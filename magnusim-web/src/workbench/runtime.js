@@ -12912,14 +12912,16 @@ function syncFiltersPanelOffset() {
   }
   if (rc) {
     rc.style.top = 'auto';
-    rc.style.bottom = '12px';
+    // Its bottom is the stylesheet's: 12 px, or above the Assistant's corner button.
+    rc.style.bottom = '';
     rc.style.right = '12px';
     rc.style.maxHeight = '';
   }
   if (fp) {
     if (fpOpen && rcOpen) {
       const rh = Math.round(rc.getBoundingClientRect().height) || 0;
-      fp.style.maxHeight = 'calc(100% - ' + (24 + rh + 8) + 'px)';
+      const rb = Math.round(parseFloat(getComputedStyle(rc).bottom)) || 12;
+      fp.style.maxHeight = 'calc(100% - ' + (12 + rb + rh + 8) + 'px)';
     } else {
       fp.style.maxHeight = '';
     }
@@ -13352,6 +13354,7 @@ function renderViewsBlock() {
   const block = document.getElementById('views-block');
   const sel = document.getElementById('views-select');
   const upd = document.getElementById('views-update');
+  const ren = document.getElementById('views-rename');
   const del = document.getElementById('views-delete');
   if (!block || !sel) return;
   if (!pluginResultsShowsViews(resultsRunId)) { block.hidden = true; return; }
@@ -13370,6 +13373,7 @@ function renderViewsBlock() {
       .join('');
   sel.value = activeViewId || '';
   if (upd) upd.hidden = !activeViewId;
+  if (ren) ren.hidden = !activeViewId;
   if (del) del.hidden = !activeViewId;
 }
 
@@ -13412,6 +13416,24 @@ async function updateActiveView() {
       : v
   );
   try { await saveViewsForRun(resultsRunId, views); } catch (e) { console.warn('[CFD] update view', e); }
+  renderViewsBlock();
+}
+
+/**
+ * Renames the saved view shown (its filters and camera stay). The Assistant could rename a
+ * view (setup_edit saved_view rename) and a person could not (Daniel's two-way parity rule).
+ */
+async function renameActiveView() {
+  if (!resultsRunId || !activeViewId) return;
+  const cur = runViews(resultsRunId).find((v) => String(v.id) === String(activeViewId));
+  if (!cur) return;
+  const name = await promptName({ title: 'Rename view', copy: 'Only its name changes: its filters and camera stay.', label: 'View name', value: String(cur.name || 'View') });
+  if (!name || name === cur.name) return;
+  const views = runViews(resultsRunId).map((v) => (String(v.id) === String(activeViewId) ? { ...v, name: name.slice(0, 64), updated: Date.now() } : v));
+  const rec = findRunRecord(resultsRunId);
+  if (rec) rec.views = views;
+  renderViewsBlock();
+  try { await saveViewsForRun(resultsRunId, views); } catch (e) { console.warn('[CFD] rename view', e); }
   renderViewsBlock();
 }
 
@@ -13460,6 +13482,9 @@ async function switchToView(viewId) {
   });
   document.getElementById('views-update')?.addEventListener('click', () => {
     updateActiveView().catch((e) => console.warn('[CFD] update view', e));
+  });
+  document.getElementById('views-rename')?.addEventListener('click', () => {
+    renameActiveView().catch((e) => console.warn('[CFD] rename view', e));
   });
   document.getElementById('views-delete')?.addEventListener('click', () => {
     deleteActiveView().catch((e) => console.warn('[CFD] delete view', e));
@@ -16640,6 +16665,13 @@ function syncInspectReadout() {
     document.querySelector('.tb-btn[data-label="Inspect point"]');
   if (btn) btn.classList.toggle('is-active', !!inspectState.armed);
   if (container) container.classList.toggle('is-inspecting', !!inspectState.armed);
+  const typed = document.getElementById('inspect-typed');
+  if (typed && typed.hidden === !!inspectState.armed) {
+    typed.hidden = !inspectState.armed;
+    const msg = document.getElementById('inspect-typed-msg');
+    if (msg) msg.hidden = true;
+    placeInspectTyped();
+  }
   if (!host) return;
   if (!inspectState.points.length) {
     host.hidden = true;
@@ -16868,7 +16900,7 @@ function clearInspect(keepArmed) {
 function inspectClickIgnored(target) {
   if (!target || !target.closest) return false;
   return !!target.closest(
-    '.filters-panel, .toolbar, .tree-float-stack, .legend, #iterations-panel, .measure-dock, .face-ctx-menu, button, input, select, textarea, a, .view-home-btn, .viewport-job-chip, .mat-panel, .right-chrome, .inspect-pin'
+    '.filters-panel, .toolbar, .tree-float-stack, .legend, #iterations-panel, .measure-dock, .face-ctx-menu, button, input, select, textarea, a, .view-home-btn, .viewport-job-chip, .mat-panel, .right-chrome, .inspect-pin, .inspect-typed'
   );
 }
 
@@ -16890,6 +16922,65 @@ function pickInspectFromEvent(e, additive) {
     additive,
   }).catch((err) => console.error('[CFD W13] pick', err));
 }
+
+/**
+ * Inspect's typed point sits bottom left, above any legend it would cover (the legends are
+ * centred in the free band, so a narrow window brings them under it; a particle trace's
+ * stacks above the field's).
+ */
+function placeInspectTyped() {
+  const typed = document.getElementById('inspect-typed');
+  if (!typed || typed.hidden) return;
+  typed.style.bottom = '';
+  const host = typed.offsetParent;
+  if (!host) return;
+  const hb = host.getBoundingClientRect().bottom;
+  const legends = Array.from(document.querySelectorAll('.legend')).filter((el) => !el.hidden && el.offsetParent);
+  for (let i = 0; i <= legends.length; i++) {
+    const r = typed.getBoundingClientRect();
+    const under = legends
+      .map((el) => el.getBoundingClientRect())
+      .filter((l) => l.width > 0 && l.left < r.right && l.right > r.left && l.top < r.bottom && l.bottom > r.top);
+    if (!under.length) return;
+    typed.style.bottom = Math.ceil(hb - Math.min(...under.map((l) => l.top)) + 8) + 'px';
+  }
+}
+window.addEventListener('resize', () => placeInspectTyped());
+
+/** "x, y, z" (commas or semicolons) as three finite numbers, or null. */
+function parseTypedPoint(text) {
+  const parts = String(text || '')
+    .replace(/;/g, ',')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length !== 3) return null;
+  const p = parts.map(Number);
+  return p.every((v) => Number.isFinite(v)) ? p : null;
+}
+
+/**
+ * Inspect's typed point (Daniel's two-way parity rule: the Assistant could read a field at
+ * x, y, z and a person only by clicking a plane or face): adds a pin there, like a click.
+ */
+(function wireInspectTyped() {
+  const form = document.getElementById('inspect-typed');
+  const input = document.getElementById('inspect-typed-xyz');
+  const msg = document.getElementById('inspect-typed-msg');
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const p = parseTypedPoint(input?.value);
+    if (!p) {
+      if (msg) {
+        msg.hidden = false;
+        msg.textContent = 'Type three numbers in metres: x, y, z';
+      }
+      return;
+    }
+    if (msg) msg.hidden = true;
+    addInspectPoint({ casePos: p, additive: true }).catch((err) => console.error('[CFD W13] typed', err));
+  });
+})();
 
 (function wireInspectPoint() {
   const btn = document.getElementById('btn-inspect-point') ||
@@ -19642,6 +19733,8 @@ function setStageChrome(stage) {
     rc.hidden = !resultsOn;
     if (resultsOn) rc.removeAttribute('hidden');
   }
+  // The Assistant's corner button takes the corner under the results' panel (style.css).
+  document.body.classList.toggle('results-chrome-shown', !!(rc && resultsOn));
   if (!resultsOn) {
     try { setLegendCardShown(document.getElementById('legend'), false, true); } catch (_) {}
     try { setLegendCardShown(document.getElementById('legend-pt'), false, true); } catch (_) {}
@@ -25034,6 +25127,20 @@ function syncHiddenFacesChip() {
   const faces = n === 1 ? '1 face' : n + ' faces';
   const bodies = nb === 1 ? '1 body' : nb + ' bodies';
   if (txt) txt.textContent = (nb && n ? bodies + ', ' + faces : nb ? bodies : faces) + ' hidden';
+  // Its words list the hidden faces, each with its own Show (the Assistant could show named faces
+  // and a person only all of them: Daniel's two-way parity rule).
+  const toggle = document.getElementById('hidden-faces-toggle');
+  const list = document.getElementById('hidden-faces-list');
+  if (!list) return;
+  const labels = Array.from(hiddenCadFaces).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }));
+  if (toggle) toggle.disabled = labels.length < 1;
+  if (!labels.length) {
+    list.hidden = true;
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }
+  list.innerHTML = labels
+    .map((lab) => '<li><span>' + escapeHtml(lab) + '</span><button type="button" data-show-face="' + escapeHtml(lab) + '">Show</button></li>')
+    .join('');
 }
 
 function hideCadFace(label) {
@@ -25993,6 +26100,16 @@ function hitFromCellIdOnPd(pd, cellId) {
     showAllCadFaces();
     showAllBodies();
     hideFaceCtxMenu();
+  });
+  document.getElementById('hidden-faces-toggle')?.addEventListener('click', () => {
+    const list = document.getElementById('hidden-faces-list');
+    if (!list || !hiddenCadFaces.size) return;
+    list.hidden = !list.hidden;
+    document.getElementById('hidden-faces-toggle')?.setAttribute('aria-expanded', list.hidden ? 'false' : 'true');
+  });
+  document.getElementById('hidden-faces-list')?.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest('[data-show-face]') : null;
+    if (btn) showCadFaces([btn.getAttribute('data-show-face')]);
   });
   document.getElementById('measure-clear')?.addEventListener('click', () => {
     clearCadSelection();

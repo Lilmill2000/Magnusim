@@ -91,7 +91,8 @@ export function projectEditTool(d: HostToolDeps): HostToolDef {
       project_id: S.id('update/move: the project; "" = this window\'s'),
       title: S.text(120),
       description: S.text(2000),
-      category: S.text(80),
+      // New project's Category list: a person cannot type their own (two-way parity).
+      category: S.enum(['', 'Other', 'Fluid dynamics', 'Solid mechanics']),
       units: S.enum(['', 'Metric', 'Imperial']),
       folder: S.text(120, '"" = My Projects / unchanged'),
       plugin: S.text(64, 'from_sample, start_action'),

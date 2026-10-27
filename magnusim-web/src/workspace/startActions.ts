@@ -81,6 +81,8 @@ export interface CatalogStartRow {
   name?: string;
   status?: string;
   start_actions?: StartAction[];
+  /** The plugin's sample projects (API 1.8). */
+  samples?: Array<{ key: string; title: string; hint?: string }>;
 }
 
 /** The catalog's rows (plugin load order) as start entries: only plugins that are on. */
@@ -120,6 +122,8 @@ export function headerKinds(kinds: readonly PluginStudyKind[] | null | undefined
 // ---------------------------------------------------------------------------
 
 let entries: StartEntry[] | null = null;
+/** The plugin rows of the last read (New project's samples read them too: one read for both). */
+let rows: CatalogStartRow[] | null = null;
 let inflight: Promise<StartEntry[]> | null = null;
 let readSerial = 0;
 const listeners = new Set<(list: StartEntry[]) => void>();
@@ -145,11 +149,11 @@ function publish(list: StartEntry[]): void {
   for (const fn of [...listeners]) fn(list);
 }
 
-async function readCatalog(): Promise<StartEntry[]> {
+async function readCatalog(): Promise<{ list: StartEntry[]; rows: CatalogStartRow[] }> {
   const r = await fetch('/api/plugins', { cache: 'no-store' });
   const j = (await r.json().catch(() => ({}))) as { plugins?: CatalogStartRow[] };
   if (!r.ok) throw new Error('plugins.list failed');
-  return entriesFromCatalog(j.plugins);
+  return { list: entriesFromCatalog(j.plugins), rows: Array.isArray(j.plugins) ? j.plugins : [] };
 }
 
 function listen(): void {
@@ -173,12 +177,13 @@ export function loadStartActions({ force = false }: { force?: boolean } = {}): P
   if (inflight && !force) return inflight;
   const serial = ++readSerial;
   const p = readCatalog().then(
-    (list) => {
+    ({ list, rows: read }) => {
       // A later read (a plugin turned on meanwhile) wins over an earlier one.
       if (serial === readSerial) {
         retryDelay = 0;
         if (retryTimer) clearTimeout(retryTimer);
         retryTimer = null;
+        rows = read;
         publish(list);
       }
       return entries || list;
@@ -196,6 +201,11 @@ export function loadStartActions({ force = false }: { force?: boolean } = {}): P
     if (inflight === p) inflight = null;
   }).catch(() => undefined);
   return p;
+}
+
+/** The plugin rows of the store's last answer (null before the first read). */
+export function catalogRowsNow(): CatalogStartRow[] | null {
+  return rows;
 }
 
 /** The store's last answer (null before the first read). */
@@ -225,6 +235,7 @@ export function useStartActions(): StartEntry[] {
 /** Tests only: forget the store. */
 export function resetStartActionsForTests(): void {
   entries = null;
+  rows = null;
   inflight = null;
   readSerial = 0;
   listeners.clear();

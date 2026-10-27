@@ -710,14 +710,24 @@
           <div id="wb-link-wait" class="wb-link-wait" role="status" hidden></div>
           <div id="inspect-readout" class="inspect-readout" hidden aria-hidden="true"></div>
           <div id="inspect-pins" class="inspect-pins" hidden aria-label="Inspected points"></div>
+          <!-- Inspect: a typed point, in metres, read like a clicked one (the results view hides the measure dock). -->
+          <form id="inspect-typed" class="inspect-typed" hidden autocomplete="off">
+            <label for="inspect-typed-xyz">Probe a point</label>
+            <input type="text" id="inspect-typed-xyz" placeholder="x, y, z (m)" spellcheck="false" />
+            <button type="submit" id="inspect-typed-go">Probe</button>
+            <p id="inspect-typed-msg" class="inspect-typed-msg" role="alert" hidden></p>
+          </form>
           <div id="measure-dock" class="measure-dock">
             <div id="measure-chip" class="measure-chip" hidden>
               <div id="measure-chip-body" class="measure-chip-body"></div>
               <button type="button" id="measure-clear">Clear</button>
             </div>
             <div id="hidden-faces-chip" class="hidden-faces-chip" hidden>
-              <span id="hidden-faces-chip-txt">Faces hidden</span>
+              <button type="button" class="hidden-faces-toggle" id="hidden-faces-toggle" aria-expanded="false" aria-controls="hidden-faces-list" title="List the hidden faces">
+                <span id="hidden-faces-chip-txt">Faces hidden</span>
+              </button>
               <button type="button" id="hidden-faces-show">Show all</button>
+              <ul id="hidden-faces-list" class="hidden-faces-list" aria-label="Hidden faces" hidden></ul>
             </div>
           </div>
           <div id="face-ctx-menu" class="face-ctx-menu" hidden role="menu" aria-label="Viewport">
@@ -756,6 +766,7 @@
               <div class="fp-row fp-views-actions">
                 <button type="button" class="js-btn" id="views-save">Save as view</button>
                 <button type="button" class="js-btn" id="views-update" hidden>Update view</button>
+                <button type="button" class="js-btn" id="views-rename" hidden>Rename</button>
                 <button type="button" class="mesh-plane-del" id="views-delete" hidden>Delete</button>
               </div>
             </div>
@@ -1318,7 +1329,11 @@
           <label for="np-folder-new">New folder name</label>
           <input type="text" id="np-folder-new" placeholder="Cyclone studies" autocomplete="off" />
         </div>
+        <!-- The plugins' sample projects (API 1.8): a copy as a new project, opened. -->
+        <div class="np-samples-list" id="np-samples-list" role="list" aria-label="Sample projects" hidden></div>
+        <p class="np-samples-error" id="np-samples-error" role="alert" hidden></p>
         <div class="np-actions">
+          <button type="button" class="np-samples-toggle" id="np-samples-toggle" aria-expanded="false" aria-controls="np-samples-list" hidden>Open a sample…</button>
           <button type="button" class="js-btn" id="np-cancel">Cancel</button>
           <button type="button" class="js-btn js-btn-kick" id="np-create">Create</button>
         </div>

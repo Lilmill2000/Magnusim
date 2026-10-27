@@ -18,6 +18,7 @@ const { createHostTransport } = await import('../assistant/host-call.ts');
 const { paced } = await import('../assistant/host/common.ts');
 const { projectEditTool } = await import('../assistant/host/project-edit.ts');
 const { importFileTool } = await import('../assistant/host/import-file.ts');
+const { meshFields } = await import('../assistant/host/catalog.ts');
 const { startFakeApp, makeRt, world } = await import('./assistant-host-harness.js');
 
 let app;
@@ -86,6 +87,12 @@ describe('project_edit: every action', () => {
     const r = await sent(t(), proj({ action: 'start_action', project_id: 'p2', plugin: 'cad', key: 'part' }));
     assert.deepEqual([r.out.error.code, r.writes], ['invalid_input', []]);
     assert.match(r.out.error.hint, /study_edit \{action:'plugin_create', plugin:'cad', kind:'part'\}/);
+  });
+  it("two-way parity: the Assistant has only what a person has: New project's Category list, and no mesh setting the Mesh panel lacks", () => {
+    assert.deepEqual(t().schema.properties.category.enum, ['', 'Other', 'Fluid dynamics', 'Solid mechanics']);
+    const keys = meshFields({ mesher: [] }, 'standard').map((f) => f.key);
+    for (const k of ['automatic_extrusion_meshing', 'preferred_cpus', 'maximum_meshing_runtime']) assert.ok(!keys.includes(k), k);
+    assert.ok(keys.includes('fineness'));
   });
   it('update (only the given fields) and move: by project_id from anywhere (the card actions)', async () => {
     fresh();

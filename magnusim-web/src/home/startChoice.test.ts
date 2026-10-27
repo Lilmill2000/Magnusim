@@ -46,6 +46,9 @@ function modal() {
       <select id="np-folder"></select>
       <div id="np-folder-new-wrap" hidden><input id="np-folder-new" /></div>
       <fieldset id="np-start" hidden><legend>Start from</legend><div id="np-start-list"></div></fieldset>
+      <div id="np-samples-list" hidden></div>
+      <p id="np-samples-error" hidden></p>
+      <button id="np-samples-toggle" aria-expanded="false" hidden>Open a sample…</button>
       <button id="np-create">Create</button>
     </div>`;
 }
@@ -161,6 +164,57 @@ describe('New Project: Start from', () => {
     title.value = 'My wing';
     pick('start-demo:demo');
     expect(title.value).toBe('My wing');
+  });
+
+  it("\"Open a sample…\" lists the samples of the plugins that are on; a pick copies one into the dialog's folder and closes it; a refusal says why (Daniel: a person can do what the Assistant's from_sample does)", async () => {
+    const posts: Array<Record<string, unknown>> = [];
+    let refuse = true;
+    const withSamples = [
+      { ...PLUGINS[0], samples: [{ key: 'heat-sink', title: 'Heat sink', hint: 'A 10 W fin block' }] },
+      PLUGINS[1],
+      { ...PLUGINS[2], samples: [{ key: 'off-one', title: 'Off sample' }] },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url);
+        if (u === '/api/plugins') return pluginsAnswer(withSamples);
+        if (u === '/api/projects') return new Response(JSON.stringify({ projects: PROJECTS, folders: ['My Projects', 'Wings'] }), { status: 200 });
+        if (u === '/api/project/sample') {
+          posts.push(JSON.parse(String(init?.body || '{}')));
+          return refuse
+            ? new Response(JSON.stringify({ ok: false, error: 'The sample is missing a file.' }), { status: 400 })
+            : new Response(JSON.stringify({ ok: true, id: 'heat-sink-1', title: 'Heat sink' }), { status: 201 });
+        }
+        return new Response('{}', { status: 200 });
+      }),
+    );
+    resetStartActionsForTests();
+    await loadStartActions();
+    document.getElementById('modal-new-project')!.hidden = false;
+    await prepareCreateModal(null, { folder: 'Wings' });
+    const toggle = document.getElementById('np-samples-toggle') as HTMLButtonElement;
+    const list = document.getElementById('np-samples-list') as HTMLElement;
+    await vi.waitFor(() => expect(toggle.hidden).toBe(false));
+    expect(list.hidden).toBe(true);
+    toggle.click();
+    expect(list.hidden).toBe(false);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    // Only the plugin that is on: its sample with its hint and plugin.
+    expect([...list.querySelectorAll('[data-np-sample]')].map((b) => b.getAttribute('data-np-sample'))).toEqual(['start-demo:heat-sink']);
+    expect(list).toHaveTextContent('A 10 W fin block (Start demo)');
+    (list.querySelector('[data-np-sample]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.getElementById('np-samples-error')!.hidden).toBe(false));
+    expect(document.getElementById('np-samples-error')).toHaveTextContent('The sample is missing a file.');
+    expect(posts).toEqual([{ plugin: 'start-demo', sample: 'heat-sink', folder: 'Wings' }]);
+    expect(document.getElementById('modal-new-project')!.hidden).toBe(false);
+    refuse = false;
+    (list.querySelector('[data-np-sample]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.getElementById('modal-new-project')!.hidden).toBe(true));
+    expect(posts).toHaveLength(2);
+    // Edit mode has none.
+    await prepareCreateModal({ id: 'p1', title: 'Untitled Demo 1', folder: 'My Projects' });
+    expect(toggle.hidden).toBe(true);
   });
 
   it('is hidden in edit mode, and when no plugin has an action', async () => {

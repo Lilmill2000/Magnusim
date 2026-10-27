@@ -16,6 +16,8 @@ import { PYTHON } from '../scripts/python-env.js';
 //      legend reads Temperature / K, nothing offers a velocity, Particle trace is off
 //      and says why, inspect shows the temperature in K.
 //   C  a case that stores p in Pa (kinematic_fields []): inspect shows p as stored.
+// Two-way parity (Daniel): a person renames a saved view (A), and probes a typed x, y, z
+// (C: the clicked point typed in reads the same p; a bad entry says what to type).
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ROUND = join(WEB, 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
 const CAVITY = join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d');
@@ -31,6 +33,12 @@ const json = async (request, url) => {
     }
   }
 };
+
+/** Whether two elements' boxes overlap on screen. */
+async function overlaps(a, b) {
+  const [ra, rb] = [await a.boundingBox(), await b.boundingBox()];
+  return !!(ra && rb && ra.x < rb.x + rb.width && rb.x < ra.x + ra.width && ra.y < rb.y + rb.height && rb.y < ra.y + ra.height);
+}
 
 /** The case's time folders. */
 const timeDirs = (caseDir) => readdirSync(caseDir).filter((d) => /^\d+(\.\d+)?$/.test(d));
@@ -189,6 +197,12 @@ test("results tools list the run's result fields with their units", async ({ pag
   // ---- A ----
   await openResults(runA.rid);
   await expect(page.locator('#legend .legend-title')).toHaveText('Velocity Magnitude', { timeout: 60_000 });
+  // The Assistant's corner button takes the corner under the Iterations panel, clear of it and of the view tools.
+  const cornerBtn = page.locator('[data-assistant-pill] .assistant-dock-pill-open');
+  await expect(cornerBtn).toBeVisible();
+  await expect(page.locator('#right-chrome')).toBeVisible();
+  await expect.poll(() => overlaps(cornerBtn, page.locator('#right-chrome')), { message: 'clear of the Iterations panel' }).toBe(false);
+  expect(await overlaps(cornerBtn, page.locator('#viewport-gizmo')), 'clear of the view tools').toBe(false);
   await expect(page.locator('#legend .legend-units')).toHaveText('m/s');
   const fieldsA = ['Velocity Magnitude', 'Pressure', 'Turbulent kinetic energy'];
   await page.locator('.tb-btn[data-label="Cutting Plane"]').click();
@@ -265,6 +279,16 @@ test("results tools list the run's result fields with their units", async ({ pag
   await page.locator('#views-select').selectOption(vid);
   await expect(page.locator('#legend')).toHaveClass(/is-custom/, { timeout: 30_000 });
   await expect(page.locator('#legend .legend-bar-val-hi')).toHaveText('2.00');
+  // Rename: only its name changes, saved with the run.
+  const setBefore = (await runARow()).views[0].set;
+  expect(setBefore).toBeTruthy();
+  await page.locator('#views-rename').click();
+  await expect(page.locator('#pm-input')).toHaveValue('k bound');
+  await page.locator('#pm-input').fill('k max 2');
+  await page.locator('#pm-confirm').click();
+  await expect(page.locator(`#views-select option[value="${vid}"]`)).toHaveText(/^k max 2 — Turbulent kinetic energy/);
+  await expect.poll(async () => ((await runARow()).views || []).map((v) => [v.id, v.name]), { timeout: 30_000 }).toEqual([[vid, 'k max 2']]);
+  expect((await runARow()).views[0].set).toEqual(setBefore);
 
   // ---- B ----
   await openResults(runB.rid);
@@ -297,4 +321,25 @@ test("results tools list the run's result fields with their units", async ({ pag
   expect(stored.hit).toBe(true);
   // As stored: not times rho (1000).
   expect(Math.abs(shownP - stored.values.p)).toBeLessThanOrEqual(Math.max(1e-6, 0.01 * Math.abs(stored.values.p)));
+
+  // The same point typed in (Inspect on): a pin there, reading the same p.
+  const typed = page.locator('#inspect-typed');
+  await expect(typed).toBeHidden();
+  await page.locator('#btn-inspect-point').click();
+  await expect(typed).toBeVisible();
+  expect(await overlaps(typed, page.locator('#legend')), 'clear of the legend').toBe(false);
+  await page.locator('#inspect-typed-xyz').fill('1, 2');
+  await page.locator('#inspect-typed-go').click();
+  await expect(page.locator('#inspect-typed-msg')).toHaveText('Type three numbers in metres: x, y, z');
+  await expect(page.locator('#inspect-pins .inspect-pin')).toHaveCount(0);
+  await page.locator('#inspect-typed-xyz').fill(picked.casePos.join('; '));
+  await page.locator('#inspect-typed-xyz').press('Enter');
+  await expect(page.locator('#inspect-typed-msg')).toBeHidden();
+  await expect(page.locator('#inspect-pins .inspect-pin[data-hit="1"]')).toHaveCount(1, { timeout: 60_000 });
+  const typedP = page.locator('#inspect-pins .inspect-pin-row[data-field="p"] b');
+  await expect.poll(() => typedP.textContent(), { timeout: 60_000 }).toMatch(/ Pa$/);
+  expect(Number(String(await typedP.textContent()).replace(/ Pa$/, ''))).toBeCloseTo(shownP, 6);
+  expect(await page.evaluate(() => window.__CFD_W13__.points.pop().casePos)).toEqual(picked.casePos);
+  await page.locator('#btn-inspect-point').click();
+  await expect(typed).toBeHidden();
 });

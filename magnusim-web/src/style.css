@@ -1096,6 +1096,20 @@ body,
   font: inherit;
   cursor: pointer;
 }
+/* Its words open the list of hidden faces, each with its own Show. */
+.hidden-faces-chip { flex-wrap: wrap; }
+.hidden-faces-chip .hidden-faces-toggle { border: 0; padding: 0; background: none; color: inherit; text-decoration: underline dotted; }
+.hidden-faces-chip .hidden-faces-toggle:disabled { text-decoration: none; cursor: default; }
+.hidden-faces-list { flex-basis: 100%; list-style: none; margin: 4px 0 0; padding: 0; max-height: 160px; overflow-y: auto; font-weight: 400; }
+.hidden-faces-list[hidden] { display: none; }
+.hidden-faces-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+/* Inspect's typed point, shown while Inspect is on, where the measure dock sits in the setup. */
+.inspect-typed { position: absolute; bottom: 16px; left: calc(18px + var(--vp-viewer-left, var(--vp-left-inset, 0px))); z-index: 31; max-width: min(340px, calc(100% - 36px - var(--vp-viewer-left, var(--vp-left-inset, 0px)))); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; background: #fff; border: 1px solid #d0d5dd; border-radius: 6px; box-shadow: 0 4px 14px rgba(16, 24, 40, 0.08); font: 600 12px/1.35 "Segoe UI", system-ui, sans-serif; color: #344054; }
+.inspect-typed[hidden] { display: none !important; }
+.inspect-typed input { width: 150px; border: 1px solid #c9ced6; border-radius: 4px; padding: 3px 6px; font: 400 12px/1.35 "Segoe UI", system-ui, sans-serif; }
+.inspect-typed button { border: 1px solid #c9ced6; background: #fff; border-radius: 4px; padding: 3px 7px; font: inherit; cursor: pointer; }
+.inspect-typed-msg { flex-basis: 100%; margin: 0; font-weight: 400; color: #b42318; }
+.inspect-typed-msg[hidden] { display: none; }
 .measure-chip {
   display: flex;
   align-items: flex-start;
@@ -5532,6 +5546,11 @@ body.workspace-open .assistant-dock-pill { bottom: 104px; }
 /* The workbench's own view tools (Home, the axes key and the 72 px triad, #viewport-gizmo) take its
    bottom-right 160 x 82 px: the corner button sits above them. */
 body.on-workbench:not(.workspace-open) .assistant-dock-pill { bottom: 96px; }
+/* Results: the right panel (Iterations) holds the bottom right and the view tools sit left of it,
+   so the corner button takes the corner and the panel sits clear above it (open or closed, so the
+   Filters panel above keeps its height). */
+body.on-workbench.results-chrome-shown:not(.workspace-open) .assistant-dock-pill { bottom: var(--mg-space-4); }
+body.on-workbench.results-chrome-shown .right-chrome { bottom: 64px; }
 @media (min-width: 720px) and (min-height: 520px) {
   body.workspace-open .assistant-dock { bottom: 104px; height: min(640px, calc(100vh - var(--mg-header-height) - 120px)); }
 }
@@ -6148,6 +6167,20 @@ body.on-workbench:not(.workspace-open) .assistant-dock-pill { bottom: 96px; }
 /* The dialog scrolls as a whole in a short window. */
 #modal-new-project .cfd-modal-card { max-height: calc(100vh - 32px); overflow-y: auto; }
 #modal-new-project .np-start { margin-bottom: 14px; }
+/* "Open a sample…": a quiet link at the left of the dialog's buttons, and its list above them. */
+#modal-new-project .np-actions { align-items: center; }
+.np-samples-toggle { margin-right: auto; padding: 0; border: 0; background: none; color: #1d4ed8; font: inherit; font-size: 13px; cursor: pointer; }
+.np-samples-toggle:hover { text-decoration: underline; }
+.np-samples-toggle[hidden] { display: none; }
+.np-samples-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 0; max-height: min(220px, 30vh); overflow-y: auto; }
+.np-samples-list[hidden] { display: none; }
+.np-sample { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; border: 1px solid #e4e7ec; background: #fff; border-radius: 6px; padding: 8px 10px; font: inherit; cursor: pointer; }
+.np-sample:hover:not(:disabled) { background: #f6f7f9; }
+.np-sample:disabled { cursor: default; opacity: 0.7; }
+.np-sample-title { font-size: 13px; font-weight: 600; color: #1a1d24; }
+.np-sample-hint { font-size: 12px; line-height: 1.35; color: #5b6575; }
+.np-samples-error { margin: 4px 0 0; font-size: 12px; color: #b42318; }
+.np-samples-error[hidden] { display: none; }
 /* Many starts (plugins that add theirs): the list scrolls, so the title and Create stay in view. */
 #modal-new-project .np-start-list { max-height: min(280px, 36vh); overflow-y: auto; padding-right: 2px; }
 .np-start .np-start-choice { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--mg-text-strong); cursor: pointer; }

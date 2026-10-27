@@ -189,6 +189,25 @@ test('bodies hide and show from the viewport and the tree, in a study; a hidden 
   expect(await page.evaluate(() => window.__CFD_VIEWPORT_FACES__().hidden)).toEqual([`face ${faceId}@Body2`]);
   const under = await page.evaluate(([x, y]) => window.__CFD_PICK_CAD__({ clientX: x, clientY: y }), [face2.x, face2.y]);
   expect(under && under.faceId).not.toBe(faceId);
+  // A face of box 1 too; the chip's words list both, and one comes back by its own Show
+  // (Daniel's two-way parity: the Assistant could show one named face).
+  const face1 = await findBody(page, 1);
+  await page.mouse.click(face1.x, face1.y, { button: 'right' });
+  await page.locator('#face-ctx-hide').click();
+  await expect(page.locator('#hidden-faces-chip-txt')).toHaveText('2 faces hidden');
+  const label1 = `face ${Number(face1.key.split(':')[1])}@Body1`;
+  const label2 = `face ${faceId}@Body2`;
+  const list = page.locator('#hidden-faces-list');
+  await expect(list).toBeHidden();
+  await page.locator('#hidden-faces-toggle').click();
+  await expect(list).toBeVisible();
+  await expect(page.locator('#hidden-faces-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(list.locator('li span')).toHaveText([label1, label2]);
+  await list.locator(`[data-show-face="${label2}"]`).click();
+  await expect(page.locator('#hidden-faces-chip-txt')).toHaveText('1 face hidden');
+  expect(await page.evaluate(() => window.__CFD_VIEWPORT_FACES__().hidden)).toEqual([label1]);
+  await expect(list.locator('li span')).toHaveText([label1]);
+  await expect.poll(() => page.evaluate(([x, y]) => window.__CFD_PICK_CAD__({ clientX: x, clientY: y })?.faceId, [face2.x, face2.y])).toBe(faceId);
   await page.locator('#hidden-faces-show').click();
   await expect(page.locator('#hidden-faces-chip')).toBeHidden();
 

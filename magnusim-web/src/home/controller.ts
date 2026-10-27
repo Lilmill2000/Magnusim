@@ -9,7 +9,7 @@ import { formatElapsed, formatSimTime } from '../plugin-ui/format/time';
 import { initSetupWizard } from '../wizard/controller';
 import { confirmLeaveWorkspace, leaveNeedsWork, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
 import { hashIsProject, parseWorkspaceHash } from '../workspace/route';
-import { loadStartActions, shownStartActions, startActionsNow, startKey } from '../workspace/startActions';
+import { catalogRowsNow, loadStartActions, shownStartActions, startActionsNow, startKey } from '../workspace/startActions';
 
 function $(id) {
   return document.getElementById(id);
@@ -834,6 +834,98 @@ function startChoicesFor(all, want) {
   return { starts, chosen };
 }
 
+/** The samples of the plugins that are on (manifest `[[samples]]`, API 1.8), in load order. */
+export function samplesFromCatalog(rows) {
+  const out = [];
+  for (const row of rows || []) {
+    if (!row || row.status !== 'enabled') continue;
+    for (const s of row.samples || []) {
+      if (s && s.key && s.title) out.push({ plugin: String(row.key), plugin_name: String(row.name || row.key), key: String(s.key), title: String(s.title), hint: String(s.hint || '') });
+    }
+  }
+  return out;
+}
+
+/**
+ * New project's "Open a sample…" (Daniel, 2026-10-27: a person can do what the Assistant's
+ * project_edit from_sample does, from inside this dialog, not from Home's header): a list of
+ * the samples of the plugins that are on; a pick copies one as a new project into the folder
+ * the dialog shows, and opens it. Hidden in edit mode and when no plugin that is on has one.
+ */
+async function fillSamples(opening) {
+  const toggle = $('np-samples-toggle');
+  const list = $('np-samples-list');
+  const err = $('np-samples-error');
+  if (!toggle || !list) return;
+  toggle.hidden = true;
+  toggle.setAttribute('aria-expanded', 'false');
+  list.hidden = true;
+  list.innerHTML = '';
+  if (err) err.hidden = true;
+  if (projectModal.mode !== 'create') return;
+  // The plugin list "Start from" reads (one read for both).
+  try {
+    await loadStartActions();
+  } catch (e) {
+    console.warn('[CFD home] samples', e);
+    return;
+  }
+  if (projectModal.opening !== opening || projectModal.mode !== 'create') return;
+  const samples = samplesFromCatalog(catalogRowsNow());
+  if (!samples.length) return;
+  list.innerHTML = samples
+    .map(
+      (s) =>
+        `<button type="button" role="listitem" class="np-sample" data-np-sample="${escapeHtml(`${s.plugin}:${s.key}`)}">` +
+        `<span class="np-sample-title">${escapeHtml(s.title)}</span>` +
+        `<span class="np-sample-hint">${escapeHtml(s.hint ? `${s.hint} (${s.plugin_name})` : s.plugin_name)}</span></button>`,
+    )
+    .join('');
+  toggle.hidden = false;
+  toggle.onclick = () => {
+    const open = list.hidden;
+    list.hidden = !open;
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  list.onclick = (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest('[data-np-sample]') : null;
+    if (!btn) return;
+    const s = samples.find((x) => `${x.plugin}:${x.key}` === btn.getAttribute('data-np-sample'));
+    if (s) void openSample(s, btn);
+  };
+}
+
+/** A sample picked in New project: copied into the dialog's folder, the dialog closed, the copy opened. */
+async function openSample(s, btn) {
+  const err = $('np-samples-error');
+  const list = $('np-samples-list');
+  if (err) err.hidden = true;
+  list?.querySelectorAll('button').forEach((b) => (b.disabled = true));
+  const title = btn.querySelector('.np-sample-title');
+  if (title) title.textContent = `Copying ${s.title}…`;
+  const folder = $('np-folder')?.value;
+  try {
+    const r = await fetch('/api/project/sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plugin: s.plugin, sample: s.key, ...(folder && folder !== '__new__' ? { folder } : {}) }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.id) throw new Error(j.error || `The sample could not be copied (${r.status}).`);
+    const modal = $('modal-new-project');
+    if (modal) modal.hidden = true;
+    void refreshHome().catch(() => undefined);
+    await openProject(String(j.id));
+  } catch (e) {
+    if (title) title.textContent = s.title;
+    list?.querySelectorAll('button').forEach((b) => (b.disabled = false));
+    if (err) {
+      err.hidden = false;
+      err.textContent = e instanceof Error ? e.message : String(e);
+    }
+  }
+}
+
 /** The first free "Untitled <kind title> N" among the projects of a folder. */
 export function firstFreeUntitledTitle(kindTitle, projects, folder) {
   const base = `Untitled ${String(kindTitle || '').trim() || 'project'}`;
@@ -956,6 +1048,7 @@ export async function prepareCreateModal(existing, opts) {
     setSelectValue($('np-units'), existing.units || 'Metric');
     fillFolderSelect(existing.folder || ROOT_FOLDER);
     projectModal.starts = [];
+    void fillSamples(projectModal.opening);
   } else {
     setSelectValue($('np-category'), 'Fluid dynamics');
     const prefUnits =
@@ -983,6 +1076,7 @@ export async function prepareCreateModal(existing, opts) {
     const { starts, chosen } = startChoicesFor(all || [], want);
     projectModal.starts = starts;
     fillStartChoices(starts, chosen);
+    void fillSamples(opening);
     loadStartActions()
       .then((fresh) => {
         if (projectModal.opening !== opening || projectModal.mode !== 'create') return;
