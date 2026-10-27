@@ -45,6 +45,7 @@ import { relationShown, relationsView } from './relations-view';
 // Daniel's first desktop test: the construction badge's ×, and the relations palette.
 import { createConstructionBadge } from './construction-badge';
 import { createRelationsPalette } from './relations-palette';
+import { placePalette as placeNear } from './palette-place';
 
 /**
  * ux010 (DRAW, review S2): when a press that moved is a click-drag (its release places the shape's
@@ -1149,10 +1150,32 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   const syncBadge = () => badge.sync();
 
   // ---- the relations palette (SolidWorks' Add Relations by the selection): src/sketch/relations-palette.ts
-  const palette = createRelationsPalette(mode, { forwardWheel });
-  html.append(palette.el);
   /** Where it was put, and for what (the selection's box on screen): it stays put while that holds. */
   let paletteFor = '';
+  /** Each curve's points in the plane, for the draft they were taken from (sampled once per edit, not per frame). */
+  let sampled: { d: SketchFeature | null; uv: Map<string, Vec2[]> } = { d: null, uv: new Map() };
+  // Its offers come after the solver's check: placed when they show (no frame may follow), once
+  // what placing it uses is set up below.
+  let paletteReady = false;
+  const palette = createRelationsPalette(mode, {
+    forwardWheel,
+    onRender: () => {
+      if (!paletteReady) return;
+      placePalette();
+      ann.changed();
+    },
+  });
+  html.append(palette.el);
+  const samplesOf = (d: SketchFeature, id: string): Vec2[] => {
+    if (sampled.d !== d) sampled = { d, uv: new Map() };
+    let uv = sampled.uv.get(id);
+    if (!uv) {
+      const e = entityOf(d, id);
+      uv = e ? samples(d, e, 32) : [];
+      sampled.uv.set(id, uv);
+    }
+    return uv;
+  };
   function selectionScreenBox(d: SketchFeature): ScreenRect | null {
     const host = hostRect();
     let b: ScreenRect | null = null;
@@ -1165,19 +1188,20 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     };
     for (const h of mode.selected()) {
       if (h.what === 'constraint') continue;
-      const p = pointAt(d, h.id);
+      const p = h.id === ORIGIN ? ([0, 0] as Vec2) : pointAt(d, h.id);
       if (p) {
         add(p);
         continue;
       }
-      const e = entityOf(d, h.id);
-      if (e) for (const uv of samples(d, e, 24)) add(uv);
+      for (const uv of samplesOf(d, h.id)) add(uv);
     }
     return b;
   }
   /**
-   * Beside the selection (above it and to its right where it can), never over a curve, a point, a
-   * glyph, a label or the floating chrome, so the next click on the sketch is never taken by it.
+   * Beside the selection (above it and to its right where it can), never over what can be clicked
+   * next: a curve (all along its visible length), a point (the origin and centres too), a glyph, a
+   * label, a value box, the construction badge or the floating chrome (src/sketch/palette-place.ts:
+   * cheap enough to run on every frame the selection moves on screen).
    */
   function placePalette() {
     const el = palette.el;
@@ -1192,7 +1216,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       return;
     }
     el.style.display = '';
-    const key = `${Math.round(box.left)},${Math.round(box.top)},${Math.round(box.right)},${Math.round(box.bottom)},${el.childElementCount},${mode.view.get().draft === d ? d.constraints.length : -1}`;
+    const key = [box.left, box.top, box.right, box.bottom].map(Math.round).join(',') + `,${el.childElementCount},${glyphEls.size},${dimEls.size},${boxEls.size},${handleEls.size},${badge.el.hidden},${d === sampled.d}`;
     if (key === paletteFor) return;
     paletteFor = key;
     const host = hostRect();
@@ -1202,31 +1226,52 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const hgt = r.height || 1;
     const pad = 6;
     const area: ScreenRect = { left: host.left + pad, top: host.top + pad, right: host.right - pad, bottom: host.bottom - pad };
-    const taken: ScreenRect[] = floatingRects(document);
-    const dot = (x: number, y: number, z: number) => taken.push({ left: x - z, right: x + z, top: y - z, bottom: y + z });
+    const boxes: ScreenRect[] = floatingRects(document);
+    const handleReach: [number, number, number, number][] = [];
+    const toClient = (uv: Vec2): [number, number] | null => {
+      const s = screenOf(uv);
+      return s ? [s[0] + host.left, s[1] + host.top] : null;
+    };
+    const rectOf = (x: HTMLElement) => {
+      if (x.hidden || x.style.display === 'none') return;
+      const q = x.getBoundingClientRect();
+      if (q.width > 0) boxes.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom });
+    };
+    for (const g of [...glyphEls.values(), ...dimEls.values()]) rectOf(g.el);
+    for (const b of boxEls.values()) rectOf(b.wrap);
+    rectOf(badge.el);
+    // A fillet's radius arrow, and the way it is dragged (along it, both ways).
+    for (const hd of handleEls.values()) {
+      rectOf(hd.el);
+      const a = toClient(hd.at);
+      if (!a) continue;
+      const reach = 70;
+      const dirPx = toClient([hd.at[0] + hd.dir[0], hd.at[1] + hd.dir[1]]);
+      if (!dirPx) continue;
+      const len = Math.hypot(dirPx[0] - a[0], dirPx[1] - a[1]) || 1;
+      const ux = (dirPx[0] - a[0]) / len;
+      const uy = (dirPx[1] - a[1]) / len;
+      handleReach.push([a[0] - ux * reach, a[1] - uy * reach, a[0] + ux * reach, a[1] + uy * reach]);
+    }
+    const segments: [number, number, number, number][] = [...handleReach];
     for (const e of d.entities) {
-      const pts = samples(d, e, 32)
-        .map((uv) => screenOf(uv))
-        .filter((s): s is [number, number] => !!s);
-      for (let i = 0; i < pts.length; i++) {
-        dot(pts[i][0] + host.left, pts[i][1] + host.top, 6);
-        if (i === 0) continue;
-        const [a, b] = [pts[i - 1], pts[i]];
-        const n = Math.min(32, Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 12)));
-        for (let k = 1; k < n; k++) dot(host.left + a[0] + ((b[0] - a[0]) * k) / n, host.top + a[1] + ((b[1] - a[1]) * k) / n, 6);
+      let prev: [number, number] | null = null;
+      for (const uv of samplesOf(d, e.id)) {
+        const s = toClient(uv);
+        if (s && prev) segments.push([prev[0], prev[1], s[0], s[1]]);
+        prev = s;
       }
     }
-    for (const g of [...glyphEls.values(), ...dimEls.values()]) {
-      const q = g.el.getBoundingClientRect();
-      if (q.width > 0) taken.push({ left: q.left, top: q.top, right: q.right, bottom: q.bottom });
+    const points: [number, number][] = [];
+    for (const id of [ORIGIN, ...drawnPoints(d)]) {
+      const s = toClient(id === ORIGIN ? [0, 0] : (pointAt(d, id) ?? [NaN, NaN]));
+      if (s && Number.isFinite(s[0]) && Number.isFinite(s[1])) points.push(s);
     }
-    const want = { left: box.right + 14, top: box.top - hgt - 14 };
-    const spot = freeSpot(want, w, hgt, taken, area, 6) ?? {
-      left: Math.max(area.left, Math.min(want.left, area.right - w)),
-      top: Math.max(area.top, Math.min(want.top, area.bottom - hgt)),
-    };
+    const spot = placeNear({ left: box.right + 14, top: box.top - hgt - 14 }, w, hgt, area, { boxes, segments, points });
     el.style.transform = `translate(${Math.round(spot.left - host.left)}px, ${Math.round(spot.top - host.top)}px)`;
   }
+
+  paletteReady = true;
 
   /**
    * The dot at the pointer as the last frame drew it (frame client px), for the e2e: the preview

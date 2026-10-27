@@ -18,7 +18,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { CommandDef } from '../types/commands';
-import type { OriginPlaneRef, SketchRelationKind } from '../types/doc';
+import type { OriginPlaneRef, SketchFeature, SketchRelationKind } from '../types/doc';
 import type { SketchToolId } from '../types/sketch';
 import type { SelectionItem } from '../types/selection';
 import type { OverlayLayer } from '../types/viewport';
@@ -26,11 +26,11 @@ import { clearSelection, userItems } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { uiFor } from '../ui/controller';
 import { constructOf, constructOutput } from '../features/refgeom/api';
-import { CONSTRAIN_COMMANDS, hasRelation, planConstraint } from './constraints';
-import { SHAPE_TOOL_IDS, SketchBuilder, toggleConstruction } from './edit';
+import { CONSTRAIN_COMMANDS, curvesCollapsed, curvesMerged, hasRelation, planConstraint, sameRefs, SUPERSEDES, turnedForAngle } from './constraints';
+import { SHAPE_TOOL_IDS, SketchBuilder, toggleConstruction, type EditOutcome } from './edit';
 import { SKETCH_ICONS } from './icons';
 import { entityOf, ORIGIN, RELATION_LABELS } from './model';
-import { type ApplyResult, type SketchMode } from './mode';
+import { IMPLIED, type ApplyResult, type SketchMode } from './mode';
 import { sketchUp } from '../viewport/normal';
 // ux010 (DRAW): Show relations.
 import { relationsView, SHOW_RELATIONS_SHORTCUT } from './relations-view';
@@ -100,26 +100,51 @@ export function relationIcon(kind: SketchRelationKind): string {
 }
 
 /**
+ * The edit a CONSTRAIN command makes for these picks: the planned records the sketch does not have
+ * yet (a record already there is not added twice: it would only over-define it), replacing what the
+ * new relation makes redundant on the same references (SUPERSEDES).
+ */
+export function relationEdit(kind: SketchRelationKind, sel: readonly string[]): (d: SketchFeature) => EditOutcome {
+  return (d) => {
+    const p = planConstraint(d, kind, sel);
+    if (!p.ok) return { ok: false, reason: p.reason };
+    const add = p.add.filter((r) => !hasRelation(d, r));
+    if (!add.length) return { ok: false, reason: `${RELATION_LABELS[kind]} is already in the sketch` };
+    const b = new SketchBuilder(d);
+    for (const r of add) {
+      const weaker = SUPERSEDES[r.kind] ?? [];
+      if (weaker.length) b.removeConstraints(d.constraints.filter((c) => (weaker as string[]).includes(c.kind) && sameRefs(c.refs, r.refs)).map((c) => c.id));
+      // P4b (SKETCH): a fit spline's tangent handle first.
+      if (r.handle) addHandle(b, r.handle);
+      b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
+    }
+    const draft = b.result();
+    // Review (relations lane): an angle relation starts the solver from the free line turned to it.
+    const turned = add.length === 1 ? turnedForAngle(d, add[0]) : null;
+    return { ok: true, draft: turned ? { ...draft, points: { ...draft.points, ...turned } } : draft, optional: [], removed: [] };
+  };
+}
+
+/**
+ * A relation's solution that shrinks a curve to (next to) nothing, or puts two of its curves on top
+ * of each other, is refused (curvesCollapsed, curvesMerged).
+ */
+export function relationRefusal(sel: readonly string[]): (before: SketchFeature, after: SketchFeature) => string | null {
+  return (before, after) => curvesCollapsed(before, after) ?? curvesMerged(before, after, sel);
+}
+
+/**
  * What a CONSTRAIN command adds for these picks, as one undo step (the toolbar command, its key,
  * and the relations palette by the selection all add through here: the same records, refused with
  * the same reasons).
  */
 export function applyRelation(mode: Pick<SketchMode, 'apply'>, kind: SketchRelationKind, sel: readonly string[]): Promise<ApplyResult> {
-  return mode.apply(RELATION_LABELS[kind], (d) => {
-    const p = planConstraint(d, kind, sel);
-    if (!p.ok) return { ok: false, reason: p.reason };
-    // A record the sketch has already is not added twice (it would only over-define it).
-    const add = p.add.filter((r) => !hasRelation(d, r));
-    if (!add.length) return { ok: false, reason: `${RELATION_LABELS[kind]} is already in the sketch` };
-    const b = new SketchBuilder(d);
-    for (const r of add) {
-      // P4b (SKETCH): a fit spline's tangent handle first.
-      if (r.handle) addHandle(b, r.handle);
-      b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
-    }
-    return b.result();
-  });
+  // Review (relations lane): the sketch's analysis is asked first, as it alone sees a relation the
+  // others imply (Parallel of two horizontal lines): added, it only over-defined the sketch.
+  return mode.apply(RELATION_LABELS[kind], relationEdit(kind, sel), { refuse: relationRefusal(sel), analyzeFirst: true });
 }
+
+export { IMPLIED };
 
 /**
  * Sketch with no plane or flat face selected (SD review round 1: Sketch was greyed on an empty

@@ -12,16 +12,19 @@
 //   splines, ellipses, parabolas and conics: what the solver takes for them (planConstraint)
 // and Fix for anything. Each button adds exactly what that CONSTRAIN toolbar command adds
 // (applyRelation, src/sketch/commands.ts), refused with the same reasons (the command's enabled
-// check first); the selection stays, so what was added shows at once. A relation the selection
-// already has shows pressed and does nothing (the toolbar commands never remove one: Delete on its
-// glyph does); one that contradicts a relation it has (Vertical on a horizontal line, Perpendicular
-// on parallel lines) is left out. Placed by the overlay (src/sketch/overlay.ts) beside the
-// selection, clear of the sketch's curves, labels and the floating chrome.
+// check first, then its own path); the selection stays, so what was added shows at once.
+// Each relation the selection could take is first checked with the solver as the command would add
+// it (SketchMode.tryApply, on the solver's second instance): one the selection has, or that the
+// sketch's other relations already imply (Parallel of two horizontal lines), shows pressed (the
+// toolbar commands never remove one: Delete on its glyph does); one that would over-define the
+// sketch, shrink a curve to nothing or put two curves on top of each other (Perpendicular on two
+// horizontal lines, Tangent on concentric circles) is left out. Placed by the overlay
+// (src/sketch/overlay.ts) beside the selection, clear of what can be clicked.
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchFeature, SketchRelationKind } from '../types/doc';
 import { uiFor } from '../ui/controller';
-import { applyRelation, picks, relationIcon } from './commands';
+import { applyRelation, IMPLIED, picks, relationEdit, relationIcon, relationRefusal } from './commands';
 import { CONSTRAIN_COMMANDS, hasRelation, planConstraint, type RelationPlan } from './constraints';
 import { entityOf, entityPoints, RELATION_LABELS } from './model';
 import type { SketchMode } from './mode';
@@ -36,15 +39,23 @@ export interface RelationOffer {
   label: string;
   /** The selection has it already (every record the command would add). */
   present: boolean;
+  /**
+   * It holds already through the sketch's other relations (Parallel of two horizontal lines,
+   * Coincident of a midpoint): shown pressed too. Known after the palette's check with the solver.
+   */
+  implied?: boolean;
 }
 
-/** The relation each kind contradicts on the same references. */
+/** The relation each kind contradicts on the same references (a quick first cut; the solver decides the rest). */
 const OPPOSED: Partial<Record<SketchRelationKind, SketchRelationKind[]>> = {
   horizontal: ['vertical'],
   vertical: ['horizontal'],
   parallel: ['perpendicular'],
   collinear: ['perpendicular'],
   perpendicular: ['parallel', 'collinear'],
+  // Review (relations lane): Tangent on concentric circles made one circle of the two.
+  tangent: ['concentric'],
+  concentric: ['tangent'],
 };
 
 /** A point and a curve it already belongs to (a line's own end): Coincident and Midpoint make no sense there. */
@@ -57,8 +68,9 @@ function ownPoint(f: F, plan: RelationPlan[]): boolean {
 }
 
 /**
- * The relations the palette offers for these picks (point ids, point entities, curve ids), in the
- * CONSTRAIN toolbar's order: those the command would add now, and those already there (pressed).
+ * The relations the selection could take, before the solver's check: for these picks (point ids,
+ * point entities, curve ids), in the CONSTRAIN toolbar's order, those the command plans, and those
+ * already there (pressed).
  */
 export function relationOffers(f: F, sel: readonly string[]): RelationOffer[] {
   if (!sel.length) return [];
@@ -99,6 +111,8 @@ export interface RelationsPalette {
   readonly el: HTMLElement;
   /** What it offers now (the e2e and the tests read the buttons). */
   offers(): RelationOffer[];
+  /** Resolves once the offers for the current selection are checked and shown (tests). */
+  settled(): Promise<void>;
   /** Clicks one of its buttons (as the person does): the command's reason when it is refused. */
   add(kind: SketchRelationKind): Promise<true | string>;
   sync(): void;
@@ -106,7 +120,7 @@ export interface RelationsPalette {
 }
 
 /** The palette's element, kept in step with the selection, the draft and the tool. */
-export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(el: HTMLElement): void } = {}): RelationsPalette {
+export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(el: HTMLElement): void; onRender?(): void } = {}): RelationsPalette {
   const { services } = mode;
   const ui = uiFor(services);
   const el = document.createElement('div');
@@ -123,26 +137,96 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
   });
   opts.forwardWheel?.(el);
   let shown: RelationOffer[] = [];
-  let key = '';
+  const buttons = new Map<SketchRelationKind, HTMLButtonElement>();
+  /** The selection, the draft and its analysis the offers were last asked for. */
+  let askedSel = '';
+  let askedDraft: unknown = null;
+  let askedStatus: unknown = null;
+  let gen = 0;
+  let pending: Promise<void> = Promise.resolve();
 
-  function current(): RelationOffer[] {
+  function candidates(): { sel: string[]; offers: RelationOffer[] } | null {
     const d = mode.draft();
-    if (!d || !mode.active || mode.byAssistant || mode.dragging) return [];
-    if ((mode.tool?.id ?? 'select') !== 'select') return [];
-    if (ui.editBlock()) return [];
-    const sel = mode.selected();
-    if (!sel.length || sel.some((h) => h.what === 'constraint')) return [];
-    return relationOffers(d, picks(mode));
+    if (!d || !mode.active || mode.byAssistant || mode.dragging) return null;
+    if ((mode.tool?.id ?? 'select') !== 'select') return null;
+    if (ui.editBlock()) return null;
+    const hits = mode.selected();
+    if (!hits.length || hits.some((h) => h.what === 'constraint')) return null;
+    const sel = picks(mode);
+    return { sel, offers: relationOffers(d, sel) };
+  }
+
+  /** Each offer as the command would add it, solved: addable, implied (pressed), or left out. */
+  async function check(sel: string[], offers: RelationOffer[]): Promise<RelationOffer[]> {
+    const out: RelationOffer[] = [];
+    for (const o of offers) {
+      if (o.present) {
+        out.push(o);
+        continue;
+      }
+      const r = await mode.tryApply(relationEdit(o.kind, sel), { refuse: relationRefusal(sel) });
+      if (r.ok) out.push(o);
+      else if (r.implied) out.push({ ...o, implied: true });
+    }
+    return out;
+  }
+
+  function button(o: RelationOffer): HTMLButtonElement {
+    let b = buttons.get(o.kind);
+    if (!b) {
+      b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cad-sk-relations-btn';
+      b.setAttribute('data-relation', o.kind);
+      b.setAttribute('aria-label', o.label);
+      b.append(icon(relationIcon(o.kind)));
+      b.addEventListener('click', () => void add(o.kind));
+      buttons.set(o.kind, b);
+    }
+    const pressed = o.present || !!o.implied;
+    b.title = o.present ? `${o.label}: already in the sketch` : o.implied ? `${o.label}: ${IMPLIED}` : `${o.label}: add the relation`;
+    b.classList.toggle('is-present', pressed);
+    b.classList.toggle('is-implied', !!o.implied);
+    b.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+    if (pressed) b.setAttribute('aria-disabled', 'true');
+    else b.removeAttribute('aria-disabled');
+    if (o.implied) b.setAttribute('data-implied', '1');
+    else b.removeAttribute('data-implied');
+    return b;
+  }
+
+  /**
+   * The buttons updated in place (review, relations lane: rebuilding them dropped the keyboard focus
+   * to the page, where the next Enter finished the sketch): the focused one keeps the focus, or its
+   * neighbour takes it when that relation is no longer offered.
+   */
+  function render(next: RelationOffer[]) {
+    const active = el.ownerDocument.activeElement as HTMLElement | null;
+    const hadFocus = !!active && el.contains(active);
+    const focusedKind = hadFocus ? (active!.getAttribute('data-relation') as SketchRelationKind | null) : null;
+    const focusedAt = hadFocus ? Array.from(el.children).indexOf(active!) : -1;
+    shown = next;
+    const want = new Set(next.map((o) => o.kind));
+    for (const [k, b] of buttons) {
+      if (want.has(k)) continue;
+      b.remove();
+      buttons.delete(k);
+    }
+    next.forEach((o, i) => {
+      const b = button(o);
+      if (el.children[i] !== b) el.insertBefore(b, el.children[i] ?? null);
+    });
+    el.hidden = !next.length;
+    if (hadFocus && !el.contains(el.ownerDocument.activeElement)) {
+      const to = (focusedKind && buttons.get(focusedKind)) || (el.children[Math.min(Math.max(focusedAt, 0), el.children.length - 1)] as HTMLElement | undefined);
+      to?.focus();
+    }
+    opts.onRender?.();
   }
 
   async function add(kind: SketchRelationKind): Promise<true | string> {
-    const offer = shown.find((o) => o.kind === kind);
-    if (offer?.present) {
-      const why = `${offer.label} is already in the sketch (Delete on its glyph removes it)`;
-      mode.note(why);
-      return why;
-    }
-    // The command's own check first: the same reason the toolbar gives.
+    // The command's own check, then its own path: the same reasons the toolbar gives (a pressed one
+    // too: "Not applied: Horizontal is already in the sketch").
     const ok = services.commands.canRun(`sketch.${kind}`);
     if (ok !== true) {
       mode.note(`${RELATION_LABELS[kind]}: ${ok}`);
@@ -153,29 +237,32 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
   }
 
   function sync() {
-    const next = current();
-    const k = next.map((o) => `${o.kind}${o.present ? '*' : ''}`).join(',');
-    shown = next;
-    el.hidden = !next.length;
-    if (k === key) return;
-    key = k;
-    el.replaceChildren(
-      ...next.map((o) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'cad-sk-relations-btn';
-        b.setAttribute('data-relation', o.kind);
-        b.setAttribute('aria-label', o.label);
-        b.title = o.present ? `${o.label}: already in the sketch` : `${o.label}: add the relation`;
-        if (o.present) {
-          b.classList.add('is-present');
-          b.setAttribute('aria-pressed', 'true');
-          b.setAttribute('aria-disabled', 'true');
-        } else b.setAttribute('aria-pressed', 'false');
-        b.append(icon(relationIcon(o.kind)));
-        b.addEventListener('click', () => void add(o.kind));
-        return b;
-      }),
+    const c = candidates();
+    const d = mode.draft();
+    const selKey = c ? c.sel.join('|') : '';
+    // The analysis comes after the edit's draft: what is implied is checked against it (its DOF).
+    const status = mode.state.get().status;
+    if (selKey === askedSel && d === askedDraft && status === askedStatus) return;
+    const sameSel = selKey === askedSel;
+    askedSel = selKey;
+    askedDraft = d;
+    askedStatus = status;
+    const my = ++gen;
+    if (!c || !c.offers.length) {
+      render([]);
+      pending = Promise.resolve();
+      return;
+    }
+    // Another selection: nothing shown until its offers are checked. The same one after an edit:
+    // the buttons stay (and keep the focus) until the new answer.
+    if (!sameSel) el.hidden = true;
+    pending = check(c.sel, c.offers).then(
+      (offers) => {
+        if (my === gen) render(offers);
+      },
+      () => {
+        if (my === gen) render([]);
+      },
     );
   }
 
@@ -184,10 +271,18 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
   return {
     el,
     offers: () => shown,
+    async settled() {
+      for (;;) {
+        const g = gen;
+        await pending;
+        if (g === gen) return;
+      }
+    },
     add,
     sync,
     dispose() {
       for (const off of offs) off();
+      gen++;
       el.remove();
     },
   };
