@@ -12,6 +12,7 @@
 // committed; doc.assistant.takeOver).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keyLabel } from '../app/keybinds';
 import { dependencies } from '../doc/features/hooks';
 import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
 import { isPersonEditing, PersonEditing } from '../doc/person-editing';
@@ -230,7 +231,8 @@ export function createUiController(services: AppServices): UiController {
       const broken = s.doc.features.filter((f) => builtBefore.has(f.id) && s.rebuild.features[f.id]?.state === 'error').map((f) => f.name);
       if (!broken.length) return;
       const list = broken.length === 1 ? broken[0] : `${broken.slice(0, -1).join(', ')} and ${broken[broken.length - 1]}`;
-      services.bridge.toast(`Deleted ${name}: ${list} ${broken.length === 1 ? 'fails' : 'fail'} without it. Undo (Ctrl+Z) brings ${name} back.`, 'error');
+      const undoKey = keyLabel(services, 'edit.undo');
+      services.bridge.toast(`Deleted ${name}: ${list} ${broken.length === 1 ? 'fails' : 'fail'} without it. Undo${undoKey ? ` (${undoKey})` : ''} brings ${name} back.`, 'error');
     };
     const off = doc.state.subscribe(check);
     const timer = setTimeout(stop, 120_000);

@@ -25,6 +25,13 @@
 //                                    bodies); the person clicks Export (the download is theirs).
 //     send_to_simulation             save, then link, as the app's Back runs it (services.apis.link);
 //                                    value "leave": then Back itself, after this call has answered.
+//   Keybinds (src/app/keybinds.ts, the person's ws.prefs "keybinds"):
+//     keybind_get                    one command's keys (target an id or a label) or all ("").
+//     keybind_set, keybind_reset, keybind_clear   Daniel: the AI may read keybinds but changes them
+//                                    only when the person explicitly asks: person_asked true (else
+//                                    not_asked), and the person's Yes in the app's own confirm
+//                                    dialog, every time (No: step_declined, nothing changes). A key
+//                                    another command has is key_taken unless items ["replace"].
 //   The person's view (fit, standard_view, normal_to, orbit_pivot, section, projection, display):
 //     only with person_asked (the person asked in this request), else only while the camera latch
 //     says they have not moved the view in this request (camera.ts); never while a pointer is held
@@ -32,6 +39,8 @@
 // Every result says what changed and whether it is an undo step.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keybindsFor, whereName, type Keybinds } from '../../app/keybinds';
+import { comboProblem, parseCombo, type KeymapEntry } from '../../app/keymap';
 import { modeFor } from '../../sketch/mode';
 import { constructShown } from '../../features/refgeom/scene';
 import { stepFileName } from '../../features/export/panel';
@@ -742,9 +751,141 @@ function upOf(n: readonly number[]): Vec3 {
   return Math.abs(n[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1];
 }
 
+// ------------------------------------------------------------------ keybinds
+
+/** The registry's entry a target names: its id, or its label (any case; a label two contexts share needs the id). */
+function keybindEntry(k: Keybinds, target: string): KeymapEntry {
+  if (!target) throw bad('target', 'target: a command id (sketch.rectangle) or its label (Rectangle).');
+  const byId = k.entry(target);
+  if (byId) return byId;
+  const all = k.entries();
+  const named = all.filter((x) => x.label.toLowerCase() === target.toLowerCase());
+  if (named.length === 1) return named[0];
+  if (named.length > 1) throw new ToolError('ambiguous_name', `"${target}" names ${named.length} commands: ${named.map((x) => `${x.id} (${x.context})`).join(', ')}. Use the id.`, { detail: { field: 'target', candidates: named.map((x) => x.id) } });
+  const t = target.toLowerCase();
+  const near = all.filter((x) => x.id.includes(t) || x.label.toLowerCase().includes(t)).slice(0, 12);
+  throw new ToolError('not_found', `No command is called "${target}".${near.length ? ` Near: ${near.map((x) => x.id).join(', ')}.` : ''} keybind_get with target "" lists them all.`, { detail: { field: 'target', candidates: near.map((x) => x.id) } });
+}
+
+/** A command's keys as the person reads them ("Shift+R", "Ctrl+Y or Ctrl+Shift+Z", "none"). */
+const keysText = (k: Keybinds, keys: readonly string[]) => (keys.length ? keys.map((c) => k.display(c)).join(' or ') : 'none');
+
+/** A command's keys as the person sees them: its own, or the key its tooltip shows (Finish sketch: "none of its own; Enter runs Place or finish"). */
+function keysSeen(k: Keybinds, id: string, keys: readonly string[]): string {
+  if (keys.length) return keysText(k, keys);
+  const v = k.via(id);
+  return v ? `none of its own; ${v.shown} runs ${v.label}` : 'none';
+}
+
+/** "A", "A and B", "A, B and C". */
+const listWords = (names: readonly string[]) => (names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+/** A command's name in a question: its label, and where when another command shares it ("Undo (sketch)"). */
+function nameOf(k: Keybinds, e: KeymapEntry): string {
+  const twin = k.entries().some((x) => x.id !== e.id && x.label === e.label);
+  return twin ? whereName(e.id) : e.label;
+}
+
+/** One command's row: its keys (as stored), as they read, whether they are its defaults, and the key its tooltip shows when it has none of its own. */
+function keybindRow(k: Keybinds, e: KeymapEntry) {
+  const keys = k.current(e.id);
+  const own = k.isDefault(e.id);
+  const v = k.via(e.id);
+  return {
+    id: e.id,
+    label: e.label,
+    context: e.context,
+    keys: [...keys],
+    shown: keysSeen(k, e.id, keys),
+    default: own,
+    ...(own ? {} : { defaults: keysText(k, e.keys) }),
+    ...(v ? { via: v } : {}),
+  };
+}
+
+/** What a change would do now: the keys, and the commands that lose them (by their mode-qualified names). */
+function planChange(k: Keybinds, e: KeymapEntry, keys: readonly string[]) {
+  const takers = [...new Set(keys.flatMap((c) => k.conflictsWith(e.id, c)))];
+  return { was: [...k.current(e.id)], takers };
+}
+
+async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
+  const { services } = ctx;
+  const k = keybindsFor(services);
+  await k.ready;
+  if (i.action === 'keybind_get') {
+    if (!i.target) {
+      const rows = k.entries().map((e) => keybindRow(k, e));
+      const set = rows.filter((r) => r.keys.length).length;
+      return done(`${rows.length} commands, ${set} with keys (${rows.filter((r) => !r.default).length} changed by the person)`, { keybinds: rows });
+    }
+    const e = keybindEntry(k, i.target);
+    const row = keybindRow(k, e);
+    return done(`${nameOf(k, e)}: ${row.shown}${row.default ? '' : ` (default ${row.defaults})`}`, { keybind: row });
+  }
+  // A change: only when the person explicitly asked in this request, and they confirm it in the app.
+  if (!i.asked) throw new ToolError('not_asked', 'Keybinds change only when the person explicitly asks for that change; pass person_asked true only then.', { detail: { field: 'person_asked' } });
+  const e = keybindEntry(k, i.target);
+  const name = nameOf(k, e);
+  const replace = i.items.some((x) => x.toLowerCase() === 'replace');
+  let keys: readonly string[];
+  if (i.action === 'keybind_set') {
+    if (!i.value) throw bad('value', 'value: the keys, as "Shift+R", "Ctrl+Alt+K", "F7" or "Delete".');
+    const p = parseCombo(i.value);
+    const why = p.ok ? comboProblem(p.combo) : p.why;
+    if (!p.ok || why) throw bad('value', `value: ${why}.`, { value: i.value });
+    keys = [p.combo];
+  } else keys = i.action === 'keybind_reset' ? e.keys : [];
+  const plan = planChange(k, e, keys);
+  if (keys.length === plan.was.length && keys.every((c, n) => c === plan.was[n])) {
+    return done(`${name} already has ${keys.length ? keysText(k, keys) : 'no key'}: nothing changed`, { keybind: keybindRow(k, e), changed: false });
+  }
+  // Another command's key: refused unless the person said to take it.
+  const takerNames = plan.takers.map(whereName);
+  if (plan.takers.length && !replace) {
+    throw new ToolError('key_taken', `${keysText(k, keys)} is the key of ${listWords(takerNames)}; nothing changed.`, { detail: { with: plan.takers, labels: takerNames } });
+  }
+  const loses = plan.takers.length ? ` ${listWords(takerNames)} ${plan.takers.length === 1 ? 'loses' : 'lose'} ${keysText(k, keys)}.` : '';
+  const was = keysSeen(k, e.id, plan.was);
+  const question =
+    i.action === 'keybind_set'
+      ? `Set the ${name} shortcut to ${keysText(k, keys)} (it was ${was})?${loses}`
+      : i.action === 'keybind_reset'
+        ? `Reset the ${name} shortcut to ${keysText(k, keys)} (it is ${was})?${loses}`
+        : `Clear the ${name} shortcut (it was ${was})?`;
+  // The app's own dialog: its Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
+  const ok = await services.bridge.confirm({ title: 'The Assistant asks to change a shortcut', message: question, confirmLabel: 'Change shortcut', guard: true, safe: true }).catch(() => false);
+  if (!ok) throw new ToolError('step_declined', 'The person did not confirm the keybind change; nothing changed.', { detail: { why: 'declined', question } });
+  ctx.checkAbort();
+  // The person said yes to that question: the change must still be the one it named.
+  const now = planChange(k, e, keys);
+  if (JSON.stringify(now) !== JSON.stringify(plan)) {
+    throw new ToolError('changed', 'The keybinds changed while the person was asked (in Settings or another tab); nothing changed.', {
+      hint: 'Call keybind_get, then ask the person again with the new wording.',
+      detail: { was: plan, now },
+    });
+  }
+  const r = i.action === 'keybind_set' ? (replace ? k.replace(e.id, keys[0]) : k.setKeybind(e.id, keys[0])) : i.action === 'keybind_reset' ? k.resetToDefault(e.id, { replace }) : k.clear(e.id);
+  if (!r.ok) {
+    if (r.reason === 'conflict') {
+      throw new ToolError('key_taken', `${keysText(k, [r.combo])} is the key of ${listWords(r.conflicts.map((c) => c.name))} now; nothing changed.`, { detail: { with: r.conflicts.map((c) => c.id), labels: r.conflicts.map((c) => c.name) } });
+    }
+    throw bad('value', `value: ${r.message}.`);
+  }
+  const stored = await k.flush();
+  const took = r.took?.length ? `; ${listWords(r.took.map((x) => x.name))} no longer ${r.took.length === 1 ? 'has' : 'have'} it` : '';
+  const keep = stored === true ? '' : ` (applied in this Part, not saved: ${stored})`;
+  return done(`${name}: ${keysText(k, r.keys)} (was ${was})${took}${keep}`, {
+    keybind: keybindRow(k, e),
+    was,
+    ...(r.took?.length ? { took: r.took.map((x) => x.id) } : {}),
+    stored,
+  });
+}
+
 // ------------------------------------------------------------------ the tool
 
-const NO_KERNEL_WAIT: ReadonlySet<WorkspaceAction> = new Set(['reload', 'keep_mine', 'retry_save', 'retry_kernel', 'import_step']);
+const NO_KERNEL_WAIT: ReadonlySet<WorkspaceAction> = new Set(['reload', 'keep_mine', 'retry_save', 'retry_kernel', 'import_step', 'keybind_get', 'keybind_set', 'keybind_reset', 'keybind_clear']);
 
 async function run(ctx: CallCtx): Promise<ToolReply> {
   const i = readInput(ctx.input);
@@ -801,6 +942,11 @@ async function run(ctx: CallCtx): Promise<ToolReply> {
     case 'projection':
     case 'display':
       return view(ctx, i);
+    case 'keybind_get':
+    case 'keybind_set':
+    case 'keybind_reset':
+    case 'keybind_clear':
+      return keybind(ctx, i);
   }
 }
 

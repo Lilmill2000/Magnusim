@@ -6,7 +6,10 @@
 // On the toy kernel (BlockKernel) with a recording viewport handle.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createKeybinds, setKeybindsFor } from '../../src/app/keybinds';
+import { KEYMAP } from '../../src/app/keymap';
 import { runtimeOf } from '../../src/assistant/runtime';
+import type { PrefsApi } from '../../src/lib/bridge';
 import { readViewInput } from '../../src/assistant/view';
 import { LEAVE_AFTER_MS } from '../../src/assistant/tools/workspace';
 import exportModule from '../../src/features/export';
@@ -437,5 +440,178 @@ describe('undo and redo of anyone\'s steps', () => {
     // own stays as it was (no action: own).
     const own = await t.call('undo', { steps: 1, previous_turn: false });
     expect(!own.ok && own.error.message).toMatch(/None of your calls|person changed/);
+  });
+});
+
+// ------------------------------------------------------------------ keybinds
+
+/** ws.prefs in memory: what was written, and a change made elsewhere (Settings) told to the page. */
+function memoryPrefs() {
+  const values: Record<string, unknown> = {};
+  const writes: string[] = [];
+  const listeners = new Set<(key: string, value: unknown) => void>();
+  const api: PrefsApi = {
+    get: async <T,>(key: string) => (key in values ? (JSON.parse(JSON.stringify(values[key])) as T) : null),
+    set: async (key, value) => {
+      writes.push(`set ${key}`);
+      values[key] = JSON.parse(JSON.stringify(value));
+    },
+    remove: async (key) => {
+      writes.push(`remove ${key}`);
+      delete values[key];
+    },
+    onChange: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+  return { api, values, writes };
+}
+
+async function keybindPart() {
+  const t = await part();
+  const prefs = memoryPrefs();
+  const k = createKeybinds({ prefs: prefs.api, layout: false });
+  setKeybindsFor(t.services, k);
+  await k.ready;
+  return { t, k, prefs };
+}
+
+describe('workspace: keybinds (Daniel: read any time, changed only when the person asks, and they confirm)', () => {
+  it('keybind_get answers any time, without person_asked and without a question: one command or all', async () => {
+    const { t } = await keybindPart();
+    const one = await t.ok('workspace', W('keybind_get', { target: 'sketch.rectangle' }));
+    expect(one.text).toBe('Rectangle: R');
+    expect(one.data.keybind).toEqual({ id: 'sketch.rectangle', label: 'Rectangle', context: 'sketch', keys: ['KeyR'], shown: 'R', default: true });
+    // By label too; a label two commands share needs the id.
+    expect((await t.ok('workspace', W('keybind_get', { target: 'show relations' }))).text).toBe('Show relations: Shift+R');
+    const twin = await t.call('workspace', W('keybind_get', { target: 'Undo' }));
+    expect(!twin.ok && twin.error.message).toMatch(/names 2 commands: edit.undo \(model\), sketch.undo \(sketch\)/);
+    const all = await t.ok('workspace', W('keybind_get'));
+    const rows = all.data.keybinds as { id: string; keys: string[] }[];
+    expect(rows.map((r) => r.id)).toEqual(KEYMAP.map((e) => e.id));
+    expect(rows.find((r) => r.id === 'edit.redo')!.keys).toEqual(['Ctrl+KeyY', 'Ctrl+Shift+KeyZ']);
+    expect(t.ws.log.confirms).toEqual([]);
+  });
+
+  it('keybind_set without person_asked is refused (not_asked): nothing changes, no question', async () => {
+    const { t, k, prefs } = await keybindPart();
+    const r = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T' }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.detail).toMatchObject({ reason: 'not_asked' });
+      expect(r.error.hint).toMatch(/explicitly asked .* Set keybind/);
+    }
+    for (const action of ['keybind_reset', 'keybind_clear']) {
+      const x = await t.call('workspace', W(action, { target: 'sketch.rectangle' }));
+      expect(!x.ok && (x.error.detail as { reason: string }).reason, action).toBe('not_asked');
+    }
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(prefs.writes).toEqual([]);
+    expect(t.ws.log.confirms).toEqual([]);
+  });
+
+  it("person_asked with the person's No in the app's dialog: step_declined, nothing changes; Yes: changed and stored", async () => {
+    const { t, k, prefs } = await keybindPart();
+    t.ws.answers.confirm = false;
+    const no = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true }));
+    expect(!no.ok && (no.error.detail as { reason: string }).reason).toBe('step_declined');
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(prefs.writes).toEqual([]);
+    // The app's guarded dialog: Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
+    expect(t.ws.log.confirms).toEqual([{ title: 'The Assistant asks to change a shortcut', message: 'Set the Rectangle shortcut to Shift+T (it was R)?', confirmLabel: 'Change shortcut', guard: true, safe: true }]);
+    t.ws.answers.confirm = true;
+    const yes = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true }));
+    expect(yes.text).toBe('Rectangle: Shift+T (was R)');
+    expect(yes.data).toMatchObject({ keybind: { keys: ['Shift+KeyT'], default: false, defaults: 'R' }, stored: true, undo_step: false });
+    expect(k.current('sketch.rectangle')).toEqual(['Shift+KeyT']);
+    expect(prefs.values.keybinds).toEqual({ 'sketch.rectangle': ['Shift+KeyT'] });
+    // Every change asks, every time: clear, then reset.
+    expect((await t.ok('workspace', W('keybind_clear', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle: none (was Shift+T)');
+    expect(prefs.values.keybinds).toEqual({ 'sketch.rectangle': [] });
+    expect((await t.ok('workspace', W('keybind_reset', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle: R (was none)');
+    expect(prefs.values.keybinds).toBeUndefined();
+    expect(t.ws.log.confirms.map((c) => c.message)).toEqual([
+      'Set the Rectangle shortcut to Shift+T (it was R)?',
+      'Set the Rectangle shortcut to Shift+T (it was R)?',
+      'Clear the Rectangle shortcut (it was Shift+T)?',
+      'Reset the Rectangle shortcut to R (it is none)?',
+    ]);
+    // A reset to what it has already asks nothing.
+    expect((await t.ok('workspace', W('keybind_reset', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle already has R: nothing changed');
+    expect(t.ws.log.confirms).toHaveLength(4);
+  });
+
+  it("another command's key is key_taken unless items replace (asked too); browser and app keys are refused before any question", async () => {
+    const { t, k } = await keybindPart();
+    const taken = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+R', person_asked: true }));
+    expect(!taken.ok && taken.error.detail).toMatchObject({ reason: 'key_taken', with: ['view.sketch-relations'], labels: ['Show relations (sketch)'] });
+    expect(t.ws.log.confirms).toEqual([]);
+    const r = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'shift+r', items: ['replace'], person_asked: true }));
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Rectangle shortcut to Shift+R (it was R)? Show relations (sketch) loses Shift+R.');
+    expect(r.text).toBe('Rectangle: Shift+R (was R); Show relations (sketch) no longer has it');
+    expect(k.current('view.sketch-relations')).toEqual([]);
+    for (const [value, words] of [
+      ['Ctrl+W', /"Ctrl\+KeyW" is kept for the browser and the system \(Close the tab\)/],
+      ['Ctrl+/', /"Ctrl\+Slash" is the app's own key \(Open or close the Assistant panel\)/],
+      ['Escape', /"Escape" is CAD's built-in cancel key/],
+      ['Ctrl+P', /"Ctrl\+KeyP" is kept for the browser and the system \(Print the page\)/],
+    ] as const) {
+      const x = await t.call('workspace', W('keybind_set', { target: 'sketch.circle', value, person_asked: true }));
+      expect(!x.ok && x.error.message, value).toMatch(words);
+    }
+    expect(t.ws.log.confirms).toHaveLength(1);
+    expect(k.current('sketch.circle')).toEqual(['KeyC']);
+  });
+
+  it('a key no keyboard reports, a modifier a shortcut cannot use or two keys are refused with why, before any question (review: a dead key could be stored)', async () => {
+    const { t, k, prefs } = await keybindPart();
+    for (const [value, words] of [
+      ['Ctrl+PgDown2', /^bad_input: value: "Ctrl\+PgDown2" is not a key \(modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent\.code such as KeyR\)/],
+      ['Shift+?', /"Shift\+\?" is not a key/],
+      ['AltGr+Q', /"AltGr\+Q" is not a key/],
+      ['Ctrl+A+B', /"Ctrl\+A\+B" is not a key/],
+      ['F (no change: keep)', /is not a key/],
+      ['Ctrl+Numpad5', /"Ctrl\+Numpad5" never comes from a press: write "Ctrl\+Digit5"/],
+    ] as const) {
+      const x = await t.call('workspace', W('keybind_set', { target: 'view.fit', value, person_asked: true }));
+      expect(!x.ok && x.error.message, value).toMatch(words);
+    }
+    // A name people write is read as the key it is: PgDn is PageDown.
+    expect((await t.ok('workspace', W('keybind_set', { target: 'view.fit', value: 'Shift+PgDn', person_asked: true }))).text).toBe('Fit: Shift+PageDown (was F)');
+    expect(t.ws.log.confirms.map((c) => c.message)).toEqual(['Set the Fit shortcut to Shift+PageDown (it was F)?']);
+    expect(k.current('view.fit')).toEqual(['Shift+PageDown']);
+    expect(prefs.values.keybinds).toEqual({ 'view.fit': ['Shift+PageDown'] });
+  });
+
+  it('a key two commands have: the question names both and where they work (review)', async () => {
+    const { t } = await keybindPart();
+    await t.ok('workspace', W('keybind_set', { target: 'view.front', value: 'Delete', items: ['replace'], person_asked: true }));
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Front view shortcut to Delete (it was 1)? Delete selected features (model) and Delete (sketch) lose Delete.');
+  });
+
+  it('the keybinds changed while the person was asked: nothing changes, and the Assistant is told to ask again (review: Replace took a key the question did not name)', async () => {
+    const { t, k } = await keybindPart();
+    // While the dialog is open, Settings gives Plane the key R too (a conflict stored elsewhere).
+    vi.spyOn(t.services.bridge, 'confirm').mockImplementation(async () => {
+      k.replace('construct.plane', 'R');
+      return true;
+    });
+    const r = await t.call('workspace', W('keybind_set', { target: 'view.fit', value: 'R', items: ['replace'], person_asked: true }));
+    expect(!r.ok && r.error.detail).toMatchObject({ reason: 'changed' });
+    expect(!r.ok && r.error.hint).toBe('Call keybind_get, then ask the person again with the new wording.');
+    // Fit kept F; Rectangle and Plane keep R.
+    expect(k.current('view.fit')).toEqual(['KeyF']);
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(k.current('construct.plane')).toEqual(['KeyR']);
+  });
+
+  it("keybind_get on Finish sketch says what the person sees: none of its own, Enter (Place or finish) finishes the sketch (review)", async () => {
+    const { t } = await keybindPart();
+    const r = await t.ok('workspace', W('keybind_get', { target: 'sketch.finish' }));
+    expect(r.text).toBe('Finish sketch: none of its own; Enter runs Place or finish');
+    expect(r.data.keybind).toMatchObject({ keys: [], shown: 'none of its own; Enter runs Place or finish', via: { id: 'sketch.enter', label: 'Place or finish', shown: 'Enter' } });
+    await t.ok('workspace', W('keybind_set', { target: 'sketch.finish', value: 'Ctrl+Enter', person_asked: true }));
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Finish sketch shortcut to Ctrl+Enter (it was none of its own; Enter runs Place or finish)?');
   });
 });

@@ -200,6 +200,9 @@ describe('the CAD guide', () => {
 
   it('says how a file is made, how busy ends a turn, and that delete asks the person', () => {
     expect(GUIDE).toContain('Files: the person uses Export STEP.');
+    // Placement still matters to the solver (review: trimmed once to fit the budget).
+    expect(GUIDE).toContain('constraints and dimensions set the shape. Draw the rough shape.');
+    expect(GUIDE).toContain('Keybinds: read any time; change only when explicitly asked (they confirm).');
     expect(GUIDE).toContain('busy: the person comes first: follow the hint; most end your turn.');
     expect(GUIDE).toContain('delete asks the person');
     // The hints the busy line points to end the turn, or say what to do instead.

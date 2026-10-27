@@ -40,6 +40,8 @@ export const SHARDS = {
     'e2e/cad-ux010-banana.spec.ts',
     // Pictures drawn off screen (handle.snapshot) and the count of the person's camera moves.
     'e2e/cad-viewport-snapshot.spec.ts',
+    // Keybinds: the Set keybind dialog (Replace, Reset), the keys live in a sketch, a change made in Settings applied at once.
+    'e2e/cad-keybinds.spec.ts',
   ],
   // The sketcher (tools, relations, dimensions, value boxes), profiles, and Extrude of them
   // (P3's gate and the P2+P3 review rounds).

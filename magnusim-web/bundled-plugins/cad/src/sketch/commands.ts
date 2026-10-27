@@ -33,7 +33,8 @@ import { entityOf, ORIGIN, RELATION_LABELS } from './model';
 import { IMPLIED, type ApplyResult, type SketchMode } from './mode';
 import { sketchUp } from '../viewport/normal';
 // ux010 (DRAW): Show relations.
-import { relationsView, SHOW_RELATIONS_SHORTCUT } from './relations-view';
+import { relationsView } from './relations-view';
+import { keyLabel } from '../app/keybinds';
 // P4b (SKETCH): spline handles and fit points for Tangent / Coincident.
 import { addHandle } from './tools/spline-relations';
 
@@ -73,12 +74,13 @@ export function supportFromSelection(
 }
 
 // v0.5.0: the drawing tools sit in toolbar flyouts (src/ui/flyouts.ts): `flyout` names the one.
-const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; shortcut?: string; hint: string; order?: number; flyout?: string }[] = [
-  { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, shortcut: 'L', hint: 'Chained lines, click by click; A or a drag from the end makes a tangent arc', flyout: 'line' },
-  { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, shortcut: 'R', hint: 'Two opposite corners', flyout: 'rectangle' },
+const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; hint: string; order?: number; flyout?: string }[] = [
+  // Line's hint names 3-point arc's key (the person's keybind) for the tangent arc: lineHint.
+  { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, hint: 'Chained lines, click by click; a drag from the end makes a tangent arc', flyout: 'line' },
+  { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, hint: 'Two opposite corners', flyout: 'rectangle' },
   { id: 'sketch.rectangle-center', tool: 'rectangle-center', label: 'Center rectangle', icon: SKETCH_ICONS.rectangleCenter, hint: 'The centre, then a corner', flyout: 'rectangle' },
-  { id: 'sketch.circle', tool: 'circle', label: 'Circle', icon: SKETCH_ICONS.circle, shortcut: 'C', hint: 'The centre, then the radius', flyout: 'circle' },
-  { id: 'sketch.arc', tool: 'arc-3pt', label: '3-point arc', icon: SKETCH_ICONS.arc, shortcut: 'A', hint: 'Start, end, then a point on the arc', flyout: 'arc' },
+  { id: 'sketch.circle', tool: 'circle', label: 'Circle', icon: SKETCH_ICONS.circle, hint: 'The centre, then the radius', flyout: 'circle' },
+  { id: 'sketch.arc', tool: 'arc-3pt', label: '3-point arc', icon: SKETCH_ICONS.arc, hint: 'Start, end, then a point on the arc', flyout: 'arc' },
   { id: 'sketch.arc-tangent', tool: 'arc-tangent', label: 'Tangent arc', icon: SKETCH_ICONS.arcTangent, hint: 'From the end of a line or an arc, tangent to it', flyout: 'arc' },
   { id: 'sketch.point', tool: 'point', label: 'Point', icon: SKETCH_ICONS.point, hint: 'A sketch point' },
   { id: 'sketch.centerline', tool: 'centerline', label: 'Centerline', icon: SKETCH_ICONS.centerline, hint: 'A construction line, an axis to mirror or revolve about', flyout: 'line' },
@@ -256,8 +258,12 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       group: 'draw',
       mode: 'sketch',
       icon: d.icon,
-      shortcut: d.shortcut,
-      hint: d.hint,
+      get hint() {
+        if (d.id !== 'sketch.line') return d.hint;
+        // In a line chain 3-point arc's key (A by default) makes the next segment a tangent arc.
+        const arc = keyLabel(services, 'sketch.arc');
+        return arc ? `Chained lines, click by click; ${arc} or a drag from the end makes a tangent arc` : d.hint;
+      },
       order: d.order ?? 10 + i,
       ...(d.flyout ? { flyout: d.flyout } : {}),
       activeWhen: { sketchTool: d.tool },
@@ -292,10 +298,10 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'draw',
     mode: 'sketch',
     icon: SKETCH_ICONS.construction,
-    shortcut: 'X',
     get hint() {
       const ids = curvesPicked();
-      if (!ids.length) return mode.drawConstruction ? 'Construction drawing is on: X turns it off' : 'Construction drawing is off: X turns it on (what you draw is dashed, never part of a profile)';
+      const x = keyLabel(services, 'sketch.construction') ?? 'Construction';
+      if (!ids.length) return mode.drawConstruction ? `Construction drawing is on: ${x} turns it off` : `Construction drawing is off: ${x} turns it on (what you draw is dashed, never part of a profile)`;
       const d = mode.draft();
       return d && ids.every((id) => entityOf(d, id)?.construction) ? 'Make the selection normal geometry (not construction)' : 'Make the selection construction';
     },
@@ -362,7 +368,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'dimension',
     mode: 'sketch',
     icon: SKETCH_ICONS.dimension,
-    shortcut: 'D',
     hint: 'Smart Dimension: pick a line, a circle, an arc or two items, then where the value goes',
     order: 10,
     activeWhen: { sketchTool: 'dimension' },
@@ -375,7 +380,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'sketch-modify',
     mode: 'sketch',
     icon: SKETCH_ICONS.trim,
-    shortcut: 'T',
     hint: 'Remove the piece of a curve between the curves that cross it',
     order: 10,
     activeWhen: { sketchTool: 'trim' },
@@ -404,7 +408,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'draw',
     mode: 'sketch',
     icon: SKETCH_ICONS.finish,
-    shortcut: 'Enter',
     get hint() {
       return mode.byAssistant ? TAKE_OVER : 'Leave the sketch (the whole sketch session is one undo step)';
     },
@@ -417,7 +420,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     id: 'sketch.delete',
     label: 'Delete',
     mode: 'sketch',
-    shortcut: 'Delete',
     explainRefusal: true,
     enabled: () => {
       const e = editable();
@@ -431,7 +433,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Undo',
     mode: 'sketch',
     icon: SKETCH_ICONS.undo,
-    shortcut: 'Ctrl+Z',
     get hint() {
       return mode.byAssistant ? TAKE_OVER : 'Undo the last change in this sketch';
     },
@@ -443,7 +444,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Redo',
     mode: 'sketch',
     icon: SKETCH_ICONS.redo,
-    shortcut: 'Ctrl+Y',
     get hint() {
       return mode.byAssistant ? TAKE_OVER : 'Redo in this sketch';
     },
@@ -456,7 +456,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Normal to',
     mode: 'sketch',
     icon: SKETCH_ICONS.lookAt,
-    shortcut: 'N',
     hint: 'Look straight at the sketch',
     order: 50,
     run: () => {
@@ -474,11 +473,11 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Show relations',
     mode: 'sketch',
     icon: RELATIONS_ICON,
-    shortcut: SHOW_RELATIONS_SHORTCUT,
     get hint() {
+      const k = keyLabel(services, 'view.sketch-relations') ?? 'Show relations';
       return rv.state.get().showAll
-        ? 'Every relation shows: Shift+R shows only those of the selected geometry (a conflict always shows)'
-        : 'Relations show for the selected geometry only: Shift+R shows them all (a conflict always shows)';
+        ? `Every relation shows: ${k} shows only those of the selected geometry (a conflict always shows)`
+        : `Relations show for the selected geometry only: ${k} shows them all (a conflict always shows)`;
     },
     order: 60,
     pressed: () => mode.active && rv.state.get().showAll,
@@ -494,6 +493,7 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
   // ---- keys that are not one command's shortcut
   const kb = services.keyboard;
   offs.push(
+    // Escape is built in (the app's own key, never rebound): it steps back in the sketch.
     kb.bind({
       combo: 'Escape',
       inInputs: true,
@@ -507,14 +507,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
         // A field keeps its Escape; it never closes the sketch.
         if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
         mode.escape();
-        return true;
-      },
-    }),
-    kb.bind({
-      combo: 'Ctrl+Shift+Z',
-      run: () => {
-        if (!mode.active) return false;
-        mode.redo();
         return true;
       },
     }),

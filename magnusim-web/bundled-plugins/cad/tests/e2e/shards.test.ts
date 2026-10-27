@@ -318,6 +318,9 @@ describe('the smoke and serial tags', () => {
       'cad:assistant-coexist-busy',
       // The Assistant's sketch on the collapsed Sketch panel's rail: the collapse is the user's pref.
       'cad:assistant-panel-rail',
+      // Keybinds are the user's pref: set in the dialog, and from outside the page (Settings).
+      'cad:keybinds-dialog',
+      'cad:keybinds-live',
     ].sort());
   });
 });

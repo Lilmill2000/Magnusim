@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { CommandDef } from '../types/commands';
+import { bindCommandKeys, keyLabel } from '../app/keybinds';
 import { clearSelection } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import type { SelectionItem } from '../types/selection';
@@ -27,7 +28,6 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     id: UNDO_ID,
     label: 'Undo',
     icon: ICONS.undo,
-    shortcut: 'Ctrl+Z',
     // With a feature panel open, Undo undoes that panel's changes as one step
     // (a new feature goes away; Redo brings them back); earlier steps are
     // untouched until the next Undo.
@@ -56,7 +56,6 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     id: REDO_ID,
     label: 'Redo',
     icon: ICONS.redo,
-    shortcut: 'Ctrl+Y',
     get hint() {
       // The Assistant's panel: Redo takes it over too, as Undo does (it goes; nothing is redone).
       if (ui.state.get().panel?.owner === 'assistant') return 'Take over from the Assistant: its open panel is discarded';
@@ -109,11 +108,11 @@ export function deleteHint(services: AppServices, ui: UiController, items: reado
   return name ? `${what} cannot be deleted on its own. To remove it, delete ${name} in the history.` : `${what} cannot be deleted on its own: delete the feature that makes it.`;
 }
 
-/** What F2 does, for a selection it cannot rename. */
-function renameHint(item: SelectionItem): string {
+/** What Rename's key (F2 by default: `key`) does, for a selection it cannot rename. */
+function renameHint(item: SelectionItem, key = 'F2'): string {
   if (item.kind === 'origin') return "The origin's planes and axes cannot be renamed.";
   const what = item.kind === 'vertex' ? 'Points' : item.kind === 'sketch' ? 'Sketch entities' : item.kind === 'region' ? 'Profiles' : `${item.kind[0].toUpperCase()}${item.kind.slice(1)}s`;
-  return `${what} have no names. F2 renames a feature or a body: select one in the tree.`;
+  return `${what} have no names. ${key} renames a feature or a body: select one in the tree.`;
 }
 
 /** Registers the UI's commands, key bindings and bus handlers. Returns an uninstall. */
@@ -140,8 +139,8 @@ export function installUi(services: AppServices): () => void {
 
   const kb = services.keyboard;
   offs.push(
-    // Ctrl+Shift+Z redoes too (the command's own shortcut is Ctrl+Y).
-    kb.bind({ combo: 'Ctrl+Shift+Z', run: () => void services.commands.run(REDO_ID) }),
+    // Escape is built in (the app's own key, never rebound). Delete and F2 are the person's keybinds
+    // ui.delete and ui.rename (src/app/keymap.ts).
     kb.bind({
       combo: 'Escape',
       // From a field, only a panel's own fields pass Escape on (after reverting
@@ -162,8 +161,7 @@ export function installUi(services: AppServices): () => void {
         }
       },
     }),
-    kb.bind({
-      combo: 'Delete',
+    bindCommandKeys(services, 'ui.delete', {
       run: () => {
         const items = services.selection.get().items;
         const ids = items.flatMap((it) => (it.kind === 'feature' ? [it.feature] : []));
@@ -179,14 +177,13 @@ export function installUi(services: AppServices): () => void {
         if (!ids.length && items.length) services.bridge.toast(deleteHint(services, ui, items), 'info');
       },
     }),
-    kb.bind({
-      combo: 'F2',
+    bindCommandKeys(services, 'ui.rename', {
       run: () => {
         const items = services.selection.get().items;
         const first = items.find((it) => it.kind === 'feature' || it.kind === 'body');
         if (first?.kind === 'feature') ui.startRename('feature', first.feature);
         else if (first?.kind === 'body') ui.startRename('body', first.body);
-        else if (items.length) services.bridge.toast(renameHint(items[0]), 'info');
+        else if (items.length) services.bridge.toast(renameHint(items[0], keyLabel(services, 'ui.rename')), 'info');
       },
     }),
   );

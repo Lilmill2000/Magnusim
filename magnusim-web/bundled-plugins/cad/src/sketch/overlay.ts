@@ -15,6 +15,7 @@
 // wheel and right drag zoom) and every move, double-click and right-click.
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keybindsFor, keyLabel } from '../app/keybinds';
 import { BufferGeometry, Color, Float32BufferAttribute, Group, Matrix4, Points, PointsMaterial, Vector3, type Object3D } from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
@@ -1145,7 +1146,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   }
 
   // "Construction · X" with its × (Turn off construction): src/sketch/construction-badge.ts.
-  const badge = createConstructionBadge(mode);
+  // Its key is the person's Construction keybind (X by default), followed when it changes.
+  const badge = createConstructionBadge(mode, () => keyLabel(services, 'sketch.construction'));
   html.append(badge.el);
   const syncBadge = () => badge.sync();
 
@@ -1657,6 +1659,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   });
   // ux010 (DRAW): Show relations on or off: the glyphs again.
   const offRelations = relationsView(services).state.subscribe(() => render());
+  // The Construction badge names Construction's key: the person's keybind, followed when it changes.
+  const offKeys = keybindsFor(services).subscribe(syncBadge);
   // ux010 (DRAW): construction drawing on or off: the badge and the preview's dashes.
   let drawingConstruction = mode.drawConstruction;
   const offState = mode.state.subscribe((s) => {
@@ -1675,6 +1679,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     offRelations();
     badge.dispose();
     palette.dispose();
+    offKeys();
     popTool();
     mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);

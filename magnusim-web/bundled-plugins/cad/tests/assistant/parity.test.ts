@@ -18,7 +18,8 @@
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
-import { AI_TOOLS, command, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { keybindsFor } from '../../src/app/keybinds';
+import { AI_TOOLS, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
@@ -136,6 +137,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
       ['doc', services.doc, DOC],
       ['rails', railsFor(services), RAILS],
       ['toolbar', toolbarPrefs(services), TOOLBAR],
+      ['keybinds', keybindsFor(services), KEYBINDS],
       ['link', services.apis.get().link ?? {}, LINK],
     ];
     for (const [name, obj, table] of methods) for (const k of Object.keys(obj)) if (!table[k]) missing.push(`${name}.${k}`);
@@ -174,7 +176,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(missing, 'an Assistant capability with no person path').toEqual([]);
     expect(stale).toEqual([]);
     // Each path is there: the command registered, the control's method on its object, the panel field on a type with a panel.
-    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT };
+    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT };
     const bad: string[] = [];
     const check = (where: string, p: PersonPath) => {
       if (p.kind === 'command') {

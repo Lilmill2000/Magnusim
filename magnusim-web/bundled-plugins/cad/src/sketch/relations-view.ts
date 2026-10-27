@@ -18,7 +18,6 @@ import { entityPoints } from './model';
 
 /** ws.prefs key (absent = false: relations show for the selection only). */
 export const PREF_SHOW_RELATIONS = 'sketch-show-relations';
-export const SHOW_RELATIONS_SHORTCUT = 'Shift+R';
 
 export interface RelationsView {
   readonly state: StateStore<{ showAll: boolean }>;

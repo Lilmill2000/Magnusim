@@ -925,7 +925,7 @@ describe('commands', () => {
   it('undo and redo commands say why they are unavailable', async () => {
     const { install } = await import('../../src/doc');
     const { createCommandRegistry } = await import('../../src/app/commands');
-    const { createKeyboard } = await import('../../src/app/keyboard');
+    const { bindCommandShortcuts, createKeyboard } = await import('../../src/app/keyboard');
     const { doc, kernel, bus } = make();
     // eslint-disable-next-line prefer-const
     let services: Parameters<typeof install>[0];
@@ -933,6 +933,8 @@ describe('commands', () => {
     const keyboard = createKeyboard(document);
     services = { doc, kernel, bus, commands, keyboard } as unknown as Parameters<typeof install>[0];
     const off = install(services);
+    // The app binds every command's keys (the keybinding registry: Redo is Ctrl+Y and Ctrl+Shift+Z).
+    const unbind = bindCommandShortcuts(commands, keyboard);
     expect(await commands.run('edit.undo')).toBe('The part is still loading');
     await doc.load();
     expect(await commands.run('edit.undo')).toBe('Nothing to undo');
@@ -941,6 +943,7 @@ describe('commands', () => {
     expect(doc.state.get().doc.features).toEqual([]);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true }));
     await vi.waitFor(() => expect(doc.state.get().doc.features).toHaveLength(1));
+    unbind();
     off();
     keyboard.dispose();
   });

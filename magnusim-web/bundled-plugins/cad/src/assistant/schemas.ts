@@ -108,6 +108,10 @@ export const WORKSPACE_ACTIONS = [
   'section',
   'projection',
   'display',
+  'keybind_get',
+  'keybind_set',
+  'keybind_reset',
+  'keybind_clear',
 ] as const;
 export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
 
@@ -442,7 +446,7 @@ const SPECS: ToolSpec[] = [
     title: 'Delete features',
     risk: 'destructive',
     timeoutS: 120,
-    confirm: 'Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.',
+    confirm: 'Deletes features from the Part; one Undo takes back the whole request, this deletion with it.',
     description:
       'Delete features by name. The person is asked first. Refused, with nothing changed, while a feature not in the list uses one of them: the error names every user. Features that fail afterwards are listed. The person can bring them back with Undo, which takes back the whole request with them. To take back your own recent calls use undo instead (no question).',
     schema: obj({ features: arr(str(80, 'Feature name'), 1, 20, 'Features to delete.') }),
@@ -513,13 +517,13 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      "Things the person controls around the model, one action per call (target, value, items: \"\" or [] when unused; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, construction feature or body), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (asks the person to pick the file), reheal (an import: the one undo step here), export_step (opens the person's Export STEP panel filled in; they click Export), send_to_simulation (save, then link into the project's geometry as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana for scale: banana_show, banana_hide, banana_place. The person's own view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or while they have not moved it in this request. Each result says what changed.",
+      "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, body or construction), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export), send_to_simulation (save and link, as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana: banana_show, banana_hide, banana_place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true).",
     schema: obj({
       action: en(WORKSPACE_ACTIONS, 'What to do'),
       target: str(300, 'What it acts on, or ""'),
       value: str(200, 'The value, or ""'),
       items: arr(str(300, 'A selector, name or kind'), 0, 40, 'Lists: selection, filter, export bodies; else []'),
-      person_asked: bool('The person asked for this view change in this request'),
+      person_asked: bool('The person asked for this view or keybind change in this request'),
     }),
   },
 ];

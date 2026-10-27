@@ -57,7 +57,6 @@ const module: CadModule = {
       label: 'Press-pull',
       group: 'modify',
       icon: P2_ICONS.pressPull,
-      shortcut: 'Q',
       order: 20,
       hint: 'Move faces along their normal: out adds material, in removes it; a curved face changes its radius',
       activeWhen: { featureType: 'press_pull' },

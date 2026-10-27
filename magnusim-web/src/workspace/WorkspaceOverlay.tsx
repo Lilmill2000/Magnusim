@@ -486,7 +486,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         focusFrame();
       }
     };
-    const appConfirm = (opts: { title: string; copy: string; yes: string }) =>
+    const appConfirm = (opts: { title: string; copy: string; yes: string; guard?: boolean; safe?: boolean }) =>
       pageDialog((turn) =>
         window.__CFD_CONFIRM__ ? window.__CFD_CONFIRM__({ ...opts, ...turn }) : Promise.resolve(window.confirm(opts.copy || opts.title)),
       );

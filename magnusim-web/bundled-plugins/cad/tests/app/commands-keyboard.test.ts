@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it, vi } from 'vitest';
 import { createCommandRegistry } from '../../src/app/commands';
+import { createKeybinds } from '../../src/app/keybinds';
 import { bindCommandShortcuts, comboOf, createKeyboard, normaliseCombo } from '../../src/app/keyboard';
 import type { AppServices } from '../../src/types/app';
 
@@ -32,10 +33,78 @@ describe('command registry', () => {
 
 describe('keyboard', () => {
   it('normalises combos', () => {
-    expect(normaliseCombo('cmd+shift+z')).toBe('Ctrl+Shift+Z');
-    expect(normaliseCombo('Shift+f')).toBe('Shift+F');
+    // Written with KeyboardEvent.code names (src/app/keymap.ts).
+    expect(normaliseCombo('cmd+shift+z')).toBe('Ctrl+Shift+KeyZ');
+    expect(normaliseCombo('Shift+f')).toBe('Shift+KeyF');
     expect(normaliseCombo('esc')).toBe('Escape');
-    expect(comboOf(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }))).toBe('Ctrl+Z');
+    expect(comboOf(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }))).toBe('Ctrl+KeyZ');
+    // A letter is the letter the key types, wherever the layout puts it.
+    expect(comboOf(new KeyboardEvent('keydown', { key: 'y', code: 'KeyZ', ctrlKey: true }))).toBe('Ctrl+KeyY');
+  });
+
+  it("Undo and Redo stay on the keys labelled Z and Y on QWERTZ and AZERTY (review: they swapped, or Undo went to the browser's close-tab key)", async () => {
+    const reg = createCommandRegistry(() => services);
+    const kb = createKeyboard(document);
+    const undo = vi.fn();
+    const redo = vi.fn();
+    reg.register({ id: 'edit.undo', label: 'Undo', run: undo });
+    reg.register({ id: 'edit.redo', label: 'Redo', run: redo });
+    const off = bindCommandShortcuts(reg, kb);
+    const press = (init: KeyboardEventInit) => document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ctrlKey: true, ...init }));
+    // German QWERTZ: Z is where US keyboards have Y, and Y where they have Z.
+    press({ key: 'z', code: 'KeyY' });
+    await Promise.resolve();
+    expect([undo.mock.calls.length, redo.mock.calls.length]).toEqual([1, 0]);
+    press({ key: 'y', code: 'KeyZ' });
+    await Promise.resolve();
+    expect([undo.mock.calls.length, redo.mock.calls.length]).toEqual([1, 1]);
+    // French AZERTY: Z is where US keyboards have W.
+    press({ key: 'z', code: 'KeyW' });
+    await Promise.resolve();
+    expect(undo).toHaveBeenCalledTimes(2);
+    // The tooltip reads Ctrl+Z on every layout.
+    expect(reg.get('edit.undo')!.shortcut).toBe('Ctrl+Z');
+    off();
+    kb.dispose();
+  });
+
+  it('only Undo and Redo themselves, on Ctrl keys, reach the app from an untouched field: a letter rebound to Redo is typed (review)', async () => {
+    const keybinds = createKeybinds({ prefs: null, layout: false });
+    const reg = createCommandRegistry(() => services, keybinds);
+    const kb = createKeyboard(document);
+    const redo = vi.fn();
+    const rect = vi.fn();
+    reg.register({ id: 'edit.redo', label: 'Redo', run: redo });
+    reg.register({ id: 'sketch.rectangle', label: 'Rectangle', mode: 'sketch', run: rect });
+    // Redo (model) on R: no conflict with Rectangle's R (sketch only).
+    expect(keybinds.setKeybind('edit.redo', 'R')).toMatchObject({ ok: true });
+    let mode: 'model' | 'sketch' = 'model';
+    const off = bindCommandShortcuts(reg, kb, undefined, () => mode);
+    const input = document.createElement('input');
+    input.setAttribute('data-undo-to-app', '1');
+    document.body.append(input);
+    const key = (init: KeyboardEventInit) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      input.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    // The field keeps the letter in both modes.
+    expect(key({ key: 'r', code: 'KeyR' })).toBe(false);
+    mode = 'sketch';
+    expect(key({ key: 'r', code: 'KeyR' })).toBe(false);
+    await Promise.resolve();
+    expect(redo).not.toHaveBeenCalled();
+    expect(rect).not.toHaveBeenCalled();
+    // Ctrl+Y is not Redo's any more (Redo has only R): the field keeps it too.
+    mode = 'model';
+    expect(key({ key: 'y', code: 'KeyY', ctrlKey: true })).toBe(false);
+    // Outside a field R is Redo.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', bubbles: true }));
+    await Promise.resolve();
+    expect(redo).toHaveBeenCalledTimes(1);
+    input.remove();
+    off();
+    kb.dispose();
   });
 
   it('runs command shortcuts, but not while typing in an input', async () => {
@@ -108,11 +177,11 @@ describe('keyboard', () => {
     const undo = vi.fn();
     const redo = vi.fn();
     const other = vi.fn();
-    reg.register({ id: 'edit.undo', label: 'Undo', shortcut: 'Ctrl+Z', run: undo });
-    reg.register({ id: 'edit.redo', label: 'Redo', shortcut: 'Ctrl+Y', run: redo });
-    reg.register({ id: 'view.fit', label: 'Fit', shortcut: 'F', run: other });
+    // Their keys are the keybinding registry's: Ctrl+Z; Ctrl+Y and Ctrl+Shift+Z; F.
+    reg.register({ id: 'edit.undo', label: 'Undo', run: undo });
+    reg.register({ id: 'edit.redo', label: 'Redo', run: redo });
+    reg.register({ id: 'view.fit', label: 'Fit', mode: 'any', run: other });
     bindCommandShortcuts(reg, kb);
-    kb.bind({ combo: 'Ctrl+Shift+Z', run: () => void reg.run('edit.redo') });
     const input = document.createElement('input');
     input.setAttribute('data-undo-to-app', '1');
     document.body.append(input);

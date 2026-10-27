@@ -270,7 +270,11 @@ export interface BridgeHooks {
   /** The study is not in the project any more (deleted in another tab). */
   studyGone(): void;
   toast(message: string, kind: 'info' | 'success' | 'error'): void;
-  confirm(opts: { title: string; copy: string; yes: string }): Promise<boolean>;
+  /**
+   * guard (a deliberate click on Yes only) and safe (Enter answers Cancel) come from the page's
+   * ui.confirm when it asks for them (the CAD Part's Assistant keybind changes: unreleased 1.9).
+   */
+  confirm(opts: { title: string; copy: string; yes: string; guard?: boolean; safe?: boolean }): Promise<boolean>;
   prompt(opts: { title: string; label: string; value: string; yes: string }): Promise<string | null>;
   units(): UnitSystem;
   log(message: string, detail?: unknown): void;
@@ -1319,6 +1323,9 @@ export class WorkspaceCalls {
           title: String(params.title || 'Are you sure?'),
           copy: String(params.message || ''),
           yes: String(params.confirmLabel || 'OK'),
+          // A Yes that must be a deliberate click, and Enter answering Cancel, when the page asks.
+          ...(params.guard === true ? { guard: true } : {}),
+          ...(params.safe === true ? { safe: true } : {}),
         });
       case 'ui.prompt':
         return this.hooks.prompt({

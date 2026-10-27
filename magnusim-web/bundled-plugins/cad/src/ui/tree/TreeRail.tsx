@@ -8,7 +8,8 @@ import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
 import { Icon, ICONS } from '../Icon';
 import { useTip } from '../kit';
-import { RAIL_SHORTCUT, railsFor, useRailFocus } from '../left-rails';
+import { RAIL_COMMAND, railsFor, useRailFocus } from '../left-rails';
+import { useKeyLabel } from '../keybinds';
 
 /** A chevron pointing left (collapse sideways) and right (expand), 24 viewBox outlines. */
 export const CHEVRON_LEFT = 'M14.5 6l-6 6 6 6';
@@ -23,10 +24,11 @@ export function TreeRail({ onOpen, sketching }: { onOpen(): void; sketching: boo
   const failed = useStateStore(services.doc.state, (s) => JSON.stringify(s.doc.features.filter((f) => s.rebuild.features[f.id]?.state === 'error').map((f) => f.name)));
   const names = JSON.parse(failed) as string[];
   const label = 'Show the design tree';
+  const key = useKeyLabel(services, RAIL_COMMAND);
   const tip = useTip({
     text: label,
     detail: names.length ? `${names.length === 1 ? 'Failed' : `${names.length} failed`}: ${names.join(', ')}` : sketching ? 'For this sketch only: it comes back by itself at Done' : undefined,
-    ...(sketching ? {} : { shortcut: RAIL_SHORTCUT }),
+    ...(sketching || !key ? {} : { shortcut: key }),
   });
   return (
     <button type="button" className="cad-rail is-tree" data-cad-rail="tree" aria-label={names.length ? `${label} (${names.length} failed)` : label} aria-expanded="false" ref={ref} onClick={() => {

@@ -41,7 +41,7 @@ export async function preselectedEdgesFaces(services: AppServices, opts: { edges
   return { body: info.id, edges, faces };
 }
 
-export function localCommand(services: AppServices, o: { id: string; type: FeatureType; label: string; icon: string; order: number; hint: string; edges: boolean; shortcut?: string }): CommandDef {
+export function localCommand(services: AppServices, o: { id: string; type: FeatureType; label: string; icon: string; order: number; hint: string; edges: boolean}): CommandDef {
   const ui = uiFor(services);
   return {
     id: o.id,
@@ -50,7 +50,6 @@ export function localCommand(services: AppServices, o: { id: string; type: Featu
     icon: o.icon,
     order: o.order,
     hint: o.hint,
-    ...(o.shortcut ? { shortcut: o.shortcut } : {}),
     explainRefusal: true,
     activeWhen: { featureType: o.type },
     enabled: () => ui.editBlock() ?? (services.doc.state.get().rebuild.bodies.length ? true : NO_BODY),

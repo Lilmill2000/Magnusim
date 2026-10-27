@@ -10,12 +10,14 @@
 // Storage: the user's plugin prefs (`ws.prefs`, host API 1.7; keys below), read once when the page
 // starts (another tab's change is not followed live: a rail that moved under the pointer would fight
 // the user). A host without `ws.prefs`, or one that refuses it, keeps them for this page only.
-// Keyboard: Ctrl+\ (by key, or by its place on the keyboard) collapses or expands the Sketch panel in
-// sketch mode, the tree in model mode. A toggle clicked on a control it removes hands the keyboard to
+// Keyboard: the person's keybind ui.toggle-rail (Ctrl+\ by default, by its place on the keyboard:
+// src/app/keymap.ts) collapses or expands the Sketch panel in sketch mode, the tree in model mode. A toggle clicked on a control it removes hands the keyboard to
 // the control that replaces it (focusAfter / takeFocus). The column is drawn once the prefs are read.
 // Owner: ux010 PANELS.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, type RefObject } from 'react';
+import { bindCommandKeys, keybindsFor } from '../app/keybinds';
+import { combosOf, defaultKeys } from '../app/keymap';
 import { openModal } from '../lib/modal';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
@@ -28,8 +30,10 @@ export const PREF_SKETCH_DETAILS = 'sketch-details-open';
 /** Every key this module keeps (tests reset them). */
 export const RAIL_PREF_KEYS = [PREF_TREE_COLLAPSED, PREF_SKETCH_COLLAPSED, PREF_SKETCH_DETAILS] as const;
 
-/** The shortcut that collapses or expands the Sketch panel (sketch mode) or the tree (model mode). */
-export const RAIL_SHORTCUT = 'Ctrl+\\';
+/** The keybind that collapses or expands the Sketch panel (sketch mode) or the tree (model mode). */
+export const RAIL_COMMAND = 'ui.toggle-rail';
+/** Its default key ("Ctrl+Backslash": Ctrl+\ by its place on the keyboard). */
+export const RAIL_SHORTCUT = defaultKeys(RAIL_COMMAND)[0];
 
 export interface RailsState {
   /** The user collapsed the tree card (model mode; remembered). */
@@ -148,14 +152,18 @@ export function railsFor(services: AppServices): Rails {
     if (services.mode.get().mode === 'sketch') rails.setSketchCollapsed(!state.get().sketchCollapsed);
     else rails.setTreeShown(state.get().treeCollapsed, false);
   };
-  services.keyboard.bind({ combo: RAIL_SHORTCUT, run: toggle });
-  // The key by its place too (review 9): where the backslash needs AltGr (German, French) the event
-  // reads Ctrl+Alt+\ and the binding above never matches. Same rules as the keyboard's: not while
-  // typing, not with an in-frame dialog open.
+  bindCommandKeys(services, RAIL_COMMAND, { run: toggle });
+  // With AltGr too (review 9): where a layout reaches that key with AltGr the event reads
+  // Ctrl+Alt+Backslash and the binding above never matches; while the key is still the default.
+  // Same rules as the keyboard's: not while typing, not with an in-frame dialog open.
   const doc = typeof document !== 'undefined' ? document : null;
   doc?.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.code !== 'Backslash') return;
-    if (e.key === '\\' && !e.altKey && !e.shiftKey) return; // the binding has it
+    if (!e.altKey && !e.shiftKey) return; // the binding has it
+    const kb = keybindsFor(services);
+    if (!kb.keys(RAIL_COMMAND).includes(RAIL_SHORTCUT)) return;
+    // Those keys given to a command or an action are theirs (review: one key did two things).
+    if (combosOf(e).some((c) => kb.owners(c).length)) return;
     if (typingIn(e.target) || openModal(doc)) return;
     e.preventDefault();
     toggle();

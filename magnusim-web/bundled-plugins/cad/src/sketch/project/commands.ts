@@ -33,7 +33,6 @@ export function registerLinkCommands(services: AppServices, mode: SketchMode): (
     group: 'sketch-modify',
     mode: 'sketch',
     icon: LINK_ICONS.project,
-    shortcut: 'P',
     hint: 'Project a vertex, an edge or a face of a body (or its silhouette) onto the sketch, linked to the model',
     // P4b fix round 1 (TOOLBAR, sketch review P1): after the patterns (40-42), together.
     order: 50,

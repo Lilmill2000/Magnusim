@@ -7,6 +7,7 @@
 // mirrored onto existing geometry.
 // Owner: P4b SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { placeKey } from './place-key';
 import type { SketchEntity, Vec2 } from '../../types/doc';
 import { SketchBuilder, type EditOutcome, type SketchDraft } from '../edit';
 import { entityLabel, entityOf, entityPoints, lineEnds } from '../model';
@@ -127,7 +128,7 @@ export function mirrorTool(mode: SketchMode): SketchTool {
 
   return {
     id: 'mirror',
-    hint: () => (step === 'pick' ? 'Pick the entities to mirror (or select them first), then Enter or Next.' : 'Click the mirror line (any line, construction too).'),
+    hint: () => (step === 'pick' ? `Pick the entities to mirror (or select them first), then ${placeKey(mode)}Next.` : 'Click the mirror line (any line, construction too).'),
     // ci2: a label or glyph clicked while picking keeps the picks (src/sketch/mode.ts refusesPick).
     refusesPick: (what) => (step === 'pick' ? `${what === 'dimension' ? 'Dimensions' : 'Relations'} can't be mirrored: pick lines, arcs, circles, splines or points` : 'Click a line to mirror about'),
     cancel() {
