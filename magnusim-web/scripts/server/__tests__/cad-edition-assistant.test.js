@@ -140,7 +140,7 @@ describe('app_status', () => {
   const status = async () => {
     const tools = createHostTools({
       hostCall: paced(createHostTransport({ port: () => app.port, now: () => 0 }).call, async () => {}),
-      assistant: async () => ({ provider: 'anthropic', model: 'm' }),
+      assistant: async () => ({ provider: 'cloud', model: 'm' }),
       version: async () => '0.5.0',
       plugins: () => [],
     });
@@ -181,7 +181,7 @@ describe('a project the Assistant creates in Magnusim CAD', () => {
       const base = `http://127.0.0.1:${server.port}`;
       const tools = createHostTools({
         hostCall: createHostTransport({ port: () => server.port }).call,
-        assistant: async () => ({ provider: 'anthropic', model: 'm' }),
+        assistant: async () => ({ provider: 'cloud', model: 'm' }),
         version: async () => '0.5.0',
         plugins: () => [],
       });
