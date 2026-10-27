@@ -232,6 +232,14 @@ describe('workspace: the tree and the view state', () => {
       const s = await t.ok('workspace', W('toolbar_show', { target: 'modify.shell' }));
       expect(s.text).toMatch(/still in its group's More: the group is narrowed to 90 px/);
       expect(s.data).toMatchObject({ shown: 'more', narrowed: true });
+      // Integration review 6: a command the narrowed group could not fit even with its other commands
+      // folded (the person's Show in toolbar is greyed): nothing changes, and the reply says why.
+      await t.ok('workspace', W('toolbar_hide', { target: 'modify.shell' }));
+      bar.querySelector<HTMLElement>('.tb-group')!.dataset.tooNarrowFor = 'modify.shell';
+      const blocked = await t.ok('workspace', W('toolbar_show', { target: 'modify.shell' }));
+      expect(blocked.text).toMatch(/does not fit its group at 90 px.*nothing changed/);
+      expect(blocked.data).toMatchObject({ changed: false, narrowed: true });
+      expect(prefs.state.get().layout.model.place['modify.shell']).toBe('more');
     } finally {
       bar.remove();
     }

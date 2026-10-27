@@ -778,8 +778,11 @@ with the host once for the page's life, and its chip goes in the dock.
     end, a command the person showed ("Show in toolbar", pinned) after those, a
     held one last, never its first command; widened, they come back out at
     once, so the bar is always full. "Show in toolbar" in a narrowed group
-    brings the command out (another folds); greyed with the reason only when
-    nothing else can fold. A group is never narrower than its first command and
+    brings the command out (another folds); it is greyed with the reason when
+    the command would not fit even with every other unpinned command folded
+    (predicted from the sizes the group last drew; the group lists those in
+    `data-too-narrow-for`, and the Assistant's toolbar_show then changes
+    nothing and says why). A group is never narrower than its first command and
     its More (`data-min-width`, measured; review 1: a narrower width clipped the
     More with every folded command): the width applied is at least that, and
     the drag, the arrows and the Assistant keep the stored width to it
@@ -789,8 +792,9 @@ with the host once for the page's life, and its chip goes in the dock.
     `--tb-rows`); below three rows every button is small (Finish sketch too).
     While a line or the edge is dragged the ribbon is measured again with each
     change and once more when it ends, saved or not (review 7). A lost release
-    (window blur, hidden tab, the handle's toolbar unmounted, a move with no
-    button held) ends a resize keeping nothing. Both are the person's, per
+    (window blur, hidden tab, the handle's group or toolbar unmounted: a mode
+    change mid-drag, a move with no button held; the drag listens on the window
+    and the document, not the handle) ends a resize keeping nothing. Both are the person's, per
     toolbar (model, sketch), in the same `ws.prefs` layout (`toolbar-layout.ts`
     `widths`, `rows`; `ToolbarPrefs.setWidth` / `setRows`); Reset toolbar clears
     them. The Assistant's `workspace` tool sets and reads them as the person
@@ -835,7 +839,10 @@ with the host once for the page's life, and its chip goes in the dock.
     right-click anywhere else on the toolbar offers Reset toolbar. Every command's
     right-click menu (a bar button, a More item, VIEW, EDIT and Finish sketch) also
     has Set keybind... (`keybindMenuItem`, src/ui/keybinds): for a flyout's
-    button, the variant on it; for a More item, that command. Shortcuts and
+    button or its arrow, the variant on the button; for an item of a flyout's
+    list, that variant; for a More item (VIEW's and EDIT's too, when the person
+    narrowed them) and an item of a collapsed group's dropdown, that command,
+    with Reset toolbar. Shortcuts and
     the More menus work whatever the layout. The layout (per mode, `place` id
     -> bar | more and each group's `order`; unknown ids are ignored, new commands
     take their registry place) is **the user's, in every project** (P4b

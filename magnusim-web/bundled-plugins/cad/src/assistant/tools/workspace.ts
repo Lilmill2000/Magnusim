@@ -53,7 +53,7 @@ import { normalTarget } from '../../viewport/normal';
 import { railsFor } from '../../ui/left-rails';
 import { barIdOf, collapseFlyouts } from '../../ui/flyouts';
 import { layoutModeOf, MAX_GROUP_W, MAX_ROWS, MIN_GROUP_W, MIN_ROWS, orderIds, rowsOf, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
-import { commandOnToolbar, settleGroupWidth } from '../../ui/Toolbar';
+import { commandOnToolbar, narrowedOut, settleGroupWidth } from '../../ui/Toolbar';
 import { uiFor } from '../../ui/controller';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
@@ -371,6 +371,17 @@ async function toolbar(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const m = prefs.state.get().layout[mode];
   if (i.action === 'toolbar_show' || i.action === 'toolbar_hide') {
     const place = i.action === 'toolbar_show' ? 'bar' : 'more';
+    // As the person's Show in toolbar is greyed (review 6): a narrowed group that could not fit it
+    // even with its other commands folded leaves the layout as it is, and says why.
+    const blocked = place === 'bar' ? narrowedOut(mode, def.id) : null;
+    if (blocked)
+      return done(`${def.label} does not fit its group at ${blocked.width} px, even with the group's other commands in its More: nothing changed. Widen the group first (toolbar_width ${blocked.group}) (${mode} mode)`, {
+        command: def.id,
+        mode,
+        shown: 'more',
+        narrowed: true,
+        changed: false,
+      });
     prefs.setMode(mode, withPlace(m, def.id, place));
     if (place === 'more') return done(`${def.label} is in its group's More menu (${mode} mode)`, { command: def.id, place, mode });
     // What the person sees now (review 2): a group or frame too narrow still holds it in More.

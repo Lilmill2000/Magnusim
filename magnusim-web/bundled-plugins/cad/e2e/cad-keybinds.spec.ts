@@ -209,7 +209,7 @@ test('cad:keybinds-live a keybind saved outside the page (Settings) applies at o
   }
 });
 
-test('cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, a More item and a flyout (its variant) each open the dialog for that command', { tag: '@serial' }, async ({ page, request }) => {
+test("cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, a More item, a flyout (its variant), a flyout's arrow and list item, VIEW's More and a collapsed group's dropdown each open the dialog for that command", { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(180_000);
   await ensureCadOn(request);
   await setPref(request, null);
@@ -223,7 +223,7 @@ test('cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, 
     const bar = frame.locator('[data-cad-toolbar]');
     const menu = frame.locator('[data-cad-menu]');
     /** Right-click `target`, pick Set keybind, see the dialog for `id` with its current key, close it. */
-    const viaMenu = async (target: Locator, id: string, label: string, current: string) => {
+    const viaMenu = async (target: Locator, id: string, label: string, current: string | null) => {
       await target.click({ button: 'right', force: true });
       await expect(menu).toBeVisible();
       const item = menu.locator('[data-menu-item="set-keybind"]');
@@ -233,7 +233,7 @@ test('cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, 
       const dlg = frame.locator(`[data-cad-keybind-dialog="${id}"]`);
       await expect(dlg).toBeVisible();
       await expect(dlg.locator('h2')).toHaveText(`Set keybind: ${label}`);
-      await expect(dlg.locator('[data-keybind-current]')).toHaveText(current);
+      if (current != null) await expect(dlg.locator('[data-keybind-current]')).toHaveText(current);
       await dlg.locator('[data-keybind-action="done"]').click();
       await expect(dlg).toHaveCount(0);
     };
@@ -263,6 +263,47 @@ test('cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, 
     await expect(slotButton).toHaveCount(1);
     const variantLabel = await cad<string>(page, (() => (window as unknown as W).__CAD__.services.commands.get('sketch.slot-arc-center').label) as never);
     await viaMenu(slotButton, 'sketch.slot-arc-center', variantLabel, 'None');
+    const labelOf = (id: string) => cad<string>(page, ((i: string) => (window as unknown as W).__CAD__.services.commands.get(i).label) as never, id);
+
+    // Review 3 of the integration: a flyout's arrow (the variant on its button) and an item of its
+    // list (that variant) have Set keybind too.
+    const rectArrow = bar.locator('[data-tb-flyout="sketch.rectangle"]');
+    await viaMenu(rectArrow, 'sketch.rectangle', 'Rectangle', 'R');
+    await rectArrow.click();
+    await expect(rectArrow).toHaveAttribute('aria-expanded', 'true');
+    await viaMenu(menu.locator('[data-command="sketch.rectangle-center"]'), 'sketch.rectangle-center', await labelOf('sketch.rectangle-center'), null);
+
+    // VIEW narrowed by the person: its More's items have Set keybind (and Reset toolbar).
+    const viewLine = bar.locator('[data-tb-resize="view"]');
+    const vb = (await viewLine.boundingBox())!;
+    await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(vb.x - 300, vb.y + vb.height / 2, { steps: 6 });
+    await page.mouse.up();
+    const viewMore = bar.locator('[data-tb-more="view"]');
+    await expect(viewMore).toBeVisible();
+    const viewFolded = ((await viewMore.getAttribute('data-more-commands')) ?? '').split(' ').filter(Boolean);
+    expect(viewFolded.length).toBeGreaterThan(0);
+    await viewMore.click();
+    await menu.locator(`[data-command="${viewFolded[0]}"]`).click({ button: 'right', force: true });
+    await expect(menu.locator('[data-menu-item="tb-reset"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await viewMore.click();
+    await viaMenu(menu.locator(`[data-command="${viewFolded[0]}"]`), viewFolded[0], await labelOf(viewFolded[0]), null);
+
+    // A frame narrow enough that a sketch group collapses into one dropdown: its items have Set keybind.
+    let collapsed = '';
+    for (let w = 900; w >= 480 && !collapsed; w -= 20) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect.poll(() => frame.locator('[data-cad-app]').evaluate(() => window.innerWidth)).toBe(w);
+      await frame.locator('[data-cad-app]').evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      collapsed = ((await bar.getAttribute('data-fit-collapsed')) ?? '').split(' ').filter(Boolean)[0] ?? '';
+    }
+    expect(collapsed, 'a collapsed group').not.toBe('');
+    const dropdown = bar.locator(`[data-tb-group-menu="${collapsed}"]`);
+    const inside = ((await dropdown.getAttribute('data-more-commands')) ?? '').split(' ').filter(Boolean);
+    await dropdown.click();
+    await viaMenu(menu.locator(`[data-command="${inside[0]}"]`), inside[0], await labelOf(inside[0]), null);
 
     // Nothing was changed: the keybinds stay the defaults.
     expect(await storedPref(request)).toBeNull();

@@ -274,6 +274,8 @@ function reasonOf(c: CommandDef, services: AppServices): string | null {
 interface ButtonCustom {
   /** `keybindId`: the command Set keybind is for (a flyout's: the variant on its button). */
   onContextMenu(e: React.MouseEvent<HTMLButtonElement>, keybindId?: string): void;
+  /** The same menu at a point, for one of a flyout's variants in its list (review 3: Set keybind for that variant). */
+  menuAt?(x: number, y: number, keybindId: string): void;
   onPointerDown?(e: React.PointerEvent<HTMLButtonElement>): void;
   dragging?: boolean;
   drop?: 'before' | 'after' | null;
@@ -399,6 +401,8 @@ function FlyoutButton({
       ...(x.hint ? { hint: x.hint } : {}),
       disabled: reasonOf(x, services),
       active: activeOf(x),
+      // A right-click on a variant: the flyout's menu with Set keybind for that variant.
+      ...(custom?.menuAt ? { onContext: (mx: number, my: number) => custom.menuAt!(mx, my, x.id) } : {}),
       run: () => {
         setLastUsed(services, def.id, x.id);
         void services.commands.run(x.id);
@@ -435,6 +439,8 @@ function FlyoutButton({
         aria-haspopup="menu"
         aria-expanded={open}
         {...tip}
+        // Its right-click: the flyout's menu, Set keybind for the variant on the button.
+        onContextMenu={custom ? (e) => custom.onContextMenu(e, cur.id) : undefined}
         onClick={() => (open ? ui.closeMenu() : show())}
         onKeyDown={keys}
       >
@@ -555,6 +561,13 @@ function MoreButton({
   );
 }
 
+/**
+ * Why a More item is there because of the group's width: false (not the width), 'fits' (pinned it
+ * would come out, another command folding instead), 'too-narrow' (it would not fit even with every
+ * other command folded: Show in toolbar is greyed with the reason, review 6).
+ */
+type NarrowFold = false | 'fits' | 'too-narrow';
+
 /** What a registry group needs to let the user rearrange it. */
 interface GroupCustom {
   /** The right-click menu of a command shown in the group (`keybindId`: Set keybind's command). */
@@ -563,7 +576,9 @@ interface GroupCustom {
    * The right-click menu of a command in the group's More (`shown`: the group's commands on the bar;
    * `narrow`: it is there because the person narrowed the group).
    */
-  moreMenu(c: CommandDef, shown: string[], x: number, y: number, narrow: boolean, keybindId?: string): void;
+  moreMenu(c: CommandDef, shown: string[], x: number, y: number, narrow: NarrowFold, keybindId?: string): void;
+  /** A command's own right-click menu (Set keybind, Reset toolbar): a collapsed group's dropdown items. */
+  commandMenu(x: number, y: number, commandId: string): void;
   /** Dragged onto the bar from More: folds last when the group is narrowed. */
   isHeld(id: string): boolean;
   /** Shown by the person ("Show in toolbar"): folds after the others when the group is narrowed. */
@@ -669,6 +684,10 @@ function Group({
   // More (or for a one-command group, its command), and the width applied is at least that
   // (`data-min-width`; Toolbar's handlers and the Assistant keep the stored width to it).
   const itemsRef = useRef<HTMLDivElement | null>(null);
+  // The group going away (its toolbar's mode changed) ends a drag of its line (review 5).
+  const resizeRef = useRef(resize);
+  resizeRef.current = resize;
+  useEffect(() => () => resizeRef.current?.gone(id), [id]);
   const open = commands.filter((c) => !folded?.has(c.id));
   const isHeld = (x: string) => !!custom?.isHeld(x);
   const isPinned = (x: string) => !!custom?.isPinned(x);
@@ -691,9 +710,24 @@ function Group({
   const [minW, setMinW] = useState({ key: '', px: 0 });
   const need = minW.key === fitKey ? minW.px : 0;
   const applied = width == null ? null : Math.max(width, Math.ceil(need));
+  // Each item's width as last drawn at this fit (px at scale 1; a flyout's with its arrow), and the
+  // More's: so a narrowed group can tell whether a folded command would fit if shown (review 6).
+  const sizes = useRef<{ key: string; gap: number; w: Map<string, { w: number; large: boolean }> }>({ key: '', gap: 0, w: new Map() });
   useLayoutEffect(() => {
     const el = itemsRef.current;
-    if (!el || width == null || collapsed) return;
+    const box = el?.parentElement;
+    if (!el || width == null || collapsed) {
+      if (box) delete box.dataset.tooNarrowFor;
+      return;
+    }
+    {
+      const s = scaleOf(el);
+      if (sizes.current.key !== fitKey) sizes.current = { key: fitKey, gap: (parseFloat(getComputedStyle(el).columnGap) || 0) / s, w: new Map() };
+      for (const k of Array.from(el.children) as HTMLElement[]) {
+        const cmd = k.dataset.tbMore != null ? '__more' : (k.dataset.command ?? k.querySelector<HTMLElement>('[data-command]')?.dataset.command);
+        if (cmd) sizes.current.w.set(cmd, { w: k.getBoundingClientRect().width / s, large: k.classList.contains('is-large') });
+      }
+    }
     // The minimum: the first command, and the More beside it (a group of one: its command).
     const kids = Array.from(el.children) as HTMLElement[];
     const moreEl = el.querySelector<HTMLElement>(':scope > [data-tb-more]');
@@ -706,8 +740,50 @@ function Group({
       if (Math.abs(px - need) > 0.5) setMinW({ key: fitKey, px });
     }
     if (nNarrow < candidates.length && el.scrollWidth > el.clientWidth + 1) setWf({ key: fitKey, n: nNarrow + 1 });
+    // The folded commands that would not fit even if shown (the Assistant's toolbar_show reads it).
+    if (box) {
+      const no = candidates.slice(0, nNarrow).filter((x) => !wouldFit(x));
+      if (no.length) box.dataset.tooNarrowFor = no.join(' ');
+      else delete box.dataset.tooNarrowFor;
+    }
   });
   const narrow = new Set(candidates.slice(0, nNarrow));
+  /**
+   * Whether `x` (folded for the group's width) would fit if the person showed it: with every
+   * unpinned command but the first folded, the pinned and held ones kept, laid out in the rows
+   * column by column beside the More. Unknown sizes: assume it fits.
+   */
+  const wouldFit = (x: string): boolean => {
+    const known = sizes.current.key === fitKey ? sizes.current : null;
+    const moreW = known?.w.get('__more');
+    if (!known || !moreW || applied == null) return true;
+    const keep = open.filter((c, i) => i === 0 || c.id === x || isPinned(c.id) || isHeld(c.id)).map((c) => known.w.get(c.id));
+    if (keep.some((k) => !k)) return true;
+    let total = 0;
+    let cols = 0;
+    let colW = 0;
+    let inCol = 0;
+    const flush = () => {
+      if (!inCol) return;
+      total += colW;
+      cols++;
+      colW = 0;
+      inCol = 0;
+    };
+    for (const it of [...(keep as { w: number; large: boolean }[]), moreW]) {
+      if (it.large) {
+        flush();
+        total += it.w;
+        cols++;
+        continue;
+      }
+      colW = Math.max(colW, it.w);
+      if (++inCol === rows) flush();
+    }
+    flush();
+    return total + known.gap * Math.max(0, cols - 1) <= applied + 1;
+  };
+
   const more = commands.filter((c) => folded?.has(c.id) || narrow.has(c.id));
   /** A variant listed in More stands for its flyout (moved, dragged and shown as one). */
   const barOf = (c: CommandDef): CommandDef => more.find((m) => flyouts?.variants.get(m.id)?.some((v) => v.id === c.id)) ?? c;
@@ -715,13 +791,20 @@ function Group({
   const at = drag?.at;
   const mark = at && (at.kind === 'bar' || at.kind === 'move') && at.group === id ? at.mark : null;
   const customFor = (c: CommandDef): ButtonCustom | undefined => {
-    if (!custom) return menu ? { onContextMenu: (e, kb) => (e.preventDefault(), e.stopPropagation(), menu(e.clientX, e.clientY, kb ?? c.id)) } : undefined;
+    if (!custom)
+      return menu
+        ? {
+            onContextMenu: (e, kb) => (e.preventDefault(), e.stopPropagation(), menu(e.clientX, e.clientY, kb ?? c.id)),
+            menuAt: (x, y, kb) => menu(x, y, kb),
+          }
+        : undefined;
     return {
       onContextMenu(e, kb) {
         e.preventDefault();
         e.stopPropagation();
         custom.barMenu(c, shown, e.clientX, e.clientY, kb ?? c.id);
       },
+      menuAt: (x, y, kb) => custom.barMenu(c, shown, x, y, kb),
       onPointerDown(e) {
         startDrag?.(c, 'bar', e);
       },
@@ -768,6 +851,8 @@ function Group({
             sketchTool={sketchTool}
             collapsed
             large={rows >= RIBBON_ROWS}
+            // Review 3: each command of the dropdown has its right-click (Set keybind, Reset toolbar).
+            {...(custom || menu ? { itemMenu: (c: CommandDef, x: number, y: number) => (custom ? custom.commandMenu(x, y, c.id) : menu!(x, y, c.id)) } : {})}
           />
         ) : null}
         {commands.map((c, i) => {
@@ -788,7 +873,12 @@ function Group({
             panel={panel}
             sketchTool={sketchTool}
             dropInto={at?.kind === 'more' && at.group === id}
-            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(barOf(c), shown, x, y, narrow.has(barOf(c).id), c.id) } : {})}
+            {...(custom
+              ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(barOf(c), shown, x, y, narrow.has(barOf(c).id) ? (wouldFit(barOf(c).id) ? 'fits' : 'too-narrow') : false, c.id) }
+              : menu
+                ? // VIEW's and EDIT's More (a narrowed group): Set keybind, Reset toolbar (review 3).
+                  { itemMenu: (c: CommandDef, x: number, y: number) => menu(x, y, c.id) }
+                : {})}
             {...(custom && startDrag ? { onItemPress: (c: CommandDef, e: React.PointerEvent<HTMLButtonElement>) => startDrag(barOf(c), 'more', e) } : {})}
           />
         ) : null}
@@ -827,6 +917,8 @@ interface ResizeHandlers {
   auto(group: string): void;
   key(group: string, e: React.KeyboardEvent<HTMLDivElement>): void;
   menu(group: string, x: number, y: number): void;
+  /** The group's line went away (its toolbar's mode changed): a drag on it ends, keeping nothing. */
+  gone(group: string): void;
 }
 
 /**
@@ -851,7 +943,10 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
   const labelOf = (id: string) => services.commands.get(id)?.label ?? id;
   /** Set keybind for a command, in its own section above Reset toolbar. */
   const keybind = (id: string | undefined): MenuEntry[] => (id ? [{ sep: true, id: 'tb-sep-keys' }, keybindMenuItem(services, id)] : []);
+  const menu = (x: number, y: number, commandId?: string) =>
+    ui.showMenu(x, y, commandId ? [keybindMenuItem(services, commandId), { sep: true, id: 'tb-sep' }, reset] : [reset], commandId ? `Toolbar: ${labelOf(commandId)}` : 'Toolbar');
   const forGroup = (group: string, order: string[]): GroupCustom => ({
+    commandMenu: (x, y, commandId) => menu(x, y, commandId),
     barMenu(c, shown, x, y, keybindId) {
       const i = shown.indexOf(c.id);
       const after = (id: string) => order[order.indexOf(id) + 1] ?? null;
@@ -882,7 +977,9 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
     isHeld: (id) => held(m, id),
     isPinned: (id) => pinned(m, id),
     moreMenu(c, shown, x, y, narrow, keybindId) {
-      const stuck = pinned(m, c.id) && (fitFolded.has(c.id) || narrow);
+      // Greyed with why when showing it would change nothing (review 6): the group would still be too
+      // narrow for it with every other command folded, or the frame folded it although pinned.
+      const stuck = narrow === 'too-narrow' || (pinned(m, c.id) && fitFolded.has(c.id));
       const last = shown.length ? shown[shown.length - 1] : null;
       ui.showMenu(
         x,
@@ -915,8 +1012,6 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
       );
     },
   });
-  const menu = (x: number, y: number, commandId?: string) =>
-    ui.showMenu(x, y, commandId ? [keybindMenuItem(services, commandId), { sep: true, id: 'tb-sep' }, reset] : [reset], commandId ? `Toolbar: ${labelOf(commandId)}` : 'Toolbar');
   return { forGroup, menu };
 }
 
@@ -1346,6 +1441,18 @@ export async function commandOnToolbar(mode: LayoutMode, id: string): Promise<{ 
   return { where: more ? 'more' : 'hidden', narrowed, width: narrowed && g?.dataset.width ? Number(g.dataset.width) : null };
 }
 
+/**
+ * The narrowed group that holds `id` in its More and could not fit it even with its other commands
+ * folded (`data-too-narrow-for`), as drawn now; null when there is none (review 6: the Assistant's
+ * toolbar_show answers as the person's greyed Show in toolbar does).
+ */
+export function narrowedOut(mode: LayoutMode, id: string): { group: string; width: number } | null {
+  const g = Array.from(document.querySelectorAll<HTMLElement>(`[data-cad-toolbar="${mode}"] .tb-group[data-too-narrow-for]`)).find((el) =>
+    (el.dataset.tooNarrowFor ?? '').split(' ').includes(id),
+  );
+  return g ? { group: g.dataset.group ?? '', width: Number(g.dataset.width) || 0 } : null;
+}
+
 /** The live preview of a resize drag (a group's width, or the rows). */
 type ResizePreview = { group?: string; width?: number; rows?: number } | null;
 
@@ -1360,9 +1467,11 @@ type ResizePreview = { group?: string; width?: number; rows?: number } | null;
  * away with its toolbar, a move with no button held) ends the drag and keeps nothing (review 4).
  */
 function useRibbonResize(bar: React.RefObject<HTMLDivElement | null>, live: React.RefObject<DragLive>, setPreview: (p: ResizePreview) => void, rows: number) {
-  const active = useRef<(() => void) | null>(null);
-  // The toolbar goes away mid-drag (the mode changed): the drag ends with it.
-  useEffect(() => () => active.current?.(), []);
+  /** The drag in progress: its stop, and the group whose line it is (null: the bottom edge). */
+  const active = useRef<{ stop: () => void; group: string | null } | null>(null);
+  // The toolbar goes away mid-drag: the drag ends with it. A group's line going away (the mode
+  // changed, the toolbar stays) ends it through ResizeHandlers.gone (review 5 of the integration).
+  useEffect(() => () => active.current?.stop(), []);
   const prefs = () => live.current.prefs;
   const mode = () => live.current.mode;
   const setWidth = (g: string, w: number | null) => {
@@ -1382,11 +1491,11 @@ function useRibbonResize(bar: React.RefObject<HTMLDivElement | null>, live: Reac
   /** EDIT's line is on its left (the group sits at the right end): its width grows to the left. */
   const signOf = (el: Element) => (el.closest('.tb-group')?.classList.contains('is-end') ? -1 : 1);
   /** A pointer drag on a handle: `at(dx, dy)` while moving, `done(dx, dy)` on release. */
-  const follow = (e: React.PointerEvent<HTMLDivElement>, cursor: string, at: (dx: number, dy: number) => void, done: (dx: number, dy: number) => void) => {
+  const follow = (e: React.PointerEvent<HTMLDivElement>, cursor: string, at: (dx: number, dy: number) => void, done: (dx: number, dy: number) => void, group: string | null = null) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    active.current?.();
+    active.current?.stop();
     const el = e.currentTarget;
     // The press gives the line the keyboard (preventDefault keeps the browser from doing it).
     el.focus({ preventScroll: true });
@@ -1400,15 +1509,17 @@ function useRibbonResize(bar: React.RefObject<HTMLDivElement | null>, live: Reac
     }
     const root = document.documentElement;
     root.classList.add(cursor);
+    // On the window (capture) and the document, not the handle: a handle taken out of the page
+    // mid-drag hears nothing more, and its lost capture goes to the document.
     const end = (keep: boolean, dx = 0, dy = 0) => {
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', lost);
-      el.removeEventListener('lostpointercapture', lost);
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', cancel, true);
+      document.removeEventListener('lostpointercapture', cancel, true);
       window.removeEventListener('blur', lost);
       document.removeEventListener('visibilitychange', hidden);
       root.classList.remove(cursor);
-      if (active.current === stop) active.current = null;
+      if (active.current?.stop === stop) active.current = null;
       if (keep) done(dx, dy);
       setPreview(null);
     };
@@ -1422,15 +1533,18 @@ function useRibbonResize(bar: React.RefObject<HTMLDivElement | null>, live: Reac
       if (ev.pointerId === pointer) end(true, ev.clientX - x0, ev.clientY - y0);
     };
     const lost = () => end(false);
+    const cancel = (ev: PointerEvent) => {
+      if (ev.pointerId === pointer) end(false);
+    };
     const hidden = () => {
       if (document.visibilityState === 'hidden') end(false);
     };
     const stop = () => end(false);
-    active.current = stop;
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', lost);
-    el.addEventListener('lostpointercapture', lost);
+    active.current = { stop, group };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', cancel, true);
+    document.addEventListener('lostpointercapture', cancel, true);
     window.addEventListener('blur', lost);
     document.addEventListener('visibilitychange', hidden);
   };
@@ -1446,7 +1560,11 @@ function useRibbonResize(bar: React.RefObject<HTMLDivElement | null>, live: Reac
         (dx) => {
           if (Math.abs(dx) >= 1) setWidth(g, clampW(g, w0 + (sign * dx) / s));
         },
+        g,
       );
+    },
+    gone(g) {
+      if (active.current?.group === g) active.current.stop();
     },
     auto(g) {
       setWidth(g, null);

@@ -271,6 +271,17 @@ test('cad:toolbar-resize-review a narrowed group keeps its first command and Mor
   await more.click();
   await expect(frame.locator('[data-cad-menu] button[role^="menuitem"]')).toHaveCount(inMore.length);
   await page.keyboard.press('Escape');
+  // Review 6 of the integration: a folded command that would not fit even with the others folded
+  // has Show in toolbar greyed with why (it used to be enabled and do nothing).
+  const tooNarrow = ((await group(frame, 'draw').getAttribute('data-too-narrow-for')) ?? '').split(' ').filter(Boolean);
+  expect(tooNarrow.length, 'commands DRAW at its minimum cannot show').toBeGreaterThan(0);
+  await more.click();
+  await frame.locator(`[data-cad-menu] [data-command="${tooNarrow[0]}"]`).click({ button: 'right', force: true });
+  const showGreyed = frame.locator('[data-cad-menu] [data-menu-item="tb-to-bar"]');
+  await expect(showGreyed).toHaveAttribute('aria-disabled', 'true');
+  await expect(showGreyed).toHaveAttribute('data-disabled-reason', /too narrow for it/);
+  await page.keyboard.press('Escape');
+  await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
   await page.mouse.move(900, 600);
   await shot(page, frame, 'sketch-ribbon-draw-at-minimum');
   // A one-command group: DIMENSION dragged narrow keeps its button whole.
@@ -330,6 +341,22 @@ test('cad:toolbar-resize-review a narrowed group keeps its first command and Mor
   await expect(group(frame, 'draw')).not.toHaveAttribute('data-width', /.+/);
   await page.mouse.up();
   expect(await userLayout(request)).toEqual(stored);
+  // Review 5 of the integration: the sketch is finished mid-drag (the mode changes, DRAW's line goes
+  // away with its group): the drag ends, no col-resize pointer is left, nothing is kept.
+  const b2 = (await line.boundingBox())!;
+  await page.mouse.move(b2.x + b2.width / 2, b2.y + b2.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b2.x - 80, b2.y + b2.height / 2, { steps: 6 });
+  await expect(frame.locator('html')).toHaveClass(/cad-tb-resizing/);
+  await app.evaluate(() => void (window as unknown as { __CAD__: { services: { commands: { run(id: string): Promise<unknown> } } } }).__CAD__.services.commands.run('sketch.finish'));
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+  await expect(frame.locator('html')).not.toHaveClass(/cad-tb-resizing/);
+  expect(await app.evaluate(() => getComputedStyle(document.body).cursor)).not.toBe('col-resize');
+  await page.mouse.up();
+  expect(await userLayout(request)).toEqual(stored);
+  await sketchOnTop(frame);
+  await settled(frame);
+  await expect(group(frame, 'draw')).not.toHaveAttribute('data-width', /.+/);
 
   // ---- 7: the bottom edge to one row and back to three in one drag: nothing squeezed after.
   await expect(tb(frame)).toHaveAttribute('data-fit-labels', '');
