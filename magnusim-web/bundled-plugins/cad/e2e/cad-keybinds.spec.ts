@@ -10,7 +10,8 @@
 //    the bar, VIEW's Fit, a command in its group's More, and a flyout's button (for the variant on it);
 //  - a key a focused control handles is that control's: Delete on a ribbon width line resets the
 //    width and the selected feature stays;
-//  - every key action has a Set keybind where the person meets it: a tree row (Delete, Rename), the
+//  - every key action has a Set keybind where the person meets it: the Part's row (an empty Part
+//    too) and a feature's row (Delete, Rename), the
 //    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish).
 // The keybinds are the user's pref on the server every test shares: both run in the serial phase, and put it back.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -360,7 +361,6 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     await newPartFromTree(page, 'Part 1');
     const frame = await partOpened(page);
     await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-    await addSolid(page, { size: [30, 20, 10] });
     const menu = frame.locator('[data-cad-menu]');
     /** Right-click `target`, pick the item, see the dialog for `id` with `label` and its key, close it. */
     const viaMenu = async (target: Locator | (() => Promise<void>), item: string, text: string, id: string, label: string, current: string) => {
@@ -377,6 +377,13 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
       await dlg.locator('[data-keybind-action="done"]').click();
       await expect(dlg).toHaveCount(0);
     };
+    // An empty Part (review: Delete's and Rename's keys had no place before a feature existed):
+    // the Part's own row.
+    await expect(frame.locator('[data-cad-tree] [data-feature-row]')).toHaveCount(0);
+    const partRow = frame.locator('[data-part-name] > .tree-row');
+    await viaMenu(partRow, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');
+    await viaMenu(partRow, 'set-keybind-ui.rename', 'Set keybind for Rename…', 'ui.rename', 'Rename the selected feature or body', 'F2');
+    await addSolid(page, { size: [30, 20, 10] });
     const row = frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"] > .tree-row');
     // A tree row: Delete's and Rename's keys, next to Delete.
     await viaMenu(row, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');

@@ -33,14 +33,14 @@ describe('every keybind has a Set keybind the person can reach', () => {
     const places = keybindPlaces();
     expect(places.map((p) => p.id)).toEqual(KEYMAP.map((e) => e.id));
     for (const p of places) expect(p.words, p.id).toMatch(/Set keybind/);
-    expect(keybindPlace('ui.delete')).toEqual({ place: 'tree', words: 'right-click a feature in the design tree, then Set keybind for Delete…' });
+    expect(keybindPlace('ui.delete')).toEqual({ place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…" });
     expect(keybindPlace('sketch.enter')?.place).toBe('sketch-finish');
     expect(keybindPlace('view.back')?.place).toBe('views-menu');
     expect(keybindPlace('view.front')?.place).toBe('toolbar');
     expect(keybindPlace('nope')).toBeNull();
   });
 
-  it('the toolbar and the views menu have the commands the places say (the booted app)', async () => {
+  it("in an EMPTY Part (no feature, no body) every place is there: the toolbar's and the views menu's commands, the Part row's Delete and Rename, the collapse arrow's toggle (review)", async () => {
     const ws = createFakeWorkspace({
       spawnWorker: () => {
         const w = new FakeWorker(okHandler());
@@ -72,6 +72,22 @@ describe('every keybind has a Set keybind the person can reach', () => {
       }
     }
     expect(wrong).toEqual([]);
+    // The Part is empty: no feature or body row to right-click.
+    expect(s.doc.state.get().doc.features).toEqual([]);
+    expect(root.querySelectorAll('[data-feature-row]').length).toBe(0);
+    // The Part's row: Delete's and Rename's keybinds; the tree's collapse arrow: the toggle's.
+    const ui = uiFor(s);
+    const rightClick = (el: Element | null) => {
+      expect(el).not.toBeNull();
+      act(() => {
+        el!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+      });
+      return (ui.state.get().menu?.items ?? []).map((i) => i.id);
+    };
+    expect(rightClick(root.querySelector('[data-part-name] .tree-row') ?? root.querySelector('[data-part-name]'))).toEqual(['rename-part', 'sep-keybinds', 'set-keybind-ui.delete', 'set-keybind-ui.rename']);
+    act(() => ui.closeMenu());
+    expect(rightClick(root.querySelector('[data-tree-collapse]'))).toEqual(['set-keybind-ui.toggle-rail']);
+    act(() => ui.closeMenu());
   });
 
   it("a tree row's right-click has Delete's and Rename's keybinds; a body's has Rename's; the collapse arrows have the toggle's", () => {

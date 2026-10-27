@@ -173,6 +173,25 @@ describe('the keybinds model', () => {
     expect(p.writes).toEqual([]);
   });
 
+  it('a value heard while the first read is under way is the person\'s keybinds: a late failure of that read never makes them unknown again (review)', async () => {
+    const p = memoryPrefs();
+    let fail: (err: Error) => void = () => {};
+    p.api.get = () => new Promise((_, reject) => (fail = reject));
+    const k = createKeybinds({ prefs: p.api, layout: false });
+    await Promise.resolve();
+    expect(k.known()).toBe('your keybinds are still being read: try again in a moment (nothing was changed)');
+    // Settings (another tab) saves, and the page hears the whole value.
+    p.elsewhere(KEYBINDS_PREF, { 'view.fit': ['KeyG'] });
+    expect(k.known()).toBe(true);
+    // Then the read under way fails: the keys heard stay the person's.
+    fail(new Error('the host did not answer'));
+    await k.ready;
+    expect(k.known()).toBe(true);
+    expect(await k.load()).toBe(true);
+    expect(k.current('view.fit')).toEqual(['KeyG']);
+    expect(k.setKeybind('sketch.circle', 'Shift+C')).toMatchObject({ ok: true });
+  });
+
   it('a change made in another tab between two changes here is kept (each store reads the stored value again)', async () => {
     const p = memoryPrefs();
     const k = createKeybinds({ prefs: p.api, layout: false });

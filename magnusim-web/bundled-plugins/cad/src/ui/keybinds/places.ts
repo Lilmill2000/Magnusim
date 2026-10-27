@@ -5,7 +5,8 @@
 //  - toolbar: a right-click on the command on the toolbar (bar, More, flyout, VIEW, EDIT, Finish
 //    sketch: Toolbar.tsx customizer);
 //  - views-menu: a right-click on its row in the views menu (ViewportChrome);
-//  - tree: Delete and Rename in a tree row's right-click menu (controller featureMenu, bodyMenu);
+//  - tree: Delete and Rename in the right-click menu of the Part's row (always there, an empty Part
+//    too: DesignTree), and of a feature's row (Rename also a body's: controller featureMenu, bodyMenu);
 //  - rail: a right-click on the arrow that collapses the design tree or the Sketch panel;
 //  - sketch-menu: Delete in the right-click menu of the selected sketch geometry (overlay);
 //  - sketch-finish: Place or finish in Finish sketch's right-click menu and the sketch's.
@@ -18,8 +19,8 @@ export type KeybindPlace = 'toolbar' | 'views-menu' | 'tree' | 'rail' | 'sketch-
 
 /** The commands set somewhere other than their own right-click on the toolbar. */
 const EXPLICIT: Readonly<Record<string, { place: KeybindPlace; words: string }>> = Object.freeze({
-  'ui.delete': { place: 'tree', words: 'right-click a feature in the design tree, then Set keybind for Delete…' },
-  'ui.rename': { place: 'tree', words: 'right-click a feature or a body in the design tree, then Set keybind for Rename…' },
+  'ui.delete': { place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…" },
+  'ui.rename': { place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's or a body's row), then Set keybind for Rename…" },
   'ui.toggle-rail': { place: 'rail', words: 'right-click the arrow that collapses the design tree or the Sketch panel, then Set keybind…' },
   'sketch.delete': { place: 'sketch-menu', words: 'in a sketch, right-click the selected geometry, then Set keybind for Delete…' },
   'sketch.enter': { place: 'sketch-finish', words: 'in a sketch, right-click Finish sketch on the toolbar (or an empty place of the sketch), then Set keybind for Place or finish…' },

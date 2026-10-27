@@ -187,7 +187,10 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     tell();
   };
   // A stored value (the first read, or a change made in Settings or another tab), under this page's changes not stored yet.
+  // How many stored values were taken: a read that began before one is older than it.
+  let takenCount = 0;
   const take = (v: unknown) => {
+    takenCount++;
     stored = parseOverrides(v);
     const was = readState;
     readState = o.prefs ? 'read' : 'none';
@@ -285,15 +288,23 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
   const read = (prefs: PrefsApi): Promise<true | string> => {
     readState = 'reading';
     const at = storeCount;
+    const taken = takenCount;
     return Promise.resolve()
       .then(() => prefs.get<unknown>(KEYBINDS_PREF))
       .then((v) => {
-        // A store that went through meanwhile read the value again and wrote a newer one.
-        if (!disposed && storeCount === at) take(v);
+        // A store that went through meanwhile read the value again and wrote a newer one; a value
+        // heard meanwhile (Settings, another tab) is newer than this read.
+        if (!disposed && storeCount === at && takenCount === taken) take(v);
         else readState = 'read';
         return true as const;
       })
       .catch((err) => {
+        // A value heard while this read was under way is the person's keybinds: a late failure
+        // never makes them unknown again (review: changes were refused, the keys called defaults).
+        if (takenCount !== taken || storeCount !== at) {
+          readState = 'read';
+          return true as const;
+        }
         console.warn('[cad] ws.prefs keybinds not read; the default keys apply and no change is made until they are read', err);
         readState = 'unreadable';
         readError = err instanceof Error && err.message ? err.message : String(err);

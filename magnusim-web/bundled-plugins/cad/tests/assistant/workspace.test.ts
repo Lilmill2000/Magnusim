@@ -617,8 +617,9 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
   it("not_asked tells where the person sets that command's keybind; keybind_get says it per command (review: the hint named a right-click that did not exist)", async () => {
     const { t } = await keybindPart();
     const r = await t.call('workspace', W('keybind_set', { target: 'ui.delete', value: 'Backspace' }));
-    expect(!r.ok && r.error.hint).toBe('Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: right-click a feature in the design tree, then Set keybind for Delete….');
-    expect(!r.ok && r.error.detail).toMatchObject({ reason: 'not_asked', set_in: 'right-click a feature in the design tree, then Set keybind for Delete…' });
+    const where = "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…";
+    expect(!r.ok && r.error.hint).toBe(`Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: ${where}.`);
+    expect(!r.ok && r.error.detail).toMatchObject({ reason: 'not_asked', set_in: where });
     const all = await t.ok('workspace', W('keybind_get'));
     const rows = all.data.keybinds as { id: string; set_in: string }[];
     expect(rows.every((x) => /Set keybind/.test(x.set_in))).toBe(true);
