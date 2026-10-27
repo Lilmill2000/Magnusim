@@ -5,7 +5,7 @@ import { HttpError, assertSameOrigin, sendJson } from './http.ts';
 import { keepIdleConnectionsOpen } from './keep-alive.ts';
 import { JobManager } from './jobs.ts';
 import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
-import { getWorker } from './worker.ts';
+import { getWorker, type WorkerClient } from './worker.ts';
 import { PluginServiceHost } from './plugin-services.ts';
 import type { SdkVariant } from './plugin-sdk.ts';
 import { isFrameAssetRequest } from './workspace-files.ts';
@@ -16,6 +16,8 @@ import { setLiveRegistry } from '../registry-defaults.js';
 import { boundPortFromListen } from '../w32-prefs.js';
 import { assistantGuard } from './assistant/access.ts';
 import { registerAssistantRoutes } from './assistant-routes.ts';
+import { isCadEdition } from '../edition.js';
+import { CadEditionWorker } from './cad-edition/node-worker.ts';
 
 export { Router, dispatch } from './router.ts';
 export { WorkerClient, getWorker, WorkerUnavailableError, RpcError } from './worker.ts';
@@ -35,7 +37,8 @@ function installProcessGuards(): void {
 
 export function createApiPlugin() {
   installProcessGuards();
-  const worker = getWorker();
+  // Magnusim CAD has no Python: its worker answers in JavaScript (scripts/server/cad-edition).
+  const worker = isCadEdition() ? (new CadEditionWorker() as unknown as WorkerClient) : getWorker();
   const services = new PluginServiceHost(worker);
   const cacheDir = join(WEB_ROOT, '.cache');
   const jobs = new JobManager({
@@ -92,7 +95,8 @@ export function createApiPlugin() {
       registerVtkExportRoutes(router, { jobs, cacheDir });
       const assistant = registerAssistantRoutes(router, { worker, services, port: () => boundPortFromListen(server) });
       // The boot queue kick may start a plugin mesher; wait for the live registry.
-      void registryReady.finally(() => live.boot());
+      // Magnusim CAD meshes, solves and links nothing: none of that boot work is its.
+      if (!isCadEdition()) void registryReady.finally(() => live.boot());
 
       server.middlewares.use(async (req, res, next) => {
         try {
