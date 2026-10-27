@@ -261,6 +261,18 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
                   <button type="button" className="cad-vp-small" data-section-flip="1" onClick={() => handle.setSection({ flip: !section.flip })}>
                     Flip side
                   </button>
+                  <button
+                    type="button"
+                    className="cad-vp-small"
+                    data-section-middle="1"
+                    title="Cut through the middle of the shown bodies"
+                    onClick={() => {
+                      const r = handle.sectionRange(section.plane);
+                      handle.setSection({ offset: r ? (r[0] + r[1]) / 2 : 0 });
+                    }}
+                  >
+                    Middle
+                  </button>
                 </div>
               </>
             ) : null}

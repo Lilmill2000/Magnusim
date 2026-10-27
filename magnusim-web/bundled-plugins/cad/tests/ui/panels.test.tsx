@@ -103,7 +103,7 @@ describe('feature panels', () => {
     const body = t.doc.state.get().rebuild.bodies[0];
     const pick = { item: { kind: 'face' as const, body: body.id, index: 2 }, point: [0, 0, 0] as [number, number, number], normal: null, depth: 1, screen: [5, 5] as [number, number] };
     act(() => t.services.bus.emit('viewport:contextmenu', { pick, clientX: 50, clientY: 60 }));
-    expect(ui.menu()).toEqual(['Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', '(Roll back to here)', 'Delete Extrude 1']);
+    expect(ui.menu()).toEqual(['Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', '(Move up)', '(Move down)', '(Roll back to here)', 'Delete Extrude 1']);
     // Bug 2026-09-30: body and feature items shared ids (React key clash); every item id is unique.
     const ids = ui.$$('[data-cad-menu] [data-menu-item]').map((b) => b.getAttribute('data-menu-item'));
     expect(new Set(ids).size).toBe(ids.length);
@@ -135,7 +135,7 @@ describe('feature panels', () => {
     expect(t.doc.calls).not.toContain('beginEdit f_old');
     expect(t.ws.log.toasts.at(-1)).toEqual({ message: 'This part uses a removed feature (Box 1). Solids come from sketches now: delete it, then sketch the shape and extrude it.', kind: 'info' });
     fireEvent.contextMenu(ui.row('f_old'));
-    expect(ui.menu()).toEqual(['(Edit Box 1)', 'Rename Box 1', 'Suppress Box 1', 'Roll back to here', 'Delete Box 1']);
+    expect(ui.menu()).toEqual(['(Edit Box 1)', 'Rename Box 1', 'Suppress Box 1', '(Move up)', 'Move down', 'Roll back to here', 'Delete Box 1']);
     fireEvent.mouseEnter(ui.menuItem('edit'));
     expect(ui.tip()).toBe('Edit Box 1This part uses a removed feature (Box 1). Solids come from sketches now: delete it, then sketch the shape and extrude it');
     fireEvent.mouseLeave(ui.menuItem('edit'));

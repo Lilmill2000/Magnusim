@@ -18,6 +18,8 @@
 // nothing answers cut_removed_nothing with the diagnosis (region-tools.ts).
 // get_model full shows the two features as sketch and extrude inputs, with made_by "hole"; the
 // model changes them as such (edit_feature on the sketch's d changes every hole).
+// The person's Hole panel (features/hole) runs this same plan (planHole) and stores the same two
+// features (holeCutFields), so a hole either made is the other's: editable either way.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE } from '../../features/extrude/def';
@@ -26,7 +28,7 @@ import { nextName } from '../../lib/ids';
 import { isDimension } from '../../sketch/model';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import type { BodyId, ExtrudeExtentDef, Feature, FeatureId, PlaneFrame, SketchFeature, SketchSupport, Vec3 } from '../../types/doc';
+import type { BodyId, ExtrudeExtentDef, Feature, FeatureId, PlaneFrame, RegionRef, SketchFeature, SketchSupport, Vec3 } from '../../types/doc';
 import type { UnitsService } from '../../types/units';
 import { heartbeat } from '../busy';
 import { ToolError } from '../errors';
@@ -60,7 +62,7 @@ export const HOLE_NAME_MAX = NAME_MAX - SKETCH_SUFFIX.length;
 
 const AXES = ['x', 'y', 'z'] as const;
 
-interface Plan extends EditPlan {
+export interface HolePlan extends EditPlan {
   /** The extrude's name, and the sketch's ("<name> sketch"). */
   name: string;
   sketchName: string;
@@ -153,6 +155,13 @@ function lengthOf(units: UnitsService, text: string, field: string, problems: st
 const valueWords = (text: string, mm: number) => (/^[-+]?[\d.]+\s*(mm)?$/.test(text.trim()) ? text.trim() : `${text.trim()} (${len(mm)} mm)`);
 
 const at = (p: readonly number[]) => `(${p.map((v) => len(v)).join(', ')})`;
+
+type Plan = HolePlan;
+
+/** The cut extrude's fields for the holes' sketch regions: every circle, into the face's body only, into the material. */
+export function holeCutFields(plan: HolePlan, profiles: readonly RegionRef[]): Partial<Feature> {
+  return { name: plan.name, profiles: [...profiles], extent: plan.extent, flip: true, op: 'cut', scope: [plan.body] } as Partial<Feature>;
+}
 
 const holeTool: EditTool<Plan> = {
   async plan(ctx) {
@@ -354,7 +363,7 @@ const holeTool: EditTool<Plan> = {
     const f = services.doc.state.get().doc.features.find((g) => g.id === sketch) as SketchFeature | undefined;
     if (!f) throw new ToolError('internal', `${plan.sketchName} is not in the Part.`);
     const regions = await withScene(ctx, { sketch }, (sc) => regionsOf(sc, f, ['all'], 'hole'));
-    const fields = { name: plan.name, profiles: regions.refs, extent: plan.extent, flip: true, op: 'cut', scope: [plan.body] } as Partial<Feature>;
+    const fields = holeCutFields(plan, regions.refs);
     const id = await fillSwept(ctx, plan, { edit: null, type: 'extrude', fields, label: plan.name });
     plan.late = await checkScoped(ctx, id);
   },
@@ -399,3 +408,8 @@ export const tool: ToolImpl = {
   kind: 'edit',
   run: (ctx: CallCtx) => runEdit(ctx, holeTool),
 };
+
+/** The hole tool's plan: every check, the sketch compiled and solved headless; nothing changes (the person's Hole panel runs it too). */
+export function planHole(ctx: CallCtx): Promise<HolePlan> {
+  return holeTool.plan(ctx);
+}

@@ -83,6 +83,8 @@ export const SHARDS = {
     'e2e/cad-p4b-pattern.spec.ts',
     // P4b fix round 1 (PATTERN): one test per review finding.
     'e2e/cad-p4b-fix1-pattern.spec.ts',
+    // Parity both ways: the person's Hole, body colour, history order, Back isometric, Find, Picture, Measure's extras.
+    'e2e/cad-person-parity.spec.ts',
   ],
   // STEP in and out and the body tools: import and edit (press-pull, delete faces, split),
   // Combine, Measure, Mass, Check, Export, the Enclosure (P2's gate, the SD pass).
@@ -173,6 +175,9 @@ export const RULES = [
   // P4b PATTERN: the PATTERN group (its command on the toolbar: shell too).
   [/^src\/features\/pattern\/index\.tsx?$/, ['solids', 'shell'], 'PATTERN, its commands'],
   ['src/features/pattern/', ['solids'], 'Linear pattern, Circular pattern, Mirror'],
+  // The person's side of the Assistant's hole, find and view tools (their commands on the toolbar: shell too).
+  [/^src\/features\/(hole|find|picture)\/index\.tsx?$/, ['solids', 'shell'], "the person's Hole, Find and Picture, their commands"],
+  [/^src\/features\/(hole|find|picture)\//, ['solids'], "the person's Hole, Find and Picture"],
   [/^src\/features\/import\/index\.tsx?$/, ['step', 'sketch', 'link', 'big', 'shell'], 'Import STEP, its command'],
   ['src/features/import/', ['step', 'sketch', 'link', 'big'], 'Import STEP'],
   [/^src\/features\/(combine|split)\/index\.tsx?$/, ['step', 'sketch', 'link', 'shell'], 'body tools, their command'],

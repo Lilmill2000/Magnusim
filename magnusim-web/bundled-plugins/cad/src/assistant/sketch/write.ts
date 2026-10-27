@@ -170,7 +170,7 @@ function upsert<T extends { id: string }>(list: readonly T[], items: readonly T[
 const isDim = (c: SketchConstraint) => typeof (c as { expr?: unknown }).expr === 'string';
 
 /** The whole sketch as sketch mode stores it: its geometry, ties (patterns, offsets) and links (none: none). */
-const whole = (g: SketchGeometry) => ({ points: g.points, entities: g.entities, constraints: g.constraints, ties: g.ties, links: g.links });
+export const whole = (g: SketchGeometry) => ({ points: g.points, entities: g.entities, constraints: g.constraints, ties: g.ties, links: g.links });
 
 /**
  * The watch path's applies from what is stored (`start`: empty for a new sketch) to `target` (drawn

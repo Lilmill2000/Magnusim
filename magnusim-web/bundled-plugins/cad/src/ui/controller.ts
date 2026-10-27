@@ -77,6 +77,8 @@ export interface UiState {
   menu: MenuState | null;
   /** The tree row being renamed in place. */
   renaming: { kind: 'feature' | 'body'; id: string } | null;
+  /** The body whose colour picker the context menu's "Colour" opens (the tree row opens it and clears this). */
+  colorFor?: BodyId | null;
 }
 
 export interface UiController {
@@ -109,6 +111,21 @@ export interface UiController {
   startRename(kind: 'feature' | 'body', id: string): void;
   endRename(): void;
   toggleSuppressed(id: FeatureId): void;
+  /**
+   * Move a feature in the history to `toIndex` (its index after the move), as a drag in the tree or
+   * Move up / Move down does: the Part's own move with its order rule (a feature stays below what it
+   * uses and above what uses it), as the Assistant's edit_feature move. Null, or the refusal's words.
+   */
+  moveFeature(id: FeatureId, toIndex: number): string | null;
+  /** A body's colour ("#rrggbb"): one undo step, as the Assistant's body color. Null, or the refusal's words. */
+  setBodyColor(id: BodyId, color: string): string | null;
+  /** Open the tree's colour picker of a body (the context menu's Colour). */
+  pickBodyColor(id: BodyId | null): void;
+  /**
+   * Delete several features in one undo step, the newest first, as the Assistant's delete: refused,
+   * with nothing deleted, while a feature not among them uses one of them. One feature: deleteFeature.
+   */
+  deleteFeatures(ids: readonly FeatureId[]): void;
   /** A failed feature's own fix ("Try repair", "Retry"). */
   runFeatureAction(id: FeatureId, action: FeatureAction): void;
   deleteFeature(id: FeatureId): void;
@@ -556,6 +573,79 @@ export function createUiController(services: AppServices): UiController {
         fail(`${verb} ${f.name}`, errText(err));
       }
     },
+    moveFeature(id, toIndex) {
+      const f = featureById(services, id);
+      if (!f) return 'That feature is not in the part';
+      const block = editBlock();
+      if (block) {
+        fail(`Move ${f.name}`, block);
+        return block;
+      }
+      settleOtherPanel(null);
+      try {
+        const r = doc.move(id, toIndex);
+        if (!r.ok) {
+          fail(`Move ${f.name}`, r.reason);
+          return r.reason;
+        }
+        return null;
+      } catch (err) {
+        fail(`Move ${f.name}`, errText(err));
+        return errText(err);
+      }
+    },
+    setBodyColor(id, color) {
+      const name = doc.state.get().rebuild.bodies.find((b) => b.id === id)?.name ?? doc.state.get().doc.bodies[id]?.name ?? 'the body';
+      const block = editBlock();
+      if (block) {
+        fail(`Colour ${name}`, block);
+        return block;
+      }
+      settleOtherPanel(null);
+      try {
+        const r = doc.setBodyColor(id, color);
+        if (!r.ok) {
+          fail(`Colour ${name}`, r.reason);
+          return r.reason;
+        }
+        return null;
+      } catch (err) {
+        fail(`Colour ${name}`, errText(err));
+        return errText(err);
+      }
+    },
+    pickBodyColor(id) {
+      closeMenu();
+      state.set({ colorFor: id });
+    },
+    deleteFeatures(ids) {
+      const feats = doc.state.get().doc.features;
+      const list = feats.filter((f) => ids.includes(f.id));
+      if (list.length <= 1) {
+        if (list[0]) c.deleteFeature(list[0].id);
+        return;
+      }
+      const label = list.length === 2 ? `Delete ${list[0].name} and ${list[1].name}` : `Delete ${list[0].name} and ${list.length - 1} more`;
+      const block = editBlock();
+      if (block) return fail(label, block);
+      settleOtherPanel(null);
+      // Newest first: a listed feature's listed users go before it; a user outside the list refuses the whole delete.
+      let removed = 0;
+      for (const f of [...list].reverse()) {
+        const why = doc.removeBlock(f.id);
+        const r = why ? { ok: false as const, reason: why } : doc.remove(f.id);
+        if (!r.ok) {
+          for (let i = 0; i < removed; i++) doc.undo();
+          fail(label, `nothing was deleted: ${r.reason}`);
+          return;
+        }
+        removed++;
+      }
+      const joined = doc.joinSteps(removed, label);
+      if (!joined.ok) console.warn('[cad] the deleted features stay separate undo steps:', joined.reason);
+      const gone = new Set(list.map((f) => f.id));
+      services.selection.set((s) => ({ ...s, items: s.items.filter((it) => !('feature' in it && gone.has(it.feature))) }));
+    },
     runFeatureAction(id, action) {
       const f = featureById(services, id);
       if (!f) return;
@@ -659,6 +749,9 @@ export function createUiController(services: AppServices): UiController {
         },
         { id: 'rename', label: `Rename ${f.name}`, disabled: block, run: () => c.startRename('feature', id) },
         { id: 'suppress', label: `${f.suppressed ? 'Unsuppress' : 'Suppress'} ${f.name}`, disabled: block, run: () => c.toggleSuppressed(id) },
+        // The history order (as the Assistant's edit_feature move; a drag of the row does the same).
+        { id: 'move-up', label: 'Move up', disabled: block ?? (index === 0 ? `${f.name} is the first feature` : null), run: () => void c.moveFeature(id, index - 1) },
+        { id: 'move-down', label: 'Move down', disabled: block ?? (index === d.doc.features.length - 1 ? `${f.name} is the last feature` : null), run: () => void c.moveFeature(id, index + 1) },
       ];
       // P4b SELECT: Normal to a sketch (its plane, its own up) or a CONSTRUCT plane, from its row.
       if (f.type === 'sketch' || f.type === 'ref_plane') {
@@ -681,7 +774,10 @@ export function createUiController(services: AppServices): UiController {
       if (bar < d.doc.features.length) items.push({ id: 'roll-end', label: 'Roll to end', run: () => c.rollToEnd() } satisfies MenuItem);
       // Refused while a later feature uses it: offered disabled, with the reason (review P2/P3 round 2:
       // "Delete Sketch 1" was offered, and only the click said no).
-      items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: deleteItemLabel(f.name), danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
+      // Several features selected, this one among them: one Delete of them all (one undo step).
+      const picked = services.selection.get().items.flatMap((it) => (it.kind === 'feature' && d.doc.features.some((g) => g.id === it.feature) ? [it.feature] : []));
+      if (picked.length > 1 && picked.includes(id)) items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: `Delete ${picked.length} features`, danger: true, disabled: block, run: () => c.deleteFeatures(picked) });
+      else items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: deleteItemLabel(f.name), danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
       return items;
     },
     bodyMenu(id) {
@@ -705,6 +801,8 @@ export function createUiController(services: AppServices): UiController {
         });
       }
       items.push({ id: 'body-rename', label: `Rename ${info.name}`, disabled: block, run: () => c.startRename('body', id) });
+      // The body's colour (as the Assistant's body color): the tree row's colour picker.
+      items.push({ id: 'body-color', label: 'Colour…', disabled: block, run: () => c.pickBodyColor(id) });
       if (f) items.push({ sep: true, id: 'sep-body-feature' }, { id: 'body-edit', label: `Edit ${f.name}`, disabled: block, run: () => c.openEdit(f.id) });
       return items;
     },

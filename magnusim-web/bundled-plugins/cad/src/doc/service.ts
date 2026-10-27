@@ -1069,6 +1069,28 @@ export function createDocService(opts: DocServiceOptions): DocService {
   }
 
   /**
+   * The person's newest `count` undo steps as one, labelled `label` (a Hole's sketch and cut, the
+   * features one Delete removed): one Ctrl+Z takes them all back, as the Assistant's own request
+   * steps are one. Refused, with nothing changed, while an Assistant step or a panel session is
+   * open, or when those steps are not all the person's and one after the other.
+   */
+  function joinSteps(count: number, label: string): EditResult {
+    const n = Math.floor(count);
+    if (n < 2) return { ok: true };
+    if (step && !step.ended) return { ok: false, reason: 'The Assistant is changing the part' };
+    if (open && open.open) return { ok: false, reason: 'A panel is open' };
+    const done = undo.snapshot().done;
+    if (done.length < n) return { ok: false, reason: `There are only ${done.length} steps to join` };
+    const last = done.slice(-n);
+    if (last.some((e) => e.tag)) return { ok: false, reason: "Those steps are not all the person's" };
+    for (let i = 1; i < last.length; i++) if (last[i].before !== last[i - 1].after) return { ok: false, reason: 'Those steps do not follow each other' };
+    for (let i = 0; i < n; i++) undo.dropTop();
+    undo.push({ label, before: last[0].before, after: last[n - 1].after });
+    state.set((s) => ({ ...s, history: historyState() }));
+    return { ok: true };
+  }
+
+  /**
    * A body's definition: the stored one, or (a derived body such as a split
    * piece, which has none until it is renamed or recoloured) the one the
    * rebuild shows, when a feature makes it.
@@ -1589,6 +1611,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     remove,
     removeBlock,
     move,
+    joinSteps,
     renameBody,
     setBodyColor,
     setBodyInSimulation,

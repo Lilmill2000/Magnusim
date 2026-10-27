@@ -1,4 +1,4 @@
-// The viewport's commands: Fit (F), the standard views (1-7) and Normal to (N).
+// The viewport's commands: Fit (F), the standard views (1-8; 8 the back isometric) and Normal to (N).
 // They have no toolbar group: the keys and the views menu reach them.
 // Ctrl+1..8 would be SOLIDWORKS' keys, but browsers keep those for tabs.
 // Owner: VIEWPORT.
@@ -19,6 +19,7 @@ export const VIEW_COMMANDS: { view: StandardView; label: string; shortcut: strin
   { view: 'top', label: 'Top', shortcut: '5' },
   { view: 'bottom', label: 'Bottom', shortcut: '6' },
   { view: 'iso', label: 'Isometric', shortcut: '7' },
+  { view: 'iso_back', label: 'Back isometric', shortcut: '8' },
 ];
 
 const NO_VIEWPORT = 'The viewport is not ready';

@@ -166,7 +166,9 @@ export function installUi(services: AppServices): () => void {
       run: () => {
         const items = services.selection.get().items;
         const ids = items.flatMap((it) => (it.kind === 'feature' ? [it.feature] : []));
-        for (const id of ids) ui.deleteFeature(id);
+        // Several features: one Delete of them all, one undo step (as the Assistant's delete).
+        if (ids.length > 1) ui.deleteFeatures(ids);
+        else if (ids.length) ui.deleteFeature(ids[0]);
         // Only faces selected: "Delete faces and heal" when that module is there and can run (P2).
         if (!ids.length && items.length && items.every((it) => it.kind === 'face') && services.commands.canRun(WELL_KNOWN_COMMANDS.deleteFaces) === true) {
           void services.commands.run(WELL_KNOWN_COMMANDS.deleteFaces);

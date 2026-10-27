@@ -612,6 +612,15 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       });
     },
     move: () => ({ ok: false, reason: 'not in the fake' }),
+    joinSteps(count, label) {
+      calls.push(`joinSteps ${count} ${label}`);
+      if (count < 2) return { ok: true };
+      if (undoStack.length < count) return { ok: false, reason: 'too few steps' };
+      const last = undoStack.splice(undoStack.length - count, count);
+      undoStack.push({ label, before: last[0].before, after: last[last.length - 1].after });
+      state.set((s) => ({ ...s, history: history() }));
+      return { ok: true };
+    },
     renameBody(id: BodyId, name) {
       calls.push(`renameBody ${id} ${name}`);
       return edit('Rename body', (doc) => ({ ...doc, bodies: { ...doc.bodies, [id]: { ...doc.bodies[id], name } } }));

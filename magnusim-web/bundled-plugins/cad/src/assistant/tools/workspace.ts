@@ -205,7 +205,7 @@ const ORIGIN_WORDS: Readonly<Record<string, OriginRef>> = {
 };
 
 /** A selector's hits as selection items (what the person's click would pick). */
-function itemsOfHit(h: Hit): SelectionItem[] {
+export function itemsOfHit(h: Hit): SelectionItem[] {
   switch (h.kind) {
     case 'face':
     case 'edge':
@@ -583,7 +583,7 @@ function personView(ctx: CallCtx, i: Input): ViewportHandle {
   return h;
 }
 
-const STANDARD: readonly StandardView[] = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso', 'home'];
+const STANDARD: readonly StandardView[] = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso', 'iso_back', 'home'];
 const DISPLAY: Readonly<Record<string, DisplayMode>> = { shaded_edges: 'shaded-edges', 'shaded-edges': 'shaded-edges', shaded: 'shaded', wireframe: 'wireframe' };
 const SECTION_PLANE: Readonly<Record<string, OriginPlaneRef>> = { top: 'origin:top', front: 'origin:front', right: 'origin:right' };
 
@@ -606,7 +606,7 @@ async function view(ctx: CallCtx, i: Input): Promise<ToolReply> {
       const v = i.value.toLowerCase() as StandardView;
       if (!STANDARD.includes(v)) throw bad('value', `value: one of ${STANDARD.join(', ')}.`);
       h.setView(v, auto);
-      return done(`Turned the person's view to ${v === 'iso' ? 'Isometric' : v === 'home' ? 'Home' : v}`, data({ standard_view: v }));
+      return done(`Turned the person's view to ${v === 'iso' ? 'Isometric' : v === 'iso_back' ? 'Back isometric' : v === 'home' ? 'Home' : v}`, data({ standard_view: v }));
     }
     case 'normal_to': {
       if (!i.target) throw bad('target', 'target: a flat face, a plane or a sketch.');

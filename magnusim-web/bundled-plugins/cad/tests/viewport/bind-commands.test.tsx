@@ -230,7 +230,7 @@ describe('bindViewport', () => {
 });
 
 describe('viewport commands', () => {
-  it('registers Fit (F), the standard views (1-7) and Normal to (N)', () => {
+  it('registers Fit (F), the standard views (1-8) and Normal to (N)', () => {
     const cmds = viewportCommands();
     expect(cmds.map((c) => `${c.id}=${c.shortcut}`)).toEqual([
       'view.fit=F',
@@ -241,6 +241,7 @@ describe('viewport commands', () => {
       'view.top=5',
       'view.bottom=6',
       'view.iso=7',
+      'view.iso_back=8',
       'view.normal-to=N',
     ]);
     expect(cmds.every((c) => !c.group)).toBe(true);
@@ -297,7 +298,7 @@ describe('viewport chrome', () => {
     click('[data-vp-fit]');
     expect(calls.views).toEqual(['home']);
     click('[data-vp-opens="views"]');
-    expect([...el.querySelectorAll('[data-view]')].map((b) => b.textContent)).toEqual(['Front1', 'Back2', 'Left3', 'Right4', 'Top5', 'Bottom6', 'Isometric7', 'Normal toN']);
+    expect([...el.querySelectorAll('[data-view]')].map((b) => b.textContent)).toEqual(['Front1', 'Back2', 'Left3', 'Right4', 'Top5', 'Bottom6', 'Isometric7', 'Back isometric8', 'Normal toN']);
     // Normal to is disabled with its reason while nothing planar is selected.
     const nt = el.querySelector('[data-view="normal-to"]') as HTMLButtonElement;
     expect(nt.disabled).toBe(true);

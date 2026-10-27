@@ -12,7 +12,6 @@ import { CameraRig, VIEW_DIRS } from './camera';
 import { TRIAD_PX } from './colors';
 import { sectionPlane } from './section';
 
-const S3 = 1 / Math.sqrt(3);
 
 /** Camera direction (from the part towards the camera) and screen-up of each snapshot view. */
 export const SNAPSHOT_DIRS: Record<SnapshotView, { dir: Vec3; up: Vec3 }> = {
@@ -24,7 +23,7 @@ export const SNAPSHOT_DIRS: Record<SnapshotView, { dir: Vec3; up: Vec3 }> = {
   bottom: VIEW_DIRS.bottom,
   iso: VIEW_DIRS.iso,
   // Iso seen from back-left-top: `iso` (front-right-top) turned half a turn about Z.
-  iso_back: { dir: [-S3, S3, S3], up: [0, 0, 1] },
+  iso_back: VIEW_DIRS.iso_back,
 };
 
 /** The largest side of a picture (px), also never more than the GPU's largest texture. */

@@ -20,6 +20,8 @@ export const VIEW_DIRS: Record<StandardView, { dir: Vec3; up: Vec3 }> = {
   top: { dir: [0, 0, 1], up: [0, 1, 0] },
   bottom: { dir: [0, 0, -1], up: [0, -1, 0] },
   iso: { dir: [1 / Math.sqrt(3), -1 / Math.sqrt(3), 1 / Math.sqrt(3)], up: [0, 0, 1] },
+  // Isometric from back-left-top: `iso` turned half a turn about Z (the Assistant's pictures' iso_back).
+  iso_back: { dir: [-1 / Math.sqrt(3), 1 / Math.sqrt(3), 1 / Math.sqrt(3)], up: [0, 0, 1] },
   home: { dir: HOME_DIR, up: [0, 0, 1] },
 };
 

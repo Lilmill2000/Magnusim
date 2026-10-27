@@ -332,3 +332,25 @@ input.mgk-input.cad-p2-name-input {
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* Measure: a point typed as x, y, z. */
+.cad-measure-point {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+.cad-measure-point .mgk-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Picture: the drawn picture, as wide as the panel. */
+.cad-picture {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 6px 0;
+  border: 1px solid var(--mg-divider);
+}

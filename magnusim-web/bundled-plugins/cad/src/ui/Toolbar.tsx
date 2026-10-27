@@ -60,10 +60,15 @@ import { held, isDefault, layoutModeOf, orderIds, pinned, placeOf, toolbarPrefs,
  */
 export const FOLD_ORDER: readonly string[] = [
   // Model mode.
+  // The person's side of the Assistant's view, find and hole tools (parity both ways): Picture and
+  // Find fold first; Hole stays with the solid commands longest of the three.
+  'file.picture',
+  'inspect.find',
   'modify.parameters',
   'inspect.check',
   'construct.point',
   'solid.loft',
+  'solid.hole',
   'inspect.mass',
   // Split and Delete faces before Axis (P4a review: the reference axis is reached for more often).
   'modify.split',

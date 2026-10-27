@@ -643,6 +643,48 @@ html.cad-tb-drag-refused * {
   vertical-align: -1px;
 }
 
+/* The swatch opens the body's colour picker: the input sits over it, invisible, so a click opens it. */
+.cad-swatch-pick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.cad-swatch-pick .cad-swatch-input {
+  position: absolute;
+  inset: 0;
+  width: 10px;
+  height: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.cad-swatch-pick .cad-swatch-input:disabled {
+  cursor: default;
+}
+
+.cad-swatch-pick:focus-within .cad-swatch {
+  outline: 2px solid var(--mg-primary);
+  outline-offset: 1px;
+}
+
+/* A feature row dragged in the history: where it goes (before or after the row under the pointer). */
+.tree-node.is-drop-before > .tree-row {
+  box-shadow: inset 0 2px 0 var(--mg-primary);
+}
+
+.tree-node.is-drop-after > .tree-row {
+  box-shadow: inset 0 -2px 0 var(--mg-primary);
+}
+
+.tree-node.is-dragged > .tree-row {
+  opacity: 0.5;
+}
+
 /* Rollback bar: 2 px #3d6fd6 line with a grab handle (drag-reorder styling, style.css:2891-2897). */
 .cad-rollback {
   display: flex;
@@ -1045,6 +1087,18 @@ input.mgk-input.cad-param-name {
   font-size: 11px;
   color: var(--mg-danger);
   white-space: normal;
+}
+
+/* A parameter's comment, under its row. */
+.cad-params tr.cad-param-comment-row > td {
+  padding-top: 0;
+}
+
+input.mgk-input.cad-param-comment {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 11px;
+  color: var(--mg-text-muted);
 }
 
 .cad-param-add td {

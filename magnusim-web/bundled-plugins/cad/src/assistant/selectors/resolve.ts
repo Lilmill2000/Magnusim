@@ -23,6 +23,7 @@ import { splitMerged, splitSuffix } from '../../naming/names';
 import { refOfFace } from '../../naming/refs';
 import { resolveFace } from '../../naming/resolve';
 import { userSelection } from '../../lib/selection';
+import type { SelectionItem } from '../../types/selection';
 import type { AppServices } from '../../types/app';
 import type { CallCtx } from '../../types/assistant';
 import { ORIGIN_PLANES, type BodyId, type Feature, type FeatureId, type PersistentRef, type PlaneFrame, type RegionRef, type SketchFeature, type Vec2, type Vec3 } from '../../types/doc';
@@ -81,6 +82,8 @@ export interface Scene {
   readonly cache: TopoCache;
   readonly signal?: AbortSignal;
   readonly progress: (label: string) => void;
+  /** What "selection" names: a panel's own picks (the person's Hole panel's face), or null for the person's selection. */
+  readonly selection?: readonly SelectionItem[] | null;
 }
 
 /** `handle`: the handle a hit was named by (it keeps it). */
@@ -137,7 +140,7 @@ export interface SceneOptions {
 }
 
 /** What a scene needs of a call. */
-export type SceneCall = Pick<CallCtx, 'services' | 'key' | 'signal' | 'progress'>;
+export type SceneCall = Pick<CallCtx, 'services' | 'key' | 'signal' | 'progress'> & { readonly selection?: readonly SelectionItem[] | null };
 
 const CANDIDATES_MAX = 8;
 const COS1 = Math.cos(Math.PI / 180);
@@ -184,6 +187,7 @@ export async function buildScene(call: SceneCall, opts: SceneOptions = {}): Prom
     cache: topoCacheOf(services),
     signal: call.signal,
     progress: (label) => call.progress(null, label),
+    selection: call.selection ?? null,
   };
 }
 
@@ -429,7 +433,7 @@ async function byHandle(sc: Scene, sel: Extract<Sel, { t: 'handle' }>): Promise<
 
 /** The person's selection on the scene's bodies (a shown face found again on the bodies before a feature). */
 async function bySelection(sc: Scene, want: Want): Promise<Hit[]> {
-  const items = userSelection(sc.services.selection.get()).items;
+  const items = sc.selection ?? userSelection(sc.services.selection.get()).items;
   const shown = sc.state.rebuild.bodies;
   const out: Hit[] = [];
   for (const it of items) {

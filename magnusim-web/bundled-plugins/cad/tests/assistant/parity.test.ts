@@ -9,11 +9,17 @@
 // method left out), and every row must name a tool and a field (and an enum value) that exist in
 // schemas.ts, or say why it is no person action. No row waits for a later tool: each is reached
 // now or is automatic or internal with its reason.
+// And the other way (Daniel: "anything the AI has I should have"): every field of every Assistant
+// tool and every value of its enums (schemas.ts) has a row in AI_TOOLS naming the person's path to
+// it, and every such row names a command the booted app registers, a method of the person's
+// controls, a field of a feature type that has a panel, or says in words where (place) or why it
+// is no person's action (own).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS } from '../../src/assistant/schemas';
-import { COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, RAILS, SKETCH_CONSTRAINTS, TOOLBAR, UI, type Reach } from '../../src/assistant/parity';
+import { AI_TOOLS, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, RAILS, SKETCH_CONSTRAINTS, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
 import { toolbarPrefs } from '../../src/ui/toolbar-layout';
@@ -29,6 +35,30 @@ vi.mock('../../src/viewport/viewport', () => ({
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type Node = { type?: string; properties?: Record<string, Node>; items?: Node; enum?: string[] };
+
+/**
+ * Every row key a tool's input asks for: a leaf field's path ("set[].expr", an array of strings by
+ * its own path) and, for an enum, each value as "path=value" ("views=iso_back", "set[].kind=angle").
+ */
+function schemaKeys(schema: Node): string[] {
+  const out: string[] = [];
+  const walk = (n: Node, path: string) => {
+    if (n.type === 'object') {
+      for (const [k, v] of Object.entries(n.properties ?? {})) walk(v, path ? `${path}.${k}` : k);
+      return;
+    }
+    if (n.type === 'array' && n.items) {
+      if (n.items.type === 'object') return walk(n.items, `${path}[]`);
+      if (n.items.enum) for (const v of n.items.enum) out.push(`${path}=${v}`);
+      else out.push(path);
+      return;
+    }
+    if (n.enum) for (const v of n.enum) out.push(`${path}=${v}`);
+    else out.push(path);
+  };
+  walk(schema, '');
+  return out;
+}
 
 /** A field path of a tool's input ("entities[].kind"), or null when the tool or a step of it is not there. */
 function fieldNode(tool: string, field: string): Node | null {
@@ -117,6 +147,61 @@ describe('parity: every person-facing capability has an Assistant tool and field
       .filter((x) => x.why)
       .map((x) => `${x.table} ${x.key}: ${x.why}`);
     expect(bad).toEqual([]);
+  });
+
+  it("the other way: every Assistant tool's field and enum value has a person's path, and every path is there in the booted app", async () => {
+    const services = await boot();
+    const missing: string[] = [];
+    const stale: string[] = [];
+    for (const t of CAD_TOOLS) {
+      const rows = AI_TOOLS[t.name];
+      if (!rows) {
+        missing.push(`tool ${t.name}`);
+        continue;
+      }
+      const keys = schemaKeys(t.inputSchema as unknown as Node);
+      for (const k of keys) if (!rows[k]) missing.push(`${t.name} ${k}`);
+      for (const k of Object.keys(rows)) if (!keys.includes(k)) stale.push(`${t.name} ${k}: no such field or value in schemas.ts`);
+    }
+    for (const name of Object.keys(AI_TOOLS)) if (!CAD_TOOLS.some((t) => t.name === name)) stale.push(`${name}: no such tool`);
+    expect(missing, 'an Assistant capability with no person path').toEqual([]);
+    expect(stale).toEqual([]);
+    // Each path is there: the command registered, the control's method on its object, the panel field on a type with a panel.
+    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT };
+    const bad: string[] = [];
+    const check = (where: string, p: PersonPath) => {
+      if (p.kind === 'command') {
+        if (!services.commands.get(p.id)) bad.push(`${where}: command ${p.id} is not registered`);
+      } else if (p.kind === 'control') {
+        if (!(p.method in controls[p.table])) bad.push(`${where}: ${p.table}.${p.method} is not a control method`);
+      } else if (p.kind === 'panel') {
+        const fields = (FEATURE_FIELDS as unknown as Record<string, Record<string, Reach>>)[p.type];
+        if (!fields?.[p.field]) bad.push(`${where}: ${p.type} has no field ${p.field}`);
+        if (!hasPanel(services, p.type)) bad.push(`${where}: ${p.type} has no panel`);
+      } else if (p.kind === 'place') {
+        if (!p.where.trim()) bad.push(`${where}: a place with no words`);
+      } else if (!p.why.trim()) bad.push(`${where}: own with no reason`);
+    };
+    for (const [tool, rows] of Object.entries(AI_TOOLS)) for (const [k, p] of Object.entries(rows)) check(`${tool} ${k}`, p);
+    expect(bad).toEqual([]);
+    const all = Object.values(AI_TOOLS).flatMap((r) => Object.values(r));
+    const n = (k: PersonPath['kind']) => all.filter((p) => p.kind === k).length;
+    console.log(`[parity] the other way: ${all.length} rows: ${n('command')} commands, ${n('control')} controls, ${n('panel')} panel fields, ${n('place')} places, ${n('own')} the Assistant's own`);
+  });
+
+  it("the person has what was the Assistant's alone: Hole, body colour, history order, Back isometric, Find, Picture, Measure's bodies, points and sections, parameter comments, a Delete of several", () => {
+    expect(AI_TOOLS.hole.face).toEqual({ kind: 'command', id: 'solid.hole' });
+    expect(AI_TOOLS.body.color).toEqual({ kind: 'control', table: 'ui', method: 'setBodyColor' });
+    expect(AI_TOOLS.edit_feature.move).toEqual({ kind: 'control', table: 'ui', method: 'moveFeature' });
+    expect(AI_TOOLS.view['views=iso_back']).toEqual({ kind: 'command', id: 'file.picture' });
+    expect(AI_TOOLS.workspace['action=standard_view']).toEqual({ kind: 'command', id: 'view.iso_back' });
+    expect(AI_TOOLS.find.query).toEqual({ kind: 'command', id: 'inspect.find' });
+    expect(AI_TOOLS.measure.section).toEqual({ kind: 'command', id: 'inspect.measure' });
+    expect(AI_TOOLS.set_params['set[].comment']).toEqual({ kind: 'command', id: 'modify.parameters' });
+    expect(AI_TOOLS.delete.features).toEqual({ kind: 'control', table: 'ui', method: 'deleteFeatures' });
+    expect(COMMANDS['solid.hole']).toMatchObject({ tool: 'hole' });
+    expect(UI.moveFeature).toMatchObject({ tool: 'edit_feature', field: 'move' });
+    expect(DOC.joinSteps).toMatchObject({ tool: 'delete' });
   });
 
   it('the workspace tool reaches what this lane added: send to the simulation, the rollback bar, the view, the banana, Export', () => {

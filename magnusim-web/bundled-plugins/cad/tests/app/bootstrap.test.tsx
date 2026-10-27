@@ -71,7 +71,7 @@ describe('bootstrap', () => {
     expect(shownIn('construct')).toEqual(['Plane']);
     expect(moreIn('construct')).toBe('construct.axis construct.point');
     expect(shownIn('solid')).toEqual(['Extrude']);
-    expect(moreIn('solid')).toBe('solid.revolve solid.sweep solid.loft');
+    expect(moreIn('solid')).toBe('solid.revolve solid.sweep solid.loft solid.hole');
     expect(shownIn('cfd')).toEqual(['Enclosure']);
     expect(moreIn('cfd')).toBe('');
     // Greyed with the reason until a body exists.
@@ -79,9 +79,9 @@ describe('bootstrap', () => {
     expect(shownIn('modify')).toEqual(['Fillet', 'Chamfer']);
     expect(moreIn('modify')).toBe('modify.parameters modify.shell modify.press-pull modify.delete-faces modify.split modify.combine');
     expect(shownIn('inspect')).toEqual(['Measure']);
-    expect(moreIn('inspect')).toBe('inspect.mass inspect.check');
+    expect(moreIn('inspect')).toBe('inspect.mass inspect.check inspect.find');
     expect(shownIn('file')).toEqual(['Import STEP']);
-    expect(moreIn('file')).toBe('file.export-step');
+    expect(moreIn('file')).toBe('file.export-step file.picture');
     expect([...root.querySelectorAll('[data-cad-toolbar] [data-group="edit"] .tb-txt')].map((e) => e.textContent)).toEqual(['Undo', 'Redo']);
     expect(root.querySelector('[data-command="edit.undo"]')?.getAttribute('aria-disabled')).toBe('true');
     // P4a integration: the toolbar's fold order names only toolbar commands, and every toolbar
@@ -92,9 +92,9 @@ describe('bootstrap', () => {
     expect(KEEP_IN_VIEW.filter((id) => !grouped.some((c) => c.id === id))).toEqual([]);
     expect(FOLD_ORDER.filter((id) => KEEP_IN_VIEW.includes(id))).toEqual([]);
     expect(grouped.filter((c) => c.group !== 'constrain' && !FOLD_ORDER.includes(c.id) && !KEEP_IN_VIEW.includes(c.id)).map((c) => c.id)).toEqual([]);
-    // jsdom has no layout: nothing folds there for width; 16 commands are in More by the default layout.
+    // jsdom has no layout: nothing folds there for width; 19 commands are in More by the default layout.
     expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-fit-folded')).toBe('0');
-    expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-folded')).toBe('16');
+    expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-folded')).toBe('19');
     expect(root.querySelector('[data-cad-toolbar]')?.getAttribute('data-layout')).toBe('default');
     expect(root.querySelector('[data-chip="kernel"]')).toBeNull();
     expect(window.__CAD__?.snapshot().kernel.state).toBe('ready');

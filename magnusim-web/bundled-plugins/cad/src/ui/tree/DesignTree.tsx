@@ -5,14 +5,16 @@
 //            it are dimmed, suppressed rows greyed and struck through, failed
 //            rows red and warned rows amber with a "What's wrong" tooltip.
 // Click selects (shared with the viewport), Ctrl+click toggles, double-click
-// opens the feature's panel, right-click opens the context menu.
+// opens the feature's panel, right-click opens the context menu. A feature row dragged onto
+// another goes before or after it (doc.move, the order rule of the Assistant's edit_feature move);
+// a body's swatch opens its colour picker (doc.setBodyColor, the Assistant's body color).
 // Sketch rows (P3-PROFILES): "(-)" / "(+)" / "(?)" before the name as
 // SOLIDWORKS shows how defined a sketch is (a lock when fully defined), its
 // dimension count, and an eye that shows or hides it in the view.
 // ux010: the PART head's chevron slides the card into its rail (src/ui/LeftStack.tsx, TreeRail.tsx).
 // Owner: UI-SHELL; sketch rows P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
 import { useServices } from '../../lib/services';
 import { isSelected, selectItem } from '../../lib/selection';
 import { useStateStore } from '../../lib/store';
@@ -113,6 +115,9 @@ function History() {
   const sel = useStateStore(selection);
   const uiState = useStateStore(ui.state, (s) => ({ panel: s.panel, renaming: s.renaming }));
   const [drag, setDrag] = useState<number | null>(null);
+  // A feature row dragged to a new place in the history (doc.move, as the Assistant's edit_feature move).
+  const [moving, setMoving] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{ id: string; where: 'before' | 'after' } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const count = d.features.length;
   const saved = rollbackIndex({ rollback: d.rollback }, count);
@@ -189,6 +194,50 @@ function History() {
     ui.openEdit(row.id);
   };
 
+  /** The index the dragged feature ends at when dropped before or after `target` (the list without it, then it put in). */
+  const dropIndex = (id: string, target: string, where: 'before' | 'after'): number | null => {
+    const from = d.features.findIndex((f) => f.id === id);
+    const at = d.features.findIndex((f) => f.id === target);
+    if (from < 0 || at < 0 || from === at) return null;
+    const to = where === 'before' ? (from < at ? at - 1 : at) : from < at ? at : at + 1;
+    return to === from ? null : to;
+  };
+  const whereIn = (e: DragEvent<HTMLDivElement>): 'before' | 'after' => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+  };
+  const block = ui.editBlock();
+  const rowDrag = (row: HistoryRow): Record<string, unknown> => ({
+    draggable: !block && !uiState.renaming,
+    'data-feature-drag': row.id,
+    onDragStart: (e: DragEvent<HTMLDivElement>) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('application/x-cad-feature', row.id);
+      e.dataTransfer.setData('text/plain', row.name);
+      setMoving(row.id);
+    },
+    onDragOver: (e: DragEvent<HTMLDivElement>) => {
+      if (!moving || moving === row.id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const where = whereIn(e);
+      if (drop?.id !== row.id || drop.where !== where) setDrop({ id: row.id, where });
+    },
+    onDrop: (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const id = moving ?? e.dataTransfer.getData('application/x-cad-feature');
+      setMoving(null);
+      setDrop(null);
+      if (!id || id === row.id) return;
+      const to = dropIndex(id, row.id, whereIn(e));
+      if (to !== null) ui.moveFeature(id, to);
+    },
+    onDragEnd: () => {
+      setMoving(null);
+      setDrop(null);
+    },
+  });
+
   const items: ReactElement[] = [];
   const barEl = (
     <RollbackBar
@@ -214,6 +263,8 @@ function History() {
       row.status === 'warning' ? 'is-warning' : '',
       related.has(row.id) ? 'is-related' : '',
       editing === row.id ? 'is-editing' : '',
+      moving === row.id ? 'is-dragged' : '',
+      drop?.id === row.id ? `is-drop-${drop.where}` : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -308,6 +359,7 @@ function History() {
             />
           ) : undefined
         }
+        rowProps={rowDrag(row)}
         onClick={(e) => onRowClick(row, e)}
         onDoubleClick={() => onRowOpen(row)}
         onContextMenu={(e) => onRowMenu(row, e)}
@@ -347,6 +399,58 @@ function History() {
   );
 }
 
+/**
+ * A body's colour swatch: a click opens the colour picker (the context menu's "Colour…" too); the
+ * colour chosen is one undo step (doc.setBodyColor, as the Assistant's body color). The picker's
+ * `change` (its close), not each `input` while dragging in it, is the step.
+ */
+function BodyColor({ row }: { row: BodyRow }) {
+  const services = useServices();
+  const ui = uiFor(services);
+  const ref = useRef<HTMLInputElement>(null);
+  const asked = useStateStore(ui.state, (s) => s.colorFor === row.id);
+  const block = ui.editBlock();
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onChange = () => {
+      const v = el.value.toLowerCase();
+      if (v !== row.color.toLowerCase()) ui.setBodyColor(row.id, v);
+    };
+    el.addEventListener('change', onChange);
+    return () => el.removeEventListener('change', onChange);
+  }, [ui, row.id, row.color]);
+  useEffect(() => {
+    if (!asked) return;
+    ui.pickBodyColor(null);
+    const el = ref.current;
+    if (!el || el.disabled) return;
+    try {
+      if (typeof el.showPicker === 'function') el.showPicker();
+      else el.click();
+    } catch {
+      el.click();
+    }
+  }, [asked, ui]);
+  const tip = useTip({ text: `Colour of ${row.name}`, detail: block ?? 'Click to choose its colour' });
+  return (
+    <label className="cad-swatch-pick" data-body-color-pick={row.id} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()} {...tip}>
+      <span className="cad-swatch" style={{ background: row.color }} aria-hidden="true" />
+      <input
+        key={row.color}
+        ref={ref}
+        type="color"
+        className="cad-swatch-input"
+        defaultValue={row.color}
+        disabled={!!block}
+        aria-label={`Colour of ${row.name}`}
+        data-body-color={row.id}
+        data-color={row.color.toLowerCase()}
+      />
+    </label>
+  );
+}
+
 function BodyNode({ row, selected }: { row: BodyRow; selected: boolean }) {
   const services = useServices();
   const ui = uiFor(services);
@@ -359,7 +463,7 @@ function BodyNode({ row, selected }: { row: BodyRow; selected: boolean }) {
       indent
       label={
         <>
-          <span className="cad-swatch" style={{ background: row.color }} aria-hidden="true" />
+          <BodyColor row={row} />
           {renaming ? (
             <InlineRename name={row.name} label="Body" onRename={(n) => ui.renameBody(row.id, n)} onDone={() => ui.endRename()} onGiveUp={(why) => ui.fail(`Rename ${row.name}`, why)} />
           ) : (

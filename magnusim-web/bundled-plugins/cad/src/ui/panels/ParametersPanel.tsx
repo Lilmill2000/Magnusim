@@ -1,6 +1,6 @@
 // The Parameters panel (Fusion's Change Parameters, as a flyout): one row per
-// user parameter with its name, expression, value, unit and delete; an add row
-// at the foot of the table. Each change is one undo step. An invalid name or
+// user parameter with its name, expression, value, unit and delete, and its comment under
+// them (as the Assistant's set_params comment); an add row at the foot of the table. Each change is one undo step. An invalid name or
 // expression shows why inline and is not applied; a change the document
 // refuses (a cycle, a parameter in use) shows the document's reason.
 // Rows an Assistant step changes flash for FLASH_MS (data-param-changed), in
@@ -114,6 +114,61 @@ function NameInput({ p, onError }: { p: Param; onError(msg: string | null): void
           setText(p.name);
           setEditing(false);
           onError(null);
+        }
+      }}
+    />
+  );
+}
+
+/** The longest comment (set_params' comment field). */
+export const COMMENT_MAX = 200;
+
+/** A parameter's comment, kept on Enter or leaving the field ("" removes it): one undo step. */
+function CommentInput({ p, onError }: { p: Param; onError(msg: string | null): void }) {
+  const services = useServices();
+  const [text, setText] = useState(p.comment ?? '');
+  const [editing, setEditing] = useState(false);
+  const shown = editing ? text : (p.comment ?? '');
+  const commit = () => {
+    setEditing(false);
+    const next = text.trim();
+    if (next === (p.comment ?? '')) return;
+    try {
+      const r = services.doc.updateParam(p.id, { comment: next });
+      onError(r.ok ? null : r.reason);
+    } catch (err) {
+      onError(errText(err));
+    }
+  };
+  return (
+    <input
+      type="text"
+      className="mgk-input cad-param-comment"
+      aria-label={`Comment of ${p.name}`}
+      placeholder="Comment"
+      spellCheck={false}
+      autoComplete="off"
+      maxLength={COMMENT_MAX}
+      data-param-comment={p.name}
+      value={shown}
+      onFocus={() => {
+        setText(p.comment ?? '');
+        setEditing(true);
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        setEditing(true);
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setText(p.comment ?? '');
+          setEditing(false);
         }
       }}
     />
@@ -245,6 +300,11 @@ function ParamRow({ p, changed = false }: { p: Param; changed?: boolean }) {
           />
         </td>
       </tr>
+      <tr className="cad-param-comment-row" data-param-comment-row={p.name}>
+        <td colSpan={5}>
+          <CommentInput p={p} onError={setError} />
+        </td>
+      </tr>
       {error || value.error ? (
         <tr className="cad-param-err-row">
           <td colSpan={5} className="cad-param-err" role="alert" data-param-error={p.name}>
@@ -263,6 +323,7 @@ function AddRow() {
   const [name, setName] = useState('');
   const [expr, setExpr] = useState('');
   const [quantity, setQuantity] = useState<Quantity>('length');
+  const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
   const opts = quantityOptions(units);
 
@@ -289,7 +350,7 @@ function AddRow() {
       return;
     }
     try {
-      const res = doc.addParam({ name: check.name, expr: exprToStore(expr, quantity, units.units()), quantity });
+      const res = doc.addParam({ name: check.name, expr: exprToStore(expr, quantity, units.units()), quantity, ...(comment.trim() ? { comment: comment.trim() } : {}) });
       if (typeof res !== 'string') {
         if (!res.ok) {
           setError(res.reason);
@@ -302,6 +363,7 @@ function AddRow() {
     }
     setName('');
     setExpr('');
+    setComment('');
     setError(null);
   };
   const onKey = (e: KeyboardEvent) => {
@@ -351,6 +413,23 @@ function AddRow() {
           <Select label="New parameter unit" value={quantity} onChange={(v) => setQuantity(v as Quantity)} options={opts.map((o) => ({ value: o.value, label: o.label }))} />
         </td>
         <td />
+      </tr>
+      <tr className="cad-param-comment-row">
+        <td colSpan={5}>
+          <input
+            type="text"
+            className="mgk-input cad-param-comment"
+            aria-label="New parameter comment"
+            placeholder="Comment (optional)"
+            spellCheck={false}
+            autoComplete="off"
+            maxLength={COMMENT_MAX}
+            data-param-comment="new"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            onKeyDown={onKey}
+          />
+        </td>
       </tr>
       <tr className="cad-param-add-actions">
         <td colSpan={5}>

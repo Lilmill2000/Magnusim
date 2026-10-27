@@ -7,6 +7,11 @@
 //   SKETCH_ENTITIES, SKETCH_CONSTRAINTS, SKETCH_TOOLS  what sketch mode draws, ties and offers;
 //   UI, DOC, RAILS, TOOLBAR, LINK, VIEWPORT  the methods the person's controls call (the tree, the
 //                     chips, the panels' rails, the toolbar layout, Back's link, the view).
+// And the other way (Daniel: "anything the AI has I should have and anything I have the AI should
+// have"): AI_TOOLS names, for every field of every Assistant tool and every value of its enums
+// (schemas.ts), the person's way to the same thing (person paths, below); the test fails on a
+// tool, field or value with no row, and on a row that names a command, control or panel field the
+// booted app does not have.
 // The records keyed by types are exhaustive at typecheck (a new feature field, entity kind, sketch
 // tool or method fails `npm run typecheck` until it is mapped); tests/assistant/parity.test.ts
 // checks the same at run time against the booted app (every registered command, feature type and
@@ -61,6 +66,7 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'view.top': W('standard_view'),
   'view.bottom': W('standard_view'),
   'view.iso': W('standard_view'),
+  'view.iso_back': W('standard_view'),
   'view.normal-to': W('normal_to'),
   'modify.parameters': reach('set_params', 'set'),
   'modify.chamfer': MODIFY('chamfer'),
@@ -80,6 +86,9 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'solid.revolve': reach('revolve', 'axis'),
   'solid.sweep': reach('sweep_loft', 'kind', 'sweep'),
   'solid.loft': reach('sweep_loft', 'kind', 'loft'),
+  'solid.hole': reach('hole', 'face'),
+  'inspect.find': reach('find', 'query'),
+  'file.picture': reach('view', 'views'),
   'pattern.linear': PATTERN('linear'),
   'pattern.circular': PATTERN('circular'),
   'pattern.mirror': PATTERN('mirror'),
@@ -364,6 +373,10 @@ export const UI: { readonly [K in keyof UiController]: Reach } = {
   startRename: reach('edit_feature', 'rename_to'),
   endRename: reach('edit_feature', 'rename_to'),
   toggleSuppressed: reach('edit_feature', 'suppress'),
+  moveFeature: reach('edit_feature', 'move'),
+  setBodyColor: reach('body', 'color'),
+  pickBodyColor: reach('body', 'color'),
+  deleteFeatures: reach('delete', 'features'),
   runFeatureAction: REPAIR,
   deleteFeature: reach('delete', 'features'),
   rollBackTo: W('roll_back_to'),
@@ -400,6 +413,7 @@ export const DOC: { readonly [K in keyof DocService]: Reach } = {
   remove: reach('delete', 'features'),
   removeBlock: reach('delete', 'features'),
   move: reach('edit_feature', 'move'),
+  joinSteps: reach('delete', 'features'),
   renameBody: reach('body', 'rename_to'),
   setBodyColor: reach('body', 'color'),
   setBodyInSimulation: reach('body', 'simulation'),
@@ -522,4 +536,325 @@ export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reac
   toolbar: TOOLBAR,
   link: LINK,
   viewport: VIEWPORT,
+};
+
+// ------------------------------------------------------------------ the other way: every Assistant tool's field, the person's path
+
+/**
+ * How the person does what an Assistant tool's field or enum value does:
+ *   command(id)              a registered command (the toolbar, a context menu or a key runs it);
+ *   control(table, method)   a method of the person's controls (the tables above: the tree, the
+ *                            panels, the document, the view, the toolbar, Back's link);
+ *   panel(type, field)       a field of a feature type's own panel (its record's field);
+ *   place(where)             a control of the person's no table holds (a chip's Retry, the Part row's
+ *                            rename, drawing in sketch mode): where it is, in words;
+ *   own(why)                 not a person's action: the Assistant's own plumbing (its ids, a
+ *                            reference text, "keep this as it is").
+ */
+export type PersonPath =
+  | { kind: 'command'; id: string }
+  | { kind: 'control'; table: ControlTable; method: string }
+  | { kind: 'panel'; type: FeatureType; field: string }
+  | { kind: 'place'; where: string }
+  | { kind: 'own'; why: string };
+
+export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'link' | 'viewport';
+
+export const command = (id: string): PersonPath => ({ kind: 'command', id });
+export const control = (table: ControlTable, method: string): PersonPath => ({ kind: 'control', table, method });
+export const panel = (type: FeatureType, field: string): PersonPath => ({ kind: 'panel', type, field });
+export const place = (where: string): PersonPath => ({ kind: 'place', where });
+export const own = (why: string): PersonPath => ({ kind: 'own', why });
+
+const EDIT_ROW = control('ui', 'openEdit');
+const NAME_ROW = control('ui', 'renameFeature');
+const KEEP = own('"keep": leave it as it is');
+const IDS = own("the Assistant's own ids for its rows (the person points at what they mean)");
+const PARAMS = command('modify.parameters');
+const PICTURE = command('file.picture');
+const HOLE = command('solid.hole');
+const MEASURE = command('inspect.measure');
+const DIMENSION = command('sketch.dimension');
+const REFERENCE = own("reference text for the model; the person has the program's documentation");
+const OPS = (type: FeatureType) => ({ 'op=new': panel(type, 'op'), 'op=join': panel(type, 'op'), 'op=cut': panel(type, 'op'), 'op=intersect': panel(type, 'op') });
+const NEW_BODY = { body_name: control('ui', 'renameBody'), color: control('ui', 'setBodyColor') };
+const each = (values: readonly string[], prefix: string, path: PersonPath) => Object.fromEntries(values.map((v) => [`${prefix}=${v}`, path]));
+
+/** Every Assistant tool's fields and enum values (schemas.ts), and the person's path to each. */
+export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPath>>>> = {
+  get_model: {
+    'detail=brief': place("the design tree: every feature with its state badge and message, the bodies, the sketches' (-)/(+) and the DOF chip"),
+    'detail=full': EDIT_ROW,
+    feature: EDIT_ROW,
+  },
+  find: { query: command('inspect.find'), limit: own('how many rows the model is sent; the Find panel lists them all') },
+  measure: { targets: MEASURE, section: MEASURE },
+  view: {
+    ...each(['iso', 'iso_back', 'front', 'back', 'left', 'right', 'top', 'bottom'], 'views', PICTURE),
+    hide: PICTURE,
+    section: PICTURE,
+    ...each(['none', 'bodies', 'faces'], 'labels', PICTURE),
+    ...each(['small', 'large'], 'size', PICTURE),
+    ...each(['shaded_edges', 'shaded', 'wireframe'], 'display', PICTURE),
+    ...each(['orthographic', 'perspective'], 'projection', PICTURE),
+  },
+  help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace'], 'topic', REFERENCE),
+  set_params: {
+    'set[].name': PARAMS,
+    ...each(['length', 'angle', 'number'], 'set[].kind', PARAMS),
+    'set[].expr': PARAMS,
+    'set[].comment': PARAMS,
+    'set[].rename_to': PARAMS,
+    remove: PARAMS,
+  },
+  sketch: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    on: command('sketch.new'),
+    'entities[].id': IDS,
+    'entities[].kind=point': command('sketch.point'),
+    'entities[].kind=line': command('sketch.line'),
+    'entities[].kind=centerline': command('sketch.centerline'),
+    'entities[].kind=polyline': command('sketch.line'),
+    'entities[].kind=circle': command('sketch.circle'),
+    'entities[].kind=arc': command('sketch.arc'),
+    'entities[].kind=rect': command('sketch.rectangle'),
+    'entities[].kind=center_rect': command('sketch.rectangle-center'),
+    // The sketch shapes' own tools are another lane's; until they land, the person draws them as the macro does.
+    'entities[].kind=slot': command('sketch.arc-tangent'),
+    'entities[].kind=polygon': command('sketch.line'),
+    'entities[].kind=sector': command('sketch.arc'),
+    'entities[].kind=spline': command('sketch.spline'),
+    'entities[].kind=control_spline': command('sketch.spline-control'),
+    'entities[].at': place('where the person clicks in sketch mode, and the dimensions they set'),
+    'entities[].construction': command('sketch.construction'),
+    'constraints[].id': IDS,
+    'constraints[].kind=coincident': command('sketch.coincident'),
+    'constraints[].kind=horizontal': command('sketch.horizontal'),
+    'constraints[].kind=vertical': command('sketch.vertical'),
+    'constraints[].kind=parallel': command('sketch.parallel'),
+    'constraints[].kind=perpendicular': command('sketch.perpendicular'),
+    'constraints[].kind=tangent': command('sketch.tangent'),
+    'constraints[].kind=equal': command('sketch.equal'),
+    'constraints[].kind=midpoint': command('sketch.midpoint'),
+    'constraints[].kind=symmetric': command('sketch.symmetric'),
+    'constraints[].kind=point_on': command('sketch.coincident'),
+    'constraints[].kind=concentric': command('sketch.concentric'),
+    'constraints[].kind=collinear': command('sketch.collinear'),
+    ...each(['distance', 'distance_x', 'distance_y', 'radius', 'diameter', 'angle'], 'constraints[].kind', DIMENSION),
+    'constraints[].kind=fix': command('sketch.fix'),
+    'constraints[].kind=trim': command('sketch.trim'),
+    'constraints[].kind=extend': command('sketch.extend'),
+    'constraints[].kind=offset': command('sketch.offset'),
+    'constraints[].kind=fillet': command('sketch.fillet'),
+    'constraints[].kind=chamfer': command('sketch.chamfer'),
+    'constraints[].kind=mirror': command('sketch.mirror'),
+    'constraints[].kind=linear_pattern': command('sketch.pattern-linear'),
+    'constraints[].kind=circular_pattern': command('sketch.pattern-circular'),
+    'constraints[].kind=project': command('sketch.project'),
+    'constraints[].kind=intersect': command('sketch.intersect'),
+    'constraints[].kind=break_link': place("a linked curve's context menu in sketch mode: Break link"),
+    'constraints[].refs': place('the curves and points the person picks for the relation, dimension or tool'),
+    'constraints[].value': DIMENSION,
+    infer: place('sketch mode adds horizontal and vertical by itself as the person draws along them'),
+  },
+  extrude: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    sketch: panel('extrude', 'profiles'),
+    regions: panel('extrude', 'profiles'),
+    face: panel('extrude', 'face'),
+    direction: panel('extrude', 'direction'),
+    ...each(['blind', 'symmetric', 'two', 'through', 'through_both', 'to'], 'extent', panel('extrude', 'extent')),
+    distance: panel('extrude', 'extent'),
+    distance2: panel('extrude', 'extent'),
+    to: panel('extrude', 'extent'),
+    flip: panel('extrude', 'flip'),
+    ...OPS('extrude'),
+    bodies: panel('extrude', 'scope'),
+    ...NEW_BODY,
+  },
+  revolve: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    sketch: panel('revolve', 'profiles'),
+    regions: panel('revolve', 'profiles'),
+    axis: panel('revolve', 'axis'),
+    ...each(['full', 'one', 'symmetric', 'two'], 'extent', panel('revolve', 'extent')),
+    angle: panel('revolve', 'extent'),
+    angle2: panel('revolve', 'extent'),
+    flip: panel('revolve', 'flip'),
+    ...OPS('revolve'),
+    bodies: panel('revolve', 'scope'),
+    ...NEW_BODY,
+  },
+  sweep_loft: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    'kind=sweep': command('solid.sweep'),
+    'kind=loft': command('solid.loft'),
+    profiles: panel('loft', 'sections'),
+    path: panel('sweep', 'path'),
+    ...each(['follow', 'fixed'], 'orientation', panel('sweep', 'orientation')),
+    ruled: panel('loft', 'ruled'),
+    ...OPS('sweep'),
+    bodies: panel('sweep', 'scope'),
+    ...NEW_BODY,
+  },
+  modify: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    'kind=fillet': command('modify.fillet'),
+    'kind=chamfer': command('modify.chamfer'),
+    'kind=shell': command('modify.shell'),
+    targets: panel('fillet', 'edges'),
+    size: panel('fillet', 'radius'),
+    size2: panel('chamfer', 'distance2'),
+    flip: panel('chamfer', 'flip'),
+    inward: panel('shell', 'direction'),
+  },
+  pattern: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    'kind=linear': command('pattern.linear'),
+    'kind=circular': command('pattern.circular'),
+    'kind=mirror': command('pattern.mirror'),
+    ...each(['features', 'bodies', 'faces'], 'of', panel('pattern_linear', 'of')),
+    items: panel('pattern_linear', 'features'),
+    about: panel('pattern_linear', 'dir1'),
+    count: panel('pattern_linear', 'dir1'),
+    spacing: panel('pattern_linear', 'dir1'),
+    flip: panel('pattern_linear', 'dir1'),
+    about2: panel('pattern_linear', 'dir2'),
+    count2: panel('pattern_linear', 'dir2'),
+    spacing2: panel('pattern_linear', 'dir2'),
+    'options=symmetric': panel('pattern_circular', 'symmetric'),
+    'options=flip2': panel('pattern_linear', 'dir2'),
+    'options=symmetric2': panel('pattern_linear', 'dir2'),
+    'options=extent': panel('pattern_linear', 'dir1'),
+    'options=extent2': panel('pattern_linear', 'dir2'),
+    skip: panel('pattern_linear', 'skip'),
+    'op=source': panel('pattern_linear', 'op'),
+    ...OPS('pattern_linear'),
+    bodies: panel('pattern_linear', 'scope'),
+  },
+  combine: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    ...each(['join', 'cut', 'intersect'], 'op', panel('combine', 'op')),
+    targets: panel('combine', 'targets'),
+    tools: panel('combine', 'tools'),
+    keep_tools: panel('combine', 'keepTools'),
+  },
+  body: {
+    body: place("the body's row in the tree (Bodies)"),
+    rename_to: control('ui', 'renameBody'),
+    color: control('ui', 'setBodyColor'),
+    'simulation=keep': KEEP,
+    'simulation=include': control('ui', 'setBodyInSimulation'),
+    'simulation=exclude': control('ui', 'setBodyInSimulation'),
+    'visibility=keep': KEEP,
+    'visibility=show': control('ui', 'setBodyVisible'),
+    'visibility=hide': control('ui', 'setBodyVisible'),
+  },
+  edit_feature: {
+    feature: EDIT_ROW,
+    'set[].field': EDIT_ROW,
+    'set[].value': EDIT_ROW,
+    rename_to: NAME_ROW,
+    'suppress=keep': KEEP,
+    'suppress=suppress': control('ui', 'toggleSuppressed'),
+    'suppress=unsuppress': control('ui', 'toggleSuppressed'),
+    move: control('ui', 'moveFeature'),
+  },
+  // Undo of a whole Assistant request: the request is one undo step of the Part, so the person's
+  // Ctrl+Z takes it all back (an Undo of a request in the Assistant dock is the dock's own).
+  undo: {
+    'action=own': control('doc', 'undo'),
+    'action=undo': control('doc', 'undo'),
+    'action=redo': control('doc', 'redo'),
+    steps: control('doc', 'undo'),
+    previous_turn: control('doc', 'undo'),
+  },
+  delete: { features: control('ui', 'deleteFeatures') },
+  construct: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    ...each(['offset', 'angle', 'three_points', 'midplane', 'normal_to_curve'], 'method', command('construct.plane')),
+    ...each(['two_points', 'cylinder', 'edge', 'two_planes'], 'method', command('construct.axis')),
+    ...each(['vertex', 'center', 'on_edge', 'edge_plane', 'coordinates'], 'method', command('construct.point')),
+    refs: panel('ref_plane', 'plane'),
+    value: panel('ref_plane', 'distance'),
+    xyz: panel('ref_point', 'xyz'),
+    flip: panel('ref_plane', 'flip'),
+    from_end: panel('ref_point', 'fromEnd'),
+  },
+  direct: {
+    edit: EDIT_ROW,
+    name: NAME_ROW,
+    'kind=press_pull': command('modify.press-pull'),
+    'kind=delete_faces': command('modify.delete-faces'),
+    'kind=split': command('modify.split'),
+    'kind=enclosure': command('cfd.enclosure'),
+    'kind=repair': control('ui', 'runFeatureAction'),
+    'kind=retry': control('ui', 'runFeatureAction'),
+    faces: panel('press_pull', 'faces'),
+    distance: panel('press_pull', 'distance'),
+    bodies: panel('split', 'targets'),
+    tool: panel('split', 'tool'),
+    keep_tool: panel('split', 'tool'),
+    'shape=box': panel('enclosure', 'shape'),
+    ...each(['cylinder_x', 'cylinder_y', 'cylinder_z'], 'shape', panel('enclosure', 'axis')),
+    ...each(['zero', 'percent', 'fixed'], 'padding', panel('enclosure', 'padding')),
+    ...each(['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'], 'sides[].side', panel('enclosure', 'sides')),
+    'sides[].value': panel('enclosure', 'sides'),
+  },
+  hole: {
+    name: HOLE,
+    face: HOLE,
+    'centers[].x': HOLE,
+    'centers[].y': HOLE,
+    'centers[].z': HOLE,
+    diameter: HOLE,
+    ...each(['through', 'blind'], 'depth', HOLE),
+    distance: HOLE,
+  },
+  workspace: {
+    'action=roll_back_to': control('ui', 'rollBackTo'),
+    'action=roll_to_end': control('ui', 'rollToEnd'),
+    'action=show': control('doc', 'setSketchVisibility'),
+    'action=hide': control('doc', 'setSketchVisibility'),
+    'action=origin_planes': control('viewport', 'setPlanes'),
+    'action=rename_part': place("the tree's Part row: a double-click renames the Part"),
+    'action=select': command('inspect.find'),
+    'action=selection_filter': control('viewport', 'setFilter'),
+    'action=expand': control('doc', 'setExpanded'),
+    'action=collapse': control('rails', 'setTreeShown'),
+    'action=toolbar_show': control('toolbar', 'setMode'),
+    'action=toolbar_hide': control('toolbar', 'setMode'),
+    'action=toolbar_move': control('toolbar', 'setMode'),
+    'action=toolbar_reset': control('toolbar', 'reset'),
+    'action=banana_show': command('scale.banana'),
+    'action=banana_hide': command('scale.banana'),
+    'action=banana_place': control('doc', 'setScaleModel'),
+    'action=reload': control('doc', 'reload'),
+    'action=keep_mine': control('doc', 'keepMine'),
+    'action=retry_save': control('doc', 'retrySave'),
+    'action=retry_kernel': place("the geometry kernel's chip in the status dock: Retry"),
+    'action=import_step': command('file.import-step'),
+    'action=reheal': panel('import', 'heal'),
+    'action=export_step': command('file.export-step'),
+    'action=send_to_simulation': control('link', 'sync'),
+    'action=fit': command('view.fit'),
+    'action=standard_view': command('view.iso_back'),
+    'action=normal_to': command('view.normal-to'),
+    'action=orbit_pivot': control('viewport', 'orbitAround'),
+    'action=section': control('viewport', 'setSection'),
+    'action=projection': control('viewport', 'setProjection'),
+    'action=display': control('viewport', 'setDisplay'),
+    target: own("the action's target: the person points at it"),
+    value: own("the action's value: the person picks it in that control"),
+    items: own("the action's list: the person picks them in that control"),
+    person_asked: own("whether the person asked for the view change: the person's own moves need no asking"),
+  },
 };

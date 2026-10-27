@@ -71,7 +71,7 @@ export interface ViewportTool {
  * Standard views. `home` is the core viewer's default direction (front-left,
  * slightly above; the Fit button), `iso` a true isometric from front-right-top.
  */
-export type StandardView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso' | 'home';
+export type StandardView = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso' | 'iso_back' | 'home';
 /**
  * Options of a camera call. `auto`: the app's own move (sketch entry's Normal to, the turn to
  * Isometric of a new extrude, a refit, a Part's camera put back), not the person's:

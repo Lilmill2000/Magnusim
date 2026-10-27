@@ -366,6 +366,12 @@ export interface DocService {
   removeBlock(id: FeatureId): string | null;
   /** Reorder with the parent/child guard. */
   move(id: FeatureId, toIndex: number): EditResult;
+  /**
+   * The person's newest `count` undo steps joined into one labelled `label` (a Hole's sketch and its
+   * cut; several features deleted at once), as the Assistant's request is one step. Refused while an
+   * Assistant step or a panel session is open, or when those steps are not all the person's.
+   */
+  joinSteps(count: number, label: string): EditResult;
   /** A body made by a feature (also a split piece with a derived id, which gets its BodyDef here). */
   renameBody(id: BodyId, name: string): EditResult;
   setBodyColor(id: BodyId, color: string): EditResult;
