@@ -106,8 +106,8 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   // round 1; cad-sd-review1.spec.ts tests the waiting). Here the plane is selected first.
   await expect(tb.locator('[data-command="sketch.new"]')).not.toHaveAttribute('aria-disabled', 'true');
   await enterSketchOnTop(page, frame);
-  // Sketch mode: DRAW / CONSTRAIN / DIMENSION / MODIFY, Finish sketch as the primary button, VIEW, EDIT (the sketch's own undo).
-  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
+  // Sketch mode (v0.5.0, SolidWorks's order): DRAW / MODIFY / CONSTRAIN / DIMENSION, Finish sketch as the primary button, VIEW, EDIT (the sketch's own undo).
+  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'MODIFY', 'CONSTRAIN', 'DIMENSION', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
   await expect(tb.locator('[data-group="primary"] [data-command="sketch.finish"]')).toHaveClass(/is-primary/);
   await expect(tb.locator('[data-group="edit"] [data-command]')).toHaveCount(2);
   await expect(tb.locator('[data-command="sketch.undo"]')).toHaveAttribute('aria-disabled', 'true');

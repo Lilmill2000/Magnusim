@@ -1,7 +1,8 @@
 // UX 0.1.0 (TOOLBAR): Daniel 2026-10-07, "I need to be able to drag something from More onto the
 // main toolbar and it replaced the last thing there ... drag tangent arc up there and it moves
 // spline to the More tab", as a user meets it with the mouse:
-//   - sketch DRAW at 1600 px shows Line, Rectangle, Circle, 3-point arc and Spline; Slot (v0.5.0: in
+//   - sketch DRAW at 1280 px (1600 before v0.5.0's compact sketch toolbar) shows Line, Rectangle,
+//     Circle, 3-point arc and Spline; Slot (v0.5.0: in
 //     Tangent arc's place, now in the Arc flyout) is in More. Dragged from More onto the bar's last
 //     place it takes it and Spline goes to More; the bar
 //     keeps its count. While dragging, the menu stays open as long as the pointer is in it, a mark
@@ -104,7 +105,8 @@ async function dragFromMore(page: Page, frame: FrameLocator, group: string, id: 
 
 test("cad:ux010-toolbar-sketch drag Slot from DRAW's More onto the bar: Spline goes to More, the count holds; kept through a reload and a new sketch; between Line and Rectangle; a bar command into More; another group refused; Swap with", { tag: '@serial' }, async ({ page, request }) => {
   await forgetUserLayout(request);
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  // v0.5.0: the compact sketch toolbar shows every command at 1600 px; at 1280 DRAW folds as it did at 1600.
+  await page.setViewportSize({ width: 1280, height: 1000 });
   let { seen, frame } = await freshPart(page, request);
   await sketchOnTop(frame);
   // Daniel's starting point.
@@ -368,7 +370,8 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   await expect.poll(() => shownIds(frame, 'draw')).toEqual([...before.slice(0, -1), 'sketch.spline']);
   await expect(btn(frame, 'sketch.spline')).toBeVisible();
   await resetToolbar(frame);
-  await resizeTo(page, frame, 1600, 1000);
+  // 1280 (1600 before v0.5.0's compact sketch toolbar): Slot, Point and Construction in DRAW's More.
+  await resizeTo(page, frame, 1280, 1000);
   await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.spline']);
 
   // S5: the window loses the press mid-drag (alt-tab): the drag ends, the release later drops nothing.

@@ -391,6 +391,28 @@ html.cad-tb-drag-refused * {
   white-space: nowrap;
 }
 
+/* v0.5.0 compact sketch toolbar (Toolbar.tsx is-compact; Daniel: every drawing group on the bar at
+   1920 px, as SolidWorks's Sketch tab): every button but Finish sketch is its icon alone (the name,
+   shortcut and hint are its tooltip, the name its aria-label), 26 x 28 px with the 18 px glyph; a
+   group's More is its icon; the flyout arrows are 10 px. The headings stay. */
+.cad-toolbar.is-compact .tb-group:not([data-group='primary']) .tb-btn {
+  min-width: 26px;
+  padding: 3px 2px;
+}
+.cad-toolbar.is-compact .tb-group:not([data-group='primary']) .tb-txt {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.cad-toolbar.is-compact .tb-group .tb-btn.tb-flyout-arrow {
+  width: 10px;
+  margin-left: -2px;
+  border-radius: 3px;
+}
+
 /* A command in a menu (the toolbar's More menus): icon, label, and its shortcut at the right. */
 .face-ctx-menu button.cad-menu-cmd {
   display: flex;

@@ -38,6 +38,12 @@
 // Ellipse) that runs its last-used variant, and a small arrow beside it that lists every variant
 // with its icon, name, shortcut and hint. For the layout a flyout is one command (its bar id); in
 // a More menu its variants are listed one by one.
+// v0.5.0 (Daniel: every drawing group on the bar at 1920 px, as SolidWorks shows its Sketch tab):
+// the sketch toolbar is compact (`is-compact`): icon-only buttons, the name, shortcut and hint in
+// the tooltip and the accessible name (aria-label), less padding and narrow flyout arrows; only
+// Finish sketch keeps its label. The groups go DRAW, MODIFY, CONSTRAIN, DIMENSION (types/commands.ts
+// SKETCH_GROUPS). The More menus, the fold, the drags and the right-click menus work as before.
+// The model toolbar keeps its labels: it shows one or two commands per group, so it has the room.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -98,9 +104,10 @@ export const FOLD_ORDER: readonly string[] = [
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
-  // The Ellipse flyout (its bar command): its variants fold with it.
-  'sketch.ellipse',
   'sketch.extend',
+  // The Ellipse flyout (its bar command): its variants fold with it. v0.5.0: the drawing groups
+  // fold after the least-used sketch tools (Daniel: every drawing group on the bar).
+  'sketch.ellipse',
   'sketch.polygon',
   'sketch.slot',
   'sketch.offset',
@@ -1114,8 +1121,10 @@ export function Toolbar() {
   // button goes to its icon (its heading stays, as every group's does), before anything folds.
   const hasScale = groups.some((g) => AFTER_VIEW.has(g.group));
   const scaleStep = hasScale ? 1 : 0;
+  // v0.5.0: the sketch toolbar is icons only from the start (compact): no icon steps there.
+  const compact = mode === 'sketch';
   // The mode's groups that go to icons one by one once everything foldable is folded.
-  const iconGroups = ICON_ORDER.filter((g) => groups.some((x) => x.group === g));
+  const iconGroups = compact ? [] : ICON_ORDER.filter((g) => groups.some((x) => x.group === g));
   const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 3 + iconGroups.length + scaleStep);
   // Tests wait for the stored layout: the attribute is set without a render.
   const bar = useRef<HTMLDivElement | null>(null);
@@ -1150,7 +1159,8 @@ export function Toolbar() {
   const live = useRef<DragLive>({ services, prefs, mode: lmode, m: ml, groups: [] });
   live.current = { services, prefs, mode: lmode, m: ml, groups: groups.map((g) => ({ group: g.group, label: g.label, order: g.order })) };
   const drag = useToolbarDrag(bar, live);
-  const iconLevel = level >= foldable.length + 3 + iconGroups.length ? 2 : level >= 1 ? 1 : 0;
+  // Compact: VIEW and EDIT are icons already, and so is every other group but the primary action.
+  const iconLevel = compact ? Math.min(level, 1) : level >= foldable.length + 3 + iconGroups.length ? 2 : level >= 1 ? 1 : 0;
   const view = viewCommands(services, mode);
   // Sketch mode undoes inside the sketch (its own Undo / Redo); model mode the document's.
   const editIds = mode === 'sketch' ? [WELL_KNOWN_COMMANDS.sketchUndo, WELL_KNOWN_COMMANDS.sketchRedo] : [UNDO_ID, REDO_ID];
@@ -1162,10 +1172,11 @@ export function Toolbar() {
     <>
       <div
         ref={barRef}
-        className={`toolbar cad-toolbar${iconLevel ? ` is-fit-${iconLevel}` : ''}${scaleIcons ? ' is-fit-scale' : ''}${tight ? ' is-fit-tight' : ''}`}
+        className={`toolbar cad-toolbar${compact ? ' is-compact' : ''}${iconLevel ? ` is-fit-${iconLevel}` : ''}${scaleIcons ? ' is-fit-scale' : ''}${tight ? ' is-fit-tight' : ''}`}
         role="toolbar"
         aria-label="Commands"
         data-cad-toolbar={mode}
+        data-compact={compact ? '1' : undefined}
         data-fit={iconLevel}
         data-fit-scale={scaleIcons ? '1' : '0'}
         data-fit-tight={tight ? '1' : '0'}

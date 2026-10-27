@@ -32,6 +32,8 @@ export const SHARDS = {
     'e2e/cad-p4a-toolbar.spec.ts',
     // P4b fix round 1 (TOOLBAR): the compact model default, the sketch ribbon order, rearranging and Reset.
     'e2e/cad-p4b-toolbar.spec.ts',
+    // v0.5.0: the compact sketch toolbar (every drawing group on the bar at 1920 px; what folds at 1600 and below).
+    'e2e/cad-sketch-toolbar-fit.spec.ts',
     // ux010 TOOLBAR builder: Banana for scale (SCALE MODELS after VIEW; never a body; dragged; not linked).
     'e2e/cad-ux010-banana.spec.ts',
     // Pictures drawn off screen (handle.snapshot) and the count of the person's camera moves.

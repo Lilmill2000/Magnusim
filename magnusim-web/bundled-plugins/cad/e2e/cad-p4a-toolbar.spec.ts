@@ -3,7 +3,8 @@
 // "More ▾" menu (Fusion style), which has the core's menu look, works from the
 // keyboard, and lists each command with its icon, shortcut and tooltip.
 //   - at 1280 x 800 and 1920 x 1080, in model and in sketch mode, every command
-//     of the toolbar is reachable: a labelled button inside the frame, or an item
+//     of the toolbar is reachable: a labelled button inside the frame (v0.5.0: the
+//     sketch toolbar is compact, its buttons icons named by aria-label), or an item
 //     of its group's More menu (label, shortcut, tooltip with the hint or the
 //     reason it cannot run); what folds is always the start of the priority list;
 //     1920 folds nothing;
@@ -57,9 +58,9 @@ const FOLD_ORDER = [
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
-  // The Ellipse flyout (its bar command).
-  'sketch.ellipse',
   'sketch.extend',
+  // The Ellipse flyout (its bar command): the drawing groups fold after the least-used sketch tools.
+  'sketch.ellipse',
   // v0.5.0: the drawing variants sit in flyouts (src/ui/flyouts.ts); Polygon and the Slot flyout fold here.
   'sketch.polygon',
   'sketch.slot',
@@ -157,7 +158,12 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
         // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon when the labelled
         // toolbar does not fit (data-fit-scale), so a modelling command keeps its label.
         const iconsOnly = g.group === 'scale' && (await bar.getAttribute('data-fit-scale')) === '1';
-        if (g.group !== 'constrain' && !iconsOnly) {
+        // v0.5.0: the sketch toolbar is compact (Daniel: every drawing group on the bar at 1920 px):
+        // icons, the name in the tooltip and the accessible name (checked above).
+        if (mode === 'sketch') {
+          await expect(bar).toHaveAttribute('data-compact', '1');
+          expect(await btn.locator('.tb-txt').evaluate((t) => getComputedStyle(t).position), `${where}: ${c.id} is its icon`).toBe('absolute');
+        } else if (g.group !== 'constrain' && !iconsOnly) {
           const label = await btn.locator('.tb-txt').evaluate((t) => {
             const r2 = t.getBoundingClientRect();
             return getComputedStyle(t).position !== 'absolute' && r2.width > 12 ? (t.textContent ?? '') : '';
@@ -254,15 +260,12 @@ test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a lab
   }
   // P4b fix round 1 (Daniel: "I prefer 1280 px (model)"): model mode is the compact layout at both
   // sizes (checked above: everything but each group's main command in More) and the width folds
-  // nothing more. Sketch mode keeps every command on the ribbon by default; with one-line labels
-  // 1920 px folds at most the six least used (Intersect, Project, Point, Construction, Chamfer,
-  // Control-point spline: the start of FOLD_ORDER's sketch part, checked in order above). That count
-  // is Segoe UI's (Windows); a wider font (Linux CI's DejaVu Sans: one more, Tangent arc) folds more,
-  // still from the start of FOLD_ORDER, and Daniel's headline tools stay on the ribbon whatever the font.
+  // nothing more. Sketch mode keeps every command on the bar by default; v0.5.0's compact sketch
+  // toolbar (icons) folds nothing at 1920 px (cad-sketch-toolbar-fit.spec.ts), and at 1280 px folds
+  // from the start of FOLD_ORDER (checked in order above).
   expect(result['model 1920']).toEqual([]);
   expect(result['model 1280']).toEqual([]);
-  if (process.platform === 'win32') expect(result['sketch 1920'].length).toBeLessThanOrEqual(6);
-  for (const id of ['sketch.spline', 'sketch.mirror', 'sketch.pattern-linear', 'sketch.pattern-circular']) expect(result['sketch 1920'], `${id} folded at 1920`).not.toContain(id);
+  expect(result['sketch 1920']).toEqual([]);
   expect(result['sketch 1280'].length).toBeGreaterThan(result['sketch 1920'].length);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);

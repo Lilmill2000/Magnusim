@@ -3,10 +3,11 @@
 // them:
 //   - the model toolbar's default is the compact layout (each group's main command, the rest in its
 //     More menu) at 1920, 1600 and 1280 px; PATTERN's More caret sits beside "More" (pattern P5);
-//   - the sketch ribbon keeps every command, with one-line labels (sketch P3), MODIFY in the order
+//   - the sketch ribbon keeps every command (v0.5.0: compact, icons named by their tooltips and
+//     aria-labels; only Finish sketch keeps a one-line label, sketch P3), MODIFY in the order
 //     Trim, Extend, Offset, Fillet, Chamfer, Mirror, Linear pattern, Circular pattern, Project,
-//     Intersect (sketch P1), and at 1600 px Project and Intersect fold before Spline, Mirror and the
-//     patterns (sketch P2);
+//     Intersect (sketch P1), and at 1440 px (1600 before the compact toolbar) Project and Intersect
+//     fold before Spline, Mirror and the patterns (sketch P2);
 //   - right-click Show in toolbar / Move to More / Move left / Move right, a drag along the group,
 //     keyboard shortcuts of a command in More, Reset toolbar; the layout kept through a reopen of
 //     the Part and in a new Part of the project, in model and sketch mode;
@@ -100,7 +101,7 @@ async function finishSketch(frame: FrameLocator) {
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
 }
 
-test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 1280 px; the sketch ribbon keeps its commands on one-line labels, MODIFY in order, Project folding before the new tools', async ({ page, request }) => {
+test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 1280 px; the sketch ribbon keeps its commands as named icons, MODIFY in order, Project folding before the new tools', async ({ page, request }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const { seen, frame } = await freshPart(page, request);
   await addSolid(page);
@@ -136,12 +137,20 @@ test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 128
         .map((e) => ({ label: e.textContent, lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)) })),
     );
   expect(lines.filter((l) => l.lines !== 1), 'two-line labels at 1920').toEqual([]);
-  expect(lines.map((l) => l.label)).toEqual(expect.arrayContaining(['Center-to-center slot', 'Polygon', 'Linear pattern', 'Circular pattern', 'Finish sketch']));
-  // 1600 (P2): Daniel's headline tools stay on the ribbon; Project and Intersect wait in More.
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  // v0.5.0 compact sketch toolbar: only Finish sketch shows its label; the others are named icons.
+  expect(lines.map((l) => l.label)).toEqual(['Finish sketch']);
+  for (const [id, name] of [
+    ['sketch.slot', 'Center-to-center slot'],
+    ['sketch.polygon', 'Polygon'],
+    ['sketch.pattern-linear', 'Linear pattern'],
+    ['sketch.pattern-circular', 'Circular pattern'],
+  ])
+    await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`)).toHaveAttribute('aria-label', name);
+  // 1440 (P2; 1600 before the compact toolbar): Daniel's headline tools stay on the ribbon; Project and Intersect wait in More.
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await expect.poll(() => moreIds(frame, 'sketch-modify')).toContain('sketch.project');
   for (const id of ['sketch.spline', 'sketch.mirror', 'sketch.pattern-linear', 'sketch.pattern-circular'])
-    await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`), `${id} at 1600`).toBeVisible();
+    await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`), `${id} at 1440`).toBeVisible();
   expect(await moreIds(frame, 'sketch-modify')).toContain('sketch.intersect');
   await finishSketch(frame);
   expect(seen.errors, 'console errors').toEqual([]);

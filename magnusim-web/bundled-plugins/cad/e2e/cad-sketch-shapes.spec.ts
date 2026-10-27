@@ -16,7 +16,7 @@ test.beforeAll(async ({ request }) => {
 });
 
 async function freshPart(page: Page, request: Parameters<typeof newProject>[0]) {
-  // Daniel's wide screen: every DRAW flyout on the bar (at 1600 px Slot and Polygon fold into More).
+  // Daniel's wide screen: every DRAW flyout on the bar (v0.5.0's compact sketch toolbar: at 1600 px too).
   await page.setViewportSize({ width: 1920, height: 1080 });
   const seen = await watchPage(page);
   const projectId = await newProject(request);
@@ -172,19 +172,13 @@ test('cad:sketch-shapes-flyouts the DRAW flyouts: each list with its variants, t
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
   }
-  // The Ellipse flyout: on the bar it lists its four tools; at 1920 px it folds after Chamfer (FOLD_ORDER), and
-  // DRAW's More lists its tools one by one. None of them is a button of its own on the bar.
+  // The Ellipse flyout: on the bar at 1920 px (v0.5.0's compact sketch toolbar), its arrow lists its four tools.
+  // None of them is a button of its own on the bar.
   const ellipses = ['Ellipse', 'Partial ellipse', 'Parabola', 'Conic'];
   for (const id of ['sketch.ellipse-partial', 'sketch.parabola', 'sketch.conic']) await expect(tb.locator(`.tb-btn[data-command="${id}"]`)).toHaveCount(0);
-  if (await tb.locator('[data-tb-flyout="sketch.ellipse"]').count()) {
-    await tb.locator('[data-tb-flyout="sketch.ellipse"]').click();
-    await expect(frame.locator('[data-cad-menu] [role="menuitem"] .cad-menu-label')).toHaveText(ellipses);
-  } else {
-    const more = tb.locator('[data-tb-more="draw"]');
-    await more.click();
-    const labels = await frame.locator('[data-cad-menu] [role="menuitem"] .cad-menu-label').allInnerTexts();
-    expect(labels.filter((l) => ellipses.includes(l.trim())).map((l) => l.trim())).toEqual(ellipses);
-  }
+  await expect(tb.locator('[data-tb-more="draw"]')).toHaveCount(0);
+  await tb.locator('[data-tb-flyout="sketch.ellipse"]').click();
+  await expect(frame.locator('[data-cad-menu] [role="menuitem"] .cad-menu-label')).toHaveText(ellipses);
   await page.keyboard.press('Escape');
   await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
   await expect(tb.locator('.tb-btn[data-command="sketch.polygon"]')).toBeVisible();

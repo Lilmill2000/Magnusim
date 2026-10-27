@@ -729,10 +729,17 @@ with the host once for the page's life, and its chip goes in the dock.
     group's main command(s), `KEEP_IN_VIEW` (Sketch, Extrude, Linear pattern,
     Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP), are buttons; the
     other sixteen start in their group's More. Sketch mode starts with every
-    command on the ribbon, labels on one line, and folds by width in
-    `FOLD_ORDER` (1920 px: Intersect, Project, Point, Construction, Chamfer,
-    Control-point spline; 1600 px: ten, Spline, Mirror and both patterns still
-    shown). Users rearrange both (`src/ui/toolbar-layout.ts`): right-click a
+    command on the ribbon and folds by width in `FOLD_ORDER`. Since v0.5.0
+    (Daniel: every drawing group on the bar at 1920 px, as SolidWorks's Sketch
+    tab) the sketch toolbar is compact (`is-compact`, `data-compact`): icon-only
+    buttons 26 px wide (the 18 px glyph), the name, shortcut and hint in the
+    tooltip and the name as `aria-label`, each More its icon, the flyout arrows
+    10 px; only Finish sketch keeps its label; the groups go DRAW, MODIFY,
+    CONSTRAIN, DIMENSION (`SKETCH_GROUPS`). Measured (bundled Chromium, Segoe
+    UI): 1920 and 1600 px fold nothing; 1440 px Intersect, Project, Point,
+    Construction, Chamfer; 1280 px ten (Extend, Ellipse, Polygon, Slot and
+    Offset too) (`e2e/cad-sketch-toolbar-fit.spec.ts`). The model toolbar keeps
+    its labels: it shows one or two commands per group and has the room. Users rearrange both (`src/ui/toolbar-layout.ts`): right-click a
     button for Move to More, Move left, Move right and Reset toolbar; right-click
     a More item for Show in toolbar (a command shown this way folds last when the
     frame is narrow; greyed with the reason when even then it cannot fit) and

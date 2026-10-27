@@ -32,7 +32,11 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
 /** CFD PREP (Enclosure) comes after the modelling groups (decision 2026-10-01). */
 /** P4b (PATTERN, Daniel's item 7): PATTERN sits right after SOLID, beside Extrude. */
 export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'pattern', 'modify', 'construct', 'cfd', 'inspect', 'file', 'scale'];
-export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', 'sketch-modify', 'scale'];
+/**
+ * v0.5.0 (Daniel: the sketch toolbar as SolidWorks's Sketch tab lays it out): the drawing tools,
+ * then the sketch tools (trim, offset, mirror, the patterns), then relations and dimensions.
+ */
+export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'sketch-modify', 'constrain', 'dimension', 'scale'];
 
 /**
  * A command. Only commands that work end to end are registered (honest UI:
