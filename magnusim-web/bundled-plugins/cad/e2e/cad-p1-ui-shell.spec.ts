@@ -264,14 +264,15 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     'border-top-color': 'rgb(208, 213, 221)',
   });
 
-  // Toolbar (.tb-btn 10px, labels 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
+  // Toolbar (headings 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
   expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 243, 246)' });
   expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
   // Labelled buttons (P4a: Daniel works on 1280-1920 px screens). At 1600 and at 1280 px every
-  // command button shown in the modelling groups has its label in view with the core's .tb-btn
-  // recipe (10px, min-width 64, radius 4); the toolbar does not scroll. Since P4b fix round 1 (Daniel:
-  // "I prefer 1280 px (model)") both sizes show the compact layout: each group's main command(s), the
-  // rest in its More menu, nothing more folded for the width; VIEW and EDIT keep their labels at
+  // command button shown in the modelling groups has its label in view; the toolbar does not
+  // scroll. Since P4b fix round 1 (Daniel: "I prefer 1280 px (model)") both sizes show the compact
+  // layout: each group's main command(s), the rest in its More menu, nothing more folded for the
+  // width. v0.5.0 ribbon: the main commands are large buttons (11 px names under 24 px icons,
+  // radius 4), Chamfer a small one beside Fillet (radius 3); VIEW and EDIT keep their labels at
   // 1600 and are icons at 1280.
   const folded: number[] = [];
   for (const size of [
@@ -280,27 +281,27 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   ]) {
     await page.setViewportSize(size);
     const bar = frame.locator('[data-cad-toolbar="model"]');
-    // ux010 (Daniel: a SCALE MODELS section, labelled like the others): VIEW and EDIT are icons at
-    // 1600 px too since then, to leave the labelled Banana for scale its room.
-    await expect(bar).toHaveAttribute('data-fit', '1');
-    // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon (data-fit-scale), checked by
-    // cad-ux010-banana: labelled at 1600 px, and at 1280 px with Segoe UI (Windows). A wider font
-    // (Linux CI's DejaVu Sans) may take its label at 1280 px, never a modelling command's (below);
-    // no group goes to icons there (cad-p4b-toolbar-wide-text checks the order with wider text).
-    if (size.width > 1280 || process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-scale', '0');
-    await expect(bar).toHaveAttribute('data-fit-icons', '');
+    // VIEW and EDIT: labelled at 1600, icons at 1280 (Segoe UI; a wider font may take them at 1600).
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit', size.width > 1280 ? '0' : '1');
+    // No group's small buttons go to icons and no group collapses at these widths (Segoe UI; the
+    // order with wider text: cad-p4b-toolbar-wide-text).
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-labels', '');
+    await expect(bar).toHaveAttribute('data-fit-collapsed', '');
     const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command]').evaluateAll((els) =>
       els.map((b) => {
         const s = getComputedStyle(b);
         const t = b.querySelector('.tb-txt') as HTMLElement;
         const r = t.getBoundingClientRect();
         const box = b.getBoundingClientRect();
-        return { id: b.getAttribute('data-command'), fontSize: s.fontSize, minWidth: s.minWidth, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
+        return { id: b.getAttribute('data-command'), large: b.classList.contains('is-large'), fontSize: s.fontSize, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
       }),
     );
     // Nine labelled: Sketch, Extrude, Linear pattern, Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP.
     expect(shown.map((b) => b.id)).toEqual(['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step']);
-    for (const b of shown) expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, fontSize: '10px', minWidth: '64px', radius: '4px', labelShown: true, inFrame: true });
+    for (const b of shown) {
+      const large = b.id !== 'modify.chamfer';
+      expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, large, fontSize: '11px', radius: large ? '4px' : '3px', labelShown: true, inFrame: true });
+    }
     expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth), `the toolbar scrolls at ${size.width}`).toBeLessThanOrEqual(1);
     folded.push(Number(await bar.getAttribute('data-folded')));
     await shot(page, `ui-parity-toolbar-${size.width}`);

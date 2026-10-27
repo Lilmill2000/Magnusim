@@ -3,11 +3,10 @@
 // them:
 //   - the model toolbar's default is the compact layout (each group's main command, the rest in its
 //     More menu) at 1920, 1600 and 1280 px; PATTERN's More caret sits beside "More" (pattern P5);
-//   - the sketch ribbon keeps every command (v0.5.0: compact, icons named by their tooltips and
-//     aria-labels; only Finish sketch keeps a one-line label, sketch P3), MODIFY in the order
-//     Trim, Extend, Offset, Fillet, Chamfer, Mirror, Linear pattern, Circular pattern, Project,
-//     Intersect (sketch P1), and at 1440 px (1600 before the compact toolbar) Project and Intersect
-//     fold before Spline, Mirror and the patterns (sketch P2);
+//   - the sketch ribbon keeps every command (v0.5.0 ribbon: the small buttons' names on one line,
+//     sketch P3), MODIFY in the order Trim, Extend, Offset, Fillet, Chamfer, Mirror, Linear pattern,
+//     Circular pattern, Project, Intersect (sketch P1), and when the frame is narrow (760 px since
+//     the ribbon) Project and Intersect fold before Spline, Mirror and the patterns (sketch P2);
 //   - right-click Show in toolbar / Move to More / Move left / Move right, a drag along the group,
 //     keyboard shortcuts of a command in More, Reset toolbar; the layout kept through a reopen of
 //     the Part and in a new Part of the project, in model and sketch mode;
@@ -125,20 +124,22 @@ test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 128
     expect(caret, `PATTERN's More caret at ${width}`).toEqual({ right: true, inLine: true });
   }
 
-  // Sketch mode at 1920: MODIFY in the review's order (P1), every label on one line (P3).
+  // Sketch mode at 1920: MODIFY in the review's order (P1), every small button's name on one line (P3).
   await page.setViewportSize({ width: 1920, height: 1080 });
   await sketchOnTop(frame);
   expect(await groupCommandLabels(frame, 'sketch-modify')).toEqual(['Trim', 'Extend', 'Offset', 'Fillet', 'Chamfer', 'Mirror', 'Linear pattern', 'Circular pattern', 'Project', 'Intersect']);
   const lines = await tb(frame)
-    .locator('.tb-btn[data-command] .tb-txt')
+    .locator('.tb-btn.is-small[data-command] .tb-txt')
     .evaluateAll((els) =>
       els
         .filter((e) => getComputedStyle(e).position !== 'absolute')
         .map((e) => ({ label: e.textContent, lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)) })),
     );
   expect(lines.filter((l) => l.lines !== 1), 'two-line labels at 1920').toEqual([]);
-  // v0.5.0 compact sketch toolbar: only Finish sketch shows its label; the others are named icons.
-  expect(lines.map((l) => l.label)).toEqual(['Finish sketch']);
+  // v0.5.0 ribbon: the small buttons are named (CONSTRAIN's are its glyphs, named by their tooltips).
+  expect(lines.map((l) => l.label)).toContain('Linear pattern');
+  expect(lines.map((l) => l.label)).toContain('Slot');
+  await expect(tb(frame).locator('.tb-btn[data-command="sketch.finish"] .tb-txt')).toBeVisible();
   for (const [id, name] of [
     ['sketch.slot', 'Center-to-center slot'],
     ['sketch.polygon', 'Polygon'],
@@ -146,18 +147,22 @@ test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 128
     ['sketch.pattern-circular', 'Circular pattern'],
   ])
     await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`)).toHaveAttribute('aria-label', name);
-  // 1440 (P2; 1600 before the compact toolbar): Daniel's headline tools stay on the ribbon; Project and Intersect wait in More.
-  await page.setViewportSize({ width: 1440, height: 1000 });
+  // 760 px (P2; 1600 before the compact toolbar, 1440 before the ribbon): Daniel's headline tools
+  // stay on the ribbon; Project and Intersect wait in More.
+  await page.setViewportSize({ width: 760, height: 1000 });
   await expect.poll(() => moreIds(frame, 'sketch-modify')).toContain('sketch.project');
   for (const id of ['sketch.spline', 'sketch.mirror', 'sketch.pattern-linear', 'sketch.pattern-circular'])
-    await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`), `${id} at 1440`).toBeVisible();
+    await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`), `${id} at 760`).toBeVisible();
   expect(await moreIds(frame, 'sketch-modify')).toContain('sketch.intersect');
   await finishSketch(frame);
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-/** The groups that go to icons one at a time once the model toolbar is still too wide (src/ui/Toolbar.tsx ICON_ORDER). */
-const MODEL_ICON_ORDER = ['file', 'inspect', 'construct', 'pattern', 'modify', 'cfd', 'solid'];
+/**
+ * The model groups whose small buttons (More among them) go to icons one at a time, then collapse
+ * into one dropdown each, when the model ribbon is too wide (src/ui/Toolbar.tsx SQUEEZE_ORDER).
+ */
+const MODEL_SQUEEZE_ORDER = ['file', 'inspect', 'construct', 'pattern', 'modify', 'solid'];
 
 /** The model toolbar after the fit has run at this width: its fit steps and what each group shows. */
 async function fitAt(page: Page, frame: FrameLocator, width: number) {
@@ -179,32 +184,40 @@ async function fitAt(page: Page, frame: FrameLocator, width: number) {
     }
     return {
       fit: el.getAttribute('data-fit'),
-      scale: el.getAttribute('data-fit-scale'),
       tight: el.getAttribute('data-fit-tight'),
-      icons: (el.getAttribute('data-fit-icons') ?? '').split(' ').filter(Boolean),
+      labels: (el.getAttribute('data-fit-labels') ?? '').split(' ').filter(Boolean),
+      collapsed: (el.getAttribute('data-fit-collapsed') ?? '').split(' ').filter(Boolean),
       scroll: el.scrollWidth - el.clientWidth,
       caret,
       groups: Array.from(el.querySelectorAll<HTMLElement>(':scope > .tb-group')).map((g) => ({
         id: g.dataset.group!,
         iconsOnly: g.dataset.icons === '1',
+        collapsed: g.dataset.collapsed === '1',
         heading: labelShown(g.querySelector('.tb-group-label')),
-        buttons: Array.from(g.querySelectorAll('.tb-btn[data-command]')).map((b) => ({ id: b.getAttribute('data-command')!, name: b.getAttribute('aria-label'), label: labelShown(b.querySelector('.tb-txt')) })),
+        menu: !!g.querySelector('[data-tb-group-menu]'),
+        buttons: Array.from(g.querySelectorAll('.tb-btn[data-command], .tb-btn[data-tb-more]')).map((b) => ({
+          id: b.getAttribute('data-command') ?? `more:${g.dataset.group}`,
+          large: b.classList.contains('is-large'),
+          name: b.getAttribute('aria-label'),
+          label: labelShown(b.querySelector('.tb-txt')),
+        })),
       })),
     };
   });
 }
 
 // Wider text than Segoe UI at 100 % (Windows text scaling or browser zoom, a larger system font,
-// Linux's fallback fonts: CI on Linux, 2026-10-13, the release's mirror) never costs Sketch its label
-// at 1280 px (P4a, Daniel's 1280 px screen) and never makes the toolbar scroll. SCALE MODELS goes to
-// its icon first, then the groups sit closer, then whole groups go to icons one at a time, the least
-// used first (FILE, INSPECT, CONSTRUCT, ...), their headings kept; Sketch keeps its label until every
-// other group is icons. Here the toolbar's text is 10 % larger, on any platform.
-test("cad:p4b-toolbar-wide-text with the toolbar's text 10 % larger: at 1280 px Sketch keeps its label and nothing scrolls, SCALE MODELS goes to its icon first, then the groups sit closer, then groups go to icons one at a time (FILE first), Sketch last; PATTERN's caret beside More while it is labelled", async ({ page, request }) => {
+// Linux's fallback fonts: CI on Linux, 2026-10-13, the release's mirror) never makes the ribbon
+// scroll and never costs Sketch its label before every other group has gone. v0.5.0 ribbon: the
+// groups' small buttons (their More) go to icons first, one group at a time, the least used first
+// (FILE, INSPECT, CONSTRUCT, ...), the large buttons keep their names; then the groups sit closer;
+// then whole groups collapse into one dropdown each in the same order, their headings kept. Here
+// the ribbon's text is 2 px larger, on any platform.
+test('cad:p4b-toolbar-wide-text with larger text in the ribbon: nothing scrolls down to 820 px; the small buttons go to icons a group at a time (FILE first), then the groups sit closer, then groups collapse into one dropdown (FILE first); Sketch keeps its large labelled button; PATTERN caret beside More while it is labelled', async ({ page, request }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const { seen, frame } = await freshPart(page, request);
-  // 11 px instead of 10 px for the buttons' labels and the groups' headings (a rule added to the
-  // CAD's own sheet through the CSSOM, as zoomed or scaled text would be).
+  // 13 px instead of 11 px for the buttons' labels and 12 px for the groups' headings (a rule added
+  // to the CAD's own sheet through the CSSOM, as zoomed or scaled text would be).
   await tb(frame).evaluate(() => {
     const sheet = Array.from(document.styleSheets).find((s) => {
       try {
@@ -213,43 +226,55 @@ test("cad:p4b-toolbar-wide-text with the toolbar's text 10 % larger: at 1280 px 
         return false;
       }
     })!;
-    sheet.insertRule('.cad-toolbar .tb-btn, .cad-toolbar .tb-group-label { font-size: 11px; }', sheet.cssRules.length);
+    sheet.insertRule('.cad-toolbar.is-ribbon .tb-btn { font-size: 13px; }', sheet.cssRules.length);
+    sheet.insertRule('.cad-toolbar .tb-group-label { font-size: 12px; }', sheet.cssRules.length);
   });
-  expect(await tb(frame).locator('.tb-btn[data-command="sketch.new"]').evaluate((b) => getComputedStyle(b).fontSize)).toBe('11px');
-  const ran = { tight: false, icons: 0 };
-  for (const width of [1280, 1100, 1000]) {
+  expect(await tb(frame).locator('.tb-btn[data-command="sketch.new"]').evaluate((b) => getComputedStyle(b).fontSize)).toBe('13px');
+  const ran = { tight: false, labels: 0, collapsed: 0 };
+  for (const width of [1280, 1100, 960, 820]) {
     const s = await fitAt(page, frame, width);
-    const where = `at ${width} px with 11 px text`;
+    const where = `at ${width} px with larger text`;
     expect(s.scroll, `the toolbar scrolls ${where}`).toBeLessThanOrEqual(1);
-    // VIEW and EDIT are icons; never every group (that would take Sketch's label).
-    expect(s.fit, `fit level ${where}`).toBe('1');
-    // The order: SCALE MODELS' icon, then closer groups, then ICON_ORDER's groups one by one.
-    expect(s.icons, `the groups gone to icons ${where}`).toEqual(MODEL_ICON_ORDER.slice(0, s.icons.length));
-    if (s.icons.length) expect(s.tight, `closer groups before any group goes to icons ${where}`).toBe('1');
-    if (s.tight === '1') expect(s.scale, `SCALE MODELS' icon before the groups move closer ${where}`).toBe('1');
+    // The order: the groups' small buttons to icons, then closer groups, then collapsed groups.
+    expect(s.labels, `the groups gone to icons ${where}`).toEqual(MODEL_SQUEEZE_ORDER.slice(0, s.labels.length));
+    expect(s.collapsed, `the groups collapsed ${where}`).toEqual(MODEL_SQUEEZE_ORDER.slice(0, s.collapsed.length));
+    if (s.tight === '1') expect(s.labels, `every group's small buttons are icons before the groups move closer ${where}`).toEqual(MODEL_SQUEEZE_ORDER);
+    if (s.collapsed.length) expect(s.tight, `closer groups before any group collapses ${where}`).toBe('1');
+    if (s.labels.length) expect(s.fit, `VIEW and EDIT icons first ${where}`).toBe('1');
     for (const g of s.groups) {
       if (g.id === 'view' || g.id === 'edit') continue;
       // Every heading stays (SCALE MODELS' too).
       expect(g.heading, `${g.id}'s heading ${where}`).toBe(true);
-      const iconsOnly = g.id === 'scale' ? s.scale === '1' : s.icons.includes(g.id);
-      expect(g.iconsOnly, `${g.id} marked as icons ${where}`).toBe(g.id === 'scale' ? false : iconsOnly);
+      expect(g.iconsOnly, `${g.id} marked as icons ${where}`).toBe(s.labels.includes(g.id));
+      expect(g.collapsed && g.menu, `${g.id} collapsed ${where}`).toBe(s.collapsed.includes(g.id));
+      if (g.collapsed) {
+        expect(g.buttons, `${g.id} collapsed: no command button ${where}`).toEqual([]);
+        continue;
+      }
       for (const b of g.buttons) {
-        expect(b.label, `${b.id}'s label ${where}`).toBe(!iconsOnly);
-        // As icons, the label is still the accessible name (and the tooltip).
+        // A large button keeps its name; a small one shows it unless its group went to icons.
+        expect(b.label, `${b.id}'s label ${where}`).toBe(b.large || !g.iconsOnly);
+        // As icons, the name is still the accessible name (and the tooltip).
         expect(b.name, `${b.id}'s name ${where}`).toBeTruthy();
       }
     }
-    expect(s.groups.find((g) => g.id === 'sketch')!.buttons, `Sketch ${where}`).toEqual([{ id: 'sketch.new', name: 'Sketch', label: true }]);
-    if (!s.icons.includes('pattern')) expect(s.caret, `PATTERN's More caret ${where}`).toEqual({ right: true, inLine: true });
+    expect(
+      s.groups.find((g) => g.id === 'sketch')!.buttons.filter((b) => !b.id.startsWith('more:')),
+      `Sketch ${where}`,
+    ).toEqual([{ id: 'sketch.new', large: true, name: 'Sketch', label: true }]);
+    if (!s.labels.includes('pattern')) expect(s.caret, `PATTERN's More caret ${where}`).toEqual({ right: true, inLine: true });
     ran.tight ||= s.tight === '1';
-    ran.icons = Math.max(ran.icons, s.icons.length);
+    ran.labels = Math.max(ran.labels, s.labels.length);
+    ran.collapsed = Math.max(ran.collapsed, s.collapsed.length);
   }
-  // The steps under test really ran: the groups moved closer, and at least FILE went to icons.
+  // The steps under test really ran: small buttons to icons, the groups closer, FILE collapsed.
+  expect(ran.labels).toBeGreaterThan(0);
   expect(ran.tight).toBe(true);
-  expect(ran.icons).toBeGreaterThan(0);
-  // Back to 1600 px: everything labelled again but VIEW and EDIT.
+  expect(ran.collapsed).toBeGreaterThan(0);
+  // Back to 1600 px: everything named again.
   const s = await fitAt(page, frame, 1600);
-  expect(s.icons).toEqual([]);
+  expect(s.labels).toEqual([]);
+  expect(s.collapsed).toEqual([]);
   expect(s.scroll).toBeLessThanOrEqual(1);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);

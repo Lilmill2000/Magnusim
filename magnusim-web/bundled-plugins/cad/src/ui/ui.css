@@ -253,62 +253,103 @@ html.cad-tb-drag-refused * {
   box-shadow: var(--mg-shadow-tooltip);
   white-space: nowrap;
 }
-/* SCALE MODELS (Banana for scale): labelled like every group while the bar has room; when VIEW
-   and EDIT are icons and it still does not fit, its button goes to its icon (is-fit-scale), before
-   any command folds or loses its label. Its heading stays, as every group's does. */
-.cad-toolbar.is-fit-scale .tb-group[data-group='scale'] .tb-btn {
-  min-width: 26px;
-  padding: 4px 2px;
-}
-.cad-toolbar.is-fit-scale .tb-group[data-group='scale'] .tb-btn:not(.tb-more) .tb-txt {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-/* Once VIEW and EDIT are icons the groups sit a little closer (5 px apart, 8 px from the frame's
-   edges), VIEW's and EDIT's icons are 24 px and SCALE MODELS leaves its right separator to EDIT's:
-   with SCALE MODELS' heading kept, the model toolbar then fits 1280 px with every modelling
-   command labelled (measured in bundled Chromium: 1299 px needed before, 1266 px after). */
-.cad-toolbar.is-fit-1,
-.cad-toolbar.is-fit-2 {
-  gap: 5px;
-  padding-left: 8px;
-  padding-right: 8px;
-}
-/* Its two-word heading stays on one line (a squeezed group would wrap it and look fitted). */
-.cad-toolbar.is-fit-1 .tb-group[data-group='scale'],
-.cad-toolbar.is-fit-2 .tb-group[data-group='scale'] {
-  padding-right: 0;
-  border-right: none;
-}
+/* SCALE MODELS' two-word heading stays on one line. */
 .tb-group[data-group='scale'] .tb-group-label {
   white-space: nowrap;
 }
 /* ---- end UX 0.1.0 (TOOLBAR) ---- */
 
-/* Fit levels (Toolbar useFitLevel): icons only where the labelled buttons do not fit the frame;
-   the label stays in the tooltip and the accessible name. */
-.cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']):not([data-group='view']):not([data-group='edit']) .tb-btn {
-  min-width: 30px;
-  padding: 4px 4px;
+/* ---- v0.5.0 ribbon (Toolbar.tsx; Daniel: the buttons stacked as SolidWorks's CommandManager).
+   Each group's buttons sit in three 20 px rows, column by column: a large button (the group's key
+   tool, the primary action) is the three rows tall, a 24 px icon with its name under it; a small
+   button is one row, a 16 px icon with its name beside it, or its icon alone (CONSTRAIN; a group
+   whose names went for the width, is-icons). Model and sketch mode are the same height. ---- */
+.cad-toolbar.is-ribbon {
+  gap: 6px;
+  padding: 3px 8px 4px;
+  align-items: stretch;
 }
-/* ux010 (TOOLBAR builder): VIEW's and EDIT's icons 24 px wide at fit level 1 (the 20 px icon
-   box with 1 px each side), so SCALE MODELS fits beside them at 1280 px and no modelling command
-   loses its label for it. The same at fit level 2, so that last step is always narrower than the
-   one before it. */
-.cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-btn,
-.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-btn,
-.cad-toolbar.is-fit-2 .tb-group[data-group='view'] .tb-btn,
-.cad-toolbar.is-fit-2 .tb-group[data-group='edit'] .tb-btn {
-  min-width: 24px;
-  padding: 4px 1px;
+.cad-toolbar.is-ribbon .tb-group {
+  gap: 2px;
+  padding-right: 6px;
 }
-.cad-toolbar.is-fit-1 .tb-group[data-group='view'] .tb-txt,
-.cad-toolbar.is-fit-1 .tb-group[data-group='edit'] .tb-txt,
-.cad-toolbar.is-fit-2 .tb-group:not([data-group='primary']) .tb-txt {
+.cad-toolbar.is-ribbon .tb-group.is-end {
+  padding-left: 6px;
+  padding-right: 0;
+}
+.cad-toolbar.is-ribbon .tb-group-label {
+  height: 12px;
+  line-height: 12px;
+  white-space: nowrap;
+}
+.cad-toolbar.is-ribbon .tb-items {
+  display: grid;
+  grid-template-rows: repeat(3, 20px);
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: 1px 2px;
+  align-items: stretch;
+}
+/* Every button of the ribbon (the core's .tb-btn sizes are for its one-line toolbar). */
+.cad-toolbar.is-ribbon .tb-btn {
+  min-width: 0;
+  max-width: none;
+  font-size: 11px;
+  line-height: 1.15;
+}
+/* A large button: three rows tall, the icon over its name (two lines at most). */
+.cad-toolbar.is-ribbon .tb-btn.is-large {
+  grid-row: span 3;
+  justify-content: flex-start;
+  gap: 2px;
+  min-width: 44px;
+  /* Narrow enough that a two-word name breaks into two short lines with little room beside them
+     ("Linear / pattern", "Import / STEP"). */
+  max-width: 58px;
+  padding: 4px 3px 2px;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-large .tb-ico {
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-large .tb-svg {
+  width: 24px;
+  height: 24px;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-large .tb-txt {
+  white-space: normal;
+  overflow-wrap: normal;
+  text-wrap: balance;
+  line-height: 12px;
+}
+/* A small button: one row, the icon and its name side by side. */
+.cad-toolbar.is-ribbon .tb-btn.is-small {
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 4px;
+  height: 20px;
+  min-width: 22px;
+  padding: 0 6px 0 2px;
+  border-radius: 3px;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-small .tb-ico {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-small .tb-svg {
+  width: 16px;
+  height: 16px;
+}
+/* Small buttons as icons alone: CONSTRAIN (its glyphs, by design), a group whose names went for the
+   width, VIEW and EDIT once the frame is narrow. The name stays the tooltip and the accessible name. */
+.cad-toolbar.is-ribbon .tb-group.is-icons .tb-btn.is-small {
+  width: 22px;
+  padding: 0 2px;
+  justify-content: center;
+}
+.cad-toolbar.is-ribbon .tb-group.is-icons .tb-btn.is-small .tb-txt {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -317,100 +358,103 @@ html.cad-tb-drag-refused * {
   white-space: nowrap;
 }
 
-/* A group's "More ▾" (Toolbar FOLD_ORDER): its folded commands, in a menu. Narrower than a
-   command button, so folding a group's first command frees room. */
-.cad-toolbar .tb-group .tb-btn.tb-more {
-  min-width: 40px;
+/* A flyout (src/ui/flyouts.ts): its button and arrow as one item, the arrow beside a small button
+   (12 px) and under a large one (a 12 px strip across it), as SolidWorks's split buttons. */
+.cad-toolbar.is-ribbon .tb-split {
+  display: flex;
+  min-width: 0;
 }
-.cad-toolbar .tb-btn.tb-more.is-open {
-  background: var(--cad-icon-btn-hover-bg);
+.cad-toolbar.is-ribbon .tb-split.is-large {
+  grid-row: span 3;
+  flex-direction: column;
 }
-/* "More" with its caret: the caret sits in the button's right padding, so the button stays narrow
-   and the label on one line. It hangs off the label (not the button's bottom), so it stays beside
-   "More" however tall the group is (P4b fix round 1, pattern review P5: under PATTERN's two-line
-   "Linear pattern" it sat below the label). */
-.tb-btn.tb-more .tb-txt {
-  position: relative;
-  white-space: nowrap;
-  margin-right: 4px;
+.cad-toolbar.is-ribbon .tb-split.is-large > .tb-btn.is-large {
+  flex: 1 1 auto;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
-.tb-btn.tb-more .tb-caret {
-  position: absolute;
-  left: 100%;
-  bottom: 0;
-  margin-left: 1px;
-  font-size: 11px;
-  line-height: 1;
+.cad-toolbar.is-ribbon .tb-split.is-small > .tb-btn.is-small {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 3px;
 }
-
-/* v0.5.0 toolbar flyouts (src/ui/flyouts.ts): a drawing group's button and the narrow arrow
-   beside it that lists its variants (SolidWorks' split buttons). */
-.cad-toolbar .tb-group .tb-btn.tb-flyout-arrow {
-  /* Narrow at every fit level (the icon-only levels widen .tb-btn). */
-  min-width: 0 !important;
-  width: 13px;
-  padding: 0 !important;
-  margin-left: -2px;
+.cad-toolbar.is-ribbon .tb-group.is-icons .tb-split.is-small > .tb-btn.is-small {
+  padding-right: 2px;
+}
+.cad-toolbar.is-ribbon .tb-btn.tb-flyout-arrow {
+  flex: none;
+  min-width: 0;
+  padding: 0;
   font-size: 10px;
+  color: var(--mg-text-muted);
+}
+.cad-toolbar.is-ribbon .tb-split.is-small > .tb-flyout-arrow {
+  width: 12px;
+  height: 20px;
+  border-radius: 0 3px 3px 0;
+}
+.cad-toolbar.is-ribbon .tb-split.is-large > .tb-flyout-arrow {
+  width: 100%;
+  height: 12px;
+  border-radius: 0 0 4px 4px;
 }
 .tb-flyout-arrow .tb-caret {
   line-height: 1;
+}
+/* Hovering either half shows the pair as one control. */
+.cad-toolbar.is-ribbon .tb-split:hover > .tb-btn:not(.is-disabled):not(.is-active) {
+  background: var(--cad-icon-btn-hover-bg);
 }
 .cad-toolbar .tb-btn.tb-flyout-arrow.is-open {
   background: var(--cad-icon-btn-hover-bg);
 }
 
-/* Wider text than measured (a larger system font, text scaling or browser zoom, Linux's fallback
-   fonts; Toolbar ICON_ORDER): with everything foldable folded and the toolbar still too wide, the
-   groups first sit closer (3 px apart, 5 px to each separator, 4 px from the frame's edges; 54 px
-   less across the model toolbar), then go to icons one group at a time, the least used first
-   (is-icons: the heading stays, the label is the tooltip and the accessible name). Kept after the
-   More rule so a group's More goes to its icon too. */
-.cad-toolbar.is-fit-tight {
+/* A group's "More ▾" (FOLD_ORDER): its folded commands, in a menu; one of the small buttons. */
+.cad-toolbar .tb-btn.tb-more.is-open,
+.cad-toolbar .tb-btn.tb-group-menu.is-open {
+  background: var(--cad-icon-btn-hover-bg);
+}
+.tb-btn.tb-more .tb-txt,
+.tb-btn.tb-group-menu .tb-txt {
+  white-space: nowrap;
+}
+.tb-btn.tb-more .tb-caret,
+.tb-btn.tb-group-menu .tb-caret {
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* Where a dragged command lands among small buttons (stacked in a column): a bar over or under it. */
+.cad-toolbar.is-ribbon .tb-btn.is-small.is-drop-before::after,
+.cad-toolbar.is-ribbon .tb-btn.is-small.is-drop-after::after {
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 3px;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-small.is-drop-before::after {
+  top: -2px;
+  bottom: auto;
+}
+.cad-toolbar.is-ribbon .tb-btn.is-small.is-drop-after::after {
+  top: auto;
+  bottom: -2px;
+}
+
+/* Wider text than measured, or a narrow frame (Toolbar useFitLevel): once every foldable command
+   is folded the groups sit closer (3 px apart, 4 px to each separator), then collapse into one
+   dropdown each (is-collapsed: a large button with the group's name, SolidWorks at narrow widths). */
+.cad-toolbar.is-ribbon.is-fit-tight {
   gap: 3px;
   padding-left: 4px;
   padding-right: 4px;
 }
-.cad-toolbar.is-fit-tight .tb-group {
-  padding-right: 5px;
+.cad-toolbar.is-ribbon.is-fit-tight .tb-group {
+  padding-right: 4px;
 }
-.cad-toolbar.is-fit-tight .tb-group.is-end {
-  padding-left: 5px;
+.cad-toolbar.is-ribbon.is-fit-tight .tb-group.is-end {
+  padding-left: 4px;
   padding-right: 0;
-}
-.cad-toolbar .tb-group.is-icons .tb-btn {
-  min-width: 30px;
-  padding: 4px 4px;
-}
-.cad-toolbar .tb-group.is-icons .tb-txt {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-/* v0.5.0 compact sketch toolbar (Toolbar.tsx is-compact; Daniel: every drawing group on the bar at
-   1920 px, as SolidWorks's Sketch tab): every button but Finish sketch is its icon alone (the name,
-   shortcut and hint are its tooltip, the name its aria-label), 26 x 28 px with the 18 px glyph; a
-   group's More is its icon; the flyout arrows are 10 px. The headings stay. */
-.cad-toolbar.is-compact .tb-group:not([data-group='primary']) .tb-btn {
-  min-width: 26px;
-  padding: 3px 2px;
-}
-.cad-toolbar.is-compact .tb-group:not([data-group='primary']) .tb-txt {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-.cad-toolbar.is-compact .tb-group .tb-btn.tb-flyout-arrow {
-  width: 10px;
-  margin-left: -2px;
-  border-radius: 3px;
 }
 
 /* A command in a menu (the toolbar's More menus): icon, label, and its shortcut at the right. */

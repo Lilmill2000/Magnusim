@@ -325,10 +325,13 @@ test('cad:p1-viewport-box shading, picking, views, section, visibility and the m
   await page.mouse.click(cPt[0] + 2, cPt[1] + 2);
   await expectSelection(frame, [{ kind: 'vertex', body: 'b_test', index: corner }]);
   await page.mouse.move(...empty);
+  // The marker is 11 px round: most of the 5 x 5 px round its middle is green (the box's vertical
+  // edge may cross its very middle pixel, as it does with the ribbon toolbar's framing).
   await expect
     .poll(async () => {
-      const g = await pixel(page, cPt);
-      return g[1] > 180 && g[0] < 90 ? 'green' : String(g);
+      const px = await region(page, cPt, 5);
+      const green = px.filter((g) => g[1] > 180 && g[0] < 90).length;
+      return green >= 18 ? 'green' : `${green} of 25 green, middle ${String(px[12])}`;
     }, { message: 'vertex marker' })
     .toBe('green');
 

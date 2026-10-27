@@ -1,9 +1,9 @@
 // UX 0.1.0 (TOOLBAR): Daniel 2026-10-07, "I need to be able to drag something from More onto the
 // main toolbar and it replaced the last thing there ... drag tangent arc up there and it moves
 // spline to the More tab", as a user meets it with the mouse:
-//   - sketch DRAW at 1280 px (1600 before v0.5.0's compact sketch toolbar) shows Line, Rectangle,
-//     Circle, 3-point arc and Spline; Slot (v0.5.0: in
-//     Tangent arc's place, now in the Arc flyout) is in More. Dragged from More onto the bar's last
+//   - sketch DRAW, with the frame narrow enough (v0.5.0 ribbon: about 710 px; 1600 px before
+//     v0.5.0's compact sketch toolbar, 1280 before the ribbon), shows Line, Rectangle, Circle,
+//     3-point arc and Spline; Slot (v0.5.0: in Tangent arc's place, now in the Arc flyout) is in More. Dragged from More onto the bar's last
 //     place it takes it and Spline goes to More; the bar
 //     keeps its count. While dragging, the menu stays open as long as the pointer is in it, a mark
 //     shows where it lands, Spline is highlighted and the note says "Spline moves to More";
@@ -41,7 +41,7 @@ async function freshPart(page: Page, request: Request) {
 /** The ids of a group's buttons on the bar, in order. */
 async function shownIds(frame: FrameLocator, group: string): Promise<string[]> {
   return tb(frame)
-    .locator(`[data-group="${group}"] .tb-items > .tb-btn[data-command]`)
+    .locator(`[data-group="${group}"] .tb-items .tb-btn[data-command]`)
     .evaluateAll((els) => els.map((e) => e.getAttribute('data-command') ?? ''));
 }
 
@@ -76,6 +76,22 @@ async function finishSketch(frame: FrameLocator) {
 
 const centre = (b: { x: number; y: number; width: number; height: number }) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
 
+/** Daniel's starting point: DRAW's buttons with Slot, Polygon, Ellipse, Point and Construction folded. */
+const DRAW_FOLDED = ['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.spline'];
+
+/**
+ * v0.5.0 ribbon: the widest frame (from `from` down, 4 px at a time) where `ok` holds, so a test
+ * reaches the fold it needs whatever the fonts (Segoe UI: Slot folds at about 710 px).
+ */
+async function widthWhere(page: Page, frame: FrameLocator, ok: () => Promise<boolean>, from = 800, to = 600): Promise<number> {
+  for (let w = from; w >= to; w -= 4) {
+    await resizeTo(page, frame, w, 1000);
+    if (await ok()) return w;
+  }
+  throw new Error(`no width from ${from} to ${to} px`);
+}
+const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
 /**
  * Open the group's More, press on `id` there, start the drag inside the menu (it stays open), then
  * move to `to` (a page point, from `target()`), run `check` while the pointer is there, and let go.
@@ -105,12 +121,14 @@ async function dragFromMore(page: Page, frame: FrameLocator, group: string, id: 
 
 test("cad:ux010-toolbar-sketch drag Slot from DRAW's More onto the bar: Spline goes to More, the count holds; kept through a reload and a new sketch; between Line and Rectangle; a bar command into More; another group refused; Swap with", { tag: '@serial' }, async ({ page, request }) => {
   await forgetUserLayout(request);
-  // v0.5.0: the compact sketch toolbar shows every command at 1600 px; at 1280 DRAW folds as it did at 1600.
+  // v0.5.0 ribbon: every sketch command is on it down to 1280 px; DRAW folds as it did at 1600 px
+  // (before the compact toolbar) only below 760 px.
   await page.setViewportSize({ width: 1280, height: 1000 });
   let { seen, frame } = await freshPart(page, request);
   await sketchOnTop(frame);
   // Daniel's starting point.
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.spline']);
+  await widthWhere(page, frame, async () => same(await shownIds(frame, 'draw'), DRAW_FOLDED));
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(DRAW_FOLDED);
   expect(await moreIds(frame, 'draw')).toContain('sketch.slot');
   const count = (await shownIds(frame, 'draw')).length;
 
@@ -121,8 +139,9 @@ test("cad:ux010-toolbar-sketch drag Slot from DRAW's More onto the bar: Spline g
     'draw',
     'sketch.slot',
     async () => {
+      // v0.5.0 ribbon: Spline is a small button at the top of its column: its lower half is after it.
       const b = (await btn(frame, 'sketch.spline').boundingBox())!;
-      return { x: b.x + b.width * 0.75, y: b.y + b.height / 2 };
+      return { x: b.x + b.width * 0.75, y: b.y + b.height * 0.8 };
     },
     async () => {
       await expect(btn(frame, 'sketch.spline')).toHaveClass(/is-displaced/);
@@ -317,15 +336,17 @@ async function resetToolbar(frame: FrameLocator) {
   await expect(tb(frame)).toHaveAttribute('data-layout', 'default');
 }
 
-test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped) from More stays on the bar and the note says what happens; a lost release drops nothing; a wobbly click on a More item runs it; Enter on a More item runs that item, not Finish sketch', { tag: '@serial' }, async ({ page, request }) => {
+test('cad:ux010-toolbar-narrow in a narrow frame a command dragged (or swapped) from More stays on the bar and the note says what happens; a lost release drops nothing; a wobbly click on a More item runs it; Enter on a More item runs that item, not Finish sketch', { tag: '@serial' }, async ({ page, request }) => {
   await forgetUserLayout(request);
   await page.setViewportSize({ width: 1150, height: 900 });
   const { seen, frame } = await freshPart(page, request);
   await sketchOnTop(frame);
   const label = (id: string) => btn(frame, id).getAttribute('aria-label');
 
-  // B2: at 1150 and 1000 px, Slot dragged onto DRAW's last place stays on the bar.
-  for (const width of [1150, 1000]) {
+  // B2: at two narrow widths (v0.5.0 ribbon: where Slot is folded, and 16 px narrower; 1150 and
+  // 1000 px before the ribbon), Slot dragged onto DRAW's last place stays on the bar.
+  const slotFolded = await widthWhere(page, frame, async () => (await moreIds(frame, 'draw')).includes('sketch.slot'));
+  for (const width of [slotFolded, slotFolded - 16]) {
     await resizeTo(page, frame, width, 900);
     await expect.poll(() => moreIds(frame, 'draw'), `Slot in More at ${width}`).toContain('sketch.slot');
     const before = await shownIds(frame, 'draw');
@@ -338,7 +359,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
       'sketch.slot',
       async () => {
         const b = (await btn(frame, last).boundingBox())!;
-        return { x: b.x + b.width * 0.75, y: b.y + b.height / 2 };
+        return { x: b.x + b.width * 0.75, y: b.y + b.height * 0.8 };
       },
       async () => {
         await expect(frame.locator('[data-tb-drop-note]')).toHaveText(`${lastLabel} moves to More`);
@@ -348,19 +369,20 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
     await expect.poll(() => shownIds(frame, 'draw'), `DRAW at ${width}`).toEqual([...before.slice(0, -1), 'sketch.slot']);
     await expect(btn(frame, 'sketch.slot')).toBeVisible();
     expect(await moreIds(frame, 'draw')).toContain(last);
-    if (width === 1150) await page.screenshot({ path: test.info().outputPath('narrow-1150-after.png') });
+    if (width === slotFolded) await page.screenshot({ path: test.info().outputPath('narrow-after.png') });
     // A narrower frame folds the group's other commands first: Slot stays.
-    await resizeTo(page, frame, 900, 900);
+    await resizeTo(page, frame, 640, 900);
     await expect.poll(() => shownIds(frame, 'draw')).toContain('sketch.slot');
     await resizeTo(page, frame, width, 900);
     await resetToolbar(frame);
   }
 
-  // B2 for the keyboard's way: Swap with at 1000 px keeps Spline on the bar.
-  // Still in the sketch (DRAW and its More exist only there), so a miss below is the toolbar's fit: at
-  // 1000 px every foldable sketch command is folded (data-fit 2), Spline among them.
+  // B2 for the keyboard's way: Swap with, where every foldable sketch command is folded (Spline
+  // among them; v0.5.0 ribbon: about 680 px), keeps Spline on the bar.
+  // Still in the sketch (DRAW and its More exist only there).
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await expect.poll(() => moreIds(frame, 'draw'), "Spline in DRAW's More at 1000 px").toContain('sketch.spline');
+  await widthWhere(page, frame, async () => (await moreIds(frame, 'draw')).includes('sketch.spline'));
+  await expect.poll(() => moreIds(frame, 'draw'), "Spline in DRAW's More").toContain('sketch.spline');
   const before = await shownIds(frame, 'draw');
   const last = before[before.length - 1];
   await tb(frame).locator('[data-tb-more="draw"]').click();
@@ -370,9 +392,9 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   await expect.poll(() => shownIds(frame, 'draw')).toEqual([...before.slice(0, -1), 'sketch.spline']);
   await expect(btn(frame, 'sketch.spline')).toBeVisible();
   await resetToolbar(frame);
-  // 1280 (1600 before v0.5.0's compact sketch toolbar): Slot, Point and Construction in DRAW's More.
-  await resizeTo(page, frame, 1280, 1000);
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.spline']);
+  // Slot, Point and Construction in DRAW's More (v0.5.0 ribbon: about 710 px; 1280 before it).
+  await widthWhere(page, frame, async () => same(await shownIds(frame, 'draw'), DRAW_FOLDED));
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(DRAW_FOLDED);
 
   // S5: the window loses the press mid-drag (alt-tab): the drag ends, the release later drops nothing.
   const stored = await userLayout(request);

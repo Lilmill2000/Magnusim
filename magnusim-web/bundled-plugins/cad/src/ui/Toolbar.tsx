@@ -7,14 +7,11 @@
 // Sketch mode (services.mode 'sketch') shows the sketch groups, the primary
 // Finish sketch button, VIEW, and sketch mode's own Undo / Redo.
 // Every command fits the frame from 1280 px wide, with its label (P4a, Daniel
-// works on 1280-1920 px screens): when the labelled buttons do not fit, VIEW
-// and EDIT show icons only first, then the less-used commands go, one by one in
-// FOLD_ORDER, into their group's "More" menu (Fusion style: "SOLID: Extrude,
-// Revolve, More ▾"); the menu lists each one with its icon, shortcut and
-// tooltip. Only below that (narrower than 1280 px, or wider text) the groups sit
-// closer, then go to icons one group at a time (ICON_ORDER), and last every group
-// but the primary action shows icons (the label stays in the tooltip and the
-// accessible name).
+// works on 1280-1920 px screens): when the toolbar does not fit, it gets more
+// compact step by step (useFitLevel; since v0.5.0 the ribbon's steps, below),
+// commands folding into their group's "More" menu (Fusion style: "SOLID:
+// Extrude, More ▾"); the menu lists each one with its icon, shortcut and
+// tooltip.
 // Review P2/P3 round 1: at 1280 px Undo, Redo and some views were scrolled out
 // of reach, with no scrollbar in real Chrome.
 // P4b fix round 1 (Daniel, 2026-10-06: "I prefer 1280 px (model) but let people
@@ -38,12 +35,16 @@
 // Ellipse) that runs its last-used variant, and a small arrow beside it that lists every variant
 // with its icon, name, shortcut and hint. For the layout a flyout is one command (its bar id); in
 // a More menu its variants are listed one by one.
-// v0.5.0 (Daniel: every drawing group on the bar at 1920 px, as SolidWorks shows its Sketch tab):
-// the sketch toolbar is compact (`is-compact`): icon-only buttons, the name, shortcut and hint in
-// the tooltip and the accessible name (aria-label), less padding and narrow flyout arrows; only
-// Finish sketch keeps its label. The groups go DRAW, MODIFY, CONSTRAIN, DIMENSION (types/commands.ts
-// SKETCH_GROUPS). The More menus, the fold, the drags and the right-click menus work as before.
-// The model toolbar keeps its labels: it shows one or two commands per group, so it has the room.
+// v0.5.0 ribbon (Daniel: "you can stack them on each other instead of it just being one line of
+// stuff", SolidWorks's CommandManager): every group's buttons are stacked in three rows. A group's
+// key tools are large buttons (RIBBON_LARGE and the primary action: a bigger icon with the name
+// under it, three rows tall); the rest are small buttons (icon and name side by side, one row
+// tall) filling the rows column by column after them. A flyout is one button of either size with
+// its arrow (beside a small one, under a large one). CONSTRAIN's buttons are their glyphs alone.
+// The model toolbar is the same ribbon, so the two modes are the same height. When the ribbon does
+// not fit the frame (useFitLevel) VIEW and EDIT go to icons, then each group's small buttons go to
+// icons one group at a time (SQUEEZE_ORDER), then commands fold into More (FOLD_ORDER), then the
+// groups sit closer, then whole groups collapse into one dropdown button each (SQUEEZE_ORDER).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -157,15 +158,35 @@ export const AFTER_VIEW: ReadonlySet<string> = new Set(['scale']);
 const KEEP_SET: ReadonlySet<string> = new Set(KEEP_IN_VIEW);
 
 /**
- * Wider text than the toolbar was measured with (a larger system font, Windows text scaling or
- * browser zoom, Linux's fallback fonts) must not cost Sketch its label first. When the toolbar
- * still does not fit with every foldable command folded, the groups first sit closer together
- * (`is-fit-tight`), then go to icons one group at a time in this order, the least used first
- * (`is-icons`; the heading stays, the labels stay the tooltips and the accessible names), and only
- * then every group but the primary action (the last step, which takes SKETCH's and DRAW's labels).
- * Groups not listed (SKETCH, DRAW; CONSTRAIN is icons by design) wait for that last step.
+ * The ribbon's squeeze order, the least-used group first (v0.5.0 ribbon). When the ribbon does not
+ * fit with VIEW and EDIT as icons, the groups' small buttons go to their icons one group at a time
+ * in this order (the name stays the tooltip and the accessible name); after every foldable command
+ * is folded and the groups sit closer, the groups collapse into one dropdown button each in this
+ * order (its menu lists the group's every command). DRAW goes last.
  */
-export const ICON_ORDER: readonly string[] = ['file', 'inspect', 'construct', 'pattern', 'modify', 'cfd', 'solid', 'sketch-modify', 'dimension'];
+export const SQUEEZE_ORDER: readonly string[] = ['file', 'inspect', 'construct', 'pattern', 'modify', 'cfd', 'solid', 'sketch', 'constrain', 'sketch-modify', 'dimension', 'scale', 'draw'];
+
+/**
+ * The large buttons of the ribbon (v0.5.0, Daniel: key tools large, "Finish sketch, Smart
+ * Dimension, Line, Trim"): three rows tall, a bigger icon with the name under it. The mode's
+ * primary action (Finish sketch) is always large; every other command is a small button.
+ * Model mode: each group's main command (the one it shows by default).
+ */
+export const RIBBON_LARGE: ReadonlySet<string> = new Set([
+  'sketch.new',
+  'solid.extrude',
+  'pattern.linear',
+  'modify.fillet',
+  'construct.plane',
+  'cfd.enclosure',
+  'inspect.measure',
+  'file.import-step',
+  'scale.banana',
+  'scale.sketch-banana',
+  'sketch.line',
+  'sketch.trim',
+  'sketch.dimension',
+]);
 
 /** Sentence case for the More menu's name: "MODIFY" -> "Modify", "CFD PREP" -> "Cfd prep". */
 function groupWords(label: string): string {
@@ -242,6 +263,8 @@ function ToolbarButton({
   custom,
   variant,
   onKeyDown,
+  size = 'small',
+  text,
 }: {
   c: CommandDef;
   services: AppServices;
@@ -252,6 +275,10 @@ function ToolbarButton({
   /** A flyout's bar button: the variant it shows and runs (its own id stays the flyout's bar id). */
   variant?: CommandDef;
   onKeyDown?(e: React.KeyboardEvent<HTMLButtonElement>): void;
+  /** The ribbon's large button (three rows, the name under the icon) or a small one (one row). */
+  size?: 'large' | 'small';
+  /** The name shown on the button when not the command's (a flyout shows its own: "Slot"). */
+  text?: string;
 }) {
   const shown = variant ?? c;
   const reason = reasonOf(shown, services);
@@ -260,7 +287,7 @@ function ToolbarButton({
   return (
     <button
       type="button"
-      className={`tb-btn${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}${custom?.dragging ? ' is-dragging' : ''}${drop}${custom?.displaced ? ' is-displaced' : ''}`}
+      className={`tb-btn is-${size}${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}${custom?.dragging ? ' is-dragging' : ''}${drop}${custom?.displaced ? ' is-displaced' : ''}`}
       data-command={c.id}
       data-variant={variant ? variant.id : undefined}
       data-index={index}
@@ -283,8 +310,8 @@ function ToolbarButton({
         void services.commands.run(shown.id);
       }}
     >
-      <span className="tb-ico">{shown.icon ? <Icon d={shown.icon} size={18} stroke={1.7} className="tb-svg" {...(shown.iconColors ? { colors: shown.iconColors } : {})} /> : null}</span>
-      <span className="tb-txt">{shown.label}</span>
+      <span className="tb-ico">{shown.icon ? <Icon d={shown.icon} size={size === 'large' ? 24 : 16} stroke={1.7} className="tb-svg" {...(shown.iconColors ? { colors: shown.iconColors } : {})} /> : null}</span>
+      <span className="tb-txt">{text ?? shown.label}</span>
     </button>
   );
 }
@@ -305,7 +332,9 @@ function FlyoutButton({
   index,
   primary,
   custom,
+  size,
 }: {
+  size: 'large' | 'small';
   c: CommandDef;
   def: FlyoutDef;
   variants: CommandDef[];
@@ -332,8 +361,8 @@ function FlyoutButton({
   const show = (last = false) => {
     const el = ref.current;
     if (!el) return;
-    // Under the flyout's button (the arrow's left neighbour).
-    const r = (el.previousElementSibling ?? el).getBoundingClientRect();
+    // Under the flyout (its button and arrow).
+    const r = (el.parentElement ?? el).getBoundingClientRect();
     const items: MenuEntry[] = variants.map((x) => ({
       id: x.id,
       command: x.id,
@@ -363,10 +392,9 @@ function FlyoutButton({
     }
   };
   return (
-    // The button and its arrow side by side in the group's items (the toolbar's drag and fold read
-    // the group's buttons as its direct children).
-    <>
-      <ToolbarButton c={c} services={services} active={variants.some(activeOf)} index={index} primary={primary} custom={custom} variant={cur} onKeyDown={keys} />
+    // The button and its arrow as one item of the ribbon: the arrow beside a small button, under a large one.
+    <div className={`tb-split is-${size}`} data-tb-split={c.id}>
+      <ToolbarButton c={c} services={services} active={variants.some(activeOf)} index={index} primary={primary} custom={custom} variant={cur} onKeyDown={keys} size={size} text={def.label} />
       <button
         ref={ref}
         type="button"
@@ -387,7 +415,7 @@ function FlyoutButton({
           ▾
         </span>
       </button>
-    </>
+    </div>
   );
 }
 
@@ -409,7 +437,13 @@ function MoreButton({
   itemMenu,
   onItemPress,
   dropInto = false,
+  collapsed = false,
 }: {
+  /**
+   * v0.5.0 ribbon: the whole group collapsed into this one dropdown (the frame too narrow): a large
+   * button with the group's name and its first command's icon; the menu lists every command.
+   */
+  collapsed?: boolean;
   group: string;
   label: string;
   commands: CommandDef[];
@@ -425,11 +459,11 @@ function MoreButton({
   dropInto?: boolean;
 }) {
   const ui = uiFor(services);
-  const owner = `tb-more:${group}`;
+  const owner = collapsed ? `tb-group-menu:${group}` : `tb-more:${group}`;
   const open = useStateStore(ui.state, (s) => s.menu?.owner === owner);
   const ref = useRef<HTMLButtonElement>(null);
   const active = commands.some((c) => isActive(c, panel, sketchTool));
-  const name = `More ${groupWords(label)} commands`;
+  const name = collapsed ? `${groupWords(label)} commands` : `More ${groupWords(label)} commands`;
   const tip = useTip(open ? null : { text: name, detail: commands.map((c) => c.label).join(', ') });
   const show = (last = false) => {
     const el = ref.current;
@@ -464,8 +498,9 @@ function MoreButton({
     <button
       ref={ref}
       type="button"
-      className={`tb-btn tb-more${active ? ' is-active' : ''}${open ? ' is-open' : ''}${dropInto ? ' is-drop-into' : ''}`}
-      data-tb-more={group}
+      className={`tb-btn ${collapsed ? 'is-large tb-group-menu' : 'is-small tb-more'}${active ? ' is-active' : ''}${open ? ' is-open' : ''}${dropInto ? ' is-drop-into' : ''}`}
+      data-tb-more={collapsed ? undefined : group}
+      data-tb-group-menu={collapsed ? group : undefined}
       data-index={first}
       data-more-commands={commands.map((c) => c.id).join(' ')}
       aria-label={name}
@@ -481,10 +516,10 @@ function MoreButton({
       }}
     >
       <span className="tb-ico">
-        <Icon d={ICONS.more} size={18} stroke={1.7} className="tb-svg" />
+        <Icon d={collapsed && commands[0]?.icon ? commands[0].icon : ICONS.more} size={collapsed ? 24 : 16} stroke={1.7} className="tb-svg" {...(collapsed && commands[0]?.iconColors ? { colors: commands[0].iconColors } : {})} />
       </span>
       <span className="tb-txt">
-        More <span className="tb-caret" aria-hidden="true">▾</span>
+        {collapsed ? groupWords(label) : 'More'} <span className="tb-caret" aria-hidden="true">▾</span>
       </span>
     </button>
   );
@@ -550,7 +585,10 @@ function Group({
   drag,
   startDrag,
   flyouts,
+  collapsed = false,
 }: {
+  /** v0.5.0 ribbon: the frame is too narrow for the group: one dropdown button lists its commands. */
+  collapsed?: boolean;
   id: string;
   label: string;
   commands: CommandDef[];
@@ -562,7 +600,7 @@ function Group({
   sketchTool: string | null;
   end?: boolean;
   primary?: boolean;
-  /** The frame is too narrow for its labels (ICON_ORDER): its buttons show icons only. */
+  /** Its small buttons show their icons alone (CONSTRAIN always; others when the frame is narrow, SQUEEZE_ORDER). */
   icons?: boolean;
   custom?: GroupCustom;
   /** VIEW, EDIT and the primary action: their right-click menu (Reset toolbar). */
@@ -596,9 +634,10 @@ function Group({
   };
   return (
     <div
-      className={`tb-group${end ? ' is-end' : ''}${icons ? ' is-icons' : ''}${at?.kind === 'refused' && at.group === id ? ' is-drop-refused' : ''}`}
+      className={`tb-group${end ? ' is-end' : ''}${icons ? ' is-icons' : ''}${collapsed ? ' is-collapsed' : ''}${at?.kind === 'refused' && at.group === id ? ' is-drop-refused' : ''}`}
       data-group={id}
       data-icons={icons ? '1' : undefined}
+      data-collapsed={collapsed ? '1' : undefined}
       data-drop-refused={at?.kind === 'refused' && at.group === id ? '1' : undefined}
       role="group"
       aria-label={label}
@@ -614,14 +653,27 @@ function Group({
       <div className="tb-group-label">{label}</div>
       {/* data-menu-keep: a press on the group's buttons leaves its open More menu open (a bar command may be dragged into it). */}
       <div className="tb-items" data-menu-keep={custom ? '1' : undefined}>
+        {collapsed ? (
+          <MoreButton
+            group={id}
+            label={label}
+            commands={commands.flatMap((c) => flyouts?.variants.get(c.id) ?? [c])}
+            first={0}
+            services={services}
+            panel={panel}
+            sketchTool={sketchTool}
+            collapsed
+          />
+        ) : null}
         {commands.map((c, i) => {
-          if (more.includes(c)) return null;
+          if (collapsed || more.includes(c)) return null;
+          const size = primary || RIBBON_LARGE.has(c.id) ? 'large' : 'small';
           const vs = flyouts?.variants.get(c.id);
           const def = flyouts?.defs.get(c.id);
-          if (vs && def) return <FlyoutButton key={c.id} c={c} def={def} variants={vs} services={services} panel={panel} sketchTool={sketchTool} index={i} primary={primary} custom={customFor(c)} />;
-          return <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} custom={customFor(c)} />;
+          if (vs && def) return <FlyoutButton key={c.id} c={c} def={def} variants={vs} services={services} panel={panel} sketchTool={sketchTool} index={i} primary={primary} custom={customFor(c)} size={size} />;
+          return <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} custom={customFor(c)} size={size} />;
         })}
-        {more.length ? (
+        {more.length && !collapsed ? (
           <MoreButton
             group={id}
             label={label}
@@ -731,6 +783,17 @@ interface DragLive {
 const rectHas = (r: DOMRect, x: number, y: number) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 
 /**
+ * Whether the point is past the button in the ribbon's reading order (v0.5.0 ribbon: column by
+ * column, top to bottom in each): right of its column, or in its column below its middle (a large
+ * button, three rows tall: right of its middle).
+ */
+export function pastButton(r: { left: number; right: number; top: number; bottom: number }, x: number, y: number): boolean {
+  if (x >= r.right) return true;
+  if (x < r.left) return false;
+  return r.bottom - r.top > 40 ? x > (r.left + r.right) / 2 : y > (r.top + r.bottom) / 2;
+}
+
+/**
  * Dragging a command (UX 0.1.0): from a group's More menu onto its bar, from the bar into its More,
  * or along the bar. Pointer events on the window (the menu's item goes away while it is dragged,
  * so nothing is captured there), so it works with a mouse in the sandboxed frame. A press becomes
@@ -760,7 +823,7 @@ function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React
     return best && best.d <= 12 ? best.g : null;
   };
   const buttonsOf = (g: string, except?: string) =>
-    [...(groupEl(g)?.querySelectorAll<HTMLElement>('.tb-items > .tb-btn[data-command]') ?? [])].filter((el) => el.dataset.command !== except);
+    [...(groupEl(g)?.querySelectorAll<HTMLElement>('.tb-items .tb-btn[data-command]') ?? [])].filter((el) => el.dataset.command !== except);
 
   const dropAt = (d: DragView, x: number, y: number): DropAt => {
     const menu = menuEl();
@@ -776,21 +839,21 @@ function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React
     if (d.from === 'more') {
       const btns = buttonsOf(g);
       const shown = btns.map((el) => el.dataset.command ?? '');
-      const index = btns.filter((el) => {
-        const r = el.getBoundingClientRect();
-        return x > (r.left + r.right) / 2;
-      }).length;
+      const index = btns.filter((el) => pastButton(el.getBoundingClientRect(), x, y)).length;
       const mark = index < shown.length ? { target: shown[index], after: false } : shown.length ? { target: shown[shown.length - 1], after: true } : null;
       return { kind: 'bar', group: g, index, mark, displaced: shown.length ? shown[shown.length - 1] : null };
     }
     // A bar command: onto its group's More button is Move to More; elsewhere in the group, a move.
     const mr = groupEl(g)?.querySelector<HTMLElement>('[data-tb-more]')?.getBoundingClientRect();
-    if (mr && x >= mr.left && x <= mr.right) return { kind: 'more', group: g, menu: false };
+    // (The More button is one of the ribbon's small buttons: over the button itself.)
+    if (mr && rectHas(mr, x, y)) return { kind: 'more', group: g, menu: false };
     let best: { target: string; after: boolean; dist: number } | null = null;
     for (const el of buttonsOf(g, d.id)) {
       const r = el.getBoundingClientRect();
-      const dist = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
-      if (!best || dist < best.dist) best = { target: el.dataset.command ?? '', after: x > (r.left + r.right) / 2, dist };
+      const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+      const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      const dist = Math.hypot(dx, dy);
+      if (!best || dist < best.dist) best = { target: el.dataset.command ?? '', after: pastButton(r, x, y), dist };
     }
     return best ? { kind: 'move', group: g, mark: { target: best.target, after: best.after } } : { kind: 'none' };
   };
@@ -1023,12 +1086,12 @@ function DragGhost({ view, ghostRef }: { view: DragView; ghostRef: React.RefObje
 }
 
 /**
- * How compact the toolbar must be to show every command without scrolling:
- * 0 labels everywhere, 1 VIEW and EDIT as icons, 1 + k the first k foldable
- * commands (FOLD_ORDER) in their group's More menu, then the groups closer
- * together, then the groups of ICON_ORDER as icons one by one, `max` every group
- * but the primary action as icons too. Measured after each render (before paint);
- * measured again from 0 when the toolbar's width, the mode or its commands change.
+ * How compact the toolbar must be to show every command without scrolling (v0.5.0 ribbon): 0 every
+ * name shown, 1 VIEW and EDIT as icons, then the labelled groups' small buttons as icons one group
+ * at a time, then the foldable commands (FOLD_ORDER) into their group's More one by one, then the
+ * groups closer together, then the groups collapsed into one dropdown each (SQUEEZE_ORDER). Measured
+ * after each render (before paint); measured again from 0 when the toolbar's width, the mode or its
+ * commands change.
  */
 function useFitLevel(mode: Mode, content: string, max: number): { ref: (node: HTMLDivElement | null) => void; level: number } {
   const node = useRef<HTMLDivElement | null>(null);
@@ -1117,15 +1180,19 @@ export function Toolbar() {
     ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !held(ml, x) && !pinned(ml, x)),
     ...FOLD_ORDER.filter((x) => present.has(x) && !placedMore.has(x) && !held(ml, x) && pinned(ml, x)),
   ];
-  // ux010: one step more than before, right after VIEW and EDIT go to icons: SCALE MODELS'
-  // button goes to its icon (its heading stays, as every group's does), before anything folds.
-  const hasScale = groups.some((g) => AFTER_VIEW.has(g.group));
-  const scaleStep = hasScale ? 1 : 0;
-  // v0.5.0: the sketch toolbar is icons only from the start (compact): no icon steps there.
-  const compact = mode === 'sketch';
-  // The mode's groups that go to icons one by one once everything foldable is folded.
-  const iconGroups = compact ? [] : ICON_ORDER.filter((g) => groups.some((x) => x.group === g));
-  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, foldable.length + 3 + iconGroups.length + scaleStep);
+  // v0.5.0 ribbon: the groups in squeeze order (any group SQUEEZE_ORDER does not name goes last).
+  const squeeze = [...groups].sort((x, y) => {
+    const i = (g: string) => (SQUEEZE_ORDER.includes(g) ? SQUEEZE_ORDER.indexOf(g) : SQUEEZE_ORDER.length);
+    return i(x.group) - i(y.group);
+  });
+  // The groups with a small labelled button on the bar (a More is one): their names go first.
+  // CONSTRAIN's buttons are their glyphs at every width.
+  const labelGroups = squeeze
+    .filter((g) => g.group !== 'constrain' && (g.order.some((x) => placedMore.has(x)) || g.order.some((x) => !placedMore.has(x) && !RIBBON_LARGE.has(x))))
+    .map((g) => g.group);
+  // The groups that may collapse into one dropdown (two commands or more; a flyout counts its variants).
+  const collapseGroups = squeeze.filter((g) => g.commands.flatMap((c) => flyVariants.get(c.id) ?? [c]).length > 1).map((g) => g.group);
+  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, 2 + labelGroups.length + foldable.length + collapseGroups.length);
   // Tests wait for the stored layout: the attribute is set without a render.
   const bar = useRef<HTMLDivElement | null>(null);
   const fitRef = fit.ref;
@@ -1145,22 +1212,22 @@ export function Toolbar() {
       live = false;
     };
   }, [prefs, mode]);
-  // Steps: 0 labels; 1 VIEW and EDIT icons; 2 SCALE MODELS' icon (when there); then the folds;
-  // then the groups closer together (tight); then ICON_ORDER's groups to icons one by one; the
-  // last, every group but the primary action as icons.
-  const level = fit.level >= 2 ? fit.level - scaleStep : fit.level;
-  const scaleIcons = scaleStep > 0 && fit.level >= 2;
-  const fitFolded = new Set(foldable.slice(0, Math.max(0, Math.min(level - 1, foldable.length))));
-  const tight = level >= foldable.length + 2;
-  const fitIcons = new Set(iconGroups.slice(0, Math.max(0, level - (foldable.length + 2))));
+  // Steps: 0 every label; 1 VIEW and EDIT icons; then each labelled group's small buttons to icons
+  // (labelGroups, one by one); then the folds (FOLD_ORDER, one by one); then the groups closer
+  // together (tight); then the groups collapse into one dropdown each (collapseGroups, one by one).
+  const level = fit.level;
+  const clampTo = (n: number, max: number) => Math.max(0, Math.min(n, max));
+  const viewIcons = level >= 1;
+  const fitLabels = new Set(labelGroups.slice(0, clampTo(level - 1, labelGroups.length)));
+  const fitFolded = new Set(foldable.slice(0, clampTo(level - 1 - labelGroups.length, foldable.length)));
+  const tight = level >= 2 + labelGroups.length + foldable.length;
+  const fitCollapsed = new Set(collapseGroups.slice(0, clampTo(level - (2 + labelGroups.length + foldable.length), collapseGroups.length)));
   const folded = new Set([...placedMore, ...fitFolded]);
   const cz = customizer(services, prefs, lmode, ml, fitFolded);
   // UX 0.1.0: dragging between a group's More and its bar (the handlers read this render's layout).
   const live = useRef<DragLive>({ services, prefs, mode: lmode, m: ml, groups: [] });
   live.current = { services, prefs, mode: lmode, m: ml, groups: groups.map((g) => ({ group: g.group, label: g.label, order: g.order })) };
   const drag = useToolbarDrag(bar, live);
-  // Compact: VIEW and EDIT are icons already, and so is every other group but the primary action.
-  const iconLevel = compact ? Math.min(level, 1) : level >= foldable.length + 3 + iconGroups.length ? 2 : level >= 1 ? 1 : 0;
   const view = viewCommands(services, mode);
   // Sketch mode undoes inside the sketch (its own Undo / Redo); model mode the document's.
   const editIds = mode === 'sketch' ? [WELL_KNOWN_COMMANDS.sketchUndo, WELL_KNOWN_COMMANDS.sketchRedo] : [UNDO_ID, REDO_ID];
@@ -1172,15 +1239,14 @@ export function Toolbar() {
     <>
       <div
         ref={barRef}
-        className={`toolbar cad-toolbar${compact ? ' is-compact' : ''}${iconLevel ? ` is-fit-${iconLevel}` : ''}${scaleIcons ? ' is-fit-scale' : ''}${tight ? ' is-fit-tight' : ''}`}
+        className={`toolbar cad-toolbar is-ribbon${viewIcons ? ' is-fit-1' : ''}${tight ? ' is-fit-tight' : ''}`}
         role="toolbar"
         aria-label="Commands"
         data-cad-toolbar={mode}
-        data-compact={compact ? '1' : undefined}
-        data-fit={iconLevel}
-        data-fit-scale={scaleIcons ? '1' : '0'}
+        data-fit={viewIcons ? 1 : 0}
+        data-fit-labels={[...fitLabels].join(' ')}
         data-fit-tight={tight ? '1' : '0'}
-        data-fit-icons={[...fitIcons].join(' ')}
+        data-fit-collapsed={[...fitCollapsed].join(' ')}
         data-folded={folded.size}
         data-fit-folded={fitFolded.size}
         data-layout={isDefault(ml) ? 'default' : 'custom'}
@@ -1199,7 +1265,8 @@ export function Toolbar() {
             services={services}
             panel={panel}
             sketchTool={sketchTool}
-            icons={fitIcons.has(g.group)}
+            icons={g.group === 'constrain' || fitLabels.has(g.group)}
+            collapsed={fitCollapsed.has(g.group)}
             flyouts={flyouts}
             custom={cz.forGroup(g.group, g.order)}
             drag={drag.view}
@@ -1207,7 +1274,7 @@ export function Toolbar() {
           />
         ))}
         {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary menu={cz.menu} drag={drag.view} /> : null}
-        {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} menu={cz.menu} drag={drag.view} /> : null}
+        {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} icons={viewIcons} menu={cz.menu} drag={drag.view} /> : null}
         {/* ux010: SCALE MODELS, right after VIEW. */}
         {groups.filter((g) => AFTER_VIEW.has(g.group)).map((g) => (
           <Group
@@ -1219,12 +1286,15 @@ export function Toolbar() {
             services={services}
             panel={panel}
             sketchTool={sketchTool}
+            icons={fitLabels.has(g.group)}
+            collapsed={fitCollapsed.has(g.group)}
+            flyouts={flyouts}
             custom={cz.forGroup(g.group, g.order)}
             drag={drag.view}
             startDrag={(c, from, e) => drag.start(c, g.group, from, e)}
           />
         ))}
-        {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end menu={cz.menu} drag={drag.view} /> : null}
+        {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end icons={viewIcons} menu={cz.menu} drag={drag.view} /> : null}
       </div>
       {drag.view ? <DragGhost view={drag.view} ghostRef={drag.ghostRef} /> : null}
     </>

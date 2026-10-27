@@ -702,17 +702,18 @@ with the host once for the page's life, and its chip goes in the dock.
   the labelled buttons do not fit the frame (`useFitLevel`, measured before
   paint, again from the start whenever the width, the mode or the commands
   change): first VIEW and EDIT show icons only (their glyphs are the usual ones;
-  the label stays the tooltip and the accessible name), then commands fold one by
-  one into their group's **More ▾** menu in `FOLD_ORDER` (`src/ui/Toolbar.tsx`),
-  the least used first. Only below that (narrower than 1280 px, or wider text: a
-  larger system font, text scaling or browser zoom, Linux's fallback fonts) the
-  groups sit closer (`is-fit-tight`), then whole groups go to icons one at a time
-  in `ICON_ORDER` (FILE, INSPECT, CONSTRUCT, PATTERN, MODIFY, CFD PREP, SOLID;
-  sketch mode MODIFY, DIMENSION; headings kept), and last every group but the
-  primary action shows icons, so Sketch keeps its label longest (CI on Linux,
-  2026-10-13: DejaVu Sans took it at 1280 px). The More button is narrower than a command
-  (40 px, the caret in its padding), so folding a group's first command frees
-  room; it carries `data-tb-more`, `data-more-commands` and `aria-expanded`, is
+  the label stays the tooltip and the accessible name), then the groups' small
+  buttons go to their icons one group at a time in `SQUEEZE_ORDER`, then commands
+  fold one by one into their group's **More ▾** menu in `FOLD_ORDER`
+  (`src/ui/Toolbar.tsx`), the least used first, then the groups sit closer
+  (`is-fit-tight`), and last whole groups collapse into one dropdown button each
+  in `SQUEEZE_ORDER` (FILE, INSPECT, CONSTRUCT, PATTERN, MODIFY, CFD PREP, SOLID,
+  SKETCH, CONSTRAIN, sketch MODIFY, DIMENSION, SCALE MODELS, DRAW last; a large
+  button with the group's name and its first command's icon, `data-tb-group-menu`,
+  its menu lists every command of the group), as SolidWorks does at narrow widths
+  (CI on Linux,
+  2026-10-13: DejaVu Sans took Sketch's label at 1280 px in the one-line toolbar).
+  The More button is one of the ribbon's small buttons ("More ▾"); it carries `data-tb-more`, `data-more-commands` and `aria-expanded`, is
   drawn pressed while one of its commands' panels or tools is open, and its menu
   is the context menu's (core `.face-ctx-menu`, `[data-cad-menu]`) with each
   command's icon, label, shortcut (`.cad-menu-key`) and the toolbar button's
@@ -729,17 +730,35 @@ with the host once for the page's life, and its chip goes in the dock.
     group's main command(s), `KEEP_IN_VIEW` (Sketch, Extrude, Linear pattern,
     Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP), are buttons; the
     other sixteen start in their group's More. Sketch mode starts with every
-    command on the ribbon and folds by width in `FOLD_ORDER`. Since v0.5.0
-    (Daniel: every drawing group on the bar at 1920 px, as SolidWorks's Sketch
-    tab) the sketch toolbar is compact (`is-compact`, `data-compact`): icon-only
-    buttons 26 px wide (the 18 px glyph), the name, shortcut and hint in the
-    tooltip and the name as `aria-label`, each More its icon, the flyout arrows
-    10 px; only Finish sketch keeps its label; the groups go DRAW, MODIFY,
-    CONSTRAIN, DIMENSION (`SKETCH_GROUPS`). Measured (bundled Chromium, Segoe
-    UI): 1920 and 1600 px fold nothing; 1440 px Intersect, Project, Point,
-    Construction, Chamfer; 1280 px ten (Extend, Ellipse, Polygon, Slot and
-    Offset too) (`e2e/cad-sketch-toolbar-fit.spec.ts`). The model toolbar keeps
-    its labels: it shows one or two commands per group and has the room. Users rearrange both (`src/ui/toolbar-layout.ts`): right-click a
+    command on the ribbon and folds by width in `FOLD_ORDER`.
+  - **The ribbon (v0.5.0, Daniel: "you can stack them on each other instead of
+    it just being one line of stuff", SolidWorks's CommandManager; it replaced
+    a one-line icon-only sketch toolbar he did not like).** Both modes' toolbars
+    are one ribbon (`is-ribbon`), so entering a sketch does not move the view:
+    each group's buttons sit in three 20 px rows (`.tb-items` a CSS grid, column
+    by column). A large button (`is-large`, `RIBBON_LARGE` and the primary
+    action) is the three rows tall, a 24 px icon with its name under it (two
+    lines at most, 58 px wide at most): sketch mode Line, Trim, Dimension, Finish sketch and the
+    taped banana; model mode each group's main command (Sketch, Extrude, Linear
+    pattern, Fillet, Plane, Enclosure, Measure, Import STEP, Banana for scale).
+    Every other command is a small button (`is-small`): one row, a 16 px icon
+    with its name beside it, or its icon alone (CONSTRAIN by design, its glyphs;
+    a group whose names went for the width, `is-icons`, `data-fit-labels`). A
+    flyout is one `.tb-split` item: its arrow beside a small button (12 px) or a
+    12 px strip under a large one; its small button shows the flyout's own name
+    ("Slot") and the variant's icon, the variant's name being its accessible
+    name and tooltip. A group's More is a small button after its commands. The
+    model toolbar uses the same ribbon for consistency (its main commands large,
+    Chamfer and the More buttons small beside them). The toolbar is about 84 px
+    tall (12 px headings over the three rows). Measured (bundled Chromium,
+    Segoe UI): the sketch ribbon folds nothing at 1920, 1600, 1440 or 1280 px
+    (at 1280 VIEW and EDIT are icons), at 1000 px MODIFY's small buttons are
+    icons, at 760 DRAW's too and Intersect, Project, Point, Construction,
+    Chamfer and Extend fold; the model ribbon keeps every name to 1440 px and at
+    770 px collapses FILE (`e2e/cad-sketch-toolbar-fit.spec.ts`). A drop mark
+    among small buttons is a bar above or under the button (they stack); where
+    a drag lands follows the ribbon's reading order (`pastButton`). Users
+    rearrange both (`src/ui/toolbar-layout.ts`): right-click a
     button for Move to More, Move left, Move right and Reset toolbar; right-click
     a More item for Show in toolbar (a command shown this way folds last when the
     frame is narrow; greyed with the reason when even then it cannot fit) and
@@ -779,9 +798,9 @@ with the host once for the page's life, and its chip goes in the dock.
     `toolbar-layout.json` (the sandboxed frame has no localStorage). The e2e that
     change it (`cad:p4b-toolbar-customize`, `-tabs`, `-migrate`) run in the serial
     phase: the server keeps one prefs file per plugin. The toolbar carries `data-folded` (all in More),
-    `data-fit-folded` (folded for the width), `data-fit` (0 labels, 1 VIEW and EDIT icons, 2 every
-    group icons), `data-fit-scale`, `data-fit-tight` and `data-fit-icons` (the groups gone to icons
-    for the width), `data-layout` (default | custom)
+    `data-fit-folded` (folded for the width), `data-fit` (0 labels, 1 VIEW and EDIT icons),
+    `data-fit-labels` (the groups whose small buttons went to icons for the width), `data-fit-tight`
+    and `data-fit-collapsed` (the groups collapsed into one dropdown), `data-layout` (default | custom)
     and `data-layout-ready`.
   - **The priority** (most used stays longest; SolidWorks' CommandManager and
     Fusion's toolbar promote the same core commands, weighted for Magnusim's

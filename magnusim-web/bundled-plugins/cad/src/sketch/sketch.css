@@ -248,23 +248,6 @@
   margin-top: 8px;
 }
 
-/* ---- the sketch toolbar: 25 commands fit the frame (CONSTRAIN as icons, labels in the tooltips) ---- */
-.cad-toolbar[data-cad-toolbar='sketch'] .tb-btn {
-  min-width: 48px;
-  padding: 4px 3px;
-}
-.cad-toolbar[data-cad-toolbar='sketch'] [data-group='constrain'] .tb-btn {
-  min-width: 30px;
-}
-.cad-toolbar[data-cad-toolbar='sketch'] [data-group='constrain'] .tb-txt {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 /* Sketch with nothing selected: what to pick, over the top of the view (sketch/commands.ts). */
 .cad-sketch-pick {
   position: absolute;
