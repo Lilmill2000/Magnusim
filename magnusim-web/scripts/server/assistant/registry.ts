@@ -443,8 +443,17 @@ interface CoreEntry {
   connected: boolean;
 }
 
+/**
+ * An edition's tools (Magnusim CAD: assistant-routes.ts CAD_EDITION_TOOLS): a host or core page
+ * tool as the edition offers it (its enums and words narrowed), or null when it has none.
+ * Never asked about a workspace's tools: those are the plugin's, the same in every edition.
+ */
+export type EditionFilter = (def: ToolDef) => ToolDef | null;
+
 export interface RegistryOptions {
   hostTools?: readonly ToolDef[];
+  /** Left out: every host and core tool as it is (Magnusim). */
+  edition?: EditionFilter;
   /** foam-runner.js pluginEpoch (tests pass their own). */
   pluginEpoch?: (key: string) => string;
 }
@@ -457,6 +466,7 @@ const dropOrder = (a: ToolDef, b: ToolDef) => (a.priority ?? 0) - (b.priority ??
 export class Registry implements ToolRegistry {
   private readonly host: ToolDef[];
   private readonly epochOf: (key: string) => string;
+  private readonly edition: EditionFilter | null;
   private readonly tabs = new Map<string, TabEntry>();
   /** Each app tab's core page registration (C7), beside its workspace one. */
   private readonly coreTabs = new Map<string, CoreEntry>();
@@ -465,6 +475,7 @@ export class Registry implements ToolRegistry {
 
   constructor(o: RegistryOptions = {}) {
     this.epochOf = o.pluginEpoch ?? ((key: string) => String(foamPluginEpoch(key)));
+    this.edition = o.edition ?? null;
     this.host = [];
     for (const t of o.hostTools ?? []) this.addHostTool(t);
   }
@@ -499,7 +510,10 @@ export class Registry implements ToolRegistry {
   addHostTool(t: ToolDef): void {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(t.name) || t.name.includes('__')) throw new Error(`bad host tool name: ${t.name}`);
     if (this.host.some((h) => h.name === t.name)) throw new Error(`duplicate host tool: ${t.name}`);
-    this.host.push(t);
+    // An edition without this tool leaves it out; one that narrows it keeps its narrowed copy.
+    const offered = this.edition ? this.edition(t) : t;
+    if (!offered) return;
+    this.host.push(offered);
     this.changed('*');
   }
 
@@ -695,8 +709,13 @@ export class Registry implements ToolRegistry {
       const seen = new Set<string>();
       for (const raw of list) {
         const r = this.checkCoreTool(raw, source, seen);
-        if ('code' in r) refused.push(r);
-        else tools.push(r);
+        if ('code' in r) {
+          refused.push(r);
+          continue;
+        }
+        const offered = this.edition ? this.edition(r) : r;
+        if (offered) tools.push(offered);
+        else refused.push({ name: r.localName, code: 'not_in_edition', message: `${r.name} is not in this edition of the app.` });
       }
     }
     tools.sort(byName);

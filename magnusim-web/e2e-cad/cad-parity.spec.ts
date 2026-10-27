@@ -1,0 +1,114 @@
+// Parity both ways in Magnusim CAD: each parity row the CAD app has (parity-rows.json, editions
+// with "cad") names the CAD app's own control a person uses for it, and here each is found the
+// way a person reaches it: on Home, a card's details, Home's right-click menus, New project, a
+// project's page of Parts, Settings. Magnusim's controls the CAD app does not have stay away:
+// the compute queue, This PC / Port / Workspace in Settings, and "Open a sample…".
+// (The Assistant's side: scripts/__tests__/assistant-parity.test.mjs.)
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, test, type Page } from './pw';
+import { partOpened } from '../bundled-plugins/cad/e2e/helpers';
+
+interface Row {
+  row: string;
+  editions: string[];
+  cad_control?: { reach: string; selector: string };
+}
+
+const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
+const FIXTURE = JSON.parse(readFileSync(join(WEB, 'scripts', 'server', 'assistant', 'parity-rows.json'), 'utf8')) as { rows: Row[] };
+const CAD_ROWS = FIXTURE.rows.filter((r) => r.editions.includes('cad'));
+
+const FOLDER = 'Brackets';
+
+async function seed(page: Page) {
+  const req = page.request;
+  expect((await req.post('/api/folders', { data: { name: FOLDER } })).ok()).toBe(true);
+  const made = await req.post('/api/project', { data: { title: 'Parity bench', units: 'Metric', folder: FOLDER } });
+  expect(made.ok()).toBe(true);
+  const pid = String((await made.json()).id);
+  const st = await req.post('/api/plugin-studies/create', { data: { project_id: pid, plugin: 'cad', kind: 'part', title: 'Hinge' } });
+  expect(st.ok()).toBe(true);
+  return pid;
+}
+
+/** Home, freshly drawn, with every project listed. */
+async function home(page: Page) {
+  await page.goto('/#/');
+  await expect(page.locator('#home')).toBeVisible();
+  await expect(page.locator('#home-grid .home-card[data-project-id]').first()).toBeVisible();
+}
+
+/** Brings the row's control on screen as a person does. */
+async function reach(page: Page, where: string, pid: string) {
+  switch (where) {
+    case 'home':
+      return home(page);
+    case 'card':
+      await home(page);
+      await page.locator(`#home-grid .home-card[data-project-id="${pid}"]`).click();
+      return;
+    case 'grid_menu': {
+      await home(page);
+      const grid = await page.locator('#home-grid').boundingBox();
+      // Empty grid, below the cards.
+      await page.mouse.click(grid!.x + grid!.width - 20, grid!.y + grid!.height - 20, { button: 'right' });
+      await expect(page.locator('#home-ctx-menu')).toBeVisible();
+      return;
+    }
+    case 'folder_menu':
+      await home(page);
+      await page.locator(`#home-folder-list .home-nav-child[data-drop-folder="${FOLDER}"]`).click({ button: 'right' });
+      await expect(page.locator('#home-ctx-menu')).toBeVisible();
+      return;
+    case 'new_project':
+      await home(page);
+      await page.locator('#home-new-project').click();
+      await expect(page.locator('#modal-new-project')).toBeVisible();
+      return;
+    case 'project':
+      await page.goto(`/#/p/${pid}`);
+      await expect(page.locator('#cad-project .cad-part-title')).toHaveText(['Hinge']);
+      return;
+    case 'settings':
+      await home(page);
+      await page.locator('#home-prefs').click();
+      await expect(page.locator('#setup-wizard')).toBeVisible();
+      return;
+    default:
+      throw new Error(`no way to reach "${where}"`);
+  }
+}
+
+test('each CAD parity row\'s control is in the CAD app, where a person reaches it', async ({ page }) => {
+  const pid = await seed(page);
+  expect(CAD_ROWS.length).toBeGreaterThan(10);
+  for (const r of CAD_ROWS) {
+    await test.step(`${r.row}: ${r.cad_control!.reach} ${r.cad_control!.selector}`, async () => {
+      await reach(page, r.cad_control!.reach, pid);
+      await expect(page.locator(r.cad_control!.selector).first(), r.row).toBeVisible();
+      await page.keyboard.press('Escape');
+    });
+  }
+});
+
+test("Magnusim's controls the CAD app does not have stay away", async ({ page }) => {
+  const pid = await seed(page);
+  // New project: no "Open a sample…" (no samples in CAD), no Import geometry.
+  await reach(page, 'new_project', pid);
+  await expect(page.locator('#np-samples-toggle')).toBeHidden();
+  await expect(page.locator('#np-start-import')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  // Settings: no This PC, Port or Workspace.
+  await reach(page, 'settings', pid);
+  for (const key of ['pc', 'port', 'workspace']) await expect(page.locator(`#wiz-rail li[data-wiz-key="${key}"]`)).toBeHidden();
+  await page.locator('#wiz-close').click();
+  // No compute queue: not on the project page, nor over a Part.
+  await reach(page, 'project', pid);
+  await expect(page.locator('#btn-queue')).toBeHidden();
+  await page.locator('#cad-project .cad-part-open', { hasText: 'Hinge' }).click();
+  await partOpened(page);
+  await expect(page.locator('#btn-queue')).toBeHidden();
+});

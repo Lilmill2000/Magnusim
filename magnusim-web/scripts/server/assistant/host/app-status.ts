@@ -6,7 +6,11 @@
  * `with_projects` they name their project too, after the project list's own question (as the
  * person's Queue does from any window: seen live, the model could not stop "the mesh that is
  * generating" from Home, not knowing whose it was).
+ *
+ * Magnusim CAD (MAGNUSIM_EDITION=cad) simulates nothing: its answer says so (edition, simulation)
+ * and has no hardware, compute queue or plugin environments (no OpenFOAM, WSL or Python to report).
  */
+import { isCadEdition } from '../../../edition.js';
 import { LIST_CONSENT_KEY } from '../privacy.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { failed, hostTool, isRecord, num, objectSchema, offeredIn, okData, placeOf, records, str, text, usedOf, via, type HostToolDeps, type HostToolDef } from './common.ts';
@@ -29,10 +33,11 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
     async run(input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {
       try {
         const own = rt.ctx.assistant;
+        const cad = isCadEdition();
         const [version, assistant, queue, prefs, pluginsList, settings, spent] = await Promise.all([
           d.version(),
           own ? Promise.resolve(own) : d.assistant(),
-          d.hostCall('queue.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>,
+          cad ? Promise.resolve({} as Record<string, unknown>) : (d.hostCall('queue.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>),
           (d.hostCall('prefs.get', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>).catch(() => ({}) as Record<string, unknown>),
           (d.hostCall('plugins.list', {}, via(rt, 'app_status')) as Promise<Record<string, unknown>>).catch(() => null),
           d.assistantSettings ? d.assistantSettings().catch(() => null) : Promise.resolve(null),
@@ -48,7 +53,7 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
             name: text(p.name),
             version: text(p.version, 40),
             on: p.enabled === undefined ? true : p.enabled === true,
-            env: !env ? 'none' : state === 'ready' ? 'ready' : state === 'failed' ? 'failed' : state === 'installing' ? 'installing' : 'missing',
+            ...(cad ? {} : { env: !env ? 'none' : state === 'ready' ? 'ready' : state === 'failed' ? 'failed' : state === 'installing' ? 'installing' : 'missing' }),
           };
         });
         // "Mine" is the turn's project; another project's rows say only what kind waits where.
@@ -73,6 +78,7 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
         const used = usedOf(rt.ctx);
         const data = {
           app: { version: text(version, 40) },
+          ...(cad ? { edition: 'cad', simulation: 'Not in Magnusim CAD' } : {}),
           assistant: {
             provider: text(assistant.provider, 40),
             model: text(assistant.model, 128),
@@ -83,17 +89,22 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
           },
           plugins,
           units: prefs.units === 'Imperial' ? 'Imperial' : 'Metric',
-          hardware: hw
-            ? {
-                cores: num(hw.physical_cores) ?? num(hw.logical_cpus),
-                ram_gb: num(hw.ram_gb),
-                openfoam: hw.openfoam_ok === true ? 'ok' : hw.openfoam_ok === false ? 'missing' : 'unknown',
-                checked_at: text(hw.checked_at, 40),
-              }
-            : { cores: null, ram_gb: null, openfoam: 'unknown', checked_at: null },
-          compute: { busy: !!busy, live, queue: items },
+          ...(cad
+            ? {}
+            : {
+                hardware: hw
+                  ? {
+                      cores: num(hw.physical_cores) ?? num(hw.logical_cpus),
+                      ram_gb: num(hw.ram_gb),
+                      openfoam: hw.openfoam_ok === true ? 'ok' : hw.openfoam_ok === false ? 'missing' : 'unknown',
+                      checked_at: text(hw.checked_at, 40),
+                    }
+                  : { cores: null, ram_gb: null, openfoam: 'unknown', checked_at: null },
+                compute: { busy: !!busy, live, queue: items },
+              }),
           where: placeOf(rt.ctx),
         };
+        if (cad) return okData(data, `Magnusim CAD ${data.app.version}, ${plugins.length} plugins, no simulation`);
         return okData(data, `Magnusim ${data.app.version}, ${plugins.length} plugins, compute ${busy ? 'busy' : 'idle'}, ${items.length} queued`);
       } catch (err) {
         return failed(err);

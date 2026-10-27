@@ -202,3 +202,87 @@ describe("the Assistant's parity with the person (spec 16.4)", () => {
     assert.deepEqual(pathProblems('T', { tool: 'compute', where: { action: 'run_start' } }), ['T compute: a path that changes something names its routes']);
   });
 });
+
+// Editions (Magnusim CAD, parity both ways): every row and every host and core page tool says
+// which editions it is in (never defaulted). In Magnusim CAD the Assistant has a tool and value
+// for each row whose control the CAD app has (cad_control, checked in the CAD app by
+// e2e-cad/cad-parity.spec.ts), and nothing more: its tools are assistant-routes.ts
+// CAD_EDITION_TOOLS, which tool_editions must say exactly.
+const { CAD_EDITION_TOOLS } = await import('../server/assistant-routes.ts');
+const EDITIONS = ['magnusim', 'cad'];
+const REACH = ['home', 'card', 'grid_menu', 'folder_menu', 'new_project', 'project', 'settings'];
+const TOOL_EDITIONS = FIXTURE.tool_editions ?? {};
+const inCad = (e) => (e.editions ?? []).includes('cad');
+
+describe("the Assistant's parity in each edition", () => {
+  it('every row says its editions, and only a Magnusim CAD row names a CAD control', () => {
+    const problems = [];
+    for (const e of FIXTURE.rows) {
+      const eds = e.editions;
+      if (!Array.isArray(eds) || !eds.length) problems.push(`${e.row}: no editions`);
+      else if (eds.some((x) => !EDITIONS.includes(x)) || new Set(eds).size !== eds.length) problems.push(`${e.row}: editions ${JSON.stringify(eds)}`);
+      else if (!eds.includes('magnusim')) problems.push(`${e.row}: an audit row of Magnusim's is in Magnusim`);
+      const c = e.cad_control;
+      if (inCad(e) && !(c && REACH.includes(c.reach) && typeof c.selector === 'string' && c.selector)) problems.push(`${e.row}: a CAD row names the CAD app's control`);
+      if (!inCad(e) && c) problems.push(`${e.row}: a cad_control on a row Magnusim CAD does not have`);
+    }
+    assert.deepEqual(problems, []);
+  });
+
+  it('tool_editions names every host and core page tool, and nothing else', () => {
+    const tools = [...host.keys(), ...Object.keys(CORE)].filter((t) => t !== 'test_ui_sync').sort();
+    assert.deepEqual(Object.keys(TOOL_EDITIONS).sort(), tools);
+    for (const [name, t] of Object.entries(TOOL_EDITIONS)) {
+      assert.ok(Array.isArray(t.editions) && t.editions.includes('magnusim') && t.editions.every((x) => EDITIONS.includes(x)), `${name}: its editions`);
+      assert.ok(!t.cad_values || t.editions.includes('cad'), `${name}: CAD values on a tool Magnusim CAD does not have`);
+    }
+  });
+
+  it("tool_editions' Magnusim CAD tools and values are exactly assistant-routes.ts's list", () => {
+    const fromFixture = Object.fromEntries(
+      Object.entries(TOOL_EDITIONS)
+        .filter(([, t]) => t.editions.includes('cad'))
+        .map(([name, t]) => [name, t.cad_values ?? {}]),
+    );
+    const fromCode = Object.fromEntries(Object.entries(CAD_EDITION_TOOLS).map(([name, t]) => [name, t.values ?? {}]));
+    assert.deepEqual(fromFixture, fromCode);
+  });
+
+  it("a CAD row's paths use only Magnusim CAD's tools and values (the Assistant can do it there)", () => {
+    const problems = [];
+    for (const e of FIXTURE.rows.filter(inCad)) {
+      if (!e.paths?.length) problems.push(`${e.row}: no path`);
+      for (const p of e.paths ?? []) {
+        const t = TOOL_EDITIONS[p.tool];
+        if (!t || !t.editions.includes('cad')) {
+          problems.push(`${e.row}: ${p.tool} is not in Magnusim CAD`);
+          continue;
+        }
+        for (const [k, v] of Object.entries(p.where ?? {})) {
+          const keep = t.cad_values?.[k];
+          if (keep && v !== true) for (const x of asList(v)) if (!keep.includes(x)) problems.push(`${e.row}: ${p.tool} ${k} "${x}" is not kept in Magnusim CAD`);
+        }
+      }
+    }
+    assert.deepEqual(problems, []);
+  });
+
+  it('every Magnusim CAD tool and kept value is a CAD row\'s (the Assistant can do no more than the person)', () => {
+    const problems = [];
+    const cadRows = FIXTURE.rows.filter(inCad);
+    const usedBy = (rows, tool, key, value) =>
+      rows.some((e) => (e.paths ?? []).some((p) => p.tool === tool && (key === null || asList((p.where ?? {})[key] ?? []).includes(value))));
+    for (const [name, t] of Object.entries(TOOL_EDITIONS).filter(([, x]) => x.editions.includes('cad'))) {
+      if (!usedBy(cadRows, name, null)) problems.push(`${name}: no CAD row uses it`);
+      for (const [key, keep] of Object.entries(t.cad_values ?? {})) {
+        for (const v of keep) {
+          // "" is a field left unused. A value no row of either edition uses is plain navigation
+          // both apps have (core__show home); one only Magnusim's rows use is not CAD's.
+          if (v === '' || usedBy(cadRows, name, key, v) || !usedBy(FIXTURE.rows, name, key, v)) continue;
+          problems.push(`${name} ${key} "${v}": only Magnusim's rows use it`);
+        }
+      }
+    }
+    assert.deepEqual(problems, []);
+  });
+});
