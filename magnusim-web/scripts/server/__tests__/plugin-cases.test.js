@@ -196,7 +196,8 @@ afterEach(async () => {
   await srv.close();
   const st = globalThis[Symbol.for('magnusim.computeQueue')];
   if (st && st.kickTimer) clearTimeout(st.kickTimer);
-  if (st) st.kickTimer = null;
+  if (st && st.holdTimer) clearTimeout(st.holdTimer);
+  if (st) st.kickTimer = st.holdTimer = null;
 });
 
 /** A case already running (as if the queue started it). */
@@ -307,6 +308,9 @@ describe('submit', () => {
   });
 
   it('at most 20 queued cases per plugin per project; the plugin folder full answers quota', async () => {
+    // They wait behind a running job, so all 20 stay queued however slowly they come in (with
+    // the slot free, a kick between two submits would start the first, here a refused start).
+    queue.configureComputeQueue({ isBusy: () => true });
     for (let i = 0; i < 20; i += 1) {
       makeCase(`k${i}`);
       assert.equal((await srv.post('/api/plugin-cases/submit', submitBody(`cases/k${i}`))).status, 202);

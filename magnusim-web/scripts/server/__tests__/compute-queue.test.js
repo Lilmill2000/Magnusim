@@ -855,6 +855,41 @@ describe('no kickAgain', () => {
     if (st.kickTimer) clearTimeout(st.kickTimer);
     st.kickTimer = null;
   });
+
+  it("a hold's retries keep their times when other jobs' kicks come between: those refusals are not retries", async () => {
+    // Each enqueue schedules a kick 250 ms on. Those kicks used to take the retry's timer,
+    // so a few cases queued one after another took a refused head off within a second.
+    const tries = [];
+    const leaves = [];
+    resetComputeQueueForTests({
+      filePath,
+      holdRetryMs: 200,
+      items: [mesh('mHold'), mesh('mNext', { project_id: 'p2' })],
+      deps: {
+        isBusy: () => false,
+        startMesh: (item) => {
+          if (item.mesh_id !== 'mHold') return { ok: true };
+          tries.push(Date.now());
+          return { ok: false, error: 'not ready yet' };
+        },
+        onLeave: (row, reason, error) => leaves.push([row.mesh_id, reason, error]),
+      },
+    });
+    await kickComputeQueue();
+    for (let i = 0; i < 6; i += 1) {
+      scheduleComputeQueueKick(1);
+      await waitFor(() => tries.length >= i + 2 || leaves.length > 0, 1000, 'the kick');
+    }
+    assert.deepEqual(leaves, [], 'still held');
+    assert.ok(tries.length >= 7, 'each kick tried the head (it may start sooner)');
+    assert.deepEqual(snapshotComputeQueue().items.map((r) => r.mesh_id), ['mHold', 'mNext']);
+    // Its retries at 200, 400 and 600 ms: the fourth counted refusal takes it off, 1.2 s on.
+    await waitFor(() => leaves.length === 1, 5000, 'the held row to leave');
+    assert.ok(tries.at(-1) - tries[0] >= 1190, `${tries.at(-1) - tries[0]} ms`);
+    assert.deepEqual(leaves, [['mHold', 'failed', 'not ready yet']]);
+    assert.deepEqual(snapshotComputeQueue().items, [], 'the next one started');
+    assert.equal(queueState().holdTimer, null, 'no retry left behind');
+  });
 });
 
 describe('process-wide queue state', () => {

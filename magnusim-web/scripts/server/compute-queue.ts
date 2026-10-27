@@ -154,6 +154,8 @@ type QueueState = {
   failures: ComputeQueueFailure[];
   /** Refused starts per queue row: a refusal right after its mesh finished is a race, not a failure. */
   holdTries: Map<string, number>;
+  /** A held row's next retry: its own timer, so another job's kick never moves it. */
+  holdTimer: ReturnType<typeof setTimeout> | null;
   holdRetryMs: number;
 };
 
@@ -170,6 +172,7 @@ const Q: QueueState = (() => {
       deps: {},
       failures: [],
       holdTries: new Map(),
+      holdTimer: null,
       holdRetryMs: 2000,
     };
   }
@@ -498,6 +501,10 @@ export function resetComputeQueueForTests(opts?: {
   if (Q.kickTimer) {
     clearTimeout(Q.kickTimer);
     Q.kickTimer = null;
+  }
+  if (Q.holdTimer) {
+    clearTimeout(Q.holdTimer);
+    Q.holdTimer = null;
   }
   Q.kicking = false;
   Q.filePath = opts && opts.filePath ? opts.filePath : DEFAULT_PATH;
@@ -890,16 +897,20 @@ async function startRow(next: ComputeQueueItem): Promise<ComputeStartResult> {
 /**
  * A refused start keeps its place at the head and is tried again at 2, 4 and 6 s;
  * on the fourth refusal it leaves the queue with its reason. True when it left.
+ * A kick before its retry is due (another job queued, a slot freed) may still start
+ * it, but that refusal is not one of the retries, and the retry keeps its time.
  */
 function holdOrDrop(row: ComputeQueueItem, error: string): boolean {
   // Right after its mesh finishes a run can be refused for a moment, so try again a
   // few times while it keeps its place at the head. If it still cannot start, holding
   // it there would stall every job behind it in every project: take it off, say why,
   // and start the next one.
-  const tries = (Q.holdTries.get(row.id) || 0) + 1;
+  const held = Q.holdTries.get(row.id) || 0;
+  if (held && Q.holdTimer) return false;
+  const tries = held + 1;
   if (tries <= HOLD_RETRIES) {
     Q.holdTries.set(row.id, tries);
-    scheduleComputeQueueKick(Q.holdRetryMs * tries);
+    scheduleHoldRetry(Q.holdRetryMs * tries);
     return false;
   }
   Q.holdTries.delete(row.id);
@@ -1006,4 +1017,13 @@ export function scheduleComputeQueueKick(delay?: number): void {
     Q.kickTimer = null;
     kickComputeQueue().catch(() => {});
   }, delay == null ? 250 : delay);
+}
+
+/** The held row's next retry. scheduleComputeQueueKick (each enqueue's) never moves it. */
+function scheduleHoldRetry(delay: number): void {
+  if (Q.holdTimer) clearTimeout(Q.holdTimer);
+  Q.holdTimer = setTimeout(() => {
+    Q.holdTimer = null;
+    kickComputeQueue().catch(() => {});
+  }, delay);
 }
