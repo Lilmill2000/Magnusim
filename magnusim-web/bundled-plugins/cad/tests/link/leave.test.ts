@@ -72,6 +72,8 @@ interface Setup {
   /** When a save on its way ends the hook (ms; SAVE_STUCK_MS by default). */
   stuckMs?: number;
   onLink?(o: LinkOptions): void;
+  /** A host with no project (the CAD desktop edition): every link call refuses not_allowed. */
+  noProject?: boolean;
 }
 
 function setup(opts: Setup = {}) {
@@ -128,12 +130,16 @@ function setup(opts: Setup = {}) {
         o.onProgress?.({ stage: 'reading', fraction: 0.5 } as Parameters<NonNullable<LinkOptions['onProgress']>>[0]);
         opts.onLink?.(o);
         const a = answers.shift();
+        if (opts.noProject) throw refused('not_allowed', 'This app has no project to link into.');
         if (!a) throw refused('failed', 'no answer scripted');
         if (a instanceof Error) throw a;
         linkedNow = linked(a.rev, o.sourceVersion);
         return a;
       }),
-      linkedGeometry: vi.fn(async () => linkedNow),
+      linkedGeometry: vi.fn(async () => {
+        if (opts.noProject) throw refused('not_allowed', 'This app has no project to link into.');
+        return linkedNow;
+      }),
       onGeometry: () => () => {},
     },
     onLeave: null,
@@ -181,6 +187,40 @@ describe('viewStateOf: the Part camera as the app reads it', () => {
     expect(viewStateOf({ ...CAM, position: [Number.NaN, 0, 0] })).toBeNull();
     expect(viewStateOf({ ...CAM, position: [10, 5, 7] })).toBeNull();
     expect(viewStateOf({ ...CAM, projection: 'orthographic', orthoHeight: 0 })).toBeNull();
+  });
+});
+
+describe('the exit hook on a host with no project (it refuses link calls with not_allowed)', () => {
+  it('a saved Part leaves at once with the camera: no question, no toast, no link, no export', async () => {
+    const t = setup({ noProject: true, nothingMs: 10_000 });
+    const t0 = performance.now();
+    expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });
+    expect(performance.now() - t0).toBeLessThan(5_000);
+    expect(t.calls).toEqual([]);
+    expect(t.writes).toEqual([]);
+    expect(t.doc.bodiesAtEnd).not.toHaveBeenCalled();
+    expect(t.toasts).toEqual([]);
+    expect(t.outcomes).toEqual([expect.objectContaining({ outcome: expect.objectContaining({ outcome: 'nothing', noProject: true }), error: null })]);
+  });
+
+  it('the save still comes first: a Part with bodies and no project is flushed before it leaves', async () => {
+    const t = setup({ noProject: true });
+    expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });
+    expect(t.doc.flush).toHaveBeenCalled();
+  });
+
+  it('a refused save still asks the app\'s own "Leave without saving?" (never "Couldn\'t update the project")', async () => {
+    const t = setup({ noProject: true });
+    t.state.set({ save: { state: 'error', message: 'the disk is full' } });
+    expect(await t.leave()).toEqual({ ok: true, view: viewStateOf(CAM) });
+    expect(t.retold).toHaveBeenCalledTimes(1);
+    expect(t.calls).toEqual([]);
+    expect(t.outcomes).toEqual([expect.objectContaining({ outcome: expect.objectContaining({ outcome: 'failed', nothingLinked: true }), error: null })]);
+  });
+
+  it('only not_allowed means no project: any other refusal of a link stays the app\'s "Couldn\'t update the project"', async () => {
+    const t = setup({ answers: [refused('failed', 'the worker stopped')] });
+    await expect(t.leave()).rejects.toThrow('the worker stopped');
   });
 });
 

@@ -557,6 +557,8 @@ async function sendToSimulation(ctx: CallCtx, i: Input): Promise<ToolReply> {
     case 'unchanged':
       return done(`The project's geometry already has this design (version ${o.sourceVersion}): nothing was sent${after}`, { outcome: 'unchanged', source_version: o.sourceVersion, leaving });
     case 'nothing':
+      // A host with no project (the CAD desktop edition): the Part is saved; there is nowhere to send it.
+      if (o.noProject) return done(`This app has no project to send the Part to: the Part is saved, and nothing was sent${after}`, { outcome: 'no_project', leaving });
       return done(`${o.message}${after}`, { outcome: 'nothing', message: o.message, leaving });
     case 'kept-editing':
       return done('The person answered the app\'s question with Keep editing: nothing was sent, the Part stays open', { outcome: 'kept-editing', leaving: false });

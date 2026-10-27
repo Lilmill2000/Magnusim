@@ -283,6 +283,11 @@ describe('workspace: the Part and the session', () => {
     expect(r.data).toMatchObject({ outcome: 'linked', geometry: 'g1', leaving: false });
     next = { outcome: 'kept-editing', sourceVersion: 4 };
     expect((await t.ok('workspace', W('send_to_simulation', { value: 'leave' }))).data).toMatchObject({ outcome: 'kept-editing', leaving: false });
+    // A host with no project (the CAD desktop edition): saved, nowhere to send it, said plainly.
+    next = { outcome: 'nothing', message: '', empty: false, linked: false, noProject: true };
+    const np = await t.ok('workspace', W('send_to_simulation'));
+    expect(np.text).toBe('This app has no project to send the Part to: the Part is saved, and nothing was sent');
+    expect(np.data).toMatchObject({ outcome: 'no_project', leaving: false });
     next = { outcome: 'failed', code: 'plugin_needed', message: 'The project needs the Heat Transfer plugin.' };
     const f = await t.call('workspace', W('send_to_simulation'));
     expect(!f.ok && f.error).toMatchObject({ code: 'failed', message: 'link_failed: The project needs the Heat Transfer plugin.' });
