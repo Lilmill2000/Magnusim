@@ -456,7 +456,32 @@ export type SketchEntity =
   /** From `a` to `b` about `c`, counter-clockwise about the sketch normal unless ccw:false. */
   | (SketchEntityBase & { kind: 'arc'; c: SketchPointId; a: SketchPointId; b: SketchPointId; ccw?: boolean })
   // ---- P4b (SKETCH): splines
-  | SketchSplineEntity;
+  | SketchSplineEntity
+  // ---- ellipses, parabolas and conics (src/sketch/tools/conic.ts)
+  | SketchConicEntity;
+
+/**
+ * Ellipses, arcs of an ellipse or a parabola, and rho conics. Each curve is a pure function of its
+ * points (src/sketch/tools/conic.ts) and of a conic's `rho`: the solver adds the hidden unknowns
+ * PlaneGCS needs (an ellipse's focus and minor radius, an arc's end parameters) and solves the points.
+ */
+export type SketchConicEntity =
+  /**
+   * An ellipse: `major` is an end of its major axis (the major radius and its direction from `c`),
+   * `minor` an end of its minor axis (its distance from `c` is the minor radius, less than the major).
+   */
+  | (SketchEntityBase & { kind: 'ellipse'; c: SketchPointId; major: SketchPointId; minor: SketchPointId })
+  /** A piece of an ellipse (as `ellipse`), from `a` to `b` counter-clockwise about the normal unless ccw:false. */
+  | (SketchEntityBase & { kind: 'ellipse_arc'; c: SketchPointId; major: SketchPointId; minor: SketchPointId; a: SketchPointId; b: SketchPointId; ccw?: boolean })
+  /** A piece of the parabola with focus `f` and vertex (apex) `v`, between its ends `a` and `b`. */
+  | (SketchEntityBase & { kind: 'parabola'; f: SketchPointId; v: SketchPointId; a: SketchPointId; b: SketchPointId })
+  /**
+   * A rho conic from `a` to `b`, tangent there to the lines towards its top point `t` (where the end
+   * tangents meet): the rational quadratic Bezier (a, t, b) with weights 1, rho / (1 - rho), 1, rho in
+   * (0, 1) (below 0.5 an ellipse piece, 0.5 a parabola, above a hyperbola). Its shoulder (where it
+   * crosses the line from the chord's midpoint to `t`) lies rho of the way along that line.
+   */
+  | (SketchEntityBase & { kind: 'conic'; a: SketchPointId; b: SketchPointId; t: SketchPointId; rho: number });
 
 /**
  * P4b (SKETCH): a spline. Its curve is a pure function of its points (src/sketch/tools/bspline.ts):

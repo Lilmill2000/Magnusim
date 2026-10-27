@@ -11,7 +11,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchEntity, SketchFeature, Vec2 } from '../types/doc';
 import { add, circleCircle, dist, dot, lineCircle, lineLine, norm, perp, scale, sub } from './geom';
-import { arcGeom, closestOn, distanceTo, entityOf, lineEnds, ORIGIN, pointAt } from './model';
+import { arcGeom, closestOn, distanceTo, entityEnds, entityOf, lineEnds, ORIGIN, pointAt } from './model';
 import type { ModelSnap } from './project/snap';
 
 export const SNAP_PX = 8;
@@ -63,7 +63,8 @@ export interface InferenceInput {
 const DEG = Math.PI / 180;
 
 function isCurve(e: SketchEntity): boolean {
-  return e.kind === 'line' || e.kind === 'circle' || e.kind === 'arc';
+  // An ellipse, a partial ellipse and a parabola take a point On curve as a circle does (a conic does not).
+  return e.kind === 'line' || e.kind === 'circle' || e.kind === 'arc' || e.kind === 'ellipse' || e.kind === 'ellipse_arc' || e.kind === 'parabola';
 }
 
 /** Positions on an entity a segment can meet at an intersection (the curves' own, within their extent). */
@@ -125,10 +126,21 @@ export function infer(input: InferenceInput): Inference {
 
   // 1. Points (the origin, every stored point not being drawn, point entities).
   let best: { id: string; d: number; p: Vec2 } | null = null;
+  // An ellipse's centre and axis ends, a parabola's focus and vertex and a conic's top point give way
+  // to a curve's end in (nearly) the same place: a partial ellipse starting at its major end joins there.
+  const aside = new Set<string>();
+  for (const e of f.entities) {
+    if (e.kind === 'ellipse' || e.kind === 'ellipse_arc') aside.add(e.c).add(e.major).add(e.minor);
+    else if (e.kind === 'parabola') aside.add(e.f).add(e.v);
+    else if (e.kind === 'conic') aside.add(e.t);
+  }
+  if (aside.size) for (const e of f.entities) for (const p of entityEnds(e)) aside.delete(p);
   const consider = (id: string, p: Vec2) => {
     if (exclude.has(id)) return;
-    const d = dist(p, at);
-    if (d <= tol && (!best || d < best.d)) best = { id, d, p };
+    const raw = dist(p, at);
+    if (raw > tol) return;
+    const d = aside.has(id) ? raw + 0.5 * tol : raw;
+    if (!best || d < best.d) best = { id, d, p };
   };
   consider(ORIGIN, [0, 0]);
   for (const [id, p] of Object.entries(f.points)) consider(id, p);

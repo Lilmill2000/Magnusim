@@ -29,6 +29,11 @@ export const SKETCH_ICONS = {
   polygon: `M12 3.5l7.4 4.25v8.5L12 20.5l-7.4-4.25v-8.5z ${dot(12, 12, 1.2)}`,
   sector: `M5 19V5a14 14 0 0 1 14 14z ${dot(5, 19, 1.3)}`,
   point: `${dot(12, 12, 2.2)} M12 4v3.5 M12 16.5V20 M4 12h3.5 M16.5 12H20`,
+  // The Ellipse group.
+  ellipse: `M12 12m-9 0a9 5.5 0 1 0 18 0a9 5.5 0 1 0 -18 0 ${dot(12, 12, 1.2)}`,
+  ellipsePartial: `M3 12a9 5.5 0 0 1 18 0 ${dot(3, 12, 1.4)} ${dot(21, 12, 1.4)} ${dot(12, 12, 1.2)}`,
+  parabola: `M5 4Q12 34 19 4 ${dot(5, 4, 1.4)} ${dot(19, 4, 1.4)} ${dot(12, 15, 1.2)}`,
+  conic: `M4 19Q6 5 20 5 M4 19L6 5h14 ${dot(4, 19, 1.4)} ${dot(20, 5, 1.4)} ${dot(6, 5, 1.2)}`,
   centerline: 'M4 20l3-3 M9 15l1-1 M12 12l3-3 M17 7l1-1 M20 4l0 0',
   construction: 'M4 20l2.5-2.5 M8.5 15.5L11 13 M13 11l2.5-2.5 M17.5 6.5L20 4',
   coincident: `${dot(10, 12, 3)} ${dot(14, 12, 3)}`,

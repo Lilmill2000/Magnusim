@@ -3,7 +3,8 @@
 // hands them to the model. `guide` is the CAD notes themselves, `errors` every reason with its
 // fix, `features` each tool's fields and rules, `parameters`, `selectors` every form of the
 // selector language, `sketch` the entity kinds (splines too), parts, DOF, the solver's ref signatures, joins
-// and frames, `checks` what to verify and how, `traps` the common mistakes, `examples` the index
+// and frames (infer and the solver's rules in sketch_tools), `checks` what to verify and how,
+// `traps` the common mistakes, `examples` the index
 // of the worked parts, `sketch_tools` fix, driven dimensions, places and the person's sketch tools
 // as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link)
 // with examples, and how a pattern's values change later. The example topics are the worked parts of examples.ts, one row per call
@@ -278,6 +279,9 @@ const sketchToolRows = (): HelpRow[] => [
   { about: 'later', text: 'A pattern or offset keeps its row\'s id. edit_feature on the sketch sets its values: "<id>.count", "<id>.spacing", "<id>.angle", "<id>.count2", "<id>.spacing2", "<id>.angle2" (linear), "<id>.count", "<id>.angle" ("full" for the whole circle; circular), "<id>.distance" (offset); copies are made or removed. A replace keeps a row sent with its id (new values lay it out again), and removes one left out.' },
   { about: 'project and intersect', text: 'project [selector]: a face (its outer edges), an edge or a vertex of a body, or a body (its silhouette along the sketch normal), as fixed curves linked to the model (they follow it at every rebuild). intersect [body]: where the sketch plane cuts the body. One per row; the curves are "<id>" (one) or "<id>.1", "<id>.2"... Constrain to them, or trim and offset them after break_link. A replace keeps a row sent with its id (its refs are not read again).' },
   { about: 'break_link', text: 'break_link [curves or a project/intersect row id]: the linked curves become ordinary geometry where they are; constraints on them stay.' },
+  // v0.5.0: help sketch holds every entity kind within its size; the solver's rules sit here.
+  { about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours, or cannot hold with one, is left out and said so (dropped_inferred, and a warning naming which).' },
+  { about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." },
 ];
 
 /** Kinds whose words name their parts (help sketch keeps within its size). */
@@ -288,23 +292,27 @@ const sketchRows = (): HelpRow[] => {
   const kinds: [EntityKind, number[], string][] = [
     ['point', [0, 0], 'the point is x itself'],
     ['line', [0, 0, 1, 0], 'x is the line'],
-    ['centerline', [0, 0, 1, 0], 'a construction line: a revolve or mirror axis ("Sketch.x")'],
-    ['polyline', [0, 0, 1, 0, 1, 1], 'points x.p0, x.p1, ...; side x.k runs from x.p(k-1) to x.pk; closed when the last point is the first (x.p0 again); 2 DOF per point'],
+    ['centerline', [0, 0, 1, 0], 'construction: a revolve or mirror axis ("Sketch.x")'],
+    ['polyline', [0, 0, 1, 0, 1, 1], 'points x.p0, x.p1...; side x.k runs from x.p(k-1) to x.pk; 2 DOF per point'],
     ['midpoint_line', [0, 0, 1, 0], 'x.line from x.start to x.end, its middle held on the construction point x.center'],
     ['circle', [0, 0, 1], 'x is the circle'],
     ['circle_3pt', [0, 0, 2, 0, 1, 1], 'x is the circle through the three points'],
-    ['arc', [0, 0, 1, 0, 90], 'x is the arc, counter-clockwise from start to end'],
+    ['arc', [0, 0, 1, 0, 90], 'x is the arc'],
     ['rect', [0, 0, 2, 1], 'keeps its 2 horizontals and 2 verticals'],
-    ['center_rect', [0, 0, 2, 1], 'a rect with a construction centre point x.center kept midway between x.bl and x.tr'],
+    ['center_rect', [0, 0, 2, 1], 'a rect about the construction point x.center'],
     ['rect_3pt', [0, 0, 2, 1, 1], 'an angled rect: corners x.p1..x.p4, sides x.s1..x.s4 (x.sk from x.pk); s1 perpendicular to s2, s1 parallel to s3, s2 to s4'],
-    ['center_rect_3pt', [0, 0, 2, 1, 30], 'the parts of rect_3pt about the construction point x.center (midway between x.p1 and x.p3)'],
-    ['parallelogram', [0, 0, 2, 0, 3, 1], 'the parts of rect_3pt, with no perpendicular'],
-    ['slot', [0, 0, 2, 0, 1], 'x.a and x.b are the arc centres; sides tangent to the arcs, the arcs equal; x.axis is construction'],
+    ['center_rect_3pt', [0, 0, 2, 1, 30], 'rect_3pt\'s parts about the construction point x.center'],
+    ['parallelogram', [0, 0, 2, 0, 3, 1], 'rect_3pt\'s parts, no perpendicular'],
+    ['slot', [0, 0, 2, 0, 1], 'sides tangent to the arcs, the arcs equal; x.axis is construction'],
     ['arc_slot', [0, 0, 10, 2, 0, 90], 'arcs x.outer, x.inner about x.center, tangent to the caps x.cap_a, x.cap_b on the cap centres x.a, x.b (so the caps are equal)'],
     ['polygon', [0, 0, 1, 4], 'corners x.p1... on the construction circle x.circle, sides x.s1... (x.sk from x.pk), all equal'],
-    ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece: arcs x.inner, x.outer on x.center, radial lines x.start, x.end through the centre; r1 0: a pie slice (no x.inner, 5 DOF)'],
-    ['spline', [0, 0, 10, 5, 20, 0], 'x is the curve through its points x.p0, x.p1... (a cubic, as the person\'s Spline tool); x.start, x.end when open; x.h0, x.h1 are its end handles once a tangent gave them. A wing: spline [100,0, 50,6, 0,0, 50,-4, 100,0] closed'],
-    ['control_spline', [0, 0, 10, 10, 20, 0, 30, 0, 3], 'x is the curve on its poles x.p0, x.p1... (as the person\'s Control-point spline); x.start, x.end when open'],
+    ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece; r1 0: a pie slice (no x.inner, 5 DOF)'],
+    ['spline', [0, 0, 10, 5, 20, 0], 'x is the curve through its points x.p0, x.p1... (a cubic); x.start, x.end when open; x.h0, x.h1 are its end handles once a tangent gave them. A wing: spline [100,0, 50,6, 0,0, 50,-4, 100,0] closed'],
+    ['control_spline', [0, 0, 10, 10, 20, 0, 30, 0, 3], 'x is the curve on its poles x.p0, x.p1...; x.start, x.end when open'],
+    ['ellipse', [0, 0, 20, 10, 0], 'distance [x.center, x.major] is a, [x.center, x.minor] b; horizontal [x] levels the major axis'],
+    ['ellipse_arc', [0, 0, 20, 10, 0, 0, 180], 'from x.start ccw to x.end'],
+    ['parabola', [5, 0, 0, 0, -10, 10], 'distance [x.vertex, x.focus] is the focal length; horizontal [x] levels the axis'],
+    ['conic', [0, 0, 40, 0, 10, 20, 0.5], 'tangent at its ends to the lines to x.top'],
   ];
   const rows: HelpRow[] = kinds.map(([kind, at, words]) => {
     const parts = kind === 'polyline' || kind === 'polygon' || kind === 'spline' || kind === 'control_spline' || NAMED_PARTS.has(kind) ? '' : partsWords(kind, at);
@@ -312,15 +320,13 @@ const sketchRows = (): HelpRow[] => {
     return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : kind.endsWith('spline') ? '. 2 DOF per point' : ''}.` };
   });
   const relations = (Object.keys(SIGNATURES) as ToolConstraintKind[]).filter((k) => !TOOL_DIMENSIONS.includes(k));
-  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. point_on is on a line or a circle/arc; collinear makes two lines one line. A spline's curve takes tangent [s, curve] at an end they share (a fit spline gets its end handle there) and coincident [point, s] (the point slides on it); other relations take its points. fix: help sketch_tools.` });
+  rows.push({ about: 'relations', text: `value "". Refs in the order written: ${relations.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. collinear makes two lines one line. A spline's curve takes tangent [s, curve] at an end they share (a fit spline gets its end handle there) and coincident [point, s] (the point slides on it); other relations take its points. Ellipses and parabolas take point_on [p, x], horizontal [x] (axis), tangent [line, ellipse] or at a shared end, equal, concentric; a conic tangent at its ends only. fix: help sketch_tools.` });
   rows.push({
     about: 'dimensions',
-    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit), or "driven" (it shows the value without holding it); a last ref at(u, v) places its label. ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
+    text: `value an expression ("w", "12 mm", "30 deg"; a bare number takes the Part's unit), or "driven" (help sketch_tools); a last ref at(u, v) places its label. ${TOOL_DIMENSIONS.map((k) => `${k} [${signatureWords(k)}]`).join('; ')}. distance [p, circle] is to its edge; distance_x [p, q] = q.u - p.u and distance_y [p, q] = q.v - p.v are signed; distance_x [p] is p's u; angle [l1, l2] turns from l1's direction to l2's, angle [l] from +u (signed, deg).`,
   });
   rows.push({ about: 'ids and refs', text: 'Ids: a-z, 0-9 and _ (a letter first, at most 24, no double _, not origin), unique across entities and constraints. Refs: an id, a part (l.start, r.top, p.2, p.p2, c.center) or origin. A kept entity of an edited sketch keeps its points (and an id the sketch has, e_..., pt_..., is taken as it is).' });
   rows.push({ about: 'joins', text: `Ends within ${JOIN_TOL} mm of another entity's point are one point (the first entity's wins; refs follow; "joined" lists them), never two points of one entity, never the origin by itself; 0.05 to 0.5 mm apart is a warning (add coincident or fix the numbers). Points an edited sketch has apart stay apart. A rect corner drawn on a line's end is joined: no coincident needed.` });
-  rows.push({ about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours, or cannot hold with one, is left out and said so (dropped_inferred, and a warning naming which).' });
-  rows.push({ about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." });
   rows.push({ about: 'planes and faces', text: 'Top n+Z u+X v+Y; Front n-Y u+X v+Z; Right n+X u+Y v+Z. On a flat face (n out of the part): +Z u+X v+Y; -Z u+X v-Y; +Y u+X v-Z; -Y u+X v+Z; +X u+Y v+Z; -X u+Y v-Z; its origin is the model origin projected onto it. "<plane or face> offset <length> [flip]" makes "<sketch> plane".' });
   rows.push({ about: 'replace', text: 'edit "<name>" and every input: get_model feature <name> gives them in this form (splines, fix, driven dimensions, patterns, offsets and projections too: help sketch_tools). "" for on keeps where it lies. Keep the ids that stay: region keys and face names follow them. edit_feature changes one dimension by its id, or a pattern\'s value as <id>.count.' });
   return rows;

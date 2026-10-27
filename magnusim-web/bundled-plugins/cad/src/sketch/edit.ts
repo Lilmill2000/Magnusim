@@ -12,6 +12,9 @@ import { angleOf, arcParam, circleCircle, dist, lineCircle, lineLine, onArcAngle
 import { arcGeom, closestOn, entityOf, entityPoints, isDimension, lineEnds, ORIGIN, pointAt } from './model';
 // P4b (SKETCH): splines in trim and extend.
 import { meetCurves, meetRaySpline, onSplineRelation, splineDomainOf, splineParam, splinePiece, trimSplineAt } from './tools/spline-edit';
+// Ellipses, parabolas, conics in trim and extend.
+import { isConic } from './tools/conic';
+import { conicParam, conicTrimPiece, meetRayConic, trimConicAt } from './tools/conic-edit';
 
 // P4b (SELECT): a draft may carry the sketch's links (linked geometry); edits that do not touch them keep them.
 export type SketchDraft = Pick<SketchFeature, 'points' | 'entities' | 'constraints'> & Partial<Pick<SketchFeature, 'links'>>;
@@ -137,7 +140,7 @@ export function toggleConstruction(d: SketchDraft, ids: readonly string[]): Sket
 /** v0.5.0 (SHAPES): the shape tools (src/sketch/tools/shapes.ts) draw construction too. */
 export const SHAPE_TOOL_IDS: readonly string[] = ['line-midpoint', 'rectangle-3pt', 'rectangle-center-3pt', 'parallelogram', 'circle-3pt', 'arc-center', 'slot-center', 'slot-overall', 'slot-center-point', 'slot-arc-3pt', 'slot-arc-center', 'polygon', 'sector'];
 /** The tools whose shapes construction drawing makes construction (points stay points; a centerline is construction always). */
-const CONSTRUCTION_TOOLS = new Set(['line', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'spline-fit', 'spline-control', ...SHAPE_TOOL_IDS]);
+const CONSTRUCTION_TOOLS = new Set(['line', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'spline-fit', 'spline-control', ...SHAPE_TOOL_IDS, 'ellipse', 'ellipse-partial', 'parabola', 'conic']);
 export function drawsConstruction(tool: string | null | undefined): boolean {
   return !!tool && CONSTRUCTION_TOOLS.has(tool);
 }
@@ -202,13 +205,14 @@ export function paramOn(d: SketchDraft, e: SketchEntity, p: Vec2): number | null
   }
   // P4b (SKETCH): a spline's own parameter.
   if (e.kind === 'spline') return splineParam(d, e, p);
+  if (isConic(e)) return conicParam(d, e, p);
   return null;
 }
 
 /** Where two curves meet (each within its own extent). */
 function meet(d: SketchDraft, a: SketchEntity, b: SketchEntity): Vec2[] {
   // P4b (SKETCH): any pair with a spline is crossed as parametric curves.
-  if (a.kind === 'spline' || b.kind === 'spline') return meetCurves(d, a, b);
+  if (a.kind === 'spline' || b.kind === 'spline' || isConic(a) || isConic(b)) return meetCurves(d, a, b);
   const circ = (e: SketchEntity) => {
     if (e.kind === 'circle') {
       const c = pointAt(d, e.c);
@@ -241,6 +245,8 @@ function onCurveRelation(b: SketchBuilder, pointId: string, by: string) {
   if (!o) return;
   // P4b (SKETCH): a fit spline takes the point as a fit point; a control spline has no on-curve relation.
   if (o.kind === 'spline') return onSplineRelation(b, pointId, o);
+  // A conic takes no On curve relation (its cut end stays where it was cut).
+  if (o.kind === 'conic' || o.kind === 'point') return;
   b.addRelation(o.kind === 'line' ? 'point_on_line' : 'point_on_circle', [pointId, by], { optional: true });
 }
 
@@ -263,7 +269,7 @@ function done(b: SketchBuilder, removed: string[] = []): EditOutcome {
  */
 export function trimAt(d: SketchDraft, id: string, at: Vec2): EditOutcome {
   const e = entityOf(d, id);
-  if (!e || e.kind === 'point') return { ok: false, reason: 'Trim works on lines, arcs and circles' };
+  if (!e || e.kind === 'point') return { ok: false, reason: 'Trim works on curves: lines, arcs, circles, splines, ellipses, parabolas and conics' };
   const near = closestOn(d, e, at);
   if (!near) return { ok: false, reason: 'That entity is not in the sketch' };
   const t0 = paramOn(d, e, near);
@@ -271,6 +277,7 @@ export function trimAt(d: SketchDraft, id: string, at: Vec2): EditOutcome {
   const xs = crossingsOn(d, e);
   // P4b (SKETCH): a spline is cut in its own parameter (src/sketch/tools/spline-edit.ts).
   if (e.kind === 'spline') return trimSplineAt(d, e, t0, xs, onCurveRelation);
+  if (isConic(e)) return trimConicAt(d, e, t0, xs, onCurveRelation);
   const b = new SketchBuilder(d);
 
   if (e.kind === 'circle') {
@@ -440,6 +447,7 @@ function meetRay(d: SketchDraft, from: Vec2, dir: Vec2, o: SketchEntity): Vec2[]
   }
   // P4b (SKETCH)
   if (o.kind === 'spline') return meetRaySpline(d, from, dir, o);
+  if (isConic(o)) return meetRayConic(d, from, dir, o);
   return [];
 }
 
@@ -467,6 +475,7 @@ export function trimPiece(d: SketchDraft, id: string, at: Vec2): Vec2[] | null {
     const hi = inner.find((x) => x.t > t0)?.t ?? ends[1];
     return splinePiece(d, e, lo, hi);
   }
+  if (isConic(e)) return conicTrimPiece(d, e, t0, xs);
   const sampleArc = (c: Vec2, r: number, a0: number, sweep: number) => {
     const n = Math.max(4, Math.ceil((sweep / TAU) * 64));
     return Array.from({ length: n + 1 }, (_, i) => polar(c, r, a0 + (sweep * i) / n));

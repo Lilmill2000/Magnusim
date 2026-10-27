@@ -258,7 +258,8 @@ const sweepLoft: EditTool<Plan> = {
       }
       const curves = pathCurves(s, p.sketch, p.list);
       pathOut = { sketch: p.sketch.name, curves: curves.map((c) => modelId(c.id)) };
-      const kinds = curves.map((c) => (c.kind === 'bspline' ? 'spline' : c.kind));
+      // A B-spline is a spline, or the ellipse, parabola or conic it stands for.
+      const kinds = curves.map((c) => (c.kind === 'bspline' ? (p.sketch.entities.find((x) => x.id === c.id)?.kind ?? 'spline') : c.kind));
       resolved.path = `${pathIn} -> ${curves.length === 1 ? `${kinds[0]} ${pathOut.curves[0]}` : `${curves.length} curves (${pathOut.curves.map((c, i) => `${kinds[i]} ${c}`).join(', ')})`} of ${p.sketch.name}`;
       resolved.orientation = orientation === 'follow' ? 'follow (the profile turns with the path)' : 'fixed (the profile keeps its orientation)';
       fields = { profiles: r.refs, path: { sketch: p.sketch.id, entities: curves.map((c) => c.id) }, orientation, op, scope: op === 'new' ? [] : r.scope };

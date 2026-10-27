@@ -135,6 +135,11 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'sketch.intersect': SKETCH_OP('intersect'),
   'sketch.spline': ENTITY('spline'),
   'sketch.spline-control': ENTITY('control_spline'),
+  // The Ellipse group.
+  'sketch.ellipse': ENTITY('ellipse'),
+  'sketch.ellipse-partial': ENTITY('ellipse_arc'),
+  'sketch.parabola': ENTITY('parabola'),
+  'sketch.conic': ENTITY('conic'),
   'sketch.mirror': SKETCH_OP('mirror'),
   'sketch.pattern-linear': SKETCH_OP('linear_pattern'),
   'sketch.pattern-circular': SKETCH_OP('circular_pattern'),
@@ -317,6 +322,10 @@ export const SKETCH_ENTITIES: { readonly [K in SketchEntity['kind']]: Reach } = 
   circle: ENTITY('circle'),
   arc: ENTITY('arc'),
   spline: ENTITY('spline'),
+  ellipse: ENTITY('ellipse'),
+  ellipse_arc: ENTITY('ellipse_arc'),
+  parabola: ENTITY('parabola'),
+  conic: ENTITY('conic'),
 };
 
 export const SKETCH_CONSTRAINTS: { readonly [K in SketchRelationKind | SketchDimensionKind]: Reach } = {
@@ -378,6 +387,10 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   polygon: ENTITY('polygon'),
   sector: ENTITY('sector'),
   intersect: SKETCH_OP('intersect'),
+  ellipse: ENTITY('ellipse'),
+  'ellipse-partial': ENTITY('ellipse_arc'),
+  parabola: ENTITY('parabola'),
+  conic: ENTITY('conic'),
 };
 
 // ------------------------------------------------------------------ the person's controls, by method
@@ -581,6 +594,10 @@ export const PERSON_SKETCH_KINDS: { readonly [K in SketchEntityKindIn]: SketchTo
   sector: 'sector',
   spline: 'spline-fit',
   control_spline: 'spline-control',
+  ellipse: 'ellipse',
+  ellipse_arc: 'ellipse-partial',
+  parabola: 'parabola',
+  conic: 'conic',
 };
 
 /**

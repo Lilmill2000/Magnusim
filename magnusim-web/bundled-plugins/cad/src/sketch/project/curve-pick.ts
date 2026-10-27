@@ -47,7 +47,8 @@ export function curveDistance(g: EntityGeom, p: Vec2): number {
       if (angleIn(ang, g.a0, g.a1, g.ccw)) return Math.abs(Math.hypot(p[0] - g.c[0], p[1] - g.c[1]) - g.r);
       return Math.min(Math.hypot(p[0] - g.a[0], p[1] - g.a[1]), Math.hypot(p[0] - g.b[0], p[1] - g.b[1]));
     }
-    case 'spline': {
+    case 'spline':
+    case 'conic': {
       let d = Infinity;
       for (let i = 1; i < g.poly.length; i++) d = Math.min(d, segDist(p, g.poly[i - 1], g.poly[i]));
       return d;

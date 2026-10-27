@@ -34,6 +34,8 @@ import { runtimeOf } from '../runtime';
 import { axisRefOf, edgeRefOf, faceRefOf, planeRefOf, vertexRefOf } from '../selectors/refs';
 import { candidates, edgeLabel, faceLabel, hitWords, selectAny, selectOne, withScene, type AxisHit, type EdgeHit, type FaceHit, type PlaneHit, type Scene, type VertexHit } from '../selectors/resolve';
 import { storeExpr } from '../sketch/compile';
+import { partsOfEntity } from '../sketch/names';
+import { isConic } from '../../sketch/tools/conic';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 
 type ConstructType = 'ref_plane' | 'ref_axis' | 'ref_point';
@@ -107,10 +109,12 @@ function sketchPrefix(s: DocState, text: string): { sketch: SketchFeature; rest:
 function sketchPointOf(sk: SketchFeature, rest: string): string | null {
   const whole = sk.entities.find((e) => e.id.toLowerCase() === storedId(rest).toLowerCase());
   if (whole?.kind === 'point') return whole.p;
-  const m = /^(.+)\.(start|end|center)$/i.exec(rest);
+  const m = /^(.+)\.(start|end|center|major|minor|focus|vertex|top)$/i.exec(rest);
   if (m) {
     const e = sk.entities.find((x) => x.id.toLowerCase() === storedId(m[1]).toLowerCase());
     const part = m[2].toLowerCase();
+    // The Ellipse group: its parts as the sketch tool names them.
+    if (e && isConic(e)) return partsOfEntity(e).find(([p]) => p === part)?.[1] ?? null;
     if (e?.kind === 'line') return part === 'start' ? e.p[0] : part === 'end' ? e.p[1] : null;
     if (e?.kind === 'circle') return part === 'center' ? e.c : null;
     if (e?.kind === 'arc') {
@@ -133,6 +137,10 @@ function sketchPointText(sk: SketchFeature, point: string): string {
     if (e.kind === 'arc' && (e.a === point || e.b === point)) {
       const start = e.ccw !== false ? e.a : e.b;
       return `${sk.name}.${id}.${point === start ? 'start' : 'end'}`;
+    }
+    if (isConic(e)) {
+      const part = partsOfEntity(e).find(([, p]) => p === point)?.[0];
+      if (part) return `${sk.name}.${id}.${part}`;
     }
   }
   return `${sk.name}.${point}`;

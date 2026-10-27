@@ -39,12 +39,24 @@
 //     pattern_along refs [p, q, L1, (L2)] value [sx, sy, d1, (d2)]: q = p + (sx, sy) + d1 dir(L1) + d2 dir(L2)
 //     offset_end refs [srcEnd, copyEnd, srcLine|srcArc]: the copy's end squared to its source
 //     pattern_rotate refs [c, p, q] value deg: q = c + R(deg) (p - c)
+// Ellipses, parabolas, conics (src/sketch/tools/conic.ts):
+//   {id, kind:"ellipse", c, major, minor}: PlaneGCS's Ellipse (centre, a hidden focus, a hidden minor
+//     radius) with the major end and the minor end held at their places on it (internal alignment):
+//     5 freedoms. {id, kind:"ellipse_arc", c, major, minor, a, b, ccw?}: its ArcOfEllipse (2 hidden end
+//     parameters more): 7. {id, kind:"parabola", f, v, a, b}: ArcOfParabola (focus, vertex, ends,
+//     2 hidden parameters): 6. {id, kind:"conic", a, b, t, rho}: a rho conic, a pure function of its
+//     points (rho is not solved): 6; tangent at an end through the line to its top point t.
+//   On curve (coincident / point_on_circle) on an ellipse, an arc of one (its whole ellipse) or a
+//   parabola (its whole parabola); horizontal / vertical on an ellipse or a parabola: its axis;
+//   tangent: a line and an ellipse anywhere, any curves at a shared end; equal: two ellipses (both
+//   radii) or two parabolas (focal length); concentric with an ellipse's centre.
 
 const ALG = { BFGS: 0, LM: 1, DOGLEG: 2 };
 const STATUS = { Success: 0, Converged: 1, Failed: 2, SuccessfulSolutionInvalid: 3 };
 const TEMP_TAG = -1; // GCS::DefaultTemporaryConstraint: soft, ignored by the diagnosis
 const INTERNAL_TAG = 0; // high priority, never reported as conflicting (arc rules)
 const DEG = Math.PI / 180;
+const CONICS = new Set(['ellipse', 'ellipse_arc', 'parabola', 'conic']);
 // P4b fix 1 (SKETCH): a point on a spline needs the spline's poles as affine combinations of its points.
 import { closestOnSpline, splineAffine, splineCurve } from '../sketch/tools/bspline';
 
@@ -135,7 +147,11 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
   const L = (e) => () => gcs.make_line(e.p1[0], e.p1[1], e.p2[0], e.p2[1]);
   const C = (e) => () => gcs.make_circle(e.c[0], e.c[1], e.r);
   const A = (e) => () => gcs.make_arc(e.c[0], e.c[1], e.s[0], e.s[1], e.e[0], e.e[1], e.a0, e.a1, e.r);
-  const CRVX = (e) => (e.kind === 'line' ? L(e) : e.kind === 'arc' ? A(e) : C(e));
+  // Ellipses and parabolas (see the header): an arc of an ellipse as its whole ellipse where only the curve counts.
+  const E = (e) => () => gcs.make_ellipse(e.c[0], e.c[1], e.f[0], e.f[1], e.rmin);
+  const AE = (e) => () => gcs.make_arc_of_ellipse(e.c[0], e.c[1], e.f[0], e.f[1], e.s[0], e.s[1], e.e[0], e.e[1], e.a0, e.a1, e.rmin);
+  const AP = (e) => () => gcs.make_arc_of_parabola(e.v[0], e.v[1], e.f[0], e.f[1], e.s[0], e.s[1], e.e[0], e.e[1], e.a0, e.a1);
+  const CRVX = (e) => (e.kind === 'line' ? L(e) : e.kind === 'arc' ? A(e) : e.kind === 'ellipse' ? E(e) : e.kind === 'ellipse_arc' ? AE(e) : e.kind === 'parabola' ? AP(e) : C(e));
 
   // end points (point ids) of a line or arc entity
   function endIds(e) {
@@ -143,7 +159,12 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     if (e.kind === 'arc') return [e.pts[1], e.pts[2]];
     // P4b (SKETCH): an open spline's first and last points
     if (e.kind === 'spline') return e.closed ? [] : [e.fitPts[0], e.fitPts[e.fitPts.length - 1]];
+    if (e.kind === 'ellipse_arc' || e.kind === 'parabola' || e.kind === 'conic') return e.ends;
     return [];
+  }
+  // A conic at one of its ends as the line from the end to its top point (its end tangent).
+  function conicEndLine(e, endId) {
+    return { kind: 'line', p1: pointParams.get(endId), p2: e.t };
   }
   // P4b (SKETCH): a spline at one of its ends as the line from the end to its neighbour
   // (a control spline's next pole, a fit spline's handle): {kind:'line', p1, p2}.
@@ -162,8 +183,32 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     return a.find((p) => b.has(p)) ?? null;
   }
   // GCS curve normals: line = rotate90ccw(p2 - p1), circle/arc = center - p
+  // (ellipse: towards its inside, as a circle's; parabola: away from its focus, PlaneGCS's own senses.)
   function normalAt(e, p, vals) {
     if (e.kind === 'line') return [-(vals[e.p2[1]] - vals[e.p1[1]]), vals[e.p2[0]] - vals[e.p1[0]]];
+    const P = [vals[p[0]], vals[p[1]]];
+    if (e.kind === 'ellipse' || e.kind === 'ellipse_arc') {
+      const c = [vals[e.c[0]], vals[e.c[1]]];
+      const f = [vals[e.f[0]], vals[e.f[1]]];
+      const b = vals[e.rmin];
+      const fd = Math.hypot(f[0] - c[0], f[1] - c[1]);
+      const a = Math.hypot(fd, b);
+      const ux = fd > 0 ? [(f[0] - c[0]) / fd, (f[1] - c[1]) / fd] : [1, 0];
+      const uy = [-ux[1], ux[0]];
+      const q = [P[0] - c[0], P[1] - c[1]];
+      const x = (q[0] * ux[0] + q[1] * ux[1]) / (a * a);
+      const y = (q[0] * uy[0] + q[1] * uy[1]) / (b * b);
+      return [-(x * ux[0] + y * uy[0]), -(x * ux[1] + y * uy[1])];
+    }
+    if (e.kind === 'parabola') {
+      const v = [vals[e.v[0]], vals[e.v[1]]];
+      const f = [vals[e.f[0]], vals[e.f[1]]];
+      const pf = Math.hypot(f[0] - v[0], f[1] - v[1]) || 1;
+      const ux = [(f[0] - v[0]) / pf, (f[1] - v[1]) / pf];
+      const uy = [-ux[1], ux[0]];
+      const y = (P[0] - v[0]) * uy[0] + (P[1] - v[1]) * uy[1];
+      return [-4 * pf * ux[0] + 2 * y * uy[0], -4 * pf * ux[1] + 2 * y * uy[1]];
+    }
     return [vals[e.c[0]] - vals[p[0]], vals[e.c[1]] - vals[p[1]]];
   }
 
@@ -270,6 +315,15 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     if (e.form === 'fit') fitGlues.push({ p: P0, entity: e });
   }
 
+  // A point on an ellipse (an arc of one: on its whole ellipse) or on a parabola; a conic refuses.
+  function onConic(sig, P0, e, T, cid) {
+    if (sig === 'point,ellipse' || sig === 'point,ellipse_arc') withGeo([P(P0), E(e)], (a, el) => gcs.add_constraint_point_on_ellipse(a, el, T, true, 1));
+    else if (sig === 'point,parabola') withGeo([P(P0), AP(e)], (a, pa) => gcs.add_constraint_point_on_parabolic_arc(a, pa, T, true, 1));
+    else if (sig === 'point,conic') throw new SketchInputError(`constraint ${cid}: a point lies on a conic only at its ends`);
+    else return false;
+    return true;
+  }
+
   function addConstraint(c, tag) {
     const cid = c.id;
     const refs = c.refs ?? [];
@@ -301,12 +355,16 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
         else if (sig === 'point,point') withGeo([P(pt(0)), P(pt(1))], (a, b) => gcs.add_constraint_p2p_coincident(a, b, T, true, 1));
         else if (sig === 'point,line') withGeo([P(pt(0)), L(ent(1))], (a, l) => gcs.add_constraint_point_on_line_pl(a, l, T, true, 1));
         else if (sig === 'point,circle' || sig === 'point,arc') withGeo([P(pt(0)), C(ent(1))], (a, cc) => gcs.add_constraint_point_on_circle(a, cc, T, true, 1));
+        else if (onConic(sig, pt(0), ent(1), T, cid)) break;
         else bad();
         break;
       case 'horizontal':
       case 'vertical': {
         const kind = c.kind;
         if (sig === 'line') withGeo([L(ent(0))], (l) => gcs[`add_constraint_${kind}_l`](l, T, true, 1));
+        // An ellipse's major axis, a parabola's axis.
+        else if (sig === 'ellipse' || sig === 'ellipse_arc') withGeo([P(ent(0).c), P(ent(0).maj)], (a, b) => gcs[`add_constraint_${kind}_pp`](a, b, T, true, 1));
+        else if (sig === 'parabola') withGeo([P(ent(0).v), P(ent(0).f)], (a, b) => gcs[`add_constraint_${kind}_pp`](a, b, T, true, 1));
         else if (sig === 'point,point') withGeo([P(pt(0)), P(pt(1))], (a, b) => gcs[`add_constraint_${kind}_pp`](a, b, T, true, 1));
         else bad();
         break;
@@ -323,15 +381,25 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
         // Curves that share an end point get endpoint tangency (FreeCAD's angle-via-point
         // form): edge tangency plus a shared point is degenerate (its Jacobian row vanishes
         // at the solution) and would be diagnosed as redundant.
-        const curve = (k) => k === 'line' || k === 'arc' || k === 'circle' || k === 'spline';
+        const curve = (k) => k === 'line' || k === 'arc' || k === 'circle' || k === 'spline' || CONICS.has(k);
         let at = null;
         if (refs.length === 3 && curve(kinds[0]) && curve(kinds[1]) && kinds[2] === 'point') at = refs[2];
         else if (refs.length === 2 && curve(kinds[0]) && curve(kinds[1])) at = sharedEnd(refs[0], refs[1]);
         if ((kinds[0] === 'spline' || kinds[1] === 'spline') && !at) throw new SketchInputError(`constraint ${cid}: a spline is tangent only at an end it shares`);
+        if ((kinds[0] === 'conic' || kinds[1] === 'conic') && !at) throw new SketchInputError(`constraint ${cid}: a conic is tangent only at an end it shares`);
+        if (!at && (CONICS.has(kinds[0]) || CONICS.has(kinds[1]))) {
+          // A line and an ellipse (or the ellipse of a partial one) anywhere.
+          const li = kinds[0] === 'line' ? 0 : kinds[1] === 'line' ? 1 : -1;
+          const el = 1 - li;
+          if (li < 0 || (kinds[el] !== 'ellipse' && kinds[el] !== 'ellipse_arc')) throw new SketchInputError(`constraint ${cid}: an ellipse is tangent to a line anywhere; a parabola or a conic is tangent only at an end it shares`);
+          withGeo([L(ent(li)), E(ent(el))], (l, el2) => gcs.add_constraint_tangent_le(l, el2, T, true, 1));
+          break;
+        }
         if (at) {
-          // P4b (SKETCH): a spline side is the line from the end to its neighbour.
-          const e1 = kinds[0] === 'spline' ? splineEndLine(ent(0), at, cid) : ent(0);
-          const e2 = kinds[1] === 'spline' ? splineEndLine(ent(1), at, cid) : ent(1);
+          // P4b (SKETCH): a spline side is the line from the end to its neighbour (a conic's: to its top point).
+          const side = (k, e) => (k === 'spline' ? splineEndLine(e, at, cid) : k === 'conic' ? conicEndLine(e, at) : e);
+          const e1 = side(kinds[0], ent(0));
+          const e2 = side(kinds[1], ent(1));
           const p = ptOf(at);
           const vals = readParams();
           const n1 = normalAt(e1, p, vals), n2 = normalAt(e2, p, vals);
@@ -359,6 +427,13 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
         else if (sig === 'circle,arc') withGeo([C(ent(0)), A(ent(1))], (a, b) => gcs.add_constraint_equal_radius_ca(a, b, T, true, 1));
         else if (sig === 'arc,circle') withGeo([C(ent(1)), A(ent(0))], (a, b) => gcs.add_constraint_equal_radius_ca(a, b, T, true, 1));
         else if (sig === 'arc,arc') withGeo([A(ent(0)), A(ent(1))], (a, b) => gcs.add_constraint_equal_radius_aa(a, b, T, true, 1));
+        // Two ellipses: both radii (centre to major end, centre to minor end); two parabolas: the focal
+        // length (vertex to focus). As equal lengths: this build's equal_radii_ee faults.
+        else if ((kinds[0] === 'ellipse' || kinds[0] === 'ellipse_arc') && (kinds[1] === 'ellipse' || kinds[1] === 'ellipse_arc')) {
+          const a = ent(0), b = ent(1);
+          withGeo([L({ p1: a.c, p2: a.maj }), L({ p1: b.c, p2: b.maj })], (x, y) => gcs.add_constraint_equal_length(x, y, T, true, 1));
+          withGeo([L({ p1: a.c, p2: a.mnr }), L({ p1: b.c, p2: b.mnr })], (x, y) => gcs.add_constraint_equal_length(x, y, T, true, 1));
+        } else if (sig === 'parabola,parabola') withGeo([L({ p1: ent(0).v, p2: ent(0).f }), L({ p1: ent(1).v, p2: ent(1).f })], (x, y) => gcs.add_constraint_equal_length(x, y, T, true, 1));
         else bad();
         break;
       case 'distance': {
@@ -425,10 +500,11 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
       case 'point_on_circle':
         if (sig === 'point,spline') onSpline(pt(0), ent(1), T, cid);
         else if (sig === 'point,circle' || sig === 'point,arc') withGeo([P(pt(0)), C(ent(1))], (a, cc) => gcs.add_constraint_point_on_circle(a, cc, T, true, 1));
+        else if (onConic(sig, pt(0), ent(1), T, cid)) break;
         else bad();
         break;
       case 'concentric': {
-        const ok = (k) => k === 'circle' || k === 'arc';
+        const ok = (k) => k === 'circle' || k === 'arc' || k === 'ellipse' || k === 'ellipse_arc';
         if (kinds.length === 2 && ok(kinds[0]) && ok(kinds[1])) withGeo([P(ent(0).c), P(ent(1).c)], (a, b) => gcs.add_constraint_p2p_coincident(a, b, T, true, 1));
         else bad();
         break;
@@ -456,7 +532,7 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
           withGeo([C(e)], (cc) => gcs.add_constraint_circle_radius(cc, ri, T, true, 1));
         } else if (sig === 'arc') { const e = ent(0); fixPoint(e.c); fixPoint(e.s); fixPoint(e.e); }
         // P4b (SKETCH): a spline: every point (handles too)
-        else if (sig === 'spline') { for (const id of ent(0).pts) fixPoint(pointParams.get(id)); }
+        else if (sig === 'spline' || CONICS.has(sig)) { for (const id of ent(0).pts) fixPoint(pointParams.get(id)); }
         else bad();
         break;
       }
@@ -613,6 +689,77 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
           const params = [];
           for (const id of all) params.push(...ptParams(id, e.id));
           entityInfo.set(e.id, { kind: 'spline', form: e.form === 'control' ? 'control' : 'fit', closed: !!e.closed, fitPts, handleIds, pts: all, params, raw: e });
+          break;
+        }
+        // Ellipses, parabolas, conics (see the header).
+        case 'ellipse':
+        case 'ellipse_arc': {
+          const c = ptParams(e.c, e.id);
+          const maj = ptParams(e.major, e.id);
+          const mnr = ptParams(e.minor, e.id);
+          const cu = uvOf(e.c), mu = uvOf(e.major), nu = uvOf(e.minor);
+          const A0 = Math.hypot(mu[0] - cu[0], mu[1] - cu[1]);
+          if (!(A0 > 0)) throw new SketchInputError(`entity ${e.id}: an ellipse needs its major end away from its centre`);
+          const ux = [(mu[0] - cu[0]) / A0, (mu[1] - cu[1]) / A0];
+          const uy = [-ux[1], ux[0]];
+          const y0 = (nu[0] - cu[0]) * uy[0] + (nu[1] - cu[1]) * uy[1];
+          if (!(Math.abs(y0) > 0)) throw new SketchInputError(`entity ${e.id}: an ellipse needs its minor end off its major axis`);
+          // The minor radius is less than the major one (an ellipse's focus is real).
+          const B0 = Math.min(Math.abs(y0), A0 * (1 - 1e-6));
+          const fd = Math.sqrt(A0 * A0 - B0 * B0);
+          const f = [push(cu[0] + fd * ux[0], false, e.id, 'fx'), push(cu[1] + fd * ux[1], false, e.id, 'fy')];
+          const rmin = push(B0, false, e.id, 'rmin');
+          const info = { kind: e.kind, c, f, rmin, maj, mnr, pts: [e.c, e.major, e.minor], params: [...c, ...maj, ...mnr, ...f, rmin] };
+          if (e.kind === 'ellipse_arc') {
+            const ccw = e.ccw !== false;
+            const sId = ccw ? e.a : e.b;
+            const eId = ccw ? e.b : e.a;
+            const s = ptParams(sId, e.id);
+            const en = ptParams(eId, e.id);
+            const ang = (q) => Math.atan2(((q[0] - cu[0]) * uy[0] + (q[1] - cu[1]) * uy[1]) / B0, ((q[0] - cu[0]) * ux[0] + (q[1] - cu[1]) * ux[1]) / A0);
+            const a0 = ang(uvOf(sId));
+            let a1 = ang(uvOf(eId));
+            while (a1 <= a0) a1 += 2 * Math.PI;
+            const ai0 = push(a0, false, e.id, 'a0');
+            const ai1 = push(a1, false, e.id, 'a1');
+            Object.assign(info, { s, e: en, a0: ai0, a1: ai1, ends: [e.a, e.b], pts: [e.c, e.major, e.minor, e.a, e.b] });
+            info.params.push(...s, ...en, ai0, ai1);
+            withGeo([AE(info)], (a) => gcs.add_constraint_arc_of_ellipse_rules(a, INTERNAL_TAG, true, 1));
+          }
+          entityInfo.set(e.id, info);
+          const IA = M.InternalAlignmentType;
+          const minorSide = y0 < 0 ? 'Negative' : 'Positive';
+          withGeo([E(info), P(maj), P(mnr)], (el, pm, pn) => {
+            gcs.add_constraint_internal_alignment_point2ellipse(el, pm, IA.EllipsePositiveMajorX, INTERNAL_TAG, true, 1);
+            gcs.add_constraint_internal_alignment_point2ellipse(el, pm, IA.EllipsePositiveMajorY, INTERNAL_TAG, true, 1);
+            gcs.add_constraint_internal_alignment_point2ellipse(el, pn, IA[`Ellipse${minorSide}MinorX`], INTERNAL_TAG, true, 1);
+            gcs.add_constraint_internal_alignment_point2ellipse(el, pn, IA[`Ellipse${minorSide}MinorY`], INTERNAL_TAG, true, 1);
+          });
+          break;
+        }
+        case 'parabola': {
+          const f = ptParams(e.f, e.id);
+          const v = ptParams(e.v, e.id);
+          const s = ptParams(e.a, e.id);
+          const en = ptParams(e.b, e.id);
+          const fu = uvOf(e.f), vu = uvOf(e.v);
+          const pf = Math.hypot(fu[0] - vu[0], fu[1] - vu[1]);
+          if (!(pf > 0)) throw new SketchInputError(`entity ${e.id}: a parabola needs its focus away from its vertex`);
+          const uy = [-(fu[1] - vu[1]) / pf, (fu[0] - vu[0]) / pf];
+          const across = (q) => (q[0] - vu[0]) * uy[0] + (q[1] - vu[1]) * uy[1];
+          const ai0 = push(across(uvOf(e.a)), false, e.id, 'a0');
+          const ai1 = push(across(uvOf(e.b)), false, e.id, 'a1');
+          const info = { kind: 'parabola', f, v, s, e: en, a0: ai0, a1: ai1, ends: [e.a, e.b], pts: [e.f, e.v, e.a, e.b], params: [...f, ...v, ...s, ...en, ai0, ai1] };
+          entityInfo.set(e.id, info);
+          withGeo([AP(info)], (a) => gcs.add_constraint_arc_of_parabola_rules(a, INTERNAL_TAG, true, 1));
+          break;
+        }
+        case 'conic': {
+          if (!(e.rho > 0 && e.rho < 1)) throw new SketchInputError(`entity ${e.id}: a conic's rho is between 0 and 1`);
+          const a = ptParams(e.a, e.id);
+          const b = ptParams(e.b, e.id);
+          const t = ptParams(e.t, e.id);
+          entityInfo.set(e.id, { kind: 'conic', t, ends: [e.a, e.b], pts: [e.a, e.b, e.t], params: [...a, ...b, ...t], raw: e });
           break;
         }
         default:
@@ -843,7 +990,7 @@ export async function createSolver({ moduleUrl, wasmUrl, moduleFactory, dlGaussS
     let ends = null;
     // P4b (SKETCH): a spline translates as a whole (each of its points held softly at its start plus the offset).
     let multi = null;
-    if (e.kind === 'spline') {
+    if (e.kind === 'spline' || CONICS.has(e.kind)) {
       multi = e.pts.map((id) => {
         const p = pointParams.get(id);
         const start = [vals[p[0]], vals[p[1]]];

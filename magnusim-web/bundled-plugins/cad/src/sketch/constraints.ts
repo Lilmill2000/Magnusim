@@ -4,7 +4,7 @@
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchEntity, SketchFeature, SketchRelationKind, Vec2 } from '../types/doc';
-import { entityOf, pointAt, pointIdOf, refKindOf, type RefKind } from './model';
+import { entityEnds, entityOf, entityPoints, pointAt, pointIdOf, refKindOf, type RefKind } from './model';
 // P4b (SKETCH): splines.
 import { splineOf } from './tools/spline-entity';
 
@@ -63,6 +63,11 @@ export function planConstraint(f: F, kind: SketchRelationKind, picks: readonly s
     const sp = planSpline(f, kind, picks, kinds, points);
     if (sp) return sp;
   }
+  // Ellipses, parabolas, conics.
+  if (kinds.some((k) => CONIC_REFS.has(k))) {
+    const cp = planConic(f, kind, picks, kinds, points);
+    if (cp) return cp;
+  }
   switch (kind) {
     case 'coincident':
       if (only(2) && points.length === 2) return points[0] === points[1] ? no : { ok: true, add: [{ kind, refs: points }] };
@@ -113,6 +118,69 @@ export function planConstraint(f: F, kind: SketchRelationKind, picks: readonly s
     }
     default:
       return no;
+  }
+}
+
+const CONIC_REFS = new Set<RefKind | null>(['ellipse', 'ellipse_arc', 'parabola', 'conic']);
+const ELLIPTIC = new Set<RefKind | null>(['ellipse', 'ellipse_arc']);
+const CONIC_WORD: Record<string, string> = { ellipse: 'an ellipse', ellipse_arc: 'a partial ellipse', parabola: 'a parabola', conic: 'a conic' };
+
+/**
+ * Relations that take an ellipse's, a parabola's or a conic's curve (the solver's own rules,
+ * src/solver-worker/solver-api.mjs): Coincident (On curve) of a point with an ellipse, a partial
+ * ellipse (its whole ellipse) or a parabola; Horizontal / Vertical of an ellipse's major axis or a
+ * parabola's axis; Tangent of a line and an ellipse anywhere, or of two curves at an end they share
+ * (a conic only there); Equal of ellipses (both radii) or of parabolas (focal length); Concentric
+ * of an ellipse with a circle, an arc or another ellipse. Fix: every point (the general rule). Null:
+ * the general rules decide.
+ */
+function planConic(f: F, kind: SketchRelationKind, picks: readonly string[], kinds: (RefKind | null)[], points: string[]): ConstraintOutcome | null {
+  if (kind === 'fix') return null;
+  const conics = picks.filter((_, i) => CONIC_REFS.has(kinds[i]));
+  const first = kinds.find((k) => CONIC_REFS.has(k))!;
+  const word = CONIC_WORD[first];
+  const no = (reason: string): ConstraintOutcome => ({ ok: false, reason });
+  switch (kind) {
+    case 'coincident':
+    case 'point_on_circle': {
+      if (picks.length !== 2 || points.length !== 1 || conics.length !== 1) return no('Select a point and the ellipse, parabola or conic');
+      const e = entityOf(f, conics[0])!;
+      if (entityPoints(e).includes(points[0])) return no(`That point is already one of ${word}'s points`);
+      if (e.kind === 'conic') return no('A point lies on a conic only at its ends: make it coincident with an end point');
+      return { ok: true, add: [{ kind: 'coincident', refs: [points[0], conics[0]] }] };
+    }
+    case 'horizontal':
+    case 'vertical': {
+      const lines = picks.filter((_, i) => kinds[i] === 'line');
+      if (conics.length + lines.length !== picks.length) return no('Select lines, ellipses (their major axis) or parabolas (their axis)');
+      if (kinds.includes('conic')) return no('A conic has no axis: make its points horizontal or vertical');
+      return { ok: true, add: picks.map((id) => ({ kind, refs: [id] })) };
+    }
+    case 'tangent': {
+      if (picks.length !== 2 || kinds.some((k) => k === 'point' || k === null)) return no('Select two curves');
+      const [a, b] = picks.map((id) => entityOf(f, id)!);
+      const shared = entityEnds(a).find((p) => entityEnds(b).includes(p));
+      if (shared) {
+        if (kinds.includes('circle')) return no('A circle has no ends: make it tangent to a line instead');
+        return { ok: true, add: [{ kind, refs: [a.id, b.id] }] };
+      }
+      const li = kinds.indexOf('line');
+      const el = 1 - li;
+      if (li >= 0 && ELLIPTIC.has(kinds[el])) return { ok: true, add: [{ kind, refs: [picks[li], picks[el]] }] };
+      return no(`${word[0].toUpperCase()}${word.slice(1)} is tangent to a line${ELLIPTIC.has(first) ? ' anywhere' : ''}, or to a curve at an end they share: join them first`);
+    }
+    case 'equal': {
+      if (picks.length >= 2 && kinds.every((k) => ELLIPTIC.has(k))) return { ok: true, add: picks.slice(1).map((id) => ({ kind, refs: [picks[0], id] })) };
+      if (picks.length >= 2 && kinds.every((k) => k === 'parabola')) return { ok: true, add: picks.slice(1).map((id) => ({ kind, refs: [picks[0], id] })) };
+      return no('Equal takes ellipses (both radii) or parabolas (focal length) of one kind');
+    }
+    case 'concentric': {
+      const ok = (k: RefKind | null) => k === 'circle' || k === 'arc' || ELLIPTIC.has(k);
+      if (picks.length === 2 && kinds.every(ok)) return { ok: true, add: [{ kind, refs: [...picks] }] };
+      return no('Concentric takes two of circles, arcs and ellipses');
+    }
+    default:
+      return no(`That relation does not take ${word}'s curve: use its points`);
   }
 }
 

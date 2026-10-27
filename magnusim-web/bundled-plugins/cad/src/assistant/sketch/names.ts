@@ -37,6 +37,36 @@ export function partsOfEntity(e: SketchEntity): [part: string, point: string][] 
       if (e.handles?.[1]) out.push(['h1', e.handles[1]]);
       return out;
     }
+    // The Ellipse group (macros.ts): start and end in the curve's own sense.
+    case 'ellipse':
+      return [
+        ['center', e.c],
+        ['major', e.major],
+        ['minor', e.minor],
+      ];
+    case 'ellipse_arc': {
+      const ccw = e.ccw !== false;
+      return [
+        ['center', e.c],
+        ['major', e.major],
+        ['minor', e.minor],
+        ['start', ccw ? e.a : e.b],
+        ['end', ccw ? e.b : e.a],
+      ];
+    }
+    case 'parabola':
+      return [
+        ['focus', e.f],
+        ['vertex', e.v],
+        ['start', e.a],
+        ['end', e.b],
+      ];
+    case 'conic':
+      return [
+        ['start', e.a],
+        ['end', e.b],
+        ['top', e.t],
+      ];
   }
 }
 

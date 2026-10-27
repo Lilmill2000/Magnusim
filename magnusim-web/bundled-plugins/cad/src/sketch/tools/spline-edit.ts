@@ -17,6 +17,7 @@ import { SketchBuilder, lineageId, type EditOutcome, type SketchDraft } from '..
 import { arcGeom, entityPoints, lineEnds, pointAt } from '../model';
 import { arcParamCurve, chordParams, closestOnSpline, compressKnots, crossCurves, derivs, domain, flatKnots, pointAtParam, segmentParamCurve, splineParamCurve, splinePolyline, subSpline, type BSpline, type ParamCurve } from './bspline';
 import { splineEndIds, splineOf } from './spline-entity';
+import { conicCurve, conicParamCurve } from './conic';
 
 /** A sketch curve as a parametric curve (line: 0..1; circle and arc: 0..1 over their sweep; spline: its own parameter). */
 export function curveOfEntity(d: SketchDraft, e: SketchEntity): ParamCurve | null {
@@ -36,6 +37,13 @@ export function curveOfEntity(d: SketchDraft, e: SketchEntity): ParamCurve | nul
     case 'spline': {
       const b = splineOf(d, e);
       return b ? splineParamCurve(b) : null;
+    }
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic': {
+      const c = conicCurve(d, e);
+      return c ? conicParamCurve(c) : null;
     }
     default:
       return null;

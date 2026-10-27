@@ -22,6 +22,9 @@ import { drawnPoints, hitTest, samples } from './pick';
 import { sketchFilterOf, type SketchPickKind } from './select-filter';
 // ux010 (DRAW): a selected arc with a radius dimension shows the fillet's radius arrow.
 import { RadiusHandle, radiusDimensionOf } from './tools/radius-handle';
+import { rhoOk } from './tools/conic';
+import type { ToolOption } from './tools/options';
+import { SketchBuilder } from './edit';
 import { autoProjectItem, modelItemAt } from './project/tools';
 
 const DRAG_PX = 4;
@@ -225,6 +228,36 @@ export function selectTool(mode: SketchMode): SketchTool {
   pickRadius();
   return {
     id: 'select',
+    // One conic selected: its rho, editable (the curve keeps its ends and top point).
+    options(): ToolOption[] {
+      const d = mode.draft();
+      const sel = mode.selected().filter((x) => x.what === 'entity');
+      const e = d && sel.length === 1 ? entityOf(d, sel[0].id) : null;
+      if (e?.kind !== 'conic' || e.link) return [];
+      const why = (v: number) => (rhoOk(v) ? null : 'Rho is more than 0 and less than 1');
+      return [
+        {
+          kind: 'number',
+          id: 'rho',
+          label: 'Rho',
+          expr: String(Math.round(e.rho * 1e6) / 1e6),
+          quantity: 'scalar',
+          validate: why,
+          set: (_expr, v) => {
+            const no = why(v);
+            if (no) return no;
+            void mode.apply('Rho', (cur) => {
+              const x = entityOf(cur, e.id);
+              if (x?.kind !== 'conic') return { ok: false, reason: 'that conic is gone' };
+              const b = new SketchBuilder(cur);
+              b.replaceEntity({ ...x, rho: v });
+              return b.result();
+            });
+            return null;
+          },
+        },
+      ];
+    },
     hint: () => 'Click to select (Ctrl toggles, Shift adds; Ctrl+click on a body vertex or edge adds it, projected). Ctrl+drag to box select: left to right selects what the box encloses, right to left what it touches (Ctrl+Shift adds). Drag under-defined geometry to move it; drag elsewhere to orbit.',
     // ux010 (PANELS): the compact panel's one line.
     shortHint: () => 'Click to select; Ctrl+drag to box select.',

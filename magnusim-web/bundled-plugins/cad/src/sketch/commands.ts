@@ -41,7 +41,7 @@ import { addHandle } from './tools/spline-relations';
 const RELATIONS_ICON = 'M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M8 16h8 M12 16V8 M12 13h3v3';
 
 /** ux010 (DRAW): the tools Construction (X) never converts a selection in: it toggles construction drawing. */
-const DRAWING_TOOLS = new Set<string>(['line', 'centerline', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'point', 'spline-fit', 'spline-control', ...SHAPE_TOOL_IDS]);
+const DRAWING_TOOLS = new Set<string>(['line', 'centerline', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'point', 'spline-fit', 'spline-control', ...SHAPE_TOOL_IDS, 'ellipse', 'ellipse-partial', 'parabola', 'conic']);
 
 export const CURVED_FACE = 'Sketches go on flat faces: that face is curved';
 /** A CONSTRUCT plane selected that did not build (failed, suppressed or rolled back). */
@@ -72,8 +72,16 @@ export function supportFromSelection(
   return reason;
 }
 
+/** The Ellipse group's variants, one line each (the toolbar's Ellipse group, in this order). */
+export const ELLIPSE_GROUP: { id: string; tool: SketchToolId; label: string; icon: string; hint: string; order: number }[] = [
+  { id: 'sketch.ellipse', tool: 'ellipse', label: 'Ellipse', icon: SKETCH_ICONS.ellipse, hint: 'The centre, an end of the major axis, then the minor radius', order: 20 },
+  { id: 'sketch.ellipse-partial', tool: 'ellipse-partial', label: 'Partial ellipse', icon: SKETCH_ICONS.ellipsePartial, hint: 'An ellipse (centre, major end, minor radius), then where the arc starts and ends', order: 21 },
+  { id: 'sketch.parabola', tool: 'parabola', label: 'Parabola', icon: SKETCH_ICONS.parabola, hint: 'The focus, the vertex, then where the parabola starts and ends', order: 22 },
+  { id: 'sketch.conic', tool: 'conic', label: 'Conic', icon: SKETCH_ICONS.conic, hint: 'Its two ends, the top point where their tangents meet, then rho (where it passes)', order: 23 },
+];
+
 // v0.5.0: the drawing tools sit in toolbar flyouts (src/ui/flyouts.ts): `flyout` names the one.
-const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; shortcut?: string; hint: string; flyout?: string }[] = [
+const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; shortcut?: string; hint: string; order?: number; flyout?: string }[] = [
   { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, shortcut: 'L', hint: 'Chained lines, click by click; A or a drag from the end makes a tangent arc', flyout: 'line' },
   { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, shortcut: 'R', hint: 'Two opposite corners', flyout: 'rectangle' },
   { id: 'sketch.rectangle-center', tool: 'rectangle-center', label: 'Center rectangle', icon: SKETCH_ICONS.rectangleCenter, hint: 'The centre, then a corner', flyout: 'rectangle' },
@@ -82,6 +90,9 @@ const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; short
   { id: 'sketch.arc-tangent', tool: 'arc-tangent', label: 'Tangent arc', icon: SKETCH_ICONS.arcTangent, hint: 'From the end of a line or an arc, tangent to it', flyout: 'arc' },
   { id: 'sketch.point', tool: 'point', label: 'Point', icon: SKETCH_ICONS.point, hint: 'A sketch point' },
   { id: 'sketch.centerline', tool: 'centerline', label: 'Centerline', icon: SKETCH_ICONS.centerline, hint: 'A construction line, an axis to mirror or revolve about', flyout: 'line' },
+  // The Ellipse group (Ellipse, Partial ellipse, Parabola, Conic): in DRAW after the splines until the
+  // toolbar's dropdown groups take them as one Ellipse group.
+  ...ELLIPSE_GROUP,
 ];
 
 /** Picked sketch items as constraint references (a point entity is a point; curves by id). */
@@ -201,7 +212,7 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       icon: d.icon,
       shortcut: d.shortcut,
       hint: d.hint,
-      order: 10 + i,
+      order: d.order ?? 10 + i,
       ...(d.flyout ? { flyout: d.flyout } : {}),
       activeWhen: { sketchTool: d.tool },
       enabled: editable,

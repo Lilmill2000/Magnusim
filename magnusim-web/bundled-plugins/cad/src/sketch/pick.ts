@@ -8,6 +8,7 @@ import { dist, polar } from './geom';
 import { arcGeom, distanceTo, entityPoints, lineEnds, ORIGIN, pointAt } from './model';
 import type { SketchHit } from './mode';
 import { splineSamples } from './tools/spline-entity';
+import { conicCurve, conicPolyline } from './tools/conic';
 import { hiddenPoles } from './project/style';
 
 export const PICK_PX = 8;
@@ -79,6 +80,13 @@ export function samples(f: F, e: SketchEntity, n = 48): Vec2[] {
     }
     case 'spline':
       return splineSamples(f, e, n);
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic': {
+      const c = conicCurve(f, e);
+      return c ? conicPolyline(c, Math.max(n, 64)) : [];
+    }
   }
 }
 

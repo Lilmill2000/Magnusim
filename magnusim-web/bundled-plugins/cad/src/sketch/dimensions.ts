@@ -47,6 +47,10 @@ export function planDimension(f: F, picks: readonly string[], at: Vec2 | null): 
   if (kinds.some((k) => k === null)) return { reason: 'That is not in the sketch' };
   // P4b (SKETCH): a spline is sized by its points.
   if (kinds.includes('spline')) return { reason: 'A spline takes dimensions on its points: pick its points (or a point and a line)' };
+  // Ellipses, parabolas, conics: by their points (an axis radius is centre to axis end; a focal length vertex to focus).
+  if (kinds.includes('ellipse') || kinds.includes('ellipse_arc')) return { reason: 'An ellipse takes dimensions on its points: its centre and its major or minor axis end give a radius' };
+  if (kinds.includes('parabola')) return { reason: 'A parabola takes dimensions on its points: its vertex and focus give the focal length' };
+  if (kinds.includes('conic')) return { reason: 'A conic takes dimensions on its points: its ends and its top point' };
   const pt = (r: string) => pointAt(f, pointIdOf(f, r)!)!;
   const twoPoints = (a: string, b: string): DimensionPlan | { reason: string } => {
     const pa = pt(a);

@@ -95,9 +95,14 @@ export const FOLD_ORDER: readonly string[] = [
   // headline tools (Spline, Mirror, the patterns) stay longest of the new ones.
   'sketch.intersect',
   'sketch.project',
+  // The Ellipse group (until the toolbar's dropdown groups hold them as one button): the rarer three first.
+  'sketch.conic',
+  'sketch.parabola',
+  'sketch.ellipse-partial',
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
+  'sketch.ellipse',
   'sketch.extend',
   'sketch.polygon',
   'sketch.slot',

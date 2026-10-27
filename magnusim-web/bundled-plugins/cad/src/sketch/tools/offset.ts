@@ -14,6 +14,7 @@ import { newId } from '../../lib/ids';
 import type { SketchEntity, SketchTie, Vec2 } from '../../types/doc';
 import type { UnitsService } from '../../types/units';
 import { SketchBuilder, type EditOutcome, type SketchDraft } from '../edit';
+import { isConic } from './conic';
 import { angleOf, circleCircle, dist, lineCircle, lineLine, norm, perp, polar, sub } from '../geom';
 import { arcGeom, closestOn, entityLabel, entityOf, pointAt } from '../model';
 import { emptyPreview, storeExpr, type SketchMode, type SketchTool } from '../mode';
@@ -38,7 +39,8 @@ const endsOf = (e: SketchEntity): [string, string] | null => (e.kind === 'line' 
 /** The chain an entity belongs to: curves joined end to end where exactly two meet. */
 export function chainOf(d: SketchDraft, id: string): { items: ChainItem[]; closed: boolean } | null {
   const start = entityOf(d, id);
-  if (!start || start.kind === 'point') return null;
+  // An ellipse's, a parabola's or a conic's offset is none of the sketch's curves: not offset.
+  if (!start || start.kind === 'point' || isConic(start)) return null;
   if (start.kind === 'circle' || (start.kind === 'spline' && start.closed)) return { items: [{ e: start, from: null, to: null }], closed: true };
   const curves = d.entities.filter((e): e is Curve => e.kind !== 'point' && !!endsOf(e) && !e.construction);
   const users = (p: string) => curves.filter((e) => endsOf(e)!.includes(p));
@@ -255,7 +257,7 @@ const endOf = startOf;
 /** The offset edit: copies of the chain through `id` on `side` (or both sides) at `distance`, tied to it. */
 export function offsetChain(d: Draft, id: string, side: 1 | -1, both: boolean, expr: string, units: UnitsService): EditOutcome {
   const chain = chainOf(d, id);
-  if (!chain) return { ok: false, reason: 'Offset takes lines, arcs, circles and splines' };
+  if (!chain) return { ok: false, reason: isConic(entityOf(d, id)) ? 'Offset takes lines, arcs, circles and splines: the offset of an ellipse, a parabola or a conic is no such curve' : 'Offset takes lines, arcs, circles and splines' };
   const tie: SketchTie = { id: `t${newId('c').slice(1)}`, kind: 'offset', sources: chain.items.map((x) => x.e.id), copies: [], count: [1, 1], exprs: { distance: expr } };
   const ev = evaluateTies({ ties: [tie] }, units);
   const bad = Object.values(ev.errors)[0];

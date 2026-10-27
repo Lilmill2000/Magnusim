@@ -54,6 +54,8 @@ export const SHARDS = {
     'e2e/cad-p4b-select.spec.ts',
     // P4b SKETCH: splines, mirror, linear and circular patterns, offset, fillet and chamfer.
     'e2e/cad-p4b-sketch-tools.spec.ts',
+    // The Ellipse group: Ellipse, Partial ellipse, Parabola and Conic drawn, closed and extruded.
+    'e2e/cad-ellipse-tools.spec.ts',
     'e2e/cad-p4b-project.spec.ts',
     // Press-pull fix round 1: the angle labels' gap and the label double-click in Mirror (ci2 polish).
     'e2e/cad-p5-fix1-sketch-labels.spec.ts',

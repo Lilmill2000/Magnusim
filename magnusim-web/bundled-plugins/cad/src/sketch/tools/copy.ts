@@ -66,6 +66,17 @@ function copyOf(e: SketchEntity, id: string, map: (p: string) => string, flip: b
         ...(e.spans ? { spans: [e.spans[0], e.spans[1]] as [number, number] } : {}),
         ...keep,
       };
+    // Ellipses, parabolas, conics: their points mapped (a mirrored partial ellipse runs the other way).
+    case 'ellipse':
+      return { id, kind: 'ellipse', c: map(e.c), major: map(e.major), minor: map(e.minor), ...keep };
+    case 'ellipse_arc': {
+      const nowCcw = flip ? e.ccw === false : e.ccw !== false;
+      return { id, kind: 'ellipse_arc', c: map(e.c), major: map(e.major), minor: map(e.minor), a: map(e.a), b: map(e.b), ...(nowCcw ? {} : { ccw: false }), ...keep };
+    }
+    case 'parabola':
+      return { id, kind: 'parabola', f: map(e.f), v: map(e.v), a: map(e.a), b: map(e.b), ...keep };
+    case 'conic':
+      return { id, kind: 'conic', a: map(e.a), b: map(e.b), t: map(e.t), rho: e.rho, ...keep };
   }
 }
 

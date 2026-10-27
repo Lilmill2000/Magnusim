@@ -145,6 +145,15 @@ function withPoints(e: SketchEntity, ids: string[], c: PlaneCurve | null): Sketc
       const sameKnots = !!e.knots && !!e.mults && e.knots.join() === c.knots.join() && e.mults.join() === c.mults.join();
       return same && sameKnots ? e : { ...e, pts: ids.slice(0, e.pts.length), knots: [...c.knots], mults: [...c.mults] };
     }
+    // Never made by a link (projections give lines, arcs, circles and splines): kept with its points.
+    case 'ellipse':
+      return { ...e, c: ids[0] ?? e.c, major: ids[1] ?? e.major, minor: ids[2] ?? e.minor };
+    case 'ellipse_arc':
+      return { ...e, c: ids[0] ?? e.c, major: ids[1] ?? e.major, minor: ids[2] ?? e.minor, a: ids[3] ?? e.a, b: ids[4] ?? e.b };
+    case 'parabola':
+      return { ...e, f: ids[0] ?? e.f, v: ids[1] ?? e.v, a: ids[2] ?? e.a, b: ids[3] ?? e.b };
+    case 'conic':
+      return { ...e, a: ids[0] ?? e.a, b: ids[1] ?? e.b, t: ids[2] ?? e.t };
   }
 }
 

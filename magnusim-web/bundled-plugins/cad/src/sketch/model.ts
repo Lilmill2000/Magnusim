@@ -12,6 +12,8 @@ import { angleOf, ccwSweep, closestOnArc, closestOnCircle, closestOnLine, closes
 // P4b (SKETCH): splines.
 import { closestOnSplineEntity, distanceToSpline, splineEndIds, splinePointIds } from './tools/spline-entity';
 import { evaluateTies, tiesToSolver } from './tools/ties';
+// Ellipses, parabolas, conics.
+import { closestOnConicCurve, conicCurve, conicEndIds, conicPointIds, conicPointRole, CONIC_WORDS } from './tools/conic';
 
 export const ORIGIN = SKETCH_ORIGIN;
 /** The solver's id for the origin's lock (never shown; filtered out of conflict lists). */
@@ -67,6 +69,11 @@ export function entityPoints(e: SketchEntity): string[] {
     // P4b (SKETCH): fit points or poles, then tangent handles.
     case 'spline':
       return splinePointIds(e);
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic':
+      return conicPointIds(e);
   }
 }
 
@@ -76,10 +83,11 @@ export function entityEnds(e: SketchEntity): string[] {
   if (e.kind === 'arc') return [e.a, e.b];
   // P4b (SKETCH): an open spline's first and last points.
   if (e.kind === 'spline') return splineEndIds(e);
+  if (e.kind === 'ellipse_arc' || e.kind === 'parabola' || e.kind === 'conic') return conicEndIds(e);
   return [];
 }
 
-export type RefKind = 'point' | 'line' | 'circle' | 'arc' | 'spline';
+export type RefKind = 'point' | 'line' | 'circle' | 'arc' | 'spline' | 'ellipse' | 'ellipse_arc' | 'parabola' | 'conic';
 
 /** What a constraint reference is: a point id (or the origin), a point entity (a point), or a curve. */
 export function refKindOf(f: Pick<SketchFeature, 'points' | 'entities'>, ref: string): RefKind | null {
@@ -132,6 +140,13 @@ export function distanceTo(f: Pick<SketchFeature, 'points' | 'entities'>, e: Ske
     // P4b (SKETCH)
     case 'spline':
       return distanceToSpline(f, e, p);
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic': {
+      const c = conicCurve(f, e);
+      return c ? closestOnConicCurve(c, p).d : Infinity;
+    }
   }
 }
 
@@ -157,6 +172,13 @@ export function closestOn(f: Pick<SketchFeature, 'points' | 'entities'>, e: Sket
     // P4b (SKETCH)
     case 'spline':
       return closestOnSplineEntity(f, e, p);
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic': {
+      const c = conicCurve(f, e);
+      return c ? closestOnConicCurve(c, p).p : null;
+    }
   }
 }
 
@@ -169,10 +191,10 @@ export function lineEnds(f: Pick<SketchFeature, 'points' | 'entities'>, id: stri
   return a && b ? [a, b] : null;
 }
 
-/** The centre point id of a circle or an arc. */
+/** The centre point id of a circle, an arc, an ellipse or a partial ellipse. */
 export function centreOf(f: Pick<SketchFeature, 'entities'>, id: string): string | null {
   const e = entityOf(f, id);
-  return e?.kind === 'circle' || e?.kind === 'arc' ? e.c : null;
+  return e?.kind === 'circle' || e?.kind === 'arc' || e?.kind === 'ellipse' || e?.kind === 'ellipse_arc' ? e.c : null;
 }
 
 /** Radius of a circle or an arc now. */
@@ -312,6 +334,15 @@ export function toSolverSketch(f: Pick<SketchFeature, 'points' | 'entities' | 'c
       // P4b (SKETCH): the solver sees a spline's points; the curve adds no unknowns.
       case 'spline':
         return { ...base, kind: 'spline' as const, form: e.form, pts: [...e.pts], degree: e.degree, ...(e.closed ? { closed: true } : {}), ...(e.handles ? { handles: [e.handles[0], e.handles[1]] as [string | null, string | null] } : {}), ...(e.knots && e.mults ? { knots: [...e.knots], mults: [...e.mults] } : {}), ...(e.spans ? { spans: [e.spans[0], e.spans[1]] as [number, number] } : {}) };
+      // Ellipses, parabolas, conics: their points (the solver adds their hidden unknowns).
+      case 'ellipse':
+        return { ...base, kind: 'ellipse' as const, c: e.c, major: e.major, minor: e.minor };
+      case 'ellipse_arc':
+        return { ...base, kind: 'ellipse_arc' as const, c: e.c, major: e.major, minor: e.minor, a: e.a, b: e.b, ...(e.ccw === false ? { ccw: false } : {}) };
+      case 'parabola':
+        return { ...base, kind: 'parabola' as const, f: e.f, v: e.v, a: e.a, b: e.b };
+      case 'conic':
+        return { ...base, kind: 'conic' as const, a: e.a, b: e.b, t: e.t, rho: e.rho };
     }
   });
   const constraints: SolverSketch['constraints'] = [{ id: ORIGIN_FIX, kind: 'fix', refs: [ORIGIN], value: [0, 0] }];
@@ -393,7 +424,7 @@ export function evaluateDimensions(f: Pick<SketchFeature, 'constraints'>, units:
 
 // ------------------------------------------------------------ words
 
-const ENTITY_WORD: Record<SketchEntity['kind'], string> = { point: 'Point', line: 'Line', circle: 'Circle', arc: 'Arc', spline: 'Spline' };
+const ENTITY_WORD: Record<SketchEntity['kind'], string> = { point: 'Point', line: 'Line', circle: 'Circle', arc: 'Arc', spline: 'Spline', ...CONIC_WORDS };
 
 /** "Line 3", "Centerline 1", "Circle 2", "Arc 1", "Point 4" (numbered by kind in drawing order). */
 export function entityLabel(f: Pick<SketchFeature, 'entities'>, id: string): string {
@@ -439,6 +470,10 @@ export function refLabel(f: Pick<SketchFeature, 'points' | 'entities'>, ref: str
     if (!owner) return 'Point';
     if (owner.kind === 'point') return entityLabel(f, owner.id);
     if ((owner.kind === 'circle' || owner.kind === 'arc') && owner.c === ref) return `Centre of ${entityLabel(f, owner.id)}`;
+    if (owner.kind === 'ellipse' || owner.kind === 'ellipse_arc' || owner.kind === 'parabola' || owner.kind === 'conic') {
+      const role = conicPointRole(owner, ref);
+      if (role) return `${role} of ${entityLabel(f, owner.id)}`;
+    }
     return `End of ${entityLabel(f, owner.id)}`;
   }
   return entityLabel(f, ref);

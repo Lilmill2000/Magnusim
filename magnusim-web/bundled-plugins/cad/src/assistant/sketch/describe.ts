@@ -22,6 +22,7 @@ import { jsonBytes } from '../numbers';
 import { expandEntity, type EntityKind, type Macro } from './macros';
 import { linkEntityNames, offsetSidePlace, ownedEntities, partsOfEntity, tieCopyNames, tieValue } from './names';
 import { toolKindOf } from './signatures';
+import { conicPointIds, ellipseAngle, ellipseFrameOf, parabolaFrameOf, parabolaU } from '../../sketch/tools/conic';
 
 export interface SketchForm {
   /** The tool's input for this sketch (edit set to its name), or null. */
@@ -89,6 +90,11 @@ function pointsOf(e: SketchEntity): string[] {
       return [e.c, e.a, e.b];
     case 'spline':
       return [...e.pts];
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic':
+      return conicPointIds(e);
     default:
       return [];
   }
@@ -397,6 +403,41 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
         if (e.closed) at.push(...P(e.pts[0]).map(r6));
         if (e.form === 'control') at.push(e.degree);
         entities.push({ id: e.id, kind: e.form === 'fit' ? 'spline' : 'control_spline', at, construction });
+        return;
+      }
+      // The Ellipse group, in macros.ts's forms (an ellipse's b signed by its minor end's side).
+      case 'ellipse':
+      case 'ellipse_arc': {
+        const c = P(e.c);
+        const g = ellipseFrameOf(c, P(e.major), P(e.minor));
+        if (!g) return;
+        name(e.id, e.id);
+        for (const [part, p] of partsOfEntity(e)) name(p, `${e.id}.${part}`);
+        const at = [c[0], c[1], g.major, g.side * g.minor].map(r6);
+        at.push(r6(Math.atan2(g.ux[1], g.ux[0]) * DEG));
+        if (e.kind === 'ellipse_arc') {
+          const ccw = e.ccw !== false;
+          const t0 = ellipseAngle(g, P(ccw ? e.a : e.b)) * DEG;
+          const t1 = ellipseAngle(g, P(ccw ? e.b : e.a)) * DEG;
+          at.push(...(g.side > 0 ? [t0, t1] : [-t1, -t0]).map(r6));
+        }
+        entities.push({ id: e.id, kind: e.kind, at, construction });
+        return;
+      }
+      case 'parabola': {
+        const F = P(e.f);
+        const V = P(e.v);
+        const g = parabolaFrameOf(F, V);
+        if (!g) return;
+        name(e.id, e.id);
+        for (const [part, p] of partsOfEntity(e)) name(p, `${e.id}.${part}`);
+        entities.push({ id: e.id, kind: 'parabola', at: [F[0], F[1], V[0], V[1], parabolaU(g, P(e.a)), parabolaU(g, P(e.b))].map(r6), construction });
+        return;
+      }
+      case 'conic': {
+        name(e.id, e.id);
+        for (const [part, p] of partsOfEntity(e)) name(p, `${e.id}.${part}`);
+        entities.push({ id: e.id, kind: 'conic', at: [...P(e.a), ...P(e.b), ...P(e.t)].map(r6).concat([e.rho]), construction });
         return;
       }
       default:

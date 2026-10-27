@@ -110,7 +110,9 @@ describe('help', () => {
   });
 
   it("the sketch topic gives each entity kind, the solver's ref signatures, joins and the frames", () => {
-    expect(HELP.sketch.map((r) => r.about)).toEqual([...SKETCH_ENTITY_KINDS, 'relations', 'dimensions', 'ids and refs', 'joins', 'infer', 'the solver', 'planes and faces', 'replace']);
+    expect(HELP.sketch.map((r) => r.about)).toEqual([...SKETCH_ENTITY_KINDS, 'relations', 'dimensions', 'ids and refs', 'joins', 'planes and faces', 'replace']);
+    // v0.5.0: infer and the solver's rules are in sketch_tools (help sketch keeps every kind within its size).
+    expect(HELP.sketch_tools.map((r) => r.about).slice(-2)).toEqual(['infer', 'the solver']);
     const text = (about: string) => HELP.sketch.find((r) => r.about === about)!.text;
     expect(text('rect')).toBe('rect [u1, v1, u2, v2] (two opposite corners): keeps its 2 horizontals and 2 verticals. Parts: x.bl x.br x.tr x.tl x.bottom x.right x.top x.left. 4 DOF.');
     expect(text('sector')).toContain('6 DOF');

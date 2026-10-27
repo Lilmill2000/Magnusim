@@ -52,11 +52,24 @@
 //   control_spline [u1, v1, ..., degree]      a control-point spline on poles S__p0... of
 //                (closed as a spline; degree  degree 3 or 5 (degree + 1 poles or more)
 //                3 or 5)                                                          2 x points
+//   ellipse      [cu, cv, a, b, angle] deg    E__center, E__major (a along angle), E__minor
+//                (a > |b| > 0; b < 0 puts     (|b| across, +90 deg from the major axis), the
+//                the minor end on the other   ellipse E (the person's Ellipse)               5
+//                side)
+//   ellipse_arc  [cu, cv, a, b, angle, start, end] deg: an ellipse's points and its ends
+//                E__start, E__end at eccentric angles start, end (ccw from start; the point
+//                at t is centre + a cos t major + b sin t minor) (Partial ellipse)        7
+//   parabola     [fu, fv, vu, vv, t1, t2]     P__focus, P__vertex, ends P__start, P__end at
+//                                             t1, t2 across the axis (vertex + t^2/(4f) along
+//                                             the axis + t across, f the focal length)     6
+//   conic        [u1, v1, u2, v2, tu, tv, rho] K__start, K__end, the top point K__top where
+//                                             the end tangents meet, rho in (0, 1)         6
 // Pure functions; compile.ts checks ids, joins points and resolves the constraints' refs.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { splineCurve } from '../../sketch/tools/bspline';
-import type { SketchEntity, SketchRelation, Vec2 } from '../../types/doc';
+import { ellipsePoint, ellipseFrameOf, parabolaFrameOf, parabolaPoint, rhoOk } from '../../sketch/tools/conic';
+import type { SketchConicEntity, SketchEntity, SketchRelation, Vec2 } from '../../types/doc';
 import type { SKETCH_ENTITY_KINDS } from '../schemas';
 
 /** The fewest points a spline takes (the person's Spline tools: fit 2 open, 3 closed; control degree + 1). */
@@ -88,10 +101,14 @@ export const AT_WORDS: Readonly<Record<EntityKind, string>> = Object.freeze({
   sector: '[cu, cv, r1, r2, start deg, end deg] (0 <= r1 < r2, counter-clockwise)',
   spline: '[u1, v1, u2, v2, ...] (the fit points it passes through, 2 or more; closed when the last point is the first, 3 or more then)',
   control_spline: '[u1, v1, ..., un, vn, degree] (the poles, then the degree 3 or 5; degree + 1 poles or more; closed when the last pole is the first)',
+  ellipse: '[cu, cv, a, b, angle deg] (major radius a along angle, minor b; a > |b|; b < 0 puts x.minor on the other side)',
+  ellipse_arc: '[cu, cv, a, b, angle, t1, t2] (an ellipse; ends at eccentric angles t1 to t2 deg ccw: c + a cos t major + b sin t minor)',
+  parabola: '[fu, fv, vu, vv, t1, t2] (focus, vertex; ends at t across the axis: v + t^2/4f along it + t across)',
+  conic: '[u1, v1, u2, v2, tu, tv, rho] (ends, the top point where their tangents meet, 0 < rho < 1)',
 });
 
 /** The DOF each kind keeps after its own relations (help sketch; polyline: 2 per point). */
-export const KIND_DOF: Readonly<Record<EntityKind, number | null>> = Object.freeze({ point: 2, line: 4, centerline: 4, polyline: null, midpoint_line: 4, circle: 3, circle_3pt: 3, arc: 5, rect: 4, center_rect: 4, rect_3pt: 5, center_rect_3pt: 5, parallelogram: 6, slot: 5, arc_slot: 6, polygon: 4, sector: 6, spline: null, control_spline: null });
+export const KIND_DOF: Readonly<Record<EntityKind, number | null>> = Object.freeze({ point: 2, line: 4, centerline: 4, polyline: null, midpoint_line: 4, circle: 3, circle_3pt: 3, arc: 5, rect: 4, center_rect: 4, rect_3pt: 5, center_rect_3pt: 5, parallelogram: 6, slot: 5, arc_slot: 6, polygon: 4, sector: 6, spline: null, control_spline: null, ellipse: 5, ellipse_arc: 7, parabola: 6, conic: 6 });
 
 /** Ends this close are one point (mm): joins, closed polylines, infer. */
 export const JOIN_TOL = 0.05;
@@ -185,6 +202,12 @@ class Builder {
     this.m.entities.push({ id, kind: 'spline', form, pts, degree, ...(closed ? { closed: true } : {}), ...this.flags() });
     this.m.parts[''] = id;
     return id;
+  }
+  /** An ellipse, a partial ellipse, a parabola or a conic as the person's Ellipse group tools store it (src/sketch/tools/ellipse.ts). */
+  conic(e: SketchConicEntity): string {
+    this.m.entities.push({ ...e, ...this.flags() });
+    this.m.parts[''] = e.id;
+    return e.id;
   }
   pointEntity(part: string, p: string, extra?: { construction?: boolean }): string {
     const id = part ? S(this.m.id, part) : this.m.id;
@@ -497,6 +520,70 @@ export function expandEntity(id: string, kind: EntityKind, at: readonly number[]
         b.m.parts.end = ids[ids.length - 1];
       }
       b.spline(form, ids, degree, closed);
+      break;
+    }
+    // The Ellipse group: the person's Ellipse, Partial ellipse, Parabola and Conic records.
+    case 'ellipse':
+    case 'ellipse_arc': {
+      const w = want(kind === 'ellipse' ? 5 : 7);
+      if (w) return w;
+      const [cu, cv, A, Bs, ang] = at;
+      const B = Math.abs(Bs);
+      if (!(B > 0) || !(A > B)) return bad('its radii must be a > |b| > 0 (a the major radius)');
+      const c: Vec2 = [cu, cv];
+      const ux: Vec2 = [Math.cos(ang * DEG), Math.sin(ang * DEG)];
+      const side = Bs < 0 ? -1 : 1;
+      const M: Vec2 = [cu + A * ux[0], cv + A * ux[1]];
+      const N: Vec2 = [cu - side * B * ux[1], cv + side * B * ux[0]];
+      const g = ellipseFrameOf(c, M, N)!;
+      if (kind === 'ellipse') {
+        b.conic({ id, kind: 'ellipse', c: b.point('center', c), major: b.point('major', M), minor: b.point('minor', N) });
+        break;
+      }
+      const [s, e] = [at[5], at[6]];
+      const sweep = sweepOf(s, e);
+      if (sweep < 1e-6 || 360 - sweep < 1e-6) return bad('its start and end angles are the same: use an ellipse for a whole one');
+      // Eccentric angles: the point at t is centre + a cos t major + b sin t across (b signed). Stored
+      // counter-clockwise, as the person's tool stores a partial ellipse drawn that way: with b < 0 the
+      // curve runs clockwise from start to end, so its counter-clockwise start is the given end.
+      const P = (t: number) => ellipsePoint(g, side * t * DEG);
+      const [p0, p1] = side > 0 ? [P(s), P(e)] : [P(e), P(s)];
+      // Its ends first: an end on an axis end joins another entity's point before the axis end does.
+      const sp = b.point('start', p0);
+      const ep = b.point('end', p1);
+      b.conic({ id, kind: 'ellipse_arc', c: b.point('center', c), major: b.point('major', M), minor: b.point('minor', N), a: sp, b: ep });
+      break;
+    }
+    case 'parabola': {
+      const w = want(6);
+      if (w) return w;
+      const F: Vec2 = [at[0], at[1]];
+      const V: Vec2 = [at[2], at[3]];
+      const g = parabolaFrameOf(F, V);
+      if (!g || g.p <= JOIN_TOL) return bad('its focus and vertex must be apart');
+      if (Math.abs(at[5] - at[4]) <= JOIN_TOL) return bad('its two ends t1 and t2 must be apart');
+      const fp = b.point('focus', F);
+      const vp = b.point('vertex', V);
+      const sp = b.point('start', parabolaPoint(g, at[4]));
+      const ep = b.point('end', parabolaPoint(g, at[5]));
+      b.conic({ id, kind: 'parabola', f: fp, v: vp, a: sp, b: ep });
+      break;
+    }
+    case 'conic': {
+      const w = want(7);
+      if (w) return w;
+      const A: Vec2 = [at[0], at[1]];
+      const Z: Vec2 = [at[2], at[3]];
+      const T: Vec2 = [at[4], at[5]];
+      const rho = at[6];
+      if (!rhoOk(rho)) return bad(`its last number is rho, more than 0 and less than 1, not ${rho}`);
+      if (dist(A, Z) <= JOIN_TOL) return bad('its two ends must be apart');
+      const cr = (T[0] - A[0]) * (Z[1] - A[1]) - (T[1] - A[1]) * (Z[0] - A[0]);
+      if (!(Math.abs(cr) > 1e-9 * Math.max(1, dist(A, Z) ** 2))) return bad('its top point must be off the line through its ends');
+      const sp = b.point('start', A);
+      const ep = b.point('end', Z);
+      const tp = b.point('top', T);
+      b.conic({ id, kind: 'conic', a: sp, b: ep, t: tp, rho });
       break;
     }
     default:

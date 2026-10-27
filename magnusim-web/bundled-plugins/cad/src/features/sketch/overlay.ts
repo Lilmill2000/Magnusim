@@ -49,7 +49,7 @@ export function entitySegments(g: EntityGeom, plane: SketchOutput['plane']): num
   };
   if (g.kind === 'line') push(g.a[0], g.a[1], g.b[0], g.b[1]);
   // P4b (SKETCH): a spline's polyline.
-  else if (g.kind === 'spline') for (let i = 1; i < g.poly.length; i++) push(g.poly[i - 1][0], g.poly[i - 1][1], g.poly[i][0], g.poly[i][1]);
+  else if (g.kind === 'spline' || g.kind === 'conic') for (let i = 1; i < g.poly.length; i++) push(g.poly[i - 1][0], g.poly[i - 1][1], g.poly[i][0], g.poly[i][1]);
   else if (g.kind === 'circle' || g.kind === 'arc') {
     let a0 = 0;
     let sweep = 360;

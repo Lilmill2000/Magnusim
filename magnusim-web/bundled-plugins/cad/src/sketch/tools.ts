@@ -33,6 +33,8 @@ import { offsetTool } from './tools/offset';
 import { filletTool } from './tools/fillet';
 // v0.5.0 (SHAPES): slots, polygon, sector and the other shape variants.
 import { SHAPE_SPEC, shapeTool } from './tools/shapes';
+// The Ellipse group: Ellipse, Partial ellipse, Parabola, Conic.
+import { conicTool, ellipseTool, parabolaTool, partialEllipseTool } from './tools/ellipse';
 
 type Draft = SketchFeature;
 const DRAG_PX = 4;
@@ -58,7 +60,8 @@ export function placePoint(b: SketchBuilder, inf: Inference, id?: string): strin
 
 function onCurve(b: SketchBuilder, p: string, entity: string) {
   const e = entityOf(b, entity);
-  if (!e) return;
+  // A conic takes no On curve relation (PlaneGCS holds points on its ends only).
+  if (!e || e.kind === 'conic' || e.kind === 'point') return;
   b.addRelation(e.kind === 'line' ? 'point_on_line' : 'point_on_circle', [p, entity], { inferred: true, optional: true });
 }
 
@@ -128,7 +131,8 @@ export class Boxes {
       }
       const v = now[d.id] ?? 0;
       // The value now with its unit ("40 mm", "30°"): typing replaces it, and the same text parses back.
-      const shown = withDisplayUnit(v, d.quantity === 'angle' ? 'angle' : 'length', units);
+      // A plain number (a conic's rho) shows to 3 decimals.
+      const shown = d.quantity === 'scalar' ? String(Math.round(v * 1000) / 1000) : withDisplayUnit(v, d.quantity === 'angle' ? 'angle' : 'length', units);
       return { id: d.id, label: d.label, at: at[d.id] ?? [0, 0], along: along[d.id] ?? null, text: t ?? shown, locked: t != null && !error, error, quantity: d.quantity === 'angle' ? 'angle' : 'length' };
     });
   }
@@ -1165,6 +1169,14 @@ export function makeTool(mode: SketchMode, id: SketchToolId): SketchTool {
     case 'polygon':
     case 'sector':
       return shapeTool(mode, SHAPE_SPEC[id]);
+    case 'ellipse':
+      return ellipseTool(mode);
+    case 'ellipse-partial':
+      return partialEllipseTool(mode);
+    case 'parabola':
+      return parabolaTool(mode);
+    case 'conic':
+      return conicTool(mode);
     case 'select':
     default:
       return selectTool(mode);

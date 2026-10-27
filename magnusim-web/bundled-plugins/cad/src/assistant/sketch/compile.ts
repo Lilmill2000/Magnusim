@@ -25,6 +25,10 @@
 //             (sketch/constraints.ts): tangent at an end it shares with the other curve (a fit
 //             spline gets its end handle there first, as the person's Tangent gives it), a point
 //             on the curve; anything else names the spline's points instead
+//   ellipses  an ellipse's, a parabola's or a conic's curve takes the person's rules
+//             (sketch/constraints.ts): coincident / point_on (a point on an ellipse or a parabola),
+//             horizontal / vertical (its axis), tangent (a line and an ellipse; any two curves at an
+//             end they share), equal, concentric; dimensions take its points (e.center, e.major)
 //   values    a dimension's expression ("w", "12 mm"; a bare number takes the Part's unit, stored
 //             with it), driving; "driven" makes it driven (measured, never held: the person's
 //             "Make it driven"); a relation's value is ""
@@ -33,7 +37,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { planConstraint } from '../../sketch/constraints';
 import { danglingRefs } from '../../sketch/edit';
-import { entityEnds, entityOf, pointAt, pointIdOf, refKindOf, ORIGIN } from '../../sketch/model';
+import { entityEnds, entityOf, entityPoints, pointAt, pointIdOf, refKindOf, ORIGIN } from '../../sketch/model';
+import { isConic } from '../../sketch/tools/conic';
 import type { SketchConstraint, SketchEntity, SketchFeature, SketchRelation, SketchSplineEntity, Vec2 } from '../../types/doc';
 import type { UnitsService } from '../../types/units';
 import { ToolError } from '../errors';
@@ -175,6 +180,12 @@ function keptPoint(stored: SketchFeature | null, id: string, kind: EntityKind, p
       const m = /^p(\d+)$/.exec(part);
       return m ? (e.pts[Number(m[1])] ?? null) : null;
     }
+    // The Ellipse group: a part of the same kind.
+    case 'ellipse':
+    case 'ellipse_arc':
+    case 'parabola':
+    case 'conic':
+      return kind === e.kind ? (partsOfEntity(e).find(([p]) => p === part)?.[1] ?? null) : null;
     default:
       return null;
   }
@@ -404,6 +415,24 @@ export class SketchCompiler {
           x.a = mapPt(i, x.a);
           x.b = mapPt(i, x.b);
         } else if (x.kind === 'spline') x.pts = x.pts.map((p) => mapPt(i, p));
+        else if (x.kind === 'ellipse' || x.kind === 'ellipse_arc') {
+          x.c = mapPt(i, x.c);
+          x.major = mapPt(i, x.major);
+          x.minor = mapPt(i, x.minor);
+          if (x.kind === 'ellipse_arc') {
+            x.a = mapPt(i, x.a);
+            x.b = mapPt(i, x.b);
+          }
+        } else if (x.kind === 'parabola') {
+          x.f = mapPt(i, x.f);
+          x.v = mapPt(i, x.v);
+          x.a = mapPt(i, x.a);
+          x.b = mapPt(i, x.b);
+        } else if (x.kind === 'conic') {
+          x.a = mapPt(i, x.a);
+          x.b = mapPt(i, x.b);
+          x.t = mapPt(i, x.t);
+        }
         // A kept entity keeps its lineage; a kept spline its handles and a trimmed piece's exact curve.
         const was = stored?.entities.find((s) => s.id === x.id && s.kind === x.kind);
         if (was?.parent) x.parent = was.parent;
@@ -426,7 +455,7 @@ export class SketchCompiler {
         this.own.set(r.id, m.words[r.id]);
       }
     });
-    const degenerate = entities.filter((e) => (e.kind === 'line' && e.p[0] === e.p[1]) || (e.kind === 'arc' && (e.a === e.b || e.a === e.c || e.b === e.c)) || (e.kind === 'spline' && new Set(e.pts).size !== e.pts.length));
+    const degenerate = entities.filter((e) => (e.kind === 'line' && e.p[0] === e.p[1]) || (e.kind === 'arc' && (e.a === e.b || e.a === e.c || e.b === e.c)) || (e.kind === 'spline' && new Set(e.pts).size !== e.pts.length) || (isConic(e) && new Set(entityPoints(e)).size !== entityPoints(e).length));
     if (degenerate.length) refuse('bad_entity', degenerate.map((e) => `${this.refOf(e.id)}: its points joined into one: move them apart`));
 
     // ---- every id once (a part written out as an entity of its own clashes with the macro's)
@@ -650,6 +679,36 @@ export class SketchCompiler {
         }
         g.points[h] = [place[0], place[1]];
       }
+      g.constraints.push({ id: c.id, kind: r.kind, refs: r.refs } as SketchRelation);
+      this.rows.set(c.id, i);
+      return;
+    }
+    // ---- an ellipse's, a parabola's or a conic's curve: the person's rules (sketch/constraints.ts)
+    if (kinds.some((k) => k === 'ellipse' || k === 'ellipse_arc' || k === 'parabola' || k === 'conic')) {
+      if (dimension) {
+        this.refProblems.push(`${at} (${c.id}): a dimension does not measure an ellipse's, a parabola's or a conic's curve: dimension its points (e.center to e.major is the major radius, e.minor the minor; p.vertex to p.focus the focal length)`);
+        return;
+      }
+      if (value) {
+        this.otherProblems.push(`${at}.value (${c.id}): ${kind} is a relation: its value is "", not "${value}"`);
+        return;
+      }
+      if (was && 'refs' in was && !('expr' in was) && JSON.stringify(was.refs) === JSON.stringify(refs) && (toolKindOf(was.kind) === kind || (kind === 'coincident' && was.kind === 'point_on_circle'))) {
+        g.constraints.push({ ...was } as SketchRelation);
+        this.rows.set(c.id, i);
+        return;
+      }
+      if (place) {
+        this.refProblems.push(`${at} (${c.id}): at(u, v) places a dimension's label or a fit spline's handle, not a ${kind}`);
+        return;
+      }
+      const stored = kind === 'point_on' ? 'coincident' : kind;
+      const plan = planConstraint(g, stored as SketchRelation['kind'], refs);
+      if (!plan.ok || plan.add.length !== 1) {
+        this.refProblems.push(`${at} (${c.id}): ${plan.ok ? `${kind} takes one relation here: name two curves, or a point and a curve` : plan.reason}`);
+        return;
+      }
+      const r = plan.add[0];
       g.constraints.push({ id: c.id, kind: r.kind, refs: r.refs } as SketchRelation);
       this.rows.set(c.id, i);
       return;

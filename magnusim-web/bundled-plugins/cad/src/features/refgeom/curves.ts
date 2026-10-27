@@ -40,7 +40,7 @@ function sketchLength(g: EntityGeom): number {
     return g.r * sweep * DEG;
   }
   // P4b (SKETCH)
-  if (g.kind === 'spline') return polyLength(g.poly);
+  if (g.kind === 'spline' || g.kind === 'conic') return polyLength(g.poly);
   return 0;
 }
 
@@ -53,7 +53,7 @@ function sketchFraction(g: EntityGeom, uv: Vec2): number {
     return Math.max(0, Math.min(1, ((uv[0] - g.a[0]) * dx + (uv[1] - g.a[1]) * dy) / l2));
   }
   // P4b (SKETCH)
-  if (g.kind === 'spline') return polyFraction(g.poly, uv);
+  if (g.kind === 'spline' || g.kind === 'conic') return polyFraction(g.poly, uv);
   if (g.kind !== 'circle' && g.kind !== 'arc') return 0;
   const ang = Math.atan2(uv[1] - g.c[1], uv[0] - g.c[0]) / DEG;
   if (g.kind === 'circle') return (((ang % 360) + 360) % 360) / 360;

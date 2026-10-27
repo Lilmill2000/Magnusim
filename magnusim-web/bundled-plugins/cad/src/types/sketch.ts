@@ -79,6 +79,11 @@ export interface SolverSketch {
     | { id: string; kind: 'arc'; c: string; a: string; b: string; ccw?: boolean; construction?: boolean }
     // P4b (SKETCH): a spline (its points are solver points; the curve adds no unknowns).
     | { id: string; kind: 'spline'; form: 'fit' | 'control'; pts: string[]; degree: number; closed?: boolean; handles?: [string | null, string | null]; knots?: number[]; mults?: number[]; spans?: [number, number]; construction?: boolean }
+    // Ellipses, arcs of an ellipse or a parabola, rho conics (src/sketch/tools/conic.ts): the solver adds their hidden unknowns.
+    | { id: string; kind: 'ellipse'; c: string; major: string; minor: string; construction?: boolean }
+    | { id: string; kind: 'ellipse_arc'; c: string; major: string; minor: string; a: string; b: string; ccw?: boolean; construction?: boolean }
+    | { id: string; kind: 'parabola'; f: string; v: string; a: string; b: string; construction?: boolean }
+    | { id: string; kind: 'conic'; a: string; b: string; t: string; rho: number; construction?: boolean }
   )[];
   // P4b (SKETCH): number[] for the solver-only pattern ties (src/sketch/tools/ties.ts).
   constraints: { id: string; kind: string; refs: string[]; value?: number | Vec2 | number[]; driving?: boolean }[];
@@ -200,7 +205,12 @@ export type SketchToolId =
   | 'slot-arc-3pt'
   | 'slot-arc-center'
   | 'polygon'
-  | 'sector';
+  | 'sector'
+  // ---- ellipses, parabolas and conics
+  | 'ellipse'
+  | 'ellipse-partial'
+  | 'parabola'
+  | 'conic';
 
 /** Sketch mode's live state (one store; written only by src/sketch/). */
 export interface SketchModeState {

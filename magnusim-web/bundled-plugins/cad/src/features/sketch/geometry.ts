@@ -12,6 +12,8 @@ import type { UnitsService } from '../../types/units';
 import { splineOf } from '../../sketch/tools/spline-entity';
 import { splinePolyline, type BSpline } from '../../sketch/tools/bspline';
 import { evaluateTies } from '../../sketch/tools/ties';
+// Ellipses, parabolas, conics.
+import { conicCurve, conicNurbs, conicPolyline, type ConicKind, type Nurbs } from '../../sketch/tools/conic';
 
 const DEG = 180 / Math.PI;
 
@@ -22,7 +24,13 @@ export type EntityGeom =
   | { kind: 'circle'; id: SketchEntityId; construction: boolean; c: Vec2; r: number; pc: SketchPointId }
   | { kind: 'arc'; id: SketchEntityId; construction: boolean; c: Vec2; r: number; a: Vec2; b: Vec2; a0: number; a1: number; ccw: boolean; pa: SketchPointId; pb: SketchPointId; pc: SketchPointId }
   /** P4b (SKETCH): a spline as its B-spline (OCCT form) and a dense polyline; `a`/`b` its ends (closed: both at pa). */
-  | { kind: 'spline'; id: SketchEntityId; construction: boolean; curve: BSpline; poly: Vec2[]; a: Vec2; b: Vec2; pa: SketchPointId; pb: SketchPointId; closed: boolean };
+  | { kind: 'spline'; id: SketchEntityId; construction: boolean; curve: BSpline; poly: Vec2[]; a: Vec2; b: Vec2; pa: SketchPointId; pb: SketchPointId; closed: boolean }
+  /**
+   * An ellipse, a partial ellipse, a parabola piece or a rho conic (`shape`) as its exact rational
+   * B-spline (src/sketch/tools/conic.ts) and a dense polyline; `a`/`b` its ends (a closed ellipse:
+   * both at its major end, pa).
+   */
+  | { kind: 'conic'; shape: ConicKind; id: SketchEntityId; construction: boolean; nurbs: Nurbs; poly: Vec2[]; a: Vec2; b: Vec2; pa: SketchPointId; pb: SketchPointId; closed: boolean };
 
 /** The points a sketch uses, SKETCH_ORIGIN included at [0, 0]. */
 export function withOrigin(points: Record<SketchPointId, Vec2>): Record<SketchPointId, Vec2> {
@@ -43,6 +51,11 @@ export function isConstruction(e: SketchEntity): boolean {
 
 function angleOf(c: Vec2, p: Vec2): number {
   return Math.atan2(p[1] - c[1], p[0] - c[0]) * DEG;
+}
+
+/** The point ids an entity uses (as src/sketch/model.ts entityPoints; repeated here, this module stays free of sketch mode). */
+function entityPointIds(e: Extract<SketchEntity, { kind: 'ellipse' | 'ellipse_arc' | 'parabola' | 'conic' }>): SketchPointId[] {
+  return e.kind === 'ellipse' ? [e.c, e.major, e.minor] : e.kind === 'ellipse_arc' ? [e.c, e.major, e.minor, e.a, e.b] : e.kind === 'parabola' ? [e.f, e.v, e.a, e.b] : [e.a, e.b, e.t];
 }
 
 /**
@@ -84,6 +97,18 @@ export function entityGeometry(f: Pick<SketchFeature, 'entities'>, points: Recor
         const pb = e.closed ? e.pts[0] : e.pts[e.pts.length - 1];
         return { kind: 'spline', id: e.id, construction, curve, poly: splinePolyline(curve, 24), a: [first[0], first[1]], b: [last[0], last[1]], pa, pb, closed: !!e.closed };
       }
+      case 'ellipse':
+      case 'ellipse_arc':
+      case 'parabola':
+      case 'conic': {
+        for (const id of entityPointIds(e)) at(e, id);
+        const curve = conicCurve({ points: pts }, e);
+        if (!curve) throw new Error(`${e.kind} ${e.id}: its points do not make a curve (two in one place, or on one line?)`);
+        const nurbs = conicNurbs(curve);
+        const a = nurbs.poles[0];
+        const b = nurbs.poles[nurbs.poles.length - 1];
+        return { kind: 'conic', shape: e.kind, id: e.id, construction, nurbs, poly: conicPolyline(curve, 128), a: [a[0], a[1]], b: [b[0], b[1]], pa: curve.startId, pb: curve.endId, closed: curve.closed };
+      }
     }
   });
 }
@@ -103,6 +128,12 @@ export function curvesOf(geom: readonly EntityGeom[]): SketchCurve[] {
     else if (g.kind === 'arc') out.push({ id: g.id, kind: 'arc', c: g.c, r: g.r, a0: g.a0, a1: g.a1, ccw: g.ccw, pa: g.pa, pb: g.pb, pc: g.pc });
     // P4b (SKETCH): kernel request R1 (`bspline`, clamped, OCCT form).
     else if (g.kind === 'spline') out.push(bsplineCurve(g));
+    // Ellipses, parabolas, conics: their exact rational B-splines (weights only when rational).
+    else if (g.kind === 'conic') {
+      const n = g.nurbs;
+      const rational = !!n.weights && n.weights.some((w) => Math.abs(w - 1) > 1e-15);
+      out.push({ id: g.id, kind: 'bspline', degree: n.degree, poles: n.poles.map((q) => [q[0], q[1]] as Vec2), knots: [...n.knots], mults: [...n.mults], ...(rational ? { weights: [...n.weights!] } : {}), pa: g.pa, pb: g.pb });
+    }
     else out.push({ id: g.id, kind: 'point', p: g.p, pid: g.pid });
   }
   return out;
@@ -208,7 +239,7 @@ export function measureDimension(c: Pick<SketchDimension, 'kind' | 'refs'>, geom
       if (g.kind === 'point') return { kind: 'point', p: g.p };
       if (g.kind === 'line') return { kind: 'line', a: g.a, b: g.b };
       // P4b (SKETCH): no dimension measures a spline's curve itself (its points take dimensions).
-      if (g.kind === 'spline') return null;
+      if (g.kind === 'spline' || g.kind === 'conic') return null;
       return { kind: 'curve', c: g.c, r: g.r };
     }
     const p = pts[id];

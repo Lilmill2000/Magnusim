@@ -26,6 +26,7 @@
 import { emptyPreview, modeFor, type ApplyResult, type SketchHit, type SketchMode, type SketchPreview } from '../../sketch/mode';
 import { entityPoints } from '../../sketch/model';
 import { splineSamples } from '../../sketch/tools/spline-entity';
+import { conicCurve, conicPolyline, isConic } from '../../sketch/tools/conic';
 import type { Feature, FeatureId, SketchConstraint, SketchEntity, SketchFeature, SketchSupport, Vec2 } from '../../types/doc';
 import type { EditSession } from '../../types/doc-service';
 import type { PlaneRef } from '../../types/references';
@@ -150,6 +151,16 @@ function previewOf(es: readonly SketchEntity[], at: (id: string) => Vec2 | null)
         if (q) points[id] = q;
       }
       const poly = splineSamples({ points }, e, 64);
+      for (let i = 1; i < poly.length; i++) p.lines.push([poly[i - 1], poly[i]]);
+    } else if (isConic(e)) {
+      // The Ellipse group's tools show the curve as it is drawn.
+      const points: Record<string, Vec2> = {};
+      for (const id of entityPoints(e)) {
+        const q = at(id);
+        if (q) points[id] = q;
+      }
+      const c = conicCurve({ points }, e);
+      const poly = c ? conicPolyline(c, 96) : [];
       for (let i = 1; i < poly.length; i++) p.lines.push([poly[i - 1], poly[i]]);
     }
   }
