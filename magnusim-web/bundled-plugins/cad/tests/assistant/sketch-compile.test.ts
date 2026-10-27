@@ -98,10 +98,21 @@ describe('macros', () => {
       ['polygon', [0, 0, 10, 6], 4],
       ['polygon', [3, 1, 7, 3], 4],
       ['sector', [0, 0, 10, 15, 20, 80], 6],
+      // v0.5.0: the shapes the person's new tools draw.
+      ['sector', [0, 0, 0, 15, 20, 80], 5],
+      ['arc_slot', [0, 0, 20, 3, 10, 120], 6],
+      ['arc_slot', [5, 5, 20, 3, 300, 30], 6],
+      ['polygon', [0, 0, 10, 5, 17], 4],
+      ['midpoint_line', [0, 0, 10, 4], 4],
+      ['circle_3pt', [10, 0, 0, 10, -10, 0], 3],
+      ['rect_3pt', [0, 0, 20, 10, 8], 5],
+      ['rect_3pt', [0, 0, 20, 10, -8], 5],
+      ['center_rect_3pt', [0, 0, 20, 12, 30], 5],
+      ['parallelogram', [0, 0, 20, 0, 25, 10], 6],
     ];
     for (const [kind, at, dof] of cases) {
       expect(await dofOf(compile([E('e', kind, at)])), kind).toBe(dof);
-      if (KIND_DOF[kind as keyof typeof KIND_DOF] !== null) expect(KIND_DOF[kind as keyof typeof KIND_DOF], kind).toBe(dof);
+      if (KIND_DOF[kind as keyof typeof KIND_DOF] !== null && !(kind === 'sector' && at[2] === 0)) expect(KIND_DOF[kind as keyof typeof KIND_DOF], kind).toBe(dof);
     }
     // The L bracket of the guide: 6 corners, 12 DOF; infer makes its 6 sides horizontal or vertical.
     const L = [0, 0, 50, 0, 50, 5, 5, 5, 5, 40, 0, 40, 0, 0];
@@ -119,11 +130,11 @@ describe('macros', () => {
     expect(e.reason).toBe('bad_entity');
     expect(e.message).toContain('entities[0] (a, circle): its radius must be more than 0');
     expect(e.message).toContain('entities[1] (b, rect): a rect needs a width and a height');
-    expect(e.message).toContain('entities[2] (c, polygon): its last number is the side count, a whole number from 3 to 24, not 2.5');
+    expect(e.message).toContain('entities[2] (c, polygon): its fourth number is the side count, a whole number from 3 to 24, not 2.5');
     expect(e.message).toContain('entities[3] (d, arc): its start and end angles are the same');
     expect(e.message).toContain('entities[4] (f, line): a line takes 4 numbers [u1, v1, u2, v2], not 2');
     expect(e.hint).toBe('Give the entity kind the numbers its at needs (help sketch).');
-    expect(expandEntity('s', 'sector', [0, 0, 10, 5, 0, 90], false)).toEqual({ ok: false, problem: 'its radii must be 0 < r1 < r2' });
+    expect(expandEntity('s', 'sector', [0, 0, 10, 5, 0, 90], false)).toEqual({ ok: false, problem: 'its radii must be 0 <= r1 < r2' });
   });
 });
 

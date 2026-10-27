@@ -61,6 +61,12 @@ export interface CommandDef {
   hint?: string;
   /** Order within its group (ascending). */
   order?: number;
+  /**
+   * v0.5.0 (toolbar flyouts, src/ui/flyouts.ts): the flyout this command is a variant of ('line',
+   * 'rectangle', 'arc', 'slot', 'ellipse'...): its group shows one button for all of them, with an
+   * arrow that lists them. The command keeps its id, shortcut and tooltip.
+   */
+  flyout?: string;
   /** true, or the reason it is unavailable right now ("Nothing to undo"). */
   enabled?(services: AppServices): true | string;
   /**

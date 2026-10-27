@@ -243,7 +243,7 @@ const workspaceRows = (): HelpRow[] => [
   { about: 'origin_planes, rename_part', text: 'origin_planes value auto (drawn on an empty part and while one is selected or hovered) or always. rename_part value: the new name of the Part (the study title, as the tree\'s Rename part; at most 120 characters).' },
   { about: 'select, selection_filter', text: 'select items: selectors (help selectors), feature names, Top, Front, Right, X axis, Y axis, Z axis or origin; [] clears the selection. The person sees it selected; "selection" in later selectors reads it. selection_filter items: face, edge, vertex, body, feature, origin, sketch, region; [] lets everything be picked.' },
   { about: 'expand, collapse', text: 'target origin or bodies (the tree folders), tree (the design tree card; in a sketch for that sketch only), sketch_panel (the Sketch panel), sketch_details (its Details).' },
-  { about: 'toolbar_show, toolbar_hide, toolbar_move, toolbar_reset', text: 'target: a toolbar command id (solid.extrude, modify.shell, sketch.spline, ...). show puts it on the bar, hide in its group\'s More menu; move value "before <command id of the same group>" or end. toolbar_reset value model, sketch or "" (both). The layout is the person\'s, in every project.' },
+  { about: 'toolbar_show, toolbar_hide, toolbar_move, toolbar_reset', text: 'target: a toolbar command id (solid.extrude, modify.shell, sketch.spline, ...). show puts it on the bar, hide in its group\'s More menu; move value "before <command id of the same group>" or end. toolbar_reset value model, sketch or "" (both). A drawing tool in a flyout (sketch.centerline in Line) moves with its flyout. The layout is the person\'s, in every project.' },
   { about: 'banana_show, banana_hide, banana_place', text: 'The banana for scale: never a body, never in the simulation. banana_place value "x, y, z[, rot deg]" (mm; its underside at z). With target a sketch: that sketch\'s taped banana picture (seen while the sketch is edited), banana_place value "u, v" mm.' },
   { about: 'reload, keep_mine, retry_save, retry_kernel', text: 'reload: after another tab saved (the save chip); when this tab has a change of its own the person confirms first, as it is lost. keep_mine: this tab\'s version over the other tab\'s save; the person confirms. retry_save: a save that failed, now. retry_kernel: the geometry kernel that failed to start.' },
   { about: 'import_step, reheal', text: 'import_step: the file picker is the person\'s, so they are asked to pick the STEP (Import STEP in FILE, or a drop on the Part); call get_model after. reheal target: an Imported STEP; value the heal tolerance ("0.01 mm"; "" keeps it); items ["knit"] knits loose faces into solids, [] does not. One undo step, as Heal all in its panel.' },
@@ -280,6 +280,9 @@ const sketchToolRows = (): HelpRow[] => [
   { about: 'break_link', text: 'break_link [curves or a project/intersect row id]: the linked curves become ordinary geometry where they are; constraints on them stay.' },
 ];
 
+/** Kinds whose words name their parts (help sketch keeps within its size). */
+const NAMED_PARTS: ReadonlySet<EntityKind> = new Set(['midpoint_line', 'rect_3pt', 'center_rect_3pt', 'parallelogram', 'arc_slot']);
+
 /** The sketch reference (CAD tools spec §10.2 sketch): kinds, parts, DOF, refs, joins, frames. */
 const sketchRows = (): HelpRow[] => {
   const kinds: [EntityKind, number[], string][] = [
@@ -287,18 +290,24 @@ const sketchRows = (): HelpRow[] => {
     ['line', [0, 0, 1, 0], 'x is the line'],
     ['centerline', [0, 0, 1, 0], 'a construction line: a revolve or mirror axis ("Sketch.x")'],
     ['polyline', [0, 0, 1, 0, 1, 1], 'points x.p0, x.p1, ...; side x.k runs from x.p(k-1) to x.pk; closed when the last point is the first (x.p0 again); 2 DOF per point'],
+    ['midpoint_line', [0, 0, 1, 0], 'x.line from x.start to x.end, its middle held on the construction point x.center'],
     ['circle', [0, 0, 1], 'x is the circle'],
+    ['circle_3pt', [0, 0, 2, 0, 1, 1], 'x is the circle through the three points'],
     ['arc', [0, 0, 1, 0, 90], 'x is the arc, counter-clockwise from start to end'],
     ['rect', [0, 0, 2, 1], 'keeps its 2 horizontals and 2 verticals'],
     ['center_rect', [0, 0, 2, 1], 'a rect with a construction centre point x.center kept midway between x.bl and x.tr'],
+    ['rect_3pt', [0, 0, 2, 1, 1], 'an angled rect: corners x.p1..x.p4, sides x.s1..x.s4 (x.sk from x.pk); s1 perpendicular to s2, s1 parallel to s3, s2 to s4'],
+    ['center_rect_3pt', [0, 0, 2, 1, 30], 'the parts of rect_3pt about the construction point x.center (midway between x.p1 and x.p3)'],
+    ['parallelogram', [0, 0, 2, 0, 3, 1], 'the parts of rect_3pt, with no perpendicular'],
     ['slot', [0, 0, 2, 0, 1], 'x.a and x.b are the arc centres; sides tangent to the arcs, the arcs equal; x.axis is construction'],
-    ['polygon', [0, 0, 1, 4], 'corners x.p1... on the construction circle x.circle (x.p1 at +u), sides x.s1... (x.sk from x.pk), all equal'],
-    ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece: arcs x.inner, x.outer on x.center, radial lines x.start, x.end through the centre'],
+    ['arc_slot', [0, 0, 10, 2, 0, 90], 'arcs x.outer, x.inner about x.center, tangent to the caps x.cap_a, x.cap_b on the cap centres x.a, x.b (so the caps are equal)'],
+    ['polygon', [0, 0, 1, 4], 'corners x.p1... on the construction circle x.circle, sides x.s1... (x.sk from x.pk), all equal'],
+    ['sector', [0, 0, 1, 2, 0, 90], 'a ring piece: arcs x.inner, x.outer on x.center, radial lines x.start, x.end through the centre; r1 0: a pie slice (no x.inner, 5 DOF)'],
     ['spline', [0, 0, 10, 5, 20, 0], 'x is the curve through its points x.p0, x.p1... (a cubic, as the person\'s Spline tool); x.start, x.end when open; x.h0, x.h1 are its end handles once a tangent gave them. A wing: spline [100,0, 50,6, 0,0, 50,-4, 100,0] closed'],
     ['control_spline', [0, 0, 10, 10, 20, 0, 30, 0, 3], 'x is the curve on its poles x.p0, x.p1... (as the person\'s Control-point spline); x.start, x.end when open'],
   ];
   const rows: HelpRow[] = kinds.map(([kind, at, words]) => {
-    const parts = kind === 'polyline' || kind === 'polygon' || kind === 'spline' || kind === 'control_spline' ? '' : partsWords(kind, at);
+    const parts = kind === 'polyline' || kind === 'polygon' || kind === 'spline' || kind === 'control_spline' || NAMED_PARTS.has(kind) ? '' : partsWords(kind, at);
     const dof = KIND_DOF[kind];
     return { about: kind, text: `${kind} ${AT_WORDS[kind]}: ${words}${parts ? `. Parts: ${parts}` : ''}${dof !== null ? `. ${dof} DOF` : kind.endsWith('spline') ? '. 2 DOF per point' : ''}.` };
   });

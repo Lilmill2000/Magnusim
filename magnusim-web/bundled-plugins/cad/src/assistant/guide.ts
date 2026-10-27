@@ -31,7 +31,7 @@ export const GUIDE = [
   '',
   'SKETCHES',
   '- Coordinates are guesses; constraints and dimensions set the shape. Draw the rough shape.',
-  '- Ends within 0.05 mm are joined. rect, center_rect, slot, polygon, sector keep their own relations.',
+  '- Ends within 0.05 mm are joined. rect, slot, polygon and the other shapes keep their own relations.',
   '- Parts: l.start l.end c.center a.end r.top r.bl r.center origin; polyline p: points p.p0, p.p1...; side p.k runs from p.p(k-1) to p.pk.',
   '- Anchor to origin, then dimension from parameters until dof is 0; "free" says what still moves. A conflict or duplicate is refused naming ids: remove yours.',
   '- Regions come back as r1, r2... extrude ["all"] (holes stay open), ["r2"] or ["at(u, v)"].',

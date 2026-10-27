@@ -17,8 +17,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { CAD_TOOLS } from '../../src/assistant/schemas';
-import { AI_TOOLS, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, RAILS, SKETCH_CONSTRAINTS, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
+import { AI_TOOLS, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
@@ -84,7 +84,14 @@ function problem(r: Reach): string {
   return '';
 }
 
-async function boot(): Promise<AppServices> {
+let booted: Promise<AppServices> | null = null;
+/** The app, booted once for the file. */
+function boot(): Promise<AppServices> {
+  booted ??= bootOnce();
+  return booted;
+}
+
+async function bootOnce(): Promise<AppServices> {
   const ws = createFakeWorkspace({
     spawnWorker: () => {
       const w = new FakeWorker(okHandler());
@@ -224,5 +231,15 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(DOC.retry).toMatchObject({ tool: 'direct', value: 'retry' });
     expect(FEATURE_FIELDS.pattern_circular.symmetric).toMatchObject({ tool: 'pattern', field: 'options', value: 'symmetric' });
     expect(FEATURE_FIELDS.extrude.face).toMatchObject({ tool: 'extrude', field: 'face' });
+  });
+
+  it('the other way (Daniel: parity both ways): every sketch entity kind the Assistant draws has a person sketch tool, a registered command, that draws it', async () => {
+    const services = await boot();
+    const tools = new Set(services.commands.all().map((c) => c.activeWhen?.sketchTool).filter((t): t is string => !!t));
+    expect(sketchKindsWithoutPersonTool(SKETCH_ENTITY_KINDS, tools)).toEqual([]);
+    expect(Object.keys(PERSON_SKETCH_KINDS).sort()).toEqual([...SKETCH_ENTITY_KINDS].sort());
+    // The helper fails a kind with no tool, or with a tool the person has no command for.
+    expect(sketchKindsWithoutPersonTool(['slot', 'no_such_kind'], tools)).toEqual(['no_such_kind']);
+    expect(sketchKindsWithoutPersonTool(['slot', 'arc_slot'], new Set(['slot-center']))).toEqual(['arc_slot']);
   });
 });

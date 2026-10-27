@@ -33,6 +33,11 @@
 // ("Spline moves to More"); over another group the note says it can only go in its own group, the
 // pointer shows not-allowed, and a drop there changes nothing. The keyboard's way: a More item's
 // right-click menu has "Swap with <the bar's last>" (useToolbarDrag, customizer).
+// v0.5.0 (Daniel: the sketch toolbar as SolidWorks lays it out): the drawing tools come in
+// flyouts (src/ui/flyouts.ts): one button per group (Line, Rectangle, Circle, Arc, Slot, Spline,
+// Ellipse) that runs its last-used variant, and a small arrow beside it that lists every variant
+// with its icon, name, shortcut and hint. For the layout a flyout is one command (its bar id); in
+// a More menu its variants are listed one by one.
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -45,6 +50,7 @@ import { PARAMS_ID, REDO_ID, UNDO_ID } from './commands';
 import { uiFor, type UiState } from './controller';
 import { Icon, ICONS } from './Icon';
 import { hideTip, useTip, type MenuEntry } from './kit';
+import { collapseFlyouts, currentVariant, setLastUsed, type FlyoutDef } from './flyouts';
 import { held, isDefault, layoutModeOf, orderIds, pinned, placeOf, toolbarPrefs, withMove, withPlace, withSwapIn, type LayoutMode, type ModeLayout, type ToolbarPrefs } from './toolbar-layout';
 
 /**
@@ -92,11 +98,9 @@ export const FOLD_ORDER: readonly string[] = [
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
-  'sketch.spline-control',
-  'sketch.arc-tangent',
-  'sketch.rectangle-center',
   'sketch.extend',
-  'sketch.centerline',
+  'sketch.polygon',
+  'sketch.slot',
   'sketch.offset',
   'sketch.fillet',
   'sketch.pattern-circular',
@@ -220,36 +224,161 @@ interface ButtonCustom {
   displaced?: boolean;
 }
 
-function ToolbarButton({ c, services, active, index, primary = false, custom }: { c: CommandDef; services: AppServices; active: boolean; index: number; primary?: boolean; custom?: ButtonCustom }) {
-  const reason = reasonOf(c, services);
-  const tip = useTip(custom?.dragging ? null : { text: c.label, shortcut: c.shortcut, detail: reason ?? c.hint });
+function ToolbarButton({
+  c,
+  services,
+  active,
+  index,
+  primary = false,
+  custom,
+  variant,
+  onKeyDown,
+}: {
+  c: CommandDef;
+  services: AppServices;
+  active: boolean;
+  index: number;
+  primary?: boolean;
+  custom?: ButtonCustom;
+  /** A flyout's bar button: the variant it shows and runs (its own id stays the flyout's bar id). */
+  variant?: CommandDef;
+  onKeyDown?(e: React.KeyboardEvent<HTMLButtonElement>): void;
+}) {
+  const shown = variant ?? c;
+  const reason = reasonOf(shown, services);
+  const tip = useTip(custom?.dragging ? null : { text: shown.label, shortcut: shown.shortcut, detail: reason ?? shown.hint });
   const drop = custom?.drop ? ` is-drop-${custom.drop}` : '';
   return (
     <button
       type="button"
       className={`tb-btn${primary ? ' is-primary' : ''}${active ? ' is-active' : ''}${reason ? ' is-disabled' : ''}${custom?.dragging ? ' is-dragging' : ''}${drop}${custom?.displaced ? ' is-displaced' : ''}`}
       data-command={c.id}
+      data-variant={variant ? variant.id : undefined}
       data-index={index}
-      aria-label={c.label}
+      aria-label={shown.label}
       aria-disabled={reason ? true : undefined}
       aria-pressed={active || undefined}
-      aria-keyshortcuts={c.shortcut ? c.shortcut.replace(/Ctrl/g, 'Control') : undefined}
+      aria-keyshortcuts={shown.shortcut ? shown.shortcut.replace(/Ctrl/g, 'Control') : undefined}
       data-disabled-reason={reason ?? undefined}
       {...tip}
       onContextMenu={custom?.onContextMenu}
       onPointerDown={custom?.onPointerDown}
+      onKeyDown={onKeyDown}
       onClick={() => {
         // A More menu left open beside this button (a press here no longer closes it: a bar
         // command may be dragged into it) closes on the click.
         const ui = uiFor(services);
         if (ui.state.get().menu) ui.closeMenu();
         if (reason) return;
-        void services.commands.run(c.id);
+        if (variant && c.flyout) setLastUsed(services, c.flyout, variant.id);
+        void services.commands.run(shown.id);
       }}
     >
-      <span className="tb-ico">{c.icon ? <Icon d={c.icon} size={18} stroke={1.7} className="tb-svg" {...(c.iconColors ? { colors: c.iconColors } : {})} /> : null}</span>
-      <span className="tb-txt">{c.label}</span>
+      <span className="tb-ico">{shown.icon ? <Icon d={shown.icon} size={18} stroke={1.7} className="tb-svg" {...(shown.iconColors ? { colors: shown.iconColors } : {})} /> : null}</span>
+      <span className="tb-txt">{shown.label}</span>
     </button>
+  );
+}
+
+/**
+ * A flyout (v0.5.0): its bar button, which runs the variant in use or last used, and the arrow
+ * beside it that lists every variant (icon, name, shortcut, hint; disabled ones say why).
+ * Keyboard: Down (or Up) on the button or the arrow opens the list on its first (last) variant;
+ * the menu's arrows, Home, End, Enter and Escape as in a More menu.
+ */
+function FlyoutButton({
+  c,
+  def,
+  variants,
+  services,
+  panel,
+  sketchTool,
+  index,
+  primary,
+  custom,
+}: {
+  c: CommandDef;
+  def: FlyoutDef;
+  variants: CommandDef[];
+  services: AppServices;
+  panel: UiState['panel'];
+  sketchTool: string | null;
+  index: number;
+  primary: boolean;
+  custom?: ButtonCustom;
+}) {
+  const ui = uiFor(services);
+  const owner = `tb-flyout:${c.id}`;
+  const open = useStateStore(ui.state, (s) => s.menu?.owner === owner);
+  const ref = useRef<HTMLButtonElement>(null);
+  const activeOf = (x: CommandDef) => isActive(x, panel, sketchTool);
+  const cur = currentVariant(services, c.id, variants, activeOf, def.id);
+  const inUse = variants.find(activeOf);
+  // The variant in use is the one the button runs next time.
+  useEffect(() => {
+    if (inUse) setLastUsed(services, def.id, inUse.id);
+  }, [inUse, services, def.id]);
+  const name = `${def.label} tools`;
+  const tip = useTip(open ? null : { text: name, detail: variants.map((x) => x.label).join(', ') });
+  const show = (last = false) => {
+    const el = ref.current;
+    if (!el) return;
+    // Under the flyout's button (the arrow's left neighbour).
+    const r = (el.previousElementSibling ?? el).getBoundingClientRect();
+    const items: MenuEntry[] = variants.map((x) => ({
+      id: x.id,
+      command: x.id,
+      label: x.label,
+      ...(x.icon ? { icon: x.icon } : {}),
+      ...(x.shortcut ? { shortcut: x.shortcut } : {}),
+      ...(x.hint ? { hint: x.hint } : {}),
+      disabled: reasonOf(x, services),
+      active: activeOf(x),
+      run: () => {
+        setLastUsed(services, def.id, x.id);
+        void services.commands.run(x.id);
+      },
+    }));
+    ui.showMenu(r.left, r.bottom + 2, items, name, { owner, anchor: el });
+    if (last) {
+      requestAnimationFrame(() => {
+        const all = document.querySelectorAll<HTMLButtonElement>('[data-cad-menu] button[role="menuitem"]');
+        all[all.length - 1]?.focus();
+      });
+    }
+  };
+  const keys = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) {
+      e.preventDefault();
+      show(e.key === 'ArrowUp');
+    }
+  };
+  return (
+    // The button and its arrow side by side in the group's items (the toolbar's drag and fold read
+    // the group's buttons as its direct children).
+    <>
+      <ToolbarButton c={c} services={services} active={variants.some(activeOf)} index={index} primary={primary} custom={custom} variant={cur} onKeyDown={keys} />
+      <button
+        ref={ref}
+        type="button"
+        className={`tb-btn tb-flyout-arrow${open ? ' is-open' : ''}`}
+        data-tb-flyout={c.id}
+        data-tb-flyout-group={def.id}
+        // Out of the Tab order (Tab goes button to button as before): Down on the button opens the list.
+        tabIndex={-1}
+        data-flyout-commands={variants.map((x) => x.id).join(' ')}
+        aria-label={name}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        {...tip}
+        onClick={() => (open ? ui.closeMenu() : show())}
+        onKeyDown={keys}
+      >
+        <span className="tb-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+    </>
   );
 }
 
@@ -411,10 +540,13 @@ function Group({
   menu,
   drag,
   startDrag,
+  flyouts,
 }: {
   id: string;
   label: string;
   commands: CommandDef[];
+  /** v0.5.0: the group's flyouts (bar id -> variants, def). */
+  flyouts?: { variants: Map<string, CommandDef[]>; defs: Map<string, FlyoutDef> };
   folded?: ReadonlySet<string>;
   services: AppServices;
   panel: UiState['panel'];
@@ -432,6 +564,8 @@ function Group({
   startDrag?(c: CommandDef, from: 'bar' | 'more', e: React.PointerEvent<HTMLButtonElement>): void;
 }) {
   const more = folded ? commands.filter((c) => folded.has(c.id)) : [];
+  /** A variant listed in More stands for its flyout (moved, dragged and shown as one). */
+  const barOf = (c: CommandDef): CommandDef => more.find((m) => flyouts?.variants.get(m.id)?.some((v) => v.id === c.id)) ?? c;
   const shown = commands.filter((c) => !more.includes(c)).map((c) => c.id);
   const at = drag?.at;
   const mark = at && (at.kind === 'bar' || at.kind === 'move') && at.group === id ? at.mark : null;
@@ -471,21 +605,25 @@ function Group({
       <div className="tb-group-label">{label}</div>
       {/* data-menu-keep: a press on the group's buttons leaves its open More menu open (a bar command may be dragged into it). */}
       <div className="tb-items" data-menu-keep={custom ? '1' : undefined}>
-        {commands.map((c, i) =>
-          more.includes(c) ? null : <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} custom={customFor(c)} />,
-        )}
+        {commands.map((c, i) => {
+          if (more.includes(c)) return null;
+          const vs = flyouts?.variants.get(c.id);
+          const def = flyouts?.defs.get(c.id);
+          if (vs && def) return <FlyoutButton key={c.id} c={c} def={def} variants={vs} services={services} panel={panel} sketchTool={sketchTool} index={i} primary={primary} custom={customFor(c)} />;
+          return <ToolbarButton key={c.id} c={c} services={services} active={isActive(c, panel, sketchTool)} index={i} primary={primary} custom={customFor(c)} />;
+        })}
         {more.length ? (
           <MoreButton
             group={id}
             label={label}
-            commands={more}
+            commands={more.flatMap((c) => flyouts?.variants.get(c.id) ?? [c])}
             first={commands.indexOf(more[0])}
             services={services}
             panel={panel}
             sketchTool={sketchTool}
             dropInto={at?.kind === 'more' && at.group === id}
-            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(c, shown, x, y) } : {})}
-            {...(custom && startDrag ? { onItemPress: (c: CommandDef, e: React.PointerEvent<HTMLButtonElement>) => startDrag(c, 'more', e) } : {})}
+            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(barOf(c), shown, x, y) } : {})}
+            {...(custom && startDrag ? { onItemPress: (c: CommandDef, e: React.PointerEvent<HTMLButtonElement>) => startDrag(barOf(c), 'more', e) } : {})}
           />
         ) : null}
       </div>
@@ -944,14 +1082,21 @@ export function Toolbar() {
   const lmode = layoutModeOf(mode);
   const ml = layout[lmode];
   // The mode's groups in the user's order.
+  // v0.5.0: each flyout is one command of its group (its bar id); its variants go with it.
+  const flyVariants = new Map<string, CommandDef[]>();
+  const flyDefs = new Map<string, FlyoutDef>();
   const groups = services.commands.toolbar(mode).map((g) => {
-    const byId = new Map(g.commands.map((c) => [c.id, c] as const));
+    const fly = collapseFlyouts(g.commands);
+    for (const [k, x] of fly.variants) flyVariants.set(k, x);
+    for (const [k, x] of fly.flyouts) flyDefs.set(k, x);
+    const byId = new Map(fly.commands.map((c) => [c.id, c] as const));
     const order = orderIds(
-      g.commands.map((c) => c.id),
+      fly.commands.map((c) => c.id),
       ml.order[g.group],
     );
     return { ...g, commands: order.map((x) => byId.get(x)!), order };
   });
+  const flyouts = { variants: flyVariants, defs: flyDefs };
   // In More by the user's layout (or the default: model mode shows each group's main command).
   const placedMore = new Set(groups.flatMap((g) => g.order.filter((x) => placeOf(x, lmode, ml, KEEP_SET) === 'more')));
   // The commands that may fold here, in folding order (only the mode's groups' own commands on the bar).
@@ -1042,6 +1187,7 @@ export function Toolbar() {
             panel={panel}
             sketchTool={sketchTool}
             icons={fitIcons.has(g.group)}
+            flyouts={flyouts}
             custom={cz.forGroup(g.group, g.order)}
             drag={drag.view}
             startDrag={(c, from, e) => drag.start(c, g.group, from, e)}

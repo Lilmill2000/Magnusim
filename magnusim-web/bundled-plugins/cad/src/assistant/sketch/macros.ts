@@ -7,21 +7,44 @@
 //   centerline   the same, construction (a revolve or mirror axis)
 //   polyline     [u1, v1, u2, v2, ...]        points P__p0..., sides P__1...: side k runs from
 //                (closed when it ends where it starts, within 0.05 mm)  p(k-1) to pk   2 x points
+//   midpoint_line [cu, cv, u2, v2]            the middle, then an end: line M__line from
+//                                             M__start to M__end, a construction point
+//                                             M__center held at its middle (midpoint)    4
 //   circle       [cu, cv, r]                  C__center, circle C                        3
+//   circle_3pt   [u1, v1, u2, v2, u3, v3]     the circle through three points: a circle  3
 //   arc          [cu, cv, r, start, end] deg  A__center, A__start, A__end, arc A (ccw)   5
 //   rect         [u1, v1, u2, v2] corners     __bl __br __tr __tl, __bottom __right __top
 //                                             __left, 2 horizontals + 2 verticals        4
 //   center_rect  [cu, cv, width, height]      a rect, a construction point __center and
 //                                             symmetric [__bl, __tr, __center]           4
+//   rect_3pt     [u1, v1, u2, v2, h]          an angled rectangle: corners __p1 __p2 (its
+//                                             first side), __p3 __p4 at h to the left of
+//                                             it (right when h < 0); sides __s1... (sk from
+//                                             pk), s1 perpendicular to s2, s1 parallel to
+//                                             s3, s2 parallel to s4                      5
+//   center_rect_3pt [cu, cv, width, height,   an angled rectangle about its centre (s1 at
+//                angle deg]                   the angle from +u) with a construction point
+//                                             __center, symmetric [__p1, __p3, __center]  5
+//   parallelogram [u1, v1, u2, v2, u3, v3]    three corners __p1 __p2 __p3 (__p4 the fourth),
+//                                             sides __s1..., s1 parallel to s3, s2 to s4 6
 //   slot         [u1, v1, u2, v2, r]          arc centres __a __b, arcs __arc_a __arc_b,
 //                                             sides __side1 __side2 (tangent at __p1..__p4),
 //                                             equal arcs, construction line __axis       5
-//   polygon      [cu, cv, R, sides 3..24]     __center, construction circle __circle,
-//                                             corners __p1... on it (__p1 on +u), sides
-//                                             __s1... (sk from pk), all sides equal      4
+//   arc_slot     [cu, cv, R, r, start, end]   a slot along an arc (ccw, deg) of radius R about
+//                deg, 0 < r < R               __center: arcs __outer __inner (R +- r) on it and
+//                                             caps __cap_a __cap_b on the cap centres __a __b,
+//                                             tangent where they meet (which makes the caps
+//                                             equal and __a, __b as far from __center: an equal
+//                                             relation would over-define it)               6
+//   polygon      [cu, cv, R, sides 3..24,     __center, construction circle __circle,
+//                 rotation deg (optional)]    corners __p1... on it (__p1 at the rotation from
+//                                             +u, 0 if left out), sides __s1... (sk from pk),
+//                                             all sides equal                            4
 //   sector       [cu, cv, r1, r2, start, end] __center, arcs __inner __outer, radial lines
-//                deg, 0 < r1 < r2             __start __end through the centre, their ends
+//                deg, 0 <= r1 < r2            __start __end through the centre, their ends
 //                                             __inner_start ... __outer_end              6
+//                                             (r1 0: a pie slice, no __inner; the lines run
+//                                             from __center)                             5
 //   spline       [u1, v1, u2, v2, ...]        a fit-point spline S through points S__p0...
 //                (closed when it ends where   (the person's Spline tool: a cubic, chord-length
 //                it starts)                   parameters); S.start, S.end; S.h0, S.h1 once a
@@ -50,19 +73,25 @@ export const AT_WORDS: Readonly<Record<EntityKind, string>> = Object.freeze({
   line: '[u1, v1, u2, v2]',
   centerline: '[u1, v1, u2, v2]',
   polyline: '[u1, v1, u2, v2, ...] (an even count, 4 or more; closed when the last point is the first)',
+  midpoint_line: '[cu, cv, u2, v2] (the middle, then an end)',
   circle: '[cu, cv, r]',
+  circle_3pt: '[u1, v1, u2, v2, u3, v3] (three points on it)',
   arc: '[cu, cv, r, start deg, end deg] (counter-clockwise)',
   rect: '[u1, v1, u2, v2] (two opposite corners)',
   center_rect: '[cu, cv, width, height]',
+  rect_3pt: '[u1, v1, u2, v2, h] (the side x.p1 to x.p2, then the height h to its left; negative: right)',
+  center_rect_3pt: '[cu, cv, width, height, angle deg] (x.s1 at the angle)',
+  parallelogram: '[u1, v1, u2, v2, u3, v3] (three corners in order)',
   slot: '[u1, v1, u2, v2, r] (the two arc centres and the radius)',
-  polygon: '[cu, cv, R, sides] (3 to 24 sides; R to the corners)',
-  sector: '[cu, cv, r1, r2, start deg, end deg] (0 < r1 < r2, counter-clockwise)',
+  arc_slot: '[cu, cv, R, r, start deg, end deg] (path radius R, half width r < R, counter-clockwise)',
+  polygon: '[cu, cv, R, sides, turn deg] (3 to 24 sides; R to the corners; x.p1 at the turn from +u, 0 if left out)',
+  sector: '[cu, cv, r1, r2, start deg, end deg] (0 <= r1 < r2, counter-clockwise)',
   spline: '[u1, v1, u2, v2, ...] (the fit points it passes through, 2 or more; closed when the last point is the first, 3 or more then)',
   control_spline: '[u1, v1, ..., un, vn, degree] (the poles, then the degree 3 or 5; degree + 1 poles or more; closed when the last pole is the first)',
 });
 
 /** The DOF each kind keeps after its own relations (help sketch; polyline: 2 per point). */
-export const KIND_DOF: Readonly<Record<EntityKind, number | null>> = Object.freeze({ point: 2, line: 4, centerline: 4, polyline: null, circle: 3, arc: 5, rect: 4, center_rect: 4, slot: 5, polygon: 4, sector: 6, spline: null, control_spline: null });
+export const KIND_DOF: Readonly<Record<EntityKind, number | null>> = Object.freeze({ point: 2, line: 4, centerline: 4, polyline: null, midpoint_line: 4, circle: 3, circle_3pt: 3, arc: 5, rect: 4, center_rect: 4, rect_3pt: 5, center_rect_3pt: 5, parallelogram: 6, slot: 5, arc_slot: 6, polygon: 4, sector: 6, spline: null, control_spline: null });
 
 /** Ends this close are one point (mm): joins, closed polylines, infer. */
 export const JOIN_TOL = 0.05;
@@ -96,6 +125,21 @@ const DEG = Math.PI / 180;
 const S = (id: string, part: string) => `${id}__${part}`;
 const polar = (c: Vec2, r: number, deg: number): Vec2 => [c[0] + r * Math.cos(deg * DEG), c[1] + r * Math.sin(deg * DEG)];
 const dist = (a: Vec2, b: Vec2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
+/** The circle through three points, or null when they are on one line (or two are one point). */
+export function circleThrough3(a: Vec2, b: Vec2, c: Vec2): { c: Vec2; r: number } | null {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  const span = Math.max(dist(a, b), dist(b, c), dist(a, c));
+  if (!(span > JOIN_TOL) || Math.abs(d) <= 1e-9 * span * span) return null;
+  const a2 = a[0] * a[0] + a[1] * a[1];
+  const b2 = b[0] * b[0] + b[1] * b[1];
+  const c2 = c[0] * c[0] + c[1] * c[1];
+  const ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
+  const uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+  const r = Math.hypot(a[0] - ux, a[1] - uy);
+  if (dist(a, b) <= JOIN_TOL || dist(b, c) <= JOIN_TOL || dist(a, c) <= JOIN_TOL || r > 1e7) return null;
+  return { c: [ux, uy], r };
+}
+
 /** The counter-clockwise sweep from `s` to `e` degrees, in [0, 360). */
 export const sweepOf = (s: number, e: number) => (((e - s) % 360) + 360) % 360;
 
@@ -129,9 +173,9 @@ class Builder {
     this.m.parts[part] = id;
     return id;
   }
-  arc(part: string, c: string, a: string, b: string): string {
+  arc(part: string, c: string, a: string, b: string, extra?: { construction?: boolean }): string {
     const id = part ? S(this.m.id, part) : this.m.id;
-    this.m.entities.push({ id, kind: 'arc', c, a, b, ...this.flags() });
+    this.m.entities.push({ id, kind: 'arc', c, a, b, ...this.flags(extra) });
     this.m.parts[part] = id;
     return id;
   }
@@ -226,6 +270,74 @@ export function expandEntity(id: string, kind: EntityKind, at: readonly number[]
       b.circle('', b.point('center', [at[0], at[1]]), at[2]);
       break;
     }
+    case 'circle_3pt': {
+      const w = want(6);
+      if (w) return w;
+      const c = circleThrough3([at[0], at[1]], [at[2], at[3]], [at[4], at[5]]);
+      if (!c) return bad('its three points are on one line (or two are the same): no circle passes through them');
+      b.circle('', b.point('center', c.c), c.r);
+      break;
+    }
+    case 'midpoint_line': {
+      const w = want(4);
+      if (w) return w;
+      const c: Vec2 = [at[0], at[1]];
+      const e: Vec2 = [at[2], at[3]];
+      if (dist(c, e) <= JOIN_TOL / 2) return bad('its middle and its end are one point: a line needs a length');
+      const s = b.point('start', [2 * c[0] - e[0], 2 * c[1] - e[1]]);
+      const en = b.point('end', e);
+      const line = b.line('line', s, en);
+      b.m.inferLines.push(line);
+      const cp = b.point('center', c, 'center__p');
+      const centre = b.pointEntity('center', cp, { construction: true });
+      b.rel('mid', 'midpoint', [centre, line], `middle ${id}.center of ${id}.line`);
+      break;
+    }
+    case 'rect_3pt':
+    case 'center_rect_3pt':
+    case 'parallelogram': {
+      let corners: Vec2[];
+      if (kind === 'rect_3pt') {
+        const w = want(5);
+        if (w) return w;
+        const p1: Vec2 = [at[0], at[1]];
+        const p2: Vec2 = [at[2], at[3]];
+        const L = dist(p1, p2);
+        if (L <= JOIN_TOL) return bad('its first two corners are one point');
+        if (!(Math.abs(at[4]) > JOIN_TOL)) return bad('its height h must not be 0');
+        const n: Vec2 = [(-(p2[1] - p1[1]) / L) * at[4], ((p2[0] - p1[0]) / L) * at[4]];
+        corners = [p1, p2, [p2[0] + n[0], p2[1] + n[1]], [p1[0] + n[0], p1[1] + n[1]]];
+      } else if (kind === 'center_rect_3pt') {
+        const w = want(5);
+        if (w) return w;
+        const [cu, cv, wd, ht, ang] = at;
+        if (!(wd > JOIN_TOL) || !(ht > JOIN_TOL)) return bad('its width and height must be more than 0');
+        const d: Vec2 = [Math.cos(ang * DEG), Math.sin(ang * DEG)];
+        const n: Vec2 = [-d[1], d[0]];
+        const pt = (sx: number, sy: number): Vec2 => [cu + (sx * wd * d[0] + sy * ht * n[0]) / 2, cv + (sx * wd * d[1] + sy * ht * n[1]) / 2];
+        corners = [pt(-1, -1), pt(1, -1), pt(1, 1), pt(-1, 1)];
+      } else {
+        const w = want(6);
+        if (w) return w;
+        const p1: Vec2 = [at[0], at[1]];
+        const p2: Vec2 = [at[2], at[3]];
+        const p3: Vec2 = [at[4], at[5]];
+        const cross = (p2[0] - p1[0]) * (p3[1] - p2[1]) - (p2[1] - p1[1]) * (p3[0] - p2[0]);
+        if (dist(p1, p2) <= JOIN_TOL || dist(p2, p3) <= JOIN_TOL || Math.abs(cross) <= JOIN_TOL * Math.max(dist(p1, p2), dist(p2, p3))) return bad('its three corners are on one line (or two are the same)');
+        corners = [p1, p2, p3, [p1[0] + p3[0] - p2[0], p1[1] + p3[1] - p2[1]]];
+      }
+      const ids = corners.map((p, i) => b.point(`p${i + 1}`, p));
+      const sides = [1, 2, 3, 4].map((k) => b.line(`s${k}`, ids[k - 1], ids[k % 4]));
+      if (kind !== 'parallelogram') b.rel('perp', 'perpendicular', [sides[0], sides[1]], `perpendicular ${id}.s1 and ${id}.s2`);
+      b.rel('par1', 'parallel', [sides[0], sides[2]], `parallel ${id}.s1 and ${id}.s3`);
+      b.rel('par2', 'parallel', [sides[1], sides[3]], `parallel ${id}.s2 and ${id}.s4`);
+      if (kind === 'center_rect_3pt') {
+        const cp = b.point('center', [at[0], at[1]], 'center__p');
+        const centre = b.pointEntity('center', cp, { construction: true });
+        b.rel('sym', 'symmetric', [ids[0], ids[2], centre], `centre between ${id}.p1 and ${id}.p3`);
+      }
+      break;
+    }
     case 'arc': {
       const w = want(5);
       if (w) return w;
@@ -287,17 +399,43 @@ export function expandEntity(id: string, kind: EntityKind, at: readonly number[]
       b.rel('eq', 'equal', [arcA, arcB], `equal radii of ${id}.arc_a and ${id}.arc_b`);
       break;
     }
-    case 'polygon': {
-      const w = want(4);
+    case 'arc_slot': {
+      const w = want(6);
       if (w) return w;
+      const [cu, cv, R, r, s, e] = at;
+      if (!(r > 0)) return bad('its half width r must be more than 0');
+      if (!(R > r + JOIN_TOL)) return bad('its path radius R must be more than its half width r');
+      const sweep = sweepOf(s, e);
+      if (sweep < 1e-6 || 360 - sweep < 1e-6) return bad('its start and end angles are the same: an arc slot is less than a whole turn');
+      const c: Vec2 = [cu, cv];
+      const centre = b.point('center', c);
+      const a = b.point('a', polar(c, R, s));
+      const bb = b.point('b', polar(c, R, e));
+      const os = b.point('outer_start', polar(c, R + r, s));
+      const oe = b.point('outer_end', polar(c, R + r, e));
+      const is = b.point('inner_start', polar(c, R - r, s));
+      const ie = b.point('inner_end', polar(c, R - r, e));
+      const outer = b.arc('outer', centre, os, oe);
+      const capB = b.arc('cap_b', bb, oe, ie);
+      const inner = b.arc('inner', centre, is, ie);
+      const capA = b.arc('cap_a', a, is, os);
+      b.rel('t1', 'tangent', [outer, capA], `tangent of ${id}.outer and ${id}.cap_a`);
+      b.rel('t2', 'tangent', [outer, capB], `tangent of ${id}.outer and ${id}.cap_b`);
+      b.rel('t3', 'tangent', [inner, capB], `tangent of ${id}.inner and ${id}.cap_b`);
+      b.rel('t4', 'tangent', [inner, capA], `tangent of ${id}.inner and ${id}.cap_a`);
+      break;
+    }
+    case 'polygon': {
+      if (at.length !== 4 && at.length !== 5) return bad(`a polygon takes 4 or 5 numbers ${AT_WORDS.polygon}, not ${at.length}`);
       const [cu, cv, R, n] = at;
+      const turn = at[4] ?? 0;
       if (!(R > 0)) return bad('its radius must be more than 0');
-      if (!Number.isInteger(n) || n < 3 || n > 24) return bad(`its last number is the side count, a whole number from 3 to 24, not ${n}`);
+      if (!Number.isInteger(n) || n < 3 || n > 24) return bad(`its fourth number is the side count, a whole number from 3 to 24, not ${n}`);
       const c: Vec2 = [cu, cv];
       const centre = b.point('center', c);
       const circle = b.circle('circle', centre, R, { construction: true });
       const corners: string[] = [];
-      for (let k = 1; k <= n; k++) corners.push(b.point(`p${k}`, polar(c, R, (360 * (k - 1)) / n)));
+      for (let k = 1; k <= n; k++) corners.push(b.point(`p${k}`, polar(c, R, turn + (360 * (k - 1)) / n)));
       const sides: string[] = [];
       for (let k = 1; k <= n; k++) sides.push(b.line(`s${k}`, corners[k - 1], corners[k % n]));
       for (let k = 1; k <= n; k++) b.rel(`on${k}`, 'point_on_circle', [corners[k - 1], circle], `corner ${id}.p${k} on ${id}.circle`);
@@ -308,11 +446,20 @@ export function expandEntity(id: string, kind: EntityKind, at: readonly number[]
       const w = want(6);
       if (w) return w;
       const [cu, cv, r1, r2, s, e] = at;
-      if (!(r1 > 0) || !(r2 > r1 + JOIN_TOL)) return bad('its radii must be 0 < r1 < r2');
+      if (!(r1 >= 0) || !(r2 > r1 + JOIN_TOL)) return bad('its radii must be 0 <= r1 < r2');
       const sweep = sweepOf(s, e);
       if (sweep < 1e-6 || 360 - sweep < 1e-6) return bad('its start and end angles are the same: a sector is less than a whole turn');
       const c: Vec2 = [cu, cv];
       const centre = b.point('center', c);
+      if (r1 === 0) {
+        // A pie slice: the radial lines run from the centre (no inner arc, nothing to hold).
+        const os = b.point('outer_start', polar(c, r2, s));
+        const oe = b.point('outer_end', polar(c, r2, e));
+        b.arc('outer', centre, os, oe);
+        b.line('start', centre, os);
+        b.line('end', centre, oe);
+        break;
+      }
       const is = b.point('inner_start', polar(c, r1, s));
       const ie = b.point('inner_end', polar(c, r1, e));
       const os = b.point('outer_start', polar(c, r2, s));

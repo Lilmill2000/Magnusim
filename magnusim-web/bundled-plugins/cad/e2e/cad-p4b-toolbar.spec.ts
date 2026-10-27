@@ -136,7 +136,7 @@ test('cad:p4b-toolbar-default the model toolbar is compact at 1920, 1600 and 128
         .map((e) => ({ label: e.textContent, lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)) })),
     );
   expect(lines.filter((l) => l.lines !== 1), 'two-line labels at 1920').toEqual([]);
-  expect(lines.map((l) => l.label)).toEqual(expect.arrayContaining(['Center rectangle', 'Linear pattern', 'Circular pattern', 'Finish sketch']));
+  expect(lines.map((l) => l.label)).toEqual(expect.arrayContaining(['Center-to-center slot', 'Polygon', 'Linear pattern', 'Circular pattern', 'Finish sketch']));
   // 1600 (P2): Daniel's headline tools stay on the ribbon; Project and Intersect wait in More.
   await page.setViewportSize({ width: 1600, height: 1000 });
   await expect.poll(() => moreIds(frame, 'sketch-modify')).toContain('sketch.project');

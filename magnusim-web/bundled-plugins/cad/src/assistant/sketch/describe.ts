@@ -54,14 +54,23 @@ const dist = (a: Vec2, b: Vec2) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 /** A place ref: "at(u, v)" to 1e-6 mm. */
 const placeRef = (p: Vec2) => `at(${r6(p[0])}, ${r6(p[1])})`;
 
-/** Which macro a group of "<id>__<part>" entities looks like, by its parts. */
-function kindOfGroup(parts: string[]): EntityKind | null {
+/** The macros a group of "<id>__<part>" entities may be, by its parts (the first that matches exactly wins). */
+function kindsOfGroup(parts: string[]): EntityKind[] {
   const set = new Set(parts);
   const is = (...want: string[]) => set.size === want.length && want.every((w) => set.has(w));
+  if (is('s1', 's2', 's3', 's4')) return ['rect_3pt', 'parallelogram'];
+  if (is('s1', 's2', 's3', 's4', 'center')) return ['center_rect_3pt'];
+  if (is('line', 'center')) return ['midpoint_line'];
+  const one = kindOfGroup(set, is, parts);
+  return one ? [one] : [];
+}
+
+function kindOfGroup(set: Set<string>, is: (...want: string[]) => boolean, parts: string[]): EntityKind | null {
   if (is('bottom', 'right', 'top', 'left')) return 'rect';
   if (is('bottom', 'right', 'top', 'left', 'center')) return 'center_rect';
   if (is('side1', 'side2', 'arc_a', 'arc_b', 'axis')) return 'slot';
-  if (is('inner', 'outer', 'start', 'end')) return 'sector';
+  if (is('inner', 'outer', 'start', 'end') || is('outer', 'start', 'end')) return 'sector';
+  if (is('outer', 'inner', 'cap_a', 'cap_b')) return 'arc_slot';
   if (set.has('circle') && parts.length >= 4 && parts.every((p) => p === 'circle' || /^s\d+$/.test(p))) return 'polygon';
   if (parts.length && parts.every((p) => /^\d+$/.test(p))) return 'polyline';
   return null;
@@ -118,17 +127,73 @@ function atOfGroup(f: SketchFeature, id: string, kind: EntityKind, byId: Map<str
       if (!a || !b || !p1) return null;
       return [a[0], a[1], b[0], b[1], dist(a, p1)].map(r6);
     }
+    case 'midpoint_line': {
+      const l = line('line');
+      const c = ent('center');
+      const cp = c?.kind === 'point' ? P(c.p) : null;
+      const e = l ? P(l.p[1]) : null;
+      if (!cp || !e) return null;
+      return [cp[0], cp[1], e[0], e[1]].map(r6);
+    }
+    case 'rect_3pt':
+    case 'center_rect_3pt':
+    case 'parallelogram': {
+      const s1 = line('s1');
+      const s2 = line('s2');
+      const s4 = line('s4');
+      if (!s1 || !s2 || !s4) return null;
+      const p1 = P(s1.p[0]);
+      const p2 = P(s1.p[1]);
+      const p3 = P(s2.p[1]);
+      const p4 = P(s4.p[0]);
+      if (!p1 || !p2 || !p3 || !p4) return null;
+      const L = dist(p1, p2);
+      if (!(L > 0)) return null;
+      if (kind === 'parallelogram') return [p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]].map(r6);
+      if (kind === 'rect_3pt') {
+        const h = ((p2[0] - p1[0]) * (p4[1] - p1[1]) - (p2[1] - p1[1]) * (p4[0] - p1[0])) / L;
+        return [p1[0], p1[1], p2[0], p2[1], h].map(r6);
+      }
+      const c = ent('center');
+      const cp = c?.kind === 'point' ? P(c.p) : null;
+      if (!cp) return null;
+      return [r6(cp[0]), r6(cp[1]), r6(L), r6(dist(p2, p3)), angleDeg(p1, p2)];
+    }
+    case 'arc_slot': {
+      const outer = ent('outer');
+      const capA = ent('cap_a');
+      const capB = ent('cap_b');
+      if (outer?.kind !== 'arc' || capA?.kind !== 'arc' || capB?.kind !== 'arc' || outer.ccw === false) return null;
+      const c = P(outer.c);
+      const a = P(capA.c);
+      const b = P(capB.c);
+      const os = P(outer.a);
+      if (!c || !a || !b || !os) return null;
+      return [r6(c[0]), r6(c[1]), r6(dist(c, a)), r6(dist(a, os)), angleDeg(c, a), angleDeg(c, b)];
+    }
     case 'polygon': {
       const circle = ent('circle');
       if (circle?.kind !== 'circle') return null;
       const c = P(circle.c);
       if (!c) return null;
       const n = [...byId.keys()].filter((k) => k.startsWith(`${id}__s`) && /^\d+$/.test(k.slice(id.length + 3))).length;
-      return [r6(c[0]), r6(c[1]), r6(circle.r), n];
+      // The first corner's turn from +u (left out at 0, as the tool takes it).
+      const s1 = line('s1');
+      const p1 = s1 ? P(s1.p[0]) : null;
+      const turn = p1 ? angleDeg(c, p1) : 0;
+      return Math.abs(turn) < 1e-6 ? [r6(c[0]), r6(c[1]), r6(circle.r), n] : [r6(c[0]), r6(c[1]), r6(circle.r), n, turn];
     }
     case 'sector': {
       const inner = ent('inner');
       const outer = ent('outer');
+      if (!inner && outer?.kind === 'arc' && outer.ccw !== false) {
+        // A pie slice (r1 0).
+        const c = P(outer.c);
+        const os = P(outer.a);
+        const oe = P(outer.b);
+        if (!c || !os || !oe) return null;
+        return [r6(c[0]), r6(c[1]), 0, r6(dist(c, os)), angleDeg(c, os), angleDeg(c, oe)];
+      }
       if (inner?.kind !== 'arc' || outer?.kind !== 'arc' || inner.ccw === false) return null;
       const c = P(inner.c);
       const is = P(inner.a);
@@ -344,11 +409,23 @@ export function describeSketch(f: SketchFeature, s: DocState, o: { budget?: numb
       continue;
     }
     const group = groups.get(st.id)!;
-    const kind = kindOfGroup(group.map((e) => e.id.slice(st.id.length + 2)));
-    const at = kind ? atOfGroup(f, st.id, kind, byId) : null;
     const construction = !!group.find((e) => !/__(center|axis|circle)$/.test(e.id))?.construction;
-    const r = kind && at ? expandEntity(st.id, kind, at, construction) : null;
-    const map = r?.ok ? matchMacro(f, r.macro, group) : null;
+    let kind: EntityKind | null = null;
+    let at: number[] | null = null;
+    let r: ReturnType<typeof expandEntity> | null = null;
+    let map: Map<string, string> | null = null;
+    for (const k of kindsOfGroup(group.map((e) => e.id.slice(st.id.length + 2)))) {
+      const a = atOfGroup(f, st.id, k, byId);
+      const x = a ? expandEntity(st.id, k, a, construction) : null;
+      const m = x?.ok ? matchMacro(f, x.macro, group) : null;
+      if (m) {
+        kind = k;
+        at = a;
+        r = x;
+        map = m;
+        break;
+      }
+    }
     if (!r?.ok || !map || !kind || !at) {
       for (const e of group) one(e);
       continue;

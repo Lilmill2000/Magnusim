@@ -42,6 +42,7 @@ import { sketchShown } from '../../features/sketch/view';
 import { normalTarget } from '../../viewport/normal';
 import { railsFor } from '../../ui/left-rails';
 import { KEEP_IN_VIEW } from '../../ui/Toolbar';
+import { barIdOf, collapseFlyouts } from '../../ui/flyouts';
 import { layoutModeOf, orderIds, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
 import { uiFor } from '../../ui/controller';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
@@ -311,7 +312,9 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
     for (const m of modes) prefs.reset(m);
     return done(`Toolbar back to its default layout (${modes.join(' and ')})`, { reset: modes });
   }
-  const def = services.commands.get(i.target);
+  // A flyout's variant (sketch.centerline) moves with its flyout, as the person's bar button does.
+  const asked = services.commands.get(i.target);
+  const def = asked?.flyout ? (services.commands.get(barIdOf(services.commands.all(), asked.id)) ?? asked) : asked;
   if (!def || !def.group) {
     const ids = services.commands.all().filter((c) => c.group).map((c) => c.id);
     throw new ToolError('not_found', `"${i.target}" is not a toolbar command. Commands: ${ids.slice(0, 40).join(', ')}.`, { detail: { field: 'target' } });
@@ -324,14 +327,14 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
     return done(`${def.label} ${place === 'bar' ? 'is on the toolbar' : "is in its group's More menu"} (${mode} mode)`, { command: def.id, place, mode });
   }
   const group = services.commands.toolbar(mode).find((g) => g.group === def.group);
-  const registry = group ? group.commands.map((c) => c.id) : [def.id];
+  const registry = group ? collapseFlyouts(group.commands).commands.map((c) => c.id) : [def.id];
   const order = orderIds(registry, m.order[def.group]);
   const v = i.value.trim();
   let before: string | null = null;
   if (v.toLowerCase() !== 'end') {
     const mm = /^before\s+(\S+)$/i.exec(v);
     if (!mm) throw bad('value', 'value: "before <command id>" (of the same group) or end.');
-    before = mm[1];
+    before = barIdOf(services.commands.all(), mm[1]);
     if (!order.includes(before) || before === def.id) throw bad('value', `${before} is not another command of ${def.label}'s group: ${order.join(', ')}.`);
   }
   prefs.setMode(mode, withMove(m, def.group, order, def.id, before));

@@ -31,6 +31,8 @@ import { mirrorTool } from './tools/mirror';
 import { patternTool } from './tools/pattern';
 import { offsetTool } from './tools/offset';
 import { filletTool } from './tools/fillet';
+// v0.5.0 (SHAPES): slots, polygon, sector and the other shape variants.
+import { SHAPE_SPEC, shapeTool } from './tools/shapes';
 
 type Draft = SketchFeature;
 const DRAG_PX = 4;
@@ -105,6 +107,11 @@ export class Boxes {
 
   any(): boolean {
     return this.typed.size > 0;
+  }
+
+  /** The text typed in a box, or null (v0.5.0 SHAPES: the polygon's Sides box shows a count, not a length). */
+  typedText(id: string): string | null {
+    return this.typed.get(id) ?? null;
   }
 
   /** The boxes to draw: typed text, or the value now (display units). `problems`: a typed value the shape cannot take. */
@@ -1143,6 +1150,21 @@ export function makeTool(mode: SketchMode, id: SketchToolId): SketchTool {
       return filletTool(mode, 'fillet');
     case 'chamfer':
       return filletTool(mode, 'chamfer');
+    // v0.5.0 (SHAPES): the person's tools for the Assistant's shape macros.
+    case 'line-midpoint':
+    case 'rectangle-3pt':
+    case 'rectangle-center-3pt':
+    case 'parallelogram':
+    case 'circle-3pt':
+    case 'arc-center':
+    case 'slot-center':
+    case 'slot-overall':
+    case 'slot-center-point':
+    case 'slot-arc-3pt':
+    case 'slot-arc-center':
+    case 'polygon':
+    case 'sector':
+      return shapeTool(mode, SHAPE_SPEC[id]);
     case 'select':
     default:
       return selectTool(mode);

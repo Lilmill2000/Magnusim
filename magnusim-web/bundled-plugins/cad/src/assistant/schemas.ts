@@ -110,7 +110,7 @@ export const WORKSPACE_ACTIONS = [
 export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
 
 /** The sketch entity kinds and relation/dimension kinds (the sketch tool's enums). */
-export const SKETCH_ENTITY_KINDS = ['point', 'line', 'centerline', 'polyline', 'circle', 'arc', 'rect', 'center_rect', 'slot', 'polygon', 'sector', 'spline', 'control_spline'] as const;
+export const SKETCH_ENTITY_KINDS = ['point', 'line', 'centerline', 'polyline', 'midpoint_line', 'circle', 'circle_3pt', 'arc', 'rect', 'center_rect', 'rect_3pt', 'center_rect_3pt', 'parallelogram', 'slot', 'arc_slot', 'polygon', 'sector', 'spline', 'control_spline'] as const;
 export const SKETCH_CONSTRAINT_KINDS = [
   'coincident',
   'horizontal',
@@ -233,7 +233,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Make a sketch (edit "") or replace one (edit: its name). on: Top, Front, Right, "<plane> offset <length>", a construction plane, or one flat face ("Base.end"). entities {id, kind, at, construction}, at in mm of sketch u, v: point [u,v]; line, centerline [u1,v1,u2,v2]; polyline [u1,v1,u2,v2,...] (closed when it ends where it starts; splines too); rect [u1,v1,u2,v2] corners; center_rect [cu,cv,width,height]; circle [cu,cv,r]; arc [cu,cv,r,start deg,end deg] ccw; slot [u1,v1,u2,v2,r] arc centres; polygon [cu,cv,R,sides]; sector [cu,cv,r1,r2,start deg,end deg]; spline [u1,v1,...] fit points; control_spline [u1,v1,...,degree] poles. constraints {id, kind, refs, value}, in order: value "" for a relation, an expression or "driven" for a dimension; refs: ids, parts (l.start, c.center, r.top, p.p2, p.2), origin, at(u, v) a place. fix and the person\'s sketch tools (trim, offset, fillet, patterns, project...) are rows too: help sketch_tools. Returns the solver\'s state, dof, free, moved, regions (r1...), made.',
+      'Make a sketch (edit "") or replace one (edit: its name). on: Top, Front, Right, "<plane> offset <length>", a construction plane, or one flat face ("Base.end"). entities {id, kind, at, construction}, at in mm of sketch u, v: point [u,v]; line, centerline [u1,v1,u2,v2]; polyline [u1,v1,u2,v2,...] (closed if it ends where it starts); rect [u1,v1,u2,v2]; center_rect [cu,cv,width,height]; circle [cu,cv,r]; arc [cu,cv,r,start deg,end deg] ccw; slot [u1,v1,u2,v2,r]; polygon [cu,cv,R,sides]; sector [cu,cv,r1,r2,start deg,end deg]; spline [u1,v1,...] fit points; more (help sketch): control_spline, midpoint_line, rect_3pt, center_rect_3pt, parallelogram, circle_3pt, arc_slot. constraints {id, kind, refs, value}, in order: value "" for a relation, an expression or "driven" for a dimension; refs: ids, parts (l.start, c.center, r.top, p.p2), origin, at(u, v) a place. fix and the person\'s sketch tools (trim, offset, fillet, patterns...) are rows too: help sketch_tools. Returns state, dof, free, moved, regions, made.',
     schema: obj({
       edit: EDIT,
       name: NAME,
@@ -242,7 +242,7 @@ const SPECS: ToolSpec[] = [
         obj({
           id: str(24, 'a-z, 0-9, _ (letter first, no double _); unique; not origin', 1),
           kind: en(SKETCH_ENTITY_KINDS, 'Kind'),
-          at: arr(num('mm'), 2, 200, 'Numbers for the kind, mm in sketch u, v (polygon: last number is the side count; control_spline: the degree, 3 or 5)'),
+          at: arr(num('mm'), 2, 200, 'Numbers for the kind, mm in sketch u, v (polygon: the fourth number is the side count; control_spline: the degree, 3 or 5)'),
           construction: bool('Reference only: bounds no region'),
         }),
         1,

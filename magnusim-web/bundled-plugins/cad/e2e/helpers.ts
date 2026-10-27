@@ -663,12 +663,25 @@ export async function runCommand(frame: FrameLocator, id: string): Promise<void>
   const tb = frame.locator('[data-cad-toolbar]');
   const btn = tb.locator(`.tb-btn[data-command="${id}"]`);
   const more = tb.locator(`[data-tb-more][data-more-commands~="${id}"]`);
-  await expect(btn.or(more), `${id}: a toolbar button or a More menu's item`).toHaveCount(1);
+  // v0.5.0: a drawing tool in a flyout (src/ui/flyouts.ts): its arrow's list (the flyout's
+  // button runs the variant used last, which may be another).
+  const arrow = tb.locator(`[data-tb-flyout][data-flyout-commands~="${id}"]`);
+  await expect(btn.or(more).or(arrow).first(), `${id}: a toolbar button, a flyout's or a More menu's item`).toHaveCount(1);
+  const menu = frame.locator('[data-cad-menu]');
   if (await btn.count()) {
-    await btn.click();
+    const variant = await btn.getAttribute('data-variant');
+    if (!variant || variant === id) {
+      await btn.click();
+      return;
+    }
+  }
+  if (await arrow.count()) {
+    await arrow.click();
+    await expect(arrow).toHaveAttribute('aria-expanded', 'true');
+    await menu.locator(`[data-command="${id}"]`).click();
+    await expect(menu).toHaveCount(0);
     return;
   }
-  const menu = frame.locator('[data-cad-menu]');
   if ((await more.getAttribute('aria-expanded')) !== 'true') await more.click();
   await expect(more).toHaveAttribute('aria-expanded', 'true');
   await menu.locator(`[data-command="${id}"]`).click();

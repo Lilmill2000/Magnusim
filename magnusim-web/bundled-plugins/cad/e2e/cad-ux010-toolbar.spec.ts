@@ -1,8 +1,9 @@
 // UX 0.1.0 (TOOLBAR): Daniel 2026-10-07, "I need to be able to drag something from More onto the
 // main toolbar and it replaced the last thing there ... drag tangent arc up there and it moves
 // spline to the More tab", as a user meets it with the mouse:
-//   - sketch DRAW at 1600 px shows Line, Rectangle, Circle, 3-point arc and Spline; Tangent arc is in
-//     More. Dragged from More onto the bar's last slot it takes it and Spline goes to More; the bar
+//   - sketch DRAW at 1600 px shows Line, Rectangle, Circle, 3-point arc and Spline; Slot (v0.5.0: in
+//     Tangent arc's place, now in the Arc flyout) is in More. Dragged from More onto the bar's last
+//     place it takes it and Spline goes to More; the bar
 //     keeps its count. While dragging, the menu stays open as long as the pointer is in it, a mark
 //     shows where it lands, Spline is highlighted and the note says "Spline moves to More";
 //   - the layout survives a reload and a new sketch;
@@ -101,22 +102,22 @@ async function dragFromMore(page: Page, frame: FrameLocator, group: string, id: 
   await expect(ghost(frame)).toHaveCount(0);
 }
 
-test("cad:ux010-toolbar-sketch drag Tangent arc from DRAW's More onto the bar: Spline goes to More, the count holds; kept through a reload and a new sketch; between Line and Rectangle; a bar command into More; another group refused; Swap with", { tag: '@serial' }, async ({ page, request }) => {
+test("cad:ux010-toolbar-sketch drag Slot from DRAW's More onto the bar: Spline goes to More, the count holds; kept through a reload and a new sketch; between Line and Rectangle; a bar command into More; another group refused; Swap with", { tag: '@serial' }, async ({ page, request }) => {
   await forgetUserLayout(request);
   await page.setViewportSize({ width: 1600, height: 1000 });
   let { seen, frame } = await freshPart(page, request);
   await sketchOnTop(frame);
   // Daniel's starting point.
   await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.spline']);
-  expect(await moreIds(frame, 'draw')).toContain('sketch.arc-tangent');
+  expect(await moreIds(frame, 'draw')).toContain('sketch.slot');
   const count = (await shownIds(frame, 'draw')).length;
 
-  // 1. Tangent arc onto the last slot (Spline's right half).
+  // 1. Slot (v0.5.0: the Slot flyout) onto the last place (Spline's right half).
   await dragFromMore(
     page,
     frame,
     'draw',
-    'sketch.arc-tangent',
+    'sketch.slot',
     async () => {
       const b = (await btn(frame, 'sketch.spline').boundingBox())!;
       return { x: b.x + b.width * 0.75, y: b.y + b.height / 2 };
@@ -129,14 +130,14 @@ test("cad:ux010-toolbar-sketch drag Tangent arc from DRAW's More onto the bar: S
       await page.screenshot({ path: test.info().outputPath('drag-onto-bar.png') });
     },
   );
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.arc-tangent']);
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.slot']);
   expect(await moreIds(frame, 'draw')).toContain('sketch.spline');
-  expect(await moreIds(frame, 'draw')).not.toContain('sketch.arc-tangent');
+  expect(await moreIds(frame, 'draw')).not.toContain('sketch.slot');
   expect((await shownIds(frame, 'draw')).length).toBe(count);
   await expect(tb(frame)).toHaveAttribute('data-layout', 'custom');
-  // The drag ran nothing: Tangent arc is not the tool in use.
-  await expect(btn(frame, 'sketch.arc-tangent')).not.toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(() => userLayout(request)).toMatchObject({ sketch: { place: { 'sketch.arc-tangent': 'bar', 'sketch.spline': 'more' } } });
+  // The drag ran nothing: no slot tool is in use.
+  await expect(btn(frame, 'sketch.slot')).not.toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => userLayout(request)).toMatchObject({ sketch: { place: { 'sketch.slot': 'bar', 'sketch.spline': 'more' } } });
   await finishSketch(frame);
 
   // 2. Reload the page, then a new sketch: the same DRAW.
@@ -146,27 +147,27 @@ test("cad:ux010-toolbar-sketch drag Tangent arc from DRAW's More onto the bar: S
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-kernel', 'ready', { timeout: 60_000 });
   await expect(tb(frame)).toHaveAttribute('data-layout-ready', '1');
   await sketchOnTop(frame);
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.arc-tangent']);
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.slot']);
   expect(await moreIds(frame, 'draw')).toContain('sketch.spline');
 
-  // 3. Center rectangle between Line and Rectangle: in there; Tangent arc (now the last) goes to More.
+  // 3. Polygon between Line and Rectangle: in there; Slot (now the last) goes to More.
   await dragFromMore(
     page,
     frame,
     'draw',
-    'sketch.rectangle-center',
+    'sketch.polygon',
     async () => {
       const b = (await btn(frame, 'sketch.rectangle').boundingBox())!;
       return { x: b.x + 4, y: b.y + b.height / 2 };
     },
     async () => {
       await expect(btn(frame, 'sketch.rectangle')).toHaveClass(/is-drop-before/);
-      await expect(btn(frame, 'sketch.arc-tangent')).toHaveClass(/is-displaced/);
-      await expect(frame.locator('[data-tb-drop-note]')).toHaveText('Tangent arc moves to More');
+      await expect(btn(frame, 'sketch.slot')).toHaveClass(/is-displaced/);
+      await expect(frame.locator('[data-tb-drop-note]')).toHaveText('Center-to-center slot moves to More');
     },
   );
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle-center', 'sketch.rectangle', 'sketch.circle', 'sketch.arc']);
-  expect(await moreIds(frame, 'draw')).toEqual(expect.arrayContaining(['sketch.arc-tangent', 'sketch.spline']));
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.polygon', 'sketch.rectangle', 'sketch.circle', 'sketch.arc']);
+  expect(await moreIds(frame, 'draw')).toEqual(expect.arrayContaining(['sketch.slot', 'sketch.spline']));
 
   // 4. A bar command (Circle) into DRAW's open More: it goes there, nothing comes up.
   const more = tb(frame).locator('[data-tb-more="draw"]');
@@ -185,7 +186,7 @@ test("cad:ux010-toolbar-sketch drag Tangent arc from DRAW's More onto the bar: S
   await expect(btn(frame, 'sketch.circle')).toHaveClass(/is-dragging/);
   await page.mouse.up();
   await expect(menu(frame)).toHaveCount(0);
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle-center', 'sketch.rectangle', 'sketch.arc']);
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.polygon', 'sketch.rectangle', 'sketch.arc']);
   expect(await moreIds(frame, 'draw')).toContain('sketch.circle');
   // The drag ran nothing (Circle is not the tool in use).
   expect(await frame.locator('[data-cad-app]').evaluate(() => (window as unknown as { __CAD__: { services: { apis: { get(): { sketch?: { state: { get(): { tool: string | null } } } } } } } }).__CAD__.services.apis.get().sketch?.state.get().tool ?? null)).not.toBe('circle');
@@ -228,7 +229,7 @@ test("cad:ux010-toolbar-sketch drag Tangent arc from DRAW's More onto the bar: S
   const swap = menu(frame).locator('[data-menu-item="tb-swap"]');
   await expect(swap).toHaveText('Swap with 3-point arc');
   await swap.click();
-  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.rectangle-center', 'sketch.rectangle', 'sketch.spline']);
+  await expect.poll(() => shownIds(frame, 'draw')).toEqual(['sketch.line', 'sketch.polygon', 'sketch.rectangle', 'sketch.spline']);
   expect(await moreIds(frame, 'draw')).toContain('sketch.arc');
 
   // Reset toolbar: DRAW as at first.
@@ -321,10 +322,10 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   await sketchOnTop(frame);
   const label = (id: string) => btn(frame, id).getAttribute('aria-label');
 
-  // B2: at 1150 and 1000 px, Tangent arc dragged onto DRAW's last slot stays on the bar.
+  // B2: at 1150 and 1000 px, Slot dragged onto DRAW's last place stays on the bar.
   for (const width of [1150, 1000]) {
     await resizeTo(page, frame, width, 900);
-    await expect.poll(() => moreIds(frame, 'draw'), `Tangent arc in More at ${width}`).toContain('sketch.arc-tangent');
+    await expect.poll(() => moreIds(frame, 'draw'), `Slot in More at ${width}`).toContain('sketch.slot');
     const before = await shownIds(frame, 'draw');
     const last = before[before.length - 1];
     const lastLabel = await label(last);
@@ -332,7 +333,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
       page,
       frame,
       'draw',
-      'sketch.arc-tangent',
+      'sketch.slot',
       async () => {
         const b = (await btn(frame, last).boundingBox())!;
         return { x: b.x + b.width * 0.75, y: b.y + b.height / 2 };
@@ -342,13 +343,13 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
         await expect(btn(frame, last)).toHaveClass(/is-displaced/);
       },
     );
-    await expect.poll(() => shownIds(frame, 'draw'), `DRAW at ${width}`).toEqual([...before.slice(0, -1), 'sketch.arc-tangent']);
-    await expect(btn(frame, 'sketch.arc-tangent')).toBeVisible();
+    await expect.poll(() => shownIds(frame, 'draw'), `DRAW at ${width}`).toEqual([...before.slice(0, -1), 'sketch.slot']);
+    await expect(btn(frame, 'sketch.slot')).toBeVisible();
     expect(await moreIds(frame, 'draw')).toContain(last);
     if (width === 1150) await page.screenshot({ path: test.info().outputPath('narrow-1150-after.png') });
-    // A narrower frame folds the group's other commands first: Tangent arc stays.
+    // A narrower frame folds the group's other commands first: Slot stays.
     await resizeTo(page, frame, 900, 900);
-    await expect.poll(() => shownIds(frame, 'draw')).toContain('sketch.arc-tangent');
+    await expect.poll(() => shownIds(frame, 'draw')).toContain('sketch.slot');
     await resizeTo(page, frame, width, 900);
     await resetToolbar(frame);
   }
@@ -374,7 +375,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   const stored = await userLayout(request);
   const more = tb(frame).locator('[data-tb-more="draw"]');
   await more.click();
-  let at = centre((await menu(frame).locator('[data-command="sketch.arc-tangent"]').boundingBox())!);
+  let at = centre((await menu(frame).locator('[data-command="sketch.slot"]').boundingBox())!);
   await page.mouse.move(at.x, at.y);
   await page.mouse.down();
   const spline = centre((await btn(frame, 'sketch.spline').boundingBox())!);
@@ -387,7 +388,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   expect(await userLayout(request)).toEqual(stored);
   // A move with no button held (the release went unheard) ends it too, and drops nothing.
   await more.click();
-  at = centre((await menu(frame).locator('[data-command="sketch.arc-tangent"]').boundingBox())!);
+  at = centre((await menu(frame).locator('[data-command="sketch.slot"]').boundingBox())!);
   await page.mouse.move(at.x, at.y);
   await page.mouse.down();
   await page.mouse.move(spline.x, spline.y, { steps: 10 });
@@ -403,7 +404,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
 
   // S6: a press on a More item, 8 px of hand movement, release on it: the item runs.
   await more.click();
-  const item = menu(frame).locator('[data-command="sketch.centerline"]');
+  const item = menu(frame).locator('[data-command="sketch.point"]');
   at = centre((await item.boundingBox())!);
   await page.mouse.move(at.x, at.y);
   await page.mouse.down();
@@ -411,7 +412,7 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   await expect(ghost(frame)).toHaveCount(0);
   await page.mouse.up();
   await expect(menu(frame)).toHaveCount(0);
-  await expect.poll(() => sketchTool(frame)).toBe('centerline');
+  await expect.poll(() => sketchTool(frame)).toBe('point');
   await page.keyboard.press('Escape');
 
   // A toggle in More (Construction, DRAW's construction drawing) shows its state as a check mark,
@@ -436,11 +437,12 @@ test('cad:ux010-toolbar-narrow at 1150 and 1000 px a command dragged (or swapped
   await more.click();
   const focused = menu(frame).locator('button[role^="menuitem"]:focus');
   await expect(focused).toHaveCount(1);
-  expect(await focused.getAttribute('data-command')).toBe('sketch.rectangle-center');
+  // v0.5.0: More lists a folded flyout's variants one by one (the Slot flyout's first).
+  expect(await focused.getAttribute('data-command')).toBe('sketch.slot');
   await page.keyboard.press('Enter');
   await expect(menu(frame)).toHaveCount(0);
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await expect.poll(() => sketchTool(frame)).toBe('rectangle-center');
+  await expect.poll(() => sketchTool(frame)).toBe('slot-center');
   await page.keyboard.press('Escape');
   // A button the keyboard reached (Tab from Line to Rectangle): Enter runs it, the sketch stays open.
   await btn(frame, 'sketch.line').focus();

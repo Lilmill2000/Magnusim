@@ -27,7 +27,7 @@ import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { uiFor } from '../ui/controller';
 import { constructOf, constructOutput } from '../features/refgeom/api';
 import { CONSTRAIN_COMMANDS, planConstraint } from './constraints';
-import { SketchBuilder, toggleConstruction } from './edit';
+import { SHAPE_TOOL_IDS, SketchBuilder, toggleConstruction } from './edit';
 import { SKETCH_ICONS } from './icons';
 import { entityOf, ORIGIN, RELATION_LABELS } from './model';
 import { type SketchMode } from './mode';
@@ -41,7 +41,7 @@ import { addHandle } from './tools/spline-relations';
 const RELATIONS_ICON = 'M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M8 16h8 M12 16V8 M12 13h3v3';
 
 /** ux010 (DRAW): the tools Construction (X) never converts a selection in: it toggles construction drawing. */
-const DRAWING_TOOLS = new Set<string>(['line', 'centerline', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'point', 'spline-fit', 'spline-control']);
+const DRAWING_TOOLS = new Set<string>(['line', 'centerline', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'point', 'spline-fit', 'spline-control', ...SHAPE_TOOL_IDS]);
 
 export const CURVED_FACE = 'Sketches go on flat faces: that face is curved';
 /** A CONSTRUCT plane selected that did not build (failed, suppressed or rolled back). */
@@ -72,15 +72,16 @@ export function supportFromSelection(
   return reason;
 }
 
-const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; shortcut?: string; hint: string }[] = [
-  { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, shortcut: 'L', hint: 'Chained lines, click by click; A or a drag from the end makes a tangent arc' },
-  { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, shortcut: 'R', hint: 'Two opposite corners' },
-  { id: 'sketch.rectangle-center', tool: 'rectangle-center', label: 'Center rectangle', icon: SKETCH_ICONS.rectangleCenter, hint: 'The centre, then a corner' },
-  { id: 'sketch.circle', tool: 'circle', label: 'Circle', icon: SKETCH_ICONS.circle, shortcut: 'C', hint: 'The centre, then the radius' },
-  { id: 'sketch.arc', tool: 'arc-3pt', label: '3-point arc', icon: SKETCH_ICONS.arc, shortcut: 'A', hint: 'Start, end, then a point on the arc' },
-  { id: 'sketch.arc-tangent', tool: 'arc-tangent', label: 'Tangent arc', icon: SKETCH_ICONS.arcTangent, hint: 'From the end of a line or an arc, tangent to it' },
+// v0.5.0: the drawing tools sit in toolbar flyouts (src/ui/flyouts.ts): `flyout` names the one.
+const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; shortcut?: string; hint: string; flyout?: string }[] = [
+  { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, shortcut: 'L', hint: 'Chained lines, click by click; A or a drag from the end makes a tangent arc', flyout: 'line' },
+  { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, shortcut: 'R', hint: 'Two opposite corners', flyout: 'rectangle' },
+  { id: 'sketch.rectangle-center', tool: 'rectangle-center', label: 'Center rectangle', icon: SKETCH_ICONS.rectangleCenter, hint: 'The centre, then a corner', flyout: 'rectangle' },
+  { id: 'sketch.circle', tool: 'circle', label: 'Circle', icon: SKETCH_ICONS.circle, shortcut: 'C', hint: 'The centre, then the radius', flyout: 'circle' },
+  { id: 'sketch.arc', tool: 'arc-3pt', label: '3-point arc', icon: SKETCH_ICONS.arc, shortcut: 'A', hint: 'Start, end, then a point on the arc', flyout: 'arc' },
+  { id: 'sketch.arc-tangent', tool: 'arc-tangent', label: 'Tangent arc', icon: SKETCH_ICONS.arcTangent, hint: 'From the end of a line or an arc, tangent to it', flyout: 'arc' },
   { id: 'sketch.point', tool: 'point', label: 'Point', icon: SKETCH_ICONS.point, hint: 'A sketch point' },
-  { id: 'sketch.centerline', tool: 'centerline', label: 'Centerline', icon: SKETCH_ICONS.centerline, hint: 'A construction line, an axis to mirror or revolve about' },
+  { id: 'sketch.centerline', tool: 'centerline', label: 'Centerline', icon: SKETCH_ICONS.centerline, hint: 'A construction line, an axis to mirror or revolve about', flyout: 'line' },
 ];
 
 /** Picked sketch items as constraint references (a point entity is a point; curves by id). */
@@ -201,6 +202,7 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       shortcut: d.shortcut,
       hint: d.hint,
       order: 10 + i,
+      ...(d.flyout ? { flyout: d.flyout } : {}),
       activeWhen: { sketchTool: d.tool },
       enabled: editable,
       run: () => {

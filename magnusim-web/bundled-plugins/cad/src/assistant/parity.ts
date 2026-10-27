@@ -28,6 +28,9 @@ import type { LinkController } from '../link/controller';
 import type { FeatureOf, FeatureType, SketchDimensionKind, SketchEntity, SketchRelationKind } from '../types/doc';
 import type { DocService } from '../types/doc-service';
 import type { SketchToolId } from '../types/sketch';
+import type { SKETCH_ENTITY_KINDS } from './schemas';
+
+type SketchEntityKindIn = (typeof SKETCH_ENTITY_KINDS)[number];
 import type { ViewportHandle } from '../types/viewport';
 import type { UiController } from '../ui/controller';
 import type { Rails } from '../ui/left-rails';
@@ -140,6 +143,20 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'sketch.chamfer': SKETCH_OP('chamfer'),
   'sketch.enter': auto("Enter places a point or finishes the tool in use: a pointer step of the person's"),
   'sketch.curve-pick': auto("a pick of the person's for Project and Intersect (sketch.project, sketch.intersect)"),
+  // v0.5.0 (SHAPES): the shape tools draw the Assistant's macros.
+  'sketch.line-midpoint': ENTITY('midpoint_line'),
+  'sketch.rectangle-3pt': ENTITY('rect_3pt'),
+  'sketch.rectangle-center-3pt': ENTITY('center_rect_3pt'),
+  'sketch.parallelogram': ENTITY('parallelogram'),
+  'sketch.circle-3pt': ENTITY('circle_3pt'),
+  'sketch.arc-center': ENTITY('arc'),
+  'sketch.slot': ENTITY('slot'),
+  'sketch.slot-overall': ENTITY('slot'),
+  'sketch.slot-center-point': ENTITY('slot'),
+  'sketch.slot-arc-3pt': ENTITY('arc_slot'),
+  'sketch.slot-arc-center': ENTITY('arc_slot'),
+  'sketch.polygon': ENTITY('polygon'),
+  'sketch.sector': ENTITY('sector'),
 };
 
 // ------------------------------------------------------------------ every feature field, by type
@@ -347,6 +364,19 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   fillet: SKETCH_OP('fillet'),
   chamfer: SKETCH_OP('chamfer'),
   project: SKETCH_OP('project'),
+  'line-midpoint': ENTITY('midpoint_line'),
+  'rectangle-3pt': ENTITY('rect_3pt'),
+  'rectangle-center-3pt': ENTITY('center_rect_3pt'),
+  parallelogram: ENTITY('parallelogram'),
+  'circle-3pt': ENTITY('circle_3pt'),
+  'arc-center': ENTITY('arc'),
+  'slot-center': ENTITY('slot'),
+  'slot-overall': ENTITY('slot'),
+  'slot-center-point': ENTITY('slot'),
+  'slot-arc-3pt': ENTITY('arc_slot'),
+  'slot-arc-center': ENTITY('arc_slot'),
+  polygon: ENTITY('polygon'),
+  sector: ENTITY('sector'),
   intersect: SKETCH_OP('intersect'),
 };
 
@@ -522,6 +552,52 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   lineResolution: INTERNAL,
   dispose: INTERNAL,
 };
+
+// ------------------------------------------------------------------ the other way: AI -> person
+
+/**
+ * The reverse direction (Daniel: parity both ways): every entity kind the Assistant's sketch tool
+ * draws (schemas.ts SKETCH_ENTITY_KINDS) and the person's sketch tool that draws the same record
+ * (exhaustive at typecheck: a new kind fails until a person's tool is named). A chained Line is a
+ * polyline; Centerline a centerline.
+ */
+export const PERSON_SKETCH_KINDS: { readonly [K in SketchEntityKindIn]: SketchToolId } = {
+  point: 'point',
+  line: 'line',
+  centerline: 'centerline',
+  polyline: 'line',
+  midpoint_line: 'line-midpoint',
+  circle: 'circle',
+  circle_3pt: 'circle-3pt',
+  arc: 'arc-center',
+  rect: 'rectangle-corner',
+  center_rect: 'rectangle-center',
+  rect_3pt: 'rectangle-3pt',
+  center_rect_3pt: 'rectangle-center-3pt',
+  parallelogram: 'parallelogram',
+  slot: 'slot-center',
+  arc_slot: 'slot-arc-center',
+  polygon: 'polygon',
+  sector: 'sector',
+  spline: 'spline-fit',
+  control_spline: 'spline-control',
+};
+
+/**
+ * The Assistant's sketch entity kinds the person cannot draw: no tool named, or its tool is not a
+ * registered command's (`personTools`: the sketch tools the registry's commands select), or the
+ * tool's own parity row does not reach that kind (a polyline is the Line tool's chain).
+ */
+export function sketchKindsWithoutPersonTool(kinds: readonly string[], personTools: ReadonlySet<string>): string[] {
+  const table = PERSON_SKETCH_KINDS as Readonly<Record<string, SketchToolId | undefined>>;
+  const chain: Readonly<Record<string, string>> = { polyline: 'line' };
+  return kinds.filter((k) => {
+    const tool = table[k];
+    if (!tool || !personTools.has(tool)) return true;
+    const row = SKETCH_TOOLS[tool];
+    return !(row.kind === 'reach' && row.tool === 'sketch' && row.field === 'entities[].kind' && (row.value === k || row.value === chain[k]));
+  });
+}
 
 /** Every table, by name (the test walks them all). */
 export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reach>>>> = {

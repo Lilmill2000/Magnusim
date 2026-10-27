@@ -186,7 +186,21 @@ export type SketchToolId =
   | 'chamfer'
   // ---- P4b (SELECT): linked geometry
   | 'project'
-  | 'intersect';
+  | 'intersect'
+  // ---- v0.5.0 (SHAPES): the person's tools for the Assistant's shape macros (src/sketch/tools/shapes.ts)
+  | 'line-midpoint'
+  | 'rectangle-3pt'
+  | 'rectangle-center-3pt'
+  | 'parallelogram'
+  | 'circle-3pt'
+  | 'arc-center'
+  | 'slot-center'
+  | 'slot-overall'
+  | 'slot-center-point'
+  | 'slot-arc-3pt'
+  | 'slot-arc-center'
+  | 'polygon'
+  | 'sector';
 
 /** Sketch mode's live state (one store; written only by src/sketch/). */
 export interface SketchModeState {

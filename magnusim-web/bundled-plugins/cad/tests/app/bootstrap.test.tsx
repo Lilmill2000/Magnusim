@@ -87,7 +87,9 @@ describe('bootstrap', () => {
     // P4a integration: the toolbar's fold order names only toolbar commands, and every toolbar
     // command either folds into its group's More menu or always stays in view (CONSTRAIN: glyphs).
     const { FOLD_ORDER, KEEP_IN_VIEW } = await import('../../src/ui/Toolbar');
-    const grouped = window.__CAD__!.services.commands.all().filter((c) => c.group && !c.primary);
+    // v0.5.0: a toolbar flyout is one command on the bar (its bar id); its other variants ride with it.
+    const { collapseFlyouts } = await import('../../src/ui/flyouts');
+    const grouped = collapseFlyouts(window.__CAD__!.services.commands.all().filter((c) => c.group && !c.primary)).commands;
     expect(FOLD_ORDER.filter((id) => !grouped.some((c) => c.id === id))).toEqual([]);
     expect(KEEP_IN_VIEW.filter((id) => !grouped.some((c) => c.id === id))).toEqual([]);
     expect(FOLD_ORDER.filter((id) => KEEP_IN_VIEW.includes(id))).toEqual([]);

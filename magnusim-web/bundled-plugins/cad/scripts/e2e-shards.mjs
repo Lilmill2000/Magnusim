@@ -71,6 +71,8 @@ export const SHARDS = {
     'e2e/cad-ux010-relations.spec.ts',
     // A sketch the Assistant draws: the person's tools refused with the reason, Escape, Ctrl+Z and Enter take it over.
     'e2e/cad-assistant-sketch.spec.ts',
+    // v0.5.0: the DRAW flyouts and the shape tools (slots, polygon, sector, the rectangle, circle, arc and line variants).
+    'e2e/cad-sketch-shapes.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.

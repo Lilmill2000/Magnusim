@@ -183,6 +183,22 @@ describe('workspace: the tree and the view state', () => {
     expect(!nf.ok && nf.error.message).toMatch(/is not a toolbar command/);
   });
 
+  it('a flyout variant moves with its flyout, as a toolbar button of the person does (v0.5.0 flyouts)', async () => {
+    const t = await part();
+    for (const [id, order, flyout] of [
+      ['sketch.line', 1, 'line'],
+      ['sketch.centerline', 2, 'line'],
+      ['sketch.point', 3, undefined],
+    ] as const)
+      t.services.commands.register({ id, label: id.slice(7), group: 'draw', mode: 'sketch', icon: 'M0 0', order, ...(flyout ? { flyout } : {}), run() {} });
+    const prefs = toolbarPrefs(t.services);
+    const r = await t.ok('workspace', W('toolbar_hide', { target: 'sketch.centerline' }));
+    expect(r.data).toMatchObject({ command: 'sketch.line', place: 'more', mode: 'sketch' });
+    expect(prefs.state.get().layout.sketch.place).toEqual({ 'sketch.line': 'more' });
+    const mv = await t.ok('workspace', W('toolbar_move', { target: 'sketch.point', value: 'before sketch.centerline' }));
+    expect(mv.data.order).toEqual(['sketch.point', 'sketch.line']);
+  });
+
   it('places and takes away the banana, and a sketch\'s taped banana', async () => {
     const t = await part();
     const r = await t.ok('workspace', W('banana_place', { value: '60, 10, 0, 90' }));

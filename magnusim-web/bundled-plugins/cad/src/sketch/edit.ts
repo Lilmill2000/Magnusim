@@ -134,8 +134,10 @@ export function toggleConstruction(d: SketchDraft, ids: readonly string[]): Sket
 }
 
 // ---- ux010 (DRAW): construction drawing
+/** v0.5.0 (SHAPES): the shape tools (src/sketch/tools/shapes.ts) draw construction too. */
+export const SHAPE_TOOL_IDS: readonly string[] = ['line-midpoint', 'rectangle-3pt', 'rectangle-center-3pt', 'parallelogram', 'circle-3pt', 'arc-center', 'slot-center', 'slot-overall', 'slot-center-point', 'slot-arc-3pt', 'slot-arc-center', 'polygon', 'sector'];
 /** The tools whose shapes construction drawing makes construction (points stay points; a centerline is construction always). */
-const CONSTRUCTION_TOOLS = new Set(['line', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'spline-fit', 'spline-control']);
+const CONSTRUCTION_TOOLS = new Set(['line', 'rectangle-corner', 'rectangle-center', 'circle', 'arc-3pt', 'arc-tangent', 'spline-fit', 'spline-control', ...SHAPE_TOOL_IDS]);
 export function drawsConstruction(tool: string | null | undefined): boolean {
   return !!tool && CONSTRUCTION_TOOLS.has(tool);
 }

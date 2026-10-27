@@ -343,6 +343,23 @@ html.cad-tb-drag-refused * {
   line-height: 1;
 }
 
+/* v0.5.0 toolbar flyouts (src/ui/flyouts.ts): a drawing group's button and the narrow arrow
+   beside it that lists its variants (SolidWorks' split buttons). */
+.cad-toolbar .tb-group .tb-btn.tb-flyout-arrow {
+  /* Narrow at every fit level (the icon-only levels widen .tb-btn). */
+  min-width: 0 !important;
+  width: 13px;
+  padding: 0 !important;
+  margin-left: -2px;
+  font-size: 10px;
+}
+.tb-flyout-arrow .tb-caret {
+  line-height: 1;
+}
+.cad-toolbar .tb-btn.tb-flyout-arrow.is-open {
+  background: var(--cad-icon-btn-hover-bg);
+}
+
 /* Wider text than measured (a larger system font, text scaling or browser zoom, Linux's fallback
    fonts; Toolbar ICON_ORDER): with everything foldable folded and the toolbar still too wide, the
    groups first sit closer (3 px apart, 5 px to each separator, 4 px from the frame's edges; 54 px

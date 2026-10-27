@@ -15,6 +15,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { collapseFlyouts } from '../src/ui/flyouts';
 import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
@@ -56,11 +57,10 @@ const FOLD_ORDER = [
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
-  'sketch.spline-control',
-  'sketch.arc-tangent',
-  'sketch.rectangle-center',
   'sketch.extend',
-  'sketch.centerline',
+  // v0.5.0: the drawing variants sit in flyouts (src/ui/flyouts.ts); Polygon and the Slot flyout fold here.
+  'sketch.polygon',
+  'sketch.slot',
   'sketch.offset',
   'sketch.fillet',
   'sketch.pattern-circular',
@@ -77,9 +77,9 @@ const FOLD_ORDER = [
 // ux010: SCALE MODELS' Banana for scale is on the bar too.
 const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step', 'scale.banana'];
 
-type Cmd = { id: string; label: string; shortcut: string | null; hint: string | null; reason: string | null };
+type Cmd = { id: string; label: string; shortcut: string | null; hint: string | null; reason: string | null; flyout?: string; order?: number };
 type Grp = { group: string; label: string; commands: Cmd[] };
-type W = { __CAD__: { services: { commands: { toolbar(m: string): { group: string; label: string; commands: { id: string; label: string; shortcut?: string; hint?: string; enabled?(s: unknown): true | string }[] }[] } } & Record<string, unknown> } };
+type W = { __CAD__: { services: { commands: { toolbar(m: string): { group: string; label: string; commands: { id: string; label: string; shortcut?: string; hint?: string; flyout?: string; order?: number; enabled?(s: unknown): true | string }[] }[] } } & Record<string, unknown> } };
 
 const tb = (frame: FrameLocator) => frame.locator('[data-cad-toolbar]');
 const menu = (frame: FrameLocator) => frame.locator('[data-cad-menu]');
@@ -109,7 +109,7 @@ async function registry(page: Page, mode: 'model' | 'sketch'): Promise<Grp[]> {
         } catch (e) {
           ok = String(e);
         }
-        return { id: c.id, label: c.label, shortcut: c.shortcut ?? null, hint: c.hint ?? null, reason: ok === true ? null : ok };
+        return { id: c.id, label: c.label, shortcut: c.shortcut ?? null, hint: c.hint ?? null, reason: ok === true ? null : ok, flyout: c.flyout, order: c.order };
       }),
     }));
   }, mode);
@@ -134,7 +134,11 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
   expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth), `${where}: the toolbar scrolls`).toBeLessThanOrEqual(1);
   const fr = (await page.locator('#workspace-frame').boundingBox())!;
   const right = Math.min(fr.x + fr.width, page.viewportSize()!.width);
-  const groups = await registry(page, mode);
+  // v0.5.0: a flyout is one button (its bar id); in More its variants are listed one by one.
+  const groups = (await registry(page, mode)).map((g) => {
+    const c = collapseFlyouts(g.commands);
+    return { ...g, commands: c.commands, variants: c.variants };
+  });
   expect(groups.length, `${where}: toolbar groups`).toBeGreaterThan(3);
   const folded: string[] = [];
   for (const g of groups) {
@@ -166,8 +170,9 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
       await expect(more, `${where}: ${g.group} has no More`).toHaveCount(0);
       continue;
     }
-    // The group's More holds exactly the commands not shown, in the group's order.
-    await expect(more).toHaveAttribute('data-more-commands', inMore.map((c) => c.id).join(' '));
+    // The group's More holds exactly the commands not shown, in the group's order (a flyout's variants).
+    const listed = inMore.flatMap((c) => g.variants.get(c.id) ?? [c]);
+    await expect(more).toHaveAttribute('data-more-commands', listed.map((c) => c.id).join(' '));
     await expect(more).toHaveAttribute('aria-haspopup', 'menu');
     await expect(more).toHaveAttribute('aria-expanded', 'false');
     await expect(more.locator('.tb-txt')).toHaveText('More ▾');
@@ -180,8 +185,8 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
     await expect(menu(frame)).toHaveAttribute('aria-label', `More ${words} commands`);
     // ux010: a toggle (Construction) is a menuitemcheckbox.
     const items = menu(frame).locator('button[role^="menuitem"]');
-    await expect(items.locator('.cad-menu-label')).toHaveText(inMore.map((c) => c.label));
-    for (const c of inMore) {
+    await expect(items.locator('.cad-menu-label')).toHaveText(listed.map((c) => c.label));
+    for (const c of listed) {
       const item = menu(frame).locator(`[data-command="${c.id}"]`);
       await expect(item.locator('svg')).toHaveCount(1);
       if (c.shortcut) await expect(item.locator('.cad-menu-key')).toHaveText(c.shortcut);
@@ -193,8 +198,9 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
       if (c.shortcut) expect(t).toContain(c.shortcut);
       const second = c.reason ?? c.hint;
       if (second) expect(t, `${where}: ${c.id}'s tooltip`).toContain(second);
-      folded.push(c.id);
+      if (inMore.includes(c)) folded.push(c.id);
     }
+    for (const c of inMore) if (!folded.includes(c.id)) folded.push(c.id);
     // Escape closes it and gives the button the keyboard back.
     await page.keyboard.press('Escape');
     await expect(menu(frame)).toHaveCount(0);
