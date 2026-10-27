@@ -720,26 +720,35 @@ function Group({
       if (box) delete box.dataset.tooNarrowFor;
       return;
     }
-    {
-      const s = scaleOf(el);
-      if (sizes.current.key !== fitKey) sizes.current = { key: fitKey, gap: (parseFloat(getComputedStyle(el).columnGap) || 0) / s, w: new Map() };
-      for (const k of Array.from(el.children) as HTMLElement[]) {
-        const cmd = k.dataset.tbMore != null ? '__more' : (k.dataset.command ?? k.querySelector<HTMLElement>('[data-command]')?.dataset.command);
-        if (cmd) sizes.current.w.set(cmd, { w: k.getBoundingClientRect().width / s, large: k.classList.contains('is-large') });
-      }
-    }
-    // The minimum: the first command, and the More beside it (a group of one: its command).
+    const s = scaleOf(el);
     const kids = Array.from(el.children) as HTMLElement[];
+    // Each item's own width, not stretched to its column's (a small button beside a wider one in its
+    // column fills the column): measured with the items set to their start for a moment, before
+    // paint (integration verify 6a: Shell took Press-pull's width and was greyed "too narrow").
+    el.style.justifyItems = 'start';
+    const own = new Map(kids.map((k) => [k, k.getBoundingClientRect()] as const));
+    el.style.justifyItems = '';
+    if (sizes.current.key !== fitKey) sizes.current = { key: fitKey, gap: (parseFloat(getComputedStyle(el).columnGap) || 0) / s, w: new Map() };
+    for (const k of kids) {
+      const cmd = k.dataset.tbMore != null ? '__more' : (k.dataset.command ?? k.querySelector<HTMLElement>('[data-command]')?.dataset.command);
+      if (cmd) sizes.current.w.set(cmd, { w: own.get(k)!.width / s, large: k.classList.contains('is-large') });
+    }
+    // The minimum: the first command, and the More beside it, or under it when the first is a
+    // small button sharing its column (a group of one: its command).
     const moreEl = el.querySelector<HTMLElement>(':scope > [data-tb-more]');
     const first = kids.find((k) => k !== moreEl);
     if (first && (moreEl || !candidates.length)) {
-      const s = scaleOf(el);
-      const left = el.getBoundingClientRect().left;
+      const f = own.get(first)!;
+      const m = moreEl ? own.get(moreEl)! : null;
       const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
-      const px = (first.getBoundingClientRect().right - left + (moreEl ? gap + moreEl.getBoundingClientRect().width : 0)) / s;
+      const px = (!m ? f.width : Math.abs(m.left - f.left) < 1 ? Math.max(f.width, m.width) : f.width + gap + m.width) / s;
       if (Math.abs(px - need) > 0.5) setMinW({ key: fitKey, px });
     }
     if (nNarrow < candidates.length && el.scrollWidth > el.clientWidth + 1) setWf({ key: fitKey, n: nNarrow + 1 });
+    // A fit with nothing to fold is kept as this key's too (integration verify 6b): a width the
+    // group comes back to later is measured from nothing folded again, so the sizes of the commands
+    // it folds are always known when Show in toolbar asks.
+    else if (wf.key !== fitKey) setWf({ key: fitKey, n: nNarrow });
     // The folded commands that would not fit even if shown (the Assistant's toolbar_show reads it).
     if (box) {
       const no = candidates.slice(0, nNarrow).filter((x) => !wouldFit(x));

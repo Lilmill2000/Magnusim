@@ -780,7 +780,9 @@ with the host once for the page's life, and its chip goes in the dock.
     once, so the bar is always full. "Show in toolbar" in a narrowed group
     brings the command out (another folds); it is greyed with the reason when
     the command would not fit even with every other unpinned command folded
-    (predicted from the sizes the group last drew; the group lists those in
+    (predicted from each command's own width as the group last drew it, not
+    the width its column stretched it to, measured again from nothing folded
+    whenever the group's width or fit changes; the group lists those in
     `data-too-narrow-for`, and the Assistant's toolbar_show then changes
     nothing and says why). A group is never narrower than its first command and
     its More (`data-min-width`, measured; review 1: a narrower width clipped the

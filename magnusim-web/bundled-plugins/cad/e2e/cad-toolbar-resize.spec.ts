@@ -284,6 +284,31 @@ test('cad:toolbar-resize-review a narrowed group keeps its first command and Mor
   await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
   await page.mouse.move(900, 600);
   await shot(page, frame, 'sketch-ribbon-draw-at-minimum');
+  // Integration verify 6b: the group set (from outside the page: another tab, Settings or the
+  // Assistant) wide enough for everything, then straight back to the minimum: the same command is
+  // still greyed (the fold is measured again from nothing folded, so its size is known).
+  const layoutNow = (await userLayout(request))!;
+  const setLayout = async (v: unknown) => {
+    const r = await request.post(`${baseUrl()}/api/plugin-prefs/set`, { data: { plugin: 'cad', key: 'toolbar-layout', value: v } });
+    expect(r.ok(), await r.text()).toBe(true);
+    // As another tab tells this one (the host's prefs channel).
+    await page.evaluate((x) => {
+      const ch = new BroadcastChannel('magnusim-plugin-prefs');
+      ch.postMessage({ plugin: 'cad', key: 'toolbar-layout', value: x, from: 'toolbar-e2e' });
+      ch.close();
+    }, v);
+  };
+  await setLayout({ ...layoutNow, sketch: { ...layoutNow.sketch, widths: { draw: 900 } } });
+  await expect(group(frame, 'draw')).toHaveAttribute('data-width', '900');
+  await expect(group(frame, 'draw')).toHaveAttribute('data-width-folded', '0');
+  await setLayout(layoutNow);
+  await expect(group(frame, 'draw')).toHaveAttribute('data-width', String(min));
+  await expect.poll(async () => ((await group(frame, 'draw').getAttribute('data-too-narrow-for')) ?? '').split(' ')).toContain(tooNarrow[0]);
+  await more.click();
+  await frame.locator(`[data-cad-menu] [data-command="${tooNarrow[0]}"]`).click({ button: 'right', force: true });
+  await expect(showGreyed).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Escape');
+  await expect(frame.locator('[data-cad-menu]')).toHaveCount(0);
   // A one-command group: DIMENSION dragged narrow keeps its button whole.
   const dimW = (await tb(frame).locator('.tb-btn[data-command="sketch.dimension"]').boundingBox())!.width;
   await dragBy(page, tb(frame).locator('[data-tb-resize="dimension"]'), -200, 0);
@@ -403,6 +428,29 @@ test('cad:toolbar-resize-review a narrowed group keeps its first command and Mor
   await setScale('');
   await expect(tb(frame)).toHaveAttribute('data-fit-labels', '');
   await expect(tb(frame)).toHaveAttribute('data-fit', '0');
+
+  // ---- Integration verify 6a: MODIFY (model mode) at its minimum, Fillet and its More. Split is
+  // narrower than the More although it was last drawn in Delete faces' wider column (it was
+  // measured at that width and greyed "too narrow"): its Show in toolbar is enabled, and it comes
+  // out, another command folding instead.
+  await runCommand(frame, 'sketch.finish');
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+  await settled(frame);
+  const modifyLine = tb(frame).locator('[data-tb-resize="modify"]');
+  await dragBy(page, modifyLine, -400, 0);
+  await settled(frame);
+  const modMin = Number(await group(frame, 'modify').getAttribute('data-min-width'));
+  await expect(group(frame, 'modify')).toHaveAttribute('data-width', String(modMin));
+  const modMore = tb(frame).locator('[data-tb-more="modify"]');
+  await expect.poll(async () => ((await modMore.getAttribute('data-more-commands')) ?? '').split(' ')).toContain('modify.split');
+  expect(((await group(frame, 'modify').getAttribute('data-too-narrow-for')) ?? '').split(' ')).not.toContain('modify.split');
+  await modMore.click();
+  await frame.locator('[data-cad-menu] [data-command="modify.split"]').click({ button: 'right', force: true });
+  await expect(showGreyed).not.toHaveAttribute('aria-disabled', 'true');
+  await showGreyed.click();
+  await settled(frame);
+  await expect(tb(frame).locator('.tb-btn[data-command="modify.split"]'), 'Split on the bar at the minimum').toBeVisible();
+  await expect(group(frame, 'modify')).toHaveAttribute('data-width', String(modMin));
 
   // Reset toolbar: the defaults.
   await tb(frame).locator('[data-group="view"] .tb-group-label').click({ button: 'right', force: true });
