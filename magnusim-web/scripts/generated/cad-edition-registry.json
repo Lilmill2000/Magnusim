@@ -1,0 +1,90 @@
+{
+  "describe": {
+    "analysis": [],
+    "solver": [],
+    "mesher": [],
+    "bc": [],
+    "bc_family": [],
+    "material": [],
+    "monitor": [],
+    "filter": [],
+    "plugins": [
+      {
+        "key": "cad",
+        "name": "Magnusim CAD",
+        "version": "0.2.0-dev",
+        "ui": null,
+        "provides": {},
+        "tier": "bundled",
+        "required": false,
+        "links_geometry": false
+      }
+    ],
+    "missing": [],
+    "required_missing": [],
+    "default_analysis": null
+  },
+  "plugins": [
+    {
+      "copy": "app",
+      "root": "bundled",
+      "bundled_version": "",
+      "unused_copies": [],
+      "tier": "bundled",
+      "required": false,
+      "default_enabled": true,
+      "key": "cad",
+      "dir": "cad",
+      "license": "GPL-3.0-or-later",
+      "name": "Magnusim CAD",
+      "version": "0.2.0-dev",
+      "description": "Parametric parts in their own workspace: sketches with dimensions and constraints, splines, offsets, sketch mirrors and patterns, and edges projected from the model; extrude, revolve, sweep and loft; fillet, chamfer, shell and booleans; linear and circular patterns and mirrors; reference planes, axes and points; an enclosure around the part for CFD; named parameters; and STEP import, editing and export.",
+      "authors": [
+        "Magnusim"
+      ],
+      "ui": null,
+      "ui_entry": "index.js",
+      "provides": {},
+      "source": "bundled",
+      "status": "enabled",
+      "enabled": true,
+      "error": "",
+      "missing": [],
+      "python_env": null,
+      "notes": [],
+      "workspaces": [
+        {
+          "key": "part",
+          "title": "Part",
+          "icon": "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8",
+          "entry": "workspace/index.html"
+        }
+      ],
+      "files": {
+        "max_file_bytes": 536870912,
+        "max_total_bytes": 4294967296
+      },
+      "start_actions": [
+        {
+          "study_kind": "part",
+          "kind_title": "Part",
+          "workspace": "part",
+          "workspace_title": "Part",
+          "label": "Design a part",
+          "home_label": "New design",
+          "header_label": "CAD",
+          "hint": "",
+          "icon": "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8",
+          "places": [
+            "empty_project",
+            "header",
+            "new_project",
+            "home"
+          ]
+        }
+      ],
+      "geometry_actions": [],
+      "samples": []
+    }
+  ]
+}
