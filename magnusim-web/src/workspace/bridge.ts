@@ -94,6 +94,7 @@ import type {
   WorkspaceContext,
 } from '../plugin-sdk/workspace';
 import { openChannel, type ChannelHandle } from '../api/eventHub';
+import { isCad } from '../app/edition';
 import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
@@ -407,6 +408,13 @@ export class BridgeError extends Error {
 }
 
 const notAllowed = (what: string) => new BridgeError(`not allowed: ${what}`, 'not_allowed');
+
+/**
+ * Magnusim CAD has no project geometries: a page's design never becomes one. Its host refuses
+ * the link calls (not_allowed: "this host links nothing"). The exit hook stays: it still holds
+ * a save on its way at Back and says when work is unsaved (CAD: link/leave.ts, controller.ts).
+ */
+const NOT_IN_CAD_EDITION = new Set(['project.linkGeometry', 'project.linkedGeometry', 'project.followGeometry']);
 const badParam = (what: string) => new BridgeError(`bad parameter: ${what}`, 'bad_request');
 const isCount = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
 
@@ -1197,6 +1205,7 @@ export class WorkspaceCalls {
 
   async handle(method: string, params: Record<string, unknown>): Promise<unknown> {
     const s = this.scope;
+    if (NOT_IN_CAD_EDITION.has(method) && isCad()) throw notAllowed(`${method} in Magnusim CAD`);
     switch (method) {
       case 'service.call': {
         const name = String(params.method || '');

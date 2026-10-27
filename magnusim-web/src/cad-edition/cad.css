@@ -1,0 +1,178 @@
+/*
+ * Magnusim CAD's page (body.edition-cad): the injected shell's workbench chrome never shows,
+ * since this app has no workbench; an open project is its page of Parts (ProjectPage.tsx),
+ * with a Part's workspace over it.
+ */
+body.edition-cad #app > :not(#workspace-overlay):not(#cad-project) {
+  display: none !important;
+}
+
+body.edition-cad #app {
+  display: flex;
+  flex-direction: column;
+  background: var(--mg-surface);
+}
+
+body.edition-cad #app[hidden] {
+  display: none;
+}
+
+#cad-project {
+  flex: 1;
+  overflow: auto;
+}
+
+.cad-project {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--mg-space-5) var(--mg-space-5) 96px;
+  font-family: var(--mg-font);
+  color: var(--mg-text);
+}
+
+.cad-project-head {
+  display: flex;
+  align-items: center;
+  gap: var(--mg-space-3);
+  margin-bottom: var(--mg-space-5);
+}
+
+.cad-project-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--mg-text-2xl);
+  font-weight: var(--mg-weight-semibold);
+  color: var(--mg-text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cad-project button {
+  font: inherit;
+  font-size: var(--mg-text-md);
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--mg-border);
+  background: var(--mg-bg);
+  color: var(--mg-text);
+  cursor: pointer;
+}
+
+.cad-project button:hover:not(:disabled) {
+  background: var(--mg-surface-muted);
+}
+
+.cad-project button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--mg-focus);
+}
+
+.cad-project button.primary {
+  background: var(--mg-primary);
+  border-color: var(--mg-primary);
+  color: var(--mg-primary-text);
+}
+
+.cad-project button.primary:hover:not(:disabled) {
+  background: var(--mg-primary-hover);
+}
+
+.cad-project button.danger {
+  color: var(--mg-danger);
+}
+
+.cad-project button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cad-parts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--mg-space-4);
+}
+
+.cad-part {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: 10px;
+  background: var(--mg-bg);
+  overflow: hidden;
+}
+
+.cad-part .cad-part-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--mg-space-2);
+  border: 0;
+  border-radius: 0;
+  padding: var(--mg-space-4);
+  text-align: left;
+  min-height: 112px;
+}
+
+.cad-part-icon {
+  color: var(--mg-primary);
+}
+
+.cad-part-title {
+  font-weight: var(--mg-weight-semibold);
+  font-size: var(--mg-text-lg);
+  color: var(--mg-text-strong);
+  word-break: break-word;
+}
+
+.cad-part-kind {
+  font-size: var(--mg-text-sm);
+  color: var(--mg-text-muted);
+}
+
+.cad-part.is-unavailable .cad-part-icon {
+  color: var(--mg-text-subtle);
+}
+
+.cad-part-actions {
+  display: flex;
+  gap: var(--mg-space-2);
+  padding: var(--mg-space-2) var(--mg-space-4) var(--mg-space-3);
+  border-top: 1px solid var(--mg-border-subtle);
+}
+
+.cad-part-actions button {
+  padding: 3px 10px;
+  font-size: var(--mg-text-sm);
+}
+
+.cad-parts-empty,
+.cad-parts-note {
+  color: var(--mg-text-muted);
+  font-size: var(--mg-text-md);
+}
+
+.cad-parts-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--mg-space-3);
+  padding: var(--mg-space-5);
+  border: 1px dashed var(--mg-border);
+  border-radius: 10px;
+  background: var(--mg-bg);
+}
+
+/* New Project: Category sorts simulations (Fluid dynamics, Solid mechanics); a CAD project is Other. */
+body.edition-cad #modal-new-project .np-field:has(#np-category) {
+  display: none;
+}
+
+/* The compute queue (meshes and runs) is Magnusim's: a Part's header has no Queue. */
+body.edition-cad #btn-queue,
+body.edition-cad #job-queue-chip {
+  display: none !important;
+}

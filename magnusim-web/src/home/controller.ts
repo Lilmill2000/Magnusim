@@ -5,6 +5,7 @@
  * (folders, cards, search, create) without cloning SimScale chrome.
  */
 
+import { isCad } from '../app/edition';
 import { formatElapsed, formatSimTime } from '../plugin-ui/format/time';
 import { initSetupWizard } from '../wizard/controller';
 import { confirmLeaveWorkspace, leaveNeedsWork, openWorkspaceRoute, workspaceDirty } from '../workspace/leaveGuard';
@@ -295,7 +296,7 @@ export function showHome() {
     history.replaceState(null, '', '#/');
   }
   applyHomeFilterFromRoute();
-  document.title = 'Magnusim - Projects';
+  document.title = isCad() ? 'Magnusim CAD - Projects' : 'Magnusim - Projects';
   restoreCatalogCache();
   try {
     render();
@@ -313,7 +314,7 @@ export function showWorkbench() {
   if (app) app.hidden = false;
   document.body.classList.remove('on-home');
   document.body.classList.add('on-workbench');
-  document.title = 'Magnusim';
+  document.title = isCad() ? 'Magnusim CAD' : 'Magnusim';
   stopHomeActivityPoll();
   requestAnimationFrame(() => {
     window.__CFD_RESIZE_VIEWER__?.();
@@ -940,7 +941,10 @@ export function firstFreeUntitledTitle(kindTitle, projects, folder) {
   return `${base} ${n}`;
 }
 
-/** "Start from": "Import geometry" (the default) and one radio per start action. */
+/**
+ * "Start from": "Import geometry" (the default) and one radio per start action. Magnusim CAD
+ * has no project geometry to import: its choices are the start actions, the first one checked.
+ */
 function fillStartChoices(entries, chosen) {
   const list = $('np-start-list');
   if (!list) return;
@@ -951,10 +955,17 @@ function fillStartChoices(entries, chosen) {
     `<span><span class="np-start-label">${escapeHtml(label)}</span>` +
     (hint ? `<span class="np-start-hint">${escapeHtml(hint)}</span>` : '') +
     '</span></label>';
+  const cad = isCad();
   list.innerHTML = [
-    radio('np-start-import', '', 'Import geometry', '', !chosen),
+    ...(cad ? [] : [radio('np-start-import', '', 'Import geometry', '', !chosen)]),
     ...entries.map((e, i) =>
-      radio(`np-start-action-${i}`, startKey(e), e.action.label, e.action.hint, !!chosen && startKey(chosen) === startKey(e)),
+      radio(
+        `np-start-action-${i}`,
+        startKey(e),
+        e.action.label,
+        e.action.hint,
+        chosen ? startKey(chosen) === startKey(e) : cad && i === 0,
+      ),
     ),
   ].join('');
 }
@@ -1036,11 +1047,11 @@ export async function prepareCreateModal(existing, opts) {
   projectModal.mode = editing ? 'edit' : 'create';
   projectModal.id = editing ? existing.id : null;
   if (title) {
-    title.placeholder = 'Vortex separator — incompressible';
+    title.placeholder = isCad() ? 'Mounting bracket' : 'Vortex separator — incompressible';
     title.value = editing ? existing.title || '' : '';
   }
   if (desc) {
-    desc.placeholder = 'What you are trying to learn from this run';
+    desc.placeholder = isCad() ? 'What these parts are for' : 'What you are trying to learn from this run';
     desc.value = editing ? existing.description || '' : '';
   }
   if (editing) {
@@ -1050,7 +1061,8 @@ export async function prepareCreateModal(existing, opts) {
     projectModal.starts = [];
     void fillSamples(projectModal.opening);
   } else {
-    setSelectValue($('np-category'), 'Fluid dynamics');
+    // Magnusim CAD hides Category (src/cad-edition/cad.css): its projects are Other.
+    setSelectValue($('np-category'), isCad() ? 'Other' : 'Fluid dynamics');
     const prefUnits =
       (window.__CFD_PREFS__ && window.__CFD_PREFS__.units) || 'Metric';
     setSelectValue($('np-units'), /imperial/i.test(String(prefUnits)) ? 'Imperial' : 'Metric');

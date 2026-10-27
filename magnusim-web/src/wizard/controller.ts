@@ -13,6 +13,7 @@
  */
 import { settleStep } from '../assistant/status';
 import { mountIsland, unmountIsland } from '../islands';
+import { isCad } from '../app/edition';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
 const WIZ_UNITS_STEP = 1;
@@ -20,7 +21,11 @@ const WIZ_PC_STEP = 2;
 const WIZ_PLUGINS_STEP = 5; // stays 5: GUIDE.md and the plugin suites name it
 const WIZ_ASSISTANT_STEP = 6;
 const WIZ_ORDER = [WIZ_UNITS_STEP, WIZ_PC_STEP, 3, 4, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
-const pos = (id) => WIZ_ORDER.indexOf(id);
+// Magnusim CAD simulates nothing: no PC check (solver ranks), no Port (its window picks one),
+// no Workspace (the simulation tree). Its rail is Units, Assistant and Plugins.
+const CAD_SECTIONS = [WIZ_UNITS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
+const sections = () => (isCad() ? WIZ_ORDER.filter((id) => CAD_SECTIONS.includes(id)) : WIZ_ORDER);
+const pos = (id) => sections().indexOf(id);
 /** The app's own port (scripts/prefs.js DEFAULT_PORT): Port's default. */
 const DEFAULT_PORT = 8082;
 /** How long the header's "Saved" stays. */
@@ -144,11 +149,12 @@ function leave(go) {
 
 /** Shows section `id` (a known section id, else Units). */
 function setStep(id) {
-  wizard.step = pos(id) >= 0 ? id : WIZ_ORDER[0];
+  wizard.step = pos(id) >= 0 ? id : sections()[0];
   document.querySelectorAll('.wiz-pane').forEach((el) => {
     el.hidden = Number(el.getAttribute('data-wiz-step')) !== wizard.step;
   });
   document.querySelectorAll('#wiz-rail li').forEach((el) => {
+    el.hidden = pos(Number(el.getAttribute('data-wiz-dot'))) < 0;
     const on = Number(el.getAttribute('data-wiz-dot')) === wizard.step;
     el.classList.toggle('is-on', on);
     if (on) el.setAttribute('aria-current', 'page');
@@ -405,7 +411,7 @@ export function openSetupWizard(opts) {
   else if (opts && opts.step === 'assistant') setStep(WIZ_ASSISTANT_STEP);
   else setStep(WIZ_UNITS_STEP);
   // The first run: the PC check (solver ranks) runs now, not only when This PC is opened.
-  if (first) startHardwareCheck();
+  if (first && pos(WIZ_PC_STEP) >= 0) startHardwareCheck();
   $('wiz-close')?.focus({ preventScroll: true });
 }
 
@@ -469,7 +475,8 @@ export function initSetupWizard(): Promise<void> {
       wireWizard();
       const prefs = await loadPrefs();
       // The first run opens Settings (on Units, the PC check running) until it is closed once.
-      if (!prefs.wizard_completed) openSetupWizard({ required: true });
+      // Magnusim CAD has nothing to set up first: it never opens by itself.
+      if (!prefs.wizard_completed && !isCad()) openSetupWizard({ required: true });
     })();
   }
   return wizardInit;
