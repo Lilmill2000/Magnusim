@@ -187,13 +187,14 @@ test('cad:ux010-banana-empty with no body the banana lies at the origin; right-c
   // v0.5.0 ribbon: SCALE MODELS' Banana for scale is a large button (the three rows tall, its name
   // under its icon) at every width, its heading on one line above it; the large modelling
   // buttons (Sketch among them) keep their names; the toolbar never scrolls. With Segoe UI
-  // (Windows, Daniel's screen) every small button keeps its name too down to 1280 px.
+  // (Windows, Daniel's screen) every small button keeps its name too down to 1600 px.
   for (const width of [1920, 1600, 1280, 1150, 1000]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(() => tb(frame).evaluate(() => window.innerWidth)).toBe(width);
     // The fit runs before paint once the toolbar has seen its new width: two frames later it is done.
     await tb(frame).evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    if (width >= 1280 && process.platform === 'win32') await expect(tb(frame)).toHaveAttribute('data-fit-labels', '');
+    // v0.5.0 ribbon: every model command on the bar; at 1600 px every small button keeps its name.
+    if (width >= 1600 && process.platform === 'win32') await expect(tb(frame)).toHaveAttribute('data-fit-labels', '');
     const labels = await tb(frame)
       .locator('.tb-group:not([data-group="view"]):not([data-group="edit"]) .tb-btn.is-large[data-command] .tb-txt')
       .evaluateAll((els) => els.filter((t) => !(getComputedStyle(t).position !== 'absolute' && t.getBoundingClientRect().width > 12)).map((t) => t.textContent));

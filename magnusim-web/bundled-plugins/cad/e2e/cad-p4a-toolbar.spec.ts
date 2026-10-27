@@ -73,14 +73,6 @@ const FOLD_ORDER = [
   'sketch.spline',
 ];
 
-/**
- * The model commands on the bar by default (src/ui/Toolbar.tsx KEEP_IN_VIEW's model part; P4b fix
- * round 1, Daniel: the compact layout at every width). Every other model command starts in its
- * group's More menu.
- */
-// ux010: SCALE MODELS' Banana for scale is on the bar too.
-const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step', 'scale.banana'];
-
 type Cmd = { id: string; label: string; shortcut: string | null; hint: string | null; reason: string | null; flyout?: string; order?: number };
 type Grp = { group: string; label: string; commands: Cmd[] };
 type W = { __CAD__: { services: { commands: { toolbar(m: string): { group: string; label: string; commands: { id: string; label: string; shortcut?: string; hint?: string; flyout?: string; order?: number; enabled?(s: unknown): true | string }[] }[] } } & Record<string, unknown> } };
@@ -215,14 +207,13 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
     expect(await more.evaluate((el) => el === document.activeElement), `${where}: Escape gives ${g.group}'s More the keyboard`).toBe(true);
   }
   await expect(bar).toHaveAttribute('data-folded', String(folded.length));
-  // In More by the default layout (model mode: everything but each group's main command), then what
-  // the width folds: always the start of the priority list of the rest (the most-used stay longest).
+  // v0.5.0 ribbon (Daniel: "yes show the rest as small buttons"): nothing is in More by the default
+  // layout in either mode; what the width folds is always the start of the priority list (the
+  // most-used stay longest).
   const present = groups.flatMap((g) => g.commands.map((c) => c.id));
-  const byLayout = mode === 'model' ? present.filter((id) => !MODEL_ON_BAR.includes(id)) : [];
-  expect(folded.filter((id) => byLayout.includes(id)).sort(), `${where}: the default layout's More commands`).toEqual([...byLayout].sort());
-  const byWidth = folded.filter((id) => !byLayout.includes(id));
+  const byWidth = folded;
   await expect(bar).toHaveAttribute('data-fit-folded', String(byWidth.length));
-  const order = FOLD_ORDER.filter((id) => present.includes(id) && !byLayout.includes(id));
+  const order = FOLD_ORDER.filter((id) => present.includes(id));
   expect([...byWidth].sort((a, b) => order.indexOf(a) - order.indexOf(b)), `${where}: folded in priority order`).toEqual(order.slice(0, byWidth.length));
   return byWidth;
 }
@@ -257,13 +248,12 @@ test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a lab
     await shot(page, `toolbar-sketch-${size.width}`, { x: 0, y: 0, width: size.width, height: 150 });
     await finishSketch(frame);
   }
-  // P4b fix round 1 (Daniel: "I prefer 1280 px (model)"): model mode is the compact layout at both
-  // sizes (checked above: everything but each group's main command in More) and the width folds
-  // nothing more. Sketch mode keeps every command on the bar by default; v0.5.0's ribbon folds
-  // nothing at 1920 px and (Segoe UI) at 1280 px either (cad-sketch-toolbar-fit.spec.ts); what
-  // folds is always the start of FOLD_ORDER (checked in order above).
+  // v0.5.0 ribbon (Daniel: "yes show the rest as small buttons"): both modes show every command by
+  // default; the width folds nothing at 1920 px, and (Segoe UI) at 1280 px either: the groups' small
+  // buttons go to their icons first (cad-sketch-toolbar-fit.spec.ts); what folds is always the
+  // start of FOLD_ORDER (checked in order above).
   expect(result['model 1920']).toEqual([]);
-  expect(result['model 1280']).toEqual([]);
+  if (process.platform === 'win32') expect(result['model 1280']).toEqual([]);
   expect(result['sketch 1920']).toEqual([]);
   if (process.platform === 'win32') expect(result['sketch 1280']).toEqual([]);
   expect(seen.csp, 'CSP violations').toEqual([]);
@@ -273,10 +263,24 @@ test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a lab
 test('cad:p4a-toolbar-more-keys the More menu from the keyboard and the mouse: Enter, Down and Up open it, arrows Home End move, Escape gives the button the keyboard back, Enter runs; a disabled item says why; an open folded command presses More', async ({ page, request }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { seen, frame } = await freshPart(page, request);
+  // v0.5.0 ribbon: every model command is on the bar by default, so MODIFY has a More only when the
+  // frame is narrow enough to fold Shell (Segoe UI: about 900 px).
   const more = tb(frame).locator('[data-group="modify"] [data-tb-more]');
+  const modifyMore = async () => (((await more.count()) ? await more.getAttribute('data-more-commands') : '') ?? '').split(' ');
+  let narrow = 0;
+  for (let w = 1200; w >= 600; w -= 20) {
+    await page.setViewportSize({ width: w, height: 800 });
+    await expect.poll(() => frame.locator('[data-cad-app]').evaluate(() => window.innerWidth)).toBe(w);
+    await frame.locator('[data-cad-app]').evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    if ((await modifyMore()).includes('modify.shell')) {
+      narrow = w;
+      break;
+    }
+  }
+  expect(narrow, "a width where MODIFY's More holds Shell").toBeGreaterThan(0);
   await expect(more).toBeVisible();
-  const ids = ((await more.getAttribute('data-more-commands')) ?? '').split(' ');
-  expect(ids[0]).toBe('modify.parameters');
+  const ids = await modifyMore();
+  expect(ids).toContain('modify.parameters');
   expect(ids).toContain('modify.shell');
   // P4a review: Chamfer never folds; it is a labelled button right after Fillet.
   expect(ids).not.toContain('modify.chamfer');
@@ -294,7 +298,9 @@ test('cad:p4a-toolbar-more-keys the More menu from the keyboard and the mouse: E
   await expect(menu(frame)).toBeVisible();
   await expect(more).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(focused).toBe('modify.parameters');
-  await shot(page, 'toolbar-more-menu-1280', { x: 0, y: 0, width: 1280, height: 420 });
+  await shot(page, 'toolbar-more-menu-narrow', { x: 0, y: 0, width: narrow, height: 420 });
+  await page.keyboard.press('Home');
+  await expect.poll(focused).toBe(ids[0]);
   await page.keyboard.press('ArrowDown');
   await expect.poll(focused).toBe(ids[1]);
   await page.keyboard.press('End');

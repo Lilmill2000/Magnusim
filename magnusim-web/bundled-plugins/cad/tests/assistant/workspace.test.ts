@@ -198,6 +198,40 @@ describe('workspace: the tree and the view state', () => {
     expect(!badR.ok && badR.error.message).toMatch(/1 to 4/);
     await t.ok('workspace', W('toolbar_rows', { value: 'auto' }));
     expect(prefs.state.get().layout.model.rows).toBeUndefined();
+    // Review 9: "" reads them, as the person sees them (no toolbar on screen here: the stored values).
+    await t.ok('workspace', W('toolbar_width', { target: 'modify', value: '150' }));
+    const rw = await t.ok('workspace', W('toolbar_width', { target: 'modify' }));
+    expect(rw.data).toMatchObject({ group: 'modify', mode: 'model', width: 150, shown: false });
+    const rr = await t.ok('workspace', W('toolbar_rows', { target: 'model' }));
+    expect(rr.data).toMatchObject({ mode: 'model', rows: 3, widths: { modify: 150 } });
+    expect(rr.text).toMatch(/modify 150 px/);
+  });
+
+  it('toolbar_width and toolbar_show answer what the person sees: the width applied (never under the group\'s first command and its More), what is on the bar and in its More, a command a narrowed group still holds', async () => {
+    const t = await part();
+    t.services.commands.register({ id: 'modify.shell', label: 'Shell', group: 'modify', icon: 'M0 0', order: 3, run() {} });
+    const prefs = toolbarPrefs(t.services);
+    // The toolbar as the person sees it (jsdom has no layout: the group's measured state as drawn).
+    const bar = document.createElement('div');
+    bar.setAttribute('data-cad-toolbar', 'model');
+    bar.innerHTML =
+      '<div class="tb-group" data-group="modify" data-width="90" data-min-width="90" data-width-folded="1">' +
+      '<div class="tb-items"><button class="tb-btn" data-command="modify.fillet"></button>' +
+      '<button class="tb-btn" data-tb-more="modify" data-more-commands="modify.shell"></button></div></div>';
+    document.body.append(bar);
+    try {
+      // Review 1: 40 px is narrower than Fillet and its More (90 px): 90 px is kept, and said.
+      const w = await t.ok('workspace', W('toolbar_width', { target: 'modify', value: '40' }));
+      expect(prefs.state.get().layout.model.widths).toEqual({ modify: 90 });
+      expect(w.data).toMatchObject({ width: 90, min_width: 90, bar: ['modify.fillet'], more: ['modify.shell'], shown: true });
+      expect(w.text).toMatch(/40 px is narrower than its first command and its More: 90 px is the least/);
+      // Review 2: Shell set to show, but the narrowed group still holds it in its More: said so.
+      const s = await t.ok('workspace', W('toolbar_show', { target: 'modify.shell' }));
+      expect(s.text).toMatch(/still in its group's More: the group is narrowed to 90 px/);
+      expect(s.data).toMatchObject({ shown: 'more', narrowed: true });
+    } finally {
+      bar.remove();
+    }
   });
 
   it('a flyout variant moves with its flyout, as a toolbar button of the person does (v0.5.0 flyouts)', async () => {

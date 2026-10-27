@@ -61,9 +61,10 @@ describe('toolbar', () => {
     // Feature commands come from their modules (none here); the shell's own are Parameters, Undo and Redo.
     expect(ui.$$('.tb-group').map((g) => g.getAttribute('data-group'))).toEqual(['modify', 'edit']);
     expect(ui.$$('.tb-group-label').map((g) => g.textContent)).toEqual(['MODIFY', 'EDIT']);
-    // Parameters is in MODIFY's More by default (the compact model toolbar, P4b fix round 1).
-    expect(ui.$$('.tb-btn[data-command] .tb-txt').map((b) => b.textContent)).toEqual(['Undo', 'Redo']);
-    expect(ui.$('[data-tb-more="modify"]')!.getAttribute('data-more-commands')).toBe('modify.parameters');
+    // v0.5.0 ribbon (Daniel: "yes show the rest as small buttons"): every command is on the toolbar,
+    // nothing in a More by default (P4b fix round 1 kept Parameters in MODIFY's More).
+    expect(ui.$$('.tb-btn[data-command] .tb-txt').map((b) => b.textContent)).toEqual(['Parameters', 'Undo', 'Redo']);
+    expect(ui.$('[data-tb-more]')).toBeNull();
     expect(ui.$('[data-command="solid.box"]')).toBeNull();
     expect(ui.$('[data-command="solid.cylinder"]')).toBeNull();
     fireEvent.mouseEnter(cmd('modify.parameters'));

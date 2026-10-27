@@ -191,6 +191,14 @@ describe('parity: every person-facing capability has an Assistant tool and field
     };
     for (const [tool, rows] of Object.entries(AI_TOOLS)) for (const [k, p] of Object.entries(rows)) check(`${tool} ${k}`, p);
     expect(bad).toEqual([]);
+    // Review 10: the toolbar's width and rows each have their own row both ways, and the person's
+    // controls for them are there in the booted app (the line at a group's right, the bottom edge).
+    expect(TOOLBAR.setWidth).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'toolbar_width' });
+    expect(TOOLBAR.setRows).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'toolbar_rows' });
+    expect(AI_TOOLS.workspace['action=toolbar_width']).toEqual({ kind: 'control', table: 'toolbar', method: 'setWidth' });
+    expect(AI_TOOLS.workspace['action=toolbar_rows']).toEqual({ kind: 'control', table: 'toolbar', method: 'setRows' });
+    expect(document.querySelectorAll('[data-cad-toolbar] [data-tb-resize]').length, "the lines at the groups' right").toBeGreaterThan(3);
+    expect(document.querySelectorAll('[data-cad-toolbar] [data-tb-rows-handle]').length, "the toolbar's bottom edge").toBe(1);
     const all = Object.values(AI_TOOLS).flatMap((r) => Object.values(r));
     const n = (k: PersonPath['kind']) => all.filter((p) => p.kind === k).length;
     console.log(`[parity] the other way: ${all.length} rows: ${n('command')} commands, ${n('control')} controls, ${n('panel')} panel fields, ${n('place')} places, ${n('own')} the Assistant's own`);

@@ -15,12 +15,13 @@
 // Review P2/P3 round 1: at 1280 px Undo, Redo and some views were scrolled out
 // of reach, with no scrollbar in real Chrome.
 // P4b fix round 1 (Daniel, 2026-10-06: "I prefer 1280 px (model) but let people
-// arrange the icons however they want"): model mode shows by default only each
-// group's main command (KEEP_IN_VIEW, the compact layout seen at 1280 px) at
-// every width, the rest in More; sketch mode shows every command by default.
+// arrange the icons however they want"). Since the v0.5.0 ribbon (Daniel
+// 2026-10-27: "yes show the rest as small buttons") both modes show every command
+// by default, model mode too: More holds only what the person moved there and
+// what does not fit (the frame, or a group the person narrowed).
 // Users rearrange both: right-click a command (or a More item) for Move to More /
-// Show in toolbar / Move left / Move right / Reset toolbar, or drag a command
-// along its group. The layout is kept in the project (toolbar-layout.ts).
+// Show in toolbar / Move earlier / Move later / Reset toolbar, or drag a command
+// along its group. The layout is the person's (toolbar-layout.ts).
 // UX 0.1.0 (Daniel 2026-10-07: "I need to be able to drag something from More onto the main
 // toolbar and it replaced the last thing there"): a command dragged out of its group's More menu
 // onto the bar goes in where it is dropped, and the group's last command on the bar goes to More
@@ -41,7 +42,8 @@
 // under it, three rows tall); the rest are small buttons (icon and name side by side, one row
 // tall) filling the rows column by column after them. A flyout is one button of either size with
 // its arrow (beside a small one, under a large one). CONSTRAIN's buttons are their glyphs alone.
-// The model toolbar is the same ribbon, so the two modes are the same height. When the ribbon does
+// The model toolbar is the same ribbon (each group's main command large, the rest small), so the
+// two modes are the same height. When the ribbon does
 // not fit the frame (useFitLevel) VIEW and EDIT go to icons, then each group's small buttons go to
 // icons one group at a time (SQUEEZE_ORDER), then commands fold into More (FOLD_ORDER), then the
 // groups sit closer, then whole groups collapse into one dropdown button each (SQUEEZE_ORDER).
@@ -75,24 +77,22 @@ import {
   widthOf,
   withMove,
   withPlace,
-  withRows,
   withSwapIn,
-  withWidth,
   type LayoutMode,
   type ModeLayout,
   type ToolbarPrefs,
 } from './toolbar-layout';
 
 /**
- * The order in which commands fold into their group's "More" menu when the labelled toolbar does
- * not fit the frame, the first one first (after VIEW and EDIT have gone to icons). A command not
- * listed never folds: each group keeps its most-used command in view (Sketch, Extrude, Fillet,
- * Plane, Enclosure, Measure, Import STEP; in sketch mode Line, Rectangle, Circle, 3-point arc,
- * Dimension, Trim and Finish sketch; Chamfer stays beside Fillet). The order follows how often SolidWorks and Fusion users
+ * The order in which commands fold into their group's "More" menu when the ribbon does not fit
+ * the frame, the first one first (after VIEW and EDIT have gone to icons and the groups' small
+ * buttons to their icons). A command not listed never folds for the frame (KEEP_IN_VIEW): each
+ * group keeps its most-used command in view (Sketch, Extrude, Fillet, Plane, Enclosure, Measure,
+ * Import STEP; in sketch mode Line, Rectangle, Circle, 3-point arc, Dimension, Trim and Finish
+ * sketch; Chamfer stays beside Fillet). The order follows how often SolidWorks and Fusion users
  * reach for each command, weighted for Magnusim's CFD preparation (press-pull, Combine and the
- * enclosure stay longest): ARCHITECTURE.md §7 "Toolbar" gives the reasons. Since P4b fix round 1
- * model mode starts compact (only KEEP_IN_VIEW on the bar), so this order matters there only for
- * the commands a user put on the bar; in sketch mode it is the ribbon's fold order.
+ * enclosure stay longest): ARCHITECTURE.md §7 "Toolbar" gives the reasons. Since the v0.5.0 ribbon
+ * both modes show every command by default, so this is the fold order of both.
  */
 export const FOLD_ORDER: readonly string[] = [
   // Model mode.
@@ -143,9 +143,10 @@ export const FOLD_ORDER: readonly string[] = [
 ];
 
 /**
- * The toolbar commands that never fold: each group's most-used command (and CONSTRAIN, whose
- * buttons are the constraints' own glyphs). Every toolbar command is either here or in
- * FOLD_ORDER (tests/app/bootstrap.test.tsx checks it, so a new command needs a decision).
+ * The toolbar commands that never fold for the frame's width: each group's most-used command (and
+ * CONSTRAIN, whose buttons are the constraints' own glyphs). Every toolbar command is either here
+ * or in FOLD_ORDER (tests/app/bootstrap.test.tsx checks it, so a new command needs a decision).
+ * (Before the v0.5.0 ribbon these were also the only model commands shown by default.)
  */
 export const KEEP_IN_VIEW: readonly string[] = [
   'sketch.new',
@@ -178,7 +179,6 @@ export const KEEP_IN_VIEW: readonly string[] = [
  * modelling groups. They rearrange, fold and keep their layout as the other groups do.
  */
 export const AFTER_VIEW: ReadonlySet<string> = new Set(['scale']);
-const KEEP_SET: ReadonlySet<string> = new Set(KEEP_IN_VIEW);
 
 /**
  * The ribbon's squeeze order, the least-used group first (v0.5.0 ribbon). When the ribbon does not
@@ -562,6 +562,8 @@ interface GroupCustom {
   moreMenu(c: CommandDef, shown: string[], x: number, y: number, narrow: boolean): void;
   /** Dragged onto the bar from More: folds last when the group is narrowed. */
   isHeld(id: string): boolean;
+  /** Shown by the person ("Show in toolbar"): folds after the others when the group is narrowed. */
+  isPinned(id: string): boolean;
 }
 
 /** The drop mark on a bar button: the dragged command lands before or after it. */
@@ -620,7 +622,10 @@ function Group({
   rows = RIBBON_ROWS,
   width = null,
   resize,
+  scaleTick = 0,
 }: {
+  /** Bumped when the toolbar's scale changes (setToolbarScale): the group measures again. */
+  scaleTick?: number;
   /** v0.5.0 ribbon: the frame is too narrow for the group: one dropdown button lists its commands. */
   collapsed?: boolean;
   /** The toolbar's rows (large buttons only from three rows). */
@@ -650,12 +655,19 @@ function Group({
   /** A press on one of the group's commands, on the bar or in its More: it may become a drag. */
   startDrag?(c: CommandDef, from: 'bar' | 'more', e: React.PointerEvent<HTMLButtonElement>): void;
 }) {
-  // v0.5.0 ribbon: a group the person narrowed puts what does not fit into its More, the least
-  // used first (FOLD_ORDER), then from its end; never its first command; a command dragged onto the
-  // bar (held) last. Measured before paint, again from none whenever the width or the rows change,
-  // so a widened group gets its commands back.
+  // v0.5.0 ribbon: a group the person narrowed puts what does not fit into its More, as the frame's
+  // fold does: the least used first (FOLD_ORDER), then from its end; a command the person showed
+  // ("Show in toolbar", pinned) after those, and one dragged onto the bar (held) last; never its
+  // first command. Measured before paint, again from none whenever the width, the rows, the scale or
+  // what is pinned change, so a widened group gets its commands back.
+  // The group is never narrower than its first command and its More (review 1: a narrower width
+  // clipped the More, and with it every folded command): that minimum is measured once there is a
+  // More (or for a one-command group, its command), and the width applied is at least that
+  // (`data-min-width`; Toolbar's handlers and the Assistant keep the stored width to it).
   const itemsRef = useRef<HTMLDivElement | null>(null);
   const open = commands.filter((c) => !folded?.has(c.id));
+  const isHeld = (x: string) => !!custom?.isHeld(x);
+  const isPinned = (x: string) => !!custom?.isPinned(x);
   const candidates =
     width == null || collapsed || open.length < 2
       ? []
@@ -667,15 +679,28 @@ function Group({
             .filter((x) => !byFold.includes(x))
             .reverse();
           const all = [...byFold, ...others];
-          const isHeld = (x: string) => !!custom?.isHeld(x);
-          return [...all.filter((x) => !isHeld(x)), ...all.filter(isHeld)];
+          return [...all.filter((x) => !isHeld(x) && !isPinned(x)), ...all.filter((x) => !isHeld(x) && isPinned(x)), ...all.filter(isHeld)];
         })();
-  const fitKey = `${width}|${rows}|${open.map((c) => c.id).join(' ')}|${icons ? 1 : 0}`;
+  const fitKey = `${width}|${rows}|${scaleTick}|${open.map((c) => `${c.id}${isPinned(c.id) ? '+' : ''}${isHeld(c.id) ? '!' : ''}`).join(' ')}|${icons ? 1 : 0}`;
   const [wf, setWf] = useState({ key: '', n: 0 });
   const nNarrow = wf.key === fitKey ? wf.n : 0;
+  const [minW, setMinW] = useState({ key: '', px: 0 });
+  const need = minW.key === fitKey ? minW.px : 0;
+  const applied = width == null ? null : Math.max(width, Math.ceil(need));
   useLayoutEffect(() => {
     const el = itemsRef.current;
-    if (!el || width == null) return;
+    if (!el || width == null || collapsed) return;
+    // The minimum: the first command, and the More beside it (a group of one: its command).
+    const kids = Array.from(el.children) as HTMLElement[];
+    const moreEl = el.querySelector<HTMLElement>(':scope > [data-tb-more]');
+    const first = kids.find((k) => k !== moreEl);
+    if (first && (moreEl || !candidates.length)) {
+      const s = scaleOf(el);
+      const left = el.getBoundingClientRect().left;
+      const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+      const px = (first.getBoundingClientRect().right - left + (moreEl ? gap + moreEl.getBoundingClientRect().width : 0)) / s;
+      if (Math.abs(px - need) > 0.5) setMinW({ key: fitKey, px });
+    }
     if (nNarrow < candidates.length && el.scrollWidth > el.clientWidth + 1) setWf({ key: fitKey, n: nNarrow + 1 });
   });
   const narrow = new Set(candidates.slice(0, nNarrow));
@@ -707,7 +732,9 @@ function Group({
       data-group={id}
       data-icons={icons ? '1' : undefined}
       data-collapsed={collapsed ? '1' : undefined}
-      data-width={width ?? undefined}
+      data-width={applied ?? undefined}
+      data-width-set={width ?? undefined}
+      data-min-width={width != null && need ? Math.ceil(need) : undefined}
       data-width-folded={width != null ? nNarrow : undefined}
       data-drop-refused={at?.kind === 'refused' && at.group === id ? '1' : undefined}
       role="group"
@@ -721,11 +748,11 @@ function Group({
           : undefined
       }
     >
-      <div className="tb-group-label" style={width != null ? { maxWidth: `calc(${width}px * var(--cad-toolbar-scale))` } : undefined}>
+      <div className="tb-group-label" style={applied != null ? { maxWidth: `calc(${applied}px * var(--cad-toolbar-scale))` } : undefined}>
         {label}
       </div>
       {/* data-menu-keep: a press on the group's buttons leaves its open More menu open (a bar command may be dragged into it). */}
-      <div ref={itemsRef} className={`tb-items${width != null && !collapsed ? ' is-sized' : ''}`} data-menu-keep={custom ? '1' : undefined} style={width != null && !collapsed ? { width: `calc(${width}px * var(--cad-toolbar-scale))` } : undefined}>
+      <div ref={itemsRef} className={`tb-items${applied != null && !collapsed ? ' is-sized' : ''}`} data-menu-keep={custom ? '1' : undefined} style={applied != null && !collapsed ? { width: `calc(${applied}px * var(--cad-toolbar-scale))` } : undefined}>
         {collapsed ? (
           <MoreButton
             group={id}
@@ -769,11 +796,13 @@ function Group({
           role="separator"
           aria-orientation="vertical"
           aria-label={`${groupWords(label)} width`}
-          aria-valuenow={width ?? undefined}
-          aria-valuemin={MIN_GROUP_W}
+          aria-valuenow={applied ?? undefined}
+          aria-valuetext={applied == null ? 'as wide as its commands' : `${applied} px`}
+          aria-valuemin={Math.max(MIN_GROUP_W, Math.ceil(need))}
           aria-valuemax={MAX_GROUP_W}
-          tabIndex={-1}
-          title="Drag to make the group narrower or wider; double-click: as wide as its commands"
+          // In the Tab order (review 5): Left / Right step it, Home sets it back to auto.
+          tabIndex={0}
+          title="Drag (or Left / Right) to make the group narrower or wider; double-click or Home: as wide as its commands"
           onPointerDown={(e) => resize.start(id, e)}
           onDoubleClick={() => resize.auto(id)}
           onKeyDown={(e) => resize.key(id, e)}
@@ -798,12 +827,13 @@ interface ResizeHandlers {
 
 /**
  * The right-click menus that rearrange the toolbar (P4b fix round 1). A command on the bar: Move to
- * More, Move left / Move right (the keyboard's and the mouse's way to reorder, besides a drag),
+ * More, Move earlier / Move later (the keyboard's and the mouse's way to reorder, besides a drag;
+ * one step in the ribbon's reading order, which is up or down its column for a small button),
  * Reset toolbar. A command in More: Show in toolbar (greyed with the reason when the frame is too
  * narrow for it), Swap with <the bar's last> (UX 0.1.0: the keyboard's way to do what a drag from
  * More onto the bar's last slot does), Reset toolbar. Anywhere else on the toolbar: Reset toolbar.
- * "Show in toolbar" still adds the command without sending another to More: it is the only way to
- * give a group more commands on the bar (model mode starts with one or two per group).
+ * "Show in toolbar" adds the command without sending another to More (in a narrowed group the
+ * group's other commands fold first to make room).
  */
 function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode, m: ModeLayout, fitFolded: ReadonlySet<string>) {
   const ui = uiFor(services);
@@ -823,16 +853,16 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
         x,
         y,
         [
-          { id: 'tb-to-more', label: 'Move to More', run: () => set(withPlace(m, c.id, 'more', mode, KEEP_SET)) },
+          { id: 'tb-to-more', label: 'Move to More', run: () => set(withPlace(m, c.id, 'more')) },
           {
             id: 'tb-left',
-            label: 'Move left',
+            label: 'Move earlier',
             disabled: i <= 0 ? `${c.label} is the first of its group` : null,
             run: () => set(withMove(m, group, order, c.id, shown[i - 1])),
           },
           {
             id: 'tb-right',
-            label: 'Move right',
+            label: 'Move later',
             disabled: i < 0 || i >= shown.length - 1 ? `${c.label} is the last of its group` : null,
             run: () => set(withMove(m, group, order, c.id, after(shown[i + 1]))),
           },
@@ -843,6 +873,7 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
       );
     },
     isHeld: (id) => held(m, id),
+    isPinned: (id) => pinned(m, id),
     moreMenu(c, shown, x, y, narrow) {
       const stuck = pinned(m, c.id) && (fitFolded.has(c.id) || narrow);
       const last = shown.length ? shown[shown.length - 1] : null;
@@ -858,14 +889,14 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
                 ? 'The group is too narrow for it: widen it (drag the line at its right) or move another command to More'
                 : 'The toolbar is full at this width: move another command to More to make room'
               : null,
-            run: () => set(withPlace(m, c.id, 'bar', mode, KEEP_SET)),
+            run: () => set(withPlace(m, c.id, 'bar')),
           },
           ...(last
             ? [
                 {
                   id: 'tb-swap',
                   label: `Swap with ${labelOf(last)}`,
-                  run: () => set(withSwapIn(m, group, order, shown, c.id, shown.length, mode, KEEP_SET)),
+                  run: () => set(withSwapIn(m, group, order, shown, c.id, shown.length)),
                 },
               ]
             : []),
@@ -894,12 +925,13 @@ const rectHas = (r: DOMRect, x: number, y: number) => x >= r.left && x <= r.righ
 /**
  * Whether the point is past the button in the ribbon's reading order (v0.5.0 ribbon: column by
  * column, top to bottom in each): right of its column, or in its column below its middle (a large
- * button, three rows tall: right of its middle).
+ * button, the rows tall: right of its middle). Large or small by its class, not its height, so it
+ * holds at every scale (review 6).
  */
-export function pastButton(r: { left: number; right: number; top: number; bottom: number }, x: number, y: number): boolean {
+export function pastButton(r: { left: number; right: number; top: number; bottom: number }, x: number, y: number, large: boolean): boolean {
   if (x >= r.right) return true;
   if (x < r.left) return false;
-  return r.bottom - r.top > 40 ? x > (r.left + r.right) / 2 : y > (r.top + r.bottom) / 2;
+  return large ? x > (r.left + r.right) / 2 : y > (r.top + r.bottom) / 2;
 }
 
 /**
@@ -948,7 +980,7 @@ function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React
     if (d.from === 'more') {
       const btns = buttonsOf(g);
       const shown = btns.map((el) => el.dataset.command ?? '');
-      const index = btns.filter((el) => pastButton(el.getBoundingClientRect(), x, y)).length;
+      const index = btns.filter((el) => pastButton(el.getBoundingClientRect(), x, y, el.classList.contains('is-large'))).length;
       const mark = index < shown.length ? { target: shown[index], after: false } : shown.length ? { target: shown[shown.length - 1], after: true } : null;
       return { kind: 'bar', group: g, index, mark, displaced: shown.length ? shown[shown.length - 1] : null };
     }
@@ -962,7 +994,7 @@ function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React
       const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
       const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
       const dist = Math.hypot(dx, dy);
-      if (!best || dist < best.dist) best = { target: el.dataset.command ?? '', after: pastButton(r, x, y), dist };
+      if (!best || dist < best.dist) best = { target: el.dataset.command ?? '', after: pastButton(r, x, y, el.classList.contains('is-large')), dist };
     }
     return best ? { kind: 'move', group: g, mark: { target: best.target, after: best.after } } : { kind: 'none' };
   };
@@ -984,10 +1016,10 @@ function useToolbarDrag(bar: React.RefObject<HTMLDivElement | null>, live: React
     if (!g) return;
     if (at.kind === 'bar' && at.group === d.group) {
       const shown = buttonsOf(d.group).map((el) => el.dataset.command ?? '');
-      prefs.setMode(mode, withSwapIn(m, d.group, g.order, shown, d.id, at.index, mode, KEEP_SET));
+      prefs.setMode(mode, withSwapIn(m, d.group, g.order, shown, d.id, at.index));
       uiFor(services).closeMenu();
     } else if (at.kind === 'more' && at.group === d.group) {
-      prefs.setMode(mode, withPlace(m, d.id, 'more', mode, KEEP_SET));
+      prefs.setMode(mode, withPlace(m, d.id, 'more'));
       // The open menu lists the group's More as it was: it closes (the More button lists it now).
       uiFor(services).closeMenu();
     } else if (at.kind === 'move' && at.group === d.group) {
@@ -1200,93 +1232,224 @@ function scaleOf(el: Element | null): number {
   return Number.isFinite(v) && v > 0 ? v : 1;
 }
 
+/** Sent on the window when setToolbarScale changed the scale: the toolbar measures its fit again. */
+export const TOOLBAR_SCALE_EVENT = 'cad:toolbar-scale';
+
 /**
- * Sets the toolbar's scale (every size of the ribbon follows it: icons, rows, names, widths). The
- * one place the host's appearance setting ("toolbar icon size") is to be wired in.
+ * Sets the toolbar's scale (every size of the ribbon follows it: icons, rows, names, widths) and
+ * has the ribbon measure its fit again (review 6). The one place the host's appearance setting
+ * ("toolbar icon size") is to be wired in.
  */
 export function setToolbarScale(scale: number, root: HTMLElement = document.documentElement): void {
   if (Number.isFinite(scale) && scale > 0) root.style.setProperty('--cad-toolbar-scale', String(scale));
   else root.style.removeProperty('--cad-toolbar-scale');
+  window.dispatchEvent(new Event(TOOLBAR_SCALE_EVENT));
 }
 
 /** A group's width step for the arrow keys on the line at its right (px at scale 1). */
 const WIDTH_STEP = 16;
 
+/** One frame later (or 50 ms: a hidden tab runs no animation frames). */
+function nextFrame(): Promise<void> {
+  return new Promise((done) => {
+    let over = false;
+    const end = () => {
+      if (over) return;
+      over = true;
+      done();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(end);
+    setTimeout(end, 50);
+  });
+}
+
+/** A group's width as the person sees it (review 9: the Assistant reads what the person sees). */
+export interface GroupWidthNow {
+  mode: LayoutMode;
+  group: string;
+  /** Its toolbar is on screen now (the other mode's is not: only `set` is known then). */
+  shown: boolean;
+  /** The width stored (px at scale 1), or null: as wide as its commands. */
+  set: number | null;
+  /** Its width on screen (px at scale 1), when shown. */
+  width: number | null;
+  /** The narrowest it can be (its first command and its More), once measured. */
+  min: number | null;
+  /** The commands in its More now (a flyout's variants one by one). */
+  more: string[];
+  /** The commands on the bar now. */
+  bar: string[];
+}
+
+function groupEl(mode: LayoutMode, group: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-cad-toolbar="${mode}"] .tb-group[data-group="${group.replace(/["\\]/g, '')}"]`);
+}
+
+/**
+ * The group's width once the toolbar has drawn the layout, its stored width kept to the group's
+ * minimum (review 1: never narrower than its first command and its More, so the More is never
+ * clipped). The person's handles and the Assistant's toolbar_width both settle through this.
+ */
+export async function settleGroupWidth(prefs: ToolbarPrefs, mode: LayoutMode, group: string): Promise<GroupWidthNow> {
+  await nextFrame();
+  await nextFrame();
+  let el = groupEl(mode, group);
+  const set0 = widthOf(prefs.state.get().layout[mode], group);
+  const min0 = el?.dataset.minWidth ? Number(el.dataset.minWidth) : null;
+  if (el && set0 != null && min0 != null && set0 < min0) {
+    prefs.setWidth(mode, group, min0);
+    await nextFrame();
+    await nextFrame();
+    el = groupEl(mode, group);
+  }
+  const set = widthOf(prefs.state.get().layout[mode], group);
+  if (!el) return { mode, group, shown: false, set, width: null, min: null, more: [], bar: [] };
+  const items = el.querySelector<HTMLElement>('.tb-items');
+  const s = scaleOf(el);
+  const more = el.querySelector<HTMLElement>('[data-tb-more], [data-tb-group-menu]');
+  return {
+    mode,
+    group,
+    shown: true,
+    set,
+    width: items ? Math.round(items.getBoundingClientRect().width / s) : null,
+    min: el.dataset.minWidth ? Number(el.dataset.minWidth) : null,
+    more: (more?.getAttribute('data-more-commands') ?? '').split(' ').filter(Boolean),
+    bar: Array.from(el.querySelectorAll('.tb-btn[data-command]')).map((b) => b.getAttribute('data-command') ?? ''),
+  };
+}
+
+/**
+ * Where a command is on its toolbar now, once the toolbar has drawn the layout: on the bar, in its
+ * group's More (`narrowed`: the group's width holds it there), or `hidden` (its toolbar is not on
+ * screen). For the Assistant's toolbar_show (review 2: it said "on the toolbar" while the person
+ * saw it in More).
+ */
+export async function commandOnToolbar(mode: LayoutMode, id: string): Promise<{ where: 'bar' | 'more' | 'hidden'; narrowed: boolean; width: number | null }> {
+  await nextFrame();
+  await nextFrame();
+  const bar = document.querySelector<HTMLElement>(`[data-cad-toolbar="${mode}"]`);
+  if (!bar) return { where: 'hidden', narrowed: false, width: null };
+  if (bar.querySelector(`.tb-btn[data-command="${id}"]`)) return { where: 'bar', narrowed: false, width: null };
+  const more = Array.from(bar.querySelectorAll<HTMLElement>('[data-tb-more], [data-tb-group-menu]')).find((m) => (m.getAttribute('data-more-commands') ?? '').split(' ').includes(id));
+  const g = more?.closest<HTMLElement>('.tb-group');
+  const narrowed = !!g && Number(g.dataset.widthFolded) > 0;
+  return { where: more ? 'more' : 'hidden', narrowed, width: narrowed && g?.dataset.width ? Number(g.dataset.width) : null };
+}
+
+/** The live preview of a resize drag (a group's width, or the rows). */
+type ResizePreview = { group?: string; width?: number; rows?: number } | null;
+
 /**
  * Resizing the ribbon (v0.5.0, Daniel: as Excel's): the line at a group's right sets its width
- * (pointer drag, Left / Right arrows, double-click or its menu back to auto), the bottom edge the
- * toolbar's rows (drag, Up / Down, double-click back to three). Shown live (`preview`), kept in the
- * person's layout on release (toolbar-layout.ts withWidth / withRows).
+ * (pointer drag, Left / Right arrows, double-click or its menu back to auto; EDIT's line is at its
+ * left, so there the drag and the arrows go the other way round, review 3), the bottom edge the
+ * toolbar's rows (drag, Up / Down, double-click back to three). Both lines are in the Tab order and
+ * take the keyboard when pressed (review 5). Shown live (`preview`), kept in the person's layout on
+ * release (ToolbarPrefs setWidth / setRows), a width never under the group's minimum
+ * (settleGroupWidth). A lost release (the window or the tab losing the pointer, the handle going
+ * away with its toolbar, a move with no button held) ends the drag and keeps nothing (review 4).
  */
-function useRibbonResize(
-  bar: React.RefObject<HTMLDivElement | null>,
-  live: React.RefObject<DragLive>,
-  setPreview: (p: { group?: string; width?: number; rows?: number } | null) => void,
-  rows: number,
-) {
-  const save = (m: ModeLayout) => live.current.prefs.setMode(live.current.mode, m);
-  const itemsOf = (g: string) => bar.current?.querySelector<HTMLElement>(`.tb-group[data-group="${CSS.escape(g)}"] .tb-items`) ?? null;
-  const widthNow = (g: string) => {
-    const set = widthOf(live.current.m, g);
-    if (set != null) return set;
-    const el = itemsOf(g);
-    return el ? el.getBoundingClientRect().width / scaleOf(bar.current) : MIN_GROUP_W;
+function useRibbonResize(bar: React.RefObject<HTMLDivElement | null>, live: React.RefObject<DragLive>, setPreview: (p: ResizePreview) => void, rows: number) {
+  const active = useRef<(() => void) | null>(null);
+  // The toolbar goes away mid-drag (the mode changed): the drag ends with it.
+  useEffect(() => () => active.current?.(), []);
+  const prefs = () => live.current.prefs;
+  const mode = () => live.current.mode;
+  const setWidth = (g: string, w: number | null) => {
+    prefs().setWidth(mode(), g, w);
+    if (w != null) void settleGroupWidth(prefs(), mode(), g);
   };
-  const clampW = (w: number) => Math.round(Math.min(MAX_GROUP_W, Math.max(MIN_GROUP_W, w)));
+  const setRows = (r: number | null) => prefs().setRows(mode(), r);
+  const itemsOf = (g: string) => bar.current?.querySelector<HTMLElement>(`.tb-group[data-group="${g}"] .tb-items`) ?? null;
+  const widthNow = (g: string) => {
+    const el = itemsOf(g);
+    if (el) return el.getBoundingClientRect().width / scaleOf(bar.current);
+    return widthOf(live.current.m, g) ?? MIN_GROUP_W;
+  };
+  const minOf = (g: string) => Number(bar.current?.querySelector<HTMLElement>(`.tb-group[data-group="${g}"]`)?.dataset.minWidth) || MIN_GROUP_W;
+  const clampW = (g: string, w: number) => Math.round(Math.min(MAX_GROUP_W, Math.max(MIN_GROUP_W, minOf(g), w)));
   const clampR = (r: number) => Math.min(MAX_ROWS, Math.max(MIN_ROWS, Math.round(r)));
+  /** EDIT's line is on its left (the group sits at the right end): its width grows to the left. */
+  const signOf = (el: Element) => (el.closest('.tb-group')?.classList.contains('is-end') ? -1 : 1);
   /** A pointer drag on a handle: `at(dx, dy)` while moving, `done(dx, dy)` on release. */
   const follow = (e: React.PointerEvent<HTMLDivElement>, cursor: string, at: (dx: number, dy: number) => void, done: (dx: number, dy: number) => void) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    active.current?.();
     const el = e.currentTarget;
+    // The press gives the line the keyboard (preventDefault keeps the browser from doing it).
+    el.focus({ preventScroll: true });
+    const pointer = e.pointerId;
     const x0 = e.clientX;
     const y0 = e.clientY;
     try {
-      el.setPointerCapture(e.pointerId);
+      el.setPointerCapture(pointer);
     } catch {
       /* synthetic events */
     }
     const root = document.documentElement;
     root.classList.add(cursor);
-    const move = (ev: PointerEvent) => at(ev.clientX - x0, ev.clientY - y0);
-    const end = (ev: PointerEvent, keep: boolean) => {
+    const end = (keep: boolean, dx = 0, dy = 0) => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', cancel);
+      el.removeEventListener('pointercancel', lost);
+      el.removeEventListener('lostpointercapture', lost);
+      window.removeEventListener('blur', lost);
+      document.removeEventListener('visibilitychange', hidden);
       root.classList.remove(cursor);
-      if (keep) done(ev.clientX - x0, ev.clientY - y0);
+      if (active.current === stop) active.current = null;
+      if (keep) done(dx, dy);
       setPreview(null);
     };
-    const up = (ev: PointerEvent) => end(ev, true);
-    const cancel = (ev: PointerEvent) => end(ev, false);
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointer) return;
+      // No button held: the release went where this frame did not hear it. Keep nothing.
+      if ((ev.buttons & 1) === 0) return end(false);
+      at(ev.clientX - x0, ev.clientY - y0);
+    };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId === pointer) end(true, ev.clientX - x0, ev.clientY - y0);
+    };
+    const lost = () => end(false);
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') end(false);
+    };
+    const stop = () => end(false);
+    active.current = stop;
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', cancel);
+    el.addEventListener('pointercancel', lost);
+    el.addEventListener('lostpointercapture', lost);
+    window.addEventListener('blur', lost);
+    document.addEventListener('visibilitychange', hidden);
   };
   const group: ResizeHandlers = {
     start(g, e) {
       const w0 = widthNow(g);
       const s = scaleOf(bar.current);
+      const sign = signOf(e.currentTarget);
       follow(
         e,
         'cad-tb-resizing',
-        (dx) => setPreview({ group: g, width: clampW(w0 + dx / s) }),
+        (dx) => setPreview({ group: g, width: clampW(g, w0 + (sign * dx) / s) }),
         (dx) => {
-          if (Math.abs(dx) >= 1) save(withWidth(live.current.m, g, clampW(w0 + dx / s)));
+          if (Math.abs(dx) >= 1) setWidth(g, clampW(g, w0 + (sign * dx) / s));
         },
       );
     },
     auto(g) {
-      save(withWidth(live.current.m, g, null));
+      setWidth(g, null);
     },
     key(g, e) {
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
-        save(withWidth(live.current.m, g, clampW(widthNow(g) + (e.key === 'ArrowRight' ? WIDTH_STEP : -WIDTH_STEP))));
+        const step = (e.key === 'ArrowRight' ? WIDTH_STEP : -WIDTH_STEP) * signOf(e.currentTarget);
+        setWidth(g, clampW(g, widthNow(g) + step));
       } else if (e.key === 'Home' || e.key === 'Delete') {
         e.preventDefault();
-        save(withWidth(live.current.m, g, null));
+        setWidth(g, null);
       }
     },
     menu(g, x, y) {
@@ -1299,14 +1462,14 @@ function useRibbonResize(
             id: 'tb-width-auto',
             label: 'Width to fit its commands',
             disabled: widthOf(live.current.m, g) == null ? `${groupWords(label)} is already as wide as its commands` : null,
-            run: () => save(withWidth(live.current.m, g, null)),
+            run: () => setWidth(g, null),
           },
           { sep: true, id: 'tb-sep' },
           {
             id: 'tb-reset',
             label: 'Reset toolbar',
             disabled: isDefault(live.current.m) ? 'The toolbar is already as it was at first' : null,
-            run: () => live.current.prefs.reset(live.current.mode),
+            run: () => prefs().reset(mode()),
           },
         ],
         `Toolbar: ${groupWords(label)}`,
@@ -1328,20 +1491,20 @@ function useRibbonResize(
         (_dx, dy) => setPreview({ rows: clampR(r0 + dy / px) }),
         (_dx, dy) => {
           const r = clampR(r0 + dy / px);
-          if (r !== r0) save(withRows(live.current.m, r));
+          if (r !== r0) setRows(r);
         },
       );
     },
     auto() {
-      save(withRows(live.current.m, null));
+      setRows(null);
     },
     key(e: React.KeyboardEvent<HTMLDivElement>) {
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
-        save(withRows(live.current.m, clampR(rows + (e.key === 'ArrowDown' ? 1 : -1))));
+        setRows(clampR(rows + (e.key === 'ArrowDown' ? 1 : -1)));
       } else if (e.key === 'Home') {
         e.preventDefault();
-        save(withRows(live.current.m, null));
+        setRows(null);
       }
     },
   };
@@ -1433,7 +1596,7 @@ export function Toolbar() {
   });
   const flyouts = { variants: flyVariants, defs: flyDefs };
   // In More by the user's layout (or the default: model mode shows each group's main command).
-  const placedMore = new Set(groups.flatMap((g) => g.order.filter((x) => placeOf(x, lmode, ml, KEEP_SET) === 'more')));
+  const placedMore = new Set(groups.flatMap((g) => g.order.filter((x) => placeOf(x, ml) === 'more')));
   // The commands that may fold here, in folding order (only the mode's groups' own commands on the bar).
   const present = new Set(groups.flatMap((g) => g.order));
   // What the user asked to see ("Show in toolbar") folds last, after the rest in FOLD_ORDER. A
@@ -1455,7 +1618,24 @@ export function Toolbar() {
     .map((g) => g.group);
   // The groups that may collapse into one dropdown (two commands or more; a flyout counts its variants).
   const collapseGroups = squeeze.filter((g) => g.commands.flatMap((c) => flyVariants.get(c.id) ?? [c]).length > 1).map((g) => g.group);
-  const fit = useFitLevel(mode, `${[...present].join(' ')}|${JSON.stringify(ml)}`, 2 + labelGroups.length + foldable.length + collapseGroups.length);
+  // v0.5.0 ribbon (Daniel: as Excel's): the person drags the line at a group's right to set its
+  // width, and the toolbar's bottom edge to set its rows; shown live while dragging, kept on release.
+  const [preview, setPreview] = useState<ResizePreview>(null);
+  const rows = preview?.rows ?? rowsOf(ml);
+  // setToolbarScale: the ribbon measures its fit again (review 6).
+  const [scaleTick, setScaleTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setScaleTick((n) => n + 1);
+    window.addEventListener(TOOLBAR_SCALE_EVENT, bump);
+    return () => window.removeEventListener(TOOLBAR_SCALE_EVENT, bump);
+  }, []);
+  // The fit is measured again from the start whenever a resize's preview changes or ends (review 7:
+  // a drag let go where it started left the ribbon squeezed), the rows or the scale change.
+  const fit = useFitLevel(
+    mode,
+    `${[...present].join(' ')}|${JSON.stringify(ml)}|${rows}|${preview?.group ?? ''}:${preview?.width ?? ''}|${scaleTick}`,
+    2 + labelGroups.length + foldable.length + collapseGroups.length,
+  );
   // Tests wait for the stored layout: the attribute is set without a render.
   const bar = useRef<HTMLDivElement | null>(null);
   const fitRef = fit.ref;
@@ -1491,10 +1671,6 @@ export function Toolbar() {
   const live = useRef<DragLive>({ services, prefs, mode: lmode, m: ml, groups: [] });
   live.current = { services, prefs, mode: lmode, m: ml, groups: groups.map((g) => ({ group: g.group, label: g.label, order: g.order })) };
   const drag = useToolbarDrag(bar, live);
-  // v0.5.0 ribbon (Daniel: as Excel's): the person drags the line at a group's right to set its
-  // width, and the toolbar's bottom edge to set its rows; shown live while dragging, kept on release.
-  const [preview, setPreview] = useState<{ group?: string; width?: number; rows?: number } | null>(null);
-  const rows = preview?.rows ?? rowsOf(ml);
   const widthFor = (g: string) => (preview?.group === g && preview.width != null ? preview.width : widthOf(ml, g));
   const resize = useRibbonResize(bar, live, setPreview, rows);
   const view = viewCommands(services, mode);
@@ -1545,10 +1721,11 @@ export function Toolbar() {
             rows={rows}
             width={widthFor(g.group)}
             resize={resize.group}
+            scaleTick={scaleTick}
           />
         ))}
         {primary.length ? <Group id="primary" label={mode === 'sketch' ? 'SKETCH' : ''} commands={primary} services={services} panel={panel} sketchTool={sketchTool} primary menu={cz.menu} drag={drag.view} rows={rows} /> : null}
-        {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} icons={viewIcons} menu={cz.menu} drag={drag.view} rows={rows} width={widthFor('view')} resize={resize.group} /> : null}
+        {view.length ? <Group id="view" label="VIEW" commands={view} services={services} panel={panel} sketchTool={sketchTool} icons={viewIcons} menu={cz.menu} drag={drag.view} rows={rows} width={widthFor('view')} resize={resize.group} scaleTick={scaleTick} /> : null}
         {/* ux010: SCALE MODELS, right after VIEW. */}
         {groups.filter((g) => AFTER_VIEW.has(g.group)).map((g) => (
           <Group
@@ -1569,9 +1746,10 @@ export function Toolbar() {
             rows={rows}
             width={widthFor(g.group)}
             resize={resize.group}
+            scaleTick={scaleTick}
           />
         ))}
-        {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end icons={viewIcons} menu={cz.menu} drag={drag.view} rows={rows} width={widthFor('edit')} resize={resize.group} /> : null}
+        {edit.length ? <Group id="edit" label="EDIT" commands={edit} services={services} panel={panel} sketchTool={sketchTool} end icons={viewIcons} menu={cz.menu} drag={drag.view} rows={rows} width={widthFor('edit')} resize={resize.group} scaleTick={scaleTick} /> : null}
         {/* The bottom edge: drag it for one to four rows (double-click: three). */}
         <div
           className="tb-rows-handle"
@@ -1582,7 +1760,8 @@ export function Toolbar() {
           aria-valuenow={rows}
           aria-valuemin={MIN_ROWS}
           aria-valuemax={MAX_ROWS}
-          tabIndex={-1}
+          // In the Tab order (review 5): Up / Down step it, Home sets it back to three.
+          tabIndex={0}
           title="Drag to make the toolbar more or fewer rows tall; double-click: three"
           onPointerDown={resize.rows.start}
           onDoubleClick={resize.rows.auto}

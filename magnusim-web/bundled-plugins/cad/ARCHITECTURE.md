@@ -726,11 +726,14 @@ with the host once for the page's life, and its chip goes in the dock.
   commands, 1440 px nine, 1280 px twelve.
   - **The default layout and the user's own (P4b fix round 1, Daniel
     2026-10-06: "I prefer 1280 px (model) but let people arrange the icons
-    however they want").** Model mode starts compact at every width: only each
-    group's main command(s), `KEEP_IN_VIEW` (Sketch, Extrude, Linear pattern,
-    Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP), are buttons; the
-    other sixteen start in their group's More. Sketch mode starts with every
-    command on the ribbon and folds by width in `FOLD_ORDER`.
+    however they want").** Both modes start with every command on the ribbon
+    (v0.5.0 ribbon, Daniel 2026-10-27: "yes show the rest as small buttons";
+    from P4b fix round 1 until then model mode started compact, only each
+    group's main command on the bar and the rest in its More). More holds only
+    what the person moved there and what does not fit: the frame (folded in
+    `FOLD_ORDER`; `KEEP_IN_VIEW` never folds for the frame) or a group the
+    person narrowed. MODIFY's Parameters comes last of MODIFY (order 60), so
+    Fillet leads its group.
   - **The ribbon (v0.5.0, Daniel: "you can stack them on each other instead of
     it just being one line of stuff", SolidWorks's CommandManager; it replaced
     a one-line icon-only sketch toolbar he did not like).** Both modes' toolbars
@@ -748,43 +751,66 @@ with the host once for the page's life, and its chip goes in the dock.
     12 px strip under a large one; its small button shows the flyout's own name
     ("Slot") and the variant's icon, the variant's name being its accessible
     name and tooltip. A group's More is a small button after its commands. The
-    model toolbar uses the same ribbon for consistency (its main commands large,
-    Chamfer and the More buttons small beside them). The toolbar is about 90 px
-    tall (12 px headings over the three rows). Measured (bundled Chromium,
-    Segoe UI): the sketch ribbon folds nothing at 1920, 1600, 1440 or 1280 px
-    (at 1280 VIEW and EDIT are icons), at 1000 px MODIFY's small buttons are
-    icons, at 760 DRAW's too and Intersect, Project, Point, Construction,
-    Chamfer and Extend fold; the model ribbon keeps every name to 1440 px and at
-    about 800 px collapses FILE first (`e2e/cad-sketch-toolbar-fit.spec.ts`). A drop mark
+    model toolbar is the same ribbon (its main commands large, every other
+    command small beside them). The toolbar is about 90 px tall (12 px
+    headings over the three rows). Measured (bundled Chromium, Segoe UI): the
+    sketch ribbon folds nothing at 1920, 1600, 1440 or 1280 px (at 1280 VIEW
+    and EDIT are icons), at 1000 px MODIFY's small buttons are icons, at 760
+    DRAW's too and Intersect, Project, Point, Construction, Chamfer and Extend
+    fold; the model ribbon folds nothing at 1920, 1600 or 1280 px (VIEW and
+    EDIT are icons from 1600; at 1280 FILE's, INSPECT's and CONSTRUCT's small
+    buttons are icons; Undo and Redo stay in view) and collapses FILE first
+    when narrower still (`e2e/cad-sketch-toolbar-fit.spec.ts`). A drop mark
     among small buttons is a bar above or under the button (they stack); where
-    a drag lands follows the ribbon's reading order (`pastButton`).
+    a drag lands follows the ribbon's reading order (`pastButton`, a large
+    button told by its class, so it holds at every scale).
   - **Resizing the ribbon (v0.5.0, Daniel: "resizable groups and multi-row,
     Excel-style").** The line at a group's right (`.tb-resize`,
     `data-tb-resize`, a col-resize pointer) dragged left or right sets that
-    group's width; Left / Right on it (focused) step 16 px, Home, a
-    double-click or its right-click "Width to fit its commands" set it back to
-    auto. A narrowed group (`.tb-items.is-sized`, `data-width`) puts what does
-    not fit into its own More, measured before paint (`data-width-folded`): the
-    group's FOLD_ORDER commands first, then from its end, never its first
-    command, a held one last; widened, they come back out at once, so the bar
-    is always full. "Show in toolbar" of a command a narrowed group holds back
-    is greyed with the reason. The toolbar's bottom edge (`.tb-rows-handle`,
-    `data-tb-rows-handle`, row-resize; Up / Down, Home, a double-click) sets the
-    rows, 1 to 4 (`data-rows`, `--tb-rows`); below three rows every button is
-    small (Finish sketch too). Both are the person's, per toolbar (model,
-    sketch), in the same `ws.prefs` layout (`toolbar-layout.ts` `widths`,
-    `rows`); Reset toolbar clears them. The Assistant's `workspace` tool sets
-    them as the person does (`toolbar_width`: a group id and px or auto;
-    `toolbar_rows`: 1 to 4 or auto; `parity.ts`).
+    group's width (EDIT's line is at its left: there a drag to the left widens
+    it, and the arrows go the same way); the lines are focusable separators in
+    the Tab order (after each group's buttons; a press focuses one too): Left /
+    Right step 16 px, Home, a double-click or its right-click "Width to fit its
+    commands" set it back to auto. A narrowed group (`.tb-items.is-sized`,
+    `data-width` the width applied, `data-width-set` the stored one) puts what
+    does not fit into its own More, measured before paint
+    (`data-width-folded`): the group's FOLD_ORDER commands first, then from its
+    end, a command the person showed ("Show in toolbar", pinned) after those, a
+    held one last, never its first command; widened, they come back out at
+    once, so the bar is always full. "Show in toolbar" in a narrowed group
+    brings the command out (another folds); greyed with the reason only when
+    nothing else can fold. A group is never narrower than its first command and
+    its More (`data-min-width`, measured; review 1: a narrower width clipped the
+    More with every folded command): the width applied is at least that, and
+    the drag, the arrows and the Assistant keep the stored width to it
+    (`settleGroupWidth`). The toolbar's bottom edge (`.tb-rows-handle`,
+    `data-tb-rows-handle`, row-resize, in the Tab order after EDIT's line; Up /
+    Down, Home, a double-click) sets the rows, 1 to 4 (`data-rows`,
+    `--tb-rows`); below three rows every button is small (Finish sketch too).
+    While a line or the edge is dragged the ribbon is measured again with each
+    change and once more when it ends, saved or not (review 7). A lost release
+    (window blur, hidden tab, the handle's toolbar unmounted, a move with no
+    button held) ends a resize keeping nothing. Both are the person's, per
+    toolbar (model, sketch), in the same `ws.prefs` layout (`toolbar-layout.ts`
+    `widths`, `rows`; `ToolbarPrefs.setWidth` / `setRows`); Reset toolbar clears
+    them. The Assistant's `workspace` tool sets and reads them as the person
+    does (`toolbar_width`: a group id and px, auto, or "" to read; the reply
+    gives the width applied, its minimum, what is on the bar and in its More;
+    `toolbar_rows`: 1 to 4, auto, or "" to read the rows and the widths set;
+    `toolbar_show` says when a narrowed group or the frame still holds a command
+    in More); `parity.ts` maps `setWidth` and `setRows` to them, each way.
   - **One scale factor.** Every size of the ribbon (rows, icons, names,
     headings, gaps, the large buttons' widths, a group's width) follows
     `--cad-toolbar-scale` (`tokens.css`, 1); `setToolbarScale` (Toolbar.tsx) is
     the one place the host's appearance setting ("toolbar icon size") is to be
     wired in. At 1 the rows are 22 px, the small icons 18 px, the large 28 px
     (Daniel found 16 / 24 small); `e2e/cad-toolbar-resize.spec.ts` checks the
-    sizes follow the factor (1.25). Users
+    sizes follow the factor (1.25); `setToolbarScale` sends `cad:toolbar-scale`
+    so the ribbon measures its fit again (review 6). Users
     rearrange both (`src/ui/toolbar-layout.ts`): right-click a
-    button for Move to More, Move left, Move right and Reset toolbar; right-click
+    button for Move to More, Move earlier, Move later (a step in the ribbon's
+    reading order: up or down its column for a small button, review 8) and
+    Reset toolbar; right-click
     a More item for Show in toolbar (a command shown this way folds last when the
     frame is narrow; greyed with the reason when even then it cannot fit) and
     Reset toolbar; drag a button along its group (a drop mark shows where);

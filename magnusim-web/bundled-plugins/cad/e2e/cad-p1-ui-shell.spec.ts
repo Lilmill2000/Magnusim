@@ -79,7 +79,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
 
   // Only commands that work, in the core's toolbar groups. No one-click solids (decision 2026-10-01).
   expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft', 'Hole']);
-  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Parameters', 'Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
+  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine', 'Parameters']);
   await expect(tb.locator('[data-group="edit"] .tb-txt')).toHaveText(['Undo', 'Redo']);
   await expect(tb.locator('.tb-group-label').first()).toHaveText('SKETCH');
   await expect(tb.locator('.tb-group-label').last()).toHaveText('EDIT');
@@ -268,12 +268,11 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 243, 246)' });
   expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
   // Labelled buttons (P4a: Daniel works on 1280-1920 px screens). At 1600 and at 1280 px every
-  // command button shown in the modelling groups has its label in view; the toolbar does not
-  // scroll. Since P4b fix round 1 (Daniel: "I prefer 1280 px (model)") both sizes show the compact
-  // layout: each group's main command(s), the rest in its More menu, nothing more folded for the
-  // width. v0.5.0 ribbon: the main commands are large buttons (11 px names under 24 px icons,
-  // radius 4), Chamfer a small one beside Fillet (radius 3); VIEW and EDIT keep their labels at
-  // 1600 and are icons at 1280.
+  // command of the modelling groups is a button inside the frame (v0.5.0 ribbon, Daniel: "yes show
+  // the rest as small buttons": nothing in More, nothing folded); the toolbar does not scroll.
+  // Each group's main command is a large button with its name (11 px, radius 4); the rest are small
+  // (radius 3), named at 1600 px; at 1280 px the least-used groups' small buttons are their icons
+  // (FILE, INSPECT, CONSTRUCT: SQUEEZE_ORDER), the name staying the tooltip and accessible name.
   const folded: number[] = [];
   for (const size of [
     { width: 1600, height: 1000 },
@@ -281,11 +280,10 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   ]) {
     await page.setViewportSize(size);
     const bar = frame.locator('[data-cad-toolbar="model"]');
-    // VIEW and EDIT: labelled at 1600, icons at 1280 (Segoe UI; a wider font may take them at 1600).
-    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit', size.width > 1280 ? '0' : '1');
-    // No group's small buttons go to icons and no group collapses at these widths (Segoe UI; the
-    // order with wider text: cad-p4b-toolbar-wide-text).
-    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-labels', '');
+    // VIEW and EDIT are icons at both (every model command needs the room); no group collapses.
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit', '1');
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-labels', size.width > 1280 ? '' : 'file inspect construct');
+    const iconGroups = ((await bar.getAttribute('data-fit-labels')) ?? '').split(' ').filter(Boolean);
     await expect(bar).toHaveAttribute('data-fit-collapsed', '');
     const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command]').evaluateAll((els) =>
       els.map((b) => {
@@ -293,20 +291,30 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
         const t = b.querySelector('.tb-txt') as HTMLElement;
         const r = t.getBoundingClientRect();
         const box = b.getBoundingClientRect();
-        return { id: b.getAttribute('data-command'), large: b.classList.contains('is-large'), fontSize: s.fontSize, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
+        return { id: b.getAttribute('data-command'), group: b.closest('.tb-group')!.getAttribute('data-group')!, large: b.classList.contains('is-large'), fontSize: s.fontSize, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
       }),
     );
-    // Nine labelled: Sketch, Extrude, Linear pattern, Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP.
-    expect(shown.map((b) => b.id)).toEqual(['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step']);
+    // Every modelling command, each group's main command first (large).
+    const LARGE = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'];
+    expect(shown.map((b) => b.id)).toEqual([
+      'sketch.new',
+      'solid.extrude', 'solid.revolve', 'solid.sweep', 'solid.loft', 'solid.hole',
+      'pattern.linear', 'pattern.circular', 'pattern.mirror',
+      'modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.combine', 'modify.parameters',
+      'construct.plane', 'construct.axis', 'construct.point',
+      'cfd.enclosure',
+      'inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find',
+      'file.import-step', 'file.export-step', 'file.picture',
+    ]);
     for (const b of shown) {
-      const large = b.id !== 'modify.chamfer';
-      expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, large, fontSize: '11px', radius: large ? '4px' : '3px', labelShown: true, inFrame: true });
+      const large = LARGE.includes(b.id!);
+      expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, group: b.group, large, fontSize: '11px', radius: large ? '4px' : '3px', labelShown: large || !iconGroups.includes(b.group), inFrame: true });
     }
     expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth), `the toolbar scrolls at ${size.width}`).toBeLessThanOrEqual(1);
     folded.push(Number(await bar.getAttribute('data-folded')));
     await shot(page, `ui-parity-toolbar-${size.width}`);
   }
-  expect(folded).toEqual([19, 19]);
+  expect(folded).toEqual([0, 0]);
   await page.setViewportSize({ width: 1600, height: 1000 });
   // The core's .measure-chip (style.css:1093-1106): 600 12px/1.35 "Segoe UI", padding 8/10/8/12 (review round 1: CAD had 6/10).
   expect(await styleOf(frame.locator('[data-chip="volume"]'), ['font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color', 'border-top-color', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'])).toEqual({

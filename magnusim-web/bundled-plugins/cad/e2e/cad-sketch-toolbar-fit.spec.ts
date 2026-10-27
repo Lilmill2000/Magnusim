@@ -10,8 +10,8 @@
 //     a flyout's arrow sits beside a small button and under a large one;
 //   - every button's tooltip gives the name, the shortcut and the hint; the accessible name is the
 //     name; Tab goes button to button, Down on a flyout's button opens its list;
-//   - the model toolbar is the same ribbon (each group's main command large, More a small button),
-//     the same height as the sketch ribbon;
+//   - the model toolbar is the same ribbon, the same height: every command on it (Daniel: "yes show
+//     the rest as small buttons"), each group's main command large, the rest small, no More;
 //   - at 1600, 1440 and 1280 px nothing folds (Windows' fonts; elsewhere the drawing groups at
 //     least stay); narrower, the groups' small buttons go to their icons (SQUEEZE_ORDER), then
 //     commands fold in FOLD_ORDER, then whole groups collapse into one dropdown (model: FILE first);
@@ -177,12 +177,18 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
     expect(b.size, `${b.id} is small`).toBe('small');
     expect(b.height, `${b.id} is one row`).toBeLessThanOrEqual(23);
   }
-  // A group's More stands beside its main command, at the top of the next column.
+  // Every model command on the ribbon, nothing in More: SOLID's Revolve stands beside Extrude, at
+  // the top of the next column, Sweep under it.
+  await expect(tb(frame, 'model').locator('[data-tb-more]')).toHaveCount(0);
+  await expect(tb(frame, 'model')).toHaveAttribute('data-folded', '0');
   const solid = model.find((x) => x.id === 'solid.extrude')!;
-  const solidMore = model.find((x) => x.id === 'more:solid')!;
-  expect(solidMore.left).toBeGreaterThanOrEqual(solid.right - 0.5);
-  expect(Math.abs(solidMore.top - solid.top)).toBeLessThanOrEqual(1);
-  await expect(tb(frame, 'model').locator('[data-tb-more="solid"] .tb-txt')).toHaveText('More ▾');
+  const revolve = model.find((x) => x.id === 'solid.revolve')!;
+  const sweep = model.find((x) => x.id === 'solid.sweep')!;
+  expect(revolve.left).toBeGreaterThanOrEqual(solid.right - 0.5);
+  expect(Math.abs(revolve.top - solid.top)).toBeLessThanOrEqual(1);
+  expect(Math.abs(sweep.left - revolve.left)).toBeLessThanOrEqual(1);
+  expect(sweep.top).toBeGreaterThanOrEqual(revolve.bottom - 0.5);
+  expect(revolve.named).toBe('Revolve');
   const modelHeight = (await tb(frame, 'model').boundingBox())!.height;
   expect(modelHeight, 'the ribbon is three rows and the headings').toBeGreaterThan(70);
   expect(modelHeight, 'and no taller').toBeLessThan(96);
@@ -387,14 +393,28 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
   await expect(tb(frame, 'model')).toBeVisible();
   await resizeTo(page, frame, 1600, 'model');
   if (process.platform === 'win32') {
-    await expect(tb(frame, 'model')).toHaveAttribute('data-fit', '0');
+    // Every model command needs the room: VIEW and EDIT are icons; every small button keeps its name.
+    await expect(tb(frame, 'model')).toHaveAttribute('data-fit', '1');
     await expect(tb(frame, 'model')).toHaveAttribute('data-fit-labels', '');
+    await expect(tb(frame, 'model')).toHaveAttribute('data-fit-folded', '0');
   }
   await page.mouse.move(900, 600);
   await shot(page, frame, 'model-ribbon-1600');
-  // The widest frame where a group collapses (Segoe UI: about 800 px): FILE first.
+  // 1280 (Daniel's narrowest): nothing folds, nothing scrolls; the least-used groups' small buttons
+  // are icons (Segoe UI: FILE, INSPECT, CONSTRUCT); Undo and Redo in view.
+  await resizeTo(page, frame, 1280, 'model');
+  await expect(tb(frame, 'model')).toHaveAttribute('data-fit-collapsed', '');
+  if (process.platform === 'win32') {
+    await expect(tb(frame, 'model')).toHaveAttribute('data-fit-folded', '0');
+    await expect(tb(frame, 'model')).toHaveAttribute('data-fit-labels', 'file inspect construct');
+  }
+  for (const id of ['edit.undo', 'edit.redo']) await expect(tb(frame, 'model').locator(`.tb-btn[data-command="${id}"]`)).toBeInViewport();
+  expect((await tb(frame, 'model').boundingBox())!.height, 'the same height').toBeCloseTo(modelHeight, 0);
+  await page.mouse.move(900, 600);
+  await shot(page, frame, 'model-ribbon-1280');
+  // The widest frame where a group collapses: FILE first.
   let collapsed: string[] = [];
-  for (let w = 900; w >= 640 && !collapsed.length; w -= 10) {
+  for (let w = 900; w >= 500 && !collapsed.length; w -= 10) {
     await resizeTo(page, frame, w, 'model');
     collapsed = ((await tb(frame, 'model').getAttribute('data-fit-collapsed')) ?? '').split(' ').filter(Boolean);
   }

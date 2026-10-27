@@ -42,9 +42,9 @@ import { placeTaped, sketchPoints } from '../../features/scale/sketch-banana';
 import { sketchShown } from '../../features/sketch/view';
 import { normalTarget } from '../../viewport/normal';
 import { railsFor } from '../../ui/left-rails';
-import { KEEP_IN_VIEW } from '../../ui/Toolbar';
 import { barIdOf, collapseFlyouts } from '../../ui/flyouts';
-import { layoutModeOf, MAX_GROUP_W, MAX_ROWS, MIN_GROUP_W, MIN_ROWS, orderIds, rowsOf, toolbarPrefs, widthOf, withMove, withPlace, withRows, withWidth, type LayoutMode } from '../../ui/toolbar-layout';
+import { layoutModeOf, MAX_GROUP_W, MAX_ROWS, MIN_GROUP_W, MIN_ROWS, orderIds, rowsOf, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
+import { commandOnToolbar, settleGroupWidth } from '../../ui/Toolbar';
 import { uiFor } from '../../ui/controller';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
@@ -302,10 +302,9 @@ function fold(ctx: CallCtx, i: Input): ToolReply {
   }
 }
 
-function toolbar(ctx: CallCtx, i: Input): ToolReply {
+async function toolbar(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const { services } = ctx;
   const prefs = toolbarPrefs(services);
-  const keep = new Set(KEEP_IN_VIEW);
   if (i.action === 'toolbar_reset') {
     const v = i.value.toLowerCase();
     if (v && v !== 'model' && v !== 'sketch') throw bad('value', 'value: model, sketch, or "" for both.');
@@ -318,11 +317,17 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
     if (t && t !== 'model' && t !== 'sketch') throw bad('target', 'target: model, sketch, or "" for the toolbar shown now.');
     const mode: LayoutMode = t ? (t as LayoutMode) : layoutModeOf(services.mode.get().mode);
     const v = i.value.trim().toLowerCase();
-    const n = v === 'auto' || v === 'default' ? null : Number(v);
-    if (n !== null && !(Number.isInteger(n) && n >= MIN_ROWS && n <= MAX_ROWS)) throw bad('value', `value: ${MIN_ROWS} to ${MAX_ROWS} rows, or auto (3).`);
-    prefs.setMode(mode, withRows(prefs.state.get().layout[mode], n));
-    const now = rowsOf(prefs.state.get().layout[mode]);
-    return done(`The ${mode} toolbar is ${now} row${now === 1 ? '' : 's'} tall`, { mode, rows: now });
+    // "" reads the rows (and the widths the person set), as the person sees them (review 9).
+    if (v) {
+      const n = v === 'auto' || v === 'default' ? null : Number(v);
+      if (n !== null && !(Number.isInteger(n) && n >= MIN_ROWS && n <= MAX_ROWS)) throw bad('value', `value: ${MIN_ROWS} to ${MAX_ROWS} rows, auto (3), or "" to read them.`);
+      prefs.setRows(mode, n);
+    }
+    const m = prefs.state.get().layout[mode];
+    const now = rowsOf(m);
+    const widths = m.widths ?? {};
+    const set = Object.entries(widths).map(([g, w]) => `${g} ${w} px`);
+    return done(`The ${mode} toolbar is ${now} row${now === 1 ? '' : 's'} tall${now < 3 ? ' (every button small)' : ''}; ${set.length ? `group widths set: ${set.join(', ')}` : 'every group as wide as its commands'}`, { mode, rows: now, widths });
   }
   if (i.action === 'toolbar_width') {
     // A group of either toolbar: the current mode's first (VIEW, SCALE MODELS and EDIT are in both).
@@ -332,11 +337,19 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
     const mode: LayoutMode | null = groupsOf(here).includes(g) ? here : groupsOf(here === 'model' ? 'sketch' : 'model').includes(g) ? (here === 'model' ? 'sketch' : 'model') : null;
     if (!mode) throw bad('target', `target: a toolbar group: ${[...new Set([...groupsOf('model'), ...groupsOf('sketch')])].join(', ')}.`);
     const v = i.value.trim().toLowerCase();
-    const w = v === 'auto' || v === '' ? null : Number(v.replace(/px$/, ''));
-    if (w !== null && !(Number.isFinite(w) && w >= MIN_GROUP_W && w <= MAX_GROUP_W)) throw bad('value', `value: a width in px, ${MIN_GROUP_W} to ${MAX_GROUP_W}, or auto.`);
-    prefs.setMode(mode, withWidth(prefs.state.get().layout[mode], g, w));
-    const now = widthOf(prefs.state.get().layout[mode], g);
-    return done(now == null ? `The ${g} group is as wide as its commands (${mode} toolbar)` : `The ${g} group is ${now} px wide (${mode} toolbar); what does not fit is in its More`, { group: g, mode, width: now });
+    // "" reads the group's width as the person sees it (review 9); a number or auto sets it, never
+    // narrower than the group's first command and its More (review 1: the reply says the width applied).
+    if (v) {
+      const w = v === 'auto' ? null : Number(v.replace(/px$/, ''));
+      if (w !== null && !(Number.isFinite(w) && w >= MIN_GROUP_W && w <= MAX_GROUP_W)) throw bad('value', `value: a width in px, ${MIN_GROUP_W} to ${MAX_GROUP_W}, auto, or "" to read it.`);
+      prefs.setWidth(mode, g, w);
+    }
+    const now = await settleGroupWidth(prefs, mode, g);
+    const asked = v && v !== 'auto' ? Number(v.replace(/px$/, '')) : null;
+    const kept = asked != null && now.set != null && now.set > asked ? ` (${asked} px is narrower than its first command and its More: ${now.set} px is the least)` : '';
+    const where = now.shown ? `; on the bar: ${now.bar.join(', ') || 'nothing'}; in its More: ${now.more.join(', ') || 'nothing'}` : ` (the ${mode} toolbar is not shown now: it applies when it is)`;
+    const size = now.set == null ? `as wide as its commands${now.width != null ? ` (${now.width} px)` : ''}` : `${now.width ?? now.set} px wide${kept}`;
+    return done(`The ${g} group is ${size} (${mode} toolbar)${where}`, { group: g, mode, width: now.set, shown_width: now.width, min_width: now.min, bar: now.bar, more: now.more, shown: now.shown });
   }
   // A flyout's variant (sketch.centerline) moves with its flyout, as the person's bar button does.
   const asked = services.commands.get(i.target);
@@ -349,8 +362,16 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
   const m = prefs.state.get().layout[mode];
   if (i.action === 'toolbar_show' || i.action === 'toolbar_hide') {
     const place = i.action === 'toolbar_show' ? 'bar' : 'more';
-    prefs.setMode(mode, withPlace(m, def.id, place, mode, keep));
-    return done(`${def.label} ${place === 'bar' ? 'is on the toolbar' : "is in its group's More menu"} (${mode} mode)`, { command: def.id, place, mode });
+    prefs.setMode(mode, withPlace(m, def.id, place));
+    if (place === 'more') return done(`${def.label} is in its group's More menu (${mode} mode)`, { command: def.id, place, mode });
+    // What the person sees now (review 2): a group or frame too narrow still holds it in More.
+    const now = await commandOnToolbar(mode, def.id);
+    if (now.where === 'more')
+      return done(
+        `${def.label} is set to show on the toolbar, but it is still in its group's More: ${now.narrowed ? `the group is narrowed to ${now.width} px (widen it: toolbar_width ${def.group})` : 'the window is too narrow for it'} (${mode} mode)`,
+        { command: def.id, place, mode, shown: 'more', narrowed: now.narrowed },
+      );
+    return done(`${def.label} is on the toolbar (${mode} mode${now.where === 'hidden' ? ': shown when that toolbar is' : ''})`, { command: def.id, place, mode, shown: now.where === 'bar' ? 'bar' : null });
   }
   const group = services.commands.toolbar(mode).find((g) => g.group === def.group);
   const registry = group ? collapseFlyouts(group.commands).commands.map((c) => c.id) : [def.id];

@@ -13,7 +13,8 @@
 //   - over another group the drop is refused (not-allowed pointer, the group marked, the note says
 //     why) and nothing changes, from More and from the bar;
 //   - the keyboard's way: a More item's right-click "Swap with <the bar's last>";
-//   - model mode: PATTERN's Circular pattern dragged onto the bar takes Linear pattern's slot.
+//   - model mode: PATTERN's Circular pattern (moved to More first: every model command starts on the
+//     bar since the v0.5.0 ribbon) dragged onto the bar takes Linear pattern's slot.
 // The layout is the user's (host plugin prefs, one file per plugin on the test server): every test
 // here runs in the serial phase and starts and ends with no user layout.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -268,7 +269,14 @@ test("cad:ux010-toolbar-model drag Circular pattern from PATTERN's More onto the
   await page.setViewportSize({ width: 1600, height: 1000 });
   const { seen, frame } = await freshPart(page, request);
   await addSolid(page);
-  expect(await shownIds(frame, 'pattern')).toEqual(['pattern.linear']);
+  // v0.5.0 ribbon: every model command starts on the bar; Circular pattern and Mirror go to More
+  // first (right-click, Move to More), leaving Linear pattern alone on PATTERN's bar.
+  for (const id of ['pattern.circular', 'pattern.mirror']) {
+    await btn(frame, id).click({ button: 'right', force: true });
+    await menu(frame).locator('[data-menu-item="tb-to-more"]').click();
+    await expect(menu(frame)).toHaveCount(0);
+  }
+  await expect.poll(() => shownIds(frame, 'pattern')).toEqual(['pattern.linear']);
   await dragFromMore(
     page,
     frame,

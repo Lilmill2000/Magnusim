@@ -80,7 +80,8 @@ function historyCommands(services: AppServices, ui: UiController): CommandDef[] 
     group: 'modify',
     icon: ICONS.params,
     hint: 'Named values that any size or position field can use',
-    order: 10,
+    // v0.5.0 ribbon: last of MODIFY, after the edits of a body (Fillet, MODIFY's main command, leads it).
+    order: 60,
     enabled: () => ui.editBlock() ?? true,
     run: () => {
       if (ui.state.get().panel?.kind === 'params') ui.closePanel({ why: 'command' });

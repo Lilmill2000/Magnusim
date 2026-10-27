@@ -149,13 +149,18 @@ describe('the ribbon (v0.5.0): where a dragged command lands', () => {
   it('pastButton reads column by column: right of a column is past it; in a small button\'s column, below its middle; a large button, right of its middle', async () => {
     const { pastButton, RIBBON_LARGE, SQUEEZE_ORDER } = await import('../../src/ui/Toolbar');
     const small = { left: 100, right: 160, top: 50, bottom: 70 };
-    expect(pastButton(small, 170, 40)).toBe(true);
-    expect(pastButton(small, 90, 90)).toBe(false);
-    expect(pastButton(small, 130, 55)).toBe(false);
-    expect(pastButton(small, 130, 65)).toBe(true);
+    expect(pastButton(small, 170, 40, false)).toBe(true);
+    expect(pastButton(small, 90, 90, false)).toBe(false);
+    expect(pastButton(small, 130, 55, false)).toBe(false);
+    expect(pastButton(small, 130, 65, false)).toBe(true);
     const large = { left: 20, right: 70, top: 50, bottom: 112 };
-    expect(pastButton(large, 30, 100)).toBe(false);
-    expect(pastButton(large, 60, 55)).toBe(true);
+    expect(pastButton(large, 30, 100, true)).toBe(false);
+    expect(pastButton(large, 60, 55, true)).toBe(true);
+    // At scale 2 a small button is 44 px tall: still a small one (review 6: a fixed 40 px took it for
+    // a large one, so the upper right of Rectangle counted as past it).
+    const small2 = { left: 100, right: 220, top: 50, bottom: 94 };
+    expect(pastButton(small2, 200, 60, false)).toBe(false);
+    expect(pastButton(small2, 110, 90, false)).toBe(true);
     // Daniel's key tools are large; DRAW collapses last.
     for (const id of ['sketch.line', 'sketch.trim', 'sketch.dimension']) expect(RIBBON_LARGE.has(id)).toBe(true);
     expect(SQUEEZE_ORDER[SQUEEZE_ORDER.length - 1]).toBe('draw');

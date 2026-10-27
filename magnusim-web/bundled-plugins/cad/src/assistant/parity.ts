@@ -508,6 +508,9 @@ export const TOOLBAR: { readonly [K in keyof ToolbarPrefs]: Reach } = {
   state: INTERNAL,
   loaded: INTERNAL,
   setMode: W('toolbar_move'),
+  // v0.5.0 ribbon: the line at a group's right, and the toolbar's bottom edge.
+  setWidth: W('toolbar_width'),
+  setRows: W('toolbar_rows'),
   reset: W('toolbar_reset'),
   saved: INTERNAL,
 };
@@ -937,8 +940,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=toolbar_hide': control('toolbar', 'setMode'),
     'action=toolbar_move': control('toolbar', 'setMode'),
     'action=toolbar_reset': control('toolbar', 'reset'),
-    'action=toolbar_width': control('toolbar', 'setMode'),
-    'action=toolbar_rows': control('toolbar', 'setMode'),
+    'action=toolbar_width': control('toolbar', 'setWidth'),
+    'action=toolbar_rows': control('toolbar', 'setRows'),
     'action=banana_show': command('scale.banana'),
     'action=banana_hide': command('scale.banana'),
     'action=banana_place': control('doc', 'setScaleModel'),

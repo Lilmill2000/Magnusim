@@ -270,10 +270,8 @@ describe('design tree', () => {
     ui = mountUi(t);
     expect(ui.$('[data-tree-empty="loading"]')!.textContent).toBe('Opening the part…');
     expect(ui.$('[data-tree-empty="history"]')).toBeNull();
-    // Parameters sits in MODIFY's More (the compact model toolbar): its item says why.
-    fireEvent.click(ui.$('[data-tb-more="modify"]')!);
-    expect(ui.$('[data-cad-menu] [data-command="modify.parameters"]')!.getAttribute('data-disabled-reason')).toBe('The part is still loading');
-    fireEvent.keyDown(ui.$('[data-cad-menu]')!, { key: 'Escape' });
+    // Parameters is a button of MODIFY (v0.5.0 ribbon: every command on the toolbar): it says why.
+    expect(ui.$('.tb-btn[data-command="modify.parameters"]')!.getAttribute('data-disabled-reason')).toBe('The part is still loading');
     act(() => (t.doc.state as unknown as { set(v: object): void }).set({ status: 'error', error: 'Could not read the part: bad JSON' }));
     const err = ui.$('[data-tree-error]')!;
     expect(err.textContent).toBe('Could not read the part: bad JSONTry again');
