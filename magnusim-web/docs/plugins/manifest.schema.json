@@ -375,6 +375,13 @@
           "default": "workspace/index.html",
           "pattern": "^workspace/.+\\.[Hh][Tt][Mm][Ll]$",
           "description": "An .html file in the plugin's workspace/ folder, which is all the host serves."
+        },
+        "commands": {
+          "type": "string",
+          "default": "",
+          "pattern": "^(workspace/.+\\.[Jj][Ss][Oo][Nn])?$",
+          "description": "Unreleased (1.9): a .json file in the plugin's workspace/ folder that lists the workspace's commands, their default keys and the contexts they act in, which Settings → Keybinds shows and lets the person change (authoring.md, Workspace commands). An older host ignores it.",
+          "x-since": "1.9"
         }
       },
       "required": [

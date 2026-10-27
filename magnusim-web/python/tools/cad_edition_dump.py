@@ -6,7 +6,7 @@ CLI: tools/cad_edition_dump.py
 Prints JSON: {"describe": registry.describe, "plugins": plugins.list, "kinds":
 plugin_studies.list's study kinds, "schema_versions": {plugin: {kind: n}}}, made by the
 real worker methods with a bundled folder that holds only bundled-plugins/cad's
-manifest.toml, plugin.py and workspace entry, no user plugins and an empty local.json. The CAD
+manifest.toml, plugin.py and workspace entry and commands file, no user plugins and an empty local.json. The CAD
 edition has no Python: scripts/gen-cad-edition.mjs turns this into the registry
 its server answers (scripts/generated/cad-edition-registry.json).
 """
@@ -33,9 +33,20 @@ def main() -> int:
         bundled = base / "bundled" / "cad"
         bundled.mkdir(parents=True)
         src = WEB_ROOT / "bundled-plugins" / "cad"
-        # The manifest, plugin.py, and each workspace's entry (discovery checks it is there).
+        # The manifest, plugin.py, and each workspace's entry and commands file (discovery checks
+        # they are there).
         (bundled / "workspace").mkdir()
-        for name in ("manifest.toml", "plugin.py", "workspace/index.html"):
+        names = {"manifest.toml", "plugin.py"}
+        from cfddesk.registry.discovery import _parse_toml
+
+        manifest = _parse_toml((src / "manifest.toml").read_text(encoding="utf-8"))[0] or {}
+        for row in manifest.get("workspaces") or []:
+            for field, default in (("entry", "workspace/index.html"), ("commands", "")):
+                rel = str(row.get(field) or default).strip().replace("\\", "/")
+                if rel:
+                    names.add(rel)
+        for name in sorted(names):
+            (bundled / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src / name, bundled / name)
         (base / "user").mkdir()
         local = base / "local.json"

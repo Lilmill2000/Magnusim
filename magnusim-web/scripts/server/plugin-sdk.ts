@@ -22,6 +22,7 @@ import type { Metafile } from 'esbuild';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { APP_KEYS } from '../../src/keybinds/appCommands.ts';
 import { buildKit, bundle, exportNames, newestStamp, type SdkVariant } from './sdk-build.ts';
 
 export type { SdkVariant } from './sdk-build.ts';
@@ -63,12 +64,17 @@ export function pluginUiDtsPath(webRoot: string): string {
   return join(webRoot, 'docs', 'plugins', 'plugin-ui.d.ts');
 }
 
-/** What a workspace builds against: the bridge and kit versions, the React it gets, the import map. */
+/**
+ * What a workspace builds against: the bridge and kit versions, the React it gets, the import map,
+ * and the app's own keys (src/keybinds/appCommands.ts APP_KEYS: app, local, reserved), whose app and
+ * reserved keys a workspace command may not take (unreleased, 1.9).
+ */
 export function pluginSdkInfo(webRoot: string): {
   sdk_version: string;
   plugin_ui_version: string;
   react_version: string;
   imports: Record<string, string>;
+  app_keys: typeof APP_KEYS;
 } {
   const src = readFileSync(join(webRoot, 'src', 'plugin-sdk', 'workspace.ts'), 'utf8');
   const m = src.match(/export const SDK_VERSION = '([^']+)'/);
@@ -78,7 +84,7 @@ export function pluginSdkInfo(webRoot: string): {
   if (!k) throw new Error('src/plugin-ui/version.ts has no PLUGIN_UI_API_VERSION');
   const req = createRequire(join(webRoot, 'package.json'));
   const react = (req('react/package.json') as { version: string }).version;
-  return { sdk_version: m[1], plugin_ui_version: k[1], react_version: react, imports: { ...SDK_IMPORTS } };
+  return { sdk_version: m[1], plugin_ui_version: k[1], react_version: react, imports: { ...SDK_IMPORTS }, app_keys: APP_KEYS };
 }
 
 function facade(binding: string, names: string[], withDefault: boolean): string {

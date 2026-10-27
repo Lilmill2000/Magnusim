@@ -111,9 +111,10 @@ for _p in (PY_ROOT, PY_ROOT / "sdk", PY_ROOT / "tools"):
 
 import plugin_boundary  # noqa: E402  (tools/, on the path above)
 import plugin_manifest_schema  # noqa: E402
+import workspace_commands  # noqa: E402
 
 from cfddesk.registry import API_VERSION  # noqa: E402
-from cfddesk.registry.discovery import _parse_toml  # noqa: E402
+from cfddesk.registry.discovery import _parse_toml, workspace_commands_problem  # noqa: E402
 
 CHECKS: tuple[tuple[str, str], ...] = (
     ("manifest", "manifest.toml matches the manifest schema"),
@@ -124,7 +125,7 @@ CHECKS: tuple[tuple[str, str], ...] = (
     ("imports", "imports stay inside the plugin boundary"),
     ("register", "register() imports nothing heavy"),
     ("react", "no React of its own"),
-    ("workspace", "workspace pages connect through the SDK"),
+    ("workspace", "workspace pages connect through the SDK; a commands file is well formed"),
     ("ui", "the in-page UI imports only what the host provides"),
     ("tools", "job tools and the service are inside the plugin"),
     ("requirements", "requirements are pinned and hashed"),
@@ -177,6 +178,47 @@ WORKSPACE_SDK = "@magnusim/workspace"
 FALLBACK_IMPORT_MAP = (
     "react", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime", "@magnusim/workspace", "@magnusim/plugin-ui",
 )
+
+def _shown(cid: str, label: str, group: str, keys: list[str]) -> dict[str, Any]:
+    return {"id": cid, "label": label, "group": group, "context": "any", "keys": keys}
+
+
+# docs/plugins/plugin-sdk.json's app_keys (src/keybinds/appCommands.ts APP_KEYS), if that file cannot
+# be read; test_workspace_commands.py keeps the two equal.
+FALLBACK_APP_KEYS: dict[str, list[dict[str, Any]]] = {
+    "app": [
+        _shown(
+            "app.assistant",
+            "Open or close the Assistant panel",
+            "Assistant",
+            ["Ctrl+Slash", "Meta+Slash", "Ctrl+NumpadDivide", "Meta+NumpadDivide", "Ctrl+Meta+Slash", "Ctrl+Meta+NumpadDivide"],
+        )
+    ],
+    "local": [_shown("app.close", "Close the open dialog, menu or mode", "App", ["Escape"])],
+    "reserved": [
+        _shown("browser.close-tab", "Close the tab", "Browser", ["Ctrl+KeyW", "Ctrl+F4"]),
+        _shown("browser.close-window", "Close the window", "Browser", ["Ctrl+Shift+KeyW", "Alt+F4"]),
+        _shown("browser.new-tab", "Open a new tab", "Browser", ["Ctrl+KeyT", "Ctrl+Shift+KeyT"]),
+        _shown("browser.new-window", "Open a new window", "Browser", ["Ctrl+KeyN", "Ctrl+Shift+KeyN"]),
+        _shown(
+            "browser.switch-tab",
+            "Switch tabs",
+            "Browser",
+            ["Ctrl+Tab", "Ctrl+Shift+Tab", "Ctrl+PageUp", "Ctrl+PageDown", *[f"Ctrl+Digit{d}" for d in "123456789"]],
+        ),
+        _shown("browser.reload", "Reload the page", "Browser", ["Ctrl+KeyR", "Ctrl+Shift+KeyR", "F5", "Ctrl+F5"]),
+        _shown("browser.devtools", "Open the developer tools", "Browser", ["Ctrl+Shift+KeyI", "Ctrl+Shift+KeyJ", "F12"]),
+        _shown("browser.full-screen", "Full screen", "Browser", ["F11"]),
+        _shown("browser.print", "Print the page", "Browser", ["Ctrl+KeyP"]),
+        _shown(
+            "browser.zoom",
+            "Zoom the page",
+            "Browser",
+            ["Ctrl+Equal", "Ctrl+Shift+Equal", "Ctrl+Minus", "Ctrl+Digit0", "Ctrl+NumpadAdd", "Ctrl+NumpadSubtract"],
+        ),
+        _shown("focus.next", "Move between controls", "Keyboard", ["Tab", "Shift+Tab"]),
+    ],
+}
 # React's own code, as it appears in any build of it.
 REACT_MARKERS = (
     "__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE",
@@ -593,6 +635,19 @@ def import_map(web_root: Path) -> tuple[str, ...]:
         return FALLBACK_IMPORT_MAP
 
 
+def app_keys(web_root: Path) -> dict[str, Any]:
+    """The app's keys (plugin-sdk.json app_keys: app, local, reserved): a workspace command may not
+    take an app or reserved one."""
+    try:
+        data = json.loads((web_root / "docs" / "plugins" / "plugin-sdk.json").read_text(encoding="utf-8"))
+        groups = data.get("app_keys")
+        if isinstance(groups, dict) and all(isinstance(groups.get(g), list) for g in ("app", "local", "reserved")):
+            return groups
+        return FALLBACK_APP_KEYS
+    except (OSError, ValueError, AttributeError):
+        return FALLBACK_APP_KEYS
+
+
 # -- manifest, key, api_version, license -----------------------------------------
 
 
@@ -683,6 +738,15 @@ def _uses(meta: dict[str, Any]) -> list[str]:
     default = meta.get("default_analysis")
     if isinstance(default, dict) and "study_name" in default:
         used.append("default_analysis.study_name")
+    # Unreleased until this host is 1.9: before, no plugin could declare the api_version asked for.
+    since = plugin_manifest_schema.FEATURE_API["workspaces.commands"]
+    rows = meta.get("workspaces")
+    if (
+        (_version(API_VERSION) or (0, 0)) >= (_version(since) or (0, 0))
+        and isinstance(rows, list)
+        and any(isinstance(r, dict) and r.get("commands") for r in rows)
+    ):
+        used.append("workspaces.commands")
     return used
 
 
@@ -1340,6 +1404,35 @@ def _check_workspace_file(ref: str, target: Path, folder: Path, kinds: tuple[str
     return None
 
 
+def _no_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not JSON (a browser cannot read it)")
+
+
+def _check_workspace_commands(plugin: Path, row: dict[str, Any], report: Report, web_root: Path) -> list[dict[str, Any]]:
+    """A workspace's commands file (``commands``, unreleased 1.9): there, JSON, and in the format.
+
+    Returns its commands, for the plugin-wide check of their ids. Read as the app reads it
+    (Response.json(): UTF-8, a BOM dropped, no NaN or Infinity)."""
+    # The host's own rule: it leaves out a bad path (the plugin still loads); here it is an error.
+    rel, why = workspace_commands_problem(row.get("commands"), plugin)
+    if why:
+        report.add("error", "workspace", f"workspace {row.get('key')!r}: {why}", plugin / "manifest.toml")
+        return []
+    if not rel:
+        return []
+    path = plugin / rel
+    who = f"workspace {row.get('key')!r}: commands {rel}"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8-sig"), parse_constant=_no_constant)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        report.add("error", "workspace", f"{who} is not JSON: {exc}", path)
+        return []
+    commands, problems = workspace_commands.read_commands(doc, app_keys(web_root))
+    for problem in problems:
+        report.add("error", "workspace", f"{who}: {problem}", path)
+    return commands
+
+
 def check_workspace(plugin: Path, meta: dict[str, Any], report: Report, web_root: Path) -> bool:
     """False when the plugin has no workspace (the check does not apply)."""
     rows = meta.get("workspaces")
@@ -1349,6 +1442,13 @@ def check_workspace(plugin: Path, meta: dict[str, Any], report: Report, web_root
     folder = plugin / "workspace"
     key = str(meta.get("key") or plugin.name)
     sdk_seen = False
+    listed: list[tuple[str, list[dict[str, Any]]]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        listed.append((str(row.get("key") or ""), _check_workspace_commands(plugin, row, report, web_root)))
+    for problem in workspace_commands.shared_command_ids(listed):
+        report.add("error", "workspace", problem, plugin / "manifest.toml")
     for row in rows:
         if not isinstance(row, dict):
             continue

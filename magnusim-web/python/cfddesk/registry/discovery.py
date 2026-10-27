@@ -1067,9 +1067,33 @@ def geometry_action_row(manifest: PluginManifest, action: GeometryAction) -> dic
     }
 
 
-def workspaces_from_meta(meta: dict[str, Any], plugin_dir: Path) -> list[WorkspaceSpec]:
+def workspace_commands_problem(value: Any, plugin_dir: Path) -> tuple[str, str]:
+    """A ``[[workspaces]] commands`` value: (the path, "") when it is a .json file in the
+    plugin's ``workspace/`` folder or none, else ("", why). Never fatal: a workspace opens
+    without its commands file; only Settings → Keybinds can't list them."""
+    if value is None or value == "":
+        return "", ""
+    if not isinstance(value, str):
+        return "", "commands must be a path (text)"
+    commands = value.strip().replace("\\", "/")
+    if not commands:
+        return "", ""
+    folder = (plugin_dir / "workspace").resolve()
+    listed = (plugin_dir / commands).resolve()
+    if not commands.startswith("workspace/") or folder not in listed.parents or listed.suffix.lower() != ".json":
+        return "", f"commands {commands!r} must be a .json file in the plugin's workspace/ folder"
+    if not listed.is_file():
+        return "", f"commands {commands!r} is missing"
+    return commands, ""
+
+
+def workspaces_from_meta(
+    meta: dict[str, Any], plugin_dir: Path, commands_errors: dict[str, str] | None = None
+) -> list[WorkspaceSpec]:
     """Validate ``[[workspaces]]``: key, title, icon (one SVG path), entry (an HTML
-    file in the plugin's ``workspace/`` folder, which is all the host serves)."""
+    file in the plugin's ``workspace/`` folder, which is all the host serves) and
+    commands (a .json file there, or none; plugin:check reads what it says). A bad
+    commands value is left out, not fatal: its reason goes in ``commands_errors``."""
     from cfddesk.registry.plugin_data import KIND_KEY_RE
 
     raw = meta.get("workspaces") or []
@@ -1099,7 +1123,10 @@ def workspaces_from_meta(meta: dict[str, Any], plugin_dir: Path) -> list[Workspa
             raise ValueError(f"{key}: entry {entry!r} must be an .html file in the plugin's workspace/ folder")
         if not target.is_file():
             raise ValueError(f"{key}: entry {entry!r} is missing")
-        out.append(WorkspaceSpec(key, title[:80], icon, entry))
+        commands, why = workspace_commands_problem(row.get("commands"), plugin_dir)
+        if why and commands_errors is not None:
+            commands_errors[key] = why
+        out.append(WorkspaceSpec(key, title[:80], icon, entry, commands))
     return out
 
 
@@ -1182,8 +1209,9 @@ def _load_folder_plugin(
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [[study_kinds]]: {exc}", meta, source=source))
         return None, True
+    commands_errors: dict[str, str] = {}
     try:
-        workspaces = workspaces_from_meta(meta, plugin_dir)
+        workspaces = workspaces_from_meta(meta, plugin_dir, commands_errors)
         declared = {w.key for w in workspaces}
         for kind in kinds:
             if kind.workspace and kind.workspace not in declared:
@@ -1196,6 +1224,10 @@ def _load_folder_plugin(
     except ValueError as exc:
         hub.failures.append(_failure_row(key, f"manifest [[start_actions]]: {exc}", meta, source=source))
         return None, True
+    for ws_key, why in commands_errors.items():
+        note = f"manifest [[workspaces]]: {ws_key}: {why}; its commands are left out of Settings → Keybinds"
+        manifest_warnings = manifest_warnings + [note]
+        log.warning("plugin %s: %s", key, note)
     try:
         geometry_actions, action_warnings = geometry_actions_from_meta(meta, kinds)
         manifest_warnings = manifest_warnings + action_warnings
@@ -1254,6 +1286,7 @@ def _load_folder_plugin(
         result.geometry_actions = geometry_actions
         result.samples = samples
         result.manifest_warnings = manifest_warnings
+        result.commands_errors = commands_errors
         result.files = files
         result.python_env = python_env
         hub._loading_overrides.pop(key, None)
@@ -1295,6 +1328,7 @@ def _load_folder_plugin(
         geometry_actions=geometry_actions,
         samples=samples,
         manifest_warnings=manifest_warnings,
+        commands_errors=commands_errors,
         files=files,
         python_env=python_env,
     )
@@ -2174,7 +2208,15 @@ def plugin_catalog(web_root: Path | str | None = None) -> list[dict[str, Any]]:
                     *list(getattr(manifest, "manifest_warnings", None) or []),
                 ],
                 workspaces=[
-                    {"key": w.key, "title": w.title, "icon": w.icon, "entry": w.entry}
+                    {
+                        "key": w.key,
+                        "title": w.title,
+                        "icon": w.icon,
+                        "entry": w.entry,
+                        "commands": w.commands,
+                        # Why its commands file is left out ("" when it is not): Settings → Keybinds says so.
+                        "commands_error": (getattr(manifest, "commands_errors", None) or {}).get(w.key, ""),
+                    }
                     for w in (manifest.workspaces or [])
                 ],
                 default_enabled=default_enabled,

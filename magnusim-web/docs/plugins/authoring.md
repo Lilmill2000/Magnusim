@@ -369,7 +369,7 @@ await ws.study.update({ last_alpha: 4 }, study.rev);   // refused if another tab
 
   Your service and jobs reach the same files through `magnusim_sdk.data.PluginData` (`from_scope(scope)` in a service method, `from_env()` in a job): `read_bytes`, `write_bytes`, `atomic_path` (a temp path for a mesher or exporter, replaced in one step), `list_files`, `delete_file` and `file_info`, whose `etag` matches the workspace's. Paths follow one set of rules everywhere (`compatibility.md`); a study's own `study.json` changes only through `ws.study`. The output of your OpenFOAM cases (1.3: frames, logs, `postProcessing`, the mesh) lands in the same folder and counts toward `max_total_mb` too; a run is not cut short at the limit, but later writes and submits are refused until you delete old cases.
 - **Unsaved work (1.2).** Call `ws.nav.setDirty(true, 'Sketch 2 is not saved')` on the first change that is not saved yet, and `ws.nav.setDirty(false)` once it is. While it is set, and while a `ws.files.write` is on its way, every way out of the workspace asks the user first, with your plugin's name and your message, and closing the browser tab shows the browser's own prompt. `ws.nav.back()` resolves `false` when the user stays; clear the flag first to leave without a question. Never reload your own page while dirty: a reload clears the flag and loses the work. If your page accepts dropped files, call `preventDefault()` on `dragover` and `drop`, or the browser opens the file in place of the app.
-- **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page.
+- **Keyboard and full screen (1.2).** Your page has the keyboard when it connects and again after the app's dialogs and Settings close; listen on `window` or `document`. `document.documentElement.requestFullscreen()` from a click or key handler covers the whole screen; Esc always leaves, and the app leaves full screen before it shows a dialog. The app's toasts are not seen over a full-screen page. List your keys in a commands file ("Workspace commands", below) so the person can change them.
 
 `python/tests/fixtures/workspace-plugins/ws-demo` is a complete example (modules, React, WebAssembly, a worker, service calls, data and study saves), driven by `e2e/h13-workspace.spec.js`. To start a workspace plugin of your own, run `npm run plugin:new -- <key> --workspace`.
 
@@ -776,6 +776,46 @@ Your tools are not the only ones a turn in your workspace has. The app offers it
 - **Leaving your workspace.** `core__show` to the project (or Home, or another place) from your workspace is the person's Back: your exit hook runs exactly as it does for their click (`Exit sync`, above), so a page that links geometry sends its design to the simulation. When your workspace links geometry the app asks the person first, as a computation ("Allow the Assistant to send your design to the simulation?"); when your page has unsaved work it asks them as for their own Back, and the call waits for their answer. A turn's calls of your tools stop with `leaving` before the hook runs. Make the hook do what the person's Back does, and nothing a model could not explain to them.
 - **Order and room.** In your workspace your tools come first, by name, then the app's, by name: the strict budget and the cloud cap of 40 go to yours first. With a local server the app's tools are left out first when the definitions don't fit, by their priority, and `core__show` last of all: a turn can always leave your workspace. The app's tools in a workspace take about 1,350 tokens of a local model's context.
 - **Pictures.** `core__view` (pictures of the app's 3D view) is not offered over a workspace: the app's viewer is under your page. If the model should see your page, give it a tool that returns `images`.
+
+## Workspace commands (unreleased)
+
+Not released yet (the next minor, 1.9); a host without it ignores the key. A workspace lists its keyboard commands in a **commands file**: what each one is called, the keys it has by default and where it acts. Settings → Keybinds shows them beside the app's own keys and lets the person give each command other keys or none; the person's keys reach your page through its preferences.
+
+```toml
+[[workspaces]]
+key = "part"
+title = "Part"
+entry = "workspace/index.html"
+commands = "workspace/commands.json"   # a .json file in workspace/
+```
+
+```json
+{
+  "version": 1,
+  "contexts": [
+    { "id": "sketch", "label": "Sketch" },
+    { "id": "model", "label": "Model" }
+  ],
+  "commands": [
+    { "id": "sketch.rectangle", "label": "Rectangle", "group": "Draw", "context": "sketch", "keys": ["KeyR"] },
+    { "id": "model.extrude", "label": "Extrude", "group": "Features", "context": "model", "keys": ["Ctrl+Shift+KeyE"] },
+    { "id": "edit.undo", "label": "Undo", "group": "Edit", "context": "any", "keys": ["Ctrl+KeyZ"] },
+    { "id": "view.fit", "label": "Fit to view", "group": "View", "context": "any", "keys": [] }
+  ]
+}
+```
+
+- **The file.** `version` is 1. Fields the format doesn't know are ignored. The host serves it from your `workspace/` folder like your page, and reads it as a browser reads JSON (UTF-8; `NaN` or `Infinity` is not JSON): build it into `workspace/` or keep it there by hand. A `commands` path outside `workspace/`, not `.json` or missing never stops your plugin loading: its commands are left out, with the reason on your plugin's Settings row (`plugin:check` calls it an error). Lengths below count characters as a person does (an emoji is one).
+- **Contexts.** Where your commands act: a mode of your page (sketching, modelling) in which a key means one thing. Each has an `id` (1 to 32 of `a-z`, `0-9`, `_` and `-`, starting with a letter) and a `label` the person reads (1 to 40 characters); at most 32, and `[]` when every command is in `any`. `any` is not one you declare: a command in `any` acts in every context.
+- **Commands.** Each has an `id` (1 to 64 of `a-z`, `0-9`, `_`, `-` and `.`, starting with a letter, unique in your plugin: the person's keys are kept per plugin, so two workspaces of one plugin never share an id), a `label` (1 to 60 characters), an optional `group` (the heading it is listed under, at most 40 characters), its `context` (one you declare, or `any`) and its default `keys` (at most 4; `[]` for none). Between 1 and 512 commands. Keep an `id` once it has shipped: the person's keys are stored under it.
+- **Keys.** A key is the modifiers held, in the order `Ctrl`, `Alt`, `Shift`, `Meta`, joined by `+`, then a `KeyboardEvent.code`: `KeyR`, `Ctrl+Shift+KeyR`, `Delete`, `F2`, `Digit8`, `NumpadAdd`, `Escape`, `Shift+Space`. Settings takes a press the way the CAD workspace reads one, and yours should too: Cmd counts as Ctrl (write `Ctrl`; `Meta` never comes from a press), a Latin letter is named by the letter it types (`Ctrl+KeyZ` is Ctrl with the Z key on QWERTY, QWERTZ and AZERTY alike), the number pad's digits and Enter are `Digit0`…`Digit9` and `Enter`, and any other key is named by its place. The codes are `KeyA`…`KeyZ`, `Digit0`…`Digit9`, `F1`…`F24`, `NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, `NumpadEqual`, the arrows (`ArrowUp` …), `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete`, `Backspace`, `Enter`, `Tab`, `Space`, `Escape`, and `Minus`, `Equal`, `BracketLeft`, `BracketRight`, `Backslash`, `Semicolon`, `Quote`, `Backquote`, `Comma`, `Period`, `Slash`, `IntlBackslash`: the codes a press gives. `Numpad0`…`Numpad9` and `NumpadEnter` never come from one, so the file may not have them (write `Digit5`, `Enter`). A modifier alone is not a key.
+- **One command per key.** Two commands whose contexts meet (the same context, or either in `any`) may not have the same default key; commands in different contexts may share one.
+- **The app's keys.** `docs/plugins/plugin-sdk.json` lists the app's own keys as `app_keys`, in three groups of entries shaped like commands; build tools read that list rather than a copy.
+  - `app`: keys the app acts on wherever the person is. No command may have one. Today that is the Assistant panel, on the key that types `/` with Ctrl or Cmd: `Ctrl+Slash`, `Ctrl+NumpadDivide`, and their `Meta` forms for a page that reads Cmd as Meta (on a layout where another key types `/`, that key with Ctrl does it too, which no code names).
+  - `local`: keys the app acts on only while something of its own is open: `Escape` closes its dialogs, menus, Settings and modes. Settings shows them, and your page may use them.
+  - `reserved`: keys the browser, the desktop app or the system takes before your page gets them: closing, opening and switching tabs and windows (`Ctrl+KeyW`, `Ctrl+KeyT`, `Ctrl+KeyN`, `Ctrl+Tab`, `Ctrl+Digit1`…`Ctrl+Digit9`, `Alt+F4` …), reload (`Ctrl+KeyR`, `F5`), the developer tools (`Ctrl+Shift+KeyI`, `F12`), full screen (`F11`), print (`Ctrl+KeyP`), zoom (`Ctrl+Equal`, `Ctrl+Minus`, `Ctrl+Digit0`) and `Tab`. No command's default may be one: the same plugin runs in a browser tab and in the desktop app, so a key either one takes stays reserved.
+- **The person's keys.** They are your plugin's preference `keybinds` (`ws.prefs`): `{ "<command id>": ["<key>", ...] }`, `[]` for none; a command that isn't there has its default keys. Read it at start and in `ws.prefs.onChange`, and act on those keys in place of the defaults; leave out an id you don't know and a key that isn't one. Settings → Keybinds writes it, and an open page hears the change.
+- **Checking.** `plugin:check`'s `workspace` rule reads the file and reports each problem with the same words the app uses when it can't read one (and an id two workspaces share); Settings → Keybinds then shows none of that workspace's commands and says why.
 
 ## UI kit (1.3)
 

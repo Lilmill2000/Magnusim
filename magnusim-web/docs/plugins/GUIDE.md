@@ -209,6 +209,7 @@ Rules:
 4. `requires_plugins = ["incompressible_flow>=1.0"]` loads those plugins first. Declare it when you build on their specs.
 5. `[files]` sets how much a workspace may keep in one project (`max_file_mb`, `max_total_mb`).
 6. Start actions have limits per place, and texts have length limits. [authoring.md](authoring.md), "Start actions (1.4)", has them all.
+7. `commands` in a `[[workspaces]]` row (1.9, unreleased) names the workspace's commands file, which Settings → Keybinds lists. [authoring.md](authoring.md), "Workspace commands (unreleased)", has its format.
 
 ## 6. register, service and jobs
 
@@ -742,7 +743,7 @@ It loads your plugin the way the host does, in a child process with scratch sett
 | `imports` | Only `magnusim_sdk`, `cfddesk.registry`, the standard library and your own code; your lock's packages too in code that runs on your environment |
 | `register` | No heavy imports in `register()` or at load |
 | `react` | No React bundled or listed as a dependency |
-| `workspace` | Each entry page loads, connects through `@magnusim/workspace`, and runs no inline or remote script |
+| `workspace` | Each entry page loads, connects through `@magnusim/workspace`, and runs no inline or remote script; a commands file is there and in its format |
 | `ui` | An in-page UI imports only what the host provides |
 | `tools` | Every job's tool is inside the plugin and exists |
 | `requirements` | Every lock line is pinned and hashed |

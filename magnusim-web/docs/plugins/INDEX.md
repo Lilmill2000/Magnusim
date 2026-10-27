@@ -7,13 +7,13 @@ Everything a plugin author needs is in this folder. Read it in this order.
 | [GUIDE.md](GUIDE.md) | How to build a plugin end to end: the kinds, the rules, the layout, testing and the definition of done. Start here. |
 | [DESIGN.md](DESIGN.md) | How a plugin must look and read: tokens, layout, the kit, copy, numbers, plots, icons, accessibility. |
 | [API.md](API.md) | The reference, generated from the app's code: manifest keys, the workspace bridge, the UI kit, the in-page host API, `magnusim_sdk`, the analysis contract, hooks, the built-in registry. |
-| [authoring.md](authoring.md) | The long form of each feature: register, environments, the analysis contract, BCs and materials, workspaces, OpenFOAM cases, start actions, linking a geometry, exit sync, the UI kit. |
+| [authoring.md](authoring.md) | The long form of each feature: register, environments, the analysis contract, BCs and materials, workspaces, OpenFOAM cases, start actions, linking a geometry, exit sync, workspace commands, the UI kit. |
 | [compatibility.md](compatibility.md) | What each host API version added or changed, and what the 1.6 freeze promises. |
 | [manifest.schema.json](manifest.schema.json) | The manifest's JSON Schema (generated). |
 | [workspace-sdk.d.ts](workspace-sdk.d.ts) | The types of `@magnusim/workspace`, the bridge a workspace page imports (generated). Copy it into your plugin. |
 | [plugin-ui.d.ts](plugin-ui.d.ts) | The types of `@magnusim/plugin-ui`, the UI kit (generated). Copy it into your plugin. |
 | [plugin-api.d.ts](plugin-api.d.ts) | The types of `@magnusim/plugin-api`: the `host` an in-page UI's `register(host)` gets (generated, types only). A plugin with a `ui/` folder copies it beside `plugin-ui.d.ts`; a workspace page does not need it. |
-| [plugin-sdk.json](plugin-sdk.json) | The bridge, kit and React versions, and the import map a workspace page gets (generated). |
+| [plugin-sdk.json](plugin-sdk.json) | The bridge, kit and React versions, the import map a workspace page gets, and the app's own keys (generated). |
 | [registry.json](registry.json) | Every key the core and the bundled plugins that are on by default register, per kind (including `bc_family`), with schemas, `plugins` and `default_analysis` (generated). |
 | `img/` | The pictures in DESIGN.md: screenshots of the app's UI kit sheet and the Airfoil plugin, and three "don't" specimens drawn on the app's own `theme.css` and kit CSS. |
 

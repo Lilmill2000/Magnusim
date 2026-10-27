@@ -90,6 +90,7 @@ schema_version = 1
 | `title` | string |  |  | The host's header shows it above the page. (at most 80 characters; required) |
 | `icon` | string | `""` |  | One SVG path (its d attribute) drawn in a 24×24 box. (matches `^[MmLlHhVvCcSsQqTtAaZz0-9 ,.\-eE]{0,4000}$`) |
 | `entry` | string | `"workspace/index.html"` |  | An .html file in the plugin's workspace/ folder, which is all the host serves. (matches `^workspace/.+\.[Hh][Tt][Mm][Ll]$`) |
+| `commands` | string | `""` | 1.9 | Unreleased (1.9): a .json file in the plugin's workspace/ folder that lists the workspace's commands, their default keys and the contexts they act in, which Settings → Keybinds shows and lets the person change (authoring.md, Workspace commands). An older host ignores it. (matches `^(workspace/.+\.[Jj][Ss][Oo][Nn])?$`) |
 
 ### [[start_actions]]
 

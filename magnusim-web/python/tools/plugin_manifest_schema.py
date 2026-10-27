@@ -64,6 +64,10 @@ FEATURE_API: dict[str, str] = {
     "geometry_actions": "1.7",
     "exports": "1.8",
     "samples": "1.8",
+    # Unreleased (compatibility.md, "Unreleased additions"): the schema says 1.9, but plugin_check
+    # warns about it only once API_VERSION is 1.9 (_uses), since no plugin may declare a newer
+    # api_version than its host and the warning could not be fixed before.
+    "workspaces.commands": "1.9",
 }
 
 # PluginManifest fields that are not manifest keys: the host or register() sets them.
@@ -71,6 +75,7 @@ HOST_SET_FIELDS: dict[str, str] = {
     "provides": "filled by the host from what register() registers",
     "source": "set by the host: bundled, local or entry_point",
     "manifest_warnings": "set by the host: what the manifest asked for that it ignores",
+    "commands_errors": "set by the host: why a workspace's commands file is left out",
 }
 
 # PluginManifest field -> manifest key, where they differ.
@@ -275,6 +280,14 @@ ARRAY_TABLES: dict[str, tuple[type, tuple[str, ...], dict[str, dict[str, Any]]]]
                 "pattern": r"^workspace/.+\.[Hh][Tt][Mm][Ll]$",
                 "description": "An .html file in the plugin's workspace/ folder, which is all the host serves.",
             },
+            "commands": {
+                "pattern": r"^(workspace/.+\.[Jj][Ss][Oo][Nn])?$",
+                "description": (
+                    "Unreleased (1.9): a .json file in the plugin's workspace/ folder that lists the workspace's "
+                    "commands, their default keys and the contexts they act in, which Settings → Keybinds shows "
+                    "and lets the person change (authoring.md, Workspace commands). An older host ignores it."
+                ),
+            },
         },
     ),
     "StartAction": (
@@ -454,6 +467,9 @@ def build_schema() -> dict[str, Any]:
     study_name = props["default_analysis"]["properties"].get("study_name")
     if study_name is not None:
         study_name["x-since"] = FEATURE_API["default_analysis.study_name"]
+    commands = defs["WorkspaceSpec"]["properties"].get("commands")
+    if commands is not None:
+        commands["x-since"] = FEATURE_API["workspaces.commands"]
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "manifest.schema.json",

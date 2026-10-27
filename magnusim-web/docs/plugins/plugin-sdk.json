@@ -9,5 +9,162 @@
     "react/jsx-dev-runtime": "/plugin-sdk/jsx-dev-runtime.js",
     "@magnusim/workspace": "/plugin-sdk/workspace.js",
     "@magnusim/plugin-ui": "/plugin-sdk/plugin-ui.js"
+  },
+  "app_keys": {
+    "app": [
+      {
+        "id": "app.assistant",
+        "label": "Open or close the Assistant panel",
+        "group": "Assistant",
+        "context": "any",
+        "keys": [
+          "Ctrl+Slash",
+          "Meta+Slash",
+          "Ctrl+NumpadDivide",
+          "Meta+NumpadDivide",
+          "Ctrl+Meta+Slash",
+          "Ctrl+Meta+NumpadDivide"
+        ]
+      }
+    ],
+    "local": [
+      {
+        "id": "app.close",
+        "label": "Close the open dialog, menu or mode",
+        "group": "App",
+        "context": "any",
+        "keys": [
+          "Escape"
+        ]
+      }
+    ],
+    "reserved": [
+      {
+        "id": "browser.close-tab",
+        "label": "Close the tab",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+KeyW",
+          "Ctrl+F4"
+        ]
+      },
+      {
+        "id": "browser.close-window",
+        "label": "Close the window",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+Shift+KeyW",
+          "Alt+F4"
+        ]
+      },
+      {
+        "id": "browser.new-tab",
+        "label": "Open a new tab",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+KeyT",
+          "Ctrl+Shift+KeyT"
+        ]
+      },
+      {
+        "id": "browser.new-window",
+        "label": "Open a new window",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+KeyN",
+          "Ctrl+Shift+KeyN"
+        ]
+      },
+      {
+        "id": "browser.switch-tab",
+        "label": "Switch tabs",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+Tab",
+          "Ctrl+Shift+Tab",
+          "Ctrl+PageUp",
+          "Ctrl+PageDown",
+          "Ctrl+Digit1",
+          "Ctrl+Digit2",
+          "Ctrl+Digit3",
+          "Ctrl+Digit4",
+          "Ctrl+Digit5",
+          "Ctrl+Digit6",
+          "Ctrl+Digit7",
+          "Ctrl+Digit8",
+          "Ctrl+Digit9"
+        ]
+      },
+      {
+        "id": "browser.reload",
+        "label": "Reload the page",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+KeyR",
+          "Ctrl+Shift+KeyR",
+          "F5",
+          "Ctrl+F5"
+        ]
+      },
+      {
+        "id": "browser.devtools",
+        "label": "Open the developer tools",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+Shift+KeyI",
+          "Ctrl+Shift+KeyJ",
+          "F12"
+        ]
+      },
+      {
+        "id": "browser.full-screen",
+        "label": "Full screen",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "F11"
+        ]
+      },
+      {
+        "id": "browser.print",
+        "label": "Print the page",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+KeyP"
+        ]
+      },
+      {
+        "id": "browser.zoom",
+        "label": "Zoom the page",
+        "group": "Browser",
+        "context": "any",
+        "keys": [
+          "Ctrl+Equal",
+          "Ctrl+Shift+Equal",
+          "Ctrl+Minus",
+          "Ctrl+Digit0",
+          "Ctrl+NumpadAdd",
+          "Ctrl+NumpadSubtract"
+        ]
+      },
+      {
+        "id": "focus.next",
+        "label": "Move between controls",
+        "group": "Keyboard",
+        "context": "any",
+        "keys": [
+          "Tab",
+          "Shift+Tab"
+        ]
+      }
+    ]
   }
 }

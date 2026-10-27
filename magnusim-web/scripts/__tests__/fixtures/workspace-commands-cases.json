@@ -1,0 +1,290 @@
+{
+  "about": "Commands files and the problems src/keybinds/commands.ts (readCommandsFile, sharedCommandIds) and python/tools/workspace_commands.py (commands_problems, shared_command_ids) must both give, word for word, with the app's keys as plugin-sdk.json app_keys has them. cases: one file each; plugins: the good files of one plugin's workspaces, in manifest order.",
+  "cases": [
+    {
+      "name": "a good file: two contexts, a command in each, one in any, a command with no default key, fields the format doesn't know",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch", "label": "Sketch" }, { "id": "model", "label": "Model" }],
+        "commands": [
+          { "id": "sketch.rectangle", "label": "Rectangle", "group": "Draw", "context": "sketch", "keys": ["KeyR"] },
+          { "id": "model.extrude", "label": "Extrude", "group": "Features", "context": "model", "keys": ["KeyR", "Ctrl+Shift+KeyE"] },
+          { "id": "edit.undo", "label": "Undo", "context": "any", "keys": ["Ctrl+KeyZ"], "icon": "undo" },
+          { "id": "view.fit", "label": "Fit to view", "group": "View", "context": "any", "keys": [] },
+          { "id": "sketch.dim-2", "label": "Rectángulo con cota", "context": "sketch", "keys": ["Ctrl+Alt+Shift+Meta+F12", "Digit8", "NumpadAdd", "Delete"] }
+        ],
+        "note": "ignored"
+      },
+      "problems": []
+    },
+    { "name": "not an object", "doc": [], "problems": ["the file is not a JSON object"] },
+    { "name": "text", "doc": "commands", "problems": ["the file is not a JSON object"] },
+    {
+      "name": "a newer format",
+      "doc": { "version": 2, "contexts": [], "commands": [{ "id": "a", "label": "A", "context": "any", "keys": [] }] },
+      "problems": ["version must be 1, the format this host reads"]
+    },
+    {
+      "name": "the version as text",
+      "doc": { "version": "1", "contexts": [], "commands": [{ "id": "a", "label": "A", "context": "any", "keys": [] }] },
+      "problems": ["version must be 1, the format this host reads"]
+    },
+    {
+      "name": "true as the version (Python's True == 1)",
+      "doc": { "version": true, "contexts": [], "commands": [{ "id": "a", "label": "A", "context": "any", "keys": [] }] },
+      "problems": ["version must be 1, the format this host reads"]
+    },
+    {
+      "name": "no contexts list",
+      "doc": { "version": 1, "commands": [{ "id": "a", "label": "A", "context": "any", "keys": [] }] },
+      "problems": ["contexts must be a list"]
+    },
+    {
+      "name": "contexts: bad id, any, twice, no label, not an object",
+      "doc": {
+        "version": 1,
+        "contexts": [
+          { "id": "Sketch", "label": "Sketch" },
+          { "id": "any", "label": "Anywhere" },
+          { "id": "model", "label": "Model" },
+          { "id": "model", "label": "Model again" },
+          { "id": "part", "label": "  " },
+          "sheet",
+          { "label": "No id" }
+        ],
+        "commands": [{ "id": "a", "label": "A", "context": "model", "keys": [] }]
+      },
+      "problems": [
+        "contexts[0].id \"Sketch\" must be 1 to 32 of a-z, 0-9, _ and -, starting with a letter",
+        "contexts[1].id \"any\" is reserved: it means every context",
+        "contexts[3].id \"model\" is declared twice",
+        "contexts[4].label must be 1 to 40 characters",
+        "contexts[5] is not an object",
+        "contexts[6].id null must be 1 to 32 of a-z, 0-9, _ and -, starting with a letter"
+      ]
+    },
+    {
+      "name": "ids that end in a new line are not ids, and a command in such a context has none (Python's $ allows the new line)",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch\n", "label": "S" }],
+        "commands": [{ "id": "a.b\n", "label": "A", "context": "sketch\n", "keys": [] }]
+      },
+      "problems": [
+        "contexts[0].id \"sketch\\n\" must be 1 to 32 of a-z, 0-9, _ and -, starting with a letter",
+        "commands[0].id \"a.b\\n\" must be 1 to 64 of a-z, 0-9, _, - and ., starting with a letter",
+        "commands[0].context \"sketch\\n\" is not a declared context or \"any\""
+      ]
+    },
+    {
+      "name": "lengths count characters, not UTF-16 units: 40 astral characters are a label, 61 and 41 are too many",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch", "label": "📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐📐" }],
+        "commands": [
+          { "id": "a", "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "group": "𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥", "context": "sketch", "keys": [] },
+          { "id": "b", "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀", "group": "𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥𝑥", "context": "sketch", "keys": [] }
+        ]
+      },
+      "problems": ["commands[1].label must be 1 to 60 characters", "commands[1].group must be text of at most 40 characters"]
+    },
+    {
+      "name": "white space is JavaScript's: a byte-order mark alone is no label, U+001F is one character (Python's strip differs)",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch", "label": "\ufeff" }, { "id": "model", "label": "\u001f" }],
+        "commands": [{ "id": "a", "label": " \u00a0A\u3000", "group": "\u0085", "context": "any", "keys": [] }]
+      },
+      "problems": ["contexts[0].label must be 1 to 40 characters"]
+    },
+    {
+      "name": "no commands",
+      "doc": { "version": 1, "contexts": [], "commands": [] },
+      "problems": ["commands must be a list of 1 to 512 commands"]
+    },
+    {
+      "name": "commands: bad id, twice, label, group, context, keys",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch", "label": "Sketch" }],
+        "commands": [
+          { "id": "Sketch.Line", "label": "Line", "context": "sketch", "keys": [] },
+          { "id": "sketch.line", "label": "Line", "context": "sketch", "keys": [] },
+          { "id": "sketch.line", "label": "Line again", "context": "sketch", "keys": [] },
+          { "id": "sketch.arc", "label": "An arc label that runs on and on, for far more than the sixty characters", "context": "sketch", "keys": [] },
+          { "id": "sketch.circle", "label": "Circle", "group": 3, "context": "sketch", "keys": [] },
+          { "id": "sketch.point", "label": "Point", "context": "drawing", "keys": [] },
+          { "id": "sketch.spline", "label": "Spline", "context": "sketch" },
+          { "id": "sketch.slot", "label": "Slot", "context": "sketch", "keys": ["KeyA", "KeyB", "KeyC", "KeyD", "KeyE"] },
+          "sketch.text"
+        ]
+      },
+      "problems": [
+        "commands[0].id \"Sketch.Line\" must be 1 to 64 of a-z, 0-9, _, - and ., starting with a letter",
+        "commands[2].id \"sketch.line\" is declared twice",
+        "commands[3].label must be 1 to 60 characters",
+        "commands[4].group must be text of at most 40 characters",
+        "commands[5].context \"drawing\" is not a declared context or \"any\"",
+        "commands[6].keys must be a list of at most 4 keys",
+        "commands[7].keys must be a list of at most 4 keys",
+        "commands[8] is not an object"
+      ]
+    },
+    {
+      "name": "an id that is not one never counts as declared, so \"null\" and \"true\" are not twice; a clash names it by its place",
+      "doc": {
+        "version": 1,
+        "contexts": [],
+        "commands": [
+          { "label": "A", "context": "any", "keys": ["KeyA"] },
+          { "id": "null", "label": "B", "context": "any", "keys": [] },
+          { "id": true, "label": "C", "context": "any", "keys": ["KeyA"] },
+          { "id": "true", "label": "D", "context": "any", "keys": [] }
+        ]
+      },
+      "problems": [
+        "commands[0].id null must be 1 to 64 of a-z, 0-9, _, - and ., starting with a letter",
+        "commands[2].id true must be 1 to 64 of a-z, 0-9, _, - and ., starting with a letter",
+        "\"KeyA\" is the default key of both commands[0] and commands[2], whose contexts meet"
+      ]
+    },
+    {
+      "name": "keys: not combos, out of order, twice, the app's own (the Assistant panel's six)",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch", "label": "Sketch" }],
+        "commands": [
+          { "id": "sketch.rectangle", "label": "Rectangle", "context": "sketch", "keys": ["Ctrl+R", "Shift+Ctrl+KeyR", "KeyR", "KeyR"] },
+          { "id": "sketch.line", "label": "Line", "context": "sketch", "keys": ["Control+KeyR", "ShiftLeft", "", 5] },
+          { "id": "sketch.help", "label": "Help", "context": "sketch", "keys": ["Ctrl+Slash", "Meta+Slash", "Ctrl+Shift+Slash"] },
+          { "id": "sketch.divide", "label": "Divide", "context": "sketch", "keys": ["Ctrl+NumpadDivide", "Meta+NumpadDivide", "Ctrl+Meta+Slash", "Ctrl+Meta+NumpadDivide"] },
+          { "id": "sketch.numpad", "label": "Numpad", "context": "sketch", "keys": ["NumpadDivide", "Shift+NumpadDivide", "Ctrl+Alt+Slash"] }
+        ]
+      },
+      "problems": [
+        "commands[0].keys: \"Ctrl+R\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[0].keys: \"Shift+Ctrl+KeyR\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[0].keys: \"KeyR\" is listed twice",
+        "commands[1].keys: \"Control+KeyR\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: \"ShiftLeft\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: \"\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: a number is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[2].keys: \"Ctrl+Slash\" is the app's own key (Open or close the Assistant panel)",
+        "commands[2].keys: \"Meta+Slash\" is the app's own key (Open or close the Assistant panel)",
+        "commands[3].keys: \"Ctrl+NumpadDivide\" is the app's own key (Open or close the Assistant panel)",
+        "commands[3].keys: \"Meta+NumpadDivide\" is the app's own key (Open or close the Assistant panel)",
+        "commands[3].keys: \"Ctrl+Meta+Slash\" is the app's own key (Open or close the Assistant panel)",
+        "commands[3].keys: \"Ctrl+Meta+NumpadDivide\" is the app's own key (Open or close the Assistant panel)"
+      ]
+    },
+    {
+      "name": "the number pad's digits and Enter never come from a press (it is read as Digit and Enter): the problem names the key to write",
+      "doc": {
+        "version": 1,
+        "contexts": [],
+        "commands": [
+          { "id": "a", "label": "A", "context": "any", "keys": ["Numpad5", "Ctrl+Shift+Numpad0", "NumpadEnter", "Alt+NumpadEnter"] },
+          { "id": "b", "label": "B", "context": "any", "keys": ["NumpadAdd", "Shift+Ctrl+Numpad1", "Numpad55", "Ctrl+NumpadDivide"] }
+        ]
+      },
+      "problems": [
+        "commands[0].keys: \"Numpad5\" never comes from a press: write \"Digit5\"",
+        "commands[0].keys: \"Ctrl+Shift+Numpad0\" never comes from a press: write \"Ctrl+Shift+Digit0\"",
+        "commands[0].keys: \"NumpadEnter\" never comes from a press: write \"Enter\"",
+        "commands[0].keys: \"Alt+NumpadEnter\" never comes from a press: write \"Alt+Enter\"",
+        "commands[1].keys: \"Shift+Ctrl+Numpad1\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: \"Numpad55\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: \"Ctrl+NumpadDivide\" is the app's own key (Open or close the Assistant panel)"
+      ]
+    },
+    {
+      "name": "keys the browser or the system takes are no command's; Escape, the app's only while its own things are open, a workspace may use",
+      "doc": {
+        "version": 1,
+        "contexts": [],
+        "commands": [
+          { "id": "a", "label": "A", "context": "any", "keys": ["Ctrl+KeyW", "F5", "Tab", "Escape"] },
+          { "id": "b", "label": "B", "context": "any", "keys": ["Ctrl+Digit3", "Ctrl+Digit0", "Ctrl+KeyP", "Ctrl+Shift+KeyI"] },
+          { "id": "c", "label": "C", "context": "any", "keys": ["Ctrl+Digit3", "Alt+F4", "Ctrl+Shift+KeyE", "F2"] }
+        ]
+      },
+      "problems": [
+        "commands[0].keys: \"Ctrl+KeyW\" is kept for the browser and the system (Close the tab)",
+        "commands[0].keys: \"F5\" is kept for the browser and the system (Reload the page)",
+        "commands[0].keys: \"Tab\" is kept for the browser and the system (Move between controls)",
+        "commands[1].keys: \"Ctrl+Digit3\" is kept for the browser and the system (Switch tabs)",
+        "commands[1].keys: \"Ctrl+Digit0\" is kept for the browser and the system (Zoom the page)",
+        "commands[1].keys: \"Ctrl+KeyP\" is kept for the browser and the system (Print the page)",
+        "commands[1].keys: \"Ctrl+Shift+KeyI\" is kept for the browser and the system (Open the developer tools)",
+        "commands[2].keys: \"Ctrl+Digit3\" is kept for the browser and the system (Switch tabs)",
+        "commands[2].keys: \"Alt+F4\" is kept for the browser and the system (Close the window)"
+      ]
+    },
+    {
+      "name": "values that are not text are named by their kind; a lone surrogate is written as JSON.stringify writes it",
+      "doc": {
+        "version": 1,
+        "contexts": [],
+        "commands": [
+          { "id": "a", "label": "A", "context": "any", "keys": [1.0, -0.0, 1e-7, 12345678901234567890] },
+          { "id": "b", "label": "B", "context": 2.5, "keys": [{ "b": 1, "1": 2 }, ["KeyR"], true, null] },
+          { "id": "\ud800", "label": "C", "context": "any", "keys": ["\ud800", "Key\ud83d\ude00"] }
+        ]
+      },
+      "problems": [
+        "commands[0].keys: a number is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[0].keys: a number is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[0].keys: a number is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[0].keys: a number is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].context a number is not a declared context or \"any\"",
+        "commands[1].keys: an object is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: a list is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: true is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[1].keys: null is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[2].id \"\\ud800\" must be 1 to 64 of a-z, 0-9, _, - and ., starting with a letter",
+        "commands[2].keys: \"\\ud800\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)",
+        "commands[2].keys: \"Key😀\" is not a key (modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent.code such as KeyR)"
+      ]
+    },
+    {
+      "name": "one key for two commands whose contexts meet: the same context, or one in any; other contexts may share it",
+      "doc": {
+        "version": 1,
+        "contexts": [{ "id": "sketch", "label": "Sketch" }, { "id": "model", "label": "Model" }],
+        "commands": [
+          { "id": "sketch.rectangle", "label": "Rectangle", "context": "sketch", "keys": ["KeyR"] },
+          { "id": "model.revolve", "label": "Revolve", "context": "model", "keys": ["KeyR"] },
+          { "id": "sketch.rect2", "label": "Rectangle from centre", "context": "sketch", "keys": ["KeyR", "Shift+KeyR"] },
+          { "id": "view.rotate", "label": "Rotate view", "context": "any", "keys": ["Shift+KeyR"] }
+        ]
+      },
+      "problems": [
+        "\"KeyR\" is the default key of both sketch.rectangle and sketch.rect2, whose contexts meet",
+        "\"Shift+KeyR\" is the default key of both sketch.rect2 and view.rotate, whose contexts meet"
+      ]
+    }
+  ],
+  "plugins": [
+    {
+      "name": "two workspaces with their own ids",
+      "workspaces": [
+        { "key": "part", "doc": { "version": 1, "contexts": [], "commands": [{ "id": "part.undo", "label": "Undo", "context": "any", "keys": ["Ctrl+KeyZ"] }] } },
+        { "key": "assembly", "doc": { "version": 1, "contexts": [], "commands": [{ "id": "assembly.undo", "label": "Undo", "context": "any", "keys": ["Ctrl+KeyZ"] }] } }
+      ],
+      "problems": []
+    },
+    {
+      "name": "two workspaces with one id: the person's keys are kept per plugin",
+      "workspaces": [
+        { "key": "part", "doc": { "version": 1, "contexts": [], "commands": [{ "id": "edit.undo", "label": "Undo", "context": "any", "keys": ["Ctrl+KeyZ"] }, { "id": "edit.redo", "label": "Redo", "context": "any", "keys": [] }] } },
+        { "key": "assembly", "doc": { "version": 1, "contexts": [], "commands": [{ "id": "edit.undo", "label": "Undo", "context": "any", "keys": ["Ctrl+KeyZ"] }] } },
+        { "key": "drawing", "doc": { "version": 1, "contexts": [], "commands": [{ "id": "edit.redo", "label": "Redo", "context": "any", "keys": [] }, { "id": "edit.undo", "label": "Undo", "context": "any", "keys": [] }] } }
+      ],
+      "problems": [
+        "workspace \"assembly\": command \"edit.undo\" is also workspace \"part\"'s: a plugin's command ids are one set, since the person's keys are kept per plugin",
+        "workspace \"drawing\": command \"edit.redo\" is also workspace \"part\"'s: a plugin's command ids are one set, since the person's keys are kept per plugin",
+        "workspace \"drawing\": command \"edit.undo\" is also workspace \"part\"'s: a plugin's command ids are one set, since the person's keys are kept per plugin"
+      ]
+    }
+  ]
+}
