@@ -9,15 +9,25 @@
  * once with a code of its own, never retried as a worker that died.
  */
 import { EventEmitter } from 'node:events';
-import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { RpcError } from '../worker.ts';
+import { RpcError, type WorkerPort } from '../worker.ts';
 import { pluginsList, registryDescribe } from './registry.js';
-import { pyJson, studyMethods } from './studies.ts';
+import { atomicWriteText, pyJson, studyMethods } from './studies.ts';
 
-/** A method that is Magnusim's, not Magnusim CAD's. */
+/** A method that is Magnusim's, not Magnusim CAD's: its RPC code, and the reason routes pass on. */
 export const NOT_IN_EDITION = -32601;
+export const NOT_IN_EDITION_REASON = 'not_in_cad_edition';
+
+/** The refusal of a method Magnusim CAD does not have, naming it (routes answer it with its reason). */
+export class CadEditionRefusal extends RpcError {
+  readonly method: string;
+  constructor(method: string) {
+    super(NOT_IN_EDITION, `${method} is not in Magnusim CAD`, { code: NOT_IN_EDITION_REASON, method, edition: 'cad' });
+    this.name = 'CadEditionRefusal';
+    this.method = method;
+  }
+}
 const MIGRATION_MARKER = 'siblings_migrated';
 const REGISTRY_CHANGES = new Set(['registry.reload']);
 
@@ -62,21 +72,9 @@ function writeProject(p: P): Record<string, unknown> {
   body.persistence = 'filesystem';
   const marker = readDict(path)[MIGRATION_MARKER];
   if (marker !== undefined && marker !== null) body[MIGRATION_MARKER] = marker;
-  // Beside it, then replaced: never a half-written project.json.
-  const tmp = join(dir, `project.json.${randomBytes(6).toString('hex')}`);
-  const fd = openSync(tmp, 'wx');
-  try {
-    writeSync(fd, pyJson(body));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    renameSync(tmp, path);
-  } catch (err) {
-    if (existsSync(tmp)) unlinkSync(tmp);
-    throw err;
-  }
+  // Beside it, then renamed over it, retried while another writer or a reader holds it
+  // (both apps may share one projects folder): never a half-written project.json.
+  atomicWriteText(path, pyJson(body), { prefix: 'project.json.', makeDirs: false });
   return body;
 }
 
@@ -106,7 +104,7 @@ export function cadEditionMethods(): string[] {
 }
 
 /** The WorkerClient calls the server makes (start, stop, call, events), with no process. */
-export class CadEditionWorker extends EventEmitter {
+export class CadEditionWorker extends EventEmitter implements WorkerPort {
   private stopped = false;
 
   start(): void {
@@ -127,7 +125,7 @@ export class CadEditionWorker extends EventEmitter {
 
   async call(method: string, params: unknown = {}, _timeoutMs?: number): Promise<unknown> {
     const fn = methods[method];
-    if (!fn) throw new RpcError(NOT_IN_EDITION, `${method} is not in Magnusim CAD`, { edition: 'cad', method });
+    if (!fn) throw new CadEditionRefusal(method);
     const p = params && typeof params === 'object' && !Array.isArray(params) ? (params as P) : {};
     const out = fn(p);
     if (REGISTRY_CHANGES.has(method)) this.emit('registry-changed');

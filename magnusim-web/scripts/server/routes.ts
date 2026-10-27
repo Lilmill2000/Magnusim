@@ -17,7 +17,7 @@ import {
   type EnvInstall,
   type PluginEnv,
 } from './plugin-services.ts';
-import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
+import { RpcError, WorkerUnavailableError, type WorkerPort } from './worker.ts';
 import { DEV_SHEET_FILES, devSheetFile, devSheetsOn, pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
 import { CASE_BUSY, PluginFileError, PluginFiles, caseBusy, registerPluginFileRoutes } from './plugin-files.ts';
 import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
@@ -37,7 +37,7 @@ import { staleBody } from '../record-rev.js';
 import { PluginPrefsError, getPluginPref, removePluginPref, setPluginPref } from '../plugin-prefs.js';
 
 export interface RouteDeps {
-  worker: WorkerClient;
+  worker: WorkerPort;
   jobs: JobManager;
   webRoot: string;
   cacheDir: string;
@@ -1113,7 +1113,7 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
   });
 }
 
-export function persistJobToWorker(worker: WorkerClient, job: JobRecord): void {
+export function persistJobToWorker(worker: WorkerPort, job: JobRecord): void {
   if (job.status !== 'done' || !job.result || !job.project) return;
   const result = job.result as Record<string, unknown>;
   if (job.kind === 'mesh') {

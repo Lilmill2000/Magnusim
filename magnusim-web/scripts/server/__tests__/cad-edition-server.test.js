@@ -29,9 +29,12 @@ const cp = await import('node:child_process');
 
 let server;
 let base;
+/** What the guard refused while the server started (before any test planted a spawn). */
+let startTrips = [];
 
 before(async () => {
   server = await startCadServer({});
+  startTrips = spawnTrips();
   base = `http://127.0.0.1:${server.port}`;
 });
 
@@ -80,6 +83,13 @@ describe('spawn guard', () => {
 });
 
 describe('Magnusim CAD server', () => {
+  it('starts without spawning WSL or Python (no import-time probe)', () => {
+    assert.deepEqual(
+      startTrips.map((t) => `${t.call}(${t.file} ${t.args.join(' ')})`),
+      [],
+    );
+  });
+
   // What the guard test above planted is not the server's.
   let planted = 0;
   before(() => {

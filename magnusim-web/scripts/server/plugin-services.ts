@@ -23,7 +23,7 @@ import { spawnJob } from '../job-runner.js';
 import { isolatedPythonEnv, killProcessTree, ownProcessGroup } from '../proc-tree.js';
 import { pyTool } from '../python-env.js';
 import { projectDir } from '../w17-sim-catalog.js';
-import { RpcError, type WorkerClient } from './worker.ts';
+import { RpcError, type WorkerPort } from './worker.ts';
 
 export const SERVICE_IDLE_MS = Number(process.env.MAGNUSIM_PLUGIN_SERVICE_IDLE_MS || 600_000);
 const DEFAULT_CALL_MS = 30_000;
@@ -246,12 +246,12 @@ export interface PluginEnv {
 }
 
 export class PluginServiceHost {
-  private readonly worker: WorkerClient;
+  private readonly worker: WorkerPort;
   private readonly idleMs: number;
   private services = new Map<string, PluginService>();
   private envs = new Map<string, { at: number; name: string; env: PluginEnv | null }>();
 
-  constructor(worker: WorkerClient, opts: { idleMs?: number } = {}) {
+  constructor(worker: WorkerPort, opts: { idleMs?: number } = {}) {
     this.worker = worker;
     this.idleMs = opts.idleMs ?? SERVICE_IDLE_MS;
   }
@@ -430,7 +430,7 @@ export function forgetStudyMigrations(plugin: string): void {
  * still being upgraded (the page reads the list again shortly).
  */
 export function startStudyMigrations(
-  worker: WorkerClient,
+  worker: WorkerPort,
   host: PluginServiceHost,
   projectId: string,
   studies: StudyRow[] | undefined,
@@ -468,7 +468,7 @@ type MigrationOutcome = 'changed' | 'skip' | 'retry';
  * was busy or stopped meanwhile.
  */
 async function migrateOne(
-  worker: WorkerClient,
+  worker: WorkerPort,
   host: PluginServiceHost,
   projectId: string,
   row: StudyRow,
@@ -507,7 +507,7 @@ async function migrateOne(
 
 /** Upgrade every study that needs it now (awaited; the routes use startStudyMigrations). */
 export async function migratePluginStudies(
-  worker: WorkerClient,
+  worker: WorkerPort,
   host: PluginServiceHost,
   projectId: string,
   studies: StudyRow[] | undefined,

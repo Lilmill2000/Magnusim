@@ -15,7 +15,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RequestContext, Router } from './router.ts';
-import { RpcError, WorkerUnavailableError, type WorkerClient } from './worker.ts';
+import { RpcError, WorkerUnavailableError, type WorkerPort } from './worker.ts';
 import { PluginFileError, caseKeyOf, type PluginFiles } from './plugin-files.ts';
 import { enqueueFoamJob, queueAheadOf, queuedFoamCount, scheduleComputeQueueKick } from './compute-queue.ts';
 import { writeSse } from './jobs.ts';
@@ -36,7 +36,7 @@ import { projectDir } from '../w17-sim-catalog.js';
 import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from '../project-layout.js';
 
 export interface PluginCaseDeps {
-  worker: WorkerClient;
+  worker: WorkerPort;
   files: PluginFiles;
 }
 

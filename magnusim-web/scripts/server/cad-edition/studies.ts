@@ -23,13 +23,13 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
-  rmSync,
   statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { PROJECTS_ROOT } from '../../project-isolation.js';
+import { removeTreeSync } from '../../remove-tree.js';
 import { RpcError } from '../worker.ts';
 import { isStudyRecord, MAX_ENTRIES } from '../plugin-files.ts';
 import { cadEditionKinds, pluginRow, schemaVersion } from './registry.js';
@@ -98,7 +98,16 @@ export function pyJson(doc: unknown): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-function retry(fn: () => void): void {
+/** Blocks for `ms` without spinning the CPU. */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * fn, again while Windows says the file is held (a reader, the indexer, antivirus): as
+ * web_writes.atomic_write retries os.replace, 8 times, waiting 50 ms more each time.
+ */
+export function retryLocked(fn: () => void): void {
   for (let attempt = 0; ; attempt++) {
     try {
       fn();
@@ -106,26 +115,28 @@ function retry(fn: () => void): void {
     } catch (err) {
       const code = String((err as NodeJS.ErrnoException)?.code || '');
       if (!RETRY_CODES.has(code) || attempt >= 7) throw err;
-      const until = Date.now() + 50 * (attempt + 1);
-      while (Date.now() < until) {
-        /* a short wait: the file is held by a scanner or another writer */
-      }
+      pause(50 * (attempt + 1));
     }
   }
 }
 
-function atomicWriteJson(path: string, doc: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = join(dirname(path), `${JSON_TEMP_PREFIX}${randomBytes(6).toString('hex')}.json`);
+/**
+ * Write `text` to `path` whole or not at all: a temp file beside it (`prefix` + random),
+ * flushed, then renamed over it with retryLocked. A reader sees the old file or the new one.
+ * `makeDirs: false`: the folder must be there (a deleted project is never made again).
+ */
+export function atomicWriteText(path: string, text: string, { prefix, suffix = '', makeDirs = true }: { prefix: string; suffix?: string; makeDirs?: boolean }): void {
+  if (makeDirs) mkdirSync(dirname(path), { recursive: true });
+  const tmp = join(dirname(path), `${prefix}${randomBytes(6).toString('hex')}${suffix}`);
   const fd = openSync(tmp, 'wx');
   try {
-    writeSync(fd, pyJson(doc));
+    writeSync(fd, text);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
   try {
-    retry(() => renameSync(tmp, path));
+    retryLocked(() => renameSync(tmp, path));
   } catch (err) {
     try {
       unlinkSync(tmp);
@@ -134,6 +145,10 @@ function atomicWriteJson(path: string, doc: unknown): void {
     }
     throw err;
   }
+}
+
+function atomicWriteJson(path: string, doc: unknown): void {
+  atomicWriteText(path, pyJson(doc), { prefix: JSON_TEMP_PREFIX, suffix: '.json' });
 }
 
 function readJson(path: string): unknown {
@@ -286,7 +301,8 @@ class PluginData {
 
   deleteStudy(sid: string): void {
     this.study(sid);
-    rmSync(join(this.root, 'studies', sid), { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+    // Node 24's rmSync gives up at the first EPERM: remove-tree.js retries.
+    removeTreeSync(join(this.root, 'studies', sid));
   }
 
   /** (bytes in files, files and folders), as the host's quota counts them. */

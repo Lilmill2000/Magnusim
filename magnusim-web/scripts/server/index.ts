@@ -5,7 +5,7 @@ import { HttpError, assertSameOrigin, sendJson } from './http.ts';
 import { keepIdleConnectionsOpen } from './keep-alive.ts';
 import { JobManager } from './jobs.ts';
 import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
-import { getWorker, type WorkerClient } from './worker.ts';
+import { getWorker, type WorkerPort } from './worker.ts';
 import { PluginServiceHost } from './plugin-services.ts';
 import type { SdkVariant } from './plugin-sdk.ts';
 import { isFrameAssetRequest } from './workspace-files.ts';
@@ -38,7 +38,7 @@ function installProcessGuards(): void {
 export function createApiPlugin() {
   installProcessGuards();
   // Magnusim CAD has no Python: its worker answers in JavaScript (scripts/server/cad-edition).
-  const worker = isCadEdition() ? (new CadEditionWorker() as unknown as WorkerClient) : getWorker();
+  const worker: WorkerPort = isCadEdition() ? new CadEditionWorker() : getWorker();
   const services = new PluginServiceHost(worker);
   const cacheDir = join(WEB_ROOT, '.cache');
   const jobs = new JobManager({

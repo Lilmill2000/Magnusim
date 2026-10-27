@@ -32,7 +32,7 @@
  * the boot check does (kind `check`) until it releases it.
  */
 import type { RequestContext, Router } from './router.ts';
-import type { WorkerClient } from './worker.ts';
+import type { WorkerPort } from './worker.ts';
 import { writeSse } from './jobs.ts';
 import { registerChannelKind, type ChannelOpened, type ChannelSend } from './event-hub.ts';
 import type { PluginFiles } from './plugin-files.ts';
@@ -124,7 +124,7 @@ function inScope(rec: any, s: Scope): any {
   return sameProjectFolder(rec.project_id, s.projectId) ? rec : null;
 }
 
-export function registerLinkRoutes(router: Router, deps: { worker: WorkerClient; files: PluginFiles }): void {
+export function registerLinkRoutes(router: Router, deps: { worker: WorkerPort; files: PluginFiles }): void {
   configureLinkJobs({ worker: deps.worker, files: deps.files });
   registerChannelKind('link', openLinkChannel);
   // Editing a project geometry (API 1.7): its target, file and faces, and the actions' resolver.

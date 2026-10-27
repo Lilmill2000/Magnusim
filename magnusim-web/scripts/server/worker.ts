@@ -489,6 +489,17 @@ export class WorkerClient extends EventEmitter {
   }
 }
 
+/**
+ * What the server's routes use of a worker: the Python one (WorkerClient), or Magnusim CAD's,
+ * which answers in JavaScript (scripts/server/cad-edition/node-worker.ts).
+ */
+export interface WorkerPort {
+  start(): void;
+  stop(): void;
+  call(method: string, params?: unknown, timeoutMs?: number): Promise<unknown>;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
 let singleton: WorkerClient | null = null;
 
 export function getWorker(): WorkerClient {
