@@ -311,9 +311,10 @@ describe("a turn's attachments", { timeout: 30_000 }, () => {
     assert.deepEqual(folders(store).sort(), [id, keep].sort());
     const f = await s.post(`/api/assistant/conversations/${r.json.conversation}/forget`, {});
     assert.equal(f.status, 200);
-    await until(() => !folders(store).includes(id), 5000, 'the folder removed');
-    assert.equal(store.get(id), null);
-    assert.deepEqual(folders(store), [keep], 'the unbound one stays');
+    // The record goes last: once rm has settled, after the folder is off the disk (a poll can see
+    // the folder gone while the record is still kept), so wait for the record.
+    await until(() => store.get(id) === null, 5000, 'the attachment forgotten');
+    assert.deepEqual(folders(store), [keep], 'its folder removed; the unbound one stays');
   });
 });
 
