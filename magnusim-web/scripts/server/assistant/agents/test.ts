@@ -47,6 +47,7 @@ import { agentRow, agentStartRefusal, ensureAgents, rememberAgentLast, rememberA
 import { agentHost, AGENTS_BUSY_TEXT, type Transient } from './host.ts';
 import { knownAgent, policyOf } from './known.ts';
 import { AGENT_TOOLS_MS, AgentRunError, AgentSession, agentErrorOf, type FoundAgent } from './session.ts';
+import { agentNode } from './node.ts';
 
 type Answer = { status: number; body: Record<string, unknown> };
 
@@ -88,7 +89,7 @@ export function signInMethods(auth: readonly AuthMethodView[], agent: Pick<Found
   return auth.map((m) => {
     let command: string | null = null;
     if (m.type === 'terminal' && agent && agent.argv.length) {
-      const nodeScript = agent.argv[0] === process.execPath && !!agent.script;
+      const nodeScript = agent.argv[0] === (agentNode() ?? process.execPath) && !!agent.script;
       const shown = (agent.programName ?? '').replace(platform === 'win32' ? /\.(exe|cmd|bat)$/i : /$^/, '');
       command =
         terminalSignIn(m, {

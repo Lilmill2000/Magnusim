@@ -93,6 +93,7 @@ import { assistantState } from '../state.ts';
 import { splitCommand, type ModelView, type ModeView } from './acp.ts';
 import { KNOWN_AGENTS, knownAgent, policyOf, type KnownAgent, type Lockdown, type LoginSpec } from './known.ts';
 import { startAgentProcess, type AgentEnvSpec, type AgentProcess } from './process.ts';
+import { agentNode, NEEDS_NODE_CODE, NEEDS_NODE_TEXT, needsNodeText } from './node.ts';
 
 /** A discovery older than this is run again at a turn's start. */
 export const AGENT_CACHE_MS = 5 * 60_000;
@@ -409,7 +410,7 @@ async function startOf(program: string, target: string, platform: NodeJS.Platfor
   const ext = extname(target).toLowerCase();
   const script = target === program ? null : target;
   if (NODE_SCRIPT_EXT.has(ext) || (ext === '' && (await isNodeScript(target)))) {
-    return { ok: true, program, script: target, base: [process.execPath, target], ...extra };
+    return { ok: true, program, script: target, base: [agentNode() ?? process.execPath, target], ...extra };
   }
   if (platform === 'win32') {
     if (ext === '.exe') return { ok: true, program, script, base: [target], ...extra };
@@ -732,6 +733,7 @@ async function resolveKnown(k: KnownAgent, c: Ctx): Promise<AgentEntry> {
     fingerprint: agentFingerprint('known', k.id, realProgram, script, k.args, c.platform),
   };
   if (!r.ok) return { ...entry, error: { code: r.code, message: r.error } };
+  if (!agentNode()) return { ...entry, error: { code: NEEDS_NODE_CODE, message: needsNodeText() } };
   // tools_off needs its live check; a class other than 'none' only through the verified package.
   const holds = k.lockdown !== 'tools_off' || !!k.checked;
   return {
@@ -778,6 +780,7 @@ export async function resolveCustom(a: CustomAgent, c: Ctx): Promise<AgentEntry>
     fingerprint: agentFingerprint('custom', a.id, await real(found.path), script, args, c.platform),
   };
   if (!r.ok) return { ...entry, error: { code: r.code, message: r.error } };
+  if (!agentNode()) return { ...entry, error: { code: NEEDS_NODE_CODE, message: needsNodeText() } };
   return { ...entry, argv: [...r.base, ...args] };
 }
 
@@ -1337,6 +1340,7 @@ export type AgentStartPurpose = 'connect' | 'sign_in' | 'test' | 'turn';
  */
 export function agentStartRefusal(row: AgentRow, purpose: AgentStartPurpose): { code: string; error: string } | null {
   if (row.reason === 'cant_start_script') return { code: row.reason, error: row.error ?? `Magnusim can't start ${row.name} without a command shell.` };
+  if (row.reason === NEEDS_NODE_CODE) return { code: row.reason, error: row.error ?? NEEDS_NODE_TEXT };
   if (row.reason === 'bad_command') return { code: row.reason, error: `${row.name}'s command can't be used. ${row.error ?? 'Change it in Settings → Assistant.'}` };
   if (!row.found) {
     return { code: 'agent_missing', error: row.kind === 'custom' && row.error ? row.error : `${row.name} isn't installed on this PC. Settings → Assistant shows how to install it.` };

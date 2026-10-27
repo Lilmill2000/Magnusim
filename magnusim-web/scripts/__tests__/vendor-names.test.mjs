@@ -53,6 +53,8 @@ const ALLOWED_CONTENT = [
   'magnusim-web/src/assistant/**',
   'magnusim-web/src/panels/prefs/AssistantStep*',
   'magnusim-web/e2e/assistant-*.spec.js',
+  // Magnusim CAD's desktop app: its coding-agent test drives the known agents' rows.
+  'magnusim-web/e2e-desktop/assistant-*.spec.ts',
   'magnusim-web/e2e/support/fake-llm.mjs',
   'magnusim-web/e2e/support/assistant.js',
   'magnusim-web/package.json',

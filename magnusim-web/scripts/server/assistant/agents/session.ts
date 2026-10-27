@@ -97,6 +97,7 @@ import { policyOf, type KnownAgent, type Lockdown } from './known.ts';
 import { AgentStartError, startAgentProcess, WORKDIR_PREFIX, type AgentEnvSpec, type AgentProcess } from './process.ts';
 import { RpcError, RpcExited, RpcPeer, RpcTimeout, type ExitInfo, type RpcId } from './rpc.ts';
 import type { SignedIn } from './discover.ts';
+import { agentNode } from './node.ts';
 
 /**
  * How long after `initialize` answered a connect waits for the agent's word on its login, when
@@ -406,7 +407,7 @@ export class AgentSession {
       }
       const params = sessionNewParams(
         (this.proc as AgentProcess).cwd,
-        { command: process.execPath, script: BRIDGE_SCRIPT, binding: this.binding.id, info: mcpInfoPath() },
+        { command: agentNode() ?? process.execPath, script: BRIDGE_SCRIPT, binding: this.binding.id, info: mcpInfoPath() },
         { sessionMeta: policy.sessionMeta },
       );
       const s = await this.request(ACP.sessionNew, params, signal);

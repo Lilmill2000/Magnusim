@@ -56,6 +56,7 @@ import type {
   SetSessionModeRequest,
 } from '@agentclientprotocol/sdk';
 import { cleanText } from '../sanitize.ts';
+import { agentNode } from './node.ts';
 
 /** The protocol version Magnusim speaks. */
 export const PROTOCOL_VERSION = 1;
@@ -115,7 +116,7 @@ export function initializeParams(version: string): InitializeRequest {
 
 /** How an agent session reaches Magnusim's MCP server: the bridge, started by the agent. */
 export interface McpBridge {
-  /** Magnusim's own Node (process.execPath). */
+  /** The Node agents run on (agentNode(): Magnusim's own, or Node.js from PATH in the desktop app). */
   command: string;
   /** The absolute path of scripts/assistant-mcp.mjs. */
   script: string;
@@ -860,7 +861,7 @@ export interface SignInContext {
   script: string | null;
   /** The program's name as found on PATH, as shown (e.g. the npm program name). */
   programName: string;
-  /** Magnusim's Node (process.execPath by default). */
+  /** The Node agents run on (agentNode() by default). */
   nodePath?: string;
   platform?: NodeJS.Platform;
 }
@@ -900,7 +901,7 @@ function sameBareName(command: string, programName: string, platform: NodeJS.Pla
 export function terminalSignIn(m: AuthMethodView, ctx: SignInContext): SignInCommand | null {
   if (m.type !== 'terminal' || !ctx.allowed) return null;
   const platform = ctx.platform ?? process.platform;
-  const node = ctx.nodePath ?? process.execPath;
+  const node = ctx.nodePath ?? agentNode() ?? process.execPath;
   const name = ctx.programName;
   if (!name || name.length > 260 || UNSAFE_PROGRAM.test(name)) return null;
   let args: string[];

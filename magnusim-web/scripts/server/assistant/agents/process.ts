@@ -68,6 +68,7 @@ import { redact } from '../redact.ts';
 import { cleanText } from '../sanitize.ts';
 import { keeperLooksBlocked, noteKeeperOutcome, takeKeeper, warmKeeper, type JobKeeper } from './job-win.ts';
 import type { ExitInfo } from './rpc.ts';
+import { agentNode, NEEDS_NODE_CODE, needsNodeText } from './node.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** The trampoline (Windows). */
@@ -892,7 +893,10 @@ export async function startAgentProcess(o: StartAgentOptions): Promise<AgentProc
       halt();
       if (keeper) {
         const before = Date.now();
-        child = spawn(process.execPath, [LAUNCH_SCRIPT, ...argv], { ...base, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+        // The launcher is a Node script: Magnusim's Node, or in the desktop app Node.js from PATH.
+        const node = agentNode();
+        if (!node) throw new AgentStartError(NEEDS_NODE_CODE, needsNodeText());
+        child = spawn(node, [LAUNCH_SCRIPT, ...argv], { ...base, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
         const after = Date.now();
         exit = watchExit(child);
         await spawned(child);
