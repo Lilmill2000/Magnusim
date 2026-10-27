@@ -131,8 +131,10 @@ export function relationEdit(kind: SketchRelationKind, sel: readonly string[], f
  * A relation's solution that shrinks a curve to (next to) nothing, or puts two of its curves on top
  * of each other, is refused (curvesCollapsed, curvesMerged).
  */
-export function relationRefusal(sel: readonly string[]): (before: SketchFeature, after: SketchFeature) => string | null {
-  return (before, after) => curvesCollapsed(before, after) ?? curvesMerged(before, after, sel);
+export function relationRefusal(sel: readonly string[], kind?: SketchRelationKind): (before: SketchFeature, after: SketchFeature) => string | null {
+  // Tangent of curves with one centre is degenerate: any coradial result is refused (the arc on the
+  // circle). Equal and Concentric may leave an arc on a circle's path.
+  return (before, after) => curvesCollapsed(before, after) ?? curvesMerged(before, after, sel, { coradial: kind === 'tangent' });
 }
 
 /**
@@ -148,7 +150,7 @@ export function fullyDefined(mode: Pick<SketchMode, 'view'>): (point: string) =>
 export function applyRelation(mode: Pick<SketchMode, 'apply' | 'view'>, kind: SketchRelationKind, sel: readonly string[]): Promise<ApplyResult> {
   // Review (relations lane): the sketch's analysis is asked first, as it alone sees a relation the
   // others imply (Parallel of two horizontal lines): added, it only over-defined the sketch.
-  return mode.apply(RELATION_LABELS[kind], relationEdit(kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel), analyzeFirst: true });
+  return mode.apply(RELATION_LABELS[kind], relationEdit(kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel, kind), analyzeFirst: true });
 }
 
 export { IMPLIED };

@@ -93,7 +93,7 @@ export function curvesCollapsed(before: F, after: F): string | null {
  * (Tangent on concentric circles makes one circle of two) is no relation the person wants: the
  * reason it is refused, or null. Curves already on top of each other before are left alone.
  */
-export function curvesMerged(before: F, after: F, ids: readonly string[]): string | null {
+export function curvesMerged(before: F, after: F, ids: readonly string[], opts: { coradial?: boolean } = {}): string | null {
   const tol = RELATION_TOL * extentOf(before);
   const near = (a: Vec2 | null, b: Vec2 | null) => !!a && !!b && Math.hypot(a[0] - b[0], a[1] - b[1]) <= tol;
   const onTop = (f: F, x: string, y: string): boolean => {
@@ -110,7 +110,10 @@ export function curvesMerged(before: F, after: F, ids: readonly string[]): strin
     if (!(!!ca && !!cb && near(pointAt(f, ca), pointAt(f, cb)) && Math.abs(ra - rb) <= tol)) return false;
     // Integration review: an arc on a circle's path, or two arcs of one circle side by side, is
     // coradial (an arc on a pitch circle), not one curve on another: only two full circles, or
-    // two arcs whose spans overlap, are.
+    // two arcs whose spans overlap, are. But a relation that can only hold by making its curves
+    // coradial (`coradial`: Tangent of curves with one centre, which the solver meets with equal
+    // radii, so the arc lies on the circle and "touches" it everywhere) is refused for any.
+    if (opts.coradial) return true;
     if (a.kind === 'circle' && b.kind === 'circle') return true;
     if (a.kind !== 'arc' || b.kind !== 'arc') return false;
     const [ga, gb] = [arcGeom(f, a), arcGeom(f, b)];

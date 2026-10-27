@@ -14,6 +14,7 @@
 //  Integration review: Parallel, Perpendicular and Collinear never move a Fixed or a projected line
 //  (the drawn line turns about their shared end), Equal of an arc and a circle with one centre
 //  applies, and the palette moves clear of the badge when Construction's key makes it wider.
+//  Verify round: Tangent of an arc and a circle with one centre is never offered and refused.
 // With RELATIONS_SHOTS=<folder>: screenshots of the palette and the badge for a person to look at.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
@@ -535,5 +536,53 @@ test('cad:sketch-relations-palette-projected Perpendicular with a line drawn fro
   expect(await note(page)).toBeNull();
   d = await drawn(page);
   proj!.p!.forEach((q, i) => expect(Math.hypot(d.points[q][0] - ends[i][0], d.points[q][1] - ends[i][1]), 'the projected line\'s ends').toBeLessThan(1e-6));
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:sketch-relations-palette-coradial an arc drawn from a circle\'s centre: Tangent is never offered and the toolbar refuses it (it would put the arc on the circle); Equal applies', async ({ page, request }) => {
+  const { seen, frame } = await startSketch(page, request);
+  await page.keyboard.press('c');
+  await clickAt(page, [60, -40]);
+  await clickAt(page, [72, -40]);
+  await page.keyboard.press('Escape');
+  await sketchIdle(page);
+  // A Centerpoint arc from the circle's centre (it snaps there: one centre point), radius 5, a quarter turn.
+  await runCommand(frame, 'sketch.arc-center');
+  await clickAt(page, [60, -40]);
+  await clickAt(page, [65, -40]);
+  for (let k = 1; k <= 8; k++) {
+    const t = (k / 8) * (Math.PI / 2);
+    const [x, y] = await at(page, [60 + 5 * Math.cos(t), -40 + 5 * Math.sin(t), 0]);
+    await page.mouse.move(x, y);
+  }
+  await clickAt(page, [60, -35]);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await sketchIdle(page);
+  let d = await drawn(page);
+  const circle = d.entities.find((e) => e.kind === 'circle')!;
+  const arc = d.entities.find((e) => e.kind === 'arc')!;
+  const centreOf = (e: object) => (e as { c: string }).c;
+  expect(centreOf(arc), 'the arc shares the circle\'s centre').toBe(centreOf(circle));
+  expect(d.constraints.filter((c) => c.kind === 'concentric')).toEqual([]);
+  await clickAt(page, [72, -40]);
+  const q = Math.PI / 4;
+  await clickAt(page, [60 + 5 * Math.cos(q * 0.6), -40 + 5 * Math.sin(q * 0.6)], true);
+  await expect(palette(frame)).toBeVisible();
+  await expect.poll(() => kindsShown(frame)).toContain('equal');
+  expect(await kindsShown(frame)).not.toContain('tangent');
+  await shot(page, 'palette-coradial-no-tangent');
+  // The toolbar's Tangent: refused, nothing changed.
+  await runCommand(frame, 'sketch.tangent');
+  await sketchIdle(page);
+  expect(await note(page)).toMatch(/^Not applied: Tangent would put (Circle 1 on Arc 1|Arc 1 on Circle 1)$/);
+  d = await drawn(page);
+  expect(d.constraints.filter((c) => c.kind === 'tangent')).toEqual([]);
+  // Equal: the arc goes onto the circle's path (allowed).
+  await relation(frame, 'equal').click();
+  await sketchIdle(page);
+  expect(await note(page)).toBeNull();
+  d = await drawn(page);
+  expect(d.constraints.filter((c) => c.kind === 'equal')).toHaveLength(1);
   expect(seen.errors).toEqual([]);
 });

@@ -11,6 +11,7 @@ import { CONSTRUCTION_BADGE_TEXT, createConstructionBadge, TURN_OFF_CONSTRUCTION
 import { curvesMerged, planConstraint, turnedForAngle } from '../../src/sketch/constraints';
 import { createRelationsPalette, hasRelation, relationOffers, type RelationsPalette } from '../../src/sketch/relations-palette';
 import type { SketchConstraint, SketchEntity, SketchFeature, Vec2 } from '../../src/types/doc';
+import { radiusOf } from '../../src/sketch/model';
 import { rectangle, type Geo } from './fixtures';
 import { sketchHarness, type Harness } from './harness';
 
@@ -420,7 +421,7 @@ describe('the palette in sketch mode (the real solver)', () => {
   });
 
   // Integration review 8: an arc on a circle's path is coradial, not one curve on another.
-  it('Equal of an arc and a circle with one centre applies (an arc on the circle), and the palette offers it', async () => {
+  it('Equal of an arc and a circle with one centre applies (an arc on the circle), and the palette offers it; Tangent of them is refused and never offered', async () => {
     h = await sketchHarness({
       points: { k: [0, 0], s: [10, 0], t: [0, 10] },
       entities: [
@@ -429,8 +430,18 @@ describe('the palette in sketch mode (the real solver)', () => {
       ],
     });
     palette = createRelationsPalette(h.mode);
-    expect(await shows(['c1', 'a1'])).toContain('equal');
+    const offered = await shows(['c1', 'a1']);
+    expect(offered).toContain('equal');
+    // Verify round: Tangent of curves with one centre is degenerate (the solver makes the radii
+    // equal: the arc on the circle, "tangent" everywhere): never offered, and the toolbar refuses it.
+    expect(offered).not.toContain('tangent');
     h.mode.select([{ what: 'entity', id: 'c1' }, { what: 'entity', id: 'a1' }], false);
+    expect(await h.services.commands.run('sketch.tangent')).toBe(true);
+    await h.idle();
+    expect(h.mode.view.get().note).toBe('Not applied: Tangent would put Circle 1 on Arc 1');
+    expect(h.sketch().constraints).toEqual([]);
+    expect(radiusOf(h.sketch(), 'c1')).toBeCloseTo(12, 9);
+    h.mode.note(null);
     expect(await h.services.commands.run('sketch.equal')).toBe(true);
     await h.idle();
     expect(h.mode.view.get().note).toBeNull();
@@ -446,6 +457,10 @@ describe('the palette in sketch mode (the real solver)', () => {
     });
     const before = two([-10, 0], [0, -10]);
     expect(curvesMerged(before, before, ['a1', 'a2'])).toBeNull();
+    // Tangent's result (coradial) is refused even for arcs side by side.
+    const apart = { ...before, points: { ...before.points, u: [-20, 0] as Vec2, v: [0, -20] as Vec2 } };
+    expect(curvesMerged(apart, before, ['a1', 'a2'], { coradial: true })).toMatch(/^would put Arc 1 on Arc 2/);
+    expect(curvesMerged(apart, before, ['a1', 'a2'])).toBeNull();
     const over = two([7.0710678, 7.0710678], [-10, 0]);
     expect(curvesMerged({ ...over, points: { ...over.points, u: [16, 12], v: [-20, 0] } }, over, ['a1', 'a2'])).toMatch(/^would put Arc/);
   });

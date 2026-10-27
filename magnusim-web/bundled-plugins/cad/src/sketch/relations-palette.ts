@@ -171,7 +171,7 @@ export function createRelationsPalette(mode: SketchMode, opts: { forwardWheel?(e
         out.push(o);
         continue;
       }
-      const r = await mode.tryApply(relationEdit(o.kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel) });
+      const r = await mode.tryApply(relationEdit(o.kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel, o.kind) });
       if (r.ok) out.push(o);
       else if (r.implied) out.push({ ...o, implied: true });
     }
