@@ -35,7 +35,13 @@ function cadEditionRegistry(dump) {
     if (p.status !== 'enabled') throw new Error(`${p.key} did not load: ${p.error || p.status}`);
   }
   if (plugins.length !== PLUGINS.size) throw new Error('the dump has no CAD plugin row');
-  return { describe, plugins };
+  const kinds = (dump.kinds || [])
+    .filter((k) => PLUGINS.has(k.plugin))
+    .map((k) => ({ ...k, links_geometry: false, geometry_action: null }));
+  const schemaVersions = Object.fromEntries(
+    Object.entries(dump.schema_versions || {}).filter(([key]) => PLUGINS.has(key)),
+  );
+  return { describe, plugins, kinds, schema_versions: schemaVersions };
 }
 
 function main() {

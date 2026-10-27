@@ -3,7 +3,8 @@
 
 CLI: tools/cad_edition_dump.py
 
-Prints JSON: {"describe": registry.describe, "plugins": plugins.list}, made by the
+Prints JSON: {"describe": registry.describe, "plugins": plugins.list, "kinds":
+plugin_studies.list's study kinds, "schema_versions": {plugin: {kind: n}}}, made by the
 real worker methods with a bundled folder that holds only bundled-plugins/cad's
 manifest.toml, plugin.py and workspace entry, no user plugins and an empty local.json. The CAD
 edition has no Python: scripts/gen-cad-edition.mjs turns this into the registry
@@ -42,12 +43,27 @@ def main() -> int:
         os.environ["MAGNUSIM_BUNDLED_DIR"] = str(base / "bundled")
         os.environ["MAGNUSIM_PLUGINS_DIR"] = str(base / "user")
         os.environ["MAGNUSIM_LOCAL_JSON"] = str(local)
+        # An empty project: plugin_studies.list answers the study kinds a project can make.
+        projects = base / "projects"
+        (projects / "p-empty").mkdir(parents=True)
+        (projects / "p-empty" / "project.json").write_text('{"id": "p-empty"}', encoding="utf-8")
+        os.environ["MAGNUSIM_PROJECTS_ROOT"] = str(projects)
 
+        from cfddesk.registry import load_all
         from cfddesk.registry.discovery import reset_for_tests
         from cfddesk.worker import methods
 
         reset_for_tests()
-        doc = {"describe": methods.registry_describe(), "plugins": methods.plugins_list()["plugins"]}
+        hub = load_all(force=True)
+        doc = {
+            "describe": methods.registry_describe(),
+            "plugins": methods.plugins_list()["plugins"],
+            "kinds": methods.plugin_studies_list("p-empty")["kinds"],
+            # What plugins.list leaves out: each study kind's schema version.
+            "schema_versions": {
+                key: {k.key: int(k.schema_version) for k in m.study_kinds} for key, m in hub.manifests.items()
+            },
+        }
     sys.stdout.write(json.dumps(doc, ensure_ascii=False))
     return 0
 

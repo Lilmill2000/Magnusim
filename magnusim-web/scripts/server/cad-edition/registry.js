@@ -12,7 +12,14 @@ import { WEB_ROOT } from '../../python-env.js';
 
 const PATH = join(WEB_ROOT, 'scripts', 'generated', 'cad-edition-registry.json');
 
-/** @type {{ describe: Record<string, unknown>, plugins: Array<Record<string, any>> } | null} */
+/**
+ * @type {{
+ *   describe: Record<string, unknown>,
+ *   plugins: Array<Record<string, any>>,
+ *   kinds: Array<Record<string, any>>,
+ *   schema_versions: Record<string, Record<string, number>>,
+ * } | null}
+ */
 let cached = null;
 
 function load() {
@@ -33,4 +40,15 @@ export function pluginsList() {
 export function pluginRow(key) {
   const row = load().plugins.find((p) => p.key === String(key || ''));
   return row ? structuredClone(row) : null;
+}
+
+/** The study kinds a project can make (plugin_studies.list's kinds). */
+export function cadEditionKinds() {
+  return structuredClone(load().kinds);
+}
+
+/** A study kind's schema version from its plugin's manifest, or null. */
+export function schemaVersion(plugin, kind) {
+  const n = load().schema_versions?.[String(plugin)]?.[String(kind)];
+  return typeof n === 'number' ? n : null;
 }

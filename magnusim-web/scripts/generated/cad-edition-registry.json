@@ -86,5 +86,39 @@
       "geometry_actions": [],
       "samples": []
     }
-  ]
+  ],
+  "kinds": [
+    {
+      "plugin": "cad",
+      "plugin_name": "Magnusim CAD",
+      "key": "part",
+      "title": "Part",
+      "icon": "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8",
+      "workspace": "part",
+      "links_geometry": false,
+      "start_action": {
+        "study_kind": "part",
+        "kind_title": "Part",
+        "workspace": "part",
+        "workspace_title": "Part",
+        "label": "Design a part",
+        "home_label": "New design",
+        "header_label": "CAD",
+        "hint": "",
+        "icon": "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8",
+        "places": [
+          "empty_project",
+          "header",
+          "new_project",
+          "home"
+        ]
+      },
+      "geometry_action": null
+    }
+  ],
+  "schema_versions": {
+    "cad": {
+      "part": 1
+    }
+  }
 }
