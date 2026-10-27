@@ -323,6 +323,9 @@ describe('the smoke and serial tags', () => {
       'cad:keybinds-live',
       // Set keybind on the toolbar's right-click: moves a command to More (the user's layout pref).
       'cad:keybinds-toolbar-menu',
+      // A focused control keeps its key (the toolbar layout pref); Set keybind where the person meets each key action.
+      'cad:keybinds-control-keeps-key',
+      'cad:keybinds-person-paths',
     ].sort());
   });
 });

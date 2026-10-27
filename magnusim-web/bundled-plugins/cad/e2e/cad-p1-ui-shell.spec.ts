@@ -170,7 +170,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the modules'
   // actions for a face, then the body's and the feature's, the feature's Delete last of all (P4a
   // review: the actions first, Delete last; it sat between them).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 1']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 1', 'Set keybind for Delete…', 'Set keybind for Rename…']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
@@ -411,7 +411,7 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
 
   // Suppress from the context menu: the row greys and strikes through; the cut is gone.
   await cut.locator('> .tree-row').click({ button: 'right' });
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 2']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 2', 'Set keybind for Delete…', 'Set keybind for Rename…']);
   await expect(menu.locator('[data-menu-item="rollback"]')).toHaveAttribute('aria-disabled', 'true');
   await menu.locator('[data-menu-item="suppress"]').click();
   await expect(menu).toHaveCount(0);

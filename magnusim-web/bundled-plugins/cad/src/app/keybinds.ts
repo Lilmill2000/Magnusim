@@ -57,12 +57,23 @@ export type KeybindResult =
   | { ok: true; id: string; keys: readonly string[]; was: readonly string[]; took?: NamedCommand[] }
   /** The combo is another command's in a context that meets this one's: offer Replace or Cancel (Replace takes it from every one of `conflicts`). */
   | { ok: false; reason: 'conflict'; id: string; combo: string; with: string; label: string; conflicts: NamedCommand[] }
-  /** Unknown command, a combo it cannot have (reserved, the app's own, no key). */
-  | { ok: false; reason: 'unknown' | 'refused'; id: string; combo?: string; message: string };
+  /**
+   * Unknown command, a combo it cannot have (reserved, the app's own, no key), or the person's saved
+   * keybinds not read yet or unreadable (`unread`: a change worked out from the defaults would name
+   * the wrong takers and write over saved keys).
+   */
+  | { ok: false; reason: 'unknown' | 'refused' | 'unread'; id: string; combo?: string; message: string };
 
 export interface Keybinds {
-  /** Resolves once the stored overrides were read (or could not be: then a change is stored only after they are read). */
+  /** Resolves once the first read of the stored overrides is over (read, or could not be). */
   readonly ready: Promise<void>;
+  /**
+   * The saved keybinds read: true (or there are none to read: no prefs), else why not. A read that
+   * failed is tried again; until one succeeds no change is made (known() says why).
+   */
+  load(): Promise<true | string>;
+  /** true once the saved keybinds are read (or there are none to read), else why changes wait. */
+  known(): true | string;
   /** The registry. */
   entries(): readonly KeymapEntry[];
   entry(id: string): KeymapEntry | null;
@@ -92,8 +103,8 @@ export interface Keybinds {
   resetToDefault(id: string, opts?: { replace?: boolean }): KeybindResult;
   /** No key at all. */
   clear(id: string): KeybindResult;
-  /** Every command back to its defaults. */
-  resetAll(): void;
+  /** Every command back to its defaults (true), or why not (the saved keybinds are not read). */
+  resetAll(): true | string;
   /** The overrides as stored (id -> keys). */
   overrides(): Readonly<Record<string, readonly string[]>>;
   /** Pairs that conflict now (overrides written elsewhere may make some); both keep their key. */
@@ -150,6 +161,9 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
   let resetAllPending = false;
   // How many stores went through: a read that began before one is older than what it wrote.
   let storeCount = 0;
+  // Whether the saved keybinds were read: a change is worked out from them, never from the defaults.
+  let readState: 'reading' | 'read' | 'unreadable' | 'none' = o.prefs ? 'reading' : 'none';
+  let readError = '';
   let layout: LayoutMap | null = null;
   let disposed = false;
   let writing: Promise<true | string> = Promise.resolve(true);
@@ -175,8 +189,17 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
   // A stored value (the first read, or a change made in Settings or another tab), under this page's changes not stored yet.
   const take = (v: unknown) => {
     stored = parseOverrides(v);
+    const was = readState;
+    readState = o.prefs ? 'read' : 'none';
     show(merged(stored));
+    if (was !== readState) tell();
   };
+  const known = (): true | string =>
+    readState === 'read' || readState === 'none'
+      ? true
+      : readState === 'reading'
+        ? 'your keybinds are still being read: try again in a moment (nothing was changed)'
+        : `your keybinds could not be read, so they cannot be changed now (nothing was changed)${readError ? `: ${readError}` : ''}`;
   /**
    * Stores this page's changes: the stored value is read again first and only these changes go on
    * top of it, so overrides made elsewhere (or never read here) are never written over. When it
@@ -229,6 +252,13 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
   const assign = (id: string, combos: readonly string[], replace: boolean): KeybindResult => {
     const entry = keymapEntry(id);
     if (!entry) return { ok: false, reason: 'unknown', id, message: `No command or key action is called ${id}` };
+    // Worked out from the saved keybinds only (review: from the defaults a Replace took a saved key
+    // from a command nobody named and left a clash). An unreadable read is tried again.
+    const k = known();
+    if (k !== true) {
+      if (readState === 'unreadable') void load();
+      return { ok: false, reason: 'unread', id, message: k };
+    }
     const was = keysOf(id);
     const keys: string[] = [];
     for (const raw of combos) {
@@ -250,21 +280,38 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     return { ok: true, id, keys: keysOf(id), was, ...(takers.length ? { took: takers.map(named) } : {}) };
   };
 
-  let readyResolve: () => void = () => {};
-  const ready = new Promise<void>((r) => (readyResolve = r));
-  if (o.prefs) {
-    const prefs = o.prefs;
-    // The person's keybinds, read at the start (a change made here meanwhile stays on top of them),
-    // then heard from Settings and other tabs.
+  let reading: Promise<true | string> = Promise.resolve(true);
+  /** Reads the saved keybinds (again, after a failure). */
+  const read = (prefs: PrefsApi): Promise<true | string> => {
+    readState = 'reading';
     const at = storeCount;
-    Promise.resolve()
+    return Promise.resolve()
       .then(() => prefs.get<unknown>(KEYBINDS_PREF))
       .then((v) => {
         // A store that went through meanwhile read the value again and wrote a newer one.
         if (!disposed && storeCount === at) take(v);
+        else readState = 'read';
+        return true as const;
       })
-      .catch((err) => console.warn('[cad] ws.prefs keybinds not read; the default keys apply (a change is stored only once they are read)', err))
-      .finally(readyResolve);
+      .catch((err) => {
+        console.warn('[cad] ws.prefs keybinds not read; the default keys apply and no change is made until they are read', err);
+        readState = 'unreadable';
+        readError = err instanceof Error && err.message ? err.message : String(err);
+        tell();
+        return known() as string;
+      });
+  };
+  const load = (): Promise<true | string> => {
+    if (!o.prefs || readState === 'read' || readState === 'none') return Promise.resolve(true);
+    if (readState === 'unreadable') reading = read(o.prefs);
+    return reading;
+  };
+  let ready: Promise<void> = Promise.resolve();
+  if (o.prefs) {
+    const prefs = o.prefs;
+    // The person's keybinds, read at the start, then heard from Settings and other tabs.
+    reading = read(prefs);
+    ready = reading.then(() => undefined);
     try {
       offs.push(
         prefs.onChange((key, v) => {
@@ -274,7 +321,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     } catch {
       /* no change events: the keybinds read at the start apply */
     }
-  } else readyResolve();
+  }
   if (o.layout !== false)
     void readLayout().then((m) => {
       if (m && !disposed) {
@@ -290,6 +337,8 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
   };
   return {
     ready,
+    load,
+    known,
     entries: () => KEYMAP,
     entry: keymapEntry,
     current: keysOf,
@@ -312,12 +361,18 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     resetToDefault: (id, opts) => assign(id, defaultKeys(id), opts?.replace === true),
     clear: (id) => assign(id, [], false),
     resetAll() {
-      if (!Object.keys(over).length) return;
+      const k = known();
+      if (k !== true) {
+        if (readState === 'unreadable') void load();
+        return k;
+      }
+      if (!Object.keys(over).length) return true;
       dirty.clear();
       resetAllPending = true;
       over = {};
       store();
       tell();
+      return true;
     },
     overrides: () => over,
     conflicts: () => conflictsIn(keysOf),

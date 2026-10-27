@@ -90,7 +90,7 @@ export const HINTS: Readonly<Record<Reason | SubReason, string>> = Object.freeze
   in_use: 'Change or delete what uses it first: detail lists them.',
   not_own_step: 'The person changed the Part after your step: leave it, or ask the person.',
   nothing_to_undo: 'None of your steps in this request is left to undo.',
-  not_asked: 'Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it (right-click a toolbar command, Set keybind).',
+  not_asked: "Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves (keybind_get's set_in says where, per command).",
   key_taken: 'Another command has that key (detail.with): ask the person, then call again with items ["replace"] to take it, or pick another key.',
   feature_failed: 'Read detail.message and detail.sub, change the inputs and call again.',
   broke_downstream: 'Nothing changed: pick a value that keeps the features in detail.broke working.',

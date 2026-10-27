@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent a
 import { createRoot, type Root } from 'react-dom/client';
 import { keybindsFor, type KeybindResult, type Keybinds } from '../../app/keybinds';
 import { cycleDialogFocus } from '../../lib/modal';
+import { uiFor } from '../controller';
 import type { AppServices } from '../../types/app';
 import { buttonClass } from '../kit/Button';
 import type { MenuItem } from '../kit/ContextMenu';
@@ -88,7 +89,18 @@ export function SetKeybindDialog({ keybinds: k, commandId, onClose }: SetKeybind
       }
     } else if (!d.open) d.setAttribute('open', '');
     captureRef.current?.focus();
-  }, []);
+    // The saved keybinds first: a key is never worked out from the defaults (an unreadable read is tried again).
+    let live = true;
+    if (k.known() !== true) {
+      setStatus({ kind: 'refused', words: 'Reading your keybinds…' });
+      void k.load().then((r) => {
+        if (live) setStatus(r === true ? { kind: 'idle' } : { kind: 'refused', words: r[0].toUpperCase() + r.slice(1) });
+      });
+    }
+    return () => {
+      live = false;
+    };
+  }, [k]);
 
   const apply = (r: KeybindResult, reset = false) => {
     if (r.ok) {
@@ -99,7 +111,7 @@ export function SetKeybindDialog({ keybinds: k, commandId, onClose }: SetKeybind
         if (saved !== true) setStatus((s) => (s.kind === 'done' && s.words === words ? { kind: 'refused', words: `${words}. Not saved: ${saved}` } : s));
       });
     } else if (r.reason === 'conflict') setStatus({ kind: 'conflict', combo: r.combo, reset, words: resultWords(k, r) });
-    else setStatus({ kind: 'refused', words: r.message });
+    else setStatus({ kind: 'refused', words: r.reason === 'unread' ? r.message[0].toUpperCase() + r.message.slice(1) : r.message });
   };
 
   const onDialogKey = (e: ReactKeyboardEvent<HTMLDialogElement>) => {
@@ -222,17 +234,30 @@ export function openSetKeybind(services: AppServices, commandId: string, doc: Do
   return close;
 }
 
-/** The menu item that opens Set keybind for a command: its label, the command's key now, a hint. */
-export function keybindMenuItem(services: AppServices, commandId: string): MenuItem {
+/**
+ * The menu item that opens Set keybind for a command: its label, the command's key now, a hint.
+ * `label` names the command when the menu is another's ("Set keybind for Delete…" in a tree row's).
+ */
+export function keybindMenuItem(services: AppServices, commandId: string, label?: string): MenuItem {
   const k = keybindsFor(services);
   const now = k.current(commandId);
   return {
-    id: 'set-keybind',
-    label: SET_KEYBIND_LABEL,
+    id: label ? `set-keybind-${commandId}` : 'set-keybind',
+    label: label ?? SET_KEYBIND_LABEL,
     hint: now.length ? `Now ${keysWords(k, commandId)}: press new keys, Reset to default or Clear` : 'No key now: press the keys you want',
     disabled: k.entry(commandId) ? null : 'This command has no keybind',
     run: () => void openSetKeybind(services, commandId),
   };
+}
+
+/**
+ * A right-click on an arrow that collapses or opens the design tree or the Sketch panel: Set keybind
+ * for that toggle (ui.toggle-rail, Ctrl+\ by default), whose key has no button of its own.
+ */
+export function railKeybindMenu(services: AppServices, e: { preventDefault(): void; stopPropagation(): void; clientX: number; clientY: number }): void {
+  e.preventDefault();
+  e.stopPropagation();
+  uiFor(services).showMenu(e.clientX, e.clientY, [keybindMenuItem(services, 'ui.toggle-rail', 'Set keybind…')], 'Collapse or open');
 }
 
 /** A command's key as a tooltip shows it, kept up to date (undefined: none). */

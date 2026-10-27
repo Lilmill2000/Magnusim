@@ -9,7 +9,7 @@ import { useStateStore } from '../../lib/store';
 import { Icon, ICONS } from '../Icon';
 import { useTip } from '../kit';
 import { RAIL_COMMAND, railsFor, useRailFocus } from '../left-rails';
-import { useKeyLabel } from '../keybinds';
+import { railKeybindMenu, useKeyLabel } from '../keybinds';
 
 /** A chevron pointing left (collapse sideways) and right (expand), 24 viewBox outlines. */
 export const CHEVRON_LEFT = 'M14.5 6l-6 6 6 6';
@@ -31,7 +31,7 @@ export function TreeRail({ onOpen, sketching }: { onOpen(): void; sketching: boo
     ...(sketching || !key ? {} : { shortcut: key }),
   });
   return (
-    <button type="button" className="cad-rail is-tree" data-cad-rail="tree" aria-label={names.length ? `${label} (${names.length} failed)` : label} aria-expanded="false" ref={ref} onClick={() => {
+    <button type="button" className="cad-rail is-tree" data-cad-rail="tree" aria-label={names.length ? `${label} (${names.length} failed)` : label} aria-expanded="false" ref={ref} onContextMenu={(e) => railKeybindMenu(services, e)} onClick={() => {
         rails.focusAfter('tree-collapse');
         onOpen();
       }} {...tip}>

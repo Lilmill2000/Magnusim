@@ -63,6 +63,10 @@ export function createKeyboard(doc: Document): KeyboardManager {
       }
       return;
     }
+    // A control that handled the key keeps it (review: Delete on a focused width line of the
+    // ribbon reset the width and deleted the selected feature too; Home in an open menu ran a
+    // command bound to Home).
+    if (e.defaultPrevented) return;
     const combos = combosOf(e);
     const combo = combos[0];
     const list = bindings.filter((b) => combos.some((c) => matches(b, c)));

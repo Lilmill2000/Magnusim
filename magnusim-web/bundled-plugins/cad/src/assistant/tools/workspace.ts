@@ -40,6 +40,7 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { keybindsFor, whereName, type Keybinds } from '../../app/keybinds';
+import { keybindPlace } from '../../ui/keybinds/places';
 import { comboProblem, parseCombo, type KeymapEntry } from '../../app/keymap';
 import { modeFor } from '../../sketch/mode';
 import { constructShown } from '../../features/refgeom/scene';
@@ -811,6 +812,8 @@ function keybindRow(k: Keybinds, e: KeymapEntry) {
     default: own,
     ...(own ? {} : { defaults: keysText(k, e.keys) }),
     ...(v ? { via: v } : {}),
+    // Where the person sets it themselves (src/ui/keybinds/places.ts).
+    set_in: keybindPlace(e.id)?.words ?? '',
   };
 }
 
@@ -823,20 +826,30 @@ function planChange(k: Keybinds, e: KeymapEntry, keys: readonly string[]) {
 async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const { services } = ctx;
   const k = keybindsFor(services);
-  await k.ready;
+  // The person's saved keybinds, never the defaults in their place (an unreadable read is tried again).
+  const loaded = await k.load();
   if (i.action === 'keybind_get') {
+    const unknown = loaded === true ? '' : `Not the person's keys: ${loaded}; these are the defaults. `;
+    const known = loaded === true ? {} : { known: false, why: loaded };
     if (!i.target) {
       const rows = k.entries().map((e) => keybindRow(k, e));
       const set = rows.filter((r) => r.keys.length).length;
-      return done(`${rows.length} commands, ${set} with keys (${rows.filter((r) => !r.default).length} changed by the person)`, { keybinds: rows });
+      return done(`${unknown}${rows.length} commands, ${set} with keys (${rows.filter((r) => !r.default).length} changed by the person)`, { keybinds: rows, ...known });
     }
     const e = keybindEntry(k, i.target);
     const row = keybindRow(k, e);
-    return done(`${nameOf(k, e)}: ${row.shown}${row.default ? '' : ` (default ${row.defaults})`}`, { keybind: row });
+    return done(`${unknown}${nameOf(k, e)}: ${row.shown}${row.default ? '' : ` (default ${row.defaults})`}`, { keybind: row, ...known });
   }
-  // A change: only when the person explicitly asked in this request, and they confirm it in the app.
-  if (!i.asked) throw new ToolError('not_asked', 'Keybinds change only when the person explicitly asks for that change; pass person_asked true only then.', { detail: { field: 'person_asked' } });
   const e = keybindEntry(k, i.target);
+  // A change: only when the person explicitly asked in this request, and they confirm it in the app.
+  const where = keybindPlace(e.id)?.words ?? '';
+  if (!i.asked) {
+    throw new ToolError('not_asked', 'Keybinds change only when the person explicitly asks for that change; pass person_asked true only then.', {
+      hint: `Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: ${where}.`,
+      detail: { field: 'person_asked', set_in: where },
+    });
+  }
+  if (loaded !== true) throw new ToolError('not_editable', `${loaded[0].toUpperCase()}${loaded.slice(1)}.`, { detail: { known: false } });
   const name = nameOf(k, e);
   const replace = i.items.some((x) => x.toLowerCase() === 'replace');
   let keys: readonly string[];

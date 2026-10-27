@@ -943,8 +943,11 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
   const labelOf = (id: string) => services.commands.get(id)?.label ?? id;
   /** Set keybind for a command, in its own section above Reset toolbar. */
   const keybind = (id: string | undefined): MenuEntry[] => (id ? [{ sep: true, id: 'tb-sep-keys' }, keybindMenuItem(services, id)] : []);
+  // Finish sketch's menu sets Place or finish's key too (Enter: it places what a tool draws, else finishes the sketch).
+  const keybindItems = (id: string): MenuEntry[] =>
+    id === WELL_KNOWN_COMMANDS.sketchFinish ? [keybindMenuItem(services, id), keybindMenuItem(services, 'sketch.enter', 'Set keybind for Place or finish…')] : [keybindMenuItem(services, id)];
   const menu = (x: number, y: number, commandId?: string) =>
-    ui.showMenu(x, y, commandId ? [keybindMenuItem(services, commandId), { sep: true, id: 'tb-sep' }, reset] : [reset], commandId ? `Toolbar: ${labelOf(commandId)}` : 'Toolbar');
+    ui.showMenu(x, y, commandId ? [...keybindItems(commandId), { sep: true, id: 'tb-sep' }, reset] : [reset], commandId ? `Toolbar: ${labelOf(commandId)}` : 'Toolbar');
   const forGroup = (group: string, order: string[]): GroupCustom => ({
     commandMenu: (x, y, commandId) => menu(x, y, commandId),
     barMenu(c, shown, x, y, keybindId) {

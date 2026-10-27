@@ -7,11 +7,15 @@
 //  - a change made outside the page (ws.prefs written on the server, as the app's Settings saves it,
 //    and announced to the app's tabs) takes effect at once, without reopening the Part;
 //  - the toolbar's right-click menus have Set keybind... for the command right-clicked: a command on
-//    the bar, VIEW's Fit, a command in its group's More, and a flyout's button (for the variant on it).
+//    the bar, VIEW's Fit, a command in its group's More, and a flyout's button (for the variant on it);
+//  - a key a focused control handles is that control's: Delete on a ribbon width line resets the
+//    width and the selected feature stays;
+//  - every key action has a Set keybind where the person meets it: a tree row (Delete, Rename), the
+//    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish).
 // The keybinds are the user's pref on the server every test shares: both run in the serial phase, and put it back.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
-import { baseUrl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, readWithRetry, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, ensureCadOn, modelOnPage, newPartFromTree, newProject, openProject, partOpened, readWithRetry, watchPage, workspaceFrame } from './helpers';
 
 const PREF = 'keybinds';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -311,5 +315,98 @@ test("cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, 
   } finally {
     await setPref(request, null);
     await forgetToolbarLayout(request);
+  }
+});
+
+test('cad:keybinds-control-keeps-key a key a focused control handles is that control\'s: Delete on a ribbon width line resets the width, and the selected feature stays', { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  await setPref(request, null);
+  await forgetToolbarLayout(request);
+  try {
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    await addSolid(page, { size: [30, 20, 10] });
+    const extrude = frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"]');
+    await expect(extrude).toHaveCount(1);
+    // The feature is selected, as a Delete would take it.
+    await extrude.locator('> .tree-row').click();
+    await expect.poll(() => cad<string[]>(page, (() => (window as unknown as W).__CAD__.services.selection.get().items.map((i: { kind: string }) => i.kind)) as never)).toEqual(['feature']);
+    // SOLID's width line, narrowed from the keyboard, then Delete on it: back to auto.
+    const bar = frame.locator('[data-cad-toolbar]');
+    const line = bar.locator('[data-tb-resize="solid"]');
+    await line.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(bar.locator('.tb-group[data-group="solid"]')).toHaveAttribute('data-width', /\d+/);
+    await page.keyboard.press('Delete');
+    await expect(bar.locator('.tb-group[data-group="solid"]')).not.toHaveAttribute('data-width', /.+/);
+    // The feature is still there (before, the same Delete deleted it too).
+    await page.waitForTimeout(500);
+    await expect(extrude).toHaveCount(1);
+  } finally {
+    await forgetToolbarLayout(request);
+  }
+});
+
+test('cad:keybinds-person-paths every key action has a Set keybind where the person meets it: a tree row (Delete, Rename), the tree\'s collapse arrow, a sketch\'s selection (Delete), Finish sketch (Place or finish)', { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  await setPref(request, null);
+  try {
+    const seen = await watchPage(page);
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    await addSolid(page, { size: [30, 20, 10] });
+    const menu = frame.locator('[data-cad-menu]');
+    /** Right-click `target`, pick the item, see the dialog for `id` with `label` and its key, close it. */
+    const viaMenu = async (target: Locator | (() => Promise<void>), item: string, text: string, id: string, label: string, current: string) => {
+      if (typeof target === 'function') await target();
+      else await target.click({ button: 'right', force: true });
+      await expect(menu).toBeVisible();
+      const it = menu.locator(`[data-menu-item="${item}"]`);
+      await expect(it).toHaveText(text);
+      await it.click();
+      const dlg = frame.locator(`[data-cad-keybind-dialog="${id}"]`);
+      await expect(dlg).toBeVisible();
+      await expect(dlg.locator('h2')).toHaveText(`Set keybind: ${label}`);
+      await expect(dlg.locator('[data-keybind-current]')).toHaveText(current);
+      await dlg.locator('[data-keybind-action="done"]').click();
+      await expect(dlg).toHaveCount(0);
+    };
+    const row = frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"] > .tree-row');
+    // A tree row: Delete's and Rename's keys, next to Delete.
+    await viaMenu(row, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');
+    await viaMenu(row, 'set-keybind-ui.rename', 'Set keybind for Rename…', 'ui.rename', 'Rename the selected feature or body', 'F2');
+    // The tree's collapse arrow: the toggle's key.
+    await viaMenu(frame.locator('[data-tree-collapse]'), 'set-keybind-ui.toggle-rail', 'Set keybind…', 'ui.toggle-rail', 'Show or hide the tree (the Sketch panel in a sketch)', 'Ctrl+\\');
+
+    // In a sketch: a line drawn, right-clicked: Delete's key (the sketch's).
+    await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    await page.keyboard.press('l');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    const a = await modelOnPage(page, [-40, 30, 0]);
+    const b = await modelOnPage(page, [40, 30, 0]);
+    await page.mouse.click(a[0], a[1]);
+    await page.mouse.click(b[0], b[1]);
+    // Escape ends the chain; a second puts the line tool down.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    const mid = await modelOnPage(page, [0, 30, 0]);
+    await viaMenu(() => page.mouse.click(mid[0], mid[1], { button: 'right' }), 'set-keybind-sketch.delete', 'Set keybind for Delete…', 'sketch.delete', 'Delete', 'Delete');
+    // Finish sketch's right-click on the toolbar: its own key, and Place or finish's (Enter).
+    const finish = frame.locator('[data-cad-toolbar="sketch"] [data-command="sketch.finish"]');
+    await viaMenu(finish, 'set-keybind', 'Set keybind…', 'sketch.finish', 'Finish sketch', 'None of its own (Enter runs Place or finish)');
+    await viaMenu(finish, 'set-keybind-sketch.enter', 'Set keybind for Place or finish…', 'sketch.enter', 'Place or finish', 'Enter');
+    // Nothing was changed.
+    expect(await storedPref(request)).toBeNull();
+    expect(seen.errors).toEqual([]);
+  } finally {
+    await setPref(request, null);
   }
 });

@@ -119,8 +119,9 @@ describe('the keybinds model', () => {
     }
   });
 
-  it('never writes over keybinds it could not read: a failed first read, then a change, stores the change on top of what is stored (review)', async () => {
-    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'sketch.line': ['KeyK'], 'view.fit': ['Shift+KeyF'] } });
+  it('never works a change out from the defaults: unreadable saved keybinds refuse changes and are read again; then Replace takes from the saved holder (review)', async () => {
+    // Saved: Fit moved to G, Plane on F.
+    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'view.fit': ['KeyG'], 'construct.plane': ['KeyF'] } });
     const realGet = p.api.get;
     let fail = true;
     p.api.get = async <T,>(key: string) => {
@@ -129,22 +130,28 @@ describe('the keybinds model', () => {
     };
     const k = createKeybinds({ prefs: p.api, layout: false });
     await k.ready;
-    // The defaults apply meanwhile.
-    expect(k.current('sketch.line')).toEqual(['KeyL']);
-    // Still unreadable: the change applies here and is not saved, and nothing is written.
-    k.setKeybind('sketch.circle', 'Shift+C');
-    expect(await k.flush()).toMatch(/^your keybinds could not be read, so the change was not saved/);
+    const unreadable = 'your keybinds could not be read, so they cannot be changed now (nothing was changed): the host did not answer';
+    expect(k.known()).toBe(unreadable);
+    // From the defaults this would say Fit has F; it refuses instead (and reads again), and writes nothing.
+    expect(k.setKeybind('inspect.measure', 'F')).toEqual({ ok: false, reason: 'unread', id: 'inspect.measure', message: unreadable });
+    await k.load();
+    expect(k.replace('inspect.measure', 'F')).toMatchObject({ ok: false, reason: 'unread' });
+    await k.load();
+    expect(k.resetAll()).toBe(unreadable);
     expect(p.writes).toEqual([]);
-    // Readable again: the next change stores both changes on top of the stored ones, and shows them.
+    // Readable again: the next try reads them; the conflict is the saved holder's (Plane), not Fit's.
     fail = false;
-    k.setKeybind('view.front', 'Shift+Digit1');
+    expect(await k.load()).toBe(true);
+    expect(k.current('view.fit')).toEqual(['KeyG']);
+    expect(k.setKeybind('inspect.measure', 'F')).toMatchObject({ ok: false, reason: 'conflict', with: 'construct.plane', conflicts: [{ id: 'construct.plane', name: 'Plane (model)' }] });
+    expect(k.replace('inspect.measure', 'F')).toMatchObject({ ok: true, keys: ['KeyF'], took: [{ id: 'construct.plane' }] });
     expect(await k.flush()).toBe(true);
-    expect(p.values[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyK'], 'view.fit': ['Shift+KeyF'], 'sketch.circle': ['Shift+KeyC'], 'view.front': ['Shift+Digit1'] });
-    expect(k.current('sketch.line')).toEqual(['KeyK']);
-    expect(k.current('sketch.circle')).toEqual(['Shift+KeyC']);
+    // Fit keeps its saved G; Plane is back to its default (no key); nobody shares F.
+    expect(p.values[KEYBINDS_PREF]).toEqual({ 'view.fit': ['KeyG'], 'inspect.measure': ['KeyF'] });
+    expect(k.current('construct.plane')).toEqual([]);
   });
 
-  it('a change made before a slow first read keeps the stored keybinds (they apply when read, the change on top)', async () => {
+  it('a change made while the first read is still under way waits for it: refused, then made from the saved keys', async () => {
     const p = memoryPrefs({ [KEYBINDS_PREF]: { 'sketch.line': ['KeyK'] } });
     const realGet = p.api.get;
     let release: () => void = () => {};
@@ -158,13 +165,12 @@ describe('the keybinds model', () => {
       return realGet<T>(key);
     };
     const k = createKeybinds({ prefs: p.api, layout: false });
-    k.setKeybind('sketch.circle', 'Shift+C');
+    expect(k.setKeybind('sketch.circle', 'K')).toEqual({ ok: false, reason: 'unread', id: 'sketch.circle', message: 'your keybinds are still being read: try again in a moment (nothing was changed)' });
     release();
-    await k.ready;
-    expect(await k.flush()).toBe(true);
-    expect(k.current('sketch.line')).toEqual(['KeyK']);
-    expect(k.current('sketch.circle')).toEqual(['Shift+KeyC']);
-    expect(p.values[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyK'], 'sketch.circle': ['Shift+KeyC'] });
+    expect(await k.load()).toBe(true);
+    // K is Line's (saved): a conflict, not a silent clash.
+    expect(k.setKeybind('sketch.circle', 'K')).toMatchObject({ ok: false, reason: 'conflict', with: 'sketch.line' });
+    expect(p.writes).toEqual([]);
   });
 
   it('a change made in another tab between two changes here is kept (each store reads the stored value again)', async () => {
@@ -359,22 +365,36 @@ describe('the Set keybind dialog', () => {
     expect(d.q('[data-keybind-current]').textContent).toBe('None of its own (Enter runs Place or finish)');
   });
 
-  it('a change that could not be saved says so in the dialog', async () => {
-    const p = memoryPrefs();
-    p.api.get = async () => {
-      throw new Error('the host did not answer');
+  it('the dialog with unreadable saved keybinds says so and changes nothing; once they are read it names the saved holder (review)', async () => {
+    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'view.fit': ['KeyG'], 'construct.plane': ['KeyF'] } });
+    const realGet = p.api.get;
+    let fail = true;
+    p.api.get = async <T,>(key: string) => {
+      if (fail) throw new Error('the host did not answer');
+      return realGet<T>(key);
     };
     const services = { bridge: { prefs: p.api } } as unknown as AppServices;
     await keybindsFor(services).ready;
     await act(async () => {
-      close = openSetKeybind(services, 'sketch.circle');
-    });
-    const q = (sel: string) => document.querySelector(`[data-cad-keybind-dialog="sketch.circle"] ${sel}`) as HTMLElement;
-    await act(async () => {
-      q('[data-keybind-capture]').dispatchEvent(new KeyboardEvent('keydown', { key: 'C', code: 'KeyC', shiftKey: true, bubbles: true, cancelable: true }));
+      close = openSetKeybind(services, 'inspect.measure');
       await flush();
     });
-    await vi.waitFor(() => expect(q('[data-keybind-status]').textContent).toMatch(/^Circle: Shift\+C\. Not saved: your keybinds could not be read/));
+    const q = (sel: string) => document.querySelector(`[data-cad-keybind-dialog="inspect.measure"] ${sel}`) as HTMLElement;
+    const press = async (init: KeyboardEventInit) => {
+      await act(async () => {
+        q('[data-keybind-capture]').dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+        await flush();
+      });
+    };
+    await vi.waitFor(() => expect(q('[data-keybind-status]').textContent).toBe('Your keybinds could not be read, so they cannot be changed now (nothing was changed): the host did not answer'));
+    await press({ key: 'f', code: 'KeyF' });
+    expect(q('[data-keybind-status]').textContent).toMatch(/^Your keybinds could not be read/);
+    expect(p.writes).toEqual([]);
+    // Readable again (a press tries the read again): F is Plane's, as saved.
+    fail = false;
+    await press({ key: 'f', code: 'KeyF' });
+    await press({ key: 'f', code: 'KeyF' });
+    expect(q('[data-keybind-status]').textContent).toBe('F is the key of Plane (model). Replace it?');
     expect(p.writes).toEqual([]);
   });
 

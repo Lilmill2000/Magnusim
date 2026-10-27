@@ -490,7 +490,7 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     const { t } = await keybindPart();
     const one = await t.ok('workspace', W('keybind_get', { target: 'sketch.rectangle' }));
     expect(one.text).toBe('Rectangle: R');
-    expect(one.data.keybind).toEqual({ id: 'sketch.rectangle', label: 'Rectangle', context: 'sketch', keys: ['KeyR'], shown: 'R', default: true });
+    expect(one.data.keybind).toEqual({ id: 'sketch.rectangle', label: 'Rectangle', context: 'sketch', keys: ['KeyR'], shown: 'R', default: true, set_in: 'in a sketch, right-click Rectangle on the toolbar, then Set keybind…' });
     // By label too; a label two commands share needs the id.
     expect((await t.ok('workspace', W('keybind_get', { target: 'show relations' }))).text).toBe('Show relations: Shift+R');
     const twin = await t.call('workspace', W('keybind_get', { target: 'Undo' }));
@@ -612,6 +612,37 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(k.current('view.fit')).toEqual(['KeyF']);
     expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
     expect(k.current('construct.plane')).toEqual(['KeyR']);
+  });
+
+  it("not_asked tells where the person sets that command's keybind; keybind_get says it per command (review: the hint named a right-click that did not exist)", async () => {
+    const { t } = await keybindPart();
+    const r = await t.call('workspace', W('keybind_set', { target: 'ui.delete', value: 'Backspace' }));
+    expect(!r.ok && r.error.hint).toBe('Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: right-click a feature in the design tree, then Set keybind for Delete….');
+    expect(!r.ok && r.error.detail).toMatchObject({ reason: 'not_asked', set_in: 'right-click a feature in the design tree, then Set keybind for Delete…' });
+    const all = await t.ok('workspace', W('keybind_get'));
+    const rows = all.data.keybinds as { id: string; set_in: string }[];
+    expect(rows.every((x) => /Set keybind/.test(x.set_in))).toBe(true);
+    expect(rows.find((x) => x.id === 'sketch.enter')!.set_in).toMatch(/right-click Finish sketch on the toolbar/);
+  });
+
+  it("the person's keybinds unreadable: keybind_get says the keys are the defaults, and a change is refused before any question (review)", async () => {
+    const t = await part();
+    const prefs = memoryPrefs();
+    prefs.values.keybinds = { 'view.fit': ['KeyG'] };
+    prefs.api.get = async () => {
+      throw new Error('the host did not answer');
+    };
+    const k = createKeybinds({ prefs: prefs.api, layout: false });
+    setKeybindsFor(t.services, k);
+    await k.ready;
+    const g = await t.ok('workspace', W('keybind_get', { target: 'view.fit' }));
+    expect(g.text).toBe("Not the person's keys: your keybinds could not be read, so they cannot be changed now (nothing was changed): the host did not answer; these are the defaults. Fit: F");
+    expect(g.data).toMatchObject({ known: false });
+    const x = await t.call('workspace', W('keybind_set', { target: 'inspect.measure', value: 'F', items: ['replace'], person_asked: true }));
+    expect(!x.ok && x.error.detail).toMatchObject({ reason: 'not_editable', known: false });
+    expect(!x.ok && x.error.message).toMatch(/Your keybinds could not be read, so they cannot be changed now/);
+    expect(t.ws.log.confirms).toEqual([]);
+    expect(prefs.writes).toEqual([]);
   });
 
   it("keybind_get on Finish sketch says what the person sees: none of its own, Enter (Place or finish) finishes the sketch (review)", async () => {

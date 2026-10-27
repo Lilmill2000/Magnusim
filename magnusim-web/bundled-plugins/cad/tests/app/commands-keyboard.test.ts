@@ -42,6 +42,25 @@ describe('keyboard', () => {
     expect(comboOf(new KeyboardEvent('keydown', { key: 'y', code: 'KeyZ', ctrlKey: true }))).toBe('Ctrl+KeyY');
   });
 
+  it("a key a control already handled (preventDefault) is the control's: no shortcut runs too (review: Delete on a ribbon width line deleted the selected feature)", () => {
+    const kb = createKeyboard(document);
+    const del = vi.fn();
+    kb.bind({ combo: 'Delete', run: del });
+    const line = document.createElement('div');
+    line.tabIndex = 0;
+    line.addEventListener('keydown', (e) => {
+      if (e.key === 'Delete') e.preventDefault();
+    });
+    document.body.append(line);
+    line.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', code: 'Delete', bubbles: true, cancelable: true }));
+    expect(del).not.toHaveBeenCalled();
+    // Not handled there: the shortcut runs.
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', code: 'Delete', bubbles: true, cancelable: true }));
+    expect(del).toHaveBeenCalledTimes(1);
+    line.remove();
+    kb.dispose();
+  });
+
   it("Undo and Redo stay on the keys labelled Z and Y on QWERTZ and AZERTY (review: they swapped, or Undo went to the browser's close-tab key)", async () => {
     const reg = createCommandRegistry(() => services);
     const kb = createKeyboard(document);

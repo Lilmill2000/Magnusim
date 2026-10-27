@@ -248,9 +248,11 @@ export function installUi(services: AppServices): () => void {
       let last: MenuEntry[] = [];
       if (pick) {
         const item = pick.item;
+        const f0 = ui.featureOfItem(item);
         if (item.kind === 'face' || item.kind === 'edge' || item.kind === 'vertex' || item.kind === 'body') {
           if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: 'sep-modules' });
-          items.push(...ui.bodyMenu(item.body).filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature'));
+          // The feature's menu below ends with the keybind items: not twice.
+          items.push(...ui.bodyMenu(item.body).filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature' && !(f0 && (e.id === 'sep-keybinds' || e.id.startsWith('set-keybind')))));
         }
         const f = ui.featureOfItem(item);
         if (f) {

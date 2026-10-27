@@ -538,6 +538,8 @@ const KEYS = (action: string) => reach('workspace', 'action', action, KEYBIND_CH
  */
 export const KEYBINDS: { readonly [K in keyof Keybinds]: Reach } = {
   ready: INTERNAL,
+  load: INTERNAL,
+  known: INTERNAL,
   entries: KEYS_READ,
   entry: KEYS_READ,
   current: KEYS_READ,

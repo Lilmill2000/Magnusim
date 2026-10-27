@@ -29,7 +29,7 @@ import { sketchShown } from '../../features/sketch/view';
 import { constructKindOfType } from '../../features/refgeom/api';
 import { constructShown, constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../features/refgeom/scene';
 import { RAIL_COMMAND, railsFor, useRailFocus } from '../left-rails';
-import { useKeyLabel } from '../keybinds';
+import { railKeybindMenu, useKeyLabel } from '../keybinds';
 import { CHEVRON_LEFT } from './TreeRail';
 import { barIndexAt, bodyRows, dimensionsText, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
 
@@ -685,7 +685,7 @@ function CollapseTree({ onCollapse, sketching }: { onCollapse(): void; sketching
   const label = 'Hide the design tree';
   const tip = useTip({ text: label, detail: sketching ? 'Back to its rail for this sketch' : 'It stays a rail at the left edge until you click it', ...(sketching || !key ? {} : { shortcut: key }) });
   return (
-    <button type="button" className="cad-collapse-btn" data-tree-collapse="1" aria-label={label} aria-expanded="true" ref={ref} onClick={() => {
+    <button type="button" className="cad-collapse-btn" data-tree-collapse="1" aria-label={label} aria-expanded="true" ref={ref} onContextMenu={(e) => railKeybindMenu(services, e)} onClick={() => {
         rails.focusAfter('tree-rail');
         onCollapse();
       }} {...tip}>

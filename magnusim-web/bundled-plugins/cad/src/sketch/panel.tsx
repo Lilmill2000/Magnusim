@@ -27,7 +27,7 @@ import { Icon } from '../ui/Icon';
 import { usePanelDelete, usePanelDeleteBlock } from '../ui/panel-delete';
 import { Button, buttonClass, DisabledReason, Field, Hint, PanelChrome, useTip } from '../ui/kit';
 import { RAIL_COMMAND, railsFor, useRailFocus } from '../ui/left-rails';
-import { useKeyLabel } from '../ui/keybinds';
+import { railKeybindMenu, useKeyLabel } from '../ui/keybinds';
 import { CHEVRON_LEFT } from '../ui/tree/TreeRail';
 import { statusText } from './dof';
 import { constraintLabel, entityLabel, isDimension, refLabel } from './model';
@@ -112,7 +112,7 @@ function CollapseButton({ onCollapse }: { onCollapse(): void }) {
   const key = useKeyLabel(services, RAIL_COMMAND);
   const tip = useTip({ text: 'Collapse the panel to the left', ...(key ? { shortcut: key } : {}) });
   return (
-    <button type="button" className="cad-collapse-btn" data-sketch-collapse="1" aria-label="Collapse the Sketch panel to the left" aria-expanded="true" ref={ref} onClick={() => {
+    <button type="button" className="cad-collapse-btn" data-sketch-collapse="1" aria-label="Collapse the Sketch panel to the left" aria-expanded="true" ref={ref} onContextMenu={(e) => railKeybindMenu(services, e)} onClick={() => {
         rails.focusAfter('sketch-expand');
         onCollapse();
       }} {...tip}>

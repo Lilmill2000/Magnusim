@@ -15,6 +15,7 @@
 // wheel and right drag zoom) and every move, double-click and right-click.
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keybindMenuItem } from '../ui/keybinds';
 import { keybindsFor, keyLabel } from '../app/keybinds';
 import { BufferGeometry, Color, Float32BufferAttribute, Group, Matrix4, Points, PointsMaterial, Vector3, type Object3D } from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -1491,9 +1492,12 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       // P4b SELECT: Construction as a state item (Make construction / Make normal on a mixed selection), and linked geometry's items.
       items.push(...constructionItems(mode, d, picked), ...linkMenuItems(mode, d, picked));
       items.push({ id: 'delete', label: 'Delete', danger: true, disabled: picked.every((h) => h.id === ORIGIN) ? 'The origin cannot be deleted' : null, run: () => void mode.deleteSelected() });
+      items.push(keybindMenuItem(services, 'sketch.delete', 'Set keybind for Delete…'));
     }
     if (items.length) items.push({ sep: true, id: 'sep-sketch' });
     items.push({ id: 'look', label: 'Normal to', run: () => void services.commands.run('view.sketch-look') }, { id: 'finish', label: 'Finish sketch', run: () => mode.finish() });
+    // Finish sketch's key, and Place or finish's (Enter by default: it places what a tool draws, else finishes).
+    items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'sketch.finish', 'Set keybind for Finish sketch…'), keybindMenuItem(services, 'sketch.enter', 'Set keybind for Place or finish…'));
     uiFor(services).showMenu(e.clientX, e.clientY, items, 'Sketch');
   }
 

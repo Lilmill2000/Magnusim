@@ -12,6 +12,7 @@
 // committed; doc.assistant.takeOver).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keybindMenuItem } from './keybinds';
 import { keyLabel } from '../app/keybinds';
 import { dependencies } from '../doc/features/hooks';
 import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
@@ -790,6 +791,8 @@ export function createUiController(services: AppServices): UiController {
       const picked = services.selection.get().items.flatMap((it) => (it.kind === 'feature' && d.doc.features.some((g) => g.id === it.feature) ? [it.feature] : []));
       if (picked.length > 1 && picked.includes(id)) items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: `Delete ${picked.length} features`, danger: true, disabled: block, run: () => c.deleteFeatures(picked) });
       else items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: deleteItemLabel(f.name), danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
+      // The keys of Delete and Rename (keyboard-only actions): set here, where the person meets them.
+      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.delete', 'Set keybind for Delete…'), keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
       return items;
     },
     bodyMenu(id) {
@@ -816,6 +819,8 @@ export function createUiController(services: AppServices): UiController {
       // The body's colour (as the Assistant's body color): the tree row's colour picker.
       items.push({ id: 'body-color', label: 'Colour…', disabled: block, run: () => c.pickBodyColor(id) });
       if (f) items.push({ sep: true, id: 'sep-body-feature' }, { id: 'body-edit', label: `Edit ${f.name}`, disabled: block, run: () => c.openEdit(f.id) });
+      // Rename's key (F2 renames a body too): set here, where the person meets it.
+      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
       return items;
     },
     showMenu(x, y, items, label = 'Actions', opts = {}) {
