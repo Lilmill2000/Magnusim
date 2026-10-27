@@ -52,7 +52,7 @@ button.mgk-pill, button.mgk-pill:hover {
 }
 button.mgk-pill:focus-visible { outline: revert; outline-offset: revert; }
 button.mgk-pill.mgk-pill--on, button.mgk-pill.mgk-pill--on:hover {
-  background: var(--mg-text); color: var(--mg-primary-text); border-color: var(--mg-text);
+  background: var(--mg-text); color: var(--mg-bg); border-color: var(--mg-text);
 }
 button.mgk-pill:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allowed; }
 
@@ -73,7 +73,7 @@ button.mgk-pill:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allo
   width: 260px; padding: 7px 9px; border-radius: var(--mg-radius-tip);
   background: var(--mg-tooltip-bg); color: var(--mg-tooltip-text); font-size: var(--mg-text-sm);
   font-weight: var(--mg-weight-regular); line-height: var(--mg-line); text-align: left; white-space: normal;
-  box-shadow: var(--mg-shadow-tooltip); pointer-events: none;
+  box-shadow: var(--mg-shadow-tooltip); outline: 1px solid var(--mg-tooltip-edge); pointer-events: none;
 }
 .mgk-field-k[data-help]:hover .mgk-field-tip, .mgk-field-help:focus-visible + .mgk-field-tip { display: block; }
 

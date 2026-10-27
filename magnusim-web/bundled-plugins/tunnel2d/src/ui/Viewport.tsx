@@ -13,6 +13,8 @@ import { hasOutline, outlineRings, profileOf } from '../geometry/shapes';
 import type { Engine } from '../sim/engine';
 import type { Body, Rake, Scene } from '../scene/scene';
 import type { Store } from '../app/store';
+import { applyViewColours } from '../app/colours';
+import { useAppearance } from '../app/hooks';
 import type { Palette, SketchEditor } from '../sketch/editor';
 import { readingText } from './forces';
 
@@ -87,6 +89,7 @@ export function Viewport({ engine, store, editor, units = 'metric', onStatus }: 
   const overlay = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
   const fitted = useRef('');
+  const appearance = useAppearance();
 
   // Size: both canvases follow the element (device pixels for the GPU one).
   useEffect(() => {
@@ -151,10 +154,13 @@ export function Viewport({ engine, store, editor, units = 'metric', onStatus }: 
 
   const handleOf = (b: Body) => turnHandle(engine, b);
 
-  // Overlay drawing, every frame.
+  // The engine's colours, read where the view is (its stage may keep a theme of its own).
+  useEffect(() => applyViewColours(engine, wrap.current!), [engine, appearance]);
+
+  // Overlay drawing, every frame. Its colours are read where the view is, and again when the theme changes.
   useEffect(() => {
     let raf = 0;
-    const css = getComputedStyle(document.documentElement);
+    const css = getComputedStyle(wrap.current!);
     const sel = css.getPropertyValue('--t2d-select').trim() || 'black';
     const ghost = css.getPropertyValue('--t2d-ghost').trim() || 'gray';
     const handleFill = css.getPropertyValue('--mg-bg').trim() || 'white';
@@ -320,7 +326,7 @@ export function Viewport({ engine, store, editor, units = 'metric', onStatus }: 
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [engine, store, editor]);
+  }, [engine, store, editor, appearance]);
 
   const hitBody = (wx: number, wy: number): Body | null => {
     const bodies = store.get().scene.bodies;

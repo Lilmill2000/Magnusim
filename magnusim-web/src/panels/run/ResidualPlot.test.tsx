@@ -1,6 +1,9 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { seriesVar } from '../../theme/series';
 import { ResidualPlot, legendGroups, legendSeries, plotGeometry, residualRegions, seriesFor, type ResidualSeries } from './ResidualPlot';
+
+afterEach(() => vi.restoreAllMocks());
 
 const SERIES: ResidualSeries[] = [
   { key: 'a', label: 'A', color: '#111111', always: true },
@@ -94,5 +97,51 @@ describe('residuals of a multi-region run', () => {
     const groups = [...container.querySelectorAll('[data-residual-region]')];
     expect(groups.map((g) => g.getAttribute('data-residual-region'))).toEqual(['air', 'heater']);
     expect(groups.map((g) => g.textContent)).toEqual(['airh', 'heaterh']);
+  });
+});
+
+// The plot follows the theme: each series through its --mg-series-* token (the hex stays its
+// identity), the grid and labels through the kit's plot classes. Light values are the old ones.
+describe('residual plot colours', () => {
+  const series: ResidualSeries[] = [
+    { key: 'u', label: 'U', color: '#1570EF', always: true },
+    { key: 'p', label: 'p', color: '#6941c6', always: true },
+    { key: 'h', label: 'h', color: '#222222', always: true },
+  ];
+  const rows = [
+    { t: 1, u: 0.5, p: 0.4, h: 0.2 },
+    { t: 2, u: 0.1, p: 0.08, h: 0.05 },
+  ];
+
+  it('paints no fixed colour: SVG attributes take no var(), so colours come from classes and styles', () => {
+    const { container } = render(<ResidualPlot rows={rows} endTime={2} seconds={false} series={series} />);
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    for (const el of svg.querySelectorAll('*')) {
+      for (const attr of ['stroke', 'fill']) expect([null, 'none'], `${el.tagName} ${attr}`).toContain(el.getAttribute(attr));
+    }
+    const grid = [...svg.querySelectorAll('line')];
+    expect(grid.length).toBeGreaterThan(0);
+    for (const line of grid) expect(line.getAttribute('class')).toBe('mgk-plot-grid');
+    const labels = [...svg.querySelectorAll('text')];
+    expect(labels.length).toBe(grid.length + 2);
+    for (const text of labels) expect(text.getAttribute('class')).toBe('mgk-plot-label');
+    const lines = [...svg.querySelectorAll('polyline')];
+    expect(lines.map((l) => l.style.stroke)).toEqual(['var(--mg-series-1)', 'var(--mg-series-2)', seriesVar('#222222')]);
+    expect(seriesVar('#222222')).toContain('var(--mg-series-lift)');
+  });
+
+  it('draws the legend swatches and the tip names in the series tokens', () => {
+    // jsdom lays nothing out: the plot is 280 px wide, one px per viewBox unit.
+    const rect = { x: 0, y: 0, left: 0, top: 0, right: 280, bottom: 132, width: 280, height: 132, toJSON: () => ({}) } as DOMRect;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect);
+    const { container } = render(<ResidualPlot rows={rows} endTime={2} seconds={false} series={series.slice(0, 2)} />);
+    const swatches = [...container.querySelectorAll('.sim-residual-legend i.sim-swatch')] as HTMLElement[];
+    expect(swatches.map((s) => s.style.background)).toEqual(['var(--mg-series-1)', 'var(--mg-series-2)']);
+    fireEvent.pointerMove(container.querySelector('.sim-residual-wrap') as Element, { clientX: 140, clientY: 60 });
+    const names = [...container.querySelectorAll('.sim-plot-tip span > span')] as HTMLElement[];
+    expect(names.map((n) => [n.textContent, n.style.color])).toEqual([
+      ['U', 'var(--mg-series-1)'],
+      ['p', 'var(--mg-series-2)'],
+    ]);
   });
 });

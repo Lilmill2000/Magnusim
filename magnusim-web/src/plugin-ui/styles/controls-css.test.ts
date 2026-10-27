@@ -9,6 +9,7 @@ import {
   readKitCss,
   ruleProps,
   specificity,
+  withTokens,
 } from '../../test/kitCss';
 
 const css = readKitCss('controls.css');
@@ -89,9 +90,11 @@ describe('controls.css', () => {
     expect(specificity('button.mgk-pill.mgk-pill--on:hover')).toEqual([0, 3, 1]);
     expect(ruleProps(css, 'button.mgk-pill.mgk-pill--on')).toEqual({
       background: 'var(--mg-text)',
-      color: 'var(--mg-primary-text)',
+      color: 'var(--mg-bg)',
       'border-color': 'var(--mg-text)',
     });
+    // Its text is the inverse of its fill: white in light, as before, and dark on the light fill in dark.
+    expect(withTokens(ruleProps(css, 'button.mgk-pill.mgk-pill--on')).color).toBe('#ffffff');
     expect(css).not.toMatch(/\.is-[a-z]/);
   });
 
@@ -146,8 +149,11 @@ describe('controls.css', () => {
       'text-align': 'left',
       'white-space': 'normal',
       'box-shadow': 'var(--mg-shadow-tooltip)',
+      outline: '1px solid var(--mg-tooltip-edge)',
       'pointer-events': 'none',
     });
+    // The outline edges the dark tip on a dark page; in light it is transparent, so nothing changes.
+    expect(withTokens(ruleProps(css, '.mgk-field-tip')).outline).toBe('1px solid transparent');
     expect(ruleProps(css, '.mgk-field-k[data-help]')).toEqual({ position: 'relative', cursor: 'help' });
   });
 

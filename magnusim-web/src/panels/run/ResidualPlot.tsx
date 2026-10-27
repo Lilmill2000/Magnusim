@@ -1,6 +1,7 @@
 import { Fragment, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { tipLeft } from '../../plugin-ui/data/linePlotGeometry';
 import { formatSimTime } from '../../plugin-ui/format/time';
+import { seriesVar } from '../../theme/series';
 import type { ResidualRow } from './residuals';
 
 /**
@@ -21,7 +22,10 @@ export interface ResidualSeries {
   region?: string;
 }
 
-/** Colors for series an analysis did not declare (a run read before the registry). */
+/**
+ * Colors for series an analysis did not declare (a run read before the registry). A series keeps
+ * its hex as its identity; it is painted through seriesVar, so the theme's series colour shows.
+ */
 const FALLBACK_COLORS = ['#1570ef', '#6941c6', '#12b76a', '#f79009', '#0ba5ec', '#dd2590', '#667085'];
 
 /** The regions the rows name (keys `<region>:<field>`, a multi-region run), in order. */
@@ -169,7 +173,7 @@ function Swatch({ s }: { s: ResidualSeries }) {
   return s.swatch ? (
     <i className={`sim-swatch sim-swatch-${s.swatch}`} />
   ) : (
-    <i className="sim-swatch" style={{ background: s.color }} />
+    <i className="sim-swatch" style={{ background: seriesVar(s.color) }} />
   );
 }
 
@@ -232,23 +236,23 @@ export function ResidualPlot({
         >
           {geo.decades.map((d) => (
             <g key={d.label}>
-              <line x1={PAD_L} y1={d.y.toFixed(1)} x2={W - PAD_R} y2={d.y.toFixed(1)} stroke="#eaecf0" strokeWidth="1" />
-              <text x={PAD_L - 4} y={(d.y + 3).toFixed(1)} textAnchor="end" fontSize="8" fill="#98a2b3">
+              <line className="mgk-plot-grid" x1={PAD_L} y1={d.y.toFixed(1)} x2={W - PAD_R} y2={d.y.toFixed(1)} />
+              <text className="mgk-plot-label" x={PAD_L - 4} y={(d.y + 3).toFixed(1)} textAnchor="end" fontSize="8">
                 {d.label}
               </text>
             </g>
           ))}
-          <text x={PAD_L} y={H - 4} fontSize="8" fill="#98a2b3">
+          <text className="mgk-plot-label" x={PAD_L} y={H - 4} fontSize="8">
             {seconds ? '0 s' : '1'}
           </text>
-          <text x={W - PAD_R} y={H - 4} textAnchor="end" fontSize="8" fill="#98a2b3">
+          <text className="mgk-plot-label" x={W - PAD_R} y={H - 4} textAnchor="end" fontSize="8">
             {seconds ? formatSimTime(geo.xmax) : String(Math.round(geo.xmax))}
           </text>
           {geo.lines.map((l) => (
             <polyline
               key={l.key}
               fill="none"
-              stroke={l.color}
+              style={{ stroke: seriesVar(l.color) }}
               strokeWidth="1.5"
               strokeLinejoin="round"
               strokeDasharray={l.dashed ? '4 2' : undefined}
@@ -278,7 +282,7 @@ export function ResidualPlot({
               {series.filter((s) => !s.dashed && Number(hover.row[s.key]) > 0).map((s, i) => (
                 <span key={s.key}>
                   {i ? ' · ' : ''}
-                  <span style={{ color: s.color }}>{s.region ? `${s.region} ${s.label}` : s.label}</span>{' '}
+                  <span style={{ color: seriesVar(s.color) }}>{s.region ? `${s.region} ${s.label}` : s.label}</span>{' '}
                   {Number(hover.row[s.key]).toExponential(1)}
                 </span>
               ))}

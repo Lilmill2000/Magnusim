@@ -9,6 +9,10 @@
  * has tokens but none for what it paints, a custom property's own value and a var() fallback
  * are left as they are and listed (--report FILE writes them as JSON).
  *
+ * A declaration followed on its line by a comment that starts with "fixed" paints the same in
+ * every theme (the white capture frame over its dark mask): its literals are left and listed
+ * apart, as fixed, and do not count as left.
+ *
  * Px font sizes (font-size, and the size in a font shorthand) become their --mg-text-* token, or
  * calc(Npx * var(--mg-text-scale)) for a size with no token, so Settings' text size reaches them;
  * at scale 1 each is the same px.
@@ -99,11 +103,15 @@ const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g;
 function declarations(styleCss) {
   // Comments blanked (same length) so their text is never matched and indexes stay the file's.
   const masked = styleCss.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' '));
-  return [...masked.matchAll(/(^|[;{\s])(-{0,2}[a-zA-Z][a-zA-Z0-9-]*)\s*:\s*([^;{}]+)(?=;|\})/g)].map((d) => ({
-    prop: d[2],
-    value: d[3],
-    valueStart: d.index + d[0].length - d[3].length,
-  }));
+  return [...masked.matchAll(/(^|[;{\s])(-{0,2}[a-zA-Z][a-zA-Z0-9-]*)\s*:\s*([^;{}]+)(?=;|\})/g)].map((d) => {
+    const end = d.index + d[0].length;
+    return {
+      prop: d[2],
+      value: d[3],
+      valueStart: end - d[3].length,
+      fixed: /^;[ \t]*\/\*[ \t]*fixed\b/.test(styleCss.slice(end, end + 64)),
+    };
+  });
 }
 
 /** The edits: each colour literal in a declaration, its token or why it stays. */
@@ -111,13 +119,18 @@ export function plan(styleCss, tokens) {
   const lineOf = (i) => styleCss.slice(0, i).split('\n').length;
   const edits = [];
   const skipped = [];
-  for (const { prop, value, valueStart } of declarations(styleCss)) {
+  const fixed = [];
+  for (const { prop, value, valueStart, fixed: isFixed } of declarations(styleCss)) {
     for (const c of value.matchAll(COLOR_RE)) {
       const at = valueStart + c.index;
       const lit = c[0];
       const line = lineOf(at);
       const before = value.slice(0, c.index);
       const why = (reason) => skipped.push({ line, prop, literal: lit, reason });
+      if (isFixed) {
+        fixed.push({ line, prop, literal: lit });
+        continue;
+      }
       if (prop.startsWith('--')) {
         why('a custom property');
         continue;
@@ -142,7 +155,7 @@ export function plan(styleCss, tokens) {
       edits.push({ at, length: lit.length, line, prop, literal: lit, to: `var(--mg-${pick})` });
     }
   }
-  return { edits, skipped };
+  return { edits, skipped, fixed };
 }
 
 /** The edits for px font sizes: font-size's px, and a font shorthand's size (its first px). */
@@ -173,14 +186,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const tokensCss = readFileSync(TOKENS, 'utf8');
   const colours = plan(style, lightTokens(tokensCss));
   const fonts = planFonts(style, textTokens(tokensCss));
-  const { skipped } = colours;
+  const { skipped, fixed } = colours;
   const edits = [...colours.edits, ...fonts];
   const byToken = {};
   for (const e of edits) byToken[e.to] = (byToken[e.to] || 0) + 1;
-  console.log(`${colours.edits.length} colour literals to tokens, ${skipped.length} left; ${fonts.length} font sizes to tokens`);
+  console.log(`${colours.edits.length} colour literals to tokens, ${skipped.length} left, ${fixed.length} fixed; ${fonts.length} font sizes to tokens`);
   console.log(Object.entries(byToken).sort((a, b) => b[1] - a[1]).map(([t, n]) => `  ${t} ${n}`).join('\n'));
   const at = process.argv.indexOf('--report');
-  if (at > 0) writeFileSync(process.argv[at + 1], `${JSON.stringify({ edits, skipped }, null, 2)}\n`);
+  if (at > 0) writeFileSync(process.argv[at + 1], `${JSON.stringify({ edits, skipped, fixed }, null, 2)}\n`);
   if (process.argv.includes('--write')) {
     writeFileSync(STYLE, apply(style, edits));
     console.log(`wrote ${STYLE}`);

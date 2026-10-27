@@ -2,9 +2,15 @@
  * Tunnel tokens. Built on the host's --mg-* tokens (/plugin-sdk/theme.css, loaded first);
  * only the tunnel's own roles (the view's background, bodies, the absorbing zones, the
  * selection) are defined here. Components use var(--t2d-*) / var(--mg-*), never raw hex.
+ * They are declared again on a [data-theme] element (the stage keeps the light theme while the
+ * core's 3D view is light): a var() in a custom property resolves where it is declared.
+ * [data-theme] has the same specificity as [data-theme="dark"], so a dark override of one of
+ * these must come after this block. The colours the GPU reads (src/app/colours.ts) stay plain
+ * hex (tests/tokens.test.ts).
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-:root {
+:root,
+[data-theme] {
   /* The view (runtime.js viewport background, as CAD's --cad-viewport-bg) */
   --t2d-bg: #f0f2f7;
   /* Bodies: the core viewport's body grey-blue, a dark outline */
@@ -13,7 +19,7 @@
   /* The absorbing zones' tint (drawn at 14 %) */
   --t2d-zone: #667085;
   /* Selection and the pose a dragged body is going to */
-  --t2d-select: #1570ef;
+  --t2d-select: var(--mg-primary);
   --t2d-ghost: #475467;
   /* Probes: dark ink on a ring of the page colour, over any field */
   --t2d-probe: var(--mg-text);

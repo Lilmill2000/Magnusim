@@ -51,9 +51,16 @@ describe('data.css', () => {
 
   // ColorLegend is a new look (no core pair): its rules are pinned here.
   it('the colour legend: a 12 px bar with the core legend bar corners, its title and ticks', () => {
-    expect(ruleProps(css, '.mgk-legend-bar')).toEqual({ height: '12px', 'border-radius': 'var(--mg-radius-2xs)' });
+    expect(ruleProps(css, '.mgk-legend-bar')).toEqual({
+      height: '12px',
+      'border-radius': 'var(--mg-radius-2xs)',
+      outline: '1px solid var(--mg-gradient-edge)',
+      'outline-offset': '-1px',
+    });
     const coreBar = withTokens(ruleProps(appCss, '.legend-bar'));
-    expect(withTokens(ruleProps(css, '.mgk-legend-bar'))).toEqual({ height: coreBar.height, 'border-radius': coreBar['border-radius'] });
+    expect(withTokens(ruleProps(css, '.mgk-legend-bar'))).toMatchObject({ height: coreBar.height, 'border-radius': coreBar['border-radius'] });
+    // The edge shows the bar's ends on a dark page; in light it is transparent, so nothing changes.
+    expect(withTokens(ruleProps(css, '.mgk-legend-bar')).outline).toBe('1px solid transparent');
     expect(ruleProps(css, '.mgk-legend-title')).toEqual({
       'font-size': 'var(--mg-text-xs)',
       color: 'var(--mg-text-muted)',

@@ -22,5 +22,6 @@ b.mgk-plot-tip-head { font-weight: var(--mg-weight-semibold); color: var(--mg-te
 .mgk-plot-cursor[hidden], .mgk-plot-tip[hidden] { display: none; }
 
 .mgk-legend-title { font-size: var(--mg-text-xs); color: var(--mg-text-muted); margin-bottom: var(--mg-space-1); }
-.mgk-legend-bar { height: 12px; border-radius: var(--mg-radius-2xs); }
+/* The edge is drawn in dark only (transparent in light); an inset outline, as a kit box-shadow must be one token. */
+.mgk-legend-bar { height: 12px; border-radius: var(--mg-radius-2xs); outline: 1px solid var(--mg-gradient-edge); outline-offset: -1px; }
 .mgk-legend-ticks { display: flex; justify-content: space-between; margin-top: 2px; font-size: var(--mg-text-xs); color: var(--mg-text-muted); font-variant-numeric: tabular-nums; }

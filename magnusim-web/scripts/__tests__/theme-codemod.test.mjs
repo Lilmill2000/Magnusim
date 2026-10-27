@@ -101,6 +101,33 @@ describe('theme codemod', () => {
     );
   });
 
+  it('leaves a declaration its "fixed" comment marks, and lists it apart from the ones left', () => {
+    const css = [
+      '.a { border: 2px solid #fff; /* fixed: white in either theme */ }',
+      '.b {',
+      '  background: #fff;/*fixed*/',
+      '  color: #fff; /* not fixed */',
+      '}',
+      '.c { color: #fff; } /* fixed, but after the rule */',
+    ].join('\n');
+    const { edits, skipped, fixed } = plan(css, lightTokens(TOKENS));
+    assert.deepEqual(
+      fixed.map((f) => [f.line, f.prop, f.literal]),
+      [
+        [1, 'border', '#fff'],
+        [3, 'background', '#fff'],
+      ],
+    );
+    assert.deepEqual(
+      edits.map((e) => [e.line, e.prop, e.to]),
+      [
+        [4, 'color', 'var(--mg-primary-text)'],
+        [6, 'color', 'var(--mg-primary-text)'],
+      ],
+    );
+    assert.deepEqual(skipped, []);
+  });
+
   it('moves px font sizes onto the text tokens, or a scaled calc when no token has the size', () => {
     const css = [
       '.a { font-size: 12px; }',

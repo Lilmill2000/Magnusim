@@ -14,6 +14,8 @@ const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1
 const PROJECT = H10_PROJECT;
 const SIM = 'sim_1';
 const BASELINE = resolve('bundled-plugins/incompressible_flow/e2e/fixtures/h10-ui-parity.json');
+// The residual plot's grid, labels and series colours are classes and var(--mg-series-N)
+// since dark mode (2026-10-27): those baseline lines were edited by hand to match (Daniel's OK).
 const UPDATE = process.env.MAGNUSIM_UPDATE_PARITY === '1';
 const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 // Rows the study panel gained after v0.2.0 (Reference values, F4), left out of the comparison.

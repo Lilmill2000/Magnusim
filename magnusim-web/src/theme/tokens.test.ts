@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { lightTokens, plan, planFonts, textTokens } from '../../scripts/theme-codemod.mjs';
+import { lightTokens, normalize, plan, planFonts, textTokens } from '../../scripts/theme-codemod.mjs';
+import { resolveVars } from '../../scripts/theme-light-identity.mjs';
 import { seriesFor } from '../panels/run/ResidualPlot';
-import { darkTokenValues, readAppCss, readTokensCss, ruleProps, tokenValues, withTokens } from '../test/kitCss';
+import { cssRules, darkTokenValues, readAppCss, readTokensCss, ruleProps, tokenValues, withTokens } from '../test/kitCss';
 
 const tokens = tokenValues();
 const dark = darkTokenValues();
@@ -64,6 +68,84 @@ const CORE_SOURCES: Array<[token: string, selector: string, prop: string, pick?:
   ['--mg-z-tooltip', '.mat-k-tip', 'z-index'],
 ];
 
+// The 3D view's tokens (and the BC, refinement and analysis-area colours its faces share with the
+// chrome's swatches): no dark value until the 3D view turns dark with them.
+const VIEW_TOKENS = [
+  ...['ink', 'edge', 'mesh-edge', 'face', 'face-dim', 'mesh-face', 'slice-face', 'selected', 'pick', 'pick-strong', 'candidate', 'region', 'marker', 'flash', 'halo'].map((n) => `--mg-viewport-${n}`),
+  '--mg-capture-mask',
+  ...['inlet', 'outlet', 'pressure', 'freestream', 'wall', 'symmetry', 'other', 'default'].map((n) => `--mg-bc-${n}`),
+  '--mg-ref-surface',
+  '--mg-ref-inflate',
+  '--mg-accent-purple',
+];
+
+// The appearance tokens for the rest of the chrome, the charts and the 3D view, with the light
+// value each takes: the colour the app paints there today, so the light look stays the same.
+const APPEARANCE_LIGHT: Record<string, string> = {
+  '--mg-text-ink': '#1f2430',
+  '--mg-overlay-bg': 'rgba(20, 24, 32, 0.5)',
+  '--mg-info-bg': '#eef3fd',
+  '--mg-info-border': '#c5d4f5',
+  '--mg-active-bg': '#d7e8ff',
+  '--mg-active-border': '#9bc2f0',
+  '--mg-pressed-border': '#6ea3ea',
+  '--mg-pressed-text': '#143a6b',
+  '--mg-success-border': '#abefc6',
+  '--mg-success-bg-strong': '#d1fadf',
+  '--mg-success-muted': '#3f6b4a',
+  '--mg-warning-border': '#fedf89',
+  '--mg-accent-purple-bg': '#ebe9fe',
+  '--mg-running': '#12b76a',
+  '--mg-legend-lo': '#2438d6',
+  '--mg-legend-hi': '#c01818',
+  '--mg-pin': '#c026d3',
+  '--mg-pin-text': '#a21caf',
+  '--mg-btn-solid-bg': '#1a1d24',
+  '--mg-btn-solid-hover': '#2a3140',
+  '--mg-btn-solid-text': '#ffffff',
+  '--mg-inverse-hover': '#1d2939',
+  '--mg-border-soft': '#dde1e8',
+  '--mg-shadow-lg': '0 12px 40px rgba(0, 0, 0, 0.25)',
+  '--mg-tooltip-edge': 'transparent',
+  '--mg-gradient-edge': 'transparent',
+  '--mg-chart-grid': '#e6e9ef',
+  '--mg-chart-axis': '#98a2b3',
+  '--mg-chart-text': '#667085',
+  '--mg-series-8': '#d92d20',
+  '--mg-series-9': '#7a5af8',
+  '--mg-series-10': '#0e9384',
+  '--mg-series-11': '#dc6803',
+  '--mg-series-default': '#3884e6',
+  '--mg-series-lift': '0%',
+  '--mg-viewport-ink': '#141a29',
+  '--mg-viewport-edge': '#0a0b0e',
+  '--mg-viewport-mesh-edge': '#42474f',
+  '--mg-viewport-face': '#bdc9db',
+  '--mg-viewport-face-dim': '#bcc4d0',
+  '--mg-viewport-mesh-face': '#dbe0e8',
+  '--mg-viewport-slice-face': '#d1d9e3',
+  '--mg-viewport-selected': '#4884eb',
+  '--mg-viewport-pick': '#2ec47e',
+  '--mg-viewport-pick-strong': '#1ad675',
+  '--mg-viewport-candidate': '#7688a2',
+  '--mg-viewport-region': '#fab81f',
+  '--mg-viewport-marker': '#ff00ff',
+  '--mg-viewport-flash': '#ff8c14',
+  '--mg-viewport-halo': '#ffffff',
+  '--mg-capture-mask': 'rgba(18, 22, 32, 0.42)',
+  '--mg-bc-inlet': '#3884e6',
+  '--mg-bc-outlet': '#ea7024',
+  '--mg-bc-pressure': '#9333ea',
+  '--mg-bc-freestream': '#16a34a',
+  '--mg-bc-wall': '#5f6b7a',
+  '--mg-bc-symmetry': '#0891b2',
+  '--mg-bc-other': '#db2777',
+  '--mg-bc-default': '#d6be8c',
+  '--mg-ref-surface': '#0d9488',
+  '--mg-ref-inflate': '#d97706',
+  '--mg-accent-purple': '#6941c6',
+};
+
 describe('tokens.css', () => {
   it('each named core value equals the core rule it comes from (style.css, through its tokens)', () => {
     for (const [token, selector, prop, pick] of CORE_SOURCES) {
@@ -74,23 +156,74 @@ describe('tokens.css', () => {
     }
   });
 
-  it('the dark set gives every light colour a dark value, and changes nothing but colours and shadows', () => {
+  it("the dark set gives every light colour a dark value (the 3D view's later), and changes nothing but colours and shadows", () => {
     const lightColours = Object.keys(tokens).filter((k) => isColour(tokens[k]));
     expect(lightColours.length).toBeGreaterThan(60);
-    expect(lightColours.filter((k) => !(k in dark))).toEqual([]);
+    expect(lightColours.filter((k) => !(k in dark) && !VIEW_TOKENS.includes(k))).toEqual([]);
+    // Each 3D view token gets its dark value with the 3D view, and leaves this list then.
+    expect(VIEW_TOKENS.filter((k) => !(k in tokens) || k in dark)).toEqual([]);
     for (const [k, v] of Object.entries(dark)) {
       expect(k in tokens, `${k} is a light token too`).toBe(true);
-      expect(isColour(v) || k.startsWith('--mg-shadow-'), `${k}: ${v}`).toBe(true);
+      // --mg-series-lift is a colour amount: how far a series with no token lifts toward white.
+      expect(isColour(v) || k.startsWith('--mg-shadow-') || k === '--mg-series-lift', `${k}: ${v}`).toBe(true);
     }
     expect(readTokensCss()).toMatch(/\[data-theme="dark"\]\s*\{\s*color-scheme: dark;/);
+  });
+
+  it('the appearance tokens have the light value the app paints today', () => {
+    for (const [k, v] of Object.entries(APPEARANCE_LIGHT)) expect(tokens[k], k).toBe(v);
+    const chromeAndCharts = Object.keys(APPEARANCE_LIGHT).filter((k) => !VIEW_TOKENS.includes(k));
+    expect(chromeAndCharts.filter((k) => !(k in dark))).toEqual([]);
+  });
+
+  // vtk, canvas and WebGPU read these through themeColor (src/theme/themeColor.ts), which takes rgb()
+  // only: a color-mix() computes to color(srgb ...).
+  it('every token code reads as a colour is plain hex or rgb in every block', () => {
+    const read = (k: string) => /^--mg-(viewport-|bc-|ref-|axis-)/.test(k) || k === '--mg-capture-mask' || k === '--mg-accent-purple';
+    const names = Object.keys(tokens).filter(read);
+    expect(names.length).toBeGreaterThan(30);
+    for (const k of names) {
+      expect(isColour(tokens[k]), `${k}: ${tokens[k]}`).toBe(true);
+      if (k in dark) expect(isColour(dark[k]), `${k} (dark): ${dark[k]}`).toBe(true);
+    }
+  });
+
+  // tunnel2d's view colours, read as colours by its WebGPU palette and its 2D overlays: several are
+  // built on the host's tokens, so each is taken through the host's light and dark values.
+  it('every tunnel2d colour token is plain hex or rgb on the light and dark tokens', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bundled-plugins', 'tunnel2d', 'src', 'styles', 'tokens.css'), 'utf8');
+    const t2d = cssRules(css).flatMap((r) => Object.entries(r.props)).filter(([k]) => k.startsWith('--t2d-'));
+    const lightMap = new Map([...Object.entries(tokens), ...t2d]);
+    const darkMap = new Map([...Object.entries({ ...tokens, ...dark }), ...t2d]);
+    const colours = t2d.filter(([, v]) => !/^\d+(\.\d+)?px$/.test(resolveVars(v, lightMap)));
+    expect(colours.length).toBeGreaterThan(25);
+    for (const [k, v] of colours) {
+      for (const [theme, map] of [['light', lightMap], ['dark', darkMap]] as const) {
+        const value = resolveVars(v, map);
+        expect(isColour(value), `${k} (${theme}): ${v} -> ${value}`).toBe(true);
+      }
+    }
+  });
+
+  // e2e/shared-face-ids.spec.js finds the painted faces as "not the most common colour".
+  it('the CAD face greys differ from every BC, refinement and pick colour', () => {
+    const paints = Object.keys(tokens).filter((k) => /^--mg-(bc-|ref-|viewport-(pick|selected|candidate|region))/.test(k) || k === '--mg-accent-purple');
+    expect(paints.length).toBeGreaterThan(12);
+    for (const face of ['--mg-viewport-face', '--mg-viewport-face-dim']) {
+      for (const p of paints) expect(tokens[p], `${face} vs ${p}`).not.toBe(tokens[face]);
+    }
   });
 
   // Text on the surfaces it sits on: at least 4.5:1 in dark, or as readable as light where light is
   // below that (the placeholder greys). The fills: their text on them, both themes.
   it('dark text is readable on every surface, at least as readable as light', () => {
-    const texts = ['text', 'text-strong', 'text-body', 'text-secondary', 'text-muted', 'text-subtle', 'text-tertiary', 'text-dim', 'text-slate', 'text-faint', 'link', 'link-strong', 'primary-ink', 'danger', 'success', 'warning', 'info'];
+    const texts = ['text', 'text-strong', 'text-body', 'text-secondary', 'text-muted', 'text-subtle', 'text-tertiary', 'text-dim', 'text-slate', 'text-faint', 'text-ink', 'link', 'link-strong', 'primary-ink', 'danger', 'success', 'warning', 'info'];
     const surfaces = ['bg', 'surface', 'surface-muted', 'surface-2', 'surface-3', 'surface-hover', 'app-bg', 'selected-bg'];
-    const fills = [['primary-text', 'primary'], ['primary-text', 'primary-hover'], ['primary-text', 'danger-solid'], ['tooltip-text', 'tooltip-bg'], ['danger', 'danger-bg'], ['success', 'success-bg'], ['warning', 'warning-bg'], ['text', 'btn-neutral-bg'], ['text', 'btn-neutral-hover']];
+    const fills = [
+      ['primary-text', 'primary'], ['primary-text', 'primary-hover'], ['primary-text', 'danger-solid'], ['tooltip-text', 'tooltip-bg'],
+      ['danger', 'danger-bg'], ['success', 'success-bg'], ['warning', 'warning-bg'], ['text', 'btn-neutral-bg'], ['text', 'btn-neutral-hover'],
+      ['btn-solid-text', 'btn-solid-bg'], ['btn-solid-text', 'btn-solid-hover'], ['pressed-text', 'active-bg'], ['text-ink', 'info-bg'],
+    ];
     const pairs = [...texts.flatMap((t) => surfaces.map((s) => [t, s])), ...fills];
     const value = (set: Record<string, string>, k: string) => set[`--mg-${k}`] ?? tokens[`--mg-${k}`];
     const short = [];
@@ -107,9 +240,36 @@ describe('tokens.css', () => {
   // new colour with no token is refused (the count only goes down), and every font size scales.
   it('style.css uses a token for every colour that has one, adds no other colour literal, and has no px font size', () => {
     const tokensCss = readTokensCss();
-    const { edits, skipped } = plan(appCss, lightTokens(tokensCss));
+    const { edits, skipped, fixed } = plan(appCss, lightTokens(tokensCss));
     expect(edits.map((e: { line: number; literal: string; to: string }) => `${e.line}: ${e.literal} -> ${e.to}`)).toEqual([]);
-    expect(skipped.length).toBeLessThanOrEqual(415);
+    const lines = appCss.split('\n');
+    const ruleAt = (line: number) => {
+      for (let i = line - 1; i >= 0; i--) {
+        const open = lines[i].lastIndexOf('{');
+        if (open >= 0) return lines[i].slice(0, open).trim();
+      }
+      return '';
+    };
+    type Left = { line: number; prop: string; literal: string; reason: string };
+    const byRule = (f: { line: number; prop: string; literal: string }) => `${ruleAt(f.line)} { ${f.prop}: ${f.literal} }`;
+    // A var() fallback that is its own token's light value is the token's colour before tokens.css
+    // arrives (index.html links style.css, the entry script brings tokens.css): not a colour of its
+    // own, so out of the count and listed.
+    const ownToken = (s: Left) => {
+      if (s.reason !== 'a var() fallback') return false;
+      const lit = s.literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const name = new RegExp(`var\\((--mg-[a-z0-9-]+)\\s*,\\s*${lit}\\s*\\)`).exec(lines[s.line - 1])?.[1];
+      return !!name && name in tokens && normalize(tokens[name]) === normalize(s.literal);
+    };
+    expect(skipped.filter(ownToken).map(byRule)).toEqual(['#app { background: #e8eaee }']);
+    expect(skipped.filter((s: Left) => !ownToken(s)).length).toBeLessThanOrEqual(218);
+    // A literal marked "fixed" (the same in every theme) is out of the count above, so each one is
+    // listed here: a new one is a deliberate change to this list. By rule, as lines move.
+    expect(fixed.map(byRule)).toEqual([
+      '.pt-rh-dot { border: #fff }',
+      '.capture-frame { border: #fff }',
+      '.cfr-corner { background: #fff }',
+    ]);
     expect(planFonts(appCss, textTokens(tokensCss)).map((e: { line: number; literal: string }) => `${e.line}: ${e.literal}`)).toEqual([]);
   });
 

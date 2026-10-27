@@ -65,7 +65,7 @@ Type, space and shape:
 | `--mg-shadow-sm`, `-md` | | Toasts; a card drawn in a frame |
 | `--mg-duration-fast`, `--mg-duration`, `--mg-ease` | 120 ms, 200 ms | Hover and open transitions |
 
-`src/theme/tokens.css` has the full list, about 100 tokens. The dev sheet's first column shows each one.
+`src/theme/tokens.css` has the full list, about 180 tokens. The dev sheet's first column shows each one. Some are the host's own, for its charts and 3D view (`--mg-chart-*`, `--mg-series-8` … `--mg-series-11`, `--mg-series-default`, `--mg-viewport-*`, `--mg-bc-*`): they may change with the host. A bundled plugin ships with the host, so it may follow the host's 3D view with them; any other plugin does not use them, and keeps to the roles above. A plugin's plot takes `--mg-series-1` … `--mg-series-7`.
 
 Rules:
 

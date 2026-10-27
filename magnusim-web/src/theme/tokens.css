@@ -143,6 +143,81 @@
   --mg-axis-x: #d42828;
   --mg-axis-y: #1f9a3a;
   --mg-axis-z: #2a5bd7;
+
+  /* Appearance: the rest of the chrome's colours that had no token (their light values) */
+  --mg-text-ink: #1f2430;
+  --mg-overlay-bg: rgba(20, 24, 32, 0.5);
+  --mg-info-bg: #eef3fd;
+  --mg-info-border: #c5d4f5;
+  --mg-active-bg: #d7e8ff;
+  --mg-active-border: #9bc2f0;
+  --mg-pressed-border: #6ea3ea;
+  --mg-pressed-text: #143a6b;
+  --mg-success-border: #abefc6;
+  --mg-success-bg-strong: #d1fadf;
+  --mg-success-muted: #3f6b4a;
+  --mg-warning-border: #fedf89;
+  --mg-accent-purple-bg: #ebe9fe;
+  --mg-running: #12b76a;
+  --mg-legend-lo: #2438d6;
+  --mg-legend-hi: #c01818;
+  --mg-pin: #c026d3;
+  --mg-pin-text: #a21caf;
+  --mg-btn-solid-bg: #1a1d24;
+  --mg-btn-solid-hover: #2a3140;
+  --mg-btn-solid-text: #ffffff;
+  --mg-inverse-hover: #1d2939;
+  --mg-border-soft: #dde1e8;
+  --mg-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.25);
+  /* Edges only dark needs (a tooltip's outline, a gradient's inset ring): none in light */
+  --mg-tooltip-edge: transparent;
+  --mg-gradient-edge: transparent;
+
+  /* Charts: grid, axes and their text; series past the seven above. A series colour with no
+     token is mixed toward white by --mg-series-lift (src/theme/series.ts): none in light. */
+  --mg-chart-grid: #e6e9ef;
+  --mg-chart-axis: #98a2b3;
+  --mg-chart-text: #667085;
+  --mg-series-8: #d92d20;
+  --mg-series-9: #7a5af8;
+  --mg-series-10: #0e9384;
+  --mg-series-11: #dc6803;
+  --mg-series-default: #3884e6;
+  --mg-series-lift: 0%;
+
+  /*
+   * The 3D view's colours, and the boundary-condition, refinement and analysis-area colours its
+   * faces share with the chrome's swatches. vtk reads them through themeColor
+   * (src/theme/themeColor.ts), so each is plain hex or rgb in every block. They have no dark
+   * value yet: they turn dark with the 3D view, so a swatch always matches its face paint.
+   */
+  --mg-viewport-ink: #141a29;
+  --mg-viewport-edge: #0a0b0e;
+  --mg-viewport-mesh-edge: #42474f;
+  --mg-viewport-face: #bdc9db;
+  --mg-viewport-face-dim: #bcc4d0;
+  --mg-viewport-mesh-face: #dbe0e8;
+  --mg-viewport-slice-face: #d1d9e3;
+  --mg-viewport-selected: #4884eb;
+  --mg-viewport-pick: #2ec47e;
+  --mg-viewport-pick-strong: #1ad675;
+  --mg-viewport-candidate: #7688a2;
+  --mg-viewport-region: #fab81f;
+  --mg-viewport-marker: #ff00ff;
+  --mg-viewport-flash: #ff8c14;
+  --mg-viewport-halo: #ffffff;
+  --mg-capture-mask: rgba(18, 22, 32, 0.42);
+  --mg-bc-inlet: #3884e6;
+  --mg-bc-outlet: #ea7024;
+  --mg-bc-pressure: #9333ea;
+  --mg-bc-freestream: #16a34a;
+  --mg-bc-wall: #5f6b7a;
+  --mg-bc-symmetry: #0891b2;
+  --mg-bc-other: #db2777;
+  --mg-bc-default: #d6be8c;
+  --mg-ref-surface: #0d9488;
+  --mg-ref-inflate: #d97706;
+  --mg-accent-purple: #6941c6;
 }
 
 /* Text and icon sizes: scaled by Settings > Appearance (1 = as designed). */
@@ -246,4 +321,40 @@
   --mg-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
   --mg-shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.4);
   --mg-shadow-tooltip: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --mg-text-ink: #e6e9ef;
+  --mg-overlay-bg: rgba(0, 0, 0, 0.6);
+  --mg-info-bg: #1c2c47;
+  --mg-info-border: #2c4a7a;
+  --mg-active-bg: #1f3a66;
+  --mg-active-border: #3f6db8;
+  --mg-pressed-border: #5b8fe0;
+  --mg-pressed-text: #b3cdff;
+  --mg-success-border: #2b6e4a;
+  --mg-success-bg-strong: #1a4a33;
+  --mg-success-muted: #7fc79a;
+  --mg-warning-border: #7a5a17;
+  --mg-accent-purple-bg: #2e2650;
+  --mg-running: #32d583;
+  --mg-legend-lo: #8b95ff;
+  --mg-legend-hi: #ff7070;
+  --mg-pin: #e879f9;
+  --mg-pin-text: #f0abfc;
+  --mg-btn-solid-bg: #e6e9ef;
+  /* The solid button lightens on hover, as in light */
+  --mg-btn-solid-hover: #ffffff;
+  --mg-btn-solid-text: #1a1d24;
+  --mg-inverse-hover: #ffffff;
+  --mg-border-soft: #343b47;
+  --mg-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
+  --mg-tooltip-edge: #3a414e;
+  --mg-gradient-edge: #3a414e;
+  --mg-chart-grid: #2c323d;
+  --mg-chart-axis: #6b7382;
+  --mg-chart-text: #9aa4b2;
+  --mg-series-8: #f97066;
+  --mg-series-9: #a48afb;
+  --mg-series-10: #2ed3b7;
+  --mg-series-11: #f38744;
+  --mg-series-default: #6aa6f8;
+  --mg-series-lift: 30%;
 }

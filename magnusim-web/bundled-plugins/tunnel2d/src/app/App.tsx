@@ -425,7 +425,9 @@ export function App({
           <TunnelPanel store={store} engine={engine} units={units} />
           <ViewPanel store={store} />
         </aside>
-        <div className="t2d-stage">
+        {/* The stage (the view and what is drawn over it) keeps the light theme while the core's 3D
+            view is light; this attribute is removed when the 3D view goes dark. */}
+        <div className="t2d-stage" data-theme="light">
           {problem ? (
             <div className="t2d-banner">
               <DisabledReason reason={`The saved tunnel could not be read (${problem}), so a new one was started.`} role="alert" />

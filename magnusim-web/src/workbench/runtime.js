@@ -234,6 +234,8 @@ import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId 
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
 import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
 import { formatSci } from '../plugin-ui/format/sci';
+import { onAppearance, themeRgb01 } from '../theme/themeColor';
+import { seriesVar } from '../theme/series';
 
 // The legend bars draw the renders' own lookup table: every LUT here is the rainbow from RAINBOW_HUE.
 try { document.documentElement.style.setProperty('--legend-cmap', colormapGradient('rainbow')); } catch (_) {}
@@ -7948,8 +7950,8 @@ function renderPopChart(meta) {
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML =
     `<path d="M${left} ${top}V${h - bottom}H${w - right}" fill="none" stroke="#c4c9d2" stroke-width="1" />` +
-    runs.map((r) => `<polyline fill="none" stroke="#1570ef" stroke-width="2" points="${r.join(' ')}" />`).join('') +
-    `<text x="8" y="14" font-size="10" fill="#4b5563">${escapeXml(popChartTitle(m))}</text>` +
+    runs.map((r) => `<polyline fill="none" style="stroke:var(--mg-series-1)" stroke-width="2" points="${r.join(' ')}" />`).join('') +
+    `<text x="8" y="14" font-size="10" style="fill:var(--mg-text-slate)">${escapeXml(popChartTitle(m))}</text>` +
     label(left - 4, top + 4, toolNum(ymax), 'end') +
     label(left - 4, h - bottom, toolNum(ymin), 'end') +
     label(left, h - bottom + 12, toolNum(xmin)) +
@@ -34555,7 +34557,7 @@ async function renameActiveRunClient(name) {
       .join(' ');
     return (
       '<svg class="mon-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" role="img" aria-label="History">' +
-      '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" points="' + pts + '" />' +
+      '<polyline fill="none" stroke="' + color + '"' + seriesStyle('stroke', color) + ' stroke-width="1.5" points="' + pts + '" />' +
       '</svg>'
     );
   }
@@ -34771,7 +34773,8 @@ async function renameActiveRunClient(name) {
     return (run + (m.name || m.patch || m.key || 'monitor') + '-' + ((spec && spec.label) || 'chart')).replace(/[^\w.-]+/g, '-');
   }
 
-  function monChartSvgEl(m, width, height) {
+  /** The chart as an SVG element: for a saved image unless `screen` (then it takes the theme). */
+  function monChartSvgEl(m, width, height, screen) {
     const pts = monPts(m);
     if (pts.length < 2 || typeof monitorChartSvg !== 'function') return null;
     const spec = qtySpec(m);
@@ -34784,6 +34787,7 @@ async function renameActiveRunClient(name) {
       color: spec.color,
       title: monChartTitle(m),
       subtitle: monChartSubtitle(),
+      screen: !!screen,
     });
     const wrap = document.createElement('div');
     wrap.innerHTML = geo.svg;
@@ -34835,7 +34839,7 @@ async function renameActiveRunClient(name) {
     fillMonChartQty(qtyEl, m);
     const w = Math.max(480, Math.round(body.clientWidth || 960));
     const h = Math.max(280, Math.round(body.clientHeight || 520));
-    const built = monChartSvgEl(m, w, h);
+    const built = monChartSvgEl(m, w, h, true);
     if (!built || !built.svg) {
       body.innerHTML = '<div class="mon-empty">Not enough samples yet.</div>';
       return;
@@ -36688,11 +36692,28 @@ function graphTick(v, span) {
   return v.toExponential(1);
 }
 
-/** Static SVG line chart with axes; all styling inline so PNG export matches. */
+/**
+ * A series colour on the theme, as an SVG style attribute for `prop` (stroke or fill). '' with no
+ * colour, or one seriesVar leaves as it is (not a hex): the attribute already paints that.
+ */
+function seriesStyle(prop, color) {
+  if (typeof color !== 'string' || !color) return '';
+  const v = seriesVar(color);
+  return v === color ? '' : ' style="' + prop + ':' + escapeHtml(v) + '"';
+}
+
+/**
+ * Static SVG line chart with axes. Its colour attributes are the light ones, so a saved image
+ * (drawn with no page CSS) stays light. On screen (opts.screen) it also takes the theme: classes
+ * that .graph-svg's CSS colours, and var() styles, which an image could not resolve.
+ */
 function monitorChartSvg(pts, opts) {
   const W = Math.max(280, Math.round(opts.width || 560));
   const H = Math.max(160, Math.round(opts.height || 190));
   const color = opts.color || '#3884e6';
+  const screen = !!opts.screen;
+  const cls = (name) => (screen ? ' class="' + name + '"' : '');
+  const lineStyle = (prop) => (screen ? seriesStyle(prop, color) : '');
   const hasTitle = !!(opts.title || opts.subtitle);
   const padL = 58;
   const padR = 12;
@@ -36708,7 +36729,7 @@ function monitorChartSvg(pts, opts) {
   const Y = (v) => padT + (1 - (v - yn.lo) / Math.max(1e-12, yn.hi - yn.lo)) * (H - padT - padB);
   const font = 'font-family="system-ui, Segoe UI, sans-serif" font-size="10" fill="#667085"';
   let s = '<svg xmlns="http://www.w3.org/2000/svg" class="graph-svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" data-w="' + W + '" data-padl="' + padL + '" data-padr="' + padR + '">';
-  s += '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="#ffffff"/>';
+  s += '<rect' + cls('gbg') + ' x="0" y="0" width="' + W + '" height="' + H + '" fill="#ffffff"/>';
   if (opts.title) {
     s +=
       '<text x="' +
@@ -36727,13 +36748,13 @@ function monitorChartSvg(pts, opts) {
   }
   for (const t of yn.ticks) {
     const y = Y(t).toFixed(1);
-    s += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y + '" y2="' + y + '" stroke="#e6e9ef"/>';
+    s += '<line' + cls('gx') + ' x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y + '" y2="' + y + '" stroke="#e6e9ef"/>';
     s += '<text x="' + (padL - 6) + '" y="' + y + '" text-anchor="end" dominant-baseline="middle" ' + font + '>' + escapeHtml(graphTick(t, yn.hi - yn.lo)) + '</text>';
   }
   for (const t of xn.ticks) {
     if (t < xlo - 1e-9 || t > xhi + 1e-9) continue;
     const x = X(t).toFixed(1);
-    s += '<line x1="' + x + '" x2="' + x + '" y1="' + (H - padB) + '" y2="' + (H - padB + 4) + '" stroke="#98a2b3"/>';
+    s += '<line' + cls('gax') + ' x1="' + x + '" x2="' + x + '" y1="' + (H - padB) + '" y2="' + (H - padB + 4) + '" stroke="#98a2b3"/>';
     const xt = opts.timeAxis
       ? typeof formatSimTime === 'function'
         ? formatSimTime(t, { noUnit: true })
@@ -36741,13 +36762,13 @@ function monitorChartSvg(pts, opts) {
       : String(Math.round(t));
     s += '<text x="' + x + '" y="' + (H - padB + 15) + '" text-anchor="middle" ' + font + '>' + escapeHtml(xt) + '</text>';
   }
-  s += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + (H - padB) + '" y2="' + (H - padB) + '" stroke="#98a2b3"/>';
-  s += '<line x1="' + padL + '" x2="' + padL + '" y1="' + padT + '" y2="' + (H - padB) + '" stroke="#98a2b3"/>';
+  s += '<line' + cls('gax') + ' x1="' + padL + '" x2="' + (W - padR) + '" y1="' + (H - padB) + '" y2="' + (H - padB) + '" stroke="#98a2b3"/>';
+  s += '<line' + cls('gax') + ' x1="' + padL + '" x2="' + padL + '" y1="' + padT + '" y2="' + (H - padB) + '" stroke="#98a2b3"/>';
   s += '<text x="' + ((padL + W - padR) / 2).toFixed(1) + '" y="' + (H - 3) + '" text-anchor="middle" ' + font + '>' + (opts.timeAxis ? 'Time (s)' : 'Iteration') + '</text>';
   s += '<text transform="translate(11 ' + ((padT + H - padB) / 2).toFixed(1) + ') rotate(-90)" text-anchor="middle" ' + font + '>' + escapeHtml(opts.unit || '') + '</text>';
   const path = pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join('');
-  s += '<path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linejoin="round"/>';
-  s += '<g class="ghover" style="display:none"><line class="gcross" y1="' + padT + '" y2="' + (H - padB) + '" stroke="#98a2b3" stroke-dasharray="3 3"/><circle r="3.5" fill="' + color + '"/>' +
+  s += '<path' + cls('gline') + ' d="' + path + '" fill="none" stroke="' + color + '"' + lineStyle('stroke') + ' stroke-width="1.6" stroke-linejoin="round"/>';
+  s += '<g class="ghover" style="display:none"><line class="gcross" y1="' + padT + '" y2="' + (H - padB) + '" stroke="#98a2b3" stroke-dasharray="3 3"/><circle r="3.5" fill="' + color + '"' + lineStyle('fill') + '/>' +
     '<g class="gtip"><rect rx="3" height="18" fill="rgba(255,255,255,0.95)" stroke="#cfd3db"/><text font-family="system-ui, Segoe UI, sans-serif" font-size="11" fill="#1f2430" dominant-baseline="middle"></text></g></g>';
   s += '<rect class="ghit" x="' + padL + '" y="' + padT + '" width="' + (W - padL - padR) + '" height="' + (H - padT - padB) + '" fill="transparent"/>';
   s += '</svg>';
@@ -38955,3 +38976,29 @@ bindSetupHost({
   applyMeshRecord,
   publishMesh: publishW20,
 });
+
+// ---- Appearance: the 3D views' theme colours ----
+
+// The 3D view's background, read where it shows (so a data-theme island applies).
+function viewportBg(scopeEl = document.getElementById('viewer')) {
+  return themeRgb01('--mg-viewport-bg', scopeEl);
+}
+
+// Renders both 3D views after an appearance change (a theme or scale change): no 3D colour comes
+// from a token yet. Each one that does is re-applied here before the render, the compare view's
+// while its viewer exists; the compare view renders only while it shows (its viewer outlives
+// compare being turned off).
+function reapplyViewportTheme() {
+  for (const rw of [renderWindow, compareState.on && compareState.viewer && compareState.viewer.renderWindow]) {
+    if (!rw) continue;
+    try {
+      rw.render();
+    } catch (err) {
+      console.warn('[CFD] viewport theme render', err);
+    }
+  }
+}
+
+onAppearance(reapplyViewportTheme);
+// Test hook: the background the theme gives a 3D view, and the re-apply an appearance change runs.
+window.__CFD_THEME__ = { viewportBg, reapplyViewportTheme };

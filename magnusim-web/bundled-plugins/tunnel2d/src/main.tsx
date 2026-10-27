@@ -14,7 +14,7 @@ import { SketchEditor } from './sketch/editor';
 import { SketchSolver } from './sketch/solve';
 import { SweepHost } from './sim/sweep';
 import { ProbeFeed } from './ui/probeFeed';
-import type { Palette } from './render/renderer';
+import { applyViewColours, viewPalette } from './app/colours';
 import { Engine } from './sim/engine';
 import { shaderErrors } from './sim/shaders';
 import { gpuHelp, webglRenderer } from './app/gpuHelp';
@@ -26,18 +26,6 @@ function fatal(title: string, message: string, cause = '') {
   root.render(
     createElement('div', { className: 't2d-fatal', role: 'alert', 'data-t2d-fatal': cause || '1' }, createElement(EmptyState, null, createElement('strong', null, title), createElement('p', null, message))),
   );
-}
-
-/** A CSS colour (a design token) as linear 0..1 RGB. */
-function tokenRgb(name: string): [number, number, number] {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const c = document.createElement('canvas').getContext('2d')!;
-  c.fillStyle = v || 'black';
-  const hex = c.fillStyle as string;
-  if (hex.startsWith('#')) return [parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255];
-  const m = /rgba?\(([^)]+)\)/.exec(hex);
-  const p = m ? m[1].split(',').map(Number) : [0, 0, 0];
-  return [p[0] / 255, p[1] / 255, p[2] / 255];
 }
 
 async function main() {
@@ -95,43 +83,10 @@ async function main() {
   const saver = new Saver(ws, store, study.id, loaded.etag);
   if (!loaded.etag) await saver.create(loaded.scene);
 
-  const palette: Palette = {
-    bg: tokenRgb('--t2d-bg'),
-    body: tokenRgb('--t2d-body'),
-    edge: tokenRgb('--t2d-edge'),
-    zone: [...tokenRgb('--t2d-zone'), 0.14],
-    plain: tokenRgb('--t2d-plain'),
-    arrow: [...tokenRgb('--t2d-arrow'), 0.85],
-  };
+  // The view's colours, read on the page until the view is drawn (it reads them again on its stage).
   const canvas = document.createElement('canvas');
-  const engine = new Engine(device, canvas, adapterName, palette);
-  // Two lights 25 degrees over the tank, from the upper left and the lower right.
-  const lightDir = (azDeg: number): [number, number, number] => {
-    const el = (16 * Math.PI) / 180;
-    const az = (azDeg * Math.PI) / 180;
-    return [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
-  };
-  const look = (name: string, d1: number, d2: number, sharp: number, glint: number) => ({
-    base: tokenRgb(`--t2d-rheo-${name}-base`),
-    l1: { dir: lightDir(135), color: tokenRgb(`--t2d-rheo-${name}-light1`), diffuse: d1 },
-    l2: { dir: lightDir(-45), color: tokenRgb(`--t2d-rheo-${name}-light2`), diffuse: d2 },
-    sharp,
-    glint,
-  });
-  engine.rheoLooks = { kalliroscope: look('kalliroscope', 0.16, 0.12, 12, 1.8), pearl: look('pearl', 0.18, 0.14, 12, 1.6), copper: look('copper', 0.17, 0.12, 10, 1.8) };
-  engine.bodyLook = { body: tokenRgb('--t2d-body-dark'), edge: tokenRgb('--t2d-edge-light') };
-  engine.markerColors = {
-    tracerDark: [...tokenRgb('--t2d-particle-dark'), 0.5],
-    tracerLight: [...tokenRgb('--t2d-particle-light'), 0.85],
-    rakes: [1, 2, 3, 4, 5, 6].map((i) => [...tokenRgb(`--mg-series-${i}`), 0.85] as [number, number, number, number]),
-    // On the dark views: each series colour a third of the way to white.
-    rakesOnDark: [1, 2, 3, 4, 5, 6].map((i) => {
-      const c = tokenRgb(`--mg-series-${i}`);
-      return [c[0] + (1 - c[0]) * 0.35, c[1] + (1 - c[1]) * 0.35, c[2] + (1 - c[2]) * 0.35, 0.85] as [number, number, number, number];
-    }),
-    streamline: [...tokenRgb('--t2d-streamline'), 0.4],
-    streamlineLight: [...tokenRgb('--t2d-particle-light'), 0.35],
-  };
+  const engine = new Engine(device, canvas, adapterName, viewPalette(document.documentElement));
+  applyViewColours(engine, document.documentElement);
   store.onSceneChange = (s) => {
     saver.schedule(s);
     void engine.setScene(s);
