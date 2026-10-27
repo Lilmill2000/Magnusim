@@ -785,14 +785,15 @@ export function createUiController(services: AppServices): UiController {
         },
       );
       if (bar < d.doc.features.length) items.push({ id: 'roll-end', label: 'Roll to end', run: () => c.rollToEnd() } satisfies MenuItem);
+      // The keys of Delete and Rename (keyboard-only actions): set here, where the person meets them,
+      // above Delete, which stays the menu's last item (P4a fix 1).
+      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.delete', 'Set keybind for Delete…'), keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
       // Refused while a later feature uses it: offered disabled, with the reason (review P2/P3 round 2:
       // "Delete Sketch 1" was offered, and only the click said no).
       // Several features selected, this one among them: one Delete of them all (one undo step).
       const picked = services.selection.get().items.flatMap((it) => (it.kind === 'feature' && d.doc.features.some((g) => g.id === it.feature) ? [it.feature] : []));
       if (picked.length > 1 && picked.includes(id)) items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: `Delete ${picked.length} features`, danger: true, disabled: block, run: () => c.deleteFeatures(picked) });
       else items.push({ sep: true, id: 'sep-delete' }, { id: 'delete', label: deleteItemLabel(f.name), danger: true, disabled: block ?? doc.removeBlock(id), run: () => c.deleteFeature(id) });
-      // The keys of Delete and Rename (keyboard-only actions): set here, where the person meets them.
-      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.delete', 'Set keybind for Delete…'), keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
       return items;
     },
     bodyMenu(id) {

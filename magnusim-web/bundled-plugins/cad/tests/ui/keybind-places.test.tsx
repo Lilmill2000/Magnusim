@@ -94,7 +94,8 @@ describe('every keybind has a Set keybind the person can reach', () => {
     const t = makeServices();
     const ui = uiFor(t.services);
     const f = t.doc.seed('extrude', { name: 'Base' });
-    expect(items(ui.featureMenu(f.id)).slice(-2)).toEqual(['set-keybind-ui.delete', 'set-keybind-ui.rename']);
+    // Above Delete, which stays the menu's last item (P4a fix 1).
+    expect(items(ui.featureMenu(f.id)).slice(-4)).toEqual(['set-keybind-ui.delete', 'set-keybind-ui.rename', 'sep-delete', 'delete']);
     const body = t.doc.state.get().rebuild.bodies[0];
     expect(items(ui.bodyMenu(body.id)).slice(-1)).toEqual(['set-keybind-ui.rename']);
     const e = { preventDefault() {}, stopPropagation() {}, clientX: 10, clientY: 20 };

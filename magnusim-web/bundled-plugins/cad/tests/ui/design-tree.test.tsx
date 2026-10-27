@@ -82,7 +82,7 @@ describe('design tree', () => {
 
   it('suppresses from the context menu: the row greys and says so', () => {
     fireEvent.contextMenu(ui.row(f[1].id), { clientX: 40, clientY: 60 });
-    expect(ui.menu()).toEqual(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 2', 'Set keybind for Delete…', 'Set keybind for Rename…']);
+    expect(ui.menu()).toEqual(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Extrude 2']);
     expect(ui.node(f[1].id).className).toContain('selected');
     fireEvent.click(ui.menuItem('suppress'));
     expect(t.doc.calls).toContain(`setSuppressed ${f[1].id} true`);
@@ -102,7 +102,7 @@ describe('design tree', () => {
     expect(ui.history()).toEqual(['Extrude 1', '|', 'Extrude 2', 'Extrude 3']);
     fireEvent.contextMenu(ui.row(f[2].id), { clientX: 40, clientY: 60 });
     // A rolled-back feature cannot be edited until the bar moves below it.
-    expect(ui.menu()).toEqual(['(Edit Extrude 3)', 'Rename Extrude 3', 'Suppress Extrude 3', 'Move up', '(Move down)', 'Roll back to here', 'Roll to end', 'Delete Extrude 3', 'Set keybind for Delete…', 'Set keybind for Rename…']);
+    expect(ui.menu()).toEqual(['(Edit Extrude 3)', 'Rename Extrude 3', 'Suppress Extrude 3', 'Move up', '(Move down)', 'Roll back to here', 'Roll to end', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Extrude 3']);
     fireEvent.click(ui.menuItem('roll-end'));
     expect(t.doc.state.get().view.rollback).toBeNull();
   });
