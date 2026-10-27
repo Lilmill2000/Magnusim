@@ -328,6 +328,10 @@ export const SKETCH_ENTITIES: { readonly [K in SketchEntity['kind']]: Reach } = 
   conic: ENTITY('conic'),
 };
 
+// The person's relations palette by the selection (src/sketch/relations-palette.ts) adds through the
+// CONSTRAIN commands, so it offers no kind beyond these rows; its Symmetric of two lines or two
+// circles about a centerline is point Symmetric records (and an On line for a shared end), which
+// the tool writes with its symmetric and point_on rows.
 export const SKETCH_CONSTRAINTS: { readonly [K in SketchRelationKind | SketchDimensionKind]: Reach } = {
   coincident: TIE('coincident'),
   horizontal: TIE('horizontal'),

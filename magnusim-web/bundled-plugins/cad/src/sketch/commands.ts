@@ -18,7 +18,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { CommandDef } from '../types/commands';
-import type { OriginPlaneRef } from '../types/doc';
+import type { OriginPlaneRef, SketchRelationKind } from '../types/doc';
 import type { SketchToolId } from '../types/sketch';
 import type { SelectionItem } from '../types/selection';
 import type { OverlayLayer } from '../types/viewport';
@@ -26,11 +26,11 @@ import { clearSelection, userItems } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { uiFor } from '../ui/controller';
 import { constructOf, constructOutput } from '../features/refgeom/api';
-import { CONSTRAIN_COMMANDS, planConstraint } from './constraints';
+import { CONSTRAIN_COMMANDS, hasRelation, planConstraint } from './constraints';
 import { SHAPE_TOOL_IDS, SketchBuilder, toggleConstruction } from './edit';
 import { SKETCH_ICONS } from './icons';
 import { entityOf, ORIGIN, RELATION_LABELS } from './model';
-import { type SketchMode } from './mode';
+import { type ApplyResult, type SketchMode } from './mode';
 import { sketchUp } from '../viewport/normal';
 // ux010 (DRAW): Show relations.
 import { relationsView, SHOW_RELATIONS_SHORTCUT } from './relations-view';
@@ -90,8 +90,35 @@ const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; short
 ];
 
 /** Picked sketch items as constraint references (a point entity is a point; curves by id). */
-function picks(mode: SketchMode): string[] {
+export function picks(mode: Pick<SketchMode, 'selected'>): string[] {
   return mode.selected().filter((h) => h.what !== 'constraint').map((h) => h.id);
+}
+
+/** The CONSTRAIN command's icon for a relation kind (the toolbar's, and the relations palette's). */
+export function relationIcon(kind: SketchRelationKind): string {
+  return SKETCH_ICONS[kind === 'point_on_line' ? 'onCurve' : (kind as keyof typeof SKETCH_ICONS)] ?? SKETCH_ICONS.coincident;
+}
+
+/**
+ * What a CONSTRAIN command adds for these picks, as one undo step (the toolbar command, its key,
+ * and the relations palette by the selection all add through here: the same records, refused with
+ * the same reasons).
+ */
+export function applyRelation(mode: Pick<SketchMode, 'apply'>, kind: SketchRelationKind, sel: readonly string[]): Promise<ApplyResult> {
+  return mode.apply(RELATION_LABELS[kind], (d) => {
+    const p = planConstraint(d, kind, sel);
+    if (!p.ok) return { ok: false, reason: p.reason };
+    // A record the sketch has already is not added twice (it would only over-define it).
+    const add = p.add.filter((r) => !hasRelation(d, r));
+    if (!add.length) return { ok: false, reason: `${RELATION_LABELS[kind]} is already in the sketch` };
+    const b = new SketchBuilder(d);
+    for (const r of add) {
+      // P4b (SKETCH): a fit spline's tangent handle first.
+      if (r.handle) addHandle(b, r.handle);
+      b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
+    }
+    return b.result();
+  });
 }
 
 /**
@@ -283,7 +310,7 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       label: c.label,
       group: 'constrain',
       mode: 'sketch',
-      icon: SKETCH_ICONS[c.kind === 'point_on_line' ? 'onCurve' : (c.kind as keyof typeof SKETCH_ICONS)] ?? SKETCH_ICONS.coincident,
+      icon: relationIcon(c.kind),
       hint: c.needs,
       order: 10 + i,
       explainRefusal: true,
@@ -296,22 +323,9 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
         return p.ok ? true : p.reason;
       },
       run: () => {
-        const sel = picks(mode);
-        void mode
-          .apply(RELATION_LABELS[c.kind], (d) => {
-            const p = planConstraint(d, c.kind, sel);
-            if (!p.ok) return { ok: false, reason: p.reason };
-            const b = new SketchBuilder(d);
-            for (const r of p.add) {
-              // P4b (SKETCH): a fit spline's tangent handle first.
-              if (r.handle) addHandle(b, r.handle);
-              b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
-            }
-            return b.result();
-          })
-          .then((r) => {
-            if (r.ok) mode.select([], false);
-          });
+        void applyRelation(mode, c.kind, picks(mode)).then((r) => {
+          if (r.ok) mode.select([], false);
+        });
       },
     }),
   );

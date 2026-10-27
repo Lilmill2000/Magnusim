@@ -79,6 +79,8 @@ export const SHARDS = {
     'e2e/cad-assistant-sketch.spec.ts',
     // v0.5.0: the DRAW flyouts and the shape tools (slots, polygon, sector, the rectangle, circle, arc and line variants).
     'e2e/cad-sketch-shapes.spec.ts',
+    // Daniel's first desktop test: the relations palette by the selection, the construction badge's ×.
+    'e2e/cad-sketch-relations-palette.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.

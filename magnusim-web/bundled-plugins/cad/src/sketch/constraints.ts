@@ -4,7 +4,7 @@
 // Owner: P3-SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchEntity, SketchFeature, SketchRelationKind, Vec2 } from '../types/doc';
-import { entityEnds, entityOf, entityPoints, pointAt, pointIdOf, refKindOf, type RefKind } from './model';
+import { entityEnds, entityOf, entityPoints, isDimension, lineEnds as lineEndsOf, pointAt, pointIdOf, refKindOf, type RefKind } from './model';
 // P4b (SKETCH): splines.
 import { splineOf } from './tools/spline-entity';
 
@@ -35,11 +35,25 @@ export const CONSTRAIN_COMMANDS: { kind: SketchRelationKind; label: string; need
   { kind: 'tangent', label: 'Tangent', needs: 'Select a line or an arc and a circle or an arc' },
   { kind: 'equal', label: 'Equal', needs: 'Select lines, or circles and arcs' },
   { kind: 'midpoint', label: 'Midpoint', needs: 'Select a point and a line' },
-  { kind: 'symmetric', label: 'Symmetric', needs: 'Select two points and the line they are symmetric about' },
+  { kind: 'symmetric', label: 'Symmetric', needs: 'Select two points and the line they are symmetric about, or two lines or two circles and a centerline' },
   { kind: 'concentric', label: 'Concentric', needs: 'Select two circles or arcs' },
   { kind: 'collinear', label: 'Collinear', needs: 'Select two lines' },
   { kind: 'fix', label: 'Fix', needs: 'Select points or curves to fix' },
 ];
+
+const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && [...a].sort().join('\u0000') === [...b].sort().join('\u0000');
+const ON_CURVE = new Set<string>(['point_on_line', 'point_on_circle']);
+
+/** Whether the sketch has this record (Coincident of a point and a curve is also stored as On line / On curve). */
+export function hasRelation(f: Pick<SketchFeature, 'constraints'>, r: Pick<RelationPlan, 'kind' | 'refs'>): boolean {
+  return f.constraints.some((c) => {
+    if (isDimension(c)) return false;
+    const kindOk = c.kind === r.kind || (r.kind === 'coincident' && r.refs.length === 2 && ON_CURVE.has(c.kind)) || (ON_CURVE.has(r.kind) && c.kind === 'coincident');
+    if (!kindOk) return false;
+    if (r.kind === 'symmetric') return c.refs.length === 3 && c.refs[2] === r.refs[2] && sameSet(c.refs.slice(0, 2), r.refs.slice(0, 2));
+    return sameSet(c.refs, r.refs);
+  });
+}
 
 const round = (k: RefKind | null) => k === 'circle' || k === 'arc';
 
@@ -96,6 +110,9 @@ export function planConstraint(f: F, kind: SketchRelationKind, picks: readonly s
     case 'midpoint':
       return only(2) && points.length === 1 && lines.length === 1 ? { ok: true, add: [{ kind, refs: [points[0], lines[0]] }] } : no;
     case 'symmetric': {
+      // Two lines, or two circles or arcs, about the one centerline picked with them (SolidWorks'
+      // Symmetric): their ends, or their centres, mirrored.
+      if (only(3) && (lines.length === 3 || (lines.length === 1 && rounds.length === 2))) return planSymmetricPair(f, lines, rounds);
       if (!(only(3) && points.length === 2 && lines.length === 1)) return no;
       // Two points in one place have no mirror line: the relation is degenerate, and the solver then
       // refused every later edit as over-defining (review P2/P3 round 1).
@@ -119,6 +136,56 @@ export function planConstraint(f: F, kind: SketchRelationKind, picks: readonly s
     default:
       return no;
   }
+}
+
+/**
+ * Symmetric of two lines (their ends) or of two circles or arcs (their centres) about a centerline:
+ * with three lines the axis is the one centerline among them. Each end pairs with the other line's
+ * end nearer its mirror image; an end the two lines share stays on the axis (On line).
+ */
+function planSymmetricPair(f: F, lines: string[], rounds: string[]): ConstraintOutcome {
+  const centerline = (id: string) => {
+    const e = entityOf(f, id);
+    return e?.kind === 'line' && !!(e as { centerline?: boolean }).centerline;
+  };
+  const axes = rounds.length ? lines : lines.filter(centerline);
+  if (axes.length !== 1) return { ok: false, reason: 'Symmetric of three lines needs one of them a centerline: the axis' };
+  const axis = axes[0];
+  const ends = lineEndsOf(f, axis);
+  if (!ends) return { ok: false, reason: 'That centerline has no length' };
+  const mirror = (p: Vec2): Vec2 => {
+    const [a, b] = ends;
+    const d: Vec2 = [b[0] - a[0], b[1] - a[1]];
+    const len2 = d[0] * d[0] + d[1] * d[1] || 1;
+    const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / len2;
+    const q: Vec2 = [a[0] + d[0] * t, a[1] + d[1] * t];
+    return [2 * q[0] - p[0], 2 * q[1] - p[1]];
+  };
+  const apart = (x: string, y: string) => {
+    const [a, b] = [pointAt(f, x), pointAt(f, y)];
+    return x !== y && !(a && b && Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6);
+  };
+  const sym = (x: string, y: string): RelationPlan => ({ kind: 'symmetric', refs: [x, y, axis] });
+  if (rounds.length) {
+    const [c1, c2] = rounds.map((id) => entityOf(f, id) as Extract<SketchEntity, { kind: 'circle' | 'arc' }>).map((e) => e.c);
+    if (!apart(c1, c2)) return { ok: false, reason: 'Symmetric needs two circles apart: these two have one centre' };
+    return { ok: true, add: [sym(c1, c2)] };
+  }
+  const [l1, l2] = lines.filter((id) => id !== axis).map((id) => (entityOf(f, id) as Extract<SketchEntity, { kind: 'line' }>).p);
+  const shared = l1.find((p) => l2.includes(p));
+  if (shared) {
+    const a = l1.find((p) => p !== shared)!;
+    const b = l2.find((p) => p !== shared)!;
+    if (!apart(a, b)) return { ok: false, reason: 'Symmetric needs two lines apart: these two lie on each other' };
+    return { ok: true, add: [sym(a, b), { kind: 'point_on_line', refs: [shared, axis] }] };
+  }
+  const at = (id: string) => pointAt(f, id) ?? ([0, 0] as Vec2);
+  const dist = (p: Vec2, q: Vec2) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+  const m0 = mirror(at(l1[0]));
+  const straight = dist(m0, at(l2[0])) <= dist(m0, at(l2[1]));
+  const pairs: [string, string][] = straight ? [[l1[0], l2[0]], [l1[1], l2[1]]] : [[l1[0], l2[1]], [l1[1], l2[0]]];
+  if (pairs.some(([x, y]) => !apart(x, y))) return { ok: false, reason: 'Symmetric needs two lines apart: these two lie on each other' };
+  return { ok: true, add: pairs.map(([x, y]) => sym(x, y)) };
 }
 
 const CONIC_REFS = new Set<RefKind | null>(['ellipse', 'ellipse_arc', 'parabola', 'conic']);
