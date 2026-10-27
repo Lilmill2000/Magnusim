@@ -31,17 +31,22 @@ export const SIZE_BUDGET = { installerMB: 130, installedMB: 400 };
 
 /**
  * The npm packages the server loads, with what they need (the rest of the app's are bundled
- * into the page). The plugin SDK's own packages (sdkPackages) come on top: only the files esbuild
- * bundles into it, so vtk.js comes without its build tools.
+ * into the page): the Assistant's provider and tool-connection packages, as its one loader names
+ * them (providers/load-sdk.ts), React (the plugin SDK reads its export names) and esbuild (it
+ * builds the plugin SDK). The plugin SDK's own packages (sdkPackages) come on top: only the files
+ * esbuild bundles into it, so vtk.js comes without its build tools.
  */
-const SERVER_PACKAGES = ['@anthropic-ai/sdk', 'openai', '@modelcontextprotocol/server', 'react', 'react-dom', 'esbuild'];
+async function serverPackages() {
+  const sdk = await import(pathToFileURL(join(WEB, 'scripts', 'server', 'assistant', 'providers', 'load-sdk.ts')).href);
+  return [...sdk.SDK_NAMES, sdk.MCP_SDK_NAME, 'react', 'react-dom', 'esbuild'];
+}
 
 const desktopPkg = JSON.parse(readFileSync(join(DESKTOP, 'package.json'), 'utf8'));
 const t0 = Date.now();
 const step = (what) => console.log(`[build ${((Date.now() - t0) / 1000).toFixed(1)}s] ${what}`);
 
 /** Those packages and every package they need, as the root lockfile resolves them (folder paths). */
-function serverClosure() {
+function serverClosure(roots) {
   const lock = JSON.parse(readFileSync(join(WEB, 'package-lock.json'), 'utf8')).packages;
   const platform = `@esbuild/${process.platform}-${process.arch}`;
   const keep = new Set();
@@ -69,7 +74,7 @@ function serverClosure() {
       }
     }
   };
-  for (const p of SERVER_PACKAGES) visit(`node_modules/${p}`);
+  for (const p of roots) visit(`node_modules/${p}`);
   // A nested copy comes with its parent's folder: only the outermost ones are copied.
   return [...keep].filter((k) => ![...keep].some((o) => o !== k && k.startsWith(`${o}/`))).sort();
 }
@@ -101,7 +106,7 @@ async function stage() {
   const cad = join(WEB, 'bundled-plugins', 'cad');
   for (const part of ['manifest.toml', 'plugin.py', 'README.md', 'workspace', 'LICENSES']) cpSync(join(cad, part), join(APP, 'bundled-plugins', 'cad', part), { recursive: true });
   for (const f of ['main.mjs', 'config.mjs', 'server.mjs']) cpSync(join(DESKTOP, f), join(APP, 'desktop', f));
-  const modules = [...new Set([...serverClosure(), ...(await sdkPackages())])].sort();
+  const modules = [...new Set([...serverClosure(await serverPackages()), ...(await sdkPackages())])].sort();
   for (const key of modules) cpSync(join(WEB, key), join(APP, key), { recursive: true, filter: runtimeFile });
   // electron-builder ships the node_modules its package.json's dependencies name: each
   // top-level copied package, at the version copied.
