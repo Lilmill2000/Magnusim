@@ -1,14 +1,16 @@
 // Keybinds (Daniel 2026-10-27: "set keybind ... shows the current keybind and also lets me change
 // it"), in the real host frame:
-//  - the Set keybind dialog (opened through the test handle until the toolbar's right-click menu
-//    has its item; a right-click on a row of the views menu opens it now): Rectangle to Shift+R takes Show
+//  - the Set keybind dialog (opened through the test handle for a sketch command from model mode; a
+//    right-click on a row of the views menu opens it too): Rectangle to Shift+R takes Show
 //    relations' key (Replace); Shift+R then starts the rectangle in a sketch and plain R does not;
 //    the tooltip says Shift+R; Reset to default brings R back;
 //  - a change made outside the page (ws.prefs written on the server, as the app's Settings saves it,
-//    and announced to the app's tabs) takes effect at once, without reopening the Part.
+//    and announced to the app's tabs) takes effect at once, without reopening the Part;
+//  - the toolbar's right-click menus have Set keybind... for the command right-clicked: a command on
+//    the bar, VIEW's Fit, a command in its group's More, and a flyout's button (for the variant on it).
 // The keybinds are the user's pref on the server every test shares: both run in the serial phase, and put it back.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
 import { baseUrl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, readWithRetry, watchPage, workspaceFrame } from './helpers';
 
 const PREF = 'keybinds';
@@ -24,6 +26,14 @@ async function setPref(request: APIRequestContext, value: unknown) {
     value === null ? request.post(`${baseUrl()}/api/plugin-prefs/remove`, { data: { plugin: 'cad', key: PREF } }) : request.post(`${baseUrl()}/api/plugin-prefs/set`, { data: { plugin: 'cad', key: PREF, value } }),
   );
   expect(r.ok(), await r.text()).toBe(true);
+}
+
+/** The user's toolbar layout (ws.prefs) back to the default. */
+async function forgetToolbarLayout(request: APIRequestContext) {
+  for (const key of ['toolbar-layout', 'toolbar-layout.migrated']) {
+    const r = await readWithRetry(() => request.post(`${baseUrl()}/api/plugin-prefs/remove`, { data: { plugin: 'cad', key } }));
+    expect(r.ok(), await r.text()).toBe(true);
+  }
 }
 
 async function storedPref(request: APIRequestContext): Promise<unknown> {
@@ -196,5 +206,69 @@ test('cad:keybinds-live a keybind saved outside the page (Settings) applies at o
     await expect(badge).toBeHidden();
   } finally {
     await setPref(request, null);
+  }
+});
+
+test('cad:keybinds-toolbar-menu Set keybind on the toolbar: a bar command, Fit, a More item and a flyout (its variant) each open the dialog for that command', { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  await setPref(request, null);
+  await forgetToolbarLayout(request);
+  try {
+    const seen = await watchPage(page);
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    const bar = frame.locator('[data-cad-toolbar]');
+    const menu = frame.locator('[data-cad-menu]');
+    /** Right-click `target`, pick Set keybind, see the dialog for `id` with its current key, close it. */
+    const viaMenu = async (target: Locator, id: string, label: string, current: string) => {
+      await target.click({ button: 'right', force: true });
+      await expect(menu).toBeVisible();
+      const item = menu.locator('[data-menu-item="set-keybind"]');
+      await expect(item).toHaveText('Set keybind…');
+      await item.click();
+      await expect(menu).toHaveCount(0);
+      const dlg = frame.locator(`[data-cad-keybind-dialog="${id}"]`);
+      await expect(dlg).toBeVisible();
+      await expect(dlg.locator('h2')).toHaveText(`Set keybind: ${label}`);
+      await expect(dlg.locator('[data-keybind-current]')).toHaveText(current);
+      await dlg.locator('[data-keybind-action="done"]').click();
+      await expect(dlg).toHaveCount(0);
+    };
+
+    // A command on the bar, and VIEW's Fit (its menu was Reset toolbar alone).
+    await viaMenu(bar.locator('.tb-btn[data-command="solid.extrude"]'), 'solid.extrude', 'Extrude', 'E');
+    await viaMenu(bar.locator('.tb-btn[data-command="view.fit"]'), 'view.fit', 'Fit', 'F');
+
+    // A command in its group's More: Revolve moved there, then right-clicked in the open More.
+    await bar.locator('.tb-btn[data-command="solid.revolve"]').click({ button: 'right', force: true });
+    await menu.locator('[data-menu-item="tb-to-more"]').click();
+    await expect(menu).toHaveCount(0);
+    await bar.locator('[data-tb-more="solid"]').click();
+    await viaMenu(menu.locator('[data-command="solid.revolve"]'), 'solid.revolve', 'Revolve', 'None');
+
+    // A flyout: its button runs the variant used last, and Set keybind is for that variant.
+    await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
+    await bar.locator('[data-command="sketch.new"]').click();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    const arrow = bar.locator('[data-tb-flyout][data-flyout-commands~="sketch.slot-arc-center"]');
+    await arrow.click();
+    await expect(arrow).toHaveAttribute('aria-expanded', 'true');
+    await menu.locator('[data-command="sketch.slot-arc-center"]').click();
+    await expect(menu).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    const slotButton = bar.locator('.tb-btn[data-variant="sketch.slot-arc-center"]');
+    await expect(slotButton).toHaveCount(1);
+    const variantLabel = await cad<string>(page, (() => (window as unknown as W).__CAD__.services.commands.get('sketch.slot-arc-center').label) as never);
+    await viaMenu(slotButton, 'sketch.slot-arc-center', variantLabel, 'None');
+
+    // Nothing was changed: the keybinds stay the defaults.
+    expect(await storedPref(request)).toBeNull();
+    expect(seen.errors).toEqual([]);
+  } finally {
+    await setPref(request, null);
+    await forgetToolbarLayout(request);
   }
 });

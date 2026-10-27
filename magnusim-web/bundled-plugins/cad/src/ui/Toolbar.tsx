@@ -31,6 +31,8 @@
 // ("Spline moves to More"); over another group the note says it can only go in its own group, the
 // pointer shows not-allowed, and a drop there changes nothing. The keyboard's way: a More item's
 // right-click menu has "Swap with <the bar's last>" (useToolbarDrag, customizer).
+// v0.5.0 keybinds: every command's right-click menu has Set keybind... (src/ui/keybinds): on a
+// flyout, for the variant on its button; on a More item, for that command.
 // v0.5.0 (Daniel: the sketch toolbar as SolidWorks lays it out): the drawing tools come in
 // flyouts (src/ui/flyouts.ts): one button per group (Line, Rectangle, Circle, Arc, Slot, Spline,
 // Ellipse) that runs its last-used variant, and a small arrow beside it that lists every variant
@@ -59,6 +61,7 @@ import { PARAMS_ID, REDO_ID, UNDO_ID } from './commands';
 import { uiFor, type UiState } from './controller';
 import { Icon, ICONS } from './Icon';
 import { hideTip, useTip, type MenuEntry } from './kit';
+import { keybindMenuItem } from './keybinds';
 import { collapseFlyouts, currentVariant, setLastUsed, type FlyoutDef } from './flyouts';
 import {
   held,
@@ -269,7 +272,8 @@ function reasonOf(c: CommandDef, services: AppServices): string | null {
 
 /** What a group's button may do besides running its command: its right-click menu and a drag (useToolbarDrag). */
 interface ButtonCustom {
-  onContextMenu(e: React.MouseEvent<HTMLButtonElement>): void;
+  /** `keybindId`: the command Set keybind is for (a flyout's: the variant on its button). */
+  onContextMenu(e: React.MouseEvent<HTMLButtonElement>, keybindId?: string): void;
   onPointerDown?(e: React.PointerEvent<HTMLButtonElement>): void;
   dragging?: boolean;
   drop?: 'before' | 'after' | null;
@@ -320,7 +324,7 @@ function ToolbarButton({
       aria-keyshortcuts={shown.shortcut ? shown.shortcut.replace(/Ctrl/g, 'Control') : undefined}
       data-disabled-reason={reason ?? undefined}
       {...tip}
-      onContextMenu={custom?.onContextMenu}
+      onContextMenu={custom ? (e) => custom.onContextMenu(e, variant?.id) : undefined}
       onPointerDown={custom?.onPointerDown}
       onKeyDown={onKeyDown}
       onClick={() => {
@@ -553,13 +557,13 @@ function MoreButton({
 
 /** What a registry group needs to let the user rearrange it. */
 interface GroupCustom {
-  /** The right-click menu of a command shown in the group. */
-  barMenu(c: CommandDef, shown: string[], x: number, y: number): void;
+  /** The right-click menu of a command shown in the group (`keybindId`: Set keybind's command). */
+  barMenu(c: CommandDef, shown: string[], x: number, y: number, keybindId?: string): void;
   /**
    * The right-click menu of a command in the group's More (`shown`: the group's commands on the bar;
    * `narrow`: it is there because the person narrowed the group).
    */
-  moreMenu(c: CommandDef, shown: string[], x: number, y: number, narrow: boolean): void;
+  moreMenu(c: CommandDef, shown: string[], x: number, y: number, narrow: boolean, keybindId?: string): void;
   /** Dragged onto the bar from More: folds last when the group is narrowed. */
   isHeld(id: string): boolean;
   /** Shown by the person ("Show in toolbar"): folds after the others when the group is narrowed. */
@@ -648,8 +652,8 @@ function Group({
   /** Its small buttons show their icons alone (CONSTRAIN always; others when the frame is narrow, SQUEEZE_ORDER). */
   icons?: boolean;
   custom?: GroupCustom;
-  /** VIEW, EDIT and the primary action: their right-click menu (Reset toolbar). */
-  menu?(x: number, y: number): void;
+  /** VIEW, EDIT and the primary action: their right-click menu (Set keybind on a command, Reset toolbar). */
+  menu?(x: number, y: number, commandId?: string): void;
   /** The toolbar's drag in progress (any group's), to draw its marks here. */
   drag?: DragView | null;
   /** A press on one of the group's commands, on the bar or in its More: it may become a drag. */
@@ -711,12 +715,12 @@ function Group({
   const at = drag?.at;
   const mark = at && (at.kind === 'bar' || at.kind === 'move') && at.group === id ? at.mark : null;
   const customFor = (c: CommandDef): ButtonCustom | undefined => {
-    if (!custom) return menu ? { onContextMenu: (e) => (e.preventDefault(), e.stopPropagation(), menu(e.clientX, e.clientY)) } : undefined;
+    if (!custom) return menu ? { onContextMenu: (e, kb) => (e.preventDefault(), e.stopPropagation(), menu(e.clientX, e.clientY, kb ?? c.id)) } : undefined;
     return {
-      onContextMenu(e) {
+      onContextMenu(e, kb) {
         e.preventDefault();
         e.stopPropagation();
-        custom.barMenu(c, shown, e.clientX, e.clientY);
+        custom.barMenu(c, shown, e.clientX, e.clientY, kb ?? c.id);
       },
       onPointerDown(e) {
         startDrag?.(c, 'bar', e);
@@ -784,7 +788,7 @@ function Group({
             panel={panel}
             sketchTool={sketchTool}
             dropInto={at?.kind === 'more' && at.group === id}
-            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(barOf(c), shown, x, y, narrow.has(barOf(c).id)) } : {})}
+            {...(custom ? { itemMenu: (c: CommandDef, x: number, y: number) => custom.moreMenu(barOf(c), shown, x, y, narrow.has(barOf(c).id), c.id) } : {})}
             {...(custom && startDrag ? { onItemPress: (c: CommandDef, e: React.PointerEvent<HTMLButtonElement>) => startDrag(barOf(c), 'more', e) } : {})}
           />
         ) : null}
@@ -845,8 +849,10 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
     run: () => prefs.reset(mode),
   };
   const labelOf = (id: string) => services.commands.get(id)?.label ?? id;
+  /** Set keybind for a command, in its own section above Reset toolbar. */
+  const keybind = (id: string | undefined): MenuEntry[] => (id ? [{ sep: true, id: 'tb-sep-keys' }, keybindMenuItem(services, id)] : []);
   const forGroup = (group: string, order: string[]): GroupCustom => ({
-    barMenu(c, shown, x, y) {
+    barMenu(c, shown, x, y, keybindId) {
       const i = shown.indexOf(c.id);
       const after = (id: string) => order[order.indexOf(id) + 1] ?? null;
       ui.showMenu(
@@ -866,6 +872,7 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
             disabled: i < 0 || i >= shown.length - 1 ? `${c.label} is the last of its group` : null,
             run: () => set(withMove(m, group, order, c.id, after(shown[i + 1]))),
           },
+          ...keybind(keybindId ?? c.id),
           { sep: true, id: 'tb-sep' },
           reset,
         ],
@@ -874,7 +881,7 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
     },
     isHeld: (id) => held(m, id),
     isPinned: (id) => pinned(m, id),
-    moreMenu(c, shown, x, y, narrow) {
+    moreMenu(c, shown, x, y, narrow, keybindId) {
       const stuck = pinned(m, c.id) && (fitFolded.has(c.id) || narrow);
       const last = shown.length ? shown[shown.length - 1] : null;
       ui.showMenu(
@@ -900,6 +907,7 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
                 },
               ]
             : []),
+          ...keybind(keybindId ?? c.id),
           { sep: true, id: 'tb-sep' },
           reset,
         ],
@@ -907,7 +915,8 @@ function customizer(services: AppServices, prefs: ToolbarPrefs, mode: LayoutMode
       );
     },
   });
-  const menu = (x: number, y: number) => ui.showMenu(x, y, [reset], 'Toolbar');
+  const menu = (x: number, y: number, commandId?: string) =>
+    ui.showMenu(x, y, commandId ? [keybindMenuItem(services, commandId), { sep: true, id: 'tb-sep' }, reset] : [reset], commandId ? `Toolbar: ${labelOf(commandId)}` : 'Toolbar');
   return { forGroup, menu };
 }
 

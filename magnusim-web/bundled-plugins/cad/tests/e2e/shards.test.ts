@@ -321,6 +321,8 @@ describe('the smoke and serial tags', () => {
       // Keybinds are the user's pref: set in the dialog, and from outside the page (Settings).
       'cad:keybinds-dialog',
       'cad:keybinds-live',
+      // Set keybind on the toolbar's right-click: moves a command to More (the user's layout pref).
+      'cad:keybinds-toolbar-menu',
     ].sort());
   });
 });

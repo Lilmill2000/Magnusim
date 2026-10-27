@@ -832,7 +832,10 @@ with the host once for the page's life, and its chip goes in the dock.
     and the drop changes nothing; Escape cancels; the keyboard's way is a More
     item's "Swap with <the bar's last>" ("Show in toolbar" still adds without
     displacing: the only way to grow a group); a
-    right-click anywhere else on the toolbar offers Reset toolbar. Shortcuts and
+    right-click anywhere else on the toolbar offers Reset toolbar. Every command's
+    right-click menu (a bar button, a More item, VIEW, EDIT and Finish sketch) also
+    has Set keybind... (`keybindMenuItem`, src/ui/keybinds): for a flyout's
+    button, the variant on it; for a More item, that command. Shortcuts and
     the More menus work whatever the layout. The layout (per mode, `place` id
     -> bar | more and each group's `order`; unknown ids are ignored, new commands
     take their registry place) is **the user's, in every project** (P4b
