@@ -13,6 +13,8 @@
 // (TOOLBAR_LAYOUT_FILE, below) is copied over, once. A 1.6 host has no `ws.prefs` (and the frame is
 // sandboxed with no localStorage): there the layout stays per project in the plugin's own data
 // (`ws.data`, TOOLBAR_LAYOUT_FILE), shared by every Part of the project.
+// v0.5.0 ribbon (Daniel: resizable groups and rows, as Excel's ribbon): per mode also each group's
+// width the person dragged (`widths`) and the toolbar's rows (`rows`, 1 to 4), in the same prefs.
 // Owner: INTEGRATE (TOOLBAR fixer).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createStateStore } from '../lib/store';
@@ -37,7 +39,23 @@ export interface ModeLayout {
    * commands first.
    */
   held?: string[];
+  /**
+   * v0.5.0 ribbon (additive, absent = auto): a group's width the person set by dragging the line
+   * at its right (group id -> px at toolbar scale 1). Its commands that do not fit go into its More
+   * and come back out when it is widened (Toolbar.tsx).
+   */
+  widths?: Record<string, number>;
+  /** v0.5.0 ribbon (additive, absent = RIBBON_ROWS): how many rows tall the toolbar is, 1 to 4. */
+  rows?: number;
 }
+
+/** The ribbon's rows by default (three: a large button beside two or three stacked small ones). */
+export const RIBBON_ROWS = 3;
+export const MIN_ROWS = 1;
+export const MAX_ROWS = 4;
+/** The narrowest a group can be dragged (one small button), and the widest, px at scale 1. */
+export const MIN_GROUP_W = 24;
+export const MAX_GROUP_W = 1200;
 
 export interface ToolbarLayout {
   version: 1;
@@ -78,6 +96,16 @@ function readMode(raw: unknown): ModeLayout {
     const held = [...new Set(r.held.filter((x): x is string => typeof x === 'string' && ID.test(x)))];
     if (held.length) out.held = held;
   }
+  const rw = (raw as { widths?: unknown }).widths;
+  if (rw && typeof rw === 'object') {
+    const widths: Record<string, number> = {};
+    for (const [g, w] of Object.entries(rw as Record<string, unknown>)) {
+      if (ID.test(g) && typeof w === 'number' && Number.isFinite(w)) widths[g] = Math.round(Math.min(MAX_GROUP_W, Math.max(MIN_GROUP_W, w)));
+    }
+    if (Object.keys(widths).length) out.widths = widths;
+  }
+  const rr = (raw as { rows?: unknown }).rows;
+  if (typeof rr === 'number' && Number.isInteger(rr) && rr >= MIN_ROWS && rr <= MAX_ROWS && rr !== RIBBON_ROWS) out.rows = rr;
   return out;
 }
 
@@ -89,7 +117,36 @@ export function readLayout(raw: unknown): ToolbarLayout {
 }
 
 export function isDefault(m: ModeLayout): boolean {
-  return !Object.keys(m.place).length && !Object.keys(m.order).length && !m.held?.length;
+  return !Object.keys(m.place).length && !Object.keys(m.order).length && !m.held?.length && !Object.keys(m.widths ?? {}).length && m.rows == null;
+}
+
+/** The toolbar's rows (RIBBON_ROWS unless the person chose). */
+export function rowsOf(m: ModeLayout): number {
+  return m.rows ?? RIBBON_ROWS;
+}
+
+/** The group's width the person set (px at scale 1), or null: as wide as its commands. */
+export function widthOf(m: ModeLayout, group: string): number | null {
+  return m.widths?.[group] ?? null;
+}
+
+/** `m` with the group's width set (clamped, rounded), or back to auto (null). */
+export function withWidth(m: ModeLayout, group: string, width: number | null): ModeLayout {
+  const widths = { ...(m.widths ?? {}) };
+  if (width == null || !Number.isFinite(width)) delete widths[group];
+  else widths[group] = Math.round(Math.min(MAX_GROUP_W, Math.max(MIN_GROUP_W, width)));
+  const { widths: _w, ...rest } = m;
+  void _w;
+  return Object.keys(widths).length ? { ...rest, widths } : rest;
+}
+
+/** `m` with the toolbar `rows` tall (clamped to 1..4), or back to the default (null). */
+export function withRows(m: ModeLayout, rows: number | null): ModeLayout {
+  const { rows: _r, ...rest } = m;
+  void _r;
+  if (rows == null || !Number.isFinite(rows)) return rest;
+  const n = Math.round(Math.min(MAX_ROWS, Math.max(MIN_ROWS, rows)));
+  return n === RIBBON_ROWS ? rest : { ...rest, rows: n };
 }
 
 /** The command was dragged onto the bar from More: it never folds into More for the width. */

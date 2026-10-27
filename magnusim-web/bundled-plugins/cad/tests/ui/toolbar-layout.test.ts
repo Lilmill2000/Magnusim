@@ -66,3 +66,29 @@ describe('reading a stored layout', () => {
     expect(l.sketch).toEqual({ place: {}, order: {} });
   });
 });
+
+describe('v0.5.0 ribbon: group widths and rows', () => {
+  it('a width is kept clamped and rounded, auto forgets it; rows 1 to 4, three is the default; both read back and count as a change', async () => {
+    const { rowsOf, widthOf, withRows, withWidth, RIBBON_ROWS, MIN_GROUP_W, MAX_GROUP_W } = await import('../../src/ui/toolbar-layout');
+    let m = withWidth(none(), 'draw', 180.4);
+    expect(widthOf(m, 'draw')).toBe(180);
+    expect(widthOf(m, 'constrain')).toBeNull();
+    expect(isDefault(m)).toBe(false);
+    expect(widthOf(withWidth(m, 'draw', 3), 'draw')).toBe(MIN_GROUP_W);
+    expect(widthOf(withWidth(m, 'draw', 1e6), 'draw')).toBe(MAX_GROUP_W);
+    m = withWidth(m, 'draw', null);
+    expect(m.widths).toBeUndefined();
+    expect(isDefault(m)).toBe(true);
+    expect(rowsOf(m)).toBe(RIBBON_ROWS);
+    m = withRows(m, 2);
+    expect(rowsOf(m)).toBe(2);
+    expect(rowsOf(withRows(m, 9))).toBe(4);
+    expect(rowsOf(withRows(m, 0))).toBe(1);
+    expect(withRows(m, 3).rows).toBeUndefined();
+    expect(withRows(m, null).rows).toBeUndefined();
+    const stored = readLayout({ version: 1, model: {}, sketch: { place: {}, order: {}, widths: { draw: 200, 'bad id!': 3, constrain: 'x', modify: 5 }, rows: 2 } });
+    expect(stored.sketch.widths).toEqual({ draw: 200, modify: MIN_GROUP_W });
+    expect(stored.sketch.rows).toBe(2);
+    expect(readLayout({ version: 1, sketch: { rows: 7 } }).sketch.rows).toBeUndefined();
+  });
+});

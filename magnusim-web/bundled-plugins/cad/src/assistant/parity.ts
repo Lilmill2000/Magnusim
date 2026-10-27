@@ -937,6 +937,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=toolbar_hide': control('toolbar', 'setMode'),
     'action=toolbar_move': control('toolbar', 'setMode'),
     'action=toolbar_reset': control('toolbar', 'reset'),
+    'action=toolbar_width': control('toolbar', 'setMode'),
+    'action=toolbar_rows': control('toolbar', 'setMode'),
     'action=banana_show': command('scale.banana'),
     'action=banana_hide': command('scale.banana'),
     'action=banana_place': control('doc', 'setScaleModel'),

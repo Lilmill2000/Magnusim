@@ -735,29 +735,54 @@ with the host once for the page's life, and its chip goes in the dock.
     it just being one line of stuff", SolidWorks's CommandManager; it replaced
     a one-line icon-only sketch toolbar he did not like).** Both modes' toolbars
     are one ribbon (`is-ribbon`), so entering a sketch does not move the view:
-    each group's buttons sit in three 20 px rows (`.tb-items` a CSS grid, column
-    by column). A large button (`is-large`, `RIBBON_LARGE` and the primary
-    action) is the three rows tall, a 24 px icon with its name under it (two
-    lines at most, 58 px wide at most): sketch mode Line, Trim, Dimension, Finish sketch and the
+    each group's buttons sit in three rows (`.tb-items` a CSS grid, column by
+    column). A large button (`is-large`, `RIBBON_LARGE` and the primary
+    action) is the three rows tall, a 28 px icon with its name under it (two
+    lines at most, 60 px wide at most): sketch mode Line, Trim, Dimension, Finish sketch and the
     taped banana; model mode each group's main command (Sketch, Extrude, Linear
     pattern, Fillet, Plane, Enclosure, Measure, Import STEP, Banana for scale).
-    Every other command is a small button (`is-small`): one row, a 16 px icon
-    with its name beside it, or its icon alone (CONSTRAIN by design, its glyphs;
+    Every other command is a small button (`is-small`): one row, an
+    18 px icon with its name beside it, or its icon alone (CONSTRAIN by design, its glyphs;
     a group whose names went for the width, `is-icons`, `data-fit-labels`). A
     flyout is one `.tb-split` item: its arrow beside a small button (12 px) or a
     12 px strip under a large one; its small button shows the flyout's own name
     ("Slot") and the variant's icon, the variant's name being its accessible
     name and tooltip. A group's More is a small button after its commands. The
     model toolbar uses the same ribbon for consistency (its main commands large,
-    Chamfer and the More buttons small beside them). The toolbar is about 84 px
+    Chamfer and the More buttons small beside them). The toolbar is about 90 px
     tall (12 px headings over the three rows). Measured (bundled Chromium,
     Segoe UI): the sketch ribbon folds nothing at 1920, 1600, 1440 or 1280 px
     (at 1280 VIEW and EDIT are icons), at 1000 px MODIFY's small buttons are
     icons, at 760 DRAW's too and Intersect, Project, Point, Construction,
     Chamfer and Extend fold; the model ribbon keeps every name to 1440 px and at
-    770 px collapses FILE (`e2e/cad-sketch-toolbar-fit.spec.ts`). A drop mark
+    about 800 px collapses FILE first (`e2e/cad-sketch-toolbar-fit.spec.ts`). A drop mark
     among small buttons is a bar above or under the button (they stack); where
-    a drag lands follows the ribbon's reading order (`pastButton`). Users
+    a drag lands follows the ribbon's reading order (`pastButton`).
+  - **Resizing the ribbon (v0.5.0, Daniel: "resizable groups and multi-row,
+    Excel-style").** The line at a group's right (`.tb-resize`,
+    `data-tb-resize`, a col-resize pointer) dragged left or right sets that
+    group's width; Left / Right on it (focused) step 16 px, Home, a
+    double-click or its right-click "Width to fit its commands" set it back to
+    auto. A narrowed group (`.tb-items.is-sized`, `data-width`) puts what does
+    not fit into its own More, measured before paint (`data-width-folded`): the
+    group's FOLD_ORDER commands first, then from its end, never its first
+    command, a held one last; widened, they come back out at once, so the bar
+    is always full. "Show in toolbar" of a command a narrowed group holds back
+    is greyed with the reason. The toolbar's bottom edge (`.tb-rows-handle`,
+    `data-tb-rows-handle`, row-resize; Up / Down, Home, a double-click) sets the
+    rows, 1 to 4 (`data-rows`, `--tb-rows`); below three rows every button is
+    small (Finish sketch too). Both are the person's, per toolbar (model,
+    sketch), in the same `ws.prefs` layout (`toolbar-layout.ts` `widths`,
+    `rows`); Reset toolbar clears them. The Assistant's `workspace` tool sets
+    them as the person does (`toolbar_width`: a group id and px or auto;
+    `toolbar_rows`: 1 to 4 or auto; `parity.ts`).
+  - **One scale factor.** Every size of the ribbon (rows, icons, names,
+    headings, gaps, the large buttons' widths, a group's width) follows
+    `--cad-toolbar-scale` (`tokens.css`, 1); `setToolbarScale` (Toolbar.tsx) is
+    the one place the host's appearance setting ("toolbar icon size") is to be
+    wired in. At 1 the rows are 22 px, the small icons 18 px, the large 28 px
+    (Daniel found 16 / 24 small); `e2e/cad-toolbar-resize.spec.ts` checks the
+    sizes follow the factor (1.25). Users
     rearrange both (`src/ui/toolbar-layout.ts`): right-click a
     button for Move to More, Move left, Move right and Reset toolbar; right-click
     a More item for Show in toolbar (a command shown this way folds last when the

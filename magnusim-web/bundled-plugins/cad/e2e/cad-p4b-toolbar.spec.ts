@@ -213,7 +213,7 @@ async function fitAt(page: Page, frame: FrameLocator, width: number) {
 // (FILE, INSPECT, CONSTRUCT, ...), the large buttons keep their names; then the groups sit closer;
 // then whole groups collapse into one dropdown each in the same order, their headings kept. Here
 // the ribbon's text is 2 px larger, on any platform.
-test('cad:p4b-toolbar-wide-text with larger text in the ribbon: nothing scrolls down to 820 px; the small buttons go to icons a group at a time (FILE first), then the groups sit closer, then groups collapse into one dropdown (FILE first); Sketch keeps its large labelled button; PATTERN caret beside More while it is labelled', async ({ page, request }) => {
+test('cad:p4b-toolbar-wide-text with larger text in the ribbon: nothing scrolls down to 720 px; the small buttons go to icons a group at a time (FILE first), then the groups sit closer, then groups collapse into one dropdown (FILE first); Sketch keeps its large labelled button; PATTERN caret beside More while it is labelled', async ({ page, request }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const { seen, frame } = await freshPart(page, request);
   // 13 px instead of 11 px for the buttons' labels and 12 px for the groups' headings (a rule added
@@ -231,7 +231,7 @@ test('cad:p4b-toolbar-wide-text with larger text in the ribbon: nothing scrolls 
   });
   expect(await tb(frame).locator('.tb-btn[data-command="sketch.new"]').evaluate((b) => getComputedStyle(b).fontSize)).toBe('13px');
   const ran = { tight: false, labels: 0, collapsed: 0 };
-  for (const width of [1280, 1100, 960, 820]) {
+  for (const width of [1280, 1100, 960, 820, 720]) {
     const s = await fitAt(page, frame, width);
     const where = `at ${width} px with larger text`;
     expect(s.scroll, `the toolbar scrolls ${where}`).toBeLessThanOrEqual(1);

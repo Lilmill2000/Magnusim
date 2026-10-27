@@ -259,94 +259,113 @@ html.cad-tb-drag-refused * {
 }
 /* ---- end UX 0.1.0 (TOOLBAR) ---- */
 
-/* ---- v0.5.0 ribbon (Toolbar.tsx; Daniel: the buttons stacked as SolidWorks's CommandManager).
-   Each group's buttons sit in three 20 px rows, column by column: a large button (the group's key
-   tool, the primary action) is the three rows tall, a 24 px icon with its name under it; a small
-   button is one row, a 16 px icon with its name beside it, or its icon alone (CONSTRAIN; a group
-   whose names went for the width, is-icons). Model and sketch mode are the same height. ---- */
+/* ---- v0.5.0 ribbon (Toolbar.tsx; Daniel: the buttons stacked as SolidWorks's CommandManager,
+   resizable as Excel's). Each group's buttons sit in rows (three by default; the person drags the
+   bottom edge for one to four), column by column: a large button (the group's key tool, the
+   primary action; three rows or more) is the rows tall, a 28 px icon with its name under it; a
+   small button is one row, an 18 px icon with its name beside it, or its icon alone (CONSTRAIN; a
+   group whose names went for the width, is-icons). Every size follows one scale factor,
+   --cad-toolbar-scale (tokens.css, 1; Toolbar.tsx setToolbarScale is where the host's appearance
+   setting is to be wired in). ---- */
 .cad-toolbar.is-ribbon {
-  gap: 6px;
-  padding: 3px 8px 4px;
+  --tb-s: var(--cad-toolbar-scale, 1);
+  --tb-row: calc(22px * var(--tb-s));
+  --tb-ico-small: calc(18px * var(--tb-s));
+  --tb-ico-large: calc(28px * var(--tb-s));
+  --tb-font: calc(11px * var(--tb-s));
+  --tb-head: calc(10px * var(--tb-s));
+  --tb-line: calc(13px * var(--tb-s));
+  position: relative;
+  gap: calc(6px * var(--tb-s));
+  padding: calc(3px * var(--tb-s)) calc(8px * var(--tb-s)) calc(5px * var(--tb-s));
   align-items: stretch;
 }
 .cad-toolbar.is-ribbon .tb-group {
-  gap: 2px;
-  padding-right: 6px;
+  position: relative;
+  gap: calc(2px * var(--tb-s));
+  padding-right: calc(6px * var(--tb-s));
 }
 .cad-toolbar.is-ribbon .tb-group.is-end {
-  padding-left: 6px;
+  padding-left: calc(6px * var(--tb-s));
   padding-right: 0;
 }
 .cad-toolbar.is-ribbon .tb-group-label {
-  height: 12px;
-  line-height: 12px;
+  height: calc(12px * var(--tb-s));
+  line-height: calc(12px * var(--tb-s));
+  font-size: var(--tb-head);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cad-toolbar.is-ribbon .tb-items {
   display: grid;
-  grid-template-rows: repeat(3, 20px);
+  grid-template-rows: repeat(var(--tb-rows, 3), var(--tb-row));
   grid-auto-flow: column;
   grid-auto-columns: max-content;
-  gap: 1px 2px;
+  gap: 1px calc(2px * var(--tb-s));
   align-items: stretch;
+}
+/* A group the person narrowed (its width set): what does not fit went into its More. */
+.cad-toolbar.is-ribbon .tb-items.is-sized {
+  overflow: hidden;
 }
 /* Every button of the ribbon (the core's .tb-btn sizes are for its one-line toolbar). */
 .cad-toolbar.is-ribbon .tb-btn {
   min-width: 0;
   max-width: none;
-  font-size: 11px;
+  font-size: var(--tb-font);
   line-height: 1.15;
 }
-/* A large button: three rows tall, the icon over its name (two lines at most). */
+/* A large button: the rows tall, the icon over its name (two lines at most). */
 .cad-toolbar.is-ribbon .tb-btn.is-large {
-  grid-row: span 3;
+  grid-row: span var(--tb-rows, 3);
   justify-content: flex-start;
-  gap: 2px;
-  min-width: 44px;
+  gap: calc(2px * var(--tb-s));
+  min-width: calc(46px * var(--tb-s));
   /* Narrow enough that a two-word name breaks into two short lines with little room beside them
      ("Linear / pattern", "Import / STEP"). */
-  max-width: 58px;
-  padding: 4px 3px 2px;
+  max-width: calc(60px * var(--tb-s));
+  padding: calc(4px * var(--tb-s)) calc(3px * var(--tb-s)) calc(2px * var(--tb-s));
 }
 .cad-toolbar.is-ribbon .tb-btn.is-large .tb-ico {
-  width: 26px;
-  height: 26px;
+  width: calc(var(--tb-ico-large) + 2px);
+  height: calc(var(--tb-ico-large) + 2px);
   flex: none;
 }
 .cad-toolbar.is-ribbon .tb-btn.is-large .tb-svg {
-  width: 24px;
-  height: 24px;
+  width: var(--tb-ico-large);
+  height: var(--tb-ico-large);
 }
 .cad-toolbar.is-ribbon .tb-btn.is-large .tb-txt {
   white-space: normal;
   overflow-wrap: normal;
   text-wrap: balance;
-  line-height: 12px;
+  line-height: var(--tb-line);
 }
 /* A small button: one row, the icon and its name side by side. */
 .cad-toolbar.is-ribbon .tb-btn.is-small {
   flex-direction: row;
   justify-content: flex-start;
-  gap: 4px;
-  height: 20px;
-  min-width: 22px;
-  padding: 0 6px 0 2px;
+  gap: calc(4px * var(--tb-s));
+  height: var(--tb-row);
+  min-width: var(--tb-row);
+  padding: 0 calc(6px * var(--tb-s)) 0 calc(2px * var(--tb-s));
   border-radius: 3px;
 }
 .cad-toolbar.is-ribbon .tb-btn.is-small .tb-ico {
-  width: 16px;
-  height: 16px;
+  width: var(--tb-ico-small);
+  height: var(--tb-ico-small);
   flex: none;
 }
 .cad-toolbar.is-ribbon .tb-btn.is-small .tb-svg {
-  width: 16px;
-  height: 16px;
+  width: var(--tb-ico-small);
+  height: var(--tb-ico-small);
 }
 /* Small buttons as icons alone: CONSTRAIN (its glyphs, by design), a group whose names went for the
    width, VIEW and EDIT once the frame is narrow. The name stays the tooltip and the accessible name. */
 .cad-toolbar.is-ribbon .tb-group.is-icons .tb-btn.is-small {
-  width: 22px;
-  padding: 0 2px;
+  width: var(--tb-row);
+  padding: 0 calc(2px * var(--tb-s));
   justify-content: center;
 }
 .cad-toolbar.is-ribbon .tb-group.is-icons .tb-btn.is-small .tb-txt {
@@ -359,13 +378,13 @@ html.cad-tb-drag-refused * {
 }
 
 /* A flyout (src/ui/flyouts.ts): its button and arrow as one item, the arrow beside a small button
-   (12 px) and under a large one (a 12 px strip across it), as SolidWorks's split buttons. */
+   and under a large one (a strip across it), as SolidWorks's split buttons. */
 .cad-toolbar.is-ribbon .tb-split {
   display: flex;
   min-width: 0;
 }
 .cad-toolbar.is-ribbon .tb-split.is-large {
-  grid-row: span 3;
+  grid-row: span var(--tb-rows, 3);
   flex-direction: column;
 }
 .cad-toolbar.is-ribbon .tb-split.is-large > .tb-btn.is-large {
@@ -376,26 +395,26 @@ html.cad-tb-drag-refused * {
 .cad-toolbar.is-ribbon .tb-split.is-small > .tb-btn.is-small {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
-  padding-right: 3px;
+  padding-right: calc(3px * var(--tb-s));
 }
 .cad-toolbar.is-ribbon .tb-group.is-icons .tb-split.is-small > .tb-btn.is-small {
-  padding-right: 2px;
+  padding-right: calc(2px * var(--tb-s));
 }
 .cad-toolbar.is-ribbon .tb-btn.tb-flyout-arrow {
   flex: none;
   min-width: 0;
   padding: 0;
-  font-size: 10px;
+  font-size: calc(10px * var(--tb-s));
   color: var(--mg-text-muted);
 }
 .cad-toolbar.is-ribbon .tb-split.is-small > .tb-flyout-arrow {
-  width: 12px;
-  height: 20px;
+  width: calc(12px * var(--tb-s));
+  height: var(--tb-row);
   border-radius: 0 3px 3px 0;
 }
 .cad-toolbar.is-ribbon .tb-split.is-large > .tb-flyout-arrow {
   width: 100%;
-  height: 12px;
+  height: calc(12px * var(--tb-s));
   border-radius: 0 0 4px 4px;
 }
 .tb-flyout-arrow .tb-caret {
@@ -409,7 +428,8 @@ html.cad-tb-drag-refused * {
   background: var(--cad-icon-btn-hover-bg);
 }
 
-/* A group's "More ▾" (FOLD_ORDER): its folded commands, in a menu; one of the small buttons. */
+/* A group's "More ▾" (FOLD_ORDER, or a narrowed group): its folded commands, in a menu; one of the
+   small buttons. */
 .cad-toolbar .tb-btn.tb-more.is-open,
 .cad-toolbar .tb-btn.tb-group-menu.is-open {
   background: var(--cad-icon-btn-hover-bg);
@@ -420,8 +440,54 @@ html.cad-tb-drag-refused * {
 }
 .tb-btn.tb-more .tb-caret,
 .tb-btn.tb-group-menu .tb-caret {
-  font-size: 10px;
+  font-size: calc(10px * var(--cad-toolbar-scale, 1));
   line-height: 1;
+}
+
+/* The line between two groups (the group's right separator): a col-resize handle over it, as
+   Excel's ribbon; the toolbar's bottom edge: a row-resize handle. */
+.cad-toolbar.is-ribbon .tb-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: calc(-3px * var(--tb-s) - 3px);
+  width: 7px;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+}
+.cad-toolbar.is-ribbon .tb-group.is-end .tb-resize {
+  right: auto;
+  left: -4px;
+}
+.cad-toolbar.is-ribbon .tb-resize:hover,
+.cad-toolbar.is-ribbon .tb-resize:focus-visible {
+  background: linear-gradient(to right, transparent 2px, var(--cad-toolbar-active-border) 2px, var(--cad-toolbar-active-border) 5px, transparent 5px);
+  outline: none;
+}
+.cad-toolbar.is-ribbon .tb-rows-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  cursor: row-resize;
+  touch-action: none;
+}
+.cad-toolbar.is-ribbon .tb-rows-handle:hover,
+.cad-toolbar.is-ribbon .tb-rows-handle:focus-visible {
+  background: var(--cad-toolbar-active-border);
+  outline: none;
+}
+html.cad-tb-resizing,
+html.cad-tb-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+html.cad-tb-resizing-rows,
+html.cad-tb-resizing-rows * {
+  cursor: row-resize !important;
+  user-select: none;
 }
 
 /* Where a dragged command lands among small buttons (stacked in a column): a bar over or under it. */
@@ -442,18 +508,18 @@ html.cad-tb-drag-refused * {
 }
 
 /* Wider text than measured, or a narrow frame (Toolbar useFitLevel): once every foldable command
-   is folded the groups sit closer (3 px apart, 4 px to each separator), then collapse into one
-   dropdown each (is-collapsed: a large button with the group's name, SolidWorks at narrow widths). */
+   is folded the groups sit closer, then collapse into one dropdown each (is-collapsed: a button
+   with the group's name, SolidWorks at narrow widths). */
 .cad-toolbar.is-ribbon.is-fit-tight {
-  gap: 3px;
-  padding-left: 4px;
-  padding-right: 4px;
+  gap: calc(3px * var(--tb-s));
+  padding-left: calc(4px * var(--tb-s));
+  padding-right: calc(4px * var(--tb-s));
 }
 .cad-toolbar.is-ribbon.is-fit-tight .tb-group {
-  padding-right: 4px;
+  padding-right: calc(4px * var(--tb-s));
 }
 .cad-toolbar.is-ribbon.is-fit-tight .tb-group.is-end {
-  padding-left: 4px;
+  padding-left: calc(4px * var(--tb-s));
   padding-right: 0;
 }
 

@@ -11,6 +11,7 @@
 //     expand, collapse               the Origin and Bodies folders, the tree card, the Sketch panel
 //                                    and its Details.
 //     toolbar_show/_hide/_move/_reset  the person's toolbar layout (toolbar-layout.ts).
+//     toolbar_width / toolbar_rows   a group's width, the toolbar's rows (the person drags them).
 //     banana_show/_hide/_place       the banana for scale (scale module), and a sketch's taped one.
 //   The Part and the session:
 //     rename_part                    the study's title, as the tree's Rename part.
@@ -43,7 +44,7 @@ import { normalTarget } from '../../viewport/normal';
 import { railsFor } from '../../ui/left-rails';
 import { KEEP_IN_VIEW } from '../../ui/Toolbar';
 import { barIdOf, collapseFlyouts } from '../../ui/flyouts';
-import { layoutModeOf, orderIds, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
+import { layoutModeOf, MAX_GROUP_W, MAX_ROWS, MIN_GROUP_W, MIN_ROWS, orderIds, rowsOf, toolbarPrefs, widthOf, withMove, withPlace, withRows, withWidth, type LayoutMode } from '../../ui/toolbar-layout';
 import { uiFor } from '../../ui/controller';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
@@ -311,6 +312,31 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
     const modes: LayoutMode[] = v ? [v as LayoutMode] : ['model', 'sketch'];
     for (const m of modes) prefs.reset(m);
     return done(`Toolbar back to its default layout (${modes.join(' and ')})`, { reset: modes });
+  }
+  if (i.action === 'toolbar_rows') {
+    const t = i.target.toLowerCase();
+    if (t && t !== 'model' && t !== 'sketch') throw bad('target', 'target: model, sketch, or "" for the toolbar shown now.');
+    const mode: LayoutMode = t ? (t as LayoutMode) : layoutModeOf(services.mode.get().mode);
+    const v = i.value.trim().toLowerCase();
+    const n = v === 'auto' || v === 'default' ? null : Number(v);
+    if (n !== null && !(Number.isInteger(n) && n >= MIN_ROWS && n <= MAX_ROWS)) throw bad('value', `value: ${MIN_ROWS} to ${MAX_ROWS} rows, or auto (3).`);
+    prefs.setMode(mode, withRows(prefs.state.get().layout[mode], n));
+    const now = rowsOf(prefs.state.get().layout[mode]);
+    return done(`The ${mode} toolbar is ${now} row${now === 1 ? '' : 's'} tall`, { mode, rows: now });
+  }
+  if (i.action === 'toolbar_width') {
+    // A group of either toolbar: the current mode's first (VIEW, SCALE MODELS and EDIT are in both).
+    const here = layoutModeOf(services.mode.get().mode);
+    const groupsOf = (m: LayoutMode) => [...services.commands.toolbar(m).map((g) => g.group), 'view', 'edit'];
+    const g = i.target.trim().toLowerCase();
+    const mode: LayoutMode | null = groupsOf(here).includes(g) ? here : groupsOf(here === 'model' ? 'sketch' : 'model').includes(g) ? (here === 'model' ? 'sketch' : 'model') : null;
+    if (!mode) throw bad('target', `target: a toolbar group: ${[...new Set([...groupsOf('model'), ...groupsOf('sketch')])].join(', ')}.`);
+    const v = i.value.trim().toLowerCase();
+    const w = v === 'auto' || v === '' ? null : Number(v.replace(/px$/, ''));
+    if (w !== null && !(Number.isFinite(w) && w >= MIN_GROUP_W && w <= MAX_GROUP_W)) throw bad('value', `value: a width in px, ${MIN_GROUP_W} to ${MAX_GROUP_W}, or auto.`);
+    prefs.setMode(mode, withWidth(prefs.state.get().layout[mode], g, w));
+    const now = widthOf(prefs.state.get().layout[mode], g);
+    return done(now == null ? `The ${g} group is as wide as its commands (${mode} toolbar)` : `The ${g} group is ${now} px wide (${mode} toolbar); what does not fit is in its More`, { group: g, mode, width: now });
   }
   // A flyout's variant (sketch.centerline) moves with its flyout, as the person's bar button does.
   const asked = services.commands.get(i.target);
@@ -728,6 +754,8 @@ async function run(ctx: CallCtx): Promise<ToolReply> {
     case 'toolbar_hide':
     case 'toolbar_move':
     case 'toolbar_reset':
+    case 'toolbar_width':
+    case 'toolbar_rows':
       return toolbar(ctx, i);
     case 'banana_show':
     case 'banana_hide':

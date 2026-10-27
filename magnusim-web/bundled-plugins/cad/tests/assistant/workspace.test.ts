@@ -181,6 +181,23 @@ describe('workspace: the tree and the view state', () => {
     expect(prefs.state.get().layout.model).toEqual({ place: {}, order: {} });
     const nf = await t.call('workspace', W('toolbar_show', { target: 'modify.nope' }));
     expect(!nf.ok && nf.error.message).toMatch(/is not a toolbar command/);
+    // v0.5.0 ribbon: a group's width and the toolbar's rows, as the person drags them.
+    const w = await t.ok('workspace', W('toolbar_width', { target: 'modify', value: '120' }));
+    expect(w.data).toMatchObject({ group: 'modify', mode: 'model', width: 120 });
+    expect(prefs.state.get().layout.model.widths).toEqual({ modify: 120 });
+    await t.ok('workspace', W('toolbar_width', { target: 'modify', value: 'auto' }));
+    expect(prefs.state.get().layout.model.widths).toBeUndefined();
+    const badW = await t.call('workspace', W('toolbar_width', { target: 'modify', value: '5' }));
+    expect(!badW.ok && badW.error.message).toMatch(/24 to 1200/);
+    const badG = await t.call('workspace', W('toolbar_width', { target: 'nope', value: '100' }));
+    expect(!badG.ok && badG.error.message).toMatch(/a toolbar group/);
+    const r = await t.ok('workspace', W('toolbar_rows', { target: 'model', value: '2' }));
+    expect(r.data).toMatchObject({ mode: 'model', rows: 2 });
+    expect(prefs.state.get().layout.model.rows).toBe(2);
+    const badR = await t.call('workspace', W('toolbar_rows', { target: 'model', value: '6' }));
+    expect(!badR.ok && badR.error.message).toMatch(/1 to 4/);
+    await t.ok('workspace', W('toolbar_rows', { value: 'auto' }));
+    expect(prefs.state.get().layout.model.rows).toBeUndefined();
   });
 
   it('a flyout variant moves with its flyout, as a toolbar button of the person does (v0.5.0 flyouts)', async () => {

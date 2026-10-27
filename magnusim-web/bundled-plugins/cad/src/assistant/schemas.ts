@@ -88,6 +88,8 @@ export const WORKSPACE_ACTIONS = [
   'toolbar_hide',
   'toolbar_move',
   'toolbar_reset',
+  'toolbar_width',
+  'toolbar_rows',
   'banana_show',
   'banana_hide',
   'banana_place',
@@ -511,7 +513,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      "Things the person controls around the model, one action per call (target, value, items: \"\" or [] when unused; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, construction feature or body), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (asks the person to pick the file), reheal (an import: the one undo step here), export_step (opens the person's Export STEP panel filled in; they click Export), send_to_simulation (save, then link into the project's geometry as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset. Banana for scale: banana_show, banana_hide, banana_place. The person's own view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or while they have not moved it in this request. Each result says what changed.",
+      "Things the person controls around the model, one action per call (target, value, items: \"\" or [] when unused; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, construction feature or body), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (asks the person to pick the file), reheal (an import: the one undo step here), export_step (opens the person's Export STEP panel filled in; they click Export), send_to_simulation (save, then link into the project's geometry as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana for scale: banana_show, banana_hide, banana_place. The person's own view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or while they have not moved it in this request. Each result says what changed.",
     schema: obj({
       action: en(WORKSPACE_ACTIONS, 'What to do'),
       target: str(300, 'What it acts on, or ""'),

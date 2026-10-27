@@ -175,7 +175,7 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
   }
   for (const b of model.filter((x) => !MODEL_LARGE.includes(x.id))) {
     expect(b.size, `${b.id} is small`).toBe('small');
-    expect(b.height, `${b.id} is one row`).toBeLessThanOrEqual(21);
+    expect(b.height, `${b.id} is one row`).toBeLessThanOrEqual(23);
   }
   // A group's More stands beside its main command, at the top of the next column.
   const solid = model.find((x) => x.id === 'solid.extrude')!;
@@ -234,7 +234,7 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
       } else {
         // Small: one row; its name beside its icon (CONSTRAIN: its glyph alone).
         expect(b.size, `${c.id} is small`).toBe('small');
-        expect(b.height, `${c.id} is one row`).toBeLessThanOrEqual(21);
+        expect(b.height, `${c.id} is one row`).toBeLessThanOrEqual(23);
         if (g.group === 'constrain') {
           expect(b.named, `${c.id} is its glyph alone`).toBe('');
           expect(b.width).toBeLessThanOrEqual(24);
@@ -392,7 +392,7 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
   }
   await page.mouse.move(900, 600);
   await shot(page, frame, 'model-ribbon-1600');
-  // The widest frame where a group collapses (Segoe UI: about 770 px): FILE first.
+  // The widest frame where a group collapses (Segoe UI: about 800 px): FILE first.
   let collapsed: string[] = [];
   for (let w = 900; w >= 640 && !collapsed.length; w -= 10) {
     await resizeTo(page, frame, w, 'model');

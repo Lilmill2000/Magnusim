@@ -294,6 +294,7 @@ describe('the smoke and serial tags', () => {
       'cad:p4b-toolbar-customize',
       'cad:p4b-toolbar-migrate',
       'cad:p4b-toolbar-tabs',
+      'cad:toolbar-resize',
       // ux010 TOOLBAR: dragging between More and the bar changes the same user layout.
       'cad:ux010-toolbar-model',
       'cad:ux010-toolbar-narrow',
