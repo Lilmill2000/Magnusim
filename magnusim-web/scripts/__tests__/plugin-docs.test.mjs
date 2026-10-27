@@ -372,10 +372,13 @@ describe('the handwritten guides', () => {
       assert.ok(settings.includes(`${attr}={`), `${attr} is not in PluginsStep.tsx`);
     }
     const wizard = app('src', 'wizard', 'controller.ts');
-    for (const id of ['wb-prefs', 'wiz-next']) {
+    for (const id of ['wb-prefs', 'wiz-close']) {
       assert.ok(guide.includes(`#${id}`), id);
       assert.ok(wizard.includes(`$('${id}')`), `${id} is not in the wizard`);
     }
+    // Settings is one page: its sections are picked in the rail.
+    assert.ok(guide.includes('`#wiz-rail`'), 'wiz-rail');
+    assert.ok(app('src', 'app', 'shell.html').includes('id="wiz-rail"'), 'wiz-rail is not in shell.html');
     const overlay = app('src', 'workspace', 'WorkspaceOverlay.tsx');
     for (const attr of ['data-ws-toast', 'data-ws-crumb']) {
       assert.ok(guide.includes(`[${attr}]`), attr);

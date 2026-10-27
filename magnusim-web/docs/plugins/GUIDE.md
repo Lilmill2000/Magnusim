@@ -702,7 +702,7 @@ A test may set up through these routes. Call them from the test, never from your
 | `POST /api/plugins/:key/env/install` | Builds the plugin's environment, as **Install dependencies** does. Answers 202 at once |
 | `GET /api/plugins/:key/env` | Answers `{env: {state, error}}`. Poll until `state` is `ready` (or `failed`) |
 
-Turning your plugin off and on is a user's action: test it through **Settings → Plugins**, as `togglePlugin` in `bundled-plugins/airfoil/e2e/airfoil.spec.js` does. Click `#wb-prefs`, then the **Plugins** step. In the row `[data-plugin-key="<key>"]`, click `[data-plugin-toggle="<key>"]` and wait for `data-plugin-status` to be `disabled` or `enabled`. Close with `#wiz-next`. To test a removed plugin, stop the server, remove its folder from `pluginsDir`, and start a server on the same `projects`.
+Turning your plugin off and on is a user's action: test it through **Settings → Plugins**, as `togglePlugin` in `bundled-plugins/airfoil/e2e/airfoil.spec.js` does. Click `#wb-prefs`, then **Plugins** in the left rail (`#wiz-rail`). In the row `[data-plugin-key="<key>"]`, click `[data-plugin-toggle="<key>"]` and wait for `data-plugin-status` to be `disabled` or `enabled`; the change is saved at once. Close with `#wiz-close`. To test a removed plugin, stop the server, remove its folder from `pluginsDir`, and start a server on the same `projects`.
 
 Driving the kit's controls in a test:
 
