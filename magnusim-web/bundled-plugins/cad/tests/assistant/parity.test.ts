@@ -18,7 +18,7 @@
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
-import { AI_TOOLS, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { AI_TOOLS, command, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
@@ -241,5 +241,21 @@ describe('parity: every person-facing capability has an Assistant tool and field
     // The helper fails a kind with no tool, or with a tool the person has no command for.
     expect(sketchKindsWithoutPersonTool(['slot', 'no_such_kind'], tools)).toEqual(['no_such_kind']);
     expect(sketchKindsWithoutPersonTool(['slot', 'arc_slot'], new Set(['slot-center']))).toEqual(['arc_slot']);
+  });
+
+  it("both reverse checks agree: each sketch kind's AI_TOOLS row is the command that selects the person's tool PERSON_SKETCH_KINDS names", async () => {
+    const services = await boot();
+    const toolOf = (id: string) => services.commands.get(id)?.activeWhen?.sketchTool;
+    const disagree = SKETCH_ENTITY_KINDS.flatMap((k) => {
+      const row = AI_TOOLS.sketch[`entities[].kind=${k}`];
+      if (row?.kind !== 'command') return [`${k}: no command row`];
+      return toolOf(row.id) === PERSON_SKETCH_KINDS[k] ? [] : [`${k}: ${row.id} selects ${toolOf(row.id)}, PERSON_SKETCH_KINDS names ${PERSON_SKETCH_KINDS[k]}`];
+    });
+    expect(disagree).toEqual([]);
+    // The shape and ellipse kinds reach their own tools, not the line and arc tools that stood in for them.
+    expect(AI_TOOLS.sketch['entities[].kind=slot']).toEqual(command('sketch.slot'));
+    expect(AI_TOOLS.sketch['entities[].kind=polygon']).toEqual(command('sketch.polygon'));
+    expect(AI_TOOLS.sketch['entities[].kind=sector']).toEqual(command('sketch.sector'));
+    expect(AI_TOOLS.sketch['entities[].kind=conic']).toEqual(command('sketch.conic'));
   });
 });
