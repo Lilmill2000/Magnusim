@@ -501,7 +501,7 @@ test('Settings: the first launch opens it on Units (no Welcome, no Next or Finis
     await expect(page.locator('#wiz-heading')).toHaveText('Settings');
     await expect(page.locator('.wiz-pane[data-wiz-key="units"]')).toBeVisible();
     const keys = await page.locator('#wiz-rail li').evaluateAll((lis) => lis.map((li) => li.getAttribute('data-wiz-key')));
-    expect(keys).toEqual(['units', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
+    expect(keys).toEqual(['units', 'appearance', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
     await expect(page.locator('#wiz-next, #wiz-back, #wiz-skip, [data-wiz-key="welcome"]')).toHaveCount(0);
     await expect.poll(() => checks, { message: 'the first run asks the PC check' }).toBeGreaterThan(0);
     // Each section is a click away, and its changes save at once.

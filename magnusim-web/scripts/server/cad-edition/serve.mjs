@@ -24,6 +24,7 @@ process.env.MAGNUSIM_WSL_CASE_ROOT ||= '/home/cfddesk/cases';
 const { installSpawnGuard } = await import('./spawn-guard.js');
 installSpawnGuard();
 const { createApiPlugin } = await import('../index.ts');
+const { stampAppearance } = await import('../../prefs.js');
 
 const WEB_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 
@@ -75,7 +76,9 @@ function serveStatic(root, req, res) {
   if (!existsSync(hit)) return false;
   res.statusCode = 200;
   res.setHeader('Content-Type', TYPES[extname(hit).toLowerCase()] || 'application/octet-stream');
-  createReadStream(hit).pipe(res);
+  // The page carries the person's look for its first paint (prefs.js stampAppearance).
+  if (extname(hit).toLowerCase() === '.html') res.end(stampAppearance(readFileSync(hit, 'utf8')));
+  else createReadStream(hit).pipe(res);
   return true;
 }
 
@@ -99,7 +102,7 @@ async function devPage(webRoot, httpServer) {
     middlewares: vite.middlewares,
     async html(url) {
       const raw = readFileSync(join(webRoot, 'cad.html'), 'utf8');
-      return vite.transformIndexHtml(url, raw);
+      return stampAppearance(await vite.transformIndexHtml(url, raw));
     },
     close: () => vite.close(),
   };

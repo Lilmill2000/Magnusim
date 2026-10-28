@@ -20,6 +20,8 @@
  *   answers `person_busy`: the camera never moves under their hand. A picture never moves it.
  * - core__keybinds and core__set_keybind are Settings → Keybinds' (keybindTools.ts): read any time;
  *   a change only when the person asked for it, and only on their Yes in the app's confirm.
+ * - core__appearance and core__set_appearance are Settings → Appearance's (appearanceTool.ts): read
+ *   any time; a change only when the person asked for it (shown at once, so no question).
  * - Where the tab is (place, project, study) is published again whenever the route, the project
  *   or the study changes; the same place again publishes nothing.
  */
@@ -31,6 +33,7 @@ import { confirmLeaveWorkspace, lastLeaveLinkJob, leaveNeedsWork, leaveWorkspace
 import { workspaceHash } from '../workspace/route';
 import { CORE_GUIDE, CORE_TOOLS, SHOW_TARGETS, VIEW_ACTIONS } from './coreToolDefs';
 import { drawPagePicture } from './domPicture';
+import { coreAppearance, coreSetAppearance, pageLookRuntime, type LookRuntime } from './appearanceTool';
 import { coreKeybinds, coreSetKeybind, pageKeysRuntime, type KeysRuntime } from './keybindTools';
 
 /** The workbench's own functions the core tools use (runtime.js window.__CFD_ASSISTANT_CORE__). */
@@ -224,13 +227,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
 /** Runs one core tool call in this page (the relay's `invoke {…, slot:'core'}`). */
-export async function runCoreTool(req: AssistantInvoke, rt: CoreRuntime = pageRuntime(), keys: KeysRuntime = pageKeysRuntime()): Promise<Outcome> {
+export async function runCoreTool(
+  req: AssistantInvoke,
+  rt: CoreRuntime = pageRuntime(),
+  keys: KeysRuntime = pageKeysRuntime(),
+  look: LookRuntime = pageLookRuntime(),
+): Promise<Outcome> {
   const input = isRecord(req.input) ? req.input : {};
   try {
     if (req.tool === 'show') return await coreShow(input, req, rt);
     if (req.tool === 'view') return await coreView(input, req, rt);
     if (req.tool === 'keybinds') return await coreKeybinds(input, keys);
     if (req.tool === 'set_keybind') return await coreSetKeybind(input, req, keys);
+    if (req.tool === 'appearance') return await coreAppearance(input, look);
+    if (req.tool === 'set_appearance') return await coreSetAppearance(input, look);
     return fail('no_tool', `No core tool named ${req.tool.slice(0, 40)}.`);
   } catch (e) {
     if (req.signal.aborted) return fail('aborted', 'It was stopped.');

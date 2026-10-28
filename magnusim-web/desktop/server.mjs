@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 if (process.versions.electron) process.env.ELECTRON_RUN_AS_NODE = '1';
 
 const { startCadServer } = await import('../scripts/server/cad-edition/serve.mjs');
+const { appearancePrefs } = await import('../scripts/prefs.js');
 const staticArg = process.argv.indexOf('--static');
 const server = await startCadServer({
   port: 0,
@@ -18,7 +19,8 @@ const server = await startCadServer({
   staticDir: staticArg > 0 ? process.argv[staticArg + 1] : undefined,
 });
 const port = process.parentPort;
-port?.postMessage({ type: 'ready', port: server.port });
+// With the person's theme: the window takes its colour before the page paints.
+port?.postMessage({ type: 'ready', port: server.port, theme: appearancePrefs().theme });
 port?.on('message', (e) => {
   if (e?.data?.type !== 'quit') return;
   server.close().finally(() => process.exit(0));

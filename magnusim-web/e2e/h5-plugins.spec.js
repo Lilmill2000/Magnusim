@@ -38,7 +38,7 @@ async function openSettingsPlugins(page, button = '#wb-prefs') {
   await page.locator(button).click();
   const wizard = page.locator('#setup-wizard');
   await expect(wizard).toBeVisible();
-  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Units', 'This PC', 'Port', 'Workspace', 'Keybinds', 'Assistant', 'Plugins']);
+  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Units', 'Appearance', 'This PC', 'Port', 'Workspace', 'Keybinds', 'Assistant', 'Plugins']);
   await wizard.locator('#wiz-rail li', { hasText: 'Plugins' }).click();
   const step = wizard.locator('.wiz-pane[data-wiz-step="5"]');
   await expect(step).toBeVisible();

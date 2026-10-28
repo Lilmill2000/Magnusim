@@ -194,6 +194,17 @@ describe('tokens.css', () => {
     expect(contrast(dark['--mg-pin'], bg)).toBeGreaterThanOrEqual(3);
   });
 
+  it("fields and ticks no rule colours are the browser's own in light, a select's and the primary in dark", () => {
+    // Chromium's light Field, FieldText and accent: what an uncoloured input showed before.
+    expect([tokens['--mg-field-bg'], tokens['--mg-field-text'], tokens['--mg-check-accent']]).toEqual(['#ffffff', '#000000', 'auto']);
+    expect([dark['--mg-field-bg'], dark['--mg-field-text'], dark['--mg-check-accent']]).toEqual([dark['--mg-bg'], dark['--mg-text'], dark['--mg-primary']]);
+    const where = cssRules(appCss).filter((r) => r.selectors.some((s) => s.startsWith(':where(input')));
+    expect(where.map((r) => r.props)).toEqual([
+      { 'background-color': 'var(--mg-field-bg)', color: 'var(--mg-field-text)' },
+      { 'accent-color': 'var(--mg-check-accent)' },
+    ]);
+  });
+
   // vtk, canvas and WebGPU read these through themeColor (src/theme/themeColor.ts), which takes rgb()
   // only: a color-mix() computes to color(srgb ...).
   it('every token code reads as a colour is plain hex or rgb in every block', () => {

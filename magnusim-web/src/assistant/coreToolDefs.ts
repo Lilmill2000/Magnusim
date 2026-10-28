@@ -68,6 +68,29 @@ export const CORE_SET_KEYBIND_SCHEMA = Object.freeze({
   },
 });
 
+/** core__appearance's input. */
+export const CORE_APPEARANCE_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['with_offered'],
+  properties: {
+    with_offered: { type: 'boolean', description: 'true also lists the choices Settings offers' },
+  },
+});
+
+/** core__set_appearance's input: every property required, sentinels where unused. */
+export const CORE_SET_APPEARANCE_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['theme', 'text_scale', 'icon_scale', 'person_asked'],
+  properties: {
+    theme: { type: 'string', enum: ['', 'light', 'dark', 'system'] },
+    text_scale: { type: 'number', description: '0.9, 1, 1.15, 1.3' },
+    icon_scale: { type: 'number', description: '0.85, 1, 1.25, 1.5' },
+    person_asked: { type: 'boolean' },
+  },
+});
+
 export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
   {
     name: 'show',
@@ -104,5 +127,23 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     inputSchema: CORE_SET_KEYBIND_SCHEMA as unknown as Record<string, unknown>,
     risk: 'edit',
     timeoutS: 300,
+  },
+  {
+    name: 'appearance',
+    title: 'Read the look',
+    description:
+      "The app's look as Settings → Appearance shows it: theme (light, dark, or system: the system's; shown: the one on screen), text and icon size. Read it any time.",
+    inputSchema: CORE_APPEARANCE_SCHEMA as unknown as Record<string, unknown>,
+    risk: 'read',
+    timeoutS: 30,
+  },
+  {
+    name: 'set_appearance',
+    title: 'Change the look',
+    description:
+      'Changes the look (Settings → Appearance). Only if the person explicitly asked for this change in this request (person_asked true, else not_asked). "" or 0 keeps a field.',
+    inputSchema: CORE_SET_APPEARANCE_SCHEMA as unknown as Record<string, unknown>,
+    risk: 'edit',
+    timeoutS: 30,
   },
 ]);

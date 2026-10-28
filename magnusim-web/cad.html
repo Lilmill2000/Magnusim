@@ -6,6 +6,28 @@
     <meta name="magnusim-edition" content="cad" />
     <title>Magnusim CAD</title>
     <meta name="description" content="Magnusim CAD - parametric parts, with the Assistant" />
+    <script>
+      /* The person's look before the first paint (src/theme/appearance.ts applyAppearance shows the same once the prefs answer):
+         the one the server put on <html> (scripts/prefs.js stampAppearance), else this origin's copy. */
+      (function () {
+        try {
+          var h = document.documentElement;
+          var a = JSON.parse(h.getAttribute('data-look') || localStorage.getItem('magnusim.appearance') || 'null');
+          if (!a || ['light', 'dark', 'system'].indexOf(a.theme) < 0) return;
+          var dark = a.theme === 'dark' || (a.theme === 'system' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var t = dark ? 'dark' : 'light';
+          h.setAttribute('data-theme', t);
+          h.setAttribute('data-theme-pref', a.theme);
+          h.style.colorScheme = t;
+          if (typeof a.text_scale === 'number' && a.text_scale >= 0.5 && a.text_scale <= 3) h.style.setProperty('--mg-text-scale', String(a.text_scale));
+          if (typeof a.icon_scale === 'number' && a.icon_scale >= 0.5 && a.icon_scale <= 3) h.style.setProperty('--mg-icon-scale', String(a.icon_scale));
+        } catch (e) {
+          /* the light look until the prefs answer */
+        }
+      })();
+    </script>
+    <!-- The theme tokens before the first paint (the pre-paint script's data-theme takes its set at once); the entry script imports them too. -->
+    <link rel="stylesheet" href="/src/theme/tokens.css" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body class="on-home edition-cad">

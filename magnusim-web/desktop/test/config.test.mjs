@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { isAppUrl, isExternalUrl, serverEnv } from '../config.mjs';
+import { isAppUrl, isExternalUrl, serverEnv, windowBackground } from '../config.mjs';
 
 const where = { documents: join('C:', 'Users', 'me', 'Documents'), userData: join('C:', 'Users', 'me', 'AppData', 'Roaming', 'Magnusim CAD') };
 
@@ -40,5 +40,15 @@ describe('addresses', () => {
   it('a web or mail link may open in the browser; a file, script or app link never', () => {
     for (const url of ['https://magnusim.example/docs', 'http://example.org', 'mailto:someone@example.org']) assert.equal(isExternalUrl(url), true, url);
     for (const url of ['file:///C:/Windows/system32/calc.exe', 'javascript:alert(1)', 'ms-settings:privacy', 'vscode://x', '']) assert.equal(isExternalUrl(url), false, url);
+  });
+});
+
+describe('windowBackground', () => {
+  it("is the page's background of the person's theme until the page paints; the system's when they match it", () => {
+    assert.equal(windowBackground('light', true), '#f9fafb');
+    assert.equal(windowBackground('dark', false), '#12151b');
+    assert.equal(windowBackground('system', true), '#12151b');
+    assert.equal(windowBackground('system', false), '#f9fafb');
+    assert.equal(windowBackground('neon', true), '#f9fafb');
   });
 });

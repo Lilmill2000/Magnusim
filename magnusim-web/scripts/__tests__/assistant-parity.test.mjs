@@ -5,7 +5,7 @@
 //   1. every required row id has exactly one entry, and each entry says how (paths), or why not
 //      (deferred, person_only, not_owed);
 //   2. each path's tool is a host tool (defaultHostTools) or a core page tool (core__show,
-//      core__view, core__keybinds, core__set_keybind: src/assistant/coreToolDefs.ts); its `where` values are in the tool's enums (or
+//      core__view, core__keybinds, core__set_keybind, core__appearance, core__set_appearance: src/assistant/coreToolDefs.ts); its `where` values are in the tool's enums (or
 //      are properties of its schema); its routes are HOST_ROUTES entries its code calls, and a
 //      page tool handles the target or action; a path's `context` is one the tool is offered in;
 //   3. each deferral is named in the release notes' "Not yet in v0.5.0" list;
@@ -34,7 +34,7 @@ const { defaultHostTools } = await import('../server/assistant/host-tools.ts');
 const { HOST_ROUTES } = await import('../server/assistant/host-call.ts');
 
 /** The audit's Tier 0 and Tier 1 rows, and the Tier 2 rows the tools cover (spec 16.4): the fixture's header must say the same. */
-const REQUIRED = ['H1-H14', 'G1-G18', 'S1-S15', 'M1-M7', 'B1-B10', 'X1-X19', 'R1-R22', 'V1-V25', 'Q1-Q5', 'P2', 'P6', 'P8', 'P23', 'L7', 'L9'];
+const REQUIRED = ['H1-H14', 'G1-G18', 'S1-S15', 'M1-M7', 'B1-B10', 'X1-X19', 'R1-R22', 'V1-V25', 'Q1-Q5', 'P2', 'P6', 'P8', 'P23', 'P24', 'L7', 'L9'];
 
 /** "H1-H14" → H1 … H14; "P2" → P2. */
 function expand(spec) {
@@ -64,13 +64,18 @@ const calls = (tool, route) => filesOf(tool).some((f) => sourceOf.get(f).include
 // The core page's tools: their definitions as the page registers them (src/assistant/coreToolDefs.ts,
 // plain data Node reads), and their handlers in the page's code (browser code: read as text).
 const { CORE_TOOLS, KEYBIND_ACTIONS, SHOW_TARGETS, VIEW_ACTIONS } = await import('../../src/assistant/coreToolDefs.ts');
-const CORE_SRC = ['coreTools.ts', 'keybindTools.ts'].map((f) => readFileSync(join(WEB, 'src', 'assistant', f), 'utf8')).join('\n');
-/** Each core page tool: the enum its paths name (key: '' for a read with none), and its properties. */
+const coreSrc = (file) => readFileSync(join(WEB, 'src', 'assistant', file), 'utf8');
+/**
+ * Each core page tool: the enum its paths name (key: '' for one with none), its properties, and the
+ * file its handler is in (a value counts as handled only there: another tool's `=== 'set'` is not its).
+ */
 const CORE = {
-  core__show: { key: 'target', values: [...SHOW_TARGETS], props: ['target', 'project_id', 'id', 'panel'] },
-  core__view: { key: 'action', values: [...VIEW_ACTIONS], props: ['action', 'target_ids', 'aspect', 'size', 'with_legend', 'on', 'save'] },
-  core__keybinds: { key: '', values: [], props: ['plugin', 'target'] },
-  core__set_keybind: { key: 'action', values: [...KEYBIND_ACTIONS], props: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'] },
+  core__show: { key: 'target', values: [...SHOW_TARGETS], props: ['target', 'project_id', 'id', 'panel'], src: 'coreTools.ts' },
+  core__view: { key: 'action', values: [...VIEW_ACTIONS], props: ['action', 'target_ids', 'aspect', 'size', 'with_legend', 'on', 'save'], src: 'coreTools.ts' },
+  core__keybinds: { key: '', values: [], props: ['plugin', 'target'], src: 'keybindTools.ts' },
+  core__set_keybind: { key: 'action', values: [...KEYBIND_ACTIONS], props: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'], src: 'keybindTools.ts' },
+  core__appearance: { key: '', values: [], props: ['with_offered'], src: 'appearanceTool.ts' },
+  core__set_appearance: { key: '', values: [], props: ['theme', 'text_scale', 'icon_scale', 'person_asked'], src: 'appearanceTool.ts' },
 };
 for (const [name, c] of Object.entries(CORE)) {
   const short = name.slice('core__'.length);
@@ -78,8 +83,8 @@ for (const [name, c] of Object.entries(CORE)) {
   assert.ok(def, `CORE_TOOLS registers ${short}`);
   for (const p of c.props) assert.ok(def.inputSchema.required.includes(p), `${name} has ${p}`);
 }
-/** The page handles this target or action (its own branch or case). */
-const handles = (value) => new RegExp(`(?:case |=== ?)'${value}'`).test(CORE_SRC);
+/** The page handles this target or action (its own branch or case) in that tool's file. */
+const handles = (value, src) => new RegExp(`(?:case |=== ?)'${value}'`).test(coreSrc(src));
 
 /** The release notes' "Not yet in v0.5.0" list (to the next heading). */
 function notYetList() {
@@ -106,7 +111,7 @@ function pathProblems(row, p) {
       else if (k === core.key) {
         for (const x of asList(v)) {
           if (!core.values.includes(x)) out.push(`${at}: ${k} "${x}" is not in its enum`);
-          else if (!handles(x)) out.push(`${at}: the page does not handle ${k} "${x}"`);
+          else if (!handles(x, core.src)) out.push(`${at}: the page does not handle ${k} "${x}"`);
         }
       }
     }
@@ -202,6 +207,9 @@ describe("the Assistant's parity with the person (spec 16.4)", () => {
     assert.deepEqual(pathProblems('T', { tool: 'delete', where: { kind: 'bc' }, routes: ['bcs.vanish'] }), ['T delete: bcs.vanish is not a HOST_ROUTES entry']);
     assert.deepEqual(pathProblems('T', { tool: 'delete', where: { kind: 'bc' }, routes: ['mesh.generate'] }), ['T delete: its code never calls mesh.generate']);
     assert.deepEqual(pathProblems('T', { tool: 'core__show', where: { target: 'garden' }, page: true }), ['T core__show: target "garden" is not in its enum']);
+    // A value is handled in the tool's own file only: keybindTools.ts's 'set' is not appearanceTool.ts's.
+    assert.equal(handles('set', 'keybindTools.ts'), true);
+    assert.equal(handles('set', 'appearanceTool.ts'), false);
     assert.deepEqual(pathProblems('T', { tool: 'compute', where: { action: 'run_start' } }), ['T compute: a path that changes something names its routes']);
   });
 });

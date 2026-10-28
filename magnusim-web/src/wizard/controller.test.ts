@@ -132,18 +132,24 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   document.body.innerHTML = '';
+  // The look a test put on the page goes with it.
+  const html = document.documentElement;
+  html.removeAttribute('data-theme');
+  html.removeAttribute('data-theme-pref');
+  html.removeAttribute('style');
+  localStorage.clear();
 });
 
 describe('Settings', () => {
   it("is sections on the left (no Welcome), an X and Esc, and no Next, Back, Finish or Close (Daniel: the sections are the way around)", async () => {
     const c = await load({ wizard_completed: true });
-    expect(railKeys()).toEqual(['units', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
+    expect(railKeys()).toEqual(['units', 'appearance', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
     expect(document.querySelectorAll('[data-wiz-key="welcome"], #wiz-next, #wiz-back, #wiz-skip, .wiz-foot')).toHaveLength(0);
     expect($('#wiz-heading')).toHaveTextContent('Settings');
     expect($('#wiz-close')).toHaveAccessibleName('Close settings');
     c.openSetupWizard({});
     expect(shownPane()).toBe('units');
-    for (const key of ['port', 'plugins', 'pc', 'keybinds', 'workspace']) {
+    for (const key of ['port', 'plugins', 'appearance', 'pc', 'keybinds', 'workspace']) {
       rail(key).click();
       expect([shownPane(), onKey(), rail(key).getAttribute('aria-current')]).toEqual([key, key, 'page']);
     }
@@ -352,6 +358,85 @@ describe('Settings', () => {
     reset.click();
     await flush();
     expect($('#wiz-saved').textContent).toBe("Reset Magnusim CAD; not reset: Magnusim CAD (the Assistant panel's key) (the settings are not available right now)");
+  });
+
+  it('Appearance: a choice is saved and shown at once; the one the pointer is on shows in the preview first', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'appearance' });
+    expect(shownPane()).toBe('appearance');
+    const choice = (field: string, value: string) => $(`[data-wiz-look="${field}"][data-value="${value}"]`);
+    const preview = $('[data-look-preview]');
+    expect(choice('theme', 'light')).toHaveAttribute('aria-checked', 'true');
+    // The look now is the page's: the preview has no theme of its own (never a light island).
+    expect(preview).not.toHaveAttribute('data-theme');
+    // Pointing at Dark shows it in the preview only.
+    choice('theme', 'dark').dispatchEvent(new Event('pointerenter'));
+    expect([preview.getAttribute('data-theme'), document.documentElement.dataset.theme ?? 'light']).toEqual(['dark', 'light']);
+    expect($('#wiz-look-note')).toHaveTextContent('Preview of the choice: click it to keep it.');
+    choice('theme', 'dark').dispatchEvent(new Event('pointerleave'));
+    expect(preview).not.toHaveAttribute('data-theme');
+    // A size tried keeps the page's theme.
+    choice('text_scale', '1.3').dispatchEvent(new Event('pointerenter'));
+    expect(preview).not.toHaveAttribute('data-theme');
+    expect(preview.style.getPropertyValue('--mg-text-scale')).toBe('1.3');
+    choice('text_scale', '1.3').dispatchEvent(new Event('pointerleave'));
+    expect(saved).toEqual([]);
+    // A click keeps it: saved, and the page is dark.
+    choice('theme', 'dark').click();
+    await flush();
+    expect(saved.at(-1)).toEqual({ theme: 'dark' });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(choice('theme', 'dark')).toHaveAttribute('aria-checked', 'true');
+    expect($('#wiz-saved')).toHaveTextContent('Saved');
+    // Text and icon sizes go on html.
+    choice('text_scale', '1.15').click();
+    await flush();
+    choice('icon_scale', '1.5').click();
+    await flush();
+    expect(saved.slice(-2)).toEqual([{ text_scale: 1.15 }, { icon_scale: 1.5 }]);
+    expect([document.documentElement.style.getPropertyValue('--mg-text-scale'), document.documentElement.style.getPropertyValue('--mg-icon-scale')]).toEqual(['1.15', '1.5']);
+    // Reset to defaults: light at 100%.
+    ($('[data-wiz-reset="appearance"]') as HTMLElement).click();
+    await flush();
+    expect(saved.at(-1)).toEqual({ theme: 'light', text_scale: 1, icon_scale: 1 });
+    expect(document.documentElement.dataset.theme).toBe('light');
+  });
+
+  it('Appearance by keyboard: one Tab stop per group, on its choice; arrows, Home and End pick and keep', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'appearance' });
+    const choice = (field: string, value: string) => $(`[data-wiz-look="${field}"][data-value="${value}"]`);
+    const stops = () => [...document.querySelectorAll('[data-wiz-look="theme"]')].map((b) => (b as HTMLElement).tabIndex);
+    expect(stops()).toEqual([0, -1, -1]);
+    const key = (el: Element, k: string) => el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    choice('theme', 'light').focus();
+    key(choice('theme', 'light'), 'ArrowRight');
+    await flush();
+    expect(document.activeElement).toBe(choice('theme', 'dark'));
+    expect(saved.at(-1)).toEqual({ theme: 'dark' });
+    expect(choice('theme', 'dark')).toHaveAttribute('aria-checked', 'true');
+    expect(stops()).toEqual([-1, 0, -1]);
+    // Left from the first wraps to the last; Home and End.
+    key(choice('theme', 'dark'), 'Home');
+    await flush();
+    key(choice('theme', 'light'), 'ArrowLeft');
+    await flush();
+    expect(saved.slice(-2)).toEqual([{ theme: 'light' }, { theme: 'system' }]);
+    choice('text_scale', '1').focus();
+    key(choice('text_scale', '1'), 'End');
+    await flush();
+    expect(saved.at(-1)).toEqual({ text_scale: 1.3 });
+    // Another key does nothing.
+    const before = saved.length;
+    key(choice('text_scale', '1.3'), 'a');
+    await flush();
+    expect(saved.length).toBe(before);
+  });
+
+  it('the saved look is shown when the prefs are read', async () => {
+    await load({ wizard_completed: true, theme: 'dark', text_scale: 1.3, icon_scale: 1 });
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    expect(document.documentElement.style.getPropertyValue('--mg-text-scale')).toBe('1.3');
   });
 
   it('mounts Keybinds on entering it (each time: it reads the lists again) and unmounts it on leaving and on close', async () => {

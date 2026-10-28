@@ -2,7 +2,7 @@
 /**
  * GET/POST /api/prefs and POST /api/prefs/hardware-check
  */
-import { cleanAppKeybinds, clampPort, listenPort, publicPrefs, writeLocalDoc } from './prefs.js';
+import { ICON_SCALES, TEXT_SCALES, THEMES, cleanAppKeybinds, clampPort, listenPort, publicPrefs, writeLocalDoc } from './prefs.js';
 import { runHardwareCheck } from './hardware-profile.js';
 import { envGet } from './env-compat.js';
 import { runRankCap } from './ranks.js';
@@ -60,6 +60,22 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
         return sendJson(res, 400, { ok: false, error: 'keybinds must map app.assistant to a list of at most 4 keys' });
       }
       patch.keybinds = keybinds;
+    }
+    // Settings → Appearance: only what it offers.
+    if (body.theme != null) {
+      if (!THEMES.includes(body.theme)) return sendJson(res, 400, { ok: false, error: `theme is one of ${THEMES.join(', ')}` });
+      patch.theme = body.theme;
+    }
+    /** @type {{ key: 'text_scale' | 'icon_scale', list: number[] }[]} */
+    const scales = [
+      { key: 'text_scale', list: TEXT_SCALES },
+      { key: 'icon_scale', list: ICON_SCALES },
+    ];
+    for (const { key, list } of scales) {
+      const value = body[key];
+      if (value == null) continue;
+      if (typeof value !== 'number' || !list.includes(value)) return sendJson(res, 400, { ok: false, error: `${key} is one of ${list.join(', ')}` });
+      patch[key] = value;
     }
     writeLocalDoc(patch);
     const prefs = pagePrefs();

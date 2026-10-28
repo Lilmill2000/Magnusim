@@ -25,6 +25,17 @@ body,
   cursor: default;
 }
 
+/* Fields, checkboxes and sliders no rule colours: the theme's field colours (tokens.css), below
+   every class rule. In light they are the browser's own; a disabled field keeps the browser's. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"], :disabled), textarea:not(:disabled), select:not(:disabled)) {
+  background-color: var(--mg-field-bg);
+  color: var(--mg-field-text);
+}
+
+:where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
+  accent-color: var(--mg-check-accent);
+}
+
 .workbench input,
 .workbench textarea,
 .workbench select,
@@ -5244,6 +5255,63 @@ body.is-recording #viewport-gizmo {
 .wiz-keys-live { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* The header's flash when a section's change was not (all) saved: why, for longer. */
 .wiz-saved.is-error { color: var(--mg-danger); white-space: normal; }
+
+/* Icon size (Settings → Appearance): an icon in a control, a tree row or a card grows with
+   --mg-icon-scale (at 1 it is as drawn). Charts and the 3D view are not in one. */
+:where(button, [role="button"], [role="menuitem"], [role="tab"], [role="treeitem"], .tree-row, .home-card) svg { zoom: var(--mg-icon-scale); }
+
+/* Settings → Appearance: the choices on the left, a preview of a choice (or of the look now) on the right. */
+.wiz-look { display: grid; grid-template-columns: minmax(0, 1fr) 236px; gap: 16px; align-items: start; }
+@media (max-width: 760px) {
+  .wiz-look { grid-template-columns: minmax(0, 1fr); }
+}
+.wiz-look-choices { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.wiz-look-group { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.wiz-look-group[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wiz-look-label { grid-column: 1 / -1; font-size: var(--mg-text-sm); font-weight: var(--mg-weight-semibold); color: var(--mg-text-secondary); }
+.wiz-look-choice {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text-body);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wiz-look-choice strong { display: block; font-size: var(--mg-text-md); }
+.wiz-look-choice span { font-size: var(--mg-text-xs); color: var(--mg-text-tertiary); }
+.wiz-look-choice:hover { background: var(--mg-surface-hover); }
+.wiz-look-choice.is-selected { border-color: var(--mg-text-strong); box-shadow: inset 0 0 0 1px var(--mg-text-strong); }
+.wiz-look-choice:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+.wiz-look-preview-wrap { margin: 0; }
+.wiz-look-preview {
+  border: 1px solid var(--mg-border);
+  border-radius: var(--mg-radius-lg);
+  background: var(--mg-bg);
+  color: var(--mg-text-body);
+  font-size: var(--mg-text-md);
+  overflow: hidden;
+}
+.wiz-look-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; background: var(--mg-surface); border-bottom: 1px solid var(--mg-border-subtle); }
+.wiz-look-title { font-size: var(--mg-text-md); font-weight: var(--mg-weight-semibold); color: var(--mg-text-strong); }
+.wiz-look-tools { display: flex; gap: 4px; }
+.wiz-look-tool { display: inline-flex; align-items: center; justify-content: center; padding: 3px; border: 1px solid var(--mg-border-subtle); border-radius: var(--mg-radius-sm); background: var(--mg-bg); color: var(--mg-text-secondary); pointer-events: none; }
+.wiz-look-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 8px; }
+.wiz-look-tree { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--mg-text-sm); }
+.wiz-look-row { display: flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: var(--mg-radius-sm); color: var(--mg-text-body); white-space: nowrap; }
+.wiz-look-row svg { color: var(--mg-text-tertiary); }
+.wiz-look-row.is-on { background: var(--mg-selected-bg); }
+.wiz-look-view { display: flex; align-items: center; justify-content: center; min-height: 64px; border-radius: var(--mg-radius-sm); background: var(--mg-viewport-bg); }
+.wiz-look-view svg { width: 100%; max-width: 120px; height: auto; }
+.wiz-look-face { fill: var(--mg-viewport-face); }
+.wiz-look-edge { fill: none; stroke: var(--mg-viewport-edge); stroke-width: 1.2; }
+.wiz-look-text { margin: 0 8px 8px; font-size: var(--mg-text-md); color: var(--mg-text-slate); }
+.wiz-look-actions { display: flex; gap: 6px; padding: 0 8px 8px; }
+.wiz-look-actions button { padding: 3px 10px; border: 1px solid var(--mg-btn-neutral-border); border-radius: var(--mg-radius-sm); background: var(--mg-btn-neutral-bg); color: var(--mg-text-body); font: inherit; font-size: var(--mg-text-sm); pointer-events: none; }
+.wiz-look-actions .primary { border-color: var(--mg-primary); background: var(--mg-primary); color: var(--mg-primary-text); }
+.wiz-look-note { margin-top: 6px; font-size: var(--mg-text-xs); color: var(--mg-text-tertiary); }
 
 /* Settings → Assistant (AssistantStep.tsx): compact blocks; the step scrolls with .wiz-main. */
 .wiz-assistant { display: flex; flex-direction: column; gap: var(--mg-space-3); }

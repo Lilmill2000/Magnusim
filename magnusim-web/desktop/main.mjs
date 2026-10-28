@@ -1,11 +1,11 @@
 // Magnusim CAD's desktop app (Electron): one window on the app's own server, which runs in a
 // utility process with no Python and no WSL (server.mjs, scripts/server/cad-edition/serve.mjs).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { app, BrowserWindow, dialog, shell, utilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, nativeTheme, shell, utilityProcess } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APP_NAME, isAppUrl, isExternalUrl, serverEnv } from './config.mjs';
+import { APP_NAME, isAppUrl, isExternalUrl, serverEnv, windowBackground } from './config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const QUIT_WAIT_MS = 4000;
@@ -28,6 +28,8 @@ if (!app.requestSingleInstanceLock()) app.quit();
 /** @type {Electron.UtilityProcess | null} */
 let server = null;
 let serverPort = 0;
+/** The person's theme as the server read it (Settings → Appearance). */
+let serverTheme = 'light';
 let quitting = false;
 /** @type {BrowserWindow | null} */
 let win = null;
@@ -48,6 +50,7 @@ function startServer() {
     child.on('message', (m) => {
       if (m && m.type === 'ready') {
         serverPort = Number(m.port);
+        serverTheme = String(m.theme || 'light');
         log(`server ready on ${serverPort}`);
         resolve(serverPort);
       }
@@ -83,7 +86,7 @@ function openWindow(port) {
     width: 1440,
     height: 900,
     show: false,
-    backgroundColor: '#f9fafb',
+    backgroundColor: windowBackground(serverTheme, nativeTheme.shouldUseDarkColors),
     autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });

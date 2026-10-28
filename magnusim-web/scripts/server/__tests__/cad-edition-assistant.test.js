@@ -108,7 +108,7 @@ describe('the Assistant in Magnusim CAD', () => {
   it('refuses core__view from the page, and keeps a workspace\'s tools as they are', () => {
     const cad = createToolRegistry({ hostTools: host(), edition: cadEditionTool });
     const v = cad.setCore('T1', 'L1', core());
-    assert.deepEqual(v.accepted, ['keybinds', 'set_keybind', 'show']);
+    assert.deepEqual(v.accepted, ['appearance', 'keybinds', 'set_appearance', 'set_keybind', 'show']);
     assert.deepEqual(v.refused.map((x) => [x.name, x.code]), [['view', 'not_in_edition']]);
     const EMPTY = { type: 'object', properties: {}, additionalProperties: false };
     cad.setWorkspace('T1', 'L1', { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', projectId: 'p1', studyId: 's1', tools: [{ name: 'sketch', description: 'Draws.', inputSchema: EMPTY, risk: 'edit' }] });

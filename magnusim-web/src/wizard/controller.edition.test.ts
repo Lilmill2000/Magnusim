@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import shellHtml from '../app/shell.html?raw';
 
-// Settings in Magnusim CAD (src/app/edition.ts): Units, Keybinds, Assistant and Plugins only,
+// Settings in Magnusim CAD (src/app/edition.ts): Units, Appearance, Keybinds, Assistant and Plugins only,
 // never opened by itself and no PC check; Magnusim's Settings has every section.
 vi.mock('../islands', () => ({ mountIsland: () => undefined, unmountIsland: () => undefined }));
 vi.mock('../assistant/status', () => ({ settleStep: () => true }));
@@ -48,11 +48,11 @@ afterEach(() => {
 });
 
 describe('Settings in Magnusim CAD', () => {
-  it('shows Units, Keybinds, Assistant and Plugins, and a hidden section cannot be opened', async () => {
+  it('shows Units, Appearance, Keybinds, Assistant and Plugins, and a hidden section cannot be opened', async () => {
     page('cad');
     const c = await load({ wizard_completed: true });
     c.openSetupWizard({});
-    expect(shownRail()).toEqual(['units', 'keybinds', 'assistant', 'plugins']);
+    expect(shownRail()).toEqual(['units', 'appearance', 'keybinds', 'assistant', 'plugins']);
     expect(shownPane()).toBe('units');
     c.openSetupWizard({ step: 'plugins' });
     expect(shownPane()).toBe('plugins');
@@ -78,7 +78,7 @@ describe('Settings in Magnusim', () => {
     await load({ wizard_completed: false });
     await new Promise((r) => setTimeout(r, 0));
     expect($('#setup-wizard').hidden).toBe(false);
-    expect(shownRail()).toEqual(['units', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
+    expect(shownRail()).toEqual(['units', 'appearance', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
     expect(shownPane()).toBe('units');
     expect(checks).toBe(1);
   });

@@ -1205,6 +1205,7 @@
         <div class="wiz-body">
           <ol class="wiz-rail" id="wiz-rail" aria-label="Settings sections">
             <li data-wiz-dot="1" data-wiz-key="units" class="is-on" role="button" tabindex="0" aria-current="page">Units</li>
+            <li data-wiz-dot="8" data-wiz-key="appearance" role="button" tabindex="0">Appearance</li>
             <li data-wiz-dot="2" data-wiz-key="pc" role="button" tabindex="0">This PC</li>
             <li data-wiz-dot="3" data-wiz-key="port" role="button" tabindex="0">Port</li>
             <li data-wiz-dot="4" data-wiz-key="workspace" role="button" tabindex="0">Workspace</li>
@@ -1228,6 +1229,61 @@
                 <strong>US customary</strong>
                 <span>inches, ft/s, psi, lb</span>
               </button>
+            </div>
+          </section>
+          <section class="wiz-pane" data-wiz-step="8" data-wiz-key="appearance" hidden>
+            <div class="wiz-pane-head">
+              <h3 class="wiz-pane-title">Appearance</h3>
+              <button type="button" class="wiz-reset" data-wiz-reset="appearance">Reset to defaults</button>
+            </div>
+            <p class="wiz-copy">How the app looks on this PC. A choice works at once, in every open window; point at one to see it in the preview first. Pictures you save stay light, and so do the surfaces of a model in the 3D view.</p>
+            <div class="wiz-look">
+              <div class="wiz-look-choices">
+                <div class="wiz-look-group" data-cols="3" role="radiogroup" aria-label="Theme">
+                  <span class="wiz-look-label">Theme</span>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="theme" data-value="light"><strong>Light</strong></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="theme" data-value="dark"><strong>Dark</strong></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="theme" data-value="system"><strong>Match system</strong><span>As Windows is</span></button>
+                </div>
+                <div class="wiz-look-group" data-cols="4" role="radiogroup" aria-label="Text size">
+                  <span class="wiz-look-label">Text size</span>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="text_scale" data-value="0.9"><strong>Small</strong><span>90%</span></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="text_scale" data-value="1"><strong>Default</strong><span>100%</span></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="text_scale" data-value="1.15"><strong>Large</strong><span>115%</span></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="text_scale" data-value="1.3"><strong>Larger</strong><span>130%</span></button>
+                </div>
+                <div class="wiz-look-group" data-cols="4" role="radiogroup" aria-label="Icon size">
+                  <span class="wiz-look-label">Icon size</span>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="icon_scale" data-value="0.85"><strong>Small</strong><span>85%</span></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="icon_scale" data-value="1"><strong>Default</strong><span>100%</span></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="icon_scale" data-value="1.25"><strong>Large</strong><span>125%</span></button>
+                <button type="button" class="wiz-look-choice" role="radio" aria-checked="false" data-wiz-look="icon_scale" data-value="1.5"><strong>Larger</strong><span>150%</span></button>
+                </div>
+              </div>
+              <figure class="wiz-look-preview-wrap">
+                <div class="wiz-look-preview" data-appearance-scope data-look-preview aria-hidden="true">
+                  <div class="wiz-look-bar">
+                    <span class="wiz-look-title">Bracket set</span>
+                    <span class="wiz-look-tools">
+                      <button type="button" tabindex="-1" class="wiz-look-tool"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 20h16 M6 16l8-8 4 4-8 8H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+                      <button type="button" tabindex="-1" class="wiz-look-tool"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+                      <button type="button" tabindex="-1" class="wiz-look-tool"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v16 M4 12h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+                    </span>
+                  </div>
+                  <div class="wiz-look-body">
+                    <ul class="wiz-look-tree" role="tree">
+                      <li class="wiz-look-row" role="treeitem"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 6h16v12H4z M4 10h16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg><span>Sketch 1</span></li>
+                      <li class="wiz-look-row is-on" role="treeitem"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 8l8-4 8 4v8l-8 4-8-4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg><span>Extrude 1</span></li>
+                    </ul>
+                    <div class="wiz-look-view" data-look-view>
+                      <svg viewBox="0 0 120 80" aria-hidden="true"><path class="wiz-look-face" d="M30 30 L60 18 L90 30 L90 58 L60 70 L30 58 Z"/><path class="wiz-look-edge" d="M30 30 L60 42 L90 30 M60 42 L60 70 M30 30 L60 18 L90 30 L90 58 L60 70 L30 58 Z"/></svg>
+                    </div>
+                  </div>
+                  <p class="wiz-look-text">A short line of text, as panels and dialogs show it.</p>
+                  <span class="wiz-look-actions"><button type="button" tabindex="-1" class="primary">Save</button><button type="button" tabindex="-1">Cancel</button></span>
+                </div>
+                <figcaption class="wiz-look-note" id="wiz-look-note" aria-live="polite">Preview of the look now.</figcaption>
+              </figure>
             </div>
           </section>
           <section class="wiz-pane" data-wiz-step="2" data-wiz-key="pc" hidden>

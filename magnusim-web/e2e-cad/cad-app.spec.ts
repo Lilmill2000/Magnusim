@@ -19,7 +19,7 @@ test('Home and Settings are the CAD app\'s', async ({ page }) => {
   await expect(page.locator('#setup-wizard')).toBeHidden();
   await page.locator('#home-prefs').click();
   await expect(page.locator('#setup-wizard')).toBeVisible();
-  await expect(page.locator('#wiz-rail li:visible')).toHaveText(['Units', 'Keybinds', 'Assistant', 'Plugins']);
+  await expect(page.locator('#wiz-rail li:visible')).toHaveText(['Units', 'Appearance', 'Keybinds', 'Assistant', 'Plugins']);
   // Keybinds: the app's own keys under the app's name, and the Part's commands (cad-keybinds-settings.spec.ts changes one).
   await page.locator('#wiz-rail li[data-wiz-key="keybinds"]').click();
   const keybinds = page.locator('#setup-wizard .wiz-pane[data-wiz-key="keybinds"]');

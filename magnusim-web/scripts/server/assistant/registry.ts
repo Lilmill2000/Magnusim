@@ -290,6 +290,10 @@ export const CORE_TOOLS: Readonly<Record<string, { risk: Risk; priority: number;
   // Part's tools fit a local model's budget only without these.
   keybinds: { risk: 'read', priority: 30, contexts: Object.freeze(['home', 'workbench'] as Place[]) },
   set_keybind: { risk: 'edit', priority: 28, contexts: Object.freeze(['home', 'workbench'] as Place[]) },
+  // Settings → Appearance (a change only when the person asked; shown at once). In a workspace too:
+  // its Settings button is in the workspace's header. Small, and last for a tight budget to keep.
+  appearance: { risk: 'read', priority: 26, contexts: PLACES },
+  set_appearance: { risk: 'edit', priority: 25, contexts: PLACES },
 });
 
 export interface ToolRegistry {

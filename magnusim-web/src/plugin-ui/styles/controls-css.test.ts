@@ -40,13 +40,16 @@ describe('controls.css', () => {
       for (const p of ['font', 'outline', 'outline-offset']) expect(props[p], `${selector} ${p}`).toBe('revert');
       expect(props.margin, selector).toBe('0');
     }
-    // The core's .bc-select sets its text colour and background; the input and buttons do not.
-    for (const selector of ['input.mgk-input', 'input.mgk-switch-input', 'button.mgk-pill']) {
+    // The core's .bc-select sets its text colour and background; its input takes the field tokens
+    // (style.css: the browser's own field in light); the switch and pill set neither.
+    for (const selector of ['input.mgk-switch-input', 'button.mgk-pill']) {
       expect(ruleProps(css, selector).color, selector).toBe('revert');
     }
     expect(ruleProps(css, 'select.mgk-select')).toMatchObject({ color: 'var(--mg-text)', background: 'var(--mg-bg)' });
-    // The core's input, switch and pill keep the browser's field or button face.
-    expect(ruleProps(css, 'input.mgk-input').background).toBe('revert');
+    expect(ruleProps(css, 'input.mgk-input')).toMatchObject({ color: 'var(--mg-field-text)', background: 'var(--mg-field-bg)' });
+    // A disabled one is the browser's, as the core's field rule leaves it.
+    expect(ruleProps(css, 'input.mgk-input:disabled')).toEqual({ color: 'revert', background: 'revert' });
+    // The core's switch and pill keep the browser's button face.
     expect(ruleProps(css, 'input.mgk-switch-input').background).toBe('revert');
     expect(ruleProps(css, 'button.mgk-pill').background).toBe('revert');
     expect(ruleProps(css, 'input.mgk-switch-input').padding).toBe('0');

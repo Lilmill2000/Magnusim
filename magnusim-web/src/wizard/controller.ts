@@ -1,9 +1,10 @@
 // @ts-nocheck
 /**
- * Settings: units, this PC, listen port, workspace, keybinds, Assistant, plugins. Sections on the
- * left; each change saves as it is made (a brief "Saved" in the header says so), and the X or Esc
- * closes. Units, Port and Workspace have a Reset to defaults, Keybinds a Reset all keybinds (one
- * question first: it touches every plugin); This PC a Check again. No
+ * Settings: units, appearance, this PC, listen port, workspace, keybinds, Assistant, plugins.
+ * Sections on the left; each change saves as it is made (a brief "Saved" in the header says so), and
+ * the X or Esc closes. Units, Appearance, Port and Workspace have a Reset to defaults, Keybinds a
+ * Reset all keybinds (one question first: it touches every plugin); This PC a Check again.
+ * Appearance's preview shows a choice the pointer or the keyboard is on before it is made. No
  * Welcome, Next, Back or Finish (Daniel, 2026-10-25: the sections are the way around).
  *
  * The first run opens it on Units, with the PC check (solver ranks) running meanwhile; closing
@@ -17,6 +18,7 @@ import { mountIsland, unmountIsland } from '../islands';
 import { isCad } from '../app/edition';
 import { resetEveryPlugin, resetEveryQuestion } from '../keybinds/catalog';
 import { displayCombo } from '../keybinds/combo';
+import { applyAppearance, currentAppearance, DEFAULT_APPEARANCE, readAppearance, resolveTheme, saveAppearance, startAppearanceSync } from '../theme/appearance';
 import { confirmAction } from '../workbench/dialogs';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
@@ -25,10 +27,11 @@ const WIZ_PC_STEP = 2;
 const WIZ_PLUGINS_STEP = 5; // stays 5: GUIDE.md and the plugin suites name it
 const WIZ_ASSISTANT_STEP = 6;
 const WIZ_KEYBINDS_STEP = 7;
-const WIZ_ORDER = [WIZ_UNITS_STEP, WIZ_PC_STEP, 3, 4, WIZ_KEYBINDS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
+const WIZ_APPEARANCE_STEP = 8;
+const WIZ_ORDER = [WIZ_UNITS_STEP, WIZ_APPEARANCE_STEP, WIZ_PC_STEP, 3, 4, WIZ_KEYBINDS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
 // Magnusim CAD simulates nothing: no PC check (solver ranks), no Port (its window picks one),
-// no Workspace (the simulation tree). Its rail is Units, Keybinds, Assistant and Plugins.
-const CAD_SECTIONS = [WIZ_UNITS_STEP, WIZ_KEYBINDS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
+// no Workspace (the simulation tree). Its rail is Units, Appearance, Keybinds, Assistant and Plugins.
+const CAD_SECTIONS = [WIZ_UNITS_STEP, WIZ_APPEARANCE_STEP, WIZ_KEYBINDS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
 const sections = () => (isCad() ? WIZ_ORDER.filter((id) => CAD_SECTIONS.includes(id)) : WIZ_ORDER);
 const pos = (id) => sections().indexOf(id);
 /** The app's own port (scripts/prefs.js DEFAULT_PORT): Port's default. */
@@ -53,6 +56,9 @@ export async function loadPrefs() {
     if (j && j.ok) {
       window.__CFD_PREFS__ = j;
       if (j.collapse_completed_sections != null) syncCollapsePrefStore(j);
+      // The person's look (the first paint had it from localStorage; this is the saved one).
+      applyAppearance(readAppearance(j));
+      startAppearanceSync();
       return j;
     }
   } catch (e) {
@@ -195,6 +201,47 @@ function paintUnits() {
   document.querySelectorAll('[data-wiz-units]').forEach((btn) => {
     btn.classList.toggle('is-selected', btn.getAttribute('data-wiz-units') === wizard.units);
   });
+}
+
+/** Appearance's choices as saved, and its preview showing them (or `trying`, a choice not made yet). */
+function paintAppearance(trying) {
+  const now = currentAppearance();
+  document.querySelectorAll('[data-wiz-look]').forEach((btn) => {
+    const field = btn.getAttribute('data-wiz-look');
+    const on = String(now[field]) === btn.getAttribute('data-value');
+    btn.classList.toggle('is-selected', on);
+    btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    // One Tab stop per group, on its choice; the arrows move within it (wireWizard).
+    btn.tabIndex = on ? 0 : -1;
+  });
+  const look = { ...now, ...(trying || {}) };
+  const preview = document.querySelector('[data-look-preview]');
+  if (preview) {
+    // The look now is the page's own (no light island is left when the theme changes with Settings
+    // closed); a theme of its own only while one is tried.
+    if (trying && trying.theme) preview.setAttribute('data-theme', resolveTheme(trying.theme));
+    else preview.removeAttribute('data-theme');
+    preview.style.setProperty('--mg-text-scale', String(look.text_scale));
+    preview.style.setProperty('--mg-icon-scale', String(look.icon_scale));
+    preview.setAttribute('data-preview-trying', trying ? '1' : '0');
+  }
+  const note = $('wiz-look-note');
+  if (note) note.textContent = trying ? 'Preview of the choice: click it to keep it.' : 'Preview of the look now.';
+}
+
+/** A choice in Appearance as the preview and the save take it ({theme: 'dark'}, {text_scale: 1.15}). */
+function lookOf(btn) {
+  const field = btn.getAttribute('data-wiz-look');
+  const raw = btn.getAttribute('data-value');
+  return { [field]: field === 'theme' ? raw : Number(raw) };
+}
+
+/** Saves an Appearance choice: shown at once here and in the other windows, "Saved" (or why not) in the header. */
+async function saveLook(patch) {
+  const out = await saveAppearance(patch);
+  paintAppearance();
+  if (out.ok) flashSaved();
+  else flashSaved(out.error, true);
 }
 
 function paintWorkspace() {
@@ -375,7 +422,10 @@ async function resetKeybinds(btn) {
   }
 }
 
-/** A section's Reset to defaults: Units Metric, Port 8082, Workspace with finished sections collapsed, Keybinds every plugin's defaults. */
+/**
+ * A section's Reset to defaults: Units Metric, Appearance light at 100%, Port 8082, Workspace with
+ * finished sections collapsed, Keybinds every plugin's defaults.
+ */
 async function resetSection(key, btn) {
   if (key === 'units') {
     wizard.units = 'Metric';
@@ -391,6 +441,8 @@ async function resetSection(key, btn) {
     await persistCollapsePref(true);
   } else if (key === 'keybinds') {
     await resetKeybinds(btn);
+  } else if (key === 'appearance') {
+    await saveLook({ ...DEFAULT_APPEARANCE });
   }
 }
 
@@ -442,7 +494,7 @@ function hideWizard() {
 
 /**
  * Opens Settings on Units, or on the section `opts.step` names ('plugins', 'assistant',
- * 'keybinds': a link about one). `opts.required`: the first run's opening (its PC check starts at once).
+ * 'keybinds', 'appearance': a link about one). `opts.required`: the first run's opening (its PC check starts at once).
  */
 export function openSetupWizard(opts) {
   const first = !!(opts && opts.required);
@@ -463,6 +515,7 @@ export function openSetupWizard(opts) {
   const saved = $('wiz-saved');
   if (saved) saved.textContent = '';
   paintUnits();
+  paintAppearance();
   paintWorkspace();
   const el = $('setup-wizard');
   if (el) el.hidden = false;
@@ -471,6 +524,7 @@ export function openSetupWizard(opts) {
   if (opts && opts.step === 'plugins') setStep(WIZ_PLUGINS_STEP);
   else if (opts && opts.step === 'assistant') setStep(WIZ_ASSISTANT_STEP);
   else if (opts && opts.step === 'keybinds') setStep(WIZ_KEYBINDS_STEP);
+  else if (opts && opts.step === 'appearance') setStep(WIZ_APPEARANCE_STEP);
   else setStep(WIZ_UNITS_STEP);
   // The first run: the PC check (solver ranks) runs now, not only when This PC is opened.
   if (first && pos(WIZ_PC_STEP) >= 0) startHardwareCheck();
@@ -519,6 +573,35 @@ function wireWizard() {
       paintUnits();
       persistWizardUnits().catch((err) => console.warn('[CFD] prefs units', err));
     });
+  });
+  // Appearance: a click keeps a choice; the pointer or the keyboard on one shows it in the preview first.
+  document.querySelectorAll('[data-wiz-look]').forEach((btn) => {
+    btn.addEventListener('click', () => void saveLook(lookOf(btn)));
+    const tryIt = () => paintAppearance(lookOf(btn));
+    const leave = () => paintAppearance();
+    btn.addEventListener('pointerenter', tryIt);
+    btn.addEventListener('focus', tryIt);
+    btn.addEventListener('pointerleave', leave);
+    btn.addEventListener('blur', leave);
+  });
+  // Each group moves as radios do: an arrow (or Home, End) goes to a choice and keeps it.
+  const STEP = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+  document.querySelectorAll('.wiz-look-group[role="radiogroup"]').forEach((group) => {
+    group.addEventListener('keydown', (e) => {
+      const radios = [...group.querySelectorAll('[role="radio"]')];
+      const at = radios.indexOf(document.activeElement);
+      if (at < 0) return;
+      const n = radios.length;
+      const to = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : e.key in STEP ? (at + STEP[e.key] + n) % n : -1;
+      if (to < 0) return;
+      e.preventDefault();
+      radios[to].focus();
+      void saveLook(lookOf(radios[to]));
+    });
+  });
+  // A look changed in another window (or by the Assistant) shows in the open section.
+  window.addEventListener('cfd:appearance', () => {
+    if (wizard.open) paintAppearance();
   });
   $('home-prefs')?.addEventListener('click', () => openSetupWizard({ required: false }));
   $('wb-prefs')?.addEventListener('click', () => openSetupWizard({ required: false }));

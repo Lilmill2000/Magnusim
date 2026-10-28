@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { createApiPlugin } from './scripts/server/index.ts';
-import { listenPort } from './scripts/prefs.js';
+import { listenPort, stampAppearance } from './scripts/prefs.js';
 import { verifyWslToolchain } from './scripts/wsl-env.js';
 // Projects, Python, caches, results, local OCCT builds and logs (tested in scripts/__tests__).
 import { isViteWatchIgnored } from './scripts/vite-watch-ignore.js';
@@ -26,8 +26,11 @@ process.env.CFDDESK_BOUND_PORT = String(PORT); // legacy alias
 // work in progress) reach it at its next start, never in the middle of a session.
 const STEADY = process.env.MAGNUSIM_STEADY === '1';
 
+/** The page as served (each request) carries the person's look for its first paint (Settings → Appearance). */
+const appearanceOnPage = { name: 'magnusim-appearance-on-page', apply: /** @type {const} */ ('serve'), transformIndexHtml: (html) => stampAppearance(html) };
+
 export default defineConfig({
-  plugins: [react(), createApiPlugin()],
+  plugins: [react(), createApiPlugin(), appearanceOnPage],
   server: {
     host: '127.0.0.1',
     port: PORT,

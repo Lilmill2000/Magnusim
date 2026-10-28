@@ -124,6 +124,31 @@ export function appKeybinds() {
   return cleanAppKeybinds(readLocalDoc().keybinds) || {};
 }
 
+/** Settings → Appearance: what it offers (src/theme/appearance.ts keeps the same lists). */
+export const THEMES = ['light', 'dark', 'system'];
+export const TEXT_SCALES = [0.9, 1, 1.15, 1.3];
+export const ICON_SCALES = [0.85, 1, 1.25, 1.5];
+
+/** The person's look as stored: each field one Settings offers, else its default (light, 1, 1). */
+export function appearancePrefs() {
+  const doc = readLocalDoc();
+  return {
+    theme: THEMES.includes(doc.theme) ? doc.theme : 'light',
+    text_scale: TEXT_SCALES.includes(doc.text_scale) ? doc.text_scale : 1,
+    icon_scale: ICON_SCALES.includes(doc.icon_scale) ? doc.icon_scale : 1,
+  };
+}
+
+/**
+ * The page as served, with the stored look on its <html> (data-look, JSON): the pre-paint script in
+ * index.html and cad.html shows it before the first paint on any origin. The page's own storage
+ * can't: Magnusim CAD's server takes a new port at every start, and with it a new, empty storage.
+ */
+export function stampAppearance(html) {
+  const look = JSON.stringify(appearancePrefs()).replace(/"/g, '&quot;');
+  return String(html).replace(/<html\b/i, `<html data-look="${look}"`);
+}
+
 export function hardwarePrefs() {
   const h = readLocalDoc().hardware;
   return h && typeof h === 'object' ? h : null;
@@ -140,6 +165,7 @@ export function publicPrefs() {
     collapse_completed_sections: collapseCompletedSections(),
     hardware: hardwarePrefs(),
     keybinds: appKeybinds(),
+    ...appearancePrefs(),
     wsl_distro: doc.wsl_distro || null,
     wsl_case_root: doc.wsl_case_root || null,
   };

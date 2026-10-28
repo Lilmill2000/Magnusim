@@ -65,6 +65,13 @@ textarea {
   background: var(--mg-bg);
 }
 
+/* The theme's tick and slider colour: the browser's own in light, the primary in dark. */
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  accent-color: var(--mg-check-accent);
+}
+
 button {
   border: 1px solid var(--mg-border);
   border-radius: var(--mg-radius-md);

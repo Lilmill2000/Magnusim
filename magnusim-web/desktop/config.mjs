@@ -23,6 +23,14 @@ export function serverEnv({ documents, userData, env = process.env }) {
   };
 }
 
+/**
+ * The window's colour until the page paints: the person's theme (Settings → Appearance; 'system'
+ * as Windows is), dark as the page's background (tokens.css --mg-app-bg), light as before.
+ */
+export function windowBackground(theme, systemDark) {
+  return theme === 'dark' || (theme === 'system' && systemDark) ? '#12151b' : '#f9fafb';
+}
+
 /** The app's own pages: its server on this PC, at its port. Anything else opens in the browser. */
 export function isAppUrl(url, port) {
   try {

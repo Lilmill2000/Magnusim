@@ -1,11 +1,13 @@
 {
   "about": "Each row and each tool names the editions it is in (editions: magnusim, cad), and each Magnusim CAD row the CAD app's control a person uses for it (cad_control: where it is reached, and its selector); tool_editions names every host and core page tool, with the values it keeps in Magnusim CAD (cad_values: assistant-routes.ts CAD_EDITION_TOOLS). Every Tier 0 and Tier 1 row of the core parity audit, and the Tier 2 rows the host tools cover, with the Assistant's way to do it (core host tools spec 1.5). A row has tool paths (tool, where: its enum values or its properties, routes: HOST_ROUTES ids the tool's code calls, or page: a core page tool), a deferral (named in the release notes' Not yet list), person_only (never a tool) or not_owed (route only, no UI). scripts/__tests__/assistant-parity.test.mjs holds it to the code.",
-  "required": ["H1-H14", "G1-G18", "S1-S15", "M1-M7", "B1-B10", "X1-X19", "R1-R22", "V1-V25", "Q1-Q5", "P2", "P6", "P8", "P23", "L7", "L9"],
+  "required": ["H1-H14", "G1-G18", "S1-S15", "M1-M7", "B1-B10", "X1-X19", "R1-R22", "V1-V25", "Q1-Q5", "P2", "P6", "P8", "P23", "P24", "L7", "L9"],
   "release_notes": "docs/releases/v0.5.0.md",
   "tool_editions": {
     "app_status": {"editions": ["magnusim", "cad"]},
     "catalog": {"editions": ["magnusim"]},
     "compute": {"editions": ["magnusim"]},
+    "core__appearance": {"editions": ["magnusim", "cad"]},
+    "core__set_appearance": {"editions": ["magnusim", "cad"]},
     "core__keybinds": {"editions": ["magnusim", "cad"]},
     "core__set_keybind": {"editions": ["magnusim", "cad"]},
     "core__show": {"editions": ["magnusim", "cad"], "cad_values": {"target": ["home", "project", "workspace"], "panel": [""]}},
@@ -187,6 +189,7 @@
     { "row": "P19", "editions": ["magnusim"], "paths": [{ "tool": "app_status" }], "person_only": "changing the limits" },
     { "row": "P20", "editions": ["magnusim"], "person_only": true },
     { "row": "P21", "editions": ["magnusim"], "person_only": true },
+    { "row": "P24", "editions": ["magnusim", "cad"], "cad_control": { "reach": "settings", "selector": "#wiz-rail li[data-wiz-key=\"appearance\"]" }, "notes": "Settings → Appearance: the theme (light, dark, the system's), text size and icon size (a change only when the person asked)", "paths": [{ "tool": "core__appearance", "page": true }, { "tool": "core__set_appearance", "page": true }] },
     { "row": "P23", "editions": ["magnusim", "cad"], "cad_control": { "reach": "settings", "selector": "#wiz-rail li[data-wiz-key=\"keybinds\"]" }, "notes": "Settings → Keybinds: every key, and Change, Reset, Clear and Reset all (a change only when the person asked, on their Yes)", "paths": [{ "tool": "core__keybinds", "page": true }, { "tool": "core__set_keybind", "where": { "action": ["set", "reset", "clear", "reset_all"] }, "page": true }] },
 
     { "row": "L1", "editions": ["magnusim"], "person_only": true },

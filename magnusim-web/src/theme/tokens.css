@@ -101,6 +101,10 @@
   --mg-danger-solid: #c62828;
   --mg-danger-solid-hover: #9b1c1c;
   --mg-switch-off: #c5cad3;
+  /* Text fields, checkboxes and sliders the app leaves to the browser: the browser's own in light. */
+  --mg-field-bg: #ffffff;
+  --mg-field-text: #000000;
+  --mg-check-accent: auto;
   --mg-tooltip-bg: #1f2430;
   --mg-tooltip-text: #f5f6f8;
   --mg-plot-bg: #f8fafc;
@@ -291,6 +295,10 @@
   --mg-danger-solid: #d92d20;
   --mg-danger-solid-hover: #f04438;
   --mg-switch-off: #4a5262;
+  /* A field as a select is (--mg-bg, --mg-text), not the browser's dark grey; the ticks on the primary. */
+  --mg-field-bg: #1b1f27;
+  --mg-field-text: #e6e9ef;
+  --mg-check-accent: #2f6fde;
   --mg-tooltip-bg: #0d1016;
   --mg-tooltip-text: #f2f4f7;
   --mg-plot-bg: #1b1f27;

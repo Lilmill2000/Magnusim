@@ -1,10 +1,10 @@
 // The CAD Part's 21 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 27 tools (the Part's 21 by name
-// first, then its 6 host and core tools by name: core host tools spec §12.4, §15), strict as
+// sent only the keywords they take; in a CAD turn the app offers 29 tools (the Part's 21 by name
+// first, then its 8 host and core tools by name: core host tools spec §12.4, §15), strict as
 // strictFlags grants them in that order on the first cloud dialect; no CAD property is optional;
-// the 27 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
+// the 29 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
 // CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
@@ -56,8 +56,8 @@ const hostTools = () => [
   ...createJobTools({ call: async () => ({}) }),
 ];
 
-/** The app's tools a workspace turn is offered, by name (core host tools spec §15): 5 host tools and the core page's core__show. */
-const HOST_IN_WORKSPACE = ['app_status', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
+/** The app's tools a workspace turn is offered, by name (core host tools spec §15): 5 host tools and the core page's core__show and Settings → Appearance's two. */
+const HOST_IN_WORKSPACE = ['app_status', 'core__appearance', 'core__set_appearance', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
 
 /** The tools the app offers a turn on the Part's tab, in order (the registry's own selection). */
 function offered({ local = false } = {}) {
@@ -97,7 +97,7 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 27: the Part's 21 by name first, then the app's 6 for a workspace; strict as strictFlags grants them in that order", () => {
+  it("a CAD turn offers 29: the Part's 21 by name first, then the app's 8 for a workspace; strict as strictFlags grants them in that order", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
@@ -108,12 +108,12 @@ describe("the CAD Part's tools by the app's rules", () => {
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it('the 27 fit the local budget of a 32K context (half of it): nothing is cut', () => {
+  it('the 29 fit the local budget of a 32K context (half of it): nothing is cut', () => {
     const { tools, dropped, budget } = offered({ local: true });
-    assert.equal(tools.length, 27);
+    assert.equal(tools.length, 29);
     assert.deepEqual(dropped, []);
     const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
-    console.log(`[assistant-cad-tools] the 27 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
+    console.log(`[assistant-cad-tools] the 29 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
     assert.equal(budget, 16_384);
     assert.ok(tokens <= budget, `${tokens} tokens`);
   });
