@@ -1,6 +1,8 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { assistantKeys, resetAppKeysForTests } from '../../keybinds/appKeys';
+import { announcePref } from '../../workspace/prefsChannel';
 import { resetStatusStore } from '../status';
 import { AssistantDock } from './AssistantDock';
 import { dockSnapshot, resetDockForTests, setDockPill } from './dockState';
@@ -32,6 +34,7 @@ const ctrlSlash = (extra: KeyboardEventInit = {}) => key({ key: '/', code: 'Slas
 beforeEach(() => {
   resetDockForTests();
   resetStatusStore();
+  resetAppKeysForTests();
   document.body.className = '';
   document.body.innerHTML = PAGE;
   // The status: Off, so the open dock's entry is its Open Settings button.
@@ -45,10 +48,20 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   resetDockForTests();
+  resetAppKeysForTests();
 });
 
-describe('isDockKey: Ctrl+/ (Cmd+/ on macOS)', () => {
+describe('isDockKey: Ctrl+/ (Cmd+/ on macOS), or the keys the person chose', () => {
   const k = (init: KeyboardEventInit) => new KeyboardEvent('keydown', init);
+  it("the person's keys replace Ctrl+/ on every platform; [] is no key", () => {
+    for (const mac of [false, true]) {
+      expect(isDockKey(k({ key: 'k', code: 'KeyK', ctrlKey: true }), mac, ['Ctrl+KeyK'])).toBe(true);
+      expect(isDockKey(k({ key: 'k', code: 'KeyK', metaKey: true }), mac, ['Ctrl+KeyK'])).toBe(true);
+      expect(isDockKey(k({ key: '/', code: 'Slash', ctrlKey: true }), mac, ['Ctrl+KeyK'])).toBe(false);
+      expect(isDockKey(k({ key: '/', code: 'Slash', ctrlKey: true, metaKey: true }), mac, [])).toBe(false);
+      expect(isDockKey(k({ key: 'F9', code: 'F9' }), mac, ['F9'])).toBe(true);
+    }
+  });
   it('takes Ctrl+/ elsewhere and Cmd+/ on a Mac, nothing else', () => {
     expect(isDockKey(k({ key: '/', code: 'Slash', ctrlKey: true }), false)).toBe(true);
     // A layout where / is Shift+7: the key says it.
@@ -107,6 +120,36 @@ describe('the corner button and Ctrl+/', () => {
     expect(dockSnapshot().open).toBe(false);
     expect(document.activeElement).toBe($('#search'));
     expect($('#assistant-dock')).toHaveAttribute('hidden');
+  });
+
+  it("the person's key (Settings → Keybinds) opens and closes it instead of Ctrl+/, and a change made in another tab takes at once; no key leaves the corner button", async () => {
+    const STATUS = { ok: true, available: true, provider: 'off', providers_ready: {} };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => new Response(JSON.stringify(String(url).startsWith('/api/prefs') ? { ok: true, keybinds: { 'app.assistant': ['Alt+KeyK'] } } : STATUS))),
+    );
+    await mount();
+    await vi.waitFor(() => expect(assistantKeys()).toEqual(['Alt+KeyK']));
+    $('#search').focus();
+    expect(ctrlSlash().defaultPrevented).toBe(false);
+    expect(dockSnapshot().open).toBe(false);
+    expect(key({ key: 'k', code: 'KeyK', altKey: true }).defaultPrevented).toBe(true);
+    expect(dockSnapshot().open).toBe(true);
+    await vi.waitFor(() => expect(document.activeElement).toBe(settingsButton()));
+    announcePref('', 'keybinds', { 'app.assistant': ['F9'] }, 'settings:other');
+    await vi.waitFor(() => expect(assistantKeys()).toEqual(['F9']));
+    key({ key: 'k', code: 'KeyK', altKey: true });
+    expect(dockSnapshot().open).toBe(true);
+    key({ key: 'F9', code: 'F9' });
+    expect(dockSnapshot().open).toBe(false);
+    expect(document.activeElement).toBe($('#search'));
+    announcePref('', 'keybinds', { 'app.assistant': [] }, 'settings:other');
+    await vi.waitFor(() => expect(assistantKeys()).toEqual([]));
+    key({ key: 'F9', code: 'F9' });
+    ctrlSlash();
+    expect(dockSnapshot().open).toBe(false);
+    act(() => $('[data-assistant-pill] .assistant-dock-pill-open').click());
+    expect(dockSnapshot().open).toBe(true);
   });
 
   it('does nothing while a dialog or Settings shows, or while composing', async () => {

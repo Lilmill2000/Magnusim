@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject }
 import { createPortal } from 'react-dom';
 import { useHashRoute } from '../app/routes';
 import { stopAnnouncedTurn } from '../assistant/relay';
+import { assistantKeys } from '../keybinds/appKeys';
 import { onTreeAction } from '../chrome/treeSession';
 import type { StudyRecord, ViewState } from '../plugin-sdk/workspace';
 import { Toast, type ToastKind } from '../plugin-ui';
@@ -626,6 +627,7 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         dock.key();
         return true;
       },
+      assistantKeys: () => assistantKeys(),
     };
     const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);
     bridgeRef.current = bridge;

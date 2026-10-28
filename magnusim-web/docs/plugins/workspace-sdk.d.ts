@@ -88,6 +88,15 @@ declare module '@magnusim/workspace' {
        * for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
        */
       assistantDock?: boolean;
+      /**
+       * The keys that open and close the app's Assistant panel when the person changed them in
+       * Settings → Keybinds: combos as a commands file writes them (Cmd counts as Ctrl), [] when they
+       * left it no key. null for its default, Ctrl+/ (Cmd+/ on macOS) on the key that types "/"
+       * (unreleased, 1.9; absent on an older host). The `assistantKeys` event says when they change.
+       * While docked the page leaves these keys to the app (ws.assistant.docked): no command of its own
+       * should answer them.
+       */
+      assistantKeys?: string[] | null;
   }
   /** What a geometry action was started on (host 1.7). */
   export interface LaunchTarget {
@@ -705,8 +714,9 @@ declare module '@magnusim/workspace' {
        * The app shows its own Assistant panel (its dock), with Stop and "Undo these changes" for each
        * turn: a page that has its own Stop and Undo for a turn leaves them out then, so no control shows
        * twice. False on an older host, and on a host without the panel. Read once, as the page connects.
-       * While docked, Ctrl+/ (Cmd+/ on macOS) typed in the page goes to the app's panel, as it does in
-       * the app, unless a keydown handler of the page calls preventDefault() for it.
+       * While docked, the panel's key typed in the page (Ctrl+/, Cmd+/ on macOS, or the keys the person
+       * chose: context.assistantKeys) goes to the app's panel, as it does in the app, unless a keydown
+       * handler of the page calls preventDefault() for it.
        */
       readonly docked: boolean;
       /**
@@ -999,6 +1009,11 @@ declare module '@magnusim/workspace' {
           rev: number;
           fromRev: number | null;
       }) => void): () => void;
+      /**
+       * `assistantKeys` (unreleased, 1.9): the person changed the keys of the app's Assistant panel
+       * (context.assistantKeys holds them now): null for its default, Ctrl+/.
+       */
+      on(event: 'assistantKeys', fn: (keys: string[] | null) => void): () => void;
       /**
        * Start an ES-module worker. A sandboxed frame cannot start a worker from a
        * URL or a module worker from a blob; this starts a classic blob worker that

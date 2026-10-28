@@ -116,8 +116,7 @@ describe("the app's own keys", () => {
     expect(isDockKey(event('Ctrl+NumpadDivide'), false)).toBe(true);
     expect(isDockKey(event('Meta+NumpadDivide'), true)).toBe(true);
     const sdk = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'plugin-sdk', 'workspace.ts'), 'utf8');
-    expect(sdk).toContain("if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.isComposing || e.repeat) return;");
-    expect(sdk).toContain("if (e.key !== '/') return;");
+    expect(sdk).toContain("if (!keys) return (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === '/';");
   });
 });
 

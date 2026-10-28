@@ -84,6 +84,15 @@ export interface WorkspaceContext {
    * for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
    */
   assistantDock?: boolean;
+  /**
+   * The keys that open and close the app's Assistant panel when the person changed them in
+   * Settings → Keybinds: combos as a commands file writes them (Cmd counts as Ctrl), [] when they
+   * left it no key. null for its default, Ctrl+/ (Cmd+/ on macOS) on the key that types "/"
+   * (unreleased, 1.9; absent on an older host). The `assistantKeys` event says when they change.
+   * While docked the page leaves these keys to the app (ws.assistant.docked): no command of its own
+   * should answer them.
+   */
+  assistantKeys?: string[] | null;
 }
 
 /** What a geometry action was started on (host 1.7). */
@@ -681,8 +690,9 @@ export interface WorkspaceAssistant {
    * The app shows its own Assistant panel (its dock), with Stop and "Undo these changes" for each
    * turn: a page that has its own Stop and Undo for a turn leaves them out then, so no control shows
    * twice. False on an older host, and on a host without the panel. Read once, as the page connects.
-   * While docked, Ctrl+/ (Cmd+/ on macOS) typed in the page goes to the app's panel, as it does in
-   * the app, unless a keydown handler of the page calls preventDefault() for it.
+   * While docked, the panel's key typed in the page (Ctrl+/, Cmd+/ on macOS, or the keys the person
+   * chose: context.assistantKeys) goes to the app's panel, as it does in the app, unless a keydown
+   * handler of the page calls preventDefault() for it.
    */
   readonly docked: boolean;
   /**
@@ -953,6 +963,11 @@ export interface Workspace {
    */
   on(event: 'geometry', fn: (g: { geometryId: string; rev: number; fromRev: number | null }) => void): () => void;
   /**
+   * `assistantKeys` (unreleased, 1.9): the person changed the keys of the app's Assistant panel
+   * (context.assistantKeys holds them now): null for its default, Ctrl+/.
+   */
+  on(event: 'assistantKeys', fn: (keys: string[] | null) => void): () => void;
+  /**
    * Start an ES-module worker. A sandboxed frame cannot start a worker from a
    * URL or a module worker from a blob; this starts a classic blob worker that
    * imports your module. Messages posted before your module has loaded are held
@@ -1031,6 +1046,48 @@ function jsonCopy(v: unknown): unknown {
     // A cycle, a BigInt, a getter that throws: no detail.
     return undefined;
   }
+}
+
+/** The key that types a punctuation character on a US layout (src/keybinds/combo.ts keyCode). */
+const TYPED_CODE: Readonly<Record<string, string>> = {
+  '`': 'Backquote',
+  '-': 'Minus',
+  '=': 'Equal',
+  '[': 'BracketLeft',
+  ']': 'BracketRight',
+  '\\': 'Backslash',
+  ';': 'Semicolon',
+  "'": 'Quote',
+  ',': 'Comma',
+  '.': 'Period',
+  '/': 'Slash',
+  ' ': 'Space',
+};
+
+/** The Assistant panel's keys as the host sent them: a list of combos, or null for its default. */
+function assistantKeysOf(v: unknown): string[] | null {
+  return Array.isArray(v) ? v.filter((k): k is string => typeof k === 'string') : null;
+}
+
+/**
+ * Whether a press is the app's Assistant panel key. The person's keys are read as the app reads a
+ * press (src/keybinds/commands.ts comboOf, combo.ts typedCombo): Cmd counts as Ctrl, a Latin letter
+ * by the letter it types, the number pad's digits and Enter as Digit and Enter, any other key by its
+ * place, and punctuation by the character it types too. The default: Ctrl or Cmd (or both), no Alt
+ * or Shift, on the key that types "/" (another layout's Slash key may be its minus: Ctrl+- zooms).
+ */
+function isAssistantKey(e: KeyboardEvent, keys: readonly string[] | null): boolean {
+  if (!keys) return (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === '/';
+  if (!keys.length) return false;
+  const held = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean).join('+');
+  const named = (code: string) => (held ? `${held}+${code}` : code);
+  const ch = e.key.length === 1 ? e.key : '';
+  const letter = /[a-z]/i.test(ch);
+  const pad = /^Numpad(\d)$/.exec(e.code);
+  const placed = letter ? `Key${ch.toUpperCase()}` : pad ? `Digit${pad[1]}` : e.code === 'NumpadEnter' ? 'Enter' : e.code;
+  if (keys.includes(named(placed))) return true;
+  const typed = !ch || letter ? '' : /\d/.test(ch) ? `Digit${ch}` : TYPED_CODE[ch] || '';
+  return !!typed && keys.includes(named(typed));
 }
 
 /**
@@ -1208,21 +1265,22 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     if (msg.event === 'units') ctx.units = msg.data as UnitSystem;
     if (msg.event === 'theme') ctx.theme = msg.data as ThemeInfo;
     if (msg.event === 'study') ctx.study = msg.data as StudyRecord;
+    if (msg.event === 'assistantKeys') ctx.assistantKeys = assistantKeysOf(msg.data);
     for (const fn of listeners.get(String(msg.event)) || []) fn(msg.data);
   };
   port.start();
 
-  // The app's Assistant panel opens and closes with Ctrl+/ (Cmd+/ on macOS); keys typed in this
-  // frame never reach the app's page, so they go on as assistant.dock (unreleased, 1.9). Heard
-  // first (capture), sent once the event is through, so a page that keeps the key for itself
-  // (preventDefault) keeps it. Only on a host that has the panel.
+  // The app's Assistant panel opens and closes with its key (Ctrl+/, Cmd+/ on macOS, or the
+  // person's: context.assistantKeys); keys typed in this frame never reach the app's page, so they
+  // go on as assistant.dock (unreleased, 1.9). Heard first (capture), sent once the event is
+  // through, so a page that keeps the key for itself (preventDefault) keeps it. Only on a host
+  // that has the panel.
   if (ctx.assistantDock === true && typeof window !== 'undefined') {
+    ctx.assistantKeys = assistantKeysOf(ctx.assistantKeys);
     window.addEventListener(
       'keydown',
       (e: KeyboardEvent) => {
-        if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.isComposing || e.repeat) return;
-        // The key that types "/" (another layout's Slash key may be its minus: Ctrl+- zooms).
-        if (e.key !== '/') return;
+        if (e.isComposing || e.repeat || !isAssistantKey(e, ctx.assistantKeys ?? null)) return;
         setTimeout(() => {
           if (!e.defaultPrevented) void call('assistant.dock').catch(() => undefined);
         }, 0);

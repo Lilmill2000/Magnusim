@@ -6,6 +6,7 @@
 // against this bridge, so both sides keep the same tools.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { connect, type AssistantTool, type AssistantTurn, type StudyRecord } from '../plugin-sdk/workspace';
+import { ASSISTANT_KEYS_EVENT } from '../keybinds/appKeys';
 import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_ALIVE_MS,
@@ -1425,6 +1426,33 @@ describe("undo from the app's Assistant panel, and its key (1.9, unreleased)", (
     expect(bare.welcome.context).toMatchObject({ assistantDock: false });
     expect((await bare.call('assistant.dock')).result).toEqual({ ok: false });
     bare.end();
+  });
+
+  it("the welcome carries the panel's keys the person chose (hooks.assistantKeys; null for the default and without the hook); a change on the window (ASSISTANT_KEYS_EVENT) reaches the page as assistantKeys, and the real SDK takes it", async () => {
+    const h = hooks();
+    h.assistantDocked = vi.fn(() => true);
+    let keys: string[] | null = ['Ctrl+KeyK'];
+    h.assistantKeys = vi.fn(() => keys);
+    const t = await connected(h);
+    expect(t.welcome.context).toMatchObject({ assistantDock: true, assistantKeys: ['Ctrl+KeyK'] });
+    keys = null;
+    window.dispatchEvent(new CustomEvent(ASSISTANT_KEYS_EVENT));
+    await settle(() => of(t.events, 'assistantKeys').length === 1, 'the keys');
+    expect(of(t.events, 'assistantKeys')[0].data).toBeNull();
+    t.end();
+    const bare = await connected();
+    expect(bare.welcome.context).toMatchObject({ assistantKeys: null });
+    window.dispatchEvent(new CustomEvent(ASSISTANT_KEYS_EVENT));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(of(bare.events, 'assistantKeys')).toHaveLength(0);
+    bare.end();
+    keys = ['F9'];
+    const sdk = await sdkConnected(h);
+    expect(sdk.ws.context.assistantKeys).toEqual(['F9']);
+    keys = ['Alt+KeyK'];
+    window.dispatchEvent(new CustomEvent(ASSISTANT_KEYS_EVENT));
+    await settle(() => JSON.stringify(sdk.ws.context.assistantKeys) === '["Alt+KeyK"]', 'the SDK took the keys');
+    sdk.end();
   });
 
   it("the panel's messages are no work of a running leave's hook (NOT_HOOK_WORK)", async () => {
