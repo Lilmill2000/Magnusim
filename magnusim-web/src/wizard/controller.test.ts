@@ -16,6 +16,32 @@ vi.mock('../assistant/status', () => ({
   },
 }));
 
+// Keybinds' Reset all keybinds: the plugins it would change, the person's answer to its question.
+const keys = vi.hoisted(() => ({
+  own: ['Keys demo'] as string[],
+  answer: true as boolean | Promise<boolean>,
+  asked: [] as { title?: string; copy?: string; yes?: string; safe?: boolean }[],
+  reset: 0,
+  // What the reset answers besides: plugins it could not reset, or the list not read.
+  failed: [] as { name: string; why: string }[],
+  error: '',
+}));
+vi.mock('../workbench/dialogs', () => ({
+  confirmAction: async (o: (typeof keys.asked)[number]) => {
+    keys.asked.push(o);
+    return keys.answer;
+  },
+}));
+vi.mock('../keybinds/catalog', () => ({
+  resetEveryPlugin: async (ask: (names: string[]) => Promise<boolean>) => {
+    if (keys.error) return { asked: false, reset: [], failed: [], error: keys.error };
+    if (!keys.own.length) return { asked: false, reset: [], failed: keys.failed, error: '' };
+    if (!(await ask(keys.own))) return { asked: true, reset: [], failed: [], error: '' };
+    keys.reset += 1;
+    return { asked: true, reset: keys.own, failed: keys.failed, error: '' };
+  },
+}));
+
 type Controller = typeof import('./controller');
 
 let prefs: Record<string, unknown>;
@@ -48,6 +74,7 @@ let checks = 0;
 
 beforeEach(() => {
   islands.calls = [];
+  Object.assign(keys, { own: ['Keys demo'], answer: true, asked: [], reset: 0, failed: [], error: '' });
   leaving.settle = () => true;
   leaving.asked = 0;
   saved = [];
@@ -112,6 +139,73 @@ describe('Settings', () => {
     c.openSetupWizard({ step: 'keybinds' });
     expect(shownPane()).toBe('keybinds');
     expect(islands.calls[islands.calls.length - 1]).toBe('mount wiz-keybinds');
+  });
+
+  it('Reset all keybinds asks once (Enter keeps them), resets every plugin and shows the lists again; nothing to reset asks nothing', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'keybinds' });
+    const reset = $('[data-wiz-reset="keybinds"]');
+    expect(reset).toHaveTextContent('Reset all keybinds');
+    keys.answer = false;
+    reset.click();
+    await flush();
+    expect(keys.asked).toEqual([
+      { title: 'Reset all keybinds?', copy: "Every command of Keys demo gets its default keys back. The app's own keys stay as they are.", yes: 'Reset all', safe: true },
+    ]);
+    expect(keys.reset).toBe(0);
+    islands.calls = [];
+    keys.answer = true;
+    reset.click();
+    await flush();
+    expect(keys.reset).toBe(1);
+    expect($('#wiz-saved')).toHaveTextContent('Saved');
+    expect(islands.calls).toEqual(['mount wiz-keybinds']);
+    keys.own = [];
+    keys.asked = [];
+    reset.click();
+    await flush();
+    expect(keys.asked).toEqual([]);
+    expect($('#wiz-saved')).toHaveTextContent('Every key is its default already');
+    expect($('#wiz-saved')).not.toHaveClass('is-error');
+  });
+
+  it('Reset all keybinds is busy while it runs (a second press asks nothing more) and gives the keyboard back to its button', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'keybinds' });
+    const reset = $('[data-wiz-reset="keybinds"]') as HTMLButtonElement;
+    let answer!: (yes: boolean) => void;
+    keys.answer = new Promise<boolean>((r) => (answer = r));
+    reset.click();
+    await flush();
+    expect([reset.disabled, reset.getAttribute('aria-busy')]).toEqual([true, 'true']);
+    reset.dispatchEvent(new MouseEvent('click'));
+    await flush();
+    expect(keys.asked).toHaveLength(1);
+    answer(true);
+    await flush();
+    await flush();
+    expect(keys.reset).toBe(1);
+    expect([reset.disabled, reset.hasAttribute('aria-busy'), document.activeElement]).toEqual([false, false, reset]);
+  });
+
+  it("Reset all keybinds says, as an error, what it could not reset and why", async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'keybinds' });
+    const reset = $('[data-wiz-reset="keybinds"]');
+    keys.failed = [{ name: 'Heat', why: 'its keys could not be read' }];
+    reset.click();
+    await flush();
+    expect($('#wiz-saved')).toHaveTextContent('Reset Keys demo; not reset: Heat (its keys could not be read)');
+    expect($('#wiz-saved')).toHaveClass('is-error');
+    keys.own = [];
+    reset.click();
+    await flush();
+    expect($('#wiz-saved')).toHaveTextContent('Not reset: Heat (its keys could not be read)');
+    keys.error = 'Could not read the plugin list: worker RPC timeout.';
+    reset.click();
+    await flush();
+    expect($('#wiz-saved')).toHaveTextContent('Could not read the plugin list: worker RPC timeout.');
+    expect($('#wiz-saved')).toHaveClass('is-error');
   });
 
   it('mounts Keybinds on entering it (each time: it reads the lists again) and unmounts it on leaving and on close', async () => {

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 COMMANDS_FORMAT = 1
 ANY_CONTEXT = "any"
@@ -76,7 +77,7 @@ def _q(v: Any) -> str:
     """A value as the problems name it: text as JSON.stringify writes it, anything else by its kind."""
     if isinstance(v, str):
         # JSON.stringify writes a lone surrogate as an escape (json.dumps would leave it raw).
-        return _LONE_SURROGATE.sub(lambda m: "\\u%04x" % ord(m.group()), json.dumps(v, ensure_ascii=False))
+        return _LONE_SURROGATE.sub(lambda m: f"\\u{ord(m.group()):04x}", json.dumps(v, ensure_ascii=False))
     if v is None:
         return "null"
     if isinstance(v, bool):

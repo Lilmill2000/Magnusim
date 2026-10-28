@@ -1,8 +1,9 @@
 // @ts-nocheck
 /**
- * Settings: units, this PC, listen port, workspace, Assistant, plugins. Sections on the left;
- * each change saves as it is made (a brief "Saved" in the header says so), and the X or Esc
- * closes. Units, Port and Workspace have a Reset to defaults; This PC a Check again. No
+ * Settings: units, this PC, listen port, workspace, keybinds, Assistant, plugins. Sections on the
+ * left; each change saves as it is made (a brief "Saved" in the header says so), and the X or Esc
+ * closes. Units, Port and Workspace have a Reset to defaults, Keybinds a Reset all keybinds (one
+ * question first: it touches every plugin); This PC a Check again. No
  * Welcome, Next, Back or Finish (Daniel, 2026-10-25: the sections are the way around).
  *
  * The first run opens it on Units, with the PC check (solver ranks) running meanwhile; closing
@@ -14,6 +15,8 @@
 import { settleStep } from '../assistant/status';
 import { mountIsland, unmountIsland } from '../islands';
 import { isCad } from '../app/edition';
+import { resetEveryPlugin } from '../keybinds/catalog';
+import { confirmAction } from '../workbench/dialogs';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
 const WIZ_UNITS_STEP = 1;
@@ -29,8 +32,9 @@ const sections = () => (isCad() ? WIZ_ORDER.filter((id) => CAD_SECTIONS.includes
 const pos = (id) => sections().indexOf(id);
 /** The app's own port (scripts/prefs.js DEFAULT_PORT): Port's default. */
 const DEFAULT_PORT = 8082;
-/** How long the header's "Saved" stays. */
+/** How long the header's "Saved" stays, and a reason something was not saved. */
 const SAVED_MS = 1800;
+const ERROR_MS = 8000;
 
 function $(id) {
   return document.getElementById(id);
@@ -92,16 +96,18 @@ const wizard = {
 };
 let savedTimer = null;
 
-/** The header's brief "Saved" (or why not), read out to screen readers too. */
-function flashSaved(text = 'Saved') {
+/** The header's brief "Saved" (or why not: `error`, shown as one and for longer), read out to screen readers too. */
+function flashSaved(text = 'Saved', error = false) {
   const el = $('wiz-saved');
   if (!el) return;
   el.textContent = text;
+  el.classList.toggle('is-error', error);
   if (savedTimer) clearTimeout(savedTimer);
   savedTimer = setTimeout(() => {
     savedTimer = null;
     el.textContent = '';
-  }, SAVED_MS);
+    el.classList.remove('is-error');
+  }, error ? ERROR_MS : SAVED_MS);
 }
 
 // The Assistant step is mounted only while it is shown: it holds a key field.
@@ -333,8 +339,49 @@ async function savePort() {
   }
 }
 
-/** A section's Reset to defaults: Units Metric, Port 8082, Workspace with finished sections collapsed. */
-async function resetSection(key) {
+// A Reset all keybinds on its way: a second press waits for it instead of asking again.
+let resettingKeys = false;
+
+/**
+ * Keybinds' Reset all keybinds: every plugin's commands back to their defaults, after one question
+ * naming the plugins it changes (it touches many; Enter answers Cancel). Nothing to reset asks
+ * nothing. The button is busy meanwhile and has the keyboard again after; the section reads its
+ * lists again when anything was reset. What could not be reset is said as an error.
+ */
+async function resetKeybinds(btn) {
+  if (resettingKeys) return;
+  resettingKeys = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+  }
+  try {
+    const out = await resetEveryPlugin((names) =>
+      confirmAction({
+        title: 'Reset all keybinds?',
+        copy: `Every command of ${names.join(', ')} gets its default keys back. The app's own keys stay as they are.`,
+        yes: 'Reset all',
+        safe: true,
+      }),
+    );
+    const failed = out.failed.map((f) => `${f.name} (${f.why})`).join(', ');
+    if (out.error) flashSaved(out.error, true);
+    else if (failed) flashSaved(out.reset.length ? `Reset ${out.reset.join(', ')}; not reset: ${failed}` : `Not reset: ${failed}`, true);
+    else if (!out.asked) flashSaved('Every key is its default already');
+    else if (out.reset.length) flashSaved();
+    if (out.reset.length && keybindsMounted) mountIsland('wiz-keybinds', { scope: '' });
+  } finally {
+    resettingKeys = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      if (btn.isConnected && wizard.open) btn.focus({ preventScroll: true });
+    }
+  }
+}
+
+/** A section's Reset to defaults: Units Metric, Port 8082, Workspace with finished sections collapsed, Keybinds every plugin's defaults. */
+async function resetSection(key, btn) {
   if (key === 'units') {
     wizard.units = 'Metric';
     paintUnits();
@@ -347,6 +394,8 @@ async function resetSection(key) {
     const el = $('wiz-collapse-completed');
     if (el) el.checked = true;
     await persistCollapsePref(true);
+  } else if (key === 'keybinds') {
+    await resetKeybinds(btn);
   }
 }
 
@@ -449,7 +498,7 @@ function wireWizard() {
   });
   $('wiz-port')?.addEventListener('change', () => void savePort());
   document.querySelectorAll('[data-wiz-reset]').forEach((btn) => {
-    btn.addEventListener('click', () => void resetSection(btn.getAttribute('data-wiz-reset')));
+    btn.addEventListener('click', () => void resetSection(btn.getAttribute('data-wiz-reset'), btn));
   });
   document.querySelectorAll('[data-wiz-recheck]').forEach((btn) => {
     btn.addEventListener('click', () => void startHardwareCheck(true));

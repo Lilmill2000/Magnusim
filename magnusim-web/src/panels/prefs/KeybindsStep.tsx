@@ -7,8 +7,10 @@
  * Tab moves on, a key the app, the browser or the system keeps is refused with why, and a key
  * another command has where the two meet asks Replace or Cancel. Reset puts the defaults back,
  * Clear leaves no key, Reset all is the plugin's every command. Each change is stored at once and
- * an open workspace takes it live; a change made in the workspace (its Set keybind) or another tab
- * shows here as it happens.
+ * an open workspace takes it live; a change made in the workspace (its Set keybind), by the
+ * Assistant or in another tab shows here as it happens (the newest read of a plugin's keys wins).
+ * The keyboard stays in the row: when the recorder closes, focus goes back to the row's Change
+ * (to Replace when a key is taken), and every row's last word is also read out by one live region.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { isCad } from '../../app/edition';
@@ -16,10 +18,12 @@ import { APP_COMMANDS, APP_LOCAL_KEYS, RESERVED_KEYS } from '../../keybinds/appC
 import {
   applyChange,
   contextLabel,
+  hasOwnKeys,
   isDefault,
   KEYBINDS_PREF,
   keysOf,
   loadPluginKeys,
+  planChange,
   refreshOverrides,
   refusalOf,
   resetAllKeys,
@@ -70,11 +74,36 @@ export function KeybindsStep() {
   const [notes, setNotes] = useState<Record<string, { text: string; kind: 'saved' | 'error' }>>({});
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const captureRef = useRef<HTMLSpanElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // Where the keyboard goes once the row has drawn again: its Change, or Replace for a taken key.
+  const [focusTo, setFocusTo] = useState<{ plugin: string; id: string; what: 'change' | 'replace' } | null>(null);
+  // What the live region reads out: every row's last word, in one place that is always there.
+  const [heard, setHeardState] = useState({ text: '', n: 0 });
+  // Every message is a change to the region, the same words twice too (a second "Saved").
+  const setHeard = (text: string) => setHeardState((h) => ({ text, n: h.n + 1 }));
+  // Each read or write of a plugin's keys; only the newest one's answer is shown.
+  const serials = useRef(new Map<string, number>());
   const pluginsRef = useRef(plugins);
   pluginsRef.current = plugins;
 
+  const begin = (plugin: string) => {
+    const n = (serials.current.get(plugin) ?? 0) + 1;
+    serials.current.set(plugin, n);
+    return () => serials.current.get(plugin) === n;
+  };
   const put = (next: PluginKeys) => setPlugins((list) => list.map((p) => (p.plugin === next.plugin ? next : p)));
+  const clearNote = (rowKey: string) => {
+    const was = timers.current.get(rowKey);
+    if (was) clearTimeout(was);
+    timers.current.delete(rowKey);
+    setNotes((n) => {
+      if (!(rowKey in n)) return n;
+      const { [rowKey]: _gone, ...rest } = n;
+      return rest;
+    });
+  };
   const note = (rowKey: string, text: string, kind: 'saved' | 'error') => {
+    setHeard(text);
     setNotes((n) => ({ ...n, [rowKey]: { text, kind } }));
     const was = timers.current.get(rowKey);
     if (was) clearTimeout(was);
@@ -101,11 +130,14 @@ export function KeybindsStep() {
       setError(why);
       setLoaded(true);
     });
-    // A change made in a workspace (its Set keybind) or in another tab's Settings shows here.
+    // A change made in a workspace (its Set keybind), by the Assistant or in another tab's
+    // Settings shows here.
     const stop = onPrefChange((c) => {
       if (c.key !== KEYBINDS_PREF || c.from === SETTINGS_FROM) return;
       const p = pluginsRef.current.find((x) => x.plugin === c.plugin);
-      if (p) void refreshOverrides(p).then((next) => live && put(next));
+      if (!p) return;
+      const newest = begin(p.plugin);
+      void refreshOverrides(p).then((next) => live && newest() && put(next));
     });
     const own = timers.current;
     return () => {
@@ -118,25 +150,75 @@ export function KeybindsStep() {
   useEffect(() => {
     if (editing && !editing.conflict) captureRef.current?.focus({ preventScroll: true });
   }, [editing]);
+  useEffect(() => {
+    if (!focusTo || !rootRef.current) return;
+    const row = [...rootRef.current.querySelectorAll<HTMLElement>('[data-keybind]')].find(
+      (el) => el.dataset.keybind === focusTo.id && el.closest<HTMLElement>('[data-keys-plugin]')?.dataset.keysPlugin === focusTo.plugin,
+    );
+    const el = row?.querySelector<HTMLElement>(focusTo.what === 'replace' ? '[data-keybind-replace]' : '[data-keybind-change]');
+    if (el) el.focus({ preventScroll: true });
+    setFocusTo(null);
+  });
 
   const rowKey = (plugin: string, id: string) => `${plugin}\u0000${id}`;
+  const mineIs = (plugin: string, id: string) => (e: Editing | null) => (e && e.plugin === plugin && e.id === id ? null : e);
+
+  /**
+   * The keyboard back to a row's Change (or Replace), only while the person is still there: in that
+   * row, or nowhere (the row's own control went). An answer that comes after they moved on (Tab,
+   * Search, another row's recorder) leaves the keyboard where it is.
+   */
+  function focusBack(plugin: string, id: string, what: 'change' | 'replace') {
+    const active = document.activeElement;
+    const row = rootRef.current
+      ? [...rootRef.current.querySelectorAll<HTMLElement>('[data-keybind]')].find(
+          (el) => el.dataset.keybind === id && el.closest<HTMLElement>('[data-keys-plugin]')?.dataset.keysPlugin === plugin,
+        )
+      : undefined;
+    if (!active || active === document.body || (row && row.contains(active))) setFocusTo({ plugin, id, what });
+  }
+
+  /** The recorder (or a taken key's question) closes with nothing changed: its refusal goes, the keyboard stays in the row. */
+  function closeRecorder(plugin: string, id: string, focus = true) {
+    setEditing(mineIs(plugin, id));
+    clearNote(rowKey(plugin, id));
+    if (focus) setFocusTo({ plugin, id, what: 'change' });
+  }
 
   async function change(p: PluginKeys, id: string, c: KeyChange) {
     const key = rowKey(p.plugin, id);
+    // Worked out first: a taken key or a refused one writes nothing, so it takes no read serial
+    // (a refresh on its way still lands).
+    const plan = planChange(p, id, c, displayCombo);
+    if (!plan.ok) {
+      if (plan.code === 'conflict') {
+        setEditing({ plugin: p.plugin, id, partial: '', conflict: { change: { ...c, replace: true } as KeyChange, message: plan.message } });
+        setFocusTo({ plugin: p.plugin, id, what: 'replace' });
+        setHeard(`${plan.message}. Replace or Cancel.`);
+        return;
+      }
+      setEditing(mineIs(p.plugin, id));
+      focusBack(p.plugin, id, 'change');
+      note(key, plan.message, 'error');
+      return;
+    }
+    const newest = begin(p.plugin);
     const { result, plugin } = await applyChange(p, id, c, displayCombo);
-    put(plugin);
     if (result.ok) {
-      setEditing((e) => (e && e.plugin === p.plugin && e.id === id ? null : e));
+      if (newest()) put(plugin);
+      setEditing(mineIs(p.plugin, id));
+      focusBack(p.plugin, id, 'change');
       const took = result.took.map((t) => t.label);
       note(key, took.length ? `Saved. Taken from ${took.join(', ')}.` : 'Saved', 'saved');
       return;
     }
-    if (result.code === 'conflict') {
-      setEditing({ plugin: p.plugin, id, partial: '', conflict: { change: { ...c, replace: true } as KeyChange, message: result.message } });
-      return;
-    }
-    setEditing(null);
+    // Not saved: the keys shown are read again (a refresh this change made stale is not lost).
+    setEditing(mineIs(p.plugin, id));
+    focusBack(p.plugin, id, 'change');
     note(key, result.message, 'error');
+    if (!newest()) return;
+    const again = begin(p.plugin);
+    void refreshOverrides(p).then((next) => again() && put(next));
   }
 
   function onCaptureKey(e: ReactKeyboardEvent<HTMLSpanElement>, p: PluginKeys, command: Command) {
@@ -149,7 +231,7 @@ export function KeybindsStep() {
     e.stopPropagation();
     const key = rowKey(p.plugin, command.id);
     if (e.key === 'Escape' && !mods && !e.shiftKey) {
-      setEditing(null);
+      closeRecorder(p.plugin, command.id);
       return;
     }
     if (MOD_KEYS.has(e.key)) {
@@ -198,7 +280,12 @@ export function KeybindsStep() {
               aria-label={`Press the new keys for ${c.label}`}
               data-keybind-capture
               onKeyDown={(e) => onCaptureKey(e, p, c)}
-              onBlur={() => setEditing((x) => (x === mine ? null : x))}
+              onBlur={(e) => {
+                // Tab or a click elsewhere: the person moved on. Within the row (Tab to the
+                // recorder's own Cancel, which goes with it), the keyboard stays: on Change.
+                const within = !!e.relatedTarget && !!e.currentTarget.closest('[data-keybind]')?.contains(e.relatedTarget as Node);
+                if (editing === mine) closeRecorder(p.plugin, c.id, within);
+              }}
             >
               {mine.partial ? `${mine.partial}+…` : 'Press the new keys…'}
             </span>
@@ -208,21 +295,31 @@ export function KeybindsStep() {
         </span>
         <span className="wiz-keys-actions">
           {mine && !mine.conflict ? (
-            <button type="button" className="wiz-reset" onMouseDown={(e) => e.preventDefault()} onClick={() => setEditing(null)}>
+            <button type="button" className="wiz-reset" aria-label={`Cancel changing ${c.label}`} onMouseDown={(e) => e.preventDefault()} onClick={() => closeRecorder(p.plugin, c.id)}>
               Cancel
             </button>
           ) : (
             <>
-              <button type="button" className="wiz-reset" data-keybind-change disabled={!!p.unread} onClick={() => setEditing({ plugin: p.plugin, id: c.id, partial: '', conflict: null })}>
+              <button
+                type="button"
+                className="wiz-reset"
+                data-keybind-change
+                aria-label={`Change ${c.label}`}
+                disabled={!!p.unread}
+                onClick={() => {
+                  clearNote(key);
+                  setEditing({ plugin: p.plugin, id: c.id, partial: '', conflict: null });
+                }}
+              >
                 Change
               </button>
               {!isDefault(p, c.id) ? (
-                <button type="button" className="wiz-reset" data-keybind-reset disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'reset' })}>
+                <button type="button" className="wiz-reset" data-keybind-reset aria-label={`Reset ${c.label}`} disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'reset' })}>
                   Reset
                 </button>
               ) : null}
               {keys.length ? (
-                <button type="button" className="wiz-reset" data-keybind-clear disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'clear' })}>
+                <button type="button" className="wiz-reset" data-keybind-clear aria-label={`Clear ${c.label}`} disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'clear' })}>
                   Clear
                 </button>
               ) : null}
@@ -230,17 +327,17 @@ export function KeybindsStep() {
           )}
         </span>
         {mine && mine.conflict ? (
-          <span className="wiz-keys-conflict" role="alert" data-keybind-conflict>
+          <span className="wiz-keys-conflict" data-keybind-conflict>
             <span>{mine.conflict.message}.</span>
             <button type="button" className="wiz-reset" data-keybind-replace onClick={() => void change(p, c.id, mine.conflict!.change)}>
               Replace
             </button>
-            <button type="button" className="wiz-reset" onClick={() => setEditing(null)}>
+            <button type="button" className="wiz-reset" data-keybind-conflict-cancel onClick={() => closeRecorder(p.plugin, c.id)}>
               Cancel
             </button>
           </span>
         ) : said ? (
-          <span className={said.kind === 'saved' ? 'wiz-keys-saved' : 'wiz-keys-error'} role={said.kind === 'saved' ? 'status' : 'alert'} data-keybind-note={said.kind}>
+          <span className={said.kind === 'saved' ? 'wiz-keys-saved' : 'wiz-keys-error'} data-keybind-note={said.kind}>
             {said.text}
           </span>
         ) : null}
@@ -273,7 +370,7 @@ export function KeybindsStep() {
   const pluginBlocks = plugins.map((p) => {
     const blocks = p.workspaces.map((ws) => workspaceBlock(p, ws)).filter(Boolean);
     if (q && !blocks.length) return null;
-    const changed = Object.keys(p.overrides).some((id) => !isDefault(p, id));
+    const changed = hasOwnKeys(p);
     return (
       <section key={p.plugin} className="wiz-keys-scope" data-keys-plugin={p.plugin}>
         <div className="wiz-keys-scope-head">
@@ -282,13 +379,25 @@ export function KeybindsStep() {
             type="button"
             className="wiz-reset"
             data-keys-reset-all
+            aria-label={`Reset all ${p.name} keys`}
             disabled={!changed || !!p.unread}
-            onClick={async () => {
+            onClick={async (e) => {
+              const btn = e.currentTarget;
+              const newest = begin(p.plugin);
               const r = await resetAllKeys(p);
               if (r.ok) {
-                put(r.plugin);
+                if (newest()) put(r.plugin);
                 note(rowKey(p.plugin, ''), 'Every command has its default keys again.', 'saved');
-              } else note(rowKey(p.plugin, ''), r.message, 'error');
+                // The button goes disabled: the keyboard, if still on it, to the section's first Change shown.
+                const first = btn.closest('[data-keys-plugin]')?.querySelector<HTMLElement>('[data-keybind] [data-keybind-change]')?.closest<HTMLElement>('[data-keybind]')?.dataset.keybind;
+                const active = document.activeElement;
+                if (first && (active === btn || !active || active === document.body)) setFocusTo({ plugin: p.plugin, id: first, what: 'change' });
+              } else {
+                note(rowKey(p.plugin, ''), r.message, 'error');
+                if (!newest()) return;
+                const again = begin(p.plugin);
+                void refreshOverrides(p).then((next) => again() && put(next));
+              }
             }}
           >
             Reset all
@@ -297,13 +406,20 @@ export function KeybindsStep() {
         {p.unread ? (
           <p className="wiz-keys-error" role="alert" data-keys-unread>
             {p.unread}. Changes wait until they can be read.{' '}
-            <button type="button" className="wiz-reset" onClick={() => void refreshOverrides(p).then(put)}>
+            <button
+              type="button"
+              className="wiz-reset"
+              onClick={() => {
+                const newest = begin(p.plugin);
+                void refreshOverrides(p).then((next) => newest() && put(next));
+              }}
+            >
               Try again
             </button>
           </p>
         ) : null}
         {notes[rowKey(p.plugin, '')] ? (
-          <p className={notes[rowKey(p.plugin, '')].kind === 'saved' ? 'wiz-keys-saved' : 'wiz-keys-error'} role="status">
+          <p className={notes[rowKey(p.plugin, '')].kind === 'saved' ? 'wiz-keys-saved' : 'wiz-keys-error'} data-keys-plugin-note={notes[rowKey(p.plugin, '')].kind}>
             {notes[rowKey(p.plugin, '')].text}
           </p>
         ) : null}
@@ -313,7 +429,10 @@ export function KeybindsStep() {
   });
 
   return (
-    <div className="wiz-keys" data-keybinds>
+    <div className="wiz-keys" data-keybinds ref={rootRef}>
+      <p className="wiz-keys-live" aria-live="polite" aria-atomic="true" data-keys-live>
+        {heard.text ? heard.text + String.fromCharCode(heard.n % 2 ? 0x200b : 0x200c) : ''}
+      </p>
       <input
         type="search"
         className="wiz-keys-search"
@@ -363,7 +482,7 @@ export function KeybindsStep() {
           ) : null}
         </section>
       ) : null}
-      {loaded && !plugins.length && !error ? <p className="wiz-keys-copy">No plugin that is on has keys of its own.</p> : null}
+      {loaded && !plugins.length && !error ? <p className="wiz-keys-copy">No plugin that is on lists its keys here yet.</p> : null}
       {pluginBlocks}
       {loaded && q && !appRows.length && !reservedRows.length && !pluginBlocks.some(Boolean) ? (
         <p className="wiz-keys-copy" data-keys-none>

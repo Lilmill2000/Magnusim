@@ -167,6 +167,7 @@ export const CORE_RESULT_CODES: ReadonlySet<string> = new Set([
   'not_asked',
   'step_declined',
   'key_taken',
+  'changed',
 ]);
 const IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const PLUGIN_KEY = /^[A-Za-z0-9._-]{1,64}$/;
