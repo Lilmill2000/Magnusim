@@ -291,6 +291,26 @@ describe('CAD tokens: the dark set', () => {
 });
 
 describe('CAD stylesheets', () => {
+  it("give every tooltip-like surface the host tooltip's edge in dark: a tooltip the core's outline, a pill its own 1 px border of that colour", () => {
+    const host = hostTokens();
+    const bad: string[] = [];
+    for (const { rel, css } of cssFiles())
+      for (const r of rulesOf(css)) {
+        if (!/--mg-tooltip-bg|--mg-shadow-tooltip/.test(r.body)) continue;
+        const outline = /outline:\s*1px solid var\(--mg-tooltip-edge, transparent\);/.test(r.body);
+        const border = /border:\s*1px (solid|dashed) var\((--mg-border|--mg-text-muted)\);/.test(r.body);
+        // A tooltip (the always-dark tooltip background) takes the core's outline (style.css .mat-k-tip).
+        if (/--mg-tooltip-bg/.test(r.body) ? !outline : !outline && !border) bad.push(`${rel} ${r.sel}`);
+      }
+    expect(bad).toEqual([]);
+    // The core's tooltip: the same outline; transparent in light (nothing changes there), a line in dark.
+    expect(rulesOf(readFileSync(CORE_CSS, 'utf8')).find((r) => r.sel === '.mat-k-tip')?.body).toMatch(/outline: 1px solid var\(--mg-tooltip-edge\)/);
+    expect(host.light.get('--mg-tooltip-edge')).toBe('transparent');
+    // A pill's border is that line's colour in dark, or a lighter one (the construction badge's dashed --mg-text-muted).
+    expect(host.dark.get('--mg-border')).toBe(host.dark.get('--mg-tooltip-edge'));
+    expect(contrast(host.dark.get('--mg-text-muted')!, host.dark.get('--mg-viewport-bg')!)).toBeGreaterThan(contrast(host.dark.get('--mg-tooltip-edge')!, host.dark.get('--mg-viewport-bg')!));
+  });
+
   it('paint blue text with --mg-primary-ink (in dark the --mg-primary fill is too dark for text)', () => {
     const bad: string[] = [];
     for (const { rel, css } of cssFiles()) {

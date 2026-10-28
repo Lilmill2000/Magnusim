@@ -47,6 +47,9 @@
 //  - dark-picture-save: the Picture panel's Save PNG (a link: a download) looks exactly like the
 //    kit's secondary button beside it, at rest, under the pointer and focused, computed style and
 //    pixels, in light and dark (it was the browser's link blue, underlined).
+//  - dark-tooltip-edge: a toolbar button's tooltip and the toolbar's drag note have the host
+//    tooltip's edge (--mg-tooltip-edge, as the core's .mat-k-tip): a #3a414e line around them in
+//    dark, where their shadow is lost; in light the edge is transparent and paints no pixel.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
@@ -1267,5 +1270,85 @@ test("cad:dark-picture-save the Picture panel's Save PNG link looks exactly like
   await check('dark');
   await appearance(page, 'light');
   await check('light again');
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:dark-tooltip-edge a tooltip and the toolbar's drag note have the host tooltip's edge in dark, as the core's tooltips do; in light it paints nothing", async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  const f = workspaceFrame(page);
+  const host = hostTokens();
+  // The toolbar's drag note as a drag shows it (Toolbar.tsx DragGhost), over the view: a real drag
+  // rewrites the person's toolbar layout (the serial toolbar specs), the look is the same.
+  await f.evaluate(() => {
+    const g = document.createElement('div');
+    g.className = 'tb-drag-ghost';
+    g.dataset.e2eGhost = '1';
+    g.style.left = '700px';
+    g.style.top = '520px';
+    const note = document.createElement('div');
+    note.className = 'tb-drag-note';
+    note.textContent = 'Spline moves to More';
+    g.append(note);
+    document.body.append(g);
+  });
+  const note = frame.locator('[data-e2e-ghost] .tb-drag-note');
+  /** A toolbar button's tooltip (the kit's, over the toolbar). */
+  const tip = async () => {
+    await page.mouse.move(5, 5);
+    await frame.locator('[data-cad-toolbar] .tb-btn[data-command="file.picture"]').hover();
+    const t = frame.locator('[data-cad-tip]');
+    await expect(t).toBeVisible();
+    return t;
+  };
+  /** Its edge (computed), the pixels around it, and the same pixels with the edge taken off. */
+  const edge = async (l: Locator) => {
+    const look = await l.evaluate((el) => ({ style: getComputedStyle(el).outlineStyle, width: getComputedStyle(el).outlineWidth, color: getComputedStyle(el).outlineColor, offset: getComputedStyle(el).outlineOffset }));
+    const r = (await l.boundingBox())!;
+    const clip = { x: Math.floor(r.x) - 3, y: Math.floor(r.y) - 3, width: Math.ceil(r.width) + 6, height: Math.ceil(r.height) + 6 };
+    const withEdge = await page.screenshot({ clip });
+    await l.evaluate((el) => ((el as HTMLElement).style.outline = 'none'));
+    const without = await page.screenshot({ clip });
+    await l.evaluate((el) => ((el as HTMLElement).style.outline = ''));
+    // The ring 1 px outside the box, along the middle of its left and right sides and of its top and bottom.
+    const img = PNG.decode(withEdge);
+    const ring = (c: RGB) => {
+      const at = [
+        [r.x - 0.5, r.y + r.height / 2],
+        [r.x + r.width + 0.5, r.y + r.height / 2],
+        [r.x + r.width / 2, r.y - 0.5],
+        [r.x + r.width / 2, r.y + r.height + 0.5],
+      ];
+      return at.map(([x, y]) => {
+        let best = Infinity;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const px = Math.round(x - clip.x + dx - 0.5);
+            const py = Math.round(y - clip.y + dy - 0.5);
+            if (px < 0 || py < 0 || px >= img.width || py >= img.height) continue;
+            best = Math.min(best, dist(img.data, 4 * (py * img.width + px), c));
+          }
+        return best;
+      });
+    };
+    return { look, ring, changed: differs(withEdge, without) };
+  };
+  for (const [name, get] of [
+    ['tooltip', tip],
+    ['drag note', async () => note],
+  ] as const) {
+    // Light: the host's light edge is transparent: the surface's pixels are the ones without an edge.
+    const light = await edge(await get());
+    expect(light.look, `light ${name}: its edge`).toEqual({ style: 'solid', width: '1px', color: 'rgba(0, 0, 0, 0)', offset: '0px' });
+    expect(light.changed, `light ${name}: the edge paints nothing`).toBe(0);
+    await appearance(page, 'dark');
+    const dark = await edge(await get());
+    const want = host.dark.get('--mg-tooltip-edge')!;
+    expect(dark.look, `dark ${name}: the host tooltip's edge`).toEqual({ style: 'solid', width: '1px', color: cssRgb(want), offset: '0px' });
+    expect(dark.changed, `dark ${name}: the edge shows`).toBeGreaterThan(0.02);
+    const ring = dark.ring(hexRgb(want));
+    expect(Math.max(...ring), `dark ${name}: the line around it is ${want} (${ring})`).toBeLessThanOrEqual(14);
+    await appearance(page, 'light');
+  }
+  await page.mouse.move(5, 5);
   expect(seen.errors).toEqual([]);
 });

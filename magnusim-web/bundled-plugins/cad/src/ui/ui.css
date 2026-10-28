@@ -251,6 +251,9 @@ html.cad-tb-drag-refused * {
   color: var(--mg-tooltip-text);
   font: 400 12px/1.45 var(--mg-font);
   box-shadow: var(--mg-shadow-tooltip);
+  /* The host tooltip's edge (style.css .mat-k-tip): none in light, a line in dark, where its shadow
+     is lost on the dark view and toolbar. */
+  outline: 1px solid var(--mg-tooltip-edge, transparent);
   white-space: nowrap;
 }
 /* SCALE MODELS' two-word heading stays on one line. */
@@ -1375,6 +1378,8 @@ input.mgk-input.cad-param-comment {
   color: var(--mg-tooltip-text);
   font: 400 12px/1.45 var(--mg-font);
   box-shadow: var(--mg-shadow-tooltip);
+  /* The host tooltip's edge, as .mat-k-tip has it: transparent in light, a line in dark. */
+  outline: 1px solid var(--mg-tooltip-edge, transparent);
   pointer-events: none;
 }
 
