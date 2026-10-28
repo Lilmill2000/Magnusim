@@ -221,8 +221,10 @@ describe('tokens.css', () => {
   });
 
   // tunnel2d's view colours, read as colours by its WebGPU palette and its 2D overlays: several are
-  // built on the host's tokens, so each is taken through the host's light and dark values.
-  it('every tunnel2d colour token is plain hex or rgb on the light and dark tokens', () => {
+  // built on the host's tokens, so each is taken through the host's light and dark values. An
+  // overlay mark drawn only in dark (the wall ring, the mark halo) is transparent in light: the
+  // overlay skips it there, and the plugin's own tests keep every GPU colour plain hex.
+  it('every tunnel2d colour token is plain hex, rgb or (an overlay mark not drawn) transparent on the light and dark tokens', () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'bundled-plugins', 'tunnel2d', 'src', 'styles', 'tokens.css'), 'utf8');
     const t2d = cssRules(css).flatMap((r) => Object.entries(r.props)).filter(([k]) => k.startsWith('--t2d-'));
     const lightMap = new Map([...Object.entries(tokens), ...t2d]);
@@ -232,7 +234,7 @@ describe('tokens.css', () => {
     for (const [k, v] of colours) {
       for (const [theme, map] of [['light', lightMap], ['dark', darkMap]] as const) {
         const value = resolveVars(v, map);
-        expect(isColour(value), `${k} (${theme}): ${v} -> ${value}`).toBe(true);
+        expect(isColour(value) || value === 'transparent', `${k} (${theme}): ${v} -> ${value}`).toBe(true);
       }
     }
   });
