@@ -68,7 +68,7 @@
 //    dark, where their shadow is lost; in light the edge is transparent and paints no pixel.
 //  - dark-triad: each orientation arrow's brightest pixels read 3:1 and more on the dark view at
 //    the home view and at every standard view (lit by the headlight alone, as the core's, an arrow
-//    pointing at the eye read 1.8:1); back in light the triad is the pixels it was.
+//    pointing at the eye read 1.8:1); back in light the triad's corner is the pixels it was.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
@@ -1816,6 +1816,7 @@ test("cad:dark-triad each orientation arrow reads 3:1 and more on the dark view 
   // Light: the core's triad, lit by the headlight alone (as vtkAxesActor), the core's axis colours.
   await look('home');
   const lightHome = await arrows(LIGHT_BG);
+  const lightCorner = await page.screenshot({ clip: await triadClip() });
   await appearance(page, 'dark');
   const results: Record<string, unknown> = {};
   const low: string[] = [];
@@ -1832,9 +1833,10 @@ test("cad:dark-triad each orientation arrow reads 3:1 and more on the dark view 
   // At the home view every arrow is drawn with enough pixels to see (the Y arrow points away from the eye there).
   const home = results.home as Record<'x' | 'y' | 'z', { n: number; contrast: number }>;
   for (const k of ['x', 'y', 'z'] as const) expect(home[k].n, `home ${k}'s pixels`).toBeGreaterThanOrEqual(8);
-  // Back in light: the core's triad, pixel for pixel as before the dark view.
+  // Back in light: the core's triad, its corner pixel for pixel as before the dark view (its shading too).
   await appearance(page, 'light');
   await look('home');
   expect(await arrows(LIGHT_BG)).toEqual(lightHome);
+  expect(differs(lightCorner, await page.screenshot({ clip: await triadClip() })), "the triad's corner back in light").toBeLessThan(0.002);
   expect(seen.errors).toEqual([]);
 });
