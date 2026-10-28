@@ -8,6 +8,7 @@
 import type { Group } from 'three';
 import type { BodyId, FeatureId, OriginPlaneRef, PlaneFrame, SavedCamera, Vec2, Vec3 } from './doc';
 import type { TessPayload } from './kernel';
+import type { MarkPalette } from '../viewport/palette';
 import type { PickResult, SelectionItem, SelectKind } from './selection';
 import type { ReadonlyStateStore } from './state';
 
@@ -332,6 +333,12 @@ export interface ViewportHandle {
    */
   onCameraChange(fn: (camera: SavedCamera) => void): () => void;
   stats(): ViewportStats;
+  /**
+   * The colours the view draws its marks in now (src/viewport/palette.ts: LIGHT, or a dark
+   * palette with the host's dark theme). Layers build their materials from it; without it (a test
+   * fake) they draw LIGHT (paletteOf).
+   */
+  palette?(): MarkPalette;
   /**
    * Draw `frames` frames synchronously, orbiting a little each frame, and wait
    * for the GPU after each one. Returns ms per frame. For performance tests.

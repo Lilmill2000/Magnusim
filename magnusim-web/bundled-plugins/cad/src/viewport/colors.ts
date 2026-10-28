@@ -2,6 +2,9 @@
 // from (magnusim-web/src/workbench/runtime.js unless noted; line numbers at
 // snapshot HEAD cff8aaa). Colours are sRGB; the shaders use them as vtk.js does
 // (no linearisation), so a face lights to the same pixel as in the core.
+// These are the light look. What turns light in a dark view (the background, edges, the triad)
+// is read through palette.ts, whose LIGHT holds these values; the rest (bodies, picks, hover,
+// the plane tints) stays the same in both themes.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 

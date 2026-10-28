@@ -16,6 +16,7 @@ import type { AppServices } from '../../types/app';
 import type { FeatureId, Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
 import { HOVER_COLOR, PICK_COLOR, PLANE_BORDER, PLANE_FILL, PLANE_HOVER_FILL, PLANE_PICK_FILL } from '../../viewport/colors';
+import { paletteOf } from '../../viewport/palette';
 import { constructView, drawnConstructs, drawnOriginAxes, isOriginAxis, ORIGIN_AXIS_REFS, type DrawnConstruct } from './scene';
 
 export const LAYER_CONSTRUCT = 'construct';
@@ -23,8 +24,6 @@ export const LAYER_CONSTRUCT = 'construct';
 const AXIS_PX = 1.6;
 const AXIS_ACTIVE_PX = 2.6;
 const DOT_PX = 4;
-/** Axis and point colour at rest: the planes' border blue, darker. */
-const LINE_COLOR = 0x2f5fb8;
 
 export type ConstructState = 'none' | 'hover' | 'pick';
 
@@ -81,6 +80,8 @@ export class ConstructOverlay {
       },
     });
     this.layer.html.dataset.constructLayer = '1';
+    // Axis and point colour at rest: the planes' border blue, darker (the palette's constructLine).
+    const LINE_COLOR = paletteOf(handle).constructLine;
     const line = (color: number, width: number) => {
       const m = new LineMaterial({ color, linewidth: width, worldUnits: false, dashed: true, transparent: true, opacity: 0.95 });
       m.polygonOffset = true;

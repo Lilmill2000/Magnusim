@@ -574,6 +574,8 @@ export const LINK: { readonly [K in keyof LinkController]: Reach } = {
 };
 
 const POINTER = auto("the person's pointer in the view (orbit, pick, hover): the Assistant names things by selector");
+/** The view's colours follow the host's appearance (its Settings): nobody sets them in the Part, and every picture is light. */
+const APPEARANCE = auto("the host's appearance (the app's Settings): the view follows it, and every picture is light whatever it is");
 
 export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   state: reach('workspace', 'action', 'display'),
@@ -608,6 +610,7 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   snapshot: reach('view', 'views'),
   onCameraChange: INTERNAL,
   stats: INTERNAL,
+  palette: APPEARANCE,
   measure: INTERNAL,
   addLayer: INTERNAL,
   reframe: W('fit'),

@@ -43,6 +43,7 @@ import { CLICK_PX } from '../viewport/colors';
 import { drawsConstruction } from './edit';
 import { cursorFor, cursorTone, sketchCursor } from './cursors';
 import { VIEWPORT_BG } from '../viewport/colors';
+import { paletteOf } from '../viewport/palette';
 import { relationShown, relationsView } from './relations-view';
 // Daniel's first desktop test: the construction badge's ×, and the relations palette.
 import { createConstructionBadge } from './construction-badge';
@@ -63,45 +64,6 @@ export function isClickDrag(heldMs: number, movedPx: number): boolean {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-
-interface Palette {
-  under: string;
-  fully: string;
-  over: string;
-  construction: string;
-  pick: string;
-  hover: string;
-  preview: string;
-  dim: string;
-  driven: string;
-  grid: string;
-  gridMajor: string;
-  doomed: string;
-  /** P4b (SELECT): linked geometry (purple) and a lost reference (amber). */
-  linked: string;
-  lost: string;
-}
-
-function readPalette(): Palette {
-  const s = getComputedStyle(document.documentElement);
-  const v = (name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
-  return {
-    under: v('--cad-sketch-under', '#1570ef'),
-    fully: v('--cad-sketch-full', '#101828'),
-    over: v('--cad-sketch-over', '#b42318'),
-    construction: v('--mg-text-muted', '#667085'),
-    pick: v('--cad-pick', '#2ec47e'),
-    hover: v('--cad-hover-pick', '#b2ccff'),
-    preview: v('--mg-primary', '#1570ef'),
-    dim: v('--mg-text', '#101828'),
-    driven: v('--mg-text-muted', '#667085'),
-    grid: v('--mg-divider', '#e8ebf0'),
-    gridMajor: v('--mg-card-border', '#cfd3db'),
-    doomed: v('--mg-danger', '#b42318'),
-    linked: v('--cad-sketch-projected', '#7a3fd1'),
-    lost: v('--cad-sketch-lost', '#b54708'),
-  };
-}
 
 /** Fat lines in the sketch's plane (u, v, 0) with a colour per segment. */
 class Lines {
@@ -294,7 +256,8 @@ function unionUv(a: UvBox | null, b: UvBox | null): UvBox | null {
 
 export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => void {
   const { services } = mode;
-  const pal = readPalette();
+  // The sketch's colours by role (src/viewport/palette.ts: the view's palette).
+  const pal = paletteOf(handle).sketch;
   // The sketch's curves, points and dimensions count when the view frames the part (entering or
   // reopening the sketch, Fit, Look at, the standard views); its grid and origin do not.
   const geo: OverlayLayer = handle.addLayer('sketch-geometry', { order: 30, frame: () => frameBox() });

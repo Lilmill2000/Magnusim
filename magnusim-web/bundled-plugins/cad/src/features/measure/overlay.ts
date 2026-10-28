@@ -6,9 +6,7 @@
 import { BufferGeometry, Float32BufferAttribute, Line, LineBasicMaterial, Points, PointsMaterial } from 'three';
 import type { Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
-
-/** The measure colour (--cad-p2-measure in p2.css). */
-const MEASURE_COLOR = 0x1a4fbf;
+import { paletteOf } from '../../viewport/palette';
 
 export interface MeasureMarks {
   show(p1: Vec3, p2: Vec3, label: string): void;
@@ -18,6 +16,8 @@ export interface MeasureMarks {
 
 export function createMeasureMarks(handle: ViewportHandle): MeasureMarks {
   const layer: OverlayLayer = handle.addLayer('p2-measure', { order: 60 });
+  // The measure colour (the palette's measure: --cad-p2-measure, which the label takes in p2.css).
+  const MEASURE_COLOR = paletteOf(handle).measure;
   const lineMat = new LineBasicMaterial({ color: MEASURE_COLOR, depthTest: false, transparent: true });
   const pointMat = new PointsMaterial({ color: MEASURE_COLOR, size: 7, sizeAttenuation: false, depthTest: false, transparent: true });
   let line: Line | null = null;

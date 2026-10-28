@@ -14,6 +14,7 @@ import type { ScaleModelPlace, Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle, ViewportPointer, ViewportTool } from '../../types/viewport';
 import { uiFor } from '../../ui/controller';
 import { BODY_LIGHT } from '../../viewport/colors';
+import { LIGHT } from '../../viewport/palette';
 import { loadBanana, type BananaMesh } from './banana-mesh';
 import type { BBox } from '../../types/kernel-protocol';
 import { halfFootprint, leashOf, nearestSlot, onLeash3, placeBeside, placedBox, rayOnPlane, slotsAround, unionBox, type Slot } from './placement';
@@ -94,7 +95,7 @@ export function installBananaView(services: AppServices): () => void {
   });
 
   // The snap guide: faint, over everything (a hint, not geometry).
-  const guideMaterial = new LineBasicMaterial({ color: 0x1570ef, transparent: true, opacity: 0.55, depthTest: false });
+  const guideMaterial = new LineBasicMaterial({ color: LIGHT.ink, transparent: true, opacity: 0.55, depthTest: false });
   const placeOf = (): ScaleModelPlace | null => services.doc.state.get().view.scaleModels?.banana ?? null;
 
   const geometryOf = (data: BananaMesh) => {
