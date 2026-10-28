@@ -4,8 +4,9 @@
 // inks at once, with the cursor's dark tone (the light one over a light face); E2: every set of
 // lines (solid, dashed, the preview, guides, dimension lines, the grid) and the points also carry
 // their face colours, LIGHT's ink for each segment's role, which the view draws where a light face
-// shows under them (src/viewport/onface.ts); the hover halo has none (its one colour reads on
-// both); a driven dimension's lines stay apart from a driving one's; LIGHT (a picture, or the
+// shows under them (src/viewport/onface.ts); the hover halo keeps its one colour, at .85 over a
+// face and fainter over the dark background, so a hovered line keeps its colour there; a driven
+// dimension's lines stay apart from a driving one's; LIGHT (a picture, or the
 // theme back to light) gives the light colours and no face colours, the grid's too when a near
 // edge-on view keeps the grid it has.
 // The real sketch mode (the solver in this process, tests/sketch/harness.ts, which loads it in
@@ -18,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { attachOverlay } from '../../src/sketch/overlay';
 import type { PlaneFrame, Vec3 } from '../../src/types/doc';
 import type { ViewportHandle } from '../../src/types/viewport';
-import { faceColoursOf } from '../../src/viewport/onface';
+import { faceColoursOf, faceOpacityOf, isFaceTwin, syncFaceTwins } from '../../src/viewport/onface';
 import { DARK, LIGHT, type MarkPalette } from '../../src/viewport/palette';
 import { rectangle, sketchOf } from './fixtures';
 import { sketchHarness, type Harness } from './harness';
@@ -226,7 +227,7 @@ describe('sketch mode and the palette', () => {
     expect(colours(grid())).toEqual([LIGHT.sketch.grid, LIGHT.sketch.gridMajor].sort());
   });
 
-  it("E2: every line set and the points (the preview, construction and dimension lines, the grid) carry LIGHT's ink for each segment's role; the halo none; none in light", async () => {
+  it("E2: every line set and the points (the preview, construction and dimension lines, the grid) carry LIGHT's ink for each segment's role; none in light", async () => {
     // A rectangle (solid, under defined), a construction line (dashed), a driving and a driven dimension.
     const g = rectangle(0, 0, 20, 10);
     g.points.q1 = [0, 20];
@@ -269,10 +270,42 @@ describe('sketch mode and the palette', () => {
     }
     // What the dark lines show over a face: LIGHT's inks, the driven dimension's grey and the construction grey among them.
     expect(new Set(shown.flatMap((o) => coloursOf(faceColoursOf(o.geometry)!)))).toEqual(new Set(shown.flatMap((o) => coloursOf(o.geometry)).map((c) => [...faceOf(c)][0])));
-    // The hover halo has none.
-    for (const o of marks(v.groups).filter((x) => x.renderOrder === 990)) expect(faceColoursOf(o.geometry)).toBeUndefined();
     v.setPalette(LIGHT);
     expect(marks(v.groups).filter((o) => faceColoursOf(o.geometry))).toEqual([]);
+  });
+
+  it('draws the hover halo fainter over the dark background (the line keeps its colour in it) and as in light over a face; light as before', async () => {
+    h = await sketchHarness(sketchOf(rectangle(0, 0, 20, 10)));
+    await h.idle();
+    await withDom();
+    const v = fakeHandle();
+    detach = attachOverlay(h.mode, v.handle);
+    await h.idle();
+    h.mode.setHover({ what: 'entity', id: 'e1' });
+    const halo = () => marks(v.groups).find((o) => o.renderOrder === 990) as Line;
+    const twin = () => halo().children.find(isFaceTwin) as Line | undefined;
+    // Light: .85, in the hover blue, drawn once.
+    expect(halo().visible).toBe(true);
+    expect(colours(halo())).toEqual([LIGHT.sketch.hover]);
+    expect(halo().material.opacity).toBe(0.85);
+    expect(faceColoursOf(halo().geometry)).toBeUndefined();
+    expect(faceOpacityOf(halo().material)).toBeUndefined();
+    v.setPalette(DARK);
+    // Dark: the same blue; over the background .45, over a light face (its twin) .85.
+    expect(colours(halo())).toEqual([DARK.sketch.hover]);
+    expect(DARK.sketch.hover).toBe(LIGHT.sketch.hover);
+    expect(coloursOf(faceColoursOf(halo().geometry)!)).toEqual([LIGHT.sketch.hover]);
+    expect(halo().material.opacity).toBe(0.45);
+    expect(faceOpacityOf(halo().material)).toBe(0.85);
+    syncFaceTwins(v.groups.get('sketch-geometry')!, true);
+    expect(twin()!.visible).toBe(true);
+    expect([twin()!.material.opacity, halo().material.opacity]).toEqual([0.85, 0.45]);
+    // A picture (LIGHT) and the theme back: .85, drawn once.
+    v.setPalette(LIGHT);
+    syncFaceTwins(v.groups.get('sketch-geometry')!, false);
+    expect(halo().material.opacity).toBe(0.85);
+    expect(faceOpacityOf(halo().material)).toBeUndefined();
+    expect(twin()?.visible ?? false).toBe(false);
   });
 
   it("keeps a driven dimension's lines apart from a driving one's in dark, and over a face as in light", async () => {

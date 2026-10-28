@@ -9,7 +9,8 @@
 //     palette's (src/viewport/palette.ts), drawn again when it changes (the
 //     host's theme, and LIGHT for a picture); in a dark view each line set and
 //     the points carry their light-view colours too, for where a light face
-//     shows under them (E2, src/viewport/onface.ts: the view draws them there);
+//     shows under them (E2, src/viewport/onface.ts: the view draws them there),
+//     and the hover halo is fainter over the dark background;
 //   layer "sketch-annotations" (order 40, html): constraint glyphs (white
 //     badges, selectable, deletable), dimension labels (driven grey in
 //     parentheses; double-click edits, drag moves, right-click for Make it
@@ -46,7 +47,7 @@ import { linkMenuItems } from './project/menu';
 import { CLICK_PX } from '../viewport/colors';
 import { drawsConstruction } from './edit';
 import { cursorFor, cursorTone, sketchCursor } from './cursors';
-import { setFaceColours } from '../viewport/onface';
+import { setFaceColours, setFaceOpacity } from '../viewport/onface';
 import { faceSketchInk, paletteOf, type MarkPalette } from '../viewport/palette';
 import { relationShown, relationsView } from './relations-view';
 // Daniel's first desktop test: the construction badge's ×, and the relations palette.
@@ -69,6 +70,16 @@ export function isClickDrag(heldMs: number, movedPx: number): boolean {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/** The hover halo's opacity: in light, and over a light face in a dark view. */
+const HALO_OPACITY = 0.85;
+/**
+ * The hover halo's opacity over the dark background: there the lines' light inks are about the
+ * halo's own lightness (an under-defined line read 1.1:1 in the .85 halo, fully defined 1.75:1),
+ * so the halo is a fainter tint of the hover blue, 3.2:1 on the background, and the line's state
+ * colour reads in it (2:1 and more).
+ */
+const HALO_GROUND_OPACITY = 0.45;
+
 /**
  * E2 (src/viewport/onface.ts): a sketch colour over a light face (its role's light-view ink), or
  * null while nothing follows what is under it (light). Lines and points that have one build their
@@ -80,7 +91,7 @@ type FaceOf = ((color: string) => string) | null;
 class Lines {
   readonly obj: LineSegments2;
   readonly mat: LineMaterial;
-  /** E2: the face colours of each set() (null: none; the hover halo has none, its one colour reads on both). */
+  /** E2: the face colours of each set() (null: none). */
   face: FaceOf = null;
   constructor(
     parent: Group,
@@ -317,7 +328,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   grid.mat.polygonOffset = true;
   grid.mat.polygonOffsetFactor = 2;
   grid.mat.polygonOffsetUnits = 8;
-  const halo = new Lines(frame, 7, { opacity: 0.85, order: 990 });
+  const halo = new Lines(frame, 7, { opacity: HALO_OPACITY, order: 990 });
   // The core's edge width: the line's middle row is drawn in its colour, not blended (fully defined lines read #101828).
   const solid = new Lines(frame, 2.4);
   const dashed = new Lines(frame, 1.6, { dashed: true });
@@ -328,11 +339,14 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   const dots = new Dots(frame, 7);
   const dimLines = new Lines(dimFrame, 1, { order: 1003 });
   // E2: every set of lines and the points take their light-view colours where a light face shows
-  // under them (the grid too); the hover halo's one colour reads on both.
-  const twoTone = [grid, solid, dashed, preview, previewDashed, guides, dimLines, dots];
+  // under them (the grid too). The hover halo keeps its one colour, at .85 over a light face and
+  // fainter over the dark background (HALO_GROUND_OPACITY), so the line in it keeps its colour.
+  const twoTone = [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines, dots];
   const applyFace = (p: MarkPalette) => {
     const f = faceOf(p);
     for (const l of twoTone) l.face = f;
+    halo.mat.opacity = f ? HALO_GROUND_OPACITY : HALO_OPACITY;
+    setFaceOpacity(halo.mat, f ? HALO_OPACITY : null);
   };
   applyFace(paletteOf(handle));
   const html = ann.html;

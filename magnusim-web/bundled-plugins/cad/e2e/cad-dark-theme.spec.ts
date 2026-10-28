@@ -18,9 +18,11 @@
 //    line's middle is whole pixels): a sketch on a block's top face whose lines cross the face's
 //    outline. In model mode a finished sketch's lines, then in sketch mode each state (fully
 //    defined, under defined, over defined, construction), the points and the line tool's rubber
-//    band: LIGHT's ink over the face, the dark ink over the background; the panel's keys show
-//    both; the draw cursor takes the light tone over the face; light is one colour again, and
-//    dark again live; a picture taken while dark is the light one, byte for byte.
+//    band: LIGHT's ink over the face, the dark ink over the background; a hovered line keeps its
+//    colour in its halo, which is fainter over the background (review: the line's blue in the .85
+//    halo there read 1.1:1); the panel's keys show both; the draw cursor takes the light tone over
+//    the face; light is one colour again, and dark again live; a picture taken while dark is the
+//    light one, byte for byte.
 //  - dark-follows-face-marks: a reference point and axis, the measure line's ends and the Extrude
 //    arrow, over a face and over the background.
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
@@ -500,7 +502,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     const p = (window as unknown as W).__CAD__.services.viewport.get().handle.palette();
     return { name: p.name as string, sketch: p.sketch as Record<string, string>, face: p.face as null | { sketch: Record<string, string>; constructLine: number; measure: number; ink: number }, constructLine: p.constructLine as number, measure: p.measure as number, ink: p.ink as number };
   });
-  const LIGHT_SK = { under: '#1570ef', fully: '#101828', over: '#b42318', construction: '#667085', preview: '#1570ef' } as const;
+  const LIGHT_SK = { under: '#1570ef', fully: '#101828', over: '#b42318', construction: '#667085', preview: '#1570ef', hover: '#b2ccff' } as const;
   const DARK_SK = { under: '#7aa7ff', fully: '#e6e9ef', over: '#f97066', construction: '#9aa4b2', preview: '#7aa7ff' } as const;
 
   /**
@@ -630,6 +632,44 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     const lineState = await f.evaluate(() => (document.querySelector('[data-cad-panel="sketch"] [data-sketch-state]') as HTMLElement).dataset.sketchState);
     expect(['over', 'under']).toContain(lineState);
     expect(await states('dark'), 'dark: LIGHT ink over the face, the dark ink over the background').toEqual([]);
+
+    // The under-defined line hovered (the pointer on it over the background): the line keeps its
+    // colour in its halo, over the face (the halo .85, as in light) and over the background (the
+    // halo fainter there, the hover blue at .45 on the dark background, the line's blue 2:1 on it).
+    {
+      const [a, b] = lineOf(ROWS.under);
+      const [hx, hy] = await modelOnPage(page, [52, ROWS.under, 20]);
+      await page.mouse.move(hx, hy, { steps: 3 });
+      await expect.poll(() => f.evaluate(() => (window as unknown as W).__CAD__.services.apis.get().sketch.view.get().hover?.id ?? null)).not.toBeNull();
+      await still(page);
+      const s = await shot2(page, clip);
+      const face = await along(page, s, a, b, ...FACE, hexRgb(LIGHT_SK.under), hexRgb(DARK_SK.under));
+      const ground = await along(page, s, a, b, ...GROUND, hexRgb(DARK_SK.under), hexRgb(LIGHT_SK.under));
+      expect(face.share, `the hovered line over the face: LIGHT's blue (${face.d})`).toBeGreaterThanOrEqual(0.75);
+      expect(ground.share, `the hovered line over the background: the dark blue (${ground.d})`).toBeGreaterThanOrEqual(0.75);
+      /** The halo's pixels 2.6 CSS px either side of the line's middle (in the 7 px halo, clear of the 2.4 px line). */
+      const haloAt = async (p: V3) => {
+        const [[x0, y0], [x1, y1]] = await onPage(page, [p, [p[0], p[1] + 1, p[2]]]);
+        const l = Math.hypot(x1 - x0, y1 - y0);
+        return [2.6, -2.6].map((d) => {
+          const x = Math.round((x0 + ((x1 - x0) / l) * d - s.clip.x) * s.k);
+          const y = Math.round((y0 + ((y1 - y0) / l) * d - s.clip.y) * s.k);
+          const i = 4 * (y * s.img.width + x);
+          return [s.img.data[i], s.img.data[i + 1], s.img.data[i + 2]] as RGB;
+        });
+      };
+      const HOVER = hexRgb(LIGHT_SK.hover);
+      const faint = HOVER.map((v, i) => Math.round(0.45 * v + 0.55 * DARK_BG[i])) as RGB;
+      for (const x of [49, 52, 55]) {
+        for (const c of await haloAt([x, ROWS.under, 20])) {
+          expect(dist(c, 0, faint), `the halo over the background at x ${x}: ${c}, the faint hover blue ${faint}`).toBeLessThanOrEqual(16);
+          expect(contrastOf(hexRgb(DARK_SK.under), c), `the dark blue on the halo at x ${x}`).toBeGreaterThanOrEqual(1.8);
+        }
+      }
+      for (const x of [16, 22, 28]) for (const c of await haloAt([x, ROWS.under, 20])) expect(dist(c, 0, HOVER), `the halo over the face at x ${x}: ${c}`).toBeLessThanOrEqual(24);
+      await page.mouse.move(5, 5);
+      await still(page);
+    }
 
     // The line tool's rubber band, from the face out over the background.
     await page.keyboard.press('l');

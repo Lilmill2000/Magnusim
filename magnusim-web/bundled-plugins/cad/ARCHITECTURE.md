@@ -986,7 +986,10 @@ with the host once for the page's life, and its chip goes in the dock.
     light inks) where a light surface shows under it, and in DARK's own light
     ink over the background or an empty or translucent plane; a line crossing a
     face's outline changes colour there (accepted). Picks and hover keep their
-    colours. How (`src/viewport/onface.ts`): one stencil bit, `FACE_BIT` 0x80,
+    colours; sketch mode's hover halo keeps its blue but is fainter over the
+    dark background (.45 for .85, `setFaceOpacity` keeps .85 over a face), as
+    the lines' light inks there are about its lightness (an under-defined line
+    read 1.1:1 in it). How (`src/viewport/onface.ts`): one stencil bit, `FACE_BIT` 0x80,
     says "a light surface shows here". An opaque body's faces write it where they
     pass the depth test (write mask `FACE_BIT`, Replace): set for a light colour,
     cleared for a dark custom one (`isLightSurface`: the light view's `#101828`

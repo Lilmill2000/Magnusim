@@ -21,7 +21,8 @@
 //     with face colours. The owner says so; the view (syncFaceTwins, before every render) makes,
 //     shows, hides and updates the twins, so a material swap (hover, pick: no face ink, so drawn
 //     once as it is), a geometry swap, a new dash, width or opacity, and the section's clipping
-//     planes follow at once.
+//     planes follow at once. A twin may have an opacity of its own (setFaceOpacity: sketch mode's
+//     hover halo, fainter over the background in a dark view).
 // In LIGHT (and for every picture, D1) nothing is restricted, no twin is drawn and no body writes
 // the stencil: the light view is the pixels it was.
 // Owner: VIEWPORT.
@@ -111,6 +112,17 @@ export function faceInkOf(m: Material): number | undefined {
   return faceInks.get(m);
 }
 
+/** A mark material's twin's opacity, where it is not the mark's own (sketch mode's hover halo). */
+const faceOpacities = new WeakMap<Material, number>();
+/** The opacity this mark's twin is drawn at over a light surface, or null for the mark's own. */
+export function setFaceOpacity(m: Material, opacity: number | null): void {
+  if (opacity === null) faceOpacities.delete(m);
+  else faceOpacities.set(m, opacity);
+}
+export function faceOpacityOf(m: Material): number | undefined {
+  return faceOpacities.get(m);
+}
+
 /** A geometry's twin in the face colours (a mark coloured per segment or point). */
 const faceGeometries = new WeakMap<BufferGeometry, BufferGeometry>();
 /** The geometries whose face colours are disposed with them (one listener each). */
@@ -186,7 +198,9 @@ const PROGRAM_KEYS = ['transparent', 'vertexColors', 'alphaToCoverage', 'dashed'
 function copyLook(dst: AnyMaterial, src: AnyMaterial, ink: number | undefined) {
   const d = dst as unknown as Record<string, unknown>;
   const s = src as unknown as Record<string, unknown>;
-  for (const k of PLAIN_KEYS) if (k in src && d[k] !== s[k]) d[k] = s[k];
+  const opacity = faceOpacities.get(src);
+  for (const k of PLAIN_KEYS) if (k in src && d[k] !== s[k] && !(k === 'opacity' && opacity !== undefined)) d[k] = s[k];
+  if (opacity !== undefined && dst.opacity !== opacity) dst.opacity = opacity;
   for (const k of PROGRAM_KEYS) {
     if (!(k in src) || d[k] === s[k]) continue;
     d[k] = s[k];
