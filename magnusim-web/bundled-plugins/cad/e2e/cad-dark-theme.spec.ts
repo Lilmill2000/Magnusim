@@ -44,6 +44,9 @@
 //  - dark-sketch-picture: in sketch mode (review round 1: only model mode was pictured dark), the
 //    view's own picture (the Assistant's and the Picture tool's path) taken while dark is the one
 //    taken in light, and the view shows no light frame meanwhile.
+//  - dark-picture-save: the Picture panel's Save PNG (a link: a download) looks exactly like the
+//    kit's secondary button beside it, at rest, under the pointer and focused, computed style and
+//    pixels, in light and dark (it was the browser's link blue, underlined).
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
@@ -1173,5 +1176,96 @@ test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the l
   expect(differs(before, await canvasShot(page)), 'the view after the picture').toBeLessThan(0.002);
   expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
   await appearance(page, 'light');
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:dark-picture-save the Picture panel's Save PNG link looks exactly like the kit's secondary button, at rest, under the pointer and focused, in light and dark", async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  await addSolid(page, { size: [20, 20, 20] });
+  await runCommand(frame, 'file.picture');
+  const pic = frame.locator('[data-cad-panel="tool"]');
+  await pic.locator('[data-picture-take]').click();
+  const save = pic.locator('[data-picture-save]');
+  await expect(save).toBeVisible({ timeout: 60_000 });
+  await expect(save).toHaveAttribute('download', 'Part picture.png');
+  // The kit's own secondary button beside it, with the same words: what the link must look like.
+  await save.evaluate((a) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'mgk-btn mgk-btn--secondary';
+    b.dataset.kitTwin = '1';
+    b.textContent = a.textContent;
+    a.after(b);
+  });
+  const kit = pic.locator('[data-kit-twin]');
+  const PROPS = ['color', 'background-color', 'border-top-color', 'border-top-width', 'border-top-style', 'border-left-width', 'border-radius', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'letter-spacing', 'text-align', 'text-decoration-line', 'text-transform', 'display', 'vertical-align', 'cursor', 'box-sizing', 'outline-style', 'outline-width', 'outline-color', 'outline-offset', 'box-shadow', 'opacity'] as const;
+  const look = (l: Locator) =>
+    l.evaluate(
+      (el, props) => {
+        const s = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return { ...Object.fromEntries(props.map((p) => [p, s.getPropertyValue(p)])), height: Math.round(r.height * 10) / 10, width: Math.round(r.width * 10) / 10 };
+      },
+      [...PROPS],
+    );
+  /** One of them in a state: at rest, under the pointer, or with keyboard focus. */
+  const put = async (l: Locator, name: string, state: 'rest' | 'hover' | 'focus') => {
+    await page.mouse.move(5, 5);
+    await l.evaluate((el) => (el as HTMLElement).blur());
+    if (state === 'hover') await l.hover();
+    if (state === 'focus') {
+      await l.evaluate((el) => (el as HTMLElement).focus({ focusVisible: true } as FocusOptions));
+      expect(await l.evaluate((el) => el.matches(':focus-visible')), `${name} has keyboard focus`).toBe(true);
+    }
+  };
+  /**
+   * Both, as the person sees them: their computed look, and their pixels: the link, then the kit's
+   * button in the link's place (the link taken out of the row meanwhile), the same clip with a
+   * focus ring's room.
+   */
+  const both = async (state: 'rest' | 'hover' | 'focus') => {
+    const out: { link: Record<string, unknown>; kit: Record<string, unknown>; differ: number } = { link: {}, kit: {}, differ: 1 };
+    for (const [name, l] of [
+      ['link', save],
+      ['kit', kit],
+    ] as const) {
+      await put(l, name, state);
+      out[name] = await look(l);
+    }
+    const box = (await save.boundingBox())!;
+    const clip = { x: box.x - 4, y: box.y - 4, width: box.width + 8, height: box.height + 8 };
+    await put(save, 'link', state);
+    const a = await page.screenshot({ clip });
+    await save.evaluate((el) => {
+      el.before(document.querySelector('[data-kit-twin]')!);
+      (el as HTMLElement).style.display = 'none';
+    });
+    expect((await kit.boundingBox())!, "the kit button in the link's place").toEqual(box);
+    await put(kit, 'kit', state);
+    const b = await page.screenshot({ clip });
+    await save.evaluate((el) => {
+      (el as HTMLElement).style.display = '';
+      el.after(document.querySelector('[data-kit-twin]')!);
+    });
+    await page.mouse.move(5, 5);
+    out.differ = differs(a, b);
+    return out;
+  };
+  const check = async (theme: string) => {
+    for (const state of ['rest', 'hover', 'focus'] as const) {
+      const r = await both(state);
+      const diff = PROPS.filter((p) => r.link[p] !== r.kit[p]).map((p) => `${p}: ${r.link[p]} vs ${r.kit[p]}`);
+      expect(diff, `${theme} ${state}: the link's look against the kit button's`).toEqual([]);
+      expect([r.link.height, r.link.width], `${theme} ${state}: its size`).toEqual([r.kit.height, r.kit.width]);
+      expect(r.differ, `${theme} ${state}: the same pixels`).toBeLessThan(0.01);
+      // No link blue, no underline.
+      expect(r.link['text-decoration-line']).toBe('none');
+    }
+  };
+  await check('light');
+  await appearance(page, 'dark');
+  await check('dark');
+  await appearance(page, 'light');
+  await check('light again');
   expect(seen.errors).toEqual([]);
 });

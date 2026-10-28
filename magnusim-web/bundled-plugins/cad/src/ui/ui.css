@@ -1110,6 +1110,38 @@ button.mgk-btn.cad-btn-danger:hover {
   color: var(--mg-danger);
 }
 
+/* A link that looks as the kit's button (the Picture panel's Save PNG, a download): the kit styles
+   only button.mgk-btn (magnusim-web/src/plugin-ui/styles/button.css), so an <a> took the browser's
+   link blue and underline. Its base rule (a button in the browser's button font, which the kit
+   reverts to) and its secondary variant, for an <a>; visited, under the pointer, pressed and
+   focused as the button is. */
+a.mgk-btn {
+  display: inline-block;
+  margin: 0;
+  font: -webkit-small-control;
+  font-size: var(--mg-text-sm);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+/* The browser's focus ring, as the kit's button has it (the browser sets a link's 1 px out). */
+a.mgk-btn:focus-visible {
+  outline: revert;
+  outline-offset: 0;
+}
+a.mgk-btn--secondary,
+a.mgk-btn--secondary:hover,
+a.mgk-btn--secondary:active {
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-sm);
+  padding: 4px 8px;
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+}
+a.mgk-btn--secondary:visited {
+  color: var(--mg-text-strong);
+}
+
 /* A button that cannot act stays focusable (aria-disabled) so its reason can be
    read; it looks as the kit's disabled buttons do. */
 button.mgk-btn[aria-disabled="true"] {
