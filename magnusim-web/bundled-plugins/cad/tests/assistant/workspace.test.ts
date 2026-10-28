@@ -527,7 +527,8 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
     expect(prefs.writes).toEqual([]);
     // The app's guarded dialog: Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
-    expect(t.ws.log.confirms).toEqual([{ title: 'The Assistant asks to change a shortcut', message: 'Set the Rectangle shortcut to Shift+T (it was R)?', confirmLabel: 'Change shortcut', guard: true, safe: true }]);
+    // The wording the host's Settings and core__set_keybind ask with too.
+    expect(t.ws.log.confirms).toEqual([{ title: 'Change a keybind?', message: 'Magnusim CAD · Rectangle: R → Shift+T', confirmLabel: 'Change', cancelLabel: 'Keep it', guard: true, safe: true }]);
     t.ws.answers.confirm = true;
     const yes = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true }));
     expect(yes.text).toBe('Rectangle: Shift+T (was R)');
@@ -539,11 +540,11 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(prefs.values.keybinds).toEqual({ 'sketch.rectangle': [] });
     expect((await t.ok('workspace', W('keybind_reset', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle: R (was none)');
     expect(prefs.values.keybinds).toBeUndefined();
-    expect(t.ws.log.confirms.map((c) => c.message)).toEqual([
-      'Set the Rectangle shortcut to Shift+T (it was R)?',
-      'Set the Rectangle shortcut to Shift+T (it was R)?',
-      'Clear the Rectangle shortcut (it was Shift+T)?',
-      'Reset the Rectangle shortcut to R (it is none)?',
+    expect(t.ws.log.confirms.map((c) => [c.title, c.message, c.confirmLabel])).toEqual([
+      ['Change a keybind?', 'Magnusim CAD · Rectangle: R → Shift+T', 'Change'],
+      ['Change a keybind?', 'Magnusim CAD · Rectangle: R → Shift+T', 'Change'],
+      ['Clear a keybind?', 'Magnusim CAD · Rectangle: Shift+T → no key', 'Clear'],
+      ['Reset a keybind?', 'Magnusim CAD · Rectangle: no key → R', 'Reset'],
     ]);
     // A reset to what it has already asks nothing.
     expect((await t.ok('workspace', W('keybind_reset', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle already has R: nothing changed');
@@ -556,7 +557,7 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(!taken.ok && taken.error.detail).toMatchObject({ reason: 'key_taken', with: ['view.sketch-relations'], labels: ['Show relations (sketch)'] });
     expect(t.ws.log.confirms).toEqual([]);
     const r = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'shift+r', items: ['replace'], person_asked: true }));
-    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Rectangle shortcut to Shift+R (it was R)? Show relations (sketch) loses Shift+R.');
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Magnusim CAD · Rectangle: R → Shift+R; Magnusim CAD · Show relations (sketch): Shift+R → no key');
     expect(r.text).toBe('Rectangle: Shift+R (was R); Show relations (sketch) no longer has it');
     expect(k.current('view.sketch-relations')).toEqual([]);
     for (const [value, words] of [
@@ -587,7 +588,7 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     }
     // A name people write is read as the key it is: PgDn is PageDown.
     expect((await t.ok('workspace', W('keybind_set', { target: 'view.fit', value: 'Shift+PgDn', person_asked: true }))).text).toBe('Fit: Shift+PageDown (was F)');
-    expect(t.ws.log.confirms.map((c) => c.message)).toEqual(['Set the Fit shortcut to Shift+PageDown (it was F)?']);
+    expect(t.ws.log.confirms.map((c) => c.message)).toEqual(['Magnusim CAD · Fit: F → Shift+PageDown']);
     expect(k.current('view.fit')).toEqual(['Shift+PageDown']);
     expect(prefs.values.keybinds).toEqual({ 'view.fit': ['Shift+PageDown'] });
   });
@@ -595,7 +596,9 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
   it('a key two commands have: the question names both and where they work (review)', async () => {
     const { t } = await keybindPart();
     await t.ok('workspace', W('keybind_set', { target: 'view.front', value: 'Delete', items: ['replace'], person_asked: true }));
-    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Front view shortcut to Delete (it was 1)? Delete selected features (model) and Delete (sketch) lose Delete.');
+    expect(t.ws.log.confirms.at(-1)!.message).toBe(
+      'Magnusim CAD · Front view: 1 → Delete; Magnusim CAD · Delete selected features (model): Delete → no key; Magnusim CAD · Delete (sketch): Delete → no key',
+    );
   });
 
   it('the keybinds changed while the person was asked: nothing changes, and the Assistant is told to ask again (review: Replace took a key the question did not name)', async () => {
@@ -652,6 +655,6 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(r.text).toBe('Finish sketch: none of its own; Enter runs Place or finish');
     expect(r.data.keybind).toMatchObject({ keys: [], shown: 'none of its own; Enter runs Place or finish', via: { id: 'sketch.enter', label: 'Place or finish', shown: 'Enter' } });
     await t.ok('workspace', W('keybind_set', { target: 'sketch.finish', value: 'Ctrl+Enter', person_asked: true }));
-    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Finish sketch shortcut to Ctrl+Enter (it was none of its own; Enter runs Place or finish)?');
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Magnusim CAD · Finish sketch: no key → Ctrl+Enter');
   });
 });

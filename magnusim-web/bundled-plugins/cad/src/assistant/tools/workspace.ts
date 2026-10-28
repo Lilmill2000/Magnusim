@@ -782,6 +782,19 @@ function keybindEntry(k: Keybinds, target: string): KeymapEntry {
 /** A command's keys as the person reads them ("Shift+R", "Ctrl+Y or Ctrl+Shift+Z", "none"). */
 const keysText = (k: Keybinds, keys: readonly string[]) => (keys.length ? keys.map((c) => k.display(c)).join(' or ') : 'none');
 
+/** The plugin's name as the host's catalog shows it (manifest.toml name), for the shared keybind question. */
+const PLUGIN_NAME = 'Magnusim CAD';
+
+/** Keys in the shared keybind question: as people read them, joined with ", "; "no key" when none. */
+const keysAsked = (k: Keybinds, keys: readonly string[]) => (keys.length ? keys.map((c) => k.display(c)).join(', ') : 'no key');
+
+/** The question's titles and Yes words, the same as the host's Settings and core__set_keybind ask with. */
+const ASK = {
+  keybind_set: { title: 'Change a keybind?', yes: 'Change' },
+  keybind_reset: { title: 'Reset a keybind?', yes: 'Reset' },
+  keybind_clear: { title: 'Clear a keybind?', yes: 'Clear' },
+} as const;
+
 /** A command's keys as the person sees them: its own, or the key its tooltip shows (Finish sketch: "none of its own; Enter runs Place or finish"). */
 function keysSeen(k: Keybinds, id: string, keys: readonly string[]): string {
   if (keys.length) return keysText(k, keys);
@@ -869,16 +882,18 @@ async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
   if (plan.takers.length && !replace) {
     throw new ToolError('key_taken', `${keysText(k, keys)} is the key of ${listWords(takerNames)}; nothing changed.`, { detail: { with: plan.takers, labels: takerNames } });
   }
-  const loses = plan.takers.length ? ` ${listWords(takerNames)} ${plan.takers.length === 1 ? 'loses' : 'lose'} ${keysText(k, keys)}.` : '';
   const was = keysSeen(k, e.id, plan.was);
-  const question =
-    i.action === 'keybind_set'
-      ? `Set the ${name} shortcut to ${keysText(k, keys)} (it was ${was})?${loses}`
-      : i.action === 'keybind_reset'
-        ? `Reset the ${name} shortcut to ${keysText(k, keys)} (it is ${was})?${loses}`
-        : `Clear the ${name} shortcut (it was ${was})?`;
+  // The wording the host's Settings and core__set_keybind use too: "Magnusim CAD · Rectangle: R → Shift+T",
+  // and each command a Replace takes the key from after "; ", in the same form, named with where it works.
+  const line = (label: string, from: readonly string[], to: readonly string[]) => `${PLUGIN_NAME} · ${label}: ${keysAsked(k, from)} → ${keysAsked(k, to)}`;
+  const losers = plan.takers.map((id) => {
+    const before = k.current(id);
+    return line(whereName(id), before, before.filter((c) => !keys.includes(c)));
+  });
+  const question = [line(name, plan.was, keys), ...losers].join('; ');
+  const ask = ASK[i.action as keyof typeof ASK];
   // The app's own dialog: its Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
-  const ok = await services.bridge.confirm({ title: 'The Assistant asks to change a shortcut', message: question, confirmLabel: 'Change shortcut', guard: true, safe: true }).catch(() => false);
+  const ok = await services.bridge.confirm({ title: ask.title, message: question, confirmLabel: ask.yes, cancelLabel: 'Keep it', guard: true, safe: true }).catch(() => false);
   if (!ok) throw new ToolError('step_declined', 'The person did not confirm the keybind change; nothing changed.', { detail: { why: 'declined', question } });
   ctx.checkAbort();
   // The person said yes to that question: the change must still be the one it named.
