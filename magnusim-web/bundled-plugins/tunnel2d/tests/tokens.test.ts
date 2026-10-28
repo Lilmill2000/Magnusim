@@ -19,6 +19,18 @@ function rules(css: string) {
 const tunnel = rules(read('..', 'src', 'styles', 'tokens.css'));
 const host = rules(read('..', '..', '..', 'src', 'theme', 'tokens.css'));
 const coloursTs = readFileSync(join(__dirname, '..', 'src', 'app', 'colours.ts'), 'utf8');
+/** A function's source in a module's text: from its name to the brace that closes its body. */
+function functionSource(src: string, name: string): string {
+  const at = src.indexOf(`function ${name}(`);
+  let i = src.indexOf('{', at);
+  for (let depth = 0; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) break;
+  }
+  return src.slice(at, i + 1);
+}
+// What the GPU draws with: the engine's palette and the rest of its colours.
+const gpuTs = functionSource(coloursTs, 'viewPalette') + functionSource(coloursTs, 'applyViewColours');
 const hostLight = host.find((r) => r.selectors.includes('[data-theme="light"]'))!;
 const tunnelBlock = tunnel.find((r) => '--t2d-bg' in r.props)!;
 
@@ -52,17 +64,17 @@ describe('the tunnel tokens', () => {
   });
 
   it('that colours.ts reads for the GPU are this list, each a plain hex colour', () => {
-    const literal = [...coloursTs.matchAll(/--t2d-[a-z0-9-]+(?=['`])/g)].map((m) => m[0]);
+    const literal = [...gpuTs.matchAll(/--t2d-[a-z0-9-]+(?=['`])/g)].map((m) => m[0]);
     expect([...new Set(literal)].sort()).toEqual([...GPU_TOKENS].sort());
-    expect([...coloursTs.matchAll(/look\('([a-z]+)'/g)].map((m) => m[1])).toEqual(RHEO_PRESETS);
-    expect(coloursTs).toContain('`--t2d-rheo-${name}-base`');
-    expect(coloursTs).toContain('`--t2d-rheo-${name}-light1`');
-    expect(coloursTs).toContain('`--t2d-rheo-${name}-light2`');
+    expect([...gpuTs.matchAll(/look\('([a-z]+)'/g)].map((m) => m[1])).toEqual(RHEO_PRESETS);
+    expect(gpuTs).toContain('`--t2d-rheo-${name}-base`');
+    expect(gpuTs).toContain('`--t2d-rheo-${name}-light1`');
+    expect(gpuTs).toContain('`--t2d-rheo-${name}-light2`');
     for (const name of [...GPU_TOKENS, ...RHEO_TOKENS]) expect(tunnelBlock.props[name], name).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
   it("the host's series colours the rakes take are plain hex in every theme", () => {
-    expect(coloursTs).toContain('`--mg-series-${i}`');
+    expect(gpuTs).toContain('`--mg-series-${i}`');
     const blocks = host.filter((r) => '--mg-series-1' in r.props);
     expect(blocks.length).toBeGreaterThanOrEqual(2);
     for (const r of blocks) {

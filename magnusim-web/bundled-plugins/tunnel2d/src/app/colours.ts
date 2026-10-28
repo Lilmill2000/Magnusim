@@ -1,9 +1,12 @@
 // The view's colours, from the design tokens: the engine's palette, the rheoscopic tank's looks,
-// the particles view's bodies and the flow markers. They are read on an element of the view (its
-// stage may keep a theme of its own), and read again when the page's theme changes.
+// the particles view's bodies and the flow markers, and the marks drawn over the view. They are
+// read on an element of the view (its stage may keep a theme of its own), and read again when the
+// page's theme changes.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Palette } from '../render/renderer';
 import type { Engine } from '../sim/engine';
+import type { Palette as SketchPalette } from '../sketch/editor';
+import type { OverlayColours } from '../ui/overlay';
 
 /** A CSS colour (a design token) as linear 0..1 RGB, read on `scope`. */
 export function tokenRgb(name: string, scope: Element): [number, number, number] {
@@ -59,5 +62,31 @@ export function applyViewColours(engine: Engine, scope: Element) {
     }),
     streamline: [...rgb('--t2d-streamline'), 0.4],
     streamlineLight: [...rgb('--t2d-particle-light'), 0.35],
+  };
+}
+
+/** The sketch's colours, from the tokens (as CAD's sketch: blue under-defined, ink fully, red over). */
+export function sketchPalette(read: (name: string) => string): SketchPalette {
+  const v = (name: string, fallback: string) => read(name) || fallback;
+  return {
+    under: v('--t2d-sketch-under', 'blue'),
+    fully: v('--t2d-sketch-full', 'black'),
+    over: v('--t2d-sketch-over', 'red'),
+    construction: v('--t2d-sketch-construction', 'gray'),
+    pick: v('--t2d-sketch-pick', 'green'),
+    halo: v('--t2d-sketch-halo', 'white'),
+    preview: v('--t2d-sketch-preview', 'blue'),
+  };
+}
+
+/** The overlay's colours, from the tokens as `read` gives them (a token's value, trimmed). */
+export function overlayColours(read: (name: string) => string): OverlayColours {
+  return {
+    sel: read('--t2d-select') || 'black',
+    ghost: read('--t2d-ghost') || 'gray',
+    halo: read('--mg-bg') || 'white',
+    probe: read('--t2d-probe') || 'black',
+    rakes: [1, 2, 3, 4, 5, 6].map((i) => read(`--mg-series-${i}`)),
+    sketch: sketchPalette(read),
   };
 }

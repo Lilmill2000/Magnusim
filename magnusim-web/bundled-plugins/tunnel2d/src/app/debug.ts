@@ -4,7 +4,7 @@ import type { Workspace } from '@magnusim/workspace';
 import type { Engine } from '../sim/engine';
 import { runSchaferTurek } from '../sim/validate';
 import { airfoilCase, plateCase, runCase, type AirfoilSpec, type PlateSpec } from '../sim/validateRans';
-import { turnHandle, worldOutline } from '../ui/Viewport';
+import { turnHandle, worldOutline } from '../ui/overlay';
 import { containsRings, signedDistanceRings } from '../geometry/polygon';
 import type { SketchEditor } from '../sketch/editor';
 import type { Store } from './store';
