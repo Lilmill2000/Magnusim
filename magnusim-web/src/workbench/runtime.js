@@ -38959,15 +38959,30 @@ window.__CFD_THEME__ = {
     return viewPixel(pane.canvas, x, y);
   },
   capturePixel: (x, y) => {
-    const wrap = captureWrap();
-    if (!wrap) return null;
-    const r = wrap.getBoundingClientRect();
-    const frame = { x: 0, y: 0, w: Math.round(r.width), h: Math.round(r.height) };
-    const out = document.createElement('canvas');
-    out.width = frame.w;
-    out.height = frame.h;
-    const ctx = out.getContext('2d');
-    drawCaptureFrame(ctx, out, frame, 1);
-    return Array.from(ctx.getImageData(x, y, 1, 1).data.slice(0, 3));
+    const ctx = captureForTest();
+    return ctx ? Array.from(ctx.getImageData(x, y, 1, 1).data.slice(0, 3)) : null;
+  },
+  /** RGB bytes, row by row, of a box of the capture (CSS px from the view's top left). */
+  captureBox: (x, y, w, h) => {
+    const ctx = captureForTest();
+    if (!ctx) return null;
+    const d = ctx.getImageData(x, y, w, h).data;
+    const rgb = [];
+    for (let i = 0; i < d.length; i += 4) rgb.push(d[i], d[i + 1], d[i + 2]);
+    return rgb;
   },
 };
+
+/** The view captured as a person keeps it, at scale 1, for the test hooks above. */
+function captureForTest() {
+  const wrap = captureWrap();
+  if (!wrap) return null;
+  const r = wrap.getBoundingClientRect();
+  const frame = { x: 0, y: 0, w: Math.round(r.width), h: Math.round(r.height) };
+  const out = document.createElement('canvas');
+  out.width = frame.w;
+  out.height = frame.h;
+  const ctx = out.getContext('2d');
+  drawCaptureFrame(ctx, out, frame, 1);
+  return ctx;
+}

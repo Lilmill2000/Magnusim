@@ -2,9 +2,15 @@
 // labels turn dark-theme colours, the model's surfaces stay light, and what the person keeps (a
 // capture) stays light. The theme is set as Settings → Appearance sets it (applyAppearance).
 import { expect, test } from '@playwright/test';
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { startHost } from './support/host-server.mjs';
 
 const FIXTURE = 'sample-project-steady-state-e2e';
+const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROUND = join(WEB, 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
+const CAVITY = join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d');
 const LIGHT_BG = [240, 242, 247];
 const DARK_BG = [27, 31, 39];
 let host;
@@ -67,6 +73,127 @@ test('the 3D view follows the theme: dark background, light lines and points, mi
   await expect.poll(async () => (await colors(page)).bg).toEqual(LIGHT_BG);
   expect(await colors(page)).toEqual(light);
   expect(near(await page.evaluate(() => window.__CFD_THEME__.screenPixel(10, 10)), LIGHT_BG)).toBe(true);
+});
+
+test("a capture of results taken in the dark theme keeps the legend light: it is the light capture's legend, pixel for pixel, title included", async ({ page, request }) => {
+  test.setTimeout(360_000);
+  page.setDefaultTimeout(30_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const json = async (url) => {
+    for (let i = 0; ; i++) {
+      try {
+        return await (await request.get(url)).json();
+      } catch (e) {
+        if (i >= 2 || !/ECONNRESET|socket hang up/i.test(String(e))) throw e;
+      }
+    }
+  };
+  await page.goto(`${host.base}/#/`);
+  await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
+  const pid = await page.evaluate(
+    async (t) =>
+      (await window.__CFD_W16_CREATE__({ title: t, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' }))
+        .project.id,
+    `e2e dark capture ${Date.now().toString(36)}`,
+  );
+  const q = (path, extra = {}) => `${host.base}${path}?${new URLSearchParams({ project_id: pid, ...extra })}`;
+  const ready = () => page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
+  await page.goto(`${host.base}/#/p/${encodeURIComponent(pid)}`);
+  await ready();
+  await page.locator('#geometry-file-input').setInputFiles(ROUND);
+  await expect
+    .poll(async () => ((await json(q('/api/project'))).project?.geometries || []).length, { timeout: 120_000 })
+    .toBe(1);
+  await expect(page.locator('#btn-create-simulation')).toBeVisible({ timeout: 60_000 });
+  await page.locator('#btn-create-simulation').click();
+  await expect(page.locator('#modal-create-simulation')).toBeVisible();
+  await page.locator('#cs-create').click();
+  await expect(page.locator('#modal-create-simulation')).toBeHidden({ timeout: 30_000 });
+  if (await page.locator('#modal-confirm').isVisible()) await page.locator('#cf-confirm').click();
+  const sid = await page.evaluate(() => window.__CFD_W17__.activeId);
+  expect(sid).toBeTruthy();
+
+  // A finished run whose case is a copy of the cavity (U and p, five saved times).
+  const runRows = async () => (await json(q('/api/run/status', { simulation_id: sid }))).runs || [];
+  const made = await (await request.post(q('/api/run/create'), { data: { project_id: pid, simulation_id: sid, name: 'Run 1' } })).json();
+  const rid = String(made.run_id || (made.run && (made.run.id || made.run.run_id)));
+  expect(rid, JSON.stringify(made)).toBeTruthy();
+  const runDir = dirname((await runRows()).find((r) => String(r.id) === rid).case_dir);
+  const caseDir = join(runDir, 'case');
+  cpSync(CAVITY, caseDir, { recursive: true });
+  const sidecar = join(caseDir, 'w27-case.json');
+  const doc = JSON.parse(readFileSync(sidecar, 'utf8'));
+  delete doc.plugin;
+  delete doc.study_id;
+  writeFileSync(sidecar, JSON.stringify(doc, null, 2));
+  const runJson = join(runDir, 'run.json');
+  const rec = JSON.parse(readFileSync(runJson, 'utf8'));
+  writeFileSync(
+    runJson,
+    JSON.stringify(
+      { ...rec, status: 'done', stage: 'done', has_results: true, n_saved_times: 5, last_saved_iteration: 0.5, finished_at: new Date().toISOString(), case_dir: caseDir },
+      null,
+      2,
+    ),
+  );
+  await page.reload();
+  await ready();
+
+  // Its results, opened from the tree as a person does.
+  const studyRow = page.locator(`#left-tree [data-w17-sim-id="${sid}"] > .tree-row`).first();
+  if ((await page.evaluate(() => window.__CFD_W17__.activeId)) !== sid) await studyRow.click();
+  await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId)).toBe(sid);
+  const runsFolder = page.locator(`#left-tree [data-w17-sim-id="${sid}"] li[data-w27-sim-control="1"]`).first();
+  if (!(await runsFolder.evaluate((el) => el.classList.contains('expanded')))) {
+    await runsFolder.locator(':scope > .tree-row .tw').click();
+  }
+  await page.locator(`#left-tree [data-w27-run="${rid}"] > .tree-row .tl`).first().click();
+  const results = page.locator(`#left-tree [data-w27-run-results="${rid}"] > .tree-row .tl`).first();
+  await expect(results).toBeVisible();
+  await results.click();
+  await expect(page.locator('#viewport-job-chip')).toBeHidden({ timeout: 90_000 });
+  const title = page.locator('#legend .legend-title');
+  await expect(title).toHaveText('Velocity Magnitude', { timeout: 60_000 });
+
+  // Where the legend and its title are, in the capture's pixels (the view's CSS px at scale 1).
+  const boxes = () =>
+    page.evaluate(() => {
+      const wrap = document.querySelector('.viewport-wrap').getBoundingClientRect();
+      const box = (sel) => {
+        const r = document.querySelector(sel).getBoundingClientRect();
+        return { x: Math.round(r.left - wrap.left), y: Math.round(r.top - wrap.top), w: Math.round(r.width), h: Math.round(r.height) };
+      };
+      return { legend: box('#legend'), title: box('#legend .legend-title') };
+    });
+  const captured = (b) => page.evaluate((b) => window.__CFD_THEME__.captureBox(b.x, b.y, b.w, b.h), b);
+  const { legend, title: t } = await boxes();
+  const light = await captured(legend);
+  expect(light.length).toBe(legend.w * legend.h * 3);
+  // Not a blank box: the title's letters are dark ink on the light card.
+  let ink = 255;
+  for (let y = t.y - legend.y; y < t.y - legend.y + t.h; y++) {
+    for (let x = t.x - legend.x; x < t.x - legend.x + t.w; x++) {
+      const i = (y * legend.w + x) * 3;
+      ink = Math.min(ink, (light[i] + light[i + 1] + light[i + 2]) / 3);
+    }
+  }
+  expect(ink, "the title's darkest pixel in the light capture").toBeLessThan(110);
+  const lightTitle = await title.evaluate((el) => getComputedStyle(el).color);
+
+  await setTheme(page, 'dark');
+  await expect.poll(async () => (await colors(page)).bg).toEqual(DARK_BG);
+  // On screen the legend is the dark theme's; in the same place.
+  expect(await title.evaluate((el) => getComputedStyle(el).color)).not.toBe(lightTitle);
+  expect(await boxes()).toEqual({ legend, title: t });
+  const dark = await captured(legend);
+  let differ = 0;
+  for (let i = 0; i < light.length; i += 3) {
+    if (Math.abs(light[i] - dark[i]) > 3 || Math.abs(light[i + 1] - dark[i + 1]) > 3 || Math.abs(light[i + 2] - dark[i + 2]) > 3) differ += 1;
+  }
+  expect(differ, "the legend's pixels in the dark-theme capture that differ from the light capture").toBe(0);
+  // The screen is dark again after the capture.
+  expect(await title.evaluate((el) => getComputedStyle(el).color)).not.toBe(lightTitle);
+  await setTheme(page, null);
 });
 
 test("the Assistant's picture of Home is light while Home is dark, and Home stays dark", async ({ page }) => {
