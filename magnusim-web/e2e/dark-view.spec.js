@@ -75,6 +75,88 @@ test('the 3D view follows the theme: dark background, light lines and points, mi
   expect(near(await page.evaluate(() => window.__CFD_THEME__.screenPixel(10, 10)), LIGHT_BG)).toBe(true);
 });
 
+/** WCAG relative luminance of [r, g, b] bytes. */
+const luminance = (rgb) => {
+  const [r, g, b] = rgb.map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+test('the triad reads in the dark theme: each arrow, end-on ones too, stands out from the dark background; light and a capture are as they were', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${host.base}/#/p/${FIXTURE}`);
+  await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, FIXTURE, { timeout: 90_000 });
+  await page.waitForFunction(() => {
+    const chip = document.getElementById('viewport-job-chip');
+    return !chip || chip.hidden;
+  }, null, { timeout: 180_000 });
+  // The triad's slot in the view's canvas pixels (on screen) and in the view's CSS px (a capture).
+  const slot = await page.evaluate(() => {
+    const canvas = document.querySelector('#viewer canvas');
+    const cr = canvas.getBoundingClientRect();
+    const wr = document.querySelector('.viewport-wrap').getBoundingClientRect();
+    const sr = document.getElementById('viewport-triad-slot').getBoundingClientRect();
+    const k = canvas.width / cr.width;
+    return {
+      screen: { x: Math.round((sr.left - cr.left) * k), y: Math.round((sr.top - cr.top) * k), w: Math.round(sr.width * k), h: Math.round(sr.height * k) },
+      capture: { x: Math.round(sr.left - wr.left), y: Math.round(sr.top - wr.top), w: Math.round(sr.width), h: Math.round(sr.height) },
+    };
+  });
+  const onScreen = () => page.evaluate((b) => window.__CFD_THEME__.screenBox(b.x, b.y, b.w, b.h), slot.screen);
+  const captured = () => page.evaluate((b) => window.__CFD_THEME__.captureBox(b.x, b.y, b.w, b.h), slot.capture);
+  /** Each arrow's brightest pixel (its hue clearly ahead of the other two) against the background. */
+  const arrows = (rgb, bg) => {
+    const best = { x: 1, y: 1, z: 1 };
+    for (let i = 0; i < rgb.length; i += 3) {
+      const p = [rgb[i], rgb[i + 1], rgb[i + 2]];
+      const [r, g, b] = p;
+      const axis = r > g + 40 && r > b + 40 ? 'x' : g > r + 30 && g > b + 30 ? 'y' : b > r + 30 && b > g + 30 ? 'z' : null;
+      if (axis) best[axis] = Math.max(best[axis], contrast(p, bg));
+    }
+    return best;
+  };
+  const lightScreen = await onScreen();
+  const lightCapture = await captured();
+  const lightArrows = arrows(lightScreen, LIGHT_BG);
+  for (const axis of ['x', 'y', 'z']) expect(lightArrows[axis], `light: the ${axis} arrow is drawn`).toBeGreaterThan(2);
+
+  await setTheme(page, 'dark');
+  await expect.poll(async () => (await colors(page)).bg).toEqual(DARK_BG);
+  const dark = arrows(await onScreen(), DARK_BG);
+  for (const axis of ['x', 'y', 'z']) expect(dark[axis], `dark: the ${axis} arrow against the background`).toBeGreaterThanOrEqual(3);
+  expect(await captured(), 'a capture taken in dark has the light triad').toEqual(lightCapture);
+
+  await setTheme(page, null);
+  await expect.poll(async () => (await colors(page)).bg).toEqual(LIGHT_BG);
+  expect(await onScreen(), 'back in light, the triad is as it was').toEqual(lightScreen);
+
+  // Looked at from each axis and the two diagonals, an arrow pointing at the eye included, every
+  // arrow still reads in dark (the lowest was 4.1:1, from -X -Y -Z, when this was written).
+  await setTheme(page, 'dark');
+  await expect.poll(async () => (await colors(page)).bg).toEqual(DARK_BG);
+  for (const d of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], [1, 1, 1], [-1, -1, -1]]) {
+    await page.evaluate((d) => {
+      const cam = window.__CFD_VIEW__.renderer.getActiveCamera();
+      const fp = cam.getFocalPoint();
+      const dist = Math.hypot(...cam.getPosition().map((v, i) => v - fp[i]));
+      const n = Math.hypot(...d);
+      cam.setPosition(fp[0] + (d[0] / n) * dist, fp[1] + (d[1] / n) * dist, fp[2] + (d[2] / n) * dist);
+      cam.setViewUp(...(Math.abs(d[2]) > 0.9 * n ? [0, 1, 0] : [0, 0, 1]));
+      window.__CFD_VIEW__.renderWindow.render();
+    }, d);
+    const seen = arrows(await onScreen(), DARK_BG);
+    for (const axis of ['x', 'y', 'z']) expect(seen[axis], `dark, seen from ${d}: the ${axis} arrow`).toBeGreaterThanOrEqual(3);
+  }
+  await setTheme(page, null);
+});
+
 test("a capture of results taken in the dark theme keeps the legend light: it is the light capture's legend, pixel for pixel, title included", async ({ page, request }) => {
   test.setTimeout(360_000);
   page.setDefaultTimeout(30_000);
