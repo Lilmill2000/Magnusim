@@ -227,7 +227,7 @@ test("gate:keybinds-ai the Assistant reads the keys any time, and changes one on
   await dockSend(page, 'Give Line the key Shift+L');
   await expect(confirm).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('#cf-heading')).toHaveText('Change a keybind?');
-  await expect(page.locator('#cf-copy')).toHaveText('Keys demo · Line (sketch): L → Shift+L');
+  await expect(page.locator('#cf-copy')).toHaveText('Keys demo · Line: L → Shift+L');
   await expect(page.locator('#cf-cancel')).toHaveText('Cancel');
   // Its Yes takes a deliberate click: disabled at first, and Enter never answers it.
   expect(await page.evaluate(() => window.__yesAtShow), 'Yes is disabled when the question shows').toBe(true);
