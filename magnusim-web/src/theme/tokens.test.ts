@@ -198,10 +198,13 @@ describe('tokens.css', () => {
     // Chromium's light Field, FieldText and accent: what an uncoloured input showed before.
     expect([tokens['--mg-field-bg'], tokens['--mg-field-text'], tokens['--mg-check-accent']]).toEqual(['#ffffff', '#000000', 'auto']);
     expect([dark['--mg-field-bg'], dark['--mg-field-text'], dark['--mg-check-accent']]).toEqual([dark['--mg-bg'], dark['--mg-text'], dark['--mg-primary']]);
-    const where = cssRules(appCss).filter((r) => r.selectors.some((s) => s.startsWith(':where(input')));
-    expect(where.map((r) => r.props)).toEqual([
-      { 'background-color': 'var(--mg-field-bg)', color: 'var(--mg-field-text)' },
-      { 'accent-color': 'var(--mg-check-accent)' },
+    // Fields in dark only (a colour set in light turns the browser's own field look off), the kit's
+    // field with them; ticks in both (auto in light). Each but the kit's below every class rule (:where).
+    const rules = cssRules(appCss).filter((r) => Object.values(r.props).some((v) => /var\(--mg-(field|check)-/.test(String(v))));
+    expect(rules.map((r) => [r.selectors.join(', ').slice(0, 34), r.props])).toEqual([
+      [':where([data-theme="dark"]) :where', { 'background-color': 'var(--mg-field-bg)', color: 'var(--mg-field-text)' }],
+      [':where([data-theme="dark"]) input.', { 'background-color': 'var(--mg-field-bg)', color: 'var(--mg-field-text)' }],
+      [':where(input[type="checkbox"], inp', { 'accent-color': 'var(--mg-check-accent)' }],
     ]);
   });
 

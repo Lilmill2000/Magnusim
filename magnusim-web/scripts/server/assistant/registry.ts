@@ -371,7 +371,12 @@ const definitions = new Map<string, ProviderTool>();
 /** The provider definitions of `tools`, memoized by content. */
 export function providerTools(tools: readonly ToolDef[]): ProviderTool[] {
   return tools.map((t) => {
-    const def: ProviderTool = { name: t.name, description: t.description, schema: t.schema, ...(t.source.kind === 'workspace' ? { workspace: true } : {}) };
+    const def: ProviderTool = {
+      name: t.name,
+      description: t.description,
+      schema: t.schema,
+      ...(t.source.kind === 'workspace' ? { workspace: true } : { ...(t.pinned ? { pinned: true } : {}), ...(typeof t.priority === 'number' ? { priority: t.priority } : {}) }),
+    };
     const key = createHash('sha256').update(JSON.stringify(def)).digest('hex');
     let memo = definitions.get(key);
     if (!memo) {

@@ -336,9 +336,9 @@ test('the workspace closing (Back) gives list_changed at the client, and the old
   expect(r.isError).toBe(true);
   expect(resultJson(r).error).toMatchObject({ code: 'unavailable', hint: TOOLS_CHANGED_HINT });
   // Listed again: no workspace tool; the window's own core tools (the workbench's, its keybind
-  // tools with them: they live only at home and in the workbench).
+  // tools with them: they live only at home and in the workbench; the appearance tools everywhere).
   const after = (await app.client.listTools()).tools.map((t) => t.name).filter((n) => n.includes('__'));
-  expect(after).toEqual(['core__keybinds', 'core__set_keybind', 'core__show', 'core__view']);
+  expect(after).toEqual(['core__appearance', 'core__keybinds', 'core__set_appearance', 'core__set_keybind', 'core__show', 'core__view']);
   const seen = app.changes.n;
   await new Promise((r) => setTimeout(r, 1000));
   expect(app.changes.n, 'nothing changed since it was listed').toBe(seen);

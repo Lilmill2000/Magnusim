@@ -65,10 +65,17 @@ textarea {
   background: var(--mg-bg);
 }
 
-/* The theme's tick and slider colour: the browser's own in light, the primary in dark. */
-input[type="checkbox"],
-input[type="radio"],
-input[type="range"] {
+/* The UI kit's field in dark: a select's colours (the field tokens), not the browser's dark grey.
+   Its own rule reverts to the browser's field, as the app's does (light as before); the page's
+   style.css has this rule too. Above that rule: (0,2,1). */
+:where([data-theme="dark"]) input.mgk-input:not(:disabled) {
+  background-color: var(--mg-field-bg);
+  color: var(--mg-field-text);
+}
+
+/* The theme's tick and slider colour: the browser's own in light, the primary in dark. Below
+   every rule of a plugin's own (no specificity), so a plugin's accent wins. */
+:where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
   accent-color: var(--mg-check-accent);
 }
 

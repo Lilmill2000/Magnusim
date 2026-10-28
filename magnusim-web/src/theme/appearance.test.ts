@@ -64,7 +64,8 @@ describe('the look', () => {
     window.addEventListener('cfd:appearance', on);
     applyAppearance({ theme: 'dark', text_scale: 1.3, icon_scale: 0.85 });
     window.removeEventListener('cfd:appearance', on);
-    expect([html.dataset.theme, html.dataset.themePref, html.style.colorScheme]).toEqual(['dark', 'dark', 'dark']);
+    // color-scheme is tokens.css's, by data-theme: never inline (a light swap on html takes it too).
+    expect([html.dataset.theme, html.dataset.themePref, html.style.colorScheme]).toEqual(['dark', 'dark', '']);
     expect([html.style.getPropertyValue('--mg-text-scale'), html.style.getPropertyValue('--mg-icon-scale')]).toEqual(['1.3', '0.85']);
     expect(JSON.parse(localStorage.getItem(APPEARANCE_KEY)!)).toEqual({ theme: 'dark', text_scale: 1.3, icon_scale: 0.85 });
     expect(heard).toEqual([{ theme: 'dark', text_scale: 1.3, icon_scale: 0.85 }]);
@@ -152,7 +153,8 @@ describe('the first paint (index.html, cad.html)', () => {
     system(false);
     localStorage.setItem(APPEARANCE_KEY, JSON.stringify({ theme: 'dark', text_scale: 1.3, icon_scale: 1.5 }));
     run();
-    expect([html.dataset.theme, html.dataset.themePref, html.style.colorScheme]).toEqual(['dark', 'dark', 'dark']);
+    // color-scheme is tokens.css's, by data-theme: never inline (a light swap on html takes it too).
+    expect([html.dataset.theme, html.dataset.themePref, html.style.colorScheme]).toEqual(['dark', 'dark', '']);
     expect([html.style.getPropertyValue('--mg-text-scale'), html.style.getPropertyValue('--mg-icon-scale')]).toEqual(['1.3', '1.5']);
     html.removeAttribute('style');
     system(true);

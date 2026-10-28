@@ -18,7 +18,6 @@
           var t = dark ? 'dark' : 'light';
           h.setAttribute('data-theme', t);
           h.setAttribute('data-theme-pref', a.theme);
-          h.style.colorScheme = t;
           if (typeof a.text_scale === 'number' && a.text_scale >= 0.5 && a.text_scale <= 3) h.style.setProperty('--mg-text-scale', String(a.text_scale));
           if (typeof a.icon_scale === 'number' && a.icon_scale >= 0.5 && a.icon_scale <= 3) h.style.setProperty('--mg-icon-scale', String(a.icon_scale));
         } catch (e) {

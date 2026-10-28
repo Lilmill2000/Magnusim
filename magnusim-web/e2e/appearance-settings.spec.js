@@ -38,6 +38,22 @@ const fieldLook = (page) =>
     const field = getComputedStyle(document.querySelector('#wiz-port'));
     return [field.backgroundColor, field.color, getComputedStyle(document.querySelector('#wiz-collapse-completed')).accentColor];
   });
+/** The plugin kit's field (an input.mgk-input put on the page): background and text. */
+const kitFieldLook = (page) =>
+  page.evaluate(() => {
+    const input = document.createElement('input');
+    input.className = 'mgk-input';
+    document.body.append(input);
+    const s = getComputedStyle(input);
+    const look = [s.backgroundColor, s.color];
+    input.remove();
+    return look;
+  });
+/**
+ * A page just committed, once its stylesheets are in (its first paint waits for them; the app's
+ * own start waits for the prefs, held): the body and its background are there.
+ */
+const stylesIn = (page) => page.waitForFunction(() => !!document.body && getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)');
 /** Parts drawn light in a dark page that are not meant to stay light (data-theme-keep): their classes. */
 const lightIslands = (page) => page.evaluate(() => [...document.querySelectorAll('[data-theme="light"]:not([data-theme-keep])')].map((el) => el.className || el.tagName));
 // Light: the browser's own field and tick. Dark: a select's colours (#1b1f27, #e6e9ef) and the primary, not the browser's grey.
@@ -86,6 +102,7 @@ test('gate:appearance the person picks a look: dark at once and before the first
     expect(browserField.field).toEqual(LIGHT_FIELD);
     expect(browserField.disabled).toEqual(browserField.browserDisabled);
     expect(browserField.disabled[0]).not.toBe(LIGHT_FIELD[0]);
+    expect(await kitFieldLook(page)).toEqual(LIGHT_FIELD.slice(0, 2));
     await expect(choice('theme', 'light')).toHaveAttribute('aria-checked', 'true');
 
     // The pointer on Dark: the preview only.
@@ -101,16 +118,34 @@ test('gate:appearance the person picks a look: dark at once and before the first
     await choice('theme', 'dark').click();
     await expect(page.locator('#wiz-saved')).toHaveText('Saved');
     expect(await theme(page)).toEqual(['dark', 'dark']);
-    expect(await bodyBg(page)).not.toBe(lightBg);
+    const darkBg = await bodyBg(page);
+    expect(darkBg).not.toBe(lightBg);
     await expect.poll(() => theme(other)).toEqual(['dark', 'dark']);
     expect(await bodyBg(other)).toBe(await bodyBg(page));
     // Nothing stays light but what is kept light (the probe, Home's pictures): not the preview, in
     // the window whose Settings was never opened either.
     for (const p of [page, other]) expect(await lightIslands(p)).toEqual([]);
+    // The browser's colour scheme is the theme's (tokens.css), never inline: a light swap on html for
+    // one task (the Assistant's picture of Home) has the browser's light controls too.
+    expect(await page.evaluate(() => [getComputedStyle(document.documentElement).colorScheme, document.documentElement.style.colorScheme])).toEqual(['dark', '']);
+    const swapped = await page.evaluate(() => {
+      const html = document.documentElement;
+      const input = document.createElement('input');
+      input.disabled = true;
+      document.body.append(input);
+      html.setAttribute('data-theme', 'light');
+      const look = [getComputedStyle(html).colorScheme, getComputedStyle(input).backgroundColor];
+      html.setAttribute('data-theme', 'dark');
+      input.remove();
+      return look;
+    });
+    expect(swapped).toEqual(['light', browserField.disabled[0]]);
     // Fields and ticks turn with it: Settings' Port field and Workspace checkbox.
     await page.locator('#wiz-rail li[data-wiz-key="port"]').click();
     await expect(page.locator('#wiz-port')).toBeVisible();
     expect(await fieldLook(page)).toEqual(DARK_FIELD);
+    // The plugin kit's field too (its own rule reverts to the browser's field).
+    expect(await kitFieldLook(page)).toEqual(DARK_FIELD.slice(0, 2));
     await page.locator('#wiz-rail li[data-wiz-key="appearance"]').click();
 
     // A reload paints dark before the app has read its prefs (they are held until it has).
@@ -125,9 +160,9 @@ test('gate:appearance the person picks a look: dark at once and before the first
     );
     // (Only until the new page's body is there: the app's own start waits for the prefs.)
     await page.reload({ waitUntil: 'commit' });
-    await page.waitForFunction(() => !!document.body);
+    await stylesIn(page);
     expect(await theme(page)).toEqual(['dark', 'dark']);
-    expect(await bodyBg(page)).not.toBe(lightBg);
+    expect(await bodyBg(page)).toBe(darkBg);
     release();
     await appReady(page);
     await page.unroute((url) => url.pathname === '/api/prefs');
@@ -147,10 +182,10 @@ test('gate:appearance the person picks a look: dark at once and before the first
         },
       );
       await first.goto(api('/#/'), { waitUntil: 'commit' });
-      await first.waitForFunction(() => !!document.body);
+      await stylesIn(first);
       expect(await first.evaluate(() => localStorage.getItem('magnusim.appearance'))).toBeNull();
       expect(await theme(first)).toEqual(['dark', 'dark']);
-      expect(await bodyBg(first)).toBe(await bodyBg(page));
+      expect(await bodyBg(first)).toBe(darkBg);
       open();
     } finally {
       await fresh.close();
@@ -227,7 +262,7 @@ test("gate:appearance-ai the Assistant reads the look any time, and changes it o
 
   // Asked for: it reads, then sets; the window is dark at once, and the step says so as Settings does.
   seen = [];
-  fake.reply(() => ({ tools: [{ name: 'core__appearance', input: { with_offered: true } }] }), after(call({ theme: 'dark', text_scale: 1.15 })), after({ text: 'Dark now.' }));
+  fake.reply(() => ({ tools: [{ name: 'core__appearance', input: {} }] }), after(call({ theme: 'dark', text_scale: 1.15 })), after({ text: 'Dark now.' }));
   await dockSend(page, 'Make it dark, with large text');
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 30_000 });
   expect(JSON.stringify(seen)).toContain('"shown":"light"');

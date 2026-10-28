@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Appearance } from '../theme/appearance';
+import { ICON_SCALES, TEXT_SCALES, THEMES, type Appearance } from '../theme/appearance';
 import { coreAppearance, coreSetAppearance, LOOK_SET_IN, type LookRuntime } from './appearanceTool';
+import { CORE_SET_APPEARANCE_SCHEMA } from './coreToolDefs';
 
 /** The page's look, and what the tool asked it to save. */
 function runtime(start: Appearance = { theme: 'light', text_scale: 1, icon_scale: 1 }, refuse = '') {
@@ -21,9 +22,9 @@ function runtime(start: Appearance = { theme: 'light', text_scale: 1, icon_scale
 const set = (o: Record<string, unknown>) => ({ theme: '', text_scale: 0, icon_scale: 0, person_asked: true, ...o });
 
 describe('core__appearance', () => {
-  it('reads the look any time: the choice, the theme it shows, and (asked) what Settings offers', async () => {
+  it('reads the look any time: the choice, the theme it shows, and what Settings offers', async () => {
     const { rt } = runtime({ theme: 'dark', text_scale: 1.15, icon_scale: 1 });
-    expect(await coreAppearance({ with_offered: true }, rt)).toEqual({
+    expect(await coreAppearance(rt)).toEqual({
       ok: true,
       result: {
         data: { theme: 'dark', shown: 'dark', text_scale: 1.15, icon_scale: 1, offered: { theme: ['light', 'dark', 'system'], text_scale: [0.9, 1, 1.15, 1.3], icon_scale: [0.85, 1, 1.25, 1.5] }, set_in: LOOK_SET_IN },
@@ -31,8 +32,15 @@ describe('core__appearance', () => {
         summary: 'dark theme, text 115%, icons 100%',
       },
     });
-    const plain = await coreAppearance({ with_offered: false }, rt);
-    expect(plain.ok && plain.result.data).not.toHaveProperty('offered');
+  });
+});
+
+describe("core__set_appearance's input", () => {
+  it("names what Settings offers, from Settings' own lists", () => {
+    const p = CORE_SET_APPEARANCE_SCHEMA.properties;
+    expect(p.theme.enum).toEqual(['', ...THEMES]);
+    expect(p.text_scale.description).toBe(TEXT_SCALES.join(', '));
+    expect(p.icon_scale.description).toBe(ICON_SCALES.join(', '));
   });
 });
 

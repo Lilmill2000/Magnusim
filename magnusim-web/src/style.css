@@ -25,13 +25,22 @@ body,
   cursor: default;
 }
 
-/* Fields, checkboxes and sliders no rule colours: the theme's field colours (tokens.css), below
-   every class rule. In light they are the browser's own; a disabled field keeps the browser's. */
-:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"], :disabled), textarea:not(:disabled), select:not(:disabled)) {
+/* Fields no rule colours, in dark: a select's colours (tokens.css field tokens), not the browser's
+   dark grey; below every class rule. Light is left to the browser (a colour set there would turn its
+   own field look off), and so is a disabled field. */
+:where([data-theme="dark"]) :where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"], :disabled), textarea:not(:disabled), select:not(:disabled)) {
   background-color: var(--mg-field-bg);
   color: var(--mg-field-text);
 }
 
+/* The plugin kit's field the same in dark (its own rule reverts to the browser's field; the frame's
+   base.css has this rule too). Above that rule: (0,2,1). */
+:where([data-theme="dark"]) input.mgk-input:not(:disabled) {
+  background-color: var(--mg-field-bg);
+  color: var(--mg-field-text);
+}
+
+/* Checkboxes, radios and sliders: the theme's tick colour (the browser's own in light), below every class rule. */
 :where(input[type="checkbox"], input[type="radio"], input[type="range"]) {
   accent-color: var(--mg-check-accent);
 }

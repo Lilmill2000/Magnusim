@@ -33,8 +33,9 @@ test('Dark in Settings turns Magnusim CAD dark at once and from the first paint;
     // Nothing stays light but what is kept light (data-theme-keep): not Settings' preview.
     expect(await page.evaluate(() => document.querySelectorAll('[data-theme="light"]:not([data-theme-keep])').length)).toBe(0);
     await page.reload({ waitUntil: 'commit' });
-    await page.waitForFunction(() => !!document.body);
+    await page.waitForFunction(() => !!document.body && getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)');
     expect(await theme(page)).toEqual(['dark', 'dark']);
+    expect(await bodyBg(page)).toBe(darkBg);
 
     // A browser with no copy of the look (as the app at its next start), its prefs held: dark
     // before the app has read them.
@@ -51,7 +52,8 @@ test('Dark in Settings turns Magnusim CAD dark at once and from the first paint;
         },
       );
       await first.goto(`${process.env.CAD_E2E_BASE_URL}/`, { waitUntil: 'commit' });
-      await first.waitForFunction(() => !!document.body);
+      // Once its stylesheets are in (the first paint waits for them; the app's start waits for the prefs).
+      await first.waitForFunction(() => !!document.body && getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)');
       expect(await first.evaluate(() => localStorage.getItem('magnusim.appearance'))).toBeNull();
       expect(await theme(first)).toEqual(['dark', 'dark']);
       expect(await bodyBg(first)).toBe(darkBg);

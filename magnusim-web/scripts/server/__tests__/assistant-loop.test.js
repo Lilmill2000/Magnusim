@@ -1151,7 +1151,7 @@ describe('the offered list', () => {
     assert.deepEqual(
       left.map((n) => n.text),
       [
-        "To fit this model's context (8,192 tokens), these tools were left out: tool_0 (Home, Workbench), tool_1 (Home, Workbench), tool_2 (Home, Workbench), tool_3 (Home, Workbench), tool_4 (Home, Workbench), tool_5 (Home), tool_6 (Home). Load the model with a longer context to have them.",
+        "To fit this model's context (8,192 tokens), these tools were left out: tool_0, tool_1, tool_2, tool_3, tool_4 (Home, Workbench); tool_5, tool_6 (Home). Load the model with a longer context to have them.",
       ],
       'noted once, the lowest priority first',
     );
@@ -1207,7 +1207,7 @@ describe('the offered list', () => {
     const said = ofType(t, 'note').map((n) => n.text);
     assert.equal(said.filter((x) => x === UNKNOWN_CONTEXT_NOTE).length, 1, 'once a turn');
     assert.equal(UNKNOWN_CONTEXT_NOTE, "Magnusim doesn't know this model's context length, so it offers tools up to 16,384 tokens of definitions.");
-    assert.ok(said.some((x) => x.startsWith('To fit 16,384 tokens of tool definitions, these tools were left out: tool_00 (Home, Workbench, Workspaces)')), said.join('\n'));
+    assert.ok(said.some((x) => x.startsWith('To fit 16,384 tokens of tool definitions, these tools were left out: tool_00, ')), said.join('\n'));
   });
 
   it('pinned tools stay while anything fits; a context too small for them ends the turn failed (context) before any request', async () => {

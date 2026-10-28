@@ -1,7 +1,8 @@
 // The Part's tools for the app's Assistant, as the person and the model meet them (CAD tools spec
 // §12.3 watch 1, T1): a Part open in its workspace offers its 21 tools on its tab; a turn there
-// offers 27 (the Part's by name first, then the app's 6 by name: its 5 host tools and core__show,
-// core host tools spec §12.4, §15, C7), the first 20 strict and the last 7 not; the system text holds
+// offers 29 (the Part's by name first, then the app's 8 by name: its 5 host tools, core__show and
+// Settings → Appearance's two, core host tools spec §12.4, §15, C7), the first 20 strict and the
+// last 9 not; the system text holds
 // the CAD notes; the tools go out byte for byte the same in the next turn. A local model whose context
 // is too small for them all: the dock names the tools left out and where they are offered, and the
 // request carries only the rest (§12.3).
@@ -89,11 +90,11 @@ test.afterEach(() => {
 
 /** The Part's 21 tools by name, as the app names them (src/assistant/schemas.ts). */
 const CAD = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace'].map((n) => `cad__${n}`);
-// The app's own: its host tools and the app page's core__show (core host tools spec §15, C7;
-// core__view is the workbench's: a workspace has its own view tool).
-const HOST_TOOLS = ['app_status', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
+// The app's own: its host tools and the app page's core__show and appearance tools (core host tools
+// spec §15, C7; core__view is the workbench's: a workspace has its own view tool).
+const HOST_TOOLS = ['app_status', 'core__appearance', 'core__set_appearance', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
 
-test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 27, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
+test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offers 29, the first 20 strict, with the CAD notes, the same bytes every turn', async ({ page, request }) => {
   test.setTimeout(240_000);
   const pid = await newProject(request, host, 'Assistant registration');
   const { tab } = await openNewPart(page, request, host, pid);
@@ -108,7 +109,7 @@ test('cad:assistant-watch-registration the Part offers its 21 tools; a turn offe
   const t2 = await startTurn(request, host, { text: 'Say hello again.', tab });
   expect((await t2.ended(STEP_MS)).turn.state).toBe('done');
   const [first, second] = chats(host).slice(before);
-  // The Part's tools first (by name), then the app's own by name: 27, the first 20 strict (the provider's budget).
+  // The Part's tools first (by name), then the app's own by name: 29, the first 20 strict (the provider's budget).
   expect(offeredTools(first)).toEqual([...CAD, ...HOST_TOOLS].map((name, i) => ({ name, strict: i < 20 })));
   // The CAD notes are the second system block, line breaks kept.
   const system = (first.body.system as { text: string }[]).map((s) => s.text).join('\n');
@@ -548,11 +549,15 @@ test("cad:assistant-watch-local-budget a local model with a 20K context: the doc
     const note = core.dockTurn(page).locator('[data-dock-line="note"]').filter({ hasText: 'these tools were left out' });
     await expect(note).toHaveCount(1);
     const said = ((await note.textContent()) || '').replace(/^\W+\s*/, '');
-    // The app's own go first (the lowest priority first), then the Part's (the later name first), each with where it is offered.
+    // The app's own go first (the lowest priority first), then the Part's (the later name first),
+    // where they are offered said once for each run: whole, within a note's 500 characters.
     expect(said).toMatch(
-      /^To fit this model's context \(20,000 tokens\), these tools were left out: app_status \(Home, Workbench, Workspaces\), explain_ready \(Home, Workbench, Workspaces\), wait \(Home, Workbench, Workspaces\), project_summary \(Home, Workbench, Workspaces\), read_setup \(Home, Workbench, Workspaces\), cad__workspace \([^)]+Part\)(, cad__\w+ \([^)]+Part\))*\. Load the model with a longer context to have them\.$/,
+      /^To fit this model's context \(20,000 tokens\), these tools were left out: core__set_appearance, core__appearance, app_status, explain_ready, wait, project_summary, read_setup \(Home, Workbench, Workspaces\); cad__workspace(, cad__\w+)* \([^)]+Part\)\. Load the model with a longer context to have them\.$/,
     );
-    const left = [...said.slice(said.indexOf('left out: ')).matchAll(/(\w+) \(/g)].map((m) => m[1]);
+    const left = said
+      .slice(said.indexOf('left out: ') + 'left out: '.length, said.indexOf('. Load'))
+      .split('; ')
+      .flatMap((run) => run.replace(/ \([^)]*\)$/, '').split(', '));
     const [sent] = chats(host).slice(from);
     const offered = ((sent.body as { tools: { function: { name: string } }[] }).tools || []).map((t) => t.function.name);
     expect(offered.filter((n) => left.includes(n))).toEqual([]);

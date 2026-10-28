@@ -3,7 +3,7 @@
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
 // sent only the keywords they take; in a CAD turn the app offers 29 tools (the Part's 21 by name
 // first, then its 8 host and core tools by name: core host tools spec §12.4, §15), strict as
-// strictFlags grants them in that order on the first cloud dialect; no CAD property is optional;
+// strictOf grants them (the workspace's first, by name) on the first cloud dialect; no CAD property is optional;
 // the 29 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
 // CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
@@ -34,7 +34,7 @@ const { WORKED_PARTS } = await import('../../bundled-plugins/cad/src/assistant/e
 const sanitizeCopy = await import('../../bundled-plugins/cad/tests/assistant/sanitize-copy.ts');
 const { checkSchema, emitSchema, STRICT_KEEP, validateInput } = await import('../server/assistant/schema.ts');
 const { JSON_CAPS, resultText, TEXT_CAPS } = await import('../server/assistant/sanitize.ts');
-const { strictFlags, STRICT_LIMITS } = await import('../server/assistant/providers/anthropic.ts');
+const { strictOf, STRICT_LIMITS } = await import('../server/assistant/providers/anthropic.ts');
 const { createToolRegistry, localBudget, providerTools, REGISTRATION_MAX_BYTES, toolTokens } = await import('../server/assistant/registry.ts');
 const { createHostTools } = await import('../server/assistant/host-tools.ts');
 const { createJobTools } = await import('../server/assistant/host/job-tools.ts');
@@ -97,12 +97,13 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 29: the Part's 21 by name first, then the app's 8 for a workspace; strict as strictFlags grants them in that order", () => {
+  it("a CAD turn offers 29: the Part's 21 by name first, then the app's 8 for a workspace; strict as strictOf grants them: the Part's first, by name", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
     assert.deepEqual(names, [...CAD_TOOLS.map((t) => `cad__${t.name}`), ...HOST_IN_WORKSPACE]);
-    const flags = strictFlags(providerTools(tools).map((t) => emitSchema('anthropic', t.schema)));
+    const sent = providerTools(tools);
+    const flags = strictOf(sent, sent.map((t) => emitSchema('anthropic', t.schema)), false);
     // The strict budget goes to the Part's tools first: its first 20 by name; the rest go loose.
     assert.deepEqual(flags, names.map((_, i) => i < STRICT_LIMITS.tools));
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);

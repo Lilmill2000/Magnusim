@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   checkCssColours,
@@ -34,22 +37,38 @@ describe('controls.css', () => {
     }
   });
 
+  it("the frame's tick colour (base.css) is below any rule of a plugin's own: a plugin's accent wins", () => {
+    const base = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugin-sdk', 'base.css'), 'utf8');
+    const accent = cssRules(base).filter((r) => 'accent-color' in r.props);
+    expect(accent.map((r) => r.props['accent-color'])).toEqual(['var(--mg-check-accent)']);
+    // Wholly inside :where(): no specificity (a plugin's `.my-check { accent-color }` is above it).
+    expect(accent[0].selectors.join(', ')).toMatch(/^:where\([^{]*\)$/);
+  });
+
+  it("in dark the kit's field takes the field tokens, in page and frame alike, above its own revert", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const sheets = { page: join(here, '..', '..', 'style.css'), frame: join(here, '..', '..', 'plugin-sdk', 'base.css') };
+    for (const [where, file] of Object.entries(sheets)) {
+      const rule = cssRules(readFileSync(file, 'utf8')).find((r) => r.selectors.some((s) => s.includes('input.mgk-input')));
+      expect(rule?.selectors, where).toEqual([':where([data-theme="dark"]) input.mgk-input:not(:disabled)']);
+      expect(rule?.props, where).toEqual({ 'background-color': 'var(--mg-field-bg)', color: 'var(--mg-field-text)' });
+    }
+  });
+
   it('leaves to the browser what the core leaves to it, and zeroes margin', () => {
     for (const [selector] of BASE_RULES) {
       const props = ruleProps(css, selector);
       for (const p of ['font', 'outline', 'outline-offset']) expect(props[p], `${selector} ${p}`).toBe('revert');
       expect(props.margin, selector).toBe('0');
     }
-    // The core's .bc-select sets its text colour and background; its input takes the field tokens
-    // (style.css: the browser's own field in light); the switch and pill set neither.
-    for (const selector of ['input.mgk-switch-input', 'button.mgk-pill']) {
+    // The core's .bc-select sets its text colour and background; the input and buttons do not (in
+    // dark the page's style.css and the frame's base.css give the input the field tokens).
+    for (const selector of ['input.mgk-input', 'input.mgk-switch-input', 'button.mgk-pill']) {
       expect(ruleProps(css, selector).color, selector).toBe('revert');
     }
     expect(ruleProps(css, 'select.mgk-select')).toMatchObject({ color: 'var(--mg-text)', background: 'var(--mg-bg)' });
-    expect(ruleProps(css, 'input.mgk-input')).toMatchObject({ color: 'var(--mg-field-text)', background: 'var(--mg-field-bg)' });
-    // A disabled one is the browser's, as the core's field rule leaves it.
-    expect(ruleProps(css, 'input.mgk-input:disabled')).toEqual({ color: 'revert', background: 'revert' });
-    // The core's switch and pill keep the browser's button face.
+    // The core's input, switch and pill keep the browser's field or button face.
+    expect(ruleProps(css, 'input.mgk-input').background).toBe('revert');
     expect(ruleProps(css, 'input.mgk-switch-input').background).toBe('revert');
     expect(ruleProps(css, 'button.mgk-pill').background).toBe('revert');
     expect(ruleProps(css, 'input.mgk-switch-input').padding).toBe('0');

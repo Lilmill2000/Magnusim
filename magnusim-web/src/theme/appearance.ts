@@ -3,16 +3,18 @@
  * size. The person's choice is in the app prefs (/api/prefs theme, text_scale, icon_scale; the
  * server keeps the same lists, scripts/prefs.js) and is shown on the page by applyAppearance:
  *
- *   html[data-theme]        the resolved theme, "light" or "dark" (tokens.css takes its set)
+ *   html[data-theme]        the resolved theme, "light" or "dark" (tokens.css takes its set, and its
+ *                           color-scheme: never inline, so a light swap on html for one task, as
+ *                           domPicture's lightPage, has the browser's light controls too)
  *   html[data-theme-pref]   what the person chose: light, dark or system
- *   html color-scheme       the resolved theme (form controls, scroll bars)
  *   --mg-text-scale, --mg-icon-scale on html (tokens.css sizes text and icons by them)
  *
  * then the window event 'cfd:appearance' {theme, text_scale, icon_scale} (theme resolved), which the
  * 3D views and charts repaint on (themeColor.ts onAppearance). "system" follows the system's light
- * or dark as it changes. A change made here reaches this app's other tabs (BroadcastChannel), and
- * the choice is kept in localStorage too, so the page's first paint has it before any script runs
- * (the pre-paint script in index.html and cad.html reads the same key). Nothing here reads
+ * or dark as it changes. A change made here reaches this app's other tabs (BroadcastChannel). The
+ * page's first paint has the look before any app script runs: the pre-paint script in index.html
+ * and cad.html reads the one the server put on <html> (data-look, scripts/prefs.js
+ * stampAppearance), else this origin's copy in localStorage (kept here). Nothing here reads
  * data-theme off any element but html (a capture puts one on .viewport-wrap for a moment).
  */
 
@@ -79,7 +81,6 @@ function show(a: Appearance): void {
   const theme = resolveTheme(a.theme);
   html.dataset.theme = theme;
   html.dataset.themePref = a.theme;
-  html.style.colorScheme = theme;
   html.style.setProperty('--mg-text-scale', String(a.text_scale));
   html.style.setProperty('--mg-icon-scale', String(a.icon_scale));
   window.dispatchEvent(new CustomEvent('cfd:appearance', { detail: { theme, text_scale: a.text_scale, icon_scale: a.icon_scale } }));

@@ -239,7 +239,7 @@ export async function runCoreTool(
     if (req.tool === 'view') return await coreView(input, req, rt);
     if (req.tool === 'keybinds') return await coreKeybinds(input, keys);
     if (req.tool === 'set_keybind') return await coreSetKeybind(input, req, keys);
-    if (req.tool === 'appearance') return await coreAppearance(input, look);
+    if (req.tool === 'appearance') return await coreAppearance(look);
     if (req.tool === 'set_appearance') return await coreSetAppearance(input, look);
     return fail('no_tool', `No core tool named ${req.tool.slice(0, 40)}.`);
   } catch (e) {

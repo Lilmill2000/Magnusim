@@ -26,7 +26,7 @@ export interface LookRuntime {
 
 export const pageLookRuntime = (): LookRuntime => ({ current: currentAppearance, save: saveAppearance });
 
-/** The look as the tools answer it: the choice, the theme it shows, and (asked) what Settings offers. */
+/** The look as the tools answer it: the choice, the theme it shows, and (core__appearance) what Settings offers. */
 const answer = (a: Appearance, offered = false) => ({
   theme: a.theme,
   shown: resolveTheme(a.theme),
@@ -40,10 +40,10 @@ const answer = (a: Appearance, offered = false) => ({
 const pct = (scale: number) => `${Math.round(scale * 100)}%`;
 const lookLine = (a: Appearance) => `${a.theme} theme, text ${pct(a.text_scale)}, icons ${pct(a.icon_scale)}`;
 
-/** core__appearance: the look now. */
-export async function coreAppearance(input: Record<string, unknown>, rt: LookRuntime): Promise<Outcome> {
+/** core__appearance: the look now, and what Settings offers. */
+export async function coreAppearance(rt: LookRuntime): Promise<Outcome> {
   const now = rt.current();
-  return { ok: true, result: { data: answer(now, input.with_offered === true), summary: lookLine(now) } };
+  return { ok: true, result: { data: answer(now, true), summary: lookLine(now) } };
 }
 
 /** core__set_appearance: the fields named, as Settings saves them. */

@@ -68,14 +68,12 @@ export const CORE_SET_KEYBIND_SCHEMA = Object.freeze({
   },
 });
 
-/** core__appearance's input. */
+/** core__appearance's input: none. */
 export const CORE_APPEARANCE_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
-  required: ['with_offered'],
-  properties: {
-    with_offered: { type: 'boolean', description: 'true also lists the choices Settings offers' },
-  },
+  required: [],
+  properties: {},
 });
 
 /** core__set_appearance's input: every property required, sentinels where unused. */
@@ -132,7 +130,7 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     name: 'appearance',
     title: 'Read the look',
     description:
-      "The app's look as Settings → Appearance shows it: theme (light, dark, or system: the system's; shown: the one on screen), text and icon size. Read it any time.",
+      "The app's look as Settings → Appearance shows it (theme: light, dark or system; shown: the one on screen; text and icon size) and what it offers. Any time.",
     inputSchema: CORE_APPEARANCE_SCHEMA as unknown as Record<string, unknown>,
     risk: 'read',
     timeoutS: 30,

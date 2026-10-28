@@ -227,11 +227,19 @@ export function toolsTooBigText(tokens: number | null): string {
 
 /**
  * The note naming the tools a request left out: a local budget's, with where each is offered
- * (§12.3), or the cloud cap's.
+ * (§12.3), or the cloud cap's. Where is said once for each run of tools offered in the same places
+ * ("a, b (Home, Workbench); c (Magnusim CAD Part)"), so the note stays within a turn note's 500.
  */
 export function droppedNote(sel: ToolSelection, local: boolean, contextTokens: number | null): string {
   if (!local) return `More tools than one request may carry; left out: ${sel.dropped.map((d) => d.name).join(', ')}.`;
-  const list = sel.dropped.map((d) => (d.contexts.length ? `${d.name} (${d.contexts.join(', ')})` : d.name)).join(', ');
+  const runs: Array<{ names: string[]; where: string }> = [];
+  for (const d of sel.dropped) {
+    const where = d.contexts.join(', ');
+    const last = runs[runs.length - 1];
+    if (last && last.where === where) last.names.push(d.name);
+    else runs.push({ names: [d.name], where });
+  }
+  const list = runs.map((r) => (r.where ? `${r.names.join(', ')} (${r.where})` : r.names.join(', '))).join('; ');
   const fit = contextTokens ? `To fit this model's context (${grouped(contextTokens)} tokens)` : `To fit ${grouped(sel.budget ?? LOCAL_BUDGET.unknown)} tokens of tool definitions`;
   return `${fit}, these tools were left out: ${list}. Load the model with a longer context to have them.`;
 }

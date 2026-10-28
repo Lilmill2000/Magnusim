@@ -131,13 +131,27 @@ function strictWeight(schema: Json): { optional: number; unions: number } {
 
 /**
  * Which of the request's tools go strict: those strictFlags grants among the ones that may,
- * which with `loose` leaves out the workspace's tools (CAD tools spec H8).
+ * which with `loose` leaves out the workspace's tools (CAD tools spec H8). The places go group by
+ * group as offered (in a workspace its tools first, each by name); among the app's own, the
+ * pinned first, then the higher priority, then as offered: `wait` before a Settings tool.
  */
 export function strictOf(tools: readonly ProviderTool[], schemas: readonly Json[], loose: boolean): boolean[] {
-  const may = tools.map((t) => !(loose && t.workspace));
-  const granted = strictFlags(schemas.filter((_, i) => may[i]));
-  let k = 0;
-  return may.map((m) => (m ? granted[k++] : false));
+  const group = (t: ProviderTool) => (t.workspace ? 1 : 0);
+  const firstAt = [0, 1].map((g) => tools.findIndex((t) => group(t) === g));
+  const rank = (t: ProviderTool) => (t.workspace ? [0, 0] : [Number(!!t.pinned), t.priority ?? 0]);
+  const order = tools
+    .map((_, i) => i)
+    .filter((i) => !(loose && tools[i].workspace))
+    .sort((a, b) => {
+      const [ra, rb] = [rank(tools[a]), rank(tools[b])];
+      return firstAt[group(tools[a])] - firstAt[group(tools[b])] || rb[0] - ra[0] || rb[1] - ra[1] || a - b;
+    });
+  const granted = strictFlags(order.map((i) => schemas[i]));
+  const out = tools.map(() => false);
+  order.forEach((i, k) => {
+    out[i] = granted[k];
+  });
+  return out;
 }
 
 /** Which of the tools go strict: in the order offered, each one that still fits STRICT_LIMITS. */

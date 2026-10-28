@@ -74,7 +74,7 @@ const CORE = {
   core__view: { key: 'action', values: [...VIEW_ACTIONS], props: ['action', 'target_ids', 'aspect', 'size', 'with_legend', 'on', 'save'], src: 'coreTools.ts' },
   core__keybinds: { key: '', values: [], props: ['plugin', 'target'], src: 'keybindTools.ts' },
   core__set_keybind: { key: 'action', values: [...KEYBIND_ACTIONS], props: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'], src: 'keybindTools.ts' },
-  core__appearance: { key: '', values: [], props: ['with_offered'], src: 'appearanceTool.ts' },
+  core__appearance: { key: '', values: [], props: [], src: 'appearanceTool.ts' },
   core__set_appearance: { key: '', values: [], props: ['theme', 'text_scale', 'icon_scale', 'person_asked'], src: 'appearanceTool.ts' },
 };
 for (const [name, c] of Object.entries(CORE)) {

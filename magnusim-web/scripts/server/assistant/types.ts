@@ -23,8 +23,11 @@ export interface AssistantMessage {
 export type Message = UserMessage | AssistantMessage;
 
 export interface JsonSchemaObject { type: 'object'; properties: Record<string, unknown>; required?: string[]; additionalProperties: false; description?: string }
-/** `workspace`: a workspace page's tool, not the host's (a cloud provider that can't compile the strict set gets these without strict, CAD tools spec H8). */
-export interface ProviderTool { name: string; description: string; schema: JsonSchemaObject; workspace?: boolean }
+/**
+ * `workspace`: a workspace page's tool, not the host's (a cloud provider that can't compile the strict set gets these without strict, CAD tools spec H8).
+ * `pinned` and `priority` (the app's other tools): which of them get a provider's few strict places first (anthropic.ts strictOf). Never sent.
+ */
+export interface ProviderTool { name: string; description: string; schema: JsonSchemaObject; workspace?: boolean; pinned?: boolean; priority?: number }
 export interface ProviderRequest {
   model: string;
   system: Array<{ text: string; cache: boolean }>;   // [host prompt, frozen workspace guide?]

@@ -9,13 +9,11 @@
 /* NumberUnitInput */
 .mgk-value-row { display: inline-flex; align-items: center; gap: 6px; color: var(--mg-text-body); }
 input.mgk-input {
-  margin: 0; font: revert; font-size: var(--mg-text-sm); color: var(--mg-field-text); background: var(--mg-field-bg);
+  margin: 0; font: revert; font-size: var(--mg-text-sm); color: revert; background: revert;
   width: 72px; padding: 2px 6px; border: 1px solid var(--mg-border); border-radius: var(--mg-radius-sm);
   outline: revert; outline-offset: revert;
 }
 input.mgk-input:focus-visible { outline: revert; outline-offset: revert; }
-/* Disabled: the browser's own, as the core's (its field rule leaves a disabled one to the browser). */
-input.mgk-input:disabled { color: revert; background: revert; }
 input.mgk-input--wide { width: 128px; }
 input.mgk-input--fill { width: 100%; max-width: 220px; }
 .mgk-unit { color: var(--mg-text); font-weight: var(--mg-weight-medium); }

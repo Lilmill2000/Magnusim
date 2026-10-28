@@ -14,7 +14,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { appReady, dockSend, dockTurn, resultsIn, useScriptedModel } from './support/assistant.js';
+import { appReady, dockSend, dockTurn, resultsIn, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { startHost } from './support/host-server.mjs';
 import { expect, test } from './support/stress.js';
@@ -202,8 +202,13 @@ test("gate:keybinds-ai the Assistant reads the keys any time, and changes one on
     seen.push(...resultsIn(body));
     return reply;
   };
+  const tabOf = trackTab(page);
   await page.goto(api('/#/'));
   await appReady(page);
+  // The window's core page (its tools with it) is on the server before the first request.
+  await expect
+    .poll(async () => (await (await request.get(api('/api/assistant/tabs'))).json()).tabs.find((t) => t.tab === tabOf())?.core?.place, { timeout: 30_000 })
+    .toBe('home');
   const confirm = page.locator('#modal-confirm');
 
   // Not asked for: refused before anything is shown.
