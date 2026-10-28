@@ -100,7 +100,7 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     name: 'set_keybind',
     title: 'Change a keyboard shortcut',
     description:
-      'Changes a plugin\'s keyboard shortcut as Settings → Keybinds does: set (keys: its one key, e.g. "Shift+R"), reset (defaults), clear (no key), reset_all (the plugin\'s every command). Only if the person explicitly asked for this change in this request (person_asked true, else not_asked); the app asks them to confirm (No: step_declined). A key another command has: key_taken unless replace true.',
+      "Changes a plugin's shortcut as Settings → Keybinds does: set (keys: its one key, e.g. \"Shift+R\"), reset (defaults), clear (no key), reset_all (all its commands). Only if the person explicitly asked for this change in this request (person_asked true, else not_asked); the app asks them to confirm (No: step_declined). Another command's key: key_taken unless replace; keys changed meanwhile: changed.",
     inputSchema: CORE_SET_KEYBIND_SCHEMA as unknown as Record<string, unknown>,
     risk: 'edit',
     timeoutS: 300,

@@ -3,6 +3,7 @@ import { DEMO_COMMANDS, fakeKeysServer } from '../test/keybindsFake';
 import { onPrefChange } from '../workspace/prefsChannel';
 import {
   applyChange,
+  ASSISTANT_FROM,
   conflictsOf,
   isDefault,
   KEYBINDS_PREF,
@@ -11,6 +12,7 @@ import {
   planChange,
   refusalOf,
   resetAllKeys,
+  resetEveryPlugin,
   SETTINGS_FROM,
   type PluginKeys,
 } from './catalog';
@@ -54,6 +56,21 @@ describe('loadPluginKeys', () => {
     expect(errors.d).toBe('workspace/x.json is missing');
   });
 
+  it('reads a key as people write it too ("shift+r"), as the CAD plugin reads them', async () => {
+    const { p } = await demo({ 'sketch.rectangle': ['shift+r'], 'sketch.line': ['ctrl+w'] });
+    expect(keysOf(p, 'sketch.rectangle')).toEqual(['Shift+KeyR']);
+    // A browser's key, however written, is still none of the person's: the defaults.
+    expect(keysOf(p, 'sketch.line')).toEqual(['KeyL']);
+  });
+
+  it('a checked change writes nothing when the keys moved before the write', async () => {
+    const { p, server } = await demo();
+    server.prefs.demo = { [KEYBINDS_PREF]: { 'sketch.line': ['KeyM'] } };
+    const { result } = await applyChange(p, 'sketch.line', { action: 'set', combo: 'KeyK' }, undefined, ASSISTANT_FROM, (now) => keysOf(now, 'sketch.line')[0] === 'KeyL');
+    expect(result).toMatchObject({ ok: false, code: 'changed' });
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyM'] });
+  });
+
   it('reads the person keys: known ids and valid combos only', async () => {
     const { p } = await demo({ 'sketch.rectangle': ['Shift+KeyR'], 'model.extrude': [], ghost: ['KeyG'], 'view.fit': ['Nope'] });
     expect({ ...p.overrides }).toEqual({ 'sketch.rectangle': ['Shift+KeyR'], 'model.extrude': [] });
@@ -77,10 +94,10 @@ describe('loadPluginKeys', () => {
 });
 
 describe('refusalOf', () => {
-  it("names the app's keys, the browser's and the system's, and the dialogs' Escape", () => {
+  it("names the app's keys, the browser's and the system's, and Escape (a command's own default only)", () => {
     expect(refusalOf('Ctrl+Slash')).toBe('"Ctrl+Slash" is the app\'s own key (Open or close the Assistant panel)');
     expect(refusalOf('Ctrl+KeyW', displayCombo)).toBe('Ctrl+W is kept for the browser and the system (Close the tab)');
-    expect(refusalOf('Escape')).toBe('"Escape" is the app\'s own key in dialogs, menus and modes (Close the open dialog, menu or mode)');
+    expect(refusalOf('Escape')).toBe('"Escape" is the app\'s own key in dialogs, menus and modes (Close the open dialog, menu or mode): only a command\'s own default can be it');
     expect(refusalOf('Shift+KeyR')).toBe('');
   });
 });
@@ -161,10 +178,92 @@ describe('applyChange', () => {
     expect(plugin).toBe(p);
   });
 
+  it('Reset all keybinds asks once, naming the plugins it changes, and resets each; nothing to reset asks nothing', async () => {
+    const ws = { key: 'part', title: 'Part', commands: 'workspace/commands.json', commands_error: '' };
+    const server = fakeKeysServer({
+      rows: [
+        { key: 'demo', name: 'Demo', status: 'enabled', workspaces: [ws] },
+        { key: 'other', name: 'Other', status: 'enabled', workspaces: [ws] },
+        { key: 'plain', name: 'Plain', status: 'enabled', workspaces: [ws] },
+      ],
+      files: Object.fromEntries(['demo', 'other', 'plain'].map((k) => [`/plugins/${k}/workspace/commands.json`, DEMO_COMMANDS])),
+      prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['KeyK'] } }, other: { [KEYBINDS_PREF]: { 'view.fit': [] } }, plain: { [KEYBINDS_PREF]: { 'sketch.line': ['KeyL'] } } },
+    });
+    const asked: string[][] = [];
+    const no = await resetEveryPlugin(async (names) => (asked.push(names), false));
+    expect(no).toEqual({ asked: true, reset: [], failed: [], error: '' });
+    expect(asked).toEqual([['Demo', 'Other']]);
+    expect(server.calls).toEqual([]);
+    const yes = await resetEveryPlugin(async () => true);
+    expect(yes).toEqual({ asked: true, reset: ['Demo', 'Other'], failed: [], error: '' });
+    expect([server.prefs.demo[KEYBINDS_PREF], server.prefs.other[KEYBINDS_PREF]]).toEqual([undefined, undefined]);
+    // Plain's stored keys are its defaults: it is left as it is.
+    expect(server.prefs.plain[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyL'] });
+    const again = await resetEveryPlugin(async () => {
+      throw new Error('asked with nothing to reset');
+    });
+    expect(again).toEqual({ asked: false, reset: [], failed: [], error: '' });
+  });
+
+  it("Reset all keybinds says which plugin's keys could not be read", async () => {
+    const server = fakeKeysServer();
+    server.failReads = true;
+    const out = await resetEveryPlugin(async () => true);
+    expect(out.asked).toBe(false);
+    expect(out.failed).toEqual([{ name: 'Demo', why: 'its keys could not be read' }]);
+  });
+
+  it('a plugin list the app could not read is an error, never "no plugins"', async () => {
+    const server = fakeKeysServer();
+    server.fetch.mockImplementation(async () => new Response(JSON.stringify({ ok: false, error: 'worker RPC timeout' }), { status: 500 }));
+    expect(await loadPluginKeys()).toEqual({ plugins: [], error: 'Could not read the plugin list: worker RPC timeout.' });
+    server.fetch.mockImplementation(async () => new Response('{}', { status: 200 }));
+    expect((await loadPluginKeys()).error).toBe('Could not read the plugin list: the app answered 200.');
+    // Reset all keybinds says so too, and asks nothing.
+    const out = await resetEveryPlugin(async () => {
+      throw new Error('asked');
+    });
+    expect(out).toMatchObject({ asked: false, error: 'Could not read the plugin list: the app answered 200.' });
+  });
+
+  it('a Replace leaves the other command its local key (Escape), and it reads back as its own', async () => {
+    const server = fakeKeysServer({
+      files: {
+        '/plugins/demo/workspace/commands.json': {
+          version: 1,
+          contexts: [{ id: 'sketch', label: 'Sketch' }],
+          commands: [
+            { id: 'sketch.line', label: 'Line', group: '', context: 'sketch', keys: ['KeyL'] },
+            { id: 'sketch.cancel', label: 'Stop drawing', group: '', context: 'sketch', keys: ['Escape', 'KeyQ'] },
+          ],
+        },
+      },
+    });
+    const p = (await loadPluginKeys()).plugins[0];
+    const { result, plugin } = await applyChange(p, 'sketch.line', { action: 'set', combo: 'KeyQ', replace: true });
+    expect(result.ok).toBe(true);
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyQ'], 'sketch.cancel': ['Escape'] });
+    expect(keysOf(plugin, 'sketch.cancel')).toEqual(['Escape']);
+    expect(conflictsOf(plugin, 'sketch.line', 'KeyQ')).toEqual([]);
+  });
+
+  it("every write says who made it: Settings, or the Assistant's tools", async () => {
+    const heard: { from: string }[] = [];
+    const stop = onPrefChange((c) => heard.push(c));
+    const { p } = await demo();
+    await applyChange(p, 'sketch.line', { action: 'set', combo: 'KeyK' });
+    await applyChange(p, 'model.extrude', { action: 'clear' }, undefined, ASSISTANT_FROM);
+    await vi.waitFor(() => expect(heard.map((h) => h.from)).toEqual([SETTINGS_FROM, ASSISTANT_FROM]));
+    expect(SETTINGS_FROM).not.toBe(ASSISTANT_FROM);
+    stop();
+  });
+
   it('Reset all drops every key of the plugin', async () => {
     const { p, server } = await demo({ 'sketch.line': ['KeyK'], 'later.command': ['KeyQ'] });
     const r = await resetAllKeys(p);
     expect(r).toMatchObject({ ok: true });
     expect(server.prefs.demo[KEYBINDS_PREF]).toBeUndefined();
+    // Its keys are looked up by id: a command named like an object property has none of the person's.
+    if (r.ok) expect([Object.getPrototypeOf(r.plugin.overrides), 'constructor' in r.plugin.overrides]).toEqual([null, false]);
   });
 });

@@ -4,9 +4,10 @@
  * CAD's start action; each Part can be renamed and deleted. Studies of plugins this app
  * does not have (a project made in Magnusim) are listed greyed, kept as they are.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useHashRoute } from '../app/routes';
+import { renamePluginStudy } from '../chrome/studyName';
 import { confirmAction, promptName } from '../workbench/dialogs';
 import { loadStartActions, startStudy } from '../workspace/startActions';
 import { workspaceHash } from '../workspace/route';
@@ -63,11 +64,16 @@ export function ProjectPage({ host }: { host: HTMLElement }) {
   const [busy, setBusy] = useState(false);
   const pid = project?.id || '';
   const onWorkspace = route.view === 'workbench' && !!(route as { workspace?: unknown }).workspace;
+  // Each read of the list; only the newest one's answer is shown (Back starts two at once, and
+  // an older answer landing last would put back rows read before the Part saved).
+  const reads = useRef(0);
 
   const reload = useCallback(async () => {
     if (!pid) return;
+    const serial = ++reads.current;
     const r = await fetch(`/api/plugin-studies?${new URLSearchParams({ project_id: pid })}`, { cache: 'no-store' });
     const j = (await r.json().catch(() => ({}))) as { studies?: PartRow[] };
+    if (serial !== reads.current) return;
     setParts(Array.isArray(j.studies) ? j.studies : []);
   }, [pid]);
 
@@ -114,12 +120,37 @@ export function ProjectPage({ host }: { host: HTMLElement }) {
     }
   };
 
-  const rename = async (part: PartRow) => {
-    const title = await promptName({ title: 'Rename part', copy: 'A new name for this part.', value: part.title, yes: 'Rename' });
-    if (!title || title.trim() === part.title) return;
-    const got = await postJson('/api/plugin-studies/rename', { project_id: pid, plugin: part.plugin, study_id: part.id, rev: part.rev, title: title.trim() });
-    if (!got.ok) await notice('Could not rename the part', String(got.json.error || `The app answered ${got.status}.`));
-    await reload();
+  // Magnusim's rename (chrome/studyName.ts) in this page's words. The row's rev can be older than
+  // the record: the Part writes its own fields while it is open (its document pointer on first
+  // open, which can even land after Back), and the list read on Back may not have answered when
+  // Rename is clicked. So the record is read once the name is typed, and its rev is sent when its
+  // title is still the one shown (a rename writes only the title, so the Part's fields stay); a
+  // record renamed elsewhere keeps the row's rev and is refused. A rev that changes between that
+  // read and the rename is read again once (renamePluginStudy). A refused rename shows the list as
+  // it is now behind its notice.
+  const rename = (part: PartRow) => {
+    const read = async (): Promise<{ title?: unknown; rev?: unknown } | null> => {
+      const q = new URLSearchParams({ project_id: pid, plugin: part.plugin, study_id: part.id });
+      const r = await fetch(`/api/plugin-studies/get?${q}`, { cache: 'no-store' }).catch(() => null);
+      const j = (r && r.ok ? await r.json().catch(() => null) : null) as { study?: { title?: unknown; rev?: unknown } } | null;
+      return j?.study ?? null;
+    };
+    return renamePluginStudy(part, {
+      promptName: (o) => promptName({ ...o, title: 'Rename part', copy: 'A new name for this part.' }),
+      rename: async (body) => {
+        const now = await read();
+        const rev = now && String(now.title ?? '') === part.title && now.rev != null ? now.rev : body.rev;
+        const got = await postJson('/api/plugin-studies/rename', { project_id: pid, plugin: part.plugin, study_id: part.id, ...body, rev });
+        const ok = got.ok && got.json.ok !== false;
+        return { response: { status: got.status }, json: { ...got.json, ok, ...(ok ? {} : { error: String(got.json.error || `The app answered ${got.status}.`) }) } };
+      },
+      read,
+      notice: (_title, copy) => {
+        void reload();
+        return notice('Could not rename the part', copy);
+      },
+      sync: () => void reload(),
+    });
   };
 
   const remove = async (part: PartRow) => {
@@ -158,7 +189,7 @@ export function ProjectPage({ host }: { host: HTMLElement }) {
       ) : (
         <ul className="cad-parts" aria-label="Parts">
           {parts.map((part) => (
-            <li key={`${part.plugin}/${part.id}`} className={`cad-part${part.available ? '' : ' is-unavailable'}`} data-part-id={part.id}>
+            <li key={`${part.plugin}/${part.id}`} className={`cad-part${part.available ? '' : ' is-unavailable'}`} data-part-id={part.id} data-part-rev={part.rev}>
               <button
                 type="button"
                 className="cad-part-open"

@@ -5228,7 +5228,10 @@ body.is-recording #viewport-gizmo {
 }
 .wiz-keys-capture:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
 .wiz-keys-actions { display: flex; gap: 6px; justify-content: flex-end; min-width: 0; }
-.wiz-keys-actions .wiz-reset:disabled { opacity: var(--mg-disabled-opacity); cursor: default; }
+/* A Keybinds button that does nothing now (keys not read, nothing to reset), or one at work (aria-busy). */
+.wiz-keys .wiz-reset:disabled,
+.wiz-pane-head .wiz-reset:disabled { opacity: var(--mg-disabled-opacity); cursor: default; }
+.wiz-pane-head .wiz-reset[aria-busy="true"] { cursor: progress; }
 /* A key another command has (Replace / Cancel), and a row's last word: Saved, or why not. */
 .wiz-keys-conflict { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--mg-text-sm); color: var(--mg-warning); }
 .wiz-keys-row .wiz-keys-saved,
@@ -5237,6 +5240,10 @@ body.is-recording #viewport-gizmo {
 .wiz-keys-error { margin: 0; font-size: var(--mg-text-sm); color: var(--mg-danger); }
 .wiz-keys-reserved summary { cursor: pointer; font-size: var(--mg-text-sm); color: var(--mg-text-secondary); margin: 4px 0; }
 .wiz-keys-reserved .wiz-keys-list { margin-top: 4px; }
+/* What every row last said, read out to screen readers from one place that is always there. */
+.wiz-keys-live { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* The header's flash when a section's change was not (all) saved: why, for longer. */
+.wiz-saved.is-error { color: var(--mg-danger); white-space: normal; }
 
 /* Settings → Assistant (AssistantStep.tsx): compact blocks; the step scrolls with .wiz-main. */
 .wiz-assistant { display: flex; flex-direction: column; gap: var(--mg-space-3); }

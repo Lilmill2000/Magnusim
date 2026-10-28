@@ -17,17 +17,24 @@
  * meanwhile, and ids this list doesn't know, stay), then announces it on the prefs channel, so an
  * open workspace of that plugin (this tab or another) takes it at once.
  */
-import { APP_COMMANDS, APP_LOCAL_KEYS, RESERVED_KEYS } from './appCommands';
+import { APP_COMMANDS, APP_KEYS, APP_LOCAL_KEYS, RESERVED_KEYS } from './appCommands';
+import { parseCombo } from './combo';
 import { ANY_CONTEXT, readCommandsFile, readKeybindOverrides, type Command, type CommandContext } from './commands';
 import { announcePref } from '../workspace/prefsChannel';
 
 /** The plugin prefs key that holds the person's keys. */
 export const KEYBINDS_PREF = 'keybinds';
+const tag = () => Math.random().toString(36).slice(2, 10);
 /**
  * Who this page's Settings changes come from, on the prefs channel: its own (a change it hears
  * with it is one it made), and not a workspace bridge's (each open workspace takes it).
  */
-export const SETTINGS_FROM = `settings:${Math.random().toString(36).slice(2, 10)}`;
+export const SETTINGS_FROM = `settings:${tag()}`;
+/** Who this page's Assistant changes (core__set_keybind) come from: an open Settings takes them. */
+export const ASSISTANT_FROM = `assistant:${tag()}`;
+
+/** No keys of the person's own: looked up by id, so no prototype answers for one. */
+const noKeys = (): Record<string, string[]> => Object.create(null) as Record<string, string[]>;
 
 export interface WorkspaceKeys {
   workspace: string;
@@ -98,13 +105,27 @@ export function commandsOf(p: PluginKeys): Command[] {
   return p.workspaces.flatMap((w) => w.commands);
 }
 
-/** Reads the person's keys of a plugin again (after a change made elsewhere, or a failed read). */
+/** One stored key as its combo: written as a combo, or as people write it ("shift+r"), as the CAD plugin reads them. */
+const readKey = (k: unknown): string | null => {
+  if (typeof k !== 'string') return null;
+  const p = parseCombo(k);
+  return p.ok ? p.combo : null;
+};
+
+/** The person's keys in a stored value, read as the CAD plugin reads them. */
+const overridesOf = (stored: unknown, p: PluginKeys) => readKeybindOverrides(stored, commandsOf(p), APP_KEYS, readKey);
+
+/**
+ * Reads the person's keys of a plugin again (after a change made elsewhere, or a failed read),
+ * once any write of this page's to that plugin is done: a read begun after a write sees it.
+ */
 export async function refreshOverrides(p: PluginKeys): Promise<PluginKeys> {
   try {
+    await (writing.get(p.plugin) ?? Promise.resolve());
     const stored = await readStored(p.plugin);
-    return { ...p, overrides: readKeybindOverrides(stored, commandsOf(p)), unread: '' };
+    return { ...p, overrides: overridesOf(stored, p), unread: '' };
   } catch (e) {
-    return { ...p, overrides: {}, unread: `Your keys for ${p.name} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+    return { ...p, overrides: noKeys(), unread: `Your keys for ${p.name} could not be read: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -113,8 +134,10 @@ export async function loadPluginKeys(): Promise<{ plugins: PluginKeys[]; error: 
   let rows: PluginRow[];
   try {
     const r = await fetch('/api/plugins', { cache: 'no-store' });
-    const body = (await r.json()) as { plugins?: PluginRow[] };
-    rows = Array.isArray(body.plugins) ? body.plugins : [];
+    const body = (await r.json().catch(() => ({}))) as { plugins?: PluginRow[]; error?: unknown };
+    // A busy or restarting worker answers with an error, never as "no plugins".
+    if (!r.ok || !Array.isArray(body.plugins)) return { plugins: [], error: `Could not read the plugin list: ${String(body.error || `the app answered ${r.status}`)}.` };
+    rows = body.plugins;
   } catch {
     return { plugins: [], error: 'Could not read the plugin list.' };
   }
@@ -125,7 +148,7 @@ export async function loadPluginKeys(): Promise<{ plugins: PluginKeys[]; error: 
         const plugin = String(row.key);
         const workspaces = (await Promise.all((row.workspaces || []).map((ws) => readWorkspace(plugin, ws)))).filter((w): w is WorkspaceKeys => !!w);
         if (!workspaces.length) return null;
-        return refreshOverrides({ plugin, name: String(row.name || plugin), workspaces, overrides: {}, unread: '' });
+        return refreshOverrides({ plugin, name: String(row.name || plugin), workspaces, overrides: noKeys(), unread: '' });
       }),
   );
   return { plugins: plugins.filter((p): p is PluginKeys => !!p), error: '' };
@@ -162,9 +185,11 @@ export function contextLabel(ws: WorkspaceKeys, context: string): string {
 export const contextsMeet = (a: string, b: string): boolean => a === b || a === ANY_CONTEXT || b === ANY_CONTEXT;
 
 /**
- * Why no command may have `combo` ('' when one may), naming it with `name` (JSON quotes, as the
- * validators do, by default): the app's own key, a key the browser or the system keeps, or the key
- * that closes the app's dialogs, menus and modes.
+ * Why a change may not give a command `combo` ('' when it may), naming it with `name` (JSON
+ * quotes, as the validators do, by default): the app's own key, a key the browser or the system
+ * keeps, or the app's local key (Escape). A workspace may use Escape, and a command's own default
+ * may be it (published: plugin-sdk.json app_keys), but no one sets it: a press of Escape cancels
+ * Settings' recorder, so the Assistant may not give it either (it can do what the person can).
  */
 export function refusalOf(combo: string, name: (c: string) => string = q): string {
   const app = APP_COMMANDS.find((c) => c.keys.includes(combo));
@@ -172,7 +197,7 @@ export function refusalOf(combo: string, name: (c: string) => string = q): strin
   const reserved = RESERVED_KEYS.find((c) => c.keys.includes(combo));
   if (reserved) return `${name(combo)} is kept for the browser and the system (${reserved.label})`;
   const local = APP_LOCAL_KEYS.find((c) => c.keys.includes(combo));
-  if (local) return `${name(combo)} is the app's own key in dialogs, menus and modes (${local.label})`;
+  if (local) return `${name(combo)} is the app's own key in dialogs, menus and modes (${local.label}): only a command's own default can be it`;
   return '';
 }
 
@@ -190,8 +215,8 @@ export type ChangeResult =
   | { ok: true; id: string; keys: string[]; took: Command[] }
   /** The key is another command's where the two meet: offer Replace or Cancel. */
   | { ok: false; code: 'conflict'; id: string; combo: string; conflicts: Command[]; message: string }
-  /** Unknown command, a key it cannot have, keys not read, or the write failed. */
-  | { ok: false; code: 'unknown' | 'refused' | 'unread' | 'failed'; id: string; message: string };
+  /** Unknown command, a key it cannot have, keys not read, the write failed, or the keys moved under a checked change. */
+  | { ok: false; code: 'unknown' | 'refused' | 'unread' | 'failed' | 'changed'; id: string; message: string };
 
 /** The ids a change touches and their keys after it (null: back to the defaults). */
 type Patch = Record<string, string[] | null>;
@@ -232,14 +257,28 @@ export function planChange(p: PluginKeys, id: string, change: KeyChange, name: (
 // One write at a time per plugin, so two quick changes never store over each other.
 const writing = new Map<string, Promise<unknown>>();
 
+/** A checked change found the keys moved since it was worked out (store's `still`). */
+class KeysChanged extends Error {}
+/** The stored keys could not be read again before the write: nothing written. */
+class KeysUnread extends Error {}
+
 /**
  * Stores a patch: reads the stored value again, changes only the patch's ids (`all`: drops every
- * id), writes it back (or removes the pref when nothing is left) and announces it. The keys as
- * stored, or the error.
+ * id), writes it back (or removes the pref when nothing is left) and announces it. `still`, when
+ * given, is asked about the value just read, in the same turn as the write: false writes nothing
+ * (KeysChanged). The keys as stored, or the error.
  */
-function store(plugin: string, patch: Patch, all = false): Promise<Record<string, unknown>> {
+function store(plugin: string, patch: Patch, all = false, from = SETTINGS_FROM, still?: (stored: unknown) => boolean): Promise<Record<string, unknown>> {
   const run = async () => {
-    const stored = all ? null : await readStored(plugin);
+    let stored: unknown = null;
+    if (!all) {
+      try {
+        stored = await readStored(plugin);
+      } catch (e) {
+        throw new KeysUnread(e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (still && !still(stored)) throw new KeysChanged('the keys changed meanwhile');
     const next: Record<string, unknown> = isObject(stored) ? { ...stored } : {};
     for (const [id, keys] of Object.entries(patch)) {
       if (keys === null) delete next[id];
@@ -248,7 +287,7 @@ function store(plugin: string, patch: Patch, all = false): Promise<Record<string
     const empty = !Object.keys(next).length;
     if (empty) await postJson('/api/plugin-prefs/remove', { plugin, key: KEYBINDS_PREF });
     else await postJson('/api/plugin-prefs/set', { plugin, key: KEYBINDS_PREF, value: next });
-    announcePref(plugin, KEYBINDS_PREF, empty ? null : next, SETTINGS_FROM);
+    announcePref(plugin, KEYBINDS_PREF, empty ? null : next, from);
     return next;
   };
   const done = (writing.get(plugin) ?? Promise.resolve()).then(run, run);
@@ -256,25 +295,66 @@ function store(plugin: string, patch: Patch, all = false): Promise<Record<string
   return done;
 }
 
-/** Makes a change and stores it: what it did (with the plugin's keys as stored now), or why not. */
-export async function applyChange(p: PluginKeys, id: string, change: KeyChange, name?: (c: string) => string): Promise<{ result: ChangeResult; plugin: PluginKeys }> {
+/**
+ * Makes a change and stores it: what it did (with the plugin's keys as stored now), or why not.
+ * `from`: who it is announced as (Settings by default; the Assistant's tools pass ASSISTANT_FROM).
+ * `still`: asked about the plugin's keys as read just before the write, in the same turn; false
+ * writes nothing and answers `changed` (the Assistant's check that the change is still the one
+ * the person said Yes to).
+ */
+export async function applyChange(
+  p: PluginKeys,
+  id: string,
+  change: KeyChange,
+  name?: (c: string) => string,
+  from = SETTINGS_FROM,
+  still?: (now: PluginKeys) => boolean,
+): Promise<{ result: ChangeResult; plugin: PluginKeys }> {
   const plan = planChange(p, id, change, name);
   if (!plan.ok) return { result: plan, plugin: p };
   try {
-    const next = await store(p.plugin, plan.patch);
-    return { result: { ok: true, id, keys: plan.keys, took: plan.took }, plugin: { ...p, overrides: readKeybindOverrides(next, commandsOf(p)) } };
+    const check = still ? (stored: unknown) => still({ ...p, overrides: overridesOf(stored, p), unread: '' }) : undefined;
+    const next = await store(p.plugin, plan.patch, false, from, check);
+    return { result: { ok: true, id, keys: plan.keys, took: plan.took }, plugin: { ...p, overrides: overridesOf(next, p) } };
   } catch (e) {
+    if (e instanceof KeysChanged) return { result: { ok: false, code: 'changed', id, message: 'The keys changed meanwhile; nothing changed.' }, plugin: p };
+    if (e instanceof KeysUnread) return { result: { ok: false, code: 'unread', id, message: `Your keys for ${p.name} could not be read: ${e.message}` }, plugin: p };
     return { result: { ok: false, code: 'failed', id, message: `Could not save the keys: ${e instanceof Error ? e.message : String(e)}` }, plugin: p };
   }
 }
 
 /** Every command of a plugin back to its defaults: the plugin as stored now, or why not. */
-export async function resetAllKeys(p: PluginKeys): Promise<{ ok: true; plugin: PluginKeys } | { ok: false; message: string }> {
+export async function resetAllKeys(p: PluginKeys, from = SETTINGS_FROM): Promise<{ ok: true; plugin: PluginKeys } | { ok: false; message: string }> {
   if (p.unread) return { ok: false, message: p.unread };
   try {
-    await store(p.plugin, {}, true);
-    return { ok: true, plugin: { ...p, overrides: {} } };
+    await store(p.plugin, {}, true, from);
+    return { ok: true, plugin: { ...p, overrides: noKeys() } };
   } catch (e) {
     return { ok: false, message: `Could not save the keys: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+/** Whether any command of a plugin has keys of the person's own. */
+export const hasOwnKeys = (p: PluginKeys): boolean => Object.keys(p.overrides).some((id) => !isDefault(p, id));
+
+/**
+ * Settings → Keybinds' Reset all keybinds: every plugin's commands back to their defaults, after
+ * one `ask` naming the plugins it changes (none asked when there is nothing to reset). What it
+ * reset, and each plugin it could not, with why in a few words (its keys not read, or the write
+ * refused).
+ */
+export async function resetEveryPlugin(ask: (names: string[]) => Promise<boolean>): Promise<{ asked: boolean; reset: string[]; failed: { name: string; why: string }[]; error: string }> {
+  const { plugins, error } = await loadPluginKeys();
+  if (error) return { asked: false, reset: [], failed: [], error };
+  const unread = plugins.filter((p) => p.unread).map((p) => ({ name: p.name, why: 'its keys could not be read' }));
+  const own = plugins.filter((p) => !p.unread && hasOwnKeys(p));
+  if (!own.length) return { asked: false, reset: [], failed: unread, error: '' };
+  if (!(await ask(own.map((p) => p.name)))) return { asked: true, reset: [], failed: [], error: '' };
+  const done = await Promise.all(own.map(async (p) => ({ p, r: await resetAllKeys(p) })));
+  return {
+    asked: true,
+    reset: done.filter((d) => d.r.ok).map((d) => d.p.name),
+    failed: [...unread, ...done.flatMap((d) => (d.r.ok ? [] : [{ name: d.p.name, why: d.r.message }]))],
+    error: '',
+  };
 }

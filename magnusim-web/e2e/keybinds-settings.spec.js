@@ -154,6 +154,31 @@ test("gate:keybinds a person sets their own keys in Settings, and the open works
     await expect(board.key('sketch.rectangle')).toHaveText('Rectangle: KeyR');
     await expect(board.key('sketch.line')).toHaveText('Line: KeyL');
     expect(storedKeys()).toBeNull();
+
+    // The section's Reset all keybinds (every plugin): one question, where Enter keeps the keys.
+    await s.row('sketch.line').locator('[data-keybind-change]').click();
+    await s.page.keyboard.press('Alt+KeyL');
+    await expect(board.key('sketch.line')).toHaveText('Line: Alt+KeyL');
+    const resetAll = s.page.locator('[data-wiz-reset="keybinds"]');
+    await expect(resetAll).toHaveText('Reset all keybinds');
+    await resetAll.click();
+    await expect(s.page.locator('#modal-confirm')).toBeVisible();
+    await expect(s.page.locator('#cf-heading')).toHaveText('Reset all keybinds?');
+    await expect(s.page.locator('#cf-copy')).toHaveText("Every command of Keys demo gets its default keys back. The app's own keys stay as they are.");
+    await s.page.keyboard.press('Enter');
+    await expect(s.page.locator('#modal-confirm')).toBeHidden();
+    await expect(s.keys('sketch.line')).toHaveText(['Alt+L']);
+    expect(storedKeys()).toEqual({ 'sketch.line': ['Alt+KeyL'] });
+    await resetAll.click();
+    await s.page.locator('#cf-confirm').click();
+    await expect(s.page.locator('#wiz-saved')).toHaveText('Saved');
+    await expect(s.keys('sketch.line')).toHaveText(['L']);
+    await expect(board.key('sketch.line')).toHaveText('Line: KeyL');
+    expect(storedKeys()).toBeNull();
+    // With nothing to reset it asks nothing.
+    await resetAll.click();
+    await expect(s.page.locator('#wiz-saved')).toHaveText('Every key is its default already');
+    await expect(s.page.locator('#modal-confirm')).toBeHidden();
   } finally {
     await context.close();
   }
@@ -183,18 +208,31 @@ test("gate:keybinds-ai the Assistant reads the keys any time, and changes one on
   expect(JSON.stringify(seen)).toContain('not_asked');
   await expect(confirm).toBeHidden();
 
-  // Asked for: the app asks; Keep it changes nothing.
+  // Asked for: the app asks, naming the change as the CAD Part asks; Enter answers Cancel, and a
+  // click on Cancel too: nothing changes.
   seen = [];
   fake.reply(
     () => call('core__keybinds', { plugin: '', target: 'Line' }),
     after(set({})),
     after({ text: 'Left it.' }),
   );
+  // What the Yes was the moment the question showed (Playwright may see the dialog later than that).
+  await page.evaluate(() => {
+    const modal = document.getElementById('modal-confirm');
+    window.__yesAtShow = null;
+    new MutationObserver(() => {
+      if (!modal.hidden && window.__yesAtShow === null) window.__yesAtShow = document.getElementById('cf-confirm').disabled;
+    }).observe(modal, { attributes: true, attributeFilter: ['hidden'] });
+  });
   await dockSend(page, 'Give Line the key Shift+L');
   await expect(confirm).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('#cf-heading')).toHaveText('Change a keybind?');
-  await expect(page.locator('#cf-copy')).toHaveText('The Assistant asks to give Line (Keys demo) the key Shift+L.');
-  await page.locator('#cf-cancel').click();
+  await expect(page.locator('#cf-copy')).toHaveText('Keys demo · Line (sketch): L → Shift+L');
+  await expect(page.locator('#cf-cancel')).toHaveText('Cancel');
+  // Its Yes takes a deliberate click: disabled at first, and Enter never answers it.
+  expect(await page.evaluate(() => window.__yesAtShow), 'Yes is disabled when the question shows').toBe(true);
+  await expect(page.locator('#cf-confirm')).toBeEnabled({ timeout: 5_000 });
+  await page.keyboard.press('Enter');
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 30_000 });
   expect(JSON.stringify(seen)).toContain('"KeyL"');
   expect(JSON.stringify(seen)).toContain('step_declined');

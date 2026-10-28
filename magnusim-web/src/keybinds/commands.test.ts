@@ -139,7 +139,7 @@ describe("the person's keys (the plugin's prefs key \"keybinds\")", () => {
     for (const v of [null, [], 'x', 3]) expect(readKeybindOverrides(v, commands)).toEqual({});
   });
 
-  it("drops the app's keys, and an id with no key left has its defaults (as the CAD plugin reads them)", () => {
+  it("drops the app's and the browser's keys (a local one, Escape, is a workspace's), and an id with no key left has its defaults", () => {
     expect(
       readKeybindOverrides(
         {
@@ -149,7 +149,7 @@ describe("the person's keys (the plugin's prefs key \"keybinds\")", () => {
         },
         commands,
       ),
-    ).toEqual({ 'sketch.rectangle': ['Shift+KeyR'] });
+    ).toEqual({ 'sketch.rectangle': ['Shift+KeyR'], 'model.extrude': ['Escape'] });
     expect(readKeybindOverrides({ 'model.extrude': ['Ctrl+Slash'] }, commands, NO_KEYS)).toEqual({ 'model.extrude': ['Ctrl+Slash'] });
   });
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { KEYBINDS_PREF, loadPluginKeys } from '../keybinds/catalog';
+import { ASSISTANT_FROM, KEYBINDS_PREF, loadPluginKeys } from '../keybinds/catalog';
+import { onPrefChange } from '../workspace/prefsChannel';
 import { fakeKeysServer } from '../test/keybindsFake';
 import type { AssistantInvoke } from '../workspace/bridge';
 import { coreKeybinds, coreSetKeybind, SET_IN, type KeysRuntime } from './keybindTools';
@@ -81,7 +82,7 @@ describe('core__set_keybind', () => {
     const { req, progress } = invoke({});
     const out = await coreSetKeybind(set({ command: 'Line', keys: 'shift+k' }), req, rt);
     expect(out).toMatchObject({ ok: false, code: 'step_declined' });
-    expect(asked).toEqual([{ title: 'Change a keybind?', copy: 'The Assistant asks to give Line (Demo) the key Shift+K.', yes: 'Change' }]);
+    expect(asked).toEqual([{ title: 'Change a keybind?', copy: 'Demo · Line (sketch): L → Shift+K', yes: 'Change' }]);
     // The call waits for the person meanwhile (the turn's minutes stop).
     expect(progress[0]).toEqual(['Waiting for you to confirm the keybind change', true]);
     expect(server.calls).toEqual([]);
@@ -101,7 +102,7 @@ describe('core__set_keybind', () => {
     expect(await coreSetKeybind(set({ command: 'sketch.line', keys: 'F' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'key_taken', message: '"KeyF" is already the key of Fit (Everywhere).' });
     expect(asked).toEqual([]);
     const out = await coreSetKeybind(set({ command: 'sketch.line', keys: 'F', replace: true }), invoke({}).req, rt);
-    expect(asked[0].copy).toBe('The Assistant asks to give Line (Demo) the key F, taking it from Fit.');
+    expect(asked[0].copy).toBe('Demo · Line (sketch): L → F; Demo · Fit (everywhere): F → no key');
     expect(out).toMatchObject({ ok: true, result: { data: { took: [{ id: 'view.fit', label: 'Fit', keys: [] }] } } });
     expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyF'], 'view.fit': [] });
   });
@@ -122,9 +123,9 @@ describe('core__set_keybind', () => {
     expect(await coreSetKeybind(set({ command: 'view.fit', action: 'clear' }), invoke({}).req, rt)).toMatchObject({ ok: true });
     expect(await coreSetKeybind(set({ action: 'reset_all' }), invoke({}).req, rt)).toMatchObject({ ok: true, result: { data: { changed: true } } });
     expect(asked.map((a) => a.copy)).toEqual([
-      'The Assistant asks to put Delete (Demo) back to its default: Delete, Backspace.',
-      'The Assistant asks to leave Fit (Demo) with no key.',
-      'The Assistant asks to put every Demo command back to its default keys.',
+      'Demo · Delete (everywhere): X → Delete, Backspace',
+      'Demo · Fit (everywhere): F → no key',
+      'Demo · every command: its own keys → its default keys',
     ]);
     expect(server.prefs.demo[KEYBINDS_PREF]).toBeUndefined();
     // Nothing to change: nothing asked.
@@ -139,6 +140,90 @@ describe('core__set_keybind', () => {
     const { rt, asked } = runtime(true);
     expect(await coreSetKeybind(set({ command: 'sketch.line', keys: 'K' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'unavailable' });
     expect(asked).toEqual([]);
+  });
+
+  it('the question names every key the command loses, as the CAD Part asks', async () => {
+    fakeKeysServer();
+    const { rt, asked } = runtime(false);
+    await coreSetKeybind(set({ command: 'edit.delete', keys: 'D' }), invoke({}).req, rt);
+    expect(asked[0].copy).toBe('Demo · Delete (everywhere): Delete, Backspace → D');
+  });
+
+  it('a change that moved while the person was asked is not made: changed', async () => {
+    const server = fakeKeysServer();
+    // The person (or a workspace) gives Fit the key K while the question is open.
+    const { rt } = runtime(() => {
+      server.prefs.demo = { [KEYBINDS_PREF]: { 'view.fit': ['KeyK'] } };
+      return true;
+    });
+    const out = await coreSetKeybind(set({ command: 'sketch.line', keys: 'K' }), invoke({}).req, rt);
+    expect(out).toMatchObject({ ok: false, code: 'changed', message: 'The keybinds changed while the person was asked (in Settings, a workspace or another tab); nothing changed.' });
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'view.fit': ['KeyK'] });
+  });
+
+  it("a Yes to 'L → Shift+K' is not applied once the command's own keys moved meanwhile", async () => {
+    const server = fakeKeysServer();
+    const { rt } = runtime(() => {
+      server.prefs.demo = { [KEYBINDS_PREF]: { 'sketch.line': ['KeyL', 'KeyM'] } };
+      return true;
+    });
+    const out = await coreSetKeybind(set({ command: 'sketch.line', keys: 'Shift+K' }), invoke({}).req, rt);
+    expect(out).toMatchObject({ ok: false, code: 'changed' });
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyL', 'KeyM'] });
+  });
+
+  it('keys that cannot be read again after the Yes are unavailable, never changed', async () => {
+    const server = fakeKeysServer();
+    const { rt } = runtime(() => {
+      server.failReads = true;
+      return true;
+    });
+    const out = await coreSetKeybind(set({ command: 'sketch.line', keys: 'K' }), invoke({}).req, rt);
+    expect(out).toMatchObject({ ok: false, code: 'unavailable' });
+    expect(server.calls).toEqual([]);
+  });
+
+  it('a write the app refuses after the Yes is failed (not unavailable), with its reason', async () => {
+    const server = fakeKeysServer();
+    const real = server.fetch.getMockImplementation()!;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/plugin-prefs/set' ? new Response(JSON.stringify({ ok: false, error: 'A plugin keeps at most 64 KB of prefs' }), { status: 413 }) : real(input, init),
+    );
+    const out = await coreSetKeybind(set({ command: 'sketch.line', keys: 'K' }), invoke({}).req, runtime(true).rt);
+    expect(out).toMatchObject({ ok: false, code: 'failed', message: 'Could not save the keys: A plugin keeps at most 64 KB of prefs' });
+  });
+
+  it('Escape is no key the Assistant sets: the person cannot set it in Settings either', async () => {
+    fakeKeysServer();
+    const { rt, asked } = runtime(true);
+    expect(await coreSetKeybind(set({ command: 'sketch.line', keys: 'Esc' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'invalid_input' });
+    expect(asked).toEqual([]);
+  });
+
+  it("the Assistant's changes are announced as its own, so an open Settings shows them", async () => {
+    fakeKeysServer();
+    const heard: string[] = [];
+    const stop = onPrefChange((c) => heard.push(c.from));
+    await coreSetKeybind(set({ command: 'sketch.line', keys: 'K' }), invoke({}).req, runtime(true).rt);
+    await vi.waitFor(() => expect(heard).toEqual([ASSISTANT_FROM]));
+    stop();
+  });
+
+  it("the page's question is the app's guarded one: a deliberate click only, Enter answers Cancel", async () => {
+    const calls: Record<string, unknown>[] = [];
+    vi.doMock('../workbench/dialogs', () => ({
+      confirmAction: async (o: Record<string, unknown>) => {
+        calls.push(o);
+        return false;
+      },
+    }));
+    vi.resetModules();
+    const { pageKeysRuntime } = await import('./keybindTools');
+    const signal = new AbortController().signal;
+    expect(await pageKeysRuntime().confirm({ title: 'Change a keybind?', copy: 'Demo · Line (sketch): L → K', yes: 'Change', signal })).toBe(false);
+    expect(calls).toEqual([{ title: 'Change a keybind?', copy: 'Demo · Line (sketch): L → K', yes: 'Change', signal, guard: true, safe: true }]);
+    vi.doUnmock('../workbench/dialogs');
+    vi.resetModules();
   });
 
   it('a label two commands share asks for the id', async () => {
