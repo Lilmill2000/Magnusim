@@ -10,7 +10,9 @@
 //     pass (materials.ts createLitFacesMaterial, at LIT_FACES_ORDER), and a whole body selected or
 //     hovered is the light blue it is drawn in. A section cap (section.ts) sets it where it draws.
 //     A see-through body (an Enclosure's air), the origin and reference planes and the region
-//     tints never touch it: what shows through them is what decides. The section caps' parity
+//     tints never touch it: what shows through them is what decides. Neither do the banana's taped
+//     picture in a sketch and the 3D banana (not a body face or a cap, the light surfaces E2 names;
+//     whether they should is Daniel's call: the picture is mostly grey tape). The section caps' parity
 //     counter keeps to the other bits (PARITY_MASK), so the two never meet.
 //   - Every mark drawn twice: the mark as it is, restricted to pixels without the bit (its
 //     material tests the stencil, writes nothing), and a twin, a child of it (its visibility and

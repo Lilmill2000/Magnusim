@@ -982,8 +982,9 @@ with the host once for the page's life, and its chip goes in the dock.
     the reference axes and points; the measure line and its ends; the Extrude
     and Enclosure arrows; the banana's guide) is drawn, pixel by pixel, in
     LIGHT's ink for its role (`DARK.face`: by role, not by colour value, since
-    DARK's construct, arrow and under-defined blues are one colour with three
-    light inks) where a light surface shows under it, and in DARK's own light
+    DARK's construct, arrow and under-defined blues are one colour, `#7aa7ff`,
+    with two light inks: the construct line's `#2f5fb8`, the arrows' and an
+    under-defined line's `#1570ef`) where a light surface shows under it, and in DARK's own light
     ink over the background or an empty or translucent plane; a line crossing a
     face's outline changes colour there (accepted). Picks and hover keep their
     colours; sketch mode's hover halo keeps its blue but is fainter over the
@@ -995,6 +996,12 @@ with the host once for the page's life, and its chip goes in the dock.
     cleared for a dark custom one (`isLightSurface`: the light view's `#101828`
     reads at least as well on it as `#e6e9ef`), so the frontmost opaque surface
     decides; a see-through body, the planes and the region tints never touch it.
+    Nor do the banana's taped picture in a sketch and the 3D banana: E2 names
+    the light surfaces (an opaque body face, a section cap), and they are
+    neither, so a mark over them takes what is behind them (over a picture on
+    an origin plane, the dark inks; the picture is mostly grey tape, where those
+    read better than the light view's). Whether they should count is Daniel's
+    call.
     The colour asked is the one the face is drawn in (`bodyShownColor`, the body
     shader's choice): a whole body selected or hovered is its light blue, and on
     a body of a dark colour the faces a pick or a hover lights (the pick green,

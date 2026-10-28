@@ -90,11 +90,17 @@ in this version yet), the Part follows it:
 - Sketch lines and points (every state, the line being drawn too, in a sketch
   and on a finished one), reference axes and points, the measure line and the
   Extrude and Enclosure arrows follow what is under them: over a part's face
-  or a section's cut face they keep the colours they have in light, over the
-  dark background they take light colours. A line that crosses a face's edge
-  changes colour there. A selected or hovered line keeps its colour.
+  of a light colour (the default one or another light one), over a face that
+  is picked or under the pointer and over a selected part (whatever its
+  colour), and over a section's cut face they keep the colours they have in
+  light; over the dark background, and over a part of a dark colour or a
+  see-through one, they take light colours. A line that crosses a face's edge
+  changes colour there. A selected or hovered line keeps its colour, and the
+  band around a line under the pointer is fainter over the dark background,
+  so the line's own colour shows in it.
 - The Sketch panel's colour dots show both colours (the left half the colour
-  over a face), the sketch cursor is the light one over a face, a selection
+  over a face), the sketch cursor (a fillet's radius arrow's hand too) is the
+  light one over a face, a selection
   box's caption and a failed Pattern copy's number stay readable, and blue
   text in the Part uses the lighter blue made for dark backgrounds.
 - Pictures stay light whatever the appearance: the Picture tool's PNG, the
