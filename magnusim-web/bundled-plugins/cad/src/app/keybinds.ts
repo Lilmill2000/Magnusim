@@ -196,6 +196,8 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
   // This page's changes not stored yet (null: back to the default), and a Reset all not stored yet.
   const dirty = new Map<string, string[] | null>();
   let resetAllPending = false;
+  // How many Reset alls were made: a store clears only the one it wrote, never one made while it wrote.
+  let resetCount = 0;
   // How many stores went through: a read that began before one is older than what it wrote.
   let storeCount = 0;
   // Whether the saved keybinds were read: a change is worked out from them, never from the defaults.
@@ -267,6 +269,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
       }
       const changes = new Map(dirty);
       const all = resetAllPending;
+      const resets = resetCount;
       const next = merged(base);
       try {
         if (Object.keys(next).length) await prefs.set(KEYBINDS_PREF, JSON.parse(JSON.stringify(next)));
@@ -276,7 +279,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
         return err instanceof Error && err.message ? err.message : String(err);
       }
       for (const [id, v] of changes) if (dirty.get(id) === v) dirty.delete(id);
-      if (all) resetAllPending = false;
+      if (all && resetCount === resets) resetAllPending = false;
       storeCount++;
       stored = next;
       if (!disposed) show(merged(stored));
@@ -460,6 +463,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
       if (ids.length === Object.keys(over).length && ids.every((id) => over[id] && same(over[id], next[id]))) return { ok: true, kept };
       dirty.clear();
       resetAllPending = true;
+      resetCount++;
       for (const id of ids) dirty.set(id, next[id]);
       over = next;
       store();

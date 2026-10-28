@@ -764,4 +764,67 @@ describe("Reset all with the Assistant panel's key the person chose (as the host
       vi.resetModules();
     }
   });
+
+  /** ws.prefs whose writes wait until `release`: `waiting` resolves once the first write waits. */
+  function heldWrites(p: ReturnType<typeof memoryPrefs>) {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let reached: () => void = () => {};
+    const waiting = new Promise<void>((r) => (reached = r));
+    const { set, remove } = p.api;
+    p.api.set = async (key, value) => {
+      reached();
+      await gate;
+      return set(key, value);
+    };
+    p.api.remove = async (key) => {
+      reached();
+      await gate;
+      return remove(key);
+    };
+    return { waiting, release };
+  }
+
+  it("a Reset all made while an earlier one is being stored is stored too: the panel's key moved between them gives its default back (review)", async () => {
+    const a = assistantKeys(['F2']);
+    const p = memoryPrefs();
+    const held = heldWrites(p);
+    const k = createKeybinds({ prefs: p.api, layout: false, assistant: a.api });
+    await k.ready;
+    expect(k.resetAll()).toEqual({ ok: true, kept: [{ id: 'ui.rename', combo: 'F2', note: keptOff('F2') }] });
+    await held.waiting;
+    // While Rename's [] is being written, the person moves the panel's key and resets every command again.
+    a.move(['F9']);
+    expect(k.resetAll()).toEqual({ ok: true, kept: [] });
+    expect(k.overrides()).toEqual({});
+    held.release();
+    expect(await k.flush()).toBe(true);
+    // The second Reset all is the one that stays: Rename has F2 again, and nothing is stored.
+    expect(p.writes).toEqual([`set ${KEYBINDS_PREF}`, `remove ${KEYBINDS_PREF}`]);
+    expect(p.values[KEYBINDS_PREF]).toBeUndefined();
+    expect(k.overrides()).toEqual({});
+    expect(k.current('ui.rename')).toEqual(['F2']);
+    k.dispose();
+  });
+
+  it('a change stored with a Reset all does not outlast a second Reset all made while that store writes (review)', async () => {
+    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'ui.rename': ['F7'] } });
+    const held = heldWrites(p);
+    const k = createKeybinds({ prefs: p.api, layout: false });
+    await k.ready;
+    expect(k.resetAll()).toEqual({ ok: true, kept: [] });
+    // Made before that store reads, so it goes with it.
+    expect(k.setKeybind('sketch.rectangle', 'Shift+T')).toMatchObject({ ok: true });
+    await held.waiting;
+    expect(k.resetAll()).toEqual({ ok: true, kept: [] });
+    expect(k.overrides()).toEqual({});
+    held.release();
+    expect(await k.flush()).toBe(true);
+    expect(p.writes).toEqual([`set ${KEYBINDS_PREF}`, `remove ${KEYBINDS_PREF}`]);
+    expect(p.values[KEYBINDS_PREF]).toBeUndefined();
+    expect(k.overrides()).toEqual({});
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(k.current('ui.rename')).toEqual(['F2']);
+    k.dispose();
+  });
 });
