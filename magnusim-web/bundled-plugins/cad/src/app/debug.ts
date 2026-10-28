@@ -7,6 +7,8 @@ import type { AssistantTestHandle } from '../assistant/testing';
 import type { LinkController, LinkOutcome } from '../link/controller';
 import type { EditOpen } from '../link/edit-open';
 import type { AppServices } from '../types/app';
+import { openSetKeybind } from '../ui/keybinds';
+import { keybindsFor, type Keybinds } from './keybinds';
 
 export interface CadTestHandle {
   version: string;
@@ -20,6 +22,11 @@ export interface CadTestHandle {
   leave: CadLeaveHandle;
   /** Edit in CAD (host API 1.7): the open flow of a Part opened on a project geometry. */
   edit?: EditOpen;
+  /**
+   * The person's keybinds (src/app/keybinds.ts) and the Set keybind dialog: `open(id)` opens it as a
+   * command's right-click menu does (the toolbar's menu adds that item when the ribbon lands).
+   */
+  readonly keybinds: { model: Keybinds; open(commandId: string): void };
   /** The Assistant's tools in this Part (src/assistant/testing.ts), or null when its module is not installed. */
   readonly assistant: AssistantTestHandle | null;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
@@ -53,6 +60,10 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
     // A getter: the modules (the Assistant's among them) install before this handle is exposed.
     get assistant() {
       return assistantTestHandle(services);
+    },
+    keybinds: {
+      model: keybindsFor(services),
+      open: (id) => void openSetKeybind(services, id),
     },
     snapshot() {
       const d = services.doc.state.get();

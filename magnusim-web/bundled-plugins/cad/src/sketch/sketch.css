@@ -248,23 +248,6 @@
   margin-top: 8px;
 }
 
-/* ---- the sketch toolbar: 25 commands fit the frame (CONSTRAIN as icons, labels in the tooltips) ---- */
-.cad-toolbar[data-cad-toolbar='sketch'] .tb-btn {
-  min-width: 48px;
-  padding: 4px 3px;
-}
-.cad-toolbar[data-cad-toolbar='sketch'] [data-group='constrain'] .tb-btn {
-  min-width: 30px;
-}
-.cad-toolbar[data-cad-toolbar='sketch'] [data-group='constrain'] .tb-txt {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 /* Sketch with nothing selected: what to pick, over the top of the view (sketch/commands.ts). */
 .cad-sketch-pick {
   position: absolute;
@@ -435,9 +418,98 @@
   white-space: nowrap;
   box-shadow: var(--mg-shadow-tooltip);
   pointer-events: none;
+  /* "Construction · X" and its × (Turn off construction), which takes the click. */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 3px;
 }
 .cad-sketch-annotations > .cad-sk-construction-badge[hidden] {
   display: none;
+}
+.cad-sk-construction-key {
+  display: inline-block;
+  min-width: 14px;
+  padding: 0 3px;
+  border: 1px solid var(--mg-border);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  line-height: 13px;
+  text-align: center;
+  color: var(--mg-text-muted);
+}
+.cad-sk-construction-off {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--mg-text);
+  margin-left: 2px;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.cad-sk-construction-off:hover {
+  background: var(--cad-icon-btn-hover-bg);
+  color: var(--mg-text);
+}
+.cad-sk-construction-off:focus-visible {
+  outline: 2px solid var(--mg-primary);
+  outline-offset: 1px;
+}
+
+/* The relations palette (SolidWorks' Add Relations): a row of relation buttons beside the selection. */
+.cad-sketch-annotations > .cad-sk-relations {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--mg-border);
+  border-radius: 6px;
+  background: var(--mg-bg);
+  box-shadow: var(--cad-menu-shadow);
+  pointer-events: auto;
+  will-change: auto;
+  z-index: 2;
+}
+.cad-sketch-annotations > .cad-sk-relations[hidden] {
+  display: none;
+}
+.cad-sk-relations-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mg-text);
+  cursor: pointer;
+}
+.cad-sk-relations-btn:hover {
+  border-color: var(--mg-border);
+  background: var(--cad-icon-btn-hover-bg);
+}
+.cad-sk-relations-btn:focus-visible {
+  outline: 2px solid var(--mg-primary);
+  outline-offset: 1px;
+}
+/* Already in the sketch: pressed, and nothing to add. */
+.cad-sk-relations-btn.is-present {
+  border-color: var(--cad-toolbar-active-border);
+  background: var(--cad-toolbar-active-bg);
+  color: var(--cad-toolbar-active-icon);
+  cursor: default;
 }
 /* The radius arrow: its tail on the arc, pointing away from the centre (rotated by the overlay); a press anywhere on it drags it. */
 .cad-sketch-annotations > .cad-sk-handle {

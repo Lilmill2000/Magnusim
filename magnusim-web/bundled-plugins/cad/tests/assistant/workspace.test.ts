@@ -6,7 +6,10 @@
 // On the toy kernel (BlockKernel) with a recording viewport handle.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createKeybinds, setKeybindsFor } from '../../src/app/keybinds';
+import { KEYMAP } from '../../src/app/keymap';
 import { runtimeOf } from '../../src/assistant/runtime';
+import type { PrefsApi } from '../../src/lib/bridge';
 import { readViewInput } from '../../src/assistant/view';
 import { LEAVE_AFTER_MS } from '../../src/assistant/tools/workspace';
 import exportModule from '../../src/features/export';
@@ -181,6 +184,65 @@ describe('workspace: the tree and the view state', () => {
     expect(prefs.state.get().layout.model).toEqual({ place: {}, order: {} });
     const nf = await t.call('workspace', W('toolbar_show', { target: 'modify.nope' }));
     expect(!nf.ok && nf.error.message).toMatch(/is not a toolbar command/);
+    // v0.5.0 ribbon: a group's width and the toolbar's rows, as the person drags them.
+    const w = await t.ok('workspace', W('toolbar_width', { target: 'modify', value: '120' }));
+    expect(w.data).toMatchObject({ group: 'modify', mode: 'model', width: 120 });
+    expect(prefs.state.get().layout.model.widths).toEqual({ modify: 120 });
+    await t.ok('workspace', W('toolbar_width', { target: 'modify', value: 'auto' }));
+    expect(prefs.state.get().layout.model.widths).toBeUndefined();
+    const badW = await t.call('workspace', W('toolbar_width', { target: 'modify', value: '5' }));
+    expect(!badW.ok && badW.error.message).toMatch(/24 to 1200/);
+    const badG = await t.call('workspace', W('toolbar_width', { target: 'nope', value: '100' }));
+    expect(!badG.ok && badG.error.message).toMatch(/a toolbar group/);
+    const r = await t.ok('workspace', W('toolbar_rows', { target: 'model', value: '2' }));
+    expect(r.data).toMatchObject({ mode: 'model', rows: 2 });
+    expect(prefs.state.get().layout.model.rows).toBe(2);
+    const badR = await t.call('workspace', W('toolbar_rows', { target: 'model', value: '6' }));
+    expect(!badR.ok && badR.error.message).toMatch(/1 to 4/);
+    await t.ok('workspace', W('toolbar_rows', { value: 'auto' }));
+    expect(prefs.state.get().layout.model.rows).toBeUndefined();
+    // Review 9: "" reads them, as the person sees them (no toolbar on screen here: the stored values).
+    await t.ok('workspace', W('toolbar_width', { target: 'modify', value: '150' }));
+    const rw = await t.ok('workspace', W('toolbar_width', { target: 'modify' }));
+    expect(rw.data).toMatchObject({ group: 'modify', mode: 'model', width: 150, shown: false });
+    const rr = await t.ok('workspace', W('toolbar_rows', { target: 'model' }));
+    expect(rr.data).toMatchObject({ mode: 'model', rows: 3, widths: { modify: 150 } });
+    expect(rr.text).toMatch(/modify 150 px/);
+  });
+
+  it('toolbar_width and toolbar_show answer what the person sees: the width applied (never under the group\'s first command and its More), what is on the bar and in its More, a command a narrowed group still holds', async () => {
+    const t = await part();
+    t.services.commands.register({ id: 'modify.shell', label: 'Shell', group: 'modify', icon: 'M0 0', order: 3, run() {} });
+    const prefs = toolbarPrefs(t.services);
+    // The toolbar as the person sees it (jsdom has no layout: the group's measured state as drawn).
+    const bar = document.createElement('div');
+    bar.setAttribute('data-cad-toolbar', 'model');
+    bar.innerHTML =
+      '<div class="tb-group" data-group="modify" data-width="90" data-min-width="90" data-width-folded="1">' +
+      '<div class="tb-items"><button class="tb-btn" data-command="modify.fillet"></button>' +
+      '<button class="tb-btn" data-tb-more="modify" data-more-commands="modify.shell"></button></div></div>';
+    document.body.append(bar);
+    try {
+      // Review 1: 40 px is narrower than Fillet and its More (90 px): 90 px is kept, and said.
+      const w = await t.ok('workspace', W('toolbar_width', { target: 'modify', value: '40' }));
+      expect(prefs.state.get().layout.model.widths).toEqual({ modify: 90 });
+      expect(w.data).toMatchObject({ width: 90, min_width: 90, bar: ['modify.fillet'], more: ['modify.shell'], shown: true });
+      expect(w.text).toMatch(/40 px is narrower than its first command and its More: 90 px is the least/);
+      // Review 2: Shell set to show, but the narrowed group still holds it in its More: said so.
+      const s = await t.ok('workspace', W('toolbar_show', { target: 'modify.shell' }));
+      expect(s.text).toMatch(/still in its group's More: the group is narrowed to 90 px/);
+      expect(s.data).toMatchObject({ shown: 'more', narrowed: true });
+      // Integration review 6: a command the narrowed group could not fit even with its other commands
+      // folded (the person's Show in toolbar is greyed): nothing changes, and the reply says why.
+      await t.ok('workspace', W('toolbar_hide', { target: 'modify.shell' }));
+      bar.querySelector<HTMLElement>('.tb-group')!.dataset.tooNarrowFor = 'modify.shell';
+      const blocked = await t.ok('workspace', W('toolbar_show', { target: 'modify.shell' }));
+      expect(blocked.text).toMatch(/does not fit its group at 90 px.*nothing changed/);
+      expect(blocked.data).toMatchObject({ changed: false, narrowed: true });
+      expect(prefs.state.get().layout.model.place['modify.shell']).toBe('more');
+    } finally {
+      bar.remove();
+    }
   });
 
   it('a flyout variant moves with its flyout, as a toolbar button of the person does (v0.5.0 flyouts)', async () => {
@@ -386,5 +448,210 @@ describe('undo and redo of anyone\'s steps', () => {
     // own stays as it was (no action: own).
     const own = await t.call('undo', { steps: 1, previous_turn: false });
     expect(!own.ok && own.error.message).toMatch(/None of your calls|person changed/);
+  });
+});
+
+// ------------------------------------------------------------------ keybinds
+
+/** ws.prefs in memory: what was written, and a change made elsewhere (Settings) told to the page. */
+function memoryPrefs() {
+  const values: Record<string, unknown> = {};
+  const writes: string[] = [];
+  const listeners = new Set<(key: string, value: unknown) => void>();
+  const api: PrefsApi = {
+    get: async <T,>(key: string) => (key in values ? (JSON.parse(JSON.stringify(values[key])) as T) : null),
+    set: async (key, value) => {
+      writes.push(`set ${key}`);
+      values[key] = JSON.parse(JSON.stringify(value));
+    },
+    remove: async (key) => {
+      writes.push(`remove ${key}`);
+      delete values[key];
+    },
+    onChange: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+  return { api, values, writes };
+}
+
+async function keybindPart() {
+  const t = await part();
+  const prefs = memoryPrefs();
+  const k = createKeybinds({ prefs: prefs.api, layout: false });
+  setKeybindsFor(t.services, k);
+  await k.ready;
+  return { t, k, prefs };
+}
+
+describe('workspace: keybinds (Daniel: read any time, changed only when the person asks, and they confirm)', () => {
+  it('keybind_get answers any time, without person_asked and without a question: one command or all', async () => {
+    const { t } = await keybindPart();
+    const one = await t.ok('workspace', W('keybind_get', { target: 'sketch.rectangle' }));
+    expect(one.text).toBe('Rectangle: R');
+    expect(one.data.keybind).toEqual({ id: 'sketch.rectangle', label: 'Rectangle', context: 'sketch', keys: ['KeyR'], shown: 'R', default: true, set_in: 'in a sketch, right-click Rectangle on the toolbar, then Set keybind…' });
+    // By label too; a label two commands share needs the id.
+    expect((await t.ok('workspace', W('keybind_get', { target: 'show relations' }))).text).toBe('Show relations: Shift+R');
+    const twin = await t.call('workspace', W('keybind_get', { target: 'Undo' }));
+    expect(!twin.ok && twin.error.message).toMatch(/names 2 commands: edit.undo \(model\), sketch.undo \(sketch\)/);
+    const all = await t.ok('workspace', W('keybind_get'));
+    const rows = all.data.keybinds as { id: string; keys: string[] }[];
+    expect(rows.map((r) => r.id)).toEqual(KEYMAP.map((e) => e.id));
+    expect(rows.find((r) => r.id === 'edit.redo')!.keys).toEqual(['Ctrl+KeyY', 'Ctrl+Shift+KeyZ']);
+    expect(t.ws.log.confirms).toEqual([]);
+  });
+
+  it('keybind_set without person_asked is refused (not_asked): nothing changes, no question', async () => {
+    const { t, k, prefs } = await keybindPart();
+    const r = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T' }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.detail).toMatchObject({ reason: 'not_asked' });
+      expect(r.error.hint).toMatch(/explicitly asked .* Set keybind/);
+    }
+    for (const action of ['keybind_reset', 'keybind_clear']) {
+      const x = await t.call('workspace', W(action, { target: 'sketch.rectangle' }));
+      expect(!x.ok && (x.error.detail as { reason: string }).reason, action).toBe('not_asked');
+    }
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(prefs.writes).toEqual([]);
+    expect(t.ws.log.confirms).toEqual([]);
+  });
+
+  it("person_asked with the person's No in the app's dialog: step_declined, nothing changes; Yes: changed and stored", async () => {
+    const { t, k, prefs } = await keybindPart();
+    t.ws.answers.confirm = false;
+    const no = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true }));
+    expect(!no.ok && (no.error.detail as { reason: string }).reason).toBe('step_declined');
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(prefs.writes).toEqual([]);
+    // The app's guarded dialog: Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
+    expect(t.ws.log.confirms).toEqual([{ title: 'The Assistant asks to change a shortcut', message: 'Set the Rectangle shortcut to Shift+T (it was R)?', confirmLabel: 'Change shortcut', guard: true, safe: true }]);
+    t.ws.answers.confirm = true;
+    const yes = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true }));
+    expect(yes.text).toBe('Rectangle: Shift+T (was R)');
+    expect(yes.data).toMatchObject({ keybind: { keys: ['Shift+KeyT'], default: false, defaults: 'R' }, stored: true, undo_step: false });
+    expect(k.current('sketch.rectangle')).toEqual(['Shift+KeyT']);
+    expect(prefs.values.keybinds).toEqual({ 'sketch.rectangle': ['Shift+KeyT'] });
+    // Every change asks, every time: clear, then reset.
+    expect((await t.ok('workspace', W('keybind_clear', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle: none (was Shift+T)');
+    expect(prefs.values.keybinds).toEqual({ 'sketch.rectangle': [] });
+    expect((await t.ok('workspace', W('keybind_reset', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle: R (was none)');
+    expect(prefs.values.keybinds).toBeUndefined();
+    expect(t.ws.log.confirms.map((c) => c.message)).toEqual([
+      'Set the Rectangle shortcut to Shift+T (it was R)?',
+      'Set the Rectangle shortcut to Shift+T (it was R)?',
+      'Clear the Rectangle shortcut (it was Shift+T)?',
+      'Reset the Rectangle shortcut to R (it is none)?',
+    ]);
+    // A reset to what it has already asks nothing.
+    expect((await t.ok('workspace', W('keybind_reset', { target: 'sketch.rectangle', person_asked: true }))).text).toBe('Rectangle already has R: nothing changed');
+    expect(t.ws.log.confirms).toHaveLength(4);
+  });
+
+  it("another command's key is key_taken unless items replace (asked too); browser and app keys are refused before any question", async () => {
+    const { t, k } = await keybindPart();
+    const taken = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+R', person_asked: true }));
+    expect(!taken.ok && taken.error.detail).toMatchObject({ reason: 'key_taken', with: ['view.sketch-relations'], labels: ['Show relations (sketch)'] });
+    expect(t.ws.log.confirms).toEqual([]);
+    const r = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'shift+r', items: ['replace'], person_asked: true }));
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Rectangle shortcut to Shift+R (it was R)? Show relations (sketch) loses Shift+R.');
+    expect(r.text).toBe('Rectangle: Shift+R (was R); Show relations (sketch) no longer has it');
+    expect(k.current('view.sketch-relations')).toEqual([]);
+    for (const [value, words] of [
+      ['Ctrl+W', /"Ctrl\+KeyW" is kept for the browser and the system \(Close the tab\)/],
+      ['Ctrl+/', /"Ctrl\+Slash" is the app's own key \(Open or close the Assistant panel\)/],
+      ['Escape', /"Escape" is CAD's built-in cancel key/],
+      ['Ctrl+P', /"Ctrl\+KeyP" is kept for the browser and the system \(Print the page\)/],
+    ] as const) {
+      const x = await t.call('workspace', W('keybind_set', { target: 'sketch.circle', value, person_asked: true }));
+      expect(!x.ok && x.error.message, value).toMatch(words);
+    }
+    expect(t.ws.log.confirms).toHaveLength(1);
+    expect(k.current('sketch.circle')).toEqual(['KeyC']);
+  });
+
+  it('a key no keyboard reports, a modifier a shortcut cannot use or two keys are refused with why, before any question (review: a dead key could be stored)', async () => {
+    const { t, k, prefs } = await keybindPart();
+    for (const [value, words] of [
+      ['Ctrl+PgDown2', /^bad_input: value: "Ctrl\+PgDown2" is not a key \(modifiers Ctrl, Alt, Shift, Meta in that order, then a KeyboardEvent\.code such as KeyR\)/],
+      ['Shift+?', /"Shift\+\?" is not a key/],
+      ['AltGr+Q', /"AltGr\+Q" is not a key/],
+      ['Ctrl+A+B', /"Ctrl\+A\+B" is not a key/],
+      ['F (no change: keep)', /is not a key/],
+      ['Ctrl+Numpad5', /"Ctrl\+Numpad5" never comes from a press: write "Ctrl\+Digit5"/],
+    ] as const) {
+      const x = await t.call('workspace', W('keybind_set', { target: 'view.fit', value, person_asked: true }));
+      expect(!x.ok && x.error.message, value).toMatch(words);
+    }
+    // A name people write is read as the key it is: PgDn is PageDown.
+    expect((await t.ok('workspace', W('keybind_set', { target: 'view.fit', value: 'Shift+PgDn', person_asked: true }))).text).toBe('Fit: Shift+PageDown (was F)');
+    expect(t.ws.log.confirms.map((c) => c.message)).toEqual(['Set the Fit shortcut to Shift+PageDown (it was F)?']);
+    expect(k.current('view.fit')).toEqual(['Shift+PageDown']);
+    expect(prefs.values.keybinds).toEqual({ 'view.fit': ['Shift+PageDown'] });
+  });
+
+  it('a key two commands have: the question names both and where they work (review)', async () => {
+    const { t } = await keybindPart();
+    await t.ok('workspace', W('keybind_set', { target: 'view.front', value: 'Delete', items: ['replace'], person_asked: true }));
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Front view shortcut to Delete (it was 1)? Delete selected features (model) and Delete (sketch) lose Delete.');
+  });
+
+  it('the keybinds changed while the person was asked: nothing changes, and the Assistant is told to ask again (review: Replace took a key the question did not name)', async () => {
+    const { t, k } = await keybindPart();
+    // While the dialog is open, Settings gives Plane the key R too (a conflict stored elsewhere).
+    vi.spyOn(t.services.bridge, 'confirm').mockImplementation(async () => {
+      k.replace('construct.plane', 'R');
+      return true;
+    });
+    const r = await t.call('workspace', W('keybind_set', { target: 'view.fit', value: 'R', items: ['replace'], person_asked: true }));
+    expect(!r.ok && r.error.detail).toMatchObject({ reason: 'changed' });
+    expect(!r.ok && r.error.hint).toBe('Call keybind_get, then ask the person again with the new wording.');
+    // Fit kept F; Rectangle and Plane keep R.
+    expect(k.current('view.fit')).toEqual(['KeyF']);
+    expect(k.current('sketch.rectangle')).toEqual(['KeyR']);
+    expect(k.current('construct.plane')).toEqual(['KeyR']);
+  });
+
+  it("not_asked tells where the person sets that command's keybind; keybind_get says it per command (review: the hint named a right-click that did not exist)", async () => {
+    const { t } = await keybindPart();
+    const r = await t.call('workspace', W('keybind_set', { target: 'ui.delete', value: 'Backspace' }));
+    const where = "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…";
+    expect(!r.ok && r.error.hint).toBe(`Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: ${where}.`);
+    expect(!r.ok && r.error.detail).toMatchObject({ reason: 'not_asked', set_in: where });
+    const all = await t.ok('workspace', W('keybind_get'));
+    const rows = all.data.keybinds as { id: string; set_in: string }[];
+    expect(rows.every((x) => /Set keybind/.test(x.set_in))).toBe(true);
+    expect(rows.find((x) => x.id === 'sketch.enter')!.set_in).toMatch(/right-click Finish sketch on the toolbar/);
+  });
+
+  it("the person's keybinds unreadable: keybind_get says the keys are the defaults, and a change is refused before any question (review)", async () => {
+    const t = await part();
+    const prefs = memoryPrefs();
+    prefs.values.keybinds = { 'view.fit': ['KeyG'] };
+    prefs.api.get = async () => {
+      throw new Error('the host did not answer');
+    };
+    const k = createKeybinds({ prefs: prefs.api, layout: false });
+    setKeybindsFor(t.services, k);
+    await k.ready;
+    const g = await t.ok('workspace', W('keybind_get', { target: 'view.fit' }));
+    expect(g.text).toBe("Not the person's keys: your keybinds could not be read, so they cannot be changed now (nothing was changed): the host did not answer; these are the defaults. Fit: F");
+    expect(g.data).toMatchObject({ known: false });
+    const x = await t.call('workspace', W('keybind_set', { target: 'inspect.measure', value: 'F', items: ['replace'], person_asked: true }));
+    expect(!x.ok && x.error.detail).toMatchObject({ reason: 'not_editable', known: false });
+    expect(!x.ok && x.error.message).toMatch(/Your keybinds could not be read, so they cannot be changed now/);
+    expect(t.ws.log.confirms).toEqual([]);
+    expect(prefs.writes).toEqual([]);
+  });
+
+  it("keybind_get on Finish sketch says what the person sees: none of its own, Enter (Place or finish) finishes the sketch (review)", async () => {
+    const { t } = await keybindPart();
+    const r = await t.ok('workspace', W('keybind_get', { target: 'sketch.finish' }));
+    expect(r.text).toBe('Finish sketch: none of its own; Enter runs Place or finish');
+    expect(r.data.keybind).toMatchObject({ keys: [], shown: 'none of its own; Enter runs Place or finish', via: { id: 'sketch.enter', label: 'Place or finish', shown: 'Enter' } });
+    await t.ok('workspace', W('keybind_set', { target: 'sketch.finish', value: 'Ctrl+Enter', person_asked: true }));
+    expect(t.ws.log.confirms.at(-1)!.message).toBe('Set the Finish sketch shortcut to Ctrl+Enter (it was none of its own; Enter runs Place or finish)?');
   });
 });

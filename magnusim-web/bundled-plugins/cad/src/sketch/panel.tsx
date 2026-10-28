@@ -26,7 +26,8 @@ import { uiFor } from '../ui/controller';
 import { Icon } from '../ui/Icon';
 import { usePanelDelete, usePanelDeleteBlock } from '../ui/panel-delete';
 import { Button, buttonClass, DisabledReason, Field, Hint, PanelChrome, useTip } from '../ui/kit';
-import { RAIL_SHORTCUT, railsFor, useRailFocus } from '../ui/left-rails';
+import { RAIL_COMMAND, railsFor, useRailFocus } from '../ui/left-rails';
+import { railKeybindMenu, useKeyLabel } from '../ui/keybinds';
 import { CHEVRON_LEFT } from '../ui/tree/TreeRail';
 import { statusText } from './dof';
 import { constraintLabel, entityLabel, isDimension, refLabel } from './model';
@@ -104,12 +105,14 @@ function OneLineHint({ mode, hint }: { mode: SketchMode; hint: string }) {
 
 /** ux010: the head's chevron that slides the panel into its rail at the left edge. */
 function CollapseButton({ onCollapse }: { onCollapse(): void }) {
-  const rails = railsFor(useServices());
+  const services = useServices();
+  const rails = railsFor(services);
   const ref = useRef<HTMLButtonElement>(null);
   useRailFocus(rails, 'sketch-collapse', ref);
-  const tip = useTip({ text: 'Collapse the panel to the left', shortcut: RAIL_SHORTCUT });
+  const key = useKeyLabel(services, RAIL_COMMAND);
+  const tip = useTip({ text: 'Collapse the panel to the left', ...(key ? { shortcut: key } : {}) });
   return (
-    <button type="button" className="cad-collapse-btn" data-sketch-collapse="1" aria-label="Collapse the Sketch panel to the left" aria-expanded="true" ref={ref} onClick={() => {
+    <button type="button" className="cad-collapse-btn" data-sketch-collapse="1" aria-label="Collapse the Sketch panel to the left" aria-expanded="true" ref={ref} onContextMenu={(e) => railKeybindMenu(services, e)} onClick={() => {
         rails.focusAfter('sketch-expand');
         onCollapse();
       }} {...tip}>

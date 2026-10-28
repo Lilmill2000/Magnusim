@@ -28,7 +28,8 @@ import { DisabledReason, EmptyState, IconButton, InlineRename, TreeNode, TreeSec
 import { sketchShown } from '../../features/sketch/view';
 import { constructKindOfType } from '../../features/refgeom/api';
 import { constructShown, constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../features/refgeom/scene';
-import { RAIL_SHORTCUT, railsFor, useRailFocus } from '../left-rails';
+import { RAIL_COMMAND, railsFor, useRailFocus } from '../left-rails';
+import { keybindMenuItem, railKeybindMenu, useKeyLabel } from '../keybinds';
 import { CHEVRON_LEFT } from './TreeRail';
 import { barIndexAt, bodyRows, dimensionsText, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
 
@@ -622,7 +623,30 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
 
   return (
     <TreeSection title="PART" section="part" action={collapse ?? undefined}>
-      <TreeNode nodeKey="part" icon={ICONS.part} label={name} className="is-part" attrs={{ 'data-part-name': '1' }} onDoubleClick={() => void renamePart()} />
+      <TreeNode
+        nodeKey="part"
+        icon={ICONS.part}
+        label={name}
+        className="is-part"
+        attrs={{ 'data-part-name': '1' }}
+        onDoubleClick={() => void renamePart()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          // The Part's own row is always there (an empty Part too): Rename, and the keys of Delete
+          // and Rename (keyboard-only actions) are set here as on a feature's row.
+          ui.showMenu(
+            e.clientX,
+            e.clientY,
+            [
+              { id: 'rename-part', label: `Rename ${name}`, run: () => void renamePart() },
+              { sep: true, id: 'sep-keybinds' },
+              keybindMenuItem(services, 'ui.delete', 'Set keybind for Delete…'),
+              keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'),
+            ],
+            `${name} actions`,
+          );
+        }}
+      />
       <TreeNode
         nodeKey="origin"
         icon={ICONS.origin}
@@ -676,13 +700,15 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
 
 /** ux010: the chevron at the top right of the card that slides it into its rail at the left edge. */
 function CollapseTree({ onCollapse, sketching }: { onCollapse(): void; sketching: boolean }) {
-  const rails = railsFor(useServices());
+  const services = useServices();
+  const rails = railsFor(services);
   const ref = useRef<HTMLButtonElement>(null);
   useRailFocus(rails, 'tree-collapse', ref);
+  const key = useKeyLabel(services, RAIL_COMMAND);
   const label = 'Hide the design tree';
-  const tip = useTip({ text: label, detail: sketching ? 'Back to its rail for this sketch' : 'It stays a rail at the left edge until you click it', ...(sketching ? {} : { shortcut: RAIL_SHORTCUT }) });
+  const tip = useTip({ text: label, detail: sketching ? 'Back to its rail for this sketch' : 'It stays a rail at the left edge until you click it', ...(sketching || !key ? {} : { shortcut: key }) });
   return (
-    <button type="button" className="cad-collapse-btn" data-tree-collapse="1" aria-label={label} aria-expanded="true" ref={ref} onClick={() => {
+    <button type="button" className="cad-collapse-btn" data-tree-collapse="1" aria-label={label} aria-expanded="true" ref={ref} onContextMenu={(e) => railKeybindMenu(services, e)} onClick={() => {
         rails.focusAfter('tree-rail');
         onCollapse();
       }} {...tip}>

@@ -13,19 +13,19 @@ export { paramNameProblem } from './params';
 export { PersonEditing, isPersonEditing } from './person-editing';
 
 /**
- * Undo and redo (Ctrl+Z; Ctrl+Y or Ctrl+Shift+Z). Keyboard commands with no
+ * Undo and redo (Ctrl+Z; Ctrl+Y or Ctrl+Shift+Z: their keys are the keybinding registry's,
+ * src/app/keymap.ts). Keyboard commands with no
  * toolbar group; UI-SHELL may register buttons with the same ids (the later
  * registration wins). New-feature commands belong with their panels (UI-SHELL):
  * `services.doc.beginNew('extrude')` opens the session the panel edits.
  * Returns an uninstall.
  */
 export function install(services: AppServices): () => void {
-  const { commands, keyboard } = services;
+  const { commands } = services;
   const offs = [
     commands.register({
       id: 'edit.undo',
       label: 'Undo',
-      shortcut: 'Ctrl+Z',
       enabled: (s) => {
         const ok = s.doc.editable();
         if (ok !== true) return ok;
@@ -38,7 +38,6 @@ export function install(services: AppServices): () => void {
     commands.register({
       id: 'edit.redo',
       label: 'Redo',
-      shortcut: 'Ctrl+Y',
       enabled: (s) => {
         const ok = s.doc.editable();
         if (ok !== true) return ok;
@@ -46,12 +45,6 @@ export function install(services: AppServices): () => void {
       },
       hint: 'Redo the change you undid',
       run: (s) => s.doc.redo(),
-    }),
-    keyboard.bind({
-      combo: 'Ctrl+Shift+Z',
-      run: () => {
-        void commands.run('edit.redo');
-      },
     }),
   ];
   return () => {

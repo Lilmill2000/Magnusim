@@ -23,6 +23,7 @@
 // reader hears what changed, not the buttons; the buttons are 24 px targets, Stop set apart.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { useKeyLabel } from '../ui/keybinds';
 import { useServices } from '../lib/services';
 import { selectItem } from '../lib/selection';
 import { createStateStore, useStateStore } from '../lib/store';
@@ -80,7 +81,7 @@ export interface ChipButton {
  * The chip's buttons in a phase (`undo`: the ended turn's group is the newest step). `docked`: the
  * app's own Assistant panel offers Stop and Undo, so the chip leaves them out.
  */
-export function chipButtons(s: AssistantUiState, undo: boolean, docked = false): ChipButton[] {
+export function chipButtons(s: AssistantUiState, undo: boolean, docked = false, undoKey: string | null = 'Ctrl+Z'): ChipButton[] {
   const stop: ChipButton[] = s.canStop && !docked ? [{ id: 'stop', label: 'Stop', title: 'Stop the request: the step it is on now is not kept' }] : [];
   const pause: ChipButton = { id: 'pause', label: 'Pause', title: 'Pause: its edits wait until you resume (it can still read the Part)' };
   const ask: ChipButton = { id: 'ask', label: 'Ask each step', title: s.askEach ? 'Stop asking before each step is kept' : 'Ask before each step is kept (Keep or Discard)', pressed: !!s.askEach };
@@ -109,7 +110,7 @@ export function chipButtons(s: AssistantUiState, undo: boolean, docked = false):
     case 'paused':
       return [{ id: 'resume', label: 'Resume', title: 'Let the Assistant edit the Part again' }, ...stop];
     case 'ended':
-      return undo && !docked ? [{ id: 'undo', label: 'Undo', title: "Undo the Assistant's changes of this request (one Ctrl+Z)" }] : [];
+      return undo && !docked ? [{ id: 'undo', label: 'Undo', title: `Undo the Assistant's changes of this request (one ${undoKey ?? 'Undo'})` }] : [];
     default:
       return [];
   }
@@ -163,10 +164,12 @@ export function AssistantChip() {
     const top = services.doc.assistant?.topGroup?.() ?? null;
     return { health: h.health, words: h.words.join(' · '), first: h.first, undo: !!top && top.tag === `turn:${turnId}` };
   });
+  // Undo's key is the person's keybind.
+  const undoKey = useKeyLabel(services, 'edit.undo');
   const text = chipText(s);
   if (!text) return null;
   const busy = s.phase === 'working' || s.phase === 'thinking';
-  const buttons = chipButtons(s, end.undo, s.docked === true);
+  const buttons = chipButtons(s, end.undo, s.docked === true, undoKey ?? null);
   const cls = ['cad-chip', 'cad-assistant-chip', ended && end.health === 'error' ? 'is-error' : '', ended && end.health === 'warn' ? 'is-warning' : ''].filter(Boolean).join(' ');
   const first = end.first;
   return (

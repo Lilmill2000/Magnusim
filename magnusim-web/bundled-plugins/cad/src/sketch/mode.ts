@@ -184,13 +184,38 @@ export interface ApplyOptions {
   noUndo?: boolean;
   /** The Assistant step whose sketch this is: a sketch the Assistant draws takes edits only from it. */
   by?: AssistantStep;
+  /**
+   * A last check of the solved result against the draft before it (the reason it is refused, or
+   * null): a relation that puts two curves on top of each other (src/sketch/commands.ts applyRelation).
+   */
+  refuse?(before: SketchFeature, after: SketchFeature): string | null;
+  /**
+   * Ask the sketch's analysis first (a dry run on the solver's second instance, in the edit's own
+   * turn): an edit it finds over-defining is refused before anything is stored, one that only adds
+   * what holds already with IMPLIED (a relation: Parallel of two horizontal lines, which the solve
+   * alone let through and left the sketch "Over defined · 1 redundant").
+   */
+  analyzeFirst?: boolean;
 }
+
+/** Why a relation the sketch already implies is not added (the toolbar and the relations palette alike). */
+export const IMPLIED = 'already holds (the other relations imply it)';
 
 /**
  * An edit refused for over-defining the sketch names the constraints the solver found conflicting
  * and redundant (stored ids, statusOf: collinear halves merged, solver-only ids left out).
  */
-export type ApplyResult = { ok: true; draft: SketchFeature } | { ok: false; reason: string; over?: boolean; conflicting?: string[]; redundant?: string[] };
+export type ApplyResult =
+  | { ok: true; draft: SketchFeature }
+  | {
+      ok: false;
+      reason: string;
+      over?: boolean;
+      conflicting?: string[];
+      redundant?: string[];
+      /** Over-defined only by redundancy: what the edit adds holds already (the sketch implies it). */
+      implied?: boolean;
+    };
 
 /** Why the person's tools and edits are refused in a sketch the Assistant draws (the panel's foot). */
 export const ASSISTANT_SKETCH = 'The Assistant is drawing this sketch · Esc takes over';
@@ -725,7 +750,17 @@ export class SketchMode implements SketchModeApi {
       const optional = [...('ok' in out ? out.optional : []), ...(opts.optional ?? [])];
       // P4b fu2 (SKETCH): a pattern whose source this edit deleted starts from its next copy.
       const promoted = promoteTies(before, { ...before, ...draft });
-      const r = await this.solveEdit(promoted.draft, optional);
+      const refuse = opts.refuse ? (after: SketchFeature) => opts.refuse!(before, after) : undefined;
+      if (opts.analyzeFirst) {
+        const dry = await this.solveEdit(promoted.draft, optional, { dry: true, refuse });
+        if (this.session !== s || !s.open) return { ok: false, reason: 'The sketch is closed' };
+        if (!dry.ok && dry.over) {
+          const reason = dry.implied ? IMPLIED : dry.reason;
+          this.note(`Not applied: ${label} ${reason}`);
+          return { ...dry, reason };
+        }
+      }
+      const r = await this.solveEdit(promoted.draft, optional, { refuse });
       // Closed while it was being solved (taken over, Finish): nothing is stored, and it says so.
       if (this.session !== s || !s.open) return { ok: false, reason: 'The sketch is closed' };
       if (!r.ok) {
@@ -743,8 +778,31 @@ export class SketchMode implements SketchModeApi {
     });
   }
 
+  /**
+   * What `apply` would do with this edit, without doing it: solved on the solver's second instance
+   * (the sketch being edited is not disturbed), nothing stored, nothing said. The relations palette
+   * offers only what this accepts (src/sketch/relations-palette.ts).
+   */
+  async tryApply(make: (d: SketchFeature) => EditOutcome | SketchDraft | null, opts: Pick<ApplyOptions, 'optional' | 'refuse'> = {}): Promise<ApplyResult> {
+    const s = this.session;
+    const before = this.stored();
+    if (!s || !s.open || !before) return { ok: false, reason: 'The sketch is closed' };
+    if (this.byAssistant) return { ok: false, reason: ASSISTANT_SKETCH };
+    let out: EditOutcome | SketchDraft | null;
+    try {
+      out = make(before);
+    } catch (err) {
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+    if (!out) return { ok: false, reason: '' };
+    if ('ok' in out && !out.ok) return { ok: false, reason: out.reason };
+    const draft = 'ok' in out ? out.draft : out;
+    const optional = [...('ok' in out ? out.optional : []), ...(opts.optional ?? [])];
+    return this.solveEdit({ ...before, ...draft }, optional, { dry: true, refuse: opts.refuse ? (after) => opts.refuse!(before, after) : undefined });
+  }
+
   /** Solve a candidate; drop optional constraints that over-define it; report the outcome. */
-  private async solveEdit(next: SketchFeature, optional: readonly string[]): Promise<ApplyResult> {
+  private async solveEdit(next: SketchFeature, optional: readonly string[], o: { dry?: boolean; refuse?(after: SketchFeature): string | null } = {}): Promise<ApplyResult> {
     const units = this.services.doc.units;
     const prevOver = new Set([...(this.view.get().status?.conflicting ?? []), ...(this.view.get().status?.redundant ?? [])]);
     let attempt = next;
@@ -752,13 +810,22 @@ export class SketchMode implements SketchModeApi {
     for (;;) {
       const ev = evaluateDimensions(attempt, units);
       let r: SolverSolveResult;
+      let analysis: SolverAnalysis | null = null;
       try {
-        await this.solver.load(toSolverSketch(attempt, ev.values));
-        r = await this.solver.solve();
+        if (o.dry) {
+          // A dry run also asks the analysis: a relation the others imply shows only there (the
+          // sketch would turn "Over defined · 1 redundant" after the edit's own analysis).
+          const fa = await this.solver.analyzeFeature(attempt, ev.values);
+          r = fa.solve;
+          analysis = fa.analysis;
+        } else {
+          await this.solver.load(toSolverSketch(attempt, ev.values));
+          r = await this.solver.solve();
+        }
       } catch (err) {
         return { ok: false, reason: `failed: ${err instanceof Error ? err.message : String(err)}` };
       }
-      const st = statusOf(r);
+      const st = statusOf(r, analysis);
       const fresh = [...st.conflicting, ...st.redundant].filter((id) => !prevOver.has(id));
       if (fresh.length && drop.length) {
         // Inferred and helper constraints go first, newest first, until nothing new over-defines.
@@ -766,12 +833,19 @@ export class SketchMode implements SketchModeApi {
         attempt = { ...attempt, constraints: attempt.constraints.filter((c) => c.id !== id) };
         continue;
       }
-      if (fresh.length) return { ok: false, reason: 'would over-define the sketch', over: true, conflicting: st.conflicting, redundant: st.redundant };
+      if (fresh.length) {
+        // Only redundant, nothing new conflicting, and no freedom taken: what it adds holds already.
+        const implied = !!o.dry && r.solved && !st.conflicting.some((id) => !prevOver.has(id)) && st.dof === (this.view.get().status?.dof ?? -1);
+        return { ok: false, reason: 'would over-define the sketch', over: true, conflicting: st.conflicting, redundant: st.redundant, ...(implied ? { implied: true } : {}) };
+      }
       if (!r.solved) return { ok: false, reason: 'cannot be solved: the constraints cannot all hold' };
       const solved = withSolved(attempt, r.values);
       // A solution that shrinks a line, a circle or an arc to nothing is not one (vertical on a horizontal line).
       const collapsed = collapsedBy(attempt, solved);
       if (collapsed) return { ok: false, reason: `would shrink ${entityLabel(attempt, collapsed)} to nothing` };
+      const refused = o.refuse?.(solved);
+      if (refused) return { ok: false, reason: refused };
+      if (o.dry) return { ok: true, draft: { ...solved, solved: solvedStateOf(st, ev.values) } };
       this.lastSolve = r;
       return { ok: true, draft: { ...solved, solved: solvedStateOf(st, ev.values) } };
     }

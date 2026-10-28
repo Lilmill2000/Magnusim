@@ -325,9 +325,11 @@ export class RadiusHandle {
     const dr = this.drag;
     const target = this.target;
     if (!dr || !target) return null;
+    // Let the solves land, the newest the pointer asked for last, then store the value the drawing
+    // shows. Integration review: a release while a solve was still running dropped the moves after
+    // it, so under load (the solver busy) the drag stored an older, smaller radius (5.5 for 7).
+    for (let i = 0; this.busy && i < 1000; i++) await this.chain.catch(() => {});
     this.want = null;
-    // Let the last solve land, then store the value the drawing showed.
-    await this.chain.catch(() => {});
     this.drag = null;
     this.mode.view.set({ dragging: false });
     const r = this.lastGood ?? dr.r0;

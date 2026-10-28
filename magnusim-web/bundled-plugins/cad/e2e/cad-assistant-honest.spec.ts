@@ -9,7 +9,7 @@
 // on r.top"); the person's tree, panels and Undo stay as they were. Resent without it, the sketch
 // is made through the person's sketch panel, fully defined, and one Undo takes it back.
 // delete (honest 7, T9) asks the person first in the app's dialog ("Allow the Assistant to delete
-// features?", its copy saying one Ctrl+Z takes back the whole request with the deletion, Don't focused): Enter answers Don't, the
+// features?", its copy saying one Undo takes back the whole request with the deletion, Don't focused): Enter answers Don't, the
 // model gets declined and the Part never hears the call; a click on Allow deletes the feature the
 // tree shows, and one Ctrl+Z brings it back.
 // A sketch the model moves onto an offset plane: the tree shows the new plane above the sketch,
@@ -270,7 +270,7 @@ test("cad:assistant-honest-delete delete asks the person first: Don't keeps the 
   const t1 = await startTurn(request, host, { text: 'Delete the extrude.', tab });
   await expect(dialog).toBeVisible(STEP);
   await expect(part('.dock-gate-title')).toHaveText('Allow the Assistant to delete features?');
-  await expect(part('.dock-gate-copy')).toContainText('Deletes features from the Part; one Ctrl+Z takes back the whole request, this deletion with it.');
+  await expect(part('.dock-gate-copy')).toContainText('Deletes features from the Part; one Undo takes back the whole request, this deletion with it.');
   await expect(part('.dock-gate-copy')).toContainText('What it sent: {"features":["Extrude 1"]}. Nothing runs until you choose.');
   await expect(part('[data-gate-answer="yes"]')).toHaveText('Allow');
   await expect(part('[data-gate-answer="no"]')).toHaveText("Don't");

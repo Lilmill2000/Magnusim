@@ -400,6 +400,8 @@ interface ConfirmOptions
 - `title: string`
 - `message?: string | undefined`
 - `confirmLabel?: string | undefined`: The confirming button's label ("Delete", "Replace", ...).
+- `guard?: boolean | undefined`: Unreleased (1.9): the confirming button answers only a deliberate click, made once it is enabled; a key press never does.
+- `safe?: boolean | undefined`: Unreleased (1.9): Cancel has the focus, and Enter, like Escape, answers Cancel.
 
 #### EditedGeometry
 

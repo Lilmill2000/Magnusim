@@ -26,6 +26,7 @@ import { install as installViewport } from '../viewport';
 import { App } from './App';
 import { createCommandRegistry } from './commands';
 import { exposeTestHandle } from './debug';
+import { createKeybinds, setKeybindsFor } from './keybinds';
 import { bindCommandShortcuts, createKeyboard } from './keyboard';
 
 function renderFatal(root: HTMLElement, title: string, message: string) {
@@ -62,7 +63,9 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   const found = discoverModules();
   const modules = createModuleRegistry(found);
   registerModuleFeatures(doc.features, found);
-  const commands = createCommandRegistry(() => services);
+  // The person's keybinds (ws.prefs "keybinds", live): the keyboard, the tooltips and the Assistant read them.
+  const keybinds = createKeybinds({ prefs: bridge.prefs });
+  const commands = createCommandRegistry(() => services, keybinds);
   const keyboard = createKeyboard(document);
   // Typed text not applied yet: focus coming back finds its field, Enter applies it (UX review U1).
   installPendingEditKeys(window);
@@ -79,6 +82,7 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
     modules,
     apis,
   };
+  setKeybindsFor(services, keybinds);
 
   // Each area registers its commands and handlers (see ARCHITECTURE.md "install()"),
   // then the modules (after the UI shell, so their commands and bindings come later).

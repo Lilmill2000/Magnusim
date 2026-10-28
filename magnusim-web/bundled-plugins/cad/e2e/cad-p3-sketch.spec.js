@@ -179,7 +179,7 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   // round 1, cad-sd-review1.spec.ts); here the plane is selected first.
   await expect(tb(frame).locator('[data-command="sketch.new"]')).not.toHaveAttribute('aria-disabled', 'true');
   await sketchOnTop(page, frame);
-  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
+  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'MODIFY', 'CONSTRAIN', 'DIMENSION', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
   // Nothing drawn yet: said so (review P2/P3 round 1: an empty sketch read "Fully defined").
   await expect(chip(frame)).toHaveText('No geometry yet');
 

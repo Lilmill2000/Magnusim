@@ -707,6 +707,10 @@ export interface ConfirmOptions {
   message?: string;
   /** The confirming button's label ("Delete", "Replace", ...). */
   confirmLabel?: string;
+  /** Unreleased (1.9): the confirming button answers only a deliberate click, made once it is enabled; a key press never does. */
+  guard?: boolean;
+  /** Unreleased (1.9): Cancel has the focus, and Enter, like Escape, answers Cancel. */
+  safe?: boolean;
 }
 
 export interface PromptOptions {

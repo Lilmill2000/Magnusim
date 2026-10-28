@@ -5,8 +5,9 @@
 //                     run them by id), by id;
 //   FEATURE_FIELDS    every field of every feature type's record (types/doc.ts), by type;
 //   SKETCH_ENTITIES, SKETCH_CONSTRAINTS, SKETCH_TOOLS  what sketch mode draws, ties and offers;
-//   UI, DOC, RAILS, TOOLBAR, LINK, VIEWPORT  the methods the person's controls call (the tree, the
-//                     chips, the panels' rails, the toolbar layout, Back's link, the view).
+//   UI, DOC, RAILS, TOOLBAR, LINK, VIEWPORT, KEYBINDS  the methods the person's controls call (the
+//                     tree, the chips, the panels' rails, the toolbar layout, Back's link, the view,
+//                     the Set keybind dialog and Settings' keybinds).
 // And the other way (Daniel: "anything the AI has I should have and anything I have the AI should
 // have"): AI_TOOLS names, for every field of every Assistant tool and every value of its enums
 // (schemas.ts), the person's way to the same thing (person paths, below); the test fails on a
@@ -17,8 +18,9 @@
 // checks the same at run time against the booted app (every registered command, feature type and
 // default field) and that every mapping names a tool and field that exist in schemas.ts.
 // A mapping is one of:
-//   reach(tool, field, value?)    the Assistant reaches it now (field: a property path of the tool's
-//                                 input, "entities[].kind"; value: the enum value, when one);
+//   reach(tool, field, value?, note?)  the Assistant reaches it now (field: a property path of the
+//                                 tool's input, "entities[].kind"; value: the enum value, when one;
+//                                 note: a rule on how, as the keybind changes' "only when asked");
 //   auto(why)                     not a person action: automatic, internal, or only a pointer's way
 //                                 to something mapped elsewhere (the why says which).
 // Not imported by the app (tests and typecheck only).
@@ -35,12 +37,13 @@ import type { ViewportHandle } from '../types/viewport';
 import type { UiController } from '../ui/controller';
 import type { Rails } from '../ui/left-rails';
 import type { ToolbarPrefs } from '../ui/toolbar-layout';
+import type { Keybinds } from '../app/keybinds';
 
 export type Reach =
-  | { kind: 'reach'; tool: string; field: string; value?: string }
+  | { kind: 'reach'; tool: string; field: string; value?: string; note?: string }
   | { kind: 'auto'; why: string };
 
-export const reach = (tool: string, field: string, value?: string): Reach => ({ kind: 'reach', tool, field, ...(value !== undefined ? { value } : {}) });
+export const reach = (tool: string, field: string, value?: string, note?: string): Reach => ({ kind: 'reach', tool, field, ...(value !== undefined ? { value } : {}), ...(note ? { note } : {}) });
 export const auto = (why: string): Reach => ({ kind: 'auto', why });
 
 const W = (action: string) => reach('workspace', 'action', action);
@@ -328,6 +331,10 @@ export const SKETCH_ENTITIES: { readonly [K in SketchEntity['kind']]: Reach } = 
   conic: ENTITY('conic'),
 };
 
+// The person's relations palette by the selection (src/sketch/relations-palette.ts) adds through the
+// CONSTRAIN commands, so it offers no kind beyond these rows; its Symmetric of two lines or two
+// circles about a centerline is point Symmetric records (and an On line for a shared end), which
+// the tool writes with its symmetric and point_on rows.
 export const SKETCH_CONSTRAINTS: { readonly [K in SketchRelationKind | SketchDimensionKind]: Reach } = {
   coincident: TIE('coincident'),
   horizontal: TIE('horizontal'),
@@ -508,8 +515,53 @@ export const TOOLBAR: { readonly [K in keyof ToolbarPrefs]: Reach } = {
   state: INTERNAL,
   loaded: INTERNAL,
   setMode: W('toolbar_move'),
+  // v0.5.0 ribbon: the line at a group's right, and the toolbar's bottom edge.
+  setWidth: W('toolbar_width'),
+  setRows: W('toolbar_rows'),
   reset: W('toolbar_reset'),
   saved: INTERNAL,
+};
+
+/**
+ * Daniel (2026-10-27): "the AI can have access to keybinds but can not change them unless the user
+ * explicitly asks them to change them": a change needs person_asked true and the person's Yes in
+ * the app's confirm dialog, every time.
+ */
+export const KEYBIND_CHANGE_RULE = "only when the person explicitly asked (person_asked true) and confirms in the app's dialog";
+const KEYS_READ = W('keybind_get');
+const KEYS = (action: string) => reach('workspace', 'action', action, KEYBIND_CHANGE_RULE);
+
+/**
+ * The person's keybinds (src/app/keybinds.ts): the Set keybind dialog (a right-click on a command:
+ * the views menu now, the toolbar's menu when the ribbon lands; the test handle) and the app's
+ * Settings call these.
+ */
+export const KEYBINDS: { readonly [K in keyof Keybinds]: Reach } = {
+  ready: INTERNAL,
+  load: INTERNAL,
+  known: INTERNAL,
+  entries: KEYS_READ,
+  entry: KEYS_READ,
+  current: KEYS_READ,
+  keys: KEYS_READ,
+  defaults: KEYS_READ,
+  isDefault: KEYS_READ,
+  display: KEYS_READ,
+  capture: auto("the person's key press in the dialog: the Assistant names the keys in keybind_set's value"),
+  shown: KEYS_READ,
+  via: KEYS_READ,
+  owners: KEYS_READ,
+  conflictsWith: KEYS_READ,
+  setKeybind: KEYS('keybind_set'),
+  replace: KEYS('keybind_set'),
+  resetToDefault: KEYS('keybind_reset'),
+  clear: KEYS('keybind_clear'),
+  resetAll: KEYS('keybind_reset'),
+  overrides: KEYS_READ,
+  conflicts: KEYS_READ,
+  flush: INTERNAL,
+  subscribe: INTERNAL,
+  dispose: INTERNAL,
 };
 
 export const LINK: { readonly [K in keyof LinkController]: Reach } = {
@@ -627,6 +679,7 @@ export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reac
   doc: DOC,
   rails: RAILS,
   toolbar: TOOLBAR,
+  keybinds: KEYBINDS,
   link: LINK,
   viewport: VIEWPORT,
 };
@@ -651,7 +704,7 @@ export type PersonPath =
   | { kind: 'place'; where: string }
   | { kind: 'own'; why: string };
 
-export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'link' | 'viewport';
+export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport';
 
 export const command = (id: string): PersonPath => ({ kind: 'command', id });
 export const control = (table: ControlTable, method: string): PersonPath => ({ kind: 'control', table, method });
@@ -937,6 +990,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=toolbar_hide': control('toolbar', 'setMode'),
     'action=toolbar_move': control('toolbar', 'setMode'),
     'action=toolbar_reset': control('toolbar', 'reset'),
+    'action=toolbar_width': control('toolbar', 'setWidth'),
+    'action=toolbar_rows': control('toolbar', 'setRows'),
     'action=banana_show': command('scale.banana'),
     'action=banana_hide': command('scale.banana'),
     'action=banana_place': control('doc', 'setScaleModel'),
@@ -955,9 +1010,14 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=section': control('viewport', 'setSection'),
     'action=projection': control('viewport', 'setProjection'),
     'action=display': control('viewport', 'setDisplay'),
+    // The Set keybind dialog (a command's right-click) and Settings; the Assistant's changes need the person's ask and Yes.
+    'action=keybind_get': control('keybinds', 'current'),
+    'action=keybind_set': control('keybinds', 'setKeybind'),
+    'action=keybind_reset': control('keybinds', 'resetToDefault'),
+    'action=keybind_clear': control('keybinds', 'clear'),
     target: own("the action's target: the person points at it"),
     value: own("the action's value: the person picks it in that control"),
     items: own("the action's list: the person picks them in that control"),
-    person_asked: own("whether the person asked for the view change: the person's own moves need no asking"),
+    person_asked: own("whether the person asked for the view or keybind change: the person's own moves and keybinds need no asking"),
   },
 };

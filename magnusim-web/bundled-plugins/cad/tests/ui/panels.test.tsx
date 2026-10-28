@@ -61,9 +61,10 @@ describe('toolbar', () => {
     // Feature commands come from their modules (none here); the shell's own are Parameters, Undo and Redo.
     expect(ui.$$('.tb-group').map((g) => g.getAttribute('data-group'))).toEqual(['modify', 'edit']);
     expect(ui.$$('.tb-group-label').map((g) => g.textContent)).toEqual(['MODIFY', 'EDIT']);
-    // Parameters is in MODIFY's More by default (the compact model toolbar, P4b fix round 1).
-    expect(ui.$$('.tb-btn[data-command] .tb-txt').map((b) => b.textContent)).toEqual(['Undo', 'Redo']);
-    expect(ui.$('[data-tb-more="modify"]')!.getAttribute('data-more-commands')).toBe('modify.parameters');
+    // v0.5.0 ribbon (Daniel: "yes show the rest as small buttons"): every command is on the toolbar,
+    // nothing in a More by default (P4b fix round 1 kept Parameters in MODIFY's More).
+    expect(ui.$$('.tb-btn[data-command] .tb-txt').map((b) => b.textContent)).toEqual(['Parameters', 'Undo', 'Redo']);
+    expect(ui.$('[data-tb-more]')).toBeNull();
     expect(ui.$('[data-command="solid.box"]')).toBeNull();
     expect(ui.$('[data-command="solid.cylinder"]')).toBeNull();
     fireEvent.mouseEnter(cmd('modify.parameters'));
@@ -103,7 +104,7 @@ describe('feature panels', () => {
     const body = t.doc.state.get().rebuild.bodies[0];
     const pick = { item: { kind: 'face' as const, body: body.id, index: 2 }, point: [0, 0, 0] as [number, number, number], normal: null, depth: 1, screen: [5, 5] as [number, number] };
     act(() => t.services.bus.emit('viewport:contextmenu', { pick, clientX: 50, clientY: 60 }));
-    expect(ui.menu()).toEqual(['Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', '(Move up)', '(Move down)', '(Roll back to here)', 'Delete Extrude 1']);
+    expect(ui.menu()).toEqual(['Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', '(Move up)', '(Move down)', '(Roll back to here)', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Extrude 1']);
     // Bug 2026-09-30: body and feature items shared ids (React key clash); every item id is unique.
     const ids = ui.$$('[data-cad-menu] [data-menu-item]').map((b) => b.getAttribute('data-menu-item'));
     expect(new Set(ids).size).toBe(ids.length);
@@ -135,7 +136,7 @@ describe('feature panels', () => {
     expect(t.doc.calls).not.toContain('beginEdit f_old');
     expect(t.ws.log.toasts.at(-1)).toEqual({ message: 'This part uses a removed feature (Box 1). Solids come from sketches now: delete it, then sketch the shape and extrude it.', kind: 'info' });
     fireEvent.contextMenu(ui.row('f_old'));
-    expect(ui.menu()).toEqual(['(Edit Box 1)', 'Rename Box 1', 'Suppress Box 1', '(Move up)', 'Move down', 'Roll back to here', 'Delete Box 1']);
+    expect(ui.menu()).toEqual(['(Edit Box 1)', 'Rename Box 1', 'Suppress Box 1', '(Move up)', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Box 1']);
     fireEvent.mouseEnter(ui.menuItem('edit'));
     expect(ui.tip()).toBe('Edit Box 1This part uses a removed feature (Box 1). Solids come from sketches now: delete it, then sketch the shape and extrude it');
     fireEvent.mouseLeave(ui.menuItem('edit'));

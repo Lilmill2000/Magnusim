@@ -205,6 +205,11 @@ describe('WorkspaceCalls: the allowlist', () => {
     expect(h.toast).toHaveBeenCalledWith('x'.repeat(300), 'info');
     expect(await c.handle('ui.confirm', { title: 'Replace?', message: 'The polar is replaced.', confirmLabel: 'Replace' })).toBe(true);
     expect(h.confirm).toHaveBeenCalledWith({ title: 'Replace?', copy: 'The polar is replaced.', yes: 'Replace' });
+    // A page may ask for the guarded Yes (a deliberate click only) and for Enter to answer Cancel.
+    await c.handle('ui.confirm', { title: 'Change?', message: 'Set it?', confirmLabel: 'Change', guard: true, safe: true });
+    expect(h.confirm).toHaveBeenLastCalledWith({ title: 'Change?', copy: 'Set it?', yes: 'Change', guard: true, safe: true });
+    await c.handle('ui.confirm', { title: 'Change?', guard: 'yes' });
+    expect(h.confirm).toHaveBeenLastCalledWith({ title: 'Change?', copy: '', yes: 'OK' });
     expect(await c.handle('ui.prompt', { title: 'Name the airfoil' })).toBe('Named');
     expect(await c.handle('nav.back', {})).toEqual({ ok: true, left: true });
     expect(h.back).toHaveBeenCalledTimes(1);

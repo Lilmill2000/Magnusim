@@ -294,6 +294,8 @@ describe('the smoke and serial tags', () => {
       'cad:p4b-toolbar-customize',
       'cad:p4b-toolbar-migrate',
       'cad:p4b-toolbar-tabs',
+      'cad:toolbar-resize',
+      'cad:toolbar-resize-review',
       // ux010 TOOLBAR: dragging between More and the bar changes the same user layout.
       'cad:ux010-toolbar-model',
       'cad:ux010-toolbar-narrow',
@@ -316,6 +318,14 @@ describe('the smoke and serial tags', () => {
       'cad:assistant-coexist-busy',
       // The Assistant's sketch on the collapsed Sketch panel's rail: the collapse is the user's pref.
       'cad:assistant-panel-rail',
+      // Keybinds are the user's pref: set in the dialog, and from outside the page (Settings).
+      'cad:keybinds-dialog',
+      'cad:keybinds-live',
+      // Set keybind on the toolbar's right-click: moves a command to More (the user's layout pref).
+      'cad:keybinds-toolbar-menu',
+      // A focused control keeps its key (the toolbar layout pref); Set keybind where the person meets each key action.
+      'cad:keybinds-control-keeps-key',
+      'cad:keybinds-person-paths',
     ].sort());
   });
 });

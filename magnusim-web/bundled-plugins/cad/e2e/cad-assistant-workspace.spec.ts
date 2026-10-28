@@ -8,7 +8,10 @@
 //   view; after their drag in the same request the next one answers view_latched and the camera
 //   stays where they put it; with person_asked true it turns the view;
 // - Export STEP: the person's own panel opens filled in (format, file name, bodies) and nothing is
-//   downloaded until the person clicks Export.
+//   downloaded until the person clicks Export;
+// - keybinds (Daniel: read any time, changed only when the person asks): keybind_get answers;
+//   keybind_set without person_asked is not_asked; with it the app's dialog names the exact change,
+//   a stray Enter is No (step_declined, nothing changes), a click on Yes changes and stores it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -218,4 +221,48 @@ test('cad:assistant-workspace-back core__show Back asks with a card naming the P
   const proj = await (await request.get(`${host.base}/api/project?project_id=${encodeURIComponent(pid)}`)).json();
   const names = ((proj.project?.geometries ?? []) as Array<{ name: string }>).map((g) => g.name);
   expect(names).toContain(jobs.jobs[0].result?.geometry);
+});
+
+test("cad:assistant-workspace-keybinds keybinds: read freely; a change only with person_asked and the person's Yes in the app's dialog, which names the exact change", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const prefs = (action: 'get' | 'remove') => request.post(`${host.base}/api/plugin-prefs/${action}`, { data: { plugin: 'cad', key: 'keybinds' } });
+  expect((await prefs('remove')).ok()).toBe(true);
+  try {
+    const pid = await newProject(request, host, 'Workspace keybinds');
+    const { tab } = await openNewPart(page, request, host, pid);
+    const keys = () => cadFrame(page).evaluate(() => [...(window as unknown as { __CAD__: { keybinds: { model: { current(id: string): string[] } } } }).__CAD__.keybinds.model.current('sketch.rectangle')]);
+    const before = chats(host).length;
+    host.fake.reply(
+      { tools: [W('keybind_get', { target: 'sketch.rectangle' })] },
+      { tools: [W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T' })] },
+      { tools: [W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true })] },
+      { tools: [W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true })] },
+      { text: 'Done.' },
+    );
+    const t = await startTurn(request, host, { text: 'Make the rectangle shortcut Shift+T.', tab });
+    // The app's own dialog, with the exact change: the person says No first.
+    const dialog = page.locator('#modal-confirm');
+    await expect(dialog).toBeVisible(STEP);
+    await expect(page.locator('#cf-heading')).toHaveText('The Assistant asks to change a shortcut');
+    await expect(page.locator('#cf-copy')).toHaveText('Set the Rectangle shortcut to Shift+T (it was R)?');
+    await expect(page.locator('#cf-confirm')).toHaveText('Change shortcut');
+    // A stray Enter never answers Yes (review): the guarded dialog takes it as Cancel.
+    await page.keyboard.press('Enter');
+    await expect(dialog).toBeHidden(STEP);
+    expect(await keys()).toEqual(['KeyR']);
+    // Asked again: Yes.
+    await expect(dialog).toBeVisible(STEP);
+    await expect(page.locator('#cf-copy')).toHaveText('Set the Rectangle shortcut to Shift+T (it was R)?');
+    await page.locator('#cf-confirm').click();
+    expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+    expect(await keys()).toEqual(['Shift+KeyT']);
+    await expect.poll(async () => (await (await prefs('get')).json()).value ?? null).toEqual({ 'sketch.rectangle': ['Shift+KeyT'] });
+    const r = chats(host).slice(before);
+    expect(resultsIn(r[1])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: 'Rectangle: R', data: { keybind: { keys: ['KeyR'], shown: 'R' } } });
+    expect(resultsIn(r[2])[0]).toMatchObject({ tool: 'cad__workspace', ok: false, error: { detail: { reason: 'not_asked' } } });
+    expect(resultsIn(r[3])[0]).toMatchObject({ tool: 'cad__workspace', ok: false, error: { code: 'busy', detail: { reason: 'step_declined' } } });
+    expect(resultsIn(r[4])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: 'Rectangle: Shift+T (was R)', data: { stored: true, undo_step: false } });
+  } finally {
+    await prefs('remove');
+  }
 });

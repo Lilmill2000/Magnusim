@@ -1,0 +1,806 @@
+{
+  "version": 1,
+  "contexts": [
+    {
+      "id": "sketch",
+      "label": "Sketch"
+    },
+    {
+      "id": "model",
+      "label": "Model"
+    }
+  ],
+  "commands": [
+    {
+      "id": "edit.undo",
+      "label": "Undo",
+      "group": "Edit",
+      "context": "model",
+      "keys": [
+        "Ctrl+KeyZ"
+      ]
+    },
+    {
+      "id": "edit.redo",
+      "label": "Redo",
+      "group": "Edit",
+      "context": "model",
+      "keys": [
+        "Ctrl+KeyY",
+        "Ctrl+Shift+KeyZ"
+      ]
+    },
+    {
+      "id": "ui.delete",
+      "label": "Delete selected features",
+      "group": "Edit",
+      "context": "model",
+      "keys": [
+        "Delete"
+      ]
+    },
+    {
+      "id": "ui.rename",
+      "label": "Rename the selected feature or body",
+      "group": "Edit",
+      "context": "any",
+      "keys": [
+        "F2"
+      ]
+    },
+    {
+      "id": "ui.toggle-rail",
+      "label": "Show or hide the tree (the Sketch panel in a sketch)",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Ctrl+Backslash"
+      ]
+    },
+    {
+      "id": "view.fit",
+      "label": "Fit",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "KeyF"
+      ]
+    },
+    {
+      "id": "view.front",
+      "label": "Front view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit1"
+      ]
+    },
+    {
+      "id": "view.back",
+      "label": "Back view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit2"
+      ]
+    },
+    {
+      "id": "view.left",
+      "label": "Left view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit3"
+      ]
+    },
+    {
+      "id": "view.right",
+      "label": "Right view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit4"
+      ]
+    },
+    {
+      "id": "view.top",
+      "label": "Top view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit5"
+      ]
+    },
+    {
+      "id": "view.bottom",
+      "label": "Bottom view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit6"
+      ]
+    },
+    {
+      "id": "view.iso",
+      "label": "Isometric view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit7"
+      ]
+    },
+    {
+      "id": "view.iso_back",
+      "label": "Back isometric view",
+      "group": "View",
+      "context": "any",
+      "keys": [
+        "Digit8"
+      ]
+    },
+    {
+      "id": "view.normal-to",
+      "label": "Normal to",
+      "group": "View",
+      "context": "model",
+      "keys": [
+        "KeyN"
+      ]
+    },
+    {
+      "id": "sketch.new",
+      "label": "Sketch",
+      "group": "Sketch",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "solid.extrude",
+      "label": "Extrude",
+      "group": "Solid",
+      "context": "model",
+      "keys": [
+        "KeyE"
+      ]
+    },
+    {
+      "id": "solid.revolve",
+      "label": "Revolve",
+      "group": "Solid",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "solid.sweep",
+      "label": "Sweep",
+      "group": "Solid",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "solid.loft",
+      "label": "Loft",
+      "group": "Solid",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "solid.hole",
+      "label": "Hole",
+      "group": "Solid",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "pattern.linear",
+      "label": "Linear pattern",
+      "group": "Pattern",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "pattern.circular",
+      "label": "Circular pattern",
+      "group": "Pattern",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "pattern.mirror",
+      "label": "Mirror",
+      "group": "Pattern",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.parameters",
+      "label": "Parameters",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.press-pull",
+      "label": "Press-pull",
+      "group": "Modify",
+      "context": "model",
+      "keys": [
+        "KeyQ"
+      ]
+    },
+    {
+      "id": "modify.fillet",
+      "label": "Fillet",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.chamfer",
+      "label": "Chamfer",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.shell",
+      "label": "Shell",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.combine",
+      "label": "Combine",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.split",
+      "label": "Split",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "modify.delete-faces",
+      "label": "Delete faces",
+      "group": "Modify",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "construct.plane",
+      "label": "Plane",
+      "group": "Construct",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "construct.axis",
+      "label": "Axis",
+      "group": "Construct",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "construct.point",
+      "label": "Point",
+      "group": "Construct",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "cfd.enclosure",
+      "label": "Enclosure",
+      "group": "CFD prep",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "inspect.measure",
+      "label": "Measure",
+      "group": "Inspect",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "inspect.find",
+      "label": "Find",
+      "group": "Inspect",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "inspect.mass",
+      "label": "Mass properties",
+      "group": "Inspect",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "inspect.check",
+      "label": "Check",
+      "group": "Inspect",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "file.import-step",
+      "label": "Import STEP",
+      "group": "File",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "file.export-step",
+      "label": "Export STEP",
+      "group": "File",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "file.picture",
+      "label": "Picture",
+      "group": "File",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "scale.banana",
+      "label": "Banana for scale",
+      "group": "Scale models",
+      "context": "model",
+      "keys": []
+    },
+    {
+      "id": "sketch.enter",
+      "label": "Place or finish",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "id": "sketch.finish",
+      "label": "Finish sketch",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.undo",
+      "label": "Undo",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Ctrl+KeyZ"
+      ]
+    },
+    {
+      "id": "sketch.redo",
+      "label": "Redo",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Ctrl+KeyY",
+        "Ctrl+Shift+KeyZ"
+      ]
+    },
+    {
+      "id": "sketch.delete",
+      "label": "Delete",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Delete"
+      ]
+    },
+    {
+      "id": "view.sketch-look",
+      "label": "Normal to",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "KeyN"
+      ]
+    },
+    {
+      "id": "view.sketch-relations",
+      "label": "Show relations",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Shift+KeyR"
+      ]
+    },
+    {
+      "id": "sketch.line",
+      "label": "Line",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": [
+        "KeyL"
+      ]
+    },
+    {
+      "id": "sketch.centerline",
+      "label": "Centerline",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.line-midpoint",
+      "label": "Midpoint line",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.rectangle",
+      "label": "Rectangle",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": [
+        "KeyR"
+      ]
+    },
+    {
+      "id": "sketch.rectangle-center",
+      "label": "Center rectangle",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.rectangle-3pt",
+      "label": "3-point corner rectangle",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.rectangle-center-3pt",
+      "label": "3-point center rectangle",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.parallelogram",
+      "label": "Parallelogram",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.circle",
+      "label": "Circle",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": [
+        "KeyC"
+      ]
+    },
+    {
+      "id": "sketch.circle-3pt",
+      "label": "Perimeter circle",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.arc",
+      "label": "3-point arc",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": [
+        "KeyA"
+      ]
+    },
+    {
+      "id": "sketch.arc-tangent",
+      "label": "Tangent arc",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.arc-center",
+      "label": "Centerpoint arc",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.sector",
+      "label": "Sector",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.slot",
+      "label": "Center-to-center slot",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.slot-overall",
+      "label": "Overall slot",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.slot-center-point",
+      "label": "Center-point slot",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.slot-arc-3pt",
+      "label": "3-point arc slot",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.slot-arc-center",
+      "label": "Center-point arc slot",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.polygon",
+      "label": "Polygon",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.spline",
+      "label": "Spline",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": [
+        "KeyS"
+      ]
+    },
+    {
+      "id": "sketch.spline-control",
+      "label": "Control-point spline",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.ellipse",
+      "label": "Ellipse",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.ellipse-partial",
+      "label": "Partial ellipse",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.parabola",
+      "label": "Parabola",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.conic",
+      "label": "Conic",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.point",
+      "label": "Point",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.construction",
+      "label": "Construction",
+      "group": "Sketch: Draw",
+      "context": "sketch",
+      "keys": [
+        "KeyX"
+      ]
+    },
+    {
+      "id": "sketch.trim",
+      "label": "Trim",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": [
+        "KeyT"
+      ]
+    },
+    {
+      "id": "sketch.extend",
+      "label": "Extend",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.offset",
+      "label": "Offset",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": [
+        "KeyO"
+      ]
+    },
+    {
+      "id": "sketch.fillet",
+      "label": "Fillet",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.chamfer",
+      "label": "Chamfer",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.mirror",
+      "label": "Mirror",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": [
+        "KeyM"
+      ]
+    },
+    {
+      "id": "sketch.pattern-linear",
+      "label": "Linear pattern",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.pattern-circular",
+      "label": "Circular pattern",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.project",
+      "label": "Project",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": [
+        "KeyP"
+      ]
+    },
+    {
+      "id": "sketch.intersect",
+      "label": "Intersect",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.coincident",
+      "label": "Coincident",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.horizontal",
+      "label": "Horizontal",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.vertical",
+      "label": "Vertical",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.parallel",
+      "label": "Parallel",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.perpendicular",
+      "label": "Perpendicular",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.tangent",
+      "label": "Tangent",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.equal",
+      "label": "Equal",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.midpoint",
+      "label": "Midpoint",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.symmetric",
+      "label": "Symmetric",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.concentric",
+      "label": "Concentric",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.collinear",
+      "label": "Collinear",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.fix",
+      "label": "Fix",
+      "group": "Sketch: Constrain",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.dimension",
+      "label": "Dimension",
+      "group": "Sketch: Dimension",
+      "context": "sketch",
+      "keys": [
+        "KeyD"
+      ]
+    },
+    {
+      "id": "scale.sketch-banana",
+      "label": "Banana for scale",
+      "group": "Sketch: Scale models",
+      "context": "sketch",
+      "keys": []
+    }
+  ]
+}

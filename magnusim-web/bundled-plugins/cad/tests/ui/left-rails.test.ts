@@ -5,6 +5,7 @@
 // and Ctrl+\ (the panel in sketch mode, the tree in model mode).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
+import { keybindsFor } from '../../src/app/keybinds';
 import type { PrefsApi } from '../../src/lib/bridge';
 import { createStateStore } from '../../src/lib/store';
 import type { AppServices } from '../../src/types/app';
@@ -139,7 +140,7 @@ describe('the left column rails', () => {
     const { services, mode, press } = servicesOf(u.api);
     const rails = railsFor(services);
     await ready(rails);
-    expect(RAIL_SHORTCUT).toBe('Ctrl+\\');
+    expect(RAIL_SHORTCUT).toBe('Ctrl+Backslash');
     press(RAIL_SHORTCUT);
     expect(rails.state.get().treeCollapsed).toBe(true);
     press(RAIL_SHORTCUT);
@@ -153,7 +154,7 @@ describe('the left column rails', () => {
   });
 
   it('Ctrl+\\ by its place on the keyboard (AltGr layouts: Ctrl+Alt+\\): toggles once; not while typing', async () => {
-    const { services, mode } = servicesOf(null);
+    const { services, mode, press } = servicesOf(null);
     const rails = railsFor(services);
     mode.set({ mode: 'sketch' });
     const key = (init: KeyboardEventInit, target: EventTarget = document) => target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
@@ -164,11 +165,33 @@ describe('the left column rails', () => {
     expect(rails.state.get().sketchCollapsed).toBe(true);
     const input = document.createElement('input');
     document.body.appendChild(input);
-    key({ key: '#', code: 'Backslash', ctrlKey: true }, input);
+    key({ key: '#', code: 'Backslash', ctrlKey: true, altKey: true }, input);
     expect(rails.state.get().sketchCollapsed).toBe(true);
+    key({ key: '#', code: 'Backslash', ctrlKey: true, altKey: true });
+    expect(rails.state.get().sketchCollapsed).toBe(false);
+    // Ctrl and that key with no AltGr is the keyboard binding's (by its place, any character on it).
     key({ key: '#', code: 'Backslash', ctrlKey: true });
     expect(rails.state.get().sketchCollapsed).toBe(false);
+    press(RAIL_SHORTCUT);
+    expect(rails.state.get().sketchCollapsed).toBe(true);
     input.remove();
+  });
+
+  it("Ctrl+Shift+\\ or Ctrl+Alt+\\ given to a command is the command's: the rail does not toggle too (review: one key did two things)", async () => {
+    const { services, mode } = servicesOf(null);
+    const rails = railsFor(services);
+    mode.set({ mode: 'sketch' });
+    const kb = keybindsFor(services);
+    expect(kb.setKeybind('inspect.measure', 'Ctrl+Shift+\\')).toMatchObject({ ok: true, keys: ['Ctrl+Shift+Backslash'] });
+    const key = (init: KeyboardEventInit) => document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+    key({ key: '|', code: 'Backslash', ctrlKey: true, shiftKey: true });
+    expect(rails.state.get().sketchCollapsed).toBe(false);
+    // Ctrl+Alt+\ is nobody's: still the rail's (AltGr layouts).
+    key({ key: '\\', code: 'Backslash', ctrlKey: true, altKey: true });
+    expect(rails.state.get().sketchCollapsed).toBe(true);
+    expect(kb.setKeybind('inspect.find', 'Ctrl+Alt+\\')).toMatchObject({ ok: true });
+    key({ key: '\\', code: 'Backslash', ctrlKey: true, altKey: true });
+    expect(rails.state.get().sketchCollapsed).toBe(true);
   });
 
   it('a host that never answers the prefs read: the column is drawn with the defaults after the give-up', async () => {

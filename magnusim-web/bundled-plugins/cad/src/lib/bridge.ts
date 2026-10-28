@@ -117,8 +117,12 @@ export interface Bridge {
   prefs: PrefsApi | null;
   /** The host's toast (bottom-right of the workspace). Never throws. */
   toast(message: string, kind?: ToastKind): void;
-  /** Destructive confirms only: the host's button is always red. */
-  confirm(opts: ConfirmOptions): Promise<boolean>;
+  /**
+   * Destructive confirms only: the host's button is always red. `guard`: Yes takes a deliberate
+   * click only (disabled at first, never Enter); `safe`: Enter answers Cancel. Hosts before the
+   * unreleased 1.9 ignore both (a plain confirm).
+   */
+  confirm(opts: ConfirmOptions & { guard?: boolean; safe?: boolean }): Promise<boolean>;
   prompt(opts: PromptOptions): Promise<string | null>;
   /** Close the workspace; false when the user chose to stay (host 1.2 asks while the page is dirty). */
   back(): Promise<boolean>;
@@ -266,7 +270,7 @@ export function createBridge(ws: Workspace): Bridge {
     toast(message, kind = 'info') {
       ws.ui.toast(message, { kind }).catch((err: unknown) => console.warn('[cad] toast failed', err));
     },
-    confirm: (opts) => ws.ui.confirm(opts),
+    confirm: (opts) => ws.ui.confirm(opts as ConfirmOptions),
     prompt: (opts) => ws.ui.prompt(opts),
     back: async () => (await ws.nav.back()) !== false,
     setDirty(dirty, message) {

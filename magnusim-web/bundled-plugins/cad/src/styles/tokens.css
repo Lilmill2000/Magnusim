@@ -31,6 +31,8 @@
   --cad-toolbar-active-bg: #d7e8ff;
   --cad-toolbar-active-border: #9bc2f0;
   --cad-toolbar-active-icon: #1a4fbf;
+  /* v0.5.0 ribbon: every toolbar size follows this factor (Toolbar.tsx setToolbarScale). */
+  --cad-toolbar-scale: 1;
 
   /* Buttons and links (style.css:2008-2028, 2450-2459, 3056-3081, 2743-2758, 2971-2990) */
   --cad-icon-btn: #5b6575;
