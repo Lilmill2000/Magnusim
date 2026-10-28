@@ -42,6 +42,8 @@ export const SHARDS = {
     'e2e/cad-viewport-snapshot.spec.ts',
     // Keybinds: the Set keybind dialog (Replace, Reset), the keys live in a sketch, a change made in Settings applied at once.
     'e2e/cad-keybinds.spec.ts',
+    // The dark set: the host's dark appearance (dark view, light marks, surfaces kept), pictures stay light, E1 / E2's switch.
+    'e2e/cad-dark-theme.spec.ts',
   ],
   // The sketcher (tools, relations, dimensions, value boxes), profiles, and Extrude of them
   // (P3's gate and the P2+P3 review rounds).

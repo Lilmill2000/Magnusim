@@ -845,3 +845,26 @@ export async function showAllRelations(page: Page): Promise<void> {
   });
   await expect(page.frameLocator('#workspace-frame').locator('[data-sketch-annotations]')).toHaveAttribute('data-sketch-relations', 'all');
 }
+
+// ---- the dark set: the host's appearance (unreleased, SDK 1.5)
+
+/**
+ * Give the Part an appearance as the host's newer SDK will: it writes data-theme, color-scheme
+ * and the text and icon scales on the frame's <html>, then sends its 'appearance' event, which
+ * reaches the Part through the bridge's own path (window.__CAD__.appearance.push). This host's SDK
+ * has neither yet, so the Part is light without this. Only CAD's own dark tokens switch here: the
+ * host's dark --mg-* set comes with its newer theme.css.
+ */
+export async function setAppearance(page: Page, theme: 'light' | 'dark', o: { textScale?: number; iconScale?: number } = {}): Promise<void> {
+  await workspaceFrame(page).evaluate(
+    ({ theme, textScale, iconScale }) => {
+      const html = document.documentElement;
+      html.dataset.theme = theme;
+      html.style.colorScheme = theme;
+      html.style.setProperty('--mg-text-scale', String(textScale));
+      html.style.setProperty('--mg-icon-scale', String(iconScale));
+      (window as unknown as { __CAD__: { appearance: { push(a: object): void } } }).__CAD__.appearance.push({ theme, preference: theme, textScale, iconScale });
+    },
+    { theme, textScale: o.textScale ?? 1, iconScale: o.iconScale ?? 1 },
+  );
+}
