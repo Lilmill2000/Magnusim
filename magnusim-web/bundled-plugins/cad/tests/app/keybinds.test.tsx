@@ -80,7 +80,7 @@ describe('the keybinds model', () => {
     expect(k.setKeybind('nope', 'K')).toMatchObject({ ok: false, reason: 'unknown' });
     expect(k.setKeybind('sketch.circle', 'Ctrl+W')).toMatchObject({ ok: false, reason: 'refused', message: '"Ctrl+KeyW" is kept for the browser and the system (Close the tab)' });
     expect(k.setKeybind('sketch.circle', 'Ctrl+/')).toMatchObject({ ok: false, reason: 'refused', message: '"Ctrl+Slash" is the app\'s own key (Open or close the Assistant panel)' });
-    k.resetAll();
+    expect(k.resetAll()).toEqual({ ok: true, kept: [] });
     await k.flush();
     expect(p.values[KEYBINDS_PREF]).toBeUndefined();
     expect(p.writes.at(-1)).toBe(`remove ${KEYBINDS_PREF}`);
@@ -625,5 +625,143 @@ describe("the Assistant panel's key the person chose (the app's Settings → Key
     expect(keybinds.shown('edit.undo')).toBe('Ctrl+Z');
     expect(commands.get('sketch.rectangle')!.shortcut).toBe('Ctrl+K');
     keybinds.dispose();
+  });
+});
+
+/** The note Reset all gives a default it kept off its command (the host's words). */
+const keptOff = (key: string) => `kept off ${key}: the Assistant panel's key`;
+
+describe("Reset all with the Assistant panel's key the person chose (as the host's Reset all)", () => {
+  it("resets every command, but a default that is the panel's key stays off: a one-key default leaves [], a two-key one the other; stored, each named with its note; nothing else changes", async () => {
+    const a = assistantKeys(['Ctrl+KeyK', 'Ctrl+KeyY', 'F2']);
+    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'view.fit': ['KeyG'], 'sketch.line': [], 'edit.undo': ['Ctrl+KeyU'] }, toolbar: { rows: 2 } });
+    const k = createKeybinds({ prefs: p.api, layout: false, assistant: a.api });
+    await k.ready;
+    const told = vi.fn();
+    k.subscribe(told);
+    // Rename's only default is F2, Redo's first Ctrl+Y (the model's and the sketch's): kept off, in the registry's order.
+    expect(k.resetAll()).toEqual({
+      ok: true,
+      kept: [
+        { id: 'edit.redo', combo: 'Ctrl+KeyY', note: keptOff('Ctrl+Y') },
+        { id: 'ui.rename', combo: 'F2', note: keptOff('F2') },
+        { id: 'sketch.redo', combo: 'Ctrl+KeyY', note: keptOff('Ctrl+Y') },
+      ],
+    });
+    expect(told).toHaveBeenCalled();
+    const kept = { 'edit.redo': ['Ctrl+Shift+KeyZ'], 'ui.rename': [], 'sketch.redo': ['Ctrl+Shift+KeyZ'] };
+    expect(k.overrides()).toEqual(kept);
+    expect(await k.flush()).toBe(true);
+    // Stored like any other override (the person's own ones gone), the other prefs untouched.
+    expect(p.writes).toEqual([`set ${KEYBINDS_PREF}`]);
+    expect(p.values).toEqual({ [KEYBINDS_PREF]: kept, toolbar: { rows: 2 } });
+    // Every other command has its defaults; no command has the panel's key; the rest still show.
+    for (const e of k.entries()) {
+      if (e.id in kept) continue;
+      expect(k.isDefault(e.id), e.id).toBe(true);
+      expect(k.current(e.id), e.id).toEqual(e.keys);
+    }
+    expect(k.appClashes()).toEqual([]);
+    expect(k.shown('edit.redo')).toBe('Ctrl+Shift+Z');
+    expect(k.shown('ui.rename')).toBeUndefined();
+    expect(k.assistantKeys()).toEqual(['Ctrl+KeyK', 'Ctrl+KeyY', 'F2']);
+    // Again: the same answer, nothing written.
+    expect(k.resetAll()).toMatchObject({ ok: true, kept: [{ id: 'edit.redo' }, { id: 'ui.rename' }, { id: 'sketch.redo' }] });
+    await k.flush();
+    expect(p.writes).toEqual([`set ${KEYBINDS_PREF}`]);
+    // The person moves the panel's key later: the stored override stays (the key does not come back by itself)...
+    a.move(['F9']);
+    expect(k.current('ui.rename')).toEqual([]);
+    expect(k.current('edit.redo')).toEqual(['Ctrl+Shift+KeyZ']);
+    // ... until the next Reset all.
+    expect(k.resetAll()).toEqual({ ok: true, kept: [] });
+    await k.flush();
+    expect(p.values).toEqual({ toolbar: { rows: 2 } });
+    expect(k.current('ui.rename')).toEqual(['F2']);
+    k.dispose();
+  });
+
+  it("a default the panel's key took with no override of the person's is written off too; the note reads the key through the layout", async () => {
+    const nav = navigator as unknown as { keyboard?: unknown };
+    nav.keyboard = { getLayoutMap: async () => new Map([['Backslash', '#']]) };
+    try {
+      const a = assistantKeys(['Ctrl+Backslash']);
+      const p = memoryPrefs();
+      const k = createKeybinds({ prefs: p.api, assistant: a.api });
+      await k.ready;
+      await vi.waitFor(() => expect(k.display('Ctrl+Backslash')).toBe('Ctrl+#'));
+      expect(k.appClashes().map((c) => c.id)).toEqual(['ui.toggle-rail']);
+      expect(k.resetAll()).toEqual({ ok: true, kept: [{ id: 'ui.toggle-rail', combo: 'Ctrl+Backslash', note: keptOff('Ctrl+#') }] });
+      await k.flush();
+      expect(p.values[KEYBINDS_PREF]).toEqual({ 'ui.toggle-rail': [] });
+      expect(k.appClashes()).toEqual([]);
+      k.dispose();
+    } finally {
+      delete nav.keyboard;
+    }
+  });
+
+  it('the default Assistant key (null), none ([]) and an older host keep nothing off: every command has its defaults', async () => {
+    for (const keys of [null, []] as (string[] | null)[]) {
+      const a = assistantKeys(keys);
+      const p = memoryPrefs({ [KEYBINDS_PREF]: { 'ui.rename': ['F7'], 'edit.redo': ['Ctrl+KeyY'] } });
+      const k = createKeybinds({ prefs: p.api, layout: false, assistant: a.api });
+      await k.ready;
+      expect(k.resetAll(), String(keys)).toEqual({ ok: true, kept: [] });
+      await k.flush();
+      expect(p.values[KEYBINDS_PREF]).toBeUndefined();
+      expect(k.current('ui.rename')).toEqual(['F2']);
+      expect(k.current('edit.redo')).toEqual(['Ctrl+KeyY', 'Ctrl+Shift+KeyZ']);
+      k.dispose();
+    }
+    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'ui.rename': ['F7'] } });
+    const old = createKeybinds({ prefs: p.api, layout: false });
+    await old.ready;
+    expect(old.resetAll()).toEqual({ ok: true, kept: [] });
+    await old.flush();
+    expect(p.values[KEYBINDS_PREF]).toBeUndefined();
+  });
+
+  it("the number pad's twin of the panel's key counts, as the refusals read it: a default on the number pad's - stays off while the key is Alt+-; not the other way", async () => {
+    // No default is on the number pad today: a registry whose Fit also has Alt with the number pad's -, and Measure Alt+-.
+    vi.resetModules();
+    vi.doMock('../../src/app/keymap', async (importOriginal) => {
+      const real = await importOriginal<typeof import('../../src/app/keymap')>();
+      const more: Record<string, string[]> = { 'view.fit': ['KeyF', 'Alt+NumpadSubtract'], 'inspect.measure': ['Alt+Minus'] };
+      const KEYMAP = real.KEYMAP.map((e) => (more[e.id] ? { ...e, keys: more[e.id] } : e));
+      const keymapEntry = (id: string) => KEYMAP.find((e) => e.id === id) ?? null;
+      return { ...real, KEYMAP, keymapEntry, defaultKeys: (id: string) => keymapEntry(id)?.keys ?? [] };
+    });
+    try {
+      const fresh = await import('../../src/app/keybinds');
+      // The panel's key on Alt+-: the number pad's - with Alt is it too (the SDK forwards it by the "-" it types).
+      const a = assistantKeys(['Alt+Minus']);
+      const p = memoryPrefs();
+      const k = fresh.createKeybinds({ prefs: p.api, layout: false, assistant: a.api });
+      await k.ready;
+      expect(k.problem('Alt+NumpadSubtract')).toBe(appOwn('Alt+NumpadSubtract'));
+      expect(k.resetAll()).toEqual({
+        ok: true,
+        kept: [
+          { id: 'view.fit', combo: 'Alt+NumpadSubtract', note: keptOff('Alt+NumpadSubtract') },
+          { id: 'inspect.measure', combo: 'Alt+Minus', note: keptOff('Alt+-') },
+        ],
+      });
+      await k.flush();
+      expect(p.values[KEYBINDS_PREF]).toEqual({ 'view.fit': ['KeyF'], 'inspect.measure': [] });
+      // The panel's key on the number pad's -: the - key may type another character, so Measure keeps Alt+-.
+      const b = assistantKeys(['Alt+NumpadSubtract']);
+      const q = memoryPrefs();
+      const other = fresh.createKeybinds({ prefs: q.api, layout: false, assistant: b.api });
+      await other.ready;
+      expect(other.resetAll()).toEqual({ ok: true, kept: [{ id: 'view.fit', combo: 'Alt+NumpadSubtract', note: keptOff('Alt+NumpadSubtract') }] });
+      await other.flush();
+      expect(q.values[KEYBINDS_PREF]).toEqual({ 'view.fit': ['KeyF'] });
+      k.dispose();
+      other.dispose();
+    } finally {
+      vi.doUnmock('../../src/app/keymap');
+      vi.resetModules();
+    }
   });
 });

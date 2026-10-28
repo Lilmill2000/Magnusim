@@ -16,7 +16,8 @@
 // a stored keybind that is one stays stored (it comes back when the person moves the Assistant's
 // key away again: the host's own Change takes it from the command meanwhile) and shows as taken
 // (appClashes), and the keyboard leaves its press to the app (keyboard.ts passAssistantKey), so
-// no tooltip, menu or hint names it as the command's (shown, via).
+// no tooltip, menu or hint names it as the command's (shown, via). Reset all still resets every
+// command, but a default that is the person's Assistant key stays off its command (resetAll).
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Bridge, PrefsApi } from '../lib/bridge';
@@ -76,6 +77,16 @@ export type KeybindResult =
 /** The Assistant panel's keys the person chose, live (the bridge has them: Bridge.assistantKeys). */
 export type AssistantKeysSource = Pick<Bridge, 'assistantKeys' | 'onAssistantKeys'>;
 
+/**
+ * Reset all went through. `kept`: each default kept off its command because it is the Assistant
+ * panel's key the person chose (one per key), with the note that says so: "kept off Ctrl+K: the
+ * Assistant panel's key", the key as people read it. [] when none was.
+ */
+export interface ResetAllResult {
+  ok: true;
+  kept: { id: string; combo: string; note: string }[];
+}
+
 export interface Keybinds {
   /** Resolves once the first read of the stored overrides is over (read, or could not be). */
   readonly ready: Promise<void>;
@@ -125,8 +136,12 @@ export interface Keybinds {
   resetToDefault(id: string, opts?: { replace?: boolean }): KeybindResult;
   /** No key at all. */
   clear(id: string): KeybindResult;
-  /** Every command back to its defaults (true), or why not (the saved keybinds are not read). */
-  resetAll(): true | string;
+  /**
+   * Every command back to its defaults, or why not (the saved keybinds are not read). A default that
+   * is the Assistant panel's key the person chose stays off its command (stored as its defaults
+   * without it); the result names each one kept off.
+   */
+  resetAll(): ResetAllResult | string;
   /** The overrides as stored (id -> keys). */
   overrides(): Readonly<Record<string, readonly string[]>>;
   /** Pairs that conflict now (overrides written elsewhere may make some); both keep their key. */
@@ -426,13 +441,30 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
         if (readState === 'unreadable') void load();
         return k;
       }
-      if (!Object.keys(over).length) return true;
+      // Every command back to its defaults, but a default that is the Assistant panel's key the
+      // person chose (isAssistantCombo, as the refusals read it) stays off: that command's override
+      // is its defaults without it ([] when none is left), stored like any other, as the host's Reset
+      // all does. It stays when the person moves the Assistant's key later: the key does not come
+      // back by itself, as it does not after the host's Replace took it.
+      const a = assistantKeys();
+      const next: Record<string, string[]> = {};
+      const kept: ResetAllResult['kept'] = [];
+      for (const e of KEYMAP) {
+        const keys = defaultKeys(e.id);
+        const off = keys.filter((c) => isAssistantCombo(c, a));
+        if (!off.length) continue;
+        next[e.id] = keys.filter((c) => !off.includes(c));
+        for (const c of off) kept.push({ id: e.id, combo: c, note: `kept off ${displayCombo(c, layout)}: the Assistant panel's key` });
+      }
+      const ids = Object.keys(next);
+      if (ids.length === Object.keys(over).length && ids.every((id) => over[id] && same(over[id], next[id]))) return { ok: true, kept };
       dirty.clear();
       resetAllPending = true;
-      over = {};
+      for (const id of ids) dirty.set(id, next[id]);
+      over = next;
       store();
       tell();
-      return true;
+      return { ok: true, kept };
     },
     overrides: () => over,
     conflicts: () => conflictsIn(keysOf),
