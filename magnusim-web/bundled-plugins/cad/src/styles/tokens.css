@@ -79,6 +79,9 @@
   --cad-vp-label-hover: #1a4fbf;
   /* Markers over the view (the pattern's instance badges). */
   --cad-marker-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
+  /* A failed copy's marker under the pointer or keyboard focus: the hover blue in light (as every
+     marker's), in dark a red-tinted one its red number reads on (the hover blue gave 1.7:1). */
+  --cad-marker-failed-hover-bg: #b2ccff;
 
   /* Sketch (proposal §3.3; P3): an over-defined sketch's words and marks */
   --cad-sketch-over: var(--mg-danger, #b42318);
@@ -161,6 +164,7 @@
   --cad-vp-label: #b0b8c4;
   --cad-vp-label-hover: #8fb5ff;
   --cad-marker-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --cad-marker-failed-hover-bg: #4a2522;
 
   /* E2's default, (c): the mid tones the lines take (palette.ts DARK_INKS). */
   --cad-sketch-key-under: #2e6bd8;

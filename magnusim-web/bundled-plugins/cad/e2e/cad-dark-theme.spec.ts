@@ -25,6 +25,10 @@
 //  - dark-box-caption: a selection box started over a light face: its caption sits on a backing
 //    of the dark background colour (review round 1: bare light blue on the face read 1.2 to
 //    1.4:1), and has none in light.
+//  - dark-pattern-failed: a Pattern copy that could not be used (red marker) under the pointer or
+//    keyboard focus: in dark its red number is on a red-tinted background, 4.5:1 and more (review
+//    round 1: on the hover blue, 1.7:1), in light on the hover blue as before. The host's dark
+//    --mg-danger is given here as its newer theme.css will (this host has no dark set yet).
 //  - dark-lines: E1 / E2's switch (window.__CAD__.appearance.darkLines) draws each candidate's edge
 //    colour, (b) with a rim, for Daniel's screenshot review.
 // Owner: INTEGRATE.
@@ -32,6 +36,7 @@
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
 import { addSketch, addSolid, featureRowNamed, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, setAppearance, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
+import { PLANNED_HOST } from '../tests/styles/css-tokens';
 
 type V3 = [number, number, number];
 type RGB = [number, number, number];
@@ -721,6 +726,68 @@ test('cad:dark-box-caption a selection box started over a face has its caption o
   await appearance(page, 'light');
   const back = await caption();
   expect([back.bg, back.ring, back.backed]).toEqual(['rgba(0, 0, 0, 0)', 'none', 0]);
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable under the pointer and keyboard focus in dark, as in light", async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  const f = workspaceFrame(page);
+  // The host's dark --mg-danger, as its newer theme.css has it (the same value there).
+  await f.evaluate((danger) => {
+    const st = document.createElement('style');
+    st.dataset.testHostDark = '1';
+    st.textContent = `[data-theme="dark"] { --mg-danger: ${danger}; }`;
+    document.head.append(st);
+  }, PLANNED_HOST.dark['--mg-danger']);
+  // A 10 mm block patterned 3 times, 15 mm apart, joined: the copies don't touch it, so they are red.
+  await addSolid(page, { size: [10, 10, 10] });
+  await page.keyboard.press('Escape');
+  await runCommand(frame, 'pattern.linear');
+  const panel = frame.locator('[data-cad-panel="feature"]');
+  await panel.locator('[data-field="of"] select').selectOption('bodies');
+  await expect(panel.locator('[data-pick-field="bodies"]')).toHaveAttribute('data-active', '1');
+  await still(page);
+  const [bx, by] = await modelOnPage(page, [5, 5, 10]);
+  await page.mouse.click(bx, by);
+  await expect(panel.locator('[data-pick-field="bodies"] [data-pick-row]')).toHaveText([/^Body 1/]);
+  await frame.locator('[data-tree-node="origin:x"] > .tree-row').click();
+  await expect(panel.locator('[data-pick-field="dir1"] [data-pick-row]')).toHaveText(/X axis/);
+  for (const [field, value] of [
+    ['dir1-count', '3'],
+    ['dir1-distance', '15'],
+  ]) {
+    const input = panel.locator(`.nui[data-field="${field}"] input`);
+    await input.fill(value);
+    await input.press('Enter');
+  }
+  await panel.locator('[data-field="op"] select').selectOption('join');
+  const marker = frame.locator('.cad-pattern-markers [data-pattern-marker="2"]');
+  await expect(marker).toHaveClass(/is-failed/, { timeout: 60_000 });
+  await still(page);
+  /** The marker's text and background colours: under the pointer, then with keyboard focus (pointer away). */
+  const looks = async () => {
+    const read = () => marker.evaluate((el) => ({ color: getComputedStyle(el).color, bg: getComputedStyle(el).backgroundColor }));
+    await marker.hover();
+    const hover = await read();
+    await page.mouse.move(5, 5);
+    await marker.evaluate((el) => (el as HTMLElement).focus({ focusVisible: true } as FocusOptions));
+    expect(await marker.evaluate((el) => el.matches(':focus-visible'))).toBe(true);
+    const focus = await read();
+    await marker.evaluate((el) => (el as HTMLElement).blur());
+    return { hover, focus };
+  };
+  const rgb = (c: string): RGB => (c.match(/\d+/g) ?? []).slice(0, 3).map(Number) as RGB;
+  const light = await looks();
+  // Light as before: the red number on the hover blue.
+  expect(light.hover).toEqual({ color: cssRgb('#b42318'), bg: cssRgb('#b2ccff') });
+  expect(light.focus).toEqual(light.hover);
+  await appearance(page, 'dark');
+  const dark = await looks();
+  expect(dark.hover).toEqual({ color: cssRgb(PLANNED_HOST.dark['--mg-danger']), bg: cssRgb('#4a2522') });
+  expect(dark.focus).toEqual(dark.hover);
+  expect(contrastOf(rgb(dark.hover.color), rgb(dark.hover.bg)), 'the red number on its hover background').toBeGreaterThanOrEqual(4.5);
+  await appearance(page, 'light');
+  expect(await looks()).toEqual(light);
   expect(seen.errors).toEqual([]);
 });
 

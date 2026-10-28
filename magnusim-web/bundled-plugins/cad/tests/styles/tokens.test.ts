@@ -59,6 +59,8 @@ const LIGHT_BEFORE: Record<string, string> = {
   '--cad-vp-label': '#4a5160',
   '--cad-vp-label-hover': '#1a4fbf',
   '--cad-marker-shadow': '0 1px 3px rgba(16, 24, 40, 0.18)',
+  // New: a failed marker's hover and focus background, the hover blue it had (--cad-hover-pick).
+  '--cad-marker-failed-hover-bg': '#b2ccff',
   '--cad-sketch-over': '#b42318',
   // The keys to the sketch's line colours: the colours the state dot and a reference's dot painted
   // before (--cad-sketch-under, --cad-sketch-full, --cad-sketch-over, --cad-sketch-projected and
@@ -171,6 +173,15 @@ describe('CAD tokens: the dark set', () => {
     expect(contrast(themeValue('--cad-box-enclose', 'dark')!, '#bdc9db')).toBeLessThan(1.6);
   });
 
+  it("keeps a failed pattern marker's red number readable under the pointer and keyboard focus", () => {
+    const css = readFileSync(join(PLUGIN, 'src/features/pattern/pattern.css'), 'utf8');
+    expect(css).toMatch(/\.cad-pattern-marker\.is-failed:hover,\s*\.cad-pattern-markers \.cad-pattern-marker\.is-failed:focus-visible \{\s*background: var\(--cad-marker-failed-hover-bg\);\s*\}/);
+    // Light: the hover blue every marker takes (4.06:1 for the red, as before); dark: on the hover blue it was 1.72:1.
+    expect(themeValue('--cad-marker-failed-hover-bg', 'light')).toBe(themeValue('--cad-hover-pick', 'light'));
+    expect(contrast(themeValue('--mg-danger', 'dark')!, themeValue('--cad-hover-pick', 'dark')!)).toBeLessThan(2);
+    expect(contrast(themeValue('--mg-danger', 'dark')!, themeValue('--cad-marker-failed-hover-bg', 'dark')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('reads in dark: text at least 4.5:1 on its background, icons and marks at least 3:1', () => {
     const v = (name: string) => {
       const r = name.startsWith('#') ? name : themeValue(name, 'dark');
@@ -193,6 +204,8 @@ describe('CAD tokens: the dark set', () => {
       ['--cad-sketch-lost', '--mg-bg', 4.5],
       ['--mg-primary-ink', '--mg-selected-bg', 4.5],
       ['--mg-danger', '--cad-danger-hover-bg', 4.5],
+      // A failed pattern marker's number under the pointer or keyboard focus.
+      ['--mg-danger', '--cad-marker-failed-hover-bg', 4.5],
       ['--cad-tree-head', '--mg-bg', 4.5],
       ['--cad-tree-section', '--mg-bg', 4.5],
       ['--mg-text', '--cad-tree-selected', 4.5],

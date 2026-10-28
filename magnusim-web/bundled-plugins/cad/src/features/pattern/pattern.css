@@ -46,6 +46,10 @@
   border-color: var(--mg-danger);
   color: var(--mg-danger);
 }
+.cad-pattern-markers .cad-pattern-marker.is-failed:hover,
+.cad-pattern-markers .cad-pattern-marker.is-failed:focus-visible {
+  background: var(--cad-marker-failed-hover-bg);
+}
 .cad-pattern-instances {
   margin: 6px 0;
 }
