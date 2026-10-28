@@ -2,6 +2,7 @@
 // opened in its workspace, and the page's test handle (window.__TUNNEL__).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { e2eTemp, NO_GEOMETRY_PROJECT, startHost } from '../../../e2e/support/plugin-suite.js';
 
@@ -90,4 +91,30 @@ export async function worldToPage(page, frame, x, y) {
 /** Flip a kit toggle (its input is hidden behind the switch it draws). */
 export async function toggle(frame, label) {
   await frame.locator(`label.mgk-switch:has(input[aria-label="${label}"])`).click();
+}
+
+/**
+ * A PNG's pixels (a file or a buffer), decoded in the page: its size and the RGBA at each point. The
+ * points are its own px, or px of a `grid` (w, h) its size is scaled from (a screenshot at a device
+ * pixel ratio, read at the GPU canvas's px).
+ */
+export async function pngPixels(page, png, points, grid = null) {
+  const b64 = (Buffer.isBuffer(png) ? png : readFileSync(png)).toString('base64');
+  return page.evaluate(
+    async ([data, pts, from]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${data}`;
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0);
+      const sx = from ? c.width / from.w : 1;
+      const sy = from ? c.height / from.h : 1;
+      const at = pts.map(([x, y]) => Array.from(g.getImageData(Math.floor((x + 0.5) * sx), Math.floor((y + 0.5) * sy), 1, 1).data));
+      return { w: c.width, h: c.height, at };
+    },
+    [b64, points, grid],
+  );
 }
