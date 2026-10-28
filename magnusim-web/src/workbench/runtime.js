@@ -234,8 +234,8 @@ import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId 
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
 import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
 import { formatSci } from '../plugin-ui/format/sci';
-import { hexRgb01, hexRgb255, LIGHT_VIEW } from '../theme/lightView';
-import { onAppearance, themeRgb01 } from '../theme/themeColor';
+import { hexRgb01, LIGHT_VIEW } from '../theme/lightView';
+import { isDarkAt, onAppearance, themeRgb01, themeRgb255 } from '../theme/themeColor';
 import { seriesLight, seriesVar } from '../theme/series';
 
 // The legend bars draw the renders' own lookup table: every LUT here is the rainbow from RAINBOW_HUE.
@@ -1258,6 +1258,36 @@ let inspectPinDrag = null;
 
 
 
+// ---- The 3D views' theme colours ----
+// The 3D views draw their background, lines, edges, points and labels in theme colours, read where
+// the view shows (#viewer, #viewer-b), so the view follows the theme; the model's surfaces keep
+// their light colours (Daniel, 2026-10-27). Each themed thing is painted as it is made
+// (paintThemed), and again after each appearance change and around a light capture (repaintViews);
+// one vtk deleted drops out.
+const themedViews = new Map();
+
+function viewScope(compare) {
+  return document.getElementById(compare ? 'viewer-b' : 'viewer') || document.documentElement;
+}
+
+/** A token's colour in a 3D view as vtk takes it: [r, g, b] from 0 to 1. */
+function viewRgb(token, compare) {
+  return themeRgb01(token, viewScope(compare));
+}
+
+/** A [r, g, b] (0..1) as #rrggbb. */
+function rgbHex(rgb) {
+  return '#' + rgb.map((c) => Math.round(Math.min(1, Math.max(0, c)) * 255).toString(16).padStart(2, '0')).join('');
+}
+
+/** Paints `obj` with `paint(obj)` now, and again whenever the 3D colours change; returns obj. */
+function paintThemed(obj, paint) {
+  if (!obj) return obj;
+  themedViews.set(obj, paint);
+  try { paint(obj); } catch (err) { console.warn('[CFD] view theme', err); }
+  return obj;
+}
+
 const container = document.getElementById('viewer');
 
 let fullScreenRenderer = null;
@@ -1288,6 +1318,7 @@ const interactor = fullScreenRenderer
   ? fullScreenRenderer.getInteractor()
   : { setInteractorStyle() {}, setRecognizeGestures() {} };
 window.__CFD_VIEW__ = { renderer, renderWindow, interactor };
+if (fullScreenRenderer) paintThemed(renderer, (r) => r.setBackground(...viewRgb('--mg-viewport-bg')));
 function applyViewportCameraManipulators(style) {
   style.addMouseManipulator(vtkMouseCameraTrackballRotateManipulator.newInstance({ button: 1 }));
   style.addMouseManipulator(vtkMouseCameraTrackballPanManipulator.newInstance({ button: 2 }));
@@ -1352,13 +1383,15 @@ try {
 
 let viewportOrient = null;
 try {
-  const viewportAxes = vtkAxesActor.newInstance({
-    config: { recenter: false },
-    xConfig: { color: hexRgb255(LIGHT_VIEW.axisX) },
-    yConfig: { color: hexRgb255(LIGHT_VIEW.axisY) },
-    zConfig: { color: hexRgb255(LIGHT_VIEW.axisZ) },
+  const viewportAxes = vtkAxesActor.newInstance({ config: { recenter: false } });
+  // The axis colours of the theme; update() at once, as a capture renders in the same task.
+  paintThemed(viewportAxes, (a) => {
+    const scope = viewScope();
+    a.setXAxisColor(themeRgb255('--mg-axis-x', scope));
+    a.setYAxisColor(themeRgb255('--mg-axis-y', scope));
+    a.setZAxisColor(themeRgb255('--mg-axis-z', scope));
+    if (typeof a.update === 'function') a.update();
   });
-  if (typeof viewportAxes.update === 'function') viewportAxes.update();
   viewportOrient = vtkOrientationMarkerWidget.newInstance({
     actor: viewportAxes,
     interactor,
@@ -1967,7 +2000,7 @@ try { meshSurfActor.setPickable(true); } catch (_) {}
   const pr = meshSurfActor.getProperty();
   pr.setRepresentationToSurface();
   pr.setEdgeVisibility(true);
-  pr.setEdgeColor(0.28, 0.3, 0.33);
+  pr.setEdgeColor(...viewRgb('--mg-viewport-mesh-edge'));
   pr.setColor(0.86, 0.88, 0.91);
   pr.setOpacity(1);
   pr.setLighting(false);
@@ -2029,7 +2062,7 @@ try { if (ptSeedMapper.setOrient) ptSeedMapper.setOrient(false); } catch (_) {}
 ptSeedMapper.setScalarVisibility(false);
 const ptSeedActor = vtkActor.newInstance();
 ptSeedActor.setMapper(ptSeedMapper);
-ptSeedActor.getProperty().setColor(0.08, 0.1, 0.16);
+paintThemed(ptSeedActor, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-ink')));
 ptSeedActor.getProperty().setLighting(true);
 ptSeedActor.setVisibility(false);
 renderer.addActor(ptSeedActor);
@@ -2041,7 +2074,7 @@ const popPathMapper = vtkMapper.newInstance();
 popPathMapper.setScalarVisibility(false);
 const popPathActor = vtkActor.newInstance();
 popPathActor.setMapper(popPathMapper);
-popPathActor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.ink));
+paintThemed(popPathActor, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-ink')));
 popPathActor.getProperty().setLineWidth(2);
 popPathActor.setVisibility(false);
 renderer.addActor(popPathActor);
@@ -2057,7 +2090,7 @@ inspectMarkerMapper.setInputConnection(inspectSphere.getOutputPort());
 inspectMarkerMapper.setScalarVisibility(false);
 const inspectMarkerActor = vtkActor.newInstance();
 inspectMarkerActor.setMapper(inspectMarkerMapper);
-inspectMarkerActor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.pin)); // the pin cards' magenta (26a.1)
+paintThemed(inspectMarkerActor, (a) => a.getProperty().setColor(...viewRgb('--mg-pin'))); // the pin cards' magenta (26a.1)
 inspectMarkerActor.getProperty().setOpacity(1.0);
 inspectMarkerActor.getProperty().setAmbient(1.0);
 inspectMarkerActor.getProperty().setDiffuse(0.0);
@@ -2140,7 +2173,7 @@ function makeFieldVectorGlyph() {
   mapper.setScalarVisibility(false);
   const actor = vtkActor.newInstance();
   actor.setMapper(mapper);
-  actor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.ink));
+  paintThemed(actor, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-ink')));
   actor.getProperty().setLighting(true);
   actor.setVisibility(false);
   renderer.addActor(actor);
@@ -2272,7 +2305,7 @@ function makeCutPlaneVectorGlyph(targetRenderer) {
   mapper.setScalarVisibility(false);
   const actor = vtkActor.newInstance();
   actor.setMapper(mapper);
-  actor.getProperty().setColor(0, 0, 0);
+  actor.getProperty().setColor(...viewRgb('--mg-viewport-ink'));
   actor.getProperty().setLighting(true);
   actor.setVisibility(false);
   try { actor.setPickable(false); } catch (_) {}
@@ -2603,15 +2636,29 @@ function applyClampedVectorScales(input, minLen, maxLen) {
   );
 }
 
+/**
+ * Whether a plane's arrow colour is Auto: black, the default and what older studies saved, draws in
+ * the view's ink (dark on light, light on dark).
+ */
+function isAutoVectorColor(solid) {
+  return !solid || String(solid).toLowerCase() === '#000000';
+}
+
 function applyCutVectorAppearance(mapper, actor, pd, coloring, solid, fieldLut, altLut, activeName) {
   const mode = planeVectorColoring(coloring);
   const colorName = cutVectorColorArrayName(mode, pd);
   if (mode === 'solid' || !colorName) {
     mapper.setScalarVisibility(false);
-    const rgb = hexToRgb01(solid || '#000000');
-    try { actor.getProperty().setColor(rgb[0], rgb[1], rgb[2]); } catch (_) {}
+    if (isAutoVectorColor(solid)) {
+      paintThemed(actor, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-ink')));
+    } else {
+      themedViews.delete(actor);
+      const rgb = hexToRgb01(solid);
+      try { actor.getProperty().setColor(rgb[0], rgb[1], rgb[2]); } catch (_) {}
+    }
     return;
   }
+  themedViews.delete(actor);
   mapper.setScalarVisibility(true);
   try { mapper.setScalarMode(ScalarMode.USE_POINT_FIELD_DATA); } catch (_) {}
   try { mapper.setColorMode(ColorMode.MAP_SCALARS); } catch (_) {}
@@ -3830,6 +3877,21 @@ function planeVectorColorOptionsHtml(col) {
     .join('');
 }
 
+/** Sets a plane's arrow colour ('#000000': Auto) and its colour field (`row`), then draws it. */
+function setPlaneVectorSolid(plane, value, row) {
+  plane.vectorSolid = value || '#000000';
+  const auto = isAutoVectorColor(plane.vectorSolid);
+  if (row) {
+    const input = row.querySelector('[data-rplane-vec-solid]');
+    if (input && auto) input.value = rgbHex(viewRgb('--mg-viewport-ink'));
+    const lab = row.querySelector('.opacity-val');
+    if (lab) lab.textContent = auto ? 'Auto' : plane.vectorSolid;
+    const btn = row.querySelector('[data-rplane-vec-auto]');
+    if (btn) btn.hidden = auto;
+  }
+  applyCutPlaneVectorSettings(plane);
+}
+
 function renderResultPlaneVectorFields(p) {
   const id = p.id;
   const on = !!p.vectors;
@@ -3838,7 +3900,8 @@ function renderResultPlaneVectorFields(p) {
   const max = sized[1];
   const dens = clampCutVectorDensity(p.vectorDensity);
   const col = planeVectorColoring(p.vectorColoring);
-  const solid = escapeHtml(p.vectorSolid || '#000000');
+  const autoSolid = isAutoVectorColor(p.vectorSolid);
+  const solid = escapeHtml(autoSolid ? rgbHex(viewRgb('--mg-viewport-ink')) : p.vectorSolid);
   const noVec = !velocityVectorName() && caseFieldsKnown();
   const optionsHtml = planeVectorColorOptionsHtml(col);
   return (
@@ -3872,7 +3935,9 @@ function renderResultPlaneVectorFields(p) {
     '<div class="fp-field" data-rplane-vec-solid-field="' + id + '"' + (col === 'solid' ? '' : ' hidden') + '>' +
     '<div class="fp-label">Color</div><div class="parts-color-row">' +
     '<input type="color" value="' + solid + '" data-rplane-vec-solid="' + id + '" aria-label="Vector solid color" />' +
-    '<span class="opacity-val">' + solid + '</span></div></div>' +
+    '<span class="opacity-val">' + (autoSolid ? 'Auto' : solid) + '</span>' +
+    '<button type="button" class="fp-btn" data-rplane-vec-auto="' + id + '"' + (autoSolid ? ' hidden' : '') +
+    ' title="The view\u2019s own colour: dark on a light view, light on a dark one">Auto</button></div></div>' +
     '<div class="fp-row toggle-row"><span>Project on plane</span>' +
     '<label class="switch"><input type="checkbox" data-rplane-vec-proj="' + id + '"' +
     (p.vectorProject ? ' checked' : '') + ' aria-label="Project vectors on cutting plane" /><span class="slider"></span></label></div>' +
@@ -4073,14 +4138,6 @@ async function loadAllResultPlanes() {
 }
 
 async function loadCutPlane() {
-  if (
-    !resultsCutActive() &&
-    window.__CFD_FILTERS_MODE__ === 'mesh' &&
-    window.__CFD_W25B__ &&
-    window.__CFD_W25B__.ready
-  ) {
-    return updateCuttingPlane({ forceRecut: false, meshOnly: true });
-  }
   if (!sourceBounds) {
     hideCutSlice();
     return { empty: true };
@@ -4117,29 +4174,6 @@ function updateCuttingPlane(opts) {
     return cutFingerprint(null);
   }
   ensureCutStateCom(sourceBounds);
-  if (
-    !resultsCutActive() &&
-    window.__CFD_FILTERS_MODE__ === 'mesh' &&
-    window.__CFD_W25B__ &&
-    window.__CFD_W25B__.ready &&
-    !options.forceRecut
-  ) {
-    try {
-      cutMapper.setInputData(sourcePolyData);
-      cutMapper.setScalarVisibility(false);
-      cutActor.setVisibility(!!cutState.enabled);
-      cutActor.getProperty().setOpacity(cutState.opacity);
-      cutActor.getProperty().setEdgeVisibility(true);
-      try { cutActor.getProperty().setRepresentationToWireframe(); } catch(_) {}
-      try { cutActor.getProperty().setBackfaceCulling(false); } catch(_) {}
-      try { cutActor.getProperty().setBackFaceCulling(false); } catch(_) {}
-      try { renderer.setBackground(1,1,1); } catch(_) {}
-      applyPartsAppearance();
-      renderWindow.render();
-    } catch (_) {}
-    return { ...cutFingerprint(sourcePolyData), mesh_section_passthrough: true };
-  }
-  if (options.meshOnly) return cutFingerprint(null);
 
   cutState.enabled = anyResultPlaneOn();
   applyCutClipAndParts();
@@ -5439,7 +5473,6 @@ function applyPtRepresentation() {
       ptSeedMapper.setInputData(seeds);
       ptSeedMapper.setScaleFactor(Math.max(size * 1.7, 0.0012));
       ptSeedMapper.setScalarVisibility(false);
-      ptSeedActor.getProperty().setColor(0.08, 0.1, 0.16);
       try { applyResultDisplayScale(ptSeedActor); } catch (_) {}
       ptSeedActor.setVisibility(true);
     } else {
@@ -5660,16 +5693,6 @@ function resolvePtFaceIds(ids) {
     if (cad && /^face\s+\d+/i.test(cad) && !out.includes(cad)) out.push(cad);
   }
   return out;
-}
-
-function paintForPtFaces(faces) {
-  const paint = {};
-  for (const f of faces || []) {
-    const row = ptCatalogRowForId(f);
-    const kind = row && row.role === 'outlet' ? 'outlet' : 'inlet';
-    paint[f] = BC_KIND_RGB[kind] || BC_KIND_RGB.inlet;
-  }
-  return paint;
 }
 
 /**
@@ -10052,14 +10075,17 @@ function applyAllResultDisplayScales() {
 }
 
 const MESH_FACE_RGB = [0.86, 0.88, 0.91];
-const MESH_EDGE_RGB = [0.26, 0.28, 0.31];
+/** The mesh edges' colour: dark on the light mesh faces in either theme. */
+function meshEdgeRgb() {
+  return viewRgb('--mg-viewport-mesh-edge');
+}
 let lastMeshEdgeLodKey = '';
 
 function styleMeshCellActor(actor) {
   const pr = actor.getProperty();
   try { pr.setRepresentationToSurface(); } catch (_) {}
   try { pr.setEdgeVisibility(true); } catch (_) {}
-  try { pr.setEdgeColor(MESH_EDGE_RGB[0], MESH_EDGE_RGB[1], MESH_EDGE_RGB[2]); } catch (_) {}
+  paintThemed(actor, (a) => a.getProperty().setEdgeColor(...meshEdgeRgb()));
   try { pr.setColor(MESH_FACE_RGB[0], MESH_FACE_RGB[1], MESH_FACE_RGB[2]); } catch (_) {}
   try { pr.setOpacity(1); } catch (_) {}
   try { pr.setLighting(false); } catch (_) {}
@@ -10107,9 +10133,10 @@ function applyMeshEdgeLodToActor(actor, ppc) {
   if (!show) return;
   let t = 1;
   if (ppc < 5.5) t = Math.max(0.15, Math.min(1, (ppc - 2.4) / 3.1));
-  const er = MESH_FACE_RGB[0] * (1 - t) + MESH_EDGE_RGB[0] * t;
-  const eg = MESH_FACE_RGB[1] * (1 - t) + MESH_EDGE_RGB[1] * t;
-  const eb = MESH_FACE_RGB[2] * (1 - t) + MESH_EDGE_RGB[2] * t;
+  const edge = meshEdgeRgb();
+  const er = MESH_FACE_RGB[0] * (1 - t) + edge[0] * t;
+  const eg = MESH_FACE_RGB[1] * (1 - t) + edge[1] * t;
+  const eb = MESH_FACE_RGB[2] * (1 - t) + edge[2] * t;
   try { pr.setEdgeColor(er, eg, eb); } catch (_) {}
 }
 
@@ -10428,7 +10455,7 @@ async function loadFullMeshSurface(casePath, token) {
   meshSurfActor.setVisibility(true);
   try { surfaceActor.setVisibility(false); } catch (_) {}
   try { cutActor.setVisibility(false); } catch (_) {}
-  try { renderer.setBackground(...hexRgb01(LIGHT_VIEW.bg)); } catch (_) {}
+  try { renderer.setBackground(...viewRgb('--mg-viewport-bg')); } catch (_) {}
   syncMeshHullForPlanes();
   frameMeshCamera();
   window.__CFD_MESH_VIEW__ = {
@@ -10824,7 +10851,7 @@ function ensureCompareViewer() {
   try { actor.setPickable(true); } catch (_) {}
   actor.setVisibility(false);
   ren.addActor(actor);
-  try { ren.setBackground(...hexRgb01(LIGHT_VIEW.bg)); } catch (_) {}
+  paintThemed(ren, (r) => r.setBackground(...viewRgb('--mg-viewport-bg', true)));
   // Same orbit pivot as the main view (its camera is mirrored onto this one).
   try {
     if (scenePivot) style.setCenterOfRotation(scenePivot[0], scenePivot[1], scenePivot[2]);
@@ -10848,7 +10875,7 @@ function ensureCompareViewer() {
 function styleCadEdgeActor(actor) {
   if (!actor) return;
   const pr = actor.getProperty();
-  try { pr.setColor(0.04, 0.045, 0.055); } catch (_) {}
+  paintThemed(actor, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-edge', true)));
   try { pr.setLineWidth(2.4); } catch (_) {}
   try { pr.setRepresentationToWireframe(); } catch (_) {}
   try { pr.setLighting(false); } catch (_) {}
@@ -11132,7 +11159,7 @@ async function loadCompareMeshSurface(casePath) {
   lastMeshEdgeLodKey = '';
   applyMeshEdgeLod();
   v.actor.setVisibility(true);
-  try { v.renderer.setBackground(...hexRgb01(LIGHT_VIEW.bg)); } catch (_) {}
+  try { v.renderer.setBackground(...viewRgb('--mg-viewport-bg', true)); } catch (_) {}
   try { v.renderer.resetCameraClippingRange(); } catch (_) {}
   try { v.renderWindow.render(); } catch (_) {}
   return { ready: true, nPoints: nPts };
@@ -11565,7 +11592,7 @@ function ensureCompareResults() {
   seedMapperB.setScalarVisibility(false);
   const seedActorB = vtkActor.newInstance();
   seedActorB.setMapper(seedMapperB);
-  seedActorB.getProperty().setColor(0.08, 0.1, 0.16);
+  paintThemed(seedActorB, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-ink', true)));
   seedActorB.setVisibility(false);
   try { seedActorB.setPickable(false); } catch (_) {}
   v.renderer.addActor(seedActorB);
@@ -12751,150 +12778,6 @@ document.getElementById('compare-sync')?.addEventListener('change', (e) => {
   setResultsCompareSync(!!e.target.checked);
 });
 
-/* ---- W25b: live mesh-section VTP for Cutting Plane mesh inspect (layered remesh) ---- */
-async function loadMeshSectionForInspect(opts) {
-  const o = opts || {};
-  const casePath = o.case_dir || getLiveMeshCaseDir();
-  if (!(casePath && String(casePath).trim()) && !hasAttachedCase()) {
-    return { empty: true, skipped: 'no_case' };
-  }
-  const axisMap = { X: 'x', Y: 'y', Z: 'z', x: 'x', y: 'y', z: 'z' };
-  const ax = axisMap[o.axis || cutState.axis] || 'x';
-  const frac = meshSectionFrac(o.frac != null ? o.frac : cutState.position);
-  const q = withMeshCacheParams({
-    case: casePath,
-    axis: ax,
-    frac: String(Number.isFinite(frac) ? frac : 0.5),
-  });
-  const metaUrl = '/api/mesh-section?' + q.toString() + '&meta=1';
-  const vtpUrl = '/api/mesh-section?' + q.toString();
-  let meta = null;
-  try {
-    const mr = await fetch(metaUrl);
-    if (mr.ok) meta = await mr.json();
-  } catch (e) {
-    console.warn('[CFD W25b] mesh-section meta', e);
-  }
-  cutState.enabled = true;
-  // Bank-like mesh inspect: white bg, gray faces, black edges (not a field rainbow)
-  try {
-    renderer.setBackground(1, 1, 1);
-  } catch (_) {}
-  await reader.setUrl(vtpUrl);
-  // vtk.js setUrl is async in some builds — poll until points exist
-  let pd = null;
-  for (let i = 0; i < 120; i++) {
-    pd = reader.getOutputData ? reader.getOutputData() : null;
-    const n = pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0;
-    if (n > 0) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  sourcePolyData = pd;
-  cutBins = null;
-  sourceBounds = pd && pd.getBounds ? pd.getBounds().slice() : null;
-  // Inflate zero-thickness planar bounds for camera clipping
-  if (sourceBounds) {
-    const eps = 1e-3;
-    if (Math.abs(sourceBounds[1] - sourceBounds[0]) < 1e-9) {
-      sourceBounds[0] -= eps;
-      sourceBounds[1] += eps;
-    }
-    if (Math.abs(sourceBounds[3] - sourceBounds[2]) < 1e-9) {
-      sourceBounds[2] -= eps;
-      sourceBounds[3] += eps;
-    }
-    if (Math.abs(sourceBounds[5] - sourceBounds[4]) < 1e-9) {
-      sourceBounds[4] -= eps;
-      sourceBounds[5] += eps;
-    }
-  }
-  activeField = 'cellVolume';
-  try {
-    const props = [cutActor.getProperty(), surfaceActor.getProperty()];
-    for (const pr of props) {
-      try { if (pr.setBackfaceCulling) pr.setBackfaceCulling(false); } catch (_) {}
-      try { if (pr.setBackFaceCulling) pr.setBackFaceCulling(false); } catch (_) {}
-      try { if (pr.setFrontfaceCulling) pr.setFrontfaceCulling(false); } catch (_) {}
-      try { if (pr.setFrontFaceCulling) pr.setFrontFaceCulling(false); } catch (_) {}
-      try { pr.setRepresentationToSurface(); } catch (_) {}
-      try { pr.setEdgeVisibility(true); } catch (_) {}
-      try { pr.setEdgeColor(0.05, 0.055, 0.06); } catch (_) {}
-      try { pr.setColor(0.86, 0.88, 0.91); } catch (_) {}
-      try { pr.setOpacity(1); } catch (_) {}
-      try { pr.setLighting(false); } catch (_) {}
-      try { pr.setLineWidth(1); } catch (_) {}
-    }
-    try { renderer.setBackground(1, 1, 1); } catch (_) {}
-    try {
-      const rr = fullScreenRenderer && fullScreenRenderer.getRenderWindow && fullScreenRenderer.getRenderWindow();
-      if (rr && rr.getViews) {
-        const views = rr.getViews();
-        if (views && views[0] && views[0].setBackground) views[0].setBackground(1, 1, 1);
-      }
-    } catch (_) {}
-  } catch (_) {}
-  const nPts = pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0;
-  if (pd && nPts > 0) {
-    surfaceMapper.setInputData(pd);
-    surfaceMapper.setScalarVisibility(false);
-    cutMapper.setInputData(pd);
-    cutMapper.setScalarVisibility(false);
-    applyMeshDisplayScale(cutActor, sourceBounds);
-    applyMeshDisplayScale(surfaceActor, sourceBounds);
-    cutActor.setVisibility(true);
-    surfaceActor.setVisibility(!!cutState.partsColor);
-  }
-  renderWindow.render();
-  const fp = fingerprintFromPolyData(pd, meta, 'cellVolume', vtpUrl);
-  if (!nPts) {
-    return { empty: true, skipped: 'empty_vtp', case_dir: casePath, meta };
-  }
-  window.__CFD_W25B__ = {
-    increment: 'W25b',
-    ready: !!(pd && sourceBounds && fp && fp.nPoints > 0),
-    case_dir: casePath,
-    vtp_url: vtpUrl,
-    meta,
-    fingerprint: fp,
-    n_cells_volume: meta && meta.meta && meta.meta.n_cells_volume,
-    n_cells_slice: meta && (meta.n_cells_slice || (meta.meta && meta.meta.n_cells_slice)),
-    nPoints: fp && fp.nPoints,
-    nCells: fp && fp.nCells,
-    note: 'Live mesh-section from remesh polyMesh (addLayers+eMesh) bank-style edges',
-  };
-  publishW7({ mesh_section: true, cut_fingerprint: cutFingerprint(pd), source_fingerprint: fp });
-  return window.__CFD_W25B__;
-}
-
-function applyRightOrthoWallZoom() {
-  const cam = renderer.getActiveCamera();
-  let b = sourceBounds;
-  if (!cam || !b) return null;
-  try { renderer.setBackground(1, 1, 1); } catch (_) {}
-  const xmin = b[0], xmax = b[1], ymin = b[2], ymax = b[3], zmin = b[4], zmax = b[5];
-  const ox = 0.5 * (xmin + xmax);
-  // wall/edge zoom framing (daniel bank): +Y outer wall + upper body/slots
-  const y0 = Math.max(ymin, -0.02);
-  const y1 = Math.min(ymax, 0.155);
-  const z0 = Math.max(zmin, -0.05);
-  const z1 = Math.min(zmax, 0.31);
-  const cy = 0.5 * (y0 + y1);
-  const cz = 0.5 * (z0 + z1);
-  cam.setParallelProjection(true);
-  // Look from +X (RIGHT) onto YZ section plane
-  cam.setPosition(ox + 1.0, cy, cz);
-  cam.setFocalPoint(ox, cy, cz);
-  cam.setViewUp(0, 0, 1);
-  try { if (cutActor.getProperty().setBackfaceCulling) cutActor.getProperty().setBackfaceCulling(false); } catch(_) {}
-  const scale = 0.55 * Math.max(y1 - y0, z1 - z0);
-  cam.setParallelScale(scale > 1e-6 ? scale : 0.1);
-  cam.setClippingRange(0.01, 10);
-  resetCameraClippingRangeLoose();
-  cutActor.setVisibility(true);
-  renderWindow.render();
-  return { ox, cy, cz, parallel_scale: scale, face: 'RIGHT', bounds: b.slice() };
-}
-
 
 const filtersPanel = document.getElementById('filters-panel');
 const legend = document.getElementById('legend');
@@ -13726,6 +13609,12 @@ document.getElementById('btn-add-result-plane')?.addEventListener('click', () =>
       if (!plane) return;
       plane.vectorProject = !!vecProj.checked;
       applyCutPlaneVectorSettings(plane);
+      return;
+    }
+    const vecAuto = e.target.closest('[data-rplane-vec-auto]');
+    if (vecAuto) {
+      const plane = resultPlanes.find((p) => p.id === vecAuto.getAttribute('data-rplane-vec-auto'));
+      if (plane) setPlaneVectorSolid(plane, '#000000', vecAuto.parentElement);
     }
   });
   list.addEventListener('pointerdown', (e) => {
@@ -13808,10 +13697,7 @@ document.getElementById('btn-add-result-plane')?.addEventListener('click', () =>
     if (vsolid) {
       const plane = resultPlanes.find((p) => p.id === vsolid.getAttribute('data-rplane-vec-solid'));
       if (!plane) return;
-      plane.vectorSolid = vsolid.value || '#000000';
-      const hex = vsolid.parentElement && vsolid.parentElement.querySelector('.opacity-val');
-      if (hex) hex.textContent = plane.vectorSolid;
-      applyCutPlaneVectorSettings(plane);
+      setPlaneVectorSolid(plane, vsolid.value, vsolid.parentElement);
     }
   });
 })();
@@ -16447,7 +16333,7 @@ function acquireInspectMarker() {
     mapper.setScalarVisibility(false);
     const actor = vtkActor.newInstance();
     actor.setMapper(mapper);
-    actor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.pin));
+    paintThemed(actor, (a) => a.getProperty().setColor(...viewRgb('--mg-pin')));
     actor.getProperty().setOpacity(1);
     actor.getProperty().setAmbient(1);
     actor.getProperty().setDiffuse(0);
@@ -16756,7 +16642,7 @@ function publishW13(overrides) {
     fingerprint: inspectState.fingerprint,
     meta: inspectState.meta,
     marker_present: !!inspectState.marker_present,
-    marker_color: [1.0, 0.0, 1.0],
+    marker_color: inspectMarkerActor.getProperty().getColor().slice(0, 3),
     marker_actor: 'inspect_point_marker',
     approach:
       'Pick cutting-plane / result-surface / iso actors; interpolate local point data; optional /api/inspect volume probe in case coordinates',
@@ -18695,7 +18581,7 @@ try {
 } catch (_) {}
 const geomEdgeActor = vtkActor.newInstance();
 geomEdgeActor.setMapper(geomEdgeMapper);
-  geomEdgeActor.getProperty().setColor(0.04, 0.045, 0.055);
+  paintThemed(geomEdgeActor, (a) => a.getProperty().setColor(...viewRgb('--mg-viewport-edge')));
   geomEdgeActor.getProperty().setLineWidth(2.4);
 geomEdgeActor.getProperty().setRepresentationToWireframe();
 geomEdgeActor.getProperty().setLighting(false);
@@ -18777,9 +18663,6 @@ const BC_KIND_RGB = {
 const BC_KIND_VTK = {
   inlet: hexRgb01(LIGHT_VIEW.bcInlet),
   outlet: hexRgb01(LIGHT_VIEW.bcOutlet),
-  pressure: [0.58, 0.2, 0.92],
-  wall: [0.37, 0.42, 0.48],
-  other: [0.86, 0.15, 0.47],
 };
 
 /** A BC's colour group (its family's colour): inlet, outlet, pressure, wall or other. */
@@ -18801,6 +18684,9 @@ const bcOutletGlyph = makeGlyphActor(BC_KIND_VTK.outlet);
 const bcAxisGlyphX = makeGlyphActor(hexRgb01(LIGHT_VIEW.axisX));
 const bcAxisGlyphY = makeGlyphActor(hexRgb01(LIGHT_VIEW.axisY));
 const bcAxisGlyphZ = makeGlyphActor(hexRgb01(LIGHT_VIEW.axisZ));
+paintThemed(bcAxisGlyphX.actor, (a) => a.getProperty().setColor(...viewRgb('--mg-axis-x')));
+paintThemed(bcAxisGlyphY.actor, (a) => a.getProperty().setColor(...viewRgb('--mg-axis-y')));
+paintThemed(bcAxisGlyphZ.actor, (a) => a.getProperty().setColor(...viewRgb('--mg-axis-z')));
 let bcAxisTips = null;
 
 function bcGlyphActors() {
@@ -18814,7 +18700,7 @@ function bringCadEdgesForward() {
   } catch (_) {}
   try {
     const pr = geomEdgeActor.getProperty();
-    pr.setColor(0.04, 0.045, 0.055);
+    pr.setColor(...viewRgb('--mg-viewport-edge'));
     pr.setLineWidth(2.4);
     pr.setLighting(false);
   } catch (_) {}
@@ -36087,8 +35973,29 @@ function endCapture() {
   restoreTreePanelAfterCapture();
 }
 
-/* Draw the framed region of every live pane plus the visible legends. */
+/*
+ * Draw the framed region of every live pane plus the visible legends, light whatever the theme:
+ * files the person keeps stay light (Daniel, 2026-10-27). Over a dark view the viewport takes a
+ * light island and the 3D colours are painted light for the draw, then put back, all in this task:
+ * the screen never shows it.
+ */
 function drawCaptureFrame(ctx, out, frameRect, scale, opts) {
+  const wrap = document.querySelector('.viewport-wrap');
+  if (!wrap || !isDarkAt(wrap)) return drawCaptureFrameNow(ctx, out, frameRect, scale, opts);
+  const was = wrap.getAttribute('data-theme');
+  wrap.setAttribute('data-theme', 'light');
+  repaintViews();
+  try {
+    return drawCaptureFrameNow(ctx, out, frameRect, scale, { ...(opts || {}), render: true });
+  } finally {
+    if (was == null) wrap.removeAttribute('data-theme');
+    else wrap.setAttribute('data-theme', was);
+    repaintViews();
+    for (const pane of capturePanes()) renderPaneNow(pane);
+  }
+}
+
+function drawCaptureFrameNow(ctx, out, frameRect, scale, opts) {
   const o = opts || {};
   const wrap = captureWrap();
   if (!wrap) return;
@@ -38992,11 +38899,24 @@ function viewportBg(scopeEl = document.getElementById('viewer')) {
   return themeRgb01('--mg-viewport-bg', scopeEl);
 }
 
-// Renders both 3D views after an appearance change (a theme or scale change): no 3D colour comes
-// from a token yet. Each one that does is re-applied here before the render, the compare view's
-// while its viewer exists; the compare view renders only while it shows (its viewer outlives
-// compare being turned off).
+// Paints every themed 3D thing again, and the mesh edges' blend with their faces.
+function repaintViews() {
+  for (const [obj, paint] of themedViews) {
+    if (typeof obj.isDeleted === 'function' && obj.isDeleted()) {
+      themedViews.delete(obj);
+      continue;
+    }
+    try { paint(obj); } catch (err) { console.warn('[CFD] view theme', err); }
+  }
+  lastMeshEdgeLodKey = '';
+  try { applyMeshEdgeLod(); } catch (_) {}
+}
+
+// After an appearance change (a theme or scale change): the 3D colours again, then both views
+// render, the compare view's while its viewer exists; the compare view renders only while it shows
+// (its viewer outlives compare being turned off).
 function reapplyViewportTheme() {
+  repaintViews();
   for (const rw of [renderWindow, compareState.on && compareState.viewer && compareState.viewer.renderWindow]) {
     if (!rw) continue;
     try {
@@ -39008,5 +38928,46 @@ function reapplyViewportTheme() {
 }
 
 onAppearance(reapplyViewportTheme);
-// Test hook: the background the theme gives a 3D view, and the re-apply an appearance change runs.
-window.__CFD_THEME__ = { viewportBg, reapplyViewportTheme };
+// Once the page's styles have all arrived (a production build links them): a colour read before
+// would be the fallback.
+if (document.readyState !== 'complete') window.addEventListener('load', () => reapplyViewportTheme(), { once: true });
+// Test hooks: the background the theme gives a 3D view, the re-apply an appearance change runs, the
+// 3D colours the main view paints now (0..255), and a pixel of the main view as the screen shows it
+// and as a capture of the whole view draws it (canvas pixels from its top left).
+const rgbBytes = (c) => Array.from(c).slice(0, 3).map((v) => Math.round(v * 255));
+function viewPixel(canvas, x, y) {
+  const c = document.createElement('canvas');
+  c.width = canvas.width;
+  c.height = canvas.height;
+  const g = c.getContext('2d');
+  g.drawImage(canvas, 0, 0);
+  return Array.from(g.getImageData(x, y, 1, 1).data.slice(0, 3));
+}
+window.__CFD_THEME__ = {
+  viewportBg,
+  reapplyViewportTheme,
+  viewColors: () => ({
+    bg: rgbBytes(renderer.getBackground()),
+    edge: rgbBytes(geomEdgeActor.getProperty().getColor()),
+    ink: rgbBytes(popPathActor.getProperty().getColor()),
+    pin: rgbBytes(inspectMarkerActor.getProperty().getColor()),
+  }),
+  screenPixel: (x, y) => {
+    const pane = capturePanes()[0];
+    if (!pane) return null;
+    renderPaneNow(pane);
+    return viewPixel(pane.canvas, x, y);
+  },
+  capturePixel: (x, y) => {
+    const wrap = captureWrap();
+    if (!wrap) return null;
+    const r = wrap.getBoundingClientRect();
+    const frame = { x: 0, y: 0, w: Math.round(r.width), h: Math.round(r.height) };
+    const out = document.createElement('canvas');
+    out.width = frame.w;
+    out.height = frame.h;
+    const ctx = out.getContext('2d');
+    drawCaptureFrame(ctx, out, frame, 1);
+    return Array.from(ctx.getImageData(x, y, 1, 1).data.slice(0, 3));
+  },
+};

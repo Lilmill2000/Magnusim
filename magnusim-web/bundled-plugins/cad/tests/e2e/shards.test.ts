@@ -326,6 +326,9 @@ describe('the smoke and serial tags', () => {
       // A focused control keeps its key (the toolbar layout pref); Set keybind where the person meets each key action.
       'cad:keybinds-control-keeps-key',
       'cad:keybinds-person-paths',
+      // The Assistant panel's key is the app's pref (Settings → Keybinds): set in the test, put back.
+      'cad:keybinds-assistant-key',
+      'cad:keybinds-assistant-key-live',
     ].sort());
   });
 });

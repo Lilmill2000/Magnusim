@@ -1,7 +1,9 @@
 /**
  * Settings → Keybinds: every key the person can see and set (src/keybinds/catalog.ts). The app's
- * own keys first (shown, never changed; the browser's and the system's in a fold), then each plugin
- * that is on and lists commands, by workspace and group, with the keys each command has now.
+ * own keys first (the Assistant panel's can be changed, the others are shown; the browser's and the
+ * system's in a fold), then each plugin that is on and lists commands, by workspace and group, with
+ * the keys each command has now. The panel's key changes as a command's does, but a key any plugin
+ * command has is taken from it on Replace (the panel's key works everywhere).
  *
  * Change waits for a key press, read as the workspace reads one (comboOf): Escape (alone) cancels,
  * Tab moves on, a key the app, the browser or the system keeps is refused with why, and a key
@@ -15,19 +17,27 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { isCad } from '../../app/edition';
 import { APP_COMMANDS, APP_LOCAL_KEYS, RESERVED_KEYS } from '../../keybinds/appCommands';
+import { appKeyRefusal, onAppKeys, refreshAppKeys } from '../../keybinds/appKeys';
 import {
+  appKeyRows,
+  applyAppChange,
   applyChange,
+  canResetAll,
   contextLabel,
-  hasOwnKeys,
   isDefault,
+  keptOffText,
   KEYBINDS_PREF,
   keysOf,
   loadPluginKeys,
+  planAppChange,
   planChange,
   refreshOverrides,
   refusalOf,
   resetAllKeys,
   SETTINGS_FROM,
+  takerName,
+  type AppKeyChange,
+  type AppKeyRow,
   type KeyChange,
   type PluginKeys,
   type WorkspaceKeys,
@@ -46,8 +56,11 @@ function appKeysShown(keys: readonly string[]): string[] {
   return [...new Set(keys.filter((k) => !k.includes('Meta')).map(displayCombo))];
 }
 
+/** The app's own rows' plugin in the rows' keys and in `Editing` (no plugin key is it). */
+const APP = 'app';
+
 /** What a row waits for: a key press, or Replace / Cancel for a key another command has. */
-type Editing = { plugin: string; id: string; partial: string; conflict: { change: KeyChange; message: string } | null };
+type Editing = { plugin: string; id: string; partial: string; conflict: { change: KeyChange | AppKeyChange; message: string } | null };
 
 function Keys({ keys }: { keys: readonly string[] }) {
   if (!keys.length) return <span className="wiz-keys-none">No key</span>;
@@ -85,6 +98,17 @@ export function KeybindsStep() {
   const serials = useRef(new Map<string, number>());
   const pluginsRef = useRef(plugins);
   pluginsRef.current = plugins;
+  // The same for the app row's change, which may run after a later draw.
+  const loadedRef = useRef(false);
+  const errorRef = useRef('');
+  const appReadRef = useRef(false);
+  const appUnreadRef = useRef('');
+  // The app's keys the person can change, as stored now (another tab, the Assistant, a reset).
+  const [appKeys, setAppKeys] = useState<AppKeyRow[]>(() => appKeyRows());
+  // Whether the app's keys were read as stored, and why not ('' unless a read failed). Every change
+  // waits for them: the panel's key may be one no command may take, or one a Reset would give back.
+  const [appRead, setAppRead] = useState(false);
+  const [appUnread, setAppUnread] = useState('');
 
   const begin = (plugin: string) => {
     const n = (serials.current.get(plugin) ?? 0) + 1;
@@ -102,13 +126,14 @@ export function KeybindsStep() {
       return rest;
     });
   };
-  const note = (rowKey: string, text: string, kind: 'saved' | 'error') => {
+  // `stay`: a "saved" word with more in it than Saved (what a Reset all kept off) stays until the next.
+  const note = (rowKey: string, text: string, kind: 'saved' | 'error', stay = false) => {
     setHeard(text);
     setNotes((n) => ({ ...n, [rowKey]: { text, kind } }));
     const was = timers.current.get(rowKey);
     if (was) clearTimeout(was);
     timers.current.delete(rowKey);
-    if (kind === 'saved') {
+    if (kind === 'saved' && !stay) {
       timers.current.set(
         rowKey,
         setTimeout(() => {
@@ -139,10 +164,16 @@ export function KeybindsStep() {
       const newest = begin(p.plugin);
       void refreshOverrides(p).then((next) => live && newest() && put(next));
     });
+    const stopApp = onAppKeys(() => live && setAppKeys(appKeyRows()));
+    // A change heard between the first draw and the listener.
+    setAppKeys(appKeyRows());
+    // Read as stored: a page without the Assistant's dock has not read them yet.
+    readAppKeys(() => live);
     const own = timers.current;
     return () => {
       live = false;
       stop();
+      stopApp();
       for (const t of own.values()) clearTimeout(t);
     };
   }, []);
@@ -187,6 +218,13 @@ export function KeybindsStep() {
 
   async function change(p: PluginKeys, id: string, c: KeyChange) {
     const key = rowKey(p.plugin, id);
+    // The panel's key as stored decides what a command may have: none is worked out before it is read.
+    if (!appReadRef.current) {
+      setEditing(mineIs(p.plugin, id));
+      focusBack(p.plugin, id, 'change');
+      note(key, appUnreadRef.current || "The Assistant panel's key is still being read: try again in a moment.", 'error');
+      return;
+    }
     // Worked out first: a taken key or a refused one writes nothing, so it takes no read serial
     // (a refresh on its way still lands).
     const plan = planChange(p, id, c, displayCombo);
@@ -221,7 +259,60 @@ export function KeybindsStep() {
     void refreshOverrides(p).then((next) => again() && put(next));
   }
 
-  function onCaptureKey(e: ReactKeyboardEvent<HTMLSpanElement>, p: PluginKeys, command: Command) {
+  /** Reads the app's keys as stored: their row, or why they can't be read (Try again reads them again). */
+  function readAppKeys(alive: () => boolean = () => true) {
+    void refreshAppKeys().then(
+      () => alive() && (setAppUnread(''), setAppRead(true), setAppKeys(appKeyRows())),
+      (e: unknown) => alive() && setAppUnread(`The Assistant panel's key could not be read: ${e instanceof Error ? e.message : String(e)}`),
+    );
+  }
+
+  /** A change of the app's key: as a command's, but a key any plugin command has asks Replace. */
+  async function changeApp(id: string, c: AppKeyChange) {
+    const key = rowKey(APP, id);
+    // Whether a command has the key is known only once every plugin's keys were read.
+    if (!loadedRef.current || errorRef.current || !appReadRef.current) {
+      setEditing(mineIs(APP, id));
+      focusBack(APP, id, 'change');
+      note(key, appUnreadRef.current || errorRef.current || 'The keys are still being read: try again in a moment.', 'error');
+      return;
+    }
+    const list = pluginsRef.current;
+    const plan = planAppChange(list, id, c, displayCombo);
+    if (!plan.ok) {
+      if (plan.code === 'conflict') {
+        setEditing({ plugin: APP, id, partial: '', conflict: { change: { ...c, replace: true } as AppKeyChange, message: plan.message } });
+        setFocusTo({ plugin: APP, id, what: 'replace' });
+        setHeard(`${plan.message}. Replace or Cancel.`);
+        return;
+      }
+      setEditing(mineIs(APP, id));
+      focusBack(APP, id, 'change');
+      note(key, plan.message, 'error');
+      return;
+    }
+    // The plugins it takes the key from: their newest read is this write's.
+    const newest = new Map(plan.took.map((t) => [t.plugin.plugin, begin(t.plugin.plugin)]));
+    const { result, plugins: after } = await applyAppChange(list, id, c, displayCombo);
+    for (const p of after) if (newest.get(p.plugin)?.()) put(p);
+    setAppKeys(appKeyRows());
+    setEditing(mineIs(APP, id));
+    focusBack(APP, id, 'change');
+    if (result.ok) {
+      const took = result.took.map(takerName);
+      note(key, took.length ? `Saved. Taken from ${took.join(', ')}.` : 'Saved', 'saved');
+      return;
+    }
+    note(key, result.message, 'error');
+    for (const [plugin, isNewest] of newest) {
+      const p = pluginsRef.current.find((x) => x.plugin === plugin);
+      if (!p || !isNewest()) continue;
+      const again = begin(plugin);
+      void refreshOverrides(p).then((next) => again() && put(next));
+    }
+  }
+
+  function onCaptureKey(e: ReactKeyboardEvent<HTMLSpanElement>, p: PluginKeys | null, command: { id: string }) {
     const ev = e.nativeEvent;
     if (ev.isComposing) return;
     const mods = e.ctrlKey || e.altKey || e.metaKey;
@@ -229,9 +320,10 @@ export function KeybindsStep() {
     if (e.key === 'Tab' && !mods) return;
     e.preventDefault();
     e.stopPropagation();
-    const key = rowKey(p.plugin, command.id);
+    const plugin = p ? p.plugin : APP;
+    const key = rowKey(plugin, command.id);
     if (e.key === 'Escape' && !mods && !e.shiftKey) {
-      closeRecorder(p.plugin, command.id);
+      closeRecorder(plugin, command.id);
       return;
     }
     if (MOD_KEYS.has(e.key)) {
@@ -245,18 +337,35 @@ export function KeybindsStep() {
       return;
     }
     const typed = typedCombo(ev, combo);
-    const why = refusalOf(combo, displayCombo) || (typed ? refusalOf(typed, displayCombo) : '');
+    // The app's key: a key that types text, or one the browser, the system or the dialogs keep, is
+    // refused; one of its own defaults is fine (it is its defaults then).
+    const refuse = (k: string) => (p ? refusalOf(k, displayCombo) : appKeyRefusal(k, displayCombo));
+    const why = refuse(combo) || (typed ? refuse(typed) : '');
     if (why) {
       note(key, `${why}. Press another.`, 'error');
       setEditing((x) => (x ? { ...x, partial: '' } : x));
       return;
     }
-    void change(p, command.id, { action: 'set', combo });
+    if (p) void change(p, command.id, { action: 'set', combo });
+    else void changeApp(command.id, { action: 'set', combo });
   }
 
+  loadedRef.current = loaded;
+  errorRef.current = error;
+  appReadRef.current = appRead;
+  appUnreadRef.current = appUnread;
   const q = query.trim().toLowerCase();
   const appName = isCad() ? 'Magnusim CAD' : 'Magnusim';
-  const appRows = useMemo(() => [...APP_COMMANDS, ...APP_LOCAL_KEYS].filter((c) => matches(q, c.label, c.group, ...appKeysShown(c.keys))), [q]);
+  // Each app row by the keys it has now (the panel's may be the person's).
+  const appRows = useMemo(
+    () =>
+      [...APP_COMMANDS, ...APP_LOCAL_KEYS].filter((c) => {
+        const own = appKeys.find((a) => a.id === c.id);
+        const keys = own ? (own.isDefault ? appKeysShown(own.keys) : own.keys.map(displayCombo)) : appKeysShown(c.keys);
+        return matches(q, c.label, c.group, ...keys);
+      }),
+    [q, appKeys],
+  );
   const reservedRows = useMemo(() => RESERVED_KEYS.filter((c) => matches(q, c.label, ...c.keys.map(displayCombo))), [q]);
 
   function commandRow(p: PluginKeys, ws: WorkspaceKeys, c: Command) {
@@ -305,7 +414,7 @@ export function KeybindsStep() {
                 className="wiz-reset"
                 data-keybind-change
                 aria-label={`Change ${c.label}`}
-                disabled={!!p.unread}
+                disabled={!!p.unread || !appRead}
                 onClick={() => {
                   clearNote(key);
                   setEditing({ plugin: p.plugin, id: c.id, partial: '', conflict: null });
@@ -314,12 +423,12 @@ export function KeybindsStep() {
                 Change
               </button>
               {!isDefault(p, c.id) ? (
-                <button type="button" className="wiz-reset" data-keybind-reset aria-label={`Reset ${c.label}`} disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'reset' })}>
+                <button type="button" className="wiz-reset" data-keybind-reset aria-label={`Reset ${c.label}`} disabled={!!p.unread || !appRead} onClick={() => void change(p, c.id, { action: 'reset' })}>
                   Reset
                 </button>
               ) : null}
               {keys.length ? (
-                <button type="button" className="wiz-reset" data-keybind-clear aria-label={`Clear ${c.label}`} disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'clear' })}>
+                <button type="button" className="wiz-reset" data-keybind-clear aria-label={`Clear ${c.label}`} disabled={!!p.unread || !appRead} onClick={() => void change(p, c.id, { action: 'clear' })}>
                   Clear
                 </button>
               ) : null}
@@ -329,10 +438,97 @@ export function KeybindsStep() {
         {mine && mine.conflict ? (
           <span className="wiz-keys-conflict" data-keybind-conflict>
             <span>{mine.conflict.message}.</span>
-            <button type="button" className="wiz-reset" data-keybind-replace onClick={() => void change(p, c.id, mine.conflict!.change)}>
+            <button type="button" className="wiz-reset" data-keybind-replace onClick={() => void change(p, c.id, mine.conflict!.change as KeyChange)}>
               Replace
             </button>
             <button type="button" className="wiz-reset" data-keybind-conflict-cancel onClick={() => closeRecorder(p.plugin, c.id)}>
+              Cancel
+            </button>
+          </span>
+        ) : said ? (
+          <span className={said.kind === 'saved' ? 'wiz-keys-saved' : 'wiz-keys-error'} data-keybind-note={said.kind}>
+            {said.text}
+          </span>
+        ) : null}
+      </li>
+    );
+  }
+
+  /** The Assistant panel's key: a command's row, with the app's recorder and its Replace across plugins. */
+  function appKeyRow(a: AppKeyRow) {
+    const key = rowKey(APP, a.id);
+    // Its changes wait for every plugin's keys (a command may have the key) and its own.
+    const appWaits = !loaded || !!error || !appRead;
+    const keys = a.isDefault ? appKeysShown(a.keys) : a.keys.map(displayCombo);
+    const mine = editing && editing.plugin === APP && editing.id === a.id ? editing : null;
+    const said = notes[key];
+    return (
+      <li key={a.id} className="wiz-keys-row" data-keybind={a.id} data-keybind-default={a.isDefault ? '1' : '0'}>
+        <span className="wiz-keys-label">
+          {a.label}
+          <span className="wiz-keys-where">Everywhere</span>
+        </span>
+        <span className="wiz-keys-keys" data-keybind-keys>
+          {mine && !mine.conflict ? (
+            <span
+              ref={captureRef}
+              className="wiz-keys-capture"
+              role="textbox"
+              tabIndex={0}
+              aria-label={`Press the new keys for ${a.label}`}
+              data-keybind-capture
+              onKeyDown={(e) => onCaptureKey(e, null, a)}
+              onBlur={(e) => {
+                const within = !!e.relatedTarget && !!e.currentTarget.closest('[data-keybind]')?.contains(e.relatedTarget as Node);
+                if (editing === mine) closeRecorder(APP, a.id, within);
+              }}
+            >
+              {mine.partial ? `${mine.partial}+…` : 'Press the new keys…'}
+            </span>
+          ) : (
+            <Keys keys={keys} />
+          )}
+        </span>
+        <span className="wiz-keys-actions">
+          {mine && !mine.conflict ? (
+            <button type="button" className="wiz-reset" aria-label={`Cancel changing ${a.label}`} onMouseDown={(e) => e.preventDefault()} onClick={() => closeRecorder(APP, a.id)}>
+              Cancel
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="wiz-reset"
+                data-keybind-change
+                aria-label={`Change ${a.label}`}
+                disabled={appWaits}
+                onClick={() => {
+                  clearNote(key);
+                  setEditing({ plugin: APP, id: a.id, partial: '', conflict: null });
+                }}
+              >
+                Change
+              </button>
+              {!a.isDefault ? (
+                <button type="button" className="wiz-reset" data-keybind-reset aria-label={`Reset ${a.label}`} disabled={appWaits} onClick={() => void changeApp(a.id, { action: 'reset' })}>
+                  Reset
+                </button>
+              ) : null}
+              {keys.length ? (
+                <button type="button" className="wiz-reset" data-keybind-clear aria-label={`Clear ${a.label}`} disabled={appWaits} onClick={() => void changeApp(a.id, { action: 'clear' })}>
+                  Clear
+                </button>
+              ) : null}
+            </>
+          )}
+        </span>
+        {mine && mine.conflict ? (
+          <span className="wiz-keys-conflict" data-keybind-conflict>
+            <span>{mine.conflict.message}.</span>
+            <button type="button" className="wiz-reset" data-keybind-replace onClick={() => void changeApp(a.id, mine.conflict!.change as AppKeyChange)}>
+              Replace
+            </button>
+            <button type="button" className="wiz-reset" data-keybind-conflict-cancel onClick={() => closeRecorder(APP, a.id)}>
               Cancel
             </button>
           </span>
@@ -370,7 +566,7 @@ export function KeybindsStep() {
   const pluginBlocks = plugins.map((p) => {
     const blocks = p.workspaces.map((ws) => workspaceBlock(p, ws)).filter(Boolean);
     if (q && !blocks.length) return null;
-    const changed = hasOwnKeys(p);
+    const changed = canResetAll(p);
     return (
       <section key={p.plugin} className="wiz-keys-scope" data-keys-plugin={p.plugin}>
         <div className="wiz-keys-scope-head">
@@ -380,14 +576,15 @@ export function KeybindsStep() {
             className="wiz-reset"
             data-keys-reset-all
             aria-label={`Reset all ${p.name} keys`}
-            disabled={!changed || !!p.unread}
+            disabled={!changed || !!p.unread || !appRead}
             onClick={async (e) => {
               const btn = e.currentTarget;
               const newest = begin(p.plugin);
               const r = await resetAllKeys(p);
               if (r.ok) {
                 if (newest()) put(r.plugin);
-                note(rowKey(p.plugin, ''), 'Every command has its default keys again.', 'saved');
+                const kept = keptOffText(r.keptOff, displayCombo);
+                note(rowKey(p.plugin, ''), `Every command has its default keys again.${kept ? ` ${kept}` : ''}`, 'saved', !!kept);
                 // The button goes disabled: the keyboard, if still on it, to the section's first Change shown.
                 const first = btn.closest('[data-keys-plugin]')?.querySelector<HTMLElement>('[data-keybind] [data-keybind-change]')?.closest<HTMLElement>('[data-keybind]')?.dataset.keybind;
                 const active = document.activeElement;
@@ -452,17 +649,30 @@ export function KeybindsStep() {
           <div className="wiz-keys-scope-head">
             <h4 className="wiz-keys-scope-title">{appName}</h4>
           </div>
-          <p className="wiz-keys-copy">The app's own keys work everywhere and can't be changed.</p>
+          <p className="wiz-keys-copy">The app's own keys work everywhere. You can change the Assistant panel's; the others can't be changed.</p>
+          {appUnread ? (
+            <p className="wiz-keys-error" role="alert" data-keys-app-unread>
+              {appUnread}. Changes wait until it can be read.{' '}
+              <button type="button" className="wiz-reset" onClick={() => readAppKeys()}>
+                Try again
+              </button>
+            </p>
+          ) : null}
           {appRows.length ? (
             <ul className="wiz-keys-list">
-              {appRows.map((c) => (
-                <li key={c.id} className="wiz-keys-row" data-keybind={c.id}>
-                  <span className="wiz-keys-label">{c.label}</span>
-                  <span className="wiz-keys-keys" data-keybind-keys>
-                    <Keys keys={appKeysShown(c.keys)} />
-                  </span>
-                </li>
-              ))}
+              {appRows.map((c) => {
+                const own = appKeys.find((a) => a.id === c.id);
+                return own ? (
+                  appKeyRow(own)
+                ) : (
+                  <li key={c.id} className="wiz-keys-row" data-keybind={c.id}>
+                    <span className="wiz-keys-label">{c.label}</span>
+                    <span className="wiz-keys-keys" data-keybind-keys>
+                      <Keys keys={appKeysShown(c.keys)} />
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
           {reservedRows.length ? (

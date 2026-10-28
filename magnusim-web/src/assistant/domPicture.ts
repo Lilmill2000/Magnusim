@@ -90,7 +90,7 @@ export async function drawPagePicture(root: HTMLElement, o: { aspect: string; wi
     if (!ctx) return null;
     ctx.scale(scale, scale);
     ctx.translate(-frame.x, -frame.y);
-    paint(ctx, root, frame);
+    lightPage(() => paint(ctx, root, frame));
     let blob: Blob | null = null;
     try {
       blob = await toBlob(canvas, 'image/png');
@@ -102,6 +102,23 @@ export async function drawPagePicture(root: HTMLElement, o: { aspect: string; wi
     width = Math.round(width * 0.7);
   }
   return null;
+}
+
+/**
+ * Runs `fn` with the page in the light theme: a picture the app keeps is light whatever the theme
+ * (Daniel, 2026-10-27), as a capture of the 3D view is. The theme goes back in the same task, so the
+ * screen never shows it (and the theme's watchers see no change).
+ */
+function lightPage<T>(fn: () => T): T {
+  const html = document.documentElement;
+  const was = html.getAttribute('data-theme');
+  if (was !== 'dark') return fn();
+  html.setAttribute('data-theme', 'light');
+  try {
+    return fn();
+  } finally {
+    html.setAttribute('data-theme', was);
+  }
 }
 
 function toBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> {

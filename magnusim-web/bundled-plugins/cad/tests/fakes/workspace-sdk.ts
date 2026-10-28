@@ -9,6 +9,9 @@
 // ws.project.geometrySource / geometryFaces (with hostVersion "1.7").
 // The app's Assistant (unreleased 1.9): pass `assistant` for a scriptable ws.assistant
 // (tests/fakes/assistant-sdk.ts; `assistantFake` is it). Without it there is no ws.assistant.
+// The Assistant panel's keys (unreleased 1.9): pass `assistantKeys` (a list, or null for the
+// default) for ws.context.assistantKeys; push('assistantKeys', keys) is the host's change, as the
+// SDK takes it (the context first, then the listeners). Without it the welcome has none.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import { FakeFiles, FakeFolder } from '../doc/fake-files';
@@ -42,6 +45,7 @@ export interface FakeWorkspace extends Workspace {
   /** Push a host event (units change, study renamed in the header). */
   push(event: 'units', v: UnitSystem): void;
   push(event: 'study', v: StudyRecord): void;
+  push(event: 'assistantKeys', v: string[] | null): void;
 }
 
 export function fakeStudy(over: Partial<StudyRecord> = {}): StudyRecord {
@@ -78,11 +82,13 @@ export function createFakeWorkspace(
     };
     /** Unreleased 1.9: a scriptable ws.assistant (true for the defaults: turn events on). */
     assistant?: FakeAssistantOptions | true;
+    /** Unreleased 1.9: ws.context.assistantKeys (null: the default); left out, the welcome has none. */
+    assistantKeys?: string[] | null;
   } = {},
 ): FakeWorkspace {
   let study = fakeStudy(opts.study);
   const assistantFake = opts.assistant ? createFakeAssistant(opts.assistant === true ? {} : opts.assistant) : null;
-  const listeners = { units: new Set<(v: UnitSystem) => void>(), study: new Set<(v: StudyRecord) => void>(), theme: new Set<(v: unknown) => void>() };
+  const listeners = { units: new Set<(v: UnitSystem) => void>(), study: new Set<(v: StudyRecord) => void>(), theme: new Set<(v: unknown) => void>(), assistantKeys: new Set<(v: unknown) => void>() };
   const log: FakeWorkspace['log'] = { toasts: [], confirms: [], prompts: [], dataWrites: [], backs: 0, dirty: [] };
   const folder = opts.folder ?? new FakeFolder();
   const files = new FakeFiles(folder);
@@ -95,6 +101,7 @@ export function createFakeWorkspace(
     theme: { name: 'light', stylesheet: '/plugin-sdk/theme.css' },
     hostVersion: opts.hostVersion ?? '1.1',
     ...(opts.edit ? { geometry: opts.edit.geometry, launch: opts.edit.launch ?? null } : {}),
+    ...('assistantKeys' in opts ? { assistantKeys: opts.assistantKeys ?? null } : {}),
   } as WorkspaceContext;
   const clone = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
   const ws = {
@@ -197,7 +204,7 @@ export function createFakeWorkspace(
       },
     },
     leaveHook: null,
-    on(event: 'units' | 'theme' | 'study', fn: (v: never) => void) {
+    on(event: 'units' | 'theme' | 'study' | 'assistantKeys', fn: (v: never) => void) {
       const set = listeners[event] as Set<(v: never) => void>;
       set.add(fn);
       return () => set.delete(fn);
@@ -206,11 +213,12 @@ export function createFakeWorkspace(
       if (!opts.spawnWorker) throw new Error('fake workspace: pass spawnWorker to createFakeWorkspace');
       return opts.spawnWorker(String(url));
     },
-    push(event: 'units' | 'study', v: UnitSystem | StudyRecord) {
+    push(event: 'units' | 'study' | 'assistantKeys', v: UnitSystem | StudyRecord | string[] | null) {
       if (event === 'study') {
         study = clone(v as StudyRecord);
         context.study = clone(study);
       }
+      if (event === 'assistantKeys') context.assistantKeys = clone(v as string[] | null);
       for (const fn of listeners[event] as Set<(x: unknown) => void>) fn(clone(v));
     },
   } as unknown as FakeWorkspace;

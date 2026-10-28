@@ -8,6 +8,9 @@
 // Replace or Cancel, Reset and Reset all put the defaults back, and the keys hold after a reload.
 // The Assistant (the scripted model) reads them any time, but changes one only when Daniel asked
 // for it, and only on his Yes in the app's own confirm: Keep it changes nothing.
+// The Assistant panel's own key changes the same way, in Settings and by the Assistant: a key a
+// plugin command has is taken from it on Replace, the new key opens the panel on the page and in
+// the open workspace, and Reset all keybinds gives Ctrl+/ back.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -27,6 +30,8 @@ test.describe.configure({ mode: 'serial' });
 const api = (path) => `${host.base}${path}`;
 const prefsFile = () => join(dirname(host.prefs), '.magnusim-plugin-prefs', `${KEY}.json`);
 const storedKeys = () => (existsSync(prefsFile()) ? JSON.parse(readFileSync(prefsFile(), 'utf8')).keybinds ?? null : null);
+/** The app's keys the person chose, as the app's settings hold them. */
+const appKeys = async (request) => (await (await request.get(api('/api/prefs'))).json()).keybinds ?? null;
 
 async function postOk(request, path, data = {}) {
   const r = await request.post(api(path), { data });
@@ -84,10 +89,11 @@ test("gate:keybinds a person sets their own keys in Settings, and the open works
     await expect(board.key('sketch.rectangle')).toHaveText('Rectangle: KeyR');
     const s = await openKeybinds(context);
 
-    // What is listed: the app's own keys (nothing to press on them), the browser's in a fold,
-    // the plugin's commands with their keys and where they work; the Broken workspace says why.
+    // What is listed: the app's own keys (only the Assistant panel's can be changed), the browser's
+    // in a fold, the plugin's commands with their keys and where they work; the Broken workspace says why.
     await expect(s.pane.locator('[data-keys-plugin="app"] [data-keybind="app.assistant"] kbd').first()).toHaveText('Ctrl+/');
-    await expect(s.pane.locator('[data-keys-plugin="app"] button')).toHaveCount(0);
+    await expect(s.pane.locator('[data-keys-plugin="app"] [data-keybind="app.assistant"] [data-keybind-change]')).toBeVisible();
+    await expect(s.pane.locator('[data-keys-plugin="app"] [data-keybind="app.close"] button')).toHaveCount(0);
     await expect(s.pane.locator('[data-keys-reserved] summary')).toHaveText('Kept for the browser and the system');
     await expect(s.keys('sketch.rectangle')).toHaveText(['R']);
     await expect(s.row('view.fit')).toContainText('Everywhere');
@@ -252,4 +258,111 @@ test("gate:keybinds-ai the Assistant reads the keys any time, and changes one on
   await page.locator('#wiz-rail li[data-wiz-key="keybinds"]').click();
   await expect(page.locator('[data-keys-plugin="keys-demo"] [data-keybind="sketch.line"] [data-keybind-keys] kbd')).toHaveText(['Shift+L'], { timeout: 30_000 });
   expect(fake.pending(), 'scripted answers left unused').toBe(0);
+});
+
+test("gate:keybinds-app the Assistant panel's key changes as a command's: Replace takes it from a command, it opens the panel on the page and in the workspace, Reset all keybinds gives Ctrl+/ back, and the Assistant changes it only on the person's Yes @plugins", async ({ browser, request }) => {
+  test.setTimeout(240_000);
+  const context = await browser.newContext();
+  try {
+    const board = await openBoard(context);
+    const s = await openKeybinds(context);
+    const app = s.pane.locator('[data-keys-plugin="app"] [data-keybind="app.assistant"]');
+    const appKbd = app.locator('[data-keybind-keys] kbd');
+    const dock = (page) => page.locator('#assistant-dock');
+
+    // A command has Alt+L.
+    await s.row('sketch.line').locator('[data-keybind-change]').click();
+    await s.page.keyboard.press('Alt+KeyL');
+    await expect(s.keys('sketch.line')).toHaveText(['Alt+L']);
+    await expect(board.key('sketch.line')).toHaveText('Line: Alt+KeyL');
+
+    // The panel's key: a key that types text is refused; Alt+L is the command's, so Replace or Cancel.
+    await app.locator('[data-keybind-change]').click();
+    await expect(app.getByRole('textbox')).toBeFocused();
+    await s.page.keyboard.press('KeyK');
+    await expect(app.locator('[data-keybind-note="error"]')).toHaveText("K types text: the Assistant panel's key needs Ctrl or Alt, or is a function key (F1 to F24). Press another.");
+    await s.page.keyboard.press('Alt+KeyL');
+    const conflict = app.locator('[data-keybind-conflict]');
+    await expect(conflict).toContainText('Alt+L is already the key of Keys demo · Line (Sketch).');
+    await conflict.getByRole('button', { name: 'Replace' }).click();
+    await expect(appKbd).toHaveText(['Alt+L']);
+    await expect(app.locator('[data-keybind-note="saved"]')).toHaveText('Saved. Taken from Keys demo · Line (Sketch).');
+    await expect(s.row('sketch.line')).toContainText('No key');
+    await expect(board.key('sketch.line')).toHaveText('Line: no key');
+    expect(await appKeys(request)).toEqual({ 'app.assistant': ['Alt+KeyL'] });
+    expect(storedKeys()).toEqual({ 'sketch.line': [] });
+
+    // No command may have it now: the plugin's recorder refuses it with the app's words.
+    await s.row('sketch.rectangle').locator('[data-keybind-change]').click();
+    await s.page.keyboard.press('Alt+KeyL');
+    await expect(s.row('sketch.rectangle').locator('[data-keybind-note="error"]')).toHaveText("Alt+L is the app's own key (Open or close the Assistant panel). Press another.");
+    await s.page.keyboard.press('Escape');
+
+    // It opens and closes the panel: on Home (Ctrl+/ no longer does), and in the Board's tab, from
+    // the workspace frame, where the Board runs nothing for it.
+    await s.page.locator('#wiz-close').click();
+    await expect(s.page.locator('#setup-wizard')).toBeHidden();
+    await s.page.keyboard.press('Control+Slash');
+    await s.page.keyboard.press('Alt+KeyL');
+    await expect(dock(s.page)).toBeVisible();
+    await s.page.keyboard.press('Alt+KeyL');
+    await expect(dock(s.page)).toBeHidden();
+    await board.frame.locator('#keys-title').click();
+    await board.page.keyboard.press('Alt+KeyL');
+    await expect(dock(board.page)).toBeVisible();
+    await expect(board.ran).not.toHaveText(/Line/);
+    await board.page.keyboard.press('Alt+KeyL');
+    await expect(dock(board.page)).toBeHidden();
+
+    // Reset all keybinds: the panel's key goes back to Ctrl+/ and every command to its defaults.
+    await s.page.locator('#home-prefs').click();
+    await s.page.locator('#wiz-rail li[data-wiz-key="keybinds"]').click();
+    await s.page.locator('[data-wiz-reset="keybinds"]').click();
+    await expect(s.page.locator('#cf-copy')).toHaveText("The Assistant panel's key goes back to Ctrl+/. Every command of Keys demo gets its default keys back.");
+    await s.page.locator('#cf-confirm').click();
+    await expect(s.page.locator('#wiz-saved')).toHaveText('Saved');
+    await expect(appKbd.first()).toHaveText('Ctrl+/');
+    await expect(s.keys('sketch.line')).toHaveText(['L']);
+    expect(await appKeys(request)).toEqual({});
+    expect(storedKeys()).toBeNull();
+    await expect(board.key('sketch.line')).toHaveText('Line: KeyL');
+  } finally {
+    await context.close();
+  }
+
+  // The Assistant changes the panel's key only when asked, on the person's deliberate Yes, and
+  // the question says what changes.
+  const page = await browser.newPage();
+  try {
+    await postOk(request, '/api/test/assistant/reset', {});
+    await useScriptedModel(request, host.base, fake, 'cloud');
+    const set = (o) => ({ tools: [{ name: 'core__set_keybind', input: { plugin: 'app', command: 'app.assistant', action: 'set', keys: 'Alt+K', replace: false, person_asked: true, ...o } }] });
+    let seen = [];
+    const after = (reply) => (body) => {
+      seen.push(...resultsIn(body));
+      return reply;
+    };
+    await page.goto(api('/#/'));
+    await appReady(page);
+    fake.reply(() => set({ person_asked: false }), after({ text: 'Done.' }));
+    await dockSend(page, 'What is the key for the Assistant?');
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 30_000 });
+    expect(JSON.stringify(seen)).toContain('not_asked');
+    expect(await appKeys(request)).toEqual({});
+    seen = [];
+    fake.reply(() => set({}), after({ text: 'Done.' }));
+    await dockSend(page, 'Make Alt+K open the Assistant');
+    await expect(page.locator('#modal-confirm')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('#cf-heading')).toHaveText('Change a keybind?');
+    await expect(page.locator('#cf-copy')).toHaveText('Magnusim · Open or close the Assistant panel: Ctrl+/ → Alt+K');
+    await expect(page.locator('#cf-confirm')).toBeEnabled({ timeout: 5_000 });
+    await page.locator('#cf-confirm').click();
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 30_000 });
+    expect(await appKeys(request)).toEqual({ 'app.assistant': ['Alt+KeyK'] });
+    // Back to its defaults, so the app is as it was.
+    await postOk(request, '/api/prefs', { keybinds: null });
+    expect(fake.pending(), 'scripted answers left unused').toBe(0);
+  } finally {
+    await page.close();
+  }
 });

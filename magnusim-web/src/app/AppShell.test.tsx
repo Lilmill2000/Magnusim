@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('./RequiredPluginError', () => ({ RequiredPluginError: () => null }));
 vi.mock('../chrome/FiltersPanel', () => ({ FiltersPanel: () => null }));
 vi.mock('../chrome/LeftTree', () => ({ LeftTree: () => null }));
-vi.mock('../chrome/TopToolbar', () => ({ TopToolbar: () => null }));
 vi.mock('../home/Home', () => ({ Home: () => null }));
 vi.mock('../plugins/loader', () => ({ loadOnePlugin: () => Promise.resolve(), loadPluginUi: () => Promise.resolve() }));
 vi.mock('../panels/register', () => ({ registerAllIslands: () => undefined }));

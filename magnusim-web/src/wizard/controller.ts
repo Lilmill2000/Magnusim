@@ -15,7 +15,8 @@
 import { settleStep } from '../assistant/status';
 import { mountIsland, unmountIsland } from '../islands';
 import { isCad } from '../app/edition';
-import { resetEveryPlugin } from '../keybinds/catalog';
+import { resetEveryPlugin, resetEveryQuestion } from '../keybinds/catalog';
+import { displayCombo } from '../keybinds/combo';
 import { confirmAction } from '../workbench/dialogs';
 
 const COLLAPSE_PREF_KEY = 'magnusim.collapseCompletedSections';
@@ -343,10 +344,10 @@ async function savePort() {
 let resettingKeys = false;
 
 /**
- * Keybinds' Reset all keybinds: every plugin's commands back to their defaults, after one question
- * naming the plugins it changes (it touches many; Enter answers Cancel). Nothing to reset asks
- * nothing. The button is busy meanwhile and has the keyboard again after; the section reads its
- * lists again when anything was reset. What could not be reset is said as an error.
+ * Keybinds' Reset all keybinds: the Assistant panel's key and every plugin's commands back to their
+ * defaults, after one question naming what it changes (it touches many; Enter answers Cancel).
+ * Nothing to reset asks nothing. The button is busy meanwhile and has the keyboard again after; the
+ * section reads its lists again when anything was reset. What could not be reset is said as an error.
  */
 async function resetKeybinds(btn) {
   if (resettingKeys) return;
@@ -356,17 +357,11 @@ async function resetKeybinds(btn) {
     btn.setAttribute('aria-busy', 'true');
   }
   try {
-    const out = await resetEveryPlugin((names) =>
-      confirmAction({
-        title: 'Reset all keybinds?',
-        copy: `Every command of ${names.join(', ')} gets its default keys back. The app's own keys stay as they are.`,
-        yes: 'Reset all',
-        safe: true,
-      }),
-    );
+    const out = await resetEveryPlugin((names) => confirmAction({ ...resetEveryQuestion(names), safe: true }), displayCombo);
     const failed = out.failed.map((f) => `${f.name} (${f.why})`).join(', ');
+    const kept = out.keptOff ? `. ${out.keptOff}` : '';
     if (out.error) flashSaved(out.error, true);
-    else if (failed) flashSaved(out.reset.length ? `Reset ${out.reset.join(', ')}; not reset: ${failed}` : `Not reset: ${failed}`, true);
+    else if (failed) flashSaved((out.reset.length ? `Reset ${out.reset.join(', ')}; not reset: ${failed}` : `Not reset: ${failed}`) + kept, true);
     else if (!out.asked) flashSaved('Every key is its default already');
     else if (out.reset.length) flashSaved();
     if (out.reset.length && keybindsMounted) mountIsland('wiz-keybinds', { scope: '' });

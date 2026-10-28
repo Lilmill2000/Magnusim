@@ -12,11 +12,16 @@
 //    width and the selected feature stays;
 //  - every key action has a Set keybind where the person meets it: the Part's row (an empty Part
 //    too) and a feature's row (Delete, Rename), the
-//    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish).
-// The keybinds are the user's pref on the server every test shares: both run in the serial phase, and put it back.
+//    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish);
+//  - the app's Assistant panel key the person chose in the app's Settings (Alt+K): typed in the Part
+//    it opens and closes the app's panel, Set keybind refuses it in the app's words, and a command
+//    whose stored key it is does not run on it and its button names no key; changed while the Part
+//    is open, it applies at once.
+// The keybinds are the user's pref on the server every test shares: both run in the serial phase, and put it back
+// (the Assistant panel's key is the app's pref, the same for every test: those tests put it back too).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
-import { addSolid, baseUrl, ensureCadOn, modelOnPage, newPartFromTree, newProject, openProject, partOpened, readWithRetry, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, ensureCadOn, forgetRailPrefs, modelOnPage, newPartFromTree, newProject, openProject, partOpened, readWithRetry, viewAndSketchIdle, watchPage, workspaceFrame } from './helpers';
 
 const PREF = 'keybinds';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -355,6 +360,8 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
   test.setTimeout(180_000);
   await ensureCadOn(request);
   await setPref(request, null);
+  // A person who never collapsed the tree or the Sketch panel: the tree's rows are right-clicked.
+  await forgetRailPrefs(request);
   try {
     const seen = await watchPage(page);
     await openProject(page, await newProject(request));
@@ -395,16 +402,25 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
     await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
     await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    // Once the view has turned to the plane: a line over the Part's width (x 0 to 30), which the view
+    // frames beside the left column whatever that column covers. The line went from x -40 to 40
+    // before: its left end lay 2 px inside the frame's edge, and off the view with the Sketch panel
+    // collapsed (the view frames the Part further left then), so nothing was drawn and the
+    // right-click met empty space (its menu had no Delete).
+    await viewAndSketchIdle(page);
     await page.keyboard.press('l');
     await expect.poll(() => toolNow(page)).toBe('line');
-    const a = await modelOnPage(page, [-40, 30, 0]);
-    const b = await modelOnPage(page, [40, 30, 0]);
+    const a = await modelOnPage(page, [5, 27, 0]);
+    const b = await modelOnPage(page, [25, 27, 0]);
     await page.mouse.click(a[0], a[1]);
     await page.mouse.click(b[0], b[1]);
     // Escape ends the chain; a second puts the line tool down.
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
-    const mid = await modelOnPage(page, [0, 30, 0]);
+    await viewAndSketchIdle(page);
+    // The line is there, as the person sees it: one horizontal line, its two ends free.
+    await expect(frame.locator('[data-chip="sketch"]')).toHaveText('Under defined · 3 DOF');
+    const mid = await modelOnPage(page, [15, 27, 0]);
     await viaMenu(() => page.mouse.click(mid[0], mid[1], { button: 'right' }), 'set-keybind-sketch.delete', 'Set keybind for Delete…', 'sketch.delete', 'Delete', 'Delete');
     // Finish sketch's right-click on the toolbar: its own key, and Place or finish's (Enter).
     const finish = frame.locator('[data-cad-toolbar="sketch"] [data-command="sketch.finish"]');
@@ -414,6 +430,154 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     expect(await storedPref(request)).toBeNull();
     expect(seen.errors).toEqual([]);
   } finally {
+    await setPref(request, null);
+  }
+});
+
+// ------------------------------------------------------------------ the app's Assistant panel key
+
+/**
+ * The Assistant panel's keys the person chose (the app's prefs "keybinds", as Settings → Keybinds
+ * stores them; null: its default, Ctrl+/), and, with the app open, told to its tabs as Settings
+ * tells them (the prefs channel). Every test on the server sees them: the tests that set them are
+ * serial and put them back.
+ */
+async function setAssistantKeys(page: Page, request: APIRequestContext, keys: string[] | null) {
+  const value = keys ? { 'app.assistant': keys } : null;
+  const r = await readWithRetry(() => request.post(`${baseUrl()}/api/prefs`, { data: { keybinds: value } }));
+  expect(r.ok(), await r.text()).toBe(true);
+  if (!page.url().startsWith(baseUrl())) return;
+  await page.evaluate((v) => {
+    const ch = new BroadcastChannel('magnusim-plugin-prefs');
+    ch.postMessage({ plugin: '', key: 'keybinds', value: v, from: 'settings:e2e' });
+    ch.close();
+  }, value);
+}
+
+/** The app's Assistant panel (its dock), and the keys the open Part has for it. */
+const dock = (page: Page) => page.locator('#assistant-dock');
+const assistantKeysInPart = (page: Page) => cad<string[] | null>(page, (() => (window as unknown as W).__CAD__.services.bridge.assistantKeys()) as never);
+const keyboardInDock = (page: Page) => page.evaluate(() => !!document.activeElement?.closest('#assistant-dock'));
+/** Nothing opened the panel: checked once the press has had its turn (the frame's forward goes over its port). */
+async function dockStaysShut(page: Page) {
+  await page.waitForTimeout(400);
+  await expect(dock(page)).toBeHidden();
+}
+const APP_OWN_ALT_K = `"Alt+KeyK" is the app's own key (Open or close the Assistant panel)`;
+/** The key Rectangle's sketch toolbar button names (its tooltip's, as aria-keyshortcuts), or null. */
+const rectangleKeyShown = (frame: FrameLocator) => frame.locator('[data-cad-toolbar="sketch"] [data-command="sketch.rectangle"]').first().getAttribute('aria-keyshortcuts');
+
+test("cad:keybinds-assistant-key the Assistant panel's key the person chose (Alt+K) opens and closes the app's panel from the Part; Set keybind refuses it in the app's words; Rectangle, whose stored key it is, does not run on it", { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  // Rectangle's stored key is Alt+K (written here so the two clash: Settings' Change would take it from Rectangle).
+  await setPref(request, { 'sketch.rectangle': ['Alt+KeyK'] });
+  await setAssistantKeys(page, request, ['Alt+KeyK']);
+  try {
+    const seen = await watchPage(page);
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    await expect.poll(() => assistantKeysInPart(page)).toEqual(['Alt+KeyK']);
+    // The stored key stays Rectangle's (it comes back if the person moves the panel's key away).
+    expect(await keysOf(page, 'sketch.rectangle')).toEqual(['Alt+KeyK']);
+
+    // Set keybind says Rectangle's Alt+K is the app's, and refuses Alt+K pressed in its field; the panel stays shut.
+    const dlg = await openDialog(page, frame, 'sketch.rectangle');
+    await expect(dlg.locator('[data-keybind-current]')).toHaveText('Alt+K');
+    await expect(dlg.locator('[data-keybind-taken="Alt+KeyK"]')).toHaveText(`${APP_OWN_ALT_K}, so it does not run Rectangle here`);
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dlg.locator('[data-keybind-status]')).toHaveText(APP_OWN_ALT_K);
+    await dockStaysShut(page);
+    expect(await keysOf(page, 'sketch.rectangle')).toEqual(['Alt+KeyK']);
+    await dlg.locator('[data-keybind-action="done"]').click();
+    await expect(dlg).toHaveCount(0);
+
+    // In a sketch: Rectangle's button names no key (its Alt+K opens the panel)...
+    await enterSketchOnTop(frame);
+    expect(await rectangleKeyShown(frame)).toBeNull();
+    expect(await shownOf(page, 'sketch.rectangle')).toBeNull();
+    // ...and Alt+K opens the panel with the keyboard in it, and Rectangle does not start.
+    await page.keyboard.press('l');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dock(page)).toBeVisible();
+    await expect.poll(() => keyboardInDock(page)).toBe(true);
+    expect(await toolNow(page)).toBe('line');
+    // Alt+K in the panel closes it, the keyboard back in the Part.
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dock(page)).toBeHidden();
+    await expect(page.locator('#workspace-frame')).toBeFocused();
+    expect(await toolNow(page)).toBe('line');
+    // Ctrl+/ is not the panel's key now, and still no command's.
+    await page.keyboard.press('Control+Slash');
+    await dockStaysShut(page);
+    expect(await toolNow(page)).toBe('line');
+    // Opened again from the Part, and closed.
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dock(page)).toBeVisible();
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dock(page)).toBeHidden();
+    expect(await toolNow(page)).toBe('line');
+    expect(seen.errors).toEqual([]);
+  } finally {
+    await setAssistantKeys(page, request, null);
+    await setPref(request, null);
+  }
+});
+
+test("cad:keybinds-assistant-key-live the Assistant panel's key changed in Settings while the Part is open applies at once: Alt+K goes from Rectangle to the panel, and back to Rectangle with the default", { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  await setPref(request, { 'sketch.rectangle': ['Alt+KeyK'] });
+  await setAssistantKeys(page, request, null);
+  try {
+    const seen = await watchPage(page);
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    expect(await assistantKeysInPart(page)).toBeNull();
+    await enterSketchOnTop(frame);
+    await page.keyboard.press('l');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    // The panel has its default key: Alt+K is Rectangle's, and its button says so.
+    expect(await rectangleKeyShown(frame)).toBe('Alt+K');
+    await page.keyboard.press('Alt+KeyK');
+    await expect.poll(() => toolNow(page)).toBe('rectangle-corner');
+    await page.keyboard.press('l');
+    await expect.poll(() => toolNow(page)).toBe('line');
+
+    // Settings (another tab) gives the panel Alt+K: the open Part takes it without reopening.
+    await setAssistantKeys(page, request, ['Alt+KeyK']);
+    await expect.poll(() => assistantKeysInPart(page)).toEqual(['Alt+KeyK']);
+    // Rectangle's button stops naming Alt+K at once.
+    await expect.poll(() => rectangleKeyShown(frame)).toBeNull();
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dock(page)).toBeVisible();
+    await expect.poll(() => keyboardInDock(page)).toBe(true);
+    expect(await toolNow(page)).toBe('line');
+    await page.keyboard.press('Alt+KeyK');
+    await expect(dock(page)).toBeHidden();
+    await expect(page.locator('#workspace-frame')).toBeFocused();
+    expect(await toolNow(page)).toBe('line');
+
+    // Back to its default: Rectangle's stored Alt+K works again, and Ctrl+/ opens and closes the panel.
+    await setAssistantKeys(page, request, null);
+    await expect.poll(() => assistantKeysInPart(page)).toBeNull();
+    await expect.poll(() => rectangleKeyShown(frame)).toBe('Alt+K');
+    await page.keyboard.press('Alt+KeyK');
+    await expect.poll(() => toolNow(page)).toBe('rectangle-corner');
+    await dockStaysShut(page);
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeVisible();
+    await page.keyboard.press('Control+Slash');
+    await expect(dock(page)).toBeHidden();
+    expect(await storedPref(request)).toEqual({ 'sketch.rectangle': ['Alt+KeyK'] });
+    expect(seen.errors).toEqual([]);
+  } finally {
+    await setAssistantKeys(page, request, null);
     await setPref(request, null);
   }
 });

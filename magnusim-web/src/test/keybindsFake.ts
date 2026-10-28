@@ -1,7 +1,8 @@
 /**
  * A fake app server for the keybinds tests: /api/plugins rows with workspace commands files, the
- * files themselves under /plugins/<key>/, and the plugin prefs (/api/plugin-prefs/get|set|remove)
- * in memory. `calls` records every prefs write, in order.
+ * files themselves under /plugins/<key>/, the plugin prefs (/api/plugin-prefs/get|set|remove) and
+ * the app's keys (GET and POST /api/prefs `keybinds`) in memory. `calls` records every prefs write,
+ * in order (the app's as ['app', '', value]).
  */
 import { vi } from 'vitest';
 
@@ -28,6 +29,10 @@ export interface FakeKeysServer {
   calls: [string, string, unknown][];
   /** Make the next prefs reads fail (the person's keys unreadable) while true. */
   failReads: boolean;
+  /** The app's keys the person chose (/api/prefs `keybinds`). */
+  app: Record<string, string[]>;
+  /** Make the app prefs reads fail while true. */
+  failAppReads: boolean;
   fetch: ReturnType<typeof vi.fn>;
 }
 
@@ -35,6 +40,7 @@ export function fakeKeysServer(opts: {
   rows?: Record<string, unknown>[];
   files?: Record<string, unknown>;
   prefs?: Record<string, Record<string, unknown>>;
+  app?: Record<string, string[]>;
 } = {}): FakeKeysServer {
   const rows = opts.rows ?? [
     {
@@ -45,11 +51,23 @@ export function fakeKeysServer(opts: {
     },
   ];
   const files: Record<string, unknown> = opts.files ?? { '/plugins/demo/workspace/commands.json': DEMO_COMMANDS };
-  const server: FakeKeysServer = { prefs: opts.prefs ?? {}, calls: [], failReads: false, fetch: vi.fn() };
+  const server: FakeKeysServer = { prefs: opts.prefs ?? {}, calls: [], failReads: false, app: opts.app ?? {}, failAppReads: false, fetch: vi.fn() };
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === '/api/plugins') return json(200, { ok: true, plugins: rows });
+    if (url === '/api/prefs') {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body || '{}')) as { keybinds?: Record<string, string[]> | null };
+        if (body.keybinds !== undefined) {
+          server.app = JSON.parse(JSON.stringify(body.keybinds ?? {}));
+          server.calls.push(['app', '', server.app]);
+        }
+        return json(200, { ok: true, prefs: { ok: true, keybinds: server.app } });
+      }
+      if (server.failAppReads) return json(503, { ok: false, error: 'the settings are not available right now' });
+      return json(200, { ok: true, units: 'Metric', keybinds: server.app });
+    }
     const pref = /^\/api\/plugin-prefs\/(get|set|remove)$/.exec(url);
     if (pref) {
       const body = JSON.parse(String(init?.body || '{}')) as { plugin: string; key: string; value?: unknown };

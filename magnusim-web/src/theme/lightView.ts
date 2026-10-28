@@ -1,9 +1,9 @@
 /**
- * The 3D views' colours as vtk.js takes them: the light values of their tokens (tokens.css), one
- * source for every view, so the main view, the compare view, the mesh views and a capture agree
- * (Daniel, 2026-10-27: one light background, #f0f2f7). The 3D view does not follow the theme yet;
- * when it does, each of these is read from its token where the view shows instead.
- * lightView.test.ts holds each to its token's light value.
+ * The 3D views' light colours as vtk.js takes them: the light values of their tokens (tokens.css),
+ * for what is light whatever the theme (a capture's base: Daniel, 2026-10-27, files the person
+ * keeps stay light) and for a view's first paint. A view then paints its background, lines, edges,
+ * points and labels from the theme where it shows (runtime.js paintThemed), and its surfaces keep
+ * these. lightView.test.ts holds each to its token's light value.
  */
 
 /** Each 3D colour and its token, as the token's light value. */

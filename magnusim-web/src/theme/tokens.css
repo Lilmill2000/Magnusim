@@ -314,6 +314,12 @@
   --mg-primary-deep: #7aa7ff;
   --mg-shadow-color: rgba(0, 0, 0, 0.45);
   --mg-viewport-bg: #1b1f27;
+  /* On the dark 3D view: lines and points light, edges a mid grey that shows on the background and
+     on the light faces, the mesh edges dark on their light faces, the labels' glow the background. */
+  --mg-viewport-ink: #e6e9ef;
+  --mg-viewport-edge: #6b7382;
+  --mg-viewport-mesh-edge: #5b6472;
+  --mg-viewport-halo: #1b1f27;
   --mg-axis-x: #ff6b6b;
   --mg-axis-y: #4cd07d;
   --mg-axis-z: #6f9bff;

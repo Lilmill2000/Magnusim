@@ -1,9 +1,11 @@
 // Frame keyboard: combos -> handlers, and command shortcuts (their keys from the keybinding
-// registry and the person's keybinds: src/app/keymap.ts, src/app/keybinds.ts). Owner: INTEGRATE.
+// registry and the person's keybinds: src/app/keymap.ts, src/app/keybinds.ts); the app's
+// Assistant panel key goes past every handler of the Part (passAssistantKey). Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cycleDialogFocus, openModal } from '../lib/modal';
+import type { Bridge } from '../lib/bridge';
 import type { CommandDef, CommandRegistry, KeyBinding, KeyboardManager, Mode } from '../types/commands';
-import { combosOf, normaliseCombo } from './keymap';
+import { combosOf, isAssistantPress, normaliseCombo } from './keymap';
 
 // Combos in the registry's form (src/app/keymap.ts); a press means combosOf(e): a Latin letter by
 // the letter it types, anything else by the key's place (punctuation by its character too).
@@ -15,6 +17,35 @@ export function typingIn(target: EventTarget | null): boolean {
   if (!el || !el.tagName) return false;
   const tag = el.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+}
+
+/** The Set keybind dialog's "press the new keys" field: it reads every press, the app's keys too, to say why one is refused. */
+export const KEY_RECORDER = '[data-keybind-capture]';
+
+/**
+ * The app's Assistant panel key typed in the Part is the app's (unreleased host 1.9): the SDK
+ * forwards it to the panel (assistant.dock) unless a handler of the page calls preventDefault, so
+ * no handler of the Part may act on it or keep it. One listener does that for them all, the ones
+ * to come too: heard first (the window, capture), it stops the press before any other handler of
+ * the Part (stopImmediatePropagation; never preventDefault). The SDK's own listener is on the
+ * window too, added as the page connected (before this one), so it still hears the press.
+ * The key is the person's from Settings (bridge.assistantKeys, live) or the default Ctrl+/ by the
+ * character "/", read by the SDK's rule (keymap.ts isAssistantPress). Only on a host whose SDK
+ * forwards it (ws.assistant.docked); a key typed while composing text stays the field's, as the
+ * SDK leaves it. The Set keybind field still reads the press (KEY_RECORDER): it shows the refusal
+ * and keeps the key, as it keeps every key typed into it, so the panel does not open over it.
+ * Returns how to remove it.
+ */
+export function passAssistantKey(win: Window, bridge: Pick<Bridge, 'assistant' | 'assistantKeys'>): () => void {
+  if (bridge.assistant?.docked !== true) return () => {};
+  const onKey = (e: KeyboardEvent) => {
+    if (e.isComposing || !isAssistantPress(e, bridge.assistantKeys())) return;
+    const t = e.target as Element | null;
+    if (t && typeof t.closest === 'function' && t.closest(KEY_RECORDER)) return;
+    e.stopImmediatePropagation();
+  };
+  win.addEventListener('keydown', onKey, true);
+  return () => win.removeEventListener('keydown', onKey, true);
 }
 
 /**
