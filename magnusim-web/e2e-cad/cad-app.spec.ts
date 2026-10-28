@@ -19,7 +19,7 @@ test('Home and Settings are the CAD app\'s', async ({ page }) => {
   await expect(page.locator('#setup-wizard')).toBeHidden();
   await page.locator('#home-prefs').click();
   await expect(page.locator('#setup-wizard')).toBeVisible();
-  await expect(page.locator('#wiz-rail li:visible')).toHaveText(['Units', 'Assistant', 'Plugins']);
+  await expect(page.locator('#wiz-rail li:visible')).toHaveText(['Units', 'Keybinds', 'Assistant', 'Plugins']);
   await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await expect(page.locator('#setup-wizard')).toContainText('Magnusim CAD');
   await page.locator('#wiz-close').click();

@@ -140,6 +140,20 @@ describe("the person's keys (the plugin's prefs key \"keybinds\")", () => {
     for (const v of [null, [], 'x', 3]) expect(readKeybindOverrides(v, commands)).toEqual({});
   });
 
+  it("drops the app's keys, and an id with no key left has its defaults (as the CAD plugin reads them)", () => {
+    expect(
+      readKeybindOverrides(
+        {
+          'sketch.rectangle': ['Ctrl+KeyW', 'Shift+KeyR'],
+          'model.extrude': ['Ctrl+Slash', 'Escape', 'F5'],
+          'view.fit': ['Nope'],
+        },
+        commands,
+      ),
+    ).toEqual({ 'sketch.rectangle': ['Shift+KeyR'] });
+    expect(readKeybindOverrides({ 'model.extrude': ['Ctrl+Slash'] }, commands, NO_KEYS)).toEqual({ 'model.extrude': ['Ctrl+Slash'] });
+  });
+
   it('a command named like an object property is looked up as any other: no prototype answers for it', () => {
     const odd = [{ id: 'constructor' }, { id: 'tostring' }, { id: '__proto__' }];
     const none = readKeybindOverrides({}, odd);

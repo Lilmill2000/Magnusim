@@ -757,6 +757,9 @@ export const CAD_EDITION_TOOLS: Readonly<Record<string, EditionTool>> = {
     values: { target: ['home', 'project', 'workspace'], panel: [''] },
     props: { id: 'workspace: the Part; "" when the target needs none' },
   },
+  // Settings → Keybinds is the same in both apps.
+  core__keybinds: {},
+  core__set_keybind: {},
 };
 
 /** A host or core page tool as Magnusim CAD offers it, or null when it has none (registry.ts EditionFilter). */

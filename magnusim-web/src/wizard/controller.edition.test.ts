@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import shellHtml from '../app/shell.html?raw';
 
-// Settings in Magnusim CAD (src/app/edition.ts): Units, Assistant and Plugins only, never
-// opened by itself and no PC check; Magnusim's Settings unchanged.
+// Settings in Magnusim CAD (src/app/edition.ts): Units, Keybinds, Assistant and Plugins only,
+// never opened by itself and no PC check; Magnusim's Settings has every section.
 vi.mock('../islands', () => ({ mountIsland: () => undefined, unmountIsland: () => undefined }));
 vi.mock('../assistant/status', () => ({ settleStep: () => true }));
 
@@ -48,16 +48,18 @@ afterEach(() => {
 });
 
 describe('Settings in Magnusim CAD', () => {
-  it('shows Units, Assistant and Plugins, and a hidden section cannot be opened', async () => {
+  it('shows Units, Keybinds, Assistant and Plugins, and a hidden section cannot be opened', async () => {
     page('cad');
     const c = await load({ wizard_completed: true });
     c.openSetupWizard({});
-    expect(shownRail()).toEqual(['units', 'assistant', 'plugins']);
+    expect(shownRail()).toEqual(['units', 'keybinds', 'assistant', 'plugins']);
     expect(shownPane()).toBe('units');
     c.openSetupWizard({ step: 'plugins' });
     expect(shownPane()).toBe('plugins');
     c.openSetupWizard({ step: 'assistant' });
     expect(shownPane()).toBe('assistant');
+    c.openSetupWizard({ step: 'keybinds' });
+    expect(shownPane()).toBe('keybinds');
     expect(checks).toBe(0);
   });
 
@@ -70,13 +72,13 @@ describe('Settings in Magnusim CAD', () => {
   });
 });
 
-describe('Settings in Magnusim (unchanged)', () => {
+describe('Settings in Magnusim', () => {
   it('shows every section, and the first run opens it on Units with the PC check', async () => {
     page(null);
     await load({ wizard_completed: false });
     await new Promise((r) => setTimeout(r, 0));
     expect($('#setup-wizard').hidden).toBe(false);
-    expect(shownRail()).toEqual(['units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
+    expect(shownRail()).toEqual(['units', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
     expect(shownPane()).toBe('units');
     expect(checks).toBe(1);
   });

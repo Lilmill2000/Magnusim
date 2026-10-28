@@ -80,13 +80,13 @@ afterEach(() => {
 describe('Settings', () => {
   it("is sections on the left (no Welcome), an X and Esc, and no Next, Back, Finish or Close (Daniel: the sections are the way around)", async () => {
     const c = await load({ wizard_completed: true });
-    expect(railKeys()).toEqual(['units', 'pc', 'port', 'workspace', 'assistant', 'plugins']);
+    expect(railKeys()).toEqual(['units', 'pc', 'port', 'workspace', 'keybinds', 'assistant', 'plugins']);
     expect(document.querySelectorAll('[data-wiz-key="welcome"], #wiz-next, #wiz-back, #wiz-skip, .wiz-foot')).toHaveLength(0);
     expect($('#wiz-heading')).toHaveTextContent('Settings');
     expect($('#wiz-close')).toHaveAccessibleName('Close settings');
     c.openSetupWizard({});
     expect(shownPane()).toBe('units');
-    for (const key of ['port', 'plugins', 'pc', 'workspace']) {
+    for (const key of ['port', 'plugins', 'pc', 'keybinds', 'workspace']) {
       rail(key).click();
       expect([shownPane(), onKey(), rail(key).getAttribute('aria-current')]).toEqual([key, key, 'page']);
     }
@@ -98,7 +98,7 @@ describe('Settings', () => {
     expect($('#setup-wizard').hidden).toBe(true);
   });
 
-  it("opens on the Assistant or Plugins for a link about one, else on Units", async () => {
+  it("opens on the Assistant, Plugins or Keybinds for a link about one, else on Units", async () => {
     const c = await load({ wizard_completed: true });
     expect($('#setup-wizard').hidden).toBe(true);
     c.openSetupWizard({ step: 'assistant' });
@@ -109,6 +109,24 @@ describe('Settings', () => {
     expect(islands.calls[islands.calls.length - 1]).toBe('unmount wiz-assistant');
     c.openSetupWizard({ step: 'plugins' });
     expect(shownPane()).toBe('plugins');
+    c.openSetupWizard({ step: 'keybinds' });
+    expect(shownPane()).toBe('keybinds');
+    expect(islands.calls[islands.calls.length - 1]).toBe('mount wiz-keybinds');
+  });
+
+  it('mounts Keybinds on entering it (each time: it reads the lists again) and unmounts it on leaving and on close', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({});
+    islands.calls = [];
+    rail('keybinds').click();
+    rail('keybinds').click();
+    expect(islands.calls).toEqual(['mount wiz-keybinds']);
+    rail('units').click();
+    rail('keybinds').click();
+    expect(islands.calls).toEqual(['mount wiz-keybinds', 'unmount wiz-keybinds', 'mount wiz-keybinds']);
+    islands.calls = [];
+    $('#wiz-close').click();
+    expect(islands.calls).toEqual(['unmount wiz-plugins', 'unmount wiz-keybinds']);
   });
 
   it('the first run opens it on Units with the PC check running, and closing marks setup done', async () => {

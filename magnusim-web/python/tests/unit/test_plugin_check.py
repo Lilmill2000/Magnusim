@@ -1003,6 +1003,7 @@ def test_schema_fails_loudly_on_a_new_manifest_field(monkeypatch: pytest.MonkeyP
 EXPECTED_FAILURES = {
     "python/tests/fixtures/plugins/ui-folder-name": {"key"},  # a key that is not its folder's name
     "python/tests/fixtures/workspace-plugins/ws-demo": {"workspace"},  # silent.html never connects (the timeout test)
+    "python/tests/fixtures/keybind-plugins/keys-demo": {"workspace"},  # Broken's commands file is not there (Settings says why)
 }
 # Findings in shipped plugins that their owners fix; the test fails once one is fixed,
 # so this list only ever shrinks.

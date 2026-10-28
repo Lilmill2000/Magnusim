@@ -5,7 +5,7 @@
 //   1. every required row id has exactly one entry, and each entry says how (paths), or why not
 //      (deferred, person_only, not_owed);
 //   2. each path's tool is a host tool (defaultHostTools) or a core page tool (core__show,
-//      core__view: src/assistant/coreToolDefs.ts); its `where` values are in the tool's enums (or
+//      core__view, core__keybinds, core__set_keybind: src/assistant/coreToolDefs.ts); its `where` values are in the tool's enums (or
 //      are properties of its schema); its routes are HOST_ROUTES entries its code calls, and a
 //      page tool handles the target or action; a path's `context` is one the tool is offered in;
 //   3. each deferral is named in the release notes' "Not yet in v0.5.0" list;
@@ -34,7 +34,7 @@ const { defaultHostTools } = await import('../server/assistant/host-tools.ts');
 const { HOST_ROUTES } = await import('../server/assistant/host-call.ts');
 
 /** The audit's Tier 0 and Tier 1 rows, and the Tier 2 rows the tools cover (spec 16.4): the fixture's header must say the same. */
-const REQUIRED = ['H1-H14', 'G1-G18', 'S1-S15', 'M1-M7', 'B1-B10', 'X1-X19', 'R1-R22', 'V1-V25', 'Q1-Q5', 'P2', 'P6', 'P8', 'L7', 'L9'];
+const REQUIRED = ['H1-H14', 'G1-G18', 'S1-S15', 'M1-M7', 'B1-B10', 'X1-X19', 'R1-R22', 'V1-V25', 'Q1-Q5', 'P2', 'P6', 'P8', 'P23', 'L7', 'L9'];
 
 /** "H1-H14" → H1 … H14; "P2" → P2. */
 function expand(spec) {
@@ -63,11 +63,14 @@ const calls = (tool, route) => filesOf(tool).some((f) => sourceOf.get(f).include
 
 // The core page's tools: their definitions as the page registers them (src/assistant/coreToolDefs.ts,
 // plain data Node reads), and their handlers in the page's code (browser code: read as text).
-const { CORE_TOOLS, SHOW_TARGETS, VIEW_ACTIONS } = await import('../../src/assistant/coreToolDefs.ts');
-const CORE_SRC = readFileSync(join(WEB, 'src', 'assistant', 'coreTools.ts'), 'utf8');
+const { CORE_TOOLS, KEYBIND_ACTIONS, SHOW_TARGETS, VIEW_ACTIONS } = await import('../../src/assistant/coreToolDefs.ts');
+const CORE_SRC = ['coreTools.ts', 'keybindTools.ts'].map((f) => readFileSync(join(WEB, 'src', 'assistant', f), 'utf8')).join('\n');
+/** Each core page tool: the enum its paths name (key: '' for a read with none), and its properties. */
 const CORE = {
   core__show: { key: 'target', values: [...SHOW_TARGETS], props: ['target', 'project_id', 'id', 'panel'] },
   core__view: { key: 'action', values: [...VIEW_ACTIONS], props: ['action', 'target_ids', 'aspect', 'size', 'with_legend', 'on', 'save'] },
+  core__keybinds: { key: '', values: [], props: ['plugin', 'target'] },
+  core__set_keybind: { key: 'action', values: [...KEYBIND_ACTIONS], props: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'] },
 };
 for (const [name, c] of Object.entries(CORE)) {
   const short = name.slice('core__'.length);
@@ -107,7 +110,7 @@ function pathProblems(row, p) {
         }
       }
     }
-    if (!(core.key in where)) out.push(`${at}: a page path names its ${core.key}`);
+    if (core.key && !(core.key in where)) out.push(`${at}: a page path names its ${core.key}`);
     return out;
   }
   const def = host.get(p.tool);

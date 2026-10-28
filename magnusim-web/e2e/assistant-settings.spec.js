@@ -92,7 +92,7 @@ test('the Assistant section sits between Workspace and Plugins and is Off; leavi
   const wizard = page.locator('#setup-wizard');
   await page.locator('#home-prefs').click();
   await expect(wizard).toBeVisible();
-  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Units', 'This PC', 'Port', 'Workspace', 'Assistant', 'Plugins']);
+  await expect(wizard.locator('#wiz-rail li')).toHaveText(['Units', 'This PC', 'Port', 'Workspace', 'Keybinds', 'Assistant', 'Plugins']);
   await expect(wizard.locator('.wiz-pane[data-wiz-key="units"]')).toBeVisible();
 
   await page.locator('#wiz-rail li[data-wiz-key="assistant"]').click();

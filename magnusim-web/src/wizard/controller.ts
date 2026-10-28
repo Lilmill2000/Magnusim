@@ -20,10 +20,11 @@ const WIZ_UNITS_STEP = 1;
 const WIZ_PC_STEP = 2;
 const WIZ_PLUGINS_STEP = 5; // stays 5: GUIDE.md and the plugin suites name it
 const WIZ_ASSISTANT_STEP = 6;
-const WIZ_ORDER = [WIZ_UNITS_STEP, WIZ_PC_STEP, 3, 4, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
+const WIZ_KEYBINDS_STEP = 7;
+const WIZ_ORDER = [WIZ_UNITS_STEP, WIZ_PC_STEP, 3, 4, WIZ_KEYBINDS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
 // Magnusim CAD simulates nothing: no PC check (solver ranks), no Port (its window picks one),
-// no Workspace (the simulation tree). Its rail is Units, Assistant and Plugins.
-const CAD_SECTIONS = [WIZ_UNITS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
+// no Workspace (the simulation tree). Its rail is Units, Keybinds, Assistant and Plugins.
+const CAD_SECTIONS = [WIZ_UNITS_STEP, WIZ_KEYBINDS_STEP, WIZ_ASSISTANT_STEP, WIZ_PLUGINS_STEP];
 const sections = () => (isCad() ? WIZ_ORDER.filter((id) => CAD_SECTIONS.includes(id)) : WIZ_ORDER);
 const pos = (id) => sections().indexOf(id);
 /** The app's own port (scripts/prefs.js DEFAULT_PORT): Port's default. */
@@ -166,6 +167,21 @@ function setStep(id) {
   if (wizard.step === WIZ_PC_STEP) startHardwareCheck();
   mountAssistant(wizard.step === WIZ_ASSISTANT_STEP);
   if (wizard.step === WIZ_PLUGINS_STEP) mountIsland('wiz-plugins', { scope: '' });
+  mountKeybinds(wizard.step === WIZ_KEYBINDS_STEP);
+}
+
+// Keybinds is mounted only while it is shown: it reads every list again each time it is (a
+// workspace may have changed a key meanwhile), and a key press waited for ends with it.
+let keybindsMounted = false;
+
+function mountKeybinds(on) {
+  if (on && !keybindsMounted) {
+    keybindsMounted = true;
+    mountIsland('wiz-keybinds', { scope: '' });
+  } else if (!on && keybindsMounted) {
+    keybindsMounted = false;
+    unmountIsland('wiz-keybinds');
+  }
 }
 
 function paintUnits() {
@@ -376,12 +392,13 @@ function hideWizard() {
   wizard.open = false;
   wizard.firstRun = false;
   unmountIsland('wiz-plugins');
+  mountKeybinds(false);
   mountAssistant(false);
 }
 
 /**
- * Opens Settings on Units, or on the section `opts.step` names ('plugins', 'assistant': a link
- * about one). `opts.required`: the first run's opening (its PC check starts at once).
+ * Opens Settings on Units, or on the section `opts.step` names ('plugins', 'assistant',
+ * 'keybinds': a link about one). `opts.required`: the first run's opening (its PC check starts at once).
  */
 export function openSetupWizard(opts) {
   const first = !!(opts && opts.required);
@@ -409,6 +426,7 @@ export function openSetupWizard(opts) {
   // the Assistant on the Assistant; anything else on Units.
   if (opts && opts.step === 'plugins') setStep(WIZ_PLUGINS_STEP);
   else if (opts && opts.step === 'assistant') setStep(WIZ_ASSISTANT_STEP);
+  else if (opts && opts.step === 'keybinds') setStep(WIZ_KEYBINDS_STEP);
   else setStep(WIZ_UNITS_STEP);
   // The first run: the PC check (solver ranks) runs now, not only when This PC is opened.
   if (first && pos(WIZ_PC_STEP) >= 0) startHardwareCheck();
