@@ -20,13 +20,13 @@ test('Home and Settings are the CAD app\'s', async ({ page }) => {
   await page.locator('#home-prefs').click();
   await expect(page.locator('#setup-wizard')).toBeVisible();
   await expect(page.locator('#wiz-rail li:visible')).toHaveText(['Units', 'Keybinds', 'Assistant', 'Plugins']);
-  // Keybinds: the app's own keys under the app's name.
+  // Keybinds: the app's own keys under the app's name, and the Part's commands (cad-keybinds-settings.spec.ts changes one).
   await page.locator('#wiz-rail li[data-wiz-key="keybinds"]').click();
   const keybinds = page.locator('#setup-wizard .wiz-pane[data-wiz-key="keybinds"]');
   await expect(keybinds.locator('[data-keys-plugin="app"] .wiz-keys-scope-title')).toHaveText('Magnusim CAD');
   await expect(keybinds.locator('[data-keys-plugin="app"] [data-keybind="app.assistant"] kbd').first()).toHaveText('Ctrl+/');
-  // The CAD plugin's commands file is not wired into its manifest on this base yet (its keybinds lane brings it).
-  await expect(keybinds.getByText('No plugin that is on lists its keys here yet.')).toBeVisible();
+  await expect(keybinds.locator('[data-keys-plugin="cad"] [data-keys-workspace="part"] [data-keybind="sketch.rectangle"]')).toBeVisible();
+  await expect(keybinds.getByText('No plugin that is on lists its keys here yet.')).toHaveCount(0);
   await page.locator('#wiz-rail li[data-wiz-key="plugins"]').click();
   await expect(page.locator('#setup-wizard')).toContainText('Magnusim CAD');
   await page.locator('#wiz-close').click();

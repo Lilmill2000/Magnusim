@@ -32,6 +32,8 @@ key = "part"
 title = "Part"
 icon = "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8"
 entry = "workspace/index.html"
+# The Part's keyboard commands (unreleased 1.9; built from src/app/keymap.ts): Settings → Keybinds lists them.
+commands = "workspace/commands.json"
 
 [[study_kinds]]
 key = "part"
