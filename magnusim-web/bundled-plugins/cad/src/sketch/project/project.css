@@ -2,7 +2,8 @@
  * P4b SELECT: the Sketch panel's References (linked geometry) and the Project / Intersect blocks.
  * A reference's dot purple as its curves are drawn (--cad-sketch-key-linked); a lost one's dot amber
  * (--cad-sketch-key-lost), its words in the lost reference's amber (--cad-sketch-lost). In a dark
- * view its left half is the colour over a light face (E2: the -on-face tokens).
+ * view its left half is the colour over a light face (E2: the -on-face tokens), on a crescent of
+ * the body colour that the name's clip leaves room for.
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 .cad-sk-links {
@@ -24,6 +25,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Room inside its clip for the dot's crescent, 2 px left of the dot (the -on-face tokens in dark):
+     the box reaches 2 px further out, its content stays where it was. */
+  margin-left: -2px;
+  padding-left: 2px;
 }
 .cad-sk-link-dot {
   display: inline-block;

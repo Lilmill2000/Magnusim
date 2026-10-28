@@ -26,7 +26,8 @@
 //  - dark-follows-face-lost: a sketch on a block whose projected reference (a cube's top face, over
 //    the block's edge) is lost: its amber curve takes the light view's amber over the face and the
 //    dark one beyond it, in model mode and in sketch mode; the reference's dot in the panel shows
-//    both (one colour in light). (It went with the removed dark-sketch-face test.)
+//    both (one colour in light), its crescent of the body colour whole (review: the name's clip cut
+//    its left side off). (It went with the removed dark-sketch-face test.)
 //  - dark-follows-face-marks: a reference point and axis, the measure line's ends and the Extrude
 //    arrow, over a face and over the background.
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
@@ -847,15 +848,28 @@ test.describe("E2: a mark's colour follows what is under it", () => {
       };
       return { left: px(0.25), right: px(0.75) };
     };
+    /** The pixel 1 CSS px left of the dot, at its middle: the crescent's (it reaches 2 px out). */
+    const crescent = async () => {
+      const r = (await dot.boundingBox())!;
+      const s = await shot2(page, { x: Math.floor(r.x) - 4, y: Math.floor(r.y), width: 6, height: Math.ceil(r.height) + 1 });
+      const i = 4 * (Math.round((r.y + r.height / 2 - s.clip.y) * s.k) * s.img.width + Math.round((r.x - 1 - s.clip.x) * s.k));
+      return [s.img.data[i], s.img.data[i + 1], s.img.data[i + 2]] as RGB;
+    };
     expect(await look()).toEqual({ bg: cssRgb(p.sketch.lost), shadow: `${cssRgb(p.face!.sketch.lost)} 4px 0px 0px 0px inset, rgb(189, 201, 219) -1.5px 0px 0px 0.5px` });
     const dark = await halves();
     expect(dist(dark.left, 0, lostFace), `the dot's left half: ${dark.left}`).toBeLessThanOrEqual(24);
     expect(dist(dark.right, 0, lost), `the dot's right half: ${dark.right}`).toBeLessThanOrEqual(24);
+    // Its crescent of the body colour shows whole, as the state dot's (review: the name's clip cut it off at the left).
+    const BODY: RGB = [0xbd, 0xc9, 0xdb];
+    const cr = await crescent();
+    expect(dist(cr, 0, BODY), `the crescent left of the dot: ${cr}`).toBeLessThanOrEqual(24);
     // Light: one colour, the light amber, and the curve one colour.
     await appearance(page, 'light');
     expect(await look()).toEqual({ bg: cssRgb(p.face!.sketch.lost), shadow: 'none' });
     const light = await halves();
     for (const c of [light.left, light.right]) expect(dist(c, 0, lostFace), `light, the dot: ${c}`).toBeLessThanOrEqual(24);
+    const crLight = await crescent();
+    expect(dist(crLight, 0, BODY), `light: no crescent (${crLight})`).toBeGreaterThan(24);
     await page.keyboard.press('Escape');
     expect(seen.errors).toEqual([]);
   });
