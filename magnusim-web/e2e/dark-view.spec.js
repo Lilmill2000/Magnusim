@@ -1,7 +1,6 @@
 // The 3D view in the dark theme (Daniel, 2026-10-27): its background, lines, edges, points and
 // labels turn dark-theme colours, the model's surfaces stay light, and what the person keeps (a
-// capture) stays light. The theme is set as Settings → Appearance sets it: html's data-theme, then a
-// cfd:appearance event.
+// capture) stays light. The theme is set as Settings → Appearance sets it (applyAppearance).
 import { expect, test } from '@playwright/test';
 import { startHost } from './support/host-server.mjs';
 
@@ -20,10 +19,9 @@ test.afterAll(() => {
 });
 
 async function setTheme(page, theme) {
-  await page.evaluate((t) => {
-    if (t) document.documentElement.setAttribute('data-theme', t);
-    else document.documentElement.removeAttribute('data-theme');
-    window.dispatchEvent(new CustomEvent('cfd:appearance', { detail: { theme: t || 'light' } }));
+  await page.evaluate(async (t) => {
+    const { applyAppearance } = await import('/src/theme/appearance.ts');
+    applyAppearance({ theme: t || 'light', text_scale: 1, icon_scale: 1 });
   }, theme);
 }
 

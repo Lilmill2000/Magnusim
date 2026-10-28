@@ -347,8 +347,13 @@ test("gate:keybinds-app the Assistant panel's key changes as a command's: Replac
       seen.push(...resultsIn(body));
       return reply;
     };
+    const tabOf = trackTab(page);
     await page.goto(api('/#/'));
     await appReady(page);
+    // The window's core page (its tools with it) is on the server before the first request.
+    await expect
+      .poll(async () => (await (await request.get(api('/api/assistant/tabs'))).json()).tabs.find((t) => t.tab === tabOf())?.core?.place, { timeout: 30_000 })
+      .toBe('home');
     fake.reply(() => set({ person_asked: false }), after({ text: 'Done.' }));
     await dockSend(page, 'What is the key for the Assistant?');
     await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 30_000 });
