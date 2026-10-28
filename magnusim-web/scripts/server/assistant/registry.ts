@@ -285,6 +285,11 @@ export const CORE_TOOLS: Readonly<Record<string, { risk: Risk; priority: number;
   show: { risk: 'edit', priority: 80, contexts: PLACES, pinned: true },
   // A workspace has its own view tool, and the core viewer is under its overlay.
   view: { risk: 'read', priority: 52, contexts: Object.freeze(['home', 'workbench'] as Place[]) },
+  // Settings → Keybinds: every plugin's keys (a change asks the person in the page). Not in a
+  // workspace: one that has keys has its own keybind tools (the CAD Part's keybind_*), and the
+  // Part's tools fit a local model's budget only without these.
+  keybinds: { risk: 'read', priority: 30, contexts: Object.freeze(['home', 'workbench'] as Place[]) },
+  set_keybind: { risk: 'edit', priority: 28, contexts: Object.freeze(['home', 'workbench'] as Place[]) },
 });
 
 export interface ToolRegistry {
@@ -728,7 +733,7 @@ export class Registry implements ToolRegistry {
   private checkCoreTool(raw: unknown, source: ToolSource & { kind: 'core' }, seen: Set<string>): ToolDef | Refusal {
     const cardTitles = new WeakMap<Record<string, unknown>, string>();
     const fixed = isRecord(raw) && typeof raw.name === 'string' && Object.hasOwn(CORE_TOOLS, raw.name) ? CORE_TOOLS[raw.name] : null;
-    if (!fixed) return { name: nameOf(raw), code: 'bad_name', message: `The core page offers only ${Object.keys(CORE_TOOLS).join(' and ')}.` };
+    if (!fixed) return { name: nameOf(raw), code: 'bad_name', message: `The core page offers only ${Object.keys(CORE_TOOLS).join(', ')}.` };
     // The shape checks of a workspace tool, under the `core` slug; its risk is the core table's.
     const shape: ToolSource & { kind: 'workspace' } = { kind: 'workspace', plugin: 'core', pluginName: 'Magnusim', workspace: 'app', tab: source.tab, link: source.link, projectId: '', studyId: '', epoch: 'core' };
     const checked = this.checkTool({ ...(raw as Record<string, unknown>), risk: fixed.risk }, shape, { plugin: 'core', pluginName: 'Magnusim', workspace: 'app', projectId: '', studyId: '', tools: [] }, seen, 0);

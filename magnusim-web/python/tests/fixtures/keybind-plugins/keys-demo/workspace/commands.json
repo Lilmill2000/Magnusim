@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "contexts": [
+    { "id": "sketch", "label": "Sketch" },
+    { "id": "model", "label": "Model" }
+  ],
+  "commands": [
+    { "id": "sketch.rectangle", "label": "Rectangle", "group": "Draw", "context": "sketch", "keys": ["KeyR"] },
+    { "id": "sketch.line", "label": "Line", "group": "Draw", "context": "sketch", "keys": ["KeyL"] },
+    { "id": "model.extrude", "label": "Extrude", "group": "Features", "context": "model", "keys": ["KeyE"] },
+    { "id": "view.fit", "label": "Fit", "group": "View", "context": "any", "keys": ["KeyF"] }
+  ]
+}

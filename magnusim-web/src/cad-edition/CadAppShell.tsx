@@ -13,6 +13,7 @@ import { Home } from '../home/Home';
 import { clearIslands } from '../islands';
 import { placeHostOnlyPanel, replacePanel } from '../plugin-api';
 import { AssistantStep } from '../panels/prefs/AssistantStep';
+import { KeybindsStep } from '../panels/prefs/KeybindsStep';
 import { PluginsStep } from '../panels/prefs/PluginsStep';
 import { useProjectStore } from '../store/project';
 import { SetupWizard } from '../wizard/SetupWizard';
@@ -24,11 +25,12 @@ import { openHashProjectAtStart } from './shell';
 export function CadAppShell() {
   useLayoutEffect(() => setWorkspaceDock({ key: () => dockShortcut() }), []);
   useEffect(() => {
-    // Settings' two island sections, as panels/register.ts places them; none of the
+    // Settings' island sections, as panels/register.ts places them; none of the
     // workbench's flyouts (they would bring the simulation panels and the viewer).
     clearIslands();
     replacePanel('wiz-plugins', PluginsStep);
     placeHostOnlyPanel('wiz-assistant', AssistantStep);
+    placeHostOnlyPanel('wiz-keybinds', KeybindsStep);
     void useProjectStore.getState().loadRegistry().catch((e) => console.warn('[CAD] registry', e));
     // After Home's own start (a child's effect runs first): a project address opens its page.
     openHashProjectAtStart();

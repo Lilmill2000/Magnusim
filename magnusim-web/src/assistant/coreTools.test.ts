@@ -11,6 +11,7 @@ vi.mock('../home/controller', () => ({ openProject: vi.fn(), parseHomeRoute: vi.
 import { resetWorkspaceToolsForTests, workspaceToolsSnapshot, type PublishedTools } from '../workspace/assistantTools';
 import type { AssistantInvoke } from '../workspace/bridge';
 import { useProjectStore } from '../store/project';
+import { CORE_KEYBINDS_SCHEMA, CORE_SET_KEYBIND_SCHEMA } from './coreToolDefs';
 import {
   CORE_GUIDE,
   CORE_SHOW_SCHEMA,
@@ -144,12 +145,14 @@ afterEach(() => {
 });
 
 describe('the registration', () => {
-  it('the two tools, strict-shaped (every property required, no unions), and the short guide', () => {
+  it('the four tools, strict-shaped (every property required, no unions), and the short guide', () => {
     expect(CORE_TOOLS.map((t) => [t.name, t.risk])).toEqual([
       ['show', 'edit'],
       ['view', 'read'],
+      ['keybinds', 'read'],
+      ['set_keybind', 'edit'],
     ]);
-    for (const schema of [CORE_SHOW_SCHEMA, CORE_VIEW_SCHEMA]) {
+    for (const schema of [CORE_SHOW_SCHEMA, CORE_VIEW_SCHEMA, CORE_KEYBINDS_SCHEMA, CORE_SET_KEYBIND_SCHEMA]) {
       expect(schema.additionalProperties).toBe(false);
       expect([...schema.required].sort()).toEqual(Object.keys(schema.properties).sort());
     }

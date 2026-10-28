@@ -40,6 +40,34 @@ export const CORE_VIEW_SCHEMA = Object.freeze({
   },
 });
 
+/** core__keybinds' input: every property required, "" for all. */
+export const CORE_KEYBINDS_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['plugin', 'target'],
+  properties: {
+    plugin: { type: 'string', maxLength: 80, description: 'a plugin key or name; "" = the app and every plugin' },
+    target: { type: 'string', maxLength: 120, description: 'a command id (sketch.rectangle) or label; "" = every command' },
+  },
+});
+
+export const KEYBIND_ACTIONS = ['set', 'reset', 'clear', 'reset_all'] as const;
+
+/** core__set_keybind's input: every property required, sentinels where unused. */
+export const CORE_SET_KEYBIND_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'],
+  properties: {
+    plugin: { type: 'string', maxLength: 80, description: 'the plugin key or name (core__keybinds lists them)' },
+    command: { type: 'string', maxLength: 120, description: 'the command id or label; "" for reset_all' },
+    action: { type: 'string', enum: [...KEYBIND_ACTIONS] },
+    keys: { type: 'string', maxLength: 40, description: 'set: the key as written ("Shift+R", "Ctrl+Alt+K", "F7"); "" otherwise' },
+    replace: { type: 'boolean', description: 'take the key from the commands that have it (only once the person agreed)' },
+    person_asked: { type: 'boolean', description: 'true only when the person explicitly asked for this change in this request' },
+  },
+});
+
 export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
   {
     name: 'show',
@@ -58,5 +86,23 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     inputSchema: CORE_VIEW_SCHEMA as unknown as Record<string, unknown>,
     risk: 'read',
     timeoutS: 60,
+  },
+  {
+    name: 'keybinds',
+    title: 'Read the keyboard shortcuts',
+    description:
+      "The person's keyboard shortcuts, as Settings → Keybinds lists them: the app's own (never changed) and each plugin's commands with their keys now (stored: \"Shift+KeyR\"; shown: \"Shift+R\"), defaults and where each works. plugin \"\" and target \"\" for all. Read them any time; set_in says where the person changes one.",
+    inputSchema: CORE_KEYBINDS_SCHEMA as unknown as Record<string, unknown>,
+    risk: 'read',
+    timeoutS: 30,
+  },
+  {
+    name: 'set_keybind',
+    title: 'Change a keyboard shortcut',
+    description:
+      'Changes a plugin\'s keyboard shortcut as Settings → Keybinds does: set (keys: its one key, e.g. "Shift+R"), reset (defaults), clear (no key), reset_all (the plugin\'s every command). Only if the person explicitly asked for this change in this request (person_asked true, else not_asked); the app asks them to confirm (No: step_declined). A key another command has: key_taken unless replace true.',
+    inputSchema: CORE_SET_KEYBIND_SCHEMA as unknown as Record<string, unknown>,
+    risk: 'edit',
+    timeoutS: 300,
   },
 ]);

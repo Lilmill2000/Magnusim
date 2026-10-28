@@ -5197,6 +5197,71 @@ body.is-recording #viewport-gizmo {
 .wiz-plugin-warn { font-size: var(--mg-text-sm); color: var(--mg-warning); }
 .wiz-plugin-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* Settings → Keybinds (KeybindsStep.tsx): the app's keys, then each plugin's, by workspace and group. */
+.wiz-keys { display: flex; flex-direction: column; gap: 16px; }
+.wiz-keys-search {
+  padding: 6px 10px;
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  background: var(--mg-bg);
+  color: var(--mg-text-body);
+  font: inherit;
+  font-size: var(--mg-text-md);
+}
+.wiz-keys-search:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+.wiz-keys-scope { display: flex; flex-direction: column; gap: 6px; }
+.wiz-keys-scope-head { display: flex; align-items: center; gap: 12px; }
+.wiz-keys-scope-title { margin: 0; flex: 1; font-size: var(--mg-text-lg); font-weight: var(--mg-weight-semibold); color: var(--mg-text-strong); }
+.wiz-keys-copy { margin: 0; font-size: var(--mg-text-sm); color: var(--mg-text-tertiary); }
+.wiz-keys-ws-title { margin: 6px 0 0; font-size: var(--mg-text-md); font-weight: var(--mg-weight-semibold); color: var(--mg-text-secondary); }
+.wiz-keys-group-title { margin: 8px 0 4px; font-size: var(--mg-text-xs); font-weight: var(--mg-weight-semibold); color: var(--mg-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.wiz-keys-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--mg-border-subtle); border-radius: var(--mg-radius-md); background: var(--mg-bg); }
+.wiz-keys-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 10px;
+  font-size: var(--mg-text-md);
+  color: var(--mg-text-body);
+}
+.wiz-keys-row + .wiz-keys-row { border-top: 1px solid var(--mg-border-subtle); }
+.wiz-keys-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.wiz-keys-where { font-size: var(--mg-text-xs); color: var(--mg-text-muted); white-space: nowrap; }
+.wiz-keys-keys { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.wiz-keys-kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--mg-border);
+  border-bottom-width: 2px;
+  border-radius: var(--mg-radius-sm);
+  background: var(--mg-surface);
+  color: var(--mg-text-ink);
+  font-family: var(--mg-font-mono);
+  font-size: var(--mg-text-sm);
+  white-space: nowrap;
+}
+.wiz-keys-none { font-size: var(--mg-text-sm); color: var(--mg-text-faint); }
+.wiz-keys-capture {
+  padding: 1px 8px;
+  border: 1px dashed var(--mg-primary);
+  border-radius: var(--mg-radius-sm);
+  background: var(--mg-info-bg);
+  color: var(--mg-primary-ink);
+  font-size: var(--mg-text-sm);
+  white-space: nowrap;
+}
+.wiz-keys-capture:focus-visible { outline: 2px solid var(--mg-focus); outline-offset: 1px; }
+.wiz-keys-actions { display: flex; gap: 6px; justify-content: flex-end; min-width: 0; }
+.wiz-keys-actions .wiz-reset:disabled { opacity: var(--mg-disabled-opacity); cursor: default; }
+/* A key another command has (Replace / Cancel), and a row's last word: Saved, or why not. */
+.wiz-keys-conflict { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--mg-text-sm); color: var(--mg-warning); }
+.wiz-keys-row .wiz-keys-saved,
+.wiz-keys-row .wiz-keys-error { grid-column: 1 / -1; }
+.wiz-keys-saved { margin: 0; font-size: var(--mg-text-sm); color: var(--mg-success-muted); }
+.wiz-keys-error { margin: 0; font-size: var(--mg-text-sm); color: var(--mg-danger); }
+.wiz-keys-reserved summary { cursor: pointer; font-size: var(--mg-text-sm); color: var(--mg-text-secondary); margin: 4px 0; }
+.wiz-keys-reserved .wiz-keys-list { margin-top: 4px; }
+
 /* Settings → Assistant (AssistantStep.tsx): compact blocks; the step scrolls with .wiz-main. */
 .wiz-assistant { display: flex; flex-direction: column; gap: var(--mg-space-3); }
 .wiz-assistant-block { display: flex; flex-direction: column; gap: var(--mg-space-1); }

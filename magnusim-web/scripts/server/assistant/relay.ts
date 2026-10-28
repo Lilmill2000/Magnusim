@@ -153,8 +153,21 @@ export const PAGE_RESULT_CODES: ReadonlySet<string> = new Set([
   'too_large',
   'bad_result',
 ]);
-/** The codes a core page tool's error may carry besides those (core host tools spec 2.6, 5). */
-export const CORE_RESULT_CODES: ReadonlySet<string> = new Set(['person_busy', 'cancelled_by_person', 'not_found', 'deferred', 'no_project', 'unavailable']);
+/**
+ * The codes a core page tool's error may carry besides those (core host tools spec 2.6, 5); the
+ * keybind tools' (src/assistant/keybindTools.ts) are the CAD Part's own keybind tools' words.
+ */
+export const CORE_RESULT_CODES: ReadonlySet<string> = new Set([
+  'person_busy',
+  'cancelled_by_person',
+  'not_found',
+  'deferred',
+  'no_project',
+  'unavailable',
+  'not_asked',
+  'step_declined',
+  'key_taken',
+]);
 const IMAGE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const PLUGIN_KEY = /^[A-Za-z0-9._-]{1,64}$/;
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;

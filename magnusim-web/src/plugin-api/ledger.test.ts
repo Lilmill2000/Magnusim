@@ -99,4 +99,27 @@ describe('plugin UI ledger', () => {
       unregisterIsland('wiz-assistant');
     }
   });
+
+  it("nor Settings → Keybinds (it sets every plugin's keys)", () => {
+    const Host = () => null;
+    const Probe = () => null;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    placeHostOnlyPanel('wiz-keybinds', Host);
+    try {
+      pluginUiFor('ledger-key-grab').replacePanel('wiz-keybinds', Probe);
+      pluginUi.replacePanel('wiz-keybinds', Probe);
+      replacePanel('wiz-keybinds', Probe);
+      expect(islandComponent('wiz-keybinds')).toBe(Host);
+    } finally {
+      warn.mockRestore();
+      unregisterPlugin('ledger-key-grab');
+      unregisterIsland('wiz-keybinds');
+    }
+  });
+
+  it("Magnusim's own registration places every Settings section (CAD's: e2e-cad/cad-app.spec.ts)", async () => {
+    const { registerAllIslands } = await import('../panels/register');
+    expect(() => registerAllIslands()).not.toThrow();
+    for (const id of ['wiz-plugins', 'wiz-assistant', 'wiz-keybinds']) expect(islandComponent(id), id).toBeTruthy();
+  });
 });

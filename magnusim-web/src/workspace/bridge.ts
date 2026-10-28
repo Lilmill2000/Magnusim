@@ -98,6 +98,7 @@ import { isCad } from '../app/edition';
 import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
+import { announcePref, PREFS_CHANNEL } from './prefsChannel';
 
 export const HOST_SDK_MAJOR = 1;
 export const HOST_API_VERSION = '1.8';
@@ -851,21 +852,6 @@ async function api<T>(url: string, init?: { body?: unknown; method?: string }): 
   });
   if (!r.ok) throw await refusal(r);
   return (await r.json().catch(() => ({}))) as T;
-}
-
-/** The app's other tabs hear a plugin's pref changes here (same origin, same browser). */
-const PREFS_CHANNEL = 'magnusim-plugin-prefs';
-
-/** A pref this tab changed: the other tabs' pages of that plugin get a `prefs` event. */
-function announcePref(plugin: string, key: string, value: unknown, from: string): void {
-  if (typeof BroadcastChannel === 'undefined') return;
-  try {
-    const ch = new BroadcastChannel(PREFS_CHANNEL);
-    ch.postMessage({ plugin, key, value, from });
-    ch.close();
-  } catch {
-    /* no other tab hears it; each still reads the file */
-  }
 }
 
 /** An upload this workspace began: where it writes, and how far it has got. */
@@ -2446,7 +2432,7 @@ export class WorkspaceBridge {
     };
   }
 
-  /** Another tab changed a pref of this page's plugin. */
+  /** Another tab, another bridge or Settings changed a pref of this page's plugin. */
   private onPref(data: unknown): void {
     const m = (data || {}) as { plugin?: unknown; key?: unknown; value?: unknown; from?: unknown };
     if (m.plugin !== this.calls.scope.plugin || typeof m.key !== 'string' || m.from === this.calls.prefsFrom) return;

@@ -1,0 +1,28 @@
+key = "keys-demo"
+name = "Keys demo"
+version = "1.0.0"
+api_version = "1.7"
+license = "GPL-3.0-or-later"
+description = "Test plugin with workspace commands (Settings → Keybinds): one workspace lists them, one names a file that is not there"
+authors = "Magnusim"
+
+[[workspaces]]
+key = "board"
+title = "Board"
+icon = "M4 5h16v14H4z M4 9h16"
+entry = "workspace/index.html"
+commands = "workspace/commands.json"
+
+# Its commands file is not there: the plugin still loads, Settings says why.
+[[workspaces]]
+key = "broken"
+title = "Broken"
+icon = "M4 5h16v14H4z"
+entry = "workspace/index.html"
+commands = "workspace/missing.json"
+
+[[study_kinds]]
+key = "board"
+title = "Board"
+icon = "M5 19V5h14v14z M9 9h6v6H9z"
+workspace = "board"

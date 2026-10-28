@@ -230,16 +230,22 @@ export function sharedCommandIds(workspaces: readonly { key: string; file: Comma
 
 /**
  * The person's keys from the plugin's prefs key "keybinds": each known command id with its valid,
- * distinct combos ([] for none). Anything else is left out, so a stale or hand-edited value never
- * stops the rest. The result has no prototype: look ids up in it, a missing one has its defaults.
+ * distinct combos ([] for none). A combo no command may have (the app's keys: app, local and
+ * reserved) is left out, and so is an id whose every combo was (it has its defaults), as the CAD
+ * plugin reads them (its keybinds.ts parseOverrides). Anything else is left out too, so a stale or
+ * hand-edited value never stops the rest. The result has no prototype: look ids up in it, a
+ * missing one has its defaults.
  */
-export function readKeybindOverrides(value: unknown, commands: readonly Pick<Command, 'id'>[]): Record<string, string[]> {
+export function readKeybindOverrides(value: unknown, commands: readonly Pick<Command, 'id'>[], appKeys: AppKeys = APP_KEYS): Record<string, string[]> {
   const out = Object.create(null) as Record<string, string[]>;
   if (!isObject(value)) return out;
   const known = new Set(commands.map((c) => c.id));
+  const taken = new Set([...appKeys.app, ...appKeys.local, ...appKeys.reserved].flatMap((c) => c.keys));
   for (const [id, keys] of Object.entries(value)) {
     if (!known.has(id) || !Array.isArray(keys)) continue;
-    out[id] = [...new Set(keys.filter(isCombo))].slice(0, MAX_KEYS);
+    const valid = [...new Set(keys.filter((k) => isCombo(k) && !taken.has(k)))].slice(0, MAX_KEYS);
+    if (keys.length && !valid.length) continue;
+    out[id] = valid;
   }
   return out;
 }

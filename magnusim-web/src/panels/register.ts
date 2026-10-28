@@ -5,6 +5,7 @@ import { MaterialsPanel } from './materials/MaterialsPanel';
 import { GeometryPanel } from './geometry/GeometryPanel';
 import { MeshInspect, MeshSettings } from './mesh/MeshPanel';
 import { AssistantStep } from './prefs/AssistantStep';
+import { KeybindsStep } from './prefs/KeybindsStep';
 import { PluginsStep } from './prefs/PluginsStep';
 import { RunControl } from './run/RunControl';
 import { SimulationDefaults, SimulationHub } from './simulation/SimulationPanel';
@@ -25,8 +26,9 @@ export function registerAllIslands(): void {
   replacePanel('panel-sim-control', RunControl);
   replacePanel('panel-geometry', GeometryPanel);
   replacePanel('wiz-plugins', PluginsStep);
-  // The host's own: nothing else can replace it (plugin-api).
+  // The host's own: nothing else can replace them (plugin-api).
   placeHostOnlyPanel('wiz-assistant', AssistantStep);
+  placeHostOnlyPanel('wiz-keybinds', KeybindsStep);
 }
 
 export function mountAllIslands(): void {

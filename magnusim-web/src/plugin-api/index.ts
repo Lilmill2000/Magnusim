@@ -116,12 +116,13 @@ export function resolvePanelId(panelId: string): string {
 
 /**
  * Host panels nothing may replace. Settings → Assistant holds the field a provider key is
- * typed into; another component there would see the key. Only placeHostOnlyPanel()
+ * typed into; another component there would see the key. Settings → Keybinds sets every
+ * plugin's keys; another component there could set another plugin's. Only placeHostOnlyPanel()
  * places them: replacePanel() refuses them for every owner, the host's own included,
  * because the host-owned API is on `window` (__CFD_PLUGIN_UI__, __CFD_REPLACE_PANEL__)
  * where any in-page plugin code can call it.
  */
-const HOST_ONLY_PANELS: ReadonlySet<string> = new Set(['wiz-assistant']);
+const HOST_ONLY_PANELS: ReadonlySet<string> = new Set(['wiz-assistant', 'wiz-keybinds']);
 
 function replacePanelFor(owner: string, requestedId: string, Component: ComponentType<IslandProps>): void {
   const panelId = resolvePanelId(requestedId);
