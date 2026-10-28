@@ -243,16 +243,17 @@ test("cad:assistant-workspace-keybinds keybinds: read freely; a change only with
     // The app's own dialog, with the exact change: the person says No first.
     const dialog = page.locator('#modal-confirm');
     await expect(dialog).toBeVisible(STEP);
-    await expect(page.locator('#cf-heading')).toHaveText('The Assistant asks to change a shortcut');
-    await expect(page.locator('#cf-copy')).toHaveText('Set the Rectangle shortcut to Shift+T (it was R)?');
-    await expect(page.locator('#cf-confirm')).toHaveText('Change shortcut');
+    // The wording the app's Settings and its own keybind tool ask with too.
+    await expect(page.locator('#cf-heading')).toHaveText('Change a keybind?');
+    await expect(page.locator('#cf-copy')).toHaveText('Magnusim CAD · Rectangle: R → Shift+T');
+    await expect(page.locator('#cf-confirm')).toHaveText('Change');
     // A stray Enter never answers Yes (review): the guarded dialog takes it as Cancel.
     await page.keyboard.press('Enter');
     await expect(dialog).toBeHidden(STEP);
     expect(await keys()).toEqual(['KeyR']);
     // Asked again: Yes.
     await expect(dialog).toBeVisible(STEP);
-    await expect(page.locator('#cf-copy')).toHaveText('Set the Rectangle shortcut to Shift+T (it was R)?');
+    await expect(page.locator('#cf-copy')).toHaveText('Magnusim CAD · Rectangle: R → Shift+T');
     await page.locator('#cf-confirm').click();
     expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
     expect(await keys()).toEqual(['Shift+KeyT']);
