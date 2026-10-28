@@ -209,7 +209,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
 
   // Tree rows (LeftTree rows inherit .tree-section's 11px/600: the core page computes 11px, which
-  // e2e/cad-p1-document.spec.js reads live; 24px rows, 3px 8px, selected #d7e8ff) and section heads (.geo-head 11px/600 #3a4250).
+  // e2e/cad-p1-document.spec.js reads live; 24px rows, 3px 8px, selected #d7e8ff) and section heads (.geo-head 11px/600 #344054, the core's --mg-text-body).
   const row = tree.locator('[data-feature-row][data-feature-type="extrude"] > .tree-row');
   await expect(tree.locator('[data-feature-row][data-feature-type="extrude"]')).toHaveClass(/selected/);
   expect(await styleOf(row, ['font-size', 'min-height', 'padding-top', 'padding-left', 'background-color', 'border-radius'])).toEqual({
@@ -226,14 +226,14 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   const originIcon = await tree.locator('[data-tree-node="origin"] > .tree-row .tree-ico').boundingBox();
   const planeIcon = await tree.locator('[data-tree-node="origin:top"] > .tree-row .tree-ico').boundingBox();
   expect(planeIcon!.x - originIcon!.x).toBe(18);
-  expect(await styleOf(tree.locator('.geo-head').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '11px', 'font-weight': '600', color: 'rgb(58, 66, 80)' });
+  expect(await styleOf(tree.locator('.geo-head').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '11px', 'font-weight': '600', color: 'rgb(52, 64, 84)' });
   expect(await styleOf(tree, ['background-color', 'border-top-color', 'border-top-left-radius', 'font-size'])).toEqual({
     'background-color': 'rgb(255, 255, 255)',
     'border-top-color': 'rgb(207, 211, 219)',
     'border-top-left-radius': '6px',
     'font-size': '12px',
   });
-  expect(await styleOf(tree.locator('[data-tree-node="origin"] > .tree-row .tw'), ['width', 'color'])).toEqual({ width: '18px', color: 'rgb(106, 113, 128)' });
+  expect(await styleOf(tree.locator('[data-tree-node="origin"] > .tree-row .tw'), ['width', 'color'])).toEqual({ width: '18px', color: 'rgb(102, 112, 133)' });
 
   // Flyout panel (PanelChrome): card, 14px/600 title, slate accent, Done recipe, Delete link.
   const card = frame.locator('[data-cad-panel="feature"]');
@@ -264,9 +264,9 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     'border-top-color': 'rgb(208, 213, 221)',
   });
 
-  // Toolbar (headings 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
-  expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 243, 246)' });
-  expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
+  // Toolbar (headings 10px/700 #667085 --mg-text-muted, bar #f2f4f7 --mg-surface-muted) and chips (600 12px #344054 on white).
+  expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 244, 247)' });
+  expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(102, 112, 133)' });
   // Labelled buttons (P4a: Daniel works on 1280-1920 px screens). At 1600 and at 1280 px every
   // command of the modelling groups is a button inside the frame (v0.5.0 ribbon, Daniel: "yes show
   // the rest as small buttons": nothing in More, nothing folded); the toolbar does not scroll.
