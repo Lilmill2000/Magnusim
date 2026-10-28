@@ -7,13 +7,15 @@
 //  - passAssistantKey keeps that press from every handler of the Part, whichever way it listens
 //    (the window or the document, capture or bubble, an element, React, the keyboard's bindings),
 //    never calls preventDefault (the SDK still forwards it), follows a change at once, leaves a
-//    composing key alone and lets the Set keybind field read it; bootstrap installs it.
+//    composing key alone and lets the Set keybind field read it; bootstrap installs it;
+//  - a combo is the Assistant's (refused, shown as taken) where every press of it is the SDK's:
+//    the number pad's /, - and = by the person's key on /, - or =, held to the SDK's forward too.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createKeyboard, passAssistantKey } from '../../src/app/keyboard';
-import { isAssistantPress } from '../../src/app/keymap';
+import { appClashesIn, comboProblem, defaultKeys, isAssistantCombo, isAssistantPress } from '../../src/app/keymap';
 import { assistantKeysOf, createBridge } from '../../src/lib/bridge';
 import { createFakeWorkspace } from '../fakes/workspace-sdk';
 
@@ -143,6 +145,10 @@ const PRESSES: (KeyboardEventInit & { key: string; code: string })[] = [
   { key: '1', code: 'Numpad1', ctrlKey: true },
   { key: '&', code: 'Digit1', ctrlKey: true },
   { key: 'Enter', code: 'NumpadEnter', altKey: true },
+  { key: '/', code: 'NumpadDivide', altKey: true },
+  { key: '-', code: 'NumpadSubtract', ctrlKey: true, shiftKey: true },
+  { key: '=', code: 'NumpadEqual', altKey: true },
+  { key: '\\', code: 'IntlBackslash', ctrlKey: true },
   { key: 'Enter', code: 'Enter', ctrlKey: true },
   { key: ' ', code: 'Space', ctrlKey: true },
   { key: 'F9', code: 'F9' },
@@ -162,6 +168,8 @@ const KEY_LISTS: (string[] | null)[] = [
   ['Ctrl+Comma', 'Ctrl+Semicolon', 'Ctrl+Period', 'Ctrl+Quote', 'Ctrl+Backslash'],
   ['Ctrl+Digit1', 'Alt+Enter', 'Ctrl+Space', 'Shift+F2', 'Alt+ArrowUp'],
   ['Ctrl+Slash', 'Ctrl+Shift+Slash', 'Ctrl+Shift+Digit7', 'Ctrl+NumpadDivide', 'Ctrl+Minus'],
+  ['Alt+Slash', 'Ctrl+Shift+Minus', 'Alt+Equal'],
+  ['Alt+NumpadDivide', 'Ctrl+IntlBackslash'],
   ['Meta+KeyK', 'ctrl+k', 'Ctrl+Control'],
 ];
 
@@ -275,6 +283,50 @@ describe("the press: the SDK's own rule", () => {
       document.removeEventListener('keydown', docCap, true);
       document.removeEventListener('keydown', docBub);
       document.body.innerHTML = '';
+      host.setKeys(null);
+    }
+  });
+
+  it("a number-pad key that types the same character everywhere is the person's key on it: the SDK forwards every press of it, so it is refused and shows as taken; not the other way, nor the UK \\ key for Backslash", async () => {
+    const appOwn = (combo: string) => `"${combo}" is the app's own key (Open or close the Assistant panel)`;
+    const fitOn = (combo: string) => (id: string) => (id === 'view.fit' ? [combo] : defaultKeys(id));
+    try {
+      for (const [pad, ch, typed] of [
+        ['NumpadDivide', '/', 'Slash'],
+        ['NumpadSubtract', '-', 'Minus'],
+        ['NumpadEqual', '=', 'Equal'],
+      ] as const) {
+        const keys = [`Alt+${typed}`];
+        host.setKeys(keys);
+        const before = host.docks();
+        press({ key: ch, code: pad, altKey: true });
+        await later();
+        expect(host.docks(), pad).toBe(before + 1);
+        expect(isAssistantCombo(`Alt+${pad}`, keys)).toBe(true);
+        expect(comboProblem(`Alt+${pad}`, null, keys)).toBe(appOwn(`Alt+${pad}`));
+        expect(appClashesIn(fitOn(`Alt+${pad}`), keys)).toEqual([{ combo: `Alt+${pad}`, id: 'view.fit', by: appOwn(`Alt+${pad}`) }]);
+        // Other modifiers are another key.
+        expect(comboProblem(`Shift+${pad}`, null, keys)).toBe('');
+        // Not the other way: the person's key on the pad leaves the main key's combo free (it may type another character).
+        expect(isAssistantCombo(`Alt+${typed}`, [`Alt+${pad}`])).toBe(false);
+        expect(comboProblem(`Alt+${typed}`, null, [`Alt+${pad}`])).toBe('');
+      }
+      // The pad's decimal key types "," on many layouts: it stays free with the person's key on Alt+. .
+      expect(comboProblem('Alt+NumpadDecimal', null, ['Alt+Period'])).toBe('');
+      // A UK keyboard's \ by Z is not its Backslash key (that one types #): Show or hide the tree keeps Ctrl+\, which still runs from its own key.
+      const uk = ['Ctrl+IntlBackslash'];
+      host.setKeys(uk);
+      const before = host.docks();
+      press({ key: '#', code: 'Backslash', ctrlKey: true });
+      await later();
+      expect(host.docks()).toBe(before);
+      expect(comboProblem('Ctrl+Backslash', null, uk)).toBe('');
+      expect(appClashesIn(defaultKeys, uk)).toEqual([]);
+      expect(comboProblem('Ctrl+IntlBackslash', null, uk)).toBe(appOwn('Ctrl+IntlBackslash'));
+      // None, or the default (APP_SHORTCUTS has it): nothing more.
+      expect(isAssistantCombo('Alt+NumpadDivide', [])).toBe(false);
+      expect(isAssistantCombo('Ctrl+NumpadDivide', null)).toBe(false);
+    } finally {
       host.setKeys(null);
     }
   });

@@ -4,10 +4,11 @@
 // and sets them at once; a combo another command has asks Replace or Cancel; a combo the browser
 // or Magnusim keeps is refused and says why (the Assistant panel's key the person chose in the
 // app's Settings too: pressed in the field it is refused and stays there, the panel does not open
-// over the dialog; a key of the command it took says so); Reset to default and Clear; Done closes
-// it. Every change goes through the keybinds model (src/app/keybinds.ts): stored in the person's
-// prefs and applied live. openSetKeybind(services, id) opens it; keybindMenuItem(services, id) is
-// the menu item that opens it (the toolbar's right-click menu adds it with one line).
+// over the dialog; a key of the command it took says so, the menu item's hint too); Reset to
+// default and Clear; Done closes it. Every change goes through the keybinds model
+// (src/app/keybinds.ts): stored in the person's prefs and applied live. openSetKeybind(services,
+// id) opens it; keybindMenuItem(services, id) is the menu item that opens it (the toolbar's
+// right-click menu adds it with one line).
 // An in-frame modal <dialog> (lib/modal.ts): no workspace shortcut runs behind it; Tab goes round
 // its controls; Escape closes it.
 // Owner: INTEGRATE.
@@ -251,10 +252,13 @@ export function openSetKeybind(services: AppServices, commandId: string, doc: Do
 export function keybindMenuItem(services: AppServices, commandId: string, label?: string): MenuItem {
   const k = keybindsFor(services);
   const now = k.current(commandId);
+  // A key of it the Assistant panel's key the person chose took: its press opens the panel, as the dialog says too.
+  const taken = k.appClashes().flatMap((c) => (c.id === commandId ? [k.display(c.combo)] : []));
+  const app = taken.length ? ` (${listWords(taken)} ${taken.length === 1 ? 'opens' : 'open'} the app's Assistant panel instead)` : '';
   return {
     id: label ? `set-keybind-${commandId}` : 'set-keybind',
     label: label ?? SET_KEYBIND_LABEL,
-    hint: now.length ? `Now ${keysWords(k, commandId)}: press new keys, Reset to default or Clear` : 'No key now: press the keys you want',
+    hint: now.length ? `Now ${keysWords(k, commandId)}${app}: press new keys, Reset to default or Clear` : 'No key now: press the keys you want',
     disabled: k.entry(commandId) ? null : 'This command has no keybind',
     run: () => void openSetKeybind(services, commandId),
   };

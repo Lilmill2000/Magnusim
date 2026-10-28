@@ -537,6 +537,16 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     keys = [];
     expect((await t.ok('workspace', W('keybind_get', { target: 'view.fit' }))).data.assistant_panel_keys).toBe('none');
     expect((await t.ok('workspace', W('keybind_reset', { target: 'edit.undo', person_asked: true }))).text).toBe('Undo (model): Ctrl+Z (was Ctrl+U)');
+    // The number pad's / with Alt is the panel's while its key is Alt+/ (the SDK forwards that press by the "/" it types).
+    expect(k.setKeybind('view.fit', 'Alt+NumpadDivide')).toMatchObject({ ok: true });
+    keys = ['Alt+Slash'];
+    const asked = t.ws.log.confirms.length;
+    const pad = await t.call('workspace', W('keybind_set', { target: 'sketch.circle', value: 'Alt+NumpadDivide', person_asked: true }));
+    expect(!pad.ok && pad.error.message).toBe(`bad_input: value: ${own('Alt+NumpadDivide')}.`);
+    expect(t.ws.log.confirms.length).toBe(asked);
+    expect(k.current('sketch.circle')).toEqual(['KeyC']);
+    const padFit = await t.ok('workspace', W('keybind_get', { target: 'view.fit' }));
+    expect(padFit.data.keybind).toMatchObject({ keys: ['Alt+NumpadDivide'], taken_by_app: [{ key: 'Alt+NumpadDivide', why: `${own('Alt+NumpadDivide')}, so it does not run Fit here` }] });
   });
 
   it('keybind_set without person_asked is refused (not_asked): nothing changes, no question', async () => {

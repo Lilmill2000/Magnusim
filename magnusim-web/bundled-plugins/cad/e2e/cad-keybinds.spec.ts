@@ -15,7 +15,8 @@
 //    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish);
 //  - the app's Assistant panel key the person chose in the app's Settings (Ctrl+K): typed in the Part
 //    it opens and closes the app's panel, Set keybind refuses it in the app's words, and a command
-//    whose stored key it is does not run on it; changed while the Part is open, it applies at once.
+//    whose stored key it is does not run on it and its button names no key; changed while the Part
+//    is open, it applies at once.
 // The keybinds are the user's pref on the server every test shares: both run in the serial phase, and put it back
 // (the Assistant panel's key is the app's pref, the same for every test: those tests put it back too).
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -452,6 +453,8 @@ async function dockStaysShut(page: Page) {
   await expect(dock(page)).toBeHidden();
 }
 const APP_OWN_CTRL_K = `"Ctrl+KeyK" is the app's own key (Open or close the Assistant panel)`;
+/** The key Rectangle's sketch toolbar button names (its tooltip's, as aria-keyshortcuts), or null. */
+const rectangleKeyShown = (frame: FrameLocator) => frame.locator('[data-cad-toolbar="sketch"] [data-command="sketch.rectangle"]').first().getAttribute('aria-keyshortcuts');
 
 test("cad:keybinds-assistant-key the Assistant panel's key the person chose (Ctrl+K) opens and closes the app's panel from the Part; Set keybind refuses it in the app's words; Rectangle, whose stored key it is, does not run on it", { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(180_000);
@@ -480,8 +483,11 @@ test("cad:keybinds-assistant-key the Assistant panel's key the person chose (Ctr
     await dlg.locator('[data-keybind-action="done"]').click();
     await expect(dlg).toHaveCount(0);
 
-    // In a sketch: Ctrl+K opens the panel with the keyboard in it, and Rectangle does not start.
+    // In a sketch: Rectangle's button names no key (its Ctrl+K opens the panel)...
     await enterSketchOnTop(frame);
+    expect(await rectangleKeyShown(frame)).toBeNull();
+    expect(await shownOf(page, 'sketch.rectangle')).toBeNull();
+    // ...and Ctrl+K opens the panel with the keyboard in it, and Rectangle does not start.
     await page.keyboard.press('l');
     await expect.poll(() => toolNow(page)).toBe('line');
     await page.keyboard.press('Control+KeyK');
@@ -525,7 +531,8 @@ test("cad:keybinds-assistant-key-live the Assistant panel's key changed in Setti
     await enterSketchOnTop(frame);
     await page.keyboard.press('l');
     await expect.poll(() => toolNow(page)).toBe('line');
-    // The panel has its default key: Ctrl+K is Rectangle's.
+    // The panel has its default key: Ctrl+K is Rectangle's, and its button says so.
+    expect(await rectangleKeyShown(frame)).toBe('Control+K');
     await page.keyboard.press('Control+KeyK');
     await expect.poll(() => toolNow(page)).toBe('rectangle-corner');
     await page.keyboard.press('l');
@@ -534,6 +541,8 @@ test("cad:keybinds-assistant-key-live the Assistant panel's key changed in Setti
     // Settings (another tab) gives the panel Ctrl+K: the open Part takes it without reopening.
     await setAssistantKeys(page, request, ['Ctrl+KeyK']);
     await expect.poll(() => assistantKeysInPart(page)).toEqual(['Ctrl+KeyK']);
+    // Rectangle's button stops naming Ctrl+K at once.
+    await expect.poll(() => rectangleKeyShown(frame)).toBeNull();
     await page.keyboard.press('Control+KeyK');
     await expect(dock(page)).toBeVisible();
     await expect.poll(() => keyboardInDock(page)).toBe(true);
@@ -546,6 +555,7 @@ test("cad:keybinds-assistant-key-live the Assistant panel's key changed in Setti
     // Back to its default: Rectangle's stored Ctrl+K works again, and Ctrl+/ opens and closes the panel.
     await setAssistantKeys(page, request, null);
     await expect.poll(() => assistantKeysInPart(page)).toBeNull();
+    await expect.poll(() => rectangleKeyShown(frame)).toBe('Control+K');
     await page.keyboard.press('Control+KeyK');
     await expect.poll(() => toolNow(page)).toBe('rectangle-corner');
     await dockStaysShut(page);

@@ -63,8 +63,8 @@ export const ASSISTANT_PANEL = 'Open or close the Assistant panel';
  *    on macOS, the number pad's / too) opens or closes the Assistant panel; inside the frame the SDK
  *    forwards it unless the page calls preventDefault. No default and no keybind may take one.
  *    These are the published defaults: the panel's key the person chose in Settings → Keybinds
- *    (ws.context.assistantKeys) is refused as well while it is theirs (refusal's `assistant`),
- *    and its press is the app's (isAssistantPress).
+ *    (ws.context.assistantKeys) is refused as well while it is theirs (isAssistantCombo: the
+ *    number pad's / when theirs is on /, as here), and its press is the app's (isAssistantPress).
  *  - local: keys the app acts on only while something of its own is open; a page may use them.
  *    Keys typed in the Part never reach the host: Escape is CAD's built-in cancel key
  *    (BUILT_IN_KEYS), never a command's key.
@@ -263,6 +263,17 @@ const PUNCT: Readonly<Record<string, string>> = Object.freeze({
   IntlBackslash: '\\',
 });
 const CODE_OF_CHAR: Readonly<Record<string, string>> = Object.freeze({ ...Object.fromEntries(Object.entries(PUNCT).filter(([c]) => c !== 'IntlBackslash').map(([c, ch]) => [ch, c])), ' ': 'Space' });
+/**
+ * The number pad's keys that type the same character on every layout, and the key that types it on
+ * a US keyboard: a press of one is read by that character too (combosOf), so it is that key as well
+ * wherever a press counts by the character (the Assistant panel's key: isAssistantCombo). Not the
+ * number pad's decimal key: it types "," on many layouts.
+ */
+const PAD_TYPES: ReadonlyMap<string, string> = new Map([
+  ['NumpadDivide', 'Slash'],
+  ['NumpadSubtract', 'Minus'],
+  ['NumpadEqual', 'Equal'],
+]);
 
 /**
  * Every key code a keybind can name: exactly the host's set (its KEY_CODES), the codes a press gives
@@ -496,12 +507,31 @@ export const appUseOf = (combo: string): string | null => APP_SHORTCUTS.app.find
 const builtInUseOf = (combo: string): string | null => BUILT_IN_KEYS.find((g) => g.keys.includes(combo))?.label ?? null;
 
 /**
+ * Whether a combo in the registry's form is the Assistant panel's key the person chose (`assistant`:
+ * ws.context.assistantKeys; null while it has its default, which APP_SHORTCUTS.app holds, [] none):
+ * one of theirs, or a number-pad key typing the same character as one (PAD_TYPES), since the SDK
+ * forwards a press by the character it types too: with theirs on Alt+/ the number pad's / with Alt
+ * opens the panel, whatever the layout, so a command on Alt+NumpadDivide would never run. Only that
+ * way round: the / key may type another character on another layout. And a UK keyboard's \ key by
+ * Z (IntlBackslash) is not its Backslash key: with theirs on Ctrl+IntlBackslash, a command on
+ * Ctrl+Backslash still runs from its own key.
+ */
+export function isAssistantCombo(combo: string, assistant: readonly string[] | null): boolean {
+  if (!assistant?.length) return false;
+  if (assistant.includes(combo)) return true;
+  const parts = combo.split('+');
+  const typed = PAD_TYPES.get(parts.pop() ?? '');
+  return !!typed && assistant.includes([...parts, typed].join('+'));
+}
+
+/**
  * Why a combo in the registry's form is the app's, the browser's or CAD's own ("" when it is free to
  * use), in the host contract's words. `assistant`: the Assistant panel's keys the person chose
- * (ws.context.assistantKeys; null while it has its default, [] none), the app's own as well.
+ * (ws.context.assistantKeys; null while it has its default, [] none), the app's own as well
+ * (isAssistantCombo).
  */
 function refusal(c: string, assistant: readonly string[] | null = null): string {
-  const app = appUseOf(c) ?? (assistant?.includes(c) ? ASSISTANT_PANEL : null);
+  const app = appUseOf(c) ?? (isAssistantCombo(c, assistant) ? ASSISTANT_PANEL : null);
   if (app) return `${q(c)} is the app's own key (${app})`;
   const r = RESERVED[c];
   if (r) return `${q(c)} is kept for the browser and the system (${r})`;

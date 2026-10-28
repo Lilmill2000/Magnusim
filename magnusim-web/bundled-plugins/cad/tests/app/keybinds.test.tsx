@@ -7,7 +7,7 @@
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCommandRegistry } from '../../src/app/commands';
-import { bindCommandKeys, createKeybinds, KEYBINDS_PREF, keybindsFor, parseOverrides, setKeybindsFor, type AssistantKeysSource } from '../../src/app/keybinds';
+import { bindCommandKeys, createKeybinds, KEYBINDS_PREF, keybindsFor, keyLabel, parseOverrides, setKeybindsFor, type AssistantKeysSource } from '../../src/app/keybinds';
 import { bindCommandShortcuts, createKeyboard } from '../../src/app/keyboard';
 import type { PrefsApi } from '../../src/lib/bridge';
 import { createStateStore } from '../../src/lib/store';
@@ -569,5 +569,61 @@ describe("the Assistant panel's key the person chose (the app's Settings → Key
         await flush();
       });
     }
+  });
+
+  it("no tooltip, menu or hint names a key the panel's key took: shown and via skip it (the next key, else none), the menu item says so; current() keeps it, and a move applies at once", async () => {
+    const a = assistantKeys(['Ctrl+KeyK', 'Ctrl+KeyY']);
+    const p = memoryPrefs({ [KEYBINDS_PREF]: { 'sketch.rectangle': ['Ctrl+KeyK'] } });
+    const keybinds = createKeybinds({ prefs: p.api, layout: false, assistant: a.api });
+    await keybinds.ready;
+    let services: AppServices | null = null;
+    const commands = createCommandRegistry(() => services!, keybinds);
+    services = { commands, bridge: { prefs: p.api, ...a.api } } as unknown as AppServices;
+    setKeybindsFor(services, keybinds);
+    commands.register({ id: 'sketch.rectangle', label: 'Rectangle', mode: 'sketch', run: () => {} });
+    const told = vi.fn();
+    commands.subscribe(told);
+    // Rectangle's only key is the panel's: its toolbar tooltip, menus and aria-keyshortcuts name none; the stored key stays.
+    expect(commands.get('sketch.rectangle')!.shortcut).toBeUndefined();
+    expect(keyLabel(services, 'sketch.rectangle')).toBeUndefined();
+    expect(keybinds.current('sketch.rectangle')).toEqual(['Ctrl+KeyK']);
+    expect(keybindMenuItem(services, 'sketch.rectangle').hint).toBe("Now Ctrl+K (Ctrl+K opens the app's Assistant panel instead): press new keys, Reset to default or Clear");
+    // Redo's first key is the panel's: its next one shows.
+    expect(keybinds.shown('edit.redo')).toBe('Ctrl+Shift+Z');
+    expect(keybindMenuItem(services, 'edit.redo').hint).toBe("Now Ctrl+Y or Ctrl+Shift+Z (Ctrl+Y opens the app's Assistant panel instead): press new keys, Reset to default or Clear");
+    expect(keybinds.shown('edit.undo')).toBe('Ctrl+Z');
+    // Finish sketch shows Place or finish's Enter while Enter runs it, none once the panel has it.
+    expect(keybinds.shown('sketch.finish')).toBe('Enter');
+    a.move(['Enter']);
+    expect(told).toHaveBeenCalled();
+    expect(keybinds.via('sketch.finish')).toBeNull();
+    expect(keybinds.shown('sketch.finish')).toBeUndefined();
+    expect(keybinds.shown('sketch.enter')).toBeUndefined();
+    expect(keybinds.current('sketch.enter')).toEqual(['Enter']);
+    // The number pad's / with Alt is the panel's while its key is Alt+/ (the SDK forwards it by the "/" it types).
+    expect(keybinds.setKeybind('view.fit', 'Alt+NumpadDivide')).toMatchObject({ ok: true, keys: ['Alt+NumpadDivide'] });
+    expect(keybinds.shown('view.fit')).toBe('Alt+NumpadDivide');
+    a.move(['Alt+Slash']);
+    expect(keybinds.shown('view.fit')).toBeUndefined();
+    expect(keybinds.appClashes()).toEqual([{ combo: 'Alt+NumpadDivide', id: 'view.fit', by: appOwn('Alt+NumpadDivide') }]);
+    expect(keybinds.problem('Alt+NumpadDivide')).toBe(appOwn('Alt+NumpadDivide'));
+    expect(keybinds.capture({ key: '/', code: 'NumpadDivide', altKey: true })).toEqual({ kind: 'refused', combo: 'Alt+NumpadDivide', reason: appOwn('Alt+NumpadDivide') });
+    // Moved away in Settings: every key shows again at once, and the toolbar hears it.
+    told.mockClear();
+    a.move(['F9']);
+    expect(told).toHaveBeenCalled();
+    expect(commands.get('sketch.rectangle')!.shortcut).toBe('Ctrl+K');
+    expect(keybinds.shown('edit.redo')).toBe('Ctrl+Y');
+    expect(keybinds.shown('sketch.finish')).toBe('Enter');
+    expect(keybinds.shown('view.fit')).toBe('Alt+NumpadDivide');
+    expect(keybindMenuItem(services, 'sketch.rectangle').hint).toBe('Now Ctrl+K: press new keys, Reset to default or Clear');
+    // Undo's default Ctrl+Z, while the panel has it; then the panel back to its default (Ctrl+/: no command has it).
+    a.move(['Ctrl+KeyZ']);
+    expect(keybinds.shown('edit.undo')).toBeUndefined();
+    expect(keybinds.shown('sketch.undo')).toBeUndefined();
+    a.move(null);
+    expect(keybinds.shown('edit.undo')).toBe('Ctrl+Z');
+    expect(commands.get('sketch.rectangle')!.shortcut).toBe('Ctrl+K');
+    keybinds.dispose();
   });
 });

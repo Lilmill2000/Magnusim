@@ -15,7 +15,8 @@
 // live). No new key of a command may be one of them (set, replace, reset, the dialog's capture);
 // a stored keybind that is one stays stored (it comes back when the person moves the Assistant's
 // key away again: the host's own Change takes it from the command meanwhile) and shows as taken
-// (appClashes), and the keyboard leaves its press to the app (keyboard.ts passAssistantKey).
+// (appClashes), and the keyboard leaves its press to the app (keyboard.ts passAssistantKey), so
+// no tooltip, menu or hint names it as the command's (shown, via).
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Bridge, PrefsApi } from '../lib/bridge';
@@ -30,6 +31,7 @@ import {
   conflictsIn,
   defaultKeys,
   displayCombo,
+  isAssistantCombo,
   KEYMAP,
   keymapEntry,
   normaliseCombo,
@@ -103,9 +105,13 @@ export interface Keybinds {
   assistantKeys(): readonly string[] | null;
   /** Keys commands have now that no command's key may be (a stored keybind the person's Assistant key took): its press is the app's. */
   appClashes(): { combo: string; id: string; by: string }[];
-  /** The first key's words for a command's tooltip (Finish sketch: Place or finish's), or undefined. */
+  /**
+   * The words of a command's first key that runs it, for its tooltips, menus and hints (Finish
+   * sketch: Place or finish's), or undefined. Never a key the Assistant panel's key the person chose
+   * took (appClashes: its press opens the panel); current() still has it.
+   */
   shown(id: string): string | undefined;
-  /** A command with no key of its own whose tooltip shows another one's (Finish sketch: Enter, through Place or finish), or null. */
+  /** A command with no key of its own whose tooltip shows another one's (Finish sketch: Enter, through Place or finish; as shown() reads it), or null. */
   via(id: string): { id: string; label: string; shown: string } | null;
   /** The commands and actions that have `combo` now, in any context. */
   owners(combo: string): string[];
@@ -191,6 +197,12 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
   const keysOf = (id: string): readonly string[] => over[id] ?? defaultKeys(id);
   // The Assistant panel's keys the person chose, read live from the bridge (null: its default).
   const assistantKeys = (): readonly string[] | null => o.assistant?.assistantKeys() ?? null;
+  // A command's keys whose press runs it: not one the Assistant panel's key took (its press is the
+  // app's), so a tooltip never names a key that opens the panel instead.
+  const working = (id: string): readonly string[] => {
+    const a = assistantKeys();
+    return a?.length ? keysOf(id).filter((c) => !isAssistantCombo(c, a)) : keysOf(id);
+  };
   const merged = (base: Record<string, string[]>): Record<string, string[]> => {
     const out: Record<string, string[]> = resetAllPending ? {} : { ...base };
     for (const [id, v] of dirty) {
@@ -374,8 +386,11 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
 
   const via = (id: string) => {
     const v = SHOWN_VIA[id];
-    if (!v || keysOf(id).length || !keysOf(v).length) return null;
-    return { id: v, label: keymapEntry(v)?.label ?? v, shown: displayCombo(keysOf(v)[0], layout) };
+    // A command with a key of its own never shows another one's, even one the panel's key took.
+    if (!v || keysOf(id).length) return null;
+    const w = working(v);
+    if (!w.length) return null;
+    return { id: v, label: keymapEntry(v)?.label ?? v, shown: displayCombo(w[0], layout) };
   };
   return {
     ready,
@@ -394,7 +409,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
     appClashes: () => appClashesIn(keysOf, assistantKeys()),
     shown(id) {
       if (!keymapEntry(id)) return undefined;
-      const k = keysOf(id);
+      const k = working(id);
       if (k.length) return displayCombo(k[0], layout);
       return via(id)?.shown;
     },
