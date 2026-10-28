@@ -38958,6 +38958,21 @@ window.__CFD_THEME__ = {
     renderPaneNow(pane);
     return viewPixel(pane.canvas, x, y);
   },
+  /** RGB bytes, row by row, of a box of the view as the screen shows it (canvas pixels). */
+  screenBox: (x, y, w, h) => {
+    const pane = capturePanes()[0];
+    if (!pane) return null;
+    renderPaneNow(pane);
+    const c = document.createElement('canvas');
+    c.width = pane.canvas.width;
+    c.height = pane.canvas.height;
+    const g = c.getContext('2d');
+    g.drawImage(pane.canvas, 0, 0);
+    const d = g.getImageData(x, y, w, h).data;
+    const rgb = [];
+    for (let i = 0; i < d.length; i += 4) rgb.push(d[i], d[i + 1], d[i + 2]);
+    return rgb;
+  },
   capturePixel: (x, y) => {
     const ctx = captureForTest();
     return ctx ? Array.from(ctx.getImageData(x, y, 1, 1).data.slice(0, 3)) : null;
