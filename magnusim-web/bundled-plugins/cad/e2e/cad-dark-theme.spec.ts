@@ -489,23 +489,72 @@ test.describe("E2: a mark's colour follows what is under it", () => {
   };
   /**
    * Of samples along a model segment (t from t0 to t1), the share where the pixel nearest the
-   * wanted ink is within `tol` of it and (`nearer`) nearer it than the other ink is to its own
-   * nearest pixel. A one-pixel line is a blend: only the first holds (a light blend of a dark ink
-   * may come near a light one).
+   * wanted ink is within `tol` of it and nearer it than the other ink is to its own nearest pixel
+   * (a line with whole pixels in its middle; a one-pixel line: blendAlong).
    */
-  const along = async (page: Page, s: Shot, a: V3, b: V3, t0: number, t1: number, want: RGB, not: RGB, r = 2, tol = 18, n = 9, nearer = true) => {
+  const along = async (page: Page, s: Shot, a: V3, b: V3, t0: number, t1: number, want: RGB, not: RGB, r = 2, tol = 18, n = 9) => {
     const pts: V3[] = Array.from({ length: n }, (_, i) => {
       const t = t0 + ((t1 - t0) * i) / (n - 1);
       return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] as V3;
     });
     const xy = await onPage(page, pts);
     const d = xy.map((p) => nearest(s, p, [want, not], r));
-    return { share: d.filter(([w, o]) => w <= tol && (!nearer || w < o)).length / n, d: d.map(([w, o]) => `${w}/${o}`).join(' ') };
+    return { share: d.filter(([w, o]) => w <= tol && w < o).length / n, d: d.map(([w, o]) => `${w}/${o}`).join(' ') };
   };
   const at1 = async (page: Page, s: Shot, p: V3, want: RGB, not: RGB, r = 1.5, tol = 18) => {
     const [xy] = await onPage(page, [p]);
     const [w, o] = nearest(s, xy, [want, not], r);
     return { ok: w <= tol && w < o, d: `${w}/${o}` };
+  };
+  /** How far a colour is from the blends of `ink` with `under` (the segment between them in RGB). */
+  const offBlend = (c: RGB, under: RGB, ink: RGB) => {
+    const d = [0, 1, 2].map((k) => ink[k] - under[k]);
+    const t = Math.max(0, Math.min(1, [0, 1, 2].reduce((sum, k) => sum + (c[k] - under[k]) * d[k], 0) / Math.max(1, d.reduce((sum, v) => sum + v * v, 0))));
+    return Math.hypot(...[0, 1, 2].map((k) => c[k] - (under[k] + t * d[k])));
+  };
+  /**
+   * Of samples along a model segment, the share where the line's plainest pixel (within `r` CSS px,
+   * the one farthest from `under`, what is under the line) lies on the blends of `want` with `under`
+   * rather than on those of `not`. A one-device-pixel line (the measure's: MSAA draws it as a 1 px
+   * band, so half of each of two pixel rows when it falls between them) is a blend whatever its
+   * coverage: this asks which ink it is a blend of, not how much of it a pixel holds.
+   */
+  const blendAlong = async (page: Page, s: Shot, a: V3, b: V3, t0: number, t1: number, want: RGB, not: RGB, under: RGB, r = 1.5, n = 9) => {
+    const pts: V3[] = Array.from({ length: n }, (_, i) => {
+      const t = t0 + ((t1 - t0) * i) / (n - 1);
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] as V3;
+    });
+    const xy = await onPage(page, pts);
+    const d = xy.map(([px, py]) => {
+      const cx = (px - s.clip.x) * s.k;
+      const cy = (py - s.clip.y) * s.k;
+      const R = Math.ceil(r * s.k);
+      let best: RGB = under;
+      let far = -1;
+      for (let dy = -R; dy <= R; dy++)
+        for (let dx = -R; dx <= R; dx++) {
+          const x = Math.round(cx + dx);
+          const y = Math.round(cy + dy);
+          if (x < 0 || y < 0 || x >= s.img.width || y >= s.img.height) continue;
+          const i = 4 * (y * s.img.width + x);
+          const c: RGB = [s.img.data[i], s.img.data[i + 1], s.img.data[i + 2]];
+          const f = Math.hypot(...[0, 1, 2].map((k) => c[k] - under[k]));
+          if (f > far) [best, far] = [c, f];
+        }
+      return { far, w: offBlend(best, under, want), o: offBlend(best, under, not) };
+    });
+    return { share: d.filter((x) => x.far >= 20 && x.w < x.o).length / n, d: d.map((x) => `${Math.round(x.far)}:${Math.round(x.w)}/${Math.round(x.o)}`).join(' ') };
+  };
+  /** The median colour of a 5 x 5 device-pixel patch at a model point (a face's colour clear of every mark). */
+  const patchAt = async (page: Page, s: Shot, p: V3): Promise<RGB> => {
+    const [[px, py]] = await onPage(page, [p]);
+    const all: RGB[] = [];
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        const i = 4 * (Math.round((py - s.clip.y) * s.k + dy) * s.img.width + Math.round((px - s.clip.x) * s.k + dx));
+        all.push([s.img.data[i], s.img.data[i + 1], s.img.data[i + 2]]);
+      }
+    return [0, 1, 2].map((k) => all.map((c) => c[k]).sort((x, y) => x - y)[12]) as RGB;
   };
   const rgbOf = (n: number): RGB => [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   const palette = (page: Page) => workspaceFrame(page).evaluate(() => {
@@ -951,11 +1000,13 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     const m2 = await at1(page, s, [62, 32, 20], measure, measureFace);
     expect(m1.ok, `the measure's end on the face: ${m1.d}`).toBe(true);
     expect(m2.ok, `the measure's end beside it: ${m2.d}`).toBe(true);
-    // Its line is one device pixel wide (a blend of its ink and what is under it): only the face ink
-    // comes within 70 of itself over the face (the dark ink's blends there are 117 and more from it),
-    // and only the dark ink over the background (the face ink's blends there are as far).
-    const lineFace = await along(page, s, [12, 32, 20], [62, 32, 20], 0.15, 0.45, measureFace, measure, 1.5, 70, 9, false);
-    const lineGround = await along(page, s, [12, 32, 20], [62, 32, 20], 0.7, 0.85, measure, measureFace, 1.5, 70, 9, false);
+    // Its line is one device pixel wide, a blend of its ink and what is under it however it falls on
+    // the pixel rows (review: a nearness test passed or failed on that): over the face a blend of the
+    // face ink with the face, over the background of the dark ink with the background.
+    const faceColour = await patchAt(page, s, [27, 36, 20]);
+    const lineFace = await blendAlong(page, s, [12, 32, 20], [62, 32, 20], 0.15, 0.45, measureFace, measure, faceColour);
+    const lineGround = await blendAlong(page, s, [12, 32, 20], [62, 32, 20], 0.7, 0.85, measure, measureFace, DARK_BG);
+    console.log(`[dark-follows-face-marks] face ${faceColour}; the measure line over it ${lineFace.d}; over the background ${lineGround.d}`);
     expect(lineFace.share, `the measure line over the face: ${lineFace.d}`).toBeGreaterThanOrEqual(0.6);
     expect(lineGround.share, `the measure line over the background: ${lineGround.d}`).toBeGreaterThanOrEqual(0.6);
     await frame.locator('[data-cad-panel="tool"] [data-panel-done]').click();
