@@ -32,6 +32,9 @@
 //                                    not_asked), and the person's Yes in the app's own confirm
 //                                    dialog, every time (No: step_declined, nothing changes). A key
 //                                    another command has is key_taken unless items ["replace"].
+//                                    A key the app keeps is refused before any question, the
+//                                    Assistant panel's key the person chose too (a default it took
+//                                    cannot be reset to); a row says when a key of it is that key.
 //   The person's view (fit, standard_view, normal_to, orbit_pivot, section, projection, display):
 //     only with person_asked (the person asked in this request), else only while the camera latch
 //     says they have not moved the view in this request (camera.ts); never while a pointer is held
@@ -41,7 +44,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { keybindsFor, whereName, type Keybinds } from '../../app/keybinds';
 import { keybindPlace } from '../../ui/keybinds/places';
-import { comboProblem, parseCombo, type KeymapEntry } from '../../app/keymap';
+import { parseCombo, type KeymapEntry } from '../../app/keymap';
 import { modeFor } from '../../sketch/mode';
 import { constructShown } from '../../features/refgeom/scene';
 import { stepFileName } from '../../features/export/panel';
@@ -811,11 +814,16 @@ function nameOf(k: Keybinds, e: KeymapEntry): string {
   return twin ? whereName(e.id) : e.label;
 }
 
-/** One command's row: its keys (as stored), as they read, whether they are its defaults, and the key its tooltip shows when it has none of its own. */
+/**
+ * One command's row: its keys (as stored), as they read, whether they are its defaults, the key its
+ * tooltip shows when it has none of its own, and a key of it the app has now (the Assistant panel's
+ * key the person chose: pressed in the Part it goes to the app; the Set keybind dialog says so too).
+ */
 function keybindRow(k: Keybinds, e: KeymapEntry) {
   const keys = k.current(e.id);
   const own = k.isDefault(e.id);
   const v = k.via(e.id);
+  const taken = k.appClashes().filter((c) => c.id === e.id);
   return {
     id: e.id,
     label: e.label,
@@ -825,6 +833,7 @@ function keybindRow(k: Keybinds, e: KeymapEntry) {
     default: own,
     ...(own ? {} : { defaults: keysText(k, e.keys) }),
     ...(v ? { via: v } : {}),
+    ...(taken.length ? { taken_by_app: taken.map((c) => ({ key: c.combo, why: `${c.by}, so it does not run ${e.label} here` })) } : {}),
     // Where the person sets it themselves (src/ui/keybinds/places.ts).
     set_in: keybindPlace(e.id)?.words ?? '',
   };
@@ -843,15 +852,18 @@ async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const loaded = await k.load();
   if (i.action === 'keybind_get') {
     const unknown = loaded === true ? '' : `Not the person's keys: ${loaded}; these are the defaults. `;
-    const known = loaded === true ? {} : { known: false, why: loaded };
+    // The app's Assistant panel key as the person chose it (Settings): no command may have it.
+    const panel = k.assistantKeys();
+    const about = { ...(loaded === true ? {} : { known: false, why: loaded }), assistant_panel_keys: panel === null ? 'Ctrl+/ (its default)' : keysText(k, panel) };
     if (!i.target) {
       const rows = k.entries().map((e) => keybindRow(k, e));
       const set = rows.filter((r) => r.keys.length).length;
-      return done(`${unknown}${rows.length} commands, ${set} with keys (${rows.filter((r) => !r.default).length} changed by the person)`, { keybinds: rows, ...known });
+      return done(`${unknown}${rows.length} commands, ${set} with keys (${rows.filter((r) => !r.default).length} changed by the person)`, { keybinds: rows, ...about });
     }
     const e = keybindEntry(k, i.target);
     const row = keybindRow(k, e);
-    return done(`${unknown}${nameOf(k, e)}: ${row.shown}${row.default ? '' : ` (default ${row.defaults})`}`, { keybind: row, ...known });
+    const taken = row.taken_by_app?.map((t) => `; ${t.why}`).join('') ?? '';
+    return done(`${unknown}${nameOf(k, e)}: ${row.shown}${row.default ? '' : ` (default ${row.defaults})`}${taken}`, { keybind: row, ...about });
   }
   const e = keybindEntry(k, i.target);
   // A change: only when the person explicitly asked in this request, and they confirm it in the app.
@@ -869,7 +881,8 @@ async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
   if (i.action === 'keybind_set') {
     if (!i.value) throw bad('value', 'value: the keys, as "Shift+R", "Ctrl+Alt+K", "F7" or "Delete".');
     const p = parseCombo(i.value);
-    const why = p.ok ? comboProblem(p.combo) : p.why;
+    // The keys no command may have, and the Assistant panel's key the person chose (live).
+    const why = p.ok ? k.problem(p.combo) : p.why;
     if (!p.ok || why) throw bad('value', `value: ${why}.`, { value: i.value });
     keys = [p.combo];
   } else keys = i.action === 'keybind_reset' ? e.keys : [];
@@ -877,6 +890,9 @@ async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
   if (keys.length === plan.was.length && keys.every((c, n) => c === plan.was[n])) {
     return done(`${name} already has ${keys.length ? keysText(k, keys) : 'no key'}: nothing changed`, { keybind: keybindRow(k, e), changed: false });
   }
+  // A default that is the Assistant panel's key the person chose cannot come back: refused before any question.
+  const taken = i.action === 'keybind_reset' ? keys.map((c) => k.problem(c)).find(Boolean) : '';
+  if (taken) throw bad('target', `${name} cannot have its default keys back: ${taken}; nothing changed.`, { target: e.id });
   // Another command's key: refused unless the person said to take it.
   const takerNames = plan.takers.map(whereName);
   if (plan.takers.length && !replace) {

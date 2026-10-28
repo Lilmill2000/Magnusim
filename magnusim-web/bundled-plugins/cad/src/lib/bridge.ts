@@ -3,7 +3,7 @@
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
 // connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
 // Edit in CAD: the geometry a Part edits, its source and its faces; unreleased 1.9:
-// ws.assistant, the tools the Part offers the app's Assistant).
+// ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type {
   AssistantHandler,
@@ -145,6 +145,14 @@ export interface Bridge {
   onLeave: ((handler: LeaveHandler | null) => Promise<void>) | null;
   /** The app's Assistant (unreleased 1.9, `ws.assistant`); null on a host whose SDK has none. */
   assistant: CadAssistantBridge | null;
+  /**
+   * The keys of the app's Assistant panel the person chose in Settings → Keybinds (unreleased 1.9,
+   * ws.context.assistantKeys): their combos as the host sent them, [] when they left it no key;
+   * null for its default (Ctrl+/ by the character "/"), and on an older host. Read live.
+   */
+  assistantKeys(): readonly string[] | null;
+  /** Hear the person change them (the host's `assistantKeys` event); a no-op on an older host. */
+  onAssistantKeys(fn: (keys: readonly string[] | null) => void): () => void;
   /** The host's bridge API is at least `major.minor` (`hostVersion`, compared as numbers). */
   hostAtLeast(major: number, minor: number): boolean;
   spawnWorker(url: string | URL): Worker;
@@ -197,11 +205,35 @@ export function assistantOf(ws: Workspace): CadAssistantBridge | null {
   };
 }
 
+/**
+ * The Assistant panel's keys as the SDK reads what the host sent (its assistantKeysOf): the text
+ * ones of a list (each once), or null for the default. Kept as sent: the SDK forwards a press by
+ * these very strings, and the host writes them as CAD stores a combo ("Ctrl+KeyK").
+ */
+export function assistantKeysOf(v: unknown): readonly string[] | null {
+  return Array.isArray(v) ? Object.freeze([...new Set(v.filter((k): k is string => typeof k === 'string'))]) : null;
+}
+
 export function createBridge(ws: Workspace): Bridge {
   let units: UnitSystem = ws.context.units;
   ws.on('units', (u) => {
     units = u;
   });
+  // The Assistant panel's keys (unreleased 1.9): the welcome's context.assistantKeys, then each
+  // change the host sends (the `assistantKeys` event). A host whose welcome has no assistantKeys
+  // has no such keys and sends no event: the default, as before.
+  let assistantKeys = assistantKeysOf(ws.context.assistantKeys);
+  const keyListeners = new Set<(keys: readonly string[] | null) => void>();
+  if ('assistantKeys' in ws.context) {
+    try {
+      ws.on('assistantKeys', (keys) => {
+        assistantKeys = assistantKeysOf(keys);
+        for (const fn of [...keyListeners]) fn(assistantKeys);
+      });
+    } catch (err) {
+      console.warn('[cad] the assistantKeys event is not heard; the keys the Part opened with apply', err);
+    }
+  }
   const host12 = versionAtLeast(ws.context.hostVersion, 1, 2);
   const maybeFiles = (ws as unknown as { files?: Partial<WsFilesApi> }).files;
   // Feature detection (compatibility.md 1.2): the host says 1.2 or newer, and the
@@ -253,6 +285,13 @@ export function createBridge(ws: Workspace): Bridge {
   return {
     context: ws.context,
     assistant: assistantOf(ws),
+    assistantKeys: () => assistantKeys,
+    onAssistantKeys(fn) {
+      keyListeners.add(fn);
+      return () => {
+        keyListeners.delete(fn);
+      };
+    },
     studyId: ws.context.study.id,
     units: () => units,
     onUnits: (fn) => ws.on('units', fn),

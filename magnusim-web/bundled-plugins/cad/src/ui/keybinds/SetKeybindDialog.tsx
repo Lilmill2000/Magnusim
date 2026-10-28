@@ -2,10 +2,13 @@
 // keybind that shows the current keybind and also lets me change it"). It shows the command's
 // keys now, waits for the new ones ("Press the new keys", read by their place on the keyboard),
 // and sets them at once; a combo another command has asks Replace or Cancel; a combo the browser
-// or Magnusim keeps is refused and says why; Reset to default and Clear; Done closes it. Every
-// change goes through the keybinds model (src/app/keybinds.ts): stored in the person's prefs and
-// applied live. openSetKeybind(services, id) opens it; keybindMenuItem(services, id) is the menu
-// item that opens it (the toolbar's right-click menu adds it with one line).
+// or Magnusim keeps is refused and says why (the Assistant panel's key the person chose in the
+// app's Settings too: pressed in the field it is refused and stays there, the panel does not open
+// over the dialog; a key of the command it took says so, the menu item's hint too); Reset to
+// default and Clear; Done closes it. Every change goes through the keybinds model
+// (src/app/keybinds.ts): stored in the person's prefs and applied live. openSetKeybind(services,
+// id) opens it; keybindMenuItem(services, id) is the menu item that opens it (the toolbar's
+// right-click menu adds it with one line).
 // An in-frame modal <dialog> (lib/modal.ts): no workspace shortcut runs behind it; Tab goes round
 // its controls; Escape closes it.
 // Owner: INTEGRATE.
@@ -69,13 +72,16 @@ export function SetKeybindDialog({ keybinds: k, commandId, onClose }: SetKeybind
   const ref = useRef<HTMLDialogElement>(null);
   const captureRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
-  // Changes made elsewhere (Settings, another tab) show at once too.
+  // Changes made elsewhere (Settings, another tab) show at once too, the Assistant panel's key too.
   const version = useSyncExternalStore(
     (fn) => k.subscribe(fn),
-    () => JSON.stringify(k.current(commandId)),
+    () => JSON.stringify([k.current(commandId), k.appClashes()]),
   );
   const entry = k.entry(commandId);
   const current = keysWords(k, commandId);
+  // A key of this command the app has now (the Assistant panel's key the person chose): its press
+  // goes to the app, so the dialog says so rather than show the key as if it worked.
+  const taken = k.appClashes().filter((c) => c.id === commandId);
   void version;
 
   useEffect(() => {
@@ -156,6 +162,11 @@ export function SetKeybindDialog({ keybinds: k, commandId, onClose }: SetKeybind
           Current: <kbd data-keybind-current="1">{current}</kbd>
           {entry && !k.isDefault(commandId) ? <span className="cad-keybind-default"> (default {entry.keys.length ? entry.keys.map((c) => k.display(c)).join(' or ') : 'none'})</span> : null}
         </p>
+        {taken.map((c) => (
+          <p key={c.combo} className="cad-keybind-taken" data-keybind-taken={c.combo}>
+            {c.by}, so it does not run {entry?.label ?? commandId} here
+          </p>
+        ))}
         <div
           ref={captureRef}
           className="cad-keybind-capture"
@@ -241,10 +252,13 @@ export function openSetKeybind(services: AppServices, commandId: string, doc: Do
 export function keybindMenuItem(services: AppServices, commandId: string, label?: string): MenuItem {
   const k = keybindsFor(services);
   const now = k.current(commandId);
+  // A key of it the Assistant panel's key the person chose took: its press opens the panel, as the dialog says too.
+  const taken = k.appClashes().flatMap((c) => (c.id === commandId ? [k.display(c.combo)] : []));
+  const app = taken.length ? ` (${listWords(taken)} ${taken.length === 1 ? 'opens' : 'open'} the app's Assistant panel instead)` : '';
   return {
     id: label ? `set-keybind-${commandId}` : 'set-keybind',
     label: label ?? SET_KEYBIND_LABEL,
-    hint: now.length ? `Now ${keysWords(k, commandId)}: press new keys, Reset to default or Clear` : 'No key now: press the keys you want',
+    hint: now.length ? `Now ${keysWords(k, commandId)}${app}: press new keys, Reset to default or Clear` : 'No key now: press the keys you want',
     disabled: k.entry(commandId) ? null : 'This command has no keybind',
     run: () => void openSetKeybind(services, commandId),
   };

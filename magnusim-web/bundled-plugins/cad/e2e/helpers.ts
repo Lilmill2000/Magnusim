@@ -477,8 +477,11 @@ async function insideView(page: Page, from: [number, number], to: [number, numbe
   return [from[0] + t * (to[0] - from[0]), from[1] + t * (to[1] - from[1])];
 }
 
-/** No view transition runs, and sketch mode has stored every edit. */
-async function viewAndSketchIdle(page: Page) {
+/**
+ * No view transition runs, and sketch mode has stored every edit. Entering a sketch turns the view
+ * to its plane: a model point's place on the page is read after this, never during the turn.
+ */
+export async function viewAndSketchIdle(page: Page) {
   const f = workspaceFrame(page);
   await expect.poll(() => f.evaluate(() => (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { state: { get(): { animating: boolean } } } | null } } } } }).__CAD__.services.viewport.get().handle?.state.get().animating ?? true)).toBe(false);
   await f.evaluate(async () => {

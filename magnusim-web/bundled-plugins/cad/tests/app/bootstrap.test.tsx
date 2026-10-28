@@ -157,4 +157,46 @@ describe('bootstrap', () => {
     // The line's text is the line alone (review N10).
     expect(document.querySelector('[data-edit-open]')?.textContent).toBe('Vortex CFD Test could not be opened in CAD: The source file of Vortex CFD Test is missing.Try again');
   });
+
+  it("the Assistant panel's key the person chose (unreleased 1.9): no handler of the Part hears it, no command may take it, and a change applies at once", async () => {
+    const ws = createFakeWorkspace({
+      assistant: { docked: true },
+      assistantKeys: ['Ctrl+KeyK'],
+      spawnWorker: () => {
+        const w = new FakeWorker(okHandler());
+        w.ready();
+        return w as unknown as Worker;
+      },
+    });
+    setFakeConnection(ws);
+    const { bootstrap } = await import('../../src/app/bootstrap');
+    const { keybindsFor } = await import('../../src/app/keybinds');
+    const root = document.createElement('div');
+    document.body.append(root);
+    let services: Awaited<ReturnType<typeof bootstrap>> = null;
+    await act(async () => {
+      services = await bootstrap(root);
+    });
+    const k = keybindsFor(services);
+    expect(k.setKeybind('view.fit', 'Ctrl+K')).toMatchObject({ ok: false, reason: 'refused', message: `"Ctrl+KeyK" is the app's own key (Open or close the Assistant panel)` });
+    // Every handler of the Part listens after the one bootstrap adds first.
+    const heard = vi.fn();
+    document.addEventListener('keydown', heard, true);
+    const press = (init: KeyboardEventInit) => document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+    try {
+      press({ key: 'k', code: 'KeyK', ctrlKey: true });
+      expect(heard).not.toHaveBeenCalled();
+      press({ key: 'j', code: 'KeyJ', ctrlKey: true });
+      expect(heard).toHaveBeenCalledTimes(1);
+      // The person moves it in Settings: Ctrl+K is the Part's again, F9 the app's.
+      ws.push('assistantKeys', ['F9']);
+      press({ key: 'k', code: 'KeyK', ctrlKey: true });
+      press({ key: 'F9', code: 'F9' });
+      expect(heard).toHaveBeenCalledTimes(2);
+      expect(k.setKeybind('view.fit', 'Ctrl+K')).toMatchObject({ ok: true, keys: ['Ctrl+KeyK'] });
+    } finally {
+      document.removeEventListener('keydown', heard, true);
+      ws.push('assistantKeys', []);
+    }
+  });
 });

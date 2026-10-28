@@ -502,6 +502,53 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(t.ws.log.confirms).toEqual([]);
   });
 
+  it("the Assistant panel's key the person chose (the app's Settings): keybind_set and keybind_reset refuse it in the host's words before any question; keybind_get says which key it is, and a command's key it took", async () => {
+    const t = await part();
+    const prefs = memoryPrefs();
+    prefs.values.keybinds = { 'view.fit': ['Ctrl+KeyK'], 'edit.undo': ['Ctrl+KeyU'] };
+    let keys: readonly string[] | null = ['Ctrl+KeyK', 'Ctrl+KeyZ'];
+    const k = createKeybinds({ prefs: prefs.api, layout: false, assistant: { assistantKeys: () => keys, onAssistantKeys: () => () => {} } });
+    setKeybindsFor(t.services, k);
+    await k.ready;
+    const own = (c: string) => `"${c}" is the app's own key (Open or close the Assistant panel)`;
+    const set = await t.call('workspace', W('keybind_set', { target: 'sketch.circle', value: 'ctrl+k', person_asked: true }));
+    expect(!set.ok && set.error.message).toBe(`bad_input: value: ${own('Ctrl+KeyK')}.`);
+    // Undo's default Ctrl+Z is that key now: it cannot come back.
+    const reset = await t.call('workspace', W('keybind_reset', { target: 'edit.undo', person_asked: true }));
+    expect(!reset.ok && reset.error.message).toBe(`bad_input: Undo (model) cannot have its default keys back: ${own('Ctrl+KeyZ')}; nothing changed.`);
+    expect(t.ws.log.confirms).toEqual([]);
+    expect(k.current('sketch.circle')).toEqual(['KeyC']);
+    expect(k.current('edit.undo')).toEqual(['Ctrl+KeyU']);
+    // What the person's Set keybind dialog says, the Assistant reads: the panel's keys, and Fit's stored Ctrl+K is the app's now.
+    const fit = await t.ok('workspace', W('keybind_get', { target: 'view.fit' }));
+    expect(fit.text).toBe(`Fit: Ctrl+K (default F); ${own('Ctrl+KeyK')}, so it does not run Fit here`);
+    expect(fit.data.assistant_panel_keys).toBe('Ctrl+K or Ctrl+Z');
+    expect(fit.data.keybind).toMatchObject({ keys: ['Ctrl+KeyK'], taken_by_app: [{ key: 'Ctrl+KeyK', why: `${own('Ctrl+KeyK')}, so it does not run Fit here` }] });
+    const all = await t.ok('workspace', W('keybind_get'));
+    const rows = all.data.keybinds as { id: string; taken_by_app?: unknown[] }[];
+    expect(rows.filter((r) => r.taken_by_app).map((r) => r.id)).toEqual(['view.fit', 'sketch.undo']);
+    expect(all.data.assistant_panel_keys).toBe('Ctrl+K or Ctrl+Z');
+    // The person moved it back to its default, then left it no key.
+    keys = null;
+    const back = await t.ok('workspace', W('keybind_get', { target: 'view.fit' }));
+    expect(back.text).toBe('Fit: Ctrl+K (default F)');
+    expect(back.data.assistant_panel_keys).toBe('Ctrl+/ (its default)');
+    expect(back.data.keybind).not.toHaveProperty('taken_by_app');
+    keys = [];
+    expect((await t.ok('workspace', W('keybind_get', { target: 'view.fit' }))).data.assistant_panel_keys).toBe('none');
+    expect((await t.ok('workspace', W('keybind_reset', { target: 'edit.undo', person_asked: true }))).text).toBe('Undo (model): Ctrl+Z (was Ctrl+U)');
+    // The number pad's / with Alt is the panel's while its key is Alt+/ (the SDK forwards that press by the "/" it types).
+    expect(k.setKeybind('view.fit', 'Alt+NumpadDivide')).toMatchObject({ ok: true });
+    keys = ['Alt+Slash'];
+    const asked = t.ws.log.confirms.length;
+    const pad = await t.call('workspace', W('keybind_set', { target: 'sketch.circle', value: 'Alt+NumpadDivide', person_asked: true }));
+    expect(!pad.ok && pad.error.message).toBe(`bad_input: value: ${own('Alt+NumpadDivide')}.`);
+    expect(t.ws.log.confirms.length).toBe(asked);
+    expect(k.current('sketch.circle')).toEqual(['KeyC']);
+    const padFit = await t.ok('workspace', W('keybind_get', { target: 'view.fit' }));
+    expect(padFit.data.keybind).toMatchObject({ keys: ['Alt+NumpadDivide'], taken_by_app: [{ key: 'Alt+NumpadDivide', why: `${own('Alt+NumpadDivide')}, so it does not run Fit here` }] });
+  });
+
   it('keybind_set without person_asked is refused (not_asked): nothing changes, no question', async () => {
     const { t, k, prefs } = await keybindPart();
     const r = await t.call('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T' }));
