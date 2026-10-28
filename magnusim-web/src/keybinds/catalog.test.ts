@@ -9,9 +9,11 @@ import {
   applyChange,
   ASSISTANT_FROM,
   canResetAll,
+  commandsOf,
   conflictsOf,
   hasOwnKeys,
   isDefault,
+  keptOffFor,
   keptOffText,
   KEYBINDS_PREF,
   keysOf,
@@ -21,6 +23,7 @@ import {
   refusalOf,
   resetAllKeys,
   resetEveryPlugin,
+  resetEveryQuestion,
   SETTINGS_FROM,
   takerName,
   type PluginKeys,
@@ -91,6 +94,9 @@ function refuseWrites(server: ReturnType<typeof fakeKeysServer>, url: string): v
     String(input) === url && init?.method === 'POST' ? new Response(JSON.stringify({ ok: false, error: 'the prefs file is read-only' }), { status: 500 }) : serve(input, init),
   );
 }
+
+/** Every command's keys now, plugin by plugin. */
+const everyKey = (list: readonly PluginKeys[]) => list.map((p) => commandsOf(p).map((c) => [c.id, keysOf(p, c.id)]));
 
 const APP_RESET = "Magnusim (the Assistant panel's key)";
 
@@ -398,6 +404,24 @@ describe("Reset all and the Assistant panel's key", () => {
     resetAppKeysForTests();
     expect([canResetAll(demo), canResetAll(other)]).toEqual([true, false]);
   });
+
+  it("the question names the commands Reset all keeps the panel's key off, as the reset keeps it off", async () => {
+    const { plugins } = await altPlugins({ prefs: { demo: { 'sketch.line': ['KeyK'] }, other: { 'view.fit': [] } }, app: { 'app.assistant': ['Alt+KeyL', 'Alt+KeyE'] } });
+    const asked = plugins.map((p) => keptOffFor(p));
+    expect(asked.map((k) => keptOffText(k, displayCombo))).toEqual(["Alt+L, Alt+E kept off Line, Extrude: the Assistant panel's key.", "Alt+L kept off Fit: the Assistant panel's key."]);
+    for (const [i, p] of plugins.entries()) {
+      const r = await resetAllKeys(p);
+      if (!r.ok) throw new Error(r.message);
+      expect(r.keptOff).toEqual(asked[i]);
+    }
+    // Asked about another key of the panel's, or its defaults: kept off that one, or none.
+    expect(keptOffFor(plugins[0], ['Alt+KeyE']).map((k) => [k.command.id, k.keys])).toEqual([['model.extrude', ['Alt+KeyE']]]);
+    expect(keptOffFor(plugins[0], [])).toEqual([]);
+    resetAppKeysForTests();
+    expect(plugins.map((p) => keptOffFor(p))).toEqual([[], []]);
+    const r = await resetAllKeys(plugins[1]);
+    expect(r.ok && r.keptOff).toEqual([]);
+  });
 });
 
 describe('appKeyRows', () => {
@@ -532,23 +556,26 @@ describe('applyAppChange', () => {
     // Line lost its L elsewhere after the plugins were read.
     server.prefs.demo = { [KEYBINDS_PREF]: { 'sketch.line': ['Alt+KeyL'] } };
     const out = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true }, undefined, ASSISTANT_FROM, true);
-    expect(out.result).toEqual({ ok: false, code: 'changed', id: 'app.assistant', message: 'The keys changed meanwhile; nothing more changed.' });
+    expect(out.result).toEqual({ ok: false, code: 'changed', id: 'app.assistant', message: 'The keys were not saved (the keys changed meanwhile); nothing changed.' });
     expect(server.calls).toEqual([]);
     expect([server.app, assistantKeys()]).toEqual([{}, null]);
     expect(out.plugins).toEqual(plugins);
   });
 
-  it("after the person's Yes, a later plugin whose keys moved stops the change there: the panel's key is not written", async () => {
+  it("after the person's Yes, a later plugin whose keys moved stops the change there, and Demo's command, written first, gets its key back", async () => {
     const { plugins, server } = await altPlugins();
+    const lineBefore = keysOf(plugins[0], 'sketch.line');
     // Fit was given another key elsewhere after the plugins were read.
     server.prefs.other = { [KEYBINDS_PREF]: { 'view.fit': ['Alt+KeyF'] } };
     const out = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true }, undefined, ASSISTANT_FROM, true);
-    expect(out.result).toMatchObject({ ok: false, code: 'changed', message: 'The keys changed meanwhile; nothing more changed.' });
-    // Demo, written first, is as stored; Other and the panel are as they were.
-    expect(server.calls).toEqual([['set', 'demo', { 'sketch.line': ['KeyL'] }]]);
+    expect(out.result).toEqual({ ok: false, code: 'changed', id: 'app.assistant', message: 'The keys were not saved (the keys changed meanwhile); nothing changed.' });
+    // Demo was written, then given its key back; Other and the panel are as they were.
+    expect(server.calls[0]).toEqual(['set', 'demo', { 'sketch.line': ['KeyL'] }]);
+    expect(server.calls).toHaveLength(2);
+    expect(keysOf((await loadPluginKeys()).plugins[0], 'sketch.line')).toEqual(lineBefore);
+    expect(keysOf(out.plugins[0], 'sketch.line')).toEqual(lineBefore);
     expect(server.prefs.other[KEYBINDS_PREF]).toEqual({ 'view.fit': ['Alt+KeyF'] });
     expect([server.app, assistantKeys()]).toEqual([{}, null]);
-    expect(keysOf(out.plugins[0], 'sketch.line')).toEqual(['KeyL']);
     expect(out.plugins[1]).toBe(plugins[1]);
   });
 
@@ -568,7 +595,7 @@ describe('applyAppChange', () => {
     const { plugins, server } = await altPlugins();
     server.failReads = true;
     const taking = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true });
-    expect(taking.result).toEqual({ ok: false, code: 'unread', id: 'app.assistant', message: 'The keys could not be read: the plugin list is not available right now' });
+    expect(taking.result).toEqual({ ok: false, code: 'unread', id: 'app.assistant', message: 'The keys were not saved (the plugin list is not available right now); nothing changed.' });
     server.failReads = false;
     server.failAppReads = true;
     const own = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyK' }, undefined, ASSISTANT_FROM, true);
@@ -586,8 +613,65 @@ describe('applyAppChange', () => {
     const again = await altPlugins();
     refuseWrites(again.server, '/api/plugin-prefs/set');
     const taking = await applyAppChange(again.plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true });
-    expect(taking.result).toEqual({ ok: false, code: 'failed', id: 'app.assistant', message: 'Could not save the keys: the prefs file is read-only' });
+    expect(taking.result).toEqual({ ok: false, code: 'failed', id: 'app.assistant', message: 'The keys were not saved (the prefs file is read-only); nothing changed.' });
     expect([again.server.calls, again.server.app, assistantKeys()]).toEqual([[], {}, null]);
+  });
+
+  it("when the panel's key is not saved after a Replace, the commands it was taken from get their keys back", async () => {
+    // Extrude has Alt+L besides its default: it gets both back, Line and Fit their defaults.
+    const { plugins, server } = await altPlugins({ prefs: { demo: { 'model.extrude': ['Alt+KeyE', 'Alt+KeyL'] } } });
+    refuseWrites(server, '/api/prefs');
+    const out = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true }, displayCombo);
+    expect(out.result).toEqual({ ok: false, code: 'failed', id: 'app.assistant', message: "The panel's key was not saved (the prefs file is read-only); nothing changed." });
+    expect(server.calls).toEqual([
+      ['set', 'demo', { 'sketch.line': ['KeyL'] }],
+      ['set', 'other', { 'view.fit': [] }],
+      ['set', 'demo', { 'model.extrude': ['Alt+KeyE', 'Alt+KeyL'] }],
+      ['remove', 'other', null],
+    ]);
+    // Stored and on this page, every command has the keys it had; the panel keeps its defaults.
+    expect(everyKey(out.plugins)).toEqual(everyKey(plugins));
+    expect(everyKey((await loadPluginKeys()).plugins)).toEqual(everyKey(plugins));
+    expect([server.app, assistantKeys()]).toEqual([{}, null]);
+  });
+
+  it("when the panel's key is not saved and a command cannot get the key back, the words name it", async () => {
+    const { plugins, server } = await altPlugins({ prefs: { demo: { 'model.extrude': ['Alt+KeyE', 'Alt+KeyL'] } } });
+    refuseWrites(server, '/api/prefs');
+    // Fit's default back removes Other's keys, which the app refuses; Demo's are written.
+    refuseWrites(server, '/api/plugin-prefs/remove');
+    const out = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true }, displayCombo);
+    expect(out.result).toMatchObject({
+      ok: false,
+      code: 'failed',
+      id: 'app.assistant',
+      message: "The panel's key was not saved (the prefs file is read-only), and Other · Fit (Everywhere) could not get the key back: change it there.",
+    });
+    // The command left without its key, for whoever reports it (the Assistant says so as it is).
+    expect(out.result.ok === false && 'lost' in out.result ? out.result.lost?.map((t) => t.command.id) : null).toEqual(['view.fit']);
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'model.extrude': ['Alt+KeyE', 'Alt+KeyL'] });
+    expect(server.prefs.other[KEYBINDS_PREF]).toEqual({ 'view.fit': [] });
+    // The plugins as stored now: Demo's keys back, Fit with none.
+    expect(everyKey(out.plugins)).toEqual(everyKey((await loadPluginKeys()).plugins));
+    expect(everyKey([out.plugins[0]])).toEqual(everyKey([plugins[0]]));
+    expect(keysOf(out.plugins[1], 'view.fit')).toEqual([]);
+    expect([server.app, assistantKeys()]).toEqual([{}, null]);
+  });
+
+  it("after the person's Yes, a panel's key that moved since a Replace gives the commands their keys back", async () => {
+    const { plugins, server } = await altPlugins();
+    // Set in another tab, not heard on this page yet.
+    server.app = { 'app.assistant': ['F2'] };
+    const out = await applyAppChange(plugins, 'app.assistant', { action: 'set', combo: 'Alt+KeyL', replace: true }, undefined, ASSISTANT_FROM, true);
+    expect(out.result).toEqual({ ok: false, code: 'changed', id: 'app.assistant', message: "The panel's key was not saved (the panel's key changed meanwhile); nothing changed." });
+    expect(server.calls).toEqual([
+      ['set', 'demo', { 'sketch.line': ['KeyL'] }],
+      ['set', 'other', { 'view.fit': [] }],
+      ['remove', 'demo', null],
+      ['remove', 'other', null],
+    ]);
+    expect(everyKey(out.plugins)).toEqual(everyKey(plugins));
+    expect([server.app, assistantKeys()]).toEqual([{ 'app.assistant': ['F2'] }, null]);
   });
 });
 
@@ -636,5 +720,97 @@ describe("Reset all keybinds and the Assistant panel's key", () => {
     expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyL'] });
     expect(server.prefs.other[KEYBINDS_PREF]).toEqual({ 'view.fit': [] });
     expect([server.app, assistantKeys()]).toEqual([{ 'app.assistant': ['Alt+KeyL'] }, ['Alt+KeyL']]);
+  });
+
+  it('the words name the key kept off as people read it, in Settings; as stored by default', async () => {
+    const { server } = await altPlugins({ prefs: { demo: { 'sketch.line': ['KeyK'] }, other: { 'view.fit': [] } }, app: { 'app.assistant': ['Alt+KeyL'] } });
+    refuseWrites(server, '/api/prefs');
+    expect((await resetEveryPlugin(async () => true, displayCombo)).keptOff).toBe("Alt+L kept off Line, Fit: the Assistant panel's key.");
+    expect((await resetEveryPlugin(async () => true)).keptOff).toBe('"Alt+KeyL" kept off Line, Fit: the Assistant panel\'s key.');
+  });
+
+  it("when this page has not heard of the panel's key and it could not be put back, the plugins keep the stored key off", async () => {
+    const { server } = await altPlugins({ prefs: { demo: { 'sketch.line': ['KeyK'] }, other: { 'view.fit': [] } }, app: { 'app.assistant': ['Alt+KeyL'] } });
+    // Set in another tab, not heard on this page yet.
+    resetAppKeysForTests();
+    refuseWrites(server, '/api/prefs');
+    const asked: string[][] = [];
+    const out = await resetEveryPlugin(async (names) => (asked.push(names), true), displayCombo);
+    expect(asked).toEqual([[APP_RESET, 'Demo', 'Other']]);
+    expect(out).toEqual({
+      asked: true,
+      reset: ['Demo', 'Other'],
+      failed: [{ name: APP_RESET, why: 'the prefs file is read-only' }],
+      error: '',
+      keptOff: "Alt+L kept off Line, Fit: the Assistant panel's key.",
+    });
+    // Line keeps its other default; Fit, whose only default it is, has none.
+    expect(server.calls).toEqual([
+      ['set', 'demo', { 'sketch.line': ['KeyL'] }],
+      ['set', 'other', { 'view.fit': [] }],
+    ]);
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyL'] });
+  });
+
+  it('a key this page still has for the panel, put back in another tab since, is kept off nothing', async () => {
+    const { server } = await altPlugins({ prefs: { demo: { 'sketch.line': ['KeyL'] }, other: { 'view.fit': [] } }, app: { 'app.assistant': ['Alt+KeyL'] } });
+    server.app = {};
+    const asked: string[][] = [];
+    const out = await resetEveryPlugin(async (names) => (asked.push(names), true), displayCombo);
+    expect(asked).toEqual([['Demo', 'Other']]);
+    expect(out).toEqual({ asked: true, reset: ['Demo', 'Other'], failed: [], error: '', keptOff: '' });
+    expect(server.calls).toEqual([
+      ['remove', 'demo', null],
+      ['remove', 'other', null],
+    ]);
+  });
+
+  it("when the panel's key cannot be read, Reset all keybinds goes by this page's copy and keeps it off", async () => {
+    const { server } = await altPlugins({ prefs: { demo: { 'sketch.line': ['KeyK'] }, other: { 'view.fit': [] } }, app: { 'app.assistant': ['Alt+KeyL'] } });
+    server.failAppReads = true;
+    const asked: string[][] = [];
+    const out = await resetEveryPlugin(async (names) => (asked.push(names), true), displayCombo);
+    expect(asked).toEqual([[APP_RESET, 'Demo', 'Other']]);
+    expect(out).toEqual({
+      asked: true,
+      reset: ['Demo', 'Other'],
+      failed: [{ name: APP_RESET, why: 'the settings are not available right now' }],
+      error: '',
+      keptOff: "Alt+L kept off Line, Fit: the Assistant panel's key.",
+    });
+    expect(server.calls).toEqual([
+      ['set', 'demo', { 'sketch.line': ['KeyL'] }],
+      ['set', 'other', { 'view.fit': [] }],
+    ]);
+  });
+});
+
+describe("Reset all keybinds' question and the Assistant's checked reset", () => {
+  it('asks in the same words wherever it is asked: the panel key first, then the plugins, or that the app keys stay', () => {
+    expect(resetEveryQuestion([APP_RESET, 'Demo', 'Other'])).toEqual({
+      title: 'Reset all keybinds?',
+      copy: "The Assistant panel's key goes back to Ctrl+/. Every command of Demo, Other gets its default keys back.",
+      yes: 'Reset all',
+    });
+    expect(resetEveryQuestion(['Demo']).copy).toBe("Every command of Demo gets its default keys back. The app's own keys stay as they are.");
+    expect(resetEveryQuestion([APP_RESET]).copy).toBe("The Assistant panel's key goes back to Ctrl+/.");
+  });
+
+  it('checked (the Assistant): what changed while the person was asked is not reset, and says changed; unchanged, it resets as Settings does', async () => {
+    const { server } = await altPlugins({ prefs: { demo: { 'sketch.line': ['KeyL'] } }, app: { 'app.assistant': ['Alt+KeyL'] } });
+    const moved = await resetEveryPlugin(
+      async () => {
+        // Another tab gives Other's Fit a key of its own while the question is open.
+        server.prefs.other = { [KEYBINDS_PREF]: { 'view.fit': ['Alt+KeyF'] } };
+        return true;
+      },
+      displayCombo,
+      { checked: true },
+    );
+    expect(moved).toEqual({ asked: true, reset: [], failed: [], error: '', keptOff: '', changed: true });
+    expect(server.calls).toEqual([]);
+    const done = await resetEveryPlugin(async () => true, displayCombo, { checked: true });
+    expect(done).toMatchObject({ asked: true, reset: [APP_RESET, 'Demo', 'Other'], failed: [] });
+    expect(server.app).toEqual({});
   });
 });

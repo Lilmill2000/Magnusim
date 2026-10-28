@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useLayoutEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resetAppKeysForTests } from '../../keybinds/appKeys';
 import { ASSISTANT_FROM, KEYBINDS_PREF } from '../../keybinds/catalog';
@@ -8,6 +9,7 @@ import { KeybindsStep } from './KeybindsStep';
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   resetAppKeysForTests();
 });
@@ -23,6 +25,23 @@ const conflictIn = (id: string) => row(id).querySelector('[data-keybind-conflict
 /** What the live region says, without the mark that makes the same words twice a change. */
 const MARKS = [String.fromCharCode(0x200b), String.fromCharCode(0x200c)];
 const liveText = () => MARKS.reduce((t, m) => t.split(m).join(''), live().textContent!);
+/** Demo's Reset all word, under its title. */
+const demoNote = () => document.querySelector('[data-keys-plugin="demo"] [data-keys-plugin-note]');
+
+/** The fake server's answers to `url` wait until the returned release is called. */
+function hold(server: ReturnType<typeof fakeKeysServer>, url: string): () => void {
+  const real = server.fetch.getMockImplementation()!;
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === url) await held;
+    return real(input, init);
+  });
+  return release;
+}
+
+/** Timers the test moves on itself (a row's Saved goes after 1.8 s); the rest of the page runs as it does. */
+const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
 
 /** A press in the open recorder. */
 function press(id: string, code: string, key: string, mods: Partial<Record<'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey', boolean>> = {}) {
@@ -283,6 +302,20 @@ describe('Settings → Keybinds', () => {
     expect(screen.getByRole('button', { name: 'Reset all Demo keys' })).toBeDisabled();
   });
 
+  it("Reset all's word goes after a moment, as a row's Saved does", async () => {
+    fakeTimers();
+    await open({ 'sketch.line': ['KeyK'] });
+    fireEvent.click(button('sketch.rectangle', 'Change Rectangle'));
+    press('sketch.rectangle', 'KeyR', 'R', { shiftKey: true });
+    await waitFor(() => expect(noteIn('sketch.rectangle')).toHaveTextContent('Saved'));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all Demo keys' }));
+    await waitFor(() => expect(demoNote()).toHaveTextContent('Every command has its default keys again.'));
+    expect(demoNote()).toHaveAttribute('data-keys-plugin-note', 'saved');
+    act(() => vi.advanceTimersByTime(2000));
+    expect(noteIn('sketch.rectangle')).toBeNull();
+    expect(demoNote()).toBeNull();
+  });
+
   it('a change the app does not save keeps the keys shown as they were read, and says why', async () => {
     const server = await open();
     const real = server.fetch.getMockImplementation()!;
@@ -537,5 +570,120 @@ describe("Settings → Keybinds: the Assistant panel's key", () => {
     expect(stored(server)).toEqual({ 'edit.rename': [] });
     expect(server.app).toEqual({ [PANEL]: ['F2'] });
     expect(screen.getByRole('button', { name: 'Reset all Demo keys' })).toBeDisabled();
+  });
+
+  it("Reset all's word that names the key it kept off stays after a row's Saved has gone", async () => {
+    fakeTimers();
+    await openF2({ 'edit.rename': ['KeyN'], 'sketch.line': ['KeyK'] }, { [PANEL]: ['F2'] });
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['F2']));
+    fireEvent.click(button('sketch.line', 'Change Line'));
+    press('sketch.line', 'KeyJ', 'j');
+    await waitFor(() => expect(noteIn('sketch.line')).toHaveTextContent('Saved'));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all Demo keys' }));
+    const said = "Every command has its default keys again. F2 kept off Rename: the Assistant panel's key.";
+    await waitFor(() => expect(demoNote()).toHaveTextContent(said));
+    act(() => vi.advanceTimersByTime(2000));
+    expect(noteIn('sketch.line')).toBeNull();
+    expect(demoNote()).toHaveTextContent(said);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(demoNote()).toHaveTextContent(said);
+  });
+
+  it("its Change, Reset and Clear wait until every plugin's keys are read", async () => {
+    const server = fakeKeysServer({ app: { [PANEL]: ['Alt+KeyK'] } });
+    const release = hold(server, '/api/plugins');
+    render(<KeybindsStep />);
+    // Its own key is read; whether a command has the key it would get is not known yet.
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+K']));
+    expect(row('sketch.line')).toBeNull();
+    const buttons = () => ['Change', 'Reset', 'Clear'].map((b) => button(PANEL, `${b} ${PANEL_LABEL}`));
+    for (const b of buttons()) expect(b).toBeDisabled();
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    expect(within(row(PANEL)).queryByRole('textbox')).toBeNull();
+    release();
+    await screen.findByText('Rectangle');
+    for (const b of buttons()) expect(b).toBeEnabled();
+    expect(server.calls).toEqual([]);
+  });
+
+  it("its Change, Reset and Clear stay off when the plugin list can't be read", async () => {
+    const server = fakeKeysServer({ app: { [PANEL]: ['Alt+KeyK'] } });
+    const real = server.fetch.getMockImplementation()!;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/plugins' ? new Response(JSON.stringify({ ok: false, error: 'worker restarted after a timeout' }), { status: 503 }) : real(input, init),
+    );
+    render(<KeybindsStep />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read the plugin list: worker restarted after a timeout.');
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+K']));
+    for (const b of ['Change', 'Reset', 'Clear']) expect(button(PANEL, `${b} ${PANEL_LABEL}`)).toBeDisabled();
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    expect(within(row(PANEL)).queryByRole('textbox')).toBeNull();
+    expect(server.calls).toEqual([]);
+  });
+
+  it("a key that can't be read is said so with Try again, its buttons wait; Try again shows the stored key and lets them", async () => {
+    const server = fakeKeysServer({ app: { [PANEL]: ['Alt+KeyK'] } });
+    server.failAppReads = true;
+    render(<KeybindsStep />);
+    await screen.findByText('Rectangle');
+    const alert = await screen.findByText(/^The Assistant panel's key could not be read: /);
+    expect(alert).toHaveAttribute('role', 'alert');
+    expect(alert).toHaveTextContent("The Assistant panel's key could not be read: the settings are not available right now. Changes wait until it can be read.");
+    // The page's copy (its defaults) shows, and nothing can be changed from it.
+    expect(keysIn(PANEL)).toEqual(PANEL_DEFAULTS);
+    expect(button(PANEL, `Change ${PANEL_LABEL}`)).toBeDisabled();
+    expect(button(PANEL, `Clear ${PANEL_LABEL}`)).toBeDisabled();
+    // The commands wait too: the panel's key decides which keys they may have.
+    expect(button('sketch.line', 'Change Line')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reset all Demo keys' })).toBeDisabled();
+    server.failAppReads = false;
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+K']));
+    expect(screen.queryByText(/^The Assistant panel's key could not be read: /)).toBeNull();
+    for (const b of ['Change', 'Reset', 'Clear']) expect(button(PANEL, `${b} ${PANEL_LABEL}`)).toBeEnabled();
+    expect(button('sketch.line', 'Change Line')).toBeEnabled();
+    expect(server.calls).toEqual([]);
+  });
+
+  it('Search finds it by the key it has now: Alt+K once changed, and no longer Ctrl+/', async () => {
+    await open();
+    const search = screen.getByRole('searchbox', { name: 'Search keybinds' });
+    fireEvent.change(search, { target: { value: 'ctrl+/' } });
+    expect(row(PANEL)).toBeTruthy();
+    fireEvent.change(search, { target: { value: '' } });
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    press(PANEL, 'KeyK', 'k', { altKey: true });
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+K']));
+    fireEvent.change(search, { target: { value: 'alt+k' } });
+    expect(row(PANEL)).toBeTruthy();
+    expect(row('sketch.line')).toBeNull();
+    fireEvent.change(search, { target: { value: 'ctrl+/' } });
+    expect(row(PANEL)).toBeNull();
+    expect(screen.getByText('No keybind matches “ctrl+/”.')).toBeInTheDocument();
+  });
+
+  it('a change of its key the page takes after Settings first drew, before Settings listens, still shows', async () => {
+    const server = fakeKeysServer();
+    // Settings' own read of the stored keys fails: only the page's copy can show the change.
+    server.failAppReads = true;
+    // Its layout effect runs after Settings' first draw and before Settings' effects: the page's
+    // copy changes there and no listener hears it (as a read the dock started may land).
+    function ChangedMeanwhile() {
+      useLayoutEffect(() => {
+        resetAppKeysForTests({ [PANEL]: ['Alt+KeyJ'] });
+      }, []);
+      return null;
+    }
+    render(
+      <>
+        <KeybindsStep />
+        <ChangedMeanwhile />
+      </>,
+    );
+    await screen.findByText(/^The Assistant panel's key could not be read: /);
+    expect(keysIn(PANEL)).toEqual(['Alt+J']);
+    expect(row(PANEL)).toHaveAttribute('data-keybind-default', '0');
+    expect(button(PANEL, `Reset ${PANEL_LABEL}`)).toBeInTheDocument();
+    expect(server.calls).toEqual([]);
   });
 });

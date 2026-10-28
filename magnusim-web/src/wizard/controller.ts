@@ -15,7 +15,7 @@
 import { settleStep } from '../assistant/status';
 import { mountIsland, unmountIsland } from '../islands';
 import { isCad } from '../app/edition';
-import { appResetName, resetEveryPlugin } from '../keybinds/catalog';
+import { resetEveryPlugin, resetEveryQuestion } from '../keybinds/catalog';
 import { displayCombo } from '../keybinds/combo';
 import { confirmAction } from '../workbench/dialogs';
 
@@ -357,16 +357,7 @@ async function resetKeybinds(btn) {
     btn.setAttribute('aria-busy', 'true');
   }
   try {
-    const out = await resetEveryPlugin((names) => {
-      const app = names.includes(appResetName());
-      const plugins = names.filter((n) => n !== appResetName());
-      const parts = [
-        ...(app ? ["The Assistant panel's key goes back to Ctrl+/."] : []),
-        ...(plugins.length ? [`Every command of ${plugins.join(', ')} gets its default keys back.`] : []),
-        ...(app ? [] : ["The app's own keys stay as they are."]),
-      ];
-      return confirmAction({ title: 'Reset all keybinds?', copy: parts.join(' '), yes: 'Reset all', safe: true });
-    }, displayCombo);
+    const out = await resetEveryPlugin((names) => confirmAction({ ...resetEveryQuestion(names), safe: true }), displayCombo);
     const failed = out.failed.map((f) => `${f.name} (${f.why})`).join(', ');
     const kept = out.keptOff ? `. ${out.keptOff}` : '';
     if (out.error) flashSaved(out.error, true);

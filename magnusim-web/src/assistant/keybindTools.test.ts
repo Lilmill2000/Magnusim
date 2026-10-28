@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assistantKeys, defaultAppKeys, refreshAppKeys, resetAppKeysForTests } from '../keybinds/appKeys';
+import { APP_KEYBINDS_PREF, APP_PREFS_PLUGIN, assistantKeys, defaultAppKeys, refreshAppKeys, resetAppKeysForTests } from '../keybinds/appKeys';
 import { ASSISTANT_FROM, KEYBINDS_PREF, loadPluginKeys } from '../keybinds/catalog';
-import { onPrefChange, type PrefChange } from '../workspace/prefsChannel';
+import { announcePref, onPrefChange, type PrefChange } from '../workspace/prefsChannel';
 import { DEMO_COMMANDS, fakeKeysServer } from '../test/keybindsFake';
 import type { AssistantInvoke } from '../workspace/bridge';
 import { coreKeybinds, coreSetKeybind, SET_IN, type KeysRuntime } from './keybindTools';
@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 /** The page's runtime with the person's answer to each confirm, and what each one asked. */
-function runtime(answer: boolean | (() => boolean)) {
+function runtime(answer: boolean | (() => boolean | Promise<boolean>)) {
   const asked: { title: string; copy: string; yes: string }[] = [];
   const rt: KeysRuntime = {
     load: loadPluginKeys,
@@ -132,7 +132,7 @@ describe('core__keybinds', () => {
     expect(back.shown).toContain('Ctrl+/');
   });
 
-  it('plugin "app" (or the app\'s name) lists the app\'s keys alone; a target names one by id or label, and none is not_found', async () => {
+  it('plugin "app" (any case) lists the app\'s keys alone; a target names one by id or label, and none is not_found', async () => {
     fakeKeysServer({ app: { 'app.assistant': ['Alt+KeyK'] } });
     const { rt } = runtime(true);
     const all = await coreKeybinds({ plugin: 'app', target: '' }, rt);
@@ -359,6 +359,19 @@ describe('core__set_keybind', () => {
     expect(asked.map((a) => a.copy)).toEqual(['Demo · Line: L → Alt+K']);
   });
 
+  it("a Yes to give a command a key that became the Assistant panel's while the person was asked writes nothing: refused", async () => {
+    const server = fakeKeysServer();
+    // Settings or another tab gives the panel Alt+K while the question is open.
+    const { rt, asked } = runtime(() => {
+      server.app = { 'app.assistant': ['Alt+KeyK'] };
+      return true;
+    });
+    expect(await coreSetKeybind(set({ command: 'sketch.line', keys: 'Alt+K' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'invalid_input', message: panelKeyRefusal('Alt+KeyK') });
+    expect(asked.map((a) => a.copy)).toEqual(['Demo · Line: L → Alt+K']);
+    expect(server.calls).toEqual([]);
+    expect(server.prefs.demo?.[KEYBINDS_PREF]).toBeUndefined();
+  });
+
   it("a Reset that would bring back a default that is the Assistant panel's key now is refused, replace or not", async () => {
     const server = fakeKeysServer({ files: MEASURE_FILES, prefs: { demo: { [KEYBINDS_PREF]: { 'tool.measure': ['KeyM'] } } }, app: { 'app.assistant': ['Alt+KeyK'] } });
     const { rt, asked } = runtime(true);
@@ -382,7 +395,7 @@ describe('core__set_keybind', () => {
       ok: true,
       result: {
         data: { plugin: 'demo', changed: true, kept_off: [{ id: 'tool.measure', keys: ['Alt+KeyK'] }] },
-        summary: "Every Demo command has its default keys again (Alt+K kept off Measure: the Assistant panel's key.)",
+        summary: "Every Demo command has its default keys again (Alt+K kept off Measure: the Assistant panel's key)",
       },
     });
     expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'tool.measure': ['KeyM'] });
@@ -435,6 +448,43 @@ describe("core__set_keybind: the Assistant panel's own key (plugin \"app\")", ()
       hint: 'Only app.assistant (Open or close the Assistant panel) can be.',
     });
     expect(asked).toEqual([]);
+  });
+
+  it("the app's name names a plugin, not the app (in Magnusim CAD a plugin has it): none is on here, so not_found", async () => {
+    const server = fakeKeysServer({ app: { 'app.assistant': ['Alt+KeyK'] } });
+    const { rt, asked } = runtime(true);
+    const none = 'No plugin that is on has keys named "Magnusim".';
+    expect(await coreKeybinds({ plugin: 'Magnusim', target: '' }, rt)).toMatchObject({ ok: false, code: 'not_found', message: none });
+    expect(await coreKeybinds({ plugin: 'magnusim', target: 'app.assistant' }, rt)).toMatchObject({ ok: false, code: 'not_found', message: 'No plugin that is on has keys named "magnusim".' });
+    expect(await coreSetKeybind(set({ plugin: 'Magnusim', command: 'app.assistant', keys: 'Alt+J' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'not_found', message: none });
+    expect(await coreSetKeybind(set({ plugin: 'Magnusim', command: '', action: 'reset_all' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'not_found', message: none });
+    expect(asked).toEqual([]);
+    expect(server.calls).toEqual([]);
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyK'] });
+  });
+
+  it("a plugin named as the app is reached by that name: its commands are read and changed, the panel's key stays", async () => {
+    const server = fakeKeysServer({
+      rows: [
+        {
+          key: 'part',
+          name: 'Magnusim',
+          status: 'enabled',
+          workspaces: [{ key: 'part', title: 'Part', entry: 'workspace/index.html', commands: 'workspace/commands.json', commands_error: '' }],
+        },
+      ],
+      files: { '/plugins/part/workspace/commands.json': DEMO_COMMANDS },
+      app: { 'app.assistant': ['Alt+KeyK'] },
+    });
+    const { rt, asked } = runtime(true);
+    const read = dataOf(await coreKeybinds({ plugin: 'Magnusim', target: 'Line' }, rt))!;
+    expect(read.plugins).toEqual([expect.objectContaining({ plugin: 'part', name: 'Magnusim' })]);
+    expect(read.plugins[0].workspaces[0].commands.map((c) => c.id)).toEqual(['sketch.line']);
+    const out = await coreSetKeybind(set({ plugin: 'Magnusim', command: 'sketch.line', keys: 'Shift+K' }), invoke({}).req, rt);
+    expect(out).toMatchObject({ ok: true, result: { data: { id: 'sketch.line', keys: ['Shift+KeyK'], changed: true } } });
+    expect(asked.map((a) => a.copy)).toEqual(['Magnusim · Line: L → Shift+K']);
+    expect(server.prefs.part[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['Shift+KeyK'] });
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyK'] });
   });
 
   it('keys it has already answer changed false without asking', async () => {
@@ -653,5 +703,170 @@ describe("core__set_keybind: the Assistant panel's own key (plugin \"app\")", ()
     });
     expect(server.calls).toEqual([]);
     expect(assistantKeys()).toBeNull();
+  });
+
+  it("a Yes is not applied once another tab's change of the panel's key reached this page while the person was asked: changed", async () => {
+    const server = fakeKeysServer();
+    // Another tab gives the panel Alt+J while the question is open, and this page hears it at once.
+    const { rt } = runtime(async () => {
+      server.app = { 'app.assistant': ['Alt+KeyJ'] };
+      announcePref(APP_PREFS_PLUGIN, APP_KEYBINDS_PREF, server.app, 'settings:another-tab');
+      await vi.waitFor(() => expect(assistantKeys()).toEqual(['Alt+KeyJ']));
+      return true;
+    });
+    expect(await coreSetKeybind(panel({ keys: 'Alt+K' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'changed', message: CHANGED });
+    expect(server.calls).toEqual([]);
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyJ'] });
+    expect(assistantKeys()).toEqual(['Alt+KeyJ']);
+  });
+
+  it("a plugin's keys that cannot be read again after the Yes leave the panel's key as it was: unavailable, not changed", async () => {
+    const server = fakeKeysServer({ prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Alt+KeyL'] } } }, app: { 'app.assistant': ['Alt+KeyK'] } });
+    const { rt } = runtime(() => {
+      server.failReads = true;
+      return true;
+    });
+    const unread = {
+      ok: false,
+      code: 'unavailable',
+      message: 'Your keys for Demo could not be read: the plugin list is not available right now',
+      hint: "Nothing is changed until every plugin's keys can be read: try again in a moment.",
+    };
+    expect(await coreSetKeybind(panel({ keys: 'Alt+J' }), invoke({}).req, rt)).toMatchObject(unread);
+    server.failReads = false;
+    // A Replace too: Line keeps Alt+L.
+    expect(await coreSetKeybind(panel({ keys: 'Alt+L', replace: true }), invoke({}).req, rt)).toMatchObject(unread);
+    expect(server.calls).toEqual([]);
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['Alt+KeyL'] });
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyK'] });
+    expect(assistantKeys()).toEqual(['Alt+KeyK']);
+  });
+
+  it('a plugin list that cannot be read again after the Yes changes nothing: unavailable', async () => {
+    const server = fakeKeysServer({ app: { 'app.assistant': ['Alt+KeyK'] } });
+    const real = server.fetch.getMockImplementation()!;
+    let yes = false;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      yes && String(input) === '/api/plugins' ? new Response(JSON.stringify({ ok: false, error: 'the worker is restarting' }), { status: 503 }) : real(input, init),
+    );
+    const { rt } = runtime(() => (yes = true));
+    expect(await coreSetKeybind(panel({ keys: 'Alt+J' }), invoke({}).req, rt)).toMatchObject({
+      ok: false,
+      code: 'unavailable',
+      message: 'Could not read the plugin list: the worker is restarting.',
+    });
+    expect(server.calls).toEqual([]);
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyK'] });
+  });
+
+  it("a panel's key the app refuses to store after a Replace gives the command its key back: failed, and nothing changed", async () => {
+    const server = fakeKeysServer({ prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Alt+KeyL'] } } }, app: { 'app.assistant': ['Alt+KeyK'] } });
+    const real = server.fetch.getMockImplementation()!;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/prefs' && init?.method === 'POST' ? new Response(JSON.stringify({ ok: false, error: 'the settings file is read-only' }), { status: 500 }) : real(input, init),
+    );
+    const { rt, asked } = runtime(true);
+    const out = await coreSetKeybind(panel({ keys: 'Alt+L', replace: true }), invoke({}).req, rt);
+    expect(asked.map((a) => a.copy)).toEqual([`${PANEL}: Alt+K → Alt+L; Demo · Line (sketch): Alt+L → no key`]);
+    expect(out).toMatchObject({ ok: false, code: 'failed', message: "The panel's key was not saved (the settings file is read-only); nothing changed." });
+    // Line lost Alt+L for the panel, then had it back once the panel could not have it.
+    expect(server.calls).toEqual([
+      ['set', 'demo', { 'sketch.line': [] }],
+      ['set', 'demo', { 'sketch.line': ['Alt+KeyL'] }],
+    ]);
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['Alt+KeyL'] });
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyK'] });
+    expect(assistantKeys()).toEqual(['Alt+KeyK']);
+  });
+
+  it("a command that could not get its key back after the panel's write was refused is named, so the person can change it there", async () => {
+    const server = fakeKeysServer({ prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Alt+KeyL'] } } }, app: { 'app.assistant': ['Alt+KeyK'] } });
+    const real = server.fetch.getMockImplementation()!;
+    let pluginWrites = 0;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/prefs' && init?.method === 'POST') return new Response(JSON.stringify({ ok: false, error: 'the settings file is read-only' }), { status: 500 });
+      // The plugin's prefs take the first write (Line loses Alt+L), not the one that gives it back.
+      if (url === '/api/plugin-prefs/set' && ++pluginWrites === 2) return new Response(JSON.stringify({ ok: false, error: 'A plugin keeps at most 64 KB of prefs' }), { status: 413 });
+      return real(input, init);
+    });
+    const out = await coreSetKeybind(panel({ keys: 'Alt+L', replace: true }), invoke({}).req, runtime(true).rt);
+    expect(out).toMatchObject({
+      ok: false,
+      code: 'failed',
+      message: "The panel's key was not saved (the settings file is read-only), and Demo · Line (Sketch) could not get the key back: change it there.",
+    });
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': [] });
+    expect(server.app).toEqual({ 'app.assistant': ['Alt+KeyK'] });
+  });
+});
+
+describe('core__set_keybind: Reset all keybinds (plugin "", reset_all)', () => {
+  const everything = () => set({ plugin: '', command: '', action: 'reset_all' });
+
+  it('asks once in Settings\' words, guarded; the No changes nothing, the Yes resets the panel key and every plugin', async () => {
+    const server = fakeKeysServer({ prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Shift+KeyL'] } } }, app: { 'app.assistant': ['Alt+KeyK'] } });
+    const no = runtime(false);
+    expect(await coreSetKeybind(everything(), invoke({}).req, no.rt)).toMatchObject({ ok: false, code: 'step_declined' });
+    expect(no.asked).toEqual([{ title: 'Reset all keybinds?', copy: "The Assistant panel's key goes back to Ctrl+/. Every command of Demo gets its default keys back.", yes: 'Reset all' }]);
+    expect(server.calls).toEqual([]);
+    const yes = runtime(true);
+    const out = await coreSetKeybind(everything(), invoke({}).req, yes.rt);
+    expect(out).toMatchObject({ ok: true, result: { data: { changed: true, reset: ["Magnusim (the Assistant panel's key)", 'Demo'] } } });
+    expect(server.app).toEqual({});
+    expect(server.prefs.demo[KEYBINDS_PREF]).toBeUndefined();
+    // Nothing left to reset: nothing asked.
+    const again = runtime(true);
+    expect(await coreSetKeybind(everything(), invoke({}).req, again.rt)).toMatchObject({ ok: true, result: { data: { changed: false } } });
+    expect(again.asked).toEqual([]);
+  });
+
+  it('is only made when the person asked for it, and is changed when something moved while they were asked', async () => {
+    const server = fakeKeysServer({ prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Shift+KeyL'] } } } });
+    const asked = runtime(true);
+    expect(await coreSetKeybind(set({ plugin: '', command: '', action: 'reset_all', person_asked: false }), invoke({}).req, asked.rt)).toMatchObject({ ok: false, code: 'not_asked' });
+    expect(asked.asked).toEqual([]);
+    const moving = runtime(() => {
+      server.app = { 'app.assistant': ['Alt+KeyJ'] };
+      return true;
+    });
+    expect(await coreSetKeybind(set({ plugin: '', command: '', action: 'reset_all' }), invoke({}).req, moving.rt)).toMatchObject({ ok: false, code: 'changed', message: CHANGED });
+    expect(server.calls).toEqual([]);
+  });
+});
+
+describe('core__set_keybind: what a stopped change says', () => {
+  it('a Replace that could not give a command its key back answers failed with the words naming it, never "nothing changed"', async () => {
+    const server = fakeKeysServer({ prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Alt+KeyL'] } } } });
+    const { rt } = runtime(true);
+    // The panel's write is refused, and so is giving Line its key back.
+    const real = server.fetch.getMockImplementation()!;
+    let demoWrites = 0;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/prefs' && init?.method === 'POST') return new Response(JSON.stringify({ ok: false, error: 'the prefs file is read-only' }), { status: 500 });
+      if (url === '/api/plugin-prefs/set' && ++demoWrites > 1) return new Response(JSON.stringify({ ok: false, error: 'the plugin is busy' }), { status: 500 });
+      return real(input, init);
+    });
+    const out = await coreSetKeybind(panel({ keys: 'Alt+L', replace: true }), invoke({}).req, rt);
+    expect(out).toMatchObject({ ok: false, code: 'failed' });
+    expect(out.ok ? '' : out.message).toBe("The panel's key was not saved (the prefs file is read-only), and Demo · Line (Sketch) could not get the key back: change it there.");
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': [] });
+  });
+
+  it("a plugin's Reset all after the Yes is changed when what it keeps off moved: the panel's key changed while the person was asked", async () => {
+    const server = fakeKeysServer({
+      files: { '/plugins/demo/workspace/commands.json': { ...DEMO_COMMANDS, commands: [...DEMO_COMMANDS.commands, { id: 'tool.measure', label: 'Measure', group: 'Tools', context: 'any', keys: ['KeyM', 'Alt+KeyK'] }] } },
+      prefs: { demo: { [KEYBINDS_PREF]: { 'sketch.line': ['Shift+KeyL'] } } },
+      app: { 'app.assistant': ['Alt+KeyK'] },
+    });
+    const { rt, asked } = runtime(() => {
+      server.app = { 'app.assistant': ['Alt+KeyJ'] };
+      return true;
+    });
+    const out = await coreSetKeybind(set({ command: '', action: 'reset_all' }), invoke({}).req, rt);
+    expect(asked[0].copy).toBe("Demo · every command: its own keys → its default keys (Alt+K kept off Measure: the Assistant panel's key)");
+    expect(out).toMatchObject({ ok: false, code: 'changed', message: CHANGED });
+    expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['Shift+KeyL'] });
   });
 });

@@ -59,7 +59,7 @@ export const CORE_SET_KEYBIND_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'],
   properties: {
-    plugin: { type: 'string', maxLength: 80, description: 'the plugin key or name (core__keybinds lists them); "app" for the Assistant panel\'s own key' },
+    plugin: { type: 'string', maxLength: 80, description: 'the plugin key or name (core__keybinds lists them); "app" for the Assistant panel\'s own key; "" with reset_all for every key' },
     command: { type: 'string', maxLength: 120, description: 'the command id or label; "" for reset_all' },
     action: { type: 'string', enum: [...KEYBIND_ACTIONS] },
     keys: { type: 'string', maxLength: 40, description: 'set: the key as written ("Shift+R", "Ctrl+Alt+K", "F7"); "" otherwise' },
@@ -100,7 +100,7 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     name: 'set_keybind',
     title: 'Change a keyboard shortcut',
     description:
-      "Changes a shortcut as Settings → Keybinds does: a plugin's command, or the Assistant panel's key (plugin \"app\", command \"app.assistant\"). set (keys: one key, e.g. \"Shift+R\"), reset, clear, reset_all. Only if the person explicitly asked in this request (person_asked, else not_asked); they confirm (No: step_declined). Another command's key: key_taken unless replace; moved meanwhile: changed.",
+      "Changes a shortcut as Settings → Keybinds does: a plugin's command, or the Assistant panel's key (plugin \"app\", command \"app.assistant\"). set (keys: one key), reset, clear, reset_all (plugin \"\": every key). Only if the person explicitly asked in this request (person_asked, else not_asked); they confirm (No: step_declined). Another command's key: key_taken unless replace; moved meanwhile: changed.",
     inputSchema: CORE_SET_KEYBIND_SCHEMA as unknown as Record<string, unknown>,
     risk: 'edit',
     timeoutS: 300,

@@ -15,6 +15,8 @@
  * - The Assistant panel's own key is plugin "app", command "app.assistant" (Daniel, 2026-10-27: it
  *   changes as a command does, under the same rule): a key any plugin command has is `key_taken`
  *   unless replace, and the question names each command it takes the key from.
+ * - plugin "" with reset_all is Settings' Reset all keybinds: the panel's key and every plugin's
+ *   commands back to their defaults, on one question in the same words.
  */
 import { APP_COMMANDS, APP_LOCAL_KEYS, RESERVED_KEYS } from '../keybinds/appCommands';
 import { refreshAppKeys } from '../keybinds/appKeys';
@@ -36,6 +38,8 @@ import {
   planAppChange,
   planChange,
   resetAllKeys,
+  resetEveryPlugin,
+  resetEveryQuestion,
   type AppKeyChange,
   type AppKeyRow,
   type KeyChange,
@@ -55,7 +59,7 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 /** Where the person changes a key themselves. */
 export const SET_IN =
-  "Settings → Keybinds: Change, Reset or Clear on the command's row (Reset all per plugin), the Assistant panel's key on its row among the app's. In a workspace that has its own, also a right-click on the command's toolbar button: Set keybind.";
+  "Settings → Keybinds: Change, Reset or Clear on the command's row (Reset all per plugin, Reset all keybinds for every key), the Assistant panel's key on its row among the app's. In a workspace that has its own, also a right-click on the command's toolbar button: Set keybind.";
 
 /** What the tools reach in the page: injected so the tests drive them without the app. */
 export interface KeysRuntime {
@@ -240,6 +244,7 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
     return fail('not_asked', 'Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves.', SET_IN);
   }
   if (isApp(str(input.plugin))) return setAppKeybind(input, action, req, rt);
+  if (!str(input.plugin) && action === 'reset_all') return resetEverything(req, rt);
   const { plugins, error } = await rt.load();
   if (error) return fail('unavailable', error, 'Try again in a moment.');
   const p = pluginNamed(plugins, str(input.plugin));
@@ -249,6 +254,8 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
   if (action === 'reset_all') {
     await rt.refreshApp().catch(() => {});
     if (!canResetAll(p)) return { ok: true, result: { data: { plugin: p.plugin, changed: false }, summary: `Every ${p.name} command has its defaults already` } };
+    // What the question says stays off the defaults (the panel's key), as it is asked.
+    const keptAsked = JSON.stringify(keptOffFor(p).map((k) => [k.command.id, k.keys]));
     const stop = waiting(req);
     let yes = false;
     try {
@@ -262,14 +269,23 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
     const now = pluginNamed(again.plugins, p.plugin);
     if (again.error || (now && now.unread)) return fail('unavailable', again.error || now!.unread, 'Nothing is changed until they can be read: try again in a moment.');
     if (!now) return fail('changed', CHANGED, CHANGED_HINT);
+    // The panel's key as stored now: what stays off must be what the question said.
+    try {
+      await rt.refreshApp();
+    } catch (e) {
+      return fail('unavailable', `The Assistant panel's key could not be read: ${e instanceof Error ? e.message : String(e)}`, 'Nothing is changed until it can be read: try again in a moment.');
+    }
+    if (JSON.stringify(keptOffFor(now).map((k) => [k.command.id, k.keys])) !== keptAsked) return fail('changed', CHANGED, CHANGED_HINT);
     const r = await resetAllKeys(now, ASSISTANT_FROM);
     if (!r.ok) return fail('failed', r.message);
-    const kept = keptOffText(r.keptOff, displayCombo);
+    const kept = keptOffText(r.keptOff, displayCombo).replace(/\.$/, '');
+    const summary = `Every ${p.name} command has its default keys again`;
     return {
       ok: true,
       result: {
         data: { plugin: p.plugin, changed: true, ...(kept ? { kept_off: r.keptOff.map((k) => ({ id: k.command.id, keys: k.keys })) } : {}) },
-        summary: `Every ${p.name} command has its default keys again${kept ? ` (${kept})` : ''}`.slice(0, 160),
+        // The kept-off words in full, or none (data.kept_off has them).
+        summary: kept && summary.length + kept.length + 3 <= 160 ? `${summary} (${kept})` : summary,
       },
     };
   }
@@ -408,6 +424,8 @@ async function setAppKeybind(input: Record<string, unknown>, action: string, req
   if (!replan.ok || appPlanKey(a.id, replan) !== asKey) return fail('changed', CHANGED, CHANGED_HINT);
   const { result } = await applyAppChange(again.plugins, a.id, change, undefined, ASSISTANT_FROM, true);
   if (!result.ok) {
+    // Stopped part way and a command could not get its key back: say so as it is.
+    if ('lost' in result && result.lost?.length) return fail('failed', result.message, "Tell the person which command lost its key; they give it back in Settings → Keybinds.");
     if (result.code === 'changed') return fail('changed', CHANGED, CHANGED_HINT);
     if (result.code === 'unread') return fail('unavailable', result.message, 'Nothing is changed until they can be read: try again in a moment.');
     if (result.code === 'conflict') return fail('key_taken', result.message);
@@ -420,6 +438,39 @@ async function setAppKeybind(input: Record<string, unknown>, action: string, req
     result: {
       data: { ...listed(), changed: true, ...(took.length ? { took } : {}) },
       summary: `${a.label}: ${shown}`.slice(0, 160),
+    },
+  };
+}
+
+/**
+ * core__set_keybind plugin "" reset_all: Settings' Reset all keybinds (the panel's key and every
+ * plugin's commands), on the same question, guarded; after the Yes it is still what was asked, or
+ * `changed`.
+ */
+async function resetEverything(req: AssistantInvoke, rt: KeysRuntime): Promise<Outcome> {
+  const out = await resetEveryPlugin(
+    async (names) => {
+      const stop = waiting(req);
+      try {
+        return await rt.confirm({ ...resetEveryQuestion(names), signal: req.signal });
+      } finally {
+        stop();
+      }
+    },
+    displayCombo,
+    { from: ASSISTANT_FROM, checked: true },
+  );
+  if (out.error) return fail('unavailable', out.error, 'Try again in a moment.');
+  if (!out.asked) return { ok: true, result: { data: { changed: false, ...(out.failed.length ? { not_read: out.failed } : {}) }, summary: 'Every key is its default already' } };
+  if (out.changed) return fail('changed', CHANGED, CHANGED_HINT);
+  if (!out.reset.length && !out.failed.length) return fail('step_declined', 'The person said no: nothing changed.');
+  const failed = out.failed.map((f) => `${f.name} (${f.why})`).join(', ');
+  if (!out.reset.length) return fail('failed', `Not reset: ${failed}${out.keptOff ? `. ${out.keptOff}` : ''}`);
+  return {
+    ok: true,
+    result: {
+      data: { changed: true, reset: out.reset, ...(out.failed.length ? { not_reset: out.failed } : {}), ...(out.keptOff ? { kept_off: out.keptOff } : {}) },
+      summary: (failed ? `Reset ${out.reset.join(', ')}; not reset: ${failed}` : `Reset ${out.reset.join(', ')}`).slice(0, 160),
     },
   };
 }

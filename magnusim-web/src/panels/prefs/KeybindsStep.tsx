@@ -101,10 +101,13 @@ export function KeybindsStep() {
   // The same for the app row's change, which may run after a later draw.
   const loadedRef = useRef(false);
   const errorRef = useRef('');
+  const appReadRef = useRef(false);
   const appUnreadRef = useRef('');
   // The app's keys the person can change, as stored now (another tab, the Assistant, a reset).
   const [appKeys, setAppKeys] = useState<AppKeyRow[]>(() => appKeyRows());
-  // Why the app's keys could not be read ('' once they were): the panel's key waits until they are.
+  // Whether the app's keys were read as stored, and why not ('' unless a read failed). Every change
+  // waits for them: the panel's key may be one no command may take, or one a Reset would give back.
+  const [appRead, setAppRead] = useState(false);
   const [appUnread, setAppUnread] = useState('');
 
   const begin = (plugin: string) => {
@@ -215,6 +218,13 @@ export function KeybindsStep() {
 
   async function change(p: PluginKeys, id: string, c: KeyChange) {
     const key = rowKey(p.plugin, id);
+    // The panel's key as stored decides what a command may have: none is worked out before it is read.
+    if (!appReadRef.current) {
+      setEditing(mineIs(p.plugin, id));
+      focusBack(p.plugin, id, 'change');
+      note(key, appUnreadRef.current || "The Assistant panel's key is still being read: try again in a moment.", 'error');
+      return;
+    }
     // Worked out first: a taken key or a refused one writes nothing, so it takes no read serial
     // (a refresh on its way still lands).
     const plan = planChange(p, id, c, displayCombo);
@@ -252,7 +262,7 @@ export function KeybindsStep() {
   /** Reads the app's keys as stored: their row, or why they can't be read (Try again reads them again). */
   function readAppKeys(alive: () => boolean = () => true) {
     void refreshAppKeys().then(
-      () => alive() && (setAppUnread(''), setAppKeys(appKeyRows())),
+      () => alive() && (setAppUnread(''), setAppRead(true), setAppKeys(appKeyRows())),
       (e: unknown) => alive() && setAppUnread(`The Assistant panel's key could not be read: ${e instanceof Error ? e.message : String(e)}`),
     );
   }
@@ -261,10 +271,10 @@ export function KeybindsStep() {
   async function changeApp(id: string, c: AppKeyChange) {
     const key = rowKey(APP, id);
     // Whether a command has the key is known only once every plugin's keys were read.
-    if (!loadedRef.current || errorRef.current || appUnreadRef.current) {
+    if (!loadedRef.current || errorRef.current || !appReadRef.current) {
       setEditing(mineIs(APP, id));
       focusBack(APP, id, 'change');
-      note(key, appUnreadRef.current || errorRef.current || "The plugins' keys are still being read: try again in a moment.", 'error');
+      note(key, appUnreadRef.current || errorRef.current || 'The keys are still being read: try again in a moment.', 'error');
       return;
     }
     const list = pluginsRef.current;
@@ -342,6 +352,7 @@ export function KeybindsStep() {
 
   loadedRef.current = loaded;
   errorRef.current = error;
+  appReadRef.current = appRead;
   appUnreadRef.current = appUnread;
   const q = query.trim().toLowerCase();
   const appName = isCad() ? 'Magnusim CAD' : 'Magnusim';
@@ -403,7 +414,7 @@ export function KeybindsStep() {
                 className="wiz-reset"
                 data-keybind-change
                 aria-label={`Change ${c.label}`}
-                disabled={!!p.unread}
+                disabled={!!p.unread || !appRead}
                 onClick={() => {
                   clearNote(key);
                   setEditing({ plugin: p.plugin, id: c.id, partial: '', conflict: null });
@@ -412,12 +423,12 @@ export function KeybindsStep() {
                 Change
               </button>
               {!isDefault(p, c.id) ? (
-                <button type="button" className="wiz-reset" data-keybind-reset aria-label={`Reset ${c.label}`} disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'reset' })}>
+                <button type="button" className="wiz-reset" data-keybind-reset aria-label={`Reset ${c.label}`} disabled={!!p.unread || !appRead} onClick={() => void change(p, c.id, { action: 'reset' })}>
                   Reset
                 </button>
               ) : null}
               {keys.length ? (
-                <button type="button" className="wiz-reset" data-keybind-clear aria-label={`Clear ${c.label}`} disabled={!!p.unread} onClick={() => void change(p, c.id, { action: 'clear' })}>
+                <button type="button" className="wiz-reset" data-keybind-clear aria-label={`Clear ${c.label}`} disabled={!!p.unread || !appRead} onClick={() => void change(p, c.id, { action: 'clear' })}>
                   Clear
                 </button>
               ) : null}
@@ -447,7 +458,7 @@ export function KeybindsStep() {
   function appKeyRow(a: AppKeyRow) {
     const key = rowKey(APP, a.id);
     // Its changes wait for every plugin's keys (a command may have the key) and its own.
-    const appWaits = !loaded || !!error || !!appUnread;
+    const appWaits = !loaded || !!error || !appRead;
     const keys = a.isDefault ? appKeysShown(a.keys) : a.keys.map(displayCombo);
     const mine = editing && editing.plugin === APP && editing.id === a.id ? editing : null;
     const said = notes[key];
@@ -565,7 +576,7 @@ export function KeybindsStep() {
             className="wiz-reset"
             data-keys-reset-all
             aria-label={`Reset all ${p.name} keys`}
-            disabled={!changed || !!p.unread}
+            disabled={!changed || !!p.unread || !appRead}
             onClick={async (e) => {
               const btn = e.currentTarget;
               const newest = begin(p.plugin);

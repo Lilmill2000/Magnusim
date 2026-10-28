@@ -17,19 +17,24 @@ vi.mock('../assistant/status', () => ({
 }));
 
 // Keybinds' Reset all keybinds: the plugins it would change, the person's answer to its question.
-// The Assistant panel's key, when it is among them, is named first (catalog.ts appResetName).
+// The Assistant panel's key, when it is among them, is named first (catalog.ts appResetName, by
+// the app's name: Magnusim CAD's is a plugin's name too).
 const APP_KEY_NAME = vi.hoisted(() => "Magnusim (the Assistant panel's key)");
 const keys = vi.hoisted(() => ({
+  appName: 'Magnusim',
   own: ['Keys demo'] as string[],
   app: false,
   answer: true as boolean | Promise<boolean>,
   asked: [] as { title?: string; copy?: string; yes?: string; safe?: boolean }[],
   reset: 0,
   // What the reset answers besides: what it could not reset, the list not read, and the commands
-  // the Assistant panel's key was kept off.
+  // the Assistant panel's key was kept off (keptOffKeys: the stored keys, worded as the reset is told).
   failed: [] as { name: string; why: string }[],
   error: '',
   keptOff: '',
+  keptOffKeys: [] as string[],
+  // How the reset was told to word a key (catalog.ts keptOffText's name).
+  name: null as ((c: string) => string) | null,
 }));
 vi.mock('../workbench/dialogs', () => ({
   confirmAction: async (o: (typeof keys.asked)[number]) => {
@@ -37,18 +42,35 @@ vi.mock('../workbench/dialogs', () => ({
     return keys.answer;
   },
 }));
-vi.mock('../keybinds/catalog', () => ({
-  appResetName: () => APP_KEY_NAME,
-  resetEveryPlugin: async (ask: (names: string[]) => Promise<boolean>) => {
-    if (keys.error) return { asked: false, reset: [], failed: [], error: keys.error, keptOff: '' };
-    const names = [...(keys.app ? [APP_KEY_NAME] : []), ...keys.own];
-    if (!names.length) return { asked: false, reset: [], failed: keys.failed, error: '', keptOff: '' };
-    if (!(await ask(names))) return { asked: true, reset: [], failed: [], error: '', keptOff: '' };
-    keys.reset += 1;
-    const reset = names.filter((n) => !keys.failed.some((f) => f.name === n));
-    return { asked: true, reset, failed: keys.failed, error: '', keptOff: keys.keptOff };
-  },
-}));
+vi.mock('../keybinds/catalog', () => {
+  const appResetName = () => `${keys.appName} (the Assistant panel's key)`;
+  return {
+    appResetName,
+    // The question as catalog.ts words it (catalog.test.ts holds the real one to the same words).
+    resetEveryQuestion: (names: string[]) => {
+      const app = names.includes(appResetName());
+      const plugins = names.filter((n) => n !== appResetName());
+      const parts = [
+        ...(app ? ["The Assistant panel's key goes back to Ctrl+/."] : []),
+        ...(plugins.length ? [`Every command of ${plugins.join(', ')} gets its default keys back.`] : []),
+        ...(app ? [] : ["The app's own keys stay as they are."]),
+      ];
+      return { title: 'Reset all keybinds?', copy: parts.join(' '), yes: 'Reset all' };
+    },
+    // Words a key as it is told to (by default quoted as stored, as catalog.ts does).
+    resetEveryPlugin: async (ask: (names: string[]) => Promise<boolean>, name: (c: string) => string = (c) => JSON.stringify(c)) => {
+      keys.name = name;
+      if (keys.error) return { asked: false, reset: [], failed: [], error: keys.error, keptOff: '' };
+      const names = [...(keys.app ? [appResetName()] : []), ...keys.own];
+      if (!names.length) return { asked: false, reset: [], failed: keys.failed, error: '', keptOff: '' };
+      if (!(await ask(names))) return { asked: true, reset: [], failed: [], error: '', keptOff: '' };
+      keys.reset += 1;
+      const reset = names.filter((n) => !keys.failed.some((f) => f.name === n));
+      const keptOff = keys.keptOffKeys.length ? `${keys.keptOffKeys.map(name).join(', ')} kept off Line: the Assistant panel's key.` : keys.keptOff;
+      return { asked: true, reset, failed: keys.failed, error: '', keptOff };
+    },
+  };
+});
 
 type Controller = typeof import('./controller');
 
@@ -82,7 +104,7 @@ let checks = 0;
 
 beforeEach(() => {
   islands.calls = [];
-  Object.assign(keys, { own: ['Keys demo'], app: false, answer: true, asked: [], reset: 0, failed: [], error: '', keptOff: '' });
+  Object.assign(keys, { appName: 'Magnusim', own: ['Keys demo'], app: false, answer: true, asked: [], reset: 0, failed: [], error: '', keptOff: '', keptOffKeys: [], name: null });
   leaving.settle = () => true;
   leaving.asked = 0;
   saved = [];
@@ -275,6 +297,61 @@ describe('Settings', () => {
     reset.click();
     await flush();
     expect($('#wiz-saved').textContent).toBe("Reset Keys demo; not reset: Magnusim (the Assistant panel's key) (the settings are not available right now)");
+  });
+
+  it('Reset all keybinds words the keys it kept the Assistant panel\'s key off as people read them: Alt+L, not "Alt+KeyL"', async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'keybinds' });
+    const reset = $('[data-wiz-reset="keybinds"]');
+    keys.app = true;
+    keys.failed = [{ name: APP_KEY_NAME, why: 'the settings are not available right now' }];
+    keys.keptOffKeys = ['Alt+KeyL'];
+    reset.click();
+    await flush();
+    expect($('#wiz-saved').textContent).toBe(
+      "Reset Keys demo; not reset: Magnusim (the Assistant panel's key) (the settings are not available right now). Alt+L kept off Line: the Assistant panel's key.",
+    );
+    expect($('#wiz-saved')).toHaveClass('is-error');
+    // Any key, as Settings shows it: no code names, no quotes.
+    expect(['Alt+KeyL', 'Ctrl+Slash', 'Ctrl+Shift+KeyR', 'Digit1', 'F2'].map((k) => keys.name!(k))).toEqual(['Alt+L', 'Ctrl+/', 'Ctrl+Shift+R', '1', 'F2']);
+    // A plugin not reset as well: every one not reset, then what was kept off.
+    keys.own = ['Keys demo', 'Heat'];
+    keys.failed = [...keys.failed, { name: 'Heat', why: 'Could not save the keys: disk full' }];
+    keys.keptOffKeys = ['Alt+KeyL', 'Ctrl+Shift+KeyR'];
+    reset.click();
+    await flush();
+    expect($('#wiz-saved').textContent).toBe(
+      "Reset Keys demo; not reset: Magnusim (the Assistant panel's key) (the settings are not available right now), Heat (Could not save the keys: disk full). Alt+L, Ctrl+Shift+R kept off Line: the Assistant panel's key.",
+    );
+  });
+
+  it("in Magnusim CAD, Reset all keybinds tells the Assistant panel's key from the plugin that has the app's name", async () => {
+    const c = await load({ wizard_completed: true });
+    c.openSetupWizard({ step: 'keybinds' });
+    const reset = $('[data-wiz-reset="keybinds"]');
+    keys.appName = 'Magnusim CAD';
+    keys.own = ['Magnusim CAD'];
+    keys.answer = false;
+    reset.click();
+    await flush();
+    expect(keys.asked).toEqual([
+      { title: 'Reset all keybinds?', copy: "Every command of Magnusim CAD gets its default keys back. The app's own keys stay as they are.", yes: 'Reset all', safe: true },
+    ]);
+    keys.app = true;
+    keys.asked = [];
+    reset.click();
+    await flush();
+    expect(keys.asked).toEqual([
+      { title: 'Reset all keybinds?', copy: "The Assistant panel's key goes back to Ctrl+/. Every command of Magnusim CAD gets its default keys back.", yes: 'Reset all', safe: true },
+    ]);
+    // Cancel says nothing.
+    expect(keys.reset).toBe(0);
+    expect($('#wiz-saved').textContent).toBe('');
+    keys.answer = true;
+    keys.failed = [{ name: "Magnusim CAD (the Assistant panel's key)", why: 'the settings are not available right now' }];
+    reset.click();
+    await flush();
+    expect($('#wiz-saved').textContent).toBe("Reset Magnusim CAD; not reset: Magnusim CAD (the Assistant panel's key) (the settings are not available right now)");
   });
 
   it('mounts Keybinds on entering it (each time: it reads the lists again) and unmounts it on leaving and on close', async () => {
