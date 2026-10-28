@@ -1,10 +1,10 @@
 // The user's toolbar layout (P4b fix round 1, Daniel 2026-10-06: "I prefer 1280 px (model) but let
 // people arrange the icons however they want"). Per mode (model, sketch) and per command: whether
 // it sits on the toolbar ("bar") or in its group's More menu ("more"), and each group's order.
-// What the user has not changed follows the defaults: model mode shows only each group's main
-// command(s) (KEEP_IN_VIEW: the compact layout seen at 1280 px), at every width; sketch mode shows
-// every command. Commands on the bar still fold into More in FOLD_ORDER when the frame is too
-// narrow. Unknown or removed ids in a stored layout are ignored; new commands take their place
+// What the user has not changed follows the defaults: every command is on the toolbar, in both
+// modes (v0.5.0 ribbon, Daniel 2026-10-27: "yes show the rest as small buttons"; before it, model
+// mode showed only each group's main command and kept the rest in More). Commands on the bar still
+// fold into More in FOLD_ORDER when the frame is too narrow, or when the person narrowed the group. Unknown or removed ids in a stored layout are ignored; new commands take their place
 // from the registry's order.
 //
 // Storage: the user's, in every project: the host's plugin prefs (`ws.prefs`, host API 1.7, key
@@ -13,6 +13,8 @@
 // (TOOLBAR_LAYOUT_FILE, below) is copied over, once. A 1.6 host has no `ws.prefs` (and the frame is
 // sandboxed with no localStorage): there the layout stays per project in the plugin's own data
 // (`ws.data`, TOOLBAR_LAYOUT_FILE), shared by every Part of the project.
+// v0.5.0 ribbon (Daniel: resizable groups and rows, as Excel's ribbon): per mode also each group's
+// width the person dragged (`widths`) and the toolbar's rows (`rows`, 1 to 4), in the same prefs.
 // Owner: INTEGRATE (TOOLBAR fixer).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createStateStore } from '../lib/store';
@@ -37,7 +39,23 @@ export interface ModeLayout {
    * commands first.
    */
   held?: string[];
+  /**
+   * v0.5.0 ribbon (additive, absent = auto): a group's width the person set by dragging the line
+   * at its right (group id -> px at toolbar scale 1). Its commands that do not fit go into its More
+   * and come back out when it is widened (Toolbar.tsx).
+   */
+  widths?: Record<string, number>;
+  /** v0.5.0 ribbon (additive, absent = RIBBON_ROWS): how many rows tall the toolbar is, 1 to 4. */
+  rows?: number;
 }
+
+/** The ribbon's rows by default (three: a large button beside two or three stacked small ones). */
+export const RIBBON_ROWS = 3;
+export const MIN_ROWS = 1;
+export const MAX_ROWS = 4;
+/** The narrowest a group can be dragged (one small button), and the widest, px at scale 1. */
+export const MIN_GROUP_W = 24;
+export const MAX_GROUP_W = 1200;
 
 export interface ToolbarLayout {
   version: 1;
@@ -78,6 +96,16 @@ function readMode(raw: unknown): ModeLayout {
     const held = [...new Set(r.held.filter((x): x is string => typeof x === 'string' && ID.test(x)))];
     if (held.length) out.held = held;
   }
+  const rw = (raw as { widths?: unknown }).widths;
+  if (rw && typeof rw === 'object') {
+    const widths: Record<string, number> = {};
+    for (const [g, w] of Object.entries(rw as Record<string, unknown>)) {
+      if (ID.test(g) && typeof w === 'number' && Number.isFinite(w)) widths[g] = Math.round(Math.min(MAX_GROUP_W, Math.max(MIN_GROUP_W, w)));
+    }
+    if (Object.keys(widths).length) out.widths = widths;
+  }
+  const rr = (raw as { rows?: unknown }).rows;
+  if (typeof rr === 'number' && Number.isInteger(rr) && rr >= MIN_ROWS && rr <= MAX_ROWS && rr !== RIBBON_ROWS) out.rows = rr;
   return out;
 }
 
@@ -89,7 +117,36 @@ export function readLayout(raw: unknown): ToolbarLayout {
 }
 
 export function isDefault(m: ModeLayout): boolean {
-  return !Object.keys(m.place).length && !Object.keys(m.order).length && !m.held?.length;
+  return !Object.keys(m.place).length && !Object.keys(m.order).length && !m.held?.length && !Object.keys(m.widths ?? {}).length && m.rows == null;
+}
+
+/** The toolbar's rows (RIBBON_ROWS unless the person chose). */
+export function rowsOf(m: ModeLayout): number {
+  return m.rows ?? RIBBON_ROWS;
+}
+
+/** The group's width the person set (px at scale 1), or null: as wide as its commands. */
+export function widthOf(m: ModeLayout, group: string): number | null {
+  return m.widths?.[group] ?? null;
+}
+
+/** `m` with the group's width set (clamped, rounded), or back to auto (null). */
+export function withWidth(m: ModeLayout, group: string, width: number | null): ModeLayout {
+  const widths = { ...(m.widths ?? {}) };
+  if (width == null || !Number.isFinite(width)) delete widths[group];
+  else widths[group] = Math.round(Math.min(MAX_GROUP_W, Math.max(MIN_GROUP_W, width)));
+  const { widths: _w, ...rest } = m;
+  void _w;
+  return Object.keys(widths).length ? { ...rest, widths } : rest;
+}
+
+/** `m` with the toolbar `rows` tall (clamped to 1..4), or back to the default (null). */
+export function withRows(m: ModeLayout, rows: number | null): ModeLayout {
+  const { rows: _r, ...rest } = m;
+  void _r;
+  if (rows == null || !Number.isFinite(rows)) return rest;
+  const n = Math.round(Math.min(MAX_ROWS, Math.max(MIN_ROWS, rows)));
+  return n === RIBBON_ROWS ? rest : { ...rest, rows: n };
 }
 
 /** The command was dragged onto the bar from More: it never folds into More for the width. */
@@ -106,15 +163,9 @@ function withHeld(m: ModeLayout, id: string, on: boolean): ModeLayout {
   return list.length ? { ...rest, held: list } : rest;
 }
 
-/**
- * Where a command sits when the frame is wide enough. `keep`: the commands shown by default in
- * model mode (each group's main command, Toolbar.tsx KEEP_IN_VIEW).
- */
-export function placeOf(id: string, mode: LayoutMode, m: ModeLayout, keep: ReadonlySet<string>): Place {
-  const p = m.place[id];
-  if (p) return p;
-  if (mode === 'sketch') return 'bar';
-  return keep.has(id) ? 'bar' : 'more';
+/** Where a command sits when the frame is wide enough: on the bar unless the person moved it to More. */
+export function placeOf(id: string, m: ModeLayout): Place {
+  return m.place[id] ?? 'bar';
 }
 
 /**
@@ -137,15 +188,12 @@ export function orderIds(registry: readonly string[], saved: readonly string[] |
 }
 
 /**
- * The layout with `id` put on the bar or in More. "Show in toolbar" is always kept (a command the
- * user asked for folds last when the frame is narrow: Toolbar.tsx); "Move to More" of a command
- * that is in More by default just forgets the earlier choice.
+ * The layout with `id` put on the bar or in More. Both are kept: "Show in toolbar" pins it (a
+ * command the person asked for folds last when the frame or its group is narrow: Toolbar.tsx),
+ * "Move to More" keeps it in More at every width.
  */
-export function withPlace(m: ModeLayout, id: string, place: Place, mode: LayoutMode, keep: ReadonlySet<string>): ModeLayout {
-  const next = { ...m.place };
-  delete next[id];
-  if (place === 'bar' || placeOf(id, mode, { place: {}, order: {} }, keep) !== 'more') next[id] = place;
-  const out: ModeLayout = { ...m, place: next };
+export function withPlace(m: ModeLayout, id: string, place: Place): ModeLayout {
+  const out: ModeLayout = { ...m, place: { ...m.place, [id]: place } };
   // A command sent to More is no longer held on the bar.
   return place === 'more' ? withHeld(out, id, false) : out;
 }
@@ -199,14 +247,12 @@ export function withSwapIn(
   shown: readonly string[],
   id: string,
   index: number,
-  mode: LayoutMode,
-  keep: ReadonlySet<string>,
 ): ModeLayout {
   const bar = shown.filter((x) => x !== id);
   const { before, displaced } = barDropOf(bar, index);
   let next = before ? withMove(m, group, order, id, before) : m;
-  next = withPlace(next, id, 'bar', mode, keep);
-  if (displaced) next = withPlace(next, displaced, 'more', mode, keep);
+  next = withPlace(next, id, 'bar');
+  if (displaced) next = withPlace(next, displaced, 'more');
   // Held: it stays on the bar at every width (the frame folds the group's other commands first).
   return withHeld(next, id, true);
 }
@@ -220,6 +266,13 @@ export interface ToolbarPrefs {
   readonly loaded: Promise<void>;
   /** Replace one mode's layout and save. */
   setMode(mode: LayoutMode, m: ModeLayout): void;
+  /**
+   * v0.5.0 ribbon: a group's width (px at scale 1, clamped), or null: as wide as its commands. The
+   * person's line at the group's right and the Assistant's toolbar_width (parity.ts).
+   */
+  setWidth(mode: LayoutMode, group: string, width: number | null): void;
+  /** v0.5.0 ribbon: the toolbar's rows (1 to 4), or null: three. The person's bottom edge and toolbar_rows. */
+  setRows(mode: LayoutMode, rows: number | null): void;
   /** One mode back to the defaults (and save). */
   reset(mode: LayoutMode): void;
   /** The last save, for tests. */
@@ -271,6 +324,12 @@ export function toolbarPrefs(services: AppServices): ToolbarPrefs {
       const layout = { ...state.get().layout, [mode]: m };
       state.set({ layout });
       save(layout);
+    },
+    setWidth(mode, group, width) {
+      prefs.setMode(mode, withWidth(state.get().layout[mode], group, width));
+    },
+    setRows(mode, rows) {
+      prefs.setMode(mode, withRows(state.get().layout[mode], rows));
     },
     reset(mode) {
       prefs.setMode(mode, { place: {}, order: {} });

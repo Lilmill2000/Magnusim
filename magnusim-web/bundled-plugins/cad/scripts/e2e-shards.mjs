@@ -32,10 +32,16 @@ export const SHARDS = {
     'e2e/cad-p4a-toolbar.spec.ts',
     // P4b fix round 1 (TOOLBAR): the compact model default, the sketch ribbon order, rearranging and Reset.
     'e2e/cad-p4b-toolbar.spec.ts',
+    // v0.5.0: the compact sketch toolbar (every drawing group on the bar at 1920 px; what folds at 1600 and below).
+    'e2e/cad-sketch-toolbar-fit.spec.ts',
+    // v0.5.0 ribbon: groups resized by their line, rows by the bottom edge, sizes from one scale factor.
+    'e2e/cad-toolbar-resize.spec.ts',
     // ux010 TOOLBAR builder: Banana for scale (SCALE MODELS after VIEW; never a body; dragged; not linked).
     'e2e/cad-ux010-banana.spec.ts',
     // Pictures drawn off screen (handle.snapshot) and the count of the person's camera moves.
     'e2e/cad-viewport-snapshot.spec.ts',
+    // Keybinds: the Set keybind dialog (Replace, Reset), the keys live in a sketch, a change made in Settings applied at once.
+    'e2e/cad-keybinds.spec.ts',
   ],
   // The sketcher (tools, relations, dimensions, value boxes), profiles, and Extrude of them
   // (P3's gate and the P2+P3 review rounds).
@@ -75,6 +81,8 @@ export const SHARDS = {
     'e2e/cad-assistant-sketch.spec.ts',
     // v0.5.0: the DRAW flyouts and the shape tools (slots, polygon, sector, the rectangle, circle, arc and line variants).
     'e2e/cad-sketch-shapes.spec.ts',
+    // Daniel's first desktop test: the relations palette by the selection, the construction badge's ×.
+    'e2e/cad-sketch-relations-palette.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.

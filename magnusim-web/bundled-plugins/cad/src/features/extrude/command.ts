@@ -73,7 +73,6 @@ export function extrudeCommand(services: AppServices): CommandDef {
     label: 'Extrude',
     group: 'solid',
     icon: EXTRUDE_ICON,
-    shortcut: 'E',
     order: 30,
     hint: 'A solid from closed profiles of a sketch: pick shaded regions, then set the distance',
     explainRefusal: true,

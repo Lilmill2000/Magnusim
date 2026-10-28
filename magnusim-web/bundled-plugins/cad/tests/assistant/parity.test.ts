@@ -18,7 +18,8 @@
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
-import { AI_TOOLS, command, COMMANDS, DOC, FEATURE_FIELDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { keybindsFor } from '../../src/app/keybinds';
+import { AI_TOOLS, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
@@ -136,6 +137,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
       ['doc', services.doc, DOC],
       ['rails', railsFor(services), RAILS],
       ['toolbar', toolbarPrefs(services), TOOLBAR],
+      ['keybinds', keybindsFor(services), KEYBINDS],
       ['link', services.apis.get().link ?? {}, LINK],
     ];
     for (const [name, obj, table] of methods) for (const k of Object.keys(obj)) if (!table[k]) missing.push(`${name}.${k}`);
@@ -174,7 +176,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(missing, 'an Assistant capability with no person path').toEqual([]);
     expect(stale).toEqual([]);
     // Each path is there: the command registered, the control's method on its object, the panel field on a type with a panel.
-    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT };
+    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT };
     const bad: string[] = [];
     const check = (where: string, p: PersonPath) => {
       if (p.kind === 'command') {
@@ -191,6 +193,14 @@ describe('parity: every person-facing capability has an Assistant tool and field
     };
     for (const [tool, rows] of Object.entries(AI_TOOLS)) for (const [k, p] of Object.entries(rows)) check(`${tool} ${k}`, p);
     expect(bad).toEqual([]);
+    // Review 10: the toolbar's width and rows each have their own row both ways, and the person's
+    // controls for them are there in the booted app (the line at a group's right, the bottom edge).
+    expect(TOOLBAR.setWidth).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'toolbar_width' });
+    expect(TOOLBAR.setRows).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'toolbar_rows' });
+    expect(AI_TOOLS.workspace['action=toolbar_width']).toEqual({ kind: 'control', table: 'toolbar', method: 'setWidth' });
+    expect(AI_TOOLS.workspace['action=toolbar_rows']).toEqual({ kind: 'control', table: 'toolbar', method: 'setRows' });
+    expect(document.querySelectorAll('[data-cad-toolbar] [data-tb-resize]').length, "the lines at the groups' right").toBeGreaterThan(3);
+    expect(document.querySelectorAll('[data-cad-toolbar] [data-tb-rows-handle]').length, "the toolbar's bottom edge").toBe(1);
     const all = Object.values(AI_TOOLS).flatMap((r) => Object.values(r));
     const n = (k: PersonPath['kind']) => all.filter((p) => p.kind === k).length;
     console.log(`[parity] the other way: ${all.length} rows: ${n('command')} commands, ${n('control')} controls, ${n('panel')} panel fields, ${n('place')} places, ${n('own')} the Assistant's own`);

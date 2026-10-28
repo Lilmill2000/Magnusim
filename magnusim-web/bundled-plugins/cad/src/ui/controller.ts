@@ -12,6 +12,8 @@
 // committed; doc.assistant.takeOver).
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keybindMenuItem } from './keybinds';
+import { keyLabel } from '../app/keybinds';
 import { dependencies } from '../doc/features/hooks';
 import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed';
 import { isPersonEditing, PersonEditing } from '../doc/person-editing';
@@ -230,7 +232,8 @@ export function createUiController(services: AppServices): UiController {
       const broken = s.doc.features.filter((f) => builtBefore.has(f.id) && s.rebuild.features[f.id]?.state === 'error').map((f) => f.name);
       if (!broken.length) return;
       const list = broken.length === 1 ? broken[0] : `${broken.slice(0, -1).join(', ')} and ${broken[broken.length - 1]}`;
-      services.bridge.toast(`Deleted ${name}: ${list} ${broken.length === 1 ? 'fails' : 'fail'} without it. Undo (Ctrl+Z) brings ${name} back.`, 'error');
+      const undoKey = keyLabel(services, 'edit.undo');
+      services.bridge.toast(`Deleted ${name}: ${list} ${broken.length === 1 ? 'fails' : 'fail'} without it. Undo${undoKey ? ` (${undoKey})` : ''} brings ${name} back.`, 'error');
     };
     const off = doc.state.subscribe(check);
     const timer = setTimeout(stop, 120_000);
@@ -782,6 +785,9 @@ export function createUiController(services: AppServices): UiController {
         },
       );
       if (bar < d.doc.features.length) items.push({ id: 'roll-end', label: 'Roll to end', run: () => c.rollToEnd() } satisfies MenuItem);
+      // The keys of Delete and Rename (keyboard-only actions): set here, where the person meets them,
+      // above Delete, which stays the menu's last item (P4a fix 1).
+      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.delete', 'Set keybind for Delete…'), keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
       // Refused while a later feature uses it: offered disabled, with the reason (review P2/P3 round 2:
       // "Delete Sketch 1" was offered, and only the click said no).
       // Several features selected, this one among them: one Delete of them all (one undo step).
@@ -814,6 +820,8 @@ export function createUiController(services: AppServices): UiController {
       // The body's colour (as the Assistant's body color): the tree row's colour picker.
       items.push({ id: 'body-color', label: 'Colour…', disabled: block, run: () => c.pickBodyColor(id) });
       if (f) items.push({ sep: true, id: 'sep-body-feature' }, { id: 'body-edit', label: `Edit ${f.name}`, disabled: block, run: () => c.openEdit(f.id) });
+      // Rename's key (F2 renames a body too): set here, where the person meets it.
+      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
       return items;
     },
     showMenu(x, y, items, label = 'Actions', opts = {}) {

@@ -107,9 +107,9 @@
   --mg-plot-tip-bg: rgba(255, 255, 255, 0.96);
   --mg-series-1: #1570ef;
   --mg-series-2: #6941c6;
-  --mg-series-3: #12b76a;
-  --mg-series-4: #f79009;
-  --mg-series-5: #0ba5ec;
+  --mg-series-3: #099250;
+  --mg-series-4: #b54708;
+  --mg-series-5: #0086c9;
   --mg-series-6: #dd2590;
   --mg-series-7: #667085;
   --mg-weight-bold: 700;
@@ -139,7 +139,7 @@
   --mg-primary-strong: #1a4fbf;
   --mg-primary-deep: #1d4ed8;
   --mg-shadow-color: rgba(20, 24, 40, 0.12);
-  --mg-viewport-bg: #f5f6f8;
+  --mg-viewport-bg: #f0f2f7;
   --mg-axis-x: #d42828;
   --mg-axis-y: #1f9a3a;
   --mg-axis-z: #2a5bd7;

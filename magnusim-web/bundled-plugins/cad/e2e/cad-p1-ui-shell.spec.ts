@@ -79,7 +79,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
 
   // Only commands that work, in the core's toolbar groups. No one-click solids (decision 2026-10-01).
   expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft', 'Hole']);
-  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Parameters', 'Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine']);
+  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine', 'Parameters']);
   await expect(tb.locator('[data-group="edit"] .tb-txt')).toHaveText(['Undo', 'Redo']);
   await expect(tb.locator('.tb-group-label').first()).toHaveText('SKETCH');
   await expect(tb.locator('.tb-group-label').last()).toHaveText('EDIT');
@@ -170,7 +170,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the modules'
   // actions for a face, then the body's and the feature's, the feature's Delete last of all (P4a
   // review: the actions first, Delete last; it sat between them).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 1']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Extrude 1']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
@@ -264,15 +264,15 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     'border-top-color': 'rgb(208, 213, 221)',
   });
 
-  // Toolbar (.tb-btn 10px, labels 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
+  // Toolbar (headings 10px/700 #6a7180, bar #f2f3f6) and chips (600 12px #344054 on white).
   expect(await styleOf(frame.locator('[data-cad-toolbar]'), ['background-color'])).toEqual({ 'background-color': 'rgb(242, 243, 246)' });
   expect(await styleOf(frame.locator('.tb-group-label').first(), ['font-size', 'font-weight', 'color'])).toEqual({ 'font-size': '10px', 'font-weight': '700', color: 'rgb(106, 113, 128)' });
   // Labelled buttons (P4a: Daniel works on 1280-1920 px screens). At 1600 and at 1280 px every
-  // command button shown in the modelling groups has its label in view with the core's .tb-btn
-  // recipe (10px, min-width 64, radius 4); the toolbar does not scroll. Since P4b fix round 1 (Daniel:
-  // "I prefer 1280 px (model)") both sizes show the compact layout: each group's main command(s), the
-  // rest in its More menu, nothing more folded for the width; VIEW and EDIT keep their labels at
-  // 1600 and are icons at 1280.
+  // command of the modelling groups is a button inside the frame (v0.5.0 ribbon, Daniel: "yes show
+  // the rest as small buttons": nothing in More, nothing folded); the toolbar does not scroll.
+  // Each group's main command is a large button with its name (11 px, radius 4); the rest are small
+  // (radius 3), named at 1600 px; at 1280 px the least-used groups' small buttons are their icons
+  // (FILE, INSPECT, CONSTRUCT: SQUEEZE_ORDER), the name staying the tooltip and accessible name.
   const folded: number[] = [];
   for (const size of [
     { width: 1600, height: 1000 },
@@ -280,32 +280,41 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   ]) {
     await page.setViewportSize(size);
     const bar = frame.locator('[data-cad-toolbar="model"]');
-    // ux010 (Daniel: a SCALE MODELS section, labelled like the others): VIEW and EDIT are icons at
-    // 1600 px too since then, to leave the labelled Banana for scale its room.
-    await expect(bar).toHaveAttribute('data-fit', '1');
-    // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon (data-fit-scale), checked by
-    // cad-ux010-banana: labelled at 1600 px, and at 1280 px with Segoe UI (Windows). A wider font
-    // (Linux CI's DejaVu Sans) may take its label at 1280 px, never a modelling command's (below);
-    // no group goes to icons there (cad-p4b-toolbar-wide-text checks the order with wider text).
-    if (size.width > 1280 || process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-scale', '0');
-    await expect(bar).toHaveAttribute('data-fit-icons', '');
+    // VIEW and EDIT are icons at both (every model command needs the room); no group collapses.
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit', '1');
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-labels', size.width > 1280 ? '' : 'file inspect construct');
+    const iconGroups = ((await bar.getAttribute('data-fit-labels')) ?? '').split(' ').filter(Boolean);
+    await expect(bar).toHaveAttribute('data-fit-collapsed', '');
     const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command]').evaluateAll((els) =>
       els.map((b) => {
         const s = getComputedStyle(b);
         const t = b.querySelector('.tb-txt') as HTMLElement;
         const r = t.getBoundingClientRect();
         const box = b.getBoundingClientRect();
-        return { id: b.getAttribute('data-command'), fontSize: s.fontSize, minWidth: s.minWidth, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
+        return { id: b.getAttribute('data-command'), group: b.closest('.tb-group')!.getAttribute('data-group')!, large: b.classList.contains('is-large'), fontSize: s.fontSize, radius: s.borderTopLeftRadius, labelShown: getComputedStyle(t).position !== 'absolute' && r.width > 12 && r.height > 8, inFrame: box.left >= 0 && box.right <= window.innerWidth };
       }),
     );
-    // Nine labelled: Sketch, Extrude, Linear pattern, Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP.
-    expect(shown.map((b) => b.id)).toEqual(['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step']);
-    for (const b of shown) expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, fontSize: '10px', minWidth: '64px', radius: '4px', labelShown: true, inFrame: true });
+    // Every modelling command, each group's main command first (large).
+    const LARGE = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step'];
+    expect(shown.map((b) => b.id)).toEqual([
+      'sketch.new',
+      'solid.extrude', 'solid.revolve', 'solid.sweep', 'solid.loft', 'solid.hole',
+      'pattern.linear', 'pattern.circular', 'pattern.mirror',
+      'modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.combine', 'modify.parameters',
+      'construct.plane', 'construct.axis', 'construct.point',
+      'cfd.enclosure',
+      'inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find',
+      'file.import-step', 'file.export-step', 'file.picture',
+    ]);
+    for (const b of shown) {
+      const large = LARGE.includes(b.id!);
+      expect(b, `${b.id} at ${size.width}`).toEqual({ id: b.id, group: b.group, large, fontSize: '11px', radius: large ? '4px' : '3px', labelShown: large || !iconGroups.includes(b.group), inFrame: true });
+    }
     expect(await bar.evaluate((el) => el.scrollWidth - el.clientWidth), `the toolbar scrolls at ${size.width}`).toBeLessThanOrEqual(1);
     folded.push(Number(await bar.getAttribute('data-folded')));
     await shot(page, `ui-parity-toolbar-${size.width}`);
   }
-  expect(folded).toEqual([19, 19]);
+  expect(folded).toEqual([0, 0]);
   await page.setViewportSize({ width: 1600, height: 1000 });
   // The core's .measure-chip (style.css:1093-1106): 600 12px/1.35 "Segoe UI", padding 8/10/8/12 (review round 1: CAD had 6/10).
   expect(await styleOf(frame.locator('[data-chip="volume"]'), ['font-size', 'font-weight', 'font-family', 'line-height', 'color', 'background-color', 'border-top-color', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left'])).toEqual({
@@ -402,7 +411,7 @@ test('cad:p1-ui-tree rollback bar, suppress, failed feature, rename, delete, reo
 
   // Suppress from the context menu: the row greys and strikes through; the cut is gone.
   await cut.locator('> .tree-row').click({ button: 'right' });
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Delete Extrude 2']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Edit Extrude 2', 'Rename Extrude 2', 'Suppress Extrude 2', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Extrude 2']);
   await expect(menu.locator('[data-menu-item="rollback"]')).toHaveAttribute('aria-disabled', 'true');
   await menu.locator('[data-menu-item="suppress"]').click();
   await expect(menu).toHaveCount(0);

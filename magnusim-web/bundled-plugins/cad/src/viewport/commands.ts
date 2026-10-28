@@ -11,15 +11,16 @@ import type { StandardView, ViewportHandle } from '../types/viewport';
 import type { DocState } from '../types/doc-service';
 import { normalTarget } from './normal';
 
-export const VIEW_COMMANDS: { view: StandardView; label: string; shortcut: string }[] = [
-  { view: 'front', label: 'Front', shortcut: '1' },
-  { view: 'back', label: 'Back', shortcut: '2' },
-  { view: 'left', label: 'Left', shortcut: '3' },
-  { view: 'right', label: 'Right', shortcut: '4' },
-  { view: 'top', label: 'Top', shortcut: '5' },
-  { view: 'bottom', label: 'Bottom', shortcut: '6' },
-  { view: 'iso', label: 'Isometric', shortcut: '7' },
-  { view: 'iso_back', label: 'Back isometric', shortcut: '8' },
+/** The standard views, in the views menu's order; their keys (1-8 by default) are the keybinding registry's (src/app/keymap.ts). */
+export const VIEW_COMMANDS: { view: StandardView; label: string }[] = [
+  { view: 'front', label: 'Front' },
+  { view: 'back', label: 'Back' },
+  { view: 'left', label: 'Left' },
+  { view: 'right', label: 'Right' },
+  { view: 'top', label: 'Top' },
+  { view: 'bottom', label: 'Bottom' },
+  { view: 'iso', label: 'Isometric' },
+  { view: 'iso_back', label: 'Back isometric' },
 ];
 
 const NO_VIEWPORT = 'The viewport is not ready';
@@ -45,7 +46,6 @@ export function viewportCommands(): CommandDef[] {
     {
       id: 'view.fit',
       label: 'Fit',
-      shortcut: 'F',
       hint: 'Frame the visible bodies, keeping the view direction',
       // Fit and the standard views work the same in sketch mode (the VIEW group stays).
       mode: 'any',
@@ -56,7 +56,6 @@ export function viewportCommands(): CommandDef[] {
       (v): CommandDef => ({
         id: `view.${v.view}`,
         label: `${v.label} view`,
-        shortcut: v.shortcut,
         mode: 'any',
         enabled: ready,
         run: (s) => viewport(s)?.setView(v.view),
@@ -65,7 +64,6 @@ export function viewportCommands(): CommandDef[] {
     {
       id: 'view.normal-to',
       label: 'Normal to',
-      shortcut: 'N',
       hint: 'Look straight at the selected flat face, plane or sketch',
       explainRefusal: true,
       enabled: (s) => {

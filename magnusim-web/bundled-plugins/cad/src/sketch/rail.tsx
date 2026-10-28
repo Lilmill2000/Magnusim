@@ -13,7 +13,8 @@ import { useServices } from '../lib/services';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { Icon } from '../ui/Icon';
 import { ASSISTANT_PANEL_DONE, usePanelOwner, useTip } from '../ui/kit';
-import { RAIL_SHORTCUT, railsFor, useRailFocus } from '../ui/left-rails';
+import { RAIL_COMMAND, railsFor, useRailFocus } from '../ui/left-rails';
+import { railKeybindMenu, useKeyLabel } from '../ui/keybinds';
 import { CHEVRON_RIGHT } from '../ui/tree/TreeRail';
 import { SKETCH_ICONS } from './icons';
 
@@ -24,11 +25,13 @@ export function SketchRail({ name, state, words, problem, onExpand }: { name: st
   useRailFocus(rails, 'sketch-expand', ref);
   const assistant = usePanelOwner() === 'assistant';
   const label = assistant ? `Show the ${name} panel (the Assistant is drawing it)` : `Show the ${name} panel`;
-  const openTip = useTip({ text: label, detail: problem ? problem : words, shortcut: RAIL_SHORTCUT });
-  const doneTip = useTip(assistant ? { text: 'Finish sketch', detail: ASSISTANT_PANEL_DONE } : { text: 'Finish sketch', shortcut: 'Enter' });
+  const railKey = useKeyLabel(services, RAIL_COMMAND);
+  const finishKey = useKeyLabel(services, 'sketch.finish');
+  const openTip = useTip({ text: label, detail: problem ? problem : words, ...(railKey ? { shortcut: railKey } : {}) });
+  const doneTip = useTip(assistant ? { text: 'Finish sketch', detail: ASSISTANT_PANEL_DONE } : { text: 'Finish sketch', ...(finishKey ? { shortcut: finishKey } : {}) });
   return (
     <div className="cad-rail is-sketch" data-cad-rail="sketch" data-sketch-state={state} data-rail-problem={problem ? '1' : undefined} data-panel-owner={assistant ? 'assistant' : undefined}>
-      <button type="button" className="cad-rail-open" data-rail-expand="1" aria-label={problem ? `${label}: ${problem}` : `${label} (${words})`} aria-expanded="false" ref={ref} onClick={() => {
+      <button type="button" className="cad-rail-open" data-rail-expand="1" aria-label={problem ? `${label}: ${problem}` : `${label} (${words})`} aria-expanded="false" ref={ref} onContextMenu={(e) => railKeybindMenu(services, e)} onClick={() => {
           rails.focusAfter('sketch-collapse');
           onExpand();
         }} {...openTip}>

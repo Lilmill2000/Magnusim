@@ -2,7 +2,7 @@
 /**
  * GET/POST /api/prefs and POST /api/prefs/hardware-check
  */
-import { clampPort, listenPort, publicPrefs, writeLocalDoc } from './prefs.js';
+import { cleanAppKeybinds, clampPort, listenPort, publicPrefs, writeLocalDoc } from './prefs.js';
 import { runHardwareCheck } from './hardware-profile.js';
 import { envGet } from './env-compat.js';
 import { runRankCap } from './ranks.js';
@@ -52,6 +52,14 @@ export async function handlePrefsApi(req, res, u, parts, { sendJson, readJsonBod
     if (body.wizard_completed != null) patch.wizard_completed = !!body.wizard_completed;
     if (body.collapse_completed_sections != null) {
       patch.collapse_completed_sections = !!body.collapse_completed_sections;
+    }
+    // The person's keys for the app's own commands (Settings → Keybinds): the whole value.
+    if (body.keybinds !== undefined) {
+      const keybinds = body.keybinds === null ? {} : cleanAppKeybinds(body.keybinds);
+      if (!keybinds) {
+        return sendJson(res, 400, { ok: false, error: 'keybinds must map app.assistant to a list of at most 4 keys' });
+      }
+      patch.keybinds = keybinds;
     }
     writeLocalDoc(patch);
     const prefs = pagePrefs();

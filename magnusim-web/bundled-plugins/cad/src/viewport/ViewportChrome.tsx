@@ -2,7 +2,8 @@
 // (shell.html:654-670, style.css:1392-1450): Fit (home) button, XYZ key and
 // the triad slot, plus the CAD view tools before them: selection filter,
 // section view and the views menu (standard views, Normal to, projection,
-// display). Every control here works; nothing is shown that does not.
+// display; a right-click on a view's row sets its keybind). Every control here
+// works; nothing is shown that does not.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -13,6 +14,8 @@ import { ORIGIN_PLANES, type OriginPlaneRef } from '../types/doc';
 import type { SelectKind } from '../types/selection';
 import type { DisplayMode, PlanesMode, Projection, StandardView, ViewportHandle } from '../types/viewport';
 import { normalToTarget, VIEW_COMMANDS } from './commands';
+import { openSetKeybind, useKeyLabel } from '../ui/keybinds';
+import type { AppServices } from '../types/app';
 // P4b SELECT: the sketch selection filter (Points, Curves, Dimensions) while a sketch is edited.
 import { SKETCH_FILTERS, sketchFilterOf, type SketchPickKind } from '../sketch/select-filter';
 
@@ -125,6 +128,33 @@ export function sectionAxis(plane: OriginPlaneRef): { label: string; sign: numbe
   const n = ORIGIN_PLANES[plane].normal;
   const i = n.findIndex((v) => v !== 0);
   return { label: 'XYZ'[i], sign: Math.sign(n[i]) };
+}
+
+/**
+ * A command's row of the views menu: its label and its key (the person's keybind). A right-click
+ * opens Set keybind for it (the menu closes first: the dialog has the keyboard).
+ */
+function ViewItem(p: { services: AppServices; command: string; label: string; 'data-view': string; disabled?: boolean; title?: string; onClick(): void; onKeybind(): void }) {
+  const key = useKeyLabel(p.services, p.command);
+  return (
+    <button
+      type="button"
+      className="cad-vp-item"
+      data-view={p['data-view']}
+      data-command={p.command}
+      disabled={p.disabled}
+      title={p.title}
+      onClick={p.onClick}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        p.onKeybind();
+        openSetKeybind(p.services, p.command);
+      }}
+    >
+      <span>{p.label}</span>
+      {key ? <kbd>{key}</kbd> : null}
+    </button>
+  );
 }
 
 export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
@@ -284,15 +314,13 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
           </button>
           <Popover open={open === 'views'} onClose={close} label="Views" id="views">
             {VIEW_COMMANDS.map((c) => (
-              <button key={c.view} type="button" className="cad-vp-item" data-view={c.view} onClick={() => view(c.view)}>
-                <span>{c.label}</span>
-                <kbd>{c.shortcut}</kbd>
-              </button>
+              <ViewItem key={c.view} services={services} command={`view.${c.view}`} label={c.label} data-view={c.view} onClick={() => view(c.view)} onKeybind={close} />
             ))}
             <div className="cad-vp-sep" />
-            <button
-              type="button"
-              className="cad-vp-item"
+            <ViewItem
+              services={services}
+              command="view.normal-to"
+              label="Normal to"
               data-view="normal-to"
               disabled={!normalTo || 'reason' in normalTo}
               title={normalTo && 'reason' in normalTo ? normalTo.reason : undefined}
@@ -300,10 +328,8 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
                 if (normalTo && !('reason' in normalTo)) handle.lookAt(normalTo.normal, normalTo.up);
                 close();
               }}
-            >
-              <span>Normal to</span>
-              <kbd>N</kbd>
-            </button>
+              onKeybind={close}
+            />
             {normalTo && 'reason' in normalTo ? <div className="cad-vp-pop-hint">{normalTo.reason}</div> : null}
             <div className="cad-vp-sep" />
             <div className="cad-vp-pop-title">Projection</div>

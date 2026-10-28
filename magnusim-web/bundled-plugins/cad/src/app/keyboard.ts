@@ -1,49 +1,16 @@
-// Frame keyboard: combos -> handlers, and command shortcuts. Owner: INTEGRATE (scaffold version).
+// Frame keyboard: combos -> handlers, and command shortcuts (their keys from the keybinding
+// registry and the person's keybinds: src/app/keymap.ts, src/app/keybinds.ts). Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cycleDialogFocus, openModal } from '../lib/modal';
 import type { CommandDef, CommandRegistry, KeyBinding, KeyboardManager, Mode } from '../types/commands';
+import { combosOf, normaliseCombo } from './keymap';
 
-const MODS = ['Ctrl', 'Alt', 'Shift'] as const;
+// Combos in the registry's form (src/app/keymap.ts); a press means combosOf(e): a Latin letter by
+// the letter it types, anything else by the key's place (punctuation by its character too).
+export { comboOf, combosOf, normaliseCombo } from './keymap';
 
-/** "ctrl+shift+z" / "Cmd+Z" / "Shift+f" -> "Ctrl+Shift+Z" / "Ctrl+Z" / "Shift+F". */
-export function normaliseCombo(combo: string): string {
-  const parts = combo.split('+').map((p) => p.trim()).filter(Boolean);
-  const mods = new Set<string>();
-  let key = '';
-  for (const p of parts) {
-    const l = p.toLowerCase();
-    if (l === 'ctrl' || l === 'control' || l === 'cmd' || l === 'meta' || l === 'mod') mods.add('Ctrl');
-    else if (l === 'alt' || l === 'option') mods.add('Alt');
-    else if (l === 'shift') mods.add('Shift');
-    else key = keyName(p);
-  }
-  return [...MODS.filter((m) => mods.has(m)), key].filter(Boolean).join('+');
-}
-
-function keyName(k: string): string {
-  if (k.length === 1) return k.toUpperCase();
-  const l = k.toLowerCase();
-  if (l === 'esc') return 'Escape';
-  if (l === 'del') return 'Delete';
-  if (l === 'space' || k === ' ') return 'Space';
-  return k[0].toUpperCase() + k.slice(1);
-}
-
-/** The combo a key event means ("Ctrl+Z"); Cmd counts as Ctrl. */
-export function comboOf(e: KeyboardEvent): string {
-  const mods: string[] = [];
-  if (e.ctrlKey || e.metaKey) mods.push('Ctrl');
-  if (e.altKey) mods.push('Alt');
-  if (e.shiftKey) mods.push('Shift');
-  const key = e.key === ' ' ? 'Space' : keyName(e.key);
-  if (key === 'Control' || key === 'Shift' || key === 'Alt' || key === 'Meta') return mods.join('+');
-  return [...mods, key].join('+');
-}
-
-/** Undo and redo: a field marked [data-undo-to-app] (nothing typed in it to take back) hands them to the app. */
-const UNDO_COMBOS = new Set(['Ctrl+Z', 'Ctrl+Y', 'Ctrl+Shift+Z']);
-
-function typingIn(target: EventTarget | null): boolean {
+/** Whether a key went to a field the person types in (an input, a textarea, a select, editable text). */
+export function typingIn(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
   if (!el || !el.tagName) return false;
   const tag = el.tagName.toLowerCase();
@@ -68,7 +35,9 @@ function controlOf(combo: string, target: EventTarget | null): { el: HTMLElement
 }
 
 export function createKeyboard(doc: Document): KeyboardManager {
-  const bindings = new Map<string, KeyBinding[]>();
+  // Every binding in the order bound (newest last): a fixed combo, or keys() read on each press.
+  let bindings: KeyBinding[] = [];
+  const matches = (b: KeyBinding, combo: string) => (b.keys ? b.keys().includes(combo) : b.combo === combo);
   // The last input (a key or a pointer press), and the element the focus last went to with it.
   let lastInput: 'key' | 'pointer' = 'pointer';
   let focused: { el: EventTarget | null; byKey: boolean } = { el: null, byKey: false };
@@ -94,18 +63,24 @@ export function createKeyboard(doc: Document): KeyboardManager {
       }
       return;
     }
-    const combo = comboOf(e);
-    const list = bindings.get(combo);
-    if (!list || !list.length) return;
+    // A control that handled the key keeps it (review: Delete on a focused width line of the
+    // ribbon reset the width and deleted the selected feature too; Home in an open menu ran a
+    // command bound to Home).
+    if (e.defaultPrevented) return;
+    const combos = combosOf(e);
+    const combo = combos[0];
+    const list = bindings.filter((b) => combos.some((c) => matches(b, c)));
+    if (!list.length) return;
     const control = controlOf(combo, e.target);
     if (control && (control.menu || (focused.byKey && (focused.el === control.el || control.el.contains(focused.el as Node | null))))) return;
     // A panel field after Enter: Ctrl+Z is the app's Undo, not the browser's text undo (review
     // P2/P3 round 3: it put the old text back in the field while the model kept the new value).
-    const typing = typingIn(e.target) && !(UNDO_COMBOS.has(combo) && (e.target as HTMLElement).getAttribute?.('data-undo-to-app') === '1');
+    const typing = typingIn(e.target);
+    const undoToApp = typing && (e.target as HTMLElement).getAttribute?.('data-undo-to-app') === '1';
     // Newest first; a binding that returns false passes the key on to the next older one.
     for (let i = list.length - 1; i >= 0; i--) {
       const b = list[i];
-      if (typing && !b.inInputs) continue;
+      if (typing && !b.inInputs && !(undoToApp && b.appUndo)) continue;
       if (b.run(e) === false) continue;
       e.preventDefault();
       return;
@@ -118,14 +93,10 @@ export function createKeyboard(doc: Document): KeyboardManager {
   return {
     normalise: normaliseCombo,
     bind(binding) {
-      const combo = normaliseCombo(binding.combo);
-      const b = { ...binding, combo };
-      const list = bindings.get(combo) ?? [];
-      list.push(b);
-      bindings.set(combo, list);
+      const b = { ...binding, combo: normaliseCombo(binding.combo) };
+      bindings.push(b);
       return () => {
-        const l = bindings.get(combo);
-        if (l) bindings.set(combo, l.filter((x) => x !== b));
+        bindings = bindings.filter((x) => x !== b);
       };
     },
     dispose() {
@@ -133,37 +104,47 @@ export function createKeyboard(doc: Document): KeyboardManager {
       doc.removeEventListener('pointerdown', onPress, true);
       doc.removeEventListener('keydown', onAnyKey, true);
       doc.removeEventListener('focusin', onFocus, true);
-      bindings.clear();
+      bindings = [];
     },
   };
 }
 
+/** Undo and Redo, of the Part and of a sketch: from a field marked [data-undo-to-app] they are the app's. */
+const APP_UNDO = new Set(['edit.undo', 'edit.redo', 'sketch.undo', 'sketch.redo']);
+
 /**
- * Keep one binding per shortcut combo for the commands that have it (re-synced
- * when commands change). A key runs the newest command of the current mode
- * (`mode()`, default always 'model'; a command's mode 'any' matches every mode)
- * with that shortcut; with none for this mode the key passes on to older
- * bindings (the UI shell's own Delete or Escape). A refused command says why
- * through `explain` when it has explainRefusal.
+ * Keep one binding per key combo of the commands that have keys (the person's keybinds, else the
+ * registry's defaults: CommandRegistry.keys; a command the registry does not list keeps its own
+ * shortcut), re-synced when commands or keys change. A key runs the newest command of the current
+ * mode (`mode()`, default always 'model'; a command's mode 'any' matches every mode) with that
+ * combo; with none for this mode the key passes on to older bindings (the UI shell's own Delete or
+ * Escape). A refused command says why through `explain` when it has explainRefusal.
  */
 export function bindCommandShortcuts(commands: CommandRegistry, keyboard: KeyboardManager, explain?: (message: string) => void, mode: () => Mode = () => 'model'): () => void {
   let offs: (() => void)[] = [];
+  const keysOf = (c: CommandDef): readonly string[] => (commands.keys ? commands.keys(c.id) : c.shortcut ? [c.shortcut] : []);
   const sync = () => {
     for (const off of offs) off();
     const combos = new Map<string, CommandDef[]>();
     for (const c of commands.all()) {
-      if (!c.shortcut) continue;
-      const combo = keyboard.normalise(c.shortcut);
-      const list = combos.get(combo) ?? [];
-      list.push(c);
-      combos.set(combo, list);
+      for (const k of keysOf(c)) {
+        const combo = keyboard.normalise(k);
+        if (!combo) continue;
+        const list = combos.get(combo) ?? [];
+        list.push(c);
+        combos.set(combo, list);
+      }
     }
     offs = [...combos].map(([combo, list]) =>
       keyboard.bind({
         combo,
-        run: () => {
+        // Only Undo and Redo themselves, and only on Ctrl (Cmd) keys, reach the app from an
+        // untouched field ([data-undo-to-app]): a letter typed there stays the field's.
+        appUndo: combo.startsWith('Ctrl+') && list.some((c) => APP_UNDO.has(c.id)),
+        run: (e) => {
           const m = mode();
-          const c = [...list].reverse().find((x) => x.mode === 'any' || (x.mode ?? 'model') === m);
+          const fromField = typingIn(e?.target ?? null);
+          const c = [...list].reverse().find((x) => (x.mode === 'any' || (x.mode ?? 'model') === m) && (!fromField || APP_UNDO.has(x.id)));
           if (!c) return false;
           void commands.run(c.id).then((r) => {
             if (r !== true && c.explainRefusal && explain) explain(`${c.label}: ${r}`);

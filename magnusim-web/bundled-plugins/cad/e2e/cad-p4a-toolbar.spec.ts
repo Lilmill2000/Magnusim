@@ -3,7 +3,9 @@
 // "More ▾" menu (Fusion style), which has the core's menu look, works from the
 // keyboard, and lists each command with its icon, shortcut and tooltip.
 //   - at 1280 x 800 and 1920 x 1080, in model and in sketch mode, every command
-//     of the toolbar is reachable: a labelled button inside the frame, or an item
+//     of the toolbar is reachable: a labelled button inside the frame (v0.5.0
+//     ribbon: CONSTRAIN's glyphs named by aria-label; a flyout shows its own
+//     short name, "Slot"), or an item
 //     of its group's More menu (label, shortcut, tooltip with the hint or the
 //     reason it cannot run); what folds is always the start of the priority list;
 //     1920 folds nothing;
@@ -57,9 +59,9 @@ const FOLD_ORDER = [
   'sketch.point',
   'sketch.construction',
   'sketch.chamfer',
-  // The Ellipse flyout (its bar command).
-  'sketch.ellipse',
   'sketch.extend',
+  // The Ellipse flyout (its bar command): the drawing groups fold after the least-used sketch tools.
+  'sketch.ellipse',
   // v0.5.0: the drawing variants sit in flyouts (src/ui/flyouts.ts); Polygon and the Slot flyout fold here.
   'sketch.polygon',
   'sketch.slot',
@@ -70,14 +72,6 @@ const FOLD_ORDER = [
   'sketch.mirror',
   'sketch.spline',
 ];
-
-/**
- * The model commands on the bar by default (src/ui/Toolbar.tsx KEEP_IN_VIEW's model part; P4b fix
- * round 1, Daniel: the compact layout at every width). Every other model command starts in its
- * group's More menu.
- */
-// ux010: SCALE MODELS' Banana for scale is on the bar too.
-const MODEL_ON_BAR = ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'modify.chamfer', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step', 'scale.banana'];
 
 type Cmd = { id: string; label: string; shortcut: string | null; hint: string | null; reason: string | null; flyout?: string; order?: number };
 type Grp = { group: string; label: string; commands: Cmd[] };
@@ -156,14 +150,17 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
         // CONSTRAIN draws its constraints' own glyphs (labels in the tooltips, by design since P3).
         // ux010: SCALE MODELS (Banana for scale) is the first to go to its icon when the labelled
         // toolbar does not fit (data-fit-scale), so a modelling command keeps its label.
-        const iconsOnly = g.group === 'scale' && (await bar.getAttribute('data-fit-scale')) === '1';
-        if (g.group !== 'constrain' && !iconsOnly) {
-          const label = await btn.locator('.tb-txt').evaluate((t) => {
-            const r2 = t.getBoundingClientRect();
-            return getComputedStyle(t).position !== 'absolute' && r2.width > 12 ? (t.textContent ?? '') : '';
-          });
-          expect(label, `${where}: ${c.id} shows its label`).toBe(c.label);
-        }
+        // v0.5.0 ribbon: a group whose small buttons went to icons for the width (data-fit-labels)
+        // shows its small buttons' icons alone (the name in the tooltip and the accessible name).
+        const iconsOnly = ((await bar.getAttribute('data-fit-labels')) ?? '').split(' ').includes(g.group) && !(await btn.evaluate((b) => b.classList.contains('is-large')));
+        const label = await btn.locator('.tb-txt').evaluate((t) => {
+          const r2 = t.getBoundingClientRect();
+          return getComputedStyle(t).position !== 'absolute' && r2.width > 12 ? (t.textContent ?? '') : '';
+        });
+        if (g.group === 'constrain' || iconsOnly) expect(label, `${where}: ${c.id} is its icon`).toBe('');
+        // A flyout's button shows the flyout's short name ("Slot"); every other button its own.
+        else if (g.variants.has(c.id)) expect(label, `${where}: ${c.id} shows its flyout's name`).not.toBe('');
+        else expect(label, `${where}: ${c.id} shows its label`).toBe(c.label);
       } else {
         inMore.push(c);
       }
@@ -210,14 +207,13 @@ async function expectAllReachable(page: Page, frame: FrameLocator, mode: 'model'
     expect(await more.evaluate((el) => el === document.activeElement), `${where}: Escape gives ${g.group}'s More the keyboard`).toBe(true);
   }
   await expect(bar).toHaveAttribute('data-folded', String(folded.length));
-  // In More by the default layout (model mode: everything but each group's main command), then what
-  // the width folds: always the start of the priority list of the rest (the most-used stay longest).
+  // v0.5.0 ribbon (Daniel: "yes show the rest as small buttons"): nothing is in More by the default
+  // layout in either mode; what the width folds is always the start of the priority list (the
+  // most-used stay longest).
   const present = groups.flatMap((g) => g.commands.map((c) => c.id));
-  const byLayout = mode === 'model' ? present.filter((id) => !MODEL_ON_BAR.includes(id)) : [];
-  expect(folded.filter((id) => byLayout.includes(id)).sort(), `${where}: the default layout's More commands`).toEqual([...byLayout].sort());
-  const byWidth = folded.filter((id) => !byLayout.includes(id));
+  const byWidth = folded;
   await expect(bar).toHaveAttribute('data-fit-folded', String(byWidth.length));
-  const order = FOLD_ORDER.filter((id) => present.includes(id) && !byLayout.includes(id));
+  const order = FOLD_ORDER.filter((id) => present.includes(id));
   expect([...byWidth].sort((a, b) => order.indexOf(a) - order.indexOf(b)), `${where}: folded in priority order`).toEqual(order.slice(0, byWidth.length));
   return byWidth;
 }
@@ -252,18 +248,14 @@ test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a lab
     await shot(page, `toolbar-sketch-${size.width}`, { x: 0, y: 0, width: size.width, height: 150 });
     await finishSketch(frame);
   }
-  // P4b fix round 1 (Daniel: "I prefer 1280 px (model)"): model mode is the compact layout at both
-  // sizes (checked above: everything but each group's main command in More) and the width folds
-  // nothing more. Sketch mode keeps every command on the ribbon by default; with one-line labels
-  // 1920 px folds at most the six least used (Intersect, Project, Point, Construction, Chamfer,
-  // Control-point spline: the start of FOLD_ORDER's sketch part, checked in order above). That count
-  // is Segoe UI's (Windows); a wider font (Linux CI's DejaVu Sans: one more, Tangent arc) folds more,
-  // still from the start of FOLD_ORDER, and Daniel's headline tools stay on the ribbon whatever the font.
+  // v0.5.0 ribbon (Daniel: "yes show the rest as small buttons"): both modes show every command by
+  // default; the width folds nothing at 1920 px, and (Segoe UI) at 1280 px either: the groups' small
+  // buttons go to their icons first (cad-sketch-toolbar-fit.spec.ts); what folds is always the
+  // start of FOLD_ORDER (checked in order above).
   expect(result['model 1920']).toEqual([]);
-  expect(result['model 1280']).toEqual([]);
-  if (process.platform === 'win32') expect(result['sketch 1920'].length).toBeLessThanOrEqual(6);
-  for (const id of ['sketch.spline', 'sketch.mirror', 'sketch.pattern-linear', 'sketch.pattern-circular']) expect(result['sketch 1920'], `${id} folded at 1920`).not.toContain(id);
-  expect(result['sketch 1280'].length).toBeGreaterThan(result['sketch 1920'].length);
+  if (process.platform === 'win32') expect(result['model 1280']).toEqual([]);
+  expect(result['sketch 1920']).toEqual([]);
+  if (process.platform === 'win32') expect(result['sketch 1280']).toEqual([]);
   expect(seen.csp, 'CSP violations').toEqual([]);
   expect(seen.errors, 'console errors').toEqual([]);
 });
@@ -271,10 +263,24 @@ test('cad:p4a-toolbar-reach at 1280 x 800 and 1920 x 1080 every command is a lab
 test('cad:p4a-toolbar-more-keys the More menu from the keyboard and the mouse: Enter, Down and Up open it, arrows Home End move, Escape gives the button the keyboard back, Enter runs; a disabled item says why; an open folded command presses More', async ({ page, request }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { seen, frame } = await freshPart(page, request);
+  // v0.5.0 ribbon: every model command is on the bar by default, so MODIFY has a More only when the
+  // frame is narrow enough to fold Shell (Segoe UI: about 900 px).
   const more = tb(frame).locator('[data-group="modify"] [data-tb-more]');
+  const modifyMore = async () => (((await more.count()) ? await more.getAttribute('data-more-commands') : '') ?? '').split(' ');
+  let narrow = 0;
+  for (let w = 1200; w >= 600; w -= 20) {
+    await page.setViewportSize({ width: w, height: 800 });
+    await expect.poll(() => frame.locator('[data-cad-app]').evaluate(() => window.innerWidth)).toBe(w);
+    await frame.locator('[data-cad-app]').evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    if ((await modifyMore()).includes('modify.shell')) {
+      narrow = w;
+      break;
+    }
+  }
+  expect(narrow, "a width where MODIFY's More holds Shell").toBeGreaterThan(0);
   await expect(more).toBeVisible();
-  const ids = ((await more.getAttribute('data-more-commands')) ?? '').split(' ');
-  expect(ids[0]).toBe('modify.parameters');
+  const ids = await modifyMore();
+  expect(ids).toContain('modify.parameters');
   expect(ids).toContain('modify.shell');
   // P4a review: Chamfer never folds; it is a labelled button right after Fillet.
   expect(ids).not.toContain('modify.chamfer');
@@ -292,7 +298,9 @@ test('cad:p4a-toolbar-more-keys the More menu from the keyboard and the mouse: E
   await expect(menu(frame)).toBeVisible();
   await expect(more).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(focused).toBe('modify.parameters');
-  await shot(page, 'toolbar-more-menu-1280', { x: 0, y: 0, width: 1280, height: 420 });
+  await shot(page, 'toolbar-more-menu-narrow', { x: 0, y: 0, width: narrow, height: 420 });
+  await page.keyboard.press('Home');
+  await expect.poll(focused).toBe(ids[0]);
   await page.keyboard.press('ArrowDown');
   await expect.poll(focused).toBe(ids[1]);
   await page.keyboard.press('End');
@@ -343,7 +351,9 @@ test('cad:p4a-toolbar-more-keys the More menu from the keyboard and the mouse: E
   await expect(frame.locator('[data-cad-panel="feature"]')).toHaveCount(0);
 
   // Sketch mode: DRAW's More lists Construction with its shortcut X; Point from it is the tool in use.
+  // (v0.5.0 ribbon: nothing folds at 1280 px; at 760 px Point and Construction are in DRAW's More.)
   await sketchOnTop(frame);
+  await page.setViewportSize({ width: 760, height: 800 });
   const draw = tb(frame).locator('[data-group="draw"] [data-tb-more]');
   await expect(draw).toBeVisible();
   await draw.click();

@@ -234,8 +234,9 @@ import { publishBodySelection, publishFaceSelection, removeFaceId, toggleFaceId 
 import { RAINBOW_HUE, colormapGradient } from '../plugin-ui/colormaps';
 import { formatElapsed, formatEta, formatSimTime } from '../plugin-ui/format/time';
 import { formatSci } from '../plugin-ui/format/sci';
+import { hexRgb01, hexRgb255, LIGHT_VIEW } from '../theme/lightView';
 import { onAppearance, themeRgb01 } from '../theme/themeColor';
-import { seriesVar } from '../theme/series';
+import { seriesLight, seriesVar } from '../theme/series';
 
 // The legend bars draw the renders' own lookup table: every LUT here is the rainbow from RAINBOW_HUE.
 try { document.documentElement.style.setProperty('--legend-cmap', colormapGradient('rainbow')); } catch (_) {}
@@ -1271,7 +1272,7 @@ try {
       left: '0',
       top: '0',
     },
-    background: [0.94, 0.95, 0.97],
+    background: hexRgb01(LIGHT_VIEW.bg),
   });
 } catch (e) {
   console.warn('[CFD] vtk bootstrap', e);
@@ -1353,9 +1354,9 @@ let viewportOrient = null;
 try {
   const viewportAxes = vtkAxesActor.newInstance({
     config: { recenter: false },
-    xConfig: { color: [220, 40, 40] },
-    yConfig: { color: [36, 168, 64] },
-    zConfig: { color: [40, 96, 220] },
+    xConfig: { color: hexRgb255(LIGHT_VIEW.axisX) },
+    yConfig: { color: hexRgb255(LIGHT_VIEW.axisY) },
+    zConfig: { color: hexRgb255(LIGHT_VIEW.axisZ) },
   });
   if (typeof viewportAxes.update === 'function') viewportAxes.update();
   viewportOrient = vtkOrientationMarkerWidget.newInstance({
@@ -2040,7 +2041,7 @@ const popPathMapper = vtkMapper.newInstance();
 popPathMapper.setScalarVisibility(false);
 const popPathActor = vtkActor.newInstance();
 popPathActor.setMapper(popPathMapper);
-popPathActor.getProperty().setColor(0.1, 0.1, 0.1);
+popPathActor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.ink));
 popPathActor.getProperty().setLineWidth(2);
 popPathActor.setVisibility(false);
 renderer.addActor(popPathActor);
@@ -2056,7 +2057,7 @@ inspectMarkerMapper.setInputConnection(inspectSphere.getOutputPort());
 inspectMarkerMapper.setScalarVisibility(false);
 const inspectMarkerActor = vtkActor.newInstance();
 inspectMarkerActor.setMapper(inspectMarkerMapper);
-inspectMarkerActor.getProperty().setColor(1.0, 0.0, 1.0); // magenta (26a.1)
+inspectMarkerActor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.pin)); // the pin cards' magenta (26a.1)
 inspectMarkerActor.getProperty().setOpacity(1.0);
 inspectMarkerActor.getProperty().setAmbient(1.0);
 inspectMarkerActor.getProperty().setDiffuse(0.0);
@@ -2139,7 +2140,7 @@ function makeFieldVectorGlyph() {
   mapper.setScalarVisibility(false);
   const actor = vtkActor.newInstance();
   actor.setMapper(mapper);
-  actor.getProperty().setColor(0.12, 0.18, 0.28);
+  actor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.ink));
   actor.getProperty().setLighting(true);
   actor.setVisibility(false);
   renderer.addActor(actor);
@@ -7946,10 +7947,10 @@ function renderPopChart(meta) {
     runs[runs.length - 1].push(`${x.toFixed(2)},${y.toFixed(2)}`);
   });
   const label = (x, y, text, anchor) =>
-    `<text x="${x}" y="${y}" font-size="9" fill="#6b7280" text-anchor="${anchor || 'start'}">${escapeXml(text)}</text>`;
+    `<text class="pop-tick" x="${x}" y="${y}" font-size="9" fill="#667085" text-anchor="${anchor || 'start'}">${escapeXml(text)}</text>`;
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   svg.innerHTML =
-    `<path d="M${left} ${top}V${h - bottom}H${w - right}" fill="none" stroke="#c4c9d2" stroke-width="1" />` +
+    `<path class="pop-axis" d="M${left} ${top}V${h - bottom}H${w - right}" fill="none" stroke="#98a2b3" stroke-width="1" />` +
     runs.map((r) => `<polyline fill="none" style="stroke:var(--mg-series-1)" stroke-width="2" points="${r.join(' ')}" />`).join('') +
     `<text x="8" y="14" font-size="10" style="fill:var(--mg-text-slate)">${escapeXml(popChartTitle(m))}</text>` +
     label(left - 4, top + 4, toolNum(ymax), 'end') +
@@ -10427,7 +10428,7 @@ async function loadFullMeshSurface(casePath, token) {
   meshSurfActor.setVisibility(true);
   try { surfaceActor.setVisibility(false); } catch (_) {}
   try { cutActor.setVisibility(false); } catch (_) {}
-  try { renderer.setBackground(1, 1, 1); } catch (_) {}
+  try { renderer.setBackground(...hexRgb01(LIGHT_VIEW.bg)); } catch (_) {}
   syncMeshHullForPlanes();
   frameMeshCamera();
   window.__CFD_MESH_VIEW__ = {
@@ -10785,7 +10786,7 @@ function ensureCompareViewer() {
       left: '0',
       top: '0',
     },
-    background: [1, 1, 1],
+    background: hexRgb01(LIGHT_VIEW.bg),
   });
   const ren = fsr.getRenderer();
   const rw = fsr.getRenderWindow();
@@ -10823,7 +10824,7 @@ function ensureCompareViewer() {
   try { actor.setPickable(true); } catch (_) {}
   actor.setVisibility(false);
   ren.addActor(actor);
-  try { ren.setBackground(1, 1, 1); } catch (_) {}
+  try { ren.setBackground(...hexRgb01(LIGHT_VIEW.bg)); } catch (_) {}
   // Same orbit pivot as the main view (its camera is mirrored onto this one).
   try {
     if (scenePivot) style.setCenterOfRotation(scenePivot[0], scenePivot[1], scenePivot[2]);
@@ -11131,7 +11132,7 @@ async function loadCompareMeshSurface(casePath) {
   lastMeshEdgeLodKey = '';
   applyMeshEdgeLod();
   v.actor.setVisibility(true);
-  try { v.renderer.setBackground(1, 1, 1); } catch (_) {}
+  try { v.renderer.setBackground(...hexRgb01(LIGHT_VIEW.bg)); } catch (_) {}
   try { v.renderer.resetCameraClippingRange(); } catch (_) {}
   try { v.renderWindow.render(); } catch (_) {}
   return { ready: true, nPoints: nPts };
@@ -16446,7 +16447,7 @@ function acquireInspectMarker() {
     mapper.setScalarVisibility(false);
     const actor = vtkActor.newInstance();
     actor.setMapper(mapper);
-    actor.getProperty().setColor(1, 0, 1);
+    actor.getProperty().setColor(...hexRgb01(LIGHT_VIEW.pin));
     actor.getProperty().setOpacity(1);
     actor.getProperty().setAmbient(1);
     actor.getProperty().setDiffuse(0);
@@ -18774,8 +18775,8 @@ const BC_KIND_RGB = {
   default: [214, 190, 140],
 };
 const BC_KIND_VTK = {
-  inlet: [0.18, 0.48, 0.92],
-  outlet: [0.92, 0.44, 0.14],
+  inlet: hexRgb01(LIGHT_VIEW.bcInlet),
+  outlet: hexRgb01(LIGHT_VIEW.bcOutlet),
   pressure: [0.58, 0.2, 0.92],
   wall: [0.37, 0.42, 0.48],
   other: [0.86, 0.15, 0.47],
@@ -18797,9 +18798,9 @@ function paintForBcFaces(faces, kind) {
 
 const bcFlowGlyph = makeGlyphActor(BC_KIND_VTK.inlet);
 const bcOutletGlyph = makeGlyphActor(BC_KIND_VTK.outlet);
-const bcAxisGlyphX = makeGlyphActor([0.88, 0.2, 0.2]);
-const bcAxisGlyphY = makeGlyphActor([0.18, 0.64, 0.28]);
-const bcAxisGlyphZ = makeGlyphActor([0.15, 0.42, 0.86]);
+const bcAxisGlyphX = makeGlyphActor(hexRgb01(LIGHT_VIEW.axisX));
+const bcAxisGlyphY = makeGlyphActor(hexRgb01(LIGHT_VIEW.axisY));
+const bcAxisGlyphZ = makeGlyphActor(hexRgb01(LIGHT_VIEW.axisZ));
 let bcAxisTips = null;
 
 function bcGlyphActors() {
@@ -22874,7 +22875,7 @@ function setCreateSimulationError(msg) {
     note = document.createElement('p');
     note.id = 'cs-create-error';
     note.setAttribute('role', 'alert');
-    note.style.cssText = 'margin:0 16px 10px;color:#c0392b;font-size:13px;';
+    note.className = 'cs-error-note';
     foot.parentNode.insertBefore(note, foot);
   }
   note.textContent = msg;
@@ -36097,7 +36098,7 @@ function drawCaptureFrame(ctx, out, frameRect, scale, opts) {
   const fw = frameRect.w;
   const fh = frameRect.h;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#f0f2f7';
+  ctx.fillStyle = LIGHT_VIEW.bg;
   ctx.fillRect(0, 0, out.width, out.height);
   for (const pane of capturePanes()) {
     if (o.render !== false) renderPaneNow(pane);
@@ -36711,6 +36712,9 @@ function monitorChartSvg(pts, opts) {
   const W = Math.max(280, Math.round(opts.width || 560));
   const H = Math.max(160, Math.round(opts.height || 190));
   const color = opts.color || '#3884e6';
+  // The colour a saved image paints the series with: its light value, which is darker than the hex
+  // for the three series that were under 3:1 (seriesLight).
+  const paint = seriesLight(color);
   const screen = !!opts.screen;
   const cls = (name) => (screen ? ' class="' + name + '"' : '');
   const lineStyle = (prop) => (screen ? seriesStyle(prop, color) : '');
@@ -36734,7 +36738,9 @@ function monitorChartSvg(pts, opts) {
     s +=
       '<text x="' +
       (W / 2).toFixed(1) +
-      '" y="22" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-size="15" font-weight="650" fill="#101828">' +
+      '"' +
+      cls('gtitle') +
+      ' y="22" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-size="15" font-weight="650" fill="#101828">' +
       escapeHtml(opts.title) +
       '</text>';
   }
@@ -36742,7 +36748,9 @@ function monitorChartSvg(pts, opts) {
     s +=
       '<text x="' +
       (W / 2).toFixed(1) +
-      '" y="40" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-size="11" fill="#667085">' +
+      '"' +
+      cls('gsub') +
+      ' y="40" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-size="11" fill="#667085">' +
       escapeHtml(opts.subtitle) +
       '</text>';
   }
@@ -36767,8 +36775,8 @@ function monitorChartSvg(pts, opts) {
   s += '<text x="' + ((padL + W - padR) / 2).toFixed(1) + '" y="' + (H - 3) + '" text-anchor="middle" ' + font + '>' + (opts.timeAxis ? 'Time (s)' : 'Iteration') + '</text>';
   s += '<text transform="translate(11 ' + ((padT + H - padB) / 2).toFixed(1) + ') rotate(-90)" text-anchor="middle" ' + font + '>' + escapeHtml(opts.unit || '') + '</text>';
   const path = pts.map((p, i) => (i ? 'L' : 'M') + X(p[0]).toFixed(1) + ' ' + Y(p[1]).toFixed(1)).join('');
-  s += '<path' + cls('gline') + ' d="' + path + '" fill="none" stroke="' + color + '"' + lineStyle('stroke') + ' stroke-width="1.6" stroke-linejoin="round"/>';
-  s += '<g class="ghover" style="display:none"><line class="gcross" y1="' + padT + '" y2="' + (H - padB) + '" stroke="#98a2b3" stroke-dasharray="3 3"/><circle r="3.5" fill="' + color + '"' + lineStyle('fill') + '/>' +
+  s += '<path' + cls('gline') + ' d="' + path + '" fill="none" stroke="' + paint + '"' + lineStyle('stroke') + ' stroke-width="1.6" stroke-linejoin="round"/>';
+  s += '<g class="ghover" style="display:none"><line class="gcross" y1="' + padT + '" y2="' + (H - padB) + '" stroke="#98a2b3" stroke-dasharray="3 3"/><circle r="3.5" fill="' + paint + '"' + lineStyle('fill') + '/>' +
     '<g class="gtip"><rect rx="3" height="18" fill="rgba(255,255,255,0.95)" stroke="#cfd3db"/><text font-family="system-ui, Segoe UI, sans-serif" font-size="11" fill="#1f2430" dominant-baseline="middle"></text></g></g>';
   s += '<rect class="ghit" x="' + padL + '" y="' + padT + '" width="' + (W - padL - padR) + '" height="' + (H - padT - padB) + '" fill="transparent"/>';
   s += '</svg>';

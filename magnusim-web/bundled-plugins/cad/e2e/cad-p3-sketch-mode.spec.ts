@@ -106,8 +106,8 @@ test('cad:p3-sketch-rectangle-dof a rectangle from the origin, two dimensions, a
   // round 1; cad-sd-review1.spec.ts tests the waiting). Here the plane is selected first.
   await expect(tb.locator('[data-command="sketch.new"]')).not.toHaveAttribute('aria-disabled', 'true');
   await enterSketchOnTop(page, frame);
-  // Sketch mode: DRAW / CONSTRAIN / DIMENSION / MODIFY, Finish sketch as the primary button, VIEW, EDIT (the sketch's own undo).
-  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'CONSTRAIN', 'DIMENSION', 'MODIFY', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
+  // Sketch mode (v0.5.0, SolidWorks's order): DRAW / MODIFY / CONSTRAIN / DIMENSION, Finish sketch as the primary button, VIEW, EDIT (the sketch's own undo).
+  await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-group-label')).toHaveText(['DRAW', 'MODIFY', 'CONSTRAIN', 'DIMENSION', 'SKETCH', 'VIEW', 'SCALE MODELS', 'EDIT']);
   await expect(tb.locator('[data-group="primary"] [data-command="sketch.finish"]')).toHaveClass(/is-primary/);
   await expect(tb.locator('[data-group="edit"] [data-command]')).toHaveCount(2);
   await expect(tb.locator('[data-command="sketch.undo"]')).toHaveAttribute('aria-disabled', 'true');
@@ -358,7 +358,8 @@ test('cad:p3-sketch-escape-typed Escape never finishes a sketch; typed length an
   await page.mouse.click(rx, ry, { button: 'right' });
   const menu = frame.locator('[data-cad-menu] [data-menu-item]');
   // P4b SELECT: Construction is a state item; "Look at sketch" is "Normal to" (one name everywhere).
-  await expect(menu).toHaveText(['Construction', 'Delete', 'Normal to', 'Finish sketch']);
+  // Keybinds: Delete's next to Delete; Finish sketch's and Place or finish's after Finish sketch.
+  await expect(menu).toHaveText(['Construction', 'Delete', 'Set keybind for Delete…', 'Normal to', 'Finish sketch', 'Set keybind for Finish sketch…', 'Set keybind for Place or finish…']);
   await frame.locator('[data-cad-menu] [data-menu-item="construction"]').click();
   await sketchIdle(page);
   const construction = await workspaceFrame(page).evaluate(

@@ -90,9 +90,19 @@ describe('the flyout button and its list', () => {
       'sketch.point',
     ]);
     expect(ui!.$('[data-tb-flyout-group="ellipse"]')).toBeNull();
-    // The button and its arrow are the group's items side by side (the toolbar's drag reads them so).
-    expect(button('sketch.arc').parentElement!.classList.contains('tb-items')).toBe(true);
+    // v0.5.0 ribbon: the button and its arrow are one item of the group's ribbon (a small split
+    // button: the arrow beside it); Line, a large one, has its arrow under it.
+    const split = button('sketch.arc').parentElement!;
+    expect(split.classList.contains('tb-split')).toBe(true);
+    expect(split.classList.contains('is-small')).toBe(true);
+    expect(split.parentElement!.classList.contains('tb-items')).toBe(true);
     expect(button('sketch.arc').nextElementSibling).toBe(arrow('sketch.arc'));
+    expect(button('sketch.arc').classList.contains('is-small')).toBe(true);
+    expect(button('sketch.line').classList.contains('is-large')).toBe(true);
+    expect(button('sketch.line').parentElement!.classList.contains('is-large')).toBe(true);
+    // The button shows the flyout's own name; its accessible name is the variant's.
+    expect(button('sketch.arc').querySelector('.tb-txt')!.textContent).toBe('Arc');
+    expect(button('sketch.arc').getAttribute('aria-label')).toBe('3-point arc');
     expect(button('sketch.arc').getAttribute('data-variant')).toBe('sketch.arc');
     expect(arrow('sketch.arc').getAttribute('aria-label')).toBe('Arc tools');
     await act(async () => fireEvent.click(arrow('sketch.arc')));
@@ -132,5 +142,27 @@ describe('the flyout button and its list', () => {
     const more = ui!.$('[data-tb-more="draw"]')!;
     expect(more.getAttribute('data-more-commands')).toBe('sketch.arc-center sketch.arc-tangent sketch.arc');
     void t;
+  });
+});
+
+describe('the ribbon (v0.5.0): where a dragged command lands', () => {
+  it('pastButton reads column by column: right of a column is past it; in a small button\'s column, below its middle; a large button, right of its middle', async () => {
+    const { pastButton, RIBBON_LARGE, SQUEEZE_ORDER } = await import('../../src/ui/Toolbar');
+    const small = { left: 100, right: 160, top: 50, bottom: 70 };
+    expect(pastButton(small, 170, 40, false)).toBe(true);
+    expect(pastButton(small, 90, 90, false)).toBe(false);
+    expect(pastButton(small, 130, 55, false)).toBe(false);
+    expect(pastButton(small, 130, 65, false)).toBe(true);
+    const large = { left: 20, right: 70, top: 50, bottom: 112 };
+    expect(pastButton(large, 30, 100, true)).toBe(false);
+    expect(pastButton(large, 60, 55, true)).toBe(true);
+    // At scale 2 a small button is 44 px tall: still a small one (review 6: a fixed 40 px took it for
+    // a large one, so the upper right of Rectangle counted as past it).
+    const small2 = { left: 100, right: 220, top: 50, bottom: 94 };
+    expect(pastButton(small2, 200, 60, false)).toBe(false);
+    expect(pastButton(small2, 110, 90, false)).toBe(true);
+    // Daniel's key tools are large; DRAW collapses last.
+    for (const id of ['sketch.line', 'sketch.trim', 'sketch.dimension']) expect(RIBBON_LARGE.has(id)).toBe(true);
+    expect(SQUEEZE_ORDER[SQUEEZE_ORDER.length - 1]).toBe('draw');
   });
 });

@@ -1,0 +1,64 @@
+/* Set keybind (src/ui/keybinds/SetKeybindDialog.tsx): the in-frame dialog's card (.cad-dialog*,
+ * features/p2/p2.css) with the current keys, the capture field and the status line.
+ * Colours only through var(--mg-*) / var(--cad-*) (src/styles/tokens.css).
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+.cad-dialog.cad-keybind-dialog {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+}
+.cad-keybind-dialog::backdrop {
+  background: var(--cad-modal-backdrop);
+}
+.cad-keybind-dialog .cad-dialog-card {
+  width: min(420px, 92vw);
+  background: var(--mg-bg);
+  border-radius: 6px;
+  box-shadow: var(--cad-modal-shadow);
+  padding: 18px 20px 16px;
+  color: var(--mg-text-strong);
+  font-size: 13px;
+}
+.cad-keybind-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.cad-keybind-current {
+  margin: 0 0 10px;
+  color: var(--mg-text-muted);
+}
+.cad-keybind-current kbd {
+  font-family: var(--mg-font);
+  font-weight: 600;
+  color: var(--mg-text-strong);
+}
+.cad-keybind-default {
+  color: var(--mg-text-subtle);
+}
+.cad-keybind-capture {
+  border: 1px dashed var(--mg-control-border);
+  border-radius: var(--mg-radius-md);
+  padding: 12px;
+  text-align: center;
+  color: var(--mg-text-muted);
+  cursor: text;
+  outline: none;
+}
+.cad-keybind-capture:focus {
+  border-style: solid;
+  border-color: var(--mg-primary);
+  box-shadow: 0 0 0 2px var(--mg-focus);
+  color: var(--mg-text);
+}
+.cad-keybind-status {
+  min-height: 18px;
+  margin: 10px 0 12px;
+  line-height: 1.4;
+  color: var(--mg-text);
+}
+.cad-keybind-status.is-problem {
+  color: var(--mg-danger);
+}

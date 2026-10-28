@@ -268,7 +268,7 @@ function meshXRange(page) {
   });
 }
 
-test('a hidden body leaves the mesh view too', async ({ page }) => {
+test("a hidden body leaves the mesh view too; the mesh view has the 3D view's one background, also after it", async ({ page }) => {
   test.skip(!WSL, NO_WSL);
   test.setTimeout(900_000);
   await openProject(page, `e2e body hide mesh ${stamp()}`, TWO);
@@ -316,4 +316,11 @@ test('a hidden body leaves the mesh view too', async ({ page }) => {
   await bodyRow(page, 2).locator(':scope > .tree-row').click({ button: 'right' });
   await treeMenu(page).locator('[data-body-act="show"]').click();
   await expect.poll(async () => (await meshXRange(page))?.cells, { timeout: 30_000 }).toBe(full.cells);
+  // The mesh view used to turn the 3D view white for the rest of the session (2026-10-27): it has
+  // the one light background (#f0f2f7) every 3D view has, and the geometry view after it too.
+  const background = () => page.evaluate(() => window.__CFD_VIEW__.renderer.getBackground().slice(0, 3).map((c) => Math.round(c * 255)));
+  expect(await background()).toEqual([240, 242, 247]);
+  await page.locator('#left-tree li[data-w16-geom] > .tree-row').first().click();
+  await expect.poll(() => page.evaluate(() => window.__CFD_MESH_INSPECT__ === true), { timeout: 30_000 }).toBe(false);
+  expect(await background()).toEqual([240, 242, 247]);
 });

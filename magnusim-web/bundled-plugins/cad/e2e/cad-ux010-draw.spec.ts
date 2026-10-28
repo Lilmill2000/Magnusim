@@ -1,7 +1,7 @@
 // ux010 (DRAW): three of Daniel's asks from trying CAD 0.1.0, in the real host frame, each
 // asserting what he sees:
 //  - Construction drawing: Draw > Construction (or X) with nothing selected is a toggle, never
-//    greyed; while it is on the button is pressed, a badge on the canvas says "Construction (X)",
+//    greyed; while it is on the button is pressed, a badge on the canvas says "Construction · X" (its × turns it off),
 //    and what he draws is construction (no profile from it); a line begun before X counts; Undo
 //    removes it; with a line selected X converts it as before; it is off when the sketch is
 //    opened again.
@@ -150,7 +150,7 @@ test('cad:ux010-draw-construction Construction with nothing selected toggles con
   // From the toolbar (bar or More): on.
   await runCommand(frame, 'sketch.construction');
   await expect(badge(frame)).toBeVisible();
-  await expect(badge(frame)).toHaveText('Construction (X)');
+  await expect(badge(frame).locator('[data-sketch-construction-text]')).toHaveText('Construction · X');
   expect(await constructionPressed(frame)).toBe(true);
   // A rectangle while it is on: four construction lines.
   await page.keyboard.press('r');

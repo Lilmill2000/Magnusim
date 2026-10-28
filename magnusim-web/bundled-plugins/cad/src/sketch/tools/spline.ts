@@ -7,6 +7,7 @@
 // in the panel.
 // Owner: P4b SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keyLabel } from '../../app/keybinds';
 import { newId } from '../../lib/ids';
 import type { Vec2 } from '../../types/doc';
 import { SketchBuilder } from '../edit';
@@ -97,7 +98,7 @@ export function splineTool(mode: SketchMode, form: 'fit' | 'control'): SketchToo
     hint: () =>
       !placed.length
         ? `Click where the ${word} starts.`
-        : `Click the next point (${placed.length} so far). Double-click or Enter places the ${word}; a click on its first point closes it.`,
+        : `Click the next point (${placed.length} so far). Double-click${keyLabel(mode.services, 'sketch.enter') ? ` or ${keyLabel(mode.services, 'sketch.enter')}` : ''} places the ${word}; a click on its first point closes it.`,
     cancel() {
       const had = placed.length > 0;
       placed = [];

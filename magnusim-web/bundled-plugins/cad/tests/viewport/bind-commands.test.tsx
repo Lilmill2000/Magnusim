@@ -231,7 +231,10 @@ describe('bindViewport', () => {
 
 describe('viewport commands', () => {
   it('registers Fit (F), the standard views (1-8) and Normal to (N)', () => {
-    const cmds = viewportCommands();
+    // Their keys come from the keybinding registry (src/app/keymap.ts) once registered.
+    const reg = createCommandRegistry(() => ({}) as AppServices);
+    for (const c of viewportCommands()) reg.register(c);
+    const cmds = reg.all();
     expect(cmds.map((c) => `${c.id}=${c.shortcut}`)).toEqual([
       'view.fit=F',
       'view.front=1',

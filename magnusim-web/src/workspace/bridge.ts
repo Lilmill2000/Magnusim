@@ -95,6 +95,7 @@ import type {
 } from '../plugin-sdk/workspace';
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import { isCad } from '../app/edition';
+import { ASSISTANT_KEYS_EVENT } from '../keybinds/appKeys';
 import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
@@ -272,7 +273,11 @@ export interface BridgeHooks {
   /** The study is not in the project any more (deleted in another tab). */
   studyGone(): void;
   toast(message: string, kind: 'info' | 'success' | 'error'): void;
-  confirm(opts: { title: string; copy: string; yes: string }): Promise<boolean>;
+  /**
+   * guard (a deliberate click on Yes only) and safe (Enter answers Cancel) come from the page's
+   * ui.confirm when it asks for them (the CAD Part's Assistant keybind changes: unreleased 1.9).
+   */
+  confirm(opts: { title: string; copy: string; yes: string; guard?: boolean; safe?: boolean }): Promise<boolean>;
   prompt(opts: { title: string; label: string; value: string; yes: string }): Promise<string | null>;
   units(): UnitSystem;
   log(message: string, detail?: unknown): void;
@@ -323,6 +328,11 @@ export interface BridgeHooks {
   assistantDocked?(): boolean;
   /** The page's Ctrl+/ (assistant.dock; 1.9, unreleased): true when the panel took it. */
   assistantDockKey?(): boolean;
+  /**
+   * The panel's keys the person chose (the welcome's `assistantKeys`, again as the `assistantKeys`
+   * event when the window hears ASSISTANT_KEYS_EVENT), or null for its default (1.9, unreleased).
+   */
+  assistantKeys?(): string[] | null;
 }
 
 /** What hooks.assistantTools answers: the verdict to come, and how to drop a list it was too late for. */
@@ -1106,6 +1116,7 @@ export class WorkspaceCalls {
       geometry,
       launch,
       assistantDock: this.hooks.assistantDocked?.() === true,
+      assistantKeys: this.hooks.assistantKeys?.() ?? null,
     };
   }
 
@@ -1314,6 +1325,9 @@ export class WorkspaceCalls {
           title: String(params.title || 'Are you sure?'),
           copy: String(params.message || ''),
           yes: String(params.confirmLabel || 'OK'),
+          // A Yes that must be a deliberate click, and Enter answering Cancel, when the page asks.
+          ...(params.guard === true ? { guard: true } : {}),
+          ...(params.safe === true ? { safe: true } : {}),
         });
       case 'ui.prompt':
         return this.hooks.prompt({
@@ -2405,6 +2419,7 @@ export class WorkspaceBridge {
     window.addEventListener('message', this.onMessage);
     this.frame.addEventListener('load', this.onLoad);
     window.addEventListener('cfd:units', this.onUnits);
+    window.addEventListener(ASSISTANT_KEYS_EVENT, this.onAssistantKeys);
     const prefs = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(PREFS_CHANNEL);
     if (prefs) prefs.onmessage = (e: MessageEvent) => this.onPref(e.data);
     // A page that already said hello to an earlier bridge never says it again by itself.
@@ -2420,6 +2435,7 @@ export class WorkspaceBridge {
       window.removeEventListener('message', this.onMessage);
       this.frame.removeEventListener('load', this.onLoad);
       window.removeEventListener('cfd:units', this.onUnits);
+      window.removeEventListener(ASSISTANT_KEYS_EVENT, this.onAssistantKeys);
       prefs?.close();
       this.closeChannel();
     };
@@ -2770,6 +2786,11 @@ export class WorkspaceBridge {
 
   private onUnits = (): void => {
     this.channel?.port.postMessage({ event: 'units', data: this.hooks.units() });
+  };
+
+  private onAssistantKeys = (): void => {
+    if (!this.hooks.assistantKeys) return;
+    this.channel?.port.postMessage({ event: 'assistantKeys', data: this.hooks.assistantKeys() });
   };
 
   /** End the channel (a new hello, a failed probe, detach): its streams and uploads go, and a dirty page is clean again. */

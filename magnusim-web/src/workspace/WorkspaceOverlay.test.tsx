@@ -1072,7 +1072,7 @@ describe('the workspace overlay', () => {
       expect(dialogBusy()).toBe(false);
     });
 
-    it("a page's question is a plain one whatever the page asks for, right after Stay too: Cancel, Yes focused, Enter answers Yes", async () => {
+    it("a page's question keeps the app's wording whatever the page asks for, right after Stay too: Cancel, Yes focused, Enter answers Yes; its guard and safe do reach it", async () => {
       const enter = () =>
         (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
       const { frame } = await open();
@@ -1086,12 +1086,11 @@ describe('the workspace overlay', () => {
       await waitFor(() => expect($('#modal-confirm').hidden).toBe(true));
       expect(location.hash).toBe(WS_HASH);
       expect(workspaceDirty()).toBe(true);
-      // The page asks for the leave question's Stay and safe (and a notice): none of it reaches the dialog.
+      // The page asks for the leave question's Stay (and a notice): none of it reaches the dialog.
       const replaced = call(port, 'ui.confirm', {
         title: 'Replace the mesh?',
         message: 'The old mesh is deleted.',
         confirmLabel: 'Replace',
-        safe: true,
         no: 'Stay',
         cancelLabel: 'Stay',
         notice: true,
@@ -1104,6 +1103,15 @@ describe('the workspace overlay', () => {
       expect(document.activeElement).toBe($('#cf-confirm'));
       enter();
       expect(await replaced).toMatchObject({ result: true });
+      expect($('#modal-confirm').hidden).toBe(true);
+      // Its guard and safe do (unreleased API 1.9; the CAD Assistant's keybind change): Cancel has the
+      // keyboard and Enter answers it, and nothing changes.
+      const changed = call(port, 'ui.confirm', { title: 'Change a shortcut?', message: 'Set Rectangle to Shift+T?', confirmLabel: 'Change shortcut', guard: true, safe: true });
+      await waitFor(() => expect($('#modal-confirm').hidden).toBe(false));
+      expect($('#cf-confirm')).toHaveTextContent('Change shortcut');
+      expect(document.activeElement).toBe($('#cf-cancel'));
+      enter();
+      expect(await changed).toMatchObject({ result: false });
       expect($('#modal-confirm').hidden).toBe(true);
     });
 

@@ -11,6 +11,7 @@
 //     expand, collapse               the Origin and Bodies folders, the tree card, the Sketch panel
 //                                    and its Details.
 //     toolbar_show/_hide/_move/_reset  the person's toolbar layout (toolbar-layout.ts).
+//     toolbar_width / toolbar_rows   a group's width, the toolbar's rows (the person drags them).
 //     banana_show/_hide/_place       the banana for scale (scale module), and a sketch's taped one.
 //   The Part and the session:
 //     rename_part                    the study's title, as the tree's Rename part.
@@ -24,6 +25,13 @@
 //                                    bodies); the person clicks Export (the download is theirs).
 //     send_to_simulation             save, then link, as the app's Back runs it (services.apis.link);
 //                                    value "leave": then Back itself, after this call has answered.
+//   Keybinds (src/app/keybinds.ts, the person's ws.prefs "keybinds"):
+//     keybind_get                    one command's keys (target an id or a label) or all ("").
+//     keybind_set, keybind_reset, keybind_clear   Daniel: the AI may read keybinds but changes them
+//                                    only when the person explicitly asks: person_asked true (else
+//                                    not_asked), and the person's Yes in the app's own confirm
+//                                    dialog, every time (No: step_declined, nothing changes). A key
+//                                    another command has is key_taken unless items ["replace"].
 //   The person's view (fit, standard_view, normal_to, orbit_pivot, section, projection, display):
 //     only with person_asked (the person asked in this request), else only while the camera latch
 //     says they have not moved the view in this request (camera.ts); never while a pointer is held
@@ -31,6 +39,9 @@
 // Every result says what changed and whether it is an undo step.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { keybindsFor, whereName, type Keybinds } from '../../app/keybinds';
+import { keybindPlace } from '../../ui/keybinds/places';
+import { comboProblem, parseCombo, type KeymapEntry } from '../../app/keymap';
 import { modeFor } from '../../sketch/mode';
 import { constructShown } from '../../features/refgeom/scene';
 import { stepFileName } from '../../features/export/panel';
@@ -41,9 +52,9 @@ import { placeTaped, sketchPoints } from '../../features/scale/sketch-banana';
 import { sketchShown } from '../../features/sketch/view';
 import { normalTarget } from '../../viewport/normal';
 import { railsFor } from '../../ui/left-rails';
-import { KEEP_IN_VIEW } from '../../ui/Toolbar';
 import { barIdOf, collapseFlyouts } from '../../ui/flyouts';
-import { layoutModeOf, orderIds, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
+import { layoutModeOf, MAX_GROUP_W, MAX_ROWS, MIN_GROUP_W, MIN_ROWS, orderIds, rowsOf, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
+import { commandOnToolbar, narrowedOut, settleGroupWidth } from '../../ui/Toolbar';
 import { uiFor } from '../../ui/controller';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
@@ -301,16 +312,54 @@ function fold(ctx: CallCtx, i: Input): ToolReply {
   }
 }
 
-function toolbar(ctx: CallCtx, i: Input): ToolReply {
+async function toolbar(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const { services } = ctx;
   const prefs = toolbarPrefs(services);
-  const keep = new Set(KEEP_IN_VIEW);
   if (i.action === 'toolbar_reset') {
     const v = i.value.toLowerCase();
     if (v && v !== 'model' && v !== 'sketch') throw bad('value', 'value: model, sketch, or "" for both.');
     const modes: LayoutMode[] = v ? [v as LayoutMode] : ['model', 'sketch'];
     for (const m of modes) prefs.reset(m);
     return done(`Toolbar back to its default layout (${modes.join(' and ')})`, { reset: modes });
+  }
+  if (i.action === 'toolbar_rows') {
+    const t = i.target.toLowerCase();
+    if (t && t !== 'model' && t !== 'sketch') throw bad('target', 'target: model, sketch, or "" for the toolbar shown now.');
+    const mode: LayoutMode = t ? (t as LayoutMode) : layoutModeOf(services.mode.get().mode);
+    const v = i.value.trim().toLowerCase();
+    // "" reads the rows (and the widths the person set), as the person sees them (review 9).
+    if (v) {
+      const n = v === 'auto' || v === 'default' ? null : Number(v);
+      if (n !== null && !(Number.isInteger(n) && n >= MIN_ROWS && n <= MAX_ROWS)) throw bad('value', `value: ${MIN_ROWS} to ${MAX_ROWS} rows, auto (3), or "" to read them.`);
+      prefs.setRows(mode, n);
+    }
+    const m = prefs.state.get().layout[mode];
+    const now = rowsOf(m);
+    const widths = m.widths ?? {};
+    const set = Object.entries(widths).map(([g, w]) => `${g} ${w} px`);
+    return done(`The ${mode} toolbar is ${now} row${now === 1 ? '' : 's'} tall${now < 3 ? ' (every button small)' : ''}; ${set.length ? `group widths set: ${set.join(', ')}` : 'every group as wide as its commands'}`, { mode, rows: now, widths });
+  }
+  if (i.action === 'toolbar_width') {
+    // A group of either toolbar: the current mode's first (VIEW, SCALE MODELS and EDIT are in both).
+    const here = layoutModeOf(services.mode.get().mode);
+    const groupsOf = (m: LayoutMode) => [...services.commands.toolbar(m).map((g) => g.group), 'view', 'edit'];
+    const g = i.target.trim().toLowerCase();
+    const mode: LayoutMode | null = groupsOf(here).includes(g) ? here : groupsOf(here === 'model' ? 'sketch' : 'model').includes(g) ? (here === 'model' ? 'sketch' : 'model') : null;
+    if (!mode) throw bad('target', `target: a toolbar group: ${[...new Set([...groupsOf('model'), ...groupsOf('sketch')])].join(', ')}.`);
+    const v = i.value.trim().toLowerCase();
+    // "" reads the group's width as the person sees it (review 9); a number or auto sets it, never
+    // narrower than the group's first command and its More (review 1: the reply says the width applied).
+    if (v) {
+      const w = v === 'auto' ? null : Number(v.replace(/px$/, ''));
+      if (w !== null && !(Number.isFinite(w) && w >= MIN_GROUP_W && w <= MAX_GROUP_W)) throw bad('value', `value: a width in px, ${MIN_GROUP_W} to ${MAX_GROUP_W}, auto, or "" to read it.`);
+      prefs.setWidth(mode, g, w);
+    }
+    const now = await settleGroupWidth(prefs, mode, g);
+    const asked = v && v !== 'auto' ? Number(v.replace(/px$/, '')) : null;
+    const kept = asked != null && now.set != null && now.set > asked ? ` (${asked} px is narrower than its first command and its More: ${now.set} px is the least)` : '';
+    const where = now.shown ? `; on the bar: ${now.bar.join(', ') || 'nothing'}; in its More: ${now.more.join(', ') || 'nothing'}` : ` (the ${mode} toolbar is not shown now: it applies when it is)`;
+    const size = now.set == null ? `as wide as its commands${now.width != null ? ` (${now.width} px)` : ''}` : `${now.width ?? now.set} px wide${kept}`;
+    return done(`The ${g} group is ${size} (${mode} toolbar)${where}`, { group: g, mode, width: now.set, shown_width: now.width, min_width: now.min, bar: now.bar, more: now.more, shown: now.shown });
   }
   // A flyout's variant (sketch.centerline) moves with its flyout, as the person's bar button does.
   const asked = services.commands.get(i.target);
@@ -323,8 +372,27 @@ function toolbar(ctx: CallCtx, i: Input): ToolReply {
   const m = prefs.state.get().layout[mode];
   if (i.action === 'toolbar_show' || i.action === 'toolbar_hide') {
     const place = i.action === 'toolbar_show' ? 'bar' : 'more';
-    prefs.setMode(mode, withPlace(m, def.id, place, mode, keep));
-    return done(`${def.label} ${place === 'bar' ? 'is on the toolbar' : "is in its group's More menu"} (${mode} mode)`, { command: def.id, place, mode });
+    // As the person's Show in toolbar is greyed (review 6): a narrowed group that could not fit it
+    // even with its other commands folded leaves the layout as it is, and says why.
+    const blocked = place === 'bar' ? narrowedOut(mode, def.id) : null;
+    if (blocked)
+      return done(`${def.label} does not fit its group at ${blocked.width} px, even with the group's other commands in its More: nothing changed. Widen the group first (toolbar_width ${blocked.group}) (${mode} mode)`, {
+        command: def.id,
+        mode,
+        shown: 'more',
+        narrowed: true,
+        changed: false,
+      });
+    prefs.setMode(mode, withPlace(m, def.id, place));
+    if (place === 'more') return done(`${def.label} is in its group's More menu (${mode} mode)`, { command: def.id, place, mode });
+    // What the person sees now (review 2): a group or frame too narrow still holds it in More.
+    const now = await commandOnToolbar(mode, def.id);
+    if (now.where === 'more')
+      return done(
+        `${def.label} is set to show on the toolbar, but it is still in its group's More: ${now.narrowed ? `the group is narrowed to ${now.width} px (widen it: toolbar_width ${def.group})` : 'the window is too narrow for it'} (${mode} mode)`,
+        { command: def.id, place, mode, shown: 'more', narrowed: now.narrowed },
+      );
+    return done(`${def.label} is on the toolbar (${mode} mode${now.where === 'hidden' ? ': shown when that toolbar is' : ''})`, { command: def.id, place, mode, shown: now.where === 'bar' ? 'bar' : null });
   }
   const group = services.commands.toolbar(mode).find((g) => g.group === def.group);
   const registry = group ? collapseFlyouts(group.commands).commands.map((c) => c.id) : [def.id];
@@ -695,9 +763,168 @@ function upOf(n: readonly number[]): Vec3 {
   return Math.abs(n[2]) > 0.9 ? [0, 1, 0] : [0, 0, 1];
 }
 
+// ------------------------------------------------------------------ keybinds
+
+/** The registry's entry a target names: its id, or its label (any case; a label two contexts share needs the id). */
+function keybindEntry(k: Keybinds, target: string): KeymapEntry {
+  if (!target) throw bad('target', 'target: a command id (sketch.rectangle) or its label (Rectangle).');
+  const byId = k.entry(target);
+  if (byId) return byId;
+  const all = k.entries();
+  const named = all.filter((x) => x.label.toLowerCase() === target.toLowerCase());
+  if (named.length === 1) return named[0];
+  if (named.length > 1) throw new ToolError('ambiguous_name', `"${target}" names ${named.length} commands: ${named.map((x) => `${x.id} (${x.context})`).join(', ')}. Use the id.`, { detail: { field: 'target', candidates: named.map((x) => x.id) } });
+  const t = target.toLowerCase();
+  const near = all.filter((x) => x.id.includes(t) || x.label.toLowerCase().includes(t)).slice(0, 12);
+  throw new ToolError('not_found', `No command is called "${target}".${near.length ? ` Near: ${near.map((x) => x.id).join(', ')}.` : ''} keybind_get with target "" lists them all.`, { detail: { field: 'target', candidates: near.map((x) => x.id) } });
+}
+
+/** A command's keys as the person reads them ("Shift+R", "Ctrl+Y or Ctrl+Shift+Z", "none"). */
+const keysText = (k: Keybinds, keys: readonly string[]) => (keys.length ? keys.map((c) => k.display(c)).join(' or ') : 'none');
+
+/** The plugin's name as the host's catalog shows it (manifest.toml name), for the shared keybind question. */
+const PLUGIN_NAME = 'Magnusim CAD';
+
+/** Keys in the shared keybind question: as people read them, joined with ", "; "no key" when none. */
+const keysAsked = (k: Keybinds, keys: readonly string[]) => (keys.length ? keys.map((c) => k.display(c)).join(', ') : 'no key');
+
+/** The question's titles and Yes words, the same as the host's Settings and core__set_keybind ask with. */
+const ASK = {
+  keybind_set: { title: 'Change a keybind?', yes: 'Change' },
+  keybind_reset: { title: 'Reset a keybind?', yes: 'Reset' },
+  keybind_clear: { title: 'Clear a keybind?', yes: 'Clear' },
+} as const;
+
+/** A command's keys as the person sees them: its own, or the key its tooltip shows (Finish sketch: "none of its own; Enter runs Place or finish"). */
+function keysSeen(k: Keybinds, id: string, keys: readonly string[]): string {
+  if (keys.length) return keysText(k, keys);
+  const v = k.via(id);
+  return v ? `none of its own; ${v.shown} runs ${v.label}` : 'none';
+}
+
+/** "A", "A and B", "A, B and C". */
+const listWords = (names: readonly string[]) => (names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+/** A command's name in a question: its label, and where when another command shares it ("Undo (sketch)"). */
+function nameOf(k: Keybinds, e: KeymapEntry): string {
+  const twin = k.entries().some((x) => x.id !== e.id && x.label === e.label);
+  return twin ? whereName(e.id) : e.label;
+}
+
+/** One command's row: its keys (as stored), as they read, whether they are its defaults, and the key its tooltip shows when it has none of its own. */
+function keybindRow(k: Keybinds, e: KeymapEntry) {
+  const keys = k.current(e.id);
+  const own = k.isDefault(e.id);
+  const v = k.via(e.id);
+  return {
+    id: e.id,
+    label: e.label,
+    context: e.context,
+    keys: [...keys],
+    shown: keysSeen(k, e.id, keys),
+    default: own,
+    ...(own ? {} : { defaults: keysText(k, e.keys) }),
+    ...(v ? { via: v } : {}),
+    // Where the person sets it themselves (src/ui/keybinds/places.ts).
+    set_in: keybindPlace(e.id)?.words ?? '',
+  };
+}
+
+/** What a change would do now: the keys, and the commands that lose them (by their mode-qualified names). */
+function planChange(k: Keybinds, e: KeymapEntry, keys: readonly string[]) {
+  const takers = [...new Set(keys.flatMap((c) => k.conflictsWith(e.id, c)))];
+  return { was: [...k.current(e.id)], takers };
+}
+
+async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
+  const { services } = ctx;
+  const k = keybindsFor(services);
+  // The person's saved keybinds, never the defaults in their place (an unreadable read is tried again).
+  const loaded = await k.load();
+  if (i.action === 'keybind_get') {
+    const unknown = loaded === true ? '' : `Not the person's keys: ${loaded}; these are the defaults. `;
+    const known = loaded === true ? {} : { known: false, why: loaded };
+    if (!i.target) {
+      const rows = k.entries().map((e) => keybindRow(k, e));
+      const set = rows.filter((r) => r.keys.length).length;
+      return done(`${unknown}${rows.length} commands, ${set} with keys (${rows.filter((r) => !r.default).length} changed by the person)`, { keybinds: rows, ...known });
+    }
+    const e = keybindEntry(k, i.target);
+    const row = keybindRow(k, e);
+    return done(`${unknown}${nameOf(k, e)}: ${row.shown}${row.default ? '' : ` (default ${row.defaults})`}`, { keybind: row, ...known });
+  }
+  const e = keybindEntry(k, i.target);
+  // A change: only when the person explicitly asked in this request, and they confirm it in the app.
+  const where = keybindPlace(e.id)?.words ?? '';
+  if (!i.asked) {
+    throw new ToolError('not_asked', 'Keybinds change only when the person explicitly asks for that change; pass person_asked true only then.', {
+      hint: `Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: ${where}.`,
+      detail: { field: 'person_asked', set_in: where },
+    });
+  }
+  if (loaded !== true) throw new ToolError('not_editable', `${loaded[0].toUpperCase()}${loaded.slice(1)}.`, { detail: { known: false } });
+  const name = nameOf(k, e);
+  const replace = i.items.some((x) => x.toLowerCase() === 'replace');
+  let keys: readonly string[];
+  if (i.action === 'keybind_set') {
+    if (!i.value) throw bad('value', 'value: the keys, as "Shift+R", "Ctrl+Alt+K", "F7" or "Delete".');
+    const p = parseCombo(i.value);
+    const why = p.ok ? comboProblem(p.combo) : p.why;
+    if (!p.ok || why) throw bad('value', `value: ${why}.`, { value: i.value });
+    keys = [p.combo];
+  } else keys = i.action === 'keybind_reset' ? e.keys : [];
+  const plan = planChange(k, e, keys);
+  if (keys.length === plan.was.length && keys.every((c, n) => c === plan.was[n])) {
+    return done(`${name} already has ${keys.length ? keysText(k, keys) : 'no key'}: nothing changed`, { keybind: keybindRow(k, e), changed: false });
+  }
+  // Another command's key: refused unless the person said to take it.
+  const takerNames = plan.takers.map(whereName);
+  if (plan.takers.length && !replace) {
+    throw new ToolError('key_taken', `${keysText(k, keys)} is the key of ${listWords(takerNames)}; nothing changed.`, { detail: { with: plan.takers, labels: takerNames } });
+  }
+  const was = keysSeen(k, e.id, plan.was);
+  // The wording the host's Settings and core__set_keybind use too: "Magnusim CAD · Rectangle: R → Shift+T",
+  // and each command a Replace takes the key from after "; ", in the same form, named with where it works.
+  const line = (label: string, from: readonly string[], to: readonly string[]) => `${PLUGIN_NAME} · ${label}: ${keysAsked(k, from)} → ${keysAsked(k, to)}`;
+  const losers = plan.takers.map((id) => {
+    const before = k.current(id);
+    return line(whereName(id), before, before.filter((c) => !keys.includes(c)));
+  });
+  const question = [line(name, plan.was, keys), ...losers].join('; ');
+  const ask = ASK[i.action as keyof typeof ASK];
+  // The app's own dialog: its Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
+  const ok = await services.bridge.confirm({ title: ask.title, message: question, confirmLabel: ask.yes, guard: true, safe: true }).catch(() => false);
+  if (!ok) throw new ToolError('step_declined', 'The person did not confirm the keybind change; nothing changed.', { detail: { why: 'declined', question } });
+  ctx.checkAbort();
+  // The person said yes to that question: the change must still be the one it named.
+  const now = planChange(k, e, keys);
+  if (JSON.stringify(now) !== JSON.stringify(plan)) {
+    throw new ToolError('changed', 'The keybinds changed while the person was asked (in Settings or another tab); nothing changed.', {
+      hint: 'Call keybind_get, then ask the person again with the new wording.',
+      detail: { was: plan, now },
+    });
+  }
+  const r = i.action === 'keybind_set' ? (replace ? k.replace(e.id, keys[0]) : k.setKeybind(e.id, keys[0])) : i.action === 'keybind_reset' ? k.resetToDefault(e.id, { replace }) : k.clear(e.id);
+  if (!r.ok) {
+    if (r.reason === 'conflict') {
+      throw new ToolError('key_taken', `${keysText(k, [r.combo])} is the key of ${listWords(r.conflicts.map((c) => c.name))} now; nothing changed.`, { detail: { with: r.conflicts.map((c) => c.id), labels: r.conflicts.map((c) => c.name) } });
+    }
+    throw bad('value', `value: ${r.message}.`);
+  }
+  const stored = await k.flush();
+  const took = r.took?.length ? `; ${listWords(r.took.map((x) => x.name))} no longer ${r.took.length === 1 ? 'has' : 'have'} it` : '';
+  const keep = stored === true ? '' : ` (applied in this Part, not saved: ${stored})`;
+  return done(`${name}: ${keysText(k, r.keys)} (was ${was})${took}${keep}`, {
+    keybind: keybindRow(k, e),
+    was,
+    ...(r.took?.length ? { took: r.took.map((x) => x.id) } : {}),
+    stored,
+  });
+}
+
 // ------------------------------------------------------------------ the tool
 
-const NO_KERNEL_WAIT: ReadonlySet<WorkspaceAction> = new Set(['reload', 'keep_mine', 'retry_save', 'retry_kernel', 'import_step']);
+const NO_KERNEL_WAIT: ReadonlySet<WorkspaceAction> = new Set(['reload', 'keep_mine', 'retry_save', 'retry_kernel', 'import_step', 'keybind_get', 'keybind_set', 'keybind_reset', 'keybind_clear']);
 
 async function run(ctx: CallCtx): Promise<ToolReply> {
   const i = readInput(ctx.input);
@@ -728,6 +955,8 @@ async function run(ctx: CallCtx): Promise<ToolReply> {
     case 'toolbar_hide':
     case 'toolbar_move':
     case 'toolbar_reset':
+    case 'toolbar_width':
+    case 'toolbar_rows':
       return toolbar(ctx, i);
     case 'banana_show':
     case 'banana_hide':
@@ -752,6 +981,11 @@ async function run(ctx: CallCtx): Promise<ToolReply> {
     case 'projection':
     case 'display':
       return view(ctx, i);
+    case 'keybind_get':
+    case 'keybind_set':
+    case 'keybind_reset':
+    case 'keybind_clear':
+      return keybind(ctx, i);
   }
 }
 

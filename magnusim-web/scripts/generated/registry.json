@@ -3802,7 +3802,7 @@
         {
           "key": "co_mean",
           "label": "Co mean",
-          "color": "#667085",
+          "color": "#d92d20",
           "fields": [
             "co_mean"
           ],

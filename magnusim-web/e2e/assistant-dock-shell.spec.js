@@ -291,6 +291,92 @@ test.describe('the dock', () => {
     await expect(page.locator('#workspace-frame')).toBeFocused();
   });
 
+  test("the person's key for it (Settings → Keybinds) opens and closes it instead of Ctrl+/, on the page and typed in a workspace frame; a change made in another tab takes at once, and no key leaves the corner button", async ({ page, request }) => {
+    // What Settings → Keybinds stores; another tab's change comes on the prefs channel, as Settings sends it.
+    const setKeys = async (keys) => {
+      await postOk(request, '/api/prefs', { keybinds: keys ? { 'app.assistant': keys } : null });
+      await page.evaluate((value) => {
+        const ch = new BroadcastChannel('magnusim-plugin-prefs');
+        ch.postMessage({ plugin: '', key: 'keybinds', value, from: 'settings:e2e-other-tab' });
+        ch.close();
+      }, keys ? { 'app.assistant': keys } : null);
+    };
+    // A key the dock does not take shows nothing, once the page has had its turn (a frame's key goes over its port first).
+    const stillClosed = async (frame) => {
+      if (frame) {
+        await frame.evaluate(() => new Promise((r) => setTimeout(r, 0)));
+        await frame.evaluate(() => window.__ws.assistant.setUndo('none', null));
+      }
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      expect(await dock(page).isVisible()).toBe(false);
+    };
+    await postOk(request, '/api/prefs', { keybinds: { 'app.assistant': ['Alt+KeyK'] } });
+    try {
+      await page.goto(`${host.base}/#/`);
+      await appReady(page);
+      // The page reads the keys as it starts: the first Alt+K after that opens the dock.
+      await expect
+        .poll(async () => {
+          await page.keyboard.press('Alt+KeyK');
+          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          return dock(page).isVisible();
+        })
+        .toBe(true);
+      await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('#assistant-dock'))).toBe(true);
+      // Ctrl+/ typed in the dock no longer closes it; Alt+K does.
+      await page.keyboard.press('Control+Slash');
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      expect(await dock(page).isVisible()).toBe(true);
+      await page.keyboard.press('Alt+KeyK');
+      await expect(dock(page)).toBeHidden();
+
+      const frame = await openWorkspace(page);
+      const ws = page.frameLocator('#workspace-frame');
+      await expect(ws.locator('#docked')).toHaveText('yes');
+      expect(await frame.evaluate(() => window.__ws.context.assistantKeys)).toEqual(['Alt+KeyK']);
+      await ws.locator('#counter').click();
+      await expect(page.locator('#workspace-frame')).toBeFocused();
+      await page.keyboard.press('Control+Slash');
+      await stillClosed(frame);
+      await page.keyboard.press('Alt+KeyK');
+      await expect(dock(page)).toBeVisible();
+      await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('#assistant-dock'))).toBe(true);
+      await page.keyboard.press('Alt+KeyK');
+      await expect(dock(page)).toBeHidden();
+      await expect(page.locator('#workspace-frame')).toBeFocused();
+
+      // Settings in another tab sets F9: the open frame takes it without a reload.
+      await setKeys(['F9']);
+      await expect.poll(() => frame.evaluate(() => window.__ws.context.assistantKeys)).toEqual(['F9']);
+      await page.keyboard.press('Alt+KeyK');
+      await stillClosed(frame);
+      await page.keyboard.press('F9');
+      await expect(dock(page)).toBeVisible();
+      await page.keyboard.press('F9');
+      await expect(dock(page)).toBeHidden();
+
+      // No key: only the corner button opens it.
+      await setKeys([]);
+      await expect.poll(() => frame.evaluate(() => window.__ws.context.assistantKeys)).toEqual([]);
+      await page.keyboard.press('F9');
+      await page.keyboard.press('Control+Slash');
+      await stillClosed(frame);
+      await cornerButton(page).click();
+      await expect(dock(page)).toBeVisible();
+      await dock(page).getByRole('button', { name: 'Close the Assistant' }).click();
+      await expect(dock(page)).toBeHidden();
+
+      // Back to the default: Ctrl+/ again.
+      await setKeys(null);
+      await expect.poll(() => frame.evaluate(() => window.__ws.context.assistantKeys)).toBeNull();
+      await ws.locator('#counter').click();
+      await page.keyboard.press('Control+Slash');
+      await expect(dock(page)).toBeVisible();
+    } finally {
+      await postOk(request, '/api/prefs', { keybinds: null });
+    }
+  });
+
   test('with the dock open, a toast and the dock do not overlap, down to 720 px wide', async ({ page }) => {
     await openFromHome(page);
     for (const width of [1280, 760, 720]) {

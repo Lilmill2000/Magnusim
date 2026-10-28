@@ -7,6 +7,7 @@
 // lays them out again: missing instances are made, extra ones go.
 // Owner: P4b SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { placeKey } from './place-key';
 import { newId } from '../../lib/ids';
 import type { SketchEntity, SketchFeature, SketchTie, Vec2 } from '../../types/doc';
 import type { UnitsService } from '../../types/units';
@@ -259,7 +260,7 @@ export function patternTool(mode: SketchMode, kind: 'linear' | 'circular'): Sket
     hint: () => {
       if (picking === 'centre') return 'Click the centre point of the pattern.';
       if (picking === 'direction1' || picking === 'direction2') return 'Click the line the pattern runs along.';
-      return picked().length ? `Set the ${word} in the panel, then Enter or Place pattern.` : `Pick the entities to pattern (or select them first).`;
+      return picked().length ? `Set the ${word} in the panel, then ${placeKey(mode)}Place pattern.` : `Pick the entities to pattern (or select them first).`;
     },
     // ci2: a label or glyph clicked while picking keeps the picks (src/sketch/mode.ts refusesPick).
     refusesPick: (what) => {

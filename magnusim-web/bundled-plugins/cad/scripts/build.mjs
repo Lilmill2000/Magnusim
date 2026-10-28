@@ -7,10 +7,11 @@
 // solver artifacts in workspace/kernel/ and workspace/solver/ come from
 // kernel-build/ and solver-build/.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
+import { loadKeymap } from './keymap-load.mjs';
 import { acquireLock } from './lock.mjs';
 // ux010 (TOOLBAR builder): the "Banana for scale" mesh, made with the shipped kernel on every build.
 import { BANANA_OUT, makeBanana } from './make-banana.mjs';
@@ -34,8 +35,22 @@ export const WORKERS = [
 
 /** Everything the page build writes (relative to the output folder). */
 const PAGE_OUTPUTS = ['index.html', 'app.js', 'app.css', 'chunks', 'assets'];
-/** Other generated files (scripts/make-banana.mjs). */
-const OTHER_OUTPUTS = [BANANA_OUT];
+/**
+ * The command and keybinding registry for the host's Settings (manifest [workspace] commands, host
+ * API 1.9): src/app/keymap.ts as JSON, every command with its default keys.
+ */
+const COMMANDS_OUT = 'commands.json';
+/** Other generated files (scripts/make-banana.mjs, the registry). */
+const OTHER_OUTPUTS = [BANANA_OUT, COMMANDS_OUT];
+
+/** Writes workspace/commands.json from the registry (scripts/keymap-load.mjs: no type stripping needed); a default that conflicts never ships. */
+async function writeCommands(out) {
+  const { commandsJson, appClashesIn, conflictsIn } = await loadKeymap(check ? 'keymap-check' : 'keymap');
+  // A default that clashes with another command's, the app's, the browser's or CAD's Escape never ships.
+  const clashes = [...conflictsIn().map((c) => `${c.combo}: ${c.ids.join(' and ')}`), ...appClashesIn().map((c) => `${c.id}: ${c.by}`)];
+  if (clashes.length) throw new Error(`default keybinds conflict:\n  ${clashes.join('\n  ')}`);
+  writeFileSync(join(out, COMMANDS_OUT), commandsJson());
+}
 
 function clean() {
   if (check) rmSync(OUT, { recursive: true, force: true });
@@ -92,6 +107,7 @@ try {
   await buildPage();
   for (const w of WORKERS) await buildWorker(w);
   await makeBanana(OUT);
+  await writeCommands(OUT);
 } finally {
   release();
 }

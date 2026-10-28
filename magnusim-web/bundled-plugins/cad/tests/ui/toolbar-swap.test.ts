@@ -7,7 +7,6 @@
 import { describe, expect, it } from 'vitest';
 import { barDropOf, held, isDefault, orderIds, placeOf, readLayout, withMove, withPlace, withSwapIn, type LayoutMode, type ModeLayout } from '../../src/ui/toolbar-layout';
 
-const KEEP = new Set(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'pattern.linear', 'modify.fillet', 'modify.chamfer']);
 const none = (): ModeLayout => ({ place: {}, order: {} });
 // DRAW in the registry's order (sketch mode); at 1600 px the frame folds the others into More.
 const DRAW = ['sketch.line', 'sketch.rectangle', 'sketch.rectangle-center', 'sketch.circle', 'sketch.arc', 'sketch.arc-tangent', 'sketch.centerline', 'sketch.point', 'sketch.spline', 'sketch.spline-control', 'sketch.construction'];
@@ -16,7 +15,7 @@ const SHOWN = ['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc',
 /** The group as the toolbar shows it: the bar (shown: placed on the bar and not folded by width), More. */
 function view(m: ModeLayout, mode: LayoutMode, registry: string[], foldedByWidth: Set<string>) {
   const order = orderIds(registry, m.order.g);
-  const bar = order.filter((id) => placeOf(id, mode, m, KEEP) === 'bar' && !(foldedByWidth.has(id) && m.place[id] !== 'bar'));
+  const bar = order.filter((id) => placeOf(id, m) === 'bar' && !(foldedByWidth.has(id) && m.place[id] !== 'bar'));
   return { bar, more: order.filter((id) => !bar.includes(id)) };
 }
 
@@ -41,7 +40,7 @@ describe('withSwapIn: the group keeps its count on the bar', () => {
   const folded = new Set(['sketch.rectangle-center', 'sketch.arc-tangent', 'sketch.centerline', 'sketch.point', 'sketch.spline-control', 'sketch.construction']);
 
   it("Daniel's example: Tangent arc onto the last slot, Spline to More", () => {
-    const m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.arc-tangent', SHOWN.length, 'sketch', KEEP);
+    const m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.arc-tangent', SHOWN.length);
     expect(m.place).toEqual({ 'sketch.arc-tangent': 'bar', 'sketch.spline': 'more' });
     const v = view(m, 'sketch', DRAW, folded);
     expect(v.bar).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.arc-tangent']);
@@ -51,49 +50,49 @@ describe('withSwapIn: the group keeps its count on the bar', () => {
   });
 
   it('dropped between Line and Rectangle it goes in there; Spline leaves', () => {
-    const m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.arc-tangent', 1, 'sketch', KEEP);
+    const m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.arc-tangent', 1);
     expect(view(m, 'sketch', DRAW, folded).bar).toEqual(['sketch.line', 'sketch.arc-tangent', 'sketch.rectangle', 'sketch.circle', 'sketch.arc']);
     // Its place in the group's order is kept (More lists the group in that order).
     expect(m.order.g.indexOf('sketch.arc-tangent')).toBe(m.order.g.indexOf('sketch.rectangle') - 1);
   });
 
   it('dropped before the last command it takes the last slot as well', () => {
-    const m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.point', 4, 'sketch', KEEP);
+    const m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.point', 4);
     expect(view(m, 'sketch', DRAW, folded).bar).toEqual(['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.point']);
   });
 
   it('then back: the one that left can be dragged in again, and the count still holds', () => {
-    let m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.arc-tangent', 5, 'sketch', KEEP);
+    let m = withSwapIn(none(), 'g', DRAW, SHOWN, 'sketch.arc-tangent', 5);
     const v1 = view(m, 'sketch', DRAW, folded);
-    m = withSwapIn(m, 'g', orderIds(DRAW, m.order.g), v1.bar, 'sketch.spline', 0, 'sketch', KEEP);
+    m = withSwapIn(m, 'g', orderIds(DRAW, m.order.g), v1.bar, 'sketch.spline', 0);
     const v2 = view(m, 'sketch', DRAW, folded);
     expect(v2.bar).toEqual(['sketch.spline', 'sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc']);
     expect(v2.more).toContain('sketch.arc-tangent');
   });
 
-  it('model mode: a More command onto a one-command group takes its slot (PATTERN: Circular pattern for Linear pattern)', () => {
+  it('model mode: a More command onto a group narrowed to one command takes its slot (PATTERN: Circular pattern for Linear pattern)', () => {
     const reg = ['pattern.linear', 'pattern.circular', 'pattern.mirror'];
-    const m = withSwapIn(none(), 'g', reg, ['pattern.linear'], 'pattern.circular', 1, 'model', KEEP);
+    const m = withSwapIn(none(), 'g', reg, ['pattern.linear'], 'pattern.circular', 1);
     expect(m.place).toEqual({ 'pattern.circular': 'bar', 'pattern.linear': 'more' });
-    expect(view(m, 'model', reg, new Set()).bar).toEqual(['pattern.circular']);
+    expect(view(m, 'model', reg, new Set(['pattern.circular', 'pattern.mirror'])).bar).toEqual(['pattern.circular']);
   });
 
-  it('model mode: a command the user had put on the bar leaves by forgetting the choice (its default is More)', () => {
+  it('model mode: a command the user had put on the bar leaves for More (kept there)', () => {
     const reg = ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.split'];
-    let m = withPlace(none(), 'modify.shell', 'bar', 'model', KEEP);
-    m = withSwapIn(m, 'g', reg, ['modify.fillet', 'modify.chamfer', 'modify.shell'], 'modify.split', 3, 'model', KEEP);
-    expect(m.place).toEqual({ 'modify.split': 'bar' });
+    let m = withPlace(none(), 'modify.shell', 'bar');
+    m = withSwapIn(m, 'g', reg, ['modify.fillet', 'modify.chamfer', 'modify.shell'], 'modify.split', 3);
+    expect(m.place).toEqual({ 'modify.shell': 'more', 'modify.split': 'bar' });
     expect(view(m, 'model', reg, new Set()).bar).toEqual(['modify.fillet', 'modify.chamfer', 'modify.split']);
   });
 
   it('nothing on the bar: it goes there and nothing leaves', () => {
     const reg = ['solid.extrude', 'solid.revolve'];
-    const m = withSwapIn(withPlace(none(), 'solid.extrude', 'more', 'model', new Set(['solid.extrude'])), 'g', reg, [], 'solid.revolve', 0, 'model', new Set(['solid.extrude']));
+    const m = withSwapIn(withPlace(none(), 'solid.extrude', 'more'), 'g', reg, [], 'solid.revolve', 0);
     expect(m.place).toEqual({ 'solid.extrude': 'more', 'solid.revolve': 'bar' });
   });
 
   it('the result is stored in the same format (version 1, place and order) and reads back the same', () => {
-    const m = withSwapIn(none(), 'draw', DRAW, SHOWN, 'sketch.arc-tangent', 1, 'sketch', KEEP);
+    const m = withSwapIn(none(), 'draw', DRAW, SHOWN, 'sketch.arc-tangent', 1);
     const stored = JSON.parse(JSON.stringify({ version: 1, model: none(), sketch: m }));
     expect(readLayout(stored).sketch).toEqual(m);
   });
@@ -101,22 +100,22 @@ describe('withSwapIn: the group keeps its count on the bar', () => {
 
 describe('held: a command dragged onto the bar never folds for the width (review B2)', () => {
   it('a swap holds the command that came in; Move to More lets it go; Show in toolbar and a move keep the list', () => {
-    let m = withSwapIn(none(), 'draw', DRAW, SHOWN.slice(0, 4), 'sketch.arc-tangent', 4, 'sketch', KEEP);
+    let m = withSwapIn(none(), 'draw', DRAW, SHOWN.slice(0, 4), 'sketch.arc-tangent', 4);
     // 1150 px: DRAW shows Line, Rectangle, Circle, 3-point arc; Tangent arc takes 3-point arc's slot.
     expect(m.place).toEqual({ 'sketch.arc-tangent': 'bar', 'sketch.arc': 'more' });
     expect(m.held).toEqual(['sketch.arc-tangent']);
     expect(held(m, 'sketch.arc-tangent')).toBe(true);
     expect(isDefault(m)).toBe(false);
     m = withMove(m, 'draw', DRAW, 'sketch.arc-tangent', 'sketch.line');
-    m = withPlace(m, 'sketch.spline', 'bar', 'sketch', KEEP);
+    m = withPlace(m, 'sketch.spline', 'bar');
     expect(m.held).toEqual(['sketch.arc-tangent']);
-    m = withPlace(m, 'sketch.arc-tangent', 'more', 'sketch', KEEP);
+    m = withPlace(m, 'sketch.arc-tangent', 'more');
     expect(m.held).toBeUndefined();
     expect(held(m, 'sketch.arc-tangent')).toBe(false);
   });
   it('a held command swapped out is no longer held; the one coming in is', () => {
-    let m = withSwapIn(none(), 'draw', DRAW, SHOWN, 'sketch.arc-tangent', 5, 'sketch', KEEP);
-    m = withSwapIn(m, 'draw', orderIds(DRAW, m.order.draw), ['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.arc-tangent'], 'sketch.point', 5, 'sketch', KEEP);
+    let m = withSwapIn(none(), 'draw', DRAW, SHOWN, 'sketch.arc-tangent', 5);
+    m = withSwapIn(m, 'draw', orderIds(DRAW, m.order.draw), ['sketch.line', 'sketch.rectangle', 'sketch.circle', 'sketch.arc', 'sketch.arc-tangent'], 'sketch.point', 5);
     expect(m.held).toEqual(['sketch.point']);
     expect(m.place['sketch.arc-tangent']).toBe('more');
   });

@@ -34,7 +34,6 @@ interface ToolCmd {
   icon: string;
   group: 'draw' | 'sketch-modify';
   order: number;
-  shortcut?: string;
   hint: string;
   /** v0.5.0: the toolbar flyout it is a variant of (src/ui/flyouts.ts). */
   flyout?: string;
@@ -42,12 +41,12 @@ interface ToolCmd {
 
 /** The tools whose code is in (src/sketch/tools/*): each one registered only when it works end to end. */
 export const P4B_TOOLS: ToolCmd[] = [
-  { id: 'sketch.spline', tool: 'spline-fit', label: 'Spline', icon: P4B_ICONS.spline, group: 'draw', order: 18, shortcut: 'S', hint: 'A smooth curve through the points you click (fit points)', flyout: 'spline' },
+  { id: 'sketch.spline', tool: 'spline-fit', label: 'Spline', icon: P4B_ICONS.spline, group: 'draw', order: 18, hint: 'A smooth curve through the points you click (fit points)', flyout: 'spline' },
   { id: 'sketch.spline-control', tool: 'spline-control', label: 'Control-point spline', icon: P4B_ICONS.splineControl, group: 'draw', order: 19, hint: 'A smooth curve pulled by its control points (degree 3 or 5)', flyout: 'spline' },
-  { id: 'sketch.mirror', tool: 'mirror', label: 'Mirror', icon: P4B_ICONS.mirror, group: 'sketch-modify', order: 40, shortcut: 'M', hint: 'Copies of the picked entities mirrored about a line, kept symmetric' },
+  { id: 'sketch.mirror', tool: 'mirror', label: 'Mirror', icon: P4B_ICONS.mirror, group: 'sketch-modify', order: 40, hint: 'Copies of the picked entities mirrored about a line, kept symmetric' },
   { id: 'sketch.pattern-linear', tool: 'pattern-linear', label: 'Linear pattern', icon: P4B_ICONS.patternLinear, group: 'sketch-modify', order: 41, hint: 'Copies in a row (or a grid): count, spacing and direction, editable later' },
   { id: 'sketch.pattern-circular', tool: 'pattern-circular', label: 'Circular pattern', icon: P4B_ICONS.patternCircular, group: 'sketch-modify', order: 42, hint: 'Copies round a centre point: count, full circle or an angle, editable later' },
-  { id: 'sketch.offset', tool: 'offset', label: 'Offset', icon: P4B_ICONS.offset, group: 'sketch-modify', order: 30, shortcut: 'O', hint: 'A copy of a chain of curves at a distance, to one side or both, that follows it' },
+  { id: 'sketch.offset', tool: 'offset', label: 'Offset', icon: P4B_ICONS.offset, group: 'sketch-modify', order: 30, hint: 'A copy of a chain of curves at a distance, to one side or both, that follows it' },
   { id: 'sketch.fillet', tool: 'fillet', label: 'Fillet', icon: P4B_ICONS.fillet, group: 'sketch-modify', order: 31, hint: 'Round a corner of two lines (or a line and an arc) with a tangent arc' },
   { id: 'sketch.chamfer', tool: 'chamfer', label: 'Chamfer', icon: P4B_ICONS.chamfer, group: 'sketch-modify', order: 32, hint: 'Cut a corner of two lines with a line at set distances' },
 ];
@@ -81,7 +80,6 @@ export function registerSketchToolCommands(services: AppServices, mode: SketchMo
       group: c.group,
       mode: 'sketch',
       icon: c.icon,
-      shortcut: c.shortcut,
       hint: c.hint,
       order: c.order,
       ...(c.flyout ? { flyout: c.flyout } : {}),
@@ -97,7 +95,6 @@ export function registerSketchToolCommands(services: AppServices, mode: SketchMo
     id: 'sketch.enter',
     label: 'Place or finish',
     mode: 'sketch',
-    shortcut: 'Enter',
     hint: 'Places what the tool is drawing; with nothing open, finishes the sketch',
     run: () => {
       if (mode.tool?.commit?.()) return;

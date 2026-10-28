@@ -98,6 +98,32 @@ export function collapseCompletedSections() {
   return readLocalDoc().collapse_completed_sections !== false;
 }
 
+/** The app's commands whose keys the person may change (src/keybinds/appKeys.ts CHANGEABLE_APP_KEYS). */
+export const APP_KEYBIND_IDS = ['app.assistant'];
+/** A combo's shape: modifiers in the order Ctrl, Alt, Shift, Meta, then a key code (the page checks the code). */
+const COMBO_SHAPE = /^(Ctrl\+)?(Alt\+)?(Shift\+)?(Meta\+)?[A-Za-z][A-Za-z0-9]{0,19}$/;
+
+/**
+ * The person's keys for the app's own commands (Settings → Keybinds): { "<id>": [combo, ...] } with
+ * only the changeable ids and at most 4 combo-shaped strings each, or null when `value` is not
+ * that shape. The page reads them again with its own rules (appKeys.ts readAppKeybinds).
+ */
+export function cleanAppKeybinds(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out = {};
+  for (const [id, keys] of Object.entries(value)) {
+    if (!APP_KEYBIND_IDS.includes(id)) return null;
+    if (!Array.isArray(keys) || keys.length > 4 || !keys.every((k) => typeof k === 'string' && COMBO_SHAPE.test(k))) return null;
+    out[id] = [...keys];
+  }
+  return out;
+}
+
+/** The person's keys for the app's own commands as stored ({} when none, or when the file has junk). */
+export function appKeybinds() {
+  return cleanAppKeybinds(readLocalDoc().keybinds) || {};
+}
+
 export function hardwarePrefs() {
   const h = readLocalDoc().hardware;
   return h && typeof h === 'object' ? h : null;
@@ -113,6 +139,7 @@ export function publicPrefs() {
     wizard_completed: !!doc.wizard_completed,
     collapse_completed_sections: collapseCompletedSections(),
     hardware: hardwarePrefs(),
+    keybinds: appKeybinds(),
     wsl_distro: doc.wsl_distro || null,
     wsl_case_root: doc.wsl_case_root || null,
   };

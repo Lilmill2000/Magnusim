@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connect, SDK_VERSION, type AssistantTool, type Workspace, type WorkspaceContext } from './workspace';
+import { typedCombo } from '../keybinds/combo';
+import { comboOf } from '../keybinds/commands';
 
 const MiB = 1024 * 1024;
 const SHA = 'ab'.repeat(32);
@@ -1102,6 +1104,75 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(docks(docked)).toHaveLength(3);
     expect(docks(plain)).toHaveLength(0);
+  });
+
+  it("the person's keys for the panel (context.assistantKeys, then the assistantKeys event) go to it instead of Ctrl+/; [] is no key; null is Ctrl+/ again", async () => {
+    const key = (init: KeyboardEventInit) => document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+    const { ws, posts, push } = await open(accepting, { context: { assistantDock: true, assistantKeys: ['Ctrl+KeyK', 'Alt+Shift+Slash', 'F9'] } });
+    const docks = () => posts.filter((x) => x.method === 'assistant.dock').length;
+    const heard: (string[] | null)[] = [];
+    ws.on('assistantKeys', (k) => heard.push(k));
+    key({ key: '/', code: 'Slash', ctrlKey: true });
+    key({ key: 'k', code: 'KeyK', ctrlKey: true });
+    // Cmd counts as Ctrl; a letter is the letter it types (Ctrl+K on a layout that has K elsewhere).
+    key({ key: 'k', code: 'KeyK', metaKey: true });
+    key({ key: 'k', code: 'KeyV', ctrlKey: true });
+    // Punctuation by its place, and by the character it types (Shift+7 types "/" on a German layout).
+    key({ key: '?', code: 'Slash', altKey: true, shiftKey: true });
+    key({ key: '/', code: 'Digit7', altKey: true, shiftKey: true });
+    key({ key: 'F9', code: 'F9' });
+    // Not the keys: other modifiers, a held key.
+    key({ key: 'K', code: 'KeyK', ctrlKey: true, shiftKey: true });
+    key({ key: 'k', code: 'KeyK', altKey: true });
+    key({ key: 'F9', code: 'F9', repeat: true });
+    key({ key: 'F9', code: 'F9', ctrlKey: true });
+    await vi.waitFor(() => expect(docks()).toBe(6));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(docks()).toBe(6);
+    push({ event: 'assistantKeys', data: [] });
+    expect(ws.context.assistantKeys).toEqual([]);
+    key({ key: 'F9', code: 'F9' });
+    key({ key: '/', code: 'Slash', ctrlKey: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(docks()).toBe(6);
+    push({ event: 'assistantKeys', data: null });
+    expect(ws.context.assistantKeys).toBeNull();
+    key({ key: 'k', code: 'KeyK', ctrlKey: true });
+    key({ key: '/', code: 'Slash', ctrlKey: true });
+    await vi.waitFor(() => expect(docks()).toBe(7));
+    expect(heard).toEqual([[], null]);
+  });
+
+  it('reads a press as the app reads it (comboOf, and typedCombo for punctuation), so a key Settings takes is one the frame passes on', async () => {
+    const { ws, posts, push } = await open(accepting, { context: { assistantDock: true, assistantKeys: [] } });
+    const docks = () => posts.filter((x) => x.method === 'assistant.dock').length;
+    const presses: KeyboardEventInit[] = [
+      { key: 'k', code: 'KeyK', ctrlKey: true },
+      { key: 'q', code: 'KeyA', altKey: true },
+      { key: 'л', code: 'KeyK', ctrlKey: true },
+      { key: '1', code: 'Numpad1', ctrlKey: true },
+      { key: 'Enter', code: 'NumpadEnter', altKey: true },
+      { key: '-', code: 'Slash', ctrlKey: true, altKey: true },
+      { key: '/', code: 'Digit7', ctrlKey: true, shiftKey: true },
+      { key: ']', code: 'BracketRight', ctrlKey: true },
+      { key: ' ', code: 'Space', ctrlKey: true },
+      { key: 'F2', code: 'F2', shiftKey: true },
+      { key: 'ArrowUp', code: 'ArrowUp', altKey: true },
+    ];
+    let n = 0;
+    for (const init of presses) {
+      const e = new KeyboardEvent('keydown', init);
+      const placed = comboOf(e);
+      expect(placed, JSON.stringify(init)).toBeTruthy();
+      for (const combo of [placed as string, typedCombo(e, placed as string)].filter((c): c is string => !!c)) {
+        push({ event: 'assistantKeys', data: [combo] });
+        expect(ws.context.assistantKeys).toEqual([combo]);
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+        n++;
+        await vi.waitFor(() => expect(docks(), `${combo} from ${JSON.stringify(init)}`).toBe(n));
+      }
+    }
+    expect(n).toBeGreaterThan(presses.length);
   });
 
   it('a throw keeps its code only from the page list (invalid_input, busy, not_ready, failed); anything else is failed', async () => {

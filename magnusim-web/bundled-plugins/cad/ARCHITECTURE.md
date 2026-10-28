@@ -702,17 +702,18 @@ with the host once for the page's life, and its chip goes in the dock.
   the labelled buttons do not fit the frame (`useFitLevel`, measured before
   paint, again from the start whenever the width, the mode or the commands
   change): first VIEW and EDIT show icons only (their glyphs are the usual ones;
-  the label stays the tooltip and the accessible name), then commands fold one by
-  one into their group's **More ▾** menu in `FOLD_ORDER` (`src/ui/Toolbar.tsx`),
-  the least used first. Only below that (narrower than 1280 px, or wider text: a
-  larger system font, text scaling or browser zoom, Linux's fallback fonts) the
-  groups sit closer (`is-fit-tight`), then whole groups go to icons one at a time
-  in `ICON_ORDER` (FILE, INSPECT, CONSTRUCT, PATTERN, MODIFY, CFD PREP, SOLID;
-  sketch mode MODIFY, DIMENSION; headings kept), and last every group but the
-  primary action shows icons, so Sketch keeps its label longest (CI on Linux,
-  2026-10-13: DejaVu Sans took it at 1280 px). The More button is narrower than a command
-  (40 px, the caret in its padding), so folding a group's first command frees
-  room; it carries `data-tb-more`, `data-more-commands` and `aria-expanded`, is
+  the label stays the tooltip and the accessible name), then the groups' small
+  buttons go to their icons one group at a time in `SQUEEZE_ORDER`, then commands
+  fold one by one into their group's **More ▾** menu in `FOLD_ORDER`
+  (`src/ui/Toolbar.tsx`), the least used first, then the groups sit closer
+  (`is-fit-tight`), and last whole groups collapse into one dropdown button each
+  in `SQUEEZE_ORDER` (FILE, INSPECT, CONSTRUCT, PATTERN, MODIFY, CFD PREP, SOLID,
+  SKETCH, CONSTRAIN, sketch MODIFY, DIMENSION, SCALE MODELS, DRAW last; a large
+  button with the group's name and its first command's icon, `data-tb-group-menu`,
+  its menu lists every command of the group), as SolidWorks does at narrow widths
+  (CI on Linux,
+  2026-10-13: DejaVu Sans took Sketch's label at 1280 px in the one-line toolbar).
+  The More button is one of the ribbon's small buttons ("More ▾"); it carries `data-tb-more`, `data-more-commands` and `aria-expanded`, is
   drawn pressed while one of its commands' panels or tools is open, and its menu
   is the context menu's (core `.face-ctx-menu`, `[data-cad-menu]`) with each
   command's icon, label, shortcut (`.cad-menu-key`) and the toolbar button's
@@ -725,15 +726,97 @@ with the host once for the page's life, and its chip goes in the dock.
   commands, 1440 px nine, 1280 px twelve.
   - **The default layout and the user's own (P4b fix round 1, Daniel
     2026-10-06: "I prefer 1280 px (model) but let people arrange the icons
-    however they want").** Model mode starts compact at every width: only each
-    group's main command(s), `KEEP_IN_VIEW` (Sketch, Extrude, Linear pattern,
-    Fillet, Chamfer, Plane, Enclosure, Measure, Import STEP), are buttons; the
-    other sixteen start in their group's More. Sketch mode starts with every
-    command on the ribbon, labels on one line, and folds by width in
-    `FOLD_ORDER` (1920 px: Intersect, Project, Point, Construction, Chamfer,
-    Control-point spline; 1600 px: ten, Spline, Mirror and both patterns still
-    shown). Users rearrange both (`src/ui/toolbar-layout.ts`): right-click a
-    button for Move to More, Move left, Move right and Reset toolbar; right-click
+    however they want").** Both modes start with every command on the ribbon
+    (v0.5.0 ribbon, Daniel 2026-10-27: "yes show the rest as small buttons";
+    from P4b fix round 1 until then model mode started compact, only each
+    group's main command on the bar and the rest in its More). More holds only
+    what the person moved there and what does not fit: the frame (folded in
+    `FOLD_ORDER`; `KEEP_IN_VIEW` never folds for the frame) or a group the
+    person narrowed. MODIFY's Parameters comes last of MODIFY (order 60), so
+    Fillet leads its group.
+  - **The ribbon (v0.5.0, Daniel: "you can stack them on each other instead of
+    it just being one line of stuff", SolidWorks's CommandManager; it replaced
+    a one-line icon-only sketch toolbar he did not like).** Both modes' toolbars
+    are one ribbon (`is-ribbon`), so entering a sketch does not move the view:
+    each group's buttons sit in three rows (`.tb-items` a CSS grid, column by
+    column). A large button (`is-large`, `RIBBON_LARGE` and the primary
+    action) is the three rows tall, a 28 px icon with its name under it (two
+    lines at most, 60 px wide at most): sketch mode Line, Trim, Dimension, Finish sketch and the
+    taped banana; model mode each group's main command (Sketch, Extrude, Linear
+    pattern, Fillet, Plane, Enclosure, Measure, Import STEP, Banana for scale).
+    Every other command is a small button (`is-small`): one row, an
+    18 px icon with its name beside it, or its icon alone (CONSTRAIN by design, its glyphs;
+    a group whose names went for the width, `is-icons`, `data-fit-labels`). A
+    flyout is one `.tb-split` item: its arrow beside a small button (12 px) or a
+    12 px strip under a large one; its small button shows the flyout's own name
+    ("Slot") and the variant's icon, the variant's name being its accessible
+    name and tooltip. A group's More is a small button after its commands. The
+    model toolbar is the same ribbon (its main commands large, every other
+    command small beside them). The toolbar is about 90 px tall (12 px
+    headings over the three rows). Measured (bundled Chromium, Segoe UI): the
+    sketch ribbon folds nothing at 1920, 1600, 1440 or 1280 px (at 1280 VIEW
+    and EDIT are icons), at 1000 px MODIFY's small buttons are icons, at 760
+    DRAW's too and Intersect, Project, Point, Construction, Chamfer and Extend
+    fold; the model ribbon folds nothing at 1920, 1600 or 1280 px (VIEW and
+    EDIT are icons from 1600; at 1280 FILE's, INSPECT's and CONSTRUCT's small
+    buttons are icons; Undo and Redo stay in view) and collapses FILE first
+    when narrower still (`e2e/cad-sketch-toolbar-fit.spec.ts`). A drop mark
+    among small buttons is a bar above or under the button (they stack); where
+    a drag lands follows the ribbon's reading order (`pastButton`, a large
+    button told by its class, so it holds at every scale).
+  - **Resizing the ribbon (v0.5.0, Daniel: "resizable groups and multi-row,
+    Excel-style").** The line at a group's right (`.tb-resize`,
+    `data-tb-resize`, a col-resize pointer) dragged left or right sets that
+    group's width (EDIT's line is at its left: there a drag to the left widens
+    it, and the arrows go the same way); the lines are focusable separators in
+    the Tab order (after each group's buttons; a press focuses one too): Left /
+    Right step 16 px, Home, a double-click or its right-click "Width to fit its
+    commands" set it back to auto. A narrowed group (`.tb-items.is-sized`,
+    `data-width` the width applied, `data-width-set` the stored one) puts what
+    does not fit into its own More, measured before paint
+    (`data-width-folded`): the group's FOLD_ORDER commands first, then from its
+    end, a command the person showed ("Show in toolbar", pinned) after those, a
+    held one last, never its first command; widened, they come back out at
+    once, so the bar is always full. "Show in toolbar" in a narrowed group
+    brings the command out (another folds); it is greyed with the reason when
+    the command would not fit even with every other unpinned command folded
+    (predicted from each command's own width as the group last drew it, not
+    the width its column stretched it to, measured again from nothing folded
+    whenever the group's width or fit changes; the group lists those in
+    `data-too-narrow-for`, and the Assistant's toolbar_show then changes
+    nothing and says why). A group is never narrower than its first command and
+    its More (`data-min-width`, measured; review 1: a narrower width clipped the
+    More with every folded command): the width applied is at least that, and
+    the drag, the arrows and the Assistant keep the stored width to it
+    (`settleGroupWidth`). The toolbar's bottom edge (`.tb-rows-handle`,
+    `data-tb-rows-handle`, row-resize, in the Tab order after EDIT's line; Up /
+    Down, Home, a double-click) sets the rows, 1 to 4 (`data-rows`,
+    `--tb-rows`); below three rows every button is small (Finish sketch too).
+    While a line or the edge is dragged the ribbon is measured again with each
+    change and once more when it ends, saved or not (review 7). A lost release
+    (window blur, hidden tab, the handle's group or toolbar unmounted: a mode
+    change mid-drag, a move with no button held; the drag listens on the window
+    and the document, not the handle) ends a resize keeping nothing. Both are the person's, per
+    toolbar (model, sketch), in the same `ws.prefs` layout (`toolbar-layout.ts`
+    `widths`, `rows`; `ToolbarPrefs.setWidth` / `setRows`); Reset toolbar clears
+    them. The Assistant's `workspace` tool sets and reads them as the person
+    does (`toolbar_width`: a group id and px, auto, or "" to read; the reply
+    gives the width applied, its minimum, what is on the bar and in its More;
+    `toolbar_rows`: 1 to 4, auto, or "" to read the rows and the widths set;
+    `toolbar_show` says when a narrowed group or the frame still holds a command
+    in More); `parity.ts` maps `setWidth` and `setRows` to them, each way.
+  - **One scale factor.** Every size of the ribbon (rows, icons, names,
+    headings, gaps, the large buttons' widths, a group's width) follows
+    `--cad-toolbar-scale` (`tokens.css`, 1); `setToolbarScale` (Toolbar.tsx) is
+    the one place the host's appearance setting ("toolbar icon size") is to be
+    wired in. At 1 the rows are 22 px, the small icons 18 px, the large 28 px
+    (Daniel found 16 / 24 small); `e2e/cad-toolbar-resize.spec.ts` checks the
+    sizes follow the factor (1.25); `setToolbarScale` sends `cad:toolbar-scale`
+    so the ribbon measures its fit again (review 6). Users
+    rearrange both (`src/ui/toolbar-layout.ts`): right-click a
+    button for Move to More, Move earlier, Move later (a step in the ribbon's
+    reading order: up or down its column for a small button, review 8) and
+    Reset toolbar; right-click
     a More item for Show in toolbar (a command shown this way folds last when the
     frame is narrow; greyed with the reason when even then it cannot fit) and
     Reset toolbar; drag a button along its group (a drop mark shows where);
@@ -755,7 +838,13 @@ with the host once for the page's life, and its chip goes in the dock.
     and the drop changes nothing; Escape cancels; the keyboard's way is a More
     item's "Swap with <the bar's last>" ("Show in toolbar" still adds without
     displacing: the only way to grow a group); a
-    right-click anywhere else on the toolbar offers Reset toolbar. Shortcuts and
+    right-click anywhere else on the toolbar offers Reset toolbar. Every command's
+    right-click menu (a bar button, a More item, VIEW, EDIT and Finish sketch) also
+    has Set keybind... (`keybindMenuItem`, src/ui/keybinds): for a flyout's
+    button or its arrow, the variant on the button; for an item of a flyout's
+    list, that variant; for a More item (VIEW's and EDIT's too, when the person
+    narrowed them) and an item of a collapsed group's dropdown, that command,
+    with Reset toolbar. Shortcuts and
     the More menus work whatever the layout. The layout (per mode, `place` id
     -> bar | more and each group's `order`; unknown ids are ignored, new commands
     take their registry place) is **the user's, in every project** (P4b
@@ -772,9 +861,9 @@ with the host once for the page's life, and its chip goes in the dock.
     `toolbar-layout.json` (the sandboxed frame has no localStorage). The e2e that
     change it (`cad:p4b-toolbar-customize`, `-tabs`, `-migrate`) run in the serial
     phase: the server keeps one prefs file per plugin. The toolbar carries `data-folded` (all in More),
-    `data-fit-folded` (folded for the width), `data-fit` (0 labels, 1 VIEW and EDIT icons, 2 every
-    group icons), `data-fit-scale`, `data-fit-tight` and `data-fit-icons` (the groups gone to icons
-    for the width), `data-layout` (default | custom)
+    `data-fit-folded` (folded for the width), `data-fit` (0 labels, 1 VIEW and EDIT icons),
+    `data-fit-labels` (the groups whose small buttons went to icons for the width), `data-fit-tight`
+    and `data-fit-collapsed` (the groups collapsed into one dropdown), `data-layout` (default | custom)
     and `data-layout-ready`.
   - **The priority** (most used stays longest; SolidWorks' CommandManager and
     Fusion's toolbar promote the same core commands, weighted for Magnusim's

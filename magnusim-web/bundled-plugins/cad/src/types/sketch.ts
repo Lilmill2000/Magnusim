@@ -230,7 +230,7 @@ export interface SketchModeState {
 /**
  * Sketch mode (proposal §3.3). Entered when a panel session opens on a sketch
  * feature (new or edit), left when it closes. While it is on: services.mode is
- * 'sketch', the toolbar shows DRAW / CONSTRAIN / DIMENSION / MODIFY and Finish
+ * 'sketch', the toolbar shows DRAW / MODIFY / CONSTRAIN / DIMENSION and Finish
  * sketch, the camera looks at the sketch plane, the rebuild stops after the
  * sketch (later features show rolled back), and the viewport's pointer belongs
  * to the sketch's tool (Alt + drag orbits; middle and right drag as usual).

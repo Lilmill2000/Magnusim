@@ -32,7 +32,11 @@ export const GROUP_LABELS: Record<ToolbarGroup, string> = {
 /** CFD PREP (Enclosure) comes after the modelling groups (decision 2026-10-01). */
 /** P4b (PATTERN, Daniel's item 7): PATTERN sits right after SOLID, beside Extrude. */
 export const MODEL_GROUPS: ModelGroup[] = ['sketch', 'solid', 'pattern', 'modify', 'construct', 'cfd', 'inspect', 'file', 'scale'];
-export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'constrain', 'dimension', 'sketch-modify', 'scale'];
+/**
+ * v0.5.0 (Daniel: the sketch toolbar as SolidWorks's Sketch tab lays it out): the drawing tools,
+ * then the sketch tools (trim, offset, mirror, the patterns), then relations and dimensions.
+ */
+export const SKETCH_GROUPS: SketchGroup[] = ['draw', 'sketch-modify', 'constrain', 'dimension', 'scale'];
 
 /**
  * A command. Only commands that work end to end are registered (honest UI:
@@ -55,7 +59,11 @@ export interface CommandDef {
    * yellow banana of Banana for scale): `fill` inside the path, `stroke` its outline.
    */
   iconColors?: { fill: string; stroke: string };
-  /** "Ctrl+Z", "Shift+F", "E", "Delete", "Escape". Ctrl means Ctrl or Cmd. */
+  /**
+   * The key its tooltip and menus show ("Ctrl+Z", "Shift+R", "E"). Filled by the registry from the
+   * keybinding registry (src/app/keymap.ts) and the person's keybinds for every command it lists:
+   * a command of the app never sets it. Ctrl means Ctrl or Cmd.
+   */
   shortcut?: string;
   /** Longer tooltip text; the label and shortcut are added by the toolbar. */
   hint?: string;
@@ -98,13 +106,19 @@ export interface CommandRegistry {
   run(id: string): Promise<true | string>;
   /** Whether a command could run now (its `enabled`), without running it; unknown ids say so. */
   canRun(id: string): true | string;
-  /** Notified when commands are added or removed (the toolbar re-renders). */
+  /** Notified when commands are added or removed, or their keys change (the toolbar re-renders). */
   subscribe(fn: () => void): () => void;
+  /** The keys bound to a command now, normalised (the person's keybinds, else its defaults). */
+  keys?(id: string): readonly string[];
 }
 
 export interface KeyBinding {
-  /** Normalised combo, "Ctrl+Shift+Z". */
+  /** Normalised combo, "Ctrl+Shift+KeyZ" (src/app/keymap.ts: physical keys). */
   combo: string;
+  /** The combos now, read on every press (a keybind the person changes applies at once); replaces combo. */
+  keys?: () => readonly string[];
+  /** Undo or Redo of the app: also from a field marked [data-undo-to-app] (nothing typed in it to take back). */
+  appUndo?: boolean;
   /**
    * Handle the key. Returning false passes it to the next older binding of the
    * same combo (command shortcuts do this when no command of the current mode
@@ -122,7 +136,7 @@ export interface KeyBinding {
  */
 export interface KeyboardManager {
   bind(binding: KeyBinding): () => void;
-  /** Normalise "ctrl+z", "Cmd+Z" -> "Ctrl+Z". */
+  /** Normalise "ctrl+z", "Cmd+Z" -> "Ctrl+KeyZ". */
   normalise(combo: string): string;
   dispose(): void;
 }

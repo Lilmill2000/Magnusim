@@ -18,7 +18,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../types/app';
 import type { CommandDef } from '../types/commands';
-import type { OriginPlaneRef } from '../types/doc';
+import type { OriginPlaneRef, SketchFeature, SketchRelationKind } from '../types/doc';
 import type { SketchToolId } from '../types/sketch';
 import type { SelectionItem } from '../types/selection';
 import type { OverlayLayer } from '../types/viewport';
@@ -26,14 +26,15 @@ import { clearSelection, userItems } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import { uiFor } from '../ui/controller';
 import { constructOf, constructOutput } from '../features/refgeom/api';
-import { CONSTRAIN_COMMANDS, planConstraint } from './constraints';
-import { SHAPE_TOOL_IDS, SketchBuilder, toggleConstruction } from './edit';
+import { CONSTRAIN_COMMANDS, curvesCollapsed, curvesMerged, hasRelation, planConstraint, sameRefs, SUPERSEDES, turnedForAngle } from './constraints';
+import { SHAPE_TOOL_IDS, SketchBuilder, toggleConstruction, type EditOutcome } from './edit';
 import { SKETCH_ICONS } from './icons';
 import { entityOf, ORIGIN, RELATION_LABELS } from './model';
-import { type SketchMode } from './mode';
+import { IMPLIED, type ApplyResult, type SketchMode } from './mode';
 import { sketchUp } from '../viewport/normal';
 // ux010 (DRAW): Show relations.
-import { relationsView, SHOW_RELATIONS_SHORTCUT } from './relations-view';
+import { relationsView } from './relations-view';
+import { keyLabel } from '../app/keybinds';
 // P4b (SKETCH): spline handles and fit points for Tangent / Coincident.
 import { addHandle } from './tools/spline-relations';
 
@@ -73,12 +74,13 @@ export function supportFromSelection(
 }
 
 // v0.5.0: the drawing tools sit in toolbar flyouts (src/ui/flyouts.ts): `flyout` names the one.
-const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; shortcut?: string; hint: string; order?: number; flyout?: string }[] = [
-  { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, shortcut: 'L', hint: 'Chained lines, click by click; A or a drag from the end makes a tangent arc', flyout: 'line' },
-  { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, shortcut: 'R', hint: 'Two opposite corners', flyout: 'rectangle' },
+const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; hint: string; order?: number; flyout?: string }[] = [
+  // Line's hint names 3-point arc's key (the person's keybind) for the tangent arc: lineHint.
+  { id: 'sketch.line', tool: 'line', label: 'Line', icon: SKETCH_ICONS.line, hint: 'Chained lines, click by click; a drag from the end makes a tangent arc', flyout: 'line' },
+  { id: 'sketch.rectangle', tool: 'rectangle-corner', label: 'Rectangle', icon: SKETCH_ICONS.rectangle, hint: 'Two opposite corners', flyout: 'rectangle' },
   { id: 'sketch.rectangle-center', tool: 'rectangle-center', label: 'Center rectangle', icon: SKETCH_ICONS.rectangleCenter, hint: 'The centre, then a corner', flyout: 'rectangle' },
-  { id: 'sketch.circle', tool: 'circle', label: 'Circle', icon: SKETCH_ICONS.circle, shortcut: 'C', hint: 'The centre, then the radius', flyout: 'circle' },
-  { id: 'sketch.arc', tool: 'arc-3pt', label: '3-point arc', icon: SKETCH_ICONS.arc, shortcut: 'A', hint: 'Start, end, then a point on the arc', flyout: 'arc' },
+  { id: 'sketch.circle', tool: 'circle', label: 'Circle', icon: SKETCH_ICONS.circle, hint: 'The centre, then the radius', flyout: 'circle' },
+  { id: 'sketch.arc', tool: 'arc-3pt', label: '3-point arc', icon: SKETCH_ICONS.arc, hint: 'Start, end, then a point on the arc', flyout: 'arc' },
   { id: 'sketch.arc-tangent', tool: 'arc-tangent', label: 'Tangent arc', icon: SKETCH_ICONS.arcTangent, hint: 'From the end of a line or an arc, tangent to it', flyout: 'arc' },
   { id: 'sketch.point', tool: 'point', label: 'Point', icon: SKETCH_ICONS.point, hint: 'A sketch point' },
   { id: 'sketch.centerline', tool: 'centerline', label: 'Centerline', icon: SKETCH_ICONS.centerline, hint: 'A construction line, an axis to mirror or revolve about', flyout: 'line' },
@@ -90,9 +92,68 @@ const DRAW: { id: string; tool: SketchToolId; label: string; icon: string; short
 ];
 
 /** Picked sketch items as constraint references (a point entity is a point; curves by id). */
-function picks(mode: SketchMode): string[] {
+export function picks(mode: Pick<SketchMode, 'selected'>): string[] {
   return mode.selected().filter((h) => h.what !== 'constraint').map((h) => h.id);
 }
+
+/** The CONSTRAIN command's icon for a relation kind (the toolbar's, and the relations palette's). */
+export function relationIcon(kind: SketchRelationKind): string {
+  return SKETCH_ICONS[kind === 'point_on_line' ? 'onCurve' : (kind as keyof typeof SKETCH_ICONS)] ?? SKETCH_ICONS.coincident;
+}
+
+/**
+ * The edit a CONSTRAIN command makes for these picks: the planned records the sketch does not have
+ * yet (a record already there is not added twice: it would only over-define it), replacing what the
+ * new relation makes redundant on the same references (SUPERSEDES).
+ */
+export function relationEdit(kind: SketchRelationKind, sel: readonly string[], fully?: (point: string) => boolean): (d: SketchFeature) => EditOutcome {
+  return (d) => {
+    const p = planConstraint(d, kind, sel);
+    if (!p.ok) return { ok: false, reason: p.reason };
+    const add = p.add.filter((r) => !hasRelation(d, r));
+    if (!add.length) return { ok: false, reason: `${RELATION_LABELS[kind]} is already in the sketch` };
+    const b = new SketchBuilder(d);
+    for (const r of add) {
+      const weaker = SUPERSEDES[r.kind] ?? [];
+      if (weaker.length) b.removeConstraints(d.constraints.filter((c) => (weaker as string[]).includes(c.kind) && sameRefs(c.refs, r.refs)).map((c) => c.id));
+      // P4b (SKETCH): a fit spline's tangent handle first.
+      if (r.handle) addHandle(b, r.handle);
+      b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
+    }
+    const draft = b.result();
+    // Review (relations lane): an angle relation starts the solver from the free line turned to it.
+    const turned = add.length === 1 ? turnedForAngle(d, add[0], fully) : null;
+    return { ok: true, draft: turned ? { ...draft, points: { ...draft.points, ...turned } } : draft, optional: [], removed: [] };
+  };
+}
+
+/**
+ * A relation's solution that shrinks a curve to (next to) nothing, or puts two of its curves on top
+ * of each other, is refused (curvesCollapsed, curvesMerged).
+ */
+export function relationRefusal(sel: readonly string[], kind?: SketchRelationKind): (before: SketchFeature, after: SketchFeature) => string | null {
+  // Tangent of curves with one centre is degenerate: any coradial result is refused (the arc on the
+  // circle). Equal and Concentric may leave an arc on a circle's path.
+  return (before, after) => curvesCollapsed(before, after) ?? curvesMerged(before, after, sel, { coradial: kind === 'tangent' });
+}
+
+/**
+ * What a CONSTRAIN command adds for these picks, as one undo step (the toolbar command, its key,
+ * and the relations palette by the selection all add through here: the same records, refused with
+ * the same reasons).
+ */
+/** Whether the sketch's last analysis has this point fully defined (an angle relation never turns it). */
+export function fullyDefined(mode: Pick<SketchMode, 'view'>): (point: string) => boolean {
+  return (q) => mode.view.get().analysis?.perPoint[q] === 'fully';
+}
+
+export function applyRelation(mode: Pick<SketchMode, 'apply' | 'view'>, kind: SketchRelationKind, sel: readonly string[]): Promise<ApplyResult> {
+  // Review (relations lane): the sketch's analysis is asked first, as it alone sees a relation the
+  // others imply (Parallel of two horizontal lines): added, it only over-defined the sketch.
+  return mode.apply(RELATION_LABELS[kind], relationEdit(kind, sel, fullyDefined(mode)), { refuse: relationRefusal(sel, kind), analyzeFirst: true });
+}
+
+export { IMPLIED };
 
 /**
  * Sketch with no plane or flat face selected (SD review round 1: Sketch was greyed on an empty
@@ -204,8 +265,12 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       group: 'draw',
       mode: 'sketch',
       icon: d.icon,
-      shortcut: d.shortcut,
-      hint: d.hint,
+      get hint() {
+        if (d.id !== 'sketch.line') return d.hint;
+        // In a line chain 3-point arc's key (A by default) makes the next segment a tangent arc.
+        const arc = keyLabel(services, 'sketch.arc');
+        return arc ? `Chained lines, click by click; ${arc} or a drag from the end makes a tangent arc` : d.hint;
+      },
       order: d.order ?? 10 + i,
       ...(d.flyout ? { flyout: d.flyout } : {}),
       activeWhen: { sketchTool: d.tool },
@@ -240,10 +305,10 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'draw',
     mode: 'sketch',
     icon: SKETCH_ICONS.construction,
-    shortcut: 'X',
     get hint() {
       const ids = curvesPicked();
-      if (!ids.length) return mode.drawConstruction ? 'Construction drawing is on: X turns it off' : 'Construction drawing is off: X turns it on (what you draw is dashed, never part of a profile)';
+      const x = keyLabel(services, 'sketch.construction') ?? 'Construction';
+      if (!ids.length) return mode.drawConstruction ? `Construction drawing is on: ${x} turns it off` : `Construction drawing is off: ${x} turns it on (what you draw is dashed, never part of a profile)`;
       const d = mode.draft();
       return d && ids.every((id) => entityOf(d, id)?.construction) ? 'Make the selection normal geometry (not construction)' : 'Make the selection construction';
     },
@@ -283,7 +348,7 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
       label: c.label,
       group: 'constrain',
       mode: 'sketch',
-      icon: SKETCH_ICONS[c.kind === 'point_on_line' ? 'onCurve' : (c.kind as keyof typeof SKETCH_ICONS)] ?? SKETCH_ICONS.coincident,
+      icon: relationIcon(c.kind),
       hint: c.needs,
       order: 10 + i,
       explainRefusal: true,
@@ -296,22 +361,9 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
         return p.ok ? true : p.reason;
       },
       run: () => {
-        const sel = picks(mode);
-        void mode
-          .apply(RELATION_LABELS[c.kind], (d) => {
-            const p = planConstraint(d, c.kind, sel);
-            if (!p.ok) return { ok: false, reason: p.reason };
-            const b = new SketchBuilder(d);
-            for (const r of p.add) {
-              // P4b (SKETCH): a fit spline's tangent handle first.
-              if (r.handle) addHandle(b, r.handle);
-              b.addRelation(r.kind, r.refs, r.value ? { value: r.value } : {});
-            }
-            return b.result();
-          })
-          .then((r) => {
-            if (r.ok) mode.select([], false);
-          });
+        void applyRelation(mode, c.kind, picks(mode)).then((r) => {
+          if (r.ok) mode.select([], false);
+        });
       },
     }),
   );
@@ -323,7 +375,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'dimension',
     mode: 'sketch',
     icon: SKETCH_ICONS.dimension,
-    shortcut: 'D',
     hint: 'Smart Dimension: pick a line, a circle, an arc or two items, then where the value goes',
     order: 10,
     activeWhen: { sketchTool: 'dimension' },
@@ -336,7 +387,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'sketch-modify',
     mode: 'sketch',
     icon: SKETCH_ICONS.trim,
-    shortcut: 'T',
     hint: 'Remove the piece of a curve between the curves that cross it',
     order: 10,
     activeWhen: { sketchTool: 'trim' },
@@ -365,7 +415,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     group: 'draw',
     mode: 'sketch',
     icon: SKETCH_ICONS.finish,
-    shortcut: 'Enter',
     get hint() {
       return mode.byAssistant ? TAKE_OVER : 'Leave the sketch (the whole sketch session is one undo step)';
     },
@@ -378,7 +427,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     id: 'sketch.delete',
     label: 'Delete',
     mode: 'sketch',
-    shortcut: 'Delete',
     explainRefusal: true,
     enabled: () => {
       const e = editable();
@@ -392,7 +440,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Undo',
     mode: 'sketch',
     icon: SKETCH_ICONS.undo,
-    shortcut: 'Ctrl+Z',
     get hint() {
       return mode.byAssistant ? TAKE_OVER : 'Undo the last change in this sketch';
     },
@@ -404,7 +451,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Redo',
     mode: 'sketch',
     icon: SKETCH_ICONS.redo,
-    shortcut: 'Ctrl+Y',
     get hint() {
       return mode.byAssistant ? TAKE_OVER : 'Redo in this sketch';
     },
@@ -417,7 +463,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Normal to',
     mode: 'sketch',
     icon: SKETCH_ICONS.lookAt,
-    shortcut: 'N',
     hint: 'Look straight at the sketch',
     order: 50,
     run: () => {
@@ -435,11 +480,11 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
     label: 'Show relations',
     mode: 'sketch',
     icon: RELATIONS_ICON,
-    shortcut: SHOW_RELATIONS_SHORTCUT,
     get hint() {
+      const k = keyLabel(services, 'view.sketch-relations') ?? 'Show relations';
       return rv.state.get().showAll
-        ? 'Every relation shows: Shift+R shows only those of the selected geometry (a conflict always shows)'
-        : 'Relations show for the selected geometry only: Shift+R shows them all (a conflict always shows)';
+        ? `Every relation shows: ${k} shows only those of the selected geometry (a conflict always shows)`
+        : `Relations show for the selected geometry only: ${k} shows them all (a conflict always shows)`;
     },
     order: 60,
     pressed: () => mode.active && rv.state.get().showAll,
@@ -455,6 +500,7 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
   // ---- keys that are not one command's shortcut
   const kb = services.keyboard;
   offs.push(
+    // Escape is built in (the app's own key, never rebound): it steps back in the sketch.
     kb.bind({
       combo: 'Escape',
       inInputs: true,
@@ -468,14 +514,6 @@ export function registerSketchCommands(services: AppServices, mode: SketchMode):
         // A field keeps its Escape; it never closes the sketch.
         if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
         mode.escape();
-        return true;
-      },
-    }),
-    kb.bind({
-      combo: 'Ctrl+Shift+Z',
-      run: () => {
-        if (!mode.active) return false;
-        mode.redo();
         return true;
       },
     }),
