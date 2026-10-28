@@ -295,14 +295,13 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     expect(await loadIdOf(frame)).toBe(loadId);
     await expect(shell).toHaveAttribute('data-workspace-dirty', '1');
     await keysReach(frame, 'p');
-    // The page's own question after it is a plain one again, even when the page asks for the
-    // leave question's Stay and safe (and a notice): Cancel, Yes focused, Enter answers Yes.
+    // The page's own question after it is its own again: no Stay and no notice (those are the
+    // leave question's), Cancel and Yes focused, Enter answers Yes.
     const plain = frame.evaluate(() =>
       window.__ws.ui.confirm({
         title: 'Replace the mesh?',
         message: 'The old mesh is deleted.',
         confirmLabel: 'Replace',
-        safe: true,
         no: 'Stay',
         cancelLabel: 'Stay',
         notice: true,
@@ -312,6 +311,15 @@ test('gate:g7-workspace-frame focus, full screen and the unsaved-work guard on e
     await page.keyboard.press('Enter');
     await expect(modal).toBeHidden();
     expect(await plain).toBe(true);
+    // A page may ask for a safe question (API 1.9: guard and safe): Cancel focused, Enter answers
+    // Cancel; still no Stay.
+    const safe = frame.evaluate(() =>
+      window.__ws.ui.confirm({ title: 'Replace the mesh?', message: 'The old mesh is deleted.', confirmLabel: 'Replace', safe: true, no: 'Stay', cancelLabel: 'Stay' }),
+    );
+    await expectQuestion('Replace the mesh?', 'The old mesh is deleted.', 'Replace', { safe: true });
+    await page.keyboard.press('Enter');
+    await expect(modal).toBeHidden();
+    expect(await safe).toBe(false);
     expect(await loadIdOf(frame)).toBe(loadId);
     // A click on Stay keeps it too.
     await overlay.locator('[data-ws-back]').click();
