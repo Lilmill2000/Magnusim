@@ -21,7 +21,7 @@
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
+  box-shadow: var(--cad-marker-shadow);
 }
 .cad-pattern-markers .cad-pattern-marker:hover,
 .cad-pattern-markers .cad-pattern-marker:focus-visible {
@@ -45,6 +45,10 @@
 .cad-pattern-markers .cad-pattern-marker.is-failed {
   border-color: var(--mg-danger);
   color: var(--mg-danger);
+}
+.cad-pattern-markers .cad-pattern-marker.is-failed:hover,
+.cad-pattern-markers .cad-pattern-marker.is-failed:focus-visible {
+  background: var(--cad-marker-failed-hover-bg);
 }
 .cad-pattern-instances {
   margin: 6px 0;

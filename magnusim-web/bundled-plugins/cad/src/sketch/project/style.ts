@@ -1,6 +1,6 @@
 // How linked geometry looks in sketch mode (P4b SELECT): every linked entity
-// and its points purple (--cad-sketch-projected), those whose source the last
-// rebuild could not find amber (--cad-sketch-lost), and an auto-made reference
+// and its points purple (the palette's linked ink), those whose source the last
+// rebuild could not find amber (its lost ink), and an auto-made reference
 // (a snap on the model while drawing) light: drawn dashed, as guides are.
 // Owner: P4b SELECT.
 // SPDX-License-Identifier: GPL-3.0-or-later

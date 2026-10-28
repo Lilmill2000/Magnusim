@@ -5,7 +5,12 @@
 //     accent, fully: #101828, over: red; construction dashed and muted),
 //     points, the hover halo and the selection, a tool's preview (rubber band,
 //     inference guides, a trim's doomed piece in red, the window), and the
-//     dimensions' extension and dimension lines;
+//     dimensions' extension and dimension lines; its colours are the view's
+//     palette's (src/viewport/palette.ts), drawn again when it changes (the
+//     host's theme, and LIGHT for a picture); in a dark view each line set and
+//     the points carry their light-view colours too, for where a light face
+//     shows under them (E2, src/viewport/onface.ts: the view draws them there),
+//     and the hover halo is fainter over the dark background;
 //   layer "sketch-annotations" (order 40, html): constraint glyphs (white
 //     badges, selectable, deletable), dimension labels (driven grey in
 //     parentheses; double-click edits, drag moves, right-click for Make it
@@ -41,8 +46,9 @@ import { linkMenuItems } from './project/menu';
 // ux010 (DRAW)
 import { CLICK_PX } from '../viewport/colors';
 import { drawsConstruction } from './edit';
-import { cursorFor, cursorTone, sketchCursor } from './cursors';
-import { VIEWPORT_BG } from '../viewport/colors';
+import { cursorFor, cursorTone, sketchCursor, type CursorTone } from './cursors';
+import { setFaceColours, setFaceOpacity } from '../viewport/onface';
+import { faceSketchInk, paletteOf, type MarkPalette } from '../viewport/palette';
 import { relationShown, relationsView } from './relations-view';
 // Daniel's first desktop test: the construction badge's ×, and the relations palette.
 import { createConstructionBadge } from './construction-badge';
@@ -64,49 +70,29 @@ export function isClickDrag(heldMs: number, movedPx: number): boolean {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-interface Palette {
-  under: string;
-  fully: string;
-  over: string;
-  construction: string;
-  pick: string;
-  hover: string;
-  preview: string;
-  dim: string;
-  driven: string;
-  grid: string;
-  gridMajor: string;
-  doomed: string;
-  /** P4b (SELECT): linked geometry (purple) and a lost reference (amber). */
-  linked: string;
-  lost: string;
-}
+/** The hover halo's opacity: in light, and over a light face in a dark view. */
+const HALO_OPACITY = 0.85;
+/**
+ * The hover halo's opacity over the dark background: there the lines' light inks are about the
+ * halo's own lightness (an under-defined line read 1.1:1 in the .85 halo, fully defined 1.75:1),
+ * so the halo is a fainter tint of the hover blue, 3.2:1 on the background, and the line's state
+ * colour reads in it (2:1 and more).
+ */
+const HALO_GROUND_OPACITY = 0.45;
 
-function readPalette(): Palette {
-  const s = getComputedStyle(document.documentElement);
-  const v = (name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
-  return {
-    under: v('--cad-sketch-under', '#1570ef'),
-    fully: v('--cad-sketch-full', '#101828'),
-    over: v('--cad-sketch-over', '#b42318'),
-    construction: v('--mg-text-muted', '#667085'),
-    pick: v('--cad-pick', '#2ec47e'),
-    hover: v('--cad-hover-pick', '#b2ccff'),
-    preview: v('--mg-primary', '#1570ef'),
-    dim: v('--mg-text', '#101828'),
-    driven: v('--mg-text-muted', '#667085'),
-    grid: v('--mg-divider', '#e8ebf0'),
-    gridMajor: v('--mg-card-border', '#cfd3db'),
-    doomed: v('--mg-danger', '#b42318'),
-    linked: v('--cad-sketch-projected', '#7a3fd1'),
-    lost: v('--cad-sketch-lost', '#b54708'),
-  };
-}
+/**
+ * E2 (src/viewport/onface.ts): a sketch colour over a light face (its role's light-view ink), or
+ * null while nothing follows what is under it (light). Lines and points that have one build their
+ * face colours with each set().
+ */
+type FaceOf = ((color: string) => string) | null;
 
 /** Fat lines in the sketch's plane (u, v, 0) with a colour per segment. */
 class Lines {
   readonly obj: LineSegments2;
   readonly mat: LineMaterial;
+  /** E2: the face colours of each set() (null: none). */
+  face: FaceOf = null;
   constructor(
     parent: Group,
     width: number,
@@ -122,22 +108,38 @@ class Lines {
     this.obj.frustumCulled = false;
     parent.add(this.obj);
   }
-  set(segs: { a: Vec2; b: Vec2; color: string }[]) {
-    const pos = new Float32Array(Math.max(1, segs.length) * 6);
-    const col = new Float32Array(Math.max(1, segs.length) * 6);
+  private geometryOf(pos: Float32Array, segs: { color: string }[], colorOf: (c: string) => string): LineSegmentsGeometry {
+    const col = new Float32Array(pos.length);
     const c = new Color();
     segs.forEach((s, i) => {
-      pos.set([s.a[0], s.a[1], 0, s.b[0], s.b[1], 0], i * 6);
-      c.setStyle(s.color);
+      c.setStyle(colorOf(s.color));
       col.set([c.r, c.g, c.b, c.r, c.g, c.b], i * 6);
     });
     const g = new LineSegmentsGeometry();
     g.setPositions(pos);
     g.setColors(col);
+    return g;
+  }
+  set(segs: { a: Vec2; b: Vec2; color: string }[]) {
+    const pos = new Float32Array(Math.max(1, segs.length) * 6);
+    segs.forEach((s, i) => pos.set([s.a[0], s.a[1], 0, s.b[0], s.b[1], 0], i * 6));
+    const g = this.geometryOf(pos, segs, (c) => c);
     this.obj.geometry.dispose();
     this.obj.geometry = g;
     this.obj.visible = segs.length > 0;
     if (this.mat.dashed) this.obj.computeLineDistances();
+    // E2: the same segments in their face colours (dashed on the same distances), for the view's twin.
+    const face = this.face;
+    if (face && segs.length) {
+      const fg = this.geometryOf(pos, segs, face);
+      if (this.mat.dashed) new LineSegments2(fg, this.mat).computeLineDistances();
+      setFaceColours(g, fg);
+    }
+  }
+  /** Dash and gap lengths (model mm). */
+  dash(dashSize: number, gapSize: number) {
+    this.mat.dashSize = dashSize;
+    this.mat.gapSize = gapSize;
   }
   dispose() {
     this.obj.geometry.dispose();
@@ -174,6 +176,8 @@ export function roundPoints(mat: PointsMaterial): PointsMaterial {
 class Dots {
   readonly obj: Points;
   readonly mat: PointsMaterial;
+  /** E2: the points' face colours with each set() (null: none). */
+  face: FaceOf = null;
   constructor(parent: Group, size: number) {
     this.mat = roundPoints(new PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, depthTest: false, depthWrite: false, transparent: true }));
     this.obj = new Points(new BufferGeometry(), this.mat);
@@ -181,21 +185,26 @@ class Dots {
     this.obj.frustumCulled = false;
     parent.add(this.obj);
   }
-  set(pts: { at: Vec2; color: string }[]) {
-    const pos = new Float32Array(pts.length * 3);
+  private geometryOf(pos: Float32Array, pts: { color: string }[], colorOf: (c: string) => string): BufferGeometry {
     const col = new Float32Array(pts.length * 3);
     const c = new Color();
     pts.forEach((p, i) => {
-      pos.set([p.at[0], p.at[1], 0], i * 3);
-      c.setStyle(p.color);
+      c.setStyle(colorOf(p.color));
       col.set([c.r, c.g, c.b], i * 3);
     });
     const g = new BufferGeometry();
     g.setAttribute('position', new Float32BufferAttribute(pos, 3));
     g.setAttribute('color', new Float32BufferAttribute(col, 3));
+    return g;
+  }
+  set(pts: { at: Vec2; color: string }[]) {
+    const pos = new Float32Array(pts.length * 3);
+    pts.forEach((p, i) => pos.set([p.at[0], p.at[1], 0], i * 3));
+    const g = this.geometryOf(pos, pts, (c) => c);
     this.obj.geometry.dispose();
     this.obj.geometry = g;
     this.obj.visible = pts.length > 0;
+    if (this.face && pts.length) setFaceColours(g, this.geometryOf(pos, pts, this.face));
   }
   dispose() {
     this.obj.geometry.dispose();
@@ -294,10 +303,16 @@ function unionUv(a: UvBox | null, b: UvBox | null): UvBox | null {
 
 export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => void {
   const { services } = mode;
-  const pal = readPalette();
+  // The sketch's colours by role: the view's palette (src/viewport/palette.ts), followed when it
+  // changes; in a dark view also each colour's light-view ink, for over a light face (E2).
+  let pal = paletteOf(handle).sketch;
+  let background = paletteOf(handle).background;
+  /** The palette's marks follow what is under them (dark): so does the cursor (tone). */
+  let followsFaces = paletteOf(handle).face !== null;
+  const faceOf = (p: MarkPalette): FaceOf => (p.face ? (c) => faceSketchInk(p, c) : null);
   // The sketch's curves, points and dimensions count when the view frames the part (entering or
   // reopening the sketch, Fit, Look at, the standard views); its grid and origin do not.
-  const geo: OverlayLayer = handle.addLayer('sketch-geometry', { order: 30, frame: () => frameBox() });
+  const geo: OverlayLayer = handle.addLayer('sketch-geometry', { order: 30, frame: () => frameBox(), palette: (p) => recolour(p) });
   const ann: OverlayLayer = handle.addLayer('sketch-annotations', { order: 40 });
   const frame = new Group();
   frame.matrixAutoUpdate = false;
@@ -313,7 +328,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   grid.mat.polygonOffset = true;
   grid.mat.polygonOffsetFactor = 2;
   grid.mat.polygonOffsetUnits = 8;
-  const halo = new Lines(frame, 7, { opacity: 0.85, order: 990 });
+  const halo = new Lines(frame, 7, { opacity: HALO_OPACITY, order: 990 });
   // The core's edge width: the line's middle row is drawn in its colour, not blended (fully defined lines read #101828).
   const solid = new Lines(frame, 2.4);
   const dashed = new Lines(frame, 1.6, { dashed: true });
@@ -323,6 +338,17 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   const guides = new Lines(frame, 1, { dashed: true, order: 1002 });
   const dots = new Dots(frame, 7);
   const dimLines = new Lines(dimFrame, 1, { order: 1003 });
+  // E2: every set of lines and the points take their light-view colours where a light face shows
+  // under them (the grid too). The hover halo keeps its one colour, at .85 over a light face and
+  // fainter over the dark background (HALO_GROUND_OPACITY), so the line in it keeps its colour.
+  const twoTone = [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines, dots];
+  const applyFace = (p: MarkPalette) => {
+    const f = faceOf(p);
+    for (const l of twoTone) l.face = f;
+    halo.mat.opacity = f ? HALO_GROUND_OPACITY : HALO_OPACITY;
+    setFaceOpacity(halo.mat, f ? HALO_OPACITY : null);
+  };
+  applyFace(paletteOf(handle));
   const html = ann.html;
   html.classList.add('cad-sketch-annotations');
   html.setAttribute('data-sketch-annotations', '1');
@@ -419,10 +445,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     dashed.set(dashSegs);
     halo.set(haloSegs);
     const px = pxAt([0, 0]);
-    dashed.mat.dashSize = 6 * px;
-    dashed.mat.gapSize = 4 * px;
-    guides.mat.dashSize = 4 * px;
-    guides.mat.gapSize = 4 * px;
+    dashed.dash(6 * px, 4 * px);
+    guides.dash(4 * px, 4 * px);
     const pts: { at: Vec2; color: string }[] = [{ at: [0, 0], color: sel.has(ORIGIN) ? pal.pick : pal.fully }];
     // ux010 (DRAW): a point under a radius arrow (the fillet's virtual sharp lies on its line) is not
     // drawn while the arrow shows, so the arrow reads on its own.
@@ -493,8 +517,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const asConstruction = mode.drawConstruction && drawsConstruction(mode.tool?.id);
     preview.set(asConstruction ? [] : prevSegs);
     previewDashed.set(asConstruction ? prevSegs : []);
-    previewDashed.mat.dashSize = 6 * px;
-    previewDashed.mat.gapSize = 4 * px;
+    previewDashed.dash(6 * px, 4 * px);
     guides.set(guideSegs);
     dots.set(pts);
     drawDimensions(v);
@@ -502,6 +525,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // ------------------------------------------------------------ the grid
   let gridKey = '';
+  /** The grid's lines as drawn now (u/v, major or not): painted again in a new palette's colours when no new grid is drawn (paintGrid). */
+  let gridLines: { a: Vec2; b: Vec2; major: boolean }[] = [];
+  const paintGrid = () => grid.set(gridLines.map((l) => ({ a: l.a, b: l.b, color: l.major ? pal.gridMajor : pal.grid })));
   function drawGrid() {
     if (!plane || !canvas) return;
     const r = canvas.getBoundingClientRect();
@@ -512,7 +538,10 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       [r.left, r.bottom],
     ].map(([x, y]) => handle.toPlane(x, y, plane!)?.uv ?? null);
     if (corners.some((c) => !c)) {
-      if (gridKey) grid.set([]);
+      if (gridKey) {
+        grid.set([]);
+        gridLines = [];
+      }
       gridKey = '';
       return;
     }
@@ -529,17 +558,17 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const key = [step, u0, u1, v0, v1].map((x) => x.toPrecision(6)).join('|');
     if (key === gridKey) return;
     gridKey = key;
-    const segs: { a: Vec2; b: Vec2; color: string }[] = [];
-    const major = pal.gridMajor;
+    const lines: { a: Vec2; b: Vec2; major: boolean }[] = [];
     for (let u = u0; u <= u1 + step / 2; u += step) {
       const isMajor = Math.abs(u / (step * 10) - Math.round(u / (step * 10))) < 1e-6;
-      segs.push({ a: [u, v0], b: [u, v1], color: isMajor ? major : pal.grid });
+      lines.push({ a: [u, v0], b: [u, v1], major: isMajor });
     }
     for (let w = v0; w <= v1 + step / 2; w += step) {
       const isMajor = Math.abs(w / (step * 10) - Math.round(w / (step * 10))) < 1e-6;
-      segs.push({ a: [u0, w], b: [u1, w], color: isMajor ? major : pal.grid });
+      lines.push({ a: [u0, w], b: [u1, w], major: isMajor });
     }
-    grid.set(segs);
+    gridLines = lines;
+    paintGrid();
   }
 
   // ------------------------------------------------------------ html: glyphs, dimensions, boxes
@@ -1088,12 +1117,16 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
           e.stopPropagation();
           canvas.dispatchEvent(new PointerEvent('pointerdown', e));
         });
+        // The grab hand takes the tone of what is under it, as the crosshair does (E2): set where the
+        // pointer comes onto the arrow and as it moves over it, not where it was when the arrow came.
+        el.addEventListener('pointerenter', (e) => aimHandle(el, e.clientX, e.clientY));
         el.addEventListener('pointermove', (e) => {
+          aimHandle(el, e.clientX, e.clientY);
           if (!canvas || e.buttons || typeof PointerEvent !== 'function') return;
           canvas.dispatchEvent(new PointerEvent('pointermove', e));
         });
         forwardWheel(el);
-        el.style.cursor = sketchCursor('grab', null, cursorTone(services.bridge?.context?.theme?.name ?? null, VIEWPORT_BG));
+        handleCursor(el, tone());
         html.append(el);
         rec = { el, at: h.at, dir: h.dir };
         handleEls.set(h.id, rec);
@@ -1448,8 +1481,25 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // ------------------------------------------------------------ the pointer
   const drawing = () => (mode.tool?.id ?? 'select') !== 'select';
-  /** ux010 (DRAW): white cursors on a dark view (the host's theme, or the view's colour). */
-  const tone = () => cursorTone(services.bridge?.context?.theme?.name ?? null, VIEWPORT_BG);
+  /**
+   * ux010 (DRAW): white cursors on a dark view (the view's palette's background); over a light face
+   * in a dark view the light view's cursor, dark with a white halo (a white crosshair melts into a
+   * face: 1.6:1 on the body colour, its faint rim aside), as the marks there take their light inks (E2).
+   */
+  const toneAt = (x: number, y: number) => (followsFaces && handle.lightSurfaceAt?.(x, y) ? 'light' : cursorTone(null, background));
+  const tone = () => (pointerAt ? toneAt(pointerAt[0], pointerAt[1]) : cursorTone(null, background));
+  /** A radius arrow's grab hand, in a tone (written only when it changes). */
+  const handCursors = new WeakMap<HTMLElement, string>();
+  function handleCursor(el: HTMLElement, t: CursorTone) {
+    const css = sketchCursor('grab', null, t);
+    if (handCursors.get(el) === css) return;
+    handCursors.set(el, css);
+    el.style.cursor = css;
+  }
+  /** The arrow's hand in the tone of what is under the pointer on it (client px). */
+  function aimHandle(el: HTMLElement, x: number, y: number) {
+    handleCursor(el, toneAt(x, y));
+  }
   /** ux010 (DRAW): the cursor value last given to the canvas. */
   let lastCursor = '';
   /** ux010 (DRAW): the active tool's toolbar icon (the command that presses for it), for the draw cursor. */
@@ -1632,6 +1682,29 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     }
   };
   document.addEventListener('keydown', onKey, true);
+
+  // ------------------------------------------------------------ theme
+  /**
+   * The view's palette changed (the host's theme; LIGHT around a picture and back): the lines, the
+   * points, the grid and the dimension lines drawn again in its colours (and, dark, their face
+   * colours), now, and the cursors in its tone. The HTML (glyphs, dimension values, boxes)
+   * follows the CSS tokens.
+   */
+  function recolour(p: MarkPalette) {
+    pal = p.sketch;
+    applyFace(p);
+    background = p.background;
+    followsFaces = p.face !== null;
+    gridKey = '';
+    drawGeometry(mode.view.get());
+    drawGrid();
+    // No new grid (a near edge-on view keeps the one it has, drawGrid's span limit): the lines there
+    // take the new colours (review round 1: they kept the old theme's, in a picture too).
+    if (!gridKey) paintGrid();
+    applyCursor();
+    for (const rec of handleEls.values()) handleCursor(rec.el, tone());
+    geo.changed();
+  }
 
   // ------------------------------------------------------------ wiring
   const render = () => {

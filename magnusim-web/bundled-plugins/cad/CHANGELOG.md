@@ -82,6 +82,35 @@ in the Part" in `README.md`.
   turns stop for the rest of it. Watching needs the Magnusim window shown: in a
   hidden or covered window its steps run without pauses.
 
+**A dark Magnusim.** With Magnusim's dark appearance (Settings → Appearance),
+the Part follows it: dark from the moment it opens, and at once when the look
+is changed with the Part open, from any Magnusim window:
+- The 3D view turns dark (`#1b1f27`); the parts keep their light surfaces, the
+  edges are light, and the orientation arrows take Magnusim's dark axis colours,
+  lit so that an arrow pointing straight at you still stands out.
+- Sketch lines and points (every state, the line being drawn too, in a sketch
+  and on a finished one), reference axes and points, the measure line and the
+  Extrude and Enclosure arrows follow what is under them: over a part's face
+  of a light colour (the default one or another light one), over a face that
+  is picked or under the pointer and over a selected part (whatever its
+  colour), and over a section's cut face they keep the colours they have in
+  light; over the dark background, and over a part of a dark colour or a
+  see-through one, they take light colours. A line that crosses a face's edge
+  changes colour there. A selected or hovered line keeps its colour, and the
+  band around a line under the pointer is fainter over the dark background,
+  so the line's own colour shows in it.
+- The Sketch panel's colour dots show both colours (the left half the colour
+  over a face), the sketch cursor (a fillet's radius arrow's hand too) is the
+  light one over a face, a selection
+  box's caption and a failed Pattern copy's number stay readable, and blue
+  text in the Part uses the lighter blue made for dark backgrounds.
+- Pictures stay light whatever the appearance: the Picture tool's PNG, the
+  Assistant's pictures, and anything else drawn off screen look exactly as in
+  light, and the view never flashes light while one is taken.
+- The toolbar's icons follow Magnusim's icon size.
+- In light the Part is as before; only its orientation arrows take the axis
+  colours Magnusim's own 3D views now use (a shade darker).
+
 ## 0.1.0 (October 2026)
 
 The first release. Magnusim CAD is a parametric part modeler built into

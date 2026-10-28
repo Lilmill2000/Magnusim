@@ -3,7 +3,8 @@
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
 // connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
 // Edit in CAD: the geometry a Part edits, its source and its faces; unreleased 1.9:
-// ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys).
+// ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys, and the
+// host's appearance, ws.context.appearance and its 'appearance' event).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type {
   AssistantHandler,
@@ -28,6 +29,34 @@ import type { WsFilesApi } from '../types/docstore';
 import type { EditedGeometry, EditLaunch, GeometryFaces, GeometrySource, OriginalNamesRef } from '../types/edit-geometry';
 
 export type ToastKind = 'info' | 'success' | 'error';
+
+/**
+ * The host's appearance (unreleased 1.9: ws.context.appearance, and the 'appearance' event with
+ * the same object): the theme as resolved ('system' already decided), the person's choice, and
+ * the text and icon scales (Settings offers 0.9, 1, 1.15 and 1.3, and 0.85, 1, 1.25 and 1.5). The
+ * SDK writes data-theme, data-theme-pref, --mg-text-scale and --mg-icon-scale on the frame's
+ * <html> itself, before any listener hears a change, and the page has them from its first paint
+ * (the server puts the look in it); theme.css takes color-scheme from data-theme. So the CSS
+ * follows with no code; CAD never sets them.
+ */
+export interface Appearance {
+  theme: 'light' | 'dark';
+  preference: 'system' | 'light' | 'dark';
+  textScale: number;
+  iconScale: number;
+}
+
+/** What a host without an appearance gives: light, at scale 1. */
+export const LIGHT_APPEARANCE: Readonly<Appearance> = Object.freeze({ theme: 'light', preference: 'light', textScale: 1, iconScale: 1 });
+
+/** A host's appearance object as CAD takes it: anything but a "dark" theme is light, a scale out of 0.5..3 is 1. */
+export function appearanceOf(raw: unknown): Appearance {
+  const a = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const theme = typeof a.theme === 'string' && /^dark$/i.test(a.theme.trim()) ? 'dark' : 'light';
+  const preference = a.preference === 'system' || a.preference === 'light' || a.preference === 'dark' ? a.preference : theme;
+  const scale = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0.5 && v <= 3 ? v : 1);
+  return { theme, preference, textScale: scale(a.textScale), iconScale: scale(a.iconScale) };
+}
 
 /**
  * The plugin's preferences for the user, the same in every project (`ws.prefs`, host API 1.7:
@@ -95,6 +124,16 @@ export interface Bridge {
   /** The app's unit system right now (updated by the host's `units` event). */
   units(): UnitSystem;
   onUnits(fn: (u: UnitSystem) => void): () => void;
+  /**
+   * The host's appearance now (unreleased: ws.context.appearance, updated by its 'appearance'
+   * event). A host without it (feature detection: the context has no `appearance`) gives
+   * LIGHT_APPEARANCE, and the Part stays light.
+   */
+  appearance(): Appearance;
+  /** The resolved theme now: 'light' on a host without an appearance. */
+  theme(): 'light' | 'dark';
+  /** Each change of the host's appearance (never on a host without one). Returns unsubscribe. */
+  onAppearance(fn: (a: Appearance) => void): () => void;
   /** The study record changed (renamed in the header, or a save echoed back). */
   onStudy(fn: (s: StudyRecord) => void): () => void;
   study: {
@@ -234,6 +273,23 @@ export function createBridge(ws: Workspace): Bridge {
       console.warn('[cad] the assistantKeys event is not heard; the keys the Part opened with apply', err);
     }
   }
+  // Feature detection (unreleased 1.9: the host's appearance): the context has `appearance`, and
+  // the SDK sends each change as 'appearance'. An older host has neither: light, scale 1.
+  const withAppearance = ws.context as typeof ws.context & { appearance?: unknown };
+  const hasAppearance = !!withAppearance.appearance && typeof withAppearance.appearance === 'object';
+  let appearance: Appearance = hasAppearance ? appearanceOf(withAppearance.appearance) : { ...LIGHT_APPEARANCE };
+  const appearanceListeners = new Set<(a: Appearance) => void>();
+  const hearAppearance = (raw: unknown) => {
+    appearance = appearanceOf(raw);
+    for (const fn of [...appearanceListeners]) {
+      try {
+        fn(appearance);
+      } catch (err) {
+        console.error('[cad] appearance listener failed', err);
+      }
+    }
+  };
+  if (hasAppearance) (ws as unknown as { on(e: 'appearance', fn: (a: unknown) => void): () => void }).on('appearance', hearAppearance);
   const host12 = versionAtLeast(ws.context.hostVersion, 1, 2);
   const maybeFiles = (ws as unknown as { files?: Partial<WsFilesApi> }).files;
   // Feature detection (compatibility.md 1.2): the host says 1.2 or newer, and the
@@ -282,7 +338,7 @@ export function createBridge(ws: Workspace): Bridge {
           faces: () => (editProject.geometryFaces as EditApi['faces']).call(project),
         }
       : null;
-  return {
+  const bridge: Bridge = {
     context: ws.context,
     assistant: assistantOf(ws),
     assistantKeys: () => assistantKeys,
@@ -295,6 +351,14 @@ export function createBridge(ws: Workspace): Bridge {
     studyId: ws.context.study.id,
     units: () => units,
     onUnits: (fn) => ws.on('units', fn),
+    appearance: () => appearance,
+    theme: () => appearance.theme,
+    onAppearance(fn) {
+      appearanceListeners.add(fn);
+      return () => {
+        appearanceListeners.delete(fn);
+      };
+    },
     onStudy: (fn) => ws.on('study', fn),
     study: {
       get: () => ws.study.get(),
@@ -327,4 +391,5 @@ export function createBridge(ws: Workspace): Bridge {
     spawnWorker: (url) => ws.spawnWorker(url),
     raw: ws,
   };
+  return bridge;
 }

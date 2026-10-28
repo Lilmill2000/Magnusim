@@ -1,14 +1,15 @@
 // Measure markers in the viewport (layer order 60, docs/p2p3-plan.md §3.3):
 // the shortest-distance segment between the two picks, its end points, and the
-// distance as a label at its middle (html, re-placed every frame).
+// distance as a label at its middle (html, re-placed every frame). In a dark view
+// the line and its ends take the light view's measure colour where a light face
+// shows under them (E2, src/viewport/onface.ts).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BufferGeometry, Float32BufferAttribute, Line, LineBasicMaterial, Points, PointsMaterial } from 'three';
 import type { Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
-
-/** The measure colour (--cad-p2-measure in p2.css). */
-const MEASURE_COLOR = 0x1a4fbf;
+import { setFaceInk } from '../../viewport/onface';
+import { paletteOf, type MarkPalette } from '../../viewport/palette';
 
 export interface MeasureMarks {
   show(p1: Vec3, p2: Vec3, label: string): void;
@@ -17,9 +18,23 @@ export interface MeasureMarks {
 }
 
 export function createMeasureMarks(handle: ViewportHandle): MeasureMarks {
-  const layer: OverlayLayer = handle.addLayer('p2-measure', { order: 60 });
+  // The measure colour: the palette's (--cad-p2-measure, which the label takes in p2.css), followed when it changes.
+  const layer: OverlayLayer = handle.addLayer('p2-measure', {
+    order: 60,
+    palette: (p) => {
+      lineMat.color.setHex(p.measure);
+      pointMat.color.setHex(p.measure);
+      faceInks(p);
+      layer.changed();
+    },
+  });
+  const MEASURE_COLOR = paletteOf(handle).measure;
   const lineMat = new LineBasicMaterial({ color: MEASURE_COLOR, depthTest: false, transparent: true });
   const pointMat = new PointsMaterial({ color: MEASURE_COLOR, size: 7, sizeAttenuation: false, depthTest: false, transparent: true });
+  const faceInks = (p: MarkPalette) => {
+    for (const m of [lineMat, pointMat]) setFaceInk(m, p.face?.measure ?? null);
+  };
+  faceInks(paletteOf(handle));
   let line: Line | null = null;
   let points: Points | null = null;
   const label = document.createElement('div');

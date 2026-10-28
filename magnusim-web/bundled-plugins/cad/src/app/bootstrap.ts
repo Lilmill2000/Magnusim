@@ -25,8 +25,9 @@ import { install as installUi } from '../ui';
 import { install as installViewport } from '../viewport';
 import { App } from './App';
 import { createCommandRegistry } from './commands';
-import { exposeTestHandle } from './debug';
+import { appearanceTestHandle, exposeTestHandle } from './debug';
 import { createKeybinds, setKeybindsFor } from './keybinds';
+import { installAppearance } from './appearance';
 import { bindCommandShortcuts, createKeyboard, passAssistantKey } from './keyboard';
 
 function renderFatal(root: HTMLElement, title: string, message: string) {
@@ -94,6 +95,9 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   installUi(services);
   installModules(services, found);
   bindCommandShortcuts(commands, keyboard, (message) => bridge.toast(message, 'info'), () => services.mode.get().mode);
+  // The host's appearance (unreleased; light on an older host): the 3D view's palette and the
+  // toolbar's icon scale, now and on each change, before the layout mounts the view.
+  const appearance = installAppearance(services);
   // LINK: the Part's design into the project's linked geometry. Leaving the
   // workspace runs it: the exit hook (host API 1.6, L3), registered now that the
   // page is connected; it hands the app the camera the user leaves with.
@@ -104,7 +108,10 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   // The Assistant's workspace tool sends the Part to the project through it (send_to_simulation).
   apis.set({ link });
   const leave = exposeTestHandle(services, PLUGIN_VERSION, link);
-  if (window.__CAD__) window.__CAD__.edit = editOpen;
+  if (window.__CAD__) {
+    window.__CAD__.edit = editOpen;
+    window.__CAD__.appearance = appearanceTestHandle(services, appearance);
+  }
   void installLeaveHook({
     bridge,
     doc,

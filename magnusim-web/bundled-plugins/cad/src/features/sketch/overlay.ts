@@ -3,7 +3,10 @@
 //                          12%), picked ones in the pick green, the one under
 //                          the pointer in the hover blue; in both modes
 //   profiles.sketches (30) a finished sketch's lines in model mode, coloured by
-//                          how defined it is (sketch mode draws its own)
+//                          how defined it is (sketch mode draws its own), in the
+//                          view's palette (recoloured when it changes); in a dark
+//                          view in their light-view inks where a light face shows
+//                          under them (E2, src/viewport/onface.ts)
 //   profiles.markers  (40) open-profile markers: a small white ring at every
 //                          open end of a chain (Fusion's hint), html
 // Reads rebuild.outputs (the sketch's SketchOutput), the view's sketch
@@ -18,7 +21,9 @@ import type { AppServices } from '../../types/app';
 import type { FeatureId, SketchFeature, Vec3 } from '../../types/doc';
 import type { SketchOutput } from '../../types/sketch';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
-import { overlayColors } from './colors';
+import { setFaceInk } from '../../viewport/onface';
+import { paletteOf, type MarkPalette } from '../../viewport/palette';
+import { overlayColors, type OverlayColors } from './colors';
 import { entityGeometry, type EntityGeom } from './geometry';
 import { toModel } from './plane';
 import { drawnSketches, editedSketch, profilesView } from './view';
@@ -78,7 +83,7 @@ export class ProfileOverlay {
   private readonly sketches: OverlayLayer;
   private readonly marks: OverlayLayer;
   private readonly drawn = new Map<FeatureId, DrawnSketch>();
-  private readonly colors = overlayColors();
+  private colors: OverlayColors;
   private readonly mats;
   private readonly lineMats;
   private readonly offs: (() => void)[] = [];
@@ -100,8 +105,11 @@ export class ProfileOverlay {
         this.sync();
       },
     });
-    this.sketches = handle.addLayer(LAYER_SKETCHES, { order: 30, frame: true });
+    // The lines take the view's palette (src/viewport/palette.ts), and a new one when it changes.
+    this.sketches = handle.addLayer(LAYER_SKETCHES, { order: 30, frame: true, palette: (p) => this.recolour(p) });
     this.marks = handle.addLayer(LAYER_MARKERS, { order: 40 });
+    const start = paletteOf(handle);
+    this.colors = overlayColors(start);
     const c = this.colors;
     // Seen from either side; pulled towards the camera so a region on a face (a sketch on it) shows over it.
     const fill = (k: { color: number; opacity: number }) =>
@@ -130,6 +138,7 @@ export class ProfileOverlay {
     // round 1: a centerline looked solid). The dash follows the zoom (place(), every frame).
     this.lineMats.construction.dashed = true;
     this.lineMats.linkedConstruction.dashed = true;
+    this.faceInks(start);
     const later = () => this.later();
     this.offs.push(
       services.doc.state.subscribe(later),
@@ -139,6 +148,41 @@ export class ProfileOverlay {
       handle.onFrame(() => this.place()),
     );
     this.sync();
+  }
+
+  /**
+   * E2 (src/viewport/onface.ts): each line material's ink over a light face, its role's light-view
+   * ink (none in light: drawn once, as it is).
+   */
+  private faceInks(p: MarkPalette): void {
+    const f = p.face ? overlayColors({ ...p, sketch: p.face.sketch }) : null;
+    const m = this.lineMats;
+    setFaceInk(m.under, f?.under ?? null);
+    setFaceInk(m.full, f?.full ?? null);
+    setFaceInk(m.over, f?.over ?? null);
+    setFaceInk(m.construction, f?.construction ?? null);
+    setFaceInk(m.linked, f?.linked ?? null);
+    setFaceInk(m.lost, f?.lost ?? null);
+    setFaceInk(m.linkedConstruction, f?.linked ?? null);
+  }
+
+  /**
+   * The view's palette changed (the host's theme; LIGHT around a picture and back): the lines'
+   * colours now, and over a light face (the regions keep their tint).
+   */
+  private recolour(p: MarkPalette): void {
+    const c = overlayColors(p);
+    this.colors = c;
+    const m = this.lineMats;
+    m.under.color.setHex(c.under);
+    m.full.color.setHex(c.full);
+    m.over.color.setHex(c.over);
+    m.construction.color.setHex(c.construction);
+    m.linked.color.setHex(c.linked);
+    m.lost.color.setHex(c.lost);
+    m.linkedConstruction.color.setHex(c.linked);
+    this.faceInks(p);
+    this.sketches.changed();
   }
 
   /** Sync on the next microtask (several stores change together). */

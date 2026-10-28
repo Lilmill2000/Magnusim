@@ -14,6 +14,9 @@ import { overlayOf } from '../../../src/features/sketch';
 import type { ExtrudeFeature, Feature, SketchFeature } from '../../../src/types/doc';
 import { rectRegion } from '../sketch/fake-profiles-kernel';
 import { startApp, type FakeApp } from './fake-app';
+import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { faceInkOf, marksBeforeSurfaces, syncFaceTwins } from '../../../src/viewport/onface';
+import { DARK, LIGHT } from '../../../src/viewport/palette';
 
 let app: FakeApp | null = null;
 afterEach(() => {
@@ -220,6 +223,26 @@ describe('Extrude panel', () => {
     });
     act(() => void fireEvent.keyDown(field(a, f), { key: 'Enter' }));
   };
+
+  it("draws its arrows in the view palette's blue, over a light face the light view's in dark, also when the theme changes while it is open", async () => {
+    const a = await opened();
+    const mats = () => a.vp.layers.get('extrude.handle')!.group.children.filter((g) => g.name === 'extrude-arrow').flatMap((g) => g.children.map((m) => (m as unknown as { material: { color: { getHex(): number } } }).material));
+    const arrows = () => new Set(mats().map((m) => m.color.getHex()));
+    const onFace = () => new Set(mats().map((m) => faceInkOf(m as never) ?? null));
+    expect(arrows()).toEqual(new Set([0x1570ef]));
+    expect(onFace()).toEqual(new Set([null]));
+    // The host's dark ink blue; over a light face (E2) the light view's.
+    act(() => a.vp.setPalette(DARK));
+    expect(arrows()).toEqual(new Set([0x7aa7ff]));
+    expect(onFace()).toEqual(new Set([0x1570ef]));
+    // Drawn after every surface that writes the face bit (each arrow is a nested Group of order 0: its meshes are transparent).
+    const group = a.vp.layers.get('extrude.handle')!.group;
+    syncFaceTwins(group, true);
+    expect(marksBeforeSurfaces(group)).toEqual([]);
+    act(() => a.vp.setPalette(LIGHT));
+    expect(arrows()).toEqual(new Set([0x1570ef]));
+    expect(onFace()).toEqual(new Set([null]));
+  });
 
   it('switches the extent between Blind, Symmetric and Two sides with their fields and words', async () => {
     const a = await opened();
@@ -435,6 +458,78 @@ describe('the profile overlay and the sketch row', () => {
     await a.settle();
     expect(overlayOf(a.services)!.shown()).toEqual([]);
     expect([...a.vp.planesBusy]).toEqual([]);
+  });
+
+  // The dark set: a finished sketch's lines take the view's dark palette at once (the same lines,
+  // recoloured), each line material says its light-view ink over a light face (E2, the view draws
+  // the twin), construction too, and LIGHT gives them back with no face ink.
+  it("draws the lines in the dark palette's inks, the light view's over a light face, and the light colours back", async () => {
+    const a = await withSketch();
+    const kids = () => a.vp.layers.get('profiles.sketches')!.group.children as unknown as { name: string; visible: boolean; material: { color: { getHex(): number }; linewidth: number; dashed: boolean }; geometry: { attributes: { instanceStart: { count: number } } } }[];
+    const colours = () => kids().filter((c) => c.name.startsWith('sketch:')).map((c) => [c.material.color.getHex(), c.geometry.attributes.instanceStart.count]);
+    const onFace = () => kids().filter((c) => c.name.startsWith('sketch:')).map((c) => [faceInkOf(c.material as never) ?? null, c.material.dashed]);
+    let s = null as unknown as ReturnType<typeof a.doc.beginEdit>;
+    act(() => void (s = a.doc.beginEdit('f_sk')));
+    act(() => s.update({ solved: { values: { c_1: 20, c_2: 10 }, dof: 3, state: 'under', fully: ['e_1', 'e_2', 'e_3', 'e_4'] } } as Partial<Feature>));
+    act(() => s.commit());
+    await a.settle();
+    expect(colours()).toEqual([
+      [0x1570ef, 3],
+      [0x101828, 4],
+    ]);
+    expect(onFace()).toEqual([
+      [null, false],
+      [null, false],
+    ]);
+    const lines = kids().slice();
+    act(() => a.vp.setPalette(DARK));
+    // Over the dark background the host's dark inks: the under-defined lines its light blue, the fully defined ones its text colour.
+    expect(colours()).toEqual([
+      [0x7aa7ff, 3],
+      [0xe6e9ef, 4],
+    ]);
+    // The same lines, recoloured; over a light face the light view's inks.
+    expect(kids()).toEqual(lines);
+    expect(onFace()).toEqual([
+      [0x1570ef, false],
+      [0x101828, false],
+    ]);
+    // A construction line (dashed, 1 px): over a face the light view's grey.
+    act(() => void (s = a.doc.beginEdit('f_sk')));
+    act(() => s.update({ entities: (s.draft as unknown as { entities: { id: string }[] }).entities.map((e) => (e.id === 'e_5' ? { ...e, construction: true } : e)) } as Partial<Feature>));
+    act(() => s.commit());
+    await a.settle();
+    expect(colours()).toEqual([
+      [0x7aa7ff, 2],
+      [0xe6e9ef, 4],
+      [0x9aa4b2, 1],
+    ]);
+    expect(onFace()).toEqual([
+      [0x1570ef, false],
+      [0x101828, false],
+      [0x667085, true],
+    ]);
+    // Every line material by role, the linked and lost ones (P4b) too: over a face the light view's ink.
+    const mats = (overlayOf(a.services) as unknown as { lineMats: Record<string, LineMaterial> }).lineMats;
+    const inks = () => Object.fromEntries(Object.entries(mats).map(([k, m]) => [k, faceInkOf(m) ?? null]));
+    expect(inks()).toEqual({ under: 0x1570ef, full: 0x101828, over: 0xb42318, construction: 0x667085, linked: 0x7a3fd1, lost: 0xb54708, linkedConstruction: 0x7a3fd1 });
+    // Drawn after every surface that writes the face bit.
+    const group = a.vp.layers.get('profiles.sketches')!.group;
+    syncFaceTwins(group, true);
+    expect(marksBeforeSurfaces(group)).toEqual([]);
+    act(() => a.vp.setPalette(LIGHT));
+    expect(colours()).toEqual([
+      [0x1570ef, 2],
+      [0x101828, 4],
+      [0x667085, 1],
+    ]);
+    expect(onFace()).toEqual([
+      [null, false],
+      [null, false],
+      [null, true],
+    ]);
+    expect(inks()).toEqual({ under: null, full: null, over: null, construction: null, linked: null, lost: null, linkedConstruction: null });
+    expect(DARK.face!.sketch).toBe(LIGHT.sketch);
   });
 
   it('says how many open ends the sketch in focus has', async () => {

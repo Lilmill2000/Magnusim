@@ -13,7 +13,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { CanvasTexture, CustomBlending, DoubleSide, Matrix4, Mesh, OneMinusSrcAlphaFactor, PlaneGeometry, ShaderMaterial, SrcAlphaFactor, Vector3 } from 'three';
 import { modeFor, planeY, toModel, type SketchMode } from '../../sketch/mode';
-import { sketchCursor } from '../../sketch/cursors';
+import { cursorTone, sketchCursor } from '../../sketch/cursors';
+import { paletteOf } from '../../viewport/palette';
 import { hitTest } from '../../sketch/pick';
 import type { AppServices } from '../../types/app';
 import type { FeatureId, PlaneFrame, Vec2, Vec3 } from '../../types/doc';
@@ -216,7 +217,7 @@ export function installSketchBanana(services: AppServices): () => void {
   const cursor = (s: Shown, c: '' | 'grab' | 'grabbing') => {
     if (!s.canvas || c === cursorSet) return;
     // Back to the sketch tool's own cursor when the hand goes (the overlay sets it on its next move).
-    if (c || cursorSet) s.canvas.style.cursor = c ? sketchCursor(c) : '';
+    if (c || cursorSet) s.canvas.style.cursor = c ? sketchCursor(c, null, cursorTone(null, paletteOf(handle).background)) : '';
     cursorSet = c;
     s.layer.html.dataset.sketchBananaCursor = c || 'none';
   };

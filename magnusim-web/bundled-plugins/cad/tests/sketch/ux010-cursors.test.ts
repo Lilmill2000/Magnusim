@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cursorFor, cursorParts, cursorSvg, cursorTone, sketchCursor } from '../../src/sketch/cursors';
 import { SKETCH_ICONS } from '../../src/sketch/icons';
 import { VIEWPORT_BG } from '../../src/viewport/colors';
+import { DARK, LIGHT } from '../../src/viewport/palette';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -31,6 +32,9 @@ describe('sketch cursors', () => {
     expect(cursorTone('light', 0x1d2433)).toBe('dark');
     expect(cursorTone(null, 0x808080)).toBe('light');
     expect(cursorTone(null, 0x303030)).toBe('dark');
+    // Sketch mode and the bananas take the tone from the view's palette's background.
+    expect(cursorTone(null, DARK.background)).toBe('dark');
+    expect(cursorTone(null, LIGHT.background)).toBe('light');
     const light = cursorParts('draw', SKETCH_ICONS.line, 'light').body;
     const dark = cursorParts('draw', SKETCH_ICONS.line, 'dark').body;
     expect(light).toContain('stroke="#101828"');

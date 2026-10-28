@@ -4,7 +4,11 @@
 // (built in the picking worker for large bodies), the core's mouse mapping
 // with zoom to cursor, perspective / orthographic, standard views with smooth
 // transitions, fit, section view and body visibility. Renders on demand.
-// Values copied from the core viewer: src/viewport/colors.ts.
+// Values copied from the core viewer: src/viewport/colors.ts. The marks' colours (background,
+// edges, triad, the layers' lines) follow the palette (palette.ts, setPalette: the host's
+// theme); in a dark view the layers' marks take their light inks where a light surface shows
+// under them (E2, onface.ts: the bodies and caps write the stencil's face bit, each frame syncs
+// the marks' twins); every picture is drawn LIGHT.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Box3, BufferGeometry, Color, Float32BufferAttribute, Group, LessEqualDepth, LinearSRGBColorSpace, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer, WebGLRenderTarget, type Material, type Object3D } from 'three';
@@ -24,7 +28,6 @@ import { CameraRig, VIEW_DIRS, type CameraPose } from './camera';
 import {
   BODY_COLOR,
   CLICK_PX,
-  EDGE_COLOR,
   EDGE_WIDTH_PX,
   HOME_DIR,
   HOVER_COLOR,
@@ -38,8 +41,10 @@ import {
   parseHex,
   rgb01,
 } from './colors';
-import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, createBodyMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
+import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, bodyShownColor, createBodyMaterial, createLitFacesMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
 import { OriginPlanes, type PlaneState } from './origin';
+import { isFaceTwin, isLightSurface, LIT_FACES_ORDER, surfaceStencil, syncFaceTwins } from './onface';
+import { LIGHT, samePalette, type MarkPalette } from './palette';
 import { kindsForFilter, makeProjector, pickAt, raycastBodies, rayAt, type PickBody, type PickView } from './pick';
 // P4b SELECT: box selection.
 import { BOX_START_PX, boxCaption, boxCombine, boxFrom, boxKinds, boxStarts, type BoxKind, type BoxMode, type Rect } from './boxselect';
@@ -97,6 +102,11 @@ interface BodyRec {
   faceHl: Map<number, number>;
   /** ViewportBody.seeThrough. */
   seeThrough: boolean;
+  /**
+   * E2 (onface.ts): its faces lit by a pick or a hover, drawn again into the stencil (a child of
+   * the mesh, after every body), shown while the body clears the face bit and has a face lit.
+   */
+  litFaces: Mesh;
 }
 
 /** Screen-width lines. An overlay (picked or hovered edges) is pulled towards the camera so it wins over the edge it covers. */
@@ -124,7 +134,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     bvhPending: 0,
     animating: false,
   });
-  const stats: ViewportStats = { frames: 0, lastFrameMs: 0, lastSetBodiesMs: 0, lastUploadFrameMs: 0, lastPickMs: 0, bvh: {}, triangles: 0, drawCalls: 0 };
+  const stats: ViewportStats & { looks: NonNullable<ViewportStats['looks']> } = { frames: 0, lastFrameMs: 0, lastSetBodiesMs: 0, lastUploadFrameMs: 0, lastPickMs: 0, bvh: {}, triangles: 0, drawCalls: 0, looks: [] };
+  const clearSeen = new Color();
 
   // ------------------------------------------------------------ renderer
   const renderer = new WebGLRenderer({ antialias: true, alpha: false, stencil: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
@@ -160,6 +171,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   let flashItems: SelectionItem[] = [];
   /** A snapshot is drawing: nothing is lit (no selection, hover or flash highlight). */
   let plain = false;
+  /** The marks' colours (setPalette: the host's theme; LIGHT until it says otherwise). */
+  let live: MarkPalette = LIGHT;
+  /** What the edges, the triad and the marks' twins are drawn in right now: `live`, or LIGHT while a picture draws. */
+  let marksNow: MarkPalette = LIGHT;
   let filter: SelectKind[] = [];
   let lastGeomKey = '';
   let uploadPending = false;
@@ -183,12 +198,15 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   points.frustumCulled = false;
   scene.add(selEdges, hovEdges, points);
   let edgeOverlayKey = '';
+  /** E2: every body's lit faces' stencil pass (BodyRec.litFaces): one material, it sets the face bit. */
+  const litFacesMat = createLitFacesMaterial();
+  surfaceStencil(litFacesMat, 'mark');
   const lineMats = (): LineMaterial[] => [selEdgeMat, hovEdgeMat, ...[...bodies.values()].map((b) => b.edgeMat)];
 
   // ------------------------------------------------------------ overlays and tools (P2/P3)
   // Layers: other areas' drawing (sketch geometry, regions, handles, measure
   // markers) in model coordinates, plus an html element over the canvas each.
-  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null); plain?: (on: boolean) => void }>();
+  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null); plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void }>();
   const frameListeners = new Set<() => void>();
   /** Fat lines in layers get the viewport's size, as the bodies' edges do. */
   function layerLineMats(): LineMaterial[] {
@@ -343,6 +361,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
     const t0 = performance.now();
     drawFrame();
+    // What this frame was drawn in (ViewportStats.looks): an entry when it is not the last one's.
+    const bg = renderer.getClearColor(clearSeen).getHex();
+    const was = stats.looks[stats.looks.length - 1];
+    if ((!was || was.palette !== marksNow.name || was.background !== bg) && stats.looks.length < 64) stats.looks.push({ frame: stats.frames, palette: marksNow.name, background: bg });
     for (const fn of [...frameListeners]) {
       try {
         fn();
@@ -369,6 +391,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, width, height);
     renderer.clear(true, true, true);
+    syncTwins();
     renderer.render(scene, cam);
     const calls = renderer.info.render.calls;
     // The triad, in its own corner viewport.
@@ -470,12 +493,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     mesh.frustumCulled = false;
     const eg = new LineSegmentsGeometry();
     if (data.drawEdges.length >= 6) eg.setPositions(data.drawEdges);
-    const edgeMat = makeLineMaterial(EDGE_COLOR, EDGE_WIDTH_PX);
+    const edgeMat = makeLineMaterial(marksNow.edge, EDGE_WIDTH_PX);
     const edges = new LineSegments2(eg, edgeMat);
     edges.name = `edges:${src.id}`;
     edges.frustumCulled = false;
     edges.renderOrder = 1;
     scene.add(mesh, edges);
+    // After every body (their faces' bits are written), before their edges and every mark.
+    const litFaces = new Mesh(data.geometry, litFacesMat);
+    litFaces.name = `body-lit-faces:${src.id}`;
+    litFaces.renderOrder = LIT_FACES_ORDER;
+    litFaces.frustumCulled = false;
+    litFaces.raycast = () => {};
+    litFaces.visible = false;
+    mesh.add(litFaces);
     const rec: BodyRec = {
       id: src.id,
       tessKey: src.tessKey,
@@ -493,7 +524,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       cancelBvh: () => {},
       faceHl: new Map(),
       seeThrough: !!src.seeThrough,
+      litFaces,
     };
+    bodyStencil(rec);
     rec.cancelBvh = bvhClient.build(
       data.geometry,
       data.triangles,
@@ -538,7 +571,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       setClipping(b.mesh.material, planes);
       setClipping(b.edgeMat, planes);
     }
-    for (const m of [selEdgeMat, hovEdgeMat, pointsMat]) setClipping(m, planes);
+    for (const m of [selEdgeMat, hovEdgeMat, pointsMat, litFacesMat]) setClipping(m, planes);
     const shaded = state.get().display !== 'wireframe';
     caps.group.visible = s.on && shaded;
     if (s.on) {
@@ -548,6 +581,61 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       );
       caps.place(clip, sceneSphere(), BODY_COLOR);
     } else caps.setBodies([], clip);
+  }
+
+  // ------------------------------------------------------------ theme (palette.ts)
+  /**
+   * E2 (onface.ts): while the marks follow what is under them, an opaque body's faces set the
+   * stencil's face bit where they show, by the colour they are drawn in (materials.ts
+   * bodyShownColor): its own, or the selected or hover blue of the whole body. A dark custom colour
+   * clears it (the marks keep their light inks there), except on its faces lit by a pick or a
+   * hover (light surfaces), which its lit faces' pass sets again. A see-through body, and every
+   * body in light, leaves the stencil alone.
+   */
+  function bodyStencil(b: BodyRec) {
+    const how = !marksNow.face || b.seeThrough ? 'off' : isLightSurface(bodyShownColor(b.color, b.mesh.material.uniforms.uBodyState.value)) ? 'mark' : 'clear';
+    surfaceStencil(b.mesh.material, how);
+    b.litFaces.visible = how === 'clear' && [...b.faceHl.values()].some((hl) => isLightSurface(bodyShownColor(b.color, 0, hl)));
+  }
+
+  /** The layers' marks drawn twice where they follow what is under them (dark), once as they are (light, a picture). */
+  function syncTwins() {
+    const on = marksNow.face !== null;
+    for (const l of layers.values()) syncFaceTwins(l.group, on);
+  }
+
+  /** The edges, the triad and the surfaces' stencil in a palette's colours (the live one, or LIGHT while a picture draws): uniforms only. */
+  function paintMarks(p: MarkPalette) {
+    marksNow = p;
+    for (const b of bodies.values()) {
+      b.edgeMat.color.setHex(p.edge);
+      bodyStencil(b);
+    }
+    caps.setFaceBit(p.face !== null);
+    triad.setColors(p.triad);
+    triad.setLight(p.triadLight);
+  }
+
+  const paletteCall = (fn: (p: MarkPalette) => void, p: MarkPalette) => {
+    try {
+      fn(p);
+    } catch (err) {
+      console.error('[cad] layer palette failed', err);
+    }
+  };
+
+  /**
+   * The host's theme changed (app/appearance.ts): the background, the edges, the triad and every
+   * layer with a `palette` hook take the new colours now, without a rebuild (colours, uniforms
+   * and, for the sketch, its lines drawn again in this task); the next frame shows them.
+   */
+  function setPalette(p: MarkPalette) {
+    if (samePalette(p, live)) return;
+    live = p;
+    renderer.setClearColor(p.background, 1);
+    paintMarks(p);
+    for (const l of layers.values()) if (l.palette) paletteCall(l.palette, p);
+    request();
   }
 
   function geometryChanged() {
@@ -607,6 +695,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         if (color !== old.color) {
           old.color = color;
           setBodyColor(old.mesh.material, color);
+          bodyStencil(old);
         }
         if (visibleOf(old) !== src.visible) geomChanged = true;
         old.docVisible = src.visible;
@@ -617,6 +706,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         if (old.seeThrough !== !!src.seeThrough) {
           old.seeThrough = !!src.seeThrough;
           setSeeThrough(old.mesh.material, old.seeThrough);
+          bodyStencil(old);
         }
         continue;
       }
@@ -771,6 +861,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         b.mesh.material.uniforms.uBodyState.value = bs;
         changed = true;
       }
+      // E2: the face bit follows the highlight's colour.
+      bodyStencil(b);
       // A body with something lit on it is pushed back less than the others, so
       // where it shares a face plane with another body its highlight wins the
       // depth test instead of fighting it (review round 2: a grey wedge in a
@@ -843,7 +935,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const out = new Box3();
     group.updateMatrixWorld(true);
     const walk = (o: Object3D) => {
-      if (!o.visible) return;
+      // A mark's face twin (onface.ts) draws what the mark draws: it adds nothing.
+      if (!o.visible || isFaceTwin(o)) return;
       const g = (o as Object3D & { geometry?: BufferGeometry }).geometry;
       if (g && typeof g.computeBoundingBox === 'function') {
         if (!g.boundingBox) g.computeBoundingBox();
@@ -1431,7 +1524,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
    * One picture into a render target of its own, in this task (no animation frame: it works in a
    * hidden window). Its own orthographic camera; the bodies shaded with edges, `hide` left out;
    * no manipulators, markers, bananas or highlight (the layers with a `plain` hook draw plain;
-   * sketch mode's own layers keep their selection and hover); its own cut. Everything is put back before it
+   * sketch mode's own layers keep their selection and hover); its own cut; LIGHT whatever the
+   * theme (the edges, the triad and the layers with a `palette` hook swap to it; no mark is drawn twice). Everything is put back before it
    * returns, and nothing here moves the person's camera, counts as their move, writes the
    * viewport's state or reports a camera change (so nothing is saved).
    */
@@ -1462,6 +1556,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const pixels = new Uint8Array(w * h * 4);
     // Layers that colour by the selection or hover draw plain for the picture (addLayer's `plain`).
     const plainLayers: ((on: boolean) => void)[] = [];
+    // A picture is light whatever the host's theme (D1): with a dark palette live, the marks and the
+    // layers it shows swap to LIGHT here and back in the finally, in this task (no frame shows LIGHT).
+    const swap = !samePalette(live, LIGHT);
+    const paletteLayers: ((p: MarkPalette) => void)[] = [];
     const plainCall = (fn: (on: boolean) => void, on: boolean) => {
       try {
         fn(on);
@@ -1476,6 +1574,14 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         if (!l.plain) continue;
         plainLayers.push(l.plain);
         plainCall(l.plain, true);
+      }
+      if (swap) {
+        paintMarks(LIGHT);
+        for (const l of layers.values()) {
+          if (!l.palette || SNAPSHOT_HIDDEN_LAYERS.has(l.layer.id)) continue;
+          paletteLayers.push(l.palette);
+          paletteCall(l.palette, LIGHT);
+        }
       }
       for (const b of bodies.values()) {
         b.mesh.visible = drawn(b) && display !== 'wireframe';
@@ -1502,8 +1608,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       // Into a target three clears with the working (linear) values as they are: the view's
       // background as the screen shows it. (CAD's own shaders, the bodies, caps and triad, write
       // their sRGB colours either way; three's line and plane materials come out a little darker.)
-      renderer.setClearColor(new Color().setRGB(...rgb01(VIEWPORT_BG), LinearSRGBColorSpace), 1);
+      renderer.setClearColor(new Color().setRGB(...rgb01(LIGHT.background), LinearSRGBColorSpace), 1);
       renderer.clear(true, true, true);
+      // The marks drawn once, as they are, in LIGHT (paintMarks above): no twin, no stencil test.
+      syncTwins();
       renderer.render(scene, cam);
       const tr = snapshotTriadRect(w, h);
       if (tr) {
@@ -1521,6 +1629,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       // Set again with the view's own target: the next frame's clear must not use the target's values.
       renderer.setClearColor(clearColor, clearAlpha);
       target.dispose();
+      if (swap) {
+        paintMarks(live);
+        for (const fn of paletteLayers) paletteCall(fn, live);
+      }
       plain = false;
       for (const fn of plainLayers) plainCall(fn, false);
       for (const [g, v] of layerShown) g.visible = v;
@@ -1750,6 +1862,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     camera: savedCamera,
     userCameraMoves: () => userMoves,
     snapshot,
+    palette: () => live,
+    setPalette,
+    lightSurfaceAt(clientX, clientY) {
+      const view = pickView();
+      // Wireframe draws no surface.
+      if (!view.faces) return false;
+      const r = canvas.getBoundingClientRect();
+      const hit = raycastBodies(pickBodies(), rayAt(view, clientX - r.left, clientY - r.top), view);
+      if (!hit) return false;
+      if (hit.cap) return true;
+      const b = bodies.get(hit.body.id);
+      // The colour the face is drawn in: a pick or a hover on it, the body's state, else its own.
+      return !!b && !b.seeThrough && isLightSurface(bodyShownColor(b.color, b.mesh.material.uniforms.uBodyState.value, b.faceHl.get(hit.face) ?? 0));
+    },
     setCamera(c, o) {
       byPerson(o);
       stopAnim();
@@ -1808,7 +1934,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
           request();
         },
       };
-      layers.set(id, { layer, group, html, frame: typeof o.frame === 'function' ? o.frame : !!o.frame, plain: o.plain });
+      layers.set(id, { layer, group, html, frame: typeof o.frame === 'function' ? o.frame : !!o.frame, plain: o.plain, palette: o.palette });
       request();
       return layer;
     },
@@ -1860,7 +1986,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       };
     },
     lineResolution: () => [width, height],
-    stats: () => ({ ...stats, bvh: { ...stats.bvh }, contextLost: renderer.getContext().isContextLost(), framed }),
+    stats: () => ({ ...stats, bvh: { ...stats.bvh }, looks: stats.looks.map((l) => ({ ...l })), contextLost: renderer.getContext().isContextLost(), framed }),
     measure(frames) {
       const gl = renderer.getContext();
       const px = new Uint8Array(4);
@@ -1904,7 +2030,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       origin.dispose();
       triad.dispose();
       caps.dispose();
-      for (const m of [selEdgeMat, hovEdgeMat, pointsMat]) m.dispose();
+      for (const m of [selEdgeMat, hovEdgeMat, pointsMat, litFacesMat]) m.dispose();
       selEdges.geometry.dispose();
       hovEdges.geometry.dispose();
       points.geometry.dispose();

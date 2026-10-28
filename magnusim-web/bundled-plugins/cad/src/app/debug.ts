@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
+import type { Appearance } from '../lib/bridge';
+import type { MarkPalette } from '../viewport/palette';
+import type { AppearanceControl } from './appearance';
 import type { AssistantTestHandle } from '../assistant/testing';
 import type { LinkController, LinkOutcome } from '../link/controller';
 import type { EditOpen } from '../link/edit-open';
@@ -29,12 +32,36 @@ export interface CadTestHandle {
   readonly keybinds: { model: Keybinds; open(commandId: string): void };
   /** The Assistant's tools in this Part (src/assistant/testing.ts), or null when its module is not installed. */
   readonly assistant: AssistantTestHandle | null;
+  /** The host's appearance in the Part (src/app/appearance.ts): set once the app has installed it. */
+  appearance?: CadAppearanceHandle;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;
     doc: { status: string; features: number; bodies: number; save: string };
     viewport: boolean;
     selection: number;
+  };
+}
+
+/**
+ * window.__CAD__.appearance: what the dark set's e2e reads (the look itself comes from the host:
+ * the person's pref, and Settings → Appearance).
+ */
+export interface CadAppearanceHandle {
+  /**
+   * The appearance the Part has (its icon scale is the toolbar's), and the 3D view's palette now:
+   * its name, its background, and whether its marks follow what is under them (E2: dark).
+   */
+  get(): { appearance: Appearance; palette: MarkPalette['name']; background: number; followsFaces: boolean };
+}
+
+/** The appearance part of the test handle, over the app's appearance control. */
+export function appearanceTestHandle(services: AppServices, control: AppearanceControl): CadAppearanceHandle {
+  return {
+    get() {
+      const p = services.viewport.get().handle?.palette?.() ?? control.palette();
+      return { appearance: { ...control.appearance() }, palette: p.name, background: p.background, followsFaces: p.face !== null };
+    },
   };
 }
 

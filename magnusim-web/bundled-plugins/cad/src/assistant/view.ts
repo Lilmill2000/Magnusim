@@ -27,7 +27,7 @@ import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
 import type { EvalResult } from '../types/units';
 import type { DisplayMode, Projection, SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
-import { VIEWPORT_BG } from '../viewport/colors';
+import { LIGHT } from '../viewport/palette';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
 import { heartbeat, waitForRead } from './busy';
 import { ToolError } from './errors';
@@ -202,11 +202,14 @@ const rgbOf = (hex: number): [number, number, number] => [(hex >> 16) & 255, (he
 /** The line between a sheet's tiles. */
 export const SEPARATOR = 0xb9c0cc;
 
-/** The pictures put into one image (RGBA, rows top to bottom): the view's background, each tile, the lines between. */
+/**
+ * The pictures put into one image (RGBA, rows top to bottom): the light view's background (a
+ * picture is light whatever the host's theme, as each tile is), each tile, the lines between.
+ */
 export function composeSheet(layout: SheetLayout, shots: readonly Pick<SnapshotResult, 'rgba' | 'width' | 'height'>[]): Uint8ClampedArray {
   const { width: W, height: H } = layout;
   const out = new Uint8ClampedArray(W * H * 4);
-  const [br, bg, bb] = rgbOf(VIEWPORT_BG);
+  const [br, bg, bb] = rgbOf(LIGHT.background);
   for (let i = 0; i < out.length; i += 4) {
     out[i] = br;
     out[i + 1] = bg;

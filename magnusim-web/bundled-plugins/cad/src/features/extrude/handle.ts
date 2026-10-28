@@ -22,6 +22,7 @@ import type { DocUnits } from '../../types/units';
 import type { OverlayLayer, ViewportHandle, ViewportPointer, ViewportTool } from '../../types/viewport';
 import { exprToStore, formatQuantity, MM_PER } from '../../ui/kit/format';
 import { PICK_COLOR } from '../../viewport/colors';
+import { setFaceInk } from '../../viewport/onface';
 import { toModel } from '../sketch/plane';
 import { regionUnder } from '../sketch/pick';
 import { profilesView, sketchOutput } from '../sketch/view';
@@ -177,6 +178,16 @@ class Arrows {
     layer.html.appendChild(this.label);
   }
 
+  /**
+   * The arrows' colour (the palette's blue; the hot one stays the pick green), and over a light
+   * face (E2, src/viewport/onface.ts: the light view's blue in a dark view; null in light).
+   */
+  setColor(color: number, face: number | null = null) {
+    this.mat.color.setHex(color);
+    setFaceInk(this.mat, face);
+    this.layer.changed();
+  }
+
   set(arrows: Arrow[]) {
     while (this.items.length > arrows.length) {
       const it = this.items.pop()!;
@@ -255,6 +266,8 @@ export interface PanelToolOptions {
   /** A refused pick, in words, for the panel's foot. */
   note(text: string | null): void;
   color: number;
+  /** The arrows' colour over a light face (the palette's `face.ink`; null or absent in light). */
+  faceColor?: number | null;
 }
 
 /**
@@ -262,8 +275,10 @@ export interface PanelToolOptions {
  * re-places the arrows after the draft or the rebuild changed.
  */
 export function startPanelTool(services: AppServices, handle: ViewportHandle, opts: PanelToolOptions): { stop(): void; refresh(): void; dragging(): boolean } {
-  const layer = handle.addLayer(HANDLE_LAYER, { order: 50 });
+  // `color` is the palette's blue when the panel opens; a new palette (the host's theme) recolours them.
+  const layer = handle.addLayer(HANDLE_LAYER, { order: 50, palette: (p) => arrows.setColor(p.ink, p.face?.ink ?? null) });
   const arrows = new Arrows(layer, opts.color);
+  arrows.setColor(opts.color, opts.faceColor ?? null);
   const view = profilesView(services);
   let geom: HandleGeometry | null = null;
   /** `grab`: where along the axis the arrow was taken, minus where its base was (the arrow keeps that offset to the pointer). */

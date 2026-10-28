@@ -8,12 +8,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BufferAttribute, BufferGeometry, DoubleSide, Line, LineBasicMaterial, Matrix4, Mesh, Ray, ShaderMaterial, Vector3 } from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { sketchCursor } from '../../sketch/cursors';
+import { cursorTone, sketchCursor } from '../../sketch/cursors';
 import type { AppServices } from '../../types/app';
 import type { ScaleModelPlace, Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle, ViewportPointer, ViewportTool } from '../../types/viewport';
 import { uiFor } from '../../ui/controller';
 import { BODY_LIGHT } from '../../viewport/colors';
+import { setFaceInk } from '../../viewport/onface';
+import { LIGHT, paletteOf } from '../../viewport/palette';
 import { loadBanana, type BananaMesh } from './banana-mesh';
 import type { BBox } from '../../types/kernel-protocol';
 import { halfFootprint, leashOf, nearestSlot, onLeash3, placeBeside, placedBox, rayOnPlane, slotsAround, unionBox, type Slot } from './placement';
@@ -94,7 +96,7 @@ export function installBananaView(services: AppServices): () => void {
   });
 
   // The snap guide: faint, over everything (a hint, not geometry).
-  const guideMaterial = new LineBasicMaterial({ color: 0x1570ef, transparent: true, opacity: 0.55, depthTest: false });
+  const guideMaterial = new LineBasicMaterial({ color: LIGHT.ink, transparent: true, opacity: 0.55, depthTest: false });
   const placeOf = (): ScaleModelPlace | null => services.doc.state.get().view.scaleModels?.banana ?? null;
 
   const geometryOf = (data: BananaMesh) => {
@@ -133,7 +135,7 @@ export function installBananaView(services: AppServices): () => void {
   const cursor = (s: Shown, c: '' | 'grab' | 'grabbing') => {
     if (!s.canvas || c === cursorSet) return;
     cursorSet = c;
-    s.canvas.style.cursor = c ? sketchCursor(c) : '';
+    s.canvas.style.cursor = c ? sketchCursor(c, null, cursorTone(null, paletteOf(handle).background)) : '';
     s.layer.html.dataset.bananaCursor = c || 'none';
   };
   const hover = (s: Shown, on: boolean) => {
@@ -367,8 +369,17 @@ export function installBananaView(services: AppServices): () => void {
         const mesh = new Mesh(g.geo, material);
         mesh.name = 'banana-for-scale';
         let box = placedBox(now, data);
+        // The snap guide in the palette's blue (a picture leaves the banana out); in a dark view the
+        // light view's blue where a light face shows under it (E2, src/viewport/onface.ts).
+        guideMaterial.color.setHex(paletteOf(h).ink);
+        setFaceInk(guideMaterial, paletteOf(h).face?.ink ?? null);
         const layer = h.addLayer(BANANA_LAYER, {
           order: 1,
+          palette: (p) => {
+            guideMaterial.color.setHex(p.ink);
+            setFaceInk(guideMaterial, p.face?.ink ?? null);
+            layer.changed();
+          },
           frame: () => {
             if (!shown) return null;
             box = placedBox(shown.place, data);

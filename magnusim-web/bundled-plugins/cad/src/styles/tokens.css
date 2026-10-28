@@ -8,89 +8,130 @@
  * Components use var(--cad-*) / var(--mg-*), never raw hex. A --cad-* token that mirrors a core
  * rule now on an --mg-* token (the core's 2026-10-27 light unify) is that token, so the two stay equal.
  * Owner: UI-SHELL (add tokens at the end of the relevant group).
+ *
+ * Dark set (the host's appearance): the SDK writes data-theme="light" | "dark" on <html>, and the
+ * host's theme.css switches every --mg-* token. A token here that aliases an --mg-* token follows
+ * it by itself; its fallback is the exact light value, for a host whose theme.css does not have
+ * that token yet (light stays as it is there). Only literal tokens have a value in the dark block
+ * below. The light block is also [data-theme="light"]: a var() in a custom property resolves where
+ * the property is declared, so a light-pinned subtree gets the light aliases.
+ * The 3D view does not read these: its colours are src/viewport/palette.ts (pictures stay light);
+ * tests/styles/tokens.test.ts keeps both in step.
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
-:root {
+:root,
+[data-theme="light"] {
   /* Cards and panels (style.css:437-451, 2948-2956) */
 
   /* Tree (style.css:710-805, 2531-2540, 2634-2639) */
-  --cad-tree-selected: #d7e8ff;
-  --cad-tree-twisty: var(--mg-text-muted);
-  --cad-tree-head: var(--mg-text-body);
-  --cad-tree-section: #4a5160;
-  --cad-tree-empty: #8a93a3;
-  --cad-drop-line: var(--mg-primary);
-  --cad-drop-bg: var(--mg-selected-bg);
+  --cad-tree-selected: var(--mg-active-bg, #d7e8ff);
+  --cad-tree-twisty: var(--mg-text-muted, #667085);
+  --cad-tree-head: var(--mg-text-body, #344054);
+  --cad-tree-section: var(--mg-text-dim, #4a5160);
+  --cad-tree-empty: var(--mg-text-faint, #8a93a3);
   /* Section dividers (style.css:2624-2627, 3829-3834, 4996-5003) */
   --cad-tree-section-top: #eef1f5;
-  --cad-tree-section-bottom: var(--mg-header-border);
+  --cad-tree-section-bottom: var(--mg-header-border, #d5d8de);
 
   /* Toolbar (style.css:133-224, 3761) */
-  --cad-toolbar-bg: var(--mg-surface-muted);
-  --cad-toolbar-sep: #d5d8de;
-  --cad-toolbar-label: var(--mg-text-muted);
-  --cad-toolbar-active-bg: #d7e8ff;
-  --cad-toolbar-active-border: #9bc2f0;
-  --cad-toolbar-active-icon: #1a4fbf;
-  /* v0.5.0 ribbon: every toolbar size follows this factor (Toolbar.tsx setToolbarScale). */
+  --cad-toolbar-bg: var(--mg-surface-muted, #f2f4f7);
+  --cad-toolbar-sep: var(--mg-header-border, #d5d8de);
+  --cad-toolbar-label: var(--mg-text-muted, #667085);
+  --cad-toolbar-active-bg: var(--mg-active-bg, #d7e8ff);
+  --cad-toolbar-active-border: var(--mg-active-border, #9bc2f0);
+  --cad-toolbar-active-icon: var(--mg-primary-strong, #1a4fbf);
+  /* v0.5.0 ribbon: every toolbar size follows this factor (Toolbar.tsx setToolbarScale; the host's icon size). */
   --cad-toolbar-scale: 1;
+  /* A toolbar button under the pointer, and an open flyout arrow, More or group menu (the core's
+     toolbar has no hover): the icon buttons' hover in light. Its own token, as the toolbar's
+     background is the host's and the icon buttons' hover is chosen for the panels' background. */
+  --cad-toolbar-hover-bg: #eef0f4;
 
   /* Buttons and links (style.css:2008-2028, 2450-2459, 3056-3081, 2743-2758, 2971-2990) */
-  --cad-icon-btn: #5b6575;
+  --cad-icon-btn: var(--mg-text-tertiary, #5b6575);
   /* A disabled button's text in Chromium's own stylesheet (button:disabled), as the
      kit's natively disabled Done shows it; CAD's Done stays focusable (aria-disabled). */
   --cad-disabled-button-text: rgba(16, 16, 16, 0.3);
   --cad-icon-btn-hover-bg: #eef0f4;
 
   /* Tooltip and context menu (style.css:2932-2941, 994-1031) */
-  --cad-menu-hover: var(--mg-surface-hover);
+  --cad-menu-hover: var(--mg-surface-hover, #eef1f5);
   --cad-menu-sep: #e4e7ec;
   --cad-menu-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
 
   /* Chips (style.css:1032-1140) */
 
-  /* Viewport (runtime.js:1031, 17528-17595; proposal §3.2) */
+  /* Viewport (runtime.js:1031, 17528-17595; proposal §3.2). The view's background is palette.ts' background. */
   --cad-viewport-bg: #f0f2f7;
-  --cad-body: #bdc9db;
-  --cad-edge: #0a0b0e;
   --cad-pick: #2ec47e;
   --cad-set: #4884eb;
   --cad-hover-pick: #b2ccff;
-  --cad-axis-x: #d42828;
-  --cad-axis-y: #1f9a3a;
-  --cad-axis-z: #2a5bd7;
-  --cad-view-btn-border: var(--mg-control-border);
+  --cad-axis-x: var(--mg-axis-x, #d42828);
+  --cad-axis-y: var(--mg-axis-y, #1f9a3a);
+  --cad-axis-z: var(--mg-axis-z, #2a5bd7);
+  --cad-view-btn-border: var(--mg-control-border, #c9ced6);
+  /* The view's buttons, labels and key (style.css:1433-1450, 3056-3064). */
+  --cad-vp-btn-bg: rgba(255, 255, 255, 0.92);
+  --cad-vp-btn-fg: #2b3440;
+  --cad-vp-btn-hover-border: #9fb0c5;
+  --cad-vp-btn-hover-fg: var(--mg-primary-deep, #1d4ed8);
+  --cad-vp-btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --cad-vp-disabled: var(--mg-text-subtle, #98a2b3);
+  --cad-vp-glow: 0 0 4px #fff, 0 1px 2px rgba(255, 255, 255, 0.85);
+  /* The origin planes' and reference geometry's names over the view (its own background, not the tree's). */
+  --cad-vp-label: #4a5160;
+  --cad-vp-label-hover: #1a4fbf;
+  /* Markers over the view (the pattern's instance badges). */
+  --cad-marker-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
+  /* A failed copy's marker under the pointer or keyboard focus: the hover blue in light (as every
+     marker's), in dark a red-tinted one its red number reads on (the hover blue gave 1.7:1). */
+  --cad-marker-failed-hover-bg: #b2ccff;
 
-  /* Sketch (proposal §3.3; P3) */
-  --cad-sketch-under: var(--mg-primary);
-  --cad-sketch-full: var(--mg-text);
-  --cad-sketch-over: var(--mg-danger);
-  /* P4b SELECT: linked sketch geometry (projected / intersection: purple, as SolidWorks and Fusion
-     show it), a lost reference (amber), and the selection box (enclose: solid blue; touch: dashed green). */
-  --cad-sketch-projected: #7a3fd1;
-  --cad-sketch-lost: #b54708;
-  --cad-box-enclose: #1570ef;
+  /* Sketch (proposal §3.3; P3): an over-defined sketch's words and marks */
+  --cad-sketch-over: var(--mg-danger, #b42318);
+  /* The keys to the colours the sketch's lines are drawn in (the Sketch panel's state dot, a
+     reference's dot): palette.ts' sketch inks (under: the core's blue accent, fully: its text,
+     over: red; P4b SELECT: linked geometry purple, as SolidWorks and Fusion show it, a lost
+     reference amber); the dark values below are DARK's, the colours over the dark background. */
+  --cad-sketch-key-under: #1570ef;
+  --cad-sketch-key-full: #101828;
+  --cad-sketch-key-over: #b42318;
+  --cad-sketch-key-linked: #7a3fd1;
+  --cad-sketch-key-lost: #b54708;
+  /* E2: in a dark view a sketch's lines take the light view's inks where a light face shows under
+     them (src/viewport/onface.ts), so the dark view's dot shows both: its left half (an inset
+     shadow) the colour over a face, on a crescent of the body colour #bdc9db, its right half the
+     key above. None in light: the dot is its one colour, as it was. */
+  --cad-sketch-key-under-on-face: none;
+  --cad-sketch-key-full-on-face: none;
+  --cad-sketch-key-over-on-face: none;
+  --cad-sketch-key-linked-on-face: none;
+  --cad-sketch-key-lost-on-face: none;
+  /* P4b SELECT: a lost reference's words (amber), and the selection box (enclose: solid blue; touch: dashed green). */
+  --cad-sketch-lost: var(--mg-warning, #b54708);
+  --cad-box-enclose: var(--mg-primary-ink, #1570ef);
   --cad-box-enclose-fill: rgba(21, 112, 239, 0.08);
   --cad-box-touch: #12855a;
   --cad-box-touch-fill: rgba(46, 196, 126, 0.1);
+  /* The box's caption: bare text in light; in dark on a backing of the view's background colour
+     (a ring around it, no layout change), so it reads where the box starts over a light face
+     (review round 1: 1.2 to 1.4:1 there). */
+  --cad-box-caption-bg: transparent;
+  --cad-box-caption-ring: none;
 
   /* Panels (style.css:2899-2906, 2948-3081, 3445, 3548; PanelChrome) */
   --cad-panel-accent-feature: #344054;
-  --cad-panel-accent-sketch: #175cd3;
-  --cad-float-min: #4a5160;
-  --cad-axis-lab-x: var(--mg-axis-x);
-  --cad-axis-lab-y: var(--mg-axis-y);
-  --cad-axis-lab-z: var(--mg-axis-z);
-  --cad-danger-hover-bg: var(--mg-danger-bg);
+  --cad-panel-accent-sketch: var(--mg-link, #175cd3);
+  --cad-danger-hover-bg: var(--mg-danger-bg, #fef3f2);
 
   /* Tree states (proposal §3.1: rolled back .55, suppressed struck through, error red, warning amber) */
   --cad-tree-dim: 0.55;
-  --cad-rollback: var(--mg-primary);
-  --cad-rollback-handle-bg: #fff;
+  --cad-rollback: var(--mg-primary, #1570ef);
+  --cad-rollback-handle-bg: var(--mg-bg, #ffffff);
   --cad-body-swatch-border: rgba(16, 24, 40, 0.25);
-  --cad-disabled-text: var(--mg-text-faint);
+  --cad-disabled-text: var(--mg-text-faint, #8a93a3);
   --cad-warning-border: #fec84b;
-  --cad-spin-track: var(--mg-border);
+  --cad-spin-track: var(--mg-border, #d0d5dd);
   --cad-tip-key-border: rgba(255, 255, 255, 0.3);
   --cad-tip-detail: #c9ced6;
 
@@ -99,6 +140,68 @@
   --cad-modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
 
   /* P2 panels and tools (src/features/p2/p2.css): progress, measure labels */
-  --cad-p2-progress-track: #e4e7ec;
-  --cad-p2-measure: #1a4fbf;
+  --cad-p2-progress-track: var(--mg-surface-3, #e4e7ec);
+  --cad-p2-measure: var(--mg-primary-strong, #1a4fbf);
+}
+
+/*
+ * Dark: every literal colour token above, in the same order (the aliases follow the host's dark
+ * --mg-* set). Text on its background is at least 4.5:1 and an icon or a mark at least 3:1
+ * (tests/styles/tokens.test.ts). The tooltip, a pick, a set face and a hover stay as they are:
+ * the tooltip is dark in both, and the marks read on both backgrounds.
+ */
+[data-theme="dark"] {
+  --cad-tree-section-top: #2c323d;
+
+  /* 1.17:1 on the host's dark toolbar (--mg-surface-muted #262c36); the icon buttons' hover
+     is only 1.06:1 there, and the dark --mg-surface-2 1.04:1. */
+  --cad-toolbar-hover-bg: #2f3746;
+
+  /* Chromium's own dark button:disabled text. */
+  --cad-disabled-button-text: rgba(255, 255, 255, 0.3);
+  /* The host's dark --mg-surface-hover: 1.25:1 on the panels' and rails' --mg-bg (the dark
+     --mg-surface-2 is 1.13:1 there). The toolbar's buttons take --cad-toolbar-hover-bg. */
+  --cad-icon-btn-hover-bg: #283040;
+
+  --cad-menu-sep: #323946;
+  --cad-menu-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* The host's dark --mg-viewport-bg (palette.ts DARK.background). */
+  --cad-viewport-bg: #1b1f27;
+  --cad-vp-btn-bg: rgba(32, 37, 46, 0.92);
+  --cad-vp-btn-fg: #d0d5dd;
+  --cad-vp-btn-hover-border: #5b6a80;
+  --cad-vp-btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --cad-vp-glow: 0 0 4px #1b1f27, 0 1px 2px rgba(0, 0, 0, 0.85);
+  --cad-vp-label: #b0b8c4;
+  --cad-vp-label-hover: #8fb5ff;
+  --cad-marker-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --cad-marker-failed-hover-bg: #4a2522;
+
+  /* The colours the lines take over the dark background (palette.ts DARK.sketch), and over a light
+     face (DARK.face: LIGHT's), the face half on a crescent of the body colour. */
+  --cad-sketch-key-under: #7aa7ff;
+  --cad-sketch-key-full: #e6e9ef;
+  --cad-sketch-key-over: #f97066;
+  --cad-sketch-key-linked: #9b7bf0;
+  --cad-sketch-key-lost: #fdb022;
+  --cad-sketch-key-under-on-face: inset 4px 0 0 0 #1570ef, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-full-on-face: inset 4px 0 0 0 #101828, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-over-on-face: inset 4px 0 0 0 #b42318, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-linked-on-face: inset 4px 0 0 0 #7a3fd1, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-lost-on-face: inset 4px 0 0 0 #b54708, -1.5px 0 0 0.5px #bdc9db;
+  --cad-box-enclose-fill: rgba(122, 167, 255, 0.12);
+  --cad-box-touch: #47cd89;
+  --cad-box-touch-fill: rgba(71, 205, 137, 0.14);
+  --cad-box-caption-bg: rgba(27, 31, 39, 0.88);
+  --cad-box-caption-ring: 0 0 0 2px rgba(27, 31, 39, 0.88);
+
+  /* A quieter stripe than light's slate. */
+  --cad-panel-accent-feature: #9aa4b2;
+
+  --cad-body-swatch-border: rgba(255, 255, 255, 0.3);
+  --cad-warning-border: #8a6d1f;
+
+  --cad-modal-backdrop: rgba(0, 0, 0, 0.6);
+  --cad-modal-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
 }

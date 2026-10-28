@@ -30,7 +30,7 @@ import { derivedLength, formatQuantity, formatVolume, unitText } from '../../ui/
 import { useBodyField } from '../p2/fields';
 import { P2FeaturePanel, useFeaturePanel } from '../p2/panel';
 import { useSelectionMirror } from '../p2/pick';
-import { overlayColors } from '../sketch/colors';
+import { paletteOf } from '../../viewport/palette';
 import { isEnclosureBody } from './def';
 import { AXIS_LABELS, enclosureShape, paddingFromMode, resolveEnclosure, shapeVolume, sideCuts, SIDE_KEYS, sideLabel, sidesOf } from './geometry';
 import { shapeOfOutput, startEnclosureHandles } from './handles';
@@ -115,7 +115,7 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   outRef.current = output;
   useEffect(() => {
     if (!handle || typeof handle.pushTool !== 'function' || props.session.owner) return;
-    const t = startEnclosureHandles(services, handle, { session: props.session, color: overlayColors().under, output: () => outRef.current });
+    const t = startEnclosureHandles(services, handle, { session: props.session, color: paletteOf(handle).ink, faceColor: paletteOf(handle).face?.ink ?? null, output: () => outRef.current });
     tool.current = t;
     return () => {
       t.stop();

@@ -808,8 +808,8 @@ with the host once for the page's life, and its chip goes in the dock.
   - **One scale factor.** Every size of the ribbon (rows, icons, names,
     headings, gaps, the large buttons' widths, a group's width) follows
     `--cad-toolbar-scale` (`tokens.css`, 1); `setToolbarScale` (Toolbar.tsx) is
-    the one place the host's appearance setting ("toolbar icon size") is to be
-    wired in. At 1 the rows are 22 px, the small icons 18 px, the large 28 px
+    where the host's appearance sets it: `app/appearance.ts` gives it the icon
+    scale (and takes it away at 1). At 1 the rows are 22 px, the small icons 18 px, the large 28 px
     (Daniel found 16 / 24 small); `e2e/cad-toolbar-resize.spec.ts` checks the
     sizes follow the factor (1.25); `setToolbarScale` sends `cad:toolbar-scale`
     so the ribbon measures its fit again (review 6). Users
@@ -945,9 +945,133 @@ with the host once for the page's life, and its chip goes in the dock.
   `#d7e8ff`, panels 12 px, Done and Delete in the browser's own button font as
   in the core; outline icons (24 viewBox, stroke 1.7–1.8, `currentColor`).
   `e2e/cad-p1-document.spec.js` reads these from the core page and compares.
+- **Appearance (the dark set; owner decisions D1-D4, "CAD dark set" plan).** The
+  host's appearance (§9: unreleased 1.9, feature-detected) drives two things,
+  and CAD never sets `data-theme` itself (the host's SDK writes it, with
+  `data-theme-pref` and the scales, on `<html>`, and the page has them from
+  its first paint; `theme.css` takes `color-scheme` from `data-theme`):
+  - **CSS.** `src/styles/tokens.css`: the light block is `:root,
+    [data-theme="light"]` (a `var()` in a custom property resolves where it is
+    declared); a token with an `--mg-*` equivalent aliases it as
+    `var(--mg-x, <exact light value>)`, so it follows the host's dark set by
+    itself and stays as it was on a host without the token; only literal tokens
+    have a `[data-theme="dark"]` value. Blue text uses `--mg-primary-ink` (D4:
+    in dark the `--mg-primary` fill is too dark for text); fills, lines and focus
+    rings keep `--mg-primary`. No CAD stylesheet paints a raw colour outside
+    `tokens.css` (a `var()` fallback aside). A token that copies a core rule now
+    on an `--mg-*` token (the tree's twisty, head, section line and selected
+    row; the toolbar's background, label and active button; menu hover,
+    view-button border, danger hover, rollback, disabled text, spin track) is
+    that token, so it stays equal to the core in both themes; the toolbar's
+    hover is CAD's own (`--cad-toolbar-hover-bg`: the core's toolbar has none).
+    `tests/styles/tokens.test.ts` pins the light values, the dark coverage, the
+    dark contrast and the core's selected row and active button, on the host's
+    own `src/theme/tokens.css` (its light and dark sets).
+  - **The 3D view.** `src/viewport/palette.ts` is the one place three.js code
+    takes colours from: `LIGHT` (the core's light values below; the triad the
+    host's light `--mg-axis-*`, as the core's since its light unify) and
+    `DARK`. D2: surfaces stay light (bodies, caps, picks and hover on faces,
+    plane and region tints); thin marks turn light (background `#1b1f27`, D3;
+    edges; triad, E4, lit ambient .55 and diffuse .45, `triadLight`, so an arrow
+    pointing at the eye reads 3.5:1 and more where the core's headlight alone
+    gives 1.8:1; sketch lines and points; reference axes and points;
+    measure; the arrows and the banana's guide). Daniel's picks (2026-10-28):
+    E1 (a), the bodies' B-rep edges `#e6e9ef`, plain; E2, "the colour follows
+    what's under it": every coloured thin mark that can lie on a face (the
+    sketch's lines and points in every state and both modes, preview, guides,
+    dimension lines and grid, a trim's doomed piece, linked and lost curves;
+    the reference axes and points; the measure line and its ends; the Extrude
+    and Enclosure arrows; the banana's guide) is drawn, pixel by pixel, in
+    LIGHT's ink for its role (`DARK.face`: by role, not by colour value, since
+    DARK's construct, arrow and under-defined blues are one colour, `#7aa7ff`,
+    with two light inks: the construct line's `#2f5fb8`, the arrows' and an
+    under-defined line's `#1570ef`) where a light surface shows under it, and in DARK's own light
+    ink over the background or an empty or translucent plane; a line crossing a
+    face's outline changes colour there (accepted). Picks and hover keep their
+    colours; sketch mode's hover halo keeps its blue but is fainter over the
+    dark background (.45 for .85, `setFaceOpacity` keeps .85 over a face), as
+    the lines' light inks there are about its lightness (an under-defined line
+    read 1.1:1 in it). How (`src/viewport/onface.ts`): one stencil bit, `FACE_BIT` 0x80,
+    says "a light surface shows here". An opaque body's faces write it where they
+    pass the depth test (write mask `FACE_BIT`, Replace): set for a light colour,
+    cleared for a dark custom one (`isLightSurface`: the light view's `#101828`
+    reads at least as well on it as `#e6e9ef`), so the frontmost opaque surface
+    decides; a see-through body, the planes and the region tints never touch it.
+    Nor do the banana's taped picture in a sketch and the 3D banana: E2 names
+    the light surfaces (an opaque body face, a section cap), and they are
+    neither, so a mark over them takes what is behind them (over a picture on
+    an origin plane, the dark inks; the picture is mostly grey tape, where those
+    read better than the light view's). Whether they should count is Daniel's
+    call.
+    The colour asked is the one the face is drawn in (`bodyShownColor`, the body
+    shader's choice): a whole body selected or hovered is its light blue, and on
+    a body of a dark colour the faces a pick or a hover lights (the pick green,
+    the hover blue) are drawn again into the stencil only
+    (`createLitFacesMaterial`: no colour, no depth, half a unit nearer than the
+    lit body, at `LIT_FACES_ORDER` after every body), so they set the bit.
+    The section caps' parity counter keeps to `PARITY_MASK` 0x7f (the meshes
+    write only those bits, the cap tests only them) and the cap sets `FACE_BIT`
+    where it draws. A mark says what it is over a face: a single-colour mark's
+    material its face ink (`setFaceInk`, from the palette's `face`), a mark
+    coloured per segment or point (sketch mode's lines and points) a geometry in
+    its face colours (`setFaceColours`, built with each `set()`; one face ink per
+    dark ink, a unit test). Before every render (`drawFrame`, `snapshot`, so
+    before three captures the render list) `syncFaceTwins` walks the layers:
+    such a mark is drawn as it is, its material restricted to pixels without the
+    bit (a stencil test with write mask 0), and gets a twin, its child (so its
+    visibility and transform), sharing its geometry (or the face colours), with
+    a copy of its material in the face ink restricted to pixels with the bit; the
+    copy follows the mark's material (a hover or pick material has no face ink:
+    drawn once, as it is), dash, width, opacity, depth test and clipping planes,
+    is disposed with the mark's material, ignores raycasts and is left out of a
+    layer's framing. The bit is final when a mark tests it only if the mark
+    draws after every surface that writes it (`drawsAfterSurfaces`). three
+    sorts its opaque pass by group order, the `renderOrder` of the nearest
+    `Group` above an object (a layer's group is 100 and more, but a `Group`
+    nested in a layer, as sketch mode's plane frames and each arrow, starts its
+    own, 0 unless set), then by the object's own `renderOrder`, and draws its
+    transparent pass after the whole opaque one; the caps (-1), the bodies (0)
+    and the lit faces (`LIT_FACES_ORDER`, 0.5) draw in group order 0. So a mark
+    is transparent (the sketch's lines and points, the measure, the arrows, the
+    guides), or under a group of order above 0, or its own order is above 0.5
+    (the sketch's opaque grid: 900 in its frame). The layers' unit tests walk
+    their twinned marks with `marksBeforeSurfaces`.
+    In light, and for every picture, no body writes the stencil, no mark is
+    restricted and no twin is drawn: the light view is the pixels it was. The
+    box-pick target (`boxpick.ts`) has no stencil and draws only ids. Sketch
+    mode's cursors take the light tone over a light face in a dark view
+    (`ViewportHandle.lightSurfaceAt`, one BVH ray, by the same colour rule,
+    the hit face's highlight and its body's state included: a white crosshair
+    is 1.6:1 on a face). The Sketch panel's state dot and a reference's dot show both
+    inks in dark: the right half the colour over the background, the left half
+    (an inset shadow, `--cad-sketch-key-*-on-face`) the colour over a face on a
+    crescent of the body colour; one colour in light.
+    `ViewportHandle.setPalette` recolours at once (uniforms and material
+    colours; sketch mode draws its lines again), and each layer's `addLayer`
+    `palette` hook (§10) follows. `app/appearance.ts` is the one handler: the
+    palette (a view made later starts in it: the bridge has the welcome's look
+    before the layout mounts the view, and the view is given it before its
+    first frame, so a Part opened dark never draws a light frame;
+    `ViewportStats.looks` records what each run of frames was drawn in) and
+    `--cad-toolbar-scale` from the icon scale.
+  - **Pictures stay light (D1).** `snapshot()` with a dark palette live paints
+    the edges, the triad and every layer it shows `LIGHT`, clears `LIGHT`'s
+    background, draws, and puts the live colours back in the same task (no
+    `await`, no frame: the view never shows a light frame); `html[data-theme]`
+    is never touched for a picture. The Assistant's sheet (`assistant/view.ts`)
+    is `LIGHT` too; STEP export and the host's thumbnails carry no theme.
+  - Tests: `tests/viewport/{palette,theme,onface}.test.ts`,
+    `tests/sketch/overlay-palette.test.ts`, the dark cases in
+    `tests/features/extrude/panel.test.tsx`, `tests/viewport/snapshot-plain.test.ts`,
+    `tests/features/measure/marks-palette.test.ts`, `tests/lib/bridge-appearance.test.ts`,
+    `tests/app/{appearance,bootstrap}.test.ts*`; e2e `cad-dark-theme.spec.ts`
+    (shell), which drives the host's own look: the pref saved before a Part
+    opens (`saveLook`) and Settings → Appearance in a second window with it
+    open (`pickTheme`). The look is one pref for the whole server, so its tests
+    are `@serial` and put it back after each (`putLookBackAfterSerialTests`).
 - Viewport: background `#f0f2f7`, body `#bdc9db` (Phong: ambient .16, diffuse
   .78, specular .22, power 28), edges `#0a0b0e` 2.4 px, pick `#2ec47e`, set
-  `#4884eb`, hover `#b2ccff`. **Mouse** (the core viewer's binding,
+  `#4884eb`, hover `#b2ccff` (the light palette, `LIGHT` in `palette.ts`). **Mouse** (the core viewer's binding,
   `src/workbench/runtime.js`; Daniel's decision of 2026-10-06, "Orbit like the
   main viewer", in model and sketch mode): left drag orbit wherever it starts,
   middle or Shift+left pan, wheel or right drag zoom, Alt+left always orbits,
@@ -975,7 +1099,9 @@ with the host once for the page's life, and its chip goes in the dock.
     about the view-up through the pivot; pan keeps the pivot-depth point under
     the pointer; wheel notch x1.1 via vtk.js `normalizeWheel`); orbit pivot =
     model centroid 9214-9310; default direction [-0.55, -0.75, 0.42] 9118;
-    triad 1113-1133 (72 px, X/Y/Z [220,40,40] / [36,168,64] / [40,96,220]);
+    triad 1113-1133 (72 px, X/Y/Z [220,40,40] / [36,168,64] / [40,96,220];
+    since the host's light unify 28ea1116 the core paints its light
+    `--mg-axis-*`, `#d42828` / `#1f9a3a` / `#2a5bd7`, and so does the Part);
     body 17528-17538; edges 17544-17568; pick / set paint 17813-17826;
     selected body 17709; picked edge tube 17585 + 3.2 px 22804; picked vertex
     17597 + 11 px 22801; core pick radii 7 / 10 px 22802-22803 (the Part
@@ -1306,6 +1432,21 @@ with the host once for the page's life, and its chip goes in the dock.
   manifest's `links_geometry = true` on the Part study kind (§11).
 - Host API 1.6 (L3): the exit hook `ws.nav.onLeave` and the camera it returns
   (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`.
+- The host's appearance (unreleased 1.9; the host still reports 1.8):
+  `ws.context.appearance = {theme, preference, textScale, iconScale}` and the
+  `appearance` event with the same object, the look the person set in Settings
+  → Appearance (their pref on the server, `POST /api/prefs`). The SDK writes
+  `data-theme`, `data-theme-pref`, `--mg-text-scale` and `--mg-icon-scale` on
+  the frame's `<html>` before any listener hears a change; `theme.css` takes
+  `color-scheme` from `data-theme`. The server puts the look in the Part's page
+  and a pre-paint script sets those attributes before the bundle runs, so the
+  page is dark from its first paint. `Bridge.appearance()` / `theme()` /
+  `onAppearance()` feature-detect on `ctx.appearance`: an older host has none,
+  and the Part stays light. The host's dark `--mg-*` set and `--mg-primary-ink`
+  are in the frame's `/plugin-sdk/theme.css`, so a dark `<html>` switches the
+  host's tokens and the kit's chrome along with CAD's literal ones. CAD's
+  tokens that mirror a core rule have no dark value of their own and follow
+  that set.
 - Host API 1.4 start actions, CAD on by default (Daniel's D33, after gate:l3-cad;
   the core half is 60bb971): no `default_enabled = false`, and one
   `[[start_actions]]` for the Part kind: "Design a part" on the empty project and
@@ -1645,10 +1786,10 @@ with the host once for the page's life, and its chip goes in the dock.
   plane cuts them ("The sketch plane doesn't cut Body 2." for a miss). Linked
   entities are ordinary entities tagged `link` (§6): the solver fixes them, so
   dimensions, relations, regions and trim-against work unchanged; drawn purple
-  (`--cad-sketch-projected`); re-read at every rebuild
+  (the palette's `linked` ink; its key `--cad-sketch-key-linked`); re-read at every rebuild
   (`reprojectLinks` before the sketch solves; what is constrained to them
   follows). A source that is gone keeps its entities where they were, drawn
-  amber (`--cad-sketch-lost`), with "Lost reference: <what> not found after
+  amber (the palette's `lost` ink; its key `--cad-sketch-key-lost`), with "Lost reference: <what> not found after
   rebuild" in the References rows and the panel's foot, and the sketch still
   builds ("Don't block, just report"). A face, silhouette or section that now
   gives other curves says "changed: open Sketch N to update it". Break link
@@ -1693,7 +1834,7 @@ with the host once for the page's life, and its chip goes in the dock.
   image-set(url(data:...) 1x, url(data:...) 2x) x y, <keyword>` on the canvas (the OS draws them:
   no lag; the frame's CSP allows data: images; tools still ask for keywords, the overlay maps them),
   the crosshair with the tool's toolbar icon, an open hand (draggable, handles) and a closed hand
-  (dragging); white on a dark view (`cursorTone`: the host theme name or the view colour).
+  (dragging); white on a dark view (`cursorTone` of the view palette's background).
   Relation glyphs show for the selection only (`src/sketch/relations-view.ts` `relationShown`; a
   conflict always shows; a fillet arc's own while its radius arrow is up stay hidden); Show
   relations (`view.sketch-relations`, VIEW, Shift+R, `CommandDef.pressed`) shows all, ws.prefs key
@@ -1734,7 +1875,13 @@ with the host once for the page's life, and its chip goes in the dock.
   press captures the gesture), `rayAt`, `toPlane`, `pixelSize`, `onFrame`,
   `lineResolution`, `setPlanesBusy(owner, busy)` (whatever draws something
   other than bodies keeps Auto's origin planes hidden: the profile overlay does,
-  while a sketch is shown or sketch mode is on). A floating panel over the left
+  while a sketch is shown or sketch mode is on), `palette()` / `setPalette` (the
+  marks' colours, `src/viewport/palette.ts`: a layer builds its materials from
+  `palette()`, through `paletteOf(handle)`, LIGHT for a fake, and its
+  `addLayer` `palette` hook recolours what it draws, synchronously, on every
+  `setPalette` and around a picture taken while dark: LIGHT before it, the live
+  palette after; a layer the picture leaves out is not called for it; never
+  called when the layer is added). A floating panel over the left
   of the view carries `data-view-cover` (the left stack does): fit, the
   standard views and Normal to centre the part in the rest, re-aimed during the
   transition when a panel opens with it. They move the image's centre

@@ -84,7 +84,7 @@
 }
 
 .tb-btn:hover {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 
 .tb-btn.is-active {
@@ -251,6 +251,9 @@ html.cad-tb-drag-refused * {
   color: var(--mg-tooltip-text);
   font: 400 12px/1.45 var(--mg-font);
   box-shadow: var(--mg-shadow-tooltip);
+  /* The host tooltip's edge (style.css .mat-k-tip): none in light, a line in dark, where its shadow
+     is lost on the dark view and toolbar. */
+  outline: 1px solid var(--mg-tooltip-edge, transparent);
   white-space: nowrap;
 }
 /* SCALE MODELS' two-word heading stays on one line. */
@@ -422,17 +425,17 @@ html.cad-tb-drag-refused * {
 }
 /* Hovering either half shows the pair as one control. */
 .cad-toolbar.is-ribbon .tb-split:hover > .tb-btn:not(.is-disabled):not(.is-active) {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 .cad-toolbar .tb-btn.tb-flyout-arrow.is-open {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 
 /* A group's "More ▾" (FOLD_ORDER, or a narrowed group): its folded commands, in a menu; one of the
    small buttons. */
 .cad-toolbar .tb-btn.tb-more.is-open,
 .cad-toolbar .tb-btn.tb-group-menu.is-open {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 .tb-btn.tb-more .tb-txt,
 .tb-btn.tb-group-menu .tb-txt {
@@ -931,7 +934,7 @@ html.cad-tb-resizing-rows * {
   border: 1px solid var(--mg-selected-border);
   border-radius: var(--mg-radius-pill);
   background: var(--mg-selected-bg);
-  color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
   font-size: 10px;
   font-weight: 600;
   line-height: 14px;
@@ -1108,6 +1111,38 @@ html.cad-tb-resizing-rows * {
 button.mgk-btn.cad-btn-danger,
 button.mgk-btn.cad-btn-danger:hover {
   color: var(--mg-danger);
+}
+
+/* A link that looks as the kit's button (the Picture panel's Save PNG, a download): the kit styles
+   only button.mgk-btn (magnusim-web/src/plugin-ui/styles/button.css), so an <a> took the browser's
+   link blue and underline. Its base rule (a button in the browser's button font, which the kit
+   reverts to) and its secondary variant, for an <a>; visited, under the pointer, pressed and
+   focused as the button is. */
+a.mgk-btn {
+  display: inline-block;
+  margin: 0;
+  font: -webkit-small-control;
+  font-size: var(--mg-text-sm);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+/* The browser's focus ring, as the kit's button has it (the browser sets a link's 1 px out). */
+a.mgk-btn:focus-visible {
+  outline: revert;
+  outline-offset: 0;
+}
+a.mgk-btn--secondary,
+a.mgk-btn--secondary:hover,
+a.mgk-btn--secondary:active {
+  border: 1px solid var(--mg-control-border);
+  border-radius: var(--mg-radius-sm);
+  padding: 4px 8px;
+  background: var(--mg-bg);
+  color: var(--mg-text-strong);
+}
+a.mgk-btn--secondary:visited {
+  color: var(--mg-text-strong);
 }
 
 /* A button that cannot act stays focusable (aria-disabled) so its reason can be
@@ -1343,6 +1378,8 @@ input.mgk-input.cad-param-comment {
   color: var(--mg-tooltip-text);
   font: 400 12px/1.45 var(--mg-font);
   box-shadow: var(--mg-shadow-tooltip);
+  /* The host tooltip's edge, as .mat-k-tip has it: transparent in light, a line in dark. */
+  outline: 1px solid var(--mg-tooltip-edge, transparent);
   pointer-events: none;
 }
 
@@ -1620,7 +1657,7 @@ button.cad-rail:focus-visible,
   border: 1px solid var(--mg-selected-border);
   border-radius: var(--mg-radius-pill);
   background: var(--mg-selected-bg);
-  color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
   font-size: 10px;
   font-weight: 600;
   line-height: 14px;

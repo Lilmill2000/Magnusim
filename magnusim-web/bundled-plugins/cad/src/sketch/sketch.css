@@ -50,8 +50,8 @@
 }
 .cad-sk-glyph.is-inference {
   pointer-events: none;
-  color: var(--mg-primary);
-  border-color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
+  border-color: var(--mg-primary-ink, #1570ef);
 }
 
 /* ---- dimension labels ---- */
@@ -82,8 +82,8 @@
   color: var(--cad-sketch-over);
 }
 .cad-sk-dim.is-preview {
-  color: var(--mg-primary);
-  border-color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
+  border-color: var(--mg-primary-ink, #1570ef);
   pointer-events: none;
 }
 
@@ -152,18 +152,23 @@
   gap: 6px;
   font-weight: 600;
 }
+/* The dot is the key to the lines' colour: the colour they are drawn in; in a dark view, where the
+   lines take two (E2), its left half the colour over a light face (the -on-face tokens). */
 .cad-sk-state-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--cad-sketch-under);
+  background: var(--cad-sketch-key-under);
+  box-shadow: var(--cad-sketch-key-under-on-face);
 }
 .cad-sk-state.is-fully .cad-sk-state-dot {
-  background: var(--cad-sketch-full);
+  background: var(--cad-sketch-key-full);
+  box-shadow: var(--cad-sketch-key-full-on-face);
 }
 .cad-sk-state.is-over .cad-sk-state-dot,
 .cad-sk-state.is-unsolved .cad-sk-state-dot {
-  background: var(--cad-sketch-over);
+  background: var(--cad-sketch-key-over);
+  box-shadow: var(--cad-sketch-key-over-on-face);
 }
 .cad-sk-state.is-over,
 .cad-sk-state.is-unsolved {
@@ -521,7 +526,7 @@
   pointer-events: auto;
   cursor: grab; /* the overlay sets the sketch's own grab cursor on the element */
   z-index: 3;
-  color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
 }
 .cad-sk-handle svg {
   display: block;

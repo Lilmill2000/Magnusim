@@ -28,7 +28,7 @@ import { usePanelDelete, usePanelDeleteBlock } from '../../ui/panel-delete';
 import { DisabledReason, displayOf, Field, FieldGroup, Hint, NumberUnitInput, PanelChrome, Select } from '../../ui/kit';
 import { formatReadout, MM_PER } from '../../ui/kit/format';
 import { MIN_SIZE_MM } from '../../doc/features/primitives';
-import { overlayColors } from '../sketch/colors';
+import { paletteOf } from '../../viewport/palette';
 import { drawnSketches, profilesView, sketchOutput } from '../sketch/view';
 import { handleGeometry, startPanelTool } from './handle';
 import { entityParents, PROFILE_REPAIRED, resolveRegionRef } from './profiles';
@@ -170,7 +170,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
   // while the Assistant fills it (the person's clicks in the view only select).
   useEffect(() => {
     if (!handle || typeof handle.pushTool !== 'function' || session.owner) return;
-    const t = startPanelTool(services, handle, { session, note: (text) => ui.setPanelNote(text), color: overlayColors().under });
+    const t = startPanelTool(services, handle, { session, note: (text) => ui.setPanelNote(text), color: paletteOf(handle).ink, faceColor: paletteOf(handle).face?.ink ?? null });
     tool.current = t;
     return () => {
       t.stop();

@@ -1,29 +1,21 @@
-// Colours of the profile overlay, read from the design tokens (three.js needs
-// numbers, so the CSS custom properties are read once at start; the fallbacks
-// are the tokens' own values, for DOM-less tests).
-// Proposal §3.3: profiles shaded --mg-primary (#1570ef) at 12% opacity.
-// Picked profiles in the core's pick green, hover in its pre-highlight blue
-// (src/viewport/colors.ts), as faces are.
+// Colours of the profile overlay: a finished sketch's lines in model mode take the view's
+// palette's sketch inks (src/viewport/palette.ts: LIGHT, or DARK with the host's dark theme).
+// Proposal §3.3: profiles shaded the primary blue (#1570ef) at 12% opacity, a surface tint that
+// stays the same in both themes (D2, E5). Picked profiles in the core's pick green, hover in its
+// pre-highlight blue (src/viewport/colors.ts), as faces are.
 // Owner: P3-PROFILES (src/features/sketch/).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { HOVER_COLOR, PICK_COLOR } from '../../viewport/colors';
+import { hexNumber, LIGHT, type MarkPalette } from '../../viewport/palette';
 
-function token(name: string, fallback: number): number {
-  try {
-    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    const m = /^#([0-9a-f]{6})$/i.exec(v);
-    if (m) return parseInt(m[1], 16);
-  } catch {
-    /* no DOM */
-  }
-  return fallback;
-}
+/** The closed regions' shading: the primary blue at 12%, in both themes (it reads as well on either background). */
+export const REGION_TINT: Readonly<{ color: number; opacity: number }> = Object.freeze({ color: 0x1570ef, opacity: 0.12 });
 
 export interface OverlayColors {
   region: { color: number; opacity: number };
   hover: { color: number; opacity: number };
   picked: { color: number; opacity: number };
-  /** A sketch's lines in model mode: under defined (--cad-sketch-under) and fully defined (--cad-sketch-full). */
+  /** A sketch's lines in model mode: under defined and fully defined. */
   under: number;
   full: number;
   over: number;
@@ -33,16 +25,16 @@ export interface OverlayColors {
   lost: number;
 }
 
-export function overlayColors(): OverlayColors {
+export function overlayColors(p: MarkPalette = LIGHT): OverlayColors {
   return {
-    region: { color: token('--mg-primary', 0x1570ef), opacity: 0.12 },
+    region: { ...REGION_TINT },
     hover: { color: HOVER_COLOR, opacity: 0.55 },
     picked: { color: PICK_COLOR, opacity: 0.4 },
-    under: token('--mg-primary', 0x1570ef),
-    full: token('--mg-text', 0x101828),
-    over: token('--mg-danger', 0xb42318),
-    construction: token('--mg-text-muted', 0x667085),
-    linked: token('--cad-sketch-projected', 0x7a3fd1),
-    lost: token('--cad-sketch-lost', 0xb54708),
+    under: hexNumber(p.sketch.under),
+    full: hexNumber(p.sketch.fully),
+    over: hexNumber(p.sketch.over),
+    construction: hexNumber(p.sketch.construction),
+    linked: hexNumber(p.sketch.linked),
+    lost: hexNumber(p.sketch.lost),
   };
 }

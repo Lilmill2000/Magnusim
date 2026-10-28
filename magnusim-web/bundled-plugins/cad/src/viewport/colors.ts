@@ -2,6 +2,9 @@
 // from (magnusim-web/src/workbench/runtime.js unless noted; line numbers at
 // snapshot HEAD cff8aaa). Colours are sRGB; the shaders use them as vtk.js does
 // (no linearisation), so a face lights to the same pixel as in the core.
+// These are the light look. What turns light in a dark view (the background, edges, the triad)
+// is read through palette.ts, whose LIGHT holds these values; the rest (bodies, picks, hover,
+// the plane tints) stays the same in both themes.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -28,8 +31,12 @@ export const BODY_SELECTED_COLOR = 0x4785eb;
 export const SET_COLOR = 0x4884eb;
 /** Hover pre-highlight: the core has none; proposal §3.2 / ARCHITECTURE §7 approve --mg-selected-border #b2ccff. */
 export const HOVER_COLOR = 0xb2ccff;
-/** Orientation triad arrows X / Y / Z (runtime.js:1115-1120), 72 px, bottom-right (runtime.js:1127-1132). */
-export const TRIAD_COLORS = [0xdc2828, 0x24a840, 0x2860dc] as const;
+/**
+ * Orientation triad arrows X / Y / Z: the host's light --mg-axis-x / -y / -z, which the core's triad
+ * paints since its light unify (28ea1116; src/theme/lightView.ts LIGHT_VIEW.axisX-Z; at cff8aaa it
+ * was [220,40,40] / [36,168,64] / [40,96,220], runtime.js:1115-1120). 72 px, bottom-right (runtime.js:1127-1132).
+ */
+export const TRIAD_COLORS = [0xd42828, 0x1f9a3a, 0x2a5bd7] as const;
 export const TRIAD_PX = 72;
 /** Default camera direction, from front-left and slightly above, Z up (runtime.js:9118, 9372). */
 export const HOME_DIR: [number, number, number] = [-0.55, -0.75, 0.42];
