@@ -45,6 +45,21 @@ describe('controls.css', () => {
     expect(accent[0].selectors.join(', ')).toMatch(/^:where\([^{]*\)$/);
   });
 
+  it('the kit Icon grows with the icon size (Settings → Appearance), in a frame as on the page', () => {
+    const icon = cssRules(css).filter((r) => r.selectors.includes('.mgk-icon'));
+    expect(icon.map((r) => r.props.zoom)).toEqual(['var(--mg-icon-scale)']);
+  });
+
+  it("an element with a theme of its own (base.css) takes its set's text and background, below any rule of a plugin's own", () => {
+    const base = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'plugin-sdk', 'base.css'), 'utf8');
+    // A light island in a dark page: colour is inherited as computed (the dark text), so the island re-reads it.
+    const themed = cssRules(base).filter((r) => r.selectors.some((s) => s.includes('[data-theme]')));
+    // Never <html> (it always has one): its background would stop body's from filling the canvas.
+    expect(themed.map((r) => [r.selectors.join(', '), r.props.color, r.props['background-color']])).toEqual([
+      [':where([data-theme]:not(:root))', 'var(--mg-text)', 'var(--mg-bg)'],
+    ]);
+  });
+
   it("in dark the kit's field takes the field tokens, in page and frame alike, above its own revert", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const sheets = { page: join(here, '..', '..', 'style.css'), frame: join(here, '..', '..', 'plugin-sdk', 'base.css') };

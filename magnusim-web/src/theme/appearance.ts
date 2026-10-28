@@ -10,13 +10,18 @@
  *   --mg-text-scale, --mg-icon-scale on html (tokens.css sizes text and icons by them)
  *
  * then the window event 'cfd:appearance' {theme, text_scale, icon_scale} (theme resolved), which the
- * 3D views and charts repaint on (themeColor.ts onAppearance). "system" follows the system's light
- * or dark as it changes. A change made here reaches this app's other tabs (BroadcastChannel). The
- * page's first paint has the look before any app script runs: the pre-paint script in index.html
- * and cad.html reads the one the server put on <html> (data-look, scripts/prefs.js
- * stampAppearance), else this origin's copy in localStorage (kept here). Nothing here reads
- * data-theme off any element but html (a capture puts one on .viewport-wrap for a moment).
+ * 3D views and charts repaint on (themeColor.ts onAppearance), and which a plugin's workspace frame
+ * hears (its bridge sends frameAppearance() as the SDK's `appearance` event). "system" follows the
+ * system's light or dark as it changes. A change made here reaches this app's other tabs
+ * (BroadcastChannel). The page's first paint has the look before any app script runs: the
+ * pre-paint script in index.html and cad.html reads the one the server put on <html> (data-look,
+ * scripts/prefs.js stampAppearance), else this origin's copy in localStorage (kept here); a
+ * workspace page's own pre-paint does the same (scripts/server/workspace-files.ts). Nothing here
+ * reads data-theme off any element but html (a capture puts one on .viewport-wrap for a moment).
+ * Until the prefs answer, the look shown is the first paint's (html's data-theme-pref and scales,
+ * read as this module loads, before any task could swap them).
  */
+import type { Appearance as FrameAppearance } from '../plugin-sdk/workspace';
 
 export type ThemePref = 'light' | 'dark' | 'system';
 export type Theme = 'light' | 'dark';
@@ -37,6 +42,8 @@ export const DEFAULT_APPEARANCE: Readonly<Appearance> = Object.freeze({ theme: '
 export const APPEARANCE_KEY = 'magnusim.appearance';
 /** This app's other tabs hear a change here. */
 export const APPEARANCE_CHANNEL = 'magnusim-appearance';
+/** The window event after each look shown (detail: theme resolved, text_scale, icon_scale). */
+export const APPEARANCE_EVENT = 'cfd:appearance';
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 /** This page, on the channel: it does not take back what it said. */
@@ -68,12 +75,34 @@ export function resolveTheme(pref: ThemePref, dark: boolean = systemDark()): The
   return pref;
 }
 
-let shown: Appearance = { ...DEFAULT_APPEARANCE };
+/** The look the first paint showed (the pre-paint script's choice and scales on html), else the default. */
+function firstPaint(): Appearance {
+  if (typeof document === 'undefined') return { ...DEFAULT_APPEARANCE };
+  const html = document.documentElement;
+  const scale = (name: string) => Number(html.style.getPropertyValue(name)) || undefined;
+  return readAppearance({ theme: html.dataset.themePref, text_scale: scale('--mg-text-scale'), icon_scale: scale('--mg-icon-scale') });
+}
+
+let shown: Appearance = firstPaint();
 let watching: MediaQueryList | null = null;
 
 const onSystem = () => {
   if (shown.theme === 'system') show(shown);
 };
+
+/** "system" follows the system's light or dark as it changes (once a page). */
+function watchSystem(): void {
+  if (watching || typeof matchMedia !== 'function') return;
+  try {
+    watching = matchMedia(DARK_QUERY);
+    watching.addEventListener('change', onSystem);
+  } catch {
+    watching = null;
+  }
+}
+
+// A first paint of "system" follows it already, before the prefs answer.
+if (shown.theme === 'system') watchSystem();
 
 /** Puts a look on the page: html's attributes and scales, then 'cfd:appearance'. */
 function show(a: Appearance): void {
@@ -83,7 +112,7 @@ function show(a: Appearance): void {
   html.dataset.themePref = a.theme;
   html.style.setProperty('--mg-text-scale', String(a.text_scale));
   html.style.setProperty('--mg-icon-scale', String(a.icon_scale));
-  window.dispatchEvent(new CustomEvent('cfd:appearance', { detail: { theme, text_scale: a.text_scale, icon_scale: a.icon_scale } }));
+  window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT, { detail: { theme, text_scale: a.text_scale, icon_scale: a.icon_scale } }));
 }
 
 /**
@@ -92,15 +121,7 @@ function show(a: Appearance): void {
  */
 export function applyAppearance(next: Appearance, opts: { announce?: boolean } = {}): void {
   shown = readAppearance(next);
-  // "system" follows the system's light or dark as it changes.
-  if (shown.theme === 'system' && !watching && typeof matchMedia === 'function') {
-    try {
-      watching = matchMedia(DARK_QUERY);
-      watching.addEventListener('change', onSystem);
-    } catch {
-      watching = null;
-    }
-  }
+  if (shown.theme === 'system') watchSystem();
   show(shown);
   try {
     localStorage.setItem(APPEARANCE_KEY, JSON.stringify(shown));
@@ -126,6 +147,15 @@ export function currentAppearance(): Appearance {
 /** The theme the page shows now: light or dark. */
 export function currentTheme(): Theme {
   return resolveTheme(shown.theme);
+}
+
+/**
+ * The look as a plugin's workspace frame gets it (the bridge's welcome and `appearance` event): the
+ * theme on screen, the person's choice, the sizes. Never read off html: a light swap of html for
+ * one task (a picture) is not the look.
+ */
+export function frameAppearance(): FrameAppearance {
+  return { theme: currentTheme(), preference: shown.theme, textScale: shown.text_scale, iconScale: shown.icon_scale };
 }
 
 let syncing: BroadcastChannel | null = null;

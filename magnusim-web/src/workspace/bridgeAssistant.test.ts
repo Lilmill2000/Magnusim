@@ -3,10 +3,12 @@
 // (refusals, the stall window that progress and the page's calls in flight hold open, Stop with
 // its 2 s wait, the result's checks and caps, images read to base64), a leave and a closed
 // channel ending the call, and what the allowlist does with the new messages; then the real SDK
-// against this bridge, so both sides keep the same tools.
+// against this bridge, so both sides keep the same tools. Also the welcome's other 1.9 fields the
+// page follows: the panel's keys and the app's look.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { connect, type AssistantTool, type AssistantTurn, type StudyRecord } from '../plugin-sdk/workspace';
+import { connect, type Appearance, type AssistantTool, type AssistantTurn, type StudyRecord } from '../plugin-sdk/workspace';
 import { ASSISTANT_KEYS_EVENT } from '../keybinds/appKeys';
+import { APPEARANCE_EVENT } from '../theme/appearance';
 import {
   ASSISTANT_ABORT_WAIT_MS,
   ASSISTANT_ALIVE_MS,
@@ -1453,6 +1455,96 @@ describe("undo from the app's Assistant panel, and its key (1.9, unreleased)", (
     window.dispatchEvent(new CustomEvent(ASSISTANT_KEYS_EVENT));
     await settle(() => JSON.stringify(sdk.ws.context.assistantKeys) === '["Alt+KeyK"]', 'the SDK took the keys');
     sdk.end();
+  });
+
+  it("the welcome carries the app's look (hooks.appearance; none without the hook); a change on the window (APPEARANCE_EVENT) reaches the page once per look as appearance, and the real SDK shows it on <html>", async () => {
+    const h = hooks();
+    let look: Appearance = { theme: 'dark', preference: 'system', textScale: 1.15, iconScale: 1 };
+    // A new object each time, as frameAppearance() gives: the bridge compares looks, not objects.
+    h.appearance = vi.fn(() => ({ ...look }));
+    const t = await connected(h);
+    expect(t.welcome.context).toMatchObject({ appearance: look });
+    // The look shown again (a save of the same look, another tab's echo): the page has it already.
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    look = { theme: 'light', preference: 'system', textScale: 1.15, iconScale: 1 };
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    await settle(() => of(t.events, 'appearance').length === 1, 'the look');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(of(t.events, 'appearance').map((e) => e.data)).toEqual([look]);
+    t.end();
+    // No hook (an app without the look): the welcome has none, and the window's event reaches nothing.
+    const bare = await connected();
+    expect('appearance' in bare.welcome.context).toBe(false);
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(of(bare.events, 'appearance')).toHaveLength(0);
+    bare.end();
+    // The real SDK: the page's <html> has the look as it connects, and each change after.
+    const html = document.documentElement;
+    look = { theme: 'dark', preference: 'dark', textScale: 1, iconScale: 1.25 };
+    const sdk = await sdkConnected(h);
+    try {
+      expect(sdk.ws.context.appearance).toEqual(look);
+      expect([html.dataset.theme, html.dataset.themePref, html.style.getPropertyValue('--mg-icon-scale')]).toEqual(['dark', 'dark', '1.25']);
+      look = { theme: 'light', preference: 'light', textScale: 1.3, iconScale: 1 };
+      window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+      await settle(() => html.dataset.theme === 'light', 'the SDK showed the look');
+      expect(sdk.ws.context.appearance).toEqual(look);
+      expect(html.style.getPropertyValue('--mg-text-scale')).toBe('1.3');
+    } finally {
+      sdk.end();
+      delete html.dataset.theme;
+      delete html.dataset.themePref;
+      html.style.removeProperty('--mg-text-scale');
+      html.style.removeProperty('--mg-icon-scale');
+    }
+  });
+
+  it('a look changed while the welcome is being made: the welcome carries the newest, nothing goes before it, a later change goes once; a new hello on the same bridge sends no extra event', async () => {
+    const h = hooks();
+    const L1: Appearance = { theme: 'light', preference: 'light', textScale: 1, iconScale: 1 };
+    const L2: Appearance = { theme: 'dark', preference: 'dark', textScale: 1.3, iconScale: 1 };
+    let look = L1;
+    h.appearance = vi.fn(() => ({ ...look }));
+    // The context's reads held: the welcome waits for them.
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const answer = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        await gate;
+        return answer(input);
+      }),
+    );
+    const sent = vi.spyOn(FakePort.prototype, 'postMessage');
+    const looksSent = () => sent.mock.calls.filter(([d]) => (d as { event?: string } | null)?.event === 'appearance');
+    const pending = connected(h);
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    look = L2;
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    expect(looksSent()).toHaveLength(0);
+    release();
+    const t = await pending;
+    expect(t.welcome.context).toMatchObject({ appearance: L2 });
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(of(t.events, 'appearance')).toHaveLength(0);
+    look = L1;
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    await settle(() => of(t.events, 'appearance').length === 1, 'the change after the welcome');
+    expect(of(t.events, 'appearance')[0].data).toEqual(L1);
+    expect(looksSent()).toHaveLength(1);
+    // The page loads again (a new hello on the same bridge): its welcome has the look, and no event repeats it.
+    window.dispatchEvent(new MessageEvent('message', { data: { magnusim: 'hello', sdkVersion: '1.4.0', instance: 'i2' }, source: t.win }));
+    await vi.waitFor(() => expect(t.posted.length).toBe(2));
+    const again = t.posted[1] as [{ context: { appearance?: Appearance } }, unknown, FakePort[]];
+    expect(again[0].context.appearance).toEqual(L1);
+    window.dispatchEvent(new CustomEvent(APPEARANCE_EVENT));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(looksSent()).toHaveLength(1);
+    t.end();
   });
 
   it("the panel's messages are no work of a running leave's hook (NOT_HOOK_WORK)", async () => {

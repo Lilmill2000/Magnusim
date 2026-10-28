@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { jsonBodyLimit, PLUGIN_DATA_BODY_LIMIT } from '../http.ts';
 import { pluginSdkFile, pluginSdkInfo, SDK_FILES, SDK_IMPORTS } from '../plugin-sdk.ts';
 import { dispatch, Router } from '../router.ts';
-import { injectWorkspaceHead, isFrameAssetRequest, workspaceCsp } from '../workspace-files.ts';
+import { injectWorkspaceHead, isFrameAssetRequest, LOOK_SCRIPT, workspaceCsp } from '../workspace-files.ts';
 
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -31,11 +31,12 @@ test('a workspace page may load the SDK and its own folder, fetch only its own f
   assert.deepEqual(d['base-uri'], ["'none'"]);
   assert.deepEqual(d['form-action'], ["'none'"]);
   assert.deepEqual(d['img-src'], [own, 'data:', 'blob:']);
-  // Scripts: the SDK, its own files, blob workers, WASM, and the host's import map by hash; no eval, no inline script.
+  // Scripts: the SDK, its own files, blob workers, WASM, and the host's import map and pre-paint by
+  // hash; no eval, no other inline script.
   const scripts = d['script-src'];
   assert.deepEqual(scripts.slice(0, 4), [sdk, own, 'blob:', "'wasm-unsafe-eval'"]);
-  assert.match(scripts[4], /^'sha256-[A-Za-z0-9+/]+=*'$/);
-  assert.equal(scripts.length, 5);
+  for (const hash of scripts.slice(4)) assert.match(hash, /^'sha256-[A-Za-z0-9+/]+=*'$/);
+  assert.equal(scripts.length, 6);
   assert.ok(!scripts.includes("'unsafe-inline'") && !scripts.includes("'unsafe-eval'"));
   // Another plugin's folder, the app's API and the app's own scripts are none of these.
   const everything = Object.values(d).flat().join(' ');
@@ -43,18 +44,23 @@ test('a workspace page may load the SDK and its own folder, fetch only its own f
   assert.doesNotMatch(everything, /\/plugins\/(?!ws-demo\/workspace\/)/);
 });
 
-test("the host's import map goes first in the head, and the CSP allows exactly it", () => {
+test("the host's pre-paint and import map go first in the head, and the CSP allows exactly them", () => {
   const html = injectWorkspaceHead('<!doctype html><html><head><title>Bench</title></head><body></body></html>');
   const m = html.match(
-    /<head><script type="importmap">(.*?)<\/script><link rel="stylesheet" href="\/plugin-sdk\/theme.css"><link rel="stylesheet" href="\/plugin-sdk\/plugin-ui.css"><title>/,
+    /<head><script>(.*?)<\/script><script type="importmap">(.*?)<\/script><link rel="stylesheet" href="\/plugin-sdk\/theme.css"><link rel="stylesheet" href="\/plugin-sdk\/plugin-ui.css"><title>/,
   );
   assert.ok(m, html);
-  assert.deepEqual(JSON.parse(m[1]), { imports: SDK_IMPORTS });
-  const hash = createHash('sha256').update(m[1]).digest('base64');
-  assert.ok(workspaceCsp('h:1', 'k').includes(`'sha256-${hash}'`));
-  // A page without a head still gets them, first.
-  assert.match(injectWorkspaceHead('<p>x</p>'), /^<script type="importmap">/);
-  assert.match(injectWorkspaceHead('<HEAD lang="en"><p>x</p>'), /^<HEAD lang="en"><script type="importmap">/);
+  assert.equal(m[1], LOOK_SCRIPT);
+  assert.deepEqual(JSON.parse(m[2]), { imports: SDK_IMPORTS });
+  for (const text of [m[1], m[2]]) {
+    const hash = createHash('sha256').update(text).digest('base64');
+    assert.ok(workspaceCsp('h:1', 'k').includes(`'sha256-${hash}'`));
+  }
+  // A page without a head still gets them, first, but after its doctype (standards mode kept).
+  assert.match(injectWorkspaceHead('<p>x</p>'), /^<script>.*?<\/script><script type="importmap">/);
+  assert.match(injectWorkspaceHead('<HEAD lang="en"><p>x</p>'), /^<HEAD lang="en"><script>.*?<\/script><script type="importmap">/);
+  assert.match(injectWorkspaceHead('<!DOCTYPE html>\n<html><body><p>x</p>'), /^<!DOCTYPE html><script>.*?<\/script><script type="importmap">.*\n<html><body><p>x<\/p>$/s);
+  assert.match(injectWorkspaceHead('<!doctype html><p>x</p>', { theme: 'dark', text_scale: 1, icon_scale: 1 }), /^<!doctype html><meta name="magnusim-look" content="[^"]*"><script>/);
 });
 
 test('only GET/HEAD of the SDK and workspace folders skip the same-origin check', () => {

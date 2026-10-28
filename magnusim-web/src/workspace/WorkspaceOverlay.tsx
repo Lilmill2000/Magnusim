@@ -9,6 +9,7 @@ import { Toast, type ToastKind } from '../plugin-ui';
 import { prefersImperial } from '../prefs';
 import { pluginStudyScope } from '../scope';
 import { useProjectStore } from '../store/project';
+import { frameAppearance } from '../theme/appearance';
 import { newWorkspaceFrameId, offerWorkspaceUndo, publishWorkspaceTools, withdrawWorkspaceTools, workspaceDock, type ToolInvoke } from './assistantTools';
 import { WorkspaceBridge, WorkspaceCalls, type BridgeHooks, type BridgeScope } from './bridge';
 import {
@@ -628,6 +629,8 @@ function WorkspaceView({ route }: { route: WorkspaceRoute }) {
         return true;
       },
       assistantKeys: () => assistantKeys(),
+      // The app's look (1.9, unreleased): the frame's page follows it (the SDK sets its html).
+      appearance: () => frameAppearance(),
     };
     const bridge = new WorkspaceBridge(frame, new WorkspaceCalls(scope, bridgeHooks, launch), bridgeHooks);
     bridgeRef.current = bridge;

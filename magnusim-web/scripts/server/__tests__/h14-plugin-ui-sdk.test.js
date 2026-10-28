@@ -16,7 +16,7 @@ import { buildUiKitSheetJs, devSdkStamp, pluginSdkFile, SDK_FILES, SDK_IMPORTS }
 import { dispatch, Router } from '../router.ts';
 import { registerPhase3Routes } from '../routes.ts';
 import { kitExportNames, newestStamp } from '../sdk-build.ts';
-import { frameCsp, injectWorkspaceHead, workspaceCsp } from '../workspace-files.ts';
+import { frameCsp, injectWorkspaceHead, LOOK_SCRIPT, workspaceCsp } from '../workspace-files.ts';
 
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -120,11 +120,13 @@ test('the frame CSP: a workspace is frameCsp with its own folder, pinned directi
   // The hash is the import map's, which names the kit (A1 changed it on purpose).
   assert.equal(SDK_IMPORTS['@magnusim/plugin-ui'], '/plugin-sdk/plugin-ui.js');
   const hash = createHash('sha256').update(JSON.stringify({ imports: SDK_IMPORTS })).digest('base64');
+  // And the pre-paint's, which gives the page the app's look before its first paint (1.9, unreleased).
+  const look = createHash('sha256').update(LOOK_SCRIPT).digest('base64');
   const sdk = 'http://127.0.0.1:5173/plugin-sdk/';
   const pinned = (own) =>
     [
       "default-src 'none'",
-      `script-src ${sdk} ${own} blob: 'wasm-unsafe-eval' 'sha256-${hash}'`,
+      `script-src ${sdk} ${own} blob: 'wasm-unsafe-eval' 'sha256-${hash}' 'sha256-${look}'`,
       'worker-src blob:',
       `style-src ${sdk} ${own} 'unsafe-inline'`,
       `img-src ${own} data: blob:`,
@@ -161,7 +163,9 @@ test('the dev sheet frame files: 404 without the flag and in prod, served with i
       // Standards mode, like the page: the doctype stays first.
       assert.match(html, /^<!doctype html>/i);
       assert.match(html, /<meta charset="utf-8">/);
-      assert.match(html, /<head><script type="importmap">.*<\/script><link rel="stylesheet" href="\/plugin-sdk\/theme.css"><link rel="stylesheet" href="\/plugin-sdk\/plugin-ui.css">/);
+      assert.match(html, /<head><script>.*?<\/script><script type="importmap">.*<\/script><link rel="stylesheet" href="\/plugin-sdk\/theme.css"><link rel="stylesheet" href="\/plugin-sdk\/plugin-ui.css">/);
+      // The dev sheet carries no person's look: it paints light.
+      assert.doesNotMatch(html, /<meta name="magnusim-look"/);
       assert.match(html, /<script type="module" src="\/plugin-sdk\/ui-kit-sheet.js"><\/script>/);
       const js = await dev.get('/plugin-sdk/ui-kit-sheet.js');
       assert.equal(js.status, 200);

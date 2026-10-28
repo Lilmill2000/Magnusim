@@ -24,6 +24,16 @@ body {
   background: var(--mg-bg);
 }
 
+/* An element with a theme of its own (data-theme="light" in a dark page: a picture kept as a
+   file) takes its set's text and background, not the dark text it would inherit (a colour is
+   inherited as computed, not as a token). No specificity: the element's own rules win. Never
+   <html> (it always has a data-theme): a background there would stop body's from filling the
+   canvas, and a page that scrolls past its first screen would show html's. */
+:where([data-theme]:not(:root)) {
+  color: var(--mg-text);
+  background-color: var(--mg-bg);
+}
+
 h1,
 h2,
 h3 {
