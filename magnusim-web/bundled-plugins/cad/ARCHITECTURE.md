@@ -808,8 +808,8 @@ with the host once for the page's life, and its chip goes in the dock.
   - **One scale factor.** Every size of the ribbon (rows, icons, names,
     headings, gaps, the large buttons' widths, a group's width) follows
     `--cad-toolbar-scale` (`tokens.css`, 1); `setToolbarScale` (Toolbar.tsx) is
-    the one place the host's appearance setting ("toolbar icon size") is to be
-    wired in. At 1 the rows are 22 px, the small icons 18 px, the large 28 px
+    where the host's appearance sets it: `app/appearance.ts` gives it the icon
+    scale (and takes it away at 1). At 1 the rows are 22 px, the small icons 18 px, the large 28 px
     (Daniel found 16 / 24 small); `e2e/cad-toolbar-resize.spec.ts` checks the
     sizes follow the factor (1.25); `setToolbarScale` sends `cad:toolbar-scale`
     so the ribbon measures its fit again (review 6). Users
@@ -945,9 +945,51 @@ with the host once for the page's life, and its chip goes in the dock.
   `#d7e8ff`, panels 12 px, Done and Delete in the browser's own button font as
   in the core; outline icons (24 viewBox, stroke 1.7–1.8, `currentColor`).
   `e2e/cad-p1-document.spec.js` reads these from the core page and compares.
+- **Appearance (the dark set; owner decisions D1-D4, "CAD dark set" plan).** The
+  host's appearance (§9: unreleased, feature-detected) drives two things, and
+  CAD never sets `data-theme` itself (the host's SDK writes it, with
+  `color-scheme` and the scales, on `<html>`):
+  - **CSS.** `src/styles/tokens.css`: the light block is `:root,
+    [data-theme="light"]` (a `var()` in a custom property resolves where it is
+    declared); a token with an `--mg-*` equivalent aliases it as
+    `var(--mg-x, <exact light value>)`, so it follows the host's dark set by
+    itself and stays as it was on a host without the token; only literal tokens
+    have a `[data-theme="dark"]` value. Blue text uses `--mg-primary-ink` (D4:
+    in dark the `--mg-primary` fill is too dark for text); fills, lines and focus
+    rings keep `--mg-primary`. No CAD stylesheet paints a raw colour outside
+    `tokens.css` (a `var()` fallback aside). `tests/styles/tokens.test.ts` pins
+    the light values, the dark coverage and the dark contrast (on the host's
+    planned dark set until its `tokens.css` has one).
+  - **The 3D view.** `src/viewport/palette.ts` is the one place three.js code
+    takes colours from: `LIGHT` (the values below, exactly as before) and
+    `DARK`. D2: surfaces stay light (bodies, caps, picks and hover on faces,
+    plane and region tints); thin marks turn light (background `#1b1f27`, D3;
+    edges; triad, E4 assumed; sketch lines and points; reference axes and
+    points; measure; the arrows and the banana's guide). E1 (edges over light
+    faces) and E2 (sketch lines over them) are open: `DARK_LINE_OPTIONS` (a) pale,
+    (b) pale with a 1 px rim in the background colour (one more line per body or
+    solid sketch line, sharing its geometry), (c) a mid grey, the default until
+    Daniel picks; `window.__CAD__.appearance.darkLines('a' | 'b' | 'c' |
+    {edges, sketch})` switches them live for his review. `ViewportHandle.
+    setPalette` recolours at once (uniforms and material colours; sketch mode
+    draws its lines again), and each layer's `addLayer` `palette` hook (§10)
+    follows. `app/appearance.ts` is the one handler: the palette (a view made
+    later starts in it) and `--cad-toolbar-scale` from the icon scale.
+  - **Pictures stay light (D1).** `snapshot()` with a dark palette live paints
+    the edges, the triad and every layer it shows `LIGHT`, clears `LIGHT`'s
+    background, draws, and puts the live colours back in the same task (no
+    `await`, no frame: the view never shows a light frame); `html[data-theme]`
+    is never touched for a picture. The Assistant's sheet (`assistant/view.ts`)
+    is `LIGHT` too; STEP export and the host's thumbnails carry no theme.
+  - Tests: `tests/viewport/{palette,theme}.test.ts`,
+    `tests/sketch/overlay-palette.test.ts`, the dark cases in
+    `tests/features/extrude/panel.test.tsx`, `tests/viewport/snapshot-plain.test.ts`,
+    `tests/features/measure/marks-palette.test.ts`, `tests/lib/bridge-appearance.test.ts`,
+    `tests/app/{appearance,bootstrap}.test.ts*`; e2e `cad-dark-theme.spec.ts`
+    (shell), which gives the appearance as the newer SDK will (`setAppearance`).
 - Viewport: background `#f0f2f7`, body `#bdc9db` (Phong: ambient .16, diffuse
   .78, specular .22, power 28), edges `#0a0b0e` 2.4 px, pick `#2ec47e`, set
-  `#4884eb`, hover `#b2ccff`. **Mouse** (the core viewer's binding,
+  `#4884eb`, hover `#b2ccff` (the light palette, `LIGHT` in `palette.ts`). **Mouse** (the core viewer's binding,
   `src/workbench/runtime.js`; Daniel's decision of 2026-10-06, "Orbit like the
   main viewer", in model and sketch mode): left drag orbit wherever it starts,
   middle or Shift+left pan, wheel or right drag zoom, Alt+left always orbits,
@@ -1306,6 +1348,15 @@ with the host once for the page's life, and its chip goes in the dock.
   manifest's `links_geometry = true` on the Part study kind (§11).
 - Host API 1.6 (L3): the exit hook `ws.nav.onLeave` and the camera it returns
   (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`.
+- The host's appearance (planned, SDK 1.5, host API stays 1.8; not on this
+  base): `ws.context.appearance = {theme, preference, textScale, iconScale}`
+  and the `appearance` event with the same object; the SDK writes `data-theme`,
+  `color-scheme`, `--mg-text-scale` and `--mg-icon-scale` on the frame's
+  `<html>`. `Bridge.appearance()` / `theme()` / `onAppearance()` feature-detect
+  on `ctx.appearance`: an older host has none, and the Part stays light. The
+  host's dark `--mg-*` set and `--mg-primary-ink` come with its `theme.css`
+  (host commit 10caf36b); until then a dark `<html>` switches only CAD's literal
+  tokens (the e2e and a review on this base see light host chrome).
 - Host API 1.4 start actions, CAD on by default (Daniel's D33, after gate:l3-cad;
   the core half is 60bb971): no `default_enabled = false`, and one
   `[[start_actions]]` for the Part kind: "Design a part" on the empty project and
@@ -1693,7 +1744,7 @@ with the host once for the page's life, and its chip goes in the dock.
   image-set(url(data:...) 1x, url(data:...) 2x) x y, <keyword>` on the canvas (the OS draws them:
   no lag; the frame's CSP allows data: images; tools still ask for keywords, the overlay maps them),
   the crosshair with the tool's toolbar icon, an open hand (draggable, handles) and a closed hand
-  (dragging); white on a dark view (`cursorTone`: the host theme name or the view colour).
+  (dragging); white on a dark view (`cursorTone` of the view palette's background).
   Relation glyphs show for the selection only (`src/sketch/relations-view.ts` `relationShown`; a
   conflict always shows; a fillet arc's own while its radius arrow is up stay hidden); Show
   relations (`view.sketch-relations`, VIEW, Shift+R, `CommandDef.pressed`) shows all, ws.prefs key
@@ -1734,7 +1785,13 @@ with the host once for the page's life, and its chip goes in the dock.
   press captures the gesture), `rayAt`, `toPlane`, `pixelSize`, `onFrame`,
   `lineResolution`, `setPlanesBusy(owner, busy)` (whatever draws something
   other than bodies keeps Auto's origin planes hidden: the profile overlay does,
-  while a sketch is shown or sketch mode is on). A floating panel over the left
+  while a sketch is shown or sketch mode is on), `palette()` / `setPalette` (the
+  marks' colours, `src/viewport/palette.ts`: a layer builds its materials from
+  `palette()`, through `paletteOf(handle)`, LIGHT for a fake, and its
+  `addLayer` `palette` hook recolours what it draws, synchronously, on every
+  `setPalette` and around a picture taken while dark: LIGHT before it, the live
+  palette after; a layer the picture leaves out is not called for it; never
+  called when the layer is added). A floating panel over the left
   of the view carries `data-view-cover` (the left stack does): fit, the
   standard views and Normal to centre the part in the rest, re-aimed during the
   transition when a panel opens with it. They move the image's centre

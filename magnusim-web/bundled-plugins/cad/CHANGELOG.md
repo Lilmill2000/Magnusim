@@ -82,6 +82,18 @@ in the Part" in `README.md`.
   turns stop for the rest of it. Watching needs the Magnusim window shown: in a
   hidden or covered window its steps run without pauses.
 
+**Ready for a dark Magnusim.** Once Magnusim has its dark appearance (it is not
+in this version yet), the Part follows it:
+- The 3D view turns dark (`#1b1f27`) with light edges, sketch lines and points,
+  reference axes, the measure line and the orientation arrows; the parts keep
+  their light surfaces. Blue text in the Part uses the lighter blue made for
+  dark backgrounds.
+- Pictures stay light whatever the appearance: the Picture tool's PNG, the
+  Assistant's pictures, and anything else drawn off screen look exactly as in
+  light, and the view never flashes light while one is taken.
+- The toolbar's icons follow Magnusim's icon size.
+- On this version nothing changes: the Part looks exactly as before.
+
 ## 0.1.0 (October 2026)
 
 The first release. Magnusim CAD is a parametric part modeler built into
