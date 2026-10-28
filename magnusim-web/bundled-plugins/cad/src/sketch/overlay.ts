@@ -46,7 +46,7 @@ import { linkMenuItems } from './project/menu';
 // ux010 (DRAW)
 import { CLICK_PX } from '../viewport/colors';
 import { drawsConstruction } from './edit';
-import { cursorFor, cursorTone, sketchCursor } from './cursors';
+import { cursorFor, cursorTone, sketchCursor, type CursorTone } from './cursors';
 import { setFaceColours, setFaceOpacity } from '../viewport/onface';
 import { faceSketchInk, paletteOf, type MarkPalette } from '../viewport/palette';
 import { relationShown, relationsView } from './relations-view';
@@ -1117,12 +1117,16 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
           e.stopPropagation();
           canvas.dispatchEvent(new PointerEvent('pointerdown', e));
         });
+        // The grab hand takes the tone of what is under it, as the crosshair does (E2): set where the
+        // pointer comes onto the arrow and as it moves over it, not where it was when the arrow came.
+        el.addEventListener('pointerenter', (e) => aimHandle(el, e.clientX, e.clientY));
         el.addEventListener('pointermove', (e) => {
+          aimHandle(el, e.clientX, e.clientY);
           if (!canvas || e.buttons || typeof PointerEvent !== 'function') return;
           canvas.dispatchEvent(new PointerEvent('pointermove', e));
         });
         forwardWheel(el);
-        el.style.cursor = sketchCursor('grab', null, tone());
+        handleCursor(el, tone());
         html.append(el);
         rec = { el, at: h.at, dir: h.dir };
         handleEls.set(h.id, rec);
@@ -1482,7 +1486,20 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
    * in a dark view the light view's cursor, dark with a white halo (a white crosshair melts into a
    * face: 1.6:1 on the body colour, its faint rim aside), as the marks there take their light inks (E2).
    */
-  const tone = () => (followsFaces && pointerAt && handle.lightSurfaceAt?.(pointerAt[0], pointerAt[1]) ? 'light' : cursorTone(null, background));
+  const toneAt = (x: number, y: number) => (followsFaces && handle.lightSurfaceAt?.(x, y) ? 'light' : cursorTone(null, background));
+  const tone = () => (pointerAt ? toneAt(pointerAt[0], pointerAt[1]) : cursorTone(null, background));
+  /** A radius arrow's grab hand, in a tone (written only when it changes). */
+  const handCursors = new WeakMap<HTMLElement, string>();
+  function handleCursor(el: HTMLElement, t: CursorTone) {
+    const css = sketchCursor('grab', null, t);
+    if (handCursors.get(el) === css) return;
+    handCursors.set(el, css);
+    el.style.cursor = css;
+  }
+  /** The arrow's hand in the tone of what is under the pointer on it (client px). */
+  function aimHandle(el: HTMLElement, x: number, y: number) {
+    handleCursor(el, toneAt(x, y));
+  }
   /** ux010 (DRAW): the cursor value last given to the canvas. */
   let lastCursor = '';
   /** ux010 (DRAW): the active tool's toolbar icon (the command that presses for it), for the draw cursor. */
@@ -1685,7 +1702,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     // take the new colours (review round 1: they kept the old theme's, in a picture too).
     if (!gridKey) paintGrid();
     applyCursor();
-    for (const rec of handleEls.values()) rec.el.style.cursor = sketchCursor('grab', null, tone());
+    for (const rec of handleEls.values()) handleCursor(rec.el, tone());
     geo.changed();
   }
 

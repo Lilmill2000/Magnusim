@@ -27,6 +27,9 @@
 //    arrow, over a face and over the background.
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
 //    over a cap takes the face ink (the cap is a light surface), the one beyond it the dark one.
+//  - dark-follows-face-handle: a fillet's radius arrow over a face shows the light view's grab hand
+//    in dark, also after the theme changed with the pointer over the background (review: it kept
+//    the white hand of where the pointer had been).
 //  - dark-follows-face-lit: on a part of a dark colour (a navy body) the marks keep the dark inks,
 //    but over a face lit by a hover or a pick, and over the whole part selected (light blues and
 //    the pick green, light surfaces), a finished sketch's line and the measure's end take the
@@ -928,6 +931,61 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     const beside = await at1(page, s, [20, 55, 10], measure, measureFace);
     expect(onCap.ok, `the measure's end over the cap: the light view's blue (${onCap.d})`).toBe(true);
     expect(beside.ok, `the end beside the cut: the dark blue (${beside.d})`).toBe(true);
+    await page.keyboard.press('Escape');
+    await appearance(page, 'light');
+    expect(seen.errors).toEqual([]);
+  });
+
+  test("cad:dark-follows-face-handle a fillet's radius arrow over a face shows the light view's grab hand in dark, also after the theme changed with the pointer elsewhere", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    await addSolid(page, { size: [60, 60, 20] });
+    await page.keyboard.press('Escape');
+    await appearance(page, 'dark');
+    const click = async (p: V3) => {
+      await still(page);
+      const [x, y] = await modelOnPage(page, p);
+      await page.mouse.click(x, y);
+    };
+    // A 30 x 20 rectangle on the top face (z 20) from (10, 10); its corner (40, 30) filleted: the
+    // radius arrow points out of the corner, over the face.
+    await click([30, 30, 20]);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    await still(page);
+    await page.keyboard.press('r');
+    await click([10, 10, 20]);
+    const [rx, ry] = await modelOnPage(page, [36, 26, 20]);
+    await page.mouse.move(rx, ry, { steps: 3 });
+    await expect(frame.locator('[data-sketch-box="width"]')).toBeVisible();
+    await page.keyboard.type('30');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('20');
+    await page.keyboard.press('Enter');
+    await still(page);
+    await page.keyboard.press('Escape');
+    await runCommand(frame, 'sketch.fillet');
+    await click([40, 30, 20]);
+    await still(page);
+    const arrow = frame.locator('[data-sketch-handle]');
+    await expect(arrow).toHaveCount(1);
+    const hand = () => arrow.evaluate((el) => (el as HTMLElement).style.cursor);
+    const crosshair = () => workspaceFrame(page).evaluate(() => (document.querySelector('[data-cad-canvas]') as HTMLElement).style.cursor);
+    // Over the face: the light view's hand (its dark ink).
+    await arrow.hover();
+    await expect.poll(hand, { message: 'on the arrow over the face: the light tone' }).toContain('101828');
+    // The pointer over the background beside the block (the crosshair there white), the theme
+    // changes (the arrows are given the tone of where the pointer is), then the pointer goes onto
+    // the arrow: the light tone, of the face under it.
+    const [bx, by] = await modelOnPage(page, [-12, -12, 20]);
+    await page.mouse.move(bx, by, { steps: 3 });
+    await expect.poll(crosshair, { message: 'over the background: the white crosshair' }).not.toContain('101828');
+    await appearance(page, 'light');
+    await appearance(page, 'dark');
+    expect(await hand(), 'given the tone of the background, where the pointer is').not.toContain('101828');
+    await arrow.hover();
+    await expect.poll(hand, { message: 'after the theme change: the light tone over the face' }).toContain('101828');
+    await page.mouse.move(5, 5);
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await appearance(page, 'light');
     expect(seen.errors).toEqual([]);

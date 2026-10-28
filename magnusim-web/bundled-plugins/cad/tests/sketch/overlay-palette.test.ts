@@ -202,6 +202,45 @@ describe('sketch mode and the palette', () => {
     expect(v.canvas.style.cursor).toBe(dark);
   });
 
+  // Review: a fillet's radius arrow kept the grab hand of where the pointer was when the arrow came
+  // or the theme changed (white with the pointer off the view), also over a light face.
+  it("gives a radius arrow's grab hand the tone of what is under the pointer on it", async () => {
+    h = await sketchHarness(sketchOf(rectangle(0, 0, 40, 20)));
+    await h.idle();
+    await withDom();
+    const v = fakeHandle();
+    detach = attachOverlay(h.mode, v.handle);
+    v.setPalette(DARK);
+    h.tool('fillet');
+    h.click([40, 20]);
+    await h.idle();
+    const el = document.querySelector<HTMLElement>('[data-sketch-handle]')!;
+    expect(el, 'the radius arrow').toBeTruthy();
+    const on = (type: string, x: number) => el.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: 100 }));
+    // Made with the pointer off the view: the dark tone (white).
+    const white = el.style.cursor;
+    expect(white).toContain('grab');
+    expect(white).not.toContain('101828');
+    // The pointer comes onto it over a light face: the light view's hand, as the crosshair there.
+    v.overFace(true);
+    on('pointerenter', 430);
+    expect(el.style.cursor).toContain('101828');
+    // The theme changes with the pointer off the view, then it comes back onto the arrow.
+    v.setPalette(LIGHT);
+    v.setPalette(DARK);
+    expect(el.style.cursor).toBe(white);
+    on('pointerenter', 431);
+    expect(el.style.cursor).toContain('101828');
+    // Over the background: white again as it moves.
+    v.overFace(false);
+    on('pointermove', 432);
+    expect(el.style.cursor).toBe(white);
+    // Light: the light tone wherever it is.
+    v.setPalette(LIGHT);
+    on('pointermove', 433);
+    expect(el.style.cursor).toContain('101828');
+  });
+
   // Review round 1: drawGrid draws no new grid in a near edge-on view, and the one there kept the old
   // palette's colours: the light grid stayed bright on the dark view, and a picture taken while dark
   // showed the dark grid on its light background.
