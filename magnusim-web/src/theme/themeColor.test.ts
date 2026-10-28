@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { lightProbe, onAppearance, parseColor, themeColor, themeRgb01, themeRgb255 } from './themeColor';
+import { isDarkAt, lightProbe, onAppearance, parseColor, themeColor, themeRgb01, themeRgb255 } from './themeColor';
 import { darkTokenValues, readTokensCss, tokenValues } from '../test/kitCss';
 
 const light = tokenValues();
@@ -140,6 +140,22 @@ describe('themeRgb255 and themeRgb01', () => {
     expect(themeRgb01('--test-lifted')).toEqual([0x38 / 255, 0x84 / 255, 0xe6 / 255]);
     expect(warn).toHaveBeenCalled();
     expect(String(warn.mock.calls[0][0])).toMatch(/--test-lifted/);
+  });
+});
+
+describe('isDarkAt', () => {
+  it("follows the nearest data-theme: html's, or an island inside it (a light capture's)", () => {
+    const wrap = document.body.appendChild(document.createElement('div'));
+    const viewer = wrap.appendChild(document.createElement('div'));
+    expect(isDarkAt(viewer)).toBe(false);
+    html.setAttribute('data-theme', 'dark');
+    expect(isDarkAt(viewer)).toBe(true);
+    wrap.setAttribute('data-theme', 'light');
+    expect(isDarkAt(viewer)).toBe(false);
+    expect(themeRgb255('--mg-viewport-bg', viewer)).toEqual([0xf0, 0xf2, 0xf7]);
+    wrap.removeAttribute('data-theme');
+    expect(isDarkAt(viewer)).toBe(true);
+    expect(themeRgb255('--mg-viewport-bg', viewer)).toEqual([0x1b, 0x1f, 0x27]);
   });
 });
 

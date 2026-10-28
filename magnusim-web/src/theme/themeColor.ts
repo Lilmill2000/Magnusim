@@ -22,6 +22,11 @@ function themeOf(scope: Element): string {
   return scope.closest('[data-theme]')?.getAttribute('data-theme') ?? '';
 }
 
+/** Whether `scope` paints in the dark theme (its nearest data-theme, an island or html's, is dark). */
+export function isDarkAt(scope: Element): boolean {
+  return themeOf(scope) === 'dark';
+}
+
 // Tokens already warned about (DEV) as not defined where they were read: once each.
 const warnedUndefined = new Set<string>();
 

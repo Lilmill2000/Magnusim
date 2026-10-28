@@ -69,10 +69,11 @@ const CORE_SOURCES: Array<[token: string, selector: string, prop: string, pick?:
   ['--mg-z-tooltip', '.mat-k-tip', 'z-index'],
 ];
 
-// The 3D view's tokens (and the BC, refinement and analysis-area colours its faces share with the
-// chrome's swatches): no dark value until the 3D view turns dark with them.
+// The 3D view's surface and pick tokens (and the BC, refinement and analysis-area colours its faces
+// share with the chrome's swatches): the same in every theme (Daniel, 2026-10-27: the model's surfaces
+// stay light on the dark view). Its lines, edges, points and labels' glow have dark values (DARK_VIEW).
 const VIEW_TOKENS = [
-  ...['ink', 'edge', 'mesh-edge', 'face', 'face-dim', 'mesh-face', 'slice-face', 'selected', 'pick', 'pick-strong', 'candidate', 'region', 'marker', 'flash', 'halo'].map((n) => `--mg-viewport-${n}`),
+  ...['face', 'face-dim', 'mesh-face', 'slice-face', 'selected', 'pick', 'pick-strong', 'candidate', 'region', 'marker', 'flash'].map((n) => `--mg-viewport-${n}`),
   '--mg-capture-mask',
   ...['inlet', 'outlet', 'pressure', 'freestream', 'wall', 'symmetry', 'other', 'default'].map((n) => `--mg-bc-${n}`),
   '--mg-ref-surface',
@@ -157,11 +158,11 @@ describe('tokens.css', () => {
     }
   });
 
-  it("the dark set gives every light colour a dark value (the 3D view's later), and changes nothing but colours and shadows", () => {
+  it("the dark set gives every light colour a dark value (the 3D view's surfaces keep theirs), and changes nothing but colours and shadows", () => {
     const lightColours = Object.keys(tokens).filter((k) => isColour(tokens[k]));
     expect(lightColours.length).toBeGreaterThan(60);
     expect(lightColours.filter((k) => !(k in dark) && !VIEW_TOKENS.includes(k))).toEqual([]);
-    // Each 3D view token gets its dark value with the 3D view, and leaves this list then.
+    // The 3D view's surfaces and picks are the same in every theme.
     expect(VIEW_TOKENS.filter((k) => !(k in tokens) || k in dark)).toEqual([]);
     for (const [k, v] of Object.entries(dark)) {
       expect(k in tokens, `${k} is a light token too`).toBe(true);
@@ -175,6 +176,22 @@ describe('tokens.css', () => {
     for (const [k, v] of Object.entries(APPEARANCE_LIGHT)) expect(tokens[k], k).toBe(v);
     const chromeAndCharts = Object.keys(APPEARANCE_LIGHT).filter((k) => !VIEW_TOKENS.includes(k));
     expect(chromeAndCharts.filter((k) => !(k in dark))).toEqual([]);
+  });
+
+  it("the dark 3D view: lines and points read on its background, edges on the background and the light faces, mesh edges on the mesh faces, the labels' glow is the background", () => {
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrast = (a: string, b: string) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+    const bg = dark['--mg-viewport-bg'];
+    expect(contrast(dark['--mg-viewport-ink'], bg)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(dark['--mg-viewport-edge'], bg)).toBeGreaterThanOrEqual(3);
+    expect(contrast(dark['--mg-viewport-edge'], tokens['--mg-viewport-face'])).toBeGreaterThanOrEqual(2.5);
+    expect(contrast(dark['--mg-viewport-mesh-edge'], tokens['--mg-viewport-mesh-face'])).toBeGreaterThanOrEqual(4.5);
+    expect(dark['--mg-viewport-halo']).toBe(bg);
+    for (const axis of ['x', 'y', 'z']) expect(contrast(dark[`--mg-axis-${axis}`], bg), axis).toBeGreaterThanOrEqual(3);
+    expect(contrast(dark['--mg-pin'], bg)).toBeGreaterThanOrEqual(3);
   });
 
   // vtk, canvas and WebGPU read these through themeColor (src/theme/themeColor.ts), which takes rgb()
@@ -267,7 +284,6 @@ describe('tokens.css', () => {
     // A literal marked "fixed" (the same in every theme) is out of the count above, so each one is
     // listed here: a new one is a deliberate change to this list. By rule, as lines move.
     expect(fixed.map(byRule)).toEqual([
-      '.viewport-wrap { background: #f0f2f7 }',
       '.pt-rh-dot { border: #fff }',
       '.capture-frame { border: #fff }',
       '.cfr-corner { background: #fff }',
