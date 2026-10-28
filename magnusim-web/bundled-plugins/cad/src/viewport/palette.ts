@@ -11,12 +11,17 @@
 //   D3  the light background is #f0f2f7 everywhere, the dark one the host's dark
 //       --mg-viewport-bg #1b1f27 (E3: until Daniel says otherwise at the screenshot review).
 // Still open for Daniel: E1, the edge colour on light faces, and E2, sketch lines over light
-// faces. Each has three candidates (DARK_LINE_OPTIONS); darkPalette() takes the choice, and the
-// test handle (window.__CAD__.appearance.darkLines) switches it live so all three can be shown.
-// Until he picks, both are (c), the mid grey: it reads on the background and on light faces.
-// E4 (the triad's dark axis colours) is assumed yes; E5 keeps the region and plane tints.
-// tests/viewport/palette.test.ts pins LIGHT to the values before the dark set, DARK's marks to
-// at least 3:1 on its background, and both to the CSS tokens they mirror.
+// faces. Each has three candidates (DARK_LINE_OPTIONS, DARK_INKS); darkPalette() takes the
+// choice, and the test handle (window.__CAD__.appearance.darkLines) switches it live so all three
+// can be shown. E2 is every coloured thin mark that can lie on a face: each state of a sketch's
+// lines and points (both modes, the preview, guides and dimension lines too), the reference axes
+// and points, the measure line, the Extrude and Enclosure arrows and the banana's guide (review
+// round 1: it was only the fully defined lines, so an under-defined line on a face read 1.4:1 in
+// every candidate). Until he picks, both are (c): the mid tones read on the background and on a
+// light face alike. E4 (the triad's dark axis colours) is assumed yes; E5 keeps the region and
+// plane tints. tests/viewport/palette.test.ts pins LIGHT to the values before the dark set,
+// DARK's marks to at least 3:1 on its background, (c)'s on a body face too, and both palettes to
+// the CSS tokens they mirror.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { EDGE_COLOR, HOVER_COLOR, PICK_COLOR, TRIAD_COLORS, VIEWPORT_BG } from './colors';
@@ -47,13 +52,17 @@ export interface SketchInk {
  * E1 / E2 candidates for thin lines over light faces in a dark view: (a) the host's dark text
  * colour, plain; (b) the same with a 1 px rim in the background colour each side (one more line
  * drawn under each, sharing its geometry); (c) a mid grey that reads on both (5.3:1 on the
- * background, 1.85:1 on a body face).
+ * background, 1.85:1 on a body face). `color` is the edges' (E1) and a fully defined sketch
+ * line's (E2); the other E2 colours are DARK_INKS'.
  */
 export type DarkLineOption = 'a' | 'b' | 'c';
 export interface DarkLines {
   /** E1: the bodies' B-rep edges. */
   edges: DarkLineOption;
-  /** E2: sketch lines and points (the fully defined ones, the origin and the dimension lines; the rim under every sketch line). */
+  /**
+   * E2: every coloured thin mark that can lie on a face (DARK_INKS): the sketch's lines and points
+   * in every state, in sketch mode and model mode; (b)'s rim is under each of the sketch's.
+   */
   sketch: DarkLineOption;
 }
 export const DARK_LINE_OPTIONS: Readonly<Record<DarkLineOption, { color: number; rim: boolean }>> = {
@@ -63,6 +72,39 @@ export const DARK_LINE_OPTIONS: Readonly<Record<DarkLineOption, { color: number;
 };
 /** Until Daniel picks E1 and E2 (screenshot review): (c) for both. */
 export const DARK_LINES_DEFAULT: Readonly<DarkLines> = { edges: 'c', sketch: 'c' };
+
+/** The E2 colours of a dark palette (all but the fully defined one, DARK_LINE_OPTIONS' colour). */
+export interface DarkInks {
+  readonly constructLine: number;
+  readonly measure: number;
+  readonly ink: number;
+  readonly sketch: Readonly<Omit<SketchInk, 'fully' | 'dim' | 'pick' | 'hover' | 'grid' | 'gridMajor'>>;
+}
+
+/**
+ * E2 by candidate. (a) and (b): the host's dark tokens (--mg-primary-ink, --mg-danger,
+ * --mg-text-muted, --mg-warning, ...), light colours that read 5:1 and more on the background but
+ * only 1.1 to 1.9:1 on a body face (#bdc9db); (b)'s rim gives them the background around them
+ * there. (c): mid tones of the same hues, each about 3.2:1 on the background and 3:1 on a body
+ * face (light's own inks read 2.7 to 3.9:1 on a face), and construction and driven lines a darker
+ * grey than the fully defined mid grey (1.7:1 apart; dashed besides, for construction). The
+ * arrows, the reference axes and points, the measure line and the banana's guide take the blue.
+ */
+export const DARK_INKS: Readonly<Record<DarkLineOption, DarkInks>> = (() => {
+  const light: DarkInks = Object.freeze({
+    constructLine: 0x7aa7ff,
+    measure: 0x8fb5ff,
+    ink: 0x7aa7ff,
+    sketch: Object.freeze({ under: '#7aa7ff', over: '#f97066', construction: '#9aa4b2', preview: '#7aa7ff', driven: '#9aa4b2', doomed: '#f97066', linked: '#9b7bf0', lost: '#fdb022' }),
+  });
+  const mid: DarkInks = Object.freeze({
+    constructLine: 0x2e6bd8,
+    measure: 0x2e6bd8,
+    ink: 0x2e6bd8,
+    sketch: Object.freeze({ under: '#2e6bd8', over: '#cf3a30', construction: '#646d7e', preview: '#2e6bd8', driven: '#646d7e', doomed: '#cf3a30', linked: '#8551dc', lost: '#a85f12' }),
+  });
+  return Object.freeze({ a: light, b: light, c: mid });
+})();
 
 export interface MarkPalette {
   readonly name: 'light' | 'dark';
@@ -80,7 +122,7 @@ export interface MarkPalette {
   /** The primary blue as a mark: the Extrude and Enclosure arrows, the banana's snap guide. */
   readonly ink: number;
   readonly sketch: Readonly<SketchInk>;
-  /** A rim drawn under each sketch line (E2 option b): its colour, or null for none. */
+  /** A rim drawn under each of the sketch's lines and points (E2 option b): its colour, or null for none. */
   readonly sketchRim: string | null;
   /** The E1 / E2 candidates this palette was made with (DARK only; null for LIGHT). */
   readonly lines: Readonly<DarkLines> | null;
@@ -120,15 +162,16 @@ export const LIGHT: MarkPalette = Object.freeze({
 const DARK_BG = 0x1b1f27;
 
 /**
- * The dark palette with these E1 / E2 candidates (DARK is it with the default). Its blues and
- * reds are the host's dark tokens (--mg-primary-ink, --mg-primary-strong, --mg-danger, ...); a
- * pick and a hover keep their colours (they read on both backgrounds).
+ * The dark palette with these E1 / E2 candidates (DARK is it with the default): the edges' colour
+ * and rim are E1's, every coloured thin mark E2's (DARK_LINE_OPTIONS, DARK_INKS); a pick and a
+ * hover keep their colours (they read on both backgrounds), and so does the grid's subtlety.
  */
 export function darkPalette(lines: Partial<DarkLines> = {}): MarkPalette {
   const chosen: DarkLines = { ...DARK_LINES_DEFAULT, ...lines };
   const edge = DARK_LINE_OPTIONS[chosen.edges];
   const sk = DARK_LINE_OPTIONS[chosen.sketch];
-  const ink = hexString(sk.color);
+  const inks = DARK_INKS[chosen.sketch];
+  const fully = hexString(sk.color);
   return Object.freeze({
     name: 'dark',
     background: DARK_BG,
@@ -136,24 +179,17 @@ export function darkPalette(lines: Partial<DarkLines> = {}): MarkPalette {
     edgeRim: edge.rim ? DARK_BG : null,
     // E4: the host's dark axis colours (the light blue arrow reads only 2.99:1 on the dark background).
     triad: Object.freeze([0xff6b6b, 0x4cd07d, 0x6f9bff] as const),
-    constructLine: 0x7aa7ff,
-    measure: 0x8fb5ff,
-    ink: 0x7aa7ff,
+    constructLine: inks.constructLine,
+    measure: inks.measure,
+    ink: inks.ink,
     sketch: Object.freeze({
-      under: '#7aa7ff',
-      fully: ink,
-      over: '#f97066',
-      construction: '#9aa4b2',
+      ...inks.sketch,
+      fully,
+      dim: fully,
       pick: LIGHT.sketch.pick,
       hover: LIGHT.sketch.hover,
-      preview: '#7aa7ff',
-      dim: ink,
-      driven: '#9aa4b2',
       grid: '#2c323d',
       gridMajor: '#3a414e',
-      doomed: '#f97066',
-      linked: '#9b7bf0',
-      lost: '#fdb022',
     }),
     sketchRim: sk.rim ? hexString(DARK_BG) : null,
     lines: Object.freeze({ ...chosen }),

@@ -1,5 +1,6 @@
 // The measure line and its ends take the view's palette (features/measure/overlay.ts): the light
-// view's darker blue, the dark view's lighter one (--cad-p2-measure in each), recoloured live;
+// view's darker blue, the dark view's E2 blue (the default (c)'s mid blue, which reads on a body
+// face too; (a) and (b) the lighter --cad-p2-measure the label takes), recoloured live;
 // a picture leaves the measure out (SNAPSHOT_HIDDEN_LAYERS), so it never needs LIGHT for one.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Group, type Line, type Points } from 'three';
@@ -7,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createMeasureMarks } from '../../../src/features/measure/overlay';
 import type { ViewportHandle } from '../../../src/types/viewport';
 import { SNAPSHOT_HIDDEN_LAYERS } from '../../../src/viewport/snapshot';
-import { DARK, LIGHT, type MarkPalette } from '../../../src/viewport/palette';
+import { DARK, darkPalette, LIGHT, type MarkPalette } from '../../../src/viewport/palette';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -48,6 +49,8 @@ describe('the measure marks and the palette', () => {
     const d = fakeHandle(DARK);
     const dm = createMeasureMarks(d.handle);
     dm.show([0, 0, 0], [0, 5, 0], '5 mm');
+    expect(colours(d.group)).toEqual([0x2e6bd8, 0x2e6bd8]);
+    d.hooks.get('p2-measure')!(darkPalette({ sketch: 'a' }));
     expect(colours(d.group)).toEqual([0x8fb5ff, 0x8fb5ff]);
     dm.dispose();
   });

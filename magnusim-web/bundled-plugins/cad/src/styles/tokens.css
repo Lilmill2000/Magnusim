@@ -80,13 +80,19 @@
   /* Markers over the view (the pattern's instance badges). */
   --cad-marker-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
 
-  /* Sketch (proposal §3.3; P3) */
-  --cad-sketch-under: var(--mg-primary-ink, #1570ef);
-  --cad-sketch-full: var(--mg-text, #101828);
+  /* Sketch (proposal §3.3; P3): an over-defined sketch's words and marks */
   --cad-sketch-over: var(--mg-danger, #b42318);
-  /* P4b SELECT: linked sketch geometry (projected / intersection: purple, as SolidWorks and Fusion
-     show it), a lost reference (amber), and the selection box (enclose: solid blue; touch: dashed green). */
-  --cad-sketch-projected: #7a3fd1;
+  /* The keys to the colours the sketch's lines are drawn in (the Sketch panel's state dot, a
+     reference's dot): palette.ts' sketch inks (under: the core's blue accent, fully: its text,
+     over: red; P4b SELECT: linked geometry purple, as SolidWorks and Fusion show it, a lost
+     reference amber). In a dark view E2's candidate decides them (src/app/appearance.ts sets them
+     on <html> from the view's palette); the dark values below are the default's, (c). */
+  --cad-sketch-key-under: #1570ef;
+  --cad-sketch-key-full: #101828;
+  --cad-sketch-key-over: #b42318;
+  --cad-sketch-key-linked: #7a3fd1;
+  --cad-sketch-key-lost: #b54708;
+  /* P4b SELECT: a lost reference's words (amber), and the selection box (enclose: solid blue; touch: dashed green). */
   --cad-sketch-lost: var(--mg-warning, #b54708);
   --cad-box-enclose: var(--mg-primary-ink, #1570ef);
   --cad-box-enclose-fill: rgba(21, 112, 239, 0.08);
@@ -151,7 +157,12 @@
   --cad-vp-label-hover: #8fb5ff;
   --cad-marker-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 
-  --cad-sketch-projected: #9b7bf0;
+  /* E2's default, (c): the mid tones the lines take (palette.ts DARK_INKS). */
+  --cad-sketch-key-under: #2e6bd8;
+  --cad-sketch-key-full: #8a93a3;
+  --cad-sketch-key-over: #cf3a30;
+  --cad-sketch-key-linked: #8551dc;
+  --cad-sketch-key-lost: #a85f12;
   --cad-box-enclose-fill: rgba(122, 167, 255, 0.12);
   --cad-box-touch: #47cd89;
   --cad-box-touch-fill: rgba(71, 205, 137, 0.14);

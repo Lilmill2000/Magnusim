@@ -1,6 +1,7 @@
 /*
  * P4b SELECT: the Sketch panel's References (linked geometry) and the Project / Intersect blocks.
- * Purple as the curves are drawn (--cad-sketch-projected); a lost reference amber (--cad-sketch-lost).
+ * A reference's dot purple as its curves are drawn (--cad-sketch-key-linked); a lost one's dot amber
+ * (--cad-sketch-key-lost), its words in the lost reference's amber (--cad-sketch-lost).
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 .cad-sk-links {
@@ -29,12 +30,12 @@
   height: 8px;
   margin-right: 6px;
   border-radius: 50%;
-  background: var(--cad-sketch-projected);
+  background: var(--cad-sketch-key-linked);
   vertical-align: 0;
 }
 .cad-sk-link.is-lost .cad-sk-link-dot,
 .cad-sk-link.is-changed .cad-sk-link-dot {
-  background: var(--cad-sketch-lost);
+  background: var(--cad-sketch-key-lost);
 }
 .cad-sk-link-state {
   flex: 1 0 100%;

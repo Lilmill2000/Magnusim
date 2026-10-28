@@ -66,14 +66,27 @@ export function isClickDrag(heldMs: number, movedPx: number): boolean {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/**
+ * E2 option (b): every rim is drawn before every sketch line and point (the hover halo is 990, the
+ * lines 1000 and up), so a rim never cuts a line it crosses; only the face around the lines goes.
+ */
+const RIM_ORDER = 985;
+
 /** Fat lines in the sketch's plane (u, v, 0) with a colour per segment. */
 class Lines {
   readonly obj: LineSegments2;
   readonly mat: LineMaterial;
+  /**
+   * E2 option (b), for `rim` lines: a line in one colour under these, 1 px wider each side,
+   * sharing their geometry (dashed as they are), in `rimParent` (the plane frame of the geometry
+   * layer, so it is drawn before every line). Shown while setRim has a colour.
+   */
+  private readonly rim: LineSegments2 | null = null;
+  private rimOn = false;
   constructor(
     parent: Group,
     width: number,
-    opts: { dashed?: boolean; depthTest?: boolean; opacity?: number; order?: number; under?: boolean } = {},
+    opts: { dashed?: boolean; depthTest?: boolean; opacity?: number; order?: number; under?: boolean; rim?: Group } = {},
   ) {
     // Drawn in three.js' transparent pass (after the opaque bodies and in layer order), so the
     // profile shading of the layer below (order 20, translucent) never washes over sketch lines.
@@ -84,6 +97,17 @@ class Lines {
     this.obj.renderOrder = opts.order ?? 1000;
     this.obj.frustumCulled = false;
     parent.add(this.obj);
+    if (opts.rim) {
+      const m = new LineMaterial({ linewidth: width + 2, worldUnits: false, dashed: !!opts.dashed, transparent: true });
+      m.depthTest = this.mat.depthTest;
+      m.depthWrite = false;
+      this.rim = new LineSegments2(this.obj.geometry, m);
+      this.rim.name = 'sketch-rim';
+      this.rim.renderOrder = RIM_ORDER;
+      this.rim.frustumCulled = false;
+      this.rim.visible = false;
+      opts.rim.add(this.rim);
+    }
   }
   set(segs: { a: Vec2; b: Vec2; color: string }[]) {
     const pos = new Float32Array(Math.max(1, segs.length) * 6);
@@ -100,11 +124,34 @@ class Lines {
     this.obj.geometry.dispose();
     this.obj.geometry = g;
     this.obj.visible = segs.length > 0;
+    // The dashes' distances go into the shared geometry: the rim's dashes are the line's.
     if (this.mat.dashed) this.obj.computeLineDistances();
+    if (this.rim) {
+      this.rim.geometry = g;
+      this.rim.visible = this.rimOn && this.obj.visible;
+    }
+  }
+  /** The rim's colour (E2 option b), or null for none. */
+  setRim(color: string | null) {
+    if (!this.rim) return;
+    this.rimOn = color !== null;
+    if (color !== null) (this.rim.material as LineMaterial).color.setStyle(color);
+    this.rim.visible = this.rimOn && this.obj.visible;
+  }
+  /** Dash and gap lengths (model mm), the rim's with them. */
+  dash(dashSize: number, gapSize: number) {
+    for (const m of this.rim ? [this.mat, this.rim.material as LineMaterial] : [this.mat]) {
+      m.dashSize = dashSize;
+      m.gapSize = gapSize;
+    }
   }
   dispose() {
     this.obj.geometry.dispose();
     this.mat.dispose();
+    if (this.rim) {
+      this.rim.removeFromParent();
+      (this.rim.material as LineMaterial).dispose();
+    }
   }
 }
 
@@ -137,12 +184,21 @@ export function roundPoints(mat: PointsMaterial): PointsMaterial {
 class Dots {
   readonly obj: Points;
   readonly mat: PointsMaterial;
+  /** E2 option (b): a round dot in one colour under each, 2 px wider, sharing their geometry (shown while setRim has a colour). */
+  private readonly rim: Points;
+  private rimOn = false;
   constructor(parent: Group, size: number) {
     this.mat = roundPoints(new PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, depthTest: false, depthWrite: false, transparent: true }));
     this.obj = new Points(new BufferGeometry(), this.mat);
     this.obj.renderOrder = 1010;
     this.obj.frustumCulled = false;
     parent.add(this.obj);
+    this.rim = new Points(this.obj.geometry, roundPoints(new PointsMaterial({ size: size + 2, sizeAttenuation: false, depthTest: false, depthWrite: false, transparent: true })));
+    this.rim.name = 'sketch-rim';
+    this.rim.renderOrder = RIM_ORDER;
+    this.rim.frustumCulled = false;
+    this.rim.visible = false;
+    parent.add(this.rim);
   }
   set(pts: { at: Vec2; color: string }[]) {
     const pos = new Float32Array(pts.length * 3);
@@ -159,10 +215,20 @@ class Dots {
     this.obj.geometry.dispose();
     this.obj.geometry = g;
     this.obj.visible = pts.length > 0;
+    this.rim.geometry = g;
+    this.rim.visible = this.rimOn && this.obj.visible;
+  }
+  /** The rim's colour (E2 option b), or null for none. */
+  setRim(color: string | null) {
+    this.rimOn = color !== null;
+    if (color !== null) (this.rim.material as PointsMaterial).color.setStyle(color);
+    this.rim.visible = this.rimOn && this.obj.visible;
   }
   dispose() {
     this.obj.geometry.dispose();
     this.mat.dispose();
+    this.rim.removeFromParent();
+    (this.rim.material as PointsMaterial).dispose();
   }
 }
 
@@ -257,8 +323,8 @@ function unionUv(a: UvBox | null, b: UvBox | null): UvBox | null {
 
 export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => void {
   const { services } = mode;
-  // The sketch's colours by role, and the rim under its solid lines (E2 option b, else null): the
-  // view's palette (src/viewport/palette.ts), followed when it changes.
+  // The sketch's colours by role, and the rim under its lines and points (E2 option b, else null):
+  // the view's palette (src/viewport/palette.ts), followed when it changes.
   let pal = paletteOf(handle).sketch;
   let rimInk = paletteOf(handle).sketchRim;
   let background = paletteOf(handle).background;
@@ -280,18 +346,24 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   grid.mat.polygonOffset = true;
   grid.mat.polygonOffsetFactor = 2;
   grid.mat.polygonOffsetUnits = 8;
-  // E2 option (b): a rim in the background colour under the solid lines (1 px each side), under the hover halo.
-  const rim = new Lines(frame, 2.4 + 2, { order: 985 });
   const halo = new Lines(frame, 7, { opacity: 0.85, order: 990 });
+  // E2 option (b): each set of lines and the points below have a rim in the background colour
+  // (1 px each side, drawn before all of them, in this frame): on a light face they keep the
+  // background around them, whatever their state.
   // The core's edge width: the line's middle row is drawn in its colour, not blended (fully defined lines read #101828).
-  const solid = new Lines(frame, 2.4);
-  const dashed = new Lines(frame, 1.6, { dashed: true });
-  const preview = new Lines(frame, 1.6, { order: 1001 });
+  const solid = new Lines(frame, 2.4, { rim: frame });
+  const dashed = new Lines(frame, 1.6, { dashed: true, rim: frame });
+  const preview = new Lines(frame, 1.6, { order: 1001, rim: frame });
   // ux010 (DRAW): what is being drawn while construction drawing is on, dashed as it will be.
-  const previewDashed = new Lines(frame, 1.6, { dashed: true, order: 1001 });
-  const guides = new Lines(frame, 1, { dashed: true, order: 1002 });
+  const previewDashed = new Lines(frame, 1.6, { dashed: true, order: 1001, rim: frame });
+  const guides = new Lines(frame, 1, { dashed: true, order: 1002, rim: frame });
   const dots = new Dots(frame, 7);
-  const dimLines = new Lines(dimFrame, 1, { order: 1003 });
+  const dimLines = new Lines(dimFrame, 1, { order: 1003, rim: frame });
+  const rimmed = [solid, dashed, preview, previewDashed, guides, dimLines, dots];
+  const applyRim = () => {
+    for (const l of rimmed) l.setRim(rimInk);
+  };
+  applyRim();
   const html = ann.html;
   html.classList.add('cad-sketch-annotations');
   html.setAttribute('data-sketch-annotations', '1');
@@ -350,7 +422,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   function drawGeometry(v: SketchView) {
     const d = v.draft;
     if (!d) {
-      for (const l of [rim, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.set([]);
+      for (const l of [halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.set([]);
       dots.set([]);
       curvesUv = null;
       dimsUv = null;
@@ -385,14 +457,11 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       if (e.id === hov || related.has(e.id)) for (let i = 1; i < pts.length; i++) haloSegs.push({ a: pts[i - 1], b: pts[i], color: pal.hover });
     }
     solid.set(solidSegs);
-    rim.set(rimInk ? solidSegs.map((s) => ({ a: s.a, b: s.b, color: rimInk! })) : []);
     dashed.set(dashSegs);
     halo.set(haloSegs);
     const px = pxAt([0, 0]);
-    dashed.mat.dashSize = 6 * px;
-    dashed.mat.gapSize = 4 * px;
-    guides.mat.dashSize = 4 * px;
-    guides.mat.gapSize = 4 * px;
+    dashed.dash(6 * px, 4 * px);
+    guides.dash(4 * px, 4 * px);
     const pts: { at: Vec2; color: string }[] = [{ at: [0, 0], color: sel.has(ORIGIN) ? pal.pick : pal.fully }];
     // ux010 (DRAW): a point under a radius arrow (the fillet's virtual sharp lies on its line) is not
     // drawn while the arrow shows, so the arrow reads on its own.
@@ -463,8 +532,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const asConstruction = mode.drawConstruction && drawsConstruction(mode.tool?.id);
     preview.set(asConstruction ? [] : prevSegs);
     previewDashed.set(asConstruction ? prevSegs : []);
-    previewDashed.mat.dashSize = 6 * px;
-    previewDashed.mat.gapSize = 4 * px;
+    previewDashed.dash(6 * px, 4 * px);
     guides.set(guideSegs);
     dots.set(pts);
     drawDimensions(v);
@@ -1606,12 +1674,14 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   // ------------------------------------------------------------ theme
   /**
    * The view's palette changed (the host's theme; LIGHT around a picture and back): the lines, the
-   * points, the grid and the dimension lines drawn again in its colours, now, and the cursors in
-   * its tone. The HTML (glyphs, dimension values, boxes) follows the CSS tokens.
+   * points, the grid and the dimension lines drawn again in its colours, now, their rims shown or
+   * hidden, and the cursors in its tone. The HTML (glyphs, dimension values, boxes) follows the
+   * CSS tokens.
    */
   function recolour(p: MarkPalette) {
     pal = p.sketch;
     rimInk = p.sketchRim;
+    applyRim();
     background = p.background;
     gridKey = '';
     drawGeometry(mode.view.get());
@@ -1680,7 +1750,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     popTool();
     mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);
-    for (const l of [grid, rim, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.dispose();
+    for (const l of [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.dispose();
     dots.dispose();
     for (const o of [...frame.children, ...dimFrame.children] as Object3D[]) o.removeFromParent();
     geo.dispose();

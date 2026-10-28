@@ -226,7 +226,10 @@ describe('Extrude panel', () => {
     const a = await opened();
     const arrows = () => new Set(a.vp.layers.get('extrude.handle')!.group.children.filter((g) => g.name === 'extrude-arrow').flatMap((g) => g.children.map((m) => (m as unknown as { material: { color: { getHex(): number } } }).material.color.getHex())));
     expect(arrows()).toEqual(new Set([0x1570ef]));
+    // E2's default (c): its mid blue (it reads on a body face too); (a): the host's light ink blue.
     act(() => a.vp.setPalette(DARK));
+    expect(arrows()).toEqual(new Set([0x2e6bd8]));
+    act(() => a.vp.setPalette(darkPalette({ sketch: 'a' })));
     expect(arrows()).toEqual(new Set([0x7aa7ff]));
     act(() => a.vp.setPalette(LIGHT));
     expect(arrows()).toEqual(new Set([0x1570ef]));
@@ -449,12 +452,13 @@ describe('the profile overlay and the sketch row', () => {
   });
 
   // The dark set: a finished sketch's lines take the view's dark palette at once (the same lines,
-  // recoloured), E2's candidate (b) puts a rim under the solid ones, and LIGHT gives them back.
+  // recoloured), E2's candidate (b) puts a rim under each, dashed under a construction line, and
+  // LIGHT gives them back.
   it("draws the lines in the dark palette's inks, a rim with E2 (b), and the light colours back", async () => {
     const a = await withSketch();
-    const kids = () => a.vp.layers.get('profiles.sketches')!.group.children as unknown as { name: string; visible: boolean; material: { color: { getHex(): number }; linewidth: number }; geometry: { attributes: { instanceStart: { count: number } } } }[];
+    const kids = () => a.vp.layers.get('profiles.sketches')!.group.children as unknown as { name: string; visible: boolean; material: { color: { getHex(): number }; linewidth: number; dashed: boolean }; geometry: { attributes: { instanceStart: { count: number } } } }[];
     const colours = () => kids().filter((c) => c.name.startsWith('sketch:')).map((c) => [c.material.color.getHex(), c.geometry.attributes.instanceStart.count]);
-    const rims = () => kids().filter((c) => c.name.startsWith('sketch-rim:') && c.visible).map((c) => [c.material.color.getHex(), c.material.linewidth, c.geometry.attributes.instanceStart.count]);
+    const rims = () => kids().filter((c) => c.name.startsWith('sketch-rim:') && c.visible).map((c) => [c.material.color.getHex(), c.material.linewidth, c.geometry.attributes.instanceStart.count, c.material.dashed]);
     let s = null as unknown as ReturnType<typeof a.doc.beginEdit>;
     act(() => void (s = a.doc.beginEdit('f_sk')));
     act(() => s.update({ solved: { values: { c_1: 20, c_2: 10 }, dof: 3, state: 'under', fully: ['e_1', 'e_2', 'e_3', 'e_4'] } } as Partial<Feature>));
@@ -466,8 +470,9 @@ describe('the profile overlay and the sketch row', () => {
     ]);
     const lines = kids().slice();
     act(() => a.vp.setPalette(DARK));
+    // E2's default (c): the under-defined lines its mid blue, the fully defined ones its mid grey.
     expect(colours()).toEqual([
-      [0x7aa7ff, 3],
+      [0x2e6bd8, 3],
       [DARK_LINE_OPTIONS[DARK.lines!.sketch].color, 4],
     ]);
     expect(kids()).toEqual(lines);
@@ -478,13 +483,24 @@ describe('the profile overlay and the sketch row', () => {
       [0xe6e9ef, 4],
     ]);
     expect(rims()).toEqual([
-      [0x1b1f27, 3.6, 3],
-      [0x1b1f27, 3.6, 4],
+      [0x1b1f27, 3.6, 3, false],
+      [0x1b1f27, 3.6, 4, false],
+    ]);
+    // A construction line (dashed, 1 px): its rim is dashed as it is, 1 px wider each side.
+    act(() => void (s = a.doc.beginEdit('f_sk')));
+    act(() => s.update({ entities: (s.draft as unknown as { entities: { id: string }[] }).entities.map((e) => (e.id === 'e_5' ? { ...e, construction: true } : e)) } as Partial<Feature>));
+    act(() => s.commit());
+    await a.settle();
+    expect(rims()).toEqual([
+      [0x1b1f27, 3.6, 2, false],
+      [0x1b1f27, 3.6, 4, false],
+      [0x1b1f27, 3, 1, true],
     ]);
     act(() => a.vp.setPalette(LIGHT));
     expect(colours()).toEqual([
-      [0x1570ef, 3],
+      [0x1570ef, 2],
       [0x101828, 4],
+      [0x667085, 1],
     ]);
     expect(rims()).toEqual([]);
   });

@@ -13,12 +13,17 @@
 //    is left behind.
 //  - dark-sketch: with a sketch open, its lines and its draw cursor recolour without a reload,
 //    and come back in light.
+//  - dark-sketch-face: a sketch on a body's face (review round 1: E2 covered only the fully
+//    defined lines): an under-defined line, the line tool's rubber band and a lost reference's
+//    amber read on the light face in E2's default (c), (b) puts the background around them, and
+//    the Sketch panel's keys (the state dot, the reference's dot) are the colours the lines are
+//    drawn in, whatever the candidate.
 //  - dark-lines: E1 / E2's switch (window.__CAD__.appearance.darkLines) draws each candidate's edge
 //    colour, (b) with a rim, for Daniel's screenshot review.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
-import { addSketch, addSolid, newPartFromTree, newProject, openProject, partOpened, runCommand, setAppearance, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, featureRowNamed, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, setAppearance, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
 
 type V3 = [number, number, number];
@@ -34,7 +39,9 @@ const PALE: RGB = [0xe6, 0xe9, 0xef];
 const GREY: RGB = [0x8a, 0x93, 0xa3];
 const LIGHT_FULL: RGB = [0x10, 0x18, 0x28];
 const LIGHT_UNDER: RGB = [0x15, 0x70, 0xef];
-const DARK_UNDER: RGB = [0x7a, 0xa7, 0xff];
+/** E2's under-defined blue: (c)'s mid tone (the default), (a) and (b)'s light ink. */
+const DARK_UNDER: RGB = [0x2e, 0x6b, 0xd8];
+const PALE_UNDER: RGB = [0x7a, 0xa7, 0xff];
 
 const dist = (a: ArrayLike<number>, i: number, c: RGB) => Math.max(Math.abs(a[i] - c[0]), Math.abs(a[i + 1] - c[1]), Math.abs(a[i + 2] - c[2]));
 
@@ -393,7 +400,12 @@ test('cad:dark-sketch an open sketch recolours its lines and its draw cursor liv
 
   await appearance(page, 'dark');
   const line1 = await shoot(page, clip);
-  expect(share(line1, lk.edge, DARK_UNDER, 24), "the line in the dark palette's blue").toBeGreaterThan(0.8);
+  expect(share(line1, lk.edge, DARK_UNDER, 24), "the line in the dark palette's blue (E2's default, the mid blue)").toBeGreaterThan(0.8);
+  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('a'));
+  await still(page);
+  expect(share(await shoot(page, clip), lk.edge, PALE_UNDER, 24), "(a): the host's light blue").toBeGreaterThan(0.8);
+  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('c'));
+  await still(page);
   expect(share(line1, lk.bg, DARK_BG, 30), 'the background (and its grid) dark').toBeGreaterThan(0.9);
   const darkCursor = await cursor();
   expect(darkCursor, 'the draw cursor in the dark tone (white ink)').not.toBe(lightCursor);
@@ -403,6 +415,169 @@ test('cad:dark-sketch an open sketch recolours its lines and its draw cursor liv
   const line2 = await shoot(page, clip);
   expect(unchanged(line0, line2, [...lk.edge, ...lk.bg, ...lk.face]), 'every pixel as it was in light').toBeGreaterThan(0.99);
   expect(await cursor()).toBe(lightCursor);
+});
+
+/** WCAG contrast of two colours. */
+function contrastOf(a: RGB, b: RGB): number {
+  const lum = (c: RGB) =>
+    c
+      .map((v) => v / 255)
+      .map((x) => (x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4)))
+      .reduce((s, x, i) => s + x * [0.2126, 0.7152, 0.0722][i], 0);
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+const hexRgb = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const cssRgb = (h: string) => { const [r, g, b] = hexRgb(h); return `rgb(${r}, ${g}, ${b})`; };
+const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : 0);
+
+test('cad:dark-sketch-face on a body face, every sketch state reads in dark (E2 covers all), (b) rims them, and the panel keys are the lines\' colours', async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  const f = workspaceFrame(page);
+  // A 40 x 40 x 20 block, and a 10 mm cube on its top face (to project, then lose).
+  await addSolid(page, { size: [40, 40, 20] });
+  await addSolid(page, { at: [25, 25, 20], size: [10, 10, 10] });
+  await still(page);
+  const click = async (p: V3) => {
+    await still(page);
+    const [x, y] = await modelOnPage(page, p);
+    await page.mouse.click(x, y);
+  };
+  // A sketch on the block's top face (z 20), the cube's top face projected into it.
+  await click([8, 8, 20]);
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await still(page);
+  await openSketchDetails(page, frame);
+  await page.keyboard.press('p');
+  await click([30, 30, 30]);
+  await still(page);
+  const links = frame.locator('[data-sketch-links] [data-link]');
+  await expect(links).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  // An under-defined line on the face.
+  await page.keyboard.press('l');
+  await click([5, 8, 20]);
+  await click([18, 14, 20]);
+  await page.keyboard.press('Escape');
+  await still(page);
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+  // The cube suppressed: its square is a lost reference, amber, where the cube stood on the face.
+  await featureRowNamed(frame, 'Extrude 2').locator('> .tree-row').click({ button: 'right' });
+  await frame.locator('[data-cad-menu] [data-menu-item="suppress"]').click();
+  await f.waitForFunction(
+    () => {
+      const st = (window as unknown as W).__CAD__.services.doc.state.get();
+      return st.rebuild.status === 'done' && st.doc.features.every((x: { id: string }) => st.rebuild.features[x.id] && st.rebuild.features[x.id].state !== 'pending');
+    },
+    null,
+    { timeout: 60_000 },
+  );
+  await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]').last().locator('> .tree-row').dblclick();
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await still(page);
+  await expect(links.first()).toHaveAttribute('data-link-state', 'lost');
+  // The line tool's rubber band from (5, 30) to the pointer at (18, 35), on the face.
+  await page.keyboard.press('l');
+  await click([5, 30, 20]);
+  const [mx, my] = await modelOnPage(page, [18, 35, 20]);
+  await page.mouse.move(mx, my, { steps: 4 });
+  await still(page);
+
+  // The marks, in model mm on the face: the under-defined line, the rubber band, the lost square's lower side.
+  const MARKS: { name: string; ink: 'under' | 'preview' | 'lost'; a: V3; b: V3 }[] = [
+    { name: 'under-defined line', ink: 'under', a: [5, 8, 20], b: [18, 14, 20] },
+    { name: 'rubber band', ink: 'preview', a: [5, 30, 20], b: [18, 35, 20] },
+    { name: 'lost reference', ink: 'lost', a: [25, 25, 20], b: [35, 25, 20] },
+  ];
+  const clip = await clipAround(page, [
+    [0, 0, 20],
+    [40, 40, 20],
+  ], 4);
+  const onClip = async (p: V3) => {
+    const [x, y] = await modelOnPage(page, p);
+    return [x - clip.x, y - clip.y] as [number, number];
+  };
+  const along = await Promise.all(MARKS.map(async (m) => ({ ...m, s: await onClip(m.a), e: await onClip(m.b) })));
+  const faceAt = await Promise.all(([[12, 22, 20], [30, 12, 20]] as V3[]).map(onClip));
+  type Img = { width: number; height: number; data: Uint8Array };
+  const px = (img: Img, x: number, y: number): RGB => {
+    const i = 4 * (Math.round(y) * img.width + Math.round(x));
+    return [img.data[i], img.data[i + 1], img.data[i + 2]];
+  };
+  /** The bare face's colour (two patches clear of every mark). */
+  const faceOf = (img: Img): RGB => {
+    const all: RGB[] = [];
+    for (const [x, y] of faceAt) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) all.push(px(img, x + dx, y + dy));
+    return [0, 1, 2].map((k) => median(all.map((c) => c[k]))) as RGB;
+  };
+  /**
+   * Along a mark's middle (20%-80%): the pixel nearest its ink in each 5 x 5 window, and whether the
+   * window holds a pixel near the dark background (a rim) - per sample.
+   */
+  const read = (img: Img, m: (typeof along)[number], ink: RGB) => {
+    const out: { ink: RGB; d: number; rim: boolean }[] = [];
+    for (let k = 0; k <= 12; k++) {
+      const t = 0.2 + (0.6 * k) / 12;
+      const cx = m.s[0] + (m.e[0] - m.s[0]) * t;
+      const cy = m.s[1] + (m.e[1] - m.s[1]) * t;
+      let best: RGB = [0, 0, 0];
+      let bestD = Infinity;
+      let rim = false;
+      for (let dy = -2; dy <= 2; dy++)
+        for (let dx = -2; dx <= 2; dx++) {
+          const c = px(img, cx + dx, cy + dy);
+          const d = Math.max(...c.map((v, j) => Math.abs(v - ink[j])));
+          if (d < bestD) [best, bestD] = [c, d];
+          if (Math.max(...c.map((v, j) => Math.abs(v - DARK_BG[j]))) <= 60) rim = true;
+        }
+      out.push({ ink: best, d: bestD, rim });
+    }
+    return out;
+  };
+  const palette = () => f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.palette().sketch as Record<string, string>);
+  const keys = () =>
+    f.evaluate(() => ({
+      state: getComputedStyle(document.querySelector('[data-cad-panel="sketch"] .cad-sk-state-dot')!).backgroundColor,
+      lost: getComputedStyle(document.querySelector('[data-sketch-links] [data-link-state="lost"] .cad-sk-link-dot')!).backgroundColor,
+      under: document.querySelector('[data-cad-panel="sketch"] [data-sketch-state]')!.getAttribute('data-sketch-state'),
+    }));
+
+  // Light, as always: the panel's keys are LIGHT's inks.
+  expect(await keys()).toEqual({ state: cssRgb('#1570ef'), lost: cssRgb('#b54708'), under: 'under' });
+  await appearance(page, 'dark');
+  const results: Record<string, Record<string, { drawn: number; contrast: number; rims: number }>> = {};
+  for (const option of ['c', 'a', 'b'] as const) {
+    await f.evaluate((o) => (window as unknown as W).__CAD__.appearance.darkLines(o), option);
+    await still(page);
+    const pal = await palette();
+    const img = await shoot(page, clip);
+    const face = faceOf(img);
+    results[option] = {};
+    for (const m of along) {
+      const ink = hexRgb(pal[m.ink]);
+      const r = read(img, m, ink);
+      const drawn = r.filter((x) => x.d <= 30);
+      results[option][m.name] = { drawn: drawn.length / r.length, contrast: median(drawn.map((x) => contrastOf(x.ink, face))), rims: r.filter((x) => x.rim).length / r.length };
+    }
+    // The keys: the colours the lines are drawn in now (the sketch is under-defined; its reference lost).
+    expect(await keys(), `(${option}) the panel's keys`).toEqual({ state: cssRgb(pal.under), lost: cssRgb(pal.lost), under: 'under' });
+  }
+  for (const m of MARKS) {
+    for (const o of ['a', 'b', 'c'] as const) expect(results[o][m.name].drawn, `(${o}) the ${m.name} is drawn in its ink on the face: ${JSON.stringify(results[o][m.name])}`).toBeGreaterThan(0.5);
+    // (c), the default: the mid tone reads on the face (light's own inks read 2.7 to 3.9:1 there).
+    expect(results.c[m.name].contrast, `(c) the ${m.name} on the face: ${JSON.stringify(results.c[m.name])}`).toBeGreaterThan(2.4);
+    // (b): the background colour around it on the face; (a) and (c) draw none.
+    expect(results.b[m.name].rims, `(b) the ${m.name} has its rim: ${JSON.stringify(results.b[m.name])}`).toBeGreaterThan(0.6);
+    for (const o of ['a', 'c'] as const) expect(results[o][m.name].rims, `(${o}) the ${m.name} has no rim`).toBeLessThan(0.1);
+  }
+  console.log(`[dark-sketch-face] ${JSON.stringify(results)}`);
+  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('c'));
+  await appearance(page, 'light');
+  expect(await keys()).toEqual({ state: cssRgb('#1570ef'), lost: cssRgb('#b54708'), under: 'under' });
+  await page.keyboard.press('Escape');
+  expect(seen.errors).toEqual([]);
 });
 
 test("cad:dark-lines E1 / E2's switch draws each candidate's edge colour, (b) with a rim, for the owner's review", async ({ page, request }) => {

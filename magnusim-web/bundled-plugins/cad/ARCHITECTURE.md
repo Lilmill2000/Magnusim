@@ -966,15 +966,24 @@ with the host once for the page's life, and its chip goes in the dock.
     plane and region tints); thin marks turn light (background `#1b1f27`, D3;
     edges; triad, E4 assumed; sketch lines and points; reference axes and
     points; measure; the arrows and the banana's guide). E1 (edges over light
-    faces) and E2 (sketch lines over them) are open: `DARK_LINE_OPTIONS` (a) pale,
-    (b) pale with a 1 px rim in the background colour (one more line per body or
-    solid sketch line, sharing its geometry), (c) a mid grey, the default until
-    Daniel picks; `window.__CAD__.appearance.darkLines('a' | 'b' | 'c' |
-    {edges, sketch})` switches them live for his review. `ViewportHandle.
-    setPalette` recolours at once (uniforms and material colours; sketch mode
-    draws its lines again), and each layer's `addLayer` `palette` hook (§10)
-    follows. `app/appearance.ts` is the one handler: the palette (a view made
-    later starts in it) and `--cad-toolbar-scale` from the icon scale.
+    faces) and E2 (every coloured thin mark that can lie on a face: the sketch's
+    lines and points in every state and both modes, preview, guides and
+    dimension lines included, the reference axes and points, the measure line,
+    the arrows and the banana's guide) are open: `DARK_LINE_OPTIONS` and
+    `DARK_INKS`, (a) the host's light dark-theme inks, (b) the same with a 1 px
+    rim in the background colour (one more line per body, per sketch line set
+    and under the sketch's points, sharing their geometry; the arrows, axes and
+    measure line have none), (c) mid tones that read on the background and on a
+    body face alike (fully defined `#8a93a3`, construction and driven a darker
+    grey), the default until Daniel picks; `window.__CAD__.appearance.darkLines(
+    'a' | 'b' | 'c' | {edges, sketch})` switches them live for his review.
+    `ViewportHandle.setPalette` recolours at once (uniforms and material
+    colours; sketch mode draws its lines again), and each layer's `addLayer`
+    `palette` hook (§10) follows. `app/appearance.ts` is the one handler: the
+    palette (a view made later starts in it), the keys to the sketch's line
+    colours (`--cad-sketch-key-*`: the Sketch panel's state dot and a
+    reference's dot, set on `<html>` from the palette while it is dark) and
+    `--cad-toolbar-scale` from the icon scale.
   - **Pictures stay light (D1).** `snapshot()` with a dark palette live paints
     the edges, the triad and every layer it shows `LIGHT`, clears `LIGHT`'s
     background, draws, and puts the live colours back in the same task (no
@@ -1696,10 +1705,10 @@ with the host once for the page's life, and its chip goes in the dock.
   plane cuts them ("The sketch plane doesn't cut Body 2." for a miss). Linked
   entities are ordinary entities tagged `link` (§6): the solver fixes them, so
   dimensions, relations, regions and trim-against work unchanged; drawn purple
-  (`--cad-sketch-projected`); re-read at every rebuild
+  (the palette's `linked` ink; its key `--cad-sketch-key-linked`); re-read at every rebuild
   (`reprojectLinks` before the sketch solves; what is constrained to them
   follows). A source that is gone keeps its entities where they were, drawn
-  amber (`--cad-sketch-lost`), with "Lost reference: <what> not found after
+  amber (the palette's `lost` ink; its key `--cad-sketch-key-lost`), with "Lost reference: <what> not found after
   rebuild" in the References rows and the panel's foot, and the sketch still
   builds ("Don't block, just report"). A face, silhouette or section that now
   gives other curves says "changed: open Sketch N to update it". Break link

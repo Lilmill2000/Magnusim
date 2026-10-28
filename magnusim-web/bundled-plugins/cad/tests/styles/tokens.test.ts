@@ -59,10 +59,15 @@ const LIGHT_BEFORE: Record<string, string> = {
   '--cad-vp-label': '#4a5160',
   '--cad-vp-label-hover': '#1a4fbf',
   '--cad-marker-shadow': '0 1px 3px rgba(16, 24, 40, 0.18)',
-  '--cad-sketch-under': '#1570ef',
-  '--cad-sketch-full': '#101828',
   '--cad-sketch-over': '#b42318',
-  '--cad-sketch-projected': '#7a3fd1',
+  // The keys to the sketch's line colours: the colours the state dot and a reference's dot painted
+  // before (--cad-sketch-under, --cad-sketch-full, --cad-sketch-over, --cad-sketch-projected and
+  // --cad-sketch-lost then), which a dark view's E2 candidate now decides.
+  '--cad-sketch-key-under': '#1570ef',
+  '--cad-sketch-key-full': '#101828',
+  '--cad-sketch-key-over': '#b42318',
+  '--cad-sketch-key-linked': '#7a3fd1',
+  '--cad-sketch-key-lost': '#b54708',
   '--cad-sketch-lost': '#b54708',
   '--cad-box-enclose': '#1570ef',
   '--cad-box-enclose-fill': 'rgba(21, 112, 239, 0.08)',
@@ -163,7 +168,7 @@ describe('CAD tokens: the dark set', () => {
       ['--cad-p2-measure', '--mg-bg', 4.5],
       ['--cad-set', '--mg-bg', 4.5],
       ['--cad-panel-accent-sketch', '--mg-bg', 4.5],
-      ['--cad-sketch-projected', '--mg-bg', 4.5],
+      ['--cad-sketch-over', '--mg-bg', 4.5],
       ['--cad-sketch-lost', '--mg-bg', 4.5],
       ['--mg-primary-ink', '--mg-selected-bg', 4.5],
       ['--mg-danger', '--cad-danger-hover-bg', 4.5],
@@ -179,7 +184,12 @@ describe('CAD tokens: the dark set', () => {
       ['--cad-rollback', '--mg-bg', 3],
       ['--cad-warning-border', '--mg-bg', 3],
       ['--cad-panel-accent-feature', '--mg-bg', 3],
-      ['--cad-sketch-under', '--mg-bg', 3],
+      // The keys to the line colours (dots, not text) at E2's default.
+      ['--cad-sketch-key-under', '--mg-bg', 3],
+      ['--cad-sketch-key-full', '--mg-bg', 3],
+      ['--cad-sketch-key-over', '--mg-bg', 3],
+      ['--cad-sketch-key-linked', '--mg-bg', 3],
+      ['--cad-sketch-key-lost', '--mg-bg', 3],
     ];
     const low: string[] = [];
     for (const [fg, bg, min] of pairs) {
@@ -204,7 +214,7 @@ describe('CAD stylesheets', () => {
         });
     }
     expect(bad).toEqual([]);
-    // The text sites (and the tokens that carry the ink to text: the sketch's under-defined state, the box caption).
+    // The text sites (and the token that carries the ink to text: the box caption).
     const sketch = readFileSync(join(PLUGIN, 'src/sketch/sketch.css'), 'utf8');
     for (const sel of ['.cad-sk-glyph.is-inference', '.cad-sk-dim.is-preview', '.cad-sketch-annotations > .cad-sk-handle']) {
       const rule = new RegExp(`\\n${sel.replace(/\./g, '\\.')} \\{([^}]*)\\}`).exec(sketch);
@@ -216,7 +226,6 @@ describe('CAD stylesheets', () => {
       expect(rule?.[1], sel).toMatch(/color: var\(--mg-primary-ink, #1570ef\)/);
     }
     const { light } = cadTokens();
-    expect(light.get('--cad-sketch-under')).toBe('var(--mg-primary-ink, #1570ef)');
     expect(light.get('--cad-box-enclose')).toBe('var(--mg-primary-ink, #1570ef)');
   });
 

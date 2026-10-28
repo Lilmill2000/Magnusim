@@ -1,11 +1,13 @@
 // The 3D view's and the sketch's colours by theme (src/viewport/palette.ts): LIGHT is exactly
-// the look before the dark set, DARK's thin marks read on the dark background, and both agree with
-// the CSS tokens they mirror (CAD's, and the host's appearance set).
+// the look before the dark set, DARK's thin marks read on the dark background, E2's candidates
+// cover every coloured thin mark ((c)'s read on a body face too, and keep driven apart from
+// driving), and both palettes agree with the CSS tokens they mirror (CAD's, and the host's
+// appearance set).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { overlayColors, REGION_TINT } from '../../src/features/sketch/colors';
 import { BODY_COLOR, EDGE_COLOR, HOVER_COLOR, PICK_COLOR, PLANE_BORDER, PLANE_FILL, TRIAD_COLORS, VIEWPORT_BG } from '../../src/viewport/colors';
-import { DARK, DARK_LINE_OPTIONS, DARK_LINES_DEFAULT, darkPalette, hexNumber, hexString, LIGHT, paletteFor, paletteOf, samePalette, type MarkPalette } from '../../src/viewport/palette';
+import { DARK, DARK_INKS, DARK_LINE_OPTIONS, DARK_LINES_DEFAULT, darkPalette, hexNumber, hexString, LIGHT, paletteFor, paletteOf, samePalette, type MarkPalette } from '../../src/viewport/palette';
 import { contrast, hostTokens, themeValue } from '../styles/css-tokens';
 
 const num = (s: string | null | undefined) => hexNumber(String(s));
@@ -102,18 +104,21 @@ describe('DARK', () => {
 
   it('agrees with the CSS tokens it mirrors, in both themes', () => {
     const host = hostTokens();
+    // LIGHT and E2's plain dark inks ((a) and (b)) are the host's tokens; their HTML twins take them too.
     for (const [p, theme] of [
       [LIGHT, 'light'],
-      [DARK, 'dark'],
+      [darkPalette({ sketch: 'a' }), 'dark'],
+      [darkPalette({ sketch: 'b' }), 'dark'],
     ] as const) {
       const css = (name: string) => num(themeValue(name, theme));
       const hostOf = (name: string) => num((theme === 'dark' ? host.dark : host.light).get(name));
       expect(p.background, `${theme} --cad-viewport-bg`).toBe(css('--cad-viewport-bg'));
       expect(p.measure, `${theme} --cad-p2-measure`).toBe(css('--cad-p2-measure'));
-      expect(p.sketch.under, `${theme} --cad-sketch-under`).toBe(hexString(css('--cad-sketch-under')));
+      expect(p.sketch.under).toBe(hexString(hostOf('--mg-primary-ink')));
+      expect(p.sketch.fully).toBe(hexString(hostOf('--mg-text')));
+      expect(p.sketch.dim).toBe(p.sketch.fully);
       expect(p.sketch.over, `${theme} --cad-sketch-over`).toBe(hexString(css('--cad-sketch-over')));
       expect(p.sketch.doomed).toBe(p.sketch.over);
-      expect(p.sketch.linked, `${theme} --cad-sketch-projected`).toBe(hexString(css('--cad-sketch-projected')));
       expect(p.sketch.lost, `${theme} --cad-sketch-lost`).toBe(hexString(css('--cad-sketch-lost')));
       expect(p.sketch.pick).toBe(hexString(css('--cad-pick')));
       expect(p.sketch.hover).toBe(hexString(css('--cad-hover-pick')));
@@ -124,12 +129,22 @@ describe('DARK', () => {
       expect(p.sketch.grid).toBe(hexString(hostOf('--mg-divider')));
       expect(p.sketch.gridMajor).toBe(hexString(hostOf('--mg-card-border')));
     }
-    // Light's fully defined lines are the host's text; dark's are E2's candidate.
-    expect(LIGHT.sketch.fully).toBe(hexString(num(host.light.get('--mg-text'))));
+    expect(LIGHT.sketch.linked).toBe('#7a3fd1');
+    expect(darkPalette({ sketch: 'a' }).sketch.linked).toBe('#9b7bf0');
+    expect(darkPalette({ sketch: 'a' }).constructLine).toBe(num(host.dark.get('--mg-link')));
+    // The keys to the line colours (the Sketch panel's state dot, a reference's dot): LIGHT's in the
+    // light block, the default's ((c)) in the dark one (app/appearance.ts sets another candidate's).
+    for (const [p, theme] of [
+      [LIGHT, 'light'],
+      [DARK, 'dark'],
+    ] as const) {
+      const key = (k: string) => hexString(num(themeValue(`--cad-sketch-key-${k}`, theme)));
+      expect({ under: key('under'), full: key('full'), over: key('over'), linked: key('linked'), lost: key('lost') }, theme).toEqual({ under: p.sketch.under, full: p.sketch.fully, over: p.sketch.over, linked: p.sketch.linked, lost: p.sketch.lost });
+    }
     expect(DARK.background).toBe(num(host.dark.get('--mg-viewport-bg')));
+    expect(DARK.background).toBe(num(themeValue('--cad-viewport-bg', 'dark')));
     // E4: the triad takes the host's dark axis colours, as the axes key's letters do.
     expect([...DARK.triad]).toEqual(['--cad-axis-x', '--cad-axis-y', '--cad-axis-z'].map((n) => num(themeValue(n, 'dark'))));
-    expect(DARK.constructLine).toBe(num(host.dark.get('--mg-link')));
   });
 });
 
@@ -152,10 +167,51 @@ describe('the E1 / E2 switch', () => {
     // Edges and sketch lines are chosen apart.
     const mixed = darkPalette({ edges: 'b', sketch: 'c' });
     expect([mixed.edge, mixed.edgeRim, mixed.sketch.fully, mixed.sketchRim]).toEqual([0xe6e9ef, 0x1b1f27, '#8a93a3', null]);
-    // Only the lines differ between candidates.
-    const strip = (p: MarkPalette) => ({ ...p, edge: 0, edgeRim: 0, lines: null, sketchRim: null, sketch: { ...p.sketch, fully: '', dim: '' } });
+    // (a) and (b) differ by the rims only; the background, the triad, picks, hover and grid are the same in every candidate.
+    const strip = (p: MarkPalette) => ({ ...p, edge: 0, edgeRim: 0, lines: null, sketchRim: null });
     expect(strip(a)).toEqual(strip(b));
-    expect(strip(a)).toEqual(strip(DARK));
+    const fixed = (p: MarkPalette) => ({ background: p.background, triad: p.triad, pick: p.sketch.pick, hover: p.sketch.hover, grid: p.sketch.grid, gridMajor: p.sketch.gridMajor });
+    expect(fixed(a)).toEqual(fixed(DARK));
+  });
+
+  it('E2 is every coloured thin mark: (c) gives each its own mid tone, each reading on the background and on a body face', () => {
+    const a = darkPalette({ sketch: 'a' });
+    const c = darkPalette({ sketch: 'c' });
+    const marks = (p: MarkPalette): Record<string, number> => ({
+      ...Object.fromEntries((['under', 'fully', 'over', 'construction', 'preview', 'dim', 'driven', 'doomed', 'linked', 'lost'] as const).map((k) => [k, num(p.sketch[k])])),
+      ink: p.ink,
+      constructLine: p.constructLine,
+      measure: p.measure,
+    });
+    // Every one of them is the candidate's: none is the same in (a) and (c).
+    const ma = marks(a);
+    const mc = marks(c);
+    expect(Object.keys(mc).filter((k) => mc[k] === ma[k])).toEqual([]);
+    expect(DARK_INKS.a).toBe(DARK_INKS.b);
+    // (c): at least 3:1 on the dark background and 2.8:1 on a body face (light's own inks read 2.7 to
+    // 3.9:1 on one); the fully defined mid grey is Daniel's candidate value (5.3:1 and 1.85:1).
+    const low: string[] = [];
+    for (const [k, v] of Object.entries(mc)) {
+      const bg = contrast(v, c.background);
+      const face = contrast(v, BODY_COLOR);
+      const minFace = k === 'fully' || k === 'dim' ? 1.8 : 2.8;
+      if (bg < 3 || face < minFace) low.push(`${k} ${hexString(v)}: ${bg.toFixed(2)} on the background, ${face.toFixed(2)} on a face`);
+    }
+    expect(low).toEqual([]);
+    // (a) and (b)'s light inks read badly on a face (why (b) rims them and (c) exists).
+    expect(contrast(ma.under, BODY_COLOR)).toBeLessThan(1.6);
+    expect(contrast(ma.lost, BODY_COLOR)).toBeLessThan(1.2);
+  });
+
+  it('keeps a driven dimension and construction apart from the fully defined lines in every candidate (light: 3.57:1)', () => {
+    expect(contrast(num(LIGHT.sketch.dim), num(LIGHT.sketch.driven))).toBeGreaterThan(3.5);
+    for (const o of ['a', 'b', 'c'] as const) {
+      const p = darkPalette({ sketch: o });
+      expect(contrast(num(p.sketch.dim), num(p.sketch.driven)), `(${o}) driving vs driven`).toBeGreaterThanOrEqual(1.6);
+      expect(contrast(num(p.sketch.fully), num(p.sketch.construction)), `(${o}) fully vs construction`).toBeGreaterThanOrEqual(1.6);
+    }
+    // (c): the driven and construction grey is darker than the fully defined mid grey (it was a lighter one, 1.23:1 apart).
+    expect(DARK.sketch.driven).toBe('#646d7e');
   });
 });
 

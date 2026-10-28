@@ -1,6 +1,9 @@
 // The host's appearance applied to the Part, in one handler, at the start and on every change:
 //   - the 3D view's palette (src/viewport/palette.ts): DARK with the dark theme, LIGHT otherwise,
 //     on the view now and on every view made later (pictures stay light whatever it is);
+//   - the keys to the sketch's line colours (--cad-sketch-key-*: the Sketch panel's state dot, a
+//     reference's dot) set on <html> from that palette while it is dark, so a key shows the colour
+//     the lines are drawn in whatever E2's candidate; taken away in light (the stylesheet's own);
 //   - the toolbar's size from the icon scale (--cad-toolbar-scale, Toolbar.tsx setToolbarScale);
 //     the ribbon's names follow the text scale through the host's --mg-text-* tokens.
 // The page's CSS needs nothing from here: the host's SDK writes data-theme, color-scheme and the
@@ -13,7 +16,27 @@
 import type { Appearance } from '../lib/bridge';
 import type { AppServices } from '../types/app';
 import { setToolbarScale } from '../ui/Toolbar';
-import { DARK_LINES_DEFAULT, paletteFor, type DarkLineOption, type DarkLines, type MarkPalette } from '../viewport/palette';
+import { DARK_LINES_DEFAULT, paletteFor, type DarkLineOption, type DarkLines, type MarkPalette, type SketchInk } from '../viewport/palette';
+
+/** The CSS keys to the sketch's line colours, by the palette ink each shows (src/styles/tokens.css). */
+export const SKETCH_KEYS: Readonly<Record<string, keyof SketchInk>> = Object.freeze({
+  '--cad-sketch-key-under': 'under',
+  '--cad-sketch-key-full': 'fully',
+  '--cad-sketch-key-over': 'over',
+  '--cad-sketch-key-linked': 'linked',
+  '--cad-sketch-key-lost': 'lost',
+});
+
+/**
+ * The keys on <html> for a palette: a dark one's inks (E2's candidate), none for LIGHT (the
+ * stylesheet's light values, which are LIGHT's inks: nothing changes in light).
+ */
+export function setSketchKeys(p: MarkPalette, root: HTMLElement = document.documentElement): void {
+  for (const [name, ink] of Object.entries(SKETCH_KEYS)) {
+    if (p.name === 'dark') root.style.setProperty(name, p.sketch[ink]);
+    else root.style.removeProperty(name);
+  }
+}
 
 export interface AppearanceControl {
   /** The host's appearance as the Part has it now. */
@@ -35,7 +58,11 @@ export function installAppearance(services: AppServices): AppearanceControl {
   // The icon scale given to the toolbar (1: --cad-toolbar-scale as tokens.css has it).
   let iconScale = 1;
   const palette = () => paletteFor(bridge.theme(), lines);
-  const toView = () => services.viewport.get().handle?.setPalette?.(palette());
+  const toView = () => {
+    const p = palette();
+    services.viewport.get().handle?.setPalette?.(p);
+    setSketchKeys(p);
+  };
   const apply = () => {
     toView();
     const s = bridge.appearance().iconScale;

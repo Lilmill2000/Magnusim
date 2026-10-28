@@ -152,18 +152,19 @@
   gap: 6px;
   font-weight: 600;
 }
+/* The dot is the key to the lines' colour: the colour they are drawn in (the key tokens follow E2 in a dark view). */
 .cad-sk-state-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--cad-sketch-under);
+  background: var(--cad-sketch-key-under);
 }
 .cad-sk-state.is-fully .cad-sk-state-dot {
-  background: var(--cad-sketch-full);
+  background: var(--cad-sketch-key-full);
 }
 .cad-sk-state.is-over .cad-sk-state-dot,
 .cad-sk-state.is-unsolved .cad-sk-state-dot {
-  background: var(--cad-sketch-over);
+  background: var(--cad-sketch-key-over);
 }
 .cad-sk-state.is-over,
 .cad-sk-state.is-unsolved {

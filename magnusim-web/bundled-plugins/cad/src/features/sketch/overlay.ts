@@ -40,7 +40,7 @@ interface DrawnSketch {
   positions: BufferAttribute;
   meshes: Map<string, Mesh<BufferGeometry, MeshBasicMaterial>>;
   segs: LineSegments2[];
-  /** E2 option (b): a rim under each solid line (sharing its geometry), made while the palette has one. */
+  /** E2 option (b): a rim under each line (sharing its geometry; dashed under a dashed one), made while the palette has one. */
   rims: LineSegments2[];
   markers: { el: HTMLElement; at: Vec3 }[];
 }
@@ -85,8 +85,13 @@ export class ProfileOverlay {
   private colors: OverlayColors;
   private readonly mats;
   private readonly lineMats;
-  /** E2 option (b): the rim under solid lines (background colour, 1 px each side); `rimOn` while the palette has one. */
+  /**
+   * E2 option (b): the rim under the lines (background colour, 1 px each side), under solid lines
+   * and, dashed as they are, under construction and auto-made linked lines; `rimOn` while the
+   * palette has one.
+   */
   private readonly rimMat: LineMaterial;
+  private readonly rimDashMat: LineMaterial;
   private rimOn: boolean;
   private readonly offs: (() => void)[] = [];
   private queued = false;
@@ -142,6 +147,8 @@ export class ProfileOverlay {
     this.lineMats.linkedConstruction.dashed = true;
     this.rimOn = start.sketchRim !== null;
     this.rimMat = line(start.sketchRim !== null ? hexNumber(start.sketchRim) : 0, LINE_PX + 2);
+    this.rimDashMat = line(start.sketchRim !== null ? hexNumber(start.sketchRim) : 0, CONSTRUCTION_PX + 2);
+    this.rimDashMat.dashed = true;
     const later = () => this.later();
     this.offs.push(
       services.doc.state.subscribe(later),
@@ -170,8 +177,8 @@ export class ProfileOverlay {
     m.lost.color.setHex(c.lost);
     m.linkedConstruction.color.setHex(c.linked);
     this.rimOn = p.sketchRim !== null;
-    if (p.sketchRim !== null) this.rimMat.color.setHex(hexNumber(p.sketchRim));
-    const lacking = this.rimOn && [...this.drawn.values()].some((d) => d.segs.some((s) => !(s.material as LineMaterial).dashed) && !d.rims.length);
+    if (p.sketchRim !== null) for (const m of [this.rimMat, this.rimDashMat]) m.color.setHex(hexNumber(p.sketchRim));
+    const lacking = this.rimOn && [...this.drawn.values()].some((d) => d.segs.length > d.rims.length);
     if (lacking) {
       for (const d of this.drawn.values()) this.drop(d);
       this.drawn.clear();
@@ -302,9 +309,9 @@ export class ProfileOverlay {
         seg.frustumCulled = false;
         segs.push(seg);
         this.sketches.group.add(seg);
-        // E2 (b): the rim under a solid line, drawn first at its depth.
-        if (this.rimOn && !m.dashed) {
-          const rim = new LineSegments2(lg, this.rimMat);
+        // E2 (b): the rim under the line, drawn first at its depth (dashed as a dashed line is, on its distances).
+        if (this.rimOn) {
+          const rim = new LineSegments2(lg, m.dashed ? this.rimDashMat : this.rimMat);
           rim.name = `sketch-rim:${feature.id}`;
           rim.renderOrder = 1;
           rim.frustumCulled = false;
@@ -356,6 +363,8 @@ export class ProfileOverlay {
         m.gapSize = 4 * px;
         this.lineMats.linkedConstruction.dashSize = 6 * px;
         this.lineMats.linkedConstruction.gapSize = 4 * px;
+        this.rimDashMat.dashSize = 6 * px;
+        this.rimDashMat.gapSize = 4 * px;
         this.sketches.changed();
       }
     }
@@ -380,6 +389,7 @@ export class ProfileOverlay {
     for (const m of Object.values(this.mats)) m.dispose();
     for (const m of Object.values(this.lineMats)) m.dispose();
     this.rimMat.dispose();
+    this.rimDashMat.dispose();
     this.regions.dispose();
     this.sketches.dispose();
     this.marks.dispose();
