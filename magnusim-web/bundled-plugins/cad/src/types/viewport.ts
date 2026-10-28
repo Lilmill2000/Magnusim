@@ -324,6 +324,9 @@ export interface ViewportHandle {
    * the selection or hover draw plain through addLayer's `plain` (the profile regions, the
    * reference geometry); sketch mode's own layers do not: in a picture taken while a sketch is
    * edited, that sketch's selection, hover halo and a tool's preview show as on screen.
+   * A picture is LIGHT whatever the host's theme (palette.ts): its background, the edges, the
+   * triad and every layer it shows with a `palette` hook (sketch mode's too) are drawn in LIGHT's
+   * colours, swapped and put back in this task, so the view never shows a light frame.
    */
   snapshot?(o: SnapshotOptions): SnapshotResult;
   /**
@@ -340,6 +343,13 @@ export interface ViewportHandle {
    */
   palette?(): MarkPalette;
   /**
+   * Draw the marks in this palette from now on (app/appearance.ts, from the host's theme): the
+   * background, the edges (and E1's rim), the triad, and each layer through its `palette` hook,
+   * without a rebuild; the next frame shows it. Surfaces keep their colours (D2). A palette that
+   * draws the same as the live one changes nothing.
+   */
+  setPalette?(p: MarkPalette): void;
+  /**
    * Draw `frames` frames synchronously, orbiting a little each frame, and wait
    * for the GPU after each one. Returns ms per frame. For performance tests.
    */
@@ -355,8 +365,13 @@ export interface ViewportHandle {
    * together; the origin planes' extent only when neither is drawn. `plain`: called with true
    * just before a snapshot draws and with false right after it (both in that task): the layer
    * then draws without its selection, hover and flash colours, synchronously, and puts them back.
+   * `palette`: called with the new palette on every setPalette, and, while a dark palette is
+   * live, with LIGHT just before a snapshot draws and with the live one right after it (a layer a
+   * picture leaves out, SNAPSHOT_HIDDEN_LAYERS, is not called for it). The layer recolours what it
+   * draws then, synchronously (material colours, or its lines drawn again). Never called when the
+   * layer is added: a layer builds its materials from palette() (paletteOf).
    */
-  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null); plain?: (on: boolean) => void }): OverlayLayer;
+  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null); plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void }): OverlayLayer;
   /**
    * The last framing (Fit, a standard view, Look at) again, with what is drawn now, when the
    * camera is still where that framing put it (nobody orbited, panned or zoomed since). A

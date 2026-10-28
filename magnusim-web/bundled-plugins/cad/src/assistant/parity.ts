@@ -611,6 +611,7 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   onCameraChange: INTERNAL,
   stats: INTERNAL,
   palette: APPEARANCE,
+  setPalette: APPEARANCE,
   measure: INTERNAL,
   addLayer: INTERNAL,
   reframe: W('fit'),
