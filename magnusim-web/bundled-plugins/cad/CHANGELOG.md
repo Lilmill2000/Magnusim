@@ -82,8 +82,9 @@ in the Part" in `README.md`.
   turns stop for the rest of it. Watching needs the Magnusim window shown: in a
   hidden or covered window its steps run without pauses.
 
-**Ready for a dark Magnusim.** Once Magnusim has its dark appearance (it is not
-in this version yet), the Part follows it:
+**A dark Magnusim.** With Magnusim's dark appearance (Settings → Appearance),
+the Part follows it: dark from the moment it opens, and at once when the look
+is changed with the Part open, from any Magnusim window:
 - The 3D view turns dark (`#1b1f27`); the parts keep their light surfaces, the
   edges are light, and the orientation arrows take Magnusim's dark axis colours,
   lit so that an arrow pointing straight at you still stands out.
@@ -107,8 +108,8 @@ in this version yet), the Part follows it:
   Assistant's pictures, and anything else drawn off screen look exactly as in
   light, and the view never flashes light while one is taken.
 - The toolbar's icons follow Magnusim's icon size.
-- On this version the Part stays light, as before; only its orientation arrows
-  take the axis colours Magnusim's own 3D views now use (a shade darker).
+- In light the Part is as before; only its orientation arrows take the axis
+  colours Magnusim's own 3D views now use (a shade darker).
 
 ## 0.1.0 (October 2026)
 

@@ -946,9 +946,10 @@ with the host once for the page's life, and its chip goes in the dock.
   in the core; outline icons (24 viewBox, stroke 1.7–1.8, `currentColor`).
   `e2e/cad-p1-document.spec.js` reads these from the core page and compares.
 - **Appearance (the dark set; owner decisions D1-D4, "CAD dark set" plan).** The
-  host's appearance (§9: unreleased, feature-detected) drives two things, and
-  CAD never sets `data-theme` itself (the host's SDK writes it, with
-  `color-scheme` and the scales, on `<html>`):
+  host's appearance (§9: unreleased 1.9, feature-detected) drives two things,
+  and CAD never sets `data-theme` itself (the host's SDK writes it, with
+  `data-theme-pref` and the scales, on `<html>`, and the page has them from
+  its first paint; `theme.css` takes `color-scheme` from `data-theme`):
   - **CSS.** `src/styles/tokens.css`: the light block is `:root,
     [data-theme="light"]` (a `var()` in a custom property resolves where it is
     declared); a token with an `--mg-*` equivalent aliases it as
@@ -1048,8 +1049,11 @@ with the host once for the page's life, and its chip goes in the dock.
     `ViewportHandle.setPalette` recolours at once (uniforms and material
     colours; sketch mode draws its lines again), and each layer's `addLayer`
     `palette` hook (§10) follows. `app/appearance.ts` is the one handler: the
-    palette (a view made later starts in it) and `--cad-toolbar-scale` from the
-    icon scale.
+    palette (a view made later starts in it: the bridge has the welcome's look
+    before the layout mounts the view, and the view is given it before its
+    first frame, so a Part opened dark never draws a light frame;
+    `ViewportStats.looks` records what each run of frames was drawn in) and
+    `--cad-toolbar-scale` from the icon scale.
   - **Pictures stay light (D1).** `snapshot()` with a dark palette live paints
     the edges, the triad and every layer it shows `LIGHT`, clears `LIGHT`'s
     background, draws, and puts the live colours back in the same task (no
@@ -1061,7 +1065,10 @@ with the host once for the page's life, and its chip goes in the dock.
     `tests/features/extrude/panel.test.tsx`, `tests/viewport/snapshot-plain.test.ts`,
     `tests/features/measure/marks-palette.test.ts`, `tests/lib/bridge-appearance.test.ts`,
     `tests/app/{appearance,bootstrap}.test.ts*`; e2e `cad-dark-theme.spec.ts`
-    (shell), which gives the appearance as the newer SDK will (`setAppearance`).
+    (shell), which drives the host's own look: the pref saved before a Part
+    opens (`saveLook`) and Settings → Appearance in a second window with it
+    open (`pickTheme`). The look is one pref for the whole server, so its tests
+    are `@serial` and put it back after each (`putLookBackAfterSerialTests`).
 - Viewport: background `#f0f2f7`, body `#bdc9db` (Phong: ambient .16, diffuse
   .78, specular .22, power 28), edges `#0a0b0e` 2.4 px, pick `#2ec47e`, set
   `#4884eb`, hover `#b2ccff` (the light palette, `LIGHT` in `palette.ts`). **Mouse** (the core viewer's binding,
@@ -1425,18 +1432,21 @@ with the host once for the page's life, and its chip goes in the dock.
   manifest's `links_geometry = true` on the Part study kind (§11).
 - Host API 1.6 (L3): the exit hook `ws.nav.onLeave` and the camera it returns
   (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`.
-- The host's appearance (planned, SDK 1.5, host API stays 1.8; the SDK's
-  part is not on this base): `ws.context.appearance = {theme, preference,
-  textScale, iconScale}` and the `appearance` event with the same object; the
-  SDK writes `data-theme`, `color-scheme`, `--mg-text-scale` and
-  `--mg-icon-scale` on the frame's `<html>`. `Bridge.appearance()` / `theme()` /
+- The host's appearance (unreleased 1.9; the host still reports 1.8):
+  `ws.context.appearance = {theme, preference, textScale, iconScale}` and the
+  `appearance` event with the same object, the look the person set in Settings
+  → Appearance (their pref on the server, `POST /api/prefs`). The SDK writes
+  `data-theme`, `data-theme-pref`, `--mg-text-scale` and `--mg-icon-scale` on
+  the frame's `<html>` before any listener hears a change; `theme.css` takes
+  `color-scheme` from `data-theme`. The server puts the look in the Part's page
+  and a pre-paint script sets those attributes before the bundle runs, so the
+  page is dark from its first paint. `Bridge.appearance()` / `theme()` /
   `onAppearance()` feature-detect on `ctx.appearance`: an older host has none,
   and the Part stays light. The host's dark `--mg-*` set and `--mg-primary-ink`
-  are here already: the frame's `/plugin-sdk/theme.css` (host commit 10caf36b)
-  carries them, so a dark `<html>` switches the host's tokens and the kit's
-  chrome along with CAD's literal ones. CAD's tokens that mirror a core rule
-  have no dark value of their own and follow that set. The e2e
-  (`setAppearance`) gives only the SDK's part: `data-theme` and the event.
+  are in the frame's `/plugin-sdk/theme.css`, so a dark `<html>` switches the
+  host's tokens and the kit's chrome along with CAD's literal ones. CAD's
+  tokens that mirror a core rule have no dark value of their own and follow
+  that set.
 - Host API 1.4 start actions, CAD on by default (Daniel's D33, after gate:l3-cad;
   the core half is 60bb971): no `default_enabled = false`, and one
   `[[start_actions]]` for the Part kind: "Design a part" on the empty project and
