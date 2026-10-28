@@ -23,6 +23,13 @@
 //     once as it is), a geometry swap, a new dash, width or opacity, and the section's clipping
 //     planes follow at once. A twin may have an opacity of its own (setFaceOpacity: sketch mode's
 //     hover halo, fainter over the background in a dark view).
+//   - The bit is final when a mark tests it only if the mark draws after every surface that
+//     writes it (drawsAfterSurfaces). three draws its opaque pass by group order (the renderOrder
+//     of the nearest Group above an object: a layer's group is 100 and more, but a Group nested in
+//     it starts its own, 0 unless set), then by the object's own renderOrder, and its transparent
+//     pass after the whole opaque one; the surfaces draw in group order 0 at LIT_FACES_ORDER and
+//     less. So a mark is transparent, or under a Group of order above 0, or its own order is above
+//     LIT_FACES_ORDER. The layers' unit tests walk their marks with it.
 // In LIGHT (and for every picture, D1) nothing is restricted, no twin is drawn and no body writes
 // the stencil: the light view is the pixels it was.
 // Owner: VIEWPORT.
@@ -38,6 +45,33 @@ export const PARITY_MASK = 0x7f;
  * caps draw at -1, the bodies at 0, all in the scene's group order 0).
  */
 export const LIT_FACES_ORDER = 0.5;
+
+/** The group order three sorts an object by: the renderOrder of the nearest Group above it (0 for none). */
+export function groupOrderOf(o: Object3D): number {
+  for (let p = o.parent; p; p = p.parent) if ((p as Object3D & { isGroup?: boolean }).isGroup) return p.renderOrder;
+  return 0;
+}
+
+/**
+ * Whether a mark draws after every surface that writes FACE_BIT, so the bit under it is final when
+ * it tests it: transparent (three's transparent pass comes after the opaque one), or in the opaque
+ * pass after the bodies' group order 0, or in it with an order of its own above LIT_FACES_ORDER.
+ */
+export function drawsAfterSurfaces(o: Object3D): boolean {
+  const m = (o as Object3D & { material?: Material | Material[] }).material;
+  if (m && !Array.isArray(m) && m.transparent) return true;
+  const g = groupOrderOf(o);
+  return g > 0 || (g === 0 && o.renderOrder > LIT_FACES_ORDER);
+}
+
+/** The marks under `root` drawn twice now (a twin shown) that would draw before a surface writing FACE_BIT: none, or the bit is not final for them. */
+export function marksBeforeSurfaces(root: Object3D): Object3D[] {
+  const out: Object3D[] = [];
+  root.traverse((o) => {
+    if (!twins.has(o) && o.children.some((c) => twins.has(c) && c.visible) && !drawsAfterSurfaces(o)) out.push(o);
+  });
+  return out;
+}
 
 const SRGB = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
 function luminance(hex: number): number {

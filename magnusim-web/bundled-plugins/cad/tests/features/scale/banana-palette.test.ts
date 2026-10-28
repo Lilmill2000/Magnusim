@@ -10,7 +10,7 @@ import { installBananaView } from '../../../src/features/scale/view';
 import { createStateStore } from '../../../src/lib/store';
 import type { AppServices } from '../../../src/types/app';
 import type { ViewportHandle } from '../../../src/types/viewport';
-import { faceInkOf } from '../../../src/viewport/onface';
+import { faceInkOf, marksBeforeSurfaces, syncFaceTwins } from '../../../src/viewport/onface';
 import { DARK, LIGHT, type MarkPalette } from '../../../src/viewport/palette';
 
 vi.mock('../../../src/features/scale/banana-mesh', async (orig) => ({
@@ -31,8 +31,10 @@ function app(start: MarkPalette) {
   const hooks = new Map<string, (p: MarkPalette) => void>();
   const handle = {
     palette: () => palette,
-    addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
+    addLayer(id: string, o: { order?: number; palette?: (p: MarkPalette) => void } = {}) {
       const group = new Group();
+      // As the viewport orders a layer's group.
+      group.renderOrder = 100 + (o.order ?? 10);
       groups.set(id, group);
       if (o.palette) hooks.set(id, o.palette);
       const html = document.createElement('div');
@@ -65,6 +67,10 @@ describe("the banana's snap guide and the palette", () => {
     v.setPalette(DARK);
     expect([guide.color.getHex(), faceInkOf(guide) ?? null]).toEqual([DARK.ink, LIGHT.ink]);
     expect(DARK.ink).toBe(0x7aa7ff);
+    // Drawn after every surface that writes the face bit.
+    syncFaceTwins(v.groups.get('scale-banana')!, true);
+    expect(marksBeforeSurfaces(v.groups.get('scale-banana')!)).toEqual([]);
+    syncFaceTwins(v.groups.get('scale-banana')!, false);
     expect(LIGHT.ink).toBe(0x1570ef);
     v.setPalette(LIGHT);
     expect([guide.color.getHex(), faceInkOf(guide) ?? null]).toEqual([LIGHT.ink, null]);

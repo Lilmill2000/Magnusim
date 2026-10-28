@@ -100,10 +100,13 @@ export function fakeViewport(): FakeViewport {
       return () => frames.delete(fn);
     },
     palette: () => fv.palette,
-    addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
+    addLayer(id: string, o: { order?: number; palette?: (p: MarkPalette) => void } = {}) {
       const html = document.createElement('div');
       document.body.appendChild(html);
-      const layer: OverlayLayer = { id, group: new Group(), html, setVisible() {}, changed() {}, dispose: () => (html.remove(), layers.delete(id), hooks.delete(id)) };
+      // The group ordered as the viewport orders a layer's (src/viewport/onface.ts drawsAfterSurfaces reads it).
+      const group = new Group();
+      group.renderOrder = 100 + (o.order ?? 10);
+      const layer: OverlayLayer = { id, group, html, setVisible() {}, changed() {}, dispose: () => (html.remove(), layers.delete(id), hooks.delete(id)) };
       layers.set(id, layer);
       if (o.palette) hooks.set(id, o.palette);
       else hooks.delete(id);

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createMeasureMarks } from '../../../src/features/measure/overlay';
 import type { ViewportHandle } from '../../../src/types/viewport';
 import { SNAPSHOT_HIDDEN_LAYERS } from '../../../src/viewport/snapshot';
-import { faceInkOf } from '../../../src/viewport/onface';
+import { faceInkOf, marksBeforeSurfaces, syncFaceTwins } from '../../../src/viewport/onface';
 import { DARK, LIGHT, type MarkPalette } from '../../../src/viewport/palette';
 
 afterEach(() => {
@@ -21,8 +21,10 @@ function fakeHandle(start: MarkPalette) {
   const group = new Group();
   const handle = {
     palette: () => start,
-    addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
+    addLayer(id: string, o: { order?: number; palette?: (p: MarkPalette) => void } = {}) {
       if (o.palette) hooks.set(id, o.palette);
+      // As the viewport orders a layer's group.
+      group.renderOrder = 100 + (o.order ?? 10);
       const html = document.createElement('div');
       document.body.appendChild(html);
       return { id, group, html, setVisible() {}, changed() {}, dispose: () => html.remove() };
@@ -46,6 +48,10 @@ describe('the measure marks and the palette', () => {
     v.hooks.get('p2-measure')!(DARK);
     expect(colours(v.group)).toEqual([0x8fb5ff, 0x8fb5ff]);
     expect(faceInks(v.group)).toEqual([LIGHT.measure, LIGHT.measure]);
+    // Drawn after every surface that writes the face bit.
+    syncFaceTwins(v.group, true);
+    expect(marksBeforeSurfaces(v.group)).toEqual([]);
+    syncFaceTwins(v.group, false);
     v.hooks.get('p2-measure')!(LIGHT);
     expect(colours(v.group)).toEqual([LIGHT.measure, LIGHT.measure]);
     expect(faceInks(v.group)).toEqual([null, null]);

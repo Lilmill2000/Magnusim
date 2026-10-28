@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { attachOverlay } from '../../src/sketch/overlay';
 import type { PlaneFrame, Vec3 } from '../../src/types/doc';
 import type { ViewportHandle } from '../../src/types/viewport';
-import { faceColoursOf, faceOpacityOf, isFaceTwin, syncFaceTwins } from '../../src/viewport/onface';
+import { faceColoursOf, faceOpacityOf, isFaceTwin, marksBeforeSurfaces, syncFaceTwins } from '../../src/viewport/onface';
 import { DARK, LIGHT, type MarkPalette } from '../../src/viewport/palette';
 import { rectangle, sketchOf } from './fixtures';
 import { sketchHarness, type Harness } from './harness';
@@ -74,8 +74,10 @@ function fakeHandle() {
   let tool: { onPointer(e: unknown): boolean } | null = null;
   const handle = {
     lightSurfaceAt: () => face,
-    addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
+    addLayer(id: string, o: { order?: number; palette?: (p: MarkPalette) => void } = {}) {
       const group = new Group();
+      // As the viewport orders a layer's group (its marks' group order, unless a nested Group's).
+      group.renderOrder = 100 + (o.order ?? 10);
       groups.set(id, group);
       if (o.palette) hooks.set(id, o.palette);
       const html = document.createElement('div');
@@ -309,6 +311,13 @@ describe('sketch mode and the palette', () => {
     }
     // What the dark lines show over a face: LIGHT's inks, the driven dimension's grey and the construction grey among them.
     expect(new Set(shown.flatMap((o) => coloursOf(faceColoursOf(o.geometry)!)))).toEqual(new Set(shown.flatMap((o) => coloursOf(o.geometry)).map((c) => [...faceOf(c)][0])));
+    // Each draws after every surface that writes the face bit (the plane frames are nested Groups of
+    // order 0: the lines are transparent, the grid's own order 900).
+    for (const id of ['sketch-geometry', 'sketch-annotations']) {
+      syncFaceTwins(v.groups.get(id)!, true);
+      expect(marksBeforeSurfaces(v.groups.get(id)!), id).toEqual([]);
+    }
+    expect(shown.every((o) => o.children.some((c) => isFaceTwin(c) && c.visible))).toBe(true);
     v.setPalette(LIGHT);
     expect(marks(v.groups).filter((o) => faceColoursOf(o.geometry))).toEqual([]);
   });

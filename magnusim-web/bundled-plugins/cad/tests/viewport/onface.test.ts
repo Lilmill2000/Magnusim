@@ -12,7 +12,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { describe, expect, it } from 'vitest';
 import { BODY_COLOR, BODY_SELECTED_COLOR, HOVER_COLOR, PICK_COLOR } from '../../src/viewport/colors';
 import { BODY_LIT_OFFSET_UNITS, bodyShownColor, createBodyMaterial, createLitFacesMaterial } from '../../src/viewport/materials';
-import { drawOnly, FACE_BIT, faceColoursOf, faceInkOf, isFaceTwin, isLightSurface, LIT_FACES_ORDER, PARITY_MASK, setFaceColours, setFaceInk, surfaceStencil, syncFaceTwins } from '../../src/viewport/onface';
+import { drawOnly, drawsAfterSurfaces, FACE_BIT, faceColoursOf, faceInkOf, groupOrderOf, isFaceTwin, isLightSurface, LIT_FACES_ORDER, marksBeforeSurfaces, PARITY_MASK, setFaceColours, setFaceInk, surfaceStencil, syncFaceTwins } from '../../src/viewport/onface';
 import { SectionCaps } from '../../src/viewport/section';
 
 const twinOf = (o: Object3D) => o.children.find(isFaceTwin) as (Object3D & { material: Material & { color: { getHex(): number } }; geometry: BufferGeometry }) | undefined;
@@ -112,6 +112,44 @@ describe('the stencil bits', () => {
     const own = new MeshBasicMaterial({ stencilWrite: true });
     drawOnly(own, null);
     expect(own.stencilWrite).toBe(true);
+  });
+});
+
+describe("a mark's draw order", () => {
+  // three sorts the opaque pass by the nearest Group's renderOrder, a nested Group starting its own.
+  it('draws after every surface writing the bit when transparent, under a Group above 0, or with an order of its own above the lit faces', () => {
+    const layer = new Group();
+    layer.renderOrder = 130;
+    const nested = new Group();
+    layer.add(nested);
+    const opaque = (order: number) => {
+      const g = new BufferGeometry();
+      g.setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0], 3));
+      const l = new Line(g, new LineBasicMaterial({ color: 0x8fb5ff }));
+      l.renderOrder = order;
+      return l;
+    };
+    const direct = opaque(0);
+    const inNested = opaque(0);
+    const atLit = opaque(LIT_FACES_ORDER);
+    const high = opaque(900);
+    const clear = opaque(0);
+    (clear.material as LineBasicMaterial).transparent = true;
+    layer.add(direct);
+    nested.add(inNested, atLit, high, clear);
+    expect([groupOrderOf(direct), groupOrderOf(inNested)]).toEqual([130, 0]);
+    expect(drawsAfterSurfaces(direct)).toBe(true);
+    expect(drawsAfterSurfaces(inNested)).toBe(false);
+    expect(drawsAfterSurfaces(atLit)).toBe(false);
+    expect(drawsAfterSurfaces(high)).toBe(true);
+    expect(drawsAfterSurfaces(clear)).toBe(true);
+    // Only the marks drawn twice count.
+    expect(marksBeforeSurfaces(layer)).toEqual([]);
+    for (const l of [direct, inNested, atLit, high, clear]) setFaceInk(l.material as Material, 0x1a4fbf);
+    syncFaceTwins(layer, true);
+    expect(marksBeforeSurfaces(layer)).toEqual([inNested, atLit]);
+    syncFaceTwins(layer, false);
+    expect(marksBeforeSurfaces(layer)).toEqual([]);
   });
 });
 

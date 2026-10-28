@@ -1016,8 +1016,18 @@ with the host once for the page's life, and its chip goes in the dock.
     copy follows the mark's material (a hover or pick material has no face ink:
     drawn once, as it is), dash, width, opacity, depth test and clipping planes,
     is disposed with the mark's material, ignores raycasts and is left out of a
-    layer's framing. Every layer draws after the bodies and caps (its group's
-    `renderOrder` is 100 and more), so the bit is final when a mark tests it.
+    layer's framing. The bit is final when a mark tests it only if the mark
+    draws after every surface that writes it (`drawsAfterSurfaces`). three
+    sorts its opaque pass by group order, the `renderOrder` of the nearest
+    `Group` above an object (a layer's group is 100 and more, but a `Group`
+    nested in a layer, as sketch mode's plane frames and each arrow, starts its
+    own, 0 unless set), then by the object's own `renderOrder`, and draws its
+    transparent pass after the whole opaque one; the caps (-1), the bodies (0)
+    and the lit faces (`LIT_FACES_ORDER`, 0.5) draw in group order 0. So a mark
+    is transparent (the sketch's lines and points, the measure, the arrows, the
+    guides), or under a group of order above 0, or its own order is above 0.5
+    (the sketch's opaque grid: 900 in its frame). The layers' unit tests walk
+    their twinned marks with `marksBeforeSurfaces`.
     In light, and for every picture, no body writes the stencil, no mark is
     restricted and no twin is drawn: the light view is the pixels it was. The
     box-pick target (`boxpick.ts`) has no stencil and draws only ids. Sketch

@@ -15,7 +15,7 @@ import type { ExtrudeFeature, Feature, SketchFeature } from '../../../src/types/
 import { rectRegion } from '../sketch/fake-profiles-kernel';
 import { startApp, type FakeApp } from './fake-app';
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { faceInkOf } from '../../../src/viewport/onface';
+import { faceInkOf, marksBeforeSurfaces, syncFaceTwins } from '../../../src/viewport/onface';
 import { DARK, LIGHT } from '../../../src/viewport/palette';
 
 let app: FakeApp | null = null;
@@ -235,6 +235,10 @@ describe('Extrude panel', () => {
     act(() => a.vp.setPalette(DARK));
     expect(arrows()).toEqual(new Set([0x7aa7ff]));
     expect(onFace()).toEqual(new Set([0x1570ef]));
+    // Drawn after every surface that writes the face bit (each arrow is a nested Group of order 0: its meshes are transparent).
+    const group = a.vp.layers.get('extrude.handle')!.group;
+    syncFaceTwins(group, true);
+    expect(marksBeforeSurfaces(group)).toEqual([]);
     act(() => a.vp.setPalette(LIGHT));
     expect(arrows()).toEqual(new Set([0x1570ef]));
     expect(onFace()).toEqual(new Set([null]));
@@ -509,6 +513,10 @@ describe('the profile overlay and the sketch row', () => {
     const mats = (overlayOf(a.services) as unknown as { lineMats: Record<string, LineMaterial> }).lineMats;
     const inks = () => Object.fromEntries(Object.entries(mats).map(([k, m]) => [k, faceInkOf(m) ?? null]));
     expect(inks()).toEqual({ under: 0x1570ef, full: 0x101828, over: 0xb42318, construction: 0x667085, linked: 0x7a3fd1, lost: 0xb54708, linkedConstruction: 0x7a3fd1 });
+    // Drawn after every surface that writes the face bit.
+    const group = a.vp.layers.get('profiles.sketches')!.group;
+    syncFaceTwins(group, true);
+    expect(marksBeforeSurfaces(group)).toEqual([]);
     act(() => a.vp.setPalette(LIGHT));
     expect(colours()).toEqual([
       [0x1570ef, 2],

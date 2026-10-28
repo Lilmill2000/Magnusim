@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import enclosureModule from '../../../src/features/enclosure';
 import type { EnclosureFeature, ExtrudeFeature, Feature } from '../../../src/types/doc';
-import { faceInkOf } from '../../../src/viewport/onface';
+import { faceInkOf, marksBeforeSurfaces, syncFaceTwins } from '../../../src/viewport/onface';
 import { DARK, LIGHT } from '../../../src/viewport/palette';
 import { block, blockRegions, blockSketch, profileOf } from '../../doc/blocks';
 import { startApp, type FakeApp } from '../extrude/fake-app';
@@ -248,6 +248,10 @@ describe('the Enclosure panel', () => {
     // Opened dark: the host's dark ink blue, and over a light face (E2) the light view's.
     expect(arrows()).toEqual(new Set([0x7aa7ff]));
     expect(onFace()).toEqual(new Set([0x1570ef]));
+    // Drawn after every surface that writes the face bit (each arrow a nested Group of order 0: its meshes are transparent).
+    const group = a.vp.layers.get('enclosure.handles')!.group;
+    syncFaceTwins(group, true);
+    expect(marksBeforeSurfaces(group)).toEqual([]);
     act(() => a.vp.setPalette(LIGHT));
     expect(arrows()).toEqual(new Set([0x1570ef]));
     expect(onFace()).toEqual(new Set([null]));
