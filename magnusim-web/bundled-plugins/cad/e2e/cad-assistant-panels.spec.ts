@@ -12,7 +12,10 @@
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { addSketch, addSolid, forgetRailPrefs, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, forgetRailPrefs, forgetRailPrefsAfterSerialTests, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+
+// The rail test collapses the Sketch panel (a pref every test on the server shares): put back after it.
+forgetRailPrefsAfterSerialTests();
 
 const DONE_REASON = 'The Assistant is filling this in · Esc takes over (the Assistant pauses)';
 
@@ -195,54 +198,50 @@ test("cad:assistant-panel-scroll a panel the Assistant fills that is taller than
 
 test("cad:assistant-panel-rail the collapsed Sketch panel of the Assistant's sketch says it is the Assistant's; its Finish is disabled with the reason and takes nothing over", { tag: '@serial' }, async ({ page, request }) => {
   await forgetRailPrefs(request);
-  try {
-    const { seen, frame } = await freshPart(page, request);
-    const sketch = await addSketch(page, { size: [30, 20] });
-    await cad(
-      page,
-      ((id: string) => {
-        const w = window as unknown as W;
-        const doc = w.__CAD__.services.doc;
-        const step = doc.assistant.begin('assistant:e2e-rail');
-        w.__step = step;
-        w.__session = step.run(() => doc.beginEdit(id));
-      }) as never,
-      sketch,
-    );
-    const panel = frame.locator('[data-cad-panel="sketch"]');
-    await expect(panel).toHaveAttribute('data-panel-owner', 'assistant');
-    // The person collapses the panel (their layout, kept for every sketch).
-    await panel.locator('[data-sketch-collapse]').click();
-    const rail = frame.locator('[data-cad-rail="sketch"]');
-    await expect(rail).toBeVisible();
-    await expect(rail).toHaveAttribute('data-panel-owner', 'assistant');
-    await expect(rail.locator('[data-panel-badge="assistant"]')).toHaveText('Assistant');
-    await expect(rail.locator('[data-rail-expand]')).toHaveAccessibleName(/^Show the Sketch 1 panel \(the Assistant is drawing it\)/);
-    const finish = rail.locator('[data-rail-done]');
-    await expect(finish).toHaveAttribute('aria-disabled', 'true');
-    await expect(finish).toHaveAttribute('data-disabled-reason', DONE_REASON);
-    await finish.hover();
-    await expect(frame.locator('[data-cad-tip]')).toContainText(DONE_REASON);
-    // A click on it takes nothing over: the Assistant's sketch stays open, the step unmarked
-    // (forced: Playwright waits for an aria-disabled button to be enabled).
-    await finish.click({ force: true });
-    await expect(rail).toBeVisible();
-    expect(await stepState(page)).toEqual({ takenOver: null, open: true });
-    await revertAndEnd(page);
-    await expect(rail).toHaveCount(0);
-    // The person's own sketch, collapsed: its Finish is theirs as always.
-    await cad(page, ((id: string) => void (window as unknown as W).__CAD__.services.doc.beginEdit(id)) as never, sketch);
-    await expect(rail).toBeVisible();
-    await expect(rail).not.toHaveAttribute('data-panel-owner', /.+/);
-    await expect(rail.locator('[data-panel-badge]')).toHaveCount(0);
-    await expect(rail.locator('[data-rail-done]')).not.toHaveAttribute('aria-disabled', /.+/);
-    await rail.locator('[data-rail-done]').click();
-    await expect(rail).toHaveCount(0);
-    expect(seen.csp, 'CSP violations').toEqual([]);
-    expect(seen.errors, 'console errors').toEqual([]);
-  } finally {
-    await forgetRailPrefs(request);
-  }
+  const { seen, frame } = await freshPart(page, request);
+  const sketch = await addSketch(page, { size: [30, 20] });
+  await cad(
+    page,
+    ((id: string) => {
+      const w = window as unknown as W;
+      const doc = w.__CAD__.services.doc;
+      const step = doc.assistant.begin('assistant:e2e-rail');
+      w.__step = step;
+      w.__session = step.run(() => doc.beginEdit(id));
+    }) as never,
+    sketch,
+  );
+  const panel = frame.locator('[data-cad-panel="sketch"]');
+  await expect(panel).toHaveAttribute('data-panel-owner', 'assistant');
+  // The person collapses the panel (their layout, kept for every sketch).
+  await panel.locator('[data-sketch-collapse]').click();
+  const rail = frame.locator('[data-cad-rail="sketch"]');
+  await expect(rail).toBeVisible();
+  await expect(rail).toHaveAttribute('data-panel-owner', 'assistant');
+  await expect(rail.locator('[data-panel-badge="assistant"]')).toHaveText('Assistant');
+  await expect(rail.locator('[data-rail-expand]')).toHaveAccessibleName(/^Show the Sketch 1 panel \(the Assistant is drawing it\)/);
+  const finish = rail.locator('[data-rail-done]');
+  await expect(finish).toHaveAttribute('aria-disabled', 'true');
+  await expect(finish).toHaveAttribute('data-disabled-reason', DONE_REASON);
+  await finish.hover();
+  await expect(frame.locator('[data-cad-tip]')).toContainText(DONE_REASON);
+  // A click on it takes nothing over: the Assistant's sketch stays open, the step unmarked
+  // (forced: Playwright waits for an aria-disabled button to be enabled).
+  await finish.click({ force: true });
+  await expect(rail).toBeVisible();
+  expect(await stepState(page)).toEqual({ takenOver: null, open: true });
+  await revertAndEnd(page);
+  await expect(rail).toHaveCount(0);
+  // The person's own sketch, collapsed: its Finish is theirs as always.
+  await cad(page, ((id: string) => void (window as unknown as W).__CAD__.services.doc.beginEdit(id)) as never, sketch);
+  await expect(rail).toBeVisible();
+  await expect(rail).not.toHaveAttribute('data-panel-owner', /.+/);
+  await expect(rail.locator('[data-panel-badge]')).toHaveCount(0);
+  await expect(rail.locator('[data-rail-done]')).not.toHaveAttribute('aria-disabled', /.+/);
+  await rail.locator('[data-rail-done]').click();
+  await expect(rail).toHaveCount(0);
+  expect(seen.csp, 'CSP violations').toEqual([]);
+  expect(seen.errors, 'console errors').toEqual([]);
 });
 
 test('cad:assistant-panel-params-flash the person\'s Parameters panel stays open and theirs, and flashes the rows an Assistant step changes', async ({ page, request }) => {

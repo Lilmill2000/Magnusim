@@ -2,7 +2,7 @@
 // opening the Part workspace, and collecting CSP violations / console errors
 // from the page and the frame. Owner: INTEGRATE (builders may add helpers at the end).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
 
 export function baseUrl(): string {
   const b = process.env.CAD_E2E_BASE_URL;
@@ -778,6 +778,22 @@ export async function forgetRailPrefs(request: APIRequestContext): Promise<void>
     const r = await readWithRetry(() => request.post(`${baseUrl()}/api/plugin-prefs/remove`, { data: { plugin: 'cad', key } }));
     expect(r.ok(), await r.text()).toBe(true);
   }
+}
+
+/**
+ * Call at the top of a spec whose @serial tests collapse or open the rails: after each of them,
+ * forgetRailPrefs, so the tests after it start with the panels as a new user sees them. It is an
+ * afterEach hook because Playwright runs those after a failed test and after a timed-out one;
+ * after a timeout, a finally in the test does not run (the test is left running, then its worker
+ * stops). The page is closed first, so a toggle still running in a timed-out test, or a pref
+ * write the page has not sent yet, cannot store a rail again after the prefs are removed.
+ */
+export function forgetRailPrefsAfterSerialTests(): void {
+  test.afterEach(async ({ page, request }, testInfo) => {
+    if (!testInfo.tags.includes('@serial')) return;
+    await page.close();
+    await forgetRailPrefs(request);
+  });
 }
 
 /**
