@@ -50,8 +50,8 @@
 }
 .cad-sk-glyph.is-inference {
   pointer-events: none;
-  color: var(--mg-primary);
-  border-color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
+  border-color: var(--mg-primary-ink, #1570ef);
 }
 
 /* ---- dimension labels ---- */
@@ -82,8 +82,8 @@
   color: var(--cad-sketch-over);
 }
 .cad-sk-dim.is-preview {
-  color: var(--mg-primary);
-  border-color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
+  border-color: var(--mg-primary-ink, #1570ef);
   pointer-events: none;
 }
 
@@ -521,7 +521,7 @@
   pointer-events: auto;
   cursor: grab; /* the overlay sets the sketch's own grab cursor on the element */
   z-index: 3;
-  color: var(--mg-primary);
+  color: var(--mg-primary-ink, #1570ef);
 }
 .cad-sk-handle svg {
   display: block;

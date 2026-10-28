@@ -21,7 +21,7 @@
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.18);
+  box-shadow: var(--cad-marker-shadow);
 }
 .cad-pattern-markers .cad-pattern-marker:hover,
 .cad-pattern-markers .cad-pattern-marker:focus-visible {

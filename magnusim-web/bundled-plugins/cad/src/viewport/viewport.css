@@ -6,13 +6,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 .cad-viewport {
-  /* Core values without a token yet (style.css:1433-1450, 3056-3064); UI-SHELL may move them to tokens.css. */
-  --cad-vp-btn-bg: rgba(255, 255, 255, 0.92);
-  --cad-vp-btn-fg: #2b3440;
-  --cad-vp-btn-hover-border: #9fb0c5;
-  --cad-vp-btn-hover-fg: #1d4ed8;
-  --cad-vp-disabled: #98a2b3;
-  --cad-vp-glow: 0 0 4px #fff, 0 1px 2px rgba(255, 255, 255, 0.85);
+  /* Its --cad-vp-* tokens are in tokens.css (declared here, they would shadow the dark set on <html>). */
   position: absolute;
   inset: 0;
   background: var(--cad-viewport-bg);
@@ -44,14 +38,14 @@
   top: 0;
   left: 0;
   font: 600 11px/1 var(--mg-font, "Segoe UI", system-ui, sans-serif);
-  color: var(--cad-tree-section);
+  color: var(--cad-vp-label);
   text-shadow: var(--cad-vp-glow);
   white-space: nowrap;
   will-change: transform;
 }
 
 .cad-vp-label[data-state="hover"] {
-  color: var(--cad-toolbar-active-icon);
+  color: var(--cad-vp-label-hover);
 }
 
 .cad-vp-label[data-state="pick"] {
@@ -126,7 +120,7 @@
   background: var(--cad-vp-btn-bg);
   color: var(--cad-vp-btn-fg);
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--cad-vp-btn-shadow);
 }
 
 .cad-vp-btn:hover {

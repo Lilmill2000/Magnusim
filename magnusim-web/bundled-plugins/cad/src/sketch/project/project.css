@@ -49,7 +49,7 @@
   padding: 0;
   background: none;
   font: inherit;
-  color: var(--mg-link, var(--mg-primary));
+  color: var(--mg-link, var(--mg-primary-ink, #1570ef));
   cursor: pointer;
 }
 .cad-sk-link-btn.is-danger {
