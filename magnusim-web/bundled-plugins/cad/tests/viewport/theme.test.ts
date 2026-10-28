@@ -8,7 +8,8 @@
 //   - E1 option (b) puts a rim line under each body's edges (new bodies too), gone with (c);
 //   - a snapshot taken while dark draws LIGHT (background, edges, triad, no rim; the hooks of the
 //     layers it shows called with LIGHT, a hidden layer's not) and puts the dark marks back in the
-//     same task; with LIGHT live it calls no hook and swaps nothing.
+//     same task, also when it fails half-way (it rethrows); with LIGHT live it calls no hook and
+//     swaps nothing.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BoxGeometry, Color, LinearSRGBColorSpace, type Mesh, type Object3D } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -30,7 +31,8 @@ interface Seen {
   arrows: number[];
 }
 
-const gpu = vi.hoisted(() => ({ last: null as unknown as { seen: Seen[] }, log: [] as string[] }));
+/** `fail`: the next render or read of the picture's pixels throws (once). */
+const gpu = vi.hoisted(() => ({ last: null as unknown as { seen: Seen[] }, log: [] as string[], fail: null as 'render' | 'read' | null }));
 
 vi.mock('three', async (importOriginal) => {
   const three = await importOriginal<typeof import('three')>();
@@ -76,6 +78,10 @@ vi.mock('three', async (importOriginal) => {
     }
     render(scene: Object3D) {
       gpu.log.push('render');
+      if (gpu.fail === 'render' && this.target) {
+        gpu.fail = null;
+        throw new Error('render failed');
+      }
       const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, rims: {}, arrows: [] };
       scene.traverse((o) => {
         const m = (o as Mesh).material as unknown as { color?: { getHex(): number }; linewidth?: number; uniforms?: { uColor?: { value: { x: number; y: number; z: number } } } };
@@ -86,7 +92,12 @@ vi.mock('three', async (importOriginal) => {
       });
       this.seen.push(s);
     }
-    readRenderTargetPixels() {}
+    readRenderTargetPixels() {
+      if (gpu.fail === 'read') {
+        gpu.fail = null;
+        throw new Error('read failed');
+      }
+    }
     getContext() {
       return { isContextLost: () => false, readPixels() {}, RGBA: 0x1908, UNSIGNED_BYTE: 0x1401 };
     }
@@ -128,6 +139,7 @@ afterEach(() => {
   for (const h of opened.splice(0)) h.dispose();
   document.body.innerHTML = '';
   gpu.log.length = 0;
+  gpu.fail = null;
   vi.useRealTimers();
 });
 
@@ -255,6 +267,34 @@ describe('the view and the theme', () => {
     expect(f.main.rims.b_1.visible).toBe(true);
     expect(f.triad.arrows[0]).toBe(0xff6b6b);
   });
+
+  // Review round 1: the restore in snapshot's finally was pinned on the success path only.
+  for (const [fail, log] of [
+    ['render', ['palette:light', 'render', 'palette:dark']],
+    ['read', ['palette:light', 'render', 'render', 'palette:dark']],
+  ] as const)
+    it(`a picture whose ${fail} fails while dark rethrows and puts every dark mark back: the next frame is dark, rims and triad too`, () => {
+      const { h, gl } = viewport();
+      h.addLayer('sketch-geometry', { palette: (p: MarkPalette) => gpu.log.push(`palette:${p.name}`) });
+      h.setPalette!(darkPalette({ edges: 'b' }));
+      frame(gl);
+      gpu.log.length = 0;
+      gpu.fail = fail;
+      expect(() => snap(h)).toThrow(`${fail} failed`);
+      // The layer drew LIGHT for the picture and has the live palette again, last.
+      expect(gpu.log).toEqual([...log]);
+      expect(h.palette!()).toEqual(darkPalette({ edges: 'b' }));
+      const f = frame(gl);
+      expect(f.main.clear).toBe(0x1b1f27);
+      expect(f.main.edges).toEqual({ b_1: 0xe6e9ef, b_2: 0xe6e9ef });
+      expect(f.main.rims).toEqual({ b_1: { visible: true, color: 0x1b1f27, width: EDGE_WIDTH_PX + 2 }, b_2: { visible: true, color: 0x1b1f27, width: EDGE_WIDTH_PX + 2 } });
+      expect(f.triad.arrows).toEqual([0xff6b6b, 0xff6b6b, 0x4cd07d, 0x4cd07d, 0x6f9bff, 0x6f9bff]);
+      // And the next picture is LIGHT again.
+      gl.seen.length = 0;
+      snap(h);
+      const pic = gl.seen.filter((s) => s.toTarget);
+      expect([pic[0].clear, pic[0].edges.b_1, pic[1].arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xdc2828]);
+    });
 
   it('a picture taken while light swaps nothing', () => {
     const { h, gl } = viewport();

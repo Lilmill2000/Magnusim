@@ -29,6 +29,9 @@
 //    keyboard focus: in dark its red number is on a red-tinted background, 4.5:1 and more (review
 //    round 1: on the hover blue, 1.7:1), in light on the hover blue as before. The host's dark
 //    --mg-danger is given here as its newer theme.css will (this host has no dark set yet).
+//  - dark-sketch-picture: in sketch mode (review round 1: only model mode was pictured dark), the
+//    view's own picture (the Assistant's and the Picture tool's path) taken while dark, E2 (c) or
+//    (b) with its rims, is the one taken in light, and the view shows no light frame meanwhile.
 //  - dark-lines: E1 / E2's switch (window.__CAD__.appearance.darkLines) draws each candidate's edge
 //    colour, (b) with a rim, for Daniel's screenshot review.
 // Owner: INTEGRATE.
@@ -788,6 +791,66 @@ test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable 
   expect(contrastOf(rgb(dark.hover.color), rgb(dark.hover.bg)), 'the red number on its hover background').toBeGreaterThanOrEqual(4.5);
   await appearance(page, 'light');
   expect(await looks()).toEqual(light);
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the light one, and the view keeps its dark lines and rims", async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  const f = workspaceFrame(page);
+  await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await still(page);
+  // A free line (under defined).
+  await page.keyboard.press('l');
+  for (const p of [
+    [5, 5, 0],
+    [35, 25, 0],
+  ] as V3[]) {
+    const [x, y] = await modelOnPage(page, p);
+    await page.mouse.click(x, y);
+  }
+  await page.keyboard.press('Escape');
+  await still(page);
+  await page.keyboard.press('Escape');
+  await still(page);
+  const snapshot = (name: string) =>
+    f.evaluate((name) => {
+      const r = (window as unknown as W).__CAD__.services.viewport.get().handle.snapshot({ view: 'iso', width: 320, height: 240, hide: [], section: null });
+      (window as unknown as Record<string, Uint8ClampedArray>)[name] = r.rgba;
+      const d = r.rgba as Uint8ClampedArray;
+      // The sketch's line in the picture: its light under-defined blue (a target draws three's lines a little darker).
+      let blue = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 2] > d[i] + 80 && d[i + 2] > 120) blue++;
+      return blue;
+    }, name);
+  const differ = (a: string, b: string) =>
+    f.evaluate(
+      ({ a, b }) => {
+        const x = (window as unknown as Record<string, Uint8ClampedArray>)[a];
+        const y = (window as unknown as Record<string, Uint8ClampedArray>)[b];
+        if (x.length !== y.length) return 1;
+        let n = 0;
+        for (let i = 0; i < x.length; i += 4) if (Math.abs(x[i] - y[i]) > 3 || Math.abs(x[i + 1] - y[i + 1]) > 3 || Math.abs(x[i + 2] - y[i + 2]) > 3) n++;
+        return n / (x.length / 4);
+      },
+      { a, b },
+    );
+  expect(await snapshot('__skLight'), 'the line in the light picture').toBeGreaterThan(20);
+  await appearance(page, 'dark');
+  for (const option of ['c', 'b'] as const) {
+    await f.evaluate((o) => (window as unknown as W).__CAD__.appearance.darkLines(o), option);
+    await still(page);
+    const before = await canvasShot(page);
+    await snapshot(`__skDark${option}`);
+    expect(await differ('__skLight', `__skDark${option}`), `(${option}) the picture taken in dark is the one taken in light`).toBeLessThan(0.002);
+    // The view, its lines (and (b)'s rims) dark as before the picture.
+    await still(page);
+    expect(differs(before, await canvasShot(page)), `(${option}) the view after the picture`).toBeLessThan(0.002);
+    expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
+  }
+  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('c'));
+  await appearance(page, 'light');
   expect(seen.errors).toEqual([]);
 });
 
