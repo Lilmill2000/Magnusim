@@ -226,7 +226,7 @@ export function createFakeWorkspace(
         context.study = clone(study);
       }
       if (event === 'assistantKeys') context.assistantKeys = clone(v as string[] | null);
-      if (event === 'appearance') (context as WorkspaceContext & { appearance?: unknown }).appearance = clone(v);
+      if (event === 'appearance') context.appearance = clone(v as unknown as WorkspaceContext['appearance']);
       for (const fn of listeners[event] as Set<(x: unknown) => void>) fn(clone(v));
     },
   } as unknown as FakeWorkspace;
