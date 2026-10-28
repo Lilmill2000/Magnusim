@@ -185,11 +185,16 @@ async function expectLightPicture(page, png, dpr) {
   }
 }
 
-/** A recording played in the page: its first frame and one every 100 ms, the RGBA at each point (its own px). */
-async function recordedFrames(page, file, points) {
+/**
+ * A recording played in the page: its first frame and one every 100 ms, the RGBA at the margin
+ * (10, 10) and on the legend card. The card's place is worked out from the video's own size and
+ * the view's CSS width `cssW`: at a device pixel ratio of 1.25 headless Chromium records the canvas
+ * at its CSS size, not its device size.
+ */
+async function recordedFrames(page, file, cssW) {
   const b64 = readFileSync(file).toString('base64');
   return page.evaluate(
-    async ([data, pts]) => {
+    async ([data, cssW]) => {
       const bin = atob(data);
       const u8 = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -203,15 +208,24 @@ async function recordedFrames(page, file, points) {
       const c = document.createElement('canvas');
       c.width = v.videoWidth;
       c.height = v.videoHeight;
+      const k = v.videoWidth / cssW;
+      // cardPlaces' legend card, in the video's px.
+      const pts = [[10, 10], [Math.round(200 * k), Math.round(v.videoHeight - 50 * k)]];
       const g = c.getContext('2d', { willReadFrequently: true });
       const frames = [];
       const sample = () => {
         g.drawImage(v, 0, 0);
         frames.push({ t: v.currentTime, at: pts.map(([x, y]) => Array.from(g.getImageData(x, y, 1, 1).data)) });
       };
-      // The first frame, then one every 100 ms as it plays.
-      sample();
-      await v.play().catch(() => {});
+      // The first frame as the video shows it (drawn at loadeddata, before any frame is shown, the
+      // video draws nothing), then one every 100 ms as it plays.
+      await new Promise((shown) => {
+        v.requestVideoFrameCallback(() => {
+          sample();
+          shown();
+        });
+        v.play().catch(() => {});
+      });
       await new Promise((done) => {
         const every = setInterval(() => {
           sample();
@@ -226,7 +240,7 @@ async function recordedFrames(page, file, points) {
       });
       return { w: c.width, h: c.height, frames };
     },
-    [b64, points],
+    [b64, cssW],
   );
 }
 
@@ -567,11 +581,10 @@ for (const dpr of [1, 1.25]) {
       expect(screen.length).toBeGreaterThan(5);
       for (const px of screen) expect(px, 'the screen while recording in dark').toEqual(DARK_MARGIN);
       const view = await T(frame, () => window.__TUNNEL__.view());
-      const w = Math.round(view.w * dpr);
-      const h = Math.round(view.h * dpr);
-      const rec = await recordedFrames(page, file, [[10, 10], cardPlaces(w, h, dpr)[1]]);
+      const rec = await recordedFrames(page, file, view.w);
       console.log(`recording ${rec.w} x ${rec.h}, ${rec.frames.length} frames looked at`);
-      expect(rec.w).toBe(w);
+      // The whole view (its size in px is the browser's choice: see recordedFrames).
+      expect(Math.abs(rec.w / rec.h - view.w / view.h)).toBeLessThan(0.01);
       expectLightFrames(rec);
     });
   });
@@ -605,9 +618,7 @@ test.describe('with the theme dark before the tunnel opens', () => {
     const frame = await openDark(page, request, 'Dark at open, recorded');
     const file = await record(page, frame, () => page.waitForTimeout(1500));
     const view = await T(frame, () => window.__TUNNEL__.view());
-    const w = Math.round(view.w * view.dpr);
-    const h = Math.round(view.h * view.dpr);
-    const rec = await recordedFrames(page, file, [[10, 10], cardPlaces(w, h, view.dpr)[1]]);
+    const rec = await recordedFrames(page, file, view.w);
     expectLightFrames(rec);
     // The first frame (the one composed as Record is pressed) above all.
     for (let k = 0; k < 3; k++) expect(Math.abs(rec.frames[0].at[0][k] - LIGHT_MARGIN[k])).toBeLessThanOrEqual(8);

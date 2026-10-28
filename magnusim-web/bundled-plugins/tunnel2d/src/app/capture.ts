@@ -185,7 +185,16 @@ export class Capture {
   startRecording(): string | null {
     if (this.recording) return null;
     if (!this.canRecord) return 'This browser cannot record the view (no MediaRecorder with WebM).';
-    this.compose();
+    // The recorder starts with the engine's next frame, once this canvas holds it: outside its
+    // own frame a WebGPU canvas reads as empty, so a frame composed now would open the file blank.
+    this.recording = { since: performance.now() };
+    this.pending.push(() => this.startRecorder());
+    this.emit();
+    return null;
+  }
+
+  private startRecorder() {
+    if (!this.recording || this.recorder) return;
     const stream = this.canvas.captureStream(30);
     const type = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
     const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 12_000_000 });
@@ -198,14 +207,12 @@ export class Capture {
     };
     rec.start(1000);
     this.recorder = rec;
-    this.recording = { since: performance.now() };
-    this.emit();
-    return null;
   }
 
+  /** Stops the recording and saves it (stopped before its first frame, there is nothing to save). */
   stopRecording() {
-    if (!this.recorder) return;
-    this.recorder.stop();
+    if (!this.recording) return;
+    this.recorder?.stop();
     this.recorder = null;
     this.recording = null;
     this.emit();

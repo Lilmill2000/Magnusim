@@ -98,7 +98,8 @@ describe('a picture with the page dark', () => {
     expect(drawn.some((l) => l.includes('<HTMLCanvasElement>'))).toBe(false);
   });
 
-  it('a recording starts with the same frame a picture draws', async () => {
+  it("a recording starts with the engine's next frame, drawn as a picture is; stopped before it, nothing is saved", async () => {
+    const started: number[] = [];
     class Recorder {
       static isTypeSupported = () => true;
       state = 'inactive';
@@ -106,6 +107,7 @@ describe('a picture with the page dark', () => {
       onstop: (() => void) | null = null;
       start() {
         this.state = 'recording';
+        started.push(log.length);
       }
       stop() {
         this.state = 'inactive';
@@ -113,15 +115,34 @@ describe('a picture with the page dark', () => {
       }
     }
     vi.stubGlobal('MediaRecorder', Recorder);
-    HTMLCanvasElement.prototype.captureStream = () => ({ getTracks: () => [] }) as unknown as MediaStream;
+    const streams = vi.fn(() => ({ getTracks: () => [] }) as unknown as MediaStream);
+    HTMLCanvasElement.prototype.captureStream = streams;
     const { engine, capture } = setup();
     expect(capture.canRecord).toBe(true);
     const still = await picture(engine, capture);
+
+    // Pressed: recording, but nothing composed or streamed until the engine draws its next frame
+    // (a WebGPU canvas read outside its frame is empty: the file would open on a blank frame).
     const from = log.length;
     expect(capture.startRecording()).toBeNull();
-    const first = log.slice(from);
+    expect(capture.recording).not.toBeNull();
+    expect(log.length).toBe(from);
+    expect(streams).not.toHaveBeenCalled();
+    engine.afterFrame!();
+    // That frame is composed first, then the recorder starts on it.
+    expect(log.slice(from)).toEqual(still);
+    expect(streams).toHaveBeenCalledTimes(1);
+    expect(started).toEqual([log.length]);
     capture.stopRecording();
-    expect(first).toEqual(still);
+    expect(capture.recording).toBeNull();
     for (const el of styles.reads) expect(el.getAttribute('data-theme')).toBe('light');
+
+    // Stopped before its first frame: no recorder, nothing saved; that frame then starts none.
+    expect(capture.startRecording()).toBeNull();
+    capture.stopRecording();
+    expect(capture.recording).toBeNull();
+    engine.afterFrame!();
+    expect(streams).toHaveBeenCalledTimes(1);
+    expect(started.length).toBe(1);
   });
 });
