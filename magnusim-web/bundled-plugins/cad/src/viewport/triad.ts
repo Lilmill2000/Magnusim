@@ -3,8 +3,9 @@
 // (shaft radius .03, tip radius .1, tip length .2, length 1; AxesActor.js
 // defaults, recenter false) in X/Y/Z colours, lit by a headlight with the
 // mapper defaults (ambient 0, diffuse 1), and a camera that copies the main
-// view's orientation and frames the arrows' bounds (resetCamera). Its colours follow the
-// view's palette (setColors: the host's dark axis colours in a dark view, LIGHT in a picture).
+// view's orientation and frames the arrows' bounds (resetCamera). Its colours and lighting
+// follow the view's palette (setColors, setLight: the host's dark axis colours with some ambient
+// in a dark view, so an arrow pointing at the eye still reads; LIGHT, the core's, in a picture).
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BufferAttribute, ConeGeometry, CylinderGeometry, Group, Mesh, PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
@@ -12,8 +13,8 @@ import { createBodyMaterial, setBodyColor, type BodyMaterial } from './materials
 import { FOV_DEG, TRIAD_COLORS } from './colors';
 
 const SHAFT_R = 0.03;
-const TIP_R = 0.1;
-const TIP_LEN = 0.2;
+export const TIP_R = 0.1;
+export const TIP_LEN = 0.2;
 
 export class Triad {
   readonly scene = new Scene();
@@ -56,6 +57,20 @@ export class Triad {
   /** The arrows' colours, X, Y, Z (a uniform each: nothing is rebuilt). */
   setColors(colors: readonly [number, number, number]): void {
     this.mats.forEach((m, i) => setBodyColor(m, colors[i]));
+  }
+
+  /** How the arrows are lit: ambient + diffuse * the headlight's angle (uniforms only). */
+  setLight(light: { ambient: number; diffuse: number }): void {
+    for (const m of this.mats) {
+      m.uniforms.uAmbient.value = light.ambient;
+      m.uniforms.uDiffuse.value = light.diffuse;
+    }
+  }
+
+  /** The arrows' lighting now (tests). */
+  light(): { ambient: number; diffuse: number } {
+    const u = this.mats[0].uniforms;
+    return { ambient: u.uAmbient.value, diffuse: u.uDiffuse.value };
   }
 
   /** The arrows' colours now (tests). */

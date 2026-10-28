@@ -50,6 +50,9 @@
 //  - dark-tooltip-edge: a toolbar button's tooltip and the toolbar's drag note have the host
 //    tooltip's edge (--mg-tooltip-edge, as the core's .mat-k-tip): a #3a414e line around them in
 //    dark, where their shadow is lost; in light the edge is transparent and paints no pixel.
+//  - dark-triad: each orientation arrow's brightest pixels read 3:1 and more on the dark view at
+//    the home view and at every standard view (lit by the headlight alone, as the core's, an arrow
+//    pointing at the eye read 1.8:1); back in light the triad is the pixels it was.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
@@ -1350,5 +1353,69 @@ test("cad:dark-tooltip-edge a tooltip and the toolbar's drag note have the host 
     await appearance(page, 'light');
   }
   await page.mouse.move(5, 5);
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:dark-triad each orientation arrow reads 3:1 and more on the dark view at the home view and every standard view, Y too; light's triad is the core's", async ({ page, request }) => {
+  const { seen } = await freshPart(page, request);
+  const f = workspaceFrame(page);
+  const box = (await page.locator('#workspace-frame').boundingBox())!;
+  const triadClip = async () => {
+    const r = await f.evaluate(() => {
+      const s = document.querySelector('[data-triad-slot]')!.getBoundingClientRect();
+      return { x: s.x, y: s.y, w: s.width, h: s.height };
+    });
+    return { x: Math.round(box.x + r.x), y: Math.round(box.y + r.y), width: Math.round(r.w), height: Math.round(r.h) };
+  };
+  /**
+   * Each arrow's pixels in the triad's corner (the pixels nearest its colour's hue: X red, Y green,
+   * Z blue, well clear of the background) and the contrast on the background of its brightest
+   * ones: the 8th brightest (a few pixels are not an arrow you can see).
+   */
+  const arrows = async (bg: RGB) => {
+    const img = PNG.decode(await page.screenshot({ clip: await triadClip() }));
+    const out: Record<'x' | 'y' | 'z', { n: number; contrast: number }> = { x: { n: 0, contrast: 0 }, y: { n: 0, contrast: 0 }, z: { n: 0, contrast: 0 } };
+    const by: Record<'x' | 'y' | 'z', number[]> = { x: [], y: [], z: [] };
+    for (let i = 0; i < img.data.length; i += 4) {
+      const c: RGB = [img.data[i], img.data[i + 1], img.data[i + 2]];
+      if (dist(img.data, i, bg) <= 12) continue;
+      const [r, g, b] = c;
+      const k = r > g + 30 && r > b + 30 ? 'x' : g > r + 25 && g > b + 15 ? 'y' : b > r + 30 && b > g + 15 ? 'z' : null;
+      if (k) by[k].push(contrastOf(c, bg));
+    }
+    for (const k of ['x', 'y', 'z'] as const) {
+      const s = by[k].sort((a, b) => b - a);
+      out[k] = { n: s.length, contrast: Math.round((s[Math.min(7, s.length - 1)] ?? 1) * 100) / 100 };
+    }
+    return out;
+  };
+  const VIEWS = ['home', 'iso', 'iso_back', 'front', 'back', 'left', 'right', 'top', 'bottom'] as const;
+  const look = async (view: (typeof VIEWS)[number]) => {
+    await f.evaluate((v) => (window as unknown as W).__CAD__.services.viewport.get().handle.setView(v, { animate: false }), view);
+    await still(page);
+  };
+  // Light: the core's triad, lit by the headlight alone (as vtkAxesActor), the core's axis colours.
+  await look('home');
+  const lightHome = await arrows(LIGHT_BG);
+  await appearance(page, 'dark');
+  const results: Record<string, unknown> = {};
+  const low: string[] = [];
+  for (const view of VIEWS) {
+    await look(view);
+    const a = await arrows(DARK_BG);
+    results[view] = a;
+    // An arrow seen end-on (Y from the front or back, Z from the top or bottom, X from the left or
+    // right) is a dot: it still reads, but has few pixels.
+    for (const k of ['x', 'y', 'z'] as const) if (a[k].n >= 8 && a[k].contrast < 3) low.push(`${view} ${k}: ${a[k].contrast} (${a[k].n} px)`);
+  }
+  console.log(`[dark-triad] light home ${JSON.stringify(lightHome)} dark ${JSON.stringify(results)}`);
+  expect(low, 'every arrow reads 3:1 and more on the dark background').toEqual([]);
+  // At the home view every arrow is drawn with enough pixels to see (the Y arrow points away from the eye there).
+  const home = results.home as Record<'x' | 'y' | 'z', { n: number; contrast: number }>;
+  for (const k of ['x', 'y', 'z'] as const) expect(home[k].n, `home ${k}'s pixels`).toBeGreaterThanOrEqual(8);
+  // Back in light: the core's triad, pixel for pixel as before the dark view.
+  await appearance(page, 'light');
+  await look('home');
+  expect(await arrows(LIGHT_BG)).toEqual(lightHome);
   expect(seen.errors).toEqual([]);
 });

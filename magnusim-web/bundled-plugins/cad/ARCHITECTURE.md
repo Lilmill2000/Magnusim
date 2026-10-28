@@ -971,7 +971,9 @@ with the host once for the page's life, and its chip goes in the dock.
     host's light `--mg-axis-*`, as the core's since its light unify) and
     `DARK`. D2: surfaces stay light (bodies, caps, picks and hover on faces,
     plane and region tints); thin marks turn light (background `#1b1f27`, D3;
-    edges; triad, E4; sketch lines and points; reference axes and points;
+    edges; triad, E4, lit ambient .55 and diffuse .45, `triadLight`, so an arrow
+    pointing at the eye reads 3.5:1 and more where the core's headlight alone
+    gives 1.8:1; sketch lines and points; reference axes and points;
     measure; the arrows and the banana's guide). Daniel's picks (2026-10-28):
     E1 (a), the bodies' B-rep edges `#e6e9ef`, plain; E2, "the colour follows
     what's under it": every coloured thin mark that can lie on a face (the

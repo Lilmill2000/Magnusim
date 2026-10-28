@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { overlayColors, REGION_TINT } from '../../src/features/sketch/colors';
 import { BODY_COLOR, EDGE_COLOR, HOVER_COLOR, PICK_COLOR, PLANE_BORDER, PLANE_FILL, TRIAD_COLORS, VIEWPORT_BG } from '../../src/viewport/colors';
 import { DARK, faceSketchInk, hexNumber, hexString, LIGHT, paletteFor, paletteOf, samePalette, sketchRolesOf, type MarkPalette, type SketchInk } from '../../src/viewport/palette';
+import { TIP_LEN, TIP_R } from '../../src/viewport/triad';
 import { contrast, hostTokens, themeValue } from '../styles/css-tokens';
 
 const num = (s: string | null | undefined) => hexNumber(String(s));
@@ -87,7 +88,7 @@ describe('DARK', () => {
   it("E1 (a): the edges are the host's dark text colour, plain (no rim, nothing else to choose)", () => {
     expect(DARK.edge).toBe(0xe6e9ef);
     expect(DARK.edge).toBe(num(hostTokens().dark.get('--mg-text')));
-    expect(Object.keys(DARK).sort()).toEqual(['background', 'constructLine', 'edge', 'face', 'ink', 'measure', 'name', 'sketch', 'triad']);
+    expect(Object.keys(DARK).sort()).toEqual(['background', 'constructLine', 'edge', 'face', 'ink', 'measure', 'name', 'sketch', 'triad', 'triadLight']);
     expect(Object.keys(LIGHT).sort()).toEqual(Object.keys(DARK).sort());
   });
 
@@ -107,6 +108,22 @@ describe('DARK', () => {
     for (const k of ['grid', 'gridMajor'] as const) expect(contrast(num(DARK.sketch[k]), DARK.background)).toBeGreaterThanOrEqual(contrast(num(LIGHT.sketch[k]), LIGHT.background));
     // In light the same marks: the blue arrow was the weakest triad colour (why E4 changes them).
     expect(contrast(LIGHT.triad[2], DARK.background)).toBeLessThan(3);
+  });
+
+  it("E4: lights the dark triad so an arrow pointing at the eye still reads 3:1; light's is the core's", () => {
+    // The core's vtkAxesActor: the headlight alone.
+    expect(LIGHT.triadLight).toEqual({ ambient: 0, diffuse: 1 });
+    // Seen end on, pointing at the eye, an arrow shows only its cone's sides (the shaft behind it),
+    // whose normals lean towards the eye by the cone's half-angle: the headlight term is its sine.
+    const side = Math.sin(Math.atan(TIP_R / TIP_LEN));
+    expect(side).toBeCloseTo(0.447, 3);
+    const lit = (c: number, k: number) => [16, 8, 0].reduce((n, s) => n | (Math.min(255, Math.round(((c >> s) & 255) * k)) << s), 0);
+    const worst = (p: MarkPalette) => p.triad.map((c) => contrast(lit(c, p.triadLight.ambient + p.triadLight.diffuse * side), DARK.background));
+    // Lit as in light, the X and Z arrows end on read under 2:1 on the dark background (review: the dim Y arrow).
+    expect(Math.min(...worst({ ...DARK, triadLight: LIGHT.triadLight }))).toBeLessThan(2);
+    for (const [i, r] of worst(DARK).entries()) expect(r, `${'xyz'[i]} end on`).toBeGreaterThanOrEqual(3);
+    // A side facing the light keeps the arrow's full colour.
+    expect(DARK.triadLight.ambient + DARK.triadLight.diffuse).toBe(1);
   });
 
   it("E2: over a light surface every mark takes LIGHT's colour for its role, exactly", () => {

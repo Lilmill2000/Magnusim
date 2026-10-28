@@ -85,7 +85,8 @@ in the Part" in `README.md`.
 **Ready for a dark Magnusim.** Once Magnusim has its dark appearance (it is not
 in this version yet), the Part follows it:
 - The 3D view turns dark (`#1b1f27`); the parts keep their light surfaces, the
-  edges are light, and the orientation arrows take Magnusim's dark axis colours.
+  edges are light, and the orientation arrows take Magnusim's dark axis colours,
+  lit so that an arrow pointing straight at you still stands out.
 - Sketch lines and points (every state, the line being drawn too, in a sketch
   and on a finished one), reference axes and points, the measure line and the
   Extrude and Enclosure arrows follow what is under them: over a part's face

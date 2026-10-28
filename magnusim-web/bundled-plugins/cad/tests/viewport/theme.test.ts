@@ -39,6 +39,8 @@ interface Seen {
   marks: Record<string, { only: 'all' | 'face' | 'ground'; twin: number | null }>;
   /** The colours of the meshes drawn with a uColor uniform and no name (the triad's arrows), as 0xrrggbb. */
   arrows: number[];
+  /** Their lighting (the first arrow's ambient and diffuse). */
+  triadLight: { ambient: number; diffuse: number } | null;
 }
 
 /** `fail`: the next render or read of the picture's pixels throws (once). */
@@ -92,10 +94,10 @@ vi.mock('three', async (importOriginal) => {
         gpu.fail = null;
         throw new Error('render failed');
       }
-      const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, surfaces: {}, cap: null, marks: {}, arrows: [] };
+      const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, surfaces: {}, cap: null, marks: {}, arrows: [], triadLight: null };
       const only = (m: Material) => (!m.stencilWrite ? 'all' : m.stencilWriteMask === 0 && m.stencilFuncMask === FACE_BIT ? (m.stencilRef === FACE_BIT ? 'face' : 'ground') : 'other');
       scene.traverse((o) => {
-        const m = (o as Mesh).material as unknown as Material & { color?: { getHex(): number }; linewidth?: number; uniforms?: { uColor?: { value: { x: number; y: number; z: number } } } };
+        const m = (o as Mesh).material as unknown as Material & { color?: { getHex(): number }; linewidth?: number; uniforms?: { uColor?: { value: { x: number; y: number; z: number } }; uAmbient?: { value: number }; uDiffuse?: { value: number } } };
         if (o.name.startsWith('edges:')) s.edges[o.name.slice(6)] = m.color!.getHex();
         if (o.name.startsWith('body:')) s.surfaces[o.name.slice(5)] = !m.stencilWrite ? 'off' : m.stencilWriteMask === FACE_BIT && m.stencilRef === FACE_BIT ? 'mark' : m.stencilWriteMask === FACE_BIT && m.stencilRef === 0 ? 'clear' : ('other' as never);
         if (o.name === 'section-cap' && o.parent?.visible) s.cap = m.stencilRef;
@@ -105,7 +107,10 @@ vi.mock('three', async (importOriginal) => {
           if (t?.visible) expect(only(t.material), 'a twin draws over light surfaces only').toBe('face');
         }
         const u = m?.uniforms?.uColor?.value;
-        if (!o.name && (o as Mesh).isMesh && u) s.arrows.push((Math.round(u.x * 255) << 16) | (Math.round(u.y * 255) << 8) | Math.round(u.z * 255));
+        if (!o.name && (o as Mesh).isMesh && u) {
+          s.arrows.push((Math.round(u.x * 255) << 16) | (Math.round(u.y * 255) << 8) | Math.round(u.z * 255));
+          s.triadLight ??= { ambient: m.uniforms!.uAmbient!.value, diffuse: m.uniforms!.uDiffuse!.value };
+        }
       });
       this.seen.push(s);
     }
@@ -212,6 +217,7 @@ describe('the view and the theme', () => {
     expect(f.main.edges).toEqual({ b_1: 0x0a0b0e, b_2: 0x0a0b0e });
     expect(f.main.surfaces).toEqual({ b_1: 'off', b_2: 'off' });
     expect(f.triad.arrows).toEqual([0xd42828, 0xd42828, 0x1f9a3a, 0x1f9a3a, 0x2a5bd7, 0x2a5bd7]);
+    expect(f.triad.triadLight).toEqual({ ambient: 0, diffuse: 1 });
     const hook = vi.fn();
     h.addLayer('sketch-geometry', { palette: hook });
     h.setPalette!(LIGHT);
@@ -236,6 +242,7 @@ describe('the view and the theme', () => {
     expect(f.main.clear).toBe(0x1b1f27);
     expect(f.main.edges).toEqual({ b_1: 0xe6e9ef, b_2: 0xe6e9ef });
     expect(f.triad.arrows).toEqual([0xff6b6b, 0xff6b6b, 0x4cd07d, 0x4cd07d, 0x6f9bff, 0x6f9bff]);
+    expect(f.triad.triadLight).toEqual(DARK.triadLight);
     // The same palette again: nothing.
     h.setPalette!({ ...DARK } as MarkPalette);
     expect(hook).toHaveBeenCalledTimes(1);
@@ -244,6 +251,7 @@ describe('the view and the theme', () => {
     expect(hook.mock.calls[1]).toEqual([LIGHT]);
     const g = frame(gl);
     expect([g.main.clear, g.main.edges.b_1, g.triad.arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xd42828]);
+    expect(g.triad.triadLight).toEqual({ ambient: 0, diffuse: 1 });
   });
 
   it("E2: while dark, a light body's faces set the face bit (a dark one clears it, a see-through one leaves it), the cap sets it, and a mark with a face ink is drawn twice; in light none of it", () => {
@@ -310,6 +318,8 @@ describe('the view and the theme', () => {
     expect(pic[0].surfaces).toEqual({ b_1: 'off', b_2: 'off' });
     expect(pic[0].marks).toEqual({ measure: { only: 'all', twin: null } });
     expect(pic[1].arrows).toEqual([0xd42828, 0xd42828, 0x1f9a3a, 0x1f9a3a, 0x2a5bd7, 0x2a5bd7]);
+    // The picture's triad is lit as the core's.
+    expect(pic[1].triadLight).toEqual(LIGHT.triadLight);
     // The layer the picture shows draws LIGHT for it and the live palette after; a hidden one is not asked.
     expect(gpu.log).toEqual(['palette:light', 'render', 'render', 'palette:dark']);
     expect(hidden.mock.calls.length).toBe(1);
@@ -321,6 +331,7 @@ describe('the view and the theme', () => {
     expect(f.main.surfaces).toEqual({ b_1: 'mark', b_2: 'clear' });
     expect(f.main.marks).toEqual({ measure: { only: 'ground', twin: LIGHT.measure } });
     expect(f.triad.arrows[0]).toBe(0xff6b6b);
+    expect(f.triad.triadLight).toEqual(DARK.triadLight);
   });
 
   // Review round 1: the restore in snapshot's finally was pinned on the success path only.

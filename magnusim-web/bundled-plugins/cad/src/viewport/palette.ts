@@ -23,7 +23,10 @@
 //       or an empty or translucent plane. A line that crosses a face's outline changes colour
 //       there (accepted). A pick and a hover keep their colours (they read on both). How it is
 //       drawn: src/viewport/onface.ts (one stencil bit for "a light surface shows here");
-//   E4  the triad takes the host's dark axis colours; E5 keeps the region and plane tints.
+//   E4  the triad takes the host's dark axis colours, lit with some ambient (`triadLight`: lit by
+//       the headlight alone, as the core's vtkAxesActor, an arrow pointing at the eye shows only
+//       its cone's sides, at 45 % of its colour: 1.8:1 on the dark background); E5 keeps the
+//       region and plane tints.
 // In LIGHT nothing follows what is under it (`face` null): the light view is as it was.
 // tests/viewport/palette.test.ts pins LIGHT to the core's light values, DARK's marks to at least
 // 3:1 on its background, its face inks to LIGHT's by role, and both palettes to the CSS tokens
@@ -54,6 +57,12 @@ export interface SketchInk {
   lost: string;
 }
 
+/** How the triad's arrows are lit: ambient + diffuse * the headlight's angle (materials.ts' body shading). */
+export interface TriadLight {
+  readonly ambient: number;
+  readonly diffuse: number;
+}
+
 /** The thin marks' colours by role where a light surface shows under them (E2): LIGHT's. */
 export interface FaceInks {
   readonly constructLine: number;
@@ -69,6 +78,8 @@ export interface MarkPalette {
   readonly edge: number;
   /** The orientation triad's X, Y and Z arrows. */
   readonly triad: readonly [number, number, number];
+  /** How the triad is lit (LIGHT: the core's vtkAxesActor, ambient 0 and diffuse 1). */
+  readonly triadLight: TriadLight;
   /** Reference axes and points at rest (CONSTRUCT). */
   readonly constructLine: number;
   /** The measure line and its ends. */
@@ -89,6 +100,8 @@ export const LIGHT: MarkPalette = Object.freeze({
   background: VIEWPORT_BG,
   edge: EDGE_COLOR,
   triad: TRIAD_COLORS,
+  // vtkAxesActor's mapper defaults (runtime.js:1386), as the core's triad.
+  triadLight: Object.freeze({ ambient: 0, diffuse: 1 }),
   constructLine: 0x2f5fb8,
   measure: 0x1a4fbf,
   ink: 0x1570ef,
@@ -128,6 +141,9 @@ export const DARK: MarkPalette = Object.freeze({
   edge: hexNumber(DARK_TEXT),
   // E4: the host's dark axis colours (the light blue arrow reads only 2.99:1 on the dark background).
   triad: Object.freeze([0xff6b6b, 0x4cd07d, 0x6f9bff] as const),
+  // An arrow seen end on, pointing at the eye, at 75 % of its colour (its cone's sides face the
+  // headlight at 63 deg): 3.5:1 and more; one facing the light keeps its full colour.
+  triadLight: Object.freeze({ ambient: 0.55, diffuse: 0.45 }),
   constructLine: 0x7aa7ff,
   measure: 0x8fb5ff,
   ink: 0x7aa7ff,

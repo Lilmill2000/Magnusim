@@ -586,6 +586,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
     caps.setFaceBit(p.face !== null);
     triad.setColors(p.triad);
+    triad.setLight(p.triadLight);
   }
 
   const paletteCall = (fn: (p: MarkPalette) => void, p: MarkPalette) => {
