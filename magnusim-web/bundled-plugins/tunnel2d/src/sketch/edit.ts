@@ -4,7 +4,7 @@
 // whatever depended on what went. The solver then puts the geometry where its relations
 // and dimensions say (src/sketch/solve.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { circleThrough, dist, newId, norm, sub, type SketchConstraint, type SketchDimensionKind, type SketchEntity, type SketchRelationKind, type Vec2 } from './cad';
+import { circleThrough, dist, entityPoints, newId, norm, sub, type SketchConstraint, type SketchDimensionKind, type SketchEntity, type SketchRelationKind, type Vec2 } from './cad';
 import { exprOf, type SketchData } from './model';
 
 export const clone = (s: SketchData): SketchData => ({
@@ -163,6 +163,9 @@ export function usedPoints(e: SketchEntity): string[] {
       return [e.c, e.a, e.b];
     case 'spline':
       return [...e.pts, ...((e.handles ?? []).filter(Boolean) as string[])];
+    default:
+      // CAD's other curves (ellipses, parabolas, conics; the tunnel draws none): CAD's own list.
+      return entityPoints(e);
   }
 }
 
