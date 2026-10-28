@@ -338,6 +338,9 @@
   top: 3px;
   font: 600 10px/1.2 var(--mg-font, inherit);
   color: var(--cad-box-enclose);
+  /* None in light; in dark a backing in the view's background colour, over a light face too. */
+  background: var(--cad-box-caption-bg);
+  box-shadow: var(--cad-box-caption-ring);
   white-space: nowrap;
 }
 .cad-box-select[data-box-mode='touch'] .cad-box-caption {

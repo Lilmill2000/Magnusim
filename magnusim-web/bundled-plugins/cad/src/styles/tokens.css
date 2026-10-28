@@ -98,6 +98,11 @@
   --cad-box-enclose-fill: rgba(21, 112, 239, 0.08);
   --cad-box-touch: #12855a;
   --cad-box-touch-fill: rgba(46, 196, 126, 0.1);
+  /* The box's caption: bare text in light; in dark on a backing of the view's background colour
+     (a ring around it, no layout change), so it reads where the box starts over a light face
+     (review round 1: 1.2 to 1.4:1 there). */
+  --cad-box-caption-bg: transparent;
+  --cad-box-caption-ring: none;
 
   /* Panels (style.css:2899-2906, 2948-3081, 3445, 3548; PanelChrome) */
   --cad-panel-accent-feature: #344054;
@@ -166,6 +171,8 @@
   --cad-box-enclose-fill: rgba(122, 167, 255, 0.12);
   --cad-box-touch: #47cd89;
   --cad-box-touch-fill: rgba(71, 205, 137, 0.14);
+  --cad-box-caption-bg: rgba(27, 31, 39, 0.88);
+  --cad-box-caption-ring: 0 0 0 2px rgba(27, 31, 39, 0.88);
 
   /* A quieter stripe than light's slate. */
   --cad-panel-accent-feature: #9aa4b2;

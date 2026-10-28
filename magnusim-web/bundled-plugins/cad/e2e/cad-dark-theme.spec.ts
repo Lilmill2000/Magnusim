@@ -22,6 +22,9 @@
 //    laid out that far across); going dark repaints that grid dark (review round 1: it stayed the
 //    light grid, bright on the dark view), and a picture taken then has the light grid, the
 //    picture taken in light.
+//  - dark-box-caption: a selection box started over a light face: its caption sits on a backing
+//    of the dark background colour (review round 1: bare light blue on the face read 1.2 to
+//    1.4:1), and has none in light.
 //  - dark-lines: E1 / E2's switch (window.__CAD__.appearance.darkLines) draws each candidate's edge
 //    colour, (b) with a rim, for Daniel's screenshot review.
 // Owner: INTEGRATE.
@@ -667,6 +670,57 @@ test('cad:dark-grid-edge-on the grid a near edge-on view keeps turns dark with t
   expect(differ, 'the picture taken in dark is the one taken in light').toBeLessThan(0.002);
   await appearance(page, 'light');
   expect((await band()).light).toBeGreaterThan(0.3);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:dark-box-caption a selection box started over a face has its caption on a dark backing in dark, none in light', async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  await addSolid(page, { size: [40, 40, 20] });
+  // Nothing selected (a selected body is shaded darker).
+  await page.keyboard.press('Escape');
+  await expect.poll(() => workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.selection.get().items.length)).toBe(0);
+  // Seen from the top: its top face fills the view, lit full on (a light face).
+  await workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('top', { animate: false }));
+  await still(page);
+  /** Ctrl+drag from the block's top face, down and right (enclose); held, the caption's look and pixels, then released. */
+  const caption = async () => {
+    const [x, y] = await modelOnPage(page, [10, 10, 20]);
+    await page.mouse.move(x, y);
+    await page.keyboard.down('Control');
+    await page.mouse.down();
+    await page.mouse.move(x + 60, y + 40, { steps: 4 });
+    await page.mouse.move(x + 120, y + 80, { steps: 4 });
+    const cap = frame.locator('[data-box-select] .cad-box-caption');
+    await expect(cap).toBeVisible();
+    const look = await cap.evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, ring: getComputedStyle(el).boxShadow, text: el.textContent }));
+    // The caption's box and 1 px of its ring: the share of pixels that are the dark backing over the face.
+    const r = (await cap.boundingBox())!;
+    const img = await shoot(page, { x: Math.round(r.x - 1), y: Math.round(r.y - 1), width: Math.round(r.width + 2), height: Math.round(r.height + 2) });
+    let backed = 0;
+    for (let i = 0; i < img.data.length; i += 4) if (dist(img.data, i, DARK_BG) <= 40) backed++;
+    await page.mouse.up();
+    await page.keyboard.up('Control');
+    await expect(frame.locator('[data-box-select]')).toHaveCount(0);
+    return { ...look, backed: backed / (img.width * img.height) };
+  };
+  // The face under the caption's start (no box yet): a light face.
+  const [fx, fy] = await modelOnPage(page, [10, 10, 20]);
+  const face = (await shoot(page, { x: Math.round(fx) + 8, y: Math.round(fy) + 8, width: 1, height: 1 })).data;
+  expect(contrastOf([face[0], face[1], face[2]], DARK_BG), 'the box starts over a light face').toBeGreaterThan(6);
+  const light = await caption();
+  // Light as it was: bare text on the face.
+  expect([light.bg, light.ring]).toEqual(['rgba(0, 0, 0, 0)', 'none']);
+  expect(light.backed).toBe(0);
+  await appearance(page, 'dark');
+  const dark = await caption();
+  expect(dark.text).toBe(light.text);
+  // On a backing of the view's dark background colour, ring and all, over the face.
+  expect(dark.bg).toBe('rgba(27, 31, 39, 0.88)');
+  expect(dark.ring).toBe('rgba(27, 31, 39, 0.88) 0px 0px 0px 2px');
+  expect(dark.backed, `the backing's pixels around the caption: ${dark.backed}`).toBeGreaterThan(0.5);
+  await appearance(page, 'light');
+  const back = await caption();
+  expect([back.bg, back.ring, back.backed]).toEqual(['rgba(0, 0, 0, 0)', 'none', 0]);
   expect(seen.errors).toEqual([]);
 });
 

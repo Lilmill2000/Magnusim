@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { cadTokens, contrast, hostTokens, PLUGIN, resolveVars, stripComments, themeValue } from './css-tokens';
+import { cadTokens, contrast, hostTokens, over, parseColor, PLUGIN, resolveVars, stripComments, themeValue } from './css-tokens';
 
 /** Literal colours that are the same in both themes (a pick, a set face, a hover, the always-dark tooltip). */
 const NEUTRAL = new Set(['--cad-pick', '--cad-set', '--cad-hover-pick', '--cad-tip-key-border', '--cad-tip-detail']);
@@ -73,6 +73,9 @@ const LIGHT_BEFORE: Record<string, string> = {
   '--cad-box-enclose-fill': 'rgba(21, 112, 239, 0.08)',
   '--cad-box-touch': '#12855a',
   '--cad-box-touch-fill': 'rgba(46, 196, 126, 0.1)',
+  // New: the caption had no background (transparent) and no shadow (none), and keeps them in light.
+  '--cad-box-caption-bg': 'transparent',
+  '--cad-box-caption-ring': 'none',
   '--cad-panel-accent-feature': '#344054',
   '--cad-panel-accent-sketch': '#175cd3',
   '--cad-danger-hover-bg': '#fef3f2',
@@ -148,6 +151,24 @@ describe('CAD tokens: the dark set', () => {
       expect(COLOURISH.test(v), `${name}: ${v}`).toBe(true);
       expect(v.replace(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi, '').replace(/[\d.\spx,-]/g, ''), `${name}: only lengths besides colours`).toBe('');
     }
+  });
+
+  it("backs the box's caption in the view's background colour in dark only: it reads on a light face", () => {
+    expect([themeValue('--cad-box-caption-bg', 'light'), themeValue('--cad-box-caption-ring', 'light')]).toEqual(['transparent', 'none']);
+    const caption = /\n\.cad-box-caption \{([^}]*)\}/.exec(readFileSync(join(PLUGIN, 'src/viewport/viewport.css'), 'utf8'))?.[1];
+    expect(caption).toMatch(/background: var\(--cad-box-caption-bg\);/);
+    expect(caption).toMatch(/box-shadow: var\(--cad-box-caption-ring\);/);
+    // The ring is the backing's own colour (one plate, 2 px larger each side).
+    const backing = themeValue('--cad-box-caption-bg', 'dark')!;
+    expect(themeValue('--cad-box-caption-ring', 'dark')).toBe(`0 0 0 2px ${backing}`);
+    // Over the lightest face (a lit one is lighter than the body colour) and over the view's own background,
+    // both captions read at least 4.5:1 on it (bare on a face: 1.2 to 1.4:1).
+    const rgb = (c: number[]) => `rgb(${c.slice(0, 3).map(Math.round).join(', ')})`;
+    for (const under of ['#ffffff', '#bdc9db', themeValue('--cad-viewport-bg', 'dark')!]) {
+      const plate = rgb(over(parseColor(backing)!, parseColor(under)!));
+      for (const text of ['--cad-box-enclose', '--cad-box-touch']) expect(contrast(themeValue(text, 'dark')!, plate), `${text} on the backing over ${under}`).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(contrast(themeValue('--cad-box-enclose', 'dark')!, '#bdc9db')).toBeLessThan(1.6);
   });
 
   it('reads in dark: text at least 4.5:1 on its background, icons and marks at least 3:1', () => {
