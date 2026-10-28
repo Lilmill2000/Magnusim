@@ -122,7 +122,7 @@ describe('parseColor', () => {
 describe('themeRgb255 and themeRgb01', () => {
   it('give the token as bytes and as 0..1, and byte -> float -> byte is the identity', () => {
     expect(themeRgb255('--mg-viewport-ink')).toEqual([0x14, 0x1a, 0x29]);
-    expect(themeRgb01('--mg-viewport-bg')).toEqual([0xf5 / 255, 0xf6 / 255, 0xf8 / 255]);
+    expect(themeRgb01('--mg-viewport-bg')).toEqual([0xf0 / 255, 0xf2 / 255, 0xf7 / 255]);
     const plain = Object.keys(light).filter((k) => /^#[0-9a-f]{6}$/i.test(light[k]));
     expect(plain.length).toBeGreaterThan(100);
     for (const k of plain) {
@@ -154,7 +154,7 @@ describe('lightProbe', () => {
     expect(probe.hasAttribute('data-theme-keep')).toBe(true);
     expect(themeColor('--mg-text-ink', probe)).toBe(hexRgb(light['--mg-text-ink']));
     expect(themeColor('--mg-text-ink')).toBe(hexRgb(dark['--mg-text-ink']));
-    expect(themeRgb255('--mg-viewport-bg', probe)).toEqual([0xf5, 0xf6, 0xf8]);
+    expect(themeRgb255('--mg-viewport-bg', probe)).toEqual([0xf0, 0xf2, 0xf7]);
     // Gone (body replaced): the next call puts a new one there.
     probe.remove();
     expect(lightProbe()).not.toBe(probe);

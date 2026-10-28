@@ -528,7 +528,7 @@ function renderCards() {
           : `<span>${escapeHtml(initials(p.title))}</span>`;
         return (
           `<article class="home-card${on}" data-project-id="${escapeHtml(p.id)}" tabindex="0" draggable="true">` +
-          `<div class="home-thumb">${thumbInner}</div>` +
+          `<div class="home-thumb" data-theme="light" data-theme-keep>${thumbInner}</div>` +
           `<div class="home-card-body">` +
           `<h3 class="home-card-title">${escapeHtml(p.title)}</h3>` +
           `<p class="home-card-meta">${escapeHtml(formatWhen(p.updated_at))}</p>` +

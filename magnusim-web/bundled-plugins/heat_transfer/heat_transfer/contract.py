@@ -54,7 +54,8 @@ RESIDUAL_SERIES: tuple[dict, ...] = (
 COURANT_SERIES = {
     "key": "co_mean",
     "label": "Co mean",
-    "color": "#667085",
+    # Red, as its legend swatch and incompressible flow's Courant line (Daniel, 2026-10-27); dashed.
+    "color": "#d92d20",
     "dashed": True,
     "max_key": "co_max",
     "max_label": "max",

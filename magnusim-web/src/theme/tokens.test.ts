@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { lightTokens, normalize, plan, planFonts, textTokens } from '../../scripts/theme-codemod.mjs';
 import { resolveVars } from '../../scripts/theme-light-identity.mjs';
 import { seriesFor } from '../panels/run/ResidualPlot';
+import { LIGHT_SERIES } from './series';
 import { cssRules, darkTokenValues, readAppCss, readTokensCss, ruleProps, tokenValues, withTokens } from '../test/kitCss';
 
 const tokens = tokenValues();
@@ -262,10 +263,11 @@ describe('tokens.css', () => {
       return !!name && name in tokens && normalize(tokens[name]) === normalize(s.literal);
     };
     expect(skipped.filter(ownToken).map(byRule)).toEqual(['#app { background: #e8eaee }']);
-    expect(skipped.filter((s: Left) => !ownToken(s)).length).toBeLessThanOrEqual(218);
+    expect(skipped.filter((s: Left) => !ownToken(s)).length).toBeLessThanOrEqual(43);
     // A literal marked "fixed" (the same in every theme) is out of the count above, so each one is
     // listed here: a new one is a deliberate change to this list. By rule, as lines move.
     expect(fixed.map(byRule)).toEqual([
+      '.viewport-wrap { background: #f0f2f7 }',
       '.pt-rh-dot { border: #fff }',
       '.capture-frame { border: #fff }',
       '.cfr-corner { background: #fff }',
@@ -279,10 +281,10 @@ describe('tokens.css', () => {
     expect(tokens['--mg-link-strong-hover']).not.toBe(tokens['--mg-link-strong']);
   });
 
-  it('--mg-series-1 … 7 are the residual plot colours, in order', () => {
+  it('--mg-series-1 … 7 are the residual plot colours, in order (three a darker light value: LIGHT_SERIES)', () => {
     const row = Object.fromEntries([['t', 1], ...[1, 2, 3, 4, 5, 6, 7].map((i) => [`s${i}`, 1])]);
     const core = seriesFor([row], []).map((s) => s.color);
     expect(core).toHaveLength(7);
-    expect([1, 2, 3, 4, 5, 6, 7].map((i) => tokens[`--mg-series-${i}`])).toEqual(core);
+    expect([1, 2, 3, 4, 5, 6, 7].map((i) => tokens[`--mg-series-${i}`])).toEqual(core.map((c) => LIGHT_SERIES[c] ?? c));
   });
 });
