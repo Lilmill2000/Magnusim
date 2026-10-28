@@ -2,7 +2,7 @@
 //  - an empty part shows the Top / Front / Right planes with labels; hovering
 //    one lights it, clicking selects it (the tree row too), Ctrl+click adds,
 //    empty space clears; the triad and the XYZ key sit bottom-right like the
-//    core's;
+//    core's, in the core's light axis colours;
 //  - a kernel box (made and tessellated by the frame's own kernel worker) is
 //    shaded with the core's headlight Phong (pixel-exact against the formula;
 //    the core viewer shows the same pixels for the same cube), hover
@@ -209,6 +209,19 @@ test('cad:p1-viewport-empty the origin planes, labels, hover, selection and the 
   expect(count(([r, g, b]) => r > 140 && g < 90 && b < 90), 'red X arrow').toBeGreaterThan(20);
   expect(count(([r, g, b]) => g > 110 && r < 90 && b < 110), 'green Y arrow').toBeGreaterThan(20);
   expect(count(([r, g, b]) => b > 140 && r < 90 && g < 140), 'blue Z arrow').toBeGreaterThan(20);
+  // In the core's light axis colours (the host's --mg-axis-*, the core triad's since its light
+  // unify), as the XYZ key's letters are.
+  const axes = await frame.evaluate(() => {
+    const h = (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { palette(): { triad: readonly number[] } } } } } } }).__CAD__.services.viewport.get().handle;
+    const root = getComputedStyle(document.documentElement);
+    return {
+      triad: [...h.palette().triad].map((n) => `#${n.toString(16).padStart(6, '0')}`),
+      host: ['x', 'y', 'z'].map((a) => root.getPropertyValue(`--mg-axis-${a}`).trim().toLowerCase()),
+      keys: Array.from(document.querySelectorAll('.cad-vp-axes-key .ax')).map((el) => getComputedStyle(el).color),
+    };
+  });
+  expect(axes.triad).toEqual(axes.host);
+  expect(axes.keys).toEqual(axes.host.map((c) => `rgb(${parseInt(c.slice(1, 3), 16)}, ${parseInt(c.slice(3, 5), 16)}, ${parseInt(c.slice(5, 7), 16)})`));
 
   // A point only the Top plane covers (the planes are see-through: none other in front or behind).
   const topPt = await at(page, frame, [45, -45, 0]);

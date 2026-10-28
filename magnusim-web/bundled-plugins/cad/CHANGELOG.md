@@ -94,7 +94,8 @@ in this version yet), the Part follows it:
   Assistant's pictures, and anything else drawn off screen look exactly as in
   light, and the view never flashes light while one is taken.
 - The toolbar's icons follow Magnusim's icon size.
-- On this version nothing changes: the Part looks exactly as before.
+- On this version the Part stays light, as before; only its orientation arrows
+  take the axis colours Magnusim's own 3D views now use (a shade darker).
 
 ## 0.1.0 (October 2026)
 

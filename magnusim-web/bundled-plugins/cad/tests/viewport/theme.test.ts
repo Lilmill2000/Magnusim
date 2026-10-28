@@ -178,7 +178,7 @@ describe('the view and the theme', () => {
     expect(f.main.clear).toBe(0xf0f2f7);
     expect(f.main.edges).toEqual({ b_1: 0x0a0b0e, b_2: 0x0a0b0e });
     expect(f.main.rims).toEqual({});
-    expect(f.triad.arrows).toEqual([0xdc2828, 0xdc2828, 0x24a840, 0x24a840, 0x2860dc, 0x2860dc]);
+    expect(f.triad.arrows).toEqual([0xd42828, 0xd42828, 0x1f9a3a, 0x1f9a3a, 0x2a5bd7, 0x2a5bd7]);
     const hook = vi.fn();
     h.addLayer('sketch-geometry', { palette: hook });
     h.setPalette!(LIGHT);
@@ -211,7 +211,7 @@ describe('the view and the theme', () => {
     h.setPalette!(LIGHT);
     expect(hook.mock.calls[1]).toEqual([LIGHT]);
     const g = frame(gl);
-    expect([g.main.clear, g.main.edges.b_1, g.triad.arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xdc2828]);
+    expect([g.main.clear, g.main.edges.b_1, g.triad.arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xd42828]);
   });
 
   it('gives each edge a rim in the background colour with E1 (b), new bodies too, and takes it away with (c)', () => {
@@ -255,7 +255,7 @@ describe('the view and the theme', () => {
     expect(pic[0].clear).toBe(0xf0f2f7);
     expect(pic[0].edges).toEqual({ b_1: 0x0a0b0e, b_2: 0x0a0b0e });
     expect(Object.values(pic[0].rims).map((r) => r.visible)).toEqual([false, false]);
-    expect(pic[1].arrows).toEqual([0xdc2828, 0xdc2828, 0x24a840, 0x24a840, 0x2860dc, 0x2860dc]);
+    expect(pic[1].arrows).toEqual([0xd42828, 0xd42828, 0x1f9a3a, 0x1f9a3a, 0x2a5bd7, 0x2a5bd7]);
     // The layer the picture shows draws LIGHT for it and the live palette after; a hidden one is not asked.
     expect(gpu.log).toEqual(['palette:light', 'render', 'render', 'palette:dark']);
     expect(hidden.mock.calls.length).toBe(1);
@@ -293,7 +293,7 @@ describe('the view and the theme', () => {
       gl.seen.length = 0;
       snap(h);
       const pic = gl.seen.filter((s) => s.toTarget);
-      expect([pic[0].clear, pic[0].edges.b_1, pic[1].arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xdc2828]);
+      expect([pic[0].clear, pic[0].edges.b_1, pic[1].arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xd42828]);
     });
 
   it('a picture taken while light swaps nothing', () => {

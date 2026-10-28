@@ -1,7 +1,8 @@
 // The colours the 3D view and the sketch draw in, by theme: the one place three.js code takes
 // them from (three.js needs numbers; the HTML over the view follows the CSS tokens). LIGHT is
-// exactly the look the view always had; DARK is for the host's dark appearance (owner decisions,
-// "CAD dark set" plan):
+// the core's light values, the look the view had before the dark set (its triad the host's light
+// axis colours, as the core's since its light unify); DARK is for the host's dark appearance
+// (owner decisions, "CAD dark set" plan):
 //   D1  pictures, previews and exports stay LIGHT whatever the theme (ViewportHandle.snapshot
 //       swaps every mark to LIGHT for the picture and back in the same task);
 //   D2  surfaces stay light in a dark view: bodies, section caps, picks and hover on faces, the
@@ -19,7 +20,7 @@
 // round 1: it was only the fully defined lines, so an under-defined line on a face read 1.4:1 in
 // every candidate). Until he picks, both are (c): the mid tones read on the background and on a
 // light face alike. E4 (the triad's dark axis colours) is assumed yes; E5 keeps the region and
-// plane tints. tests/viewport/palette.test.ts pins LIGHT to the values before the dark set,
+// plane tints. tests/viewport/palette.test.ts pins LIGHT to the core's light values,
 // DARK's marks to at least 3:1 on its background, (c)'s on a body face too, and both palettes to
 // the CSS tokens they mirror.
 // Owner: VIEWPORT.
@@ -128,7 +129,7 @@ export interface MarkPalette {
   readonly lines: Readonly<DarkLines> | null;
 }
 
-/** Exactly the colours before the dark set: colors.ts' core values and the CSS tokens' light values. */
+/** The core's light colours: colors.ts' core values and the CSS tokens' light values. */
 export const LIGHT: MarkPalette = Object.freeze({
   name: 'light',
   background: VIEWPORT_BG,

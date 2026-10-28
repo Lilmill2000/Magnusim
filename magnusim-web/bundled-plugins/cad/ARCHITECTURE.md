@@ -961,7 +961,8 @@ with the host once for the page's life, and its chip goes in the dock.
     the light values, the dark coverage and the dark contrast (on the host's
     planned dark set until its `tokens.css` has one).
   - **The 3D view.** `src/viewport/palette.ts` is the one place three.js code
-    takes colours from: `LIGHT` (the values below, exactly as before) and
+    takes colours from: `LIGHT` (the core's light values below; the triad the
+    host's light `--mg-axis-*`, as the core's since its light unify) and
     `DARK`. D2: surfaces stay light (bodies, caps, picks and hover on faces,
     plane and region tints); thin marks turn light (background `#1b1f27`, D3;
     edges; triad, E4 assumed; sketch lines and points; reference axes and
@@ -1026,7 +1027,9 @@ with the host once for the page's life, and its chip goes in the dock.
     about the view-up through the pivot; pan keeps the pivot-depth point under
     the pointer; wheel notch x1.1 via vtk.js `normalizeWheel`); orbit pivot =
     model centroid 9214-9310; default direction [-0.55, -0.75, 0.42] 9118;
-    triad 1113-1133 (72 px, X/Y/Z [220,40,40] / [36,168,64] / [40,96,220]);
+    triad 1113-1133 (72 px, X/Y/Z [220,40,40] / [36,168,64] / [40,96,220];
+    since the host's light unify 28ea1116 the core paints its light
+    `--mg-axis-*`, `#d42828` / `#1f9a3a` / `#2a5bd7`, and so does the Part);
     body 17528-17538; edges 17544-17568; pick / set paint 17813-17826;
     selected body 17709; picked edge tube 17585 + 3.2 px 22804; picked vertex
     17597 + 11 px 22801; core pick radii 7 / 10 px 22802-22803 (the Part

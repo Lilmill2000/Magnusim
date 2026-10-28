@@ -1,5 +1,6 @@
-// The 3D view's and the sketch's colours by theme (src/viewport/palette.ts): LIGHT is exactly
-// the look before the dark set, DARK's thin marks read on the dark background, E2's candidates
+// The 3D view's and the sketch's colours by theme (src/viewport/palette.ts): LIGHT is the core's
+// light values (the look before the dark set, the triad the core's unified light axes), DARK's
+// thin marks read on the dark background, E2's candidates
 // cover every coloured thin mark ((c)'s read on a body face too, and keep driven apart from
 // driving), and both palettes agree with the CSS tokens they mirror (CAD's, and the host's
 // appearance set).
@@ -13,12 +14,13 @@ import { contrast, hostTokens, themeValue } from '../styles/css-tokens';
 const num = (s: string | null | undefined) => hexNumber(String(s));
 
 describe('LIGHT', () => {
-  it('is exactly the colours before the dark set (colors.ts, and the sketch readers\' token fallbacks)', () => {
+  it('is the core\'s light colours (colors.ts, and the sketch readers\' token fallbacks)', () => {
     expect(LIGHT.name).toBe('light');
     expect(LIGHT.background).toBe(0xf0f2f7);
     expect(LIGHT.edge).toBe(0x0a0b0e);
     expect(LIGHT.edgeRim).toBeNull();
-    expect([...LIGHT.triad]).toEqual([0xdc2828, 0x24a840, 0x2860dc]);
+    // The host's light --mg-axis-x / -y / -z, the core triad's since its light unify.
+    expect([...LIGHT.triad]).toEqual([0xd42828, 0x1f9a3a, 0x2a5bd7]);
     // features/refgeom/overlay.ts LINE_COLOR, features/measure/overlay.ts MEASURE_COLOR, the scale guide's and the arrows' 0x1570ef.
     expect(LIGHT.constructLine).toBe(0x2f5fb8);
     expect(LIGHT.measure).toBe(0x1a4fbf);
@@ -143,8 +145,11 @@ describe('DARK', () => {
     }
     expect(DARK.background).toBe(num(host.dark.get('--mg-viewport-bg')));
     expect(DARK.background).toBe(num(themeValue('--cad-viewport-bg', 'dark')));
-    // E4: the triad takes the host's dark axis colours, as the axes key's letters do.
+    // E4: the triad takes the host's dark axis colours, as the axes key's letters do; in light
+    // its light ones, as the core's triad and the key's letters do.
     expect([...DARK.triad]).toEqual(['--cad-axis-x', '--cad-axis-y', '--cad-axis-z'].map((n) => num(themeValue(n, 'dark'))));
+    expect([...LIGHT.triad]).toEqual(['--cad-axis-x', '--cad-axis-y', '--cad-axis-z'].map((n) => num(themeValue(n, 'light'))));
+    expect([...LIGHT.triad]).toEqual(['--mg-axis-x', '--mg-axis-y', '--mg-axis-z'].map((n) => num(host.light.get(n))));
   });
 });
 
