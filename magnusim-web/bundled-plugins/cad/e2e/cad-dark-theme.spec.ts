@@ -10,10 +10,12 @@
 //    SDK held back: <html>, its colour scheme and the page's background), its view's every frame
 //    from the first is in the dark palette on the dark background (none light), and its pictures
 //    are light: the same picture once the look is light.
-//  - dark-model: the view's background is #1b1f27 (its CSS and the canvas), the edges are E1's
-//    #e6e9ef (Daniel: option a), a finished sketch beside the block (over the background) its
-//    dark inks, and the faces are the pixels they were (D2); back to light, every colour of the
-//    page (computed, element by element) and the canvas are as before.
+//  - dark-model: the view's background is #1b1f27 (its CSS and the canvas), the edges follow what
+//    is under them (E1, Daniel after the screenshot review: the light view's near-black over the
+//    faces, #e6e9ef on the outline's outer side over the background), a finished sketch beside
+//    the block (over the background) its dark inks, and the faces are the pixels they were (D2);
+//    back to light, every colour of the page (computed, element by element) and the canvas are
+//    as before.
 //  - dark-picture: a Picture taken while dark is light (the light background, near-black edges,
 //    no dark background pixel) and is the same picture as one taken in light; the view shows no
 //    light frame meanwhile (its pixels before and after the picture are the same) and no timer
@@ -93,7 +95,7 @@ type W = { __CAD__: { services: any; appearance: { get(): { appearance: { theme:
 const LIGHT_BG: RGB = [0xf0, 0xf2, 0xf7];
 const DARK_BG: RGB = [0x1b, 0x1f, 0x27];
 const LIGHT_EDGE: RGB = [0x0a, 0x0b, 0x0e];
-/** E1 (a): the edges, and a fully defined sketch line over the background: the host's dark text colour. */
+/** Over the background, the edges (E1) and a fully defined sketch line: the host's dark text colour. */
 const PALE: RGB = [0xe6, 0xe9, 0xef];
 const LIGHT_FULL: RGB = [0x10, 0x18, 0x28];
 const LIGHT_UNDER: RGB = [0x15, 0x70, 0xef];
@@ -306,11 +308,13 @@ test("cad:dark-first-paint with the look dark before the Part opens, its page is
   let pale = 0;
   let nearBlack = 0;
   for (let i = 0; i < block.data.length; i += 4) {
-    if (dist(block.data, i, PALE) <= 24) pale++;
-    if (dist(block.data, i, LIGHT_EDGE) <= 8) nearBlack++;
+    if (dist(block.data, i, PALE) <= 40) pale++;
+    if (dist(block.data, i, LIGHT_EDGE) <= 24) nearBlack++;
   }
-  expect(pale, "the block's edges are light").toBeGreaterThan(40);
-  expect(nearBlack, 'no near-black edge').toBe(0);
+  // E1: the edges follow what is under them, the light view's near-black over the faces and
+  // #e6e9ef on the outline's outer side, over the background.
+  expect(nearBlack, "the block's edges over its faces are near-black").toBeGreaterThan(40);
+  expect(pale, "its outline's outer side is light").toBeGreaterThan(10);
   // The view's own picture (the Assistant's and the Picture tool's path): light, then the same in light.
   const snapshot = (name: string) =>
     f.evaluate((name) => {
@@ -353,7 +357,7 @@ test("cad:dark-first-paint with the look dark before the Part opens, its page is
   expect(seen.errors, 'console errors').toEqual([]);
 });
 
-test('cad:dark-model the view turns dark with #e6e9ef edges and light sketch lines, the faces as they were; back to light every colour is as before', { tag: '@serial' }, async ({ page, request }) => {
+test('cad:dark-model the view turns dark with edges that follow what is under them and light sketch lines, the faces as they were; back to light every colour is as before', { tag: '@serial' }, async ({ page, request }) => {
   const { seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await blockAndSketch(page);
@@ -382,8 +386,26 @@ test('cad:dark-model the view turns dark with #e6e9ef edges and light sketch lin
   expect(css).toEqual({ token: '#1b1f27', view: 'rgb(27, 31, 39)' });
   expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
   const block1 = await shoot(page, blockClip);
-  expect(share(block1, px.edge, PALE, 24), "the edges are E1's #e6e9ef").toBeGreaterThan(0.8);
-  expect(share(block1, px.edge, LIGHT_EDGE, 24), 'no near-black edge is left').toBeLessThan(0.05);
+  // E1: an edge pixel with only face around it (3 px, in the light shot) is over a face: the light
+  // view's near-black; one by the background is on the outline, whose outer side is #e6e9ef.
+  const byBg = (i: number) => {
+    const x = (i / 4) % block0.width;
+    const y = Math.floor(i / 4 / block0.width);
+    for (let dy = -3; dy <= 3; dy++)
+      for (let dx = -3; dx <= 3; dx++) {
+        const xx = Math.min(block0.width - 1, Math.max(0, x + dx));
+        const yy = Math.min(block0.height - 1, Math.max(0, y + dy));
+        if (dist(block0.data, 4 * (yy * block0.width + xx), LIGHT_BG) <= 4) return true;
+      }
+    return false;
+  };
+  const inner = px.edge.filter((i) => !byBg(i));
+  const outline = px.edge.filter(byBg);
+  expect(inner.length, 'the block has edges between its faces').toBeGreaterThan(20);
+  expect(outline.length, 'and an outline').toBeGreaterThan(20);
+  expect(share(block1, inner, LIGHT_EDGE, 24), "the edges over the faces are the light view's near-black").toBeGreaterThan(0.8);
+  expect(share(block1, inner, PALE, 40), 'none of them light').toBeLessThan(0.05);
+  expect(share(block1, outline, PALE, 40), "the outline's outer side, over the background, is #e6e9ef").toBeGreaterThan(0.1);
   expect(share(block1, px.bg, DARK_BG, 4), 'the background around the block').toBeGreaterThan(0.95);
   expect(unchanged(block0, block1, px.face), 'the faces are the pixels they were (D2)').toBeGreaterThan(0.98);
   const sketch1 = await shoot(page, sketchClip);

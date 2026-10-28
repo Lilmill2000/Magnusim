@@ -8,11 +8,14 @@
 //   D2  surfaces stay light in a dark view: bodies, section caps, picks and hover on faces, the
 //       plane and region tints are the same in both (colors.ts); only thin marks turn light
 //       (edges, the triad, sketch lines and points, reference axes and points, the measure line,
-//       the arrows and the banana's guide);
+//       the arrows and the banana's guide), and those that can lie on a face only over the
+//       background (E1, E2);
 //   D3  the light background is #f0f2f7 everywhere, the dark one the host's dark
 //       --mg-viewport-bg #1b1f27;
-//   E1  (Daniel, 2026-10-28: option a) the bodies' B-rep edges are the host's dark text colour
-//       #e6e9ef, plain: no rim;
+//   E1  (Daniel, 2026-10-28) the bodies' B-rep edges follow what is under them as E2's marks do:
+//       LIGHT's near-black where a light surface shows under them, the host's dark text colour
+//       #e6e9ef over the background (`edge`; no rim). His first pick, #e6e9ef everywhere, lost
+//       the edges on a face seen head-on (it lights to #dbe9fe: 1.06:1), as when sketching on it;
 //   E2  (Daniel, 2026-10-28: "the colour follows what's under it") every coloured thin mark that
 //       can lie on a face (each state of a sketch's lines and points in both modes, the preview,
 //       guides, dimension lines and grid, a trim's doomed piece, linked and lost curves; the
@@ -63,8 +66,10 @@ export interface TriadLight {
   readonly diffuse: number;
 }
 
-/** The thin marks' colours by role where a light surface shows under them (E2): LIGHT's. */
+/** The thin marks' colours by role where a light surface shows under them (E1, E2): LIGHT's. */
 export interface FaceInks {
+  /** The bodies' B-rep edges (E1). */
+  readonly edge: number;
   readonly constructLine: number;
   readonly measure: number;
   readonly ink: number;
@@ -163,7 +168,7 @@ export const DARK: MarkPalette = Object.freeze({
     linked: '#9b7bf0',
     lost: '#fdb022',
   }),
-  face: Object.freeze({ constructLine: LIGHT.constructLine, measure: LIGHT.measure, ink: LIGHT.ink, sketch: LIGHT.sketch }),
+  face: Object.freeze({ edge: LIGHT.edge, constructLine: LIGHT.constructLine, measure: LIGHT.measure, ink: LIGHT.ink, sketch: LIGHT.sketch }),
 });
 
 /** The palette of a theme name: anything but "dark" (any case) is light, as an older host is. */
