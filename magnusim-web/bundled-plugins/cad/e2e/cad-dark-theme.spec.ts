@@ -23,6 +23,10 @@
 //    halo there read 1.1:1); the panel's keys show both; the draw cursor takes the light tone over
 //    the face; light is one colour again, and dark again live; a picture taken while dark is the
 //    light one, byte for byte.
+//  - dark-follows-face-lost: a sketch on a block whose projected reference (a cube's top face, over
+//    the block's edge) is lost: its amber curve takes the light view's amber over the face and the
+//    dark one beyond it, in model mode and in sketch mode; the reference's dot in the panel shows
+//    both (one colour in light). (It went with the removed dark-sketch-face test.)
 //  - dark-follows-face-marks: a reference point and axis, the measure line's ends and the Extrude
 //    arrow, over a face and over the background.
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
@@ -757,6 +761,101 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     await snapshot('__followsDark2');
     expect(await bytesDiffer('__followsLight', '__followsDark2')).toBe(0);
     await appearance(page, 'light');
+    await page.keyboard.press('Escape');
+    expect(seen.errors).toEqual([]);
+  });
+
+  test("cad:dark-follows-face-lost a lost reference's curve is the light view's amber over the face and the dark amber beyond it, in both modes; its dot shows both", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    const f = workspaceFrame(page);
+    // A 40 x 40 x 20 block, and a 10 mm cube on its top face standing out over its +X edge (x 35..45).
+    await addSolid(page, { size: [40, 40, 20] });
+    await addSolid(page, { at: [35, 15, 20], size: [10, 10, 10] });
+    await page.keyboard.press('Escape');
+    const click = async (p: V3) => {
+      await still(page);
+      const [x, y] = await modelOnPage(page, p);
+      await page.mouse.click(x, y);
+    };
+    // A sketch on the block's top face (z 20), the cube's top face projected into it.
+    await click([10, 10, 20]);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    await still(page);
+    await openSketchDetails(page, frame);
+    await page.keyboard.press('p');
+    await click([40, 20, 30]);
+    await still(page);
+    const links = frame.locator('[data-sketch-links] [data-link]');
+    await expect(links).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await still(page);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+    await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+    // The cube suppressed: its square is a lost reference, amber, half over the block's face.
+    await featureRowNamed(frame, 'Extrude 2').locator('> .tree-row').click({ button: 'right' });
+    await frame.locator('[data-cad-menu] [data-menu-item="suppress"]').click();
+    await f.waitForFunction(
+      () => {
+        const st = (window as unknown as W).__CAD__.services.doc.state.get();
+        return st.rebuild.status === 'done' && st.doc.features.every((x: { id: string }) => st.rebuild.features[x.id] && st.rebuild.features[x.id].state !== 'pending');
+      },
+      null,
+      { timeout: 60_000 },
+    );
+    await page.keyboard.press('Escape');
+    await appearance(page, 'dark');
+    const p = await palette(page);
+    const lostFace = hexRgb(p.face!.sketch.lost);
+    const lost = hexRgb(p.sketch.lost);
+    // The square's lower side (y 15): over the face from x 35 to 40, over the background from 40 to 45.
+    const A: V3 = [35, 15, 20];
+    const B: V3 = [45, 15, 20];
+    const sides = async (where: string) => {
+      const clip = await clipAround(page, [
+        [0, 0, 20],
+        [50, 40, 20],
+      ], 8);
+      const s = await shot2(page, clip);
+      const face = await along(page, s, A, B, 0.1, 0.4, lostFace, lost, 2, 18, 5);
+      const ground = await along(page, s, A, B, 0.6, 0.9, lost, lostFace, 2, 18, 5);
+      console.log(`[dark-follows-face-lost] ${where} face ${face.d}; ground ${ground.d}`);
+      expect(face.share, `${where}: the lost curve over the face, the light view's amber (${face.d})`).toBeGreaterThanOrEqual(0.6);
+      expect(ground.share, `${where}: the lost curve over the background, the dark amber (${ground.d})`).toBeGreaterThanOrEqual(0.6);
+    };
+    // Model mode, from the top.
+    await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('top', { animate: false }));
+    await page.mouse.move(5, 5);
+    await still(page);
+    await sides('model mode');
+    // Sketch mode.
+    await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]').last().locator('> .tree-row').dblclick();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    await page.mouse.move(5, 5);
+    await still(page);
+    await expect(links.first()).toHaveAttribute('data-link-state', 'lost');
+    await sides('sketch mode');
+    // The reference's dot: the dark amber, its left half the light view's amber on a crescent of the body colour.
+    const dot = links.first().locator('.cad-sk-link-dot');
+    const look = () => dot.evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, shadow: getComputedStyle(el).boxShadow }));
+    const halves = async () => {
+      const r = (await dot.boundingBox())!;
+      const s = await shot2(page, { x: Math.floor(r.x), y: Math.floor(r.y), width: Math.ceil(r.width) + 1, height: Math.ceil(r.height) + 1 });
+      const px = (fx: number) => {
+        const i = 4 * (Math.round((r.y + r.height / 2 - s.clip.y) * s.k) * s.img.width + Math.round((r.x + r.width * fx - s.clip.x) * s.k));
+        return [s.img.data[i], s.img.data[i + 1], s.img.data[i + 2]] as RGB;
+      };
+      return { left: px(0.25), right: px(0.75) };
+    };
+    expect(await look()).toEqual({ bg: cssRgb(p.sketch.lost), shadow: `${cssRgb(p.face!.sketch.lost)} 4px 0px 0px 0px inset, rgb(189, 201, 219) -1.5px 0px 0px 0.5px` });
+    const dark = await halves();
+    expect(dist(dark.left, 0, lostFace), `the dot's left half: ${dark.left}`).toBeLessThanOrEqual(24);
+    expect(dist(dark.right, 0, lost), `the dot's right half: ${dark.right}`).toBeLessThanOrEqual(24);
+    // Light: one colour, the light amber, and the curve one colour.
+    await appearance(page, 'light');
+    expect(await look()).toEqual({ bg: cssRgb(p.face!.sketch.lost), shadow: 'none' });
+    const light = await halves();
+    for (const c of [light.left, light.right]) expect(dist(c, 0, lostFace), `light, the dot: ${c}`).toBeLessThanOrEqual(24);
     await page.keyboard.press('Escape');
     expect(seen.errors).toEqual([]);
   });

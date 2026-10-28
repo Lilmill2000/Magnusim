@@ -14,6 +14,7 @@ import { overlayOf } from '../../../src/features/sketch';
 import type { ExtrudeFeature, Feature, SketchFeature } from '../../../src/types/doc';
 import { rectRegion } from '../sketch/fake-profiles-kernel';
 import { startApp, type FakeApp } from './fake-app';
+import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { faceInkOf } from '../../../src/viewport/onface';
 import { DARK, LIGHT } from '../../../src/viewport/palette';
 
@@ -504,6 +505,10 @@ describe('the profile overlay and the sketch row', () => {
       [0x101828, false],
       [0x667085, true],
     ]);
+    // Every line material by role, the linked and lost ones (P4b) too: over a face the light view's ink.
+    const mats = (overlayOf(a.services) as unknown as { lineMats: Record<string, LineMaterial> }).lineMats;
+    const inks = () => Object.fromEntries(Object.entries(mats).map(([k, m]) => [k, faceInkOf(m) ?? null]));
+    expect(inks()).toEqual({ under: 0x1570ef, full: 0x101828, over: 0xb42318, construction: 0x667085, linked: 0x7a3fd1, lost: 0xb54708, linkedConstruction: 0x7a3fd1 });
     act(() => a.vp.setPalette(LIGHT));
     expect(colours()).toEqual([
       [0x1570ef, 2],
@@ -515,6 +520,7 @@ describe('the profile overlay and the sketch row', () => {
       [null, false],
       [null, true],
     ]);
+    expect(inks()).toEqual({ under: null, full: null, over: null, construction: null, linked: null, lost: null, linkedConstruction: null });
     expect(DARK.face!.sketch).toBe(LIGHT.sketch);
   });
 
