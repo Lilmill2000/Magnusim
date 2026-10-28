@@ -1,7 +1,9 @@
 // The marks over the tunnel's view: the rakes, the probes, the selection and its turn handle,
 // the pose a body is being dragged or turned to, outlines of what is not in the flow, and the
-// sketch being edited. Drawn in CSS px on the view's overlay canvas every frame (Viewport.tsx).
+// sketch being edited. Drawn in CSS px on the view's overlay canvas every frame (Viewport.tsx),
+// and drawn again in the light colours for each picture or recorded frame (src/app/capture.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { overlaySet } from '../app/colours';
 import { transformRings, type Rings } from '../geometry/polygon';
 import { hasOutline, outlineRings, profileOf } from '../geometry/shapes';
 import type { Engine } from '../sim/engine';
@@ -50,8 +52,9 @@ export function turnHandle(engine: Engine, b: Body): { x: number; y: number; cx:
 
 /** The colours the marks are drawn in (src/app/colours.ts reads them from the tokens). */
 export interface OverlayColours {
-  /** The selection. */
+  /** The selection; the selected probe's name (blue as text). */
   sel: string;
+  selInk: string;
   /** Outlines of what is not in the flow, or not there yet (dashed). */
   ghost: string;
   /** Under a probe or a handle, and round a probe's name. */
@@ -101,6 +104,11 @@ export function paintOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: O
   g.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
   g.clearRect(0, 0, v.w, v.h);
   drawOverlay(g, st, c);
+}
+
+/** The marks a picture or a recording draws over the flow: this frame's, in the light colours (kept files stay light). */
+export function lightOverlay(state: () => OverlayState): (g: CanvasRenderingContext2D) => void {
+  return (g) => paintOverlay(g, state(), overlaySet('light'));
 }
 
 /** The marks, in CSS px (the canvas's transform set to the device pixel ratio). */
@@ -165,7 +173,7 @@ export function drawOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: Ov
     g.lineWidth = 3;
     g.strokeStyle = handleFill;
     g.strokeText(`P${i + 1}`, s.x + PROBE_R_PX + 2, s.y - PROBE_R_PX);
-    g.fillStyle = isSel ? sel : probeInk;
+    g.fillStyle = isSel ? c.selInk : probeInk;
     g.fillText(`P${i + 1}`, s.x + PROBE_R_PX + 2, s.y - PROBE_R_PX);
   });
   const sketching = editor?.editing ? editor.bodyId : null;

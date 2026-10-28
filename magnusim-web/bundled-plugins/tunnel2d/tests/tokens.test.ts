@@ -1,23 +1,13 @@
 // The tunnel's tokens: the view's colours the GPU reads (src/app/colours.ts) are plain hex, which
-// tokenRgb can read, and the tokens built on the host's are declared again on the stage (its
-// data-theme keeps the light theme), so they resolve to the host's light values there.
+// tokenRgb can read; the tokens built on the host's are declared again on any element with a theme
+// of its own (the hidden light element the GPU, pictures and recordings read), so they take the
+// host's light values there; and in light each colour is the one the tunnel drew before.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { hostLight, tokenReader, tunnel, tunnelBase } from './themeTokens';
 
-const read = (...parts: string[]) => readFileSync(join(__dirname, ...parts), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-
-/** Each rule of a stylesheet: its selectors and its custom properties. */
-function rules(css: string) {
-  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
-    selectors: m[1].split(',').map((s) => s.trim()),
-    props: Object.fromEntries([...m[2].matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((d) => [d[1], d[2].trim()])),
-  }));
-}
-
-const tunnel = rules(read('..', 'src', 'styles', 'tokens.css'));
-const host = rules(read('..', '..', '..', 'src', 'theme', 'tokens.css'));
 const coloursTs = readFileSync(join(__dirname, '..', 'src', 'app', 'colours.ts'), 'utf8');
 /** A function's source in a module's text: from its name to the brace that closes its body. */
 function functionSource(src: string, name: string): string {
@@ -31,10 +21,9 @@ function functionSource(src: string, name: string): string {
 }
 // What the GPU draws with: the engine's palette and the rest of its colours.
 const gpuTs = functionSource(coloursTs, 'viewPalette') + functionSource(coloursTs, 'applyViewColours');
-const hostLight = host.find((r) => r.selectors.includes('[data-theme="light"]'))!;
-const tunnelBlock = tunnel.find((r) => '--t2d-bg' in r.props)!;
 
-// The tunnel tokens colours.ts reads; the rheoscopic presets' are built from the preset's name.
+// The tunnel tokens colours.ts reads; the rheoscopic presets' are built from the preset's name,
+// the rakes' from their number.
 const GPU_TOKENS = [
   '--t2d-bg',
   '--t2d-body',
@@ -50,12 +39,42 @@ const GPU_TOKENS = [
 ];
 const RHEO_PRESETS = ['kalliroscope', 'pearl', 'copper'];
 const RHEO_TOKENS = RHEO_PRESETS.flatMap((p) => ['base', 'light1', 'light2'].map((l) => `--t2d-rheo-${p}-${l}`));
+const RAKE_TOKENS = [1, 2, 3, 4, 5, 6].map((i) => `--t2d-rake-${i}`);
+
+/**
+ * The marks' and the cards' colours as the tunnel drew them before it followed the theme (the
+ * stage pinned light; the cards read on the light page): each token must still give its value in
+ * light. The probe's ring and the handles were --mg-bg, the selected probe's name the selection's
+ * blue, the rakes the host's light series.
+ */
+const DRAWN_BEFORE: Record<string, string> = {
+  '--t2d-select': '#1570ef',
+  '--t2d-select-ink': '#1570ef',
+  '--t2d-ghost': '#475467',
+  '--t2d-halo': '#ffffff',
+  '--t2d-probe': '#101828',
+  '--t2d-sketch-under': '#1570ef',
+  '--t2d-sketch-full': '#101828',
+  '--t2d-sketch-over': '#b42318',
+  '--t2d-sketch-construction': '#667085',
+  '--t2d-sketch-pick': '#12855a',
+  '--t2d-sketch-halo': '#ffffff',
+  '--t2d-sketch-preview': '#1570ef',
+  '--t2d-rake-1': '#1570ef',
+  '--t2d-rake-2': '#6941c6',
+  '--t2d-rake-3': '#099250',
+  '--t2d-rake-4': '#b54708',
+  '--t2d-rake-5': '#0086c9',
+  '--t2d-rake-6': '#dd2590',
+  '--mg-bg': '#ffffff',
+  '--mg-text': '#101828',
+};
 
 describe('the tunnel tokens', () => {
-  it('are declared on the page and again on any element with a theme of its own (the stage)', () => {
-    expect(tunnelBlock.selectors).toEqual([':root', '[data-theme]']);
-    // A token built on the host's resolves where it is declared: on the stage it takes the
-    // stage's theme only because it is declared there too.
+  it('are declared on the page and again on any element with a theme of its own', () => {
+    expect(tunnelBase.selectors).toEqual([':root', '[data-theme]']);
+    // A token built on the host's resolves where it is declared: on the light element it takes
+    // the light theme only because it is declared there too.
     for (const r of tunnel) {
       for (const [name, value] of Object.entries(r.props)) {
         if (value.includes('var(')) expect(r.selectors, name).toContain('[data-theme]');
@@ -70,27 +89,31 @@ describe('the tunnel tokens', () => {
     expect(gpuTs).toContain('`--t2d-rheo-${name}-base`');
     expect(gpuTs).toContain('`--t2d-rheo-${name}-light1`');
     expect(gpuTs).toContain('`--t2d-rheo-${name}-light2`');
-    for (const name of [...GPU_TOKENS, ...RHEO_TOKENS]) expect(tunnelBlock.props[name], name).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(gpuTs).toContain('`--t2d-rake-${i}`');
+    expect(gpuTs).not.toContain('--mg-');
+    for (const name of [...GPU_TOKENS, ...RHEO_TOKENS, ...RAKE_TOKENS]) expect(tunnelBase.props[name], name).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
-  it("the host's series colours the rakes take are plain hex in every theme", () => {
-    expect(gpuTs).toContain('`--mg-series-${i}`');
-    const blocks = host.filter((r) => '--mg-series-1' in r.props);
-    expect(blocks.length).toBeGreaterThanOrEqual(2);
-    for (const r of blocks) {
-      for (let i = 1; i <= 6; i++) expect(r.props[`--mg-series-${i}`], `${r.selectors.join(', ')} --mg-series-${i}`).toMatch(/^#[0-9a-f]{6}$/i);
-    }
+  it("the rakes and their dye are the host's light series colours, in every theme", () => {
+    for (let i = 1; i <= 6; i++) expect(tunnelBase.props[`--t2d-rake-${i}`], `--t2d-rake-${i}`).toBe(hostLight.props[`--mg-series-${i}`]);
+    expect(coloursTs).not.toContain('--mg-series');
   });
 
-  it("built on the host's take the host's light values on the light stage", () => {
+  it("the view's background is the host's light view background", () => {
+    expect(tunnelBase.props['--t2d-bg']).toBe(hostLight.props['--mg-viewport-bg']);
+  });
+
+  it("built on the host's take the host's light values on a light element", () => {
     expect(hostLight.selectors).toContain(':root');
-    for (const [name, value] of Object.entries(tunnelBlock.props)) {
+    for (const [name, value] of Object.entries(tunnelBase.props)) {
       const ref = /^var\((--mg-[\w-]+)\)$/.exec(value);
       if (value.includes('var(')) expect(ref, name).not.toBeNull();
       if (ref) expect(hostLight.props[ref[1]], `${name}: ${value}`).toBeDefined();
     }
-    // The selection was #1570ef before it followed the host's primary.
-    expect(tunnelBlock.props['--t2d-select']).toBe('var(--mg-primary)');
-    expect(hostLight.props['--mg-primary']).toBe('#1570ef');
+  });
+
+  it('give the marks and the cards, in light, the colours they were drawn in before', () => {
+    const light = tokenReader('light');
+    for (const [name, value] of Object.entries(DRAWN_BEFORE)) expect(light(name), name).toBe(value);
   });
 });

@@ -12,11 +12,11 @@ import { containsRings } from '../geometry/polygon';
 import type { Engine } from '../sim/engine';
 import type { Body, Rake, Scene } from '../scene/scene';
 import type { Store } from '../app/store';
-import { applyViewColours, overlayColours } from '../app/colours';
-import { useAppearance } from '../app/hooks';
+import { overlaySet } from '../app/colours';
+import type { Capture } from '../app/capture';
 import type { SketchEditor } from '../sketch/editor';
 import { readingText } from './forces';
-import { HANDLE_R_PX, PROBE_R_PX, overlayState, paintOverlay, turnHandle, worldOutline, type Drag } from './overlay';
+import { HANDLE_R_PX, PROBE_R_PX, lightOverlay, overlayState, paintOverlay, turnHandle, worldOutline, type Drag } from './overlay';
 
 export function fitView(engine: Engine, scene: Scene) {
   const v = engine.worldView;
@@ -25,7 +25,21 @@ export function fitView(engine: Engine, scene: Scene) {
   engine.worldView = { ...v, cx: length / 2, cy: height / 2, mpp };
 }
 
-export function Viewport({ engine, store, editor, units = 'metric', onStatus }: { engine: Engine; store: Store; editor?: SketchEditor; units?: UnitSystem; onStatus?: (text: string) => void }) {
+export function Viewport({
+  engine,
+  store,
+  editor,
+  capture,
+  units = 'metric',
+  onStatus,
+}: {
+  engine: Engine;
+  store: Store;
+  editor?: SketchEditor;
+  capture?: Capture;
+  units?: UnitSystem;
+  onStatus?: (text: string) => void;
+}) {
   /** The hover readout: the newest pointer position (world) and whether a read is on. */
   const hover = useRef<{ at: { x: number; y: number } | null; busy: boolean; last: number }>({ at: null, busy: false, last: 0 });
   const wrap = useRef<HTMLDivElement>(null);
@@ -35,7 +49,6 @@ export function Viewport({ engine, store, editor, units = 'metric', onStatus }: 
   const overlay = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
   const fitted = useRef('');
-  const appearance = useAppearance();
 
   // Size: both canvases follow the element (device pixels for the GPU one).
   useEffect(() => {
@@ -100,23 +113,25 @@ export function Viewport({ engine, store, editor, units = 'metric', onStatus }: 
 
   const handleOf = (b: Body) => turnHandle(engine, b);
 
-  // The engine's colours, read where the view is (its stage may keep a theme of its own).
-  useEffect(() => applyViewColours(engine, wrap.current!), [engine, appearance]);
-
-  // Overlay drawing, every frame. Its colours are read where the view is, and again when the theme changes.
+  // Overlay drawing, every frame, in the light colours the stage keeps.
   useEffect(() => {
     let raf = 0;
-    const css = getComputedStyle(wrap.current!);
-    const colours = overlayColours((name) => css.getPropertyValue(name).trim());
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const o = overlay.current;
       if (!o) return;
-      paintOverlay(o.getContext('2d')!, overlayState(engine, store, drag.current, editor), colours);
+      paintOverlay(o.getContext('2d')!, overlayState(engine, store, drag.current, editor), overlaySet('light'));
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [engine, store, editor, appearance]);
+  }, [engine, store, editor]);
+
+  // Pictures and recordings draw the marks of their own frame, in the light colours.
+  useEffect(() => {
+    if (!capture) return;
+    capture.setOverlay(lightOverlay(() => overlayState(engine, store, drag.current, editor)));
+    return () => capture.setOverlay(null);
+  }, [capture, engine, store, editor]);
 
   const hitBody = (wx: number, wy: number): Body | null => {
     const bodies = store.get().scene.bodies;

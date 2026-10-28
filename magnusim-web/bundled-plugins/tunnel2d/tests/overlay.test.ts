@@ -1,17 +1,19 @@
+// @vitest-environment jsdom
 // The marks over the view (src/ui/overlay.ts), drawn on a context that writes down every call: in
 // the light theme they are drawn as they were before the overlay left Viewport.tsx (the log saved
-// in __snapshots__/overlay-light.txt right after that move).
+// in __snapshots__/overlay-light.txt right after that move), and pictures draw them so whatever
+// the page's theme.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/app/store';
-import { overlayColours } from '../src/app/colours';
+import { forgetColours, overlayColours } from '../src/app/colours';
 import { defaultScene, type Body, type Scene } from '../src/scene/scene';
 import type { Engine } from '../src/sim/engine';
 import { SketchEditor } from '../src/sketch/editor';
 import type { SketchEntity } from '../src/sketch/cad';
-import { overlayState, paintOverlay, type Drag, type OverlayColours } from '../src/ui/overlay';
+import { lightOverlay, overlayState, paintOverlay, type Drag, type OverlayState } from '../src/ui/overlay';
 import { recordingContext } from './canvasLog';
-import { tokenReader } from './themeTokens';
+import { themedStyles, tokenReader } from './themeTokens';
 
 /** The view: zoomed out, so the 8 m x 4 m tunnel has margins all round. */
 const VIEW = { cx: 4, cy: 2, mpp: 0.012, w: 800, h: 450, dpr: 1.25 };
@@ -59,15 +61,17 @@ function fixture() {
   return { store, engine, editor };
 }
 
+type Paint = (g: CanvasRenderingContext2D, st: OverlayState) => void;
+
 /** The overlay's frames: each kind of selection, a body dragged and one turned, a sketch being edited. */
-function frames(colours: OverlayColours): string[] {
+function frames(paint: Paint): string[] {
   const { store, engine, editor } = fixture();
   const log: string[] = [];
   const g = recordingContext(log, { width: 1000, height: 563 });
   const frame = (label: string, selected: string | null, drag: Drag | null = null) => {
     log.push(`# ${label}`);
     store.select(selected);
-    paintOverlay(g, overlayState(engine, store, drag, editor), colours);
+    paint(g, overlayState(engine, store, drag, editor));
   };
   frame('nothing selected', null);
   frame('the streak rake selected', 'r1');
@@ -82,10 +86,38 @@ function frames(colours: OverlayColours): string[] {
   return log;
 }
 
+/** Paints each frame on screen in a theme's colours, the tokens resolved from the stylesheets. */
+const onScreen = (theme: 'light' | 'dark'): Paint => {
+  const colours = overlayColours(tokenReader(theme));
+  return (g, st) => paintOverlay(g, st, colours);
+};
+
+afterEach(() => {
+  document.documentElement.removeAttribute('data-theme');
+  forgetColours();
+});
+
 describe('the overlay', () => {
   it('in the light theme draws exactly what it drew before it left the view', async () => {
-    const log = frames(overlayColours(tokenReader('light')));
+    const log = frames(onScreen('light'));
     expect(log.length).toBeGreaterThan(500);
     await expect(log.join('\n') + '\n').toMatchFileSnapshot('./__snapshots__/overlay-light.txt');
+  });
+
+  it("pictures and recordings draw the frame's marks in the light colours while the page is dark", () => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    const styles = themedStyles();
+    try {
+      const log = frames((g, st) => lightOverlay(() => st)(g));
+      expect(log).toEqual(frames(onScreen('light')));
+      // Read on the hidden light element only, never on the dark page.
+      expect(styles.reads.length).toBeGreaterThan(0);
+      for (const el of styles.reads) {
+        expect(el).not.toBe(document.documentElement);
+        expect(el.getAttribute('data-theme')).toBe('light');
+      }
+    } finally {
+      styles.restore();
+    }
   });
 });

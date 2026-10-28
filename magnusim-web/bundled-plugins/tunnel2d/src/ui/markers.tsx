@@ -8,9 +8,9 @@ import { LIMITS, RAKE_COLORS, newRakeId, type Density, type Rake, type RakeKind,
 import { useStore, type Store } from '../app/store';
 
 export const RAKE_KIND_LABEL: Record<RakeKind, string> = { streaks: 'Streaks', timelines: 'Timelines', dye: 'Dye' };
-/** The rake colours: the app's series colours, in order. */
+/** The rake colours: the app's light series colours, in order, in every theme (the view's rakes and their dye). */
 export const RAKE_COLOR_NAMES = ['Blue', 'Purple', 'Green', 'Orange', 'Sky blue', 'Pink'];
-export const rakeColorVar = (i: number) => `var(--mg-series-${(i % RAKE_COLORS) + 1})`;
+export const rakeColorVar = (i: number) => `var(--t2d-rake-${(i % RAKE_COLORS) + 1})`;
 
 function Section({ title, children, attr }: { title: string; children: ReactNode; attr: string }) {
   return (

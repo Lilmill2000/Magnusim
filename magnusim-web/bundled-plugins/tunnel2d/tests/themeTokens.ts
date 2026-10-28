@@ -39,3 +39,18 @@ export function tokenReader(theme: Theme): (name: string) => string {
     depth > 16 ? '' : v.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^)]*))?\)/g, (_, name: string, fallback?: string) => resolve(props[name] ?? fallback ?? '', depth + 1));
   return (name) => resolve(props[name] ?? '', 0).trim();
 }
+
+/**
+ * getComputedStyle as a browser gives the tokens: an element has its nearest data-theme's (html's
+ * when it has none). Returns each element read, in order, and a function that puts it back.
+ */
+export function themedStyles(): { reads: Element[]; restore: () => void } {
+  const real = globalThis.getComputedStyle;
+  const reads: Element[] = [];
+  globalThis.getComputedStyle = ((el: Element) => {
+    reads.push(el);
+    const read = tokenReader(el.closest('[data-theme]')?.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+    return { getPropertyValue: (name: string) => read(name) } as CSSStyleDeclaration;
+  }) as typeof getComputedStyle;
+  return { reads, restore: () => (globalThis.getComputedStyle = real) };
+}

@@ -1,12 +1,13 @@
 /*
  * Tunnel tokens. Built on the host's --mg-* tokens (/plugin-sdk/theme.css, loaded first);
  * only the tunnel's own roles (the view's background, bodies, the absorbing zones, the
- * selection) are defined here. Components use var(--t2d-*) / var(--mg-*), never raw hex.
- * They are declared again on a [data-theme] element (the stage keeps the light theme while the
- * core's 3D view is light): a var() in a custom property resolves where it is declared.
- * [data-theme] has the same specificity as [data-theme="dark"], so a dark override of one of
- * these must come after this block. The colours the GPU reads (src/app/colours.ts) stay plain
- * hex (tests/tokens.test.ts).
+ * selection, the rakes) are defined here. Components use var(--t2d-*) / var(--mg-*), never raw hex.
+ * They are declared again on any [data-theme] element (a var() in a custom property resolves
+ * where it is declared): the GPU, pictures and recordings read them on a hidden element with
+ * data-theme="light" (src/app/colours.ts), so the view's colours and what a person keeps stay
+ * light whatever the page's theme. [data-theme] has the same specificity as [data-theme="dark"],
+ * so a dark override of one of these must come after this block. The colours the GPU reads
+ * (src/app/colours.ts) stay plain hex (tests/tokens.test.ts).
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 :root,
@@ -18,14 +19,17 @@
   --t2d-edge: #1a1d24;
   /* The absorbing zones' tint (drawn at 14 %) */
   --t2d-zone: #667085;
-  /* Selection and the pose a dragged body is going to */
+  /* Selection and the pose a dragged body is going to; the selected probe's name (blue as text) */
   --t2d-select: var(--mg-primary);
+  --t2d-select-ink: var(--mg-primary-ink);
   --t2d-ghost: #475467;
-  /* Probes: dark ink on a ring of the page colour, over any field */
+  /* Probes: dark ink on a ring of the view's halo colour, over any field; the same ring under a
+     handle */
   --t2d-probe: var(--mg-text);
+  --t2d-halo: var(--mg-viewport-halo);
   /* The sketcher (as CAD's sketch: blue under-defined, ink fully defined, red over-defined;
      CAD's pick green for the selection), on a halo of the page colour over any field */
-  --t2d-sketch-under: var(--mg-primary);
+  --t2d-sketch-under: var(--mg-primary-ink);
   --t2d-sketch-full: var(--mg-text);
   --t2d-sketch-over: var(--mg-danger);
   --t2d-sketch-construction: var(--mg-text-muted);
@@ -39,6 +43,13 @@
   --t2d-plain: #121823;
   --t2d-streamline: #1a1d24;
   --t2d-arrow: #1a1d24;
+  /* Rakes, their dye and their swatches: the app's light series colours, in every theme */
+  --t2d-rake-1: #1570ef;
+  --t2d-rake-2: #6941c6;
+  --t2d-rake-3: #099250;
+  --t2d-rake-4: #b54708;
+  --t2d-rake-5: #0086c9;
+  --t2d-rake-6: #dd2590;
   /* The rheoscopic tank: a dark base and the colours of its two lights, per preset */
   --t2d-rheo-kalliroscope-base: #061226;
   --t2d-rheo-kalliroscope-light1: #d8e8ff;

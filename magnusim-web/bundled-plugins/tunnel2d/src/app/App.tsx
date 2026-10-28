@@ -443,7 +443,7 @@ export function App({
               <DisabledReason reason="The flow became unstable and was stopped." fix={{ label: 'Reset flow', onFix: resetFlow }} role="alert" />
             </div>
           ) : null}
-          <Viewport engine={engine} store={store} editor={editor} units={units} onStatus={setHint} />
+          <Viewport engine={engine} store={store} editor={editor} capture={capture} units={units} onStatus={setHint} />
           <SketchBar editor={editor} />
           {help ? <ShortcutsHelp onClose={() => setHelp(false)} /> : null}
           <DimensionInput editor={editor} />
