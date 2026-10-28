@@ -893,7 +893,7 @@ async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const question = [line(name, plan.was, keys), ...losers].join('; ');
   const ask = ASK[i.action as keyof typeof ASK];
   // The app's own dialog: its Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
-  const ok = await services.bridge.confirm({ title: ask.title, message: question, confirmLabel: ask.yes, cancelLabel: 'Keep it', guard: true, safe: true }).catch(() => false);
+  const ok = await services.bridge.confirm({ title: ask.title, message: question, confirmLabel: ask.yes, guard: true, safe: true }).catch(() => false);
   if (!ok) throw new ToolError('step_declined', 'The person did not confirm the keybind change; nothing changed.', { detail: { why: 'declined', question } });
   ctx.checkAbort();
   // The person said yes to that question: the change must still be the one it named.
