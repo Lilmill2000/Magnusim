@@ -38,6 +38,12 @@
 .cad-keybind-default {
   color: var(--mg-text-subtle);
 }
+/* A key of the command the app's Assistant panel has now (the person's key for it). */
+.cad-keybind-taken {
+  margin: -4px 0 10px;
+  line-height: 1.4;
+  color: var(--mg-danger);
+}
 .cad-keybind-capture {
   border: 1px dashed var(--mg-control-border);
   border-radius: var(--mg-radius-md);

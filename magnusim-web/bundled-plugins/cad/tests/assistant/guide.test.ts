@@ -96,8 +96,9 @@ const value = (at: string, v: string) => expect(VALUES.get(at), at).toContain(v)
 const REPLY_KEYS = ['volume_mm3', 'area_mm2', 'bbox_mm', 'at_mm', 'problem_total', 'problem_counts', 'dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut', 'steps_left', 'usd_left', 'changes_left',
   // The workspace tool: its answers' undo_step, and the targets of expand and collapse.
   'undo_step', 'sketch_panel', 'sketch_details',
-  // keybind_get's rows: where the person sets each command's keybind.
-  'set_in'];
+  // keybind_get's rows: where the person sets each command's keybind, and a key of it the app has
+  // now; its answer: the app's Assistant panel key as the person chose it.
+  'set_in', 'taken_by_app', 'assistant_panel_keys'];
 
 /** Every text of help, and the guide. */
 const helpTexts = () => Object.values(HELP).flatMap((rows) => rows.flatMap((r) => [r.about, r.text]));

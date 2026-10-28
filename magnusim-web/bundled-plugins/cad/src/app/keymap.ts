@@ -13,7 +13,8 @@
 // types (Ctrl+Z is Undo on QWERTZ and AZERTY too), anything else by the key's place, punctuation
 // also by the character it types. Cmd counts as Ctrl, so Meta never reaches a binding. People read
 // them as "Shift+R", "Ctrl+\" (displayCombo). A conflict is the same combo in the same context,
-// or with either side 'any'; the app's app-wide shortcuts (APP_SHORTCUTS) are 'any' on every screen.
+// or with either side 'any'; the app's app-wide shortcuts (APP_SHORTCUTS) are 'any' on every screen,
+// and so is the Assistant panel's key the person chose in Settings (src/app/keybinds.ts).
 // Escape stays built in (cancel, close, let go of the selection, a sketch tool's step back): it is
 // the app's, never a command's key.
 // No runtime imports: scripts/build.mjs imports this file with Node's type stripping.
@@ -51,6 +52,9 @@ export interface AppKeyGroup {
 
 const group = (label: string, keys: readonly string[]): AppKeyGroup => Object.freeze({ label, keys: Object.freeze([...keys]) });
 
+/** What the app's Assistant panel key does, in the host's words (its refusals name it so). */
+export const ASSISTANT_PANEL = 'Open or close the Assistant panel';
+
 /**
  * Magnusim's own keys, exactly as the host's contract has them (src/keybinds/appCommands.ts
  * APP_KEYS, published as docs/plugins/plugin-sdk.json `app_keys`, from the CAD Standalone session).
@@ -58,6 +62,9 @@ const group = (label: string, keys: readonly string[]): AppKeyGroup => Object.fr
  *  - app: keys the app acts on wherever the person is: a conflict in every context. Ctrl+/ (Cmd+/
  *    on macOS, the number pad's / too) opens or closes the Assistant panel; inside the frame the SDK
  *    forwards it unless the page calls preventDefault. No default and no keybind may take one.
+ *    These are the published defaults: the panel's key the person chose in Settings → Keybinds
+ *    (ws.context.assistantKeys) is refused as well while it is theirs (refusal's `assistant`),
+ *    and its press is the app's (isAssistantPress).
  *  - local: keys the app acts on only while something of its own is open; a page may use them.
  *    Keys typed in the Part never reach the host: Escape is CAD's built-in cancel key
  *    (BUILT_IN_KEYS), never a command's key.
@@ -67,7 +74,7 @@ const group = (label: string, keys: readonly string[]): AppKeyGroup => Object.fr
  * key labelled W is Ctrl+W. A press never gives Meta (Cmd counts as Ctrl).
  */
 export const APP_SHORTCUTS: Readonly<{ app: readonly AppKeyGroup[]; local: readonly AppKeyGroup[]; reserved: readonly AppKeyGroup[] }> = Object.freeze({
-  app: Object.freeze([group('Open or close the Assistant panel', ['Ctrl+Slash', 'Meta+Slash', 'Ctrl+NumpadDivide', 'Meta+NumpadDivide', 'Ctrl+Meta+Slash', 'Ctrl+Meta+NumpadDivide'])]),
+  app: Object.freeze([group(ASSISTANT_PANEL, ['Ctrl+Slash', 'Meta+Slash', 'Ctrl+NumpadDivide', 'Meta+NumpadDivide', 'Ctrl+Meta+Slash', 'Ctrl+Meta+NumpadDivide'])]),
   local: Object.freeze([group('Close the open dialog, menu or mode', ['Escape'])]),
   reserved: Object.freeze([
     group('Close the tab', ['Ctrl+KeyW', 'Ctrl+F4']),
@@ -488,9 +495,13 @@ export const appUseOf = (combo: string): string | null => APP_SHORTCUTS.app.find
 /** CAD's built-in use of a combo, or null. */
 const builtInUseOf = (combo: string): string | null => BUILT_IN_KEYS.find((g) => g.keys.includes(combo))?.label ?? null;
 
-/** Why a combo in the registry's form is the app's, the browser's or CAD's own ("" when it is free to use), in the host contract's words. */
-function refusal(c: string): string {
-  const app = appUseOf(c);
+/**
+ * Why a combo in the registry's form is the app's, the browser's or CAD's own ("" when it is free to
+ * use), in the host contract's words. `assistant`: the Assistant panel's keys the person chose
+ * (ws.context.assistantKeys; null while it has its default, [] none), the app's own as well.
+ */
+function refusal(c: string, assistant: readonly string[] | null = null): string {
+  const app = appUseOf(c) ?? (assistant?.includes(c) ? ASSISTANT_PANEL : null);
   if (app) return `${q(c)} is the app's own key (${app})`;
   const r = RESERVED[c];
   if (r) return `${q(c)} is kept for the browser and the system (${r})`;
@@ -503,11 +514,11 @@ function refusal(c: string): string {
  * Why a combo cannot be a keybind ("" when it can), in the words of the host's validators: text that
  * is not a key, a number-pad digit or Enter (never from a press: the one to write), or a key the app,
  * the browser or CAD keeps. `layout` is accepted for the callers' sake; refusals name keys as
- * combos are written.
+ * combos are written. `assistant`: the Assistant panel's keys the person chose (refusal).
  */
-export function comboProblem(combo: string, _layout?: LayoutMap | null): string {
+export function comboProblem(combo: string, _layout?: LayoutMap | null, assistant: readonly string[] | null = null): string {
   const p = parseCombo(combo);
-  return p.ok ? refusal(p.combo) : p.why;
+  return p.ok ? refusal(p.combo, assistant) : p.why;
 }
 
 export type Captured =
@@ -518,8 +529,11 @@ export type Captured =
   /** A combo the browser, the system or the app keeps (or a key no shortcut can use), and why. */
   | { kind: 'refused'; combo: string; reason: string };
 
-/** A key press in a "press the new keys" field, read as the keyboard reads it (combosOf): the combo, modifiers still held, or a combo it cannot have and why. */
-export function captureCombo(e: KeyLike, _layout?: LayoutMap | null): Captured {
+/**
+ * A key press in a "press the new keys" field, read as the keyboard reads it (combosOf): the combo,
+ * modifiers still held, or a combo it cannot have and why (`assistant`: as comboProblem's).
+ */
+export function captureCombo(e: KeyLike, _layout?: LayoutMap | null, assistant: readonly string[] | null = null): Captured {
   const combos = combosOf(e);
   const combo = combos[0];
   if (isModifierPress(e) || !combo || combo.split('+').every((p) => (MODS as readonly string[]).includes(p))) return { kind: 'modifier', partial: combo };
@@ -527,10 +541,35 @@ export function captureCombo(e: KeyLike, _layout?: LayoutMap | null): Captured {
   if (!isKeyCode(key)) return { kind: 'refused', combo, reason: `"${key}" cannot be a shortcut key` };
   // The browser's and the app's keys go by what the key types too (the Assistant's Ctrl+/ is the key typing /).
   for (const c of combos) {
-    const why = refusal(c);
+    const why = refusal(c, assistant);
     if (why) return { kind: 'refused', combo, reason: why };
   }
   return { kind: 'combo', combo };
+}
+
+/**
+ * Whether a press is the app's Assistant panel key, by the very rule the SDK forwards it with
+ * (the host's src/plugin-sdk/workspace.ts isAssistantKey; tests/app/assistant-key.test.ts holds
+ * the two to the same answers). `keys`: the person's (ws.context.assistantKeys), [] for none, or
+ * null for the default: Ctrl or Cmd (or both), no Alt or Shift, on the key that types "/". The
+ * person's are read as combosOf reads a press: Cmd counts as Ctrl, a Latin letter by the letter
+ * it types, the number pad's digits and Enter as Digit and Enter, any other key by its place, and
+ * punctuation by the character it types too. Composing and held keys are the caller's to judge.
+ */
+export function isAssistantPress(e: KeyLike, keys: readonly string[] | null): boolean {
+  const k = e.key ?? '';
+  if (!keys) return !!(e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && k === '/';
+  if (!keys.length) return false;
+  const held = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean).join('+');
+  const named = (code: string) => (held ? `${held}+${code}` : code);
+  const code = e.code ?? '';
+  const ch = k.length === 1 ? k : '';
+  const letter = /[a-z]/i.test(ch);
+  const pad = /^Numpad(\d)$/.exec(code);
+  const placed = letter ? `Key${ch.toUpperCase()}` : pad ? `Digit${pad[1]}` : code === 'NumpadEnter' ? 'Enter' : code;
+  if (keys.includes(named(placed))) return true;
+  const typed = !ch || letter ? '' : /\d/.test(ch) ? `Digit${ch}` : CODE_OF_CHAR[ch] || '';
+  return !!typed && keys.includes(named(typed));
 }
 
 /** Whether two contexts meet (the same one, or either is 'any'). */
@@ -555,9 +594,11 @@ export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultK
 /**
  * Every entry whose keys (under `keysOf`) take a key no keybind may have (the app's, the browser's
  * and the system's reserved ones, CAD's built-in Escape) or one a press never gives; `by` says why.
+ * `assistant`: the Assistant panel's keys the person chose (a stored keybind may have one of them:
+ * it stays stored, but the press is the app's).
  */
-export function appClashesIn(keysOf: (id: string) => readonly string[] = defaultKeys): { combo: string; id: string; by: string }[] {
-  return KEYMAP.flatMap((x) => keysOf(x.id).flatMap((c) => (refusal(c) ? [{ combo: c, id: x.id, by: refusal(c) }] : [])));
+export function appClashesIn(keysOf: (id: string) => readonly string[] = defaultKeys, assistant: readonly string[] | null = null): { combo: string; id: string; by: string }[] {
+  return KEYMAP.flatMap((x) => keysOf(x.id).flatMap((c) => (refusal(c, assistant) ? [{ combo: c, id: x.id, by: refusal(c, assistant) }] : [])));
 }
 
 // ------------------------------------------------------------------ workspace/commands.json

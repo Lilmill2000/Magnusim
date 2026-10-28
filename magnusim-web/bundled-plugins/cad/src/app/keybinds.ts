@@ -10,12 +10,19 @@
 // keybindsFor(services) is the Part's one model (bootstrap sets it; a test's services get their
 // own); bindCommandKeys binds a keyboard-only action (Delete, F2, Ctrl+\) by its id, so its keys
 // follow the person's.
+// The app's Assistant panel key is the app's: the published default (Ctrl+/, keymap.ts
+// APP_SHORTCUTS) and the one the person chose in the app's Settings (the bridge's assistantKeys,
+// live). No new key of a command may be one of them (set, replace, reset, the dialog's capture);
+// a stored keybind that is one stays stored (it comes back when the person moves the Assistant's
+// key away again: the host's own Change takes it from the command meanwhile) and shows as taken
+// (appClashes), and the keyboard leaves its press to the app (keyboard.ts passAssistantKey).
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { PrefsApi } from '../lib/bridge';
+import type { Bridge, PrefsApi } from '../lib/bridge';
 import type { AppServices } from '../types/app';
 import type { KeyBinding } from '../types/commands';
 import {
+  appClashesIn,
   appUseOf,
   captureCombo,
   comboProblem,
@@ -64,6 +71,9 @@ export type KeybindResult =
    */
   | { ok: false; reason: 'unknown' | 'refused' | 'unread'; id: string; combo?: string; message: string };
 
+/** The Assistant panel's keys the person chose, live (the bridge has them: Bridge.assistantKeys). */
+export type AssistantKeysSource = Pick<Bridge, 'assistantKeys' | 'onAssistantKeys'>;
+
 export interface Keybinds {
   /** Resolves once the first read of the stored overrides is over (read, or could not be). */
   readonly ready: Promise<void>;
@@ -87,6 +97,12 @@ export interface Keybinds {
   display(combo: string): string;
   /** A key press in a "press the new keys" field (captureCombo, its reasons through the layout). */
   capture(e: KeyLike): Captured;
+  /** Why a combo cannot be a command's key now ('' when it can): comboProblem, with the Assistant panel's keys the person chose. */
+  problem(combo: string): string;
+  /** The Assistant panel's keys the person chose (as the host sent them, [] none), or null for its default (Ctrl+/). */
+  assistantKeys(): readonly string[] | null;
+  /** Keys commands have now that no command's key may be (a stored keybind the person's Assistant key took): its press is the app's. */
+  appClashes(): { combo: string; id: string; by: string }[];
   /** The first key's words for a command's tooltip (Finish sketch: Place or finish's), or undefined. */
   shown(id: string): string | undefined;
   /** A command with no key of its own whose tooltip shows another one's (Finish sketch: Enter, through Place or finish), or null. */
@@ -152,7 +168,7 @@ async function readLayout(): Promise<LayoutMap | null> {
   }
 }
 
-export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }): Keybinds {
+export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; assistant?: AssistantKeysSource | null }): Keybinds {
   // The overrides in effect: the stored ones (as last read) with this page's changes on top.
   let over: Record<string, string[]> = {};
   let stored: Record<string, string[]> = {};
@@ -173,6 +189,8 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     for (const fn of [...listeners]) fn();
   };
   const keysOf = (id: string): readonly string[] => over[id] ?? defaultKeys(id);
+  // The Assistant panel's keys the person chose, read live from the bridge (null: its default).
+  const assistantKeys = (): readonly string[] | null => o.assistant?.assistantKeys() ?? null;
   const merged = (base: Record<string, string[]>): Record<string, string[]> => {
     const out: Record<string, string[]> = resetAllPending ? {} : { ...base };
     for (const [id, v] of dirty) {
@@ -266,7 +284,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     const keys: string[] = [];
     for (const raw of combos) {
       const p = parseCombo(raw);
-      const why = p.ok ? comboProblem(p.combo, layout) : p.why;
+      const why = p.ok ? comboProblem(p.combo, layout, assistantKeys()) : p.why;
       if (!p.ok || why) return { ok: false, reason: 'refused', id, combo: p.ok ? p.combo : raw, message: why };
       if (!keys.includes(p.combo)) keys.push(p.combo);
     }
@@ -333,6 +351,19 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
       /* no change events: the keybinds read at the start apply */
     }
   }
+  if (o.assistant) {
+    // The person moved the Assistant panel's key in Settings: what is refused changes, and so may
+    // what the dialog says of a command's keys.
+    try {
+      offs.push(
+        o.assistant.onAssistantKeys(() => {
+          if (!disposed) tell();
+        }),
+      );
+    } catch {
+      /* no change events: the keys the Part opened with apply */
+    }
+  }
   if (o.layout !== false)
     void readLayout().then((m) => {
       if (m && !disposed) {
@@ -357,7 +388,10 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean }):
     defaults: defaultKeys,
     isDefault: (id) => !(id in over),
     display: (combo) => displayCombo(combo, layout),
-    capture: (ev) => captureCombo(ev, layout),
+    capture: (ev) => captureCombo(ev, layout, assistantKeys()),
+    problem: (combo) => comboProblem(combo, layout, assistantKeys()),
+    assistantKeys,
+    appClashes: () => appClashesIn(keysOf, assistantKeys()),
     shown(id) {
       if (!keymapEntry(id)) return undefined;
       const k = keysOf(id);
@@ -412,8 +446,11 @@ export function keybindsFor(services: AppServices | null | undefined): Keybinds 
   if (!services || typeof services !== 'object') return (fallback ??= createKeybinds({ prefs: null, layout: false }));
   let k = MODELS.get(services);
   if (!k) {
-    const prefs = (services as Partial<AppServices>).bridge?.prefs ?? null;
-    k = createKeybinds({ prefs });
+    const bridge = (services as Partial<AppServices>).bridge;
+    const prefs = bridge?.prefs ?? null;
+    // A test's bridge may be partial: the Assistant panel's keys only when it has them.
+    const assistant = typeof bridge?.assistantKeys === 'function' && typeof bridge.onAssistantKeys === 'function' ? bridge : null;
+    k = createKeybinds({ prefs, assistant });
     MODELS.set(services, k);
   }
   return k;
