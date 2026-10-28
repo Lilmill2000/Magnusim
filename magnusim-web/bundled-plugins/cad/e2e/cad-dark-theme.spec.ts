@@ -29,6 +29,9 @@
 //    keyboard focus: in dark its red number is on a red-tinted background, 4.5:1 and more (review
 //    round 1: on the hover blue, 1.7:1), in light on the hover blue as before. The host's dark
 //    --mg-danger is given here as its newer theme.css will (this host has no dark set yet).
+//  - dark-chrome: the toolbar takes the host's dark --mg-surface-muted (CAD has no dark value of
+//    its own for it), and a button under the pointer stands off it (review of the rebase: the
+//    icon buttons' hover was 1.06:1 there); back in light every colour is as before.
 //  - dark-sketch-picture: in sketch mode (review round 1: only model mode was pictured dark), the
 //    view's own picture (the Assistant's and the Picture tool's path) taken while dark, E2 (c) or
 //    (b) with its rims, is the one taken in light, and the view shows no light frame meanwhile.
@@ -36,10 +39,10 @@
 //    colour, (b) with a rim, for Daniel's screenshot review.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
 import { addSketch, addSolid, featureRowNamed, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, setAppearance, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
-import { PLANNED_HOST } from '../tests/styles/css-tokens';
+import { hostTokens, PLANNED_HOST, themeValue } from '../tests/styles/css-tokens';
 
 type V3 = [number, number, number];
 type RGB = [number, number, number];
@@ -789,6 +792,35 @@ test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable 
   expect(dark.hover).toEqual({ color: cssRgb(PLANNED_HOST.dark['--mg-danger']), bg: cssRgb('#4a2522') });
   expect(dark.focus).toEqual(dark.hover);
   expect(contrastOf(rgb(dark.hover.color), rgb(dark.hover.bg)), 'the red number on its hover background').toBeGreaterThanOrEqual(4.5);
+  await appearance(page, 'light');
+  expect(await looks()).toEqual(light);
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:dark-chrome the toolbar is the host's dark one, and a button under the pointer stands off it in dark as in light", async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  const bar = frame.locator('[data-cad-toolbar]');
+  const btn = bar.locator('.tb-btn[data-command]:not(.is-disabled):not(.is-active):not(.is-primary)').filter({ visible: true }).first();
+  const bg = (l: Locator) => l.evaluate((el) => getComputedStyle(el).backgroundColor);
+  /** The toolbar's background, and a button's away from the pointer and under it. */
+  const looks = async () => {
+    await page.mouse.move(5, 5);
+    const rest = await bg(btn);
+    await btn.hover();
+    const hover = await bg(btn);
+    await page.mouse.move(5, 5);
+    return { bar: await bg(bar), rest, hover };
+  };
+  const rgb = (c: string): RGB => (c.match(/\d+/g) ?? []).slice(0, 3).map(Number) as RGB;
+  const light = await looks();
+  // Light as before: the icon buttons' faint hover on the core's toolbar grey.
+  expect(light).toEqual({ bar: cssRgb('#f2f4f7'), rest: 'rgba(0, 0, 0, 0)', hover: cssRgb('#eef0f4') });
+  await appearance(page, 'dark');
+  const dark = await looks();
+  // The host's dark set is live in the frame: the toolbar is its dark --mg-surface-muted.
+  expect(dark.bar).toBe(cssRgb(hostTokens().dark.get('--mg-surface-muted')!));
+  expect(dark.hover).toBe(cssRgb(themeValue('--cad-toolbar-hover-bg', 'dark')!));
+  expect(contrastOf(rgb(dark.hover), rgb(dark.bar)), 'the hover on the dark toolbar').toBeGreaterThanOrEqual(1.15);
   await appearance(page, 'light');
   expect(await looks()).toEqual(light);
   expect(seen.errors).toEqual([]);

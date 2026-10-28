@@ -34,6 +34,8 @@ const LIGHT_BEFORE: Record<string, string> = {
   '--cad-toolbar-active-border': '#9bc2f0',
   '--cad-toolbar-active-icon': '#1a4fbf',
   '--cad-toolbar-scale': '1',
+  // New: a toolbar button's hover and open background, the icon buttons' hover it had (--cad-icon-btn-hover-bg).
+  '--cad-toolbar-hover-bg': '#eef0f4',
   '--cad-icon-btn': '#5b6575',
   '--cad-disabled-button-text': 'rgba(16, 16, 16, 0.3)',
   '--cad-icon-btn-hover-bg': '#eef0f4',
@@ -180,6 +182,25 @@ describe('CAD tokens: the dark set', () => {
     expect(themeValue('--cad-marker-failed-hover-bg', 'light')).toBe(themeValue('--cad-hover-pick', 'light'));
     expect(contrast(themeValue('--mg-danger', 'dark')!, themeValue('--cad-hover-pick', 'dark')!)).toBeLessThan(2);
     expect(contrast(themeValue('--mg-danger', 'dark')!, themeValue('--cad-marker-failed-hover-bg', 'dark')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("shows a toolbar button's hover on the host's dark toolbar (its own token, not the panels' hover)", () => {
+    const ui = stripComments(readFileSync(join(PLUGIN, 'src/ui/ui.css'), 'utf8'));
+    const rules = [...ui.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].replace(/\s+/g, ' ').trim(), body: m[2] }));
+    const toolbar = rules.filter((r) => /\.tb-/.test(r.sel));
+    // The button under the pointer, a split pair's either half, and an open flyout arrow, More or group menu.
+    expect(toolbar.filter((r) => /background: var\(--cad-toolbar-hover-bg\);/.test(r.body)).map((r) => r.sel)).toEqual([
+      '.tb-btn:hover',
+      '.cad-toolbar.is-ribbon .tb-split:hover > .tb-btn:not(.is-disabled):not(.is-active)',
+      '.cad-toolbar .tb-btn.tb-flyout-arrow.is-open',
+      '.cad-toolbar .tb-btn.tb-more.is-open, .cad-toolbar .tb-btn.tb-group-menu.is-open',
+    ]);
+    expect(toolbar.filter((r) => r.body.includes('--cad-icon-btn-hover-bg')).map((r) => r.sel)).toEqual([]);
+    // Light as it was; in dark it stands off the host's toolbar (the panels' hover was 1.06:1 there),
+    // and the button's text and icon read on it.
+    expect(themeValue('--cad-toolbar-hover-bg', 'light')).toBe(LIGHT_BEFORE['--cad-icon-btn-hover-bg']);
+    expect(contrast(themeValue('--cad-toolbar-hover-bg', 'dark')!, themeValue('--cad-toolbar-bg', 'dark')!)).toBeGreaterThanOrEqual(1.15);
+    expect(contrast(themeValue('--mg-text-strong', 'dark')!, themeValue('--cad-toolbar-hover-bg', 'dark')!)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('reads in dark: text at least 4.5:1 on its background, icons and marks at least 3:1', () => {

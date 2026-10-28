@@ -84,7 +84,7 @@
 }
 
 .tb-btn:hover {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 
 .tb-btn.is-active {
@@ -422,17 +422,17 @@ html.cad-tb-drag-refused * {
 }
 /* Hovering either half shows the pair as one control. */
 .cad-toolbar.is-ribbon .tb-split:hover > .tb-btn:not(.is-disabled):not(.is-active) {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 .cad-toolbar .tb-btn.tb-flyout-arrow.is-open {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 
 /* A group's "More ▾" (FOLD_ORDER, or a narrowed group): its folded commands, in a menu; one of the
    small buttons. */
 .cad-toolbar .tb-btn.tb-more.is-open,
 .cad-toolbar .tb-btn.tb-group-menu.is-open {
-  background: var(--cad-icon-btn-hover-bg);
+  background: var(--cad-toolbar-hover-bg);
 }
 .tb-btn.tb-more .tb-txt,
 .tb-btn.tb-group-menu .tb-txt {
