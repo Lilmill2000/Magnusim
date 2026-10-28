@@ -26,6 +26,7 @@ import type { Vec3 } from '../../../src/types/doc';
 import type { DocService } from '../../../src/types/doc-service';
 import type { CadEvents } from '../../../src/types/events';
 import type { OverlayLayer, ViewportHandle, ViewportPointer, ViewportTool } from '../../../src/types/viewport';
+import { LIGHT, type MarkPalette } from '../../../src/viewport/palette';
 import { LeftStack, Overlays, StatusDock, Toolbar } from '../../../src/ui';
 import { installUi } from '../../../src/ui/commands';
 import { tipTiming } from '../../../src/ui/kit';
@@ -49,12 +50,16 @@ export interface FakeViewport {
   at(type: ViewportPointer['type'], p: Vec3, extra?: Partial<ViewportPointer>): ViewportPointer;
   /** Offer an event to the tools, newest first, as the viewport does; true when one took it. */
   offer(e: ViewportPointer): boolean;
+  /** The view's palette now (palette()), and a new one given to every layer's `palette` hook, as setPalette does. */
+  palette: MarkPalette;
+  setPalette(p: MarkPalette): void;
 }
 
 export function fakeViewport(): FakeViewport {
   const tools: ViewportTool[] = [];
   const layers = new Map<string, OverlayLayer>();
   const frames = new Set<() => void>();
+  const hooks = new Map<string, (p: MarkPalette) => void>();
   const fv: FakeViewport = {
     tools,
     layers,
@@ -69,6 +74,11 @@ export function fakeViewport(): FakeViewport {
     offer(e) {
       for (let i = tools.length - 1; i >= 0; i--) if (tools[i].onPointer(e)) return true;
       return false;
+    },
+    palette: LIGHT,
+    setPalette(p) {
+      fv.palette = p;
+      for (const [id, fn] of hooks) if (layers.has(id)) fn(p);
     },
   };
   const state = createStateStore({ ready: true, planes: 'auto' as const, bodies: 0 });
@@ -89,11 +99,14 @@ export function fakeViewport(): FakeViewport {
       frames.add(fn);
       return () => frames.delete(fn);
     },
-    addLayer(id: string) {
+    palette: () => fv.palette,
+    addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
       const html = document.createElement('div');
       document.body.appendChild(html);
-      const layer: OverlayLayer = { id, group: new Group(), html, setVisible() {}, changed() {}, dispose: () => (html.remove(), layers.delete(id)) };
+      const layer: OverlayLayer = { id, group: new Group(), html, setVisible() {}, changed() {}, dispose: () => (html.remove(), layers.delete(id), hooks.delete(id)) };
       layers.set(id, layer);
+      if (o.palette) hooks.set(id, o.palette);
+      else hooks.delete(id);
       return layer;
     },
     pushTool(tool: ViewportTool) {

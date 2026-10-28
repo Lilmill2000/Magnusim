@@ -3,7 +3,8 @@
 //                          12%), picked ones in the pick green, the one under
 //                          the pointer in the hover blue; in both modes
 //   profiles.sketches (30) a finished sketch's lines in model mode, coloured by
-//                          how defined it is (sketch mode draws its own)
+//                          how defined it is (sketch mode draws its own), in the
+//                          view's palette (recoloured when it changes)
 //   profiles.markers  (40) open-profile markers: a small white ring at every
 //                          open end of a chain (Fusion's hint), html
 // Reads rebuild.outputs (the sketch's SketchOutput), the view's sketch
@@ -18,7 +19,8 @@ import type { AppServices } from '../../types/app';
 import type { FeatureId, SketchFeature, Vec3 } from '../../types/doc';
 import type { SketchOutput } from '../../types/sketch';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
-import { overlayColors } from './colors';
+import { hexNumber, paletteOf, type MarkPalette } from '../../viewport/palette';
+import { overlayColors, type OverlayColors } from './colors';
 import { entityGeometry, type EntityGeom } from './geometry';
 import { toModel } from './plane';
 import { drawnSketches, editedSketch, profilesView } from './view';
@@ -38,6 +40,8 @@ interface DrawnSketch {
   positions: BufferAttribute;
   meshes: Map<string, Mesh<BufferGeometry, MeshBasicMaterial>>;
   segs: LineSegments2[];
+  /** E2 option (b): a rim under each solid line (sharing its geometry), made while the palette has one. */
+  rims: LineSegments2[];
   markers: { el: HTMLElement; at: Vec3 }[];
 }
 
@@ -78,9 +82,12 @@ export class ProfileOverlay {
   private readonly sketches: OverlayLayer;
   private readonly marks: OverlayLayer;
   private readonly drawn = new Map<FeatureId, DrawnSketch>();
-  private readonly colors = overlayColors();
+  private colors: OverlayColors;
   private readonly mats;
   private readonly lineMats;
+  /** E2 option (b): the rim under solid lines (background colour, 1 px each side); `rimOn` while the palette has one. */
+  private readonly rimMat: LineMaterial;
+  private rimOn: boolean;
   private readonly offs: (() => void)[] = [];
   private queued = false;
   /** A snapshot is drawing: every region in its normal colour. */
@@ -100,8 +107,11 @@ export class ProfileOverlay {
         this.sync();
       },
     });
-    this.sketches = handle.addLayer(LAYER_SKETCHES, { order: 30, frame: true });
+    // The lines take the view's palette (src/viewport/palette.ts), and a new one when it changes.
+    this.sketches = handle.addLayer(LAYER_SKETCHES, { order: 30, frame: true, palette: (p) => this.recolour(p) });
     this.marks = handle.addLayer(LAYER_MARKERS, { order: 40 });
+    const start = paletteOf(handle);
+    this.colors = overlayColors(start);
     const c = this.colors;
     // Seen from either side; pulled towards the camera so a region on a face (a sketch on it) shows over it.
     const fill = (k: { color: number; opacity: number }) =>
@@ -130,6 +140,8 @@ export class ProfileOverlay {
     // round 1: a centerline looked solid). The dash follows the zoom (place(), every frame).
     this.lineMats.construction.dashed = true;
     this.lineMats.linkedConstruction.dashed = true;
+    this.rimOn = start.sketchRim !== null;
+    this.rimMat = line(start.sketchRim !== null ? hexNumber(start.sketchRim) : 0, LINE_PX + 2);
     const later = () => this.later();
     this.offs.push(
       services.doc.state.subscribe(later),
@@ -139,6 +151,33 @@ export class ProfileOverlay {
       handle.onFrame(() => this.place()),
     );
     this.sync();
+  }
+
+  /**
+   * The view's palette changed (the host's theme; LIGHT around a picture and back): the lines'
+   * colours now (the regions keep their tint). A rim (E2 b) shows and hides with it; rims a sketch
+   * drawn without one lacks come with its lines drawn again.
+   */
+  private recolour(p: MarkPalette): void {
+    const c = overlayColors(p);
+    this.colors = c;
+    const m = this.lineMats;
+    m.under.color.setHex(c.under);
+    m.full.color.setHex(c.full);
+    m.over.color.setHex(c.over);
+    m.construction.color.setHex(c.construction);
+    m.linked.color.setHex(c.linked);
+    m.lost.color.setHex(c.lost);
+    m.linkedConstruction.color.setHex(c.linked);
+    this.rimOn = p.sketchRim !== null;
+    if (p.sketchRim !== null) this.rimMat.color.setHex(hexNumber(p.sketchRim));
+    const lacking = this.rimOn && [...this.drawn.values()].some((d) => d.segs.some((s) => !(s.material as LineMaterial).dashed) && !d.rims.length);
+    if (lacking) {
+      for (const d of this.drawn.values()) this.drop(d);
+      this.drawn.clear();
+      this.sync();
+    } else for (const d of this.drawn.values()) for (const r of d.rims) r.visible = this.rimOn;
+    this.sketches.changed();
   }
 
   /** Sync on the next microtask (several stores change together). */
@@ -217,6 +256,7 @@ export class ProfileOverlay {
       this.regions.group.add(mesh);
     }
     const segs: LineSegments2[] = [];
+    const rims: LineSegments2[] = [];
     if (lines) {
       let geom: EntityGeom[] = [];
       try {
@@ -262,6 +302,15 @@ export class ProfileOverlay {
         seg.frustumCulled = false;
         segs.push(seg);
         this.sketches.group.add(seg);
+        // E2 (b): the rim under a solid line, drawn first at its depth.
+        if (this.rimOn && !m.dashed) {
+          const rim = new LineSegments2(lg, this.rimMat);
+          rim.name = `sketch-rim:${feature.id}`;
+          rim.renderOrder = 1;
+          rim.frustumCulled = false;
+          rims.push(rim);
+          this.sketches.group.add(rim);
+        }
       }
     }
     const markers = output.open.map((o) => {
@@ -272,7 +321,7 @@ export class ProfileOverlay {
       this.marks.html.appendChild(el);
       return { el, at: toModel(output.plane, o.at) };
     });
-    return { output, feature, lines, positions, meshes, segs, markers };
+    return { output, feature, lines, positions, meshes, segs, rims, markers };
   }
 
   private positionsOf(output: SketchOutput, uv: Float32Array): Float32Array {
@@ -290,6 +339,7 @@ export class ProfileOverlay {
       this.sketches.group.remove(s);
       s.geometry.dispose();
     }
+    for (const r of d.rims) this.sketches.group.remove(r);
     for (const m of d.markers) m.el.remove();
   }
 
@@ -329,6 +379,7 @@ export class ProfileOverlay {
     this.drawn.clear();
     for (const m of Object.values(this.mats)) m.dispose();
     for (const m of Object.values(this.lineMats)) m.dispose();
+    this.rimMat.dispose();
     this.regions.dispose();
     this.sketches.dispose();
     this.marks.dispose();

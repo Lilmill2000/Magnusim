@@ -78,6 +78,11 @@ export class ConstructOverlay {
         this.plainNow = on;
         this.sync();
       },
+      // Axes and points at rest take the palette's construct colour (light in a dark view); hover, pick and the plane tints stay.
+      palette: (p) => {
+        for (const m of [this.lineMats.none, this.xlineMats.none, this.dots.none, this.xdots.none]) m.color.setHex(p.constructLine);
+        this.layer.changed();
+      },
     });
     this.layer.html.dataset.constructLayer = '1';
     // Axis and point colour at rest: the planes' border blue, darker (the palette's constructLine).

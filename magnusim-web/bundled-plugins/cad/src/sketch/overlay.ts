@@ -5,7 +5,9 @@
 //     accent, fully: #101828, over: red; construction dashed and muted),
 //     points, the hover halo and the selection, a tool's preview (rubber band,
 //     inference guides, a trim's doomed piece in red, the window), and the
-//     dimensions' extension and dimension lines;
+//     dimensions' extension and dimension lines; its colours are the view's
+//     palette's (src/viewport/palette.ts), drawn again when it changes (the
+//     host's theme, and LIGHT for a picture);
 //   layer "sketch-annotations" (order 40, html): constraint glyphs (white
 //     badges, selectable, deletable), dimension labels (driven grey in
 //     parentheses; double-click edits, drag moves, right-click for Make it
@@ -42,8 +44,7 @@ import { linkMenuItems } from './project/menu';
 import { CLICK_PX } from '../viewport/colors';
 import { drawsConstruction } from './edit';
 import { cursorFor, cursorTone, sketchCursor } from './cursors';
-import { VIEWPORT_BG } from '../viewport/colors';
-import { paletteOf } from '../viewport/palette';
+import { paletteOf, type MarkPalette } from '../viewport/palette';
 import { relationShown, relationsView } from './relations-view';
 // Daniel's first desktop test: the construction badge's ×, and the relations palette.
 import { createConstructionBadge } from './construction-badge';
@@ -256,11 +257,14 @@ function unionUv(a: UvBox | null, b: UvBox | null): UvBox | null {
 
 export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => void {
   const { services } = mode;
-  // The sketch's colours by role (src/viewport/palette.ts: the view's palette).
-  const pal = paletteOf(handle).sketch;
+  // The sketch's colours by role, and the rim under its solid lines (E2 option b, else null): the
+  // view's palette (src/viewport/palette.ts), followed when it changes.
+  let pal = paletteOf(handle).sketch;
+  let rimInk = paletteOf(handle).sketchRim;
+  let background = paletteOf(handle).background;
   // The sketch's curves, points and dimensions count when the view frames the part (entering or
   // reopening the sketch, Fit, Look at, the standard views); its grid and origin do not.
-  const geo: OverlayLayer = handle.addLayer('sketch-geometry', { order: 30, frame: () => frameBox() });
+  const geo: OverlayLayer = handle.addLayer('sketch-geometry', { order: 30, frame: () => frameBox(), palette: (p) => recolour(p) });
   const ann: OverlayLayer = handle.addLayer('sketch-annotations', { order: 40 });
   const frame = new Group();
   frame.matrixAutoUpdate = false;
@@ -276,6 +280,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   grid.mat.polygonOffset = true;
   grid.mat.polygonOffsetFactor = 2;
   grid.mat.polygonOffsetUnits = 8;
+  // E2 option (b): a rim in the background colour under the solid lines (1 px each side), under the hover halo.
+  const rim = new Lines(frame, 2.4 + 2, { order: 985 });
   const halo = new Lines(frame, 7, { opacity: 0.85, order: 990 });
   // The core's edge width: the line's middle row is drawn in its colour, not blended (fully defined lines read #101828).
   const solid = new Lines(frame, 2.4);
@@ -344,7 +350,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   function drawGeometry(v: SketchView) {
     const d = v.draft;
     if (!d) {
-      for (const l of [halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.set([]);
+      for (const l of [rim, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.set([]);
       dots.set([]);
       curvesUv = null;
       dimsUv = null;
@@ -379,6 +385,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       if (e.id === hov || related.has(e.id)) for (let i = 1; i < pts.length; i++) haloSegs.push({ a: pts[i - 1], b: pts[i], color: pal.hover });
     }
     solid.set(solidSegs);
+    rim.set(rimInk ? solidSegs.map((s) => ({ a: s.a, b: s.b, color: rimInk! })) : []);
     dashed.set(dashSegs);
     halo.set(haloSegs);
     const px = pxAt([0, 0]);
@@ -1056,7 +1063,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
           canvas.dispatchEvent(new PointerEvent('pointermove', e));
         });
         forwardWheel(el);
-        el.style.cursor = sketchCursor('grab', null, cursorTone(services.bridge?.context?.theme?.name ?? null, VIEWPORT_BG));
+        el.style.cursor = sketchCursor('grab', null, tone());
         html.append(el);
         rec = { el, at: h.at, dir: h.dir };
         handleEls.set(h.id, rec);
@@ -1411,8 +1418,8 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // ------------------------------------------------------------ the pointer
   const drawing = () => (mode.tool?.id ?? 'select') !== 'select';
-  /** ux010 (DRAW): white cursors on a dark view (the host's theme, or the view's colour). */
-  const tone = () => cursorTone(services.bridge?.context?.theme?.name ?? null, VIEWPORT_BG);
+  /** ux010 (DRAW): white cursors on a dark view (the view's palette's background). */
+  const tone = () => cursorTone(null, background);
   /** ux010 (DRAW): the cursor value last given to the canvas. */
   let lastCursor = '';
   /** ux010 (DRAW): the active tool's toolbar icon (the command that presses for it), for the draw cursor. */
@@ -1596,6 +1603,24 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   };
   document.addEventListener('keydown', onKey, true);
 
+  // ------------------------------------------------------------ theme
+  /**
+   * The view's palette changed (the host's theme; LIGHT around a picture and back): the lines, the
+   * points, the grid and the dimension lines drawn again in its colours, now, and the cursors in
+   * its tone. The HTML (glyphs, dimension values, boxes) follows the CSS tokens.
+   */
+  function recolour(p: MarkPalette) {
+    pal = p.sketch;
+    rimInk = p.sketchRim;
+    background = p.background;
+    gridKey = '';
+    drawGeometry(mode.view.get());
+    drawGrid();
+    applyCursor();
+    for (const rec of handleEls.values()) rec.el.style.cursor = sketchCursor('grab', null, tone());
+    geo.changed();
+  }
+
   // ------------------------------------------------------------ wiring
   const render = () => {
     const v = mode.view.get();
@@ -1655,7 +1680,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     popTool();
     mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);
-    for (const l of [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.dispose();
+    for (const l of [grid, rim, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.dispose();
     dots.dispose();
     for (const o of [...frame.children, ...dimFrame.children] as Object3D[]) o.removeFromParent();
     geo.dispose();

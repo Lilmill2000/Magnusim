@@ -20,7 +20,9 @@ import type { AppServices } from '../../src/types/app';
 import type { Mode } from '../../src/types/commands';
 import type { SketchOutput, SketchRegion } from '../../src/types/sketch';
 import type { ViewportHandle } from '../../src/types/viewport';
-import { PLANE_BORDER, PLANE_FILL, PLANE_PICK_FILL } from '../../src/viewport/colors';
+import { HOVER_COLOR, PICK_COLOR, PLANE_BORDER, PLANE_FILL, PLANE_PICK_FILL } from '../../src/viewport/colors';
+import { DARK, LIGHT, type MarkPalette } from '../../src/viewport/palette';
+import { wantOriginAxes } from '../../src/features/refgeom/scene';
 
 const disposers: (() => void)[] = [];
 afterEach(() => {
@@ -30,11 +32,11 @@ afterEach(() => {
 
 /** A viewport handle with what the overlays use; addLayer keeps each layer's group and options. */
 function fakeHandle() {
-  const layers = new Map<string, { group: Group; plain?: (on: boolean) => void }>();
+  const layers = new Map<string, { group: Group; plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void }>();
   const handle = {
-    addLayer(id: string, o: { plain?: (on: boolean) => void } = {}) {
+    addLayer(id: string, o: { plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void } = {}) {
       const group = new Group();
-      layers.set(id, { group, plain: o.plain });
+      layers.set(id, { group, plain: o.plain, palette: o.palette });
       const html = document.createElement('div');
       document.body.appendChild(html);
       return { id, group, html, setVisible() {}, changed() {}, dispose: () => html.remove() };
@@ -145,5 +147,35 @@ describe('the reference geometry in a snapshot', () => {
     expect(fill().opacity).toBe(PLANE_PICK_FILL.opacity);
     expect(border().material.opacity).toBe(0.9);
     expect(new Set(axes())).toEqual(new Set(['construct:origin:x', 'construct:origin:y']));
+  });
+});
+
+describe('the reference geometry and the palette', () => {
+  it("draws axes and points at rest in the palette's construct colour (light in a dark view, LIGHT for a picture); tints, hover and pick stay", () => {
+    const s = services({
+      doc: { features: [{ id: 'f_pl', type: 'ref_plane', name: 'Plane 1' }] },
+      view: {},
+      rebuild: { outputs: { f_pl: { type: 'plane', frame: { origin: [0, 0, 5], normal: [0, 0, 1], xdir: [1, 0, 0] } } }, bodies: [], features: {} },
+      session: null,
+    });
+    wantOriginAxes(s, 'test', true);
+    constructView(s).set({ hover: 'origin:y' });
+    const { handle, layers } = fakeHandle();
+    const overlay = new ConstructOverlay(s, handle);
+    disposers.push(() => overlay.dispose());
+    const group = layers.get(LAYER_CONSTRUCT)!.group;
+    const colour = (name: string) => (group.children.find((o) => o.name === name) as unknown as { material: { color: { getHex(): number } } }).material.color.getHex();
+    const look = () => [colour('construct:origin:x'), colour('construct:origin:y'), colour('construct:f_pl')];
+    expect(look()).toEqual([LIGHT.constructLine, HOVER_COLOR, PLANE_FILL.color]);
+    const palette = layers.get(LAYER_CONSTRUCT)!.palette!;
+    palette(DARK);
+    expect(look()).toEqual([DARK.constructLine, HOVER_COLOR, PLANE_FILL.color]);
+    s.selection.set((x) => ({ ...x, items: [{ kind: 'origin', ref: 'origin:x' }] }));
+    overlay.sync();
+    expect(colour('construct:origin:x')).toBe(PICK_COLOR);
+    s.selection.set((x) => ({ ...x, items: [] }));
+    overlay.sync();
+    palette(LIGHT);
+    expect(look()).toEqual([LIGHT.constructLine, HOVER_COLOR, PLANE_FILL.color]);
   });
 });

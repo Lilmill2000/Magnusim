@@ -177,6 +177,12 @@ class Arrows {
     layer.html.appendChild(this.label);
   }
 
+  /** The arrows' colour (the palette's blue; the hot one stays the pick green). */
+  setColor(color: number) {
+    this.mat.color.setHex(color);
+    this.layer.changed();
+  }
+
   set(arrows: Arrow[]) {
     while (this.items.length > arrows.length) {
       const it = this.items.pop()!;
@@ -262,7 +268,8 @@ export interface PanelToolOptions {
  * re-places the arrows after the draft or the rebuild changed.
  */
 export function startPanelTool(services: AppServices, handle: ViewportHandle, opts: PanelToolOptions): { stop(): void; refresh(): void; dragging(): boolean } {
-  const layer = handle.addLayer(HANDLE_LAYER, { order: 50 });
+  // `color` is the palette's blue when the panel opens; a new palette (the host's theme) recolours them.
+  const layer = handle.addLayer(HANDLE_LAYER, { order: 50, palette: (p) => arrows.setColor(p.ink) });
   const arrows = new Arrows(layer, opts.color);
   const view = profilesView(services);
   let geom: HandleGeometry | null = null;

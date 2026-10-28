@@ -101,6 +101,12 @@ class Arrows {
     layer.html.appendChild(this.label);
   }
 
+  /** The arrows' colour (the palette's blue; the lit one stays the pick green). */
+  setColor(color: number) {
+    this.mat.color.setHex(color);
+    this.layer.changed();
+  }
+
   set(arrows: SideArrow[]) {
     while (this.items.length > arrows.length) {
       const it = this.items.pop()!;
@@ -192,7 +198,8 @@ export interface EnclosureToolOptions {
  * re-places the arrows after a rebuild; `arrows()` says where they are now.
  */
 export function startEnclosureHandles(services: AppServices, handle: ViewportHandle, opts: EnclosureToolOptions): { stop(): void; refresh(): void; dragging(): boolean; arrows(): SideArrow[] } {
-  const layer = handle.addLayer(HANDLES_LAYER, { order: 50 });
+  // `color` is the palette's blue when the panel opens; a new palette (the host's theme) recolours them.
+  const layer = handle.addLayer(HANDLES_LAYER, { order: 50, palette: (p) => arrows.setColor(p.ink) });
   const arrows = new Arrows(layer, opts.color);
   /**
    * `applied`: a live update went to the session during this drag (`last`: its value); `before`: the
