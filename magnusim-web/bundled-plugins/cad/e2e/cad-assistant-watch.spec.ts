@@ -557,7 +557,7 @@ test("cad:assistant-watch-local-budget a local model with a 20K context: the doc
     const left = said
       .slice(said.indexOf('left out: ') + 'left out: '.length, said.indexOf('. Load'))
       .split('; ')
-      .flatMap((run) => run.replace(/ \([^)]*\)$/, '').split(', '));
+      .flatMap((run: string) => run.replace(/ \([^)]*\)$/, '').split(', '));
     const [sent] = chats(host).slice(from);
     const offered = ((sent.body as { tools: { function: { name: string } }[] }).tools || []).map((t) => t.function.name);
     expect(offered.filter((n) => left.includes(n))).toEqual([]);
