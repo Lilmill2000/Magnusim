@@ -528,7 +528,7 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     expect(prefs.writes).toEqual([]);
     // The app's guarded dialog: Yes takes a deliberate click (never a stray Enter: Enter answers Cancel).
     // The wording the host's Settings and core__set_keybind ask with too.
-    expect(t.ws.log.confirms).toEqual([{ title: 'Change a keybind?', message: 'Magnusim CAD · Rectangle: R → Shift+T', confirmLabel: 'Change', cancelLabel: 'Keep it', guard: true, safe: true }]);
+    expect(t.ws.log.confirms).toEqual([{ title: 'Change a keybind?', message: 'Magnusim CAD · Rectangle: R → Shift+T', confirmLabel: 'Change', guard: true, safe: true }]);
     t.ws.answers.confirm = true;
     const yes = await t.ok('workspace', W('keybind_set', { target: 'sketch.rectangle', value: 'Shift+T', person_asked: true }));
     expect(yes.text).toBe('Rectangle: Shift+T (was R)');

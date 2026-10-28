@@ -122,8 +122,7 @@ export interface Bridge {
    * click only (disabled at first, never Enter); `safe`: Enter answers Cancel. Hosts before the
    * unreleased 1.9 ignore both (a plain confirm).
    */
-  /** `cancelLabel`: the No's words, when the host lets a page name them (it keeps its own Cancel today). */
-  confirm(opts: ConfirmOptions & { guard?: boolean; safe?: boolean; cancelLabel?: string }): Promise<boolean>;
+  confirm(opts: ConfirmOptions & { guard?: boolean; safe?: boolean }): Promise<boolean>;
   prompt(opts: PromptOptions): Promise<string | null>;
   /** Close the workspace; false when the user chose to stay (host 1.2 asks while the page is dirty). */
   back(): Promise<boolean>;
