@@ -20,7 +20,7 @@ import {
 import { RpcError, WorkerUnavailableError, type WorkerPort } from './worker.ts';
 import { DEV_SHEET_FILES, devSheetFile, devSheetsOn, pluginSdkFile, type SdkVariant } from './plugin-sdk.ts';
 import { CASE_BUSY, PluginFileError, PluginFiles, caseBusy, registerPluginFileRoutes } from './plugin-files.ts';
-import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
+import { FRAME_ASSET_HEADERS, frameCsp, injectWorkspaceHead, isPageLoad, SDK_TYPES, WORKSPACE_TYPES, workspaceCsp } from './workspace-files.ts';
 import { registerPluginCaseRoutes } from './plugin-cases.ts';
 import { registerLinkRoutes } from './link-routes.ts';
 import { registerUiSyncRoutes } from './ui-channel.ts';
@@ -35,6 +35,7 @@ import { projectDir } from '../w17-sim-catalog.js';
 import { checkRecordSave } from '../link-stamp.js';
 import { staleBody } from '../record-rev.js';
 import { PluginPrefsError, getPluginPref, removePluginPref, setPluginPref } from '../plugin-prefs.js';
+import { appearancePrefs } from '../prefs.js';
 
 export interface RouteDeps {
   worker: WorkerPort;
@@ -1065,7 +1066,10 @@ export function registerPhase3Routes(router: Router, deps: RouteDeps): void {
     const headers: Record<string, string> = { ...FRAME_ASSET_HEADERS, 'Content-Type': WORKSPACE_TYPES[ext] || 'application/octet-stream' };
     let buf = readFileSync(file);
     if (ext === 'html') {
-      buf = Buffer.from(injectWorkspaceHead(buf.toString('utf8')), 'utf8');
+      // The person's look in its head: the page's first paint has it (1.9, unreleased). Only for a
+      // page load: this file is anyone's to read (ACAO *), the person's look is not.
+      const look = isPageLoad(ctx.req.headers['sec-fetch-dest'], ctx.req.headers.origin) ? appearancePrefs() : null;
+      buf = Buffer.from(injectWorkspaceHead(buf.toString('utf8'), look), 'utf8');
       headers['Content-Security-Policy'] = workspaceCsp(String(ctx.req.headers.host || ''), key);
     }
     sendBytes(ctx.res, buf, headers, ctx.method === 'HEAD');

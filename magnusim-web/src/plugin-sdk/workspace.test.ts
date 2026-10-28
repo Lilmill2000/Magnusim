@@ -1269,3 +1269,85 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     await vi.waitFor(() => expect(waiting.size).toBe(0));
   });
 });
+
+describe("context.appearance and the 'appearance' event: the app's look on the page (unreleased, 1.9)", () => {
+  const html = () => document.documentElement;
+  const shown = () => ({
+    theme: html().dataset.theme,
+    pref: html().dataset.themePref,
+    text: html().style.getPropertyValue('--mg-text-scale'),
+    icons: html().style.getPropertyValue('--mg-icon-scale'),
+    scheme: html().style.colorScheme,
+  });
+  afterEach(() => {
+    delete html().dataset.theme;
+    delete html().dataset.themePref;
+    html().style.removeProperty('--mg-text-scale');
+    html().style.removeProperty('--mg-icon-scale');
+  });
+
+  it("puts the host's look on <html> as the page connects, then each change before any listener hears it (each its own copy)", async () => {
+    const dark = { theme: 'dark', preference: 'system', textScale: 1.15, iconScale: 1.25 } as const;
+    const { ws, push } = await open(() => undefined, { context: { appearance: { ...dark } } });
+    expect(ws.context.appearance).toEqual(dark);
+    // As the app's own page has it: data-theme (theme.css's tokens and color-scheme follow), never an inline color-scheme.
+    expect(shown()).toEqual({ theme: 'dark', pref: 'system', text: '1.15', icons: '1.25', scheme: '' });
+
+    const heard: Array<{ theme: string; onPage: string | undefined }> = [];
+    const off = ws.on('appearance', (a) => {
+      heard.push({ theme: a.theme, onPage: html().dataset.theme });
+      // A listener that changes its copy changes nothing for the next one, nor the context.
+      (a as { theme: string }).theme = 'changed';
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    ws.on('appearance', () => {
+      throw new Error('a broken listener');
+    });
+    const after: string[] = [];
+    ws.on('appearance', (a) => after.push(`${a.theme} ${a.preference} ${a.textScale} ${a.iconScale}`));
+
+    push({ event: 'appearance', data: { theme: 'light', preference: 'light', textScale: 1, iconScale: 1 } });
+    expect(heard).toEqual([{ theme: 'light', onPage: 'light' }]);
+    expect(after).toEqual(['light light 1 1']);
+    expect(warn).toHaveBeenCalledWith('[workspace] appearance', expect.any(Error));
+    expect(ws.context.appearance).toEqual({ theme: 'light', preference: 'light', textScale: 1, iconScale: 1 });
+    expect(shown()).toEqual({ theme: 'light', pref: 'light', text: '1', icons: '1', scheme: '' });
+
+    off();
+    push({ event: 'appearance', data: { theme: 'dark', preference: 'dark', textScale: 1.3, iconScale: 1.5 } });
+    expect(heard).toHaveLength(1);
+    expect(after).toEqual(['light light 1 1', 'dark dark 1.3 1.5']);
+    expect(shown()).toEqual({ theme: 'dark', pref: 'dark', text: '1.3', icons: '1.5', scheme: '' });
+  });
+
+  it('an older host (no appearance in its welcome) leaves the page as it was served, and hears nothing', async () => {
+    html().dataset.theme = 'light';
+    const { ws, push } = await open(() => undefined);
+    expect('appearance' in ws.context).toBe(false);
+    expect(shown()).toEqual({ theme: 'light', pref: undefined, text: '', icons: '', scheme: '' });
+    // A welcome whose appearance is not an object counts as none.
+    const odd = await open(() => undefined, { context: { appearance: 'dark' as never } });
+    expect('appearance' in odd.ws.context).toBe(false);
+    expect(shown().theme).toBe('light');
+    // An event that carries no look changes nothing and reaches no listener.
+    const fn = vi.fn();
+    ws.on('appearance', fn);
+    for (const data of [null, 'dark', [], 7]) push({ event: 'appearance', data });
+    expect(fn).not.toHaveBeenCalled();
+    expect(shown().theme).toBe('light');
+  });
+
+  it("reads what a host sends safely: a theme but 'dark' is light, a choice it does not know is the theme, a size outside 0.5 to 3 is 1", async () => {
+    const { ws, push } = await open(() => undefined, { context: { appearance: { theme: 'Dark', preference: 'nope', textScale: 9, iconScale: Number.NaN } as never } });
+    expect(ws.context.appearance).toEqual({ theme: 'light', preference: 'light', textScale: 1, iconScale: 1 });
+    const heard: unknown[] = [];
+    ws.on('appearance', (a) => heard.push(a));
+    push({ event: 'appearance', data: { theme: 'dark', textScale: '1.15', iconScale: 0.4 } });
+    push({ event: 'appearance', data: { theme: 'dark', preference: 'system', textScale: 0.5, iconScale: 3 } });
+    expect(heard).toEqual([
+      { theme: 'dark', preference: 'dark', textScale: 1, iconScale: 1 },
+      { theme: 'dark', preference: 'system', textScale: 0.5, iconScale: 3 },
+    ]);
+    expect(shown()).toEqual({ theme: 'dark', pref: 'system', text: '0.5', icons: '3', scheme: '' });
+  });
+});

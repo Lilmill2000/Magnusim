@@ -12,7 +12,7 @@ declare module '@magnusim/workspace' {
    * A workspace runs in a sandboxed frame with an opaque origin: it cannot reach
    * the app's page or its API, has no localStorage, IndexedDB or cookies, and
    * talks to the app only through this bridge. `connect()` says hello to the
-   * host, which answers with the context (plugin, project, study, units) and a
+   * host, which answers with the context (plugin, project, study, units, look) and a
    * private MessageChannel port; every call then goes over that port, and the
    * host checks it against an allowlist scoped to this plugin, project and study.
    *
@@ -47,9 +47,35 @@ declare module '@magnusim/workspace' {
   }
   export type UnitSystem = 'metric' | 'imperial';
   export interface ThemeInfo {
+      /**
+       * The stylesheet's name, 'light' on every host so far: it holds the dark set too, and
+       * context.appearance says which one the page shows (unreleased, 1.9).
+       */
       name: 'light';
       /** The stylesheet with the design tokens and base styles the host serves. */
       stylesheet: string;
+  }
+  /**
+   * The app's look, as the person set it in Settings → Appearance (unreleased, 1.9):
+   * context.appearance, and the `appearance` event after each change. The SDK shows it on this
+   * page's <html> itself, before any listener hears it: data-theme (`theme`: theme.css's --mg-*
+   * tokens and its color-scheme follow it), data-theme-pref (`preference`), --mg-text-scale and
+   * --mg-icon-scale (the size tokens follow them). The page's first paint has it already: the
+   * host puts it on the page as it loads it. A page on the tokens needs no code for it; what it
+   * draws on screen itself (a canvas, a plot) reads `theme`. A picture or recording it keeps as a
+   * file stays light whatever the theme: drawn with light colours read off an element that carries
+   * data-theme="light" (theme.css gives that element the light set's tokens, text and background).
+   * A host without it sends none, and its pages are light.
+   */
+  export interface Appearance {
+      /** The theme on screen: 'light' or 'dark' (a 'system' choice already decided). */
+      theme: 'light' | 'dark';
+      /** What the person chose: 'light', 'dark' or 'system' (the system's, followed as it changes). */
+      preference: 'light' | 'dark' | 'system';
+      /** The text size: 1 is the default (Settings offers 0.9, 1, 1.15 and 1.3). */
+      textScale: number;
+      /** The icon size: 1 is the default (Settings offers 0.85, 1, 1.25 and 1.5). */
+      iconScale: number;
   }
   export interface WorkspaceContext {
       plugin: string;
@@ -97,6 +123,11 @@ declare module '@magnusim/workspace' {
        * should answer them.
        */
       assistantKeys?: string[] | null;
+      /**
+       * The app's look (Appearance): light or dark, and the text and icon sizes (unreleased, 1.9;
+       * absent on an older host, whose pages are light). The `appearance` event says when it changes.
+       */
+      appearance?: Appearance;
   }
   /** What a geometry action was started on (host 1.7). */
   export interface LaunchTarget {
@@ -1014,6 +1045,12 @@ declare module '@magnusim/workspace' {
        * (context.assistantKeys holds them now): null for its default, Ctrl+/.
        */
       on(event: 'assistantKeys', fn: (keys: string[] | null) => void): () => void;
+      /**
+       * `appearance` (unreleased, 1.9): the person changed the app's look, or the system turned light
+       * or dark under a 'system' choice. context.appearance and this page's <html> have it already
+       * when a listener hears it; each listener gets its own copy.
+       */
+      on(event: 'appearance', fn: (appearance: Appearance) => void): () => void;
       /**
        * Start an ES-module worker. A sandboxed frame cannot start a worker from a
        * URL or a module worker from a blob; this starts a classic blob worker that

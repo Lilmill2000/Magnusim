@@ -204,6 +204,19 @@ const SDK_VERSION: "1.4.0"
 
 The bridge's version; a host accepts a workspace built for the same major version. 1.4.0 (host 1.7): ws.prefs, context.geometry and context.launch, ws.project.geometrySource and ws.project.geometryFaces, and linkGeometry's `originalNames` (editing a project geometry).
 
+#### Appearance
+
+```ts
+interface Appearance
+```
+
+The app's look, as the person set it in Settings → Appearance (unreleased, 1.9): context.appearance, and the `appearance` event after each change. The SDK shows it on this page's <html> itself, before any listener hears it: data-theme (`theme`: theme.css's --mg-* tokens and its color-scheme follow it), data-theme-pref (`preference`), --mg-text-scale and --mg-icon-scale (the size tokens follow them). The page's first paint has it already: the host puts it on the page as it loads it. A page on the tokens needs no code for it; what it draws on screen itself (a canvas, a plot) reads `theme`. A picture or recording it keeps as a file stays light whatever the theme: drawn with light colours read off an element that carries data-theme="light" (theme.css gives that element the light set's tokens, text and background). A host without it sends none, and its pages are light.
+
+- `theme: "light" | "dark"`: The theme on screen: 'light' or 'dark' (a 'system' choice already decided).
+- `preference: "light" | "dark" | "system"`: What the person chose: 'light', 'dark' or 'system' (the system's, followed as it changes).
+- `textScale: number`: The text size: 1 is the default (Settings offers 0.9, 1, 1.15 and 1.3).
+- `iconScale: number`: The icon size: 1 is the default (Settings offers 0.85, 1, 1.25 and 1.5).
+
 #### AssistantCall
 
 ```ts
@@ -759,7 +772,7 @@ A case the page wrote in its study's folder, to run with OpenFOAM in WSL (host 1
 interface ThemeInfo
 ```
 
-- `name: "light"`
+- `name: "light"`: The stylesheet's name, 'light' on every host so far: it holds the dark set too, and context.appearance says which one the page shows (unreleased, 1.9).
 - `stylesheet: string`: The stylesheet with the design tokens and base styles the host serves.
 
 #### ViewState
@@ -831,7 +844,7 @@ interface Workspace
 - `results: { … }`
 - `results.openIn3D(caseRel: string): Promise<{ opened: boolean; }>`: Show a finished case's saved frames in the project's 3D view. The app asks first when other results are on screen, and when the page has unsaved work. Resolves { opened: false } when the user cancels or stays; when it opens, the workspace closes, so the promise may never settle.
 - `assistant?: WorkspaceAssistant | undefined`: Tools this page offers to the app's assistant (unreleased, next host minor 1.9; absent on an older host, so check that it exists, and catch "not_allowed" from a host without it).
-- `on(event: "units", fn: (units: UnitSystem) => void): () => void; on(event: "theme", fn: (theme: ThemeInfo) => void): () => void; on(event: "study", fn: (study: StudyRecord) => void): () => void; on(event: "prefs", fn: (change: { key: string; value: unknown; }) => void): () => void; on(event: "geometry", fn: (g: { geometryId: string; rev: number; fromRev: number | null; }) => void): () => void; on(event: "assistantKeys", fn: (keys: string[] | null) => void): () => void`: Live changes the host pushes. Returns a function that stops listening. `study`: the study changed (renamed in the header, or saved): save next with its `rev`. `prefs` (host 1.7): a pref of this plugin changed in another tab (ws.prefs.onChange is the same). `geometry` (host 1.5): the geometry this study links was updated (by this page or another tab of the same study). Only the page of the study that owns it hears it. `assistantKeys` (unreleased, 1.9): the person changed the keys of the app's Assistant panel (context.assistantKeys holds them now): null for its default, Ctrl+/.
+- `on(event: "units", fn: (units: UnitSystem) => void): () => void; on(event: "theme", fn: (theme: ThemeInfo) => void): () => void; on(event: "study", fn: (study: StudyRecord) => void): () => void; on(event: "prefs", fn: (change: { key: string; value: unknown; }) => void): () => void; on(event: "geometry", fn: (g: { geometryId: string; rev: number; fromRev: number | null; }) => void): () => void; on(event: "assistantKeys", fn: (keys: string[] | null) => void): () => void; on(event: "appearance", fn: (appearance: Appearance) => void): () => void`: Live changes the host pushes. Returns a function that stops listening. `study`: the study changed (renamed in the header, or saved): save next with its `rev`. `prefs` (host 1.7): a pref of this plugin changed in another tab (ws.prefs.onChange is the same). `geometry` (host 1.5): the geometry this study links was updated (by this page or another tab of the same study). Only the page of the study that owns it hears it. `assistantKeys` (unreleased, 1.9): the person changed the keys of the app's Assistant panel (context.assistantKeys holds them now): null for its default, Ctrl+/. `appearance` (unreleased, 1.9): the person changed the app's look, or the system turned light or dark under a 'system' choice. context.appearance and this page's <html> have it already when a listener hears it; each listener gets its own copy.
 - `spawnWorker(url: string | URL): Worker`: Start an ES-module worker. A sandboxed frame cannot start a worker from a URL or a module worker from a blob; this starts a classic blob worker that imports your module. Messages posted before your module has loaded are held and handed to it, in order, once it has.
 
 #### WorkspaceAssistant
@@ -868,6 +881,7 @@ interface WorkspaceContext
 - `launch?: LaunchTarget | null | undefined`: What the user right-clicked to open this page (host 1.7): a face label ("face 3@Body1") or a body ("Body1") of `geometry`, from the viewport's menu. Given once, to the page load the action opened; a reload has none. null or absent otherwise.
 - `assistantDock?: boolean | undefined`: The app shows its own Assistant panel, which offers the person Stop and "Undo these changes" for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
 - `assistantKeys?: string[] | null | undefined`: The keys that open and close the app's Assistant panel when the person changed them in Settings → Keybinds: combos as a commands file writes them (Cmd counts as Ctrl), [] when they left it no key. null for its default, Ctrl+/ (Cmd+/ on macOS) on the key that types "/" (unreleased, 1.9; absent on an older host). The `assistantKeys` event says when they change. While docked the page leaves these keys to the app (ws.assistant.docked): no command of its own should answer them.
+- `appearance?: Appearance | undefined`: The app's look (Appearance): light or dark, and the text and icon sizes (unreleased, 1.9; absent on an older host, whose pages are light). The `appearance` event says when it changes.
 
 #### AssistantHandler
 

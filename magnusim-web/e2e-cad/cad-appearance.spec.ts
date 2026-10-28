@@ -9,9 +9,16 @@ import { expect, test, type Page } from './pw';
 const theme = (page: Page) => page.evaluate(() => [document.documentElement.dataset.theme ?? 'light', document.documentElement.dataset.themePref ?? '']);
 const bodyBg = (page: Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
+// The look back to light at 100% on this shared server, even after a timeout (a finally would not
+// run then): the window closed first, so it saves nothing again.
+test.afterEach(async ({ page, request }) => {
+  await page.close();
+  await request.post('/api/prefs', { data: { theme: 'light', text_scale: 1, icon_scale: 1 } });
+});
+
 test('Dark in Settings turns Magnusim CAD dark at once and from the first paint; Reset brings light back', async ({ page, request, browser }) => {
   await request.post('/api/prefs', { data: { theme: 'light', text_scale: 1, icon_scale: 1 } });
-  try {
+  {
     await page.goto('/');
     await expect(page.locator('#home')).toBeVisible();
     const lightBg = await bodyBg(page);
@@ -70,7 +77,5 @@ test('Dark in Settings turns Magnusim CAD dark at once and from the first paint;
     await pane.locator('[data-wiz-reset="appearance"]').click();
     await expect.poll(() => theme(page)).toEqual(['light', 'light']);
     expect(await bodyBg(page)).toBe(lightBg);
-  } finally {
-    await request.post('/api/prefs', { data: { theme: 'light', text_scale: 1, icon_scale: 1 } });
   }
 });

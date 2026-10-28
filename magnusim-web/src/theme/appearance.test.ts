@@ -3,11 +3,13 @@ import indexHtml from '../../index.html?raw';
 import cadHtml from '../../cad.html?raw';
 import {
   APPEARANCE_CHANNEL,
+  APPEARANCE_EVENT,
   APPEARANCE_KEY,
   applyAppearance,
   currentAppearance,
   currentTheme,
   DEFAULT_APPEARANCE,
+  frameAppearance,
   readAppearance,
   resetAppearanceForTests,
   resolveTheme,
@@ -88,6 +90,54 @@ describe('the look', () => {
     window.removeEventListener('cfd:appearance', on);
     expect(html.dataset.theme).toBe('light');
     expect(themes).toEqual(['light', 'dark', 'light']);
+  });
+
+  it("a plugin's frame gets the theme on screen, the choice and the sizes (frameAppearance), never a light swap of html; the event is APPEARANCE_EVENT", () => {
+    const sys = system(true);
+    const heard: unknown[] = [];
+    const on = () => heard.push(frameAppearance());
+    window.addEventListener(APPEARANCE_EVENT, on);
+    applyAppearance({ theme: 'system', text_scale: 1.15, icon_scale: 1.5 });
+    expect(frameAppearance()).toEqual({ theme: 'dark', preference: 'system', textScale: 1.15, iconScale: 1.5 });
+    // A picture's light swap of html for one task (domPicture's lightPage) is not the look.
+    html.dataset.theme = 'light';
+    expect(frameAppearance().theme).toBe('dark');
+    sys.set(false);
+    window.removeEventListener(APPEARANCE_EVENT, on);
+    expect(APPEARANCE_EVENT).toBe('cfd:appearance');
+    // Each look shown, as the frame's bridge reads it when the window hears the event.
+    expect(heard).toEqual([
+      { theme: 'dark', preference: 'system', textScale: 1.15, iconScale: 1.5 },
+      { theme: 'light', preference: 'system', textScale: 1.15, iconScale: 1.5 },
+    ]);
+  });
+
+  it("until the prefs answer, the look is the first paint's (html's choice and scales as the module loads), not the default; a first paint of \"system\" follows the system already", async () => {
+    const sys = system(true);
+    html.dataset.theme = 'dark';
+    html.dataset.themePref = 'system';
+    html.style.setProperty('--mg-text-scale', '1.3');
+    html.style.setProperty('--mg-icon-scale', '0.85');
+    vi.resetModules();
+    const fresh = await import('./appearance');
+    expect(fresh.currentAppearance()).toEqual({ theme: 'system', text_scale: 1.3, icon_scale: 0.85 });
+    expect(fresh.frameAppearance()).toEqual({ theme: 'dark', preference: 'system', textScale: 1.3, iconScale: 0.85 });
+    // The system turns light before the prefs answer: the page and its frames (the event) follow.
+    const heard: string[] = [];
+    const on = (e: Event) => heard.push((e as CustomEvent).detail.theme);
+    window.addEventListener(fresh.APPEARANCE_EVENT, on);
+    sys.set(false);
+    window.removeEventListener(fresh.APPEARANCE_EVENT, on);
+    expect([html.dataset.theme, heard]).toEqual(['light', ['light']]);
+    expect(fresh.frameAppearance().theme).toBe('light');
+    // A page the pre-paint left as it was (light, no scales), or junk on it: the default.
+    html.removeAttribute('style');
+    html.dataset.themePref = 'neon';
+    vi.resetModules();
+    const plain = await import('./appearance');
+    expect(plain.currentAppearance()).toEqual(DEFAULT_APPEARANCE);
+    fresh.resetAppearanceForTests();
+    plain.resetAppearanceForTests();
   });
 
   it("a change made here reaches this app's other tabs, and a page does not take back what it said", async () => {

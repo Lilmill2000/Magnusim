@@ -87,5 +87,6 @@ button.mgk-pill:disabled { opacity: var(--mg-disabled-opacity); cursor: not-allo
 li.mgk-empty { list-style: none; }
 .mgk-empty--chart { font-size: var(--mg-text-xs); color: var(--mg-text-subtle); font-style: italic; padding: 0; }
 
-/* Icon */
-.mgk-icon { flex: none; }
+/* Icon: it grows with the icon size (Settings → Appearance), in a workspace frame as on the app's page
+   (where style.css's icon rule sets the same zoom on an icon in a control: one zoom, never two). */
+.mgk-icon { flex: none; zoom: var(--mg-icon-scale); }

@@ -70,8 +70,13 @@
  * by assistant.undone {req, undone, reason?}) only for a turn it offers, while no turn told to it
  * runs and no tool call runs, one at a time. The welcome's `assistantDock` says the host has the
  * panel (hooks.assistantDocked), and the page's Ctrl+/ comes as assistant.dock (hooks.assistantDockKey).
+ *
+ * The welcome's `appearance` is the app's look (hooks.appearance; 1.9, unreleased), and each change
+ * of it the window hears (APPEARANCE_EVENT) goes to the page as the `appearance` event, once per
+ * look: the SDK shows it on the page's <html>.
  */
 import type {
+  Appearance,
   AssistantRegistration,
   AssistantRisk,
   AssistantStopAnswer,
@@ -96,6 +101,7 @@ import type {
 import { openChannel, type ChannelHandle } from '../api/eventHub';
 import { isCad } from '../app/edition';
 import { ASSISTANT_KEYS_EVENT } from '../keybinds/appKeys';
+import { APPEARANCE_EVENT } from '../theme/appearance';
 import type { LeaveReason } from './leaveGuard';
 import { sendLinkChoice, type LinkChoice, type LinkCopyOutcome, type LinkQuestion } from './linkChoice';
 import { linkTouchesSetup, setupOf, type LinkSetup } from './linkReport';
@@ -333,6 +339,12 @@ export interface BridgeHooks {
    * event when the window hears ASSISTANT_KEYS_EVENT), or null for its default (1.9, unreleased).
    */
   assistantKeys?(): string[] | null;
+  /**
+   * The app's look as the page gets it (the welcome's `appearance`, again as the `appearance` event
+   * when the window hears APPEARANCE_EVENT; 1.9, unreleased): the theme on screen, never a light
+   * swap of html for one task. No hook: the welcome has none, and the page stays light.
+   */
+  appearance?(): Appearance;
 }
 
 /** What hooks.assistantTools answers: the verdict to come, and how to drop a list it was too late for. */
@@ -1105,6 +1117,7 @@ export class WorkspaceCalls {
     } catch {
       launch = null;
     }
+    const appearance = this.hooks.appearance?.();
     return {
       plugin: this.scope.plugin,
       workspace: this.scope.workspace,
@@ -1117,6 +1130,7 @@ export class WorkspaceCalls {
       launch,
       assistantDock: this.hooks.assistantDocked?.() === true,
       assistantKeys: this.hooks.assistantKeys?.() ?? null,
+      ...(appearance ? { appearance } : {}),
     };
   }
 
@@ -2402,7 +2416,8 @@ export class WorkspaceBridge {
   private readonly hooks: BridgeHooks;
   // `welcomed` once the frame has its context and port (until then it has not connected);
   // `ended` aborts when the channel ends.
-  private channel: { port: MessagePort; instance: string; welcomed: boolean; ended: AbortController } | null = null;
+  /** `look`: the app's look the page has (the welcome's, then each one sent), as JSON. */
+  private channel: { port: MessagePort; instance: string; welcomed: boolean; ended: AbortController; look: string } | null = null;
   private alive = '';
   /** Probes waiting for the page's answer. */
   private readonly aliveWaiters = new Set<(instance: string) => void>();
@@ -2420,6 +2435,7 @@ export class WorkspaceBridge {
     this.frame.addEventListener('load', this.onLoad);
     window.addEventListener('cfd:units', this.onUnits);
     window.addEventListener(ASSISTANT_KEYS_EVENT, this.onAssistantKeys);
+    window.addEventListener(APPEARANCE_EVENT, this.onAppearance);
     const prefs = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(PREFS_CHANNEL);
     if (prefs) prefs.onmessage = (e: MessageEvent) => this.onPref(e.data);
     // A page that already said hello to an earlier bridge never says it again by itself.
@@ -2436,6 +2452,7 @@ export class WorkspaceBridge {
       this.frame.removeEventListener('load', this.onLoad);
       window.removeEventListener('cfd:units', this.onUnits);
       window.removeEventListener(ASSISTANT_KEYS_EVENT, this.onAssistantKeys);
+      window.removeEventListener(APPEARANCE_EVENT, this.onAppearance);
       prefs?.close();
       this.closeChannel();
     };
@@ -2682,7 +2699,7 @@ export class WorkspaceBridge {
     this.closeChannel();
     const mc = new MessageChannel();
     const instance = data.instance;
-    const channel = { port: mc.port1, instance, welcomed: false, ended: new AbortController() };
+    const channel = { port: mc.port1, instance, welcomed: false, ended: new AbortController(), look: '' };
     this.channel = channel;
     mc.port1.onmessage = (e) => void this.request(mc.port1, e.data);
     this.calls.setPush((msg) => mc.port1.postMessage(msg));
@@ -2696,6 +2713,13 @@ export class WorkspaceBridge {
     }
     const win = this.frame.contentWindow;
     if (!win || this.channel !== channel) return;
+    // The look as it is now, with no await before the welcome goes: a change heard while the context
+    // was read is in it (none is sent before the welcome), and each later one goes once.
+    const look = this.hooks.appearance?.();
+    if (look) {
+      context = { ...context, appearance: look };
+      channel.look = JSON.stringify(look);
+    }
     // The frame's origin is opaque, so no target origin names it; only this window gets the port.
     win.postMessage({ magnusim: 'welcome', instance, context }, '*', [mc.port2]);
     channel.welcomed = true;
@@ -2791,6 +2815,17 @@ export class WorkspaceBridge {
   private onAssistantKeys = (): void => {
     if (!this.hooks.assistantKeys) return;
     this.channel?.port.postMessage({ event: 'assistantKeys', data: this.hooks.assistantKeys() });
+  };
+
+  /** The app's look changed (or was shown again): the page hears it once per look, after its welcome (which has the look then). */
+  private onAppearance = (): void => {
+    const channel = this.channel;
+    const look = channel?.welcomed && this.hooks.appearance?.();
+    if (!channel || !look) return;
+    const text = JSON.stringify(look);
+    if (text === channel.look) return;
+    channel.look = text;
+    channel.port.postMessage({ event: 'appearance', data: look });
   };
 
   /** End the channel (a new hello, a failed probe, detach): its streams and uploads go, and a dirty page is clean again. */
