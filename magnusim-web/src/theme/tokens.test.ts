@@ -280,7 +280,7 @@ describe('tokens.css', () => {
       return !!name && name in tokens && normalize(tokens[name]) === normalize(s.literal);
     };
     expect(skipped.filter(ownToken).map(byRule)).toEqual(['#app { background: #e8eaee }']);
-    expect(skipped.filter((s: Left) => !ownToken(s)).length).toBeLessThanOrEqual(43);
+    expect(skipped.filter((s: Left) => !ownToken(s)).length).toBeLessThanOrEqual(35);
     // A literal marked "fixed" (the same in every theme) is out of the count above, so each one is
     // listed here: a new one is a deliberate change to this list. By rule, as lines move.
     expect(fixed.map(byRule)).toEqual([

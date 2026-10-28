@@ -4138,14 +4138,6 @@ async function loadAllResultPlanes() {
 }
 
 async function loadCutPlane() {
-  if (
-    !resultsCutActive() &&
-    window.__CFD_FILTERS_MODE__ === 'mesh' &&
-    window.__CFD_W25B__ &&
-    window.__CFD_W25B__.ready
-  ) {
-    return updateCuttingPlane({ forceRecut: false, meshOnly: true });
-  }
   if (!sourceBounds) {
     hideCutSlice();
     return { empty: true };
@@ -4182,29 +4174,6 @@ function updateCuttingPlane(opts) {
     return cutFingerprint(null);
   }
   ensureCutStateCom(sourceBounds);
-  if (
-    !resultsCutActive() &&
-    window.__CFD_FILTERS_MODE__ === 'mesh' &&
-    window.__CFD_W25B__ &&
-    window.__CFD_W25B__.ready &&
-    !options.forceRecut
-  ) {
-    try {
-      cutMapper.setInputData(sourcePolyData);
-      cutMapper.setScalarVisibility(false);
-      cutActor.setVisibility(!!cutState.enabled);
-      cutActor.getProperty().setOpacity(cutState.opacity);
-      cutActor.getProperty().setEdgeVisibility(true);
-      try { cutActor.getProperty().setRepresentationToWireframe(); } catch(_) {}
-      try { cutActor.getProperty().setBackfaceCulling(false); } catch(_) {}
-      try { cutActor.getProperty().setBackFaceCulling(false); } catch(_) {}
-      try { renderer.setBackground(1,1,1); } catch(_) {}
-      applyPartsAppearance();
-      renderWindow.render();
-    } catch (_) {}
-    return { ...cutFingerprint(sourcePolyData), mesh_section_passthrough: true };
-  }
-  if (options.meshOnly) return cutFingerprint(null);
 
   cutState.enabled = anyResultPlaneOn();
   applyCutClipAndParts();
@@ -5724,16 +5693,6 @@ function resolvePtFaceIds(ids) {
     if (cad && /^face\s+\d+/i.test(cad) && !out.includes(cad)) out.push(cad);
   }
   return out;
-}
-
-function paintForPtFaces(faces) {
-  const paint = {};
-  for (const f of faces || []) {
-    const row = ptCatalogRowForId(f);
-    const kind = row && row.role === 'outlet' ? 'outlet' : 'inlet';
-    paint[f] = BC_KIND_RGB[kind] || BC_KIND_RGB.inlet;
-  }
-  return paint;
 }
 
 /**
@@ -12819,150 +12778,6 @@ document.getElementById('compare-sync')?.addEventListener('change', (e) => {
   setResultsCompareSync(!!e.target.checked);
 });
 
-/* ---- W25b: live mesh-section VTP for Cutting Plane mesh inspect (layered remesh) ---- */
-async function loadMeshSectionForInspect(opts) {
-  const o = opts || {};
-  const casePath = o.case_dir || getLiveMeshCaseDir();
-  if (!(casePath && String(casePath).trim()) && !hasAttachedCase()) {
-    return { empty: true, skipped: 'no_case' };
-  }
-  const axisMap = { X: 'x', Y: 'y', Z: 'z', x: 'x', y: 'y', z: 'z' };
-  const ax = axisMap[o.axis || cutState.axis] || 'x';
-  const frac = meshSectionFrac(o.frac != null ? o.frac : cutState.position);
-  const q = withMeshCacheParams({
-    case: casePath,
-    axis: ax,
-    frac: String(Number.isFinite(frac) ? frac : 0.5),
-  });
-  const metaUrl = '/api/mesh-section?' + q.toString() + '&meta=1';
-  const vtpUrl = '/api/mesh-section?' + q.toString();
-  let meta = null;
-  try {
-    const mr = await fetch(metaUrl);
-    if (mr.ok) meta = await mr.json();
-  } catch (e) {
-    console.warn('[CFD W25b] mesh-section meta', e);
-  }
-  cutState.enabled = true;
-  // Bank-like mesh inspect: white bg, gray faces, black edges (not a field rainbow)
-  try {
-    renderer.setBackground(1, 1, 1);
-  } catch (_) {}
-  await reader.setUrl(vtpUrl);
-  // vtk.js setUrl is async in some builds — poll until points exist
-  let pd = null;
-  for (let i = 0; i < 120; i++) {
-    pd = reader.getOutputData ? reader.getOutputData() : null;
-    const n = pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0;
-    if (n > 0) break;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  sourcePolyData = pd;
-  cutBins = null;
-  sourceBounds = pd && pd.getBounds ? pd.getBounds().slice() : null;
-  // Inflate zero-thickness planar bounds for camera clipping
-  if (sourceBounds) {
-    const eps = 1e-3;
-    if (Math.abs(sourceBounds[1] - sourceBounds[0]) < 1e-9) {
-      sourceBounds[0] -= eps;
-      sourceBounds[1] += eps;
-    }
-    if (Math.abs(sourceBounds[3] - sourceBounds[2]) < 1e-9) {
-      sourceBounds[2] -= eps;
-      sourceBounds[3] += eps;
-    }
-    if (Math.abs(sourceBounds[5] - sourceBounds[4]) < 1e-9) {
-      sourceBounds[4] -= eps;
-      sourceBounds[5] += eps;
-    }
-  }
-  activeField = 'cellVolume';
-  try {
-    const props = [cutActor.getProperty(), surfaceActor.getProperty()];
-    for (const pr of props) {
-      try { if (pr.setBackfaceCulling) pr.setBackfaceCulling(false); } catch (_) {}
-      try { if (pr.setBackFaceCulling) pr.setBackFaceCulling(false); } catch (_) {}
-      try { if (pr.setFrontfaceCulling) pr.setFrontfaceCulling(false); } catch (_) {}
-      try { if (pr.setFrontFaceCulling) pr.setFrontFaceCulling(false); } catch (_) {}
-      try { pr.setRepresentationToSurface(); } catch (_) {}
-      try { pr.setEdgeVisibility(true); } catch (_) {}
-      try { pr.setEdgeColor(0.05, 0.055, 0.06); } catch (_) {}
-      try { pr.setColor(0.86, 0.88, 0.91); } catch (_) {}
-      try { pr.setOpacity(1); } catch (_) {}
-      try { pr.setLighting(false); } catch (_) {}
-      try { pr.setLineWidth(1); } catch (_) {}
-    }
-    try { renderer.setBackground(1, 1, 1); } catch (_) {}
-    try {
-      const rr = fullScreenRenderer && fullScreenRenderer.getRenderWindow && fullScreenRenderer.getRenderWindow();
-      if (rr && rr.getViews) {
-        const views = rr.getViews();
-        if (views && views[0] && views[0].setBackground) views[0].setBackground(1, 1, 1);
-      }
-    } catch (_) {}
-  } catch (_) {}
-  const nPts = pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0;
-  if (pd && nPts > 0) {
-    surfaceMapper.setInputData(pd);
-    surfaceMapper.setScalarVisibility(false);
-    cutMapper.setInputData(pd);
-    cutMapper.setScalarVisibility(false);
-    applyMeshDisplayScale(cutActor, sourceBounds);
-    applyMeshDisplayScale(surfaceActor, sourceBounds);
-    cutActor.setVisibility(true);
-    surfaceActor.setVisibility(!!cutState.partsColor);
-  }
-  renderWindow.render();
-  const fp = fingerprintFromPolyData(pd, meta, 'cellVolume', vtpUrl);
-  if (!nPts) {
-    return { empty: true, skipped: 'empty_vtp', case_dir: casePath, meta };
-  }
-  window.__CFD_W25B__ = {
-    increment: 'W25b',
-    ready: !!(pd && sourceBounds && fp && fp.nPoints > 0),
-    case_dir: casePath,
-    vtp_url: vtpUrl,
-    meta,
-    fingerprint: fp,
-    n_cells_volume: meta && meta.meta && meta.meta.n_cells_volume,
-    n_cells_slice: meta && (meta.n_cells_slice || (meta.meta && meta.meta.n_cells_slice)),
-    nPoints: fp && fp.nPoints,
-    nCells: fp && fp.nCells,
-    note: 'Live mesh-section from remesh polyMesh (addLayers+eMesh) bank-style edges',
-  };
-  publishW7({ mesh_section: true, cut_fingerprint: cutFingerprint(pd), source_fingerprint: fp });
-  return window.__CFD_W25B__;
-}
-
-function applyRightOrthoWallZoom() {
-  const cam = renderer.getActiveCamera();
-  let b = sourceBounds;
-  if (!cam || !b) return null;
-  try { renderer.setBackground(1, 1, 1); } catch (_) {}
-  const xmin = b[0], xmax = b[1], ymin = b[2], ymax = b[3], zmin = b[4], zmax = b[5];
-  const ox = 0.5 * (xmin + xmax);
-  // wall/edge zoom framing (daniel bank): +Y outer wall + upper body/slots
-  const y0 = Math.max(ymin, -0.02);
-  const y1 = Math.min(ymax, 0.155);
-  const z0 = Math.max(zmin, -0.05);
-  const z1 = Math.min(zmax, 0.31);
-  const cy = 0.5 * (y0 + y1);
-  const cz = 0.5 * (z0 + z1);
-  cam.setParallelProjection(true);
-  // Look from +X (RIGHT) onto YZ section plane
-  cam.setPosition(ox + 1.0, cy, cz);
-  cam.setFocalPoint(ox, cy, cz);
-  cam.setViewUp(0, 0, 1);
-  try { if (cutActor.getProperty().setBackfaceCulling) cutActor.getProperty().setBackfaceCulling(false); } catch(_) {}
-  const scale = 0.55 * Math.max(y1 - y0, z1 - z0);
-  cam.setParallelScale(scale > 1e-6 ? scale : 0.1);
-  cam.setClippingRange(0.01, 10);
-  resetCameraClippingRangeLoose();
-  cutActor.setVisibility(true);
-  renderWindow.render();
-  return { ox, cy, cz, parallel_scale: scale, face: 'RIGHT', bounds: b.slice() };
-}
-
 
 const filtersPanel = document.getElementById('filters-panel');
 const legend = document.getElementById('legend');
@@ -18848,9 +18663,6 @@ const BC_KIND_RGB = {
 const BC_KIND_VTK = {
   inlet: hexRgb01(LIGHT_VIEW.bcInlet),
   outlet: hexRgb01(LIGHT_VIEW.bcOutlet),
-  pressure: [0.58, 0.2, 0.92],
-  wall: [0.37, 0.42, 0.48],
-  other: [0.86, 0.15, 0.47],
 };
 
 /** A BC's colour group (its family's colour): inlet, outlet, pressure, wall or other. */

@@ -805,28 +805,6 @@ body,
   user-select: none;
 }
 
-.ti {
-  width: 14px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.ti.ok {
-  color: #1f9d55;
-}
-
-.ti.bc {
-  color: #1f9d55;
-}
-
-.ti.gear {
-  color: #1f9d55;
-}
-
-.ti.field {
-  color: #c45ad4;
-}
-
 .tree-section {
   margin-top: 0;
   padding: 8px 10px;
@@ -3507,7 +3485,6 @@ select.fp-select {
   padding: 0 4px;
 }
 .tree-row .mat-plus:hover { color: var(--mg-text); }
-.tree-node[data-w18-air="1"] .ti.ok { color: #12b76a; }
 .ml-modal-card { width: min(640px, 92vw); }
 .ml-modal-body {
   display: grid;
@@ -3591,7 +3568,6 @@ select.fp-select {
   gap: 6px;
 }
 .bc-unit-label { color: var(--mg-text); font-weight: 500; }
-.tree-node[data-w19-bc="1"] .ti.ok { color: #12b76a; }
 /* Tree "+" buttons (Materials, Boundary conditions, Refinements, Monitors) share one look. */
 .tree-row .bc-plus,
 .tree-row .ref-plus,
@@ -3897,13 +3873,6 @@ select.fp-select {
 }
 .tb-btn.is-active .tb-ico { color: var(--mg-primary-strong); }
 
-/* Per-row status dots stay off. Section-ready uses .tree-check only. */
-.ti {
-  display: none !important;
-}
-.tree-row .ti {
-  display: none !important;
-}
 
 /* Mode-aware FILTERS toolbar */
 .tb-group[data-group="FILTERS"][data-filters-mode="setup"] {
@@ -4970,10 +4939,8 @@ body.is-recording #viewport-gizmo {
 .graphs-controls { display: flex; align-items: center; gap: 10px; padding: 4px 12px 6px; }
 .graphs-controls .js-btn { margin-left: auto; }
 .graphs-list { display: flex; flex-direction: column; gap: 10px; padding: 0 10px 8px; }
-.graph-card { border: 1px solid #dde1e8; border-radius: 6px; padding: 8px 10px 6px; background: var(--mg-bg); }
 .graph-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
 .graph-name { font-weight: 600; font-size: var(--mg-text-sm); }
-.graph-last { font-size: var(--mg-text-xs); color: #4a5160; margin-left: auto; font-variant-numeric: tabular-nums; }
 .graph-png { font-size: var(--mg-text-xs); padding: 1px 7px; }
 .graph-svg { width: 100%; height: 190px; display: block; touch-action: none; }
 .graph-svg .gx { stroke: var(--mg-chart-grid); }
