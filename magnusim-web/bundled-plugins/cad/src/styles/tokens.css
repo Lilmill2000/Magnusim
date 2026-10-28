@@ -5,7 +5,8 @@
  * the --mg-* token wherever the core value has one; only core values with no
  * --mg-* token, and CAD's own roles (viewport, sketch, accents), are defined
  * here as --cad-* (research/design-language.md §2, style.css citations).
- * Components use var(--cad-*) / var(--mg-*), never raw hex.
+ * Components use var(--cad-*) / var(--mg-*), never raw hex. A --cad-* token that mirrors a core
+ * rule now on an --mg-* token (the core's 2026-10-27 light unify) is that token, so the two stay equal.
  * Owner: UI-SHELL (add tokens at the end of the relevant group).
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -14,20 +15,20 @@
 
   /* Tree (style.css:710-805, 2531-2540, 2634-2639) */
   --cad-tree-selected: #d7e8ff;
-  --cad-tree-twisty: #6a7180;
-  --cad-tree-head: #3a4250;
+  --cad-tree-twisty: var(--mg-text-muted);
+  --cad-tree-head: var(--mg-text-body);
   --cad-tree-section: #4a5160;
   --cad-tree-empty: #8a93a3;
-  --cad-drop-line: #3d6fd6;
-  --cad-drop-bg: #e8f0ff;
+  --cad-drop-line: var(--mg-primary);
+  --cad-drop-bg: var(--mg-selected-bg);
   /* Section dividers (style.css:2624-2627, 3829-3834, 4996-5003) */
   --cad-tree-section-top: #eef1f5;
-  --cad-tree-section-bottom: #d5dae3;
+  --cad-tree-section-bottom: var(--mg-header-border);
 
   /* Toolbar (style.css:133-224, 3761) */
-  --cad-toolbar-bg: #f2f3f6;
+  --cad-toolbar-bg: var(--mg-surface-muted);
   --cad-toolbar-sep: #d5d8de;
-  --cad-toolbar-label: #6a7180;
+  --cad-toolbar-label: var(--mg-text-muted);
   --cad-toolbar-active-bg: #d7e8ff;
   --cad-toolbar-active-border: #9bc2f0;
   --cad-toolbar-active-icon: #1a4fbf;
@@ -42,7 +43,7 @@
   --cad-icon-btn-hover-bg: #eef0f4;
 
   /* Tooltip and context menu (style.css:2932-2941, 994-1031) */
-  --cad-menu-hover: #eef2f6;
+  --cad-menu-hover: var(--mg-surface-hover);
   --cad-menu-sep: #e4e7ec;
   --cad-menu-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
 
@@ -58,7 +59,7 @@
   --cad-axis-x: #d42828;
   --cad-axis-y: #1f9a3a;
   --cad-axis-z: #2a5bd7;
-  --cad-view-btn-border: #c9d1dc;
+  --cad-view-btn-border: var(--mg-control-border);
 
   /* Sketch (proposal §3.3; P3) */
   --cad-sketch-under: var(--mg-primary);
@@ -77,19 +78,19 @@
   --cad-panel-accent-feature: #344054;
   --cad-panel-accent-sketch: #175cd3;
   --cad-float-min: #4a5160;
-  --cad-axis-lab-x: #c92a2a;
-  --cad-axis-lab-y: #2f9e44;
-  --cad-axis-lab-z: #1864ab;
-  --cad-danger-hover-bg: #fee4e2;
+  --cad-axis-lab-x: var(--mg-axis-x);
+  --cad-axis-lab-y: var(--mg-axis-y);
+  --cad-axis-lab-z: var(--mg-axis-z);
+  --cad-danger-hover-bg: var(--mg-danger-bg);
 
   /* Tree states (proposal §3.1: rolled back .55, suppressed struck through, error red, warning amber) */
   --cad-tree-dim: 0.55;
-  --cad-rollback: #3d6fd6;
+  --cad-rollback: var(--mg-primary);
   --cad-rollback-handle-bg: #fff;
   --cad-body-swatch-border: rgba(16, 24, 40, 0.25);
-  --cad-disabled-text: #8a91a0;
+  --cad-disabled-text: var(--mg-text-faint);
   --cad-warning-border: #fec84b;
-  --cad-spin-track: #c5cdd8;
+  --cad-spin-track: var(--mg-border);
   --cad-tip-key-border: rgba(255, 255, 255, 0.3);
   --cad-tip-detail: #c9ced6;
 
