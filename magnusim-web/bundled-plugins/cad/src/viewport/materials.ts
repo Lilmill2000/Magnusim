@@ -8,7 +8,7 @@
 // in and out as sRGB, like vtk.js: no colour-space conversion.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { DoubleSide, ShaderMaterial, Vector3, type Plane } from 'three';
+import { DoubleSide, LessEqualDepth, ShaderMaterial, Vector3, type Plane } from 'three';
 import { BODY_LIGHT, BODY_SELECTED_COLOR, HOVER_COLOR, PICK_COLOR, rgb01 } from './colors';
 
 const v3 = (hex: number) => new Vector3(...rgb01(hex));
@@ -146,6 +146,53 @@ export function createBodyMaterial(
     },
   }) as BodyMaterial;
   return m;
+}
+
+/**
+ * The colour a body's face is drawn in before its shading (BODY_FS's choice): a pick or a hover on
+ * the face (`hl`: 2 pick, 1 hover), else the whole body selected or hovered (`bodyState`: 2, 1),
+ * else its own colour. E2 (onface.ts) asks it whether a light surface shows there.
+ */
+export function bodyShownColor(color: number, bodyState: number, hl = 0): number {
+  if (hl > 1.5) return PICK_COLOR;
+  if (hl > 0.5) return HOVER_COLOR;
+  if (bodyState > 1.5) return BODY_SELECTED_COLOR;
+  if (bodyState > 0.5) return HOVER_COLOR;
+  return color;
+}
+
+const LIT_FACES_FS = /* glsl */ `
+#include <common>
+#include <clipping_planes_pars_fragment>
+varying float vHl;
+void main() {
+  #include <clipping_planes_fragment>
+  if (vHl < 0.5) discard;
+  gl_FragColor = vec4(0.0);
+}
+`;
+
+/**
+ * E2 (onface.ts): a body's faces lit by a pick or a hover (its 'hl' attribute), drawn again into
+ * the stencil only (no colour, no depth), where the body itself shows: its own shader draws them in
+ * the pick green or the hover blue, light surfaces, while a body of a dark colour clears the face
+ * bit everywhere it draws. As a lit body is offset (BODY_LIT_OFFSET_UNITS), half a unit nearer, so
+ * it passes wherever the body's own fragment won the depth test and nowhere a nearer surface did.
+ * The view gives it the stencil write (surfaceStencil 'mark') and the section's clipping.
+ */
+export function createLitFacesMaterial(): ShaderMaterial {
+  return new ShaderMaterial({
+    vertexShader: BODY_VS,
+    fragmentShader: LIT_FACES_FS,
+    side: DoubleSide,
+    clipping: true,
+    colorWrite: false,
+    depthWrite: false,
+    depthFunc: LessEqualDepth,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: BODY_LIT_OFFSET_UNITS - 0.5,
+  });
 }
 
 export function setBodyColor(m: BodyMaterial, color: number): void {

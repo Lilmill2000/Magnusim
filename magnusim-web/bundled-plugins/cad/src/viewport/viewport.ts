@@ -41,9 +41,9 @@ import {
   parseHex,
   rgb01,
 } from './colors';
-import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, createBodyMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
+import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, bodyShownColor, createBodyMaterial, createLitFacesMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
 import { OriginPlanes, type PlaneState } from './origin';
-import { isFaceTwin, isLightSurface, surfaceStencil, syncFaceTwins } from './onface';
+import { isFaceTwin, isLightSurface, LIT_FACES_ORDER, surfaceStencil, syncFaceTwins } from './onface';
 import { LIGHT, samePalette, type MarkPalette } from './palette';
 import { kindsForFilter, makeProjector, pickAt, raycastBodies, rayAt, type PickBody, type PickView } from './pick';
 // P4b SELECT: box selection.
@@ -102,6 +102,11 @@ interface BodyRec {
   faceHl: Map<number, number>;
   /** ViewportBody.seeThrough. */
   seeThrough: boolean;
+  /**
+   * E2 (onface.ts): its faces lit by a pick or a hover, drawn again into the stencil (a child of
+   * the mesh, after every body), shown while the body clears the face bit and has a face lit.
+   */
+  litFaces: Mesh;
 }
 
 /** Screen-width lines. An overlay (picked or hovered edges) is pulled towards the camera so it wins over the edge it covers. */
@@ -192,6 +197,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   points.frustumCulled = false;
   scene.add(selEdges, hovEdges, points);
   let edgeOverlayKey = '';
+  /** E2: every body's lit faces' stencil pass (BodyRec.litFaces): one material, it sets the face bit. */
+  const litFacesMat = createLitFacesMaterial();
+  surfaceStencil(litFacesMat, 'mark');
   const lineMats = (): LineMaterial[] => [selEdgeMat, hovEdgeMat, ...[...bodies.values()].map((b) => b.edgeMat)];
 
   // ------------------------------------------------------------ overlays and tools (P2/P3)
@@ -486,6 +494,14 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     edges.frustumCulled = false;
     edges.renderOrder = 1;
     scene.add(mesh, edges);
+    // After every body (their faces' bits are written), before their edges and every mark.
+    const litFaces = new Mesh(data.geometry, litFacesMat);
+    litFaces.name = `body-lit-faces:${src.id}`;
+    litFaces.renderOrder = LIT_FACES_ORDER;
+    litFaces.frustumCulled = false;
+    litFaces.raycast = () => {};
+    litFaces.visible = false;
+    mesh.add(litFaces);
     const rec: BodyRec = {
       id: src.id,
       tessKey: src.tessKey,
@@ -503,6 +519,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       cancelBvh: () => {},
       faceHl: new Map(),
       seeThrough: !!src.seeThrough,
+      litFaces,
     };
     bodyStencil(rec);
     rec.cancelBvh = bvhClient.build(
@@ -549,7 +566,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       setClipping(b.mesh.material, planes);
       setClipping(b.edgeMat, planes);
     }
-    for (const m of [selEdgeMat, hovEdgeMat, pointsMat]) setClipping(m, planes);
+    for (const m of [selEdgeMat, hovEdgeMat, pointsMat, litFacesMat]) setClipping(m, planes);
     const shaded = state.get().display !== 'wireframe';
     caps.group.visible = s.on && shaded;
     if (s.on) {
@@ -564,11 +581,16 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   // ------------------------------------------------------------ theme (palette.ts)
   /**
    * E2 (onface.ts): while the marks follow what is under them, an opaque body's faces set the
-   * stencil's face bit where they show (a dark custom colour clears it: the marks keep their light
-   * inks there); a see-through body, and every body in light, leaves the stencil alone.
+   * stencil's face bit where they show, by the colour they are drawn in (materials.ts
+   * bodyShownColor): its own, or the selected or hover blue of the whole body. A dark custom colour
+   * clears it (the marks keep their light inks there), except on its faces lit by a pick or a
+   * hover (light surfaces), which its lit faces' pass sets again. A see-through body, and every
+   * body in light, leaves the stencil alone.
    */
   function bodyStencil(b: BodyRec) {
-    surfaceStencil(b.mesh.material, !marksNow.face || b.seeThrough ? 'off' : isLightSurface(b.color) ? 'mark' : 'clear');
+    const how = !marksNow.face || b.seeThrough ? 'off' : isLightSurface(bodyShownColor(b.color, b.mesh.material.uniforms.uBodyState.value)) ? 'mark' : 'clear';
+    surfaceStencil(b.mesh.material, how);
+    b.litFaces.visible = how === 'clear' && [...b.faceHl.values()].some((hl) => isLightSurface(bodyShownColor(b.color, 0, hl)));
   }
 
   /** The layers' marks drawn twice where they follow what is under them (dark), once as they are (light, a picture). */
@@ -834,6 +856,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         b.mesh.material.uniforms.uBodyState.value = bs;
         changed = true;
       }
+      // E2: the face bit follows the highlight's colour.
+      bodyStencil(b);
       // A body with something lit on it is pushed back less than the others, so
       // where it shares a face plane with another body its highlight wins the
       // depth test instead of fighting it (review round 2: a grey wedge in a
@@ -1844,7 +1868,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       if (!hit) return false;
       if (hit.cap) return true;
       const b = bodies.get(hit.body.id);
-      return !!b && !b.seeThrough && isLightSurface(b.color);
+      // The colour the face is drawn in: a pick or a hover on it, the body's state, else its own.
+      return !!b && !b.seeThrough && isLightSurface(bodyShownColor(b.color, b.mesh.material.uniforms.uBodyState.value, b.faceHl.get(hit.face) ?? 0));
     },
     setCamera(c, o) {
       byPerson(o);
@@ -2000,7 +2025,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       origin.dispose();
       triad.dispose();
       caps.dispose();
-      for (const m of [selEdgeMat, hovEdgeMat, pointsMat]) m.dispose();
+      for (const m of [selEdgeMat, hovEdgeMat, pointsMat, litFacesMat]) m.dispose();
       selEdges.geometry.dispose();
       hovEdges.geometry.dispose();
       points.geometry.dispose();

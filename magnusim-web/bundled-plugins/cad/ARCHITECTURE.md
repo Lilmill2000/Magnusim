@@ -992,6 +992,12 @@ with the host once for the page's life, and its chip goes in the dock.
     cleared for a dark custom one (`isLightSurface`: the light view's `#101828`
     reads at least as well on it as `#e6e9ef`), so the frontmost opaque surface
     decides; a see-through body, the planes and the region tints never touch it.
+    The colour asked is the one the face is drawn in (`bodyShownColor`, the body
+    shader's choice): a whole body selected or hovered is its light blue, and on
+    a body of a dark colour the faces a pick or a hover lights (the pick green,
+    the hover blue) are drawn again into the stencil only
+    (`createLitFacesMaterial`: no colour, no depth, half a unit nearer than the
+    lit body, at `LIT_FACES_ORDER` after every body), so they set the bit.
     The section caps' parity counter keeps to `PARITY_MASK` 0x7f (the meshes
     write only those bits, the cap tests only them) and the cap sets `FACE_BIT`
     where it draws. A mark says what it is over a face: a single-colour mark's
@@ -1013,8 +1019,9 @@ with the host once for the page's life, and its chip goes in the dock.
     restricted and no twin is drawn: the light view is the pixels it was. The
     box-pick target (`boxpick.ts`) has no stencil and draws only ids. Sketch
     mode's cursors take the light tone over a light face in a dark view
-    (`ViewportHandle.lightSurfaceAt`, one BVH ray: a white crosshair is 1.6:1
-    on a face). The Sketch panel's state dot and a reference's dot show both
+    (`ViewportHandle.lightSurfaceAt`, one BVH ray, by the same colour rule,
+    the hit face's highlight and its body's state included: a white crosshair
+    is 1.6:1 on a face). The Sketch panel's state dot and a reference's dot show both
     inks in dark: the right half the colour over the background, the left half
     (an inset shadow, `--cad-sketch-key-*-on-face`) the colour over a face on a
     crescent of the body colour; one colour in light.

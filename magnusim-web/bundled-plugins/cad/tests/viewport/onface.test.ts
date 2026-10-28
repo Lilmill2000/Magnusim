@@ -11,8 +11,8 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { describe, expect, it } from 'vitest';
 import { BODY_COLOR, BODY_SELECTED_COLOR, HOVER_COLOR, PICK_COLOR } from '../../src/viewport/colors';
-import { createBodyMaterial } from '../../src/viewport/materials';
-import { drawOnly, FACE_BIT, faceColoursOf, faceInkOf, isFaceTwin, isLightSurface, PARITY_MASK, setFaceColours, setFaceInk, surfaceStencil, syncFaceTwins } from '../../src/viewport/onface';
+import { BODY_LIT_OFFSET_UNITS, bodyShownColor, createBodyMaterial, createLitFacesMaterial } from '../../src/viewport/materials';
+import { drawOnly, FACE_BIT, faceColoursOf, faceInkOf, isFaceTwin, isLightSurface, LIT_FACES_ORDER, PARITY_MASK, setFaceColours, setFaceInk, surfaceStencil, syncFaceTwins } from '../../src/viewport/onface';
 import { SectionCaps } from '../../src/viewport/section';
 
 const twinOf = (o: Object3D) => o.children.find(isFaceTwin) as (Object3D & { material: Material & { color: { getHex(): number } }; geometry: BufferGeometry }) | undefined;
@@ -69,6 +69,34 @@ describe('the stencil bits', () => {
   it('calls a body colour a light surface when the light view\'s ink reads at least as well on it as the dark view\'s', () => {
     for (const c of [BODY_COLOR, 0xffffff, PICK_COLOR, HOVER_COLOR, BODY_SELECTED_COLOR, 0xf5d742, 0xe07a5f]) expect(isLightSurface(c), c.toString(16)).toBe(true);
     for (const c of [0x1d2939, 0x000000, 0x1b1f27, 0x3a2a6b, 0xd02828]) expect(isLightSurface(c), c.toString(16)).toBe(false);
+  });
+
+  it("asks the colour a face is drawn in, as the body's shader chooses it: a pick or a hover on the face, else the body's state, else its own", () => {
+    const navy = 0x1d2939;
+    expect(bodyShownColor(navy, 0)).toBe(navy);
+    expect(bodyShownColor(navy, 0, 2)).toBe(PICK_COLOR);
+    expect(bodyShownColor(navy, 0, 1)).toBe(HOVER_COLOR);
+    expect(bodyShownColor(navy, 2)).toBe(BODY_SELECTED_COLOR);
+    expect(bodyShownColor(navy, 1)).toBe(HOVER_COLOR);
+    // A face's own highlight wins over the body's (BODY_FS: vHl after uBodyState).
+    expect(bodyShownColor(navy, 2, 1)).toBe(HOVER_COLOR);
+    expect(bodyShownColor(navy, 1, 2)).toBe(PICK_COLOR);
+    // Each highlight is a light surface, so a lit face of a navy body is one.
+    for (const [bs, hl] of [[0, 1], [0, 2], [1, 0], [2, 0]]) expect(isLightSurface(bodyShownColor(navy, bs, hl))).toBe(true);
+    expect(isLightSurface(bodyShownColor(navy, 0, 0))).toBe(false);
+  });
+
+  it("draws a body's lit faces again into the stencil only, nearer than the lit body, after every body and before the edges", () => {
+    const m = createLitFacesMaterial();
+    surfaceStencil(m, 'mark');
+    expect([m.colorWrite, m.depthWrite, m.depthTest, m.polygonOffset, m.polygonOffsetFactor]).toEqual([false, false, true, true, 1]);
+    expect(m.polygonOffsetUnits).toBeLessThan(BODY_LIT_OFFSET_UNITS);
+    expect([m.stencilWrite, m.stencilRef, m.stencilWriteMask, m.stencilZPass]).toEqual([true, FACE_BIT, FACE_BIT, ReplaceStencilOp]);
+    // Only the faces a pick or a hover lights: the rest of the body is discarded.
+    expect((m as unknown as { fragmentShader: string }).fragmentShader).toMatch(/if \(vHl < 0\.5\) discard;/);
+    expect(LIT_FACES_ORDER).toBeGreaterThan(0);
+    expect(LIT_FACES_ORDER).toBeLessThan(1);
+    m.dispose();
   });
 
   it('restricts a mark to pixels with the bit or without it, writing nothing, and gives back only what it restricted', () => {

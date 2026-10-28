@@ -3,11 +3,15 @@
 // dark palette's own ink elsewhere, pixel by pixel. One stencil bit says "a light surface shows
 // here":
 //   - FACE_BIT (0x80). An opaque body's face writes it where it passes the depth test (Replace,
-//     write mask FACE_BIT): set for a light surface, cleared for a body whose own colour is dark
-//     (isLightSurface), so the frontmost opaque surface decides. A section cap (section.ts) sets
-//     it where it draws. A see-through body (an Enclosure's air), the origin and reference planes
-//     and the region tints never touch it: what shows through them is what decides. The section
-//     caps' parity counter keeps to the other bits (PARITY_MASK), so the two never meet.
+//     write mask FACE_BIT): set for a light surface, cleared for a dark one (isLightSurface), by
+//     the colour the face is drawn in (materials.ts bodyShownColor), so the frontmost opaque
+//     surface decides. A body of a dark colour clears it, but its faces lit by a pick or a hover
+//     (the pick green, the hover blue: light surfaces) set it again in a second, stencil-only
+//     pass (materials.ts createLitFacesMaterial, at LIT_FACES_ORDER), and a whole body selected or
+//     hovered is the light blue it is drawn in. A section cap (section.ts) sets it where it draws.
+//     A see-through body (an Enclosure's air), the origin and reference planes and the region
+//     tints never touch it: what shows through them is what decides. The section caps' parity
+//     counter keeps to the other bits (PARITY_MASK), so the two never meet.
 //   - Every mark drawn twice: the mark as it is, restricted to pixels without the bit (its
 //     material tests the stencil, writes nothing), and a twin, a child of it (its visibility and
 //     transform), sharing its geometry and a copy of its material in its face ink, restricted to
@@ -28,6 +32,11 @@ import { AlwaysStencilFunc, EqualStencilFunc, KeepStencilOp, ReplaceStencilOp, t
 export const FACE_BIT = 0x80;
 /** The bits the section caps' parity counter may use (section.ts): all but FACE_BIT. */
 export const PARITY_MASK = 0x7f;
+/**
+ * The render order of the last surface pass that writes FACE_BIT: a body's lit faces (the section
+ * caps draw at -1, the bodies at 0, all in the scene's group order 0).
+ */
+export const LIT_FACES_ORDER = 0.5;
 
 const SRGB = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
 function luminance(hex: number): number {

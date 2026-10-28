@@ -11,6 +11,9 @@
 //     colour clears it; a see-through body leaves it), the section cap sets it, and a layer's mark
 //     with a face ink is drawn twice (itself over the background, a twin over light surfaces);
 //     in light none of it;
+//   - E2 on a dark body: its faces lit by a pick or a hover set the bit again (their stencil-only
+//     pass), the whole body selected or hovered sets it (the blue it is drawn in), and
+//     lightSurfaceAt says the same; in light, and in a picture, none of it;
 //   - a snapshot taken while dark draws LIGHT (background, edges, triad, no twin, no stencil; the
 //     hooks of the layers it shows called with LIGHT, a hidden layer's not) and puts the dark marks
 //     back in the same task, also when it fails half-way (it rethrows); with LIGHT live it calls
@@ -35,6 +38,8 @@ interface Seen {
   surfaces: Record<string, 'off' | 'mark' | 'clear'>;
   /** The section cap's stencil ref (0 in light, the face bit in dark), when the cap shows. */
   cap: number | null;
+  /** Each body's lit faces' stencil pass: 'mark' where it draws (it sets the face bit, no colour, no depth), else 'hidden'. */
+  litFaces: Record<string, 'mark' | 'hidden' | 'other'>;
   /** Each named layer mark: its stencil test (none, or the pixels with or without the face bit) and its twin's colour where one shows. */
   marks: Record<string, { only: 'all' | 'face' | 'ground'; twin: number | null }>;
   /** The colours of the meshes drawn with a uColor uniform and no name (the triad's arrows), as 0xrrggbb. */
@@ -94,13 +99,18 @@ vi.mock('three', async (importOriginal) => {
         gpu.fail = null;
         throw new Error('render failed');
       }
-      const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, surfaces: {}, cap: null, marks: {}, arrows: [], triadLight: null };
+      const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, surfaces: {}, cap: null, litFaces: {}, marks: {}, arrows: [], triadLight: null };
       const only = (m: Material) => (!m.stencilWrite ? 'all' : m.stencilWriteMask === 0 && m.stencilFuncMask === FACE_BIT ? (m.stencilRef === FACE_BIT ? 'face' : 'ground') : 'other');
       scene.traverse((o) => {
         const m = (o as Mesh).material as unknown as Material & { color?: { getHex(): number }; linewidth?: number; uniforms?: { uColor?: { value: { x: number; y: number; z: number } }; uAmbient?: { value: number }; uDiffuse?: { value: number } } };
         if (o.name.startsWith('edges:')) s.edges[o.name.slice(6)] = m.color!.getHex();
         if (o.name.startsWith('body:')) s.surfaces[o.name.slice(5)] = !m.stencilWrite ? 'off' : m.stencilWriteMask === FACE_BIT && m.stencilRef === FACE_BIT ? 'mark' : m.stencilWriteMask === FACE_BIT && m.stencilRef === 0 ? 'clear' : ('other' as never);
         if (o.name === 'section-cap' && o.parent?.visible) s.cap = m.stencilRef;
+        if (o.name.startsWith('body-lit-faces:')) {
+          const drawn = o.visible && !!o.parent?.visible;
+          const mark = m.stencilWrite && m.stencilWriteMask === FACE_BIT && m.stencilRef === FACE_BIT && !m.colorWrite && !m.depthWrite;
+          s.litFaces[o.name.slice(15)] = !drawn ? 'hidden' : mark ? 'mark' : 'other';
+        }
         if (o.name.startsWith('mark:')) {
           const t = o.children.find(isFaceTwin) as (Object3D & { material: Material & { color: { getHex(): number } } }) | undefined;
           s.marks[o.name.slice(5)] = { only: only(m) as 'all', twin: t && t.visible ? t.material.color.getHex() : null };
@@ -296,6 +306,73 @@ describe('the view and the theme', () => {
     expect(f.main.cap).toBe(0);
     expect(f.main.marks).toEqual({ measure: { only: 'all', twin: null } });
     expect(mat.color.getHex()).toBe(LIGHT.measure);
+  });
+
+  it("E2 on a dark body: its faces lit by a pick or a hover, and the whole body selected or hovered, set the face bit; lightSurfaceAt says so; light and a picture none of it", () => {
+    const { h, gl } = viewport();
+    h.setPalette!(DARK);
+    // A navy b_1 (it clears the bit) beside the red b_2.
+    h.setBodies([
+      { id: 'b_1', color: '#1d2939', visible: true, tessKey: 'k1', tess: cubeTess([0, 0, 0], 10) },
+      { id: 'b_2', color: '#d02828', visible: true, tessKey: 'k2', tess: cubeTess([20, 0, 0], 10) },
+    ]);
+    let f = frame(gl);
+    expect(f.main.surfaces).toEqual({ b_1: 'clear', b_2: 'clear' });
+    expect(f.main.litFaces).toEqual({ b_1: 'hidden', b_2: 'hidden' });
+    // The top faces' middles (index 4 is +z), on screen.
+    const top1 = h.project([5, 5, 10])!;
+    const top2 = h.project([25, 5, 10])!;
+    const light = (at: [number, number]) => h.lightSurfaceAt!(at[0], at[1]);
+    expect([light(top1), light(top2)]).toEqual([false, false]);
+    // b_1's top face picked (a Measure's picks, the selection): the pick green, a light surface.
+    h.highlight([{ kind: 'face', body: 'b_1', index: 4 }]);
+    f = frame(gl);
+    expect(f.main.surfaces).toEqual({ b_1: 'clear', b_2: 'clear' });
+    expect(f.main.litFaces).toEqual({ b_1: 'mark', b_2: 'hidden' });
+    expect([light(top1), light(top2)]).toEqual([true, false]);
+    // Hovered instead (a list row's flash lights it as the pointer does): the hover blue, light too.
+    h.highlight([]);
+    h.flash([{ kind: 'face', body: 'b_1', index: 4 }]);
+    f = frame(gl);
+    expect(f.main.litFaces).toEqual({ b_1: 'mark', b_2: 'hidden' });
+    expect(light(top1)).toBe(true);
+    h.flash([]);
+    // The whole body selected: drawn in the selected blue, a light surface: the body sets the bit itself.
+    h.highlight([{ kind: 'body', body: 'b_1' }]);
+    f = frame(gl);
+    expect(f.main.surfaces).toEqual({ b_1: 'mark', b_2: 'clear' });
+    expect(f.main.litFaces).toEqual({ b_1: 'hidden', b_2: 'hidden' });
+    expect([light(top1), light(top2)]).toEqual([true, false]);
+    // Nothing lit: b_1 clears the bit again.
+    h.highlight([]);
+    f = frame(gl);
+    expect(f.main.surfaces).toEqual({ b_1: 'clear', b_2: 'clear' });
+    expect(f.main.litFaces).toEqual({ b_1: 'hidden', b_2: 'hidden' });
+    expect(light(top1)).toBe(false);
+    // A light body with a face picked sets the bit itself: no second pass.
+    h.setBodies([
+      { id: 'b_1', color: '#bdc9db', visible: true, tessKey: 'k1', tess: cubeTess([0, 0, 0], 10) },
+      { id: 'b_2', color: '#d02828', visible: true, tessKey: 'k2', tess: cubeTess([20, 0, 0], 10) },
+    ]);
+    h.highlight([{ kind: 'face', body: 'b_1', index: 4 }, { kind: 'face', body: 'b_2', index: 4 }]);
+    f = frame(gl);
+    expect(f.main.surfaces).toEqual({ b_1: 'mark', b_2: 'clear' });
+    expect(f.main.litFaces).toEqual({ b_1: 'hidden', b_2: 'mark' });
+    // A picture while dark: no stencil, no lit faces' pass (and nothing lit).
+    gl.seen.length = 0;
+    snap(h);
+    const pic = gl.seen.find((s) => s.toTarget && !s.triad)!;
+    expect(pic.surfaces).toEqual({ b_1: 'off', b_2: 'off' });
+    expect(pic.litFaces).toEqual({ b_1: 'hidden', b_2: 'hidden' });
+    // And back: the next frame has them again.
+    f = frame(gl);
+    expect(f.main.litFaces).toEqual({ b_1: 'hidden', b_2: 'mark' });
+    // Light: none of it, whatever is lit.
+    h.setPalette!(LIGHT);
+    f = frame(gl);
+    expect(f.main.surfaces).toEqual({ b_1: 'off', b_2: 'off' });
+    expect(f.main.litFaces).toEqual({ b_1: 'hidden', b_2: 'hidden' });
+    expect(light(top2)).toBe(true);
   });
 
   it('a picture taken while dark is LIGHT, and the dark marks are back in the same task', () => {

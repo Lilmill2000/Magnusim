@@ -25,6 +25,10 @@
 //    arrow, over a face and over the background.
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
 //    over a cap takes the face ink (the cap is a light surface), the one beyond it the dark one.
+//  - dark-follows-face-lit: on a part of a dark colour (a navy body) the marks keep the dark inks,
+//    but over a face lit by a hover or a pick, and over the whole part selected (light blues and
+//    the pick green, light surfaces), a finished sketch's line and the measure's end take the
+//    light view's inks (review: they stayed light, about 1.1:1 on the pick green).
 //  - dark-grid-edge-on: a sketch's plane seen near edge-on keeps the grid it has (no new one is
 //    laid out that far across); going dark repaints that grid dark (review round 1: it stayed the
 //    light grid, bright on the dark view), and a picture taken then has the light grid, the
@@ -885,6 +889,106 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(onCap.ok, `the measure's end over the cap: the light view's blue (${onCap.d})`).toBe(true);
     expect(beside.ok, `the end beside the cut: the dark blue (${beside.d})`).toBe(true);
     await page.keyboard.press('Escape');
+    await appearance(page, 'light');
+    expect(seen.errors).toEqual([]);
+  });
+
+  test("cad:dark-follows-face-lit on a dark-coloured part a face lit by a hover or a pick, or the whole part selected, is light: a sketch's line and the measure's end over it take the light view's inks", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    const f = workspaceFrame(page);
+    const block = await addSolid(page, { size: [40, 40, 20] });
+    await page.keyboard.press('Escape');
+    // Navy (as the tree's swatch sets it): a dark surface, so the marks over it keep the dark inks.
+    await f.evaluate((id) => (window as unknown as W).__CAD__.services.doc.setBodyColor(id, '#1d2939'), block.body);
+    await appearance(page, 'dark');
+    const click = async (p: V3) => {
+      await still(page);
+      const [x, y] = await modelOnPage(page, p);
+      await page.mouse.click(x, y);
+    };
+    // A finished sketch on the top face (z 20): a free line (under defined) from (6, 12) to (34, 12).
+    const A: V3 = [6, 12, 20];
+    const B: V3 = [34, 12, 20];
+    await click([20, 30, 20]);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    await still(page);
+    await page.keyboard.press('l');
+    await click(A);
+    await click(B);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await still(page);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+    await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    const selected = () => f.evaluate(() => (window as unknown as W).__CAD__.services.selection.get().items.map((it: { kind: string }) => it.kind) as string[]);
+    await expect.poll(selected).toEqual([]);
+    /** Orthographic, 40 degrees from the top, from the front: the top face, and the space beyond its far edge. */
+    const pose = async () => {
+      await f.evaluate(() =>
+        (window as unknown as W).__CAD__.services.viewport.get().handle.setCamera({ position: [20, 20 - 300 * Math.sin(0.7), 20 + 300 * Math.cos(0.7)], target: [20, 20, 20], up: [0, 0, 1], orthoHeight: 90, projection: 'orthographic' }),
+      );
+      await still(page);
+    };
+    await pose();
+    const p = await palette(page);
+    const under = hexRgb(p.sketch.under);
+    const underFace = hexRgb(p.face!.sketch.under);
+    const clip = await clipAround(page, [
+      [0, 0, 20],
+      [40, 40, 20],
+      [20, 22, 60],
+    ], 8);
+    // At rest, the navy face: the line in the dark view's blue.
+    await page.mouse.move(5, 5);
+    await still(page);
+    let s = await shot2(page, clip);
+    const rest = await along(page, s, A, B, 0.2, 0.8, under, underFace);
+    expect(rest.share, `on the navy face at rest: the dark view's blue (${rest.d})`).toBeGreaterThanOrEqual(0.75);
+    // The face under the pointer (clear of the line): the hover blue, a light surface.
+    const hovered = () => f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.state.get().hover?.item ?? null);
+    const [hx, hy] = await modelOnPage(page, [20, 32, 20]);
+    await page.mouse.move(hx, hy, { steps: 3 });
+    await expect.poll(hovered).toMatchObject({ kind: 'face', body: block.body });
+    await still(page);
+    s = await shot2(page, clip);
+    const hover = await along(page, s, A, B, 0.2, 0.8, underFace, under);
+    expect(hover.share, `on the hovered face: the light view's blue (${hover.d})`).toBeGreaterThanOrEqual(0.75);
+    // The whole part selected from its tree row: the selected blue, a light surface.
+    await page.mouse.move(5, 5);
+    const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');
+    if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row').click();
+    await frame.locator(`[data-body-row="${block.body}"] .tree-row`).first().click();
+    await expect.poll(selected).toEqual(['body']);
+    await page.mouse.move(5, 5);
+    await still(page);
+    s = await shot2(page, clip);
+    const sel = await along(page, s, A, B, 0.2, 0.8, underFace, under);
+    expect(sel.share, `on the selected part: the light view's blue (${sel.d})`).toBeGreaterThanOrEqual(0.75);
+    await f.evaluate(() => (window as unknown as W).__CAD__.services.selection.set((st: object) => ({ ...st, items: [] })));
+    await expect.poll(selected).toEqual([]);
+
+    // The measure from the top face (picked: the pick green) to a point 40 mm above it.
+    await runCommand(frame, 'inspect.measure');
+    await pose();
+    await click([20, 22, 20]);
+    await expect.poll(selected).toEqual(['face']);
+    const input = frame.locator('[data-measure-point-input]');
+    await input.fill('20, 22, 60');
+    await input.press('Enter');
+    await expect(frame.locator('[data-measure-label]')).toBeVisible({ timeout: 60_000 });
+    await page.mouse.move(5, 5);
+    await pose();
+    s = await shot2(page, clip);
+    const measure = rgbOf(p.measure);
+    const measureFace = rgbOf(p.face!.measure);
+    const onFace = await at1(page, s, [20, 22, 20], measureFace, measure);
+    const above = await at1(page, s, [20, 22, 60], measure, measureFace);
+    expect(onFace.ok, `the measure's end on the picked face: the light view's blue (${onFace.d})`).toBe(true);
+    expect(above.ok, `its end above, over the background: the dark blue (${above.d})`).toBe(true);
+    await frame.locator('[data-cad-panel="tool"] [data-panel-done]').click();
+    await expect(frame.locator('[data-tool-panel="inspect.measure"]')).toHaveCount(0);
     await appearance(page, 'light');
     expect(seen.errors).toEqual([]);
   });
