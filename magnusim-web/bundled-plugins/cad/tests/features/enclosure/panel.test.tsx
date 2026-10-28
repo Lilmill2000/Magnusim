@@ -12,6 +12,8 @@ import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import enclosureModule from '../../../src/features/enclosure';
 import type { EnclosureFeature, ExtrudeFeature, Feature } from '../../../src/types/doc';
+import { faceInkOf } from '../../../src/viewport/onface';
+import { DARK, LIGHT } from '../../../src/viewport/palette';
 import { block, blockRegions, blockSketch, profileOf } from '../../doc/blocks';
 import { startApp, type FakeApp } from '../extrude/fake-app';
 
@@ -233,6 +235,25 @@ describe('the Enclosure panel', () => {
     // A press away from the arrows is not the tool's (it orbits or selects).
     act(() => void (took = a.vp.offer(a.vp.at('down', [-40, -40, 0]))));
     expect(took).toBe(false);
+  });
+
+  it("draws its arrows in the view palette's blue, over a light face the light view's in dark: opened dark, and when the theme changes while it is open", async () => {
+    const a = await start();
+    act(() => a.vp.setPalette(DARK));
+    await opened(a);
+    const mats = () => a.vp.layers.get('enclosure.handles')!.group.children.filter((g) => g.name === 'enclosure-arrow').flatMap((g) => g.children.map((m) => (m as unknown as { material: { color: { getHex(): number } } }).material));
+    const arrows = () => new Set(mats().map((m) => m.color.getHex()));
+    const onFace = () => new Set(mats().map((m) => faceInkOf(m as never) ?? null));
+    expect(mats().length).toBeGreaterThanOrEqual(12);
+    // Opened dark: the host's dark ink blue, and over a light face (E2) the light view's.
+    expect(arrows()).toEqual(new Set([0x7aa7ff]));
+    expect(onFace()).toEqual(new Set([0x1570ef]));
+    act(() => a.vp.setPalette(LIGHT));
+    expect(arrows()).toEqual(new Set([0x1570ef]));
+    expect(onFace()).toEqual(new Set([null]));
+    act(() => a.vp.setPalette(DARK));
+    expect(arrows()).toEqual(new Set([0x7aa7ff]));
+    expect(onFace()).toEqual(new Set([0x1570ef]));
   });
 
   it('Escape during a drag puts the side back and keeps the panel open (SD review round 2: it closed the panel and kept the dragged value)', async () => {

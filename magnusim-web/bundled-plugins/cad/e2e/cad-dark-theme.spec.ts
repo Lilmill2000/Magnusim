@@ -30,6 +30,8 @@
 //    its left side off). (It went with the removed dark-sketch-face test.)
 //  - dark-follows-face-marks: a reference point and axis, the measure line's ends and the Extrude
 //    arrow, over a face and over the background.
+//  - dark-follows-face-enclosure: the Enclosure's arrows, over the part's face (the +Z arrow seen
+//    end on from the top) and over the background (the +X arrow, past the top face's outline).
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
 //    over a cap takes the face ink (the cap is a light surface), the one beyond it the dark one.
 //  - dark-follows-face-handle: a fillet's radius arrow over a face shows the light view's grab hand
@@ -990,6 +992,57 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     }
     expect(ground, `from the front, over the background: the dark blue (${ground} pixels; face ink ${face})`).toBeGreaterThanOrEqual(8);
     expect(face).toBe(0);
+    await page.keyboard.press('Escape');
+    await appearance(page, 'light');
+    expect(seen.errors).toEqual([]);
+  });
+
+  test("cad:dark-follows-face-enclosure the Enclosure's arrows take the light view's blue over the part's face and the dark one over the background", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    const f = workspaceFrame(page);
+    await addSolid(page, { size: [20, 20, 20] });
+    await page.keyboard.press('Escape');
+    await appearance(page, 'dark');
+    // A new Enclosure, tight to the part: an arrow from the middle of each of its sides.
+    await runCommand(frame, 'cfd.enclosure');
+    await expect(frame.locator('[data-cad-panel] [data-panel-title]')).toHaveText('Enclosure 1');
+    await expect(featureRowNamed(frame, 'Enclosure 1')).toHaveAttribute('data-state', 'ok', { timeout: 60_000 });
+    await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('top', { animate: false }));
+    await page.mouse.move(5, 5);
+    await still(page);
+    const p = await palette(page);
+    const ink = rgbOf(p.ink);
+    const inkFace = rgbOf(p.face!.ink);
+    // The +Z arrow seen end on from the top, at the middle of the part's top face.
+    const [zx, zy] = await modelOnPage(page, [10, 10, 20]);
+    let s = await shot2(page, { x: Math.round(zx - 12), y: Math.round(zy - 12), width: 24, height: 24 });
+    const [zFace, zGround] = nearest(s, [zx, zy], [inkFace, ink], 6);
+    expect(zFace, `the +Z arrow over the part's top face: the light view's blue (${zFace}/${zGround})`).toBeLessThanOrEqual(16);
+    expect(zGround).toBeGreaterThan(zFace);
+    // The +X arrow, from the middle of the +X side (under the top face's outline, seen from above)
+    // out over the background: the light view's blue up to the outline, the dark one beyond it.
+    const [xx, xy] = await modelOnPage(page, [20, 10, 10]);
+    const [ex] = await modelOnPage(page, [20, 10, 20]);
+    const count = async (x0: number, x1: number) => {
+      const shot = await shot2(page, { x: Math.round(x0), y: Math.round(xy - 5), width: Math.round(x1 - x0), height: 10 });
+      let dark = 0;
+      let light = 0;
+      for (let i = 0; i < shot.img.data.length; i += 4) {
+        if (dist(shot.img.data, i, ink) <= 16) dark++;
+        if (dist(shot.img.data, i, inkFace) <= 16) light++;
+      }
+      return { dark, light };
+    };
+    expect(ex - xx, 'the outline is between the base and the head').toBeGreaterThan(12);
+    expect(ex - xx).toBeLessThan(44);
+    const inside = await count(xx + 3, ex - 3);
+    const beyond = await count(ex + 3, xx + 50);
+    // Over the face its anti-aliased edges (the light view's blue half on the light face) come near the
+    // dark blue: the light view's blue fills the shaft's middle, so it has the most pixels.
+    expect(inside.light, `the +X arrow over the face: the light view's blue (${JSON.stringify(inside)})`).toBeGreaterThanOrEqual(8);
+    expect(inside.light).toBeGreaterThan(inside.dark);
+    expect(beyond.dark, `the +X arrow over the background: the dark blue (${JSON.stringify(beyond)})`).toBeGreaterThanOrEqual(8);
+    expect(beyond.light).toBe(0);
     await page.keyboard.press('Escape');
     await appearance(page, 'light');
     expect(seen.errors).toEqual([]);
