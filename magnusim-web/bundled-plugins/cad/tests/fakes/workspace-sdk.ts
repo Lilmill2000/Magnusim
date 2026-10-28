@@ -12,6 +12,9 @@
 // The Assistant panel's keys (unreleased 1.9): pass `assistantKeys` (a list, or null for the
 // default) for ws.context.assistantKeys; push('assistantKeys', keys) is the host's change, as the
 // SDK takes it (the context first, then the listeners). Without it the welcome has none.
+// The host's appearance (unreleased, SDK 1.5): pass `appearance` for ws.context.appearance, and
+// push('appearance', a) for its event (the context follows, as the SDK's does). Without it the
+// context has none, as an older host's.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import { FakeFiles, FakeFolder } from '../doc/fake-files';
@@ -42,10 +45,11 @@ export interface FakeWorkspace extends Workspace {
   answers: { confirm: boolean; prompt: string | null };
   /** The exit hook the page registered (host 1.6 nav.onLeave), or null. */
   leaveHook: LeaveHandler | null;
-  /** Push a host event (units change, study renamed in the header). */
+  /** Push a host event (units change, study renamed in the header, the appearance changed). */
   push(event: 'units', v: UnitSystem): void;
   push(event: 'study', v: StudyRecord): void;
   push(event: 'assistantKeys', v: string[] | null): void;
+  push(event: 'appearance', v: Record<string, unknown>): void;
 }
 
 export function fakeStudy(over: Partial<StudyRecord> = {}): StudyRecord {
@@ -84,11 +88,13 @@ export function createFakeWorkspace(
     assistant?: FakeAssistantOptions | true;
     /** Unreleased 1.9: ws.context.assistantKeys (null: the default); left out, the welcome has none. */
     assistantKeys?: string[] | null;
+    /** Unreleased (SDK 1.5): ws.context.appearance ({theme, preference, textScale, iconScale}). */
+    appearance?: Record<string, unknown>;
   } = {},
 ): FakeWorkspace {
   let study = fakeStudy(opts.study);
   const assistantFake = opts.assistant ? createFakeAssistant(opts.assistant === true ? {} : opts.assistant) : null;
-  const listeners = { units: new Set<(v: UnitSystem) => void>(), study: new Set<(v: StudyRecord) => void>(), theme: new Set<(v: unknown) => void>(), assistantKeys: new Set<(v: unknown) => void>() };
+  const listeners = { units: new Set<(v: UnitSystem) => void>(), study: new Set<(v: StudyRecord) => void>(), theme: new Set<(v: unknown) => void>(), assistantKeys: new Set<(v: unknown) => void>(), appearance: new Set<(v: unknown) => void>() };
   const log: FakeWorkspace['log'] = { toasts: [], confirms: [], prompts: [], dataWrites: [], backs: 0, dirty: [] };
   const folder = opts.folder ?? new FakeFolder();
   const files = new FakeFiles(folder);
@@ -102,6 +108,7 @@ export function createFakeWorkspace(
     hostVersion: opts.hostVersion ?? '1.1',
     ...(opts.edit ? { geometry: opts.edit.geometry, launch: opts.edit.launch ?? null } : {}),
     ...('assistantKeys' in opts ? { assistantKeys: opts.assistantKeys ?? null } : {}),
+    ...(opts.appearance ? { appearance: { ...opts.appearance } } : {}),
   } as WorkspaceContext;
   const clone = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
   const ws = {
@@ -204,7 +211,7 @@ export function createFakeWorkspace(
       },
     },
     leaveHook: null,
-    on(event: 'units' | 'theme' | 'study' | 'assistantKeys', fn: (v: never) => void) {
+    on(event: 'units' | 'theme' | 'study' | 'assistantKeys' | 'appearance', fn: (v: never) => void) {
       const set = listeners[event] as Set<(v: never) => void>;
       set.add(fn);
       return () => set.delete(fn);
@@ -213,12 +220,13 @@ export function createFakeWorkspace(
       if (!opts.spawnWorker) throw new Error('fake workspace: pass spawnWorker to createFakeWorkspace');
       return opts.spawnWorker(String(url));
     },
-    push(event: 'units' | 'study' | 'assistantKeys', v: UnitSystem | StudyRecord | string[] | null) {
+    push(event: 'units' | 'study' | 'assistantKeys' | 'appearance', v: UnitSystem | StudyRecord | string[] | null | Record<string, unknown>) {
       if (event === 'study') {
         study = clone(v as StudyRecord);
         context.study = clone(study);
       }
       if (event === 'assistantKeys') context.assistantKeys = clone(v as string[] | null);
+      if (event === 'appearance') (context as WorkspaceContext & { appearance?: unknown }).appearance = clone(v);
       for (const fn of listeners[event] as Set<(x: unknown) => void>) fn(clone(v));
     },
   } as unknown as FakeWorkspace;

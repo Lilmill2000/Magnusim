@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
+import { pushAppearance, type Appearance } from '../lib/bridge';
+import type { DarkLineOption, DarkLines, MarkPalette } from '../viewport/palette';
+import type { AppearanceControl } from './appearance';
 import type { AssistantTestHandle } from '../assistant/testing';
 import type { LinkController, LinkOutcome } from '../link/controller';
 import type { EditOpen } from '../link/edit-open';
@@ -29,12 +32,39 @@ export interface CadTestHandle {
   readonly keybinds: { model: Keybinds; open(commandId: string): void };
   /** The Assistant's tools in this Part (src/assistant/testing.ts), or null when its module is not installed. */
   readonly assistant: AssistantTestHandle | null;
+  /** The host's appearance in the Part (src/app/appearance.ts): set once the app has installed it. */
+  appearance?: CadAppearanceHandle;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;
     doc: { status: string; features: number; bodies: number; save: string };
     viewport: boolean;
     selection: number;
+  };
+}
+
+/** window.__CAD__.appearance: the dark set's test path (e2e) and Daniel's E1 / E2 review switch. */
+export interface CadAppearanceHandle {
+  /** The appearance the Part has (its icon scale is the toolbar's), and the 3D view's palette now: its name, E1 / E2 candidates and background. */
+  get(): { appearance: Appearance; palette: MarkPalette['name']; lines: DarkLines | null; background: number };
+  /**
+   * Deliver an appearance as the host's SDK does with its 'appearance' event (a host with none yet
+   * included). The SDK also writes data-theme and the scales on <html>: the caller does that too.
+   */
+  push(a: Partial<Appearance>): void;
+  /** E1 / E2: the candidates for edges and sketch lines in a dark view (one for both, or each apart); returns the choice. */
+  darkLines(lines?: Partial<DarkLines> | DarkLineOption): DarkLines;
+}
+
+/** The appearance part of the test handle, over the app's appearance control. */
+export function appearanceTestHandle(services: AppServices, control: AppearanceControl): CadAppearanceHandle {
+  return {
+    get() {
+      const p = services.viewport.get().handle?.palette?.() ?? control.palette();
+      return { appearance: { ...control.appearance() }, palette: p.name, lines: p.lines ? { ...p.lines } : null, background: p.background };
+    },
+    push: (a) => pushAppearance(services.bridge, { ...control.appearance(), ...a }),
+    darkLines: (lines) => control.darkLines(lines),
   };
 }
 
