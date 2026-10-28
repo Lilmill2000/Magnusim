@@ -62,9 +62,9 @@ export interface OverlayColours {
   ghost: string;
   /** Under a probe or a handle, and round a probe's name. */
   halo: string;
-  /** A probe's ring, cross and name. */
+  /** A probe's ring, cross and name; in dark, the edge round a selected rake's end squares. */
   probe: string;
-  /** Under a probe's cross, whose arms reach past its ring (null: none, as in light). */
+  /** Under the marks with no halo of their own, a probe's cross (its arms reach past its ring) and the dashed outlines (null: none, as in light). */
   markHalo: string | null;
   /** Each rake colour (an empty one draws in the selection's). */
   rakes: string[];
@@ -163,8 +163,22 @@ export function lightOverlay(state: () => OverlayState): (g: CanvasRenderingCont
 /** The marks, in CSS px (the canvas's transform set to the device pixel ratio). */
 export function drawOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: OverlayColours) {
   const { scene, selected, toScreen, poseOf, handleOf, editor } = st;
-  const { sel, ghost, halo: handleFill, probe: probeInk, sketch: pal } = c;
+  const { sel, ghost, halo: handleFill, probe: probeInk, markHalo, sketch: pal } = c;
   const d = st.drag;
+  // The path dashed: what is not in the flow, or not there yet. In dark on a halo of its own, as
+  // it can lie on a body's light grey (the pose a body is going to, over the body catching up).
+  const dashed = (colour: string, dash: number[]) => {
+    g.setLineDash(dash);
+    if (markHalo) {
+      g.strokeStyle = markHalo;
+      g.lineWidth = 4.5;
+      g.stroke();
+    }
+    g.strokeStyle = colour;
+    g.lineWidth = 1.5;
+    g.stroke();
+    g.setLineDash([]);
+  };
   for (const r of scene.rakes) {
     const color = c.rakes[r.color % 6] || sel;
     const a = toScreen(r.x0, r.y0);
@@ -195,6 +209,13 @@ export function drawOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: Ov
         g.lineWidth = 2;
         g.fillRect(p.x - 5, p.y - 5, 10, 10);
         g.strokeRect(p.x - 5, p.y - 5, 10, 10);
+        if (markHalo) {
+          // Dark: the square's fill is as dark as the view, and some rake colours are faint on it
+          // (purple 2.5:1): a light edge round it.
+          g.strokeStyle = probeInk;
+          g.lineWidth = 1;
+          g.strokeRect(p.x - 6.5, p.y - 6.5, 13, 13);
+        }
       }
     }
     g.globalAlpha = 1;
@@ -203,14 +224,14 @@ export function drawOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: Ov
   scene.probes.forEach((p, i) => {
     const s = toScreen(p.x, p.y);
     const isSel = p.id === selected;
-    if (c.markHalo) {
+    if (markHalo) {
       // The cross's arms reach past the ring: a halo under them first (dark).
       g.beginPath();
       g.moveTo(s.x - PROBE_R_PX - 3, s.y);
       g.lineTo(s.x + PROBE_R_PX + 3, s.y);
       g.moveTo(s.x, s.y - PROBE_R_PX - 3);
       g.lineTo(s.x, s.y + PROBE_R_PX + 3);
-      g.strokeStyle = c.markHalo;
+      g.strokeStyle = markHalo;
       g.lineWidth = (isSel ? 2.5 : 1.5) + 3;
       g.stroke();
     }
@@ -269,28 +290,16 @@ export function drawOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: Ov
           else g.lineTo(p.x, p.y);
         });
       }
-      g.setLineDash([4, 4]);
-      g.strokeStyle = isSel ? sel : ghost;
-      g.lineWidth = 1.5;
-      g.stroke();
-      g.setLineDash([]);
+      dashed(isSel ? sel : ghost, [4, 4]);
     }
     if (!b.enabled) {
       path(worldOutline(b, pose));
-      g.setLineDash([4, 4]);
-      g.strokeStyle = ghost;
-      g.lineWidth = 1.5;
-      g.stroke();
-      g.setLineDash([]);
+      dashed(ghost, [4, 4]);
     }
     if (target && (Math.abs(target.x - pose.x) > 1e-6 || Math.abs(target.y - pose.y) > 1e-6 || Math.abs(target.angle - pose.angle) > 1e-3)) {
       // Where the body is going; the flow's body catches up at the lattice's speed limit.
       path(worldOutline(b, target));
-      g.setLineDash([5, 4]);
-      g.strokeStyle = ghost;
-      g.lineWidth = 1.5;
-      g.stroke();
-      g.setLineDash([]);
+      dashed(ghost, [5, 4]);
     }
     if (isSel) {
       path(worldOutline(b, pose));

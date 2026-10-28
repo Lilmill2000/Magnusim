@@ -2,15 +2,16 @@
 // tokenRgb can read, with no dark value; the tokens built on the host's are declared again on any
 // element with a theme of its own (the hidden light element the GPU, pictures and recordings read),
 // so they take the host's light values there; in light each colour is the one the tunnel drew
-// before; and in dark what is drawn on the view's margins, on a map's ends, on the plain and tank
-// looks and on the marks' halo reads clearly.
+// before, and the swatches' dark ring has no declaration; and in dark what is drawn on the view's
+// margins, on a map's ends, on the plain and tank looks, on a body and on the marks' halo reads
+// clearly, as do the swatches on the panel's rows.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { colormapRgb } from '../../../src/plugin-ui/colormaps';
 import { INFERNO } from '../src/render/inferno';
-import { hostDark, hostLight, tokenReader, tunnel, tunnelBase, tunnelDark } from './themeTokens';
+import { hostDark, hostLight, readCss, tokenReader, tunnel, tunnelBase, tunnelDark } from './themeTokens';
 
 const coloursTs = readFileSync(join(__dirname, '..', 'src', 'app', 'colours.ts'), 'utf8');
 /** A function's source in a module's text: from its name to the brace that closes its body. */
@@ -76,7 +77,6 @@ const DRAWN_BEFORE: Record<string, string> = {
   '--t2d-margin': '#f0f2f7',
   '--t2d-wall': 'transparent',
   '--t2d-mark-halo': 'transparent',
-  '--t2d-swatch-ring': 'transparent',
 };
 
 /** WCAG contrast of two #rrggbb colours. */
@@ -154,6 +154,13 @@ describe('the tunnel tokens', () => {
     for (const [name, value] of Object.entries(DRAWN_BEFORE)) expect(light(name), name).toBe(value);
   });
 
+  it("leave the swatches' ring to a dark rule: the light look has no declaration of it (scripts/theme-light-identity.mjs --strict)", () => {
+    const app = readCss('..', 'src', 'styles', 'app.css');
+    const uses = [...app.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter((m) => m[2].includes('--t2d-swatch-ring'));
+    expect(uses.map((m) => m[1].trim())).toEqual(['[data-theme="dark"] .t2d-swatch']);
+    expect(tunnelBase.props['--t2d-swatch-ring']).toBeUndefined();
+  });
+
   it("in dark: the margins are the host's dark view background, and what is drawn over the view reads clearly", () => {
     const dark = tokenReader('dark');
     const light = tokenReader('light');
@@ -171,11 +178,34 @@ describe('the tunnel tokens', () => {
     // On the marks' halo (the probes' ring and names, the sketch and its dimensions): text 4.5:1, lines 3:1.
     const halo = dark('--t2d-halo');
     expect([dark('--t2d-mark-halo'), dark('--t2d-sketch-halo')]).toEqual([halo, halo]);
+    // The dashed outlines lie on a body too (the pose a body is going to, over the body catching
+    // up), where the ghost's grey is under 3:1 (one grey at 3:1 on the margins, the map ends and a
+    // body would need a luminance of 0.157 to 0.159): on the mark halo, which reads there.
+    const bodies = { body: dark('--t2d-body'), 'body (particles)': dark('--t2d-body-dark') };
+    expect(contrast(dark('--t2d-ghost'), dark('--t2d-body'))).toBeLessThan(3);
+    expect(contrast(dark('--t2d-ghost'), halo)).toBeGreaterThanOrEqual(3);
+    for (const [on, bg] of Object.entries({ ...under, ...bodies })) {
+      expect(Math.max(contrast(dark('--t2d-ghost'), bg), contrast(halo, bg)), `a dashed outline on ${on} ${bg}`).toBeGreaterThanOrEqual(3);
+    }
+    // A selected rake's end squares: the halo, edged in the rake's colour (purple is 2.5:1 on it)
+    // and round that in a light edge (the probes' ink), which reads on the halo; on whatever is
+    // under the square, its fill or one of its edges reads.
+    expect(contrast(dark('--t2d-rake-2'), halo)).toBeLessThan(3);
+    expect(contrast(dark('--t2d-probe'), halo)).toBeGreaterThanOrEqual(3);
+    for (const rake of RAKE_TOKENS) {
+      for (const [on, bg] of Object.entries({ ...under, ...bodies })) {
+        const best = Math.max(contrast(halo, bg), contrast(dark(rake), bg), contrast(dark('--t2d-probe'), bg));
+        expect(best, `${rake}'s end square on ${on} ${bg}`).toBeGreaterThanOrEqual(3);
+      }
+    }
     const text = ['--t2d-probe', '--t2d-select-ink', '--t2d-sketch-under', '--t2d-sketch-full', '--t2d-sketch-over', '--t2d-sketch-construction', '--t2d-sketch-pick'];
     for (const name of text) expect(contrast(dark(name), halo), `${name} ${dark(name)}`).toBeGreaterThanOrEqual(4.5);
     for (const name of ['--t2d-select', '--t2d-sketch-preview']) expect(contrast(dark(name), halo), name).toBeGreaterThanOrEqual(3);
-    // The ring at the wall on the margins, and the swatches' ring on the dark panel.
+    // The ring at the wall on the margins, and the swatches' ring on the dark panel and on its
+    // hovered and selected rows (a swatch's colour may be fainter there than the ring).
     expect(contrast(dark('--t2d-wall'), margin)).toBeGreaterThanOrEqual(3);
-    expect(contrast(dark('--t2d-swatch-ring'), dark('--mg-bg'))).toBeGreaterThanOrEqual(3);
+    for (const row of ['--mg-bg', '--mg-surface-muted', '--mg-selected-bg']) {
+      expect(contrast(dark('--t2d-swatch-ring'), dark(row)), `the swatches' ring on ${row} ${dark(row)}`).toBeGreaterThanOrEqual(3);
+    }
   });
 });

@@ -7,8 +7,10 @@
 //    recorded frame are light (the class of the core's 1bc504eb).
 // 2. The dark screen: the margins exactly (27, 31, 39) with a (107, 115, 130) ring on the tunnel's
 //    wall; the GPU's frame and a box of the flow are the light ones; the rake swatches are the rakes'
-//    colours; the stage's text reads at 4.5:1, nothing in it has a light background, and the only
-//    light island is the hidden one kept light on purpose.
+//    colours, with a ring that reads on a selected row (none in light); a selected rake's end
+//    squares have a light edge and the dashed outlines a halo (neither in light); the stage's text
+//    reads at 4.5:1, nothing in it has a light background, and the only light island is the hidden
+//    one kept light on purpose.
 // 3. Live: a change of theme shows in the next frame on the view, the stage and the panels together;
 //    a pan or zoom in dark never uncovers the GPU's light margin.
 // The scene is still (paused) wherever pixels are compared. The theme is set as Settings →
@@ -251,6 +253,65 @@ async function record(page, frame, during) {
   return dl.path();
 }
 
+/** WCAG contrast of two CSS rgb() colours. */
+function contrast(a, b) {
+  const lum = (c) => {
+    const [r, g, bl] = c.match(/[\d.]+/g).slice(0, 3).map((v) => {
+      const k = Number(v) / 255;
+      return k <= 0.04045 ? k / 12.92 : ((k + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * The purple streak rake selected a moment (then the airfoil again): its swatch's ring and its
+ * row's background, the light pixels on the overlay just outside its first end square, and the
+ * overlay's pixels of the mark halo (27, 31, 39) by the switched-off cylinder's dashed outline.
+ */
+async function rakeSelected(frame) {
+  await T(frame, () => window.__TUNNEL__.select('streaks'));
+  await rafs(frame);
+  const out = await T(frame, () => {
+    const t = window.__TUNNEL__;
+    const v = t.view();
+    const d = t.domain();
+    const o = document.querySelector('[data-t2d-viewport] canvas.t2d-overlay').getContext('2d');
+    // The overlay's pixels (RGBA) in a box round a world point: [left, right, top, bottom] CSS px from it.
+    const box = (x, y, [x0, x1, y0, y1]) => {
+      const at = t.toScreen(x, y);
+      const cx = (at.x - d.canvas.left) * v.dpr;
+      const cy = (at.y - d.canvas.top) * v.dpr;
+      const [a, b, c, e] = [Math.floor(cx + x0 * v.dpr), Math.ceil(cx + x1 * v.dpr), Math.floor(cy + y0 * v.dpr), Math.ceil(cy + y1 * v.dpr)];
+      const data = o.getImageData(a, c, b - a, e - c).data;
+      const px = [];
+      for (let i = 0; i < data.length; i += 4) px.push(Array.from(data.slice(i, i + 4)));
+      return px;
+    };
+    const s = t.scene();
+    const rake = s.rakes.find((r) => r.id === 'streaks');
+    const off = s.bodies.find((b) => b.id === 'off');
+    const r = off.shape.diameter / 2 / v.mpp;
+    const swatch = document.querySelector('[data-t2d-rake="streaks"].is-selected .t2d-swatch');
+    return {
+      ring: getComputedStyle(swatch).boxShadow,
+      row: getComputedStyle(swatch.closest('.t2d-body-row')).backgroundColor,
+      // Left of the square, whose rake-coloured edge is 4 to 6 CSS px out from the end.
+      edge: box(rake.x0, rake.y0, [-9, -5.5, -1, 1]).filter((p) => p[3] >= 100 && Math.min(p[0], p[1], p[2]) >= 180).length,
+      // Across the cylinder's leftmost point, two dash periods tall.
+      halo: box(off.x, off.y, [-r - 4, -r + 4, -8, 8]).filter((p) => p[3] >= 120 && Math.abs(p[0] - 27) + Math.abs(p[1] - 31) + Math.abs(p[2] - 39) <= 12).length,
+    };
+  });
+  await T(frame, () => {
+    const t = window.__TUNNEL__;
+    t.select(t.scene().bodies[0].id);
+  });
+  await rafs(frame);
+  return out;
+}
+
 /** The stage in the frame: text below 4.5:1 on what is behind it, light backgrounds, light islands. */
 const stageReport = (frame) =>
   frame.evaluate(() => {
@@ -340,6 +401,9 @@ for (const dpr of [1, 1.25]) {
       const flow = await flowBox(page, frame);
       const swatchesLight = await frame.locator('.t2d-swatch').evaluateAll((els) => els.map((e) => getComputedStyle(e).backgroundColor));
       expect(swatchesLight).toEqual(['rgb(105, 65, 198)', 'rgb(181, 71, 8)']);
+      // The purple rake selected: no ring on its swatch, no light edge round its end squares, no
+      // halo under the dashed outlines.
+      expect(await rakeSelected(frame)).toMatchObject({ ring: 'none', edge: 0, halo: 0 });
 
       await setTheme(page, frame, 'dark');
       await rafs(frame);
@@ -362,7 +426,13 @@ for (const dpr of [1, 1.25]) {
       // The rake swatches are the colours the rakes are drawn in, with a grey ring on the dark panel.
       const swatches = await frame.locator('.t2d-swatch').evaluateAll((els) => els.map((e) => [getComputedStyle(e).backgroundColor, getComputedStyle(e).boxShadow]));
       expect(swatches.map((s) => s[0])).toEqual(swatchesLight);
-      for (const [, ring] of swatches) expect(ring).toContain('rgb(107, 115, 130)');
+      for (const [, ring] of swatches) expect(ring).toContain('rgb(154, 164, 178)');
+      // The purple rake selected: its swatch's ring reads on the selected row, a light edge round its
+      // end squares (purple is faint on their dark fill), a halo under the dashed outlines.
+      const sel = await rakeSelected(frame);
+      expect(contrast(sel.ring, sel.row), `the swatch's ring ${sel.ring} on the selected row ${sel.row}`).toBeGreaterThanOrEqual(3);
+      expect(sel.edge, "light pixels round the rake's end square").toBeGreaterThan(0);
+      expect(sel.halo, "the halo's pixels by the switched-off body's outline").toBeGreaterThanOrEqual(2);
       // The stage's text and backgrounds, with the shortcuts open too.
       await frame.locator('[data-t2d-picture]').focus();
       await page.keyboard.press('?');

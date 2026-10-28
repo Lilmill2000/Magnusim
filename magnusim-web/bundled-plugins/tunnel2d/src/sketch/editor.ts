@@ -62,7 +62,7 @@ export interface Palette {
   pick: string;
   halo: string;
   preview: string;
-  /** Under the marks with no halo of their own (the origin, the snap ring) where they need one (dark). */
+  /** Under the marks with no halo of their own (the origin, the rings where the outline is open, the snap ring) where they need one (dark). */
   markHalo?: string;
 }
 
@@ -734,12 +734,17 @@ export class SketchEditor {
       g.fill();
       g.stroke();
     }
-    // Where the outline is open or branches.
+    // Where the outline is open or branches (on a halo where the marks need one).
     const prof = profileOf(s);
     for (const p of [...prof.open, ...prof.branch]) {
       const q = scr(p);
       g.beginPath();
       g.arc(q.x, q.y, 8, 0, 2 * Math.PI);
+      if (markHalo) {
+        g.strokeStyle = markHalo;
+        g.lineWidth = 5;
+        g.stroke();
+      }
       g.strokeStyle = pal.over;
       g.lineWidth = 2;
       g.stroke();

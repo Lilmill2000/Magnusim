@@ -54,15 +54,13 @@
   --t2d-plain: #121823;
   --t2d-streamline: #1a1d24;
   --t2d-arrow: #1a1d24;
-  /* Rakes, their dye and their swatches: the app's light series colours, in every theme; the
-     swatches' ring (dark only: some of the colours are faint on the dark panel) */
+  /* Rakes, their dye and their swatches: the app's light series colours, in every theme */
   --t2d-rake-1: #1570ef;
   --t2d-rake-2: #6941c6;
   --t2d-rake-3: #099250;
   --t2d-rake-4: #b54708;
   --t2d-rake-5: #0086c9;
   --t2d-rake-6: #dd2590;
-  --t2d-swatch-ring: transparent;
   /* The rheoscopic tank: a dark base and the colours of its two lights, per preset */
   --t2d-rheo-kalliroscope-base: #061226;
   --t2d-rheo-kalliroscope-light1: #d8e8ff;
@@ -81,11 +79,12 @@
 }
 
 /* Dark: the marks that can lie on the view's margins turn light or mid grey, and the edges only
-   dark needs appear. No colour the GPU reads is here: the GPU draws light in every theme. */
+   dark needs appear (the swatches' ring: app.css draws it in dark only). No colour the GPU reads
+   is here: the GPU draws light in every theme. */
 [data-theme="dark"] {
   --t2d-wall: var(--mg-viewport-edge);
   --t2d-ghost: var(--mg-viewport-edge);
   --t2d-sketch-pick: var(--mg-viewport-pick);
   --t2d-mark-halo: var(--mg-viewport-halo);
-  --t2d-swatch-ring: var(--mg-viewport-edge);
+  --t2d-swatch-ring: var(--mg-text-muted);
 }

@@ -3,8 +3,10 @@
 // the light theme they are drawn as they were before the overlay left Viewport.tsx (the log saved
 // in __snapshots__/overlay-light.txt right after that move), with nothing painted on the margins;
 // in dark the margins and the ring at the tunnel's wall come first, then the marks in dark colours
-// with a halo under those that have none of their own; the rakes keep their colours; and pictures
-// draw the light marks whatever the page's theme.
+// with a halo under those that have none of their own (the probe's cross, the dashed outlines, the
+// sketch's origin, the rings where its outline is open and its snap ring) and a light edge round a
+// selected rake's end squares; the rakes keep their colours; and pictures draw the light marks
+// whatever the page's theme.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/app/store';
@@ -106,6 +108,16 @@ function frames(paint: Paint): string[] {
   return log;
 }
 
+/** The open sketch being edited (the frames above edit a closed one): the rings where its outline is open. */
+function openSketchEdited(paint: Paint): string[] {
+  const { store, engine, editor } = fixture();
+  const log: string[] = [];
+  editor.bodyId = 'b3';
+  store.select('b3');
+  paint(recordingContext(log, CANVAS), overlayState(engine, store, null, editor));
+  return log;
+}
+
 /** Paints each frame on screen in a theme's colours (the tokens resolved from the stylesheets), over `drawn`. */
 const onScreen = (theme: 'light' | 'dark', drawn: Drawn | null = drawnFor(VIEW)): Paint => {
   const colours = overlayColours(tokenReader(theme));
@@ -185,7 +197,7 @@ describe('the overlay', () => {
     expect((r.y1 - r.y0) / VIEW.dpr).toBeCloseTo(4 / 0.012, -1);
   });
 
-  it('in the dark theme draws the marks in dark colours, with a halo under the probe cross, the sketch origin and its snap ring', () => {
+  it("in the dark theme draws the marks in dark colours, with a halo under the probe cross, the dashed outlines, the sketch origin and its snap ring, and a light edge round a rake's end squares", () => {
     const log = frames(onScreen('dark'));
     // Nothing half-themed: none of the light marks' own colours is left.
     for (const light of ['#ffffff', '#101828', '#475467', '#667085']) expect(log.some((l) => l.includes(light)), light).toBe(false);
@@ -205,6 +217,43 @@ describe('the overlay', () => {
     expect(origin).toBeGreaterThan(0);
     expect(sketch.slice(origin + 7, origin + 11)).toEqual(['stroke()', 'strokeStyle = "#9aa4b2"', 'lineWidth = 1', 'beginPath()']);
     expect(sketch.slice(-6)).toEqual(['strokeStyle = "#1b1f27"', 'lineWidth = 4.5', 'stroke()', 'strokeStyle = "#2f6fde"', 'lineWidth = 1.5', 'stroke()']);
+    // Every dashed outline (the open sketch, the switched-off body, where a dragged body is going)
+    // on a halo of its own, dashed as it is: they lie on a body's light grey too.
+    let dashes = 0;
+    log.forEach((l, i) => {
+      if (!/^setLineDash\(\[[45], 4\]\)$/.test(l)) return;
+      dashes++;
+      expect(log.slice(i + 1, i + 4), `${l} at ${i}`).toEqual(['strokeStyle = "#1b1f27"', 'lineWidth = 4.5', 'stroke()']);
+      expect(log[i + 4]).toMatch(/^strokeStyle = "#(6b7382|2f6fde)"$/);
+      expect(log.slice(i + 5, i + 8)).toEqual(['lineWidth = 1.5', 'stroke()', 'setLineDash([])']);
+    });
+    // Two a frame (the open sketch, the switched-off body), and where the body dragged and the one
+    // turned are going.
+    expect(dashes).toBe(7 * 2 + 2);
+    expect(frameOf(log, 'a body dragged').filter((l) => l === 'setLineDash([5, 4])')).toHaveLength(1);
+    // The selected rake's end squares: edged in its colour, then a light edge round that.
+    const rake = frameOf(log, 'the streak rake selected');
+    const squares = rake.flatMap((l, i) => (l.startsWith('strokeRect(') && rake[i - 1] === 'fillRect' + l.slice('strokeRect'.length) ? [i] : []));
+    expect(squares).toHaveLength(2);
+    const args = (l: string) => l.slice(l.indexOf('(') + 1, -1).split(', ').map(Number);
+    for (const i of squares) {
+      expect(rake.slice(i + 1, i + 3)).toEqual(['strokeStyle = "#e6e9ef"', 'lineWidth = 1']);
+      expect(rake[i + 3]).toMatch(/^strokeRect\(/);
+      const [x, y] = args(rake[i]);
+      const [ex, ey, ew, eh] = args(rake[i + 3]);
+      expect([ex - x, ey - y, ew, eh].map((v) => Math.round(v * 1e6) / 1e6)).toEqual([-1.5, -1.5, 13, 13]);
+    }
+  });
+
+  it('draws the rings where an edited sketch is open on the mark halo in dark, and as before in light', () => {
+    const ring = /^arc\([-\d.]+, [-\d.]+, 8, 0, 6\.283185307179586\)$/;
+    const after = (log: string[]) => log.flatMap((l, i) => (ring.test(l) ? [log.slice(i + 1, i + 7)] : []));
+    const dark = after(openSketchEdited(onScreen('dark')));
+    expect(dark).toHaveLength(2);
+    for (const a of dark) expect(a).toEqual(['strokeStyle = "#1b1f27"', 'lineWidth = 5', 'stroke()', 'strokeStyle = "#f97066"', 'lineWidth = 2', 'stroke()']);
+    const light = after(openSketchEdited(onScreen('light')));
+    expect(light).toHaveLength(2);
+    for (const a of light) expect(a.slice(0, 3)).toEqual(['strokeStyle = "#b42318"', 'lineWidth = 2', 'stroke()']);
   });
 
   it('draws the rakes in the same colours in both themes', () => {
