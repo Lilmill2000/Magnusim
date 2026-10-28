@@ -195,15 +195,18 @@ function whereName(p: PluginKeys, c: Command): string {
 /**
  * The question the person answers, in the words the CAD Part's own keybind tools ask with (its
  * assistant/tools/workspace.ts): "<plugin> · <command>: <keys now> → <keys after>", and each command
- * a Replace takes the key from after "; " in the same form. Its No is the app's Cancel.
+ * a Replace takes the key from after "; " in the same form, named with where it works ("Fit
+ * (everywhere)"). The command itself is named with where it works too when another command of the
+ * plugin has its label (two "Delete"s). Its No is the app's Cancel.
  */
 function question(p: PluginKeys, c: Command | null, action: string, keys: string[], took: Command[], after: (t: Command) => string[]): { title: string; copy: string; yes: string } {
   if (action === 'reset_all') {
     const kept = keptOffText(keptOffFor(p), displayCombo);
     return { title: 'Reset keybinds?', copy: `${p.name} · every command: its own keys → its default keys${kept ? ` (${kept.replace(/\.$/, '')})` : ''}`, yes: 'Reset all' };
   }
-  const line = (cmd: Command, from: readonly string[], to: readonly string[]) => `${p.name} · ${whereName(p, cmd)}: ${keysAsked(from)} → ${keysAsked(to)}`;
-  const copy = [line(c!, keysOf(p, c!.id), keys), ...took.map((t) => line(t, keysOf(p, t.id), after(t)))].join('; ');
+  const line = (name: string, from: readonly string[], to: readonly string[]) => `${p.name} · ${name}: ${keysAsked(from)} → ${keysAsked(to)}`;
+  const shared = commandsOf(p).some((o) => o.id !== c!.id && o.label === c!.label);
+  const copy = [line(shared ? whereName(p, c!) : c!.label, keysOf(p, c!.id), keys), ...took.map((t) => line(whereName(p, t), keysOf(p, t.id), after(t)))].join('; ');
   if (action === 'set') return { title: 'Change a keybind?', copy, yes: 'Change' };
   if (action === 'reset') return { title: 'Reset a keybind?', copy, yes: 'Reset' };
   return { title: 'Clear a keybind?', copy, yes: 'Clear' };

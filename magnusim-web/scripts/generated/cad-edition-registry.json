@@ -58,7 +58,7 @@
           "title": "Part",
           "icon": "M4 8l8-4 8 4v8l-8 4-8-4z M4 8l8 4 8-4 M12 12v8",
           "entry": "workspace/index.html",
-          "commands": "",
+          "commands": "workspace/commands.json",
           "commands_error": ""
         }
       ],

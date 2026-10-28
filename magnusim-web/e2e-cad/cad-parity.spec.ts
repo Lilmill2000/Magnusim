@@ -52,9 +52,22 @@ async function reach(page: Page, where: string, pid: string) {
       return;
     case 'grid_menu': {
       await home(page);
-      const grid = await page.locator('#home-grid').boundingBox();
-      // Empty grid, below the cards.
-      await page.mouse.click(grid!.x + grid!.width - 20, grid!.y + grid!.height - 20, { button: 'right' });
+      // A point of the grid with no card on it, however many projects the earlier specs made
+      // (the bottom-right corner has one when the last row is full).
+      const at = await page.evaluate(() => {
+        const grid = document.getElementById('home-grid');
+        const r = grid?.getBoundingClientRect();
+        if (!grid || !r) return null;
+        for (let y = r.bottom - 8; y > r.top; y -= 16) {
+          for (let x = r.right - 8; x > r.left; x -= 16) {
+            const hit = document.elementFromPoint(x, y);
+            if (hit && grid.contains(hit) && !hit.closest('.home-card')) return { x, y };
+          }
+        }
+        return null;
+      });
+      expect(at, 'an empty point of the Home grid').toBeTruthy();
+      await page.mouse.click(at!.x, at!.y, { button: 'right' });
       await expect(page.locator('#home-ctx-menu')).toBeVisible();
       return;
     }

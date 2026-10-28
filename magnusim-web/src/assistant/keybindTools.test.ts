@@ -166,7 +166,7 @@ describe('core__set_keybind', () => {
     const { req, progress } = invoke({});
     const out = await coreSetKeybind(set({ command: 'Line', keys: 'shift+k' }), req, rt);
     expect(out).toMatchObject({ ok: false, code: 'step_declined' });
-    expect(asked).toEqual([{ title: 'Change a keybind?', copy: 'Demo · Line (sketch): L → Shift+K', yes: 'Change' }]);
+    expect(asked).toEqual([{ title: 'Change a keybind?', copy: 'Demo · Line: L → Shift+K', yes: 'Change' }]);
     // The call waits for the person meanwhile (the turn's minutes stop).
     expect(progress[0]).toEqual(['Waiting for you to confirm the keybind change', true]);
     expect(server.calls).toEqual([]);
@@ -186,7 +186,7 @@ describe('core__set_keybind', () => {
     expect(await coreSetKeybind(set({ command: 'sketch.line', keys: 'F' }), invoke({}).req, rt)).toMatchObject({ ok: false, code: 'key_taken', message: '"KeyF" is already the key of Fit (Everywhere).' });
     expect(asked).toEqual([]);
     const out = await coreSetKeybind(set({ command: 'sketch.line', keys: 'F', replace: true }), invoke({}).req, rt);
-    expect(asked[0].copy).toBe('Demo · Line (sketch): L → F; Demo · Fit (everywhere): F → no key');
+    expect(asked[0].copy).toBe('Demo · Line: L → F; Demo · Fit (everywhere): F → no key');
     expect(out).toMatchObject({ ok: true, result: { data: { took: [{ id: 'view.fit', label: 'Fit', keys: [] }] } } });
     expect(server.prefs.demo[KEYBINDS_PREF]).toEqual({ 'sketch.line': ['KeyF'], 'view.fit': [] });
   });
@@ -207,8 +207,8 @@ describe('core__set_keybind', () => {
     expect(await coreSetKeybind(set({ command: 'view.fit', action: 'clear' }), invoke({}).req, rt)).toMatchObject({ ok: true });
     expect(await coreSetKeybind(set({ action: 'reset_all' }), invoke({}).req, rt)).toMatchObject({ ok: true, result: { data: { changed: true } } });
     expect(asked.map((a) => a.copy)).toEqual([
-      'Demo · Delete (everywhere): X → Delete, Backspace',
-      'Demo · Fit (everywhere): F → no key',
+      'Demo · Delete: X → Delete, Backspace',
+      'Demo · Fit: F → no key',
       'Demo · every command: its own keys → its default keys',
     ]);
     expect(server.prefs.demo[KEYBINDS_PREF]).toBeUndefined();
@@ -226,11 +226,32 @@ describe('core__set_keybind', () => {
     expect(asked).toEqual([]);
   });
 
+  it('a command whose label another one shares is named with where it works, as the CAD Part names it', async () => {
+    fakeKeysServer({
+      files: {
+        '/plugins/demo/workspace/commands.json': {
+          version: 1,
+          contexts: [
+            { id: 'sketch', label: 'Sketch' },
+            { id: 'model', label: 'Model' },
+          ],
+          commands: [
+            { id: 'sketch.delete', label: 'Delete', group: '', context: 'sketch', keys: ['Delete'] },
+            { id: 'model.delete', label: 'Delete', group: '', context: 'model', keys: ['Delete'] },
+          ],
+        },
+      },
+    });
+    const { rt, asked } = runtime(false);
+    await coreSetKeybind(set({ command: 'sketch.delete', keys: 'X' }), invoke({}).req, rt);
+    expect(asked[0].copy).toBe('Demo · Delete (sketch): Delete → X');
+  });
+
   it('the question names every key the command loses, as the CAD Part asks', async () => {
     fakeKeysServer();
     const { rt, asked } = runtime(false);
     await coreSetKeybind(set({ command: 'edit.delete', keys: 'D' }), invoke({}).req, rt);
-    expect(asked[0].copy).toBe('Demo · Delete (everywhere): Delete, Backspace → D');
+    expect(asked[0].copy).toBe('Demo · Delete: Delete, Backspace → D');
   });
 
   it('a change that moved while the person was asked is not made: changed', async () => {
@@ -304,8 +325,8 @@ describe('core__set_keybind', () => {
     vi.resetModules();
     const { pageKeysRuntime } = await import('./keybindTools');
     const signal = new AbortController().signal;
-    expect(await pageKeysRuntime().confirm({ title: 'Change a keybind?', copy: 'Demo · Line (sketch): L → K', yes: 'Change', signal })).toBe(false);
-    expect(calls).toEqual([{ title: 'Change a keybind?', copy: 'Demo · Line (sketch): L → K', yes: 'Change', signal, guard: true, safe: true }]);
+    expect(await pageKeysRuntime().confirm({ title: 'Change a keybind?', copy: 'Demo · Line: L → K', yes: 'Change', signal })).toBe(false);
+    expect(calls).toEqual([{ title: 'Change a keybind?', copy: 'Demo · Line: L → K', yes: 'Change', signal, guard: true, safe: true }]);
     vi.doUnmock('../workbench/dialogs');
     vi.resetModules();
   });
@@ -335,7 +356,7 @@ describe('core__set_keybind', () => {
     // The panel's key changed in Settings or another tab: Line may have Alt+K now.
     server.app = { 'app.assistant': ['Alt+KeyJ'] };
     await coreSetKeybind(set({ command: 'sketch.line', keys: 'Alt+K' }), invoke({}).req, rt);
-    expect(asked.map((a) => a.copy)).toEqual(['Demo · Line (sketch): L → Alt+K']);
+    expect(asked.map((a) => a.copy)).toEqual(['Demo · Line: L → Alt+K']);
   });
 
   it("a Reset that would bring back a default that is the Assistant panel's key now is refused, replace or not", async () => {
