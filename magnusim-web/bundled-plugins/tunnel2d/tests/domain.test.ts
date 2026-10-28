@@ -1,10 +1,12 @@
 // The tunnel's pixels on the GPU canvas (src/render/domain.ts) and the dark view's margins painted
 // by them (src/ui/overlay.ts), against the render shader's own test (src/sim/kernels.ts, fs) run
 // pixel by pixel in f32 as a GPU runs it, with and without a fused multiply-add: every pixel the
-// shader leaves as the light margin is under the dark margin or the ring at the wall, and what is
-// painted over the tunnel is only its edge. At device pixel ratios 1, 1.25, 1.5 and 2: zoomed out,
-// zoomed in, panned partly and wholly off the canvas, walls on pixel centres and within a few
-// roundings of one.
+// shader leaves as the light margin is under the dark margin fill, the ring at the wall lies between
+// it and the flow (no margin pixel next to one the overlay leaves clear: both canvases are resampled
+// at a fractional device pixel ratio), and what is painted over the tunnel is only its edge. At
+// device pixel ratios 1, 1.25, 1.5 and 2: zoomed out, zoomed in, panned partly and wholly off the
+// canvas, walls on pixel centres and within a few roundings of one, and fitted (the outlet's wall
+// on a pixel centre, which the two orders put either side).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { domainRectPx, type Drawn } from '../src/render/domain';
@@ -17,21 +19,28 @@ const LENGTH = 8;
 const NX = 256;
 const NY = 128;
 const DX = LENGTH / NX;
+const HEIGHT = NY * DX;
 /** The view's box (CSS px). */
 const BOX = { w: 160, h: 100 };
 const DPRS = [1, 1.25, 1.5, 2];
 
-/** The frame the engine draws for a view (its centre and metres per CSS px), as it records it. */
-function drawnFor(dpr: number, v: { cx: number; cy: number; mpp: number }): Drawn {
+/** The frame the engine draws for a view (its centre and metres per CSS px) of a box (CSS px), as it records it. */
+function drawnFor(dpr: number, v: { cx: number; cy: number; mpp: number }, box = BOX): Drawn {
   return {
     scale: f(v.mpp / dpr / DX),
-    ox: f((v.cx - (BOX.w / 2) * v.mpp) / DX - 0.5),
-    oy: f((v.cy + (BOX.h / 2) * v.mpp) / DX - 0.5),
+    ox: f((v.cx - (box.w / 2) * v.mpp) / DX - 0.5),
+    oy: f((v.cy + (box.h / 2) * v.mpp) / DX - 0.5),
     nx: NX,
     ny: NY,
-    w: Math.round(BOX.w * dpr),
-    h: Math.round(BOX.h * dpr),
+    w: Math.round(box.w * dpr),
+    h: Math.round(box.h * dpr),
   };
+}
+
+/** The frame after a fit (src/ui/Viewport.tsx, fitView) of a w x h CSS px view: the tunnel centred, 16 CSS px clear of the sides that limit it. */
+function fitted(dpr: number, w: number, h: number): Drawn {
+  const mpp = Math.max(LENGTH / Math.max(50, w - 32), HEIGHT / Math.max(50, h - 32));
+  return drawnFor(dpr, { cx: LENGTH / 2, cy: HEIGHT / 2, mpp }, { w, h });
 }
 
 /** The shader's test for a column (sign 1) or a row (sign -1): whether its pixel centres' lattice coordinate is off the tunnel. */
@@ -83,10 +92,11 @@ const DARK: OverlayColours = {
 };
 
 /**
- * Paints the dark margins of one frame and checks them in both f32 orders: the problems found, and
- * how many of the rectangle's edges domainRectPx put a pixel off the shader's (a tie).
+ * Paints the dark margins of one frame and checks them in both f32 orders: the problems found, how
+ * many of the rectangle's edges domainRectPx put a pixel off the shader's (a tie), and whether the
+ * two orders put some pixel either side (`split`).
  */
-function check(d: Drawn, dpr: number, label: string): { problems: string[]; ties: number } {
+function check(d: Drawn, dpr: number, label: string): { problems: string[]; ties: number; split: boolean } {
   const log: string[] = [];
   const st: OverlayState = {
     view: { w: d.w / dpr, h: d.h / dpr, dpr },
@@ -102,11 +112,24 @@ function check(d: Drawn, dpr: number, label: string): { problems: string[]; ties
   const r = domainRectPx(d);
   const t = Math.max(1, Math.round(dpr));
   const problems: string[] = [];
+  // No margin pixel next to a clear one, corners included: the ring lies between them.
+  for (let j = 0; j < d.h; j++) {
+    for (let i = 0; i < d.w; i++) {
+      if (painted[j * d.w + i] !== 'm') continue;
+      for (let b = Math.max(0, j - 1); b <= Math.min(d.h - 1, j + 1); b++) {
+        for (let a = Math.max(0, i - 1); a <= Math.min(d.w - 1, i + 1); a++) {
+          if (painted[b * d.w + a] === '') problems.push(`${label} (dpr ${dpr}): margin pixel ${i}, ${j} next to the clear pixel ${a}, ${b}`);
+        }
+      }
+    }
+  }
   let ties = 0;
+  const offs: boolean[][] = [];
   for (const fma of [false, true]) {
     const at = `${label} (dpr ${dpr}, ${fma ? 'fused' : 'two roundings'})`;
     const colOff = Array.from({ length: d.w }, (_, i) => offAt(d.ox, d.scale, i, d.nx, 1, fma));
     const rowOff = Array.from({ length: d.h }, (_, j) => offAt(d.oy, d.scale, j, d.ny, -1, fma));
+    offs.push([...colOff, ...rowOff]);
     // Within k px of a margin column or row.
     const near = (i: number, j: number, k: number) => {
       for (let q = 1; q <= k; q++) if ((i - q >= 0 && colOff[i - q]) || (i + q < d.w && colOff[i + q]) || (j - q >= 0 && rowOff[j - q]) || (j + q < d.h && rowOff[j + q])) return true;
@@ -116,7 +139,7 @@ function check(d: Drawn, dpr: number, label: string): { problems: string[]; ties
       for (let i = 0; i < d.w; i++) {
         const off = colOff[i] || rowOff[j];
         const p = painted[j * d.w + i];
-        if (off && p === '') problems.push(`${at}: the shader's margin pixel ${i}, ${j} is left light`);
+        if (off && p !== 'm') problems.push(`${at}: the shader's margin pixel ${i}, ${j} is ${p ? 'only under the ring' : 'left light'}`);
         // Over the tunnel: a pixel next to the wall (a tie), or the ring's width in from it.
         if (!off && p === 'm' && !near(i, j, 1)) problems.push(`${at}: tunnel pixel ${i}, ${j} painted as margin`);
         if (!off && p === 'w' && !near(i, j, t + 1)) problems.push(`${at}: ring pixel ${i}, ${j} away from the wall`);
@@ -138,7 +161,7 @@ function check(d: Drawn, dpr: number, label: string): { problems: string[]; ties
       if (a !== b) ties++;
     }
   }
-  return { problems, ties };
+  return { problems, ties, split: offs[0].some((o, k) => o !== offs[1][k]) };
 }
 
 /** A small, repeatable random sequence (mulberry32). */
@@ -192,20 +215,77 @@ describe("the tunnel's pixels and the dark margins", () => {
   it('and with walls within a few roundings of a pixel centre, either side', () => {
     const next = random(20261028);
     const problems: string[] = [];
-    for (let n = 0; n < 48; n++) {
+    let split = 0;
+    for (let n = 0; n < 96; n++) {
       const dpr = DPRS[n % DPRS.length];
       const w = Math.round(BOX.w * dpr);
       const h = Math.round(BOX.h * dpr);
       // Cells per device px, then the left wall (lattice -0.5) on column k's centre and the top wall
-      // (n - 0.5) on row k's, each moved a few f32 steps.
+      // (n - 0.5) on row k's; or the right wall (n - 0.5) on column w - k's and the bottom wall
+      // (-0.5) on row h - k's. Each moved a few f32 steps.
       const s = f(0.15 + 1.5 * next());
       const k = 3 + Math.floor(next() * 20);
       const nx = 20 + Math.floor(next() * 60);
       const ny = 10 + Math.floor(next() * 40);
-      const ox = ulps(f(-0.5 - (k + 0.5) * s), Math.round(next() * 6 - 3));
-      const oy = ulps(f(ny - 0.5 + (k + 0.5) * s), Math.round(next() * 6 - 3));
-      problems.push(...check({ scale: s, ox, oy, nx, ny, w, h }, dpr, `near tie ${n}`).problems);
+      const [ox, oy] =
+        n % 2 === 0
+          ? [f(-0.5 - (k + 0.5) * s), f(ny - 0.5 + (k + 0.5) * s)]
+          : [f(nx - 0.5 - (w - k + 0.5) * s), f(-0.5 + (h - k + 0.5) * s)];
+      const c = check({ scale: s, ox: ulps(ox, Math.round(next() * 6 - 3)), oy: ulps(oy, Math.round(next() * 6 - 3)), nx, ny, w, h }, dpr, `near tie ${n}`);
+      problems.push(...c.problems);
+      if (c.split) split++;
     }
     expect(problems).toEqual([]);
+    // Some of them a pixel the two orders put either side.
+    expect(split).toBeGreaterThan(0);
+  });
+
+  it("after a fit that puts the outlet's wall on a pixel centre: the last column is the margin's in one order, the tunnel's in the other", () => {
+    // An 8 m x 4 m tunnel, 646 x 355 CSS px at 1.25 and 330.5 x 200 at 1 (a 1 px ring): with the
+    // product rounded first the shader draws the outlet's last column as margin, fused as the flow.
+    const problems: string[] = [];
+    for (const [dpr, w, h] of [
+      [1.25, 646, 355],
+      [1, 330.5, 200],
+    ]) {
+      const c = check(fitted(dpr, w, h), dpr, `fitted ${w} x ${h}`);
+      expect(c.split, `fitted ${w} x ${h} at ${dpr}: the orders differ`).toBe(true);
+      problems.push(...c.problems);
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('after a fit at any width, the rectangle holds no pixel the shader draws as margin, in either order', () => {
+    // Every half CSS px from 300 to 1600 at ratios 1 and 1.25 (a 1 px ring): the columns and rows
+    // alone (the shader's test is one per axis).
+    const problems: string[] = [];
+    let split = 0;
+    for (const dpr of [1, 1.25]) {
+      for (let w = 300; w <= 1600; w += 0.5) {
+        const d = fitted(dpr, w, 355);
+        const r = domainRectPx(d);
+        if (!r) {
+          problems.push(`${w} at ${dpr}: no tunnel`);
+          continue;
+        }
+        const offs = [false, true].map((fma) => [
+          Array.from({ length: d.w }, (_, i) => offAt(d.ox, d.scale, i, d.nx, 1, fma)),
+          Array.from({ length: d.h }, (_, j) => offAt(d.oy, d.scale, j, d.ny, -1, fma)),
+        ]);
+        if (offs[0].some((axis, a) => axis.some((o, i) => o !== offs[1][a][i]))) split++;
+        for (const [cols, rows] of offs) {
+          for (const [lo, hi, off, what] of [
+            [r.x0, r.x1, cols, 'column'],
+            [r.y0, r.y1, rows, 'row'],
+          ] as const) {
+            for (let i = lo; i < hi; i++) if (off[i]) problems.push(`${w} at ${dpr}: ${what} ${i} is the margin's`);
+            // At most a pixel of the tunnel's left to the margin at each edge.
+            if (off.indexOf(false) < lo - 1 || off.lastIndexOf(false) + 1 > hi + 1) problems.push(`${w} at ${dpr}: ${what}s ${lo}..${hi}, the shader's ${off.indexOf(false)}..${off.lastIndexOf(false) + 1}`);
+          }
+        }
+      }
+    }
+    expect(problems.slice(0, 10)).toEqual([]);
+    expect(split, 'fits the two orders draw differently').toBeGreaterThan(0);
   });
 });

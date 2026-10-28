@@ -125,9 +125,9 @@ export function paintOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: O
 
 /**
  * The view's margins (device px), and a ring `t` px wide on the tunnel's outermost pixels: it keeps
- * the wall in sight on a dark look (the plain or tank view, a map's dark end), and the overlay stays
- * opaque past the wall, so none of the GPU's light margin shows beside it (a pixel the shader's f32
- * test put either side, or both canvases resampled at a fractional device pixel ratio).
+ * the wall in sight on a dark look (the plain or tank view, a map's dark end), and it lies between
+ * the margin fill and the flow, so no pixel the GPU drew as its light margin is next to one the
+ * overlay leaves clear (both canvases are resampled at a fractional device pixel ratio).
  */
 function paintMargins(g: CanvasRenderingContext2D, d: Drawn, margin: string, wall: string | null, t: number) {
   g.setTransform(1, 0, 0, 1, 0, 0);
