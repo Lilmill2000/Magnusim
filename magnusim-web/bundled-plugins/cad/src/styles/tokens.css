@@ -24,7 +24,7 @@
   /* Cards and panels (style.css:437-451, 2948-2956) */
 
   /* Tree (style.css:710-805, 2531-2540, 2634-2639) */
-  --cad-tree-selected: #d7e8ff;
+  --cad-tree-selected: var(--mg-active-bg, #d7e8ff);
   --cad-tree-twisty: var(--mg-text-muted, #667085);
   --cad-tree-head: var(--mg-text-body, #344054);
   --cad-tree-section: var(--mg-text-dim, #4a5160);
@@ -37,8 +37,8 @@
   --cad-toolbar-bg: var(--mg-surface-muted, #f2f4f7);
   --cad-toolbar-sep: var(--mg-header-border, #d5d8de);
   --cad-toolbar-label: var(--mg-text-muted, #667085);
-  --cad-toolbar-active-bg: #d7e8ff;
-  --cad-toolbar-active-border: #9bc2f0;
+  --cad-toolbar-active-bg: var(--mg-active-bg, #d7e8ff);
+  --cad-toolbar-active-border: var(--mg-active-border, #9bc2f0);
   --cad-toolbar-active-icon: var(--mg-primary-strong, #1a4fbf);
   /* v0.5.0 ribbon: every toolbar size follows this factor (Toolbar.tsx setToolbarScale; the host's icon size). */
   --cad-toolbar-scale: 1;
@@ -143,12 +143,8 @@
  * the tooltip is dark in both, and the marks read on both backgrounds.
  */
 [data-theme="dark"] {
-  --cad-tree-selected: #233f69;
   --cad-tree-section-top: #2c323d;
 
-  /* The host's own toolbar has no dark set yet: these are CAD's until it does. */
-  --cad-toolbar-active-bg: #233f69;
-  --cad-toolbar-active-border: #3f6db8;
   /* 1.17:1 on the host's dark toolbar (--mg-surface-muted #262c36); the icon buttons' hover
      is only 1.06:1 there, and the dark --mg-surface-2 1.04:1. */
   --cad-toolbar-hover-bg: #2f3746;

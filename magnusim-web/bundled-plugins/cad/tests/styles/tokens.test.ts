@@ -112,6 +112,14 @@ function cssFiles(): { rel: string; css: string }[] {
   return out;
 }
 
+/** The core's stylesheet (magnusim-web/src/style.css), whose recipes CAD's copy. */
+const CORE_CSS = join(PLUGIN, '../../src/style.css');
+
+/** Every rule of a stylesheet, comments left out: its selector (whitespace collapsed) and its declarations. */
+function rulesOf(css: string): { sel: string; body: string }[] {
+  return [...stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].replace(/\s+/g, ' ').trim(), body: m[2] }));
+}
+
 const same = (a: string | null, b: string) => (a ?? '').replace(/\s+/g, ' ').toLowerCase() === b.replace(/\s+/g, ' ').toLowerCase() || (a === '#fff' && b === '#ffffff');
 
 describe('CAD tokens: the light set', () => {
@@ -185,9 +193,7 @@ describe('CAD tokens: the dark set', () => {
   });
 
   it("shows a toolbar button's hover on the host's dark toolbar (its own token, not the panels' hover)", () => {
-    const ui = stripComments(readFileSync(join(PLUGIN, 'src/ui/ui.css'), 'utf8'));
-    const rules = [...ui.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].replace(/\s+/g, ' ').trim(), body: m[2] }));
-    const toolbar = rules.filter((r) => /\.tb-/.test(r.sel));
+    const toolbar = rulesOf(readFileSync(join(PLUGIN, 'src/ui/ui.css'), 'utf8')).filter((r) => /\.tb-/.test(r.sel));
     // The button under the pointer, a split pair's either half, and an open flyout arrow, More or group menu.
     expect(toolbar.filter((r) => /background: var\(--cad-toolbar-hover-bg\);/.test(r.body)).map((r) => r.sel)).toEqual([
       '.tb-btn:hover',
@@ -201,6 +207,25 @@ describe('CAD tokens: the dark set', () => {
     expect(themeValue('--cad-toolbar-hover-bg', 'light')).toBe(LIGHT_BEFORE['--cad-icon-btn-hover-bg']);
     expect(contrast(themeValue('--cad-toolbar-hover-bg', 'dark')!, themeValue('--cad-toolbar-bg', 'dark')!)).toBeGreaterThanOrEqual(1.15);
     expect(contrast(themeValue('--mg-text-strong', 'dark')!, themeValue('--cad-toolbar-hover-bg', 'dark')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("paints a selected tree row and an active toolbar button in the core's colours, in both themes", () => {
+    // CAD's copies of the core's recipes (style.css .tree-node.selected > .tree-row, .tb-btn.is-active).
+    const core = rulesOf(readFileSync(CORE_CSS, 'utf8'));
+    const host = hostTokens();
+    const coreValue = (sel: string, prop: string, theme: 'light' | 'dark') => {
+      const body = core.find((r) => r.sel === sel)?.body ?? '';
+      const v = new RegExp(`(?:^|;)\\s*${prop}:\\s*([^;]+);`).exec(body)?.[1];
+      expect(v, `the core's ${sel} { ${prop} }`).toBeTruthy();
+      return resolveVars(v!, (n) => (theme === 'dark' ? host.dark : host.light).get(n));
+    };
+    for (const theme of ['light', 'dark'] as const)
+      for (const [sel, prop, token] of [
+        ['.tree-node.selected > .tree-row', 'background', '--cad-tree-selected'],
+        ['.tb-btn.is-active', 'background', '--cad-toolbar-active-bg'],
+        ['.tb-btn.is-active', 'border-color', '--cad-toolbar-active-border'],
+      ] as const)
+        expect(themeValue(token, theme), `${theme} ${token}`).toBe(coreValue(sel, prop, theme));
   });
 
   it('reads in dark: text at least 4.5:1 on its background, icons and marks at least 3:1', () => {

@@ -31,7 +31,9 @@
 //    --mg-danger is given here as its newer theme.css will (this host has no dark set yet).
 //  - dark-chrome: the toolbar takes the host's dark --mg-surface-muted (CAD has no dark value of
 //    its own for it), and a button under the pointer stands off it (review of the rebase: the
-//    icon buttons' hover was 1.06:1 there); back in light every colour is as before.
+//    icon buttons' hover was 1.06:1 there); a selected tree row and a pressed toolbar button are
+//    the host's --mg-active-bg / -border, as the core's (they were CAD's own blue in dark); back
+//    in light each is as before.
 //  - dark-sketch-picture: in sketch mode (review round 1: only model mode was pictured dark), the
 //    view's own picture (the Assistant's and the Picture tool's path) taken while dark, E2 (c) or
 //    (b) with its rims, is the one taken in light, and the view shows no light frame meanwhile.
@@ -797,28 +799,47 @@ test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable 
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-chrome the toolbar is the host's dark one, and a button under the pointer stands off it in dark as in light", async ({ page, request }) => {
+test("cad:dark-chrome the toolbar is the host's dark one, a button under the pointer stands off it, and a selected row and an active button are the core's blue, in dark as in light", async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const bar = frame.locator('[data-cad-toolbar]');
+  // A selected tree row, and the Picture tool open (its toolbar button pressed).
+  const row = frame.locator('[data-tree-node="origin:top"]');
+  await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
+  await expect(row).toHaveClass(/selected/);
+  await runCommand(frame, 'file.picture');
+  await expect(frame.locator('[data-cad-panel="tool"]')).toBeVisible();
+  const active = bar.locator('.tb-btn.is-active').first();
+  await expect(active).toBeVisible();
+  await expect(row).toHaveClass(/selected/);
   const btn = bar.locator('.tb-btn[data-command]:not(.is-disabled):not(.is-active):not(.is-primary)').filter({ visible: true }).first();
   const bg = (l: Locator) => l.evaluate((el) => getComputedStyle(el).backgroundColor);
-  /** The toolbar's background, and a button's away from the pointer and under it. */
+  /** The toolbar's background, a button's away from the pointer and under it, the selected row's and the pressed button's. */
   const looks = async () => {
     await page.mouse.move(5, 5);
     const rest = await bg(btn);
     await btn.hover();
     const hover = await bg(btn);
     await page.mouse.move(5, 5);
-    return { bar: await bg(bar), rest, hover };
+    return {
+      bar: await bg(bar),
+      rest,
+      hover,
+      selected: await bg(frame.locator('[data-tree-node="origin:top"] > .tree-row')),
+      active: await active.evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, border: getComputedStyle(el).borderTopColor })),
+    };
   };
   const rgb = (c: string): RGB => (c.match(/\d+/g) ?? []).slice(0, 3).map(Number) as RGB;
   const light = await looks();
-  // Light as before: the icon buttons' faint hover on the core's toolbar grey.
-  expect(light).toEqual({ bar: cssRgb('#f2f4f7'), rest: 'rgba(0, 0, 0, 0)', hover: cssRgb('#eef0f4') });
+  // Light as before: the icon buttons' faint hover on the core's toolbar grey, the core's active blue.
+  expect(light).toEqual({ bar: cssRgb('#f2f4f7'), rest: 'rgba(0, 0, 0, 0)', hover: cssRgb('#eef0f4'), selected: cssRgb('#d7e8ff'), active: { bg: cssRgb('#d7e8ff'), border: cssRgb('#9bc2f0') } });
   await appearance(page, 'dark');
   const dark = await looks();
-  // The host's dark set is live in the frame: the toolbar is its dark --mg-surface-muted.
-  expect(dark.bar).toBe(cssRgb(hostTokens().dark.get('--mg-surface-muted')!));
+  // The host's dark set is live in the frame: the toolbar is its dark --mg-surface-muted, and the
+  // selected row and the pressed button its dark --mg-active-bg / -border, as the core's tree and toolbar.
+  const host = hostTokens().dark;
+  expect(dark.bar).toBe(cssRgb(host.get('--mg-surface-muted')!));
+  expect(dark.selected).toBe(cssRgb(host.get('--mg-active-bg')!));
+  expect(dark.active).toEqual({ bg: cssRgb(host.get('--mg-active-bg')!), border: cssRgb(host.get('--mg-active-border')!) });
   expect(dark.hover).toBe(cssRgb(themeValue('--cad-toolbar-hover-bg', 'dark')!));
   expect(contrastOf(rgb(dark.hover), rgb(dark.bar)), 'the hover on the dark toolbar').toBeGreaterThanOrEqual(1.15);
   await appearance(page, 'light');
