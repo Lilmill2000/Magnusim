@@ -3,7 +3,7 @@
 // 'appearance' event followed, and the values CAD takes from what a host sends.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it, vi } from 'vitest';
-import { appearanceOf, createBridge, LIGHT_APPEARANCE, pushAppearance } from '../../src/lib/bridge';
+import { appearanceOf, createBridge, LIGHT_APPEARANCE } from '../../src/lib/bridge';
 import { createFakeWorkspace } from '../fakes/workspace-sdk';
 
 describe('Bridge appearance', () => {
@@ -48,22 +48,23 @@ describe('Bridge appearance', () => {
     for (const s of [0, -1, 9, Number.NaN, '1.25']) expect(appearanceOf({ iconScale: s }).iconScale).toBe(1);
   });
 
-  it('takes a pushed appearance (the test handle) as the host would send it, on any host', () => {
-    const b = createBridge(createFakeWorkspace());
+  it("takes the host's event as CAD takes any appearance, and a listener that throws does not stop the others", () => {
+    const ws = createFakeWorkspace({ appearance: { theme: 'light', preference: 'light', textScale: 1, iconScale: 1 } });
+    const b = createBridge(ws);
     const fn = vi.fn();
     b.onAppearance(fn);
-    pushAppearance(b, { theme: 'dark', iconScale: 1.5 });
+    ws.push('appearance', { theme: 'dark', iconScale: 1.5 });
     expect(fn).toHaveBeenCalledWith({ theme: 'dark', preference: 'dark', textScale: 1, iconScale: 1.5 });
     expect(b.theme()).toBe('dark');
-    // A listener that throws does not stop the others.
     const later = vi.fn();
     b.onAppearance(() => {
       throw new Error('boom');
     });
     b.onAppearance(later);
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    pushAppearance(b, { theme: 'light' });
+    ws.push('appearance', { theme: 'light' });
     expect(later).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledTimes(1);
     err.mockRestore();
   });
 });

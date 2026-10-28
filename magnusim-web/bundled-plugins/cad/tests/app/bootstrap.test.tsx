@@ -139,9 +139,10 @@ describe('bootstrap', () => {
     act(() => ws.push('appearance', { theme: 'light', preference: 'light', textScale: 1, iconScale: 1 }));
     expect(views.palettes.map((p) => p.name)).toEqual(['dark', 'light']);
     expect(document.documentElement.style.getPropertyValue('--cad-toolbar-scale')).toBe('');
-    // The test handle's push is the same path (a host with no appearance yet, e2e).
-    act(() => window.__CAD__!.appearance!.push({ theme: 'dark' }));
+    // Dark again on the next change; the test handle only reads (e2e drives the host's own look).
+    act(() => ws.push('appearance', { theme: 'dark', preference: 'dark', textScale: 1, iconScale: 1 }));
     expect(views.palettes.map((p) => p.name)).toEqual(['dark', 'light', 'dark']);
+    expect(window.__CAD__!.appearance).not.toHaveProperty('push');
     // One dark set (Daniel picked E1 and E2): nothing to switch.
     expect(window.__CAD__!.appearance).not.toHaveProperty('darkLines');
   });

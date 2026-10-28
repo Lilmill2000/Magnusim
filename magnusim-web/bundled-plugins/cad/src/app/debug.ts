@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
-import { pushAppearance, type Appearance } from '../lib/bridge';
+import type { Appearance } from '../lib/bridge';
 import type { MarkPalette } from '../viewport/palette';
 import type { AppearanceControl } from './appearance';
 import type { AssistantTestHandle } from '../assistant/testing';
@@ -43,18 +43,16 @@ export interface CadTestHandle {
   };
 }
 
-/** window.__CAD__.appearance: the dark set's test path (e2e). */
+/**
+ * window.__CAD__.appearance: what the dark set's e2e reads (the look itself comes from the host:
+ * the person's pref, and Settings → Appearance).
+ */
 export interface CadAppearanceHandle {
   /**
    * The appearance the Part has (its icon scale is the toolbar's), and the 3D view's palette now:
    * its name, its background, and whether its marks follow what is under them (E2: dark).
    */
   get(): { appearance: Appearance; palette: MarkPalette['name']; background: number; followsFaces: boolean };
-  /**
-   * Deliver an appearance as the host's SDK does with its 'appearance' event (a host with none yet
-   * included). The SDK also writes data-theme and the scales on <html>: the caller does that too.
-   */
-  push(a: Partial<Appearance>): void;
 }
 
 /** The appearance part of the test handle, over the app's appearance control. */
@@ -64,7 +62,6 @@ export function appearanceTestHandle(services: AppServices, control: AppearanceC
       const p = services.viewport.get().handle?.palette?.() ?? control.palette();
       return { appearance: { ...control.appearance() }, palette: p.name, background: p.background, followsFaces: p.face !== null };
     },
-    push: (a) => pushAppearance(services.bridge, { ...control.appearance(), ...a }),
   };
 }
 

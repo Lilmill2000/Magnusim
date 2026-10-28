@@ -73,7 +73,7 @@ describe('the appearance in the Part', () => {
     a.viewport.set({ handle: w.handle });
     expect(w.given).toEqual([DARK]);
     expect(a.control.palette()).toBe(DARK);
-    // CAD never writes data-theme or color-scheme: the SDK does.
+    // CAD never writes data-theme (the SDK does) or color-scheme (theme.css takes it from data-theme).
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
     expect(document.documentElement.style.colorScheme).toBe('');
     a.done();

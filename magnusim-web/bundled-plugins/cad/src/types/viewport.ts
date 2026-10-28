@@ -188,6 +188,13 @@ export interface ViewportStats {
   contextLost?: boolean;
   /** The camera is where the last framing put it: nobody orbited, panned or zoomed since. */
   framed?: boolean;
+  /**
+   * What the view's frames on screen were drawn in, from its very first: the palette (its name)
+   * and the clear colour, one entry per change with the frame it starts at (the first 64 changes;
+   * pictures, drawn off screen, are not frames). A view dark from its start has one dark entry at
+   * frame 0 (e2e cad:dark-first-paint).
+   */
+  looks?: { frame: number; palette: MarkPalette['name']; background: number }[];
 }
 
 /** Directions of ViewportHandle.snapshot: the standard views but Home, and iso from back-left-top. */

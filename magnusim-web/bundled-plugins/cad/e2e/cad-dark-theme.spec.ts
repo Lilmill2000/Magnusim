@@ -1,9 +1,15 @@
-// The dark set (owner decisions D1-D4): the Part follows the host's dark appearance, and its
-// pictures stay light. This host's SDK has no appearance yet: setAppearance gives it as the newer
-// SDK will (<html>'s data-theme, color-scheme and scales, then the 'appearance' event through the
-// bridge's own path). The frame's /plugin-sdk/theme.css already has the host's dark --mg-* set, so
-// a dark <html> switches the host's tokens and chrome along with CAD's own; only the SDK's part is
-// given here.
+// The dark set (owner decisions D1-D4): the Part follows the host's dark appearance (unreleased
+// 1.9), and its pictures stay light. The look is the host's own, set as a person sets it: the pref
+// saved before a Part opens (saveLook: the page is dark from its first paint), and Settings →
+// Appearance in a second window of the browser with the Part open (pickTheme): the app sends the
+// frame its 'appearance' event, the frame's SDK writes <html>'s data-theme, and the frame's
+// /plugin-sdk/theme.css has the host's dark --mg-* set, so the host's tokens and chrome switch
+// along with CAD's own. The look is one pref for the whole server: every test here is tagged
+// serial (it runs alone), and after each the look is light again (putLookBackAfterSerialTests).
+//  - dark-first-paint: with the look dark before the Part opens, its page is dark as served (its
+//    SDK held back: <html>, its colour scheme and the page's background), its view's every frame
+//    from the first is in the dark palette on the dark background (none light), and its pictures
+//    are light: the same picture once the look is light.
 //  - dark-model: the view's background is #1b1f27 (its CSS and the canvas), the edges are E1's
 //    #e6e9ef (Daniel: option a), a finished sketch beside the block (over the background) its
 //    dark inks, and the faces are the pixels they were (D2); back to light, every colour of the
@@ -72,9 +78,12 @@
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
-import { addSketch, addSolid, featureRowNamed, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, setAppearance, watchPage, workspaceFrame } from './helpers';
+import { addSketch, addSolid, featureRowNamed, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, pickTheme, putLookBackAfterSerialTests, runCommand, saveLook, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
 import { hostTokens, themeValue } from '../tests/styles/css-tokens';
+
+// The look is the server's (one pref for every test on it): light at 100% again after each test.
+putLookBackAfterSerialTests();
 
 type V3 = [number, number, number];
 type RGB = [number, number, number];
@@ -121,9 +130,12 @@ async function still(page: Page) {
   });
 }
 
-/** Switch the appearance and wait two frames (the view draws in the new colours on its next frame). */
+/**
+ * Switch the theme as a person does (Settings → Appearance in a second window) and wait two frames
+ * once the Part has it (the view draws in the new colours on its next frame).
+ */
 async function appearance(page: Page, theme: 'light' | 'dark') {
-  await setAppearance(page, theme);
+  await pickTheme(page, theme);
   await still(page);
 }
 
@@ -241,11 +253,111 @@ const SKETCH: V3[] = [
   [40, 20, 0],
 ];
 
-test('cad:dark-model the view turns dark with #e6e9ef edges and light sketch lines, the faces as they were; back to light every colour is as before', async ({ page, request }) => {
+test("cad:dark-first-paint with the look dark before the Part opens, its page is dark as served and its view's every frame is dark from the first; its pictures are light", { tag: '@serial' }, async ({ page, request }) => {
+  await saveLook(request, 'dark');
+  const seen = await watchPage(page);
+  await openProject(page, await newProject(request));
+  // The Part's SDK held back: its page as the server serves it, before any of CAD's code runs.
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  await page.route(
+    (url) => url.pathname === '/plugin-sdk/workspace.js',
+    async (route) => {
+      await held;
+      await route.continue();
+    },
+  );
+  await newPartFromTree(page, 'Part 1');
+  await expect.poll(() => page.frames().some((fr) => /\/plugins\/cad\/workspace\//.test(fr.url())), { timeout: 60_000 }).toBe(true);
+  const served = workspaceFrame(page);
+  await served.waitForFunction(() => !!document.body && getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)');
+  expect(
+    await served.evaluate(() => ({
+      theme: document.documentElement.dataset.theme,
+      scheme: getComputedStyle(document.documentElement).colorScheme,
+      page: getComputedStyle(document.body).backgroundColor,
+      app: document.querySelector('[data-cad-app]') !== null,
+    })),
+    'the page as served, before CAD runs: dark',
+  ).toEqual({ theme: 'dark', scheme: 'dark', page: 'rgb(27, 31, 39)', app: false });
+  // Let it through (the route stays: it passes each request on at once now).
+  release();
+  const frame = await partOpened(page);
+  await expect(page.getByText("didn't start")).toHaveCount(0);
+  await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+  const f = workspaceFrame(page);
+  expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get())).toEqual({
+    appearance: { theme: 'dark', preference: 'dark', textScale: 1, iconScale: 1 },
+    palette: 'dark',
+    background: 0x1b1f27,
+    followsFaces: true,
+  });
+  // Every frame the view has drawn on screen, from its very first: the dark palette on the dark background.
+  const looks = () => f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.stats().looks as { frame: number; palette: string; background: number }[]);
+  const DARK_ONLY = [{ frame: 0, palette: 'dark', background: 0x1b1f27 }];
+  expect(await looks(), "the view's frames from its first").toEqual(DARK_ONLY);
+  await addSolid(page, { size: [20, 20, 20] });
+  await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.fit({ animate: false }));
+  await still(page);
+  expect(await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.stats().frames)).toBeGreaterThan(1);
+  expect(await looks(), 'with a part in it too').toEqual(DARK_ONLY);
+  expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
+  const block = await shoot(page, await clipAround(page, BLOCK));
+  let pale = 0;
+  let nearBlack = 0;
+  for (let i = 0; i < block.data.length; i += 4) {
+    if (dist(block.data, i, PALE) <= 24) pale++;
+    if (dist(block.data, i, LIGHT_EDGE) <= 8) nearBlack++;
+  }
+  expect(pale, "the block's edges are light").toBeGreaterThan(40);
+  expect(nearBlack, 'no near-black edge').toBe(0);
+  // The view's own picture (the Assistant's and the Picture tool's path): light, then the same in light.
+  const snapshot = (name: string) =>
+    f.evaluate((name) => {
+      const r = (window as unknown as W).__CAD__.services.viewport.get().handle.snapshot({ view: 'iso', width: 320, height: 240, hide: [], section: null });
+      const d = r.rgba as Uint8ClampedArray;
+      (window as unknown as Record<string, Uint8ClampedArray>)[name] = d;
+      const near = (i: number, rgb: number[], t: number) => Math.abs(d[i] - rgb[0]) <= t && Math.abs(d[i + 1] - rgb[1]) <= t && Math.abs(d[i + 2] - rgb[2]) <= t;
+      let light = 0;
+      let dark = 0;
+      let black = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (near(i, [0xf0, 0xf2, 0xf7], 3)) light++;
+        if (near(i, [0x1b, 0x1f, 0x27], 6)) dark++;
+        if (d[i] < 60 && d[i + 1] < 60 && d[i + 2] < 60) black++;
+      }
+      const n = d.length / 4;
+      return { light: light / n, dark: dark / n, black: black / n };
+    }, name);
+  const inDark = await snapshot('__darkSnap');
+  expect(inDark.light, 'the light background fills most of the picture').toBeGreaterThan(0.4);
+  expect(inDark.black, 'near-black edges').toBeGreaterThan(0.0005);
+  expect(await looks(), 'the picture drew no frame on screen').toEqual(DARK_ONLY);
+  await appearance(page, 'light');
+  const looksNow = await looks();
+  expect(looksNow.slice(0, 1)).toEqual(DARK_ONLY);
+  expect(looksNow.slice(1).map((l) => [l.palette, l.background]), 'light once the look is').toEqual([['light', 0xf0f2f7]]);
+  const inLight = await snapshot('__lightSnap');
+  expect(inLight.light).toBeGreaterThan(0.4);
+  expect(inDark.dark, 'no more pixels of the dark background than in light (edge blends only)').toBeLessThanOrEqual(inLight.dark);
+  const differ = await f.evaluate(() => {
+    const x = (window as unknown as Record<string, Uint8ClampedArray>).__darkSnap;
+    const y = (window as unknown as Record<string, Uint8ClampedArray>).__lightSnap;
+    if (x.length !== y.length) return 1;
+    let n = 0;
+    for (let i = 0; i < x.length; i += 4) if (Math.abs(x[i] - y[i]) > 3 || Math.abs(x[i + 1] - y[i + 1]) > 3 || Math.abs(x[i + 2] - y[i + 2]) > 3) n++;
+    return n / (x.length / 4);
+  });
+  expect(differ, 'the picture taken in dark is the one taken in light').toBeLessThan(0.002);
+  expect(seen.csp, 'CSP violations').toEqual([]);
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+test('cad:dark-model the view turns dark with #e6e9ef edges and light sketch lines, the faces as they were; back to light every colour is as before', { tag: '@serial' }, async ({ page, request }) => {
   const { seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await blockAndSketch(page);
-  // Light, as always: CAD has no appearance from this host.
+  // Light, as a new user's look is.
   expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get())).toMatchObject({ appearance: { theme: 'light' }, palette: 'light', followsFaces: false, background: 0xf0f2f7 });
   const coloursBefore = await pageColours(f);
   const shotBefore = await canvasShot(page);
@@ -289,7 +401,7 @@ test('cad:dark-model the view turns dark with #e6e9ef edges and light sketch lin
   expect(seen.csp).toEqual([]);
 });
 
-test('cad:dark-picture a Picture taken while the view is dark is light, the same picture as in light, and the view never shows a light frame', async ({ page, request }) => {
+test('cad:dark-picture a Picture taken while the view is dark is light, the same picture as in light, and the view never shows a light frame', { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await blockAndSketch(page);
@@ -392,7 +504,7 @@ test('cad:dark-picture a Picture taken while the view is dark is light, the same
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:dark-sketch an open sketch recolours its lines and its draw cursor live, and back in light', async ({ page, request }) => {
+test('cad:dark-sketch an open sketch recolours its lines and its draw cursor live, and back in light', { tag: '@serial' }, async ({ page, request }) => {
   const { frame } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
@@ -579,7 +691,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
   const FACE: [number, number] = [0.127, 0.491];
   const GROUND: [number, number] = [0.764, 0.927];
 
-  test("cad:dark-follows-face a sketch line crossing a face's outline is the light view's ink over the face and the dark ink over the background, in every state, its points too; the keys show both, the cursor follows; light is one colour, and a picture is the light one", async ({ page, request }) => {
+  test("cad:dark-follows-face a sketch line crossing a face's outline is the light view's ink over the face and the dark ink over the background, in every state, its points too; the keys show both, the cursor follows; light is one colour, and a picture is the light one", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     const f = workspaceFrame(page);
     await addSolid(page, { size: [40, 40, 20] });
@@ -817,7 +929,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-lost a lost reference's curve is the light view's amber over the face and the dark amber beyond it, in both modes; its dot shows both", async ({ page, request }) => {
+  test("cad:dark-follows-face-lost a lost reference's curve is the light view's amber over the face and the dark amber beyond it, in both modes; its dot shows both", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     const f = workspaceFrame(page);
     // A 40 x 40 x 20 block, and a 10 mm cube on its top face standing out over its +X edge (x 35..45).
@@ -925,7 +1037,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-marks a reference point and axis, the measure's ends and the Extrude arrow take the light view's inks over a face and the dark ones over the background", async ({ page, request }) => {
+  test("cad:dark-follows-face-marks a reference point and axis, the measure's ends and the Extrude arrow take the light view's inks over a face and the dark ones over the background", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     const f = workspaceFrame(page);
     await addSolid(page, { size: [40, 40, 20] });
@@ -1048,7 +1160,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-enclosure the Enclosure's arrows take the light view's blue over the part's face and the dark one over the background", async ({ page, request }) => {
+  test("cad:dark-follows-face-enclosure the Enclosure's arrows take the light view's blue over the part's face and the dark one over the background", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     const f = workspaceFrame(page);
     await addSolid(page, { size: [20, 20, 20] });
@@ -1099,7 +1211,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-section a section in dark keeps its light caps, and a mark over a cap takes the light view's ink", async ({ page, request }) => {
+  test("cad:dark-follows-face-section a section in dark keeps its light caps, and a mark over a cap takes the light view's ink", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     const f = workspaceFrame(page);
     await addSolid(page, { size: [40, 40, 20] });
@@ -1153,7 +1265,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-handle a fillet's radius arrow over a face shows the light view's grab hand in dark, also after the theme changed with the pointer elsewhere", async ({ page, request }) => {
+  test("cad:dark-follows-face-handle a fillet's radius arrow over a face shows the light view's grab hand in dark, also after the theme changed with the pointer elsewhere", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     await addSolid(page, { size: [60, 60, 20] });
     await page.keyboard.press('Escape');
@@ -1208,7 +1320,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-lit on a dark-coloured part a face lit by a hover or a pick, or the whole part selected, is light: a sketch's line and the measure's end over it take the light view's inks", async ({ page, request }) => {
+  test("cad:dark-follows-face-lit on a dark-coloured part a face lit by a hover or a pick, or the whole part selected, is light: a sketch's line and the measure's end over it take the light view's inks", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     const f = workspaceFrame(page);
     const block = await addSolid(page, { size: [40, 40, 20] });
@@ -1309,7 +1421,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
   });
 });
 
-test('cad:dark-grid-edge-on the grid a near edge-on view keeps turns dark with the view, and a picture taken then is the light one', async ({ page, request }) => {
+test('cad:dark-grid-edge-on the grid a near edge-on view keeps turns dark with the view, and a picture taken then is the light one', { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
@@ -1395,7 +1507,7 @@ test('cad:dark-grid-edge-on the grid a near edge-on view keeps turns dark with t
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:dark-box-caption a selection box started over a face has its caption on a dark backing in dark, none in light', async ({ page, request }) => {
+test('cad:dark-box-caption a selection box started over a face has its caption on a dark backing in dark, none in light', { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   await addSolid(page, { size: [40, 40, 20] });
   // Nothing selected (a selected body is shaded darker).
@@ -1446,7 +1558,7 @@ test('cad:dark-box-caption a selection box started over a face has its caption o
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable under the pointer and keyboard focus in dark, as in light", async ({ page, request }) => {
+test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable under the pointer and keyboard focus in dark, as in light", { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   // A 10 mm block patterned 3 times, 15 mm apart, joined: the copies don't touch it, so they are red.
   await addSolid(page, { size: [10, 10, 10] });
@@ -1501,7 +1613,7 @@ test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable 
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-chrome the toolbar is the host's dark one, a button under the pointer stands off it, and a selected row and an active button are the core's blue, in dark as in light", async ({ page, request }) => {
+test("cad:dark-chrome the toolbar is the host's dark one, a button under the pointer stands off it, and a selected row and an active button are the core's blue, in dark as in light", { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const bar = frame.locator('[data-cad-toolbar]');
   // A selected tree row, and the Picture tool open (its toolbar button pressed).
@@ -1549,7 +1661,7 @@ test("cad:dark-chrome the toolbar is the host's dark one, a button under the poi
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the light one, and the view keeps its dark lines", async ({ page, request }) => {
+test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the light one, and the view keeps its dark lines", { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
@@ -1604,7 +1716,7 @@ test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the l
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-picture-save the Picture panel's Save PNG link looks exactly like the kit's secondary button, at rest, under the pointer and focused, in light and dark", async ({ page, request }) => {
+test("cad:dark-picture-save the Picture panel's Save PNG link looks exactly like the kit's secondary button, at rest, under the pointer and focused, in light and dark", { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   await addSolid(page, { size: [20, 20, 20] });
   await runCommand(frame, 'file.picture');
@@ -1695,7 +1807,7 @@ test("cad:dark-picture-save the Picture panel's Save PNG link looks exactly like
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-tooltip-edge a tooltip and the toolbar's drag note have the host tooltip's edge in dark, as the core's tooltips do; in light it paints nothing", async ({ page, request }) => {
+test("cad:dark-tooltip-edge a tooltip and the toolbar's drag note have the host tooltip's edge in dark, as the core's tooltips do; in light it paints nothing", { tag: '@serial' }, async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   const host = hostTokens();
@@ -1775,7 +1887,7 @@ test("cad:dark-tooltip-edge a tooltip and the toolbar's drag note have the host 
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-triad each orientation arrow reads 3:1 and more on the dark view at the home view and every standard view, Y too; light's triad is the core's", async ({ page, request }) => {
+test("cad:dark-triad each orientation arrow reads 3:1 and more on the dark view at the home view and every standard view, Y too; light's triad is the core's", { tag: '@serial' }, async ({ page, request }) => {
   const { seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   const box = (await page.locator('#workspace-frame').boundingBox())!;

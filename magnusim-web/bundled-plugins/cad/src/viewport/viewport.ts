@@ -134,7 +134,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     bvhPending: 0,
     animating: false,
   });
-  const stats: ViewportStats = { frames: 0, lastFrameMs: 0, lastSetBodiesMs: 0, lastUploadFrameMs: 0, lastPickMs: 0, bvh: {}, triangles: 0, drawCalls: 0 };
+  const stats: ViewportStats & { looks: NonNullable<ViewportStats['looks']> } = { frames: 0, lastFrameMs: 0, lastSetBodiesMs: 0, lastUploadFrameMs: 0, lastPickMs: 0, bvh: {}, triangles: 0, drawCalls: 0, looks: [] };
+  const clearSeen = new Color();
 
   // ------------------------------------------------------------ renderer
   const renderer = new WebGLRenderer({ antialias: true, alpha: false, stencil: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
@@ -360,6 +361,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     }
     const t0 = performance.now();
     drawFrame();
+    // What this frame was drawn in (ViewportStats.looks): an entry when it is not the last one's.
+    const bg = renderer.getClearColor(clearSeen).getHex();
+    const was = stats.looks[stats.looks.length - 1];
+    if ((!was || was.palette !== marksNow.name || was.background !== bg) && stats.looks.length < 64) stats.looks.push({ frame: stats.frames, palette: marksNow.name, background: bg });
     for (const fn of [...frameListeners]) {
       try {
         fn();
@@ -1981,7 +1986,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       };
     },
     lineResolution: () => [width, height],
-    stats: () => ({ ...stats, bvh: { ...stats.bvh }, contextLost: renderer.getContext().isContextLost(), framed }),
+    stats: () => ({ ...stats, bvh: { ...stats.bvh }, looks: stats.looks.map((l) => ({ ...l })), contextLost: renderer.getContext().isContextLost(), framed }),
     measure(frames) {
       const gl = renderer.getContext();
       const px = new Uint8Array(4);

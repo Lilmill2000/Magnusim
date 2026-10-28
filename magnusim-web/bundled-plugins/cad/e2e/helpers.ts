@@ -846,26 +846,69 @@ export async function showAllRelations(page: Page): Promise<void> {
   await expect(page.frameLocator('#workspace-frame').locator('[data-sketch-annotations]')).toHaveAttribute('data-sketch-relations', 'all');
 }
 
-// ---- the dark set: the host's appearance (unreleased, SDK 1.5)
+// ---- the dark set: the host's appearance (unreleased 1.9)
+// The look is the person's pref on the server (POST /api/prefs {theme, text_scale, icon_scale}),
+// one for every test running on it: a test that changes it is @serial, and the spec puts it back
+// after each (putLookBackAfterSerialTests).
 
 /**
- * Give the Part an appearance as the host's newer SDK will: it writes data-theme, color-scheme
- * and the text and icon scales on the frame's <html>, then sends its 'appearance' event, which
- * reaches the Part through the bridge's own path (window.__CAD__.appearance.push). This host's SDK
- * has neither yet, so the Part is light without this. The frame's /plugin-sdk/theme.css already
- * has the host's dark --mg-* set: the dark data-theme switches the host's tokens and chrome too,
- * and only the SDK's part (data-theme and the event) is simulated here.
+ * Saves the look as Settings does (the person's pref on the server): every page opened after it
+ * has it from its first paint (the server puts it in the page, a Part's frame too). A page open
+ * already does not hear it: pickTheme changes the look of an open Part.
  */
-export async function setAppearance(page: Page, theme: 'light' | 'dark', o: { textScale?: number; iconScale?: number } = {}): Promise<void> {
-  await workspaceFrame(page).evaluate(
-    ({ theme, textScale, iconScale }) => {
-      const html = document.documentElement;
-      html.dataset.theme = theme;
-      html.style.colorScheme = theme;
-      html.style.setProperty('--mg-text-scale', String(textScale));
-      html.style.setProperty('--mg-icon-scale', String(iconScale));
-      (window as unknown as { __CAD__: { appearance: { push(a: object): void } } }).__CAD__.appearance.push({ theme, preference: theme, textScale, iconScale });
-    },
-    { theme, textScale: o.textScale ?? 1, iconScale: o.iconScale ?? 1 },
-  );
+export async function saveLook(request: APIRequestContext, theme: 'light' | 'dark', o: { textScale?: number; iconScale?: number } = {}): Promise<void> {
+  const r = await request.post(`${baseUrl()}/api/prefs`, { data: { theme, text_scale: o.textScale ?? 1, icon_scale: o.iconScale ?? 1 } });
+  expect(r.ok(), await r.text()).toBe(true);
+}
+
+/** Each Part page's Settings window (pickTheme), open for the rest of its test. */
+const settingsWindows = new WeakMap<Page, Page>();
+
+/**
+ * Changes the theme as a person does with a Part open: Settings → Appearance in a second window
+ * of the same browser (opened at the first call, kept for the test's next change), the choice
+ * clicked and its save awaited. The app's other windows hear the save, this page's app sends the
+ * Part's frame the `appearance` event, and the frame's SDK writes <html>'s data-theme before CAD
+ * hears it. Returns once the Part has the theme (<html> and its bridge); its view draws it on its
+ * next frame.
+ */
+export async function pickTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
+  let settings = settingsWindows.get(page);
+  if (!settings || settings.isClosed()) {
+    const s = await page.context().newPage();
+    settingsWindows.set(page, s);
+    await s.goto(`${baseUrl()}/#/`);
+    // Settings opens the wizard once the page has wired its button (as the host's own specs wait).
+    await expect(async () => {
+      await s.locator('#home-prefs').click();
+      await expect(s.locator('#setup-wizard')).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 60_000 });
+    await s.locator('#wiz-rail li[data-wiz-key="appearance"]').click();
+    await expect(s.locator('#setup-wizard .wiz-pane[data-wiz-key="appearance"]')).toBeVisible();
+    settings = s;
+  }
+  const pane = settings.locator('#setup-wizard .wiz-pane[data-wiz-key="appearance"]');
+  const saved = settings.waitForResponse((r) => new URL(r.url()).pathname === '/api/prefs' && r.request().method() === 'POST');
+  await pane.locator(`[data-wiz-look="theme"][data-value="${theme}"]`).click();
+  expect((await saved).ok(), 'Settings saved the look').toBe(true);
+  const inPart = () =>
+    workspaceFrame(page).evaluate(() => {
+      const cad = (window as unknown as { __CAD__?: { appearance?: { get(): { appearance: { theme: string } } } } }).__CAD__;
+      return `${document.documentElement.dataset.theme} ${cad?.appearance?.get().appearance.theme}`;
+    });
+  await expect.poll(inPart, { timeout: 15_000 }).toBe(`${theme} ${theme}`);
+}
+
+/**
+ * Call at the top of a spec whose @serial tests change the look: after each of them (a failed or
+ * timed-out one too: an afterEach runs then, a finally in the test does not), every window of its
+ * browser is closed first, so none of them saves again, then the look is light at 100%, as a new
+ * user has it.
+ */
+export function putLookBackAfterSerialTests(): void {
+  test.afterEach(async ({ page, request }, testInfo) => {
+    if (!testInfo.tags.includes('@serial')) return;
+    for (const p of page.context().pages()) await p.close();
+    await saveLook(request, 'light');
+  });
 }

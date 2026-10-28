@@ -329,6 +329,26 @@ describe('the smoke and serial tags', () => {
       // The Assistant panel's key is the app's pref (Settings → Keybinds): set in the test, put back.
       'cad:keybinds-assistant-key',
       'cad:keybinds-assistant-key-live',
+      // The dark set: the look is the person's pref (Settings → Appearance), one for the whole server: set in the test, put back.
+      'cad:dark-first-paint',
+      'cad:dark-model',
+      'cad:dark-picture',
+      'cad:dark-sketch',
+      'cad:dark-follows-face',
+      'cad:dark-follows-face-lost',
+      'cad:dark-follows-face-marks',
+      'cad:dark-follows-face-enclosure',
+      'cad:dark-follows-face-section',
+      'cad:dark-follows-face-handle',
+      'cad:dark-follows-face-lit',
+      'cad:dark-grid-edge-on',
+      'cad:dark-box-caption',
+      'cad:dark-pattern-failed',
+      'cad:dark-chrome',
+      'cad:dark-sketch-picture',
+      'cad:dark-picture-save',
+      'cad:dark-tooltip-edge',
+      'cad:dark-triad',
     ].sort());
   });
 });

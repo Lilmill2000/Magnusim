@@ -12,7 +12,7 @@
 // The Assistant panel's keys (unreleased 1.9): pass `assistantKeys` (a list, or null for the
 // default) for ws.context.assistantKeys; push('assistantKeys', keys) is the host's change, as the
 // SDK takes it (the context first, then the listeners). Without it the welcome has none.
-// The host's appearance (unreleased, SDK 1.5): pass `appearance` for ws.context.appearance, and
+// The host's appearance (unreleased 1.9): pass `appearance` for ws.context.appearance, and
 // push('appearance', a) for its event (the context follows, as the SDK's does). Without it the
 // context has none, as an older host's.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -88,7 +88,7 @@ export function createFakeWorkspace(
     assistant?: FakeAssistantOptions | true;
     /** Unreleased 1.9: ws.context.assistantKeys (null: the default); left out, the welcome has none. */
     assistantKeys?: string[] | null;
-    /** Unreleased (SDK 1.5): ws.context.appearance ({theme, preference, textScale, iconScale}). */
+    /** Unreleased 1.9: ws.context.appearance ({theme, preference, textScale, iconScale}). */
     appearance?: Record<string, unknown>;
   } = {},
 ): FakeWorkspace {

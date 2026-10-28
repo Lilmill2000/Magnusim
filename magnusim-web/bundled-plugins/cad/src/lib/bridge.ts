@@ -3,8 +3,8 @@
 // when the host gains APIs (host API 1.2: ws.files, nav.setDirty, focus on
 // connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
 // Edit in CAD: the geometry a Part edits, its source and its faces; unreleased 1.9:
-// ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys; unreleased,
-// SDK 1.5: the host's appearance, ws.context.appearance and its 'appearance' event).
+// ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys, and the
+// host's appearance, ws.context.appearance and its 'appearance' event).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type {
   AssistantHandler,
@@ -31,11 +31,13 @@ import type { EditedGeometry, EditLaunch, GeometryFaces, GeometrySource, Origina
 export type ToastKind = 'info' | 'success' | 'error';
 
 /**
- * The host's appearance (unreleased, planned with SDK 1.5: ws.context.appearance, and the
- * 'appearance' event with the same object): the theme as resolved ('system' already decided),
- * the person's choice, and the text and icon scales (0.9, 1, 1.1, 1.25, 1.5). The SDK writes
- * data-theme, color-scheme, --mg-text-scale and --mg-icon-scale on the frame's <html> itself (so
- * the CSS follows with no code); CAD never sets them.
+ * The host's appearance (unreleased 1.9: ws.context.appearance, and the 'appearance' event with
+ * the same object): the theme as resolved ('system' already decided), the person's choice, and
+ * the text and icon scales (Settings offers 0.9, 1, 1.15 and 1.3, and 0.85, 1, 1.25 and 1.5). The
+ * SDK writes data-theme, data-theme-pref, --mg-text-scale and --mg-icon-scale on the frame's
+ * <html> itself, before any listener hears a change, and the page has them from its first paint
+ * (the server puts the look in it); theme.css takes color-scheme from data-theme. So the CSS
+ * follows with no code; CAD never sets them.
  */
 export interface Appearance {
   theme: 'light' | 'dark';
@@ -251,18 +253,6 @@ export function assistantKeysOf(v: unknown): readonly string[] | null {
   return Array.isArray(v) ? Object.freeze([...new Set(v.filter((k): k is string => typeof k === 'string'))]) : null;
 }
 
-/** What feeds each bridge's appearance listeners (pushAppearance, the test handle's push). */
-const appearanceFeeds = new WeakMap<Bridge, (raw: unknown) => void>();
-
-/**
- * Deliver an appearance to a bridge as the host's SDK does with its 'appearance' event (the test
- * handle: e2e drives a dark appearance on a host that has none yet; it writes <html>'s attributes
- * itself, as the SDK would).
- */
-export function pushAppearance(bridge: Bridge, raw: unknown): void {
-  appearanceFeeds.get(bridge)?.(raw);
-}
-
 export function createBridge(ws: Workspace): Bridge {
   let units: UnitSystem = ws.context.units;
   ws.on('units', (u) => {
@@ -283,8 +273,8 @@ export function createBridge(ws: Workspace): Bridge {
       console.warn('[cad] the assistantKeys event is not heard; the keys the Part opened with apply', err);
     }
   }
-  // Feature detection (unreleased, SDK 1.5: the host's appearance): the context has `appearance`,
-  // and the SDK pushes its changes as 'appearance'. An older host has neither: light, scale 1.
+  // Feature detection (unreleased 1.9: the host's appearance): the context has `appearance`, and
+  // the SDK sends each change as 'appearance'. An older host has neither: light, scale 1.
   const withAppearance = ws.context as typeof ws.context & { appearance?: unknown };
   const hasAppearance = !!withAppearance.appearance && typeof withAppearance.appearance === 'object';
   let appearance: Appearance = hasAppearance ? appearanceOf(withAppearance.appearance) : { ...LIGHT_APPEARANCE };
@@ -401,6 +391,5 @@ export function createBridge(ws: Workspace): Bridge {
     spawnWorker: (url) => ws.spawnWorker(url),
     raw: ws,
   };
-  appearanceFeeds.set(bridge, hearAppearance);
   return bridge;
 }
