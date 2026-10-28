@@ -59,7 +59,7 @@ export const CORE_SET_KEYBIND_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: ['plugin', 'command', 'action', 'keys', 'replace', 'person_asked'],
   properties: {
-    plugin: { type: 'string', maxLength: 80, description: 'the plugin key or name (core__keybinds lists them)' },
+    plugin: { type: 'string', maxLength: 80, description: 'the plugin key or name (core__keybinds lists them); "app" for the Assistant panel\'s own key' },
     command: { type: 'string', maxLength: 120, description: 'the command id or label; "" for reset_all' },
     action: { type: 'string', enum: [...KEYBIND_ACTIONS] },
     keys: { type: 'string', maxLength: 40, description: 'set: the key as written ("Shift+R", "Ctrl+Alt+K", "F7"); "" otherwise' },
@@ -91,7 +91,7 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     name: 'keybinds',
     title: 'Read the keyboard shortcuts',
     description:
-      "The person's keyboard shortcuts, as Settings → Keybinds lists them: the app's own (never changed) and each plugin's commands with their keys now (stored: \"Shift+KeyR\"; shown: \"Shift+R\"), defaults and where each works. plugin \"\" and target \"\" for all. Read them any time; set_in says where the person changes one.",
+      "The person's keyboard shortcuts, as Settings → Keybinds lists them: the app's own (only the Assistant panel's, app.assistant, can be changed) and each plugin's commands with their keys now (stored: \"Shift+KeyR\"; shown: \"Shift+R\"), defaults and where each works. plugin \"\" and target \"\" for all; plugin \"app\" for the app's. Read them any time; set_in says where the person changes one.",
     inputSchema: CORE_KEYBINDS_SCHEMA as unknown as Record<string, unknown>,
     risk: 'read',
     timeoutS: 30,
@@ -100,7 +100,7 @@ export const CORE_TOOLS: readonly RelayTool[] = Object.freeze([
     name: 'set_keybind',
     title: 'Change a keyboard shortcut',
     description:
-      "Changes a plugin's shortcut as Settings → Keybinds does: set (keys: its one key, e.g. \"Shift+R\"), reset (defaults), clear (no key), reset_all (all its commands). Only if the person explicitly asked for this change in this request (person_asked true, else not_asked); the app asks them to confirm (No: step_declined). Another command's key: key_taken unless replace; keys changed meanwhile: changed.",
+      "Changes a shortcut as Settings → Keybinds does: a plugin's command, or the Assistant panel's key (plugin \"app\", command \"app.assistant\"). set (keys: one key, e.g. \"Shift+R\"), reset, clear, reset_all. Only if the person explicitly asked in this request (person_asked, else not_asked); they confirm (No: step_declined). Another command's key: key_taken unless replace; moved meanwhile: changed.",
     inputSchema: CORE_SET_KEYBIND_SCHEMA as unknown as Record<string, unknown>,
     risk: 'edit',
     timeoutS: 300,

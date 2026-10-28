@@ -1,23 +1,43 @@
 /**
  * Every key the person can see and set, for Settings → Keybinds and the Assistant's keybind tools:
- * the app's own (appCommands.ts: shown, never changed) and each plugin's workspace commands (the
+ * the app's own (appCommands.ts: shown; only the Assistant panel's can be changed, appKeys.ts) and
+ * each plugin's workspace commands (the
  * catalog row's `workspaces[].commands`, read as commands.ts reads it), with the person's keys from
  * the plugin's prefs key "keybinds" ({ "<command id>": [combo, ...] }, [] for none, a missing id
  * for the defaults). Only a plugin that is on is listed: its prefs are reachable only then.
  *
  * A change follows the CAD plugin's rules (its keybinds.ts), so Settings and the Part agree:
  * - Change gives the command that one key. A key the app, the browser or the system keeps is
- *   refused (refusalOf); a key another command of the same workspace has where the two meet (the
- *   same context, or either is "any") is a conflict, which Replace takes from that command.
+ *   refused (refusalOf), and so is the Assistant panel's key the person chose (appKeys.ts); a key
+ *   another command of the same workspace has where the two meet (the same context, or either is
+ *   "any") is a conflict, which Replace takes from that command.
  * - Reset puts the defaults back (a default another command took meanwhile is a conflict unless
- *   Replace); Clear leaves the command no key; Reset all drops every one of the person's keys.
+ *   Replace; one that is the Assistant panel's key now is refused); Clear leaves the command no key;
+ *   Reset all drops every one of the person's keys, but keeps the Assistant panel's key off the
+ *   command whose default it is (keptOffText says which).
+ * - The Assistant panel's own key (app.assistant) changes the same way (planAppChange): a key a
+ *   plugin command has anywhere is a conflict, as the panel's key works everywhere, and Replace
+ *   takes it from each of them before the panel gets it.
  * - No change is worked out from keys that were not read (`unread`): it would name the wrong
  *   takers and write over the saved ones.
  * A write reads the stored value again and changes only the ids it touches (keys set elsewhere
  * meanwhile, and ids this list doesn't know, stay), then announces it on the prefs channel, so an
  * open workspace of that plugin (this tab or another) takes it at once.
  */
+import { isCad } from '../app/edition';
 import { APP_COMMANDS, APP_KEYS, APP_LOCAL_KEYS, RESERVED_KEYS } from './appCommands';
+import {
+  AppKeysChanged,
+  AppKeysUnread,
+  appKeyRefusal,
+  appKeybinds,
+  ASSISTANT_KEY_ID,
+  assistantKeys,
+  CHANGEABLE_APP_KEYS,
+  defaultAppKeys,
+  readStoredAppKeybinds,
+  storeAppKeybinds,
+} from './appKeys';
 import { parseCombo } from './combo';
 import { ANY_CONTEXT, readCommandsFile, readKeybindOverrides, type Command, type CommandContext } from './commands';
 import { announcePref } from '../workspace/prefsChannel';
@@ -194,12 +214,22 @@ export const contextsMeet = (a: string, b: string): boolean => a === b || a === 
 export function refusalOf(combo: string, name: (c: string) => string = q): string {
   const app = APP_COMMANDS.find((c) => c.keys.includes(combo));
   if (app) return `${name(combo)} is the app's own key (${app.label})`;
+  if (assistantKeys()?.includes(combo)) return assistantKeyRefusal(combo, name);
   const reserved = RESERVED_KEYS.find((c) => c.keys.includes(combo));
   if (reserved) return `${name(combo)} is kept for the browser and the system (${reserved.label})`;
   const local = APP_LOCAL_KEYS.find((c) => c.keys.includes(combo));
   if (local) return `${name(combo)} is the app's own key in dialogs, menus and modes (${local.label}): only a command's own default can be it`;
   return '';
 }
+
+/** The Assistant panel's command (appCommands.ts). */
+const ASSISTANT_APP = APP_COMMANDS.find((c) => c.id === ASSISTANT_KEY_ID)!;
+
+/** Why a command may not have the Assistant panel's key the person chose. */
+const assistantKeyRefusal = (combo: string, name: (c: string) => string) => `${name(combo)} is the app's own key (${ASSISTANT_APP.label})`;
+
+/** The app as Settings names it. */
+export const appName = (): string => (isCad() ? 'Magnusim CAD' : 'Magnusim');
 
 /** The other commands of `id`'s workspace that have `combo` now where they meet `id`'s context. */
 export function conflictsOf(p: PluginKeys, id: string, combo: string): Command[] {
@@ -236,6 +266,12 @@ export function planChange(p: PluginKeys, id: string, change: KeyChange, name: (
   if (change.action === 'set') {
     const why = refusalOf(change.combo, name);
     if (why) return { ok: false, code: 'refused', id, message: why };
+  }
+  if (change.action === 'reset') {
+    // A default that is the Assistant panel's key now stays the panel's: move that key first.
+    const live = assistantKeys() ?? [];
+    const taken = wanted.find((k) => live.includes(k));
+    if (taken) return { ok: false, code: 'refused', id, message: assistantKeyRefusal(taken, name) };
   }
   const replace = change.action !== 'clear' && !!change.replace;
   const patch: Patch = { [id]: storedAs(at.command, wanted) };
@@ -323,12 +359,55 @@ export async function applyChange(
   }
 }
 
-/** Every command of a plugin back to its defaults: the plugin as stored now, or why not. */
-export async function resetAllKeys(p: PluginKeys, from = SETTINGS_FROM): Promise<{ ok: true; plugin: PluginKeys } | { ok: false; message: string }> {
+/** A command whose default is the Assistant panel's key now, kept off it by a Reset all, and those keys. */
+export interface KeptOff {
+  command: Command;
+  keys: string[];
+}
+
+/**
+ * What a Reset all stores for a plugin: nothing, except that a command whose defaults hold the
+ * Assistant panel's key (`live`, the person's; none while it has its defaults) keeps its other
+ * defaults, so that key stays the panel's.
+ */
+function resetAllPatch(p: PluginKeys, live: readonly string[] = assistantKeys() ?? []): { patch: Patch; keptOff: KeptOff[] } {
+  const patch: Patch = {};
+  const keptOff: KeptOff[] = [];
+  for (const c of commandsOf(p)) {
+    const off = c.keys.filter((k) => live.includes(k));
+    if (!off.length) continue;
+    patch[c.id] = c.keys.filter((k) => !live.includes(k));
+    keptOff.push({ command: c, keys: off });
+  }
+  return { patch, keptOff };
+}
+
+/** What a Reset all of a plugin would keep the Assistant panel's key off (its question names them). */
+export function keptOffFor(p: PluginKeys, live: readonly string[] = assistantKeys() ?? []): KeptOff[] {
+  return resetAllPatch(p, live).keptOff;
+}
+
+/** The words for the commands a Reset all kept the Assistant panel's key off ('' when none). */
+export function keptOffText(keptOff: readonly KeptOff[], name: (c: string) => string = q): string {
+  if (!keptOff.length) return '';
+  const keys = [...new Set(keptOff.flatMap((k) => k.keys))].map(name).join(', ');
+  return `${keys} kept off ${keptOff.map((k) => k.command.label).join(', ')}: the Assistant panel's key.`;
+}
+
+/**
+ * Every command of a plugin back to its defaults (but the Assistant panel's key: resetAllPatch):
+ * the plugin as stored now and the commands that key was kept off, or why not.
+ */
+export async function resetAllKeys(
+  p: PluginKeys,
+  from = SETTINGS_FROM,
+  live: readonly string[] = assistantKeys() ?? [],
+): Promise<{ ok: true; plugin: PluginKeys; keptOff: KeptOff[] } | { ok: false; message: string }> {
   if (p.unread) return { ok: false, message: p.unread };
+  const { patch, keptOff } = resetAllPatch(p, live);
   try {
-    await store(p.plugin, {}, true, from);
-    return { ok: true, plugin: { ...p, overrides: noKeys() } };
+    const next = await store(p.plugin, patch, true, from);
+    return { ok: true, plugin: { ...p, overrides: overridesOf(next, p) }, keptOff };
   } catch (e) {
     return { ok: false, message: `Could not save the keys: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -338,23 +417,227 @@ export async function resetAllKeys(p: PluginKeys, from = SETTINGS_FROM): Promise
 export const hasOwnKeys = (p: PluginKeys): boolean => Object.keys(p.overrides).some((id) => !isDefault(p, id));
 
 /**
- * Settings → Keybinds' Reset all keybinds: every plugin's commands back to their defaults, after
- * one `ask` naming the plugins it changes (none asked when there is nothing to reset). What it
- * reset, and each plugin it could not, with why in a few words (its keys not read, or the write
- * refused).
+ * Whether a Reset all would change any of a plugin's keys (`live`: the Assistant panel's key the
+ * person chose, which stays off the commands whose default it is).
  */
-export async function resetEveryPlugin(ask: (names: string[]) => Promise<boolean>): Promise<{ asked: boolean; reset: string[]; failed: { name: string; why: string }[]; error: string }> {
+export function canResetAll(p: PluginKeys, live: readonly string[] = assistantKeys() ?? []): boolean {
+  const { patch } = resetAllPatch(p, live);
+  const ids = new Set([...Object.keys(p.overrides), ...Object.keys(patch)]);
+  for (const id of ids) {
+    const at = commandOf(p, id);
+    if (!at) continue;
+    if (!same(keysOf(p, id), patch[id] ?? at.command.keys)) return true;
+  }
+  return false;
+}
+
+// ---- The app's own key the person can change: the Assistant panel's ----
+
+/** The app's changeable key as Settings and the Assistant show it. */
+export interface AppKeyRow {
+  id: string;
+  label: string;
+  group: string;
+  /** Its keys now: the person's, else its defaults. */
+  keys: string[];
+  defaults: string[];
+  isDefault: boolean;
+}
+
+/** Each app key the person can change, with its keys now. */
+export function appKeyRows(): AppKeyRow[] {
+  const own = appKeybinds();
+  return CHANGEABLE_APP_KEYS.map((id) => {
+    const c = APP_COMMANDS.find((x) => x.id === id)!;
+    const defaults = defaultAppKeys(id);
+    return { id, label: c.label, group: c.group, keys: own[id] ?? defaults, defaults, isDefault: !(id in own) };
+  });
+}
+
+export type AppKeyChange = { action: 'set'; combo: string; replace?: boolean } | { action: 'reset' } | { action: 'clear' };
+
+/** A plugin command a change of the app's key takes it from: its keys before and after. */
+export interface Taker {
+  plugin: PluginKeys;
+  command: Command;
+  before: string[];
+  after: string[];
+}
+
+export type AppChangeResult =
+  /** Done: the panel's keys now, and the plugin commands a Replace took the key from. */
+  | { ok: true; id: string; keys: string[]; took: Taker[] }
+  /** The key is a plugin command's: offer Replace or Cancel. */
+  | { ok: false; code: 'conflict'; id: string; combo: string; takers: Taker[]; message: string }
+  | { ok: false; code: 'unknown' | 'refused' | 'unread' | 'failed' | 'changed'; id: string; message: string };
+
+/** A plugin command as a conflict names it: "CAD · Line (Sketch)". */
+export function takerName(t: { plugin: PluginKeys; command: Command }): string {
+  const ws = commandOf(t.plugin, t.command.id)?.ws;
+  return `${t.plugin.name} · ${t.command.label} (${ws ? contextLabel(ws, t.command.context) : t.command.context})`;
+}
+
+/**
+ * What a change of an app key would do, worked out from the plugins' keys as read: the value to
+ * store for it (null: its defaults), its keys after, and the commands it takes the key from (with
+ * the patch of each plugin), or why not. A key that types text, or one the browser, the system or
+ * the dialogs keep, is refused (appKeyRefusal); one of its own defaults is its defaults; a key any
+ * plugin command has is a conflict (the panel's key works everywhere), which Replace takes.
+ */
+export function planAppChange(
+  plugins: readonly PluginKeys[],
+  id: string,
+  change: AppKeyChange,
+  name: (c: string) => string = q,
+): { ok: true; stored: string[] | null; keys: string[]; took: Taker[]; patches: Map<string, Patch> } | Exclude<AppChangeResult, { ok: true }> {
+  if (!CHANGEABLE_APP_KEYS.includes(id)) return { ok: false, code: 'unknown', id, message: `${appName()} has no key ${q(id)} that can be changed` };
+  const defaults = defaultAppKeys(id);
+  const none = new Map<string, Patch>();
+  if (change.action === 'reset') return { ok: true, stored: null, keys: defaults, took: [], patches: none };
+  if (change.action === 'clear') return { ok: true, stored: [], keys: [], took: [], patches: none };
+  const combo = change.combo;
+  // One of its own defaults: the defaults (they go by the character "/", which no combo names).
+  if (defaults.includes(combo)) return { ok: true, stored: null, keys: defaults, took: [], patches: none };
+  const why = appKeyRefusal(combo, name);
+  if (why) return { ok: false, code: 'refused', id, message: why };
+  // Whether a command has it is not known for a plugin whose keys were not read.
+  const unread = plugins.find((p) => p.unread);
+  if (unread) return { ok: false, code: 'unread', id, message: unread.unread };
+  const takers: Taker[] = plugins.flatMap((p) =>
+    commandsOf(p)
+      .filter((c) => keysOf(p, c.id).includes(combo))
+      .map((c) => ({ plugin: p, command: c, before: keysOf(p, c.id), after: keysOf(p, c.id).filter((k) => k !== combo) })),
+  );
+  if (takers.length && !change.replace) {
+    return { ok: false, code: 'conflict', id, combo, takers, message: `${name(combo)} is already the key of ${takers.map(takerName).join(', ')}` };
+  }
+  const patches = new Map<string, Patch>();
+  for (const t of takers) patches.set(t.plugin.plugin, { ...(patches.get(t.plugin.plugin) ?? {}), [t.command.id]: storedAs(t.command, t.after) });
+  return { ok: true, stored: [combo], keys: [combo], took: takers, patches };
+}
+
+/**
+ * Makes a change of an app key and stores it: first each plugin a Replace takes the key from (so
+ * the panel has the key only once no command does), then the app's keys. What it did, with the
+ * plugins as stored now, or why not. `checked` (the Assistant, after the person's Yes): each write
+ * first reads its keys again and writes nothing when they moved since the plan (`changed`).
+ */
+export async function applyAppChange(
+  plugins: readonly PluginKeys[],
+  id: string,
+  change: AppKeyChange,
+  name?: (c: string) => string,
+  from = SETTINGS_FROM,
+  checked = false,
+): Promise<{ result: AppChangeResult; plugins: PluginKeys[] }> {
+  const list = [...plugins];
+  const plan = planAppChange(list, id, change, name);
+  if (!plan.ok) return { result: plan, plugins: list };
+  const appBefore = JSON.stringify(appKeybinds()[id] ?? null);
+  try {
+    for (const [key, patch] of plan.patches) {
+      const i = list.findIndex((p) => p.plugin === key);
+      const p = list[i];
+      const takers = plan.took.filter((t) => t.plugin.plugin === key);
+      const still = checked
+        ? (stored: unknown) => {
+            const now = { ...p, overrides: overridesOf(stored, p), unread: '' };
+            return takers.every((t) => same(keysOf(now, t.command.id), t.before));
+          }
+        : undefined;
+      const next = await store(key, patch, false, from, still);
+      list[i] = { ...p, overrides: overridesOf(next, p) };
+    }
+    const still = checked ? (stored: Record<string, string[]>) => JSON.stringify(stored[id] ?? null) === appBefore : undefined;
+    try {
+      await storeAppKeybinds({ [id]: plan.stored }, from, still);
+    } catch (e) {
+      // The panel did not get the key: the commands it was taken from get it back.
+      const lost = await giveBack(list, plan.took, from);
+      const why = e instanceof AppKeysChanged ? "the panel's key changed meanwhile" : e instanceof Error ? e.message : String(e);
+      const message = lost.length
+        ? `The panel's key was not saved (${why}), and ${lost.map(takerName).join(', ')} could not get the key back: change it there.`
+        : `The panel's key was not saved (${why}); nothing changed.`;
+      const code = e instanceof AppKeysChanged ? 'changed' : e instanceof AppKeysUnread ? 'unread' : 'failed';
+      return { result: { ok: false, code, id, message }, plugins: list };
+    }
+    return { result: { ok: true, id, keys: plan.keys, took: plan.took }, plugins: list };
+  } catch (e) {
+    if (e instanceof KeysChanged || e instanceof AppKeysChanged) return { result: { ok: false, code: 'changed', id, message: 'The keys changed meanwhile; nothing more changed.' }, plugins: list };
+    if (e instanceof KeysUnread || e instanceof AppKeysUnread) return { result: { ok: false, code: 'unread', id, message: `The keys could not be read: ${e.message}` }, plugins: list };
+    return { result: { ok: false, code: 'failed', id, message: `Could not save the keys: ${e instanceof Error ? e.message : String(e)}` }, plugins: list };
+  }
+}
+
+/**
+ * Gives the commands a Replace took the key from their keys back (the panel's own write failed),
+ * in `list` too; the ones that could not get it back.
+ */
+async function giveBack(list: PluginKeys[], took: readonly Taker[], from: string): Promise<Taker[]> {
+  const lost: Taker[] = [];
+  for (const key of new Set(took.map((t) => t.plugin.plugin))) {
+    const mine = took.filter((t) => t.plugin.plugin === key);
+    const i = list.findIndex((p) => p.plugin === key);
+    try {
+      const next = await store(key, Object.fromEntries(mine.map((t) => [t.command.id, storedAs(t.command, t.before)])), false, from);
+      if (i >= 0) list[i] = { ...list[i], overrides: overridesOf(next, list[i]) };
+    } catch {
+      lost.push(...mine);
+    }
+  }
+  return lost;
+}
+
+/** The app's keys as stored, read again (a Reset all asks about the stored value, not the page's copy); null when they can't be read. */
+async function appKeysStored(): Promise<Record<string, string[]> | null> {
+  try {
+    return await readStoredAppKeybinds();
+  } catch {
+    return null;
+  }
+}
+
+/** How Reset all keybinds names the Assistant panel's key in its question and its word after. */
+export const appResetName = (): string => `${appName()} (the Assistant panel's key)`;
+
+/**
+ * Settings → Keybinds' Reset all keybinds: the Assistant panel's key back to its defaults first
+ * (so no plugin default is kept off it), then every plugin's commands, after one `ask` naming
+ * what it changes (none asked when there is nothing to reset). What it reset, each one it could
+ * not, with why in a few words (its keys not read, or the write refused), and the commands a key
+ * the panel still has was kept off (when the panel's own reset failed).
+ */
+export async function resetEveryPlugin(
+  ask: (names: string[]) => Promise<boolean>,
+  name: (c: string) => string = q,
+): Promise<{ asked: boolean; reset: string[]; failed: { name: string; why: string }[]; error: string; keptOff: string }> {
   const { plugins, error } = await loadPluginKeys();
-  if (error) return { asked: false, reset: [], failed: [], error };
+  if (error) return { asked: false, reset: [], failed: [], error, keptOff: '' };
   const unread = plugins.filter((p) => p.unread).map((p) => ({ name: p.name, why: 'its keys could not be read' }));
-  const own = plugins.filter((p) => !p.unread && hasOwnKeys(p));
-  if (!own.length) return { asked: false, reset: [], failed: unread, error: '' };
-  if (!(await ask(own.map((p) => p.name)))) return { asked: true, reset: [], failed: [], error: '' };
-  const done = await Promise.all(own.map(async (p) => ({ p, r: await resetAllKeys(p) })));
-  return {
-    asked: true,
-    reset: done.filter((d) => d.r.ok).map((d) => d.p.name),
-    failed: [...unread, ...done.flatMap((d) => (d.r.ok ? [] : [{ name: d.p.name, why: d.r.message }]))],
-    error: '',
-  };
+  // The panel's key as stored (the page's copy may be behind another tab's change).
+  const stored = await appKeysStored();
+  const storedLive = stored ? (stored[ASSISTANT_KEY_ID] ?? null) : assistantKeys();
+  const app = stored ? Object.keys(stored).length > 0 : assistantKeys() !== null;
+  // With the panel's key back to its defaults, every plugin default comes back whole.
+  const own = plugins.filter((p) => !p.unread && canResetAll(p, app ? [] : (storedLive ?? [])));
+  if (!app && !own.length) return { asked: false, reset: [], failed: unread, error: '', keptOff: '' };
+  if (!(await ask([...(app ? [appResetName()] : []), ...own.map((p) => p.name)]))) return { asked: true, reset: [], failed: [], error: '', keptOff: '' };
+  const reset: string[] = [];
+  const failed = [...unread];
+  // The panel's key the plugins' defaults stay off: none once it is back to its defaults.
+  let live: readonly string[] = storedLive ?? [];
+  if (app) {
+    try {
+      await storeAppKeybinds(Object.fromEntries(CHANGEABLE_APP_KEYS.map((id) => [id, null])), SETTINGS_FROM);
+      reset.push(appResetName());
+      live = [];
+    } catch (e) {
+      failed.push({ name: appResetName(), why: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  const done = await Promise.all(own.map(async (p) => ({ p, r: await resetAllKeys(p, SETTINGS_FROM, live) })));
+  reset.push(...done.filter((d) => d.r.ok).map((d) => d.p.name));
+  failed.push(...done.flatMap((d) => (d.r.ok ? [] : [{ name: d.p.name, why: d.r.message }])));
+  const kept = done.flatMap((d) => (d.r.ok ? d.r.keptOff : []));
+  return { asked: true, reset, failed, error: '', keptOff: keptOffText(kept, name) };
 }

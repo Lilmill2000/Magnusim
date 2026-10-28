@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resetAppKeysForTests } from '../../keybinds/appKeys';
 import { ASSISTANT_FROM, KEYBINDS_PREF } from '../../keybinds/catalog';
 import { fakeKeysServer } from '../../test/keybindsFake';
 import { announcePref } from '../../workspace/prefsChannel';
@@ -8,6 +9,7 @@ import { KeybindsStep } from './KeybindsStep';
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  resetAppKeysForTests();
 });
 
 const row = (id: string) => document.querySelector(`[data-keybind="${id}"]`) as HTMLElement;
@@ -35,6 +37,38 @@ async function open(prefs?: Record<string, unknown>) {
   return server;
 }
 
+/** The Assistant panel's row, the label its buttons name, and its default keys as the row shows them. */
+const PANEL = 'app.assistant';
+const PANEL_LABEL = 'Open or close the Assistant panel';
+const PANEL_DEFAULTS = ['Ctrl+/', 'Ctrl+NumpadDivide'];
+
+/** Settings with the Assistant panel's key the person chose (`app`), once the row shows it (`shown`). */
+async function openWithPanelKey(app: Record<string, string[]>, shown: string[], prefs?: Record<string, unknown>) {
+  const server = fakeKeysServer({ prefs: prefs ? { demo: { [KEYBINDS_PREF]: prefs } } : {}, app });
+  render(<KeybindsStep />);
+  await screen.findByText('Rectangle');
+  await waitFor(() => expect(keysIn(PANEL)).toEqual(shown));
+  return server;
+}
+
+/** A commands file whose Rename has F2 by default, a key the Assistant panel may have too. */
+const F2_COMMANDS = {
+  version: 1,
+  contexts: [{ id: 'sketch', label: 'Sketch' }],
+  commands: [
+    { id: 'sketch.line', label: 'Line', group: 'Draw', context: 'sketch', keys: ['KeyL'] },
+    { id: 'edit.rename', label: 'Rename', group: 'Edit', context: 'any', keys: ['F2'] },
+  ],
+};
+
+/** Settings over F2_COMMANDS, with the person's Demo keys (`prefs`) and app keys (`app`). */
+async function openF2(prefs?: Record<string, unknown>, app?: Record<string, string[]>) {
+  const server = fakeKeysServer({ files: { '/plugins/demo/workspace/commands.json': F2_COMMANDS }, prefs: prefs ? { demo: { [KEYBINDS_PREF]: prefs } } : {}, app });
+  render(<KeybindsStep />);
+  await screen.findByText('Rename');
+  return server;
+}
+
 describe('Settings → Keybinds', () => {
   it("lists the app's keys, the browser's in a fold, and each plugin's commands by group with their keys", async () => {
     await open({ 'sketch.line': ['Shift+KeyL'] });
@@ -43,9 +77,13 @@ describe('Settings → Keybinds', () => {
     const fold = document.querySelector('[data-keys-reserved]') as HTMLDetailsElement;
     expect(fold.open).toBe(false);
     expect(within(fold).getByText('Close the tab')).toBeInTheDocument();
-    // The app's rows have nothing to press, and say so.
-    expect(within(row('app.assistant')).queryByRole('button')).toBeNull();
-    expect(screen.getByText("The app's own keys work everywhere and can't be changed.")).toBeInTheDocument();
+    // The Assistant panel's key can be changed (no Reset while it has its defaults); the app's
+    // other keys have nothing to press, and the section says so.
+    expect(button('app.assistant', 'Change Open or close the Assistant panel')).toBeInTheDocument();
+    expect(button('app.assistant', 'Clear Open or close the Assistant panel')).toBeInTheDocument();
+    expect(within(row('app.assistant')).queryByRole('button', { name: /^Reset/ })).toBeNull();
+    expect(within(row('app.close')).queryByRole('button')).toBeNull();
+    expect(screen.getByText("The app's own keys work everywhere. You can change the Assistant panel's; the others can't be changed.")).toBeInTheDocument();
     const demo = document.querySelector('[data-keys-plugin="demo"]') as HTMLElement;
     expect(within(demo).getByText('Part workspace')).toBeInTheDocument();
     expect([...demo.querySelectorAll('.wiz-keys-group-title')].map((h) => h.textContent)).toEqual(['Draw', 'Features', 'View', 'Edit']);
@@ -307,7 +345,197 @@ describe('Settings → Keybinds', () => {
     const server = fakeKeysServer();
     server.fetch.mockImplementation(async () => new Response(JSON.stringify({ ok: false, error: 'worker restarted after a timeout' }), { status: 503 }));
     render(<KeybindsStep />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read the plugin list: worker restarted after a timeout.');
+    // Every read fails here: the app's keys say so too.
+    await waitFor(() => expect(screen.getAllByRole('alert').map((a) => a.textContent).join(' ')).toContain('Could not read the plugin list: worker restarted after a timeout.'));
     expect(screen.queryByText('No plugin that is on lists its keys here yet.')).toBeNull();
+  });
+});
+
+describe("Settings → Keybinds: the Assistant panel's key", () => {
+  it("Change takes Alt+K and stores it as the app's key; the row shows it with a Reset, the keyboard goes back to Change", async () => {
+    const server = await open();
+    expect(within(row(PANEL)).getByText('Everywhere')).toBeInTheDocument();
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    const capture = within(row(PANEL)).getByRole('textbox', { name: `Press the new keys for ${PANEL_LABEL}` });
+    await waitFor(() => expect(document.activeElement).toBe(capture));
+    // A modifier alone waits for the key.
+    press(PANEL, 'AltLeft', 'Alt', { altKey: true });
+    expect(capture).toHaveTextContent('Alt+…');
+    press(PANEL, 'KeyK', 'k', { altKey: true });
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+K']));
+    expect(noteIn(PANEL)).toHaveTextContent('Saved');
+    expect(liveText()).toBe('Saved');
+    // Only the app's keys are written: no plugin command had it.
+    expect(server.app).toEqual({ [PANEL]: ['Alt+KeyK'] });
+    expect(server.calls).toEqual([['app', '', { [PANEL]: ['Alt+KeyK'] }]]);
+    expect(row(PANEL)).toHaveAttribute('data-keybind-default', '0');
+    expect(button(PANEL, `Reset ${PANEL_LABEL}`)).toBeInTheDocument();
+    await waitFor(() => expect(document.activeElement).toBe(button(PANEL, `Change ${PANEL_LABEL}`)));
+  });
+
+  it('its recorder refuses a key that types text, or one the browser keeps, says why and keeps listening; Escape cancels', async () => {
+    const server = await open();
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    const typesText = "types text: the Assistant panel's key needs Ctrl or Alt, or is a function key (F1 to F24). Press another.";
+    press(PANEL, 'KeyK', 'k');
+    expect(noteIn(PANEL)!.textContent).toBe(`K ${typesText}`);
+    expect(liveText()).toBe(`K ${typesText}`);
+    press(PANEL, 'KeyK', 'K', { shiftKey: true });
+    expect(noteIn(PANEL)!.textContent).toBe(`Shift+K ${typesText}`);
+    expect(liveText()).toBe(`Shift+K ${typesText}`);
+    press(PANEL, 'KeyW', 'w', { ctrlKey: true });
+    expect(noteIn(PANEL)).toHaveTextContent('Ctrl+W is kept for the browser and the system (Close the tab). Press another.');
+    expect(liveText()).toBe('Ctrl+W is kept for the browser and the system (Close the tab). Press another.');
+    press(PANEL, 'F5', 'F5');
+    expect(noteIn(PANEL)).toHaveTextContent('F5 is kept for the browser and the system (Reload the page). Press another.');
+    expect(within(row(PANEL)).getByRole('textbox')).toBeInTheDocument();
+    press(PANEL, 'Escape', 'Escape');
+    expect(within(row(PANEL)).queryByRole('textbox')).toBeNull();
+    expect(noteIn(PANEL)).toBeNull();
+    expect(keysIn(PANEL)).toEqual(PANEL_DEFAULTS);
+    expect(server.calls).toEqual([]);
+    await waitFor(() => expect(document.activeElement).toBe(button(PANEL, `Change ${PANEL_LABEL}`)));
+  });
+
+  it('pressing Ctrl+/ in its recorder gives it its defaults again', async () => {
+    const server = await openWithPanelKey({ [PANEL]: ['Alt+KeyK'] }, ['Alt+K']);
+    expect(button(PANEL, `Reset ${PANEL_LABEL}`)).toBeInTheDocument();
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    press(PANEL, 'Slash', '/', { ctrlKey: true });
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(PANEL_DEFAULTS));
+    expect(noteIn(PANEL)).toHaveTextContent('Saved');
+    expect(server.app).toEqual({});
+    expect(server.calls).toEqual([['app', '', {}]]);
+    expect(row(PANEL)).toHaveAttribute('data-keybind-default', '1');
+    expect(within(row(PANEL)).queryByRole('button', { name: `Reset ${PANEL_LABEL}` })).toBeNull();
+  });
+
+  it('Clear leaves it no key and Reset gives it Ctrl+/ again; the keyboard stays on its Change', async () => {
+    const server = await open();
+    const clear = button(PANEL, `Clear ${PANEL_LABEL}`);
+    clear.focus();
+    fireEvent.click(clear);
+    await waitFor(() => expect(within(row(PANEL)).getByText('No key')).toBeInTheDocument());
+    expect(noteIn(PANEL)).toHaveTextContent('Saved');
+    expect(server.app).toEqual({ [PANEL]: [] });
+    expect(within(row(PANEL)).queryByRole('button', { name: `Clear ${PANEL_LABEL}` })).toBeNull();
+    // Clear went with the keys: the keyboard is on Change.
+    await waitFor(() => expect(document.activeElement).toBe(button(PANEL, `Change ${PANEL_LABEL}`)));
+    const reset = button(PANEL, `Reset ${PANEL_LABEL}`);
+    reset.focus();
+    fireEvent.click(reset);
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(PANEL_DEFAULTS));
+    expect(server.app).toEqual({});
+    expect(within(row(PANEL)).queryByRole('button', { name: `Reset ${PANEL_LABEL}` })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(button(PANEL, `Change ${PANEL_LABEL}`)));
+    expect(server.calls.map(([what]) => what)).toEqual(['app', 'app']);
+  });
+
+  it('a key a plugin command has asks Replace or Cancel (the keyboard on Replace); Replace takes it from that command first', async () => {
+    const server = await open({ 'sketch.line': ['Alt+KeyL', 'Shift+KeyL'] });
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    press(PANEL, 'KeyL', 'l', { altKey: true });
+    await waitFor(() => expect(conflictIn(PANEL)).toBeTruthy());
+    const conflict = conflictIn(PANEL)!;
+    expect(conflict).toHaveTextContent('Alt+L is already the key of Demo · Line (Sketch).');
+    await waitFor(() => expect(document.activeElement).toBe(within(conflict).getByRole('button', { name: 'Replace' })));
+    expect(liveText()).toBe('Alt+L is already the key of Demo · Line (Sketch). Replace or Cancel.');
+    expect(server.calls).toEqual([]);
+    fireEvent.click(within(conflict).getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+L']));
+    expect(keysIn('sketch.line')).toEqual(['Shift+L']);
+    expect(noteIn(PANEL)).toHaveTextContent('Saved. Taken from Demo · Line (Sketch).');
+    expect(liveText()).toBe('Saved. Taken from Demo · Line (Sketch).');
+    // The command loses the key before the panel has it: never both at once.
+    expect(server.calls).toEqual([
+      ['set', 'demo', { 'sketch.line': ['Shift+KeyL'] }],
+      ['app', '', { [PANEL]: ['Alt+KeyL'] }],
+    ]);
+    expect(stored(server)).toEqual({ 'sketch.line': ['Shift+KeyL'] });
+    expect(server.app).toEqual({ [PANEL]: ['Alt+KeyL'] });
+    await waitFor(() => expect(document.activeElement).toBe(button(PANEL, `Change ${PANEL_LABEL}`)));
+  });
+
+  it("a taken key's Cancel changes neither and puts the keyboard back on its Change", async () => {
+    const server = await open({ 'sketch.line': ['Alt+KeyL'] });
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    press(PANEL, 'KeyL', 'l', { altKey: true });
+    await waitFor(() => expect(conflictIn(PANEL)).toBeTruthy());
+    fireEvent.click(within(conflictIn(PANEL)!).getByRole('button', { name: 'Cancel' }));
+    expect(conflictIn(PANEL)).toBeNull();
+    expect([keysIn(PANEL), keysIn('sketch.line')]).toEqual([PANEL_DEFAULTS, ['Alt+L']]);
+    expect(server.calls).toEqual([]);
+    expect(server.app).toEqual({});
+    await waitFor(() => expect(document.activeElement).toBe(button(PANEL, `Change ${PANEL_LABEL}`)));
+  });
+
+  it('a change made in another tab or by the Assistant shows here as it happens', async () => {
+    const server = await open();
+    server.app = { [PANEL]: ['Alt+KeyJ'] };
+    announcePref('', 'keybinds', server.app, 'bridge:elsewhere');
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['Alt+J']));
+    expect(button(PANEL, `Reset ${PANEL_LABEL}`)).toBeInTheDocument();
+    server.app = {};
+    announcePref('', 'keybinds', null, ASSISTANT_FROM);
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(PANEL_DEFAULTS));
+    expect(within(row(PANEL)).queryByRole('button', { name: `Reset ${PANEL_LABEL}` })).toBeNull();
+  });
+
+  it("a plugin command's recorder refuses the panel's key the person chose, with the app's-own-key words; once the panel moves, the command may have it", async () => {
+    const server = await openWithPanelKey({ [PANEL]: ['Alt+KeyK'] }, ['Alt+K']);
+    fireEvent.click(button('sketch.line', 'Change Line'));
+    press('sketch.line', 'KeyK', 'k', { altKey: true });
+    expect(noteIn('sketch.line')).toHaveTextContent("Alt+K is the app's own key (Open or close the Assistant panel). Press another.");
+    expect(liveText()).toBe("Alt+K is the app's own key (Open or close the Assistant panel). Press another.");
+    // Its default stays the app's as well: no one sets it.
+    press('sketch.line', 'Slash', '/', { ctrlKey: true });
+    expect(noteIn('sketch.line')).toHaveTextContent("Ctrl+/ is the app's own key (Open or close the Assistant panel). Press another.");
+    expect(within(row('sketch.line')).getByRole('textbox')).toBeInTheDocument();
+    press('sketch.line', 'Escape', 'Escape');
+    expect(server.calls).toEqual([]);
+    fireEvent.click(button(PANEL, `Reset ${PANEL_LABEL}`));
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(PANEL_DEFAULTS));
+    fireEvent.click(button('sketch.line', 'Change Line'));
+    press('sketch.line', 'KeyK', 'k', { altKey: true });
+    await waitFor(() => expect(keysIn('sketch.line')).toEqual(['Alt+K']));
+    expect(stored(server)).toEqual({ 'sketch.line': ['Alt+KeyK'] });
+  });
+
+  it("F2 for the panel takes it from the command whose default it is; that command's Reset is then refused with why", async () => {
+    const server = await openF2();
+    fireEvent.click(button(PANEL, `Change ${PANEL_LABEL}`));
+    press(PANEL, 'F2', 'F2');
+    await waitFor(() => expect(conflictIn(PANEL)).toBeTruthy());
+    expect(conflictIn(PANEL)).toHaveTextContent('F2 is already the key of Demo · Rename (Everywhere).');
+    fireEvent.click(within(conflictIn(PANEL)!).getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['F2']));
+    expect(within(row('edit.rename')).getByText('No key')).toBeInTheDocument();
+    expect(noteIn(PANEL)).toHaveTextContent('Saved. Taken from Demo · Rename (Everywhere).');
+    expect(stored(server)).toEqual({ 'edit.rename': [] });
+    const writes = server.calls.length;
+    fireEvent.click(button('edit.rename', 'Reset Rename'));
+    await waitFor(() => expect(noteIn('edit.rename')).toHaveTextContent("F2 is the app's own key (Open or close the Assistant panel)"));
+    expect(noteIn('edit.rename')).toHaveAttribute('data-keybind-note', 'error');
+    expect(liveText()).toBe("F2 is the app's own key (Open or close the Assistant panel)");
+    expect(within(row('edit.rename')).getByText('No key')).toBeInTheDocument();
+    expect(server.calls).toHaveLength(writes);
+    // Nothing a Reset all would change: the panel keeps F2.
+    expect(screen.getByRole('button', { name: 'Reset all Demo keys' })).toBeDisabled();
+  });
+
+  it("Reset all puts every default back but keeps the panel's key off the command whose default it is, and says so", async () => {
+    const server = await openF2({ 'edit.rename': ['KeyN'], 'sketch.line': ['KeyK'] }, { [PANEL]: ['F2'] });
+    await waitFor(() => expect(keysIn(PANEL)).toEqual(['F2']));
+    const resetAll = screen.getByRole('button', { name: 'Reset all Demo keys' });
+    expect(resetAll).toBeEnabled();
+    fireEvent.click(resetAll);
+    const said = "Every command has its default keys again. F2 kept off Rename: the Assistant panel's key.";
+    await waitFor(() => expect(document.querySelector('[data-keys-plugin="demo"] [data-keys-plugin-note]')).toHaveTextContent(said));
+    expect(liveText()).toBe(said);
+    expect(keysIn('sketch.line')).toEqual(['L']);
+    expect(within(row('edit.rename')).getByText('No key')).toBeInTheDocument();
+    expect(stored(server)).toEqual({ 'edit.rename': [] });
+    expect(server.app).toEqual({ [PANEL]: ['F2'] });
+    expect(screen.getByRole('button', { name: 'Reset all Demo keys' })).toBeDisabled();
   });
 });

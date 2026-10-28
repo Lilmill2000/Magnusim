@@ -12,22 +12,35 @@
  *   `key_taken` unless replace, nothing worked out from keys that could not be read (`unavailable`), and
  *   after the Yes the change is worked out again from the keys as they are then: one that differs
  *   from what the person was asked is `changed`, and nothing is written (as the CAD Part's own tools do).
+ * - The Assistant panel's own key is plugin "app", command "app.assistant" (Daniel, 2026-10-27: it
+ *   changes as a command does, under the same rule): a key any plugin command has is `key_taken`
+ *   unless replace, and the question names each command it takes the key from.
  */
 import { APP_COMMANDS, APP_LOCAL_KEYS, RESERVED_KEYS } from '../keybinds/appCommands';
+import { refreshAppKeys } from '../keybinds/appKeys';
 import {
+  appKeyRows,
+  appName,
+  applyAppChange,
   applyChange,
   ASSISTANT_FROM,
+  canResetAll,
   commandOf,
   commandsOf,
   contextLabel,
-  hasOwnKeys,
   isDefault,
+  keptOffFor,
+  keptOffText,
   keysOf,
   loadPluginKeys,
+  planAppChange,
   planChange,
   resetAllKeys,
+  type AppKeyChange,
+  type AppKeyRow,
   type KeyChange,
   type PluginKeys,
+  type Taker,
 } from '../keybinds/catalog';
 import { displayCombo, parseCombo } from '../keybinds/combo';
 import type { Command } from '../keybinds/commands';
@@ -42,17 +55,20 @@ const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 /** Where the person changes a key themselves. */
 export const SET_IN =
-  "Settings → Keybinds: Change, Reset or Clear on the command's row (Reset all per plugin). In a workspace that has its own, also a right-click on the command's toolbar button: Set keybind.";
+  "Settings → Keybinds: Change, Reset or Clear on the command's row (Reset all per plugin), the Assistant panel's key on its row among the app's. In a workspace that has its own, also a right-click on the command's toolbar button: Set keybind.";
 
 /** What the tools reach in the page: injected so the tests drive them without the app. */
 export interface KeysRuntime {
   load(): Promise<{ plugins: PluginKeys[]; error: string }>;
+  /** Reads the app's keys as stored and takes them on the page (the panel's key). */
+  refreshApp(): Promise<void>;
   /** The app's confirm dialog: true on the person's Yes. */
   confirm(o: { title: string; copy: string; yes: string; signal: AbortSignal }): Promise<boolean>;
 }
 
 export const pageKeysRuntime = (): KeysRuntime => ({
   load: loadPluginKeys,
+  refreshApp: refreshAppKeys,
   // A guarded Yes (a deliberate click only) that Enter never answers; its No is the app's Cancel.
   confirm: (o) => confirmAction({ ...o, guard: true, safe: true }),
 });
@@ -93,10 +109,45 @@ function commandRow(p: PluginKeys, c: Command) {
 
 const appRow = (c: { id: string; label: string; keys: readonly string[] }) => ({ id: c.id, label: c.label, keys: [...c.keys], shown: [...new Set(c.keys.map(displayCombo))] });
 
+/** Keys as people read them, Cmd's own forms left out (Cmd counts as Ctrl). */
+const appShown = (keys: readonly string[]) => [...new Set(keys.filter((k) => !k.includes('Meta')).map(displayCombo))];
+
+/** The app's changeable key as core__keybinds lists it. */
+const appKeyListed = (a: AppKeyRow) => ({
+  id: a.id,
+  label: a.label,
+  where: 'Everywhere',
+  keys: a.keys,
+  shown: appShown(a.keys),
+  defaults: a.defaults,
+  is_default: a.isDefault,
+  changeable: true,
+});
+
+/** The app's keys: the panel's as it is now (changeable), the others as published. */
+function appKeysListed() {
+  const own = appKeyRows();
+  return [...APP_COMMANDS, ...APP_LOCAL_KEYS].map((c) => {
+    const a = own.find((x) => x.id === c.id);
+    return a ? appKeyListed(a) : appRow(c);
+  });
+}
+
+/** Whether a plugin name names the app: "app" only (in Magnusim CAD the app's name is a plugin's too). */
+const isApp = (name: string) => lower(name) === 'app';
+
 /** core__keybinds. */
 export async function coreKeybinds(input: Record<string, unknown>, rt: KeysRuntime): Promise<Outcome> {
   const plugin = str(input.plugin);
   const target = str(input.target);
+  // The panel's key as stored (another tab, Settings): a failed read leaves the page's copy.
+  await rt.refreshApp().catch(() => {});
+  if (plugin && isApp(plugin)) {
+    const t = lower(target);
+    const keys = appKeysListed().filter((k) => !t || lower(k.id) === t || lower(k.label) === t);
+    if (target && !keys.length) return fail('not_found', `${appName()} has no key "${target.slice(0, 120)}".`, "core__keybinds with plugin 'app' and target '' lists them.");
+    return { ok: true, result: { data: { app: { name: appName(), keys }, set_in: SET_IN }, summary: `Keys of ${appName()}` } };
+  }
   const { plugins, error } = await rt.load();
   if (error) return fail('unavailable', error, 'Try again in a moment.');
   let list = plugins;
@@ -123,7 +174,10 @@ export async function coreKeybinds(input: Record<string, unknown>, rt: KeysRunti
   if (target && !found) return fail('not_found', `No command "${target.slice(0, 120)}"${plugin ? ` in ${list[0].name}` : ''}.`, 'core__keybinds with target "" lists them.');
   const data: Record<string, unknown> = { plugins: rows, set_in: SET_IN };
   if (!plugin && !target) {
-    data.app = { note: "The app's own keys: they work everywhere and are never changed.", keys: [...APP_COMMANDS, ...APP_LOCAL_KEYS].map(appRow) };
+    data.app = {
+      note: "The app's own keys: they work everywhere. Only the Assistant panel's (app.assistant, changeable) can be changed: core__set_keybind with plugin 'app'.",
+      keys: appKeysListed(),
+    };
     data.reserved = { note: 'Kept for the browser and the system: no command can have them.', keys: RESERVED_KEYS.map(appRow) };
   }
   return { ok: true, result: { data, summary: target ? `Keys of ${found} command${found === 1 ? '' : 's'}` : `Keys of ${list.length} plugin${list.length === 1 ? '' : 's'}` } };
@@ -144,7 +198,10 @@ function whereName(p: PluginKeys, c: Command): string {
  * a Replace takes the key from after "; " in the same form. Its No is the app's Cancel.
  */
 function question(p: PluginKeys, c: Command | null, action: string, keys: string[], took: Command[], after: (t: Command) => string[]): { title: string; copy: string; yes: string } {
-  if (action === 'reset_all') return { title: 'Reset keybinds?', copy: `${p.name} · every command: its own keys → its default keys`, yes: 'Reset all' };
+  if (action === 'reset_all') {
+    const kept = keptOffText(keptOffFor(p), displayCombo);
+    return { title: 'Reset keybinds?', copy: `${p.name} · every command: its own keys → its default keys${kept ? ` (${kept.replace(/\.$/, '')})` : ''}`, yes: 'Reset all' };
+  }
   const line = (cmd: Command, from: readonly string[], to: readonly string[]) => `${p.name} · ${whereName(p, cmd)}: ${keysAsked(from)} → ${keysAsked(to)}`;
   const copy = [line(c!, keysOf(p, c!.id), keys), ...took.map((t) => line(t, keysOf(p, t.id), after(t)))].join('; ');
   if (action === 'set') return { title: 'Change a keybind?', copy, yes: 'Change' };
@@ -179,6 +236,7 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
   if (input.person_asked !== true) {
     return fail('not_asked', 'Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves.', SET_IN);
   }
+  if (isApp(str(input.plugin))) return setAppKeybind(input, action, req, rt);
   const { plugins, error } = await rt.load();
   if (error) return fail('unavailable', error, 'Try again in a moment.');
   const p = pluginNamed(plugins, str(input.plugin));
@@ -186,7 +244,8 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
   if (p.unread) return fail('unavailable', p.unread, 'Nothing is changed until they can be read: try again in a moment.');
 
   if (action === 'reset_all') {
-    if (!hasOwnKeys(p)) return { ok: true, result: { data: { plugin: p.plugin, changed: false }, summary: `Every ${p.name} command has its defaults already` } };
+    await rt.refreshApp().catch(() => {});
+    if (!canResetAll(p)) return { ok: true, result: { data: { plugin: p.plugin, changed: false }, summary: `Every ${p.name} command has its defaults already` } };
     const stop = waiting(req);
     let yes = false;
     try {
@@ -202,7 +261,14 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
     if (!now) return fail('changed', CHANGED, CHANGED_HINT);
     const r = await resetAllKeys(now, ASSISTANT_FROM);
     if (!r.ok) return fail('failed', r.message);
-    return { ok: true, result: { data: { plugin: p.plugin, changed: true }, summary: `Every ${p.name} command has its default keys again` } };
+    const kept = keptOffText(r.keptOff, displayCombo);
+    return {
+      ok: true,
+      result: {
+        data: { plugin: p.plugin, changed: true, ...(kept ? { kept_off: r.keptOff.map((k) => ({ id: k.command.id, keys: k.keys })) } : {}) },
+        summary: `Every ${p.name} command has its default keys again${kept ? ` (${kept})` : ''}`.slice(0, 160),
+      },
+    };
   }
 
   const named = commandsNamed(p, str(input.command));
@@ -218,6 +284,8 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
   else if (action === 'clear') change = { action: 'clear' };
   else return fail('invalid_input', `action is one of ${KEYBIND_ACTIONS.join(', ')}.`);
 
+  // A Reset or a refusal reads the panel's key as stored (it may not be a command's).
+  await rt.refreshApp().catch(() => {});
   const plan = planChange(p, c.id, change);
   if (!plan.ok) {
     if (plan.code === 'conflict') {
@@ -244,6 +312,8 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
   // works it out again from the keys as it reads them, in the same turn (Settings, a workspace or
   // another tab may have changed them while the question was open), and writes nothing if it differs.
   const asKey = planKey(p, c.id, plan);
+  // The panel's key as stored now: the key asked about may have become it meanwhile (refused then).
+  await rt.refreshApp().catch(() => {});
   const still = (now: PluginKeys) => {
     const again = planChange(now, c.id, change);
     return again.ok && planKey(now, c.id, again) === asKey;
@@ -264,6 +334,89 @@ export async function coreSetKeybind(input: Record<string, unknown>, req: Assist
     result: {
       data: { ...commandRow(plugin, c), changed: true, ...(took.length ? { took } : {}) },
       summary: `${c.label}: ${shown}`.slice(0, 160),
+    },
+  };
+}
+
+/** The panel's keys in the question: its defaults as Ctrl+/, else as people read them. */
+const appKeysAsked = (id: string, keys: readonly string[]) => {
+  if (!keys.length) return 'no key';
+  const defaults = appKeyRows().find((a) => a.id === id)?.defaults ?? [];
+  return keys.length === defaults.length && keys.every((k, i) => k === defaults[i]) ? appShown(keys)[0] : appShown(keys).join(', ');
+};
+
+/** What a question about the app's key named, to tell it from a plan made on the keys later. */
+const appPlanKey = (id: string, plan: { stored: string[] | null; took: Taker[] }) =>
+  JSON.stringify({ stored: plan.stored, from: appKeyRows().find((a) => a.id === id)?.keys ?? [], took: plan.took.map((t) => [t.plugin.plugin, t.command.id, t.before]) });
+
+/** core__set_keybind for the app's own key (plugin "app"): the Assistant panel's. */
+async function setAppKeybind(input: Record<string, unknown>, action: string, req: AssistantInvoke, rt: KeysRuntime): Promise<Outcome> {
+  await rt.refreshApp().catch(() => {});
+  const rows = appKeyRows();
+  const target = lower(str(input.command));
+  const a = rows.find((r) => lower(r.id) === target || lower(r.label) === target) ?? (target ? null : rows[0]);
+  if (!a) return fail('not_found', `${appName()} has no key "${str(input.command).slice(0, 120)}" that can be changed.`, `Only ${rows.map((r) => `${r.id} (${r.label})`).join(', ')} can be.`);
+  let change: AppKeyChange;
+  if (action === 'set') {
+    const parsed = parseCombo(str(input.keys));
+    if (!parsed.ok) return fail('invalid_input', parsed.why);
+    change = { action: 'set', combo: parsed.combo, replace: input.replace === true };
+  } else if (action === 'reset' || action === 'reset_all') change = { action: 'reset' };
+  else change = { action: 'clear' };
+  // Whether a plugin command has the key: every plugin's keys as read now.
+  const { plugins, error } = await rt.load();
+  if (error) return fail('unavailable', error, 'Try again in a moment.');
+  const plan = planAppChange(plugins, a.id, change);
+  if (!plan.ok) {
+    if (plan.code === 'conflict') return fail('key_taken', `${plan.message}.`, 'Ask the person whether to take it from them; with their yes, call again with replace true.');
+    if (plan.code === 'unread') return fail('unavailable', plan.message, 'Nothing is changed until every plugin\'s keys can be read: try again in a moment.');
+    return fail(plan.code === 'unknown' ? 'not_found' : 'invalid_input', plan.message);
+  }
+  const listed = () => appKeyListed(appKeyRows().find((r) => r.id === a.id) ?? a);
+  if (!plan.took.length && JSON.stringify(plan.stored) === JSON.stringify(a.isDefault ? null : a.keys)) {
+    return { ok: true, result: { data: { ...listed(), changed: false }, summary: `${a.label} has those keys already` } };
+  }
+  const line = `${appName()} · ${a.label}: ${appKeysAsked(a.id, a.keys)} → ${appKeysAsked(a.id, plan.keys)}`;
+  const takers = plan.took.map((t) => `${t.plugin.name} · ${whereName(t.plugin, t.command)}: ${keysAsked(t.before)} → ${keysAsked(t.after)}`);
+  const copy = [line, ...takers].join('; ');
+  const asked =
+    change.action === 'set'
+      ? { title: 'Change a keybind?', copy, yes: 'Change' }
+      : change.action === 'reset'
+        ? { title: 'Reset a keybind?', copy, yes: 'Reset' }
+        : { title: 'Clear a keybind?', copy, yes: 'Clear' };
+  // What the question names, as it is asked: a change heard while it is open is not this one.
+  const asKey = appPlanKey(a.id, plan);
+  const stop = waiting(req);
+  let yes = false;
+  try {
+    yes = await rt.confirm({ ...asked, signal: req.signal });
+  } finally {
+    stop();
+  }
+  if (!yes) return fail('step_declined', 'The person said no: nothing changed.');
+  // The change must still be the one the person said Yes to: worked out again on the keys as
+  // they are now; each write then checks its own keys once more as it reads them.
+  await rt.refreshApp().catch(() => {});
+  const again = await rt.load();
+  if (again.error) return fail('unavailable', again.error, 'Nothing is changed until they can be read: try again in a moment.');
+  const replan = planAppChange(again.plugins, a.id, change);
+  if (!replan.ok && replan.code === 'unread') return fail('unavailable', replan.message, 'Nothing is changed until every plugin\'s keys can be read: try again in a moment.');
+  if (!replan.ok || appPlanKey(a.id, replan) !== asKey) return fail('changed', CHANGED, CHANGED_HINT);
+  const { result } = await applyAppChange(again.plugins, a.id, change, undefined, ASSISTANT_FROM, true);
+  if (!result.ok) {
+    if (result.code === 'changed') return fail('changed', CHANGED, CHANGED_HINT);
+    if (result.code === 'unread') return fail('unavailable', result.message, 'Nothing is changed until they can be read: try again in a moment.');
+    if (result.code === 'conflict') return fail('key_taken', result.message);
+    return fail(result.code === 'failed' ? 'failed' : 'invalid_input', result.message);
+  }
+  const took = result.took.map((t) => ({ plugin: t.plugin.plugin, id: t.command.id, label: t.command.label, keys: t.after }));
+  const shown = appKeysAsked(a.id, result.keys);
+  return {
+    ok: true,
+    result: {
+      data: { ...listed(), changed: true, ...(took.length ? { took } : {}) },
+      summary: `${a.label}: ${shown}`.slice(0, 160),
     },
   };
 }

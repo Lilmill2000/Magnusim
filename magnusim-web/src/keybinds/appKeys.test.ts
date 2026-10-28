@@ -30,9 +30,15 @@ describe("the Assistant panel's key the person chose", () => {
     expect(appKeyRefusal('Ctrl+KeyW', displayCombo)).toBe('Ctrl+W is kept for the browser and the system (Close the tab)');
     expect(appKeyRefusal('F5', displayCombo)).toBe('F5 is kept for the browser and the system (Reload the page)');
     expect(appKeyRefusal('Escape', displayCombo)).toBe("Escape is the app's own key in dialogs, menus and modes (Close the open dialog, menu or mode)");
-    for (const text of ['KeyK', 'Shift+KeyK', 'Space', 'Digit1', 'Shift+Slash', 'Enter']) {
+    for (const text of ['KeyK', 'Shift+KeyK', 'Space', 'Digit1', 'Shift+Slash']) {
       expect(appKeyRefusal(text, displayCombo), text).toBe(
         `${displayCombo(text)} types text: the Assistant panel's key needs Ctrl or Alt, or is a function key (F1 to F24)`,
+      );
+    }
+    // A key that moves or edits while the person types is no key for it either, in its own words.
+    for (const used of ['Enter', 'Delete', 'ArrowUp', 'Home', 'Backspace']) {
+      expect(appKeyRefusal(used, displayCombo), used).toBe(
+        `${displayCombo(used)} is a key used while typing: the Assistant panel's key needs Ctrl or Alt, or is a function key (F1 to F24)`,
       );
     }
     expect(appKeyRefusal('Ctrl+Nope')).toBe('"Ctrl+Nope" is not a key');
