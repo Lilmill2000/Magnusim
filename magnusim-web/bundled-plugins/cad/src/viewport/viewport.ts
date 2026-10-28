@@ -43,7 +43,7 @@ import {
 } from './colors';
 import { BODY_LIT_OFFSET_UNITS, BODY_OFFSET_UNITS, bodyShownColor, createBodyMaterial, createLitFacesMaterial, createPointsMaterial, SEE_THROUGH_OFFSET_UNITS, setBodyColor, setClipping, setSeeThrough, type BodyMaterial } from './materials';
 import { OriginPlanes, type PlaneState } from './origin';
-import { isFaceTwin, isLightSurface, LIT_FACES_ORDER, surfaceStencil, syncFaceTwins } from './onface';
+import { isFaceTwin, isLightSurface, LIT_FACES_ORDER, setFaceInk, surfaceStencil, syncFaceTwins } from './onface';
 import { LIGHT, samePalette, type MarkPalette } from './palette';
 import { kindsForFilter, makeProjector, pickAt, raycastBodies, rayAt, type PickBody, type PickView } from './pick';
 // P4b SELECT: box selection.
@@ -201,7 +201,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   /** E2: every body's lit faces' stencil pass (BodyRec.litFaces): one material, it sets the face bit. */
   const litFacesMat = createLitFacesMaterial();
   surfaceStencil(litFacesMat, 'mark');
-  const lineMats = (): LineMaterial[] => [selEdgeMat, hovEdgeMat, ...[...bodies.values()].map((b) => b.edgeMat)];
+  // A body's edges and their face twin's copy of its material (E1: dark), which takes its width per pixel too.
+  const lineMats = (): LineMaterial[] => [selEdgeMat, hovEdgeMat, ...[...bodies.values()].flatMap((b) => [b.edgeMat, ...edgeTwinMats(b)])];
+  const edgeTwinMats = (b: BodyRec): LineMaterial[] => b.edges.children.filter(isFaceTwin).map((t) => (t as LineSegments2).material as LineMaterial);
 
   // ------------------------------------------------------------ overlays and tools (P2/P3)
   // Layers: other areas' drawing (sketch geometry, regions, handles, measure
@@ -494,6 +496,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const eg = new LineSegmentsGeometry();
     if (data.drawEdges.length >= 6) eg.setPositions(data.drawEdges);
     const edgeMat = makeLineMaterial(marksNow.edge, EDGE_WIDTH_PX);
+    setFaceInk(edgeMat, marksNow.face ? marksNow.face.edge : null);
     const edges = new LineSegments2(eg, edgeMat);
     edges.name = `edges:${src.id}`;
     edges.frustumCulled = false;
@@ -598,9 +601,10 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     b.litFaces.visible = how === 'clear' && [...b.faceHl.values()].some((hl) => isLightSurface(bodyShownColor(b.color, 0, hl)));
   }
 
-  /** The layers' marks drawn twice where they follow what is under them (dark), once as they are (light, a picture). */
+  /** The edges and the layers' marks drawn twice where they follow what is under them (dark), once as they are (light, a picture). */
   function syncTwins() {
     const on = marksNow.face !== null;
+    for (const b of bodies.values()) syncFaceTwins(b.edges, on);
     for (const l of layers.values()) syncFaceTwins(l.group, on);
   }
 
@@ -609,6 +613,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     marksNow = p;
     for (const b of bodies.values()) {
       b.edgeMat.color.setHex(p.edge);
+      // E1: over a light surface the edges are LIGHT's (their face twin), over the background p.edge.
+      setFaceInk(b.edgeMat, p.face ? p.face.edge : null);
       bodyStencil(b);
     }
     caps.setFaceBit(p.face !== null);

@@ -129,7 +129,9 @@ describe('DARK', () => {
   it("E2: over a light surface every mark takes LIGHT's colour for its role, exactly", () => {
     const f = DARK.face!;
     expect(f).not.toBeNull();
-    expect({ constructLine: f.constructLine, measure: f.measure, ink: f.ink }).toEqual({ constructLine: LIGHT.constructLine, measure: LIGHT.measure, ink: LIGHT.ink });
+    expect({ edge: f.edge, constructLine: f.constructLine, measure: f.measure, ink: f.ink }).toEqual({ edge: LIGHT.edge, constructLine: LIGHT.constructLine, measure: LIGHT.measure, ink: LIGHT.ink });
+    // E1 too: over a face the edges are the light view's near-black, over the background #e6e9ef.
+    expect([f.edge, DARK.edge]).toEqual([0x0a0b0e, 0xe6e9ef]);
     expect({ ...f.sketch }).toEqual({ ...LIGHT.sketch });
     // Role by role, not by value: the dark reference axes, the arrows' ink and the under-defined
     // lines are one blue, but over a face the axes take LIGHT's darker construct blue.

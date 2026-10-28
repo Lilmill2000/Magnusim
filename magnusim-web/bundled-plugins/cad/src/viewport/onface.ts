@@ -20,8 +20,10 @@
 //     pixels with the bit. A mark that colours per segment or point (the sketch's lines and
 //     points) gives its twin a geometry of its own in the face colours (setFaceColours).
 //   - Which marks: a material with a face ink (setFaceInk: its role's LIGHT colour), or a geometry
-//     with face colours. The owner says so; the view (syncFaceTwins, before every render) makes,
-//     shows, hides and updates the twins, so a material swap (hover, pick: no face ink, so drawn
+//     with face colours; the bodies' B-rep edges too (E1: the view gives their material LIGHT's
+//     near-black and twins them with the layers). The owner says so; the view (syncFaceTwins,
+//     before every render) makes, shows, hides and updates the twins, so a material swap (hover,
+//     pick: no face ink, so drawn
 //     once as it is), a geometry swap, a new dash, width or opacity, and the section's clipping
 //     planes follow at once. A twin may have an opacity of its own (setFaceOpacity: sketch mode's
 //     hover halo, fainter over the background in a dark view).

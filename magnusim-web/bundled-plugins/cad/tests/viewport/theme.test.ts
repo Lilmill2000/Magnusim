@@ -34,6 +34,8 @@ interface Seen {
   triad: boolean;
   clear: number;
   edges: Record<string, number>;
+  /** Each body's edges: their stencil test and their face twin's colour where it shows (E1), as `marks`. */
+  edgeTwins: Record<string, { only: 'all' | 'face' | 'ground'; twin: number | null }>;
   /** Each body's faces in the stencil: off, or the face bit set ('mark') or cleared ('clear'). */
   surfaces: Record<string, 'off' | 'mark' | 'clear'>;
   /** The section cap's stencil ref (0 in light, the face bit in dark), when the cap shows. */
@@ -99,11 +101,16 @@ vi.mock('three', async (importOriginal) => {
         gpu.fail = null;
         throw new Error('render failed');
       }
-      const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, surfaces: {}, cap: null, litFaces: {}, marks: {}, arrows: [], triadLight: null };
+      const s: Seen = { toTarget: !!this.target, triad: this.target ? !!this.target.scissorTest : this.scissor, clear: this.clearHex, edges: {}, edgeTwins: {}, surfaces: {}, cap: null, litFaces: {}, marks: {}, arrows: [], triadLight: null };
       const only = (m: Material) => (!m.stencilWrite ? 'all' : m.stencilWriteMask === 0 && m.stencilFuncMask === FACE_BIT ? (m.stencilRef === FACE_BIT ? 'face' : 'ground') : 'other');
       scene.traverse((o) => {
         const m = (o as Mesh).material as unknown as Material & { color?: { getHex(): number }; linewidth?: number; uniforms?: { uColor?: { value: { x: number; y: number; z: number } }; uAmbient?: { value: number }; uDiffuse?: { value: number } } };
-        if (o.name.startsWith('edges:')) s.edges[o.name.slice(6)] = m.color!.getHex();
+        if (o.name.startsWith('edges:')) {
+          s.edges[o.name.slice(6)] = m.color!.getHex();
+          const t = o.children.find(isFaceTwin) as (Object3D & { material: Material & { color: { getHex(): number } } }) | undefined;
+          s.edgeTwins[o.name.slice(6)] = { only: only(m) as 'all', twin: t && t.visible ? t.material.color.getHex() : null };
+          if (t?.visible) expect(only(t.material), 'an edge twin draws over light surfaces only').toBe('face');
+        }
         if (o.name.startsWith('body:')) s.surfaces[o.name.slice(5)] = !m.stencilWrite ? 'off' : m.stencilWriteMask === FACE_BIT && m.stencilRef === FACE_BIT ? 'mark' : m.stencilWriteMask === FACE_BIT && m.stencilRef === 0 ? 'clear' : ('other' as never);
         if (o.name === 'section-cap' && o.parent?.visible) s.cap = m.stencilRef;
         if (o.name.startsWith('body-lit-faces:')) {
@@ -251,6 +258,8 @@ describe('the view and the theme', () => {
     const f = frame(gl);
     expect(f.main.clear).toBe(0x1b1f27);
     expect(f.main.edges).toEqual({ b_1: 0xe6e9ef, b_2: 0xe6e9ef });
+    // E1: the edges over the background, and their twin in LIGHT's near-black over light surfaces.
+    expect(f.main.edgeTwins).toEqual({ b_1: { only: 'ground', twin: 0x0a0b0e }, b_2: { only: 'ground', twin: 0x0a0b0e } });
     expect(f.triad.arrows).toEqual([0xff6b6b, 0xff6b6b, 0x4cd07d, 0x4cd07d, 0x6f9bff, 0x6f9bff]);
     expect(f.triad.triadLight).toEqual(DARK.triadLight);
     // The same palette again: nothing.
@@ -261,6 +270,7 @@ describe('the view and the theme', () => {
     expect(hook.mock.calls[1]).toEqual([LIGHT]);
     const g = frame(gl);
     expect([g.main.clear, g.main.edges.b_1, g.triad.arrows[0]]).toEqual([0xf0f2f7, 0x0a0b0e, 0xd42828]);
+    expect(g.main.edgeTwins, 'the edges drawn once again, as they are').toEqual({ b_1: { only: 'all', twin: null }, b_2: { only: 'all', twin: null } });
     expect(g.triad.triadLight).toEqual({ ambient: 0, diffuse: 1 });
   });
 
@@ -392,6 +402,7 @@ describe('the view and the theme', () => {
     expect(pic[0].clear).toBe(0xf0f2f7);
     expect(pic[0].edges).toEqual({ b_1: 0x0a0b0e, b_2: 0x0a0b0e });
     // No mark drawn twice, no stencil test or write: the light picture.
+    expect(pic[0].edgeTwins).toEqual({ b_1: { only: 'all', twin: null }, b_2: { only: 'all', twin: null } });
     expect(pic[0].surfaces).toEqual({ b_1: 'off', b_2: 'off' });
     expect(pic[0].marks).toEqual({ measure: { only: 'all', twin: null } });
     expect(pic[1].arrows).toEqual([0xd42828, 0xd42828, 0x1f9a3a, 0x1f9a3a, 0x2a5bd7, 0x2a5bd7]);

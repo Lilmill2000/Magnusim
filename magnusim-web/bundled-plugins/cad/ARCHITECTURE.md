@@ -976,7 +976,13 @@ with the host once for the page's life, and its chip goes in the dock.
     pointing at the eye reads 3.5:1 and more where the core's headlight alone
     gives 1.8:1; sketch lines and points; reference axes and points;
     measure; the arrows and the banana's guide). Daniel's picks (2026-10-28):
-    E1 (a), the bodies' B-rep edges `#e6e9ef`, plain; E2, "the colour follows
+    E1, the bodies' B-rep edges follow what is under them as E2's marks do
+    (`DARK.face.edge`, the light view's near-black, over a light surface;
+    `#e6e9ef`, plain, over the background: his first pick, `#e6e9ef`
+    everywhere, lost them on a face seen head-on, which lights to `#dbe9fe`,
+    1.06:1, as when sketching on it; the view twins each body's edges, and
+    the twin's copy of the edge material takes its width per pixel with
+    them); E2, "the colour follows
     what's under it": every coloured thin mark that can lie on a face (the
     sketch's lines and points in every state and both modes, preview, guides,
     dimension lines and grid, a trim's doomed piece, linked and lost curves;
