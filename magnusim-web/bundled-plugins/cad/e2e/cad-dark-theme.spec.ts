@@ -5,20 +5,26 @@
 // a dark <html> switches the host's tokens and chrome along with CAD's own; only the SDK's part is
 // given here.
 //  - dark-model: the view's background is #1b1f27 (its CSS and the canvas), the edges are E1's
-//    candidate (the mid grey until Daniel picks), a finished sketch's lines E2's, and the faces
-//    are the pixels they were (D2); back to light, every colour of the page (computed, element by
-//    element) and the canvas are as before.
+//    #e6e9ef (Daniel: option a), a finished sketch beside the block (over the background) its
+//    dark inks, and the faces are the pixels they were (D2); back to light, every colour of the
+//    page (computed, element by element) and the canvas are as before.
 //  - dark-picture: a Picture taken while dark is light (the light background, near-black edges,
 //    no dark background pixel) and is the same picture as one taken in light; the view shows no
 //    light frame meanwhile (its pixels before and after the picture are the same) and no timer
 //    is left behind.
 //  - dark-sketch: with a sketch open, its lines and its draw cursor recolour without a reload,
 //    and come back in light.
-//  - dark-sketch-face: a sketch on a body's face (review round 1: E2 covered only the fully
-//    defined lines): an under-defined line, the line tool's rubber band and a lost reference's
-//    amber read on the light face in E2's default (c), (b) puts the background around them, and
-//    the Sketch panel's keys (the state dot, the reference's dot) are the colours the lines are
-//    drawn in, whatever the candidate.
+//  - dark-follows-face (E2, Daniel: "the colour follows what's under it"; device scale 2, so a
+//    line's middle is whole pixels): a sketch on a block's top face whose lines cross the face's
+//    outline. In model mode a finished sketch's lines, then in sketch mode each state (fully
+//    defined, under defined, over defined, construction), the points and the line tool's rubber
+//    band: LIGHT's ink over the face, the dark ink over the background; the panel's keys show
+//    both; the draw cursor takes the light tone over the face; light is one colour again, and
+//    dark again live; a picture taken while dark is the light one, byte for byte.
+//  - dark-follows-face-marks: a reference point and axis, the measure line's ends and the Extrude
+//    arrow, over a face and over the background.
+//  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
+//    over a cap takes the face ink (the cap is a light surface), the one beyond it the dark one.
 //  - dark-grid-edge-on: a sketch's plane seen near edge-on keeps the grid it has (no new one is
 //    laid out that far across); going dark repaints that grid dark (review round 1: it stayed the
 //    light grid, bright on the dark view), and a picture taken then has the light grid, the
@@ -36,10 +42,8 @@
 //    the host's --mg-active-bg / -border, as the core's (they were CAD's own blue in dark); back
 //    in light each is as before.
 //  - dark-sketch-picture: in sketch mode (review round 1: only model mode was pictured dark), the
-//    view's own picture (the Assistant's and the Picture tool's path) taken while dark, E2 (c) or
-//    (b) with its rims, is the one taken in light, and the view shows no light frame meanwhile.
-//  - dark-lines: E1 / E2's switch (window.__CAD__.appearance.darkLines) draws each candidate's edge
-//    colour, (b) with a rim, for Daniel's screenshot review.
+//    view's own picture (the Assistant's and the Picture tool's path) taken while dark is the one
+//    taken in light, and the view shows no light frame meanwhile.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
@@ -50,19 +54,17 @@ import { hostTokens, themeValue } from '../tests/styles/css-tokens';
 type V3 = [number, number, number];
 type RGB = [number, number, number];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type W = { __CAD__: { services: any; appearance: { get(): { appearance: { theme: string }; palette: string; lines: { edges: string; sketch: string } | null; background: number }; darkLines(l?: unknown): unknown } } };
+type W = { __CAD__: { services: any; appearance: { get(): { appearance: { theme: string }; palette: string; background: number; followsFaces: boolean } } } };
 
 const LIGHT_BG: RGB = [0xf0, 0xf2, 0xf7];
 const DARK_BG: RGB = [0x1b, 0x1f, 0x27];
 const LIGHT_EDGE: RGB = [0x0a, 0x0b, 0x0e];
-/** E1 / E2 candidates: (a) and (b) the host's dark text colour, (c) the mid grey (the default until Daniel picks). */
+/** E1 (a): the edges, and a fully defined sketch line over the background: the host's dark text colour. */
 const PALE: RGB = [0xe6, 0xe9, 0xef];
-const GREY: RGB = [0x8a, 0x93, 0xa3];
 const LIGHT_FULL: RGB = [0x10, 0x18, 0x28];
 const LIGHT_UNDER: RGB = [0x15, 0x70, 0xef];
-/** E2's under-defined blue: (c)'s mid tone (the default), (a) and (b)'s light ink. */
-const DARK_UNDER: RGB = [0x2e, 0x6b, 0xd8];
-const PALE_UNDER: RGB = [0x7a, 0xa7, 0xff];
+/** The dark palette's under-defined blue (the host's dark --mg-primary-ink). */
+const DARK_UNDER: RGB = [0x7a, 0xa7, 0xff];
 
 const dist = (a: ArrayLike<number>, i: number, c: RGB) => Math.max(Math.abs(a[i] - c[0]), Math.abs(a[i + 1] - c[1]), Math.abs(a[i + 2] - c[2]));
 
@@ -193,26 +195,6 @@ function classify(img: { width: number; height: number; data: Uint8Array }, line
   return { edge, bg, face };
 }
 
-/** The pixels next to the edge pixels (1 to 2 px from one) on a face: not edge or background pixels themselves. */
-function besideEdges(w: number, h: number, edge: number[], bg: number[]): number[] {
-  const isEdge = new Set([...edge, ...bg]);
-  const out = new Set<number>();
-  for (const i of edge) {
-    const p = i / 4;
-    const x = p % w;
-    const y = Math.floor(p / w);
-    for (let dy = -2; dy <= 2; dy++)
-      for (let dx = -2; dx <= 2; dx++) {
-        const xx = x + dx;
-        const yy = y + dy;
-        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-        const j = 4 * (yy * w + xx);
-        if (!isEdge.has(j)) out.add(j);
-      }
-  }
-  return [...out];
-}
-
 /** Of these pixels of a shot, the fraction within `tol` of a colour. */
 const share = (img: { data: Uint8Array }, at: number[], c: RGB, tol: number) => (at.length ? at.filter((i) => dist(img.data, i, c) <= tol).length / at.length : 0);
 /** Of these pixels, the fraction unchanged between two shots (within 3 levels). */
@@ -234,12 +216,12 @@ const SKETCH: V3[] = [
   [40, 20, 0],
 ];
 
-test('cad:dark-model the view turns dark with light edges and sketch lines, the faces as they were; back to light every colour is as before', async ({ page, request }) => {
+test('cad:dark-model the view turns dark with #e6e9ef edges and light sketch lines, the faces as they were; back to light every colour is as before', async ({ page, request }) => {
   const { seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await blockAndSketch(page);
   // Light, as always: CAD has no appearance from this host.
-  expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get())).toMatchObject({ appearance: { theme: 'light' }, palette: 'light', lines: null, background: 0xf0f2f7 });
+  expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get())).toMatchObject({ appearance: { theme: 'light' }, palette: 'light', followsFaces: false, background: 0xf0f2f7 });
   const coloursBefore = await pageColours(f);
   const shotBefore = await canvasShot(page);
   const blockClip = await clipAround(page, BLOCK);
@@ -254,7 +236,7 @@ test('cad:dark-model the view turns dark with light edges and sketch lines, the 
   expect(sk.edge.length, "the finished sketch's fully defined lines in light").toBeGreaterThan(20);
 
   await appearance(page, 'dark');
-  expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get())).toMatchObject({ appearance: { theme: 'dark' }, palette: 'dark', lines: { edges: 'c', sketch: 'c' }, background: 0x1b1f27 });
+  expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get())).toMatchObject({ appearance: { theme: 'dark' }, palette: 'dark', followsFaces: true, background: 0x1b1f27 });
   // The view's background, in CSS and on the canvas: the host's dark viewport colour.
   const css = await f.evaluate(() => ({
     token: getComputedStyle(document.documentElement).getPropertyValue('--cad-viewport-bg').trim(),
@@ -263,12 +245,13 @@ test('cad:dark-model the view turns dark with light edges and sketch lines, the 
   expect(css).toEqual({ token: '#1b1f27', view: 'rgb(27, 31, 39)' });
   expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
   const block1 = await shoot(page, blockClip);
-  expect(share(block1, px.edge, GREY, 24), "the edges are E1's mid grey").toBeGreaterThan(0.8);
+  expect(share(block1, px.edge, PALE, 24), "the edges are E1's #e6e9ef").toBeGreaterThan(0.8);
   expect(share(block1, px.edge, LIGHT_EDGE, 24), 'no near-black edge is left').toBeLessThan(0.05);
   expect(share(block1, px.bg, DARK_BG, 4), 'the background around the block').toBeGreaterThan(0.95);
   expect(unchanged(block0, block1, px.face), 'the faces are the pixels they were (D2)').toBeGreaterThan(0.98);
   const sketch1 = await shoot(page, sketchClip);
-  expect(share(sketch1, sk.edge, GREY, 24), "the sketch's fully defined lines are E2's mid grey").toBeGreaterThan(0.8);
+  // Beside the block, over the background: the dark palette's own ink (the host's dark text colour).
+  expect(share(sketch1, sk.edge, PALE, 24), "the sketch's fully defined lines over the background are #e6e9ef").toBeGreaterThan(0.8);
 
   await appearance(page, 'light');
   // Every colour of the page as it was (the dark set only ever adds to the light one), and the canvas.
@@ -421,12 +404,7 @@ test('cad:dark-sketch an open sketch recolours its lines and its draw cursor liv
 
   await appearance(page, 'dark');
   const line1 = await shoot(page, clip);
-  expect(share(line1, lk.edge, DARK_UNDER, 24), "the line in the dark palette's blue (E2's default, the mid blue)").toBeGreaterThan(0.8);
-  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('a'));
-  await still(page);
-  expect(share(await shoot(page, clip), lk.edge, PALE_UNDER, 24), "(a): the host's light blue").toBeGreaterThan(0.8);
-  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('c'));
-  await still(page);
+  expect(share(line1, lk.edge, DARK_UNDER, 24), "the line, over the background, in the dark palette's blue").toBeGreaterThan(0.8);
   expect(share(line1, lk.bg, DARK_BG, 30), 'the background (and its grid) dark').toBeGreaterThan(0.9);
   const darkCursor = await cursor();
   expect(darkCursor, 'the draw cursor in the dark tone (white ink)').not.toBe(lightCursor);
@@ -450,155 +428,457 @@ function contrastOf(a: RGB, b: RGB): number {
 }
 const hexRgb = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const cssRgb = (h: string) => { const [r, g, b] = hexRgb(h); return `rgb(${r}, ${g}, ${b})`; };
-const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : 0);
 
-test('cad:dark-sketch-face on a body face, every sketch state reads in dark (E2 covers all), (b) rims them, and the panel keys are the lines\' colours', async ({ page, request }) => {
-  const { frame, seen } = await freshPart(page, request);
-  const f = workspaceFrame(page);
-  // A 40 x 40 x 20 block, and a 10 mm cube on its top face (to project, then lose).
-  await addSolid(page, { size: [40, 40, 20] });
-  await addSolid(page, { at: [25, 25, 20], size: [10, 10, 10] });
-  await still(page);
-  const click = async (p: V3) => {
-    await still(page);
-    const [x, y] = await modelOnPage(page, p);
-    await page.mouse.click(x, y);
-  };
-  // A sketch on the block's top face (z 20), the cube's top face projected into it.
-  await click([8, 8, 20]);
-  await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
-  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await still(page);
-  await openSketchDetails(page, frame);
-  await page.keyboard.press('p');
-  await click([30, 30, 30]);
-  await still(page);
-  const links = frame.locator('[data-sketch-links] [data-link]');
-  await expect(links).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  // An under-defined line on the face.
-  await page.keyboard.press('l');
-  await click([5, 8, 20]);
-  await click([18, 14, 20]);
-  await page.keyboard.press('Escape');
-  await still(page);
-  await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
-  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
-  // The cube suppressed: its square is a lost reference, amber, where the cube stood on the face.
-  await featureRowNamed(frame, 'Extrude 2').locator('> .tree-row').click({ button: 'right' });
-  await frame.locator('[data-cad-menu] [data-menu-item="suppress"]').click();
-  await f.waitForFunction(
-    () => {
-      const st = (window as unknown as W).__CAD__.services.doc.state.get();
-      return st.rebuild.status === 'done' && st.doc.features.every((x: { id: string }) => st.rebuild.features[x.id] && st.rebuild.features[x.id].state !== 'pending');
-    },
-    null,
-    { timeout: 60_000 },
-  );
-  await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]').last().locator('> .tree-row').dblclick();
-  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
-  await still(page);
-  await expect(links.first()).toHaveAttribute('data-link-state', 'lost');
-  // The line tool's rubber band from (5, 30) to the pointer at (18, 35), on the face.
-  await page.keyboard.press('l');
-  await click([5, 30, 20]);
-  const [mx, my] = await modelOnPage(page, [18, 35, 20]);
-  await page.mouse.move(mx, my, { steps: 4 });
-  await still(page);
+// ---- E2: the colour follows what's under it (Daniel, 2026-10-28)
+// At device scale 2 every line here (1.6 px and up) has whole pixels in its middle, so the pixel
+// nearest a line's ink is the ink itself, not a blend with what is under it.
+test.describe("E2: a mark's colour follows what is under it", () => {
+  test.use({ deviceScaleFactor: 2 });
 
-  // The marks, in model mm on the face: the under-defined line, the rubber band, the lost square's lower side.
-  const MARKS: { name: string; ink: 'under' | 'preview' | 'lost'; a: V3; b: V3 }[] = [
-    { name: 'under-defined line', ink: 'under', a: [5, 8, 20], b: [18, 14, 20] },
-    { name: 'rubber band', ink: 'preview', a: [5, 30, 20], b: [18, 35, 20] },
-    { name: 'lost reference', ink: 'lost', a: [25, 25, 20], b: [35, 25, 20] },
-  ];
-  const clip = await clipAround(page, [
-    [0, 0, 20],
-    [40, 40, 20],
-  ], 4);
-  const onClip = async (p: V3) => {
-    const [x, y] = await modelOnPage(page, p);
-    return [x - clip.x, y - clip.y] as [number, number];
+  type Shot = { img: { width: number; height: number; data: Uint8Array }; k: number; clip: { x: number; y: number; width: number; height: number } };
+  const shot2 = async (page: Page, clip: Shot['clip']): Promise<Shot> => {
+    const img = PNG.decode(await page.screenshot({ clip }));
+    return { img, k: img.width / clip.width, clip };
   };
-  const along = await Promise.all(MARKS.map(async (m) => ({ ...m, s: await onClip(m.a), e: await onClip(m.b) })));
-  const faceAt = await Promise.all(([[12, 22, 20], [30, 12, 20]] as V3[]).map(onClip));
-  type Img = { width: number; height: number; data: Uint8Array };
-  const px = (img: Img, x: number, y: number): RGB => {
-    const i = 4 * (Math.round(y) * img.width + Math.round(x));
-    return [img.data[i], img.data[i + 1], img.data[i + 2]];
+  /** Model points on the page (CSS px), in one call. */
+  const onPage = async (page: Page, pts: V3[]): Promise<[number, number][]> => {
+    const box = (await page.locator('#workspace-frame').boundingBox())!;
+    const xy = await workspaceFrame(page).evaluate((pts) => pts.map((p) => (window as unknown as W).__CAD__.services.viewport.get().handle.project(p) as [number, number]), pts);
+    return xy.map(([x, y]) => [box.x + x, box.y + y]);
   };
-  /** The bare face's colour (two patches clear of every mark). */
-  const faceOf = (img: Img): RGB => {
-    const all: RGB[] = [];
-    for (const [x, y] of faceAt) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) all.push(px(img, x + dx, y + dy));
-    return [0, 1, 2].map((k) => median(all.map((c) => c[k]))) as RGB;
+  /** Within `r` CSS px of a page point: how near the nearest pixel comes to each ink (max channel difference). */
+  const nearest = (s: Shot, at: [number, number], inks: RGB[], r: number) => {
+    const cx = (at[0] - s.clip.x) * s.k;
+    const cy = (at[1] - s.clip.y) * s.k;
+    const R = Math.ceil(r * s.k);
+    const best = inks.map(() => Infinity);
+    for (let dy = -R; dy <= R; dy++)
+      for (let dx = -R; dx <= R; dx++) {
+        const x = Math.round(cx + dx);
+        const y = Math.round(cy + dy);
+        if (x < 0 || y < 0 || x >= s.img.width || y >= s.img.height) continue;
+        const i = 4 * (y * s.img.width + x);
+        inks.forEach((c, j) => (best[j] = Math.min(best[j], dist(s.img.data, i, c))));
+      }
+    return best;
   };
   /**
-   * Along a mark's middle (20%-80%): the pixel nearest its ink in each 5 x 5 window, and whether the
-   * window holds a pixel near the dark background (a rim) - per sample.
+   * Of samples along a model segment (t from t0 to t1), the share where the pixel nearest the
+   * wanted ink is within `tol` of it and (`nearer`) nearer it than the other ink is to its own
+   * nearest pixel. A one-pixel line is a blend: only the first holds (a light blend of a dark ink
+   * may come near a light one).
    */
-  const read = (img: Img, m: (typeof along)[number], ink: RGB) => {
-    const out: { ink: RGB; d: number; rim: boolean }[] = [];
-    for (let k = 0; k <= 12; k++) {
-      const t = 0.2 + (0.6 * k) / 12;
-      const cx = m.s[0] + (m.e[0] - m.s[0]) * t;
-      const cy = m.s[1] + (m.e[1] - m.s[1]) * t;
-      let best: RGB = [0, 0, 0];
-      let bestD = Infinity;
-      let rim = false;
-      for (let dy = -2; dy <= 2; dy++)
-        for (let dx = -2; dx <= 2; dx++) {
-          const c = px(img, cx + dx, cy + dy);
-          const d = Math.max(...c.map((v, j) => Math.abs(v - ink[j])));
-          if (d < bestD) [best, bestD] = [c, d];
-          if (Math.max(...c.map((v, j) => Math.abs(v - DARK_BG[j]))) <= 60) rim = true;
-        }
-      out.push({ ink: best, d: bestD, rim });
-    }
-    return out;
+  const along = async (page: Page, s: Shot, a: V3, b: V3, t0: number, t1: number, want: RGB, not: RGB, r = 2, tol = 18, n = 9, nearer = true) => {
+    const pts: V3[] = Array.from({ length: n }, (_, i) => {
+      const t = t0 + ((t1 - t0) * i) / (n - 1);
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] as V3;
+    });
+    const xy = await onPage(page, pts);
+    const d = xy.map((p) => nearest(s, p, [want, not], r));
+    return { share: d.filter(([w, o]) => w <= tol && (!nearer || w < o)).length / n, d: d.map(([w, o]) => `${w}/${o}`).join(' ') };
   };
-  const palette = () => f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.palette().sketch as Record<string, string>);
-  const keys = () =>
-    f.evaluate(() => ({
-      state: getComputedStyle(document.querySelector('[data-cad-panel="sketch"] .cad-sk-state-dot')!).backgroundColor,
-      lost: getComputedStyle(document.querySelector('[data-sketch-links] [data-link-state="lost"] .cad-sk-link-dot')!).backgroundColor,
-      under: document.querySelector('[data-cad-panel="sketch"] [data-sketch-state]')!.getAttribute('data-sketch-state'),
-    }));
+  const at1 = async (page: Page, s: Shot, p: V3, want: RGB, not: RGB, r = 1.5, tol = 18) => {
+    const [xy] = await onPage(page, [p]);
+    const [w, o] = nearest(s, xy, [want, not], r);
+    return { ok: w <= tol && w < o, d: `${w}/${o}` };
+  };
+  const rgbOf = (n: number): RGB => [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const palette = (page: Page) => workspaceFrame(page).evaluate(() => {
+    const p = (window as unknown as W).__CAD__.services.viewport.get().handle.palette();
+    return { name: p.name as string, sketch: p.sketch as Record<string, string>, face: p.face as null | { sketch: Record<string, string>; constructLine: number; measure: number; ink: number }, constructLine: p.constructLine as number, measure: p.measure as number, ink: p.ink as number };
+  });
+  const LIGHT_SK = { under: '#1570ef', fully: '#101828', over: '#b42318', construction: '#667085', preview: '#1570ef' } as const;
+  const DARK_SK = { under: '#7aa7ff', fully: '#e6e9ef', over: '#f97066', construction: '#9aa4b2', preview: '#7aa7ff' } as const;
 
-  // Light, as always: the panel's keys are LIGHT's inks.
-  expect(await keys()).toEqual({ state: cssRgb('#1570ef'), lost: cssRgb('#b54708'), under: 'under' });
-  await appearance(page, 'dark');
-  const results: Record<string, Record<string, { drawn: number; contrast: number; rims: number }>> = {};
-  for (const option of ['c', 'a', 'b'] as const) {
-    await f.evaluate((o) => (window as unknown as W).__CAD__.appearance.darkLines(o), option);
+  /**
+   * Lines across the block's top face (x 0..40) and out over the background, at these y (model mm,
+   * z 20), and two construction lines whose points show the points' inks (a solid line's ends carry
+   * the open-profile marker over them): one free (under-defined points), one fixed (fully defined).
+   */
+  const ROWS = { fully: 6, under: 12, over: 18, construction: 24 } as const;
+  const POINT_ROWS = { under: 30, fully: 35 } as const;
+  const lineOf = (y: number): [V3, V3] => [
+    [5, y, 20],
+    [60, y, 20],
+  ];
+  // Over the face: x 12..32 of the line (t 0.127 to 0.491); over the background: x 47..56 (t 0.764 to 0.927).
+  const FACE: [number, number] = [0.127, 0.491];
+  const GROUND: [number, number] = [0.764, 0.927];
+
+  test("cad:dark-follows-face a sketch line crossing a face's outline is the light view's ink over the face and the dark ink over the background, in every state, its points too; the keys show both, the cursor follows; light is one colour, and a picture is the light one", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    const f = workspaceFrame(page);
+    await addSolid(page, { size: [40, 40, 20] });
+    await page.keyboard.press('Escape');
+    await appearance(page, 'dark');
+    const click = async (p: V3) => {
+      await still(page);
+      const [x, y] = await modelOnPage(page, p);
+      await page.mouse.click(x, y);
+    };
+    // A sketch on the block's top face (z 20), four lines across its outline at x 40.
+    await click([20, 20, 20]);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
     await still(page);
-    const pal = await palette();
-    const img = await shoot(page, clip);
-    const face = faceOf(img);
-    results[option] = {};
-    for (const m of along) {
-      const ink = hexRgb(pal[m.ink]);
-      const r = read(img, m, ink);
-      const drawn = r.filter((x) => x.d <= 30);
-      results[option][m.name] = { drawn: drawn.length / r.length, contrast: median(drawn.map((x) => contrastOf(x.ink, face))), rims: r.filter((x) => x.rim).length / r.length };
+    for (const y of [...Object.values(ROWS), ...Object.values(POINT_ROWS)]) {
+      await page.keyboard.press('l');
+      const [a, b] = lineOf(y);
+      await click(a);
+      await click(b);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
     }
-    // The keys: the colours the lines are drawn in now (the sketch is under-defined; its reference lost).
-    expect(await keys(), `(${option}) the panel's keys`).toEqual({ state: cssRgb(pal.under), lost: cssRgb(pal.lost), under: 'under' });
-  }
-  for (const m of MARKS) {
-    for (const o of ['a', 'b', 'c'] as const) expect(results[o][m.name].drawn, `(${o}) the ${m.name} is drawn in its ink on the face: ${JSON.stringify(results[o][m.name])}`).toBeGreaterThan(0.5);
-    // (c), the default: the mid tone reads on the face (light's own inks read 2.7 to 3.9:1 there).
-    expect(results.c[m.name].contrast, `(c) the ${m.name} on the face: ${JSON.stringify(results.c[m.name])}`).toBeGreaterThan(2.4);
-    // (b): the background colour around it on the face; (a) and (c) draw none.
-    expect(results.b[m.name].rims, `(b) the ${m.name} has its rim: ${JSON.stringify(results.b[m.name])}`).toBeGreaterThan(0.6);
-    for (const o of ['a', 'c'] as const) expect(results[o][m.name].rims, `(${o}) the ${m.name} has no rim`).toBeLessThan(0.1);
-  }
-  console.log(`[dark-sketch-face] ${JSON.stringify(results)}`);
-  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('c'));
-  await appearance(page, 'light');
-  expect(await keys()).toEqual({ state: cssRgb('#1570ef'), lost: cssRgb('#b54708'), under: 'under' });
-  await page.keyboard.press('Escape');
-  expect(seen.errors).toEqual([]);
+    await still(page);
+    await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+    await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+    await page.mouse.move(5, 5);
+    await still(page);
+    const sketch = await f.evaluate(() => {
+      const st = (window as unknown as W).__CAD__.services.doc.state.get();
+      return st.doc.features.filter((x: { type: string }) => x.type === 'sketch').at(-1).id as string;
+    });
+    const clip = await clipAround(page, [
+      [0, 0, 20],
+      [64, 40, 20],
+    ], 8);
+
+    // Model mode: the finished sketch's (under-defined) lines on the face.
+    {
+      const s = await shot2(page, clip);
+      const [a, b] = lineOf(ROWS.under);
+      const face = await along(page, s, a, b, ...FACE, hexRgb(LIGHT_SK.under), hexRgb(DARK_SK.under));
+      const ground = await along(page, s, a, b, ...GROUND, hexRgb(DARK_SK.under), hexRgb(LIGHT_SK.under));
+      expect(face.share, `model mode, over the face, LIGHT's blue: ${face.d}`).toBeGreaterThanOrEqual(0.75);
+      expect(ground.share, `model mode, over the background, the dark blue: ${ground.d}`).toBeGreaterThanOrEqual(0.75);
+    }
+
+    // The states: line 1 fixed (fully defined), line 2 free, line 3 horizontal twice more (over
+    // defined), line 4 construction; line 5 construction, line 6 construction and fixed. A fixed
+    // line keeps no relation the line tool gave it (a horizontal beside a fix is over defined).
+    await f.evaluate((id) => {
+      const doc = (window as unknown as W).__CAD__.services.doc;
+      const fe = doc.state.get().doc.features.find((x: { id: string }) => x.id === id);
+      const lines = fe.entities.filter((e: { kind: string }) => e.kind === 'line');
+      if (lines.length !== 6) throw new Error(`the sketch has ${lines.length} lines, not 6`);
+      const fixed = new Set([lines[0].id, lines[5].id]);
+      const construction = new Set([lines[3].id, lines[4].id, lines[5].id]);
+      const s = doc.beginEdit(id);
+      s.update({
+        entities: fe.entities.map((e: { id: string }) => (construction.has(e.id) ? { ...e, construction: true } : e)),
+        constraints: [
+          ...fe.constraints.filter((c: { refs: string[] }) => !c.refs.some((r) => fixed.has(r))),
+          { id: 'c_fix_dark1', kind: 'fix', refs: [lines[0].id] },
+          { id: 'c_fix_dark2', kind: 'fix', refs: [lines[5].id] },
+          { id: 'c_h_dark1', kind: 'horizontal', refs: [lines[2].id] },
+          { id: 'c_h_dark2', kind: 'horizontal', refs: [lines[2].id] },
+        ],
+      });
+      s.commit();
+    }, sketch);
+    await still(page);
+    await frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]').last().locator('> .tree-row').dblclick();
+    await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    await page.mouse.move(5, 5);
+    await still(page);
+
+    /** Every state's line over the face and over the background, and the fully and under-defined lines' points. */
+    const states = async (theme: 'light' | 'dark') => {
+      const s = await shot2(page, clip);
+      const out: Record<string, string> = {};
+      const bad: string[] = [];
+      for (const [state, y] of Object.entries(ROWS) as [keyof typeof ROWS, number][]) {
+        const [a, b] = lineOf(y);
+        const faceInk = hexRgb(LIGHT_SK[state]);
+        const groundInk = hexRgb(theme === 'dark' ? DARK_SK[state] : LIGHT_SK[state]);
+        const other = hexRgb(theme === 'dark' ? DARK_SK[state] : '#ffffff');
+        const face = await along(page, s, a, b, ...FACE, faceInk, theme === 'dark' ? other : hexRgb('#ff00ff'));
+        const ground = await along(page, s, a, b, ...GROUND, groundInk, theme === 'dark' ? faceInk : hexRgb('#ff00ff'));
+        out[state] = `face ${face.share} (${face.d}); ground ${ground.share} (${ground.d})`;
+        // Construction is dashed: a sample's window may fall in a gap.
+        const min = state === 'construction' ? 0.55 : 0.75;
+        if (face.share < min) bad.push(`${state} over the face: ${face.d}`);
+        if (ground.share < min) bad.push(`${state} over the background: ${ground.d}`);
+      }
+      for (const state of ['fully', 'under'] as const) {
+        const [a, b] = lineOf(POINT_ROWS[state]);
+        const p0 = await at1(page, s, a, hexRgb(LIGHT_SK[state]), theme === 'dark' ? hexRgb(DARK_SK[state]) : hexRgb('#ff00ff'));
+        const p1 = await at1(page, s, b, hexRgb(theme === 'dark' ? DARK_SK[state] : LIGHT_SK[state]), theme === 'dark' ? hexRgb(LIGHT_SK[state]) : hexRgb('#ff00ff'));
+        out[`${state} points`] = `${p0.d} ${p1.d}`;
+        if (!p0.ok) bad.push(`${state}'s point on the face: ${p0.d}`);
+        if (!p1.ok) bad.push(`${state}'s point over the background: ${p1.d}`);
+      }
+      console.log(`[dark-follows-face] ${theme} ${JSON.stringify(out)}`);
+      return bad;
+    };
+    const p = await palette(page);
+    expect(p.face?.sketch.fully).toBe(LIGHT_SK.fully);
+    // The sketch shows each state (the solver's verdict), so each line is in its state's ink.
+    const lineState = await f.evaluate(() => (document.querySelector('[data-cad-panel="sketch"] [data-sketch-state]') as HTMLElement).dataset.sketchState);
+    expect(['over', 'under']).toContain(lineState);
+    expect(await states('dark'), 'dark: LIGHT ink over the face, the dark ink over the background').toEqual([]);
+
+    // The line tool's rubber band, from the face out over the background.
+    await page.keyboard.press('l');
+    await click([5, 37, 20]);
+    const [mx, my] = await modelOnPage(page, [60, 37, 20]);
+    await page.mouse.move(mx, my, { steps: 4 });
+    await still(page);
+    {
+      const s = await shot2(page, clip);
+      const face = await along(page, s, [5, 37, 20], [60, 37, 20], ...FACE, hexRgb(LIGHT_SK.preview), hexRgb(DARK_SK.preview));
+      const ground = await along(page, s, [5, 37, 20], [60, 37, 20], ...GROUND, hexRgb(DARK_SK.preview), hexRgb(LIGHT_SK.preview));
+      expect(face.share, `the rubber band over the face: ${face.d}`).toBeGreaterThanOrEqual(0.75);
+      expect(ground.share, `the rubber band over the background: ${ground.d}`).toBeGreaterThanOrEqual(0.75);
+    }
+    // The draw cursor: the light view's (dark ink, white halo) over the face, white over the background.
+    const cursor = () => f.evaluate(() => (document.querySelector('[data-cad-canvas]') as HTMLElement).style.cursor);
+    const [fx, fy] = await modelOnPage(page, [25, 9, 20]);
+    await page.mouse.move(fx, fy, { steps: 3 });
+    await expect.poll(cursor, { message: 'over the face: the light tone' }).toContain('101828');
+    const [gx, gy] = await modelOnPage(page, [55, 9, 20]);
+    await page.mouse.move(gx, gy, { steps: 3 });
+    await expect.poll(cursor, { message: 'over the background: the dark tone' }).not.toContain('101828');
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await page.mouse.move(5, 5);
+    await still(page);
+
+    // The panel's keys: in dark the left half the colour over a face (on a crescent of the body
+    // colour), the right half the colour over the background; in light the one colour.
+    const keyOf = (st: string | undefined) => (st === 'fully' ? 'fully' : st === 'over' || st === 'unsolved' ? 'over' : 'under');
+    const keys = async () => {
+      const dot = frame.locator('[data-cad-panel="sketch"] .cad-sk-state-dot');
+      const look = await dot.evaluate((el) => ({ bg: getComputedStyle(el).backgroundColor, shadow: getComputedStyle(el).boxShadow, state: (el.closest('[data-sketch-state]') as HTMLElement).dataset.sketchState }));
+      const r = (await dot.boundingBox())!;
+      const s = await shot2(page, { x: Math.floor(r.x), y: Math.floor(r.y), width: Math.ceil(r.width) + 1, height: Math.ceil(r.height) + 1 });
+      const px = (fx: number) => {
+        const i = 4 * (Math.round((r.y + r.height / 2 - s.clip.y) * s.k) * s.img.width + Math.round((r.x + r.width * fx - s.clip.x) * s.k));
+        return [s.img.data[i], s.img.data[i + 1], s.img.data[i + 2]] as RGB;
+      };
+      return { ...look, left: px(0.25), right: px(0.75) };
+    };
+    {
+      const k = await keys();
+      const role = keyOf(k.state);
+      expect(k.bg, 'the dot: the ink over the background').toBe(cssRgb(DARK_SK[role]));
+      expect(k.shadow, 'its face half').toBe(`${cssRgb(LIGHT_SK[role])} 4px 0px 0px 0px inset, rgb(189, 201, 219) -1.5px 0px 0px 0.5px`);
+      expect(Math.max(...k.left.map((v, i) => Math.abs(v - hexRgb(LIGHT_SK[role])[i]))), `the left half shows ${LIGHT_SK[role]}: ${k.left}`).toBeLessThanOrEqual(24);
+      expect(Math.max(...k.right.map((v, i) => Math.abs(v - hexRgb(DARK_SK[role])[i]))), `the right half shows ${DARK_SK[role]}: ${k.right}`).toBeLessThanOrEqual(24);
+    }
+    const snapshot = (name: string) =>
+      f.evaluate((name) => {
+        const r = (window as unknown as W).__CAD__.services.viewport.get().handle.snapshot({ view: 'top', width: 320, height: 240, hide: [], section: null });
+        (window as unknown as Record<string, Uint8ClampedArray>)[name] = r.rgba;
+      }, name);
+    const bytesDiffer = (a: string, b: string) =>
+      f.evaluate(
+        ({ a, b }) => {
+          const x = (window as unknown as Record<string, Uint8ClampedArray>)[a];
+          const y = (window as unknown as Record<string, Uint8ClampedArray>)[b];
+          if (x.length !== y.length) return -1;
+          let n = 0;
+          for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) n++;
+          return n;
+        },
+        { a, b },
+      );
+    await snapshot('__followsDark1');
+
+    // Light: one colour, LIGHT's, over the face and the background alike; the key one colour.
+    await appearance(page, 'light');
+    expect(await states('light'), 'light: LIGHT ink everywhere').toEqual([]);
+    {
+      const k = await keys();
+      const role = keyOf(k.state);
+      expect([k.bg, k.shadow]).toEqual([cssRgb(LIGHT_SK[role]), 'none']);
+    }
+    await snapshot('__followsLight');
+    expect(await bytesDiffer('__followsLight', '__followsDark1'), 'the picture taken in dark is the light one, byte for byte').toBe(0);
+    // Dark again, live: the two inks again; and a picture now is still the light one.
+    await appearance(page, 'dark');
+    expect(await states('dark'), 'dark again').toEqual([]);
+    await snapshot('__followsDark2');
+    expect(await bytesDiffer('__followsLight', '__followsDark2')).toBe(0);
+    await appearance(page, 'light');
+    await page.keyboard.press('Escape');
+    expect(seen.errors).toEqual([]);
+  });
+
+  test("cad:dark-follows-face-marks a reference point and axis, the measure's ends and the Extrude arrow take the light view's inks over a face and the dark ones over the background", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    const f = workspaceFrame(page);
+    await addSolid(page, { size: [40, 40, 20] });
+    // A small block further along x: the axis is drawn across the bodies (refgeom/scene.ts
+    // axisSegment), so this one carries it out over the background beside the first.
+    await addSolid(page, { at: [72, 0, 0], size: [6, 6, 6] });
+    await page.keyboard.press('Escape');
+    const addRaw = (type: string, init: Record<string, unknown>) =>
+      f.evaluate(
+        async ({ t, i }) => {
+          const s = (window as unknown as W).__CAD__.services;
+          const sk = s.doc.beginNew(t, i);
+          sk.commit();
+          for (let k = 0; k < 400; k++) {
+            const st = s.doc.state.get().rebuild;
+            if (st.status === 'done' && st.features[sk.feature] && st.features[sk.feature].state !== 'pending') return sk.feature as string;
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          throw new Error(`${t} did not build`);
+        },
+        { t: type, i: init },
+      );
+    // Points on the top face (z 20) and beside it, the axis through them, along y 20.
+    const P1: V3 = [10, 20, 20];
+    const P2: V3 = [62, 20, 20];
+    const p1 = await addRaw('ref_point', { method: 'coordinates', xyz: P1.map((v) => `${v} mm`) });
+    const p2 = await addRaw('ref_point', { method: 'coordinates', xyz: P2.map((v) => `${v} mm`) });
+    await addRaw('ref_axis', { method: 'two_points', points: [{ kind: 'feature', feature: p1 }, { kind: 'feature', feature: p2 }] });
+    await appearance(page, 'dark');
+    const top = async () => {
+      await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('top', { animate: false }));
+      await page.mouse.move(5, 5);
+      await still(page);
+    };
+    await top();
+    const p = await palette(page);
+    const clip = await clipAround(page, [
+      [0, 0, 20],
+      [78, 40, 20],
+    ], 8);
+    let s = await shot2(page, clip);
+    const construct = rgbOf(p.constructLine);
+    const constructFace = rgbOf(p.face!.constructLine);
+    const dot1 = await at1(page, s, P1, constructFace, construct);
+    const dot2 = await at1(page, s, P2, construct, constructFace);
+    expect(dot1.ok, `the point on the face: ${dot1.d}`).toBe(true);
+    expect(dot2.ok, `the point beside it: ${dot2.d}`).toBe(true);
+    // The axis between them: dashed, so some samples fall in a gap.
+    const axisFace = await along(page, s, P1, P2, 0.12, 0.5, constructFace, construct);
+    // x 47 to 58, where nothing is under it.
+    const axisGround = await along(page, s, P1, P2, 0.71, 0.92, construct, constructFace);
+    expect(axisFace.share, `the axis over the face: ${axisFace.d}`).toBeGreaterThanOrEqual(0.55);
+    expect(axisGround.share, `the axis over the background: ${axisGround.d}`).toBeGreaterThanOrEqual(0.55);
+
+    // The measure between two typed points, one on the face, one beside it: its ends (7 px squares).
+    await runCommand(frame, 'inspect.measure');
+    const input = frame.locator('[data-measure-point-input]');
+    for (const q of ['12, 32, 20', '62, 32, 20']) {
+      await input.fill(q);
+      await input.press('Enter');
+    }
+    await expect(frame.locator('[data-measure-label]')).toBeVisible({ timeout: 60_000 });
+    await top();
+    const clip2 = await clipAround(page, [
+      [0, 0, 20],
+      [78, 40, 20],
+    ], 8);
+    s = await shot2(page, clip2);
+    const measure = rgbOf(p.measure);
+    const measureFace = rgbOf(p.face!.measure);
+    const m1 = await at1(page, s, [12, 32, 20], measureFace, measure);
+    const m2 = await at1(page, s, [62, 32, 20], measure, measureFace);
+    expect(m1.ok, `the measure's end on the face: ${m1.d}`).toBe(true);
+    expect(m2.ok, `the measure's end beside it: ${m2.d}`).toBe(true);
+    // Its line is one device pixel wide (a blend of its ink and what is under it): only the face ink
+    // comes within 70 of itself over the face (the dark ink's blends there are 117 and more from it),
+    // and only the dark ink over the background (the face ink's blends there are as far).
+    const lineFace = await along(page, s, [12, 32, 20], [62, 32, 20], 0.15, 0.45, measureFace, measure, 1.5, 70, 9, false);
+    const lineGround = await along(page, s, [12, 32, 20], [62, 32, 20], 0.7, 0.85, measure, measureFace, 1.5, 70, 9, false);
+    expect(lineFace.share, `the measure line over the face: ${lineFace.d}`).toBeGreaterThanOrEqual(0.6);
+    expect(lineGround.share, `the measure line over the background: ${lineGround.d}`).toBeGreaterThanOrEqual(0.6);
+    await frame.locator('[data-cad-panel="tool"] [data-panel-done]').click();
+    await expect(frame.locator('[data-tool-panel="inspect.measure"]')).toHaveCount(0);
+    await expect(frame.locator('[data-measure-label]')).toBeHidden();
+
+    // The Extrude arrow of a square beside the block: seen from the top it stands on its own
+    // preview's top face (the face ink); from the front it rises over the background (the dark ink).
+    await addSketch(page, { at: [60, 10], size: [10, 10] });
+    await top();
+    const [rx, ry] = await modelOnPage(page, [65, 15, 0]);
+    await page.mouse.click(rx, ry);
+    await frame.locator('[data-command="solid.extrude"]').click();
+    await expect(frame.locator('[data-cad-panel] .nui[data-field="distance"] input')).toHaveValue('10');
+    await top();
+    const ink = rgbOf(p.ink);
+    const inkFace = rgbOf(p.face!.ink);
+    const [ax, ay] = await modelOnPage(page, [65, 15, 10]);
+    s = await shot2(page, { x: Math.round(ax - 12), y: Math.round(ay - 12), width: 24, height: 24 });
+    const [endOnFace, endOnGround] = nearest(s, [ax, ay], [inkFace, ink], 6);
+    expect(endOnFace, `from the top, over its face: the light view's blue (${endOnFace}/${endOnGround})`).toBeLessThanOrEqual(16);
+    expect(endOnGround).toBeGreaterThan(endOnFace);
+    await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('front', { animate: false }));
+    await page.mouse.move(5, 5);
+    await still(page);
+    const [bx, by] = await modelOnPage(page, [65, 15, 10]);
+    // A column from just above the preview's top up past the arrow's tip.
+    s = await shot2(page, { x: Math.round(bx - 6), y: Math.round(by - 90), width: 12, height: 84 });
+    let ground = 0;
+    let face = 0;
+    for (let i = 0; i < s.img.data.length; i += 4) {
+      if (dist(s.img.data, i, ink) <= 16) ground++;
+      if (dist(s.img.data, i, inkFace) <= 16) face++;
+    }
+    expect(ground, `from the front, over the background: the dark blue (${ground} pixels; face ink ${face})`).toBeGreaterThanOrEqual(8);
+    expect(face).toBe(0);
+    await page.keyboard.press('Escape');
+    await appearance(page, 'light');
+    expect(seen.errors).toEqual([]);
+  });
+
+  test("cad:dark-follows-face-section a section in dark keeps its light caps, and a mark over a cap takes the light view's ink", async ({ page, request }) => {
+    const { frame, seen } = await freshPart(page, request);
+    const f = workspaceFrame(page);
+    await addSolid(page, { size: [40, 40, 20] });
+    await page.keyboard.press('Escape');
+    // Cut at x 20, seen from the right: the cap faces the eye; the block's own faces at x 40 are cut away.
+    await f.evaluate(() => {
+      const h = (window as unknown as W).__CAD__.services.viewport.get().handle;
+      h.setSection({ on: true, plane: 'origin:right', offset: 20, flip: false });
+      h.setView('right', { animate: false });
+    });
+    await runCommand(frame, 'inspect.measure');
+    const input = frame.locator('[data-measure-point-input]');
+    for (const q of ['20, 12, 10', '20, 55, 10']) {
+      await input.fill(q);
+      await input.press('Enter');
+    }
+    await expect(frame.locator('[data-measure-label]')).toBeVisible({ timeout: 60_000 });
+    await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setView('right', { animate: false }));
+    await page.mouse.move(5, 5);
+    await still(page);
+    const clip = await clipAround(page, [
+      [20, 0, 0],
+      [20, 58, 20],
+    ], 8);
+    /** The cap: light, and hatched (a plain face is one colour), at a patch clear of the measure. */
+    const cap = async () => {
+      const [x, y] = await modelOnPage(page, [20, 30, 15]);
+      const s = await shot2(page, { x: Math.round(x - 10), y: Math.round(y - 10), width: 20, height: 20 });
+      const lum: number[] = [];
+      for (let i = 0; i < s.img.data.length; i += 4) lum.push(s.img.data[i] + s.img.data[i + 1] + s.img.data[i + 2]);
+      const hi = Math.max(...lum);
+      const lo = Math.min(...lum);
+      return { light: contrastOf([s.img.data[0], s.img.data[1], s.img.data[2]], DARK_BG) > 4 || hi / 3 > 150, hatched: lo < hi * 0.8, hi, lo };
+    };
+    const lightCap = await cap();
+    expect(lightCap, 'light: the cap, hatched').toMatchObject({ light: true, hatched: true });
+    await appearance(page, 'dark');
+    const darkCap = await cap();
+    expect(darkCap, 'dark: the cap stays light (D2), hatched').toMatchObject({ light: true, hatched: true });
+    expect([darkCap.hi, darkCap.lo]).toEqual([lightCap.hi, lightCap.lo]);
+    const p = await palette(page);
+    const s = await shot2(page, clip);
+    const measure = rgbOf(p.measure);
+    const measureFace = rgbOf(p.face!.measure);
+    const onCap = await at1(page, s, [20, 12, 10], measureFace, measure);
+    const beside = await at1(page, s, [20, 55, 10], measure, measureFace);
+    expect(onCap.ok, `the measure's end over the cap: the light view's blue (${onCap.d})`).toBe(true);
+    expect(beside.ok, `the end beside the cut: the dark blue (${beside.d})`).toBe(true);
+    await page.keyboard.press('Escape');
+    await appearance(page, 'light');
+    expect(seen.errors).toEqual([]);
+  });
 });
 
 test('cad:dark-grid-edge-on the grid a near edge-on view keeps turns dark with the view, and a picture taken then is the light one', async ({ page, request }) => {
@@ -841,7 +1121,7 @@ test("cad:dark-chrome the toolbar is the host's dark one, a button under the poi
   expect(seen.errors).toEqual([]);
 });
 
-test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the light one, and the view keeps its dark lines and rims", async ({ page, request }) => {
+test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the light one, and the view keeps its dark lines", async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
   const f = workspaceFrame(page);
   await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
@@ -885,54 +1165,13 @@ test("cad:dark-sketch-picture in sketch mode a picture taken while dark is the l
     );
   expect(await snapshot('__skLight'), 'the line in the light picture').toBeGreaterThan(20);
   await appearance(page, 'dark');
-  for (const option of ['c', 'b'] as const) {
-    await f.evaluate((o) => (window as unknown as W).__CAD__.appearance.darkLines(o), option);
-    await still(page);
-    const before = await canvasShot(page);
-    await snapshot(`__skDark${option}`);
-    expect(await differ('__skLight', `__skDark${option}`), `(${option}) the picture taken in dark is the one taken in light`).toBeLessThan(0.002);
-    // The view, its lines (and (b)'s rims) dark as before the picture.
-    await still(page);
-    expect(differs(before, await canvasShot(page)), `(${option}) the view after the picture`).toBeLessThan(0.002);
-    expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
-  }
-  await f.evaluate(() => (window as unknown as W).__CAD__.appearance.darkLines('c'));
+  const before = await canvasShot(page);
+  await snapshot('__skDark');
+  expect(await differ('__skLight', '__skDark'), 'the picture taken in dark is the one taken in light').toBeLessThan(0.002);
+  // The view, its lines dark as before the picture.
+  await still(page);
+  expect(differs(before, await canvasShot(page)), 'the view after the picture').toBeLessThan(0.002);
+  expect(dist(await cornerPixel(page), 0, DARK_BG)).toBeLessThanOrEqual(2);
   await appearance(page, 'light');
   expect(seen.errors).toEqual([]);
-});
-
-test("cad:dark-lines E1 / E2's switch draws each candidate's edge colour, (b) with a rim, for the owner's review", async ({ page, request }) => {
-  await freshPart(page, request);
-  const f = workspaceFrame(page);
-  await blockAndSketch(page);
-  const clip = await clipAround(page, BLOCK);
-  const px = classify(await shoot(page, clip), LIGHT_EDGE);
-  await appearance(page, 'dark');
-  const lines = (v: unknown) => f.evaluate((v) => (window as unknown as W).__CAD__.appearance.darkLines(v), v);
-  for (const [option, colour] of [
-    ['a', PALE],
-    ['b', PALE],
-    ['c', GREY],
-  ] as const) {
-    expect(await lines(option)).toEqual({ edges: option, sketch: option });
-    await still(page);
-    expect(await f.evaluate(() => (window as unknown as W).__CAD__.appearance.get().lines)).toEqual({ edges: option, sketch: option });
-    const img = await shoot(page, clip);
-    // (b)'s rim covers the edges' anti-aliased border: their middle shows the colour, the rest the background.
-    expect(share(img, px.edge, colour, 24), `(${option}): the edges' colour`).toBeGreaterThan(option === 'b' ? 0.3 : 0.75);
-  }
-  // (b)'s rim: a line in the background colour under each edge, 1 px wider each side: beside the
-  // edges, on the faces, (b) shows the background colour where (a) shows the face.
-  const beside = besideEdges(clip.width, clip.height, px.edge, px.bg);
-  const rimShare = async (option: 'a' | 'b') => {
-    await lines(option);
-    await still(page);
-    return share(await shoot(page, clip), beside, DARK_BG, 10);
-  };
-  const plain = await rimShare('a');
-  const rimmed = await rimShare('b');
-  expect(rimmed - plain, `(b) rims the edges: ${rimmed} against (a)'s ${plain}`).toBeGreaterThan(0.1);
-  expect(await f.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.palette().edgeRim)).toBe(0x1b1f27);
-  await lines('c');
-  await appearance(page, 'light');
 });

@@ -612,6 +612,7 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   stats: INTERNAL,
   palette: APPEARANCE,
   setPalette: APPEARANCE,
+  lightSurfaceAt: POINTER,
   measure: INTERNAL,
   addLayer: INTERNAL,
   reframe: W('fit'),

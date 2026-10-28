@@ -66,12 +66,18 @@ const LIGHT_BEFORE: Record<string, string> = {
   '--cad-sketch-over': '#b42318',
   // The keys to the sketch's line colours: the colours the state dot and a reference's dot painted
   // before (--cad-sketch-under, --cad-sketch-full, --cad-sketch-over, --cad-sketch-projected and
-  // --cad-sketch-lost then), which a dark view's E2 candidate now decides.
+  // --cad-sketch-lost then).
   '--cad-sketch-key-under': '#1570ef',
   '--cad-sketch-key-full': '#101828',
   '--cad-sketch-key-over': '#b42318',
   '--cad-sketch-key-linked': '#7a3fd1',
   '--cad-sketch-key-lost': '#b54708',
+  // New: the dots' face half in a dark view (E2); they had no shadow (none), and keep none in light.
+  '--cad-sketch-key-under-on-face': 'none',
+  '--cad-sketch-key-full-on-face': 'none',
+  '--cad-sketch-key-over-on-face': 'none',
+  '--cad-sketch-key-linked-on-face': 'none',
+  '--cad-sketch-key-lost-on-face': 'none',
   '--cad-sketch-lost': '#b54708',
   '--cad-box-enclose': '#1570ef',
   '--cad-box-enclose-fill': 'rgba(21, 112, 239, 0.08)',
@@ -161,7 +167,8 @@ describe('CAD tokens: the dark set', () => {
     for (const [name, v] of dark!) {
       expect(NOT_COLOURS.has(name), name).toBe(false);
       expect(COLOURISH.test(v), `${name}: ${v}`).toBe(true);
-      expect(v.replace(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi, '').replace(/[\d.\spx,-]/g, ''), `${name}: only lengths besides colours`).toBe('');
+      // A shadow's lengths, and `inset` (a key dot's face half, E2), besides colours.
+      expect(v.replace(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi, '').replace(/\binset\b/g, '').replace(/[\d.\spx,-]/g, ''), `${name}: only lengths besides colours`).toBe('');
     }
   });
 

@@ -1,16 +1,16 @@
 // The host's appearance applied to the Part (src/app/appearance.ts): the 3D view's palette now and
 // for a view made later, light again on the way back, nothing at all on a host without an
-// appearance, the toolbar's scale from the icon scale, E1 / E2's switch, the keys to the sketch's
-// line colours from the palette while dark; never data-theme (the SDK's).
+// appearance, the toolbar's scale from the icon scale; nothing else on <html> (the keys to the
+// sketch's line colours are CSS tokens), never data-theme (the SDK's).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
-import { installAppearance, SKETCH_KEYS } from '../../src/app/appearance';
+import { installAppearance } from '../../src/app/appearance';
 import { createBridge } from '../../src/lib/bridge';
 import { createStateStore } from '../../src/lib/store';
 import type { AppServices } from '../../src/types/app';
 import type { ViewportHandle } from '../../src/types/viewport';
 import { TOOLBAR_SCALE_EVENT } from '../../src/ui/Toolbar';
-import { DARK, darkPalette, LIGHT, type MarkPalette } from '../../src/viewport/palette';
+import { DARK, LIGHT, type MarkPalette } from '../../src/viewport/palette';
 import { createFakeWorkspace } from '../fakes/workspace-sdk';
 
 afterEach(() => {
@@ -46,7 +46,7 @@ function app(appearance?: Record<string, unknown>) {
   return { ws, bridge, viewport, view, control, scales, done };
 }
 
-const names = (ps: MarkPalette[]) => ps.map((p) => (p.lines ? `${p.name}:${p.lines.edges}${p.lines.sketch}` : p.name));
+const names = (ps: MarkPalette[]) => ps.map((p) => p.name);
 
 describe('the appearance in the Part', () => {
   it('changes nothing on a host without an appearance: light view, no toolbar scale, no data-theme', () => {
@@ -65,13 +65,14 @@ describe('the appearance in the Part', () => {
     const a = app({ theme: 'dark', preference: 'dark', textScale: 1, iconScale: 1 });
     const v = a.view();
     a.viewport.set({ handle: v.handle });
-    expect(names(v.given)).toEqual(['dark:cc']);
+    expect(v.given).toEqual([DARK]);
     a.ws.push('appearance', { theme: 'light', preference: 'system', textScale: 1, iconScale: 1 });
-    expect(names(v.given)).toEqual(['dark:cc', 'light']);
+    expect(v.given).toEqual([DARK, LIGHT]);
     a.ws.push('appearance', { theme: 'dark', preference: 'system', textScale: 1, iconScale: 1 });
     const w = a.view();
     a.viewport.set({ handle: w.handle });
-    expect(names(w.given)).toEqual(['dark:cc']);
+    expect(w.given).toEqual([DARK]);
+    expect(a.control.palette()).toBe(DARK);
     // CAD never writes data-theme or color-scheme: the SDK does.
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
     expect(document.documentElement.style.colorScheme).toBe('');
@@ -90,44 +91,17 @@ describe('the appearance in the Part', () => {
     a.done();
   });
 
-  it("switches E1 / E2's candidates (one for both, or each apart) and applies them while dark", () => {
-    const a = app({ theme: 'dark' });
-    const v = a.view();
-    a.viewport.set({ handle: v.handle });
-    expect(a.control.darkLines()).toEqual({ edges: 'c', sketch: 'c' });
-    expect(a.control.darkLines('b')).toEqual({ edges: 'b', sketch: 'b' });
-    expect(a.control.darkLines({ sketch: 'a' })).toEqual({ edges: 'b', sketch: 'a' });
-    // Nonsense is ignored.
-    expect(a.control.darkLines({ edges: 'z' as never })).toEqual({ edges: 'b', sketch: 'a' });
-    expect(names(v.given)).toEqual(['dark:cc', 'dark:bb', 'dark:ba', 'dark:ba']);
-    expect(v.handle.palette!().edgeRim).toBe(0x1b1f27);
-    // Kept for the dark view while light; light draws LIGHT.
-    a.ws.push('appearance', { theme: 'light' });
-    expect(v.handle.palette!()).toBe(LIGHT);
-    a.ws.push('appearance', { theme: 'dark' });
-    expect(names(v.given).at(-1)).toBe('dark:ba');
-    a.done();
-  });
-
-  it("sets the keys to the sketch's line colours from the palette while dark (E2's candidate's), and none in light", () => {
-    const keys = () => Object.fromEntries(Object.keys(SKETCH_KEYS).map((k) => [k.replace('--cad-sketch-key-', ''), document.documentElement.style.getPropertyValue(k)]));
+  it("writes nothing else on <html> in either theme: the keys to the line colours are the stylesheet's tokens", () => {
     const a = app({ theme: 'light' });
     const v = a.view();
     a.viewport.set({ handle: v.handle });
-    // Light: no key on <html> (the stylesheet's light values are LIGHT's inks), no style attribute at all.
-    expect(keys()).toEqual({ under: '', full: '', over: '', linked: '', lost: '' });
     expect(document.documentElement.hasAttribute('style')).toBe(false);
     a.ws.push('appearance', { theme: 'dark' });
-    // (c), the default: the mid tones the lines are drawn in, a fully defined sketch's dot the mid grey.
-    expect(keys()).toEqual({ under: DARK.sketch.under, full: '#8a93a3', over: DARK.sketch.over, linked: DARK.sketch.linked, lost: DARK.sketch.lost });
-    a.control.darkLines({ sketch: 'a' });
-    const pa = darkPalette({ sketch: 'a' });
-    expect(keys()).toEqual({ under: pa.sketch.under, full: '#e6e9ef', over: pa.sketch.over, linked: pa.sketch.linked, lost: pa.sketch.lost });
-    // Each key is the colour the view's lines are drawn in now.
-    const live = v.handle.palette!().sketch;
-    expect(keys()).toEqual({ under: live.under, full: live.fully, over: live.over, linked: live.linked, lost: live.lost });
+    expect(v.handle.palette!()).toBe(DARK);
+    expect(document.documentElement.hasAttribute('style')).toBe(false);
     a.ws.push('appearance', { theme: 'light' });
-    expect(keys()).toEqual({ under: '', full: '', over: '', linked: '', lost: '' });
+    expect(v.handle.palette!()).toBe(LIGHT);
+    expect(document.documentElement.hasAttribute('style')).toBe(false);
     a.done();
   });
 

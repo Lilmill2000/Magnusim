@@ -1,12 +1,15 @@
 // Measure markers in the viewport (layer order 60, docs/p2p3-plan.md §3.3):
 // the shortest-distance segment between the two picks, its end points, and the
-// distance as a label at its middle (html, re-placed every frame).
+// distance as a label at its middle (html, re-placed every frame). In a dark view
+// the line and its ends take the light view's measure colour where a light face
+// shows under them (E2, src/viewport/onface.ts).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BufferGeometry, Float32BufferAttribute, Line, LineBasicMaterial, Points, PointsMaterial } from 'three';
 import type { Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
-import { paletteOf } from '../../viewport/palette';
+import { setFaceInk } from '../../viewport/onface';
+import { paletteOf, type MarkPalette } from '../../viewport/palette';
 
 export interface MeasureMarks {
   show(p1: Vec3, p2: Vec3, label: string): void;
@@ -21,12 +24,17 @@ export function createMeasureMarks(handle: ViewportHandle): MeasureMarks {
     palette: (p) => {
       lineMat.color.setHex(p.measure);
       pointMat.color.setHex(p.measure);
+      faceInks(p);
       layer.changed();
     },
   });
   const MEASURE_COLOR = paletteOf(handle).measure;
   const lineMat = new LineBasicMaterial({ color: MEASURE_COLOR, depthTest: false, transparent: true });
   const pointMat = new PointsMaterial({ color: MEASURE_COLOR, size: 7, sizeAttenuation: false, depthTest: false, transparent: true });
+  const faceInks = (p: MarkPalette) => {
+    for (const m of [lineMat, pointMat]) setFaceInk(m, p.face?.measure ?? null);
+  };
+  faceInks(paletteOf(handle));
   let line: Line | null = null;
   let points: Points | null = null;
   const label = document.createElement('div');

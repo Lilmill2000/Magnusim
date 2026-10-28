@@ -92,13 +92,21 @@
   /* The keys to the colours the sketch's lines are drawn in (the Sketch panel's state dot, a
      reference's dot): palette.ts' sketch inks (under: the core's blue accent, fully: its text,
      over: red; P4b SELECT: linked geometry purple, as SolidWorks and Fusion show it, a lost
-     reference amber). In a dark view E2's candidate decides them (src/app/appearance.ts sets them
-     on <html> from the view's palette); the dark values below are the default's, (c). */
+     reference amber); the dark values below are DARK's, the colours over the dark background. */
   --cad-sketch-key-under: #1570ef;
   --cad-sketch-key-full: #101828;
   --cad-sketch-key-over: #b42318;
   --cad-sketch-key-linked: #7a3fd1;
   --cad-sketch-key-lost: #b54708;
+  /* E2: in a dark view a sketch's lines take the light view's inks where a light face shows under
+     them (src/viewport/onface.ts), so the dark view's dot shows both: its left half (an inset
+     shadow) the colour over a face, on a crescent of the body colour #bdc9db, its right half the
+     key above. None in light: the dot is its one colour, as it was. */
+  --cad-sketch-key-under-on-face: none;
+  --cad-sketch-key-full-on-face: none;
+  --cad-sketch-key-over-on-face: none;
+  --cad-sketch-key-linked-on-face: none;
+  --cad-sketch-key-lost-on-face: none;
   /* P4b SELECT: a lost reference's words (amber), and the selection box (enclose: solid blue; touch: dashed green). */
   --cad-sketch-lost: var(--mg-warning, #b54708);
   --cad-box-enclose: var(--mg-primary-ink, #1570ef);
@@ -170,12 +178,18 @@
   --cad-marker-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   --cad-marker-failed-hover-bg: #4a2522;
 
-  /* E2's default, (c): the mid tones the lines take (palette.ts DARK_INKS). */
-  --cad-sketch-key-under: #2e6bd8;
-  --cad-sketch-key-full: #8a93a3;
-  --cad-sketch-key-over: #cf3a30;
-  --cad-sketch-key-linked: #8551dc;
-  --cad-sketch-key-lost: #a85f12;
+  /* The colours the lines take over the dark background (palette.ts DARK.sketch), and over a light
+     face (DARK.face: LIGHT's), the face half on a crescent of the body colour. */
+  --cad-sketch-key-under: #7aa7ff;
+  --cad-sketch-key-full: #e6e9ef;
+  --cad-sketch-key-over: #f97066;
+  --cad-sketch-key-linked: #9b7bf0;
+  --cad-sketch-key-lost: #fdb022;
+  --cad-sketch-key-under-on-face: inset 4px 0 0 0 #1570ef, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-full-on-face: inset 4px 0 0 0 #101828, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-over-on-face: inset 4px 0 0 0 #b42318, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-linked-on-face: inset 4px 0 0 0 #7a3fd1, -1.5px 0 0 0.5px #bdc9db;
+  --cad-sketch-key-lost-on-face: inset 4px 0 0 0 #b54708, -1.5px 0 0 0.5px #bdc9db;
   --cad-box-enclose-fill: rgba(122, 167, 255, 0.12);
   --cad-box-touch: #47cd89;
   --cad-box-touch-fill: rgba(71, 205, 137, 0.14);

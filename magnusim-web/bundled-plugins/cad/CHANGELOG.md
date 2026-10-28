@@ -84,12 +84,18 @@ in the Part" in `README.md`.
 
 **Ready for a dark Magnusim.** Once Magnusim has its dark appearance (it is not
 in this version yet), the Part follows it:
-- The 3D view turns dark (`#1b1f27`); the parts keep their light surfaces, and
-  edges, sketch lines and points (every state, on a face too), reference axes,
-  the measure line and the orientation arrows take colours that read on both.
-  The Sketch panel's colour dots match the lines, a selection box's caption
-  and a failed Pattern copy's number stay readable, and blue text in the Part
-  uses the lighter blue made for dark backgrounds.
+- The 3D view turns dark (`#1b1f27`); the parts keep their light surfaces, the
+  edges are light, and the orientation arrows take Magnusim's dark axis colours.
+- Sketch lines and points (every state, the line being drawn too, in a sketch
+  and on a finished one), reference axes and points, the measure line and the
+  Extrude and Enclosure arrows follow what is under them: over a part's face
+  or a section's cut face they keep the colours they have in light, over the
+  dark background they take light colours. A line that crosses a face's edge
+  changes colour there. A selected or hovered line keeps its colour.
+- The Sketch panel's colour dots show both colours (the left half the colour
+  over a face), the sketch cursor is the light one over a face, a selection
+  box's caption and a failed Pattern copy's number stay readable, and blue
+  text in the Part uses the lighter blue made for dark backgrounds.
 - Pictures stay light whatever the appearance: the Picture tool's PNG, the
   Assistant's pictures, and anything else drawn off screen look exactly as in
   light, and the view never flashes light while one is taken.

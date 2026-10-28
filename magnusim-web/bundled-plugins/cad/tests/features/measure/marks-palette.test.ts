@@ -1,14 +1,16 @@
 // The measure line and its ends take the view's palette (features/measure/overlay.ts): the light
-// view's darker blue, the dark view's E2 blue (the default (c)'s mid blue, which reads on a body
-// face too; (a) and (b) the lighter --cad-p2-measure the label takes), recoloured live;
-// a picture leaves the measure out (SNAPSHOT_HIDDEN_LAYERS), so it never needs LIGHT for one.
+// view's darker blue, the dark view's lighter --cad-p2-measure (the label's), recoloured live, and
+// in a dark view the light view's blue over a light face (E2: their materials' face ink, which the
+// view draws as a twin, src/viewport/onface.ts; none in light); a picture leaves the measure out
+// (SNAPSHOT_HIDDEN_LAYERS), so it never needs LIGHT for one.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Group, type Line, type Points } from 'three';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMeasureMarks } from '../../../src/features/measure/overlay';
 import type { ViewportHandle } from '../../../src/types/viewport';
 import { SNAPSHOT_HIDDEN_LAYERS } from '../../../src/viewport/snapshot';
-import { DARK, darkPalette, LIGHT, type MarkPalette } from '../../../src/viewport/palette';
+import { faceInkOf } from '../../../src/viewport/onface';
+import { DARK, LIGHT, type MarkPalette } from '../../../src/viewport/palette';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -32,6 +34,7 @@ function fakeHandle(start: MarkPalette) {
 }
 
 const colours = (g: Group) => g.children.map((o) => ((o as Line | Points).material as unknown as { color: { getHex(): number } }).color.getHex());
+const faceInks = (g: Group) => g.children.map((o) => faceInkOf((o as Line | Points).material as never) ?? null);
 
 describe('the measure marks and the palette', () => {
   it('start in the view palette, follow a new one, and are left out of pictures', () => {
@@ -39,19 +42,21 @@ describe('the measure marks and the palette', () => {
     const marks = createMeasureMarks(v.handle);
     marks.show([0, 0, 0], [10, 0, 0], '10 mm');
     expect(colours(v.group)).toEqual([0x1a4fbf, 0x1a4fbf]);
+    expect(faceInks(v.group)).toEqual([null, null]);
     v.hooks.get('p2-measure')!(DARK);
-    expect(colours(v.group)).toEqual([DARK.measure, DARK.measure]);
+    expect(colours(v.group)).toEqual([0x8fb5ff, 0x8fb5ff]);
+    expect(faceInks(v.group)).toEqual([LIGHT.measure, LIGHT.measure]);
     v.hooks.get('p2-measure')!(LIGHT);
     expect(colours(v.group)).toEqual([LIGHT.measure, LIGHT.measure]);
+    expect(faceInks(v.group)).toEqual([null, null]);
     expect(SNAPSHOT_HIDDEN_LAYERS.has('p2-measure')).toBe(true);
     marks.dispose();
     // Opened while the view is dark: dark from the start.
     const d = fakeHandle(DARK);
     const dm = createMeasureMarks(d.handle);
     dm.show([0, 0, 0], [0, 5, 0], '5 mm');
-    expect(colours(d.group)).toEqual([0x2e6bd8, 0x2e6bd8]);
-    d.hooks.get('p2-measure')!(darkPalette({ sketch: 'a' }));
-    expect(colours(d.group)).toEqual([0x8fb5ff, 0x8fb5ff]);
+    expect(colours(d.group)).toEqual([DARK.measure, DARK.measure]);
+    expect(faceInks(d.group)).toEqual([LIGHT.measure, LIGHT.measure]);
     dm.dispose();
   });
 });

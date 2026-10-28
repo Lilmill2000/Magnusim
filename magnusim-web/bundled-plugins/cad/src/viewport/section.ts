@@ -1,7 +1,9 @@
 // Section view: one clipping plane parallel to an origin plane, and a cap where
 // it cuts through material (stencil parity: back faces +1, front faces -1; the
 // cap draws where the count is not 0). The cap is shaded like a body face and
-// hatched, so a cut never reads as an ordinary face.
+// hatched, so a cut never reads as an ordinary face. The count keeps to the
+// stencil's low bits (onface.ts PARITY_MASK); in a dark view the cap, a light
+// surface, sets the bit the marks over it read (onface.ts FACE_BIT, E2).
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import {
@@ -12,6 +14,7 @@ import {
   FrontSide,
   Group,
   IncrementWrapStencilOp,
+  KeepStencilOp,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
@@ -27,6 +30,7 @@ import { ORIGIN_PLANES } from '../types/doc';
 import type { SectionState } from '../types/viewport';
 import { BODY_COLOR } from './colors';
 import { createBodyMaterial, type BodyMaterial } from './materials';
+import { FACE_BIT, PARITY_MASK } from './onface';
 
 export const DEFAULT_SECTION: SectionState = { on: false, plane: 'origin:front', offset: 0, flip: false };
 
@@ -51,12 +55,13 @@ export class SectionCaps {
     this.group.visible = false;
     this.capMat = createBodyMaterial(BODY_COLOR, undefined, { hatchPixelRatio: pixelRatio });
     this.capMat.polygonOffset = false;
+    // Where the count (the low bits) is not 0; drawn, it clears the count (and, dark, sets FACE_BIT).
     this.capMat.stencilWrite = true;
-    this.capMat.stencilRef = 0;
     this.capMat.stencilFunc = NotEqualStencilFunc;
-    this.capMat.stencilFail = ReplaceStencilOp;
-    this.capMat.stencilZFail = ReplaceStencilOp;
+    this.capMat.stencilFuncMask = PARITY_MASK;
+    this.capMat.stencilFail = KeepStencilOp;
     this.capMat.stencilZPass = ReplaceStencilOp;
+    this.setFaceBit(false);
     const g = new PlaneGeometry(2, 2);
     g.setAttribute('hl', new BufferAttribute(new Uint8Array(g.getAttribute('position').count), 1));
     this.cap = new Mesh(g, this.capMat);
@@ -64,6 +69,15 @@ export class SectionCaps {
     this.cap.renderOrder = -1;
     this.cap.name = 'section-cap';
     this.group.add(this.cap);
+  }
+
+  /**
+   * E2 (onface.ts): in a dark view the cap sets FACE_BIT where it shows (a light surface; where it
+   * is hidden it leaves the stencil); in light it writes 0 as it always did.
+   */
+  setFaceBit(on: boolean): void {
+    this.capMat.stencilRef = on ? FACE_BIT : 0;
+    this.capMat.stencilZFail = on ? KeepStencilOp : ReplaceStencilOp;
   }
 
   /** Keep one pair of stencil meshes per body geometry (by key). */
@@ -98,6 +112,8 @@ export class SectionCaps {
       depthWrite: false,
       depthTest: false,
       stencilWrite: true,
+      // The count only: FACE_BIT is the bodies' and the cap's.
+      stencilWriteMask: PARITY_MASK,
       stencilFunc: AlwaysStencilFunc,
       stencilFail: op,
       stencilZFail: op,

@@ -971,33 +971,63 @@ with the host once for the page's life, and its chip goes in the dock.
     host's light `--mg-axis-*`, as the core's since its light unify) and
     `DARK`. D2: surfaces stay light (bodies, caps, picks and hover on faces,
     plane and region tints); thin marks turn light (background `#1b1f27`, D3;
-    edges; triad, E4 assumed; sketch lines and points; reference axes and
-    points; measure; the arrows and the banana's guide). E1 (edges over light
-    faces) and E2 (every coloured thin mark that can lie on a face: the sketch's
-    lines and points in every state and both modes, preview, guides and
-    dimension lines included, the reference axes and points, the measure line,
-    the arrows and the banana's guide) are open: `DARK_LINE_OPTIONS` and
-    `DARK_INKS`, (a) the host's light dark-theme inks, (b) the same with a 1 px
-    rim in the background colour (one more line per body, per sketch line set
-    and under the sketch's points, sharing their geometry; the arrows, axes and
-    measure line have none), (c) mid tones that read on the background and on a
-    body face alike (fully defined `#8a93a3`, construction and driven a darker
-    grey), the default until Daniel picks; `window.__CAD__.appearance.darkLines(
-    'a' | 'b' | 'c' | {edges, sketch})` switches them live for his review.
+    edges; triad, E4; sketch lines and points; reference axes and points;
+    measure; the arrows and the banana's guide). Daniel's picks (2026-10-28):
+    E1 (a), the bodies' B-rep edges `#e6e9ef`, plain; E2, "the colour follows
+    what's under it": every coloured thin mark that can lie on a face (the
+    sketch's lines and points in every state and both modes, preview, guides,
+    dimension lines and grid, a trim's doomed piece, linked and lost curves;
+    the reference axes and points; the measure line and its ends; the Extrude
+    and Enclosure arrows; the banana's guide) is drawn, pixel by pixel, in
+    LIGHT's ink for its role (`DARK.face`: by role, not by colour value, since
+    DARK's construct, arrow and under-defined blues are one colour with three
+    light inks) where a light surface shows under it, and in DARK's own light
+    ink over the background or an empty or translucent plane; a line crossing a
+    face's outline changes colour there (accepted). Picks and hover keep their
+    colours. How (`src/viewport/onface.ts`): one stencil bit, `FACE_BIT` 0x80,
+    says "a light surface shows here". An opaque body's faces write it where they
+    pass the depth test (write mask `FACE_BIT`, Replace): set for a light colour,
+    cleared for a dark custom one (`isLightSurface`: the light view's `#101828`
+    reads at least as well on it as `#e6e9ef`), so the frontmost opaque surface
+    decides; a see-through body, the planes and the region tints never touch it.
+    The section caps' parity counter keeps to `PARITY_MASK` 0x7f (the meshes
+    write only those bits, the cap tests only them) and the cap sets `FACE_BIT`
+    where it draws. A mark says what it is over a face: a single-colour mark's
+    material its face ink (`setFaceInk`, from the palette's `face`), a mark
+    coloured per segment or point (sketch mode's lines and points) a geometry in
+    its face colours (`setFaceColours`, built with each `set()`; one face ink per
+    dark ink, a unit test). Before every render (`drawFrame`, `snapshot`, so
+    before three captures the render list) `syncFaceTwins` walks the layers:
+    such a mark is drawn as it is, its material restricted to pixels without the
+    bit (a stencil test with write mask 0), and gets a twin, its child (so its
+    visibility and transform), sharing its geometry (or the face colours), with
+    a copy of its material in the face ink restricted to pixels with the bit; the
+    copy follows the mark's material (a hover or pick material has no face ink:
+    drawn once, as it is), dash, width, opacity, depth test and clipping planes,
+    is disposed with the mark's material, ignores raycasts and is left out of a
+    layer's framing. Every layer draws after the bodies and caps (its group's
+    `renderOrder` is 100 and more), so the bit is final when a mark tests it.
+    In light, and for every picture, no body writes the stencil, no mark is
+    restricted and no twin is drawn: the light view is the pixels it was. The
+    box-pick target (`boxpick.ts`) has no stencil and draws only ids. Sketch
+    mode's cursors take the light tone over a light face in a dark view
+    (`ViewportHandle.lightSurfaceAt`, one BVH ray: a white crosshair is 1.6:1
+    on a face). The Sketch panel's state dot and a reference's dot show both
+    inks in dark: the right half the colour over the background, the left half
+    (an inset shadow, `--cad-sketch-key-*-on-face`) the colour over a face on a
+    crescent of the body colour; one colour in light.
     `ViewportHandle.setPalette` recolours at once (uniforms and material
     colours; sketch mode draws its lines again), and each layer's `addLayer`
     `palette` hook (§10) follows. `app/appearance.ts` is the one handler: the
-    palette (a view made later starts in it), the keys to the sketch's line
-    colours (`--cad-sketch-key-*`: the Sketch panel's state dot and a
-    reference's dot, set on `<html>` from the palette while it is dark) and
-    `--cad-toolbar-scale` from the icon scale.
+    palette (a view made later starts in it) and `--cad-toolbar-scale` from the
+    icon scale.
   - **Pictures stay light (D1).** `snapshot()` with a dark palette live paints
     the edges, the triad and every layer it shows `LIGHT`, clears `LIGHT`'s
     background, draws, and puts the live colours back in the same task (no
     `await`, no frame: the view never shows a light frame); `html[data-theme]`
     is never touched for a picture. The Assistant's sheet (`assistant/view.ts`)
     is `LIGHT` too; STEP export and the host's thumbnails carry no theme.
-  - Tests: `tests/viewport/{palette,theme}.test.ts`,
+  - Tests: `tests/viewport/{palette,theme,onface}.test.ts`,
     `tests/sketch/overlay-palette.test.ts`, the dark cases in
     `tests/features/extrude/panel.test.tsx`, `tests/viewport/snapshot-plain.test.ts`,
     `tests/features/measure/marks-palette.test.ts`, `tests/lib/bridge-appearance.test.ts`,

@@ -4,7 +4,9 @@
 // 1", as the origin planes' labels). Hovered items (the pointer, or its tree
 // row) light in the hover blue; selected ones, and the one a panel edits, in
 // the pick green. Reads scene.ts (what is drawn), the selection and the
-// overlay's hover state; nobody pushes geometry into it.
+// overlay's hover state; nobody pushes geometry into it. In a dark view the axes
+// and points at rest take the light view's colour where a light face shows
+// under them (E2, src/viewport/onface.ts).
 // Owner: REFERENCE (P4a).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BufferGeometry, DoubleSide, Float32BufferAttribute, LineBasicMaterial, LineLoop, Matrix4, Mesh, MeshBasicMaterial, PlaneGeometry, SphereGeometry, Vector3, type Object3D } from 'three';
@@ -16,7 +18,8 @@ import type { AppServices } from '../../types/app';
 import type { FeatureId, Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
 import { HOVER_COLOR, PICK_COLOR, PLANE_BORDER, PLANE_FILL, PLANE_HOVER_FILL, PLANE_PICK_FILL } from '../../viewport/colors';
-import { paletteOf } from '../../viewport/palette';
+import { setFaceInk } from '../../viewport/onface';
+import { paletteOf, type MarkPalette } from '../../viewport/palette';
 import { constructView, drawnConstructs, drawnOriginAxes, isOriginAxis, ORIGIN_AXIS_REFS, type DrawnConstruct } from './scene';
 
 export const LAYER_CONSTRUCT = 'construct';
@@ -81,6 +84,7 @@ export class ConstructOverlay {
       // Axes and points at rest take the palette's construct colour (light in a dark view); hover, pick and the plane tints stay.
       palette: (p) => {
         for (const m of [this.lineMats.none, this.xlineMats.none, this.dots.none, this.xdots.none]) m.color.setHex(p.constructLine);
+        this.faceInks(p);
         this.layer.changed();
       },
     });
@@ -105,10 +109,16 @@ export class ConstructOverlay {
     this.xlineMats = { none: xline(LINE_COLOR, AXIS_PX), hover: xline(HOVER_COLOR, AXIS_ACTIVE_PX), pick: xline(PICK_COLOR, AXIS_ACTIVE_PX) };
     const xdot = (color: number) => new MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthTest: false, depthWrite: false });
     this.xdots = { none: xdot(LINE_COLOR), hover: xdot(HOVER_COLOR), pick: xdot(PICK_COLOR) };
+    this.faceInks(paletteOf(handle));
     const later = () => this.later();
     this.offs.push(services.doc.state.subscribe(later), services.selection.subscribe(later), services.mode.subscribe(later), constructView(services).subscribe(later), handle.onFrame(() => this.place()));
     overlays.set(services, this);
     this.sync();
+  }
+
+  /** E2: the axes and points at rest (and their faint see-through copies) over a light face: the light view's construct colour; hover and pick keep theirs. */
+  private faceInks(p: MarkPalette): void {
+    for (const m of [this.lineMats.none, this.xlineMats.none, this.dots.none, this.xdots.none]) setFaceInk(m, p.face?.constructLine ?? null);
   }
 
   private frameBox(): { min: Vec3; max: Vec3 } | null {

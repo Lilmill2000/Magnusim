@@ -1,22 +1,25 @@
 // @vitest-environment node
 // Sketch mode's lines follow the view's palette (src/sketch/overlay.ts, the sketch-geometry
 // layer's `palette` hook): a dark palette draws the lines, the points and the grid again in its
-// inks at once, with the cursor's dark tone; E2's candidate (b) puts a background-coloured rim
-// under every set of lines (solid, dashed, the preview, guides, dimension lines) and under the
-// points; (c) keeps a driven dimension's lines apart from a driving one's; LIGHT (a picture, or
-// the theme back to light) gives the light colours, the grid's too when a near edge-on view keeps
-// the grid it has.
+// inks at once, with the cursor's dark tone (the light one over a light face); E2: every set of
+// lines (solid, dashed, the preview, guides, dimension lines, the grid) and the points also carry
+// their face colours, LIGHT's ink for each segment's role, which the view draws where a light face
+// shows under them (src/viewport/onface.ts); the hover halo has none (its one colour reads on
+// both); a driven dimension's lines stay apart from a driving one's; LIGHT (a picture, or the
+// theme back to light) gives the light colours and no face colours, the grid's too when a near
+// edge-on view keeps the grid it has.
 // The real sketch mode (the solver in this process, tests/sketch/harness.ts, which loads it in
 // Node) with a DOM of its own for the overlay's HTML, set up once the solver is loaded.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { Color, Group, type Object3D, type Points, type PointsMaterial } from 'three';
+import { Color, Group, type Object3D, type Points } from 'three';
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { attachOverlay } from '../../src/sketch/overlay';
 import type { PlaneFrame, Vec3 } from '../../src/types/doc';
 import type { ViewportHandle } from '../../src/types/viewport';
-import { DARK, darkPalette, LIGHT, type MarkPalette } from '../../src/viewport/palette';
+import { faceColoursOf } from '../../src/viewport/onface';
+import { DARK, LIGHT, type MarkPalette } from '../../src/viewport/palette';
 import { rectangle, sketchOf } from './fixtures';
 import { sketchHarness, type Harness } from './harness';
 
@@ -65,7 +68,11 @@ function fakeHandle() {
   document.body.appendChild(host);
   let palette: MarkPalette = LIGHT;
   let far = 1;
+  /** What lightSurfaceAt answers (a light face under the pointer). */
+  let face = false;
+  let tool: { onPointer(e: unknown): boolean } | null = null;
   const handle = {
+    lightSurfaceAt: () => face,
     addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
       const group = new Group();
       groups.set(id, group);
@@ -76,7 +83,10 @@ function fakeHandle() {
     },
     palette: () => palette,
     onFrame: () => () => {},
-    pushTool: () => () => {},
+    pushTool: (t: { onPointer(e: unknown): boolean }) => {
+      tool = t;
+      return () => {};
+    },
     pixelSize: () => 0.1,
     project: (p: Vec3) => [400 + p[0] * 10, 300 - p[1] * 10] as [number, number],
     toPlane: (x: number, y: number, _plane: PlaneFrame) => ({ p: [((x - 400) / 10) * far, ((300 - y) / 10) * far, 0] as Vec3, uv: [((x - 400) / 10) * far, ((300 - y) / 10) * far] as [number, number] }),
@@ -84,46 +94,49 @@ function fakeHandle() {
   const edgeOn = (on: boolean) => {
     far = on ? 1000 : 1;
   };
+  const overFace = (on: boolean) => {
+    face = on;
+  };
   /** As the viewport does on setPalette: the live palette, then each hook. */
   const setPalette = (p: MarkPalette) => {
     palette = p;
     for (const fn of hooks.values()) fn(p);
   };
-  return { handle: handle as unknown as ViewportHandle, hooks, groups, canvas, setPalette, edgeOn };
+  /** The pointer moved over the canvas (client px), as the viewport hands it to sketch mode's tool. */
+  const pointer = (x: number, y: number) => tool?.onPointer({ type: 'move', button: 0, buttons: 0, clientX: x, clientY: y, ctrl: false, shift: false, alt: false, ray: { origin: [0, 0, 0], dir: [0, 0, -1] }, native: {} });
+  return { handle: handle as unknown as ViewportHandle, hooks, groups, canvas, setPalette, edgeOn, overFace, pointer };
 }
 
 type Line = LineSegments2 & { material: LineMaterial };
-/** The sketch-geometry layer's undashed fat lines by draw order (the grid 900, the solid lines 1000); rims left out. */
+/** The sketch-geometry layer's undashed fat lines by draw order (the grid 900, the solid lines 1000). */
 function lines(groups: Map<string, Group>): Map<number, Line> {
   const out = new Map<number, Line>();
   groups.get('sketch-geometry')!.traverse((o: Object3D) => {
-    if ((o as Line).isLineSegments2 && o.name !== 'sketch-rim' && !(o as Line).material.dashed && !out.has(o.renderOrder)) out.set(o.renderOrder, o as Line);
+    if ((o as Line).isLineSegments2 && !(o as Line).material.dashed && !out.has(o.renderOrder)) out.set(o.renderOrder, o as Line);
   });
   return out;
 }
 
-/** Every line set and point set of both sketch layers (the grid and the hover halo aside), and every rim (E2 b). */
+/** Every line set and point set of both sketch layers, by draw order (the grid 900, the halo 990, the rest 1000 and up). */
 function marks(groups: Map<string, Group>) {
   const sets: (Line | Points)[] = [];
-  const rims: (Line | Points)[] = [];
   for (const id of ['sketch-geometry', 'sketch-annotations'])
     groups.get(id)!.traverse((o: Object3D) => {
-      if (!(o as Line).isLineSegments2 && !(o as Points).isPoints) return;
-      if (o.name === 'sketch-rim') rims.push(o as Line | Points);
-      else if (o.renderOrder >= 1000) sets.push(o as Line | Points);
+      if ((o as Line).isLineSegments2 || (o as Points).isPoints) sets.push(o as Line | Points);
     });
-  return { sets, rims };
+  return sets;
 }
-const widthOf = (o: Line | Points) => ((o as Line).isLineSegments2 ? (o as Line).material.linewidth : ((o as Points).material as PointsMaterial).size);
-const rimColour = (o: Line | Points) => `#${(o.material as unknown as { color: Color }).color.getHexString()}`;
 
-/** The distinct colours of a line's segments, as '#rrggbb'. */
-function colours(l: Line): string[] {
-  if (!l.visible) return [];
-  const a = l.geometry.getAttribute('instanceColorStart');
+/** The distinct colours of a geometry's segments or points, as '#rrggbb'. */
+function coloursOf(g: Line['geometry'] | Points['geometry']): string[] {
+  const a = g.getAttribute('instanceColorStart') ?? g.getAttribute('color');
   const seen = new Set<string>();
   for (let i = 0; i < a.count; i++) seen.add(`#${new Color(a.getX(i), a.getY(i), a.getZ(i)).getHexString()}`);
   return [...seen].sort();
+}
+/** The distinct colours of a line's segments, as '#rrggbb'. */
+function colours(l: Line): string[] {
+  return l.visible ? coloursOf(l.geometry) : [];
 }
 
 async function sketchWithOverlay() {
@@ -144,7 +157,8 @@ describe('sketch mode and the palette', () => {
     const light = { solid: colours(lines(v.groups).get(1000)!), grid: colours(lines(v.groups).get(900)!), cursor: v.canvas.style.cursor };
     expect(light.solid).toEqual([LIGHT.sketch.under]);
     expect(light.grid).toEqual([LIGHT.sketch.grid, LIGHT.sketch.gridMajor].sort());
-    expect(marks(v.groups).rims.filter((r) => r.visible)).toEqual([]);
+    // Light: nothing carries face colours (nothing is drawn twice).
+    expect(marks(v.groups).filter((o) => faceColoursOf(o.geometry))).toEqual([]);
     // The draw cursor in the light tone (#101828 ink).
     expect(light.cursor).toContain('101828');
     v.setPalette(DARK);
@@ -157,6 +171,34 @@ describe('sketch mode and the palette', () => {
     expect(colours(lines(v.groups).get(1000)!)).toEqual(light.solid);
     expect(colours(lines(v.groups).get(900)!)).toEqual(light.grid);
     expect(v.canvas.style.cursor).toBe(light.cursor);
+    expect(marks(v.groups).filter((o) => faceColoursOf(o.geometry))).toEqual([]);
+  });
+
+  // E2 judgement: a white cursor melts into a light face (1.6:1 on the body colour): over one, in a
+  // dark view, the cursor is the light view's (dark, with a white halo); in light it never asks.
+  it('gives the draw cursor the light tone over a light face in a dark view, the dark tone elsewhere', async () => {
+    const v = await sketchWithOverlay();
+    const move = (x: number, y: number) => v.pointer(x, y);
+    const light = v.canvas.style.cursor;
+    v.overFace(true);
+    move(420, 280);
+    await h!.idle();
+    expect(v.canvas.style.cursor, 'light: over a face as anywhere').toBe(light);
+    v.setPalette(DARK);
+    v.overFace(false);
+    move(430, 280);
+    await h!.idle();
+    const dark = v.canvas.style.cursor;
+    expect(dark).not.toBe(light);
+    expect(dark).not.toContain('101828');
+    v.overFace(true);
+    move(440, 280);
+    await h!.idle();
+    expect(v.canvas.style.cursor, 'dark, over a light face: the light tone').toBe(light);
+    v.overFace(false);
+    move(450, 280);
+    await h!.idle();
+    expect(v.canvas.style.cursor).toBe(dark);
   });
 
   // Review round 1: drawGrid draws no new grid in a near edge-on view, and the one there kept the old
@@ -184,7 +226,7 @@ describe('sketch mode and the palette', () => {
     expect(colours(grid())).toEqual([LIGHT.sketch.grid, LIGHT.sketch.gridMajor].sort());
   });
 
-  it('E2 (b): a rim in the background colour, 1 px wider each side, under every line set and the points (the preview, construction and dimension lines too); none with (a) or (c)', async () => {
+  it("E2: every line set and the points (the preview, construction and dimension lines, the grid) carry LIGHT's ink for each segment's role; the halo none; none in light", async () => {
     // A rectangle (solid, under defined), a construction line (dashed), a driving and a driven dimension.
     const g = rectangle(0, 0, 20, 10);
     g.points.q1 = [0, 20];
@@ -201,34 +243,39 @@ describe('sketch mode and the palette', () => {
     h.click([30, 0]);
     h.move([40, 5]);
     await h.idle();
-    v.setPalette(darkPalette({ sketch: 'b' }));
-    const { sets, rims } = marks(v.groups);
-    const shown = sets.filter((o) => o.visible);
-    // Solid, dashed, preview, dimension lines and points at least.
-    expect(shown.length).toBeGreaterThanOrEqual(5);
+    v.setPalette(DARK);
+    const shown = marks(v.groups).filter((o) => o.visible && o.renderOrder !== 990);
+    // The grid, solid, dashed, preview, dimension lines and points at least.
+    expect(shown.length).toBeGreaterThanOrEqual(6);
     expect(shown.some((o) => (o as Line).isLineSegments2 && (o as Line).material.dashed)).toBe(true);
     expect(shown.some((o) => (o as Points).isPoints)).toBe(true);
+    expect(shown.some((o) => o.renderOrder === 900)).toBe(true);
+    const roles = Object.keys(DARK.sketch) as (keyof typeof DARK.sketch)[];
+    const faceOf = (c: string) => new Set(roles.filter((r) => DARK.sketch[r] === c).map((r) => LIGHT.sketch[r]));
     for (const o of shown) {
-      const rim = rims.find((r) => r.geometry === o.geometry);
-      expect(rim, `${o.renderOrder}: a rim`).toBeTruthy();
-      expect(rim!.visible).toBe(true);
-      expect(widthOf(rim!)).toBeCloseTo(widthOf(o) + 2);
-      expect(rimColour(rim!)).toBe('#1b1f27');
-      // Drawn before every line and point, dashed as its line is.
-      expect(rim!.renderOrder).toBeLessThan(990);
-      if ((o as Line).isLineSegments2) expect((rim as Line).material.dashed).toBe((o as Line).material.dashed);
+      const face = faceColoursOf(o.geometry);
+      expect(face, `${o.renderOrder}: face colours`).toBeTruthy();
+      // Each segment's (point's) face colour is its role's LIGHT ink, in the same place.
+      const dark = o.geometry.getAttribute((o as Line).isLineSegments2 ? 'instanceColorStart' : 'color');
+      const lit = face!.getAttribute((o as Line).isLineSegments2 ? 'instanceColorStart' : 'color');
+      expect(lit.count).toBe(dark.count);
+      for (let i = 0; i < dark.count; i++) {
+        const d = `#${new Color(dark.getX(i), dark.getY(i), dark.getZ(i)).getHexString()}`;
+        const l = `#${new Color(lit.getX(i), lit.getY(i), lit.getZ(i)).getHexString()}`;
+        expect([...faceOf(d)], `${o.renderOrder} segment ${i}: ${d}`).toEqual([l]);
+      }
+      // Dashed on the same distances.
+      if ((o as Line).isLineSegments2 && (o as Line).material.dashed) expect(Array.from(face!.getAttribute('instanceDistanceStart').array as Float32Array)).toEqual(Array.from(o.geometry.getAttribute('instanceDistanceStart').array as Float32Array));
     }
-    // In the geometry layer's frame (drawn before every line of both layers), the dimension lines' rim too.
-    for (const r of rims) expect(v.groups.get('sketch-geometry')!.getObjectById(r.id)).toBe(r);
-    for (const o of ['a', 'c'] as const) {
-      v.setPalette(darkPalette({ sketch: o }));
-      expect(marks(v.groups).rims.filter((r) => r.visible), `(${o}) no rim`).toEqual([]);
-    }
+    // What the dark lines show over a face: LIGHT's inks, the driven dimension's grey and the construction grey among them.
+    expect(new Set(shown.flatMap((o) => coloursOf(faceColoursOf(o.geometry)!)))).toEqual(new Set(shown.flatMap((o) => coloursOf(o.geometry)).map((c) => [...faceOf(c)][0])));
+    // The hover halo has none.
+    for (const o of marks(v.groups).filter((x) => x.renderOrder === 990)) expect(faceColoursOf(o.geometry)).toBeUndefined();
     v.setPalette(LIGHT);
-    expect(marks(v.groups).rims.filter((r) => r.visible)).toEqual([]);
+    expect(marks(v.groups).filter((o) => faceColoursOf(o.geometry))).toEqual([]);
   });
 
-  it("E2 (c): a driven dimension's lines a darker grey than a driving one's, and every state its mid tone", async () => {
+  it("keeps a driven dimension's lines apart from a driving one's in dark, and over a face as in light", async () => {
     const g = rectangle(0, 0, 20, 10);
     g.constraints.push({ id: 'dw', kind: 'distance', refs: ['e1'], expr: '20 mm', driving: true }, { id: 'dd', kind: 'distance', refs: ['e2'], expr: '10 mm', driving: false });
     h = await sketchHarness(sketchOf(g));
@@ -246,10 +293,9 @@ describe('sketch mode and the palette', () => {
     };
     expect(colours(dimLines())).toEqual([LIGHT.sketch.dim, LIGHT.sketch.driven].sort());
     v.setPalette(DARK);
-    expect(colours(dimLines())).toEqual(['#646d7e', '#8a93a3']);
-    expect(colours(lines(v.groups).get(1000)!)).toEqual([DARK.sketch.under]);
-    expect(DARK.sketch.under).toBe('#2e6bd8');
-    v.setPalette(darkPalette({ sketch: 'a' }));
     expect(colours(dimLines())).toEqual(['#9aa4b2', '#e6e9ef']);
+    expect(coloursOf(faceColoursOf(dimLines().geometry)!)).toEqual([LIGHT.sketch.dim, LIGHT.sketch.driven].sort());
+    expect(colours(lines(v.groups).get(1000)!)).toEqual([DARK.sketch.under]);
+    expect(DARK.sketch.under).toBe('#7aa7ff');
   });
 });

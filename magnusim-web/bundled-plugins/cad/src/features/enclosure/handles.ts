@@ -23,6 +23,7 @@ import type { DocUnits } from '../../types/units';
 import type { OverlayLayer, ViewportHandle, ViewportTool } from '../../types/viewport';
 import { formatQuantity } from '../../ui/kit/format';
 import { PICK_COLOR } from '../../viewport/colors';
+import { setFaceInk } from '../../viewport/onface';
 import { axisParamAt, roundedDistance } from '../extrude/handle';
 import { sideAnchors, sideLabel, sideMinWith, type EnclosureShape } from './geometry';
 
@@ -101,9 +102,13 @@ class Arrows {
     layer.html.appendChild(this.label);
   }
 
-  /** The arrows' colour (the palette's blue; the lit one stays the pick green). */
-  setColor(color: number) {
+  /**
+   * The arrows' colour (the palette's blue; the lit one stays the pick green), and over a light
+   * face (E2, src/viewport/onface.ts: the light view's blue in a dark view; null in light).
+   */
+  setColor(color: number, face: number | null = null) {
     this.mat.color.setHex(color);
+    setFaceInk(this.mat, face);
     this.layer.changed();
   }
 
@@ -189,6 +194,8 @@ class Arrows {
 export interface EnclosureToolOptions {
   session: EditSession;
   color: number;
+  /** The arrows' colour over a light face (the palette's `face.ink`; null or absent in light). */
+  faceColor?: number | null;
   /** The enclosure's last build output (what the arrows sit on), or null. */
   output(): EnclosureOutput | null;
 }
@@ -199,8 +206,9 @@ export interface EnclosureToolOptions {
  */
 export function startEnclosureHandles(services: AppServices, handle: ViewportHandle, opts: EnclosureToolOptions): { stop(): void; refresh(): void; dragging(): boolean; arrows(): SideArrow[] } {
   // `color` is the palette's blue when the panel opens; a new palette (the host's theme) recolours them.
-  const layer = handle.addLayer(HANDLES_LAYER, { order: 50, palette: (p) => arrows.setColor(p.ink) });
+  const layer = handle.addLayer(HANDLES_LAYER, { order: 50, palette: (p) => arrows.setColor(p.ink, p.face?.ink ?? null) });
   const arrows = new Arrows(layer, opts.color);
+  arrows.setColor(opts.color, opts.faceColor ?? null);
   /**
    * `applied`: a live update went to the session during this drag (`last`: its value); `before`: the
    * side's own value when it began (none: it followed the padding); `release`: lets the held saves go.

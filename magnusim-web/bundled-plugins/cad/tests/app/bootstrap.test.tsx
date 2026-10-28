@@ -133,7 +133,7 @@ describe('bootstrap', () => {
     });
     await vi.waitFor(() => expect(views.palettes.map((p) => p.name)).toEqual(['dark']));
     expect(document.documentElement.style.getPropertyValue('--cad-toolbar-scale')).toBe('1.25');
-    expect(window.__CAD__?.appearance?.get()).toMatchObject({ appearance: { theme: 'dark', iconScale: 1.25 }, palette: 'dark', lines: { edges: 'c', sketch: 'c' }, background: 0x1b1f27 });
+    expect(window.__CAD__?.appearance?.get()).toMatchObject({ appearance: { theme: 'dark', iconScale: 1.25 }, palette: 'dark', background: 0x1b1f27, followsFaces: true });
     // The SDK writes data-theme on <html>; the Part never does.
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
     act(() => ws.push('appearance', { theme: 'light', preference: 'light', textScale: 1, iconScale: 1 }));
@@ -142,8 +142,8 @@ describe('bootstrap', () => {
     // The test handle's push is the same path (a host with no appearance yet, e2e).
     act(() => window.__CAD__!.appearance!.push({ theme: 'dark' }));
     expect(views.palettes.map((p) => p.name)).toEqual(['dark', 'light', 'dark']);
-    expect(window.__CAD__!.appearance!.darkLines('a')).toEqual({ edges: 'a', sketch: 'a' });
-    expect(window.__CAD__!.appearance!.get().lines).toEqual({ edges: 'a', sketch: 'a' });
+    // One dark set (Daniel picked E1 and E2): nothing to switch.
+    expect(window.__CAD__!.appearance).not.toHaveProperty('darkLines');
   });
 
   it('stays light on a host without an appearance', async () => {

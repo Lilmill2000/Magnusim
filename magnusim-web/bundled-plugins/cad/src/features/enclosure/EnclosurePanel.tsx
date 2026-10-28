@@ -115,7 +115,7 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   outRef.current = output;
   useEffect(() => {
     if (!handle || typeof handle.pushTool !== 'function' || props.session.owner) return;
-    const t = startEnclosureHandles(services, handle, { session: props.session, color: paletteOf(handle).ink, output: () => outRef.current });
+    const t = startEnclosureHandles(services, handle, { session: props.session, color: paletteOf(handle).ink, faceColor: paletteOf(handle).face?.ink ?? null, output: () => outRef.current });
     tool.current = t;
     return () => {
       t.stop();

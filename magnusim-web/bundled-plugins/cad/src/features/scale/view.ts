@@ -14,6 +14,7 @@ import type { ScaleModelPlace, Vec3 } from '../../types/doc';
 import type { OverlayLayer, ViewportHandle, ViewportPointer, ViewportTool } from '../../types/viewport';
 import { uiFor } from '../../ui/controller';
 import { BODY_LIGHT } from '../../viewport/colors';
+import { setFaceInk } from '../../viewport/onface';
 import { LIGHT, paletteOf } from '../../viewport/palette';
 import { loadBanana, type BananaMesh } from './banana-mesh';
 import type { BBox } from '../../types/kernel-protocol';
@@ -368,12 +369,15 @@ export function installBananaView(services: AppServices): () => void {
         const mesh = new Mesh(g.geo, material);
         mesh.name = 'banana-for-scale';
         let box = placedBox(now, data);
-        // The snap guide in the palette's blue (a picture leaves the banana out).
+        // The snap guide in the palette's blue (a picture leaves the banana out); in a dark view the
+        // light view's blue where a light face shows under it (E2, src/viewport/onface.ts).
         guideMaterial.color.setHex(paletteOf(h).ink);
+        setFaceInk(guideMaterial, paletteOf(h).face?.ink ?? null);
         const layer = h.addLayer(BANANA_LAYER, {
           order: 1,
           palette: (p) => {
             guideMaterial.color.setHex(p.ink);
+            setFaceInk(guideMaterial, p.face?.ink ?? null);
             layer.changed();
           },
           frame: () => {

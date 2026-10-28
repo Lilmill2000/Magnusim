@@ -170,7 +170,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
   // while the Assistant fills it (the person's clicks in the view only select).
   useEffect(() => {
     if (!handle || typeof handle.pushTool !== 'function' || session.owner) return;
-    const t = startPanelTool(services, handle, { session, note: (text) => ui.setPanelNote(text), color: paletteOf(handle).ink });
+    const t = startPanelTool(services, handle, { session, note: (text) => ui.setPanelNote(text), color: paletteOf(handle).ink, faceColor: paletteOf(handle).face?.ink ?? null });
     tool.current = t;
     return () => {
       t.stop();

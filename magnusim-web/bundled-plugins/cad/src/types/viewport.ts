@@ -344,11 +344,19 @@ export interface ViewportHandle {
   palette?(): MarkPalette;
   /**
    * Draw the marks in this palette from now on (app/appearance.ts, from the host's theme): the
-   * background, the edges (and E1's rim), the triad, and each layer through its `palette` hook,
-   * without a rebuild; the next frame shows it. Surfaces keep their colours (D2). A palette that
-   * draws the same as the live one changes nothing.
+   * background, the edges, the triad, and each layer through its `palette` hook, without a
+   * rebuild; the next frame shows it. Surfaces keep their colours (D2). With a dark palette the
+   * layers' marks that say so (src/viewport/onface.ts) take their light inks where a light surface
+   * shows under them (E2). A palette that draws the same as the live one changes nothing.
    */
   setPalette?(p: MarkPalette): void;
+  /**
+   * Whether the view shows a light surface at this point (client px): an opaque body face of a
+   * light colour, or a section cap (E2's rule for the marks, src/viewport/onface.ts
+   * isLightSurface). One BVH ray, as picking (a body still without one counts as none). Sketch
+   * mode's cursors take the light tone there in a dark view.
+   */
+  lightSurfaceAt?(clientX: number, clientY: number): boolean;
   /**
    * Draw `frames` frames synchronously, orbiting a little each frame, and wait
    * for the GPU after each one. Returns ms per frame. For performance tests.
