@@ -19,6 +19,7 @@ import { ForcesPanel, SurfacePanel, SweepPanel } from '../ui/forces';
 import { ProbePanel, ProbesPanel } from '../ui/probes';
 import { ShortcutsHelp } from '../ui/shortcuts';
 import { Capture, type LegendSpec } from './capture';
+import { exposeCapture } from './debug';
 import { useWorkspaceUnits } from './hooks';
 import { FLUIDS } from '../scene/scene';
 import { useStore, type Store } from './store';
@@ -262,6 +263,7 @@ export function App({
         () => captionNow(engine, store.get().scene),
       ),
   );
+  useEffect(() => exposeCapture(capture), [capture]);
   const picture = () => {
     void capture
       .screenshot()
@@ -425,9 +427,7 @@ export function App({
           <TunnelPanel store={store} engine={engine} units={units} />
           <ViewPanel store={store} />
         </aside>
-        {/* The stage (the view and what is drawn over it) keeps the light theme while the core's 3D
-            view is light; this attribute is removed when the 3D view goes dark. */}
-        <div className="t2d-stage" data-theme="light">
+        <div className="t2d-stage">
           {problem ? (
             <div className="t2d-banner">
               <DisabledReason reason={`The saved tunnel could not be read (${problem}), so a new one was started.`} role="alert" />
@@ -443,7 +443,7 @@ export function App({
               <DisabledReason reason="The flow became unstable and was stopped." fix={{ label: 'Reset flow', onFix: resetFlow }} role="alert" />
             </div>
           ) : null}
-          <Viewport engine={engine} store={store} editor={editor} units={units} onStatus={setHint} />
+          <Viewport engine={engine} store={store} editor={editor} capture={capture} units={units} onStatus={setHint} />
           <SketchBar editor={editor} />
           {help ? <ShortcutsHelp onClose={() => setHelp(false)} /> : null}
           <DimensionInput editor={editor} />

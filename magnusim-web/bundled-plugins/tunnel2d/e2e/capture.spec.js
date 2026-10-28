@@ -1,14 +1,14 @@
 // T6: the keyboard shortcuts and capture.
 //
 // 1. Picture (and C) downloads a PNG of the view: the flow itself, not a blank canvas, at the
-//    view's size, with the legend and the caption drawn on it. Record (and Shift+C) records
-//    the view and downloads a WebM when stopped.
+//    view's size, with the legend and the caption drawn on it, and the view's light margins.
+//    Record (and Shift+C) records the view and downloads a WebM when stopped.
 // 2. The keys: ? lists the shortcuts; Space pauses and . steps the paused flow by one frame;
 //    R resets it; F fits the view; 1-7 pick the view; [ and ] turn the selected body.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { newTunnel, openTunnel, scaledTimeout, scene, SLOW, stats, T, useTunnelHost } from './helpers.js';
+import { newTunnel, openTunnel, pngPixels, scaledTimeout, scene, SLOW, stats, T, useTunnelHost } from './helpers.js';
 
 const env = useTunnelHost('tunnel2d-capture');
 
@@ -94,6 +94,8 @@ test('Picture saves the view as a PNG with its legend; Record saves a WebM that 
   // The legend's colour bar, bottom left: the map's many colours.
   const legend = await pngStats(page, png, [0.0, 0.85, 0.2, 1.0]);
   expect(legend.colours).toBeGreaterThan(20);
+  // The fitted view's margin, top left: the light view background (pictures are light in every theme).
+  expect((await pngPixels(page, png, [[3, 3]])).at[0]).toEqual([240, 242, 247, 255]);
   await expect(frame.locator('[data-t2d-hint]')).toBeDefined();
   // The key.
   pending = page.waitForEvent('download');

@@ -62,6 +62,8 @@ export interface Palette {
   pick: string;
   halo: string;
   preview: string;
+  /** Under the marks with no halo of their own (the origin, the rings where the outline is open, the snap ring) where they need one (dark). */
+  markHalo?: string;
 }
 
 type Listener = () => void;
@@ -692,15 +694,25 @@ export class SketchEditor {
           return [];
       }
     };
-    // The origin.
+    // The origin, on a halo where the marks need one.
+    const markHalo = pal.markHalo && pal.markHalo !== 'transparent' ? pal.markHalo : null;
     const o = scr([0, 0]);
+    const origin = () => {
+      g.beginPath();
+      g.moveTo(o.x - 8, o.y);
+      g.lineTo(o.x + 8, o.y);
+      g.moveTo(o.x, o.y - 8);
+      g.lineTo(o.x, o.y + 8);
+    };
+    if (markHalo) {
+      g.strokeStyle = markHalo;
+      g.lineWidth = 4;
+      origin();
+      g.stroke();
+    }
     g.strokeStyle = pal.construction;
     g.lineWidth = 1;
-    g.beginPath();
-    g.moveTo(o.x - 8, o.y);
-    g.lineTo(o.x + 8, o.y);
-    g.moveTo(o.x, o.y - 8);
-    g.lineTo(o.x, o.y + 8);
+    origin();
     g.stroke();
     // Curves.
     for (const e of s.entities) {
@@ -722,12 +734,17 @@ export class SketchEditor {
       g.fill();
       g.stroke();
     }
-    // Where the outline is open or branches.
+    // Where the outline is open or branches (on a halo where the marks need one).
     const prof = profileOf(s);
     for (const p of [...prof.open, ...prof.branch]) {
       const q = scr(p);
       g.beginPath();
       g.arc(q.x, q.y, 8, 0, 2 * Math.PI);
+      if (markHalo) {
+        g.strokeStyle = markHalo;
+        g.lineWidth = 5;
+        g.stroke();
+      }
       g.strokeStyle = pal.over;
       g.lineWidth = 2;
       g.stroke();
@@ -810,6 +827,11 @@ export class SketchEditor {
         const q = scr(cur);
         g.beginPath();
         g.arc(q.x, q.y, 6, 0, 2 * Math.PI);
+        if (markHalo) {
+          g.strokeStyle = markHalo;
+          g.lineWidth = 4.5;
+          g.stroke();
+        }
         g.strokeStyle = pal.preview;
         g.lineWidth = 1.5;
         g.stroke();

@@ -2,8 +2,13 @@
 // everything over it, with its colour legend and a line saying what it shows. Each is drawn
 // right after the engine submits a frame (so the GPU canvas is read while its picture is the
 // current one) and downloads from the page.
+// Both are light in every theme (what a person keeps stays light, Daniel 2026-10-27): the GPU
+// draws the flow in its light colours, the marks over it are drawn again for the frame in the
+// light ones (the view's painter, src/ui/overlay.ts), and the cards take the light page's colours.
+// Nothing on screen is touched for it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Engine } from '../sim/engine';
+import { captureCards } from './colours';
 
 export interface LegendSpec {
   title: string;
@@ -15,6 +20,8 @@ export interface LegendSpec {
 }
 
 type Listener = () => void;
+/** The legend and caption cards' background and text. */
+type Cards = () => { bg: string; ink: string };
 
 const fmt = new Intl.NumberFormat('en-US', { maximumSignificantDigits: 3 });
 
@@ -42,17 +49,27 @@ export class Capture {
   private engine: Engine;
   private legend: () => LegendSpec | null;
   private caption: () => string;
+  private cards: Cards;
+  /** Draws the marks over the flow into a canvas of the view's size (the view registers it). */
+  private overlay: ((g: CanvasRenderingContext2D) => void) | null = null;
   private canvas = document.createElement('canvas');
+  private overlayCanvas: HTMLCanvasElement | null = null;
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private pending: ((c: HTMLCanvasElement) => void)[] = [];
   private listeners = new Set<Listener>();
 
-  constructor(engine: Engine, legend: () => LegendSpec | null, caption: () => string) {
+  constructor(engine: Engine, legend: () => LegendSpec | null, caption: () => string, cards: Cards = captureCards) {
     this.engine = engine;
     this.legend = legend;
     this.caption = caption;
+    this.cards = cards;
     engine.afterFrame = () => this.onFrame();
+  }
+
+  /** What a capture draws over the flow (null: nothing). */
+  setOverlay(paint: ((g: CanvasRenderingContext2D) => void) | null) {
+    this.overlay = paint;
   }
 
   subscribe(fn: Listener): () => void {
@@ -91,15 +108,24 @@ export class Capture {
     const g = c.getContext('2d')!;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.drawImage(src, 0, 0);
-    const overlay = document.querySelector<HTMLCanvasElement>('[data-t2d-viewport] canvas.t2d-overlay');
-    if (overlay && overlay.width === w && overlay.height === h) g.drawImage(overlay, 0, 0);
+    if (this.overlay) {
+      // This frame's marks on a canvas of their own, laid over the flow as the screen's overlay is.
+      const o = (this.overlayCanvas ??= document.createElement('canvas'));
+      if (o.width !== w || o.height !== h) {
+        o.width = w;
+        o.height = h;
+      }
+      const og = o.getContext('2d')!;
+      og.setTransform(1, 0, 0, 1, 0, 0);
+      og.clearRect(0, 0, w, h);
+      this.overlay(og);
+      g.drawImage(o, 0, 0);
+    }
     const dpr = this.engine.worldView.dpr || 1;
     g.scale(dpr, dpr);
     const W = w / dpr;
     const H = h / dpr;
-    const css = getComputedStyle(document.documentElement);
-    const bg = css.getPropertyValue('--mg-bg').trim() || 'white';
-    const ink = css.getPropertyValue('--mg-text').trim() || 'black';
+    const { bg, ink } = this.cards();
     g.font = '12px system-ui, sans-serif';
     g.textBaseline = 'middle';
     const lg = this.legend();
@@ -139,26 +165,36 @@ export class Capture {
     return c;
   }
 
-  /** The next frame drawn, as a PNG (downloaded); resolves with its file name. */
-  screenshot(): Promise<string> {
+  /** The next frame drawn, as a PNG. */
+  still(): Promise<Blob> {
     return new Promise((resolve, reject) => {
-      this.pending.push((c) => {
-        c.toBlob((b) => {
-          if (!b) return reject(new Error('The picture could not be made.'));
-          const name = captureName('png');
-          download(b, name);
-          resolve(name);
-        }, 'image/png');
-      });
+      this.pending.push((c) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('The picture could not be made.'))), 'image/png'));
       // A paused flow still draws every frame, so the next one comes within a frame.
     });
+  }
+
+  /** The next frame drawn, as a PNG (downloaded); resolves with its file name. */
+  async screenshot(): Promise<string> {
+    const b = await this.still();
+    const name = captureName('png');
+    download(b, name);
+    return name;
   }
 
   /** Start recording the view (each frame the engine draws), or say why it cannot. */
   startRecording(): string | null {
     if (this.recording) return null;
     if (!this.canRecord) return 'This browser cannot record the view (no MediaRecorder with WebM).';
-    this.compose();
+    // The recorder starts with the engine's next frame, once this canvas holds it: outside its
+    // own frame a WebGPU canvas reads as empty, so a frame composed now would open the file blank.
+    this.recording = { since: performance.now() };
+    this.pending.push(() => this.startRecorder());
+    this.emit();
+    return null;
+  }
+
+  private startRecorder() {
+    if (!this.recording || this.recorder) return;
     const stream = this.canvas.captureStream(30);
     const type = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
     const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 12_000_000 });
@@ -171,14 +207,12 @@ export class Capture {
     };
     rec.start(1000);
     this.recorder = rec;
-    this.recording = { since: performance.now() };
-    this.emit();
-    return null;
   }
 
+  /** Stops the recording and saves it (stopped before its first frame, there is nothing to save). */
   stopRecording() {
-    if (!this.recorder) return;
-    this.recorder.stop();
+    if (!this.recording) return;
+    this.recorder?.stop();
     this.recorder = null;
     this.recording = null;
     this.emit();

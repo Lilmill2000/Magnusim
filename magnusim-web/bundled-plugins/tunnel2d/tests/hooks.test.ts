@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 // The page follows the host's unit system and the engine's changes, including a change that
-// lands between the first render and the moment the page starts listening (the frame mounting),
-// and the page's theme (colours read from the tokens are read again when it changes).
+// lands between the first render and the moment the page starts listening (the frame mounting).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { afterEach, describe, expect, it } from 'vitest';
-import { createElement, useEffect } from 'react';
+import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
 import { act, render } from '@testing-library/react';
-import { onAppearance, useAppearance, useEngineTick, useWorkspaceUnits } from '../src/app/hooks';
+import { useEngineTick, useWorkspaceUnits } from '../src/app/hooks';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -75,54 +74,5 @@ describe('the engine', () => {
       for (const fn of engine.fns) fn();
     });
     expect(container.textContent).toBe('3');
-  });
-});
-
-describe('the page theme', () => {
-  /** Lets the mutation observers' callbacks run. */
-  const settle = () => new Promise((r) => setTimeout(r, 0));
-  afterEach(() => {
-    document.documentElement.removeAttribute('data-theme');
-    document.body.removeAttribute('data-theme');
-  });
-
-  it('each change of html data-theme is heard, and nothing once stopped', async () => {
-    let n = 0;
-    const stop = onAppearance(() => n++);
-    document.documentElement.setAttribute('data-theme', 'dark');
-    await settle();
-    expect(n).toBe(1);
-    // Another attribute, or a theme of an element in the page (the stage's own), is not the page's theme.
-    document.documentElement.setAttribute('lang', 'en');
-    document.body.setAttribute('data-theme', 'light');
-    await settle();
-    expect(n).toBe(1);
-    stop();
-    document.documentElement.setAttribute('data-theme', 'light');
-    await settle();
-    expect(n).toBe(1);
-  });
-
-  it('an effect that depends on useAppearance reads the colours again after a change', async () => {
-    const reads: string[] = [];
-    function View() {
-      const appearance = useAppearance();
-      useEffect(() => {
-        reads.push(document.documentElement.getAttribute('data-theme') ?? 'none');
-      }, [appearance]);
-      return null;
-    }
-    const { unmount } = render(createElement(View));
-    expect(reads).toEqual(['none']);
-    await act(async () => {
-      document.documentElement.setAttribute('data-theme', 'dark');
-      await settle();
-    });
-    expect(reads).toEqual(['none', 'dark']);
-    // Unmounted, it stops listening.
-    unmount();
-    document.documentElement.setAttribute('data-theme', 'light');
-    await settle();
-    expect(reads).toEqual(['none', 'dark']);
   });
 });

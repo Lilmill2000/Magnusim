@@ -4,9 +4,13 @@ import type { Workspace } from '@magnusim/workspace';
 import type { Engine } from '../sim/engine';
 import { runSchaferTurek } from '../sim/validate';
 import { airfoilCase, plateCase, runCase, type AirfoilSpec, type PlateSpec } from '../sim/validateRans';
-import { turnHandle, worldOutline } from '../ui/Viewport';
+import { turnHandle, worldOutline } from '../ui/overlay';
 import { containsRings, signedDistanceRings } from '../geometry/polygon';
+import { domainRectPx } from '../render/domain';
+import { parseScene } from '../scene/scene';
 import type { SketchEditor } from '../sketch/editor';
+import type { Capture } from './capture';
+import { captureCards, overlaySet } from './colours';
 import type { Store } from './store';
 
 declare global {
@@ -15,9 +19,62 @@ declare global {
   }
 }
 
+/** A canvas's pixels (a WebGPU one read in the task that drew its frame): its size, a hash of them and the pixels at `at` (device px, RGBA). */
+function pixelsOf(src: CanvasImageSource & { width: number; height: number }, at: [number, number][]) {
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(src, 0, 0);
+  const d = g.getImageData(0, 0, c.width, c.height).data;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < d.length; i++) hash = Math.imul(hash ^ d[i], 0x01000193);
+  return { w: c.width, h: c.height, hash: (hash >>> 0).toString(16), at: at.map(([x, y]) => Array.from(d.subarray(4 * (y * c.width + x), 4 * (y * c.width + x) + 4))) };
+}
+
+/** Pictures, for the tests: the page's App makes the Capture. */
+export function exposeCapture(capture: Capture) {
+  const t = window.__TUNNEL__;
+  if (!t) return;
+  /** A picture of the next frame as Picture saves it (decoded): its size, a hash and the pixels at `at` (device px). */
+  t.picture = async (at: [number, number][] = []) => pixelsOf(await createImageBitmap(await capture.still()), at);
+}
+
 export function exposeTestHandle({ store, engine, device, editor }: { ws: Workspace; store: Store; engine: Engine; device: GPUDevice; editor: SketchEditor }) {
   window.__TUNNEL__ = {
     ready: true,
+    /** Drive: a scene as a saved one (an undo step), the selection, the view (centre and metres per CSS px). */
+    commit: (s: unknown) => store.commit(parseScene(s)),
+    select: (id: string | null) => store.select(id),
+    setView: (v: { cx?: number; cy?: number; mpp?: number }) => {
+      engine.worldView = { ...engine.worldView, ...v };
+    },
+    /** The page's theme, and the marks' colours on screen and in pictures (with the pictures' cards). */
+    theme: () => {
+      const page = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+      return { page, screen: overlaySet(page), light: overlaySet('light'), cards: captureCards() };
+    },
+    /** The tunnel's pixels on the GPU canvas as its last frame drew them (device px), and the canvas in the frame (CSS px). */
+    domain: () => {
+      const r = engine.canvas.getBoundingClientRect();
+      return { drawn: engine.drawn, rect: engine.drawn ? domainRectPx(engine.drawn) : null, dpr: engine.worldView.dpr, canvas: { left: r.left, top: r.top, w: r.width, h: r.height } };
+    },
+    /** The GPU canvas as the next frame leaves it: its size, a hash of its pixels and the pixels at `at` (device px). */
+    gpuHash: (at: [number, number][] = []) =>
+      new Promise((resolve) => {
+        const after = engine.afterFrame;
+        engine.afterFrame = () => {
+          engine.afterFrame = after;
+          resolve(pixelsOf(engine.canvas, at));
+          after?.();
+        };
+      }),
+    /** The overlay on screen at device pixels: RGBA each. */
+    overlayPixels: (at: [number, number][]) => {
+      const o = document.querySelector<HTMLCanvasElement>('[data-t2d-viewport] canvas.t2d-overlay');
+      const g = o?.getContext('2d');
+      return g ? at.map(([x, y]) => Array.from(g.getImageData(x, y, 1, 1).data)) : null;
+    },
     scene: () => store.get().scene,
     selected: () => store.get().selected,
     save: () => store.get().save,

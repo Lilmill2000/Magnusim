@@ -1,0 +1,975 @@
+# nothing selected
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#101828"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+# the streak rake selected
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 3
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+fillStyle = "#ffffff"
+strokeStyle = "#1570ef"
+lineWidth = 2
+fillRect(145, 303.3333333333333, 10, 10)
+strokeRect(145, 303.3333333333333, 10, 10)
+fillStyle = "#ffffff"
+strokeStyle = "#1570ef"
+lineWidth = 2
+fillRect(145, 136.66666666666669, 10, 10)
+strokeRect(145, 136.66666666666669, 10, 10)
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#101828"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+# a probe selected
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#1570ef"
+lineWidth = 2.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#1570ef"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+# the open sketch selected
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#101828"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#1570ef"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+strokeStyle = "#1570ef"
+lineWidth = 2
+stroke()
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(441.6666666666667, 164.33333333333334)
+strokeStyle = "#1570ef"
+lineWidth = 1
+stroke()
+beginPath()
+arc(441.6666666666667, 157.33333333333334, 7, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+lineWidth = 2
+stroke()
+beginPath()
+moveTo(436.6666666666667, 183.33333333333334)
+lineTo(446.6666666666667, 183.33333333333334)
+moveTo(441.6666666666667, 178.33333333333334)
+lineTo(441.6666666666667, 188.33333333333334)
+lineWidth = 1.5
+stroke()
+# a body dragged
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#101828"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(191.14626146230336, 114.90245524189541)
+lineTo(241.02446397529457, 118.39027892910165)
+lineTo(242.18707187102996, 101.76421142477128)
+lineTo(192.30886935803875, 98.27638773756503)
+closePath()
+setLineDash([5, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(166.14626146230336, 98.23578857522874)
+lineTo(216.02446397529457, 101.72361226243497)
+lineTo(217.18707187102999, 85.09754475810459)
+lineTo(167.30886935803878, 81.60972107089836)
+closePath()
+strokeStyle = "#1570ef"
+lineWidth = 2
+stroke()
+beginPath()
+moveTo(191.66666666666666, 91.66666666666666)
+lineTo(191.66666666666666, 62.60972107089836)
+strokeStyle = "#1570ef"
+lineWidth = 1
+stroke()
+beginPath()
+arc(191.66666666666666, 55.60972107089836, 7, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+lineWidth = 2
+stroke()
+beginPath()
+moveTo(186.66666666666666, 91.66666666666666)
+lineTo(196.66666666666666, 91.66666666666666)
+moveTo(191.66666666666666, 86.66666666666666)
+lineTo(191.66666666666666, 96.66666666666666)
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+# a body turned
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#101828"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(165.3241832859717, 90.9469349234075)
+lineTo(212.3088143252671, 108.04794208969095)
+lineTo(218.00915004736163, 92.38639840992582)
+lineTo(171.02451900806625, 75.28539124364238)
+closePath()
+setLineDash([5, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(166.14626146230336, 98.23578857522874)
+lineTo(216.02446397529457, 101.72361226243497)
+lineTo(217.18707187102999, 85.09754475810459)
+lineTo(167.30886935803878, 81.60972107089836)
+closePath()
+strokeStyle = "#1570ef"
+lineWidth = 2
+stroke()
+beginPath()
+moveTo(191.66666666666666, 91.66666666666666)
+lineTo(191.66666666666666, 62.60972107089836)
+strokeStyle = "#1570ef"
+lineWidth = 1
+stroke()
+beginPath()
+arc(191.66666666666666, 55.60972107089836, 7, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+lineWidth = 2
+stroke()
+beginPath()
+moveTo(186.66666666666666, 91.66666666666666)
+lineTo(196.66666666666666, 91.66666666666666)
+moveTo(191.66666666666666, 86.66666666666666)
+lineTo(191.66666666666666, 96.66666666666666)
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+# a sketch edited
+setTransform(1.25, 0, 0, 1.25, 0, 0)
+clearRect(0, 0, 800, 450)
+globalAlpha = 1
+beginPath()
+moveTo(150, 308.3333333333333)
+lineTo(150, 141.66666666666669)
+strokeStyle = "#1570ef"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#1570ef"
+beginPath()
+arc(150, 308.3333333333333, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 252.77777777777777, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 197.22222222222223, 2.5, 0, 6.283185307179586)
+fill()
+beginPath()
+arc(150, 141.66666666666669, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+globalAlpha = 1
+beginPath()
+moveTo(566.6666666666666, 350)
+lineTo(608.3333333333334, 100)
+strokeStyle = "#6941c6"
+lineWidth = 2
+setLineDash([6, 4])
+stroke()
+setLineDash([])
+globalAlpha = 1
+globalAlpha = 0.45
+beginPath()
+moveTo(650, 308.3333333333333)
+lineTo(650, 225)
+strokeStyle = "#0086c9"
+lineWidth = 2
+setLineDash([])
+stroke()
+setLineDash([])
+fillStyle = "#0086c9"
+beginPath()
+arc(650, 266.66666666666663, 2.5, 0, 6.283185307179586)
+fill()
+globalAlpha = 1
+beginPath()
+arc(358.3333333333333, 141.66666666666669, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(350.3333333333333, 141.66666666666669)
+lineTo(366.3333333333333, 141.66666666666669)
+moveTo(358.3333333333333, 133.66666666666669)
+lineTo(358.3333333333333, 149.66666666666669)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P1", 365.3333333333333, 136.66666666666669)
+fillStyle = "#101828"
+fillText("P1", 365.3333333333333, 136.66666666666669)
+beginPath()
+arc(725, 383.3333333333333, 5, 0, 6.283185307179586)
+fillStyle = "#ffffff"
+fill()
+strokeStyle = "#101828"
+lineWidth = 1.5
+stroke()
+beginPath()
+moveTo(717, 383.3333333333333)
+lineTo(733, 383.3333333333333)
+moveTo(725, 375.3333333333333)
+lineTo(725, 391.3333333333333)
+stroke()
+font = "11px system-ui, sans-serif"
+textAlign = "left"
+textBaseline = "bottom"
+lineWidth = 3
+strokeStyle = "#ffffff"
+strokeText("P2", 732, 378.3333333333333)
+fillStyle = "#101828"
+fillText("P2", 732, 378.3333333333333)
+beginPath()
+moveTo(291.6666666666667, 316.6666666666667)
+lineTo(341.66666666666663, 316.6666666666667)
+lineTo(341.66666666666663, 300)
+lineTo(291.6666666666667, 300)
+closePath()
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+beginPath()
+moveTo(441.6666666666667, 183.33333333333334)
+lineTo(458.33333333333337, 183.33333333333334)
+moveTo(458.33333333333337, 183.33333333333334)
+lineTo(458.33333333333337, 175)
+setLineDash([4, 4])
+strokeStyle = "#475467"
+lineWidth = 1.5
+stroke()
+setLineDash([])
+strokeStyle = "#667085"
+lineWidth = 1
+beginPath()
+moveTo(475.3333333333333, 308.3333333333333)
+lineTo(491.3333333333333, 308.3333333333333)
+moveTo(483.3333333333333, 300.3333333333333)
+lineTo(483.3333333333333, 316.3333333333333)
+stroke()
+beginPath()
+moveTo(508.3333333333333, 308.3333333333333)
+lineTo(525, 308.3333333333333)
+setLineDash([])
+strokeStyle = "#ffffff"
+lineWidth = 4.75
+stroke()
+setLineDash([])
+strokeStyle = "#1570ef"
+lineWidth = 1.75
+stroke()
+setLineDash([])
+beginPath()
+moveTo(525, 308.3333333333333)
+lineTo(516.6666666666667, 295.83333333333337)
+setLineDash([])
+strokeStyle = "#ffffff"
+lineWidth = 4.75
+stroke()
+setLineDash([])
+strokeStyle = "#1570ef"
+lineWidth = 1.75
+stroke()
+setLineDash([])
+beginPath()
+moveTo(516.6666666666667, 295.83333333333337)
+lineTo(508.3333333333333, 308.3333333333333)
+setLineDash([])
+strokeStyle = "#ffffff"
+lineWidth = 4.75
+stroke()
+setLineDash([])
+strokeStyle = "#1570ef"
+lineWidth = 1.75
+stroke()
+setLineDash([])
+beginPath()
+arc(508.3333333333333, 308.3333333333333, 3, 0, 6.283185307179586)
+fillStyle = "#1570ef"
+strokeStyle = "#ffffff"
+lineWidth = 1.5
+fill()
+stroke()
+beginPath()
+arc(525, 308.3333333333333, 3, 0, 6.283185307179586)
+fillStyle = "#1570ef"
+strokeStyle = "#ffffff"
+lineWidth = 1.5
+fill()
+stroke()
+beginPath()
+arc(516.6666666666667, 295.83333333333337, 3, 0, 6.283185307179586)
+fillStyle = "#1570ef"
+strokeStyle = "#ffffff"
+lineWidth = 1.5
+fill()
+stroke()
+font = "12px system-ui, sans-serif"
+textAlign = "center"
+textBaseline = "middle"
+beginPath()
+arc(483.3333333333333, 308.3333333333333, 6, 0, 6.283185307179586)
+strokeStyle = "#1570ef"
+lineWidth = 1.5
+stroke()

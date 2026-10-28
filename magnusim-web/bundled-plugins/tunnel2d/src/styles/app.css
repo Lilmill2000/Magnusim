@@ -161,6 +161,11 @@ html {
   border-radius: var(--mg-radius-xs);
   flex: none;
 }
+/* Dark: a ring round each swatch, as some rake colours are faint on the panel and on its selected
+   and hovered rows (in a dark rule, so the light look has no declaration of it) */
+[data-theme="dark"] .t2d-swatch {
+  box-shadow: inset 0 0 0 1px var(--t2d-swatch-ring);
+}
 .t2d-icon-btn {
   border: none;
   background: transparent;
@@ -190,7 +195,7 @@ html {
   flex: 1;
   position: relative;
   min-width: 0;
-  background: var(--t2d-bg);
+  background: var(--t2d-margin);
 }
 .t2d-viewport {
   position: absolute;

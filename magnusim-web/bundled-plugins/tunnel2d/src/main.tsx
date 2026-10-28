@@ -14,7 +14,7 @@ import { SketchEditor } from './sketch/editor';
 import { SketchSolver } from './sketch/solve';
 import { SweepHost } from './sim/sweep';
 import { ProbeFeed } from './ui/probeFeed';
-import { applyViewColours, viewPalette } from './app/colours';
+import { applyViewColours, forgetColours, themeScope, viewPalette } from './app/colours';
 import { Engine } from './sim/engine';
 import { shaderErrors } from './sim/shaders';
 import { gpuHelp, webglRenderer } from './app/gpuHelp';
@@ -83,10 +83,15 @@ async function main() {
   const saver = new Saver(ws, store, study.id, loaded.etag);
   if (!loaded.etag) await saver.create(loaded.scene);
 
-  // The view's colours, read on the page until the view is drawn (it reads them again on its stage).
+  // The view's colours: light in every theme (pictures and recordings are drawn from it).
   const canvas = document.createElement('canvas');
-  const engine = new Engine(device, canvas, adapterName, viewPalette(document.documentElement));
-  applyViewColours(engine, document.documentElement);
+  const engine = new Engine(device, canvas, adapterName, viewPalette(themeScope('light')));
+  applyViewColours(engine, themeScope('light'));
+  // A new stylesheet from the host (none sends one yet): every colour is read again.
+  ws.on('theme', () => {
+    forgetColours();
+    applyViewColours(engine, themeScope('light'));
+  });
   store.onSceneChange = (s) => {
     saver.schedule(s);
     void engine.setScene(s);
