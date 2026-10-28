@@ -21,7 +21,7 @@
 // (the Assistant panel's key is the app's pref, the same for every test: those tests put it back too).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
-import { addSolid, baseUrl, ensureCadOn, modelOnPage, newPartFromTree, newProject, openProject, partOpened, readWithRetry, watchPage, workspaceFrame } from './helpers';
+import { addSolid, baseUrl, ensureCadOn, forgetRailPrefs, modelOnPage, newPartFromTree, newProject, openProject, partOpened, readWithRetry, viewAndSketchIdle, watchPage, workspaceFrame } from './helpers';
 
 const PREF = 'keybinds';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -360,6 +360,8 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
   test.setTimeout(180_000);
   await ensureCadOn(request);
   await setPref(request, null);
+  // A person who never collapsed the tree or the Sketch panel: the tree's rows are right-clicked.
+  await forgetRailPrefs(request);
   try {
     const seen = await watchPage(page);
     await openProject(page, await newProject(request));
@@ -400,16 +402,25 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
     await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
     await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+    // Once the view has turned to the plane: a line over the Part's width (x 0 to 30), which the view
+    // frames beside the left column whatever that column covers. The line went from x -40 to 40
+    // before: its left end lay 2 px inside the frame's edge, and off the view with the Sketch panel
+    // collapsed (the view frames the Part further left then), so nothing was drawn and the
+    // right-click met empty space (its menu had no Delete).
+    await viewAndSketchIdle(page);
     await page.keyboard.press('l');
     await expect.poll(() => toolNow(page)).toBe('line');
-    const a = await modelOnPage(page, [-40, 30, 0]);
-    const b = await modelOnPage(page, [40, 30, 0]);
+    const a = await modelOnPage(page, [5, 27, 0]);
+    const b = await modelOnPage(page, [25, 27, 0]);
     await page.mouse.click(a[0], a[1]);
     await page.mouse.click(b[0], b[1]);
     // Escape ends the chain; a second puts the line tool down.
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
-    const mid = await modelOnPage(page, [0, 30, 0]);
+    await viewAndSketchIdle(page);
+    // The line is there, as the person sees it: one horizontal line, its two ends free.
+    await expect(frame.locator('[data-chip="sketch"]')).toHaveText('Under defined · 3 DOF');
+    const mid = await modelOnPage(page, [15, 27, 0]);
     await viaMenu(() => page.mouse.click(mid[0], mid[1], { button: 'right' }), 'set-keybind-sketch.delete', 'Set keybind for Delete…', 'sketch.delete', 'Delete', 'Delete');
     // Finish sketch's right-click on the toolbar: its own key, and Place or finish's (Enter).
     const finish = frame.locator('[data-cad-toolbar="sketch"] [data-command="sketch.finish"]');
