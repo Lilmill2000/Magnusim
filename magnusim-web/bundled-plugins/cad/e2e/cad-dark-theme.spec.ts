@@ -18,6 +18,10 @@
 //    amber read on the light face in E2's default (c), (b) puts the background around them, and
 //    the Sketch panel's keys (the state dot, the reference's dot) are the colours the lines are
 //    drawn in, whatever the candidate.
+//  - dark-grid-edge-on: a sketch's plane seen near edge-on keeps the grid it has (no new one is
+//    laid out that far across); going dark repaints that grid dark (review round 1: it stayed the
+//    light grid, bright on the dark view), and a picture taken then has the light grid, the
+//    picture taken in light.
 //  - dark-lines: E1 / E2's switch (window.__CAD__.appearance.darkLines) draws each candidate's edge
 //    colour, (b) with a rim, for Daniel's screenshot review.
 // Owner: INTEGRATE.
@@ -577,6 +581,92 @@ test('cad:dark-sketch-face on a body face, every sketch state reads in dark (E2 
   await appearance(page, 'light');
   expect(await keys()).toEqual({ state: cssRgb('#1570ef'), lost: cssRgb('#b54708'), under: 'under' });
   await page.keyboard.press('Escape');
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:dark-grid-edge-on the grid a near edge-on view keeps turns dark with the view, and a picture taken then is the light one', async ({ page, request }) => {
+  const { frame, seen } = await freshPart(page, request);
+  const f = workspaceFrame(page);
+  await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.new"]').click();
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await still(page);
+  /**
+   * The camera looking at the Top plane's origin from -Y, `deg` above the plane, orthographic, at
+   * 0.7071 of the canvas height in mm (the grid's step just under 14 px: 10 mm). Then what the
+   * sketch's grid does there (src/sketch/overlay.ts drawGrid, the same reads): 'drawn' when a grid
+   * is laid out, 'kept' when the plane spans more than 400 steps across the view (the one there stays).
+   */
+  const pose = (deg: number) =>
+    f.evaluate((deg) => {
+      const h = (window as unknown as W).__CAD__.services.viewport.get().handle;
+      const r = document.querySelector('[data-cad-canvas]')!.getBoundingClientRect();
+      const t = (deg * Math.PI) / 180;
+      h.setCamera({ position: [0, -500 * Math.cos(t), 500 * Math.sin(t)], target: [0, 0, 0], up: [0, 0, 1], orthoHeight: 0.7071 * r.height, projection: 'orthographic' });
+      const plane = { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] };
+      const c = [
+        [r.left, r.top],
+        [r.right, r.top],
+        [r.right, r.bottom],
+        [r.left, r.bottom],
+      ].map(([x, y]) => h.toPlane(x, y, plane)?.uv ?? null);
+      if (c.some((p: unknown) => !p)) return 'none';
+      const us = c.map((p: number[]) => p[0]);
+      const vs = c.map((p: number[]) => p[1]);
+      const px = h.pixelSize([(Math.min(...us) + Math.max(...us)) / 2, (Math.min(...vs) + Math.max(...vs)) / 2, 0]);
+      const step = Math.pow(10, Math.ceil(Math.log10(Math.max(1e-9, 14 * px))));
+      const span = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs));
+      return span / step > 400 ? 'kept' : 'drawn';
+    }, deg);
+  // 10 degrees: a grid is laid out; 3 degrees: the view keeps it (it shows as a band across the middle).
+  expect(await pose(10)).toBe('drawn');
+  await still(page);
+  expect(await pose(3)).toBe('kept');
+  await still(page);
+  /** The middle band of the canvas (the kept grid, seen edge-on): the share of pixels near each grid's colours. */
+  const band = async () => {
+    const r = await f.evaluate(() => {
+      const c = document.querySelector('[data-cad-canvas]')!.getBoundingClientRect();
+      return { x: c.x, y: c.y, w: c.width, h: c.height };
+    });
+    const box = (await page.locator('#workspace-frame').boundingBox())!;
+    const img = await shoot(page, { x: Math.round(box.x + r.x + r.w * 0.2), y: Math.round(box.y + r.y + r.h / 2 - 20), width: Math.round(r.w * 0.5), height: 40 });
+    let light = 0;
+    let dark = 0;
+    const n = img.width * img.height;
+    for (let i = 0; i < img.data.length; i += 4) {
+      if (dist(img.data, i, [0xe8, 0xeb, 0xf0]) <= 8 || dist(img.data, i, [0xcf, 0xd3, 0xdb]) <= 8) light++;
+      if (dist(img.data, i, [0x2c, 0x32, 0x3d]) <= 10 || dist(img.data, i, [0x3a, 0x41, 0x4e]) <= 10) dark++;
+    }
+    return { light: light / n, dark: dark / n };
+  };
+  const inLight = await band();
+  expect(inLight.light, `the kept grid in light: ${JSON.stringify(inLight)}`).toBeGreaterThan(0.3);
+  const snapshot = (name: string) =>
+    f.evaluate((name) => {
+      const r = (window as unknown as W).__CAD__.services.viewport.get().handle.snapshot({ view: 'iso', width: 320, height: 240, hide: [], section: null });
+      (window as unknown as Record<string, Uint8ClampedArray>)[name] = r.rgba;
+    }, name);
+  await snapshot('__edgeOnLight');
+  await appearance(page, 'dark');
+  expect(await pose(3)).toBe('kept');
+  await still(page);
+  const inDark = await band();
+  expect(inDark.dark, `the kept grid turned dark: ${JSON.stringify(inDark)}`).toBeGreaterThan(0.3);
+  expect(inDark.light, 'no light grid left on the dark view').toBeLessThan(0.01);
+  // A picture now: the light grid, the same picture as in light.
+  await snapshot('__edgeOnDark');
+  const differ = await f.evaluate(() => {
+    const x = (window as unknown as Record<string, Uint8ClampedArray>).__edgeOnLight;
+    const y = (window as unknown as Record<string, Uint8ClampedArray>).__edgeOnDark;
+    if (x.length !== y.length) return 1;
+    let n = 0;
+    for (let i = 0; i < x.length; i += 4) if (Math.abs(x[i] - y[i]) > 3 || Math.abs(x[i + 1] - y[i + 1]) > 3 || Math.abs(x[i + 2] - y[i + 2]) > 3) n++;
+    return n / (x.length / 4);
+  });
+  expect(differ, 'the picture taken in dark is the one taken in light').toBeLessThan(0.002);
+  await appearance(page, 'light');
+  expect((await band()).light).toBeGreaterThan(0.3);
   expect(seen.errors).toEqual([]);
 });
 

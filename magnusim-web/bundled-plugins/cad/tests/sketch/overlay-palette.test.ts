@@ -4,7 +4,8 @@
 // inks at once, with the cursor's dark tone; E2's candidate (b) puts a background-coloured rim
 // under every set of lines (solid, dashed, the preview, guides, dimension lines) and under the
 // points; (c) keeps a driven dimension's lines apart from a driving one's; LIGHT (a picture, or
-// the theme back to light) gives the light colours.
+// the theme back to light) gives the light colours, the grid's too when a near edge-on view keeps
+// the grid it has.
 // The real sketch mode (the solver in this process, tests/sketch/harness.ts, which loads it in
 // Node) with a DOM of its own for the overlay's HTML, set up once the solver is loaded.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -49,7 +50,11 @@ afterEach(() => {
   }
 });
 
-/** A viewport handle with what the overlay uses; 10 px per mm on the Top plane; keeps each layer's palette hook. */
+/**
+ * A viewport handle with what the overlay uses; 10 px per mm on the Top plane; keeps each layer's
+ * palette hook. `edgeOn(true)`: the plane seen near edge-on, so far across that the grid is not
+ * drawn again (src/sketch/overlay.ts drawGrid: more than 400 steps).
+ */
 function fakeHandle() {
   const hooks = new Map<string, (p: MarkPalette) => void>();
   const groups = new Map<string, Group>();
@@ -59,6 +64,7 @@ function fakeHandle() {
   host.appendChild(canvas);
   document.body.appendChild(host);
   let palette: MarkPalette = LIGHT;
+  let far = 1;
   const handle = {
     addLayer(id: string, o: { palette?: (p: MarkPalette) => void } = {}) {
       const group = new Group();
@@ -73,14 +79,17 @@ function fakeHandle() {
     pushTool: () => () => {},
     pixelSize: () => 0.1,
     project: (p: Vec3) => [400 + p[0] * 10, 300 - p[1] * 10] as [number, number],
-    toPlane: (x: number, y: number, _plane: PlaneFrame) => ({ p: [(x - 400) / 10, (300 - y) / 10, 0] as Vec3, uv: [(x - 400) / 10, (300 - y) / 10] as [number, number] }),
+    toPlane: (x: number, y: number, _plane: PlaneFrame) => ({ p: [((x - 400) / 10) * far, ((300 - y) / 10) * far, 0] as Vec3, uv: [((x - 400) / 10) * far, ((300 - y) / 10) * far] as [number, number] }),
+  };
+  const edgeOn = (on: boolean) => {
+    far = on ? 1000 : 1;
   };
   /** As the viewport does on setPalette: the live palette, then each hook. */
   const setPalette = (p: MarkPalette) => {
     palette = p;
     for (const fn of hooks.values()) fn(p);
   };
-  return { handle: handle as unknown as ViewportHandle, hooks, groups, canvas, setPalette };
+  return { handle: handle as unknown as ViewportHandle, hooks, groups, canvas, setPalette, edgeOn };
 }
 
 type Line = LineSegments2 & { material: LineMaterial };
@@ -148,6 +157,31 @@ describe('sketch mode and the palette', () => {
     expect(colours(lines(v.groups).get(1000)!)).toEqual(light.solid);
     expect(colours(lines(v.groups).get(900)!)).toEqual(light.grid);
     expect(v.canvas.style.cursor).toBe(light.cursor);
+  });
+
+  // Review round 1: drawGrid draws no new grid in a near edge-on view, and the one there kept the old
+  // palette's colours: the light grid stayed bright on the dark view, and a picture taken while dark
+  // showed the dark grid on its light background.
+  it('recolours the grid a near edge-on view keeps: the dark palette, LIGHT for a picture, and back', async () => {
+    const v = await sketchWithOverlay();
+    const grid = () => lines(v.groups).get(900)!;
+    const built = grid().geometry;
+    expect(colours(grid())).toEqual([LIGHT.sketch.grid, LIGHT.sketch.gridMajor].sort());
+    v.edgeOn(true);
+    v.setPalette(DARK);
+    expect(colours(grid())).toEqual([DARK.sketch.grid, DARK.sketch.gridMajor].sort());
+    // The same lines, recoloured (no new grid was laid out).
+    expect(grid().geometry.getAttribute('instanceStart').count).toBe(built.getAttribute('instanceStart').count);
+    // A picture while dark: the hook with LIGHT, then the live palette again.
+    const hook = v.hooks.get('sketch-geometry')!;
+    hook(LIGHT);
+    expect(colours(grid())).toEqual([LIGHT.sketch.grid, LIGHT.sketch.gridMajor].sort());
+    hook(DARK);
+    expect(colours(grid())).toEqual([DARK.sketch.grid, DARK.sketch.gridMajor].sort());
+    // Back to a view that draws a grid: the new grid in the live colours.
+    v.edgeOn(false);
+    v.setPalette(LIGHT);
+    expect(colours(grid())).toEqual([LIGHT.sketch.grid, LIGHT.sketch.gridMajor].sort());
   });
 
   it('E2 (b): a rim in the background colour, 1 px wider each side, under every line set and the points (the preview, construction and dimension lines too); none with (a) or (c)', async () => {

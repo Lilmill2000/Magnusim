@@ -540,6 +540,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
 
   // ------------------------------------------------------------ the grid
   let gridKey = '';
+  /** The grid's lines as drawn now (u/v, major or not): painted again in a new palette's colours when no new grid is drawn (paintGrid). */
+  let gridLines: { a: Vec2; b: Vec2; major: boolean }[] = [];
+  const paintGrid = () => grid.set(gridLines.map((l) => ({ a: l.a, b: l.b, color: l.major ? pal.gridMajor : pal.grid })));
   function drawGrid() {
     if (!plane || !canvas) return;
     const r = canvas.getBoundingClientRect();
@@ -550,7 +553,10 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       [r.left, r.bottom],
     ].map(([x, y]) => handle.toPlane(x, y, plane!)?.uv ?? null);
     if (corners.some((c) => !c)) {
-      if (gridKey) grid.set([]);
+      if (gridKey) {
+        grid.set([]);
+        gridLines = [];
+      }
       gridKey = '';
       return;
     }
@@ -567,17 +573,17 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const key = [step, u0, u1, v0, v1].map((x) => x.toPrecision(6)).join('|');
     if (key === gridKey) return;
     gridKey = key;
-    const segs: { a: Vec2; b: Vec2; color: string }[] = [];
-    const major = pal.gridMajor;
+    const lines: { a: Vec2; b: Vec2; major: boolean }[] = [];
     for (let u = u0; u <= u1 + step / 2; u += step) {
       const isMajor = Math.abs(u / (step * 10) - Math.round(u / (step * 10))) < 1e-6;
-      segs.push({ a: [u, v0], b: [u, v1], color: isMajor ? major : pal.grid });
+      lines.push({ a: [u, v0], b: [u, v1], major: isMajor });
     }
     for (let w = v0; w <= v1 + step / 2; w += step) {
       const isMajor = Math.abs(w / (step * 10) - Math.round(w / (step * 10))) < 1e-6;
-      segs.push({ a: [u0, w], b: [u1, w], color: isMajor ? major : pal.grid });
+      lines.push({ a: [u0, w], b: [u1, w], major: isMajor });
     }
-    grid.set(segs);
+    gridLines = lines;
+    paintGrid();
   }
 
   // ------------------------------------------------------------ html: glyphs, dimensions, boxes
@@ -1686,6 +1692,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     gridKey = '';
     drawGeometry(mode.view.get());
     drawGrid();
+    // No new grid (a near edge-on view keeps the one it has, drawGrid's span limit): the lines there
+    // take the new colours (review round 1: they kept the old theme's, in a picture too).
+    if (!gridKey) paintGrid();
     applyCursor();
     for (const rec of handleEls.values()) rec.el.style.cursor = sketchCursor('grab', null, tone());
     geo.changed();
