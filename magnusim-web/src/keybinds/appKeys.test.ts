@@ -26,7 +26,16 @@ afterEach(() => {
 
 describe("the Assistant panel's key the person chose", () => {
   it('may be any key with Ctrl or Alt, or a function key; never one the browser, the system or the dialogs keep, nor one that types text', () => {
-    for (const ok of ['Ctrl+KeyK', 'Alt+KeyA', 'Ctrl+Shift+Slash', 'F9', 'Shift+F2', 'Ctrl+Alt+Digit1', 'Ctrl+Slash']) expect(appKeyRefusal(ok), ok).toBe('');
+    for (const ok of ['Ctrl+Alt+KeyK', 'Alt+KeyK', 'Ctrl+KeyM', 'Ctrl+Shift+Slash', 'F9', 'Shift+F2', 'Ctrl+Alt+Digit1', 'Ctrl+Slash']) expect(appKeyRefusal(ok), ok).toBe('');
+    // A key the browser or a text box acts on: in a workspace the panel hears it too late to stop that.
+    expect(appKeyRefusal('Ctrl+KeyC', displayCombo)).toBe("Ctrl+C is the browser's (copy, cut, paste, undo, redo and select all): the Assistant panel's key needs one the browser leaves alone");
+    expect(appKeyRefusal('Alt+ArrowLeft', displayCombo)).toBe("Alt+ArrowLeft is the browser's (back and forward): the Assistant panel's key needs one the browser leaves alone");
+    for (const k of ['Ctrl+KeyF', 'Ctrl+KeyK', 'Ctrl+KeyL', 'Ctrl+KeyS', 'Ctrl+KeyZ', 'F1', 'F7', 'Alt+KeyF']) expect(appKeyRefusal(k), k).toMatch(/is the browser's \(/);
+    // A moving or editing key with a modifier still moves or edits (Ctrl+Left by a word).
+    expect(appKeyRefusal('Ctrl+ArrowLeft', displayCombo)).toBe(
+      "Ctrl+ArrowLeft is a key used while typing: the Assistant panel's key needs Ctrl or Alt with a letter, digit or punctuation key, or is a function key (F1 to F24)",
+    );
+    for (const k of ['Alt+Enter', 'Ctrl+Backspace', 'Ctrl+Space', 'Ctrl+Home']) expect(appKeyRefusal(k), k).toMatch(/is a key used while typing/);
     expect(appKeyRefusal('Ctrl+KeyW', displayCombo)).toBe('Ctrl+W is kept for the browser and the system (Close the tab)');
     expect(appKeyRefusal('F5', displayCombo)).toBe('F5 is kept for the browser and the system (Reload the page)');
     expect(appKeyRefusal('Escape', displayCombo)).toBe("Escape is the app's own key in dialogs, menus and modes (Close the open dialog, menu or mode)");
@@ -46,11 +55,11 @@ describe("the Assistant panel's key the person chose", () => {
 
   it("is read from the prefs as the plugins' keys are: valid distinct combos, at most 4, an id with none valid keeps its defaults, other ids left out", () => {
     expect(readAppKeybinds(null)).toEqual({});
-    expect(readAppKeybinds({ 'app.assistant': ['Ctrl+KeyK', 'Ctrl+KeyK', 'F9'] })).toEqual({ 'app.assistant': ['Ctrl+KeyK', 'F9'] });
+    expect(readAppKeybinds({ 'app.assistant': ['Ctrl+Alt+KeyK', 'Ctrl+Alt+KeyK', 'F9'] })).toEqual({ 'app.assistant': ['Ctrl+Alt+KeyK', 'F9'] });
     expect(readAppKeybinds({ 'app.assistant': [] })).toEqual({ 'app.assistant': [] });
     expect(readAppKeybinds({ 'app.assistant': ['KeyK', 'Ctrl+KeyW', 7] })).toEqual({});
-    expect(readAppKeybinds({ 'app.assistant': ['F1', 'F2', 'F3', 'F4', 'F6'] })).toEqual({ 'app.assistant': ['F1', 'F2', 'F3', 'F4'] });
-    expect(readAppKeybinds({ 'app.close': ['Ctrl+KeyK'], 'app.assistant': 'F9' })).toEqual({});
+    expect(readAppKeybinds({ 'app.assistant': ['F2', 'F4', 'F8', 'F9', 'F11', 'F12', 'F13', 'F1'] })).toEqual({ 'app.assistant': ['F2', 'F4', 'F8', 'F9'] });
+    expect(readAppKeybinds({ 'app.close': ['Ctrl+Alt+KeyK'], 'app.assistant': 'F9' })).toEqual({});
     expect(defaultAppKeys('app.assistant')).toEqual(APP_COMMANDS[0].keys);
   });
 
@@ -65,7 +74,7 @@ describe("the Assistant panel's key the person chose", () => {
   });
 
   it('is read once from GET /api/prefs, then follows the prefs channel; each change tells the listeners and the window (an open workspace)', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, units: 'Metric', keybinds: { 'app.assistant': ['Ctrl+KeyK'] } })));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, units: 'Metric', keybinds: { 'app.assistant': ['Ctrl+Alt+KeyK'] } })));
     vi.stubGlobal('fetch', fetchMock);
     const told = vi.fn();
     const windowTold = vi.fn();
@@ -74,7 +83,7 @@ describe("the Assistant panel's key the person chose", () => {
     expect(assistantKeys()).toBeNull();
     startAppKeys();
     startAppKeys();
-    await vi.waitFor(() => expect(assistantKeys()).toEqual(['Ctrl+KeyK']));
+    await vi.waitFor(() => expect(assistantKeys()).toEqual(['Ctrl+Alt+KeyK']));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(told).toHaveBeenCalledTimes(1);
     expect(windowTold).toHaveBeenCalledTimes(1);
@@ -107,13 +116,13 @@ describe("the Assistant panel's key the person chose", () => {
     const heard: unknown[] = [];
     const ch = new BroadcastChannel(PREFS_CHANNEL);
     ch.onmessage = (e) => heard.push(e.data);
-    expect(await storeAppKeybinds({ 'app.assistant': ['Ctrl+KeyK'] }, 'settings:me')).toEqual({ 'app.assistant': ['Ctrl+KeyK'] });
-    expect(assistantKeys()).toEqual(['Ctrl+KeyK']);
+    expect(await storeAppKeybinds({ 'app.assistant': ['Ctrl+Alt+KeyK'] }, 'settings:me')).toEqual({ 'app.assistant': ['Ctrl+Alt+KeyK'] });
+    expect(assistantKeys()).toEqual(['Ctrl+Alt+KeyK']);
     expect(await storeAppKeybinds({ 'app.assistant': null }, 'settings:me')).toEqual({});
     expect(assistantKeys()).toBeNull();
-    expect(bodies).toEqual([{ keybinds: { 'app.assistant': ['Ctrl+KeyK'] } }, { keybinds: {} }]);
+    expect(bodies).toEqual([{ keybinds: { 'app.assistant': ['Ctrl+Alt+KeyK'] } }, { keybinds: {} }]);
     await vi.waitFor(() => expect(heard).toHaveLength(2));
-    expect(heard[0]).toEqual({ plugin: '', key: 'keybinds', value: { 'app.assistant': ['Ctrl+KeyK'] }, from: 'settings:me' });
+    expect(heard[0]).toEqual({ plugin: '', key: 'keybinds', value: { 'app.assistant': ['Ctrl+Alt+KeyK'] }, from: 'settings:me' });
     ch.close();
     await expect(storeAppKeybinds({ 'app.close': ['F9'] }, 'settings:me')).rejects.toThrow('"app.close" is not a key the person can change');
   });
