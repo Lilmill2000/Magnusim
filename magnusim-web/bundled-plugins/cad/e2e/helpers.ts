@@ -852,8 +852,9 @@ export async function showAllRelations(page: Page): Promise<void> {
  * Give the Part an appearance as the host's newer SDK will: it writes data-theme, color-scheme
  * and the text and icon scales on the frame's <html>, then sends its 'appearance' event, which
  * reaches the Part through the bridge's own path (window.__CAD__.appearance.push). This host's SDK
- * has neither yet, so the Part is light without this. Only CAD's own dark tokens switch here: the
- * host's dark --mg-* set comes with its newer theme.css.
+ * has neither yet, so the Part is light without this. The frame's /plugin-sdk/theme.css already
+ * has the host's dark --mg-* set: the dark data-theme switches the host's tokens and chrome too,
+ * and only the SDK's part (data-theme and the event) is simulated here.
  */
 export async function setAppearance(page: Page, theme: 'light' | 'dark', o: { textScale?: number; iconScale?: number } = {}): Promise<void> {
   await workspaceFrame(page).evaluate(

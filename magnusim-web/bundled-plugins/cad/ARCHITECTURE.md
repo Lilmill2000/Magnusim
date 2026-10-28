@@ -957,9 +957,15 @@ with the host once for the page's life, and its chip goes in the dock.
     have a `[data-theme="dark"]` value. Blue text uses `--mg-primary-ink` (D4:
     in dark the `--mg-primary` fill is too dark for text); fills, lines and focus
     rings keep `--mg-primary`. No CAD stylesheet paints a raw colour outside
-    `tokens.css` (a `var()` fallback aside). `tests/styles/tokens.test.ts` pins
-    the light values, the dark coverage and the dark contrast (on the host's
-    planned dark set until its `tokens.css` has one).
+    `tokens.css` (a `var()` fallback aside). A token that copies a core rule now
+    on an `--mg-*` token (the tree's twisty, head, section line and selected
+    row; the toolbar's background, label and active button; menu hover,
+    view-button border, danger hover, rollback, disabled text, spin track) is
+    that token, so it stays equal to the core in both themes; the toolbar's
+    hover is CAD's own (`--cad-toolbar-hover-bg`: the core's toolbar has none).
+    `tests/styles/tokens.test.ts` pins the light values, the dark coverage, the
+    dark contrast and the core's selected row and active button, on the host's
+    own `src/theme/tokens.css` (its light and dark sets).
   - **The 3D view.** `src/viewport/palette.ts` is the one place three.js code
     takes colours from: `LIGHT` (the core's light values below; the triad the
     host's light `--mg-axis-*`, as the core's since its light unify) and
@@ -1360,15 +1366,18 @@ with the host once for the page's life, and its chip goes in the dock.
   manifest's `links_geometry = true` on the Part study kind (§11).
 - Host API 1.6 (L3): the exit hook `ws.nav.onLeave` and the camera it returns
   (`ViewState`, §11). `manifest.toml` declares `api_version = "1.6"`.
-- The host's appearance (planned, SDK 1.5, host API stays 1.8; not on this
-  base): `ws.context.appearance = {theme, preference, textScale, iconScale}`
-  and the `appearance` event with the same object; the SDK writes `data-theme`,
-  `color-scheme`, `--mg-text-scale` and `--mg-icon-scale` on the frame's
-  `<html>`. `Bridge.appearance()` / `theme()` / `onAppearance()` feature-detect
-  on `ctx.appearance`: an older host has none, and the Part stays light. The
-  host's dark `--mg-*` set and `--mg-primary-ink` come with its `theme.css`
-  (host commit 10caf36b); until then a dark `<html>` switches only CAD's literal
-  tokens (the e2e and a review on this base see light host chrome).
+- The host's appearance (planned, SDK 1.5, host API stays 1.8; the SDK's
+  part is not on this base): `ws.context.appearance = {theme, preference,
+  textScale, iconScale}` and the `appearance` event with the same object; the
+  SDK writes `data-theme`, `color-scheme`, `--mg-text-scale` and
+  `--mg-icon-scale` on the frame's `<html>`. `Bridge.appearance()` / `theme()` /
+  `onAppearance()` feature-detect on `ctx.appearance`: an older host has none,
+  and the Part stays light. The host's dark `--mg-*` set and `--mg-primary-ink`
+  are here already: the frame's `/plugin-sdk/theme.css` (host commit 10caf36b)
+  carries them, so a dark `<html>` switches the host's tokens and the kit's
+  chrome along with CAD's literal ones. CAD's tokens that mirror a core rule
+  have no dark value of their own and follow that set. The e2e
+  (`setAppearance`) gives only the SDK's part: `data-theme` and the event.
 - Host API 1.4 start actions, CAD on by default (Daniel's D33, after gate:l3-cad;
   the core half is 60bb971): no `default_enabled = false`, and one
   `[[start_actions]]` for the Part kind: "Design a part" on the empty project and

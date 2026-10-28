@@ -1,6 +1,6 @@
 // Helpers for the token and palette tests: CAD's token blocks (src/styles/tokens.css), the host's
-// (magnusim-web/src/theme/tokens.css, or the planned appearance set where it has not landed yet),
-// var() resolution and the WCAG contrast of flat colours.
+// (magnusim-web/src/theme/tokens.css, light and dark), var() resolution and the WCAG contrast of
+// flat colours.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -57,71 +57,14 @@ export function cadTokens() {
 }
 
 /**
- * The host's appearance tokens CAD's tokens and palette build on, as the host plans them
- * (magnusim-web 10caf36b, src/theme/tokens.css: the dark set, --mg-primary-ink and the new roles).
- * Only what CAD reads. hostTokens() takes the host's own file first: these fill in what this
- * checkout's host does not have yet, and its dark block replaces them once it has one.
+ * The host's tokens (its own src/theme/tokens.css, the file its /plugin-sdk/theme.css serves the
+ * frame): the light set, and the dark set over it. The host has had its dark set since 10caf36b;
+ * a host file without one is an error here, not a light pass.
  */
-export const PLANNED_HOST = {
-  light: {
-    '--mg-text': '#101828',
-    '--mg-text-muted': '#667085',
-    '--mg-text-subtle': '#98a2b3',
-    '--mg-bg': '#ffffff',
-    '--mg-header-border': '#d5d8de',
-    '--mg-primary': '#1570ef',
-    '--mg-primary-ink': '#1570ef',
-    '--mg-selected-bg': '#eff4ff',
-    '--mg-danger': '#b42318',
-    '--mg-warning': '#b54708',
-    '--mg-divider': '#e8ebf0',
-    '--mg-card-border': '#cfd3db',
-    '--mg-link': '#175cd3',
-    '--mg-surface-3': '#e4e7ec',
-    '--mg-text-tertiary': '#5b6575',
-    '--mg-text-dim': '#4a5160',
-    '--mg-text-faint': '#8a93a3',
-    '--mg-primary-strong': '#1a4fbf',
-    '--mg-primary-deep': '#1d4ed8',
-    '--mg-viewport-bg': '#f5f6f8',
-    '--mg-axis-x': '#d42828',
-    '--mg-axis-y': '#1f9a3a',
-    '--mg-axis-z': '#2a5bd7',
-  },
-  dark: {
-    '--mg-text': '#e6e9ef',
-    '--mg-text-muted': '#9aa4b2',
-    '--mg-text-subtle': '#7b8494',
-    '--mg-bg': '#1b1f27',
-    '--mg-header-border': '#323946',
-    '--mg-primary': '#2f6fde',
-    '--mg-primary-ink': '#7aa7ff',
-    '--mg-selected-bg': '#1f3355',
-    '--mg-danger': '#f97066',
-    '--mg-warning': '#fdb022',
-    '--mg-divider': '#2c323d',
-    '--mg-card-border': '#3a414e',
-    '--mg-link': '#7aa7ff',
-    '--mg-surface-3': '#2b313c',
-    '--mg-text-tertiary': '#a3acba',
-    '--mg-text-dim': '#b0b8c4',
-    '--mg-text-faint': '#7f8898',
-    '--mg-primary-strong': '#8fb5ff',
-    '--mg-primary-deep': '#7aa7ff',
-    '--mg-viewport-bg': '#1b1f27',
-    '--mg-axis-x': '#ff6b6b',
-    '--mg-axis-y': '#4cd07d',
-    '--mg-axis-z': '#6f9bff',
-  },
-} as const;
-
-/** The host's tokens: its own file's, with the planned ones it lacks (`planned`: its file has no dark set yet). */
-export function hostTokens(): { light: Tokens; dark: Tokens; planned: boolean } {
+export function hostTokens(): { light: Tokens; dark: Tokens } {
   const own = tokenBlocks(readFileSync(HOST_TOKENS, 'utf8'));
-  const light: Tokens = new Map(Object.entries(PLANNED_HOST.light));
-  for (const [k, v] of own.light) light.set(k, v);
-  if (own.dark) return { light, dark: new Map([...light, ...own.dark]), planned: false };
-  return { light, dark: new Map([...light, ...Object.entries(PLANNED_HOST.dark)]), planned: true };
+  if (!own.dark) throw new Error(`${HOST_TOKENS} has no [data-theme="dark"] block`);
+  return { light: own.light, dark: new Map([...own.light, ...own.dark]) };
 }
 
 /** A value with every var() replaced (its token's value, else its fallback); null when one has neither. */

@@ -1,8 +1,9 @@
 // The dark set (owner decisions D1-D4): the Part follows the host's dark appearance, and its
 // pictures stay light. This host's SDK has no appearance yet: setAppearance gives it as the newer
 // SDK will (<html>'s data-theme, color-scheme and scales, then the 'appearance' event through the
-// bridge's own path). Only CAD's own dark tokens switch here (the host's --mg-* dark set comes with
-// its newer theme.css).
+// bridge's own path). The frame's /plugin-sdk/theme.css already has the host's dark --mg-* set, so
+// a dark <html> switches the host's tokens and chrome along with CAD's own; only the SDK's part is
+// given here.
 //  - dark-model: the view's background is #1b1f27 (its CSS and the canvas), the edges are E1's
 //    candidate (the mid grey until Daniel picks), a finished sketch's lines E2's, and the faces
 //    are the pixels they were (D2); back to light, every colour of the page (computed, element by
@@ -27,8 +28,8 @@
 //    1.4:1), and has none in light.
 //  - dark-pattern-failed: a Pattern copy that could not be used (red marker) under the pointer or
 //    keyboard focus: in dark its red number is on a red-tinted background, 4.5:1 and more (review
-//    round 1: on the hover blue, 1.7:1), in light on the hover blue as before. The host's dark
-//    --mg-danger is given here as its newer theme.css will (this host has no dark set yet).
+//    round 1: on the hover blue, 1.7:1), in light on the hover blue as before. The red is the
+//    host's dark --mg-danger, from the frame's own theme.css.
 //  - dark-chrome: the toolbar takes the host's dark --mg-surface-muted (CAD has no dark value of
 //    its own for it), and a button under the pointer stands off it (review of the rebase: the
 //    icon buttons' hover was 1.06:1 there); a selected tree row and a pressed toolbar button are
@@ -44,7 +45,7 @@
 import { expect, test, type APIRequestContext, type Frame, type Locator, type Page } from '@playwright/test';
 import { addSketch, addSolid, featureRowNamed, modelOnPage, newPartFromTree, newProject, openProject, openSketchDetails, partOpened, runCommand, setAppearance, watchPage, workspaceFrame } from './helpers';
 import { PNG } from './png';
-import { hostTokens, PLANNED_HOST, themeValue } from '../tests/styles/css-tokens';
+import { hostTokens, themeValue } from '../tests/styles/css-tokens';
 
 type V3 = [number, number, number];
 type RGB = [number, number, number];
@@ -739,14 +740,6 @@ test('cad:dark-box-caption a selection box started over a face has its caption o
 
 test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable under the pointer and keyboard focus in dark, as in light", async ({ page, request }) => {
   const { frame, seen } = await freshPart(page, request);
-  const f = workspaceFrame(page);
-  // The host's dark --mg-danger, as its newer theme.css has it (the same value there).
-  await f.evaluate((danger) => {
-    const st = document.createElement('style');
-    st.dataset.testHostDark = '1';
-    st.textContent = `[data-theme="dark"] { --mg-danger: ${danger}; }`;
-    document.head.append(st);
-  }, PLANNED_HOST.dark['--mg-danger']);
   // A 10 mm block patterned 3 times, 15 mm apart, joined: the copies don't touch it, so they are red.
   await addSolid(page, { size: [10, 10, 10] });
   await page.keyboard.press('Escape');
@@ -791,7 +784,8 @@ test("cad:dark-pattern-failed a failed Pattern copy's red number stays readable 
   expect(light.focus).toEqual(light.hover);
   await appearance(page, 'dark');
   const dark = await looks();
-  expect(dark.hover).toEqual({ color: cssRgb(PLANNED_HOST.dark['--mg-danger']), bg: cssRgb('#4a2522') });
+  // The host's dark --mg-danger (the frame's theme.css) on CAD's red-tinted hover.
+  expect(dark.hover).toEqual({ color: cssRgb(hostTokens().dark.get('--mg-danger')!), bg: cssRgb('#4a2522') });
   expect(dark.focus).toEqual(dark.hover);
   expect(contrastOf(rgb(dark.hover.color), rgb(dark.hover.bg)), 'the red number on its hover background').toBeGreaterThanOrEqual(4.5);
   await appearance(page, 'light');
