@@ -7,6 +7,7 @@ import { hasOutline, outlineRings, referenceLength } from '../geometry/shapes';
 import { bakeSdf, type SdfGrid } from '../geometry/sdf';
 import { radiusRings, transformRings, type Rings } from '../geometry/polygon';
 import { Renderer, type Palette, type ViewXform } from '../render/renderer';
+import type { Drawn } from '../render/domain';
 import { FLUIDS, LIMITS, flowModelFor, type Body, type FieldMode, type Resolution, type Scene } from '../scene/scene';
 import { Dye, type DyeSource } from './dye';
 import { MAX_BODIES, MAX_STEPS, PATCH_STORAGE_BUFFERS, SA_SDF_BAND, TE_MIN_CELLS } from './kernels';
@@ -239,6 +240,8 @@ export class Engine {
   palette: Palette;
   /** What the canvas shows: the world point at its centre (m), metres per CSS pixel, its size. */
   worldView = { cx: 4, cy: 2, mpp: 0.01, w: 800, h: 400, dpr: 1 };
+  /** The frame on the canvas: its lattice view as the shader has it, its grid and size (the dark view's margins follow it). */
+  drawn: Drawn | null = null;
   simTime = 0;
   stats: Stats;
   private particles: Particles;
@@ -1004,6 +1007,7 @@ export class Engine {
       this.streamlines.encodeTrace(enc, solver.macroBuf, solver, Math.max(0, solver.absorbInX) + 1, Math.max(8, lines));
     }
     const size = this.renderer.size;
+    this.drawn = { scale: Math.fround(lv.scale), ox: Math.fround(lv.ox), oy: Math.fround(lv.oy), nx: solver.nx, ny: solver.ny, w: size.w, h: size.h };
     const markers = (view.tracers || view.field === 'particles') && this.particles.tracerCount > 0;
     if (markers && mc) {
       const dpr = this.worldView.dpr;

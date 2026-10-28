@@ -1,12 +1,16 @@
 // The tunnel's tokens: the view's colours the GPU reads (src/app/colours.ts) are plain hex, which
-// tokenRgb can read; the tokens built on the host's are declared again on any element with a theme
-// of its own (the hidden light element the GPU, pictures and recordings read), so they take the
-// host's light values there; and in light each colour is the one the tunnel drew before.
+// tokenRgb can read, with no dark value; the tokens built on the host's are declared again on any
+// element with a theme of its own (the hidden light element the GPU, pictures and recordings read),
+// so they take the host's light values there; in light each colour is the one the tunnel drew
+// before; and in dark what is drawn on the view's margins, on a map's ends, on the plain and tank
+// looks and on the marks' halo reads clearly.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { hostLight, tokenReader, tunnel, tunnelBase } from './themeTokens';
+import { colormapRgb } from '../../../src/plugin-ui/colormaps';
+import { INFERNO } from '../src/render/inferno';
+import { hostDark, hostLight, tokenReader, tunnel, tunnelBase, tunnelDark } from './themeTokens';
 
 const coloursTs = readFileSync(join(__dirname, '..', 'src', 'app', 'colours.ts'), 'utf8');
 /** A function's source in a module's text: from its name to the brace that closes its body. */
@@ -68,17 +72,50 @@ const DRAWN_BEFORE: Record<string, string> = {
   '--t2d-rake-6': '#dd2590',
   '--mg-bg': '#ffffff',
   '--mg-text': '#101828',
+  // The stage's background was --t2d-bg; the dark-only edges and halos are none in light.
+  '--t2d-margin': '#f0f2f7',
+  '--t2d-wall': 'transparent',
+  '--t2d-mark-halo': 'transparent',
+  '--t2d-swatch-ring': 'transparent',
 };
 
+/** WCAG contrast of two #rrggbb colours. */
+function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+const hexOf = (rgb: ArrayLike<number>, i: number) => `#${[0, 1, 2].map((k) => rgb[3 * i + k].toString(16).padStart(2, '0')).join('')}`;
+
 describe('the tunnel tokens', () => {
-  it('are declared on the page and again on any element with a theme of its own', () => {
+  it('are declared on the page and again on any element with a theme of its own; dark values come after', () => {
     expect(tunnelBase.selectors).toEqual([':root', '[data-theme]']);
     // A token built on the host's resolves where it is declared: on the light element it takes
-    // the light theme only because it is declared there too.
-    for (const r of tunnel) {
+    // the light theme only because it is declared there too. The one dark block has the same
+    // specificity, so it comes after the base block.
+    const blocks = tunnel.filter((r) => Object.keys(r.props).length);
+    expect(blocks.map((r) => r.selectors.join(', '))).toEqual([':root, [data-theme]', '[data-theme="dark"]']);
+    for (const r of blocks) {
       for (const [name, value] of Object.entries(r.props)) {
-        if (value.includes('var(')) expect(r.selectors, name).toContain('[data-theme]');
+        if (value.includes('var(')) expect(r === tunnelBase || r === tunnelDark, name).toBe(true);
       }
+    }
+  });
+
+  it('give the GPU no dark value: the dark block holds only what is drawn over the view and the swatches', () => {
+    expect(Object.keys(tunnelDark.props).sort()).toEqual(['--t2d-ghost', '--t2d-mark-halo', '--t2d-sketch-pick', '--t2d-swatch-ring', '--t2d-wall']);
+    for (const name of [...GPU_TOKENS, ...RHEO_TOKENS, ...RAKE_TOKENS]) expect(tunnelDark.props[name], name).toBeUndefined();
+    // Every dark value is the host's own (the core's dark 3D view: its edge grey, pick green and halo).
+    for (const [name, value] of Object.entries(tunnelDark.props)) {
+      const ref = /^var\((--mg-[\w-]+)\)$/.exec(value);
+      expect(ref, name).not.toBeNull();
+      expect(hostDark.props[ref![1]] ?? hostLight.props[ref![1]], `${name}: ${value}`).toBeDefined();
     }
   });
 
@@ -115,5 +152,30 @@ describe('the tunnel tokens', () => {
   it('give the marks and the cards, in light, the colours they were drawn in before', () => {
     const light = tokenReader('light');
     for (const [name, value] of Object.entries(DRAWN_BEFORE)) expect(light(name), name).toBe(value);
+  });
+
+  it("in dark: the margins are the host's dark view background, and what is drawn over the view reads clearly", () => {
+    const dark = tokenReader('dark');
+    const light = tokenReader('light');
+    const margin = dark('--t2d-margin');
+    expect(margin).toBe(hostDark.props['--mg-viewport-bg']);
+    expect(dark('--t2d-bg'), 'the GPU stays light').toBe(light('--t2d-bg'));
+    // What lines with no halo of their own lie on: the margins, the plain and tank looks, each
+    // colour map's ends, and white (a light field).
+    const under: Record<string, string> = { margin, plain: dark('--t2d-plain'), white: '#ffffff' };
+    for (const p of ['kalliroscope', 'pearl', 'copper']) under[`${p} tank`] = dark(`--t2d-rheo-${p}-base`);
+    for (const map of ['viridis', 'balance'] as const) for (const i of [0, 255]) under[`${map} ${i}`] = hexOf(colormapRgb(map), i);
+    for (const i of [0, 255]) under[`inferno ${i}`] = hexOf(INFERNO, i);
+    const lines = ['--t2d-select', '--t2d-ghost', '--t2d-wall'];
+    for (const name of lines) for (const [on, bg] of Object.entries(under)) expect(contrast(dark(name), bg), `${name} ${dark(name)} on ${on} ${bg}`).toBeGreaterThanOrEqual(3);
+    // On the marks' halo (the probes' ring and names, the sketch and its dimensions): text 4.5:1, lines 3:1.
+    const halo = dark('--t2d-halo');
+    expect([dark('--t2d-mark-halo'), dark('--t2d-sketch-halo')]).toEqual([halo, halo]);
+    const text = ['--t2d-probe', '--t2d-select-ink', '--t2d-sketch-under', '--t2d-sketch-full', '--t2d-sketch-over', '--t2d-sketch-construction', '--t2d-sketch-pick'];
+    for (const name of text) expect(contrast(dark(name), halo), `${name} ${dark(name)}`).toBeGreaterThanOrEqual(4.5);
+    for (const name of ['--t2d-select', '--t2d-sketch-preview']) expect(contrast(dark(name), halo), name).toBeGreaterThanOrEqual(3);
+    // The ring at the wall on the margins, and the swatches' ring on the dark panel.
+    expect(contrast(dark('--t2d-wall'), margin)).toBeGreaterThanOrEqual(3);
+    expect(contrast(dark('--t2d-swatch-ring'), dark('--mg-bg'))).toBeGreaterThanOrEqual(3);
   });
 });

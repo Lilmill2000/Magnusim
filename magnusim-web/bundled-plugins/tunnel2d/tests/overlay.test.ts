@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 // The marks over the view (src/ui/overlay.ts), drawn on a context that writes down every call: in
 // the light theme they are drawn as they were before the overlay left Viewport.tsx (the log saved
-// in __snapshots__/overlay-light.txt right after that move), and pictures draw them so whatever
-// the page's theme.
+// in __snapshots__/overlay-light.txt right after that move), with nothing painted on the margins;
+// in dark the margins and the ring at the tunnel's wall come first, then the marks in dark colours
+// with a halo under those that have none of their own; the rakes keep their colours; and pictures
+// draw the light marks whatever the page's theme.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/app/store';
@@ -11,12 +13,30 @@ import { defaultScene, type Body, type Scene } from '../src/scene/scene';
 import type { Engine } from '../src/sim/engine';
 import { SketchEditor } from '../src/sketch/editor';
 import type { SketchEntity } from '../src/sketch/cad';
+import { domainRectPx, type Drawn } from '../src/render/domain';
 import { lightOverlay, overlayState, paintOverlay, type Drag, type OverlayState } from '../src/ui/overlay';
 import { recordingContext } from './canvasLog';
 import { themedStyles, tokenReader } from './themeTokens';
 
 /** The view: zoomed out, so the 8 m x 4 m tunnel has margins all round. */
 const VIEW = { cx: 4, cy: 2, mpp: 0.012, w: 800, h: 450, dpr: 1.25 };
+/** The overlay canvas, the GPU canvas's size (device px). */
+const CANVAS = { width: Math.round(VIEW.w * VIEW.dpr), height: Math.round(VIEW.h * VIEW.dpr) };
+
+/** The frame on the GPU canvas for VIEW, as the engine records it (a 512 x 256 lattice). */
+function drawnFor(view: typeof VIEW, nx = 512, ny = 256, length = 8): Drawn {
+  const dx = length / nx;
+  const f = Math.fround;
+  return {
+    scale: f(view.mpp / view.dpr / dx),
+    ox: f((view.cx - (view.w / 2) * view.mpp) / dx - 0.5),
+    oy: f((view.cy + (view.h / 2) * view.mpp) / dx - 0.5),
+    nx,
+    ny,
+    w: Math.round(view.w * view.dpr),
+    h: Math.round(view.h * view.dpr),
+  };
+}
 
 const line = (id: string, a: string, b: string) => ({ id, kind: 'line', p: [a, b] }) as SketchEntity;
 
@@ -67,7 +87,7 @@ type Paint = (g: CanvasRenderingContext2D, st: OverlayState) => void;
 function frames(paint: Paint): string[] {
   const { store, engine, editor } = fixture();
   const log: string[] = [];
-  const g = recordingContext(log, { width: 1000, height: 563 });
+  const g = recordingContext(log, CANVAS);
   const frame = (label: string, selected: string | null, drag: Drag | null = null) => {
     log.push(`# ${label}`);
     store.select(selected);
@@ -86,11 +106,24 @@ function frames(paint: Paint): string[] {
   return log;
 }
 
-/** Paints each frame on screen in a theme's colours, the tokens resolved from the stylesheets. */
-const onScreen = (theme: 'light' | 'dark'): Paint => {
+/** Paints each frame on screen in a theme's colours (the tokens resolved from the stylesheets), over `drawn`. */
+const onScreen = (theme: 'light' | 'dark', drawn: Drawn | null = drawnFor(VIEW)): Paint => {
   const colours = overlayColours(tokenReader(theme));
-  return (g, st) => paintOverlay(g, st, colours);
+  return (g, st) => paintOverlay(g, st, colours, drawn);
 };
+
+/** One frame of a log (from its '# label' line to the next). */
+function frameOf(log: string[], label: string): string[] {
+  const at = log.indexOf(`# ${label}`);
+  const next = log.findIndex((l, i) => i > at && l.startsWith('# '));
+  return log.slice(at + 1, next < 0 ? undefined : next);
+}
+
+/** Where `run` (consecutive lines) starts in `lines`, or -1. */
+function indexOfRun(lines: string[], run: string[]): number {
+  for (let i = 0; i + run.length <= lines.length; i++) if (run.every((l, k) => lines[i + k] === l)) return i;
+  return -1;
+}
 
 afterEach(() => {
   document.documentElement.removeAttribute('data-theme');
@@ -98,9 +131,10 @@ afterEach(() => {
 });
 
 describe('the overlay', () => {
-  it('in the light theme draws exactly what it drew before it left the view', async () => {
+  it('in the light theme draws exactly what it drew before it left the view, nothing on the margins', async () => {
     const log = frames(onScreen('light'));
     expect(log.length).toBeGreaterThan(500);
+    expect(log.some((l) => /fill\("evenodd"\)|^rect\(|setTransform\(1, 0, 0, 1, 0, 0\)/.test(l))).toBe(false);
     await expect(log.join('\n') + '\n').toMatchFileSnapshot('./__snapshots__/overlay-light.txt');
   });
 
@@ -119,5 +153,79 @@ describe('the overlay', () => {
     } finally {
       styles.restore();
     }
+  });
+
+  it("in the dark theme paints the margins and the ring at the tunnel's wall first, by the GPU's frame", () => {
+    const drawn = drawnFor(VIEW);
+    const r = domainRectPx(drawn)!;
+    expect(r.walls).toEqual({ left: true, right: true, top: true, bottom: true });
+    const log = frames(onScreen('dark', drawn));
+    // The ring is one device px at 1.25 (round(dpr)), on the tunnel's outermost pixels.
+    const head = [
+      'setTransform(1.25, 0, 0, 1.25, 0, 0)',
+      'clearRect(0, 0, 800, 450)',
+      'setTransform(1, 0, 0, 1, 0, 0)',
+      'fillStyle = "#1b1f27"',
+      'beginPath()',
+      `rect(0, 0, ${CANVAS.width}, ${CANVAS.height})`,
+      `rect(${r.x0}, ${r.y0}, ${r.x1 - r.x0}, ${r.y1 - r.y0})`,
+      'fill("evenodd")',
+      'beginPath()',
+      `rect(${r.x0}, ${r.y0}, 1, ${r.y1 - r.y0})`,
+      `rect(${r.x1 - 1}, ${r.y0}, 1, ${r.y1 - r.y0})`,
+      `rect(${r.x0}, ${r.y0}, ${r.x1 - r.x0}, 1)`,
+      `rect(${r.x0}, ${r.y1 - 1}, ${r.x1 - r.x0}, 1)`,
+      'fillStyle = "#6b7382"',
+      'fill()',
+      'setTransform(1.25, 0, 0, 1.25, 0, 0)',
+    ];
+    for (const label of ['nothing selected', 'a body turned', 'a sketch edited']) expect(frameOf(log, label).slice(0, head.length), label).toEqual(head);
+    // The tunnel is where the shader has it: 8 m x 4 m at 0.012 m per CSS px, centred.
+    expect((r.x1 - r.x0) / VIEW.dpr).toBeCloseTo(8 / 0.012, -1);
+    expect((r.y1 - r.y0) / VIEW.dpr).toBeCloseTo(4 / 0.012, -1);
+  });
+
+  it('in the dark theme draws the marks in dark colours, with a halo under the probe cross, the sketch origin and its snap ring', () => {
+    const log = frames(onScreen('dark'));
+    // Nothing half-themed: none of the light marks' own colours is left.
+    for (const light of ['#ffffff', '#101828', '#475467', '#667085']) expect(log.some((l) => l.includes(light)), light).toBe(false);
+    for (const dark of ['#e6e9ef', '#2f6fde', '#7aa7ff', '#6b7382', '#9aa4b2']) expect(log.some((l) => l.includes(dark)), dark).toBe(true);
+    // The probe's cross: a halo of the margin's colour, 3 px wider than its ink, before its ring.
+    const probe = frameOf(log, 'nothing selected');
+    const cross = indexOfRun(probe, ['strokeStyle = "#1b1f27"', 'lineWidth = 4.5', 'stroke()']);
+    expect(cross).toBeGreaterThan(0);
+    expect(probe[cross + 3]).toBe('beginPath()');
+    expect(probe[cross + 4]).toMatch(/^arc\(/);
+    const selected = frameOf(log, 'a probe selected');
+    expect(indexOfRun(selected, ['strokeStyle = "#1b1f27"', 'lineWidth = 5.5', 'stroke()'])).toBeGreaterThan(0);
+    expect(selected).toContain('fillStyle = "#7aa7ff"');
+    // The sketch: a halo under its origin cross, then under its snap ring.
+    const sketch = frameOf(log, 'a sketch edited');
+    const origin = indexOfRun(sketch, ['strokeStyle = "#1b1f27"', 'lineWidth = 4', 'beginPath()']);
+    expect(origin).toBeGreaterThan(0);
+    expect(sketch.slice(origin + 7, origin + 11)).toEqual(['stroke()', 'strokeStyle = "#9aa4b2"', 'lineWidth = 1', 'beginPath()']);
+    expect(sketch.slice(-6)).toEqual(['strokeStyle = "#1b1f27"', 'lineWidth = 4.5', 'stroke()', 'strokeStyle = "#2f6fde"', 'lineWidth = 1.5', 'stroke()']);
+  });
+
+  it('draws the rakes in the same colours in both themes', () => {
+    expect(overlayColours(tokenReader('dark')).rakes).toEqual(overlayColours(tokenReader('light')).rakes);
+    const rakes = (log: string[]) => frameOf(log, 'the streak rake selected').filter((l) => /^(strokeStyle|fillStyle) = "#(1570ef|6941c6|099250|b54708|0086c9|dd2590)"$/.test(l));
+    const light = rakes(frames(onScreen('light')));
+    expect(light.length).toBeGreaterThan(6);
+    expect(rakes(frames(onScreen('dark')))).toEqual(light);
+  });
+
+  it("leaves the margins to the stage's background with no frame on the GPU canvas yet, or one of another size", () => {
+    for (const drawn of [null, { ...drawnFor(VIEW), w: CANVAS.width + 1 }]) {
+      const log = frames(onScreen('dark', drawn));
+      expect(log.some((l) => /fill\("evenodd"\)|fillStyle = "#6b7382"|setTransform\(1, 0, 0, 1, 0, 0\)/.test(l))).toBe(false);
+    }
+  });
+
+  it('paints the whole canvas as margin when the tunnel is off it, and no ring', () => {
+    const away = drawnFor({ ...VIEW, cx: -20 });
+    expect(domainRectPx(away)).toBeNull();
+    const first = frameOf(frames(onScreen('dark', away)), 'nothing selected');
+    expect(first.slice(2, 6)).toEqual(['setTransform(1, 0, 0, 1, 0, 0)', 'fillStyle = "#1b1f27"', `fillRect(0, 0, ${CANVAS.width}, ${CANVAS.height})`, 'setTransform(1.25, 0, 0, 1.25, 0, 0)']);
   });
 });

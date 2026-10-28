@@ -38,6 +38,8 @@ The plugin ships on (it can be turned off in **Settings → Plugins**). The head
 
 The legend's range follows the flow, or can be fixed.
 
+In the app's dark theme (Settings → Appearance) the view's margins turn dark, with a grey line along the tunnel's walls, and the marks over the flow (probes, the selection, sketches) take the dark theme's colours; the flow, the bodies and the rakes keep theirs. Pictures and recordings are light in either theme.
+
 **Flow markers:**
 - tracer particles with trails;
 - rakes you place and drag, releasing streaks, timelines or dye;

@@ -160,6 +160,7 @@ html {
   height: 10px;
   border-radius: var(--mg-radius-xs);
   flex: none;
+  box-shadow: inset 0 0 0 1px var(--t2d-swatch-ring);
 }
 .t2d-icon-btn {
   border: none;
@@ -190,7 +191,7 @@ html {
   flex: 1;
   position: relative;
   min-width: 0;
-  background: var(--t2d-bg);
+  background: var(--t2d-margin);
 }
 .t2d-viewport {
   position: absolute;

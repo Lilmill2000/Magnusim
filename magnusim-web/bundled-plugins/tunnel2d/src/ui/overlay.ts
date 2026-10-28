@@ -1,9 +1,12 @@
 // The marks over the tunnel's view: the rakes, the probes, the selection and its turn handle,
 // the pose a body is being dragged or turned to, outlines of what is not in the flow, and the
 // sketch being edited. Drawn in CSS px on the view's overlay canvas every frame (Viewport.tsx),
-// and drawn again in the light colours for each picture or recorded frame (src/app/capture.ts).
+// in the page's theme; in dark it first paints the view's margins dark over the GPU's light ones,
+// with a ring at the tunnel's wall. Drawn again in the light colours, with no margins, for each
+// picture or recorded frame (src/app/capture.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { overlaySet } from '../app/colours';
+import { domainRectPx, type Drawn } from '../render/domain';
 import { transformRings, type Rings } from '../geometry/polygon';
 import { hasOutline, outlineRings, profileOf } from '../geometry/shapes';
 import type { Engine } from '../sim/engine';
@@ -61,10 +64,16 @@ export interface OverlayColours {
   halo: string;
   /** A probe's ring, cross and name. */
   probe: string;
+  /** Under a probe's cross, whose arms reach past its ring (null: none, as in light). */
+  markHalo: string | null;
   /** Each rake colour (an empty one draws in the selection's). */
   rakes: string[];
   /** The sketch being edited. */
   sketch: Palette;
+  /** The view's margins on screen, where they are not the GPU's (null: the GPU's, as in light). */
+  margin: string | null;
+  /** The ring at the tunnel's wall on those margins (null: none). */
+  wall: string | null;
 }
 
 /** What one frame of the overlay shows. */
@@ -98,17 +107,57 @@ export function overlayState(engine: Engine, store: Store, drag: Drag | null, ed
   };
 }
 
-/** One frame of the overlay: the canvas cleared, then the marks. */
-export function paintOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: OverlayColours) {
+/**
+ * One frame of the overlay: the canvas cleared; where the colours have margins of their own (dark),
+ * the view's margins and the ring at the tunnel's wall, by the frame on the GPU canvas (`drawn`:
+ * none yet, or another size, leaves them to the stage's background); then the marks.
+ */
+export function paintOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: OverlayColours, drawn: Drawn | null) {
   const v = st.view;
   g.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
   g.clearRect(0, 0, v.w, v.h);
+  if (c.margin && drawn && drawn.w === g.canvas.width && drawn.h === g.canvas.height && drawn.scale > 0) {
+    paintMargins(g, drawn, c.margin, c.wall, Math.max(1, Math.round(v.dpr)));
+    g.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
+  }
   drawOverlay(g, st, c);
+}
+
+/**
+ * The view's margins (device px), and a ring `t` px wide on the tunnel's outermost pixels: it keeps
+ * the wall in sight on a dark look (the plain or tank view, a map's dark end), and the overlay stays
+ * opaque past the wall, so none of the GPU's light margin shows beside it (a pixel the shader's f32
+ * test put either side, or both canvases resampled at a fractional device pixel ratio).
+ */
+function paintMargins(g: CanvasRenderingContext2D, d: Drawn, margin: string, wall: string | null, t: number) {
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = margin;
+  const r = domainRectPx(d);
+  if (!r) {
+    g.fillRect(0, 0, d.w, d.h);
+    return;
+  }
+  const w = r.x1 - r.x0;
+  const h = r.y1 - r.y0;
+  g.beginPath();
+  g.rect(0, 0, d.w, d.h);
+  g.rect(r.x0, r.y0, w, h);
+  g.fill('evenodd');
+  if (!wall) return;
+  const tx = Math.min(t, w);
+  const ty = Math.min(t, h);
+  g.beginPath();
+  if (r.walls.left) g.rect(r.x0, r.y0, tx, h);
+  if (r.walls.right) g.rect(r.x1 - tx, r.y0, tx, h);
+  if (r.walls.top) g.rect(r.x0, r.y0, w, ty);
+  if (r.walls.bottom) g.rect(r.x0, r.y1 - ty, w, ty);
+  g.fillStyle = wall;
+  g.fill();
 }
 
 /** The marks a picture or a recording draws over the flow: this frame's, in the light colours (kept files stay light). */
 export function lightOverlay(state: () => OverlayState): (g: CanvasRenderingContext2D) => void {
-  return (g) => paintOverlay(g, state(), overlaySet('light'));
+  return (g) => paintOverlay(g, state(), overlaySet('light'), null);
 }
 
 /** The marks, in CSS px (the canvas's transform set to the device pixel ratio). */
@@ -154,6 +203,17 @@ export function drawOverlay(g: CanvasRenderingContext2D, st: OverlayState, c: Ov
   scene.probes.forEach((p, i) => {
     const s = toScreen(p.x, p.y);
     const isSel = p.id === selected;
+    if (c.markHalo) {
+      // The cross's arms reach past the ring: a halo under them first (dark).
+      g.beginPath();
+      g.moveTo(s.x - PROBE_R_PX - 3, s.y);
+      g.lineTo(s.x + PROBE_R_PX + 3, s.y);
+      g.moveTo(s.x, s.y - PROBE_R_PX - 3);
+      g.lineTo(s.x, s.y + PROBE_R_PX + 3);
+      g.strokeStyle = c.markHalo;
+      g.lineWidth = (isSel ? 2.5 : 1.5) + 3;
+      g.stroke();
+    }
     g.beginPath();
     g.arc(s.x, s.y, PROBE_R_PX, 0, Math.PI * 2);
     g.fillStyle = handleFill;

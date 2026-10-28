@@ -3,8 +3,9 @@
 // on pictures and recordings. The GPU draws the view in its light colours in every theme, and what
 // a person keeps (a picture, a recording) is light too, marks and cards included (Daniel,
 // 2026-10-27): all of these are read on a hidden element with data-theme="light", never on the
-// page. Each set is read once the page's stylesheets are in, and again after the host's 'theme'
-// event (forgetColours).
+// page. The marks on screen take the page's theme, read on a hidden element of that theme (dark:
+// with the view's margins and the ring at its wall). Each set is read once the page's stylesheets
+// are in, and again after the host's 'theme' event (forgetColours).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Palette } from '../render/renderer';
 import type { Engine } from '../sim/engine';
@@ -109,9 +110,13 @@ export function applyViewColours(engine: Engine, scope: Element) {
   };
 }
 
+/** A colour token's value, or null for none ('transparent': an edge or halo only dark draws). */
+const colourOrNone = (v: string) => (v && v !== 'transparent' ? v : null);
+
 /** The sketch's colours, from the tokens (as CAD's sketch: blue under-defined, ink fully, red over). */
 export function sketchPalette(read: (name: string) => string): SketchPalette {
   const v = (name: string, fallback: string) => read(name) || fallback;
+  const markHalo = colourOrNone(read('--t2d-mark-halo'));
   return {
     under: v('--t2d-sketch-under', 'blue'),
     fully: v('--t2d-sketch-full', 'black'),
@@ -120,20 +125,26 @@ export function sketchPalette(read: (name: string) => string): SketchPalette {
     pick: v('--t2d-sketch-pick', 'green'),
     halo: v('--t2d-sketch-halo', 'white'),
     preview: v('--t2d-sketch-preview', 'blue'),
+    ...(markHalo ? { markHalo } : {}),
   };
 }
 
 /** The overlay's colours, from the tokens as `read` gives them (a token's value, trimmed). */
 export function overlayColours(read: (name: string) => string): OverlayColours {
   const sel = read('--t2d-select') || 'black';
+  const margin = read('--t2d-margin');
   return {
     sel,
     selInk: read('--t2d-select-ink') || sel,
     ghost: read('--t2d-ghost') || 'gray',
     halo: read('--t2d-halo') || 'white',
     probe: read('--t2d-probe') || 'black',
+    markHalo: colourOrNone(read('--t2d-mark-halo')),
     rakes: [1, 2, 3, 4, 5, 6].map((i) => read(`--t2d-rake-${i}`)),
     sketch: sketchPalette(read),
+    // Painted only where the screen's margins are not the GPU's light ones.
+    margin: margin && margin !== read('--t2d-bg') ? margin : null,
+    wall: colourOrNone(read('--t2d-wall')),
   };
 }
 

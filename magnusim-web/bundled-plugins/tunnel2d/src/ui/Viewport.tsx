@@ -113,14 +113,16 @@ export function Viewport({
 
   const handleOf = (b: Body) => turnHandle(engine, b);
 
-  // Overlay drawing, every frame, in the light colours the stage keeps.
+  // Overlay drawing, every frame, right after the engine's (its loop started first, so `drawn` is
+  // this frame's), in the page's theme read each frame: a change shows with the view and panels.
   useEffect(() => {
     let raf = 0;
     const draw = () => {
       raf = requestAnimationFrame(draw);
       const o = overlay.current;
       if (!o) return;
-      paintOverlay(o.getContext('2d')!, overlayState(engine, store, drag.current, editor), overlaySet('light'));
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+      paintOverlay(o.getContext('2d')!, overlayState(engine, store, drag.current, editor), overlaySet(theme), engine.drawn);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
