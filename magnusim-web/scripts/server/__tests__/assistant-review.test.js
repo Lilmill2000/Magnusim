@@ -2,9 +2,10 @@
 // review gets its prompt as the next user message once the model ends its answer after one of
 // its edit tools succeeded, round i of n, until a round makes no successful edit or the rounds
 // are used up; caps and Stop still win; no review when the workspace didn't ask or nothing was
-// edited. A turn's reference pictures are checked at its start (type, size, count), go into its
-// first user message only once privacy allows the turn, never to a coding agent, and a local
-// model known not to read images gets none (with the note).
+// edited. A turn's reference pictures are checked at its start (type, size, count), for a coding
+// agent too, go into its first user message only once privacy allows the turn, and a local model
+// known not to read images gets none (with the note). Whether a coding agent takes them is its
+// initialize's word (assistant-agent-turn.test.js).
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -257,14 +258,22 @@ describe('reference pictures', () => {
     assert.equal(jsonBodyLimit('/api/assistant/turns/t-1/stop'), 64 * 1024);
   });
 
-  it('a start with bad pictures is refused before anything runs; a coding agent takes none', async () => {
+  it('a start with bad pictures is refused before anything runs, on a coding agent too; good ones alone never refuse an agent', async () => {
     const m = mk();
     let r = await startTurn(m, { text: 'x', images: [{ media_type: 'image/png', data: png(5000, 5) }] });
     assert.deepEqual([r.status, r.body.code], [400, 'images_too_large']);
     r = await startTurn(m, { text: 'x', images: 'pic' });
     assert.deepEqual([r.status, r.body.code], [400, 'bad_images']);
+    r = await startTurn(m, { text: 'x', provider: 'agent:someone', images: [{ media_type: 'image/png', data: png(5000, 5) }] });
+    assert.deepEqual([r.status, r.body.code], [400, 'images_too_large']);
+    r = await startTurn(m, { text: 'x', provider: 'agent:someone', images: [{ media_type: 'image/png', data: PNG_1x1 }, 'pic'] });
+    assert.deepEqual([r.status, r.body.code], [400, 'bad_images']);
+    // Checked pictures go on to the agent's own checks (here: no such agent), never refused for being pictures.
     r = await startTurn(m, { text: 'x', provider: 'agent:someone', images: [{ media_type: 'image/png', data: PNG_1x1 }] });
-    assert.deepEqual([r.status, r.body.code, r.body.error], [400, 'bad_images', AGENT_IMAGES_TEXT]);
+    assert.equal(r.status, 400);
+    assert.notEqual(r.body.code, 'bad_images');
+    assert.notEqual(r.body.error, AGENT_IMAGES_TEXT('someone'));
+    assert.doesNotMatch(String(r.body.error), /doesn't take pictures/);
     assert.equal(m.provider.requests.length, 0);
   });
 

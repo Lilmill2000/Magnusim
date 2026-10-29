@@ -8,6 +8,7 @@
  * any path it is given. A browser can't open its file picker for the model.
  */
 import { basename, extname } from 'node:path';
+import { NO_SUCH_ATTACHMENT_TEXT } from '../attachments.ts';
 import type { ToolCtx, ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import {
@@ -34,6 +35,10 @@ import {
 
 export const GEOMETRY_EXTS = ['.step', '.stp', '.iges', '.igs', '.brep', '.brp', '.stl', '.obj', '.ply'];
 const MESH_EXTS = ['.stl', '.obj', '.ply'];
+/** The drawings the dock attaches too: a workspace that imports drawings takes them, never import_file. */
+const DRAWING_EXTS = ['.svg', '.dxf'];
+export const drawingHereText = (name: string): string =>
+  `${name} is a drawing (SVG/DXF): open a workspace that imports drawings and ask there.`;
 /** The length units of the units dialog, as the import (and /api/prefs) take them. */
 export const LENGTH_UNITS: Readonly<Record<string, string>> = Object.freeze({ mm: 'MM', cm: 'CM', m: 'M', in: 'INCH' });
 const NEEDS_FILE_HINT = 'Ask the person to attach it with the paper-clip in the Assistant panel, or to use + Add geometry. A browser can\'t open its file picker for you.';
@@ -58,7 +63,7 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
     name: 'import_file',
     title: 'Import a geometry file',
     description:
-      'Adds a geometry file to the project open here: a file the person attached (attachment_id) or a path the person typed in this message (path). STL/OBJ/PLY need length_unit. Unused fields: "".',
+      'Adds a geometry file to the project open here: one the person attached (the attachment_id of an "Attached geometry file" line, never a drawing) or a path the person typed in this message (path). STL/OBJ/PLY need length_unit. Unused fields: "".',
     schema: objectSchema({
       project_id: S.id('"" = this window\'s project'),
       attachment_id: S.text(40, 'a file the person attached in the dock; "" when path'),
@@ -73,6 +78,15 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts, (ctx: ToolCtx) => (ctx.projectId ? true : 'No project is open in this window.')),
     projectOf: (_input, ctx) => ctx.projectId,
+    // An attached drawing is refused before the person is asked to allow an import it can't be.
+    async refuse(input, ctx) {
+      const attachment = str(input.attachment_id).trim();
+      if (!attachment || !d.attachments) return null;
+      const opened = await d.attachments.open(attachment, conversationOf(ctx));
+      if (!opened) return null;
+      (opened.stream as { destroy?: () => void }).destroy?.();
+      return DRAWING_EXTS.includes(extname(opened.name).toLowerCase()) ? { code: 'invalid_input', message: drawingHereText(cleanText(opened.name, 80)) } : null;
+    },
     describe: (input) => ({
       line: `Import ${str(input.attachment_id) ? 'the attached file' : cleanText(basename(str(input.path)), 120)}`,
       detail: [
@@ -98,12 +112,20 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
         const o = via(rt, 'import_file');
         if (attachment) {
           const opened = d.attachments ? await d.attachments.open(attachment, conversationOf(rt.ctx)) : null;
-          if (!opened) return fail('not_found', 'No such attached file in this conversation.', NEEDS_FILE_HINT);
+          if (!opened) return fail('not_found', NO_SUCH_ATTACHMENT_TEXT, NEEDS_FILE_HINT);
           name = opened.name;
           const ext = extname(name).toLowerCase();
-          if (!GEOMETRY_EXTS.includes(ext)) return fail('invalid_input', 'Only STEP, IGES, BREP, STL, OBJ and PLY files are geometry.');
+          const close = () => (opened.stream as { destroy?: () => void }).destroy?.();
+          if (DRAWING_EXTS.includes(ext)) {
+            close();
+            return fail('invalid_input', drawingHereText(cleanText(name, 80)));
+          }
+          if (!GEOMETRY_EXTS.includes(ext)) {
+            close();
+            return fail('invalid_input', 'Only STEP, IGES, BREP, STL, OBJ and PLY files are geometry.');
+          }
           if (MESH_EXTS.includes(ext) && !unit) {
-            (opened.stream as { destroy?: () => void }).destroy?.();
+            close();
             return fail('invalid_input', `${cleanText(name, 80)} is a mesh file: say its length unit (mm, cm, m or in).`, 'Ask the person which unit the file is in.');
           }
           rt.progress(null, `Importing ${cleanText(name, 80)}`);

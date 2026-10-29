@@ -66,20 +66,38 @@ describe('the dock copy', () => {
     expect(copy.providerNotReady('Cloud A', 'No key')).toBe('Cloud A: No key. Settings → Assistant can fix it.');
     expect(copy.tabBusy('CAD')).toBe('A request is already working in CAD. Wait for it, or stop it.');
     expect([copy.STOP_THAT_REQUEST, copy.CONVERSATION_FULL]).toEqual(['Stop that request', 'This conversation is full. Start a new one.']);
-    expect([copy.ATTACH_LABEL, copy.DROP_PICTURES, copy.ONLY_IMAGES, copy.AT_MOST_FOUR, copy.PICTURES_GO]).toEqual([
+    expect([copy.ATTACH_LABEL, copy.ONLY_IMAGES, copy.AT_MOST_FOUR, copy.PICTURES_GO]).toEqual([
       'Attach pictures or files',
-      'Drop pictures or geometry files to attach',
       'Only PNG, JPEG and WebP pictures can be attached.',
       'At most 4 pictures per message.',
       'Pictures go to the provider with your message.',
     ]);
-    expect([copy.attachFilesOnly('Helper'), copy.DROP_FILES, copy.ONLY_FILES, copy.fileTooLarge('big.step'), copy.AT_MOST_FOUR_FILES, copy.FILES_STAY, copy.ATTACHED_FILES]).toEqual([
+    // What can be attached, with drawings while the dock offers them (drawings.ts) and without.
+    expect([copy.dropPictures(true), copy.attachFilesOnly('Helper', true), copy.dropFiles(true), copy.onlyFiles(true)]).toEqual([
+      'Drop pictures, geometry files or drawings to attach',
+      "Attach geometry files or drawings (Helper doesn't take pictures)",
+      'Drop geometry files or drawings to attach',
+      'Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.',
+    ]);
+    expect([copy.dropPictures(false), copy.attachFilesOnly('Helper', false), copy.dropFiles(false), copy.onlyFiles(false)]).toEqual([
+      'Drop pictures or geometry files to attach',
       "Attach geometry files (Helper doesn't take pictures)",
       'Drop geometry files to attach',
       'Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.',
+    ]);
+    expect([
+      copy.fileTooLarge('big.step'),
+      copy.drawingTooLarge('poster.svg'),
+      copy.AT_MOST_FOUR_FILES,
+      copy.FILES_STAY,
+      copy.DRAWINGS_STAY,
+      copy.ATTACHED_FILES,
+    ]).toEqual([
       'big.step is larger than 500 MB. Import it with + Add geometry.',
+      'poster.svg is larger than 20 MB, the limit for a drawing.',
       'At most 4 files per message.',
-      'Files stay on this PC. The Assistant gets their names and can import them into the project open here.',
+      'Files stay on this PC. The Assistant gets their names and can import them into the project open here. A workspace tool may read one, and what it reports goes to the provider.',
+      'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them. A workspace tool may read one, and what it reports goes to the provider.',
       'Attached files',
     ]);
     expect([copy.uploadingLabel('a.stl'), copy.waitingForUpload('a.stl'), copy.uploadLost('a.stl')]).toEqual([
@@ -95,7 +113,9 @@ describe('the dock copy', () => {
       'a.png · 64 × 48',
       'Remove a.png',
     ]);
+    // A coding agent that said it takes none; one that takes them gets them, and says where they go.
     expect(copy.noPictures('Helper')).toBe("Helper doesn't take pictures. Send the message without them.");
+    expect(copy.picturesGoToAgent('Helper')).toBe('Pictures go to Helper with your message, and on to its own service.');
     expect([
       copy.CONTEXT_HOME,
       copy.contextProject('Wing'),

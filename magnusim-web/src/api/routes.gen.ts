@@ -20,6 +20,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'POST', path: '/api/assistant/launch/check' },
   { method: 'GET', path: '/api/assistant/mcp' },
   { method: 'GET', path: '/api/assistant/models' },
+  { method: 'GET', path: '/api/assistant/relay/attachment' },
   { method: 'POST', path: '/api/assistant/relay/gate' },
   { method: 'POST', path: '/api/assistant/relay/progress' },
   { method: 'POST', path: '/api/assistant/relay/result' },

@@ -1,38 +1,52 @@
 /**
- * The person's files for a message (core host tools spec 13.1): geometry files attached in the
- * dock beside the pictures (Attach, paste or a drop), each uploaded at once to
- * POST /api/assistant/attachments with this tab's live relay link, then named in the turn by its
- * attachment_id. The AI imports one only by that id, into the project open here.
+ * The person's files for a message (core host tools spec 13.1): geometry files, and drawings
+ * while the dock offers them (drawings.ts), attached in the dock beside the pictures (Attach,
+ * paste or a drop), each uploaded at once to POST /api/assistant/attachments with this tab's live
+ * relay link, then named in the turn by its attachment_id. The AI imports one only by that id: a
+ * geometry file into the project open here, a drawing in a workspace that imports drawings.
  *
  * - kindOf(file): a picture (pictures.ts takes it), a geometry file (STEP, IGES, BREP, STL, OBJ,
- *   PLY by its extension) or anything else (refused with ONLY_FILES).
- * - checkFiles(): at most 4 per message, 500 MB each, said plainly before anything is sent.
+ *   PLY by its extension), a drawing (SVG, DXF; an image/svg+xml file is a drawing, never a
+ *   picture) or anything else (refused with onlyFiles). While the dock offers no drawings a
+ *   drawing is anything else too, refused before it is uploaded.
+ * - acceptAll() / acceptFiles(): the file input's accept list, drawings in it only while offered.
+ * - checkFiles(): at most 4 per message, 500 MB each (a drawing 20 MB), said plainly before
+ *   anything is sent.
  * - uploadFile(): the raw bytes (XMLHttpRequest, for the progress), once more with a fresh link
- *   when the server no longer takes this one.
+ *   when the server no longer takes this one. A drawing is only uploaded: its markup never
+ *   reaches the page's DOM.
  */
 import { AssistantApiError, RemoteError, REMOTE_TEXT } from '../api';
 import { withAssistantLink } from '../relay';
-import { AT_MOST_FOUR_FILES, fileTooLarge, ONLY_FILES, uploadLost } from './copy';
+import { AT_MOST_FOUR_FILES, drawingTooLarge, fileTooLarge, onlyFiles, uploadLost } from './copy';
+import { drawingsOffered } from './drawings';
 
-export const FILE_LIMITS = Object.freeze({ count: 4, bytes: 500 * 1024 * 1024 });
+export const FILE_LIMITS = Object.freeze({ count: 4, bytes: 500 * 1024 * 1024, drawingBytes: 20 * 1024 * 1024 });
 export const ATTACHMENTS_PATH = '/api/assistant/attachments';
 export const GEOMETRY_EXTENSIONS = Object.freeze(['.step', '.stp', '.iges', '.igs', '.brep', '.brp', '.stl', '.obj', '.ply']);
+export const DRAWING_EXTENSIONS = Object.freeze(['.svg', '.dxf']);
 const PICTURE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
-/** The file input's accept list: pictures and the geometry files (a coding agent's: the files only). */
-export const ACCEPT_ALL = ['image/png', 'image/jpeg', 'image/webp', ...GEOMETRY_EXTENSIONS].join(',');
-export const ACCEPT_FILES = GEOMETRY_EXTENSIONS.join(',');
+/** The files' part of the accept list: geometry files, and drawings while the dock offers them. */
+const fileExtensions = (): readonly string[] => (drawingsOffered() ? [...GEOMETRY_EXTENSIONS, ...DRAWING_EXTENSIONS] : GEOMETRY_EXTENSIONS);
+/** The file input's accept list: pictures and the files (a coding agent that takes no pictures: the files only, acceptFiles). */
+export const acceptAll = (): string => ['image/png', 'image/jpeg', 'image/webp', ...fileExtensions()].join(',');
+export const acceptFiles = (): string => fileExtensions().join(',');
 
-export type FileKind = 'picture' | 'geometry' | 'other';
+export type FileKind = 'picture' | 'geometry' | 'drawing' | 'other';
 
 const extOf = (name: string): string => {
   const m = /(\.[A-Za-z0-9]{1,5})$/.exec(name || '');
   return m ? m[1].toLowerCase() : '';
 };
 
-/** What a file is to the dock, by its extension (a picture also by its type). */
+/**
+ * What a file is to the dock, by its extension (a picture also by its type; an SVG by either is a
+ * drawing, never a picture, and anything else while the dock offers no drawings).
+ */
 export function kindOf(file: { name: string; type?: string }): FileKind {
   const ext = extOf(file.name);
   if (GEOMETRY_EXTENSIONS.includes(ext)) return 'geometry';
+  if (DRAWING_EXTENSIONS.includes(ext) || file.type === 'image/svg+xml') return drawingsOffered() ? 'drawing' : 'other';
   if (PICTURE_EXTENSIONS.includes(ext) || /^image\//.test(file.type || '')) return 'picture';
   return 'other';
 }
@@ -43,25 +57,29 @@ export interface AttachedFile {
   key: string;
   name: string;
   bytes: number;
+  kind: 'geometry' | 'drawing';
   state: 'uploading' | 'ready';
   progress: number;
   id: string | null;
 }
 
 /**
- * Which of `files` (geometry files) may be added beside the `have` already there: past the
- * fourth, or over 500 MB, each is refused with its line.
+ * Which of `files` (geometry files and drawings) may be added beside the `have` already there:
+ * past the fourth, or over its kind's size (500 MB, a drawing 20 MB), each is refused with its line.
  */
 export function checkFiles(have: number, files: readonly File[]): { accepted: File[]; errors: string[] } {
   const accepted: File[] = [];
   const errors: string[] = [];
   for (const f of files) {
-    if (kindOf(f) !== 'geometry') {
-      if (!errors.includes(ONLY_FILES)) errors.push(ONLY_FILES);
+    const kind = kindOf(f);
+    if (kind !== 'geometry' && kind !== 'drawing') {
+      const only = onlyFiles(drawingsOffered());
+      if (!errors.includes(only)) errors.push(only);
       continue;
     }
-    if (f.size > FILE_LIMITS.bytes) {
-      errors.push(fileTooLarge(f.name));
+    const drawing = kind === 'drawing';
+    if (f.size > (drawing ? FILE_LIMITS.drawingBytes : FILE_LIMITS.bytes)) {
+      errors.push(drawing ? drawingTooLarge(f.name) : fileTooLarge(f.name));
       continue;
     }
     if (have + accepted.length >= FILE_LIMITS.count) {

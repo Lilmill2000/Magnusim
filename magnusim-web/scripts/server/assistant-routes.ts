@@ -29,10 +29,12 @@
  *                                        with a message (as /agents/test, with its launch proof)
  *   POST /api/assistant/attachments     ?name=<file name>, the raw file (application/octet-stream, the one
  *                                        route that isn't JSON) with the tab's live relay link in
- *                                        x-magnusim-link → {ok, attachment_id, name, bytes, kind:'geometry',
- *                                        format}: a STEP, IGES, BREP, STL, OBJ or PLY file (by its name and
- *                                        its first bytes) of at most 500 MB, kept on this PC for the turn
- *                                        that names it (assistant/attachments.ts); 400 bad_type,
+ *                                        x-magnusim-link → {ok, attachment_id, name, bytes, kind, format}:
+ *                                        kind 'geometry', a STEP, IGES, BREP, STL, OBJ or PLY file of at
+ *                                        most 500 MB, or 'drawing', an SVG or DXF file of at most 20 MB
+ *                                        (each by its name and its first bytes), kept on this PC for the
+ *                                        turn that names it (assistant/attachments.ts); only GET
+ *                                        /relay/attachment serves its bytes back; 400 bad_type,
  *                                        empty_file, bad_name; 409 no_channel; 413 too_large; 415 octet_only
  *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
  *                                        attachments?:['att-…'], images?:[{media_type, data}]}
@@ -40,7 +42,9 @@
  *                                        conversation's, then bound to it; 400 bad_attachments,
  *                                        attachments_need_window; 409 attachment_gone) (images: ≤ 4 PNG, JPEG or WebP
  *                                        reference pictures as base64, each ≤ 1.5 MB and 2000 px a
- *                                        side; 400 bad_images / images_too_large; none on an agent:<id>)
+ *                                        side; 400 bad_images / images_too_large; an agent:<id> gets
+ *                                        them only if its initialize says it takes them, else its
+ *                                        turn ends failed bad_images before anything is sent to it)
  *                                        → 202 {ok, conversation, turn, answer_key}: the turn runs detached
  *                                        (assistant/turns.ts); 400/404/409/429 with a code. tab:
  *                                        an app tab's id, 'auto' for the only connected one, or
@@ -90,6 +94,16 @@
  *   POST /api/assistant/relay/gate      {link, gate, allow} → {ok}: the tab that shows a question
  *                                        answers it through its live link; 409 no_channel; 403
  *                                        not_shown (not sent on this link, or another tab's); 409 {already}
+ *   GET  /api/assistant/relay/attachment  ?call=rc-…&id=att-…, the call's link in x-magnusim-link: a
+ *                                        file attached in the conversation of the workspace call the
+ *                                        page runs, while it runs (the frame's assistant.attachment):
+ *                                        its bytes as application/octet-stream (never its own type: an
+ *                                        SVG may carry a script), nosniff, no-store, CSP default-src
+ *                                        'none', Content-Disposition attachment, X-File-Name
+ *                                        (URI-encoded), X-Sha256. 400 bad_request; 409 no_channel; 409
+ *                                        not_allowed (that call is not running on this link); 403
+ *                                        not_allowed (a core call); 404 not_found (an MCP call, or no
+ *                                        such file in that conversation: another's, unbound or gone)
  *   GET  /api/assistant/mcp             other apps (MCP): {ok, clients, running, reason, port,
  *                                        bridge:{command, args}, snippet, connections:[{id, kind,
  *                                        name, since, calls}]} (never the token; the MCP connection
@@ -155,7 +169,7 @@ import { defaultHostTools } from './assistant/host-tools.ts';
 import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, IMAGE_GONE_TEXT, WINDOW_LOST_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
-import { attachmentStore, type AttachmentStore } from './assistant/attachments.ts';
+import { attachmentStore, isAttachmentId, kindOfFormat, NO_SUCH_ATTACHMENT_TEXT, type AttachmentStore } from './assistant/attachments.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 import { turnChannelsOpen } from './assistant/turn-channel.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
@@ -950,7 +964,7 @@ function registerAttachmentRoutes(router: Router, relay: Relay, files: () => Att
           return;
         }
         const m = r.meta;
-        ctx.sendJson(200, { ok: true, attachment_id: m.id, name: m.name, bytes: m.bytes, kind: 'geometry', format: m.format });
+        ctx.sendJson(200, { ok: true, attachment_id: m.id, name: m.name, bytes: m.bytes, kind: kindOfFormat(m.format), format: m.format });
       },
       { raw: true },
     ),
@@ -1108,8 +1122,53 @@ async function startMcpIfUsed(): Promise<void> {
 }
 
 /** The page relay's routes and its event-hub channel kind (assistant/relay.ts does the work). */
-function registerRelayRoutes(router: Router, relay: Relay): void {
+function registerRelayRoutes(router: Router, relay: Relay, files: () => AttachmentStore): void {
   registerChannelKind('assistant', (params, send, done, meta) => relay.open(params, send, done, meta));
+
+  router.get(
+    '/api/assistant/relay/attachment',
+    local(async (ctx) => {
+      const q = ctx.url.searchParams;
+      const id = q.get('id');
+      if (!isAttachmentId(id)) {
+        ctx.sendJson(400, { ok: false, code: 'bad_request', error: 'id is an attachment id (att-…).' });
+        return;
+      }
+      const r = relay.attachmentCall(ctx.req.headers['x-magnusim-link'], q.get('call'));
+      if (!('conversation' in r)) {
+        ctx.sendJson(r.status, r.body);
+        return;
+      }
+      // Only the call's own conversation's, as import_file's rule.
+      const opened = await files().open(id, r.conversation);
+      if (!opened) {
+        ctx.sendJson(404, { ok: false, code: 'not_found', error: NO_SUCH_ATTACHMENT_TEXT });
+        return;
+      }
+      // Bytes, whatever they are: never sniffed, cached, rendered or able to load anything.
+      const res = ctx.res;
+      // The page went while the file opened (its 'close' came before a listener could hear it):
+      // let the file go now, or Windows keeps it open and the sweep cannot remove it.
+      if (res.destroyed || res.closed || ctx.req.destroyed) {
+        opened.stream.destroy();
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(opened.bytes),
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': "default-src 'none'",
+        'Content-Disposition': 'attachment',
+        'X-File-Name': encodeURIComponent(opened.name),
+        'X-Sha256': opened.sha256,
+      });
+      const stream = opened.stream;
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+    }),
+  );
 
   router.post(
     '/api/assistant/relay/tools',
@@ -1303,7 +1362,7 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
 
   registerTurnRoutes(router, turns);
   registerAttachmentRoutes(router, relay, files);
-  registerRelayRoutes(router, relay);
+  registerRelayRoutes(router, relay, files);
   registerMcpRoutes(router);
   registerAgentRoutes(router, turns);
 

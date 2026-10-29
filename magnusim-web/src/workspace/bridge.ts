@@ -234,6 +234,10 @@ interface InvokeRun {
   done(out: AssistantCallOutcome): void;
   /** End it now with this code (the page is told `assistantAbort`). */
   cancel(code: string, message: string): void;
+  /** Reads a file attached in the call's conversation (the caller's AssistantInvoke.attachment); null: the caller reads none. */
+  attachment: ((id: string, signal: AbortSignal) => Promise<AssistantAttachmentRead>) | null;
+  /** Aborted as the call ends: its attachment reads stop. */
+  reads: AbortController;
 }
 
 /**
@@ -417,7 +421,28 @@ export interface AssistantInvoke {
    * call holds this bridge's stall window open; a caller with a window of its own holds it too.
    */
   onAlive?(): void;
+  /**
+   * Reads a file attached in the conversation of the call's turn, for the page's
+   * assistant.attachment while the call runs (`signal` aborts as it ends). A refusal throws an
+   * error whose `code` says why (not_found, not_allowed, bad_request; anything else reads failed).
+   * Absent: the page can read none (a core call, a caller with no conversation).
+   */
+  attachment?(id: string, signal: AbortSignal): Promise<AssistantAttachmentRead>;
 }
+
+/** An attached file as a call's caller read it (AssistantInvoke.attachment). */
+export interface AssistantAttachmentRead {
+  blob: Blob;
+  /** The name the person's file had. */
+  fileName: string;
+  /** Its SHA-256, as hex ('' when the server gave none). */
+  sha256: string;
+}
+
+/** An attachment's id, as the server makes them. */
+const ATTACHMENT_ID = /^att-[0-9a-f]{16}$/;
+/** The codes a refused attachment read keeps; any other reads failed. */
+const ATTACHMENT_CODES: ReadonlySet<string> = new Set(['not_found', 'not_allowed', 'bad_request']);
 
 export class BridgeError extends Error {
   code: string;
@@ -1436,6 +1461,9 @@ export class WorkspaceCalls {
         inv.done(await assistantCallOutcome(params));
         return { ok: true };
       }
+      // Not in NOT_HOOK_WORK: the read is the running call's own work, so its stall window waits for it.
+      case 'assistant.attachment':
+        return this.readAttachment(params);
       case 'assistant.stop':
         return this.stopAssistantTurn(params.turn);
       // Undo from the app's Assistant panel (1.9, unreleased): the page's offers and its answers.
@@ -1460,6 +1488,34 @@ export class WorkspaceCalls {
       default:
         throw notAllowed(method ? JSON.stringify(method) : 'an unnamed call');
     }
+  }
+
+  /**
+   * assistant.attachment {call, id} (1.9, unreleased): a file attached in the conversation of the
+   * running tool call's turn, for that call only (`call` is its `ai-<n>`) and only while it runs,
+   * as {blob, fileName, size, sha256}. not_allowed for any other call, one that ended (a read
+   * still going when it ends stops), or a call whose caller reads no attachment; bad_request for
+   * an id that is not one; not_found when the conversation has no such file.
+   */
+  private async readAttachment(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const inv = this.invoke;
+    if (!inv || params.call !== inv.id) throw notAllowed('an attachment read outside its running tool call');
+    const id = params.id;
+    if (typeof id !== 'string' || !ATTACHMENT_ID.test(id)) throw new BridgeError('id is an attachment id ("att-" and 16 hex digits).', 'bad_request');
+    if (!inv.attachment) throw notAllowed('an attachment read in this call (no conversation reaches it)');
+    const signal = inv.reads.signal;
+    const ended = () => new BridgeError('the tool call ended before the file was read', 'not_allowed');
+    let a: AssistantAttachmentRead;
+    try {
+      a = await inv.attachment(id, signal);
+    } catch (e) {
+      if (signal.aborted) throw ended();
+      const err = (e && typeof e === 'object' ? e : {}) as { code?: unknown; message?: unknown };
+      const code = typeof err.code === 'string' && ATTACHMENT_CODES.has(err.code) ? err.code : 'failed';
+      throw new BridgeError(cleanDirtyMessage(err.message) || 'The file could not be read.', code);
+    }
+    if (signal.aborted) throw ended();
+    return { blob: a.blob, fileName: a.fileName, size: a.blob.size, sha256: a.sha256 };
   }
 
   /**
@@ -2583,7 +2639,9 @@ export class WorkspaceBridge {
    * is in flight the caller hears `onAlive` (as it starts and ends, and every ASSISTANT_ALIVE_MS).
    * Aborting `signal` sends `assistantAbort` and waits ASSISTANT_ABORT_WAIT_MS for the page's
    * result (a result that came means it finished), else ends `aborted`. A call that ran ends as
-   * `stalled`, `leaving` or `closed` saying it may or may not have finished.
+   * `stalled`, `leaving` or `closed` saying it may or may not have finished. While it runs the
+   * page may read files attached in its conversation through `req.attachment`
+   * (assistant.attachment), each read a call in flight; the reads stop when it ends.
    */
   invokeTool(req: AssistantInvoke): Promise<AssistantCallOutcome> {
     const refuse = (code: string, message: string) => Promise.resolve<AssistantCallOutcome>({ ok: false, code, message });
@@ -2618,6 +2676,7 @@ export class WorkspaceBridge {
         clearTimeout(stopTimer);
         clearTimeout(aliveTimer);
         req.signal.removeEventListener('abort', onAbort);
+        inv.reads.abort();
         this.calls.endInvoke(inv.id);
         resolve(out);
       };
@@ -2659,6 +2718,7 @@ export class WorkspaceBridge {
         tell('assistantAbort', { call: inv.id });
         stopTimer = setTimeout(() => end(stopped()), ASSISTANT_ABORT_WAIT_MS);
       };
+      const readAttachment = req.attachment;
       const inv = this.calls.beginInvoke({
         activity: (a) => {
           if (settled) return;
@@ -2683,6 +2743,8 @@ export class WorkspaceBridge {
           tell('assistantAbort', { call: inv.id });
           end(stopping ? stopped() : { ok: false, code, message });
         },
+        attachment: readAttachment ? (id, signal) => readAttachment.call(req, id, signal) : null,
+        reads: new AbortController(),
       });
       req.signal.addEventListener('abort', onAbort);
       if (!tell('assistantInvoke', { call: inv.id, turn: String(req.turn ?? ''), tool: tool.name, input: req.input })) {

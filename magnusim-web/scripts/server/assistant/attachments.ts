@@ -1,19 +1,22 @@
 /**
- * The person's file attachments (core host tools spec 13, C9): geometry files dropped on the
- * dock, kept on this PC until the AI imports them by attachment_id.
+ * The person's file attachments (core host tools spec 13, C9): geometry files and drawings
+ * (SVG, DXF) dropped on the dock, kept on this PC until the AI uses them by attachment_id.
  *
  *   <assistant home>/attachments/<id>/file        the bytes, as they came
  *   <assistant home>/attachments/<id>/meta.json   {name, bytes, sha256, format, link_tab,
  *                                                 conversation, created_at, pid}
  *
  * - receive(): POST /api/assistant/attachments streams the request body here (never through
- *   readJsonBody): at most ATTACHMENT_LIMITS.bytes, a geometry extension, and first bytes that
- *   say the same format (sniffGeometry). The id is `att-<16 hex>`.
+ *   readJsonBody): a geometry or drawing extension, at most ATTACHMENT_LIMITS.bytes (a drawing:
+ *   drawingBytes), and first bytes that say the same format (sniffGeometry, sniffDrawing). The
+ *   id is `att-<16 hex>`. An SVG may carry a script, so the bytes go back to a browser only as
+ *   application/octet-stream, never as what they are: GET /api/assistant/relay/attachment, to
+ *   a workspace page's tool call of the conversation, is the one route that serves them.
  * - A turn's start checks its `attachments` (check(): each kept, from the tab that starts the
  *   turn, unbound or bound to its conversation) and binds them to its conversation (bind(), in
  *   the start's synchronous step).
- * - open(id, conversation): the stored file as a stream, for import_file; null for an id that
- *   is not kept or is another conversation's (the tool answers not_found).
+ * - open(id, conversation): the stored file as a stream, for import_file and that route; null for
+ *   an id that is not kept or is another conversation's (both answer not_found).
  * - Lifetime: a conversation's attachments go when it is forgotten or expires
  *   (dropConversation). sweep() takes what nothing can use any more: anything older than 24 h;
  *   another Magnusim's that ended (its pid gone); this process's bound to a conversation no
@@ -38,6 +41,8 @@ import { cleanText } from './sanitize.ts';
 export const ATTACHMENT_LIMITS = Object.freeze({
   /** One file (500 MB). */
   bytes: 500 * 1024 * 1024,
+  /** One drawing (20 MB). */
+  drawingBytes: 20 * 1024 * 1024,
   /** Files per message. */
   perMessage: 4,
   /** Anything older goes at the next sweep. */
@@ -46,11 +51,15 @@ export const ATTACHMENT_LIMITS = Object.freeze({
   unboundMs: 60 * 60 * 1000,
   /** The sweep's period. */
   sweepEveryMs: 6 * 60 * 60 * 1000,
-  /** How much of the start sniffGeometry reads. */
+  /** How much of the start sniffGeometry and sniffDrawing read. */
   headBytes: 4096,
 });
 
 export type GeometryFormat = 'step' | 'iges' | 'brep' | 'stl' | 'obj' | 'ply';
+export type DrawingFormat = 'svg' | 'dxf';
+export type AttachmentFormat = GeometryFormat | DrawingFormat;
+/** What the file is to the AI: a geometry file import_file adds, or a drawing a workspace imports. */
+export type AttachmentKind = 'geometry' | 'drawing';
 
 /** Each extension the dock and the route take, and the format its bytes must be. */
 export const GEOMETRY_EXTENSIONS: Readonly<Record<string, GeometryFormat>> = Object.freeze({
@@ -65,13 +74,22 @@ export const GEOMETRY_EXTENSIONS: Readonly<Record<string, GeometryFormat>> = Obj
   '.ply': 'ply',
 });
 
-const FORMAT_LABEL: Readonly<Record<GeometryFormat, string>> = Object.freeze({ step: 'STEP', iges: 'IGES', brep: 'BREP', stl: 'STL', obj: 'OBJ', ply: 'PLY' });
+/** The drawings' extensions, the same way. */
+export const DRAWING_EXTENSIONS: Readonly<Record<string, DrawingFormat>> = Object.freeze({
+  '.svg': 'svg',
+  '.dxf': 'dxf',
+});
 
-export const ONLY_FILES_TEXT = 'Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.';
+const FORMAT_LABEL: Readonly<Record<AttachmentFormat, string>> = Object.freeze({ step: 'STEP', iges: 'IGES', brep: 'BREP', stl: 'STL', obj: 'OBJ', ply: 'PLY', svg: 'SVG', dxf: 'DXF' });
+
+export const ONLY_FILES_TEXT = 'Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.';
 export const tooLargeText = (name: string): string => `${name} is larger than 500 MB. Import it with + Add geometry.`;
-export const notFormatText = (name: string, f: GeometryFormat): string => `${name} doesn't look like a ${FORMAT_LABEL[f]} file.`;
+export const drawingTooLargeText = (name: string): string => `${name} is larger than 20 MB, the limit for a drawing.`;
+export const notFormatText = (name: string, f: AttachmentFormat): string => `${name} doesn't look like ${f === 'svg' ? 'an' : 'a'} ${FORMAT_LABEL[f]} file.`;
 export const emptyFileText = (name: string): string => `${name} is empty.`;
 export const ATTACHMENT_GONE_TEXT = 'An attached file is no longer kept on this PC. Remove it and attach it again.';
+/** open() found nothing for the conversation: import_file's and the page's read's not_found. */
+export const NO_SUCH_ATTACHMENT_TEXT = 'No such attached file in this conversation.';
 export const ATTACHMENTS_NEED_WINDOW_TEXT = 'Files are attached in the Assistant panel of a Magnusim window, and sent from that window.';
 export const tooManyFilesText = (n: number): string => `At most ${n} files per message.`;
 
@@ -86,7 +104,7 @@ export interface AttachmentMeta {
   name: string;
   bytes: number;
   sha256: string;
-  format: GeometryFormat;
+  format: AttachmentFormat;
   /** The app tab whose live relay link sent it: only a turn started from that tab may use it. */
   link_tab: string;
   /** The conversation it is bound to (its first turn's), or null until then. */
@@ -101,6 +119,7 @@ export interface AttachmentRef {
   id: string;
   name: string;
   bytes: number;
+  kind: AttachmentKind;
 }
 
 /** An attachment opened for import_file: its facts and a stream of its bytes (the caller reads or destroys it). */
@@ -109,7 +128,7 @@ export interface OpenedAttachment {
   name: string;
   bytes: number;
   sha256: string;
-  format: GeometryFormat;
+  format: AttachmentFormat;
   stream: ReadStream;
 }
 
@@ -133,14 +152,27 @@ export function cleanFileName(raw: unknown): string {
 }
 
 /** The extension's format (".STEP" too), or null for any other. */
-export function formatOfName(name: string): GeometryFormat | null {
+export function formatOfName(name: string): AttachmentFormat | null {
   const m = /(\.[A-Za-z]{3,4})$/.exec(name);
-  return m ? (GEOMETRY_EXTENSIONS[m[1].toLowerCase()] ?? null) : null;
+  if (!m) return null;
+  const ext = m[1].toLowerCase();
+  return GEOMETRY_EXTENSIONS[ext] ?? DRAWING_EXTENSIONS[ext] ?? null;
 }
 
-/** The model's line for one file (spec 13.2). */
+/** A drawing for SVG and DXF, else a geometry file (the route's `kind`, the model's line). */
+export function kindOfFormat(f: AttachmentFormat): AttachmentKind {
+  return Object.values(DRAWING_EXTENSIONS).includes(f as DrawingFormat) ? 'drawing' : 'geometry';
+}
+
+function isFormat(v: unknown): v is AttachmentFormat {
+  return typeof v === 'string' && (Object.values(GEOMETRY_EXTENSIONS) as string[]).concat(Object.values(DRAWING_EXTENSIONS)).includes(v);
+}
+
+const LINE_OPENING: Readonly<Record<AttachmentKind, string>> = Object.freeze({ geometry: 'Attached geometry file', drawing: 'Attached drawing' });
+
+/** The model's line for one file (spec 13.2), saying what kind of file it is (no kind: a geometry file). */
 export function attachmentLine(a: AttachmentRef): string {
-  return `[Attached file: "${cleanFileName(a.name)}", ${sizeText(a.bytes)}, attachment_id ${a.id}]`;
+  return `[${LINE_OPENING[a.kind] ?? LINE_OPENING.geometry}: "${cleanFileName(a.name)}", ${sizeText(a.bytes)}, attachment_id ${a.id}]`;
 }
 
 /** The lines for a turn's files, one per file; '' with none. */
@@ -171,6 +203,57 @@ export function sniffGeometry(head: Buffer, total: number): GeometryFormat | nul
     }
   }
   return null;
+}
+
+const BINARY_DXF = Buffer.from('AutoCAD Binary DXF\r\n\x1a\0', 'latin1');
+
+/** The head as text: UTF-16 by its BOM, else its bytes as latin1 (a UTF-8 BOM dropped). */
+function headText(head: Buffer): string {
+  if (head[0] === 0xff && head[1] === 0xfe) return head.subarray(2).toString('utf16le');
+  // Big-endian: swapped to little-endian (swap16 wants an even length; a cut head loses a byte).
+  if (head[0] === 0xfe && head[1] === 0xff) return Buffer.from(head.subarray(2, head.length - (head.length % 2))).swap16().toString('utf16le');
+  const text = head.toString('latin1');
+  return text.startsWith('ï»¿') ? text.slice(3) : text;
+}
+
+/**
+ * The drawing format a file's first bytes say (`head`: at least its first 4 KB, or all of it).
+ * SVG: an <svg> root element after the XML prolog (its declaration, processing instructions,
+ * comments, a DOCTYPE). DXF: ASCII, group code 0 then SECTION after blank lines and 999
+ * comments; or the binary DXF sentinel. null: neither.
+ */
+export function sniffDrawing(head: Buffer): DrawingFormat | null {
+  if (head.length >= BINARY_DXF.length && head.subarray(0, BINARY_DXF.length).equals(BINARY_DXF)) return 'dxf';
+  const text = headText(head);
+  let s = text;
+  for (;;) {
+    s = s.replace(/^\s+/, '');
+    if (s.startsWith('<?')) {
+      const end = s.indexOf('?>', 2);
+      if (end < 0) return null;
+      s = s.slice(end + 2);
+    } else if (s.startsWith('<!--')) {
+      const end = s.indexOf('-->', 4);
+      if (end < 0) return null;
+      s = s.slice(end + 3);
+    } else if (/^<!DOCTYPE\s/.test(s)) {
+      const close = s.indexOf('>');
+      if (close < 0) return null;
+      const open = s.indexOf('[');
+      if (open >= 0 && open < close) {
+        // Its internal subset may hold a '>' of its own: the DOCTYPE ends at "]>".
+        const m = /\]\s*>/.exec(s.slice(open));
+        if (!m) return null;
+        s = s.slice(open + m.index + m[0].length);
+      } else s = s.slice(close + 1);
+    } else break;
+  }
+  if (/^<([A-Za-z_][\w.-]*:)?svg[\s>/]/.test(s)) return 'svg';
+  const lines = text.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i += 1;
+  while (i + 1 < lines.length && lines[i].trim() === '999') i += 2;
+  return i + 1 < lines.length && lines[i].trim() === '0' && lines[i + 1].trim() === 'SECTION' ? 'dxf' : null;
 }
 
 // ---------------------------------------------------------------- the store
@@ -213,7 +296,7 @@ function pidAlive(pid: number): boolean {
 function metaOf(v: unknown, id: string): AttachmentMeta | null {
   if (!v || typeof v !== 'object') return null;
   const m = v as Record<string, unknown>;
-  const format = typeof m.format === 'string' && Object.values(GEOMETRY_EXTENSIONS).includes(m.format as GeometryFormat) ? (m.format as GeometryFormat) : null;
+  const format = isFormat(m.format) ? m.format : null;
   if (!format || typeof m.name !== 'string' || typeof m.bytes !== 'number' || typeof m.created_at !== 'string') return null;
   return {
     id,
@@ -271,10 +354,13 @@ export class AttachmentStore {
     if (!name) return refusal(400, 'bad_name', 'Send the file name as ?name=<file name>.');
     const expected = formatOfName(name);
     if (!expected) return refusal(400, 'bad_type', ONLY_FILES_TEXT);
+    const drawing = kindOfFormat(expected) === 'drawing';
+    const max = drawing ? Math.min(this.maxBytes, ATTACHMENT_LIMITS.drawingBytes) : this.maxBytes;
+    const largeText = drawing ? drawingTooLargeText(name) : tooLargeText(name);
     if (o.declared !== undefined && o.declared !== '') {
       const n = Number(o.declared);
       if (!Number.isFinite(n) || n < 0) return refusal(400, 'bad_request', 'Invalid Content-Length.');
-      if (n > this.maxBytes) return refusal(413, 'too_large', tooLargeText(name));
+      if (n > max) return refusal(413, 'too_large', largeText);
     }
     let id = `att-${randomBytes(8).toString('hex')}`;
     while (this.index.has(id)) id = `att-${randomBytes(8).toString('hex')}`;
@@ -284,7 +370,6 @@ export class AttachmentStore {
     const heads: Buffer[] = [];
     let headLen = 0;
     let total = 0;
-    const max = this.maxBytes;
     const tooLarge = Object.assign(new Error('too large'), { code: 'too_large' });
     const meter = new Transform({
       transform(chunk: Buffer, _enc, done) {
@@ -309,7 +394,7 @@ export class AttachmentStore {
       await pipeline(src, meter, createWriteStream(part, { flags: 'wx', mode: 0o600 }));
     } catch (err) {
       await removeDir(folder);
-      if (err === tooLarge) return refusal(413, 'too_large', tooLargeText(name));
+      if (err === tooLarge) return refusal(413, 'too_large', largeText);
       if (codeOf(err) === 'ENOSPC') return refusal(507, 'disk_full', `There is no room on this PC's disk for ${name}.`);
       throw err;
     }
@@ -317,7 +402,8 @@ export class AttachmentStore {
       await removeDir(folder);
       return refusal(400, 'empty_file', emptyFileText(name));
     }
-    const format = sniffGeometry(Buffer.concat(heads), total);
+    const head = Buffer.concat(heads);
+    const format = drawing ? sniffDrawing(head) : sniffGeometry(head, total);
     if (format !== expected) {
       await removeDir(folder);
       return refusal(400, 'bad_type', notFormatText(name, expected));
@@ -368,7 +454,7 @@ export class AttachmentStore {
       const m = this.index.get(id);
       // Not kept, another window's, or another conversation's: the same answer for each.
       if (!m || m.link_tab !== o.tab || (m.conversation !== null && m.conversation !== o.conversation)) return refusal(409, 'attachment_gone', ATTACHMENT_GONE_TEXT);
-      refs.push({ id: m.id, name: m.name, bytes: m.bytes });
+      refs.push({ id: m.id, name: m.name, bytes: m.bytes, kind: kindOfFormat(m.format) });
     }
     return { ok: true, refs };
   }
@@ -384,8 +470,9 @@ export class AttachmentStore {
   }
 
   /**
-   * The stored file of `id` as a stream, for the conversation's import (spec 13.2): null when it
-   * is not kept, or not bound to `conversation` (an unbound one isn't any conversation's yet).
+   * The stored file of `id` as a stream, for the conversation's import (spec 13.2) or a workspace
+   * tool call's read: null when it is not kept, or not bound to `conversation` (an unbound one
+   * isn't any conversation's yet). Its bytes reach a browser only as application/octet-stream.
    */
   async open(id: unknown, conversation: string | null): Promise<OpenedAttachment | null> {
     const m = this.get(id);

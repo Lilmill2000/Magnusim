@@ -51,6 +51,9 @@
  *   /relay/gate     {link, gate, allow} → {ok}: the person's answer to a question this link
  *                   was sent (the tab that shows it). 403 not_shown (never sent on this link,
  *                   or not this tab's), 409 {already}, 400.
+ * And GET /relay/attachment ?call&id, the link in x-magnusim-link: a file attached in the
+ *                   conversation of the workspace call running on that link (attachmentCall says
+ *                   which conversation, or why none; the route reads the file).
  *
  * - Registrations go into the tool registry (one per tab), so a turn bound to the tab is
  *   offered only that tab's tools. Each accepted one has its own id: a tool of an earlier
@@ -100,6 +103,8 @@ import { onPluginEpochBump } from '../../foam-runner.js';
 import { liveRegistryLoaded, mesherEntries, pluginLoaded as livePluginLoaded } from '../../registry-defaults.js';
 import type { ChannelMeta, ChannelOpened, ChannelSend } from '../event-hub.ts';
 import { assistantAccess, REMOTE_MESSAGE } from './access.ts';
+import { NO_SUCH_ATTACHMENT_TEXT } from './attachments.ts';
+import { MCP_NO_ATTACHMENT } from './host/import-file.ts';
 import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
@@ -303,6 +308,9 @@ interface Pending {
   pluginName: string;
   epoch: string;
   workspace: string;
+  /** The call's turn (`mcp:<connection>` for an MCP call) and its conversation (null: none, so no attachments). */
+  turn: string | null;
+  conversation: string | null;
   progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   resolve(o: ToolOutcome): void;
   acked: boolean;
@@ -368,6 +376,8 @@ export interface InvokeCall {
   /** The runner stopped waiting for the call (runner.ts): the tab is free at once. */
   released?: AbortSignal;
   turn: string | null;
+  /** The turn's conversation: its attachments are what the page may read while the call runs (none when absent or null). */
+  conversation?: string | null;
   progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
 }
 
@@ -944,6 +954,8 @@ export class Relay {
         pluginName: meta.pluginName,
         epoch: meta.epoch,
         workspace: ws,
+        turn: c.turn,
+        conversation: typeof c.conversation === 'string' && c.conversation ? c.conversation : null,
         progress: c.progress,
         resolve,
         acked: false,
@@ -1050,6 +1062,27 @@ export class Relay {
     }
     this.finish(p, pageOutcome(body, p.slot));
     return ok();
+  }
+
+  /**
+   * GET /api/assistant/relay/attachment: the conversation whose attached files the page's running
+   * workspace call `call` may read (the frame's assistant.attachment), asked on the link the call
+   * was sent on. 400 for a call that is no id; 409 no_channel without a live link; 409 not_allowed
+   * when that call is not running there (it ended, or it is another's); 403 not_allowed for a core
+   * call (the app's own page reads none); 404 not_found for an MCP call or a turn with no
+   * conversation (neither has attachments).
+   */
+  attachmentCall(link: unknown, call: unknown): Answer | { conversation: string } {
+    if (typeof call !== 'string' || !CALL.test(call)) return refuse(400, 'bad_request', 'call is the running call it reads for.');
+    const rec = this.closed ? null : this.liveLink(link);
+    if (!rec) return refuse(409, 'no_channel', NO_CHANNEL_TEXT);
+    this.heard(rec);
+    const p = this.pendingFor(rec, call);
+    if (!p) return refuse(409, 'not_allowed', 'That tool call is not running in this page: a file is read only while its call runs.');
+    if (p.slot !== 'workspace') return refuse(403, 'not_allowed', "Only a workspace tool's call reads an attached file.");
+    if (typeof p.turn === 'string' && p.turn.startsWith('mcp:')) return refuse(404, 'not_found', MCP_NO_ATTACHMENT);
+    if (!p.conversation) return refuse(404, 'not_found', NO_SUCH_ATTACHMENT_TEXT);
+    return { conversation: p.conversation };
   }
 
   // ------------------------------------------------------------ turns and gates

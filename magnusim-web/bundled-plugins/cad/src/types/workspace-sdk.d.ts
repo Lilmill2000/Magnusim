@@ -588,6 +588,19 @@ declare module '@magnusim/workspace' {
        * while you wait, every few seconds.
        */
       progress(fraction: number | null, label?: string, opts?: AssistantProgressOptions): void;
+      /**
+       * Read a file the person attached in the Assistant panel, in this turn's conversation, by the
+       * attachment_id the model was given for it (unreleased, 1.9; absent on an older host, so check
+       * that it exists). Only while this call runs: a read keeps the call alive like any call of the
+       * page, and one still going when the call ends stops. Resolves a File with the attachment's name
+       * and bytes, typed application/octet-stream whatever it holds (never image/svg+xml: an SVG may
+       * carry a script, so read its text rather than showing the file). A drawing (SVG, DXF) is at
+       * most 20 MiB, a geometry file at most 500 MiB. Rejects with `.code` "not_found" (the
+       * conversation has no such file, or the call came from another app on this PC over MCP, which
+       * has no attachments), "not_allowed" (the call ended, or a host without it), "bad_request" (an
+       * id that is not att- and 16 hex digits) or "failed" (the read did not complete: try again).
+       */
+      readAttachment?(id: string): Promise<File>;
   }
   /** What else a call's progress says (unreleased, 1.9). */
   export interface AssistantProgressOptions {

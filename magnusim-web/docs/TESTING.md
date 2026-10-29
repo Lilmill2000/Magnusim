@@ -339,7 +339,7 @@ No test reaches a real model provider or this PC's real Assistant files.
   whole chain in a browser: the fake → the server's turn loop → the page relay on
   the tab's event stream → the workspace bridge → the frame of the test plugin
   `ai-demo` (`python/tests/fixtures/assistant-plugins`) → back.
-  - The plugin's page keeps a counter and offers nine tools: read, add (its result
+  - The plugin's page keeps a counter and offers ten tools: read, add (its result
     carries a `summary` for the turn's log), a slow add (progress every 200 ms until
     `window.__release()` in its frame, or Stop), reset (destructive, with a `confirm`
     note that its question shows in place of "can't be undone"), one whose risk the
@@ -349,7 +349,9 @@ No test reaches a real model provider or this PC's real Assistant files.
     too), and `fail_hint`, which always fails with a `hint` and a `detail` (they reach
     the model's next request and the terminal client), and `label`, whose string, list
     and boolean fields are all required (a local model's call that leaves them out
-    gets `""`, `[]` and `false`). It shows `#counter`, `#aborted`, `#label` and
+    gets `""`, `[]` and `false`), and `attachment_size`, which reads a file attached in
+    the dock with `call.readAttachment` and answers its name and size
+    (`e2e/assistant-dock.spec.js`). It shows `#counter`, `#aborted`, `#label` and
     `#ai-available`, and registers again once shown when its tab was hidden at load.
     It hears the turns bound to its tab (`#turn-state` reads "running: <title>", then
     how it ended), and its `#stop` button stops the turn through the bridge.

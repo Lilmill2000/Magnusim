@@ -75,6 +75,12 @@ export interface ProviderReady {
   /** 'usd': counted by the $ meter and limits; 'free': not priced (a local server). */
   billing: 'usd' | 'free' | 'agent_account';
   detail: string;
+  /**
+   * A coding agent's row only: whether it takes the person's pictures, as its last start said
+   * (else as its catalogue entry says; null: not known until it starts). A turn with pictures on
+   * one that turns out to take none ends bad_images before anything is sent to it.
+   */
+  images?: boolean | null;
 }
 
 /** Whether a declined request may be retried on an older model: `true`, a non-empty list, or `{on: true, targets}`. */
@@ -319,8 +325,8 @@ export interface TurnSummary {
   used?: TurnUsed;
   /** The person's own pictures sent with the request ("p1".."p4"; [] without any). */
   prompt_images?: ImageRef[];
-  /** The files the person attached to the request (core host tools spec 13.2; absent from an older server). */
-  attachments?: Array<{ id: string; name: string; bytes: number }>;
+  /** The files the person attached to the request (core host tools spec 13.2; absent from an older server; kind absent before drawings). */
+  attachments?: Array<{ id: string; name: string; bytes: number; kind?: 'geometry' | 'drawing' }>;
   /** Its log and pictures are no longer kept (past the server's 200 newest ended turns): this summary is all there is. */
   log_dropped?: boolean;
 }

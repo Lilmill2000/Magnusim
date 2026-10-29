@@ -947,6 +947,12 @@ export interface AgentLast {
   at: string;
 }
 
+/** What an agent's last initialize said of pictures (promptCapabilities.image), and of which program (memory only). */
+export interface AgentImagesWord {
+  images: boolean;
+  fingerprint: string | null;
+}
+
 interface AgentsCache {
   result: Discovery | null;
   /** The discovery running now, and whether it asks every version again. */
@@ -963,6 +969,7 @@ interface AgentsCache {
   last: Map<string, AgentLast>;
   signIn: Map<string, Record<string, unknown>>;
   word: Map<string, AgentWord>;
+  images: Map<string, AgentImagesWord>;
 }
 
 interface AgentsGlobal {
@@ -987,7 +994,7 @@ function cacheOf(): AgentsCache {
   const g = globals();
   let c = g.byState.get(key);
   if (!c) {
-    c = { result: null, running: null, queued: null, gen: 0, versions: new Map(), last: new Map(), signIn: new Map(), word: new Map() };
+    c = { result: null, running: null, queued: null, gen: 0, versions: new Map(), last: new Map(), signIn: new Map(), word: new Map(), images: new Map() };
     g.byState.set(key, c);
   }
   return c;
@@ -1006,6 +1013,26 @@ function hooks(): AgentRunHooks {
 export function rememberAgentLast(id: string, last: AgentLast | null): void {
   if (last) cacheOf().last.set(id, last);
   else cacheOf().last.delete(id);
+}
+
+/**
+ * Whether the agent said at its last initialize (a turn's start, a Test or a connect) that it
+ * takes pictures, for the program it said it of (`fingerprint`); null forgets. The status row
+ * shows it; a turn goes by its own session's initialize, never by this.
+ */
+export function rememberAgentImages(id: string, fingerprint: string | null, images: boolean | null): void {
+  if (images === null) cacheOf().images.delete(id);
+  else cacheOf().images.set(id, { images, fingerprint });
+}
+
+/**
+ * Whether the agent takes pictures, as far as Magnusim knows before its next start: its last
+ * initialize's word for this very program, else the catalogue's (known.ts `images`), else null.
+ */
+export function agentTakesImages(id: string, fingerprint: string | null): boolean | null {
+  const said = cacheOf().images.get(id);
+  if (said && said.fingerprint === fingerprint) return said.images;
+  return knownAgent(id)?.images ?? null;
 }
 
 /**
@@ -1294,8 +1321,9 @@ function readyLogin(row: AgentRow): SignedIn {
  * and every custom agent of the last discovery (a custom agent not looked up since it was added:
  * not_checked), and the saved default when it is an agent with no row of its own, so Settings
  * names it and says why it can't run (not looked for yet; looked for and not found: a known
- * agent agent_missing, any other id agent_unknown). From the cache only: the status never
- * starts a process.
+ * agent agent_missing, any other id agent_unknown). Each says whether the agent takes pictures
+ * (`images`: agentTakesImages; null not known), which the dock's composer follows. From the
+ * cache only: the status never starts a process.
  */
 export function agentReadyRows(ctx: RowContext): Record<string, Record<string, unknown>> {
   const d = agentsCache();
@@ -1305,7 +1333,7 @@ export function agentReadyRows(ctx: RowContext): Record<string, Record<string, u
     let detail: string;
     if (row && row.ready) detail = [row.key_var ? `Uses ${row.key_var}` : LOGIN_SHORT[readyLogin(row)], row.version].filter(Boolean).join(' · ');
     else detail = NOT_READY_DETAIL[reason ?? ''] ?? 'Not ready';
-    out[`agent:${id}`] = { label: name, kind: 'agent', ready: !!row?.ready, reason, billing: 'agent_account', detail };
+    out[`agent:${id}`] = { label: name, kind: 'agent', ready: !!row?.ready, reason, billing: 'agent_account', detail, images: agentTakesImages(id, row?.fingerprint ?? null) };
   };
   if (d) {
     for (const k of KNOWN_AGENTS) {
@@ -1322,7 +1350,7 @@ export function agentReadyRows(ctx: RowContext): Record<string, Record<string, u
     const id = saved.slice('agent:'.length);
     const k = KNOWN_AGENTS.find((x) => x.id === id);
     const reason = !d ? 'not_checked' : k ? 'agent_missing' : 'agent_unknown';
-    out[saved] = { label: k?.name ?? id, kind: 'agent', ready: false, reason, billing: 'agent_account', detail: NOT_READY_DETAIL[reason] };
+    out[saved] = { label: k?.name ?? id, kind: 'agent', ready: false, reason, billing: 'agent_account', detail: NOT_READY_DETAIL[reason], images: k?.images ?? null };
   }
   return out;
 }
@@ -1425,6 +1453,7 @@ export async function removeCustomAgentRequest(body: Record<string, unknown>): P
   rememberAgentLast(id, null);
   rememberAgentSignIn(id, null);
   rememberAgentWord(id, null);
+  rememberAgentImages(id, null, null);
   // Saved first, so no new turn starts; then a session kept between messages ends too.
   await hooks().stop(id, `${name} was removed in Settings.`);
   alog('info', 'custom agent removed', { agent: id });

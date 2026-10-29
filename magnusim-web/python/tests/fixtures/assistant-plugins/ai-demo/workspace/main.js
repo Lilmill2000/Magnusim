@@ -13,12 +13,14 @@
 // keeps it alive however long that takes) and fail_hint (read: it always fails, with a hint
 // that says how to fix it and a detail the model can act on). label {text, marks, loud}
 // (edit: every field required, with "", [] and false meaning unused; #label shows the input
-// it got). A registration the app could not take yet (not_connected) is made again when the
+// it got). attachment_size {attachment_id} (read: call.readAttachment, then the file's name and
+// size; a refusal fails it with the host's code in its message). A registration the app could not take yet (not_connected) is made again when the
 // page is shown. The page hears the turns bound to its tab (ws.assistant.onTurn) and its Stop
 // button stops the last one (ws.assistant.stop).
 //
 // What the e2e reads: #counter, #slow, #aborted, #ai-available ("yes" or "no") with
-// #ai-reason, #calls (the tools run, in order), #label, and window.__aiCalls;
+// #ai-reason, #calls (the tools run, in order), #label, window.__aiCalls and window.__aiFiles
+// (each file attachment_size read: {name, type, bytes});
 // window.__register() registers again (window.__register({review}) with review rounds from then
 // on: {rounds, prompt}, or null for none; none at first). #turn-state reads "<state>: <title>" for the last turn
 // heard (running, or how it ended: done, stopped, failed, capped, or "ended" when the page did
@@ -44,6 +46,7 @@ const show = () => {
 let counterChanged = () => undefined;
 show();
 window.__aiCalls = [];
+window.__aiFiles = [];
 
 const ws = await connect();
 window.__ws = ws;
@@ -107,6 +110,13 @@ const TOOLS = [
       loud: { type: 'boolean', description: 'The label in capitals (false: as written).' },
     }),
     risk: 'edit',
+  },
+  {
+    name: 'attachment_size',
+    title: 'Measure an attached file',
+    description: 'Read a file the person attached in this conversation and say its name and size in bytes.',
+    inputSchema: obj({ attachment_id: { type: 'string', maxLength: 40, description: 'The attachment_id of the attached file.' } }),
+    risk: 'read',
   },
 ];
 
@@ -214,6 +224,19 @@ async function handle(call) {
       return shown
         ? { text: `The label reads ${shown}.`, data: { label: shown }, summary: `Labelled ${shown}` }
         : { text: 'The label is empty.', data: { label: '' }, summary: 'Cleared the label' };
+    }
+    case 'attachment_size': {
+      if (typeof call.readAttachment !== 'function') throw Object.assign(new Error('This app reads no attached files.'), { code: 'not_ready' });
+      let file;
+      try {
+        file = await call.readAttachment(call.input.attachment_id);
+      } catch (e) {
+        // A page's error keeps only its own codes: the host's goes in the message.
+        throw Object.assign(new Error(`${(e && e.code) || 'failed'}: ${e && e.message}`), { code: 'invalid_input' });
+      }
+      const bytes = (await file.arrayBuffer()).byteLength;
+      window.__aiFiles.push({ name: file.name, type: file.type, bytes });
+      return { text: `${file.name} is ${bytes} bytes.`, data: { name: file.name, bytes }, summary: `${file.name}: ${bytes} bytes` };
     }
     default:
       throw Object.assign(new Error(`No tool named ${call.tool}.`), { code: 'invalid_input' });

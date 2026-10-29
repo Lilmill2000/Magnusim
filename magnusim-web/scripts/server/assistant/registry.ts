@@ -76,6 +76,9 @@ export interface ToolCtx {
   used?: () => TurnUse | null;
 }
 
+/** The turn's conversation as a page's call carries it (host/common.ts conversationOf reads it the same way). */
+const conversationOf = (ctx: ToolCtx): string | null => (typeof ctx.conversation === 'string' ? ctx.conversation : null);
+
 /**
  * A turn's spend so far against its limits in force (the lower of its start's and the live
  * settings'): steps (a coding agent's: its calls), minutes of its active time, dollars (none
@@ -99,6 +102,13 @@ export interface Assessed {
   detail: GateDetail[];
   /** What the card called each job of the call's chain, by job id (the covered call's transcript line names it). */
   labels?: Record<string, string>;
+}
+
+/** A tool's refusal before any question (ToolDef.refuse). */
+export interface ToolRefusal {
+  code: string;
+  message: string;
+  hint?: string;
 }
 
 export interface AssessContext {
@@ -173,6 +183,12 @@ export interface ToolDef {
    * that throws or takes longer than ESCALATE_MAX_MS (runner.ts) counts as destructive.
    */
   escalate?(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null>;
+  /**
+   * A refusal the tool can tell from the input alone, before any question is asked (import_file:
+   * an attached drawing): the call fails with it, unasked and unrun. null lets it go on. One that
+   * throws counts as null (the tool's own run still checks).
+   */
+  refuse?(input: Record<string, unknown>, ctx: ToolCtx): ToolRefusal | null | Promise<ToolRefusal | null>;
   /** Plain-English card title and copy for compute and destructive calls (§14), in place of the generic one. */
   gateText?(input: Record<string, unknown>, a: Assessed | null): { title: string; copy: string; detail?: GateDetail[] };
   /** The project this call reads or writes, for the per-call privacy check (C5). null = no project data. */
@@ -233,6 +249,8 @@ export interface WorkspaceRegistration {
     signal: AbortSignal;
     released?: AbortSignal;
     turn: string | null;
+    /** The turn's conversation (the page may read its attachments while the call runs); null for an MCP call. */
+    conversation: string | null;
     progress(f: number | null, label: string, opts?: ProgressOptions): void;
   }): Promise<ToolOutcome>;
   /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
@@ -645,7 +663,7 @@ export class Registry implements ToolRegistry {
           const message = `The page hosting ${source.workspace} isn't connected.`;
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
+        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
       },
     };
   }
@@ -767,7 +785,7 @@ export class Registry implements ToolRegistry {
           const message = "This window isn't connected.";
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
+        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
       },
       // Raise-only risk per call and its card (C3, §2.1): the core page's own rule, from its newest registration.
       // The runner keeps only an escalation's risk, note and rows: the card's copy goes as its

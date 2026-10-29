@@ -122,8 +122,12 @@ interface Sent {
   path: string;
   method: string;
   body: Record<string, unknown>;
+  /** The request's own headers (lower-case names). */
+  headers: Record<string, string>;
   answered: boolean;
   answer(status: number, body?: unknown): void;
+  /** A file's bytes as the answer (200), with these headers. */
+  answerFile(blob: Blob, headers: Record<string, string>): void;
   /** No answer comes (the connection failed). */
   fail(): void;
 }
@@ -136,6 +140,7 @@ const short = (s: Sent): string => {
   if (p === 'relay/tools') return `tools[${((s.body.tools as Array<{ name: string }>) || []).map((t) => t.name).join(',')}]`;
   if (p === 'relay/progress') return s.body.ack ? 'ack' : 'progress';
   if (p === 'relay/result') return 'result';
+  if (p.startsWith('relay/attachment?')) return 'attachment';
   return p;
 };
 
@@ -249,12 +254,19 @@ beforeEach(() => {
             path: String(input),
             method: init?.method || 'GET',
             body: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {},
+            headers: Object.fromEntries(new Headers(init?.headers).entries()),
             answered: false,
             answer: (status, body = {}) => {
               if (s.answered) throw new Error(`answered twice: ${short(s)}`);
               s.answered = true;
               log.push(`${short(s)} answered`);
               resolve({ status, ok: status >= 200 && status < 300, json: async () => body });
+            },
+            answerFile: (blob, headers) => {
+              if (s.answered) throw new Error(`answered twice: ${short(s)}`);
+              s.answered = true;
+              log.push(`${short(s)} answered`);
+              resolve({ status: 200, ok: true, headers: new Headers(headers), blob: async () => blob, json: async () => ({}) });
             },
             fail: () => {
               s.answered = true;
@@ -370,6 +382,8 @@ describe('the core page (core host tools spec C7, 11.1): every app tab registers
     channel().frame('invoke', { call: 'rc-1', turn: 't-1', tool: 'show', input: { target: 'home' }, timeout_s: 120, slot: 'core' });
     await settle();
     expect(coreCalls.map((c) => [c.tool, c.input])).toEqual([['show', { target: 'home' }]]);
+    // The app's own page reads no attached file.
+    expect(coreCalls[0].attachment).toBeUndefined();
     expect(vi.mocked(invoke)).not.toHaveBeenCalled();
     const result = last('/api/assistant/relay/result');
     expect(result.body).toMatchObject({ link: LINK_B, call: 'rc-1', ok: true, result: { summary: 'Showed Home' } });
@@ -1093,6 +1107,54 @@ describe('tool calls', () => {
     run.end({ ok: false, code: 'aborted', message: 'it was stopped before its page said it finished' });
     await settle();
     expect(take('/api/assistant/relay/result').body).toMatchObject({ link: LINK_A, call: 'call-1', ok: false, error: { code: 'aborted' } });
+  });
+
+  it("the frame's read of an attached file: GET /relay/attachment with the invoke's own link and call (a newer link too), its bytes, name and SHA-256 back; the server's refusal keeps its code (no_channel reads not_allowed); an MCP call is refused at once", async () => {
+    await registered();
+    const ATT = 'att-0123456789abcdef';
+    const reads = () => sent.filter((s) => s.path.startsWith('/api/assistant/relay/attachment'));
+    channel().frame('invoke', { call: 'rc-1-abcdef', turn: 'turn-1', tool: 'add', input: { by: 2 }, timeout_s: 30 });
+    const run = running[0];
+    expect(typeof run.req.attachment).toBe('function');
+    const ctl = new AbortController();
+    const first = run.req.attachment!(ATT, ctl.signal);
+    await settle();
+    const r1 = reads()[0];
+    expect([r1.method, r1.path, r1.headers]).toEqual(['GET', `/api/assistant/relay/attachment?call=rc-1-abcdef&id=${ATT}`, { 'x-magnusim-link': LINK_A }]);
+    const blob = new Blob(['<svg xmlns="http://www.w3.org/2000/svg"/>']);
+    r1.answerFile(blob, { 'Content-Length': String(blob.size), 'X-File-Name': encodeURIComponent('plaque été.svg'), 'X-Sha256': 'ab12' });
+    await expect(first).resolves.toEqual({ blob, fileName: 'plaque été.svg', sha256: 'ab12' });
+    // The server's refusal, with its code and words; a link that went (the call with it) reads not_allowed.
+    const gone = run.req.attachment!(ATT, ctl.signal);
+    await settle();
+    reads()[1].answer(404, { ok: false, code: 'not_found', error: 'No such attached file in this conversation.' });
+    await expect(gone).rejects.toMatchObject({ code: 'not_found', message: 'No such attached file in this conversation.' });
+    const lost = run.req.attachment!(ATT, ctl.signal);
+    await settle();
+    reads()[2].answer(409, { ok: false, code: 'no_channel', error: 'This page’s channel is not open.' });
+    await expect(lost).rejects.toMatchObject({ code: 'not_allowed' });
+    // Bytes that did not all come: failed.
+    const cut = run.req.attachment!(ATT, ctl.signal);
+    await settle();
+    reads()[3].answerFile(blob, { 'Content-Length': String(blob.size + 10) });
+    await expect(cut).rejects.toMatchObject({ code: 'failed' });
+    // A newer link: a read of this call still names the link it came on (the server refuses it, the call is gone there).
+    channel().frame('linked', { link: LINK_B });
+    expect(run.req.signal.aborted).toBe(true);
+    void run.req.attachment!(ATT, ctl.signal).catch(() => undefined);
+    await settle();
+    expect(reads()[4].headers).toEqual({ 'x-magnusim-link': LINK_A });
+    reads()[4].answer(409, { ok: false, code: 'no_channel', error: 'gone' });
+    run.end({ ok: false, code: 'aborted', message: 'it was stopped before its page said it finished' });
+    await settle();
+    // An app connected over MCP has no conversation: refused here, nothing sent.
+    channel().frame('invoke', { call: 'rc-2-abcdef', turn: 'mcp:conn-1', tool: 'add', input: { by: 1 }, timeout_s: 30 });
+    await settle();
+    const mcp = running[1];
+    await expect(mcp.req.attachment!(ATT, new AbortController().signal)).rejects.toMatchObject({ code: 'not_found', message: expect.stringContaining('MCP') });
+    expect(reads()).toHaveLength(5);
+    mcp.end({ ok: true, result: { text: 'done' } });
+    await settle();
   });
 
   it('a list that goes while a call runs: the result POST resolves before tools: [] is sent, and that before the channel closes', async () => {

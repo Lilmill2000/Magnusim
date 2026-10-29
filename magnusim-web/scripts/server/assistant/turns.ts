@@ -32,7 +32,8 @@
  * - A window's start may name files the person attached in its dock (`attachments`, core host
  *   tools spec 13.2): each kept, attached from that window, and unbound or this conversation's;
  *   they are bound to the conversation in the start's synchronous step, and the model (or the
- *   coding agent) gets one line per file with its attachment_id (attachments.ts).
+ *   coding agent) gets one line per file with its kind (a geometry file or a drawing) and its
+ *   attachment_id (attachments.ts).
  * - A turn on a coding agent (provider `agent:<id>`, phase 3 spec 4.7, 5.2, 6.1) runs on
  *   agents/turn.ts instead of the loop, in the same log, gates, relay and limits on how many
  *   run. Its start needs a proof of this account (launchProven): the per-launch token (the CLI
@@ -77,7 +78,7 @@ import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agen
 import { runAgentTurn, type AgentEvent, type AgentRunTurn, type AgentTurnDeps, type AgentTurnSettings } from './agents/turn.ts';
 import { agentHost, AGENTS_BUSY_TEXT } from './agents/host.ts';
 import type { FoundAgent } from './agents/session.ts';
-import { agentStartRefusal, rememberAgentSignIn, type AgentEntry, type AgentRow } from './agents/discover.ts';
+import { agentStartRefusal, rememberAgentImages, rememberAgentSignIn, type AgentEntry, type AgentRow } from './agents/discover.ts';
 import { findAgentNow, foundAgentOf, signInView } from './agents/test.ts';
 import { appVersion } from './host-tools.ts';
 import type { AttachmentRef, AttachmentStore } from './attachments.ts';
@@ -93,6 +94,7 @@ export type { ImageRef } from './runner.ts';
  */
 export type TurnSettings = ModelTurnSettings | AgentTurnSettings;
 export type { AgentTurnSettings } from './agents/turn.ts';
+export { AGENT_IMAGES_TEXT } from './agents/turn.ts';
 
 /** A model provider's settings (`kind` absent or 'model'): loop.ts runs the turn. */
 export function isModelSettings(s: TurnSettings): s is ModelTurnSettings {
@@ -268,9 +270,6 @@ const STREAM_CONTROLS = /[\p{Cc}\p{Bidi_Control}\p{Zl}\p{Zp}]/gu;
 export function plainModelText(text: string): string {
   return text.replace(STREAM_CONTROLS, (c) => (c === '\n' || c === '\t' ? c : ''));
 }
-
-/** A coding agent's turn takes no pictures (its agent reads its own files). */
-export const AGENT_IMAGES_TEXT = "A coding agent's request can't carry pictures: send it without them.";
 
 export function newTurnId(now: number): string {
   return `t-${Math.max(0, Math.floor(now)).toString(36)}-${randomBytes(4).toString('hex')}`;
@@ -1489,7 +1488,8 @@ export class TurnManager {
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) return refuse(400, 'bad_text', 'Write what the Assistant should do.');
     if (text.length > TURN_LIMITS.textMax) return refuse(400, 'bad_text', `A prompt is at most ${TURN_LIMITS.textMax.toLocaleString('en-US')} characters.`);
-    // Reference pictures: checked as a tool result's images; they reach the model only once privacy allows the turn (loop.ts).
+    // Reference pictures: checked as a tool result's images; they reach the model only once privacy
+    // allows the turn (loop.ts), and a coding agent only once its initialize said it takes them (agents/turn.ts).
     const pictures = checkPromptImages(body.images);
     if (!pictures.ok) return refuse(400, pictures.code, pictures.message);
     const convId = optionalId(body.conversation);
@@ -1511,11 +1511,11 @@ export class TurnManager {
     const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? settings.provider;
     if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
     if (isAgentChoice(provider)) {
-      if (pictures.images.length) return refuse(400, 'bad_images', AGENT_IMAGES_TEXT);
       const agentId = agentIdOf(provider);
       if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
       return this.startAgent({
         text,
+        images: pictures.images,
         convId,
         tab,
         ctxProject,
@@ -1638,6 +1638,8 @@ export class TurnManager {
   /** An agent turn's start (spec 5.2, 5.3, 6.1): its checks in order, then started detached (202). */
   private async startAgent(a: {
     text: string;
+    /** The person's pictures, checked; whether the agent takes them is its initialize's word (agents/turn.ts). */
+    images: ImagePart[];
     convId: string | null;
     tab: string | null;
     ctxProject: string | null;
@@ -1738,6 +1740,7 @@ export class TurnManager {
     const t = new Turn({
       id: tid,
       prompt: a.text,
+      promptImages: a.images,
       attachments: attached,
       conv,
       tab: boundTab,
@@ -1751,6 +1754,8 @@ export class TurnManager {
       onEnded: (ended) => this.turnChanged(ended, 'ended'),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
+    // The person's pictures, kept for the window as a model turn's are (prompt_images p1..p4).
+    if (a.images.length) t.keepPromptImages(a.images);
     conv.running = tid;
     conv.lastUsed = this.clock.now();
     this.turns().set(tid, t);
@@ -1780,6 +1785,7 @@ export class TurnManager {
       version: ad.version,
       lockdownFailed: ad.lockdownFailed,
       rememberSignIn: (agentId, session, err) => rememberAgentSignIn(agentId, signInView(err.auth ?? session?.info.auth ?? [], agent)),
+      rememberImages: rememberAgentImages,
     };
   }
 
