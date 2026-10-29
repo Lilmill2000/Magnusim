@@ -17,6 +17,12 @@
 //  Review round: the arrow is pressed in the middle of its shaft (the R label sits off its line),
 //  Escape mid-drag puts the radius and the box back; a 20 px / 60 ms slide is a click, a held drag
 //  draws; with the Line tool in hand X turns construction drawing on and leaves a selection alone.
+//  - tool-key-leaves (Daniel 2026-10-28: "draw a line and then press L, and it fully escapes out of
+//    the line tool altogether, not just like pressing Escape once"): L, one segment, L: the Line
+//    tool is gone (Select, its button not pressed, a click draws nothing), the segment stays;
+//    Escape after a segment still only ends the chain; R with a corner placed drops it and leaves
+//    Rectangle, and R leaves Center rectangle too (the Rectangle flyout's key); a key typed into a
+//    value box stays there.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { commandControl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
@@ -611,5 +617,92 @@ test('cad:ux010-draw-fillet-direct the radius arrow is direct manipulation: 20 p
   await page.mouse.up();
   await sketchIdle(page);
   expect(await arcRadius(page)).toBeGreaterThan(r2);
+  expect(seen.errors).toEqual([]);
+});
+
+/** The sketch tool in hand now. */
+const toolNow = (page: Page) => cad<string | null>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch?.tool?.id ?? null) as never);
+const lineCount = async (page: Page) => (await drawn(page)).entities.filter((e) => e.kind === 'line').length;
+
+test("cad:tool-key-leaves a tool's own key pressed again leaves the tool entirely (Line, Rectangle, Center rectangle); Escape still ends only the chain; a key typed in a value box stays there", async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  const tb = frame.locator('[data-cad-toolbar="sketch"]');
+  const lineBtn = tb.locator('.tb-btn[data-command="sketch.line"]');
+  // L, one segment, L: the tool is gone, the segment stays.
+  await page.keyboard.press('l');
+  await expect.poll(() => toolNow(page)).toBe('line');
+  await expect(lineBtn).toHaveClass(/is-active/);
+  await clickAt(page, [-30, 10]);
+  await clickAt(page, [0, 10]);
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(1);
+  const [mx, my] = await at(page, [10, 20, 0]);
+  await page.mouse.move(mx, my, { steps: 3 });
+  await expect(hint(frame)).toContainText('Click the next point');
+  await page.keyboard.press('l');
+  await expect.poll(() => toolNow(page)).toBe('select');
+  await expect(lineBtn).not.toHaveClass(/is-active/);
+  await expect(hint(frame)).toContainText('Click to select');
+  // The chain's rubber band is gone and the next clicks draw nothing.
+  expect(await cad<number>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch.view.get().preview?.lines.length ?? 0) as never)).toBe(0);
+  await clickAt(page, [20, 30]);
+  await clickAt(page, [40, 30]);
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(1);
+  // Escape after a segment ends the chain only: the Line tool stays (Daniel likes that).
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('l');
+  await expect.poll(() => toolNow(page)).toBe('line');
+  await clickAt(page, [-30, -10]);
+  await clickAt(page, [0, -10]);
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(2);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  expect(await toolNow(page)).toBe('line');
+  await expect(lineBtn).toHaveClass(/is-active/);
+  // The next click starts a new chain with the tool still in hand; L then leaves it, the new chain
+  // dropped as Escape drops it (no segment from it).
+  await clickAt(page, [10, -20]);
+  await page.keyboard.press('l');
+  await expect.poll(() => toolNow(page)).toBe('select');
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(2);
+  // Rectangle: R, the first corner, R: nothing is made, the tool is gone.
+  await page.keyboard.press('r');
+  await expect.poll(() => toolNow(page)).toBe('rectangle-corner');
+  await clickAt(page, [20, -40]);
+  const [rx, ry] = await at(page, [35, -30, 0]);
+  await page.mouse.move(rx, ry, { steps: 3 });
+  await expect(frame.locator('[data-sketch-box="width"]')).toBeVisible();
+  await page.keyboard.press('r');
+  await expect.poll(() => toolNow(page)).toBe('select');
+  await expect(frame.locator('[data-sketch-box="width"]')).toHaveCount(0);
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(2);
+  // Center rectangle (the Rectangle flyout's variant): R leaves it too.
+  await runCommand(frame, 'sketch.rectangle-center');
+  await expect.poll(() => toolNow(page)).toBe('rectangle-center');
+  await page.keyboard.press('r');
+  await expect.poll(() => toolNow(page)).toBe('select');
+  // A key typed into a value box is the box's: L there leaves nothing.
+  await page.keyboard.press('l');
+  await expect.poll(() => toolNow(page)).toBe('line');
+  await clickAt(page, [-40, 40]);
+  const [vx, vy] = await at(page, [-20, 40, 0]);
+  await page.mouse.move(vx, vy, { steps: 3 });
+  const length = frame.locator('input[data-sketch-box="length"]');
+  await expect(length).toBeVisible();
+  await page.keyboard.type('2');
+  await expect(length).toBeFocused();
+  await page.keyboard.press('l');
+  await expect(length).toHaveValue('2l');
+  expect(await toolNow(page)).toBe('line');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect.poll(() => toolNow(page)).toBe('select');
+  expect(await lineCount(page)).toBe(2);
   expect(seen.errors).toEqual([]);
 });

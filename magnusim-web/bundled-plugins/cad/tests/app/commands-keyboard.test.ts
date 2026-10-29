@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCommandRegistry } from '../../src/app/commands';
 import { createKeybinds } from '../../src/app/keybinds';
-import { bindCommandShortcuts, comboOf, createKeyboard, normaliseCombo } from '../../src/app/keyboard';
+import { bindCommandShortcuts, comboOf, createKeyboard, isToolKeyAgain, normaliseCombo, toolKeyAgain } from '../../src/app/keyboard';
+import { createStateStore } from '../../src/lib/store';
+import type { CommandDef } from '../../src/types/commands';
+import type { SketchModeState } from '../../src/types/sketch';
 import type { AppServices } from '../../src/types/app';
 
 const services = {} as AppServices;
@@ -225,5 +228,111 @@ describe('keyboard', () => {
     expect(undo).toHaveBeenCalledTimes(1);
     input.remove();
     kb.dispose();
+  });
+});
+
+// Daniel (2026-10-28): "I want to be able to draw a line and then press L, and it fully escapes out
+// of the line tool altogether, not just like pressing Escape once".
+describe("a sketch tool's key pressed again", () => {
+  const tool = (id: string, sketchTool: string, flyout?: string): CommandDef => ({ id, label: id, mode: 'sketch', activeWhen: { sketchTool }, ...(flyout ? { flyout } : {}), run() {} });
+  const line = tool('sketch.line', 'line', 'line');
+  const centerline = tool('sketch.centerline', 'centerline', 'line');
+  const rect = tool('sketch.rectangle', 'rectangle-corner', 'rectangle');
+  const rectCenter = tool('sketch.rectangle-center', 'rectangle-center', 'rectangle');
+  const dim = tool('sketch.dimension', 'dimension');
+  const all = [line, centerline, rect, rectCenter, dim, { id: 'sketch.construction', label: 'Construction', mode: 'sketch', run() {} } as CommandDef];
+
+  it("is the key of the tool in hand, or of its flyout's variant in hand; never Select, never another tool, never a command that is no tool", () => {
+    expect(isToolKeyAgain(line, 'line', all)).toBe(true);
+    expect(isToolKeyAgain(dim, 'dimension', all)).toBe(true);
+    // The Rectangle flyout's R with Center rectangle in hand; the Line flyout's L with Centerline.
+    expect(isToolKeyAgain(rect, 'rectangle-center', all)).toBe(true);
+    expect(isToolKeyAgain(line, 'centerline', all)).toBe(true);
+    // Another tool's key switches to it, as before.
+    expect(isToolKeyAgain(rect, 'line', all)).toBe(false);
+    expect(isToolKeyAgain(dim, 'line', all)).toBe(false);
+    expect(isToolKeyAgain(line, 'select', all)).toBe(false);
+    expect(isToolKeyAgain(line, null, all)).toBe(false);
+    expect(isToolKeyAgain(all[5], 'line', all)).toBe(false);
+  });
+
+  function setup(active: string) {
+    const keybinds = createKeybinds({ prefs: null, layout: false });
+    const reg = createCommandRegistry(() => services, keybinds);
+    const kb = createKeyboard(document);
+    const ran: string[] = [];
+    for (const c of [line, rect, rectCenter, dim]) reg.register({ ...c, run: () => void ran.push(c.id) });
+    const state = createStateStore<SketchModeState>({ feature: 'f', tool: active as SketchModeState['tool'], status: null, analyzing: false, typing: false });
+    const left: string[] = [];
+    const sketch = {
+      state,
+      leaveTool: () => {
+        const was = state.get().tool;
+        if (was === 'select') return false;
+        left.push(was);
+        state.set({ tool: 'select' });
+        return true;
+      },
+    };
+    const off = bindCommandShortcuts(reg, kb, undefined, () => 'sketch', (c) => toolKeyAgain(sketch, c, reg.all()));
+    const press = (init: KeyboardEventInit, target: EventTarget = document.body) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      target.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    return { keybinds, reg, kb, ran, state, left, press, dispose: () => (off(), kb.dispose()) };
+  }
+
+  it('L with Line in hand leaves it (the command does not run again); L again takes it up; another key switches as before', async () => {
+    const t = setup('line');
+    expect(t.press({ key: 'l', code: 'KeyL' })).toBe(true);
+    await Promise.resolve();
+    expect(t.left).toEqual(['line']);
+    expect(t.ran).toEqual([]);
+    expect(t.state.get().tool).toBe('select');
+    // From Select: L takes up the Line tool (the command runs).
+    t.press({ key: 'l', code: 'KeyL' });
+    await Promise.resolve();
+    expect(t.ran).toEqual(['sketch.line']);
+    // D with Line in hand: Dimension runs (no leaving).
+    t.state.set({ tool: 'line' });
+    t.press({ key: 'd', code: 'KeyD' });
+    await Promise.resolve();
+    expect(t.ran).toEqual(['sketch.line', 'sketch.dimension']);
+    expect(t.left).toEqual(['line']);
+    // R with Center rectangle in hand (the Rectangle flyout's key): leaves it.
+    t.state.set({ tool: 'rectangle-center' });
+    t.press({ key: 'r', code: 'KeyR' });
+    await Promise.resolve();
+    expect(t.left).toEqual(['line', 'rectangle-center']);
+    t.dispose();
+  });
+
+  it("follows the person's keybind: Line on G, G leaves it and L is no key of it; a held key acts once; a key typed in a field stays there", async () => {
+    const t = setup('line');
+    expect(t.keybinds.setKeybind('sketch.line', 'G')).toMatchObject({ ok: true });
+    t.press({ key: 'l', code: 'KeyL' });
+    await Promise.resolve();
+    expect(t.left).toEqual([]);
+    expect(t.state.get().tool).toBe('line');
+    t.press({ key: 'g', code: 'KeyG' });
+    await Promise.resolve();
+    expect(t.left).toEqual(['line']);
+    // Held: the repeats neither take the tool up again nor run anything.
+    expect(t.press({ key: 'g', code: 'KeyG', repeat: true })).toBe(true);
+    expect(t.press({ key: 'g', code: 'KeyG', repeat: true })).toBe(true);
+    await Promise.resolve();
+    expect(t.state.get().tool).toBe('select');
+    expect(t.ran).toEqual([]);
+    // In a value box: the key is the box's.
+    t.state.set({ tool: 'line' });
+    const input = document.createElement('input');
+    document.body.append(input);
+    expect(t.press({ key: 'g', code: 'KeyG' }, input)).toBe(false);
+    await Promise.resolve();
+    expect(t.left).toEqual(['line']);
+    expect(t.state.get().tool).toBe('line');
+    input.remove();
+    t.dispose();
   });
 });

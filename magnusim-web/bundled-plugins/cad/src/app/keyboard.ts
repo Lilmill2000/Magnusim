@@ -1,10 +1,12 @@
 // Frame keyboard: combos -> handlers, and command shortcuts (their keys from the keybinding
 // registry and the person's keybinds: src/app/keymap.ts, src/app/keybinds.ts); the app's
-// Assistant panel key goes past every handler of the Part (passAssistantKey). Owner: INTEGRATE.
+// Assistant panel key goes past every handler of the Part (passAssistantKey); a sketch tool's key
+// pressed again leaves the tool (toolKeyAgain). Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cycleDialogFocus, openModal } from '../lib/modal';
 import type { Bridge } from '../lib/bridge';
 import type { CommandDef, CommandRegistry, KeyBinding, KeyboardManager, Mode } from '../types/commands';
+import type { SketchModeApi } from '../types/sketch';
 import { combosOf, isAssistantPress, normaliseCombo } from './keymap';
 
 // Combos in the registry's form (src/app/keymap.ts); a press means combosOf(e): a Latin letter by
@@ -140,6 +142,31 @@ export function createKeyboard(doc: Document): KeyboardManager {
   };
 }
 
+/**
+ * Whether a command pressed by its key now is that of the sketch tool in hand (Daniel 2026-10-28:
+ * "click L again and it acts just like me clicking Escape ... fully escapes out of that"): the
+ * command's tool (activeWhen.sketchTool) is the one in hand, or one of the variants of its toolbar
+ * flyout is (R while Center rectangle is in hand: the Rectangle flyout's key). Select is no tool
+ * to leave.
+ */
+export function isToolKeyAgain(c: Pick<CommandDef, 'activeWhen' | 'flyout'>, active: string | null | undefined, all: readonly Pick<CommandDef, 'activeWhen' | 'flyout'>[]): boolean {
+  const own = c.activeWhen?.sketchTool;
+  if (!own || !active || active === 'select') return false;
+  if (own === active) return true;
+  return !!c.flyout && all.some((x) => x.flyout === c.flyout && x.activeWhen?.sketchTool === active);
+}
+
+/**
+ * The key of the sketch tool in hand pressed again: the tool is left entirely, as Escape pressed
+ * until it is gone (SketchModeApi.leaveTool); true when it was. Whichever key the person bound to
+ * the tool's command (the press reached it by that key). Only from the keyboard: a toolbar click
+ * on the active tool's button stays as it is.
+ */
+export function toolKeyAgain(sketch: Pick<SketchModeApi, 'state' | 'leaveTool'> | null | undefined, c: CommandDef, all: readonly CommandDef[]): boolean {
+  if (!sketch || !isToolKeyAgain(c, sketch.state.get().tool, all)) return false;
+  return sketch.leaveTool();
+}
+
 /** Undo and Redo, of the Part and of a sketch: from a field marked [data-undo-to-app] they are the app's. */
 const APP_UNDO = new Set(['edit.undo', 'edit.redo', 'sketch.undo', 'sketch.redo']);
 
@@ -149,9 +176,18 @@ const APP_UNDO = new Set(['edit.undo', 'edit.redo', 'sketch.undo', 'sketch.redo'
  * shortcut), re-synced when commands or keys change. A key runs the newest command of the current
  * mode (`mode()`, default always 'model'; a command's mode 'any' matches every mode) with that
  * combo; with none for this mode the key passes on to older bindings (the UI shell's own Delete or
- * Escape). A refused command says why through `explain` when it has explainRefusal.
+ * Escape). A refused command says why through `explain` when it has explainRefusal. `again`: a
+ * press of a command that is already in effect (the sketch tool in hand: toolKeyAgain) does that
+ * instead of running it, when it returns true. A held key acts once: its repeats of a sketch tool's
+ * command do nothing (a held L does not leave the tool and take it up again).
  */
-export function bindCommandShortcuts(commands: CommandRegistry, keyboard: KeyboardManager, explain?: (message: string) => void, mode: () => Mode = () => 'model'): () => void {
+export function bindCommandShortcuts(
+  commands: CommandRegistry,
+  keyboard: KeyboardManager,
+  explain?: (message: string) => void,
+  mode: () => Mode = () => 'model',
+  again?: (c: CommandDef) => boolean,
+): () => void {
   let offs: (() => void)[] = [];
   const keysOf = (c: CommandDef): readonly string[] => (commands.keys ? commands.keys(c.id) : c.shortcut ? [c.shortcut] : []);
   const sync = () => {
@@ -177,6 +213,8 @@ export function bindCommandShortcuts(commands: CommandRegistry, keyboard: Keyboa
           const fromField = typingIn(e?.target ?? null);
           const c = [...list].reverse().find((x) => (x.mode === 'any' || (x.mode ?? 'model') === m) && (!fromField || APP_UNDO.has(x.id)));
           if (!c) return false;
+          if (e?.repeat && c.activeWhen?.sketchTool) return true;
+          if (again?.(c)) return true;
           void commands.run(c.id).then((r) => {
             if (r !== true && c.explainRefusal && explain) explain(`${c.label}: ${r}`);
           });

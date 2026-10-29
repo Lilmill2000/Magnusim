@@ -188,6 +188,57 @@ describe('the Select tool cursor names the kind under the pointer, never the han
   });
 });
 
+// Daniel (2026-10-28): the tool's key again leaves the tool entirely, as Escape pressed until it is gone.
+describe("leaving a tool (its key pressed again)", () => {
+  it('a line chain after one segment: Escape ends the chain and keeps the tool; leaveTool drops the chain and the tool, the segment stays, the selection too', async () => {
+    h = await sketchHarness({ points: { a: [-30, -30], b: [-20, -30] }, entities: [{ id: 'k', kind: 'line', p: ['a', 'b'] }] });
+    h.mode.select([{ what: 'entity', id: 'k' }], false);
+    h.tool('line');
+    h.click([0, 0]);
+    h.click([20, 0]);
+    await h.idle();
+    h.move([30, 10]);
+    expect(h.mode.view.get().preview?.lines.length ?? 0).toBeGreaterThan(0);
+    const lines = () => h!.sketch().entities.filter((e) => e.kind === 'line').length;
+    expect(lines()).toBe(2);
+    // Escape once: the chain ends, the Line tool stays.
+    h.mode.escape();
+    expect(h.mode.tool?.id).toBe('line');
+    expect(h.mode.state.get().tool).toBe('line');
+    // A new chain, one segment, and the tool's key again: the tool is gone, nothing half made.
+    h.click([0, 20]);
+    h.click([20, 20]);
+    await h.idle();
+    h.move([30, 30]);
+    expect(h.mode.leaveTool()).toBe(true);
+    await h.idle();
+    expect(h.mode.tool?.id).toBe('select');
+    expect(h.mode.state.get().tool).toBe('select');
+    expect(h.mode.view.get().preview).toBeNull();
+    expect(lines()).toBe(3);
+    // A click now draws nothing.
+    h.click([40, 40]);
+    h.click([50, 40]);
+    await h.idle();
+    expect(lines()).toBe(3);
+    // Nothing to leave with Select in hand.
+    expect(h.mode.leaveTool()).toBe(false);
+  });
+
+  it('a circle with its centre placed: dropped, as Escape drops it, and the tool left', async () => {
+    h = await sketchHarness({});
+    h.tool('circle');
+    h.click([0, 0]);
+    h.move([5, 0]);
+    expect(h.mode.view.get().preview).not.toBeNull();
+    expect(h.mode.leaveTool()).toBe(true);
+    await h.idle();
+    expect(h.mode.tool?.id).toBe('select');
+    expect(h.mode.view.get().preview).toBeNull();
+    expect(h.sketch().entities).toEqual([]);
+  });
+});
+
 describe('review S2: a sloppy click stays a click', () => {
   it('click-drag only when held >= 150 ms and moved > 12 px, or moved > 30 px', () => {
     expect(isClickDrag(60, 20)).toBe(false);

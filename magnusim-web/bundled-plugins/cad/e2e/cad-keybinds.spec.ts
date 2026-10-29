@@ -13,6 +13,8 @@
 //  - every key action has a Set keybind where the person meets it: the Part's row (an empty Part
 //    too) and a feature's row (Delete, Rename), the
 //    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish);
+//  - a sketch tool's key pressed again leaves the tool, by the key the person gave it: Line on G,
+//    G, one segment, G: the tool is gone, the segment stays; L is no key of Line then;
 //  - the app's Assistant panel key the person chose in the app's Settings (Alt+K): typed in the Part
 //    it opens and closes the app's panel, Set keybind refuses it in the app's words, and a command
 //    whose stored key it is does not run on it and its button names no key; changed while the Part
@@ -146,6 +148,52 @@ test('cad:keybinds-dialog Set keybind: Rectangle to Shift+R (Replace takes it fr
     await page.keyboard.press('Escape');
     await expect(viewDlg).toHaveCount(0);
     expect(await keysOf(page, 'view.front')).toEqual(['Digit1']);
+    expect(seen.errors).toEqual([]);
+  } finally {
+    await setPref(request, null);
+  }
+});
+
+test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again leaves it (the segment drawn stays, the next click draws nothing); L does neither", { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  await setPref(request, { 'sketch.line': ['KeyG'] });
+  try {
+    const seen = await watchPage(page);
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    await expect.poll(() => keysOf(page, 'sketch.line')).toEqual(['KeyG']);
+    await enterSketchOnTop(frame);
+    await viewAndSketchIdle(page);
+    const lines = () => cad<number>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch.draft().entities.filter((e: { kind: string }) => e.kind === 'line').length) as never);
+    const click = async (p: [number, number, number]) => {
+      const [x, y] = await modelOnPage(page, p);
+      await page.mouse.click(x, y);
+    };
+    // L is no key of Line now.
+    await page.keyboard.press('l');
+    await page.waitForTimeout(300);
+    expect(await toolNow(page)).toBe('select');
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    await click([-30, 10, 0]);
+    await click([0, 10, 0]);
+    await viewAndSketchIdle(page);
+    expect(await lines()).toBe(1);
+    // L with the chain open: not Line's key, nothing leaves.
+    await page.keyboard.press('l');
+    await page.waitForTimeout(300);
+    expect(await toolNow(page)).toBe('line');
+    // G again: the tool is gone, the segment stays, the next click draws nothing.
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('select');
+    await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-btn[data-command="sketch.line"]')).not.toHaveClass(/is-active/);
+    await click([20, 30, 0]);
+    await click([40, 30, 0]);
+    await viewAndSketchIdle(page);
+    expect(await lines()).toBe(1);
     expect(seen.errors).toEqual([]);
   } finally {
     await setPref(request, null);

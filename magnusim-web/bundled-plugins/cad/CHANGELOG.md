@@ -125,6 +125,12 @@ is changed with the Part open, from any Magnusim window:
 - The point under the pointer grows, in a light blue disk, so you can see
   which point you are about to click. A selected point is green with a green
   ring round it. Both in light and dark.
+- A tool's own key pressed again puts the tool down: L, draw a line, L, and the
+  Line tool is gone (what you drew stays; a line or shape you had started is
+  dropped, as Escape drops it). It is the key you gave the tool, if you changed
+  it; R also puts down Center rectangle and the other rectangles, and so on for
+  each toolbar group. Escape still steps back one step at a time (it ends a line
+  chain and keeps the Line tool). A key typed into a value box stays there.
 
 ## 0.1.0 (October 2026)
 
