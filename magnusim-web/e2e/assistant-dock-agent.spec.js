@@ -11,8 +11,9 @@
 // that agent discovery's test switches point at (never this PC's PATH or home), signed in by its
 // login file there; the turns work in the ai-demo counter workspace.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { dockSend, dockTurn, openDock, resetAssistant, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeAcp } from './support/fake-acp.mjs';
 import { startFakeLlm } from './support/fake-llm.mjs';
@@ -23,8 +24,20 @@ const WIN = process.platform === 'win32';
 const AGENT = { id: 'claude', name: 'Claude Code', pkg: '@agentclientprotocol/claude-agent-acp', program: 'claude-agent-acp', version: '0.85.1' };
 const PLUGIN = 'ai-demo';
 const STEP = { timeout: 30_000 };
-const ACCEPT_FILES = '.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.svg,.dxf';
+/**
+ * Whether the dock offers drawings, as the app ships it (src/assistant/dock/drawings.ts): its
+ * accept lists and its files-only Attach words name drawings only then.
+ */
+const DRAWINGS_OFFERED = (() => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'assistant', 'dock', 'drawings.ts'), 'utf8');
+  const m = /export const DRAWINGS_OFFERED = (true|false);/.exec(src);
+  if (!m) throw new Error('src/assistant/dock/drawings.ts has no "export const DRAWINGS_OFFERED = true|false;"');
+  return m[1] === 'true';
+})();
+const ACCEPT_FILES = `.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply${DRAWINGS_OFFERED ? ',.svg,.dxf' : ''}`;
 const ACCEPT_ALL = `image/png,image/jpeg,image/webp,${ACCEPT_FILES}`;
+/** Attach's words for an agent that takes no pictures. */
+const attachFilesOnly = (name) => (DRAWINGS_OFFERED ? `Attach geometry files or drawings (${name} doesn't take pictures)` : `Attach geometry files (${name} doesn't take pictures)`);
 /** The words a request with pictures ends with on an agent whose start says it takes none (turns.ts AGENT_IMAGES_TEXT). */
 const AGENT_IMAGES_TEXT = / doesn't take pictures\. Send the message without them\.$/;
 
@@ -207,7 +220,7 @@ test("the picker offers the coding agent beside the API keys; a request on it sh
   await expect(frame.locator('#counter')).toHaveText('2');
   await expect(dock.locator('[data-dock-provider-locked]')).toContainText(AGENT.name);
   // This agent's start said it takes no pictures: the dock says so for the next message.
-  await expect(attach).toHaveAttribute('title', `Attach geometry files or drawings (${AGENT.name} doesn't take pictures)`, STEP);
+  await expect(attach).toHaveAttribute('title', attachFilesOnly(AGENT.name), STEP);
   await expect(dock.locator('[data-dock-file]')).toHaveAttribute('accept', ACCEPT_FILES);
   await page.screenshot({ path: test.info().outputPath('agent-turn.png') });
   if (process.env.DOCK_SHOTS) await page.screenshot({ path: `${process.env.DOCK_SHOTS}/agent-turn-${page.viewportSize()?.width ?? 0}.png` });
@@ -227,9 +240,6 @@ test("a coding agent imports a file the person attached in the dock: Magnusim as
   await dock.locator('.dock-picker-button').click();
   await dock.locator(`[data-dock-provider-option="agent:${AGENT.id}"]`).click();
   await expect(dock.locator('.dock-picker-button')).toContainText(AGENT.name);
-  const { readFileSync } = await import('node:fs');
-  const { dirname } = await import('node:path');
-  const { fileURLToPath } = await import('node:url');
   const elbow = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'python', 'tests', 'fixtures', 'geometry', 'elbow.step'));
   await dock.locator('[data-dock-file]').setInputFiles([{ name: 'elbow.step', mimeType: 'application/octet-stream', buffer: elbow }]);
   await expect(dock.locator('[data-dock-file-chip]').first()).toHaveAttribute('data-dock-file-state', 'ready', STEP);
@@ -353,7 +363,7 @@ test("a coding agent whose start says it takes no pictures: a request with one e
   // The person's message still shows with its picture.
   await expect(turn.locator('.dock-you img')).toHaveCount(1);
   // The dock now says it takes none: Attach for files only, and a picture is refused with the words why.
-  await expect(attach).toHaveAttribute('title', `Attach geometry files or drawings (${AGENT.name} doesn't take pictures)`, STEP);
+  await expect(attach).toHaveAttribute('title', attachFilesOnly(AGENT.name), STEP);
   await expect(dock.locator('[data-dock-file]')).toHaveAttribute('accept', ACCEPT_FILES);
   await dock.locator('[data-dock-file]').setInputFiles([{ name: 'again.png', mimeType: 'image/png', buffer: png }]);
   await expect(dock.locator('[data-dock-picture-error]')).toHaveText(`${AGENT.name} doesn't take pictures. Send the message without them.`);

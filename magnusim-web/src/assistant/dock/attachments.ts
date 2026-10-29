@@ -1,13 +1,15 @@
 /**
- * The person's files for a message (core host tools spec 13.1): geometry files and drawings
- * attached in the dock beside the pictures (Attach, paste or a drop), each uploaded at once to
- * POST /api/assistant/attachments with this tab's live relay link, then named in the turn by its
- * attachment_id. The AI imports one only by that id: a geometry file into the project open
- * here, a drawing in a workspace that imports drawings.
+ * The person's files for a message (core host tools spec 13.1): geometry files, and drawings
+ * while the dock offers them (drawings.ts), attached in the dock beside the pictures (Attach,
+ * paste or a drop), each uploaded at once to POST /api/assistant/attachments with this tab's live
+ * relay link, then named in the turn by its attachment_id. The AI imports one only by that id: a
+ * geometry file into the project open here, a drawing in a workspace that imports drawings.
  *
  * - kindOf(file): a picture (pictures.ts takes it), a geometry file (STEP, IGES, BREP, STL, OBJ,
  *   PLY by its extension), a drawing (SVG, DXF; an image/svg+xml file is a drawing, never a
- *   picture) or anything else (refused with ONLY_FILES).
+ *   picture) or anything else (refused with onlyFiles). While the dock offers no drawings a
+ *   drawing is anything else too, refused before it is uploaded.
+ * - acceptAll() / acceptFiles(): the file input's accept list, drawings in it only while offered.
  * - checkFiles(): at most 4 per message, 500 MB each (a drawing 20 MB), said plainly before
  *   anything is sent.
  * - uploadFile(): the raw bytes (XMLHttpRequest, for the progress), once more with a fresh link
@@ -16,16 +18,19 @@
  */
 import { AssistantApiError, RemoteError, REMOTE_TEXT } from '../api';
 import { withAssistantLink } from '../relay';
-import { AT_MOST_FOUR_FILES, drawingTooLarge, fileTooLarge, ONLY_FILES, uploadLost } from './copy';
+import { AT_MOST_FOUR_FILES, drawingTooLarge, fileTooLarge, onlyFiles, uploadLost } from './copy';
+import { drawingsOffered } from './drawings';
 
 export const FILE_LIMITS = Object.freeze({ count: 4, bytes: 500 * 1024 * 1024, drawingBytes: 20 * 1024 * 1024 });
 export const ATTACHMENTS_PATH = '/api/assistant/attachments';
 export const GEOMETRY_EXTENSIONS = Object.freeze(['.step', '.stp', '.iges', '.igs', '.brep', '.brp', '.stl', '.obj', '.ply']);
 export const DRAWING_EXTENSIONS = Object.freeze(['.svg', '.dxf']);
 const PICTURE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
-/** The file input's accept list: pictures, geometry files and drawings (a coding agent that takes no pictures: the files only). */
-export const ACCEPT_ALL = ['image/png', 'image/jpeg', 'image/webp', ...GEOMETRY_EXTENSIONS, ...DRAWING_EXTENSIONS].join(',');
-export const ACCEPT_FILES = [...GEOMETRY_EXTENSIONS, ...DRAWING_EXTENSIONS].join(',');
+/** The files' part of the accept list: geometry files, and drawings while the dock offers them. */
+const fileExtensions = (): readonly string[] => (drawingsOffered() ? [...GEOMETRY_EXTENSIONS, ...DRAWING_EXTENSIONS] : GEOMETRY_EXTENSIONS);
+/** The file input's accept list: pictures and the files (a coding agent that takes no pictures: the files only, acceptFiles). */
+export const acceptAll = (): string => ['image/png', 'image/jpeg', 'image/webp', ...fileExtensions()].join(',');
+export const acceptFiles = (): string => fileExtensions().join(',');
 
 export type FileKind = 'picture' | 'geometry' | 'drawing' | 'other';
 
@@ -34,11 +39,14 @@ const extOf = (name: string): string => {
   return m ? m[1].toLowerCase() : '';
 };
 
-/** What a file is to the dock, by its extension (a picture also by its type; an SVG by either is a drawing). */
+/**
+ * What a file is to the dock, by its extension (a picture also by its type; an SVG by either is a
+ * drawing, never a picture, and anything else while the dock offers no drawings).
+ */
 export function kindOf(file: { name: string; type?: string }): FileKind {
   const ext = extOf(file.name);
   if (GEOMETRY_EXTENSIONS.includes(ext)) return 'geometry';
-  if (DRAWING_EXTENSIONS.includes(ext) || file.type === 'image/svg+xml') return 'drawing';
+  if (DRAWING_EXTENSIONS.includes(ext) || file.type === 'image/svg+xml') return drawingsOffered() ? 'drawing' : 'other';
   if (PICTURE_EXTENSIONS.includes(ext) || /^image\//.test(file.type || '')) return 'picture';
   return 'other';
 }
@@ -65,7 +73,8 @@ export function checkFiles(have: number, files: readonly File[]): { accepted: Fi
   for (const f of files) {
     const kind = kindOf(f);
     if (kind !== 'geometry' && kind !== 'drawing') {
-      if (!errors.includes(ONLY_FILES)) errors.push(ONLY_FILES);
+      const only = onlyFiles(drawingsOffered());
+      if (!errors.includes(only)) errors.push(only);
       continue;
     }
     const drawing = kind === 'drawing';

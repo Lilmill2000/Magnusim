@@ -1,9 +1,11 @@
 // Files attached in the Assistant's dock (core host tools spec 13, C9): the person attaches a
 // STEP or STL file beside the pictures (Attach, paste or a drop) in a project; its chip shows
 // its name and size and uploads at once; the request names it and the model gets one line per
-// file with its kind and attachment_id; the person's message lists it. A drawing (SVG, DXF) is a
-// file too, never a picture and never rendered in the page; over 20 MB it is refused in its own
-// words, and import_file tells the model a drawing goes to a workspace that imports drawings. Too
+// file with its kind and attachment_id; the person's message lists it. A drawing (SVG, DXF), while
+// the dock offers drawings (src/assistant/dock/drawings.ts), is a file too, never a picture and
+// never rendered in the page; over 20 MB it is refused in its own words, and import_file tells the
+// model a drawing goes to a workspace that imports drawings. While the dock offers none, a drawing
+// is refused as another type is (the drawing test runs the branch the shipped setting says). Too
 // big or another type is refused in plain words before anything is sent; a file the server can't
 // read as its type is refused with the server's words. A forgotten conversation's files go; one
 // never sent is swept and the send then says so; a conversation can't use another
@@ -22,6 +24,22 @@ import { expect, test } from './support/stress.js';
 
 const STEP_WAIT = { timeout: 15_000 };
 const PROJECT_TITLE = 'Attach project';
+
+/**
+ * Whether the dock offers drawings, as the app ships it: read from src/assistant/dock/drawings.ts
+ * (the server takes drawings either way), so this spec checks what the person gets.
+ */
+const DRAWINGS_OFFERED = (() => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'assistant', 'dock', 'drawings.ts'), 'utf8');
+  const m = /export const DRAWINGS_OFFERED = (true|false);/.exec(src);
+  if (!m) throw new Error('src/assistant/dock/drawings.ts has no "export const DRAWINGS_OFFERED = true|false;"');
+  return m[1] === 'true';
+})();
+/** The dock's words for a file it doesn't take: they name drawings only while it offers them. */
+const ONLY_FILES = DRAWINGS_OFFERED
+  ? 'Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.'
+  : 'Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.';
+const GEOMETRY_ACCEPT = '.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply';
 
 let host;
 let fake;
@@ -206,7 +224,8 @@ test('a STEP and an STL attached in the dock: chips with name and size, uploaded
   expect(after.map((a) => a.conversation)).toEqual([turn.turn.conversation, turn.turn.conversation]);
 });
 
-test('an SVG and a DXF attached in the dock: drawing chips with name and size, never pictures or rendered; one over 20 MB refused in its own words; the model gets a drawing line each, and import_file says where a drawing goes', async ({ page, request }) => {
+test('drawings offered: an SVG and a DXF attached in the dock: drawing chips with name and size, never pictures or rendered; one over 20 MB refused in its own words; the model gets a drawing line each, and import_file says where a drawing goes', async ({ page, request }) => {
+  test.skip(!DRAWINGS_OFFERED, 'The dock offers no drawings: DRAWINGS_OFFERED is false in src/assistant/dock/drawings.ts (the test below runs instead).');
   await openProject(page);
   const uploads = [];
   page.on('request', (r) => {
@@ -277,6 +296,38 @@ test('an SVG and a DXF attached in the dock: drawing chips with name and size, n
   expect(await page.evaluate(() => window.__drawingRan ?? null)).toBe(null);
 });
 
+test("drawings not offered: an SVG and a DXF attached in the dock, or dropped on it, are refused in the words that name pictures and geometry files only; no chips, nothing uploaded; Attach's list has neither; a geometry file still goes", async ({ page, request }) => {
+  test.skip(DRAWINGS_OFFERED, 'The dock offers drawings: DRAWINGS_OFFERED is true in src/assistant/dock/drawings.ts (the test above runs instead).');
+  await openProject(page);
+  const uploads = [];
+  page.on('request', (r) => {
+    if (new URL(r.url()).pathname === '/api/assistant/attachments') uploads.push(new URL(r.url()).searchParams.get('name'));
+  });
+  await expect(dock(page).locator('[data-dock-file]')).toHaveAttribute('accept', `image/png,image/jpeg,image/webp,${GEOMETRY_ACCEPT}`);
+  await dock(page).locator('[data-dock-file]').setInputFiles([
+    { name: 'plate.svg', mimeType: 'image/svg+xml', buffer: svgFile(2) },
+    { name: 'flange.dxf', mimeType: 'application/dxf', buffer: dxfFile(1) },
+  ]);
+  await expect(fileErrors(page)).toHaveText([ONLY_FILES]);
+  await expect(chips(page)).toHaveCount(0);
+  // Never taken for a picture either.
+  await expect(dock(page).locator('[data-dock-picture-chip]')).toHaveCount(0);
+  await expect(dock(page).locator('[data-dock-picture-error]')).toHaveCount(0);
+  await shot(page, 'drawings-refused');
+  // A drop says the same.
+  await dropFiles(page, [{ name: 'outline.svg', bytes: svgFile(1) }]);
+  await expect(fileErrors(page)).toHaveText([ONLY_FILES]);
+  await expect(chips(page)).toHaveCount(0);
+  // A geometry file after them goes at once: so nothing of the drawings was ever sent.
+  await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'bracket.step', mimeType: 'application/octet-stream', buffer: stepFile(1) }]);
+  await expect(chips(page)).toHaveCount(1);
+  await expect(chips(page).first()).toHaveAttribute('data-dock-file-state', 'ready', STEP_WAIT);
+  await expect(chips(page).first()).toHaveAttribute('data-dock-file-kind', 'geometry');
+  await expect(fileErrors(page)).toHaveCount(0);
+  expect(uploads).toEqual(['bracket.step']);
+  expect((await getJson(request, '/api/test/assistant/state')).attachments.map((a) => [a.name, a.format])).toEqual([['bracket.step', 'step']]);
+});
+
 test('refused in plain words: a file over 500 MB and another type before anything is sent; a .step that is not STEP with the server\'s words', async ({ page, request }) => {
   await openProject(page);
   const uploads = [];
@@ -287,7 +338,7 @@ test('refused in plain words: a file over 500 MB and another type before anythin
   await dropFiles(page, [{ name: 'huge.step', size: 600 * 1024 * 1024 }]);
   await expect(fileErrors(page)).toHaveText(['huge.step is larger than 500 MB. Import it with + Add geometry.']);
   await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'plugin.zip', mimeType: 'application/zip', buffer: Buffer.from('PK\u0003\u0004 not for the Assistant') }]);
-  await expect(fileErrors(page)).toHaveText(['Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.']);
+  await expect(fileErrors(page)).toHaveText([ONLY_FILES]);
   await expect(chips(page)).toHaveCount(0);
   expect(uploads, 'nothing was sent').toEqual([]);
   // Named STEP, but a picture's bytes: the server reads its first bytes and says so.

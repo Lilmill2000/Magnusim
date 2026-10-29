@@ -7,7 +7,8 @@
  *   paste, or a drop onto the dock; at most 4, shrunk to fit) and geometry files and drawings
  *   beside them (core host tools spec 13.1: the same three ways in, at most 4 of 500 MB each, a
  *   drawing 20 MB, each uploaded at once with its progress and named in the request by its
- *   attachment id; a drawing shows as a file chip, its markup never put in the page).
+ *   attachment id; a drawing shows as a file chip, its markup never put in the page). Drawings
+ *   only while the dock offers them (drawings.ts); until then one is refused as any other file.
  * - Send is disabled, with the line that says why in place of the hint, while the Assistant is
  *   off, the provider isn't ready, the workspace is still offering its tools, a coding agent that
  *   takes no pictures is picked with pictures attached, a file is still uploading, the
@@ -37,8 +38,8 @@ import {
   contextWorkspace,
   CONVERSATION_FULL,
   DRAWINGS_STAY,
-  DROP_FILES,
-  DROP_PICTURES,
+  dropFiles,
+  dropPictures,
   fileChip,
   FILES_STAY,
   MESSAGE_LABEL,
@@ -52,7 +53,7 @@ import {
   PLACEHOLDER_PROJECT,
   placeholderWorkspace,
   providerNotReady,
-  ONLY_FILES,
+  onlyFiles,
   removePicture,
   SEND,
   shrunkTo,
@@ -65,8 +66,9 @@ import {
   waitingForUpload,
   WORKING_ON_IT,
 } from './copy';
-import { ACCEPT_ALL, ACCEPT_FILES, checkFiles, kindOf, uploadFile, type AttachedFile, type UploadSend } from './attachments';
+import { acceptAll, acceptFiles, checkFiles, kindOf, uploadFile, type AttachedFile, type UploadSend } from './attachments';
 import type { DockPlace } from './context';
+import { drawingsOffered } from './drawings';
 import { addPictures, dragHasFiles, picturesFrom, type PictureDeps, type PreparedPicture } from './pictures';
 import { defaultProvider, ProviderPicker, providerOptions } from './ProviderPicker';
 import { startDockTurn, stopDockTurn } from './send';
@@ -232,13 +234,13 @@ export function Composer({ place, status, conversation, conversationId, running,
   );
 
   // Pictures go to pictures.ts (unless a coding agent that takes none is picked); geometry files
-  // and drawings upload; anything else is refused.
+  // and drawings (while the dock offers them) upload; anything else is refused.
   const add = useCallback(
     async (all: File[]) => {
       if (!all.length) return;
       const pics = all.filter((f) => kindOf(f) === 'picture');
       const toUpload = all.filter((f) => kindOf(f) === 'geometry' || kindOf(f) === 'drawing');
-      const fileLines: string[] = all.some((f) => kindOf(f) === 'other') ? [ONLY_FILES] : [];
+      const fileLines: string[] = all.some((f) => kindOf(f) === 'other') ? [onlyFiles(drawingsOffered())] : [];
       if (toUpload.length) {
         const checked = checkFiles(filesRef.current.length, toUpload);
         fileLines.push(...checked.errors);
@@ -302,6 +304,8 @@ export function Composer({ place, status, conversation, conversationId, running,
 
   const projectTitle = place.projectTitle ?? conversation?.project_title ?? place.projectId ?? '';
   const ws = place.workspace;
+  // The Attach label, its accept list and the drop overlay name drawings only while offered.
+  const drawings = drawingsOffered();
 
   // Why Send can't go now (the first that holds), shown in place of the hint.
   let blocked: (Blocked & { onStop?: () => void; stopLabel?: string }) | null = null;
@@ -426,8 +430,8 @@ export function Composer({ place, status, conversation, conversationId, running,
         <button
           type="button"
           className="dock-attach"
-          aria-label={noAgentPictures ? attachFilesOnly(agentName) : ATTACH_LABEL}
-          title={noAgentPictures ? attachFilesOnly(agentName) : ATTACH_LABEL}
+          aria-label={noAgentPictures ? attachFilesOnly(agentName, drawings) : ATTACH_LABEL}
+          title={noAgentPictures ? attachFilesOnly(agentName, drawings) : ATTACH_LABEL}
           data-dock-attach="1"
           onClick={() => file.current?.click()}
         >
@@ -436,7 +440,7 @@ export function Composer({ place, status, conversation, conversationId, running,
         <input
           ref={file}
           type="file"
-          accept={noAgentPictures ? ACCEPT_FILES : ACCEPT_ALL}
+          accept={noAgentPictures ? acceptFiles() : acceptAll()}
           multiple
           hidden
           data-dock-file="1"
@@ -490,7 +494,7 @@ export function Composer({ place, status, conversation, conversationId, running,
       </div>
       {dragging ? (
         <div className="dock-drop" data-dock-drop="1" aria-hidden="true">
-          {noAgentPictures ? DROP_FILES : DROP_PICTURES}
+          {noAgentPictures ? dropFiles(drawings) : dropPictures(drawings)}
         </div>
       ) : null}
     </div>

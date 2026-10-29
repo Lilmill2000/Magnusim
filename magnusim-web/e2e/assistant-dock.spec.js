@@ -1,7 +1,7 @@
 // The Assistant's chat dock (phase 4 spec 2-8, 11.3): where Daniel types to the Assistant and
 // follows what it does. A request's transcript as it streams (the person's message, the
 // model's text, a tool step with its badge, summary and time, a picture inline), the turn's end
-// and counters. A drawing attached in the dock, read by the workspace's own tool in its
+// and counters. A file attached in the dock, read by the workspace's own tool in its
 // conversation and never in another.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys), the
 // scripted model (support/fake-llm.mjs) and the ai-demo test plugin
@@ -284,35 +284,35 @@ test('pictures: two by Attach, one pasted, one dropped; a fifth refused; a wide 
   await expect(chips).toHaveCount(0);
 });
 
-test("a workspace tool reads a drawing attached in the dock (call.readAttachment): its step shows the file's name and size; another conversation's file is refused not_found", async ({ page, request }) => {
+test("a workspace tool reads a file attached in the dock (call.readAttachment): its step shows the file's name and size; another conversation's file is refused not_found", async ({ page, request }) => {
   const w = await openCounter(page, request);
   await openDock(page);
-  // A drawing whose script would run if anything showed it as an SVG.
-  const svg = Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><script>window.__drawingRan = true</script><rect width="10" height="10"/></svg>\n');
+  // A small ASCII STL: a geometry file, which the dock always offers (drawings only while
+  // src/assistant/dock/drawings.ts offers them), and the server reads it as STL.
+  const stl = Buffer.from('solid t\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid t\n');
   const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/attachments' && r.request().method() === 'POST');
-  await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'plate.svg', mimeType: 'image/svg+xml', buffer: svg }]);
+  await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'bracket.stl', mimeType: 'application/octet-stream', buffer: stl }]);
   const att = (await (await uploaded).json()).attachment_id;
   expect(att).toMatch(/^att-[0-9a-f]{16}$/);
   await expect(dock(page).locator('[data-dock-file-chip]')).toHaveAttribute('data-dock-file-state', 'ready', STEP);
   const measure = { tools: [{ name: `${PLUGIN}__attachment_size`, input: { attachment_id: att } }] };
-  fake.reply(measure, { text: `plate.svg is ${svg.length} bytes.` });
-  await dockSend(page, 'How big is the drawing?');
+  fake.reply(measure, { text: `bracket.stl is ${stl.length} bytes.` });
+  await dockSend(page, 'How big is the file?');
   const turn = dockTurn(page);
   await expect(turn.locator('[data-turn-end="done"]')).toBeVisible(STEP);
   const step = turn.locator('[data-dock-step]').first();
   await expect(step.locator('.dock-step-title')).toHaveText('Measure an attached file');
-  await expect(step.locator('[data-dock-result]')).toHaveText(new RegExp(`^✓ plate\\.svg: ${svg.length} bytes · \\d+\\.\\d s$`));
-  await expect(turn.locator('[data-dock-you-file]')).toHaveText([`plate.svg · ${svg.length} bytes`]);
+  await expect(step.locator('[data-dock-result]')).toHaveText(new RegExp(`^✓ bracket\\.stl: ${stl.length} bytes · \\d+\\.\\d s$`));
+  await expect(turn.locator('[data-dock-you-file]')).toHaveText([`bracket.stl · ${stl.length} bytes`]);
   await shot(page, 'attachment-read');
   // The page got the bytes as a file of no type it could render; the model got its size.
-  expect(await w.frame.locator('body').evaluate(() => window.__aiFiles)).toEqual([{ name: 'plate.svg', type: 'application/octet-stream', bytes: svg.length }]);
-  expect(resultsIn(chats().at(-1))).toEqual([{ tool: `${PLUGIN}__attachment_size`, ok: true, data: { name: 'plate.svg', bytes: svg.length }, text: `plate.svg is ${svg.length} bytes.`, images: [] }]);
-  expect(await page.evaluate(() => window.__drawingRan ?? null)).toBe(null);
+  expect(await w.frame.locator('body').evaluate(() => window.__aiFiles)).toEqual([{ name: 'bracket.stl', type: 'application/octet-stream', bytes: stl.length }]);
+  expect(resultsIn(chats().at(-1))).toEqual([{ tool: `${PLUGIN}__attachment_size`, ok: true, data: { name: 'bracket.stl', bytes: stl.length }, text: `bracket.stl is ${stl.length} bytes.`, images: [] }]);
 
   // A new conversation: the file is the first one's, never this one's.
   await dock(page).locator('[data-dock-new]').first().click();
   fake.reply(measure, { text: 'That file is not in this conversation.' });
-  await dockSend(page, 'And that drawing again?');
+  await dockSend(page, 'And that file again?');
   const second = dockTurn(page);
   await expect(second.locator('[data-turn-end="done"]')).toBeVisible(STEP);
   await expect(second.locator('[data-dock-step][data-dock-step-state="failed"] [data-dock-result]')).toHaveText('✗ not_found: No such attached file in this conversation.');
