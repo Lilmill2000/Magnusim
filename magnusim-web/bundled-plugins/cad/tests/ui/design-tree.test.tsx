@@ -170,7 +170,7 @@ describe('design tree', () => {
   // Daniel's poker chip: a Join of an inlay's 8 spots and rings, meant to stay apart, showed a warning
   // triangle and "What's wrong: Inlay is now 8 separate solids: the tools do not touch it".
   it('shows a note as a quiet info mark with a "Note" tooltip, not amber; a warning keeps its badge and says the note after it', () => {
-    const note = "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)";
+    const note = "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)";
     const badge = (id: string) => ui.$(`[data-tree-node="${id}"] [data-feature-badge]`);
     act(() => t.doc.setStatus(f[1].id, { state: 'ok', note }));
     const mark = badge(f[1].id)!;

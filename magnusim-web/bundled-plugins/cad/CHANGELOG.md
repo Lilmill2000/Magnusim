@@ -153,7 +153,7 @@ by a Cut with Keep tools) keeps the pieces apart in one body, which is often
 what you want. Its History row now has a quiet "i" mark instead of the amber
 triangle, and its tooltip and panel say, for example, "Note: Inlay holds 8
 separate pieces: they don't touch, so they stay apart in one body (fine for a
-group like an inlay; to fuse pieces, they must overlap)". A Cut or Intersect
+group like an inlay; to fuse pieces, they must overlap or share a face)". A Cut or Intersect
 that leaves a body in more pieces than it had, and a Press-pull that splits a
 body, still warn. The Assistant reads the same note.
 
@@ -164,7 +164,7 @@ changes what is drawn: a hidden plane is not drawn or clicked in the 3D view,
 but it stays in the tree, can still be picked there and by name, and what is
 built on it (a sketch on a hidden plane, say) builds as before. Its row shows
 it is hidden as a hidden body's does: the eye closed, the name and icon
-dimmed. Hiding is not an undo step, and the Part remembers it when it is
+dimmed (a sketch a later feature uses is hidden by default, with its eye closed but its row not dimmed). Hiding is not an undo step, and the Part remembers it when it is
 opened again. The Assistant hides and shows them the same way.
 
 ## 0.1.0 (October 2026)

@@ -279,7 +279,9 @@ function History() {
       editing === row.id ? 'is-editing' : '',
       moving === row.id ? 'is-dragged' : '',
       drop?.id === row.id ? `is-drop-${drop.where}` : '',
-      shown === false ? 'is-hidden-feature' : '',
+      // Dimmed only when the person hid it (a sketch a later feature uses is hidden by default:
+      // dimming those would grey most of a history); its eye says hidden either way.
+      shown === false && d.sketches?.[row.id] === 'hidden' ? 'is-hidden-feature' : '',
     ]
       .filter(Boolean)
       .join(' ');

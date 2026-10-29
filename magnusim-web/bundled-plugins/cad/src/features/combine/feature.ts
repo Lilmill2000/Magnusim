@@ -59,7 +59,7 @@ function andList(names: string[]): string {
  * separate solids: the tools do not touch it").
  */
 export function apartNote(body: string, solids: number): string {
-  return `${body} holds ${solids} separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)`;
+  return `${body} holds ${solids} separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)`;
 }
 
 /** How many solids a shape holds (the kernel's cheap counts), or null when it cannot say. */

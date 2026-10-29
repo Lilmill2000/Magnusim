@@ -93,7 +93,8 @@ describe("a row's menu: Hide and Show", () => {
   it('a sketch a later feature uses is hidden by default: its menu says Show, which keeps "shown"; Hide then forgets it', () => {
     const f = part();
     ui = mountUi(t);
-    expect(ui.node(f.used.id).className).toContain('is-hidden-feature');
+    // Hidden by default, not by the person: its eye is closed but the row is not dimmed.
+    expect(ui.node(f.used.id).className).not.toContain('is-hidden-feature');
     fireEvent.contextMenu(ui.row(f.used.id), { clientX: 40, clientY: 60 });
     expect(ui.menu()).toContain('Show Sketch 1');
     fireEvent.click(ui.menuItem('visibility'));

@@ -216,7 +216,7 @@ describe('combine', () => {
       expect(bodies(h).map((b) => b.name)).toEqual(['Body 1', 'Body 1 (Instance 2)', 'Body 1 (Instance 3)']);
       const r = await h.ok('combine', COMBINE({ targets: ['Body 1'], tools: ['bodies of Linear pattern 1'] }));
       expect(r.data).toMatchObject({
-        feature: { name: 'Combine 1', type: 'combine', state: 'ok', message: null, note: "Body 1 holds 3 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)" },
+        feature: { name: 'Combine 1', type: 'combine', state: 'ok', message: null, note: "Body 1 holds 3 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)" },
         targets: ['Body 1'],
         tools: ['Body 1 (Instance 2)', 'Body 1 (Instance 3)'],
         bodies: { removed: ['Body 1 (Instance 2)', 'Body 1 (Instance 3)'], changed: [{ body: 'Body 1', volume_mm3: [14400, 43200], solids: [1, 3] }] },

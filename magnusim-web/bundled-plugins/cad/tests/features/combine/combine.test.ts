@@ -119,13 +119,13 @@ describe('Combine build', () => {
     // One tool: 2 pieces.
     let k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 2 })], timings: {} })).on('props', props);
     let r = await combineDef.build(f({ op: 'join' }), {}, ctxOf(k, BODIES, { doc }));
-    expect(r).toMatchObject({ ok: true, note: "Body 1 holds 2 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)" });
+    expect(r).toMatchObject({ ok: true, note: "Body 1 holds 2 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)" });
     expect(r.ok && r.warning).toBeUndefined();
     // Several tools, the target named Inlay: 8 pieces.
     const inlay: CadDoc = { ...doc, bodies: { ...doc.bodies, b_1: { name: 'Inlay', color: '#bdc9db' } } };
     k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 8 })], timings: {} })).on('props', props);
     r = await combineDef.build(f({ op: 'join', tools: ['b_2', 'b_3'] }), {}, ctxOf(k, BODIES, { doc: inlay }));
-    expect(r).toMatchObject({ ok: true, note: "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)" });
+    expect(r).toMatchObject({ ok: true, note: "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)" });
     expect(r.ok && r.warning).toBeUndefined();
     // A real warning beside it (the kernel's own words) stays a warning; the note is kept apart.
     k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 2, warning_text: 'BOPAlgo_AlertAcquiredSelfIntersection' })], timings: {} })).on('props', props);

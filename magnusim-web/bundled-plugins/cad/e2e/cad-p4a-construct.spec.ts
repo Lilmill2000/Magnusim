@@ -470,7 +470,8 @@ test('cad:p4a-construct-hide Hide and Show in the menu of a Plane, an Axis, a Po
   await sketchRow.locator('> .tree-row').click({ button: 'right' });
   await menuItems.filter({ hasText: 'Hide Sketch 1' }).click();
   await expect(sketchRow).toHaveAttribute('data-sketch-shown', '0');
-  await expect(sketchRow).toHaveClass(/is-hidden-feature/);
+  // Back to its default (hidden: Extrude 1 uses it), so not dimmed: only a row the person hid is.
+  await expect(sketchRow).not.toHaveClass(/is-hidden-feature/);
   await expect(sketchRow.locator('[data-sketch-act="visibility"]')).toHaveAttribute('aria-label', 'Show Sketch 1');
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);

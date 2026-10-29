@@ -10,7 +10,7 @@ import { addSolid, newPartFromTree, newProject, openProject, partOpened, runComm
 
 test.use({ viewport: { width: 1280, height: 800 } });
 
-const NOTE = "Body 1 holds 2 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)";
+const NOTE = "Body 1 holds 2 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)";
 
 const panel = (frame: FrameLocator) => frame.locator('[data-cad-panel]');
 const featureRow = (frame: FrameLocator, name: string) => frame.locator('[data-cad-tree] [data-feature-row]').filter({ has: frame.locator(`> .tree-row .tl`, { hasText: new RegExp(`^${name}$`) }) });

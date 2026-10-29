@@ -140,7 +140,7 @@ export interface Bridge {
   /**
    * The host has projects to link the Part into, and so a simulation: true in Magnusim. Magnusim
    * CAD (the desktop edition: no projects, no simulations) says false in its welcome
-   * (ws.context.projectLinks, not in the SDK's types yet); absent, as on Magnusim and older hosts,
+   * (ws.context.projectLinks, unreleased 1.9); absent, as on Magnusim and older hosts,
    * it is true. Read once. False: the Part shows no simulation control and the Assistant offers
    * none; a body's stored choice stays in the document.
    */
@@ -348,7 +348,7 @@ export function createBridge(ws: Workspace): Bridge {
         }
       : null;
   // Magnusim CAD's welcome flag (ws.context.projectLinks === false): absent means projects.
-  const projectLinks = (ws.context as typeof ws.context & { projectLinks?: unknown }).projectLinks !== false;
+  const projectLinks = ws.context.projectLinks !== false;
   const bridge: Bridge = {
     context: ws.context,
     projectLinks: () => projectLinks,
