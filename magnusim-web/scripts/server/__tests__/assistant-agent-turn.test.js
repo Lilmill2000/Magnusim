@@ -2661,9 +2661,11 @@ describe("the person's pictures on a coding agent", LIMIT, () => {
     }
   });
 
-  it("an agent that takes none: the turn ends bad_images with the old words before its prompt (nothing of the request sent); its status row says so; without them it goes on", async () => {
+  it("an agent that takes none: the turn ends bad_images, the words naming it, before its prompt (nothing of the request sent); its status row says so; without them it goes on", async () => {
     const { srv } = await serverWorld();
     const page = await srv.page();
+    // The agent's own name, as the turn knows it (agents/known.ts).
+    const agentLabel = 'Claude Code';
     try {
       const link = await page.open();
       // Before it ever started: the catalogue's word.
@@ -2674,8 +2676,8 @@ describe("the person's pictures on a coding agent", LIMIT, () => {
       const t = srv.handle.turns.get(r.json.turn);
       await settledTurn(t);
       const end = endOf(t);
-      assert.deepEqual([end.state, end.reason, end.message], ['failed', 'bad_images', AGENT_IMAGES_TEXT]);
-      assert.equal(AGENT_IMAGES_TEXT, "A coding agent's request can't carry pictures: send it without them.");
+      assert.deepEqual([end.state, end.reason, end.message], ['failed', 'bad_images', AGENT_IMAGES_TEXT(agentLabel)]);
+      assert.equal(AGENT_IMAGES_TEXT(agentLabel), `${agentLabel} doesn't take pictures. Send the message without them.`);
       const pid = lastPid(claude);
       assert.ok(methodsIn(claude, pid).includes('initialize'));
       assert.ok(!methodsIn(claude, pid).includes('session/prompt'), 'no prompt went to the agent');
@@ -2695,7 +2697,7 @@ describe("the person's pictures on a coding agent", LIMIT, () => {
       assert.equal(r3.status, 202, JSON.stringify(r3.json));
       const t3 = srv.handle.turns.get(r3.json.turn);
       await settledTurn(t3);
-      assert.deepEqual([endOf(t3).reason, endOf(t3).message], ['bad_images', AGENT_IMAGES_TEXT]);
+      assert.deepEqual([endOf(t3).reason, endOf(t3).message], ['bad_images', AGENT_IMAGES_TEXT(agentLabel)]);
       assert.equal(claude.received(pid).filter((m) => m.method === 'session/prompt').length, 1);
     } finally {
       page.close();

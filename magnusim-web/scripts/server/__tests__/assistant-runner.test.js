@@ -235,6 +235,30 @@ async function c3Run(runner, def, input = {}, { turn = logTurn(), callTurn, app,
   );
 }
 
+describe('the runner: a refusal before the question (ToolDef.refuse)', () => {
+  it('a compute call the tool refuses from its input fails unasked and unrun; null goes on to the question; a refuse that throws counts as null', async () => {
+    const runs = [];
+    const { runner, asked } = c3Runner('allow');
+    const def = c3Tool('import_it', 'compute', runs, {
+      schema: obj({ kind: { type: 'string', maxLength: 20 } }),
+      refuse: async (input, ctx) => {
+        assert.equal(ctx.projectId, 'p1');
+        if (input.kind === 'boom') throw new Error('boom');
+        return input.kind === 'drawing' ? { code: 'invalid_input', message: 'plate.svg is a drawing.', hint: 'Open a workspace.' } : null;
+      },
+    });
+    let r = await c3Run(runner, def, { kind: 'drawing' });
+    assert.deepEqual([r.ok, r.code], [false, 'invalid_input']);
+    assert.match(JSON.stringify(r.part), /plate\.svg is a drawing\..*Open a workspace\./);
+    assert.deepEqual([asked.length, runs.length], [0, 0], 'never asked, never run');
+    r = await c3Run(runner, def, { kind: 'geometry' });
+    assert.equal(r.ok, true);
+    r = await c3Run(runner, def, { kind: 'boom' });
+    assert.equal(r.ok, true);
+    assert.deepEqual([asked.length, runs.length], [2, 2]);
+  });
+});
+
 describe('the runner: escalate (raise-only risk per call)', () => {
   it('maxRisk orders read < edit < compute < destructive; an unknown one is destructive', () => {
     assert.equal(maxRisk('read', 'edit'), 'edit');

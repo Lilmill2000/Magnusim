@@ -26,7 +26,7 @@ const STEP = { timeout: 30_000 };
 const ACCEPT_FILES = '.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.svg,.dxf';
 const ACCEPT_ALL = `image/png,image/jpeg,image/webp,${ACCEPT_FILES}`;
 /** The words a request with pictures ends with on an agent whose start says it takes none (turns.ts AGENT_IMAGES_TEXT). */
-const AGENT_IMAGES_TEXT = "A coding agent's request can't carry pictures: send it without them.";
+const AGENT_IMAGES_TEXT = / doesn't take pictures\. Send the message without them\.$/;
 
 let host;
 let fake;
@@ -348,7 +348,7 @@ test("a coding agent whose start says it takes no pictures: a request with one e
   await expect(end).toBeVisible({ timeout: 60_000 });
   await expect(end).toContainText(AGENT_IMAGES_TEXT);
   const summary = (await (await request.get(api(`/api/assistant/turns/${id}`))).json()).turn;
-  expect([summary.state, summary.end_reason, summary.message]).toEqual(['failed', 'bad_images', AGENT_IMAGES_TEXT]);
+  expect([summary.state, summary.end_reason, summary.message]).toEqual(['failed', 'bad_images', expect.stringMatching(AGENT_IMAGES_TEXT)]);
   expect(promptsSent().length, 'nothing of the request went to the agent').toBe(before);
   // The person's message still shows with its picture.
   await expect(turn.locator('.dock-you img')).toHaveCount(1);

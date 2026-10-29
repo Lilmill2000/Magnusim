@@ -104,6 +104,13 @@ export interface Assessed {
   labels?: Record<string, string>;
 }
 
+/** A tool's refusal before any question (ToolDef.refuse). */
+export interface ToolRefusal {
+  code: string;
+  message: string;
+  hint?: string;
+}
+
 export interface AssessContext {
   ctx: ToolCtx;
   signal: AbortSignal;
@@ -176,6 +183,12 @@ export interface ToolDef {
    * that throws or takes longer than ESCALATE_MAX_MS (runner.ts) counts as destructive.
    */
   escalate?(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null>;
+  /**
+   * A refusal the tool can tell from the input alone, before any question is asked (import_file:
+   * an attached drawing): the call fails with it, unasked and unrun. null lets it go on. One that
+   * throws counts as null (the tool's own run still checks).
+   */
+  refuse?(input: Record<string, unknown>, ctx: ToolCtx): ToolRefusal | null | Promise<ToolRefusal | null>;
   /** Plain-English card title and copy for compute and destructive calls (§14), in place of the generic one. */
   gateText?(input: Record<string, unknown>, a: Assessed | null): { title: string; copy: string; detail?: GateDetail[] };
   /** The project this call reads or writes, for the per-call privacy check (C5). null = no project data. */

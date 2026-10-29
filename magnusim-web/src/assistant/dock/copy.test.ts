@@ -90,8 +90,8 @@ describe('the dock copy', () => {
       'big.step is larger than 500 MB. Import it with + Add geometry.',
       'poster.svg is larger than 20 MB, the limit for a drawing.',
       'At most 4 files per message.',
-      'Files stay on this PC. The Assistant gets their names and can import them into the project open here.',
-      'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.',
+      'Files stay on this PC. The Assistant gets their names and can import them into the project open here. A workspace tool may read one, and what it reports goes to the provider.',
+      'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them. A workspace tool may read one, and what it reports goes to the provider.',
       'Attached files',
     ]);
     expect([copy.uploadingLabel('a.stl'), copy.waitingForUpload('a.stl'), copy.uploadLost('a.stl')]).toEqual([

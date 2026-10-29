@@ -272,7 +272,8 @@ describe('reference pictures', () => {
     r = await startTurn(m, { text: 'x', provider: 'agent:someone', images: [{ media_type: 'image/png', data: PNG_1x1 }] });
     assert.equal(r.status, 400);
     assert.notEqual(r.body.code, 'bad_images');
-    assert.notEqual(r.body.error, AGENT_IMAGES_TEXT);
+    assert.notEqual(r.body.error, AGENT_IMAGES_TEXT('someone'));
+    assert.doesNotMatch(String(r.body.error), /doesn't take pictures/);
     assert.equal(m.provider.requests.length, 0);
   });
 

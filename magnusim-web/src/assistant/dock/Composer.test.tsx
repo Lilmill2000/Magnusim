@@ -362,7 +362,7 @@ describe('files (core host tools spec 13.1)', () => {
     await pick([geometry('bracket.step', Math.round(4.2 * 1024 * 1024))]);
     expect(chips().map((c) => c.querySelector('.dock-chip-text > span')?.textContent)).toEqual(['bracket.step · 4.2 MB']);
     expect(chips()[0].getAttribute('data-dock-file-state')).toBe('uploading');
-    expect(screen.getByText('Files stay on this PC. The Assistant gets their names and can import them into the project open here.')).toBeTruthy();
+    expect(screen.getByText('Files stay on this PC. The Assistant gets their names and can import them into the project open here. A workspace tool may read one, and what it reports goes to the provider.')).toBeTruthy();
     expect(line()).toBe('Waiting for bracket.step to finish uploading…');
     expect(sendButton().disabled).toBe(true);
     await waitFor(() => expect(up.calls).toHaveLength(1));
@@ -484,7 +484,7 @@ describe('files (core host tools spec 13.1)', () => {
     expect(panel.querySelector('svg, img')).toBeNull();
     expect(document.body.innerHTML).not.toContain('DRAWING-MARKUP');
     expect(document.querySelector('[data-dock-files-note]')?.textContent).toBe(
-      'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.',
+      'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them. A workspace tool may read one, and what it reports goes to the provider.',
     );
     await act(async () => up.calls[0].answer(200, { ok: true, attachment_id: 'att-00000000000000d1', name: 'flange.dxf', bytes: dxf.length, kind: 'drawing', format: 'dxf' }));
     await act(async () => up.calls[1].answer(200, { ok: true, attachment_id: 'att-00000000000000d2', name: 'plate.svg', bytes: markup.length, kind: 'drawing', format: 'svg' }));

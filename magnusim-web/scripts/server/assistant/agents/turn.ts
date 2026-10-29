@@ -199,7 +199,7 @@ export function callsCapText(n: number): string {
 
 export const AGENT_CALLS_END_TEXT = (n: number) => `The agent went on calling tools past this message's ${n}-call limit, so Magnusim stopped it.`;
 /** A request with pictures on an agent whose initialize said it takes none (nothing was sent to it). */
-export const AGENT_IMAGES_TEXT = "A coding agent's request can't carry pictures: send it without them.";
+export const AGENT_IMAGES_TEXT = (name: string): string => `${name} doesn't take pictures. Send the message without them.`;
 export const PICTURE_NOTE = '(The agent showed a picture; the chat will show it.)';
 export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its own tool; answer such questions in a project's Magnusim window.`;
 /** A permission request for a tool of Magnusim's server that isn't allowed without asking now (it left the list served to the agent). */
@@ -968,7 +968,7 @@ class AgentTurnRun implements AgentDispatch {
     // The person's pictures go only to an agent whose initialize said it takes them (a kept
     // session's said so at its start); otherwise the turn ends before its prompt, nothing sent.
     if (t.promptImages?.length && !session.info.images) {
-      t.end('failed', 'bad_images', AGENT_IMAGES_TEXT);
+      t.end('failed', 'bad_images', AGENT_IMAGES_TEXT(this.name));
       return;
     }
     // An agent may answer session/new before its MCP servers are up (its bridge connects

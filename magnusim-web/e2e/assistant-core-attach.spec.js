@@ -178,7 +178,7 @@ test('a STEP and an STL attached in the dock: chips with name and size, uploaded
   await expect(chips(page).nth(0)).toContainText('bracket.step · 3 KB');
   await expect(chips(page).nth(1)).toContainText('wing.stl · 2 KB');
   for (const i of [0, 1]) await expect(chips(page).nth(i)).toHaveAttribute('data-dock-file-state', 'ready', STEP_WAIT);
-  await expect(dock(page).getByText('Files stay on this PC. The Assistant gets their names and can import them into the project open here.')).toBeVisible();
+  await expect(dock(page).getByText('Files stay on this PC. The Assistant gets their names and can import them into the project open here. A workspace tool may read one, and what it reports goes to the provider.')).toBeVisible();
   await shot(page, 'chips');
   // Kept on this PC, from this window, not yet any conversation's.
   const kept = (await getJson(request, '/api/test/assistant/state')).attachments;
@@ -232,7 +232,7 @@ test('an SVG and a DXF attached in the dock: drawing chips with name and size, n
   await expect(dock(page).locator('[data-dock-files] svg, [data-dock-files] img')).toHaveCount(0);
   expect(await page.evaluate(() => window.__drawingRan ?? null)).toBe(null);
   await expect(dock(page).locator('[data-dock-files-note]')).toHaveText(
-    'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.',
+    'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them. A workspace tool may read one, and what it reports goes to the provider.',
   );
   await shot(page, 'drawings');
   const kept = (await getJson(request, '/api/test/assistant/state')).attachments;
@@ -248,19 +248,18 @@ test('an SVG and a DXF attached in the dock: drawing chips with name and size, n
   await expect(chips(page)).toHaveCount(2);
   expect(uploads, 'nothing more was sent').toHaveLength(2);
 
-  // Sent: one drawing line each; the model tries to import the SVG, the person is asked, and the model is told where a drawing goes.
+  // Sent: one drawing line each; the model tries to import the SVG and is told where a drawing goes,
+  // with no question first (the import can't be: the person is never asked to allow it).
   const byName = Object.fromEntries(kept.map((a) => [a.name, a.id]));
   const geometries = async () => ((await getJson(request, `/api/project?project_id=${project}`)).project.geometries || []).length;
   const before = await geometries();
   fake.reply(
     { text: 'Trying it.', tools: [{ name: 'import_file', input: { project_id: '', attachment_id: byName['plate.svg'], path: '', as: 'geometry', length_unit: '' } }] },
-    { text: 'plate.svg is a drawing: open a CAD Part for it.' },
+    { text: 'plate.svg is a drawing: it needs a workspace that imports drawings.' },
   );
   const id = await dockSend(page, 'Use these outlines');
-  const gate = dock(page).locator('[data-gate]').first();
-  await expect(gate).toBeVisible(STEP_WAIT);
-  await gate.locator('[data-gate-answer="yes"]').click({ timeout: STEP_WAIT.timeout });
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP_WAIT);
+  await expect(dock(page).locator('[data-gate]')).toHaveCount(0);
   const first = chats().find((r) => userTexts(r).includes('Use these outlines'));
   expect(userTexts(first)).toContain(`[Attached drawing: "plate.svg", 2 KB, attachment_id ${byName['plate.svg']}]\n[Attached drawing: "flange.dxf", 1 KB, attachment_id ${byName['flange.dxf']}]`);
   const DRAWING_HERE = 'plate.svg is a drawing (SVG/DXF): open a workspace that imports drawings and ask there.';

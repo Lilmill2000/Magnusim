@@ -63,7 +63,7 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
     name: 'import_file',
     title: 'Import a geometry file',
     description:
-      'Adds a geometry file to the project open here: a file the person attached (attachment_id) or a path the person typed in this message (path). STL/OBJ/PLY need length_unit. Unused fields: "".',
+      'Adds a geometry file to the project open here: one the person attached (the attachment_id of an "Attached geometry file" line, never a drawing) or a path the person typed in this message (path). STL/OBJ/PLY need length_unit. Unused fields: "".',
     schema: objectSchema({
       project_id: S.id('"" = this window\'s project'),
       attachment_id: S.text(40, 'a file the person attached in the dock; "" when path'),
@@ -78,6 +78,15 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
     contexts,
     available: offeredIn(contexts, (ctx: ToolCtx) => (ctx.projectId ? true : 'No project is open in this window.')),
     projectOf: (_input, ctx) => ctx.projectId,
+    // An attached drawing is refused before the person is asked to allow an import it can't be.
+    async refuse(input, ctx) {
+      const attachment = str(input.attachment_id).trim();
+      if (!attachment || !d.attachments) return null;
+      const opened = await d.attachments.open(attachment, conversationOf(ctx));
+      if (!opened) return null;
+      (opened.stream as { destroy?: () => void }).destroy?.();
+      return DRAWING_EXTS.includes(extname(opened.name).toLowerCase()) ? { code: 'invalid_input', message: drawingHereText(cleanText(opened.name, 80)) } : null;
+    },
     describe: (input) => ({
       line: `Import ${str(input.attachment_id) ? 'the attached file' : cleanText(basename(str(input.path)), 120)}`,
       detail: [

@@ -45,7 +45,7 @@
 import { safeLinks, type ToolLink } from './links.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolSource, TurnUse } from './registry.ts';
+import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolRefusal, ToolSource, TurnUse } from './registry.ts';
 import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, GATE_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
@@ -515,6 +515,17 @@ export class ToolRunner {
       available = 'It is not available now.';
     }
     if (available !== true) return errorResult(call, 'unavailable', String(available));
+    // A refusal the tool knows from the input alone: before any question, so none is asked for nothing.
+    if (def.refuse) {
+      let no: ToolRefusal | null = null;
+      try {
+        no = await def.refuse(input, o.ctx);
+      } catch {
+        no = null;
+      }
+      if (o.signal.aborted) return this.abortedResult(call, o.signal, false);
+      if (no) return errorResult(call, no.code, no.message, no.hint);
+    }
     // 5. This call's risk (raise-only), then ask first.
     const assessed = def.escalate ? await this.assess(def, input, o) : null;
     if (o.signal.aborted) return this.abortedResult(call, o.signal, false);

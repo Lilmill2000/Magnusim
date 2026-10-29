@@ -137,9 +137,9 @@ export function fileSize(bytes: number): string {
 export const fileChip = (name: string, bytes: number): string => `${name} · ${fileSize(bytes)}`;
 /** The person's message's files in the transcript (their list's name). */
 export const ATTACHED_FILES = 'Attached files';
-export const FILES_STAY = 'Files stay on this PC. The Assistant gets their names and can import them into the project open here.';
+export const FILES_STAY = 'Files stay on this PC. The Assistant gets their names and can import them into the project open here. A workspace tool may read one, and what it reports goes to the provider.';
 /** The same, with a drawing among them: import_file never takes one. */
-export const DRAWINGS_STAY = 'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.';
+export const DRAWINGS_STAY = 'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them. A workspace tool may read one, and what it reports goes to the provider.';
 export const uploadingLabel = (name: string): string => `Uploading ${name}`;
 export const waitingForUpload = (name: string): string => `Waiting for ${name} to finish uploading…`;
 export const uploadLost = (name: string): string => `${name} didn't reach Magnusim's server. Attach it again.`;
