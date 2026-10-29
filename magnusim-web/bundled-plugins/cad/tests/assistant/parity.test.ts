@@ -241,6 +241,10 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(DOC.retry).toMatchObject({ tool: 'direct', value: 'retry' });
     expect(FEATURE_FIELDS.pattern_circular.symmetric).toMatchObject({ tool: 'pattern', field: 'options', value: 'symmetric' });
     expect(FEATURE_FIELDS.extrude.face).toMatchObject({ tool: 'extrude', field: 'face' });
+    // Delete body (Daniel 2026-10-28), both ways: the body menu's Delete and the Delete key, and direct's delete_body.
+    expect(UI.deleteBodies).toEqual({ kind: 'reach', tool: 'direct', field: 'kind', value: 'delete_body' });
+    expect(FEATURE_FIELDS.delete_body.bodies).toEqual({ kind: 'reach', tool: 'direct', field: 'bodies' });
+    expect(AI_TOOLS.direct['kind=delete_body']).toEqual({ kind: 'control', table: 'ui', method: 'deleteBodies' });
   });
 
   it('the other way (Daniel: parity both ways): every sketch entity kind the Assistant draws has a person sketch tool, a registered command, that draws it', async () => {

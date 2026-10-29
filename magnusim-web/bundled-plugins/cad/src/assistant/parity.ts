@@ -265,6 +265,7 @@ export const FEATURE_FIELDS: FeatureFields = {
   delete_faces: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), repair: REPAIR },
   press_pull: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), distance: DIRECT_FIELD('distance'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
   split: { ...BASE, targets: DIRECT_FIELD('bodies'), tool: DIRECT_FIELD('tool'), repair: REPAIR },
+  delete_body: { ...BASE, bodies: DIRECT_FIELD('bodies') },
   enclosure: {
     ...BASE,
     shape: DIRECT_FIELD('shape'),
@@ -434,6 +435,7 @@ export const UI: { readonly [K in keyof UiController]: Reach } = {
   setRollbackIndex: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
   setBodyInSimulation: reach('body', 'simulation'),
+  deleteBodies: DIRECT('delete_body'),
   featureMenu: MENU,
   bodyMenu: MENU,
   showMenu: MENU,
@@ -960,6 +962,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'kind=delete_faces': command('modify.delete-faces'),
     'kind=split': command('modify.split'),
     'kind=enclosure': command('cfd.enclosure'),
+    'kind=delete_body': control('ui', 'deleteBodies'),
     'kind=repair': control('ui', 'runFeatureAction'),
     'kind=retry': control('ui', 'runFeatureAction'),
     faces: panel('press_pull', 'faces'),

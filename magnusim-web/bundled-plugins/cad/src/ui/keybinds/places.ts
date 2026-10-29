@@ -19,7 +19,7 @@ export type KeybindPlace = 'toolbar' | 'views-menu' | 'tree' | 'rail' | 'sketch-
 
 /** The commands set somewhere other than their own right-click on the toolbar. */
 const EXPLICIT: Readonly<Record<string, { place: KeybindPlace; words: string }>> = Object.freeze({
-  'ui.delete': { place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…" },
+  'ui.delete': { place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's or a body's row), then Set keybind for Delete…" },
   'ui.rename': { place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's or a body's row), then Set keybind for Rename…" },
   'ui.toggle-rail': { place: 'rail', words: 'right-click the arrow that collapses the design tree or the Sketch panel, then Set keybind…' },
   'sketch.delete': { place: 'sketch-menu', words: 'in a sketch, right-click the selected geometry, then Set keybind for Delete…' },

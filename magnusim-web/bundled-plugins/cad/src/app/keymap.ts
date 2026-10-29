@@ -113,7 +113,7 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   // ---- both modes, and the model's edit keys
   e('edit.undo', 'Undo', 'Edit', 'model', ['Ctrl+KeyZ']),
   e('edit.redo', 'Redo', 'Edit', 'model', ['Ctrl+KeyY', 'Ctrl+Shift+KeyZ']),
-  e('ui.delete', 'Delete selected features', 'Edit', 'model', ['Delete'], true),
+  e('ui.delete', 'Delete selected features or bodies', 'Edit', 'model', ['Delete'], true),
   e('ui.rename', 'Rename the selected feature or body', 'Edit', 'any', ['F2'], true),
   e('ui.toggle-rail', 'Show or hide the tree (the Sketch panel in a sketch)', 'View', 'any', ['Ctrl+Backslash'], true),
   e('view.fit', 'Fit', 'View', 'any', ['KeyF']),

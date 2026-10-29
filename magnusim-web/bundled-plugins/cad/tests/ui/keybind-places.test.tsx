@@ -33,7 +33,7 @@ describe('every keybind has a Set keybind the person can reach', () => {
     const places = keybindPlaces();
     expect(places.map((p) => p.id)).toEqual(KEYMAP.map((e) => e.id));
     for (const p of places) expect(p.words, p.id).toMatch(/Set keybind/);
-    expect(keybindPlace('ui.delete')).toEqual({ place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…" });
+    expect(keybindPlace('ui.delete')).toEqual({ place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's or a body's row), then Set keybind for Delete…" });
     expect(keybindPlace('sketch.enter')?.place).toBe('sketch-finish');
     expect(keybindPlace('view.back')?.place).toBe('views-menu');
     expect(keybindPlace('view.front')?.place).toBe('toolbar');

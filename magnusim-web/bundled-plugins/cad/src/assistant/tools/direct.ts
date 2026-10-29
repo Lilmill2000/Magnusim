@@ -1,5 +1,5 @@
 // direct: the person's direct edits and CFD prep in one step, the same records as their panels
-// (src/features/{press_pull,delete_faces,split,enclosure}), and their Try repair / Retry on a
+// (src/features/{press_pull,delete_faces,split,enclosure,delete_body}), and their Try repair / Retry on a
 // failed feature (DocService.repair / retry). edit "" makes a new feature; edit "<name>" replaces
 // that feature's inputs (its type must be the kind's); repair and retry take the feature in edit.
 //   press_pull    faces of one body move along their own normals by distance (> 0 adds, < 0 removes)
@@ -9,6 +9,8 @@
 //   enclosure     a box or a cylinder (about X, Y or Z) around bodies ([] every solid body made
 //                 before it), each side out by the padding: zero, percent (distance "10") or fixed
 //                 (distance a length); sides rows set single sides on their own
+//   delete_body   bodies leave the model from this point in the history (the person's Delete on a
+//                 body in the tree): one Delete body feature for them all
 //   repair        the person's Try repair: the feature's booleans again with a looser tolerance
 //   retry         the person's Retry: build again a feature the geometry kernel stopped
 // Selectors read the bodies built now, or for an edit the bodies just before the feature. The
@@ -18,7 +20,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import type { BodyId, DeleteFacesFeature, EnclosureFeature, EnclosureSide, Feature, FeatureId, FeatureType, OriginAxisRef, OriginPlaneRef, PersistentRef, PressPullFeature, SplitFeature, SplitTool } from '../../types/doc';
+import type { BodyId, DeleteBodyFeature, DeleteFacesFeature, EnclosureFeature, EnclosureSide, Feature, FeatureId, FeatureType, OriginAxisRef, OriginPlaneRef, PersistentRef, PressPullFeature, SplitFeature, SplitTool } from '../../types/doc';
 import { ToolError } from '../errors';
 import { andList, bodyText, createdLabels, editTarget, faceText, fillFeature, nameFor, partOf, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo } from '../features-io';
@@ -30,10 +32,10 @@ import { echo, faceLabel, hitWords, selectAny, selectSet, withScene, type FaceHi
 import { storeExpr } from '../sketch/compile';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 
-export const DIRECT_KINDS = ['press_pull', 'delete_faces', 'split', 'enclosure', 'repair', 'retry'] as const;
+export const DIRECT_KINDS = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'repair', 'retry'] as const;
 type Kind = (typeof DIRECT_KINDS)[number];
 type MakeKind = Exclude<Kind, 'repair' | 'retry'>;
-const TYPE: Record<MakeKind, FeatureType> = { press_pull: 'press_pull', delete_faces: 'delete_faces', split: 'split', enclosure: 'enclosure' };
+const TYPE: Record<MakeKind, FeatureType> = { press_pull: 'press_pull', delete_faces: 'delete_faces', split: 'split', enclosure: 'enclosure', delete_body: 'delete_body' };
 export const ENCLOSURE_SHAPES = ['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'] as const;
 export const ENCLOSURE_SIDES: readonly EnclosureSide[] = ['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'];
 const BOX_SIDES: readonly EnclosureSide[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
@@ -76,7 +78,7 @@ async function facesOfOneBody(sc: Scene, texts: readonly string[]): Promise<{ bo
   return { body: hits[0].body.id, bodyName: hits[0].body.name, faces, words: echoes.join('; '), warnings };
 }
 
-/** Bodies by selector (split targets, enclosure bodies), deduplicated. */
+/** Bodies by selector (split targets, enclosure bodies, bodies to delete), deduplicated. */
 async function bodiesOf(sc: Scene, texts: readonly string[]): Promise<{ ids: BodyId[]; names: string[] }> {
   const ids: BodyId[] = [];
   const names: string[] = [];
@@ -133,9 +135,10 @@ const direct: EditTool<Plan> = {
       if (!t) problems.push(`faces[${i}]: a face selector, not ""`);
     });
     if (kind === 'press_pull' && !distance) problems.push('distance: how far the faces move ("5 mm"; below 0 removes material)');
-    if ((kind === 'delete_faces' || kind === 'repair' || kind === 'retry') && distance) problems.push(`distance: "" with ${kind}`);
+    if ((kind === 'delete_faces' || kind === 'delete_body' || kind === 'repair' || kind === 'retry') && distance) problems.push(`distance: "" with ${kind}`);
     if (kind === 'split' && !bodies.length) problems.push('bodies: the bodies to split');
-    if (kind !== 'split' && kind !== 'enclosure' && bodies.length) problems.push(`bodies: [] with ${kind}`);
+    if (kind === 'delete_body' && !bodies.length) problems.push('bodies: the bodies to delete');
+    if (kind !== 'split' && kind !== 'enclosure' && kind !== 'delete_body' && bodies.length) problems.push(`bodies: [] with ${kind}`);
     bodies.forEach((t, i) => {
       if (!t) problems.push(`bodies[${i}]: a body, not ""`);
     });
@@ -203,6 +206,12 @@ const direct: EditTool<Plan> = {
       resolved.bodies = andList(r.targets.names);
       resolved.tool = r.tool.words;
       what = `split ${andList(r.targets.names)} by ${r.tool.words}${r.tool.tool.kind === 'body' ? (keepTool ? ' (kept)' : ' (used up)') : ''}`;
+    } else if (kind === 'delete_body') {
+      // An edit names the bodies as they are just before it (the ones it deletes are there then).
+      const r = await withScene(ctx, { before: self, self }, (sc) => bodiesOf(sc, bodies));
+      fields = { bodies: r.ids } as Partial<DeleteBodyFeature>;
+      resolved.bodies = andList(r.names);
+      what = `deleted ${andList(r.names)} from the model here on`;
     } else {
       const r = bodies.length ? await withScene(ctx, { before: self, self }, (sc) => bodiesOf(sc, bodies)) : { ids: [], names: [] };
       const own = (editing as EnclosureFeature | null)?.creates;
@@ -234,7 +243,7 @@ const direct: EditTool<Plan> = {
     const draft = { ...(editing ?? def.create(s.doc, {})), ...fields } as Feature;
     const why = def.incomplete(draft, units);
     if (why) {
-      const field = /^(Distance|Offset|Percent)/i.test(why) ? 'distance' : /side|Top|Bottom|Radius|[+-][XYZ]/.test(why) && kind === 'enclosure' ? 'sides' : kind === 'split' ? 'tool' : 'faces';
+      const field = /^(Distance|Offset|Percent)/i.test(why) ? 'distance' : /side|Top|Bottom|Radius|[+-][XYZ]/.test(why) && kind === 'enclosure' ? 'sides' : kind === 'split' ? 'tool' : kind === 'delete_body' ? 'bodies' : 'faces';
       throw new ToolError(/: /.test(why) ? 'expr_error' : 'bad_input', `${field}: ${why}.`, { detail: { field } });
     }
     if (editing) resolved.edit = editing.name;
@@ -375,6 +384,16 @@ registerFeatureIo('split', {
     if (t.kind === 'plane') return { ...base, tool: PLANE_WORD[t.plane], distance: t.offset === '0' ? '' : t.offset };
     if (t.kind === 'face') return t.face ? { ...base, tool: faceText(s, t.body, t.face, at) } : null;
     return t.body ? { ...base, tool: bodyText(s, t.body), keep_tool: !!t.keepTool } : null;
+  },
+});
+
+registerFeatureIo('delete_body', {
+  tool: 'direct',
+  inputsOf(f, services) {
+    const g = f as DeleteBodyFeature;
+    if ((g.bodies ?? []).length > BODIES_MAX) return null;
+    const s = services.doc.state.get();
+    return { edit: g.name, name: '', kind: 'delete_body', ...BLANK, bodies: (g.bodies ?? []).map((id) => bodyText(s, id)) };
   },
 });
 

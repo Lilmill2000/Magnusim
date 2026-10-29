@@ -63,7 +63,7 @@ export const CONSTRUCT_METHOD_NAMES = ['offset', 'angle', 'three_points', 'midpl
 const CONSTRUCT_METHODS = CONSTRUCT_METHOD_NAMES;
 
 /** The direct tool's kinds. */
-export const DIRECT_KIND_NAMES = ['press_pull', 'delete_faces', 'split', 'enclosure', 'repair', 'retry'] as const;
+export const DIRECT_KIND_NAMES = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'repair', 'retry'] as const;
 const DIRECT_KINDS = DIRECT_KIND_NAMES;
 
 /** The pattern tool's options (on/off choices beyond flip). */
@@ -475,14 +475,14 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 240,
     description:
-      'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.',
+      'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). delete_body: bodies leave the model from here on. repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.',
     schema: obj({
       edit: EDIT,
       name: NAME,
       kind: en(DIRECT_KINDS, 'What to do'),
       faces: arr(SEL('A face selector'), 0, 60, 'press_pull, delete_faces: faces of one body; else [].'),
       distance: EXPR('press_pull: the distance; split by Top, Front, Right: the offset; enclosure percent or fixed: the padding; else ""'),
-      bodies: arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; else [].'),
+      bodies: arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; delete_body: the bodies to delete; else [].'),
       tool: SEL('split: Top, Front, Right, a flat face or a body; else ""'),
       keep_tool: bool('split by a body: keep the tool body'),
       shape: en(['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'], 'enclosure: box or a cylinder about X, Y, Z; else box'),

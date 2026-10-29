@@ -74,7 +74,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
 | `solver-build/**`, `workspace/solver/*`, `src/solver-worker/**`, `tests/solver/**` | P3 (sketcher) | Built and tested now; not wired into the page until P3. |
 | `src/modules.ts`, `src/naming/**`, `src/doc/features/{hooks,body-ids}.ts`, `tests/arch/**`, `docs/p2p3-plan.md` | INTEGRATE (P2/P3 architect) | Module discovery, the naming layer, the feature-type hooks; frozen during the P2/P3 build (requests to INTEGRATE). Builders append only to the plan's §8 contract-change table. |
-| `src/features/{import,delete_faces,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
+| `src/features/{import,delete_faces,delete_body,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts`, `e2e/cad-body-menu.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
 | `src/features/p2/**` | P2-FEATURES | P2's shared building blocks (selection list, viewport picker, stored-face refs, Try repair helpers, in-frame dialog, icons, `p2.css`). No `index.ts`, so module discovery skips it. Its colours are `--cad-p2-*` in `src/styles/tokens.css`. |
 | `src/sketch/**`, the solver worker's `WORKERS` line in `scripts/build.mjs` + their tests | P3-SKETCH | Sketch mode, tools, dimensions and constraints UI, solver client. |
 | `src/features/{sketch,extrude}/**`, `src/ui/tree/**` + their tests | P3-PROFILES | The sketch feature (regions), extrude, sketch rows in the tree. |
@@ -419,7 +419,15 @@ with the host once for the page's life, and its chip goes in the dock.
   `exprs`/`mapExprs`, `isolateWhileEditing`; `src/doc/features/hooks.ts` holds
   the P1 defaults). Builds may publish an `output` (a sketch's regions) that
   later features read; a feature's cache key holds its parents' keys. Every body
-  carries face names (`src/naming/`).
+  carries face names (`src/naming/`). v0.5.0 adds `delete_body` (Delete body,
+  SOLIDWORKS' Delete/Keep Body; `src/features/delete_body/`): `bodies` (ids, as
+  Combine and Split name theirs) leave the model from that point in the history
+  (`removed`, no kernel call); a body not there at that point fails the feature,
+  red, with the model as before it. The tree's Delete on a body (its menu, or the
+  Delete key with only bodies selected) adds one through `UiController.deleteBodies`
+  (`beginNew` + `commit`: one undo step for every body selected); its panel edits
+  which bodies; the Assistant's `direct` kind `delete_body` makes the same record.
+  An older CAD shows its row red and keeps it.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a

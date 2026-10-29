@@ -371,12 +371,12 @@ describe('the Set keybind dialog', () => {
   it('a key two commands have: the question names both and where they work; Replace takes it from both (review)', async () => {
     const d = await open('view.front');
     await d.keys({ key: 'Delete', code: 'Delete' });
-    expect(d.q('[data-keybind-status]').textContent).toBe('Delete is the key of Delete selected features (model) and Delete (sketch). Replace both?');
+    expect(d.q('[data-keybind-status]').textContent).toBe('Delete is the key of Delete selected features or bodies (model) and Delete (sketch). Replace both?');
     await d.click('replace');
     expect(d.k.current('view.front')).toEqual(['Delete']);
     expect(d.k.current('ui.delete')).toEqual([]);
     expect(d.k.current('sketch.delete')).toEqual([]);
-    expect(d.q('[data-keybind-status]').textContent).toBe('Front view: Delete; taken from Delete selected features (model) and Delete (sketch)');
+    expect(d.q('[data-keybind-status]').textContent).toBe('Front view: Delete; taken from Delete selected features or bodies (model) and Delete (sketch)');
   });
 
   it("Finish sketch's dialog says it has no key of its own, and which key finishes the sketch", async () => {

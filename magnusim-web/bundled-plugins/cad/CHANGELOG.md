@@ -28,6 +28,12 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   joined), a body's cross-section at Top, Front, Right or a plane of yours, and
   points typed as x, y, z.
 - Parameters have a comment, under each row.
+- Delete a body: right-click it in the tree (or select it and press Delete),
+  "Delete Body 1". It goes from the tree and the view, and "Delete body 1" is
+  added to the history (one undo step: Undo brings the body back). Several
+  bodies selected are deleted by one feature. Edit the feature to change which
+  bodies it deletes; delete or suppress it to bring them back. The Assistant
+  deletes bodies the same way.
 - The sketch toolbar's drawing tools come in groups, one button each with an
   arrow beside it that lists the group's tools (the button runs the one used
   last): Line (Centerline, Midpoint line), Rectangle (Center, 3-point corner,

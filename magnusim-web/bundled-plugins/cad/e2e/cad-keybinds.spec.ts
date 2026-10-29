@@ -140,7 +140,7 @@ test('cad:keybinds-dialog Set keybind: Rectangle to Shift+R (Replace takes it fr
     await viewDlg.locator('[data-keybind-capture]').click();
     // A key two commands have: the question names both and where each works (Replace would take it from both).
     await page.keyboard.press('Delete');
-    await expect(viewDlg.locator('[data-keybind-status]')).toHaveText('Delete is the key of Delete selected features (model) and Delete (sketch). Replace both?');
+    await expect(viewDlg.locator('[data-keybind-status]')).toHaveText('Delete is the key of Delete selected features or bodies (model) and Delete (sketch). Replace both?');
     await viewDlg.locator('[data-keybind-action="cancel"]').click();
     await viewDlg.locator('[data-keybind-capture]').click();
     await page.keyboard.press('Escape');
@@ -388,12 +388,12 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     // the Part's own row.
     await expect(frame.locator('[data-cad-tree] [data-feature-row]')).toHaveCount(0);
     const partRow = frame.locator('[data-part-name] > .tree-row');
-    await viaMenu(partRow, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');
+    await viaMenu(partRow, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features or bodies', 'Delete');
     await viaMenu(partRow, 'set-keybind-ui.rename', 'Set keybind for Rename…', 'ui.rename', 'Rename the selected feature or body', 'F2');
     await addSolid(page, { size: [30, 20, 10] });
     const row = frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"] > .tree-row');
     // A tree row: Delete's and Rename's keys, next to Delete.
-    await viaMenu(row, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');
+    await viaMenu(row, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features or bodies', 'Delete');
     await viaMenu(row, 'set-keybind-ui.rename', 'Set keybind for Rename…', 'ui.rename', 'Rename the selected feature or body', 'F2');
     // The tree's collapse arrow: the toggle's key.
     await viaMenu(frame.locator('[data-tree-collapse]'), 'set-keybind-ui.toggle-rail', 'Set keybind…', 'ui.toggle-rail', 'Show or hide the tree (the Sketch panel in a sketch)', 'Ctrl+\\');
