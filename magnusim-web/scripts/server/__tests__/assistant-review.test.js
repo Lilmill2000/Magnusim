@@ -21,7 +21,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 const { makeManager, startTurn, settled, eventsOf, answerGates, checkInvariants } = await import('./assistant-harness.js');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { reviewText } = await import('../assistant/prompt.ts');
-const { capText, REVIEW_NO_ROOM_NOTE } = await import('../assistant/loop.ts');
+const { capText, REVIEW_NO_ROOM_NOTE, REVIEW_NO_ROOM_FULL_NOTE } = await import('../assistant/loop.ts');
 const { AGENT_IMAGES_TEXT } = await import('../assistant/turns.ts');
 const { checkPromptImages, IMAGE_CAPS } = await import('../assistant/sanitize.ts');
 const { reviewOf } = await import('../assistant/registry.ts');
@@ -121,6 +121,26 @@ describe('review rounds', () => {
     assert.deepEqual([r.turn.state, r.turn.endReason], ['done', 'end_turn']);
     assert.deepEqual(ofType(r.turn, 'review'), []);
     assert.equal(m.provider.requests.length, 2);
+  });
+
+  it('a round due in a conversation it could fill is not started: the answer stands, the turn ends capped (conversation_full), and the conversation is full', async () => {
+    // A model the price table doesn't know: full at 160,000 of 200,000 tokens.
+    const m = mk({ model: 'claude-test-9' });
+    const ran = demo(m, { review: { rounds: 3, prompt: PROMPT } });
+    m.provider.script(ADD, { text: 'Done: the plate.', usage: { input: 159_990 } });
+    const r = await startTurn(m, { text: 'Make it', tab: 'T1' });
+    await settled(r.turn);
+    const t = r.turn;
+    assert.deepEqual([t.state, t.endReason], ['capped', 'conversation_full']);
+    assert.match(t.message, /^This conversation is full: the last request used 159,990 of the 200,000 tokens Magnusim counts for claude-test-9/);
+    assert.deepEqual(ran, ['add']);
+    assert.deepEqual(ofType(t, 'review'), []);
+    assert.ok(ofType(t, 'note').some((n) => n.text === REVIEW_NO_ROOM_FULL_NOTE));
+    assert.equal(t.summary().text_so_far, 'Done: the plate.');
+    assert.equal(m.provider.requests.length, 2);
+    const next = await startTurn(m, { text: 'Again', tab: 'T1', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code], [409, 'conversation_full']);
+    checkInvariants(assert, t.conv, m.provider.requests);
   });
 
   it('every round edits: it stops after the n-th round', async () => {

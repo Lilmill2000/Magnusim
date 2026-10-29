@@ -219,6 +219,32 @@ describe('which limit a full conversation reached, and how close it is (the full
     );
   });
 
+  it('nearlyFull: the next request at the context limit, or pictures, bytes or messages within the largest step so far (2 more messages); a closed conversation is full', () => {
+    const c = conv();
+    assert.equal(c.nearlyFull({ promptTokens: 159_999 }), null);
+    assert.deepEqual(c.nearlyFull({ promptTokens: 160_000 }), { reason: 'context', used: 0, limit: 160_000, of: 'app', window: 200_000, near: true });
+    const before = c.counts();
+    pictures(c, 30);
+    c.noteStep(before);
+    assert.deepEqual(c.largestStep, { messages: 30, images: 30, bytes: c.bytes });
+    pictures(c, 39);
+    assert.equal(c.nearlyFull({ promptTokens: 0 }), null, '69 + 30 < 100');
+    pictures(c, 1);
+    assert.deepEqual(c.nearlyFull({ promptTokens: 0 }), { reason: 'images', used: 70, limit: 100, of: 'app', near: true }, '70 + 30 >= 100');
+    assert.equal(c.fullDetail(), null);
+    c.closedBy = c.nearlyFull({ promptTokens: 0 });
+    assert.deepEqual(c.fullDetail(), { reason: 'images', used: 70, limit: 100, of: 'app', near: true });
+    assert.equal(
+      fullText(c.fullDetail(), 'Claude Opus 5.5'),
+      'This conversation is full: it holds 70 pictures, and Magnusim keeps at most 100 in one conversation (its next step could pass that). Start a new one.',
+    );
+    const msgs = conv();
+    for (let i = 0; i < 297; i += 1) msgs.append({ role: 'user', parts: [{ type: 'text', text: 'x' }] });
+    assert.equal(msgs.nearlyFull({ promptTokens: 0 }), null, '297 + 0 + 2 < 300');
+    msgs.append({ role: 'user', parts: [{ type: 'text', text: 'x' }] });
+    assert.equal(msgs.nearlyFull({ promptTokens: 0 }).reason, 'messages', 'a sum-up adds 2');
+  });
+
   it('room: the limit it is closest to, with its numbers; none for a coding agent', () => {
     const c = conv();
     assert.deepEqual(c.room(), { reason: 'messages', used: 0, limit: 300 });

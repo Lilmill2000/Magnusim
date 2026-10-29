@@ -431,6 +431,120 @@ describe('the steps cap', () => {
   });
 });
 
+describe('a conversation the next step could fill: the model sums up first (conversations.ts nearlyFull)', () => {
+  // A model the price table doesn't know: 200K of context and 100 pictures a conversation.
+  const MODEL = 'claude-test-9';
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const snap = () => hostTool('snap', { risk: 'edit', run: async () => ({ ok: true, text: 'Made.', images: [{ type: 'image', mediaType: 'image/png', base64: PNG, width: 1, height: 1 }], summary: 'made' }) });
+  const peek = () => hostTool('peek', { run: async () => ({ ok: true, data: { seen: true }, summary: 'peeked' }) });
+  const calls = (name, n) => Array.from({ length: n }, () => ({ name }));
+  const lastUserText = (req) => {
+    const m = req.messages.at(-1);
+    return m.role === 'user' ? m.parts.filter((p) => p.type === 'text').map((p) => p.text) : [];
+  };
+
+  it('the next request would pass 80% of the context: one more request with the same tools and a note after the results; its answer ends the turn capped (conversation_full) and kept; the next start is refused with the same words', async () => {
+    const m = mk({ model: MODEL, hostTools: [peek()] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { text: 'Done: the bracket. Left: the holes.' });
+    const r = await startTurn(m, 'Build the bracket.');
+    await settled(r.turn);
+    const t = r.turn;
+    const said = 'This conversation is full: the last request used 159,990 of the 200,000 tokens Magnusim counts for claude-test-9, and a conversation is full at 80% (its next step could pass that). Start a new one.';
+    assert.deepEqual([t.state, t.endReason, t.message], ['capped', 'conversation_full', said]);
+    assert.equal(t.summary().text_so_far, 'Done: the bracket. Left: the holes.', 'the sum-up is kept');
+    assert.equal(m.provider.requests.length, 2, 'one sum-up request');
+    const [first, sumUp] = m.provider.requests;
+    assert.equal(JSON.stringify(sumUp.req.tools), JSON.stringify(first.req.tools), 'the same tools (the cached prefix and the thinking binding hold)');
+    assert.deepEqual(lastUserText(sumUp.req), ["This conversation is nearly full (context 159,990 of 160,000 tokens). Don't call tools now: say what is done and what is left."]);
+    assert.deepEqual(codes(resultsIn(sumUp.req.messages.at(-2))), ['ok'], 'the step’s result goes with it');
+    assert.ok(ofType(t, 'note').some((n) => n.text === 'This conversation is nearly full; asking the model to sum up.'));
+    assert.equal(t.conv.messages.length, sumUp.req.messages.length + 1, 'nothing stored that was not sent, but the answer');
+    const next = await startTurn(m, { text: 'Now the holes.', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code, next.body.error], [409, 'conversation_full', said]);
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it("pictures: a step's calls stop before their pictures could pass the conversation's limit (never run, answered capped), and the model sums up; no result is stored that is not sent", async () => {
+    const m = mk({ model: MODEL, hostTools: [snap()] });
+    m.provider.script({ tools: calls('snap', 40) }, { tools: calls('snap', 70) }, { text: 'Made 97 parts; the last 13 are left.' });
+    const r = await startTurn(m, 'Make 110 parts.');
+    await settled(r.turn);
+    const t = r.turn;
+    assert.deepEqual([t.state, t.endReason], ['capped', 'conversation_full'], t.message);
+    const second = lastResults(t.conv);
+    assert.equal(second.filter((x) => x.ok).length, 57, '40 + 57 + one more result’s 4 would pass 100');
+    const capped = second.filter((x) => !x.ok);
+    assert.equal(capped.length, 13);
+    assert.ok(capped.every((x) => x.error.code === 'capped' && x.error.message === "Not run: This conversation is nearly full (pictures 97 of 100). Don't call tools now: say what is done and what is left."));
+    assert.equal(t.conv.images, 97);
+    assert.equal(t.message, 'This conversation is full: it holds 97 pictures, and Magnusim keeps at most 100 in one conversation (its next step could pass that). Start a new one.');
+    const sumUp = m.provider.requests.at(-1);
+    assert.equal(m.provider.requests.length, 3);
+    assert.equal(t.conv.messages.length, sumUp.req.messages.length + 1, 'every stored result was sent');
+    assert.equal(t.calls, 97, 'the capped calls never ran');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('pictures within the largest step so far: the model sums up after that step', async () => {
+    const m = mk({ model: MODEL, hostTools: [snap()] });
+    m.provider.script({ tools: calls('snap', 30) }, { tools: calls('snap', 30) }, { tools: calls('snap', 30) }, { text: 'Made 90.' });
+    const r = await startTurn(m, 'Make parts.');
+    await settled(r.turn);
+    // After 60: 60 + 30 < 100, go on; after 90: 90 + 30 >= 100, sum up.
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.conv.images], ['capped', 'conversation_full', 90]);
+    assert.equal(m.provider.requests.length, 4);
+    assert.deepEqual(r.turn.conv.largestStep, { ...r.turn.conv.largestStep, images: 30 });
+  });
+
+  it('a sum-up that calls tools anyway: each answered capped with the full words, never run; the turn ends capped (conversation_full)', async () => {
+    let ran = 0;
+    const m = mk({ model: MODEL, hostTools: [hostTool('peek', { run: async () => (ran++, { ok: true, summary: 'peeked' }) })] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { tools: calls('peek', 2) });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
+    assert.equal(ran, 1);
+    const last = lastResults(r.turn.conv);
+    assert.deepEqual(codes(last), ['capped', 'capped']);
+    assert.equal(last[0].error.message, `Not run: ${r.turn.message}`);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it('a sum-up request that never answers (Stop): the conversation is full all the same, so no later turn reads the note', async () => {
+    const m = mk({ model: MODEL, hostTools: [peek()] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { text: 'Summing', hold: 'sum' });
+    const r = await startTurn(m, 'x');
+    await m.provider.reached('sum');
+    assert.equal((await m.manager.stop(r.turn.id)).status, 200);
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'stopped');
+    const next = await startTurn(m, { text: 'y', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code], [409, 'conversation_full']);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a full conversation at a step's start ends the turn capped (conversation_full) before anything is sent: the person's pictures took it to the limit", async () => {
+    const m = mk({ model: MODEL });
+    m.provider.script({ text: 'ok' });
+    const first = await startTurn(m, 'x');
+    await settled(first.turn);
+    const conv = first.turn.conv;
+    for (let i = 0; i < 49; i += 1) {
+      conv.append({ role: 'user', parts: [{ type: 'image', mediaType: 'image/png', base64: PNG, width: 1, height: 1 }] });
+      conv.append({ role: 'assistant', parts: [{ type: 'text', text: 'seen' }], raw: { provider: 'anthropic', model: MODEL, payload: [] } });
+    }
+    assert.equal(conv.images, 49);
+    for (let i = 0; i < 49; i += 1) conv.append({ role: 'user', parts: [{ type: 'image', mediaType: 'image/png', base64: PNG, width: 1, height: 1 }] });
+    assert.equal(conv.fullReason(), null);
+    const r = await startTurn(m, { text: 'And these two?', conversation: conv.id, images: [{ media_type: 'image/png', data: PNG }, { media_type: 'image/png', data: PNG }] });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
+    assert.equal(r.turn.message, 'This conversation is full: it holds 100 pictures, and Magnusim keeps at most 100 in one conversation. Start a new one.');
+    assert.equal(m.provider.requests.length, 1, 'nothing more sent');
+  });
+});
+
 describe('the token and minute caps', () => {
   it('tokens: the calls after the request that passed the cap are answered capped; the turn ends at once', async () => {
     const m = mk({ hostTools: [hostTool('peek')], caps: { turn_tokens: 10_000 } });

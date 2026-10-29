@@ -14,7 +14,9 @@
  * 100 images and 20 MB each, and "full" at 80% of the model's context (a local server's
  * model: the context its server reported, else 128K tokens). Nothing is written to disk.
  * fullDetail() names the limit a conversation reached with its numbers (fullText words it for
- * the person), and room() how close it is to the nearest one.
+ * the person), and room() how close it is to the nearest one. nearlyFull() says when the next
+ * step could reach one (the loop then asks the model to sum up, and closes the conversation:
+ * a closed one is full from then on).
  *
  * It also lists its turns (their ids, at most 200, oldest first) and takes its first turn's
  * title as its own (phase 4 spec 9.3): the turn manager keeps its newest 50 turns while it
@@ -57,10 +59,21 @@ export interface Room {
   limit: number;
 }
 
-/** A limit as fullText words it: whose it is ('model': the model's own; 'app': Magnusim's), and the context's whole window. */
+/**
+ * A limit as fullText words it: whose it is ('model': the model's own; 'app': Magnusim's), the
+ * context's whole window, and `near` when not reached yet but within the next step (nearlyFull).
+ */
 export interface FullDetail extends Room {
   of: 'model' | 'app';
   window?: number;
+  near?: boolean;
+}
+
+/** What one step added, or the most any step of a conversation added (nearlyFull's margin). */
+export interface Growth {
+  messages: number;
+  images: number;
+  bytes: number;
 }
 
 const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -68,6 +81,20 @@ const megabytes = (bytes: number) => {
   const mb = bytes / (1024 * 1024);
   return `${mb < 10 ? Math.floor(mb * 10) / 10 : Math.floor(mb)} MB`;
 };
+
+/** A limit's numbers in the person's words ("pictures 72 of 100"), as the note asking the model to sum up says them. */
+export function roomNumbers(r: Room): string {
+  switch (r.reason) {
+    case 'messages':
+      return `messages ${grouped(r.used)} of ${grouped(r.limit)}`;
+    case 'images':
+      return `pictures ${grouped(r.used)} of ${grouped(r.limit)}`;
+    case 'bytes':
+      return `results and pictures ${megabytes(r.used).replace(' MB', '')} of ${megabytes(r.limit)}`;
+    case 'context':
+      return `context ${grouped(r.used)} of ${grouped(r.limit)} tokens`;
+  }
+}
 
 /** Why a conversation is full, with its numbers, as the person reads it (`label`: the model's name). */
 export function fullText(d: FullDetail, label: string): string {
@@ -92,7 +119,7 @@ export function fullText(d: FullDetail, label: string): string {
       break;
     }
   }
-  return `This conversation is full: ${why}. Start a new one.`;
+  return `This conversation is full: ${why}${d.near ? ' (its next step could pass that)' : ''}. Start a new one.`;
 }
 
 export interface FrozenGuide {
@@ -134,9 +161,13 @@ export class Conversation {
   turnsDropped = 0;
   /** Its first turn's title ('' before any). */
   title = '';
+  /** Set when a turn ended it nearly full (after the model summed up): it is full from then on. */
+  closedBy: FullDetail | null = null;
   private readonly list: Message[] = [];
   private imageCount = 0;
   private byteCount = 0;
+  /** The most one step added (its answer and its results; a review prompt, a sum-up note): nearlyFull's margin. */
+  private largest: Growth = { messages: 0, images: 0, bytes: 0 };
 
   constructor(id: string, b: Binding, now: number) {
     this.id = id;
@@ -246,9 +277,44 @@ export class Conversation {
     ];
   }
 
-  /** The first limit this conversation reached, with its numbers (null while more turns fit). */
+  /** The first limit this conversation reached, with its numbers (null while more turns fit); a closed one's, else. */
   fullDetail(baseUrl?: string): FullDetail | null {
-    return this.limits(baseUrl).find((l) => l.used >= l.limit) ?? null;
+    return this.limits(baseUrl).find((l) => l.used >= l.limit) ?? this.closedBy;
+  }
+
+  /** Its counts now (messages, pictures, bytes), for what a step adds (noteStep). */
+  counts(): Growth {
+    return { messages: this.list.length, images: this.imageCount, bytes: this.byteCount };
+  }
+
+  /** A step ended: what it added since `before` (counts() then) widens the margin nearlyFull keeps. */
+  noteStep(before: Growth): void {
+    const now = this.counts();
+    this.largest = {
+      messages: Math.max(this.largest.messages, now.messages - before.messages),
+      images: Math.max(this.largest.images, now.images - before.images),
+      bytes: Math.max(this.largest.bytes, now.bytes - before.bytes),
+    };
+  }
+
+  /** The most one step of it added so far. */
+  get largestStep(): Growth {
+    return { ...this.largest };
+  }
+
+  /**
+   * Whether the next step could reach a limit, and which (with its numbers, `near`): the next
+   * request's prompt (`next.promptTokens`: the last request's and what was added since) at the
+   * context's limit, or pictures, bytes or messages within the largest step it made so far (and
+   * 2 more messages: the note that asks for a sum-up, and the answer). Null while there is room.
+   */
+  nearlyFull(next: { promptTokens: number }, baseUrl?: string): FullDetail | null {
+    const margin: Growth = { ...this.largest, messages: this.largest.messages + 2 };
+    for (const l of this.limits(baseUrl)) {
+      const reached = l.reason === 'context' ? next.promptTokens >= l.limit : l.used + margin[l.reason] >= l.limit;
+      if (reached) return { ...l, near: true };
+    }
+    return null;
   }
 
   /** Why no more turns fit (null while they do); with `baseUrl`, a context only that server reported counts. */

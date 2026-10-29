@@ -6,7 +6,9 @@
  *     then the prompt, its reference pictures (none for a local model known not to read
  *     images) and the app context, as one user message
  *   for each step:
- *     the caps (minutes, tokens; then the spend estimate and the day's reservation)
+ *     the caps (minutes, tokens; then the spend estimate and the day's reservation); a full
+ *       conversation (conversations.ts fullDetail) → capped (conversation_full), but for the
+ *       request that sums up
  *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
  *       before this request, forgotten answers ask again
  *     a local server's model row (its context, kept 60 s), read before the tools are chosen:
@@ -26,12 +28,17 @@
  *         a round with no such success, or the n-th, ends the turn done; a round counts
  *         against the caps as any step (a turn already at a cap ends done with a note)
  *     tools: each call in order, through the runner (only this step's tools resolve)
- *       a cap reached → this and every later call is answered `capped`
+ *       a cap reached → this and every later call is answered `capped`; so is a call whose
+ *         pictures could take the next request past the conversation's picture limit
  *       a call declined → every later call `skipped`
  *       Stop → every later call `stopped`
  *       a crash → the results so far kept, the rest `failed`, then t.crash
  *     one user message with every result, in call order
  *     steps cap: one more request (same tools, so the cached prefix holds) to sum up
+ *     nearly full (conversations.ts nearlyFull: the next step could reach a limit): a note asks
+ *       the model to sum up, one more request (same tools); its answer ends the turn capped
+ *       (conversation_full) and the conversation is full from then on; calls it makes anyway
+ *       are answered `capped`, never run. A review round due then is not started.
  *
  * Two invariants hold whatever happens (a property test drives random scripts):
  * 1. Stored messages are append-only (conversations.ts).
@@ -42,6 +49,7 @@
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
 import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
+import { IMAGE_CAPS } from './sanitize.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
 import { clearedResults, isStrictNote, sentMessages, strictNoteKey } from './providers/common.ts';
@@ -68,8 +76,7 @@ import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, 
 import type { Caps, AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import type { Clock, GateBroker } from './gates.ts';
-import type { Conversation } from './conversations.ts';
-import { fullText } from './conversations.ts';
+import { fullText, roomNumbers, type Conversation, type FullDetail } from './conversations.ts';
 import {
   ProviderError,
   type Effort,
@@ -105,8 +112,18 @@ export interface ModelTurnSettings {
 
 export type CapReason = 'steps' | 'turn_tokens' | 'turn_minutes' | 'turn_usd' | 'day_usd';
 export interface CapHit {
-  reason: CapReason;
+  reason: CapReason | 'conversation_full';
   text: string;
+}
+
+/** The note when the next step could fill the conversation (the model sums up first). */
+export const NEARLY_FULL_NOTE = 'This conversation is nearly full; asking the model to sum up.';
+/** A review round was due, but the conversation is nearly full: its answer stands. */
+export const REVIEW_NO_ROOM_FULL_NOTE = 'No review round: this conversation is nearly full.';
+
+/** What the model is told when the next step could fill the conversation (after the step's results). */
+export function nearlyFullText(d: FullDetail): string {
+  return `This conversation is nearly full (${roomNumbers(d)}). Don't call tools now: say what is done and what is left.`;
 }
 
 /**
@@ -585,6 +602,9 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   const priced = adapter.id !== 'openai_compatible';
   const model = t.settings.model;
   let finalStep = false;
+  // Why the summing-up request goes: the conversation nearly full (null: the steps cap).
+  let finalReason: FullDetail | null = null;
+  const label = modelLabel(model);
   let lastTools: ToolDef[] | null = null;
   let prev: EstimateInput['prev'] = null;
   let counted = 0;
@@ -603,6 +623,18 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   const learnImages = () => {
     const known = adapter.id === 'openai_compatible' ? (adapter.readsImages?.(model) ?? null) : true;
     if (known !== null) t.setModelFacts({ images: known });
+  };
+  // Whether the next step could fill the conversation: the next request's prompt is the last
+  // one's and what was added since, as it would be sent (images a model doesn't read left out).
+  const nearNow = (): FullDetail | null => {
+    const added = freshOf(sentMessages(conv.messages, clearedResults(conv.messages)).slice(counted));
+    return conv.nearlyFull({ promptTokens: conv.promptTokens + estimateTokens(added.chars, t.images === false ? [] : added.images) }, t.settings.base_url);
+  };
+  // A turn that ends the conversation full: logged with its numbers, and the conversation keeps it.
+  const endFull = (d: FullDetail) => {
+    if (d.near) conv.closedBy = d;
+    alog('info', 'conversation full', { turn: t.id, conversation: conv.id, reason: d.reason, used: d.used, limit: d.limit, near: !!d.near });
+    t.end('capped', 'conversation_full', fullText(d, label));
   };
 
   for (let step = 1; ; step += 1) {
@@ -625,11 +657,11 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     t.setUsed(limitsNow());
     const hit = stepCap(t, caps);
     if (hit) return t.end('capped', hit.reason, hit.text);
-    const full = conv.fullDetail();
-    if (full && full.reason !== 'context') {
-      alog('info', 'conversation full', { turn: t.id, conversation: conv.id, reason: full.reason, used: full.used, limit: full.limit });
-      return t.end('failed', 'conversation_full', fullText(full, modelLabel(model)));
-    }
+    // A full conversation sends nothing more, but for the request that sums up (it stays within
+    // every provider's limits: a step's calls stop before their pictures could pass one).
+    // A context counts only for the server that reported it (the turn's address).
+    const full = conv.fullDetail(t.settings.base_url);
+    if (full && !finalStep) return endFull(full);
     // The turn follows its tab (§9.4): a project opened there since the last step (core__show, or
     // the person) is this step's, and its privacy is asked before this request carries any of it.
     const at = step > 1 && t.tab ? tabHere(d.registry, t.tab) : null;
@@ -893,9 +925,11 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     if (out.stop === 'max_tokens') return t.end('capped', 'max_tokens', 'The model ran out of room mid-answer.');
 
     const calls = out.message.parts.filter(isCall);
+    // What this step adds (its answer, its results or a review prompt): nearlyFull's margin.
+    const before = conv.counts();
     conv.append(out.message);
     if (!calls.length) {
-      if (finalStep) return t.end('capped', 'steps', capText('steps', caps));
+      if (finalStep) return finalReason ? endFull(finalReason) : t.end('capped', 'steps', capText('steps', caps));
       // The turn's workspace asked for review and its edits went through since the last round:
       // the next round (within the turn's usual caps, checked at the next step).
       const ask = editedSinceReview ? reviewAsk(workspaceNow(), t.tab ? (d.registry.coreOf?.(t.tab) ?? null) : null) : null;
@@ -906,6 +940,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           t.note(REVIEW_NO_ROOM_NOTE);
           return t.end('done', 'end_turn', null);
         }
+        // Nor in a conversation the round could fill: the answer stands, and the conversation ends here.
+        const near = nearNow();
+        if (near) {
+          t.note(REVIEW_NO_ROOM_FULL_NOTE);
+          return endFull(near);
+        }
         reviewOf ||= ask.rounds;
         reviewRound += 1;
         editedSinceReview = false;
@@ -914,6 +954,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           role: 'user',
           parts: withGuide([{ type: 'text', text: reviewText(reviewRound, reviewOf, ask.prompt, t.images === false ? 0 : pictures.length) }], syncGuide(t, workspaceNow(), true)),
         });
+        conv.noteStep(before);
         continue;
       }
       return t.end('done', 'end_turn', null);
@@ -923,7 +964,20 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     /** The call the runner has in hand (until its result is kept), for a crash. */
     let inHand = -1;
     let declined = false;
-    let capped: CapHit | null = finalStep ? { reason: 'steps', text: capText('steps', caps) } : null;
+    let capped: CapHit | null = finalStep
+      ? finalReason
+        ? { reason: 'conversation_full', text: fullText(finalReason, label) }
+        : { reason: 'steps', text: capText('steps', caps) }
+      : null;
+    // The pictures the next request would carry, past the conversation's picture limit with one
+    // more result's (at most IMAGE_CAPS.perResult): this call and the later ones don't run.
+    let roomStop: FullDetail | null = null;
+    const pictureRoom = (): FullDetail | null => {
+      const lim = conv.limits(t.settings.base_url).find((l) => l.reason === 'images');
+      if (!lim) return null;
+      const pending = results.reduce((n, p) => n + p.images.length, 0);
+      return lim.used + pending + IMAGE_CAPS.perResult > lim.limit ? { ...lim, used: lim.used + pending, near: true } : null;
+    };
     const notRun = (call: ToolCallPart, code: string, message: string) => {
       t.emit(toolCallEvent(call, offered.get(call.name) ?? null, step));
       const r = errorResult(call, code, message);
@@ -938,6 +992,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           continue;
         }
         if (!capped) capped = callCap(t, caps);
+        if (!capped && (roomStop = pictureRoom())) capped = { reason: 'conversation_full', text: nearlyFullText(roomStop) };
         if (capped) {
           notRun(call, 'capped', `Not run: ${capped.text}`);
           continue;
@@ -978,14 +1033,28 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     // Every call answered exactly once, in call order: capped, skipped and stopped ones too.
     // A workspace the calls opened gives its notes with their results (syncGuide).
     conv.append({ role: 'user', parts: withGuide(results, syncGuide(t, workspaceNow(), true)) });
+    conv.noteStep(before);
     if (stoppedNow(t)) return;
-    if (capped) {
+    if (capped && !(roomStop && !finalStep)) {
       if (capped.reason === 'steps' && !finalStep) {
         finalStep = true;
         t.note('Tool limit reached; asking the model to sum up.');
         continue;
       }
+      if (finalReason) return endFull(finalReason);
       return t.end('capped', capped.reason, capped.text);
+    }
+    // The next step could fill the conversation: the model sums up first, in one more request
+    // with the same tools (the cached prefix holds), told so after this step's results. The
+    // conversation is full from now on, however this turn ends (a cap, Stop): no later turn
+    // starts after the note.
+    const near = finalStep ? null : (roomStop ?? nearNow());
+    if (near) {
+      conv.append({ role: 'user', parts: [{ type: 'text', text: nearlyFullText(near) }] });
+      conv.closedBy = near;
+      finalStep = true;
+      finalReason = near;
+      t.note(NEARLY_FULL_NOTE);
     }
   }
 }
