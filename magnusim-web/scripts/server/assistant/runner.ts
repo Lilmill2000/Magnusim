@@ -45,7 +45,7 @@
 import { safeLinks, type ToolLink } from './links.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
-import type { ProgressOptions, ToolCtx, ToolDef, ToolOutcome, ToolRefusal, ToolSource, TurnUse } from './registry.ts';
+import type { ProgressOptions, StepInfo, ToolCtx, ToolDef, ToolOutcome, ToolRefusal, ToolSource, TurnUse } from './registry.ts';
 import { capResult, checkImages, cleanText, CONFIRM_NOTE_MAX, GATE_NOTE_MAX, TEXT_CAPS } from './sanitize.ts';
 import { fillLocalDefaults, stripNullOptionals, validateInput } from './schema.ts';
 import { realClock, type Clock, type GateBroker, type GateDetail, type GateOwner, type GateRequest } from './gates.ts';
@@ -114,6 +114,8 @@ export interface RunOptions {
   callTurn?: string;
   /** This step's tools by name: the only names that may run. */
   offered: ReadonlyMap<string, ToolDef>;
+  /** The call's place in its step (a turn's own calls: loop.ts); the tool hears it (a workspace page, through the relay). */
+  step?: StepInfo;
   /** How long its confirm question waits (the broker's own when left out: 10 minutes). */
   gateTimeoutMs?: number;
   /** Hears the tool's progress, as a turn's log does (MCP: the client's progress notifications). */
@@ -694,7 +696,7 @@ export class ToolRunner {
     let onAbort: (() => void) | null = null;
     const released = new AbortController();
     const ran = Promise.resolve()
-      .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? o.callTurn ?? null, progress, released: released.signal }))
+      .then(() => def.run(input, { signal, ctx: o.ctx, turn: o.turn?.id ?? o.callTurn ?? null, progress, released: released.signal, ...(o.step ? { step: o.step } : {}) }))
       .then(
         (out): ToolOutcome | null => {
           return out && typeof out === 'object' ? out : { ok: false, error: { code: 'bad_result', message: 'The tool gave no result.' }, summary: 'No result' };

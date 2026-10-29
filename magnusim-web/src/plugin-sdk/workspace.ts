@@ -569,6 +569,17 @@ export interface AssistantCall {
   tool: string;
   /** The input, already checked against the tool's inputSchema. */
   input: Record<string, unknown>;
+  /**
+   * The call's place in its step: one answer of the model, whose calls run one after another
+   * (unreleased, 1.9). `step` numbers the answers of the turn from 1; `callsLeftInStep` is how many
+   * calls of that answer come after this one; `editsLeftInStep` how many of those are this page's
+   * `edit` or `destructive` tools (of the workspace the turn is bound to). A page that shows the
+   * model a picture after its edits can take it once, when no edit follows. Absent for a call from
+   * another app on this PC (MCP) or a coding agent, and on an older host.
+   */
+  step?: number;
+  callsLeftInStep?: number;
+  editsLeftInStep?: number;
   /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
   signal: AbortSignal;
   /**
@@ -662,6 +673,11 @@ export interface AssistantTurn {
   state: 'running' | 'ended';
   /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
   title: string;
+  /**
+   * The conversation it runs in (unreleased, 1.9): the same for each turn of one conversation,
+   * so a page can keep what it tells the model per conversation. Absent on an older host.
+   */
+  conversation?: string | null;
   /** It runs on a local server (a smaller model, often with less room: keep results short). */
   local: boolean;
   /** The model's context in tokens, when the app knows it (null otherwise). */
@@ -1459,7 +1475,7 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
    * assistant.result. A tool the host did not accept, or no handler, answers "no_tool" at once.
    */
   async function runAssistantCall(data: unknown): Promise<void> {
-    const d = (data || {}) as { call?: unknown; turn?: unknown; tool?: unknown; input?: unknown };
+    const d = (data || {}) as { call?: unknown; turn?: unknown; tool?: unknown; input?: unknown; step?: unknown; calls_left_in_step?: unknown; edits_left_in_step?: unknown };
     const id = typeof d.call === 'string' ? d.call : '';
     if (!id || assistantCalls.has(id)) return;
     const tool = typeof d.tool === 'string' ? d.tool : '';
@@ -1472,6 +1488,9 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
     const ctl = new AbortController();
     assistantCalls.set(id, ctl);
     const input = d.input && typeof d.input === 'object' && !Array.isArray(d.input) ? (d.input as Record<string, unknown>) : {};
+    const whole = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+    const [step, callsLeft, editsLeft] = [whole(d.step), whole(d.calls_left_in_step), whole(d.edits_left_in_step)];
+    const place = step !== null && callsLeft !== null && editsLeft !== null ? { step, callsLeftInStep: callsLeft, editsLeftInStep: editsLeft } : {};
     let answer: Record<string, unknown>;
     try {
       const out = await handler({
@@ -1479,6 +1498,7 @@ function makeWorkspace(port: MessagePort, context: WorkspaceContext): Workspace 
         turn: typeof d.turn === 'string' ? d.turn : '',
         tool,
         input,
+        ...place,
         signal: ctl.signal,
         progress: (fraction, label, opts) => {
           if (ctl.signal.aborted) return;

@@ -286,7 +286,8 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual(await page.frame('active', 1), { turns: 1, hold_until: null });
     const inv = await page.frame('invoke', 0);
     assert.match(inv.call, /^rc-[0-9a-z]+-[0-9a-f]{6}$/);
-    assert.deepEqual({ ...inv, call: null }, { call: null, turn: t.id, tool: 'add', input: { by: 2 }, timeout_s: 60 });
+    // A turn's own call says its place in its step: step 1, the answer's only call, no edit after it.
+    assert.deepEqual({ ...inv, call: null }, { call: null, turn: t.id, tool: 'add', input: { by: 2 }, timeout_s: 60, step: 1, calls_left_in_step: 0, edits_left_in_step: 0 });
     assert.deepEqual((await s.progress(link, inv.call, { ack: true })).json, { ok: true });
     assert.deepEqual((await s.progress(link, inv.call, { fraction: 2, label: 'Adding\u0007' })).json, { ok: true });
     assert.ok(eventsOf(t).some((e) => e.type === 'tool_progress' && e.fraction === 1 && e.label === 'Adding'), 'clamped and cleaned');
@@ -301,6 +302,36 @@ describe('a call', { timeout: 30_000 }, () => {
     assert.deepEqual((await s.result(link, inv.call, { ok: true })).json, { ok: true, stale: true });
     assert.deepEqual((await s.progress(link, inv.call, { ack: true })).json, { ok: true, stale: true });
     assert.deepEqual(await page.frame('active', 2), { turns: 0, hold_until: t.endedAt + ASSISTANT_HOLD_MS }, 'the hold after its last bound turn');
+  });
+
+  it("each call of a step says its place in it: the step's number, the calls after it in that answer, and how many of those are the workspace's edits", async () => {
+    const { m, s } = await setup();
+    const { page, link } = await linkedPage(s);
+    m.provider.script(
+      { tools: [{ name: 'ai-demo__add', input: { by: 1 } }, { name: 'ai-demo__get_count' }, { name: 'ai-demo__add', input: { by: 2 } }, { name: 'ai-demo__get_count' }] },
+      { tools: [{ name: 'ai-demo__get_count' }] },
+      { text: 'Done.' },
+    );
+    const started = await s.post('/api/assistant/turns', { text: 'Add, read, add, read', tab: page.tab });
+    assert.equal(started.status, 202, JSON.stringify(started.json));
+    const t = s.handle.turns.get(started.json.turn);
+    const places = [];
+    for (let i = 0; i < 5; i += 1) {
+      const inv = await page.frame('invoke', i);
+      places.push([inv.tool, inv.step, inv.calls_left_in_step, inv.edits_left_in_step]);
+      await s.progress(link, inv.call, { ack: true });
+      await s.result(link, inv.call, { ok: true, result: { text: 'ok' } });
+    }
+    await settled(t);
+    assert.deepEqual(places, [
+      ['add', 1, 3, 1],
+      ['get_count', 1, 2, 1],
+      ['add', 1, 1, 0],
+      ['get_count', 1, 0, 0],
+      ['get_count', 2, 0, 0],
+    ]);
+    // The turn frame names its conversation.
+    assert.equal((await page.frame('turn', 0)).conversation, t.conv.id);
   });
 
   it("a destructive tool's confirm note (its registration's `confirm`) is what the question on its tab says the call does; declined, nothing reaches the page", async () => {
@@ -855,6 +886,7 @@ describe('turns reach the page (CAD tools spec H3)', { timeout: 30_000 }, () => 
       id: t.id,
       state: 'running',
       title: TITLE,
+      conversation: t.conv.id,
       local: true,
       context_tokens: null,
       images: null,

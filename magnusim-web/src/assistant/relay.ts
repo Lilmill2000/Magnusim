@@ -802,6 +802,12 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
   updatePin(r);
   const timeoutS = typeof d.timeout_s === 'number' && d.timeout_s > 0 ? d.timeout_s : Number.NaN;
   const turn = typeof d.turn === 'string' ? d.turn : '';
+  // The call's place in its step, when the server says it (a turn's own calls).
+  const count = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+  const step = count(d.step);
+  const callsLeft = count(d.calls_left_in_step);
+  const editsLeft = count(d.edits_left_in_step);
+  const place = step !== null && step > 0 && callsLeft !== null && editsLeft !== null && editsLeft <= callsLeft ? { step, callsLeftInStep: callsLeft, editsLeftInStep: editsLeft } : {};
   inv.done = (async () => {
     let out: AssistantCallOutcome;
     try {
@@ -815,6 +821,7 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
             signal: ctl.signal,
             onProgress: progress.push,
             onAlive: progress.alive,
+            ...place,
             // A workspace frame's call reads its conversation's files on this invoke's own link and call.
             ...(d.slot === 'core' ? {} : { attachment: (id: string, signal: AbortSignal) => readAttachment(link, call, turn, id, signal) }),
           })
@@ -968,6 +975,7 @@ function turnOf(d: unknown): AssistantTurn | null {
     id: x.id,
     state: x.state,
     title: typeof x.title === 'string' ? x.title.slice(0, 60) : '',
+    conversation: typeof x.conversation === 'string' && x.conversation && x.conversation.length <= 128 ? x.conversation : null,
     local: x.local === true,
     contextTokens: typeof x.context_tokens === 'number' && Number.isSafeInteger(x.context_tokens) && x.context_tokens > 0 ? x.context_tokens : null,
     images: typeof x.images === 'boolean' ? x.images : null,
@@ -1022,7 +1030,16 @@ function checkRelink(r: Relay): void {
   if (!k || k.need === null || k.seen.size < k.need) return;
   r.relink = null;
   for (const [id, turn] of [...r.turnsRunning]) {
-    if (!k.seen.has(id)) turnEnded(r, { id, state: 'ended', title: turn.title, local: turn.local, contextTokens: turn.contextTokens, images: turn.images, used: turn.used });
+    if (!k.seen.has(id)) turnEnded(r, {
+        id,
+        state: 'ended',
+        title: turn.title,
+        conversation: turn.conversation,
+        local: turn.local,
+        contextTokens: turn.contextTokens,
+        images: turn.images,
+        used: turn.used,
+      });
   }
   // What runs is known again: a page not told yet hears those that run (never the ones that ended meanwhile).
   tellNewFrame(r);

@@ -991,9 +991,13 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       t.emit({ type: 'tool_result', call: call.callId, ok: false, code, summary: r.summary, ms: 0 });
       results.push(r.part);
     };
+    // How many of this answer's calls come after each, and how many of those change the turn's
+    // workspace (its edit or destructive tools): the workspace hears it with each call.
+    const editsAfter = calls.map(() => 0);
+    for (let i = calls.length - 2; i >= 0; i -= 1) editsAfter[i] = editsAfter[i + 1] + (isWorkspaceEdit(offered.get(calls[i + 1].name), t.tab) ? 1 : 0);
     try {
       t.setState('tools');
-      for (const call of calls) {
+      for (const [index, call] of calls.entries()) {
         if (t.signal.aborted) {
           notRun(call, 'stopped', stoppedText(false, t.stopEnd().reason === 'shutdown'));
           continue;
@@ -1020,6 +1024,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
             signal,
             turn: t,
             offered,
+            step: { n: step, callsLeft: calls.length - 1 - index, editsLeft: editsAfter[index] },
             // Another project's data, or the project list: that consent first (§9.2, §9.3).
             privacyFor: (projectId, callSignal) => otherProjectPrivacy(t, d, adapter.cloud, projectId, callSignal),
           });

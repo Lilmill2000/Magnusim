@@ -137,11 +137,25 @@ export interface ProgressOptions {
   waiting?: boolean;
 }
 
+/**
+ * Where a call stands in its step (one answer of the model): the step's number in its turn, how
+ * many calls of that answer come after it, and how many of those are the turn's workspace's edit
+ * or destructive tools. Only a turn's own calls have it (not another app's over MCP, nor a coding
+ * agent's).
+ */
+export interface StepInfo {
+  n: number;
+  callsLeft: number;
+  editsLeft: number;
+}
+
 export interface ToolRunContext {
   signal: AbortSignal;
   ctx: ToolCtx;
   /** The turn that makes the call; another app's call (MCP) has `mcp:<connection id>` (RunOptions.callTurn). */
   turn: string | null;
+  /** Its place in its step (a turn's own calls only). */
+  step?: StepInfo;
   progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   /** Aborts when the runner stops waiting for this call (it was aborted and its grace ran out). */
   released?: AbortSignal;
@@ -253,6 +267,8 @@ export interface WorkspaceRegistration {
     turn: string | null;
     /** The turn's conversation (the page may read its attachments while the call runs); null for an MCP call. */
     conversation: string | null;
+    /** Its place in its step (a turn's own calls only). */
+    step?: StepInfo;
     progress(f: number | null, label: string, opts?: ProgressOptions): void;
   }): Promise<ToolOutcome>;
   /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
@@ -665,7 +681,17 @@ export class Registry implements ToolRegistry {
           const message = `The page hosting ${source.workspace} isn't connected.`;
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
+        return reg.invoke({
+          tool: localName,
+          input,
+          timeoutS,
+          signal: rt.signal,
+          released: rt.released,
+          turn: rt.turn,
+          conversation: conversationOf(rt.ctx),
+          ...(rt.step ? { step: rt.step } : {}),
+          progress: rt.progress,
+        });
       },
     };
   }
@@ -787,7 +813,17 @@ export class Registry implements ToolRegistry {
           const message = "This window isn't connected.";
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
+        return invoke({
+          tool: localName,
+          input,
+          timeoutS,
+          signal: rt.signal,
+          released: rt.released,
+          turn: rt.turn,
+          conversation: conversationOf(rt.ctx),
+          ...(rt.step ? { step: rt.step } : {}),
+          progress: rt.progress,
+        });
       },
       // Raise-only risk per call and its card (C3, §2.1): the core page's own rule, from its newest registration.
       // The runner keeps only an escalation's risk, note and rows: the card's copy goes as its

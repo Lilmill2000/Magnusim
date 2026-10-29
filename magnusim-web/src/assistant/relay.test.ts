@@ -1089,6 +1089,23 @@ describe('tool calls', () => {
     expect(log.slice(log.indexOf('invoke add'))).toEqual(['invoke add', 'channel closed', 'result sent', 'result answered']);
   });
 
+  it("a turn's call carries its place in its step to the frame (step, calls and edits after it); none when the frame names none or one out of shape", async () => {
+    await registered();
+    const ch = channel();
+    ch.frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: { by: 1 }, timeout_s: 30, step: 2, calls_left_in_step: 3, edits_left_in_step: 1 });
+    expect([running[0].req.step, running[0].req.callsLeftInStep, running[0].req.editsLeftInStep]).toEqual([2, 3, 1]);
+    running[0].end({ ok: true, result: {} });
+    await settle();
+    // An MCP call (none), and frames out of shape (more edits than calls, a fraction, a step 0).
+    for (const [i, extra] of [{}, { step: 1, calls_left_in_step: 1, edits_left_in_step: 2 }, { step: 1, calls_left_in_step: 0.5, edits_left_in_step: 0 }, { step: 0, calls_left_in_step: 0, edits_left_in_step: 0 }].entries()) {
+      ch.frame('invoke', { call: `call-${i + 2}`, turn: 'turn-1', tool: 'add', input: { by: 1 }, timeout_s: 30, ...extra });
+      const run = running.at(-1)!;
+      expect([Object.hasOwn(run.req, 'step'), Object.hasOwn(run.req, 'callsLeftInStep'), Object.hasOwn(run.req, 'editsLeftInStep')]).toEqual([false, false, false]);
+      run.end({ ok: true, result: {} });
+      await settle();
+    }
+  });
+
   it('a dropped stream stops the running call (the server failed it at once)', async () => {
     await registered();
     channel().frame('invoke', { call: 'call-1', turn: 'turn-1', tool: 'add', input: {}, timeout_s: 30 });
@@ -1412,6 +1429,7 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     id,
     state: 'running',
     title: 'Add 2 to the counter',
+    conversation: null,
     local: true,
     contextTokens: null,
     images: null,
@@ -1455,6 +1473,15 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
       told('t-5', { used: { steps: 1, stepsCap: 50, changes: 0, changesCap: 0, usd: 0, usdCap: 3 } }),
     ]);
     expect(Object.hasOwn(turns[3], 'end')).toBe(false);
+  });
+
+  it('the conversation the turn runs in goes to the frame (null when the frame names none or one out of shape)', async () => {
+    const turns = await heard();
+    const ch = channel();
+    ch.frame('turn', turnFrame('t-1', { conversation: 'c-mvb0-12ab34cd' }));
+    ch.frame('turn', turnFrame('t-1', { conversation: 5 as never }));
+    ch.frame('turn', turnFrame('t-1', { conversation: 'c'.repeat(129) }));
+    expect(turns.map((t) => t.conversation)).toEqual(['c-mvb0-12ab34cd', null, null]);
   });
 
   it("the money left for a cloud turn's next request goes as usdLeft (absent when the frame has none; one that is not a number left out)", async () => {

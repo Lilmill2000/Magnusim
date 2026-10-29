@@ -476,8 +476,23 @@ export interface RelayFrameData {
    */
   turn: RelayTurnFrame;
   /** Run a tool of the page (`tool` is the page's own name for it). */
-  /** `slot: 'core'`: a core page tool (core host tools spec C7), run in this page; else the workspace's. */
-  invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number; slot?: 'core' };
+  /**
+   * `slot: 'core'`: a core page tool (core host tools spec C7), run in this page; else the workspace's.
+   * `step`, `calls_left_in_step`, `edits_left_in_step`: the call's place in its step (one answer of
+   * the model): the step's number in its turn, how many calls of that answer come after it, and how
+   * many of those are the turn's workspace's edit or destructive tools. A turn's own calls only.
+   */
+  invoke: {
+    call: string;
+    turn: string;
+    tool: string;
+    input: unknown;
+    timeout_s: number;
+    slot?: 'core';
+    step?: number;
+    calls_left_in_step?: number;
+    edits_left_in_step?: number;
+  };
   abort: { call: string };
   /** A question to show as the app's own confirm dialog. */
   gate: { gate: GateView };
@@ -499,6 +514,8 @@ export interface RelayTurnFrame {
   id: string;
   state: 'running' | 'ended';
   title: string;
+  /** The conversation it runs in (absent from an older server). */
+  conversation?: string | null;
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;

@@ -239,12 +239,14 @@ export const TURN_TITLE_MAX = 60;
  * changes (calls that are not reads) against its change cap, and no dollars (usd and usd_cap 0:
  * its agent bills the person's own account); any other turn has no change cap (changes and
  * changes_cap 0). The caps are those in force, the lower of the turn's and the live settings, as
- * its runner last read them (the loop at each step, an agent turn at each call).
+ * its runner last read them (the loop at each step, an agent turn at each call). `conversation`:
+ * the conversation it runs in (the same id for each of that conversation's turns).
  */
 export interface TurnPageView {
   id: string;
   state: 'running' | 'ended';
   title: string;
+  conversation: string | null;
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
@@ -1000,6 +1002,7 @@ export class Turn implements AnyTurn {
       id: this.id,
       state: ended ? 'ended' : 'running',
       title: this.title(),
+      conversation: this.conv?.id ?? null,
       local: this.settings.provider === 'openai_compatible',
       context_tokens: this.contextTokens,
       images: this.images,

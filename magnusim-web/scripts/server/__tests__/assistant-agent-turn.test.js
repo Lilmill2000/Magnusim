@@ -1306,7 +1306,7 @@ describe('an agent turn and its app tab: one turn per tab, the page hears it, an
       const t = r.turn;
       await holding(claude, 'after-add');
       await H.until(() => heard.some(([change]) => change === 'updated'), CEILING, "the call's result heard");
-      const base = { id: t.id, title: 'Add one.', local: false, context_tokens: null, images: null };
+      const base = { id: t.id, title: 'Add one.', conversation: t.conv.id, local: false, context_tokens: null, images: null };
       assert.deepEqual(heard, [
         ['started', { ...base, state: 'running', used: { steps: 0, steps_cap: 50, changes: 0, changes_cap: 24, usd: 0, usd_cap: 0 } }],
         ['updated', { ...base, state: 'running', used: { steps: 1, steps_cap: 50, changes: 1, changes_cap: 24, usd: 0, usd_cap: 0 } }],

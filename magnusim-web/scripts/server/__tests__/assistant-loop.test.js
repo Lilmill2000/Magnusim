@@ -1936,6 +1936,21 @@ describe("what a tool hears of its turn: the person's message and the conversati
     await settled(r.turn);
     assert.deepEqual(seen, [['Import C:\\parts\\bracket.step', r.body.conversation]]);
   });
+  it("each call's place in its step: the step's number and the calls after it in the same answer, counting down", async () => {
+    const seen = [];
+    const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.step), { ok: true, summary: 'who' }) })] });
+    m.provider.script({ tools: [{ name: 'who' }, { name: 'who' }, { name: 'who' }] }, { tools: [{ name: 'who' }] }, { text: 'Done.' });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    // A host tool is no workspace edit: editsLeft counts only the turn's workspace's edit tools (assistant-relay.test.js).
+    assert.deepEqual(seen, [
+      { n: 1, callsLeft: 2, editsLeft: 0 },
+      { n: 1, callsLeft: 1, editsLeft: 0 },
+      { n: 1, callsLeft: 0, editsLeft: 0 },
+      { n: 2, callsLeft: 0, editsLeft: 0 },
+    ]);
+  });
+
   it('what the turn used so far of its limits (app_status shows it): its steps, minutes and dollars against its caps in force', async () => {
     const seen = [];
     const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });

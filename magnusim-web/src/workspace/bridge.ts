@@ -413,6 +413,14 @@ export interface AssistantInvoke {
   /** Its stall window in seconds (1 to 600; else the tool's own). */
   timeoutS: number;
   signal: AbortSignal;
+  /**
+   * Its place in its step (one answer of the model; a turn's own calls only): the step's number in
+   * the turn, how many calls of that answer come after it, and how many of those are the turn's
+   * workspace's edit or destructive tools. The page's AssistantCall carries them.
+   */
+  step?: number;
+  callsLeftInStep?: number;
+  editsLeftInStep?: number;
   /** `opts.waiting`: the call waits for the person (the page said so; absent otherwise). */
   onProgress(fraction: number | null, label: string, opts?: { waiting?: boolean }): void;
   /**
@@ -2747,7 +2755,11 @@ export class WorkspaceBridge {
         reads: new AbortController(),
       });
       req.signal.addEventListener('abort', onAbort);
-      if (!tell('assistantInvoke', { call: inv.id, turn: String(req.turn ?? ''), tool: tool.name, input: req.input })) {
+      const place =
+        typeof req.step === 'number' && typeof req.callsLeftInStep === 'number' && typeof req.editsLeftInStep === 'number'
+          ? { step: req.step, calls_left_in_step: req.callsLeftInStep, edits_left_in_step: req.editsLeftInStep }
+          : {};
+      if (!tell('assistantInvoke', { call: inv.id, turn: String(req.turn ?? ''), tool: tool.name, input: req.input, ...place })) {
         end({ ok: false, code: 'closed', message: 'its page could not be reached' });
         return;
       }

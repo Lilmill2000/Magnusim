@@ -108,7 +108,7 @@ import { MCP_NO_ATTACHMENT } from './host/import-file.ts';
 import { realClock, tabOf, type Clock, type GateAnswer, type GateClosedBy, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { assistantHomeIsOverridden } from './home.ts';
 import { alog } from './log.ts';
-import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type CoreEscalation, type CorePlace, type ProgressOptions, type Registry, type ToolOutcome } from './registry.ts';
+import { REVIEW_PROMPT_MAX, REVIEW_ROUNDS_MAX, reviewOf, type CoreEscalation, type CorePlace, type ProgressOptions, type Registry, type StepInfo, type ToolOutcome } from './registry.ts';
 import { rememberJob } from './host/turn-jobs.ts';
 import { leaveTargetOf, type LeaveTargetFn } from './link-target.ts';
 import { ABORT_GRACE_MS } from './runner.ts';
@@ -378,6 +378,8 @@ export interface InvokeCall {
   turn: string | null;
   /** The turn's conversation: its attachments are what the page may read while the call runs (none when absent or null). */
   conversation?: string | null;
+  /** Its place in its step (a turn's own calls): the page hears step, calls_left_in_step and edits_left_in_step. */
+  step?: StepInfo;
   progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
 }
 
@@ -968,7 +970,15 @@ export class Relay {
         offAbort: null,
       };
       t.pending = p;
-      const sent = live.send('invoke', { call, turn: c.turn, tool: c.tool, input: c.input, timeout_s: c.timeoutS, ...(meta.slot === 'core' ? { slot: 'core' } : {}) });
+      const sent = live.send('invoke', {
+        call,
+        turn: c.turn,
+        tool: c.tool,
+        input: c.input,
+        timeout_s: c.timeoutS,
+        ...(meta.slot === 'core' ? { slot: 'core' } : {}),
+        ...(c.step ? { step: c.step.n, calls_left_in_step: c.step.callsLeft, edits_left_in_step: c.step.editsLeft } : {}),
+      });
       // The channel or its stream is gone (its cleanup may not have run yet): it never reached the page.
       if (!sent) {
         this.finish(p, fail('tab_disconnected', notSentText(ws)));
