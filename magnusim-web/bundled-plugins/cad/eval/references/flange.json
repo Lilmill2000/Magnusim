@@ -3,7 +3,7 @@
   "about": "The flange and its hub as one closed polyline on Front revolved about the Z axis, then one hole on the flange's top face at x pcd/2 and a circular pattern of it all round.",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

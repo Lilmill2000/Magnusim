@@ -63,7 +63,7 @@ export function probeStrict(notes) {
 /** The server switch that keeps every model request and answer (scripts/server/assistant/debug-log.ts). */
 export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
 /** The scripted model's answers to the probe: the read it asks for, then its sentence. */
-const PROBE_STEPS = [{ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] }, { text: 'The Part has no features yet.' }];
+const PROBE_STEPS = [{ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] }, { text: 'The Part has no features yet.' }];
 
 const USAGE = `node eval/run.mjs --tasks <ids|all|probe> [--runs N] [--label text] (--profile <file> | --attach <url> | --scripted)
   [--tab <id>] [--toolset all|core] [--pace fast|watch] [--headed] [--clean] [--out <dir>] [--no-repair]

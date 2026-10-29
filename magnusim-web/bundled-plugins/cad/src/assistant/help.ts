@@ -89,7 +89,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   set_params:
     'All rows apply together, in any order: a swap (w = 2*d while d was w/2) or a rename used by another row works. A rename updates every use. Comments: help details. A value that turns a working feature red changes nothing (broke_downstream); a sketch it mirrors is named in flipped.',
   sketch:
-    'on "<plane> offset <length>" makes "<sketch> plane", or uses one made for the same plane and offset. Replace: edit "<name>" with every input (get_model feature <name> gives them). Reply: plane (origin, u, v in model axes, words), solver (state, dof, free, moved, dropped_inferred), regions (id, area, at, holes), open ends. help sketch has every kind and signature.',
+    'on "<plane> offset <length>" makes "<sketch> plane", or uses one made for the same plane and offset. Replace: edit "<name>" with every input (get_model feature <name> gives them). Reply: plane (origin, u, v in model axes, words), solver (state, dof, free, moved, dropped_inferred), regions (help selectors), open ends. help sketch has every kind and signature.',
   sweep_loft:
     "sweep: profiles are regions of one sketch; draw them on a plane through the path's start, square to it; path curves run end to end. loft: one region per sketch, in order, none with a hole. Faces: <Name>.side(<profile entity>@<path entity>) (<Name>.side(o): every side swept from o), <Name>.start, <Name>.end.",
   undo: 'steps n: your newest n calls of this request, back to before the oldest. previous_turn true (steps 0): the whole previous request, while it is the newest change. not_own_step when the person changed the Part after one of them.',
@@ -169,7 +169,7 @@ const selectorRows = (): HelpRow[] => [
   },
   {
     about: 'regions',
-    text: `In the tool's sketch: all (every hole stays open), largest, r1 r2 ... (by area, largest first), at(u, v) in the sketch's mm. Another sketch: "Plate sketch r2"; "Plate sketch" alone is all of it; find "Plate sketch regions" lists every one.`,
+    text: `In the tool's sketch: all (every hole stays open), largest, r1 r2 ... (by area, largest first), at(u, v) in the sketch's mm. Another sketch: "Plate sketch r2"; "Plate sketch" alone is all of it; find "Plate sketch regions" lists every one. Replies list them short: past 8 regions, a run of one size is one row (ids r7..r102, count: each id works); get_model feature <sketch> regions full and find give each one's bounds and depth.`,
   },
   {
     about: 'handles and selection',

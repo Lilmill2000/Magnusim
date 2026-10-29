@@ -9,7 +9,8 @@
             "name": "cad__get_model",
             "input": {
               "detail": "brief",
-              "feature": ""
+              "feature": "",
+              "regions": "short"
             }
           }
         ]
@@ -201,7 +202,8 @@
             "name": "cad__get_model",
             "input": {
               "detail": "brief",
-              "feature": ""
+              "feature": "",
+              "regions": "short"
             }
           }
         ]

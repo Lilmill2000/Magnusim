@@ -143,8 +143,11 @@ export function labelNames(s: DocState): LabelNames {
   return { featureName: (id) => names.get(id) ?? null };
 }
 
+/** Face labels an edit's reply lists as created (created_more counts the rest). */
+export const CREATED_MAX = 12;
+
 /** The labels of the faces `feature` made on the bodies built now, each once (EditData.created), and how many more there are. */
-export function createdLabels(services: AppServices, feature: FeatureId, max = 50): { labels: string[]; more: number } {
+export function createdLabels(services: AppServices, feature: FeatureId, max = CREATED_MAX): { labels: string[]; more: number } {
   const s = services.doc.state.get();
   const names = labelNames(s);
   const out = new Set<string>();

@@ -3,7 +3,7 @@
   "about": "Red: the chip blank with a sealed pocket for the disc (a cut on an offset plane inside it). White: a ring buried at mid-thickness (Red above and below it) joined to six edge spots, ring pieces at the rim through the whole thickness, patterned all round. Red then loses White (combine cut, White kept), so the two bodies touch and never overlap.",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

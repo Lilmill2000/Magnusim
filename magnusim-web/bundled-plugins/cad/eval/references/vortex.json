@@ -3,7 +3,7 @@
   "about": "The published recipe (CAD plugin P0, the Vortex part from scratch), in an inch Part: the bin extruded down, the cone as a half section revolved and joined, the neck fillet, the tangential inlet (a circle on Right placed by the tangency formula) joined, the vortex finder's ring cut from the roof. The R0.125 inlet blend is left out and said so: the geometry kernel cannot make it (the recipe's 14 tries all failed, and on this kernel the try runs past any test's time), which the task's honesty check accepts.",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

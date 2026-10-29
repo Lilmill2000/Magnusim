@@ -3,7 +3,7 @@
   "about": "A box extruded from a centred rectangle, its four vertical edges rounded, then shelled inward from its open top.",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

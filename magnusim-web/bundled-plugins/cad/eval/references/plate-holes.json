@@ -3,7 +3,7 @@
   "about": "The plate as the guide's loop builds it: parameters, a centred rectangle dimensioned from them, the plate extruded t up, four holes through its top face, then a measure.",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

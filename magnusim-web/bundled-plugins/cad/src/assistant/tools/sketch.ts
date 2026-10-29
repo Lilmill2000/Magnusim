@@ -6,14 +6,14 @@
 // still moves. Then, inside the step, an offset plane when `on` asks for one and the sketch itself
 // through the person's own sketch mode (sketch/write.ts); an edited sketch's new plane goes above
 // it in the history (the rebuild reads a sketch's plane from the features before it). The answer:
-// the state, dof, free and moved points, the plane in numbers and words, the regions (r1, r2, ...
-// by area) with what bounds them, open ends, joins, inferred relations and warnings (an inferred
-// relation left out says what it repeated or could not hold with), and what each of the person's
-// sketch tools made (`made`: sketch/ops.ts runs them in row order, before the solve).
+// the state, dof, free and moved points, the plane in numbers and words, the regions in short (r1,
+// r2, ... by area; sketch/regions.ts shortRegions), open ends, joins, inferred relations and
+// warnings (an inferred relation left out says what it repeated or could not hold with), and what
+// each of the person's sketch tools made (`made`: sketch/ops.ts runs them in row order, before the solve).
 // get_model reads a sketch back in this tool's input form (sketch/describe.ts, registered here).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { toModel, ydirOf } from '../../features/sketch/plane';
+import { ydirOf } from '../../features/sketch/plane';
 import { nextName } from '../../lib/ids';
 import { isDimension } from '../../sketch/model';
 import type { EditData, ToolImpl, ToolReply } from '../../types/assistant';
@@ -22,13 +22,13 @@ import type { SketchOutput } from '../../types/sketch';
 import { ToolError } from '../errors';
 import { registerFeatureIo } from '../features-io';
 import { featureByName, frameWords, supportText } from '../model';
-import { dir, jsonBytes, sig6, vec } from '../numbers';
+import { dir, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
 import { compileSketchRows, type Compiled, type ConstraintIn, type EntityIn } from '../sketch/compile';
 import { tieFields } from '../sketch/dims';
 import { toolHost } from '../sketch/ops';
 import { describeSketch, TOO_BIG_WORDS } from '../sketch/describe';
-import { regionRows } from '../sketch/regions';
+import { fitRegions, regionRows, shortRegions } from '../sketch/regions';
 import { solveSketch, type Solved } from '../sketch/solve';
 import { planSupport, type SupportPlan } from '../sketch/support';
 import { writePlane, writeSketch } from '../sketch/write';
@@ -148,19 +148,9 @@ const sketchTool: EditTool<Plan> = {
     const solved = plan.solved;
     const plane = out?.type === 'sketch' ? out.plane : (f?.plane ?? null);
     const on = f ? supportText(s, f) : plan.support.words;
-    const regions =
-      out?.type === 'sketch'
-        ? regionRows(out).map((r) => ({
-            id: r.id,
-            area_mm2: r.area_mm2,
-            at: r.at,
-            ...(plane ? { at_mm: vec(toModel(plane, r.at)) } : {}),
-            holes: r.holes,
-            depth: r.depth,
-            bbox_uv: r.bbox_uv,
-            bounded_by: r.entities.map(refOf).slice(0, 40),
-          }))
-        : [];
+    // In short (get_model feature <name> regions full gives their bounds, places and depths).
+    const regions = out?.type === 'sketch' ? regionRows(out) : [];
+    const short = shortRegions(regions);
     const constraint = (cid: string) => plan.compiled.draft.constraints.find((c) => c.id === cid);
     const optional = new Set(plan.compiled.optional);
     const dropped = solved.dropped.filter((cid) => !optional.has(cid)).map((cid) => (constraint(cid) ? words(constraint(cid)!) : cid));
@@ -196,19 +186,14 @@ const sketchTool: EditTool<Plan> = {
       joined: plan.compiled.joined.slice(0, 40),
       ...(plan.compiled.made.length ? { made: plan.compiled.made.slice(0, 40) } : {}),
       inferred: inferred.slice(0, 60),
-      regions,
+      regions: short.regions,
+      ...(short.more ? { regions_more: short.more } : {}),
       open: out?.type === 'sketch' ? out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: refOf(o.entity), point: o.point ? refOf(o.point) : null })) : [],
       dangling: out?.type === 'sketch' ? out.dangling.slice(0, 40).map(refOf) : [],
       warnings: warnings.slice(0, 30),
     };
-    // Within the sketch reply's room: the regions' boundaries go first, then half the regions at a time.
-    const budget = ctx.budgets.sketch;
-    if (jsonBytes(row) > budget) row.regions = regions.map(({ bounded_by: _b, ...r }) => r);
-    while (jsonBytes(row) > budget && Array.isArray(row.regions) && (row.regions as unknown[]).length > 1) {
-      const r = row.regions as unknown[];
-      row.regions_more = (Number(row.regions_more) || 0) + Math.ceil(r.length / 2);
-      row.regions = r.slice(0, Math.floor(r.length / 2));
-    }
+    // Within the sketch reply's room: half the regions at a time (r1 stays).
+    fitRegions(row, ctx.budgets.sketch);
     const state = solved.state === 'fully' ? 'fully defined' : `under-defined (dof ${solved.dof})`;
     const n = regions.length;
     const area = n ? ` (${n === 1 ? '' : 'largest '}${sig6(regions[0].area_mm2)} mm²)` : out?.type === 'sketch' && out.open.length ? ` (not closed: ${plural(out.open.length, 'open end')})` : '';

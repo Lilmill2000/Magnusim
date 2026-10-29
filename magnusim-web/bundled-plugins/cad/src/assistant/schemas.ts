@@ -183,6 +183,7 @@ const SPECS: ToolSpec[] = [
     schema: obj({
       detail: en(['brief', 'full'], 'brief: names, states, sizes. full: also every input.'),
       feature: str(80, '"" for the whole Part, or one feature name.'),
+      regions: en(['short', 'full'], "One sketch's regions: short (8 rows, equal sizes summed), or full (each with its bounds and depth)."),
     }),
   },
   {
@@ -191,8 +192,8 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Preview a selector without changing anything. Lists what it matches, with handles for later calls of this request (#f3 face, #e7 edge, #v2 vertex, #b1 body; regions as "<sketch> r2"). Each row: handle, words, label (Base.end), body, owning feature and role, type, area or length, radius, centre, normal or axis, a point on it in mm, hole or boss for cylinders, the faces an edge joins, and for a flat face the frame a sketch on it gets. query examples: "Body 1 faces >Z", "edges of Base.end", "Plate sketch regions", "Body 1 faces hole", "bodies". limit: 1 to 50 rows. The matches flash in the person\'s view.',
-    schema: obj({ query: str(300, 'A selector (help selectors).', 1), limit: int(1, 50, 'Most rows; count says how many matched.') }),
+      'Preview a selector without changing anything. Lists what it matches, with handles for later calls of this request (#f3 face, #e7 edge, #v2 vertex, #b1 body; regions as "<sketch> r2"). Each row: handle, words, label (Base.end), body, owning feature and role, type, area or length, radius, centre, normal or axis, a point on it in mm, hole or boss for cylinders, the faces an edge joins, and for a flat face the frame a sketch on it gets. query examples: "Body 1 faces >Z", "edges of Base.end", "Plate sketch regions", "Body 1 faces hole", "bodies". limit: 1 to 25 rows. The matches flash in the person\'s view.',
+    schema: obj({ query: str(300, 'A selector (help selectors).', 1), limit: int(1, 25, 'Most rows, 10 usually; count says how many matched.') }),
   },
   {
     name: 'measure',

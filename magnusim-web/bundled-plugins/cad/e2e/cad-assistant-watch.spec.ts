@@ -131,7 +131,7 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a hol
   const before = chats(host).length;
   host.fake.reply(
     // The model is still answering: the chip says the Assistant thinks.
-    { hold: 'think', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
+    { hold: 'think', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
     { tools: [{ name: 'cad__hole', input: { name: '', face: 'Extrude 1.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' } }] },
     { text: 'The Part is empty, so there is no face to drill yet.' },
   );
@@ -935,7 +935,7 @@ test("cad:assistant-watch-chip-end the chip after the turn: the dock's Undo is o
     { extrude: made.extrude, body: made.body },
   );
   await expect(f2.locator('[data-cad-tree] [data-feature-row][data-state="error"]')).toHaveCount(1, { timeout: STEP_MS * 2 });
-  host.fake.reply({ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] }, { text: 'Fillet 1 fails: its radius is too large.' });
+  host.fake.reply({ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] }, { text: 'Fillet 1 fails: its radius is too large.' });
   const t3 = await startTurn(request, host, { text: 'Check the part.', tab: tab2 });
   expect((await t3.ended(STEP_MS * 2)).turn.state).toBe('done');
   const chip2 = f2.locator('[data-chip="assistant"]');
@@ -1007,7 +1007,7 @@ test("cad:assistant-watch-pictures each edit's result carries one iso picture of
     host.fake.reply(
       { tools: [sketchOf('Plate sketch', 'Top')] },
       { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '6 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
-      { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
+      { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
       { text: 'The plate is made.' },
     );
     const t = await startTurn(request, host, { text: 'A plate.', tab });

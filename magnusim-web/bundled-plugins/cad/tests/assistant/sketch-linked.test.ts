@@ -23,7 +23,7 @@ import type { SketchFeature } from '../../src/types/doc';
 import { HELP } from '../../src/assistant/help';
 import { SKETCH_TOOL_KINDS } from '../../src/assistant/schemas';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
-import { block, C, E, featureNamed, outputOf, SK, type Row } from './sketch-tools';
+import { block, C, E, featureNamed, fullRegions, outputOf, SK, type Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -110,7 +110,7 @@ describe('splines', () => {
       const regions = r.data.regions as Row[];
       expect(regions).toHaveLength(1);
       expect(regions[0].area_mm2 as number).toBeGreaterThan(500);
-      expect((regions[0].bounded_by as string[])).toEqual(['w']);
+      expect((await fullRegions(h, 'Wing'))[0].bounded_by).toEqual(['w']);
       const ex = await ok(h, 'extrude', { edit: '', name: 'Span', sketch: 'Wing', regions: ['all'], extent: 'blind', distance: '10 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' });
       expect(ex.data.feature).toMatchObject({ state: 'ok' });
       const vol = await ok(h, 'measure', { targets: ['Body 1'], section: '' });
@@ -299,7 +299,8 @@ describe("the person's linked tools", () => {
       expect(f.entities.filter((e) => e.link === 'pr')).toHaveLength(4);
       expect((r.data.made as Row[])[0].entities).toEqual(['pr.1', 'pr.2', 'pr.3', 'pr.4']);
       // The face's outline bounds a region with the circle as its hole.
-      expect((r.data.regions as Row[]).map((x) => [x.holes, x.depth])).toEqual([
+      expect((r.data.regions as Row[]).map((x) => x.holes)).toEqual([1, 0]);
+      expect((await fullRegions(h, 'Lid')).map((x) => [x.holes, x.depth])).toEqual([
         [1, 0],
         [0, 1],
       ]);

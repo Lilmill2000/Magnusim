@@ -10,8 +10,8 @@
 //     first, params_cut says so), and a long list is halved only once its names do not fit;
 //   - full: inputs null with a summary while no tool writes the type, expression fields;
 //   - one sketch: its plane in numbers and words, the solver's state now (free parameters by the
-//     sketch tool's names), every region with its depth and model point, its input form for the
-//     sketch tool; a name not found lists the names;
+//     sketch tool's names), its regions in short (regions full: each with its depth, model point,
+//     box and bounds), its input form for the sketch tool; a name not found lists the names;
 //   - rev unchanged across a live draft, +1 per commit; what the person changed told once, the
 //     person's undo of the Assistant's steps with it; the person's open panel in words.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -243,7 +243,10 @@ describe('get_model full and one feature', () => {
       // A rectangle of four lines with no relation: 4 points free in u and v, by the sketch tool's names.
       expect(f.solver).toMatchObject({ state: 'under', dof: 8, source: 'solver', conflicting: [], redundant: [] });
       expect((f.solver as { free: { of: string; moves: string[] }[] }).free.map((x) => x.of).sort()).toEqual(['e_1.end', 'e_1.start', 'e_2.end', 'e_3.end']);
-      expect(f.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), at_mm: expect.any(Array), holes: 0, depth: 0, bbox_uv: [[-30, -20], [30, 20]], bounded_by: ['e_1', 'e_2', 'e_3', 'e_4'] }]);
+      expect(f.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), holes: 0 }]);
+      // Asked for in full: each region's place, depth, box and bounds too.
+      const full = (await h.ok('get_model', { detail: 'brief', feature: 'sketch 1', regions: 'full' })).data.feature as Row;
+      expect(full.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), at_mm: expect.any(Array), holes: 0, depth: 0, bbox_uv: [[-30, -20], [30, 20]], bounded_by: ['e_1', 'e_2', 'e_3', 'e_4'] }]);
       // Its input form, ready to resend to the sketch tool (the person's lines by their own ids).
       expect(f).toMatchObject({ entities: 4, constraints: 0, open: [], dangling: [] });
       expect(f.inputs).toEqual({

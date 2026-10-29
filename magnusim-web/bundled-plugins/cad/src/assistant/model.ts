@@ -6,9 +6,11 @@
 //   full   also each feature's inputs in its tool's fields (inputs: null and a summary for a type
 //          no tool writes yet) and its expression fields; cut at the budget, the rest brief with
 //          "more": "get_model feature <name>";
-//   one feature  in full; a sketch with its plane, the solver's state now, all its regions (60),
-//          its open ends and dangling entities, by the sketch tool's names (r.top, l1.start), and
-//          its inputs in the sketch tool's form (sketch/describe.ts; null when it cannot be resent).
+//   one feature  in full; a sketch with its plane, the solver's state now, its regions in short
+//          (sketch/regions.ts shortRegions; regions full: each of them, 60, with its place, depth,
+//          box and bounds), its open ends and dangling entities, by the sketch tool's names (r.top,
+//          l1.start), and its inputs in the sketch tool's form (sketch/describe.ts; null when it
+//          cannot be resent). Brief rows list a sketch's regions in short too.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
@@ -36,12 +38,10 @@ import { dir, jsonBytes, len, sig6, vec } from './numbers';
 import { runtimeOf } from './runtime';
 import { describeSketch, supportSelector, TOO_BIG_WORDS } from './sketch/describe';
 import { freeRows } from './sketch/solve';
-import { regionRows } from './sketch/regions';
+import { fitRegions, regionRows, shortRegions } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
 
-/** Brief features keep at most this many regions per sketch. */
-export const BRIEF_REGIONS = 8;
-/** One sketch shows at most this many regions. */
+/** One sketch read with regions full shows at most this many regions. */
 export const SKETCH_REGIONS = 60;
 /** Bodies listed (the rest counted). */
 export const BODIES_MAX = 50;
@@ -143,9 +143,9 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
     row.sketch = out?.source === 'stored-unsolved' ? 'unsolved' : f.solved.state;
     row.dof = f.solved.dof;
     if (out?.type === 'sketch') {
-      const regions = regionRows(out);
-      row.regions = regions.slice(0, BRIEF_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, holes: r.holes }));
-      if (regions.length > BRIEF_REGIONS) row.regions_more = regions.length - BRIEF_REGIONS;
+      const short = shortRegions(regionRows(out));
+      row.regions = short.regions;
+      if (short.more) row.regions_more = short.more;
       if (out.open.length) row.open = out.open.length;
     }
   } else if (isBodyMaking(f)) {
@@ -262,6 +262,8 @@ function collapse(rows: Row[], keep: number): Row[] {
 export interface ModelInput {
   detail: 'brief' | 'full';
   feature: string;
+  /** One sketch's regions: short, or full (each with its place, depth, box and bounds). */
+  regions: 'short' | 'full';
 }
 
 /** The Part-level facts every get_model has (everything but the features). */
@@ -416,8 +418,8 @@ async function fitFull(facts: Row, services: AppServices, s: DocState, budgets: 
   return data;
 }
 
-/** One sketch in full: its plane, the solver's state now (headless), every region, open ends. */
-async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature): Promise<Row> {
+/** One sketch in full: its plane, the solver's state now (headless), its regions (short or full), open ends. */
+async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature, regionsFull: boolean): Promise<Row> {
   const { services } = ctx;
   const row = fullFeature(services, s, f);
   const out = s.rebuild.outputs[f.id] as SketchOutput | undefined;
@@ -435,20 +437,20 @@ async function sketchDetail(ctx: CallCtx, s: DocState, f: SketchFeature): Promis
   if (form.tooBig) row.too_big = TOO_BIG_WORDS;
   if (out?.type === 'sketch') {
     const regions = regionRows(out);
-    row.regions = regions.slice(0, SKETCH_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, at_mm: vec(toModel(plane, r.at)), holes: r.holes, depth: r.depth, bbox_uv: r.bbox_uv, bounded_by: r.entities.slice(0, 40).map(form.refOf) }));
-    if (regions.length > SKETCH_REGIONS) row.regions_more = regions.length - SKETCH_REGIONS;
+    if (regionsFull) {
+      row.regions = regions.slice(0, SKETCH_REGIONS).map((r) => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, at_mm: vec(toModel(plane, r.at)), holes: r.holes, depth: r.depth, bbox_uv: r.bbox_uv, bounded_by: r.entities.slice(0, 40).map(form.refOf) }));
+      if (regions.length > SKETCH_REGIONS) row.regions_more = regions.length - SKETCH_REGIONS;
+    } else {
+      const short = shortRegions(regions);
+      row.regions = short.regions;
+      if (short.more) row.regions_more = short.more;
+    }
     row.open = out.open.slice(0, 40).map((o) => ({ at: vec(o.at), entity: form.refOf(o.entity), point: o.point ? form.refOf(o.point) : null }));
     row.dangling = out.dangling.slice(0, 40).map(form.refOf);
     if (out.supportLost) row.support_lost = true;
   }
   // Within the sketch budget: the regions' boundaries go first, then regions themselves.
-  const budget = ctx.budgets.sketch;
-  if (jsonBytes(row) > budget && Array.isArray(row.regions)) row.regions = (row.regions as Row[]).map(({ bounded_by: _b, ...r }) => r);
-  while (jsonBytes(row) > budget && Array.isArray(row.regions) && (row.regions as Row[]).length > 1) {
-    const r = row.regions as Row[];
-    row.regions_more = (Number(row.regions_more) || 0) + Math.ceil(r.length / 2);
-    row.regions = r.slice(0, Math.floor(r.length / 2));
-  }
+  fitRegions(row, ctx.budgets.sketch);
   return row;
 }
 
@@ -513,7 +515,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
       });
     }
     const facts = await partFacts(ctx, s);
-    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f) : await fullFeatureNow(services, s, f);
+    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f, input.regions === 'full') : await fullFeatureNow(services, s, f);
     const data = { ...Object.fromEntries(FEATURE_BASE.filter((k) => k in facts).map((k) => [k, facts[k]])), feature: row };
     const state = String(row.state);
     return {

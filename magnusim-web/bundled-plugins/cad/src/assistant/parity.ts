@@ -757,6 +757,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'detail=brief': place("the design tree: every feature with its state badge and message, the bodies, the sketches' (-)/(+) and the DOF chip"),
     'detail=full': EDIT_ROW,
     feature: EDIT_ROW,
+    'regions=short': own("how much of a sketch's region list the model is sent"),
+    'regions=full': place('the view in model mode: hovering a sketch region lights it, a click selects it'),
   },
   find: { query: command('inspect.find'), limit: own('how many rows the model is sent; the Find panel lists them all') },
   measure: { targets: MEASURE, section: MEASURE },

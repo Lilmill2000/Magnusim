@@ -427,7 +427,7 @@ test("cad:assistant-takeover-person-undo the person's Ctrl+Z between two calls p
   const { frame, tab } = await openNewPart(page, request, host, pid);
   await forcePace(page, 'fast', 0);
   const before = chats(host).length;
-  host.fake.reply({ tools: [PARAM('a', '3 mm')] }, { hold: 'between', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] }, { tools: [PARAM('b', '4 mm')] }, { text: 'b is set.' });
+  host.fake.reply({ tools: [PARAM('a', '3 mm')] }, { hold: 'between', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] }, { tools: [PARAM('b', '4 mm')] }, { text: 'b is set.' });
   const t = await startTurn(request, host, { text: 'Add a, then b.', tab });
   await nthRequest(2, before);
   expect(await params(page)).toEqual(['a']);
