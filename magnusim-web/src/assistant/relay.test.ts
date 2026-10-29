@@ -1457,6 +1457,16 @@ describe('turns bound to this tab (CAD tools spec H3)', () => {
     expect(Object.hasOwn(turns[3], 'end')).toBe(false);
   });
 
+  it("the money left for a cloud turn's next request goes as usdLeft (absent when the frame has none; one that is not a number left out)", async () => {
+    const turns = await heard();
+    const ch = channel();
+    ch.frame('turn', turnFrame('t-1', { local: false, used: { ...USED, usd: 1.5, usd_left: 0.75 } }));
+    ch.frame('turn', turnFrame('t-1', { local: false, used: { ...USED, usd_left: 'lots' as never } }));
+    ch.frame('turn', turnFrame('t-1', { local: false, used: { ...USED, usd_left: -2 } }));
+    expect(turns.map((t) => t.used.usdLeft)).toEqual([0.75, undefined, 0]);
+    expect(Object.hasOwn(turns[1].used, 'usdLeft')).toBe(false);
+  });
+
   it('a review round goes to the frame as `review {round, of}`; one out of shape is left out', async () => {
     const turns = await heard();
     const ch = channel();

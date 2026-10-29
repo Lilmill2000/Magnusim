@@ -227,6 +227,7 @@ export function useDockContent(): DockContent | null {
         workspace={place.workspace?.name ?? ''}
         stops={store.stops}
         localPictures={localPicturesOf}
+        room={row && !row.running ? (row.room ?? null) : null}
       />
     ),
     composer:

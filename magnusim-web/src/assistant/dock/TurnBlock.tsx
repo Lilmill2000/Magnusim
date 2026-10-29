@@ -10,7 +10,7 @@
  * changes, spec 8.3).
  */
 import { useEffect, useReducer, type ReactNode } from 'react';
-import type { AssistantStatus, ConversationTurn } from '../wire';
+import type { AssistantStatus, ConversationRoom, ConversationTurn } from '../wire';
 import { AgentLine, AgentLineItem, AgentPlan, AgentTools } from './AgentBits';
 import {
   ATTACHED_FILES,
@@ -56,6 +56,8 @@ export interface TurnBlockProps {
   note?: string | null;
   cards?: ReactNode;
   endExtra?: ReactNode;
+  /** The conversation's nearest limit (its row's room), for the meter's readout under the newest turn. */
+  room?: ConversationRoom | null;
 }
 
 function Row({ view, item, open, workspace, streaming, onOpenPicture }: { view: TurnView; item: TurnItem; open: boolean; workspace: string; streaming: boolean; onOpenPicture?: (turn: string, n: string) => void }) {
@@ -128,6 +130,7 @@ function EndBlock({ view, extra }: { view: TurnView; extra?: ReactNode }) {
   if (!isEnded(view)) return null;
   const state = view.end ? view.end.state : (view.state as 'done' | 'stopped' | 'failed' | 'capped');
   const message = view.end ? view.end.message : (s?.message ?? null);
+  const reason = view.end ? view.end.reason : (s?.end_reason ?? null);
   const label = endLabel(state);
   const billing = s?.billing ?? (view.agent ? 'agent_account' : 'usd');
   const steps = s?.used?.steps ?? s?.step ?? 0;
@@ -136,14 +139,14 @@ function EndBlock({ view, extra }: { view: TurnView; extra?: ReactNode }) {
   return (
     <div className={`dock-end${state === 'done' ? '' : ` ${state}`}`} data-turn-end={state}>
       {label ? <strong className="dock-end-label">{label}</strong> : null}
-      {state === 'done' ? <p className="dock-muted">{usageLine(steps, billing, usd, agentName)}</p> : endBody(state, message) ? <p>{endBody(state, message)}</p> : null}
+      {state === 'done' ? <p className="dock-muted">{usageLine(steps, billing, usd, agentName)}</p> : endBody(state, message, reason) ? <p>{endBody(state, message, reason)}</p> : null}
       {s?.log_dropped ? <p className="dock-muted">{LOG_DROPPED}</p> : null}
       {extra}
     </div>
   );
 }
 
-export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = null, localPictures, onOpenPicture, note, cards, endExtra }: TurnBlockProps) {
+export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = null, localPictures, onOpenPicture, note, cards, endExtra, room = null }: TurnBlockProps) {
   const ended = isEnded(view);
   // "Still stopping…" once the Stop's bound passed.
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -216,7 +219,7 @@ export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = n
         </div>
       ) : null}
       <EndBlock view={view} extra={endExtra} />
-      {newest ? <Meter view={view} status={status} /> : null}
+      {newest ? <Meter view={view} status={status} room={room} /> : null}
     </article>
   );
 }

@@ -215,8 +215,14 @@ describe('what holds Send back', () => {
   it('a full conversation, and one that ended: New conversation', async () => {
     const onNew = vi.fn();
     const conv = { id: 'c1', provider: 'openai_compatible', label: 'Local server', full: 'messages' } as unknown as ConversationRow;
+    // The server's words name the limit with its numbers.
+    const said = 'This conversation is full: it holds 100 pictures, and Magnusim keeps at most 100 in one conversation. Start a new one.';
+    const named = mount({ conversation: { ...conv, full: 'images', full_text: said } as unknown as ConversationRow, conversationId: 'c1', onNew });
+    expect(line()).toBe(said);
+    expect((document.querySelector('[data-dock-send]') as HTMLButtonElement).disabled).toBe(true);
+    named.unmount();
     const { unmount } = mount({ conversation: conv, conversationId: 'c1', onNew });
-    expect(line()).toBe('This conversation is full. Start a new one.');
+    expect(line(), 'an older server names no limit').toBe('This conversation is full. Start a new one.');
     fireEvent.click(document.querySelector('[data-dock-new-line]') as HTMLElement);
     expect(onNew).toHaveBeenCalledTimes(1);
     unmount();

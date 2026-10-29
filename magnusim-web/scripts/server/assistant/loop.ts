@@ -48,7 +48,7 @@ import { clearedResults, isStrictNote, sentMessages, strictNoteKey } from './pro
 import { alog } from './log.ts';
 import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
-import { costOf, estimateStep, estimateTokens, promptTokens, requestCost, type EstimateInput } from './prices.ts';
+import { costOf, estimateStep, estimateTokens, modelLabel, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import {
   destinationHost,
   isProjectList,
@@ -69,7 +69,7 @@ import type { Caps, AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import type { Clock, GateBroker } from './gates.ts';
 import type { Conversation } from './conversations.ts';
-import { FULL_TEXT } from './conversations.ts';
+import { fullText } from './conversations.ts';
 import {
   ProviderError,
   type Effort,
@@ -112,12 +112,14 @@ export interface CapHit {
 /**
  * The limits a turn's tab's page hears (turns.ts TurnPageView.used), as they are in force: its
  * steps (a coding agent's: its tool calls), its dollars (0: none counted) and a coding agent's
- * changes (0: no such limit).
+ * changes (0: no such limit). `usdLeft`, when dollars are counted: the money left for its next
+ * request, the smaller of what its own limit and today's leave.
  */
 export interface PageLimits {
   steps: number;
   usd: number;
   changes: number;
+  usdLeft?: number;
 }
 
 /** The turn as the loop drives it (turns.ts). */
@@ -609,11 +611,25 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     const live = await d.settings();
     const caps = effectiveCaps(t.settings.caps, live.caps);
     t.armMinutes(caps.turn_minutes * 60_000, capText('turn_minutes', caps));
-    t.setUsed({ steps: caps.steps, usd: caps.turn_usd, changes: 0 });
+    const ledger = priced ? await d.ledger() : null;
+    // The money left: the turn's own, and today's (others' requests reserve from it too).
+    const turnRoomNow = () => caps.turn_usd - t.usd;
+    const dayRoomNow = () => (ledger ? caps.day_usd - (ledger.spentToday() + ledger.reservedToday()) : Number.POSITIVE_INFINITY);
+    // What the workspace and app_status hear is left: the smaller of the two, as Settings' limits say.
+    const limitsNow = (): PageLimits => ({
+      steps: caps.steps,
+      usd: caps.turn_usd,
+      changes: 0,
+      ...(priced ? { usdLeft: Math.max(0, Math.min(turnRoomNow(), dayRoomNow())) } : {}),
+    });
+    t.setUsed(limitsNow());
     const hit = stepCap(t, caps);
     if (hit) return t.end('capped', hit.reason, hit.text);
-    const full = conv.fullReason();
-    if (full && full !== 'context') return t.end('failed', 'conversation_full', FULL_TEXT);
+    const full = conv.fullDetail();
+    if (full && full.reason !== 'context') {
+      alog('info', 'conversation full', { turn: t.id, conversation: conv.id, reason: full.reason, used: full.used, limit: full.limit });
+      return t.end('failed', 'conversation_full', fullText(full, modelLabel(model)));
+    }
     // The turn follows its tab (§9.4): a project opened there since the last step (core__show, or
     // the person) is this step's, and its privacy is asked before this request carries any of it.
     const at = step > 1 && t.tab ? tabHere(d.registry, t.tab) : null;
@@ -717,9 +733,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     counted = conv.messages.length;
     sentCleared = cleared;
     const systemChars = step === 1 ? req.system.reduce((n, s) => n + s.text.length, 0) : 0;
-    const ledger = priced ? await d.ledger() : null;
-    const turnRoom = caps.turn_usd - t.usd;
-    const dayRoom = ledger ? caps.day_usd - (ledger.spentToday() + ledger.reservedToday()) : Number.POSITIVE_INFINITY;
+    const turnRoom = turnRoomNow();
+    const dayRoom = dayRoomNow();
     const estimate = (remainingUsd: number) =>
       estimateStep({
         provider: adapter.id,
@@ -816,7 +831,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         },
       );
       if (priced) {
-        const c = requestCost(adapter.id, out.attempts);
+        const c = requestCost(adapter.id, out.attempts, out.cleared?.tokens ?? 0);
         cost = resentCost + c.usd;
         costEstimated = c.estimated || resentCost > 0;
       }
@@ -849,6 +864,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         t.estimated ||= costEstimated;
         t.usage({ usd: cost, estimated: costEstimated, dayUsd: ledger ? ledger.spentToday() : 0 });
       }
+      t.setUsed(limitsNow());
     }
 
     if (!out) {

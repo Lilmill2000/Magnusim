@@ -8,6 +8,7 @@ import { REMOTE_TEXT } from '../api';
 import type { TurnEvent } from '../wire';
 
 type EndState = 'done' | 'stopped' | 'failed' | 'capped';
+type RoomReason = 'messages' | 'images' | 'bytes' | 'context';
 type Risk = 'read' | 'edit' | 'compute' | 'destructive';
 type Billing = 'usd' | 'free' | 'agent_account';
 
@@ -104,6 +105,7 @@ export const WORKING_ON_IT = 'The Assistant is working on your last message.';
 export const providerNotReady = (label: string, detail: string): string => `${label}: ${detail}. Settings → Assistant can fix it.`;
 export const tabBusy = (workspace: string): string => `A request is already working in ${workspace}. Wait for it, or stop it.`;
 export const STOP_THAT_REQUEST = 'Stop that request';
+/** A full conversation whose row names no limit (an older server); the server's own words otherwise (full_text). */
 export const CONVERSATION_FULL = 'This conversation is full. Start a new one.';
 // Pictures (3.2) and files (core host tools spec 13.1). A line that names what can be attached
 // names drawings only while the dock offers them (drawings.ts): the caller says which.
@@ -256,6 +258,22 @@ export const agentCounters = (changes: number, changesCap: number, calls: number
   `${changes} of ${changesCap} changes · ${calls} of ${callsCap} tool calls · ${minutes(activeMs)} of ${minutesCap} min`;
 export const meterUsd = (turnUsd: number, turnCap: number, estimated: boolean, dayUsd: number, dayCap: number): string =>
   `This request: ${estimated ? 'about ' : ''}${usd(turnUsd)} of ${usd(turnCap)} · Today: ${usd(dayUsd)} of ${usd(dayCap)}`;
+/** From 80% of today's limit: what was spent, and what spends less (no price is compared). */
+export const dayNear = (dayUsd: number, dayCap: number): string => `Today: ${usd(dayUsd)} of ${usd(dayCap)}. A cheaper model or a lower Effort costs less.`;
+const grouped = (n: number): string => Math.round(n).toLocaleString('en-US');
+const megabytes = (bytes: number): string => {
+  const mb = bytes / (1024 * 1024);
+  return String(mb < 10 ? Math.floor(mb * 10) / 10 : Math.floor(mb));
+};
+const ROOM_NUMBERS: Record<RoomReason, (used: number, limit: number) => string> = {
+  messages: (u, l) => `messages ${grouped(u)} of ${grouped(l)}`,
+  images: (u, l) => `pictures ${grouped(u)} of ${grouped(l)}`,
+  bytes: (u, l) => `results and pictures ${megabytes(u)} of ${megabytes(l)} MB`,
+  context: (u, l) => `context ${grouped(u)} of ${grouped(l)} tokens`,
+};
+/** How full the conversation is, by the limit it is closest to: "Conversation: 72% full (pictures 72 of 100)". */
+export const roomLine = (reason: RoomReason, used: number, limit: number): string =>
+  `Conversation: ${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, limit)) * 100))}% full (${ROOM_NUMBERS[reason](used, limit)})`;
 export const METER_FREE = 'Local server · no cost';
 export const meterAgent = (name: string): string => `Billed to your ${name} account (Magnusim can't see the cost)`;
 
@@ -286,9 +304,15 @@ export const OPEN_SETTINGS = 'Open Settings';
 const END_LABELS: Record<EndState, string | null> = { done: null, stopped: 'Stopped', capped: 'Limit reached', failed: "Didn't finish" };
 /** An ended turn's label (none for done). */
 export const endLabel = (state: EndState): string | null => END_LABELS[state];
-/** An ended turn's body: the server's message, and for a limit the way on. */
-export const endBody = (state: EndState, message: string | null): string => {
+/**
+ * An ended turn's body: the server's message, and for a limit the way on. Today's limit is
+ * raised in Settings (another message is refused until then, or midnight); a full conversation
+ * goes on in a new one (the composer offers it); any other limit, with another message.
+ */
+export const endBody = (state: EndState, message: string | null, reason: string | null = null): string => {
   const m = message ?? '';
+  if (state === 'capped' && reason === 'day_usd') return m ? `${m} Raise it in Settings → Assistant.` : 'Raise it in Settings → Assistant.';
+  if (state === 'capped' && reason === 'conversation_full') return m;
   if (state === 'capped') return m ? `${m} Send another message to carry on.` : 'Send another message to carry on.';
   return m;
 };

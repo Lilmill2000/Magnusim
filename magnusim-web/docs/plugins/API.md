@@ -334,13 +334,14 @@ A turn of the app's assistant bound to this page's tab (unreleased, 1.9): what t
 - `local: boolean`: It runs on a local server (a smaller model, often with less room: keep results short).
 - `contextTokens: number | null`: The model's context in tokens, when the app knows it (null otherwise).
 - `images: boolean | null`: Whether the model reads images, when the app knows it (null otherwise, as for a coding agent's).
-- `used: { … }`: What it used so far and its limits, as they are in force now: tool calls (`steps`) and dollars (`usd`; 0 on a local server). A turn on a coding agent counts its tool calls against its own cap, and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account). It also counts its changes (its calls of tools that are not reads) against its change limit: past `changesCap`, its changes are refused while its reads go on. `changesCap` is 0 for any other turn (no such limit).
+- `used: { … }`: What it used so far and its limits, as they are in force now: tool calls (`steps`) and dollars (`usd`; 0 on a local server). A turn on a coding agent counts its tool calls against its own cap, and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account). It also counts its changes (its calls of tools that are not reads) against its change limit: past `changesCap`, its changes are refused while its reads go on. `changesCap` is 0 for any other turn (no such limit). `usdLeft`, when dollars are counted, is what is left for its next request: the smaller of what its own limit and the person's daily limit leave (other requests spend from the day too), so it can be less than `usdCap - usd`. Absent on a local server, for a coding agent and on an older host.
 - `used.steps: number`
 - `used.stepsCap: number`
 - `used.changes: number`
 - `used.changesCap: number`
 - `used.usd: number`
 - `used.usdCap: number`
+- `used.usdLeft?: number | undefined`
 - `end?: { … }`: How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then).
 - `review?: { … }`: The review round it is in (the page's `review` at registration): absent before its first round.
 

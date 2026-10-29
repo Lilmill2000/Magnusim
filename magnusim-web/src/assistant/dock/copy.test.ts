@@ -190,6 +190,20 @@ describe('the dock copy', () => {
     expect(copy.agentCounters(2, 24, 17, 400, 60_000, 60)).toBe('2 of 24 changes · 17 of 400 tool calls · 1 of 60 min');
     expect(copy.meterUsd(0.42, 8, false, 3.1, 15)).toBe('This request: $0.42 of $8.00 · Today: $3.10 of $15.00');
     expect(copy.meterUsd(0.42, 8, true, 3.1, 15)).toBe('This request: about $0.42 of $8.00 · Today: $3.10 of $15.00');
+    expect(copy.dayNear(12.1, 15)).toBe('Today: $12.10 of $15.00. A cheaper model or a lower Effort costs less.');
+    expect([
+      copy.roomLine('images', 72, 100),
+      copy.roomLine('messages', 216, 300),
+      copy.roomLine('bytes', 15 * 1024 * 1024 + 400 * 1024, 20 * 1024 * 1024),
+      copy.roomLine('context', 115_200, 160_000),
+      copy.roomLine('images', 140, 100),
+    ]).toEqual([
+      'Conversation: 72% full (pictures 72 of 100)',
+      'Conversation: 72% full (messages 216 of 300)',
+      'Conversation: 76% full (results and pictures 15 of 20 MB)',
+      'Conversation: 72% full (context 115,200 of 160,000 tokens)',
+      'Conversation: 100% full (pictures 140 of 100)',
+    ]);
     expect(copy.METER_FREE).toBe('Local server · no cost');
     expect(copy.meterAgent('Helper')).toBe("Billed to your Helper account (Magnusim can't see the cost)");
   });
@@ -204,6 +218,13 @@ describe('the dock copy', () => {
     expect(copy.STATE_OFF).toBe('The Assistant is off. Choose a provider in Settings → Assistant.');
     expect((['done', 'stopped', 'capped', 'failed'] as const).map(copy.endLabel)).toEqual([null, 'Stopped', 'Limit reached', "Didn't finish"]);
     expect(copy.endBody('capped', null)).toBe('Send another message to carry on.');
+    // Today's limit: another message is refused until it is raised (or midnight), so none is offered.
+    const day = copy.endBody('capped', "Today's $15.00 limit is reached; it resets at midnight.", 'day_usd');
+    expect(day).toBe("Today's $15.00 limit is reached; it resets at midnight. Raise it in Settings → Assistant.");
+    expect(day).not.toContain('Send another message');
+    // A full conversation: its own words only (the composer offers a new one).
+    expect(copy.endBody('capped', 'This conversation is full: it holds 100 pictures.', 'conversation_full')).toBe('This conversation is full: it holds 100 pictures.');
+    expect(copy.endBody('capped', 'The step limit was reached.', 'steps')).toBe('The step limit was reached. Send another message to carry on.');
     expect(copy.endBody('failed', 'The model declined this request.')).toBe('The model declined this request.');
     expect([copy.usageLine(4, 'usd', 0.42, null), copy.usageLine(1, 'free', 0, null), copy.usageLine(9, 'agent_account', 0, 'Helper')]).toEqual([
       '4 steps · $0.42',

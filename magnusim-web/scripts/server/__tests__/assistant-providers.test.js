@@ -2040,6 +2040,7 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
   // [model, input, 5 m write, 1 h write, cache read, output, long: [above, input, 5 m, 1 h, read, output] | null, picker]
   const TABLE = [
     ['claude-opus-5-5', 4, 5, 8, 0.2, 20, null, true],
+    // The pricing page, read again 2026-10-29: cache reads $0.10 (0.05x input); the claude-api skill's notes say $0.20.
     ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10, null, true],
     ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5, [100_000, 0.5, 0.625, 1, 0.05, 2.5], true],
     ['claude-opus-5', 5, 6.25, 10, 0.5, 25, null, false],
@@ -2108,6 +2109,26 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     assert.ok(Math.abs(cold.inputUsd - (50_000 * 0.1 + 1200 * 0.125) / 1e6) < 1e-12, 'input after 4 minutes');
     const uncached = prices.estimateStep({ ...base, prev: { ...prev, cacheUsed: false } });
     assert.equal(uncached.inputUsd, cold.inputUsd);
+  });
+
+  it("Claude Haiku 5.5's long card: the estimate takes it from 90% of its 100K line; a request whose context editing moved its prompt across the line is estimated", () => {
+    const haiku = prices.priceRow('claude-haiku-5-5');
+    assert.equal(prices.LONG_TIER_MARGIN, 0.9);
+    assert.equal(prices.ratesFor(haiku, 90_000).input, 0.1, 'billing: the line itself');
+    assert.equal(prices.ratesFor(haiku, 90_000, 0.9).input, 0.5, 'the estimate: from 90% of it');
+    assert.equal(prices.ratesFor(haiku, 89_999, 0.9).input, 0.1);
+    const prev = { promptTokens: 89_000, startedAt: base.now - 1000, cacheUsed: true };
+    const e = prices.estimateStep({ ...base, prev });
+    assert.equal(e.promptTokens, 89_000 + 1200);
+    assert.deepEqual(e.rates, { input: 0.5, write5m: 0.625, write1h: 1, read: 0.05, output: 2.5 }, 'priced on the long card');
+    const under = prices.estimateStep({ ...base, prev: { ...prev, promptTokens: 80_000 } });
+    assert.equal(under.rates.input, 0.1);
+    // Context editing took 30,000 tokens out of a 95,000-token prompt sent as 125,000: which size picks the card is not documented.
+    const read = [{ model: 'claude-haiku-5-5', usage: usage({ input: 5000, cacheRead: 90_000, output: 100 }), fallback: false }];
+    assert.equal(prices.requestCost('anthropic', read, 30_000).estimated, true);
+    assert.equal(prices.requestCost('anthropic', read, 4000).estimated, false, 'both under the line');
+    assert.equal(prices.requestCost('anthropic', read).estimated, false);
+    assert.equal(prices.requestCost('anthropic', [{ ...read[0], model: 'claude-opus-5-5' }], 30_000).estimated, false, 'a model with one card');
   });
 
   it('estimateStep: a jump in the left-out results reads the previous prompt only up to its first newly left-out result, and writes what is sent there now', () => {

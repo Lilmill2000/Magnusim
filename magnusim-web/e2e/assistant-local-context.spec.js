@@ -24,7 +24,8 @@ import { expect, test } from './support/stress.js';
 const MODEL = 'qwen3.8-27b';
 const SMALL_TEXT =
   "The local model's context (3,072 tokens) is too small for this conversation: load it with a longer context in the local server, or start a new conversation.";
-const FULL_TEXT = 'This conversation is full. Start a new one.';
+/** The full line names the limit with its numbers: the model's own context, as its server reported it. */
+const FULL_TEXT = `This conversation is full: the last request used 26,300 of ${MODEL}'s 32,768-token context, and a conversation is full at 80%. Start a new one.`;
 
 let host;
 let fake;

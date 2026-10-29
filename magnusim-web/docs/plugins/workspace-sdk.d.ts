@@ -685,7 +685,10 @@ declare module '@magnusim/workspace' {
        * cap, and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account). It
        * also counts its changes (its calls of tools that are not reads) against its change limit:
        * past `changesCap`, its changes are refused while its reads go on. `changesCap` is 0 for any
-       * other turn (no such limit).
+       * other turn (no such limit). `usdLeft`, when dollars are counted, is what is left for its next
+       * request: the smaller of what its own limit and the person's daily limit leave (other requests
+       * spend from the day too), so it can be less than `usdCap - usd`. Absent on a local server, for
+       * a coding agent and on an older host.
        */
       used: {
           steps: number;
@@ -694,6 +697,7 @@ declare module '@magnusim/workspace' {
           changesCap: number;
           usd: number;
           usdCap: number;
+          usdLeft?: number;
       };
       /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
       end?: {

@@ -17,7 +17,8 @@
  *   says it takes none (`images: false`, what its last start said); not known yet, it takes them,
  *   and the server ends the request bad_images before anything is sent if its start says no.
  * - A refusal shows the server's words above the composer; the draft and pictures stay. The
- *   draft is kept per conversation (store.ts).
+ *   draft is kept per conversation (store.ts). A full conversation's line is the server's: which
+ *   limit it reached, with its numbers (the row's full_text).
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { openSetupWizard } from '../../wizard/controller';
@@ -310,7 +311,7 @@ export function Composer({ place, status, conversation, conversationId, running,
   // Why Send can't go now (the first that holds), shown in place of the hint.
   let blocked: (Blocked & { onStop?: () => void; stopLabel?: string }) | null = null;
   if (error && (error.code === 'unknown_conversation' || error.code === 'conversation_full')) blocked = { line: error.text, action: 'new' };
-  else if (conversation?.full) blocked = { line: CONVERSATION_FULL, action: 'new' };
+  else if (conversation?.full) blocked = { line: conversation.full_text || CONVERSATION_FULL, action: 'new' };
   else if (!running && !choice) blocked = { line: STATE_OFF, action: 'settings' };
   else if (!running && ready && !ready.ready) blocked = { line: providerNotReady(ready.label, ready.detail || ready.reason || ''), action: 'settings' };
   else if (!running && busy) blocked = busy;

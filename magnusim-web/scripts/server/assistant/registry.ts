@@ -91,6 +91,8 @@ export interface TurnUse {
   minutes_cap: number;
   usd?: number;
   usd_cap?: number;
+  /** The money left for its next request: the smaller of what its own limit and today's leave. */
+  usd_left?: number;
   changes?: number;
   changes_cap?: number;
 }

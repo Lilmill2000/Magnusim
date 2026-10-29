@@ -1816,11 +1816,51 @@ describe("what a tool hears of its turn: the person's message and the conversati
     await settled(r.turn);
     assert.equal(seen.length, 2);
     for (const u of seen) {
-      assert.deepEqual(Object.keys(u).sort(), ['minutes', 'minutes_cap', 'steps', 'steps_cap', 'usd', 'usd_cap']);
+      assert.deepEqual(Object.keys(u).sort(), ['minutes', 'minutes_cap', 'steps', 'steps_cap', 'usd', 'usd_cap', 'usd_left']);
       assert.equal(u.minutes_cap, m.state.settings.caps.turn_minutes);
       assert.ok(u.steps_cap > 0 && u.usd_cap > 0, JSON.stringify(u));
     }
     assert.ok(seen[1].steps > seen[0].steps, 'read at each call');
+  });
+});
+
+describe("the money left that a turn's tools and page hear (usd_left)", () => {
+  const round6 = (n) => Math.round(n * 1e6) / 1e6;
+  for (const [what, caps, spentBefore, smaller] of [
+    ["today's room, when it is the smaller", { turn_usd: 2, day_usd: 3 }, 2.5, 'day'],
+    ["the turn's room, when it is the smaller", { turn_usd: 0.4, day_usd: 15 }, 0, 'turn'],
+  ]) {
+    it(`is the smaller of the turn's and today's room: ${what}`, async () => {
+      const seen = [];
+      const m = mk({ caps, hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });
+      if (spentBefore) {
+        const res = await m.ledger.reserve(spentBefore);
+        await m.ledger.settle(res, spentBefore);
+      }
+      m.provider.script({ text: 'Looking.', tools: [{ name: 'who' }], usage: { input: 2000, output: 100 } }, { text: 'Done.' });
+      const r = await startTurn(m, 'How much is left?');
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await settled(r.turn);
+      // The call ran after its step's request was settled: the turn had spent u.usd, today spentBefore more.
+      const [u] = seen;
+      const turnRoom = caps.turn_usd - u.usd;
+      const dayRoom = caps.day_usd - (spentBefore + u.usd);
+      assert.ok(u.usd > 0, 'the first request was priced');
+      assert.equal(u.usd_left, round6(Math.min(turnRoom, dayRoom)));
+      assert.equal(u.usd_left, round6(smaller === 'day' ? dayRoom : turnRoom), JSON.stringify(u));
+      // The page hears the same (its turn frame), as of the last request.
+      assert.equal(r.turn.pageView().used.usd_left, round6(Math.min(caps.turn_usd - r.turn.usd, caps.day_usd - m.ledger.spentToday())));
+    });
+  }
+
+  it('a local server counts no dollars: no usd_left', async () => {
+    const seen = [];
+    const m = mk({ provider: 'openai_compatible', hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });
+    m.provider.script({ text: 'Looking.', tools: [{ name: 'who' }] }, { text: 'Done.' });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.equal(Object.hasOwn(seen[0], 'usd_left'), false);
+    assert.equal(Object.hasOwn(r.turn.pageView().used, 'usd_left'), false);
   });
 });
 

@@ -63,6 +63,8 @@ export const PRICES: readonly PriceRow[] = Object.freeze([
   // ANTHROPIC_PRICES, read 2026-10-16. Cache reads are 0.05x input on this model.
   row('anthropic', 'claude-opus-5-5', 'Claude Opus 5.5', [4, 5, 8, 0.2, 20]),
   // ANTHROPIC_PRICES, read 2026-10-16. Cache reads $0.10 (0.05x input), not the $0.20 of the plan.
+  // Read again 2026-10-29: still $0.10 there ("0.05x the base input price"), where the claude-api
+  // skill's model notes (cached 2026-10-06) say $0.20; the pricing page is what is billed.
   row('anthropic', 'claude-sonnet-5-5', 'Claude Sonnet 5.5', [2, 2.5, 4, 0.1, 10]),
   // ANTHROPIC_PRICES, read 2026-10-16: prompts over 100,000 tokens pay the second row.
   row('anthropic', 'claude-haiku-5-5', 'Claude Haiku 5.5', [0.1, 0.125, 0.2, 0.01, 0.5], { long: [100_000, 0.5, 0.625, 1, 0.05, 2.5] }),
@@ -111,9 +113,20 @@ export function priceRow(model: string): PriceRow | null {
   return PRICES.find((r) => r.model === want) ?? null;
 }
 
-/** The rates one request of `promptTokens` pays on this row (the long tier per request). */
-export function ratesFor(r: PriceRow, promptTokens: number): Rates {
-  return r.long && promptTokens > r.long.above ? r.long : r;
+/**
+ * The estimate prices a prompt at or above this share of a long tier's line on the long tier: its
+ * prompt is a rough count (characters / 2.5), and a request just over the line pays the long tier
+ * for all of its tokens (Claude Haiku 5.5's 100K line, for one).
+ */
+export const LONG_TIER_MARGIN = 0.9;
+
+/**
+ * The rates one request of `promptTokens` pays on this row (the long tier per request, past its
+ * line); with `margin`, from that share of the line on (the estimate's LONG_TIER_MARGIN).
+ */
+export function ratesFor(r: PriceRow, promptTokens: number, margin?: number): Rates {
+  if (!r.long) return r;
+  return (margin === undefined ? promptTokens > r.long.above : promptTokens >= margin * r.long.above) ? r.long : r;
 }
 
 function maxRates(list: Rates[]): Rates {
@@ -122,10 +135,10 @@ function maxRates(list: Rates[]): Rates {
   return out;
 }
 
-/** The provider's dearest price for each kind of token, at this prompt size. */
-export function dearestRates(provider: ProviderId, promptTokens = 0): Rates {
+/** The provider's dearest price for each kind of token, at this prompt size (`margin`: as ratesFor). */
+export function dearestRates(provider: ProviderId, promptTokens = 0, margin?: number): Rates {
   if (provider === 'openai_compatible') return { ...ZERO };
-  return maxRates(PRICES.filter((r) => r.provider === provider).map((r) => ratesFor(r, promptTokens)));
+  return maxRates(PRICES.filter((r) => r.provider === provider).map((r) => ratesFor(r, promptTokens, margin)));
 }
 
 /** All input tokens of one request (what the long tier is chosen on). */
@@ -145,8 +158,11 @@ export function costOf(rates: Rates, u: Usage): number {
  * What one request cost: the sum over its attempts, each at its own model's row (a
  * refusal fallback bills the fallback model at its own prices). An unknown model is
  * charged at its provider's dearest prices, `estimated`. A local server costs nothing.
+ * `clearedTokens`: what the provider's context editing took out of the prompt before the
+ * model read it. Which prompt picks a long tier then (the one sent, or the one read) is not
+ * documented, so a request whose two sizes fall on either side of the line is `estimated`.
  */
-export function requestCost(provider: ProviderId, attempts: readonly Attempt[]): { usd: number; estimated: boolean } {
+export function requestCost(provider: ProviderId, attempts: readonly Attempt[], clearedTokens = 0): { usd: number; estimated: boolean } {
   if (provider === 'openai_compatible') return { usd: 0, estimated: false };
   let usd = 0;
   let estimated = false;
@@ -156,6 +172,7 @@ export function requestCost(provider: ProviderId, attempts: readonly Attempt[]):
     if (!r) estimated = true;
     usd += costOf(r ? ratesFor(r, tokens) : dearestRates(provider, tokens), a.usage);
     if (!a.usage.complete) estimated = true;
+    if (r?.long && clearedTokens > 0 && tokens <= r.long.above && tokens + clearedTokens > r.long.above) estimated = true;
   }
   return { usd, estimated };
 }
@@ -235,7 +252,8 @@ export interface Estimate {
 
 /**
  * The cost of the next request, made before it is sent (spec 5.7). Each price is the
- * dearest among the model and its refusal-fallback targets. The previous request's
+ * dearest among the model and its refusal-fallback targets, on a long tier from 90% of its line
+ * (LONG_TIER_MARGIN). The previous request's
  * prompt is priced as a cache read only if that request used the cache and started
  * under 4 minutes ago (an entry's 5-minute life counts from the start of the request
  * that used it); new text and images are priced as cache writes. A refusal fallback runs
@@ -261,7 +279,7 @@ export function estimateStep(e: EstimateInput): Estimate {
   const models = [e.model, ...e.fallbackTargets];
   const known = models.map((m) => priceRow(m));
   const estimated = known.some((r) => !r);
-  const rates = maxRates(known.map((r) => (r ? ratesFor(r, prompt) : dearestRates(e.provider, prompt))));
+  const rates = maxRates(known.map((r) => (r ? ratesFor(r, prompt, LONG_TIER_MARGIN) : dearestRates(e.provider, prompt, LONG_TIER_MARGIN))));
   const cached = !!e.prev && e.prev.cacheUsed && e.now - e.prev.startedAt < CACHE_FRESH_MS;
   const inputUsd = (prefix * (cached ? rates.read : rates.input) + fresh * rates.write5m) / 1e6;
   const fallbackInputUsd = inputUsd * e.fallbackTargets.length;

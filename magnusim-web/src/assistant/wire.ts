@@ -389,12 +389,25 @@ export interface ConversationRow {
   running: string | null;
   /** Why no more turns fit ('messages', 'images', 'bytes', 'context'), or null. */
   full: string | null;
+  /** That limit with its numbers, in the person's words (null while more turns fit; absent from an older server). */
+  full_text?: string | null;
+  /**
+   * The limit it is closest to: `used` of `limit`, full at `used >= limit` (the context's limit is
+   * 80% of the model's); null for a coding agent's (absent from an older server).
+   */
+  room?: ConversationRoom | null;
   /** Its first turn's title ('' before any). */
   title: string;
   /** Its turns the server still keeps, oldest first (a turn's events: GET /api/assistant/turns/:id or the turn channel). */
   turns: ConversationTurn[];
   /** Its turns no longer kept (older than its newest 50 once an hour passed, or past 200). */
   dropped_turns: number;
+}
+
+export interface ConversationRoom {
+  reason: 'messages' | 'images' | 'bytes' | 'context';
+  used: number;
+  limit: number;
 }
 
 export interface ConversationTurn {
@@ -437,6 +450,8 @@ export interface TurnUsed {
   changes_cap: number;
   usd: number;
   usd_cap: number;
+  /** When dollars are counted: what is left for its next request, the smaller of its own limit's room and today's. */
+  usd_left?: number;
   active_ms: number;
   minutes_cap: number;
 }
@@ -487,7 +502,8 @@ export interface RelayTurnFrame {
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
-  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
+  /** `usd_left` when dollars are counted: what is left for its next request, the smaller of its own limit's room and today's. */
+  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number; usd_left?: number };
   end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
   /** The review round it is in (the workspace's review at registration); absent before its first. */
   review?: { round: number; of: number };

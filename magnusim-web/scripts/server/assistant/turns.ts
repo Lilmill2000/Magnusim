@@ -59,7 +59,8 @@ import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import { grants } from './grants.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
-import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
+import { Conversations, fullText, type Conversation } from './conversations.ts';
+import { modelLabel } from './prices.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
 import type { ToolLink } from './links.ts';
@@ -183,6 +184,8 @@ export interface TurnUsed {
   changes_cap: number;
   usd: number;
   usd_cap: number;
+  /** When dollars are counted: what is left for its next request (the smaller of its own limit's room and today's). */
+  usd_left?: number;
   active_ms: number;
   minutes_cap: number;
 }
@@ -245,7 +248,8 @@ export interface TurnPageView {
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
-  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
+  /** `usd_left` when dollars are counted: what is left for its next request, the smaller of its own limit's room and today's. */
+  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number; usd_left?: number };
   end?: { state: EndState; reason: string };
   /** The review round it is in, once one started (loop.ts). */
   review?: { round: number; of: number };
@@ -543,7 +547,12 @@ export class Turn implements AnyTurn {
   setUsed(limits: PageLimits, agent: { calls: number; changes: number } | null = null, tell = false): void {
     const l = this.limits;
     const a = this.agentCounts;
-    const moved = limits.steps !== l.steps || limits.usd !== l.usd || limits.changes !== l.changes || (agent !== null && (agent.calls !== a.calls || agent.changes !== a.changes));
+    const moved =
+      limits.steps !== l.steps ||
+      limits.usd !== l.usd ||
+      limits.changes !== l.changes ||
+      limits.usdLeft !== l.usdLeft ||
+      (agent !== null && (agent.calls !== a.calls || agent.changes !== a.changes));
     if (!moved) return;
     this.limits = { ...limits };
     if (agent) this.agentCounts = { calls: agent.calls, changes: agent.changes };
@@ -964,7 +973,7 @@ export class Turn implements AnyTurn {
     const l = this.limits;
     return isAgentSettings(this.settings)
       ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
-      : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd };
+      : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd, ...(l.usdLeft !== undefined ? { usd_left: round6(l.usdLeft) } : {}) };
   }
 
   /** What it used so far of its limits, for its tools (ToolCtx.used; app_status shows it). */
@@ -972,7 +981,9 @@ export class Turn implements AnyTurn {
     const u = this.usedNow();
     const minutes = Math.round((u.active_ms / 60_000) * 10) / 10;
     const base = { steps: u.steps, steps_cap: u.steps_cap, minutes, minutes_cap: u.minutes_cap };
-    return isAgentSettings(this.settings) ? { ...base, changes: u.changes, changes_cap: u.changes_cap } : { ...base, usd: u.usd, usd_cap: u.usd_cap };
+    return isAgentSettings(this.settings)
+      ? { ...base, changes: u.changes, changes_cap: u.changes_cap }
+      : { ...base, usd: u.usd, usd_cap: u.usd_cap, ...(u.usd_left !== undefined ? { usd_left: u.usd_left } : {}) };
   }
 
   /** The summary's counters: the page's, its active time and its minutes in force (as armed; its start's before). */
@@ -1585,7 +1596,11 @@ export class TurnManager {
       const field = conv.mismatch(binding);
       if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
-      if (conv.fullReason(settings.base_url)) return refuse(409, 'conversation_full', FULL_TEXT);
+      const full = conv.fullDetail(settings.base_url);
+      if (full) {
+        alog('info', 'conversation full', { conversation: conv.id, reason: full.reason, used: full.used, limit: full.limit });
+        return refuse(409, 'conversation_full', fullText(full, modelLabel(conv.model)));
+      }
     }
     // The window still has its link (the checks above awaited).
     if (linkGiven && this.tabOfLink(body.link) !== linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
@@ -1922,6 +1937,7 @@ export class TurnManager {
     const conversations = convs.map((c) => {
       const kept = c.turns.map((id) => this.turns().get(id)).filter((t): t is Turn => !!t && t.conv === c);
       const agent = isAgentChoice(c.provider) ? agentIdOf(c.provider) : null;
+      const full = c.fullDetail(settings.base_url);
       return {
         id: c.id,
         provider: c.provider,
@@ -1933,7 +1949,9 @@ export class TurnManager {
         created_at: iso(c.createdAt),
         last_used_at: iso(c.lastUsed),
         running: c.running,
-        full: c.fullReason(settings.base_url),
+        full: full?.reason ?? null,
+        full_text: full ? fullText(full, modelLabel(c.model)) : null,
+        room: c.room(settings.base_url),
         title: c.title,
         turns: kept.map((t) => ({ id: t.id, title: t.title(), state: t.state, started_at: iso(t.startedAt), ended_at: t.endedAt === null ? null : iso(t.endedAt), started_by: t.startedBy })),
         dropped_turns: c.turnsDropped + (c.turns.length - kept.length),

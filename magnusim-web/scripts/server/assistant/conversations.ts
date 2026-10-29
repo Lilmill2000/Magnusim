@@ -13,6 +13,8 @@
  * Limits: 20 conversations (the oldest idle one goes first), 2 hours idle, 300 messages,
  * 100 images and 20 MB each, and "full" at 80% of the model's context (a local server's
  * model: the context its server reported, else 128K tokens). Nothing is written to disk.
+ * fullDetail() names the limit a conversation reached with its numbers (fullText words it for
+ * the person), and room() how close it is to the nearest one.
  *
  * It also lists its turns (their ids, at most 200, oldest first) and takes its first turn's
  * title as its own (phase 4 spec 9.3): the turn manager keeps its newest 50 turns while it
@@ -43,7 +45,55 @@ export const CONVERSATION_LIMITS = Object.freeze({
 /** Context windows, in tokens: a local model's when its server reports none, and a safe 200K for cloud models. */
 export const CONTEXT_TOKENS = Object.freeze({ cloud: 200_000, local: 128_000 });
 
-export const FULL_TEXT = 'This conversation is full. Start a new one.';
+export type FullReason = 'messages' | 'images' | 'bytes' | 'context';
+
+/**
+ * One of a conversation's limits with its numbers: `used` of `limit` (full at `used >= limit`).
+ * For the context, `used` is the last request's prompt tokens and `limit` 80% of `window`.
+ */
+export interface Room {
+  reason: FullReason;
+  used: number;
+  limit: number;
+}
+
+/** A limit as fullText words it: whose it is ('model': the model's own; 'app': Magnusim's), and the context's whole window. */
+export interface FullDetail extends Room {
+  of: 'model' | 'app';
+  window?: number;
+}
+
+const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const megabytes = (bytes: number) => {
+  const mb = bytes / (1024 * 1024);
+  return `${mb < 10 ? Math.floor(mb * 10) / 10 : Math.floor(mb)} MB`;
+};
+
+/** Why a conversation is full, with its numbers, as the person reads it (`label`: the model's name). */
+export function fullText(d: FullDetail, label: string): string {
+  let why: string;
+  switch (d.reason) {
+    case 'messages':
+      why = `it has ${grouped(d.used)} messages, and one conversation holds at most ${grouped(d.limit)}`;
+      break;
+    case 'images':
+      why = d.of === 'model'
+        ? `it holds ${grouped(d.used)} pictures, and ${label} takes at most ${grouped(d.limit)} in one request`
+        : `it holds ${grouped(d.used)} pictures, and Magnusim keeps at most ${grouped(d.limit)} in one conversation`;
+      break;
+    case 'bytes':
+      why = `it holds ${megabytes(d.used)} of results and pictures, and Magnusim keeps at most ${megabytes(d.limit)} for one conversation`;
+      break;
+    case 'context': {
+      const window = d.window ?? Math.round(d.limit / CONVERSATION_LIMITS.fullFraction);
+      why = d.of === 'model'
+        ? `the last request used ${grouped(d.used)} of ${label}'s ${grouped(window)}-token context, and a conversation is full at ${Math.round(CONVERSATION_LIMITS.fullFraction * 100)}%`
+        : `the last request used ${grouped(d.used)} of the ${grouped(window)} tokens Magnusim counts for ${label}, and a conversation is full at ${Math.round(CONVERSATION_LIMITS.fullFraction * 100)}%`;
+      break;
+    }
+  }
+  return `This conversation is full: ${why}. Start a new one.`;
+}
 
 export interface FrozenGuide {
   text: string;
@@ -182,16 +232,36 @@ export class Conversation {
     return this.contextBaseUrl === baseUrl ? this.contextTokens : null;
   }
 
-  /** Why no more turns fit (null while they do); with `baseUrl`, a context only that server reported counts. */
-  fullReason(baseUrl?: string): string | null {
+  /** Each limit with its numbers, in the order they are checked; with `baseUrl`, a context only that server reported counts. */
+  limits(baseUrl?: string): FullDetail[] {
     const L = CONVERSATION_LIMITS;
-    if (this.list.length >= L.messages) return 'messages';
-    if (this.imageCount >= L.images) return 'images';
-    if (this.byteCount >= L.bytes) return 'bytes';
     const context = baseUrl === undefined ? this.contextTokens : this.contextAt(baseUrl);
-    const window = this.provider === 'openai_compatible' ? (context ?? CONTEXT_TOKENS.local) : CONTEXT_TOKENS.cloud;
-    if (this.promptTokens >= L.fullFraction * window) return 'context';
-    return null;
+    const local = this.provider === 'openai_compatible';
+    const window = local ? (context ?? CONTEXT_TOKENS.local) : CONTEXT_TOKENS.cloud;
+    return [
+      { reason: 'messages', used: this.list.length, limit: L.messages, of: 'app' },
+      { reason: 'images', used: this.imageCount, limit: L.images, of: 'app' },
+      { reason: 'bytes', used: this.byteCount, limit: L.bytes, of: 'app' },
+      { reason: 'context', used: this.promptTokens, limit: Math.floor(L.fullFraction * window), of: local && context ? 'model' : 'app', window },
+    ];
+  }
+
+  /** The first limit this conversation reached, with its numbers (null while more turns fit). */
+  fullDetail(baseUrl?: string): FullDetail | null {
+    return this.limits(baseUrl).find((l) => l.used >= l.limit) ?? null;
+  }
+
+  /** Why no more turns fit (null while they do); with `baseUrl`, a context only that server reported counts. */
+  fullReason(baseUrl?: string): FullReason | null {
+    return this.fullDetail(baseUrl)?.reason ?? null;
+  }
+
+  /** The limit it is closest to (the largest share of one), with its numbers; null for a conversation that keeps no messages. */
+  room(baseUrl?: string): Room | null {
+    if (String(this.provider).startsWith('agent:')) return null;
+    let best: FullDetail | null = null;
+    for (const l of this.limits(baseUrl)) if (l.limit > 0 && (!best || l.used / l.limit > best.used / best.limit)) best = l;
+    return best ? { reason: best.reason, used: best.used, limit: best.limit } : null;
   }
 
   /** The field a turn would change, or null when it fits this conversation. */

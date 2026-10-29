@@ -6,7 +6,7 @@
  * a "New messages ↓" button appears.
  */
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { AssistantStatus, ConversationTurn } from '../wire';
+import type { AssistantStatus, ConversationRoom, ConversationTurn } from '../wire';
 import { ELSEWHERE, NEW_MESSAGES, pictureAlt, SHOW_EARLIER, yourPictureAlt } from './copy';
 import { TurnBlock } from './TurnBlock';
 import type { TurnView } from './turnView';
@@ -35,6 +35,8 @@ export interface TranscriptProps {
   cardsFor?: (turn: string) => ReactNode;
   endExtraFor?: (turn: string) => ReactNode;
   noteFor?: (turn: string) => string | null;
+  /** The conversation's nearest limit while no request of it runs (the meter's room readout). */
+  room?: ConversationRoom | null;
 }
 
 function picturesOf(t: TurnView): ViewerPicture[] {
@@ -108,6 +110,7 @@ export function Transcript(p: TranscriptProps) {
       note={p.noteFor?.(t.id) ?? null}
       cards={p.cardsFor?.(t.id)}
       endExtra={p.endExtraFor?.(t.id)}
+      room={newest ? (p.room ?? null) : null}
     />
   );
 
