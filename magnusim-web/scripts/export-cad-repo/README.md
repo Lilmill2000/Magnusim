@@ -80,7 +80,11 @@ tests and the scripts that run them (its `npm test`, `npm run typecheck` and
 The kernel and solver WebAssembly modules in `bundled-plugins/cad/workspace/`
 are prebuilt. Their sources, pinned to exact upstream commits with our patches,
 and the Linux scripts that rebuild them are in `bundled-plugins/cad/kernel-build/`
-and `bundled-plugins/cad/solver-build/`.
+and `bundled-plugins/cad/solver-build/`. On Linux or WSL, run `./build.sh` in
+either folder to rebuild its module into `workspace/`: the script's first lines
+say what it needs and its options, and the folder's `SOURCES.md` has the pins
+(`./repro-check.sh --against-shipped` in `kernel-build/` compares a rebuilt
+kernel with the shipped one).
 
 ## Where the code comes from
 

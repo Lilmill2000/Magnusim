@@ -35,9 +35,9 @@ const DEV_LABEL = /^development version \S+ \(\d{4}-\d{2}-\d{2}\)$/;
  * HEAD (no commit outside a checkout). In the Magnusim CAD repository, whose EXPORT.json (at the
  * root, one level above magnusim-web/) says what its code was copied from: that repository, and
  * what in Magnusim, since a copy's own commits are not Magnusim's. A development snapshot
- * (magnusim.public false: its commit is not published) is named by its label, "development
- * version <version> (<date>)", and no commit; a release export by its commit, with its release
- * tag (the label) when it has one.
+ * (magnusim.public false: its commit is not published, and its record has none) is named by its
+ * label, "development version <version> (<date>)", and no commit; a release export by its
+ * commit, with its release tag (the label) when it has one.
  */
 export function sourceOf(repoRoot) {
   let record = null;
@@ -48,9 +48,9 @@ export function sourceOf(repoRoot) {
   }
   if (record && record.kind === EXPORT_KIND) {
     const m = record.magnusim || {};
-    if (!/^[0-9a-f]{40}$/.test(String(m.commit))) throw new Error(`${join(repoRoot, 'EXPORT.json')} names no Magnusim commit`);
-    if (record.incomplete || (record.selfCheck !== undefined && record.selfCheck?.passed !== true)) throw new Error(`${join(repoRoot, 'EXPORT.json')}: the export that wrote this copy did not finish, or failed its self-check`);
     const dev = m.public === false;
+    if (!dev && !/^[0-9a-f]{40}$/.test(String(m.commit))) throw new Error(`${join(repoRoot, 'EXPORT.json')} names no Magnusim commit`);
+    if (record.incomplete || (record.selfCheck !== undefined && record.selfCheck?.passed !== true)) throw new Error(`${join(repoRoot, 'EXPORT.json')}: the export that wrote this copy did not finish, or failed its self-check`);
     if (dev && !DEV_LABEL.test(String(m.label))) throw new Error(`${join(repoRoot, 'EXPORT.json')}: a development snapshot without its label ("development version <version> (<date>)")`);
     const changed = Array.isArray(m.uncommitted) ? m.uncommitted.length : 0;
     return { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: m.repository || REPO_URL, label: typeof m.label === 'string' ? m.label : '', commit: dev ? '' : m.commit, changed } };

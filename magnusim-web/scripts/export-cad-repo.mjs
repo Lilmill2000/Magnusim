@@ -4,15 +4,22 @@
 // changes are made here, in Magnusim, and the copy is refreshed from it (one commit per copy in
 // the CAD repository).
 //
-//   node scripts/export-cad-repo.mjs [<out folder>] [--dev] [--allow-dirty]   (default C:/mcad-export)
-//   node scripts/export-cad-repo.mjs --check [<out folder>]   the self-check alone, on a copy
+//   node scripts/export-cad-repo.mjs [<out folder>] [--dev] [--allow-dirty] [--record <file>]
+//                                                             (default C:/mcad-export)
+//   node scripts/export-cad-repo.mjs --check [<out folder>] [--record <file>]
+//                                                             the self-check alone, on a copy
 //                                                             (after a build in it, say)
 //
 // --dev: a development snapshot, from a commit that is not published. The copy (its README, and
 // the installer's notices through EXPORT.json) then says it is copied from Magnusim's
-// "development version <desktop/package.json version> (<commit date>)" and names no commit;
-// EXPORT.json keeps the commit for Magnusim's own bookkeeping (magnusim.public false). Without
-// it (a release export) the copy names the commit, and the release tag (vX.Y.Z) at it.
+// "development version <desktop/package.json version> (<commit date>)" and names no commit,
+// EXPORT.json included (magnusim.public false). Without it (a release export) the copy names the
+// commit, and the release tag (vX.Y.Z) at it.
+// Each export also writes Magnusim's own bookkeeping OUTSIDE the copy (never published): the
+// commit, and the sha256 of the EXPORT.json it wrote, in --record <file> (default
+// <out folder>.bookkeeping/last-export.json, beside the out folder). --check takes the commit
+// from EXPORT.json when it names one, else from that file when it is this copy's (the same
+// EXPORT.json), else HEAD when its date is EXPORT.json's; otherwise it stops.
 //
 // What goes in, each list worked out from the code as it runs, where it can be:
 //   page       the page's Vite build as desktop/scripts/build.mjs page() runs it (cad.html):
@@ -29,8 +36,10 @@
 // and it writes, at the new repository's root: README.md (with where the copy comes from),
 // .gitignore and .gitattributes (from scripts/export-cad-repo/), LICENSE (Magnusim's),
 // THIRD_PARTY_NOTICES.md (Magnusim's, with only the sections about what the copy holds:
-// NOTICE_SECTIONS) and EXPORT.json (what the copy comes from, its own changes, and each exported
-// path with the lists that put it there); in magnusim-web/: package.json with
+// NOTICE_SECTIONS) and EXPORT.json (what the copy comes from, its own changes, the files git has
+// as executable (100755: "executables", which the CAD repository's commit adds with
+// git add --chmod=+x, as no file system here keeps the bit), and each exported path with the
+// lists that put it there); in magnusim-web/: package.json with
 // only the dependencies those lists use, and package-lock.json pruned from Magnusim's
 // (npm install --package-lock-only --offline: the same versions, or the export stops).
 // The app keeps its magnusim-web/ folder, so desktop/scripts/build.mjs and the installer's
@@ -43,7 +52,7 @@
 // or the export's own, no AI-tool traces, models, test data, secrets, paths of this PC or a
 // private part's name, the licences in place. A failed check lists each offender and fails the
 // export; EXPORT.json keeps each check's counts. The copy's few changes to Magnusim's files are
-// declared (REWRITES, LEFT_OUT, the notices' dropped paragraphs) and listed in EXPORT.json; the
+// declared (rewritesFor, LEFT_OUT, the notices' dropped paragraphs) and listed in EXPORT.json; the
 // self-check applies each rewrite to the commit's file again and refuses any other difference.
 // Never exported: tests and e2e, python/, other plugins, docs
 // (but the two .d.ts files the server serves), hidden folders, AI-tool files, STEP and IGES files,
@@ -55,13 +64,14 @@
 // Needs Node 24 (or 22.18 and later): it imports the server's TypeScript (sdk-build.ts, load-sdk.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { builtinModules, createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, parse as parsePath, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse as parsePath, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { cadSection, copiedFromWords } from '../desktop/scripts/notices.mjs';
-import { applyEdits, report, selfCheck, summary } from './export-cad-repo/self-check.mjs';
+import { applyEdits, BINARY, executablesOf, report, selfCheck, summary } from './export-cad-repo/self-check.mjs';
 import { removeTreeSync } from './remove-tree.js';
 
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -192,8 +202,30 @@ const NOTICE_SECTIONS = {
 /** Magnusim's setup files that the copy has none of. */
 const NOTICE_WORDING = [[/Setup \(`npm ci`\) or `run\.bat`/g, '`npm ci`']];
 
-/** Where the CAD plugin's tests and developer scripts are (Magnusim's default branch on GitHub). */
-const CAD_IN_MAGNUSIM = `${MAGNUSIM_URL}/tree/master/magnusim-web/bundled-plugins/cad`;
+/** The CAD plugin's manifest: its version names the plugin in the copy's README (cadTitle). */
+const CAD_MANIFEST = 'bundled-plugins/cad/manifest.toml';
+
+/** The version in the CAD plugin's manifest.toml text. */
+function cadVersionOf(manifest) {
+  const m = /^version\s*=\s*"([^"]+)"/m.exec(manifest);
+  if (!m) throw new Error(`${CAD_MANIFEST} names no version`);
+  return m[1];
+}
+
+/** The CAD plugin README's title in the copy: the manifest's version, and a pre-release one said to be the development version. */
+const cadTitle = (version) => (/-/.test(version) ? `# Magnusim CAD ${version}: the CAD plugin's development version` : `# Magnusim CAD ${version}`);
+
+/**
+ * Where the copy's CAD texts say the plugin's tests and developer scripts are (EXPORT.json's
+ * magnusim record): for a development snapshot, Magnusim's development version, with no branch
+ * claimed (its commit is not published); for a release export, that release (or commit).
+ */
+function testsIn(m) {
+  const repo = m.repository || MAGNUSIM_URL;
+  if (m.public === false) return `Magnusim's development version, in its \`magnusim-web/bundled-plugins/cad\` folder (<${repo}>)`;
+  const ref = m.label || m.commit;
+  return `Magnusim ${m.label || `at commit ${String(m.commit).slice(0, 10)}`}, in its \`magnusim-web/bundled-plugins/cad\` folder (<${repo}/tree/${ref}/magnusim-web/bundled-plugins/cad>)`;
+}
 
 /**
  * Magnusim's files the copy holds with its own words (Daniel, 2026-10-29: the public copy leaves
@@ -201,13 +233,16 @@ const CAD_IN_MAGNUSIM = `${MAGNUSIM_URL}/tree/master/magnusim-web/bundled-plugin
  * they are). `path`: web-root relative; `what` and `why` go into EXPORT.json, so they never name
  * the part; `edits`: exact texts (self-check.mjs applyEdits). The self-check applies them to the
  * commit's file again and refuses any other difference; an edit whose text is gone stops the export.
+ * `magnusim`: EXPORT.json's record (where the tests are); `cadVersion`: the CAD manifest's version
+ * at the commit (the plugin README's title).
  */
-const REWRITES = [
+const rewritesFor = ({ magnusim, cadVersion }) => [
   {
     path: 'bundled-plugins/cad/README.md',
-    what: 'the Developer section without the scripts, tests and notes the copy does not hold (one line points to Magnusim), and no reference to ARCHITECTURE.md (left out) or a private test part',
-    why: "the copy's README must not describe scripts that do not run here, or files it does not have",
+    what: "the title names the plugin's version (a development one as such); the Developer section without the scripts, tests and notes the copy does not hold (one line says where in Magnusim they are), and no reference to ARCHITECTURE.md (left out) or a private test part",
+    why: "the copy's README must not describe scripts that do not run here, or files it does not have, nor claim a release or branch it was not copied from",
     edits: [
+      { find: '# Magnusim CAD 0.1.0\n\nA parametric part modeler', put: `${cadTitle(cadVersion)}\n\nA parametric part modeler` },
       { find: 'How it is built: the\n[Developer](#developer) section below and `ARCHITECTURE.md`.', put: 'How it is built: the\n[Developer](#developer) section below.' },
       { find: '`ws.nav.onLeave`, 1.6); ARCHITECTURE.md §11 has the export, the face names and\nthe exit hook. From 1.2', put: '`ws.nav.onLeave`, 1.6). From 1.2' },
       { find: 'else it is kept per project (ARCHITECTURE.md §7 "Toolbar").', put: 'else it is kept per project.' },
@@ -238,7 +273,7 @@ const REWRITES = [
           'kernel and solver binaries are rebuilt only when their sources change, on Linux',
           'or WSL: `kernel-build/build.sh`, `solver-build/build.sh`.',
           '',
-          `The plugin's tests and its other developer scripts live in Magnusim: <${CAD_IN_MAGNUSIM}>.`,
+          `The plugin's tests and its other developer scripts for this version are in ${testsIn(magnusim)}.`,
           '',
           '',
         ].join('\n'),
@@ -262,11 +297,42 @@ const REWRITES = [
   },
   {
     path: 'bundled-plugins/cad/kernel-build/SOURCES.md',
-    what: 'no reference to ARCHITECTURE.md (left out), and a private test part named generically',
-    why: 'internal notes stay in Magnusim',
+    what: "no reference to ARCHITECTURE.md (left out); the build lock and the Tests section say where in Magnusim the e2e runs and the kernel's tests are, instead of naming scripts the copy does not hold; a private test part named generically",
+    why: 'internal notes and the tests stay in Magnusim',
     edits: [
       { find: 'What it does and its rules: `ARCHITECTURE.md` §5 and the typed contract in\n`src/types/kernel-protocol.ts`.', put: 'What it does and its rules: the typed contract in\n`src/types/kernel-protocol.ts`.' },
-      { find: 'the vortex-finder cut removes', put: "a test part's tube cut removes" },
+      {
+        find: 'node kernel-build/ship.mjs                           # queued with e2e runs; replaces workspace/kernel between them',
+        put: 'node kernel-build/ship.mjs                           # waits its turn for the lock, then replaces workspace/kernel',
+      },
+      {
+        from: '- `build.sh` waits (bounded, `CAD_KERNEL_LOCK_WAIT`',
+        to: '\n\n## Tests',
+        put: [
+          '- `build.sh` waits (bounded, `CAD_KERNEL_LOCK_WAIT`, default 900 s) while',
+          '  another run holds `.cache/build.lock` before it replaces the shipped pair (in',
+          "  Magnusim the plugin's e2e runs hold it, so a running suite never gets a new",
+          '  kernel mid-run); `CAD_KERNEL_IGNORE_BUILD_LOCK=1` for a lock left by a stopped',
+          '  run. `node kernel-build/ship.mjs` waits its turn for the lock, holds it, and',
+          '  runs build.sh inside it.',
+        ].join('\n'),
+      },
+      {
+        from: '## Tests\n',
+        to: 'Commit `workspace/kernel/*.wasm`',
+        put: [
+          '## Tests',
+          '',
+          "The kernel's tests are not in this repository: they and the scripts that run",
+          `them (the plugin's \`npm run test:kernel\`) are in ${testsIn(magnusim)}.`,
+          '`EXTRA_CXXFLAGS=-DMK_TEST_NO_WORK_COPY FACADE_OBJ=<tmp> build.sh --out <dir>`',
+          'makes a test-only kernel that runs ops on the stored shapes themselves; with it',
+          "the hazard those tests guard against comes back (a test part's tube cut removes",
+          '0.015 mm³ instead of 42,353 mm³).',
+          '',
+          '',
+        ].join('\n'),
+      },
     ],
   },
   ...[
@@ -637,8 +703,6 @@ function cadNotices(text, fixed) {
   return `${out.join('\n\n')}\n`;
 }
 
-const BINARY = /\.(wasm|bin|webp|png|ico|jpe?g|gif|woff2?|zip|gz)$/i;
-
 /** The files of scripts/export-cad-repo/ the export writes or composes from (the self-check's code is not one). */
 const FIXED_FILES = ['README.md', 'gitignore', 'gitattributes', 'notices-intro.md', ...Object.values(NOTICE_SECTIONS).filter((v) => typeof v === 'string' && v !== 'keep' && v !== 'drop').map((v) => `notices-${v}`)];
 
@@ -664,22 +728,22 @@ function readmeSource(m) {
 }
 
 /**
- * The self-check's rewrites (copy path -> { source, edits }): REWRITES, and the README from
- * scripts/export-cad-repo/README.md with its placeholder filled from `magnusim`.
+ * The self-check's rewrites (copy path -> { source, edits }): `rewrites` (rewritesFor), and the
+ * README from scripts/export-cad-repo/README.md with its placeholder filled from `magnusim`.
  */
-function resolvedRewrites(prefix, magnusim) {
+function resolvedRewrites(prefix, magnusim, rewrites) {
   const out = { 'README.md': { source: `${prefix}scripts/export-cad-repo/README.md`, edits: [{ find: README_SOURCE, put: readmeSource(magnusim) }] } };
-  for (const r of REWRITES) out[`${APP_DIR}/${r.path}`] = { source: `${prefix}${r.path}`, edits: r.edits };
+  for (const r of rewrites) out[`${APP_DIR}/${r.path}`] = { source: `${prefix}${r.path}`, edits: r.edits };
   return out;
 }
 
-/** What EXPORT.json says about the copy's own changes. */
-function copyChanges() {
+/** What EXPORT.json says about the copy's own changes (`rewrites`: rewritesFor). */
+function copyChanges(rewrites) {
   return {
     about: "Magnusim's files this copy changes or leaves out (the self-check applies each rewrite to the commit's file again and refuses any other difference)",
     rewritten: [
       { path: 'README.md', from: 'magnusim-web/scripts/export-cad-repo/README.md', what: 'where this copy comes from, filled in from "magnusim" above', why: "the copy's own README" },
-      ...REWRITES.map((r) => ({ path: `${APP_DIR}/${r.path}`, what: r.what, why: r.why, edits: r.edits.length })),
+      ...rewrites.map((r) => ({ path: `${APP_DIR}/${r.path}`, what: r.what, why: r.why, edits: r.edits.length })),
     ],
     leftOut: LEFT_OUT.map((x) => ({ path: `${APP_DIR}/${x.path}`, why: x.why })),
     notices: Object.entries(NOTICE_SECTIONS)
@@ -688,38 +752,97 @@ function copyChanges() {
   };
 }
 
-/** The self-check alone, on a copy this script wrote (its EXPORT.json names the commit). */
-function checkOnly(out, prefix) {
+/** The kind of Magnusim's own bookkeeping of an export, kept outside the copy and never published. */
+const BOOK_KIND = 'magnusim-cad-export-bookkeeping';
+
+/** The bookkeeping file of the copy in `out`: `record` (--record), else beside the out folder. */
+const bookkeepingFile = (out, record) => resolve(record || join(dirname(out), `${basename(out)}.bookkeeping`, 'last-export.json'));
+
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+
+/**
+ * The commit a copy was exported from, for --check: EXPORT.json's when it names one (a release
+ * export); else the bookkeeping file's when it is this copy's (it holds the sha256 of this very
+ * EXPORT.json); else HEAD when its date is EXPORT.json's (the commit's date). Otherwise it stops.
+ */
+function commitOfCopy(out, record, bookFile) {
+  const m = record.magnusim || {};
+  if (/^[0-9a-f]{40}$/.test(String(m.commit))) return { commit: m.commit, from: 'EXPORT.json' };
+  let book = null;
+  try {
+    book = JSON.parse(readFileSync(bookFile, 'utf8'));
+  } catch {
+    /* none: HEAD below */
+  }
+  const ours = book?.kind === BOOK_KIND && book.exportJsonSha256 === sha256(readFileSync(join(out, 'EXPORT.json'))) && /^[0-9a-f]{40}$/.test(String(book.commit));
+  if (ours) return { commit: book.commit, from: bookFile };
+  const head = git(['rev-parse', 'HEAD']).trim();
+  const headDate = git(['show', '-s', '--format=%cI', head]).trim();
+  if (m.date && headDate === m.date) return { commit: head, from: `HEAD, whose date is EXPORT.json's (${m.date})` };
+  throw new Error(
+    `${join(out, 'EXPORT.json')} names no commit (a development snapshot), ${bookFile} ${book ? "is another export's" : 'is not there'}, and HEAD (${head.slice(0, 10)}, ${headDate}) is not the commit the copy was made from (${m.date || 'no date'}): pass --record <file>, this copy's bookkeeping`,
+  );
+}
+
+/** The CAD manifest's version at `commit` (or in `file`, for one taken from a working tree). */
+const cadVersionAt = (commit, prefix, file = null) => cadVersionOf(file ? readFileSync(file, 'utf8') : git(['show', `${commit}:${prefix}${CAD_MANIFEST}`]));
+
+/** The self-check alone, on a copy this script wrote. */
+function checkOnly(out, prefix, bookFile) {
   let record = null;
   try {
     record = JSON.parse(readFileSync(join(out, 'EXPORT.json'), 'utf8'));
   } catch {
     /* refused below */
   }
-  if (!record || record.kind !== MARKER_KIND || !record.magnusim?.commit) throw new Error(`${out} holds no EXPORT.json from this script`);
-  const { commit, uncommitted = [] } = record.magnusim;
-  console.log(`Self-check of ${out} (Magnusim ${commit.slice(0, 10)}${record.magnusim.label ? `, ${record.magnusim.label}` : ''})`);
+  if (!record || record.kind !== MARKER_KIND || !record.magnusim) throw new Error(`${out} holds no EXPORT.json from this script`);
+  const { commit, from } = commitOfCopy(out, record, bookFile);
+  const { uncommitted = [] } = record.magnusim;
+  console.log(`Self-check of ${out} (Magnusim ${commit.slice(0, 10)}, from ${from}${record.magnusim.label ? `; ${record.magnusim.label}` : ''})`);
   const leftOut = LEFT_OUT.map((x) => `${APP_DIR}/${x.path}`);
-  const result = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted, rewrites: resolvedRewrites(prefix, record.magnusim), leftOut });
+  // An --allow-dirty copy's manifest may be the working tree's: the copy's own, then.
+  const cadVersion = cadVersionAt(commit, prefix, uncommitted.includes(`${prefix}${CAD_MANIFEST}`) ? join(out, APP_DIR, CAD_MANIFEST) : null);
+  const rewrites = resolvedRewrites(prefix, record.magnusim, rewritesFor({ magnusim: record.magnusim, cadVersion }));
+  const result = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted, rewrites, leftOut });
   if (!report(result)) throw new Error(`the self-check failed: ${Object.values(result.checks).reduce((n, c) => n + c.offenders.length, 0)} offenders`);
   console.log('Self-check passed');
+}
+
+/** The command line: [<out folder>] [--dev] [--allow-dirty] [--check] [--record <file>]. */
+function parseArgs(args) {
+  const o = { allowDirty: false, check: false, dev: false, record: null, out: null };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--allow-dirty') o.allowDirty = true;
+    else if (a === '--check') o.check = true;
+    else if (a === '--dev') o.dev = true;
+    else if (a === '--record') {
+      o.record = args[++i];
+      if (!o.record || o.record.startsWith('--')) throw new Error('--record needs a file');
+    } else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
+    else if (o.out) throw new Error(`one out folder only: ${o.out}, ${a}`);
+    else o.out = a;
+  }
+  return o;
 }
 
 // --- the export -------------------------------------------------------------------------------
 
 async function main() {
-  const args = process.argv.slice(2);
-  const allowDirty = args.includes('--allow-dirty');
-  const checkAlone = args.includes('--check');
-  const devSnapshot = args.includes('--dev');
-  const unknown = args.filter((a) => a.startsWith('--') && a !== '--allow-dirty' && a !== '--check' && a !== '--dev');
-  if (unknown.length) throw new Error(`unknown option ${unknown.join(' ')}`);
-  const out = resolve(args.find((a) => !a.startsWith('--')) || (process.platform === 'win32' ? 'C:/mcad-export' : join(WEB, '..', '..', 'mcad-export')));
+  const opts = parseArgs(process.argv.slice(2));
+  const { allowDirty, dev: devSnapshot } = opts;
+  const out = resolve(opts.out || (process.platform === 'win32' ? 'C:/mcad-export' : join(WEB, '..', '..', 'mcad-export')));
+  const bookFile = bookkeepingFile(out, opts.record);
+  const within = (p, dir) => {
+    const cmp = (s) => (caseless ? slash(s).toLowerCase() : slash(s));
+    return cmp(p).startsWith(`${cmp(dir)}/`);
+  };
+  if (within(bookFile, out)) throw new Error(`the bookkeeping file ${bookFile} is in the copy ${out}: it must stay outside it (--record)`);
 
   const top = git(['rev-parse', '--show-toplevel']).trim();
   const prefix = git(['rev-parse', '--show-prefix']).trim();
   if (prefix !== `${APP_DIR}/` || slash(resolve(top)) !== slash(resolve(WEB, '..'))) throw new Error(`expected the app in ${APP_DIR}/ at the repository's root, found ${top} + ${prefix}`);
-  if (checkAlone) return checkOnly(out, prefix);
+  if (opts.check) return checkOnly(out, prefix, bookFile);
   const commit = git(['rev-parse', 'HEAD']).trim();
   const commitDate = git(['show', '-s', '--format=%cI', commit]).trim();
   // The whole repository's (':/'): LICENSE and THIRD_PARTY_NOTICES.md are at its root, above the app.
@@ -796,17 +919,10 @@ async function main() {
   /**
    * What the copy says it comes from (EXPORT.json's magnusim; the README and desktop/scripts/build.mjs
    * sourceOf read it). A development snapshot's commit is not published: the copy names its
-   * label, and the commit stays only as Magnusim's bookkeeping (public: false).
+   * label and no commit (public: false); the commit stays in Magnusim's bookkeeping, outside it.
    */
   const magnusim = devSnapshot
-    ? {
-        repository: MAGNUSIM_URL,
-        label: `development version ${desktopPkg.version} (${commitDate.slice(0, 10)})`,
-        public: false,
-        commit,
-        commitNote: "Magnusim's own bookkeeping: a development commit that is not published, so the copy names it nowhere else",
-        date: commitDate,
-      }
+    ? { repository: MAGNUSIM_URL, label: `development version ${desktopPkg.version} (${commitDate.slice(0, 10)})`, public: false, date: commitDate }
     : { repository: MAGNUSIM_URL, ...(releaseTag ? { label: releaseTag } : {}), public: true, commit, date: commitDate };
   const declared = new Set([...Object.keys(rootPkg.dependencies || {}), ...Object.keys(rootPkg.devDependencies || {})]);
   const desktopDeclared = new Set([...Object.keys(desktopPkg.dependencies || {}), ...Object.keys(desktopPkg.devDependencies || {})]);
@@ -858,8 +974,10 @@ async function main() {
   if (uncommitted.length) magnusim.uncommitted = uncommitted;
 
   // Each declared rewrite is of a file the copy holds, and applies (it throws otherwise).
-  const rewriteOf = new Map(REWRITES.map((r) => [r.path, r]));
-  for (const r of REWRITES) if (!lists.has(r.path)) throw new Error(`REWRITES names ${r.path}, which the copy does not hold: update REWRITES`);
+  const cadVersion = cadVersionAt(commit, prefix, dirty.includes(CAD_MANIFEST) ? join(WEB, CAD_MANIFEST) : null);
+  const rewriteList = rewritesFor({ magnusim, cadVersion });
+  const rewriteOf = new Map(rewriteList.map((r) => [r.path, r]));
+  for (const r of rewriteList) if (!lists.has(r.path)) throw new Error(`rewritesFor names ${r.path}, which the copy does not hold: update it`);
   if (!fixed('README.md').toString('utf8').includes(README_SOURCE)) throw new Error(`scripts/export-cad-repo/README.md has no ${README_SOURCE}`);
 
   prepareOut(out, top);
@@ -897,7 +1015,7 @@ async function main() {
   }
 
   // The new repository's root.
-  const rewrites = resolvedRewrites(prefix, magnusim);
+  const rewrites = resolvedRewrites(prefix, magnusim, rewriteList);
   const rootFiles = {
     'README.md': applyEdits(fixed('README.md').toString('utf8'), rewrites['README.md'].edits, 'README.md'),
     '.gitignore': fixed('gitignore'),
@@ -916,10 +1034,12 @@ async function main() {
 
   const record = {
     kind: MARKER_KIND,
-    about: "A copy of Magnusim CAD's code, made by Magnusim's scripts/export-cad-repo.mjs. Code changes are made in Magnusim, and arrive here with the next copy.",
+    about:
+      "A copy of Magnusim CAD's code, made by Magnusim's scripts/export-cad-repo.mjs. Code changes are made in Magnusim, and arrive here with the next copy. \"executables\": the files Magnusim's git has as executable (100755), which this repository's commit adds with git add --chmod=+x.",
     magnusim,
+    executables: executablesOf({ web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), rewrites, files: all }),
     lockfile,
-    copyChanges: copyChanges(),
+    copyChanges: copyChanges(rewriteList),
     selfCheck: 'not run yet',
     lists: {
       page: 'the page: the Vite build of cad.html (modules, files it reads, its tsconfig.json)',
@@ -946,6 +1066,21 @@ async function main() {
   record.selfCheck = summary(checked);
   writeRecord();
 
+  // Magnusim's own bookkeeping, outside the copy: the commit, and the EXPORT.json it belongs to.
+  const book = {
+    kind: BOOK_KIND,
+    about: "Magnusim's bookkeeping of a Magnusim CAD export (scripts/export-cad-repo.mjs): kept outside the copy and never published; --check finds the commit here",
+    out,
+    commit,
+    date: commitDate,
+    label: magnusim.label || '',
+    public: magnusim.public,
+    exportJsonSha256: sha256(readFileSync(join(out, 'EXPORT.json'))),
+    selfCheckPassed: checked.passed,
+  };
+  mkdirSync(dirname(bookFile), { recursive: true });
+  writeFileSync(bookFile, `${JSON.stringify(book, null, 2)}\n`);
+
   // Files and size per top folder.
   const sizes = new Map();
   for (const rel of all) {
@@ -965,6 +1100,8 @@ async function main() {
   console.log(`  dependencies: ${Object.keys(pkg.dependencies).join(' ')}`);
   console.log(`  devDependencies: ${Object.keys(pkg.devDependencies).join(' ')}`);
   console.log(`  lockfile: ${lockfile}`);
+  console.log(`  executables: ${record.executables.length} (EXPORT.json "executables")`);
+  console.log(`  bookkeeping, outside the copy: ${bookFile}`);
   for (const w of warnings) console.warn(`  warning: ${w}`);
   if (!report(checked)) throw new Error(`the self-check failed: ${Object.values(checked.checks).reduce((n, c) => n + c.offenders.length, 0)} offenders in ${out} (above); EXPORT.json records it`);
   console.log(`Exported ${all.length} files to ${out}`);

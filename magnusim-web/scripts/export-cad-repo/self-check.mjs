@@ -7,7 +7,8 @@
 //            object (so the copy came from git, never from a working tree), or one the export
 //            writes (GENERATED); the root files copied from Magnusim are its git objects too; a
 //            file the export rewrites (its declared rewrites) is its git object with exactly those
-//            edits applied again here, and a file it leaves out is not there;
+//            edits applied again here, and a file it leaves out is not there; EXPORT.json's
+//            "executables" are exactly the copy's files that git has as 100755;
 //   ai       no AI-tool files or folders, no Co-Authored-By trailer anywhere, and no AI vendor or
 //            tool name in the Markdown the export writes. The Assistant's provider code and
 //            packages are the product's own, so its sources are not searched for vendor names;
@@ -35,8 +36,11 @@ export const generated = (appDir) => ['README.md', 'LICENSE', 'THIRD_PARTY_NOTIC
 /** The Markdown the export writes (README.md from its folder, the notices it composes). */
 const WRITTEN_MARKDOWN = ['README.md', 'THIRD_PARTY_NOTICES.md'];
 
-/** Files no text check reads. Any other file holding a NUL byte is binary too. */
-const BINARY = /\.(wasm|bin|webp|png|ico|jpe?g|gif|woff2?|zip|gz|exe|dll|node)$/i;
+/**
+ * Binary files, by their extension: no text check reads them (the names check reads their
+ * bytes). Every other file is text and read by every check, a stray NUL byte in it or not.
+ */
+export const BINARY = /\.(wasm|bin|webp|png|ico|icns|jpe?g|gif|bmp|tiff?|woff2?|ttf|otf|eot|zip|7z|gz|tgz|xz|bz2|tar|exe|dll|node|msi|pdf|mp[34]|webm|wav)$/i;
 
 const AI_DIRS = new Set(['.claude', '.cursor', '.codex', '.continue']);
 const AI_NAMES = /^(claude|agents|gemini)\.md$|^\.(cursorrules|windsurfrules|clinerules)$|^\.aider|\.mdc$/i;
@@ -153,14 +157,34 @@ function walk(out, appDir) {
 /** Git's object id of these bytes (as `git hash-object` gives it). */
 const objectId = (data, format) => createHash(format).update(`blob ${data.length}\0`).update(data).digest('hex');
 
-/** `commit`'s files: repository path -> object id. */
+/** `commit`'s files: repository path -> object id (`tree`), and -> git mode (`modes`: 100644, 100755). */
 function treeOf(web, commit) {
   const tree = new Map();
+  const modes = new Map();
   for (const entry of execFileSync('git', ['-C', web, 'ls-tree', '-r', '-z', '--full-tree', commit], { encoding: 'utf8', maxBuffer: 1 << 28 }).split('\0')) {
-    const m = /^\d+ blob ([0-9a-f]+)\t(.+)$/s.exec(entry);
-    if (m) tree.set(m[2], m[1]);
+    const m = /^(\d+) blob ([0-9a-f]+)\t(.+)$/s.exec(entry);
+    if (!m) continue;
+    tree.set(m[3], m[2]);
+    modes.set(m[3], m[1]);
   }
-  return tree;
+  return { tree, modes };
+}
+
+/** The repository path a copy file comes from (its rewrite's source, a root file's, or the app's own), or null for one the export composes. */
+function sourcePath(rel, { prefix, appDir, fromGit, rewrites }) {
+  if (rewrites[rel]) return rewrites[rel].source;
+  if (fromGit[rel]) return fromGit[rel];
+  if (generated(appDir).includes(rel)) return null;
+  return rel.startsWith(`${appDir}/`) ? `${prefix}${rel.slice(appDir.length + 1)}` : null;
+}
+
+/**
+ * The copy's `files` that git has as executable (mode 100755) at `commit`, sorted: EXPORT.json's
+ * "executables" (no file system here keeps the bit, so the CAD repository's commit sets it).
+ */
+export function executablesOf({ web, commit, prefix, appDir, fromGit, rewrites = {}, files }) {
+  const { modes } = treeOf(web, commit);
+  return files.filter((rel) => modes.get(sourcePath(rel, { prefix, appDir, fromGit, rewrites })) === '100755').sort();
 }
 
 /** Blobs by object id, in one git process. */
@@ -211,7 +235,7 @@ function* matches(text, patterns) {
  */
 export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitted = [], rewrites = {}, leftOut = [] }) {
   const format = execFileSync('git', ['-C', web, 'rev-parse', '--show-object-format'], { encoding: 'utf8' }).trim();
-  const tree = treeOf(web, commit);
+  const { tree, modes } = treeOf(web, commit);
   const { files, links } = walk(out, appDir);
   const gen = new Set(generated(appDir));
   const dirty = new Set(uncommitted);
@@ -219,9 +243,14 @@ export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitt
   const data = new Map(files.map((rel) => [rel, readFileSync(join(out, ...rel.split('/')))]));
   const text = new Map();
   let binaries = 0;
+  /** Text files with a NUL byte: read as text all the same (a NUL never makes a file binary). */
+  let textWithNul = 0;
   for (const [rel, d] of data) {
-    if (BINARY.test(rel) || d.includes(0)) binaries++;
-    else text.set(rel, d.toString('utf8'));
+    if (BINARY.test(rel)) binaries++;
+    else {
+      if (d.includes(0)) textWithNul++;
+      text.set(rel, d.toString('utf8'));
+    }
   }
   const repoPath = (rel) => (rel.startsWith(`${appDir}/`) ? `${prefix}${rel.slice(appDir.length + 1)}` : null);
   const checks = {};
@@ -273,6 +302,20 @@ export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitt
     for (const rel of gen) if (!data.has(rel)) offenders.push(`${rel}: missing (the export writes it)`);
     for (const rel of Object.keys(rewrites)) if (!data.has(rel)) offenders.push(`${rel}: missing (a declared rewrite of the export)`);
     for (const rel of leftOut) if (data.has(rel)) offenders.push(`${rel}: here, and the export leaves it out`);
+    // EXPORT.json's executables: exactly the files git has as 100755 (the CAD repository's commit sets the bit from it).
+    const want = files.filter((rel) => modes.get(sourcePath(rel, { prefix, appDir, fromGit, rewrites })) === '100755');
+    let listed = null;
+    try {
+      listed = JSON.parse(text.get('EXPORT.json') || 'null')?.executables;
+    } catch {
+      /* reported below */
+    }
+    if (!Array.isArray(listed)) offenders.push('EXPORT.json: no "executables" list');
+    else {
+      for (const rel of want) if (!listed.includes(rel)) offenders.push(`${rel}: git has it as executable (100755), and EXPORT.json's "executables" does not list it`);
+      for (const rel of listed) if (!want.includes(rel)) offenders.push(`${rel}: in EXPORT.json's "executables", and ${data.has(rel) ? 'git does not have it as executable' : 'not in the copy'}`);
+    }
+    counts.executables = want.length;
     check('files', counts, offenders);
   }
 
@@ -317,7 +360,7 @@ export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitt
     const offenders = [];
     for (const rel of files) if (SECRET_FILE.test(rel.split('/').pop())) offenders.push(`${rel}: an env, key or certificate file`);
     for (const [rel, t] of text) for (const m of matches(t, SECRET_TEXT)) offenders.push(`${rel}: ${at(t, m.index, m[0].length, true)} (shaped like a key or token)`);
-    check('secrets', { files: files.length, textFiles: text.size, binaryFiles: binaries }, offenders);
+    check('secrets', { files: files.length, textFiles: text.size, binaryFiles: binaries, textFilesWithNul: textWithNul }, offenders);
   }
 
   // paths: this PC's.

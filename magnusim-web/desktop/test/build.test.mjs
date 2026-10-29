@@ -34,14 +34,18 @@ describe('sourceOf', () => {
     assert.deepEqual(sourceOf(tagged).copiedFrom, { repo: 'https://github.com/Lilmill2000/Magnusim', label: 'v0.5.0', commit: SHA, changed: 0 });
   });
 
-  it("names a development snapshot by its label and never its commit, which is not published", () => {
+  it('names a development snapshot by its label and never a commit: its record has none (it is not published)', () => {
     const label = 'development version 0.5.0-dev (2026-10-29)';
-    const dir = folder('dev-copy', { kind: 'magnusim-cad-export', magnusim: { repository: 'https://github.com/Lilmill2000/Magnusim', label, public: false, commit: SHA, date: '2026-10-29T00:36:21-05:00' }, selfCheck: { passed: true, checks: {} } });
+    // As export-cad-repo.mjs --dev writes it: no commit (that stays in Magnusim's bookkeeping, outside the copy).
+    const dir = folder('dev-copy', { kind: 'magnusim-cad-export', magnusim: { repository: 'https://github.com/Lilmill2000/Magnusim', label, public: false, date: '2026-10-29T00:36:21-05:00' }, selfCheck: { passed: true, checks: {} } });
     assert.deepEqual(sourceOf(dir), { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: 'https://github.com/Lilmill2000/Magnusim', label, commit: '', changed: 0 } });
-    assert.ok(!JSON.stringify(sourceOf(dir)).includes(SHA), 'the commit appears nowhere in what the notices get');
+    // An older record that still names one: never passed on.
+    const older = folder('dev-copy-with-commit', { kind: 'magnusim-cad-export', magnusim: { label, public: false, commit: SHA } });
+    assert.deepEqual(sourceOf(older).copiedFrom, { repo: 'https://github.com/Lilmill2000/Magnusim', label, commit: '', changed: 0 });
+    assert.ok(!JSON.stringify(sourceOf(older)).includes(SHA), 'the commit appears nowhere in what the notices get');
     // Without its label (or with another), the build stops rather than name something else.
-    assert.throws(() => sourceOf(folder('dev-no-label', { kind: 'magnusim-cad-export', magnusim: { public: false, commit: SHA } })), /a development snapshot without its label/);
-    assert.throws(() => sourceOf(folder('dev-bad-label', { kind: 'magnusim-cad-export', magnusim: { label: 'v0.5.0', public: false, commit: SHA } })), /a development snapshot without its label/);
+    assert.throws(() => sourceOf(folder('dev-no-label', { kind: 'magnusim-cad-export', magnusim: { public: false } })), /a development snapshot without its label/);
+    assert.throws(() => sourceOf(folder('dev-bad-label', { kind: 'magnusim-cad-export', magnusim: { label: 'v0.5.0', public: false } })), /a development snapshot without its label/);
   });
 
   it('counts the files a copy made with --allow-dirty took from the working tree', () => {
@@ -50,9 +54,10 @@ describe('sourceOf', () => {
     assert.equal(sourceOf(dir).copiedFrom.repo, 'https://github.com/Lilmill2000/Magnusim', "Magnusim's repository when the record names none");
   });
 
-  it("fails on the export's record without a Magnusim commit, rather than naming a wrong source", () => {
+  it("fails on a release export's record without a Magnusim commit, rather than naming a wrong source", () => {
     const dir = folder('no-commit', { kind: 'magnusim-cad-export', magnusim: { commit: 'HEAD' } });
     assert.throws(() => sourceOf(dir), /names no Magnusim commit/);
+    assert.throws(() => sourceOf(folder('release-no-commit', { kind: 'magnusim-cad-export', magnusim: { label: 'v0.5.0', public: true } })), /names no Magnusim commit/);
   });
 
   it('fails in a copy whose export did not finish or failed its self-check, and builds in one that passed it', () => {
