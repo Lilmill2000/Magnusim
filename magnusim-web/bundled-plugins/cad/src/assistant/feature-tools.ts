@@ -35,6 +35,7 @@ import { featureByName, stateWord } from './model';
 import { len } from './numbers';
 import { macrotask } from './pace';
 import type { EditCtx } from './step';
+import { closestName, closestWords } from './closest';
 
 /** A feature name's longest (the Part's own rename rule). */
 export const NAME_MAX = 40;
@@ -66,7 +67,8 @@ export function editTarget(services: AppServices, edit: unknown, types: readonly
   const f = featureByName(s, name);
   if (!f) {
     const names = s.doc.features.map((g) => g.name);
-    throw new ToolError('not_found', `edit: no feature is called "${name}". Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'edit', names: names.slice(0, 30) } });
+    const near = closestName(name, names);
+    throw new ToolError('not_found', `edit: no feature is called "${name}".${closestWords(near)} Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'edit', names: names.slice(0, 30), ...(near ? { closest: near } : {}) } });
   }
   if (!types.includes(f.type)) {
     const io = featureIoOf(f.type);

@@ -40,6 +40,7 @@ import { describeSketch, supportSelector, TOO_BIG_WORDS } from './sketch/describ
 import { freeRows } from './sketch/solve';
 import { fitRegions, regionRows, shortRegions } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
+import { closestName, closestWords } from './closest';
 
 /** One sketch read with regions full shows at most this many regions. */
 export const SKETCH_REGIONS = 60;
@@ -510,8 +511,9 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     const f = featureByName(s, input.feature);
     if (!f) {
       const names = s.doc.features.map((g) => g.name);
-      throw new ToolError('not_found', `No feature is called "${input.feature.trim()}". Features: ${names.slice(0, NAMES_MAX).join(', ') || 'none yet'}.`, {
-        detail: { names: names.slice(0, NAMES_MAX), more: Math.max(0, names.length - NAMES_MAX) },
+      const near = closestName(input.feature, names);
+      throw new ToolError('not_found', `No feature is called "${input.feature.trim()}".${closestWords(near)} Features: ${names.slice(0, NAMES_MAX).join(', ') || 'none yet'}.`, {
+        detail: { names: names.slice(0, NAMES_MAX), more: Math.max(0, names.length - NAMES_MAX), ...(near ? { closest: near } : {}) },
       });
     }
     const facts = await partFacts(ctx, s);

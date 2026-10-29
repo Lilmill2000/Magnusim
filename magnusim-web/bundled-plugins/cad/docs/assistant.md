@@ -53,10 +53,11 @@ into the message. Anything else thrown is `internal`; an aborted call is `stoppe
 
 - `GUIDE` is the CAD notes the model reads with the tools: at most 3950 characters of ASCII
   (the app keeps 4000), LF line breaks, no project data. Its frame lines, the 0.05 mm join and
-  the parts it names are pinned against the code (`guide.test.ts`); its EXAMPLES lines are the
-  worked parts abridged (`guide-example.test.ts` checks each line against the calls). It ends a
-  build by sending the person to Export STEP: there is no export tool. More material goes into
-  `help`, not the guide.
+  the parts it names are pinned against the code (`guide.test.ts`); its EXAMPLES line sends the
+  model to `help examples`, whose rows give each worked part's calls abridged (`brief`;
+  `guide-example.test.ts` checks each row against the calls). A sketch the person names or draws
+  is the spec: the model reads and views it. It ends a build by sending the person to Export
+  STEP: there is no export tool. More material goes into `help`, not the guide.
 - `HELP` holds the help tool's 13 topics as rows `{about, text}`, each topic at most 8 KB (example
   topics 12 KB), every string at most 2000 characters. `features` gives each tool's fields and its
   rules (`FEATURE_NOTES`); `checks` and `traps` are the lists to verify against and the mistakes

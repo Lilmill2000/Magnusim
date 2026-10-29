@@ -23,6 +23,7 @@ import { ToolError } from '../errors';
 import { bodyWords } from '../judge';
 import { featureByName } from '../model';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { closestName } from '../closest';
 
 interface Plan extends EditPlan {
   /** The features to delete, in history order. */
@@ -104,11 +105,13 @@ const deleteTool: EditTool<Plan> = {
     const ids = new Set<FeatureId>();
     const missing: string[] = [];
     const problems: string[] = [];
+    const all = s.doc.features.map((g) => g.name);
     given.forEach((name, i) => {
       const f = name ? featureByName(s, name) : null;
       if (!f) {
         missing.push(`features[${i}]`);
-        problems.push(name ? `features[${i}]: no feature is called "${name}"` : `features[${i}]: enter a feature name`);
+        const near = name ? closestName(name, all) : null;
+        problems.push(name ? `features[${i}]: no feature is called "${name}"${near ? ` (closest: "${near}")` : ''}` : `features[${i}]: enter a feature name`);
       } else if (ids.has(f.id)) problems.push(`features[${i}]: ${f.name} is named twice`);
       else ids.add(f.id);
     });

@@ -1,14 +1,20 @@
 // @vitest-environment node
 // What the person changed between the Assistant's calls, in words (rev.ts describeChanges): added,
 // deleted, renamed, suppressed, changed and reordered features; parameters added, renamed, set and
-// deleted; bodies renamed, recoloured, left out of the simulation. And a sketch's regions as the
+// deleted; bodies renamed, recoloured, left out of the simulation. The tracker's baselines
+// (createRevTracker): per conversation when the host names one, so a request's first call tells
+// what the person did between two messages (and their undo of an earlier request's steps), else
+// per request. And a sketch's regions as the
 // tools name them (sketch/regions.ts): r1... by area, then by their inside point; a region in a
 // hole of another is one deeper.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { describeChanges } from '../../src/assistant/rev';
+import { createRevTracker, describeChanges } from '../../src/assistant/rev';
 import { regionRows } from '../../src/assistant/sketch/regions';
+import { createBus } from '../../src/lib/bus';
 import type { CadDoc, Feature } from '../../src/types/doc';
+import type { DocService } from '../../src/types/doc-service';
+import type { CadEvents } from '../../src/types/events';
 import type { KernelRegion } from '../../src/types/kernel-protocol';
 
 const f = (id: string, name: string, over: Record<string, unknown> = {}) => ({ id, type: 'extrude', name, distance: '5 mm', ...over }) as unknown as Feature;
@@ -41,6 +47,58 @@ describe('describeChanges', () => {
       'left Plate out of the simulation',
     ]);
     expect(describeChanges(a, a)).toEqual([]);
+  });
+});
+
+describe('createRevTracker', () => {
+  /** A tracker on a committed model the test sets (as the person's commits do). */
+  function tracker() {
+    let committed = docOf([f('f_1', 'Extrude 1')]);
+    const subs = new Set<() => void>();
+    const doc = { committed: () => committed, state: { subscribe: (fn: () => void) => (subs.add(fn), () => void subs.delete(fn)) } } as unknown as DocService;
+    const bus = createBus<CadEvents>();
+    const t = createRevTracker({ doc, bus });
+    const commit = (features: Feature[]) => {
+      committed = docOf(features);
+      for (const fn of subs) fn();
+    };
+    /** One call under `key`, start to answer to end, as call.ts runs it: its user_changes. */
+    const call = (key: string, conversation?: string) => {
+      t.begin(key, conversation);
+      const out = t.changesFor(key);
+      t.seen(key);
+      return out;
+    };
+    return { t, bus, commit, call };
+  }
+  const E1 = f('f_1', 'Extrude 1');
+  const S = f('f_2', 'Sample "S" Sketch', { type: 'sketch' });
+
+  it("one baseline per conversation: a new request's first call tells what the person did since the chat's last call, and their undo of its steps", () => {
+    const { bus, commit, call } = tracker();
+    expect(call('turn:r1', 'c-1')).toEqual([]);
+    // The person draws a sketch between two messages.
+    commit([E1, S]);
+    expect(call('turn:r2', 'c-1')).toEqual(['added Sample "S" Sketch (sketch)']);
+    expect(call('turn:r2', 'c-1')).toEqual([]);
+    // Between two messages the person undoes request 2's steps: request 3 is told.
+    bus.emit('assistant:person-undo', { tag: 'turn:r2', label: 'Assistant: Draw an S', redo: false });
+    commit([E1]);
+    expect(call('turn:r3', 'c-1')).toEqual(['the person undid your steps (Assistant: Draw an S); do not redo them unless asked', 'deleted Sample "S" Sketch']);
+    // Another chat starts at its own first call; the first chat still has its own baseline.
+    commit([E1, S]);
+    expect(call('turn:r4', 'c-2')).toEqual([]);
+    expect(call('turn:r5', 'c-1')).toEqual(['added Sample "S" Sketch (sketch)']);
+  });
+
+  it('a host that names no conversation: each request starts at its own first call (what the person did between messages is not told)', () => {
+    const { commit, call } = tracker();
+    expect(call('turn:r1')).toEqual([]);
+    commit([E1, S]);
+    expect(call('turn:r2')).toEqual([]);
+    // Within a request it is told as before.
+    commit([E1]);
+    expect(call('turn:r2')).toEqual(['deleted Sample "S" Sketch']);
   });
 });
 

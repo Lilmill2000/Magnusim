@@ -4,7 +4,8 @@
 // object: `text` is the reply's line, every other key a path into the reply's data
 // ("solver.dof", "bodies.created[0].volume_mm3"). tests/assistant/guide-example.test.ts runs every
 // call on the real kernel and checks each result and the finished part against its formula, so
-// what these say is what the tools answer. The guide's EXAMPLES lines are these parts, abridged.
+// what these say is what the tools answer. `brief` is a part's calls abridged in one line (help
+// examples gives it; the guide's EXAMPLES once held them).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -24,6 +25,8 @@ export interface WorkedPart {
   topic: 'example_plate' | 'example_bracket' | 'example_flange' | 'example_chip';
   /** One line for help examples. */
   title: string;
+  /** Its calls abridged in one line, for help examples (guide-example.test.ts holds it to the calls). */
+  brief?: string;
   /** The part, its parameters and its expected numbers (the formulas). */
   part: string;
   calls: ExampleCall[];
@@ -53,6 +56,7 @@ const FIND = (query: string, limit = 10): Row => ({ query, limit });
 
 const PLATE: WorkedPart = {
   topic: 'example_plate',
+  brief: 'set_params w 60 mm, d 40 mm, t 6 mm, hd 5 mm, e 8 mm. sketch on Top: center_rect r [0,0,60,40]; coincident [r.center, origin]; distance [r.bottom] "w", [r.left] "d". extrude "Plate" ["all"] blind "t" new. hole on "Plate.end": 4 centers, x "w/2 - e" or "-(w/2 - e)", y the same with d, z ""; diameter "hd"; through.',
   title: 'A 60 x 40 x 6 mm plate with 4 through holes 5 mm across, 8 mm from its edges, all from parameters',
   part: 'Plan: parameters w 60 mm, d 40 mm, t 6 mm, hd 5 mm, e 8 mm; a centred rectangle on Top, extruded t as the body Plate; 4 holes in its top face. Expect 1 body, 1 solid, 0 voids, volume w*d*t - 4*pi*(hd/2)^2*t = 13928.8 mm3, box 60 x 40 x 6 mm (x and y from -30 and -20, z from 0).',
   calls: [
@@ -103,6 +107,7 @@ const PLATE: WorkedPart = {
 };
 
 const BRACKET: WorkedPart = {
+  brief: 'sketch on Front: polyline p [0,0,50,0,50,5,5,5,5,40,0,40,0,0], infer; coincident [p.p0, origin]; distance [p.1] "a", [p.6] "b", [p.2] "t", [p.5] "t". extrude "Bracket" symmetric "wid" new. modify fillet ["Bracket.side(p.3) & Bracket.side(p.4)"] "r".',
   topic: 'example_bracket',
   title: 'An L bracket 50 x 40, 5 thick, 30 wide, an inner fillet R4 and a 6 mm hole in each flange',
   part: 'Plan: parameters a 50 mm, b 40 mm, t 5 mm, wid 30 mm, r 4 mm, hd 6 mm; the L as a closed polyline on Front (u +X, v +Z), extruded symmetric wid (y from -15 to 15); the inner corner rounded; one hole down through the foot, one across through the upright. Expect 1 solid, volume (a*t + t*(b - t))*wid + (1 - pi/4)*r^2*wid - 2*pi*(hd/2)^2*t = 12570.3 mm3, box 50 x 30 x 40 mm.',
@@ -168,6 +173,7 @@ const BRACKET: WorkedPart = {
 };
 
 const FLANGE: WorkedPart = {
+  brief: 'sketch on Front: rect r [10,0,40,8]; horizontal [r.bl, origin]; distance_x [origin, r.bl] "bore/2", [origin, r.br] "od/2"; distance [r.left] "t". revolve "Flange" axis "Z axis" full new. hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "" diameter "hd", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg".',
   topic: 'example_flange',
   title: 'A flange 80 across and 8 thick with a 20 mm bore and 6 holes 6.5 mm across on a 60 mm circle',
   part: 'Plan: parameters od 80 mm, bore 20 mm, t 8 mm, pcd 60 mm, hd 6.5 mm, n 6 (a number); its half section as a rectangle on Front, from x bore/2 to od/2 and z 0 to t, revolved a full turn about the Z axis; one hole on the top face at radius pcd/2, repeated n times round Z. Expect 1 solid, volume pi*((od/2)^2 - (bore/2)^2)*t - n*pi*(hd/2)^2*t = 36106.3 mm3, box 80 x 80 x 8 mm.',

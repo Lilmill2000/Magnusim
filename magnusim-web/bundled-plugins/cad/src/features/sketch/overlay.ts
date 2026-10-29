@@ -11,7 +11,9 @@
 //                          open end of a chain (Fusion's hint), html
 // Reads rebuild.outputs (the sketch's SketchOutput), the view's sketch
 // visibility, the selection (region items) and profilesView (hover, the open
-// Extrude panel's profiles). Owner: P3-PROFILES (src/features/sketch/).
+// Extrude panel's profiles). A picture of one sketch (the view tool's sketch:
+// SnapshotPicture) draws that sketch, shown or not, and every sketch over the
+// bodies, for that picture only. Owner: P3-PROFILES (src/features/sketch/).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BufferAttribute, BufferGeometry, DoubleSide, Mesh, MeshBasicMaterial } from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -20,13 +22,13 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import type { AppServices } from '../../types/app';
 import type { FeatureId, SketchFeature, Vec3 } from '../../types/doc';
 import type { SketchOutput } from '../../types/sketch';
-import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
+import type { OverlayLayer, SnapshotPicture, ViewportHandle } from '../../types/viewport';
 import { setFaceInk } from '../../viewport/onface';
 import { paletteOf, type MarkPalette } from '../../viewport/palette';
 import { overlayColors, type OverlayColors } from './colors';
 import { entityGeometry, type EntityGeom } from './geometry';
 import { toModel } from './plane';
-import { drawnSketches, editedSketch, profilesView } from './view';
+import { drawnSketches, editedSketch, isSketch, profilesView, sketchOutput } from './view';
 
 export const LAYER_REGIONS = 'profiles.regions';
 export const LAYER_SKETCHES = 'profiles.sketches';
@@ -90,6 +92,8 @@ export class ProfileOverlay {
   private queued = false;
   /** A snapshot is drawing: every region in its normal colour. */
   private plainNow = false;
+  /** The sketch the snapshot drawing now pictures (drawn shown or not, over the bodies), or null. */
+  private picture: FeatureId | null = null;
 
   constructor(
     private readonly services: AppServices,
@@ -100,8 +104,10 @@ export class ProfileOverlay {
     // A snapshot draws the regions plain, without the picked and hover colours (ViewportHandle.snapshot).
     this.regions = handle.addLayer(LAYER_REGIONS, {
       order: 20,
-      plain: (on) => {
+      plain: (on, picture?: SnapshotPicture) => {
         this.plainNow = on;
+        this.picture = on ? (picture?.sketch ?? null) : null;
+        this.overBodies(this.picture !== null);
         this.sync();
       },
     });
@@ -200,11 +206,23 @@ export class ProfileOverlay {
     return [...this.drawn.keys()];
   }
 
+  /** Lines and regions drawn over the bodies (a picture of one sketch), or hidden behind them as usual. */
+  private overBodies(on: boolean): void {
+    for (const m of [...Object.values(this.lineMats), ...Object.values(this.mats)]) m.depthTest = !on;
+  }
+
   sync(): void {
     const s = this.services.doc.state.get();
     const mode = this.services.mode.get().mode;
     const view = profilesView(this.services).get();
     const list = drawnSketches(s, mode, view, this.services.doc.features);
+    // The sketch a picture is of: drawn for it whether the view shows it or not.
+    const pic = this.picture;
+    if (pic && !list.some((d) => d.feature.id === pic)) {
+      const f = s.doc.features.find((g) => g.id === pic);
+      const out = sketchOutput(s, pic);
+      if (f && isSketch(f) && out) list.push({ feature: f, output: out });
+    }
     const keep = new Set(list.map((d) => d.feature.id));
     for (const [id, d] of this.drawn) {
       if (!keep.has(id)) {
@@ -212,9 +230,11 @@ export class ProfileOverlay {
         this.drawn.delete(id);
       }
     }
-    // Sketch mode draws the edited sketch's own lines; model mode shows a finished sketch's.
-    const lines = mode !== 'sketch' && !editedSketch(s);
+    // Sketch mode draws the edited sketch's own lines; model mode shows a finished sketch's (and a picture the one it is of).
+    const edited = editedSketch(s);
+    const modelLines = mode !== 'sketch' && !edited;
     for (const { feature, output } of list) {
+      const lines = modelLines || (feature.id === pic && feature.id !== edited?.id);
       const was = this.drawn.get(feature.id);
       if (was && was.output === output && was.feature === feature && was.lines === lines) continue;
       if (was) this.drop(was);
@@ -234,7 +254,8 @@ export class ProfileOverlay {
       }
     }
     // Sketches are not bodies: while one is shown (or sketch mode is on), Auto hides the origin planes.
-    this.handle.setPlanesBusy(LAYER_SKETCHES, mode === 'sketch' || this.drawn.size > 0);
+    // (Not while a snapshot draws: a picture changes nothing of the view's own planes.)
+    if (!this.plainNow) this.handle.setPlanesBusy(LAYER_SKETCHES, mode === 'sketch' || this.drawn.size > 0);
     this.place();
     this.regions.changed();
     this.sketches.changed();

@@ -45,6 +45,7 @@ import { echo, selectOne, selectSet, withScene, type AxisHit, type FaceHit, type
 import { storeExpr } from '../sketch/compile';
 import { offsetPlaneLike } from '../sketch/support';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { closestName, closestWords } from '../closest';
 
 type Kind = 'linear' | 'circular' | 'mirror';
 const KINDS: readonly Kind[] = ['linear', 'circular', 'mirror'];
@@ -174,7 +175,8 @@ const pattern: EditTool<Plan> = {
           const f = featureByName(s, unquote(t));
           if (!f) {
             const names = s.doc.features.filter((g) => !featureRefusal(services, self ?? '', g.id)).map((g) => g.name);
-            throw new ToolError('not_found', `items[${i}]: no feature is called "${t}". Features it can repeat: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: `items[${i}]`, names: names.slice(0, 30) } });
+            const near = closestName(unquote(t), names);
+            throw new ToolError('not_found', `items[${i}]: no feature is called "${t}".${closestWords(near)} Features it can repeat: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: `items[${i}]`, names: names.slice(0, 30), ...(near ? { closest: near } : {}) } });
           }
           const why = featureRefusal(services, self ?? '', f.id);
           if (why) {

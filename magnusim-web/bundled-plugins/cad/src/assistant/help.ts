@@ -262,7 +262,7 @@ const workspaceRows = (): HelpRow[] => [
 
 /** The index of the worked parts: what each one is, its calls and its topic. */
 const exampleIndex = (): HelpRow[] =>
-  WORKED_PARTS.map((p) => ({ about: p.topic, text: `${p.title}. ${p.calls.length} calls: ${[...new Set(p.calls.map((c) => c.tool))].join(', ')}. help ${p.topic} has every input whole.` }));
+  WORKED_PARTS.map((p) => ({ about: p.topic, text: `${p.title}. ${p.brief ? `${p.brief} ` : ''}${p.calls.length} calls: ${[...new Set(p.calls.map((c) => c.tool))].join(', ')}. help ${p.topic} has every input whole.` }));
 
 /** Each entity kind's parts (what refs name after "<id>."), from the tool's own expansion. */
 function partsWords(kind: EntityKind, at: number[]): string {

@@ -214,6 +214,17 @@ export interface SnapshotOptions {
   display?: DisplayMode;
   /** The picture's projection (default 'orthographic'; perspective: mmPerPx holds at the framed centre only). */
   projection?: Projection;
+  /** Look along this instead of from `view` (the view tool's sketch): `dir` from the part towards the camera (unit), `up` the picture's up. */
+  along?: { dir: Vec3; up: Vec3 };
+  /** Frame this box (model mm) instead of the shown bodies (a sketch's curves). */
+  fit?: { min: Vec3; max: Vec3 };
+  /** A sketch drawn in the picture over the bodies, shown in the view or not (the layers' `plain` hook gets it). */
+  sketch?: FeatureId;
+}
+
+/** What a snapshot tells the layers' `plain` hook as it starts: the sketch it pictures (SnapshotOptions.sketch), or null. */
+export interface SnapshotPicture {
+  sketch: FeatureId | null;
 }
 
 export interface SnapshotResult {
@@ -322,7 +333,8 @@ export interface ViewportHandle {
   userCameraMoves?(): number;
   /**
    * A picture of the Part drawn off screen in this task (no animation frame needed): an
-   * orthographic camera of its own framing the shown bodies (`hide` left out) from `view`, with
+   * orthographic camera of its own framing the shown bodies (`hide` left out) from `view` (or the
+   * box `fit` along `along`: a sketch's curves, that sketch drawn over the bodies), with
    * the sketches and reference planes but no manipulators, markers, bananas, selection, hover or
    * flash, an optional cut of its own, and the triad in a corner. The person's camera, framing,
    * section view, highlight and saved view are never touched, userCameraMoves() does not change,
@@ -379,14 +391,15 @@ export interface ViewportHandle {
    * sketch counts its curves and dimensions but not its grid. Sketches and bodies are framed
    * together; the origin planes' extent only when neither is drawn. `plain`: called with true
    * just before a snapshot draws and with false right after it (both in that task): the layer
-   * then draws without its selection, hover and flash colours, synchronously, and puts them back.
+   * then draws without its selection, hover and flash colours, synchronously, and puts them back;
+   * with true it also gets the picture (the sketch it pictures: drawn whether shown or not).
    * `palette`: called with the new palette on every setPalette, and, while a dark palette is
    * live, with LIGHT just before a snapshot draws and with the live one right after it (a layer a
    * picture leaves out, SNAPSHOT_HIDDEN_LAYERS, is not called for it). The layer recolours what it
    * draws then, synchronously (material colours, or its lines drawn again). Never called when the
    * layer is added: a layer builds its materials from palette() (paletteOf).
    */
-  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null); plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void }): OverlayLayer;
+  addLayer(id: string, opts?: { order?: number; frame?: boolean | (() => FrameBox | null); plain?: (on: boolean, picture?: SnapshotPicture) => void; palette?: (p: MarkPalette) => void }): OverlayLayer;
   /**
    * The last framing (Fit, a standard view, Look at) again, with what is drawn now, when the
    * camera is still where that framing put it (nobody orbited, panned or zoomed since). A

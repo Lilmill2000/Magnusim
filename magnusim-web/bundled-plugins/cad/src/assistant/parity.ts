@@ -770,6 +770,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     ...each(['small', 'large'], 'size', PICTURE),
     ...each(['shaded_edges', 'shaded', 'wireframe'], 'display', PICTURE),
     ...each(['orthographic', 'perspective'], 'projection', PICTURE),
+    // The person looks straight at a sketch with Normal to (its row selected, N); the Picture panel has no sketch choice.
+    sketch: command('view.normal-to'),
   },
   help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace'], 'topic', REFERENCE),
   set_params: {

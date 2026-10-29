@@ -42,7 +42,7 @@ export interface PictureChoice {
 export function viewInput(c: PictureChoice): Record<string, unknown> {
   const s = c.section;
   const section = s.plane ? [s.plane, s.at === 'middle' ? 'middle' : s.offset.trim() ? `offset ${s.offset.trim()}` : '', s.flip ? 'flip' : ''].filter(Boolean).join(' ') : '';
-  return { views: c.views, hide: c.hide, section, labels: c.labels, size: c.size, display: c.display, projection: c.projection };
+  return { views: c.views, hide: c.hide, section, labels: c.labels, size: c.size, display: c.display, projection: c.projection, sketch: '' };
 }
 
 export interface Picture {

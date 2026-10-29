@@ -1,7 +1,8 @@
 // One call of a Part tool, as the app's bridge hands it (CAD tools spec §2.1 call.ts): its key,
 // its context, the tool's code from tools/index.ts (a tool not in this build answers not_ready
 // "not in this build yet"), the reply's revision and the person's changes since the key's last
-// call (worked out as the call answers: what they did while it ran is told too), an honest error
+// call, or the conversation's when the host names it (worked out as the call answers: what they
+// did while it ran is told too), an honest error
 // with its reason, hint and detail, the turn log's summary, and the chip
 // and the test ledger kept up to date. The call's signal is the SDK's merged with the chip's
 // Stop (a call of a key the person stopped answers busy stopped at once); the camera latch takes
@@ -15,6 +16,7 @@ import { oneLine } from './numbers';
 import { editPicture, wantsPicture } from './pictures';
 import { CALLS_KEPT, type AssistantRuntime } from './runtime';
 import { toolNamed, TOOL_NAMES } from './schemas';
+import { conversationOf } from './session-key';
 import * as BUILT from './tools';
 
 /** A reply's text and summary, on one line. */
@@ -62,7 +64,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     rt.seenKeys.add(key);
     const spec = toolNamed(call.tool);
     const label = spec?.title ?? call.tool;
-    rt.rev.begin(key);
+    // What the person changed: from the conversation's last call when the host names it.
+    rt.rev.begin(key, conversationOf(call));
     // The chip's Stop aborts this one here, at once (its step reverts synchronously).
     const local = new AbortController();
     const merged = bothSignals(call.signal, local.signal);

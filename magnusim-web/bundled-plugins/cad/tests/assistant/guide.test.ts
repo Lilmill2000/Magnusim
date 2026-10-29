@@ -158,7 +158,7 @@ describe('the CAD guide', () => {
   });
 
   it('names only tools, fields, values and help topics that exist', () => {
-    const tools = ['get_model', 'set_params', 'sketch', 'extrude', 'hole', 'measure', 'view', 'find', 'modify', 'pattern', 'combine', 'undo', 'edit_feature', 'revolve', 'delete'];
+    const tools = ['get_model', 'set_params', 'sketch', 'extrude', 'hole', 'measure', 'view', 'find', 'combine', 'undo', 'edit_feature', 'delete', 'help'];
     for (const t of tools) expect(GUIDE, t).toMatch(new RegExp(`\\b${t}\\b`));
     for (const t of tools) expect(TOOL_NAMES).toContain(t);
     for (const m of GUIDE.matchAll(/\bhelp ([a-z_]+)/g)) expect([...HELP_TOPICS], m[0]).toContain(m[1]);
@@ -208,6 +208,10 @@ describe('the CAD guide', () => {
     expect(GUIDE).toContain('Keybinds: read any time; change only when explicitly asked (they confirm).');
     expect(GUIDE).toContain('busy: the person comes first: follow the hint; most end your turn.');
     expect(GUIDE).toContain('delete asks the person');
+    // A sketch the person draws is the spec (the clock chats: an S guessed twice before its sketch was read).
+    expect(GUIDE).toContain('- When the person names or draws a sketch, read it (get_model feature <name>) and view it; it is the spec. If a shape is still wrong after one correction, ask for a sketch or a picture.');
+    // The worked parts are in help.
+    expect(GUIDE).toContain('EXAMPLES: help examples');
     // The hints the busy line points to end the turn, or say what to do instead.
     for (const r of ['person_editing', 'rolled_back', 'paused', 'taken_over', 'stopped', 'other_turn'] as const) expect(HINTS[r], r).toMatch(/end your turn/);
     expect(HINTS.step_declined).toMatch(/ask what to change/);
@@ -254,6 +258,7 @@ describe("the guide of a Part that offers only some of its tools (the eval's cor
     expect(rest).toContain('5 measure against the plan.\nDone:');
     expect(rest).toContain('EDITING: change sizes via parameters; else call the tool again with edit');
     expect(rest).toContain('undo takes back your own steps. Leave the person');
+    expect(rest).toContain('read it (get_model feature <name>); it is the spec.');
     expect(rest.length).toBe(GUIDE.length - GUIDE_TOOL_WORDS.reduce((n, [, w, wo]) => n + w.length - wo.length, 0));
   });
 

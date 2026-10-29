@@ -43,7 +43,8 @@ export interface FakeAssistant {
   /** The tools and handler the last available register kept. */
   readonly accepted: string[];
   /** Run a call as the bridge would; `abort` aborts its signal. */
-  invoke(tool: string, input: Record<string, unknown>, o?: { turn?: string; signal?: AbortSignal; call?: string }): Promise<FakeOutcome>;
+  /** `conversation`: a host that names the call's conversation (AssistantCall.conversation, proposed). */
+  invoke(tool: string, input: Record<string, unknown>, o?: { turn?: string; signal?: AbortSignal; call?: string; conversation?: string }): Promise<FakeOutcome>;
   /** Tell this tab's listeners a turn (a full AssistantTurn; missing fields get defaults). */
   emitTurn(t: Partial<AssistantTurn> & { id: string }): void;
   readonly progress: FakeProgress[];
@@ -113,6 +114,7 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
         const out = await handler({
           call: id,
           turn: io.turn ?? '',
+          ...(io.conversation !== undefined ? { conversation: io.conversation } : {}),
           tool,
           input: JSON.parse(JSON.stringify(input)),
           signal,

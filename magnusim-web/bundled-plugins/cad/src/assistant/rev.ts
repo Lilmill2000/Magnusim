@@ -5,7 +5,9 @@
 // so what the person did while it ran (an edit waits for them) is told in that answer; the
 // call's own kept step (own(): from its mark to the model after it) never counts. Reported once,
 // with the person's undo or redo of the Assistant's own steps (one that came while the call ran
-// too).
+// too). A call whose host names its conversation shares that conversation's baseline with every
+// request of it, so a new request's first call tells what the person did between two messages;
+// without one, each request starts from its own first call.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { BodyId, CadDoc, Feature } from '../types/doc';
@@ -21,8 +23,12 @@ const KEYS_KEPT = 64;
 export interface RevTracker {
   /** The revision now. */
   current(): number;
-  /** A call under `key` starts: a key's first call takes the model now as its baseline. */
-  begin(key: string): void;
+  /**
+   * A call under `key` starts: a key's first call takes the model now as its baseline. With a
+   * `conversation` (the host's, when it names one) the key shares that conversation's baseline,
+   * taken at the conversation's first call.
+   */
+  begin(key: string, conversation?: string | null): void;
   /** The call under `key` kept a step of its own, from `before` to `after` (never told as the person's). */
   own(key: string, before: CadDoc, after: CadDoc): void;
   /** The person's changes since the key's last call ended (or its first call began), the call's own step left out, in words. */
@@ -102,32 +108,43 @@ export function createRevTracker(o: { doc: DocService; bus: EventBus<CadEvents> 
       rev += 1;
     }
   });
+  /** Baselines by a key, or by "conv:<id>" for the keys of one conversation. */
   const baselines = new Map<string, CadDoc>();
+  /** Each key of a conversation: its baseline's key ("conv:<id>"). */
+  const shared = new Map<string, string>();
+  const base = (key: string) => shared.get(key) ?? key;
   /** The steps the key's running call kept: the committed model before and after each. */
   const owns = new Map<string, { before: CadDoc; after: CadDoc }[]>();
-  /** The person's undo or redo of a key's steps, told with that key's next reply. */
+  /** The person's undo or redo of a key's steps, told with the next reply of that key (or of its conversation). */
   const undone = new Map<string, string[]>();
   const offUndo = o.bus.on('assistant:person-undo', (e) => {
     if (!e.tag) return;
     const what = e.label ? ` (${e.label})` : '';
     const line = e.redo ? `the person redid your steps${what}` : `the person undid your steps${what}; do not redo them unless asked`;
-    undone.set(e.tag, [...(undone.get(e.tag) ?? []), line]);
+    const b = base(e.tag);
+    undone.set(b, [...(undone.get(b) ?? []), line]);
   });
   return {
     current: () => rev,
-    begin(key) {
-      if (!baselines.has(key)) baselines.set(key, o.doc.committed());
+    begin(key, conversation) {
+      if (conversation) {
+        shared.delete(key);
+        shared.set(key, `conv:${conversation}`);
+        if (shared.size > KEYS_KEPT) shared.delete(shared.keys().next().value as string);
+      }
+      const b = base(key);
+      if (!baselines.has(b)) baselines.set(b, o.doc.committed());
     },
     own(key, before, after) {
       if (before !== after) owns.set(key, [...(owns.get(key) ?? []), { before, after }]);
     },
     changesFor(key) {
-      const notes = undone.get(key) ?? [];
-      const base = baselines.get(key);
+      const notes = undone.get(base(key)) ?? [];
+      const was = baselines.get(base(key));
       const diff: string[] = [];
-      if (base) {
+      if (was) {
         // The person's: before each own step, and after the last one.
-        let from = base;
+        let from = was;
         for (const st of owns.get(key) ?? []) {
           diff.push(...describeChanges(from, st.before));
           from = st.after;
@@ -137,11 +154,12 @@ export function createRevTracker(o: { doc: DocService; bus: EventBus<CadEvents> 
       return capped([...notes, ...diff]);
     },
     seen(key) {
-      undone.delete(key);
+      const b = base(key);
+      undone.delete(b);
       owns.delete(key);
       // Moved to the end: the key least recently seen goes first when there are too many.
-      baselines.delete(key);
-      baselines.set(key, o.doc.committed());
+      baselines.delete(b);
+      baselines.set(b, o.doc.committed());
       if (baselines.size > KEYS_KEPT) baselines.delete(baselines.keys().next().value as string);
       if (undone.size > KEYS_KEPT) undone.delete(undone.keys().next().value as string);
     },

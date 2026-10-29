@@ -213,7 +213,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, returned as one image (2 to 4 as a labelled sheet), orthographic. hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length> | middle] [flip]" to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). display: shaded_edges, shaded or wireframe; projection: orthographic, or perspective (mm_per_px then holds at the middle only). Pictures show shape, not sizes, and sketch dimension values are not drawn: use measure for numbers. If the model cannot read images, the call says so instead. Use at milestones and at the end. To move the person\'s own view use workspace.',
+      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, as one image (2 to 4: a labelled sheet), orthographic. sketch: a sketch\'s name for one picture straight at it, framed on its curves and drawn over the bodies (views unused), or "". hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length> | middle] [flip]" to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). display: shaded_edges, shaded or wireframe; projection: orthographic, or perspective (mm_per_px then holds at the middle only). Pictures show shape, not sizes (no dimension values): use measure for numbers. If the model cannot read images, the call says so instead. Use at milestones and at the end. To move the person\'s own view use workspace.',
     schema: obj({
       views: arr(en(VIEW_DIRECTIONS, 'A direction'), 1, 4, 'Directions.'),
       hide: arr(str(80, 'A body name'), 0, 32, 'Bodies to leave out.'),
@@ -222,6 +222,7 @@ const SPECS: ToolSpec[] = [
       size: en(['small', 'large'], 'Long side 768 or 1280 px.'),
       display: en(['shaded_edges', 'shaded', 'wireframe'], 'How the bodies are drawn.'),
       projection: en(['orthographic', 'perspective'], 'orthographic keeps mm_per_px true everywhere.'),
+      sketch: str(120, '"" or a sketch\'s name: one picture straight at it.'),
     }),
   },
   {

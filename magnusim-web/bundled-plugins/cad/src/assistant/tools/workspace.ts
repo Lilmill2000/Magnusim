@@ -72,6 +72,7 @@ import { WORKSPACE_ACTIONS, type WorkspaceAction } from '../schemas';
 import { centreOf, hitWords, selectAny, withScene, type Hit } from '../selectors/resolve';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { parseSection, sectionAtMiddle, sectionData } from '../view';
+import { closestName, closestWords } from '../closest';
 
 interface Input {
   action: WorkspaceAction;
@@ -104,7 +105,10 @@ function featureNamed(services: AppServices, name: string, field = 'target'): Fe
   if (!name) throw bad(field, `${field}: a feature name.`);
   const list = features(services);
   const f = list.find((x) => x.name === name) ?? list.find((x) => x.name.toLowerCase() === name.toLowerCase());
-  if (!f) throw new ToolError('not_found', `No feature is called "${name}". Features: ${list.map((x) => x.name).slice(0, 30).join(', ') || 'none yet'}.`, { detail: { field, names: list.map((x) => x.name).slice(0, 30) } });
+  if (!f) {
+    const near = closestName(name, list.map((x) => x.name));
+    throw new ToolError('not_found', `No feature is called "${name}".${closestWords(near)} Features: ${list.map((x) => x.name).slice(0, 30).join(', ') || 'none yet'}.`, { detail: { field, names: list.map((x) => x.name).slice(0, 30), ...(near ? { closest: near } : {}) } });
+  }
   return f;
 }
 
@@ -172,7 +176,10 @@ function eye(ctx: CallCtx, i: Input): ToolReply {
   const f = list.find((x) => x.name.toLowerCase() === i.target.toLowerCase()) ?? null;
   if (!f) {
     const b = bodyNamed(services, i.target);
-    if (!b) throw new ToolError('not_found', `Nothing with an eye is called "${i.target}": name a sketch, a construction feature or a body.`, { detail: { field: 'target' } });
+    if (!b) {
+      const near = closestName(i.target, list.map((x) => x.name));
+      throw new ToolError('not_found', `Nothing with an eye is called "${i.target}": name a sketch, a construction feature or a body.${closestWords(near)}`, { detail: { field: 'target', ...(near ? { closest: near } : {}) } });
+    }
     const hidden = doc.state.get().view.hiddenBodies.includes(b.id);
     if (hidden !== show) return done(`${b.name} is already ${show ? 'shown' : 'hidden'}`, { body: b.name, shown: show });
     uiFor(services).setBodyVisible(b.id, show);

@@ -38,6 +38,7 @@ import { runtimeOf } from '../runtime';
 import { regionRefOf } from '../selectors/refs';
 import { echo, selectSet, withScene, type RegionHit } from '../selectors/resolve';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { closestName, closestWords } from '../closest';
 
 type Kind = 'sweep' | 'loft';
 const KINDS: readonly Kind[] = ['sweep', 'loft'];
@@ -111,7 +112,8 @@ function splitPath(s: DocState, text: string): { sketch: SketchFeature; list: st
   }
   if (!sketch) {
     const names = all.map((f) => f.name);
-    throw new ToolError('not_found', `path: no sketch is called "${head}". Sketches: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'path', names: names.slice(0, 30) } });
+    const near = closestName(head, names);
+    throw new ToolError('not_found', `path: no sketch is called "${head}".${closestWords(near)} Sketches: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'path', names: names.slice(0, 30), ...(near ? { closest: near } : {}) } });
   }
   rest = rest.trim();
   if (!rest) return { sketch, list: null };

@@ -16,7 +16,11 @@
 //   - not_ready no_images for a model that reads no images (nothing drawn), no_viewport without a
 //     3D view, without pictures or with its graphics context lost;
 //   - notes for the person's sketch, the rollback bar and a hidden window; the shown sketches'
-//     dimension values in the data and the text.
+//     dimension values in the data and the text;
+//   - sketch: one picture straight at that sketch (from its normal's side, its u to the right and
+//     its v up), framed on its curves so every point of it is in the picture, drawn whether the
+//     view shows it or not; its name in the text, the summary and the data; a name not found
+//     says the closest sketch.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Sphere, Vector3 } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -70,6 +74,8 @@ const VIEW_RGB: Record<SnapshotView, [number, number, number]> = {
 interface FakeView {
   handle: ViewportHandle;
   shots: SnapshotOptions[];
+  /** What each snapshot answered (its project() reads where a model point is in the picture). */
+  results: SnapshotResult[];
   camera: ReturnType<typeof vi.fn>[];
   lost: boolean;
   /** The snapshot throws not_ready while the stats still say the context is fine. */
@@ -85,23 +91,25 @@ const dot = (a: readonly number[], b: readonly number[]) => a[0] * b[0] + a[1] *
  */
 function fakeViewport(x: AssistantHarness, o: { snapshot?: boolean } = {}): FakeView {
   const camera = ['fit', 'setView', 'lookAt', 'setCamera', 'orbitAround', 'reframe', 'refitIfOffScreen'].map(() => vi.fn());
-  const fv: FakeView = { handle: null as unknown as ViewportHandle, shots: [], camera, lost: false, dies: false };
+  const fv: FakeView = { handle: null as unknown as ViewportHandle, shots: [], results: [], camera, lost: false, dies: false };
   const snapshot = (opts: SnapshotOptions): SnapshotResult => {
     if (fv.lost || fv.dies) throw Object.assign(new Error('not_ready'), { code: 'not_ready' });
     fv.shots.push(JSON.parse(JSON.stringify(opts)));
     const shown = x.doc.state.get().rebuild.bodies.filter((b) => b.visible && b.tess && !opts.hide.includes(b.id));
     const box = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
     for (const b of shown) for (let k = 0; k < 3; k++) (box.min[k] = Math.min(box.min[k], b.bbox[k])), (box.max[k] = Math.max(box.max[k], b.bbox[k + 3]));
-    const sphere = shown.length ? new Sphere(new Vector3(...box.min.map((v, k) => (v + box.max[k]) / 2)), Math.hypot(...box.max.map((v, k) => v - box.min[k])) / 2) : new Sphere(new Vector3(), 50);
-    sphere.radius *= 1.1;
-    const rig = snapshotRig(opts.view, sphere, opts.width, opts.height);
+    // A box asked (a sketch's curves) is framed instead of the bodies, as the real one does.
+    if (opts.fit) Object.assign(box, { min: [...opts.fit.min], max: [...opts.fit.max] });
+    const sphere = shown.length || opts.fit ? new Sphere(new Vector3(...box.min.map((v, k) => (v + box.max[k]) / 2)), Math.hypot(...box.max.map((v, k) => v - box.min[k])) / 2) : new Sphere(new Vector3(), 50);
+    sphere.radius = Math.max(sphere.radius, 1) * 1.1;
+    const rig = snapshotRig(opts.along ?? opts.view, sphere, opts.width, opts.height);
     const cam = rig.apply(opts.width / opts.height);
     const rgba = new Uint8ClampedArray(opts.width * opts.height * 4);
     const [r, g, b] = VIEW_RGB[opts.view];
     for (let i = 0; i < rgba.length; i += 4) rgba.set([r, g, b, 255], i);
     const project = (p: Vec3) => projectToPicture(cam, opts.width, opts.height, p);
-    const dir = SNAPSHOT_DIRS[opts.view].dir;
-    return {
+    const dir = opts.along?.dir ?? SNAPSHOT_DIRS[opts.view].dir;
+    const result: SnapshotResult = {
       rgba,
       width: opts.width,
       height: opts.height,
@@ -135,6 +143,8 @@ function fakeViewport(x: AssistantHarness, o: { snapshot?: boolean } = {}): Fake
         return best && best.body === body ? best.face : null;
       },
     };
+    fv.results.push(result);
+    return result;
   };
   const [fit, setView, lookAt, setCamera, orbitAround, reframe, refitIfOffScreen] = camera;
   fv.handle = {
@@ -668,6 +678,78 @@ describe('view', () => {
         { sketch: 'Sketch 1', id: 'c_h', value: 20, unit: 'mm' },
       ]);
       expect(r.text).toContain('; dimensions c_w 40 mm, c_h 20 mm');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "sketch: one picture straight at the person's sketch beside the part, framed on its curves (every point in), drawn shown or not; a wrong name says the closest sketch",
+    async () => {
+      h = await assistantHarness();
+      const a = await block(h, 20, 20, 20);
+      // The person's sketch beside the block (as the Sample "S" sat beside the chip): x 40 to 55, y -21 to 17.
+      const rect = rectangle(15, 38, 40, -21);
+      const sample = await h.add('sketch', { points: rect.points, entities: rect.entities });
+      const corners: Vec3[] = [
+        [40, -21, 0],
+        [55, -21, 0],
+        [55, 17, 0],
+        [40, 17, 0],
+      ];
+      const fv = fakeViewport(h);
+      recordingRaster();
+      await h.settle();
+      const inside = (r: SnapshotResult, p: Vec3) => {
+        const at = r.project(p);
+        return !!at && at[0] >= 0 && at[1] >= 0 && at[0] <= r.width && at[1] <= r.height;
+      };
+      // A picture framed on the bodies leaves most of it out (the clock chat's top view of the S).
+      await h.ok('view', { ...VIEW, views: ['top'] });
+      expect(corners.filter((c) => inside(fv.results.at(-1)!, c)).length).toBeLessThan(4);
+
+      const r = await h.ok('view', { ...VIEW, views: ['iso', 'front'], sketch: 'sketch 2' });
+      // One picture, looking down its normal (+Z for Top) with its v up, framed on its curves, the sketch drawn for it.
+      expect(fv.shots.at(-1)).toMatchObject({ width: 768, height: 576, along: { dir: [0, 0, 1], up: [0, 1, 0] }, fit: { min: [40, -21, 0], max: [55, 17, 0] }, sketch: sample });
+      const shot = fv.results.at(-1)!;
+      for (const c of corners) expect(inside(shot, c), `corner ${c.join(', ')}`).toBe(true);
+      // Its u runs to the right, its v up.
+      expect(shot.project([55, 0, 0])![0]).toBeGreaterThan(shot.project([40, 0, 0])![0]);
+      expect(shot.project([47, 17, 0])![1]).toBeLessThan(shot.project([47, -21, 0])![1]);
+      // Framed on it: it fills most of the picture's height.
+      expect((shot.project([47, -21, 0])![1] - shot.project([47, 17, 0])![1]) / shot.height).toBeGreaterThan(0.6);
+      expect(r.text).toMatch(/^Pictured Sketch 2 normal to its plane \(768x576 px, [\d.]+ mm\/px\); shown Body 1$/);
+      expect(r.summary).toBe('Pictured Sketch 2');
+      expect(r.data).toMatchObject({ views: [], sketch: { name: 'Sketch 2', normal: [0, 0, 1], mm_per_px: expect.any(Number) }, shown: [bodyOf(h, a.body).name] });
+
+      // A sketch the view does not show (its extrude used it): pictured all the same.
+      await h.ok('view', { ...VIEW, sketch: 'Sketch 1' });
+      expect(fv.shots.at(-1)).toMatchObject({ sketch: a.sketch, fit: { min: [0, 0, 0], max: [20, 20, 0] } });
+
+      // A wrong name: not_found with the closest sketch; a feature that is not a sketch says so.
+      expect(await h.call('view', { ...VIEW, sketch: 'Skecth 2' })).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', message: expect.stringContaining('sketch: no sketch is called "Skecth 2". Closest: "Sketch 2". Sketches: Sketch 1, Sketch 2.'), detail: { reason: 'not_found', field: 'sketch', closest: 'Sketch 2' } },
+      });
+      expect(await h.call('view', { ...VIEW, sketch: 'Extrude 1' })).toMatchObject({ ok: false, error: { message: expect.stringContaining('sketch: Extrude 1 is not a sketch.') } });
+      for (const fn of fv.camera) expect(fn).not.toHaveBeenCalled();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'sketch on Front: looked at from -Y with +Z up, as Normal to shows it',
+    async () => {
+      h = await assistantHarness();
+      const rect = rectangle(30, 10, -15, 0);
+      await h.add('sketch', { support: { kind: 'plane', plane: 'origin:front' }, plane: { origin: [0, 0, 0], normal: [0, -1, 0], xdir: [1, 0, 0] }, points: rect.points, entities: rect.entities });
+      const fv = fakeViewport(h);
+      recordingRaster();
+      await h.settle();
+      await h.ok('view', { ...VIEW, sketch: 'Sketch 1' });
+      expect(fv.shots.at(-1)).toMatchObject({ along: { dir: [0, -1, 0], up: [0, 0, 1] }, fit: { min: [-15, 0, 0], max: [15, 0, 10] } });
+      const shot = fv.results.at(-1)!;
+      expect(shot.project([15, 0, 5])![0]).toBeGreaterThan(shot.project([-15, 0, 5])![0]);
+      expect(shot.project([0, 0, 10])![1]).toBeLessThan(shot.project([0, 0, 0])![1]);
     },
     REAL_KERNEL_MS,
   );

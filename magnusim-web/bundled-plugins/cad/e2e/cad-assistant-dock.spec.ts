@@ -6,13 +6,16 @@
 // person's edit withdraws it; Ctrl+/ typed in the Part opens the dock and, typed in the dock,
 // closes it back to the Part; a question of a CAD request shows as the dock's card with No
 // focused while the Part had the keyboard (Enter answers No); the app's toasts stay clear of the
-// Part's chips.
+// Part's chips; a sketch the person draws between two dock messages is pictured whole by view's
+// sketch, named in the dock's step (this host names no conversation on a call yet, so the next
+// request's user_changes do not tell it: the fallback).
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
 // @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
 import * as core from '../../../e2e/support/assistant.js';
+import { drawRectangle } from './helpers';
 import {
   cadFrame,
   chats,
@@ -31,6 +34,7 @@ import {
   STEP,
   STEP_MS,
   useScriptedModel,
+  resultsIn,
   type AssistantHost,
 } from './assistant-helpers';
 
@@ -267,4 +271,50 @@ test("cad:assistant-dock-view-tools the pill and the open panel stay clear of th
   const hb = (await home.boundingBox())!;
   const top = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id ?? '', { x: hb.x + hb.width / 2, y: hb.y + hb.height / 2 });
   expect(top).toBe('workspace-frame');
+});
+
+test("cad:assistant-dock-sketch-spec the person draws a sketch between two dock messages: the next request's view of it pictures it whole, and the dock's step names it with its picture", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Dock sketch spec');
+  const { frame } = await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  // Message 1: the Assistant makes a disc 20 mm across.
+  host.fake.reply({ tools: [SKETCH] }, { tools: [EXTRUDE] }, { text: 'A disc.' });
+  await core.dockSend(page, 'Make a disc 20 mm across and 5 mm tall');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 2 });
+  // Between two messages the person closes the panel and draws a 60 x 30 rectangle, far wider than the disc.
+  await dock(page).locator('[data-dock-close]').click();
+  await expect(dock(page)).toBeHidden(STEP);
+  await drawRectangle(page, frame, 60, 30);
+  const names = await features(page);
+  expect(names.slice(0, 2)).toEqual(['Disc sketch', 'Disc']);
+  const sketch = names[2];
+  expect(sketch).toMatch(/^Sketch \d+$/);
+  // Message 2: the scripted model reads the Part, then looks at the person's sketch.
+  const before = chats(host).length;
+  const VIEW_IN = { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic', sketch };
+  host.fake.reply({ tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] }, { tools: [{ name: 'cad__view', input: VIEW_IN }] }, { text: 'I see your rectangle.' });
+  await core.dockSend(page, 'Make it the shape of my sketch');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 2 });
+  const [read] = resultsIn(chats(host)[before + 1]);
+  expect(read).toMatchObject({ tool: 'cad__get_model', ok: true });
+  // The fallback: this host names no conversation on a call (AssistantCall.conversation), so the
+  // request starts from its own first call and does not tell the sketch. A host that names it
+  // tells 'added <sketch> (sketch)' here (unit: model.test.ts, rev.test.ts).
+  expect(read.data?.user_changes).toBeUndefined();
+  const [viewed] = resultsIn(chats(host)[before + 2]);
+  expect(viewed).toMatchObject({ tool: 'cad__view', ok: true, data: { views: [], sketch: { name: sketch, normal: [0, 0, 1] } } });
+  expect(viewed.images).toHaveLength(1);
+  // Framed on the sketch, not on the disc: its 60 mm fit in the 768 px picture with room to spare
+  // (framed on the disc they would take about 990 px).
+  const mmPerPx = (viewed.data!.sketch as { mm_per_px: number }).mm_per_px;
+  expect(60 / mmPerPx).toBeLessThan(768);
+  expect(60 / mmPerPx).toBeGreaterThan(0.4 * 768);
+  // What the person sees: the dock's view step names the sketch and shows its picture.
+  const step = dockTurn(page).locator('[data-dock-step]').filter({ hasText: `Pictured ${sketch}` });
+  await expect(step).toBeVisible(STEP);
+  const img = step.locator('.dock-step-pictures img').first();
+  await expect(img).toBeVisible(STEP);
+  await expect.poll(() => img.evaluate((el: Element) => (el as HTMLImageElement).naturalWidth), STEP).toBe(768);
+  await shot(page, 'cad-dock-sketch-spec');
 });

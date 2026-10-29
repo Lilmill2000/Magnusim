@@ -425,7 +425,7 @@ test("cad:assistant-watch-view view pictures the Part off screen: one image in t
   await countFileWrites(page);
   await countDataWrites(page);
 
-  const input = (hide: string[]) => ({ views: ['iso', 'top'], hide, section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic' });
+  const input = (hide: string[]) => ({ views: ['iso', 'top'], hide, section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic', sketch: '' });
   const from = chats(host).length;
   host.fake.reply({ tools: [{ name: 'cad__view', input: input([]) }] }, { tools: [{ name: 'cad__view', input: input([names[1]]) }] }, { text: 'Two blocks; the red one on the right.' });
   const t = await startTurn(request, host, { text: 'Look at the Part.', tab });
@@ -472,7 +472,7 @@ test("cad:assistant-watch-view-handles a picture's handles are the request's own
   const pid = await newProject(request, host, 'Assistant view handles');
   const { frame, tab } = await openNewPart(page, request, host, pid);
   const made = await addSolid(page, { size: [40, 30, 10] });
-  const view = (labels: string) => ({ views: ['top'], hide: [], section: '', labels, size: 'small', display: 'shaded_edges', projection: 'orthographic' });
+  const view = (labels: string) => ({ views: ['top'], hide: [], section: '', labels, size: 'small', display: 'shaded_edges', projection: 'orthographic', sketch: '' });
   const from = chats(host).length;
   host.fake.reply(
     { tools: [{ name: 'cad__view', input: view('faces') }] },
@@ -507,7 +507,7 @@ test('cad:assistant-watch-view-no-images a local model that reads no images is t
   host.fake.models([{ id: local.model, context: 65_536, type: 'llm' }], 'compat');
   try {
     const from = chats(host).length;
-    const input = { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic' };
+    const input = { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic', sketch: '' };
     host.fake.reply({ hold: 'text-only-view', tools: [{ name: 'cad__view', input }] }, { text: 'I cannot see pictures here; I will measure instead.' });
     const t = await startTurn(request, host, { text: 'Look at the Part.', tab });
     // The page heard that this turn's model reads no images before the call comes.

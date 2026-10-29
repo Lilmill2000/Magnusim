@@ -31,6 +31,7 @@ import { faceRefOf } from '../selectors/refs';
 import { echo, faceLabel, hitWords, selectAny, selectSet, withScene, type FaceHit, type Scene } from '../selectors/resolve';
 import { storeExpr } from '../sketch/compile';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { closestName, closestWords } from '../closest';
 
 export const DIRECT_KINDS = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'repair', 'retry'] as const;
 type Kind = (typeof DIRECT_KINDS)[number];
@@ -311,7 +312,8 @@ function planAction(services: AppServices, kind: 'repair' | 'retry', featureName
   const f = featureByName(s, featureName);
   if (!f) {
     const names = s.doc.features.map((g) => g.name);
-    throw new ToolError('not_found', `edit: no feature is called "${featureName}". Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'edit', names: names.slice(0, 30) } });
+    const near = closestName(featureName, names);
+    throw new ToolError('not_found', `edit: no feature is called "${featureName}".${closestWords(near)} Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'edit', names: names.slice(0, 30), ...(near ? { closest: near } : {}) } });
   }
   const st = s.rebuild.features[f.id];
   if (!st?.actions?.includes(kind)) {

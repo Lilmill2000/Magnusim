@@ -7,7 +7,10 @@
 //   - labels 'bodies' writes each shown body's name at its box's centre; 'faces' writes a handle
 //     ("#f3") on each of the 30 largest faces as the picture shows them, only where the picture
 //     really sees that face there, and lists the handles with their words;
-//   - PNG, or JPEG (quality 0.85) when the PNG is over 1.4 MB.
+//   - PNG, or JPEG (quality 0.85) when the PNG is over 1.4 MB;
+//   - `sketch` names a sketch: one picture straight at it (normal to its plane, its up as Normal
+//     to shows it), framed on its curves so all of it is in the picture, and drawn over the bodies
+//     whether the view shows it or not (views are then not used).
 // The data says what was drawn and what not, the scale, the cut, the values of the shown
 // sketches' dimensions (pictures carry no HTML overlays), whether a software renderer drew it,
 // and a note when the picture is not the whole Part (the person's sketch or the rollback bar
@@ -17,18 +20,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Vector3 } from 'three';
 import { pickFace } from '../features/p2/refs';
-import { drawnSketches, profilesView } from '../features/sketch/view';
+import { entityGeometry } from '../features/sketch/geometry';
+import { entitySegments } from '../features/sketch/overlay';
+import { toModel } from '../features/sketch/plane';
+import { drawnSketches, isSketch, profilesView, sketchOutput } from '../features/sketch/view';
 import { describeFace } from '../naming/names';
 import { evaluateDimensions, isDimension, quantityOf } from '../sketch/model';
 import type { AppServices } from '../types/app';
 import type { CallCtx, ToolReply } from '../types/assistant';
-import type { BodyId, Vec3 } from '../types/doc';
+import type { BodyId, SketchFeature, Vec3 } from '../types/doc';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
 import type { EvalResult } from '../types/units';
 import type { DisplayMode, Projection, SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
 import { LIGHT } from '../viewport/palette';
+import { sketchPlane, sketchUp } from '../viewport/normal';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
+import { closestName, closestWords } from './closest';
 import { heartbeat, waitForRead } from './busy';
 import { ToolError } from './errors';
 import { faceWords, LabelIndex } from './labels';
@@ -68,6 +76,8 @@ export interface ViewInput {
   /** How the bodies are drawn (the input's shaded_edges is the viewport's shaded-edges). */
   display: DisplayMode;
   projection: Projection;
+  /** A sketch's name: one picture straight at it, framed on its curves ("" for none). */
+  sketch: string;
 }
 
 const LABELS: readonly ViewLabels[] = ['none', 'bodies', 'faces'];
@@ -98,7 +108,10 @@ export function readViewInput(input: Record<string, unknown>): ViewInput {
   if (!display) throw bad('display', 'display must be shaded_edges, shaded or wireframe.');
   const projection = (input.projection ?? 'orthographic') as Projection;
   if (!PROJECTIONS.includes(projection)) throw bad('projection', 'projection must be orthographic or perspective.');
-  return { views, hide: hide as string[], section, labels: labels as ViewLabels, size: size as ViewSize, display, projection };
+  // Absent (an older caller): no sketch.
+  const sketch = input.sketch ?? '';
+  if (typeof sketch !== 'string') throw bad('sketch', 'sketch must be "" or the name of a sketch.');
+  return { views, hide: hide as string[], section, labels: labels as ViewLabels, size: size as ViewSize, display, projection, sketch: sketch.trim() };
 }
 
 // ------------------------------------------------------------ the cut
@@ -514,10 +527,12 @@ function bodiesToHide(names: readonly string[], bodies: readonly BodyInfo[]): Bo
 }
 
 /** The driving dimensions of the sketches drawn now, with their values (mm or degrees). */
-function shownDimensions(services: AppServices, s: DocState): { sketch: string; id: string; value: number; unit: 'mm' | 'deg' }[] {
+function shownDimensions(services: AppServices, s: DocState, pictured: SketchFeature | null): { sketch: string; id: string; value: number; unit: 'mm' | 'deg' }[] {
   const out: { sketch: string; id: string; value: number; unit: 'mm' | 'deg' }[] = [];
   const mode = services.mode?.get().mode ?? 'model';
-  for (const { feature } of drawnSketches(s, mode, profilesView(services).get(), services.doc.features)) {
+  const drawn = drawnSketches(s, mode, profilesView(services).get(), services.doc.features).map((d) => d.feature);
+  if (pictured && !drawn.some((f) => f.id === pictured.id)) drawn.push(pictured);
+  for (const feature of drawn) {
     const ev = evaluateDimensions(feature, services.doc.units);
     for (const c of feature.constraints) {
       if (!isDimension(c) || !c.driving || ev.values[c.id] === undefined) continue;
@@ -542,6 +557,50 @@ function notesNow(services: AppServices, s: DocState): string[] {
   }
   if (typeof document !== 'undefined' && document.hidden) notes.push('The window is hidden or covered: the person may not be watching.');
   return notes;
+}
+
+/** A picture of one sketch: the sketch, the way to look at it (from its normal's side, its up as Normal to has it) and its points in model mm. */
+export interface SketchShot {
+  feature: SketchFeature;
+  dir: Vec3;
+  up: Vec3;
+  /** Every point of its curves as drawn (and its points), model mm; its plane's origin when it has none. */
+  points: Vec3[];
+}
+
+/** The built sketch `name` names (any case, or its id), as a picture looks at it; not_found in words. */
+export function sketchShot(s: DocState, name: string): SketchShot {
+  const want = name.toLowerCase();
+  const f = s.doc.features.find((g) => g.name.toLowerCase() === want) ?? s.doc.features.find((g) => g.id === name) ?? null;
+  const sketches = s.doc.features.filter(isSketch).map((g) => g.name);
+  if (!f || !isSketch(f)) {
+    const near = closestName(name, sketches);
+    const what = f ? `${f.name} is not a sketch.` : `no sketch is called "${name}".`;
+    throw new ToolError('not_found', `sketch: ${what}${closestWords(near)} Sketches: ${sketches.slice(0, 30).join(', ') || 'none yet'}.`, { detail: { field: 'sketch', names: sketches.slice(0, 30), ...(near ? { closest: near } : {}) } });
+  }
+  const out = sketchOutput(s, f.id);
+  const plane = out?.plane ?? sketchPlane(s, f.id);
+  if (!out || !plane) throw new ToolError('not_found', `sketch: ${f.name} is not built now (it is ${s.rebuild.features[f.id]?.state ?? 'not rebuilt yet'}): fix it first, or move the rollback bar past it.`, { detail: { field: 'sketch', feature: f.name } });
+  const points: Vec3[] = [];
+  try {
+    for (const g of entityGeometry(out.entities ? { entities: out.entities } : f, out.points, out.radii)) {
+      if (g.kind === 'point') points.push(toModel(out.plane, g.p));
+      const seg = entitySegments(g, out.plane);
+      for (let i = 0; i + 2 < seg.length; i += 3) points.push([seg[i], seg[i + 1], seg[i + 2]]);
+    }
+  } catch {
+    // A sketch whose geometry does not read frames on its plane's origin.
+  }
+  if (!points.length) points.push([...plane.origin] as Vec3);
+  return { feature: f, dir: [...plane.normal] as Vec3, up: sketchUp(plane), points };
+}
+
+/** The box of some points (model mm). */
+function boxOfPoints(points: readonly Vec3[]): { min: Vec3; max: Vec3 } {
+  const min: Vec3 = [Infinity, Infinity, Infinity];
+  const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const p of points) for (let k = 0; k < 3; k++) (min[k] = Math.min(min[k], p[k])), (max[k] = Math.max(max[k], p[k]));
+  return { min, max };
 }
 
 /** One picture of one view, or not_ready when the graphics context went away. */
@@ -578,17 +637,24 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
     drawn.map((b) => b.bbox),
   );
   const size: ViewSize = ctx.budgets.viewSize === 'small' ? 'small' : input.size;
-  const layout = sheetLayout(input.views.length, SHEET_LONG_PX[size]);
+  // A sketch: one picture straight at it, framed on its curves; else the views asked.
+  const pictured = input.sketch ? sketchShot(s, input.sketch) : null;
+  const views: SnapshotView[] = pictured ? [] : input.views;
+  const layout = sheetLayout(pictured ? 1 : views.length, SHEET_LONG_PX[size]);
   const font = LABEL_FONT_PX[size];
 
   // Every picture in this task: the Part as it is now in each of them.
-  ctx.progress(0, `Drawing ${input.views.join(', ')}`);
-  const snapOpts = (view: SnapshotView, t: Tile): SnapshotOptions => ({ view, width: t.w, height: t.h, hide: [...hideIds], section: section ? { ...section } : null, display: input.display, projection: input.projection });
-  const shots = input.views.map((view, i) => snap(handle, snapOpts(view, layout.tiles[i])));
+  ctx.progress(0, `Drawing ${pictured ? pictured.feature.name : views.join(', ')}`);
+  const base = (t: Tile): SnapshotOptions => ({ view: 'iso', width: t.w, height: t.h, hide: [...hideIds], section: section ? { ...section } : null, display: input.display, projection: input.projection });
+  const shots = pictured
+    ? [snap(handle, { ...base(layout.tiles[0]), along: { dir: pictured.dir, up: pictured.up }, fit: boxOfPoints(pictured.points), sketch: pictured.feature.id })]
+    : views.map((view, i) => snap(handle, { ...base(layout.tiles[i]), view }));
+  /** Each picture's direction from the part towards its camera. */
+  const toCamera = (i: number): Vec3 => (pictured ? pictured.dir : SNAPSHOT_DIRS[views[i]].dir);
   const shown = drawn;
   const inTree = bodies.filter((b) => !b.visible && !hideIds.has(b.id));
 
-  const marks = titleMarks(layout, input.views, font);
+  const marks = titleMarks(layout, views, font);
   const notes = notesNow(services, s);
   // The key's one handle table, shared with find and the selectors (a #f3 here names the same face there).
   const handles = handlesOf(services, ctx.key);
@@ -617,7 +683,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
       const clip = section ? snapshotClip(section) : null;
       const v = new Vector3();
       const keep = clip ? (p: Vec3) => clip.distanceToPoint(v.set(p[0], p[1], p[2])) >= -1e-6 : null;
-      const spots = shots.flatMap((shot, i) => shown.flatMap((b) => faceSpots(b, shot, SNAPSHOT_DIRS[input.views[i]].dir, keep).map((spot) => ({ ...spot, tile: i }))));
+      const spots = shots.flatMap((shot, i) => shown.flatMap((b) => faceSpots(b, shot, toCamera(i), keep).map((spot) => ({ ...spot, tile: i }))));
       spots.sort((a, b) => b.area - a.area);
       // The largest first; a face labelled once may be labelled in every picture that shows it.
       const chosen = new Map<string, { body: BodyInfo; face: number; marks: Mark[] }>();
@@ -690,10 +756,11 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
   const image = await encodePicture(rgba, layout.width, layout.height, marks, font);
   ctx.checkAbort();
 
-  const dims = shownDimensions(services, s);
+  const dims = shownDimensions(services, s, pictured?.feature ?? null);
   const scale = sig6(shots[0].mmPerPx);
   const data: Record<string, unknown> = {
-    views: input.views.map((view, i) => ({ view, mm_per_px: sig6(shots[i].mmPerPx) })),
+    views: views.map((view, i) => ({ view, mm_per_px: sig6(shots[i].mmPerPx) })),
+    ...(pictured ? { sketch: { name: pictured.feature.name, normal: pictured.dir.map((v) => sig6(v + 0)), mm_per_px: scale } } : {}),
     shown: shown.slice(0, BODY_NAMES_MAX).map((b) => b.name),
     ...(shown.length > BODY_NAMES_MAX ? { shown_more: shown.length - BODY_NAMES_MAX } : {}),
     hidden: hidden.map((b) => b.name),
@@ -708,8 +775,9 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
     software_renderer: softwareRenderer(),
     ...(notes.length ? { note: notes.join(' ') } : {}),
   };
-  const bits = [`Pictured ${input.views.join(', ')} (${layout.width}x${layout.height} px, ${Number(scale.toPrecision(3))} mm/px)`, shown.length ? `shown ${shown.map((b) => b.name).join(', ')}` : 'no bodies shown'];
+  const what = pictured ? `${pictured.feature.name} normal to its plane` : views.join(', ');
+  const bits = [`Pictured ${what} (${layout.width}x${layout.height} px, ${Number(scale.toPrecision(3))} mm/px)`, shown.length ? `shown ${shown.map((b) => b.name).join(', ')}` : 'no bodies shown'];
   if (hidden.length || inTree.length) bits.push(`hidden ${[...hidden, ...inTree].map((b) => b.name).join(', ')}`);
   if (dims.length) bits.push(`dimensions ${dims.map((d) => `${d.id} ${d.value} ${d.unit}`).join(', ')}`);
-  return { text: bits.join('; '), data, summary: `Pictured ${input.views.join(', ')}`, images: [image] };
+  return { text: bits.join('; '), data, summary: `Pictured ${pictured ? pictured.feature.name : views.join(', ')}`, images: [image] };
 }

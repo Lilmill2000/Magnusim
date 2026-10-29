@@ -33,6 +33,7 @@ import { solveSketch, type Solved } from '../sketch/solve';
 import { planSupport, type SupportPlan } from '../sketch/support';
 import { writePlane, writeSketch } from '../sketch/write';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
+import { closestName, closestWords } from '../closest';
 
 interface Plan extends EditPlan {
   name: string;
@@ -58,7 +59,10 @@ const sketchTool: EditTool<Plan> = {
     let edit: SketchFeature | null = null;
     if (editName) {
       const f = featureByName(s, editName);
-      if (!f) throw new ToolError('not_found', `edit: no feature is called "${editName}". Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'edit', names: names.slice(0, 30) } });
+      if (!f) {
+        const near = closestName(editName, names);
+        throw new ToolError('not_found', `edit: no feature is called "${editName}".${closestWords(near)} Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, { detail: { field: 'edit', names: names.slice(0, 30), ...(near ? { closest: near } : {}) } });
+      }
       if (f.type !== 'sketch') throw new ToolError('wrong_feature_type', `edit: ${f.name} is a ${f.type}, not a sketch: change it with its own tool or edit_feature.`, { detail: { field: 'edit', type: f.type } });
       edit = f;
       const form = describeSketch(f, s, { budget: ctx.budgets.sketch });

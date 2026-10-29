@@ -32,6 +32,7 @@ import { len, sig6 } from './numbers';
 import { regionRefOf } from './selectors/refs';
 import { selectSet, type RegionHit, type Scene } from './selectors/resolve';
 import type { EditCtx } from './step';
+import { closestName, closestWords } from './closest';
 
 export const OPS = ['new', 'join', 'cut', 'intersect'] as const;
 export type Op = (typeof OPS)[number];
@@ -74,7 +75,10 @@ export function sketchFor(services: AppServices, text: unknown, editing: Feature
   const sketches = s.doc.features.filter((f) => f.type === 'sketch').map((f) => f.name);
   const list = sketches.length ? sketches.slice(0, 30).join(', ') : 'none yet';
   const f = name ? featureByName(s, name) : null;
-  if (!f) throw new ToolError('not_found', `sketch: no sketch is called "${name}". Sketches: ${list}.`, { detail: { field: 'sketch', names: sketches.slice(0, 30) } });
+  if (!f) {
+    const near = closestName(name, sketches);
+    throw new ToolError('not_found', `sketch: no sketch is called "${name}".${closestWords(near)} Sketches: ${list}.`, { detail: { field: 'sketch', names: sketches.slice(0, 30), ...(near ? { closest: near } : {}) } });
+  }
   if (f.type !== 'sketch') throw new ToolError('not_found', `sketch: ${f.name} is not a sketch. Sketches: ${list}.`, { detail: { field: 'sketch', names: sketches.slice(0, 30) } });
   if (editing) {
     const at = s.doc.features.findIndex((g) => g.id === editing.id);

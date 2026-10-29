@@ -39,13 +39,14 @@ export function snapshotSize(o: Pick<SnapshotOptions, 'width' | 'height'>, gpuMa
 }
 
 /**
- * The picture's camera: orthographic, looking along the view's direction at the sphere's centre,
+ * The picture's camera: orthographic, looking along the view's direction (or `view` itself: a
+ * direction from the part towards the camera and the picture's up) at the sphere's centre,
  * the sphere filling the picture's height, or its width when the picture is taller than wide.
  * `sphere` already carries the framing margin. The caller sets `scene` (near and far) to all that
  * is drawn.
  */
-export function snapshotRig(view: SnapshotView, sphere: Sphere, width: number, height: number, projection: Projection = 'orthographic'): CameraRig {
-  const d = SNAPSHOT_DIRS[view];
+export function snapshotRig(view: SnapshotView | { dir: Vec3; up: Vec3 }, sphere: Sphere, width: number, height: number, projection: Projection = 'orthographic'): CameraRig {
+  const d = typeof view === 'string' ? SNAPSHOT_DIRS[view] : view;
   const rig = new CameraRig();
   rig.projection = 'orthographic';
   rig.orient(d.dir, d.up);

@@ -8,12 +8,13 @@
 //   bracket  the L (50 x 5 and 5 x 35) x 30, the inner R4, a 6 mm hole in each flange
 //   flange   a ring 80/20 x 8 less 6 holes 6.5 mm across on a 60 mm circle (6 holes found)
 //   chip     Red and White, 1 solid each, Red with its sealed pocket (voids 1), overlap 0
-// The guide's EXAMPLES lines are these parts abridged: each line is checked to hold the calls as
-// the worked part sends them, so the guide, help and the tools cannot drift apart.
+// help examples' row of each part holds its calls abridged (WorkedPart.brief, once the guide's
+// EXAMPLES): each row is checked to hold the calls as the worked part sends them, so help's index,
+// its example topics and the tools cannot drift apart.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { WORKED_PARTS, type ResultValue, type WorkedPart } from '../../src/assistant/examples';
-import { GUIDE } from '../../src/assistant/guide';
+import { HELP } from '../../src/assistant/help';
 import type { SketchFeature } from '../../src/types/doc';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import type { Row } from './sketch-tools';
@@ -73,13 +74,17 @@ function check(x: AssistantHarness, bodies: Record<string, { volume: number; bbo
   }
 }
 
-/** The guide's own line for example `n` (under its EXAMPLES heading). */
-const line = (n: number) => GUIDE.slice(GUIDE.indexOf('\nEXAMPLES')).split('\n').find((l) => l.startsWith(`${n} `)) ?? '';
+/** help examples' row for a worked part: its title and its calls abridged (its brief). */
+function line(topic: WorkedPart['topic']): string {
+  const text = HELP.examples.find((r) => r.about === topic)?.text ?? '';
+  expect(text).toContain(part(topic).brief!);
+  return text;
+}
 
-/** A set_params call as the guide abridges it: "set_params w 60 mm, d 40 mm". */
+/** A set_params call as the brief abridges it: "set_params w 60 mm, d 40 mm". */
 const paramsWords = (input: Row) => `set_params ${(input.set as Row[]).map((r) => `${r.name} ${r.expr}`).join(', ')}`;
 
-/** A sketch call as the guide abridges it: 'sketch on Top: rect r [0,0,2,1]; coincident [r.bl, origin]; distance [r.bottom] "w", [r.left] "d"'. */
+/** A sketch call as the brief abridges it: 'sketch on Top: rect r [0,0,2,1]; coincident [r.bl, origin]; distance [r.bottom] "w", [r.left] "d"'. */
 function sketchWords(input: Row): string {
   const entities = (input.entities as Row[]).map((e) => `${e.kind} ${e.id} [${(e.at as number[]).join(',')}]`).join('; ');
   const groups: string[] = [];
@@ -99,9 +104,9 @@ const WHITE = 6 * (SA / 2) * (18.5 ** 2 - 16.5 ** 2) * 3.3 + Math.PI * (18 ** 2 
 
 describe("help's worked parts on the real kernel", () => {
   it(
-    "example_plate: the plate with its 4 holes (the guide's example 1)",
+    "example_plate: the plate with its 4 holes (help examples' first row)",
     async () => {
-      const g = line(1);
+      const g = line('example_plate');
       expect(g).toContain(paramsWords(callOf('example_plate', 'set_params')));
       expect(g).toContain(sketchWords(callOf('example_plate', 'sketch')));
       expect(g).toContain('extrude "Plate" ["all"] blind "t" new');
@@ -124,9 +129,9 @@ describe("help's worked parts on the real kernel", () => {
   );
 
   it(
-    "example_bracket: the L bracket, its inner fillet and a hole in each flange (the guide's example 2)",
+    "example_bracket: the L bracket, its inner fillet and a hole in each flange (help examples' second row)",
     async () => {
-      const g = line(2);
+      const g = line('example_bracket');
       expect(g).toContain(sketchWords(callOf('example_bracket', 'sketch')));
       expect(g).toContain('extrude "Bracket" symmetric "wid" new');
       expect(callOf('example_bracket', 'extrude')).toMatchObject({ name: 'Bracket', extent: 'symmetric', distance: 'wid', op: 'new' });
@@ -142,9 +147,9 @@ describe("help's worked parts on the real kernel", () => {
   );
 
   it(
-    "example_flange: the flange with its pattern of 6 holes (the guide's example 3)",
+    "example_flange: the flange with its pattern of 6 holes (help examples' third row)",
     async () => {
-      const g = line(3);
+      const g = line('example_flange');
       expect(g).toContain(sketchWords(callOf('example_flange', 'sketch')));
       expect(g).toContain('revolve "Flange" axis "Z axis" full new');
       expect(callOf('example_flange', 'revolve')).toMatchObject({ name: 'Flange', axis: 'Z axis', extent: 'full', op: 'new' });
