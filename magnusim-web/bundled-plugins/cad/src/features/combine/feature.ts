@@ -6,7 +6,10 @@
 // each target shares with all the tools (SOLIDWORKS' Common, Fusion's
 // Intersect: what the tools share is made first, one more kernel call per
 // extra tool); a target left empty goes (said in amber), one left in more
-// pieces than it had says so. Tools go unless kept.
+// pieces than it had says so. A Join whose tools do not touch the target keeps
+// the pieces apart in one body: a note (an info mark, not amber), since a group
+// such as an inlay of spots and rings is made that way on purpose. Tools go
+// unless kept.
 // Faces keep their names through the history. An invalid result is red with
 // "Try repair": fuzzy 0.001 mm, then 0.01 mm, then ShapeFix.
 // Owner: P2-FEATURES.
@@ -48,6 +51,15 @@ export const COMBINE_OPS: { value: CombineFeature['op']; label: string; hint: st
 /** "Body 2", "Body 2 and Body 3", "Body 2, Body 3 and Body 4". */
 function andList(names: string[]): string {
   return names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The note of a Join that leaves a target in `solids` pieces (Daniel's poker chip: an inlay grouped
+ * from 8 spots and rings, later used by a Cut with keep tools, read "What's wrong: Inlay is now 8
+ * separate solids: the tools do not touch it").
+ */
+export function apartNote(body: string, solids: number): string {
+  return `${body} holds ${solids} separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)`;
 }
 
 /** How many solids a shape holds (the kernel's cheap counts), or null when it cannot say. */
@@ -136,6 +148,8 @@ export const combineDef: FeatureTypeDef<CombineFeature, Record<string, never>> =
     const gone: string[] = [];
     const repaired: string[] = [];
     const notes: string[] = [];
+    /** Said, not warned (FeatureBuildResult.note): pieces a Join leaves apart. */
+    const aside: string[] = [];
     try {
       for (const r of res.results) {
         const id = byShape.get(r.target);
@@ -156,8 +170,9 @@ export const combineDef: FeatureTypeDef<CombineFeature, Record<string, never>> =
           repaired.push(ctx.bodyName(id));
         }
         if (r.warning_text) notes.push(occtWords(r.warning_text));
-        // Join: tools that do not touch the target stay apart inside the one body (no silent pass).
-        if (f.op === 'join' && r.solids > 1) notes.push(`${ctx.bodyName(id)} is now ${r.solids} separate solids: ${tools.length === 1 ? 'the tool does' : 'the tools do'} not touch it`);
+        // Join: tools that do not touch the target stay apart inside the one body (no silent pass), a
+        // note and not a warning: often meant (a group of pieces used later as one tool).
+        if (f.op === 'join' && r.solids > 1) aside.push(apartNote(ctx.bodyName(id), r.solids));
         // A Cut or Intersect that leaves a target in pieces says so (review P2/P3 round 4: two cubes
         // meeting at a corner read as one body, "Body 1 · 2,000 mm³", with no word of the 2 pieces).
         if (f.op !== 'join' && r.solids > 1) {
@@ -206,7 +221,7 @@ export const combineDef: FeatureTypeDef<CombineFeature, Record<string, never>> =
       const extra = made.filter((s) => !kept.has(s));
       made.length = 0;
       await ctx.release(extra);
-      return { ok: true, bodies, removed: [...removed], ...(notes.length ? { warning: notes.join('; ') } : {}) };
+      return { ok: true, bodies, removed: [...removed], ...(notes.length ? { warning: notes.join('; ') } : {}), ...(aside.length ? { note: aside.join('; ') } : {}) };
     } finally {
       if (made.length) await ctx.release(made).catch(() => {});
     }

@@ -115,6 +115,8 @@ export const SHARDS = {
     'e2e/cad-p5-pressPull-curved.spec.ts',
     // A body's menu in the tree: Delete (a Delete body feature, Undo, Redo, several bodies, the Delete key), and its simulation item in Magnusim.
     'e2e/cad-body-menu.spec.ts',
+    // Combine: a Join of pieces that do not touch is a quiet note in History; a Cut that splits a body warns.
+    'e2e/cad-join-note.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [

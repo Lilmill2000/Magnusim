@@ -3,7 +3,9 @@
 //            document has parameters to edit, Bodies (n) (eye toggle, rename)
 //   HISTORY  the features in order, with the draggable rollback bar; rows below
 //            it are dimmed, suppressed rows greyed and struck through, failed
-//            rows red and warned rows amber with a "What's wrong" tooltip.
+//            rows red and warned rows amber with a "What's wrong" tooltip; a
+//            feature's note (a Join's pieces left apart) is a quiet info mark
+//            with a "Note" tooltip, and follows the warning in a warned row's.
 // Click selects (shared with the viewport), Ctrl+click toggles, double-click
 // opens the feature's panel, right-click opens the context menu. A feature row dragged onto
 // another goes before or after it (doc.move, the order rule of the Assistant's edit_feature move);
@@ -60,16 +62,23 @@ function usePartName(): string {
 }
 
 function StatusBadge({ row, onOpen }: { row: HistoryRow; onOpen(): void }) {
-  const tip = useTip(row.message ? { text: "What's wrong", detail: row.message } : null);
-  if (row.status !== 'error' && row.status !== 'warning') return null;
-  const label = `What's wrong: ${row.message ?? (row.status === 'error' ? 'the feature failed' : 'the feature has a warning')}`;
+  // An error or a warning has the badge; a note alone (said, not wrong) has the quiet info mark.
+  const wrong = row.status === 'error' || row.status === 'warning';
+  const kind = wrong ? row.status : row.note ? 'note' : null;
+  // A warned row's note follows the warning in its tooltip and label.
+  const also = wrong && row.note ? `Note: ${row.note}` : null;
+  const tip = useTip(wrong && row.message ? { text: "What's wrong", detail: also ? `${row.message}\n${also}` : row.message } : kind === 'note' ? { text: 'Note', detail: row.note! } : null);
+  if (!kind) return null;
+  const label =
+    kind === 'note' ? `Note: ${row.note}` : `What's wrong: ${row.message ?? (row.status === 'error' ? 'the feature failed' : 'the feature has a warning')}${also ? `. ${also}` : ''}`;
   return (
     <button
       type="button"
-      className={`cad-badge is-${row.status}`}
+      className={`cad-badge is-${kind}`}
       aria-label={label}
-      data-feature-badge={row.status}
-      data-message={row.message ?? undefined}
+      data-feature-badge={kind}
+      data-message={(kind === 'note' ? row.note : row.message) ?? undefined}
+      data-note={also ? row.note! : undefined}
       {...tip}
       onClick={(e) => {
         e.stopPropagation();
@@ -77,7 +86,7 @@ function StatusBadge({ row, onOpen }: { row: HistoryRow; onOpen(): void }) {
       }}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {row.status === 'error' ? <span className="cad-badge-dot" /> : <Icon d={ICONS.warning} size={13} />}
+      {kind === 'error' ? <span className="cad-badge-dot" /> : <Icon d={kind === 'note' ? ICONS.info : ICONS.warning} size={13} />}
     </button>
   );
 }

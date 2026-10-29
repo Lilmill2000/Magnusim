@@ -190,7 +190,8 @@ export interface ToolImpl {
 export interface EditData {
   rev: number;
   step: number;
-  feature: { name: string; type: string; state: string; message: string | null } | null;
+  /** `note`: the feature's note (FeatureStatus.note), only when it has one. */
+  feature: { name: string; type: string; state: string; message: string | null; note?: string } | null;
   resolved: Record<string, string>;
   bodies: {
     created: Record<string, unknown>[];

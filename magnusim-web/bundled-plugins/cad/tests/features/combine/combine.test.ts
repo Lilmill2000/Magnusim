@@ -4,7 +4,8 @@
 // empty result removes its target with an amber word; tools go unless kept;
 // an invalid result is red with Try repair (0.001, 0.01, then ShapeFix, and
 // no further offer once the steps are used); large inputs get the long
-// timeout; validation words.
+// timeout; validation words. A Join whose tools do not touch the target
+// notes the pieces it leaves apart (a note, not a warning).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { indexedNames } from '../../../src/naming/names';
@@ -95,7 +96,7 @@ describe('Combine build', () => {
 
   // Review P2/P3 round 1: a Cut whose tool only touches the target, or a Join with the tool inside it,
   // passed with nothing changed and no word.
-  it('a Cut that removes nothing fails with the words an Extrude uses; a Join that adds nothing or stays apart says so', async () => {
+  it('a Cut that removes nothing fails with the words an Extrude uses; a Join that adds nothing says so', async () => {
     const same = (p: Record<string, unknown>) => ({ faces: 6, edges: 12, vertices: 8, solids: 1, shells: 1, volume: 8000, bbox_mode: 'none', timings: {}, id: p.id });
     let k = scriptKernel().on('combine', () => ({ results: [result(1, 100)], timings: {} })).on('props', same);
     let r = await combineDef.build(f(), {}, ctxOf(k, BODIES, { doc }));
@@ -109,9 +110,32 @@ describe('Combine build', () => {
     k = scriptKernel().on('combine', () => ({ results: [result(1, 100)], timings: {} })).on('props', same);
     r = await combineDef.build(f({ op: 'join' }), {}, ctxOf(k, BODIES, { doc }));
     expect(r).toMatchObject({ ok: true, warning: 'Body 2 lies inside Body 1: joining adds nothing' });
-    k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 2 })], timings: {} })).on('props', (p) => ({ ...same(p), volume: p.id === 100 ? 9000 : 8000 }));
+  });
+
+  // Daniel's poker chip: an inlay grouped from 8 spots and rings that do not touch (later the tool of
+  // a Cut with keep tools) read "What's wrong: Inlay is now 8 separate solids: the tools do not touch it".
+  it('a Join whose tools do not touch the target notes the pieces it leaves apart, in plain words and not as a warning', async () => {
+    const props = (p: Record<string, unknown>) => ({ faces: 6, edges: 12, vertices: 8, solids: 1, shells: 1, volume: p.id === 100 ? 9000 : 8000, bbox_mode: 'none', timings: {}, id: p.id });
+    // One tool: 2 pieces.
+    let k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 2 })], timings: {} })).on('props', props);
+    let r = await combineDef.build(f({ op: 'join' }), {}, ctxOf(k, BODIES, { doc }));
+    expect(r).toMatchObject({ ok: true, note: "Body 1 holds 2 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)" });
+    expect(r.ok && r.warning).toBeUndefined();
+    // Several tools, the target named Inlay: 8 pieces.
+    const inlay: CadDoc = { ...doc, bodies: { ...doc.bodies, b_1: { name: 'Inlay', color: '#bdc9db' } } };
+    k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 8 })], timings: {} })).on('props', props);
+    r = await combineDef.build(f({ op: 'join', tools: ['b_2', 'b_3'] }), {}, ctxOf(k, BODIES, { doc: inlay }));
+    expect(r).toMatchObject({ ok: true, note: "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)" });
+    expect(r.ok && r.warning).toBeUndefined();
+    // A real warning beside it (the kernel's own words) stays a warning; the note is kept apart.
+    k = scriptKernel().on('combine', () => ({ results: [result(1, 100, { solids: 2, warning_text: 'BOPAlgo_AlertAcquiredSelfIntersection' })], timings: {} })).on('props', props);
     r = await combineDef.build(f({ op: 'join' }), {}, ctxOf(k, BODIES, { doc }));
-    expect(r).toMatchObject({ ok: true, warning: 'Body 1 is now 2 separate solids: the tool does not touch it' });
+    expect(r).toMatchObject({ ok: true, warning: expect.any(String), note: expect.stringMatching(/^Body 1 holds 2 separate pieces: /) });
+    expect(r.ok && r.warning).not.toMatch(/separate/);
+    // One solid: nothing to note.
+    k = scriptKernel().on('combine', () => ({ results: [result(1, 100)], timings: {} })).on('props', props);
+    r = await combineDef.build(f({ op: 'join' }), {}, ctxOf(k, BODIES, { doc }));
+    expect(r.ok && (r.note ?? r.warning ?? null)).toBeNull();
   });
 
   // Review P2/P3 round 2: an Intersect of two bodies that only touch was amber "Body 1 was removed
@@ -181,11 +205,14 @@ describe('Combine build', () => {
       .on('props', props(() => 1));
     let r = await combineDef.build(f(), {}, ctxOf(k, BODIES, { doc }));
     expect(r).toMatchObject({ ok: true, warning: 'Body 1 is now in 2 separate pieces' });
+    // A real surprise: a warning, never a note.
+    expect(r.ok && r.note).toBeUndefined();
     k = scriptKernel()
       .on('combine', () => ({ results: [result(1, 100, { solids: 2 })], timings: {} }))
       .on('props', props(() => 1));
     r = await combineDef.build(f({ op: 'intersect' }), {}, ctxOf(k, BODIES, { doc }));
     expect(r).toMatchObject({ ok: true, warning: 'Body 1 is now in 2 separate pieces' });
+    expect(r.ok && r.note).toBeUndefined();
     // A target that was in 2 pieces already: nothing new to say.
     k = scriptKernel()
       .on('combine', () => ({ results: [result(1, 100, { solids: 2 })], timings: {} }))

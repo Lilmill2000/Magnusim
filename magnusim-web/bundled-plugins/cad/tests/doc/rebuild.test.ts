@@ -1,7 +1,8 @@
 // The rebuild engine over a fake kernel: operations, cache (rebuild from the
 // first changed feature), failures as no-ops with downstream still trying,
 // validity and repair, suppression, rollback, watchdog stops, respawns,
-// busy() and onIdle, and the bodies up to an index (bodiesAt).
+// busy() and onIdle, the bodies up to an index (bodiesAt), and a feature's note
+// beside its state.
 // Solids come from sketches (a rectangle on Top, then Extrude: blockPair in
 // tests/doc/blocks.ts), as in the app since Box and Cylinder were removed.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -11,7 +12,8 @@ import { RebuildEngine, type RebuildOutput } from '../../src/doc/rebuild';
 import { deepFreeze, emptyDoc, emptyView } from '../../src/doc/schema';
 import { extrudeDef } from '../../src/features/extrude/def';
 import { sketchDef } from '../../src/features/sketch/def';
-import type { BodyOp, CadDoc, CadView, ExtrudeFeature, Feature, Param, Vec3 } from '../../src/types/doc';
+import { combineDef } from '../../src/features/combine/feature';
+import type { BodyOp, CadDoc, CadView, CombineFeature, ExtrudeFeature, Feature, Param, Vec3 } from '../../src/types/doc';
 import type { FeatureTypeDef } from '../../src/types/doc-service';
 import { BlockKernel, blockPair, circleSketch, profileOf } from './blocks';
 
@@ -54,7 +56,7 @@ function setup() {
     }
     return outs[outs.length - 1];
   }
-  return { kernel, engine, outs, run, respawns };
+  return { kernel, engine, outs, run, respawns, registry };
 }
 
 /** The blind or first distance of an extrude_regions call's extent (mm). */
@@ -228,6 +230,35 @@ describe('rebuild engine', () => {
     const out = outs.at(-1)!;
     expect(out.features.f_ex1).toMatchObject({ state: 'warning', message: 'Body 1 could not be displayed: worker error', actions: ['retry'] });
     expect(out.bodies[0].tess).toBeNull();
+  });
+
+  // Daniel's poker chip: a Join of pieces that do not touch is often meant; its words are a note
+  // (an info mark in the tree), not a warning.
+  it("a feature's note is said beside its state: ok with a note, a warning keeps both; a rename follows from the cache", async () => {
+    const { kernel, registry, run } = setup();
+    let warn = false;
+    let builds = 0;
+    const noted: FeatureTypeDef = {
+      ...(combineDef as unknown as FeatureTypeDef),
+      async build(f) {
+        builds++;
+        return { ok: true, bodies: [], removed: [], note: `Body 1 holds 2 separate pieces (${f.name})`, ...(warn ? { warning: `${f.name}: Body 1 was repaired: check the result` } : {}) };
+      },
+    };
+    registry.register(noted);
+    const join = (name: string, keepTools = true): CombineFeature => ({ id: 'f_c', type: 'combine', name, op: 'join', targets: ['b_1'], tools: ['b_2'], keepTools });
+    const out = await run(docOf([block(1, 'new', [0, 0, 0]), block(2, 'new', [50, 0, 0]), [join('Combine 1')]]));
+    expect(out.features.f_c).toEqual({ bodiesBefore: 2, state: 'ok', note: 'Body 1 holds 2 separate pieces (Combine 1)', ms: expect.any(Number) });
+    // Renamed: from the cache, in the new name.
+    kernel.calls = [];
+    const renamed = await run(docOf([block(1, 'new', [0, 0, 0]), block(2, 'new', [50, 0, 0]), [join('Inlay join')]]));
+    expect(builds).toBe(1);
+    expect(renamed.features.f_c).toMatchObject({ state: 'ok', note: 'Body 1 holds 2 separate pieces (Inlay join)' });
+    expect(renamed.features.f_c.message).toBeUndefined();
+    // A warning too: the state is the warning's, the note stays beside it.
+    warn = true;
+    const both = await run(docOf([block(1, 'new', [0, 0, 0]), block(2, 'new', [50, 0, 0]), [join('Combine 1', false)]]));
+    expect(both.features.f_c).toMatchObject({ state: 'warning', message: 'Combine 1: Body 1 was repaired: check the result', note: 'Body 1 holds 2 separate pieces (Combine 1)' });
   });
 
   it('suppressed and rolled-back features are not built', async () => {

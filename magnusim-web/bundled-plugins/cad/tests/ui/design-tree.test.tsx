@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Feature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
+import { ICONS } from '../../src/ui/Icon';
 import { makeServices, type TestServices } from './fake-doc';
 import { mountUi } from './mount';
 
@@ -164,6 +165,45 @@ describe('design tree', () => {
     act(() => t.doc.setStatus(f[0].id, { state: 'warning', message: 'Nothing to cut' }));
     expect(ui.node(f[0].id).className).toContain('is-warning');
     expect(ui.$(`[data-tree-node="${f[0].id}"] [data-feature-badge]`)!.getAttribute('data-feature-badge')).toBe('warning');
+  });
+
+  // Daniel's poker chip: a Join of an inlay's 8 spots and rings, meant to stay apart, showed a warning
+  // triangle and "What's wrong: Inlay is now 8 separate solids: the tools do not touch it".
+  it('shows a note as a quiet info mark with a "Note" tooltip, not amber; a warning keeps its badge and says the note after it', () => {
+    const note = "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap)";
+    const badge = (id: string) => ui.$(`[data-tree-node="${id}"] [data-feature-badge]`);
+    act(() => t.doc.setStatus(f[1].id, { state: 'ok', note }));
+    const mark = badge(f[1].id)!;
+    expect(mark.getAttribute('data-feature-badge')).toBe('note');
+    expect(mark.className).toBe('cad-badge is-note');
+    expect(mark.getAttribute('aria-label')).toBe(`Note: ${note}`);
+    expect(mark.querySelector('path')!.getAttribute('d')).toBe(ICONS.info);
+    // The row itself is as an ok row: no amber, no red, state ok.
+    expect(ui.node(f[1].id).className).not.toMatch(/is-(warning|error)/);
+    expect(ui.node(f[1].id).getAttribute('data-state')).toBe('ok');
+    fireEvent.mouseEnter(mark);
+    expect(ui.tip()).toBe(`Note${note}`);
+    expect(ui.tip()).not.toContain("What's wrong");
+    fireEvent.mouseLeave(mark);
+    // A click opens the feature, as a warning badge's does.
+    fireEvent.click(mark);
+    expect(t.doc.calls).toContain(`beginEdit ${f[1].id}`);
+    // A real warning beside the note: the warning's badge, its tooltip says both.
+    act(() => t.doc.setStatus(f[1].id, { state: 'warning', message: 'Body 1 was repaired: check the result', note }));
+    const warned = badge(f[1].id)!;
+    expect(warned.getAttribute('data-feature-badge')).toBe('warning');
+    expect(warned.querySelector('path')!.getAttribute('d')).toBe(ICONS.warning);
+    expect(ui.node(f[1].id).className).toContain('is-warning');
+    expect(warned.getAttribute('aria-label')).toBe(`What's wrong: Body 1 was repaired: check the result. Note: ${note}`);
+    fireEvent.mouseEnter(warned);
+    expect(ui.tip()).toBe(`What's wrongBody 1 was repaired: check the result\nNote: ${note}`);
+    fireEvent.mouseLeave(warned);
+    // A failed feature has no note to show; nor has a feature without one.
+    act(() => t.doc.setStatus(f[1].id, { state: 'error', message: 'Extrude 2 failed', note }));
+    expect(badge(f[1].id)!.getAttribute('data-feature-badge')).toBe('error');
+    expect(badge(f[1].id)!.getAttribute('aria-label')).toBe("What's wrong: Extrude 2 failed");
+    act(() => t.doc.setStatus(f[1].id, { state: 'ok' }));
+    expect(badge(f[1].id)).toBeNull();
   });
 
   it('opens the feature panel on double-click, but not for a rolled-back feature', () => {
