@@ -35,11 +35,13 @@
  *   B results (their pictures with them) and keep the rest. The history goes as stored, so the
  *   model's earlier thinking stays valid. A 400 that names context management is sent once more
  *   without it, and that model goes without it for the rest of the process.
+ * - The models list's max_input_tokens is kept per model (prices.ts noteListedContext): a
+ *   conversation made after it is full at 80% of that context.
  * - Headers: only the allowlist leaves, the key only as x-api-key, never Authorization.
  */
 import { alog } from '../log.ts';
 import { emitSchema } from '../schema.ts';
-import { FALLBACK_TARGETS, priceRow } from '../prices.ts';
+import { FALLBACK_TARGETS, noteListedContext, priceRow } from '../prices.ts';
 import { assistantState } from '../state.ts';
 import {
   ProviderError,
@@ -82,7 +84,7 @@ type RawEvent = Json & { type?: string };
 
 interface Client {
   beta: { messages: { create(body: Json, opts: { signal: AbortSignal }): Promise<AsyncIterable<RawEvent>> } };
-  models: { list(params: Json, opts: { signal: AbortSignal }): Promise<{ data?: Array<{ id?: unknown; display_name?: unknown }> }> };
+  models: { list(params: Json, opts: { signal: AbortSignal }): Promise<{ data?: Array<{ id?: unknown; display_name?: unknown; max_input_tokens?: unknown }> }> };
 }
 type ClientCtor = new (opts: Json) => Client;
 
@@ -595,6 +597,8 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
         try {
           const c = await client(String(key), wd, null);
           const page = await c.models.list({ limit: 100 }, { signal: sig });
+          // Each model's context as the provider says it (conversations made from now on use it).
+          for (const m of page.data ?? []) if (typeof m.id === 'string' && m.id) noteListedContext('anthropic', m.id, m.max_input_tokens);
           return (page.data ?? [])
             .filter((m) => typeof m.id === 'string' && m.id)
             .map((m): ModelInfo => ({ id: String(m.id), label: typeof m.display_name === 'string' && m.display_name ? m.display_name : String(m.id), priced: !!priceRow(String(m.id)) }));

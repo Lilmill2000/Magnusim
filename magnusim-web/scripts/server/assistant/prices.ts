@@ -10,7 +10,12 @@
  * Two kinds of cache write are priced: `write5m` (the first provider's 5-minute entries;
  * the second provider's only kind, its 30-minute entries) and `write1h` (the first
  * provider's 1-hour entries; the second provider has none, so it repeats write5m).
+ *
+ * A row's `context` is the model's context window in tokens, from the provider's model
+ * reference (null where nobody read it): contextWindow() takes the provider's own models list
+ * first (Anthropic's max_input_tokens), then the row, else a safe 200K.
  */
+import { assistantState } from './state.ts';
 import type { Attempt, ProviderId, Usage } from './types.ts';
 
 export const PRICES_AS_OF = '2026-10-16';
@@ -27,6 +32,8 @@ export interface PriceRow extends Rates {
   model: string;
   provider: 'anthropic' | 'openai';
   label: string;
+  /** The model's context window in tokens (its provider's model reference), or null where not read. */
+  context: number | null;
   /** Prompts (all input tokens of one request) above `above` tokens pay these instead. */
   long: (Rates & { above: number }) | null;
   /** Shown in Settings' model list (fallback targets are not). */
@@ -34,6 +41,12 @@ export interface PriceRow extends Rates {
 }
 
 const ANTHROPIC_PRICES = 'https://platform.claude.com/docs/en/about-claude/pricing';
+/**
+ * The 1M-token context of the Anthropic rows: the "Current Models" table of the claude-api
+ * skill's model reference (read 2026-10-29), Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5
+ * and Haiku 5.5 alike.
+ */
+const ONE_MILLION = 1_000_000;
 const OPENAI_PRICES = 'https://developers.openai.com/api/docs/pricing';
 
 function row(
@@ -41,13 +54,14 @@ function row(
   model: string,
   label: string,
   [input, write5m, write1h, read, output]: [number, number, number, number, number],
-  o: { picker?: boolean; long?: [number, number, number, number, number, number] } = {},
+  o: { picker?: boolean; long?: [number, number, number, number, number, number]; context?: number } = {},
 ): PriceRow {
   const l = o.long;
   return Object.freeze({
     provider,
     model,
     label,
+    context: o.context ?? null,
     input,
     write5m,
     write1h,
@@ -61,19 +75,19 @@ function row(
 /** [input, 5 m write, 1 h write, cache read, output]; long: [above, input, 5 m, 1 h, read, output]. */
 export const PRICES: readonly PriceRow[] = Object.freeze([
   // ANTHROPIC_PRICES, read 2026-10-16. Cache reads are 0.05x input on this model.
-  row('anthropic', 'claude-opus-5-5', 'Claude Opus 5.5', [4, 5, 8, 0.2, 20]),
+  row('anthropic', 'claude-opus-5-5', 'Claude Opus 5.5', [4, 5, 8, 0.2, 20], { context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16. Cache reads $0.10 (0.05x input), not the $0.20 of the plan.
   // Read again 2026-10-29: still $0.10 there ("0.05x the base input price"), where the claude-api
   // skill's model notes (cached 2026-10-06) say $0.20; the pricing page is what is billed.
-  row('anthropic', 'claude-sonnet-5-5', 'Claude Sonnet 5.5', [2, 2.5, 4, 0.1, 10]),
+  row('anthropic', 'claude-sonnet-5-5', 'Claude Sonnet 5.5', [2, 2.5, 4, 0.1, 10], { context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16: prompts over 100,000 tokens pay the second row.
-  row('anthropic', 'claude-haiku-5-5', 'Claude Haiku 5.5', [0.1, 0.125, 0.2, 0.01, 0.5], { long: [100_000, 0.5, 0.625, 1, 0.05, 2.5] }),
+  row('anthropic', 'claude-haiku-5-5', 'Claude Haiku 5.5', [0.1, 0.125, 0.2, 0.01, 0.5], { long: [100_000, 0.5, 0.625, 1, 0.05, 2.5], context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16. A refusal fallback target only (not in the picker).
-  row('anthropic', 'claude-opus-5', 'Claude Opus 5', [5, 6.25, 10, 0.5, 25], { picker: false }),
+  row('anthropic', 'claude-opus-5', 'Claude Opus 5', [5, 6.25, 10, 0.5, 25], { picker: false, context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16. A refusal fallback target only.
-  row('anthropic', 'claude-opus-4-8', 'Claude Opus 4.8', [5, 6.25, 10, 0.5, 25], { picker: false }),
+  row('anthropic', 'claude-opus-4-8', 'Claude Opus 4.8', [5, 6.25, 10, 0.5, 25], { picker: false, context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16. A refusal fallback target only.
-  row('anthropic', 'claude-sonnet-5', 'Claude Sonnet 5', [2, 2.5, 4, 0.2, 10], { picker: false }),
+  row('anthropic', 'claude-sonnet-5', 'Claude Sonnet 5', [2, 2.5, 4, 0.2, 10], { picker: false, context: ONE_MILLION }),
   // OPENAI_PRICES (Standard), read 2026-10-16: cache writes 1.25x input; over 272K tokens the long row.
   row('openai', 'gpt-6.1-sol', 'GPT-6.1 Sol', [2, 2.5, 2.5, 0.1, 10], { long: [272_000, 4, 5, 5, 0.2, 15] }),
   // OPENAI_PRICES (Standard), read 2026-10-16.
@@ -111,6 +125,32 @@ export function canonicalModel(id: string): string {
 export function priceRow(model: string): PriceRow | null {
   const want = canonicalModel(model);
   return PRICES.find((r) => r.model === want) ?? null;
+}
+
+/** A cloud model's context when nothing says it: a safe 200K. */
+export const CLOUD_CONTEXT_DEFAULT = 200_000;
+
+/** What a provider's models list said of each model's context (Anthropic's max_input_tokens), for this process. */
+const LISTED_CONTEXT = new Map<string, number>();
+const listedKey = (provider: ProviderId, model: string) => `${assistantState().bootId} ${provider} ${model}`;
+
+/** A provider's models list named a model's context (tokens): contextWindow() takes it first, until the server starts again. */
+export function noteListedContext(provider: ProviderId, model: string, tokens: unknown): void {
+  if (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens <= 0) return;
+  const boot = `${assistantState().bootId} `;
+  for (const k of LISTED_CONTEXT.keys()) if (!k.startsWith(boot)) LISTED_CONTEXT.delete(k);
+  LISTED_CONTEXT.set(listedKey(provider, model), tokens);
+}
+
+/**
+ * A cloud model's context window: what its provider's models list said this process, else its
+ * row's, else CLOUD_CONTEXT_DEFAULT (`known` false: Magnusim's own figure).
+ */
+export function contextWindow(provider: ProviderId, model: string): { tokens: number; known: boolean } {
+  const listed = LISTED_CONTEXT.get(listedKey(provider, model));
+  if (listed) return { tokens: listed, known: true };
+  const r = priceRow(model);
+  return r?.context && r.provider === provider ? { tokens: r.context, known: true } : { tokens: CLOUD_CONTEXT_DEFAULT, known: false };
 }
 
 /**

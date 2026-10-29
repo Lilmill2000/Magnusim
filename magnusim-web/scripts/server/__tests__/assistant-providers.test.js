@@ -1248,6 +1248,19 @@ describe('model lists', () => {
     assert.deepEqual(c.map((m) => m.id), ['qwen3.8-27b', 'gemma-4-31b']);
   });
 
+  it("the first dialect's list says each model's context (max_input_tokens): a conversation's window takes it first, for this process", async () => {
+    fake.models(['claude-opus-5-5', { id: 'claude-future-9', max_input_tokens: 2_000_000 }, 'claude-quiet-1'], 'anthropic');
+    try {
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-future-9'), { tokens: 200_000, known: false }, 'before the list: 200K');
+      await adapterFor('anthropic').listModels(new AbortController().signal);
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-future-9'), { tokens: 2_000_000, known: true });
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-quiet-1'), { tokens: 200_000, known: false }, 'a model the list gives none for');
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-opus-5-5'), { tokens: 1_000_000, known: true });
+    } finally {
+      fake.models(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], 'anthropic');
+    }
+  });
+
   it('a list that never comes: the watchdog ends it with timeout, and Stop ends it at once', async () => {
     const lists = () => fake.requests().filter((r) => r.path.endsWith('/v1/models')).length;
     for (const provider of PROVIDERS) {
@@ -2051,6 +2064,27 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     ['gpt-6-sol', 2, 2.5, 2.5, 0.2, 10, [272_000, 4, 5, 5, 0.4, 15], true],
     ['gpt-6-luna', 0.1, 0.125, 0.125, 0.01, 0.5, [272_000, 0.2, 0.25, 0.25, 0.02, 0.75], true],
   ];
+
+  it("every row says its model's context: 1M for each Anthropic row (its model reference), none read yet for OpenAI's", () => {
+    assert.ok(prices.PRICES.every((r) => Object.hasOwn(r, 'context')));
+    assert.deepEqual(
+      prices.PRICES.map((r) => [r.model, r.context]),
+      [
+        ['claude-opus-5-5', 1_000_000],
+        ['claude-sonnet-5-5', 1_000_000],
+        ['claude-haiku-5-5', 1_000_000],
+        ['claude-opus-5', 1_000_000],
+        ['claude-opus-4-8', 1_000_000],
+        ['claude-sonnet-5', 1_000_000],
+        ['gpt-6.1-sol', null],
+        ['gpt-6-astra', null],
+        ['gpt-6-sol', null],
+        ['gpt-6-luna', null],
+      ],
+    );
+    assert.deepEqual(prices.contextWindow('openai', 'gpt-6.1-sol'), { tokens: 200_000, known: false });
+    assert.deepEqual(prices.contextWindow('anthropic', 'claude-sonnet-5-5-20261001'), { tokens: 1_000_000, known: true }, 'a dated id');
+  });
 
   it('every row is pinned, with its date', () => {
     assert.equal(prices.PRICES_AS_OF, '2026-10-16');

@@ -636,6 +636,13 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     alog('info', 'conversation full', { turn: t.id, conversation: conv.id, reason: d.reason, used: d.used, limit: d.limit, near: !!d.near });
     t.end('capped', 'conversation_full', fullText(d, label));
   };
+  // Any other limit that ends the turn once the model was asked to sum up: the conversation is
+  // full all the same (no later message is taken), and the end says both.
+  const endCapped = (reason: string, text: string) => {
+    if (!finalReason) return t.end('capped', reason, text);
+    alog('info', 'conversation full', { turn: t.id, conversation: conv.id, reason: finalReason.reason, used: finalReason.used, limit: finalReason.limit, near: true, ended_by: reason });
+    t.end('capped', 'conversation_full', `${text} ${fullText(finalReason, label)}`);
+  };
 
   for (let step = 1; ; step += 1) {
     if (stoppedNow(t)) return;
@@ -656,7 +663,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     });
     t.setUsed(limitsNow());
     const hit = stepCap(t, caps);
-    if (hit) return t.end('capped', hit.reason, hit.text);
+    if (hit) return endCapped(hit.reason, hit.text);
     // A full conversation sends nothing more, but for the request that sums up (it stays within
     // every provider's limits: a step's calls stop before their pictures could pass one).
     // A context counts only for the server that reported it (the turn's address).
@@ -792,10 +799,10 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
     if (priced && est.capped) {
       const reason: CapReason = turnRoom <= dayRoom ? 'turn_usd' : 'day_usd';
-      return t.end('capped', reason, capText(reason, caps));
+      return endCapped(reason, capText(reason, caps));
     }
     let reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
-    if (ledger && !reservation) return t.end('capped', 'day_usd', capText('day_usd', caps));
+    if (ledger && !reservation) return endCapped('day_usd', capText('day_usd', caps));
     if (t.signal.aborted) {
       if (ledger && reservation) await ledger.settle(reservation, 0);
       stoppedNow(t);
@@ -903,7 +910,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       // Only an overload whose resend no longer fits the money left gets here.
       if (stoppedNow(t)) return;
       const reason = capEnd ?? 'turn_usd';
-      return t.end('capped', reason, capText(reason, caps));
+      return endCapped(reason, capText(reason, caps));
     }
     t.servedBy = out.servedBy || t.servedBy;
     for (const text of out.notes ?? []) {
@@ -922,7 +929,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       return t.end('failed', `refusal:${out.refusal?.category ?? 'none'}`, 'The model declined this request.');
     }
     if (out.stop === 'context') return t.end('failed', 'context', 'This conversation is too long for the model. Start a new one.');
-    if (out.stop === 'max_tokens') return t.end('capped', 'max_tokens', 'The model ran out of room mid-answer.');
+    if (out.stop === 'max_tokens') return endCapped('max_tokens', 'The model ran out of room mid-answer.');
 
     const calls = out.message.parts.filter(isCall);
     // What this step adds (its answer, its results or a review prompt): nearlyFull's margin.

@@ -9,6 +9,9 @@
 //   POST /compat/v1/chat/completions   GET /compat/v1/models      (the local-server dialect)
 //   GET /compat/api/v0/models/<id>     POST /compat/api/show      (a local server's model row)
 //
+// The Messages dialect's model list gives each model's max_input_tokens, as the real one does:
+// 1,000,000 for the default ids, an entry's own `max_input_tokens` ({id, max_input_tokens}), and
+// none for any other id.
 // The model rows (CAD tools spec H5) are served for models(list) entries that are rows,
 // `{id, context?, max?, type?, route?: 'models' | 'show'}`, in the shapes of
 // LOCAL_SERVER_ROWS: by default an LM Studio row at the first route (`context` loaded, so
@@ -333,6 +336,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   const modelLists = { anthropic: [...DEFAULT_MODELS.anthropic], openai: [...DEFAULT_MODELS.openai], compat: [...DEFAULT_MODELS.compat] };
   /** The local server's model rows, by id (models() entries that are rows). */
   const modelRows = new Map();
+  /** The Messages dialect's max_input_tokens by model id (the list's own word on each model's context). */
+  const modelContexts = new Map(DEFAULT_MODELS.anthropic.map((id) => [id, 1_000_000]));
   /** Local-server models that can't read images (textOnly()). */
   const textOnlyModels = new Set();
   /** Strict schema bytes a request may carry, by dialect (strictBudget()). */
@@ -846,7 +851,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         if (fail) return json(fail.status, fail.body ?? errorBody(dialect, fail.status, `fake failure ${fail.status}`), fail.headers);
         const ids = modelLists[dialect];
         if (dialect === 'anthropic') {
-          return json(200, { data: ids.map((id) => ({ type: 'model', id, display_name: id, created_at: '2026-01-01T00:00:00Z' })), has_more: false, first_id: ids[0] ?? null, last_id: ids[ids.length - 1] ?? null });
+          const row = (id) => ({ type: 'model', id, display_name: id, created_at: '2026-01-01T00:00:00Z', ...(modelContexts.has(id) ? { max_input_tokens: modelContexts.get(id) } : {}) });
+          return json(200, { data: ids.map(row), has_more: false, first_id: ids[0] ?? null, last_id: ids[ids.length - 1] ?? null });
         }
         return json(200, { object: 'list', data: ids.map((id) => ({ id, object: 'model', created: 0, owned_by: 'fake' })) });
       }
@@ -926,11 +932,15 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     /**
      * The model ids the models routes list (every dialect, or one: 'anthropic' | 'openai' |
      * 'compat'). An entry may be a row, `{id, context?, max?, type?, route?}`: the local
-     * server's model routes answer for it (see the top), and a later list replaces the rows.
+     * server's model routes answer for it (see the top), and a later list replaces the rows;
+     * `{id, max_input_tokens}` sets what the Messages dialect's list says of its context.
      */
     models(list, dialect) {
       const ids = list.map((m) => (m && typeof m === 'object' ? m.id : m));
       for (const d of dialect ? [dialect] : Object.keys(modelLists)) modelLists[d] = [...ids];
+      if (!dialect || dialect === 'anthropic') {
+        for (const m of list) if (m && typeof m === 'object' && Number.isInteger(m.max_input_tokens)) modelContexts.set(m.id, m.max_input_tokens);
+      }
       if (!dialect || dialect === 'compat') {
         modelRows.clear();
         for (const m of list) if (m && typeof m === 'object') modelRows.set(m.id, { ...m });

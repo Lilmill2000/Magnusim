@@ -10,9 +10,15 @@
  * call of an appended answer gets exactly one result in the next user message; repair()
  * answers any call a crashed or stopped turn left open, before anything else is added.
  *
- * Limits: 20 conversations (the oldest idle one goes first), 2 hours idle, 300 messages,
- * 100 images and 20 MB each, and "full" at 80% of the model's context (a local server's
- * model: the context its server reported, else 128K tokens). Nothing is written to disk.
+ * Limits: 20 conversations (the oldest idle one goes first), 2 hours idle, 300 messages and
+ * 20 MB each, and "full" at 80% of the model's context, fixed when it is made (prices.ts
+ * contextWindow: what the provider's models list said, else the model's row, else 200K; a
+ * local server's model: the context its server reported, else 128K tokens). Pictures, by what
+ * the provider takes in one request (imageLimit): Anthropic counts every picture the
+ * conversation holds (each request sends them all; its context editing clears them only after
+ * the upload) against 600 for a model of more than 200K tokens of context, else 100; OpenAI
+ * and a local server count only the pictures a request sends (its oldest results go without
+ * theirs, providers/common.ts) against 100. Nothing is written to disk.
  * fullDetail() names the limit a conversation reached with its numbers (fullText words it for
  * the person), and room() how close it is to the nearest one. nearlyFull() says when the next
  * step could reach one (the loop then asks the model to sum up, and closes the conversation:
@@ -28,6 +34,8 @@
  * onDrop's listeners, so the agent working for it ends with it.
  */
 import { randomBytes } from 'node:crypto';
+import { contextWindow } from './prices.ts';
+import { clearedResults, sentMessages } from './providers/common.ts';
 import { capResult } from './sanitize.ts';
 import { assistantState } from './state.ts';
 import type { AgentProviderId } from './agents/known.ts';
@@ -44,8 +52,19 @@ export const CONVERSATION_LIMITS = Object.freeze({
   turns: 200,
 });
 
-/** Context windows, in tokens: a local model's when its server reports none, and a safe 200K for cloud models. */
+/** Context windows, in tokens: a local model's when its server reports none, and a safe 200K for cloud models (prices.ts contextWindow). */
 export const CONTEXT_TOKENS = Object.freeze({ cloud: 200_000, local: 128_000 });
+
+/**
+ * The pictures one request may carry (https://platform.claude.com/docs/en/build-with-claude/vision,
+ * "Request limits", read 2026-10-29: 100 for a model with a 200K-token context, 600 for the
+ * others; every image block counts, earlier turns' and those inside tool results too). Anthropic
+ * by its model's window; OpenAI and a local server Magnusim's own 100.
+ */
+export function imageLimit(provider: ProviderId | AgentProviderId, window: number): number {
+  if (provider !== 'anthropic') return CONVERSATION_LIMITS.images;
+  return window > CONTEXT_TOKENS.cloud ? 600 : 100;
+}
 
 export type FullReason = 'messages' | 'images' | 'bytes' | 'context';
 
@@ -67,6 +86,8 @@ export interface FullDetail extends Room {
   of: 'model' | 'app';
   window?: number;
   near?: boolean;
+  /** Pictures counted as each request sends them (OpenAI, a local server), not all it holds. */
+  sent?: boolean;
 }
 
 /** What one step added, or the most any step of a conversation added (nearlyFull's margin). */
@@ -104,9 +125,11 @@ export function fullText(d: FullDetail, label: string): string {
       why = `it has ${grouped(d.used)} messages, and one conversation holds at most ${grouped(d.limit)}`;
       break;
     case 'images':
-      why = d.of === 'model'
-        ? `it holds ${grouped(d.used)} pictures, and ${label} takes at most ${grouped(d.limit)} in one request`
-        : `it holds ${grouped(d.used)} pictures, and Magnusim keeps at most ${grouped(d.limit)} in one conversation`;
+      why = d.sent
+        ? `each request sends ${grouped(d.used)} pictures, and Magnusim sends at most ${grouped(d.limit)} in one request`
+        : d.of === 'model'
+          ? `it holds ${grouped(d.used)} pictures, and ${label} takes at most ${grouped(d.limit)} in one request`
+          : `it holds ${grouped(d.used)} pictures, and Magnusim keeps at most ${grouped(d.limit)} in one conversation`;
       break;
     case 'bytes':
       why = `it holds ${megabytes(d.used)} of results and pictures, and Magnusim keeps at most ${megabytes(d.limit)} for one conversation`;
@@ -161,6 +184,8 @@ export class Conversation {
   turnsDropped = 0;
   /** Its first turn's title ('' before any). */
   title = '';
+  /** A cloud model's context window, fixed when it was made (prices.ts contextWindow); null for a local server or a coding agent. */
+  readonly window: { tokens: number; known: boolean } | null;
   /** Set when a turn ended it nearly full (after the model summed up): it is full from then on. */
   closedBy: FullDetail | null = null;
   private readonly list: Message[] = [];
@@ -176,6 +201,7 @@ export class Conversation {
     this.boundProject = b.projectId;
     this.createdAt = now;
     this.lastUsed = now;
+    this.window = b.provider === 'anthropic' || b.provider === 'openai' ? contextWindow(b.provider, b.model) : null;
   }
 
   get projectId(): string | null {
@@ -268,13 +294,35 @@ export class Conversation {
     const L = CONVERSATION_LIMITS;
     const context = baseUrl === undefined ? this.contextTokens : this.contextAt(baseUrl);
     const local = this.provider === 'openai_compatible';
-    const window = local ? (context ?? CONTEXT_TOKENS.local) : CONTEXT_TOKENS.cloud;
+    const window = local ? (context ?? CONTEXT_TOKENS.local) : (this.window?.tokens ?? CONTEXT_TOKENS.cloud);
+    const known = local ? !!context : !!this.window?.known;
+    const sent = this.provider !== 'anthropic';
     return [
       { reason: 'messages', used: this.list.length, limit: L.messages, of: 'app' },
-      { reason: 'images', used: this.imageCount, limit: L.images, of: 'app' },
+      {
+        reason: 'images',
+        used: this.pictures(),
+        limit: imageLimit(this.provider, window),
+        of: this.provider === 'anthropic' && known ? 'model' : 'app',
+        ...(sent ? { sent: true } : {}),
+      },
       { reason: 'bytes', used: this.byteCount, limit: L.bytes, of: 'app' },
-      { reason: 'context', used: this.promptTokens, limit: Math.floor(L.fullFraction * window), of: local && context ? 'model' : 'app', window },
+      { reason: 'context', used: this.promptTokens, limit: Math.floor(L.fullFraction * window), of: known ? 'model' : 'app', window },
     ];
+  }
+
+  /**
+   * The pictures its limit counts: every one it holds on Anthropic (each request uploads them
+   * all), else those its next request sends (the person's, and those of the results not left out).
+   */
+  pictures(): number {
+    if (this.provider === 'anthropic') return this.imageCount;
+    let n = 0;
+    for (const m of sentMessages(this.list, clearedResults(this.list))) {
+      if (m.role !== 'user') continue;
+      for (const p of m.parts) n += p.type === 'image' ? 1 : p.type === 'tool_result' ? p.images.length : 0;
+    }
+    return n;
   }
 
   /** The first limit this conversation reached, with its numbers (null while more turns fit); a closed one's, else. */
@@ -284,7 +332,7 @@ export class Conversation {
 
   /** Its counts now (messages, pictures, bytes), for what a step adds (noteStep). */
   counts(): Growth {
-    return { messages: this.list.length, images: this.imageCount, bytes: this.byteCount };
+    return { messages: this.list.length, images: this.pictures(), bytes: this.byteCount };
   }
 
   /** A step ended: what it added since `before` (counts() then) widens the margin nearlyFull keeps. */

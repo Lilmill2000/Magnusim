@@ -2,7 +2,9 @@
 // follows what it does. A request's transcript as it streams (the person's message, the
 // model's text, a tool step with its badge, summary and time, a picture inline), the turn's end
 // and counters. A file attached in the dock, read by the workspace's own tool in its
-// conversation and never in another.
+// conversation and never in another. A long conversation: its old tool results go through the
+// provider's context editing, the model sums up before it fills, and the full line, the room it
+// has and today's limit say what is true, with their numbers.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys), the
 // scripted model (support/fake-llm.mjs) and the ai-demo test plugin
 // (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks allow 2 px (fonts
@@ -571,4 +573,89 @@ test("Undo these changes: the workspace's offer shows on the ended request, undo
   await w.frame.locator('#bump').click();
   await expect(dockTurn(page).locator('[data-dock-undo]')).toHaveCount(0, STEP);
   await expect(w.frame.locator('#counter')).toHaveText('2');
+});
+
+// ---------------------------------------------------------------- a long conversation (chat fill)
+
+test('a long build in one conversation: 120 calls over three requests never fill it; from the 36th result each request asks the provider to clear the oldest in jumps of 24, and every request is answered', async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  await openDock(page);
+  const add = Array.from({ length: 40 }, () => ({ name: `${PLUGIN}__add`, input: { by: 1 } }));
+  const before = chats().length;
+  fake.reply({ tools: add }, { tools: add }, { tools: add }, { text: 'Added 120.' });
+  await dockSend(page, 'Add one, 120 times');
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible({ timeout: 120_000 });
+  await expect(w.frame.locator('#counter')).toHaveText('120');
+  const sent = chats().slice(before);
+  expect(sent.length).toBe(4);
+  // Request 3: 80 results, the 40 just made never cut, so 24 of the first step's; request 4: 72 of 120.
+  expect(sent.map((r) => r.body.context_management?.edits?.[0]?.keep?.value ?? null)).toEqual([null, null, 56, 48]);
+  expect(sent.every((r) => String(r.headers['anthropic-beta']).split(',').includes('context-management-2025-06-27')), 'the same beta on every request').toBe(true);
+  // The history goes whole (only the provider clears): request 4 carries all 120 results.
+  expect(JSON.stringify(sent[3].body.messages).match(/"tool_result"/g).length).toBe(120);
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveCount(0);
+  await expect(dock(page).locator('[data-dock-send]')).toBeVisible();
+  await expect(turn.getByText('This conversation is full', { exact: false })).toHaveCount(0);
+});
+
+test('a conversation the next step could fill: the model sums up after its results, the request ends "Limit reached" with the full line in numbers, and Send says the same with New conversation', async ({ page, request }) => {
+  await openCounter(page, request);
+  await openDock(page);
+  const before = chats().length;
+  // 799,990 tokens, cached (so the sum-up is cheap): Claude Opus 5.5 is full at 80% of 1,000,000.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, cacheRead: 799_980 } }, { text: 'Added one. Nothing is left to do.' });
+  await dockSend(page, 'Add one');
+  const turn = dockTurn(page);
+  const said = "This conversation is full: the last request used 799,990 of Claude Opus 5.5's 1,000,000-token context, and a conversation is full at 80% (its next step could pass that). Start a new one.";
+  await expect(turn.locator('[data-turn-end="capped"]')).toHaveText(`Limit reached${said}`, STEP);
+  await expect(turn.locator('[data-dock-text]').last()).toHaveText('Added one. Nothing is left to do.');
+  await expect(turn.locator('[data-dock-line="note"]')).toContainText(['This conversation is nearly full; asking the model to sum up.']);
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveText(said, STEP);
+  await expect(dock(page).locator('[data-dock-new-line]')).toBeVisible();
+  const [first, sumUp] = chats().slice(before);
+  expect(sumUp.body.tools.map((t) => t.name), 'the same tools').toEqual(first.body.tools.map((t) => t.name));
+  const last = sumUp.body.messages.at(-1).content;
+  expect(last[0].type).toBe('tool_result');
+  expect(last.at(-1).text).toBe("This conversation is nearly full (context 799,990 of 800,000 tokens). Don't call tools now: say what is done and what is left.");
+  await shot(page, 'conversation-full');
+});
+
+test('Claude Opus 5.5 keeps its own 1M context: after a 300,000-token request the next message goes and is answered, with no full line', async ({ page, request }) => {
+  await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ text: 'Read it all.', usage: { input: 10, cacheRead: 299_990 } });
+  await dockSend(page, 'Read everything');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  fake.reply({ text: 'And again.' });
+  await dockSend(page, 'Once more');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(dockTurn(page).locator('[data-dock-text]').last()).toHaveText('And again.');
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveCount(0);
+});
+
+test("today's limit: the request ends \"Limit reached\" saying to raise it in Settings (never \"Send another message\"), and from 80% of the day the meter says what costs less", async ({ page, request }) => {
+  // A clean day and $1 limits (restored after).
+  await postOk(request, '/api/test/assistant/reset', { files: true });
+  await useScriptedModel(request, host.base, fake, 'cloud');
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 1, day_usd: 1 } });
+  try {
+    await openCounter(page, request);
+    await openDock(page);
+    // $0.96 of input (240,000 tokens at Claude Opus 5.5's $4): 96% of the day.
+    fake.reply({ text: 'Read it.', usage: { input: 240_000, output: 10 } });
+    await dockSend(page, 'Read the counter');
+    const first = dockTurn(page);
+    await expect(first.locator('[data-turn-end="done"]')).toBeVisible(STEP);
+    await expect(first.locator('[data-dock-day-near]')).toHaveText(/^Today: \$0\.96 of \$1\.00\. A cheaper model or a lower Effort costs less\.$/);
+    // The next request can't fit in the $0.04 left today: nothing is sent.
+    const before = chats().length;
+    await dockSend(page, 'Read it again');
+    const second = dockTurn(page);
+    await expect(second.locator('[data-turn-end="capped"]')).toHaveText("Limit reachedToday's $1.00 limit is reached; it resets at midnight. Raise it in Settings → Assistant.", STEP);
+    await expect(second.locator('[data-turn-end="capped"]')).not.toContainText('Send another message');
+    expect(chats().length, 'nothing sent').toBe(before);
+  } finally {
+    await postOk(request, '/api/test/assistant/reset', { files: true });
+  }
 });

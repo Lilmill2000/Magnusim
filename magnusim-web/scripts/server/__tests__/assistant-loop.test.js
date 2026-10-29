@@ -510,6 +510,18 @@ describe('a conversation the next step could fill: the model sums up first (conv
     checkInvariants(assert, r.turn.conv, m.provider.requests);
   });
 
+  it("a sum-up the turn's money can't pay for: the turn ends capped (conversation_full), its words saying both", async () => {
+    const m = mk({ model: MODEL, hostTools: [peek()], caps: { turn_usd: 1 } });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.equal(m.provider.requests.length, 1, 'the sum-up is never sent');
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
+    assert.match(r.turn.message, /^The next step could go over this turn's \$1\.00 limit\. This conversation is full: the last request used 159,990 of the 200,000 tokens/);
+    const next = await startTurn(m, { text: 'y', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code], [409, 'conversation_full']);
+  });
+
   it('a sum-up request that never answers (Stop): the conversation is full all the same, so no later turn reads the note', async () => {
     const m = mk({ model: MODEL, hostTools: [peek()] });
     m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { text: 'Summing', hold: 'sum' });
@@ -1845,7 +1857,10 @@ describe('how many turns', () => {
     assert.equal(r.status, 202);
     await settled(r.turn);
     assert.equal(m.provider.requests[1].req.messages.length, 3, 'the second turn carries the first');
+    // Claude Opus 5.5's own 1M window: full at 800,000 (Magnusim once held every cloud model to 160,000).
     r.turn.conv.promptTokens = 0.8 * 200_000;
+    assert.equal(r.turn.conv.fullReason(), null);
+    r.turn.conv.promptTokens = 0.8 * 1_000_000;
     r = await startTurn(m, { text: 'y', conversation: conv });
     assert.deepEqual([r.status, r.body.code], [409, 'conversation_full']);
     assert.deepEqual(m.manager.forget(conv).body, { ok: true, forgotten: true });

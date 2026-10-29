@@ -19,7 +19,7 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 const { makeManager, relayServer, startTurn, settled, eventsOf, ScriptedProvider } = await import('./assistant-harness.js');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { TURN_LIMITS } = await import('../assistant/turns.ts');
-const { Conversation, fullText } = await import('../assistant/conversations.ts');
+const { Conversation, fullText, imageLimit } = await import('../assistant/conversations.ts');
 const { PROVIDER_LABELS } = await import('../assistant/providers/index.ts');
 
 const servers = [];
@@ -179,7 +179,8 @@ describe('keeping a conversation\'s turns (spec 9.7)', () => {
 
 describe('which limit a full conversation reached, and how close it is (the full line and the room readout)', () => {
   const PIC = { type: 'image', mediaType: 'image/png', base64: 'AAAA', width: 640, height: 480 };
-  const conv = (provider = 'anthropic', model = 'claude-opus-5-5') => new Conversation('c-1', { provider, model, projectId: null }, 0);
+  // A model the price table doesn't know: Magnusim's own 200K of context and 100 pictures.
+  const conv = (provider = 'anthropic', model = 'claude-test-9') => new Conversation('c-1', { provider, model, projectId: null }, 0);
   const pictures = (c, n) => {
     for (let i = 0; i < n; i += 1) c.append({ role: 'user', parts: [{ type: 'text', text: `p${i}` }, { ...PIC }] });
   };
@@ -191,7 +192,7 @@ describe('which limit a full conversation reached, and how close it is (the full
     assert.deepEqual(c.fullDetail(), { reason: 'images', used: 100, limit: 100, of: 'app' });
     assert.equal(c.fullReason(), 'images');
     assert.equal(
-      fullText(c.fullDetail(), 'Claude Opus 5.5'),
+      fullText(c.fullDetail(), 'claude-test-9'),
       'This conversation is full: it holds 100 pictures, and Magnusim keeps at most 100 in one conversation. Start a new one.',
     );
     assert.equal(
@@ -206,8 +207,8 @@ describe('which limit a full conversation reached, and how close it is (the full
     ctx.promptTokens = 162_000;
     assert.deepEqual(ctx.fullDetail(), { reason: 'context', used: 162_000, limit: 160_000, of: 'app', window: 200_000 });
     assert.equal(
-      fullText(ctx.fullDetail(), 'Claude Opus 5.5'),
-      'This conversation is full: the last request used 162,000 of the 200,000 tokens Magnusim counts for Claude Opus 5.5, and a conversation is full at 80%. Start a new one.',
+      fullText(ctx.fullDetail(), 'claude-test-9'),
+      'This conversation is full: the last request used 162,000 of the 200,000 tokens Magnusim counts for claude-test-9, and a conversation is full at 80%. Start a new one.',
     );
     // A local server that reported its model's context: the model's own.
     const local = conv('openai_compatible', 'qwen3.8-27b');
@@ -235,7 +236,7 @@ describe('which limit a full conversation reached, and how close it is (the full
     c.closedBy = c.nearlyFull({ promptTokens: 0 });
     assert.deepEqual(c.fullDetail(), { reason: 'images', used: 70, limit: 100, of: 'app', near: true });
     assert.equal(
-      fullText(c.fullDetail(), 'Claude Opus 5.5'),
+      fullText(c.fullDetail(), 'claude-test-9'),
       'This conversation is full: it holds 70 pictures, and Magnusim keeps at most 100 in one conversation (its next step could pass that). Start a new one.',
     );
     const msgs = conv();
@@ -243,6 +244,77 @@ describe('which limit a full conversation reached, and how close it is (the full
     assert.equal(msgs.nearlyFull({ promptTokens: 0 }), null, '297 + 0 + 2 < 300');
     msgs.append({ role: 'user', parts: [{ type: 'text', text: 'x' }] });
     assert.equal(msgs.nearlyFull({ promptTokens: 0 }).reason, 'messages', 'a sum-up adds 2');
+  });
+
+  it("each model's own window (fix 4): Claude Opus 5.5 holds 300,000 tokens and is full at 800,000; 600 pictures a request on a 1M model, 100 on one Magnusim doesn't know", () => {
+    const opus = conv('anthropic', 'claude-opus-5-5');
+    assert.deepEqual(opus.window, { tokens: 1_000_000, known: true });
+    opus.promptTokens = 300_000;
+    assert.equal(opus.fullDetail(), null, 'once full at 160,000');
+    opus.promptTokens = 800_000;
+    assert.deepEqual(opus.fullDetail(), { reason: 'context', used: 800_000, limit: 800_000, of: 'model', window: 1_000_000 });
+    assert.equal(
+      fullText(opus.fullDetail(), 'Claude Opus 5.5'),
+      "This conversation is full: the last request used 800,000 of Claude Opus 5.5's 1,000,000-token context, and a conversation is full at 80%. Start a new one.",
+    );
+    const pics = conv('anthropic', 'claude-sonnet-5-5');
+    // Ten to a message (the messages' own limit is 300).
+    for (let i = 0; i < 60; i += 1) pics.append({ role: 'user', parts: Array.from({ length: i === 59 ? 9 : 10 }, () => ({ ...PIC })) });
+    assert.equal(pics.images, 599);
+    assert.equal(pics.fullDetail(), null);
+    pictures(pics, 1);
+    assert.deepEqual(pics.fullDetail(), { reason: 'images', used: 600, limit: 600, of: 'model' });
+    assert.equal(
+      fullText(pics.fullDetail(), 'Claude Sonnet 5.5'),
+      'This conversation is full: it holds 600 pictures, and Claude Sonnet 5.5 takes at most 600 in one request. Start a new one.',
+    );
+    const unknown = conv('anthropic', 'claude-test-9');
+    assert.deepEqual(unknown.window, { tokens: 200_000, known: false });
+    pictures(unknown, 100);
+    assert.deepEqual(unknown.fullDetail(), { reason: 'images', used: 100, limit: 100, of: 'app' });
+    unknown.promptTokens = 160_000;
+    assert.equal(unknown.limits().find((l) => l.reason === 'context').limit, 160_000, 'an unknown cloud model keeps 200K');
+    assert.equal(imageLimit('anthropic', 1_000_000), 600);
+    assert.equal(imageLimit('anthropic', 200_000), 100);
+    assert.equal(imageLimit('openai', 1_000_000), 100);
+  });
+
+  it('OpenAI and a local server count the pictures a request sends: 150 held, 20 sent, not full', () => {
+    const o = conv('openai', 'gpt-6.1-sol');
+    assert.deepEqual(o.window, { tokens: 200_000, known: false }, 'no OpenAI row says its context');
+    o.append({ role: 'user', parts: [{ type: 'text', text: 'Build it' }] });
+    for (let s = 1; s <= 140; s += 1) {
+      o.append({ role: 'assistant', parts: [{ type: 'tool_call', callId: `c${s}`, name: 'snap', input: {} }], raw: { provider: 'openai', model: 'gpt-6.1-sol', payload: [] } });
+      o.append({ role: 'user', parts: [{ type: 'tool_result', callId: `c${s}`, isError: false, text: '{"ok":true}', images: [{ ...PIC }, ...(s <= 10 ? [{ ...PIC }] : [])] }] });
+    }
+    assert.equal(o.images, 150, 'held');
+    // 140 results, 139 answered: the oldest 120 left out (common.ts clearedResults), 20 sent.
+    assert.equal(o.pictures(), 20);
+    assert.equal(o.fullDetail(), null);
+    const few = conv('openai_compatible', 'qwen3.8-27b');
+    few.append({ role: 'user', parts: [{ type: 'text', text: 'x' }] });
+    for (let s = 1; s <= 130; s += 1) {
+      few.append({ role: 'assistant', parts: [{ type: 'tool_call', callId: `c${s}`, name: 'snap', input: {} }], raw: { provider: 'openai_compatible', model: 'qwen3.8-27b', payload: null } });
+      few.append({ role: 'user', parts: [{ type: 'tool_result', callId: `c${s}`, isError: false, text: '{"ok":true}', images: s > 120 ? [{ ...PIC }] : [] }] });
+    }
+    assert.deepEqual([few.images, few.pictures(), few.fullReason()], [10, 10, null]);
+    assert.equal(
+      fullText({ reason: 'images', used: 100, limit: 100, of: 'app', sent: true }, 'GPT-6.1 Sol'),
+      'This conversation is full: each request sends 100 pictures, and Magnusim sends at most 100 in one request. Start a new one.',
+    );
+  });
+
+  it("the provider's models list says a model's context first: a conversation made after it uses it", async () => {
+    const { noteListedContext, contextWindow } = await import('../assistant/prices.ts');
+    assert.deepEqual(contextWindow('anthropic', 'claude-test-9'), { tokens: 200_000, known: false });
+    noteListedContext('anthropic', 'claude-test-9', 500_000);
+    noteListedContext('anthropic', 'claude-test-8', 'lots');
+    assert.deepEqual(contextWindow('anthropic', 'claude-test-9'), { tokens: 500_000, known: true });
+    assert.deepEqual(contextWindow('anthropic', 'claude-test-8'), { tokens: 200_000, known: false });
+    assert.deepEqual(contextWindow('openai', 'claude-test-9'), { tokens: 200_000, known: false }, "another provider's model");
+    assert.equal(conv('anthropic', 'claude-test-9').limits().find((l) => l.reason === 'context').limit, 400_000);
+    resetAssistantState();
+    assert.deepEqual(contextWindow('anthropic', 'claude-test-9'), { tokens: 200_000, known: false }, 'for this process only');
   });
 
   it('room: the limit it is closest to, with its numbers; none for a coding agent', () => {
@@ -263,10 +335,10 @@ describe('which limit a full conversation reached, and how close it is (the full
     let row = (await s.get('/api/assistant/conversations')).json.conversations[0];
     assert.deepEqual([row.full, row.full_text], [null, null]);
     assert.equal(row.room.reason, 'messages');
-    first.conv.promptTokens = 170_000;
+    first.conv.promptTokens = 810_000;
     row = (await s.get('/api/assistant/conversations')).json.conversations[0];
-    const said = 'This conversation is full: the last request used 170,000 of the 200,000 tokens Magnusim counts for Claude Opus 5.5, and a conversation is full at 80%. Start a new one.';
-    assert.deepEqual([row.full, row.full_text, row.room], ['context', said, { reason: 'context', used: 170_000, limit: 160_000 }]);
+    const said = "This conversation is full: the last request used 810,000 of Claude Opus 5.5's 1,000,000-token context, and a conversation is full at 80%. Start a new one.";
+    assert.deepEqual([row.full, row.full_text, row.room], ['context', said, { reason: 'context', used: 810_000, limit: 800_000 }]);
     const r = await startTurn(m, { text: 'two', conversation: first.conv.id });
     assert.deepEqual([r.status, r.body.code, r.body.error], [409, 'conversation_full', said]);
   });
