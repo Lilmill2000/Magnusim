@@ -1,8 +1,9 @@
 // Magnusim CAD as a desktop app (desktop/main.mjs, Electron): it opens one window on its own
 // server with no Python and no WSL to be found, a Part made there runs CAD's kernel, a web link
-// opens outside the app, and quitting ends the server.
+// opens outside the app, and quitting ends the server. What the server said is in its log in the
+// app's user data (logs\server.log), from its start to the quit.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,17 @@ import { removeTreeSync } from '../scripts/remove-tree.js';
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DESKTOP = join(WEB, 'desktop');
 const EXE = join(DESKTOP, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
+/** A line of the server's log: its time, its level, its text. */
+const LOG_LINE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (info |warn |error|debug) /;
+
+/** The server's log in that user data ('' while there is none). */
+function serverLog(userData: string): string {
+  try {
+    return readFileSync(join(userData, 'logs', 'server.log'), 'utf8');
+  } catch {
+    return '';
+  }
+}
 
 test('the desktop app: a window on its own server, a Part with CAD running, and Quit ends the server', async () => {
   test.setTimeout(240_000);
@@ -30,13 +42,19 @@ test('the desktop app: a window on its own server, a Part with CAD running, and 
       .join(delimiter),
   } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
-  // Its own user data (prefs, desktop.log, caches), never the person's Magnusim CAD folder in AppData.
-  const app = await electron.launch({ executablePath: EXE, args: [DESKTOP, `--user-data-dir=${join(root, 'user data')}`], env });
+  // Its own user data (prefs, desktop.log, the server's log, caches), never the person's Magnusim CAD folder in AppData.
+  const userData = join(root, 'user data');
+  const app = await electron.launch({ executablePath: EXE, args: [DESKTOP, `--user-data-dir=${userData}`], env });
   try {
     const page = await app.firstWindow();
     await expect(page).toHaveTitle('Magnusim CAD - Projects', { timeout: 60_000 });
     const url = new URL(page.url());
     expect(url.hostname).toBe('127.0.0.1');
+    // The server's own lines, from its start (npm start: the page from source), each with its time.
+    const started = serverLog(userData);
+    expect(started).toMatch(/^\S+Z info  Magnusim CAD server starting \(the page from source; pid \d+, Node v[\d.]+, Electron [\d.]+\)$/m);
+    expect(started).toContain(`info  server listening on 127.0.0.1:${url.port}\n`);
+    for (const l of started.split('\n').filter(Boolean)) expect(l).toMatch(LOG_LINE);
     // CAD's helpers find the app here.
     process.env.CAD_E2E_BASE_URL = url.origin;
 
@@ -66,6 +84,8 @@ test('the desktop app: a window on its own server, a Part with CAD running, and 
     // Quit: the window goes and the server stops listening.
     await app.evaluate(({ app: a }) => a.quit());
     await expect.poll(async () => fetch(`${url.origin}/api/plugins`).then(() => 'up', () => 'down'), { timeout: 15_000 }).toBe('down');
+    // The log goes on to the end: the quit is in it.
+    await expect.poll(() => serverLog(userData), { timeout: 15_000 }).toMatch(/^\S+Z info  server closing: the app quits$/m);
   } finally {
     await app.close().catch(() => undefined);
     removeTreeSync(root);

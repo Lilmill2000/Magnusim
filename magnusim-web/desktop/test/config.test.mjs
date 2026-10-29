@@ -46,6 +46,12 @@ describe('serverEnv', () => {
     assert.equal(env.MAGNUSIM_LOCAL_JSON, 'D:\p.json');
     assert.equal(env.MAGNUSIM_EDITION, 'cad', 'never Magnusim');
   });
+
+  it("keeps the server's log in the app's user data, logs\\server.log; one the environment names wins", () => {
+    assert.equal(serverEnv({ ...where, env: {} }).MAGNUSIM_SERVER_LOG, join(where.userData, 'logs', 'server.log'));
+    assert.equal(serverEnv({ ...where, env: { MAGNUSIM_SERVER_LOG: '  ' } }).MAGNUSIM_SERVER_LOG, join(where.userData, 'logs', 'server.log'), 'blank is not set');
+    assert.equal(serverEnv({ ...where, env: { MAGNUSIM_SERVER_LOG: 'D:\\logs\\cad.log' } }).MAGNUSIM_SERVER_LOG, 'D:\\logs\\cad.log');
+  });
 });
 
 describe('the uninstaller (resources/uninstall.nsh)', () => {

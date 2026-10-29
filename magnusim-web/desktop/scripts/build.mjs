@@ -163,7 +163,7 @@ async function stage(source) {
   for (const dir of ['scripts', 'src']) cpSync(join(WEB, dir), join(APP, dir), { recursive: true, filter: notTest });
   const cad = join(WEB, 'bundled-plugins', 'cad');
   for (const part of ['manifest.toml', 'plugin.py', 'README.md', 'workspace', 'LICENSES']) cpSync(join(cad, part), join(APP, 'bundled-plugins', 'cad', part), { recursive: true });
-  for (const f of ['main.mjs', 'config.mjs', 'server.mjs']) cpSync(join(DESKTOP, f), join(APP, 'desktop', f));
+  for (const f of ['main.mjs', 'config.mjs', 'server.mjs', 'server-log.mjs']) cpSync(join(DESKTOP, f), join(APP, 'desktop', f));
   const modules = [...new Set([...serverClosure(await serverPackages()), ...(await sdkPackages())])].sort();
   for (const key of modules) cpSync(join(WEB, key), join(APP, key), { recursive: true, filter: runtimeFile });
   // electron-builder ships the node_modules its package.json's dependencies name: each
@@ -237,8 +237,9 @@ function icon(exe) {
 
 /**
  * The staged app, before it is packaged: its plugin SDK builds from what was staged, and its
- * server starts (the built page, no Python) and answers the page, the plugin list, CAD's
- * workspace and the SDK. A package left out fails here, not in a person's app.
+ * server starts (the built page, no Python), answers the page, the plugin list, CAD's
+ * workspace and the SDK, and keeps its log (server-log.mjs, through the Assistant's redact as
+ * staged). A package left out fails here, not in a person's app.
  */
 async function checkStaged() {
   const sdk = spawnSync(process.execPath, ['--input-type=module', '-e', "const { pathToFileURL } = await import('node:url'); const m = await import(pathToFileURL(process.argv[1]).href); const files = await m.buildPluginSdk(process.argv[2], 'prod'); console.log([...files.keys()].join(' '));", join(APP, 'scripts', 'server', 'plugin-sdk.ts'), APP], { encoding: 'utf8', timeout: 120_000 });
@@ -246,7 +247,7 @@ async function checkStaged() {
   const root = join(BUILD, 'check');
   rmSync(root, { recursive: true, force: true });
   mkdirSync(join(root, 'projects'), { recursive: true });
-  const env = { ...process.env, MAGNUSIM_PROJECTS_ROOT: join(root, 'projects'), MAGNUSIM_LOCAL_JSON: join(root, 'local.json'), MAGNUSIM_ASSISTANT_HOME: join(root, 'assistant'), MAGNUSIM_PYTHON: join(root, 'no-python.exe') };
+  const env = { ...process.env, MAGNUSIM_PROJECTS_ROOT: join(root, 'projects'), MAGNUSIM_LOCAL_JSON: join(root, 'local.json'), MAGNUSIM_ASSISTANT_HOME: join(root, 'assistant'), MAGNUSIM_PYTHON: join(root, 'no-python.exe'), MAGNUSIM_SERVER_LOG: join(root, 'logs', 'server.log') };
   const { spawn } = await import('node:child_process');
   const child = spawn(process.execPath, [join(APP, 'desktop', 'server.mjs'), '--static', join(APP, 'page')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let said = '';
@@ -270,6 +271,8 @@ async function checkStaged() {
       const r = await fetch(base + path);
       if (!r.ok) throw new Error(`the staged server answered ${r.status} for ${path}`);
     }
+    const kept = existsSync(env.MAGNUSIM_SERVER_LOG) ? readFileSync(env.MAGNUSIM_SERVER_LOG, 'utf8') : '';
+    if (!kept.includes(`server listening on 127.0.0.1:${port}`)) throw new Error(`the staged server kept no log in ${env.MAGNUSIM_SERVER_LOG}:\n${said}`);
   } finally {
     child.kill();
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });

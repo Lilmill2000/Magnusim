@@ -13,6 +13,10 @@ export const APP_NAME = 'Magnusim CAD';
  * keys live beside them in the app's own folder (%APPDATA%\Magnusim CAD\local.assistant: the
  * Assistant's home follows MAGNUSIM_LOCAL_JSON, assistant/home.ts), not in Magnusim's, and the
  * uninstaller's "Also remove settings" (resources/uninstall.nsh) removes them too.
+ * The server's console (the Assistant's [assistant] lines, a plugin's error, a crash) is kept
+ * in %APPDATA%\Magnusim CAD\logs\server.log, on this PC only (server.mjs, server-log.mjs:
+ * scrubbed of keys, moved on to server.1.log and server.2.log past 5 MiB; the server makes the
+ * folder); MAGNUSIM_SERVER_LOG set already wins. desktop.log keeps the app's own start and stop.
  * MAGNUSIM_PACKAGED marks the desktop app (installed, or npm start: the same user data): its home
  * is the person's real folder, never a test one, so no Assistant test switch is honoured in it
  * (assistant/home.ts assistantHomeIsOverridden).
@@ -27,6 +31,7 @@ export function serverEnv({ documents, userData, env = process.env }) {
     MAGNUSIM_EDITION: 'cad',
     MAGNUSIM_PROJECTS_ROOT: projects,
     MAGNUSIM_LOCAL_JSON: String(env.MAGNUSIM_LOCAL_JSON || '').trim() || join(userData, 'local.json'),
+    MAGNUSIM_SERVER_LOG: String(env.MAGNUSIM_SERVER_LOG || '').trim() || join(userData, 'logs', 'server.log'),
     MAGNUSIM_PACKAGED: '1',
   };
 }
