@@ -33,7 +33,7 @@ export const SET_COLOR = 0x4884eb;
 export const HOVER_COLOR = 0xb2ccff;
 /**
  * Orientation triad arrows X / Y / Z: the host's light --mg-axis-x / -y / -z, which the core's triad
- * paints since its light unify (28ea1116; src/theme/lightView.ts LIGHT_VIEW.axisX-Z; at cff8aaa it
+ * paints since its light unify (src/theme/lightView.ts LIGHT_VIEW.axisX-Z; at cff8aaa it
  * was [220,40,40] / [36,168,64] / [40,96,220], runtime.js:1115-1120). 72 px, bottom-right (runtime.js:1127-1132).
  */
 export const TRIAD_COLORS = [0xd42828, 0x1f9a3a, 0x2a5bd7] as const;
