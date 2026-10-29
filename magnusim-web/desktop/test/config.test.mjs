@@ -55,10 +55,10 @@ describe('serverEnv', () => {
 });
 
 describe('the uninstaller (resources/uninstall.nsh)', () => {
-  it("asks plainly: the settings it removes include the Assistant's saved API keys; projects stay", () => {
+  it("asks plainly: the settings it removes include the Assistant's saved API keys, its chat history and the logs; projects stay", () => {
     const nsh = readFileSync(new URL('../resources/uninstall.nsh', import.meta.url), 'utf8');
     const question = /MessageBox [^"]*"([^"]*)"/.exec(nsh)?.[1] ?? '';
-    assert.match(question, /^Also remove Magnusim CAD's settings, including the Assistant's settings and its saved API keys\?/);
+    assert.match(question, /^Also remove Magnusim CAD's settings\? They include the Assistant's saved API keys, its chat history \(the last 31 days of chats, per project\) and the app's logs\./);
     assert.match(question, /Your projects in Documents\\Magnusim CAD are kept either way\./);
     assert.match(nsh, /RMDir \/r "\$APPDATA\\Magnusim CAD"/, 'the folder that holds local.json and local.assistant');
   });
