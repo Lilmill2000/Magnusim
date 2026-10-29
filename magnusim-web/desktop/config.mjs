@@ -13,6 +13,9 @@ export const APP_NAME = 'Magnusim CAD';
  * keys live beside them in the app's own folder (%APPDATA%\Magnusim CAD\local.assistant: the
  * Assistant's home follows MAGNUSIM_LOCAL_JSON, assistant/home.ts), not in Magnusim's, and the
  * uninstaller's "Also remove settings" (resources/uninstall.nsh) removes them too.
+ * MAGNUSIM_PACKAGED marks the desktop app (installed, or npm start: the same user data): its home
+ * is the person's real folder, never a test one, so no Assistant test switch is honoured in it
+ * (assistant/home.ts assistantHomeIsOverridden).
  * @param {{ documents: string, userData: string, env?: NodeJS.ProcessEnv }} o
  */
 export function serverEnv({ documents, userData, env = process.env }) {
@@ -22,6 +25,7 @@ export function serverEnv({ documents, userData, env = process.env }) {
     MAGNUSIM_EDITION: 'cad',
     MAGNUSIM_PROJECTS_ROOT: projects,
     MAGNUSIM_LOCAL_JSON: String(env.MAGNUSIM_LOCAL_JSON || '').trim() || join(userData, 'local.json'),
+    MAGNUSIM_PACKAGED: '1',
   };
 }
 

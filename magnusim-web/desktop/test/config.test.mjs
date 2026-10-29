@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isAppUrl, isExternalUrl, serverEnv, windowBackground } from '../config.mjs';
 
@@ -20,11 +21,29 @@ describe('serverEnv', () => {
     assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   });
 
+  it("carries the installed-app marker, so the Assistant's home is never taken for a test one", () => {
+    assert.equal(serverEnv({ ...where, env: {} }).MAGNUSIM_PACKAGED, '1');
+    // Whatever the environment says: a home the person or a test set, or the marker blanked.
+    const set = serverEnv({ ...where, env: { MAGNUSIM_LOCAL_JSON: 'D:\\p.json', MAGNUSIM_ASSISTANT_HOME: 'D:\\a', MAGNUSIM_PACKAGED: '' } });
+    assert.equal(set.MAGNUSIM_PACKAGED, '1');
+    assert.equal(set.MAGNUSIM_LOCAL_JSON, 'D:\\p.json');
+  });
+
   it("keeps a projects folder or prefs file the person set (Magnusim's, to share them)", () => {
     const env = serverEnv({ ...where, env: { MAGNUSIM_PROJECTS_ROOT: 'D:\Magnusim\projects', MAGNUSIM_LOCAL_JSON: 'D:\p.json', MAGNUSIM_EDITION: 'magnusim' } });
     assert.equal(env.MAGNUSIM_PROJECTS_ROOT, 'D:\Magnusim\projects');
     assert.equal(env.MAGNUSIM_LOCAL_JSON, 'D:\p.json');
     assert.equal(env.MAGNUSIM_EDITION, 'cad', 'never Magnusim');
+  });
+});
+
+describe('the uninstaller (resources/uninstall.nsh)', () => {
+  it("asks plainly: the settings it removes include the Assistant's saved API keys; projects stay", () => {
+    const nsh = readFileSync(new URL('../resources/uninstall.nsh', import.meta.url), 'utf8');
+    const question = /MessageBox [^"]*"([^"]*)"/.exec(nsh)?.[1] ?? '';
+    assert.match(question, /^Also remove Magnusim CAD's settings, including the Assistant's settings and its saved API keys\?/);
+    assert.match(question, /Your projects in Documents\\Magnusim CAD are kept either way\./);
+    assert.match(nsh, /RMDir \/r "\$APPDATA\\Magnusim CAD"/, 'the folder that holds local.json and local.assistant');
   });
 });
 

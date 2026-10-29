@@ -29,9 +29,14 @@ function envOf(env: NodeJS.ProcessEnv, suffix: string): string | undefined {
   return undefined;
 }
 
-/** True when the home comes from MAGNUSIM_ASSISTANT_HOME or MAGNUSIM_LOCAL_JSON (a test or dev folder). */
+/**
+ * True when the home comes from MAGNUSIM_ASSISTANT_HOME or MAGNUSIM_LOCAL_JSON (a test or dev
+ * folder); never in an installed app (MAGNUSIM_PACKAGED, set by desktop/config.mjs serverEnv).
+ */
 export function assistantHomeIsOverridden(o: HomeOptions = {}): boolean {
   const env = o.env ?? process.env;
+  // An installed app's local.json home is the person's real folder, never a test one.
+  if (String(env.MAGNUSIM_PACKAGED ?? '').trim() !== '') return false;
   return !!(envOf(env, 'ASSISTANT_HOME') || envOf(env, 'LOCAL_JSON'));
 }
 

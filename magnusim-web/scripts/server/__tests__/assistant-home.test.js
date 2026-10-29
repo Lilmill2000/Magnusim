@@ -78,6 +78,21 @@ describe('the Assistant home', () => {
     assert.equal(home.assistantHomeIsOverridden({ env: {} }), false);
   });
 
+  it("an installed app's home is never a test one (MAGNUSIM_PACKAGED), whatever sets it", () => {
+    const local = join(ROOT, 'Roaming', 'Magnusim CAD', 'local.json');
+    assert.equal(home.assistantHomeIsOverridden({ env: { MAGNUSIM_LOCAL_JSON: local } }), true, 'LOCAL_JSON alone: a test or dev folder');
+    assert.equal(home.assistantHomeIsOverridden({ env: { MAGNUSIM_LOCAL_JSON: local, MAGNUSIM_PACKAGED: '1' } }), false, 'LOCAL_JSON in an installed app');
+    assert.equal(home.assistantHomeIsOverridden({ env: { MAGNUSIM_ASSISTANT_HOME: join(ROOT, 'h'), MAGNUSIM_PACKAGED: '1' } }), false, 'ASSISTANT_HOME in an installed app');
+    assert.equal(
+      home.assistantHomeIsOverridden({ env: { MAGNUSIM_ASSISTANT_HOME: join(ROOT, 'h'), MAGNUSIM_LOCAL_JSON: local, MAGNUSIM_PACKAGED: '1' } }),
+      false,
+      'both, in an installed app',
+    );
+    assert.equal(home.assistantHomeIsOverridden({ env: { MAGNUSIM_LOCAL_JSON: local, MAGNUSIM_PACKAGED: ' ' } }), true, 'blank is unset');
+    // Where the home is does not change: only whether it counts as a test one.
+    assert.equal(home.assistantHome({ env: { MAGNUSIM_LOCAL_JSON: local, MAGNUSIM_PACKAGED: '1' } }), join(ROOT, 'Roaming', 'Magnusim CAD', 'local.assistant'));
+  });
+
   it('secrets and data folders sit under the home', () => {
     const env = { MAGNUSIM_ASSISTANT_HOME: join(ROOT, 'h') };
     assert.equal(home.secretsDir({ env }), join(ROOT, 'h', 'secrets'));
