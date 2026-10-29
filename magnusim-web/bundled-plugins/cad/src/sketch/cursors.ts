@@ -1,11 +1,19 @@
 // ux010 (DRAW, Daniel: "Is there a way to not have the standard mouse or crosshair with the
-// arrows? some other mouse thing would be ideal" and, after the first sheet, "can you have the
-// cursor be the hand thing for dragging ... for the dark mode, can they just be white"): sketch
-// mode's own cursors, small SVGs in the app's look, given to CSS `cursor` so the OS still draws
-// them (no lag), each with a keyword fallback:
+// arrows? some other mouse thing would be ideal" and, after the first sheet, "for the dark mode,
+// can they just be white"): sketch mode's own cursors, small SVGs in the app's look, given to CSS
+// `cursor` so the OS still draws them (no lag), each with a keyword fallback:
 //   draw      a thin precise crosshair (hotspot at its centre) with the tool's icon at its lower right
-//   grab      an open hand: geometry that can be dragged, a drag handle (a fillet's radius arrow)
-//   grabbing  a closed hand: a drag under way
+//   pick      a small arrow (hotspot at its tip) with a tiny icon of what is under it at its lower
+//             right: a point, a line, an arc, a circle or an ellipse (entityPickKind: every other
+//             kind shows as one of those five)
+//   drag      the same small arrow with a tiny four-way arrow: a drag under way, a drag handle (a
+//             fillet's radius arrow), the banana's picture in a sketch
+//   grab      an open hand, grabbing a closed hand: the 3D banana's (model mode), never in a sketch
+// Daniel (2026-10-28) on the hand a sketch showed over geometry: "it gets way too big and kind of
+// covers up some of what you're trying to look at, especially when you're trying to hover over a
+// point ... if I hover over something in the sketch, say a line, a tiny little line icon appears
+// next to the mouse cursor". The kind icon is 11 CSS px, at the arrow's lower right, clear of the
+// hotspot (PICK_ICON_BOX).
 // Two tones: on a light view dark strokes with a white halo (as OS cursors are); on a dark view
 // plain white, with only a faint dark edge so it does not melt into a light spot (cursorTone).
 // Each is a data: URI (the frame's CSP allows data: images; nothing in the host changes), at 1x
@@ -13,9 +21,57 @@
 // given in CSS px (the browser scales it with the image).
 // Owner: DRAW (ux010).
 // SPDX-License-Identifier: GPL-3.0-or-later
+import type { SketchFeature } from '../types/doc';
 
-export type SketchCursorKind = 'draw' | 'grab' | 'grabbing';
+export type SketchCursorKind = 'draw' | 'pick' | 'drag' | 'grab' | 'grabbing';
 export type CursorTone = 'light' | 'dark';
+
+/** What the pick cursor shows of the sketch item under the pointer: every kind is one of these five. */
+export type PickKind = 'point' | 'line' | 'arc' | 'circle' | 'ellipse';
+export const PICK_KINDS: readonly PickKind[] = Object.freeze(['point', 'line', 'arc', 'circle', 'ellipse']);
+const isPickKind = (s: string): s is PickKind => (PICK_KINDS as readonly string[]).includes(s);
+
+/**
+ * The kind a sketch entity shows as under the pointer (Daniel: "those are the main types; everything
+ * else can be grouped into that"):
+ *   point    a point (a sketch point; a curve's end or centre is a point hit, not an entity)
+ *   line     a line or a centerline: a rectangle's, a polygon's, a parallelogram's and a slot's
+ *            straight sides are lines
+ *   arc      an arc (a fillet's, a slot's end, a sector's), and the open curves: an open spline, a
+ *            parabola, a conic
+ *   circle   a circle, and a closed spline (a closed curve)
+ *   ellipse  an ellipse and a piece of one
+ * Projected and linked curves are entities of these kinds: they show by their shape.
+ */
+export function entityPickKind(e: { kind: string; closed?: boolean }): PickKind {
+  switch (e.kind) {
+    case 'point':
+      return 'point';
+    case 'line':
+      return 'line';
+    case 'circle':
+      return 'circle';
+    case 'ellipse':
+    case 'ellipse_arc':
+      return 'ellipse';
+    case 'spline':
+      return e.closed ? 'circle' : 'arc';
+    default:
+      // arc, parabola, conic, and any open curve to come.
+      return 'arc';
+  }
+}
+
+/** The kind a hover shows (null: a dimension or a relation, or what is no longer in the sketch). */
+export function pickKindOf(d: Pick<SketchFeature, 'entities'>, h: { what: 'point' | 'entity' | 'constraint'; id: string } | null): PickKind | null {
+  if (!h || h.what === 'constraint') return null;
+  if (h.what === 'point') return 'point';
+  const e = d.entities.find((x) => x.id === h.id);
+  return e ? entityPickKind(e as { kind: string; closed?: boolean }) : null;
+}
+
+/** The view's cursor keyword for a kind under the Select tool ("pick:line"), read back by cursorFor. */
+export const pickKeyword = (k: PickKind): string => `pick:${k}`;
 
 interface Ink {
   /** The outermost edge: a white halo (light view) or a faint dark rim (dark view). */
@@ -61,6 +117,62 @@ function toolIcon(d: string, k: Ink): string {
   return `<g transform="translate(18.5 18.5) scale(0.52)">${stroke(d, k.halo, 2.1 + k.haloW * 1.9)}${stroke(d, k.ink, 2.1)}</g>`;
 }
 
+/** The pick and drag cursors' hotspot: the arrow's tip (CSS px). */
+export const ARROW_TIP = Object.freeze({ x: 2, y: 2 });
+/** Where the kind icon (and the drag's four-way arrow) sits: its box's top left and size (CSS px). */
+export const PICK_ICON_BOX = Object.freeze({ x: 16, y: 16, size: 11 });
+/** The arrow's outline (about 10 x 15 px, a little smaller than the system's), its tip at ARROW_TIP. */
+export const ARROW_PATH = 'M2 2V15.6L5.3 12.5L7.5 17.3L9.7 16.3L7.5 11.6H12Z';
+
+function arrow(k: Ink): string {
+  return `<path d="${ARROW_PATH}" fill="${k.halo}" stroke="${k.halo}" stroke-width="${k.haloW}" stroke-linejoin="round"/><path d="${ARROW_PATH}" fill="${k.ink}"/>`;
+}
+
+const ICON_W = 1.5;
+/** A dot of the icons (an end of a line or an arc; the point itself, larger), with its halo. */
+const dotAt = (x: number, y: number, r: number, k: Ink) => `<circle cx="${x}" cy="${y}" r="${r + k.haloW / 2}" fill="${k.halo}"/><circle cx="${x}" cy="${y}" r="${r}" fill="${k.ink}"/>`;
+
+/**
+ * The kind's tiny icon in PICK_ICON_BOX (16..27 both ways, centre 21.5): a dot; a slanted segment
+ * with its ends; a half circle with its ends; a circle; an ellipse. `data-pick` names it (the e2e
+ * reads the drawn image's kind from it).
+ */
+function pickIcon(kind: PickKind, k: Ink): string {
+  const c = PICK_ICON_BOX.x + PICK_ICON_BOX.size / 2;
+  const lo = PICK_ICON_BOX.x + 1;
+  const hi = PICK_ICON_BOX.x + PICK_ICON_BOX.size - 1;
+  const outline = (d: string) => stroke(d, k.halo, ICON_W + k.haloW) + stroke(d, k.ink, ICON_W);
+  let body: string;
+  switch (kind) {
+    case 'point':
+      body = dotAt(c, c, 2.7, k);
+      break;
+    case 'line':
+      body = outline(`M${lo} ${hi}L${hi} ${lo}`) + dotAt(lo, hi, 1.25, k) + dotAt(hi, lo, 1.25, k);
+      break;
+    case 'arc':
+      body = outline(`M${lo} ${c + 2.5}A${c - lo} ${c - lo} 0 0 1 ${hi} ${c + 2.5}`) + dotAt(lo, c + 2.5, 1.25, k) + dotAt(hi, c + 2.5, 1.25, k);
+      break;
+    case 'circle':
+      body = outline(`M${c - 5} ${c}a5 5 0 1 0 10 0a5 5 0 1 0 -10 0`);
+      break;
+    case 'ellipse':
+      body = outline(`M${c - 5.5} ${c}a5.5 3.2 0 1 0 11 0a5.5 3.2 0 1 0 -11 0`);
+      break;
+  }
+  return `<g data-pick="${kind}">${body}</g>`;
+}
+
+/** The drag's four-way arrow in PICK_ICON_BOX. */
+function moveIcon(k: Ink): string {
+  const c = PICK_ICON_BOX.x + PICK_ICON_BOX.size / 2;
+  const lo = PICK_ICON_BOX.x + 0.25;
+  const hi = PICK_ICON_BOX.x + PICK_ICON_BOX.size - 0.25;
+  const h = 1.9;
+  const d = `M${c} ${lo}V${hi}M${lo} ${c}H${hi}M${c - h} ${lo + h}L${c} ${lo}L${c + h} ${lo + h}M${c - h} ${hi - h}L${c} ${hi}L${c + h} ${hi - h}M${lo + h} ${c - h}L${lo} ${c}L${lo + h} ${c + h}M${hi - h} ${c - h}L${hi} ${c}L${hi - h} ${c + h}`;
+  return `<g data-drag="1">${stroke(d, k.halo, ICON_W + k.haloW)}${stroke(d, k.ink, ICON_W)}</g>`;
+}
+
 /**
  * A hand (32 units, hotspot at the palm, 15 15): the fingers are round-capped strokes on a rounded
  * palm. Open: four fingers spread up and the thumb out; closed: the fingers curled short.
@@ -95,12 +207,19 @@ function uri(s: string): string {
   return `data:image/svg+xml,${encodeURIComponent(s)}`;
 }
 
-/** The body (32-unit SVG), hotspot and keyword of each cursor. */
+/**
+ * The body (32-unit SVG), hotspot and keyword of each cursor. `icon`: the draw cursor's tool icon
+ * (a 24-unit path), or the pick cursor's kind (a PickKind; anything else shows the arrow alone).
+ */
 export function cursorParts(kind: SketchCursorKind, icon?: string | null, tone: CursorTone = 'light'): { body: string; x: number; y: number; fallback: string } {
   const k = INKS[tone];
   switch (kind) {
     case 'draw':
       return { body: cross(k) + (icon ? toolIcon(icon, k) : ''), x: 10, y: 10, fallback: 'crosshair' };
+    case 'pick':
+      return { body: arrow(k) + (icon && isPickKind(icon) ? pickIcon(icon, k) : ''), x: ARROW_TIP.x, y: ARROW_TIP.y, fallback: 'default' };
+    case 'drag':
+      return { body: arrow(k) + moveIcon(k), x: ARROW_TIP.x, y: ARROW_TIP.y, fallback: 'move' };
     case 'grab':
       return { body: hand(true, k), x: 15, y: 15, fallback: 'grab' };
     case 'grabbing':
@@ -141,19 +260,23 @@ export function sketchCursor(kind: SketchCursorKind, icon?: string | null, tone:
 }
 
 /**
- * What the canvas shows for a keyword a tool asks for: 'crosshair' the draw cursor (with the tool's
- * icon), 'move' and 'grab' the open hand, 'grabbing' the closed hand; other keywords as they are.
+ * What the canvas shows for a keyword a sketch tool asks for: 'crosshair' the draw cursor (with the
+ * tool's icon), 'pick:<kind>' the small arrow with that kind's icon, 'drag' (and 'move', 'grab' and
+ * 'grabbing') the small arrow with the four-way arrow: no hand in a sketch. Other keywords as they
+ * are.
  */
 export function cursorFor(keyword: string, icon?: string | null, tone: CursorTone = 'light'): string {
   switch (keyword) {
     case 'crosshair':
       return sketchCursor('draw', icon, tone);
+    case 'drag':
     case 'move':
     case 'grab':
-      return sketchCursor('grab', null, tone);
     case 'grabbing':
-      return sketchCursor('grabbing', null, tone);
-    default:
-      return keyword;
+      return sketchCursor('drag', null, tone);
+    default: {
+      const kind = keyword.startsWith('pick:') ? keyword.slice(5) : '';
+      return isPickKind(kind) ? sketchCursor('pick', kind, tone) : keyword;
+    }
   }
 }

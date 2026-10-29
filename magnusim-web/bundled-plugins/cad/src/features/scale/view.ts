@@ -2,7 +2,7 @@
 // bodies, the picking BVHs, Measure, box selection, the export or the linked geometry), framed by
 // Fit while it is shown, and a pointer tool that drags it on its own height in model mode. A press
 // on it never starts an orbit or a box (the tool takes the press first); the hover shows the open
-// hand, a drag the closed one (sketch mode's hand cursors, src/sketch/cursors.ts). Right-click on
+// hand, a drag the closed one (the hand cursors of src/sketch/cursors.ts; a sketch shows no hand). Right-click on
 // it: Remove banana. Its place is kept with the Part's view (DocService.setScaleModel).
 // Owner: TOOLBAR builder (ux010).
 // SPDX-License-Identifier: GPL-3.0-or-later

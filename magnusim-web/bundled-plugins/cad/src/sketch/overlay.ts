@@ -3,7 +3,8 @@
 //   layer "sketch-geometry" (order 30, in the sketch's own plane frame): the
 //     grid, entities coloured by definition state (under: the core's blue
 //     accent, fully: #101828, over: red; construction dashed and muted),
-//     points, the hover halo and the selection, a tool's preview (rubber band,
+//     points (the one under the pointer larger in a disk of the hover colour, a
+//     selected one ringed), the hover halo and the selection, a tool's preview (rubber band,
 //     inference guides, a trim's doomed piece in red, the window), and the
 //     dimensions' extension and dimension lines; its colours are the view's
 //     palette's (src/viewport/palette.ts), drawn again when it changes (the
@@ -150,10 +151,12 @@ class Lines {
 /**
  * ux010 (DRAW, Daniel: "can points be round and not square?"): a point sprite drawn as a round dot
  * with a smooth (anti-aliased) edge: outside its circle the fragment is dropped, the last pixel
- * fades. Picking is analytic (src/sketch/pick.ts), not from the sprite.
+ * fades. Picking is analytic (src/sketch/pick.ts), not from the sprite. `ring` (0..1): only the
+ * band outside that fraction of the radius is drawn, a ring (a selected point's: POINT_RING_PX).
  */
-export function roundPoints(mat: PointsMaterial): PointsMaterial {
-  mat.defines = { ...(mat.defines ?? {}), ROUND_POINTS: '' };
+export function roundPoints(mat: PointsMaterial, ring?: number): PointsMaterial {
+  const inner = ring === undefined ? null : Math.min(0.95, Math.max(0.05, ring)).toFixed(3);
+  mat.defines = { ...(mat.defines ?? {}), ROUND_POINTS: '', ...(inner ? { RING_INNER: inner } : {}) };
   mat.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <alphatest_fragment>',
@@ -163,25 +166,42 @@ export function roundPoints(mat: PointsMaterial): PointsMaterial {
         '  float rr = length( gl_PointCoord - vec2( 0.5 ) ) * 2.0;',
         '  float aa = max( fwidth( rr ), 1e-4 );',
         '  diffuseColor.a *= 1.0 - smoothstep( 1.0 - aa, 1.0, rr );',
+        '#ifdef RING_INNER',
+        '  diffuseColor.a *= smoothstep( RING_INNER - aa, RING_INNER, rr );',
+        '#endif',
         '  if ( diffuseColor.a <= 0.0 ) discard;',
         '#endif',
       ].join('\n'),
     );
   };
-  mat.customProgramCacheKey = () => 'cad-round-points';
+  mat.customProgramCacheKey = () => (inner ? `cad-round-points-ring-${inner}` : 'cad-round-points');
   mat.needsUpdate = true;
   return mat;
 }
+
+/**
+ * Daniel (2026-10-28: "right now I can't even tell if I'm clicking a point or not. It should
+ * highlight or something"): the point under the pointer sits in a disk of the hover colour
+ * (POINT_HALO_PX across, behind the lines, faint over the dark background as a line's hover band
+ * is) and is drawn larger (POINT_HOT_PX); a selected point, in the pick colour, has a ring of it
+ * (POINT_RING_PX across, POINT_RING_W thick) with a gap round the dot. CSS px; the plain dot is
+ * POINT_PX.
+ */
+export const POINT_PX = 7;
+export const POINT_HOT_PX = 11;
+export const POINT_HALO_PX = 17;
+export const POINT_RING_PX = 17;
+export const POINT_RING_W = 2.2;
 
 class Dots {
   readonly obj: Points;
   readonly mat: PointsMaterial;
   /** E2: the points' face colours with each set() (null: none). */
   face: FaceOf = null;
-  constructor(parent: Group, size: number) {
-    this.mat = roundPoints(new PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, depthTest: false, depthWrite: false, transparent: true }));
+  constructor(parent: Group, size: number, opts: { order?: number; opacity?: number; ring?: number } = {}) {
+    this.mat = roundPoints(new PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, depthTest: false, depthWrite: false, transparent: true, opacity: opts.opacity ?? 1 }), opts.ring);
     this.obj = new Points(new BufferGeometry(), this.mat);
-    this.obj.renderOrder = 1010;
+    this.obj.renderOrder = opts.order ?? 1010;
     this.obj.frustumCulled = false;
     parent.add(this.obj);
   }
@@ -336,17 +356,25 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   // ux010 (DRAW): what is being drawn while construction drawing is on, dashed as it will be.
   const previewDashed = new Lines(frame, 1.6, { dashed: true, order: 1001 });
   const guides = new Lines(frame, 1, { dashed: true, order: 1002 });
-  const dots = new Dots(frame, 7);
+  const dots = new Dots(frame, POINT_PX);
+  // Daniel (2026-10-28): the point under the pointer, larger in its disk of the hover colour (behind
+  // the lines, as a line's hover band is), and a selected point's ring (over the lines, under the dots).
+  const hotDots = new Dots(frame, POINT_HOT_PX);
+  const pointHalo = new Dots(frame, POINT_HALO_PX, { order: 995, opacity: HALO_OPACITY });
+  const pointRing = new Dots(frame, POINT_RING_PX, { order: 1009, ring: 1 - (2 * POINT_RING_W) / POINT_RING_PX });
   const dimLines = new Lines(dimFrame, 1, { order: 1003 });
   // E2: every set of lines and the points take their light-view colours where a light face shows
   // under them (the grid too). The hover halo keeps its one colour, at .85 over a light face and
-  // fainter over the dark background (HALO_GROUND_OPACITY), so the line in it keeps its colour.
-  const twoTone = [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines, dots];
+  // fainter over the dark background (HALO_GROUND_OPACITY), so the line in it keeps its colour; a
+  // point's hover disk does the same.
+  const twoTone = [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines, dots, hotDots, pointHalo, pointRing];
   const applyFace = (p: MarkPalette) => {
     const f = faceOf(p);
     for (const l of twoTone) l.face = f;
-    halo.mat.opacity = f ? HALO_GROUND_OPACITY : HALO_OPACITY;
-    setFaceOpacity(halo.mat, f ? HALO_OPACITY : null);
+    for (const m of [halo.mat, pointHalo.mat]) {
+      m.opacity = f ? HALO_GROUND_OPACITY : HALO_OPACITY;
+      setFaceOpacity(m, f ? HALO_OPACITY : null);
+    }
   };
   applyFace(paletteOf(handle));
   const html = ann.html;
@@ -408,7 +436,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const d = v.draft;
     if (!d) {
       for (const l of [halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.set([]);
-      dots.set([]);
+      for (const p of [dots, hotDots, pointHalo, pointRing]) p.set([]);
       curvesUv = null;
       dimsUv = null;
       return;
@@ -447,7 +475,20 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     const px = pxAt([0, 0]);
     dashed.dash(6 * px, 4 * px);
     guides.dash(4 * px, 4 * px);
-    const pts: { at: Vec2; color: string }[] = [{ at: [0, 0], color: sel.has(ORIGIN) ? pal.pick : pal.fully }];
+    // Daniel (2026-10-28): the point under the pointer (or one a hovered or picked relation holds) is
+    // drawn larger in its hover disk; a selected one has its ring (POINT_HOT_PX, POINT_RING_PX).
+    const pts: { at: Vec2; color: string }[] = [];
+    const hot: { at: Vec2; color: string }[] = [];
+    const disks: { at: Vec2; color: string }[] = [];
+    const rings: { at: Vec2; color: string }[] = [];
+    const putPoint = (at: Vec2, color: string, hovered: boolean, selected: boolean) => {
+      (hovered ? hot : pts).push({ at, color });
+      if (hovered) disks.push({ at, color: pal.hover });
+      if (selected) rings.push({ at, color: pal.pick });
+    };
+    const originHot = hov === ORIGIN || related.has(ORIGIN);
+    putPoint([0, 0], originHot ? pal.preview : sel.has(ORIGIN) ? pal.pick : pal.fully, originHot, sel.has(ORIGIN));
+    const pointsUv: Vec2[] = [];
     // ux010 (DRAW): a point under a radius arrow (the fillet's virtual sharp lies on its line) is not
     // drawn while the arrow shows, so the arrow reads on its own.
     const arrows = (v.preview?.handles ?? []).map((h) => ({ at: h.at, dir: h.dir, px: pxAt(h.at) }));
@@ -465,10 +506,12 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
       const pe = d.entities.find((e) => e.kind === 'point' && e.p === id);
       const key = pe ? pe.id : id;
       const lp = look.points.get(id);
-      pts.push({ at: p, color: key === hov || related.has(id) ? pal.preview : sel.has(key) ? pal.pick : lp ? (lp.lost ? pal.lost : pal.linked) : colorOf(id, 'point') });
+      const hovered = key === hov || related.has(id);
+      putPoint(p, hovered ? pal.preview : sel.has(key) ? pal.pick : lp ? (lp.lost ? pal.lost : pal.linked) : colorOf(id, 'point'), hovered, sel.has(key));
+      pointsUv.push(p);
     }
     // What a framing shows of it: its curves and points (not the origin, nor a tool's preview).
-    curvesUv = uvBoxOf([...solidSegs, ...dashSegs].flatMap((s) => [s.a, s.b]).concat(pts.slice(1).map((p) => p.at)));
+    curvesUv = uvBoxOf([...solidSegs, ...dashSegs].flatMap((s) => [s.a, s.b]).concat(pointsUv));
     // The tool's preview.
     const pv = v.preview;
     const prevSegs: { a: Vec2; b: Vec2; color: string }[] = [];
@@ -520,6 +563,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     previewDashed.dash(6 * px, 4 * px);
     guides.set(guideSegs);
     dots.set(pts);
+    hotDots.set(hot);
+    pointHalo.set(disks);
+    pointRing.set(rings);
     drawDimensions(v);
   }
 
@@ -1117,7 +1163,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
           e.stopPropagation();
           canvas.dispatchEvent(new PointerEvent('pointerdown', e));
         });
-        // The grab hand takes the tone of what is under it, as the crosshair does (E2): set where the
+        // The drag cursor takes the tone of what is under it, as the crosshair does (E2): set where the
         // pointer comes onto the arrow and as it moves over it, not where it was when the arrow came.
         el.addEventListener('pointerenter', (e) => aimHandle(el, e.clientX, e.clientY));
         el.addEventListener('pointermove', (e) => {
@@ -1488,15 +1534,15 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
    */
   const toneAt = (x: number, y: number) => (followsFaces && handle.lightSurfaceAt?.(x, y) ? 'light' : cursorTone(null, background));
   const tone = () => (pointerAt ? toneAt(pointerAt[0], pointerAt[1]) : cursorTone(null, background));
-  /** A radius arrow's grab hand, in a tone (written only when it changes). */
+  /** A radius arrow's drag cursor (the small arrow with the four-way arrow), in a tone (written only when it changes). */
   const handCursors = new WeakMap<HTMLElement, string>();
   function handleCursor(el: HTMLElement, t: CursorTone) {
-    const css = sketchCursor('grab', null, t);
+    const css = sketchCursor('drag', null, t);
     if (handCursors.get(el) === css) return;
     handCursors.set(el, css);
     el.style.cursor = css;
   }
-  /** The arrow's hand in the tone of what is under the pointer on it (client px). */
+  /** The arrow's drag cursor in the tone of what is under the pointer on it (client px). */
   function aimHandle(el: HTMLElement, x: number, y: number) {
     handleCursor(el, toneAt(x, y));
   }
@@ -1511,8 +1557,10 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   function applyCursor() {
     if (!canvas) return;
     const v = mode.view.get();
-    // ux010 (DRAW): our own cursors (src/sketch/cursors.ts) for the keywords the tools ask for.
-    const want = v.dragging ? 'grabbing' : v.cursor || (drawing() ? 'crosshair' : 'default');
+    // ux010 (DRAW): our own cursors (src/sketch/cursors.ts) for the keywords the tools ask for: the
+    // tool's crosshair, the small arrow with the kind under it ('pick:line', the Select tool), and
+    // the small drag cursor while a drag is under way (Daniel 2026-10-28: no big hand).
+    const want = v.dragging ? 'drag' : v.cursor || (drawing() ? 'crosshair' : 'default');
     const css = cursorFor(want, want === 'crosshair' ? toolIcon() : null, tone());
     if (css !== lastCursor || canvas.dataset.sketchCursor !== want || (css.includes('url(') && !canvas.style.cursor.includes('url('))) {
       lastCursor = css;
@@ -1766,7 +1814,7 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     mode.repeatPointer = null;
     document.removeEventListener('keydown', onKey, true);
     for (const l of [grid, halo, solid, dashed, preview, previewDashed, guides, dimLines]) l.dispose();
-    dots.dispose();
+    for (const p of [dots, hotDots, pointHalo, pointRing]) p.dispose();
     for (const o of [...frame.children, ...dimFrame.children] as Object3D[]) o.removeFromParent();
     geo.dispose();
     ann.dispose();

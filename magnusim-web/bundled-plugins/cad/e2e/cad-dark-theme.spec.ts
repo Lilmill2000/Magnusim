@@ -42,9 +42,9 @@
 //    end on from the top) and over the background (the +X arrow, past the top face's outline).
 //  - dark-follows-face-section: a section in dark keeps its light caps, and the measure's end
 //    over a cap takes the face ink (the cap is a light surface), the one beyond it the dark one.
-//  - dark-follows-face-handle: a fillet's radius arrow over a face shows the light view's grab hand
+//  - dark-follows-face-handle: a fillet's radius arrow over a face shows the light view's drag cursor
 //    in dark, also after the theme changed with the pointer over the background (review: it kept
-//    the white hand of where the pointer had been).
+//    the white one of where the pointer had been).
 //  - dark-follows-face-lit: on a part of a dark colour (a navy body) the marks keep the dark inks,
 //    but over a face lit by a hover or a pick, and over the whole part selected (light blues and
 //    the pick green, light surfaces), a finished sketch's line and the measure's end take the
@@ -1287,7 +1287,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     expect(seen.errors).toEqual([]);
   });
 
-  test("cad:dark-follows-face-handle a fillet's radius arrow over a face shows the light view's grab hand in dark, also after the theme changed with the pointer elsewhere", { tag: '@serial' }, async ({ page, request }) => {
+  test("cad:dark-follows-face-handle a fillet's radius arrow over a face shows the light view's drag cursor in dark, also after the theme changed with the pointer elsewhere", { tag: '@serial' }, async ({ page, request }) => {
     const { frame, seen } = await freshPart(page, request);
     await addSolid(page, { size: [60, 60, 20] });
     await page.keyboard.press('Escape');
@@ -1321,9 +1321,10 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     await expect(arrow).toHaveCount(1);
     const hand = () => arrow.evaluate((el) => (el as HTMLElement).style.cursor);
     const crosshair = () => workspaceFrame(page).evaluate(() => (document.querySelector('[data-cad-canvas]') as HTMLElement).style.cursor);
-    // Over the face: the light view's hand (its dark ink).
+    // Over the face: the light view's drag cursor (its dark ink), the small arrow with the four-way arrow.
     await arrow.hover();
     await expect.poll(hand, { message: 'on the arrow over the face: the light tone' }).toContain('101828');
+    expect(decodeURIComponent(await hand())).toContain('data-drag="1"');
     // The pointer over the background beside the block (the crosshair there white), the theme
     // changes (the arrows are given the tone of where the pointer is), then the pointer goes onto
     // the arrow: the light tone, of the face under it.

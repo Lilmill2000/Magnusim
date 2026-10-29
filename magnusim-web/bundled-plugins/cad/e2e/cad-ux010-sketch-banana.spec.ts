@@ -3,7 +3,8 @@
 // someone can add this to their sketch to see the scale". On a 40 x 30 rectangle sketch:
 //   - sketch mode's SCALE MODELS (after its VIEW) shows the picture to +u of the rectangle, at its
 //     true size (137.7 x 181.0 mm) on screen, and the button is pressed;
-//   - it lies behind the rectangle's lines; a press on it drags it with the pointer;
+//   - it lies behind the rectangle's lines; a press on it drags it with the pointer (over it and while
+//     dragging, the sketch's small drag cursor, no hand);
 //   - Finish and edit the sketch again: it is where it was left;
 //   - the sketch's DOF, its region and the Extrude of it do not change;
 //   - the button again removes it.
@@ -130,10 +131,19 @@ test('cad:ux010-sketch-banana the taped banana beside a 40 x 30 rectangle at tru
   await expect.poll(entities).toBe(before);
 
   // Select: drag it away (on a leash round the sketch, 300 mm here), then right-click on it: Place
-  // next to sketch puts it back beside the sketch.
-  await page.mouse.move(gp[0], gp[1]);
+  // next to sketch puts it back beside the sketch. Over the picture and while it is dragged the
+  // pointer is the sketch's small drag cursor (the arrow with a four-way arrow), never the hand
+  // (Daniel 2026-10-28).
+  const canvasCursor = () => workspaceFrame(page).evaluate(() => decodeURIComponent((document.querySelector('[data-cad-canvas]') as HTMLElement).style.cursor));
+  await page.mouse.move(gp[0] + 4, gp[1] + 4);
+  await page.mouse.move(gp[0], gp[1], { steps: 2 });
+  await expect.poll(canvasCursor).toContain('data-drag="1"');
+  expect(await canvasCursor()).toMatch(/, move$/);
+  expect(await canvasCursor()).not.toContain('M14.4 14');
   await page.mouse.down();
   await page.mouse.move(gp[0] + 80, gp[1] + 60, { steps: 8 });
+  expect(await canvasCursor()).toContain('data-drag="1"');
+  expect(await canvasCursor()).not.toContain('M14.4 14');
   await page.mouse.up();
   expect(Number(await layer(frame).getAttribute('data-sketch-banana-leash'))).toBe(300);
   expect((await layer(frame).getAttribute('data-sketch-banana-at'))!.split(' ').map(Number)).not.toEqual(at);

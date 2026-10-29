@@ -26,6 +26,7 @@ import { rhoOk } from './tools/conic';
 import type { ToolOption } from './tools/options';
 import { SketchBuilder } from './edit';
 import { autoProjectItem, modelItemAt } from './project/tools';
+import { pickKeyword, pickKindOf } from './cursors';
 
 const DRAG_PX = 4;
 
@@ -150,19 +151,17 @@ export function selectTool(mode: SketchMode): SketchTool {
   const host = () => (mode.services.viewport.get().handle && typeof document !== 'undefined' ? (document.querySelector<HTMLElement>('[data-cad-canvas]')?.parentElement ?? null) : null);
   const box = new BoxEl(host);
   const hit = (d: SketchFeature, uv: Vec2, px: number) => hitTest(d, uv, px, hitOptions(filter.get().kinds));
-  // Follow-up (Daniel, 2026-10-06: "I don't like how the mouse icon changes to the little red circle
-  // with a line through it when the sketch is fully defined"): what cannot be dragged keeps the normal
-  // arrow (the hover highlight still shows what is under it); a drag of it says why in the panel.
+  // Daniel (2026-10-28: the hand over geometry "gets way too big and kind of covers up some of what
+  // you're trying to look at ... if I hover over something in the sketch, say a line, a tiny little
+  // line icon appears next to the mouse cursor"): over sketch geometry the small arrow with a tiny
+  // icon of its kind (point, line, arc, circle, ellipse: src/sketch/cursors.ts entityPickKind),
+  // whether it can be dragged or not (follow-up 2026-10-06: never the not-allowed cursor; a drag of
+  // what is fully defined says why in the panel). Elsewhere, and over a dimension or a relation,
+  // the plain arrow.
   const cursorFor = (h: SketchHit | null): string => {
-    if (!h || h.what === 'constraint') return '';
-    // The origin never moves (CI run 37, a slow runner: hovered before the sketch's analysis was in,
-    // it showed the hand and kept it). Without the analysis nothing is known to move yet: the arrow,
-    // until the analysis lands (the cursor follows it, below).
-    if (h.id === ORIGIN) return '';
-    const a = mode.view.get().analysis;
-    if (!a) return '';
-    const s = h.what === 'point' ? a.perPoint[h.id] : a.perEntity[h.id];
-    return s === 'fully' ? '' : 'move';
+    const d = mode.draft();
+    const k = d ? pickKindOf(d, h) : null;
+    return k ? pickKeyword(k) : '';
   };
   /** Sketch u/v to frame client px: the view's own projection; without a view (unit tests), the press's local scale. */
   const screenOf = (p: { at: Vec2; px: number; client: [number, number] }): ((uv: Vec2) => [number, number] | null) => {
@@ -207,16 +206,6 @@ export function selectTool(mode: SketchMode): SketchTool {
   };
   const offSel = mode.services.selection.subscribe(() => pickRadius());
   const offDraft = mode.view.subscribe((v, prev) => {
-    // The cursor follows the analysis, not only the pointer: what is under a pointer that stays put
-    // became draggable or fully defined (the analysis came after the hover, or an edit changed it).
-    if (v.analysis !== prev.analysis && !press && !v.dragging && !radius.dragging && !radius.hovered) {
-      queueMicrotask(() => {
-        const now = mode.view.get();
-        if (mode.tool?.id !== 'select' || press || now.dragging || radius.dragging || radius.hovered) return;
-        const want = cursorFor(now.hover);
-        if (want !== now.cursor) mode.view.set({ cursor: want });
-      });
-    }
     // After an edit, an Undo or a Redo (they clear the preview): the arrow drawn again, or gone with its arc.
     const lost = !!prev.preview?.handles?.length && !v.preview?.handles?.length;
     if ((v.draft === prev.draft && !lost) || radius.dragging || !radius.target) return;
@@ -329,7 +318,7 @@ export function selectTool(mode: SketchMode): SketchTool {
         }
         if (on) {
           mode.setHover(null);
-          mode.view.set({ cursor: 'grab' });
+          mode.view.set({ cursor: 'drag' });
           return;
         }
       }

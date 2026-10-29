@@ -349,6 +349,8 @@ describe('the smoke and serial tags', () => {
       'cad:dark-picture-save',
       'cad:dark-tooltip-edge',
       'cad:dark-triad',
+      // Sketch hover kinds and point marks in dark (the look is the person's pref).
+      'cad:sketch-hover-kinds-dark',
     ].sort());
   });
 });

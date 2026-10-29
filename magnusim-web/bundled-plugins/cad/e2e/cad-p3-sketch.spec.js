@@ -8,7 +8,7 @@
 //      (40, 20) -> "Fully defined", lines #101828.
 //   2. A diagonal dimension -> "Make it driven?"; accepting shows it grey, in
 //      parentheses "(44.72)".
-//   3. A fully defined corner won't drag (the cursor stays the arrow; the panel says why). Deleting a
+//   3. A fully defined corner won't drag (the cursor is the small arrow with the point icon; the panel says why). Deleting a
 //      dimension -> "Under defined · 1 DOF", and the corner drags.
 //      (1-3 are one story on one sketch; undo inside the sketch, Finish sketch,
 //      and the whole session as one undo step follow.)
@@ -245,13 +245,14 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await expect(chip(frame)).toHaveText('Fully defined');
   await shot(page, 'p3-sketch-driven-diagonal');
 
-  // 3. A fully defined corner does not move; the cursor stays the normal arrow, the panel says why.
+  // 3. A fully defined corner does not move; the cursor is the small arrow with the point icon (no
+  // not-allowed, no hand), the panel says why.
   await page.keyboard.press('Escape');
   await expect(tb(frame).locator('[data-command="sketch.dimension"]')).not.toHaveClass(/is-active/);
   const [cx, cy] = await at(page, [40, 20, 0]);
   await page.mouse.move(cx, cy);
   await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => getComputedStyle(el).cursor)).not.toBe('not-allowed');
-  expect(await frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toMatch(/^(default|auto|)$/);
+  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.dataset.sketchCursor)).toBe('pick:point');
   await page.mouse.down();
   await page.mouse.move(cx + 60, cy - 40, { steps: 8 });
   await page.mouse.up();
@@ -270,8 +271,8 @@ test('cad:p3-sketch-dof a rectangle from the origin is "Under defined · 2 DOF";
   await expect(frame.locator('[data-sketch-dim]')).toHaveText(['40 mm', '(44.72 mm)']);
   const [c2x, c2y] = await at(page, [40, 20, 0]);
   await page.mouse.move(c2x, c2y);
-  // ux010 (DRAW): the sketch's own open hand (an SVG, the grab keyword as its fallback).
-  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toMatch(/url\("data:image\/svg\+xml,.*, grab$/);
+  // Daniel 2026-10-28: the sketch's small arrow with the point icon (an SVG, default its fallback), no hand.
+  await expect.poll(() => frame.locator('[data-cad-canvas]').evaluate((el) => el.style.cursor)).toMatch(/url\("data:image\/svg\+xml,.*data-pick%3D%22point%22.*, default$/);
   const [tx, ty] = await at(page, [40, 30, 0]);
   await page.mouse.down();
   await page.mouse.move(tx, ty, { steps: 10 });

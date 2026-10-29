@@ -103,7 +103,7 @@ is changed with the Part open, from any Magnusim window:
   band around a line under the pointer is fainter over the dark background,
   so the line's own colour shows in it.
 - The Sketch panel's colour dots show both colours (the left half the colour
-  over a face), the sketch cursor (a fillet's radius arrow's hand too) is the
+  over a face), the sketch cursor (a fillet's radius arrow's too) is the
   light one over a face, a selection
   box's caption and a failed Pattern copy's number stay readable, and blue
   text in the Part uses the lighter blue made for dark backgrounds.
@@ -113,6 +113,18 @@ is changed with the Part open, from any Magnusim window:
 - The toolbar's icons follow Magnusim's icon size.
 - In light the Part is as before; only its orientation arrows take the axis
   colours Magnusim's own 3D views now use (a shade darker).
+
+**Sketching, after trying Magnusim CAD**
+- In a sketch the big hand is gone. Over sketch geometry the pointer is a small
+  arrow with a tiny icon beside it of what is under it: a point, a line, an arc,
+  a circle or an ellipse. A rectangle's, polygon's or slot's sides show as
+  lines; fillets, slot ends, open splines, parabolas and conics as arcs; a
+  closed spline as a circle; part of an ellipse as an ellipse. While you drag,
+  and over a fillet's radius arrow or the banana's picture, the small arrow has
+  a four-way arrow beside it.
+- The point under the pointer grows, in a light blue disk, so you can see
+  which point you are about to click. A selected point is green with a green
+  ring round it. Both in light and dark.
 
 ## 0.1.0 (October 2026)
 

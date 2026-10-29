@@ -1110,19 +1110,19 @@ test('cad:p4b-fu-dim-units a dimension shows its unit next to its value: on the 
   expect(inch.seen.errors).toEqual([]);
 });
 
-test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the normal arrow on hover (no not-allowed cursor); a drag of them moves nothing and the panel says why; a free circle still shows the move cursor', async ({ page, request }) => {
+test('cad:p4b-fu-no-not-allowed a fully defined line and the origin show the small arrow with their kind on hover (no not-allowed cursor, no hand); a drag of them moves nothing and the panel says why; a free circle shows the circle icon', async ({ page, request }) => {
   const { seen, frame } = await freshPartIn(page, request, 'Metric');
   await enterSketchOnTop(page, frame);
   const canvas = frame.locator('[data-cad-canvas]');
   const cursor = () => canvas.evaluate((el) => ({ style: (el as HTMLElement).style.cursor, computed: getComputedStyle(el as HTMLElement).cursor }));
   const reason = panel(frame).locator('[data-run-reason]');
-  // The origin (before anything is drawn on it): the arrow; a drag says it cannot move.
+  // The origin (before anything is drawn on it): the small arrow with the point icon; a drag says it cannot move.
   const [ox, oy] = await at(page, [0, 0, 0]);
   await page.mouse.move(ox - 40, oy + 40);
   await page.mouse.move(ox, oy, { steps: 4 });
   await expect.poll(() => hovered(page)).not.toBeNull();
-  // The cursor follows the hover once the sketch's analysis is in: poll it (a loaded runner lags).
-  await expect.poll(async () => (await cursor()).style).toMatch(/^(default|auto|)$/);
+  // The cursor follows the hover: poll it (a loaded runner lags).
+  await expect.poll(async () => (await cursor()).style).toMatch(/url\("data:image\/svg\+xml,.*data-pick%3D%22point%22.*, default$/);
   let c = await cursor();
   expect(c.computed).not.toBe('not-allowed');
   await page.mouse.down();
@@ -1132,12 +1132,12 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   await sketchIdle(page);
   await expect(reason.first()).toContainText("The origin can't be moved");
   await typedRectangle(page, frame, 40, 30);
-  // Hover the bottom line: its halo shows, the arrow stays.
+  // Hover the bottom line: its halo shows, and the small arrow with the line icon (Daniel 2026-10-28).
   const [bx, by] = await at(page, [20, 0, 0]);
   await page.mouse.move(bx, by - 30);
   await page.mouse.move(bx, by, { steps: 4 });
   await expect.poll(() => hovered(page)).not.toBeNull();
-  await expect.poll(async () => (await cursor()).style).toMatch(/^(default|auto|)$/);
+  await expect.poll(async () => (await cursor()).style).toMatch(/url\("data:image\/svg\+xml,.*data-pick%3D%22line%22.*, default$/);
   c = await cursor();
   expect(c.computed).not.toBe('not-allowed');
   // A drag of it: nothing moves; the words say why.
@@ -1150,7 +1150,7 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   await sketchIdle(page);
   expect((await drawn(page)).points).toEqual(before);
   await expect(reason.first()).toContainText('This line is fully defined: change a dimension to move it');
-  // Something that can move still says so: a free circle shows the move cursor.
+  // A free circle: the circle icon (what is under the pointer, not whether it moves).
   await page.keyboard.press('c');
   await clickAt(page, [70, 15]);
   await clickAt(page, [76, 15]);
@@ -1159,8 +1159,8 @@ test('cad:p4b-fu-no-not-allowed a fully defined line and the origin keep the nor
   const [fx, fy] = await at(page, [76, 15, 0]);
   await page.mouse.move(fx + 30, fy);
   await page.mouse.move(fx, fy, { steps: 4 });
-  // ux010 (DRAW): the sketch's own open hand (an SVG, the grab keyword as its fallback).
-  await expect.poll(async () => (await cursor()).style).toMatch(/url\("data:image\/svg\+xml,.*, grab$/);
+  // Daniel 2026-10-28: the sketch's small arrow with the circle icon (an SVG, default its fallback), no hand.
+  await expect.poll(async () => (await cursor()).style).toMatch(/url\("data:image\/svg\+xml,.*data-pick%3D%22circle%22.*, default$/);
   expect(seen.errors).toEqual([]);
 });
 

@@ -137,7 +137,10 @@ radius, a pattern's count) shows them in a small card beside the rail.
 While you draw, a value box follows the pointer: type a length or an angle and
 press Enter or Tab. A click counts where you pressed, even when the mouse is
 still moving as you click. The pointer is a thin crosshair with the tool's icon
-beside it; over geometry you can drag, an open hand (closed while you drag).
+beside it. With no tool in hand it is a small arrow with a tiny icon of what is
+under it (a point, a line, an arc, a circle or an ellipse), and a four-way arrow
+while you drag. The point under the pointer grows in a light blue disk; a
+selected point is green with a green ring.
 
 Relations (the small horizontal, parallel, tangent, ... badges) show only for
 the geometry you select. **Show relations** (VIEW, Shift+R) shows them all and

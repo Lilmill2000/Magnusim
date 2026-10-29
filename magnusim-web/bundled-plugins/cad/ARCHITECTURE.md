@@ -1839,8 +1839,26 @@ with the host once for the page's life, and its chip goes in the dock.
   Sketch cursors are the plugin's own SVGs (`src/sketch/cursors.ts`): CSS `cursor:
   image-set(url(data:...) 1x, url(data:...) 2x) x y, <keyword>` on the canvas (the OS draws them:
   no lag; the frame's CSP allows data: images; tools still ask for keywords, the overlay maps them),
-  the crosshair with the tool's toolbar icon, an open hand (draggable, handles) and a closed hand
-  (dragging); white on a dark view (`cursorTone` of the view palette's background).
+  the crosshair with the tool's toolbar icon (a tool's own cursor, unchanged); under the Select
+  tool (Daniel 2026-10-28: the hand "gets way too big") `pick`, a small arrow (hotspot at its tip,
+  `ARROW_TIP`) with an 11 px icon at its lower right (`PICK_ICON_BOX`, clear of the hotspot) of the
+  kind under it: the tool asks for `pick:<kind>`, `pickKindOf` maps the hit (point hits and point
+  entities: point; line and centerline: line; circle and a closed spline: circle; ellipse and
+  ellipse_arc: ellipse; arc, an open spline, parabola and conic: arc; linked curves by their kind)
+  whether or not it can be dragged; `drag`, the same arrow with a four-way arrow, while a drag is
+  under way (`SketchView.dragging`) and over a drag handle (a fillet's radius arrow, the banana's
+  picture in a sketch; tools ask for `drag`, and `move`, `grab`, `grabbing` map to it); the open
+  and closed hands stay for the 3D banana in model mode only. White on a dark view (`cursorTone`
+  of the view palette's background), the light tone over a light face (`lightSurfaceAt`). The
+  canvas's `data-sketch-cursor` says which (`pick:line`, `drag`, `crosshair`); each SVG's icon
+  group carries `data-pick="<kind>"` or `data-drag` (the e2e reads them).
+  Sketch points (`attachOverlay`): the point under the pointer, or one a hovered or picked relation
+  holds, is drawn at `POINT_HOT_PX` (11) in its own `Dots` set, over a disk of the hover colour
+  (`POINT_HALO_PX`, order 995: behind the lines, at the line halo's opacities, fainter over the
+  dark background, `setFaceOpacity` .85 over a face); a selected point keeps the pick colour and
+  gets a ring (`roundPoints(mat, ring)`: the band outside `RING_INNER` of the sprite's radius,
+  `POINT_RING_PX` across, `POINT_RING_W` thick, order 1009: over the lines, under the dots). All
+  four point sets are E2 two-tone marks (face colours per point).
   Relation glyphs show for the selection only (`src/sketch/relations-view.ts` `relationShown`; a
   conflict always shows; a fillet arc's own while its radius arrow is up stay hidden); Show
   relations (`view.sketch-relations`, VIEW, Shift+R, `CommandDef.pressed`) shows all, ws.prefs key
