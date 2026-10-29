@@ -76,6 +76,9 @@ export interface ToolCtx {
   used?: () => TurnUse | null;
 }
 
+/** The turn's conversation as a page's call carries it (host/common.ts conversationOf reads it the same way). */
+const conversationOf = (ctx: ToolCtx): string | null => (typeof ctx.conversation === 'string' ? ctx.conversation : null);
+
 /**
  * A turn's spend so far against its limits in force (the lower of its start's and the live
  * settings'): steps (a coding agent's: its calls), minutes of its active time, dollars (none
@@ -233,6 +236,8 @@ export interface WorkspaceRegistration {
     signal: AbortSignal;
     released?: AbortSignal;
     turn: string | null;
+    /** The turn's conversation (the page may read its attachments while the call runs); null for an MCP call. */
+    conversation: string | null;
     progress(f: number | null, label: string, opts?: ProgressOptions): void;
   }): Promise<ToolOutcome>;
   /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
@@ -645,7 +650,7 @@ export class Registry implements ToolRegistry {
           const message = `The page hosting ${source.workspace} isn't connected.`;
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
+        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
       },
     };
   }
@@ -767,7 +772,7 @@ export class Registry implements ToolRegistry {
           const message = "This window isn't connected.";
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, progress: rt.progress });
+        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
       },
       // Raise-only risk per call and its card (C3, §2.1): the core page's own rule, from its newest registration.
       // The runner keeps only an escalation's risk, note and rows: the card's copy goes as its

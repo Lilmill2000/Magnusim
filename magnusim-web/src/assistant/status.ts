@@ -174,13 +174,16 @@ export function providerReady(status: AssistantStatus, id: string): ProviderRead
   if (rows && typeof rows === 'object') {
     const r = Object.hasOwn(rows, id) ? (rows[id] as Partial<ProviderReady> | undefined) : undefined;
     if (!r || typeof r !== 'object') return null;
+    const kind = KINDS.has(r.kind) ? (r.kind as ProviderReady['kind']) : 'key';
     return {
       label: typeof r.label === 'string' && r.label ? r.label : id,
-      kind: KINDS.has(r.kind) ? (r.kind as ProviderReady['kind']) : 'key',
+      kind,
       ready: r.ready === true,
       reason: typeof r.reason === 'string' && r.reason ? r.reason : null,
       billing: BILLING.has(r.billing) ? (r.billing as ProviderReady['billing']) : 'usd',
       detail: typeof r.detail === 'string' ? r.detail : '',
+      // A coding agent's word on pictures (a server older than it says nothing: not known).
+      ...(kind === 'agent' ? { images: typeof r.images === 'boolean' ? r.images : null } : {}),
     };
   }
   if (id !== status.provider || typeof status.ready !== 'boolean') return null;

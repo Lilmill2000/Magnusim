@@ -1,5 +1,5 @@
-// The person's files in the dock (core host tools spec 13.1): what a file is to the dock, the
-// limits said before anything is sent, and the upload (the window's link, once more with a fresh
+// The person's files in the dock (core host tools spec 13.1): what a file is to the dock (a
+// drawing too), the limits said before anything is sent, and the upload (the window's link, once more with a fresh
 // one when the server no longer takes it; the server's words, or a plain line when it didn't
 // answer).
 import { describe, expect, it, vi } from 'vitest';
@@ -21,22 +21,28 @@ const file = (name: string, size = 10, type = '') => {
 };
 
 describe('kindOf and checkFiles', () => {
-  it('geometry by its extension (any case), pictures by extension or type, anything else refused', () => {
+  it('geometry by its extension (any case), drawings by extension or the SVG type, pictures by extension or type, anything else refused', () => {
     expect(['a.step', 'b.STP', 'c.iges', 'd.igs', 'e.brep', 'f.brp', 'g.stl', 'h.OBJ', 'i.ply'].map((n) => kindOf(file(n)))).toEqual(Array(9).fill('geometry'));
+    // An SVG is a drawing, never a picture, though its type says image/.
+    expect([file('plate.svg', 10, 'image/svg+xml'), file('PLATE.SVG'), file('flange.dxf'), file('flange.DXF', 10, 'image/vnd.dxf'), file('clip', 1, 'image/svg+xml')].map(kindOf)).toEqual(Array(5).fill('drawing'));
     expect([file('a.png'), file('b.JPG'), file('c.webp'), file('clip', 1, 'image/png')].map(kindOf)).toEqual(['picture', 'picture', 'picture', 'picture']);
-    expect(['plugin.zip', 'notes.txt', 'model.step.exe', 'step'].map((n) => kindOf(file(n)))).toEqual(['other', 'other', 'other', 'other']);
+    expect(['plugin.zip', 'notes.txt', 'model.step.exe', 'step', 'plate.svgz', 'part.dwg'].map((n) => kindOf(file(n)))).toEqual(Array(6).fill('other'));
   });
 
-  it('at most 4 per message and 500 MB each, said once each', () => {
-    expect(FILE_LIMITS).toEqual({ count: 4, bytes: 500 * 1024 * 1024 });
+  it('at most 4 per message and 500 MB each, a drawing 20 MB, said once each', () => {
+    expect(FILE_LIMITS).toEqual({ count: 4, bytes: 500 * 1024 * 1024, drawingBytes: 20 * 1024 * 1024 });
     const r = checkFiles(2, [file('a.stl'), file('big.step', FILE_LIMITS.bytes + 1), file('b.stl'), file('c.stl'), file('d.stl'), file('x.zip')]);
     expect(r.accepted.map((f) => f.name)).toEqual(['a.stl', 'b.stl']);
     expect(r.errors).toEqual([
       'big.step is larger than 500 MB. Import it with + Add geometry.',
       'At most 4 files per message.',
-      'Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.',
+      'Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.',
     ]);
     expect(checkFiles(0, [file('edge.step', FILE_LIMITS.bytes)]).accepted).toHaveLength(1);
+    // A drawing has its own cap and words; a geometry file of that size is fine.
+    const d = checkFiles(0, [file('poster.svg', FILE_LIMITS.drawingBytes + 1, 'image/svg+xml'), file('edge.dxf', FILE_LIMITS.drawingBytes), file('mid.step', FILE_LIMITS.drawingBytes + 1)]);
+    expect(d.accepted.map((f) => f.name)).toEqual(['edge.dxf', 'mid.step']);
+    expect(d.errors).toEqual(['poster.svg is larger than 20 MB, the limit for a drawing.']);
   });
 });
 

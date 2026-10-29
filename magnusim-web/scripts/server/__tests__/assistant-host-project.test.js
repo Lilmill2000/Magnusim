@@ -2,7 +2,8 @@
 // 4.11, 16.1): every project_edit action sends the exact method, path and body of the spec;
 // the card actions go by project_id from anywhere, a units change only in the window's
 // project and asking first with what converts; import_file streams a file attached to this
-// conversation, or a path the person typed in this message, and nothing else.
+// conversation, or a path the person typed in this message, and nothing else (an attached drawing
+// is refused with where it can go).
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, createReadStream, statSync } from 'node:fs';
@@ -172,6 +173,36 @@ describe('import_file', () => {
     assert.deepEqual(r.writes.map((w) => [w.path, w.body]), [['/api/geometry/import', { project_id: 'p1', step_path: file, length_unit: 'INCH' }]]);
     r = await sent(t, imp({ path: `${file}x`, length_unit: 'in' }), rt({ ctx: { prompt: `Import ${file}x` } }));
     assert.equal(r.out.error.code, 'invalid_input');
+  });
+  it('a drawing attached (SVG, DXF): refused with where it can go, its stream closed, nothing sent', async () => {
+    fresh();
+    const file = join(ROOT, 'plate.svg');
+    writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const streams = [];
+    const names = { 'att-00000000000000d1': 'plate.svg', 'att-00000000000000d2': 'Flange.DXF' };
+    const t = importFileTool(
+      deps({
+        attachments: {
+          open: async (id) => {
+            const stream = createReadStream(file);
+            streams.push(stream);
+            return { name: names[id], bytes: statSync(file).size, stream };
+          },
+        },
+      }),
+    );
+    for (const [id, name] of Object.entries(names)) {
+      const r = await sent(t, imp({ attachment_id: id }), rt({ ctx: { conversation: 'c-1' } }));
+      assert.deepEqual(
+        [r.out.ok, r.out.error.code, r.out.error.message, r.writes],
+        [false, 'invalid_input', `${name} is a drawing (SVG/DXF): open a workspace that imports drawings and ask there.`, []],
+      );
+    }
+    assert.deepEqual(
+      streams.map((s) => s.destroyed),
+      [true, true],
+      'nothing left open on the file',
+    );
   });
   it('neither a file nor a path: needs_file, with the way the person gives one', async () => {
     const r = await sent(importFileTool(deps()), imp({}));

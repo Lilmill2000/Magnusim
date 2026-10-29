@@ -1,13 +1,14 @@
 // The Assistant's chat dock (phase 4 spec 2-8, 11.3): where Daniel types to the Assistant and
 // follows what it does. A request's transcript as it streams (the person's message, the
 // model's text, a tool step with its badge, summary and time, a picture inline), the turn's end
-// and counters.
+// and counters. A drawing attached in the dock, read by the workspace's own tool in its
+// conversation and never in another.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys), the
 // scripted model (support/fake-llm.mjs) and the ai-demo test plugin
 // (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks allow 2 px (fonts
 // differ under Linux); no pixel snapshots; races are held by the fake, never slept.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { answerGate, dockGate, dockSend, dockTurn, openDock, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
+import { answerGate, dockGate, dockSend, dockTurn, openDock, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm, userImagesOf } from './support/fake-llm.mjs';
 import { startHost } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
@@ -281,6 +282,42 @@ test('pictures: two by Attach, one pasted, one dropped; a fifth refused; a wide 
   expect(turn.turn.prompt_images.map((p) => p.n)).toEqual(['p1', 'p2', 'p3', 'p4']);
   await expect(dockTurn(page).locator('.dock-you img')).toHaveCount(4);
   await expect(chips).toHaveCount(0);
+});
+
+test("a workspace tool reads a drawing attached in the dock (call.readAttachment): its step shows the file's name and size; another conversation's file is refused not_found", async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  await openDock(page);
+  // A drawing whose script would run if anything showed it as an SVG.
+  const svg = Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><script>window.__drawingRan = true</script><rect width="10" height="10"/></svg>\n');
+  const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/assistant/attachments' && r.request().method() === 'POST');
+  await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'plate.svg', mimeType: 'image/svg+xml', buffer: svg }]);
+  const att = (await (await uploaded).json()).attachment_id;
+  expect(att).toMatch(/^att-[0-9a-f]{16}$/);
+  await expect(dock(page).locator('[data-dock-file-chip]')).toHaveAttribute('data-dock-file-state', 'ready', STEP);
+  const measure = { tools: [{ name: `${PLUGIN}__attachment_size`, input: { attachment_id: att } }] };
+  fake.reply(measure, { text: `plate.svg is ${svg.length} bytes.` });
+  await dockSend(page, 'How big is the drawing?');
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  const step = turn.locator('[data-dock-step]').first();
+  await expect(step.locator('.dock-step-title')).toHaveText('Measure an attached file');
+  await expect(step.locator('[data-dock-result]')).toHaveText(new RegExp(`^✓ plate\\.svg: ${svg.length} bytes · \\d+\\.\\d s$`));
+  await expect(turn.locator('[data-dock-you-file]')).toHaveText([`plate.svg · ${svg.length} bytes`]);
+  await shot(page, 'attachment-read');
+  // The page got the bytes as a file of no type it could render; the model got its size.
+  expect(await w.frame.locator('body').evaluate(() => window.__aiFiles)).toEqual([{ name: 'plate.svg', type: 'application/octet-stream', bytes: svg.length }]);
+  expect(resultsIn(chats().at(-1))).toEqual([{ tool: `${PLUGIN}__attachment_size`, ok: true, data: { name: 'plate.svg', bytes: svg.length }, text: `plate.svg is ${svg.length} bytes.`, images: [] }]);
+  expect(await page.evaluate(() => window.__drawingRan ?? null)).toBe(null);
+
+  // A new conversation: the file is the first one's, never this one's.
+  await dock(page).locator('[data-dock-new]').first().click();
+  fake.reply(measure, { text: 'That file is not in this conversation.' });
+  await dockSend(page, 'And that drawing again?');
+  const second = dockTurn(page);
+  await expect(second.locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(second.locator('[data-dock-step][data-dock-step-state="failed"] [data-dock-result]')).toHaveText('✗ not_found: No such attached file in this conversation.');
+  expect(await w.frame.locator('body').evaluate(() => window.__aiFiles.length)).toBe(1);
+  expect(JSON.stringify(resultsIn(chats().at(-1)))).toContain('not_found: No such attached file in this conversation.');
 });
 
 test('review rounds: after its edit and its answer, the workspace asks it to check its work; the divider shows and the request ends done', async ({ page, request }) => {

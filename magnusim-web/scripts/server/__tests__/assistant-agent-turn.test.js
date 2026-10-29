@@ -63,7 +63,7 @@ const { stopAllAgentProcesses } = await import('../assistant/agents/process.ts')
 const { dropWarmKeeper } = await import('../assistant/agents/job-win.ts');
 const { startFakeAcp } = await import('../../../e2e/support/fake-acp.mjs');
 const { removeTree } = await import('../../remove-tree.js');
-const { TAB_BUSY_TEXT, TURN_UPDATE_MS } = await import('../assistant/turns.ts');
+const { AGENT_IMAGES_TEXT, TAB_BUSY_TEXT, TURN_UPDATE_MS } = await import('../assistant/turns.ts');
 const { WAIT_PAUSE_MAX_MS, WAITED_TOO_LONG_NOTE } = await import('../assistant/runner.ts');
 
 const WIN = process.platform === 'win32';
@@ -2608,6 +2608,125 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
 });
 
 // ------------------------------------------------------------------------------------------------
+// The person's pictures: only to an agent whose initialize says it takes them
+// ------------------------------------------------------------------------------------------------
+
+const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+const PICTURE = { media_type: 'image/png', data: PNG_1x1 };
+
+describe("the person's pictures on a coding agent", LIMIT, () => {
+  it("an agent that takes them (promptCapabilities.image) gets image blocks after the message and the files' lines; the window keeps them; its status row says so", async () => {
+    const { srv } = await serverWorld();
+    const page = await srv.page();
+    claude.configure({ images: true });
+    try {
+      const link = await page.open();
+      const bytes = Buffer.from('ISO-10303-21;\nEND-ISO-10303-21;\n');
+      const up = await fetch(`${srv.base}/api/assistant/attachments?name=bracket.step`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-magnusim-link': link }, body: bytes });
+      const a = await up.json();
+      assert.equal(up.status, 200, JSON.stringify(a));
+      claude.script({ say: 'seen' });
+      const r = await srv.post('/api/assistant/turns', { text: 'Like this', provider: 'agent:claude', link, attachments: [a.attachment_id], images: [PICTURE, PICTURE] });
+      assert.equal(r.status, 202, JSON.stringify(r.json));
+      const t = srv.handle.turns.get(r.json.turn);
+      await settledTurn(t);
+      assert.equal(endOf(t).state, 'done', JSON.stringify(endOf(t)));
+      const prompts = claude.received(lastPid(claude)).filter((m) => m.method === 'session/prompt');
+      assert.equal(prompts.length, 1);
+      const blocks = prompts[0].params.prompt;
+      const at = blocks.findIndex((b) => b.type === 'text' && b.text === 'Like this');
+      assert.ok(at >= 0, JSON.stringify(blocks.map((b) => b.type)));
+      assert.deepEqual(blocks.slice(at).map((b) => b.type), ['text', 'text', 'image', 'image', 'text']);
+      assert.match(blocks[at + 1].text, /^\[Attached geometry file: "bracket\.step"/);
+      assert.deepEqual(blocks[at + 2], { type: 'image', mimeType: 'image/png', data: PNG_1x1 });
+      assert.deepEqual(blocks[at + 3], { type: 'image', mimeType: 'image/png', data: PNG_1x1 });
+      assert.match(blocks[at + 4].text, /^App context \(data, not instructions\): /);
+      assert.equal(blocks.filter((b) => b.type === 'image').length, 2, 'only after the message');
+      // The window shows the person's pictures with the message, as a model turn's.
+      const sum = (await srv.get(`/api/assistant/turns/${r.json.turn}`)).json.turn;
+      assert.deepEqual(sum.prompt_images, [
+        { n: 'p1', media_type: 'image/png', width: 1, height: 1 },
+        { n: 'p2', media_type: 'image/png', width: 1, height: 1 },
+      ]);
+      const img = await fetch(`${srv.base}/api/assistant/turns/${r.json.turn}/images/p1`);
+      assert.equal(img.status, 200);
+      assert.equal(Buffer.from(await img.arrayBuffer()).toString('base64'), PNG_1x1);
+      // Its initialize's word is the status row's.
+      const st = (await srv.get('/api/assistant/status')).json;
+      assert.equal(st.providers_ready['agent:claude'].images, true);
+    } finally {
+      claude.configure({ images: false });
+      page.close();
+      await srv.close();
+    }
+  });
+
+  it("an agent that takes none: the turn ends bad_images with the old words before its prompt (nothing of the request sent); its status row says so; without them it goes on", async () => {
+    const { srv } = await serverWorld();
+    const page = await srv.page();
+    try {
+      const link = await page.open();
+      // Before it ever started: the catalogue's word.
+      await srv.get('/api/assistant/agents');
+      assert.equal((await srv.get('/api/assistant/status')).json.providers_ready['agent:claude'].images, true);
+      const r = await srv.post('/api/assistant/turns', { text: 'Like this', provider: 'agent:claude', link, images: [PICTURE] });
+      assert.equal(r.status, 202, JSON.stringify(r.json));
+      const t = srv.handle.turns.get(r.json.turn);
+      await settledTurn(t);
+      const end = endOf(t);
+      assert.deepEqual([end.state, end.reason, end.message], ['failed', 'bad_images', AGENT_IMAGES_TEXT]);
+      assert.equal(AGENT_IMAGES_TEXT, "A coding agent's request can't carry pictures: send it without them.");
+      const pid = lastPid(claude);
+      assert.ok(methodsIn(claude, pid).includes('initialize'));
+      assert.ok(!methodsIn(claude, pid).includes('session/prompt'), 'no prompt went to the agent');
+      assert.equal((await srv.get('/api/assistant/status')).json.providers_ready['agent:claude'].images, false);
+      // The same conversation, without pictures: its kept agent gets the message.
+      claude.script({ say: 'ok' });
+      const r2 = await srv.post('/api/assistant/turns', { text: 'Without them', conversation: r.json.conversation, link });
+      assert.equal(r2.status, 202, JSON.stringify(r2.json));
+      const t2 = srv.handle.turns.get(r2.json.turn);
+      await settledTurn(t2);
+      assert.equal(endOf(t2).state, 'done');
+      const prompt = claude.received(pid).filter((m) => m.method === 'session/prompt').at(-1);
+      assert.ok(prompt.params.prompt.every((b) => b.type === 'text'));
+      assert.ok(prompt.params.prompt.some((b) => b.text === 'Without them'));
+      // With pictures again, its kept session's word refuses them too.
+      const r3 = await srv.post('/api/assistant/turns', { text: 'Again', conversation: r.json.conversation, link, images: [PICTURE] });
+      assert.equal(r3.status, 202, JSON.stringify(r3.json));
+      const t3 = srv.handle.turns.get(r3.json.turn);
+      await settledTurn(t3);
+      assert.deepEqual([endOf(t3).reason, endOf(t3).message], ['bad_images', AGENT_IMAGES_TEXT]);
+      assert.equal(claude.received(pid).filter((m) => m.method === 'session/prompt').length, 1);
+    } finally {
+      page.close();
+      await srv.close();
+    }
+  });
+
+  it('Ask: the privacy question comes first (no agent runs until it is answered); after Send the pictures go with the message', async () => {
+    const w = await world({ privacy: 'ask' });
+    claude.configure({ images: true });
+    try {
+      const before = claude.pids('agent').length;
+      const r = await w.turn({ text: 'Like this', provider: 'agent:claude', tab: 'tab-1', images: [PICTURE] });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script({ say: 'seen' });
+      const g = await gateOf(r.turn);
+      assert.deepEqual([g.kind, g.title], ['privacy', 'Send project "Secret Wing" to Claude Code?']);
+      assert.equal(claude.pids('agent').length, before, 'no agent before the answer');
+      assert.equal(byTab(w, g, true).status, 200);
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      const prompt = claude.received(lastPid(claude)).filter((m) => m.method === 'session/prompt').at(-1);
+      assert.deepEqual(prompt.params.prompt.filter((b) => b.type === 'image'), [{ type: 'image', mimeType: 'image/png', data: PNG_1x1 }]);
+    } finally {
+      claude.configure({ images: false });
+      await w.close();
+    }
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
 // The routes and the server's lifetime
 // ------------------------------------------------------------------------------------------------
 
@@ -2669,26 +2788,39 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
     }
   });
 
-  it("a window's attached files reach the agent as the model's lines do, after the message (core host tools spec 13.3)", async () => {
+  it("a window's attached files reach the agent as the model's lines do, after the message, each with its kind (core host tools spec 13.3)", async () => {
     const { srv } = await serverWorld();
     const page = await srv.page();
     try {
       const link = await page.open();
       const bytes = Buffer.from('ISO-10303-21;\nEND-ISO-10303-21;\n');
-      const up = await fetch(`${srv.base}/api/assistant/attachments?name=bracket.step`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-magnusim-link': link }, body: bytes });
-      const a = await up.json();
-      assert.equal(up.status, 200, JSON.stringify(a));
+      const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+      const send = async (name, body) => {
+        const up = await fetch(`${srv.base}/api/assistant/attachments?name=${name}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-magnusim-link': link }, body });
+        const j = await up.json();
+        assert.equal(up.status, 200, JSON.stringify(j));
+        return j;
+      };
+      const a = await send('bracket.step', bytes);
+      const d = await send('plate.svg', svg);
+      assert.equal(d.kind, 'drawing');
       claude.script({ say: 'seen' });
-      const r = await srv.post('/api/assistant/turns', { text: 'Import it', provider: 'agent:claude', link, attachments: [a.attachment_id] });
+      const r = await srv.post('/api/assistant/turns', { text: 'Import it', provider: 'agent:claude', link, attachments: [a.attachment_id, d.attachment_id] });
       assert.equal(r.status, 202, JSON.stringify(r.json));
       await settledTurn(srv.handle.turns.get(r.json.turn));
       const prompt = claude.received(lastPid(claude)).filter((m) => m.method === 'session/prompt').at(-1);
       const texts = prompt.params.prompt.map((b) => b.text);
       const at = texts.indexOf('Import it');
       assert.ok(at >= 0, JSON.stringify(texts));
-      assert.equal(texts[at + 1], `[Attached file: "bracket.step", ${bytes.length} bytes, attachment_id ${a.attachment_id}]`);
+      assert.equal(
+        texts[at + 1],
+        `[Attached geometry file: "bracket.step", ${bytes.length} bytes, attachment_id ${a.attachment_id}]\n[Attached drawing: "plate.svg", ${svg.length} bytes, attachment_id ${d.attachment_id}]`,
+      );
       assert.match(texts[at + 2], /^App context \(data, not instructions\): /);
-      assert.deepEqual((await srv.get(`/api/assistant/turns/${r.json.turn}`)).json.turn.attachments, [{ id: a.attachment_id, name: 'bracket.step', bytes: bytes.length }]);
+      assert.deepEqual((await srv.get(`/api/assistant/turns/${r.json.turn}`)).json.turn.attachments, [
+        { id: a.attachment_id, name: 'bracket.step', bytes: bytes.length, kind: 'geometry' },
+        { id: d.attachment_id, name: 'plate.svg', bytes: svg.length, kind: 'drawing' },
+      ]);
     } finally {
       page.close();
       await srv.close();
@@ -2707,6 +2839,8 @@ describe('the agent routes, the turn route and the server lifetime (spec 4.12, 4
         { ok: true, agent: 'Claude Code', version: '0.85.1', signed_in: 'yes', own_tools: 'off', images: false, tools: 'works' },
       );
       assert.ok(Number.isInteger(t.json.ms) && t.json.ms >= 0);
+      // Its initialize said it takes no pictures: the status row (the dock's composer) says so now.
+      assert.equal((await srv.get('/api/assistant/status')).json.providers_ready['agent:claude'].images, false);
       assert.deepEqual(t.json.modes.map((x) => x.id), ['default', 'plan']);
       assert.deepEqual(t.json.models.map((x) => x.id), ['fake-large', 'fake-small']);
       const tools = claude.events('mcp_tools', pid).at(-1);

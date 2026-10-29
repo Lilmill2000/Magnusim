@@ -28,6 +28,7 @@ import {
   WorkspaceCalls,
   assistantCallOutcome,
   checkAssistantTools,
+  type AssistantAttachmentRead,
   type AssistantCallOutcome,
   type AssistantInvoke,
   type AssistantPublication,
@@ -46,6 +47,8 @@ const STUDY = { id: 'st-1', kind: 'counter_case', title: 'Counter', rev: 1 } as 
 const SCHEMA = { type: 'object', properties: { by: { type: 'integer', minimum: -100, maximum: 100 } }, required: ['by'], additionalProperties: false };
 const ADD = { name: 'add', title: 'Add to the counter', description: 'Adds `by` to the counter.', inputSchema: SCHEMA, risk: 'edit' };
 const SLOW = { name: 'slow_add', description: 'Adds slowly, with progress.', inputSchema: SCHEMA, risk: 'edit', timeoutS: 2 };
+/** An attachment id, as the server makes them. */
+const ATT = 'att-0123456789abcdef';
 const KB = 1024;
 // Controls written by code, so this file holds none: BEL, a bidi override, a line separator.
 const BEL = String.fromCharCode(7);
@@ -778,6 +781,91 @@ describe('invokeTool (1.9, unreleased)', () => {
     t.end();
   });
 
+  it("assistant.attachment {call, id}: the running call's read goes to the caller's fetcher and comes back {blob, fileName, size, sha256}; refused for another call, a bad id, a call with no fetcher and once the call ended", async () => {
+    const t = await connected();
+    await t.call('assistant.register', { tools: [ADD] });
+    const blob = new Blob(['<svg xmlns="http://www.w3.org/2000/svg"/>'], { type: 'application/octet-stream' });
+    const signals: AbortSignal[] = [];
+    const attachment = vi.fn(async (_id: string, signal: AbortSignal): Promise<AssistantAttachmentRead> => {
+      signals.push(signal);
+      return { blob, fileName: 'plate.svg', sha256: 'ab12' };
+    });
+    const a = invoke(t, { attachment });
+    await settle(() => of(t.events, 'assistantInvoke').length === 1, 'the invoke');
+    const got = await t.call('assistant.attachment', { call: 'ai-1', id: ATT });
+    expect(got.result).toEqual({ blob, fileName: 'plate.svg', size: blob.size, sha256: 'ab12' });
+    expect((got.result as { blob: Blob }).blob).toBe(blob);
+    expect(attachment).toHaveBeenCalledWith(ATT, expect.any(AbortSignal));
+    expect(signals[0].aborted).toBe(false);
+    // Another call's id, and ids that are none: the fetcher is not asked.
+    expect((await t.call('assistant.attachment', { call: 'ai-9', id: ATT })).error).toMatchObject({ code: 'not_allowed' });
+    for (const id of ['att-0123', 'att-0123456789ABCDEF', '../file', 7, undefined]) {
+      expect((await t.call('assistant.attachment', { call: 'ai-1', id })).error, String(id)).toMatchObject({ code: 'bad_request' });
+    }
+    expect(attachment).toHaveBeenCalledTimes(1);
+    // The fetcher's refusals keep their code (not_found, not_allowed, bad_request); any other reads failed.
+    attachment.mockRejectedValueOnce(Object.assign(new Error('No such attached file in this conversation.'), { code: 'not_found' }));
+    expect((await t.call('assistant.attachment', { call: 'ai-1', id: ATT })).error).toEqual({ code: 'not_found', message: 'No such attached file in this conversation.' });
+    attachment.mockRejectedValueOnce(Object.assign(new Error(`Spoofed${BEL}`), { code: 'plugin_off' }));
+    expect((await t.call('assistant.attachment', { call: 'ai-1', id: ATT })).error).toEqual({ code: 'failed', message: 'Spoofed' });
+    // Ended: the reads' signal is aborted, and its id reads nothing more.
+    await t.call('assistant.result', { call: 'ai-1', ok: true });
+    await a.p;
+    expect(signals[0].aborted).toBe(true);
+    expect((await t.call('assistant.attachment', { call: 'ai-1', id: ATT })).error).toMatchObject({ code: 'not_allowed' });
+    // A call whose caller gave no fetcher (a core call's): not_allowed.
+    const b = invoke(t);
+    await settle(() => of(t.events, 'assistantInvoke').length === 2, 'the second invoke');
+    expect((await t.call('assistant.attachment', { call: 'ai-2', id: ATT })).error).toMatchObject({ code: 'not_allowed' });
+    await t.call('assistant.result', { call: 'ai-2', ok: true });
+    await b.p;
+    expect(attachment).toHaveBeenCalledTimes(3);
+    t.end();
+  });
+
+  it("an attachment read is the call's work in flight (not NOT_HOOK_WORK): the stall window waits for it and the caller hears onAlive; the call ending aborts it and the page hears not_allowed", async () => {
+    const t = await connected();
+    await t.call('assistant.register', { tools: [SLOW] });
+    fakeTimers();
+    const signals: AbortSignal[] = [];
+    const delivers: Array<(r: AssistantAttachmentRead) => void> = [];
+    const attachment = vi.fn(
+      (_id: string, signal: AbortSignal) =>
+        new Promise<AssistantAttachmentRead>((resolve, reject) => {
+          signals.push(signal);
+          delivers.push(resolve);
+          signal.addEventListener('abort', () => reject(new DOMException('The read was aborted', 'AbortError')));
+        }),
+    );
+    const alive = vi.fn();
+    const a = invoke(t, { tool: 'slow_add', timeoutS: 2, onAlive: alive, attachment });
+    await settle(() => of(t.events, 'assistantInvoke').length === 1, 'the invoke');
+    const read = t.send('assistant.attachment', { call: 'ai-1', id: ATT });
+    await settle(() => attachment.mock.calls.length === 1, 'the read');
+    expect(alive).toHaveBeenCalledTimes(1);
+    // Far past the call's own 2 s window: the read holds it open, and the caller hears it is alive.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(a.state.out).toBeNull();
+    expect(alive).toHaveBeenCalledTimes(3);
+    delivers[0]({ blob: new Blob(['x']), fileName: 'a.svg', sha256: '' });
+    await settle(() => !!read(), 'its answer');
+    expect(read()?.result).toMatchObject({ fileName: 'a.svg', size: 1 });
+    // Answered: the window runs again.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await outcomeOf(a)).toMatchObject({ ok: false, code: 'stalled' });
+    // A read still going when the call ends stops, and the page hears the call ended.
+    const b = invoke(t, { tool: 'slow_add', timeoutS: 2, attachment });
+    await settle(() => of(t.events, 'assistantInvoke').length === 2, 'the second invoke');
+    const late = t.send('assistant.attachment', { call: 'ai-2', id: ATT });
+    await settle(() => attachment.mock.calls.length === 2, 'the second read');
+    await t.call('assistant.result', { call: 'ai-2', ok: true, result: { text: 'added' } });
+    expect(await outcomeOf(b)).toEqual({ ok: true, result: { text: 'added' } });
+    expect(signals[1].aborted).toBe(true);
+    await settle(() => !!late(), 'the late answer');
+    expect(late()?.error).toEqual({ code: 'not_allowed', message: 'the tool call ended before the file was read' });
+    t.end();
+  });
+
   it('Stop: assistantAbort, then aborted after 2 s without an answer; a result within 2 s is kept, an error within 2 s reads aborted', async () => {
     const t = await connected();
     await t.call('assistant.register', { tools: [ADD] });
@@ -1224,6 +1312,38 @@ describe('the SDK and the bridge together (1.9, unreleased)', () => {
     expect(await call(t.bridge)).toEqual({ ok: false, code: 'invalid_input', message: 'step_too_big: at most 3 at a time.', hint: 'Call add with by 1, 2 or 3.', detail });
     expect(await call(t.bridge)).toEqual({ ok: false, code: 'failed', message: 'No.', hint: 'Wait.', detail: { at: '1970-01-01T00:00:00.000Z' } });
     expect(await call(t.bridge)).toEqual({ ok: true, result: { text: 'Now 2', data: { count: 2 }, summary: 'Added 2: the counter is 2' } });
+    t.end();
+  });
+
+  it("call.readAttachment(id) through the real SDK: a File with the attachment's name and bytes, typed application/octet-stream (never the SVG's own type); a refusal rejects with its code", async () => {
+    const t = await sdkConnected();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>window.ran = 1</script></svg>';
+    const read: Array<File | { code: unknown; message: string }> = [];
+    await t.ws.assistant!.register([TOOL], async (c) => {
+      if (typeof c.readAttachment !== 'function') throw new Error('no readAttachment');
+      try {
+        read.push(await c.readAttachment(ATT));
+      } catch (e) {
+        read.push({ code: (e as { code?: unknown }).code, message: (e as Error).message });
+      }
+      return 'read';
+    });
+    const attachment = vi.fn(async (): Promise<AssistantAttachmentRead> => ({ blob: new Blob([svg], { type: 'image/svg+xml' }), fileName: 'plate été.svg', sha256: 'ab12' }));
+    const run = (over: Partial<AssistantInvoke>) =>
+      t.bridge.invokeTool({ call: 's', turn: 't', tool: 'add', input: { by: 2 }, timeoutS: 60, signal: new AbortController().signal, onProgress: () => undefined, ...over });
+    expect(await run({ attachment })).toEqual({ ok: true, result: { text: 'read' } });
+    expect(attachment).toHaveBeenCalledWith(ATT, expect.any(AbortSignal));
+    const file = read[0] as File;
+    expect(file).toBeInstanceOf(File);
+    expect([file.name, file.type, file.size]).toEqual(['plate été.svg', 'application/octet-stream', svg.length]);
+    expect(new TextDecoder().decode(await file.arrayBuffer())).toBe(svg);
+    // Refused: the handler gets the code.
+    attachment.mockRejectedValueOnce(Object.assign(new Error('No such attached file in this conversation.'), { code: 'not_found' }));
+    await run({ attachment });
+    expect(read[1]).toEqual({ code: 'not_found', message: 'No such attached file in this conversation.' });
+    // A call whose caller reads none: not_allowed.
+    await run({});
+    expect(read[2]).toMatchObject({ code: 'not_allowed' });
     t.end();
   });
 });

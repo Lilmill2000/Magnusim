@@ -43,7 +43,7 @@ import { CONNECTION_CHECK } from '../provider-test.ts';
 import { cleanText } from '../sanitize.ts';
 import { agentPrefs, isAgentOf, loadSettings, setAgentLockdownFailed, type AssistantSettings } from '../settings.ts';
 import { OursMatcher, pickOption, REJECT_KINDS, terminalSignIn, type AuthMethodView, type ModelView, type ModeView } from './acp.ts';
-import { agentRow, agentStartRefusal, ensureAgents, rememberAgentLast, rememberAgentSignIn, rememberAgentWord, resolveAgentNow, type AgentEntry, type AgentRow } from './discover.ts';
+import { agentRow, agentStartRefusal, ensureAgents, rememberAgentImages, rememberAgentLast, rememberAgentSignIn, rememberAgentWord, resolveAgentNow, type AgentEntry, type AgentRow } from './discover.ts';
 import { agentHost, AGENTS_BUSY_TEXT, type Transient } from './host.ts';
 import { knownAgent, policyOf } from './known.ts';
 import { AGENT_TOOLS_MS, AgentRunError, AgentSession, agentErrorOf, type FoundAgent } from './session.ts';
@@ -325,6 +325,7 @@ async function runTest(p: Prepared, tr: Transient, message: boolean, o: RunOptio
     await session.start(signal);
     const choices = choicesOf(session);
     rememberAgentLast(found.id, { ...choices, at: new Date().toISOString() });
+    rememberAgentImages(found.id, found.fingerprint, session.info.images);
     let tools: 'works' | 'not_used' | null = null;
     if (message) {
       // Its MCP server may still be connecting (session/new can come first): the message waits

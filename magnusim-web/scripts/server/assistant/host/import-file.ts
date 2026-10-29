@@ -8,6 +8,7 @@
  * any path it is given. A browser can't open its file picker for the model.
  */
 import { basename, extname } from 'node:path';
+import { NO_SUCH_ATTACHMENT_TEXT } from '../attachments.ts';
 import type { ToolCtx, ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import {
@@ -34,6 +35,10 @@ import {
 
 export const GEOMETRY_EXTS = ['.step', '.stp', '.iges', '.igs', '.brep', '.brp', '.stl', '.obj', '.ply'];
 const MESH_EXTS = ['.stl', '.obj', '.ply'];
+/** The drawings the dock attaches too: a workspace that imports drawings takes them, never import_file. */
+const DRAWING_EXTS = ['.svg', '.dxf'];
+export const drawingHereText = (name: string): string =>
+  `${name} is a drawing (SVG/DXF): open a workspace that imports drawings and ask there.`;
 /** The length units of the units dialog, as the import (and /api/prefs) take them. */
 export const LENGTH_UNITS: Readonly<Record<string, string>> = Object.freeze({ mm: 'MM', cm: 'CM', m: 'M', in: 'INCH' });
 const NEEDS_FILE_HINT = 'Ask the person to attach it with the paper-clip in the Assistant panel, or to use + Add geometry. A browser can\'t open its file picker for you.';
@@ -98,12 +103,20 @@ export function importFileTool(d: HostToolDeps): HostToolDef {
         const o = via(rt, 'import_file');
         if (attachment) {
           const opened = d.attachments ? await d.attachments.open(attachment, conversationOf(rt.ctx)) : null;
-          if (!opened) return fail('not_found', 'No such attached file in this conversation.', NEEDS_FILE_HINT);
+          if (!opened) return fail('not_found', NO_SUCH_ATTACHMENT_TEXT, NEEDS_FILE_HINT);
           name = opened.name;
           const ext = extname(name).toLowerCase();
-          if (!GEOMETRY_EXTS.includes(ext)) return fail('invalid_input', 'Only STEP, IGES, BREP, STL, OBJ and PLY files are geometry.');
+          const close = () => (opened.stream as { destroy?: () => void }).destroy?.();
+          if (DRAWING_EXTS.includes(ext)) {
+            close();
+            return fail('invalid_input', drawingHereText(cleanText(name, 80)));
+          }
+          if (!GEOMETRY_EXTS.includes(ext)) {
+            close();
+            return fail('invalid_input', 'Only STEP, IGES, BREP, STL, OBJ and PLY files are geometry.');
+          }
           if (MESH_EXTS.includes(ext) && !unit) {
-            (opened.stream as { destroy?: () => void }).destroy?.();
+            close();
             return fail('invalid_input', `${cleanText(name, 80)} is a mesh file: say its length unit (mm, cm, m or in).`, 'Ask the person which unit the file is in.');
           }
           rt.progress(null, `Importing ${cleanText(name, 80)}`);

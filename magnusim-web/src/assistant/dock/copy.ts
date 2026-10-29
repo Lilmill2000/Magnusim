@@ -108,7 +108,7 @@ export const CONVERSATION_FULL = 'This conversation is full. Start a new one.';
 // Pictures (3.2) and files (core host tools spec 13.1).
 export const ATTACH_LABEL = 'Attach pictures or files';
 export const ATTACH = 'Attach';
-export const DROP_PICTURES = 'Drop pictures or geometry files to attach';
+export const DROP_PICTURES = 'Drop pictures, geometry files or drawings to attach';
 export const ONLY_IMAGES = 'Only PNG, JPEG and WebP pictures can be attached.';
 export const shrunkTo = (w: number, h: number): string => `Shrunk to ${w} × ${h} px to fit`;
 export const tooLargeAfterShrinking = (name: string): string => `${name} is larger than 1.5 MB even after shrinking it.`;
@@ -116,12 +116,15 @@ export const pictureChip = (name: string, w: number, h: number): string => `${na
 export const removePicture = (name: string): string => `Remove ${name}`;
 export const AT_MOST_FOUR = 'At most 4 pictures per message.';
 export const PICTURES_GO = 'Pictures go to the provider with your message.';
+/** A coding agent's conversation: the agent gets them, and its own service under the person's account. */
+export const picturesGoToAgent = (name: string): string => `Pictures go to ${name} with your message, and on to its own service.`;
 export const noPictures = (name: string): string => `${name} doesn't take pictures. Send the message without them.`;
-/** A coding agent's conversation: files, not pictures. */
-export const attachFilesOnly = (name: string): string => `Attach geometry files (${name} doesn't take pictures)`;
-export const DROP_FILES = 'Drop geometry files to attach';
-export const ONLY_FILES = 'Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.';
+/** A coding agent that said it takes no pictures: files (drawings among them), not pictures. */
+export const attachFilesOnly = (name: string): string => `Attach geometry files or drawings (${name} doesn't take pictures)`;
+export const DROP_FILES = 'Drop geometry files or drawings to attach';
+export const ONLY_FILES = 'Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.';
 export const fileTooLarge = (name: string): string => `${name} is larger than 500 MB. Import it with + Add geometry.`;
+export const drawingTooLarge = (name: string): string => `${name} is larger than 20 MB, the limit for a drawing.`;
 export const AT_MOST_FOUR_FILES = 'At most 4 files per message.';
 /** "4.2 MB", "12 KB", "512 bytes" (1024-based, as the server's line to the model). */
 export function fileSize(bytes: number): string {
@@ -135,6 +138,8 @@ export const fileChip = (name: string, bytes: number): string => `${name} · ${f
 /** The person's message's files in the transcript (their list's name). */
 export const ATTACHED_FILES = 'Attached files';
 export const FILES_STAY = 'Files stay on this PC. The Assistant gets their names and can import them into the project open here.';
+/** The same, with a drawing among them: import_file never takes one. */
+export const DRAWINGS_STAY = 'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.';
 export const uploadingLabel = (name: string): string => `Uploading ${name}`;
 export const waitingForUpload = (name: string): string => `Waiting for ${name} to finish uploading…`;
 export const uploadLost = (name: string): string => `${name} didn't reach Magnusim's server. Attach it again.`;

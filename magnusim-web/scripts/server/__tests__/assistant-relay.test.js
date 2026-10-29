@@ -5,13 +5,17 @@
 // at once when its stream or channel goes, after the ack window when nothing answers, after
 // the grace when the page withdrew its tools mid-call; the runner's stall window and Stop
 // reach the page as `abort`; one call per tab, and tabs stay apart; a bound turn's end
-// starts the hold, and a dropped link leaves a dormant registration until the hold ends.
+// starts the hold, and a dropped link leaves a dormant registration until the hold ends. A
+// running workspace call reads a file attached in its conversation (GET /relay/attachment) as
+// bytes only, on its own link, and nothing else does.
 // Races are forced (the server's cut, a fake clock, explicit answers), never slept.
 import { after, afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-assistant-relay-'));
 process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
@@ -25,6 +29,8 @@ const { TAB_HIDDEN_TEXT } = await import('../assistant/turns.ts');
 const { ABORT_GRACE_MS } = await import('../assistant/runner.ts');
 const { ASSISTANT_HOLD_MS, RELAY_ACK_MS, UNREGISTER_GRACE_MS, pageOutcome, resolveRelaySwitches } = await import('../assistant/relay.ts');
 const { sourceLabel } = await import('../assistant/runner.ts');
+const { AttachmentStore } = await import('../assistant/attachments.ts');
+const { MCP_NO_ATTACHMENT } = await import('../assistant/host/import-file.ts');
 
 const servers = [];
 afterEach(async () => {
@@ -1334,5 +1340,151 @@ describe('a request started in a window (phase 4 spec 9.1, 9.6)', { timeout: 30_
     const there = await s.post('/api/assistant/relay/gate', { link: linkA, gate: first.id, allow: true });
     assert.deepEqual([there.status, there.json.code], [403, 'not_shown']);
     s.handle.turns.get(id).stop();
+  });
+});
+
+// ---------------------------------------------------------------- a running call's read of an attached file
+
+/** A drawing with a script in it: its bytes go back to a page, never as an SVG. */
+const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><script>window.ran = true</script><rect width="10" height="10"/></svg>\n');
+let stores = 0;
+
+async function filesSetup() {
+  stores += 1;
+  const store = new AttachmentStore({ dir: join(ROOT, `files-${stores}`), maxBytes: 4096 });
+  return { store, ...(await setup({ attachments: store })) };
+}
+
+/** A file kept for `tab`, as the dock's upload keeps it, bound to `conversation` (null: unbound). */
+async function keep(store, tab, conversation, name = 'plate.svg', bytes = SVG) {
+  const r = await store.receive(Readable.from([bytes]), { name, linkTab: tab });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  if (conversation) store.bind([r.meta.id], conversation);
+  return r.meta.id;
+}
+
+/** GET /relay/attachment as the page relay sends it: its status, headers and bytes, and a refusal's JSON. */
+async function readFile(s, { link, call, id, headers = {} }) {
+  const q = new URLSearchParams();
+  if (call !== undefined) q.set('call', call);
+  if (id !== undefined) q.set('id', id);
+  const r = await fetch(`${s.base}/api/assistant/relay/attachment?${q}`, { headers: { ...(link ? { 'x-magnusim-link': link } : {}), ...headers } });
+  const bytes = Buffer.from(await r.arrayBuffer());
+  let json = null;
+  if (r.status !== 200) {
+    try {
+      json = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      /* not JSON */
+    }
+  }
+  return { status: r.status, headers: r.headers, bytes, json };
+}
+
+const codeOf = (r) => [r.status, r.json?.code];
+
+describe("a running call reads a file attached in its turn's conversation", { timeout: 30_000 }, () => {
+  it('its bytes as application/octet-stream (nosniff, no-store, CSP none, an attachment) with its name and SHA-256, while the call runs; not once it ended', async () => {
+    const { m, s, store } = await filesSetup();
+    const { page, link } = await linkedPage(s);
+    const id = await keep(store, page.tab, 'conv-1', 'plaque été (1).svg');
+    const call = runTool(toolOf(m, page.tab, 'add'), { by: 1 }, { ...ctx(page.tab), conversation: 'conv-1' });
+    const inv = await page.frame('invoke');
+    await s.progress(link, inv.call, { ack: true });
+    const got = await readFile(s, { link, call: inv.call, id });
+    assert.equal(got.status, 200, got.bytes.toString('utf8'));
+    assert.deepEqual(got.bytes, SVG);
+    const heads = ['content-type', 'content-length', 'x-content-type-options', 'cache-control', 'content-security-policy', 'content-disposition', 'x-file-name', 'x-sha256'];
+    assert.deepEqual(Object.fromEntries(heads.map((h) => [h, got.headers.get(h)])), {
+      'content-type': 'application/octet-stream',
+      'content-length': String(SVG.length),
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store',
+      'content-security-policy': "default-src 'none'",
+      'content-disposition': 'attachment',
+      'x-file-name': encodeURIComponent('plaque été (1).svg'),
+      'x-sha256': createHash('sha256').update(SVG).digest('hex'),
+    });
+    // Read as often as it likes while it runs.
+    assert.equal((await readFile(s, { link, call: inv.call, id })).status, 200);
+    await s.result(link, inv.call, { ok: true, result: { text: 'Now 1' } });
+    assert.equal((await call.promise).ok, true);
+    // Ended: the same call id reads nothing.
+    const after = await readFile(s, { link, call: inv.call, id });
+    assert.deepEqual(codeOf(after), [409, 'not_allowed']);
+    assert.ok(!after.bytes.includes('window.ran'), 'no byte of the file');
+  });
+
+  it('refused: a link that is not live (409 as the others), another call or one on another link, a bad call or id (400), another conversation’s file, an unbound one, one not kept (404 not_found)', async () => {
+    const { m, s, store } = await filesSetup();
+    const { page, link } = await linkedPage(s);
+    const other = await linkedPage(s);
+    const mine = await keep(store, page.tab, 'conv-1');
+    const theirs = await keep(store, page.tab, 'conv-2');
+    const unbound = await keep(store, page.tab, null);
+    const call = runTool(toolOf(m, page.tab, 'add'), { by: 1 }, { ...ctx(page.tab), conversation: 'conv-1' });
+    const inv = await page.frame('invoke');
+    await s.progress(link, inv.call, { ack: true });
+    for (const [what, req] of [
+      ['an unknown link', { link: 'f'.repeat(24), call: inv.call, id: mine }],
+      ['no link', { call: inv.call, id: mine }],
+      ['a link that is no link', { link: 'not-a-link', call: inv.call, id: mine }],
+    ]) {
+      assert.deepEqual(codeOf(await readFile(s, req)), [409, 'no_channel'], what);
+    }
+    assert.deepEqual(codeOf(await readFile(s, { link, call: 'rc-9-abcdef', id: mine })), [409, 'not_allowed'], 'another call');
+    assert.deepEqual(codeOf(await readFile(s, { link: other.link, call: inv.call, id: mine })), [409, 'not_allowed'], "another tab's link");
+    for (const [what, req] of [
+      ['no call', { link, id: mine }],
+      ['a call that is no id', { link, call: 'a b', id: mine }],
+      ['no id', { link, call: inv.call }],
+      ['an id that is no attachment id', { link, call: inv.call, id: '../meta.json' }],
+    ]) {
+      assert.equal((await readFile(s, req)).status, 400, what);
+    }
+    for (const [what, id] of [
+      ['another conversation’s', theirs],
+      ['unbound', unbound],
+      ['not kept', 'att-0123456789abcdef'],
+    ]) {
+      const r = await readFile(s, { link, call: inv.call, id });
+      assert.deepEqual([r.status, r.json?.code, r.json?.error], [404, 'not_found', 'No such attached file in this conversation.'], what);
+    }
+    // From elsewhere: refused before anything, as every Assistant route.
+    assert.equal((await readFile(s, { link, call: inv.call, id: mine, headers: { 'x-forwarded-for': '203.0.113.9' } })).status, 403);
+    // Its own file still reads, and the call is as it was.
+    assert.equal((await readFile(s, { link, call: inv.call, id: mine })).status, 200);
+    await s.result(link, inv.call, { ok: true });
+    assert.equal((await call.promise).ok, true);
+  });
+
+  it('an MCP call has no conversation, so no file (404 not_found); a core call reads none (403 not_allowed)', async () => {
+    const { m, s, store } = await filesSetup();
+    const { page, link } = await linkedPage(s);
+    const id = await keep(store, page.tab, 'conv-1');
+    const mcp = runTool(toolOf(m, page.tab, 'add'), { by: 1 }, ctx(page.tab), { turn: 'mcp:conn-1' });
+    const inv = await page.frame('invoke');
+    assert.equal(inv.turn, 'mcp:conn-1');
+    const r = await readFile(s, { link, call: inv.call, id });
+    assert.deepEqual([r.status, r.json?.code, r.json?.error], [404, 'not_found', MCP_NO_ATTACHMENT]);
+    await s.result(link, inv.call, { ok: true });
+    await mcp.promise;
+    // The core page (C7) on the same link: its call is the app's own, never a file reader.
+    const core = await s.post('/api/assistant/relay/tools', {
+      link,
+      rev: 2,
+      slot: 'core',
+      workspace: { project_id: 'p1', plugin: 'core', workspace: 'app', title: 'Magnusim', study_id: 's1' },
+      place: 'workspace',
+      tools: [{ name: 'show', title: 'Show a place in Magnusim', description: 'Moves this window.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, risk: 'edit', timeoutS: 120 }],
+    });
+    assert.equal(core.status, 200, JSON.stringify(core.json));
+    const show = m.registry.toolsFor(ctx(page.tab)).find((t) => t.source.kind === 'core' && t.localName === 'show');
+    const coreCall = runTool(show, {}, { ...ctx(page.tab), conversation: 'conv-1' });
+    const cinv = await page.frame('invoke', 1);
+    assert.equal(cinv.slot, 'core');
+    assert.deepEqual(codeOf(await readFile(s, { link, call: cinv.call, id })), [403, 'not_allowed']);
+    await s.result(link, cinv.call, { ok: true });
+    await coreCall.promise;
   });
 });

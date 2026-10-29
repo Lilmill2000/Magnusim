@@ -28,6 +28,8 @@
  * Magnusim window only (link_only) is shown here but answered there.
  * `--image <file>` (up to 4) sends a PNG, JPEG or WebP reference picture with the prompt; the app
  * checks it (at most 1.5 MB and 2000 px a side) and its privacy rules hold for it as for the prompt.
+ * A coding agent gets it only if the agent says it takes pictures; otherwise the turn ends with
+ * the app's words and nothing is sent to the agent.
  * A review round the workspace asked for prints as `review: round i of n`.
  * `--tab auto` is resolved by the app (the only connected tab). Ctrl+C stops the turn
  * (twice: leave at once).

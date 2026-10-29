@@ -7,11 +7,13 @@
  *              BEFORE the session starts, so the agent never lists the project's tools without
  *              consent (Ask: a question only the Magnusim window answers; Never send: stopped)
  *   the conversation's agent session (kept between messages, else started: "agent" event)
+ *   the person's pictures: only for an agent whose initialize said it takes them
+ *              (promptCapabilities.image), else failed/bad_images before the prompt
  *   its tools listed: the prompt waits (AGENT_TOOLS_MS at most, else failed/agent_no_tools)
  *              until the agent's Magnusim MCP server has listed them
  *   the prompt: [the agent note and the workspace notes, on the first prompt the session gets
  *                (a kept session whose earlier turn ended before its prompt too); the message;
- *                the app context]
+ *                the attached files' lines; the person's pictures; the app context]
  *   model ─ while it runs:
  *     the agent's updates go to the log (text, plan, its own tools, its mode and model; our
  *       own tools' updates are not logged: the runner's tool_call / tool_result are their record)
@@ -72,7 +74,7 @@ import type { CorePlace, ToolCtx, ToolDef, WorkspaceRegistration } from '../regi
 import { placeOf, tabHere } from '../tab-place.ts';
 import { bindingServes, notePromptSent, type AgentDispatch } from '../mcp/sessions.ts';
 import type { EndState, PageLimits, TurnState } from '../loop.ts';
-import type { StreamEvent, ToolCallPart } from '../types.ts';
+import type { ImagePart, StreamEvent, ToolCallPart } from '../types.ts';
 import { noteBlock, noteInSystemPrompt, OursMatcher, pickOption, REJECT_KINDS, type AgentUpdate, type PermissionView } from './acp.ts';
 import type { AgentProviderId, KnownAgent } from './known.ts';
 import { policyOf } from './known.ts';
@@ -112,6 +114,8 @@ export interface AgentRunTurn extends RunnerTurn {
   readonly prompt: string;
   /** The files the person attached (core host tools spec 13.3): one line each after the prompt. */
   readonly attachments?: readonly AttachmentRef[];
+  /** The person's pictures sent with the request (sanitize.ts checkPromptImages), until its end. */
+  readonly promptImages?: readonly ImagePart[];
   readonly tab: string | null;
   /** The tab that shows its questions: the window that started it, else its bound tab (phase 4 spec 9.1). */
   readonly showTab: string | null;
@@ -168,6 +172,8 @@ export interface AgentTurnDeps {
   lockdownFailed(id: string, version: string): Promise<unknown>;
   /** The sign-in block from an auth_required (discover.ts rememberAgentSignIn). */
   rememberSignIn?(id: string, session: AgentSession | null, err: AgentRunError): void;
+  /** Whether a session started for this turn said it takes pictures (discover.ts rememberAgentImages). */
+  rememberImages?(id: string, fingerprint: string | null, images: boolean): void;
 }
 
 /** The caps in force: the lower of the turn's snapshot and the live settings. */
@@ -192,6 +198,8 @@ export function callsCapText(n: number): string {
 }
 
 export const AGENT_CALLS_END_TEXT = (n: number) => `The agent went on calling tools past this message's ${n}-call limit, so Magnusim stopped it.`;
+/** A request with pictures on an agent whose initialize said it takes none (nothing was sent to it). */
+export const AGENT_IMAGES_TEXT = "A coding agent's request can't carry pictures: send it without them.";
 export const PICTURE_NOTE = '(The agent showed a picture; the chat will show it.)';
 export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its own tool; answer such questions in a project's Magnusim window.`;
 /** A permission request for a tool of Magnusim's server that isn't allowed without asking now (it left the list served to the agent). */
@@ -931,6 +939,8 @@ class AgentTurnRun implements AgentDispatch {
         },
       });
       this.session = got.session;
+      // What its initialize said of pictures: the dock's next state for this agent.
+      if (got.fresh) d.rememberImages?.(agentId, t.settings.agent.fingerprint, got.session.info.images);
       if (got.fresh) for (const n of got.session.notes) t.note(n);
       if (got.restarted) t.note(RESTARTED_TEXT(this.name));
       // Why the earlier agent was ended between messages.
@@ -955,6 +965,12 @@ class AgentTurnRun implements AgentDispatch {
     this.lastModel = session.model;
     t.emit({ type: 'agent', name: this.name, version: session.info.version, own_tools: t.settings.agent.ownTools });
     if (this.stoppedNow()) return;
+    // The person's pictures go only to an agent whose initialize said it takes them (a kept
+    // session's said so at its start); otherwise the turn ends before its prompt, nothing sent.
+    if (t.promptImages?.length && !session.info.images) {
+      t.end('failed', 'bad_images', AGENT_IMAGES_TEXT);
+      return;
+    }
     // An agent may answer session/new before its MCP servers are up (its bridge connects
     // meanwhile): the prompt waits, bounded, until Magnusim's tools were listed to it, so a
     // message is never answered without them.
@@ -1077,6 +1093,8 @@ class AgentTurnRun implements AgentDispatch {
     }
     out.push({ type: 'text', text: t.prompt });
     if (t.attachments?.length) out.push({ type: 'text', text: attachmentLines(t.attachments) });
+    // The person's pictures, after the words they go with (main() sends none to an agent that takes none).
+    for (const p of t.promptImages ?? []) out.push({ type: 'image', mimeType: p.mediaType, data: p.base64 });
     out.push({
       type: 'text',
       text: contextBlock({

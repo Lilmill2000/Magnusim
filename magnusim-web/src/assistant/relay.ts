@@ -29,7 +29,9 @@
  * meanwhile);
  * `abort` stops it. When the list goes while a call runs, that call's result is sent first
  * (at most 3 s), then `tools: []`, then the channel closes. A dropped stream ends this page's calls on the server at once, so
- * they are stopped here too.
+ * they are stopped here too. A workspace frame's call may read a file attached in its turn's
+ * conversation (the bridge's assistant.attachment): GET /api/assistant/relay/attachment with the
+ * invoke's own link and call.
  *
  * Questions (`gate`): out of the workspace's full screen, then shown by the presenter the
  * dock set (setGatePresenter: its question card, chat dock spec 4.1), else the app's own
@@ -93,7 +95,7 @@ import {
   type PublishedCore,
   type PublishedTools,
 } from '../workspace/assistantTools';
-import type { AssistantCallOutcome } from '../workspace/bridge';
+import type { AssistantAttachmentRead, AssistantCallOutcome } from '../workspace/bridge';
 import { exitFrameFullscreen } from '../workspace/leaveGuard';
 import { setAssistantLinkSource } from './api';
 import { refreshStatus, statusSnapshot, subscribeStatus, type StatusSnapshot } from './status';
@@ -105,6 +107,7 @@ const TOOLS_PATH = '/api/assistant/relay/tools';
 const PROGRESS_PATH = '/api/assistant/relay/progress';
 const RESULT_PATH = '/api/assistant/relay/result';
 const GATE_PATH = '/api/assistant/relay/gate';
+const ATTACHMENT_PATH = '/api/assistant/relay/attachment';
 /** A running call's result is waited for this long before its list is withdrawn. */
 export const RESULT_BEFORE_UNREGISTER_MS = 3000;
 /** Progress goes on at most this often (4 a second). */
@@ -798,19 +801,22 @@ function onInvoke(r: Relay, d: RelayFrameData['invoke']): void {
   r.invokes.set(call, inv);
   updatePin(r);
   const timeoutS = typeof d.timeout_s === 'number' && d.timeout_s > 0 ? d.timeout_s : Number.NaN;
+  const turn = typeof d.turn === 'string' ? d.turn : '';
   inv.done = (async () => {
     let out: AssistantCallOutcome;
     try {
       out = pub
         ? await pub.invoke({
             call,
-            turn: typeof d.turn === 'string' ? d.turn : '',
+            turn,
             tool: String(d.tool ?? ''),
             input: d.input,
             timeoutS,
             signal: ctl.signal,
             onProgress: progress.push,
             onAlive: progress.alive,
+            // A workspace frame's call reads its conversation's files on this invoke's own link and call.
+            ...(d.slot === 'core' ? {} : { attachment: (id: string, signal: AbortSignal) => readAttachment(link, call, turn, id, signal) }),
           })
         : { ok: false, code: 'closed', message: 'its page is not open' };
     } catch (e) {
@@ -841,6 +847,38 @@ async function postResult(link: string, call: string, out: AssistantCallOutcome)
   if (a && a.status === 413) {
     await post(RESULT_PATH, { link, call, ok: false, error: { code: 'too_large', message: "The tool's result is too large for the app to take." } } satisfies RelayResultBody);
   }
+}
+
+/** The server's words for an MCP call's read: it has no conversation, so no attached files. */
+const MCP_NO_ATTACHMENT = "An app connected over MCP has no attached files: attachments belong to a conversation in Magnusim's Assistant panel.";
+
+const readRefusal = (code: string, message: string): Error => Object.assign(new Error(message), { code });
+
+/**
+ * A file attached in the conversation of the call `call` that came on `link`, for its frame's
+ * assistant.attachment: GET /relay/attachment on this invoke's own link and call, never the tab's
+ * link now (a new link already stopped the call). A refusal keeps the server's code, but
+ * no_channel (the link went, and the call with it) reads not_allowed. An MCP call (its turn
+ * `mcp:…`) has no conversation: not_found at once.
+ */
+async function readAttachment(link: string, call: string, turn: string, id: string, signal: AbortSignal): Promise<AssistantAttachmentRead> {
+  if (turn.startsWith('mcp:')) throw readRefusal('not_found', MCP_NO_ATTACHMENT);
+  const r = await fetch(`${ATTACHMENT_PATH}?${new URLSearchParams({ call, id })}`, { headers: { 'x-magnusim-link': link }, cache: 'no-store', signal });
+  if (!r.ok) {
+    const j = (await r.json().catch(() => ({}))) as { code?: unknown; error?: unknown };
+    const code = j.code === 'no_channel' ? 'not_allowed' : typeof j.code === 'string' ? j.code : 'failed';
+    throw readRefusal(code, typeof j.error === 'string' && j.error ? j.error : `The file could not be read (${r.status}).`);
+  }
+  const blob = await r.blob();
+  const total = Number(r.headers.get('Content-Length')) || 0;
+  if (total && blob.size !== total) throw readRefusal('failed', 'The file did not arrive whole. Try again.');
+  let fileName = 'attachment';
+  try {
+    fileName = decodeURIComponent(r.headers.get('X-File-Name') || '') || fileName;
+  } catch {
+    /* the default name */
+  }
+  return { blob, fileName, sha256: r.headers.get('X-Sha256') || '' };
 }
 
 /** A gate's copy for the app's dialog: the host's text, then its detail rows. */

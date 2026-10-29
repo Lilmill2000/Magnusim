@@ -1,18 +1,21 @@
 // Files attached in the Assistant's dock (core host tools spec 13, C9): the person attaches a
 // STEP or STL file beside the pictures (Attach, paste or a drop) in a project; its chip shows
 // its name and size and uploads at once; the request names it and the model gets one line per
-// file with its attachment_id; the person's message lists it. Too big or another type is
-// refused in plain words before anything is sent; a file the server can't read as its type is
-// refused with the server's words. A forgotten conversation's files go; one never sent is swept
-// and the send then says so; a conversation can't use another conversation's file. An attached
-// STEP the model imports (import_file by its attachment_id) asks first, then the project has it.
+// file with its kind and attachment_id; the person's message lists it. A drawing (SVG, DXF) is a
+// file too, never a picture and never rendered in the page; over 20 MB it is refused in its own
+// words, and import_file tells the model a drawing goes to a workspace that imports drawings. Too
+// big or another type is refused in plain words before anything is sent; a file the server can't
+// read as its type is refused with the server's words. A forgotten conversation's files go; one
+// never sent is swept and the send then says so; a conversation can't use another
+// conversation's file. An attached STEP the model imports (import_file by its attachment_id)
+// asks first, then the project has it.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys) and the
 // scripted model (support/fake-llm.mjs). No WSL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dockSend, dockTurn, openDock, useScriptedModel } from './support/assistant.js';
+import { dockSend, dockTurn, openDock, resultsIn, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { startHost } from './support/host-server.mjs';
 import { expect, test } from './support/stress.js';
@@ -89,6 +92,20 @@ function stlFile(n) {
   b.write('solid wing', 0, 'ascii');
   b.writeUInt32LE(n, 80);
   return b;
+}
+
+/** An SVG of `kb` KB that runs a script if anything ever renders it as a page or an image of the page. */
+function svgFile(kb = 2) {
+  const head = '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><script>window.__drawingRan = true</script>\n';
+  const tail = '<rect width="100" height="50"/></svg>\n';
+  return Buffer.from(head + ' '.repeat(kb * 1024 - head.length - tail.length) + tail);
+}
+
+/** An ASCII DXF of `kb` KB: one line entity, padded with a 999 comment. */
+function dxfFile(kb = 1) {
+  const head = '  0\nSECTION\n  2\nENTITIES\n  0\nLINE\n  8\n0\n 10\n0.0\n 20\n0.0\n 11\n100.0\n 21\n0.0\n';
+  const tail = '  0\nENDSEC\n  0\nEOF\n';
+  return Buffer.from(`${head}999\n${'p'.repeat(kb * 1024 - head.length - tail.length - 5)}\n${tail}`);
 }
 
 /** With DOCK_SHOTS=<folder>: a screenshot of the window for a person to look at (never compared). */
@@ -175,7 +192,7 @@ test('a STEP and an STL attached in the dock: chips with name and size, uploaded
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP_WAIT);
   const byName = Object.fromEntries(kept.map((a) => [a.name, a.id]));
   expect(userTexts(chats().at(-1))).toContain(
-    `[Attached file: "bracket.step", 3 KB, attachment_id ${byName['bracket.step']}]\n[Attached file: "wing.stl", 2 KB, attachment_id ${byName['wing.stl']}]`,
+    `[Attached geometry file: "bracket.step", 3 KB, attachment_id ${byName['bracket.step']}]\n[Attached geometry file: "wing.stl", 2 KB, attachment_id ${byName['wing.stl']}]`,
   );
   // The person's message lists its files; the composer is clear for the next one.
   const files = dockTurn(page).locator('[data-dock-you-file]');
@@ -189,6 +206,78 @@ test('a STEP and an STL attached in the dock: chips with name and size, uploaded
   expect(after.map((a) => a.conversation)).toEqual([turn.turn.conversation, turn.turn.conversation]);
 });
 
+test('an SVG and a DXF attached in the dock: drawing chips with name and size, never pictures or rendered; one over 20 MB refused in its own words; the model gets a drawing line each, and import_file says where a drawing goes', async ({ page, request }) => {
+  await openProject(page);
+  const uploads = [];
+  page.on('request', (r) => {
+    if (new URL(r.url()).pathname === '/api/assistant/attachments') uploads.push(new URL(r.url()).searchParams.get('name'));
+  });
+  await expect(dock(page).locator('[data-dock-file]')).toHaveAttribute('accept', 'image/png,image/jpeg,image/webp,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.svg,.dxf');
+  const svg = svgFile(2);
+  const dxf = dxfFile(1);
+  await dock(page).locator('[data-dock-file]').setInputFiles([
+    { name: 'plate.svg', mimeType: 'image/svg+xml', buffer: svg },
+    { name: 'flange.dxf', mimeType: 'application/dxf', buffer: dxf },
+  ]);
+  await expect(chips(page)).toHaveCount(2, STEP_WAIT);
+  await expect(chips(page).nth(0)).toContainText('plate.svg · 2 KB');
+  await expect(chips(page).nth(1)).toContainText('flange.dxf · 1 KB');
+  for (const i of [0, 1]) {
+    await expect(chips(page).nth(i)).toHaveAttribute('data-dock-file-state', 'ready', STEP_WAIT);
+    await expect(chips(page).nth(i)).toHaveAttribute('data-dock-file-kind', 'drawing');
+  }
+  await expect(chips(page).nth(0).locator('.dock-file-type')).toHaveText('SVG');
+  // A file chip, not a picture: no thumbnail, nothing of its markup in the page, its script never ran.
+  await expect(dock(page).locator('[data-dock-picture-chip]')).toHaveCount(0);
+  await expect(dock(page).locator('[data-dock-files] svg, [data-dock-files] img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__drawingRan ?? null)).toBe(null);
+  await expect(dock(page).locator('[data-dock-files-note]')).toHaveText(
+    'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.',
+  );
+  await shot(page, 'drawings');
+  const kept = (await getJson(request, '/api/test/assistant/state')).attachments;
+  expect(kept.map((a) => [a.name, a.bytes, a.format, a.conversation]).sort()).toEqual([
+    ['flange.dxf', dxf.length, 'dxf', null],
+    ['plate.svg', svg.length, 'svg', null],
+  ]);
+  expect(uploads.sort()).toEqual(['flange.dxf', 'plate.svg']);
+
+  // Over 20 MB: refused in the dock before anything is sent; the two chips stay.
+  await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'poster.svg', mimeType: 'image/svg+xml', buffer: Buffer.concat([svgFile(1), Buffer.alloc(21 * 1024 * 1024 - 1024, 32)]) }]);
+  await expect(fileErrors(page)).toHaveText(['poster.svg is larger than 20 MB, the limit for a drawing.']);
+  await expect(chips(page)).toHaveCount(2);
+  expect(uploads, 'nothing more was sent').toHaveLength(2);
+
+  // Sent: one drawing line each; the model tries to import the SVG, the person is asked, and the model is told where a drawing goes.
+  const byName = Object.fromEntries(kept.map((a) => [a.name, a.id]));
+  const geometries = async () => ((await getJson(request, `/api/project?project_id=${project}`)).project.geometries || []).length;
+  const before = await geometries();
+  fake.reply(
+    { text: 'Trying it.', tools: [{ name: 'import_file', input: { project_id: '', attachment_id: byName['plate.svg'], path: '', as: 'geometry', length_unit: '' } }] },
+    { text: 'plate.svg is a drawing: open a CAD Part for it.' },
+  );
+  const id = await dockSend(page, 'Use these outlines');
+  const gate = dock(page).locator('[data-gate]').first();
+  await expect(gate).toBeVisible(STEP_WAIT);
+  await gate.locator('[data-gate-answer="yes"]').click({ timeout: STEP_WAIT.timeout });
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP_WAIT);
+  const first = chats().find((r) => userTexts(r).includes('Use these outlines'));
+  expect(userTexts(first)).toContain(`[Attached drawing: "plate.svg", 2 KB, attachment_id ${byName['plate.svg']}]\n[Attached drawing: "flange.dxf", 1 KB, attachment_id ${byName['flange.dxf']}]`);
+  const DRAWING_HERE = 'plate.svg is a drawing (SVG/DXF): open a workspace that imports drawings and ask there.';
+  await expect(dockTurn(page).locator('[data-dock-step][data-dock-step-state="failed"] [data-dock-result]')).toHaveText(`✗ ${DRAWING_HERE}`);
+  expect(JSON.stringify(resultsIn(chats().at(-1)))).toContain(DRAWING_HERE);
+  // The person's message lists its drawings; the project has no new geometry; the script never ran.
+  await expect(dockTurn(page).locator('[data-dock-you-file]')).toHaveText(['plate.svg · 2 KB', 'flange.dxf · 1 KB']);
+  await shot(page, 'drawings-sent');
+  const turn = await getJson(request, `/api/assistant/turns/${id}`);
+  expect(turn.turn.attachments.map((a) => [a.name, a.kind])).toEqual([
+    ['plate.svg', 'drawing'],
+    ['flange.dxf', 'drawing'],
+  ]);
+  expect(await geometries()).toBe(before);
+  expect(await page.evaluate(() => window.__drawingRan ?? null)).toBe(null);
+});
+
 test('refused in plain words: a file over 500 MB and another type before anything is sent; a .step that is not STEP with the server\'s words', async ({ page, request }) => {
   await openProject(page);
   const uploads = [];
@@ -199,7 +288,7 @@ test('refused in plain words: a file over 500 MB and another type before anythin
   await dropFiles(page, [{ name: 'huge.step', size: 600 * 1024 * 1024 }]);
   await expect(fileErrors(page)).toHaveText(['huge.step is larger than 500 MB. Import it with + Add geometry.']);
   await dock(page).locator('[data-dock-file]').setInputFiles([{ name: 'plugin.zip', mimeType: 'application/zip', buffer: Buffer.from('PK\u0003\u0004 not for the Assistant') }]);
-  await expect(fileErrors(page)).toHaveText(['Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.']);
+  await expect(fileErrors(page)).toHaveText(['Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.']);
   await expect(chips(page)).toHaveCount(0);
   expect(uploads, 'nothing was sent').toEqual([]);
   // Named STEP, but a picture's bytes: the server reads its first bytes and says so.

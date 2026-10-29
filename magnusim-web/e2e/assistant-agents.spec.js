@@ -121,7 +121,7 @@ const CODEX_FAKE = Object.freeze({
 const CUSTOM_FAKE = Object.freeze({ ...BASE_FAKE, style: 'none', agentInfo: { name: 'e2e-agent', title: 'E2E agent', version: '1.0.0' } });
 
 const PLUGIN = 'ai-demo';
-const TOOLS = ['add', 'fail_hint', 'get_count', 'label', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+const TOOLS = ['add', 'attachment_size', 'fail_hint', 'get_count', 'label', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
 const PROJECT_TITLE = 'Counter project';
 const KEY = 'sk-ant-e2e-agents-turns-0123456789abcdef';
 /** The page's own grace before a hidden tab lets its stream go (src/api/eventHub.ts HIDDEN_GRACE_MS). */

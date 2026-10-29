@@ -1211,7 +1211,8 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
     assert.ok(status.agents_checked_at);
     assert.ok(['job', 'group', 'best_effort'].includes(status.agents_tree_kill));
     const pr = status.providers_ready;
-    assert.deepEqual(pr['agent:claude'], { label: 'Claude Code', kind: 'agent', ready: true, reason: null, billing: 'agent_account', detail: 'Signed in · 0.85.1' });
+    // Not started yet: whether it takes pictures is the catalogue's word.
+    assert.deepEqual(pr['agent:claude'], { label: 'Claude Code', kind: 'agent', ready: true, reason: null, billing: 'agent_account', detail: 'Signed in · 0.85.1', images: true });
     assert.equal(pr['agent:codex'].ready, false);
     assert.equal(pr['agent:codex'].reason, 'agent_not_allowed');
     assert.equal(pr['agent:opencode'], undefined, 'only found or custom agents');
@@ -1254,7 +1255,7 @@ describe('the routes (spec 4.9, 5.2, 5.3)', LIMIT, () => {
       // (Settings' Default choice shows it), though an agent not installed is otherwise not offered.
       r = await plainPost('/api/assistant/settings', { provider: 'agent:gemini' });
       assert.deepEqual([r.json.ready, r.json.ready_reason], [false, 'agent_missing']);
-      assert.deepEqual(r.json.providers_ready['agent:gemini'], { label: 'Gemini CLI', kind: 'agent', ready: false, reason: 'agent_missing', billing: 'agent_account', detail: 'Not installed' });
+      assert.deepEqual(r.json.providers_ready['agent:gemini'], { label: 'Gemini CLI', kind: 'agent', ready: false, reason: 'agent_missing', billing: 'agent_account', detail: 'Not installed', images: true });
       r = await plainPost('/api/assistant/settings', { provider: 'agent:claude' });
       assert.equal(r.json.providers_ready['agent:gemini'], undefined, 'not the default: not offered');
     } finally {

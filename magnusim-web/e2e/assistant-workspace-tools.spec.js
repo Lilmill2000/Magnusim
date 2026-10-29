@@ -1,12 +1,13 @@
 // Workspace tools for the Assistant, end to end (Foundation spec 8.4, 10.3): a scripted model
 // (support/fake-llm.mjs, the first cloud dialect) → the server's turn loop → the page relay on
 // the tab's event stream → the bridge → the plugin's frame → back. The test plugin ai-demo
-// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers nine tools:
+// (python/tests/fixtures/assistant-plugins) keeps a counter in its page and offers ten tools:
 // get_count, add (its result names what it did in a summary), slow_add (progress every 200 ms
 // until window.__release() in the frame), reset (destructive, with a confirm note), mystery (a
 // risk the host does not know), snap (a 64x64 PNG), read_study (a 1 s window, waiting on the
 // app's answer to its read of the study), fail_hint (it always fails, with a hint and a detail)
-// and label (a string, a list and a boolean, every one required; #label shows the input it got).
+// label (a string, a list and a boolean, every one required; #label shows the input it got) and
+// attachment_size (an attached file's name and size: assistant-dock.spec.js runs it).
 //
 // Covered (spec 10.3's thirteen, then three more): the tools come and go with the workspace; the
 // cloud privacy question once per project; an edit tool runs without asking; a destructive one
@@ -55,7 +56,7 @@ import { expect, test } from './support/stress.js';
 
 const PLUGIN = 'ai-demo';
 const PLUGIN_NAME = 'Workspace demo';
-const TOOLS = ['add', 'fail_hint', 'get_count', 'label', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
+const TOOLS = ['add', 'attachment_size', 'fail_hint', 'get_count', 'label', 'mystery', 'read_study', 'reset', 'slow_add', 'snap'].map((n) => `${PLUGIN}__${n}`);
 /** What fail_hint throws (the fixture's FAIL_HINT). */
 const FAIL = {
   code: 'invalid_input',

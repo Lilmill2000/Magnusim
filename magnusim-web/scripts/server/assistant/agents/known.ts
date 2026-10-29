@@ -73,6 +73,12 @@ export interface KnownAgent {
   /** Its addition to session/new (acp.ts sessionNewParams). */
   sessionMeta: SessionMetaHook | null;
   /**
+   * Whether its adapter's initialize says it takes pictures (promptCapabilities.image), as its
+   * source says: the dock's first state before Magnusim has started it (absent: not known). A
+   * turn goes by what the agent's own initialize says.
+   */
+  images?: boolean;
+  /**
    * The arguments that print its version, in place of its ACP arguments (null: it prints none and
    * is never asked). Grok Build's carry --no-auto-update, as its start does: the program updates
    * itself, and a version probe must never update it (whether --version alone would is UNVERIFIED).
@@ -151,6 +157,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: ['default'],
     ours: 'tool_name_meta',
     sessionMeta: CLAUDE_CODE_SESSION,
+    images: true,
     versionArgs: ['--version'],
   }),
   Object.freeze<KnownAgent>({
@@ -169,6 +176,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: ['read-only'],
     ours: 'mcp_call_flag',
     sessionMeta: null,
+    images: true,
     versionArgs: ['--version'],
     env: () => ({
       INITIAL_AGENT_MODE: 'read-only',
@@ -191,6 +199,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: 'initial',
     ours: null,
     sessionMeta: null,
+    images: true,
     versionArgs: ['--version'],
     env: (ctx) => ({ OPENCODE_CONFIG_CONTENT: openCodeConfig(ctx.defaultAgent) }),
   }),
@@ -225,6 +234,7 @@ export const KNOWN_AGENTS: readonly KnownAgent[] = Object.freeze([
     allowedModes: ['default'],
     ours: null,
     sessionMeta: null,
+    images: true,
     versionArgs: ['--version'],
     env: (ctx): Record<string, string> => (ctx.systemSettingsPath ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: ctx.systemSettingsPath } : {}),
     systemSettings: geminiSystemSettings,

@@ -172,6 +172,7 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/launch/check',
       '/api/assistant/mcp',
       '/api/assistant/models',
+      '/api/assistant/relay/attachment',
       '/api/assistant/relay/gate',
       '/api/assistant/relay/progress',
       '/api/assistant/relay/result',

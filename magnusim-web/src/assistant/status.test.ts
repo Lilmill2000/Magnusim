@@ -279,6 +279,14 @@ describe("providers_ready: each provider's readiness, read field by field", () =
     expect(providerReady(s, '__proto__')).toBeNull();
   });
 
+  it("a coding agent's row says whether it takes pictures: true, false, else not known (null); other rows have no such field", () => {
+    const agent = { label: 'Helper', kind: 'agent', ready: true, reason: null, billing: 'agent_account', detail: 'Signed in' };
+    const s = asStatus({ providers_ready: { 'agent:a': { ...agent, images: true }, 'agent:b': { ...agent, images: false }, 'agent:c': { ...agent, images: null }, 'agent:d': agent, 'agent:e': { ...agent, images: 'yes' }, k: { ...agent, kind: 'key', billing: 'usd', images: true } } });
+    expect(providerReady(s, 'agent:a')).toEqual({ ...agent, images: true });
+    expect(['agent:b', 'agent:c', 'agent:d', 'agent:e'].map((id) => providerReady(s, id)?.images)).toEqual([false, null, null, null]);
+    expect(providerReady(s, 'k')).toEqual({ ...agent, kind: 'key', billing: 'usd' });
+  });
+
   it('from a server without it: the default from ready and ready_reason (no line), and nothing for any other', () => {
     const s = asStatus({ provider: 'openai_compatible', ready: false, ready_reason: 'no_model' });
     expect(providerReady(s, 'openai_compatible')).toEqual({ label: 'openai_compatible', kind: 'server', ready: false, reason: 'no_model', billing: 'free', detail: '' });

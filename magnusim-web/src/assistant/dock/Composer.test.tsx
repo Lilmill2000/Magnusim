@@ -32,7 +32,12 @@ const WS = (state: 'tools' | 'connecting' | 'late' | 'none'): DockPlace => ({ ..
 
 const ready = (label: string, kind = 'key', ok = true, billing = 'usd', detail = '') => ({ label, kind, ready: ok, reason: ok ? null : 'no_key', billing, detail });
 const status = (def: string, rows: Record<string, unknown>): AssistantStatus => ({ provider: def, default_provider: def, providers_ready: rows, caps: { turn_usd: 8, day_usd: 15 } }) as unknown as AssistantStatus;
-const LOCAL = status('openai_compatible', { openai_compatible: ready('Local server', 'server', true, 'free', 'qwen'), 'agent:helper': ready('Helper', 'agent', true, 'agent_account') });
+/** The coding agent's row: whether it takes pictures as its status says (left out: a server that doesn't say, not known). */
+const helperRow = (images?: boolean | null) => ({ ...ready('Helper', 'agent', true, 'agent_account'), ...(images === undefined ? {} : { images }) });
+const withHelper = (images?: boolean | null) => status('openai_compatible', { openai_compatible: ready('Local server', 'server', true, 'free', 'qwen'), 'agent:helper': helperRow(images) });
+const LOCAL = withHelper();
+/** Its last start said it takes no pictures. */
+const HELPER_NO_PICTURES = withHelper(false);
 
 let posts: Array<{ url: string; body: Record<string, unknown> }> = [];
 let answers: Array<[number, Record<string, unknown>]> = [];
@@ -196,34 +201,116 @@ describe('what holds Send back', () => {
     expect(document.querySelector('[data-dock-provider-locked]')?.textContent).toBe('Provider: Local server');
   });
 
-  it("a coding agent takes files but no pictures: Attach says so and takes geometry files only; a pasted picture is refused", async () => {
+  it("a coding agent whose status says it takes no pictures: Attach says so and takes geometry files and drawings only; a pasted picture is refused", async () => {
     sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
-    mount();
+    mount({ status: HELPER_NO_PICTURES });
     const attach = document.querySelector('[data-dock-attach]') as HTMLButtonElement;
     expect(attach.disabled).toBe(false);
-    expect(attach.title).toBe("Attach geometry files (Helper doesn't take pictures)");
-    expect(attach.getAttribute('aria-label')).toBe("Attach geometry files (Helper doesn't take pictures)");
-    expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply');
+    expect(attach.title).toBe("Attach geometry files or drawings (Helper doesn't take pictures)");
+    expect(attach.getAttribute('aria-label')).toBe("Attach geometry files or drawings (Helper doesn't take pictures)");
+    expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.svg,.dxf');
     const f = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
     fireEvent.paste(area(), { clipboardData: { files: [f], items: [] } });
     expect(document.querySelector('[data-dock-picture-error]')?.textContent).toBe("Helper doesn't take pictures. Send the message without them.");
   });
 
-  it('a coding agent: a picture dropped on the dock says it takes none (never left for the browser to open); the overlay says geometry files', async () => {
+  it('a coding agent that takes no pictures: a picture dropped on the dock says it takes none (never left for the browser to open); the overlay says geometry files or drawings', async () => {
     sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
     render(
       <aside id="assistant-dock">
-        <Composer place={HOME} status={LOCAL} conversation={null} conversationId={null} running={null} onNew={() => undefined} />
+        <Composer place={HOME} status={HELPER_NO_PICTURES} conversation={null} conversationId={null} running={null} onNew={() => undefined} />
       </aside>,
     );
     const panel = document.getElementById('assistant-dock') as HTMLElement;
     const f = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
     const dt = { types: ['Files'], files: [f], items: [] };
     expect(fireEvent.dragEnter(panel, { dataTransfer: dt })).toBe(false);
-    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop geometry files to attach');
+    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop geometry files or drawings to attach');
     expect(fireEvent.drop(panel, { dataTransfer: dt })).toBe(false);
     await waitFor(() => expect(document.querySelector('[data-dock-picture-error]')?.textContent).toBe("Helper doesn't take pictures. Send the message without them."));
     expect(document.querySelector('[data-dock-picture-chip]')).toBeNull();
+  });
+
+  for (const [how, images] of [
+    ['takes them', true],
+    ['not known yet', null],
+    ["a server that doesn't say", undefined],
+  ] as const) {
+    it(`a coding agent whose status says it ${how === 'takes them' ? 'takes pictures' : `may (${how})`}: Attach, paste and drop take pictures as for any provider; the line names the agent; Send goes with them`, async () => {
+      sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
+      const deps: PictureDeps = { size: async () => ({ width: 10, height: 10, draw: async () => new Blob() }) };
+      vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }));
+      render(
+        <aside id="assistant-dock">
+          <Composer place={HOME} status={withHelper(images)} conversation={null} conversationId={null} running={null} onNew={() => undefined} pictureDeps={deps} />
+        </aside>,
+      );
+      const attach = document.querySelector('[data-dock-attach]') as HTMLButtonElement;
+      expect(attach.title).toBe('Attach pictures or files');
+      expect(attach.getAttribute('aria-label')).toBe('Attach pictures or files');
+      expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('image/png,image/jpeg,image/webp,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.svg,.dxf');
+      const png = (name: string) => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], name, { type: 'image/png' });
+      await act(async () => {
+        fireEvent.change(document.querySelector('[data-dock-file]') as HTMLInputElement, { target: { files: [png('picked.png')] } });
+      });
+      await act(async () => {
+        fireEvent.paste(area(), { clipboardData: { files: [png('pasted.png')], items: [] } });
+      });
+      const panel = document.getElementById('assistant-dock') as HTMLElement;
+      const dt = { types: ['Files'], files: [png('dropped.png')], items: [] };
+      fireEvent.dragEnter(panel, { dataTransfer: dt });
+      expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop pictures, geometry files or drawings to attach');
+      await act(async () => {
+        fireEvent.drop(panel, { dataTransfer: dt });
+      });
+      await waitFor(() => expect(Array.from(document.querySelectorAll('[data-dock-picture-chip]')).map((c) => c.getAttribute('data-dock-picture-chip'))).toEqual(['picked.png', 'pasted.png', 'dropped.png']));
+      expect(document.querySelector('[data-dock-picture-error]')).toBeNull();
+      expect(document.querySelector('[data-dock-pictures-note]')?.textContent).toBe('Pictures go to Helper with your message, and on to its own service.');
+      fireEvent.change(area(), { target: { value: 'Like this' } });
+      expect(line()).toBeNull();
+      expect(sendButton().disabled).toBe(false);
+      await act(async () => {
+        fireEvent.click(sendButton());
+      });
+      await waitFor(() => expect(posts).toHaveLength(1));
+      expect(posts[0].body.provider).toBe('agent:helper');
+      expect((posts[0].body.images as unknown[]).length).toBe(3);
+    });
+  }
+
+  it("pictures attached, then the agent's status says it takes none (its start said so): Send is held with the line that says why; the server's refusal of them shows as any refusal", async () => {
+    sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
+    const deps: PictureDeps = { size: async () => ({ width: 10, height: 10, draw: async () => new Blob() }) };
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }));
+    const { rerender } = mount({ status: withHelper(null), pictureDeps: deps });
+    const f = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
+    await act(async () => {
+      fireEvent.paste(area(), { clipboardData: { files: [f], items: [] } });
+    });
+    await waitFor(() => expect(document.querySelector('[data-dock-picture-chip]')).not.toBeNull());
+    fireEvent.change(area(), { target: { value: 'Like this' } });
+    rerender(<Composer place={HOME} status={HELPER_NO_PICTURES} conversation={null} conversationId={null} running={null} onNew={() => undefined} pictureDeps={deps} />);
+    expect(line()).toBe("Helper doesn't take pictures. Send the message without them.");
+    expect(sendButton().disabled).toBe(true);
+    expect((document.querySelector('[data-dock-attach]') as HTMLButtonElement).title).toBe("Attach geometry files or drawings (Helper doesn't take pictures)");
+    // Removed: Send goes.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }));
+    expect(sendButton().disabled).toBe(false);
+  });
+
+  it("a coding agent's request that ends: the status is read again (what its start said of pictures shows for the next message)", async () => {
+    const conv = { id: 'c1', provider: 'agent:helper', label: 'Helper', full: null } as unknown as ConversationRow;
+    const { rerender } = mount({ conversation: conv, conversationId: 'c1', running: 't7' });
+    const statusReads = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/api/assistant/status')).length;
+    expect(statusReads()).toBe(0);
+    rerender(<Composer place={HOME} status={LOCAL} conversation={conv} conversationId="c1" running={null} onNew={() => undefined} />);
+    await waitFor(() => expect(statusReads()).toBe(1));
+    // Not an agent's: nothing read.
+    const other = { id: 'c2', provider: 'openai_compatible', label: 'Local server', full: null } as unknown as ConversationRow;
+    rerender(<Composer place={HOME} status={LOCAL} conversation={other} conversationId="c2" running="t8" onNew={() => undefined} />);
+    rerender(<Composer place={HOME} status={LOCAL} conversation={other} conversationId="c2" running={null} onNew={() => undefined} />);
+    await act(async () => undefined);
+    expect(statusReads()).toBe(1);
   });
 
   it('Attach stays on while a request runs (the next message can take pictures, as a paste or drop can)', () => {
@@ -232,7 +319,7 @@ describe('what holds Send back', () => {
     expect(attach.disabled).toBe(false);
     expect(attach.title).toBe('Attach pictures or files');
     expect(attach.getAttribute('aria-label')).toBe('Attach pictures or files');
-    expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('image/png,image/jpeg,image/webp,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply');
+    expect((document.querySelector('[data-dock-file]') as HTMLInputElement).accept).toBe('image/png,image/jpeg,image/webp,.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply,.svg,.dxf');
   });
 
   it('pictures: chips with their size, shrunk, removed; the line under them', async () => {
@@ -299,7 +386,7 @@ describe('files (core host tools spec 13.1)', () => {
     const up = uploads();
     mount({ uploadSend: up.send });
     await pick([geometry('notes.txt'), geometry('plugin.zip')]);
-    expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toEqual(['Only pictures and geometry files (STEP, IGES, BREP, STL, OBJ, PLY) can be attached.']);
+    expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toEqual(['Only pictures, geometry files (STEP, IGES, BREP, STL, OBJ, PLY) and drawings (SVG, DXF) can be attached.']);
     const big = geometry('huge.stl');
     Object.defineProperty(big, 'size', { value: 600 * 1024 * 1024 });
     await pick([big]);
@@ -343,7 +430,7 @@ describe('files (core host tools spec 13.1)', () => {
     const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', { type: 'image/png' });
     const dt = { types: ['Files'], files: [geometry('dropped.step'), png], items: [] };
     fireEvent.dragEnter(panel, { dataTransfer: dt });
-    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop pictures or geometry files to attach');
+    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop pictures, geometry files or drawings to attach');
     await act(async () => {
       fireEvent.drop(panel, { dataTransfer: dt });
     });
@@ -366,6 +453,67 @@ describe('files (core host tools spec 13.1)', () => {
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0].body.attachments).toEqual(['att-00000000000000c3']);
     expect(posts[0].body.provider).toBe('agent:helper');
+  });
+
+  it('drawings: a .dxf picked and an SVG dropped (image/svg+xml) upload as files with their chips, never as pictures and never as markup in the page; their note; the request names them; over 20 MB refused before anything is sent', async () => {
+    const up = uploads();
+    const deps: PictureDeps = { size: async () => ({ width: 10, height: 10, draw: async () => new Blob() }) };
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined }));
+    render(
+      <aside id="assistant-dock">
+        <Composer place={HOME} status={LOCAL} conversation={null} conversationId={null} running={null} onNew={() => undefined} uploadSend={up.send} pictureDeps={deps} />
+      </aside>,
+    );
+    const markup = '<svg xmlns="http://www.w3.org/2000/svg"><text>DRAWING-MARKUP</text><script>window.__ran = 1</script></svg>';
+    const dxf = '  0\nSECTION\n  2\nENTITIES\n  0\nENDSEC\n  0\nEOF\n';
+    await pick([new File([dxf], 'flange.dxf')]);
+    const panel = document.getElementById('assistant-dock') as HTMLElement;
+    const dt = { types: ['Files'], files: [new File([markup], 'plate.svg', { type: 'image/svg+xml' })], items: [] };
+    fireEvent.dragEnter(panel, { dataTransfer: dt });
+    expect(document.querySelector('[data-dock-drop]')?.textContent).toBe('Drop pictures, geometry files or drawings to attach');
+    await act(async () => {
+      fireEvent.drop(panel, { dataTransfer: dt });
+    });
+    await waitFor(() => expect(up.calls.map((c) => c.file.name)).toEqual(['flange.dxf', 'plate.svg']));
+    expect(chips().map((c) => [c.getAttribute('data-dock-file-chip'), c.getAttribute('data-dock-file-kind'), c.querySelector('.dock-chip-text > span')?.textContent])).toEqual([
+      ['flange.dxf', 'drawing', `flange.dxf · ${dxf.length} bytes`],
+      ['plate.svg', 'drawing', `plate.svg · ${markup.length} bytes`],
+    ]);
+    expect(document.querySelector('[data-dock-picture-chip]')).toBeNull();
+    expect(document.querySelector('[data-dock-picture-error]')).toBeNull();
+    expect(panel.querySelector('svg, img')).toBeNull();
+    expect(document.body.innerHTML).not.toContain('DRAWING-MARKUP');
+    expect(document.querySelector('[data-dock-files-note]')?.textContent).toBe(
+      'Files stay on this PC. The Assistant gets their names. It can import geometry files into the project open here, and drawings in a workspace that imports them.',
+    );
+    await act(async () => up.calls[0].answer(200, { ok: true, attachment_id: 'att-00000000000000d1', name: 'flange.dxf', bytes: dxf.length, kind: 'drawing', format: 'dxf' }));
+    await act(async () => up.calls[1].answer(200, { ok: true, attachment_id: 'att-00000000000000d2', name: 'plate.svg', bytes: markup.length, kind: 'drawing', format: 'svg' }));
+    fireEvent.change(area(), { target: { value: 'Use these outlines' } });
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    // Too large: its own words, and nothing uploaded.
+    const big = new File(['<svg/>'], 'poster.svg', { type: 'image/svg+xml' });
+    Object.defineProperty(big, 'size', { value: 21 * 1024 * 1024 });
+    await pick([big]);
+    expect(Array.from(document.querySelectorAll('[data-dock-file-error]')).map((e) => e.textContent)).toEqual(['poster.svg is larger than 20 MB, the limit for a drawing.']);
+    expect(up.calls).toHaveLength(2);
+    await act(async () => {
+      fireEvent.click(sendButton());
+    });
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0].body.attachments).toEqual(['att-00000000000000d1', 'att-00000000000000d2']);
+    expect(posts[0].body.images).toBeUndefined();
+  });
+
+  it('a coding agent that takes no pictures takes a drawing as a file: a pasted SVG uploads, no picture refusal', async () => {
+    sessionStorage.setItem('mg.assistant.dock.provider', JSON.stringify({ home: 'agent:helper' }));
+    const up = uploads();
+    mount({ status: HELPER_NO_PICTURES, uploadSend: up.send });
+    await act(async () => {
+      fireEvent.paste(area(), { clipboardData: { files: [new File(['<svg/>'], 'sketch.svg', { type: 'image/svg+xml' })], items: [] } });
+    });
+    await waitFor(() => expect(up.calls.map((c) => c.file.name)).toEqual(['sketch.svg']));
+    expect(chips().map((c) => c.getAttribute('data-dock-file-kind'))).toEqual(['drawing']);
+    expect(document.querySelector('[data-dock-picture-error]')).toBeNull();
   });
 });
 
