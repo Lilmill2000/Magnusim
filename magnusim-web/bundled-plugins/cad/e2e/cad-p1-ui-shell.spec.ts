@@ -168,9 +168,9 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   await page.mouse.click(mid[0], mid[1], { button: 'right' });
   const menu = frame.locator('[data-cad-menu]');
   // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the modules'
-  // actions for a face, then the body's and the feature's, the feature's Delete last of all (P4a
-  // review: the actions first, Delete last; it sat between them).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Extrude 1']);
+  // actions for a face, then the body's and the feature's, the body's and the feature's Delete last of
+  // all (P4a review: the actions first, Delete last; it sat between them).
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Body 1', 'Delete Extrude 1']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');

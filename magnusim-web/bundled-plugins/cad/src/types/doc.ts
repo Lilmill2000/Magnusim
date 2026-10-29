@@ -12,6 +12,8 @@
 //   SD (2026-10-01): Box and Cylinder are no longer built (REMOVED_FEATURE_TYPES):
 //      a stored one stays in the Part as a red "Removed feature" row. Enclosure is
 //      new. The schema stays 2 (no released build reads schema 2).
+//   v0.5.0: Delete body (delete_body) is new. The schema stays 2: an older CAD shows its row red
+//      ("cannot build delete_body features") with the bodies still there, and keeps it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { DocUnits, Expr } from './units';
 import type { AxisRef, CurveRef, EdgeRef, FaceRef, PlaneRef, PointRef } from './references';
@@ -382,6 +384,16 @@ export interface CombineFeature extends FeatureBase<'combine'> {
   tools: BodyId[];
   keepTools: boolean;
   repair?: { fuzzy: number };
+}
+
+/**
+ * Delete body (SOLIDWORKS' Delete/Keep Body; Daniel 2026-10-28): the bodies leave the model from
+ * this point in the history (the tree's Delete on a body, its Delete key). They are named by id, as
+ * Combine and Split name theirs; one that is not there at this point fails the feature (red, the
+ * model as before it). Deleting or suppressing it brings them back.
+ */
+export interface DeleteBodyFeature extends FeatureBase<'delete_body'> {
+  bodies: BodyId[];
 }
 
 // ------------------------------------------------------------ P3: sketches
@@ -964,6 +976,7 @@ export type Feature =
   | PressPullFeature
   | SplitFeature
   | CombineFeature
+  | DeleteBodyFeature
   | SketchFeature
   | ExtrudeFeature
   | EnclosureFeature

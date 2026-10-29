@@ -6,7 +6,7 @@
 import type { ToolImpl } from '../../types/assistant';
 import { ToolError } from '../errors';
 import { guideWithout } from '../guide';
-import { guideRows, HELP, isHelpTopic, NOT_OFFERED } from '../help';
+import { BODY_ROW_WITHOUT_SIMULATION, guideRows, HELP, isHelpTopic, NOT_OFFERED } from '../help';
 import { runtimeOf } from '../runtime';
 import { HELP_TOPICS, TOOL_NAMES } from '../schemas';
 
@@ -20,8 +20,12 @@ export const tool: ToolImpl = {
     const offered = rt?.offered ?? TOOL_NAMES;
     const missing = TOOL_NAMES.filter((n) => !offered.includes(n));
     const base = topic === 'guide' && missing.length ? guideRows(guideWithout(missing)) : HELP[topic];
-    const rows = base.map((r) => {
-      if (topic !== 'features') return r;
+    // Magnusim CAD (no projects, no simulation): the body tool as offered there. (Help needs no Part:
+    // with no bridge it answers as in Magnusim.)
+    const links = ctx.services.bridge?.projectLinks() !== false;
+    const rows = base.map((row) => {
+      if (topic !== 'features') return row;
+      const r = !links && row.about === 'body' ? BODY_ROW_WITHOUT_SIMULATION : row;
       if (!built(r.about)) return { ...r, text: `${r.text} Not in this build yet.` };
       return missing.includes(r.about) ? { ...r, text: `${r.text} ${NOT_OFFERED}` } : r;
     });

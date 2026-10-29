@@ -18,6 +18,7 @@
 //     axes and planes as selectors, bodies by their names.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { storedBodyName } from '../doc/features/body-ids';
 import { splitEdgeName } from '../naming/edges';
 import { splitMerged, splitSuffix } from '../naming/names';
 import type { AppServices } from '../types/app';
@@ -167,7 +168,8 @@ export function createdLabels(services: AppServices, feature: FeatureId, max = 5
 const point = (p: Vec3 | readonly number[]) => `(${[...p].map((v) => len(v)).join(', ')})`;
 
 function bodyName(s: DocState, id: BodyId): string {
-  return s.doc.bodies[id]?.name ?? s.rebuild.bodies.find((b) => b.id === id)?.name ?? id;
+  // A body no rebuild shows now (a Delete body's, a Combine's used-up tool): a split piece by the derived-name rule.
+  return s.doc.bodies[id]?.name ?? s.rebuild.bodies.find((b) => b.id === id)?.name ?? storedBodyName(s.doc, id) ?? id;
 }
 
 /** A body by its name, as a body list writes it. */

@@ -98,6 +98,8 @@ const MANY: Partial<Record<SelectionItem['kind'], string>> = { body: 'bodies', v
 export function deleteHint(services: AppServices, ui: UiController, items: readonly SelectionItem[]): string {
   const item = items[0];
   if (item.kind === 'origin') return "The origin's planes and axes cannot be deleted.";
+  // Bodies are deleted (a Delete body feature) when nothing else is selected with them.
+  if (items.some((it) => it.kind === 'body') && services.doc.features.get('delete_body')) return 'Delete removes bodies when only bodies are selected: select just the bodies, or right-click one in the tree.';
   const f = ui.featureOfItem(item);
   const name = f ? services.doc.state.get().doc.features.find((x) => x.id === f)?.name : null;
   if (item.kind === 'sketch') return name ? `Sketch geometry is deleted in the sketch: edit ${name}.` : 'Sketch geometry is deleted in its sketch.';
@@ -168,6 +170,11 @@ export function installUi(services: AppServices): () => void {
         // Several features: one Delete of them all, one undo step (as the Assistant's delete).
         if (ids.length > 1) ui.deleteFeatures(ids);
         else if (ids.length) ui.deleteFeature(ids[0]);
+        // Only bodies selected: one Delete body feature for them all, as the body menu's Delete.
+        if (!ids.length && items.length && items.every((it) => it.kind === 'body') && services.doc.features.get('delete_body')) {
+          ui.deleteBodies(items.flatMap((it) => (it.kind === 'body' ? [it.body] : [])));
+          return;
+        }
         // Only faces selected: "Delete faces and heal" when that module is there and can run (P2).
         if (!ids.length && items.length && items.every((it) => it.kind === 'face') && services.commands.canRun(WELL_KNOWN_COMMANDS.deleteFaces) === true) {
           void services.commands.run(WELL_KNOWN_COMMANDS.deleteFaces);
@@ -246,13 +253,17 @@ export function installUi(services: AppServices): () => void {
         items.push(...extra.map((e) => ({ id: `${m.id}:${e.id}`, label: e.label, disabled: e.disabled ?? null, run: e.run })));
       }
       let last: MenuEntry[] = [];
+      /** The body's Delete: with the feature's, last of all. */
+      let bodyDelete: MenuEntry[] = [];
       if (pick) {
         const item = pick.item;
         const f0 = ui.featureOfItem(item);
         if (item.kind === 'face' || item.kind === 'edge' || item.kind === 'vertex' || item.kind === 'body') {
           if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: 'sep-modules' });
+          const menu = ui.bodyMenu(item.body);
+          bodyDelete = menu.filter((e) => e.id === 'body-delete');
           // The feature's menu below ends with the keybind items: not twice.
-          items.push(...ui.bodyMenu(item.body).filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature' && !(f0 && (e.id === 'sep-keybinds' || e.id.startsWith('set-keybind')))));
+          items.push(...menu.filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature' && e.id !== 'body-delete' && e.id !== 'sep-body-delete' && !(f0 && (e.id === 'sep-keybinds' || e.id.startsWith('set-keybind')))));
         }
         const f = ui.featureOfItem(item);
         if (f) {
@@ -271,7 +282,8 @@ export function installUi(services: AppServices): () => void {
           items.push({ id: 'view.fit', label: fit.label, run: () => void services.commands.run('view.fit') });
         }
       }
-      items.push(...last);
+      if (bodyDelete.length) items.push({ sep: true, id: 'sep-body-delete' }, ...bodyDelete);
+      items.push(...last.filter((e) => !(bodyDelete.length && isSep(e))));
       // No separator at either end, and none twice.
       while (items.length && isSep(items[items.length - 1])) items.pop();
       const clean = items.filter((e, i) => !(isSep(e) && (i === 0 || isSep(items[i - 1]))));

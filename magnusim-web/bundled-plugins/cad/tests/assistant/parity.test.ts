@@ -15,7 +15,6 @@
 // controls, a field of a feature type that has a panel, or says in words where (place) or why it
 // is no person's action (own).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
 import { keybindsFor } from '../../src/app/keybinds';
@@ -26,8 +25,7 @@ import { railsFor } from '../../src/ui/left-rails';
 import { toolbarPrefs } from '../../src/ui/toolbar-layout';
 import { uiFor } from '../../src/ui/controller';
 import type { AppServices } from '../../src/types/app';
-import { createFakeWorkspace, setFakeConnection } from '../fakes/workspace-sdk';
-import { FakeWorker, okHandler } from '../fakes/fake-worker';
+import { bootApp, problem, schemaKeys, type Node } from './parity-lib';
 
 // three's WebGLRenderer needs WebGL, which jsdom lacks (the viewport's table is checked by type).
 vi.mock('../../src/viewport/viewport', () => ({
@@ -35,81 +33,11 @@ vi.mock('../../src/viewport/viewport', () => ({
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Node = { type?: string; properties?: Record<string, Node>; items?: Node; enum?: string[] };
-
-/**
- * Every row key a tool's input asks for: a leaf field's path ("set[].expr", an array of strings by
- * its own path) and, for an enum, each value as "path=value" ("views=iso_back", "set[].kind=angle").
- */
-function schemaKeys(schema: Node): string[] {
-  const out: string[] = [];
-  const walk = (n: Node, path: string) => {
-    if (n.type === 'object') {
-      for (const [k, v] of Object.entries(n.properties ?? {})) walk(v, path ? `${path}.${k}` : k);
-      return;
-    }
-    if (n.type === 'array' && n.items) {
-      if (n.items.type === 'object') return walk(n.items, `${path}[]`);
-      if (n.items.enum) for (const v of n.items.enum) out.push(`${path}=${v}`);
-      else out.push(path);
-      return;
-    }
-    if (n.enum) for (const v of n.enum) out.push(`${path}=${v}`);
-    else out.push(path);
-  };
-  walk(schema, '');
-  return out;
-}
-
-/** A field path of a tool's input ("entities[].kind"), or null when the tool or a step of it is not there. */
-function fieldNode(tool: string, field: string): Node | null {
-  const t = CAD_TOOLS.find((x) => x.name === tool);
-  if (!t) return null;
-  let n: Node | undefined = t.inputSchema as unknown as Node;
-  for (const step of field.split('.')) {
-    const arr = step.endsWith('[]');
-    const key = arr ? step.slice(0, -2) : step;
-    n = n?.properties?.[key];
-    if (arr) n = n?.items;
-    if (!n) return null;
-  }
-  return n;
-}
-
-/** Why a row does not hold now ("" when it does). */
-function problem(r: Reach): string {
-  if (r.kind === 'auto') return r.why.trim() ? '' : 'auto with no reason';
-  const n = fieldNode(r.tool, r.field);
-  if (!n) return `${r.tool}.${r.field} is not in schemas.ts`;
-  if (r.value !== undefined && n.enum && !n.enum.includes(r.value)) return `${r.tool}.${r.field} has no value ${r.value}`;
-  return '';
-}
-
 let booted: Promise<AppServices> | null = null;
 /** The app, booted once for the file. */
 function boot(): Promise<AppServices> {
-  booted ??= bootOnce();
+  booted ??= bootApp();
   return booted;
-}
-
-async function bootOnce(): Promise<AppServices> {
-  const ws = createFakeWorkspace({
-    spawnWorker: () => {
-      const w = new FakeWorker(okHandler());
-      w.ready();
-      return w as unknown as Worker;
-    },
-  });
-  setFakeConnection(ws);
-  const { bootstrap } = await import('../../src/app/bootstrap');
-  const root = document.createElement('div');
-  document.body.append(root);
-  let services: AppServices | null = null;
-  await act(async () => {
-    services = await bootstrap(root);
-  });
-  await vi.waitFor(() => expect(root.querySelector('[data-cad-app]')?.getAttribute('data-kernel')).toBe('ready'));
-  return services!;
 }
 
 const rows = () => Object.entries(PARITY_TABLES).flatMap(([table, t]) => Object.entries(t).map(([key, r]) => ({ table, key, r })));
@@ -241,6 +169,10 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(DOC.retry).toMatchObject({ tool: 'direct', value: 'retry' });
     expect(FEATURE_FIELDS.pattern_circular.symmetric).toMatchObject({ tool: 'pattern', field: 'options', value: 'symmetric' });
     expect(FEATURE_FIELDS.extrude.face).toMatchObject({ tool: 'extrude', field: 'face' });
+    // Delete body (Daniel 2026-10-28), both ways: the body menu's Delete and the Delete key, and direct's delete_body.
+    expect(UI.deleteBodies).toEqual({ kind: 'reach', tool: 'direct', field: 'kind', value: 'delete_body' });
+    expect(FEATURE_FIELDS.delete_body.bodies).toEqual({ kind: 'reach', tool: 'direct', field: 'bodies' });
+    expect(AI_TOOLS.direct['kind=delete_body']).toEqual({ kind: 'control', table: 'ui', method: 'deleteBodies' });
   });
 
   it('the other way (Daniel: parity both ways): every sketch entity kind the Assistant draws has a person sketch tool, a registered command, that draws it', async () => {

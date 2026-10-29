@@ -138,6 +138,12 @@ export interface UiController {
   setBodyVisible(id: BodyId, visible: boolean): void;
   /** LINK: the body's "Include in simulation" toggle (one undo step). */
   setBodyInSimulation(id: BodyId, include: boolean): void;
+  /**
+   * Delete bodies (the body menu's Delete, the Delete key with only bodies selected): one Delete
+   * body feature for all of them at the rollback bar, one undo step, as the Assistant's direct
+   * delete_body. Bodies not built now are left out; none left: nothing happens.
+   */
+  deleteBodies(ids: readonly BodyId[]): void;
   featureMenu(id: FeatureId): MenuEntry[];
   bodyMenu(id: BodyId): MenuEntry[];
   showMenu(x: number, y: number, items: MenuEntry[], label?: string, opts?: MenuOptions): void;
@@ -731,6 +737,28 @@ export function createUiController(services: AppServices): UiController {
         fail(action, errText(err));
       }
     },
+    deleteBodies(ids) {
+      const list = doc.state.get().rebuild.bodies.filter((b) => ids.includes(b.id));
+      if (!list.length) return;
+      const label = list.length === 1 ? `Delete ${list[0].name}` : `Delete ${list.length} bodies`;
+      const block = editBlock();
+      if (block) return fail(label, block);
+      if (!doc.features.get('delete_body')) return fail(label, 'this version of Magnusim CAD cannot delete bodies');
+      paramsBack = false;
+      settleOtherPanel(null);
+      closeMenu();
+      try {
+        // A new feature whose session applies at once (its bodies are given) and closes: one undo step.
+        doc.beginNew('delete_body', { bodies: list.map((b) => b.id) } as Partial<Feature>).commit();
+      } catch (err) {
+        fail(label, errText(err));
+        return;
+      }
+      // The deleted bodies leave the selection, with their faces, edges and points.
+      const gone = new Set(list.map((b) => b.id));
+      const off = (it: SelectionItem) => (it.kind === 'body' || it.kind === 'face' || it.kind === 'edge' || it.kind === 'vertex') && gone.has(it.body);
+      if (services.selection.get().items.some(off)) services.selection.set((s) => ({ ...s, items: s.items.filter((it) => !off(it)) }));
+    },
     setBodyVisible(id, visible) {
       try {
         doc.setBodyVisible(id, visible);
@@ -806,8 +834,9 @@ export function createUiController(services: AppServices): UiController {
       const items: MenuEntry[] = [
         { id: 'body-visibility', label: `${hidden ? 'Show' : 'Hide'} ${info.name}`, run: () => c.setBodyVisible(id, hidden) },
       ];
-      // LINK: a solid body goes to the project's geometry unless it is left out; a surface body never does.
-      if (info.solids !== 0) {
+      // LINK: a solid body goes to the project's geometry unless it is left out; a surface body never
+      // does. Magnusim CAD has no projects and no simulation: no such item there.
+      if (info.solids !== 0 && services.bridge.projectLinks()) {
         const inSim = d.doc.bodies[id]?.simulation !== false;
         items.push({
           id: 'body-simulation',
@@ -820,8 +849,17 @@ export function createUiController(services: AppServices): UiController {
       // The body's colour (as the Assistant's body color): the tree row's colour picker.
       items.push({ id: 'body-color', label: 'Colour…', disabled: block, run: () => c.pickBodyColor(id) });
       if (f) items.push({ sep: true, id: 'sep-body-feature' }, { id: 'body-edit', label: `Edit ${f.name}`, disabled: block, run: () => c.openEdit(f.id) });
-      // Rename's key (F2 renames a body too): set here, where the person meets it.
-      items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
+      const canDelete = !!doc.features.get('delete_body');
+      // The keys of Delete and Rename (Delete and F2 act on a selected body too): set here, where the person meets them.
+      items.push({ sep: true, id: 'sep-keybinds' }, ...(canDelete ? [keybindMenuItem(services, 'ui.delete', 'Set keybind for Delete…')] : []), keybindMenuItem(services, 'ui.rename', 'Set keybind for Rename…'));
+      // Delete, last (Daniel 2026-10-28: a body could be hidden, renamed and coloured, never removed): a
+      // Delete body feature in the history, one undo step. Several bodies selected, this one among
+      // them: one feature for them all.
+      if (canDelete) {
+        const picked = services.selection.get().items.flatMap((it) => (it.kind === 'body' && d.rebuild.bodies.some((b) => b.id === it.body) ? [it.body] : []));
+        const many = picked.length > 1 && picked.includes(id);
+        items.push({ sep: true, id: 'sep-body-delete' }, { id: 'body-delete', label: many ? `Delete ${picked.length} bodies` : `Delete ${info.name}`, danger: true, disabled: block, run: () => c.deleteBodies(many ? picked : [id]) });
+      }
       return items;
     },
     showMenu(x, y, items, label = 'Actions', opts = {}) {

@@ -63,7 +63,7 @@ export const CONSTRUCT_METHOD_NAMES = ['offset', 'angle', 'three_points', 'midpl
 const CONSTRUCT_METHODS = CONSTRUCT_METHOD_NAMES;
 
 /** The direct tool's kinds. */
-export const DIRECT_KIND_NAMES = ['press_pull', 'delete_faces', 'split', 'enclosure', 'repair', 'retry'] as const;
+export const DIRECT_KIND_NAMES = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'repair', 'retry'] as const;
 const DIRECT_KINDS = DIRECT_KIND_NAMES;
 
 /** The pattern tool's options (on/off choices beyond flip). */
@@ -148,6 +148,28 @@ interface ToolSpec {
   description: string;
   schema: S;
   confirm?: string;
+}
+
+/**
+ * The body tool. `simulation`: where the host has projects (Magnusim), the field that says whether
+ * the body goes into the project's simulation geometry; Magnusim CAD (projectLinks false) has no
+ * simulation, and the tool there neither has the field nor speaks of it.
+ */
+function bodySpec(simulation: boolean): ToolSpec {
+  return {
+    name: 'body',
+    title: 'Name, colour or show a body',
+    risk: 'edit',
+    timeoutS: 60,
+    description: `Rename a body, set its colour (#rrggbb), ${simulation ? "say whether it goes into the project's simulation geometry, " : ''}or show or hide it in the person's view (the tree's eye: saved view state, not an undo step). "" or keep leaves a field as it is. One step.`,
+    schema: obj({
+      body: str(80, 'The body', 1),
+      rename_to: str(40, '"" keeps it'),
+      color: str(7, '"#rrggbb" or ""'),
+      ...(simulation ? { simulation: en(['keep', 'include', 'exclude'], 'In the simulation geometry') } : {}),
+      visibility: en(['keep', 'show', 'hide'], "In the person's view"),
+    }),
+  };
 }
 
 const SPECS: ToolSpec[] = [
@@ -398,21 +420,7 @@ const SPECS: ToolSpec[] = [
       keep_tools: bool('Keep the tool bodies'),
     }),
   },
-  {
-    name: 'body',
-    title: 'Name, colour or show a body',
-    risk: 'edit',
-    timeoutS: 60,
-    description:
-      "Rename a body, set its colour (#rrggbb), say whether it goes into the project's simulation geometry, or show or hide it in the person's view (the tree's eye: saved view state, not an undo step). \"\" or keep leaves a field as it is. One step.",
-    schema: obj({
-      body: str(80, 'The body', 1),
-      rename_to: str(40, '"" keeps it'),
-      color: str(7, '"#rrggbb" or ""'),
-      simulation: en(['keep', 'include', 'exclude'], 'In the simulation geometry'),
-      visibility: en(['keep', 'show', 'hide'], "In the person's view"),
-    }),
-  },
+  bodySpec(true),
   {
     name: 'edit_feature',
     title: 'Change a feature',
@@ -475,14 +483,14 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 240,
     description:
-      'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.',
+      'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). delete_body: bodies leave the model from here on. repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.',
     schema: obj({
       edit: EDIT,
       name: NAME,
       kind: en(DIRECT_KINDS, 'What to do'),
       faces: arr(SEL('A face selector'), 0, 60, 'press_pull, delete_faces: faces of one body; else [].'),
       distance: EXPR('press_pull: the distance; split by Top, Front, Right: the offset; enclosure percent or fixed: the padding; else ""'),
-      bodies: arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; else [].'),
+      bodies: arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; delete_body: the bodies to delete; else [].'),
       tool: SEL('split: Top, Front, Right, a flat face or a body; else ""'),
       keep_tool: bool('split by a body: keep the tool body'),
       shape: en(['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'], 'enclosure: box or a cylinder about X, Y, Z; else box'),
@@ -540,6 +548,18 @@ const toTool = (s: ToolSpec): AssistantTool => ({
 
 /** The 21 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
 export const CAD_TOOLS: readonly AssistantTool[] = Object.freeze(SPECS.map(toTool).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
+
+/** The body tool as Magnusim CAD offers it (projectLinks false): no simulation field. */
+const BODY_WITHOUT_SIMULATION: AssistantTool = Object.freeze(toTool(bodySpec(false)));
+
+/**
+ * The tools this page offers, by name: CAD_TOOLS where the host has projects (Magnusim), and in
+ * Magnusim CAD (projectLinks false: no projects, no simulation) the body tool without its
+ * simulation field. The same 21 tools either way.
+ */
+export function cadToolsFor(o: { projectLinks: boolean }): readonly AssistantTool[] {
+  return o.projectLinks ? CAD_TOOLS : CAD_TOOLS.map((t) => (t.name === 'body' ? BODY_WITHOUT_SIMULATION : t));
+}
 
 /** The tools' names, by name. */
 export const TOOL_NAMES: readonly string[] = Object.freeze(CAD_TOOLS.map((t) => t.name));

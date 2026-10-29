@@ -32,7 +32,7 @@
     },
     {
       "id": "ui.delete",
-      "label": "Delete selected features",
+      "label": "Delete selected features or bodies",
       "group": "Edit",
       "context": "model",
       "keys": [

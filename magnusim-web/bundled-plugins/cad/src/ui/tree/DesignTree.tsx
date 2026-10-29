@@ -570,7 +570,8 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
   const handle = useStateStore(services.viewport, (s) => s.handle);
   const originOpen = d.expanded.includes('origin');
   const bodiesOpen = d.expanded.includes('bodies');
-  const bodies = bodyRows({ bodies: d.docBodies }, { hiddenBodies: d.hidden }, d.bodies);
+  // Magnusim CAD (no projects, no simulation): no simulation toggle, hint or mark on a body row.
+  const bodies = bodyRows({ bodies: d.docBodies }, { hiddenBodies: d.hidden }, d.bodies, { projectLinks: services.bridge.projectLinks() });
   const picked = selectedBodies(sel);
 
   // Double-click the part's own row: rename it, as the header's crumb does (the study's title).

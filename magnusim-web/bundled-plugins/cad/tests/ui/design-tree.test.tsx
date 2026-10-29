@@ -4,6 +4,7 @@
 import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Feature } from '../../src/types/doc';
+import { uiFor } from '../../src/ui/controller';
 import { makeServices, type TestServices } from './fake-doc';
 import { mountUi } from './mount';
 
@@ -289,5 +290,61 @@ describe('design tree', () => {
     expect(ui.$('[data-bodies-folder] > .tree-row .tl')!.textContent).toBe('Bodies (0)');
     fireEvent.click(ui.$('[data-bodies-folder] > .tree-row')!);
     expect(ui.$('[data-tree-empty="bodies"]')!.textContent).toBe('No bodies yet');
+  });
+});
+
+// Daniel 2026-10-28: "there shouldn't be a 'leave body out of simulation' option, because there's no
+// simulation in the standalone Magnusim CAD". The host's welcome flag projectLinks false (Magnusim CAD)
+// hides every word and mark of the simulation on a body row and in its menu; absent (Magnusim) shows them.
+describe('a body row with and without a simulation', () => {
+  const hiddenBody = (x: TestServices, u: ReturnType<typeof mountUi>) => {
+    fireEvent.click(u.$('[data-bodies-folder] > .tree-row')!);
+    const b = x.doc.state.get().rebuild.bodies[0];
+    fireEvent.click(u.$(`[data-body-row="${b.id}"] [data-body-act="visibility"]`)!);
+    return { b, row: u.$(`[data-body-row="${b.id}"]`)! };
+  };
+  /** The full-name title a cut-off row name shows (jsdom lays nothing out: the name is made too wide). */
+  const titleOf = (el: Element) => {
+    Object.defineProperty(el, 'scrollWidth', { value: 500, configurable: true });
+    fireEvent.mouseEnter(el);
+    return el.getAttribute('title');
+  };
+  const tipOf = (u: ReturnType<typeof mountUi>, el: Element) => {
+    fireEvent.mouseEnter(el);
+    const text = u.tip();
+    fireEvent.mouseLeave(el);
+    return text;
+  };
+
+  it('Magnusim (no flag): the toggle, the "still in the simulation" words and marks, and the menu item', () => {
+    const { b, row } = hiddenBody(t, ui);
+    expect(t.services.bridge.projectLinks()).toBe(true);
+    expect(row.querySelector('[data-body-act="simulation"]')!.getAttribute('aria-label')).toBe('Leave Body 1 out of the simulation');
+    expect(row.getAttribute('data-in-simulation')).toBe('1');
+    expect(row.getAttribute('data-hidden-in-simulation')).toBe('1');
+    expect(titleOf(row.querySelector('.tl')!)).toBe('Body 1 (hidden, still in the simulation)');
+    expect(tipOf(ui, row.querySelector('[data-body-act="visibility"]')!)).toContain('Hidden, still in the simulation');
+    fireEvent.contextMenu(row.querySelector('.tree-row')!, { clientX: 10, clientY: 10 });
+    expect(ui.menu()).toContain('Leave Body 1 out of the simulation');
+    expect(uiFor(t.services).bodyMenu(b.id).map((e) => e.id)).toContain('body-simulation');
+  });
+
+  it('Magnusim CAD (projectLinks false): no toggle, no words, no marks and no menu item; the stored choice stays as it is', () => {
+    cleanup();
+    ui.dispose();
+    t = makeServices({ viewport: true, panels: true, projectLinks: false });
+    t.doc.seed('extrude');
+    ui = mountUi(t);
+    const { b, row } = hiddenBody(t, ui);
+    expect(t.services.bridge.projectLinks()).toBe(false);
+    expect(row.querySelector('[data-body-act="simulation"]')).toBeNull();
+    expect(row.hasAttribute('data-in-simulation')).toBe(false);
+    expect(row.hasAttribute('data-hidden-in-simulation')).toBe(false);
+    expect(titleOf(row.querySelector('.tl')!)).toBe('Body 1');
+    expect(tipOf(ui, row.querySelector('[data-body-act="visibility"]')!)).not.toMatch(/simulation/);
+    expect(row.textContent).not.toMatch(/simulation/);
+    fireEvent.contextMenu(row.querySelector('.tree-row')!, { clientX: 10, clientY: 10 });
+    expect(ui.menu().filter((m) => /simulation/.test(m ?? ''))).toEqual([]);
+    expect(uiFor(t.services).bodyMenu(b.id).map((e) => e.id)).not.toContain('body-simulation');
   });
 });
