@@ -655,11 +655,175 @@ describe('the refusal fallback (first cloud dialect)', () => {
       const req = lastChat('anthropic');
       assert.equal(req.body.fallbacks, on ? 'default' : undefined, model);
       assert.equal(req.body.betas, undefined, 'betas travel as a header');
-      // The thinking binding's beta goes with every 5-series model (THINKING_BINDING_BETA).
+      // The thinking binding's beta goes with every 5-series model (THINKING_BINDING_BETA), context editing's with every request.
       const binding = model.startsWith('claude-unknown') ? [] : ['thinking-binding-controls-2026-08-01'];
-      assert.equal(req.headers['anthropic-beta'], [...(on ? ['server-side-fallback-2026-07-01'] : []), ...binding].join(',') || undefined, model);
+      assert.equal(req.headers['anthropic-beta'], [...(on ? ['server-side-fallback-2026-07-01'] : []), ...binding, 'context-management-2025-06-27'].join(','), model);
       assert.deepEqual(adapterFor('anthropic').fallbackTargets(model), on ? [...prices.FALLBACK_TARGETS[model]] : [], model);
     }
+  });
+});
+
+describe('old tool results left out of a long conversation (context editing, trimming)', () => {
+  const PIC = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 640, height: 480 };
+  /** An answer of `n` calls in a provider's own raw form (what its adapter replays). */
+  const answer = (provider, step, n) => {
+    const calls = Array.from({ length: n }, (_, i) => ({ type: 'tool_call', callId: `c${step}-${i}`, name: 'add', input: { by: 1 } }));
+    const payload =
+      provider === 'anthropic'
+        ? calls.map((c) => ({ type: 'tool_use', id: c.callId, name: c.name, input: c.input }))
+        : provider === 'openai'
+          ? calls.map((c) => ({ type: 'function_call', call_id: c.callId, name: c.name, arguments: JSON.stringify(c.input) }))
+          : { role: 'assistant', content: null, tool_calls: calls.map((c) => ({ id: c.callId, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input) } })) };
+    return { role: 'assistant', parts: calls, raw: { provider, model: MODELS[provider], payload } };
+  };
+  const results = (step, n, text = '{"tool":"add","ok":true,"data":{"count":1}}') => ({
+    role: 'user',
+    parts: Array.from({ length: n }, (_, i) => ({ type: 'tool_result', callId: `c${step}-${i}`, isError: i === 1 && n > 1, text, images: [{ ...PIC }] })),
+  });
+  /** The person's prompt with a picture, then `steps` steps of `n` calls each (one picture per result). */
+  const conversation = (provider, steps, n = 1) => {
+    const out = [{ role: 'user', parts: [{ type: 'text', text: 'Build it' }, { ...PIC }] }];
+    for (let s = 1; s <= steps; s += 1) out.push(answer(provider, s, n), results(s, n));
+    return out;
+  };
+  const resultsOf = (messages) => messages.flatMap((m) => (m.role === 'user' ? m.parts.filter((p) => p.type === 'tool_result') : []));
+
+  it('clearedResults: none below 36 results, then whole jumps of 24 that leave at least 12; it only grows; the step that just ran is never cut', async () => {
+    const { clearedResults, RESULT_WINDOW } = await import('../assistant/providers/common.ts');
+    assert.deepEqual({ ...RESULT_WINDOW }, { keep: 12, jump: 24 });
+    let last = 0;
+    for (let k = 1; k <= 150; k += 1) {
+      const b = clearedResults(conversation('anthropic', k));
+      assert.equal(b, k < 36 ? 0 : Math.floor((k - 12) / 24) * 24, `after ${k} results`);
+      assert.ok(b >= last, 'never goes down');
+      assert.ok(b === 0 || k - b >= 12, 'the newest 12 stay whole');
+      last = b;
+    }
+    // A step of 40 calls, then one of 30: only the first step's results may go, never the 30 the model has not read.
+    const big = [userText('go'), answer('anthropic', 1, 40), results(1, 40)];
+    assert.equal(clearedResults(big), 0, 'the results after the last answer are the step that just ran');
+    big.push(answer('anthropic', 2, 30), results(2, 30));
+    assert.equal(clearedResults(big), 24, '70 results: 24 of the first step go, none of the 30');
+  });
+
+  it('sentMessages: the oldest results as the same short note, with no pictures; the stored messages unchanged; the person’s picture kept', async () => {
+    const { sentMessages, clearedText, CLEARED_NOTE } = await import('../assistant/providers/common.ts');
+    const stored = conversation('anthropic', 3, 2);
+    const before = JSON.stringify(stored);
+    const sent = sentMessages(stored, 3);
+    assert.equal(JSON.stringify(stored), before, 'stored messages are never changed');
+    assert.equal(sent.length, stored.length);
+    const r = resultsOf(sent);
+    assert.deepEqual(r.slice(0, 3).map((p) => [p.text, p.images.length]), [
+      [clearedText(false), 0],
+      [clearedText(true), 0],
+      [clearedText(false), 0],
+    ]);
+    assert.ok(r.slice(3).every((p) => p.images.length === 1 && p.text.startsWith('{"tool":"add"')));
+    assert.deepEqual(JSON.parse(clearedText(true)), { ok: false, left_out: CLEARED_NOTE });
+    assert.equal(sent[0], stored[0], 'a message with no cleared result is the stored one');
+    assert.equal(sent[0].parts[1].type, 'image', "the person's picture stays");
+  });
+
+  it('anthropicBody: the edit keeps all but B results, with its beta; the messages are exactly those of a request that clears nothing; thinking keeps its binding; requests between two jumps share their prefix', async () => {
+    const { anthropicBody, CONTEXT_MANAGEMENT_BETA } = await import('../assistant/providers/anthropic.ts');
+    const { clearedResults } = await import('../assistant/providers/common.ts');
+    const stored = conversation('anthropic', 150);
+    const B = clearedResults(stored);
+    assert.equal(B, 120);
+    const req = { ...request('anthropic', stored), clearResults: B };
+    const body = anthropicBody(req);
+    assert.deepEqual(body.context_management, {
+      edits: [{ type: 'clear_tool_uses_20250919', trigger: { type: 'tool_uses', value: 30 }, keep: { type: 'tool_uses', value: 30 } }],
+    });
+    assert.ok(body.betas.includes(CONTEXT_MANAGEMENT_BETA));
+    const plain = anthropicBody({ ...req, clearResults: 0 });
+    assert.equal(plain.context_management, undefined, 'nothing to clear: no edit');
+    assert.ok(plain.betas.includes(CONTEXT_MANAGEMENT_BETA), 'the beta goes on every request, so the header never changes');
+    assert.equal(JSON.stringify(body.messages), JSON.stringify(plain.messages), 'the history goes as stored: only the provider clears');
+    assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+    assert.equal(anthropicBody(req, { managed: false }).context_management, undefined);
+    assert.ok(!anthropicBody(req, { managed: false }).betas.includes(CONTEXT_MANAGEMENT_BETA));
+    // Two requests between jumps (40 and 41 results: B 24 both) share every message but the newest, and clear the same results.
+    const at = (k) => {
+      const m = conversation('anthropic', k);
+      return anthropicBody({ ...request('anthropic', m), clearResults: clearedResults(m) });
+    };
+    const [a, b] = [at(40), at(41)];
+    const bare = (msgs) => JSON.stringify(msgs).replace(/,"cache_control":\{"type":"ephemeral"\}/g, '');
+    assert.equal(bare(b.messages.slice(0, a.messages.length)), bare(a.messages));
+    assert.deepEqual([a.context_management.edits[0].keep.value, b.context_management.edits[0].keep.value], [16, 17], 'the same 24 cleared');
+    assert.deepEqual([a.system, a.tools], [b.system, b.tools]);
+  });
+
+  it('the Responses and local-server bodies: a long conversation sends its oldest results as the note with no pictures, the newest whole, the person’s picture always', async () => {
+    const { responsesBody } = await import('../assistant/providers/openai.ts');
+    const { compatBody } = await import('../assistant/providers/openai-compatible.ts');
+    const { clearedResults, clearedText } = await import('../assistant/providers/common.ts');
+    const o = conversation('openai', 150);
+    const B = clearedResults(o);
+    const body = responsesBody({ ...request('openai', o), clearResults: B });
+    const outs = body.input.filter((it) => it.type === 'function_call_output');
+    assert.equal(outs.length, 150);
+    assert.ok(outs.slice(0, B).every((it) => it.output === clearedText(false)), 'the oldest B: the note, as text only');
+    assert.ok(outs.slice(B).every((it) => Array.isArray(it.output) && it.output.filter((c) => c.type === 'input_image').length === 1));
+    assert.equal(body.input.filter((it) => it.type === 'function_call').length, 150, 'every call stays');
+    const own = body.input.filter((it) => it.role === 'user').flatMap((it) => it.content.filter((c) => c.type === 'input_image'));
+    assert.equal(own.length, 1, "the person's picture");
+    const c = conversation('openai_compatible', 150);
+    const cb = compatBody({ ...request('openai_compatible', c), clearResults: clearedResults(c) });
+    const tools = cb.messages.filter((m) => m.role === 'tool');
+    assert.equal(tools.length, 150);
+    assert.ok(tools.slice(0, B).every((m) => m.content === clearedText(false)));
+    const pictures = cb.messages.filter((m) => m.role === 'user' && Array.isArray(m.content)).flatMap((m) => m.content.filter((p) => p.type === 'image_url'));
+    assert.equal(pictures.length, 150 - B + 1, "the kept results' pictures and the person's");
+  });
+
+  it('against the fake: the first dialect asks the provider to clear, and the answer says what it cleared; a 400 naming context management goes once more without it, and that model keeps going without', async () => {
+    const { clearedResults } = await import('../assistant/providers/common.ts');
+    const stored = conversation('anthropic', 40);
+    fake.reply({ text: 'Done.' });
+    const r = await send('anthropic', { ...request('anthropic', stored), clearResults: clearedResults(stored) });
+    const sent = lastChat('anthropic');
+    assert.ok(String(sent.headers['anthropic-beta']).split(',').includes('context-management-2025-06-27'));
+    assert.equal(sent.body.context_management.edits[0].keep.value, 16);
+    assert.equal(r.cleared.results, 24, 'applied_edits: cleared_tool_uses');
+    assert.ok(r.cleared.tokens > 0);
+    // The provider refuses it (a platform without the beta): the same request again, without it.
+    const model = 'claude-sonnet-5-5';
+    fake.failNext({ status: 400, dialect: 'anthropic', body: { type: 'error', error: { type: 'invalid_request_error', message: 'context_management: Extra inputs are not permitted' } } });
+    fake.reply({ text: 'Done again.' });
+    const n = chat('anthropic').length;
+    const again = await send('anthropic', { ...request('anthropic', stored, { model }), clearResults: 24 });
+    assert.equal(again.stop, 'end_turn');
+    const [refused, resent] = chat('anthropic').slice(n);
+    assert.ok(refused.body.context_management && !resent.body.context_management);
+    assert.ok(!String(resent.headers['anthropic-beta']).includes('context-management'));
+    assert.equal(again.cleared, undefined);
+    assert.ok(logged.some((l) => l.includes('the provider refused context editing')));
+    fake.reply({ text: 'Third.' });
+    await send('anthropic', { ...request('anthropic', stored, { model }), clearResults: 24 });
+    assert.equal(lastChat('anthropic').body.context_management, undefined, 'remembered for this model');
+    fake.reply({ text: 'Other model.' });
+    await send('anthropic', { ...request('anthropic', stored), clearResults: 24 });
+    assert.ok(lastChat('anthropic').body.context_management, 'another model still clears');
+    resetAssistantState();
+    fake.reply({ text: 'After a restart.' });
+    await send('anthropic', { ...request('anthropic', stored, { model }), clearResults: 24 });
+    assert.ok(lastChat('anthropic').body.context_management, 'a new process tries again');
+  });
+
+  it('MessageAccumulator: the final message_delta’s applied edits become `cleared`; none named, none kept', () => {
+    const acc = new MessageAccumulator(() => {});
+    acc.add({ type: 'message_start', message: { model: 'claude-opus-5-5', usage: { input_tokens: 10 } } });
+    acc.add({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 }, context_management: { applied_edits: [{ type: 'clear_tool_uses_20250919', cleared_tool_uses: 24, cleared_input_tokens: 9100 }] } });
+    acc.add({ type: 'message_stop' });
+    assert.deepEqual(acc.result('claude-opus-5-5').cleared, { results: 24, tokens: 9100 });
+    const none = new MessageAccumulator(() => {});
+    none.add({ type: 'message_start', message: { model: 'claude-opus-5-5', usage: {} } });
+    none.add({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: {}, context_management: null });
+    none.add({ type: 'message_stop' });
+    assert.equal(none.result('claude-opus-5-5').cleared, undefined);
   });
 });
 
@@ -1005,8 +1169,8 @@ describe('the environment and the profiles are never read', () => {
       if (r.dialect === 'anthropic') {
         assert.equal(h['x-api-key'], KEYS.anthropic);
         assert.equal(h.authorization, undefined, 'no Authorization on the first cloud dialect');
-        // No beta the environment names: only the app's own (a Haiku chat asks for the thinking binding; the model list for none).
-        assert.ok([undefined, 'thinking-binding-controls-2026-08-01'].includes(h['anthropic-beta']), `${r.path}: ${h['anthropic-beta']}`);
+        // No beta the environment names: only the app's own (a Haiku chat asks for the thinking binding and context editing; the model list for none).
+        assert.ok([undefined, 'thinking-binding-controls-2026-08-01,context-management-2025-06-27'].includes(h['anthropic-beta']), `${r.path}: ${h['anthropic-beta']}`);
         assert.equal(h['anthropic-version'], '2023-06-01');
       } else if (r.dialect === 'openai') {
         assert.equal(h.authorization, `Bearer ${KEYS.openai}`);
@@ -1944,6 +2108,18 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     assert.ok(Math.abs(cold.inputUsd - (50_000 * 0.1 + 1200 * 0.125) / 1e6) < 1e-12, 'input after 4 minutes');
     const uncached = prices.estimateStep({ ...base, prev: { ...prev, cacheUsed: false } });
     assert.equal(uncached.inputUsd, cold.inputUsd);
+  });
+
+  it('estimateStep: a jump in the left-out results reads the previous prompt only up to its first newly left-out result, and writes what is sent there now', () => {
+    const prev = { promptTokens: 50_000, startedAt: base.now - 1000, cacheUsed: true };
+    const plain = prices.estimateStep({ ...base, prev });
+    const jump = prices.estimateStep({ ...base, prev, prevDropTokens: 20_000, rewriteChars: 6000, rewriteImages: [{ width: 640, height: 480 }] });
+    const rewrite = Math.ceil((1.2 * (3000 + 6000)) / 3) + Math.ceil((640 * 480) / 750);
+    assert.equal(jump.promptTokens, 30_000 + rewrite);
+    assert.ok(Math.abs(jump.inputUsd - (30_000 * 0.01 + rewrite * 0.125) / 1e6) < 1e-12, 'the rewrite at the 5-minute write price');
+    assert.ok(jump.inputUsd > plain.inputUsd, 'a jump costs more than a step that only appends');
+    assert.equal(prices.estimateStep({ ...base, prev, prevDropTokens: 60_000 }).promptTokens, Math.ceil((1.2 * 3000) / 3), 'never below nothing');
+    assert.equal(prices.estimateTokens(3000, [{ width: 640, height: 480 }]), 1200 + 410);
   });
 
   it('estimateStep: the output limit is what the money left buys; under 2048 tokens the turn is capped', () => {

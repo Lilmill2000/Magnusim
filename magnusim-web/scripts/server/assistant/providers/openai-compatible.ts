@@ -13,7 +13,8 @@
  *   server sends no id). A model that writes a tool call as text instead is flagged
  *   (`toolCallAsText`): its chat template doesn't do tools.
  * - Tool results go back as `tool` messages; images from them follow in one user message
- *   as data: URLs (a tool message holds text only).
+ *   as data: URLs (a tool message holds text only). The oldest `req.clearResults` of them go
+ *   as a short note with no images (common.ts sentMessages).
  * - It costs nothing.
  * - The model's row, best effort (modelRow): LM Studio's `GET <root>/api/v0/models/<id>`
  *   (`<root>` is the base URL without `/v1`), else Ollama's `POST <root>/api/show {model}`.
@@ -45,7 +46,7 @@ import {
   type Usage,
 } from '../types.ts';
 import { debugCall, type DebugCall } from '../debug-log.ts';
-import { dataUrl, emptyUsage, looksLikeToolCallText, newWatchdog, parseToolInput, requestMessages, tokenCount, type AdapterOptions } from './common.ts';
+import { dataUrl, emptyUsage, looksLikeToolCallText, newWatchdog, parseToolInput, requestMessages, sentMessages, tokenCount, type AdapterOptions } from './common.ts';
 import { mapProviderError } from './errors.ts';
 import { guardedFetch, type HeaderRule, type Watchdog } from './guarded-fetch.ts';
 import { loadSdkClass } from './load-sdk.ts';
@@ -71,9 +72,11 @@ export const IMAGES_REFUSED_NOTE = 'The local server refused the images, so the 
 /** The note when images were left out from the start (the model's row, or a refusal remembered). */
 export const IMAGES_LEFT_OUT_NOTE = "The local model doesn't read images: they are left out of its requests.";
 
-/** Whether any message carries an image (in a tool result or on its own). */
+/** Whether any message as sent carries an image (in a tool result or on its own; a left-out result has none). */
 function carriesImages(req: ProviderRequest): boolean {
-  return req.messages.some((m) => m.role === 'user' && m.parts.some((p) => p.type === 'image' || (p.type === 'tool_result' && p.images.length > 0)));
+  return sentMessages(req.messages, req.clearResults ?? 0).some(
+    (m) => m.role === 'user' && m.parts.some((p) => p.type === 'image' || (p.type === 'tool_result' && p.images.length > 0)),
+  );
 }
 
 function toMessages(req: ProviderRequest, withImages = true): Json[] {
@@ -84,7 +87,7 @@ function toMessages(req: ProviderRequest, withImages = true): Json[] {
     .filter(Boolean)
     .join('\n\n');
   if (system) out.push({ role: 'system', content: system });
-  for (const m of requestMessages(req.messages)) {
+  for (const m of requestMessages(req.messages, req.clearResults ?? 0)) {
     if (m.role === 'assistant') {
       if (m.raw.provider === 'openai_compatible' && m.raw.payload && typeof m.raw.payload === 'object') out.push(m.raw.payload as Json);
       else out.push(assistantMessage(m.parts));

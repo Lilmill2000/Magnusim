@@ -35,6 +35,12 @@ export interface ProviderRequest {
   tools: readonly ProviderTool[];
   maxOutputTokens: number;
   effort: Effort;
+  /**
+   * How many of the oldest tool results go without their content (providers/common.ts
+   * clearedResults; 0 or absent: none). The messages stay whole: a cloud adapter leaves them
+   * out as it builds the request (Anthropic: the provider's own context editing).
+   */
+  clearResults?: number;
 }
 export interface Usage { input: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; output: number; reasoning: number; complete: boolean }
 /** One billed attempt (a refusal fallback adds attempts on other models). */
@@ -50,6 +56,8 @@ export interface ProviderResult {
   toolCallAsText?: boolean;
   /** One-line notes for the person on how the request went (its images left out); the loop logs each once per turn. */
   notes?: string[];
+  /** The tool results the provider left out of this request itself, and the input tokens that saved (Anthropic's context editing). */
+  cleared?: { results: number; tokens: number };
 }
 /** `storage_unavailable`: the secret store can't unlock the saved key right now (its helper was blocked or timed out). */
 export type ProviderErrorCode = 'no_key' | 'storage_unavailable' | 'deps_missing' | 'auth' | 'model' | 'rate_limit' | 'overloaded' | 'server'

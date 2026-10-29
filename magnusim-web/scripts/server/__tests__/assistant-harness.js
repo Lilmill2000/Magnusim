@@ -101,7 +101,8 @@ const emptyUsage = () => ({ input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1
  *   { text?, tools?: [{name, input?, id?, inputError?}], stop?, usage?, category?,
  *     hold?: '<name>' (after the text, until release(name) or abort), error?: '<code>',
  *     streamed?: bool (with error), fallback?: '<model>', throws?: Error,
- *     notes?: [the adapter's notes on how the request went] }
+ *     notes?: [the adapter's notes on how the request went],
+ *     cleared?: {results, tokens} (what the provider's context editing cleared) }
  * or a function (req, provider) => step. Every request is recorded (a deep copy, plus the
  * objects it carried).
  */
@@ -207,6 +208,7 @@ export class ScriptedProvider {
       servedBy: model,
       ...(stop === 'refusal' ? { refusal: { category: step.category ?? null, explanation: '' } } : {}),
       ...(step.notes ? { notes: [...step.notes] } : {}),
+      ...(step.cleared ? { cleared: { ...step.cleared } } : {}),
     };
   }
 }

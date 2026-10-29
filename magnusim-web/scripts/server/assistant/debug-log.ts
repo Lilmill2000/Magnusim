@@ -9,7 +9,8 @@
  * its strict tools (`strict: {count, of}`), and why it went so (a strict refusal: strict_reduced,
  * strict_refused and their _earlier forms; images refused, an overload resend), the whole request body as sent, every HTTP answer's status, request id
  * header and time (the SDK may retry), the duration, and then either the result (stop reason,
- * usage, the model that served it, notes, and a compact list of its blocks: text, thinking's
+ * usage, the model that served it, notes, what the provider's context editing cleared, and a
+ * compact list of its blocks: text, thinking's
  * length, tool calls with their inputs) or the error (its text, type, code and status, and each
  * failed answer's whole body text).
  *
@@ -179,6 +180,7 @@ function resultOf(r: ProviderResult): Json {
     ...(r.refusal ? { refusal: r.refusal } : {}),
     ...(r.notes?.length ? { notes: r.notes } : {}),
     ...(r.toolCallAsText ? { tool_call_as_text: true } : {}),
+    ...(r.cleared ? { cleared: r.cleared } : {}),
     blocks,
   };
 }

@@ -16,7 +16,9 @@
  *       little → failed (context) before this request, and the row is read again next turn
  *     whether the model reads images (cloud: yes; a local server: its row's type, or a
  *       refusal remembered); the adapter's notes on how a request went, each once a turn
- *     model: one request with this step's tools (computed by the host, every step)
+ *     model: one request with this step's tools (computed by the host, every step); it sends
+ *       the conversation with its oldest tool results left out (providers/common.ts
+ *       clearedResults: none until 36, then in jumps of 24, the newest 12 or more whole)
  *       refusal → failed · context → failed · max_tokens → capped · no calls → done
  *       no calls, the turn's workspace asked for review (registry.ts WorkspaceReview) and
  *         its edit or destructive tools succeeded since the turn began or the last round →
@@ -42,10 +44,11 @@
 import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
-import { isStrictNote, strictNoteKey } from './providers/common.ts';
+import { clearedResults, isStrictNote, sentMessages, strictNoteKey } from './providers/common.ts';
+import { alog } from './log.ts';
 import { debugScoped } from './debug-log.ts';
 import { destinationOf, sendWithOneResend } from './providers/index.ts';
-import { costOf, estimateStep, promptTokens, requestCost, type EstimateInput } from './prices.ts';
+import { costOf, estimateStep, estimateTokens, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import {
   destinationHost,
   isProjectList,
@@ -277,11 +280,34 @@ function callCap(t: LoopTurn, caps: Caps): CapHit | null {
   return stepCap(t, caps);
 }
 
-/** The request for this step (maxOutputTokens is set from the estimate). */
+/** The request for this step (maxOutputTokens is set from the estimate); its oldest tool results left out (clearedResults). */
 export function buildRequest(conv: Conversation, tools: readonly ToolDef[], s: ModelTurnSettings): ProviderRequest {
   const system = [{ text: SYSTEM_PROMPT, cache: true }];
   if (conv.guide) system.push({ text: guideBlock(conv.guide.text, conv.guide.pluginName), cache: true });
-  return { model: s.model, system, messages: [...conv.messages], tools: providerTools(tools), maxOutputTokens: 0, effort: s.effort };
+  return {
+    model: s.model,
+    system,
+    messages: [...conv.messages],
+    tools: providerTools(tools),
+    maxOutputTokens: 0,
+    effort: s.effort,
+    clearResults: clearedResults(conv.messages),
+  };
+}
+
+/** The index of the message that holds the tool result at `k` (0: the first), or the list's length past the last. */
+function messageOfResult(messages: readonly Message[], k: number): number {
+  let seen = 0;
+  for (let i = 0; i < messages.length; i += 1) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    for (const p of m.parts) {
+      if (p.type !== 'tool_result') continue;
+      if (seen === k) return i;
+      seen += 1;
+    }
+  }
+  return messages.length;
 }
 
 /** Characters and images of messages a request adds (for the estimate). */
@@ -560,6 +586,10 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
   let lastTools: ToolDef[] | null = null;
   let prev: EstimateInput['prev'] = null;
   let counted = 0;
+  // The tool results the previous request of this turn left out, and whether a request cleared
+  // another number than asked (logged once a turn).
+  let sentCleared = 0;
+  let warnedCleared = false;
   const notedDrops = new Set<string>();
   let notedUnknown = false;
   // Review rounds (the turn's workspace asked for them): its edit tools that succeeded since the
@@ -669,9 +699,23 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     const offered = new Map(tools.map((x) => [x.name, x] as const));
     const req = buildRequest(conv, tools, t.settings);
 
-    // The spend estimate and the day's reservation (cloud only; a local server costs nothing).
-    const fresh = freshOf(conv.messages.slice(counted));
+    // The spend estimate and the day's reservation (cloud only; a local server costs nothing), on
+    // the messages as this request sends them.
+    const cleared = req.clearResults ?? 0;
+    const sent = sentMessages(conv.messages, cleared);
+    const fresh = freshOf(sent.slice(counted));
+    // Images a model doesn't read are left out of its request (each as a line of text).
+    const seen = (images: Array<{ width: number; height: number }>) => (t.images === false ? [] : images);
+    // More results left out than in the previous request: from the first newly left out on, the
+    // previous request's prefix no longer holds, and this request writes that part again.
+    let jump: { drop: number; rewrite: ReturnType<typeof freshOf> } | null = null;
+    if (prev && cleared > sentCleared) {
+      const first = messageOfResult(conv.messages, sentCleared);
+      const before = freshOf(sentMessages(conv.messages, sentCleared).slice(first, counted));
+      jump = { drop: estimateTokens(before.chars, seen(before.images)), rewrite: freshOf(sent.slice(first, counted)) };
+    }
     counted = conv.messages.length;
+    sentCleared = cleared;
     const systemChars = step === 1 ? req.system.reduce((n, s) => n + s.text.length, 0) : 0;
     const ledger = priced ? await d.ledger() : null;
     const turnRoom = caps.turn_usd - t.usd;
@@ -683,11 +727,11 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         cloud: adapter.cloud,
         fallbackTargets: adapter.fallbackTargets(model),
         newChars: fresh.chars + systemChars,
-        // Images a model doesn't read are left out of its request (each as a line of text).
-        newImages: t.images === false ? [] : fresh.images,
+        newImages: seen(fresh.images),
         toolCount: tools.length,
         firstStep: step === 1,
         prev,
+        ...(jump ? { prevDropTokens: jump.drop, rewriteChars: jump.rewrite.chars, rewriteImages: seen(jump.rewrite.images) } : {}),
         now: d.clock.now(),
         remainingUsd: priced ? remainingUsd : Number.POSITIVE_INFINITY,
         contextTokens: t.contextTokens,
@@ -779,6 +823,12 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       // This request's tokens count before its usage event is logged.
       const used = promptTokens(out.usage);
       conv.promptTokens = used;
+      // The estimate counts on the provider clearing exactly what was asked (its context editing).
+      const got = out.cleared?.results ?? 0;
+      if (adapter.id === 'anthropic' && got !== cleared && !warnedCleared) {
+        warnedCleared = true;
+        alog('warn', 'the provider cleared another number of old tool results than asked', { turn: t.id, step, asked: cleared, cleared: got, tokens: out.cleared?.tokens ?? 0 });
+      }
       t.tokens += used + out.usage.output;
       prev = { promptTokens: used, startedAt, cacheUsed: out.usage.cacheRead + out.usage.cacheWrite5m + out.usage.cacheWrite1h > 0 };
     } catch (err) {

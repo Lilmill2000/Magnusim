@@ -30,10 +30,17 @@
  *   decline mid-answer only the declined partial's text stays before the last fallback
  *   block: its tool calls never run and, like its thinking, are not sent back.
  * - Effort other than the provider's default goes in `output_config`.
+ * - Old tool results go through the provider's context editing (CONTEXT_MANAGEMENT_BETA, on
+ *   every request): with `req.clearResults` (B) above 0 the request asks it to clear the oldest
+ *   B results (their pictures with them) and keep the rest. The history goes as stored, so the
+ *   model's earlier thinking stays valid. A 400 that names context management is sent once more
+ *   without it, and that model goes without it for the rest of the process.
  * - Headers: only the allowlist leaves, the key only as x-api-key, never Authorization.
  */
+import { alog } from '../log.ts';
 import { emitSchema } from '../schema.ts';
 import { FALLBACK_TARGETS, priceRow } from '../prices.ts';
+import { assistantState } from '../state.ts';
 import {
   ProviderError,
   type AssistantPart,
@@ -210,9 +217,53 @@ export function bindsThinking(model: string): boolean {
   return /^claude-(opus|sonnet|haiku|fable|mythos)-5(?:$|[-.])/.test(model);
 }
 
-/** The request's betas: the fallback's and the thinking binding's, as each applies to the model. */
-export function betasOf(model: string): string[] {
-  return [...(usesFallback(model) ? [FALLBACK_BETA] : []), ...(bindsThinking(model) ? [THINKING_BINDING_BETA] : [])];
+/**
+ * Context editing (https://platform.claude.com/docs/en/build-with-claude/context-editing, read
+ * 2026-10-29): `clear_tool_uses_20250919` clears the oldest tool results on the provider's side,
+ * before the model reads the request. It never counts as an edit for the thinking binding (the
+ * check compares the conversation as sent), and a picture inside a tool result goes with it.
+ * The beta goes on every request, so the header stays the same through a conversation.
+ */
+export const CONTEXT_MANAGEMENT_BETA = 'context-management-2025-06-27';
+
+/** A 400's words when the provider takes no context editing for the request (its beta, or the field). */
+export const CONTEXT_MANAGEMENT_WORDS = /context[_-]management/i;
+
+/** Models a 400 named context management for: they go without it until the server starts again (or a test reset). */
+const NO_CLEARING = new Set<string>();
+const clearingKey = (model: string) => `${assistantState().bootId} ${model}`;
+
+/** Whether requests for this model use context editing (not after a refusal of it in this process). */
+export function clearsResults(model: string): boolean {
+  return !NO_CLEARING.has(clearingKey(model));
+}
+
+function noClearing(model: string): void {
+  const boot = `${assistantState().bootId} `;
+  for (const k of NO_CLEARING) if (!k.startsWith(boot)) NO_CLEARING.delete(k);
+  NO_CLEARING.add(clearingKey(model));
+}
+
+/** The request's betas: the fallback's and the thinking binding's, as each applies to the model, and context editing's (`managed`). */
+export function betasOf(model: string, managed = true): string[] {
+  return [
+    ...(usesFallback(model) ? [FALLBACK_BETA] : []),
+    ...(bindsThinking(model) ? [THINKING_BINDING_BETA] : []),
+    ...(managed ? [CONTEXT_MANAGEMENT_BETA] : []),
+  ];
+}
+
+/**
+ * The context editing that clears the oldest `cleared` of `results` tool results: it fires once
+ * more than `results - cleared` are sent (always, then) and keeps that many, so exactly
+ * `cleared` go. Tool calls stay (clear_tool_inputs false), and so does thinking.
+ */
+export function contextManagement(results: number, cleared: number): Json | null {
+  const kept = results - cleared;
+  if (cleared <= 0 || kept < 0) return null;
+  return {
+    edits: [{ type: 'clear_tool_uses_20250919', trigger: { type: 'tool_uses', value: kept }, keep: { type: 'tool_uses', value: kept } }],
+  };
 }
 
 function userContent(parts: readonly UserPart[]): Json[] {
@@ -241,9 +292,10 @@ function assistantContent(m: Extract<Message, { role: 'assistant' }>): Json[] {
 
 /**
  * The request body (without `stream`), as sent; with `loose` the workspace's tools go without
- * strict, with `strict` exactly those tools go strict (H8).
+ * strict, with `strict` exactly those tools go strict (H8); `managed` false: no context editing.
  */
-export function anthropicBody(req: ProviderRequest, o: { loose?: boolean; strict?: readonly boolean[] } = {}): Json {
+export function anthropicBody(req: ProviderRequest, o: { loose?: boolean; strict?: readonly boolean[]; managed?: boolean } = {}): Json {
+  const managed = o.managed ?? true;
   const fallback = usesFallback(req.model);
   const sys = req.system.filter((s) => s.text);
   let lastCached = -1;
@@ -276,7 +328,9 @@ export function anthropicBody(req: ProviderRequest, o: { loose?: boolean; strict
       ...(i === req.tools.length - 1 ? { cache_control: EPHEMERAL } : {}),
     }),
   );
-  const betas = betasOf(req.model);
+  const betas = betasOf(req.model, managed);
+  const results = messages.reduce((n, m) => n + (m.content as Json[]).filter((b) => b && b.type === 'tool_result').length, 0);
+  const editing = managed ? contextManagement(results, req.clearResults ?? 0) : null;
   return {
     model: req.model,
     max_tokens: req.maxOutputTokens,
@@ -284,6 +338,7 @@ export function anthropicBody(req: ProviderRequest, o: { loose?: boolean; strict
     messages,
     ...(tools.length ? { tools, tool_choice: { type: 'auto' } } : {}),
     ...(bindsThinking(req.model) ? { thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } } } : {}),
+    ...(editing ? { context_management: editing } : {}),
     ...(req.effort !== 'default' ? { output_config: { effort: req.effort } } : {}),
     ...(fallback ? { fallbacks: 'default' } : {}),
     ...(betas.length ? { betas } : {}),
@@ -329,6 +384,8 @@ export class MessageAccumulator {
   private usage: Json = {};
   private stop: string | null = null;
   private stopDetails: Json | null = null;
+  /** What context editing cleared (its applied edits, from the last message_delta). */
+  private cleared: { results: number; tokens: number } | null = null;
   private readonly onEvent: (e: StreamEvent) => void;
 
   constructor(onEvent: (e: StreamEvent) => void) {
@@ -396,6 +453,7 @@ export class MessageAccumulator {
         if (d.stop_details !== undefined) this.stopDetails = (d.stop_details as Json | null) ?? null;
         // Cumulative counters: each present one replaces the last.
         for (const [k, v] of Object.entries((ev.usage as Json) ?? {})) if (v !== null && v !== undefined) this.usage[k] = v;
+        this.noteCleared(ev.context_management);
         break;
       }
       case 'message_stop':
@@ -404,6 +462,20 @@ export class MessageAccumulator {
       default:
         break;
     }
+  }
+
+  /** The applied edits of context editing (the final message_delta carries them): what clear_tool_uses cleared. */
+  private noteCleared(raw: unknown): void {
+    const edits = raw && typeof raw === 'object' ? (raw as Json).applied_edits : null;
+    if (!Array.isArray(edits)) return;
+    let results = 0;
+    let tokens = 0;
+    for (const e of edits as Json[]) {
+      if (!e || e.type !== 'clear_tool_uses_20250919') continue;
+      results += tokenCount(e.cleared_tool_uses);
+      tokens += tokenCount(e.cleared_input_tokens);
+    }
+    this.cleared = { results, tokens };
   }
 
   result(requested: string): ProviderResult {
@@ -468,7 +540,17 @@ export class MessageAccumulator {
       ...(stop === 'refusal'
         ? { refusal: { category: typeof details.category === 'string' ? details.category : null, explanation: typeof details.explanation === 'string' ? details.explanation : '' } }
         : {}),
+      ...(this.cleared ? { cleared: { ...this.cleared } } : {}),
     };
+  }
+}
+
+/** A 400 that named context management, before anything streamed. */
+class ClearingRefused extends Error {
+  readonly said: string;
+  constructor(said: string) {
+    super(said);
+    this.said = said;
   }
 }
 
@@ -528,35 +610,50 @@ export function anthropicAdapter(o: AdapterOptions): ProviderAdapter {
       await loadSdkClass('@anthropic-ai/sdk', 'Anthropic');
       const schemas = req.tools.map((t) => emitSchema('anthropic', t.schema));
       const sets = { strict: strictOf(req.tools, schemas, false), loose: strictOf(req.tools, schemas, true), bytes: schemas.map(schemaBytes) };
+      // One request; with context editing (`managed`) a 400 that names it throws ClearingRefused.
+      const once = async (key: string, plan: StrictPlan, managed: boolean): Promise<ProviderResult> => {
+        const body = { ...anthropicBody(req, { strict: plan.strict, managed }), stream: true };
+        const wd = newWatchdog(o, false);
+        const sig = AbortSignal.any([signal, wd.signal]);
+        const acc = new MessageAccumulator(onEvent);
+        const dbg = debugCall({ dialect: 'anthropic', model: req.model, attempt: plan.kind, reason: plan.reason, strict: { count: plan.count, of: plan.of }, body });
+        try {
+          const c = await client(key, wd, betasOf(req.model, managed).join(',') || null, dbg);
+          const stream = await c.beta.messages.create(body, { signal: sig });
+          for await (const ev of stream) {
+            acc.add(ev);
+            if (sig.aborted) break;
+          }
+          // The SDK ends the iteration quietly on an abort: never return a partial answer.
+          if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
+          const result = acc.result(req.model);
+          dbg?.done(result);
+          onEvent({ kind: 'usage', usage: result.usage });
+          return result;
+        } catch (err) {
+          const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
+          dbg?.failed(err, mapped);
+          const before = !acc.started && !signal.aborted && mapped.code === 'bad_request';
+          if (managed && before && strictSchemaRefusal(err, CONTEXT_MANAGEMENT_WORDS)) throw new ClearingRefused(providerSaid(err, SAID_MAX));
+          if (plan.kind !== 'loose' && plan.count > 0 && before && strictSchemaRefusal(err, STRICT_REFUSED_WORDS)) {
+            throw new StrictRefused(mapped, providerSaid(err, SAID_MAX));
+          }
+          throw mapped;
+        } finally {
+          wd.done();
+        }
+      };
       const attempt = (plan: StrictPlan) =>
         o.borrowKey(async (key) => {
-          const body = { ...anthropicBody(req, { strict: plan.strict }), stream: true };
-          const wd = newWatchdog(o, false);
-          const sig = AbortSignal.any([signal, wd.signal]);
-          const acc = new MessageAccumulator(onEvent);
-          const dbg = debugCall({ dialect: 'anthropic', model: req.model, attempt: plan.kind, reason: plan.reason, strict: { count: plan.count, of: plan.of }, body });
+          const managed = clearsResults(req.model);
           try {
-            const c = await client(String(key), wd, betasOf(req.model).join(',') || null, dbg);
-            const stream = await c.beta.messages.create(body, { signal: sig });
-            for await (const ev of stream) {
-              acc.add(ev);
-              if (sig.aborted) break;
-            }
-            // The SDK ends the iteration quietly on an abort: never return a partial answer.
-            if (sig.aborted) throw new ProviderError('aborted', 'Stopped.');
-            const result = acc.result(req.model);
-            dbg?.done(result);
-            onEvent({ kind: 'usage', usage: result.usage });
-            return result;
+            return await once(String(key), plan, managed);
           } catch (err) {
-            const mapped = mapProviderError(err, ctx(req.model, wd, signal, acc.started));
-            dbg?.failed(err, mapped);
-            if (plan.kind !== 'loose' && plan.count > 0 && !acc.started && !signal.aborted && mapped.code === 'bad_request' && strictSchemaRefusal(err, STRICT_REFUSED_WORDS)) {
-              throw new StrictRefused(mapped, providerSaid(err, SAID_MAX));
-            }
-            throw mapped;
-          } finally {
-            wd.done();
+            if (!(err instanceof ClearingRefused)) throw err;
+            // Nothing reached the model: the same request goes once more, without context editing.
+            noClearing(req.model);
+            alog('warn', 'the provider refused context editing; this model goes without it until the server starts again', { provider: 'anthropic', model: req.model, said: err.said });
+            return once(String(key), plan, false);
           }
         });
       return sendStrictOrLoose('anthropic', req, sets, attempt);

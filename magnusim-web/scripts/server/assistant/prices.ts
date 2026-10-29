@@ -173,6 +173,14 @@ export const CONTEXT_MARGIN = 1_024;
 const IMAGE_TOKENS_MAX = 5_334;
 const TOOL_DEF_TOKENS = 500;
 
+/** Tokens estimated for text of `chars` characters and these images (each by its checked header size). */
+export function estimateTokens(chars: number, images: ReadonlyArray<{ width: number; height: number }>): number {
+  return (
+    Math.ceil((1.2 * Math.max(0, chars)) / 3) +
+    images.reduce((n, im) => n + Math.min(IMAGE_TOKENS_MAX, Math.ceil((Math.max(0, im.width) * Math.max(0, im.height)) / 750)), 0)
+  );
+}
+
 export interface EstimateInput {
   provider: ProviderId;
   model: string;
@@ -188,6 +196,15 @@ export interface EstimateInput {
   firstStep: boolean;
   /** The previous request in this turn: its prompt size, when it started, and whether it read or wrote the cache. */
   prev: { promptTokens: number; startedAt: number; cacheUsed: boolean } | null;
+  /**
+   * More old tool results left out than in the previous request (common.ts clearedResults): the
+   * tokens the previous request sent from the first newly left-out result on (no longer part of
+   * the prefix), and the characters and images this request sends there instead, written to the
+   * cache again.
+   */
+  prevDropTokens?: number;
+  rewriteChars?: number;
+  rewriteImages?: ReadonlyArray<{ width: number; height: number }>;
   now: number;
   /** min(turn_usd − turn spend, day_usd − (today's spend + open reservations)). */
   remainingUsd: number;
@@ -223,17 +240,17 @@ export interface Estimate {
  * under 4 minutes ago (an entry's 5-minute life counts from the start of the request
  * that used it); new text and images are priced as cache writes. A refusal fallback runs
  * the request again on another model within the same request, and the declined attempt
- * can be billed too, so each fallback target adds one more input to the reservation. The
+ * can be billed too, so each fallback target adds one more input to the reservation. When
+ * this request leaves out more old tool results than the previous one, the prefix ends where
+ * the first of them was, and what it sends from there is written again. The
  * output limit is what the remaining money buys, at most 32,000 (cloud) or 8,192 (local)
  * tokens. A local server costs nothing; when it reported the model's context, the answer
  * gets what that context leaves: min(the cap, context − prompt estimate − 1,024).
  */
 export function estimateStep(e: EstimateInput): Estimate {
   const fresh =
-    Math.ceil((1.2 * Math.max(0, e.newChars)) / 3) +
-    e.newImages.reduce((n, im) => n + Math.min(IMAGE_TOKENS_MAX, Math.ceil((Math.max(0, im.width) * Math.max(0, im.height)) / 750)), 0) +
-    (e.firstStep ? TOOL_DEF_TOKENS * Math.max(0, e.toolCount) : 0);
-  const prefix = e.prev ? Math.max(0, e.prev.promptTokens) : 0;
+    estimateTokens(e.newChars + (e.rewriteChars ?? 0), [...e.newImages, ...(e.rewriteImages ?? [])]) + (e.firstStep ? TOOL_DEF_TOKENS * Math.max(0, e.toolCount) : 0);
+  const prefix = e.prev ? Math.max(0, e.prev.promptTokens - Math.max(0, e.prevDropTokens ?? 0)) : 0;
   const prompt = prefix + fresh;
   const cap = e.cloud ? MAX_OUT_CLOUD : MAX_OUT_LOCAL;
   if (e.provider === 'openai_compatible') {

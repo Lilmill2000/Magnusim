@@ -105,8 +105,10 @@ describe('a turn from start to end', () => {
     assert.match(SYSTEM_PROMPT, /\n3\. Give numbers with units\. Say plainly when a result is not converged, not ready, or an estimate\.\n/);
     assert.match(SYSTEM_PROMPT, /\n5\. Be brief\.\n/);
     // Seen live: the model wrote image markdown for a picture the dock already shows.
-    assert.match(SYSTEM_PROMPT, /\n6\. A picture a tool takes is shown to the user with that step; refer to it in words, never with image markdown or a link\.$/);
-    assert.equal(SYSTEM_PROMPT.split('\n').length, 7);
+    assert.match(SYSTEM_PROMPT, /\n6\. A picture a tool takes is shown to the user with that step; refer to it in words, never with image markdown or a link\.\n/);
+    // A long conversation's requests leave out old tool results (providers/common.ts clearedResults).
+    assert.match(SYSTEM_PROMPT, /\n7\. In a long conversation, older tool results and pictures may be replaced by a short note; call a read tool to see things as they are now\.$/);
+    assert.equal(SYSTEM_PROMPT.split('\n').length, 8);
   });
 
   it('a read tool: tools → its result first in the next request → done; the tool events', async () => {
@@ -825,6 +827,94 @@ describe('the spend caps', () => {
     assert.equal(r.body.code, 'cap_day');
     assert.equal(r.body.error, "Today's $1.00 limit is reached; it resets at midnight.");
     assert.equal(m.provider.requests.length, 0);
+  });
+});
+
+describe('a long conversation leaves out its oldest tool results (providers/common.ts clearedResults)', () => {
+  // Results longer than the note a left-out one becomes (as a CAD read's are).
+  const look = () => hostTool('look', { run: async () => ({ ok: true, data: { seen: 'x'.repeat(400) }, summary: 'looked' }) });
+  const calls = (n) => Array.from({ length: n }, () => ({ name: 'look' }));
+  /** freshOf's count (loop.ts): an answer's raw payload as JSON, a user message's text and results. */
+  const charsOf = (messages) =>
+    messages.reduce((n, m) => n + (m.role === 'assistant' ? JSON.stringify(m.raw.payload).length : m.parts.reduce((k, p) => k + (p.type === 'text' || p.type === 'tool_result' ? p.text.length : 0), 0)), 0);
+  const tokensOf = (chars) => Math.ceil((1.2 * chars) / 3);
+
+  it('each request asks to leave out what clearedResults says of the stored messages, which stay as they were; the step that just ran goes whole', async () => {
+    const { clearedResults } = await import('../assistant/providers/common.ts');
+    const { buildRequest } = await import('../assistant/loop.ts');
+    const m = mk({ hostTools: [look()] });
+    m.provider.script({ tools: calls(40) }, { tools: calls(1) }, { text: 'Done.', cleared: { results: 24, tokens: 900 } });
+    const r = await startTurn(m, 'Look a lot.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    assert.deepEqual(m.provider.requests.map((x) => x.req.clearResults), [0, 0, 24], 'the 40 results of step 1 whole while they are the newest step');
+    assert.deepEqual(m.provider.requests.map((x) => clearedResults(x.messages)), [0, 0, 24]);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+    const before = structuredClone(r.turn.conv.messages);
+    const req = buildRequest(r.turn.conv, [], r.turn.settings);
+    assert.deepEqual(r.turn.conv.messages, before, 'building a request changes no stored message');
+    assert.equal(req.clearResults, 24);
+  });
+
+  it('a jump within a turn (local server, its context known): the previous prompt less what it sent from the first newly left-out result, plus what this request sends there now and its new messages', async () => {
+    const { sentMessages } = await import('../assistant/providers/common.ts');
+    const context = 16_000;
+    const m = mk({ provider: 'openai_compatible', hostTools: [look()] });
+    m.provider.modelRow = async () => ({ context, type: 'llm' });
+    m.provider.script({ tools: calls(40), usage: { input: 3000 } }, { tools: calls(1), usage: { input: 12_000 } }, { text: 'Done.' });
+    const r = await startTurn(m, 'Look a lot.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    const third = m.provider.requests[2];
+    assert.equal(third.req.clearResults, 24);
+    const stored = third.messages;
+    const sent = sentMessages(stored, 24);
+    // [prompt, answer 1, its 40 results, answer 2, its result]: the jump starts at message 2.
+    const drop = tokensOf(charsOf(stored.slice(2, 3)));
+    const prompt = 12_000 - drop + tokensOf(charsOf(sent.slice(3)) + charsOf(sent.slice(2, 3)));
+    assert.equal(third.req.maxOutputTokens, Math.min(8192, context - prompt - 1024));
+    assert.ok(third.req.maxOutputTokens < 8192, 'within the context, not at the cap');
+    const whole = 12_000 + tokensOf(charsOf(stored.slice(3)));
+    assert.ok(third.req.maxOutputTokens > context - whole - 1024, 'less than if every result were sent');
+  });
+
+  it("a later turn's first request is priced on what it sends: the left-out results as their note", async () => {
+    const { sentMessages } = await import('../assistant/providers/common.ts');
+    const context = 12_000;
+    const m = mk({ provider: 'openai_compatible', hostTools: [look()] });
+    m.provider.modelRow = async () => ({ context, type: 'llm' });
+    m.provider.script({ tools: calls(40) }, { tools: calls(1) }, { text: 'Done.' }, { text: 'Again.' });
+    const r = await startTurn(m, 'Look a lot.');
+    await settled(r.turn);
+    const next = await startTurn(m, { text: 'And now?', conversation: r.body.conversation });
+    assert.equal(next.status, 202, JSON.stringify(next.body));
+    await settled(next.turn);
+    const first = m.provider.requests[3];
+    assert.equal(first.req.clearResults, 24);
+    const system = first.req.system.reduce((n, s) => n + s.text.length, 0);
+    const prompt = tokensOf(charsOf(sentMessages(first.messages, 24)) + system) + 500 * first.req.tools.length;
+    assert.equal(first.req.maxOutputTokens, Math.min(8192, context - prompt - 1024));
+    assert.ok(first.req.maxOutputTokens < 8192, 'within the context, not at the cap');
+    const whole = tokensOf(charsOf(first.messages) + system) + 500 * first.req.tools.length;
+    assert.ok(prompt < whole, `${prompt} < ${whole}`);
+  });
+
+  it('a provider that cleared another number than asked: one warn line in the turn', async () => {
+    const warned = [];
+    const orig = console.warn;
+    console.warn = (...a) => warned.push(a.join(' '));
+    try {
+      const m = mk({ hostTools: [look()] });
+      m.provider.script({ tools: calls(40) }, { tools: calls(1) }, { tools: calls(1), cleared: { results: 20, tokens: 5 } }, { text: 'Done.' });
+      const r = await startTurn(m, 'Look a lot.');
+      await settled(r.turn);
+      assert.equal(r.turn.state, 'done', r.turn.message);
+      const lines = warned.filter((l) => l.includes('the provider cleared another number of old tool results than asked'));
+      assert.equal(lines.length, 1, warned.join('\n'));
+      assert.match(lines[0], /"asked":24,"cleared":20/);
+    } finally {
+      console.warn = orig;
+    }
   });
 });
 

@@ -89,7 +89,7 @@ import {
   remember as rememberConsent,
   type ProjectInfo,
 } from '../privacy.ts';
-import { guideBlock, SYSTEM_PROMPT } from '../prompt.ts';
+import { guideBlock, LEFT_OUT_RULE, SYSTEM_PROMPT } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
 import type { Registry, ToolCtx, ToolDef } from '../registry.ts';
@@ -111,7 +111,9 @@ export const MCP_RATES = Object.freeze({ calls: 1200, changes: 120, windowMs: 60
 
 export const MCP_INSTRUCTIONS = [
   "These are Magnusim's tools. Magnusim is a CFD and CAD app on this PC, and the tools act in it for the person at this PC.",
-  ...SYSTEM_PROMPT.split('\n').slice(1),
+  ...SYSTEM_PROMPT.split('\n')
+    .slice(1)
+    .filter((line) => line !== LEFT_OUT_RULE),
 ].join('\n');
 
 /** How long an external app's question waits before it is declined. */
