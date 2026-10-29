@@ -29,7 +29,7 @@ import type { SelectionItem } from '../types/selection';
 import type { StateStore } from '../types/state';
 import { hideTip, type MenuEntry, type MenuItem, type PanelOwner } from './kit';
 import { checkItemName } from './tree/names';
-import { rollbackIndex, rollbackValue } from './tree/model';
+import { featureShown, rollbackIndex, rollbackValue, visibilityChoice } from './tree/model';
 
 /**
  * Whether some panel edits features of this type. Every feature type brings
@@ -136,6 +136,12 @@ export interface UiController {
   rollToEnd(): void;
   setRollbackIndex(index: number): void;
   setBodyVisible(id: BodyId, visible: boolean): void;
+  /**
+   * Show or hide a sketch, or a reference plane, axis or point, in the view (its row's eye and its
+   * menu's Hide / Show; view state, no undo step). A hidden reference still serves the features
+   * built on it and is picked from the tree. A no-op for a feature with no eye.
+   */
+  setFeatureVisible(id: FeatureId, visible: boolean): void;
   /** LINK: the body's "Include in simulation" toggle (one undo step). */
   setBodyInSimulation(id: BodyId, include: boolean): void;
   /**
@@ -773,6 +779,16 @@ export function createUiController(services: AppServices): UiController {
         if (services.selection.get().items.some(gone)) services.selection.set((s) => ({ ...s, items: s.items.filter((it) => !gone(it)) }));
       }
     },
+    setFeatureVisible(id, visible) {
+      const d = doc.state.get();
+      const now = featureShown(d.doc, d.view, doc.features, id);
+      if (now === null || now === visible) return;
+      try {
+        doc.setSketchVisibility(id, visibilityChoice(d.doc, doc.features, id, visible));
+      } catch (err) {
+        fail(`${visible ? 'Show' : 'Hide'} ${featureName(id)}`, errText(err));
+      }
+    },
     featureMenu(id) {
       const d = doc.state.get();
       const f = d.doc.features.find((x) => x.id === id);
@@ -790,10 +806,15 @@ export function createUiController(services: AppServices): UiController {
         },
         { id: 'rename', label: `Rename ${f.name}`, disabled: block, run: () => c.startRename('feature', id) },
         { id: 'suppress', label: `${f.suppressed ? 'Unsuppress' : 'Suppress'} ${f.name}`, disabled: block, run: () => c.toggleSuppressed(id) },
+      ];
+      // A sketch's or a reference's eye, as its row's (view state: never blocked, no undo step).
+      const shown = featureShown(d.doc, d.view, doc.features, id);
+      if (shown !== null) items.push({ id: 'visibility', label: `${shown ? 'Hide' : 'Show'} ${f.name}`, run: () => c.setFeatureVisible(id, !shown) });
+      items.push(
         // The history order (as the Assistant's edit_feature move; a drag of the row does the same).
         { id: 'move-up', label: 'Move up', disabled: block ?? (index === 0 ? `${f.name} is the first feature` : null), run: () => void c.moveFeature(id, index - 1) },
         { id: 'move-down', label: 'Move down', disabled: block ?? (index === d.doc.features.length - 1 ? `${f.name} is the last feature` : null), run: () => void c.moveFeature(id, index + 1) },
-      ];
+      );
       // P4b SELECT: Normal to a sketch (its plane, its own up) or a CONSTRUCT plane, from its row.
       if (f.type === 'sketch' || f.type === 'ref_plane') {
         const h = services.viewport.get().handle;

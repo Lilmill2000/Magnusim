@@ -1,12 +1,38 @@
 // What the design tree shows, as plain data (pure functions, unit-tested):
 // history rows in document order with their rollback / suppressed / error
-// states and notes, where the rollback bar sits, and the bodies list.
+// states and notes, where the rollback bar sits, which rows have an eye and
+// whether it is open, and the bodies list.
 // Owner: UI-SHELL; sketch rows (prefix, lock, dimension count): P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RebuildState } from '../../types/doc-service';
+import type { FeatureRegistry, RebuildState } from '../../types/doc-service';
 import type { BodyId, CadDoc, CadView, Feature, FeatureId, FeatureType, SketchSolvedState } from '../../types/doc';
 import type { Selection } from '../../types/selection';
 import type { BodyInfo } from '../../types/kernel';
+import { constructKindOfType } from '../../features/refgeom/api';
+import { constructShown } from '../../features/refgeom/scene';
+import { sketchShown } from '../../features/sketch/view';
+
+/**
+ * Whether a feature with an eye is drawn in the view (a sketch, a reference plane, axis or point;
+ * CadView.sketches holds the choice per feature id), or null for a feature with no eye. Its row's
+ * eye, its menu's Hide / Show and the Assistant's workspace show / hide read this.
+ */
+export function featureShown(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, 'sketches'>, registry: Pick<FeatureRegistry, 'get'>, id: FeatureId): boolean | null {
+  const f = doc.features.find((g) => g.id === id);
+  if (!f) return null;
+  if (f.type === 'sketch') return sketchShown(doc, view, registry, id);
+  return constructKindOfType(f.type) ? constructShown(view, id) : null;
+}
+
+/**
+ * The CadView.sketches entry that shows or hides a feature: a choice equal to the default is
+ * forgotten (null), so a sketch shown by default still hides once a later feature uses it; a
+ * reference is shown unless hidden.
+ */
+export function visibilityChoice(doc: Pick<CadDoc, 'features'>, registry: Pick<FeatureRegistry, 'get'>, id: FeatureId, show: boolean): 'shown' | 'hidden' | null {
+  const byDefault = featureShown(doc, {}, registry, id) ?? true;
+  return show === byDefault ? null : show ? 'shown' : 'hidden';
+}
 
 export interface HistoryRow {
   id: FeatureId;

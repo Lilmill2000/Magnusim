@@ -442,6 +442,7 @@ export const UI: { readonly [K in keyof UiController]: Reach } = {
   rollToEnd: W('roll_to_end'),
   setRollbackIndex: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
+  setFeatureVisible: W('show'),
   setBodyInSimulation: inProjects(reach('body', 'simulation')),
   deleteBodies: DIRECT('delete_body'),
   featureMenu: MENU,
@@ -1003,8 +1004,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
   workspace: {
     'action=roll_back_to': control('ui', 'rollBackTo'),
     'action=roll_to_end': control('ui', 'rollToEnd'),
-    'action=show': control('doc', 'setSketchVisibility'),
-    'action=hide': control('doc', 'setSketchVisibility'),
+    'action=show': control('ui', 'setFeatureVisible'),
+    'action=hide': control('ui', 'setFeatureVisible'),
     'action=origin_planes': control('viewport', 'setPlanes'),
     'action=rename_part': place("the tree's Part row: a double-click renames the Part"),
     'action=select': command('inspect.find'),

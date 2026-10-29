@@ -153,6 +153,9 @@ describe('parity: every person-facing capability has an Assistant tool and field
     for (const k of ['sync'] as const) expect(LINK[k]).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'send_to_simulation' });
     expect(UI.rollBackTo).toMatchObject({ tool: 'workspace', value: 'roll_back_to' });
     expect(UI.setBodyVisible).toMatchObject({ tool: 'body', field: 'visibility' });
+    // Hide / Show in a sketch's or a reference's menu (and its eye) is the workspace tool's show / hide, both ways.
+    expect(UI.setFeatureVisible).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'show' });
+    for (const a of ['show', 'hide']) expect(AI_TOOLS.workspace[`action=${a}`]).toEqual({ kind: 'control', table: 'ui', method: 'setFeatureVisible' });
     expect(DOC.redo).toMatchObject({ tool: 'undo', value: 'redo' });
     expect(COMMANDS['file.export-step']).toMatchObject({ tool: 'workspace', value: 'export_step' });
     expect(COMMANDS['scale.banana']).toMatchObject({ tool: 'workspace', value: 'banana_show' });

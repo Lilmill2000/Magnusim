@@ -134,6 +134,32 @@ describe('workspace: the tree and the view state', () => {
     expect(vh.calls.find((c) => c.call === 'setPlanes')?.args).toEqual(['always']);
   });
 
+  it("shows and hides a reference plane, axis and point as the person's eye and menu do: view state, no undo step; the person's menu then offers Show", async () => {
+    const t = await part();
+    const C = (o: Record<string, unknown>) => ({ edit: '', name: '', method: 'offset', refs: [], value: '', xyz: [], flip: false, from_end: false, ...o });
+    await t.ok('construct', C({ method: 'offset', refs: ['Top'], value: '20' }));
+    await t.ok('construct', C({ method: 'two_planes', refs: ['Front', 'Right'] }));
+    await t.ok('construct', C({ method: 'coordinates', xyz: ['1', '2', '3'] }));
+    await t.settle();
+    const ui = uiFor(t.services);
+    const idOf = (name: string) => t.doc.state.get().doc.features.find((f) => f.name === name)!.id;
+    const menuLabel = (name: string) => ui.featureMenu(idOf(name)).find((m) => m.id === 'visibility') as { label: string } | undefined;
+    for (const name of ['Plane 1', 'Axis 1', 'Point 1']) {
+      const steps = t.doc.state.get().history.undoLabel;
+      expect((await t.ok('workspace', W('hide', { target: name }))).text).toBe(`Hid ${name} in the view`);
+      expect(t.doc.state.get().view.sketches?.[idOf(name)]).toBe('hidden');
+      expect(t.doc.state.get().history.undoLabel).toBe(steps);
+      expect(menuLabel(name)?.label).toBe(`Show ${name}`);
+      expect((await t.ok('workspace', W('hide', { target: name }))).text).toBe(`${name} is already hidden`);
+    }
+    // The person hid Point 1 from its menu: the Assistant reads it hidden, and shows it.
+    ui.setFeatureVisible(idOf('Point 1'), true);
+    expect(menuLabel('Point 1')?.label).toBe('Hide Point 1');
+    expect((await t.ok('workspace', W('show', { target: 'Point 1' }))).text).toBe('Point 1 is already shown');
+    expect((await t.ok('workspace', W('show', { target: 'Plane 1' }))).text).toBe('Showed Plane 1 in the view');
+    expect(t.doc.state.get().view.sketches?.[idOf('Plane 1')]).toBeUndefined();
+  });
+
   it('selects features, origin planes and bodies, clears, and sets the filter', async () => {
     const t = await part();
     const r = await t.ok('workspace', W('select', { items: ['Extrude 1', 'Top plane'] }));
