@@ -131,6 +131,8 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   const st = s.rebuild.features[f.id];
   const row: Row = { name: f.name, type: f.type, state: stateWord(st) };
   if (st?.message) row.message = st.message;
+  // What the tree shows as the row's info mark (a Join's pieces left apart): said, not warned.
+  if (st?.note && (st.state === 'ok' || st.state === 'warning')) row.note = st.note;
   if (st?.actions?.length) row.actions = [...st.actions];
   if (runtimeOf(services)?.madeBy.has(f.id)) row.by = 'assistant';
   // A kept structural edit of the Assistant's turned it red, and it still fails.
@@ -514,7 +516,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     const data = { ...Object.fromEntries(FEATURE_BASE.filter((k) => k in facts).map((k) => [k, facts[k]])), feature: row };
     const state = String(row.state);
     return {
-      text: `${f.name} (${f.type}): ${state}${row.message ? ` · ${String(row.message)}` : ''}`,
+      text: `${f.name} (${f.type}): ${state}${row.message ? ` · ${String(row.message)}` : ''}${row.note ? ` · note: ${String(row.note)}` : ''}`,
       data,
       summary: `Read ${f.name}: ${state}`,
     };

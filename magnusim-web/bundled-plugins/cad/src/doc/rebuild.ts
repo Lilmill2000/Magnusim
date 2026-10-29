@@ -478,9 +478,11 @@ export class RebuildEngine {
         }
         if (epoch !== this.epoch) return null;
         const templated: FeatureBuildResult = result.ok
-          ? result.warning
-            ? { ...result, warning: template(result.warning, f.name) }
-            : result
+          ? {
+              ...result,
+              ...(result.warning ? { warning: template(result.warning, f.name) } : {}),
+              ...(result.note ? { note: template(result.note, f.name) } : {}),
+            }
           : { ...result, message: template(result.message, f.name) };
         entry = { result: templated, shapes: result.ok ? result.bodies.map((b) => b.shape) : [], ms: performance.now() - tf, lastUsed: seq };
         this.cache.set(key, entry);
@@ -497,7 +499,9 @@ export class RebuildEngine {
         }
         for (const id of r.removed) bodies.delete(id);
         if (r.output) outputs.set(f.id, r.output);
-        statuses[f.id] = r.warning ? { bodiesBefore: before, state: 'warning', message: untemplate(r.warning, f.name), ms: entry.ms } : { bodiesBefore: before, state: 'ok', ms: entry.ms };
+        // A note (a Join whose pieces stay apart) is said beside the state, which it leaves 'ok'.
+        const note = r.note ? { note: untemplate(r.note, f.name) } : {};
+        statuses[f.id] = r.warning ? { bodiesBefore: before, state: 'warning', message: untemplate(r.warning, f.name), ...note, ms: entry.ms } : { bodiesBefore: before, state: 'ok', ...note, ms: entry.ms };
       } else {
         if (r.output) outputs.set(f.id, r.output);
         const st: FeatureStatus = { bodiesBefore: before, state: 'error', message: untemplate(r.message, f.name), ms: entry.ms };

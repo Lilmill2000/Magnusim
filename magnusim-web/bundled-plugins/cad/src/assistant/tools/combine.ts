@@ -4,7 +4,8 @@
 // pattern's new-body copies, for example), "all bodies" or a #b handle, read on the bodies built
 // now (an edit: just before the Combine). The lists are expanded and deduplicated, the targets
 // are taken out of the tools ("all bodies" then means every other body), and what is left must
-// not be empty. Bodies that do not touch make a join of separate solids: the result warns. The
+// not be empty. Bodies that do not touch join as separate solids: the result notes it (its
+// feature's note, as the tree's info mark; warnings still say the body has more solids). The
 // person's own Combine panel opens read-only, filled, and its Done keeps the feature.
 // get_model full shows a Combine as this tool's input (registerFeatureIo).
 // Owner: ASSISTANT.

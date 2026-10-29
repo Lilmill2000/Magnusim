@@ -388,7 +388,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Join, cut or intersect bodies (edit "" or a name). targets: the bodies that keep the result; tools: the bodies used, consumed unless keep_tools. Each entry is a body name or "bodies of <feature>" (a pattern\'s copies, for example) or "all bodies". Bodies that do not touch make a join of separate solids: the result warns. Use it after making separate pieces with op new.',
+      'Join, cut or intersect bodies (edit "" or a name). targets: the bodies that keep the result; tools: the bodies used, consumed unless keep_tools. Each entry is a body name or "bodies of <feature>" (a pattern\'s copies, for example) or "all bodies". Bodies that do not touch join as separate solids: the result notes it. Use it after making separate pieces with op new.',
     schema: obj({
       edit: EDIT,
       name: NAME,

@@ -1,6 +1,6 @@
 // What the design tree shows, as plain data (pure functions, unit-tested):
 // history rows in document order with their rollback / suppressed / error
-// states, where the rollback bar sits, and the bodies list.
+// states and notes, where the rollback bar sits, and the bodies list.
 // Owner: UI-SHELL; sketch rows (prefix, lock, dimension count): P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { RebuildState } from '../../types/doc-service';
@@ -19,6 +19,11 @@ export interface HistoryRow {
   /** Rebuild outcome shown as a badge. */
   status: 'ok' | 'error' | 'warning' | 'pending';
   message: string | null;
+  /**
+   * What a built feature notes (FeatureStatus.note): an info mark when the row has no error or
+   * warning badge, else said after the warning in its tooltip. Never a status of its own.
+   */
+  note: string | null;
   /** A sketch's row: how defined it is (prefix, lock) and how many dimensions it has. */
   sketch?: SketchRowInfo;
 }
@@ -78,6 +83,8 @@ export function historyRows(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, '
     } else if (st?.state === 'pending') {
       status = 'pending';
     }
+    // Only what was built has a note (a failed feature has its error to say).
+    const note = (st?.state === 'ok' || st?.state === 'warning') && st.note ? st.note : null;
     return {
       id: f.id,
       type: f.type,
@@ -87,6 +94,7 @@ export function historyRows(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, '
       rolledBack: index >= bar,
       status,
       message,
+      note,
       ...(f.type === 'sketch' ? { sketch: sketchInfo(f) } : {}),
     };
   });

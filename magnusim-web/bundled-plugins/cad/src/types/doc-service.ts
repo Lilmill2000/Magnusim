@@ -568,6 +568,11 @@ export type FeatureBuildResult =
       bodies: { id: BodyId; shape: ShapeId; valid: boolean; names?: FaceNames | null; name?: string; color?: string }[];
       removed: BodyId[];
       warning?: string;
+      /**
+       * What the result is when it may well be what the user meant, said but not warned: a Join
+       * whose tools do not touch the target keeps the pieces apart in one body (FeatureStatus.note).
+       */
+      note?: string;
       /** Published in RebuildState.outputs and to later features' BuildContext.outputs. */
       output?: FeatureOutput;
     }

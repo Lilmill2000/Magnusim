@@ -495,8 +495,9 @@ The tools:
   either one uses the plane the other made. Spacing is a pitch above 0 (the hint says flip).
 - `combine` (`tools/combine.ts`): targets and tools are body selectors (`bodies of <pattern>`,
   `all bodies`, `#b` handles); they are expanded and deduplicated, and the targets are taken
-  out of the tools, which must not then be empty. A join of pieces that do not touch warns
-  (the body's solids went up, and CAD's own warning).
+  out of the tools, which must not then be empty. A join of pieces that do not touch says so:
+  a warning that the body's solids went up, and CAD's note as `feature.note` (the state stays
+  ok, as the tree shows an info mark and no warning; `get_model` gives the row's `note` too).
 
 Tests: `modify.test.ts`, `pattern-combine.test.ts` (real kernel: volumes by formula, round
 trips of `get_model full` inputs, refusals), `feature-tools.test.ts` (a Stop at

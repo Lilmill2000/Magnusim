@@ -113,6 +113,8 @@ export const SHARDS = {
     'e2e/cad-p4b-project-step.spec.ts',
     // Press-pull on curved faces (kernel API 6): bores, fillets, slopes, the flange STEP and the Vortex.
     'e2e/cad-p5-pressPull-curved.spec.ts',
+    // Combine: a Join of pieces that do not touch is a quiet note in History; a Cut that splits a body warns.
+    'e2e/cad-join-note.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [

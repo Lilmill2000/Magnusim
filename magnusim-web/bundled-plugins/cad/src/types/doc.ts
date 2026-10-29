@@ -1065,6 +1065,11 @@ export interface FeatureStatus {
   state: 'ok' | 'error' | 'warning' | 'suppressed' | 'rolled-back' | 'pending';
   /** "Fillet failed: radius 5 mm is too large for edge Top · Side 2". */
   message?: string;
+  /**
+   * A built feature's note (FeatureBuildResult.note): a quiet info mark in the tree, "Note:" in
+   * its tooltip and panel foot, never amber. The state stays 'ok' ('warning' when it also warns).
+   */
+  note?: string;
   ms?: number;
   /** What the user can do about an error (absent when nothing). */
   actions?: FeatureAction[];

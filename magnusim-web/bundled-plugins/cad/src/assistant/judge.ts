@@ -10,7 +10,8 @@
 //   - a structural edit (a rename, a move, a suppression, the undo tool, ...) did: kept, listed in
 //     `broke` (get_model marks them broken_by_you while they fail);
 //   - warnings: the own feature's warning, features newly warning (a repaired reference), a body
-//     that now has more solids than before.
+//     that now has more solids than before. A feature's note (a Join's pieces left apart, not a
+//     warning in the tree) is the result's feature.note.
 // report() gives every edit result's data (EditData): the feature, what was resolved, the bodies
 // created, changed and removed (volumes, bounding boxes, solids), and the lists above.
 // Owner: ASSISTANT.
@@ -40,6 +41,8 @@ export interface FeatureSnap {
   /** stateWord: ok, warning, error, suppressed, rolled_back, pending. */
   state: string;
   message: string | null;
+  /** FeatureStatus.note: said beside the state (a Join's pieces left apart), absent when none. */
+  note?: string;
   actions: FeatureAction[];
 }
 
@@ -63,7 +66,7 @@ export function snapshotStates(s: DocState): StateSnap {
   const features = new Map<FeatureId, FeatureSnap>();
   for (const f of s.doc.features) {
     const st = s.rebuild.features[f.id];
-    features.set(f.id, { name: f.name, type: f.type, state: stateWord(st), message: st?.message ?? null, actions: [...(st?.actions ?? [])] });
+    features.set(f.id, { name: f.name, type: f.type, state: stateWord(st), message: st?.message ?? null, ...(st?.note ? { note: st.note } : {}), actions: [...(st?.actions ?? [])] });
   }
   const bodies = new Map<BodyId, BodySnap>();
   for (const b of s.rebuild.bodies) bodies.set(b.id, { name: b.name, volume: b.volume, bbox: [...b.bbox], solids: typeof b.solids === 'number' ? b.solids : null });
@@ -172,7 +175,7 @@ export function report(o: { before: StateSnap; after: StateSnap; plan: JudgedPla
   return {
     rev: o.rev,
     step: o.step,
-    feature: f ? { name: f.name, type: f.type, state: f.state, message: f.message } : null,
+    feature: f ? { name: f.name, type: f.type, state: f.state, message: f.message, ...(f.note ? { note: f.note } : {}) } : null,
     resolved: { ...(plan.resolved ?? {}) },
     bodies: { created: created.slice(0, 50), changed: changed.slice(0, 50), removed: removed.slice(0, 50) },
     created: [],

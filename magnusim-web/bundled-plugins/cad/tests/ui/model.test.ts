@@ -49,7 +49,24 @@ describe('history rows', () => {
       [false, 'error', 'Extrude 2 failed: the result is not a valid solid'],
     ]);
     const warn = historyRows({ features: [extrude('f1', 'Extrude 1')] }, { rollback: null }, { features: { f1: { state: 'warning', message: 'Nothing to cut' } } });
-    expect(warn[0]).toMatchObject({ status: 'warning', message: 'Nothing to cut' });
+    expect(warn[0]).toMatchObject({ status: 'warning', message: 'Nothing to cut', note: null });
+    // A note: said beside the state, never a status of its own; only what was built has one.
+    const noted = historyRows(
+      { features: [extrude('f1', 'Extrude 1'), extrude('f2', 'Extrude 2'), extrude('f3', 'Extrude 3')] },
+      { rollback: null },
+      {
+        features: {
+          f1: { state: 'ok', note: 'Body 1 holds 2 separate pieces' },
+          f2: { state: 'warning', message: 'Body 1 was repaired: check the result', note: 'Body 1 holds 2 separate pieces' },
+          f3: { state: 'error', message: 'Extrude 3 failed', note: 'Body 1 holds 2 separate pieces' },
+        },
+      },
+    );
+    expect(noted.map((r) => [r.status, r.message, r.note])).toEqual([
+      ['ok', null, 'Body 1 holds 2 separate pieces'],
+      ['warning', 'Body 1 was repaired: check the result', 'Body 1 holds 2 separate pieces'],
+      ['error', 'Extrude 3 failed', null],
+    ]);
     const failedNoText = historyRows({ features: [extrude('f1', 'Extrude 1')] }, { rollback: null }, { features: { f1: { state: 'error' } } });
     expect(failedNoText[0].message).toBe('Extrude 1 failed');
     const pending = historyRows({ features: [extrude('f1', 'Extrude 1')] }, { rollback: null }, { features: { f1: { state: 'pending' } } });
