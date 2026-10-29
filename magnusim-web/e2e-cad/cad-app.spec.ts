@@ -55,6 +55,9 @@ test('New project makes a Part that opens in CAD, and the project page keeps its
   const frame = await partOpened(page);
   await expect(page.locator('#workspace-overlay [data-ws-crumb]')).toHaveText(/Magnusim CAD\s*›\s*Part 1/);
   await expect(page.locator('#btn-queue')).toBeHidden();
+  // The Part hears at once that this app links nothing into a project (no simulation here).
+  const part = page.frames().find((f) => /\/plugins\/cad\/workspace\//.test(f.url()));
+  expect(await part!.evaluate(() => (window as unknown as { __CAD__: { services: { bridge: { context: { projectLinks?: boolean } } } } }).__CAD__.services.bridge.context.projectLinks)).toBe(false);
   await drawBlock(page, frame, 40, 20, 10);
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
 

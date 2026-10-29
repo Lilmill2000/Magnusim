@@ -63,6 +63,12 @@ describe('a workspace page in Magnusim CAD', () => {
     // The rest of the page's calls are as in Magnusim.
     await expect(c.handle('project.info', {})).resolves.toMatchObject({ id: 'proj-a', title: 'Project A' });
   });
+
+  it('hears it in its welcome (context.projectLinks false), to leave out what only matters to a simulation', async () => {
+    document.head.innerHTML = '<meta name="magnusim-edition" content="cad">';
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    expect(await c.context()).toMatchObject({ projectLinks: false });
+  });
 });
 
 describe('a workspace page in Magnusim (unchanged)', () => {
@@ -72,5 +78,10 @@ describe('a workspace page in Magnusim (unchanged)', () => {
     await expect(c.handle('project.linkedGeometry', {})).resolves.toMatchObject({ geometryId: 'g1' });
     expect(asked.some((u) => u.startsWith('/api/plugin-geometry/linked?'))).toBe(true);
     await expect(c.handle('nav.leaveHook', { on: true })).resolves.toEqual({ ok: true });
+  });
+
+  it('has no projectLinks in its welcome (absent: the link calls work)', async () => {
+    const c = new WorkspaceCalls(SCOPE, hooks());
+    expect('projectLinks' in (await c.context())).toBe(false);
   });
 });

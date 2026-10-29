@@ -882,6 +882,7 @@ interface WorkspaceContext
 - `assistantDock?: boolean | undefined`: The app shows its own Assistant panel, which offers the person Stop and "Undo these changes" for a turn (unreleased, 1.9; absent on an older host). ws.assistant.docked reads it.
 - `assistantKeys?: string[] | null | undefined`: The keys that open and close the app's Assistant panel when the person changed them in Settings → Keybinds: combos as a commands file writes them (Cmd counts as Ctrl), [] when they left it no key. null for its default, Ctrl+/ (Cmd+/ on macOS) on the key that types "/" (unreleased, 1.9; absent on an older host). The `assistantKeys` event says when they change. While docked the page leaves these keys to the app (ws.assistant.docked): no command of its own should answer them.
 - `appearance?: Appearance | undefined`: The app's look (Appearance): light or dark, and the text and icon sizes (unreleased, 1.9; absent on an older host, whose pages are light). The `appearance` event says when it changes.
+- `projectLinks?: boolean | undefined`: false: this app takes no study's design into a project as a geometry, so it runs no simulation of it (Magnusim CAD). ws.project.linkGeometry, linkedGeometry and followGeometry are refused there (`not_allowed`); leave out what only matters to a simulation (unreleased, 1.9). Absent where they work, and on an older host: read absent as true.
 
 #### AssistantHandler
 
