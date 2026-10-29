@@ -256,6 +256,20 @@ describe("a sketch tool's key pressed again", () => {
     expect(isToolKeyAgain(all[5], 'line', all)).toBe(false);
   });
 
+  it("a variant's own key with another variant of its flyout in hand switches to it: only the flyout's own key (its bar command's) leaves a variant", () => {
+    // Centerline's key (the person gave it one) with Line in hand: Centerline, as its flyout row says.
+    expect(isToolKeyAgain(centerline, 'line', all)).toBe(false);
+    expect(isToolKeyAgain(rectCenter, 'rectangle-corner', all)).toBe(false);
+    // Its own tool in hand: the key leaves it.
+    expect(isToolKeyAgain(centerline, 'centerline', all)).toBe(true);
+    expect(isToolKeyAgain(rectCenter, 'rectangle-center', all)).toBe(true);
+    // A flyout whose main is not registered: its first variant by order stands for it on the bar.
+    const ellipse = { ...tool('sketch.ellipse-partial', 'ellipse-partial', 'ellipse'), order: 21 };
+    const parabola = { ...tool('sketch.parabola', 'parabola', 'ellipse'), order: 22 };
+    expect(isToolKeyAgain(ellipse, 'parabola', [ellipse, parabola])).toBe(true);
+    expect(isToolKeyAgain(parabola, 'ellipse-partial', [ellipse, parabola])).toBe(false);
+  });
+
   function setup(active: string) {
     const keybinds = createKeybinds({ prefs: null, layout: false });
     const reg = createCommandRegistry(() => services, keybinds);

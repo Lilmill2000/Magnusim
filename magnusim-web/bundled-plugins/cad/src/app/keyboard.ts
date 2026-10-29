@@ -8,6 +8,7 @@ import type { Bridge } from '../lib/bridge';
 import type { CommandDef, CommandRegistry, KeyBinding, KeyboardManager, Mode } from '../types/commands';
 import type { SketchModeApi } from '../types/sketch';
 import { combosOf, isAssistantPress, normaliseCombo } from './keymap';
+import { barIdOf } from '../ui/flyouts';
 
 // Combos in the registry's form (src/app/keymap.ts); a press means combosOf(e): a Latin letter by
 // the letter it types, anything else by the key's place (punctuation by its character too).
@@ -142,18 +143,25 @@ export function createKeyboard(doc: Document): KeyboardManager {
   };
 }
 
+/** What isToolKeyAgain reads of a command. */
+type ToolKeyCmd = Pick<CommandDef, 'id' | 'activeWhen' | 'flyout' | 'group' | 'mode' | 'order'>;
+
 /**
  * Whether a command pressed by its key now is that of the sketch tool in hand (Daniel 2026-10-28:
  * "click L again and it acts just like me clicking Escape ... fully escapes out of that"): the
- * command's tool (activeWhen.sketchTool) is the one in hand, or one of the variants of its toolbar
- * flyout is (R while Center rectangle is in hand: the Rectangle flyout's key). Select is no tool
- * to leave.
+ * command's tool (activeWhen.sketchTool) is the one in hand, or the command is its toolbar
+ * flyout's own (the bar command, src/ui/flyouts.ts barIdOf) and one of the flyout's variants is in
+ * hand (R while Center rectangle is in hand: the Rectangle flyout's key). A variant's own key with
+ * another variant of its flyout in hand is no such press: it switches to that variant (Centerline's
+ * key with Line in hand takes up Centerline, as its row in the flyout list says). Select is no
+ * tool to leave.
  */
-export function isToolKeyAgain(c: Pick<CommandDef, 'activeWhen' | 'flyout'>, active: string | null | undefined, all: readonly Pick<CommandDef, 'activeWhen' | 'flyout'>[]): boolean {
+export function isToolKeyAgain(c: ToolKeyCmd, active: string | null | undefined, all: readonly ToolKeyCmd[]): boolean {
   const own = c.activeWhen?.sketchTool;
   if (!own || !active || active === 'select') return false;
   if (own === active) return true;
-  return !!c.flyout && all.some((x) => x.flyout === c.flyout && x.activeWhen?.sketchTool === active);
+  if (!c.flyout || barIdOf(all, c.id) !== c.id) return false;
+  return all.some((x) => x.flyout === c.flyout && x.activeWhen?.sketchTool === active);
 }
 
 /**

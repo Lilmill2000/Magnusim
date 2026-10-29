@@ -1899,11 +1899,13 @@ with the host once for the page's life, and its chip goes in the dock.
   the newest command of the current mode with that shortcut (`mode: 'any'`
   matches both), and passes to older bindings when none matches (the shell's
   Delete and Escape). A sketch tool's command pressed by its key while its tool,
-  or a variant of its toolbar flyout, is in hand does not run again: it leaves
-  the tool (`bindCommandShortcuts`' `again` hook, `toolKeyAgain` and
+  or (for the flyout's own command, its bar command: `barIdOf`) a variant of its
+  toolbar flyout, is in hand does not run again: it leaves the tool
+  (`bindCommandShortcuts`' `again` hook, `toolKeyAgain` and
   `isToolKeyAgain` in `src/app/keyboard.ts`, `SketchModeApi.leaveTool`: Escape
   until the tool is gone; Daniel 2026-10-28), so the person's own keybind does it
-  too; a held key's repeats of a sketch tool's command do nothing; a toolbar
+  too; a variant's own key with another variant of its flyout in hand switches
+  to it; a held key's repeats of a sketch tool's command do nothing; a toolbar
   click is unchanged. Fit and the standard views work in both modes. In sketch
   mode EDIT shows `sketch.undo` / `sketch.redo`. Delete with only faces selected
   runs `modify.delete-faces` when it is registered and enabled.

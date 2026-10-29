@@ -14,7 +14,8 @@
 //    too) and a feature's row (Delete, Rename), the
 //    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish);
 //  - a sketch tool's key pressed again leaves the tool, by the key the person gave it: Line on G,
-//    G, one segment, G: the tool is gone, the segment stays; L is no key of Line then;
+//    G, one segment, G: the tool is gone, the segment stays; L is no key of Line then; a flyout
+//    variant's own key (Centerline on K) with Line in hand switches to Centerline;
 //  - the app's Assistant panel key the person chose in the app's Settings (Alt+K): typed in the Part
 //    it opens and closes the app's panel, Set keybind refuses it in the app's words, and a command
 //    whose stored key it is does not run on it and its button names no key; changed while the Part
@@ -154,10 +155,10 @@ test('cad:keybinds-dialog Set keybind: Rectangle to Shift+R (Replace takes it fr
   }
 });
 
-test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again leaves it (the segment drawn stays, the next click draws nothing); L does neither", { tag: '@serial' }, async ({ page, request }) => {
+test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again leaves it (the segment drawn stays, the next click draws nothing); L does neither; Centerline on K: K with Line in hand switches to Centerline", { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(180_000);
   await ensureCadOn(request);
-  await setPref(request, { 'sketch.line': ['KeyG'] });
+  await setPref(request, { 'sketch.line': ['KeyG'], 'sketch.centerline': ['KeyK'] });
   try {
     const seen = await watchPage(page);
     await openProject(page, await newProject(request));
@@ -194,6 +195,21 @@ test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again l
     await click([40, 30, 0]);
     await viewAndSketchIdle(page);
     expect(await lines()).toBe(1);
+    // Centerline (a variant of the Line flyout) on K: K with Line in hand takes up Centerline (its
+    // own key switches to it, as its row in the flyout's list says); it put Line down before.
+    await expect.poll(() => keysOf(page, 'sketch.centerline')).toEqual(['KeyK']);
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    await page.keyboard.press('k');
+    await expect.poll(() => toolNow(page)).toBe('centerline');
+    await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-btn[data-variant="sketch.centerline"]')).toHaveClass(/is-active/);
+    // K again: Centerline is put down. K, then G (the Line flyout's own key): put down too.
+    await page.keyboard.press('k');
+    await expect.poll(() => toolNow(page)).toBe('select');
+    await page.keyboard.press('k');
+    await expect.poll(() => toolNow(page)).toBe('centerline');
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('select');
     expect(seen.errors).toEqual([]);
   } finally {
     await setPref(request, null);
