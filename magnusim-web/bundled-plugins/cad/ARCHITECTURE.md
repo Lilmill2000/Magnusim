@@ -432,7 +432,13 @@ with the host once for the page's life, and its chip goes in the dock.
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a
   new version of the design. A derived body (a split piece) gets its BodyDef
-  then, as a rename does.
+  then, as a rename does. Magnusim CAD (the desktop edition: no projects, no
+  simulations) says `ws.context.projectLinks: false` in its welcome
+  (`bridge.projectLinks()`, true when absent): the body row's toggle, its
+  "still in the simulation" hints and data attributes, the body menu's item and
+  the Assistant's `body.simulation` field (`cadToolsFor`, `parityFor`) are not
+  there, and a call that still asks for it is refused in words. The stored
+  field stays, so a design opened later in Magnusim keeps its choice.
 - **View state** (`CadView`: rollback index, hidden bodies, expanded tree
   nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and

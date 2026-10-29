@@ -841,8 +841,9 @@ export interface TestServices {
   looks: unknown[][];
 }
 
-export function makeServices(opts: { types?: FeatureType[]; status?: DocState['status']; units?: DocUnits; viewport?: boolean; incompleteExtrude?: boolean; panels?: boolean } = {}): TestServices {
-  const ws = createFakeWorkspace();
+export function makeServices(opts: { types?: FeatureType[]; status?: DocState['status']; units?: DocUnits; viewport?: boolean; incompleteExtrude?: boolean; panels?: boolean; projectLinks?: boolean } = {}): TestServices {
+  // projectLinks false: Magnusim CAD's welcome (no projects, no simulation); left out, Magnusim's.
+  const ws = createFakeWorkspace('projectLinks' in opts ? { projectLinks: opts.projectLinks } : {});
   const bridge = createBridge(ws);
   const bus = createBus<CadEvents>();
   const doc = createFakeDoc({ types: opts.types, status: opts.status, units: opts.units, incompleteExtrude: opts.incompleteExtrude });

@@ -18,7 +18,8 @@ import { MAX_PARAM_NAME } from '../doc/params';
 import { HINTS, REASONS, type ToolCode } from './errors';
 import { WORKED_PARTS, type ResultValue } from './examples';
 import { GUIDE } from './guide';
-import { CAD_TOOLS, HELP_TOPICS, type HelpTopic } from './schemas';
+import type { AssistantTool } from '@magnusim/workspace';
+import { CAD_TOOLS, cadToolsFor, HELP_TOPICS, type HelpTopic } from './schemas';
 import { AT_WORDS, expandEntity, JOIN_TOL, KIND_DOF, type EntityKind } from './sketch/macros';
 import { signatureWords, SIGNATURES, TOOL_DIMENSIONS, type ToolConstraintKind } from './sketch/signatures';
 
@@ -96,13 +97,18 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
+/** One tool's row: its title, how much it may change, its fields, and its rules. */
+function toolRow(t: AssistantTool, note: string | undefined = FEATURE_NOTES[t.name]): HelpRow {
+  return { about: t.name, text: `${t.title} (${t.risk}). Fields: ${Object.keys(t.inputSchema.properties).join(', ')}.${note ? ` ${note}` : ''}` };
+}
+
 /** Each tool: its title, how much it may change, its fields, and its rules. */
 function featureRows(): HelpRow[] {
-  return CAD_TOOLS.map((t) => ({
-    about: t.name,
-    text: `${t.title} (${t.risk}). Fields: ${Object.keys(t.inputSchema.properties).join(', ')}.${FEATURE_NOTES[t.name] ? ` ${FEATURE_NOTES[t.name]}` : ''}`,
-  }));
+  return CAD_TOOLS.map((t) => toolRow(t));
 }
+
+/** The features topic's body row in Magnusim CAD (projectLinks false: no projects, no simulation): the tool as offered there. */
+export const BODY_ROW_WITHOUT_SIMULATION: HelpRow = toolRow(cadToolsFor({ projectLinks: false }).find((t) => t.name === 'body')!, 'One step. A body name is unique among bodies; it may equal a feature name.');
 
 const parameterRows = (): HelpRow[] => [
   {

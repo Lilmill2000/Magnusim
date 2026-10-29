@@ -6,6 +6,9 @@
 // them are one step, so a refused second change takes the first back too. `visibility` show or
 // hide is the tree's eye (uiFor.setBodyVisible): view state, saved, not an undo step, so it is
 // set after the step (or alone, with no step, when nothing else changes) and the reply says so.
+// Magnusim CAD (bridge.projectLinks() false: no projects, no simulation) offers the tool without
+// `simulation` (schemas.ts cadToolsFor); an input that still asks to include or exclude a body is
+// refused in plain words, and the reply says nothing of the simulation.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
@@ -28,6 +31,9 @@ interface Plan extends EditPlan {
 
 const COLOR = /^#[0-9a-f]{6}$/i;
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** Magnusim CAD's refusal of a simulation choice (its tool has no such field). */
+export const NO_SIMULATION = 'simulation: Magnusim CAD has no simulation, so a body has no simulation setting here: leave the field out';
 
 /** A refusal of the Part's own edit as the tool's error. */
 function refused(field: string, r: EditResult): ToolError {
@@ -74,10 +80,12 @@ const bodyTool: EditTool<Plan> = {
     const b = findBody(ctx);
     const renameTo = str(ctx.input.rename_to);
     const color = str(ctx.input.color).toLowerCase();
-    const sim = ctx.input.simulation === 'include' ? true : ctx.input.simulation === 'exclude' ? false : null;
+    const links = ctx.services.bridge.projectLinks();
+    const sim = links && ctx.input.simulation === 'include' ? true : links && ctx.input.simulation === 'exclude' ? false : null;
     const problems: string[] = [];
     if (color && !COLOR.test(color)) problems.push(`color: "${color}" is not #rrggbb`);
-    if (ctx.input.simulation !== undefined && !['keep', 'include', 'exclude'].includes(String(ctx.input.simulation))) problems.push('simulation: keep, include or exclude');
+    if (!links && ctx.input.simulation !== undefined && ctx.input.simulation !== '' && ctx.input.simulation !== 'keep') problems.push(NO_SIMULATION);
+    else if (ctx.input.simulation !== undefined && !['keep', 'include', 'exclude'].includes(String(ctx.input.simulation))) problems.push('simulation: keep, include or exclude');
     if (problems.length) throw new ToolError('bad_input', `${problems.join('; ')}.`, { detail: { problems } });
     if (renameTo && renameTo.toLowerCase() !== b.name.toLowerCase()) {
       const clash = bodies.find((x) => x.id !== b.id && x.name.toLowerCase() === renameTo.toLowerCase()) ?? Object.entries(s.doc.bodies).find(([id, d]) => id !== b.id && d.name.toLowerCase() === renameTo.toLowerCase());
@@ -95,7 +103,7 @@ const bodyTool: EditTool<Plan> = {
       resolved: { body: b.name },
     };
     if (plan.renameTo === null && plan.color === null && plan.simulation === null) {
-      throw new ToolError('bad_input', `Nothing to change: ${b.name} already has that name, colour and simulation setting.`);
+      throw new ToolError('bad_input', `Nothing to change: ${b.name} already has that name${links ? ', colour and simulation setting' : ' and colour'}.`);
     }
     return plan;
   },
@@ -122,7 +130,9 @@ const bodyTool: EditTool<Plan> = {
     const s = ctx.services.doc.state.get();
     const def = s.doc.bodies[plan.body];
     const info = s.rebuild.bodies.find((b) => b.id === plan.body);
-    const body = { name: info?.name ?? def?.name ?? plan.name, color: info?.color ?? def?.color ?? null, simulation: def?.simulation !== false };
+    // Magnusim CAD: no simulation to speak of.
+    const links = ctx.services.bridge.projectLinks();
+    const body = { name: info?.name ?? def?.name ?? plan.name, color: info?.color ?? def?.color ?? null, ...(links ? { simulation: def?.simulation !== false } : {}) };
     const bits: string[] = [];
     if (plan.renameTo !== null) bits.push(`renamed ${body.name}`);
     if (plan.color !== null) bits.push(`colour ${plan.color}`);

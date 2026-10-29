@@ -113,7 +113,7 @@ export const SHARDS = {
     'e2e/cad-p4b-project-step.spec.ts',
     // Press-pull on curved faces (kernel API 6): bores, fillets, slopes, the flange STEP and the Vortex.
     'e2e/cad-p5-pressPull-curved.spec.ts',
-    // A body's menu in the tree: Delete (a Delete body feature, Undo, Redo, several bodies, the Delete key).
+    // A body's menu in the tree: Delete (a Delete body feature, Undo, Redo, several bodies, the Delete key), and its simulation item in Magnusim.
     'e2e/cad-body-menu.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.

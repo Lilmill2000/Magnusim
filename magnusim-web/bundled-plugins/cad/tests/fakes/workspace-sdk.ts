@@ -15,6 +15,8 @@
 // The host's appearance (unreleased 1.9): pass `appearance` for ws.context.appearance, and
 // push('appearance', a) for its event (the context follows, as the SDK's does). Without it the
 // context has none, as an older host's.
+// Magnusim CAD's welcome flag: pass `projectLinks` for ws.context.projectLinks (false there: no
+// projects, no simulation). Without it the context has none, as Magnusim's.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ConfirmOptions, LeaveHandler, PromptOptions, StudyRecord, UnitSystem, Workspace, WorkspaceContext } from '@magnusim/workspace';
 import { FakeFiles, FakeFolder } from '../doc/fake-files';
@@ -90,6 +92,8 @@ export function createFakeWorkspace(
     assistantKeys?: string[] | null;
     /** Unreleased 1.9: ws.context.appearance ({theme, preference, textScale, iconScale}). */
     appearance?: Record<string, unknown>;
+    /** Magnusim CAD's welcome: ws.context.projectLinks (false there); left out, the welcome has none. */
+    projectLinks?: boolean;
   } = {},
 ): FakeWorkspace {
   let study = fakeStudy(opts.study);
@@ -109,6 +113,7 @@ export function createFakeWorkspace(
     ...(opts.edit ? { geometry: opts.edit.geometry, launch: opts.edit.launch ?? null } : {}),
     ...('assistantKeys' in opts ? { assistantKeys: opts.assistantKeys ?? null } : {}),
     ...(opts.appearance ? { appearance: { ...opts.appearance } } : {}),
+    ...('projectLinks' in opts ? { projectLinks: opts.projectLinks } : {}),
   } as WorkspaceContext;
   const clone = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
   const ws = {

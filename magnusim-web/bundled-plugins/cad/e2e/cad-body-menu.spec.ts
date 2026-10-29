@@ -5,6 +5,11 @@
 //                     the history, Ctrl+Z brings the body back and Ctrl+Y takes it again;
 //   cad:body-delete-two   two bodies selected: the menu says "Delete 2 bodies" and makes one feature
 //                     for both (one undo step); the Delete key on a selected body does the same.
+//   cad:body-sim-magnusim in Magnusim (the host has projects: no projectLinks false in its welcome)
+//                     a solid body still has its simulation toggle, its "still in the simulation"
+//                     marks when hidden, and "Leave Body 1 out of the simulation" in its menu. Magnusim
+//                     CAD's welcome says projectLinks false: there the Part shows none of them (unit
+//                     tests; its own suite asserts it in the desktop app).
 // Setup (blocks) goes in through the document as the other specs do; everything asserted is what
 // the person sees (the tree, the view's drawn bodies, the volume chip) or the record their click stored.
 // Owner: P2-FEATURES.
@@ -110,4 +115,23 @@ test('cad:body-delete-two two bodies selected: Delete 2 bodies makes one feature
     { name: 'Delete body 2', bodies: [b1, b2] },
   ]);
   expect(await undoLabel(page)).toBe('Delete body 2');
+});
+
+test('cad:body-sim-magnusim in Magnusim a body keeps its simulation toggle, its hidden-but-included marks and its menu item', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const frame = await freshPart(page, request);
+  const made = await addSolid(page, { size: [20, 20, 20] });
+  expect(await workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.bridge.projectLinks() as boolean)).toBe(true);
+  await frame.locator('[data-bodies-folder] > .tree-row').click();
+  const row = frame.locator(`[data-body-row="${made.body}"]`);
+  await expect(row).toHaveAttribute('data-in-simulation', '1');
+  await expect(row.locator('[data-body-act="simulation"]')).toHaveAttribute('aria-label', 'Leave Body 1 out of the simulation');
+  await row.locator('[data-body-act="visibility"]').click();
+  await expect(row).toHaveAttribute('data-hidden-in-simulation', '1');
+  await row.locator('> .tree-row').click({ button: 'right' });
+  const menu = frame.locator('[data-cad-menu]');
+  await expect(menu.locator('[data-menu-item="body-simulation"]')).toHaveText('Leave Body 1 out of the simulation');
+  await menu.locator('[data-menu-item="body-simulation"]').click();
+  await expect(row).toHaveAttribute('data-in-simulation', '0');
+  expect(await undoLabel(page)).toBe('Leave Body 1 out of the simulation');
 });

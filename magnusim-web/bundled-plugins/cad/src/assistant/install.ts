@@ -36,7 +36,7 @@ import { createPictures } from './pictures';
 import { createRevTracker } from './rev';
 import { CAD_REVIEW } from './review';
 import { setRuntime, type AssistantRuntime } from './runtime';
-import { CAD_TOOLS, CORE_TOOLSET, TOOL_NAMES } from './schemas';
+import { cadToolsFor, CORE_TOOLSET, TOOL_NAMES } from './schemas';
 import { createSessionKeys } from './session-key';
 import { createAssistantStore, ENDED_MS, LINGER_MS, phaseOf } from './state';
 import { createHoldPoints, type AssistantTestHandle } from './testing';
@@ -340,7 +340,8 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   let waitingForVisible = false;
   const register = async (): Promise<AssistantRegistration> => {
     const offered = rt.offered;
-    const tools = CAD_TOOLS.filter((t) => offered.includes(t.name));
+    // Magnusim CAD (no projects, no simulation): the body tool without its simulation field.
+    const tools = cadToolsFor({ projectLinks: services.bridge.projectLinks() }).filter((t) => offered.includes(t.name));
     // The guide names only tools offered (the eval's core set leaves some out).
     const guide = guideWithout(TOOL_NAMES.filter((n) => !offered.includes(n)));
     let verdict: AssistantRegistration;

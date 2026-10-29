@@ -111,7 +111,8 @@ export interface BodyRow {
   valid: boolean;
   /**
    * LINK: "Include in simulation" (the project's geometry gets this body), or
-   * null for a surface body, which is never sent and has no toggle.
+   * null for a surface body, which is never sent and has no toggle, and for
+   * every body where the host has no projects (Magnusim CAD: no simulation).
    */
   inSimulation: boolean | null;
 }
@@ -121,8 +122,10 @@ export interface BodyRow {
  * made them: Body 1, Body 2, Body 3, whatever the history did to them since),
  * with the saved names and visibility.
  */
-export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hiddenBodies'>, bodies: BodyInfo[]): BodyRow[] {
-  // A surface body (measured: no solid) has no simulation toggle: it is never sent.
+export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hiddenBodies'>, bodies: BodyInfo[], o: { projectLinks?: boolean } = {}): BodyRow[] {
+  // A surface body (measured: no solid) has no simulation toggle: it is never sent. Nor has any
+  // body in Magnusim CAD (projectLinks false): it has no simulation.
+  const links = o.projectLinks !== false;
   const made = Object.keys(doc.bodies);
   const rank = (id: BodyId) => {
     const i = made.indexOf(id);
@@ -136,7 +139,7 @@ export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hidde
     visible: !view.hiddenBodies.includes(b.id),
     feature: b.feature,
     valid: b.valid,
-    inSimulation: b.solids === 0 ? null : doc.bodies[b.id]?.simulation !== false,
+    inSimulation: !links || b.solids === 0 ? null : doc.bodies[b.id]?.simulation !== false,
   }));
 }
 

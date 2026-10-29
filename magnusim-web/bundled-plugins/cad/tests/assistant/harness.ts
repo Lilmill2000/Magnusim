@@ -100,10 +100,12 @@ export interface HarnessOptions {
   paceScale?: number;
   /** Run the real sketch mode (the sketch tool needs it). */
   sketchMode?: boolean;
+  /** The host's welcome flag: false is Magnusim CAD (no projects, no simulation); left out, Magnusim. */
+  projectLinks?: boolean;
 }
 
 export async function assistantHarness(o: HarnessOptions = {}): Promise<AssistantHarness> {
-  const ws = createFakeWorkspace({ units: o.units ?? 'metric', hostVersion: '1.2', assistant: o.assistant ?? {}, study: { title: o.title ?? 'Part 1' } });
+  const ws = createFakeWorkspace({ units: o.units ?? 'metric', hostVersion: '1.2', assistant: o.assistant ?? {}, study: { title: o.title ?? 'Part 1' }, ...('projectLinks' in o ? { projectLinks: o.projectLinks } : {}) });
   const fake = ws.assistantFake!;
   fake.verdicts.push(...(o.verdicts ?? []));
   const kernel = o.kernel ?? realKernelAnywhere();

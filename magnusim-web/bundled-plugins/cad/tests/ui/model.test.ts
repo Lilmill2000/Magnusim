@@ -106,6 +106,18 @@ describe('bodies and selection', () => {
     ]);
   });
 
+  it('Magnusim CAD (projectLinks false: no simulation): no body has the toggle; the stored choice stays in the document', () => {
+    const doc = { bodies: { b1: { name: 'Body 1', color: '#bdc9db' }, b2: { name: 'Body 2', color: '#bdc9db', simulation: false as const } } };
+    const list = [body('b1', 'f1'), body('b2', 'f2')];
+    expect(bodyRows(doc, { hiddenBodies: ['b1'] }, list, { projectLinks: false }).map((r) => [r.id, r.inSimulation])).toEqual([
+      ['b1', null],
+      ['b2', null],
+    ]);
+    // Absent (Magnusim) or true: as before.
+    expect(bodyRows(doc, { hiddenBodies: [] }, list, { projectLinks: true }).map((r) => r.inSimulation)).toEqual([true, false]);
+    expect(bodyRows(doc, { hiddenBodies: [] }, list, {}).map((r) => r.inSimulation)).toEqual([true, false]);
+  });
+
   it('lists bodies in the order the document made them, not the order the rebuild last touched them (review round 1)', () => {
     const doc = { bodies: { b1: { name: 'Body 1', color: '#bdc9db' }, b2: { name: 'Body 2', color: '#bdc9db' }, b3: { name: 'Body 3', color: '#bdc9db' } } };
     // A join into Body 2 after Body 3 was made puts Body 2 last in the rebuild's list.

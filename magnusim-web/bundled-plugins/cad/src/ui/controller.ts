@@ -834,8 +834,9 @@ export function createUiController(services: AppServices): UiController {
       const items: MenuEntry[] = [
         { id: 'body-visibility', label: `${hidden ? 'Show' : 'Hide'} ${info.name}`, run: () => c.setBodyVisible(id, hidden) },
       ];
-      // LINK: a solid body goes to the project's geometry unless it is left out; a surface body never does.
-      if (info.solids !== 0) {
+      // LINK: a solid body goes to the project's geometry unless it is left out; a surface body never
+      // does. Magnusim CAD has no projects and no simulation: no such item there.
+      if (info.solids !== 0 && services.bridge.projectLinks()) {
         const inSim = d.doc.bodies[id]?.simulation !== false;
         items.push({
           id: 'body-simulation',

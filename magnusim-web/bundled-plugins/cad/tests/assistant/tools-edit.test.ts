@@ -5,7 +5,8 @@
 //     keeps the parameter's comment ("-" removes it); a bad name, a bad expression (with the parameters there are),
 //     a removal still used and an unknown name answer before anything changes, naming the row;
 //   - body: rename, colour and simulation in one step; a clash, a bad colour and nothing to change
-//     refused; a name in quotes (as get_model writes one with parentheses) names the body;
+//     refused; a name in quotes (as get_model writes one with parentheses) names the body; in
+//     Magnusim CAD (no projects) no simulation field, and a simulation choice refused in words;
 //   - edit_feature: a value by its path, rename, suppress and move (before, after, end) with the
 //     Part's own words when refused; a field it does not have, and a sketch dimension the sketch
 //     does not have, refused;
@@ -14,6 +15,7 @@
 //     get_model's undo.your_steps counts what it can take back.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { TOOL_NAMES } from '../../src/assistant/schemas';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { fillet, plate, stateOf, undoLabel } from './parts';
 
@@ -143,6 +145,43 @@ describe('body', () => {
       await h.ok('body', { body: second, rename_to: 'Plate (copy)', color: '', simulation: 'keep' });
       const quoted = await h.ok('body', { body: '"Plate (copy)"', rename_to: 'Copy', color: '', simulation: 'keep' });
       expect(quoted.data).toMatchObject({ body: { name: 'Copy' }, resolved: { body: 'Plate (copy)' } });
+      // Magnusim (no welcome flag): the registered body tool has the simulation field, and help lists it.
+      const props = (r: { tools: { name: string; inputSchema: { properties: Record<string, unknown> } }[] }) => Object.keys(r.tools.find((t) => t.name === 'body')!.inputSchema.properties);
+      expect(props(h.fake.registrations.at(-1)!)).toEqual(['body', 'rename_to', 'color', 'simulation', 'visibility']);
+      const help = await h.ok('help', { topic: 'features' });
+      expect((help.data.rows as { about: string; text: string }[]).find((x) => x.about === 'body')!.text).toContain('simulation');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'in Magnusim CAD (no projects, no simulation): the body tool has no simulation field and says nothing of it; a simulation choice is refused in plain words',
+    async () => {
+      h = await assistantHarness({ projectLinks: false });
+      const p = await plate(h);
+      const reg = h.fake.registrations.at(-1)!;
+      const body = reg.tools.find((t) => t.name === 'body')!;
+      expect(Object.keys(body.inputSchema.properties)).toEqual(['body', 'rename_to', 'color', 'visibility']);
+      expect(body.inputSchema.required).toEqual(['body', 'rename_to', 'color', 'visibility']);
+      expect(body.description).not.toMatch(/simulation/);
+      // The other 20 tools are Magnusim's.
+      expect(reg.tools.map((t) => t.name)).toEqual(TOOL_NAMES);
+      const r = await h.ok('body', { body: 'Body 1', rename_to: 'Plate', color: '', visibility: 'keep' });
+      expect(r.data.body).toEqual({ name: 'Plate', color: '#bdc9db' });
+      expect(r.text).toBe('Body Body 1: renamed Plate');
+      const before = h.doc.state.get().doc;
+      const refused = await h.call('body', { body: 'Plate', rename_to: '', color: '', simulation: 'exclude', visibility: 'keep' });
+      expect(refused).toMatchObject({ ok: false, error: { detail: { reason: 'bad_input' } } });
+      expect((refused as { error: { message: string } }).error.message).toContain('simulation: Magnusim CAD has no simulation, so a body has no simulation setting here: leave the field out');
+      expect(h.doc.state.get().doc).toBe(before);
+      expect(h.doc.state.get().doc.bodies[p.body].simulation).toBeUndefined();
+      // "keep" asks for nothing: it passes.
+      await h.ok('body', { body: 'Plate', rename_to: 'Base', color: '', simulation: 'keep', visibility: 'keep' });
+      const nothing = await h.call('body', { body: 'Base', rename_to: '', color: '', visibility: 'keep' });
+      expect((nothing as { error: { message: string } }).error.message).toContain('Nothing to change: Base already has that name and colour.');
+      const help = await h.ok('help', { topic: 'features' });
+      const row = (help.data.rows as { about: string; text: string }[]).find((x) => x.about === 'body')!;
+      expect(row.text).toBe('Name, colour or show a body (edit). Fields: body, rename_to, color, visibility. One step. A body name is unique among bodies; it may equal a feature name.');
     },
     REAL_KERNEL_MS,
   );
