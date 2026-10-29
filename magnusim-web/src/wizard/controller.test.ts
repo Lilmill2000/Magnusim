@@ -381,13 +381,24 @@ describe('Settings', () => {
     expect(preview.style.getPropertyValue('--mg-text-scale')).toBe('1.3');
     choice('text_scale', '1.3').dispatchEvent(new Event('pointerleave'));
     expect(saved).toEqual([]);
-    // A click keeps it: saved, and the page is dark.
+    // Under the choices, the look kept now; never the one tried.
+    const kept = $('#wiz-look-now');
+    expect(kept).toHaveTextContent('Your look now: Light, text 100%, icons 100%.');
+    expect(kept).not.toHaveClass('is-saved');
+    // The preview is a picture: it has no Save or Cancel to press.
+    expect([...document.querySelectorAll('[data-look-preview] button')].map((b) => b.textContent)).not.toContain('Save');
+    // A click keeps it: saved, and the page is dark; the line under the choices says so.
     choice('theme', 'dark').click();
     await flush();
     expect(saved.at(-1)).toEqual({ theme: 'dark' });
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(choice('theme', 'dark')).toHaveAttribute('aria-checked', 'true');
     expect($('#wiz-saved')).toHaveTextContent('Saved');
+    expect(kept).toHaveTextContent('Saved. Your look now: Dark, text 100%, icons 100%.');
+    expect(kept).toHaveClass('is-saved');
+    choice('text_scale', '1.3').dispatchEvent(new Event('pointerenter'));
+    expect(kept).toHaveTextContent('Saved. Your look now: Dark, text 100%, icons 100%.');
+    choice('text_scale', '1.3').dispatchEvent(new Event('pointerleave'));
     // Text and icon sizes go on html.
     choice('text_scale', '1.15').click();
     await flush();
@@ -395,6 +406,10 @@ describe('Settings', () => {
     await flush();
     expect(saved.slice(-2)).toEqual([{ text_scale: 1.15 }, { icon_scale: 1.5 }]);
     expect([document.documentElement.style.getPropertyValue('--mg-text-scale'), document.documentElement.style.getPropertyValue('--mg-icon-scale')]).toEqual(['1.15', '1.5']);
+    expect(kept).toHaveTextContent('Saved. Your look now: Dark, text 115%, icons 150%.');
+    // "Saved." goes after a while; the look now stays.
+    await vi.waitFor(() => expect(kept).not.toHaveClass('is-saved'), { timeout: 6000, interval: 100 });
+    expect(kept).toHaveTextContent(/^Your look now: Dark, text 115%, icons 150%\.$/);
     // Reset to defaults: light at 100%.
     ($('[data-wiz-reset="appearance"]') as HTMLElement).click();
     await flush();

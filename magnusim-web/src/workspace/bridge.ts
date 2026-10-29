@@ -1131,6 +1131,9 @@ export class WorkspaceCalls {
       assistantDock: this.hooks.assistantDocked?.() === true,
       assistantKeys: this.hooks.assistantKeys?.() ?? null,
       ...(appearance ? { appearance } : {}),
+      // Magnusim CAD refuses the link calls (NOT_IN_CAD_EDITION): the page hears so at once, to
+      // leave out what only matters to a simulation (1.9, unreleased). Absent where links work.
+      ...(isCad() ? { projectLinks: false } : {}),
     };
   }
 

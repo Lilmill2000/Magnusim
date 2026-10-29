@@ -114,9 +114,22 @@ test('gate:appearance the person picks a look: dark at once and before the first
     expect(await preview.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(previewLight);
     expect(await theme(page)).toEqual(['light', 'light']);
 
-    // A click keeps it: this window and the other one are dark.
+    // Under the choices, the look kept now; the preview is a picture, with nothing to press (it had a
+    // Save that did nothing: Daniel pressed it).
+    const kept = pane.locator('#wiz-look-now');
+    await expect(kept).toHaveText('Your look now: Light, text 100%, icons 100%.');
+    await expect(preview.getByText('Save', { exact: true })).toHaveCount(0);
+    expect(await preview.evaluate((el) => getComputedStyle(el).pointerEvents)).toBe('none');
+    // The choice kept now has a tick.
+    const tick = (field, value) => choice(field, value).locator('strong').evaluate((el) => getComputedStyle(el, '::after').content);
+    expect(await tick('theme', 'light')).toMatch(/✓/);
+    expect(await tick('theme', 'dark')).toBe('none');
+
+    // A click keeps it: this window and the other one are dark, and the line under the choices says it was saved.
     await choice('theme', 'dark').click();
     await expect(page.locator('#wiz-saved')).toHaveText('Saved');
+    await expect(kept).toHaveText('Saved. Your look now: Dark, text 100%, icons 100%.');
+    expect(await tick('theme', 'dark')).toMatch(/✓/);
     expect(await theme(page)).toEqual(['dark', 'dark']);
     const darkBg = await bodyBg(page);
     expect(darkBg).not.toBe(lightBg);

@@ -203,6 +203,10 @@ function paintUnits() {
   });
 }
 
+/** How long Appearance's line says "Saved." after a choice was kept. */
+const LOOK_SAVED_MS = 4000;
+let lookSavedTimer = null;
+
 /** Appearance's choices as saved, and its preview showing them (or `trying`, a choice not made yet). */
 function paintAppearance(trying) {
   const now = currentAppearance();
@@ -227,6 +231,14 @@ function paintAppearance(trying) {
   }
   const note = $('wiz-look-note');
   if (note) note.textContent = trying ? 'Preview of the choice: click it to keep it.' : 'Preview of the look now.';
+  // Under the choices: the look kept now (never the one tried), and "Saved." for a while after a click.
+  const kept = $('wiz-look-now');
+  if (kept) {
+    const pct = (x) => `${Math.round(x * 100)}%`;
+    const theme = now.theme === 'system' ? `Match system (${resolveTheme('system')} now)` : now.theme === 'dark' ? 'Dark' : 'Light';
+    kept.textContent = `${lookSavedTimer ? 'Saved. ' : ''}Your look now: ${theme}, text ${pct(now.text_scale)}, icons ${pct(now.icon_scale)}.`;
+    kept.classList.toggle('is-saved', !!lookSavedTimer);
+  }
 }
 
 /** A choice in Appearance as the preview and the save take it ({theme: 'dark'}, {text_scale: 1.15}). */
@@ -236,9 +248,19 @@ function lookOf(btn) {
   return { [field]: field === 'theme' ? raw : Number(raw) };
 }
 
-/** Saves an Appearance choice: shown at once here and in the other windows, "Saved" (or why not) in the header. */
+/**
+ * Saves an Appearance choice: shown at once here and in the other windows, "Saved" (or why not) in
+ * the header, and "Saved. Your look now: …" under the choices.
+ */
 async function saveLook(patch) {
   const out = await saveAppearance(patch);
+  if (out.ok) {
+    if (lookSavedTimer) clearTimeout(lookSavedTimer);
+    lookSavedTimer = setTimeout(() => {
+      lookSavedTimer = null;
+      paintAppearance();
+    }, LOOK_SAVED_MS);
+  }
   paintAppearance();
   if (out.ok) flashSaved();
   else flashSaved(out.error, true);

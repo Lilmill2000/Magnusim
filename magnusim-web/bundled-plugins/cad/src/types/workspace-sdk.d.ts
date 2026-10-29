@@ -128,6 +128,13 @@ declare module '@magnusim/workspace' {
        * absent on an older host, whose pages are light). The `appearance` event says when it changes.
        */
       appearance?: Appearance;
+      /**
+       * false: this app takes no study's design into a project as a geometry, so it runs no
+       * simulation of it (Magnusim CAD). ws.project.linkGeometry, linkedGeometry and followGeometry are
+       * refused there (`not_allowed`); leave out what only matters to a simulation (unreleased, 1.9).
+       * Absent where they work, and on an older host: read absent as true.
+       */
+      projectLinks?: boolean;
   }
   /** What a geometry action was started on (host 1.7). */
   export interface LaunchTarget {

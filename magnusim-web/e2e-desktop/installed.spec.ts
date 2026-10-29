@@ -1,12 +1,13 @@
 // Magnusim CAD as a person installs it: the installer from desktop/dist (npm run dist), put in a
 // folder of the test's own, per-user and silent. The installed app runs the built page with no
 // Python, makes a Part with CAD's kernel, and carries its licences; its CAD workspace is the
-// plugin's, byte for byte (the two apps mirror each other). Uninstalling keeps the person's
-// settings and projects.
+// plugin's, byte for byte (the two apps mirror each other). A person who keeps the dark look has
+// it from the page as served, and in the Part's frame. Uninstalling keeps the person's settings
+// and projects.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,18 +68,37 @@ test('the installed app: built page, a Part with CAD, its licences, the plugin\'
     } as Record<string, string>;
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.MAGNUSIM_LOCAL_JSON;
+    // The person keeps the dark look (Settings → Appearance), in the app's own prefs.
+    mkdirSync(userData, { recursive: true });
+    writeFileSync(join(userData, 'local.json'), JSON.stringify({ theme: 'dark' }));
     const running = await electron.launch({ executablePath: exe, args: [`--user-data-dir=${userData}`], env });
     const page = await running.firstWindow();
+    const refused: string[] = [];
+    page.on('console', (m) => {
+      if (/Content Security Policy/i.test(m.text())) refused.push(m.text());
+    });
     await expect(page).toHaveTitle('Magnusim CAD - Projects', { timeout: 60_000 });
     const origin = new URL(page.url()).origin;
     process.env.CAD_E2E_BASE_URL = origin;
     // The built page: no dev server's client.
     const scripts = await page.evaluate(() => [...document.scripts].map((s) => s.src));
     expect(scripts.some((s) => s.includes('/@vite/client'))).toBe(false);
+    // Dark from the page as served (its server stamped the look: the port, and so the page's storage, is new at every start).
+    expect(await page.evaluate(() => [JSON.parse(document.documentElement.getAttribute('data-look') || '{}').theme, document.documentElement.dataset.theme])).toEqual(['dark', 'dark']);
     await page.locator('#home-new-project').click();
     await page.locator('#np-title').fill('Installed bench');
     await page.locator('#np-create').click();
     const frame = await partOpened(page);
+    // The Part's page too: the look in its head as served, its html dark, nothing refused by a CSP.
+    const part = page.frames().find((f) => /\/plugins\/cad\/workspace\//.test(f.url()));
+    expect(
+      await part!.evaluate(() => [
+        JSON.parse(document.querySelector('meta[name="magnusim-look"]')?.getAttribute('content') || '{}').theme,
+        document.documentElement.dataset.theme,
+        getComputedStyle(document.documentElement).colorScheme,
+      ]),
+    ).toEqual(['dark', 'dark', 'dark']);
+    expect(refused, 'CSP refusals').toEqual([]);
     await drawBlock(page, frame, 30, 20, 10);
     await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
     await page.locator('#workspace-overlay [data-ws-back]').click();
