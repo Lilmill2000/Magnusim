@@ -7,12 +7,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test } from '../e2e-cad/pw';
 import { drawBlock, historyNames, partOpened } from '../bundled-plugins/cad/e2e/helpers';
+// @ts-expect-error plain ESM script with no types
+import { removeTreeSync } from '../scripts/remove-tree.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(WEB, 'desktop', 'dist');
@@ -114,5 +116,5 @@ test('the installed app: built page, a Part with CAD, its licences, the plugin\'
   await expect.poll(() => existsSync(exe), { timeout: 30_000 }).toBe(false);
   expect(existsSync(userData), 'settings kept').toBe(true);
   expect(statSync(projects).isDirectory(), 'projects kept').toBe(true);
-  rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  removeTreeSync(root);
 });

@@ -2,12 +2,14 @@
 // server with no Python and no WSL to be found, a Part made there runs CAD's kernel, a web link
 // opens outside the app, and quitting ends the server.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test } from '../e2e-cad/pw';
 import { partOpened, drawBlock, historyNames } from '../bundled-plugins/cad/e2e/helpers';
+// @ts-expect-error plain ESM script with no types
+import { removeTreeSync } from '../scripts/remove-tree.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DESKTOP = join(WEB, 'desktop');
@@ -66,6 +68,6 @@ test('the desktop app: a window on its own server, a Part with CAD running, and 
     await expect.poll(async () => fetch(`${url.origin}/api/plugins`).then(() => 'up', () => 'down'), { timeout: 15_000 }).toBe('down');
   } finally {
     await app.close().catch(() => undefined);
-    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+    removeTreeSync(root);
   }
 });

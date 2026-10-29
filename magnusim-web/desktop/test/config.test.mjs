@@ -21,6 +21,17 @@ describe('serverEnv', () => {
     assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   });
 
+  it('asks for Documents only when the projects folder is not set (Windows may fail to name it)', () => {
+    let asked = 0;
+    const documents = () => {
+      asked += 1;
+      throw new Error("Failed to get 'documents' path");
+    };
+    assert.equal(serverEnv({ documents, userData: where.userData, env: { MAGNUSIM_PROJECTS_ROOT: 'D:\\parts' } }).MAGNUSIM_PROJECTS_ROOT, 'D:\\parts');
+    assert.equal(asked, 0);
+    assert.equal(serverEnv({ documents: () => where.documents, userData: where.userData, env: {} }).MAGNUSIM_PROJECTS_ROOT, join(where.documents, 'Magnusim CAD'));
+  });
+
   it("carries the installed-app marker, so the Assistant's home is never taken for a test one", () => {
     assert.equal(serverEnv({ ...where, env: {} }).MAGNUSIM_PACKAGED, '1');
     // Whatever the environment says: a home the person or a test set, or the marker blanked.

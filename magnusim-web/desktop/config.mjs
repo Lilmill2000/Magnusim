@@ -16,10 +16,12 @@ export const APP_NAME = 'Magnusim CAD';
  * MAGNUSIM_PACKAGED marks the desktop app (installed, or npm start: the same user data): its home
  * is the person's real folder, never a test one, so no Assistant test switch is honoured in it
  * (assistant/home.ts assistantHomeIsOverridden).
- * @param {{ documents: string, userData: string, env?: NodeJS.ProcessEnv }} o
+ * `documents` may be a function: it is asked only when MAGNUSIM_PROJECTS_ROOT does not say where
+ * projects go (Windows can fail to name Documents, e.g. under another profile folder).
+ * @param {{ documents: string | (() => string), userData: string, env?: NodeJS.ProcessEnv }} o
  */
 export function serverEnv({ documents, userData, env = process.env }) {
-  const projects = String(env.MAGNUSIM_PROJECTS_ROOT || '').trim() || join(documents, APP_NAME);
+  const projects = String(env.MAGNUSIM_PROJECTS_ROOT || '').trim() || join(typeof documents === 'function' ? documents() : documents, APP_NAME);
   return {
     ...env,
     MAGNUSIM_EDITION: 'cad',

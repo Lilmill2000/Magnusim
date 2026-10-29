@@ -3,8 +3,11 @@
 // on the Node.js found on PATH (scripts/server/assistant/agents/node.ts). Settings' Test starts
 // the e2e's stand-in agent (e2e/support/fake-acp.mjs, installed as npm installs one), which calls
 // Magnusim's test tool and answers. With no Node.js on PATH the agent's row says what it needs.
+// The installed app takes no test switches (MAGNUSIM_PACKAGED), so it finds the stand-in where it
+// looks for any agent: the stand-in's npm folder first on PATH, a home and AppData of its own (with
+// the login file), so this PC's own agents and sign-ins never come into it.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +15,8 @@ import { existsSync, readdirSync } from 'node:fs';
 import { _electron as electron, expect, test, type Page } from '../e2e-cad/pw';
 // @ts-expect-error plain ESM test support with no types
 import { startFakeAcp } from '../e2e/support/fake-acp.mjs';
+// @ts-expect-error plain ESM script with no types
+import { removeTreeSync } from '../scripts/remove-tree.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXE = join(WEB, 'desktop', 'dist', 'win-unpacked', 'Magnusim CAD.exe');
@@ -52,17 +57,23 @@ function pathWith(node: boolean): string {
 }
 
 async function launch(root: string, opts: { node: boolean; prefix: string; home: string }) {
+  const appData = join(root, 'appdata');
+  const localAppData = join(root, 'localappdata');
+  mkdirSync(appData, { recursive: true });
+  mkdirSync(localAppData, { recursive: true });
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    PATH: pathWith(opts.node),
+    PATH: [opts.prefix, pathWith(opts.node)].join(delimiter),
+    USERPROFILE: opts.home,
+    HOME: opts.home,
+    APPDATA: appData,
+    LOCALAPPDATA: localAppData,
     MAGNUSIM_PROJECTS_ROOT: join(root, 'projects'),
     MAGNUSIM_ASSISTANT_HOME: join(root, 'assistant'),
-    MAGNUSIM_TEST_ASSISTANT: '1',
-    MAGNUSIM_TEST_ASSISTANT_AGENT_PATHS: opts.prefix,
-    MAGNUSIM_TEST_ASSISTANT_AGENT_HOME: opts.home,
   };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.MAGNUSIM_LOCAL_JSON;
+  for (const k of Object.keys(env)) if (k.startsWith('MAGNUSIM_TEST_')) delete env[k];
   const app = await electron.launch({ executablePath: EXE, args: [`--user-data-dir=${join(root, 'user data')}`], env });
   const page = await app.firstWindow();
   await expect(page).toHaveTitle('Magnusim CAD - Projects', { timeout: 60_000 });
@@ -99,7 +110,7 @@ test.describe('coding agents in the desktop app', () => {
 
   test.afterAll(async () => {
     await fake?.stop();
-    if (root) rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+    if (root) removeTreeSync(root);
   });
 
   test("Settings' Test starts the agent on Node.js from PATH: it calls Magnusim's test tool and answers", async () => {
