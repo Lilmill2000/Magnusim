@@ -17,6 +17,10 @@
  *                                        each provider's readiness (providers_ready)
  *   POST /api/assistant/settings        a partial change → status; 400 {error, field}; 409 {needs_confirm:'base_url'}.
  *                                        models: {<provider>: id} saves each provider's own model
+ *   POST /api/assistant/log-folder/open {} → {ok, folder}: File Explorer on the provider log's folder
+ *                                        (made when missing): MAGNUSIM_ASSISTANT_DEBUG_LOG's, else
+ *                                        <home>/assistant/logs (Settings' "Keep a provider log for a
+ *                                        problem report", settings.provider_log); 500 open_failed
  *   POST /api/assistant/key             {provider, key} → status (+ warning); 400; 409 storage_unavailable; 500
  *   POST /api/assistant/key/remove      {provider} → status; 400
  *   GET  /api/assistant/models?provider= {ok, models, source}: the curated list, merged with what
@@ -142,7 +146,7 @@
  *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files and attachments)
  *   POST /api/test/assistant/attachments/sweep  {later_ms?} the attachments' sweep, as if run that much later → {ok, removed}
  */
-import { access, rm } from 'node:fs/promises';
+import { access, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError } from './http.ts';
 import { registerChannelKind } from './event-hub.ts';
@@ -190,6 +194,8 @@ import { agentProviderTest, agentSignInRequest, agentTestRequest, WINDOW_PROOF_T
 import { agentIdOf, knownAgent } from './assistant/agents/known.ts';
 import { setAgentRunHooks } from './assistant/agents/discover.ts';
 import { appVersion } from './assistant/host-tools.ts';
+import { debugLogDir, debugLogEnvDir, providerLogDir } from './assistant/debug-log.ts';
+import { openFolderOnThisPc } from './vtk-export.ts';
 import { mcpSdkInstalled } from './assistant/providers/load-sdk.ts';
 
 export { TURN_HEADER };
@@ -205,6 +211,8 @@ export interface AssistantDeps {
   relay?: Partial<Omit<RelayOptions, 'registry' | 'turns'>>;
   /** Tests: the attachments' store (a small size cap); `<assistant home>/attachments` otherwise. */
   attachments?: AttachmentStore;
+  /** Shows a folder to the person (File Explorer); tests pass a stub. */
+  openFolder?: (dir: string) => void;
 }
 
 export interface AssistantHandle {
@@ -308,6 +316,11 @@ const STATUS_PARTS: StatusPart[] = [
     caps: s.caps,
     /** A coding agent's turn's limits (changes, tool calls, active minutes per message; spec 4.10). */
     agent_caps: s.agent_caps,
+    /**
+     * The provider log for a problem report: the switch as saved, whether
+     * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, and its folder.
+     */
+    provider_log: { on: s.provider_log, env: debugLogEnvDir() !== null, folder: debugLogEnvDir() ?? providerLogDir() },
   }),
   ({ store }) => ({ keys: store.status(), storage: store.storage(), keys_notice: store.notice() }),
   ({ ledger }) => ({ spent_today_usd: round4(ledger.spentToday()) }),
@@ -1268,6 +1281,22 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       // Off: the apps connected now are cut off too (coding agents' connections stay).
       if (!r.settings.mcp.clients) closeExternalMcpConnections();
       ctx.sendJson(200, await assistantStatus());
+    }),
+  );
+
+  router.post(
+    '/api/assistant/log-folder/open',
+    local(async (ctx) => {
+      // The folder the log goes to now, else where the switch would put it.
+      const folder = debugLogDir() ?? debugLogEnvDir() ?? providerLogDir();
+      try {
+        await mkdir(folder, { recursive: true });
+        (deps.openFolder ?? openFolderOnThisPc)(folder);
+      } catch (err) {
+        ctx.sendJson(500, { ok: false, code: 'open_failed', error: `Could not open the folder: ${redact(err instanceof Error ? err.message : String(err))}` });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, folder });
     }),
   );
 

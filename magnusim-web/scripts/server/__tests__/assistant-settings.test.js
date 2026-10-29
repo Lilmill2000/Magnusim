@@ -53,6 +53,7 @@ describe('defaults and bounds', () => {
       agents: {},
       custom_agents: [],
       agent_caps: { changes: 24, calls: 400, turn_minutes: 60 },
+      provider_log: false,
     });
     assert.deepEqual(S.DEFAULT_SETTINGS, s);
     assert.equal(existsSync(join(ROOT, 'home')), false);
@@ -111,6 +112,7 @@ describe('defaults and bounds', () => {
     assert.equal(field({ effort: 'max' }), 'effort');
     assert.equal(field({ privacy: 'sometimes' }), 'privacy');
     assert.equal(field({ forget_consents: 'yes' }), 'forget_consents');
+    assert.equal(field({ provider_log: 'on' }), 'provider_log');
     assert.equal(field({ confirm_remote: 1 }), 'confirm_remote');
     assert.equal(field({ api_key: 'sk-not-here' }), 'api_key');
     assert.equal(field({ models: [] }), 'models');
@@ -238,6 +240,16 @@ describe('the base URL', () => {
     assert.equal(n.caps.turn_usd, 2);
     assert.equal(n.models.openai, 'gpt-6.1-sol');
     assert.deepEqual(S.normalizeSettings({ caps: { turn_usd: 50, day_usd: 10 } }).caps, S.defaultSettings().caps);
+  });
+});
+
+describe('the provider log for a problem report', () => {
+  it('a page switches it on and off; a file keeps it only as true or false', () => {
+    const on = S.validatePatch(S.defaultSettings(), { provider_log: true });
+    assert.deepEqual([on.ok, on.settings.provider_log], [true, true]);
+    assert.equal(S.validatePatch(on.settings, { provider_log: false }).settings.provider_log, false);
+    assert.equal(S.normalizeSettings({ provider_log: true }).provider_log, true);
+    assert.equal(S.normalizeSettings({ provider_log: 'yes' }).provider_log, false);
   });
 });
 

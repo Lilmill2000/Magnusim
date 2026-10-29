@@ -162,7 +162,7 @@ export function defaultHostTools(port: () => number | null | undefined, more: Pa
     },
     assistantSettings: async () => {
       const s = await loadSettings();
-      return { effort: s.effort, privacy: s.privacy, caps: { ...s.caps } as unknown as Record<string, number> };
+      return { effort: s.effort, privacy: s.privacy, caps: { ...s.caps } as unknown as Record<string, number>, provider_log: s.provider_log };
     },
     spentToday: async () => (await spendLedger()).spentToday(),
     version: appVersion,

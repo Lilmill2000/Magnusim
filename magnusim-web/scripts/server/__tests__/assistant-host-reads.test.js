@@ -38,7 +38,7 @@ function tools(o = {}) {
     assistant: async () => ({ provider: 'anthropic', model: 'm' }),
     version: async () => '0.5.0',
     plugins: () => [],
-    assistantSettings: async () => ({ effort: 'default', privacy: o.privacy ?? 'ask', caps: { turn_usd: 8 } }),
+    assistantSettings: async () => ({ effort: 'default', privacy: o.privacy ?? 'ask', caps: { turn_usd: 8 }, provider_log: o.providerLog ?? false }),
     spentToday: async () => 1.234,
     ...o,
   });
@@ -60,7 +60,7 @@ describe('app_status', () => {
   it('the Assistant\'s own settings read only, today\'s spend, hardware and units; nothing writes them', async () => {
     fresh();
     const d = await ok('app_status', {});
-    assert.deepEqual(d.assistant, { provider: 'anthropic', model: 'm', effort: 'default', privacy: 'ask', caps: { turn_usd: 8 }, spent_today_usd: 1.23, can_change_these: false });
+    assert.deepEqual(d.assistant, { provider: 'anthropic', model: 'm', effort: 'default', privacy: 'ask', caps: { turn_usd: 8 }, provider_log: false, spent_today_usd: 1.23, can_change_these: false });
     assert.deepEqual(d.hardware, { cores: 8, ram_gb: 32, openfoam: 'ok', checked_at: '2026-10-20T10:00:00Z' });
     assert.equal(d.units, 'Metric');
     assert.deepEqual(d.plugins.map((p) => [p.key, p.on, p.env]), [
@@ -70,6 +70,12 @@ describe('app_status', () => {
     // Another project's queued run: its kind and place only.
     assert.deepEqual(d.compute.queue, [{ kind: 'solve', mine: false, position: 1 }]);
     assert.equal(d.where, 'workbench');
+  });
+  it('whether the provider log for a problem report is on (the person switches it; app_status reads it)', async () => {
+    fresh();
+    const d = await tools({ assistantSettings: async () => ({ effort: 'default', privacy: 'ask', caps: { turn_usd: 8 }, provider_log: true }) }).app_status.run({}, rt());
+    assert.equal(d.ok, true);
+    assert.deepEqual([d.data.assistant.provider_log, d.data.assistant.can_change_these], [true, false]);
   });
   it("this turn's spend and caps so far, read when asked (read-only; none outside a turn)", async () => {
     fresh();

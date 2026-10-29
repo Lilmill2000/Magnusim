@@ -136,6 +136,12 @@ export interface AssistantStatus {
   ready_reason?: string | null;
   /** Limits for a turn on a coding agent (absent from a server without them in its status). */
   agent_caps?: AgentCaps;
+  /**
+   * The provider log for a problem report (Settings → Assistant): `on` the switch as saved, `env`
+   * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, `folder` where it is kept
+   * (absent from an older server).
+   */
+  provider_log?: { on: boolean; env: boolean; folder: string };
   /** When the coding agents were last looked for (null: not since the server started). */
   agents_checked_at?: string | null;
   /** How an agent's whole tree is stopped on this PC ('best_effort': Windows PowerShell is blocked). */

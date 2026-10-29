@@ -1,8 +1,11 @@
 /**
  * The provider debug log, opt-in: with MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder> in the server's
- * environment (read once, at the first use), every model request an adapter sends appends one
- * JSON row to <folder>/provider.jsonl, a local file only. Unset, nothing is kept and nothing
- * costs anything (debugCall() returns null).
+ * environment (read once, at the first use), or while Settings → Assistant's "Keep a provider
+ * log for a problem report" is on (settings.provider_log, read at each request: then the folder
+ * is <home>/assistant/logs, providerLogDir), every model request an adapter sends appends one
+ * JSON row to <folder>/provider.jsonl, a local file only. Off, nothing is kept and nothing
+ * costs anything (debugCall() returns null). Past PROVIDER_LOG_MAX the file becomes
+ * provider.1.jsonl (the one before it goes) and a new one starts.
  *
  * A row: time, turn and step (debugScoped, from the loop), dialect, model, attempt (strict,
  * reduced, loose; for a local server no_images, with_images, without_images), for a cloud request
@@ -20,14 +23,20 @@
  * queue whose failures are swallowed (one log line), so the log never breaks or holds a turn.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { assistantDataDir } from './home.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
+import { assistantState } from './state.ts';
 import type { ProviderAdapter, ProviderId, ProviderResult } from './types.ts';
 
 export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
 export const DEBUG_LOG_FILE = 'provider.jsonl';
+/** The file before the current one (PROVIDER_LOG_MAX). */
+export const DEBUG_LOG_OLD = 'provider.1.jsonl';
+/** The provider log's file starts again past this size (the one before it kept as DEBUG_LOG_OLD). */
+export const PROVIDER_LOG_MAX = 64 * 1024 * 1024;
 /** The longest row, in characters. */
 export const MAX_ROW = 4 * 1024 * 1024;
 /** The longest error body kept. */
@@ -41,24 +50,36 @@ const BODY_WAIT_MS = 5_000;
 const REQUEST_ID_HEADERS = ['request-id', 'x-request-id'];
 const BASE64 = /^(data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=\r\n]+$/;
 
-let dir: string | null | undefined;
-let made = false;
+let envDir: string | null | undefined;
+let made: string | null = null;
 let warned = false;
 let queue: Promise<void> = Promise.resolve();
 
-/** The folder rows go to, or null when the log is off (the environment is read once). */
-export function debugLogDir(): string | null {
-  if (dir === undefined) {
+/** The folder MAGNUSIM_ASSISTANT_DEBUG_LOG names, or null (the environment is read once). */
+export function debugLogEnvDir(): string | null {
+  if (envDir === undefined) {
     const v = String(process.env[DEBUG_LOG_ENV] ?? '').trim();
-    dir = v ? resolve(v) : null;
+    envDir = v ? resolve(v) : null;
   }
-  return dir;
+  return envDir;
+}
+
+/** Where Settings' provider log goes: <home>/assistant/logs. */
+export function providerLogDir(): string {
+  return join(assistantDataDir(), 'logs');
+}
+
+/** The folder rows go to, or null when the log is off: the environment's, else Settings' switch's (as last read or saved). */
+export function debugLogDir(): string | null {
+  const env = debugLogEnvDir();
+  if (env) return env;
+  return assistantState().settings.cache?.provider_log === true ? providerLogDir() : null;
 }
 
 /** Tests: read the environment again at the next use. */
 export function resetDebugLogForTests(): void {
-  dir = undefined;
-  made = false;
+  envDir = undefined;
+  made = null;
   warned = false;
 }
 
@@ -191,11 +212,18 @@ function enqueue(build: Promise<string>): void {
   queue = queue
     .then(async () => {
       const line = await build;
-      if (!made) {
+      if (made !== folder) {
         await mkdir(folder, { recursive: true });
-        made = true;
+        made = folder;
       }
-      await appendFile(join(folder, DEBUG_LOG_FILE), `${line}\n`, 'utf8');
+      const file = join(folder, DEBUG_LOG_FILE);
+      // Past its size the file starts again; the one before it is kept.
+      const size = await stat(file).then(
+        (st) => st.size,
+        () => 0,
+      );
+      if (size + line.length > PROVIDER_LOG_MAX) await rename(file, join(folder, DEBUG_LOG_OLD));
+      await appendFile(file, `${line}\n`, 'utf8');
     })
     .catch((err: unknown) => {
       if (warned) return;

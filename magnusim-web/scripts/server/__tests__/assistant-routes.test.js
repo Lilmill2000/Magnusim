@@ -69,10 +69,12 @@ let port;
 let router;
 let handle;
 const agent = new http.Agent({ keepAlive: true, maxSockets: 8 });
+/** The folders Open log folder showed (File Explorer, stubbed). */
+const opened = [];
 
 before(async () => {
   router = new Router();
-  handle = routes.registerAssistantRoutes(router, { port: () => port });
+  handle = routes.registerAssistantRoutes(router, { port: () => port, openFolder: (dir) => opened.push(dir) });
   server = await serve(router);
   port = server.address().port;
 });
@@ -170,6 +172,8 @@ describe('only on this PC: the remote census', () => {
       '/api/assistant/key',
       '/api/assistant/key/remove',
       '/api/assistant/launch/check',
+      '/api/assistant/log-folder/open',
+      '/api/assistant/log_folder/open',
       '/api/assistant/mcp',
       '/api/assistant/models',
       '/api/assistant/relay/attachment',
@@ -391,6 +395,22 @@ describe('status, settings and keys', () => {
     assert.deepEqual(homeFiles(), []);
     const head = await request('HEAD', '/api/assistant/status');
     assert.equal(head.status, 200);
+  });
+
+  it("the provider log for a problem report: the status says the switch, the variable and the folder; Open log folder makes the folder and shows it; the switch saves", async () => {
+    const folder = join(ROOT, 'home', 'assistant', 'logs');
+    let r = await get('/api/assistant/status');
+    assert.deepEqual(r.json.provider_log, { on: false, env: false, folder });
+    assert.ok(!existsSync(folder), 'reading the status makes nothing');
+    r = await post('/api/assistant/log-folder/open', {});
+    assert.deepEqual([r.status, r.json], [200, { ok: true, folder }]);
+    assert.deepEqual(opened, [folder]);
+    assert.ok(existsSync(folder));
+    r = await post('/api/assistant/settings', { provider_log: true });
+    assert.deepEqual([r.status, r.json.provider_log], [200, { on: true, env: false, folder }]);
+    r = await post('/api/assistant/settings', { provider_log: false });
+    assert.equal(r.json.provider_log.on, false);
+    rmSync(folder, { recursive: true, force: true });
   });
 
   it('settings: saved at once, answered with the status; 400 with the field; 409 to confirm a server outside this PC', async () => {

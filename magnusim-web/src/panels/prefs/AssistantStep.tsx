@@ -4,7 +4,8 @@
  * always listed whatever the default (each with its endpoint, key, model and connection Test,
  * saved for that provider only) and below them the one Effort both cloud providers use (a
  * single setting, so it is shown once and says so), the coding agents (AssistantStepAgents.tsx), other apps
- * (AssistantStepMcp.tsx), privacy, the limits (API keys' and coding agents') and today's spend. A conversation may use any provider, so nothing is removed when the default
+ * (AssistantStepMcp.tsx), privacy, the limits (API keys' and coding agents') and today's spend, and
+ * the provider log for a problem report (its switch, off by default, and Open log folder). A conversation may use any provider, so nothing is removed when the default
  * changes. The default's card starts open; the others open with Set up. Every change saves at once,
  * and every save answers with the whole status (src/assistant/status.ts). Leaving the step
  * saves a key pasted but not saved, and waits for the changes on their way (stepChange):
@@ -113,6 +114,12 @@ export const SHARED_PC_TEXT =
 export const LOCAL_LIMITS_TEXT = 'Local servers cost nothing; the step and time limits still apply.';
 export const SERVER_LIMITS_TEXT = "Magnusim can't price a server that isn't on this PC, so the $ limits don't apply to it; the step and time limits do.";
 export const LOCAL_PRIVACY_TEXT = 'On this PC: project data stays here.';
+export const PROVIDER_LOG_LABEL = 'Keep a provider log for a problem report';
+export const PROVIDER_LOG_TEXT =
+  'While on, every request to a cloud provider or local server is written to a file on this PC, with what came back: your messages and the project data they carry, but never a key. Turn it off when the report is sent.';
+export const PROVIDER_LOG_ENV_TEXT = 'MAGNUSIM_ASSISTANT_DEBUG_LOG keeps the log on while Magnusim runs, whatever this switch says.';
+export const OPEN_LOG_FOLDER = 'Open log folder';
+export const logFolderText = (folder: string): string => `Kept in ${folder}`;
 const OLLAMA_HINT_TEXT =
   "Ollama gives a model a 4K context unless told otherwise, which can silently cut off the tools Magnusim sends. Give the model a larger context (num_ctx in its Modelfile).";
 const TEMPLATE_FIX = 'In LM Studio, pick a model marked for tool use or load a template that has them.';
@@ -360,6 +367,7 @@ function AssistantSettings({ status }: { status: AssistantStatus }) {
       <AssistantStepMcp status={status} />
       <PrivacyBlock status={status} />
       <LimitsBlock status={status} />
+      <ProblemReportBlock status={status} />
       <TestSwitchLine status={status} />
     </div>
   );
@@ -1198,6 +1206,67 @@ function CapField({
 }
 
 // ---------------------------------------------------------------- test switches
+
+// ---------------------------------------------------------------- the provider log (a problem report)
+
+/** The provider log's switch (settings.provider_log), what it keeps, and Open log folder. */
+function ProblemReportBlock({ status }: { status: AssistantStatus }) {
+  const part = status.provider_log;
+  const [pending, setPending] = useState<boolean | null>(null);
+  const [error, setError] = useState('');
+  if (!part) return null;
+  const shown = pending ?? part.on;
+  const toggle = async (on: boolean): Promise<boolean> => {
+    setError('');
+    setPending(on);
+    const r = await writeStatus(SETTINGS, { provider_log: on });
+    setPending(null);
+    if (!r.ok) setError(r.error.message);
+    return r.ok;
+  };
+  const open = async () => {
+    setError('');
+    try {
+      await assistantPost('/api/assistant/log-folder/open', {});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <div className="wiz-assistant-block" data-assistant-provider-log={part.on ? 'on' : 'off'}>
+      <h3 className="wiz-assistant-h">Problem report</h3>
+      <label className="wiz-assistant-switch">
+        <span className="switch">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={shown}
+            aria-checked={shown}
+            data-assistant-provider-log-switch="1"
+            onChange={(e) => void stepChange(toggle(e.currentTarget.checked))}
+          />
+          <span className="slider" aria-hidden="true" />
+        </span>
+        <span>{PROVIDER_LOG_LABEL}</span>
+      </label>
+      <p className="wiz-assistant-meta">{PROVIDER_LOG_TEXT}</p>
+      {part.env ? (
+        <p className="wiz-assistant-warn" data-assistant-provider-log-env="1">
+          {PROVIDER_LOG_ENV_TEXT}
+        </p>
+      ) : null}
+      <div className="wiz-assistant-row">
+        <button type="button" className="home-btn" data-assistant-log-folder="1" onClick={() => void open()}>
+          {OPEN_LOG_FOLDER}
+        </button>
+        <span className="wiz-assistant-meta" data-assistant-log-folder-path="1">
+          {logFolderText(part.folder)}
+        </span>
+      </div>
+      <ErrorLine text={error} hook={{ 'data-assistant-provider-log-error': '1' }} />
+    </div>
+  );
+}
 
 function TestSwitchLine({ status }: { status: AssistantStatus }) {
   const parts: string[] = [];

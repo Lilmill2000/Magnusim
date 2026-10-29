@@ -187,6 +187,7 @@
     { "row": "P17", "editions": ["magnusim"], "person_only": true },
     { "row": "P18", "editions": ["magnusim"], "paths": [{ "tool": "app_status" }], "person_only": "changing the privacy mode or forgetting answers" },
     { "row": "P19", "editions": ["magnusim"], "paths": [{ "tool": "app_status" }], "person_only": "changing the limits" },
+    { "row": "P25", "editions": ["magnusim"], "notes": "Settings → Assistant: Keep a provider log for a problem report (app_status says whether it is on) and Open log folder", "paths": [{ "tool": "app_status" }], "person_only": "turning the provider log on or off, and opening its folder" },
     { "row": "P20", "editions": ["magnusim"], "person_only": true },
     { "row": "P21", "editions": ["magnusim"], "person_only": true },
     { "row": "P24", "editions": ["magnusim", "cad"], "cad_control": { "reach": "settings", "selector": "#wiz-rail li[data-wiz-key=\"appearance\"]" }, "notes": "Settings → Appearance: the theme (light, dark, the system's), text size and icon size (a change only when the person asked)", "paths": [{ "tool": "core__appearance", "page": true }, { "tool": "core__set_appearance", "page": true }] },

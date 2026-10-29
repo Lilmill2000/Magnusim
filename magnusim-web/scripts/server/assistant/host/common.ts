@@ -73,7 +73,7 @@ export interface HostToolDeps {
   version(): Promise<string>;
   plugins(): Array<Record<string, unknown>>;
   /** The Assistant's own settings, read only: effort, privacy mode, caps. */
-  assistantSettings?(): Promise<{ effort: string; privacy: string; caps: Record<string, number> }>;
+  assistantSettings?(): Promise<{ effort: string; privacy: string; caps: Record<string, number>; provider_log?: boolean }>;
   /** Today's spend (the ledger). */
   spentToday?(): Promise<number>;
   /** The ui_sync emitter (scripts/server/ui-sync.ts uiSync). */
