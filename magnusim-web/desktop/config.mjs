@@ -9,8 +9,10 @@ export const APP_NAME = 'Magnusim CAD';
 /**
  * The server's environment: the CAD edition; projects in Documents\Magnusim CAD (D5: the app's
  * own folder; MAGNUSIM_PROJECTS_ROOT set by the person wins, e.g. Magnusim's folder to share it);
- * prefs in the app's user data. The Assistant's home stays Magnusim's (%APPDATA%\Magnusim), so
- * one sign-in covers both apps.
+ * prefs in the app's user data (%APPDATA%\Magnusim CAD\local.json). The Assistant's settings and
+ * keys live beside them in the app's own folder (%APPDATA%\Magnusim CAD\local.assistant: the
+ * Assistant's home follows MAGNUSIM_LOCAL_JSON, assistant/home.ts), not in Magnusim's, and the
+ * uninstaller's "Also remove settings" (resources/uninstall.nsh) removes them too.
  * @param {{ documents: string, userData: string, env?: NodeJS.ProcessEnv }} o
  */
 export function serverEnv({ documents, userData, env = process.env }) {

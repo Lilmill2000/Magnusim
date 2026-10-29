@@ -15,7 +15,7 @@ describe('serverEnv', () => {
     assert.equal(env.MAGNUSIM_PROJECTS_ROOT, join(where.documents, 'Magnusim CAD'));
     assert.equal(env.MAGNUSIM_LOCAL_JSON, join(where.userData, 'local.json'));
     assert.equal(env.PATH, 'x', "the rest of the app's environment goes with it");
-    assert.equal(env.MAGNUSIM_ASSISTANT_HOME, undefined, "the Assistant's home stays Magnusim's");
+    assert.equal(env.MAGNUSIM_ASSISTANT_HOME, undefined, "the Assistant's home follows MAGNUSIM_LOCAL_JSON: local.assistant in the app's own folder");
     // In the utility process's own environment it would start that process as Node (exit 9).
     assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   });

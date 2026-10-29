@@ -26,8 +26,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const BANANA_OUT = 'models/banana.bin';
 
 /**
- * The recipe (round 3, approved by Daniel: the coordinator's native preview banana3.py, our own
- * tables read off the shape of a side-on photo). Built along +X here (Z up), turned to +Y at the
+ * The recipe (round 3, approved by Daniel: that of a native preview script, our own tables read
+ * off the shape of a side-on photo). Built along +X here (Z up), turned to +Y at the
  * end:
  * - centreline: the table CENTRE (x, z), through a natural cubic spline in x;
  * - diameter: the table DIAM (x), linear between stations: a blunt blossom end, a long even body
