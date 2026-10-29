@@ -38,12 +38,12 @@ describe('openServerLog', () => {
     let t = Date.parse('2026-10-29T12:00:00.000Z');
     const log = openServerLog({ file, redact: scrub, now: () => new Date((t += 1000)) });
     assert.equal(existsSync(dir), false, 'nothing is made before a line is written');
-    log.write('info', '[assistant] connection test {"provider":"anthropic","ok":true}');
+    log.write('info', '[assistant] connection test {"provider":"cloud","ok":true}');
     log.write('warn', 'a plugin could not load');
     log.write('error', 'Error: boom\n    at x (file.js:1:1)\r\n    at y (file.js:2:2)\n');
     log.write('debug', 42);
     assert.deepEqual(lines(file), [
-      '2026-10-29T12:00:01.000Z info  [assistant] connection test {"provider":"anthropic","ok":true}',
+      '2026-10-29T12:00:01.000Z info  [assistant] connection test {"provider":"cloud","ok":true}',
       '2026-10-29T12:00:02.000Z warn  a plugin could not load',
       // A stack: every line of it carries the time, so each is found by its time.
       '2026-10-29T12:00:03.000Z error Error: boom',
