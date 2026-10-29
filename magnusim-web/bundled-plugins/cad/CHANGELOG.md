@@ -29,11 +29,13 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   points typed as x, y, z.
 - Parameters have a comment, under each row.
 - Delete a body: right-click it in the tree (or select it and press Delete),
-  "Delete Body 1". It goes from the tree and the view, and "Delete body 1" is
+  "Delete Body 1". It goes from the tree and the view, and "Body-Delete 1" is
   added to the history (one undo step: Undo brings the body back). Several
   bodies selected are deleted by one feature. Edit the feature to change which
   bodies it deletes; delete or suppress it to bring them back. The Assistant
-  deletes bodies the same way.
+  deletes bodies the same way. While a panel is open, the bodies it shows
+  picked (Combine's target, say) are the panel's: Delete leaves them alone, and
+  a body's menu offers to delete only that body.
 - In Magnusim CAD, the desktop edition with no projects, a body has no "Leave
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation

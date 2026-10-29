@@ -11,7 +11,7 @@
 // Owner: P2-FEATURES (shared by its panels; INTEGRATE may lift it into the kit).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef } from 'react';
-import { setSelectionFilter, showForPanel } from '../../lib/selection';
+import { isPanelHighlight, setSelectionFilter, showForPanel } from '../../lib/selection';
 import type { AppServices } from '../../types/app';
 import { selectionKey, type PickResult, type SelectionItem, type SelectKind } from '../../types/selection';
 import type { ViewportHandle } from '../../types/viewport';
@@ -78,25 +78,41 @@ export function usePicker(services: AppServices, opts: PickerOptions): void {
  * Selection changes from elsewhere (a body row clicked in the tree) are passed
  * to `onOutside` with the items that are new, so a body field can take them;
  * items only taken out (a rebuild dropping a body) are not a pick.
+ * A selection that is just the panel's items is the panel's highlight
+ * (showForPanel), also when the person's click made it (the body row a field
+ * took, the selection a command opened the panel with): Delete and the next
+ * command's preselection leave it alone (userItems).
  */
 export function useSelectionMirror(services: AppServices, items: SelectionItem[], onOutside?: (items: SelectionItem[]) => void): void {
   const key = items.map(selectionKey).join('\n');
   const last = useRef<string>('');
+  const shown = useRef(items);
+  shown.current = items;
   const outside = useRef(onOutside);
   outside.current = onOutside;
   const assistant = useRef(false);
   assistant.current = usePanelOwner() === 'assistant';
   useEffect(() => {
     last.current = key;
-    const cur = services.selection.get().items.map(selectionKey).join('\n');
-    if (cur !== key) showForPanel(services.selection, items);
+    const sel = services.selection.get();
+    const cur = sel.items.map(selectionKey).join('\n');
+    if (cur !== key || (items.length > 0 && !isPanelHighlight(sel))) showForPanel(services.selection, items);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [services, key]);
   useEffect(() => {
+    let open = true;
     const off = services.selection.subscribe((s, prev) => {
       if (s.items === prev.items) return;
       const k = s.items.map(selectionKey).join('\n');
-      if (k === last.current) return;
+      if (k === last.current) {
+        // A click that selects just what the panel shows (its picked body's row again): still the panel's.
+        if (k && !isPanelHighlight(s))
+          queueMicrotask(() => {
+            const now = services.selection.get();
+            if (open && !isPanelHighlight(now) && now.items.map(selectionKey).join('\n') === last.current) showForPanel(services.selection, shown.current);
+          });
+        return;
+      }
       // Items only taken out (a rebuild that no longer makes a body this panel's
       // feature removed) are not a pick: only what is new goes to the panel.
       const mine = new Set(last.current ? last.current.split('\n') : []);
@@ -110,6 +126,7 @@ export function useSelectionMirror(services: AppServices, items: SelectionItem[]
       outside.current?.(added);
     });
     return () => {
+      open = false;
       off();
       const cur = services.selection.get().items.map(selectionKey).join('\n');
       if (cur === last.current && cur) services.selection.set({ items: [] });

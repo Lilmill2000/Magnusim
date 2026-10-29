@@ -19,7 +19,7 @@ import { isRemovedFeature, removedFeatureMessage } from '../doc/features/removed
 import { isPersonEditing, PersonEditing } from '../doc/person-editing';
 import { openModal } from '../lib/modal';
 import { pendingEdits } from '../lib/pendingEdits';
-import { clearSelection, selectItem, showForPanel } from '../lib/selection';
+import { clearSelection, selectItem, showForPanel, userItems } from '../lib/selection';
 import { targetOfItem } from '../viewport/normal';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
@@ -856,7 +856,8 @@ export function createUiController(services: AppServices): UiController {
       // Delete body feature in the history, one undo step. Several bodies selected, this one among
       // them: one feature for them all.
       if (canDelete) {
-        const picked = services.selection.get().items.flatMap((it) => (it.kind === 'body' && d.rebuild.bodies.some((b) => b.id === it.body) ? [it.body] : []));
+        // The person's own selection, not an open panel's picks (Combine's target and tool bodies).
+        const picked = userItems(services.selection).flatMap((it) => (it.kind === 'body' && d.rebuild.bodies.some((b) => b.id === it.body) ? [it.body] : []));
         const many = picked.length > 1 && picked.includes(id);
         items.push({ sep: true, id: 'sep-body-delete' }, { id: 'body-delete', label: many ? `Delete ${picked.length} bodies` : `Delete ${info.name}`, danger: true, disabled: block, run: () => c.deleteBodies(many ? picked : [id]) });
       }

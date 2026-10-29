@@ -21,7 +21,9 @@ export const deleteBodyDef: FeatureTypeDef<DeleteBodyFeature, Record<string, nev
     return {
       id: newId('f'),
       type: 'delete_body',
-      name: nextName('Delete body', doc.features.map((f) => f.name)),
+      // "Body-Delete 1" (SOLIDWORKS' Body-Delete/Keep1), never "Delete body 1": that read as Body 1
+      // deleted when Body 3 was.
+      name: nextName('Body-Delete', doc.features.map((f) => f.name)),
       bodies: [],
       ...init,
     } as DeleteBodyFeature;

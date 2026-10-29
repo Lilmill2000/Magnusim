@@ -165,7 +165,14 @@ with the host once for the page's life, and its chip goes in the dock.
   command's preselection reads `userItems` / `userSelection`, which leave a
   panel's highlight out (P4a review: the Fillet panel's face opened Chamfer with
   it and chamfered six edges). Any other write makes a new array, so a click on
-  the same item makes it the user's. Body vertices are asked once per drawn
+  the same item makes it the user's, except while a panel's `useSelectionMirror`
+  shows just those items: a selection that is exactly the panel's picks (the body
+  row a field took, the selection a command opened the panel with, that row
+  clicked again) is marked as the panel's too. Delete with only bodies selected
+  and a body's menu ("Delete N bodies") leave a panel's highlight out as well, so
+  Delete with Combine open never deletes its picked bodies (a feature shown for
+  the Assistant's panel is still the person's to delete: that takes it over).
+  Body vertices are asked once per drawn
   `id|tessKey`; a key that stops being drawn leaves both the cache and the
   in-flight set, so a body that comes back (an Undo) is asked again.
 
@@ -427,7 +434,9 @@ with the host once for the page's life, and its chip goes in the dock.
   Delete key with only bodies selected) adds one through `UiController.deleteBodies`
   (`beginNew` + `commit`: one undo step for every body selected); its panel edits
   which bodies; the Assistant's `direct` kind `delete_body` makes the same record.
-  An older CAD shows its row red and keeps it.
+  Its rows are named "Body-Delete N" (SOLIDWORKS' Body-Delete/Keep1), never
+  "Delete body N", which read as Body N deleted. An older CAD shows its row red
+  and keeps it.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a

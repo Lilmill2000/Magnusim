@@ -9,7 +9,7 @@
 import type { AppServices } from '../types/app';
 import type { CommandDef } from '../types/commands';
 import { bindCommandKeys, keyLabel } from '../app/keybinds';
-import { clearSelection } from '../lib/selection';
+import { clearSelection, isPanelHighlight } from '../lib/selection';
 import { WELL_KNOWN_COMMANDS } from '../types/modules';
 import type { SelectionItem } from '../types/selection';
 import { targetOfItem } from '../viewport/normal';
@@ -165,14 +165,17 @@ export function installUi(services: AppServices): () => void {
     }),
     bindCommandKeys(services, 'ui.delete', {
       run: () => {
-        const items = services.selection.get().items;
+        const sel = services.selection.get();
+        const items = sel.items;
         const ids = items.flatMap((it) => (it.kind === 'feature' ? [it.feature] : []));
         // Several features: one Delete of them all, one undo step (as the Assistant's delete).
         if (ids.length > 1) ui.deleteFeatures(ids);
         else if (ids.length) ui.deleteFeature(ids[0]);
-        // Only bodies selected: one Delete body feature for them all, as the body menu's Delete.
+        // Only bodies selected: one Delete body feature for them all, as the body menu's Delete. Bodies
+        // an open panel shows picked (showForPanel: Combine's target) are the panel's, not the person's
+        // selection: Delete leaves them, the panel and the model alone (the panel's × takes one out).
         if (!ids.length && items.length && items.every((it) => it.kind === 'body') && services.doc.features.get('delete_body')) {
-          ui.deleteBodies(items.flatMap((it) => (it.kind === 'body' ? [it.body] : [])));
+          if (!isPanelHighlight(sel)) ui.deleteBodies(items.flatMap((it) => (it.kind === 'body' ? [it.body] : [])));
           return;
         }
         // Only faces selected: "Delete faces and heal" when that module is there and can run (P2).

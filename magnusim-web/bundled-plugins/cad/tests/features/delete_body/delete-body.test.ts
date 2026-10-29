@@ -36,7 +36,7 @@ const units = createUnitsService(() => ({ length: 'mm', angle: 'deg' }));
 const built = (id: string, shape: number): BuiltBody => ({ id, shape, valid: true, feature: `f_${id}`, names: null });
 const BODIES = [built('b_1', 1), built('b_2', 2)];
 const docOf: CadDoc = { ...emptyDoc('metric'), bodies: { b_1: { name: 'Body 1', color: '#bdc9db' }, b_2: { name: 'Body 2', color: '#bdc9db' } } };
-const f = (over: Partial<DeleteBodyFeature> = {}): DeleteBodyFeature => ({ id: 'f_d', type: 'delete_body', name: 'Delete body 1', bodies: ['b_1'], ...over });
+const f = (over: Partial<DeleteBodyFeature> = {}): DeleteBodyFeature => ({ id: 'f_d', type: 'delete_body', name: 'Body-Delete 1', bodies: ['b_1'], ...over });
 
 describe('Delete body: the build', () => {
   it('drops the bodies with no kernel call; a body named twice once', async () => {
@@ -49,11 +49,11 @@ describe('Delete body: the build', () => {
 
   it('a body that is not there at this point fails it, by name; nothing picked is said', async () => {
     const r = await deleteBodyDef.build(f({ bodies: ['b_1', 'b_9'] }), {}, ctxOf(scriptKernel(), BODIES, { doc: docOf }));
-    expect(r).toEqual({ ok: false, message: 'Delete body 1 failed: a deleted body is not there at this point' });
+    expect(r).toEqual({ ok: false, message: 'Body-Delete 1 failed: a deleted body is not there at this point' });
     const two = await deleteBodyDef.build(f({ bodies: ['b_1', 'b_2'] }), {}, ctxOf(scriptKernel(), [BODIES[0]], { doc: docOf }));
-    expect(two).toEqual({ ok: false, message: 'Delete body 1 failed: Body 2 is not there at this point' });
+    expect(two).toEqual({ ok: false, message: 'Body-Delete 1 failed: Body 2 is not there at this point' });
     expect(deleteBodyDef.incomplete(f({ bodies: [] }), units)).toBe('Pick the bodies to delete');
-    expect(deleteBodyDef.create(docOf, {})).toMatchObject({ type: 'delete_body', name: 'Delete body 1', bodies: [] });
+    expect(deleteBodyDef.create(docOf, {})).toMatchObject({ type: 'delete_body', name: 'Body-Delete 1', bodies: [] });
   });
 });
 
@@ -89,10 +89,10 @@ describe('Delete body: through the document', () => {
     doc.beginNew('delete_body', { bodies: [one.body!] } as Partial<Feature>).commit();
     await doc.settled();
     expect(shown(doc)).toEqual(['Body 2']);
-    expect(names(doc).at(-1)).toBe('Delete body 1');
+    expect(names(doc).at(-1)).toBe('Body-Delete 1');
     const id = doc.state.get().doc.features.at(-1)!.id;
     expect(doc.state.get().rebuild.features[id]?.state).toBe('ok');
-    expect(doc.state.get().history).toMatchObject({ canUndo: true, undoLabel: 'Delete body 1' });
+    expect(doc.state.get().history).toMatchObject({ canUndo: true, undoLabel: 'Body-Delete 1' });
     // Its body's definition stays (Extrude 1 still makes it): Undo and Redo only move the feature.
     expect(doc.state.get().doc.bodies[one.body!]?.name).toBe('Body 1');
     doc.undo();
@@ -109,7 +109,7 @@ describe('Delete body: through the document', () => {
     await doc.settled();
     expect(shown(doc)).toEqual(['Body 2']);
     // It uses the body: the Extrude that makes it cannot go first, nor move below it.
-    expect(doc.removeBlock(one.extrude)).toBe('Delete body 1 uses Body 1 of Extrude 1: delete Delete body 1 or change what it uses first');
+    expect(doc.removeBlock(one.extrude)).toBe('Body-Delete 1 uses Body 1 of Extrude 1: delete Body-Delete 1 or change what it uses first');
     // Deleted, the body is back.
     expect(doc.remove(id)).toEqual({ ok: true });
     await doc.settled();
@@ -126,7 +126,7 @@ describe('Delete body: through the document', () => {
     doc.beginNew('delete_body', { bodies: [one.body!, 'b_gone'] } as Partial<Feature>).commit();
     await doc.settled();
     const id = doc.state.get().doc.features.at(-1)!.id;
-    expect(doc.state.get().rebuild.features[id]).toMatchObject({ state: 'error', message: 'Delete body 1 failed: a deleted body is not there at this point' });
+    expect(doc.state.get().rebuild.features[id]).toMatchObject({ state: 'error', message: 'Body-Delete 1 failed: a deleted body is not there at this point' });
     expect(shown(doc)).toEqual(['Body 1', 'Body 2']);
     const s = doc.beginEdit(id);
     s.update({ bodies: [one.body!] } as Partial<Feature>);
@@ -137,8 +137,8 @@ describe('Delete body: through the document', () => {
   });
 
   it('a stored Part keeps it as it is', () => {
-    const raw = { schema: 2, units: { length: 'mm', angle: 'deg' }, params: [], bodies: { b_1: { name: 'Body 1', color: '#bdc9db' } }, features: [{ id: 'f_d', type: 'delete_body', name: 'Delete body 1', bodies: ['b_1'] }] };
-    expect(readDoc(raw).features).toEqual([{ id: 'f_d', type: 'delete_body', name: 'Delete body 1', bodies: ['b_1'] }]);
+    const raw = { schema: 2, units: { length: 'mm', angle: 'deg' }, params: [], bodies: { b_1: { name: 'Body 1', color: '#bdc9db' } }, features: [{ id: 'f_d', type: 'delete_body', name: 'Body-Delete 1', bodies: ['b_1'] }] };
+    expect(readDoc(raw).features).toEqual([{ id: 'f_d', type: 'delete_body', name: 'Body-Delete 1', bodies: ['b_1'] }]);
   });
 });
 
@@ -166,7 +166,7 @@ async function makeServices() {
 const item = (menu: MenuEntry[], id: string) => menu.find((e): e is MenuItem => e.id === id && !('sep' in e));
 
 describe("Delete body: the body menu's Delete and the Delete key", () => {
-  it('Delete <body> is the last item, in danger red; disabled with the reason while the Part cannot be edited; it adds Delete body 1 in one undo step', async () => {
+  it('Delete <body> is the last item, in danger red; disabled with the reason while the Part cannot be edited; it adds Body-Delete 1 in one undo step', async () => {
     const { doc, services } = await makeServices();
     const one = block(doc);
     block(doc, { at: [40, 0, 0] });
@@ -183,7 +183,7 @@ describe("Delete body: the body menu's Delete and the Delete key", () => {
     item(ui.bodyMenu(one.body!), 'body-delete')!.run();
     await doc.settled();
     expect(shown(doc)).toEqual(['Body 2']);
-    expect(names(doc).at(-1)).toBe('Delete body 1');
+    expect(names(doc).at(-1)).toBe('Body-Delete 1');
     doc.undo();
     await doc.settled();
     expect(shown(doc)).toEqual(['Body 1', 'Body 2']);
