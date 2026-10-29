@@ -103,6 +103,23 @@ describe('get_model brief', () => {
   );
 
   it(
+    "in Magnusim CAD (projectLinks false) a body row says nothing of a simulation, even one left out in Magnusim: the person sees no such state there",
+    async () => {
+      h = await assistantHarness({ title: 'Plate test', projectLinks: false });
+      const { extrude } = await plate(h);
+      const id = h.doc.state.get().rebuild.bodies.find((b) => b.feature === extrude)!.id;
+      // The design was saved in Magnusim with the body left out (the stored field stays with it).
+      h.doc.setBodyInSimulation(id, false);
+      expect(h.doc.state.get().doc.bodies[id]?.simulation).toBe(false);
+      const d = (await h.ok('get_model', BRIEF)).data as Row;
+      const [body] = d.bodies as Row[];
+      expect(body).toMatchObject({ name: 'Body 1', visible: true });
+      expect(body).not.toHaveProperty('simulation');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
     'a 20-feature Part fits 8 KB; on a local turn 3 KB, the older features collapsed with their errors named; 85 collapse above 80',
     async () => {
       h = await assistantHarness();

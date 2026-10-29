@@ -207,8 +207,9 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
     bbox_mm: [vec(b.bbox.slice(0, 3)), vec(b.bbox.slice(3, 6))],
     faces: b.faces,
     visible: b.visible,
-    simulation: s.doc.bodies[b.id]?.simulation !== false,
   };
+  // Magnusim CAD (projectLinks false) has no simulation: the person sees no such state, nor does the Assistant.
+  if (services.bridge.projectLinks()) row.simulation = s.doc.bodies[b.id]?.simulation !== false;
   if (row.volume_mm3 === null && b.faces > EAGER_FACES) row.measure = 'use measure';
   const maker = bodyMaker(services.doc.features, s.doc, b.id);
   if (maker) row.made_by = maker.name;
