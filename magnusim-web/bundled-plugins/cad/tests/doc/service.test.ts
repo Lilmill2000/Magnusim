@@ -12,10 +12,12 @@ import { SAVE_BURST } from '../../src/doc/autosave';
 import { createBridge } from '../../src/lib/bridge';
 import { createBus } from '../../src/lib/bus';
 import { commitPendingEdits, pendingEditsChanged, registerPendingEdit } from '../../src/lib/pendingEdits';
-import type { ExtrudeFeature, Feature, SketchFeature } from '../../src/types/doc';
+import type { CadView, ExtrudeFeature, Feature, SketchFeature } from '../../src/types/doc';
 import type { DocService, FeatureTypeDef } from '../../src/types/doc-service';
 import type { CadEvents } from '../../src/types/events';
 import { linearPatternDef } from '../../src/features/pattern/defs';
+import { refPlaneDef } from '../../src/features/refgeom/defs';
+import { constructShown } from '../../src/features/refgeom/scene';
 import { createFakeWorkspace, type FakeWorkspace } from '../fakes/workspace-sdk';
 import { block, BlockKernel, blockSketch, circleSketch, cylinder, profileOf, registerSolidFeatures } from './blocks';
 
@@ -280,6 +282,42 @@ describe('panel sessions and edits', () => {
     expect(doc.state.get().history.undoLabel).toBe(steps);
     await doc.flush();
     expect((ws.json(VIEW) as { view: { hiddenBodies: string[] } }).view.hiddenBodies).toEqual([b]);
+  });
+
+  it('a hidden reference plane is view state: no undo step, kept in view.json and read back on reopen; shown, the choice goes; an older view.json without it shows everything', async () => {
+    const open = async (ws?: FakeWorkspace) => {
+      const t = make(ws ? { ws } : {});
+      t.doc.features.register(refPlaneDef as unknown as FeatureTypeDef);
+      await t.doc.load();
+      return t;
+    };
+    const { doc, ws } = await open();
+    doc.beginNew('ref_plane', { plane: { kind: 'origin', plane: 'origin:top' }, distance: '20 mm' } as Partial<Feature>).commit();
+    await rebuilt(doc);
+    const id = doc.state.get().doc.features[0].id;
+    expect(doc.state.get().rebuild.features[id]?.state).toBe('ok');
+    const steps = doc.state.get().history.undoLabel;
+    doc.setSketchVisibility(id, 'hidden');
+    expect(doc.state.get().view.sketches).toEqual({ [id]: 'hidden' });
+    expect(constructShown(doc.state.get().view, id)).toBe(false);
+    expect(doc.state.get().history.undoLabel).toBe(steps);
+    await doc.flush();
+    expect((ws.json(VIEW) as { view: CadView }).view.sketches).toEqual({ [id]: 'hidden' });
+    doc.dispose();
+    const again = (await open(ws)).doc;
+    expect(again.state.get().view.sketches).toEqual({ [id]: 'hidden' });
+    await rebuilt(again);
+    // Hidden, it still builds (the features on it use it).
+    expect(again.state.get().rebuild.features[id]?.state).toBe('ok');
+    again.setSketchVisibility(id, null);
+    await again.flush();
+    expect((ws.json(VIEW) as { view: CadView }).view).not.toHaveProperty('sketches');
+    again.dispose();
+    // A view.json written before any choice was kept (no field): it loads, nothing hidden.
+    ws.folder.putJson(VIEW, { ...(ws.json(VIEW) as object), view: { rollback: null, hiddenBodies: [], expanded: ['origin'] } });
+    const old = (await open(ws)).doc;
+    expect(old.state.get().view.sketches).toBeUndefined();
+    expect(constructShown(old.state.get().view, id)).toBe(true);
   });
 
   it('the rollback bar stops the rebuild; new features go in at the bar', async () => {

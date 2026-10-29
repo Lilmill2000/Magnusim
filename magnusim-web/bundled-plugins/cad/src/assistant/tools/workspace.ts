@@ -46,19 +46,18 @@ import { keybindsFor, whereName, type Keybinds } from '../../app/keybinds';
 import { keybindPlace } from '../../ui/keybinds/places';
 import { parseCombo, type KeymapEntry } from '../../app/keymap';
 import { modeFor } from '../../sketch/mode';
-import { constructShown } from '../../features/refgeom/scene';
 import { stepFileName } from '../../features/export/panel';
 import { setExportPrefill } from '../../features/export/prefill';
 import { importRunsFor } from '../../features/import/runs';
 import { BANANA_COMMAND } from '../../features/scale';
 import { placeTaped, sketchPoints } from '../../features/scale/sketch-banana';
-import { sketchShown } from '../../features/sketch/view';
 import { normalTarget } from '../../viewport/normal';
 import { railsFor } from '../../ui/left-rails';
 import { barIdOf, collapseFlyouts } from '../../ui/flyouts';
 import { layoutModeOf, MAX_GROUP_W, MAX_ROWS, MIN_GROUP_W, MIN_ROWS, orderIds, rowsOf, toolbarPrefs, withMove, withPlace, type LayoutMode } from '../../ui/toolbar-layout';
 import { commandOnToolbar, narrowedOut, settleGroupWidth } from '../../ui/Toolbar';
 import { uiFor } from '../../ui/controller';
+import { featureShown } from '../../ui/tree/model';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
@@ -180,17 +179,11 @@ function eye(ctx: CallCtx, i: Input): ToolReply {
     return done(`${show ? 'Showed' : 'Hid'} ${b.name} in the view`, { body: b.name, shown: show });
   }
   const s = doc.state.get();
-  if (f.type === 'sketch') {
-    const shownNow = sketchShown(s.doc, s.view, doc.features, f.id);
+  // A sketch or a reference plane, axis or point: its row's eye and its menu's Hide / Show.
+  const shownNow = featureShown(s.doc, s.view, doc.features, f.id);
+  if (shownNow !== null) {
     if (shownNow === show) return done(`${f.name} is already ${show ? 'shown' : 'hidden'}`, { feature: f.name, shown: show });
-    // As the tree's eye: a choice that matches the default is forgotten.
-    const byDefault = sketchShown({ features: s.doc.features }, { sketches: {} }, doc.features, f.id);
-    doc.setSketchVisibility(f.id, show === byDefault ? null : show ? 'shown' : 'hidden');
-    return done(`${show ? 'Showed' : 'Hid'} ${f.name} in the view`, { feature: f.name, shown: show });
-  }
-  if (f.type === 'ref_plane' || f.type === 'ref_axis' || f.type === 'ref_point') {
-    if (constructShown(s.view, f.id) === show) return done(`${f.name} is already ${show ? 'shown' : 'hidden'}`, { feature: f.name, shown: show });
-    doc.setSketchVisibility(f.id, show ? null : 'hidden');
+    uiFor(services).setFeatureVisible(f.id, show);
     return done(`${show ? 'Showed' : 'Hid'} ${f.name} in the view`, { feature: f.name, shown: show });
   }
   throw bad('target', `${f.name} has no eye: only sketches, construction planes, axes and points, and bodies (the bodies it makes: name them).`);

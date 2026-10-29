@@ -756,6 +756,12 @@ html.cad-tb-resizing-rows * {
   opacity: var(--cad-tree-dim);
 }
 
+/* A hidden sketch or reference (its eye closed): name and icon dimmed, as a hidden body's. */
+.tree-node.is-hidden-feature > .tree-row .tl,
+.tree-node.is-hidden-feature > .tree-row .tree-ico {
+  opacity: var(--cad-tree-dim);
+}
+
 .cad-badge {
   display: inline-flex;
   align-items: center;

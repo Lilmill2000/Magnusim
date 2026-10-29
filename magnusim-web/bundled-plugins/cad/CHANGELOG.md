@@ -114,6 +114,16 @@ is changed with the Part open, from any Magnusim window:
 - In light the Part is as before; only its orientation arrows take the axis
   colours Magnusim's own 3D views now use (a shade darker).
 
+**Hide a plane, an axis, a point or a sketch from its menu.** Right-click a
+reference plane, axis or point, or a sketch, in the history: Hide <name>, and
+Show <name> once it is hidden, as its eye in the tree does. Hiding only
+changes what is drawn: a hidden plane is not drawn or clicked in the 3D view,
+but it stays in the tree, can still be picked there and by name, and what is
+built on it (a sketch on a hidden plane, say) builds as before. Its row shows
+it is hidden as a hidden body's does: the eye closed, the name and icon
+dimmed. Hiding is not an undo step, and the Part remembers it when it is
+opened again. The Assistant hides and shows them the same way.
+
 ## 0.1.0 (October 2026)
 
 The first release. Magnusim CAD is a parametric part modeler built into

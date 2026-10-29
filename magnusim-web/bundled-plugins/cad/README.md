@@ -391,8 +391,10 @@ comes on). Rename the result, for example to "Fluid".
 ## History, parameters, undo and saving
 
 - **History**: right-click a feature for Edit, Rename, Suppress or Unsuppress,
-  Roll back to here, Roll to end and Delete. Drag the rollback bar to see the
-  part as it was at that feature. A feature that breaks because something
+  Roll back to here, Roll to end and Delete; a sketch or a reference plane,
+  axis or point also has Hide or Show (its eye in the tree does the same; a
+  hidden one is still used by what is built on it). Drag the rollback bar to
+  see the part as it was at that feature. A feature that breaks because something
   upstream changed is marked red with the reason; a reference it can follow
   only approximately says "Reference repaired · check".
 - **Parameters**: named values with units and expressions. Use them in any
