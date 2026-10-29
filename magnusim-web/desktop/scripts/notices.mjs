@@ -109,16 +109,26 @@ export function cadSection(repoNotices) {
   return m[1].trim();
 }
 
-/** THIRD_PARTY_NOTICES.txt as the installer ships it. */
-export function noticesText({ version, commit, repo, cad, rows, electron }) {
+/**
+ * THIRD_PARTY_NOTICES.txt as the installer ships it. Its source is `repo` (at `commit`), or, for
+ * a build from the Magnusim CAD repository, that repository (`repo`) with the Magnusim commit its
+ * code was copied from (`copiedFrom`: repo, commit, and how many files were changed from it).
+ */
+export function noticesText({ version, commit, repo, copiedFrom, cad, rows, electron }) {
   const rule = '='.repeat(78);
+  const source = copiedFrom
+    ? [
+        `Magnusim CAD repository, ${repo}, whose code is copied from Magnusim,`,
+        `${copiedFrom.repo}, at commit ${copiedFrom.commit}${copiedFrom.changed ? ` (with ${copiedFrom.changed} files changed from that commit)` : ''}.`,
+      ]
+    : [`Magnusim repository, ${repo}${commit ? `, at commit ${commit}` : ''}.`];
   const out = [
     `Magnusim CAD ${version}: third-party software`,
     rule,
     '',
     'Magnusim CAD is free software under the GNU General Public License, version 3 or',
     '(at your option) any later version: LICENSE, next to this file. Its source is the',
-    `Magnusim repository, ${repo}${commit ? `, at commit ${commit}` : ''}.`,
+    ...source,
     '',
     'It ships the software below, each under its own licence.',
     '',

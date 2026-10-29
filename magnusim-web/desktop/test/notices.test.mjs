@@ -66,4 +66,13 @@ describe('noticesText', () => {
       assert.ok(text.includes(part), part);
     }
   });
+
+  it('names the Magnusim CAD repository and the Magnusim commit its code was copied from, for a build from that copy', () => {
+    const base = { version: '0.5.0', repo: 'https://example.org/cad', cad: 'OCCT', rows: [], electron: '44.9.3' };
+    const sha = 'f'.repeat(40);
+    const text = noticesText({ ...base, commit: '', copiedFrom: { repo: 'https://example.org/magnusim', commit: sha, changed: 0 } });
+    assert.ok(text.includes(`Its source is the\nMagnusim CAD repository, https://example.org/cad, whose code is copied from Magnusim,\nhttps://example.org/magnusim, at commit ${sha}.\n`), text.slice(0, 400));
+    assert.ok(!text.includes('Magnusim repository'), 'not "the Magnusim repository" as its source');
+    assert.match(noticesText({ ...base, copiedFrom: { repo: 'https://example.org/magnusim', commit: sha, changed: 2 } }), / \(with 2 files changed from that commit\)\./);
+  });
 });
