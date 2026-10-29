@@ -27,11 +27,17 @@ export const CAD_REPO_URL = 'https://github.com/Lilmill2000/Magnusim-CAD';
 /** The kind of the EXPORT.json that copy has at its root. */
 const EXPORT_KIND = 'magnusim-cad-export';
 
+/** A development snapshot's label in EXPORT.json (scripts/export-cad-repo.mjs --dev). */
+const DEV_LABEL = /^development version \S+ \(\d{4}-\d{2}-\d{2}\)$/;
+
 /**
  * Where the installer says its source is. In Magnusim: Magnusim's repository at this checkout's
  * HEAD (no commit outside a checkout). In the Magnusim CAD repository, whose EXPORT.json (at the
- * root, one level above magnusim-web/) names the Magnusim commit its code was copied from: that
- * repository, and the Magnusim commit, since a copy's own commits are not Magnusim's.
+ * root, one level above magnusim-web/) says what its code was copied from: that repository, and
+ * what in Magnusim, since a copy's own commits are not Magnusim's. A development snapshot
+ * (magnusim.public false: its commit is not published) is named by its label, "development
+ * version <version> (<date>)", and no commit; a release export by its commit, with its release
+ * tag (the label) when it has one.
  */
 export function sourceOf(repoRoot) {
   let record = null;
@@ -44,8 +50,10 @@ export function sourceOf(repoRoot) {
     const m = record.magnusim || {};
     if (!/^[0-9a-f]{40}$/.test(String(m.commit))) throw new Error(`${join(repoRoot, 'EXPORT.json')} names no Magnusim commit`);
     if (record.incomplete || (record.selfCheck !== undefined && record.selfCheck?.passed !== true)) throw new Error(`${join(repoRoot, 'EXPORT.json')}: the export that wrote this copy did not finish, or failed its self-check`);
+    const dev = m.public === false;
+    if (dev && !DEV_LABEL.test(String(m.label))) throw new Error(`${join(repoRoot, 'EXPORT.json')}: a development snapshot without its label ("development version <version> (<date>)")`);
     const changed = Array.isArray(m.uncommitted) ? m.uncommitted.length : 0;
-    return { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: m.repository || REPO_URL, commit: m.commit, changed } };
+    return { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: m.repository || REPO_URL, label: typeof m.label === 'string' ? m.label : '', commit: dev ? '' : m.commit, changed } };
   }
   let commit = '';
   try {
@@ -326,7 +334,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     step('page');
     await page();
     step(`staged app checked: its plugin SDK (${await checkStaged()} files) and its server`);
-    step(`notices: ${notices(source)} npm packages, source ${source.copiedFrom ? `${source.repo} (Magnusim ${source.copiedFrom.commit.slice(0, 10)})` : `${source.repo}${source.commit ? ` at ${source.commit.slice(0, 10)}` : ''}`}`);
+    const from = source.copiedFrom;
+    step(`notices: ${notices(source)} npm packages, source ${from ? `${source.repo} (Magnusim${from.label ? ` ${from.label}` : ''}${from.commit ? ` ${from.commit.slice(0, 10)}` : ''})` : `${source.repo}${source.commit ? ` at ${source.commit.slice(0, 10)}` : ''}`}`);
     step('icon');
     icon(electronExe);
     step('installer');

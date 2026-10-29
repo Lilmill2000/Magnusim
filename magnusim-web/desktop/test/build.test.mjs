@@ -1,6 +1,7 @@
 // The installer build's word on where its source is (desktop/scripts/build.mjs sourceOf): this
 // checkout's commit in Magnusim, and in the Magnusim CAD repository (a copy with the export's
-// EXPORT.json at its root) that repository and the Magnusim commit its code was copied from.
+// EXPORT.json at its root) that repository and what its code was copied from: a release
+// export's Magnusim commit (and release), or a development snapshot's label and no commit.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,10 +26,22 @@ function folder(name, exportJson) {
 }
 
 describe('sourceOf', () => {
-  it("names the Magnusim CAD repository and EXPORT.json's Magnusim commit in the export's copy", () => {
-    const dir = folder('copy', { kind: 'magnusim-cad-export', magnusim: { repository: 'https://github.com/Lilmill2000/Magnusim', commit: SHA, date: '2026-10-29T00:00:00Z' } });
-    assert.deepEqual(sourceOf(dir), { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: 'https://github.com/Lilmill2000/Magnusim', commit: SHA, changed: 0 } });
+  it("names the Magnusim CAD repository and EXPORT.json's Magnusim commit in a release export's copy, with its release", () => {
+    const dir = folder('copy', { kind: 'magnusim-cad-export', magnusim: { repository: 'https://github.com/Lilmill2000/Magnusim', public: true, commit: SHA, date: '2026-10-29T00:00:00Z' } });
+    assert.deepEqual(sourceOf(dir), { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: 'https://github.com/Lilmill2000/Magnusim', label: '', commit: SHA, changed: 0 } });
     assert.equal(CAD_REPO_URL, 'https://github.com/Lilmill2000/Magnusim-CAD');
+    const tagged = folder('tagged-copy', { kind: 'magnusim-cad-export', magnusim: { label: 'v0.5.0', public: true, commit: SHA } });
+    assert.deepEqual(sourceOf(tagged).copiedFrom, { repo: 'https://github.com/Lilmill2000/Magnusim', label: 'v0.5.0', commit: SHA, changed: 0 });
+  });
+
+  it("names a development snapshot by its label and never its commit, which is not published", () => {
+    const label = 'development version 0.5.0-dev (2026-10-29)';
+    const dir = folder('dev-copy', { kind: 'magnusim-cad-export', magnusim: { repository: 'https://github.com/Lilmill2000/Magnusim', label, public: false, commit: SHA, date: '2026-10-29T00:36:21-05:00' }, selfCheck: { passed: true, checks: {} } });
+    assert.deepEqual(sourceOf(dir), { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: 'https://github.com/Lilmill2000/Magnusim', label, commit: '', changed: 0 } });
+    assert.ok(!JSON.stringify(sourceOf(dir)).includes(SHA), 'the commit appears nowhere in what the notices get');
+    // Without its label (or with another), the build stops rather than name something else.
+    assert.throws(() => sourceOf(folder('dev-no-label', { kind: 'magnusim-cad-export', magnusim: { public: false, commit: SHA } })), /a development snapshot without its label/);
+    assert.throws(() => sourceOf(folder('dev-bad-label', { kind: 'magnusim-cad-export', magnusim: { label: 'v0.5.0', public: false, commit: SHA } })), /a development snapshot without its label/);
   });
 
   it('counts the files a copy made with --allow-dirty took from the working tree', () => {

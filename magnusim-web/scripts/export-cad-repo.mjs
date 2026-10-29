@@ -1,12 +1,18 @@
 // Exports Magnusim CAD's code into its own repository folder (the public "Magnusim CAD"
 // repository): only the files the CAD edition's page, server, desktop shell and installer
 // build use, as this commit has them. Magnusim CAD and the CAD plugin stay one code base:
-// changes are made here, in Magnusim, and the copy is refreshed at each release (one commit
-// per sync in the CAD repository).
+// changes are made here, in Magnusim, and the copy is refreshed from it (one commit per copy in
+// the CAD repository).
 //
-//   node scripts/export-cad-repo.mjs [<out folder>] [--allow-dirty]     (default C:/mcad-export)
+//   node scripts/export-cad-repo.mjs [<out folder>] [--dev] [--allow-dirty]   (default C:/mcad-export)
 //   node scripts/export-cad-repo.mjs --check [<out folder>]   the self-check alone, on a copy
 //                                                             (after a build in it, say)
+//
+// --dev: a development snapshot, from a commit that is not published. The copy (its README, and
+// the installer's notices through EXPORT.json) then says it is copied from Magnusim's
+// "development version <desktop/package.json version> (<commit date>)" and names no commit;
+// EXPORT.json keeps the commit for Magnusim's own bookkeeping (magnusim.public false). Without
+// it (a release export) the copy names the commit, and the release tag (vX.Y.Z) at it.
 //
 // What goes in, each list worked out from the code as it runs, where it can be:
 //   page       the page's Vite build as desktop/scripts/build.mjs page() runs it (cad.html):
@@ -20,10 +26,11 @@
 //   tooling    the desktop shell and its installer build, the CAD plugin (its source, its
 //              committed workspace/ build output, its licences, the kernel and solver sources),
 //              the tsconfigs (TOOLING, and esbuild's metafile of TOOLING_ENTRIES);
-// and it writes, at the new repository's root: README.md, .gitignore and .gitattributes (from
-// scripts/export-cad-repo/), LICENSE (Magnusim's), THIRD_PARTY_NOTICES.md (Magnusim's, with only
-// the sections about what the copy holds: NOTICE_SECTIONS) and EXPORT.json (the Magnusim commit,
-// and each exported path with the lists that put it there); in magnusim-web/: package.json with
+// and it writes, at the new repository's root: README.md (with where the copy comes from),
+// .gitignore and .gitattributes (from scripts/export-cad-repo/), LICENSE (Magnusim's),
+// THIRD_PARTY_NOTICES.md (Magnusim's, with only the sections about what the copy holds:
+// NOTICE_SECTIONS) and EXPORT.json (what the copy comes from, its own changes, and each exported
+// path with the lists that put it there); in magnusim-web/: package.json with
 // only the dependencies those lists use, and package-lock.json pruned from Magnusim's
 // (npm install --package-lock-only --offline: the same versions, or the export stops).
 // The app keeps its magnusim-web/ folder, so desktop/scripts/build.mjs and the installer's
@@ -33,9 +40,12 @@
 // of scripts/export-cad-repo/ too; a needed file that is changed or not committed stops the
 // export (--allow-dirty copies the working tree instead and EXPORT.json says so). Then the
 // self-check (scripts/export-cad-repo/self-check.mjs) reads the written copy: every file git's
-// or the export's own, no AI-tool traces, models, test data, secrets or paths of this PC, the
-// licences in place. A failed check lists each offender and fails the export; EXPORT.json keeps
-// each check's counts. Never exported: tests and e2e, python/, other plugins, docs
+// or the export's own, no AI-tool traces, models, test data, secrets, paths of this PC or a
+// private part's name, the licences in place. A failed check lists each offender and fails the
+// export; EXPORT.json keeps each check's counts. The copy's few changes to Magnusim's files are
+// declared (REWRITES, LEFT_OUT, the notices' dropped paragraphs) and listed in EXPORT.json; the
+// self-check applies each rewrite to the commit's file again and refuses any other difference.
+// Never exported: tests and e2e, python/, other plugins, docs
 // (but the two .d.ts files the server serves), hidden folders, AI-tool files, STEP and IGES files,
 // npm packages, build output (but CAD's committed workspace/). A list that needs an excluded file
 // stops the export: the copy would not run.
@@ -50,7 +60,8 @@ import { builtinModules, createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, parse as parsePath, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { report, selfCheck, summary } from './export-cad-repo/self-check.mjs';
+import { cadSection, copiedFromWords } from '../desktop/scripts/notices.mjs';
+import { applyEdits, report, selfCheck, summary } from './export-cad-repo/self-check.mjs';
 import { removeTreeSync } from './remove-tree.js';
 
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -109,7 +120,6 @@ const TOOLING = [
   'bundled-plugins/cad/plugin.py',
   'bundled-plugins/cad/README.md',
   'bundled-plugins/cad/CHANGELOG.md', // named by the plugin's README and source
-  'bundled-plugins/cad/ARCHITECTURE.md',
   'bundled-plugins/cad/src/',
   'bundled-plugins/cad/workspace/',
   'bundled-plugins/cad/LICENSES/',
@@ -149,9 +159,11 @@ const SCRIPTS = {
 };
 
 /**
- * Magnusim's THIRD_PARTY_NOTICES.md, section by section ("## " headings): keep, drop, or
- * replace with scripts/export-cad-repo/notices-<file>. A heading not listed stops the export
- * (decide whether Magnusim CAD ships it); a kept one that is gone does too.
+ * Magnusim's THIRD_PARTY_NOTICES.md, section by section ("## " headings): keep, drop, replace
+ * with scripts/export-cad-repo/notices-<file>, or keep with some paragraphs changed
+ * ({ paragraphs: [{ starts, put }], why }: the paragraph that starts with `starts`, exactly one
+ * in the section, dropped when `put` is null, else replaced by it). A heading not listed stops
+ * the export (decide whether Magnusim CAD ships it); a kept one that is gone does too.
  */
 const NOTICE_SECTIONS = {
   'Gmsh and the mesher': 'drop',
@@ -160,13 +172,141 @@ const NOTICE_SECTIONS = {
   '2D Wind Tunnel plugin': 'drop',
   'XFOIL and the Airfoil plugin': 'drop',
   "The Assistant's provider packages": 'keep',
-  "The Assistant's tool-connection package (MCP)": 'keep',
-  "The Assistant's coding agents": 'keep', // acp.ts's MIT notice (SolidCraft)
+  "The Assistant's tool-connection package (MCP)": {
+    paragraphs: [{ starts: "The tests also use the SDK's client package", put: null }],
+    why: 'the copy has no tests, and @modelcontextprotocol/client is not in its lockfile',
+  },
+  "The Assistant's coding agents": {
+    // acp.ts's MIT notice (SolidCraft) stays.
+    paragraphs: [
+      {
+        starts: "The tests check Magnusim's side of the Agent Client Protocol",
+        put: "`npm run typecheck` checks Magnusim CAD's side of the Agent Client Protocol\nagainst the protocol's own types with `@agentclientprotocol/sdk` 1.7.0\n(Apache-2.0), a development dependency the app never runs.",
+      },
+    ],
+    why: 'the copy has no tests; its typecheck reads the package (the agents code imports its types)',
+  },
   'Other dependencies': 'other.md', // Magnusim's names Python, PyVista and cadquery-ocp
   'Colour maps': 'keep',
 };
 /** Magnusim's setup files that the copy has none of. */
 const NOTICE_WORDING = [[/Setup \(`npm ci`\) or `run\.bat`/g, '`npm ci`']];
+
+/** Where the CAD plugin's tests and developer scripts are (Magnusim's default branch on GitHub). */
+const CAD_IN_MAGNUSIM = `${MAGNUSIM_URL}/tree/master/magnusim-web/bundled-plugins/cad`;
+
+/**
+ * Magnusim's files the copy holds with its own words (Daniel, 2026-10-29: the public copy leaves
+ * out internal working notes and the name of his private test part; Magnusim's files stay as
+ * they are). `path`: web-root relative; `what` and `why` go into EXPORT.json, so they never name
+ * the part; `edits`: exact texts (self-check.mjs applyEdits). The self-check applies them to the
+ * commit's file again and refuses any other difference; an edit whose text is gone stops the export.
+ */
+const REWRITES = [
+  {
+    path: 'bundled-plugins/cad/README.md',
+    what: 'the Developer section without the scripts, tests and notes the copy does not hold (one line points to Magnusim), and no reference to ARCHITECTURE.md (left out) or a private test part',
+    why: "the copy's README must not describe scripts that do not run here, or files it does not have",
+    edits: [
+      { find: 'How it is built: the\n[Developer](#developer) section below and `ARCHITECTURE.md`.', put: 'How it is built: the\n[Developer](#developer) section below.' },
+      { find: '`ws.nav.onLeave`, 1.6); ARCHITECTURE.md §11 has the export, the face names and\nthe exit hook. From 1.2', put: '`ws.nav.onLeave`, 1.6). From 1.2' },
+      { find: 'else it is kept per project (ARCHITECTURE.md §7 "Toolbar").', put: 'else it is kept per project.' },
+      { find: 'Part offers no tools and works as before. ARCHITECTURE.md §12 has the design,\n`docs/assistant.md` the developer reference.', put: 'Part offers no tools and works as before.' },
+      { find: 'names only what ships: update it\nas features land, and run `npm run gen:registry` in `magnusim-web` after.', put: 'names only what ships: it is updated\nin Magnusim as features land.' },
+      {
+        from: '| `tests/` |',
+        to: '| `CHANGELOG.md` |',
+        put: '| `scripts/` | `build.mjs` (page + workers) and what it runs (`keymap-load.mjs`, `make-banana.mjs`, `lock.mjs`). |\n',
+      },
+      {
+        from: '### Build and test\n',
+        to: '### Separation rules\n',
+        put: [
+          '### Build and test',
+          '',
+          "The plugin has its own toolchain and packages; the app's typecheck never sees",
+          'its `src/`.',
+          '',
+          '```',
+          'cd bundled-plugins/cad',
+          'npm ci                 # own node_modules (gitignored)',
+          'npm run build          # src/ -> workspace/ (page + worker modules)',
+          'npm run build:check    # workspace/ must be exactly the build of src/',
+          '```',
+          '',
+          "`npm run typecheck:cad` in `magnusim-web` checks the plugin's TypeScript. The",
+          'kernel and solver binaries are rebuilt only when their sources change, on Linux',
+          'or WSL: `kernel-build/build.sh`, `solver-build/build.sh`.',
+          '',
+          `The plugin's tests and its other developer scripts live in Magnusim: <${CAD_IN_MAGNUSIM}>.`,
+          '',
+          '',
+        ].join('\n'),
+      },
+      { find: '(`python/tools/plugin_boundary.py` checks', put: "(Magnusim's `python/tools/plugin_boundary.py` checks" },
+      { find: "they are never bundled. The unit tests run the\n  kit's own source (`vitest.config.ts` alias). Workers", put: 'they are never bundled. Workers' },
+      { find: 'generic host APIs, listed in `ARCHITECTURE.md` §9.', put: 'generic host APIs.' },
+      { find: "a coding tool's file: the app's\n  `scripts/__tests__/vendor-names.test.mjs`", put: "a coding tool's file: Magnusim's\n  `scripts/__tests__/vendor-names.test.mjs`" },
+    ],
+  },
+  {
+    path: 'bundled-plugins/cad/LICENSES/README.md',
+    what: "the kernel's and solver's source archives: attached to each Magnusim CAD release, and which files",
+    why: "Magnusim's text names a release of Magnusim CAD 0.1.0 on Magnusim's GitHub, which has no such release",
+    edits: [
+      {
+        find: 'The GitHub release of Magnusim CAD 0.1.0 attaches the exact upstream sources\nthe shipped modules were built from, so they can be had from the same place as\nthe plugin.',
+        put: 'Each release of Magnusim CAD\n(<https://github.com/Lilmill2000/Magnusim-CAD/releases>) attaches, beside its\ninstaller, the exact upstream sources the shipped modules were built from (the\nfour archives below and `SHA256SUMS-cad-sources.txt`), so they can be had from\nthe same place as the app.',
+      },
+    ],
+  },
+  {
+    path: 'bundled-plugins/cad/kernel-build/SOURCES.md',
+    what: 'no reference to ARCHITECTURE.md (left out), and a private test part named generically',
+    why: 'internal notes stay in Magnusim',
+    edits: [
+      { find: 'What it does and its rules: `ARCHITECTURE.md` §5 and the typed contract in\n`src/types/kernel-protocol.ts`.', put: 'What it does and its rules: the typed contract in\n`src/types/kernel-protocol.ts`.' },
+      { find: 'the vortex-finder cut removes', put: "a test part's tube cut removes" },
+    ],
+  },
+  ...[
+    ['bundled-plugins/cad/src/features/import/pipeline.ts', "polish 5: the Vortex's cell read", "polish 5: a test part's cell read"],
+    ['bundled-plugins/cad/src/features/press_pull/feature.ts', 'was false for the Vortex outlet bores', "was false for a test part's outlet bores"],
+    ['bundled-plugins/cad/src/link/edit-open.css', '("Opening Vortex CFD Test from the project",', '("Opening Bracket from the project",'],
+    ['bundled-plugins/cad/src/link/edit-open.ts', 'The Vortex (0.1 MB BREP) never left 64 MiB.', 'A small part (0.1 MB BREP) never left 64 MiB.'],
+    ['bundled-plugins/cad/src/viewport/viewport.ts', "the Vortex's fluid-domain Box was cut off", "a test part's fluid-domain Box was cut off"],
+  ].map(([path, find, put]) => ({ path, what: 'a comment: a private test part named generically', why: 'internal notes stay in Magnusim (the build strips comments: workspace/ is unchanged)', edits: [{ find, put }] })),
+  {
+    path: 'src/home/controller.ts',
+    what: "the new-project title's placeholder outside the CAD edition: a generic example",
+    why: "Magnusim's placeholder names a private part (Magnusim CAD shows its own, 'Mounting bracket')",
+    edits: [{ find: "'Vortex separator — incompressible'", put: "'Pipe elbow — incompressible'" }],
+  },
+  {
+    path: 'src/app/shell.html',
+    what: "the new-project description's placeholder: a generic one",
+    why: "Magnusim's placeholder names a private part",
+    edits: [{ find: 'placeholder="Test for the vortex"', put: 'placeholder="What this project is for"' }],
+  },
+  {
+    path: 'scripts/w16-project-geometry.js',
+    what: "the default STEP's source tag and a geometry's fallback name: generic",
+    why: "Magnusim's strings name a private part; neither is reached in Magnusim CAD (no DEFAULT_STEP, and an import always has a file name)",
+    edits: [
+      { find: "stepSource = 'default-vortex';", put: "stepSource = 'default-step';" },
+      { find: "String(originalName || 'Vortex CFD Test.step')", put: "String(originalName || 'geometry.step')" },
+      { find: ".trim() || 'Vortex CFD Test';", put: ".trim() || 'geometry';" },
+    ],
+  },
+];
+
+/** Magnusim's files the copy leaves out, with why: no list of what runs or builds needs them (one that did would stop the export). */
+const LEFT_OUT = [
+  {
+    path: 'bundled-plugins/cad/ARCHITECTURE.md',
+    why: "the plugin's internal working notes (area ownership for parallel builders, plan rules); the copy's README and notes no longer refer to it",
+  },
+];
 
 // ---------------------------------------------------------------------------------------------
 
@@ -207,6 +347,7 @@ function excludedBy(p) {
   const dirs = parts.slice(0, -1);
   const name = parts[parts.length - 1];
   if (p === 'scripts/export-cad-repo.mjs' || p.startsWith('scripts/export-cad-repo/')) return 'this export';
+  if (LEFT_OUT.some((x) => x.path === p)) return 'left out of the copy (LEFT_OUT)';
   if (dirs.some((d) => d.startsWith('.'))) return 'a hidden folder';
   if (name.startsWith('.') && name !== '.gitignore') return 'a hidden file';
   if (AI_FILE.test(name)) return 'an AI-tool file';
@@ -461,6 +602,17 @@ function writeOut(out, rel, data) {
   writeFileSync(p, data);
 }
 
+/** A notices section with NOTICE_SECTIONS' paragraph changes: each `starts` starts exactly one paragraph. */
+function changedParagraphs(heading, body, changes) {
+  let paragraphs = body.split(/\n{2,}/);
+  for (const { starts, put } of changes) {
+    const n = paragraphs.filter((p) => p.startsWith(starts)).length;
+    if (n !== 1) throw new Error(`THIRD_PARTY_NOTICES.md "## ${heading}": ${n} paragraphs start with "${starts}", and NOTICE_SECTIONS changes exactly one (update it)`);
+    paragraphs = paragraphs.flatMap((p) => (!p.startsWith(starts) ? [p] : put === null ? [] : [put]));
+  }
+  return paragraphs.join('\n\n');
+}
+
 /**
  * Magnusim's notices, with only NOTICE_SECTIONS' kept (and replaced) sections, after
  * notices-intro.md. `fixed(name)`: a file of scripts/export-cad-repo/, as the commit has it.
@@ -476,7 +628,7 @@ function cadNotices(text, fixed) {
     if (!what) throw new Error(`THIRD_PARTY_NOTICES.md has a section the export does not know, "## ${heading}": add it to NOTICE_SECTIONS (keep, drop, or a replacement)`);
     seen.add(heading);
     if (what === 'drop') continue;
-    let body = what === 'keep' ? part.slice(nl + 1).trim() : fixed(`notices-${what}`).toString('utf8').trim();
+    let body = what === 'keep' ? part.slice(nl + 1).trim() : typeof what === 'string' ? fixed(`notices-${what}`).toString('utf8').trim() : changedParagraphs(heading, part.slice(nl + 1).trim(), what.paragraphs);
     for (const [from, to] of NOTICE_WORDING) body = body.replace(from, to);
     out.push(`## ${heading}\n\n${body}`);
   }
@@ -488,15 +640,53 @@ function cadNotices(text, fixed) {
 const BINARY = /\.(wasm|bin|webp|png|ico|jpe?g|gif|woff2?|zip|gz)$/i;
 
 /** The files of scripts/export-cad-repo/ the export writes or composes from (the self-check's code is not one). */
-const FIXED_FILES = ['README.md', 'gitignore', 'gitattributes', 'notices-intro.md', ...Object.values(NOTICE_SECTIONS).filter((v) => v !== 'keep' && v !== 'drop').map((v) => `notices-${v}`)];
+const FIXED_FILES = ['README.md', 'gitignore', 'gitattributes', 'notices-intro.md', ...Object.values(NOTICE_SECTIONS).filter((v) => typeof v === 'string' && v !== 'keep' && v !== 'drop').map((v) => `notices-${v}`)];
 
 /** The copy's root files that are Magnusim's git files as they are: copy path -> repository path. */
 const rootFromGit = (prefix) => ({
-  'README.md': `${prefix}scripts/export-cad-repo/README.md`,
   '.gitignore': `${prefix}scripts/export-cad-repo/gitignore`,
   '.gitattributes': `${prefix}scripts/export-cad-repo/gitattributes`,
   LICENSE: 'LICENSE',
 });
+
+/** The README's placeholder for where this copy comes from. */
+const README_SOURCE = '{{copied-from}}';
+
+/**
+ * The README's words for where this copy comes from (EXPORT.json's magnusim record): a
+ * development snapshot names Magnusim's development version and no commit, a release export
+ * the release and the commit, in the installer notices' words (notices.mjs copiedFromWords).
+ */
+function readmeSource(m) {
+  const dev = m.public === false;
+  const words = copiedFromWords({ repo: m.repository || MAGNUSIM_URL, label: m.label || '', commit: dev ? '' : m.commit, changed: (m.uncommitted || []).length });
+  return dev ? `This one is copied from ${words}. A copy made from a Magnusim release names that release instead.` : `This one is copied from ${words}.`;
+}
+
+/**
+ * The self-check's rewrites (copy path -> { source, edits }): REWRITES, and the README from
+ * scripts/export-cad-repo/README.md with its placeholder filled from `magnusim`.
+ */
+function resolvedRewrites(prefix, magnusim) {
+  const out = { 'README.md': { source: `${prefix}scripts/export-cad-repo/README.md`, edits: [{ find: README_SOURCE, put: readmeSource(magnusim) }] } };
+  for (const r of REWRITES) out[`${APP_DIR}/${r.path}`] = { source: `${prefix}${r.path}`, edits: r.edits };
+  return out;
+}
+
+/** What EXPORT.json says about the copy's own changes. */
+function copyChanges() {
+  return {
+    about: "Magnusim's files this copy changes or leaves out (the self-check applies each rewrite to the commit's file again and refuses any other difference)",
+    rewritten: [
+      { path: 'README.md', from: 'magnusim-web/scripts/export-cad-repo/README.md', what: 'where this copy comes from, filled in from "magnusim" above', why: "the copy's own README" },
+      ...REWRITES.map((r) => ({ path: `${APP_DIR}/${r.path}`, what: r.what, why: r.why, edits: r.edits.length })),
+    ],
+    leftOut: LEFT_OUT.map((x) => ({ path: `${APP_DIR}/${x.path}`, why: x.why })),
+    notices: Object.entries(NOTICE_SECTIONS)
+      .filter(([, v]) => v !== 'keep')
+      .map(([section, v]) => (v === 'drop' ? { section, kept: false } : typeof v === 'string' ? { section, replacedBy: `magnusim-web/scripts/export-cad-repo/notices-${v}` } : { section, paragraphs: v.paragraphs.map((p) => ({ starts: `${p.starts}...`, ...(p.put === null ? { dropped: true } : { replacedWith: p.put.replace(/\n/g, ' ') }) })), why: v.why })),
+  };
+}
 
 /** The self-check alone, on a copy this script wrote (its EXPORT.json names the commit). */
 function checkOnly(out, prefix) {
@@ -508,8 +698,9 @@ function checkOnly(out, prefix) {
   }
   if (!record || record.kind !== MARKER_KIND || !record.magnusim?.commit) throw new Error(`${out} holds no EXPORT.json from this script`);
   const { commit, uncommitted = [] } = record.magnusim;
-  console.log(`Self-check of ${out} (Magnusim ${commit.slice(0, 10)})`);
-  const result = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted });
+  console.log(`Self-check of ${out} (Magnusim ${commit.slice(0, 10)}${record.magnusim.label ? `, ${record.magnusim.label}` : ''})`);
+  const leftOut = LEFT_OUT.map((x) => `${APP_DIR}/${x.path}`);
+  const result = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted, rewrites: resolvedRewrites(prefix, record.magnusim), leftOut });
   if (!report(result)) throw new Error(`the self-check failed: ${Object.values(result.checks).reduce((n, c) => n + c.offenders.length, 0)} offenders`);
   console.log('Self-check passed');
 }
@@ -520,7 +711,8 @@ async function main() {
   const args = process.argv.slice(2);
   const allowDirty = args.includes('--allow-dirty');
   const checkAlone = args.includes('--check');
-  const unknown = args.filter((a) => a.startsWith('--') && a !== '--allow-dirty' && a !== '--check');
+  const devSnapshot = args.includes('--dev');
+  const unknown = args.filter((a) => a.startsWith('--') && a !== '--allow-dirty' && a !== '--check' && a !== '--dev');
   if (unknown.length) throw new Error(`unknown option ${unknown.join(' ')}`);
   const out = resolve(args.find((a) => !a.startsWith('--')) || (process.platform === 'win32' ? 'C:/mcad-export' : join(WEB, '..', '..', 'mcad-export')));
 
@@ -539,7 +731,10 @@ async function main() {
       .map((e) => e.slice(3)),
   );
   const isDirty = (rel) => dirtyTop.has(`${prefix}${rel}`);
-  console.log(`Magnusim ${commit.slice(0, 10)} (${commitDate}) -> ${out}`);
+  // A release export names the release tag at the commit (Magnusim's are vX.Y.Z).
+  const releaseTag = devSnapshot ? '' : git(['tag', '--points-at', commit]).split(/\r?\n/).filter((t) => /^v\d+\.\d+\.\d+$/.test(t)).sort()[0] || '';
+  console.log(`Magnusim ${commit.slice(0, 10)} (${commitDate})${devSnapshot ? ', a development snapshot' : releaseTag ? `, ${releaseTag}` : ''} -> ${out}`);
+  if (!devSnapshot && !git(['branch', '-r', '--contains', commit]).trim()) console.warn(`  warning: ${commit.slice(0, 10)} is on no remote branch, and the copy names it: --dev makes a development snapshot, which names no commit`);
 
   // Magnusim's files the export writes its own from (repository paths): from git too.
   const readFrom = ['LICENSE', 'THIRD_PARTY_NOTICES.md', ...['package.json', 'package-lock.json', 'desktop/package.json', ...FIXED_FILES.map((f) => `scripts/export-cad-repo/${f}`)].map((p) => `${prefix}${p}`)];
@@ -598,6 +793,21 @@ async function main() {
   // The root package.json's dependencies: those the lists use, as Magnusim declares them (at the commit).
   const rootPkg = JSON.parse(source(`${prefix}package.json`).toString('utf8'));
   const desktopPkg = JSON.parse(source(`${prefix}desktop/package.json`).toString('utf8'));
+  /**
+   * What the copy says it comes from (EXPORT.json's magnusim; the README and desktop/scripts/build.mjs
+   * sourceOf read it). A development snapshot's commit is not published: the copy names its
+   * label, and the commit stays only as Magnusim's bookkeeping (public: false).
+   */
+  const magnusim = devSnapshot
+    ? {
+        repository: MAGNUSIM_URL,
+        label: `development version ${desktopPkg.version} (${commitDate.slice(0, 10)})`,
+        public: false,
+        commit,
+        commitNote: "Magnusim's own bookkeeping: a development commit that is not published, so the copy names it nowhere else",
+        date: commitDate,
+      }
+    : { repository: MAGNUSIM_URL, ...(releaseTag ? { label: releaseTag } : {}), public: true, commit, date: commitDate };
   const declared = new Set([...Object.keys(rootPkg.dependencies || {}), ...Object.keys(rootPkg.devDependencies || {})]);
   const desktopDeclared = new Set([...Object.keys(desktopPkg.dependencies || {}), ...Object.keys(desktopPkg.devDependencies || {})]);
   for (const [name, by] of server.imports) {
@@ -645,12 +855,22 @@ async function main() {
 
   /** What came from the working tree (--allow-dirty): repository paths. */
   const uncommitted = [...dirty.map((p) => `${prefix}${p}`), ...readDirty].sort();
+  if (uncommitted.length) magnusim.uncommitted = uncommitted;
+
+  // Each declared rewrite is of a file the copy holds, and applies (it throws otherwise).
+  const rewriteOf = new Map(REWRITES.map((r) => [r.path, r]));
+  for (const r of REWRITES) if (!lists.has(r.path)) throw new Error(`REWRITES names ${r.path}, which the copy does not hold: update REWRITES`);
+  if (!fixed('README.md').toString('utf8').includes(README_SOURCE)) throw new Error(`scripts/export-cad-repo/README.md has no ${README_SOURCE}`);
 
   prepareOut(out, top);
   // The marker first: an export that fails from here on leaves a folder the next one may replace.
-  writeOut(out, 'EXPORT.json', `${JSON.stringify({ kind: MARKER_KIND, incomplete: 'the export did not finish', magnusim: { repository: MAGNUSIM_URL, commit } }, null, 2)}\n`);
+  writeOut(out, 'EXPORT.json', `${JSON.stringify({ kind: MARKER_KIND, incomplete: 'the export did not finish', magnusim }, null, 2)}\n`);
   const blobs = catFiles(commit, files.filter((p) => !dirty.includes(p)).map((p) => `${prefix}${p}`));
-  for (const p of files) writeOut(out, `${APP_DIR}/${p}`, dirty.includes(p) ? readFileSync(join(WEB, p)) : blobs.get(`${prefix}${p}`));
+  for (const p of files) {
+    const data = dirty.includes(p) ? readFileSync(join(WEB, p)) : blobs.get(`${prefix}${p}`);
+    const rw = rewriteOf.get(p);
+    writeOut(out, `${APP_DIR}/${p}`, rw ? applyEdits(data.toString('utf8'), rw.edits, p) : data);
+  }
 
   // package.json, and the lockfile pruned from Magnusim's (the same versions).
   const outWeb = join(out, APP_DIR);
@@ -677,15 +897,15 @@ async function main() {
   }
 
   // The new repository's root.
+  const rewrites = resolvedRewrites(prefix, magnusim);
   const rootFiles = {
-    'README.md': fixed('README.md'),
+    'README.md': applyEdits(fixed('README.md').toString('utf8'), rewrites['README.md'].edits, 'README.md'),
     '.gitignore': fixed('gitignore'),
     '.gitattributes': fixed('gitattributes'),
     LICENSE: source('LICENSE'),
     'THIRD_PARTY_NOTICES.md': cadNotices(source('THIRD_PARTY_NOTICES.md').toString('utf8'), fixed),
   };
   for (const [name, data] of Object.entries(rootFiles)) writeOut(out, name, data);
-  const { cadSection } = await import(pathToFileURL(join(WEB, 'desktop', 'scripts', 'notices.mjs')).href);
   cadSection(join(out, 'THIRD_PARTY_NOTICES.md')); // the installer's notices need it (throws if gone)
 
   const all = [...Object.keys(rootFiles), 'EXPORT.json', ...[...lists.keys()].map((p) => `${APP_DIR}/${p}`)].sort();
@@ -696,9 +916,10 @@ async function main() {
 
   const record = {
     kind: MARKER_KIND,
-    about: "A copy of Magnusim CAD's code, made by Magnusim's scripts/export-cad-repo.mjs. Code changes are made in Magnusim; this copy is refreshed from it at each release.",
-    magnusim: { repository: MAGNUSIM_URL, commit, date: commitDate, ...(uncommitted.length ? { uncommitted } : {}) },
+    about: "A copy of Magnusim CAD's code, made by Magnusim's scripts/export-cad-repo.mjs. Code changes are made in Magnusim, and arrive here with the next copy.",
+    magnusim,
     lockfile,
+    copyChanges: copyChanges(),
     selfCheck: 'not run yet',
     lists: {
       page: 'the page: the Vite build of cad.html (modules, files it reads, its tsconfig.json)',
@@ -721,7 +942,7 @@ async function main() {
 
   // The self-check reads what was written (EXPORT.json too), and its counts go into EXPORT.json.
   console.log('  self-check: the written copy');
-  const checked = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted });
+  const checked = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted, rewrites, leftOut: LEFT_OUT.map((x) => `${APP_DIR}/${x.path}`) });
   record.selfCheck = summary(checked);
   writeRecord();
 

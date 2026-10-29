@@ -5,7 +5,9 @@
 // runs, every offending path or line is listed, and EXPORT.json keeps each check's counts:
 //   files    each file is a file of the exported commit (git ls-tree) with the bytes of its git
 //            object (so the copy came from git, never from a working tree), or one the export
-//            writes (GENERATED); the root files copied from Magnusim are its git objects too;
+//            writes (GENERATED); the root files copied from Magnusim are its git objects too; a
+//            file the export rewrites (its declared rewrites) is its git object with exactly those
+//            edits applied again here, and a file it leaves out is not there;
 //   ai       no AI-tool files or folders, no Co-Authored-By trailer anywhere, and no AI vendor or
 //            tool name in the Markdown the export writes. The Assistant's provider code and
 //            packages are the product's own, so its sources are not searched for vendor names;
@@ -13,6 +15,8 @@
 //   secrets  no env file, key or certificate file, and no text shaped like a key or a token;
 //   paths    no path of this PC (a user's folder, Desktop/Code, a home folder) in any text
 //            file, CAD's built workspace among them, but the generic ones in PATH_ALLOWED;
+//   names    no private part's name (PRIVATE_NAMES) in any file, binaries too, but the hits in
+//            NAMES_ALLOWED;
 //   licence  GPL-3.0 in LICENSE and the app's package.json, the CAD plugin's LGPL licences, each
 //            SPDX line Magnusim's sources have, and notices naming the kernel, the solver and
 //            Electron, and not Python (nothing of Python's ships).
@@ -77,6 +81,48 @@ export const PATH_ALLOWED = [
   { path: 'magnusim-web/scripts/wsl-env.js', text: "'/home/cfddesk/cases'", reason: "Magnusim's built-in default WSL case folder (its own WSL account, the same on every PC)" },
 ];
 
+/** The name of Daniel's private part, which tests and notes in Magnusim use: never in the copy. */
+const PRIVATE_NAMES = [/vortex/gi];
+
+/**
+ * Hits of PRIVATE_NAMES that stay, with why: the file in the copy, how many hits it has (one
+ * more, or one fewer, fails the check) and, when given, the text each hit must be inside.
+ */
+export const NAMES_ALLOWED = [
+  {
+    path: 'magnusim-web/bundled-plugins/cad/kernel-build/facade/facade.cpp',
+    count: 6,
+    reason: "comments in the kernel's corresponding source (LGPL), kept as built: kernel-build/mk32.build.txt records the sha256 of facade/ (facade_sources), and an edited comment would no longer match it",
+  },
+  { path: 'magnusim-web/src/app/shell.html', count: 1, text: 'frames for vortex shedding', reason: "the physics term (a transient run's results), not a part's name" },
+];
+
+/**
+ * A declared rewrite's edits applied to `text` (a file as the commit has it), in order: { find, put }
+ * replaces that text, which must be there exactly once; { from, to, put } replaces the span from
+ * `from` (there exactly once) up to the first `to` after it (`to` stays). Throws when one no
+ * longer applies, so a rewrite that Magnusim's file outgrew stops the export.
+ */
+export function applyEdits(text, edits, where = 'a rewrite') {
+  let out = text;
+  edits.forEach((e, i) => {
+    const what = `${where}, edit ${i + 1}`;
+    const key = typeof e.find === 'string' ? e.find : e.from;
+    if (typeof key !== 'string' || !key || typeof e.put !== 'string') throw new Error(`${what}: not { find, put } or { from, to, put }`);
+    const at = out.indexOf(key);
+    if (at < 0) throw new Error(`${what}: ${JSON.stringify(key.slice(0, 70))} is not there`);
+    if (out.indexOf(key, at + 1) >= 0) throw new Error(`${what}: ${JSON.stringify(key.slice(0, 70))} is there more than once`);
+    let end = at + key.length;
+    if (typeof e.find !== 'string') {
+      if (typeof e.to !== 'string' || !e.to) throw new Error(`${what}: { from } without { to }`);
+      end = out.indexOf(e.to, end);
+      if (end < 0) throw new Error(`${what}: ${JSON.stringify(e.to.slice(0, 70))} is not after ${JSON.stringify(key.slice(0, 40))}`);
+    }
+    out = out.slice(0, at) + e.put + out.slice(end);
+  });
+  return out;
+}
+
 /** Python files that may ship, with why: none of Python's runtime or packages ever does. */
 const PYTHON_ALLOWED = {
   'bundled-plugins/cad/plugin.py': "the CAD plugin's register() stub for Magnusim's plugin host: it imports nothing, and Magnusim CAD runs no Python (desktop/scripts/build.mjs stages it with the manifest)",
@@ -120,6 +166,7 @@ function treeOf(web, commit) {
 /** Blobs by object id, in one git process. */
 function blobsOf(web, ids) {
   const list = [...new Set(ids)];
+  if (!list.length) return new Map();
   const out = execFileSync('git', ['-C', web, 'cat-file', '--batch'], { input: `${list.join('\n')}\n`, maxBuffer: 1 << 30 });
   const blobs = new Map();
   let pos = 0;
@@ -158,14 +205,17 @@ function* matches(text, patterns) {
  * (`prefix`: the app's folder in that repository, `appDir`: in the copy). `fromGit`: the copy's
  * root files that are Magnusim's git files as they are (copy path -> repository path).
  * `uncommitted`: the repository paths an --allow-dirty export took from the working tree (they
- * may differ from the commit). Returns { passed, checks: { name: { passed, counts, offenders } } }.
+ * may differ from the commit). `rewrites`: copy path -> { source (repository path), edits } for
+ * each file the export rewrote (applyEdits); `leftOut`: copy paths the export never writes.
+ * Returns { passed, checks: { name: { passed, counts, offenders } } }.
  */
-export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitted = [] }) {
+export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitted = [], rewrites = {}, leftOut = [] }) {
   const format = execFileSync('git', ['-C', web, 'rev-parse', '--show-object-format'], { encoding: 'utf8' }).trim();
   const tree = treeOf(web, commit);
   const { files, links } = walk(out, appDir);
   const gen = new Set(generated(appDir));
   const dirty = new Set(uncommitted);
+  const rewriteSources = blobsOf(web, Object.values(rewrites).map((r) => tree.get(r.source)).filter(Boolean));
   const data = new Map(files.map((rel) => [rel, readFileSync(join(out, ...rel.split('/')))]));
   const text = new Map();
   let binaries = 0;
@@ -182,8 +232,25 @@ export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitt
   // files: git's, byte for byte, or the export's own.
   {
     const offenders = links.map((r) => `${r}: a link`);
-    const counts = { files: files.length, fromGit: 0, rootFromGit: 0, generated: 0, workingTree: 0 };
+    const counts = { files: files.length, fromGit: 0, rootFromGit: 0, generated: 0, rewritten: 0, workingTree: 0, leftOut: leftOut.length };
     for (const rel of files) {
+      const rw = rewrites[rel];
+      if (rw) {
+        const id = tree.get(rw.source);
+        if (dirty.has(rw.source)) counts.workingTree++;
+        else if (!id) offenders.push(`${rel}: ${rw.source} (its rewrite's source) is not a file of ${commit}`);
+        else {
+          let want = null;
+          try {
+            want = Buffer.from(applyEdits(rewriteSources.get(id).toString('utf8'), rw.edits, rel), 'utf8');
+          } catch (err) {
+            offenders.push(`${rel}: its declared rewrite no longer applies to ${rw.source} (${err instanceof Error ? err.message : err})`);
+          }
+          if (want && !want.equals(data.get(rel))) offenders.push(`${rel}: not ${rw.source} with exactly its declared rewrite (any other change is refused)`);
+          else if (want) counts.rewritten++;
+        }
+        continue;
+      }
       if (gen.has(rel)) {
         if (!fromGit[rel]) {
           counts.generated++;
@@ -204,6 +271,8 @@ export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitt
       else offenders.push(`${rel}: not as ${commit} has it (from a working tree?)`);
     }
     for (const rel of gen) if (!data.has(rel)) offenders.push(`${rel}: missing (the export writes it)`);
+    for (const rel of Object.keys(rewrites)) if (!data.has(rel)) offenders.push(`${rel}: missing (a declared rewrite of the export)`);
+    for (const rel of leftOut) if (data.has(rel)) offenders.push(`${rel}: here, and the export leaves it out`);
     check('files', counts, offenders);
   }
 
@@ -266,6 +335,27 @@ export function selfCheck({ out, web, commit, prefix, appDir, fromGit, uncommitt
       }
     }
     check('paths', { textFiles: text.size, allowed }, offenders);
+  }
+
+  // names: a private part's, in every file (binaries read byte for byte).
+  {
+    const offenders = [];
+    let allowed = 0;
+    for (const [rel, d] of data) {
+      const t = text.get(rel) ?? d.toString('latin1');
+      const hits = [...matches(t, PRIVATE_NAMES)];
+      if (!hits.length) continue;
+      const ok = NAMES_ALLOWED.find((a) => a.path === rel);
+      const inText = (m) => !ok.text || t.slice(Math.max(0, m.index - ok.text.length), m.index + ok.text.length).includes(ok.text);
+      if (ok && hits.length === ok.count && hits.every(inText)) {
+        allowed += hits.length;
+        continue;
+      }
+      if (ok) offenders.push(`${rel}: ${hits.length} hits, and NAMES_ALLOWED allows ${ok.count}${ok.text ? ` inside "${ok.text}"` : ''}`);
+      for (const m of hits) offenders.push(`${rel}: ${at(t, m.index, m[0].length)} (a private part's name)`);
+    }
+    for (const a of NAMES_ALLOWED) if (!data.has(a.path)) offenders.push(`${a.path}: in NAMES_ALLOWED, and not in the copy (drop the entry)`);
+    check('names', { files: data.size, allowed }, offenders);
   }
 
   // licence: GPL-3.0, the CAD plugin's LGPL licences, SPDX lines, the notices.

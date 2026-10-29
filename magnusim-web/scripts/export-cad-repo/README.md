@@ -27,10 +27,23 @@ your PC, or a coding agent you have installed and signed in to yourself. A key
 you give it is kept on your PC, encrypted for your Windows account. Without one,
 everything else works the same.
 
-With the app running, `node scripts/assistant-run.mjs "prompt"` in
-`magnusim-web/` runs one Assistant turn from a terminal and prints what happens
-(`--help` lists its options). Outside the app's window it is the one way to start
-a turn on a coding agent: the app checks that it runs on your Windows account.
+From a terminal, `scripts/assistant-run.mjs` runs one Assistant turn and prints
+what happens. It works only with the app's server started from this repository,
+not with the installed app (that one keeps its Assistant files in its own folder
+and does not show its port). In `magnusim-web/`, after `npm ci`:
+
+```
+npm run dev
+node scripts/assistant-run.mjs --port <port> "prompt"
+```
+
+`npm run dev` prints the address it listens on (`Magnusim CAD server on
+http://127.0.0.1:<port>/`; `npm run dev -- --port <port>` chooses it), and the
+second command, in another terminal, takes that port (`--help` lists its other
+options). For a turn on a coding agent it reads the server's per-launch token
+from `%APPDATA%\Magnusim\assistant\mcp.json`, which the server writes when it
+starts with the Assistant set up (`MAGNUSIM_ASSISTANT_HOME`, set the same for
+both, moves that folder).
 
 ## Build from source
 
@@ -60,6 +73,10 @@ Other scripts in `magnusim-web/`:
 - `npm run dev`: the app's server with the page from source; open the address
   it prints in a browser.
 
+The tests are not in this repository: the CAD plugin's unit, kernel and e2e
+tests and the scripts that run them (its `npm test`, `npm run typecheck` and
+`test:*` scripts), and `npm test` in `desktop/`, stay in Magnusim.
+
 The kernel and solver WebAssembly modules in `bundled-plugins/cad/workspace/`
 are prebuilt. Their sources, pinned to exact upstream commits with our patches,
 and the Linux scripts that rebuild them are in `bundled-plugins/cad/kernel-build/`
@@ -67,12 +84,12 @@ and `bundled-plugins/cad/solver-build/`.
 
 ## Where the code comes from
 
-This repository is a copy of Magnusim CAD's code, refreshed from
-[Magnusim](https://github.com/Lilmill2000/Magnusim) at each release, one commit
-per release. Magnusim CAD and Magnusim's CAD plugin are the same code, so code
-changes are made in Magnusim and arrive here with the next release; the tests
-stay there too. Issues are welcome here. `EXPORT.json` names the Magnusim
-commit each copy was made from and lists every file in it.
+This repository is a copy of Magnusim CAD's code, one commit per copy.
+Magnusim CAD and Magnusim's CAD plugin are the same code, so code changes are
+made in Magnusim and arrive here with the next copy.
+{{copied-from}}
+Issues are welcome here. `EXPORT.json` says what each copy was made from and
+lists every file in it, with the few the copy changes or leaves out and why.
 
 ## Licence
 
