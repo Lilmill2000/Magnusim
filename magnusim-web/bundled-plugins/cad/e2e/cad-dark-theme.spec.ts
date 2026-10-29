@@ -546,8 +546,9 @@ test('cad:dark-sketch an open sketch recolours its lines and its draw cursor liv
   await page.mouse.click(b[0], b[1]);
   await page.keyboard.press('Escape');
   await still(page);
-  // The line tool again: the draw cursor (its ink is in the cursor's image).
-  await page.keyboard.press('l');
+  // The Line tool is still in hand (Escape ended only the chain; L now would put it down): the
+  // draw cursor (its ink is in the cursor's image).
+  expect(await f.evaluate(() => (window as unknown as W).__CAD__.services.apis.get().sketch.tool?.id)).toBe('line');
   await page.mouse.move((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 60);
   await still(page);
   const cursor = () => f.evaluate(() => (document.querySelector('[data-cad-canvas]') as HTMLElement).style.cursor);

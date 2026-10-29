@@ -306,8 +306,9 @@ test('cad:p3-sketch-escape-typed Escape never finishes a sketch; typed length an
   await expect(panel).toBeVisible();
   await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
 
-  // Two overlapping circles (C): r 20 at (60, 0) and (90, 0); trim the arc inside the first one.
-  await page.keyboard.press('c');
+  // Two overlapping circles: r 20 at (60, 0) and (90, 0); trim the arc inside the first one. The
+  // Circle tool is still in hand (Escape dropped only the circle); C now would put it down.
+  await expect(tb.locator('.tb-btn[data-command="sketch.circle"]')).toHaveClass(/is-active/);
   await clickAt(page, [60, 0, 0]);
   await clickAt(page, [80, 0, 0]);
   await clickAt(page, [90, 0, 0]);
