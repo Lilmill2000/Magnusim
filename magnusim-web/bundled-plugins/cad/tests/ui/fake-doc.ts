@@ -715,6 +715,17 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       state.set((s) => ({ ...s, view: { ...s.view, hiddenBodies: visible ? s.view.hiddenBodies.filter((b) => b !== id) : [...s.view.hiddenBodies, id] } }));
       rebuild();
     },
+    setBodiesSeeThrough(ids, on) {
+      calls.push(`setBodiesSeeThrough ${ids.join(',')} ${on}`);
+      state.set((s) => {
+        const was = s.view.seeThroughBodies ?? [];
+        const now = on ? [...was, ...ids.filter((id) => !was.includes(id))] : was.filter((b) => !ids.includes(b));
+        const view = { ...s.view };
+        if (now.length) view.seeThroughBodies = now;
+        else delete view.seeThroughBodies;
+        return { ...s, view };
+      });
+    },
     setExpanded(key, expanded) {
       state.set((s) => {
         const has = s.view.expanded.includes(key);
@@ -734,6 +745,15 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     setCamera(camera) {
       calls.push('setCamera');
       state.set((s) => ({ ...s, view: { ...s.view, camera } }));
+    },
+    setSection(section) {
+      calls.push(`setSection ${section ? section.plane.kind : 'off'}`);
+      state.set((s) => {
+        const view = { ...s.view };
+        if (section) view.section = section;
+        else delete view.section;
+        return { ...s, view };
+      });
     },
     setSketchVisibility(id, mode) {
       calls.push(`setSketchVisibility ${id} ${mode}`);

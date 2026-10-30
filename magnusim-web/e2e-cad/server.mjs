@@ -1,10 +1,14 @@
 // The CAD edition's test server: Magnusim CAD from source (scripts/server/cad-edition/serve.mjs
-// --dev) on the port given, with an emptied projects folder and prefs of its own, no Python to
-// find (MAGNUSIM_PYTHON names a missing file, Python's folders are off PATH) and the spawn
-// guard on. playwright.cad.config.js starts it. Outside e2e/ so the core suite never runs these.
+// --dev) on the port given, with an emptied projects folder, prefs of its own and an emptied
+// Assistant home (its settings, keys and spend start as a new install's at every start, so a
+// test that changed Settings → Assistant and was cut short leaves nothing for the next run), no
+// Python to find (MAGNUSIM_PYTHON names a missing file, Python's folders are off PATH) and the
+// spawn guard on. playwright.cad.config.js starts it. Outside e2e/ so the core suite never runs
+// these.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { removeTreeSync } from '../scripts/remove-tree.js';
 
 const root = process.env.MAGNUSIM_PROJECTS_ROOT;
 const prefs = process.env.MAGNUSIM_LOCAL_JSON;
@@ -12,6 +16,11 @@ if (!root || !prefs) throw new Error('MAGNUSIM_PROJECTS_ROOT and MAGNUSIM_LOCAL_
 rmSync(root, { recursive: true, force: true, maxRetries: 5 });
 mkdirSync(root, { recursive: true });
 writeFileSync(prefs, '{}\n');
+// The Assistant's home: MAGNUSIM_ASSISTANT_HOME, else beside the prefs file, as the server finds
+// it (scripts/server/assistant/home.ts); named here so both are the same folder.
+const assistantHome = resolve(process.env.MAGNUSIM_ASSISTANT_HOME || join(dirname(prefs), basename(prefs).replace(/\.json$/i, '') + '.assistant'));
+process.env.MAGNUSIM_ASSISTANT_HOME = assistantHome;
+removeTreeSync(assistantHome);
 process.env.MAGNUSIM_PYTHON = join(root, 'no-python.exe');
 process.env.PATH = String(process.env.PATH || '')
   .split(delimiter)

@@ -8,7 +8,8 @@
 //   - the person's view is never touched: no camera call, the Part's view, its files and its view
 //     file unchanged;
 //   - hide by name (any case) or id, bodies hidden in the tree apart, an unknown name not_found;
-//   - section "<Top|Front|Right> [offset <length>] [flip]" (parameters allowed), bad_section;
+//   - section "<plane> [offset <length> | middle] [flip]": Top, Front, Right, a construction plane,
+//     a flat face (parameters allowed in the offset), bad_section;
 //   - labels bodies (names at their boxes' centres, #b handles) and faces (#f handles on the
 //     largest faces the picture really sees, at most 30, kept by their stored references, the
 //     same handle for the same face in one key, a new table for a new key); the handles are the
@@ -30,15 +31,15 @@ import {
   FACE_LABELS_MAX,
   faceSpots,
   JPEG_QUALITY,
-  keepsWords,
-  parseSection,
-  sectionAtMiddle,
   sheetLayout,
   setViewRaster,
   type Ctx2D,
   type Raster,
 } from '../../src/assistant/view';
 import { currentHandles } from '../../src/assistant/selectors/handles';
+import { splitSection } from '../../src/assistant/measure-targets';
+import { keepsWords } from '../../src/features/section/plane';
+import { offsetRange, originFrame } from '../../src/viewport/section';
 import type { BodyId, RegionRef, Vec3 } from '../../src/types/doc';
 import type { SketchOutput } from '../../src/types/sketch';
 import type { SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../../src/types/viewport';
@@ -262,31 +263,38 @@ describe('the sheet, the cut and the faces a picture shows', () => {
     expect(at(100, 288)).not.toEqual([7, 8, 9, 255]);
   });
 
-  it('reads a cut: a plane, an offset in any length (parameters too), flip; anything else is bad_section', () => {
-    const units = (e: string) => (e.trim() === 'w/2' ? { ok: true as const, value: 15, quantity: 'length' as const, uses: ['w'] } : /^(-?\d+(\.\d+)?)( mm)?$/.test(e.trim()) ? { ok: true as const, value: Number(e.trim().split(' ')[0]), quantity: 'length' as const, uses: [] } : { ok: false as const, error: 'Unknown name' });
-    expect(parseSection('', units)).toBeNull();
-    expect(parseSection('  ', units)).toBeNull();
-    expect(parseSection('Top offset 4 mm flip', units)).toEqual({ plane: 'top', offset: 4, flip: true });
-    expect(parseSection('front', units)).toEqual({ plane: 'front', offset: 0, flip: false });
-    expect(parseSection('YZ offset w/2', units)).toEqual({ plane: 'right', offset: 15, flip: false });
-    expect(parseSection('XY flip', units)).toEqual({ plane: 'top', offset: 0, flip: true });
-    expect(parseSection('Front middle', units)).toEqual({ plane: 'front', offset: 0, flip: false, middle: true });
-    expect(parseSection('top MIDDLE flip', units)).toEqual({ plane: 'top', offset: 0, flip: true, middle: true });
+  it('reads a cut: a plane, an offset or middle, flip; what each keeps in model words', () => {
+    expect(splitSection('')).toBeNull();
+    expect(splitSection('  ')).toBeNull();
+    expect(splitSection('Top offset 4 mm flip')).toEqual({ base: 'Top', offset: '4 mm', middle: false, flip: true });
+    expect(splitSection('front')).toEqual({ base: 'front', offset: null, middle: false, flip: false });
+    expect(splitSection('YZ offset w/2')).toEqual({ base: 'YZ', offset: 'w/2', middle: false, flip: false });
+    expect(splitSection('XY flip')).toEqual({ base: 'XY', offset: null, middle: false, flip: true });
+    expect(splitSection('Front middle')).toEqual({ base: 'Front', offset: null, middle: true, flip: false });
+    expect(splitSection('top MIDDLE flip')).toEqual({ base: 'top', offset: null, middle: true, flip: true });
+    // A construction plane's name and a face selector keep their spaces and dots.
+    expect(splitSection('Tilted plane 2 offset -3 mm')).toEqual({ base: 'Tilted plane 2', offset: '-3 mm', middle: false, flip: false });
+    expect(splitSection('Extrude 1.end offset -2 mm flip')).toEqual({ base: 'Extrude 1.end', offset: '-2 mm', middle: false, flip: true });
+    // What is not a form stays in the plane's text, which then names no plane (bad_section, below).
+    expect(splitSection('Top 4')!.base).toBe('Top 4');
+    expect(splitSection('Top offset')!.base).toBe('Top offset');
+    expect(splitSection('middle')!.base).toBe('middle');
     // Through the middle of the shown bodies' box along the normal (Front's points at -Y).
     const boxes = [[0, 10, 0, 20, 30, 4], [-5, 20, 2, 5, 50, 12]];
-    expect(sectionAtMiddle(parseSection('Top middle', units), boxes)).toEqual({ plane: 'top', offset: 6, flip: false, middle: true });
-    expect(sectionAtMiddle(parseSection('Front middle', units), boxes)).toEqual({ plane: 'front', offset: -30, flip: false, middle: true });
-    expect(sectionAtMiddle(parseSection('Right middle', units), [])).toEqual({ plane: 'right', offset: 0, flip: false, middle: true });
-    expect(sectionAtMiddle(parseSection('Top offset 4 mm', units), boxes)).toEqual({ plane: 'top', offset: 4, flip: false });
-    expect(sectionAtMiddle(null, boxes)).toBeNull();
-    for (const bad of ['Side', 'Top 4', 'Top offset', 'Top offset banana', 'Front offset 3 mm sideways', 'Top middle offset 2 mm', 'middle']) {
-      expect(() => parseSection(bad, units), bad).toThrow(/^bad_section: /);
-    }
-    // What each cut keeps, in model words (Front's normal points at -Y).
-    expect(keepsWords({ plane: 'top', offset: 4, flip: false })).toBe('z <= 4 mm');
-    expect(keepsWords({ plane: 'top', offset: 4, flip: true })).toBe('z >= 4 mm');
-    expect(keepsWords({ plane: 'front', offset: 10, flip: false })).toBe('y >= -10 mm');
-    expect(keepsWords({ plane: 'right', offset: -2, flip: true })).toBe('x >= -2 mm');
+    const mid = (p: 'origin:top' | 'origin:front') => {
+      const r = offsetRange(originFrame(p), boxes)!;
+      return (r[0] + r[1]) / 2;
+    };
+    expect(mid('origin:top')).toBe(6);
+    expect(mid('origin:front')).toBe(-30);
+    // What each cut keeps, in model words (Front's normal points at -Y); a slanted plane by its normal.
+    expect(keepsWords(originFrame('origin:top'), 4, false)).toBe('z <= 4 mm');
+    expect(keepsWords(originFrame('origin:top'), 4, true)).toBe('z >= 4 mm');
+    expect(keepsWords(originFrame('origin:front'), 10, false)).toBe('y >= -10 mm');
+    expect(keepsWords(originFrame('origin:right'), -2, true)).toBe('x >= -2 mm');
+    expect(keepsWords({ origin: [0, 0, 5], normal: [0, 0, 1] }, 2, false)).toBe('z <= 7 mm');
+    expect(keepsWords({ origin: [0, 0, 0], normal: [Math.SQRT1_2, 0, Math.SQRT1_2] }, 2, false)).toBe('the side against its normal');
+    expect(keepsWords({ origin: [0, 0, 0], normal: [Math.SQRT1_2, 0, Math.SQRT1_2] }, 2, true)).toBe('the side along its normal');
   });
 
   it('a face counts where it faces the camera and the cut keeps it, and only where the picture sees it', () => {
@@ -416,6 +424,15 @@ describe('view', () => {
       expect(fv.shots[0].hide.sort()).toEqual([a.body, b.body].sort());
       expect(r.data).toMatchObject({ shown: [], hidden: ['Body 2', 'Body 1'], hidden_in_tree: ['Body 3'] });
       expect(r.text).toContain('no bodies shown; hidden Body 2, Body 1, Body 3');
+      // See-through in the tree (INSPECT > See-through): the picture follows the tree as for hidden
+      // ones, drawing it see-through (the view's own material), and lists it; one the picture leaves out is not listed.
+      h.doc.setBodyVisible(c.body, true);
+      h.doc.setBodiesSeeThrough([b.body, c.body], true);
+      const see = await h.ok('view', { ...VIEW, hide: [a.body, b.body] });
+      expect(see.data).toMatchObject({ shown: ['Body 3'], hidden: ['Body 1', 'Body 2'], see_through: ['Body 3'] });
+      expect(see.text).toContain('shown Body 3; hidden Body 1, Body 2; see-through Body 3');
+      h.doc.setBodiesSeeThrough([b.body, c.body], false);
+      expect((await h.ok('view', { ...VIEW })).data).not.toHaveProperty('see_through');
       const miss = await h.call('view', { ...VIEW, hide: ['Body 9'] });
       expect(miss).toEqual({
         ok: false,
@@ -439,11 +456,47 @@ describe('view', () => {
       const fv = fakeViewport(h);
       recordingRaster();
       const r = await h.ok('view', { ...VIEW, views: ['front'], section: 'Top offset cut flip' });
-      expect(fv.shots[0].section).toEqual({ plane: 'top', offset: 4, flip: true });
+      expect(fv.shots[0].section).toEqual({ frame: { origin: [0, 0, 0], normal: [0, 0, 1] }, offset: 4, flip: true });
       expect(r.data.section).toEqual({ plane: 'Top', offset_mm: 4, flip: true, keeps: 'z >= 4 mm' });
       const bad = await h.call('view', { ...VIEW, section: 'Top offset nothing' });
       expect(bad).toMatchObject({ ok: false, error: { code: 'invalid_input', message: expect.stringMatching(/^bad_section: The offset "nothing" of "Top offset nothing" is not a length: /), detail: { reason: 'bad_section' } } });
+      for (const text of ['Side', 'Top 4', 'Top offset', 'Top middle offset 2 mm', 'middle', 'Body 1']) {
+        const no = await h.call('view', { ...VIEW, section: text });
+        expect(no, text).toMatchObject({ ok: false, error: { detail: { reason: 'bad_section' } } });
+      }
       expect(fv.shots).toHaveLength(1);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'section on a construction plane at an angle and on a flat face: the picture cuts there, the data names the plane',
+    async () => {
+      h = await assistantHarness();
+      await block(h, 20, 20, 20);
+      // Tilt: the Top plane turned 30 deg about the X axis (normal (0, -+sin 30, cos 30)).
+      await h.add('ref_plane', { method: 'angle', plane: { kind: 'origin', plane: 'origin:top' }, axis: { kind: 'origin', axis: 'origin:x' }, angle: '30 deg', name: 'Tilt' });
+      const fv = fakeViewport(h);
+      recordingRaster();
+      const tilt = await h.ok('view', { ...VIEW, section: 'Tilt offset 5 mm' });
+      const cut = fv.shots[0].section as { frame: { origin: Vec3; normal: Vec3 }; offset: number; flip: boolean };
+      expect(cut.offset).toBe(5);
+      expect(cut.flip).toBe(false);
+      expect(Math.abs(cut.frame.normal[1])).toBeCloseTo(0.5, 9);
+      expect(Math.abs(cut.frame.normal[2])).toBeCloseTo(Math.sqrt(3) / 2, 9);
+      expect(tilt.data.section).toEqual({ plane: 'Tilt', offset_mm: 5, flip: false, keeps: 'the side against its normal' });
+      // The block's top face (z = 20, its normal out of the material +Z), cut 5 mm into it: z = 15.
+      const face = await h.ok('view', { ...VIEW, section: 'Extrude 1.end offset -5 mm flip' });
+      expect(fv.shots[1].section).toMatchObject({ frame: { normal: [0, 0, 1] }, offset: -5, flip: true });
+      expect(face.data.section).toMatchObject({ offset_mm: -5, flip: true, keeps: 'z >= 15 mm' });
+      expect(String((face.data.section as Row).plane)).toMatch(/Extrude 1/);
+      // Middle on Tilt: through the middle of the block along Tilt's normal.
+      await h.ok('view', { ...VIEW, section: 'Tilt middle' });
+      const r = offsetRange((fv.shots[2].section as typeof cut).frame, [[0, 0, 0, 20, 20, 20]])!;
+      expect((fv.shots[2].section as typeof cut).offset).toBeCloseTo((r[0] + r[1]) / 2, 9);
+      // A construction axis is no plane: bad_section.
+      await h.add('ref_axis', { method: 'two_planes', planes: [{ kind: 'origin', plane: 'origin:top' }, { kind: 'origin', plane: 'origin:right' }], name: 'Edge axis' });
+      expect(await h.call('view', { ...VIEW, section: 'Edge axis' })).toMatchObject({ ok: false, error: { detail: { reason: 'bad_section' } } });
     },
     REAL_KERNEL_MS,
   );

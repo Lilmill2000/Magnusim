@@ -11,13 +11,16 @@ import {
   addLocalTurn,
   answerKeyOf,
   chooseConversation,
+  continueInNewChat,
   dockStoreSnapshot,
   draftOf,
+  historyCleared,
   keepAnswerKey,
   keepTurn,
   keptTurns,
   clearStopSent,
   markStopSent,
+  moreSavedChat,
   pickedProvider,
   questionClosed,
   questionShown,
@@ -29,6 +32,7 @@ import {
   setPickedProvider,
   setTurnStopper,
   showConversation,
+  showSavedChat,
   STORAGE_KEYS,
   subscribeDockStore,
   unwatchTurn,
@@ -519,6 +523,96 @@ describe('drafts', () => {
     setDraft('c1', '');
     expect(draftOf('c1')).toBe('');
     expect(sessionStorage.getItem(`${STORAGE_KEYS.draftPrefix}c1`)).toBeNull();
+  });
+
+  it("Continue in a new chat: a new conversation shown, the earlier one's draft moved into it, `carry` held until the person picks one, New, or the context moves", () => {
+    const from = { from: 'c1', provider: 'anthropic', label: 'Cloud A' };
+    setDockContext({ project_id: 'p1', workspace: null });
+    showConversation('c1');
+    setDraft('c1', 'Now the hands.');
+    setDraft(null, 'an older new draft');
+    continueInNewChat(from);
+    expect(dockStoreSnapshot()).toMatchObject({ shown: null, carry: from });
+    expect([draftOf('c1'), draftOf(null)]).toEqual(['', 'Now the hands.']);
+    expect(sessionStorage.getItem(`${STORAGE_KEYS.draftPrefix}c1`)).toBeNull();
+    // New conversation: nothing is carried.
+    showConversation(null);
+    expect(dockStoreSnapshot().carry).toBeNull();
+    // An earlier one with no draft leaves the new one's.
+    continueInNewChat(from);
+    expect([dockStoreSnapshot().carry, draftOf(null)]).toEqual([from, 'Now the hands.']);
+    showConversation('c2');
+    expect(dockStoreSnapshot().carry).toBeNull();
+    continueInNewChat(from);
+    setDockContext({ project_id: 'p2', workspace: null });
+    expect(dockStoreSnapshot().carry, 'only in its own context').toBeNull();
+  });
+});
+
+describe('a saved chat (History)', () => {
+  const request = (turn: string, prompt: string) => ({
+    turn,
+    conversation: 'c-old',
+    prompt,
+    pictures: 0,
+    files: [],
+    answer: `Answer to ${prompt}`,
+    steps: [],
+    steps_left_out: 0,
+    end: { state: 'done', reason: 'end_turn', message: null },
+    full: null,
+    usage: { usd: 0, estimated: false, tokens: 0, steps: 0, billing: 'usd' },
+    started_by: 'window',
+    started_at: '2026-10-20T10:00:00.000Z',
+    ended_at: '2026-10-20T10:01:00.000Z',
+  });
+  const chat = { id: 'c-old', title: 'The clock', provider: 'anthropic', label: 'Cloud A', model: 'm', started_at: '', ended_at: '2026-10-20T10:01:00.000Z', first_prompt: 'one', end_state: 'done', full: true };
+
+  it('shows read only in place of a conversation, a page at a time; picking a conversation, New, Continue or another context ends it', async () => {
+    setDockContext({ project_id: 'p1', workspace: null });
+    showConversation('c1');
+    const shown = showSavedChat('p1', 'c-old');
+    expect(dockStoreSnapshot()).toMatchObject({ shown: null, carry: null, saved: { project: 'p1', id: 'c-old', state: 'loading' } });
+    expect(sent.at(-1)?.url).toBe('/api/assistant/history/c-old?project=p1&from=0');
+    await sent.at(-1)?.answer(200, { ok: true, chat, total: 3, from: 0, next: 2, requests: [request('t1', 'one'), request('t2', 'two')] });
+    await shown;
+    expect(dockStoreSnapshot().saved).toMatchObject({ state: 'ready', total: 3, next: 2, chat: { title: 'The clock' } });
+    expect(dockStoreSnapshot().saved?.requests.map((r) => r.prompt)).toEqual(['one', 'two']);
+    const more = moreSavedChat();
+    expect(sent.at(-1)?.url).toBe('/api/assistant/history/c-old?project=p1&from=2');
+    await sent.at(-1)?.answer(200, { ok: true, chat, total: 3, from: 2, next: null, requests: [request('t3', 'three')] });
+    await more;
+    expect(dockStoreSnapshot().saved?.requests.map((r) => r.prompt)).toEqual(['one', 'two', 'three']);
+    expect(dockStoreSnapshot().saved?.next).toBeNull();
+    // A conversation picked: the saved chat goes.
+    showConversation('c1');
+    expect(dockStoreSnapshot().saved).toBeNull();
+    // Continue in a new chat from it: carried as a live one is.
+    void showSavedChat('p1', 'c-old');
+    continueInNewChat({ from: 'c-old', provider: 'anthropic', label: 'Cloud A' });
+    expect(dockStoreSnapshot()).toMatchObject({ saved: null, shown: null, carry: { from: 'c-old', provider: 'anthropic' } });
+    // Another context, or Clear history of its project.
+    void showSavedChat('p1', 'c-old');
+    setDockContext({ project_id: 'p2', workspace: null });
+    expect(dockStoreSnapshot().saved).toBeNull();
+    void showSavedChat(null, 'c-home');
+    expect(sent.at(-1)?.url).toBe('/api/assistant/history/c-home?project=home&from=0');
+    historyCleared('p1');
+    expect(dockStoreSnapshot().saved?.id, "another place's Clear leaves it").toBe('c-home');
+    historyCleared(null);
+    expect(dockStoreSnapshot().saved).toBeNull();
+  });
+
+  it('a read that fails says why; an answer for a chat no longer shown is dropped', async () => {
+    const first = showSavedChat('p1', 'c-old');
+    const firstReq = sent.at(-1);
+    const second = showSavedChat('p1', 'c-two');
+    await firstReq?.answer(200, { ok: true, chat, total: 1, from: 0, next: null, requests: [request('t1', 'one')] });
+    await first;
+    expect(dockStoreSnapshot().saved).toMatchObject({ id: 'c-two', state: 'loading', requests: [] });
+    await sent.at(-1)?.answer(404, { ok: false, code: 'not_found', error: 'No saved chat of that id here (History keeps 31 days).' });
+    await second;
+    expect(dockStoreSnapshot().saved).toMatchObject({ id: 'c-two', state: 'error', error: 'No saved chat of that id here (History keeps 31 days).' });
   });
 });
 

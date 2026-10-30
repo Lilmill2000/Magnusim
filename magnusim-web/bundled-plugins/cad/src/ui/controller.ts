@@ -21,6 +21,7 @@ import { openModal } from '../lib/modal';
 import { pendingEdits } from '../lib/pendingEdits';
 import { clearSelection, selectItem, showForPanel, userItems } from '../lib/selection';
 import { targetOfItem } from '../viewport/normal';
+import { seeThroughBy, seeThroughWhy } from '../viewport/bind';
 import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
 import type { AssistantStep, EditSession, TakeOverWhy } from '../types/doc-service';
@@ -136,6 +137,13 @@ export interface UiController {
   rollToEnd(): void;
   setRollbackIndex(index: number): void;
   setBodyVisible(id: BodyId, visible: boolean): void;
+  /**
+   * Draw bodies see-through (on) or opaque again: INSPECT > See-through and the body's menu (view
+   * state kept with the Part, no undo step; the Assistant's workspace see_through and opaque). A
+   * body its feature always draws see-through (an Enclosure) stays so. Null when it applied, else
+   * why nothing changed (the caller says it: a toast, the Assistant's error).
+   */
+  setBodiesSeeThrough(ids: readonly BodyId[], on: boolean): string | null;
   /**
    * Show or hide a sketch, or a reference plane, axis or point, in the view (its row's eye and its
    * menu's Hide / Show; view state, no undo step). A hidden reference still serves the features
@@ -779,6 +787,24 @@ export function createUiController(services: AppServices): UiController {
         if (services.selection.get().items.some(gone)) services.selection.set((s) => ({ ...s, items: s.items.filter((it) => !gone(it)) }));
       }
     },
+    setBodiesSeeThrough(ids, on) {
+      const d = doc.state.get();
+      const built = d.rebuild.bodies.filter((b) => ids.includes(b.id));
+      if (!built.length) return 'Select a body first, in the view or the tree';
+      // A body its feature always draws see-through (an Enclosure's air) is left as it is.
+      const always = built.filter((b) => seeThroughBy(d, services, b.id));
+      const list = built.filter((b) => !always.includes(b));
+      if (!list.length) return on ? null : `${always[0].name} is always see-through: ${seeThroughBy(d, services, always[0].id)!.name} draws it so`;
+      try {
+        doc.setBodiesSeeThrough(
+          list.map((b) => b.id),
+          on,
+        );
+      } catch (err) {
+        return errText(err);
+      }
+      return null;
+    },
     setFeatureVisible(id, visible) {
       const d = doc.state.get();
       const now = featureShown(d.doc, d.view, doc.features, id);
@@ -852,8 +878,20 @@ export function createUiController(services: AppServices): UiController {
       const hidden = d.view.hiddenBodies.includes(id);
       const block = editBlock();
       const f = d.doc.features.find((x) => x.id === info.feature);
+      // See-through or opaque (INSPECT > See-through for this body; view state, never blocked). An
+      // Enclosure's air is always see-through: offered greyed with the reason.
+      const see = seeThroughWhy(d, services, id);
       const items: MenuEntry[] = [
         { id: 'body-visibility', label: `${hidden ? 'Show' : 'Hide'} ${info.name}`, run: () => c.setBodyVisible(id, hidden) },
+        {
+          id: 'body-see-through',
+          label: see ? `Make ${info.name} opaque` : `Make ${info.name} see-through`,
+          disabled: see === 'feature' ? `${info.name} is always see-through: ${seeThroughBy(d, services, id)?.name ?? 'its feature'} draws it so` : null,
+          run: () => {
+            const why = c.setBodiesSeeThrough([id], !see);
+            if (why) fail(see ? 'Opaque' : 'See-through', why);
+          },
+        },
       ];
       // LINK: a solid body goes to the project's geometry unless it is left out; a surface body never
       // does. Magnusim CAD has no projects and no simulation: no such item there.

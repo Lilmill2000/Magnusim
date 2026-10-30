@@ -16,7 +16,9 @@ export const APP_NAME = 'Magnusim CAD';
  * The server's console (the Assistant's [assistant] lines, a plugin's error, a crash) is kept
  * in %APPDATA%\Magnusim CAD\logs\server.log, on this PC only (server.mjs, server-log.mjs:
  * scrubbed of keys, moved on to server.1.log and server.2.log past 5 MiB; the server makes the
- * folder); MAGNUSIM_SERVER_LOG set already wins. desktop.log keeps the app's own start and stop.
+ * folder); MAGNUSIM_SERVER_LOG set already wins. Settings → Assistant's provider log for a problem
+ * report goes in the same folder (assistant/debug-log.ts providerLogDir), and its Open log folder
+ * opens it. desktop.log keeps the app's own start and stop.
  * MAGNUSIM_PACKAGED marks the desktop app (installed, or npm start: the same user data): its home
  * is the person's real folder, never a test one, so no Assistant test switch is honoured in it
  * (assistant/home.ts assistantHomeIsOverridden).

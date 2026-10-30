@@ -1,8 +1,9 @@
 // Parity both ways in Magnusim CAD: each parity row the CAD app has (parity-rows.json, editions
 // with "cad") names the CAD app's own control a person uses for it, and here each is found the
 // way a person reaches it: on Home, a card's details, Home's right-click menus, New project, a
-// project's page of Parts, Settings. Magnusim's controls the CAD app does not have stay away:
-// the compute queue, This PC / Port / Workspace in Settings, and "Open a sample…".
+// project's page of Parts, Settings, the Assistant dock's conversation menu. Magnusim's controls
+// the CAD app does not have stay away: the compute queue, This PC / Port / Workspace in Settings,
+// and "Open a sample…".
 // (The Assistant's side: scripts/__tests__/assistant-parity.test.mjs.)
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readFileSync } from 'node:fs';
@@ -90,6 +91,21 @@ async function reach(page: Page, where: string, pid: string) {
       await page.locator('#home-prefs').click();
       await expect(page.locator('#setup-wizard')).toBeVisible();
       return;
+    case 'dock': {
+      // The Assistant on (a local server's model: its menu shows once a provider is ready; nothing
+      // is sent), the dock open over the project, its conversation menu open. The local server is
+      // the provider whose key is optional.
+      const status = (await (await page.request.get('/api/assistant/status')).json()) as { providers: Array<{ id: string; key: string }> };
+      const local = status.providers.find((p) => p.key === 'optional')?.id ?? '';
+      const set = await page.request.post('/api/assistant/settings', { data: { provider: local, base_url: 'http://127.0.0.1:9/v1', models: { [local]: 'parity' } } });
+      expect(set.ok(), await set.text()).toBe(true);
+      await page.goto(`/#/p/${pid}`);
+      await expect(page.locator('#cad-project .cad-part-title')).toHaveText(['Hinge']);
+      if (!(await page.locator('#assistant-dock').isVisible())) await page.locator('[data-assistant-pill] .assistant-dock-pill-open').click();
+      await page.locator('#assistant-dock [data-dock-menu]').click();
+      await expect(page.locator('#assistant-dock [data-dock-menu-list]')).toBeVisible();
+      return;
+    }
     default:
       throw new Error(`no way to reach "${where}"`);
   }
@@ -98,12 +114,17 @@ async function reach(page: Page, where: string, pid: string) {
 test('each CAD parity row\'s control is in the CAD app, where a person reaches it', async ({ page }) => {
   const pid = await seed(page);
   expect(CAD_ROWS.length).toBeGreaterThan(10);
-  for (const r of CAD_ROWS) {
-    await test.step(`${r.row}: ${r.cad_control!.reach} ${r.cad_control!.selector}`, async () => {
-      await reach(page, r.cad_control!.reach, pid);
-      await expect(page.locator(r.cad_control!.selector).first(), r.row).toBeVisible();
-      await page.keyboard.press('Escape');
-    });
+  try {
+    for (const r of CAD_ROWS) {
+      await test.step(`${r.row}: ${r.cad_control!.reach} ${r.cad_control!.selector}`, async () => {
+        await reach(page, r.cad_control!.reach, pid);
+        await expect(page.locator(r.cad_control!.selector).first(), r.row).toBeVisible();
+        await page.keyboard.press('Escape');
+      });
+    }
+  } finally {
+    // The dock's row turned the Assistant on: off again for the specs after this one.
+    await page.request.post('/api/assistant/settings', { data: { provider: 'off' } }).catch(() => undefined);
   }
 });
 

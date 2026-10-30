@@ -1,11 +1,11 @@
 // Another app with no Magnusim window of its own (core host tools spec 9.5, L9): an MCP client
 // through Magnusim's real bridge (support/mcp-client.mjs), against real app windows.
-// - No window open: the client gets the Home subset of the app's tools (12: no core page tools,
+// - No window open: the client gets the Home subset of the app's tools (13: no core page tools,
 //   nothing that needs the window's project), reads that need no project data run, and a read
 //   of a project that would ask the person answers no_window at once (nobody could see the
 //   question).
 // - Two windows open (Home and a project's workbench): the client is still tab-less (the same
-//   12), but a call whose project_id is open in exactly one window runs in that window: its
+//   13), but a call whose project_id is open in exactly one window runs in that window: its
 //   privacy question shows in that window's dock (not Home's), and after Allow it reads the
 //   project. A project open in no window still answers no_window.
 // Its own server with the Assistant's test switches (a test home, never this PC's settings or
@@ -20,7 +20,7 @@ const WING = 'Mcp Wing';
 const TAIL = 'Mcp Tail';
 const APP_NAME = 'E2E Desk App';
 /** The Home subset a tab-less app gets (spec 15): Home's tools without the window's own. */
-const HOME_SUBSET = ['app_status', 'catalog', 'compute', 'delete', 'explain_ready', 'jobs', 'project_edit', 'project_summary', 'projects', 'read_results', 'read_setup', 'wait'];
+const HOME_SUBSET = ['app_status', 'catalog', 'chat_history', 'compute', 'delete', 'explain_ready', 'jobs', 'project_edit', 'project_summary', 'projects', 'read_results', 'read_setup', 'wait'];
 
 let host;
 let wing;
@@ -79,7 +79,7 @@ async function windows(request) {
 const summary = (projectId) => ({ name: 'project_summary', arguments: { project_id: projectId, with_thumbnail: false } });
 const listed = async (app) => (await app.client.listTools()).tools.map((t) => t.name).sort();
 
-test('no Magnusim window: the Home subset of 12; a read with no project data runs; a project read that would ask answers no_window', async ({ request }) => {
+test('no Magnusim window: the Home subset of 13; a read with no project data runs; a project read that would ask answers no_window', async ({ request }) => {
   await expect.poll(async () => (await windows(request)).length, { timeout: 15_000, message: 'no app window' }).toBe(0);
   const app = await connectApp(request);
   expect(await listed(app)).toEqual(HOME_SUBSET);

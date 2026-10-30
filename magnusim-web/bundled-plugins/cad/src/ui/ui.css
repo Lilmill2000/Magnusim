@@ -794,6 +794,18 @@ html.cad-tb-resizing-rows * {
   color: var(--mg-text);
 }
 
+/* A see-through body (INSPECT > See-through, an Enclosure's air): a quiet mark of its own, not a
+   hidden body's dimmed name (a hidden body can be see-through too). It says so; the menu acts. */
+.cad-badge.is-see-through {
+  color: var(--mg-text-muted);
+  cursor: default;
+}
+
+.cad-badge.is-see-through:hover,
+.cad-badge.is-see-through:focus-visible {
+  color: var(--mg-text);
+}
+
 .cad-badge-dot {
   width: 8px;
   height: 8px;

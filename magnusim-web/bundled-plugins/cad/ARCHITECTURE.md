@@ -70,6 +70,8 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/types/events.ts` | append-only | Add events **only in your own section**; never change another section. |
 | `src/ui/**`, `src/styles/tokens.css`, `tests/ui/**` | UI-SHELL | Design-language components, design tree, rollback bar, panels (flyout feature panels, parameters), toolbar, context menu, chips, dialogs. |
 | `src/viewport/**`, `src/types/viewport.ts`, `tests/viewport/**` | VIEWPORT | three.js viewport, camera/controls, bodies + edges, origin display, BVH picking in a worker, highlight, fit/standard views, triad/XYZ/Fit chrome. |
+| `src/features/see_through/**`, `CadView.seeThroughBodies` (`src/types/doc.ts`, `readView` in `src/doc/schema.ts`, `DocService.setBodiesSeeThrough`), `tests/features/see_through/**`, `tests/doc/see-through.test.ts`, `e2e/cad-see-through.spec.ts` | VIEWPORT (see-through bodies) | INSPECT > See-through and its rule (§7 "See-through bodies"); the body menu's item and the tree's mark are UI-SHELL's, the workspace's see_through and opaque ASSISTANT's. |
+| `src/features/section/**`, `CadView.section` (`src/types/doc.ts`, `readSection` in `src/doc/schema.ts`, `DocService.setSection`), `tests/features/section/**`, `e2e/cad-section-view.spec.ts` | VIEWPORT (the section view's plane) | INSPECT > Section view: its panel, its arrow, the binding that keeps the view's one section state true to the Part (§7 "Section view"). The Assistant's side (`resolveSectionRef` in `src/assistant/measure-targets.ts`, `findSection` in `view.ts`, the workspace's section) is ASSISTANT's. |
 | `src/doc/**`, `src/kernel/**`, `src/types/{doc,doc-service,docstore,undo,units,kernel}.ts`, `tests/doc/**`, `tests/kernel/worker-client.test.ts` | DOC-CORE | Schema v1, feature registry (built-in types: none since the SD pass; removed types read as "Removed feature", `doc/features/removed.ts`), rebuild engine + cache, parameters + expressions, undo/redo, DocStore (WsFilesStore on host API 1.2, WsDataStore on a 1.1 host), conflicts, unsaved work (`nav.setDirty`); KernelAdapter, watchdog, respawn + rebuild. |
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
 | `solver-build/**`, `workspace/solver/*`, `src/solver-worker/**`, `tests/solver/**` | P3 (sketcher) | Built and tested now; not wired into the page until P3. |
@@ -97,7 +99,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/sketch/tools/clip.ts`, `src/sketch/tools/paste.ts`, `tests/sketch/clipboard.test.ts`, `tests/app/clipboard-keys.test.ts`, `tests/assistant/sketch-copy.test.ts`, `e2e/cad-sketch-copy-paste.spec.ts` | P3-SKETCH (Copy and Paste) | The person's Copy and Paste and the Assistant's copy row (§10 "Copy and Paste"). |
 | `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
 | What the Assistant's tools stand on, each in its area's own files: `doc.assistant`, `settled`, `bodiesBefore`, `committed`, `editParams` and `BodyProps.shells` (`src/doc/service.ts`, `params-bulk.ts`, `person-editing.ts`, `rebuild.ts`), undo tags and snapshots (`src/doc/undo.ts`, `src/types/undo.ts`); `openForAssistant`, `openEditForAssistant`, `openParamsForAssistant`, `doneForAssistant`, `dropForAssistant` and the read-only chrome (`src/ui/controller.ts`, `src/ui/kit/Panel.tsx`, `src/ui/panels/ParametersPanel.tsx`); Assistant sketches (`src/sketch/mode.ts`, `commands.ts`) and `analyzeOnce` (`src/solver-worker/`, `src/sketch/solver-client.ts`); `snapshot`, `project`, `visibleFaceAt`, `userCameraMoves` and `{auto}` camera calls (`src/viewport/snapshot.ts`, `viewport.ts`); `AreaApis.assistant` (`src/types/app.ts`). Tests: `tests/doc/{assistant-step,params-bulk,settled}.test.ts`, `tests/ui/controller-assistant.test.ts`, `tests/sketch/mode-assistant.test.ts`, `tests/viewport/{camera-count,snapshot,snapshot-plain}.test.ts`, the `auto-camera` tests, e2e `cad-assistant-panels` and `cad-viewport-snapshot` (shell), `cad-assistant-sketch` (sketch) | DOC-CORE, UI-SHELL, P3-SKETCH, VIEWPORT | §6 "Assistant steps", §7 "Assistant panels and sketches". ASSISTANT calls them and changes none of them. |
-| `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 18 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
+| `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 22 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
 | `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `manifest.toml`, `plugin.py`, `README.md`, `ARCHITECTURE.md`, `LICENSES/**` | frozen (INTEGRATE) | New dependency? Ask INTEGRATE: one `npm install` at a time (shared `node_modules`). |
 | `workspace/**` (except `kernel/mk32.*`, `solver/planegcs.*`) | nobody by hand | Written only by `npm run build`. |
 
@@ -585,8 +587,8 @@ with the host once for the page's life, and its chip goes in the dock.
   (`features/enclosure/kept.ts`): built, read-only panel, edit_feature refuses
   its values, get_model gives no inputs. Magnusim's schemas, help and prefix are
   byte for byte as before (tests/assistant/edition-no-projects.test.ts).
-- **View state** (`CadView`: rollback index, hidden bodies, expanded tree
-  nodes, the origin planes' mode and the camera) is saved but not undoable.
+- **View state** (`CadView`: rollback index, hidden bodies, see-through bodies,
+  expanded tree nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and
   the camera after its first rebuild (over the framing of the first bodies);
   user changes go back with `doc.setPlanes` / `doc.setCamera` (a camera move
@@ -1360,6 +1362,63 @@ with the host once for the page's life, and its chip goes in the dock.
   A feature's error names its fields in the panel's words: an extrude's Two
   sides reason says "Distance 1: ..." under the field "Distance 1", Symmetric
   "Total distance: ...".
+- **Section view** (VIEWPORT, `src/features/section`; Daniel 2026-10-29: any
+  plane, a construction plane's own normal, a draggable arrow, typed offset and
+  flip). One state: the view's `SectionState` (`plane`: a `PlaneRef` of
+  `src/types/references.ts`, an origin plane, a construction plane's feature or
+  a flat face's stored reference; `frame`: where that plane is now; `offset`
+  along its normal; `flip`). The viewport cuts and caps at `frame.origin +
+  offset * normal` and knows nothing of features (`nextSection` in
+  `src/viewport/section.ts`: an origin plane brings its own frame, any other
+  plane comes with the one found for it). Everything else goes through
+  `setSectionView` (`bind.ts`), which finds the plane with the CONSTRUCT
+  resolver (`resolvePlane` on the Part as built: a face by its persistent name,
+  as a feature finds it): INSPECT > Section view's panel (`panel.tsx`, a tool
+  panel; its plane field is a CONSTRUCT pick field with no feature), its arrow
+  (`handle.ts`, Move/copy body's arrow drawing and drag rule: `handle-math.ts`),
+  the Assistant's workspace section. The view tools' popover drives the same
+  state for the origin planes and names any other plane it is on; its More
+  runs the command. The view tools' button and the command turn the cut on
+  with `sectionOn`: the plane found where it is now first (it may have moved
+  while the cut was off), Front with a note when it is gone. `bindSection`
+  (installed with the module) follows the plane after every rebuild, turns the
+  section off and back to Front with a note when the plane is deleted or does
+  not build while nothing holds it back (a panel editing an earlier feature,
+  the rollback bar), keeps the cut meanwhile (said as rolled back when the bar
+  is above the plane), and keeps the section in the Part's view
+  (`CadView.section`, saved, not undoable; written once a drag ends) and puts
+  it back when the Part opens; held back then, it stays saved and comes back
+  once the plane builds. A note lasts until the cut turns off, on or moves to
+  another plane. The Assistant reads it: get_model's section and the
+  workspace's view carry the panel's note, and a face's selector. The arrow points
+  along the plane's own normal whatever Flip keeps (the way Offset grows).
+  Pictures take any plane by its frame (`SnapshotSection`) and leave the arrow
+  out (`section.arrow` in `SNAPSHOT_HIDDEN_LAYERS`).
+- **See-through bodies** (VIEWPORT, `src/features/see_through`; Daniel
+  2026-10-29: per-body see-through as a view state, like a hidden body). The
+  Part's view lists them (`CadView.seeThroughBodies`, absent when none: an older
+  view.json loads unchanged; read as `hiddenBodies` is, strings only, once
+  each); `DocService.setBodiesSeeThrough` changes it with no undo step, and a
+  body that goes with its feature's delete leaves it as it leaves
+  `hiddenBodies`. A body is drawn see-through when its feature draws it so (an
+  Enclosure's air, `FeatureTypeDef.seeThrough`) or the list has it
+  (`seeThroughWhy` in `src/viewport/bind.ts`); the binding sets the bodies again
+  when the list changes (no rebuild). The viewport's one rule for both: the
+  material is translucent at `SEE_THROUGH_OPACITY` (0.28) with no depth writes
+  and pushed back (opaque bodies draw first and write depth, so they sort right
+  against it), its B-rep edges stay; a pick goes to an opaque face behind it
+  first, its own face where nothing opaque is behind (`raycastBodies`), and it
+  hides nothing for edge and vertex picks. A cut caps it with a cap of its own
+  (`SectionCaps` `seeThrough`: its own stencil count in three's transparent
+  pass after every opaque surface, translucent, no depth, never FACE_BIT), so an
+  opaque body inside keeps its cap. INSPECT > See-through (`rule.ts`) acts on the
+  bodies the person's selection touches: all see-through, opaque again; else all
+  see-through; an Enclosure's air is left alone. The body menu has Make <body>
+  see-through / opaque (`ui.setBodiesSeeThrough`), the Bodies row a mark of its
+  own (`data-see-through`, apart from a hidden body's dimming). Pictures follow
+  the tree as for hidden bodies: the snapshot draws the materials as they are
+  (see-through stays see-through), and the view tool's data lists `see_through`
+  as it lists `hidden_in_tree`.
 
 ## 8. Tests
 
@@ -1452,9 +1511,14 @@ with the host once for the page's life, and its chip goes in the dock.
   - The app's own check of the set: `scripts/__tests__/assistant-cad-tools.test.mjs`
     (`npm run test:server` in `magnusim-web`) imports `src/assistant/schemas.ts`
     and `guide.ts` and checks every schema against the app's rules, the strict
-    flags (the first 20 of the 21 tools strict on the cloud dialects,
-    `cad__view` not), and that the local prefix stays within 52,000 characters.
-    Run it after any schema or guide change.
+    flags (the first 20 of the tools a CAD turn offers strict on the cloud
+    dialects: the Part's 22 first), and, in each edition as its server builds the
+    registry (Magnusim offers 31 tools; Magnusim CAD 29, its app tools in its own
+    words), that the tools as sent fit the registry's own local budget (`LOCAL_BUDGET`: 16,384 tokens for an
+    unknown 32K model, at 3.5 characters a token) with nothing cut, and that the
+    system text (the prompt and the CAD notes) stays within 6,000 characters; it
+    prints both and warns past 90% of the tool budget. Run it after any schema or
+    guide change.
 - Phase exit gates: `e2e/cad-p1-document.spec.js` is P1's (proposal §7, one
   test per bullet), against host API 1.2: CAD is On on a fresh install (it
   ships on since D33; `resetCadToDefault()` forgets the choice in the server's
@@ -2410,7 +2474,7 @@ changes. The host's contract is `docs/plugins/authoring.md` "Linking a geometry
 
 The app's Assistant runs a model the person chose (a cloud provider with their
 own key, or a local server) in turns on the app's server, and a workspace page
-offers it tools through the bridge (§9). The Part offers 18 with one fixed
+offers it tools through the bridge (§9). The Part offers 22 with one fixed
 guide. This section is the design and the rules for changing it;
 `docs/assistant.md` is the developer reference (how a call goes, each tool's
 pieces, adding and testing a tool), and each tool's description in
@@ -2420,13 +2484,17 @@ pieces, adding and testing a tool), and each tool's description in
 - **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `check`,
   `view`, `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
   `modify` (fillet, chamfer, shell), `pattern` (linear, circular, mirror),
-  `combine`, `body`, `edit_feature`, `undo`, `hole`. `delete` is the one
-  destructive tool, with its `confirm` note. With the app's three host tools a
-  CAD turn offers 21 (at most 24 go to a local server, 40 to the cloud). Every
-  property of every object is required (`""`, `[]` or `false` when unused), so
-  the set spends none of the first cloud dialect's strict budget for optional
-  fields: the first 20 tools in the app's order are strict, and `cad__view`
-  (the 21st by name) is checked by the app but not decoded strictly. The
+  `combine`, `body`, `edit_feature`, `undo`, `hole`, `construct`, `direct`,
+  `workspace`. `delete` is the one destructive tool, with its `confirm` note.
+  A CAD turn offers 31 in Magnusim (the Part's 22, then the app's 9) and 29 in
+  Magnusim CAD (the app's 7 it keeps). A local request's tools are limited by
+  tokens, not by count (the registry's `LOCAL_BUDGET`: half the model's context,
+  16,384 tokens for an unknown one; past it the lowest priorities go); the cloud
+  takes at most 40. Every property of every object is required (`""`, `[]` or
+  `false` when unused), so the set spends none of the first cloud dialect's
+  strict budget for optional fields: the first 20 tools in the app's order are
+  strict, and `cad__view` and `cad__workspace` (the 21st and 22nd by name) are
+  checked by the app but not decoded strictly. The
   schemas use only the app's subset (no `$ref`, unions, patterns, formats,
   defaults, consts, titles or type lists), at most 6 KB each and 64 KB in all.
   One more tool, or an optional field, would leave another tool out of strict:

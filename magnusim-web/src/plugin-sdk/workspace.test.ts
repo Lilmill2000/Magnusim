@@ -713,6 +713,24 @@ describe('ws.assistant (unreleased, next host minor 1.9)', () => {
     expect(results(posts)[1]).toEqual({ call: 'ai-2', ok: true, result: { text: 'Counter is 2' } });
   });
 
+  it("a call's place in its step reaches the handler (step, callsLeftInStep, editsLeftInStep); a call without it (another app's) has none", async () => {
+    const { ws, push } = await open(accepting);
+    const seen: Array<Record<string, unknown>> = [];
+    await ws.assistant!.register([ADD], async (c) => {
+      seen.push({ step: c.step, callsLeftInStep: c.callsLeftInStep, editsLeftInStep: c.editsLeftInStep, has: Object.hasOwn(c, 'step') });
+      return 'ok';
+    });
+    push({ event: 'assistantInvoke', data: { call: 'ai-1', turn: 'turn-1', tool: 'add', input: { by: 1 }, step: 2, calls_left_in_step: 4, edits_left_in_step: 3 } });
+    invoke(push, 'ai-2');
+    push({ event: 'assistantInvoke', data: { call: 'ai-3', turn: 'turn-1', tool: 'add', input: { by: 1 }, step: 2, calls_left_in_step: -1, edits_left_in_step: 0 } });
+    await vi.waitFor(() => expect(seen).toHaveLength(3));
+    expect(seen).toEqual([
+      { step: 2, callsLeftInStep: 4, editsLeftInStep: 3, has: true },
+      { step: undefined, callsLeftInStep: undefined, editsLeftInStep: undefined, has: false },
+      { step: undefined, callsLeftInStep: undefined, editsLeftInStep: undefined, has: false },
+    ]);
+  });
+
   it('register sends a review (rounds and prompt only) when asked for one, and none otherwise', async () => {
     const { ws, posts } = await open(accepting);
     await ws.assistant!.register([ADD], vi.fn(), { guide: 'g', review: { rounds: 3, prompt: 'Look again.', extra: true } as unknown as { rounds: number; prompt: string } });

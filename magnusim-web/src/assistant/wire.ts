@@ -136,6 +136,13 @@ export interface AssistantStatus {
   ready_reason?: string | null;
   /** Limits for a turn on a coding agent (absent from a server without them in its status). */
   agent_caps?: AgentCaps;
+  /**
+   * The provider log for a problem report (Settings → Assistant): `on` the switch as saved, `env`
+   * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, `folder` where it is kept
+   * (absent from an older server), `server_log` the server's own log's file name when that folder
+   * holds it too (Magnusim CAD's server.log; null otherwise, absent from an older server).
+   */
+  provider_log?: { on: boolean; env: boolean; folder: string; server_log?: string | null };
   /** When the coding agents were last looked for (null: not since the server started). */
   agents_checked_at?: string | null;
   /** How an agent's whole tree is stopped on this PC ('best_effort': Windows PowerShell is blocked). */
@@ -218,11 +225,15 @@ export interface GateView {
  * 'window' (409 no_channel when the link is no longer live: get a fresh one and send again).
  * `tab: 'link'` binds the turn to this tab's workspace (409 no_channel, 400 bad_tab, 409
  * tab_hidden, 409 tab_busy as for a tab id); else `context` names the project and study.
- * `provider` only before a conversation's first message (it keeps its provider).
+ * `provider` only before a conversation's first message (it keeps its provider). `carry_from`
+ * (Continue in a new chat, never with `conversation`): an earlier conversation of the same
+ * provider and project, whose prompts, last answer and end go with the new one's first message
+ * (400 bad_carry, carry_agent; 404 unknown_conversation; 409 conversation_changed, conversation_busy).
  */
 export interface TurnStartBody {
   text: string;
   conversation?: string;
+  carry_from?: string;
   provider?: string;
   link?: string;
   /** 'link' (this window's workspace), an app tab's id, or 'auto' (the only connected one: the CLI). */
@@ -364,8 +375,68 @@ export interface TurnChannelFrameData {
 }
 
 /**
+ * GET /api/assistant/history?project=<id>|home: the dock's History, the chats saved for a project
+ * (or Home), newest end first, kept 31 days (scripts/server/assistant/history.ts).
+ */
+export interface HistoryAnswer {
+  ok: true;
+  kept_days: number;
+  chats: HistoryChat[];
+  /** Saved chats in all (at most 200 are listed). */
+  total: number;
+}
+
+export interface HistoryChat {
+  /** Its conversation's id (Continue in a new chat sends it as carry_from). */
+  id: string;
+  title: string;
+  provider: string;
+  /** How the person reads its provider: its label, or the coding agent's name (server data). */
+  label: string;
+  model: string;
+  started_at: string;
+  ended_at: string;
+  first_prompt: string;
+  end_state: string;
+  /** Its conversation was full after its last request. */
+  full: boolean;
+}
+
+/** One saved request: never a picture or a result's data. */
+export interface HistoryRequest {
+  turn: string;
+  conversation: string;
+  prompt: string;
+  /** The person's pictures sent with it (their number only). */
+  pictures: number;
+  files: string[];
+  /** Everything the model said in it (its end kept when cut). */
+  answer: string;
+  steps: Array<{ step: number; tool: string; title: string; ok: boolean | null; code: string | null; line: string }>;
+  steps_left_out: number;
+  end: { state: string; reason: string; message: string | null };
+  full: string | null;
+  usage: { usd: number; estimated: boolean; tokens: number; steps: number; billing: string };
+  started_by: string;
+  started_at: string;
+  ended_at: string;
+  /** The fields cut to fit the saved line. */
+  cut?: string[];
+}
+
+/** GET /api/assistant/history/:id?project=&from=: a page of one saved chat. */
+export interface HistoryPageAnswer {
+  ok: true;
+  chat: HistoryChat;
+  total: number;
+  from: number;
+  next: number | null;
+  requests: HistoryRequest[];
+}
+
+/**
  * GET /api/assistant/conversations[?project=<id>|home]: the conversations this server holds
- * (memory only: a restart clears them), newest use first.
+ * (memory only: a restart clears them; History keeps what they said), newest use first.
  */
 export interface ConversationsAnswer {
   ok: true;
@@ -389,12 +460,41 @@ export interface ConversationRow {
   running: string | null;
   /** Why no more turns fit ('messages', 'images', 'bytes', 'context'), or null. */
   full: string | null;
+  /** That limit with its numbers, in the person's words (null while more turns fit; absent from an older server). */
+  full_text?: string | null;
+  /**
+   * The limit it is closest to: `used` of `limit`, full at `used >= limit` (the context's limit is
+   * 80% of the model's); null for a coding agent's (absent from an older server).
+   */
+  room?: ConversationRoom | null;
+  /**
+   * A coding agent's: the context its agent uses, of its size (tokens), as the agent last said;
+   * null before it said, and for any other conversation (absent from an older server).
+   */
+  context?: AgentContext | null;
   /** Its first turn's title ('' before any). */
   title: string;
   /** Its turns the server still keeps, oldest first (a turn's events: GET /api/assistant/turns/:id or the turn channel). */
   turns: ConversationTurn[];
   /** Its turns no longer kept (older than its newest 50 once an hour passed, or past 200). */
   dropped_turns: number;
+}
+
+/** How much of its own context a coding agent uses: `used` of `size` tokens. */
+export interface AgentContext {
+  used: number;
+  size: number;
+}
+
+export interface ConversationRoom {
+  reason: 'messages' | 'images' | 'bytes' | 'context';
+  used: number;
+  limit: number;
+  /**
+   * The context's limit is what this much money per turn (Settings → Assistant) can resend once the
+   * cache has expired, lower than 80% of the model's context (absent otherwise, and from an older server).
+   */
+  usd?: number;
 }
 
 export interface ConversationTurn {
@@ -437,6 +537,8 @@ export interface TurnUsed {
   changes_cap: number;
   usd: number;
   usd_cap: number;
+  /** When dollars are counted: what is left for its next request, the smaller of its own limit's room and today's. */
+  usd_left?: number;
   active_ms: number;
   minutes_cap: number;
 }
@@ -461,8 +563,23 @@ export interface RelayFrameData {
    */
   turn: RelayTurnFrame;
   /** Run a tool of the page (`tool` is the page's own name for it). */
-  /** `slot: 'core'`: a core page tool (core host tools spec C7), run in this page; else the workspace's. */
-  invoke: { call: string; turn: string; tool: string; input: unknown; timeout_s: number; slot?: 'core' };
+  /**
+   * `slot: 'core'`: a core page tool (core host tools spec C7), run in this page; else the workspace's.
+   * `step`, `calls_left_in_step`, `edits_left_in_step`: the call's place in its step (one answer of
+   * the model): the step's number in its turn, how many calls of that answer come after it, and how
+   * many of those are the turn's workspace's edit or destructive tools. A turn's own calls only.
+   */
+  invoke: {
+    call: string;
+    turn: string;
+    tool: string;
+    input: unknown;
+    timeout_s: number;
+    slot?: 'core';
+    step?: number;
+    calls_left_in_step?: number;
+    edits_left_in_step?: number;
+  };
   abort: { call: string };
   /** A question to show as the app's own confirm dialog. */
   gate: { gate: GateView };
@@ -484,10 +601,13 @@ export interface RelayTurnFrame {
   id: string;
   state: 'running' | 'ended';
   title: string;
+  /** The conversation it runs in (absent from an older server). */
+  conversation?: string | null;
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
-  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
+  /** `usd_left` when dollars are counted: what is left for its next request, the smaller of its own limit's room and today's. */
+  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number; usd_left?: number };
   end?: { state: 'done' | 'stopped' | 'failed' | 'capped'; reason: string };
   /** The review round it is in (the workspace's review at registration); absent before its first. */
   review?: { round: number; of: number };

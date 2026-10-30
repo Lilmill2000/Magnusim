@@ -655,11 +655,175 @@ describe('the refusal fallback (first cloud dialect)', () => {
       const req = lastChat('anthropic');
       assert.equal(req.body.fallbacks, on ? 'default' : undefined, model);
       assert.equal(req.body.betas, undefined, 'betas travel as a header');
-      // The thinking binding's beta goes with every 5-series model (THINKING_BINDING_BETA).
+      // The thinking binding's beta goes with every 5-series model (THINKING_BINDING_BETA), context editing's with every request.
       const binding = model.startsWith('claude-unknown') ? [] : ['thinking-binding-controls-2026-08-01'];
-      assert.equal(req.headers['anthropic-beta'], [...(on ? ['server-side-fallback-2026-07-01'] : []), ...binding].join(',') || undefined, model);
+      assert.equal(req.headers['anthropic-beta'], [...(on ? ['server-side-fallback-2026-07-01'] : []), ...binding, 'context-management-2025-06-27'].join(','), model);
       assert.deepEqual(adapterFor('anthropic').fallbackTargets(model), on ? [...prices.FALLBACK_TARGETS[model]] : [], model);
     }
+  });
+});
+
+describe('old tool results left out of a long conversation (context editing, trimming)', () => {
+  const PIC = { type: 'image', mediaType: 'image/png', base64: PNG_1x1, width: 640, height: 480 };
+  /** An answer of `n` calls in a provider's own raw form (what its adapter replays). */
+  const answer = (provider, step, n) => {
+    const calls = Array.from({ length: n }, (_, i) => ({ type: 'tool_call', callId: `c${step}-${i}`, name: 'add', input: { by: 1 } }));
+    const payload =
+      provider === 'anthropic'
+        ? calls.map((c) => ({ type: 'tool_use', id: c.callId, name: c.name, input: c.input }))
+        : provider === 'openai'
+          ? calls.map((c) => ({ type: 'function_call', call_id: c.callId, name: c.name, arguments: JSON.stringify(c.input) }))
+          : { role: 'assistant', content: null, tool_calls: calls.map((c) => ({ id: c.callId, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input) } })) };
+    return { role: 'assistant', parts: calls, raw: { provider, model: MODELS[provider], payload } };
+  };
+  const results = (step, n, text = '{"tool":"add","ok":true,"data":{"count":1}}') => ({
+    role: 'user',
+    parts: Array.from({ length: n }, (_, i) => ({ type: 'tool_result', callId: `c${step}-${i}`, isError: i === 1 && n > 1, text, images: [{ ...PIC }] })),
+  });
+  /** The person's prompt with a picture, then `steps` steps of `n` calls each (one picture per result). */
+  const conversation = (provider, steps, n = 1) => {
+    const out = [{ role: 'user', parts: [{ type: 'text', text: 'Build it' }, { ...PIC }] }];
+    for (let s = 1; s <= steps; s += 1) out.push(answer(provider, s, n), results(s, n));
+    return out;
+  };
+  const resultsOf = (messages) => messages.flatMap((m) => (m.role === 'user' ? m.parts.filter((p) => p.type === 'tool_result') : []));
+
+  it('clearedResults: none below 36 results, then whole jumps of 24 that leave at least 12; it only grows; the step that just ran is never cut', async () => {
+    const { clearedResults, RESULT_WINDOW } = await import('../assistant/providers/common.ts');
+    assert.deepEqual({ ...RESULT_WINDOW }, { keep: 12, jump: 24 });
+    let last = 0;
+    for (let k = 1; k <= 150; k += 1) {
+      const b = clearedResults(conversation('anthropic', k));
+      assert.equal(b, k < 36 ? 0 : Math.floor((k - 12) / 24) * 24, `after ${k} results`);
+      assert.ok(b >= last, 'never goes down');
+      assert.ok(b === 0 || k - b >= 12, 'the newest 12 stay whole');
+      last = b;
+    }
+    // A step of 40 calls, then one of 30: only the first step's results may go, never the 30 the model has not read.
+    const big = [userText('go'), answer('anthropic', 1, 40), results(1, 40)];
+    assert.equal(clearedResults(big), 0, 'the results after the last answer are the step that just ran');
+    big.push(answer('anthropic', 2, 30), results(2, 30));
+    assert.equal(clearedResults(big), 24, '70 results: 24 of the first step go, none of the 30');
+  });
+
+  it('sentMessages: the oldest results as the same short note, with no pictures; the stored messages unchanged; the person’s picture kept', async () => {
+    const { sentMessages, clearedText, CLEARED_NOTE } = await import('../assistant/providers/common.ts');
+    const stored = conversation('anthropic', 3, 2);
+    const before = JSON.stringify(stored);
+    const sent = sentMessages(stored, 3);
+    assert.equal(JSON.stringify(stored), before, 'stored messages are never changed');
+    assert.equal(sent.length, stored.length);
+    const r = resultsOf(sent);
+    assert.deepEqual(r.slice(0, 3).map((p) => [p.text, p.images.length]), [
+      [clearedText(false), 0],
+      [clearedText(true), 0],
+      [clearedText(false), 0],
+    ]);
+    assert.ok(r.slice(3).every((p) => p.images.length === 1 && p.text.startsWith('{"tool":"add"')));
+    assert.deepEqual(JSON.parse(clearedText(true)), { ok: false, left_out: CLEARED_NOTE });
+    assert.equal(sent[0], stored[0], 'a message with no cleared result is the stored one');
+    assert.equal(sent[0].parts[1].type, 'image', "the person's picture stays");
+  });
+
+  it('anthropicBody: the edit keeps all but B results, with its beta; the messages are exactly those of a request that clears nothing; thinking keeps its binding; requests between two jumps share their prefix', async () => {
+    const { anthropicBody, CONTEXT_MANAGEMENT_BETA } = await import('../assistant/providers/anthropic.ts');
+    const { clearedResults } = await import('../assistant/providers/common.ts');
+    const stored = conversation('anthropic', 150);
+    const B = clearedResults(stored);
+    assert.equal(B, 120);
+    const req = { ...request('anthropic', stored), clearResults: B };
+    const body = anthropicBody(req);
+    assert.deepEqual(body.context_management, {
+      edits: [{ type: 'clear_tool_uses_20250919', trigger: { type: 'tool_uses', value: 30 }, keep: { type: 'tool_uses', value: 30 } }],
+    });
+    assert.ok(body.betas.includes(CONTEXT_MANAGEMENT_BETA));
+    const plain = anthropicBody({ ...req, clearResults: 0 });
+    assert.equal(plain.context_management, undefined, 'nothing to clear: no edit');
+    assert.ok(plain.betas.includes(CONTEXT_MANAGEMENT_BETA), 'the beta goes on every request, so the header never changes');
+    assert.equal(JSON.stringify(body.messages), JSON.stringify(plain.messages), 'the history goes as stored: only the provider clears');
+    assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+    assert.equal(anthropicBody(req, { managed: false }).context_management, undefined);
+    assert.ok(!anthropicBody(req, { managed: false }).betas.includes(CONTEXT_MANAGEMENT_BETA));
+    // Two requests between jumps (40 and 41 results: B 24 both) share every message but the newest, and clear the same results.
+    const at = (k) => {
+      const m = conversation('anthropic', k);
+      return anthropicBody({ ...request('anthropic', m), clearResults: clearedResults(m) });
+    };
+    const [a, b] = [at(40), at(41)];
+    const bare = (msgs) => JSON.stringify(msgs).replace(/,"cache_control":\{"type":"ephemeral"\}/g, '');
+    assert.equal(bare(b.messages.slice(0, a.messages.length)), bare(a.messages));
+    assert.deepEqual([a.context_management.edits[0].keep.value, b.context_management.edits[0].keep.value], [16, 17], 'the same 24 cleared');
+    assert.deepEqual([a.system, a.tools], [b.system, b.tools]);
+  });
+
+  it('the Responses and local-server bodies: a long conversation sends its oldest results as the note with no pictures, the newest whole, the person’s picture always', async () => {
+    const { responsesBody } = await import('../assistant/providers/openai.ts');
+    const { compatBody } = await import('../assistant/providers/openai-compatible.ts');
+    const { clearedResults, clearedText } = await import('../assistant/providers/common.ts');
+    const o = conversation('openai', 150);
+    const B = clearedResults(o);
+    const body = responsesBody({ ...request('openai', o), clearResults: B });
+    const outs = body.input.filter((it) => it.type === 'function_call_output');
+    assert.equal(outs.length, 150);
+    assert.ok(outs.slice(0, B).every((it) => it.output === clearedText(false)), 'the oldest B: the note, as text only');
+    assert.ok(outs.slice(B).every((it) => Array.isArray(it.output) && it.output.filter((c) => c.type === 'input_image').length === 1));
+    assert.equal(body.input.filter((it) => it.type === 'function_call').length, 150, 'every call stays');
+    const own = body.input.filter((it) => it.role === 'user').flatMap((it) => it.content.filter((c) => c.type === 'input_image'));
+    assert.equal(own.length, 1, "the person's picture");
+    const c = conversation('openai_compatible', 150);
+    const cb = compatBody({ ...request('openai_compatible', c), clearResults: clearedResults(c) });
+    const tools = cb.messages.filter((m) => m.role === 'tool');
+    assert.equal(tools.length, 150);
+    assert.ok(tools.slice(0, B).every((m) => m.content === clearedText(false)));
+    const pictures = cb.messages.filter((m) => m.role === 'user' && Array.isArray(m.content)).flatMap((m) => m.content.filter((p) => p.type === 'image_url'));
+    assert.equal(pictures.length, 150 - B + 1, "the kept results' pictures and the person's");
+  });
+
+  it('against the fake: the first dialect asks the provider to clear, and the answer says what it cleared; a 400 naming context management goes once more without it, and that model keeps going without', async () => {
+    const { clearedResults } = await import('../assistant/providers/common.ts');
+    const stored = conversation('anthropic', 40);
+    fake.reply({ text: 'Done.' });
+    const r = await send('anthropic', { ...request('anthropic', stored), clearResults: clearedResults(stored) });
+    const sent = lastChat('anthropic');
+    assert.ok(String(sent.headers['anthropic-beta']).split(',').includes('context-management-2025-06-27'));
+    assert.equal(sent.body.context_management.edits[0].keep.value, 16);
+    assert.equal(r.cleared.results, 24, 'applied_edits: cleared_tool_uses');
+    assert.ok(r.cleared.tokens > 0);
+    // The provider refuses it (a platform without the beta): the same request again, without it.
+    const model = 'claude-sonnet-5-5';
+    fake.failNext({ status: 400, dialect: 'anthropic', body: { type: 'error', error: { type: 'invalid_request_error', message: 'context_management: Extra inputs are not permitted' } } });
+    fake.reply({ text: 'Done again.' });
+    const n = chat('anthropic').length;
+    const again = await send('anthropic', { ...request('anthropic', stored, { model }), clearResults: 24 });
+    assert.equal(again.stop, 'end_turn');
+    const [refused, resent] = chat('anthropic').slice(n);
+    assert.ok(refused.body.context_management && !resent.body.context_management);
+    assert.ok(!String(resent.headers['anthropic-beta']).includes('context-management'));
+    assert.equal(again.cleared, undefined);
+    assert.ok(logged.some((l) => l.includes('the provider refused context editing')));
+    fake.reply({ text: 'Third.' });
+    await send('anthropic', { ...request('anthropic', stored, { model }), clearResults: 24 });
+    assert.equal(lastChat('anthropic').body.context_management, undefined, 'remembered for this model');
+    fake.reply({ text: 'Other model.' });
+    await send('anthropic', { ...request('anthropic', stored), clearResults: 24 });
+    assert.ok(lastChat('anthropic').body.context_management, 'another model still clears');
+    resetAssistantState();
+    fake.reply({ text: 'After a restart.' });
+    await send('anthropic', { ...request('anthropic', stored, { model }), clearResults: 24 });
+    assert.ok(lastChat('anthropic').body.context_management, 'a new process tries again');
+  });
+
+  it('MessageAccumulator: the final message_delta’s applied edits become `cleared`; none named, none kept', () => {
+    const acc = new MessageAccumulator(() => {});
+    acc.add({ type: 'message_start', message: { model: 'claude-opus-5-5', usage: { input_tokens: 10 } } });
+    acc.add({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 }, context_management: { applied_edits: [{ type: 'clear_tool_uses_20250919', cleared_tool_uses: 24, cleared_input_tokens: 9100 }] } });
+    acc.add({ type: 'message_stop' });
+    assert.deepEqual(acc.result('claude-opus-5-5').cleared, { results: 24, tokens: 9100 });
+    const none = new MessageAccumulator(() => {});
+    none.add({ type: 'message_start', message: { model: 'claude-opus-5-5', usage: {} } });
+    none.add({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: {}, context_management: null });
+    none.add({ type: 'message_stop' });
+    assert.equal(none.result('claude-opus-5-5').cleared, undefined);
   });
 });
 
@@ -1005,8 +1169,8 @@ describe('the environment and the profiles are never read', () => {
       if (r.dialect === 'anthropic') {
         assert.equal(h['x-api-key'], KEYS.anthropic);
         assert.equal(h.authorization, undefined, 'no Authorization on the first cloud dialect');
-        // No beta the environment names: only the app's own (a Haiku chat asks for the thinking binding; the model list for none).
-        assert.ok([undefined, 'thinking-binding-controls-2026-08-01'].includes(h['anthropic-beta']), `${r.path}: ${h['anthropic-beta']}`);
+        // No beta the environment names: only the app's own (a Haiku chat asks for the thinking binding and context editing; the model list for none).
+        assert.ok([undefined, 'thinking-binding-controls-2026-08-01,context-management-2025-06-27'].includes(h['anthropic-beta']), `${r.path}: ${h['anthropic-beta']}`);
         assert.equal(h['anthropic-version'], '2023-06-01');
       } else if (r.dialect === 'openai') {
         assert.equal(h.authorization, `Bearer ${KEYS.openai}`);
@@ -1082,6 +1246,19 @@ describe('model lists', () => {
     assert.deepEqual(o.map((m) => m.id), ['gpt-6-astra', 'gpt-6-luna', 'gpt-6.1-sol']);
     const c = await adapterFor('openai_compatible').listModels(new AbortController().signal);
     assert.deepEqual(c.map((m) => m.id), ['qwen3.8-27b', 'gemma-4-31b']);
+  });
+
+  it("the first dialect's list says each model's context (max_input_tokens): a conversation's window takes it first, for this process", async () => {
+    fake.models(['claude-opus-5-5', { id: 'claude-future-9', max_input_tokens: 2_000_000 }, 'claude-quiet-1'], 'anthropic');
+    try {
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-future-9'), { tokens: 200_000, known: false }, 'before the list: 200K');
+      await adapterFor('anthropic').listModels(new AbortController().signal);
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-future-9'), { tokens: 2_000_000, known: true });
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-quiet-1'), { tokens: 200_000, known: false }, 'a model the list gives none for');
+      assert.deepEqual(prices.contextWindow('anthropic', 'claude-opus-5-5'), { tokens: 1_000_000, known: true });
+    } finally {
+      fake.models(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], 'anthropic');
+    }
   });
 
   it('a list that never comes: the watchdog ends it with timeout, and Stop ends it at once', async () => {
@@ -1876,6 +2053,7 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
   // [model, input, 5 m write, 1 h write, cache read, output, long: [above, input, 5 m, 1 h, read, output] | null, picker]
   const TABLE = [
     ['claude-opus-5-5', 4, 5, 8, 0.2, 20, null, true],
+    // The pricing page, read again 2026-10-29: cache reads $0.10 (0.05x input); the claude-api skill's notes say $0.20.
     ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10, null, true],
     ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5, [100_000, 0.5, 0.625, 1, 0.05, 2.5], true],
     ['claude-opus-5', 5, 6.25, 10, 0.5, 25, null, false],
@@ -1886,6 +2064,27 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     ['gpt-6-sol', 2, 2.5, 2.5, 0.2, 10, [272_000, 4, 5, 5, 0.4, 15], true],
     ['gpt-6-luna', 0.1, 0.125, 0.125, 0.01, 0.5, [272_000, 0.2, 0.25, 0.25, 0.02, 0.75], true],
   ];
+
+  it("every row says its model's context: 1M for each Anthropic row (its model reference), none read yet for OpenAI's", () => {
+    assert.ok(prices.PRICES.every((r) => Object.hasOwn(r, 'context')));
+    assert.deepEqual(
+      prices.PRICES.map((r) => [r.model, r.context]),
+      [
+        ['claude-opus-5-5', 1_000_000],
+        ['claude-sonnet-5-5', 1_000_000],
+        ['claude-haiku-5-5', 1_000_000],
+        ['claude-opus-5', 1_000_000],
+        ['claude-opus-4-8', 1_000_000],
+        ['claude-sonnet-5', 1_000_000],
+        ['gpt-6.1-sol', null],
+        ['gpt-6-astra', null],
+        ['gpt-6-sol', null],
+        ['gpt-6-luna', null],
+      ],
+    );
+    assert.deepEqual(prices.contextWindow('openai', 'gpt-6.1-sol'), { tokens: 200_000, known: false });
+    assert.deepEqual(prices.contextWindow('anthropic', 'claude-sonnet-5-5-20261001'), { tokens: 1_000_000, known: true }, 'a dated id');
+  });
 
   it('every row is pinned, with its date', () => {
     assert.equal(prices.PRICES_AS_OF, '2026-10-16');
@@ -1931,7 +2130,7 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     remainingUsd: 100,
   };
 
-  it('estimateStep: fresh text, images and tools as cache writes; the prefix read only within 4 minutes of its start', () => {
+  it('estimateStep: fresh text, images and tools as cache writes; the prefix read within 4 minutes of its start, written again after, plain input when it never used the cache', () => {
     const e = prices.estimateStep({ ...base, firstStep: true, newImages: [{ width: 1000, height: 750 }, { width: 8000, height: 8000 }] });
     const fresh = Math.ceil((1.2 * 3000) / 3) + 1000 + 5334 + 4 * 500;
     assert.equal(e.promptTokens, fresh);
@@ -1941,9 +2140,41 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     const warm = prices.estimateStep({ ...base, prev });
     assert.ok(Math.abs(warm.inputUsd - (50_000 * 0.01 + 1200 * 0.125) / 1e6) < 1e-12, 'read under 4 minutes');
     const cold = prices.estimateStep({ ...base, prev: { ...prev, startedAt: base.now - 241_000 } });
-    assert.ok(Math.abs(cold.inputUsd - (50_000 * 0.1 + 1200 * 0.125) / 1e6) < 1e-12, 'input after 4 minutes');
+    assert.ok(Math.abs(cold.inputUsd - (50_000 * 0.125 + 1200 * 0.125) / 1e6) < 1e-12, 'after 4 minutes the cached prefix is written again (the last block carries a breakpoint)');
     const uncached = prices.estimateStep({ ...base, prev: { ...prev, cacheUsed: false } });
-    assert.equal(uncached.inputUsd, cold.inputUsd);
+    assert.ok(Math.abs(uncached.inputUsd - (50_000 * 0.1 + 1200 * 0.125) / 1e6) < 1e-12, 'a prompt that never used the cache: plain input');
+  });
+
+  it("Claude Haiku 5.5's long card: the estimate takes it from 90% of its 100K line; a request whose context editing moved its prompt across the line is estimated", () => {
+    const haiku = prices.priceRow('claude-haiku-5-5');
+    assert.equal(prices.LONG_TIER_MARGIN, 0.9);
+    assert.equal(prices.ratesFor(haiku, 90_000).input, 0.1, 'billing: the line itself');
+    assert.equal(prices.ratesFor(haiku, 90_000, 0.9).input, 0.5, 'the estimate: from 90% of it');
+    assert.equal(prices.ratesFor(haiku, 89_999, 0.9).input, 0.1);
+    const prev = { promptTokens: 89_000, startedAt: base.now - 1000, cacheUsed: true };
+    const e = prices.estimateStep({ ...base, prev });
+    assert.equal(e.promptTokens, 89_000 + 1200);
+    assert.deepEqual(e.rates, { input: 0.5, write5m: 0.625, write1h: 1, read: 0.05, output: 2.5 }, 'priced on the long card');
+    const under = prices.estimateStep({ ...base, prev: { ...prev, promptTokens: 80_000 } });
+    assert.equal(under.rates.input, 0.1);
+    // Context editing took 30,000 tokens out of a 95,000-token prompt sent as 125,000: which size picks the card is not documented.
+    const read = [{ model: 'claude-haiku-5-5', usage: usage({ input: 5000, cacheRead: 90_000, output: 100 }), fallback: false }];
+    assert.equal(prices.requestCost('anthropic', read, 30_000).estimated, true);
+    assert.equal(prices.requestCost('anthropic', read, 4000).estimated, false, 'both under the line');
+    assert.equal(prices.requestCost('anthropic', read).estimated, false);
+    assert.equal(prices.requestCost('anthropic', [{ ...read[0], model: 'claude-opus-5-5' }], 30_000).estimated, false, 'a model with one card');
+  });
+
+  it('estimateStep: a jump in the left-out results reads the previous prompt only up to its first newly left-out result, and writes what is sent there now', () => {
+    const prev = { promptTokens: 50_000, startedAt: base.now - 1000, cacheUsed: true };
+    const plain = prices.estimateStep({ ...base, prev });
+    const jump = prices.estimateStep({ ...base, prev, prevDropTokens: 20_000, rewriteChars: 6000, rewriteImages: [{ width: 640, height: 480 }] });
+    const rewrite = Math.ceil((1.2 * (3000 + 6000)) / 3) + Math.ceil((640 * 480) / 750);
+    assert.equal(jump.promptTokens, 30_000 + rewrite);
+    assert.ok(Math.abs(jump.inputUsd - (30_000 * 0.01 + rewrite * 0.125) / 1e6) < 1e-12, 'the rewrite at the 5-minute write price');
+    assert.ok(jump.inputUsd > plain.inputUsd, 'a jump costs more than a step that only appends');
+    assert.equal(prices.estimateStep({ ...base, prev, prevDropTokens: 60_000 }).promptTokens, Math.ceil((1.2 * 3000) / 3), 'never below nothing');
+    assert.equal(prices.estimateTokens(3000, [{ width: 640, height: 480 }]), 1200 + 410);
   });
 
   it('estimateStep: the output limit is what the money left buys; under 2048 tokens the turn is capped', () => {
@@ -1993,19 +2224,56 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     assert.equal(u.rates.output, 25);
   });
 
-  it('estimateStep: a fallback-capable request reserves one input for each model that may run (the declined attempt is billed too)', () => {
+  it('estimateStep: a fallback-capable request reserves one input for each model that may run (the declined attempt is billed too), each at its own row', () => {
     const targets = ['claude-opus-5', 'claude-opus-4-8'];
     const e = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, remainingUsd: 100 });
-    const input = (1200 * 6.25) / 1e6;
-    assert.ok(Math.abs(e.inputUsd - input) < 1e-12, 'one attempt’s input (what a cut-off answer is billed)');
-    assert.ok(Math.abs(e.fallbackInputUsd - 2 * input) < 1e-12);
-    assert.ok(Math.abs(e.usd - (3 * input + (32_000 * 25) / 1e6)) < 1e-12, String(e.usd));
-    // The output limit is what is left once every attempt's input is reserved.
+    const input = (1200 * 5) / 1e6;
+    const retry = (1200 * 6.25) / 1e6;
+    assert.ok(Math.abs(e.inputUsd - input) < 1e-12, 'the model’s own attempt (what a cut-off answer is billed)');
+    assert.ok(Math.abs(e.fallbackInputUsd - 2 * retry) < 1e-12, 'each fallback at its own row');
+    assert.ok(Math.abs(e.usd - (input + 2 * retry + (32_000 * 25) / 1e6)) < 1e-12, String(e.usd));
+    // The output limit is what is left once every attempt's input is reserved (at the dearest output: a fallback may answer).
     const tight = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, remainingUsd: 0.5 });
-    assert.equal(tight.maxOut, Math.floor(((0.5 - 3 * input) / 25) * 1e6));
+    assert.equal(tight.maxOut, Math.floor(((0.5 - input - 2 * retry) / 25) * 1e6));
     assert.ok(tight.usd <= 0.5 + 1e-12);
     const none = prices.estimateStep({ ...base, model: 'claude-haiku-5-5', remainingUsd: 100 });
     assert.equal(none.fallbackInputUsd, 0);
+  });
+
+  it("estimateStep: a fallback re-runs as if the conversation had been on its model all along: a fresh cached prefix is a read at each model's own row, a stale one written again at each (Claude Opus 5.5, 440,000 tokens)", () => {
+    const targets = ['claude-opus-5', 'claude-opus-4-8'];
+    const prev = { promptTokens: 440_000, startedAt: base.now - 60_000, cacheUsed: true };
+    const warm = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, prev, remainingUsd: 8 });
+    assert.ok(Math.abs(warm.inputUsd - (440_000 * 0.2 + 1200 * 5) / 1e6) < 1e-9, String(warm.inputUsd));
+    assert.ok(Math.abs(warm.fallbackInputUsd - 2 * (440_000 * 0.5 + 1200 * 6.25) / 1e6) < 1e-9, String(warm.fallbackInputUsd));
+    assert.deepEqual([warm.maxOut, warm.capped], [32_000, false], "a read of 440,000 tokens fits a turn's $8 with room to answer");
+    const stale = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, prev: { ...prev, startedAt: base.now - 300_000 }, remainingUsd: 8 });
+    const written = 441_200 * (5 + 6.25 + 6.25) / 1e6;
+    assert.ok(Math.abs(stale.inputUsd + stale.fallbackInputUsd - written) < 1e-9, String(stale.inputUsd + stale.fallbackInputUsd));
+    assert.ok(Math.abs(stale.maxOut - Math.floor(((8 - written) / 25) * 1e6)) <= 1, 'what $8 leaves once all of it is written three times');
+    assert.equal(stale.capped, false);
+  });
+
+  it("coldLine: the largest prompt a turn's money can send with nothing cached, every attempt written at its own row, MIN_OUT left to answer", () => {
+    const opus = prices.coldLine('anthropic', 'claude-opus-5-5', prices.fallbackTargetsOf('anthropic', 'claude-opus-5-5'), 8);
+    // (8 - 2048 × $25/MTok) / ($5 + $6.25 + $6.25 per MTok written).
+    assert.equal(opus, Math.floor((8 - (2048 * 25) / 1e6) / ((5 + 6.25 + 6.25) / 1e6)));
+    assert.equal(opus, 454_217);
+    const at = (tokens, usd) =>
+      prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: ['claude-opus-5', 'claude-opus-4-8'], newChars: 0, prev: { promptTokens: tokens, startedAt: 0, cacheUsed: true }, now: prices.CACHE_FRESH_MS, remainingUsd: usd });
+    assert.equal(at(opus, 8).capped, false, 'the line itself fits');
+    assert.equal(at(opus + 1, 8).capped, true, 'a token past it does not');
+    assert.deepEqual(prices.fallbackTargetsOf('anthropic', 'claude-opus-5-5'), ['claude-opus-5', 'claude-opus-4-8']);
+    assert.deepEqual([prices.fallbackTargetsOf('openai', 'gpt-6.1-sol'), prices.fallbackTargetsOf('anthropic', 'claude-haiku-5-5')], [[], []]);
+    // Claude Sonnet 5.5 (and Claude Sonnet 5 for its fallback) resends 1.6M on $8: past its 800,000-token line.
+    assert.ok(prices.coldLine('anthropic', 'claude-sonnet-5-5', prices.fallbackTargetsOf('anthropic', 'claude-sonnet-5-5'), 8) > 1_500_000);
+    assert.ok(prices.coldLine('anthropic', 'claude-opus-5-5', prices.fallbackTargetsOf('anthropic', 'claude-opus-5-5'), 20) > 1_000_000, '$20 a turn resends the 800,000 line');
+    // Claude Haiku 5.5's long card from 90% of its 100K line on: the line is where the long card stops fitting.
+    const haiku = prices.coldLine('anthropic', 'claude-haiku-5-5', [], 0.1);
+    assert.equal(haiku, Math.floor((0.1 - (2048 * 2.5) / 1e6) / (0.625 / 1e6)));
+    assert.equal(prices.coldLine('anthropic', 'claude-opus-5-5', [], 0.01), 0, 'not even an answer fits');
+    assert.equal(prices.coldLine('openai_compatible', 'qwen', [], 8), null, 'a local server costs nothing');
+    assert.equal(prices.coldLine('agent:helper', 'x', [], 8), null);
   });
 
   it('priceInfo for Settings', () => {

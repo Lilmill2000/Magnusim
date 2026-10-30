@@ -2,7 +2,8 @@
 // the edit tools, undo and delete) carries one small picture of the Part, so the model sees what it
 // made. The picture is the view tool's (ViewportHandle.snapshot, drawn off screen with its own
 // orthographic camera: the person's camera never moves): iso, framed on every shown body (the shown
-// sketches when there is none), the bodies' own colours, EDIT_PICTURE_PX, PNG (encodePicture). The
+// sketches when there is none), the bodies' own colours (the person's see-through bodies see-through,
+// named in the line), EDIT_PICTURE_PX, PNG (encodePicture). The
 // data says what it is in one line (`picture`), or why there is none this time (`picture_note`);
 // a picture that fails never fails the call. No picture when the person turned them off (ws.prefs
 // `assistant.pictures`: 'each', the default, or 'off'; the chip's Pictures toggle), when the
@@ -21,6 +22,7 @@ import type { CallCtx } from '../types/assistant';
 import type { ViewportHandle } from '../types/viewport';
 import { ToolError } from './errors';
 import { toolNamed } from './schemas';
+import { seeThroughOf } from '../viewport/bind';
 import { encodePicture, LABEL_FONT_PX } from './view';
 
 /** The person's choice, in ws.prefs. */
@@ -174,6 +176,9 @@ export function owePicture(owed: Set<string>, key: string): void {
   if (owed.size > OWED_KEPT) owed.delete(owed.values().next().value as string);
 }
 
+/** The see-through bodies an edit's picture names (the rest are counted). */
+const SEE_THROUGH_NAMED = 8;
+
 /** What an edit's answer gets: the picture and its line, or a note why there is none; null: nothing at all. */
 export type EditPicture = { image: AssistantImage; caption: string } | { note: string } | null;
 
@@ -211,9 +216,14 @@ export async function editPicture(ctx: Pick<CallCtx, 'services' | 'signal'>): Pr
       throw e;
     }
     const image = await encodePicture(shot.rgba, shot.width, shot.height, [], LABEL_FONT_PX.small);
-    const shown = services.doc.state.get().rebuild.bodies.filter((b) => b.visible && !!b.tess).length;
+    const s = services.doc.state.get();
+    const drawn = s.rebuild.bodies.filter((b) => b.visible && !!b.tess);
+    const shown = drawn.length;
     const what = shown ? `all ${shown === 1 ? '1 shown body' : `${shown} shown bodies`}` : 'the shown sketches (no body yet)';
-    return { image, caption: `Picture: iso view of the Part framed on ${what}, ${shot.width}x${shot.height}, real colours; look at it and fix what looks wrong.` };
+    // The person's see-through bodies are drawn see-through here too: said, so a ghosted body is not taken for a fault.
+    const through = drawn.filter((b) => seeThroughOf(s, services, b.id)).map((b) => b.name);
+    const see = through.length ? `; see-through as in the person's view: ${through.slice(0, SEE_THROUGH_NAMED).join(', ')}${through.length > SEE_THROUGH_NAMED ? ` and ${through.length - SEE_THROUGH_NAMED} more` : ''}` : '';
+    return { image, caption: `Picture: iso view of the Part framed on ${what}, ${shot.width}x${shot.height}, real colours${see}; look at it and fix what looks wrong.` };
   } catch (e) {
     if (ctx.signal.aborted) return null;
     const raw = e instanceof Error && e.message ? e.message : String(e);

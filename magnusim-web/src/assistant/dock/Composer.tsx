@@ -17,7 +17,11 @@
  *   says it takes none (`images: false`, what its last start said); not known yet, it takes them,
  *   and the server ends the request bad_images before anything is sent if its start says no.
  * - A refusal shows the server's words above the composer; the draft and pictures stay. The
- *   draft is kept per conversation (store.ts).
+ *   draft is kept per conversation (store.ts). A full conversation's line is the server's: which
+ *   limit it reached, with its numbers (the row's full_text), with New conversation and Continue
+ *   in a new chat (store.ts continueInNewChat: the draft moves into the new one's box). A new
+ *   conversation that continues an earlier one says what goes with its first message, keeps the
+ *   earlier one's provider (the picker locked to it) and sends carry_from instead of a provider.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { openSetupWizard } from '../../wizard/controller';
@@ -36,6 +40,8 @@ import {
   contextNoTools,
   contextProject,
   contextWorkspace,
+  CARRY_LINE,
+  CONTINUE_IN_NEW_CHAT,
   CONVERSATION_FULL,
   DRAWINGS_STAY,
   dropFiles,
@@ -72,7 +78,7 @@ import { drawingsOffered } from './drawings';
 import { addPictures, dragHasFiles, picturesFrom, type PictureDeps, type PreparedPicture } from './pictures';
 import { defaultProvider, ProviderPicker, providerOptions } from './ProviderPicker';
 import { startDockTurn, stopDockTurn } from './send';
-import { draftOf, pickedProvider, setDraft, setPickedProvider } from './store';
+import { continueInNewChat, draftOf, pickedProvider, setDraft, setPickedProvider, type DockCarry } from './store';
 
 /** The server's limit on a request's text, and where the count starts to show. */
 export const TEXT_MAX = 20_000;
@@ -99,10 +105,11 @@ export function placeholderOf(place: DockPlace): string {
   return place.projectId ? PLACEHOLDER_PROJECT : PLACEHOLDER_HOME;
 }
 
-/** A line shown in place of the hint, with Send disabled, and what it offers. */
+/** A line shown in place of the hint, with Send disabled, and what it offers (`carry`: Continue in a new chat too). */
 export interface Blocked {
   line: string;
   action?: 'settings' | 'new';
+  carry?: boolean;
 }
 
 export interface ComposerProps {
@@ -115,6 +122,8 @@ export interface ComposerProps {
   /** Its request running now, if any (Send is Stop). */
   running: string | null;
   onNew: () => void;
+  /** The earlier conversation the new one shown continues (Continue in a new chat; store.ts). */
+  carry?: DockCarry | null;
   /** Extra reason Send can't go (tab_busy: another request works in this workspace). */
   busy?: (Blocked & { onStop?: () => void; stopLabel?: string }) | null;
   /** Tests: the browser calls pictures need. */
@@ -126,8 +135,10 @@ export interface ComposerProps {
 /** The context key the provider pick is kept under. */
 const contextKey = (place: DockPlace) => place.projectId ?? 'home';
 
-export function Composer({ place, status, conversation, conversationId, running, onNew, busy = null, pictureDeps, uploadSend }: ComposerProps) {
+export function Composer({ place, status, conversation, conversationId, running, onNew, carry = null, busy = null, pictureDeps, uploadSend }: ComposerProps) {
   const draftKey = conversationId;
+  // Only a new conversation continues one.
+  const carrying = conversationId ? null : carry;
   const [text, setText] = useState(() => draftOf(draftKey));
   const [pictures, setPictures] = useState<PreparedPicture[]>([]);
   const [pictureErrors, setPictureErrors] = useState<string[]>([]);
@@ -167,11 +178,12 @@ export function Composer({ place, status, conversation, conversationId, running,
     };
   }, []);
 
-  // Another conversation: its draft; a refusal of the one before is not this one's.
+  // Another conversation (or one that continues another): its draft; a refusal of the one before is not this one's.
+  const carryKey = carrying?.from ?? null;
   useEffect(() => {
     setText(draftOf(draftKey));
     setError(null);
-  }, [draftKey]);
+  }, [draftKey, carryKey]);
   // A Stop that didn't reach the server is about the request it was for.
   useEffect(() => setError((e) => (e && e.code === 'stop' ? null : e)), [running]);
   const ctxKey = contextKey(place);
@@ -191,10 +203,11 @@ export function Composer({ place, status, conversation, conversationId, running,
   const options = providerOptions(status);
   const def = defaultProvider(status);
   const pickable = (id: string | null) => !!id && options.some((o) => o.id === id && o.ready);
-  const choice = conversation ? conversation.provider : pickable(picked) ? picked : def;
+  const choice = conversation ? conversation.provider : carrying ? carrying.provider : pickable(picked) ? picked : def;
   const ready = choice ? providerReady(status, choice) : null;
-  // A conversation keeps its provider once it has a message (before the list names it too).
-  const locked = conversationId ? (conversation?.label ?? ready?.label ?? '') : null;
+  // A conversation keeps its provider once it has a message (before the list names it too); one
+  // that continues another, that one's.
+  const locked = conversationId ? (conversation?.label ?? ready?.label ?? '') : carrying ? carrying.label || ready?.label || '' : null;
   const agent = !!choice && (isAgentProvider(choice) || ready?.kind === 'agent');
   const agentName = ready?.label ?? conversation?.label ?? '';
   // A coding agent whose last start said it takes no pictures (not known yet: it may take them).
@@ -309,8 +322,8 @@ export function Composer({ place, status, conversation, conversationId, running,
 
   // Why Send can't go now (the first that holds), shown in place of the hint.
   let blocked: (Blocked & { onStop?: () => void; stopLabel?: string }) | null = null;
-  if (error && (error.code === 'unknown_conversation' || error.code === 'conversation_full')) blocked = { line: error.text, action: 'new' };
-  else if (conversation?.full) blocked = { line: CONVERSATION_FULL, action: 'new' };
+  if (error && (error.code === 'unknown_conversation' || error.code === 'conversation_full')) blocked = { line: error.text, action: 'new', carry: error.code === 'conversation_full' && !!conversationId };
+  else if (conversation?.full) blocked = { line: conversation.full_text || CONVERSATION_FULL, action: 'new', carry: !isAgentProvider(conversation.provider) };
   else if (!running && !choice) blocked = { line: STATE_OFF, action: 'settings' };
   else if (!running && ready && !ready.ready) blocked = { line: providerNotReady(ready.label, ready.detail || ready.reason || ''), action: 'settings' };
   else if (!running && busy) blocked = busy;
@@ -327,7 +340,7 @@ export function Composer({ place, status, conversation, conversationId, running,
     setError(null);
     try {
       const attachments = files.filter((f) => f.state === 'ready' && f.id).map((f) => f.id as string);
-      await startDockTurn({ text, conversation: conversationId, provider: conversationId ? null : choice, place, pictures, attachments });
+      await startDockTurn({ text, conversation: conversationId, provider: conversationId || carrying ? null : choice, carryFrom: carrying?.from ?? null, place, pictures, attachments });
       setText('');
       setDraft(draftKey, '');
       setPictures([]);
@@ -340,6 +353,13 @@ export function Composer({ place, status, conversation, conversationId, running,
     } finally {
       setSending(false);
     }
+  };
+
+  // Continue in a new chat: the box's text goes with it (store.ts moves the draft).
+  const onContinue = () => {
+    if (!conversationId) return;
+    setDraft(conversationId, text);
+    continueInNewChat({ from: conversationId, provider: conversation?.provider ?? choice ?? '', label: conversation?.label ?? ready?.label ?? '' });
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -373,6 +393,11 @@ export function Composer({ place, status, conversation, conversationId, running,
           }}
         />
       </div>
+      {carrying ? (
+        <p className="dock-muted" data-dock-carry={carrying.from}>
+          {CARRY_LINE}
+        </p>
+      ) : null}
       {error && error.code !== 'unknown_conversation' && error.code !== 'conversation_full' ? (
         <p className="dock-alert" role="alert" data-dock-refusal={error.code}>
           {error.text}
@@ -465,6 +490,11 @@ export function Composer({ place, status, conversation, conversationId, running,
               ) : blocked.action === 'new' ? (
                 <button type="button" className="dock-link-button" data-dock-new-line="1" onClick={onNew}>
                   {NEW_CONVERSATION}
+                </button>
+              ) : null}
+              {blocked.carry ? (
+                <button type="button" className="dock-link-button" data-dock-continue="1" onClick={onContinue}>
+                  {CONTINUE_IN_NEW_CHAT}
                 </button>
               ) : null}
               {blocked.onStop ? (

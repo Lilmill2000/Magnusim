@@ -7,10 +7,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Plane, Vector3, type Camera, type Sphere } from 'three';
 import type { Vec3 } from '../types/doc';
-import type { Projection, SectionState, SnapshotOptions, SnapshotView } from '../types/viewport';
+import type { Projection, SnapshotOptions, SnapshotView } from '../types/viewport';
 import { CameraRig, VIEW_DIRS } from './camera';
 import { TRIAD_PX } from './colors';
-import { sectionPlane } from './section';
+import { originFrame, sectionPlane, usableFrame } from './section';
 
 
 /** Camera direction (from the part towards the camera) and screen-up of each snapshot view. */
@@ -65,9 +65,11 @@ export function projectToPicture(camera: Camera, width: number, height: number, 
   return [((v.x + 1) / 2) * width, ((1 - v.y) / 2) * height];
 }
 
-/** A snapshot's cut as a section state (the view's own section state is never written). */
-export function snapshotSection(s: NonNullable<SnapshotOptions['section']>): SectionState {
-  return { on: true, plane: `origin:${s.plane}`, offset: Number.isFinite(s.offset) ? s.offset : 0, flip: !!s.flip };
+/** A snapshot's cut as the section view cuts: a frame (an origin plane's own), its offset and side (the view's own section state is never written). */
+export function snapshotSection(s: NonNullable<SnapshotOptions['section']>): { frame: { origin: Vec3; normal: Vec3 }; offset: number; flip: boolean } {
+  const offset = Number.isFinite(s.offset) ? s.offset : 0;
+  const f = 'plane' in s ? originFrame(`origin:${s.plane}`) : usableFrame(s.frame) ? s.frame : originFrame('origin:front');
+  return { frame: { origin: [...f.origin] as Vec3, normal: [...f.normal] as Vec3 }, offset, flip: !!s.flip };
 }
 
 /** The clipping plane of a snapshot's cut (kept side: distanceToPoint >= 0), as the section view makes it. */
@@ -97,7 +99,7 @@ export function rowsTopDown(src: Uint8Array, width: number, height: number): Uin
 
 /**
  * Overlay layers a picture leaves out: the manipulators and markers (the Extrude's arrow, the
- * Enclosure's handles, Move/copy body's handle, Measure's markers, the pattern markers, the solids' pick marks, sketch
+ * Enclosure's handles, Move/copy body's handle, the section view's arrow, Measure's markers, the pattern markers, the solids' pick marks, sketch
  * mode's plane picker) and the bananas for scale. The sketches and the reference planes stay.
  * tests/viewport/snapshot.test.ts pins each id against its owner's.
  */
@@ -105,6 +107,7 @@ export const SNAPSHOT_HIDDEN_LAYERS: ReadonlySet<string> = new Set([
   'extrude.handle',
   'enclosure.handles',
   'move_body.handle',
+  'section.arrow',
   'p2-measure',
   'pattern.markers',
   'solids.picks',

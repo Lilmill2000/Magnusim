@@ -1,15 +1,20 @@
 /**
  * The provider debug log, opt-in: with MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder> in the server's
- * environment (read once, at the first use), every model request an adapter sends appends one
- * JSON row to <folder>/provider.jsonl, a local file only. Unset, nothing is kept and nothing
- * costs anything (debugCall() returns null).
+ * environment (read once, at the first use), or while Settings → Assistant's "Keep a provider
+ * log for a problem report" is on (settings.provider_log, read at each request: then the folder
+ * is providerLogDir: the server's own log's folder when MAGNUSIM_SERVER_LOG names one, as Magnusim
+ * CAD's desktop app does, so one folder holds both; else <home>/assistant/logs), every model
+ * request an adapter sends appends one JSON row to <folder>/provider.jsonl, a local file only.
+ * Off, nothing is kept and nothing costs anything (debugCall() returns null). Past
+ * PROVIDER_LOG_MAX the file becomes provider.1.jsonl (the one before it goes) and a new one starts.
  *
  * A row: time, turn and step (debugScoped, from the loop), dialect, model, attempt (strict,
  * reduced, loose; for a local server no_images, with_images, without_images), for a cloud request
  * its strict tools (`strict: {count, of}`), and why it went so (a strict refusal: strict_reduced,
  * strict_refused and their _earlier forms; images refused, an overload resend), the whole request body as sent, every HTTP answer's status, request id
  * header and time (the SDK may retry), the duration, and then either the result (stop reason,
- * usage, the model that served it, notes, and a compact list of its blocks: text, thinking's
+ * usage, the model that served it, notes, what the provider's context editing cleared, and a
+ * compact list of its blocks: text, thinking's
  * length, tool calls with their inputs) or the error (its text, type, code and status, and each
  * failed answer's whole body text).
  *
@@ -19,14 +24,22 @@
  * queue whose failures are swallowed (one log line), so the log never breaks or holds a turn.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { appendFile, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { assistantDataDir } from './home.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
+import { assistantState } from './state.ts';
 import type { ProviderAdapter, ProviderId, ProviderResult } from './types.ts';
 
 export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
+/** The server's own console log, a file (Magnusim CAD's desktop app sets it: desktop/config.mjs serverEnv). */
+export const SERVER_LOG_ENV = 'MAGNUSIM_SERVER_LOG';
 export const DEBUG_LOG_FILE = 'provider.jsonl';
+/** The file before the current one (PROVIDER_LOG_MAX). */
+export const DEBUG_LOG_OLD = 'provider.1.jsonl';
+/** The provider log's file starts again past this size (the one before it kept as DEBUG_LOG_OLD). */
+export const PROVIDER_LOG_MAX = 64 * 1024 * 1024;
 /** The longest row, in characters. */
 export const MAX_ROW = 4 * 1024 * 1024;
 /** The longest error body kept. */
@@ -40,24 +53,57 @@ const BODY_WAIT_MS = 5_000;
 const REQUEST_ID_HEADERS = ['request-id', 'x-request-id'];
 const BASE64 = /^(data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=\r\n]+$/;
 
-let dir: string | null | undefined;
-let made = false;
+let envDir: string | null | undefined;
+let serverLog: string | null | undefined;
+let made: string | null = null;
 let warned = false;
 let queue: Promise<void> = Promise.resolve();
 
-/** The folder rows go to, or null when the log is off (the environment is read once). */
-export function debugLogDir(): string | null {
-  if (dir === undefined) {
+/** The folder MAGNUSIM_ASSISTANT_DEBUG_LOG names, or null (the environment is read once). */
+export function debugLogEnvDir(): string | null {
+  if (envDir === undefined) {
     const v = String(process.env[DEBUG_LOG_ENV] ?? '').trim();
-    dir = v ? resolve(v) : null;
+    envDir = v ? resolve(v) : null;
   }
-  return dir;
+  return envDir;
+}
+
+/** The server's own log file MAGNUSIM_SERVER_LOG names, or null (the environment is read once). */
+export function serverLogFile(): string | null {
+  if (serverLog === undefined) {
+    const v = String(process.env[SERVER_LOG_ENV] ?? '').trim();
+    serverLog = v ? resolve(v) : null;
+  }
+  return serverLog;
+}
+
+/**
+ * Where Settings' provider log goes: the server's log's folder when MAGNUSIM_SERVER_LOG names one
+ * (Magnusim CAD: %APPDATA%\Magnusim CAD\logs, beside server.log), else <home>/assistant/logs.
+ */
+export function providerLogDir(): string {
+  const server = serverLogFile();
+  return server ? dirname(server) : join(assistantDataDir(), 'logs');
+}
+
+/** The server's log's file name when it is kept in `folder` (the provider log's), else null. */
+export function serverLogIn(folder: string): string | null {
+  const server = serverLogFile();
+  return server && resolve(dirname(server)) === resolve(folder) ? basename(server) : null;
+}
+
+/** The folder rows go to, or null when the log is off: the environment's, else Settings' switch's (as last read or saved). */
+export function debugLogDir(): string | null {
+  const env = debugLogEnvDir();
+  if (env) return env;
+  return assistantState().settings.cache?.provider_log === true ? providerLogDir() : null;
 }
 
 /** Tests: read the environment again at the next use. */
 export function resetDebugLogForTests(): void {
-  dir = undefined;
-  made = false;
+  envDir = undefined;
+  serverLog = undefined;
+  made = null;
   warned = false;
 }
 
@@ -179,6 +225,7 @@ function resultOf(r: ProviderResult): Json {
     ...(r.refusal ? { refusal: r.refusal } : {}),
     ...(r.notes?.length ? { notes: r.notes } : {}),
     ...(r.toolCallAsText ? { tool_call_as_text: true } : {}),
+    ...(r.cleared ? { cleared: r.cleared } : {}),
     blocks,
   };
 }
@@ -189,11 +236,18 @@ function enqueue(build: Promise<string>): void {
   queue = queue
     .then(async () => {
       const line = await build;
-      if (!made) {
+      if (made !== folder) {
         await mkdir(folder, { recursive: true });
-        made = true;
+        made = folder;
       }
-      await appendFile(join(folder, DEBUG_LOG_FILE), `${line}\n`, 'utf8');
+      const file = join(folder, DEBUG_LOG_FILE);
+      // Past its size the file starts again; the one before it is kept.
+      const size = await stat(file).then(
+        (st) => st.size,
+        () => 0,
+      );
+      if (size + line.length > PROVIDER_LOG_MAX) await rename(file, join(folder, DEBUG_LOG_OLD));
+      await appendFile(file, `${line}\n`, 'utf8');
     })
     .catch((err: unknown) => {
       if (warned) return;

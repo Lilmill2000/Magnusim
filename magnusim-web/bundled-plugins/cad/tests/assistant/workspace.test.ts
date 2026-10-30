@@ -15,6 +15,7 @@ import { LEAVE_AFTER_MS } from '../../src/assistant/tools/workspace';
 import exportModule from '../../src/features/export';
 import { takeExportPrefill } from '../../src/features/export/prefill';
 import { createStateStore } from '../../src/lib/store';
+import { offsetRange, originFrame } from '../../src/viewport/section';
 import { createModuleRegistry } from '../../src/modules';
 import { railsFor } from '../../src/ui/left-rails';
 import { toolbarPrefs } from '../../src/ui/toolbar-layout';
@@ -48,7 +49,7 @@ function viewHandle() {
     (call: string) =>
     (...args: unknown[]) =>
       void calls.push({ call, args });
-  const state = createStateStore({ display: 'shaded-edges', projection: 'perspective', section: { on: false, plane: 'origin:top', offset: 0, flip: false }, planes: 'auto' });
+  const state = createStateStore({ display: 'shaded-edges', projection: 'perspective', section: { on: false, plane: { kind: 'origin', plane: 'origin:top' }, frame: originFrame('origin:top'), offset: 0, flip: false }, planes: 'auto' });
   const handle = {
     moves: 0,
     state,
@@ -71,6 +72,8 @@ function viewHandle() {
       state.set({ display: d });
     },
     setPlanes: rec('setPlanes'),
+    // The two blocks (20 mm cubes): the offsets they span along a plane's normal.
+    sectionRange: (f: { origin: number[]; normal: number[] }) => offsetRange(f as never, [[0, 0, 0, 60, 20, 20]]),
     planeNormal: () => [0, 0, 1],
     refitIfOffScreen: () => false,
     reframe: () => true,
@@ -132,6 +135,48 @@ describe('workspace: the tree and the view state', () => {
     expect((await t.ok('workspace', W('origin_planes', { value: 'always' }))).text).toMatch(/always drawn/);
     expect(t.doc.state.get().view.planes).toBe('always');
     expect(vh.calls.find((c) => c.call === 'setPlanes')?.args).toEqual(['always']);
+  });
+
+  it("see_through and opaque: bodies drawn see-through as INSPECT > See-through does (view state, no undo step), said by get_model and body; an Enclosure's air stays see-through", async () => {
+    const t = await part();
+    const [b1, b2] = t.doc.state.get().rebuild.bodies.map((b) => b.id);
+    const steps = t.doc.state.get().history.undoLabel;
+    const one = await t.ok('workspace', W('see_through', { target: 'Body 1' }));
+    expect(one.text).toBe('Made Body 1 see-through in the view');
+    expect(one.data).toMatchObject({ bodies: ['Body 1'], see_through: true, changed: ['Body 1'], undo_step: false });
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1]);
+    expect(t.doc.state.get().history.undoLabel).toBe(steps);
+    // Several by items; one already so.
+    const both = await t.ok('workspace', W('see_through', { items: ['Body 1', 'body 2'] }));
+    expect(both.text).toBe('Made Body 2 see-through in the view; Body 1 is already see-through');
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1, b2]);
+    // get_model's parts and the body tool say so.
+    const m = await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' });
+    expect((m.data.parts as { name: string; see_through?: boolean }[]).map((p) => [p.name, p.see_through ?? false])).toEqual([
+      ['Body 1', true],
+      ['Body 2', true],
+    ]);
+    const body = await t.ok('body', { body: 'Body 1', rename_to: '', color: '', simulation: 'keep', visibility: 'hide' });
+    expect(body.data.body).toEqual({ name: 'Body 1', see_through: true });
+    // Opaque again.
+    const op = await t.ok('workspace', W('opaque', { target: 'Body 2' }));
+    expect(op.text).toBe('Made Body 2 opaque in the view');
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1]);
+    const m2 = await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' });
+    expect((m2.data.parts as { see_through?: boolean }[])[1]).not.toHaveProperty('see_through');
+    // What it cannot name, or nothing named.
+    const miss = await t.call('workspace', W('opaque', { target: 'Body 9' }));
+    expect(!miss.ok && miss.error.message).toMatch(/No body is called "Body 9"/);
+    const none = await t.call('workspace', W('see_through'));
+    expect(!none.ok && none.error.message).toMatch(/target: a body, or items: bodies/);
+    // A body its feature always draws see-through (an Enclosure's air): opaque refuses, nothing changes.
+    const def = t.doc.features.get('extrude')!;
+    const second = t.doc.state.get().doc.features.filter((f) => f.type === 'extrude')[1];
+    t.doc.features.register({ ...def, seeThrough: (f: { id: string }) => f.id === second.id } as typeof def);
+    const always = await t.call('workspace', W('opaque', { items: ['Body 1', 'Body 2'] }));
+    expect(!always.ok && always.error.message).toMatch(/Body 2 is always see-through: Extrude 2 draws it so \(an Enclosure's air\)\. Nothing changed\./);
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1]);
+    expect((await t.ok('workspace', W('see_through', { target: 'Body 2' }))).text).toBe('Body 2 is already see-through');
   });
 
   it("shows and hides a reference plane, axis and point as the person's eye and menu do: view state, no undo step; the person's menu then offers Show", async () => {
@@ -426,10 +471,28 @@ describe("workspace: the person's view", () => {
     await t.ok('workspace', W('orbit_pivot', { target: '(1, 2, 3)', ...A }));
     expect(vh.calls.at(-1)?.args[0]).toEqual([1, 2, 3]);
     const sec = await t.ok('workspace', W('section', { value: 'Top offset 5 mm flip', ...A }));
-    expect(vh.state.get().section).toMatchObject({ on: true, plane: 'origin:top', offset: 5, flip: true });
-    expect(sec.data.view).toMatchObject({ section: { plane: 'top', offset_mm: 5, flip: true } });
+    expect(vh.state.get().section).toMatchObject({ on: true, plane: { kind: 'origin', plane: 'origin:top' }, frame: { origin: [0, 0, 0], normal: [0, 0, 1] }, offset: 5, flip: true });
+    expect(sec.data.view).toMatchObject({ section: { plane: 'Top', offset_mm: 5, flip: true, keeps: 'z >= 5 mm' } });
+    // A construction plane by its name: the view keeps the plane itself (its feature), at its own frame.
+    await t.add('ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: '4 mm', name: 'Shelf' });
+    const shelf = await t.ok('workspace', W('section', { value: 'Shelf offset 2 mm', ...A }));
+    const shelfId = t.doc.state.get().doc.features.find((f) => f.name === 'Shelf')!.id;
+    expect(vh.state.get().section).toMatchObject({ on: true, plane: { kind: 'feature', feature: shelfId }, frame: { origin: [0, 0, 4], normal: [0, 0, 1] }, offset: 2, flip: false });
+    expect(shelf.data.view).toMatchObject({ section: { plane: 'Shelf', offset_mm: 2, flip: false, keeps: 'z <= 6 mm' } });
+    expect(shelf.text).toBe("Section view on in the person's view: Shelf offset 2 mm, keeps z <= 6 mm");
+    // get_model says it too (the Assistant learns the person's section without moving the view).
+    const model = await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' });
+    expect(model.data.section).toEqual({ plane: 'Shelf', offset_mm: 2, flip: false, keeps: 'z <= 6 mm' });
+    // Middle: through the middle of the shown bodies along Shelf's normal (z 0 to 20 from z = 4: offset 6).
+    await t.ok('workspace', W('section', { value: 'Shelf middle', ...A }));
+    expect(vh.state.get().section.offset).toBe(6);
+    // Not a plane: refused in words, the view as it was.
+    const notPlane = await t.call('workspace', W('section', { value: 'Body 1', ...A }));
+    expect(!notPlane.ok && notPlane.error.message).toMatch(/^bad_section: value: Body 1 is a body; a section is a plane/);
+    expect(vh.state.get().section.offset).toBe(6);
     await t.ok('workspace', W('section', { value: 'off', ...A }));
     expect(vh.state.get().section.on).toBe(false);
+    expect((await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' })).data.section).toBeUndefined();
     await t.ok('workspace', W('projection', { value: 'orthographic', ...A }));
     expect(vh.state.get().projection).toBe('orthographic');
     const d = await t.ok('workspace', W('display', { value: 'wireframe', ...A }));

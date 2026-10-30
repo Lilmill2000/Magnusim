@@ -9,6 +9,9 @@
 //   POST /compat/v1/chat/completions   GET /compat/v1/models      (the local-server dialect)
 //   GET /compat/api/v0/models/<id>     POST /compat/api/show      (a local server's model row)
 //
+// The Messages dialect's model list gives each model's max_input_tokens, as the real one does:
+// 1,000,000 for the default ids, an entry's own `max_input_tokens` ({id, max_input_tokens}), and
+// none for any other id.
 // The model rows (CAD tools spec H5) are served for models(list) entries that are rows,
 // `{id, context?, max?, type?, route?: 'models' | 'show'}`, in the shapes of
 // LOCAL_SERVER_ROWS: by default an LM Studio row at the first route (`context` loaded, so
@@ -52,7 +55,14 @@
 //   "not found";
 // - Messages: `fallbacks` only with the `server-side-fallback-2026-07-01` beta and only for
 //   claude-opus-5-5 and claude-sonnet-5-5; no forced tool_choice on those; at most 4
-//   cache breakpoints; a key in x-api-key.
+//   cache breakpoints; a key in x-api-key; `context_management` only with the
+//   `context-management-2025-06-27` beta, its edits clear_tool_uses_20250919 with `trigger`
+//   and `keep` in tool_uses.
+// Context editing (Messages): a request whose clear_tool_uses edit fires (more tool results
+// than its trigger) is answered as if the oldest results past `keep` were cleared: the final
+// message_delta's context_management.applied_edits says how many (cleared_tool_uses) and
+// cleared_input_tokens (their characters / 4). A request with context_management that clears
+// nothing gets applied_edits [].
 // A `fallback` step answers as the fallback model: a `fallback` block first (its trigger
 // names `category`, cyber when the step has none; null is kept), the
 // top-level model set to it, and usage.iterations with the refused primary attempt and a
@@ -71,6 +81,7 @@
 import http from 'node:http';
 
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+const CONTEXT_BETA = 'context-management-2025-06-27';
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5']);
 const STRICT_REFUSED = ['minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'pattern', 'format', 'title'];
 const DEFAULT_MODELS = {
@@ -325,6 +336,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
   const modelLists = { anthropic: [...DEFAULT_MODELS.anthropic], openai: [...DEFAULT_MODELS.openai], compat: [...DEFAULT_MODELS.compat] };
   /** The local server's model rows, by id (models() entries that are rows). */
   const modelRows = new Map();
+  /** The Messages dialect's max_input_tokens by model id (the list's own word on each model's context). */
+  const modelContexts = new Map(DEFAULT_MODELS.anthropic.map((id) => [id, 1_000_000]));
   /** Local-server models that can't read images (textOnly()). */
   const textOnlyModels = new Set();
   /** Strict schema bytes a request may carry, by dialect (strictBudget()). */
@@ -377,6 +390,21 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
       if (!betas.includes(FALLBACK_BETA)) throw new Refusal(`fallbacks: requires the ${FALLBACK_BETA} beta`);
       if (!FALLBACK_MODELS.has(body.model)) throw new Refusal(`fallbacks: ${body.model} has no server-side fallback`);
       if (body.fallbacks !== 'default' && !Array.isArray(body.fallbacks)) throw new Refusal('fallbacks: must be "default" or a list');
+    }
+    if (body.context_management !== undefined) {
+      if (!betas.includes(CONTEXT_BETA)) throw new Refusal(`context_management: requires the ${CONTEXT_BETA} beta`);
+      const edits = body.context_management && Array.isArray(body.context_management.edits) ? body.context_management.edits : null;
+      if (!edits) throw new Refusal('context_management.edits: must be a list');
+      edits.forEach((e, i) => {
+        if (!e || e.type !== 'clear_tool_uses_20250919') throw new Refusal(`context_management.edits.${i}.type: only clear_tool_uses_20250919 here`);
+        for (const k of ['trigger', 'keep']) {
+          const v = e[k];
+          if (v !== undefined && (!v || !['tool_uses', 'input_tokens'].includes(v.type) || !Number.isInteger(v.value) || v.value < 0)) {
+            throw new Refusal(`context_management.edits.${i}.${k}: {type, value} with a whole value`);
+          }
+        }
+        if (e.keep && e.keep.type !== 'tool_uses') throw new Refusal(`context_management.edits.${i}.keep: type must be tool_uses`);
+      });
     }
     if (body.tool_choice && ['any', 'tool'].includes(body.tool_choice.type) && FALLBACK_MODELS.has(body.model)) {
       throw new Refusal(`tool_choice: ${body.tool_choice.type} is not supported with ${body.model}`);
@@ -527,6 +555,28 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     return 'go';
   }
 
+  /**
+   * What context editing would clear in this request (clear_tool_uses_20250919 with tool_uses
+   * trigger and keep; an input_tokens trigger is read as the request's characters / 4): its
+   * applied_edits, or null when the request has no context_management.
+   */
+  function appliedEdits(body) {
+    const edits = body && body.context_management && Array.isArray(body.context_management.edits) ? body.context_management.edits : null;
+    if (!edits) return null;
+    const results = [];
+    for (const m of body.messages || []) if (Array.isArray(m.content)) for (const b of m.content) if (b && b.type === 'tool_result') results.push(b);
+    const out = [];
+    for (const e of edits) {
+      const keep = e.keep ? e.keep.value : 3;
+      const over = !e.trigger ? JSON.stringify(body).length / 4 > 100_000 : e.trigger.type === 'tool_uses' ? results.length > e.trigger.value : JSON.stringify(body).length / 4 > e.trigger.value;
+      const cleared = over ? Math.max(0, results.length - keep) : 0;
+      if (!cleared) continue;
+      const tokens = Math.ceil(results.slice(0, cleared).reduce((n, b) => n + JSON.stringify(b.content ?? '').length, 0) / 4);
+      out.push({ type: 'clear_tool_uses_20250919', cleared_tool_uses: cleared, cleared_input_tokens: tokens });
+    }
+    return out;
+  }
+
   function usageOf(step) {
     const u = step.usage || {};
     return { input: u.input ?? 120, output: u.output ?? 30, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 };
@@ -638,7 +688,13 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         { type: 'fallback_message', model: step.fallback, ...usage, cache_creation: null },
       ];
     }
-    write('message_delta', { type: 'message_delta', delta: { stop_reason: stop, stop_sequence: null, stop_details: stopDetails }, usage });
+    const applied = appliedEdits(body);
+    write('message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: stop, stop_sequence: null, stop_details: stopDetails },
+      usage,
+      ...(applied ? { context_management: { applied_edits: applied } } : {}),
+    });
     write('message_stop', { type: 'message_stop' });
     res.end();
   }
@@ -795,7 +851,8 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
         if (fail) return json(fail.status, fail.body ?? errorBody(dialect, fail.status, `fake failure ${fail.status}`), fail.headers);
         const ids = modelLists[dialect];
         if (dialect === 'anthropic') {
-          return json(200, { data: ids.map((id) => ({ type: 'model', id, display_name: id, created_at: '2026-01-01T00:00:00Z' })), has_more: false, first_id: ids[0] ?? null, last_id: ids[ids.length - 1] ?? null });
+          const row = (id) => ({ type: 'model', id, display_name: id, created_at: '2026-01-01T00:00:00Z', ...(modelContexts.has(id) ? { max_input_tokens: modelContexts.get(id) } : {}) });
+          return json(200, { data: ids.map(row), has_more: false, first_id: ids[0] ?? null, last_id: ids[ids.length - 1] ?? null });
         }
         return json(200, { object: 'list', data: ids.map((id) => ({ id, object: 'model', created: 0, owned_by: 'fake' })) });
       }
@@ -875,11 +932,15 @@ export async function startFakeLlm({ port = 0, host = '127.0.0.1' } = {}) {
     /**
      * The model ids the models routes list (every dialect, or one: 'anthropic' | 'openai' |
      * 'compat'). An entry may be a row, `{id, context?, max?, type?, route?}`: the local
-     * server's model routes answer for it (see the top), and a later list replaces the rows.
+     * server's model routes answer for it (see the top), and a later list replaces the rows;
+     * `{id, max_input_tokens}` sets what the Messages dialect's list says of its context.
      */
     models(list, dialect) {
       const ids = list.map((m) => (m && typeof m === 'object' ? m.id : m));
       for (const d of dialect ? [dialect] : Object.keys(modelLists)) modelLists[d] = [...ids];
+      if (!dialect || dialect === 'anthropic') {
+        for (const m of list) if (m && typeof m === 'object' && Number.isInteger(m.max_input_tokens)) modelContexts.set(m.id, m.max_input_tokens);
+      }
       if (!dialect || dialect === 'compat') {
         modelRows.clear();
         for (const m of list) if (m && typeof m === 'object') modelRows.set(m.id, { ...m });

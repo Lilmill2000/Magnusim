@@ -221,7 +221,7 @@ describe("the Assistant's parity with the person (spec 16.4)", () => {
 // CAD_EDITION_TOOLS, which tool_editions must say exactly.
 const { CAD_EDITION_TOOLS } = await import('../server/assistant-routes.ts');
 const EDITIONS = ['magnusim', 'cad'];
-const REACH = ['home', 'card', 'grid_menu', 'folder_menu', 'new_project', 'project', 'settings'];
+const REACH = ['home', 'card', 'grid_menu', 'folder_menu', 'new_project', 'project', 'settings', 'dock'];
 const TOOL_EDITIONS = FIXTURE.tool_editions ?? {};
 const inCad = (e) => (e.editions ?? []).includes('cad');
 

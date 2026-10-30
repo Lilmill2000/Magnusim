@@ -11,7 +11,7 @@ export { Chip, type ChipAction } from './Chip';
 export { ContextMenu, isSep, type MenuEntry, type MenuItem } from './ContextMenu';
 export { commaProblem, exprToStore, formatField, formatQuantity, formatReadout, formatSci, formatVolume, fullPrecision, literalDigits, MM_PER, DEG_PER, parseLiteral, toDisplay, unitText } from './format';
 export { NumberUnitInput, displayOf, type NumberUnitInputProps } from './NumberUnitInput';
-export { DisabledReason, EmptyState, Field, FieldGroup, Flyout, Hint, PanelChrome, Select, type PanelChromeProps, type SelectOption, type SelectProps } from './Panel';
+export { DisabledReason, EmptyState, Field, FieldGroup, Flyout, Hint, Note, PanelChrome, Select, type PanelChromeProps, type SelectOption, type SelectProps } from './Panel';
 export { ASSISTANT_PANEL_DONE, PanelOwnerProvider, usePanelOwner, type PanelOwner } from './Panel';
 export { InlineRename, NAME_MAX, RenameTitle, type RenameFn } from './Rename';
 export { TooltipLayer, hideTip, tipTiming, useTip, type TipContent } from './Tooltip';

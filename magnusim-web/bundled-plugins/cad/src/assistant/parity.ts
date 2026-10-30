@@ -45,6 +45,7 @@ import type { Rails } from '../ui/left-rails';
 import type { ToolbarPrefs } from '../ui/toolbar-layout';
 import type { Keybinds } from '../app/keybinds';
 import type { CheckControl } from '../features/check/controls';
+import type { SectionControl } from '../features/section/controls';
 
 export type Reach =
   | { kind: 'reach'; tool: string; field: string; value?: string; note?: string; projects?: true; without?: string }
@@ -65,6 +66,8 @@ export const ENCLOSURE_KEPT_WHY =
 const KEPT = (r: Reach) => inProjects(r, ENCLOSURE_KEPT_WHY);
 
 const W = (action: string) => reach('workspace', 'action', action);
+/** See-through bodies (INSPECT > See-through, the body's menu): workspace see_through, and opaque the other way. */
+const SEE = reach('workspace', 'action', 'see_through', 'action opaque makes them opaque again');
 const ENTITY = (kind: string) => reach('sketch', 'entities[].kind', kind);
 const TIE = (kind: string) => reach('sketch', 'constraints[].kind', kind);
 const MODIFY = (kind: string) => reach('modify', 'kind', kind);
@@ -106,6 +109,8 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'inspect.check': reach('measure', 'targets'),
   'inspect.mass': reach('measure', 'targets'),
   'inspect.measure': reach('measure', 'targets'),
+  'inspect.section': W('section'),
+  'inspect.see-through': SEE,
   'cfd.enclosure': inProjects(DIRECT('enclosure')),
   'file.export-step': W('export_step'),
   'file.import-step': W('import_step'),
@@ -473,6 +478,7 @@ export const UI: { readonly [K in keyof UiController]: Reach } = {
   rollToEnd: W('roll_to_end'),
   setRollbackIndex: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
+  setBodiesSeeThrough: SEE,
   setFeatureVisible: W('show'),
   setBodyInSimulation: inProjects(reach('body', 'simulation')),
   deleteBodies: DIRECT('delete_body'),
@@ -519,9 +525,11 @@ export const DOC: { readonly [K in keyof DocService]: Reach } = {
   retry: DIRECT('retry'),
   setRollback: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
+  setBodiesSeeThrough: SEE,
   setExpanded: W('expand'),
   setPlanes: W('origin_planes'),
   setCamera: auto('the view keeps its camera by itself'),
+  setSection: W('section'),
   setSketchVisibility: W('show'),
   setScaleModel: W('banana_place'),
   setSketchBanana: W('banana_place'),
@@ -634,6 +642,24 @@ export const CHECK: { readonly [K in CheckControl]: Reach } = {
   row: W('select'),
 };
 
+/**
+ * INSPECT's Section view panel, control by control (the command inspect.section opens it), and its
+ * arrow in the view: the workspace tool's section sets the same view state (src/features/section/bind.ts
+ * setSectionView), with the same plane forms (an origin plane, a construction plane by name, a flat
+ * face, "selection"), offset or middle, and flip; off turns it off. What the panel's note says,
+ * get_model's section says too.
+ */
+export const SECTION: { readonly [K in SectionControl]: Reach } = {
+  on: reach('workspace', 'action', 'section', 'value "off" turns it off; any plane turns it on'),
+  plane: reach('workspace', 'action', 'section', 'value "<construction plane name | flat face selector | selection> ..."'),
+  origin: reach('workspace', 'action', 'section', 'value "Top|Front|Right ..."'),
+  offset: reach('workspace', 'action', 'section', 'value "<plane> offset <length>"'),
+  middle: reach('workspace', 'action', 'section', 'value "<plane> middle"'),
+  flip: reach('workspace', 'action', 'section', 'value "<plane> ... flip"'),
+  arrow: reach('workspace', 'action', 'section', 'a drag of the arrow sets the offset, as value "<plane> offset <length>" does'),
+  note: reach('get_model', 'detail', 'brief', "section.note: the panel's note (on: false when the section turned off); the workspace's view.section too"),
+};
+
 const POINTER = auto("the person's pointer in the view (orbit, pick, hover): the Assistant names things by selector");
 /** The view's colours follow the host's appearance (its Settings): nobody sets them in the Part, and every picture is light. */
 const APPEARANCE = auto("the host's appearance (the app's Settings): the view follows it, and every picture is light whatever it is");
@@ -681,6 +707,7 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   addLayer: INTERNAL,
   reframe: W('fit'),
   refitIfOffScreen: W('fit'),
+  offView: INTERNAL,
   pushTool: POINTER,
   rayAt: POINTER,
   toPlane: POINTER,
@@ -755,6 +782,7 @@ export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reac
   link: LINK,
   viewport: VIEWPORT,
   check: CHECK,
+  section: SECTION,
 };
 
 // ------------------------------------------------------------------ the other way: every Assistant tool's field, the person's path
@@ -783,7 +811,7 @@ export type PersonPath = (
   also?: string;
 };
 
-export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport' | 'check';
+export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport' | 'check' | 'section';
 
 export const command = (id: string): PersonPath => ({ kind: 'command', id });
 export const control = (table: ControlTable, method: string): PersonPath => ({ kind: 'control', table, method });
@@ -1092,6 +1120,9 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=roll_to_end': control('ui', 'rollToEnd'),
     'action=show': control('ui', 'setFeatureVisible'),
     'action=hide': control('ui', 'setFeatureVisible'),
+    // INSPECT > See-through on the selected bodies (again: opaque), and the body's menu in the tree or the view.
+    'action=see_through': { ...command('inspect.see-through'), also: "the body's menu in the tree or the view: Make <body> see-through" },
+    'action=opaque': { ...command('inspect.see-through'), also: "the body's menu in the tree or the view: Make <body> opaque" },
     'action=origin_planes': control('viewport', 'setPlanes'),
     'action=rename_part': place("the tree's Part row: a double-click renames the Part"),
     'action=select': command('inspect.find'),
@@ -1119,7 +1150,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=standard_view': command('view.iso_back'),
     'action=normal_to': command('view.normal-to'),
     'action=orbit_pivot': control('viewport', 'orbitAround'),
-    'action=section': control('viewport', 'setSection'),
+    // INSPECT > Section view (its panel; also the view tools' section button and the arrow on the cut).
+    'action=section': { ...command('inspect.section'), also: "the arrow on the cut in the view: a drag sets the offset; the view tools' section button" },
     'action=projection': control('viewport', 'setProjection'),
     'action=display': control('viewport', 'setDisplay'),
     // The Set keybind dialog (a command's right-click) and Settings; the Assistant's changes need the person's ask and Yes.

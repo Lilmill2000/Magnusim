@@ -6,15 +6,39 @@ describe('the dock copy', () => {
   it('header, conversations and the person\'s message', () => {
     expect([copy.DOCK_TITLE, copy.NEW_CONVERSATION, copy.ASSISTANT_SETTINGS, copy.CLOSE_DOCK]).toEqual(['Assistant', 'New conversation', 'Assistant settings', 'Close the Assistant']);
     expect([copy.GROUP_HERE, copy.GROUP_HOME, copy.GROUP_OTHER_PROJECTS]).toEqual(['Here', 'Home', 'Other projects']);
-    expect(copy.CONVERSATIONS_EMPTY).toBe('No conversations yet. Magnusim keeps them while it runs; a restart clears them.');
+    expect(copy.CONVERSATIONS_EMPTY).toBe('No conversations yet. Magnusim keeps them while it runs; History keeps what they said for 31 days.');
     expect(copy.forgetLabel('Box')).toBe('Forget Box');
     expect([copy.FORGET, copy.FORGET_TITLE, copy.FORGET_KEEP]).toEqual(['Forget', 'Forget this conversation?', 'Keep']);
-    expect(copy.FORGET_COPY).toBe("The Assistant forgets its messages; this can't be undone. What it changed in your projects stays.");
+    expect(copy.FORGET_COPY).toBe("The Assistant forgets its messages; this can't be undone. Its saved copy stays in History, and what it changed in your projects stays.");
     expect(copy.FORGET_BUSY).toBe('A request is running in this conversation. Stop it first.');
     expect(copy.conversationMeta('Local server', '09:41')).toBe('Local server · 09:41');
     expect(copy.readOnlyConversation('Wing')).toBe('This conversation is about project "Wing". Open that project to continue it, or start a new conversation here.');
     expect(copy.OPEN_PROJECT).toBe('Open project');
     expect(copy.FROM_PROGRAM).toBe('From the command line or another program');
+  });
+
+  it('History: the saved chats, Clear history and a saved chat read only', () => {
+    expect([copy.HISTORY, copy.CLEAR_HISTORY, copy.BACK, copy.CLEAR_HISTORY_KEEP]).toEqual(['History', 'Clear history', 'Back', 'Keep']);
+    expect([copy.historyOf(false), copy.historyOf(true)]).toEqual(['Chats saved in this project, newest first. Kept 31 days.', 'Chats saved on Home, newest first. Kept 31 days.']);
+    expect([copy.HISTORY_EMPTY, copy.HISTORY_LOADING, copy.historyMore(1), copy.historyMore(3)]).toEqual([
+      'No saved chats here in the last 31 days.',
+      'Loading the saved chats…',
+      '1 older chat is saved but not listed.',
+      '3 older chats are saved but not listed.',
+    ]);
+    expect([copy.dayTime('2026-10-28T09:05:00'), copy.dayTime('not a date')]).toEqual(['28 Oct, 09:05', '']);
+    expect([copy.clearHistoryTitle(false), copy.clearHistoryTitle(true)]).toEqual(["Clear this project's chat history?", "Clear Home's chat history?"]);
+    expect(copy.CLEAR_HISTORY_COPY).toBe("Magnusim deletes the chats it saved here; this can't be undone. Conversations still open stay, and what the Assistant changed in your projects stays.");
+    expect([copy.clearedChats(0), copy.clearedChats(1), copy.clearedChats(4)]).toEqual(['There were no saved chats to clear.', 'Cleared 1 saved chat.', 'Cleared 4 saved chats.']);
+    expect(copy.savedLine('28 Oct, 09:05', true)).toBe('A saved chat, last used 28 Oct, 09:05. It is read only: Continue in a new chat takes up where it ended.');
+    expect(copy.savedLine('28 Oct, 09:05', false)).toBe('A saved chat, last used 28 Oct, 09:05. It is read only.');
+    expect([copy.SAVED_LOADING, copy.SHOW_MORE, copy.savedPictures(1), copy.savedPictures(2)]).toEqual(['Loading the saved chat…', 'Show more', '1 picture sent (not saved)', '2 pictures sent (not saved)']);
+    expect([copy.savedStep(true, 'Extrude', 'Extruded 10 mm', null), copy.savedStep(false, 'Fillet', 'Edge too short', 'bad_values'), copy.savedStep(null, 'Look', '', null)]).toEqual([
+      '✓ Extrude: Extruded 10 mm',
+      '✗ Fillet: Edge too short (bad_values)',
+      '… Look: no answer',
+    ]);
+    expect([copy.stepsLeftOut(1), copy.stepsLeftOut(5), copy.SAVED_CUT]).toEqual(['1 more step not saved', '5 more steps not saved', 'Cut to fit what History keeps of one request.']);
   });
 
   it('the menu, the transcript and the intros', () => {
@@ -190,6 +214,24 @@ describe('the dock copy', () => {
     expect(copy.agentCounters(2, 24, 17, 400, 60_000, 60)).toBe('2 of 24 changes · 17 of 400 tool calls · 1 of 60 min');
     expect(copy.meterUsd(0.42, 8, false, 3.1, 15)).toBe('This request: $0.42 of $8.00 · Today: $3.10 of $15.00');
     expect(copy.meterUsd(0.42, 8, true, 3.1, 15)).toBe('This request: about $0.42 of $8.00 · Today: $3.10 of $15.00');
+    expect(copy.dayNear(12.1, 15)).toBe('Today: $12.10 of $15.00. A cheaper model or a lower Effort costs less.');
+    expect([
+      copy.roomLine('images', 72, 100),
+      copy.roomLine('messages', 216, 300),
+      copy.roomLine('bytes', 15 * 1024 * 1024 + 400 * 1024, 20 * 1024 * 1024),
+      copy.roomLine('context', 115_200, 160_000),
+      copy.roomLine('images', 140, 100),
+      copy.roomLine('context', 400_000, 454_217, 8),
+      copy.roomLine('images', 72, 100, 8),
+    ]).toEqual([
+      'Conversation: 72% full (pictures 72 of 100)',
+      'Conversation: 72% full (messages 216 of 300)',
+      'Conversation: 76% full (results and pictures 15 of 20 MB)',
+      'Conversation: 72% full (context 115,200 of 160,000 tokens)',
+      'Conversation: 100% full (pictures 140 of 100)',
+      'Conversation: 88% full (context 400,000 of the 454,217 tokens $8.00 per turn can resend)',
+      'Conversation: 72% full (pictures 72 of 100)',
+    ]);
     expect(copy.METER_FREE).toBe('Local server · no cost');
     expect(copy.meterAgent('Helper')).toBe("Billed to your Helper account (Magnusim can't see the cost)");
   });
@@ -204,6 +246,13 @@ describe('the dock copy', () => {
     expect(copy.STATE_OFF).toBe('The Assistant is off. Choose a provider in Settings → Assistant.');
     expect((['done', 'stopped', 'capped', 'failed'] as const).map(copy.endLabel)).toEqual([null, 'Stopped', 'Limit reached', "Didn't finish"]);
     expect(copy.endBody('capped', null)).toBe('Send another message to carry on.');
+    // Today's limit: another message is refused until it is raised (or midnight), so none is offered.
+    const day = copy.endBody('capped', "Today's $15.00 limit is reached; it resets at midnight.", 'day_usd');
+    expect(day).toBe("Today's $15.00 limit is reached; it resets at midnight. Raise it in Settings → Assistant.");
+    expect(day).not.toContain('Send another message');
+    // A full conversation: its own words only (the composer offers a new one).
+    expect(copy.endBody('capped', 'This conversation is full: it holds 100 pictures.', 'conversation_full')).toBe('This conversation is full: it holds 100 pictures.');
+    expect(copy.endBody('capped', 'The step limit was reached.', 'steps')).toBe('The step limit was reached. Send another message to carry on.');
     expect(copy.endBody('failed', 'The model declined this request.')).toBe('The model declined this request.');
     expect([copy.usageLine(4, 'usd', 0.42, null), copy.usageLine(1, 'free', 0, null), copy.usageLine(9, 'agent_account', 0, 'Helper')]).toEqual([
       '4 steps · $0.42',

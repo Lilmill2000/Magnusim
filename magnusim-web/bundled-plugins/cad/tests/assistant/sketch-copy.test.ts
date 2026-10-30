@@ -64,6 +64,10 @@ describe('the copy row', () => {
       });
       expect((made.dimensions as string[]).length).toBe(1);
       expect(r.data.warnings as string[]).toContain('k1 (copy): 1 relation to other geometry was left out');
+      // The person's dock step says where it copied from and what it left out, as made does.
+      const said = (r as { summary?: string }).summary ?? '';
+      expect(said).toBe('Sketch "Plate" on Top: copied 4 lines, 4 relations and 1 dimension from this sketch (left out 1 relation), under-defined (dof 6), 3 regions (largest 600 mm²)');
+      expect(said.length).toBeLessThanOrEqual(160);
       const f = featureNamed(h, 'Plate');
       const lines = f.entities.filter((e) => e.kind === 'line');
       expect(lines).toHaveLength(8);

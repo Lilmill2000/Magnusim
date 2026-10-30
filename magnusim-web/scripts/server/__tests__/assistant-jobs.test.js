@@ -185,6 +185,7 @@ describe('the job tools: schemas and definitions', () => {
       'setup_edit',
       'import_file',
       'delete',
+      'chat_history',
       'compute',
       'wait',
       'jobs',

@@ -87,7 +87,7 @@ describe('bootstrap', () => {
     // Greyed with the reason until a body exists.
     expect(root.querySelector('[data-command="cfd.enclosure"]')?.getAttribute('data-disabled-reason')).toBe('Add or import a body first');
     expect(shownIn('modify')).toEqual(['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters']);
-    expect(shownIn('inspect')).toEqual(['inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find']);
+    expect(shownIn('inspect')).toEqual(['inspect.measure', 'inspect.section', 'inspect.see-through', 'inspect.mass', 'inspect.check', 'inspect.find']);
     expect(shownIn('file')).toEqual(['file.import-step', 'file.export-step', 'file.picture']);
     for (const id of ['sketch.new', 'solid.extrude', 'pattern.linear', 'modify.fillet', 'construct.plane', 'cfd.enclosure', 'inspect.measure', 'file.import-step']) expect(large(id), `${id} large`).toBe(true);
     for (const id of ['solid.revolve', 'modify.chamfer', 'modify.shell', 'inspect.find', 'file.picture']) expect(large(id), `${id} small`).toBe(false);

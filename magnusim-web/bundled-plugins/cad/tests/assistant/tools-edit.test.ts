@@ -164,7 +164,7 @@ describe('body', () => {
       expect(Object.keys(body.inputSchema.properties)).toEqual(['body', 'rename_to', 'color', 'visibility']);
       expect(body.inputSchema.required).toEqual(['body', 'rename_to', 'color', 'visibility']);
       expect(body.description).not.toMatch(/simulation/);
-      // The same 21 tools by name (workspace, direct and edit_feature without a simulation's or the Enclosure's words: edition-no-projects.test.ts).
+      // The same 22 tools by name (workspace, direct and edit_feature without a simulation's or the Enclosure's words: edition-no-projects.test.ts).
       expect(reg.tools.map((t) => t.name)).toEqual(TOOL_NAMES);
       const r = await h.ok('body', { body: 'Body 1', rename_to: 'Plate', color: '', visibility: 'keep' });
       expect(r.data.body).toEqual({ name: 'Plate', color: '#bdc9db' });

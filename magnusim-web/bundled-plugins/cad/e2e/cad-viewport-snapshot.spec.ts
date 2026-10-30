@@ -224,7 +224,7 @@ test('cad:viewport-snapshot a picture drawn off screen leaves the view as it was
   await frame.evaluate((id) => (window as unknown as W).__CAD__.services.doc.setBodyColor(id, '#d02828'), b.body);
   // The person's own section view (both blocks cut at z = 15, the lower parts kept) and a selected
   // face: the red block's front.
-  await frame.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setSection({ on: true, plane: 'origin:top', offset: 15 }));
+  await frame.evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:top' }, offset: 15 }));
   await still(page);
   const front = await modelOnPage(page, [50, 0, 7]);
   await page.mouse.click(front[0], front[1]);

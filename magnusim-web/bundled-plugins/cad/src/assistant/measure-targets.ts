@@ -22,7 +22,8 @@ import type { CallCtx } from '../types/assistant';
 import { ORIGIN_PLANES, type OriginPlaneRef, type OriginRef, type PlaneFrame, type Vec3 } from '../types/doc';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
-import type { ConstructOutput } from '../types/references';
+import type { ConstructOutput, PlaneRef } from '../types/references';
+import { pickFace } from '../features/p2/refs';
 import type { SelectionItem } from '../types/selection';
 import { ToolError } from './errors';
 import { selectionWords } from './model';
@@ -98,12 +99,12 @@ export function bodyNamed(s: DocState, name: string): BodyInfo | null {
 }
 
 /** A construction plane, axis or point by its feature's name (any case), with its built output. */
-function constructNamed(s: DocState, name: string): { name: string; out: ConstructOutput | null } | null {
+function constructNamed(s: DocState, name: string): { id: string; name: string; out: ConstructOutput | null } | null {
   const want = unquote(name).toLowerCase();
   const f = s.doc.features.find((g) => (g.type === 'ref_plane' || g.type === 'ref_axis' || g.type === 'ref_point') && g.name.toLowerCase() === want);
   if (!f) return null;
   const out = s.rebuild.outputs[f.id] as ConstructOutput | { type?: string } | undefined;
-  return { name: f.name, out: out && (out.type === 'plane' || out.type === 'axis' || out.type === 'point') ? (out as ConstructOutput) : null };
+  return { id: f.id, name: f.name, out: out && (out.type === 'plane' || out.type === 'axis' || out.type === 'point') ? (out as ConstructOutput) : null };
 }
 
 /** A plane frame moved `offset` (an expression, the Part's units) along its normal; `flip` the other way. */
@@ -309,4 +310,85 @@ export async function resolveSectionPlane(ctx: CallCtx, s: DocState, text: strin
   if (e.kind !== 'face') throw new ToolError('bad_section', `section: ${e.words} is not a plane or a flat face.`, { detail: { field } });
   const frame = await planeOfFace(e);
   return { frame: offsetBy(ctx, frame, offset, flip, field), words: offset === null ? e.words : `${e.words} offset ${offset}${flip ? ' flip' : ''}` };
+}
+
+// ------------------------------------------------------------------ the section view's plane
+
+/**
+ * A cut as the view tool's section and the workspace's section write it, read but not found yet:
+ * "<plane> [offset <length> | middle] [flip]" (flip keeps the other side). null for "".
+ */
+export interface SectionText {
+  base: string;
+  offset: string | null;
+  middle: boolean;
+  flip: boolean;
+}
+
+export function splitSection(text: string): SectionText | null {
+  const t = text.trim();
+  if (!t) return null;
+  const m = /^(.*?)(?:\s+offset\s+(.+?)|\s+(middle))?(?:\s+(flip))?\s*$/i.exec(t)!;
+  return { base: m[1].trim(), offset: m[2]?.trim() ?? null, middle: !!m[3], flip: !!m[4] };
+}
+
+/** The forms a section takes, for its refusals. */
+export const SECTION_FORMS = 'Top, Front or Right, a construction plane, a flat face or "selection" (a flat face or plane selected), then "offset <length>" or "middle", then "flip"';
+
+/**
+ * The plane a section's text names, as the section view keeps it (src/features/section): an origin
+ * plane, a construction plane (its feature: the cut follows it), or a flat face (its stored reference:
+ * the cut follows the face). The same forms as measure's section (resolveSectionPlane), read to what
+ * they are rather than to where they are now. Anything else is bad_section in words.
+ */
+export async function resolveSectionRef(ctx: CallCtx, s: DocState, base: string, field = 'section'): Promise<PlaneRef> {
+  const word = unquote(base).toLowerCase().replace(/\s+plane$/, '');
+  const origin = ORIGIN_PLANE_WORDS[word];
+  if (origin) return { kind: 'origin', plane: origin };
+  const built = constructNamed(s, base);
+  if (built) {
+    if (!built.out) throw new ToolError('nothing_selected', `${field}: ${built.name} is not built now (it fails, is suppressed or rolled back).`, { detail: { field } });
+    if (built.out.type !== 'plane') throw new ToolError('bad_section', `${field}: ${built.name} is ${built.out.type === 'axis' ? 'an axis' : 'a point'}, not a plane.`, { detail: { field } });
+    return { kind: 'feature', feature: built.id };
+  }
+  if (bodyNamed(s, base)) throw new ToolError('bad_section', `${field}: ${unquote(base)} is a body; a section is a plane (${SECTION_FORMS}).`, { detail: { field } });
+  let item: SelectionItem | null = null;
+  let e: Entity | null = null;
+  let parse: ToolError | null = null;
+  if (/^selection$/i.test(base)) {
+    const items = userSelection(ctx.services.selection.get()).items.filter((it) => it.kind === 'face' || it.kind === 'origin' || it.kind === 'feature');
+    if (!items.length) throw new ToolError('nothing_selected', `${field}: the person has no flat face or plane selected.`, { detail: { field } });
+    if (items.length > 1) throw new ToolError('selector_ambiguous', `${field}: the person has ${items.length} faces or planes selected; a section is one.`, { detail: { field, count: items.length } });
+    item = items[0];
+  } else if (base && selectorResolver) {
+    let list: readonly Entity[] | null = null;
+    try {
+      list = await selectorResolver(ctx, base, { field });
+    } catch (err) {
+      parse = syntaxError(err);
+      if (!parse) throw err;
+    }
+    if (list) e = one(list, base, field);
+  }
+  if (e?.kind === 'face') item = { kind: 'face', body: e.body.id, index: e.index };
+  if (item?.kind === 'origin' && item.ref in ORIGIN_PLANES) return { kind: 'origin', plane: item.ref as OriginPlaneRef };
+  if (item?.kind === 'feature') {
+    const f = s.doc.features.find((g) => g.id === (item as { feature: string }).feature);
+    const out = f ? (s.rebuild.outputs[f.id] as { type?: string } | undefined) : undefined;
+    if (f && out?.type === 'plane') return { kind: 'feature', feature: f.id };
+    throw new ToolError('bad_section', `${field}: ${f?.name ?? 'that'} is not a plane built now.`, { detail: { field } });
+  }
+  if (item?.kind === 'face') {
+    const body = s.rebuild.bodies.find((b) => b.id === (item as { body: string }).body);
+    if (!body) throw new ToolError('nothing_selected', `${field}: that face's body is not built now.`, { detail: { field } });
+    const r = await pickFace(ctx.services, body, item.index, null);
+    if (!r.ok) throw new ToolError('bad_section', `${field}: ${r.reason}.`, { detail: { field } });
+    if (r.ref.signature.type !== 'plane') throw new ToolError('bad_section', `${field}: ${e?.words ?? 'that face'} is not flat (${r.ref.signature.type}); a section needs a plane or a flat face.`, { detail: { field } });
+    return { kind: 'face', body: body.id, ref: r.ref };
+  }
+  throw new ToolError(
+    'bad_section',
+    `${field}: "${base}" is not a plane here${e ? ` (${e.words} is not a plane or a flat face)` : parse ? ` (${syntaxWords(parse, field)})` : ''}. Use ${SECTION_FORMS}.`,
+    { detail: { field, ...(parse ? { selector: base, column: parse.detail.column } : {}) } },
+  );
 }

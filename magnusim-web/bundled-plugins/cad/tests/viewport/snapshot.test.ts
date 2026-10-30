@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { HANDLES_LAYER } from '../../src/features/enclosure/handles';
 import { HANDLE_LAYER } from '../../src/features/extrude/handle';
 import { MOVE_HANDLE_LAYER } from '../../src/features/move_body/handle';
+import { SECTION_ARROW_LAYER } from '../../src/features/section/handle';
 import { MARKERS_LAYER } from '../../src/features/pattern/markers';
 import { LAYER_CONSTRUCT } from '../../src/features/refgeom/overlay';
 import { SKETCH_BANANA_LAYER } from '../../src/features/scale/sketch-banana';
@@ -101,8 +102,14 @@ describe('size, cut, triad and rows', () => {
   });
 
   it('the cut is the section view\'s plane through the offset (flip keeps the other side); the shared state is not involved', () => {
-    expect(snapshotSection({ plane: 'top', offset: 5, flip: false })).toEqual({ on: true, plane: 'origin:top', offset: 5, flip: false });
-    expect(snapshotSection({ plane: 'right', offset: Number.NaN, flip: true })).toEqual({ on: true, plane: 'origin:right', offset: 0, flip: true });
+    expect(snapshotSection({ plane: 'top', offset: 5, flip: false })).toEqual({ frame: { origin: [0, 0, 0], normal: [0, 0, 1] }, offset: 5, flip: false });
+    expect(snapshotSection({ plane: 'right', offset: Number.NaN, flip: true })).toEqual({ frame: { origin: [0, 0, 0], normal: [1, 0, 0] }, offset: 0, flip: true });
+    // Any plane by its frame (a construction plane, a flat face): the cut through origin + offset * normal.
+    expect(snapshotSection({ frame: { origin: [1, 2, 3], normal: [0, 0, 2] }, offset: 4, flip: false })).toEqual({ frame: { origin: [1, 2, 3], normal: [0, 0, 2] }, offset: 4, flip: false });
+    const tilted = snapshotClip({ frame: { origin: [0, 0, 10], normal: [Math.SQRT1_2, 0, Math.SQRT1_2] }, offset: 0, flip: false });
+    expect(tilted.distanceToPoint(new Vector3(0, 0, 10))).toBeCloseTo(0, 12);
+    expect(tilted.distanceToPoint(new Vector3(0, 0, 0))).toBeGreaterThan(0);
+    expect(tilted.distanceToPoint(new Vector3(0, 0, 20))).toBeLessThan(0);
     const below = snapshotClip({ plane: 'top', offset: 5, flip: false });
     expect(below.distanceToPoint(new Vector3(0, 0, 0))).toBeGreaterThan(0);
     expect(below.distanceToPoint(new Vector3(0, 0, 10))).toBeLessThan(0);
@@ -153,7 +160,7 @@ describe('the layers a picture leaves out', () => {
   }
 
   it('manipulators, markers and bananas; the sketches and reference planes stay', () => {
-    expect([...SNAPSHOT_HIDDEN_LAYERS].sort()).toEqual([HANDLE_LAYER, HANDLES_LAYER, MOVE_HANDLE_LAYER, 'p2-measure', MARKERS_LAYER, PICKS_LAYER, 'sketch.pick', BANANA_LAYER, SKETCH_BANANA_LAYER].sort());
+    expect([...SNAPSHOT_HIDDEN_LAYERS].sort()).toEqual([HANDLE_LAYER, HANDLES_LAYER, MOVE_HANDLE_LAYER, SECTION_ARROW_LAYER, 'p2-measure', MARKERS_LAYER, PICKS_LAYER, 'sketch.pick', BANANA_LAYER, SKETCH_BANANA_LAYER].sort());
     const kept = [LAYER_CONSTRUCT, LAYER_REGIONS, LAYER_SKETCHES, LAYER_MARKERS, 'sketch-geometry', 'sketch-annotations'];
     for (const id of kept) expect(SNAPSHOT_HIDDEN_LAYERS.has(id), id).toBe(false);
     // Every layer the app adds is one or the other (a new layer must be placed in one list).

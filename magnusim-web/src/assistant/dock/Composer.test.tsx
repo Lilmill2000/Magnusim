@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantStatus, ConversationRow } from '../wire';
 import { Composer, contextChip, placeholderOf } from './Composer';
+import { CARRY_LINE, CONTINUE_IN_NEW_CHAT } from './copy';
 import type { DockPlace } from './context';
 import { setDrawingsOfferedForTests } from './drawings';
 import type { PictureDeps } from './pictures';
@@ -173,8 +174,9 @@ describe('the body per context', () => {
     expect(turnBody({ ...send, place: HOME })).toEqual({ text: 'x', provider: 'p' });
     // The window's core registration on the link (C7): bound from Home and the workbench too.
     for (const place of [HOME, PROJECT, WS('connecting')]) expect(turnBody({ ...send, place }, true)).toEqual({ text: 'x', provider: 'p', tab: 'link' });
-    // A conversation keeps its provider: only its id goes.
+    // A conversation keeps its provider: only its id goes; one that continues another, that one's.
     expect(turnBody({ ...send, conversation: 'c9', place: HOME })).toEqual({ text: 'x', conversation: 'c9' });
+    expect(turnBody({ ...send, carryFrom: 'c8', place: HOME })).toEqual({ text: 'x', carry_from: 'c8' });
     const pic = { media_type: 'image/png' as const, data: 'AAAA', width: 1, height: 1, name: 'a.png', shrunk: false, blob: new Blob() };
     expect(turnBody({ ...send, place: HOME, pictures: [pic] }).images).toEqual([{ media_type: 'image/png', data: 'AAAA' }]);
   });
@@ -215,8 +217,15 @@ describe('what holds Send back', () => {
   it('a full conversation, and one that ended: New conversation', async () => {
     const onNew = vi.fn();
     const conv = { id: 'c1', provider: 'openai_compatible', label: 'Local server', full: 'messages' } as unknown as ConversationRow;
+    // The server's words name the limit with its numbers.
+    const said = 'This conversation is full: it holds 100 pictures, and Magnusim keeps at most 100 in one conversation. Start a new one.';
+    const named = mount({ conversation: { ...conv, full: 'images', full_text: said } as unknown as ConversationRow, conversationId: 'c1', onNew });
+    expect(line()).toBe(said);
+    expect((document.querySelector('[data-dock-send]') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector('[data-dock-continue]')?.textContent).toBe(CONTINUE_IN_NEW_CHAT);
+    named.unmount();
     const { unmount } = mount({ conversation: conv, conversationId: 'c1', onNew });
-    expect(line()).toBe('This conversation is full. Start a new one.');
+    expect(line(), 'an older server names no limit').toBe('This conversation is full. Start a new one.');
     fireEvent.click(document.querySelector('[data-dock-new-line]') as HTMLElement);
     expect(onNew).toHaveBeenCalledTimes(1);
     unmount();
@@ -229,6 +238,37 @@ describe('what holds Send back', () => {
     await waitFor(() => expect(line()).toBe('That conversation has ended (2 hours idle, or forgotten). Start a new one.'));
     expect(posts[0].body).toEqual({ text: 'Hi', conversation: 'c1', link: 'L1' });
     expect(document.querySelector('[data-dock-provider-locked]')?.textContent).toBe('Provider: Local server');
+    expect(document.querySelector('[data-dock-continue]'), 'an ended one has nothing to carry').toBeNull();
+  });
+
+  it('Continue in a new chat: the text typed moves into a new conversation, which says what goes with it, keeps the provider and sends carry_from; a send refused full offers it too', async () => {
+    const said = 'This conversation is full: it has 300 messages, and one conversation holds at most 300. Start a new one.';
+    const conv = { id: 'c1', provider: 'openai_compatible', label: 'Local server', project_id: 'p1', full: null } as unknown as ConversationRow;
+    answers = [[409, { ok: false, code: 'conversation_full', error: said }]];
+    const view = mount({ place: PROJECT, conversation: conv, conversationId: 'c1' });
+    fireEvent.change(area(), { target: { value: 'Now the hands.' } });
+    await act(async () => {
+      fireEvent.click(sendButton());
+    });
+    await waitFor(() => expect(line()).toBe(said));
+    expect(document.querySelector('[data-dock-carry]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: CONTINUE_IN_NEW_CHAT }));
+    const snap = dockStoreSnapshot();
+    expect([snap.shown, snap.carry]).toEqual([null, { from: 'c1', provider: 'openai_compatible', label: 'Local server' }]);
+    expect([sessionStorage.getItem('mg.assistant.dock.draft.c1'), sessionStorage.getItem('mg.assistant.dock.draft.new')]).toEqual([null, 'Now the hands.']);
+    // The dock shows the new conversation (ConversationView passes the store's carry).
+    view.rerender(<Composer place={PROJECT} status={LOCAL} conversation={null} conversationId={null} running={null} onNew={() => undefined} carry={snap.carry} />);
+    expect(area().value).toBe('Now the hands.');
+    expect(document.querySelector('[data-dock-carry]')?.textContent).toBe(CARRY_LINE);
+    expect(document.querySelector('[data-dock-provider-locked]')?.textContent).toBe('Provider: Local server');
+    expect([line(), sendButton().disabled]).toEqual([null, false]);
+    answers = [[202, { ok: true, conversation: 'c2', turn: 't2', answer_key: 'k2' }]];
+    await act(async () => {
+      fireEvent.click(sendButton());
+    });
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect(posts[1].body).toEqual({ text: 'Now the hands.', carry_from: 'c1', context: { project_id: 'p1', simulation_id: 's1' }, link: 'L1' });
+    expect(dockStoreSnapshot()).toMatchObject({ shown: 'c2', carry: null });
   });
 
   for (const s of SETTINGS) {

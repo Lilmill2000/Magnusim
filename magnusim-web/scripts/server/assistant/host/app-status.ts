@@ -21,7 +21,7 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
     name: 'app_status',
     title: 'Read the app status',
     description:
-      "Magnusim's version, the Assistant's provider, model, caps and today's spend (you can't change these), the plugins and their environments, the units preference, this PC's hardware and the compute queue. with_projects: true also names the project of each running or queued job (it reads the project list; the user may be asked once).",
+      "Magnusim's version, the Assistant's provider, model, caps, today's spend and whether its provider log for a problem report is on (you can't change these), the plugins and their environments, the units preference, this PC's hardware and the compute queue. with_projects: true also names the project of each running or queued job (it reads the project list; the user may be asked once).",
     schema: objectSchema({ with_projects: { type: 'boolean' } }),
     risk: 'read',
     // Naming other projects' jobs reads the project list: its own question (LIST_CONSENT_KEY).
@@ -82,7 +82,9 @@ export function appStatusTool(d: HostToolDeps): HostToolDef {
           assistant: {
             provider: text(assistant.provider, 40),
             model: text(assistant.model, 128),
-            ...(settings ? { effort: text(settings.effort, 20), privacy: text(settings.privacy, 20), caps: settings.caps } : {}),
+            ...(settings
+              ? { effort: text(settings.effort, 20), privacy: text(settings.privacy, 20), caps: settings.caps, provider_log: settings.provider_log === true }
+              : {}),
             ...(spent !== null ? { spent_today_usd: Math.round(spent * 100) / 100 } : {}),
             ...(used ? { this_turn: used } : {}),
             can_change_these: false,

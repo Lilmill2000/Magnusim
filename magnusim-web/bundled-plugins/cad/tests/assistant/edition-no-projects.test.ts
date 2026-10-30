@@ -1,6 +1,6 @@
 // The Assistant in Magnusim CAD (Daniel 2026-10-29: hide every project and simulation item there,
 // and what the person cannot see the Assistant is not told about either). The host's welcome says
-// projectLinks false: the Part registers the same 21 tools, but the workspace tool has no
+// projectLinks false: the Part registers the same 22 tools, but the workspace tool has no
 // send_to_simulation (enum and words), the direct tool no enclosure kind, fields or words, and help
 // says none of them (features, workspace, details, errors); a call that still names them is
 // refused in plain words. An Enclosure made in Magnusim stays as it is: get_model gives no inputs
@@ -31,7 +31,7 @@ const rowsOf = (r: { data: Row }) => r.data.rows as { about: string; text: strin
 
 describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
   it(
-    'registers the 21 tools without send_to_simulation, the enclosure kind or their words, and help says none of them',
+    'registers the 22 tools without send_to_simulation, the enclosure kind or their words, and help says none of them',
     async () => {
       h = await assistantHarness({ projectLinks: false });
       const reg = h.fake.registrations.at(-1)!;
@@ -42,7 +42,7 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       const workspace = tool('workspace');
       const actions = (workspace.inputSchema.properties.action as Node).enum!;
       expect(actions).not.toContain('send_to_simulation');
-      expect(actions).toHaveLength(37);
+      expect(actions).toHaveLength(39);
       expect(workspace.description).not.toMatch(PROJECT_WORDS);
       const direct = tool('direct');
       expect((direct.inputSchema.properties.kind as Node).enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'move_body', 'repair', 'retry']);

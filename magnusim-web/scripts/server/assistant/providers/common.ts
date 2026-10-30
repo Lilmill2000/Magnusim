@@ -1,7 +1,8 @@
 /**
- * What the three adapters share: how a conversation is cut into requests, the watchdog
- * defaults, the options every adapter is built with (providers/index.ts builds them), and
- * the cloud adapters' fallback for strict tools their provider can't compile.
+ * What the three adapters share: how a conversation is cut into requests (which old tool
+ * results go without their content: clearedResults), the watchdog defaults, the options every
+ * adapter is built with (providers/index.ts builds them), and the cloud adapters' fallback for
+ * strict tools their provider can't compile.
  */
 import { createHash } from 'node:crypto';
 import { alog } from '../log.ts';
@@ -40,13 +41,69 @@ const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 
 export { n as tokenCount };
 
 /**
+ * Which tool results a request sends whole: at least the newest `keep`, and the older ones
+ * left out in jumps of `jump`, so what a request sends changes about once every `jump` results
+ * (each change rewrites the prompt cache from the first result it leaves out).
+ */
+export const RESULT_WINDOW = Object.freeze({ keep: 12, jump: 24 });
+
+/** What a left-out result says to the model. */
+export const CLEARED_NOTE = 'An older result, no longer sent. Call a read tool to see the current state.';
+
+/** A left-out result's text: the same bytes every time, so the requests after it share their prefix. */
+export function clearedText(isError: boolean): string {
+  return JSON.stringify({ ok: !isError, left_out: CLEARED_NOTE });
+}
+
+/**
+ * How many of the oldest tool results a request of this conversation leaves out (B): none
+ * while it has fewer than keep + jump; then the most whole jumps that leave at least `keep`,
+ * and never a result the model has not answered yet (those after the last answer: the step
+ * that just ran, however many calls it made). The messages are append-only, so B never goes down.
+ */
+export function clearedResults(messages: readonly Message[]): number {
+  let total = 0;
+  let answered = 0;
+  for (const m of messages) {
+    if (m.role === 'assistant') {
+      answered = total;
+      continue;
+    }
+    for (const p of m.parts) if (p.type === 'tool_result') total += 1;
+  }
+  const { keep, jump } = RESULT_WINDOW;
+  const room = Math.min(total - keep, answered);
+  return room >= jump ? Math.floor(room / jump) * jump : 0;
+}
+
+/**
+ * The messages as a request sends them: the same list, with the oldest `cleared` tool results
+ * (in stored order) as a short note (clearedText) and no pictures. Nothing else changes, and a
+ * message with no such result is the stored object itself. The stored messages stay as they are.
+ */
+export function sentMessages(messages: readonly Message[], cleared: number): Message[] {
+  if (cleared <= 0) return [...messages];
+  let left = cleared;
+  return messages.map((m): Message => {
+    if (left <= 0 || m.role !== 'user' || !m.parts.some((p) => p.type === 'tool_result')) return m;
+    const parts = m.parts.map((p): UserPart => {
+      if (p.type !== 'tool_result' || left <= 0) return p;
+      left -= 1;
+      return { ...p, text: clearedText(p.isError), images: [] };
+    });
+    return { role: 'user', parts };
+  });
+}
+
+/**
  * The conversation as requests carry it: consecutive user messages merged into one, and
- * in each user message every tool result first, in call order, then text and images.
+ * in each user message every tool result first, in call order, then text and images; the
+ * oldest `cleared` tool results left out (sentMessages).
  * Stored messages are never changed (they are append-only); this builds a new list.
  */
-export function requestMessages(messages: readonly Message[]): Message[] {
+export function requestMessages(messages: readonly Message[], cleared = 0): Message[] {
   const out: Message[] = [];
-  for (const m of messages) {
+  for (const m of cleared > 0 ? sentMessages(messages, cleared) : messages) {
     const last = out[out.length - 1];
     if (m.role === 'user' && last && last.role === 'user') {
       out[out.length - 1] = { role: 'user', parts: [...last.parts, ...m.parts] };

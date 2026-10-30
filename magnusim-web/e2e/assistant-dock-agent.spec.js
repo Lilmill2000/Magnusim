@@ -5,7 +5,9 @@
 // files, and the person's pictures while the agent may take them (its catalogue entry before it
 // started, then what its start said); the picker is locked after the first message. An agent
 // that takes pictures gets them with the message and the transcript shows them; one whose start
-// says it takes none ends the request with the words why, and the dock then takes files only.
+// says it takes none ends the request with the words why, and the dock then takes files only. An
+// agent that shortens its memory mid-request (a compaction update) gets a note and its context
+// line, never the lockdown, and keeps its session.
 // The agent is the scripted coding agent
 // (e2e/support/fake-acp-agent.mjs) installed as npm installs the known agent in a temp folder
 // that agent discovery's test switches point at (never this PC's PATH or home), signed in by its
@@ -14,7 +16,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dockSend, dockTurn, openDock, resetAssistant, trackTab, useScriptedModel } from './support/assistant.js';
+import { dockSend, dockTurn, openAssistantStep, openDock, resetAssistant, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeAcp } from './support/fake-acp.mjs';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { e2eTemp, startHost } from './support/host-server.mjs';
@@ -369,4 +371,39 @@ test("a coding agent whose start says it takes no pictures: a request with one e
   await expect(dock.locator('[data-dock-picture-error]')).toHaveText(`${AGENT.name} doesn't take pictures. Send the message without them.`);
   await expect(dock.locator('[data-dock-picture-chip]')).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath('agent-no-pictures.png') });
+});
+
+test('a coding agent that shortens its memory mid-request (a compaction update): the dock notes it and shows its context, the request ends done, the next message goes to the same agent, and Settings shows no lockdown warning', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await resetAssistant(request, host.base);
+  await useScriptedModel(request, host.base, llm, 'cloud');
+  const dock = await pickAgentAtHome(page, request);
+  fake.script(
+    { update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'in_progress' } },
+    { update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'completed' } },
+    { update: { sessionUpdate: 'usage_update', used: 150000, size: 200000 } },
+    { say: 'Still here.' },
+  );
+  await dockSend(page, 'Keep going');
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible({ timeout: 60_000 });
+  await expect(turn.locator('[data-dock-line="note"]')).toContainText([`${AGENT.name} shortened its memory of this chat to make room.`]);
+  await expect(turn.locator('[data-dock-agent-context]')).toHaveText('Context: 150,000 of 200,000 tokens (75%)', STEP);
+  // Magnusim told the agent it takes compaction updates.
+  const init = fake.received().filter((m) => m.method === 'initialize').at(-1);
+  expect(init.params.clientCapabilities.session).toEqual({ compaction: {} });
+  const starts = fake.received().filter((m) => m.method === 'session/new').length;
+  fake.script({ say: 'Next answer.' });
+  await dockSend(page, 'And the next');
+  const next = dockTurn(page);
+  await expect(next.locator('[data-turn-end="done"]')).toBeVisible({ timeout: 60_000 });
+  await expect(next.locator('[data-dock-text]').last()).toHaveText('Next answer.');
+  expect(fake.received().filter((m) => m.method === 'session/new').length, 'the same agent session').toBe(starts);
+  await expect(next.locator('[data-dock-line="note"]')).toHaveCount(0);
+  // No lockdown was recorded: Settings shows the agent ready, not asking to be allowed again.
+  const row = (await (await request.get(api('/api/assistant/agents'))).json()).agents.find((a) => a.id === AGENT.id);
+  expect(row).toMatchObject({ ready: true, needs_allow: false });
+  const pane = await openAssistantStep(page);
+  await expect(pane.locator(`[data-assistant-agent="${AGENT.id}"]`)).toHaveAttribute('data-assistant-agent-state', 'ready', STEP);
+  await page.screenshot({ path: test.info().outputPath('agent-compaction.png') });
 });

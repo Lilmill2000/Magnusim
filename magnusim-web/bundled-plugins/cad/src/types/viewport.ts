@@ -6,7 +6,8 @@
 // and the selection do.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Group } from 'three';
-import type { BodyId, FeatureId, OriginPlaneRef, PlaneFrame, SavedCamera, Vec2, Vec3 } from './doc';
+import type { BodyId, FeatureId, PlaneFrame, SavedCamera, Vec2, Vec3 } from './doc';
+import type { PlaneRef } from './references';
 import type { TessPayload } from './kernel';
 import type { MarkPalette } from '../viewport/palette';
 import type { PickResult, SelectionItem, SelectKind } from './selection';
@@ -86,15 +87,29 @@ export type Projection = 'perspective' | 'orthographic';
 /** Origin planes: 'auto' draws them on an empty part and while one is selected or hovered; 'always' draws them all the time. */
 export type PlanesMode = 'auto' | 'always';
 
-/** Section view: a clipping plane parallel to an origin plane, with capped cuts. */
+/**
+ * Section view: a clipping plane parallel to a plane (an origin plane, a construction plane or a flat
+ * face), with capped cuts. A view state: never a feature, never undone; the Part keeps it in its
+ * view (CadView.section, src/features/section).
+ */
 export interface SectionState {
   on: boolean;
-  plane: OriginPlaneRef;
-  /** Distance of the cut from the origin along the plane's normal (mm). */
+  /** The plane the cut is parallel to (src/types/references.ts PlaneRef). */
+  plane: PlaneRef;
+  /**
+   * That plane where it is now (model mm): the cut is `offset` along `frame.normal` from
+   * `frame.origin`. An origin plane's is its own; a construction plane's or a face's is found by
+   * src/features/section (it follows the plane when an edit moves it).
+   */
+  frame: PlaneFrame;
+  /** Distance of the cut from the plane along its normal (mm). */
   offset: number;
   /** Keep the other side. */
   flip: boolean;
 }
+
+/** A cut as a picture takes it: an origin plane by its word, or any plane by its frame; `offset` mm along its normal, `flip` keeps the other side. */
+export type SnapshotSection = { plane: 'top' | 'front' | 'right'; offset: number; flip: boolean } | { frame: { origin: Vec3; normal: Vec3 }; offset: number; flip: boolean };
 
 /** One body to draw: the kernel's tessellation plus display state. */
 export interface ViewportBody {
@@ -195,6 +210,8 @@ export interface ViewportStats {
    * frame 0 (e2e cad:dark-first-paint).
    */
   looks?: { frame: number; palette: MarkPalette['name']; background: number }[];
+  /** Each body's surface opacity as it is drawn now: 1 opaque, less see-through (materials.ts SEE_THROUGH_OPACITY). */
+  opacity?: Record<BodyId, number>;
 }
 
 /** Directions of ViewportHandle.snapshot: the standard views but Home, and iso from back-left-top. */
@@ -208,8 +225,8 @@ export interface SnapshotOptions {
   height: number;
   /** Bodies left out of the picture (the view keeps showing them). */
   hide: BodyId[];
-  /** A cut parallel to an origin plane (as the section view's: `offset` mm along its normal, `flip` keeps the other side), or null. */
-  section: { plane: 'top' | 'front' | 'right'; offset: number; flip: boolean } | null;
+  /** A cut as the section view makes it (SnapshotSection), or null. */
+  section: SnapshotSection | null;
   /** How the bodies are drawn in the picture (default 'shaded-edges'; the view's own display is never touched). */
   display?: DisplayMode;
   /** The picture's projection (default 'orthographic'; perspective: mmPerPx holds at the framed centre only). */
@@ -295,6 +312,10 @@ export interface ViewportHandle {
   lookAt(normal: Vec3, up?: Vec3, opts?: { animate?: boolean } & CameraCallOpts): void;
   setDisplay(mode: DisplayMode): void;
   setProjection(p: Projection): void;
+  /**
+   * Change the section view. A new origin plane brings its own frame; a construction plane or a
+   * face needs its `frame` in the same patch (src/features/section finds it), else it throws.
+   */
   setSection(patch: Partial<SectionState>): void;
   setPlanes(mode: PlanesMode): void;
   /**
@@ -309,8 +330,8 @@ export interface ViewportHandle {
    * Not saved (the Origin planes setting stays the user's).
    */
   setPlanesWanted(owner: string, wanted: boolean): void;
-  /** Range of the section offset along a plane's normal that cuts the visible bodies (mm), or null without bodies. */
-  sectionRange(plane: OriginPlaneRef): [number, number] | null;
+  /** Range of the section offset along a plane's normal (from the frame's origin) that cuts the visible bodies (mm), or null without bodies. */
+  sectionRange(frame: Pick<PlaneFrame, 'origin' | 'normal'>): [number, number] | null;
   /** Pick at frame client coordinates, respecting the selection filter. */
   pick(clientX: number, clientY: number): PickResult | null;
   /** P4b SELECT: pick these kinds of body geometry (no planes) at frame client coordinates, whatever the selection filter. */
@@ -424,6 +445,13 @@ export interface ViewportHandle {
    * mode's end calls it (P4a review: a first large sketch stayed half off-screen after Finish).
    */
   refitIfOffScreen?(opts?: CameraCallOpts): boolean;
+  /**
+   * Whether any of these model points is off the part of the view the floating panels leave free
+   * ([data-view-cover] over its left), with the camera where it is now (mid-transition too: ask
+   * once it rests). Sketch mode's Import SVG/DXF asks it of the drawing it previews, and fits
+   * (its preview counting: the tool's frameUv) when the drawing does not all show.
+   */
+  offView?(points: readonly Vec3[]): boolean;
   /** Push a pointer tool on the stack; returns pop (safe to call twice). */
   pushTool(tool: ViewportTool): () => void;
   /** The ray under frame client coordinates (model mm). */

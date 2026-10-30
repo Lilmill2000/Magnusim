@@ -25,7 +25,8 @@ export interface OpenReservation { usd: number; day: string; at: string }
 export interface SpendDoc { version: 1; days: Record<string, DaySpend>; open: Record<string, OpenReservation> }
 export interface Reservation { id: string; usd: number; day: string }
 
-const KEEP_DAYS = 31;
+/** Days a record is kept (the spend's days here; the chat history's files, history.ts). */
+export const KEEP_DAYS = 31;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
@@ -38,7 +39,8 @@ export function todayKey(clock: Clock = () => new Date()): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function dayNumber(day: string): number {
+/** A YYYY-MM-DD date as a day count, to tell how many days apart two dates are. */
+export function dayNumber(day: string): number {
   const [y, m, d] = day.split('-').map(Number);
   return Math.floor(Date.UTC(y, m - 1, d) / 86_400_000);
 }

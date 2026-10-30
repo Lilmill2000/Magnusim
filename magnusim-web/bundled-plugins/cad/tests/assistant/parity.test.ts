@@ -18,8 +18,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
 import { keybindsFor } from '../../src/app/keybinds';
-import { AI_TOOLS, CHECK, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, SKETCH_TOOLS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { AI_TOOLS, CHECK, command, COMMANDS, SECTION, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, SKETCH_TOOLS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
 import { CHECK_CONTROLS } from '../../src/features/check/controls';
+import { SECTION_CONTROLS } from '../../src/features/section/controls';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
@@ -69,6 +70,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
       ['keybinds', keybindsFor(services), KEYBINDS],
       ['link', services.apis.get().link ?? {}, LINK],
       ['check', CHECK_CONTROLS, CHECK],
+      ['section', SECTION_CONTROLS, SECTION],
     ];
     for (const [name, obj, table] of methods) for (const k of Object.keys(obj)) if (!table[k]) missing.push(`${name}.${k}`);
     expect(services.apis.get().link, 'bootstrap publishes the project link').toBeTruthy();
@@ -106,7 +108,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(missing, 'an Assistant capability with no person path').toEqual([]);
     expect(stale).toEqual([]);
     // Each path is there: the command registered, the control's method on its object, the panel field on a type with a panel.
-    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT, check: CHECK_CONTROLS };
+    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT, check: CHECK_CONTROLS, section: SECTION_CONTROLS };
     const bad: string[] = [];
     const check = (where: string, p: PersonPath) => {
       if (p.kind === 'command') {
@@ -179,6 +181,32 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(CHECK.turning).toMatchObject({ tool: 'check', field: 'bodies' });
     expect(CHECK.row).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'select' });
     expect(Object.keys(CHECK).sort()).toEqual(Object.keys(CHECK_CONTROLS).sort());
+  });
+
+  it("the section view both ways: INSPECT > Section view's controls and its arrow reach the workspace section, and the workspace section is that command", async () => {
+    const services = await boot();
+    expect(services.modules.tool('inspect.section'), 'the Section view panel is the inspect.section command\'s tool').toBeTruthy();
+    expect(COMMANDS['inspect.section']).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
+    expect(Object.keys(SECTION).sort()).toEqual(Object.keys(SECTION_CONTROLS).sort());
+    for (const [k, r] of Object.entries(SECTION)) if (k !== 'note') expect(r).toMatchObject({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
+    // What the panel's note says (a cut held where it was, why the section turned off), get_model's section says.
+    expect(SECTION.note).toMatchObject({ kind: 'reach', tool: 'get_model', field: 'detail', value: 'brief', note: expect.stringMatching(/^section\.note: the panel's note/) });
+    expect(SECTION.arrow).toMatchObject({ note: expect.stringMatching(/drag of the arrow sets the offset/) });
+    expect(AI_TOOLS.workspace['action=section']).toEqual({ kind: 'command', id: 'inspect.section', also: expect.stringMatching(/^the arrow on the cut in the view: a drag sets the offset/) });
+    // The view keeps it; the document keeps it in the Part's view (both the workspace's section).
+    expect(VIEWPORT.setSection).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
+    expect(DOC.setSection).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
+  });
+
+  it("see-through bodies both ways: INSPECT > See-through, the body's menu and the Part's view state reach workspace see_through (opaque back); the workspace's see_through and opaque are that command and that menu", async () => {
+    const services = await boot();
+    expect(services.commands.get('inspect.see-through'), 'INSPECT > See-through is registered').toBeTruthy();
+    const SEE = { kind: 'reach', tool: 'workspace', field: 'action', value: 'see_through', note: 'action opaque makes them opaque again' };
+    expect(COMMANDS['inspect.see-through']).toEqual(SEE);
+    expect(UI.setBodiesSeeThrough).toEqual(SEE);
+    expect(DOC.setBodiesSeeThrough).toEqual(SEE);
+    expect(AI_TOOLS.workspace['action=see_through']).toEqual({ kind: 'command', id: 'inspect.see-through', also: "the body's menu in the tree or the view: Make <body> see-through" });
+    expect(AI_TOOLS.workspace['action=opaque']).toEqual({ kind: 'command', id: 'inspect.see-through', also: "the body's menu in the tree or the view: Make <body> opaque" });
   });
 
   it('the workspace tool reaches what this lane added: send to the simulation, the rollback bar, the view, the banana, Export', () => {

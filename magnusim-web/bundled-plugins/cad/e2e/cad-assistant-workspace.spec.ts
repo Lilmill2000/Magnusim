@@ -9,6 +9,12 @@
 //   stays where they put it; with person_asked true it turns the view;
 // - Export STEP: the person's own panel opens filled in (format, file name, bodies) and nothing is
 //   downloaded until the person clicks Export;
+// - the section view (Daniel 2026-10-29: any plane, a construction plane too): section on a
+//   construction plane at an angle by its name cuts the person's view on its own normal; the reply's
+//   view and get_model name the plane; INSPECT > Section view shows that plane and offset; the plane
+//   deleted, get_model says the panel's note; a face's cut comes with its selector, taken back;
+// - see-through bodies (Daniel 2026-10-29): see_through marks Body 1 in the tree and the view draws
+//   it translucent, get_model's parts say see_through, opaque takes it back; no undo step;
 // - keybinds (Daniel: read any time, changed only when the person asks): keybind_get answers;
 //   keybind_set without person_asked is not_asked; with it the app's dialog names the exact change,
 //   a stray Enter is No (step_declined, nothing changes), a click on Yes changes and stores it.
@@ -19,7 +25,7 @@ import { expect, test, type Page } from '@playwright/test';
 // @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
 import * as core from '../../../e2e/support/assistant.js';
 import { cadFrame, chats, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
-import { addSolid } from './helpers';
+import { addSolid, runCommand } from './helpers';
 
 let host: AssistantHost;
 
@@ -174,6 +180,111 @@ test("cad:assistant-workspace-export the person's Export STEP panel opens filled
   const dl = page.waitForEvent('download', { timeout: STEP_MS * 2 });
   await panel.locator('[data-export-run]').click();
   expect((await dl).suggestedFilename()).toBe('plate export.step');
+});
+
+test("cad:assistant-workspace-section section on a construction plane at an angle by its name: the person's view is cut on its own normal, the reply and get_model name it, and INSPECT > Section view shows it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Workspace section');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await addSolid(page, { size: [20, 20, 20] });
+  // Tilt: the Top plane turned 30 deg about X (normal (0, -1/2, sqrt 3 / 2)), put in as setup.
+  const plane = await cadFrame(page).evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (window as any).__CAD__.services.doc;
+    const s = doc.beginNew('ref_plane', { method: 'angle', plane: { kind: 'origin', plane: 'origin:top' }, axis: { kind: 'origin', axis: 'origin:x' }, angle: '30 deg', name: 'Tilt' });
+    s.commit();
+    return s.feature as string;
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cut = () => cadFrame(page).evaluate(() => (window as any).__CAD__.services.viewport.get().handle.state.get().section as { on: boolean; plane: unknown; frame: { normal: number[] }; offset: number; flip: boolean });
+  await expect(frame.locator('[data-vp-opens="section"]')).toHaveAttribute('aria-pressed', 'false');
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [W('section', { value: 'Tilt offset 2 mm', person_asked: true })] },
+    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
+    { text: 'Cut on Tilt.' },
+  );
+  const t = await startTurn(request, host, { text: 'Cut my view on the Tilt plane, 2 mm up.', tab });
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  // The person's view: cut on Tilt itself (its feature), on its own normal, 2 mm along it.
+  const c = await cut();
+  expect(c).toMatchObject({ on: true, plane: { kind: 'feature', feature: plane }, offset: 2, flip: false });
+  expect(c.frame.normal.map((v) => Math.round(v * 1e6) / 1e6 + 0)).toEqual([0, -0.5, Math.round((Math.sqrt(3) / 2) * 1e6) / 1e6]);
+  await expect(frame.locator('[data-vp-opens="section"]')).toHaveAttribute('aria-pressed', 'true');
+  const r = chats(host).slice(before);
+  const words = { plane: 'Tilt', offset_mm: 2, flip: false, keeps: 'the side against its normal' };
+  expect(resultsIn(r[1])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: "Section view on in the person's view: Tilt offset 2 mm, keeps the side against its normal", data: { undo_step: false, section: words, view: { section: words } } });
+  expect(resultsIn(r[2])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { section: words } });
+  // The person's INSPECT > Section view shows the same plane and offset.
+  await runCommand(frame, 'inspect.section');
+  const panel = frame.locator('[data-tool-panel="inspect.section"]');
+  await expect(panel).toBeVisible(STEP);
+  await expect(panel.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['Tilt']);
+  await expect(panel.locator('.nui[data-field="section-offset"] input')).toHaveValue('2');
+  expect(await cut()).toMatchObject({ on: true, offset: 2 });
+
+  // The person deletes Tilt: the section turns off and the panel's note says why; get_model says the
+  // same words. A cut on the block's top face: get_model gives its selector, and the workspace's
+  // section takes it back (offset and side changed on the same face).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expect(await cadFrame(page).evaluate((id) => (window as any).__CAD__.services.doc.remove(id).ok as boolean, plane)).toBe(true);
+  await expect(panel.locator('[data-section-note]')).toHaveText('The section view is off: Tilt was deleted.', STEP);
+  const before2 = chats(host).length;
+  const model = { name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } };
+  host.fake.reply(
+    { tools: [model] },
+    { tools: [W('section', { value: 'Extrude 1.end offset -5 mm', person_asked: true })] },
+    { tools: [model] },
+    { tools: [W('section', { value: 'Extrude 1.end offset -2 mm flip', person_asked: true })] },
+    { text: 'Tilt was deleted; the cut is on the top face now.' },
+  );
+  const t2 = await startTurn(request, host, { text: 'Why did my section go? Cut on the top face instead.', tab });
+  expect((await t2.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const r2 = chats(host).slice(before2);
+  expect(resultsIn(r2[1])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { section: { on: false, note: 'The section view is off: Tilt was deleted.' } } });
+  const face = { plane: 'End face of Extrude 1 on Body 1', selector: 'Extrude 1.end' };
+  expect(resultsIn(r2[2])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, data: { view: { section: { ...face, offset_mm: -5, flip: false } } } });
+  expect(resultsIn(r2[3])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { section: { ...face, offset_mm: -5, flip: false, keeps: 'z <= 15 mm' } } });
+  expect(resultsIn(r2[4])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, data: { view: { section: { ...face, offset_mm: -2, flip: true, keeps: 'z >= 18 mm' } } } });
+  expect(await cut()).toMatchObject({ on: true, plane: { kind: 'face' }, offset: -2, flip: true });
+  await expect(panel.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['End face of Extrude 1']);
+  await expect(panel.locator('[data-section-note]')).toHaveCount(0);
+});
+
+test("cad:assistant-workspace-see-through see_through draws Body 1 see-through: the tree marks it, the view draws it translucent, get_model says so; opaque takes it back; no undo step", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Workspace see-through');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await addSolid(page, { size: [30, 20, 10] });
+  const bodyRow = frame.locator('[data-body-row]').first();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opacity = () => cadFrame(page).evaluate(() => Object.values((window as any).__CAD__.services.viewport.get().handle.stats().opacity) as number[]);
+  await expect.poll(opacity, STEP).toEqual([1]);
+  const undoBefore = await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.doc.state.get().history.undoLabel);
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [W('see_through', { target: 'Body 1' })] },
+    { hold: 'seen', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
+    { hold: 'back', tools: [W('opaque', { target: 'Body 1' })] },
+    { text: 'Done.' },
+  );
+  const t = await startTurn(request, host, { text: 'Make the body see-through, then opaque again.', tab });
+  // The person's tree marks it and the view draws it see-through.
+  await expect(bodyRow).toHaveAttribute('data-see-through', 'view', STEP);
+  await expect(bodyRow.locator('[data-see-through-badge]')).toHaveCount(1);
+  await expect.poll(opacity, STEP).toEqual([0.28]);
+  host.fake.release('seen');
+  await expect.poll(() => chats(host).length - before, STEP).toBeGreaterThanOrEqual(3);
+  host.fake.release('back');
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect(bodyRow).not.toHaveAttribute('data-see-through', /./, STEP);
+  await expect.poll(opacity, STEP).toEqual([1]);
+  const r = chats(host).slice(before);
+  expect(resultsIn(r[1])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: 'Made Body 1 see-through in the view', data: { see_through: true, undo_step: false } });
+  expect(resultsIn(r[2])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { parts: [{ name: 'Body 1', see_through: true }] } });
+  expect(resultsIn(r[3])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: 'Made Body 1 opaque in the view', data: { see_through: false, undo_step: false } });
+  // A view state: no undo step.
+  expect(await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.doc.state.get().history.undoLabel)).toBe(undoBefore);
 });
 
 // Back from the Part through the app page's core__show (core host tools spec 5.1, 14.2, 8.1): the

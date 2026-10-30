@@ -17,6 +17,12 @@
  *                                        each provider's readiness (providers_ready)
  *   POST /api/assistant/settings        a partial change → status; 400 {error, field}; 409 {needs_confirm:'base_url'}.
  *                                        models: {<provider>: id} saves each provider's own model
+ *   POST /api/assistant/log-folder/open {} → {ok, folder}: File Explorer on the provider log's folder
+ *                                        (made when missing): MAGNUSIM_ASSISTANT_DEBUG_LOG's, else the
+ *                                        folder of MAGNUSIM_SERVER_LOG's file (Magnusim CAD: one folder
+ *                                        holds the server's log and the provider log), else
+ *                                        <home>/assistant/logs (Settings' "Keep a provider log for a
+ *                                        problem report", settings.provider_log); 500 open_failed
  *   POST /api/assistant/key             {provider, key} → status (+ warning); 400; 409 storage_unavailable; 500
  *   POST /api/assistant/key/remove      {provider} → status; 400
  *   GET  /api/assistant/models?provider= {ok, models, source}: the curated list, merged with what
@@ -36,7 +42,7 @@
  *                                        turn that names it (assistant/attachments.ts); only GET
  *                                        /relay/attachment serves its bytes back; 400 bad_type,
  *                                        empty_file, bad_name; 409 no_channel; 413 too_large; 415 octet_only
- *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
+ *   POST /api/assistant/turns           {text, conversation?, carry_from?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
  *                                        attachments?:['att-…'], images?:[{media_type, data}]}
  *                                        (attachments: ≤ 4 files this tab attached, unbound or this
  *                                        conversation's, then bound to it; 400 bad_attachments,
@@ -58,6 +64,12 @@
  *                                        per-launch token in x-magnusim-launch (the CLI) or `link`
  *                                        = an app tab's live relay link, any tab's (the page): else
  *                                        403 launch_proof (TurnManager.launchProven)
+ *                                        carry_from: Continue in a new chat, an earlier conversation
+ *                                        of the same provider and project (its provider when none
+ *                                        is named), never with `conversation`: the new one's first
+ *                                        message carries its prompts, last answer and end (400
+ *                                        bad_carry, carry_agent; 404 unknown_conversation; 409
+ *                                        conversation_changed {field}, conversation_busy)
  *   POST /api/assistant/launch/check    {nonce: 32 hex} → {ok, proof}: HMAC-SHA256(token, "l<port>:<nonce>"),
  *                                        port = the app port the request reached, so the terminal
  *                                        client sends this launch's token only to the Magnusim that
@@ -81,10 +93,23 @@
  *                                        the window only); 409 {already} (the first answer wins); 404
  *   GET  /api/assistant/conversations   ?project=<id>|home → {ok, conversations:[{id, provider, label,
  *                                        billing, model, project_id, project_title, created_at,
- *                                        last_used_at, running, full, title, turns:[{id, title, state,
- *                                        started_at, ended_at, started_by}], dropped_turns}]}: this
- *                                        server's conversations (memory only), newest use first; 400
- *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
+ *                                        last_used_at, running, full, full_text, room, context, title,
+ *                                        turns:[{id, title, state, started_at, ended_at, started_by}],
+ *                                        dropped_turns}]}: this server's conversations (memory only),
+ *                                        newest use first (context: a coding agent's {used, size}
+ *                                        of its own context, else null); 400
+ *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it (its saved
+ *                                        chat stays in History)
+ *   GET  /api/assistant/history         ?project=<id>|home → {ok, kept_days, chats:[{id, title, provider,
+ *                                        label, model, destinations, started_at, ended_at, first_prompt,
+ *                                        end_state, full}], total}: the dock's History, the saved chats of a project
+ *                                        (or Home), newest end first, kept 31 days (assistant/history.ts:
+ *                                        one line per request's end, redacted, no pictures); 400 bad_project
+ *   GET  /api/assistant/history/:id     ?project=<id>|home&from=N → {ok, chat, total, from, next,
+ *                                        requests:[HistoryLine]}: one saved chat of that project, a page
+ *                                        of its requests from `from`; 400 bad_project; 404 not_found
+ *   POST /api/assistant/history/clear   {project: <id>|'home'} → {ok, removed}: Clear history (the dock
+ *                                        asks first); 400 bad_project
  *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools):
  *                                        {ok, tabs:[{tab, connected, since, workspace, tools, refused,
  *                                        active_turns, hold_until}]} (since and hold_until: ms since 1970)
@@ -139,10 +164,10 @@
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory (turn_channels: the turn
  *                                        channels open, by tab; attachments: the files kept)
- *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files and attachments)
+ *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files, attachments and saved chats)
  *   POST /api/test/assistant/attachments/sweep  {later_ms?} the attachments' sweep, as if run that much later → {ok, removed}
  */
-import { access, rm } from 'node:fs/promises';
+import { access, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HttpError } from './http.ts';
 import { registerChannelKind } from './event-hub.ts';
@@ -170,6 +195,8 @@ import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, IMAGE_GONE_TEXT, WINDOW_LOST_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { attachmentStore, isAttachmentId, kindOfFormat, NO_SUCH_ATTACHMENT_TEXT, type AttachmentStore } from './assistant/attachments.ts';
+import { CONVERSATION_ID_RE, HISTORY_LIMITS } from './assistant/history.ts';
+import { onProjectDeleted } from './project-deleted.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 import { turnChannelsOpen } from './assistant/turn-channel.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
@@ -190,6 +217,8 @@ import { agentProviderTest, agentSignInRequest, agentTestRequest, WINDOW_PROOF_T
 import { agentIdOf, knownAgent } from './assistant/agents/known.ts';
 import { setAgentRunHooks } from './assistant/agents/discover.ts';
 import { appVersion } from './assistant/host-tools.ts';
+import { debugLogDir, debugLogEnvDir, providerLogDir, serverLogIn } from './assistant/debug-log.ts';
+import { openFolderOnThisPc } from './vtk-export.ts';
 import { mcpSdkInstalled } from './assistant/providers/load-sdk.ts';
 
 export { TURN_HEADER };
@@ -205,6 +234,8 @@ export interface AssistantDeps {
   relay?: Partial<Omit<RelayOptions, 'registry' | 'turns'>>;
   /** Tests: the attachments' store (a small size cap); `<assistant home>/attachments` otherwise. */
   attachments?: AttachmentStore;
+  /** Shows a folder to the person (File Explorer); tests pass a stub. */
+  openFolder?: (dir: string) => void;
 }
 
 export interface AssistantHandle {
@@ -295,6 +326,12 @@ export type StatusPart = (s: StatusSources) => Record<string, unknown>;
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
+/** The status's provider_log: the switch, the variable that keeps it on, its folder and the server's log beside it (or null). */
+function providerLogStatus(on: boolean): { on: boolean; env: boolean; folder: string; server_log: string | null } {
+  const folder = debugLogEnvDir() ?? providerLogDir();
+  return { on, env: debugLogEnvDir() !== null, folder, server_log: serverLogIn(folder) };
+}
+
 const STATUS_PARTS: StatusPart[] = [
   ({ settings: s }) => ({
     provider: s.provider,
@@ -308,6 +345,12 @@ const STATUS_PARTS: StatusPart[] = [
     caps: s.caps,
     /** A coding agent's turn's limits (changes, tool calls, active minutes per message; spec 4.10). */
     agent_caps: s.agent_caps,
+    /**
+     * The provider log for a problem report: the switch as saved, whether
+     * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, its folder, and the
+     * server's own log's file name when that folder holds it too (MAGNUSIM_SERVER_LOG).
+     */
+    provider_log: providerLogStatus(s.provider_log),
   }),
   ({ store }) => ({ keys: store.status(), storage: store.storage(), keys_notice: store.notice() }),
   ({ ledger }) => ({ spent_today_usd: round4(ledger.spentToday()) }),
@@ -687,6 +730,7 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay, ke
           await rm(f, { force: true });
         }
         await kept().clear();
+        await turns.history().clearAll();
       }
       ctx.sendJson(200, { ok: true, boot: assistantState().bootId });
     }),
@@ -771,6 +815,8 @@ export const CAD_EDITION_TOOLS: Readonly<Record<string, EditionTool>> = {
     values: { target: ['home', 'project', 'workspace'], panel: [''] },
     props: { id: 'workspace: the Part; "" when the target needs none' },
   },
+  // The dock's History is the same in both apps.
+  chat_history: {},
   // Settings → Keybinds and Settings → Appearance are the same in both apps.
   core__keybinds: {},
   core__set_keybind: {},
@@ -936,6 +982,67 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
     local(async (ctx) => {
       const r = turns.tabs();
       ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  registerHistoryRoutes(router, turns);
+}
+
+const HISTORY_PROJECT_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const BAD_HISTORY_PROJECT = 'project is a project id, or home.';
+
+/** A History route's `project`: an id, null for 'home', or false when it is neither. */
+function historyProject(v: unknown): string | null | false {
+  if (v === 'home') return null;
+  return typeof v === 'string' && HISTORY_PROJECT_RE.test(v) ? v : false;
+}
+
+/**
+ * The dock's History and Clear history (assistant/history.ts): a project's saved chats, one of
+ * them a page at a time, and every one of them removed. The AI does the same with chat_history.
+ */
+function registerHistoryRoutes(router: Router, turns: TurnManager): void {
+  router.get(
+    '/api/assistant/history',
+    local(async (ctx) => {
+      const project = historyProject(ctx.url.searchParams.get('project'));
+      if (project === false) {
+        ctx.sendJson(400, { ok: false, code: 'bad_project', error: BAD_HISTORY_PROJECT });
+        return;
+      }
+      const { chats, total } = await turns.history().list(project);
+      ctx.sendJson(200, { ok: true, kept_days: HISTORY_LIMITS.keepDays, chats, total });
+    }),
+  );
+
+  router.get(
+    '/api/assistant/history/:id',
+    local(async (ctx) => {
+      const project = historyProject(ctx.url.searchParams.get('project'));
+      if (project === false) {
+        ctx.sendJson(400, { ok: false, code: 'bad_project', error: BAD_HISTORY_PROJECT });
+        return;
+      }
+      const from = Number(ctx.url.searchParams.get('from') ?? 0);
+      const page = CONVERSATION_ID_RE.test(ctx.params.id) ? await turns.history().read(project, ctx.params.id, { from: Number.isFinite(from) ? from : 0 }) : null;
+      if (!page) {
+        ctx.sendJson(404, { ok: false, code: 'not_found', error: 'No saved chat of that id here (History keeps 31 days).' });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, chat: page.chat, total: page.total, from: page.from, next: page.next, requests: page.lines });
+    }),
+  );
+
+  router.post(
+    '/api/assistant/history/clear',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      const project = historyProject(body.project);
+      if (project === false) {
+        ctx.sendJson(400, { ok: false, code: 'bad_project', error: BAD_HISTORY_PROJECT });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, removed: await turns.history().clear(project) });
     }),
   );
 }
@@ -1272,6 +1379,22 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
   );
 
   router.post(
+    '/api/assistant/log-folder/open',
+    local(async (ctx) => {
+      // The folder the log goes to now, else where the switch would put it.
+      const folder = debugLogDir() ?? debugLogEnvDir() ?? providerLogDir();
+      try {
+        await mkdir(folder, { recursive: true });
+        (deps.openFolder ?? openFolderOnThisPc)(folder);
+      } catch (err) {
+        ctx.sendJson(500, { ok: false, code: 'open_failed', error: `Could not open the folder: ${redact(err instanceof Error ? err.message : String(err))}` });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, folder });
+    }),
+  );
+
+  router.post(
     '/api/assistant/key',
     local(async (ctx) => {
       const body = await ctx.readJsonBody();
@@ -1359,6 +1482,14 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       .catch(() => undefined);
   });
   const stopSweeps = files().startSweeps();
+  // The saved chats past 31 days go (at boot and every 6 h), and a deleted project's at once.
+  const stopHistorySweeps = turns.history().startSweeps();
+  const offProjectDeleted = onProjectDeleted((id) => {
+    turns
+      .history()
+      .forgetProject(id)
+      .catch((err: unknown) => alog('warn', "a deleted project's chats could not be removed", { error: redact(String((err as Error)?.message ?? err)).slice(0, 200) }));
+  });
 
   registerTurnRoutes(router, turns);
   registerAttachmentRoutes(router, relay, files);
@@ -1401,6 +1532,8 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       unwatch();
       offDrop();
       stopSweeps();
+      stopHistorySweeps();
+      offProjectDeleted();
       // Explicitly, superseded or not: the connections this lifetime's handler served close,
       // and the coding agents its turns started end (their turns failed/shutdown).
       disposeMcp();

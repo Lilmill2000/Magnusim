@@ -19,13 +19,20 @@
  *   Only events newer than the view's are applied and announced (live.ts); the first data of a
  *   watch (its snapshot, the turn's past) is announced only for a turn this dock just started.
  *   An unwatched turn's view is dropped.
+ * - **Continue in a new chat** (continueInNewChat): a new conversation is shown, the earlier
+ *   one's draft moves into its box, and `carry` names the earlier one until the new one's first
+ *   message goes (its start sends carry_from), the person picks a conversation (or New), or the
+ *   context moves.
+ * - **A saved chat** (History, GET /api/assistant/history/:id): shown read only in place of a
+ *   conversation, a page at a time (`saved`), until the person picks a conversation, New or
+ *   Continue in a new chat (which carries it as a live one does), or the context moves.
  * - **What the page keeps** (per viewer, never needed for correctness; every read and write in
  *   try/catch): the conversation shown and each conversation's draft (sessionStorage). Open or
  *   closed is dockState's (localStorage).
  */
 import { useSyncExternalStore } from 'react';
 import { assistantGet, RemoteError } from '../api';
-import type { ConversationRow, ConversationsAnswer, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
+import type { ConversationRow, ConversationsAnswer, HistoryChat, HistoryPageAnswer, HistoryRequest, SlimTurnSummary, TurnEvent, TurnSummary } from '../wire';
 import { LIVE_ITS_WORKSPACE, pillDone, pillQuestion, pillRunning } from './copy';
 import { dockSnapshot, openDock, setDockPill, subscribeDock, type DockPill } from './dockState';
 import { followTurn, type FollowSink, type TurnFollower } from './follow';
@@ -45,6 +52,29 @@ export interface ConversationsState {
   error: string | null;
 }
 
+/** The earlier conversation a new one continues (Continue in a new chat): its id, provider (the new one's too) and label. */
+export interface DockCarry {
+  from: string;
+  provider: string;
+  label: string;
+}
+
+/** A saved chat shown read only (History): its project (null: Home), what came of it, and where its next page starts. */
+export interface DockSaved {
+  project: string | null;
+  id: string;
+  state: 'loading' | 'ready' | 'error';
+  chat: HistoryChat | null;
+  requests: readonly HistoryRequest[];
+  total: number;
+  next: number | null;
+  error: string | null;
+}
+
+export const HISTORY_PATH = '/api/assistant/history';
+/** The History routes' project: an id, or home. */
+export const historyProject = (project: string | null): string => encodeURIComponent(project ?? 'home');
+
 export interface DockStoreSnapshot {
   /** Questions shown as cards in this tab, oldest first (their gate ids). */
   questions: readonly string[];
@@ -52,6 +82,10 @@ export interface DockStoreSnapshot {
   conversations: ConversationsState;
   /** The conversation shown; null: a new one. */
   shown: string | null;
+  /** The new conversation shown continues this one (only while `shown` is null). */
+  carry: DockCarry | null;
+  /** A saved chat shown read only in place of a conversation (History), or null. */
+  saved: DockSaved | null;
   /** The turns watched, by id. */
   turns: Readonly<Record<string, TurnView>>;
   /** Turns this tab started, by conversation, until the server's list names them. */
@@ -121,6 +155,10 @@ let offDock: (() => void) | null = null;
 let context: DockContext = { project_id: null, workspace: null };
 let conversations: ConversationsState = { state: 'idle', list: [], error: null };
 let shown: string | null = null;
+let carry: DockCarry | null = null;
+let saved: DockSaved | null = null;
+/** Each saved chat read: an older answer than the one shown is dropped. */
+let savedSeq = 0;
 /** The person picked the conversation shown (or a new one) in this context. */
 let picked = false;
 let turns: Record<string, TurnView> = {};
@@ -147,7 +185,7 @@ function running(id: string): boolean {
 }
 
 function build(): DockStoreSnapshot {
-  return { questions, context, conversations, shown, turns, local, stops };
+  return { questions, context, conversations, shown, carry, saved, turns, local, stops };
 }
 
 function publish(): void {
@@ -320,6 +358,9 @@ export function setDockContext(next: DockContext): void {
   if (!moved && next.workspace === context.workspace) return;
   context = { project_id: next.project_id ?? null, workspace: next.workspace ?? null };
   if (moved) {
+    // A conversation continues one of its own context only; a saved chat is read in its own.
+    carry = null;
+    saved = null;
     if (runningHere(shown)) {
       picked = true;
       void refreshConversations();
@@ -332,12 +373,89 @@ export function setDockContext(next: DockContext): void {
   publish();
 }
 
-/** The person shows a conversation (null: a new one). */
+/** The person shows a conversation (null: a new one, which carries nothing). */
 export function showConversation(id: string | null): void {
   start();
   picked = true;
   shown = id;
+  carry = null;
+  saved = null;
   writeKey(STORAGE_KEYS.conv, id);
+  publish();
+}
+
+/**
+ * Continue in a new chat: a new conversation is shown that continues `from` (its first message
+ * sends carry_from), with `from`'s draft moved into its box (a new conversation's draft stays
+ * when `from` has none).
+ */
+export function continueInNewChat(from: DockCarry): void {
+  start();
+  const text = draftOf(from.from);
+  if (text) {
+    setDraft(null, text);
+    setDraft(from.from, '');
+  }
+  picked = true;
+  shown = null;
+  carry = { ...from };
+  saved = null;
+  writeKey(STORAGE_KEYS.conv, null);
+  publish();
+}
+
+/** Reads a page of the saved chat shown (from `from`); an answer for a chat no longer shown is dropped. */
+async function readSaved(project: string | null, id: string, from: number): Promise<void> {
+  const seq = ++savedSeq;
+  let next: DockSaved;
+  const had = saved && saved.id === id && saved.project === project ? saved : null;
+  try {
+    const page = await assistantGet<HistoryPageAnswer>(`${HISTORY_PATH}/${encodeURIComponent(id)}?project=${historyProject(project)}&from=${from}`);
+    const requests = Array.isArray(page.requests) ? page.requests : [];
+    next = {
+      project,
+      id,
+      state: 'ready',
+      chat: page.chat ?? had?.chat ?? null,
+      requests: from > 0 && had ? [...had.requests, ...requests] : requests,
+      total: typeof page.total === 'number' ? page.total : requests.length,
+      next: typeof page.next === 'number' ? page.next : null,
+      error: null,
+    };
+  } catch (err) {
+    next = { project, id, state: 'error', chat: had?.chat ?? null, requests: had?.requests ?? [], total: had?.total ?? 0, next: had?.next ?? null, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (seq !== savedSeq || !saved || saved.id !== id || saved.project !== project) return;
+  saved = next;
+  publish();
+}
+
+/** History: a saved chat of `project` (null: Home) is shown read only, in place of a conversation. */
+export function showSavedChat(project: string | null, id: string): Promise<void> {
+  start();
+  picked = true;
+  shown = null;
+  carry = null;
+  saved = { project, id, state: 'loading', chat: null, requests: [], total: 0, next: null, error: null };
+  writeKey(STORAGE_KEYS.conv, null);
+  publish();
+  return readSaved(project, id, 0);
+}
+
+/** The saved chat shown: its next page. */
+export function moreSavedChat(): Promise<void> {
+  if (!saved || saved.next === null || saved.state === 'loading') return Promise.resolve();
+  const { project, id, next } = saved;
+  saved = { ...saved, state: 'loading' };
+  publish();
+  return readSaved(project, id, next);
+}
+
+/** Clear history of `project` went through: a saved chat of it shown is gone (a new conversation shows). */
+export function historyCleared(project: string | null): void {
+  if (!saved || saved.project !== project) return;
+  saved = null;
+  shown = null;
   publish();
 }
 
@@ -643,6 +761,9 @@ export function resetDockStoreForTests(): void {
   context = { project_id: null, workspace: null };
   conversations = { state: 'idle', list: [], error: null };
   shown = null;
+  carry = null;
+  saved = null;
+  savedSeq = 0;
   picked = false;
   turns = {};
   local = {};

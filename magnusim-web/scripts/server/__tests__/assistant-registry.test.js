@@ -401,11 +401,12 @@ describe('toolsFor', () => {
     const tools = createHostTools({ hostCall: async () => ({}), assistant: async () => ({ provider: 'off', model: '' }), version: async () => '0', plugins: () => [] });
     const r = createToolRegistry({ hostTools: tools });
     // A workspace's tab (ctx() has one).
-    assert.deepEqual(names(r.toolsFor(ctx())), ['app_status', 'explain_ready', 'project_summary', 'read_setup']);
+    assert.deepEqual(names(r.toolsFor(ctx())), ['app_status', 'chat_history', 'explain_ready', 'project_summary', 'read_setup']);
     // The workbench: a project, no workspace tab.
     assert.deepEqual(names(r.toolsFor(ctx({ tab: null }))), [
       'app_status',
       'catalog',
+      'chat_history',
       'delete',
       'explain_ready',
       'import_file',
@@ -421,6 +422,7 @@ describe('toolsFor', () => {
     assert.deepEqual(names(r.toolsFor(ctx({ projectId: null, tab: null }))), [
       'app_status',
       'catalog',
+      'chat_history',
       'delete',
       'explain_ready',
       'project_edit',
@@ -445,6 +447,7 @@ describe('toolsFor', () => {
       setup_edit: 'edit',
       import_file: 'compute',
       delete: 'destructive',
+      chat_history: 'read',
     });
     assert.equal(connectionCheckTool().name, 'connection_check');
   });

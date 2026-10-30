@@ -93,6 +93,12 @@ describe('the file-to-shard map', () => {
     ['src/features/split/index.ts', ['step', 'sketch', 'link', 'shell']],
     ['src/features/measure/panel.tsx', ['step', 'sketch']],
     ['src/features/mass/panel.tsx', ['step']],
+    // Section view: the person's panel and arrow (shell) and the Assistant's workspace section (assistant).
+    ['src/features/section/handle.ts', ['shell', 'assistant']],
+    ['src/features/section/index.ts', ['shell', 'assistant']],
+    // See-through bodies: the person's command and the tree (shell), the Assistant's workspace see_through (assistant).
+    ['src/features/see_through/index.ts', ['shell', 'assistant']],
+    ['src/features/see_through/rule.ts', ['shell', 'assistant']],
     ['src/features/import/pipeline.ts', ['step', 'sketch', 'link', 'big']],
     ['src/files/transfer.ts', ['step']],
     // P4b PATTERN.

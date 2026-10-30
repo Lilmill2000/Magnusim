@@ -1064,6 +1064,12 @@ export interface CadView {
   /** Features with index >= rollback are rolled back (not built). null = at the end. */
   rollback: number | null;
   hiddenBodies: BodyId[];
+  /**
+   * Bodies the person drew see-through (INSPECT > See-through, the body's menu, the Assistant's
+   * workspace see_through): translucent in the view and in pictures, as hidden bodies are left out
+   * of both. A view state like hiddenBodies: no undo step, never part of the model. Absent: none.
+   */
+  seeThroughBodies?: BodyId[];
   /** Tree node keys that are expanded (e.g. "origin"). */
   expanded: string[];
   /** The origin planes: drawn only when needed ('auto', the default) or all the time ('always'). */
@@ -1081,6 +1087,20 @@ export interface CadView {
    * geometry never sees it). A model with no entry is not shown. Absent: none.
    */
   scaleModels?: ScaleModels;
+  /**
+   * The section view while it is on (INSPECT > Section view, the view tools' section, the
+   * Assistant's workspace section): the plane it is parallel to (an origin plane, a construction
+   * plane by its feature, a flat face by its stored reference), its offset along that plane's
+   * normal (mm) and its side. A view state: no undo step, never part of the model. Absent: off.
+   */
+  section?: SavedSection;
+}
+
+/** The section view as the Part keeps it (CadView.section). */
+export interface SavedSection {
+  plane: PlaneRef;
+  offset: number;
+  flip: boolean;
 }
 
 /** ux010: where a scale model lies (model mm; its underside at at[2]; rot about +Z in degrees). */

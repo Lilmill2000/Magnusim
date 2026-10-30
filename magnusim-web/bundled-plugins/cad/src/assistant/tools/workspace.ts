@@ -6,6 +6,8 @@
 //                                    rolled back makes its own edits answer rolled_back at once
 //                                    (own-rollback.ts), never a ten-minute wait.
 //     show, hide                     the eye of a sketch, a construction feature or a body.
+//     see_through, opaque            bodies drawn see-through or opaque again (INSPECT > See-through,
+//                                    the body's menu); an Enclosure's air stays see-through.
 //     origin_planes                  Auto or Always.
 //     select, selection_filter       the shared selection and the filter chips.
 //     expand, collapse               the Origin and Bodies folders, the tree card, the Sketch panel
@@ -62,7 +64,7 @@ import { featureShown } from '../../ui/tree/model';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import { type BodyId, type Feature, type FeatureId, type ImportFeature, type OriginPlaneRef, type OriginRef, type Vec2, type Vec3 } from '../../types/doc';
+import { type BodyId, type Feature, type FeatureId, type ImportFeature, type OriginRef, type Vec2, type Vec3 } from '../../types/doc';
 import type { SelectionItem, SelectKind } from '../../types/selection';
 import type { DisplayMode, Projection, StandardView, ViewportHandle } from '../../types/viewport';
 import { heartbeat, waitForRead } from '../busy';
@@ -72,7 +74,10 @@ import { runtimeOf } from '../runtime';
 import { workspaceActionsFor, type WorkspaceAction } from '../schemas';
 import { centreOf, hitWords, selectAny, withScene, type Hit } from '../selectors/resolve';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
-import { parseSection, sectionAtMiddle, sectionData } from '../view';
+import { findSection, personSection, sectionData } from '../view';
+import { SECTION_FORMS } from '../measure-targets';
+import { setSectionView } from '../../features/section/bind';
+import { seeThroughBy, seeThroughWhy } from '../../viewport/bind';
 import { closestName, closestWords } from '../closest';
 
 interface Input {
@@ -197,6 +202,48 @@ function eye(ctx: CallCtx, i: Input): ToolReply {
     return done(`${show ? 'Showed' : 'Hid'} ${f.name} in the view`, { feature: f.name, shown: show });
   }
   throw bad('target', `${f.name} has no eye: only sketches, construction planes, axes and points, and bodies (the bodies it makes: name them).`);
+}
+
+/**
+ * see_through, opaque: bodies drawn see-through or opaque again, as INSPECT > See-through and the
+ * body's menu do (uiFor.setBodiesSeeThrough): view state kept with the Part, no undo step. target a
+ * body, items more; an Enclosure's air is always see-through, so opaque refuses it and changes nothing.
+ */
+function seeThrough(ctx: CallCtx, i: Input): ToolReply {
+  const { services } = ctx;
+  const on = i.action === 'see_through';
+  const names = i.target ? [i.target, ...i.items] : i.items;
+  if (!names.length) throw bad('target', 'target: a body, or items: bodies.');
+  const bodies: { id: BodyId; name: string }[] = [];
+  for (const n of names) {
+    const b = bodyNamed(services, n);
+    if (!b) {
+      const all = services.doc.state.get().rebuild.bodies.map((x) => x.name);
+      const near = closestName(n, all);
+      throw new ToolError('not_found', `No body is called "${n}".${closestWords(near)} Bodies: ${all.slice(0, 30).join(', ') || 'none yet'}.`, { detail: { field: i.target ? 'target' : 'items', ...(near ? { closest: near } : {}) } });
+    }
+    if (!bodies.some((x) => x.id === b.id)) bodies.push(b);
+  }
+  const s = services.doc.state.get();
+  const why = (id: BodyId) => seeThroughWhy(s, services, id);
+  const always = on ? [] : bodies.filter((b) => why(b.id) === 'feature');
+  if (always.length) {
+    const b = always[0];
+    throw bad(i.target ? 'target' : 'items', `${b.name} is always see-through: ${seeThroughBy(s, services, b.id)?.name ?? 'its feature'} draws it so (an Enclosure's air). Nothing changed.`);
+  }
+  const change = bodies.filter((b) => (why(b.id) !== null) !== on);
+  if (change.length) {
+    const refused = uiFor(services).setBodiesSeeThrough(
+      change.map((b) => b.id),
+      on,
+    );
+    if (refused) throw bad(i.target ? 'target' : 'items', `${refused}.`);
+  }
+  const list = (bs: { name: string }[]) => bs.map((b) => b.name).join(', ');
+  const word = on ? 'see-through' : 'opaque';
+  const already = bodies.filter((b) => !change.includes(b));
+  const bits = [change.length ? `Made ${list(change)} ${word} in the view` : '', already.length ? `${list(already)} ${already.length === 1 ? 'is' : 'are'} already ${word}` : ''].filter(Boolean);
+  return done(bits.join('; '), { bodies: bodies.map((b) => b.name), see_through: on, changed: change.map((b) => b.name) });
 }
 
 function planes(ctx: CallCtx, i: Input): ToolReply {
@@ -666,19 +713,17 @@ function personView(ctx: CallCtx, i: Input): ViewportHandle {
 
 const STANDARD: readonly StandardView[] = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso', 'iso_back', 'home'];
 const DISPLAY: Readonly<Record<string, DisplayMode>> = { shaded_edges: 'shaded-edges', 'shaded-edges': 'shaded-edges', shaded: 'shaded', wireframe: 'wireframe' };
-const SECTION_PLANE: Readonly<Record<string, OriginPlaneRef>> = { top: 'origin:top', front: 'origin:front', right: 'origin:right' };
-
-/** The view's words now (the reply's `view`). */
-function viewNow(h: ViewportHandle): Record<string, unknown> {
+/** The view's words now (the reply's `view`): the section's plane by its words, as the person's Section view panel names it, and the panel's note. */
+function viewNow(services: AppServices, h: ViewportHandle): Record<string, unknown> {
   const st = h.state.get();
-  return { display: st.display.replace('-', '_'), projection: st.projection, section: st.section.on ? { plane: st.section.plane.slice('origin:'.length), offset_mm: round(st.section.offset), flip: st.section.flip } : null };
+  return { display: st.display.replace('-', '_'), projection: st.projection, section: personSection(services) };
 }
 
 async function view(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const { services } = ctx;
   const h = personView(ctx, i);
   const auto = { auto: true, animate: true };
-  const data = (extra: Record<string, unknown> = {}) => ({ ...extra, view: viewNow(h), person_asked: i.asked });
+  const data = (extra: Record<string, unknown> = {}) => ({ ...extra, view: viewNow(services, h), person_asked: i.asked });
   switch (i.action) {
     case 'fit':
       h.fit(auto);
@@ -740,14 +785,16 @@ async function view(ctx: CallCtx, i: Input): Promise<ToolReply> {
         h.setSection({ on: false });
         return done('Section view off in the person\'s view', data());
       }
+      // The person's Section view (INSPECT): the same plane forms as the view tool's section; a
+      // construction plane or a face is kept as what it is, so the cut follows it.
+      await heartbeat(ctx, services.doc.settled(ctx.signal), 'Waiting for the rebuild');
       const drawn = services.doc.state.get().rebuild.bodies.filter((b) => b.visible);
-      const c = sectionAtMiddle(
-        parseSection(i.value, (e) => services.doc.units.evaluate(e, 'length')),
-        drawn.map((b) => b.bbox),
-      );
-      if (!c) throw bad('value', 'value: off, or "<Top|Front|Right> [offset <length> | middle] [flip]".');
-      h.setSection({ on: true, plane: SECTION_PLANE[c.plane], offset: c.offset, flip: c.flip });
-      return done(`Section view on in the person's view: ${String(sectionData(c)?.keeps ?? '')}`, data({ section: sectionData(c) }));
+      const c = await findSection(ctx, i.value, drawn.map((b) => b.bbox), 'value');
+      if (!c) throw bad('value', `value: off, or a plane: ${SECTION_FORMS}.`);
+      const r = await setSectionView(services, { plane: c.plane, offset: c.offset, flip: c.flip });
+      if (!r.ok) throw new ToolError('no_viewport', r.reason);
+      const d = sectionData(services.doc.state.get(), { ...c, frame: r.section.frame, offset: r.section.offset });
+      return done(`Section view on in the person's view: ${String(d?.plane)} offset ${String(d?.offset_mm)} mm, keeps ${String(d?.keeps ?? '')}`, data({ section: d }));
     }
     case 'projection': {
       const p = i.value.toLowerCase() as Projection;
@@ -962,6 +1009,9 @@ async function run(ctx: CallCtx): Promise<ToolReply> {
     case 'show':
     case 'hide':
       return eye(ctx, i);
+    case 'see_through':
+    case 'opaque':
+      return seeThrough(ctx, i);
     case 'origin_planes':
       return planes(ctx, i);
     case 'rename_part':

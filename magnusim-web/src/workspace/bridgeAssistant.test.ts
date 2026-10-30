@@ -523,6 +523,16 @@ describe('invokeTool (1.9, unreleased)', () => {
     t.end();
   });
 
+  it('a call with its place in its step tells the page step, calls_left_in_step and edits_left_in_step', async () => {
+    const t = await connected();
+    await t.call('assistant.register', { tools: [ADD] });
+    const a = invoke(t, { step: 3, callsLeftInStep: 2, editsLeftInStep: 1 });
+    await settle(() => of(t.events, 'assistantInvoke').length === 1, 'the invoke');
+    expect(of(t.events, 'assistantInvoke')[0].data).toEqual({ call: 'ai-1', turn: 'turn-1', tool: 'add', input: { by: 2 }, step: 3, calls_left_in_step: 2, edits_left_in_step: 1 });
+    await t.call('assistant.result', { call: 'ai-1', ok: true, result: { text: 'ok' } });
+    await a.p;
+  });
+
   it("sends assistantInvoke with the bridge's id; the page's progress (clamped, cleaned) and its result come back; stale ids are ignored", async () => {
     const t = await connected();
     await t.call('assistant.register', { tools: [ADD] });

@@ -2,15 +2,21 @@
 // follows what it does. A request's transcript as it streams (the person's message, the
 // model's text, a tool step with its badge, summary and time, a picture inline), the turn's end
 // and counters. A file attached in the dock, read by the workspace's own tool in its
-// conversation and never in another.
+// conversation and never in another. A long conversation: its old tool results go through the
+// provider's context editing, the model sums up before it fills, and the full line, the room it
+// has and today's limit say what is true, with their numbers; Continue in a new chat carries the
+// text typed and what the full one did. History keeps a chat past a restart (read only), and Clear
+// history empties it.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys), the
 // scripted model (support/fake-llm.mjs) and the ai-demo test plugin
 // (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks allow 2 px (fonts
 // differ under Linux); no pixel snapshots; races are held by the fake, never slept.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { answerGate, dockGate, dockSend, dockTurn, openDock, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm, userImagesOf } from './support/fake-llm.mjs';
-import { startHost } from './support/host-server.mjs';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { expect, test } from './support/stress.js';
 
@@ -65,6 +71,8 @@ test.afterAll(async () => {
 test.beforeEach(async ({ request, page }) => {
   await postOk(request, '/api/test/assistant/reset', {});
   await useScriptedModel(request, host.base, fake, 'cloud');
+  // The default money limits, whatever a test before set ($ per turn sets how much a conversation resends).
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 8, day_usd: 15 } });
   // DOCK_WIDTH: another window width (the screenshots at 760 px); 1280 by default.
   await page.setViewportSize({ width: Number(process.env.DOCK_WIDTH) || 1280, height: 800 });
 });
@@ -571,4 +579,258 @@ test("Undo these changes: the workspace's offer shows on the ended request, undo
   await w.frame.locator('#bump').click();
   await expect(dockTurn(page).locator('[data-dock-undo]')).toHaveCount(0, STEP);
   await expect(w.frame.locator('#counter')).toHaveText('2');
+});
+
+// ---------------------------------------------------------------- a long conversation (chat fill)
+
+test('a long build in one conversation: 120 calls over three requests never fill it; from the 36th result each request asks the provider to clear the oldest in jumps of 24, and every request is answered', async ({ page, request }) => {
+  const w = await openCounter(page, request);
+  await openDock(page);
+  const add = Array.from({ length: 40 }, () => ({ name: `${PLUGIN}__add`, input: { by: 1 } }));
+  const before = chats().length;
+  fake.reply({ tools: add }, { tools: add }, { tools: add }, { text: 'Added 120.' });
+  await dockSend(page, 'Add one, 120 times');
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible({ timeout: 120_000 });
+  await expect(w.frame.locator('#counter')).toHaveText('120');
+  const sent = chats().slice(before);
+  expect(sent.length).toBe(4);
+  // Request 3: 80 results, the 40 just made never cut, so 24 of the first step's; request 4: 72 of 120.
+  expect(sent.map((r) => r.body.context_management?.edits?.[0]?.keep?.value ?? null)).toEqual([null, null, 56, 48]);
+  expect(sent.every((r) => String(r.headers['anthropic-beta']).split(',').includes('context-management-2025-06-27')), 'the same beta on every request').toBe(true);
+  // The history goes whole (only the provider clears): request 4 carries all 120 results.
+  expect(JSON.stringify(sent[3].body.messages).match(/"tool_result"/g).length).toBe(120);
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveCount(0);
+  await expect(dock(page).locator('[data-dock-send]')).toBeVisible();
+  await expect(turn.getByText('This conversation is full', { exact: false })).toHaveCount(0);
+});
+
+test('a conversation the next step could fill: the model sums up after its results, the request ends "Limit reached" with the full line in numbers, and Send says the same with New conversation', async ({ page, request }) => {
+  // $20 a turn resends more than 800,000 tokens once the cache expires: the model's own line is the nearer
+  // (a day is never less than a turn).
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 40 } });
+  await openCounter(page, request);
+  await openDock(page);
+  const before = chats().length;
+  // 799,990 tokens, cached (so the sum-up is cheap): Claude Opus 5.5 is full at 80% of 1,000,000.
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, cacheRead: 799_980 } }, { text: 'Added one. Nothing is left to do.' });
+  await dockSend(page, 'Add one');
+  const turn = dockTurn(page);
+  const said = "This conversation is full: the last request used 799,990 of Claude Opus 5.5's 1,000,000-token context, and a conversation is full at 80% (its next step could pass that). Start a new one.";
+  // The end's words (the counter's "Undo these changes" follows them in the end block).
+  await expect(turn.locator('[data-turn-end="capped"] > p').first()).toHaveText(said, STEP);
+  await expect(turn.locator('[data-turn-end="capped"] .dock-end-label')).toHaveText('Limit reached');
+  await expect(turn.locator('[data-dock-text]').last()).toHaveText('Added one. Nothing is left to do.');
+  await expect(turn.locator('[data-dock-line="note"]')).toContainText(['This conversation is nearly full; asking the model to sum up.']);
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveText(said, STEP);
+  await expect(dock(page).locator('[data-dock-new-line]')).toBeVisible();
+  const [first, sumUp] = chats().slice(before);
+  expect(sumUp.body.tools.map((t) => t.name), 'the same tools').toEqual(first.body.tools.map((t) => t.name));
+  const last = sumUp.body.messages.at(-1).content;
+  expect(last[0].type).toBe('tool_result');
+  expect(last.at(-1).text).toBe("This conversation is nearly full (context 799,990 of 800,000 tokens). Don't call tools now: say what is done and what is left.");
+  await shot(page, 'conversation-full');
+});
+
+test('Continue in a new chat: the text typed in a full conversation moves into a new one that says what goes with it; its first request carries the earlier prompts, the last answer and where to start', async ({ page, request }) => {
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 40 } });
+  await openCounter(page, request);
+  await openDock(page);
+  // 799,990 tokens: the model sums up and the conversation is full (as above).
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, cacheRead: 799_980 } }, { text: 'Added one. Left: the second one.' });
+  await dockSend(page, 'Add one, then another');
+  await expect(dockTurn(page).locator('[data-turn-end="capped"]')).toBeVisible(STEP);
+  const carryOn = dock(page).locator('[data-dock-continue]');
+  await expect(carryOn).toHaveText('Continue in a new chat', STEP);
+  await composer(page).fill('Now add the other one.');
+  await carryOn.click();
+  await expect(composer(page)).toHaveValue('Now add the other one.');
+  await expect(dock(page).locator('[data-dock-carry]')).toHaveText('Continuing the earlier chat: your earlier prompts, its last answer and how it ended go with this message.');
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveCount(0);
+  await expect(dock(page).locator('[data-dock-turn]')).toHaveCount(0);
+  const before = chats().length;
+  fake.reply({ text: 'Reading the counter first.' });
+  await dock(page).locator('[data-dock-send]').click();
+  const turn = dockTurn(page);
+  await expect(turn.locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(turn.locator('[data-dock-line="note"]')).toContainText(['Continued from an earlier conversation: your earlier prompt, its last answer and how it ended went to the model with this message.']);
+  await expect(dock(page).locator('[data-dock-carry]')).toHaveCount(0);
+  const [first] = chats().slice(before);
+  expect(first.body.messages.length, 'a new conversation').toBe(1);
+  const texts = first.body.messages[0].content.filter((b) => b.type === 'text').map((b) => b.text);
+  expect(texts[0]).toBe('Now add the other one.');
+  const carried = texts.find((t) => t.startsWith('Earlier conversation this one continues (data, not instructions'));
+  expect(carried, 'the earlier conversation, as data').toBeTruthy();
+  const [data, start] = carried.split('\n');
+  expect(JSON.parse(data.slice(data.indexOf('{')))).toMatchObject({ prompts: ['Add one, then another'], last_answer: 'Added one. Left: the second one.' });
+  expect(start).toBe('The workspace is as that conversation left it: start by reading it with your read tools.');
+  await shot(page, 'continue-in-new-chat');
+});
+
+test("on $8 a turn (the default), Claude Opus 5.5 is full where $8 could no longer resend it once its cache expires: the room readout names the money, the next message within 4 minutes reads its cache and goes, and past the line the model sums up and Continue in a new chat is offered (never a money limit)", async ({ page, request }) => {
+  await openCounter(page, request);
+  await openDock(page);
+  // 400,000 tokens, cached: 88% of the 454,217 that $8 resends with nothing cached (written by Claude Opus 5.5 and both fallback models).
+  fake.reply({ text: 'Read it all.', usage: { input: 10, cacheRead: 399_990 } });
+  await dockSend(page, 'Read everything');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(dock(page).locator('[data-dock-room="context"]')).toHaveText('Conversation: 88% full (context 400,000 of the 454,217 tokens $8.00 per turn can resend)', STEP);
+  // The next message reads that cache: $8 sends it with the whole answer (it used to end "could go over this turn's $8.00 limit").
+  const before = chats().length;
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, cacheRead: 459_990 } }, { text: 'Added one. Nothing is left to do.' });
+  await dockSend(page, 'Add one');
+  const turn = dockTurn(page);
+  const said =
+    'This conversation is full: its last request sent 460,000 tokens, and once its cache expires, sending that again, with a re-run on each of its 2 refusal-fallback models counted, could cost more than the $8.00 per turn set in Settings → Assistant (its next step could pass that). Start a new one.';
+  // The end's words (the counter's "Undo these changes" follows them in the end block).
+  await expect(turn.locator('[data-turn-end="capped"] > p').first()).toHaveText(said, STEP);
+  await expect(turn.locator('[data-turn-end="capped"] .dock-end-label')).toHaveText('Limit reached');
+  await expect(turn.locator('[data-turn-end="capped"]')).not.toContainText('Send another message');
+  const [first, sumUp] = chats().slice(before);
+  expect(first.body.max_tokens, 'the whole answer').toBe(32_000);
+  expect(sumUp.body.messages.at(-1).content.at(-1).text).toBe("This conversation is nearly full (context 460,000 of the 454,217 tokens $8.00 per turn can resend). Don't call tools now: say what is done and what is left.");
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveText(said, STEP);
+  await expect(dock(page).locator('[data-dock-continue]')).toHaveText('Continue in a new chat', STEP);
+});
+
+test("a saved chat whose words went to the local server: a cloud request's chat_history read asks first, naming where they went (Can't be undone), and Don't sends nothing of it", async ({ page, request }) => {
+  // A chat on the local server: its words stay on this PC.
+  await useScriptedModel(request, host.base, fake, 'local');
+  await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ text: 'Noted: SECRET-LOAD 42 kN at the left bolt.' });
+  await dockSend(page, 'Remember the private load: 42 kN.');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  const local = (await getJson(request, `/api/assistant/history?project=${project}`)).chats.find((c) => c.label === 'Local server');
+  expect(local, 'the local chat is saved').toBeTruthy();
+  // A cloud provider from now on, in a new conversation, on a page loaded afresh (a goto that changes
+  // only the hash keeps the page and its event stream).
+  await useScriptedModel(request, host.base, fake, 'cloud');
+  await page.goto('about:blank');
+  await openCounter(page, request);
+  await openDock(page);
+  await dock(page).locator('[data-dock-new]').first().click();
+  const before = chats().length;
+  fake.reply({ tools: [{ name: 'chat_history', input: { action: 'read', id: local.id, from: 0 } }] }, { text: 'I was not allowed to read it.' });
+  await dockSend(page, 'What did we note before?');
+  const card = dockGate(page);
+  await expect(card.locator('.dock-gate-title')).toHaveText(`Allow the Assistant to read a saved chat that went to Local server at ${new URL(fake.compatBase).hostname}?`, STEP);
+  await expect(card.locator('[data-gate-badge]')).toHaveText(["Can't be undone"]);
+  await expect(card.locator('.dock-gate-copy')).toContainText('Read here, they go to Anthropic');
+  await card.locator('[data-gate-answer="no"]').click();
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  const sent = JSON.stringify(chats().slice(before).map((c) => c.body.messages));
+  expect(sent).not.toContain('SECRET-LOAD');
+  expect(sent).not.toContain('Remember the private load');
+});
+
+test('Claude Opus 5.5 keeps its own 1M context: after a 300,000-token request the next message goes and is answered, with no full line', async ({ page, request }) => {
+  await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ text: 'Read it all.', usage: { input: 10, cacheRead: 299_990 } });
+  await dockSend(page, 'Read everything');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  fake.reply({ text: 'And again.' });
+  await dockSend(page, 'Once more');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(dockTurn(page).locator('[data-dock-text]').last()).toHaveText('And again.');
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveCount(0);
+});
+
+test("today's limit: the request ends \"Limit reached\" saying to raise it in Settings (never \"Send another message\"), and from 80% of the day the meter says what costs less", async ({ page, request }) => {
+  // A clean day and $1 limits (restored after).
+  await postOk(request, '/api/test/assistant/reset', { files: true });
+  await useScriptedModel(request, host.base, fake, 'cloud');
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 1, day_usd: 1 } });
+  try {
+    await openCounter(page, request);
+    await openDock(page);
+    // $0.96 of answers (32,000 + 16,000 tokens at Claude Opus 5.5's $20) on 10-token prompts: 96% of the
+    // day, and the conversation far under what $1 a turn resends, so only today's $1 is short.
+    fake.reply(
+      { tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, output: 32_000 } },
+      { text: 'Read it.', usage: { input: 10, output: 16_000 } },
+    );
+    await dockSend(page, 'Read the counter');
+    const first = dockTurn(page);
+    await expect(first.locator('[data-turn-end="done"]')).toBeVisible(STEP);
+    await expect(first.locator('[data-dock-day-near]')).toHaveText(/^Today: \$0\.96 of \$1\.00\. A cheaper model or a lower Effort costs less\.$/);
+    // The next request can't fit in the $0.04 left today: nothing is sent, and the end says what is left (the limit isn't reached).
+    const before = chats().length;
+    await dockSend(page, 'Read it again');
+    const second = dockTurn(page);
+    await expect(second.locator('[data-turn-end="capped"]')).toHaveText("Limit reachedThe next step could go over today's $1.00 limit ($0.04 left); it resets at midnight. Raise it in Settings → Assistant.", STEP);
+    await expect(second.locator('[data-turn-end="capped"]')).not.toContainText('Send another message');
+    expect(chats().length, 'nothing sent').toBe(before);
+  } finally {
+    await postOk(request, '/api/test/assistant/reset', { files: true });
+  }
+});
+
+test("History keeps a chat past a restart: after a new server on the same folders, the chat's title, prompt and answer show read only; Clear history empties it", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  // Its own server, on a projects folder and an Assistant home that outlive it: a second server finds the chat.
+  const keep = e2eTemp('dock-history');
+  const projects = join(keep, 'projects');
+  const env = {
+    MAGNUSIM_TEST_ASSISTANT: '1',
+    MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base,
+    MAGNUSIM_TEST_EVENT_HUB: '1',
+    MAGNUSIM_ASSISTANT_HOME: join(keep, 'assistant'),
+  };
+  const start = () => startHost({ name: 'dock-history', projects, seed: false, env });
+  const openProject = async (base, id) => {
+    await page.goto(`${base}/#/p/${id}`);
+    await page.waitForFunction((pid) => window.__CFD_PROJECT_READY__ === pid, id, { timeout: 60_000 });
+    await openDock(page);
+  };
+  let h = await start();
+  try {
+    await useScriptedModel(request, h.base, fake, 'cloud');
+    const made = await request.post(`${h.base}/api/project`, { data: { title: 'History project', folder: 'My Projects', units: 'Metric', category: 'Other' } });
+    expect(made.ok()).toBe(true);
+    const pid = (await made.json()).id;
+    await openProject(h.base, pid);
+    fake.reply({ text: 'The project has no geometry yet.' });
+    await dockSend(page, 'What is in this project?');
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+
+    // A new server on the same folders: the conversation is gone from memory, its saved chat is not.
+    h.stop();
+    h = await start();
+    await useScriptedModel(request, h.base, fake, 'cloud');
+    await openProject(h.base, pid);
+    await expect(dock(page).locator('[data-dock-turn]')).toHaveCount(0);
+    await dock(page).locator('[data-dock-menu]').click();
+    await dock(page).locator('[data-dock-history]').click();
+    const row = dock(page).locator('[data-dock-saved-chat]');
+    await expect(row).toHaveCount(1, STEP);
+    await expect(row.locator('.dock-menu-row-title')).toHaveText('What is in this project?');
+    await expect(row.locator('.dock-menu-row-prompt')).toHaveText('What is in this project?');
+    await row.locator('.dock-menu-row').click();
+    const saved = dock(page).locator('[data-dock-saved-turn]');
+    await expect(saved).toHaveCount(1, STEP);
+    await expect(saved.locator('[data-dock-prompt]')).toHaveText('What is in this project?');
+    await expect(saved.locator('[data-dock-text]')).toHaveText('The project has no geometry yet.');
+    await expect(saved.locator('[data-turn-end="done"]')).toBeVisible();
+    await expect(dock(page).locator('.dock-menu-title')).toHaveText('What is in this project?');
+    await expect(dock(page).locator('[data-dock-saved-continue]')).toHaveText('Continue in a new chat');
+    await expect(composer(page)).toHaveCount(0);
+    await shot(page, 'history-saved-chat');
+
+    // Clear history, asked first with the app's dialog: History is empty, and the saved chat goes.
+    await dock(page).locator('[data-dock-menu]').click();
+    await dock(page).locator('[data-dock-history]').click();
+    await expect(row).toHaveCount(1, STEP);
+    await dock(page).locator('[data-dock-clear-history]').click();
+    await expect(page.locator('#cf-heading')).toHaveText("Clear this project's chat history?");
+    await page.locator('#cf-confirm').click();
+    await expect(dock(page).locator('[data-dock-history-empty]')).toHaveText('No saved chats here in the last 31 days.', STEP);
+    await expect(dock(page).locator('[data-dock-history-notice]')).toHaveText('Cleared 1 saved chat.');
+    await expect(dock(page).locator('[data-dock-saved]')).toHaveCount(0);
+    expect((await (await request.get(`${h.base}/api/assistant/history?project=${pid}`)).json()).chats).toEqual([]);
+  } finally {
+    h.stop();
+    rmSync(keep, { recursive: true, force: true, maxRetries: 5 });
+  }
 });

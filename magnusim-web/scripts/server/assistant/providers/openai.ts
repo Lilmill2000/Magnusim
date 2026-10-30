@@ -15,7 +15,8 @@
  *   with the workspace's tools `strict: false`, the host's still strict; that tool set goes
  *   so from then on (CAD tools spec H8, common.ts sendStrictOrLoose).
  * - Tool results go back as `function_call_output` items, with images as input_image
- *   parts.
+ *   parts; the oldest `req.clearResults` of them as a short note with no images
+ *   (common.ts sentMessages: only their output changes, the reasoning items go as they came).
  * - Requests stream and are accumulated here; each output item is taken from its
  *   `response.output_item.done` event (the `added` copy may be incomplete).
  * - Headers: only the allowlist leaves, the key only as Authorization.
@@ -85,9 +86,9 @@ export function openAiClientOptions(key: string, baseURL: string, fetch: typeof 
   };
 }
 
-function toInput(messages: readonly Message[]): Json[] {
+function toInput(messages: readonly Message[], cleared: number): Json[] {
   const out: Json[] = [];
-  for (const m of requestMessages(messages)) {
+  for (const m of requestMessages(messages, cleared)) {
     if (m.role === 'assistant') {
       if (m.raw.provider === 'openai' && Array.isArray(m.raw.payload)) out.push(...(m.raw.payload as Json[]));
       else {
@@ -132,7 +133,7 @@ export function responsesBody(req: ProviderRequest, o: { loose?: boolean; strict
   return {
     model: req.model,
     ...(instructions ? { instructions } : {}),
-    input: toInput(req.messages),
+    input: toInput(req.messages, req.clearResults ?? 0),
     ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: true } : {}),
     store: false,
     include: ['reasoning.encrypted_content'],

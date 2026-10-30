@@ -3,7 +3,8 @@
  * CAD_EDITION_TOOLS offers only the host and core page tools Magnusim CAD has, each with the
  * values (and the words) its person has controls for; a dropped value is refused before a tool
  * runs; the workspace's own tools are untouched. Magnusim's registry is byte-identical with and
- * without the edition code path. And app_status says what Magnusim CAD is.
+ * without the edition code path. And app_status says what Magnusim CAD is, as do the system
+ * prompt, the coding agents' note and the MCP instructions: no simulation in Magnusim CAD.
  */
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,6 +26,9 @@ const { CORE_TOOLS } = await import('../../../src/assistant/coreToolDefs.ts');
 const { createHostTransport } = await import('../assistant/host-call.ts');
 const { paced } = await import('../assistant/host/common.ts');
 const { startFakeApp, makeRt } = await import('./assistant-host-harness.js');
+const { SYSTEM_PROMPT, systemPrompt } = await import('../assistant/prompt.ts');
+const { AGENT_NOTE, agentNote } = await import('../assistant/agents/acp.ts');
+const { MCP_INSTRUCTIONS, mcpInstructions } = await import('../assistant/mcp/server.ts');
 
 const host = () => defaultHostTools(() => null);
 // In a project (its page in Magnusim CAD, the workbench in Magnusim) unless a test says where.
@@ -166,6 +170,43 @@ describe('app_status', () => {
       assert.equal(out.data.compute, undefined);
       assert.ok(out.data.plugins.every((p) => !('env' in p)));
       assert.doesNotMatch(JSON.stringify(out.data), /openfoam|wsl|python/i);
+    } finally {
+      delete process.env.MAGNUSIM_EDITION;
+    }
+  });
+});
+
+describe('what the model is told the app is', () => {
+  // A word a person of Magnusim CAD never sees: the app simulates nothing (Daniel: hide all).
+  const SIMULATION = /CFD|simulat|converg|\bstud(y|ies)\b|geometr|\bmesh|solver/i;
+
+  it("in Magnusim: the system prompt, the coding agents' note and the MCP instructions are as before", () => {
+    assert.equal(systemPrompt(), SYSTEM_PROMPT, 'no edition: Magnusim');
+    assert.equal(systemPrompt(false), SYSTEM_PROMPT);
+    assert.ok(SYSTEM_PROMPT.startsWith('You are the Magnusim Assistant, working inside Magnusim, a CFD and CAD app, for the person at this PC.'));
+    assert.ok(SYSTEM_PROMPT.includes('(names of projects, studies, geometries, faces and files;'));
+    assert.ok(SYSTEM_PROMPT.includes('Say plainly when a result is not converged, not ready, or an estimate.'));
+    assert.equal(agentNote(), AGENT_NOTE);
+    assert.ok(AGENT_NOTE.startsWith('You are working inside Magnusim, a CFD and CAD app, for the person at this PC.'));
+    assert.equal(mcpInstructions(), MCP_INSTRUCTIONS);
+    assert.ok(MCP_INSTRUCTIONS.startsWith("These are Magnusim's tools. Magnusim is a CFD and CAD app on this PC, and the tools act in it for the person at this PC.\n"));
+  });
+
+  it('in Magnusim CAD: each names Magnusim CAD, a CAD app, and no simulation', () => {
+    const texts = { system: systemPrompt(true), agent: agentNote(true), mcp: mcpInstructions(true) };
+    assert.ok(texts.system.startsWith('You are the Magnusim Assistant, working inside Magnusim CAD, a CAD app for designing parts, for the person at this PC.'));
+    assert.ok(texts.system.includes('(names of projects, Parts, features, faces and files;'));
+    assert.ok(texts.system.includes('Say plainly when a result is not ready or an estimate.'));
+    assert.ok(texts.agent.startsWith('You are working inside Magnusim CAD, a CAD app for designing parts, for the person at this PC.'));
+    assert.ok(texts.mcp.startsWith("These are Magnusim CAD's tools. Magnusim CAD is a CAD app for designing parts on this PC, and the tools act in it for the person at this PC.\n"));
+    for (const [which, text] of Object.entries(texts)) assert.doesNotMatch(text, SIMULATION, which);
+    // Only the words differ: the same rules, one for one.
+    assert.equal(texts.system.split('\n').length, SYSTEM_PROMPT.split('\n').length);
+    assert.equal(texts.mcp.split('\n').length, MCP_INSTRUCTIONS.split('\n').length);
+    // MAGNUSIM_EDITION=cad (Magnusim CAD's server) picks them.
+    process.env.MAGNUSIM_EDITION = 'cad';
+    try {
+      assert.deepEqual({ system: systemPrompt(), agent: agentNote(), mcp: mcpInstructions() }, texts);
     } finally {
       delete process.env.MAGNUSIM_EDITION;
     }

@@ -89,7 +89,8 @@ import {
   remember as rememberConsent,
   type ProjectInfo,
 } from '../privacy.ts';
-import { guideBlock, SYSTEM_PROMPT } from '../prompt.ts';
+import { isCadEdition } from '../../../edition.js';
+import { appWords, guideBlock, LEFT_OUT_RULE, systemPrompt } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
 import type { Registry, ToolCtx, ToolDef } from '../registry.ts';
@@ -109,10 +110,19 @@ export const MCP_LINE_MAX = 8 * 1024 * 1024;
 /** External apps' calls per rolling hour, process-wide. */
 export const MCP_RATES = Object.freeze({ calls: 1200, changes: 120, windowMs: 60 * 60_000 });
 
-export const MCP_INSTRUCTIONS = [
-  "These are Magnusim's tools. Magnusim is a CFD and CAD app on this PC, and the tools act in it for the person at this PC.",
-  ...SYSTEM_PROMPT.split('\n').slice(1),
-].join('\n');
+export function mcpInstructions(cad: boolean = isCadEdition()): string {
+  const app = appWords(cad).app;
+  const name = app.split(',')[0];
+  return [
+    `These are ${name}'s tools. ${name} is ${app.slice(name.length + 2)} on this PC, and the tools act in it for the person at this PC.`,
+    ...systemPrompt(cad)
+      .split('\n')
+      .slice(1)
+      .filter((line) => line !== LEFT_OUT_RULE),
+  ].join('\n');
+}
+
+export const MCP_INSTRUCTIONS = mcpInstructions(false);
 
 /** How long an external app's question waits before it is declined. */
 export const MCP_GATE_TIMEOUT_MS = GATE_TIMEOUT_MS;
@@ -206,8 +216,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** Where an app's calls answer to (chat_history asks before a saved chat's words go there). */
+const APP_DESTINATION = Object.freeze({ key: MCP_DESTINATION, label: 'the app that asks' });
+
 /** No tab (none, or two or more windows): Home (core host tools spec 9.5); each project tool by its project_id. */
-const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null });
+const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null, destination: APP_DESTINATION });
 
 /** Schema keys that carry a registration's own words or values. */
 const WITHHELD_KEYS = new Set(['description', 'title', 'enum', 'const', 'default', 'examples']);
@@ -533,13 +546,13 @@ export function createMcpService(d: McpServiceDeps): McpService {
       const hit = projectId ? (d.resolveTabForProject?.(projectId) ?? null) : null;
       if (hit) {
         const pid = hit.projectId || null;
-        return { ctx: { tab: hit.tab, projectId: pid, simulationId: hit.studyId || null, cloud: true, local: false, place: d.registry.placeOf(hit.tab, pid), budgetTokens: null, prompt: null }, why: null };
+        return { ctx: { tab: hit.tab, projectId: pid, simulationId: hit.studyId || null, cloud: true, local: false, place: d.registry.placeOf(hit.tab, pid), budgetTokens: null, prompt: null, destination: APP_DESTINATION }, why: null };
       }
       const why = APP_TAB_TEXTS.get(String(t.body.code)) ?? (typeof t.body.error === 'string' ? t.body.error : null);
       return { ctx: TABLESS, why };
     }
     const pid = t.projectId || null;
-    return { ctx: { tab: t.tab, projectId: pid, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, pid), budgetTokens: null, prompt: null }, why: null };
+    return { ctx: { tab: t.tab, projectId: pid, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, pid), budgetTokens: null, prompt: null, destination: APP_DESTINATION }, why: null };
   }
 
   /**
@@ -612,12 +625,13 @@ export function createMcpService(d: McpServiceDeps): McpService {
   async function instructions(session: McpSession): Promise<string> {
     // A Test binding gets the rules alone. So does an external app until privacy allows the
     // project: the workspace guide is registration text, as the tools' own text is.
-    if (session.binding?.test) return MCP_INSTRUCTIONS;
+    const rules = mcpInstructions();
+    if (session.binding?.test) return rules;
     const { ctx } = contextOf(session);
     const ws = ctx.tab ? d.registry.workspaceOf(ctx.tab) : null;
-    if (!ws?.guide) return MCP_INSTRUCTIONS;
-    if (!(await projectOpen(session, ctx).catch(() => false))) return MCP_INSTRUCTIONS;
-    return `${MCP_INSTRUCTIONS}\n\n${guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin)}`;
+    if (!ws?.guide) return rules;
+    if (!(await projectOpen(session, ctx).catch(() => false))) return rules;
+    return `${rules}\n\n${guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin)}`;
   }
 
   async function listTools(session: McpSession): Promise<Array<Record<string, unknown>>> {

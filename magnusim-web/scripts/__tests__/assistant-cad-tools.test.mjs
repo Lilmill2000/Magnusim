@@ -1,15 +1,20 @@
 // The CAD Part's 22 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 30 tools (the Part's 22 by name
-// first, then its 8 host and core tools by name: core host tools spec §12.4, §15), strict as
-// strictOf grants them (the workspace's first, by name) on the first cloud dialect; no CAD property is optional;
-// the 30 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
-// CAD schema's size is
-// printed and stays within the app's 16 KB; the registration is within
-// 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
-// the system prompt) is at most 52,000 characters, its estimated tokens printed; in Magnusim CAD
-// (projectLinks false: the tools without a simulation's or the Enclosure's fields) it is shorter.
+// sent only the keywords they take; in a CAD turn Magnusim offers 31 tools (the Part's 22 by name
+// first, then its 9 host and core tools by name: core host tools spec §12.4, §15) and Magnusim CAD
+// 29 (the same 22, then the 7 of those its server keeps: assistant-routes.ts CAD_EDITION_TOOLS,
+// in its own words), strict as strictOf grants them (the workspace's first, by name) on the first
+// cloud dialect; no CAD property is optional; each CAD schema's size is printed and stays within
+// the app's 16 KB; the registration is within 512 KB. What a local model reads before the
+// conversation, in each edition as its server builds the registry (Magnusim CAD: with
+// cadEditionTool, and the Part's tools without a simulation's or the Enclosure's fields), by the
+// runtime's own rule (registry.ts LOCAL_BUDGET: a local request's tools take at most half the
+// model's context, 16,384 tokens for an unknown (32K) model, counted as toolTokens counts them at
+// LOCAL_BUDGET.charsPerToken characters a token): the tools as sent fit that budget and nothing is
+// cut at it; the system text (the prompt and the CAD notes) is at most 6,000 characters. Both are
+// printed with their share, and past 90% of the tool budget a warning is printed, so the next
+// squeeze is seen before a tool is cut.
 // The CAD suite's hand copies of the app's rules stay the app's: tests/assistant/sanitize-copy.ts
 // (help.test.ts checks every help reply through it) has the server's caps and gives what
 // resultText gives, on replies shaped as help sends them (the guide, the core set's guide, every
@@ -36,15 +41,22 @@ const sanitizeCopy = await import('../../bundled-plugins/cad/tests/assistant/san
 const { checkSchema, emitSchema, STRICT_KEEP, validateInput } = await import('../server/assistant/schema.ts');
 const { JSON_CAPS, resultText, TEXT_CAPS } = await import('../server/assistant/sanitize.ts');
 const { strictOf, STRICT_LIMITS } = await import('../server/assistant/providers/anthropic.ts');
-const { createToolRegistry, localBudget, providerTools, REGISTRATION_MAX_BYTES, toolTokens } = await import('../server/assistant/registry.ts');
+const { createToolRegistry, LOCAL_BUDGET, localBudget, providerTools, REGISTRATION_MAX_BYTES, toolTokens } = await import('../server/assistant/registry.ts');
 const { createHostTools } = await import('../server/assistant/host-tools.ts');
 const { createJobTools } = await import('../server/assistant/host/job-tools.ts');
 const { CORE_TOOLS } = await import('../../src/assistant/coreToolDefs.ts');
-const { SYSTEM_PROMPT, guideBlock } = await import('../server/assistant/prompt.ts');
-const { estimateStep } = await import('../server/assistant/prices.ts');
+const { guideBlock, systemPrompt } = await import('../server/assistant/prompt.ts');
+const { CAD_EDITION_TOOLS, cadEditionTool } = await import('../server/assistant-routes.ts');
 
-/** What a local model reads before the conversation, at most (characters). */
-const LOCAL_PREFIX_MAX = 52_000;
+/**
+ * The tools as sent to a local model, at most (characters): the registry's budget for a model of
+ * unknown (32K) context, at the registry's characters a token (a deliberate over-count).
+ */
+const TOOLS_MAX_CHARS = LOCAL_BUDGET.unknown * LOCAL_BUDGET.charsPerToken;
+/** The system text a local model reads (the prompt and the CAD notes), at most (characters). */
+const SYSTEM_MAX = 6_000;
+/** Past this share of the tool budget a warning is printed. */
+const WARN_SHARE = 0.9;
 
 /** The app's host tools as the server makes them (defaultHostTools: the host tools, then the job tools). */
 const hostTools = () => [
@@ -57,20 +69,36 @@ const hostTools = () => [
   ...createJobTools({ call: async () => ({}) }),
 ];
 
-/** The app's tools a workspace turn is offered, by name (core host tools spec §15): 5 host tools and the core page's core__show and Settings → Appearance's two. */
-const HOST_IN_WORKSPACE = ['app_status', 'core__appearance', 'core__set_appearance', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
+/** The app's tools a workspace turn is offered in Magnusim, by name (core host tools spec §15): 6 host tools, the core page's core__show and Settings → Appearance's two. */
+const HOST_IN_WORKSPACE = ['app_status', 'chat_history', 'core__appearance', 'core__set_appearance', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
 
-/** The tools the app offers a turn on the Part's tab, in order (the registry's own selection); `tools` the Part's (Magnusim's by default). */
-function offered({ local = false, tools: cad = CAD_TOOLS } = {}) {
-  const registry = createToolRegistry({ hostTools: hostTools(), pluginEpoch: () => 'e1' });
-  const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: cad.map((t) => ({ ...t })), guide: GUIDE };
+/**
+ * Each edition as its server builds the Assistant (assistant-routes.ts turnManager): Magnusim's
+ * registry offers every host and core tool as it is; Magnusim CAD's is built with cadEditionTool
+ * (only CAD_EDITION_TOOLS, in its own words), and its Part registers the tools without project
+ * links. `app`: the app's tools a workspace turn is offered there, by name; `count`: all it offers.
+ */
+const EDITIONS = [
+  { edition: 'Magnusim', cad: false, filter: null, tools: CAD_TOOLS, app: HOST_IN_WORKSPACE, count: 31 },
+  { edition: 'Magnusim CAD', cad: true, filter: cadEditionTool, tools: cadToolsFor({ projectLinks: false }), app: HOST_IN_WORKSPACE.filter((n) => n in CAD_EDITION_TOOLS), count: 29 },
+];
+const [MAGNUSIM, MAGNUSIM_CAD] = EDITIONS;
+
+/**
+ * The tools the app offers a turn on the Part's tab, in order (the registry's own selection), in
+ * `edition` (Magnusim by default); a local turn's budget is a 32K model's unless `budgetTokens`.
+ */
+function offered({ local = false, edition = MAGNUSIM, budgetTokens = localBudget(32_768) } = {}) {
+  const registry = createToolRegistry({ hostTools: hostTools(), pluginEpoch: () => 'e1', ...(edition.filter ? { edition: edition.filter } : {}) });
+  const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: edition.tools.map((t) => ({ ...t })), guide: GUIDE };
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
   assert.equal(verdict.accepted.length, 22);
   // The app page's own registration in the same tab (C7), where it is: the Part's workspace.
+  // Magnusim CAD has no 3D view tool for the page to offer (cad-edition-assistant.test.js).
   const core = registry.setCore('T1', 'L1', { projectId: 'p1', studyId: 's1', place: 'workspace', tools: CORE_TOOLS.map((t) => ({ ...t })), guide: '' });
-  assert.deepEqual(core.refused, []);
-  return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local, place: 'workspace', budgetTokens: local ? localBudget(32_768) : null, prompt: null });
+  assert.deepEqual(core.refused.map((r) => [r.name, r.code]), edition.filter ? [['view', 'not_in_edition']] : []);
+  return registry.selectTools({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: !local, local, place: 'workspace', budgetTokens: local ? budgetTokens : null, prompt: null });
 }
 
 /** Every schema node, with its path. */
@@ -98,27 +126,54 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 30: the Part's 22 by name first, then the app's 8 for a workspace; strict as strictOf grants them: the Part's first, by name", () => {
-    const { tools, dropped } = offered();
-    assert.deepEqual(dropped, []);
-    const names = tools.map((t) => t.name);
-    assert.deepEqual(names, [...CAD_TOOLS.map((t) => `cad__${t.name}`), ...HOST_IN_WORKSPACE]);
-    const sent = providerTools(tools);
-    const flags = strictOf(sent, sent.map((t) => emitSchema('anthropic', t.schema)), false);
-    // The strict budget goes to the Part's tools first: its first 20 by name; the rest go loose.
-    assert.deepEqual(flags, names.map((_, i) => i < STRICT_LIMITS.tools));
-    assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
+  it("a CAD turn offers 31 in Magnusim and 29 in Magnusim CAD: the Part's 22 by name first, then the app's 9 (7) for a workspace; strict as strictOf grants them: the Part's first, by name", () => {
+    assert.equal(MAGNUSIM.app.length, 9);
+    // Magnusim CAD keeps no simulation tool (explain_ready, wait) and says the rest in its own words.
+    assert.deepEqual(MAGNUSIM_CAD.app, ['app_status', 'chat_history', 'core__appearance', 'core__set_appearance', 'core__show', 'project_summary', 'read_setup']);
+    for (const ed of EDITIONS) {
+      const { tools, dropped } = offered({ edition: ed });
+      assert.deepEqual(dropped, [], ed.edition);
+      const names = tools.map((t) => t.name);
+      assert.deepEqual(names, [...CAD_TOOLS.map((t) => `cad__${t.name}`), ...ed.app], ed.edition);
+      assert.equal(names.length, ed.count, ed.edition);
+      const sent = providerTools(tools);
+      const flags = strictOf(sent, sent.map((t) => emitSchema('anthropic', t.schema)), false);
+      // The strict budget goes to the Part's tools first: its first 20 by name; the rest go loose.
+      assert.deepEqual(flags, names.map((_, i) => i < STRICT_LIMITS.tools), ed.edition);
+      assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools, ed.edition);
+    }
+    // Magnusim CAD's app tools are its server's, in its words (app_status says what Magnusim CAD is).
+    const status = offered({ edition: MAGNUSIM_CAD }).tools.find((t) => t.name === 'app_status');
+    assert.equal(status.description, CAD_EDITION_TOOLS.app_status.description);
   });
 
-  it('the 30 fit the local budget of a 32K context (half of it): nothing is cut', () => {
-    const { tools, dropped, budget } = offered({ local: true });
-    assert.equal(tools.length, 30);
-    assert.deepEqual(dropped, []);
-    const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
-    console.log(`[assistant-cad-tools] the 30 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
-    assert.equal(budget, 16_384);
-    assert.ok(tokens <= budget, `${tokens} tokens`);
-  });
+  for (const ed of EDITIONS) {
+    const { edition } = ed;
+    it(`${edition}: the ${ed.count} as sent fit a 32K local model's tool budget (nothing is cut) and the system text is at most ${SYSTEM_MAX} characters`, () => {
+      // Measured on all of them, whatever the budget would cut.
+      const all = offered({ local: true, edition: ed, budgetTokens: Number.MAX_SAFE_INTEGER });
+      assert.equal(all.tools.length, ed.count);
+      const r = readBefore(all.tools, ed.cad);
+      const budget = LOCAL_BUDGET.unknown;
+      const share = r.tokens / budget;
+      const pct = (n) => `${(100 * n).toFixed(1)}%`;
+      console.log(
+        `[assistant-cad-tools] ${edition}: the ${ed.count} tools as sent ${r.chars} characters, ${r.tokens} tokens of ${budget} (${pct(share)}; at most ${TOOLS_MAX_CHARS} characters); system text ${r.system} of ${SYSTEM_MAX} characters (${pct(r.system / SYSTEM_MAX)})`,
+      );
+      if (share > WARN_SHARE) {
+        console.warn(`[assistant-cad-tools] WARNING ${edition}: the tools take ${pct(share)} of a 32K local model's tool budget, past ${pct(WARN_SHARE)}: ${r.tokens <= budget ? `${budget - r.tokens} tokens are left before the registry cuts a tool` : `${r.tokens - budget} tokens over, so the registry cuts a tool`}`);
+      }
+      assert.ok(r.tokens <= budget, `${edition}: ${r.tokens} tokens of ${budget}`);
+      assert.ok(r.chars <= TOOLS_MAX_CHARS, `${edition}: ${r.chars} characters of ${TOOLS_MAX_CHARS}`);
+      assert.ok(r.system <= SYSTEM_MAX, `${edition}: system text ${r.system} characters of ${SYSTEM_MAX}`);
+      // The hard rule: at a 32K model's budget (and an unknown model's, the same) nothing is cut.
+      assert.equal(localBudget(32_768), budget);
+      const { tools: sent, dropped, budget: given } = offered({ local: true, edition: ed });
+      assert.equal(given, budget);
+      assert.deepEqual(dropped, []);
+      assert.equal(sent.length, ed.count);
+    });
+  }
 
   it('each CAD schema as sent is within the app\'s 16 KB (sizes printed)', () => {
     const sizes = CAD_TOOLS.map((t) => [t.name, Buffer.byteLength(JSON.stringify(t.inputSchema), 'utf8'), Buffer.byteLength(JSON.stringify(emitSchema('anthropic', t.inputSchema)), 'utf8')]);
@@ -131,45 +186,31 @@ describe("the CAD Part's tools by the app's rules", () => {
     assert.ok(bytes <= REGISTRATION_MAX_BYTES, `${bytes} bytes`);
   });
 
-  it(`what a local model reads before the conversation is at most ${LOCAL_PREFIX_MAX} characters`, () => {
-    const { tools } = offered({ local: true });
-    const { chars, sent, system } = prefixOf(tools);
-    const est = estimateStep({
-      provider: 'openai_compatible',
-      model: 'local',
-      cloud: false,
-      fallbackTargets: [],
-      // As the turn's first request counts it: the system text, and a fixed share per tool.
-      newChars: system.length,
-      newImages: [],
-      toolCount: tools.length,
-      firstStep: true,
-      prev: null,
-      now: Date.now(),
-      remainingUsd: 0,
-    });
-    console.log(`[assistant-cad-tools] local prefix: ${chars} characters (tools ${JSON.stringify(sent).length}, system ${system.length}), about ${est.promptTokens} tokens by the estimate's rule`);
-    assert.ok(chars <= LOCAL_PREFIX_MAX, `${chars} characters`);
-  });
-
-  it("in Magnusim CAD (projectLinks false) the Part's tools make that prefix shorter: the same 22, without a simulation's or the Enclosure's fields", () => {
-    const edition = cadToolsFor({ projectLinks: false });
+  it("in Magnusim CAD (projectLinks false) the Part's tools as sent are shorter: the same 22, without a simulation's or the Enclosure's fields", () => {
+    const edition = MAGNUSIM_CAD.tools;
     assert.deepEqual(edition.map((t) => t.name), CAD_TOOLS.map((t) => t.name));
     for (const t of edition) assert.deepEqual(checkSchema(t.inputSchema), { ok: true }, t.name);
-    const magnusim = prefixOf(offered({ local: true }).tools).chars;
-    const { tools, dropped } = offered({ local: true, tools: edition });
-    assert.deepEqual(dropped, []);
-    const { chars } = prefixOf(tools);
-    console.log(`[assistant-cad-tools] local prefix in Magnusim CAD: ${chars} characters (Magnusim ${magnusim}, ${magnusim - chars} fewer)`);
-    assert.ok(chars < magnusim, `${chars} characters, Magnusim ${magnusim}`);
+    const part = (tools) => tools.filter((t) => t.name.startsWith('cad__'));
+    const magnusim = offered({ local: true }).tools;
+    const cad = offered({ local: true, edition: MAGNUSIM_CAD }).tools;
+    const [mPart, cPart] = [readBefore(part(magnusim), false).chars, readBefore(part(cad), true).chars];
+    const [mAll, cAll] = [readBefore(magnusim, false).chars, readBefore(cad, true).chars];
+    console.log(`[assistant-cad-tools] Magnusim CAD: the Part's 22 as sent ${cPart} characters (Magnusim ${mPart}, ${mPart - cPart} fewer); all ${cad.length} ${cAll} (Magnusim's ${magnusim.length} ${mAll}, ${mAll - cAll} fewer)`);
+    // The whole list is printed, not held shorter: the edition's own words may run longer, and its budget test checks them.
+    assert.ok(cPart < mPart, `the Part's: ${cPart} characters, Magnusim ${mPart}`);
   });
 });
 
-/** What a local model reads before the conversation: the tools as sent and the system text (the prompt and the CAD notes). */
-function prefixOf(tools) {
-  const sent = providerTools(tools).map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: emitSchema('openai_compatible', t.schema) } }));
-  const system = `${SYSTEM_PROMPT}\n${guideBlock(GUIDE, 'Magnusim CAD')}`;
-  return { chars: JSON.stringify(sent).length + system.length, sent, system };
+/**
+ * What a local model reads before the conversation: the tools as sent, in characters and in
+ * tokens, each as the registry counts it (toolTokens: one definition's JSON, rounded up per tool),
+ * and the system text's characters (the edition's prompt and the CAD notes).
+ */
+function readBefore(tools, cad) {
+  const chars = providerTools(tools).reduce((n, t) => n + JSON.stringify({ type: 'function', function: { name: t.name, description: t.description, parameters: emitSchema('openai_compatible', t.schema) } }).length, 0);
+  const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
+  const system = `${systemPrompt(cad)}\n${guideBlock(GUIDE, 'Magnusim CAD')}`;
+  return { chars, tokens, system: system.length };
 }
 
 /** A help reply's data as the help tool gives it (CAD's help.ts), rev first as the call handler adds it. */

@@ -8,6 +8,7 @@ import { REMOTE_TEXT } from '../api';
 import type { TurnEvent } from '../wire';
 
 type EndState = 'done' | 'stopped' | 'failed' | 'capped';
+type RoomReason = 'messages' | 'images' | 'bytes' | 'context';
 type Risk = 'read' | 'edit' | 'compute' | 'destructive';
 type Billing = 'usd' | 'free' | 'agent_account';
 
@@ -20,11 +21,11 @@ export const CLOSE_DOCK = 'Close the Assistant';
 export const GROUP_HERE = 'Here';
 export const GROUP_HOME = 'Home';
 export const GROUP_OTHER_PROJECTS = 'Other projects';
-export const CONVERSATIONS_EMPTY = 'No conversations yet. Magnusim keeps them while it runs; a restart clears them.';
+export const CONVERSATIONS_EMPTY = 'No conversations yet. Magnusim keeps them while it runs; History keeps what they said for 31 days.';
 export const FORGET = 'Forget';
 export const forgetLabel = (title: string): string => `Forget ${title}`;
 export const FORGET_TITLE = 'Forget this conversation?';
-export const FORGET_COPY = "The Assistant forgets its messages; this can't be undone. What it changed in your projects stays.";
+export const FORGET_COPY = "The Assistant forgets its messages; this can't be undone. Its saved copy stays in History, and what it changed in your projects stays.";
 export const FORGET_KEEP = 'Keep';
 export const FORGET_BUSY = 'A request is running in this conversation. Stop it first.';
 /** A conversation row's second line: its provider and the time it was last used. */
@@ -32,6 +33,39 @@ export const conversationMeta = (label: string, hhmm: string): string => `${labe
 export const readOnlyConversation = (projectTitle: string): string =>
   `This conversation is about project "${projectTitle}". Open that project to continue it, or start a new conversation here.`;
 export const OPEN_PROJECT = 'Open project';
+
+// ---------------------------------------------------------------- History: the saved chats (31 days)
+
+export const HISTORY = 'History';
+export const CLEAR_HISTORY = 'Clear history';
+export const BACK = 'Back';
+/** Over the History list: whose chats, and how long they are kept. */
+export const historyOf = (home: boolean): string => (home ? 'Chats saved on Home, newest first. Kept 31 days.' : 'Chats saved in this project, newest first. Kept 31 days.');
+export const HISTORY_EMPTY = 'No saved chats here in the last 31 days.';
+export const HISTORY_LOADING = 'Loading the saved chats…';
+export const historyMore = (n: number): string => `${n} older ${n === 1 ? 'chat is' : 'chats are'} saved but not listed.`;
+/** A saved chat's day and time as History shows it: "29 Oct, 09:41". */
+export const dayTime = (iso: string): string => {
+  const t = new Date(iso);
+  if (!Number.isFinite(t.getTime())) return '';
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${t.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][t.getMonth()]}, ${two(t.getHours())}:${two(t.getMinutes())}`;
+};
+export const clearHistoryTitle = (home: boolean): string => (home ? "Clear Home's chat history?" : "Clear this project's chat history?");
+export const CLEAR_HISTORY_COPY = "Magnusim deletes the chats it saved here; this can't be undone. Conversations still open stay, and what the Assistant changed in your projects stays.";
+export const CLEAR_HISTORY_KEEP = 'Keep';
+export const clearedChats = (n: number): string => (n ? `Cleared ${n} saved ${n === 1 ? 'chat' : 'chats'}.` : 'There were no saved chats to clear.');
+/** Under a saved chat, in place of the composer. */
+export const savedLine = (when: string, carry: boolean): string =>
+  carry ? `A saved chat, last used ${when}. It is read only: Continue in a new chat takes up where it ended.` : `A saved chat, last used ${when}. It is read only.`;
+export const SAVED_LOADING = 'Loading the saved chat…';
+export const SHOW_MORE = 'Show more';
+export const savedPictures = (n: number): string => `${n} ${n === 1 ? 'picture' : 'pictures'} sent (not saved)`;
+/** A saved tool step: its title, and its result's line, or how it failed. */
+export const savedStep = (ok: boolean | null, title: string, line: string, code: string | null): string =>
+  ok === null ? `… ${title}: no answer` : ok ? `✓ ${title}${line ? `: ${line}` : ''}` : `✗ ${title}${line ? `: ${line}` : ''}${code ? ` (${code})` : ''}`;
+export const stepsLeftOut = (n: number): string => `${n} more ${n === 1 ? 'step' : 'steps'} not saved`;
+export const SAVED_CUT = 'Cut to fit what History keeps of one request.';
 
 // ---------------------------------------------------------------- the person's message (2.4)
 
@@ -104,7 +138,12 @@ export const WORKING_ON_IT = 'The Assistant is working on your last message.';
 export const providerNotReady = (label: string, detail: string): string => `${label}: ${detail}. Settings → Assistant can fix it.`;
 export const tabBusy = (workspace: string): string => `A request is already working in ${workspace}. Wait for it, or stop it.`;
 export const STOP_THAT_REQUEST = 'Stop that request';
+/** A full conversation whose row names no limit (an older server); the server's own words otherwise (full_text). */
 export const CONVERSATION_FULL = 'This conversation is full. Start a new one.';
+/** A full conversation's second way on: a new one that carries what this one did (carry_from). */
+export const CONTINUE_IN_NEW_CHAT = 'Continue in a new chat';
+/** Over the box of a new conversation that continues an earlier one: what goes with its first message. */
+export const CARRY_LINE = 'Continuing the earlier chat: your earlier prompts, its last answer and how it ended go with this message.';
 // Pictures (3.2) and files (core host tools spec 13.1). A line that names what can be attached
 // names drawings only while the dock offers them (drawings.ts): the caller says which.
 export const ATTACH_LABEL = 'Attach pictures or files';
@@ -256,6 +295,30 @@ export const agentCounters = (changes: number, changesCap: number, calls: number
   `${changes} of ${changesCap} changes · ${calls} of ${callsCap} tool calls · ${minutes(activeMs)} of ${minutesCap} min`;
 export const meterUsd = (turnUsd: number, turnCap: number, estimated: boolean, dayUsd: number, dayCap: number): string =>
   `This request: ${estimated ? 'about ' : ''}${usd(turnUsd)} of ${usd(turnCap)} · Today: ${usd(dayUsd)} of ${usd(dayCap)}`;
+/** From 80% of today's limit: what was spent, and what spends less (no price is compared). */
+export const dayNear = (dayUsd: number, dayCap: number): string => `Today: ${usd(dayUsd)} of ${usd(dayCap)}. A cheaper model or a lower Effort costs less.`;
+const grouped = (n: number): string => Math.round(n).toLocaleString('en-US');
+const megabytes = (bytes: number): string => {
+  const mb = bytes / (1024 * 1024);
+  return String(mb < 10 ? Math.floor(mb * 10) / 10 : Math.floor(mb));
+};
+const ROOM_NUMBERS: Record<RoomReason, (used: number, limit: number) => string> = {
+  messages: (u, l) => `messages ${grouped(u)} of ${grouped(l)}`,
+  images: (u, l) => `pictures ${grouped(u)} of ${grouped(l)}`,
+  bytes: (u, l) => `results and pictures ${megabytes(u)} of ${megabytes(l)} MB`,
+  context: (u, l) => `context ${grouped(u)} of ${grouped(l)} tokens`,
+};
+/**
+ * How full the conversation is, by the limit it is closest to: "Conversation: 72% full (pictures 72
+ * of 100)". `perTurn`: the context's limit is what that much per turn can resend once the cache expires.
+ */
+export const roomLine = (reason: RoomReason, used: number, limit: number, perTurn?: number): string =>
+  `Conversation: ${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, limit)) * 100))}% full (${
+    reason === 'context' && perTurn !== undefined ? `context ${grouped(used)} of the ${grouped(limit)} tokens ${usd(perTurn)} per turn can resend` : ROOM_NUMBERS[reason](used, limit)
+  })`;
+/** A coding agent's chat: how much of its own context it uses (it shortens its memory itself when it fills). */
+export const agentContextLine = (used: number, size: number): string =>
+  `Context: ${grouped(used)} of ${grouped(size)} tokens (${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, size)) * 100))}%)`;
 export const METER_FREE = 'Local server · no cost';
 export const meterAgent = (name: string): string => `Billed to your ${name} account (Magnusim can't see the cost)`;
 
@@ -286,9 +349,15 @@ export const OPEN_SETTINGS = 'Open Settings';
 const END_LABELS: Record<EndState, string | null> = { done: null, stopped: 'Stopped', capped: 'Limit reached', failed: "Didn't finish" };
 /** An ended turn's label (none for done). */
 export const endLabel = (state: EndState): string | null => END_LABELS[state];
-/** An ended turn's body: the server's message, and for a limit the way on. */
-export const endBody = (state: EndState, message: string | null): string => {
+/**
+ * An ended turn's body: the server's message, and for a limit the way on. Today's limit is
+ * raised in Settings (another message is refused until then, or midnight); a full conversation
+ * goes on in a new one (the composer offers it); any other limit, with another message.
+ */
+export const endBody = (state: EndState, message: string | null, reason: string | null = null): string => {
   const m = message ?? '';
+  if (state === 'capped' && reason === 'day_usd') return m ? `${m} Raise it in Settings → Assistant.` : 'Raise it in Settings → Assistant.';
+  if (state === 'capped' && reason === 'conversation_full') return m;
   if (state === 'capped') return m ? `${m} Send another message to carry on.` : 'Send another message to carry on.';
   return m;
 };

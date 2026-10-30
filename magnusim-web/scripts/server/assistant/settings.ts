@@ -110,6 +110,11 @@ export interface AssistantSettings {
   /** At most 8. */
   custom_agents: CustomAgent[];
   agent_caps: AgentCaps;
+  /**
+   * "Keep a provider log for a problem report" (Settings → Assistant), off by default: while on,
+   * every model request is written to the provider log (debug-log.ts, <home>/assistant/logs).
+   */
+  provider_log: boolean;
 }
 
 export const PROVIDER_IDS: readonly ProviderId[] = Object.freeze(['anthropic', 'openai', 'openai_compatible']);
@@ -163,6 +168,7 @@ const DEFAULTS: AssistantSettings = {
   agents: {},
   custom_agents: [],
   agent_caps: { changes: 24, calls: 400, turn_minutes: 60 },
+  provider_log: false,
 };
 
 /** A fresh copy of the defaults. */
@@ -362,6 +368,7 @@ export function normalizeSettings(raw: unknown): AssistantSettings {
       if (agentCapValid(key, v)) s.agent_caps[key] = v;
     }
   }
+  if (typeof raw.provider_log === 'boolean') s.provider_log = raw.provider_log;
   return s;
 }
 
@@ -401,7 +408,7 @@ export type PatchResult =
   | { ok: true; settings: AssistantSettings }
   | { ok: false; status: 400 | 409; error: string; field?: string; needs_confirm?: 'base_url' };
 
-const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents', 'mcp', 'agents', 'agent_caps', 'custom_agents']);
+const PATCH_KEYS = new Set(['provider', 'model', 'models', 'base_url', 'confirm_remote', 'effort', 'privacy', 'caps', 'forget_consents', 'mcp', 'agents', 'agent_caps', 'custom_agents', 'provider_log']);
 
 const MODEL_TEXT = 'A model id is 1–128 letters, digits and . _ : / -.';
 
@@ -501,6 +508,10 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
       if (typeof patch.mcp.clients !== 'boolean') return refuse('mcp.clients must be true or false.', 'mcp.clients');
       next.mcp.clients = patch.mcp.clients;
     }
+  }
+  if ('provider_log' in patch) {
+    if (typeof patch.provider_log !== 'boolean') return refuse('provider_log must be true or false.', 'provider_log');
+    next.provider_log = patch.provider_log;
   }
   if ('custom_agents' in patch) return refuse('Custom agents are added and removed in Settings → Assistant, one at a time.', 'custom_agents');
   if ('agents' in patch) {

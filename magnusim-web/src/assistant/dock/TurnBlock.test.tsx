@@ -232,6 +232,37 @@ describe('the footer, the end and the meter', () => {
     expect(block(view([], { billing: 'free' }), { newest: false }).querySelector('[data-dock-meter]')).toBeNull();
   });
 
+  it("from 80% of today's limit a line says so and what costs less; from 70% of the conversation's nearest limit, how full it is", () => {
+    const usage = (day: number) => ({ type: 'usage', usd: 0.1, estimated: false, turn_usd: 0.5, day_usd: day, tokens: 1 });
+    const below = block(view([{ type: 'state', state: 'model' }, usage(11.9)], { billing: 'usd', used: USED }));
+    expect(below.querySelector('[data-dock-day-near]')).toBeNull();
+    const near = block(view([{ type: 'state', state: 'model' }, usage(12)], { billing: 'usd', used: USED }));
+    expect(near.querySelector('[data-dock-day-near]')?.textContent).toBe('Today: $12.00 of $15.00. A cheaper model or a lower Effort costs less.');
+    expect(near.querySelector('[data-dock-day-near]')?.textContent).not.toMatch(/half|times|cheaper by/);
+    const room = (used: number) => ({ reason: 'images' as const, used, limit: 100 });
+    expect(block(view([], { billing: 'usd', used: USED }), { room: room(69) }).querySelector('[data-dock-room]')).toBeNull();
+    const full = block(view([], { billing: 'usd', used: USED }), { room: room(70) });
+    expect(full.querySelector('[data-dock-room="images"]')?.textContent).toBe('Conversation: 70% full (pictures 70 of 100)');
+    expect(block(view([], { billing: 'free' }), { room: room(90), newest: false }).querySelector('[data-dock-room]')).toBeNull();
+    const local = block(view([], { billing: 'free' }), { room: { reason: 'context', used: 92_000, limit: 102_400 } });
+    expect(local.querySelector('[data-dock-room="context"]')?.textContent).toBe('Conversation: 89% full (context 92,000 of 102,400 tokens)');
+    // A turn's money is the nearer line (Claude Opus 5.5 on $8 a turn): the readout names it.
+    const money = block(view([], { billing: 'usd', used: USED }), { room: { reason: 'context', used: 400_000, limit: 454_217, usd: 8 } });
+    expect(money.querySelector('[data-dock-room="context"]')?.textContent).toBe('Conversation: 88% full (context 400,000 of the 454,217 tokens $8.00 per turn can resend)');
+  });
+
+  it("a coding agent's conversation: how much of its own context the agent uses, under its meter, whatever the share; none before it said, and never for another billing", () => {
+    const agent = view([], { billing: 'agent_account', agent: { id: 'helper', name: 'Helper', version: null } });
+    const ctx = { used: 150_000, size: 200_000 };
+    const c = block(agent, { agentContext: ctx });
+    expect(c.querySelector('[data-dock-meter]')?.textContent).toBe("Billed to your Helper account (Magnusim can't see the cost)");
+    expect(c.querySelector('[data-dock-agent-context]')?.textContent).toBe('Context: 150,000 of 200,000 tokens (75%)');
+    expect(block(agent, { agentContext: { used: 2_000, size: 200_000 } }).querySelector('[data-dock-agent-context]')?.textContent).toBe('Context: 2,000 of 200,000 tokens (1%)');
+    expect(block(agent).querySelector('[data-dock-agent-context]')).toBeNull();
+    expect(block(agent, { agentContext: ctx, newest: false }).querySelector('[data-dock-agent-context]')).toBeNull();
+    expect(block(view([], { billing: 'free' }), { agentContext: ctx }).querySelector('[data-dock-agent-context]')).toBeNull();
+  });
+
   it('every end: its label and body, and no footer', () => {
     const end = (state: string, message: string | null, summary: Partial<TurnSummary> = {}) =>
       block(view([{ type: 'end', state, reason: 'x', message }], { state: state as TurnSummary['state'], ...summary }));
@@ -240,6 +271,11 @@ describe('the footer, the end and the meter', () => {
     expect(done.querySelector('[data-dock-phase]')).toBeNull();
     expect(end('stopped', 'Nothing was sent.').querySelector('[data-turn-end="stopped"]')?.textContent).toBe('StoppedNothing was sent.');
     expect(end('capped', 'The step limit was reached.').querySelector('[data-turn-end="capped"]')?.textContent).toBe('Limit reachedThe step limit was reached. Send another message to carry on.');
+    const dayEnd = block(view([{ type: 'end', state: 'capped', reason: 'day_usd', message: "Today's $15.00 limit is reached; it resets at midnight." }], { state: 'capped' }));
+    expect(dayEnd.querySelector('[data-turn-end="capped"]')?.textContent).toBe("Limit reachedToday's $15.00 limit is reached; it resets at midnight. Raise it in Settings → Assistant.");
+    // Its record only (the log dropped): the summary's end_reason says which limit.
+    const dayGone = block(view([], { state: 'capped', end_reason: 'day_usd', message: "Today's $15.00 limit is reached; it resets at midnight.", log_dropped: true }));
+    expect(dayGone.querySelector('[data-turn-end="capped"]')?.textContent).toContain('Raise it in Settings → Assistant.');
     expect(end('failed', 'The model declined this request.').querySelector('[data-turn-end="failed"]')?.textContent).toBe("Didn't finishThe model declined this request.");
     expect(end('done', null, { log_dropped: true, billing: 'free', used: USED }).textContent).toContain("This request's details are no longer kept.");
     const gone = block(markGone(emptyTurnView('t1')));

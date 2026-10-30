@@ -530,7 +530,7 @@ export function toolHost(ctx: Pick2, o: { frame: PlaneFrame; scene: SceneOptions
           const fromClip = v.from !== undefined && v.from.trim().toLowerCase() === 'clipboard';
           let held: SketchClip | null = null;
           if (fromClip) {
-            if (refs.some((r) => r !== 'all')) fail('value "from clipboard" pastes all of what the person copied: give refs ["all"] (or none) and at(u, v) where its middle goes', 'bad_ref');
+            if (refs.some((r) => r !== 'all')) fail('value "from clipboard" pastes all of what the person copied: give refs ["all"], or only an at(u, v) where its middle goes', 'bad_ref');
             held = await heldClip(services);
             if (!held) fail('value: the person has copied no sketch geometry (Ctrl+C in a sketch): nothing is on the clipboard', 'bad_ref');
           } else if (!refs.length) fail('copy takes what it copies: entities, whole macros ("r") or "all"', 'bad_ref');

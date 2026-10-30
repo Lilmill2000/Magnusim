@@ -20,7 +20,7 @@ import { noteJobState } from './turn-jobs.ts';
 
 /**
  * Where wait is offered (spec §15): in a workspace too, so a CAD turn can wait on a mesh or a
- * geometry update it started (the CAD Part's request: its 21 tools, then the app's 6).
+ * geometry update it started (the CAD Part's request: its 22 tools, then the app's 9).
  */
 export const WAIT_CONTEXTS: readonly Place[] = Object.freeze(['home', 'workbench', 'workspace']);
 export const WAIT_POLL_MS = 2_000;

@@ -19,6 +19,13 @@
  * - The minutes cap counts active time only: questions waiting for an answer don't count.
  * - A turn runs on the provider its start names, else its conversation's own, else the
  *   default; every check of the start is about that provider.
+ * - Continue in a new chat: a start without `conversation` may name `carry_from`, an earlier
+ *   conversation (its provider is the turn's when none is named). The new conversation's first
+ *   message carries what that one did (conversations.ts carried(), prompt.ts carryBlock).
+ *   Refused: 400 bad_carry (not an id, or with `conversation`), 400 carry_agent (a coding agent
+ *   on either side: it keeps its own history), 404 unknown_conversation, 409
+ *   conversation_changed (another provider or project: its words go only where they went
+ *   before, `field`), 409 conversation_busy (a turn runs in it).
  * - A turn's questions are answered only by the program that started it (the answer key
  *   of its 202) or by the app tab that shows them (its live relay link); see answerGate.
  * - A turn started with `link` (an app tab's live relay link: the window's dock, phase 4 spec
@@ -59,7 +66,9 @@ import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import { grants } from './grants.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
-import { Conversations, FULL_TEXT, type Conversation } from './conversations.ts';
+import { carriedFromSaved, Conversations, fullText, type Carried, type Conversation } from './conversations.ts';
+import { chatHistory, historyKey, HISTORY_LIMITS, type ChatHistory, type HistoryInput, type HistoryLine, type HistoryStep } from './history.ts';
+import { modelLabel } from './prices.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
 import type { ToolLink } from './links.ts';
@@ -71,7 +80,7 @@ import { checkPromptImages, cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
-import { isCloud, PROVIDER_LABELS } from './providers/index.ts';
+import { destinationOf, isCloud, PROVIDER_LABELS } from './providers/index.ts';
 import { ProviderError, type ImagePart, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
 import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agents/known.ts';
@@ -183,6 +192,8 @@ export interface TurnUsed {
   changes_cap: number;
   usd: number;
   usd_cap: number;
+  /** When dollars are counted: what is left for its next request (the smaller of its own limit's room and today's). */
+  usd_left?: number;
   active_ms: number;
   minutes_cap: number;
 }
@@ -236,16 +247,19 @@ export const TURN_TITLE_MAX = 60;
  * changes (calls that are not reads) against its change cap, and no dollars (usd and usd_cap 0:
  * its agent bills the person's own account); any other turn has no change cap (changes and
  * changes_cap 0). The caps are those in force, the lower of the turn's and the live settings, as
- * its runner last read them (the loop at each step, an agent turn at each call).
+ * its runner last read them (the loop at each step, an agent turn at each call). `conversation`:
+ * the conversation it runs in (the same id for each of that conversation's turns).
  */
 export interface TurnPageView {
   id: string;
   state: 'running' | 'ended';
   title: string;
+  conversation: string | null;
   local: boolean;
   context_tokens: number | null;
   images: boolean | null;
-  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number };
+  /** `usd_left` when dollars are counted: what is left for its next request, the smaller of its own limit's room and today's. */
+  used: { steps: number; steps_cap: number; changes: number; changes_cap: number; usd: number; usd_cap: number; usd_left?: number };
   end?: { state: EndState; reason: string };
   /** The review round it is in, once one started (loop.ts). */
   review?: { round: number; of: number };
@@ -388,6 +402,9 @@ export class Turn implements AnyTurn {
   releasedAt: number | null = null;
   /** Its log and pictures were dropped (past TURN_LIMITS.keptEnded): only its summary is kept. */
   logDropped = false;
+  /** Its tool steps as the chat history keeps them (the first HISTORY_LIMITS.steps; the rest counted), with their calls. */
+  private readonly toolSteps: Array<HistoryStep & { call: string }> = [];
+  private toolStepsLeftOut = 0;
 
   constructor(o: TurnInit) {
     this.id = o.id;
@@ -500,9 +517,63 @@ export class Turn implements AnyTurn {
     if (e.type === 'agent') this.agentVersion = e.version;
     if (e.type === 'tool_call') this.openCall = e.call;
     else if (e.type === 'tool_result' && e.call === this.openCall) this.openCall = null;
+    if (!this.closed) this.noteStep(e);
     this.push(e as TurnEventBody);
     // A call's result: the steps and money its tab's page shows moved on.
     if (e.type === 'tool_result') this.changed();
+  }
+
+  /** A tool step for the chat history: its call, then its result's line (never its data). */
+  private noteStep(e: RunnerEvent | TurnEventBody): void {
+    if (e.type === 'tool_call') {
+      if (this.toolSteps.length < HISTORY_LIMITS.steps) this.toolSteps.push({ call: e.call, step: e.step, tool: e.tool, title: e.title, ok: null, code: null, line: '' });
+      else this.toolStepsLeftOut += 1;
+    } else if (e.type === 'tool_result') {
+      for (let i = this.toolSteps.length - 1; i >= 0; i -= 1) {
+        const s = this.toolSteps[i];
+        if (s.call !== e.call) continue;
+        s.ok = e.ok;
+        s.code = e.ok ? null : (e.code ?? null);
+        s.line = e.summary;
+        break;
+      }
+    }
+  }
+
+  /**
+   * What the chat history keeps of it (history.ts), once it ended: the person's prompt, all the
+   * model said, its tool steps' lines, how it ended (and why its conversation is full now), where
+   * its words went, its usage and times. Never a picture or a result's data: those are not here
+   * to give.
+   */
+  historyInput(): HistoryInput {
+    const sum = this.summary();
+    const agent = isAgentSettings(this.settings) ? this.settings.agent : null;
+    const model = isModelSettings(this.settings) ? this.settings : null;
+    const full = model ? this.conv.fullDetail(model.base_url, model.caps.turn_usd) : null;
+    return {
+      turn: this.id,
+      conversation: this.conv.id,
+      project_id: this.conv.projectId,
+      provider: this.settings.provider,
+      destination: destinationOf({ provider: this.settings.provider, base_url: model?.base_url ?? '' }),
+      label: agent ? agent.name : (PROVIDER_LABELS[this.settings.provider as ProviderId] ?? this.settings.provider),
+      model: this.settings.model,
+      title: this.conv.title || sum.title,
+      prompt: this.prompt,
+      pictures: sum.prompt_images.length,
+      files: this.attachments.map((a) => a.name),
+      answer: this.textSoFar(),
+      steps: this.toolSteps.map((x) => ({ step: x.step, tool: x.tool, title: x.title, ok: x.ok, code: x.code, line: x.line })),
+      steps_left_out: this.toolStepsLeftOut,
+      end: { state: this.state, reason: this.endReason ?? this.state, message: this.message },
+      full: full ? fullText(full, modelLabel(this.conv.model)) : null,
+      usage: { usd: sum.usd, estimated: sum.estimated, tokens: this.tokens, steps: sum.used.steps, billing: sum.billing },
+      started_by: this.startedBy,
+      started_at: sum.started_at,
+      ended_at: sum.ended_at ?? new Date(this.clock.now()).toISOString(),
+      carried_from: this.conv.carriedFrom,
+    };
   }
 
   /** A write of one of its calls (C2): the log's `ui_sync` row, under the call that made it. */
@@ -543,7 +614,12 @@ export class Turn implements AnyTurn {
   setUsed(limits: PageLimits, agent: { calls: number; changes: number } | null = null, tell = false): void {
     const l = this.limits;
     const a = this.agentCounts;
-    const moved = limits.steps !== l.steps || limits.usd !== l.usd || limits.changes !== l.changes || (agent !== null && (agent.calls !== a.calls || agent.changes !== a.changes));
+    const moved =
+      limits.steps !== l.steps ||
+      limits.usd !== l.usd ||
+      limits.changes !== l.changes ||
+      limits.usdLeft !== l.usdLeft ||
+      (agent !== null && (agent.calls !== a.calls || agent.changes !== a.changes));
     if (!moved) return;
     this.limits = { ...limits };
     if (agent) this.agentCounts = { calls: agent.calls, changes: agent.changes };
@@ -617,6 +693,13 @@ export class Turn implements AnyTurn {
       .map(([, text]) => text.trim())
       .filter(Boolean)
       .join('\n\n');
+  }
+
+  /** Its last step's text, the answer it ended with ('' when it said nothing). */
+  lastWords(): string {
+    let at = -1;
+    for (const [step, text] of this.stepText) if (step > at && text.trim()) at = step;
+    return at < 0 ? '' : (this.stepText.get(at) as string).trim();
   }
 
   /** Events after `since` (marks them read). */
@@ -904,6 +987,8 @@ export class Turn implements AnyTurn {
     this.push({ type: 'state', state });
     this.push({ type: 'end', state, reason: this.endReason, message: this.message });
     this.closed = true;
+    // What a conversation that continues this one carries (Continue in a new chat).
+    this.conv.noteEnd({ state, reason: this.endReason, message: this.message }, this.lastWords());
     alog('info', 'turn ended', {
       id: this.id,
       provider: this.settings.provider,
@@ -964,7 +1049,7 @@ export class Turn implements AnyTurn {
     const l = this.limits;
     return isAgentSettings(this.settings)
       ? { steps: this.agentCounts.calls, steps_cap: l.steps, changes: this.agentCounts.changes, changes_cap: l.changes, usd: 0, usd_cap: 0 }
-      : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd };
+      : { steps: this.calls, steps_cap: l.steps, changes: 0, changes_cap: 0, usd: round6(this.usd), usd_cap: l.usd, ...(l.usdLeft !== undefined ? { usd_left: round6(l.usdLeft) } : {}) };
   }
 
   /** What it used so far of its limits, for its tools (ToolCtx.used; app_status shows it). */
@@ -972,7 +1057,9 @@ export class Turn implements AnyTurn {
     const u = this.usedNow();
     const minutes = Math.round((u.active_ms / 60_000) * 10) / 10;
     const base = { steps: u.steps, steps_cap: u.steps_cap, minutes, minutes_cap: u.minutes_cap };
-    return isAgentSettings(this.settings) ? { ...base, changes: u.changes, changes_cap: u.changes_cap } : { ...base, usd: u.usd, usd_cap: u.usd_cap };
+    return isAgentSettings(this.settings)
+      ? { ...base, changes: u.changes, changes_cap: u.changes_cap }
+      : { ...base, usd: u.usd, usd_cap: u.usd_cap, ...(u.usd_left !== undefined ? { usd_left: u.usd_left } : {}) };
   }
 
   /** The summary's counters: the page's, its active time and its minutes in force (as armed; its start's before). */
@@ -989,6 +1076,7 @@ export class Turn implements AnyTurn {
       id: this.id,
       state: ended ? 'ended' : 'running',
       title: this.title(),
+      conversation: this.conv?.id ?? null,
       local: this.settings.provider === 'openai_compatible',
       context_tokens: this.contextTokens,
       images: this.images,
@@ -1085,6 +1173,8 @@ export interface TurnManagerDeps {
   registry: Registry;
   projects(id: string, o: { signal: AbortSignal; turn: string }): Promise<ProjectInfo | null>;
   remember(projectId: string, createdAt: string | null, destination: string): Promise<void>;
+  /** Where each request's end is saved, and a saved chat is found again (tests: their own; else the Assistant home's). */
+  history?: ChatHistory;
   presenter?: GatePresenter;
   clock?: Clock;
   gateTimeoutMs?: number;
@@ -1167,6 +1257,12 @@ const isAgentChoice = (p: unknown): p is AgentProviderId => typeof p === 'string
 export const agentUnknownText = (id: string) => `No coding agent called ${cleanText(id, 40) || '(none)'}. Settings → Assistant lists them.`;
 
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
+export const CARRY_WITH_CONVERSATION_TEXT = 'carry_from starts a new conversation: send it without conversation.';
+export const CARRY_AGENT_TEXT = 'A coding agent keeps its own history, so a conversation with one is not carried into a new one. Start a new conversation.';
+export const CARRY_GONE_TEXT = 'That conversation has ended, and History has no saved copy of it (it keeps 31 days). Start a new one.';
+
+/** A chat the history saved (history.ts find): its project's folder and its requests. */
+type SavedChat = { key: string; lines: HistoryLine[] };
 
 /** How long the conversation list keeps a project's title. */
 const PROJECT_TITLE_MS = 60_000;
@@ -1318,6 +1414,21 @@ export class TurnManager {
     };
   }
 
+  /** The chat history this manager saves to (history.ts). */
+  history(): ChatHistory {
+    return this.d.history ?? chatHistory();
+  }
+
+  /** A turn ended: its line goes to the chat history (written after, never awaited), and its listeners hear it. */
+  private ended(t: Turn): void {
+    try {
+      void this.history().append(t.historyInput());
+    } catch (err) {
+      alog('warn', 'a request could not be saved to the chat history', { error: redact(err instanceof Error ? err.message : String(err)).slice(0, 200) });
+    }
+    this.turnChanged(t, 'ended');
+  }
+
   private turnChanged(t: Turn, change: TurnChange): void {
     for (const fn of [...this.turnListeners]) {
       try {
@@ -1380,6 +1491,7 @@ export class TurnManager {
   /** A turn starts in `conv`: listed there; the turn that falls out of its newest kept ones is released. */
   private listInConversation(conv: Conversation, t: Turn): void {
     conv.addTurn(t.id, t.title());
+    conv.notePrompt(t.prompt);
     const out = conv.turns[conv.turns.length - 1 - TURN_LIMITS.keptPerConversation];
     const old = out ? this.turns().get(out) : undefined;
     if (old) old.releasedAt ??= this.clock.now();
@@ -1481,6 +1593,16 @@ export class TurnManager {
     return this.startOnce(body, launch, 1);
   }
 
+  /** A conversation's saved chat (history.ts), or null when none is saved (or it can't be read). */
+  private async savedChat(id: string): Promise<SavedChat | null> {
+    try {
+      return await this.history().find(id);
+    } catch (err) {
+      alog('warn', 'a saved chat could not be read', { error: redact(err instanceof Error ? err.message : String(err)).slice(0, 200) });
+      return null;
+    }
+  }
+
   /** One pass of start()'s checks; an agent whose switch went off while they ran is checked again. */
   private async startOnce(body: Record<string, unknown>, launch: LaunchProof, attempt: number): Promise<Answer> {
     // Before the first await (the settings read): see agentHost().offSince().
@@ -1495,6 +1617,9 @@ export class TurnManager {
     const convId = optionalId(body.conversation);
     const tab = optionalId(body.tab);
     if (convId === false) return refuse(400, 'bad_conversation', 'That is not a conversation id.');
+    const carryId = optionalId(body.carry_from);
+    if (carryId === false) return refuse(400, 'bad_carry', 'carry_from is a conversation id.');
+    if (carryId && convId) return refuse(400, 'bad_carry', CARRY_WITH_CONVERSATION_TEXT);
     if (tab === false) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
     if (body.context !== undefined && body.context !== null && !isRecord(body.context)) return refuse(400, 'bad_context', 'context must be an object.');
     const context = isRecord(body.context) ? body.context : {};
@@ -1507,9 +1632,16 @@ export class TurnManager {
 
     const settings = await this.d.settings();
     // The turn's provider: the one its start names, else its conversation's own (a conversation
-    // stays bound to its provider), else the default. Every check below is about this one.
-    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? settings.provider;
+    // stays bound to its provider), else the one it continues, else the default. Every check
+    // below is about this one. The one it continues may be gone from memory (a restart, the
+    // 2-hour expiry, Forget) and saved in the chat history: that copy stands in for it.
+    const carryFrom = carryId ? this.conversations.get(carryId) : null;
+    const saved = carryId && !carryFrom ? await this.savedChat(carryId) : null;
+    const carriedProvider = carryFrom?.provider ?? (saved ? (saved.lines[saved.lines.length - 1].provider as ProviderId | AgentProviderId) : undefined);
+    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? carriedProvider ?? settings.provider;
     if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
+    // A coding agent keeps its own history: nothing is carried to or from one.
+    if (carryId && (isAgentChoice(provider) || (carriedProvider !== undefined && isAgentChoice(carriedProvider)))) return refuse(400, 'carry_agent', CARRY_AGENT_TEXT);
     if (isAgentChoice(provider)) {
       const agentId = agentIdOf(provider);
       if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
@@ -1585,7 +1717,29 @@ export class TurnManager {
       const field = conv.mismatch(binding);
       if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
-      if (conv.fullReason(settings.base_url)) return refuse(409, 'conversation_full', FULL_TEXT);
+      const full = conv.fullDetail(settings.base_url, settings.caps.turn_usd);
+      if (full) {
+        alog('info', 'conversation full', { conversation: conv.id, reason: full.reason, used: full.used, limit: full.limit });
+        return refuse(409, 'conversation_full', fullText(full, modelLabel(conv.model)));
+      }
+    }
+    // Continue in a new chat: what the earlier conversation did, as it is now (or as the chat
+    // history saved it, once it is gone).
+    let carry: Carried | null = null;
+    if (carryId) {
+      const from = this.conversations.get(carryId);
+      if (!from && !saved) return refuse(404, 'unknown_conversation', CARRY_GONE_TEXT);
+      // Its words go only to the provider they went to, about the same project (or Home).
+      const was = from ? { provider: from.provider, project: historyKey(from.projectId ?? null) } : { provider: carriedProvider, project: (saved as SavedChat).key };
+      const field = was.provider !== provider ? 'provider' : was.project !== historyKey(projectId || null) ? 'project' : null;
+      if (field) return refuse(409, 'conversation_changed', `That conversation is bound to another ${field}, so it can't be continued here. Start a new one.`, { field });
+      if (from?.running) return refuse(409, 'conversation_busy', 'A turn is still running in that conversation. Wait for it, or stop it.');
+      if (from) {
+        const full = from.fullDetail(settings.base_url, settings.caps.turn_usd);
+        carry = from.carried(full ? fullText(full, modelLabel(from.model)) : null);
+      } else {
+        carry = carriedFromSaved(carryId, (saved as SavedChat).lines);
+      }
     }
     // The window still has its link (the checks above awaited).
     if (linkGiven && this.tabOfLink(body.link) !== linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
@@ -1594,6 +1748,10 @@ export class TurnManager {
     const refused = this.admitRefusal(boundTab);
     if (refused) return refused;
     if (!conv) conv = this.conversations.create(binding);
+    if (carry) {
+      conv.carry = carry;
+      alog('info', 'conversation continued', { conversation: conv.id, from: carry.from, prompts: carry.prompts.length, left_out: carry.promptsLeftOut, saved: !!saved });
+    }
     this.bindAttachments(attached, conv.id);
     const turnSettings: TurnSettings = {
       kind: 'model',
@@ -1618,7 +1776,7 @@ export class TurnManager {
       gates: this.gates,
       startedBy: linkTab ? 'window' : 'program',
       showTab: linkTab ?? boundTab,
-      onEnded: (ended) => this.turnChanged(ended, 'ended'),
+      onEnded: (ended) => this.ended(ended),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
     // The person's pictures, kept for the window before anyone hears of the turn: its summary's
@@ -1751,7 +1909,7 @@ export class TurnManager {
       gates: this.gates,
       startedBy: shownBy ? 'window' : 'program',
       showTab: shownBy ?? boundTab,
-      onEnded: (ended) => this.turnChanged(ended, 'ended'),
+      onEnded: (ended) => this.ended(ended),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
     // The person's pictures, kept for the window as a model turn's are (prompt_images p1..p4).
@@ -1906,7 +2064,8 @@ export class TurnManager {
   /**
    * GET /api/assistant/conversations[?project=<id>|home] (phase 4 spec 9.3): each conversation
    * this server holds, newest use first, with its kept turns (oldest first) and how many are no
-   * longer kept. `project`: only that project's ('home': those with none).
+   * longer kept. `project`: only that project's ('home': those with none). A coding agent's says
+   * how much of its context its agent uses (`context`, its last usage_update).
    */
   async conversationsView(project: string | null): Promise<Answer> {
     if (project !== null && project !== 'home' && !ID_RE.test(project)) return refuse(400, 'bad_project', 'project is a project id, or home.');
@@ -1922,6 +2081,7 @@ export class TurnManager {
     const conversations = convs.map((c) => {
       const kept = c.turns.map((id) => this.turns().get(id)).filter((t): t is Turn => !!t && t.conv === c);
       const agent = isAgentChoice(c.provider) ? agentIdOf(c.provider) : null;
+      const full = c.fullDetail(settings.base_url, settings.caps.turn_usd);
       return {
         id: c.id,
         provider: c.provider,
@@ -1933,7 +2093,11 @@ export class TurnManager {
         created_at: iso(c.createdAt),
         last_used_at: iso(c.lastUsed),
         running: c.running,
-        full: c.fullReason(settings.base_url),
+        full: full?.reason ?? null,
+        full_text: full ? fullText(full, modelLabel(c.model)) : null,
+        room: c.room(settings.base_url, settings.caps.turn_usd),
+        // A coding agent's: how much of its own context it uses (it shortens its memory itself).
+        context: isAgentChoice(c.provider) && c.agentContext ? { ...c.agentContext } : null,
         title: c.title,
         turns: kept.map((t) => ({ id: t.id, title: t.title(), state: t.state, started_at: iso(t.startedAt), ended_at: t.endedAt === null ? null : iso(t.endedAt), started_by: t.startedBy })),
         dropped_turns: c.turnsDropped + (c.turns.length - kept.length),

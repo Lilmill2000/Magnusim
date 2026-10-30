@@ -578,6 +578,17 @@ declare module '@magnusim/workspace' {
       tool: string;
       /** The input, already checked against the tool's inputSchema. */
       input: Record<string, unknown>;
+      /**
+       * The call's place in its step: one answer of the model, whose calls run one after another
+       * (unreleased, 1.9). `step` numbers the answers of the turn from 1; `callsLeftInStep` is how many
+       * calls of that answer come after this one; `editsLeftInStep` how many of those are this page's
+       * `edit` or `destructive` tools (of the workspace the turn is bound to). A page that shows the
+       * model a picture after its edits can take it once, when no edit follows. Absent for a call from
+       * another app on this PC (MCP) or a coding agent, and on an older host.
+       */
+      step?: number;
+      callsLeftInStep?: number;
+      editsLeftInStep?: number;
       /** Aborted when the user stops the turn, the call stalls, or the workspace closes: stop then, and change nothing more. */
       signal: AbortSignal;
       /**
@@ -673,6 +684,11 @@ declare module '@magnusim/workspace' {
       state: 'running' | 'ended';
       /** The first line of the person's request, as plain text, at most 60 characters ("Assistant: <title>" names an undo step well). */
       title: string;
+      /**
+       * The conversation it runs in (unreleased, 1.9): the same for each turn of one conversation,
+       * so a page can keep what it tells the model per conversation. Absent on an older host.
+       */
+      conversation?: string | null;
       /** It runs on a local server (a smaller model, often with less room: keep results short). */
       local: boolean;
       /** The model's context in tokens, when the app knows it (null otherwise). */
@@ -685,7 +701,10 @@ declare module '@magnusim/workspace' {
        * cap, and no dollars: `usd` and `usdCap` are 0 (the agent bills the person's own account). It
        * also counts its changes (its calls of tools that are not reads) against its change limit:
        * past `changesCap`, its changes are refused while its reads go on. `changesCap` is 0 for any
-       * other turn (no such limit).
+       * other turn (no such limit). `usdLeft`, when dollars are counted, is what is left for its next
+       * request: the smaller of what its own limit and the person's daily limit leave (other requests
+       * spend from the day too), so it can be less than `usdCap - usd`. Absent on a local server, for
+       * a coding agent and on an older host.
        */
       used: {
           steps: number;
@@ -694,6 +713,7 @@ declare module '@magnusim/workspace' {
           changesCap: number;
           usd: number;
           usdCap: number;
+          usdLeft?: number;
       };
       /** How it ended (with `ended`); absent when this page did not hear it end (its tab's link was down then). */
       end?: {

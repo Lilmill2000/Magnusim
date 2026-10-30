@@ -38,6 +38,8 @@ import { viewportCommands } from '../../src/viewport/commands';
 import { sectionPlane } from '../../src/viewport/section';
 import { snapshotClip } from '../../src/viewport/snapshot';
 import { createViewport } from '../../src/viewport/viewport';
+import { SEE_THROUGH_OPACITY } from '../../src/viewport/materials';
+import { PARITY_MASK } from '../../src/viewport/onface';
 
 /** What the stand-in renderer saw at each render call. */
 interface Seen {
@@ -52,6 +54,12 @@ interface Seen {
   clips: Record<string, number[][]>;
   /** The section caps' stencil meshes of each body: shown or not, and their clipping plane. */
   stencils: Record<string, { visible: boolean; clip: number[] | null }[]>;
+  /** The same for the see-through bodies' caps (section.ts SectionCaps seeThrough). */
+  seeStencils: Record<string, { visible: boolean; clip: number[] | null }[]>;
+  /** Each body's surface material as drawn: translucent or not, its depth writes and opacity. */
+  surface: Record<string, { transparent: boolean; depthWrite: boolean; opacity: number }>;
+  /** The caps' materials (by cap name): translucent or not, depth writes, opacity, the stencil bits they write. */
+  caps: Record<string, { transparent: boolean; depthWrite: boolean; opacity: number; writeMask: number }>;
   /** Line resolution of each body's edges. */
   resolution: Record<string, [number, number]>;
 }
@@ -103,8 +111,8 @@ vi.mock('three', async (importOriginal) => {
     }
     render(scene: Object3D, camera: { isOrthographicCamera?: boolean }) {
       gpu.log.push('render');
-      const s: Seen = { toTarget: !!this.target, ortho: !!camera.isOrthographicCamera, scissor: !!this.target?.scissorTest, visible: {}, lit: {}, clips: {}, stencils: {}, resolution: {} };
-      type Clipped = Mesh & { material: { clippingPlanes?: Parameters<typeof planeOf>[0][] | null; resolution?: { x: number; y: number } } };
+      const s: Seen = { toTarget: !!this.target, ortho: !!camera.isOrthographicCamera, scissor: !!this.target?.scissorTest, visible: {}, lit: {}, clips: {}, stencils: {}, seeStencils: {}, surface: {}, caps: {}, resolution: {} };
+      type Clipped = Mesh & { material: { clippingPlanes?: Parameters<typeof planeOf>[0][] | null; resolution?: { x: number; y: number }; transparent: boolean; depthWrite: boolean; stencilWriteMask: number; uniforms?: { uOpacity?: { value: number } } } };
       // A stencil mesh draws its body's geometry: the body it belongs to.
       const bodyOf = new Map<unknown, string>();
       scene.traverse((o) => {
@@ -117,11 +125,15 @@ vi.mock('three', async (importOriginal) => {
           const id = o.name.slice(5);
           s.lit[id] = Array.from(m.geometry.getAttribute('hl').array as Uint8Array).reduce((a, b) => a + b, 0);
           s.clips[id] = (m.material.clippingPlanes ?? []).map(planeOf);
+          s.surface[id] = { transparent: m.material.transparent, depthWrite: m.material.depthWrite, opacity: m.material.uniforms!.uOpacity!.value };
         }
-        if (o.name === 'section-stencil') {
+        if (o.name === 'section-stencil' || o.name === 'section-stencil-see-through') {
           const id = bodyOf.get(m.geometry) ?? '?';
           const c = m.material.clippingPlanes?.[0];
-          (s.stencils[id] ??= []).push({ visible: o.visible, clip: c ? planeOf(c) : null });
+          ((o.name === 'section-stencil' ? s.stencils : s.seeStencils)[id] ??= []).push({ visible: o.visible, clip: c ? planeOf(c) : null });
+        }
+        if (o.name === 'section-cap' || o.name === 'section-cap-see-through') {
+          s.caps[o.name] = { transparent: m.material.transparent, depthWrite: m.material.depthWrite, opacity: m.material.uniforms!.uOpacity!.value, writeMask: m.material.stencilWriteMask };
         }
         if (o.name.startsWith('edges:')) s.resolution[o.name.slice(6)] = [m.material.resolution!.x, m.material.resolution!.y];
       });
@@ -441,7 +453,7 @@ describe('snapshot', () => {
     await vi.waitFor(() => expect(h.state.get().bvhPending).toBe(0));
     // The person's view: a face selected, the pointer hovering a face of b_1, a list row flashing a
     // face of b_2, a section on, a manipulator and a sketch layer shown, and a layer with a plain hook.
-    h.setSection({ on: true, plane: 'origin:right', offset: 5 });
+    h.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:right' }, offset: 5 });
     h.highlight([{ kind: 'face', body: 'b_1', index: 4 }]);
     // Hovered: a face of b_1 the selection does not light (lit counts it apart from the pick).
     const at = h.project([2, 5, 5])!;
@@ -587,7 +599,7 @@ describe('snapshot', () => {
     const { h, gl } = viewport();
     withCube(h);
     // The view's own section on: in wireframe it draws no caps; a picture without a cut has none either.
-    h.setSection({ on: true, plane: 'origin:top', offset: 5 });
+    h.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:top' }, offset: 5 });
     for (const [display, mesh, edges, caps] of [
       ['wireframe', false, true, false],
       ['shaded', true, false, true],
@@ -609,6 +621,49 @@ describe('snapshot', () => {
       expect(gl.seen[0].visible, `${display}: the next frame`).toMatchObject({ 'body:b_1': mesh, 'edges:b_1': edges, 'body:b_2': mesh, 'edges:b_2': edges, 'section-caps': caps });
       expect(gl.seen[0].clips.b_1).toHaveLength(1);
     }
+  });
+
+  it("a see-through body: translucent with its edges, no depth writes; a cut caps it with a translucent cap of its own (never the opaque bodies' cap); a picture draws it so; opaque again, all as before", async () => {
+    const { h, gl } = viewport();
+    withCube(h);
+    const cut = { on: true, plane: { kind: 'origin' as const, plane: 'origin:top' as const }, offset: 5 };
+    h.setSection(cut);
+    const frame = async () => {
+      gl.seen.length = 0;
+      await vi.waitFor(() => expect(gl.seen.length).toBeGreaterThan(0));
+      return gl.seen[0];
+    };
+    // The person makes b_2 see-through (the same bodies, the view's flag): the view draws it again, no new geometry.
+    h.setBodies([
+      { id: 'b_1', color: '#bdc9db', visible: true, tessKey: 'k1', tess: cubeTess([0, 0, 0], 10) },
+      { id: 'b_2', color: '#d02828', visible: true, tessKey: 'k2', tess: cubeTess([20, 0, 0], 10), seeThrough: true },
+    ]);
+    let f = await frame();
+    expect(f.surface.b_1).toEqual({ transparent: false, depthWrite: true, opacity: 1 });
+    expect(f.surface.b_2).toEqual({ transparent: true, depthWrite: false, opacity: SEE_THROUGH_OPACITY });
+    expect(f.visible).toMatchObject({ 'body:b_2': true, 'edges:b_2': true, 'section-caps': true, 'section-caps-see-through': true });
+    expect(h.stats().opacity).toEqual({ b_1: 1, b_2: SEE_THROUGH_OPACITY });
+    // The cut: b_1 counts for the opaque cap, b_2 for its own translucent one (no depth, only the count's bits).
+    const viewCut = planeOf(sectionPlane(h.state.get().section, new Plane()));
+    expect(f.stencils).toEqual({ b_1: [{ visible: true, clip: viewCut }, { visible: true, clip: viewCut }] });
+    expect(f.seeStencils).toEqual({ b_2: [{ visible: true, clip: viewCut }, { visible: true, clip: viewCut }] });
+    expect(f.caps['section-cap']).toMatchObject({ transparent: false, depthWrite: true, opacity: 1 });
+    expect(f.caps['section-cap-see-through']).toEqual({ transparent: true, depthWrite: false, opacity: SEE_THROUGH_OPACITY, writeMask: PARITY_MASK });
+    // A picture with a cut of its own: b_2 see-through there too, cut by its own cap.
+    gl.seen.length = 0;
+    h.snapshot!({ view: 'iso', width: 64, height: 64, hide: [], section: { plane: 'front', offset: 0, flip: false } });
+    const snapCut = planeOf(snapshotClip({ plane: 'front', offset: 0, flip: false }));
+    expect(gl.seen[0].surface.b_2).toEqual({ transparent: true, depthWrite: false, opacity: SEE_THROUGH_OPACITY });
+    expect(gl.seen[0].stencils).toEqual({ b_1: [{ visible: true, clip: snapCut }, { visible: true, clip: snapCut }] });
+    expect(gl.seen[0].seeStencils).toEqual({ b_2: [{ visible: true, clip: snapCut }, { visible: true, clip: snapCut }] });
+    expect(gl.seen[0].visible).toMatchObject({ 'section-caps': true, 'section-caps-see-through': true });
+    // Opaque again: as it was, every body in the one cap.
+    withCube(h);
+    f = await frame();
+    expect(f.surface.b_2).toEqual({ transparent: false, depthWrite: true, opacity: 1 });
+    expect(Object.keys(f.stencils).sort()).toEqual(['b_1', 'b_2']);
+    expect(f.seeStencils).toEqual({});
+    expect(h.stats().opacity).toEqual({ b_1: 1, b_2: 1 });
   });
 
   it('visibleFaceAt: the face of that body in front at a picture pixel, else null', async () => {

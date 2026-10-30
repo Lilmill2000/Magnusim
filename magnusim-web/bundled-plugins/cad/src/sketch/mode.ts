@@ -78,6 +78,9 @@ export interface ValueBox {
   quantity: 'length' | 'angle';
 }
 
+/** How the Sketch panel's foot shows a note (SketchView.noteTone). */
+export type SketchNoteTone = 'error' | 'info' | 'warning';
+
 export interface SketchView {
   /** What is drawn: the session's draft, or the geometry of a drag in progress. */
   draft: SketchFeature | null;
@@ -86,8 +89,14 @@ export interface SketchView {
   status: SketchStatus | null;
   hover: SketchHit | null;
   preview: SketchPreview | null;
-  /** The last refused action, in words (the panel's foot). */
+  /** The last refused action, in words (the panel's foot); or what an action did (noteTone). */
   note: string | null;
+  /**
+   * How the foot shows the note: 'error' (absent) a refusal or a failure, in the red of a reason;
+   * 'info' what an action did (Copied 4 lines...), plain; 'warning' what it did only in part
+   * (something left out), amber. A success never shows as a failure.
+   */
+  noteTone?: SketchNoteTone;
   /** P4b fu2 (SKETCH): what the last edit did to a pattern by itself ("Linear pattern 1 now starts from Circle 1"), with Dissolve. */
   tieNotice?: import('./tools/ties').TieNotice | null;
   /** "Make it driven?" */
@@ -173,6 +182,12 @@ export interface SketchTool {
   dragDraw?(): boolean;
   /** The press that just ended was the tool's own drag (the line's tangent arc, a fillet's radius arrow): no click is made of it. */
   ownsDrag?(): boolean;
+  /**
+   * What the tool shows that counts when the view frames the sketch (Fit, a standard view, Look
+   * at), as the sketch's own curves do: its u/v box (min, max), or null. Import SVG/DXF's drawing,
+   * previewed before anything of it is in the sketch.
+   */
+  frameUv?(): [Vec2, Vec2] | null;
 }
 
 export type ToolFactory = (mode: SketchMode, id: SketchToolId) => SketchTool;
@@ -662,8 +677,9 @@ export class SketchMode implements SketchModeApi {
     this.select([], false);
   }
 
-  note(text: string | null) {
-    this.view.set({ note: text });
+  /** The panel's foot: a refusal (red, the default), or what an action did ('info'; 'warning' when only in part). */
+  note(text: string | null, tone: SketchNoteTone = 'error') {
+    this.view.set({ note: text, noteTone: tone });
   }
 
   setPreview(p: SketchPreview | null) {

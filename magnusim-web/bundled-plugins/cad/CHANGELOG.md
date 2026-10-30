@@ -53,6 +53,56 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   and after a delete so slow that comparing would take too long. Retrying in
   two goes stops after about 5 s.
 
+**See-through bodies.**
+- INSPECT > See-through draws the selected bodies see-through (a selected face
+  counts for its body): what is inside and behind them shows, their edges stay,
+  and a click goes through them to an opaque face behind. Run again while all of
+  them are see-through and they are opaque again; a mix all turn see-through. It
+  is in Settings > Keybinds (no key by default) and refuses, with the reason,
+  when no body is selected.
+- A body's menu (its Bodies row, or a right-click on it in the view) has
+  **Make Body 1 see-through** and **Make Body 1 opaque**, next to Hide. The
+  Bodies row shows a see-through mark of its own (a hidden body is dimmed; a body
+  can be both).
+- A section cuts a see-through body with a see-through cap: a body inside it
+  keeps its own cap and shows through.
+- It is a view, as hiding is: no undo step, never in the model or the
+  simulation; the Part keeps it when it is opened again. Pictures (the Assistant's
+  and the Picture panel's) draw see-through bodies see-through, as they leave
+  out hidden ones; the picture after an Assistant's edit names them. A new body
+  made from a see-through one (a split's other pieces, a copy) starts opaque, as
+  it starts shown when its source is hidden.
+- The Assistant's workspace see_through and opaque do the same (a body, or
+  several); get_model's parts, the body tool and the view tool say which bodies
+  are see-through.
+
+**Section view on any plane, with an arrow to drag.**
+- INSPECT > Section view (key X, in Settings > Keybinds) opens a panel with the
+  view cut. The plane can be Top, Front or Right, a construction plane (the cut
+  follows its own normal, so a plane at an angle cuts at that angle) or a flat
+  face: click it in the view or the tree. The panel names the plane and says
+  where the cut is and which side it keeps.
+- Offset is a typed length (the Part's units, parameters and expressions as any
+  length field), with Middle and Keep the other side, and Cut the view turns it
+  off. An arrow on the cut, along the plane's normal, moves it when dragged, and
+  Offset follows (Ctrl: whole millimetres).
+- The cut follows its plane when an edit moves it (a construction plane turned
+  by a parameter, a face that moves as its extrude grows). A deleted plane turns
+  the section off with a note, and the next cut starts on Front. With the
+  rollback bar above the plane the cut stays where it was, and the note says it
+  is rolled back.
+- The section is kept with the Part (no undo step) and comes back when it is
+  opened again; opened with the bar above its plane, the Part keeps it and it
+  comes back once the plane builds. The view tools' section button drives the
+  same cut and names a construction plane or face it is on; its More opens the
+  panel. The button and INSPECT > Section view turn the cut on where its plane
+  is now.
+- The Assistant's workspace section and view section take the same planes (a
+  construction plane by name, a flat face, "selection", with offset or middle
+  and flip); its answer and get_model name the plane (a face with its selector,
+  which they take back) and say the panel's note. The Picture panel's Section
+  takes a construction plane or the selected flat face too.
+
 **Copy and paste sketch geometry.**
 - In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C
   (or right-click > Copy): the panel says what was copied. Ctrl+V (or

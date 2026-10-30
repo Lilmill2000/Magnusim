@@ -149,14 +149,24 @@ export interface BodyRow {
    * every body where the host has no projects (Magnusim CAD: no simulation).
    */
   inSimulation: boolean | null;
+  /**
+   * Drawn see-through: 'view' the person made it so (CadView.seeThroughBodies), 'feature' its
+   * feature always draws it so (an Enclosure's air, `o.alwaysSeeThrough`); null opaque.
+   */
+  seeThrough: 'view' | 'feature' | null;
 }
 
 /**
  * Bodies at the rollback position, in creation order (the order the document
  * made them: Body 1, Body 2, Body 3, whatever the history did to them since),
- * with the saved names and visibility.
+ * with the saved names, visibility and see-through.
  */
-export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hiddenBodies'>, bodies: BodyInfo[], o: { projectLinks?: boolean } = {}): BodyRow[] {
+export function bodyRows(
+  doc: Pick<CadDoc, 'bodies'>,
+  view: Pick<CadView, 'hiddenBodies' | 'seeThroughBodies'>,
+  bodies: BodyInfo[],
+  o: { projectLinks?: boolean; alwaysSeeThrough?: (id: BodyId) => boolean } = {},
+): BodyRow[] {
   // A surface body (measured: no solid) has no simulation toggle: it is never sent. Nor has any
   // body in Magnusim CAD (projectLinks false): it has no simulation.
   const links = o.projectLinks !== false;
@@ -174,6 +184,7 @@ export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hidde
     feature: b.feature,
     valid: b.valid,
     inSimulation: !links || b.solids === 0 ? null : doc.bodies[b.id]?.simulation !== false,
+    seeThrough: o.alwaysSeeThrough?.(b.id) ? 'feature' : view.seeThroughBodies?.includes(b.id) ? 'view' : null,
   }));
 }
 

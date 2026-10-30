@@ -5,7 +5,7 @@
 // can't be written never fails a request.
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,8 @@ process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 for (const k of Object.keys(process.env)) {
   if (k.startsWith('MAGNUSIM_TEST_ASSISTANT') || k.startsWith('MAGNUSIM_ASSISTANT_DEBUG') || k.startsWith('ANTHROPIC_') || k.startsWith('OPENAI_')) delete process.env[k];
 }
+// Magnusim CAD's server log (set only where a test says so).
+delete process.env.MAGNUSIM_SERVER_LOG;
 process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
 const LOG_DIR = join(ROOT, 'debug');
@@ -27,7 +29,23 @@ process.env.MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL = fake.base;
 
 const { createAdapter } = await import('../assistant/providers/index.ts');
 const { STRICT_FALLBACK_NOTE, strictReducedNote } = await import('../assistant/providers/common.ts');
-const { debugCall, debugLogDir, flushDebugLog, resetDebugLogForTests, withDebugScope, DEBUG_LOG_FILE, DEBUG_LOG_ENV } = await import('../assistant/debug-log.ts');
+const {
+  debugCall,
+  debugLogDir,
+  debugLogEnvDir,
+  flushDebugLog,
+  providerLogDir,
+  resetDebugLogForTests,
+  serverLogFile,
+  serverLogIn,
+  withDebugScope,
+  DEBUG_LOG_FILE,
+  DEBUG_LOG_OLD,
+  DEBUG_LOG_ENV,
+  PROVIDER_LOG_MAX,
+  SERVER_LOG_ENV,
+} = await import('../assistant/debug-log.ts');
+const { loadSettings, saveSettings } = await import('../assistant/settings.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { resetAssistantState } = await import('../assistant/state.ts');
 
@@ -238,6 +256,106 @@ describe('the provider debug log', () => {
       assert.equal(r2.stop, 'end_turn');
       await flushDebugLog();
       assert.equal(text(), before);
+    } finally {
+      process.env[DEBUG_LOG_ENV] = LOG_DIR;
+      resetDebugLogForTests();
+    }
+  });
+});
+
+describe("Settings' switch (Keep a provider log for a problem report)", () => {
+  const SWITCHED = join(ROOT, 'home', 'assistant', 'logs');
+  const rowsIn = (dir) => (existsSync(join(dir, DEBUG_LOG_FILE)) ? readFileSync(join(dir, DEBUG_LOG_FILE), 'utf8').trim().split('\n').filter(Boolean) : []);
+
+  it('with no variable, the switch turns the log on and off at once, into <home>/assistant/logs; the variable, when set, wins', async () => {
+    delete process.env[DEBUG_LOG_ENV];
+    resetDebugLogForTests();
+    resetAssistantState();
+    try {
+      await loadSettings();
+      assert.deepEqual([debugLogEnvDir(), debugLogDir(), providerLogDir()], [null, null, SWITCHED]);
+      fake.reply({ text: 'not kept' });
+      await send('openai', request('openai', [userText('before')], HOST));
+      await flushDebugLog();
+      assert.deepEqual(rowsIn(SWITCHED), []);
+      assert.equal((await saveSettings({ provider_log: true })).ok, true);
+      assert.equal(debugLogDir(), SWITCHED);
+      fake.reply({ text: 'kept' });
+      await send('openai', request('openai', [userText('while on')], HOST));
+      await flushDebugLog();
+      const rows = rowsIn(SWITCHED).map((l) => JSON.parse(l));
+      assert.equal(rows.length, 1);
+      assert.match(JSON.stringify(rows[0].request), /while on/);
+      assert.equal((await saveSettings({ provider_log: false })).ok, true);
+      fake.reply({ text: 'off again' });
+      await send('openai', request('openai', [userText('after')], HOST));
+      await flushDebugLog();
+      assert.equal(rowsIn(SWITCHED).length, 1, 'nothing more once off');
+      // The variable keeps it on (its own folder), whatever the switch says.
+      process.env[DEBUG_LOG_ENV] = LOG_DIR;
+      resetDebugLogForTests();
+      assert.equal(debugLogDir(), LOG_DIR);
+    } finally {
+      process.env[DEBUG_LOG_ENV] = LOG_DIR;
+      resetDebugLogForTests();
+      resetAssistantState();
+    }
+  });
+
+  it("Magnusim CAD (MAGNUSIM_SERVER_LOG names the server's log): the switch's log goes in that log's folder, so one folder holds both; MAGNUSIM_ASSISTANT_DEBUG_LOG still wins; unset, <home>/assistant/logs", async () => {
+    const CAD_LOGS = join(ROOT, 'Magnusim CAD', 'logs');
+    mkdirSync(CAD_LOGS, { recursive: true });
+    writeFileSync(join(CAD_LOGS, 'server.log'), 'a server line\n');
+    delete process.env[DEBUG_LOG_ENV];
+    process.env[SERVER_LOG_ENV] = join(CAD_LOGS, 'server.log');
+    resetDebugLogForTests();
+    resetAssistantState();
+    const homeRows = rowsIn(SWITCHED).length;
+    try {
+      await loadSettings();
+      assert.deepEqual([serverLogFile(), providerLogDir(), serverLogIn(CAD_LOGS), debugLogDir()], [join(CAD_LOGS, 'server.log'), CAD_LOGS, 'server.log', null]);
+      assert.equal((await saveSettings({ provider_log: true })).ok, true);
+      assert.equal(debugLogDir(), CAD_LOGS);
+      fake.reply({ text: 'beside the server log' });
+      await send('openai', request('openai', [userText('kept with server.log')], HOST));
+      await flushDebugLog();
+      assert.equal(rowsIn(CAD_LOGS).length, 1);
+      assert.match(rowsIn(CAD_LOGS)[0], /kept with server\.log/);
+      assert.equal(readFileSync(join(CAD_LOGS, 'server.log'), 'utf8'), 'a server line\n', "the server's own log is left alone");
+      assert.equal(rowsIn(SWITCHED).length, homeRows, 'nothing more in the home folder');
+      // The provider log's own variable wins, and the server's log is not in its folder.
+      process.env[DEBUG_LOG_ENV] = LOG_DIR;
+      resetDebugLogForTests();
+      assert.deepEqual([debugLogDir(), serverLogIn(LOG_DIR)], [LOG_DIR, null]);
+      // Unset (Magnusim): as before.
+      delete process.env[DEBUG_LOG_ENV];
+      process.env[SERVER_LOG_ENV] = '  ';
+      resetDebugLogForTests();
+      assert.deepEqual([serverLogFile(), providerLogDir(), serverLogIn(SWITCHED)], [null, SWITCHED, null]);
+      assert.equal((await saveSettings({ provider_log: false })).ok, true);
+    } finally {
+      delete process.env[SERVER_LOG_ENV];
+      process.env[DEBUG_LOG_ENV] = LOG_DIR;
+      resetDebugLogForTests();
+      resetAssistantState();
+    }
+  });
+
+  it('past PROVIDER_LOG_MAX the file starts again, the one before it kept as provider.1.jsonl', async () => {
+    const dir = join(ROOT, 'rotate');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, DEBUG_LOG_FILE), '');
+    truncateSync(join(dir, DEBUG_LOG_FILE), PROVIDER_LOG_MAX);
+    process.env[DEBUG_LOG_ENV] = dir;
+    resetDebugLogForTests();
+    try {
+      fake.reply({ text: 'fresh file' });
+      await send('openai', request('openai', [userText('rotate')], HOST));
+      await flushDebugLog();
+      assert.equal(statSync(join(dir, DEBUG_LOG_OLD)).size, PROVIDER_LOG_MAX, 'the full one, kept');
+      const rows = rowsIn(dir);
+      assert.equal(rows.length, 1);
+      assert.match(rows[0], /rotate/);
     } finally {
       process.env[DEBUG_LOG_ENV] = LOG_DIR;
       resetDebugLogForTests();

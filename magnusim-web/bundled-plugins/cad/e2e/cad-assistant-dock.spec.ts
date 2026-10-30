@@ -7,9 +7,11 @@
 // closes it back to the Part; a question of a CAD request shows as the dock's card with No
 // focused while the Part had the keyboard (Enter answers No); the app's toasts stay clear of the
 // Part's chips; a sketch the person draws between two dock messages is pictured whole by view's
-// sketch, named in the dock's step (this host names no conversation on a turn yet, so the next
-// request's user_changes do not tell it: the fallback); view's picture of a hidden sketch far
-// above the part shows its lines; a feature name one word off gets no closest name.
+// sketch, named in the dock's step, and told in the next request's user_changes (the host names
+// the conversation of each turn); view's picture of a hidden sketch far
+// above the part shows its lines; a feature name one word off gets no closest name; five
+// extrudes in one answer of the model (one step) get one picture, after the last of them (the
+// host says each call's place in its step), and the four before it point the model to it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -299,10 +301,10 @@ test("cad:assistant-dock-sketch-spec the person draws a sketch between two dock 
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 2 });
   const [read] = resultsIn(chats(host)[before + 1]);
   expect(read).toMatchObject({ tool: 'cad__get_model', ok: true });
-  // The fallback: this host names no conversation on a turn (AssistantTurn.conversation), so the
-  // request starts from its own first call and does not tell the sketch. A host that names it
-  // tells 'added <sketch> (sketch)' here (unit: model.test.ts, rev.test.ts).
-  expect(read.data?.user_changes).toBeUndefined();
+  // This host names each turn's conversation (AssistantTurn.conversation), so the second request
+  // shares the first one's baseline and tells the sketch the person drew between them
+  // (unit: model.test.ts, rev.test.ts).
+  expect(read.data?.user_changes).toEqual([`added ${sketch} (sketch)`]);
   const [viewed] = resultsIn(chats(host)[before + 2]);
   expect(viewed).toMatchObject({ tool: 'cad__view', ok: true, data: { views: [], sketch: { name: sketch, normal: [0, 0, 1] } } });
   expect(viewed.images).toHaveLength(1);
@@ -374,4 +376,41 @@ test("cad:assistant-dock-sketch-far a sketch the view hides, far above the part:
   await expect(failed.filter({ hasText: 'Lip sketch' })).not.toContainText('Closest');
   await expect(failed.filter({ hasText: 'lid-sketch' })).toContainText('Closest: "Lid sketch".');
   await shot(page, 'cad-dock-sketch-far');
+});
+
+test('cad:assistant-dock-step-picture five extrudes in one answer of the model: the dock shows one picture for that step, on its last extrude; the four before it point the model to that picture', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Dock step picture');
+  await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  // Answer 1: the disc's sketch (a step of one edit: its own picture). Answer 2: five extrudes of
+  // it, all in one answer, so the host sends each with its place in that step (editsLeftInStep 4..0).
+  const NAMES = ['Disc 1', 'Disc 2', 'Disc 3', 'Disc 4', 'Disc 5'];
+  const FIVE = NAMES.map((name, i) => ({ name: 'cad__extrude', input: EXTRUDE_IN({ name, sketch: 'Disc sketch', distance: `${i + 1} mm` }) }));
+  const before = chats(host).length;
+  host.fake.reply({ tools: [SKETCH] }, { tools: FIVE }, { text: 'Five discs.' });
+  await core.dockSend(page, 'Make five discs, 1 to 5 mm tall');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 3 });
+  expect(await features(page)).toEqual(['Disc sketch', ...NAMES]);
+  // What the person sees: the dock's five extrude steps, a picture on the fifth only, and the
+  // turn's pictures are the sketch's and that one.
+  const extrudes = dockTurn(page).locator('[data-dock-step]').filter({ has: page.locator('.dock-step-title', { hasText: /^Extrude$/ }) });
+  await expect(extrudes).toHaveCount(5, STEP);
+  await expect(extrudes.locator('.dock-step-pictures img')).toHaveCount(1, STEP);
+  for (let i = 0; i < 4; i++) await expect(extrudes.nth(i).locator('.dock-step-pictures img')).toHaveCount(0);
+  const img = extrudes.nth(4).locator('.dock-step-pictures img');
+  await expect(img).toBeVisible(STEP);
+  await expect.poll(() => img.evaluate((el: Element) => (el as HTMLImageElement).naturalWidth), STEP).toBe(640);
+  await expect(dockTurn(page).locator('.dock-step-pictures img')).toHaveCount(2);
+  // What the model gets back for that step: the four earlier extrudes carry the pointer line
+  // (pictures.ts PICTURE_LATER) and no picture; the fifth carries the one picture and its line.
+  const five = resultsIn(chats(host)[before + 2]);
+  expect(five.map((r) => [r.tool, r.ok])).toEqual(NAMES.map(() => ['cad__extrude', true]));
+  for (const r of five.slice(0, 4)) {
+    expect(r.data?.picture).toBe("see this step's last edit");
+    expect(r.images).toHaveLength(0);
+  }
+  expect(five[4].images).toHaveLength(1);
+  expect(String(five[4].data?.picture)).toMatch(/^Picture: iso view of the Part framed on /);
+  await shot(page, 'cad-dock-step-picture');
 });

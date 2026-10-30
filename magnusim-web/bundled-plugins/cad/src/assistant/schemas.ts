@@ -1,4 +1,4 @@
-// The Part's 21 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
+// The Part's 22 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
 // windows, descriptions and input schemas, in the schema subset the app accepts
 // (scripts/server/assistant/schema.ts): type, description, enum, properties, required,
 // additionalProperties false, items, min/max lengths, values and items; never $ref, unions,
@@ -85,6 +85,8 @@ export const WORKSPACE_ACTIONS = [
   'roll_to_end',
   'show',
   'hide',
+  'see_through',
+  'opaque',
   'origin_planes',
   'rename_part',
   'select',
@@ -238,8 +240,8 @@ function workspaceSpec(simulation: boolean): ToolSpec {
     risk: 'edit',
     timeoutS: 180,
     description: simulation
-      ? "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, body or construction), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export), send_to_simulation (save and link, as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana: banana_show, banana_hide, banana_place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true)."
-      : "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, body or construction), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana: banana_show, banana_hide, banana_place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true).",
+      ? "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show, hide (a sketch, body or construction), see_through, opaque (bodies: target or items), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export), send_to_simulation (save and link, as Back does). Toolbar: toolbar_show, _hide, _move, _reset, _width, _rows. Banana: banana_show, _hide, _place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true)."
+      : "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show, hide (a sketch, body or construction), see_through, opaque (bodies: target or items), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export). Toolbar: toolbar_show, _hide, _move, _reset, _width, _rows. Banana: banana_show, _hide, _place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true).",
     schema: obj({
       action: en(workspaceActionsFor(simulation), 'What to do'),
       target: str(300, 'What it acts on, or ""'),
@@ -262,8 +264,8 @@ function editFeatureSpec(enclosure: boolean): ToolSpec {
     risk: 'edit',
     timeoutS: 180,
     description: enclosure
-      ? 'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", padding "fixed", shape "cylinder", axis "Z", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. To Try repair or Retry a failed feature use direct.'
-      : 'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. To Try repair or Retry a failed feature use direct.',
+      ? 'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", padding "fixed", shape "cylinder", axis "Z", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason. To Try repair or Retry a failed feature use direct.'
+      : 'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason. To Try repair or Retry a failed feature use direct.',
     schema: obj({
       feature: str(80, 'The feature', 1),
       set: arr(obj({ field: str(40, 'Field', 1), value: EXPR('An expression, or a choice field\'s word ("true", "false" for on/off)') }), 0, 20, 'Values to change.'),
@@ -294,7 +296,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Preview a selector without changing anything. Lists what it matches, with handles for later calls of this request (#f3 face, #e7 edge, #v2 vertex, #b1 body; regions as "<sketch> r2"). Each row: handle, words, label (Base.end), body, owning feature and role, type, area or length, radius, centre, normal or axis, a point on it in mm, hole or boss for cylinders, the faces an edge joins, and for a flat face the frame a sketch on it gets. query examples: "Body 1 faces >Z", "edges of Base.end", "Plate sketch regions", "Body 1 faces hole", "bodies". limit: 1 to 25 rows.',
+      'Preview a selector without changing anything. Lists what it matches, with handles for later calls of this request (#f3 face, #e7 edge, #v2 vertex, #b1 body; regions as "<sketch> r2"). Each row: handle, words, label (Base.end), body, owning feature and role, type, area or length, radius, centre, normal or axis, a point on it in mm, hole or boss for cylinders, the faces an edge joins, and for a flat face the frame a sketch on it gets. query examples: "Body 1 faces >Z", "edges of Base.end", "Plate sketch regions", "Body 1 faces hole", "bodies". limit: 1 to 25 rows. The matches flash in the person\'s view.',
     schema: obj({ query: str(300, 'A selector (help selectors).', 1), limit: int(1, 25, 'Most rows, 10 usually; count says how many matched.') }),
   },
   {
@@ -329,11 +331,11 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, as one image (2 to 4: a labelled sheet), orthographic. sketch: a sketch\'s name for one picture straight at it, framed on its curves and drawn over the bodies (views unused), or "". hide: bodies to leave out. section: "" or "Top|Front|Right [offset <length> | middle] [flip]" to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). display: shaded_edges, shaded or wireframe; projection: orthographic, or perspective (mm_per_px then holds at the middle only). Pictures show shape, not sizes (no dimension values): use measure for numbers. Use at milestones and at the end. To move the person\'s own view use workspace.',
+      'Pictures of the Part from fixed directions, drawn off screen: the person\'s view never moves. views: 1 to 4 of iso, iso_back, front, back, left, right, top, bottom, as one image (2 to 4: a labelled sheet), orthographic. sketch: a sketch\'s name for one picture straight at it, framed on its curves and drawn over the bodies (views unused), or "". hide: bodies to leave out. section: "" or "<plane> [offset <length> | middle] [flip]" (Top, Front, Right, a construction plane or a flat face) to cut the model there and cap the cut (middle: through the middle of the shown bodies). labels: none, bodies (names), or faces (handles of the larger visible faces, usable like find\'s). size: small (768 px) or large (1280 px). display: shaded_edges, shaded or wireframe; projection: orthographic, or perspective (mm_per_px then holds at the middle only). Pictures show shape, not sizes (no dimension values): use measure for numbers. Use at milestones and at the end. To move the person\'s own view use workspace.',
     schema: obj({
       views: arr(en(VIEW_DIRECTIONS, 'A direction'), 1, 4, 'Directions.'),
       hide: arr(str(80, 'A body name'), 0, 32, 'Bodies to leave out.'),
-      section: str(120, '"" or "<Top|Front|Right> [offset <length> | middle] [flip]".'),
+      section: str(120, '"" or "<plane> [offset <length> | middle] [flip]".'),
       labels: en(['none', 'bodies', 'faces'], 'What to write on the picture.'),
       size: en(['small', 'large'], 'Long side 768 or 1280 px.'),
       display: en(['shaded_edges', 'shaded', 'wireframe'], 'How the bodies are drawn.'),
@@ -347,7 +349,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 30,
     description:
-      'Fixed reference text: sketch (entity kinds, at numbers, macros, relations, dimensions), selectors (every form), features (each tool\'s fields, faces it names), parameters, checks (what to verify), traps (common mistakes), errors (each reason, its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls), guide (the CAD notes, if not given), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project, infer, solver), details (get_model holes and briefs, set_params comments, construct, direct, edit_feature choices, extrude face and direction, pattern options, measure totals), workspace (every action), assemblies (shafts, bores, collars, fits, check), printing (PLA rules of thumb). Read it when unsure instead of guessing.',
+      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields, faces it names), parameters (expressions, units, functions), checks (what to verify), traps (common mistakes and their fixes), errors (each reason, its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls), guide (the CAD notes, if not given), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project, import, copy, infer, solver), details (get_model holes and short briefs, set_params comments, construct methods and refs, direct kinds, edit_feature choice fields, extrude face and direction, pattern options and keys, measure totals and checks), workspace (every action), assemblies (shafts, bores, collars, fits, check), printing (PLA rules of thumb). Read it when unsure instead of guessing.',
     schema: obj({ topic: en(HELP_TOPICS, 'Topic') }),
   },
   {
@@ -616,7 +618,7 @@ const toTool = (s: ToolSpec): AssistantTool => ({
   ...(s.confirm ? { confirm: s.confirm } : {}),
 });
 
-/** The 21 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
+/** The 22 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
 export const CAD_TOOLS: readonly AssistantTool[] = Object.freeze(SPECS.map(toTool).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
 
 /**
@@ -631,7 +633,7 @@ const CAD_TOOLS_WITHOUT_PROJECTS: readonly AssistantTool[] = Object.freeze(
 
 /**
  * The tools this page offers, by name: CAD_TOOLS where the host has projects (Magnusim), and in
- * Magnusim CAD (projectLinks false) CAD_TOOLS_WITHOUT_PROJECTS. The same 21 tools either way.
+ * Magnusim CAD (projectLinks false) CAD_TOOLS_WITHOUT_PROJECTS. The same 22 tools either way.
  */
 export function cadToolsFor(o: { projectLinks: boolean }): readonly AssistantTool[] {
   return o.projectLinks ? CAD_TOOLS : CAD_TOOLS_WITHOUT_PROJECTS;

@@ -2,7 +2,8 @@
 // reading stored documents (validation + migration from v1) and freezing snapshots.
 // Owner: DOC-CORE.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { DOC_SCHEMA, DOC_SCHEMAS_READ, type CadDoc, type CadView, type Feature, type Param, type SavedCamera, type ScaleModelPlace, type Vec3 } from '../types/doc';
+import { DOC_SCHEMA, DOC_SCHEMAS_READ, ORIGIN_PLANES, type CadDoc, type CadView, type Feature, type OriginPlaneRef, type Param, type PersistentRef, type SavedCamera, type SavedSection, type ScaleModelPlace, type Vec3 } from '../types/doc';
+import type { PlaneRef } from '../types/references';
 import type { DocUnits, LengthUnit } from '../types/units';
 import { newId } from '../lib/ids';
 
@@ -138,6 +139,11 @@ export function readView(raw: unknown, featureCount: number): CadView {
   const view = emptyView();
   if (typeof v.rollback === 'number' && Number.isInteger(v.rollback) && v.rollback >= 0 && v.rollback < featureCount) view.rollback = v.rollback;
   if (Array.isArray(v.hiddenBodies)) view.hiddenBodies = v.hiddenBodies.filter((x): x is string => typeof x === 'string');
+  // See-through bodies, as hidden ones (older views have none: the field stays absent).
+  if (Array.isArray(v.seeThroughBodies)) {
+    const see = [...new Set(v.seeThroughBodies.filter((x): x is string => typeof x === 'string'))];
+    if (see.length) view.seeThroughBodies = see;
+  }
   if (Array.isArray(v.expanded)) view.expanded = v.expanded.filter((x): x is string => typeof x === 'string');
   if (v.planes === 'always') view.planes = 'always';
   const camera = readCamera(v.camera);
@@ -159,7 +165,30 @@ export function readView(raw: unknown, featureCount: number): CadView {
     }
   }
   if (banana || Object.keys(sketch).length) view.scaleModels = { ...(banana ? { banana } : {}), ...(Object.keys(sketch).length ? { sketch } : {}) };
+  const section = readSection(v.section);
+  if (section) view.section = section;
   return view;
+}
+
+/**
+ * A stored section view, or null when it is missing or unusable (then the view is not cut): an
+ * origin plane, a construction plane's feature id, or a flat face's body and stored reference.
+ * Whether that plane is still there is the section module's to say when it puts it back.
+ */
+export function readSection(raw: unknown): SavedSection | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as { plane?: unknown; offset?: unknown; flip?: unknown };
+  const p = r.plane && typeof r.plane === 'object' ? (r.plane as Record<string, unknown>) : null;
+  let plane: PlaneRef | null = null;
+  if (p?.kind === 'origin' && typeof p.plane === 'string' && p.plane in ORIGIN_PLANES) plane = { kind: 'origin', plane: p.plane as OriginPlaneRef };
+  else if (p?.kind === 'feature' && typeof p.feature === 'string' && p.feature) plane = { kind: 'feature', feature: p.feature };
+  else if (p?.kind === 'face' && typeof p.body === 'string' && p.body && p.ref && typeof p.ref === 'object') {
+    const ref = p.ref as Partial<PersistentRef>;
+    if (typeof ref.name === 'string' && ref.signature && typeof ref.signature === 'object') plane = { kind: 'face', body: p.body, ref: ref as PersistentRef };
+  }
+  if (!plane) return null;
+  const offset = typeof r.offset === 'number' && Number.isFinite(r.offset) ? r.offset : 0;
+  return { plane, offset, flip: r.flip === true };
 }
 
 /** ux010: a stored scale model's place, or null when it is missing or unusable (then it is not shown). */

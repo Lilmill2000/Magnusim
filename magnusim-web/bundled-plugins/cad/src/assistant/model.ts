@@ -13,7 +13,7 @@
 //          cannot be resent). Brief rows list a sketch's regions in short too. Each reply says
 //          what the person copied in a sketch (clipboard: the copy row's "from clipboard"), if anything.
 // The whole Part (brief or full) also lists `parts`: every body in one short row (name, volume, the
-// size and middle of its box, its colour when set, the feature that made it, hidden), never halved
+// size and middle of its box, its colour when set, the feature that made it, hidden, see_through), never halved
 // with the budgets (up to PARTS_MAX, the app's cap on a list's items, within PARTS_BYTES), so every
 // part of an assembly can be checked against the request. It comes first in the reply, and the rest
 // fits what the app's result cap (RESULT_DATA_BYTES) leaves: a cut never takes a part's row.
@@ -22,6 +22,7 @@
 import { storedBodyName } from '../doc/features/body-ids';
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
 import { moveWords } from '../features/move_body/words';
+import { seeThroughOf } from '../viewport/bind';
 import { DEFAULT_BODY_COLOR } from '../doc/schema';
 import { toModel, ydirOf } from '../features/sketch/plane';
 import { userSelection } from '../lib/selection';
@@ -53,6 +54,7 @@ import { freeRows } from './sketch/solve';
 import { fitRegions, regionRows, shortRegions } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
 import { closestName, closestWords } from './closest';
+import { personSection } from './view';
 
 /** One sketch read with regions full shows at most this many regions. */
 export const SKETCH_REGIONS = 60;
@@ -260,7 +262,7 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
 /**
  * Every body built now as one short row: name, volume (mm3; null above EAGER_FACES faces until
  * measured), the size and middle of its box, its colour when it is not the default, the feature that
- * made it, hidden when the person hid it. Never halved: the first PARTS_MAX, the rest counted.
+ * made it, hidden when the person hid it, see_through when drawn see-through. Never halved: the first PARTS_MAX, the rest counted.
  */
 export async function partRows(services: AppServices, s: DocState): Promise<{ parts: Row[]; more: number }> {
   const parts: Row[] = [];
@@ -285,6 +287,8 @@ export async function partRows(services: AppServices, s: DocState): Promise<{ pa
     const maker = bodyMaker(services.doc.features, s.doc, b.id);
     if (maker) row.by = maker.name;
     if (!b.visible) row.hidden = true;
+    // Drawn see-through (the person's INSPECT > See-through or workspace see_through; an Enclosure's air).
+    if (seeThroughOf(s, services, b.id)) row.see_through = true;
     size += jsonBytes(row) + 1;
     if (size > PARTS_BYTES) break;
     parts.push(row);
@@ -371,6 +375,9 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
     ...(s.rebuild.bodies.length > BODIES_MAX ? { bodies_more: s.rebuild.bodies.length - BODIES_MAX } : {}),
     selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i, labels)),
   };
+  // The person's section view while it is on (INSPECT > Section view; workspace section sets it), and its panel's note.
+  const cut = personSection(services);
+  if (cut) out.section = cut;
   // What the person copied (Ctrl+C in a sketch of any Part): the sketch tool's copy row pastes it ("from clipboard").
   const clip = await heldClip(services).catch(() => null);
   if (clip) out.clipboard = `${clipWords(clip)}, copied from ${clip.from}`;

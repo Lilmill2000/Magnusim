@@ -12,8 +12,13 @@ import {
   LOCAL_LIMITS_TEXT,
   LOCAL_PRICE_TEXT,
   LOCAL_PRIVACY_TEXT,
+  logFolderText,
   NOT_USED_TEXT,
+  OPEN_LOG_FOLDER,
   PRIVACY_COPY,
+  PROVIDER_LOG_ENV_TEXT,
+  PROVIDER_LOG_LABEL,
+  PROVIDER_LOG_TEXT,
   SERVER_LIMITS_TEXT,
   SERVER_PRICE_TEXT,
   SHARED_PC_TEXT,
@@ -82,6 +87,7 @@ function applySettings(patch: Record<string, unknown>): Answer {
   if ('effort' in patch) next.effort = patch.effort;
   if ('privacy' in patch) next.privacy = patch.privacy;
   if ('forget_consents' in patch) next.consents = 0;
+  if ('provider_log' in patch) next.provider_log = { ...(next.provider_log as object), on: patch.provider_log };
   if ('base_url' in patch) {
     const url = String(patch.base_url);
     if (!isLoopback(url) && patch.confirm_remote !== true) {
@@ -121,6 +127,7 @@ async function route(method: string, path: string, body: Record<string, unknown>
     status = { ...status, keys: { ...(status.keys as object), [String(body.provider)]: NO_KEY } };
     return { status: 200, body: status };
   }
+  if (path === '/api/assistant/log-folder/open') return { status: 200, body: { ok: true, folder: 'D:/Magnusim home/assistant/logs' } };
   if (path.startsWith('/api/assistant/models')) return modelsAnswer;
   if (path === '/api/assistant/test') {
     onTest?.();
@@ -1151,5 +1158,51 @@ describe('AssistantStep a Test nobody waits for', () => {
     expect(testSignals[1]?.aborted).toBe(false);
     cleanup();
     expect(testSignals[1]?.aborted).toBe(true);
+  });
+});
+
+describe('AssistantStep problem report', () => {
+  const LOG = { on: false, env: false, folder: 'D:/Magnusim home/assistant/logs' };
+
+  it('the provider log switch: off by default with what it keeps, saved at once; Open log folder asks the server to show it', async () => {
+    await ready({ provider_log: LOG });
+    const block = q('[data-assistant-provider-log]')!;
+    expect(block.getAttribute('data-assistant-provider-log')).toBe('off');
+    expect(within(block).getByText(PROVIDER_LOG_LABEL)).toBeTruthy();
+    expect(block.textContent).toContain(PROVIDER_LOG_TEXT);
+    expect(q('[data-assistant-log-folder-path]')!.textContent).toBe(`Kept in ${LOG.folder}`);
+    expect(q('[data-assistant-provider-log-env]')).toBeNull();
+    const sw = q<HTMLInputElement>('[data-assistant-provider-log-switch]')!;
+    expect(sw.checked).toBe(false);
+    await act(async () => {
+      fireEvent.click(sw);
+    });
+    await waitFor(() => expect(posts('/api/assistant/settings').map((r) => r.body)).toEqual([{ provider_log: true }]));
+    await waitFor(() => expect(q('[data-assistant-provider-log]')!.getAttribute('data-assistant-provider-log')).toBe('on'));
+    await act(async () => {
+      fireEvent.click(within(q('[data-assistant-provider-log]')!).getByRole('button', { name: OPEN_LOG_FOLDER }));
+    });
+    await waitFor(() => expect(posts('/api/assistant/log-folder/open')).toHaveLength(1));
+    expect(q('[data-assistant-provider-log-error]')).toBeNull();
+  });
+
+  it('MAGNUSIM_ASSISTANT_DEBUG_LOG set: the step says the log is on whatever the switch says; an older server shows no block', async () => {
+    await ready({ provider_log: { ...LOG, env: true } });
+    expect(q('[data-assistant-provider-log-env]')!.textContent).toBe(PROVIDER_LOG_ENV_TEXT);
+    cleanup();
+    resetStatusStore();
+    await ready();
+    expect(q('[data-assistant-provider-log]')).toBeNull();
+  });
+
+  it("Magnusim CAD (the server's log in the same folder): the line names the folder and the server's log; Open log folder shows that folder", async () => {
+    const folder = 'C:/Users/me/AppData/Roaming/Magnusim CAD/logs';
+    await ready({ provider_log: { ...LOG, folder, server_log: 'server.log' } });
+    expect(q('[data-assistant-log-folder-path]')!.textContent).toBe(`Kept in ${folder}, with the server's log (server.log)`);
+    expect(logFolderText(folder, null)).toBe(`Kept in ${folder}`);
+    await act(async () => {
+      fireEvent.click(within(q('[data-assistant-provider-log]')!).getByRole('button', { name: OPEN_LOG_FOLDER }));
+    });
+    await waitFor(() => expect(posts('/api/assistant/log-folder/open')).toHaveLength(1));
   });
 });

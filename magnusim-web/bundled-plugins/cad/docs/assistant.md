@@ -17,7 +17,7 @@ model reads.
    listens to the host's turns (`turn-info.ts`), then registers **once** for the page's
    life: every tool of `schemas.ts` and `GUIDE` (`guide.ts`). After a `not_connected`
    answer it registers again when the tab shows; after `remote`, `no_assistant` or
-   `not_allowed` never. This build answers all 18 tools. A build without one's code still
+   `not_allowed` never. This build answers all 22 tools. A build without one's code still
    offers it, and the call answers `not_ready` `not_built` (`call.ts`; tests make such a
    build with `createCallHandler(rt, tools)`): the grammar and the prompt cache stay the same
    while tools are added.
@@ -439,7 +439,8 @@ make a 2 x 2 sheet with each tile's name. The long side is 768 px (`small`) or 1
   label, in the key's one table (`selectors/handles.ts`): find and every selector read a
   picture's `#f3`, and find numbers on after it.
 - The data lists the views and their mm per px, the shown and hidden bodies (and those
-  hidden in the tree), the cut, the labels, the shown sketches' dimension values
+  hidden in the tree, and the shown ones drawn see-through: `see_through`, as the
+  tree has them), the cut, the labels, the shown sketches' dimension values
   (pictures carry no HTML overlays), `software_renderer`, and a `note` when the person's
   sketch or the rollback bar rolls later features back, or the window is hidden.
 - A turn whose model reads no images (the host's turn says `images: false`) answers

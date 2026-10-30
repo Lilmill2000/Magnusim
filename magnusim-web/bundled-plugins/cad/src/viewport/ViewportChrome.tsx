@@ -3,7 +3,10 @@
 // the triad slot, plus the CAD view tools before them: selection filter,
 // section view and the views menu (standard views, Normal to, projection,
 // display; a right-click on a view's row sets its keybind). Every control here
-// works; nothing is shown that does not.
+// works; nothing is shown that does not. The section's popover drives the one
+// section state INSPECT > Section view drives (the view's SectionState): a plane
+// that panel picked (a construction plane, a flat face) shows here by its name,
+// and "More" opens that panel.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -11,16 +14,25 @@ import { setSelectionFilter } from '../lib/selection';
 import { useServices } from '../lib/services';
 import { createStateStore, useStateStore } from '../lib/store';
 import { ORIGIN_PLANES, type OriginPlaneRef } from '../types/doc';
+import type { PlaneRef } from '../types/references';
+import { sectionPlaneWords, SECTION_COMMAND } from '../features/section/plane';
+import { originFrame, sectionStart, sliderStep } from './section';
+import { sectionOn } from '../features/section/bind';
+// The view tools' and the Section view panel's helpers live with the section state (bind.ts uses them too).
+export { sectionStart, sliderStep, startOffset } from './section';
 import type { SelectKind } from '../types/selection';
 import type { DisplayMode, PlanesMode, Projection, StandardView, ViewportHandle } from '../types/viewport';
 import { normalToTarget, VIEW_COMMANDS } from './commands';
 import { openSetKeybind, useKeyLabel } from '../ui/keybinds';
 import type { AppServices } from '../types/app';
+import type { DocState } from '../types/doc-service';
 // P4b SELECT: the sketch selection filter (Points, Curves, Dimensions) while a sketch is edited.
 import { SKETCH_FILTERS, sketchFilterOf, type SketchPickKind } from '../sketch/select-filter';
 
 /** A services object with no mode store (tests of the chrome alone) is always in model mode. */
 const MODEL_ONLY = createStateStore<{ mode: 'model' | 'sketch' }>({ mode: 'model' });
+/** A services object with no document (tests of the chrome alone): no construction plane to name. */
+const NO_DOC = createStateStore<{ doc: DocState | null }>({ doc: null });
 
 const ICON = {
   home: ['M4 11.2L12 4.5l8 6.7', 'M6.4 10.2V19.5h11.2V10.2', 'M10 19.5v-5.2h4v5.2'],
@@ -94,7 +106,7 @@ const FILTERS: { kind: SelectKind; label: string }[] = [
   { kind: 'origin', label: 'Planes' },
 ];
 
-const PLANES: { value: OriginPlaneRef; label: string }[] = [
+const PLANES: { value: OriginPlaneRef | 'other'; label: string }[] = [
   { value: 'origin:top', label: 'Top' },
   { value: 'origin:front', label: 'Front' },
   { value: 'origin:right', label: 'Right' },
@@ -104,28 +116,16 @@ function fmt(n: number): string {
   return String(Math.round(n * 1000) / 1000 || 0);
 }
 
-/** A round slider step (1, 2 or 5 times a power of ten) giving about 400 stops over `span`. */
-export function sliderStep(span: number): number {
-  const raw = Math.max(span / 400, 1e-4);
-  const p = 10 ** Math.floor(Math.log10(raw));
-  return [1, 2, 5, 10].map((m) => m * p).find((x) => x >= raw - 1e-12) ?? raw;
-}
-
-/** Where a new cut starts: the middle of the part, on a round step ("Y 10 mm", not "Y 5.008 mm"). */
-export function sectionStart(range: readonly [number, number] | null): number {
-  if (!range) return 0;
-  const step = sliderStep(Math.abs(range[1] - range[0]));
-  const mid = (range[0] + range[1]) / 2;
-  return Math.round(mid / step) * step || 0;
-}
-
 /**
  * The cut's position shown as the coordinate it fixes (Front plane: y, Top: z,
  * Right: x) rather than the signed offset along the plane's normal (Front's
- * normal is -Y): "Y 10 mm" where the cut is at y = 10.
+ * normal is -Y): "Y 10 mm" where the cut is at y = 10. Any other plane (a
+ * construction plane, a flat face) shows its offset along its own normal.
  */
-export function sectionAxis(plane: OriginPlaneRef): { label: string; sign: number } {
-  const n = ORIGIN_PLANES[plane].normal;
+export function sectionAxis(plane: OriginPlaneRef | PlaneRef): { label: string; sign: number } {
+  const ref = typeof plane === 'string' ? plane : plane.kind === 'origin' ? plane.plane : null;
+  if (!ref) return { label: 'Offset', sign: 1 };
+  const n = ORIGIN_PLANES[ref].normal;
   const i = n.findIndex((v) => v !== 0);
   return { label: 'XYZ'[i], sign: Math.sign(n[i]) };
 }
@@ -177,7 +177,9 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
   const close = () => setOpen(null);
   const toggle = (which: 'filter' | 'views') => setOpen((o) => (o === which ? null : which));
 
-  const range = open === 'section' && section ? handle.sectionRange(section.plane) : null;
+  const range = open === 'section' && section ? handle.sectionRange(section.frame) : null;
+  // A plane the Section view panel picked (a construction plane, a flat face): shown by its name.
+  const otherPlane = useStateStore<DocState | { doc: DocState | null }, string | null>(services.doc?.state ?? NO_DOC, (s) => ('rebuild' in s && section && section.plane.kind !== 'origin' ? sectionPlaneWords(s, section.plane) : null));
   const axis = section ? sectionAxis(section.plane) : { label: 'Y', sign: 1 };
   const coordRange = range ? ([Math.min(range[0] * axis.sign, range[1] * axis.sign), Math.max(range[0] * axis.sign, range[1] * axis.sign)] as const) : null;
   const normalTo = open === 'views' ? normalToTarget({ items }, handle, services.doc?.state.get()) : null;
@@ -193,13 +195,15 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
       setOpen(null);
       return;
     }
-    const plane = section?.plane ?? 'origin:front';
-    handle.setSection({ on: true, plane, offset: sectionStart(handle.sectionRange(plane)) });
+    // On the plane it had, found where it is now (a construction plane or a face may have moved while
+    // the cut was off; one that is gone gives way to Front): src/features/section/bind.ts sectionOn.
     setOpen('section');
+    void sectionOn(services);
   };
 
-  const setPlane = (plane: OriginPlaneRef) => {
-    handle.setSection({ plane, offset: sectionStart(handle.sectionRange(plane)) });
+  const setPlane = (plane: OriginPlaneRef | 'other') => {
+    if (plane === 'other') return;
+    handle.setSection({ plane: { kind: 'origin', plane }, offset: sectionStart(handle.sectionRange(originFrame(plane))) });
   };
 
   const view = (v: StandardView) => {
@@ -270,7 +274,12 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
             <div className="cad-vp-pop-title">Section view</div>
             {section ? (
               <>
-                <Seg name="Section plane" value={section.plane} options={PLANES} onChange={setPlane} />
+                <Seg
+                  name="Section plane"
+                  value={section.plane.kind === 'origin' ? section.plane.plane : 'other'}
+                  options={otherPlane ? [...PLANES, { value: 'other' as const, label: otherPlane }] : PLANES}
+                  onChange={setPlane}
+                />
                 <label className="cad-vp-row">
                   <span>Cut at</span>
                   <input
@@ -297,12 +306,26 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
                     data-section-middle="1"
                     title="Cut through the middle of the shown bodies"
                     onClick={() => {
-                      const r = handle.sectionRange(section.plane);
+                      const r = handle.sectionRange(section.frame);
                       handle.setSection({ offset: r ? (r[0] + r[1]) / 2 : 0 });
                     }}
                   >
                     Middle
                   </button>
+                  {services.commands?.get(SECTION_COMMAND) ? (
+                    <button
+                      type="button"
+                      className="cad-vp-small"
+                      data-section-more="1"
+                      title="Any plane, a typed offset and the arrow in the view: INSPECT > Section view"
+                      onClick={() => {
+                        close();
+                        void services.commands.run(SECTION_COMMAND);
+                      }}
+                    >
+                      More…
+                    </button>
+                  ) : null}
                 </div>
               </>
             ) : null}

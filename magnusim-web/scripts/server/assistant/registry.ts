@@ -70,6 +70,12 @@ export interface ToolCtx {
   prompt: string | null;
   /** The turn's provider and model (app_status reports them); absent outside a turn. */
   assistant?: { provider: string; model: string };
+  /**
+   * Where what a call gives goes: the turn's destination (providers/index.ts destinationOf: a cloud
+   * provider, `host:<name>`, `agent:<id>`), or another app's (`mcp`), with how the person reads it.
+   * chat_history asks before a saved chat goes where its words didn't go (absent: it always asks).
+   */
+  destination?: { key: string; label: string };
   /** The turn's conversation (attachments are bound to it); absent outside a turn. */
   conversation?: string | null;
   /** What the turn used so far of its limits, read when asked (app_status shows it, read-only); absent outside a turn. */
@@ -91,6 +97,8 @@ export interface TurnUse {
   minutes_cap: number;
   usd?: number;
   usd_cap?: number;
+  /** The money left for its next request: the smaller of what its own limit and today's leave. */
+  usd_left?: number;
   changes?: number;
   changes_cap?: number;
 }
@@ -135,11 +143,25 @@ export interface ProgressOptions {
   waiting?: boolean;
 }
 
+/**
+ * Where a call stands in its step (one answer of the model): the step's number in its turn, how
+ * many calls of that answer come after it, and how many of those are the turn's workspace's edit
+ * or destructive tools. Only a turn's own calls have it (not another app's over MCP, nor a coding
+ * agent's).
+ */
+export interface StepInfo {
+  n: number;
+  callsLeft: number;
+  editsLeft: number;
+}
+
 export interface ToolRunContext {
   signal: AbortSignal;
   ctx: ToolCtx;
   /** The turn that makes the call; another app's call (MCP) has `mcp:<connection id>` (RunOptions.callTurn). */
   turn: string | null;
+  /** Its place in its step (a turn's own calls only). */
+  step?: StepInfo;
   progress(fraction: number | null, label: string, opts?: ProgressOptions): void;
   /** Aborts when the runner stops waiting for this call (it was aborted and its grace ran out). */
   released?: AbortSignal;
@@ -251,6 +273,8 @@ export interface WorkspaceRegistration {
     turn: string | null;
     /** The turn's conversation (the page may read its attachments while the call runs); null for an MCP call. */
     conversation: string | null;
+    /** Its place in its step (a turn's own calls only). */
+    step?: StepInfo;
     progress(f: number | null, label: string, opts?: ProgressOptions): void;
   }): Promise<ToolOutcome>;
   /** Whether its tools may be offered and run now (true), else why not (the relay's own checks). */
@@ -663,7 +687,17 @@ export class Registry implements ToolRegistry {
           const message = `The page hosting ${source.workspace} isn't connected.`;
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return reg.invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
+        return reg.invoke({
+          tool: localName,
+          input,
+          timeoutS,
+          signal: rt.signal,
+          released: rt.released,
+          turn: rt.turn,
+          conversation: conversationOf(rt.ctx),
+          ...(rt.step ? { step: rt.step } : {}),
+          progress: rt.progress,
+        });
       },
     };
   }
@@ -785,7 +819,17 @@ export class Registry implements ToolRegistry {
           const message = "This window isn't connected.";
           return { ok: false, error: { code: 'tab_disconnected', message }, summary: message };
         }
-        return invoke({ tool: localName, input, timeoutS, signal: rt.signal, released: rt.released, turn: rt.turn, conversation: conversationOf(rt.ctx), progress: rt.progress });
+        return invoke({
+          tool: localName,
+          input,
+          timeoutS,
+          signal: rt.signal,
+          released: rt.released,
+          turn: rt.turn,
+          conversation: conversationOf(rt.ctx),
+          ...(rt.step ? { step: rt.step } : {}),
+          progress: rt.progress,
+        });
       },
       // Raise-only risk per call and its card (C3, §2.1): the core page's own rule, from its newest registration.
       // The runner keeps only an escalation's risk, note and rows: the card's copy goes as its

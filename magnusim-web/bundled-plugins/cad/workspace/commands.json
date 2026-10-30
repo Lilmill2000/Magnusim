@@ -316,6 +316,22 @@
       "keys": []
     },
     {
+      "id": "inspect.section",
+      "label": "Section view",
+      "group": "Inspect",
+      "context": "model",
+      "keys": [
+        "KeyX"
+      ]
+    },
+    {
+      "id": "inspect.see-through",
+      "label": "See-through",
+      "group": "Inspect",
+      "context": "model",
+      "keys": []
+    },
+    {
       "id": "inspect.find",
       "label": "Find",
       "group": "Inspect",

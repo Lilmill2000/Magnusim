@@ -105,8 +105,10 @@ describe('a turn from start to end', () => {
     assert.match(SYSTEM_PROMPT, /\n3\. Give numbers with units\. Say plainly when a result is not converged, not ready, or an estimate\.\n/);
     assert.match(SYSTEM_PROMPT, /\n5\. Be brief\.\n/);
     // Seen live: the model wrote image markdown for a picture the dock already shows.
-    assert.match(SYSTEM_PROMPT, /\n6\. A picture a tool takes is shown to the user with that step; refer to it in words, never with image markdown or a link\.$/);
-    assert.equal(SYSTEM_PROMPT.split('\n').length, 7);
+    assert.match(SYSTEM_PROMPT, /\n6\. A picture a tool takes is shown to the user with that step; refer to it in words, never with image markdown or a link\.\n/);
+    // A long conversation's requests leave out old tool results (providers/common.ts clearedResults).
+    assert.match(SYSTEM_PROMPT, /\n7\. In a long conversation, older tool results and pictures may be replaced by a short note; call a read tool to see things as they are now\.$/);
+    assert.equal(SYSTEM_PROMPT.split('\n').length, 8);
   });
 
   it('a read tool: tools → its result first in the next request → done; the tool events', async () => {
@@ -429,6 +431,133 @@ describe('the steps cap', () => {
   });
 });
 
+describe('a conversation the next step could fill: the model sums up first (conversations.ts nearlyFull)', () => {
+  // A model the price table doesn't know: 200K of context and 100 pictures a conversation.
+  const MODEL = 'claude-test-9';
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  const snap = () => hostTool('snap', { risk: 'edit', run: async () => ({ ok: true, text: 'Made.', images: [{ type: 'image', mediaType: 'image/png', base64: PNG, width: 1, height: 1 }], summary: 'made' }) });
+  const peek = () => hostTool('peek', { run: async () => ({ ok: true, data: { seen: true }, summary: 'peeked' }) });
+  const calls = (name, n) => Array.from({ length: n }, () => ({ name }));
+  const lastUserText = (req) => {
+    const m = req.messages.at(-1);
+    return m.role === 'user' ? m.parts.filter((p) => p.type === 'text').map((p) => p.text) : [];
+  };
+
+  it('the next request would pass 80% of the context: one more request with the same tools and a note after the results; its answer ends the turn capped (conversation_full) and kept; the next start is refused with the same words', async () => {
+    const m = mk({ model: MODEL, hostTools: [peek()] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { text: 'Done: the bracket. Left: the holes.' });
+    const r = await startTurn(m, 'Build the bracket.');
+    await settled(r.turn);
+    const t = r.turn;
+    const said = 'This conversation is full: the last request used 159,990 of the 200,000 tokens Magnusim counts for claude-test-9, and a conversation is full at 80% (its next step could pass that). Start a new one.';
+    assert.deepEqual([t.state, t.endReason, t.message], ['capped', 'conversation_full', said]);
+    assert.equal(t.summary().text_so_far, 'Done: the bracket. Left: the holes.', 'the sum-up is kept');
+    assert.equal(m.provider.requests.length, 2, 'one sum-up request');
+    const [first, sumUp] = m.provider.requests;
+    assert.equal(JSON.stringify(sumUp.req.tools), JSON.stringify(first.req.tools), 'the same tools (the cached prefix and the thinking binding hold)');
+    assert.deepEqual(lastUserText(sumUp.req), ["This conversation is nearly full (context 159,990 of 160,000 tokens). Don't call tools now: say what is done and what is left."]);
+    assert.deepEqual(codes(resultsIn(sumUp.req.messages.at(-2))), ['ok'], 'the step’s result goes with it');
+    assert.ok(ofType(t, 'note').some((n) => n.text === 'This conversation is nearly full; asking the model to sum up.'));
+    assert.equal(t.conv.messages.length, sumUp.req.messages.length + 1, 'nothing stored that was not sent, but the answer');
+    const next = await startTurn(m, { text: 'Now the holes.', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code, next.body.error], [409, 'conversation_full', said]);
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it("pictures: a step's calls stop before their pictures could pass the conversation's limit (never run, answered capped), and the model sums up; no result is stored that is not sent", async () => {
+    const m = mk({ model: MODEL, hostTools: [snap()] });
+    m.provider.script({ tools: calls('snap', 40) }, { tools: calls('snap', 70) }, { text: 'Made 97 parts; the last 13 are left.' });
+    const r = await startTurn(m, 'Make 110 parts.');
+    await settled(r.turn);
+    const t = r.turn;
+    assert.deepEqual([t.state, t.endReason], ['capped', 'conversation_full'], t.message);
+    const second = lastResults(t.conv);
+    assert.equal(second.filter((x) => x.ok).length, 57, '40 + 57 + one more result’s 4 would pass 100');
+    const capped = second.filter((x) => !x.ok);
+    assert.equal(capped.length, 13);
+    assert.ok(capped.every((x) => x.error.code === 'capped' && x.error.message === "Not run: This conversation is nearly full (pictures 97 of 100). Don't call tools now: say what is done and what is left."));
+    assert.equal(t.conv.images, 97);
+    assert.equal(t.message, 'This conversation is full: it holds 97 pictures, and Magnusim keeps at most 100 in one conversation (its next step could pass that). Start a new one.');
+    const sumUp = m.provider.requests.at(-1);
+    assert.equal(m.provider.requests.length, 3);
+    assert.equal(t.conv.messages.length, sumUp.req.messages.length + 1, 'every stored result was sent');
+    assert.equal(t.calls, 97, 'the capped calls never ran');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it('pictures within the largest step so far: the model sums up after that step', async () => {
+    const m = mk({ model: MODEL, hostTools: [snap()] });
+    m.provider.script({ tools: calls('snap', 30) }, { tools: calls('snap', 30) }, { tools: calls('snap', 30) }, { text: 'Made 90.' });
+    const r = await startTurn(m, 'Make parts.');
+    await settled(r.turn);
+    // After 60: 60 + 30 < 100, go on; after 90: 90 + 30 >= 100, sum up.
+    assert.deepEqual([r.turn.state, r.turn.endReason, r.turn.conv.images], ['capped', 'conversation_full', 90]);
+    assert.equal(m.provider.requests.length, 4);
+    assert.deepEqual(r.turn.conv.largestStep, { ...r.turn.conv.largestStep, images: 30 });
+  });
+
+  it('a sum-up that calls tools anyway: each answered capped with the full words, never run; the turn ends capped (conversation_full)', async () => {
+    let ran = 0;
+    const m = mk({ model: MODEL, hostTools: [hostTool('peek', { run: async () => (ran++, { ok: true, summary: 'peeked' }) })] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { tools: calls('peek', 2) });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
+    assert.equal(ran, 1);
+    const last = lastResults(r.turn.conv);
+    assert.deepEqual(codes(last), ['capped', 'capped']);
+    assert.equal(last[0].error.message, `Not run: ${r.turn.message}`);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a sum-up the turn's money can't pay for: the turn ends capped (conversation_full), its words saying both", async () => {
+    const m = mk({ model: MODEL, hostTools: [peek()], caps: { turn_usd: 1 } });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.equal(m.provider.requests.length, 1, 'the sum-up is never sent');
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
+    // $1 a turn resends 151,808 tokens of it once the cache expires: that line comes before the 160,000 one.
+    assert.match(r.turn.message, /^The next step could go over this turn's \$1\.00 limit\. This conversation is full: its last request sent 159,990 tokens, and once its cache expires, sending that again could cost more than the \$1\.00 per turn set in Settings → Assistant \(its next step could pass that\)\. Start a new one\.$/);
+    const next = await startTurn(m, { text: 'y', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code], [409, 'conversation_full']);
+  });
+
+  it('a sum-up request that never answers (Stop): the conversation is full all the same, so no later turn reads the note', async () => {
+    const m = mk({ model: MODEL, hostTools: [peek()] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 159_990 } }, { text: 'Summing', hold: 'sum' });
+    const r = await startTurn(m, 'x');
+    await m.provider.reached('sum');
+    assert.equal((await m.manager.stop(r.turn.id)).status, 200);
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'stopped');
+    const next = await startTurn(m, { text: 'y', conversation: r.body.conversation });
+    assert.deepEqual([next.status, next.body.code], [409, 'conversation_full']);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+  });
+
+  it("a full conversation at a step's start ends the turn capped (conversation_full) before anything is sent: the person's pictures took it to the limit", async () => {
+    const m = mk({ model: MODEL });
+    m.provider.script({ text: 'ok' });
+    const first = await startTurn(m, 'x');
+    await settled(first.turn);
+    const conv = first.turn.conv;
+    for (let i = 0; i < 49; i += 1) {
+      conv.append({ role: 'user', parts: [{ type: 'image', mediaType: 'image/png', base64: PNG, width: 1, height: 1 }] });
+      conv.append({ role: 'assistant', parts: [{ type: 'text', text: 'seen' }], raw: { provider: 'anthropic', model: MODEL, payload: [] } });
+    }
+    assert.equal(conv.images, 49);
+    for (let i = 0; i < 49; i += 1) conv.append({ role: 'user', parts: [{ type: 'image', mediaType: 'image/png', base64: PNG, width: 1, height: 1 }] });
+    assert.equal(conv.fullReason(), null);
+    const r = await startTurn(m, { text: 'And these two?', conversation: conv.id, images: [{ media_type: 'image/png', data: PNG }, { media_type: 'image/png', data: PNG }] });
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    await settled(r.turn);
+    assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
+    assert.equal(r.turn.message, 'This conversation is full: it holds 100 pictures, and Magnusim keeps at most 100 in one conversation. Start a new one.');
+    assert.equal(m.provider.requests.length, 1, 'nothing more sent');
+  });
+});
+
 describe('the token and minute caps', () => {
   it('tokens: the calls after the request that passed the cap are answered capped; the turn ends at once', async () => {
     const m = mk({ hostTools: [hostTool('peek')], caps: { turn_tokens: 10_000 } });
@@ -733,7 +862,9 @@ describe('the spend caps', () => {
       const { turn: t } = await startTurn(m, 'x');
       await settled(t);
       assert.deepEqual([t.state, t.endReason], ['capped', reason]);
-      assert.equal(t.message, capText(reason, caps));
+      // Today's limit isn't reached (what is left can't pay for the resend): it says what is left.
+      assert.equal(t.message, capText(reason, caps, caps.day_usd - t.usd));
+      if (reason === 'day_usd') assert.equal(t.message, "The next step could go over today's $0.65 limit ($0.01 left); it resets at midnight.");
       assert.equal(m.provider.requests.length, 1, reason);
       assert.equal(t.conv.messages.length, 1, 'nothing appended');
       assert.ok(t.usd > 0 && t.usd <= 0.65 + 1e-6, `${reason}: spent ${t.usd}`);
@@ -825,6 +956,196 @@ describe('the spend caps', () => {
     assert.equal(r.body.code, 'cap_day');
     assert.equal(r.body.error, "Today's $1.00 limit is reached; it resets at midnight.");
     assert.equal(m.provider.requests.length, 0);
+  });
+});
+
+describe("a priced turn's first request goes on from the conversation's last one (Claude Opus 5.5, $8 a turn and $15 a day: the defaults)", () => {
+  const TARGETS = ['claude-opus-5', 'claude-opus-4-8'];
+  const opusMk = (o = {}) => mk({ model: 'claude-opus-5-5', adapter: new ScriptedProvider({ id: 'anthropic', fallbackTargets: TARGETS }), ...o });
+  const peek = () => hostTool('peek', { run: async () => ({ ok: true, data: { seen: true }, summary: 'peeked' }) });
+  /** A first turn whose request used `cacheRead` tokens of cache (and 10 more); settled. */
+  async function longTurn(m, cacheRead) {
+    m.provider.script({ text: 'Read it all.', usage: { input: 10, cacheRead } });
+    const r = await startTurn(m, 'Read everything.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    return r;
+  }
+
+  it('within 4 minutes its 440,000-token prompt is a cache read: $8 sends it with the whole 32,000-token answer (it was capped as all written three times); after 5 minutes, or with another effort, it is written again and the answer gets what $8 leaves', async () => {
+    const m = opusMk();
+    const a = await longTurn(m, 439_990);
+    assert.equal(a.turn.conv.lastRequest.promptTokens, 440_000);
+    m.clock.advance(60_000);
+    m.provider.script({ text: 'Again.', usage: { input: 300, cacheRead: 439_990 } });
+    const b = await startTurn(m, { text: 'Once more.', conversation: a.body.conversation });
+    await settled(b.turn);
+    assert.deepEqual([b.turn.state, b.turn.endReason], ['done', 'end_turn'], b.turn.message);
+    assert.equal(m.provider.requests[1].req.maxOutputTokens, 32_000);
+    // 440,290 tokens and the new ones, written by Claude Opus 5.5 and both fallbacks: about $7.71 of the $8.
+    const written = (out) => assert.ok(out > 2048 && out < 13_000, String(out));
+    // Another effort rewrites the cached prefix, however fresh.
+    m.clock.advance(60_000);
+    m.state.settings.effort = 'high';
+    m.provider.script({ text: 'Harder.', usage: { input: 300, cacheRead: 439_990 } });
+    const c = await startTurn(m, { text: 'Think harder.', conversation: a.body.conversation });
+    await settled(c.turn);
+    assert.deepEqual([c.turn.state, c.turn.endReason], ['done', 'end_turn'], c.turn.message);
+    written(m.provider.requests[2].req.maxOutputTokens);
+    m.clock.advance(5 * 60_000);
+    m.provider.script({ text: 'And again.' });
+    const d = await startTurn(m, { text: 'Last one.', conversation: a.body.conversation });
+    await settled(d.turn);
+    assert.deepEqual([d.turn.state, d.turn.endReason], ['done', 'end_turn'], d.turn.message);
+    written(m.provider.requests[3].req.maxOutputTokens);
+    checkInvariants(assert, d.turn.conv, m.provider.requests);
+  });
+
+  it("a request past what $8 resends once the cache expires ends the conversation full before it is sent, in the money's words; the next start is refused with them (the dock offers Continue in a new chat)", async () => {
+    // Within 4 minutes the same request is a read, and goes.
+    const warm = opusMk();
+    const w = await longTurn(warm, 451_990);
+    warm.clock.advance(60_000);
+    warm.provider.script({ text: 'Fine.' });
+    const sent = await startTurn(warm, { text: 'x'.repeat(6000), conversation: w.body.conversation });
+    await settled(sent.turn);
+    assert.deepEqual([sent.turn.state, warm.provider.requests.length], ['done', 2]);
+
+    const m = opusMk();
+    const a = await longTurn(m, 451_990);
+    assert.equal(a.turn.conv.fullDetail(m.state.settings.base_url, 8), null, '452,000 is under the 454,217 a turn resends');
+    m.clock.advance(5 * 60_000);
+    const b = await startTurn(m, { text: 'x'.repeat(6000), conversation: a.body.conversation });
+    await settled(b.turn);
+    const said =
+      'This conversation is full: its last request sent 452,000 tokens, and once its cache expires, sending that again, with a re-run on each of its 2 refusal-fallback models counted, could cost more than the $8.00 per turn set in Settings → Assistant (its next step could pass that). Start a new one.';
+    assert.deepEqual([b.turn.state, b.turn.endReason, b.turn.message], ['capped', 'conversation_full', said]);
+    assert.equal(m.provider.requests.length, 1, 'nothing sent');
+    assert.equal(b.turn.usd, 0);
+    assert.equal(b.turn.conv.closedBy?.usd, 8);
+    const next = await startTurn(m, { text: 'y', conversation: a.body.conversation });
+    assert.deepEqual([next.status, next.body.code, next.body.error], [409, 'conversation_full', said]);
+  });
+
+  it("a step past what $8 resends: the model sums up while its cache is fresh (cheap), and the conversation is full in the money's words", async () => {
+    const m = opusMk({ hostTools: [peek()] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 10, cacheRead: 459_990 } }, { text: 'Done: the bracket. Left: the holes.' });
+    const r = await startTurn(m, 'Build the bracket.');
+    await settled(r.turn);
+    const t = r.turn;
+    assert.deepEqual([t.state, t.endReason], ['capped', 'conversation_full'], t.message);
+    assert.match(t.message, /^This conversation is full: its last request sent 460,000 tokens, and once its cache expires, .* \(its next step could pass that\)\. Start a new one\.$/);
+    assert.equal(m.provider.requests.length, 2, 'the sum-up went');
+    const note = m.provider.requests[1].req.messages.at(-1).parts.filter((p) => p.type === 'text').map((p) => p.text);
+    assert.deepEqual(note, ["This conversation is nearly full (context 460,000 of the 454,217 tokens $8.00 per turn can resend). Don't call tools now: say what is done and what is left."]);
+    assert.equal(t.summary().text_so_far, 'Done: the bracket. Left: the holes.');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it("today's money: a step only what is left today can't pay for says it could go over, with what is left; reached only when nothing is", async () => {
+    const caps = { turn_usd: 8, day_usd: 1, steps: 120, turn_minutes: 60, turn_tokens: 1e7 };
+    assert.equal(capText('day_usd', caps, 0.04), "The next step could go over today's $1.00 limit ($0.04 left); it resets at midnight.");
+    assert.equal(capText('day_usd', caps, 0.001), "Today's $1.00 limit is reached; it resets at midnight.");
+    assert.equal(capText('day_usd', caps), "Today's $1.00 limit is reached; it resets at midnight.");
+    assert.equal(capText('turn_usd', caps, 0.04), "The next step could go over this turn's $8.00 limit.");
+    const m = opusMk({ caps: { turn_usd: 8, day_usd: 1 } });
+    // $0.96 of input (240,000 tokens at Claude Opus 5.5's $4).
+    m.provider.script({ text: 'Read it.', usage: { input: 240_000, output: 10 } });
+    const a = await startTurn(m, 'Read the counter.');
+    await settled(a.turn);
+    const b = await startTurn(m, { text: 'Read it again.', conversation: a.body.conversation });
+    await settled(b.turn);
+    assert.deepEqual([b.turn.state, b.turn.endReason], ['capped', 'day_usd']);
+    assert.match(b.turn.message, /^The next step could go over today's \$1\.00 limit \(\$0\.0[34] left\); it resets at midnight\.$/);
+    assert.equal(m.provider.requests.length, 1, 'nothing sent');
+  });
+});
+
+describe('a long conversation leaves out its oldest tool results (providers/common.ts clearedResults)', () => {
+  // Results longer than the note a left-out one becomes (as a CAD read's are).
+  const look = () => hostTool('look', { run: async () => ({ ok: true, data: { seen: 'x'.repeat(400) }, summary: 'looked' }) });
+  const calls = (n) => Array.from({ length: n }, () => ({ name: 'look' }));
+  /** freshOf's count (loop.ts): an answer's raw payload as JSON, a user message's text and results. */
+  const charsOf = (messages) =>
+    messages.reduce((n, m) => n + (m.role === 'assistant' ? JSON.stringify(m.raw.payload).length : m.parts.reduce((k, p) => k + (p.type === 'text' || p.type === 'tool_result' ? p.text.length : 0), 0)), 0);
+  const tokensOf = (chars) => Math.ceil((1.2 * chars) / 3);
+
+  it('each request asks to leave out what clearedResults says of the stored messages, which stay as they were; the step that just ran goes whole', async () => {
+    const { clearedResults } = await import('../assistant/providers/common.ts');
+    const { buildRequest } = await import('../assistant/loop.ts');
+    const m = mk({ hostTools: [look()] });
+    m.provider.script({ tools: calls(40) }, { tools: calls(1) }, { text: 'Done.', cleared: { results: 24, tokens: 900 } });
+    const r = await startTurn(m, 'Look a lot.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    assert.deepEqual(m.provider.requests.map((x) => x.req.clearResults), [0, 0, 24], 'the 40 results of step 1 whole while they are the newest step');
+    assert.deepEqual(m.provider.requests.map((x) => clearedResults(x.messages)), [0, 0, 24]);
+    checkInvariants(assert, r.turn.conv, m.provider.requests);
+    const before = structuredClone(r.turn.conv.messages);
+    const req = buildRequest(r.turn.conv, [], r.turn.settings);
+    assert.deepEqual(r.turn.conv.messages, before, 'building a request changes no stored message');
+    assert.equal(req.clearResults, 24);
+  });
+
+  it('a jump within a turn (local server, its context known): the previous prompt less what it sent from the first newly left-out result, plus what this request sends there now and its new messages', async () => {
+    const { sentMessages } = await import('../assistant/providers/common.ts');
+    const context = 16_000;
+    const m = mk({ provider: 'openai_compatible', hostTools: [look()] });
+    m.provider.modelRow = async () => ({ context, type: 'llm' });
+    m.provider.script({ tools: calls(40), usage: { input: 3000 } }, { tools: calls(1), usage: { input: 12_000 } }, { text: 'Done.' });
+    const r = await startTurn(m, 'Look a lot.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    const third = m.provider.requests[2];
+    assert.equal(third.req.clearResults, 24);
+    const stored = third.messages;
+    const sent = sentMessages(stored, 24);
+    // [prompt, answer 1, its 40 results, answer 2, its result]: the jump starts at message 2.
+    const drop = tokensOf(charsOf(stored.slice(2, 3)));
+    const prompt = 12_000 - drop + tokensOf(charsOf(sent.slice(3)) + charsOf(sent.slice(2, 3)));
+    assert.equal(third.req.maxOutputTokens, Math.min(8192, context - prompt - 1024));
+    assert.ok(third.req.maxOutputTokens < 8192, 'within the context, not at the cap');
+    const whole = 12_000 + tokensOf(charsOf(stored.slice(3)));
+    assert.ok(third.req.maxOutputTokens > context - whole - 1024, 'less than if every result were sent');
+  });
+
+  it("a later turn's first request is priced on what it sends: the left-out results as their note", async () => {
+    const { sentMessages } = await import('../assistant/providers/common.ts');
+    const context = 12_000;
+    const m = mk({ provider: 'openai_compatible', hostTools: [look()] });
+    m.provider.modelRow = async () => ({ context, type: 'llm' });
+    m.provider.script({ tools: calls(40) }, { tools: calls(1) }, { text: 'Done.' }, { text: 'Again.' });
+    const r = await startTurn(m, 'Look a lot.');
+    await settled(r.turn);
+    const next = await startTurn(m, { text: 'And now?', conversation: r.body.conversation });
+    assert.equal(next.status, 202, JSON.stringify(next.body));
+    await settled(next.turn);
+    const first = m.provider.requests[3];
+    assert.equal(first.req.clearResults, 24);
+    const system = first.req.system.reduce((n, s) => n + s.text.length, 0);
+    const prompt = tokensOf(charsOf(sentMessages(first.messages, 24)) + system) + 500 * first.req.tools.length;
+    assert.equal(first.req.maxOutputTokens, Math.min(8192, context - prompt - 1024));
+    assert.ok(first.req.maxOutputTokens < 8192, 'within the context, not at the cap');
+    const whole = tokensOf(charsOf(first.messages) + system) + 500 * first.req.tools.length;
+    assert.ok(prompt < whole, `${prompt} < ${whole}`);
+  });
+
+  it('a provider that cleared another number than asked: one warn line in the turn', async () => {
+    const warned = [];
+    const orig = console.warn;
+    console.warn = (...a) => warned.push(a.join(' '));
+    try {
+      const m = mk({ hostTools: [look()] });
+      m.provider.script({ tools: calls(40) }, { tools: calls(1) }, { tools: calls(1), cleared: { results: 20, tokens: 5 } }, { text: 'Done.' });
+      const r = await startTurn(m, 'Look a lot.');
+      await settled(r.turn);
+      assert.equal(r.turn.state, 'done', r.turn.message);
+      const lines = warned.filter((l) => l.includes('the provider cleared another number of old tool results than asked'));
+      assert.equal(lines.length, 1, warned.join('\n'));
+      assert.match(lines[0], /"asked":24,"cleared":20/);
+    } finally {
+      console.warn = orig;
+    }
   });
 });
 
@@ -1641,7 +1962,10 @@ describe('how many turns', () => {
     assert.equal(r.status, 202);
     await settled(r.turn);
     assert.equal(m.provider.requests[1].req.messages.length, 3, 'the second turn carries the first');
+    // Claude Opus 5.5's own 1M window: full at 800,000 (Magnusim once held every cloud model to 160,000).
     r.turn.conv.promptTokens = 0.8 * 200_000;
+    assert.equal(r.turn.conv.fullReason(), null);
+    r.turn.conv.promptTokens = 0.8 * 1_000_000;
     r = await startTurn(m, { text: 'y', conversation: conv });
     assert.deepEqual([r.status, r.body.code], [409, 'conversation_full']);
     assert.deepEqual(m.manager.forget(conv).body, { ok: true, forgotten: true });
@@ -1717,6 +2041,21 @@ describe("what a tool hears of its turn: the person's message and the conversati
     await settled(r.turn);
     assert.deepEqual(seen, [['Import C:\\parts\\bracket.step', r.body.conversation]]);
   });
+  it("each call's place in its step: the step's number and the calls after it in the same answer, counting down", async () => {
+    const seen = [];
+    const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.step), { ok: true, summary: 'who' }) })] });
+    m.provider.script({ tools: [{ name: 'who' }, { name: 'who' }, { name: 'who' }] }, { tools: [{ name: 'who' }] }, { text: 'Done.' });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    // A host tool is no workspace edit: editsLeft counts only the turn's workspace's edit tools (assistant-relay.test.js).
+    assert.deepEqual(seen, [
+      { n: 1, callsLeft: 2, editsLeft: 0 },
+      { n: 1, callsLeft: 1, editsLeft: 0 },
+      { n: 1, callsLeft: 0, editsLeft: 0 },
+      { n: 2, callsLeft: 0, editsLeft: 0 },
+    ]);
+  });
+
   it('what the turn used so far of its limits (app_status shows it): its steps, minutes and dollars against its caps in force', async () => {
     const seen = [];
     const m = mk({ hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });
@@ -1726,11 +2065,51 @@ describe("what a tool hears of its turn: the person's message and the conversati
     await settled(r.turn);
     assert.equal(seen.length, 2);
     for (const u of seen) {
-      assert.deepEqual(Object.keys(u).sort(), ['minutes', 'minutes_cap', 'steps', 'steps_cap', 'usd', 'usd_cap']);
+      assert.deepEqual(Object.keys(u).sort(), ['minutes', 'minutes_cap', 'steps', 'steps_cap', 'usd', 'usd_cap', 'usd_left']);
       assert.equal(u.minutes_cap, m.state.settings.caps.turn_minutes);
       assert.ok(u.steps_cap > 0 && u.usd_cap > 0, JSON.stringify(u));
     }
     assert.ok(seen[1].steps > seen[0].steps, 'read at each call');
+  });
+});
+
+describe("the money left that a turn's tools and page hear (usd_left)", () => {
+  const round6 = (n) => Math.round(n * 1e6) / 1e6;
+  for (const [what, caps, spentBefore, smaller] of [
+    ["today's room, when it is the smaller", { turn_usd: 2, day_usd: 3 }, 2.5, 'day'],
+    ["the turn's room, when it is the smaller", { turn_usd: 0.4, day_usd: 15 }, 0, 'turn'],
+  ]) {
+    it(`is the smaller of the turn's and today's room: ${what}`, async () => {
+      const seen = [];
+      const m = mk({ caps, hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });
+      if (spentBefore) {
+        const res = await m.ledger.reserve(spentBefore);
+        await m.ledger.settle(res, spentBefore);
+      }
+      m.provider.script({ text: 'Looking.', tools: [{ name: 'who' }], usage: { input: 2000, output: 100 } }, { text: 'Done.' });
+      const r = await startTurn(m, 'How much is left?');
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      await settled(r.turn);
+      // The call ran after its step's request was settled: the turn had spent u.usd, today spentBefore more.
+      const [u] = seen;
+      const turnRoom = caps.turn_usd - u.usd;
+      const dayRoom = caps.day_usd - (spentBefore + u.usd);
+      assert.ok(u.usd > 0, 'the first request was priced');
+      assert.equal(u.usd_left, round6(Math.min(turnRoom, dayRoom)));
+      assert.equal(u.usd_left, round6(smaller === 'day' ? dayRoom : turnRoom), JSON.stringify(u));
+      // The page hears the same (its turn frame), as of the last request.
+      assert.equal(r.turn.pageView().used.usd_left, round6(Math.min(caps.turn_usd - r.turn.usd, caps.day_usd - m.ledger.spentToday())));
+    });
+  }
+
+  it('a local server counts no dollars: no usd_left', async () => {
+    const seen = [];
+    const m = mk({ provider: 'openai_compatible', hostTools: [hostTool('who', { run: async (_input, rt) => (seen.push(rt.ctx.used()), { ok: true, summary: 'who' }) })] });
+    m.provider.script({ text: 'Looking.', tools: [{ name: 'who' }] }, { text: 'Done.' });
+    const r = await startTurn(m, 'x');
+    await settled(r.turn);
+    assert.equal(Object.hasOwn(seen[0], 'usd_left'), false);
+    assert.equal(Object.hasOwn(r.turn.pageView().used, 'usd_left'), false);
   });
 });
 

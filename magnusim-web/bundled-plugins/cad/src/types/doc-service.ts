@@ -8,7 +8,7 @@
 // earlier features (a sketch's regions), the sketch solver and face names;
 // RebuildState publishes every feature's output.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SavedCamera, ScaleModelPlace, StoredFileRef, Vec2, Vec3 } from './doc';
+import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SavedCamera, SavedSection, ScaleModelPlace, StoredFileRef, Vec2, Vec3 } from './doc';
 import type { BodyInfo, KernelAdapter } from './kernel';
 import type { BBox, OffsetFaceAbout, ShapeId } from './kernel-protocol';
 import type { FaceNames } from './naming';
@@ -421,11 +421,15 @@ export interface DocService {
   // --- view state: saved, not undoable ---
   setRollback(index: number | null): void;
   setBodyVisible(id: BodyId, visible: boolean): void;
+  /** Draw bodies see-through (on) or opaque again (CadView.seeThroughBodies). */
+  setBodiesSeeThrough(ids: readonly BodyId[], on: boolean): void;
   setExpanded(key: string, expanded: boolean): void;
   /** The origin planes' mode, kept per Part. */
   setPlanes(mode: 'auto' | 'always'): void;
   /** Where the camera is, kept per Part (written on the view's cadence; not undoable). */
   setCamera(camera: SavedCamera): void;
+  /** The section view, kept per Part while it is on (null: off); not undoable (src/features/section). */
+  setSection(section: SavedSection | null): void;
   /** Show or hide a sketch in model mode (the tree's eye); null forgets the choice (shown until used). */
   setSketchVisibility(id: FeatureId, mode: 'shown' | 'hidden' | null): void;
   /**
