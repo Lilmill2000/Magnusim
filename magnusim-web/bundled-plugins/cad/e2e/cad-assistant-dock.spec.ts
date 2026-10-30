@@ -7,8 +7,8 @@
 // closes it back to the Part; a question of a CAD request shows as the dock's card with No
 // focused while the Part had the keyboard (Enter answers No); the app's toasts stay clear of the
 // Part's chips; a sketch the person draws between two dock messages is pictured whole by view's
-// sketch, named in the dock's step (this host names no conversation on a turn yet, so the next
-// request's user_changes do not tell it: the fallback); view's picture of a hidden sketch far
+// sketch, named in the dock's step, and told in the next request's user_changes (the host names
+// the conversation of each turn); view's picture of a hidden sketch far
 // above the part shows its lines; a feature name one word off gets no closest name.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
@@ -299,10 +299,10 @@ test("cad:assistant-dock-sketch-spec the person draws a sketch between two dock 
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 2 });
   const [read] = resultsIn(chats(host)[before + 1]);
   expect(read).toMatchObject({ tool: 'cad__get_model', ok: true });
-  // The fallback: this host names no conversation on a turn (AssistantTurn.conversation), so the
-  // request starts from its own first call and does not tell the sketch. A host that names it
-  // tells 'added <sketch> (sketch)' here (unit: model.test.ts, rev.test.ts).
-  expect(read.data?.user_changes).toBeUndefined();
+  // This host names each turn's conversation (AssistantTurn.conversation), so the second request
+  // shares the first one's baseline and tells the sketch the person drew between them
+  // (unit: model.test.ts, rev.test.ts).
+  expect(read.data?.user_changes).toEqual([`added ${sketch} (sketch)`]);
   const [viewed] = resultsIn(chats(host)[before + 2]);
   expect(viewed).toMatchObject({ tool: 'cad__view', ok: true, data: { views: [], sketch: { name: sketch, normal: [0, 0, 1] } } });
   expect(viewed.images).toHaveLength(1);
