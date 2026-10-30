@@ -18,7 +18,10 @@ import scaleModule from '../../../src/features/scale';
 import type { EnclosureFeature, Feature } from '../../../src/types/doc';
 import { cfdFirst, volumeListShown } from '../../../src/ui/StatusDock';
 import { block, blockRegions } from '../../doc/blocks';
-import { startApp, type FakeApp } from '../extrude/fake-app';
+import { memoryPrefs, startApp, type FakeApp } from '../extrude/fake-app';
+import type { PrefsApi } from '../../../src/lib/bridge';
+import { keybindsFor } from '../../../src/app/keybinds';
+import { vi } from 'vitest';
 
 let app: FakeApp | null = null;
 afterEach(() => {
@@ -27,9 +30,12 @@ afterEach(() => {
   app = null;
 });
 
-/** A 20 mm block and an Enclosure around it (5 mm out on every side), as a Part made in Magnusim has them. */
-async function start(projectLinks?: boolean) {
-  app = await startApp({ modules: [enclosureModule, combineModule, scaleModule], ...(projectLinks === undefined ? {} : { projectLinks }) });
+/**
+ * A 20 mm block and an Enclosure around it (5 mm out on every side), as a Part made in Magnusim has
+ * them. `prefs`: the person's stored preferences (their keybinds), read as bootstrap reads them.
+ */
+async function start(projectLinks?: boolean, prefs?: PrefsApi) {
+  app = await startApp({ modules: [enclosureModule, combineModule, scaleModule], ...(projectLinks === undefined ? {} : { projectLinks }), ...(prefs ? { prefs } : {}) });
   const a = app;
   a.kernel.regionsFor = blockRegions;
   act(() => void block(a.doc));
@@ -161,5 +167,62 @@ describe('the volume chip with more bodies than it lists', () => {
   it('Magnusim: the Enclosure first; Magnusim CAD: the biggest', () => {
     expect(volumeListShown(bodies, cfdFirst(features, true)).map((b) => b.id)).toEqual(['b_1', 'b_2', 'b_3', 'b_enc']);
     expect(volumeListShown(bodies, cfdFirst(features, false)).map((b) => b.id)).toEqual(['b_1', 'b_2', 'b_3', 'b_4']);
+  });
+});
+
+// Main's review (2026-10-29): Settings in Magnusim CAD no longer lists the Enclosure, so its conflict
+// check never sees a key the person gave it in Magnusim. That stored key must be inert in the Part,
+// and free for another command there, so one press never runs two.
+describe('a key stored for the Enclosure (the person bound J to it in Magnusim)', () => {
+  const STORED = { keybinds: { 'cfd.enclosure': ['KeyJ'] } };
+  const pressJ = async (a: FakeApp) => {
+    act(() => void fireEvent.keyDown(document.body, { key: 'j', code: 'KeyJ' }));
+    await a.settle();
+  };
+  const enclosures = (a: FakeApp) => a.doc.state.get().doc.features.filter((f) => f.type === 'enclosure').length;
+
+  it('Magnusim CAD: J does nothing; given to Extrude it is taken with no conflict and runs Extrude alone, once', async () => {
+    const prefs = memoryPrefs(STORED);
+    const a = await start(false, prefs.api);
+    const k = keybindsFor(a.services);
+    expect(k.known()).toBe(true);
+    // Stored (it stays for Magnusim), but no command of this Part has it.
+    expect(k.current('cfd.enclosure')).toEqual(['KeyJ']);
+    expect(k.entry('cfd.enclosure')).toBeNull();
+    expect(k.owners('KeyJ')).toEqual([]);
+    expect(a.services.commands.keys!('cfd.enclosure')).toEqual([]);
+    const runs = vi.spyOn(a.services.commands, 'run');
+    const before = a.doc.state.get().doc;
+    await pressJ(a);
+    expect(runs).not.toHaveBeenCalled();
+    expect(panel(a)).toBeNull();
+    expect(a.doc.state.get().doc).toBe(before);
+    expect(enclosures(a)).toBe(1);
+    // J for Extrude: no conflict (no Replace question), none listed after.
+    expect(k.conflictsWith('solid.extrude', 'KeyJ')).toEqual([]);
+    let set: unknown = null;
+    act(() => void (set = k.setKeybind('solid.extrude', 'J')));
+    expect(set).toMatchObject({ ok: true, keys: ['KeyJ'] });
+    expect(k.conflicts()).toEqual([]);
+    expect(k.owners('KeyJ')).toEqual(['solid.extrude']);
+    await act(async () => void (await k.flush()));
+    expect(prefs.values.keybinds).toEqual({ 'cfd.enclosure': ['KeyJ'], 'solid.extrude': ['KeyJ'] });
+    await pressJ(a);
+    expect(runs.mock.calls.map((c) => c[0])).toEqual(['solid.extrude']);
+    expect(a.$('[data-cad-panel] [data-panel-title]')?.textContent).toMatch(/^Extrude/);
+    expect(enclosures(a)).toBe(1);
+  });
+
+  it('Magnusim: J runs the Enclosure (a new one opens), and Extrude cannot take J without the Replace question', async () => {
+    const a = await start(undefined, memoryPrefs(STORED).api);
+    const k = keybindsFor(a.services);
+    expect(k.current('cfd.enclosure')).toEqual(['KeyJ']);
+    expect(k.owners('KeyJ')).toEqual(['cfd.enclosure']);
+    expect(k.conflictsWith('solid.extrude', 'KeyJ')).toEqual(['cfd.enclosure']);
+    expect(k.setKeybind('solid.extrude', 'J')).toMatchObject({ ok: false, reason: 'conflict', with: 'cfd.enclosure' });
+    const runs = vi.spyOn(a.services.commands, 'run');
+    await pressJ(a);
+    expect(runs.mock.calls.map((c) => c[0])).toEqual(['cfd.enclosure']);
+    expect(a.$('[data-cad-panel] [data-panel-title]')?.textContent).toBe('Enclosure 2');
   });
 });

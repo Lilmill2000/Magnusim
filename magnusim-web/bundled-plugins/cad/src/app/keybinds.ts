@@ -430,7 +430,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
     capture: (ev) => captureCombo(ev, layout, assistantKeys()),
     problem: (combo) => comboProblem(combo, layout, assistantKeys()),
     assistantKeys,
-    appClashes: () => appClashesIn(keysOf, assistantKeys()),
+    appClashes: () => appClashesIn(keysOf, assistantKeys(), map),
     shown(id) {
       if (!entryOf(id)) return undefined;
       const k = working(id);
@@ -477,7 +477,8 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
       return { ok: true, kept };
     },
     overrides: () => over,
-    conflicts: () => conflictsIn(keysOf),
+    // Magnusim CAD: a key stored for a project's command (the Enclosure, bound in Magnusim) is no one's here.
+    conflicts: () => conflictsIn(keysOf, map),
     flush: () => writing,
     subscribe(fn) {
       listeners.add(fn);

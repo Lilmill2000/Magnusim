@@ -616,15 +616,18 @@ export function isAssistantPress(e: KeyLike, keys: readonly string[] | null): bo
 /** Whether two contexts meet (the same one, or either is 'any'). */
 export const contextsMeet = (a: KeyContext, b: KeyContext): boolean => a === b || a === 'any' || b === 'any';
 
-/** Every pair of entries whose keys conflict, under `keysOf` (the defaults when left out). */
-export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultKeys): { combo: string; ids: [string, string] }[] {
+/**
+ * Every pair of entries whose keys conflict, under `keysOf` (the defaults when left out), among
+ * `entries` (the registry; keymapFor(false) in Magnusim CAD, where a project's command is no one's).
+ */
+export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultKeys, entries: readonly KeymapEntry[] = KEYMAP): { combo: string; ids: [string, string] }[] {
   const out: { combo: string; ids: [string, string] }[] = [];
-  for (let i = 0; i < KEYMAP.length; i++) {
-    const a = KEYMAP[i];
+  for (let i = 0; i < entries.length; i++) {
+    const a = entries[i];
     const ka = keysOf(a.id);
     if (!ka.length) continue;
-    for (let j = i + 1; j < KEYMAP.length; j++) {
-      const b = KEYMAP[j];
+    for (let j = i + 1; j < entries.length; j++) {
+      const b = entries[j];
       if (!contextsMeet(a.context, b.context)) continue;
       for (const c of keysOf(b.id)) if (ka.includes(c)) out.push({ combo: c, ids: [a.id, b.id] });
     }
@@ -636,10 +639,10 @@ export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultK
  * Every entry whose keys (under `keysOf`) take a key no keybind may have (the app's, the browser's
  * and the system's reserved ones, CAD's built-in Escape) or one a press never gives; `by` says why.
  * `assistant`: the Assistant panel's keys the person chose (a stored keybind may have one of them:
- * it stays stored, but the press is the app's).
+ * it stays stored, but the press is the app's). `entries`: as conflictsIn's.
  */
-export function appClashesIn(keysOf: (id: string) => readonly string[] = defaultKeys, assistant: readonly string[] | null = null): { combo: string; id: string; by: string }[] {
-  return KEYMAP.flatMap((x) => keysOf(x.id).flatMap((c) => (refusal(c, assistant) ? [{ combo: c, id: x.id, by: refusal(c, assistant) }] : [])));
+export function appClashesIn(keysOf: (id: string) => readonly string[] = defaultKeys, assistant: readonly string[] | null = null, entries: readonly KeymapEntry[] = KEYMAP): { combo: string; id: string; by: string }[] {
+  return entries.flatMap((x) => keysOf(x.id).flatMap((c) => (refusal(c, assistant) ? [{ combo: c, id: x.id, by: refusal(c, assistant) }] : [])));
 }
 
 // ------------------------------------------------------------------ workspace/commands.json
