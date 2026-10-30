@@ -463,16 +463,22 @@ comes on). Rename the result, for example to "Fluid".
     back.
   - The cut follows its plane: an edit that moves a construction plane, or a
     face that moves, moves the cut too. If the plane is deleted (or no longer
-    builds), the section turns off and a note says why; while a panel edits an
-    earlier feature or the rollback bar is above the plane, the cut stays where
-    it was.
+    builds), the section turns off and a note says why, and the next cut starts
+    on Front; while a panel edits an earlier feature or the rollback bar is
+    above the plane, the cut stays where it was (the note says it is rolled
+    back). A Part opened with the bar above its section's plane opens uncut
+    and keeps the section: it comes back once the plane builds.
+  - The view tools' button and INSPECT > Section view turn the cut on where
+    its plane is now (a face that moved while the cut was off is cut through
+    its middle again).
   - It is a view, not a feature: no undo step, never in the model or the
     simulation. The Part keeps it, so it is there when you open the Part again.
     The view tools' section button and its quick controls (Top, Front, Right, a
     slider, Flip side, Middle) drive the same cut; **More** opens this panel.
   - The Assistant sets the same cut (workspace section, on any of these
-    planes), reads it back, and draws pictures cut on any of them; the Picture
-    panel's Section takes a construction plane or the selected flat face too.
+    planes), reads it back (with the panel's note, and a face's selector it can
+    use again), and draws pictures cut on any of them; the Picture panel's
+    Section takes a construction plane or the selected flat face too.
 - **See-through** (INSPECT) draws the selected bodies see-through (a selected
   face counts for its body), so you can see what is inside and behind them.
   Their edges stay drawn, and a click on them goes through to an opaque face
@@ -488,6 +494,9 @@ comes on). Rename the result, for example to "Fluid".
   - It is a view, as hiding is: no undo step, never in the model or the
     simulation. The Part keeps it, so it is there when you open the Part again.
     Pictures draw see-through bodies see-through, as they leave out hidden ones.
+  - It belongs to the body, as hiding does: a new body made from it (a split's
+    other pieces, a Move/copy body copy, a pattern's copies) starts opaque,
+    with its colour; make it see-through on its own.
   - The Assistant does the same (workspace see_through and opaque) and reads it
     back (get_model's parts say see_through).
 

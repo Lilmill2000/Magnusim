@@ -646,7 +646,8 @@ export const CHECK: { readonly [K in CheckControl]: Reach } = {
  * INSPECT's Section view panel, control by control (the command inspect.section opens it), and its
  * arrow in the view: the workspace tool's section sets the same view state (src/features/section/bind.ts
  * setSectionView), with the same plane forms (an origin plane, a construction plane by name, a flat
- * face, "selection"), offset or middle, and flip; off turns it off.
+ * face, "selection"), offset or middle, and flip; off turns it off. What the panel's note says,
+ * get_model's section says too.
  */
 export const SECTION: { readonly [K in SectionControl]: Reach } = {
   on: reach('workspace', 'action', 'section', 'value "off" turns it off; any plane turns it on'),
@@ -656,6 +657,7 @@ export const SECTION: { readonly [K in SectionControl]: Reach } = {
   middle: reach('workspace', 'action', 'section', 'value "<plane> middle"'),
   flip: reach('workspace', 'action', 'section', 'value "<plane> ... flip"'),
   arrow: reach('workspace', 'action', 'section', 'a drag of the arrow sets the offset, as value "<plane> offset <length>" does'),
+  note: reach('get_model', 'detail', 'brief', "section.note: the panel's note (on: false when the section turned off); the workspace's view.section too"),
 };
 
 const POINTER = auto("the person's pointer in the view (orbit, pick, hover): the Assistant names things by selector");

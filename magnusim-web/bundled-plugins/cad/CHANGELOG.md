@@ -20,7 +20,9 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 - It is a view, as hiding is: no undo step, never in the model or the
   simulation; the Part keeps it when it is opened again. Pictures (the Assistant's
   and the Picture panel's) draw see-through bodies see-through, as they leave
-  out hidden ones.
+  out hidden ones; the picture after an Assistant's edit names them. A new body
+  made from a see-through one (a split's other pieces, a copy) starts opaque, as
+  it starts shown when its source is hidden.
 - The Assistant's workspace see_through and opaque do the same (a body, or
   several); get_model's parts, the body tool and the view tool say which bodies
   are see-through.
@@ -37,14 +39,20 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   Offset follows (Ctrl: whole millimetres).
 - The cut follows its plane when an edit moves it (a construction plane turned
   by a parameter, a face that moves as its extrude grows). A deleted plane turns
-  the section off with a note.
+  the section off with a note, and the next cut starts on Front. With the
+  rollback bar above the plane the cut stays where it was, and the note says it
+  is rolled back.
 - The section is kept with the Part (no undo step) and comes back when it is
-  opened again. The view tools' section button drives the same cut and names a
-  construction plane or face it is on; its More opens the panel.
+  opened again; opened with the bar above its plane, the Part keeps it and it
+  comes back once the plane builds. The view tools' section button drives the
+  same cut and names a construction plane or face it is on; its More opens the
+  panel. The button and INSPECT > Section view turn the cut on where its plane
+  is now.
 - The Assistant's workspace section and view section take the same planes (a
   construction plane by name, a flat face, "selection", with offset or middle
-  and flip); its answer and get_model name the plane. The Picture panel's
-  Section takes a construction plane or the selected flat face too.
+  and flip); its answer and get_model name the plane (a face with its selector,
+  which they take back) and say the panel's note. The Picture panel's Section
+  takes a construction plane or the selected flat face too.
 
 **Copy and paste sketch geometry.**
 - In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C

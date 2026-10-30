@@ -188,7 +188,9 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(services.modules.tool('inspect.section'), 'the Section view panel is the inspect.section command\'s tool').toBeTruthy();
     expect(COMMANDS['inspect.section']).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
     expect(Object.keys(SECTION).sort()).toEqual(Object.keys(SECTION_CONTROLS).sort());
-    for (const r of Object.values(SECTION)) expect(r).toMatchObject({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
+    for (const [k, r] of Object.entries(SECTION)) if (k !== 'note') expect(r).toMatchObject({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
+    // What the panel's note says (a cut held where it was, why the section turned off), get_model's section says.
+    expect(SECTION.note).toMatchObject({ kind: 'reach', tool: 'get_model', field: 'detail', value: 'brief', note: expect.stringMatching(/^section\.note: the panel's note/) });
     expect(SECTION.arrow).toMatchObject({ note: expect.stringMatching(/drag of the arrow sets the offset/) });
     expect(AI_TOOLS.workspace['action=section']).toEqual({ kind: 'command', id: 'inspect.section', also: expect.stringMatching(/^the arrow on the cut in the view: a drag sets the offset/) });
     // The view keeps it; the document keeps it in the Part's view (both the workspace's section).

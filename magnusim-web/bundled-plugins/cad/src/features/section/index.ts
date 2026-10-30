@@ -2,15 +2,15 @@
 // normal arrow moving the cut, typed offset and flip"): INSPECT's "Section view", a tool panel over
 // the view's one section state, and the binding that keeps that state true to the Part (bind.ts:
 // follows a construction plane or a face, turns off when its plane is gone, kept in the Part's view).
-// The command turns the cut on as it opens the panel (through the middle of the shown bodies on the
-// plane it had, as the view tools' button does); run again, it closes the panel and leaves the cut.
+// The command turns the cut on as it opens the panel (on the plane it had, found where it is now, as
+// the view tools' button does: bind.ts sectionOn; not while the Part's saved section waits for its
+// rolled-back plane); run again, it closes the panel and leaves the cut.
 // Owner: VIEWPORT (the section view's plane).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import '../p2/p2.css';
 import type { CadModule } from '../../types/modules';
 import { uiFor } from '../../ui/controller';
-import { startOffset } from '../../viewport/ViewportChrome';
-import { bindSection } from './bind';
+import { bindSection, sectionNotes, sectionOn } from './bind';
 import { SectionPanel } from './panel';
 import { SECTION_COMMAND } from './plane';
 
@@ -38,9 +38,9 @@ const module: CadModule = {
           ui.closePanel();
           return;
         }
-        const h = services.viewport.get().handle;
-        const sec = h?.state.get().section;
-        if (h && sec && !sec.on) h.setSection({ on: true, offset: startOffset(h, sec) });
+        const sec = services.viewport.get().handle?.state.get().section;
+        // A saved section waiting for its rolled-back plane stays as it is: the panel's note says why.
+        if (sec && !sec.on && !sectionNotes(services).get().waiting) void sectionOn(services);
         ui.openTool(SECTION_COMMAND);
       },
     });

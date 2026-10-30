@@ -74,7 +74,7 @@ import { runtimeOf } from '../runtime';
 import { workspaceActionsFor, type WorkspaceAction } from '../schemas';
 import { centreOf, hitWords, selectAny, withScene, type Hit } from '../selectors/resolve';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
-import { findSection, sectionData } from '../view';
+import { findSection, personSection, sectionData } from '../view';
 import { SECTION_FORMS } from '../measure-targets';
 import { setSectionView } from '../../features/section/bind';
 import { seeThroughBy, seeThroughWhy } from '../../viewport/bind';
@@ -713,10 +713,10 @@ function personView(ctx: CallCtx, i: Input): ViewportHandle {
 
 const STANDARD: readonly StandardView[] = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso', 'iso_back', 'home'];
 const DISPLAY: Readonly<Record<string, DisplayMode>> = { shaded_edges: 'shaded-edges', 'shaded-edges': 'shaded-edges', shaded: 'shaded', wireframe: 'wireframe' };
-/** The view's words now (the reply's `view`): the section's plane by its words, as the person's Section view panel names it. */
+/** The view's words now (the reply's `view`): the section's plane by its words, as the person's Section view panel names it, and the panel's note. */
 function viewNow(services: AppServices, h: ViewportHandle): Record<string, unknown> {
   const st = h.state.get();
-  return { display: st.display.replace('-', '_'), projection: st.projection, section: st.section.on ? sectionData(services.doc.state.get(), st.section) : null };
+  return { display: st.display.replace('-', '_'), projection: st.projection, section: personSection(services) };
 }
 
 async function view(ctx: CallCtx, i: Input): Promise<ToolReply> {

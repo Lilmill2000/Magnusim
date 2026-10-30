@@ -10,6 +10,14 @@
 //                          Keep the other side flips the kept side; the key X (Section view) closes the
 //                          panel and the cut stays; reloaded, the Part comes back cut on Plane 1;
 //                          Cut the view off: no cut, the button not pressed, no arrow.
+//   cad:section-view-held-gone-moved  the rollback bar above the section's plane (Mid): the cut
+//                          stays and the note says Mid is rolled back; the view tools' button off
+//                          takes the note away; reloaded with the bar there, the Part opens uncut
+//                          and keeps the section (a toast, the panel's note), and INSPECT > Section
+//                          view leaves it so; the bar at the end puts the cut back on Mid. Mid
+//                          deleted: off, a toast and the note; the button cuts again on Front and
+//                          stays on. A face cut through its middle, turned off, its block grown
+//                          from 20 to 60 mm: the button cuts through the middle again (z = 30).
 // What is asserted is what the person sees: the panel's words and fields, the view's section state
 // (window.__CAD__: the clipping plane the view draws), where the arrow is, a point of the block that
 // the cut takes away and gives back (the view's own pick there).
@@ -175,5 +183,113 @@ test('cad:section-view-plane-arrow INSPECT > Section view on a construction plan
   expect(await arrow(page)).toBeNull();
   await expect.poll(() => savedSection(page)).toBeNull();
   await expect.poll(() => pickAt(page, FRONT_POINT)).not.toBeNull();
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+/** Setup through the document (the person's tree does the same): the rollback bar, a delete, an extrude's distance. */
+const setRollback = (page: Page, at: number | null) => workspaceFrame(page).evaluate((n) => (window as unknown as W).__CAD__.services.doc.setRollback(n), at);
+const removeFeature = (page: Page, id: string) => workspaceFrame(page).evaluate((f) => (window as unknown as W).__CAD__.services.doc.remove(f).ok as boolean, id);
+const setDistance = (page: Page, id: string, distance: string) =>
+  workspaceFrame(page).evaluate(
+    ({ f, d }) => {
+      const e = (window as unknown as W).__CAD__.services.doc.beginEdit(f);
+      e.update({ extent: { kind: 'blind', distance: d } });
+      e.commit();
+    },
+    { f: id, d: distance },
+  );
+const toast = (page: Page, text: string) => page.locator('[data-ws-toast]').filter({ hasText: text });
+
+test('cad:section-view-held-gone-moved the bar above the plane holds the cut and says rolled back; the button off drops the note; opened rolled back the Part keeps the cut and puts it back; a deleted plane leaves Front for the button; a face that moved is cut through its middle again', async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const { frame, seen } = await freshPart(page, request);
+  // A 20 mm cube at the origin and Mid, a construction plane 5 mm above Top (features: sketch, extrude, Mid).
+  const made = await addSolid(page, { size: [20, 20, 20] });
+  const mid = await workspaceFrame(page).evaluate(() => {
+    const s = (window as unknown as W).__CAD__.services.doc.beginNew('ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: '5 mm', name: 'Mid' });
+    s.commit();
+    return s.feature as string;
+  });
+  await expect.poll(() => workspaceFrame(page).evaluate((f) => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.outputs[f]?.type ?? null, mid), { timeout: 30_000 }).toBe('plane');
+  const p = panel(frame);
+  const note = p.locator('[data-section-note]');
+
+  // INSPECT > Section view, Mid clicked in the tree: the cut on Mid.
+  await runCommand(frame, 'inspect.section');
+  await frame.locator('[data-cad-tree] [data-feature-row] > .tree-row').filter({ hasText: 'Mid' }).click();
+  await expect.poll(async () => (await section(page)).plane).toEqual({ kind: 'feature', feature: mid });
+  // The rollback bar above Mid: the cut stays, and the note says Mid is rolled back.
+  await setRollback(page, 2);
+  await expect(note).toHaveText('Mid is rolled back: the cut stays where it last was until it builds again.', { timeout: 30_000 });
+  expect((await section(page)).on).toBe(true);
+  // The view tools' button turns the cut off: the note goes with it.
+  await stripButton(frame).click();
+  await expect.poll(async () => (await section(page)).on).toBe(false);
+  await expect(note).toHaveCount(0);
+  // On again with the button: held where it last was, said again; the Part keeps it.
+  await stripButton(frame).click();
+  await expect.poll(async () => (await section(page)).on).toBe(true);
+  await expect(note).toHaveText(/^Mid is rolled back: the cut stays where it last was/);
+  await expect.poll(() => savedSection(page)).toEqual({ plane: { kind: 'feature', feature: mid }, offset: 0, flip: false });
+
+  // Opened again with the bar still above Mid: not cut, the Part keeps the section, a toast says why.
+  await page.waitForTimeout(2200); // the view's own save cadence (one write per 2 s at most)
+  await page.reload();
+  const again = page.frameLocator('#workspace-frame');
+  await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready', { timeout: 60_000 });
+  await expect(toast(page, 'Mid is rolled back: the section view comes back when it builds.')).toBeVisible({ timeout: 60_000 });
+  expect((await section(page)).on).toBe(false);
+  expect(await savedSection(page)).toEqual({ plane: { kind: 'feature', feature: mid }, offset: 0, flip: false });
+  // INSPECT > Section view opens to say so, without cutting on another plane.
+  await runCommand(again, 'inspect.section');
+  const p2 = panel(again);
+  const note2 = p2.locator('[data-section-note]');
+  await expect(note2).toHaveText('Mid is rolled back: the section view comes back when it builds.');
+  await page.waitForTimeout(300);
+  expect((await section(page)).on).toBe(false);
+  await expect(stripButton(again)).toHaveAttribute('aria-pressed', 'false');
+  // The bar back at the end: Mid builds, and the cut is back on it.
+  await setRollback(page, null);
+  await expect.poll(async () => (await section(page)).on, { timeout: 30_000 }).toBe(true);
+  expect((await section(page)).plane).toEqual({ kind: 'feature', feature: mid });
+  await expect(p2.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['Mid']);
+  await expect(note2).toHaveCount(0);
+  await expect(stripButton(again)).toHaveAttribute('aria-pressed', 'true');
+
+  // Mid deleted: off, and a toast and the note say so; the next cut starts on Front.
+  expect(await removeFeature(page, mid)).toBe(true);
+  await expect(note2).toHaveText('The section view is off: Mid was deleted.', { timeout: 30_000 });
+  await expect(toast(page, 'The section view is off: Mid was deleted.')).toBeVisible();
+  await expect(stripButton(again)).toHaveAttribute('aria-pressed', 'false');
+  await expect(p2.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['Front plane']);
+  // The view tools' button cuts again, on Front, and the cut stays on (no flash back off).
+  await stripButton(again).click();
+  await expect.poll(async () => (await section(page)).on).toBe(true);
+  expect((await section(page)).plane).toEqual({ kind: 'origin', plane: 'origin:front' });
+  await page.waitForTimeout(800);
+  expect((await section(page)).on).toBe(true);
+  await expect(stripButton(again)).toHaveAttribute('aria-pressed', 'true');
+  await expect(note2).toHaveCount(0);
+
+  // The cube's top face clicked in the view (the panel takes it): cut through its middle, z = 10.
+  const top = await modelOnPage(page, [10, 15, 20]);
+  await page.mouse.click(top[0], top[1]);
+  await expect(p2.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['End face of Extrude 1']);
+  await expect(p2.locator('[data-section-where]')).toHaveText('Cuts at z = 10 mm; keeps z <= 10 mm');
+  // Off with the button; the block grows to 60 mm; on again with the button: through the middle of the
+  // 60 mm block (z = 30), not 10 mm from where the face was (z = 70, above the block: nothing cut).
+  await stripButton(again).click();
+  await expect.poll(async () => (await section(page)).on).toBe(false);
+  const seq = await rebuildSeq(page);
+  await setDistance(page, made.extrude, '60 mm');
+  await expect.poll(() => rebuildSeq(page), { timeout: 30_000 }).toBeGreaterThan(seq);
+  await stripButton(again).click();
+  await expect.poll(async () => (await section(page)).on).toBe(true);
+  await expect(again.locator('[data-section-value]')).toHaveText('Offset -30 mm', { timeout: 30_000 });
+  const cut = await section(page);
+  expect(cut.frame.origin[2] + cut.frame.normal[2] * cut.offset).toBeCloseTo(30, 6);
+  // INSPECT > Section view (the extrude's edit took the panel's place) says where it cuts.
+  if ((await p2.locator('[data-tool-panel="inspect.section"]').count()) === 0) await runCommand(again, 'inspect.section');
+  await expect(p2.locator('[data-section-where]')).toHaveText('Cuts at z = 30 mm; keeps z <= 30 mm');
   expect(seen.errors, 'console errors').toEqual([]);
 });

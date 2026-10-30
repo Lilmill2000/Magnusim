@@ -11,13 +11,14 @@ import { createSelectionStore } from '../../src/lib/selection';
 import { ServicesProvider } from '../../src/lib/services';
 import { createStateStore } from '../../src/lib/store';
 import { createCommandRegistry } from '../../src/app/commands';
+import { sectionNotes } from '../../src/features/section/bind';
 import type { AppServices } from '../../src/types/app';
 import type { DocState } from '../../src/types/doc-service';
 import type { StateStore } from '../../src/types/state';
 import type { CadEvents } from '../../src/types/events';
 import type { BodyInfo, TessPayload } from '../../src/types/kernel';
 import type { PickResult, SelectionItem } from '../../src/types/selection';
-import type { SavedCamera } from '../../src/types/doc';
+import type { PlaneFrame, SavedCamera } from '../../src/types/doc';
 import type { ViewportBody, ViewportHandle, ViewportPickEvent, ViewportState } from '../../src/types/viewport';
 import { bindViewport } from '../../src/viewport/bind';
 import { normalToTarget, viewportCommands } from '../../src/viewport/commands';
@@ -369,14 +370,16 @@ describe('viewport chrome', () => {
     expect(el.querySelector('[data-vp-pop="section"]')).toBeNull();
   });
 
-  it("a cut on a construction plane (INSPECT > Section view's) shows by its name, its offset along its own normal; More opens that panel", () => {
+  it("a cut on a construction plane (INSPECT > Section view's) shows by its name, its offset along its own normal; More opens that panel", async () => {
     const { el, h, services, click } = mount();
     // The Part has Plane 1, and the view is cut on it (as the Section view panel sets it).
-    (services.doc.state as StateStore<DocState>).set((s) => ({ ...s, doc: { features: [{ id: 'f_p', type: 'ref_plane', name: 'Plane 1' }], bodies: {} } }) as unknown as DocState);
-    act(() => h.setSection({ on: true, plane: { kind: 'feature', feature: 'f_p' }, frame: { origin: [0, 0, 5], normal: [0, 0, 1], xdir: [1, 0, 0] }, offset: 2 }));
+    const frame = { origin: [0, 0, 5], normal: [0, 0, 1], xdir: [1, 0, 0] } as PlaneFrame;
+    (services.doc.state as StateStore<DocState>).set((s) => ({ ...s, rebuild: { ...s.rebuild, outputs: { f_p: { type: 'plane', frame } } }, doc: { features: [{ id: 'f_p', type: 'ref_plane', name: 'Plane 1' }], bodies: {} } }) as unknown as DocState);
+    act(() => h.setSection({ on: true, plane: { kind: 'feature', feature: 'f_p' }, frame, offset: 2 }));
     click('[data-vp-opens="section"]');
-    // The button turns it off (it was on); on again: the same plane, at the plane itself (offset 0).
+    // The button turns it off (it was on); on again: the same plane, found where it is now, at the plane itself (offset 0).
     click('[data-vp-opens="section"]');
+    await act(async () => vi.waitFor(() => expect(h.state.get().section.on).toBe(true)));
     expect(h.state.get().section).toMatchObject({ on: true, plane: { kind: 'feature', feature: 'f_p' }, offset: 0 });
     const seg = [...el.querySelectorAll('[data-vp-seg="Section plane"] button')].map((b) => [b.textContent, b.getAttribute('aria-checked')]);
     expect(seg).toEqual([
@@ -393,5 +396,17 @@ describe('viewport chrome', () => {
     click('[data-section-more]');
     expect(run).toHaveBeenCalledTimes(1);
     expect(el.querySelector('[data-vp-pop="section"]')).toBeNull();
+  });
+
+  it('the plane the cut was on is gone (deleted while the cut was off): the button cuts on Front and says why, and the cut stays on', async () => {
+    const { el, h, services, click } = mount();
+    (services.doc.state as StateStore<DocState>).set((s) => ({ ...s, rebuild: { ...s.rebuild, outputs: {} }, doc: { features: [], bodies: {} } }) as unknown as DocState);
+    act(() => h.setSection({ on: false, plane: { kind: 'feature', feature: 'f_gone' }, frame: { origin: [0, 0, 5], normal: [0, 0, 1], xdir: [1, 0, 0] }, offset: 2 }));
+    click('[data-vp-opens="section"]');
+    await act(async () => vi.waitFor(() => expect(h.state.get().section.on).toBe(true)));
+    expect(h.state.get().section).toMatchObject({ on: true, plane: { kind: 'origin', plane: 'origin:front' }, offset: 10 });
+    expect(sectionNotes(services).get().note).toBe('The plane the cut was on was deleted: the section view cuts on Front.');
+    expect(el.querySelector('[data-vp-pop="section"]')).not.toBeNull();
+    expect(el.querySelector('[data-vp-opens="section"]')!.getAttribute('aria-pressed')).toBe('true');
   });
 });

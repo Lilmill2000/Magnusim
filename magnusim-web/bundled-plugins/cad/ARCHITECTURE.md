@@ -1311,12 +1311,19 @@ with the host once for the page's life, and its chip goes in the dock.
   (`handle.ts`, Move/copy body's arrow drawing and drag rule: `handle-math.ts`),
   the Assistant's workspace section. The view tools' popover drives the same
   state for the origin planes and names any other plane it is on; its More
-  runs the command. `bindSection` (installed with the module) follows the
-  plane after every rebuild, turns the section off with a note when the plane
-  is deleted or does not build while nothing holds it back (a panel editing an
-  earlier feature, the rollback bar), keeps the cut meanwhile, and keeps the
-  section in the Part's view (`CadView.section`, saved, not undoable; written
-  once a drag ends) and puts it back when the Part opens. The arrow points
+  runs the command. The view tools' button and the command turn the cut on
+  with `sectionOn`: the plane found where it is now first (it may have moved
+  while the cut was off), Front with a note when it is gone. `bindSection`
+  (installed with the module) follows the plane after every rebuild, turns the
+  section off and back to Front with a note when the plane is deleted or does
+  not build while nothing holds it back (a panel editing an earlier feature,
+  the rollback bar), keeps the cut meanwhile (said as rolled back when the bar
+  is above the plane), and keeps the section in the Part's view
+  (`CadView.section`, saved, not undoable; written once a drag ends) and puts
+  it back when the Part opens; held back then, it stays saved and comes back
+  once the plane builds. A note lasts until the cut turns off, on or moves to
+  another plane. The Assistant reads it: get_model's section and the
+  workspace's view carry the panel's note, and a face's selector. The arrow points
   along the plane's own normal whatever Flip keeps (the way Offset grows).
   Pictures take any plane by its frame (`SnapshotSection`) and leave the arrow
   out (`section.arrow` in `SNAPSHOT_HIDDEN_LAYERS`).

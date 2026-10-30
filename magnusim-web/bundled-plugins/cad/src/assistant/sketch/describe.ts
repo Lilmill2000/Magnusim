@@ -288,8 +288,8 @@ function linkRef(l: SketchLink, s: DocState): string {
   return sourceWords(src, { bodies, bodyName: () => bodyName, featureName: (id) => s.doc.features.find((g) => g.id === id)?.name ?? null });
 }
 
-/** A face's label on the shown bodies, or "". */
-function labelOfFace(s: DocState, bodyId: string, face: string): string {
+/** A face's label on the shown bodies (a body built now, its stored face name), or "". */
+export function labelOfFace(s: DocState, bodyId: string, face: string): string {
   const bodies = s.rebuild.bodies;
   const bi = bodies.findIndex((b) => b.id === bodyId);
   const fi = bi >= 0 ? (bodies[bi].names?.faces.indexOf(face) ?? -1) : -1;

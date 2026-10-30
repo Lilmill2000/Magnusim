@@ -11,10 +11,18 @@
 //     the cut follows it when a parameter turns it; a flat face by its reference, the cut follows it
 //     when the extrude grows; the plane rolled back keeps the cut where it was (with a note); deleted,
 //     the section turns off with a note and a toast; the saved section comes back when the Part opens.
+//   - review of the section round (real kernel): a Part opened with the bar above its section's plane
+//     keeps the section and puts it back once the plane builds (S1); a face that moved while the cut
+//     was off: INSPECT > Section view cuts through the middle of where it is now (S2); the note goes
+//     when the person (or the Assistant) turns the cut off (S3); a deleted plane leaves Front for the
+//     next cut, so the command (and the view tools' button) cut again (no flash, no second toast);
+//     get_model and the workspace's view say the panel's note (S4) and a face's selector, which the
+//     workspace's section takes back.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readSection, readView } from '../../../src/doc/schema';
 import { viewInput } from '../../../src/features/picture/panel';
+import sectionModule from '../../../src/features/section/index';
 import { bindSection, savedOf, sectionNotes, setSectionView } from '../../../src/features/section/bind';
 import { arrowPlace, draggedOffset } from '../../../src/features/section/handle-math';
 import { cutPoint, findSectionFrame, sectionPlaneKey, sectionPlaneWords } from '../../../src/features/section/plane';
@@ -118,9 +126,10 @@ afterEach(() => {
 
 /** A view that keeps a section state as the real one does (nextSection), over the bodies' boxes. */
 function fakeView(x: AssistantHarness) {
-  const state = createStateStore<{ section: SectionState }>({ section: { ...DEFAULT_SECTION } });
+  const state = createStateStore<{ section: SectionState; display: string; projection: string }>({ section: { ...DEFAULT_SECTION }, display: 'shaded-edges', projection: 'orthographic' });
   const handle = {
     state,
+    fit: () => {},
     setSection: (p: Partial<SectionState>) => state.set({ section: nextSection(state.get().section, p) }),
     sectionRange: (f: { origin: Vec3; normal: Vec3 }) => offsetRange(f, x.doc.state.get().rebuild.bodies.filter((b) => b.visible).map((b) => b.bbox)),
   };
@@ -177,11 +186,11 @@ describe('the section binding (real kernel)', () => {
       await vi.waitFor(() => expect(view.state.get().section.frame.normal[2]).toBeCloseTo(Math.SQRT1_2, 9));
       expect(view.state.get().section).toMatchObject({ on: true, offset: 3 });
 
-      // The rollback bar above the plane: not built, held back: the cut stays where it was, a note says so.
+      // The rollback bar above the plane: rolled back, held back: the cut stays where it was, a note says so.
       const at = view.state.get().section.frame;
       h.doc.setRollback(2);
       await settled(h);
-      await vi.waitFor(() => expect(sectionNotes(h!.services).get().note).toMatch(/^Tilt is not built now \(.*\): the cut stays where it last was until it builds again\.$/));
+      await vi.waitFor(() => expect(sectionNotes(h!.services).get().note).toBe('Tilt is rolled back: the cut stays where it last was until it builds again.'));
       expect(view.state.get().section.on).toBe(true);
       expect(view.state.get().section.frame).toEqual(at);
       h.doc.setRollback(null);
@@ -236,6 +245,204 @@ describe('the section binding (real kernel)', () => {
       stop = bindSection(h.services);
       await vi.waitFor(() => expect(view.state.get().section).toMatchObject({ on: true, plane: { kind: 'face', body }, offset: -5, flip: true }));
       expect(cutPoint(view.state.get().section.frame, -5)[2]).toBeCloseTo(25, 9);
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe('the section binding after review (real kernel)', () => {
+  /** Block 20 x 20 x 20 mm and Mid, a construction plane 5 mm above Top; the cut on Mid at 2 mm. */
+  async function onMid(x: AssistantHarness) {
+    await block(x, 20, 20, '20 mm');
+    const plane = await x.add('ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: '5 mm', name: 'Mid' });
+    await settled(x);
+    expect((await setSectionView(x.services, { plane: { kind: 'feature', feature: plane }, offset: 2 })).ok).toBe(true);
+    const saved = { plane: { kind: 'feature' as const, feature: plane }, offset: 2, flip: false };
+    await vi.waitFor(() => expect(x.doc.state.get().view.section).toEqual(saved));
+    return { plane, saved };
+  }
+  const note = () => sectionNotes(h!.services).get().note;
+  const getModel = async () => (await h!.ok('get_model', { detail: 'brief', feature: '', regions: 'short' })).data;
+  const W = (action: string, value = '') => ({ action, target: '', value, items: [], person_asked: true });
+
+  it(
+    "S1: the Part opened with the rollback bar above the section's plane keeps the section (said as rolled back) and puts it back once the plane builds",
+    async () => {
+      h = await assistantHarness();
+      const view = fakeView(h);
+      stop = sectionModule.install!(h.services) as () => void;
+      const { plane, saved } = await onMid(h);
+      // Rolled back above Mid in the session: held, said as rolled back (not "did not build").
+      h.doc.setRollback(2);
+      await settled(h);
+      await vi.waitFor(() => expect(note()).toBe('Mid is rolled back: the cut stays where it last was until it builds again.'));
+      // The Part opened again with the bar still there (a new binding over a new view).
+      stop();
+      view.setSection({ ...DEFAULT_SECTION });
+      sectionNotes(h.services).set({ note: null });
+      const toasts = h.ws.log.toasts.length;
+      stop = sectionModule.install!(h.services) as () => void;
+      await vi.waitFor(() => expect(note()).toBe('Mid is rolled back: the section view comes back when it builds.'));
+      expect(view.state.get().section.on).toBe(false);
+      expect(h.doc.state.get().view.section).toEqual(saved);
+      expect(h.ws.log.toasts.slice(toasts)).toEqual([{ message: 'Mid is rolled back: the section view comes back when it builds.', kind: 'info' }]);
+      // INSPECT > Section view opens to say so, without cutting on another plane (the saved one waits).
+      await h.services.commands.run('inspect.section');
+      await new Promise((r) => setTimeout(r, 100));
+      expect(view.state.get().section.on).toBe(false);
+      expect(note()).toBe('Mid is rolled back: the section view comes back when it builds.');
+      expect(h.doc.state.get().view.section).toEqual(saved);
+      // The bar back at the end: Mid builds, and the cut is back on it where it was.
+      h.doc.setRollback(null);
+      await settled(h);
+      await vi.waitFor(() => expect(view.state.get().section).toMatchObject({ on: true, plane: { kind: 'feature', feature: plane }, offset: 2, flip: false }));
+      expect(view.state.get().section.frame.origin[2]).toBeCloseTo(5, 9);
+      expect(note()).toBeNull();
+      expect(h.doc.state.get().view.section).toEqual(saved);
+
+      // Opened rolled back again, and the person cuts on Top before Mid builds: Top stays.
+      h.doc.setRollback(2);
+      await settled(h);
+      stop();
+      view.setSection({ ...DEFAULT_SECTION });
+      stop = sectionModule.install!(h.services) as () => void;
+      await vi.waitFor(() => expect(note()).toBe('Mid is rolled back: the section view comes back when it builds.'));
+      expect((await setSectionView(h.services, { plane: { kind: 'origin', plane: 'origin:top' }, offset: 4 })).ok).toBe(true);
+      await vi.waitFor(() => expect(h!.doc.state.get().view.section).toEqual({ plane: { kind: 'origin', plane: 'origin:top' }, offset: 4, flip: false }));
+      h.doc.setRollback(null);
+      await settled(h);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(view.state.get().section).toMatchObject({ on: true, plane: { kind: 'origin', plane: 'origin:top' }, offset: 4 });
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "S3: the held note goes when the view tools' button or the Assistant turns the cut off",
+    async () => {
+      h = await assistantHarness();
+      const view = fakeView(h);
+      stop = bindSection(h.services);
+      const { plane } = await onMid(h);
+      h.doc.setRollback(2);
+      await settled(h);
+      await vi.waitFor(() => expect(note()).toMatch(/^Mid is rolled back: the cut stays where it last was/));
+      // The view tools' button turns it off (the view's setSection).
+      view.setSection({ on: false });
+      expect(note()).toBeNull();
+      h.doc.setRollback(null);
+      await settled(h);
+      expect(note()).toBeNull();
+      // On again on Mid, held again; the Assistant's workspace section off.
+      expect((await setSectionView(h.services, { plane: { kind: 'feature', feature: plane }, offset: 2 })).ok).toBe(true);
+      h.doc.setRollback(2);
+      await settled(h);
+      await vi.waitFor(() => expect(note()).toMatch(/^Mid is rolled back/));
+      await h.ok('workspace', W('section', 'off'));
+      expect(view.state.get().section.on).toBe(false);
+      expect(note()).toBeNull();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'S2: a face that moved while the cut was off: INSPECT > Section view cuts through the middle of where it is now',
+    async () => {
+      h = await assistantHarness();
+      const view = fakeView(h);
+      stop = sectionModule.install!(h.services) as () => void;
+      h.doc.addParam({ name: 'height', expr: '20 mm', quantity: 'length' });
+      const { body } = await block(h, 20, 20, 'height');
+      await settled(h);
+      const b = h.doc.state.get().rebuild.bodies.find((x) => x.id === body)!;
+      const top = b.names!.faces.findIndex((n) => /:end/.test(n));
+      const { pickFace } = await import('../../../src/features/p2/refs');
+      const picked = await pickFace(h.services, b, top, null);
+      const face = { kind: 'face' as const, body, ref: (picked as unknown as { ref: PersistentRef }).ref };
+      expect((await setSectionView(h.services, { plane: face, offset: 'middle' })).ok).toBe(true);
+      const z = () => cutPoint(view.state.get().section.frame, view.state.get().section.offset)[2];
+      expect(z()).toBeCloseTo(10, 9);
+      // Off (the view tools' button), then the block grows to 60 mm.
+      view.setSection({ on: false });
+      const height = h.doc.state.get().doc.params.find((p) => p.name === 'height')!;
+      h.doc.updateParam(height.id, { expr: '60 mm' });
+      await settled(h);
+      // INSPECT > Section view turns it on again (as the view tools' button does): through the middle of the 60 mm block.
+      await h.services.commands.run('inspect.section');
+      await vi.waitFor(() => expect(view.state.get().section.on).toBe(true));
+      await settled(h);
+      await vi.waitFor(() => expect(view.state.get().section.frame.origin[2]).toBeCloseTo(60, 9));
+      expect(z()).toBeCloseTo(30, 9);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a deleted plane: the section turns off once (one toast) and INSPECT > Section view cuts again, on Front',
+    async () => {
+      h = await assistantHarness();
+      const view = fakeView(h);
+      stop = sectionModule.install!(h.services) as () => void;
+      const { plane } = await onMid(h);
+      const toasts = h.ws.log.toasts.length;
+      expect(h.doc.remove(plane).ok).toBe(true);
+      await settled(h);
+      await vi.waitFor(() => expect(view.state.get().section.on).toBe(false));
+      expect(note()).toBe('The section view is off: Mid was deleted.');
+      // Run INSPECT > Section view: the cut is on, on Front, and stays on; no second toast.
+      await h.services.commands.run('inspect.section');
+      await vi.waitFor(() => expect(view.state.get().section.on).toBe(true));
+      await settled(h);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(view.state.get().section).toMatchObject({ on: true, plane: { kind: 'origin', plane: 'origin:front' } });
+      expect(h.ws.log.toasts.slice(toasts)).toEqual([{ message: 'The section view is off: Mid was deleted.', kind: 'info' }]);
+      expect(note()).toBeNull();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "S4: get_model and the workspace's view say the panel's note: a held cut, and why the section turned off",
+    async () => {
+      h = await assistantHarness();
+      fakeView(h);
+      stop = bindSection(h.services);
+      const { plane } = await onMid(h);
+      h.doc.setRollback(2);
+      await settled(h);
+      await vi.waitFor(() => expect(note()).toMatch(/^Mid is rolled back/));
+      const held = { plane: 'Mid', offset_mm: 2, flip: false, keeps: 'z <= 7 mm', note: note() };
+      expect((await getModel()).section).toEqual(held);
+      expect((await h.ok('workspace', W('fit'))).data.view).toMatchObject({ section: held });
+      h.doc.setRollback(null);
+      await settled(h);
+      await vi.waitFor(() => expect(note()).toBeNull());
+      expect((await getModel()).section).toEqual({ plane: 'Mid', offset_mm: 2, flip: false, keeps: 'z <= 7 mm' });
+      // Deleted: off, and the panel's note says why; so do get_model and the workspace's view.
+      expect(h.doc.remove(plane).ok).toBe(true);
+      await settled(h);
+      await vi.waitFor(() => expect(note()).toBe('The section view is off: Mid was deleted.'));
+      const off = { on: false, note: 'The section view is off: Mid was deleted.' };
+      expect((await getModel()).section).toEqual(off);
+      expect((await h.ok('workspace', W('fit'))).data.view).toMatchObject({ section: off });
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a face's section in the Assistant's words carries its selector, which the workspace's section takes back",
+    async () => {
+      h = await assistantHarness();
+      const view = fakeView(h);
+      stop = bindSection(h.services);
+      const { body } = await block(h, 20, 20, '20 mm');
+      await settled(h);
+      await h.ok('workspace', W('section', 'Extrude 1.end offset -5 mm'));
+      const words = (await getModel()).section as Record<string, unknown>;
+      expect(words).toEqual({ plane: 'End face of Extrude 1 on Body 1', selector: 'Extrude 1.end', offset_mm: -5, flip: false, keeps: 'z <= 15 mm' });
+      const again = await h.ok('workspace', W('section', `${String(words.selector)} offset -2 mm flip`));
+      expect(view.state.get().section).toMatchObject({ on: true, plane: { kind: 'face', body }, offset: -2, flip: true });
+      expect(again.data.view).toMatchObject({ section: { plane: 'End face of Extrude 1 on Body 1', selector: 'Extrude 1.end', offset_mm: -2, flip: true, keeps: 'z >= 18 mm' } });
     },
     REAL_KERNEL_MS,
   );

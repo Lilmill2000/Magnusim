@@ -28,7 +28,7 @@ import {
   type Sphere,
 } from 'three';
 import { ORIGIN_PLANES, type OriginPlaneRef, type PlaneFrame, type Vec3 } from '../types/doc';
-import type { SectionState } from '../types/viewport';
+import type { SectionState, ViewportHandle } from '../types/viewport';
 import { BODY_COLOR } from './colors';
 import { createBodyMaterial, SEE_THROUGH_OPACITY, type BodyMaterial } from './materials';
 import { FACE_BIT, PARITY_MASK } from './onface';
@@ -40,6 +40,30 @@ export function originFrame(plane: OriginPlaneRef): PlaneFrame {
 }
 
 export const DEFAULT_SECTION: SectionState = { on: false, plane: { kind: 'origin', plane: 'origin:front' }, frame: originFrame('origin:front'), offset: 0, flip: false };
+
+/** A round slider step (1, 2 or 5 times a power of ten) giving about 400 stops over `span`. */
+export function sliderStep(span: number): number {
+  const raw = Math.max(span / 400, 1e-4);
+  const p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map((m) => m * p).find((x) => x >= raw - 1e-12) ?? raw;
+}
+
+/** Where a new cut starts: the middle of the part, on a round step ("Y 10 mm", not "Y 5.008 mm"). */
+export function sectionStart(range: readonly [number, number] | null): number {
+  if (!range) return 0;
+  const step = sliderStep(Math.abs(range[1] - range[0]));
+  const mid = (range[0] + range[1]) / 2;
+  return Math.round(mid / step) * step || 0;
+}
+
+/**
+ * Where a cut that comes on starts: at a construction plane itself (the plane was made to cut there),
+ * else through the middle of the shown bodies on a round step (an origin plane, a flat face). The
+ * view tools' button and INSPECT > Section view both turn it on so.
+ */
+export function startOffset(h: Pick<ViewportHandle, 'sectionRange'>, s: Pick<SectionState, 'plane' | 'frame'>): number {
+  return s.plane.kind === 'feature' ? 0 : sectionStart(h.sectionRange(s.frame));
+}
 
 /** A frame that can carry a cut: finite, with a normal that is not zero. */
 export function usableFrame(f: Pick<PlaneFrame, 'origin' | 'normal'> | null | undefined): boolean {

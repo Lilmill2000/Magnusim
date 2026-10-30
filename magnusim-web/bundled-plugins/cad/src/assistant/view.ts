@@ -34,13 +34,15 @@ import type { BodyId, PlaneFrame, SketchFeature, Vec3 } from '../types/doc';
 import type { PlaneRef } from '../types/references';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
-import type { DisplayMode, Projection, SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
+import type { DisplayMode, Projection, SectionState, SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
 import { LIGHT } from '../viewport/palette';
 import { sketchPlane, sketchUp } from '../viewport/normal';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
 import { offsetRange } from '../viewport/section';
 import { seeThroughOf } from '../viewport/bind';
 import { findSectionFrame, sectionPlaneWords, sectionWords } from '../features/section/plane';
+import { sectionNotes } from '../features/section/bind';
+import { labelOfFace } from './sketch/describe';
 import { resolveSectionRef, SECTION_FORMS, splitSection } from './measure-targets';
 import { closestName, closestWords } from './closest';
 import { heartbeat, waitForRead } from './busy';
@@ -167,9 +169,27 @@ export function snapshotCut(c: SectionCut): NonNullable<SnapshotOptions['section
   return { frame: { origin: [...c.frame.origin], normal: [...c.frame.normal] }, offset: c.offset, flip: c.flip };
 }
 
-/** The cut as the data gives it: the plane by its words ("Top", "Plane 1", "End face of Extrude 1 on Body 1"). */
-export function sectionData(s: Pick<DocState, 'doc' | 'rebuild'>, c: Pick<SectionCut, 'plane' | 'frame' | 'offset' | 'flip' | 'middle'> | null): Record<string, unknown> | null {
-  return c ? sectionWords(s, c) : null;
+/**
+ * The cut as the data gives it: the plane by its words ("Top", "Plane 1", "End face of Extrude 1 on
+ * Body 1"), a face's also by its selector ("Extrude 1.end": section and view take it back).
+ */
+export function sectionData(s: DocState, c: Pick<SectionCut, 'plane' | 'frame' | 'offset' | 'flip' | 'middle'> | null): Record<string, unknown> | null {
+  if (!c) return null;
+  const { plane, ...rest } = sectionWords(s, c);
+  const selector = c.plane.kind === 'face' ? labelOfFace(s, c.plane.body, c.plane.ref.name) : '';
+  return { plane, ...(selector ? { selector } : {}), ...rest };
+}
+
+/**
+ * The person's section view in these words (get_model, the workspace's view), with the Section view
+ * panel's note when it has one (a cut held where it was, why the section turned off): the cut while
+ * it is on; off with a note, { on: false, note }; else null.
+ */
+export function personSection(services: Pick<AppServices, 'doc' | 'viewport'>): Record<string, unknown> | null {
+  const cut = (services.viewport.get().handle?.state.get() as { section?: SectionState } | undefined)?.section;
+  const note = sectionNotes(services).get().note;
+  if (cut?.on) return { ...sectionData(services.doc.state.get(), cut), ...(note ? { note } : {}) };
+  return note ? { on: false, note } : null;
 }
 
 // ------------------------------------------------------------ the sheet

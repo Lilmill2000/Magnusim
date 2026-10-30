@@ -22,9 +22,7 @@
 import { storedBodyName } from '../doc/features/body-ids';
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
 import { moveWords } from '../features/move_body/words';
-import { sectionWords } from '../features/section/plane';
 import { seeThroughOf } from '../viewport/bind';
-import type { SectionState } from '../types/viewport';
 import { DEFAULT_BODY_COLOR } from '../doc/schema';
 import { toModel, ydirOf } from '../features/sketch/plane';
 import { userSelection } from '../lib/selection';
@@ -56,6 +54,7 @@ import { freeRows } from './sketch/solve';
 import { fitRegions, regionRows, shortRegions } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
 import { closestName, closestWords } from './closest';
+import { personSection } from './view';
 
 /** One sketch read with regions full shows at most this many regions. */
 export const SKETCH_REGIONS = 60;
@@ -376,9 +375,9 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
     ...(s.rebuild.bodies.length > BODIES_MAX ? { bodies_more: s.rebuild.bodies.length - BODIES_MAX } : {}),
     selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i, labels)),
   };
-  // The person's section view while it is on (INSPECT > Section view; workspace section sets it).
-  const cut = (services.viewport.get().handle?.state.get() as { section?: SectionState } | undefined)?.section;
-  if (cut?.on) out.section = sectionWords(s, cut);
+  // The person's section view while it is on (INSPECT > Section view; workspace section sets it), and its panel's note.
+  const cut = personSection(services);
+  if (cut) out.section = cut;
   // What the person copied (Ctrl+C in a sketch of any Part): the sketch tool's copy row pastes it ("from clipboard").
   const clip = await heldClip(services).catch(() => null);
   if (clip) out.clipboard = `${clipWords(clip)}, copied from ${clip.from}`;

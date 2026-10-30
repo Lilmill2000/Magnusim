@@ -175,6 +175,24 @@ describe('a picture after every edit', () => {
     }
   });
 
+  it("the line names the person's see-through bodies (the picture draws them see-through), so a ghosted body is not taken for a fault", async () => {
+    fakeRaster();
+    const handle = { stats: () => ({ contextLost: false }), snapshot: () => ({ rgba: new Uint8ClampedArray(640 * 480 * 4), width: 640, height: 480 }) };
+    const bodies = [
+      { id: 'b_1', name: 'Body 1', visible: true, tess: {} },
+      { id: 'b_2', name: 'Body 2', visible: true, tess: {} },
+      { id: 'b_3', name: 'Body 3', visible: false, tess: {} },
+    ];
+    const state = { doc: { features: [] }, view: { rollback: null, hiddenBodies: ['b_3'], expanded: [], seeThroughBodies: ['b_2', 'b_3'] }, rebuild: { bodies } };
+    const services = { viewport: { get: () => ({ handle }) }, doc: { settled: async () => undefined, state: { get: () => state } } } as unknown as AppServices;
+    const pic = await editPicture({ services, signal: new AbortController().signal });
+    // Body 3 is hidden (not in the picture): only the shown see-through body is named.
+    expect(pic && 'caption' in pic && pic.caption).toBe("Picture: iso view of the Part framed on all 2 shown bodies, 640x480, real colours; see-through as in the person's view: Body 2; look at it and fix what looks wrong.");
+    state.view.seeThroughBodies = [];
+    const plain = await editPicture({ services, signal: new AbortController().signal });
+    expect(plain && 'caption' in plain && plain.caption).toBe('Picture: iso view of the Part framed on all 2 shown bodies, 640x480, real colours; look at it and fix what looks wrong.');
+  });
+
   it('the real set_params answers with the picture through the fake host', async () => {
     h = await start(true);
     const fv = fakeViewport(h);

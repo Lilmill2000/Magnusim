@@ -1,5 +1,6 @@
 // The Section view panel's controls by id, each with what it is: the parity table
-// (src/assistant/parity.ts SECTION) names the Assistant's way to each (the workspace tool's section),
+// (src/assistant/parity.ts SECTION) names the Assistant's way to each (the workspace tool's section;
+// the panel's note: get_model's section reads it),
 // and tests/assistant/parity.test.ts holds the two together. The view tools' popover drives the same
 // state (Top, Front, Right, the slider, Flip side, Middle).
 // Owner: VIEWPORT (the section view's plane).
@@ -13,6 +14,7 @@ export const SECTION_CONTROLS = {
   middle: "Middle: the cut through the middle of the shown bodies along the plane's normal",
   flip: 'Keep the other side',
   arrow: "the arrow on the cut in the view: a drag moves the cut along the plane's normal and sets Offset (Ctrl: whole steps)",
+  note: 'the note under the panel: why the section turned off, or why the cut stays where it last was',
 } as const;
 
 export type SectionControl = keyof typeof SECTION_CONTROLS;

@@ -11,7 +11,8 @@
 //   downloaded until the person clicks Export;
 // - the section view (Daniel 2026-10-29: any plane, a construction plane too): section on a
 //   construction plane at an angle by its name cuts the person's view on its own normal; the reply's
-//   view and get_model name the plane; INSPECT > Section view shows that plane and offset;
+//   view and get_model name the plane; INSPECT > Section view shows that plane and offset; the plane
+//   deleted, get_model says the panel's note; a face's cut comes with its selector, taken back;
 // - see-through bodies (Daniel 2026-10-29): see_through marks Body 1 in the tree and the view draws
 //   it translucent, get_model's parts say see_through, opaque takes it back; no undo step;
 // - keybinds (Daniel: read any time, changed only when the person asks): keybind_get answers;
@@ -221,6 +222,33 @@ test("cad:assistant-workspace-section section on a construction plane at an angl
   await expect(panel.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['Tilt']);
   await expect(panel.locator('.nui[data-field="section-offset"] input')).toHaveValue('2');
   expect(await cut()).toMatchObject({ on: true, offset: 2 });
+
+  // The person deletes Tilt: the section turns off and the panel's note says why; get_model says the
+  // same words. A cut on the block's top face: get_model gives its selector, and the workspace's
+  // section takes it back (offset and side changed on the same face).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  expect(await cadFrame(page).evaluate((id) => (window as any).__CAD__.services.doc.remove(id).ok as boolean, plane)).toBe(true);
+  await expect(panel.locator('[data-section-note]')).toHaveText('The section view is off: Tilt was deleted.', STEP);
+  const before2 = chats(host).length;
+  const model = { name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } };
+  host.fake.reply(
+    { tools: [model] },
+    { tools: [W('section', { value: 'Extrude 1.end offset -5 mm', person_asked: true })] },
+    { tools: [model] },
+    { tools: [W('section', { value: 'Extrude 1.end offset -2 mm flip', person_asked: true })] },
+    { text: 'Tilt was deleted; the cut is on the top face now.' },
+  );
+  const t2 = await startTurn(request, host, { text: 'Why did my section go? Cut on the top face instead.', tab });
+  expect((await t2.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const r2 = chats(host).slice(before2);
+  expect(resultsIn(r2[1])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { section: { on: false, note: 'The section view is off: Tilt was deleted.' } } });
+  const face = { plane: 'End face of Extrude 1 on Body 1', selector: 'Extrude 1.end' };
+  expect(resultsIn(r2[2])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, data: { view: { section: { ...face, offset_mm: -5, flip: false } } } });
+  expect(resultsIn(r2[3])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { section: { ...face, offset_mm: -5, flip: false, keeps: 'z <= 15 mm' } } });
+  expect(resultsIn(r2[4])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, data: { view: { section: { ...face, offset_mm: -2, flip: true, keeps: 'z >= 18 mm' } } } });
+  expect(await cut()).toMatchObject({ on: true, plane: { kind: 'face' }, offset: -2, flip: true });
+  await expect(panel.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['End face of Extrude 1']);
+  await expect(panel.locator('[data-section-note]')).toHaveCount(0);
 });
 
 test("cad:assistant-workspace-see-through see_through draws Body 1 see-through: the tree marks it, the view draws it translucent, get_model says so; opaque takes it back; no undo step", async ({ page, request }) => {

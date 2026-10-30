@@ -16,9 +16,12 @@ import { createStateStore, useStateStore } from '../lib/store';
 import { ORIGIN_PLANES, type OriginPlaneRef } from '../types/doc';
 import type { PlaneRef } from '../types/references';
 import { sectionPlaneWords, SECTION_COMMAND } from '../features/section/plane';
-import { originFrame } from './section';
+import { originFrame, sectionStart, sliderStep } from './section';
+import { sectionOn } from '../features/section/bind';
+// The view tools' and the Section view panel's helpers live with the section state (bind.ts uses them too).
+export { sectionStart, sliderStep, startOffset } from './section';
 import type { SelectKind } from '../types/selection';
-import type { DisplayMode, PlanesMode, Projection, SectionState, StandardView, ViewportHandle } from '../types/viewport';
+import type { DisplayMode, PlanesMode, Projection, StandardView, ViewportHandle } from '../types/viewport';
 import { normalToTarget, VIEW_COMMANDS } from './commands';
 import { openSetKeybind, useKeyLabel } from '../ui/keybinds';
 import type { AppServices } from '../types/app';
@@ -113,30 +116,6 @@ function fmt(n: number): string {
   return String(Math.round(n * 1000) / 1000 || 0);
 }
 
-/** A round slider step (1, 2 or 5 times a power of ten) giving about 400 stops over `span`. */
-export function sliderStep(span: number): number {
-  const raw = Math.max(span / 400, 1e-4);
-  const p = 10 ** Math.floor(Math.log10(raw));
-  return [1, 2, 5, 10].map((m) => m * p).find((x) => x >= raw - 1e-12) ?? raw;
-}
-
-/** Where a new cut starts: the middle of the part, on a round step ("Y 10 mm", not "Y 5.008 mm"). */
-export function sectionStart(range: readonly [number, number] | null): number {
-  if (!range) return 0;
-  const step = sliderStep(Math.abs(range[1] - range[0]));
-  const mid = (range[0] + range[1]) / 2;
-  return Math.round(mid / step) * step || 0;
-}
-
-/**
- * Where a cut that comes on starts: at a construction plane itself (the plane was made to cut there),
- * else through the middle of the shown bodies on a round step (an origin plane, a flat face). The
- * view tools' button and INSPECT > Section view both turn it on so.
- */
-export function startOffset(h: Pick<ViewportHandle, 'sectionRange'>, s: Pick<SectionState, 'plane' | 'frame'>): number {
-  return s.plane.kind === 'feature' ? 0 : sectionStart(h.sectionRange(s.frame));
-}
-
 /**
  * The cut's position shown as the coordinate it fixes (Front plane: y, Top: z,
  * Right: x) rather than the signed offset along the plane's normal (Front's
@@ -216,9 +195,10 @@ export function ViewportChrome({ handle }: { handle: ViewportHandle }) {
       setOpen(null);
       return;
     }
-    // The plane it had (the Section view panel follows a construction plane or a face to where it is now).
-    handle.setSection({ on: true, offset: startOffset(handle, section) });
+    // On the plane it had, found where it is now (a construction plane or a face may have moved while
+    // the cut was off; one that is gone gives way to Front): src/features/section/bind.ts sectionOn.
     setOpen('section');
+    void sectionOn(services);
   };
 
   const setPlane = (plane: OriginPlaneRef | 'other') => {
