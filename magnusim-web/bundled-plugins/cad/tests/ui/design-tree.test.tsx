@@ -4,6 +4,8 @@
 import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Feature } from '../../src/types/doc';
+import { uiFor } from '../../src/ui/controller';
+import { ICONS } from '../../src/ui/Icon';
 import { makeServices, type TestServices } from './fake-doc';
 import { mountUi } from './mount';
 
@@ -165,6 +167,45 @@ describe('design tree', () => {
     expect(ui.$(`[data-tree-node="${f[0].id}"] [data-feature-badge]`)!.getAttribute('data-feature-badge')).toBe('warning');
   });
 
+  // Daniel's poker chip: a Join of an inlay's 8 spots and rings, meant to stay apart, showed a warning
+  // triangle and "What's wrong: Inlay is now 8 separate solids: the tools do not touch it".
+  it('shows a note as a quiet info mark with a "Note" tooltip, not amber; a warning keeps its badge and says the note after it', () => {
+    const note = "Inlay holds 8 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)";
+    const badge = (id: string) => ui.$(`[data-tree-node="${id}"] [data-feature-badge]`);
+    act(() => t.doc.setStatus(f[1].id, { state: 'ok', note }));
+    const mark = badge(f[1].id)!;
+    expect(mark.getAttribute('data-feature-badge')).toBe('note');
+    expect(mark.className).toBe('cad-badge is-note');
+    expect(mark.getAttribute('aria-label')).toBe(`Note: ${note}`);
+    expect(mark.querySelector('path')!.getAttribute('d')).toBe(ICONS.info);
+    // The row itself is as an ok row: no amber, no red, state ok.
+    expect(ui.node(f[1].id).className).not.toMatch(/is-(warning|error)/);
+    expect(ui.node(f[1].id).getAttribute('data-state')).toBe('ok');
+    fireEvent.mouseEnter(mark);
+    expect(ui.tip()).toBe(`Note${note}`);
+    expect(ui.tip()).not.toContain("What's wrong");
+    fireEvent.mouseLeave(mark);
+    // A click opens the feature, as a warning badge's does.
+    fireEvent.click(mark);
+    expect(t.doc.calls).toContain(`beginEdit ${f[1].id}`);
+    // A real warning beside the note: the warning's badge, its tooltip says both.
+    act(() => t.doc.setStatus(f[1].id, { state: 'warning', message: 'Body 1 was repaired: check the result', note }));
+    const warned = badge(f[1].id)!;
+    expect(warned.getAttribute('data-feature-badge')).toBe('warning');
+    expect(warned.querySelector('path')!.getAttribute('d')).toBe(ICONS.warning);
+    expect(ui.node(f[1].id).className).toContain('is-warning');
+    expect(warned.getAttribute('aria-label')).toBe(`What's wrong: Body 1 was repaired: check the result. Note: ${note}`);
+    fireEvent.mouseEnter(warned);
+    expect(ui.tip()).toBe(`What's wrongBody 1 was repaired: check the result\nNote: ${note}`);
+    fireEvent.mouseLeave(warned);
+    // A failed feature has no note to show; nor has a feature without one.
+    act(() => t.doc.setStatus(f[1].id, { state: 'error', message: 'Extrude 2 failed', note }));
+    expect(badge(f[1].id)!.getAttribute('data-feature-badge')).toBe('error');
+    expect(badge(f[1].id)!.getAttribute('aria-label')).toBe("What's wrong: Extrude 2 failed");
+    act(() => t.doc.setStatus(f[1].id, { state: 'ok' }));
+    expect(badge(f[1].id)).toBeNull();
+  });
+
   it('opens the feature panel on double-click, but not for a rolled-back feature', () => {
     fireEvent.doubleClick(ui.row(f[1].id));
     expect(t.doc.calls).toContain(`beginEdit ${f[1].id}`);
@@ -289,5 +330,61 @@ describe('design tree', () => {
     expect(ui.$('[data-bodies-folder] > .tree-row .tl')!.textContent).toBe('Bodies (0)');
     fireEvent.click(ui.$('[data-bodies-folder] > .tree-row')!);
     expect(ui.$('[data-tree-empty="bodies"]')!.textContent).toBe('No bodies yet');
+  });
+});
+
+// Daniel 2026-10-28: "there shouldn't be a 'leave body out of simulation' option, because there's no
+// simulation in the standalone Magnusim CAD". The host's welcome flag projectLinks false (Magnusim CAD)
+// hides every word and mark of the simulation on a body row and in its menu; absent (Magnusim) shows them.
+describe('a body row with and without a simulation', () => {
+  const hiddenBody = (x: TestServices, u: ReturnType<typeof mountUi>) => {
+    fireEvent.click(u.$('[data-bodies-folder] > .tree-row')!);
+    const b = x.doc.state.get().rebuild.bodies[0];
+    fireEvent.click(u.$(`[data-body-row="${b.id}"] [data-body-act="visibility"]`)!);
+    return { b, row: u.$(`[data-body-row="${b.id}"]`)! };
+  };
+  /** The full-name title a cut-off row name shows (jsdom lays nothing out: the name is made too wide). */
+  const titleOf = (el: Element) => {
+    Object.defineProperty(el, 'scrollWidth', { value: 500, configurable: true });
+    fireEvent.mouseEnter(el);
+    return el.getAttribute('title');
+  };
+  const tipOf = (u: ReturnType<typeof mountUi>, el: Element) => {
+    fireEvent.mouseEnter(el);
+    const text = u.tip();
+    fireEvent.mouseLeave(el);
+    return text;
+  };
+
+  it('Magnusim (no flag): the toggle, the "still in the simulation" words and marks, and the menu item', () => {
+    const { b, row } = hiddenBody(t, ui);
+    expect(t.services.bridge.projectLinks()).toBe(true);
+    expect(row.querySelector('[data-body-act="simulation"]')!.getAttribute('aria-label')).toBe('Leave Body 1 out of the simulation');
+    expect(row.getAttribute('data-in-simulation')).toBe('1');
+    expect(row.getAttribute('data-hidden-in-simulation')).toBe('1');
+    expect(titleOf(row.querySelector('.tl')!)).toBe('Body 1 (hidden, still in the simulation)');
+    expect(tipOf(ui, row.querySelector('[data-body-act="visibility"]')!)).toContain('Hidden, still in the simulation');
+    fireEvent.contextMenu(row.querySelector('.tree-row')!, { clientX: 10, clientY: 10 });
+    expect(ui.menu()).toContain('Leave Body 1 out of the simulation');
+    expect(uiFor(t.services).bodyMenu(b.id).map((e) => e.id)).toContain('body-simulation');
+  });
+
+  it('Magnusim CAD (projectLinks false): no toggle, no words, no marks and no menu item; the stored choice stays as it is', () => {
+    cleanup();
+    ui.dispose();
+    t = makeServices({ viewport: true, panels: true, projectLinks: false });
+    t.doc.seed('extrude');
+    ui = mountUi(t);
+    const { b, row } = hiddenBody(t, ui);
+    expect(t.services.bridge.projectLinks()).toBe(false);
+    expect(row.querySelector('[data-body-act="simulation"]')).toBeNull();
+    expect(row.hasAttribute('data-in-simulation')).toBe(false);
+    expect(row.hasAttribute('data-hidden-in-simulation')).toBe(false);
+    expect(titleOf(row.querySelector('.tl')!)).toBe('Body 1');
+    expect(tipOf(ui, row.querySelector('[data-body-act="visibility"]')!)).not.toMatch(/simulation/);
+    expect(row.textContent).not.toMatch(/simulation/);
+    fireEvent.contextMenu(row.querySelector('.tree-row')!, { clientX: 10, clientY: 10 });
+    expect(ui.menu().filter((m) => /simulation/.test(m ?? ''))).toEqual([]);
+    expect(uiFor(t.services).bodyMenu(b.id).map((e) => e.id)).not.toContain('body-simulation');
   });
 });

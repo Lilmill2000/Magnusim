@@ -8,11 +8,12 @@
 // face and fainter over the dark background, so a hovered line keeps its colour there; a driven
 // dimension's lines stay apart from a driving one's; LIGHT (a picture, or the
 // theme back to light) gives the light colours and no face colours, the grid's too when a near
-// edge-on view keeps the grid it has.
+// edge-on view keeps the grid it has. Over sketch geometry the Select tool shows the small arrow
+// with the kind's icon; a hovered point is drawn larger in its hover disk, a selected one ringed.
 // The real sketch mode (the solver in this process, tests/sketch/harness.ts, which loads it in
 // Node) with a DOM of its own for the overlay's HTML, set up once the solver is loaded.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { Color, Group, type Object3D, type Points } from 'three';
+import { Color, Group, type Object3D, type Points, type PointsMaterial } from 'three';
 import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -204,9 +205,10 @@ describe('sketch mode and the palette', () => {
     expect(v.canvas.style.cursor).toBe(dark);
   });
 
-  // Review: a fillet's radius arrow kept the grab hand of where the pointer was when the arrow came
-  // or the theme changed (white with the pointer off the view), also over a light face.
-  it("gives a radius arrow's grab hand the tone of what is under the pointer on it", async () => {
+  // Review: a fillet's radius arrow kept the cursor tone of where the pointer was when the arrow came
+  // or the theme changed (white with the pointer off the view), also over a light face. Daniel
+  // (2026-10-28): its cursor is the small drag cursor (the arrow with a four-way arrow), no hand.
+  it("gives a radius arrow's drag cursor the tone of what is under the pointer on it", async () => {
     h = await sketchHarness(sketchOf(rectangle(0, 0, 40, 20)));
     await h.idle();
     await withDom();
@@ -221,9 +223,11 @@ describe('sketch mode and the palette', () => {
     const on = (type: string, x: number) => el.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: 100 }));
     // Made with the pointer off the view: the dark tone (white).
     const white = el.style.cursor;
-    expect(white).toContain('grab');
+    expect(white.trim().endsWith(', move')).toBe(true);
+    expect(decodeURIComponent(white)).toContain('data-drag="1"');
+    expect(white).not.toContain('grab');
     expect(white).not.toContain('101828');
-    // The pointer comes onto it over a light face: the light view's hand, as the crosshair there.
+    // The pointer comes onto it over a light face: the light view's drag cursor, as the crosshair there.
     v.overFace(true);
     on('pointerenter', 430);
     expect(el.style.cursor).toContain('101828');
@@ -354,6 +358,131 @@ describe('sketch mode and the palette', () => {
     expect(halo().material.opacity).toBe(0.85);
     expect(faceOpacityOf(halo().material)).toBeUndefined();
     expect(twin()?.visible ?? false).toBe(false);
+  });
+
+  // Daniel (2026-10-28): "a tiny little line icon appears next to the mouse cursor. If I hover over a
+  // point, a tiny point icon appears next to it", never the big hand; dark too.
+  it('the Select tool over a line, a point, a circle, an arc and an ellipse: the small arrow with that kind\'s icon, the plain arrow elsewhere, no hand; the dark tone on a dark view', async () => {
+    const g = rectangle(0, 0, 20, 10);
+    g.points.c1 = [40, 0];
+    g.points.a0 = [40, 30];
+    g.points.a1 = [45, 30];
+    g.points.a2 = [35, 30];
+    g.points.k = [-40, 0];
+    g.points.kM = [-30, 0];
+    g.points.km = [-40, 4];
+    g.entities.push(
+      { id: 'c1', kind: 'circle', c: 'c1', r: 5 },
+      { id: 'arc1', kind: 'arc', c: 'a0', a: 'a1', b: 'a2' },
+      { id: 'el1', kind: 'ellipse', c: 'k', major: 'kM', minor: 'km' },
+    );
+    h = await sketchHarness(sketchOf(g));
+    await h.idle();
+    await withDom();
+    const v = fakeHandle();
+    detach = attachOverlay(h.mode, v.handle);
+    await h.idle();
+    expect(h.mode.tool?.id).toBe('select');
+    // u/v (mm) to the fake view's client px (10 px per mm about (400, 300)).
+    const hover = async (u: number, w: number) => {
+      v.pointer(400 + u * 10, 300 - w * 10);
+      await h!.idle();
+      return { kind: v.canvas.dataset.sketchCursor, css: v.canvas.style.cursor, svg: decodeURIComponent(v.canvas.style.cursor) };
+    };
+    const cases: [number, number, string][] = [
+      [10, 0, 'line'],
+      [20, 0, 'point'],
+      [45, 0, 'circle'],
+      [40, 35, 'arc'],
+      [-30, 0.0, 'point'],
+      [-40, -4, 'ellipse'],
+      [0, 0, 'point'],
+    ];
+    for (const [u, w, kind] of cases) {
+      const c = await hover(u, w);
+      expect(c.kind, `${u}, ${w}`).toBe(`pick:${kind}`);
+      expect(c.css.trim().endsWith(', default')).toBe(true);
+      expect(c.svg).toContain(`data-pick="${kind}"`);
+      expect(c.svg).not.toContain('M14.4 14');
+      expect(c.css).not.toContain('grab');
+      expect(c.css).toContain('101828');
+    }
+    // Off the geometry: the plain arrow.
+    expect((await hover(10, 60)).kind).toBe('default');
+    v.setPalette(DARK);
+    const dark = await hover(10, 0);
+    expect(dark.kind).toBe('pick:line');
+    expect(dark.svg).toContain('data-pick="line"');
+    expect(dark.css).not.toContain('101828');
+  });
+
+  // Daniel (2026-10-28): "I can't even tell if I'm clicking a point or not. It should highlight or
+  // something when I click a point".
+  it('a hovered point is drawn larger in a disk of the hover colour, a selected one in the pick colour with a ring; in dark they carry their face colours and the disk is fainter over the background', async () => {
+    h = await sketchHarness(sketchOf(rectangle(0, 0, 20, 10)));
+    await h.idle();
+    await withDom();
+    const v = fakeHandle();
+    detach = attachOverlay(h.mode, v.handle);
+    await h.idle();
+    const points = () => marks(v.groups).filter((o) => (o as Points).isPoints) as (Points & { material: PointsMaterial })[];
+    const bySize = (size: number, order?: number) => points().find((o) => o.material.size === size && (order === undefined || o.renderOrder === order))!;
+    const dots = () => bySize(7);
+    const hot = () => bySize(11);
+    const disk = () => bySize(17, 995);
+    const ring = () => bySize(17, 1009);
+    const count = (o: Points) => (o.visible ? o.geometry.getAttribute('position').count : 0);
+    const at = (o: Points, i = 0) => [o.geometry.getAttribute('position').getX(i), o.geometry.getAttribute('position').getY(i)];
+    // Nothing hovered or selected: the dots alone (the origin and the four corners).
+    expect(count(dots())).toBe(5);
+    expect([count(hot()), count(disk()), count(ring())]).toEqual([0, 0, 0]);
+    // The ring is a ring: its material draws only the band outside RING_INNER.
+    expect(Number(ring().material.defines!.RING_INNER)).toBeGreaterThan(0.6);
+    expect(Number(ring().material.defines!.RING_INNER)).toBeLessThan(0.85);
+    expect(disk().material.defines!.RING_INNER).toBeUndefined();
+    // Hover p2 (20, 0): drawn larger, in its disk of the hover colour, not among the plain dots.
+    h.mode.setHover({ what: 'point', id: 'p2' });
+    expect(count(dots())).toBe(4);
+    expect(count(hot())).toBe(1);
+    expect(at(hot())).toEqual([20, 0]);
+    expect(count(disk())).toBe(1);
+    expect(coloursOf(disk().geometry)).toEqual([LIGHT.sketch.hover]);
+    expect(disk().material.opacity).toBe(0.85);
+    // Behind the lines (the hover band's place), the ring over them, under the dots.
+    expect(disk().renderOrder).toBeLessThan(1000);
+    expect(ring().renderOrder).toBeGreaterThan(1003);
+    expect(ring().renderOrder).toBeLessThan(dots().renderOrder);
+    // The origin too.
+    h.mode.setHover({ what: 'point', id: 'origin' });
+    expect(at(hot())).toEqual([0, 0]);
+    // Select p3 (20, 10): the pick colour and its ring; hovered and selected: both.
+    h.mode.setHover(null);
+    h.mode.select([{ what: 'point', id: 'p3' }], false);
+    expect([count(hot()), count(disk())]).toEqual([0, 0]);
+    expect(count(ring())).toBe(1);
+    expect(at(ring())).toEqual([20, 10]);
+    expect(coloursOf(ring().geometry)).toEqual([LIGHT.sketch.pick]);
+    expect(coloursOf(dots().geometry)).toContain(LIGHT.sketch.pick);
+    h.mode.setHover({ what: 'point', id: 'p3' });
+    expect([count(hot()), count(disk()), count(ring())]).toEqual([1, 1, 1]);
+    // Dark: the same colours, face colours for over a light face; the disk .45 over the background, .85 over a face.
+    v.setPalette(DARK);
+    expect(coloursOf(disk().geometry)).toEqual([DARK.sketch.hover]);
+    expect(coloursOf(ring().geometry)).toEqual([DARK.sketch.pick]);
+    for (const o of [hot(), disk(), ring()]) expect(faceColoursOf(o.geometry), `${o.renderOrder}`).toBeTruthy();
+    expect(coloursOf(faceColoursOf(disk().geometry)!)).toEqual([LIGHT.sketch.hover]);
+    expect(coloursOf(faceColoursOf(ring().geometry)!)).toEqual([LIGHT.sketch.pick]);
+    expect(disk().material.opacity).toBe(0.45);
+    expect(faceOpacityOf(disk().material)).toBe(0.85);
+    syncFaceTwins(v.groups.get('sketch-geometry')!, true);
+    expect(marksBeforeSurfaces(v.groups.get('sketch-geometry')!)).toEqual([]);
+    // The ring's twin keeps the ring (the shader edit and its define go with it).
+    const twin = ring().children.find(isFaceTwin) as (Points & { material: PointsMaterial }) | undefined;
+    expect(twin?.visible).toBe(true);
+    expect(twin!.material.defines!.RING_INNER).toBe(ring().material.defines!.RING_INNER);
+    v.setPalette(LIGHT);
+    expect(disk().material.opacity).toBe(0.85);
+    expect(faceOpacityOf(disk().material)).toBeUndefined();
   });
 
   it("keeps a driven dimension's lines apart from a driving one's in dark, and over a face as in light", async () => {

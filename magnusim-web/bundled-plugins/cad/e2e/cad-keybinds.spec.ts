@@ -13,6 +13,9 @@
 //  - every key action has a Set keybind where the person meets it: the Part's row (an empty Part
 //    too) and a feature's row (Delete, Rename), the
 //    tree's collapse arrow, a sketch's selection (Delete), Finish sketch (its own and Place or finish);
+//  - a sketch tool's key pressed again leaves the tool, by the key the person gave it: Line on G,
+//    G, one segment, G: the tool is gone, the segment stays; L is no key of Line then; a flyout
+//    variant's own key (Centerline on K) with Line in hand switches to Centerline;
 //  - the app's Assistant panel key the person chose in the app's Settings (Alt+K): typed in the Part
 //    it opens and closes the app's panel, Set keybind refuses it in the app's words, and a command
 //    whose stored key it is does not run on it and its button names no key; changed while the Part
@@ -140,12 +143,73 @@ test('cad:keybinds-dialog Set keybind: Rectangle to Shift+R (Replace takes it fr
     await viewDlg.locator('[data-keybind-capture]').click();
     // A key two commands have: the question names both and where each works (Replace would take it from both).
     await page.keyboard.press('Delete');
-    await expect(viewDlg.locator('[data-keybind-status]')).toHaveText('Delete is the key of Delete selected features (model) and Delete (sketch). Replace both?');
+    await expect(viewDlg.locator('[data-keybind-status]')).toHaveText('Delete is the key of Delete selected features or bodies (model) and Delete (sketch). Replace both?');
     await viewDlg.locator('[data-keybind-action="cancel"]').click();
     await viewDlg.locator('[data-keybind-capture]').click();
     await page.keyboard.press('Escape');
     await expect(viewDlg).toHaveCount(0);
     expect(await keysOf(page, 'view.front')).toEqual(['Digit1']);
+    expect(seen.errors).toEqual([]);
+  } finally {
+    await setPref(request, null);
+  }
+});
+
+test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again leaves it (the segment drawn stays, the next click draws nothing); L does neither; Centerline on K: K with Line in hand switches to Centerline", { tag: '@serial' }, async ({ page, request }) => {
+  test.setTimeout(180_000);
+  await ensureCadOn(request);
+  await setPref(request, { 'sketch.line': ['KeyG'], 'sketch.centerline': ['KeyK'] });
+  try {
+    const seen = await watchPage(page);
+    await openProject(page, await newProject(request));
+    await newPartFromTree(page, 'Part 1');
+    const frame = await partOpened(page);
+    await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+    await expect.poll(() => keysOf(page, 'sketch.line')).toEqual(['KeyG']);
+    await enterSketchOnTop(frame);
+    await viewAndSketchIdle(page);
+    const lines = () => cad<number>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch.draft().entities.filter((e: { kind: string }) => e.kind === 'line').length) as never);
+    const click = async (p: [number, number, number]) => {
+      const [x, y] = await modelOnPage(page, p);
+      await page.mouse.click(x, y);
+    };
+    // L is no key of Line now.
+    await page.keyboard.press('l');
+    await page.waitForTimeout(300);
+    expect(await toolNow(page)).toBe('select');
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    await click([-30, 10, 0]);
+    await click([0, 10, 0]);
+    await viewAndSketchIdle(page);
+    expect(await lines()).toBe(1);
+    // L with the chain open: not Line's key, nothing leaves.
+    await page.keyboard.press('l');
+    await page.waitForTimeout(300);
+    expect(await toolNow(page)).toBe('line');
+    // G again: the tool is gone, the segment stays, the next click draws nothing.
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('select');
+    await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-btn[data-command="sketch.line"]')).not.toHaveClass(/is-active/);
+    await click([20, 30, 0]);
+    await click([40, 30, 0]);
+    await viewAndSketchIdle(page);
+    expect(await lines()).toBe(1);
+    // Centerline (a variant of the Line flyout) on K: K with Line in hand takes up Centerline (its
+    // own key switches to it, as its row in the flyout's list says); it put Line down before.
+    await expect.poll(() => keysOf(page, 'sketch.centerline')).toEqual(['KeyK']);
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    await page.keyboard.press('k');
+    await expect.poll(() => toolNow(page)).toBe('centerline');
+    await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-btn[data-variant="sketch.centerline"]')).toHaveClass(/is-active/);
+    // K again: Centerline is put down. K, then G (the Line flyout's own key): put down too.
+    await page.keyboard.press('k');
+    await expect.poll(() => toolNow(page)).toBe('select');
+    await page.keyboard.press('k');
+    await expect.poll(() => toolNow(page)).toBe('centerline');
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('select');
     expect(seen.errors).toEqual([]);
   } finally {
     await setPref(request, null);
@@ -388,12 +452,12 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     // the Part's own row.
     await expect(frame.locator('[data-cad-tree] [data-feature-row]')).toHaveCount(0);
     const partRow = frame.locator('[data-part-name] > .tree-row');
-    await viaMenu(partRow, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');
+    await viaMenu(partRow, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features or bodies', 'Delete');
     await viaMenu(partRow, 'set-keybind-ui.rename', 'Set keybind for Rename…', 'ui.rename', 'Rename the selected feature or body', 'F2');
     await addSolid(page, { size: [30, 20, 10] });
     const row = frame.locator('[data-cad-tree] [data-feature-row][data-feature-type="extrude"] > .tree-row');
     // A tree row: Delete's and Rename's keys, next to Delete.
-    await viaMenu(row, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features', 'Delete');
+    await viaMenu(row, 'set-keybind-ui.delete', 'Set keybind for Delete…', 'ui.delete', 'Delete selected features or bodies', 'Delete');
     await viaMenu(row, 'set-keybind-ui.rename', 'Set keybind for Rename…', 'ui.rename', 'Rename the selected feature or body', 'F2');
     // The tree's collapse arrow: the toggle's key.
     await viaMenu(frame.locator('[data-tree-collapse]'), 'set-keybind-ui.toggle-rail', 'Set keybind…', 'ui.toggle-rail', 'Show or hide the tree (the Sketch panel in a sketch)', 'Ctrl+\\');

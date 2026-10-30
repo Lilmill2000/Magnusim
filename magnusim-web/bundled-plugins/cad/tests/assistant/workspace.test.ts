@@ -134,6 +134,32 @@ describe('workspace: the tree and the view state', () => {
     expect(vh.calls.find((c) => c.call === 'setPlanes')?.args).toEqual(['always']);
   });
 
+  it("shows and hides a reference plane, axis and point as the person's eye and menu do: view state, no undo step; the person's menu then offers Show", async () => {
+    const t = await part();
+    const C = (o: Record<string, unknown>) => ({ edit: '', name: '', method: 'offset', refs: [], value: '', xyz: [], flip: false, from_end: false, ...o });
+    await t.ok('construct', C({ method: 'offset', refs: ['Top'], value: '20' }));
+    await t.ok('construct', C({ method: 'two_planes', refs: ['Front', 'Right'] }));
+    await t.ok('construct', C({ method: 'coordinates', xyz: ['1', '2', '3'] }));
+    await t.settle();
+    const ui = uiFor(t.services);
+    const idOf = (name: string) => t.doc.state.get().doc.features.find((f) => f.name === name)!.id;
+    const menuLabel = (name: string) => ui.featureMenu(idOf(name)).find((m) => m.id === 'visibility') as { label: string } | undefined;
+    for (const name of ['Plane 1', 'Axis 1', 'Point 1']) {
+      const steps = t.doc.state.get().history.undoLabel;
+      expect((await t.ok('workspace', W('hide', { target: name }))).text).toBe(`Hid ${name} in the view`);
+      expect(t.doc.state.get().view.sketches?.[idOf(name)]).toBe('hidden');
+      expect(t.doc.state.get().history.undoLabel).toBe(steps);
+      expect(menuLabel(name)?.label).toBe(`Show ${name}`);
+      expect((await t.ok('workspace', W('hide', { target: name }))).text).toBe(`${name} is already hidden`);
+    }
+    // The person hid Point 1 from its menu: the Assistant reads it hidden, and shows it.
+    ui.setFeatureVisible(idOf('Point 1'), true);
+    expect(menuLabel('Point 1')?.label).toBe('Hide Point 1');
+    expect((await t.ok('workspace', W('show', { target: 'Point 1' }))).text).toBe('Point 1 is already shown');
+    expect((await t.ok('workspace', W('show', { target: 'Plane 1' }))).text).toBe('Showed Plane 1 in the view');
+    expect(t.doc.state.get().view.sketches?.[idOf('Plane 1')]).toBeUndefined();
+  });
+
   it('selects features, origin planes and bodies, clears, and sets the filter', async () => {
     const t = await part();
     const r = await t.ok('workspace', W('select', { items: ['Extrude 1', 'Top plane'] }));
@@ -644,7 +670,7 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
     const { t } = await keybindPart();
     await t.ok('workspace', W('keybind_set', { target: 'view.front', value: 'Delete', items: ['replace'], person_asked: true }));
     expect(t.ws.log.confirms.at(-1)!.message).toBe(
-      'Magnusim CAD · Front view: 1 → Delete; Magnusim CAD · Delete selected features (model): Delete → no key; Magnusim CAD · Delete (sketch): Delete → no key',
+      'Magnusim CAD · Front view: 1 → Delete; Magnusim CAD · Delete selected features or bodies (model): Delete → no key; Magnusim CAD · Delete (sketch): Delete → no key',
     );
   });
 
@@ -667,7 +693,7 @@ describe('workspace: keybinds (Daniel: read any time, changed only when the pers
   it("not_asked tells where the person sets that command's keybind; keybind_get says it per command (review: the hint named a right-click that did not exist)", async () => {
     const { t } = await keybindPart();
     const r = await t.call('workspace', W('keybind_set', { target: 'ui.delete', value: 'Backspace' }));
-    const where = "right-click the Part's row at the top of the design tree (or a feature's row), then Set keybind for Delete…";
+    const where = "right-click the Part's row at the top of the design tree (or a feature's or a body's row), then Set keybind for Delete…";
     expect(!r.ok && r.error.hint).toBe(`Only change keybinds when the person explicitly asked for that change in this request; otherwise tell them how to do it themselves: ${where}.`);
     expect(!r.ok && r.error.detail).toMatchObject({ reason: 'not_asked', set_in: where });
     const all = await t.ok('workspace', W('keybind_get'));

@@ -216,8 +216,10 @@ export function installSketchBanana(services: AppServices): () => void {
   let cursorSet = '';
   const cursor = (s: Shown, c: '' | 'grab' | 'grabbing') => {
     if (!s.canvas || c === cursorSet) return;
-    // Back to the sketch tool's own cursor when the hand goes (the overlay sets it on its next move).
-    if (c || cursorSet) s.canvas.style.cursor = c ? sketchCursor(c, null, cursorTone(null, paletteOf(handle).background)) : '';
+    // Back to the sketch tool's own cursor when the drag cursor goes (the overlay sets it on its next
+    // move). A sketch shows no hand (Daniel 2026-10-28): over the picture and while it is dragged, the
+    // sketch's small drag cursor (src/sketch/cursors.ts).
+    if (c || cursorSet) s.canvas.style.cursor = c ? sketchCursor('drag', null, cursorTone(null, paletteOf(handle).background)) : '';
     cursorSet = c;
     s.layer.html.dataset.sketchBananaCursor = c || 'none';
   };
@@ -272,7 +274,7 @@ export function installSketchBanana(services: AppServices): () => void {
           return true;
         }
         if (e.type === 'move' && !e.buttons) {
-          // The open hand over the picture (Select tool).
+          // The drag cursor over the picture (Select tool).
           const over = !!onPicture(s, e);
           cursor(s, over ? 'grab' : '');
           return over;

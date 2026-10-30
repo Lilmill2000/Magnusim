@@ -28,6 +28,18 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   joined), a body's cross-section at Top, Front, Right or a plane of yours, and
   points typed as x, y, z.
 - Parameters have a comment, under each row.
+- Delete a body: right-click it in the tree (or select it and press Delete),
+  "Delete Body 1". It goes from the tree and the view, and "Body-Delete 1" is
+  added to the history (one undo step: Undo brings the body back). Several
+  bodies selected are deleted by one feature. Edit the feature to change which
+  bodies it deletes; delete or suppress it to bring them back. The Assistant
+  deletes bodies the same way. While a panel is open, the bodies it shows
+  picked (Combine's target, say) are the panel's: Delete leaves them alone, and
+  a body's menu offers to delete only that body.
+- In Magnusim CAD, the desktop edition with no projects, a body has no "Leave
+  out of the simulation" toggle or menu item and no "still in the simulation"
+  words, and the Assistant offers no simulation choice: there is no simulation
+  there. A choice made in Magnusim stays with the design.
 - The sketch toolbar's drawing tools come in groups, one button each with an
   arrow beside it that lists the group's tools (the button runs the one used
   last): Line (Centerline, Midpoint line), Rectangle (Center, 3-point corner,
@@ -103,7 +115,7 @@ is changed with the Part open, from any Magnusim window:
   band around a line under the pointer is fainter over the dark background,
   so the line's own colour shows in it.
 - The Sketch panel's colour dots show both colours (the left half the colour
-  over a face), the sketch cursor (a fillet's radius arrow's hand too) is the
+  over a face), the sketch cursor (a fillet's radius arrow's too) is the
   light one over a face, a selection
   box's caption and a failed Pattern copy's number stay readable, and blue
   text in the Part uses the lighter blue made for dark backgrounds.
@@ -113,6 +125,47 @@ is changed with the Part open, from any Magnusim window:
 - The toolbar's icons follow Magnusim's icon size.
 - In light the Part is as before; only its orientation arrows take the axis
   colours Magnusim's own 3D views now use (a shade darker).
+
+**Sketching, after trying Magnusim CAD**
+- In a sketch the big hand is gone. Over sketch geometry the pointer is a small
+  arrow with a tiny icon beside it of what is under it: a point, a line, an arc,
+  a circle or an ellipse. A rectangle's, polygon's or slot's sides show as
+  lines; fillets, slot ends, open splines, parabolas and conics as arcs; a
+  closed spline as a circle; part of an ellipse as an ellipse. While you drag,
+  and over a fillet's radius arrow or the banana's picture, the small arrow has
+  a four-way arrow beside it.
+- The point under the pointer grows, in a light blue disk, so you can see
+  which point you are about to click. A selected point is green with a green
+  ring round it. Both in light and dark.
+- A tool's own key pressed again puts the tool down: L, draw a line, L, and the
+  Line tool is gone (what you drew stays; a line or shape you had started is
+  dropped, as Escape drops it). It is the key you gave the tool, if you changed
+  it; R also puts down Center rectangle and the other rectangles, and so on for
+  each toolbar group. Escape still steps back one step at a time (it ends a line
+  chain and keeps the Line tool). A key typed into a value box stays there. A
+  key you gave one of a group's other tools (Centerline, say) takes that tool
+  up even while another tool of its group is in hand, as its row in the
+  group's list says.
+
+**A Join of pieces that do not touch is a note, not a warning.** Joining tools
+that do not touch the target (an inlay grouped from spots and rings, used later
+by a Cut with Keep tools) keeps the pieces apart in one body, which is often
+what you want. Its History row now has a quiet "i" mark instead of the amber
+triangle, and its tooltip and panel say, for example, "Note: Inlay holds 8
+separate pieces: they don't touch, so they stay apart in one body (fine for a
+group like an inlay; to fuse pieces, they must overlap or share a face)". A Cut or Intersect
+that leaves a body in more pieces than it had, and a Press-pull that splits a
+body, still warn. The Assistant reads the same note.
+
+**Hide a plane, an axis, a point or a sketch from its menu.** Right-click a
+reference plane, axis or point, or a sketch, in the history: Hide <name>, and
+Show <name> once it is hidden, as its eye in the tree does. Hiding only
+changes what is drawn: a hidden plane is not drawn or clicked in the 3D view,
+but it stays in the tree, can still be picked there and by name, and what is
+built on it (a sketch on a hidden plane, say) builds as before. Its row shows
+it is hidden as a hidden body's does: the eye closed, the name and icon
+dimmed (a sketch a later feature uses is hidden by default, with its eye closed but its row not dimmed). Hiding is not an undo step, and the Part remembers it when it is
+opened again. The Assistant hides and shows them the same way.
 
 ## 0.1.0 (October 2026)
 

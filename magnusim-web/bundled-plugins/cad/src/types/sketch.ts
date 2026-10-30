@@ -249,4 +249,10 @@ export interface SketchModeApi {
    */
   finish(opts?: { step?: AssistantStep }): Promise<string | null>;
   setTool(tool: SketchToolId): void;
+  /**
+   * Leave the tool in hand entirely, as Escape pressed until it is gone (its open step dropped
+   * as Escape drops it; then Select). The tool's own key pressed again (src/app/keyboard.ts
+   * toolKeyAgain). False when there was no tool but Select to leave.
+   */
+  leaveTool(): boolean;
 }

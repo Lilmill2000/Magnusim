@@ -18,6 +18,7 @@ import { runtimeOf } from '../../src/assistant/runtime';
 import { createDocService } from '../../src/doc';
 import chamferModule from '../../src/features/chamfer';
 import combineModule from '../../src/features/combine';
+import deleteBodyModule from '../../src/features/delete_body';
 import deleteFacesModule from '../../src/features/delete_faces';
 import enclosureModule from '../../src/features/enclosure';
 import extrudeModule from '../../src/features/extrude';
@@ -54,7 +55,7 @@ import { realKernelAnywhere } from '../features/p2/kernel-anywhere';
 import { solverAnywhere } from './solver-anywhere';
 
 /** The feature types a tool may make (every module that makes one). */
-export const FEATURE_MODULES: CadModule[] = [sketchModule, extrudeModule, revolveModule, sweepModule, loftModule, filletModule, chamferModule, shellModule, patternModule, combineModule, refgeomModule, pressPullModule, deleteFacesModule, splitModule, enclosureModule];
+export const FEATURE_MODULES: CadModule[] = [sketchModule, extrudeModule, revolveModule, sweepModule, loftModule, filletModule, chamferModule, shellModule, patternModule, combineModule, refgeomModule, pressPullModule, deleteFacesModule, splitModule, enclosureModule, deleteBodyModule];
 
 /** Sketch mode's panel, a stand-in (the UI controller opens a sketch through the panel its type has). */
 const SKETCH_PANEL: CadModule = { id: 'sketch-panel', panels: { sketch: (() => null) as never } };
@@ -99,10 +100,12 @@ export interface HarnessOptions {
   paceScale?: number;
   /** Run the real sketch mode (the sketch tool needs it). */
   sketchMode?: boolean;
+  /** The host's welcome flag: false is Magnusim CAD (no projects, no simulation); left out, Magnusim. */
+  projectLinks?: boolean;
 }
 
 export async function assistantHarness(o: HarnessOptions = {}): Promise<AssistantHarness> {
-  const ws = createFakeWorkspace({ units: o.units ?? 'metric', hostVersion: '1.2', assistant: o.assistant ?? {}, study: { title: o.title ?? 'Part 1' } });
+  const ws = createFakeWorkspace({ units: o.units ?? 'metric', hostVersion: '1.2', assistant: o.assistant ?? {}, study: { title: o.title ?? 'Part 1' }, ...('projectLinks' in o ? { projectLinks: o.projectLinks } : {}) });
   const fake = ws.assistantFake!;
   fake.verdicts.push(...(o.verdicts ?? []));
   const kernel = o.kernel ?? realKernelAnywhere();

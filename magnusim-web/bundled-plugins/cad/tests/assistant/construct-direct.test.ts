@@ -347,6 +347,42 @@ describe('direct', () => {
   );
 
   it(
+    "deletes bodies as the person's Delete on a body in the tree does: one feature, the inputs come back, an edit changes which bodies, undo",
+    async () => {
+      h = await assistantHarness();
+      h.fake.emitTurn({ id: 't-test', title: 'Delete bodies' });
+      await plate(h);
+      const sk = await sketchOn(h, 'Block sketch', 'origin:top', new Shapes().rect('b', 40, -5, 50, 5));
+      await extrude(h, 'Block', regions(h, sk), { distance: '20 mm' });
+      const sk2 = await sketchOn(h, 'Post sketch', 'origin:top', new Shapes().rect('p', 60, -5, 70, 5));
+      await extrude(h, 'Post', regions(h, sk2), { distance: '20 mm' });
+      const [b1, b2] = [bodyNamed(h, 'Body 1').id, bodyNamed(h, 'Body 2').id];
+      const d = await h.ok('direct', DIRECT({ kind: 'delete_body', bodies: ['Body 1', 'Body 2'] }));
+      expect(d.data).toMatchObject({ feature: { name: 'Body-Delete 1', type: 'delete_body', state: 'ok' }, resolved: { bodies: 'Body 1 and Body 2' } });
+      expect(d.text).toMatch(/^Body-Delete 1 ok: deleted Body 1 and Body 2 from the model here on/);
+      expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 3']);
+      // The record the person's Delete of those two bodies in the tree makes.
+      expect(stored(named(h, 'Body-Delete 1'))).toEqual(await personRecord(h, 'delete_body', { bodies: [b1, b2] }));
+      expect(await roundTrip(h, 'Body-Delete 1', 'direct')).toEqual(DIRECT({ edit: 'Body-Delete 1', kind: 'delete_body', bodies: ['Body 1', 'Body 2'] }));
+      // An edit names the bodies as they are just before it: Body 2 comes back.
+      await h.ok('direct', DIRECT({ edit: 'Body-Delete 1', kind: 'delete_body', bodies: ['Body 1'] }));
+      expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 2', 'Body 3']);
+      // Refused before anything changes.
+      const none = await h.call('direct', DIRECT({ kind: 'delete_body' }));
+      expect((none as { error: { message: string } }).error.message).toContain('bodies: the bodies to delete');
+      const far = await h.call('direct', DIRECT({ kind: 'delete_body', bodies: ['Body 3'], distance: '1 mm' }));
+      expect((far as { error: { message: string } }).error.message).toContain('distance: "" with delete_body');
+      expect(undoLabel(h)).toBe('Assistant: Delete bodies');
+      h.fake.emitTurn({ id: 't-test', title: 'Delete bodies', state: 'ended', end: { state: 'done', reason: 'done' } });
+      h.doc.undo();
+      await h.settle();
+      expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 1', 'Body 2', 'Body 3']);
+      expect(names(h)).not.toContain('Body-Delete 1');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
     'encloses bodies in a box or a cylinder, with padding and sides; choices change with edit_feature',
     async () => {
       h = await assistantHarness();

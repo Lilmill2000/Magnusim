@@ -756,6 +756,12 @@ html.cad-tb-resizing-rows * {
   opacity: var(--cad-tree-dim);
 }
 
+/* A hidden sketch or reference (its eye closed): name and icon dimmed, as a hidden body's. */
+.tree-node.is-hidden-feature > .tree-row .tl,
+.tree-node.is-hidden-feature > .tree-row .tree-ico {
+  opacity: var(--cad-tree-dim);
+}
+
 .cad-badge {
   display: inline-flex;
   align-items: center;
@@ -776,6 +782,16 @@ html.cad-tb-resizing-rows * {
 
 .cad-badge.is-warning {
   color: var(--mg-warning);
+}
+
+/* A note (a Join's pieces left apart): said, not wrong, so quieter than a warning. */
+.cad-badge.is-note {
+  color: var(--mg-text-muted);
+}
+
+.cad-badge.is-note:hover,
+.cad-badge.is-note:focus-visible {
+  color: var(--mg-text);
 }
 
 .cad-badge-dot {
@@ -1393,6 +1409,8 @@ input.mgk-input.cad-param-comment {
 .cad-tip-detail {
   flex-basis: 100%;
   color: var(--cad-tip-detail);
+  /* Lines of their own (a warning, then the row's note). */
+  white-space: pre-line;
 }
 
 /* ---- chips (style.css:1070-1140) ---- */

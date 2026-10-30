@@ -18,7 +18,8 @@ import { MAX_PARAM_NAME } from '../doc/params';
 import { HINTS, REASONS, type ToolCode } from './errors';
 import { WORKED_PARTS, type ResultValue } from './examples';
 import { GUIDE } from './guide';
-import { CAD_TOOLS, HELP_TOPICS, type HelpTopic } from './schemas';
+import type { AssistantTool } from '@magnusim/workspace';
+import { CAD_TOOLS, cadToolsFor, HELP_TOPICS, type HelpTopic } from './schemas';
 import { AT_WORDS, expandEntity, JOIN_TOL, KIND_DOF, type EntityKind } from './sketch/macros';
 import { signatureWords, SIGNATURES, TOOL_DIMENSIONS, type ToolConstraintKind } from './sketch/signatures';
 
@@ -96,13 +97,18 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
+/** One tool's row: its title, how much it may change, its fields, and its rules. */
+function toolRow(t: AssistantTool, note: string | undefined = FEATURE_NOTES[t.name]): HelpRow {
+  return { about: t.name, text: `${t.title} (${t.risk}). Fields: ${Object.keys(t.inputSchema.properties).join(', ')}.${note ? ` ${note}` : ''}` };
+}
+
 /** Each tool: its title, how much it may change, its fields, and its rules. */
 function featureRows(): HelpRow[] {
-  return CAD_TOOLS.map((t) => ({
-    about: t.name,
-    text: `${t.title} (${t.risk}). Fields: ${Object.keys(t.inputSchema.properties).join(', ')}.${FEATURE_NOTES[t.name] ? ` ${FEATURE_NOTES[t.name]}` : ''}`,
-  }));
+  return CAD_TOOLS.map((t) => toolRow(t));
 }
+
+/** The features topic's body row in Magnusim CAD (projectLinks false: no projects, no simulation): the tool as offered there. */
+export const BODY_ROW_WITHOUT_SIMULATION: HelpRow = toolRow(cadToolsFor({ projectLinks: false }).find((t) => t.name === 'body')!, 'One step. A body name is unique among bodies; it may equal a feature name.');
 
 const parameterRows = (): HelpRow[] => [
   {
@@ -353,7 +359,7 @@ const detailRows = (): HelpRow[] => [
   },
   {
     about: 'direct kinds',
-    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"... enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid. repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
+    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"... enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid. delete_body: bodies (one feature for them all) leave the model from this point in the history, as the person\'s Delete on a body in the tree; later features that use them fail; delete or suppress the feature to bring them back (edit changes which bodies). repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
   },
   {
     about: 'edit_feature choices',

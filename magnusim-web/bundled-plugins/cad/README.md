@@ -137,7 +137,10 @@ radius, a pattern's count) shows them in a small card beside the rail.
 While you draw, a value box follows the pointer: type a length or an angle and
 press Enter or Tab. A click counts where you pressed, even when the mouse is
 still moving as you click. The pointer is a thin crosshair with the tool's icon
-beside it; over geometry you can drag, an open hand (closed while you drag).
+beside it. With no tool in hand it is a small arrow with a tiny icon of what is
+under it (a point, a line, an arc, a circle or an ellipse), and a four-way arrow
+while you drag. The point under the pointer grows in a light blue disk; a
+selected point is green with a green ring.
 
 Relations (the small horizontal, parallel, tangent, ... badges) show only for
 the geometry you select. **Show relations** (VIEW, Shift+R) shows them all and
@@ -391,8 +394,10 @@ comes on). Rename the result, for example to "Fluid".
 ## History, parameters, undo and saving
 
 - **History**: right-click a feature for Edit, Rename, Suppress or Unsuppress,
-  Roll back to here, Roll to end and Delete. Drag the rollback bar to see the
-  part as it was at that feature. A feature that breaks because something
+  Roll back to here, Roll to end and Delete; a sketch or a reference plane,
+  axis or point also has Hide or Show (its eye in the tree does the same; a
+  hidden one is still used by what is built on it). Drag the rollback bar to
+  see the part as it was at that feature. A feature that breaks because something
   upstream changed is marked red with the reason; a reference it can follow
   only approximately says "Reference repaired · check".
 - **Parameters**: named values with units and expressions. Use them in any
@@ -604,7 +609,10 @@ Delete faces), Ctrl+Z / Ctrl+Y, Escape clears the selection.
 M Mirror, O Offset, P Project, D Dimension, T Trim, X Construction, N Normal to
 (the open sketch), Enter places an open tool step or finishes the sketch
 (on a menu item, or a button you reached with Tab, Enter presses that instead),
-Escape stops the tool, then clears the selection. Ctrl held while drawing turns
+Escape steps back (a line chain first, then the tool), then clears the selection.
+A tool's own key pressed again while it is in hand (L with Line, or the key you
+gave it) puts the tool down at once, as Escape pressed until the tool is gone;
+what you drew stays. Ctrl held while drawing turns
 snapping off. `Ctrl+\` collapses or expands the Sketch panel (in model mode: the
 design tree).
 

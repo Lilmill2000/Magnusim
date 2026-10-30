@@ -3,14 +3,18 @@
 //            document has parameters to edit, Bodies (n) (eye toggle, rename)
 //   HISTORY  the features in order, with the draggable rollback bar; rows below
 //            it are dimmed, suppressed rows greyed and struck through, failed
-//            rows red and warned rows amber with a "What's wrong" tooltip.
+//            rows red and warned rows amber with a "What's wrong" tooltip; a
+//            feature's note (a Join's pieces left apart) is a quiet info mark
+//            with a "Note" tooltip, and follows the warning in a warned row's.
 // Click selects (shared with the viewport), Ctrl+click toggles, double-click
 // opens the feature's panel, right-click opens the context menu. A feature row dragged onto
 // another goes before or after it (doc.move, the order rule of the Assistant's edit_feature move);
 // a body's swatch opens its colour picker (doc.setBodyColor, the Assistant's body color).
 // Sketch rows (P3-PROFILES): "(-)" / "(+)" / "(?)" before the name as
 // SOLIDWORKS shows how defined a sketch is (a lock when fully defined), its
-// dimension count, and an eye that shows or hides it in the view.
+// dimension count, and an eye that shows or hides it in the view; a reference
+// Plane, Axis or Point has the same eye. A hidden one's name and icon are dimmed,
+// as a hidden body's; its menu's Hide / Show does what the eye does.
 // ux010: the PART head's chevron slides the card into its rail (src/ui/LeftStack.tsx, TreeRail.tsx).
 // Owner: UI-SHELL; sketch rows P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -25,13 +29,12 @@ import { PARAMS_ID } from '../commands';
 import { errText, uiFor } from '../controller';
 import { Icon, ICONS } from '../Icon';
 import { DisabledReason, EmptyState, IconButton, InlineRename, TreeNode, TreeSection, useTip } from '../kit';
-import { sketchShown } from '../../features/sketch/view';
 import { constructKindOfType } from '../../features/refgeom/api';
-import { constructShown, constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../features/refgeom/scene';
+import { constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../features/refgeom/scene';
 import { RAIL_COMMAND, railsFor, useRailFocus } from '../left-rails';
 import { keybindMenuItem, railKeybindMenu, useKeyLabel } from '../keybinds';
 import { CHEVRON_LEFT } from './TreeRail';
-import { barIndexAt, bodyRows, dimensionsText, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
+import { barIndexAt, bodyRows, dimensionsText, featureShown, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
 
 /** A padlock (24 viewBox outline): the sketch is fully defined. */
 const LOCK_ICON = 'M7.5 11V8a4.5 4.5 0 0 1 9 0v3 M5.5 11h13v9.5h-13z';
@@ -60,16 +63,23 @@ function usePartName(): string {
 }
 
 function StatusBadge({ row, onOpen }: { row: HistoryRow; onOpen(): void }) {
-  const tip = useTip(row.message ? { text: "What's wrong", detail: row.message } : null);
-  if (row.status !== 'error' && row.status !== 'warning') return null;
-  const label = `What's wrong: ${row.message ?? (row.status === 'error' ? 'the feature failed' : 'the feature has a warning')}`;
+  // An error or a warning has the badge; a note alone (said, not wrong) has the quiet info mark.
+  const wrong = row.status === 'error' || row.status === 'warning';
+  const kind = wrong ? row.status : row.note ? 'note' : null;
+  // A warned row's note follows the warning in its tooltip and label.
+  const also = wrong && row.note ? `Note: ${row.note}` : null;
+  const tip = useTip(wrong && row.message ? { text: "What's wrong", detail: also ? `${row.message}\n${also}` : row.message } : kind === 'note' ? { text: 'Note', detail: row.note! } : null);
+  if (!kind) return null;
+  const label =
+    kind === 'note' ? `Note: ${row.note}` : `What's wrong: ${row.message ?? (row.status === 'error' ? 'the feature failed' : 'the feature has a warning')}${also ? `. ${also}` : ''}`;
   return (
     <button
       type="button"
-      className={`cad-badge is-${row.status}`}
+      className={`cad-badge is-${kind}`}
       aria-label={label}
-      data-feature-badge={row.status}
-      data-message={row.message ?? undefined}
+      data-feature-badge={kind}
+      data-message={(kind === 'note' ? row.note : row.message) ?? undefined}
+      data-note={also ? row.note! : undefined}
       {...tip}
       onClick={(e) => {
         e.stopPropagation();
@@ -77,7 +87,7 @@ function StatusBadge({ row, onOpen }: { row: HistoryRow; onOpen(): void }) {
       }}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {row.status === 'error' ? <span className="cad-badge-dot" /> : <Icon d={ICONS.warning} size={13} />}
+      {kind === 'error' ? <span className="cad-badge-dot" /> : <Icon d={kind === 'note' ? ICONS.info : ICONS.warning} size={13} />}
     </button>
   );
 }
@@ -257,6 +267,9 @@ function History() {
     if (i === bar) items.push(barEl);
     const def = doc.features.get(row.type);
     const renaming = uiState.renaming?.kind === 'feature' && uiState.renaming.id === row.id;
+    // A sketch, or (P4a REFERENCE) a reference Plane, Axis or Point: an eye (null: no eye).
+    const shown = featureShown({ features: d.features }, { sketches: d.sketches }, doc.features, row.id);
+    const construct = constructKindOfType(row.type);
     const cls = [
       row.rolledBack ? 'is-rolled-back' : '',
       row.suppressed ? 'is-suppressed' : '',
@@ -266,15 +279,14 @@ function History() {
       editing === row.id ? 'is-editing' : '',
       moving === row.id ? 'is-dragged' : '',
       drop?.id === row.id ? `is-drop-${drop.where}` : '',
+      // Dimmed only when the person hid it (a sketch a later feature uses is hidden by default:
+      // dimming those would grey most of a history); its eye says hidden either way.
+      shown === false && d.sketches?.[row.id] === 'hidden' ? 'is-hidden-feature' : '',
     ]
       .filter(Boolean)
       .join(' ');
     const sk = row.sketch;
     const prefix = sk ? sketchPrefix(sk.state) : '';
-    const shown = sk ? sketchShown({ features: d.features }, { sketches: d.sketches }, doc.features, row.id) : false;
-    // P4a (REFERENCE): a reference Plane, Axis or Point has an eye too (shown unless hidden).
-    const construct = constructKindOfType(row.type);
-    const cShown = construct ? constructShown({ sketches: d.sketches }, row.id) : false;
     items.push(
       <TreeNode
         key={row.id}
@@ -318,47 +330,24 @@ function History() {
           'data-rolled-back': row.rolledBack ? '1' : undefined,
           'data-sketch-state': sk?.state,
           'data-sketch-shown': sk ? (shown ? '1' : '0') : undefined,
-          'data-construct-shown': construct ? (cShown ? '1' : '0') : undefined,
+          'data-construct-shown': construct ? (shown ? '1' : '0') : undefined,
         }}
         badge={<StatusBadge row={row} onOpen={() => onRowOpen(row)} />}
         sub={row.suppressed ? 'Suppressed' : sk ? (dimensionsText(sk.dims) ?? undefined) : undefined}
         actions={
-          sk ? (
+          shown === null ? undefined : (
             <IconButton
               size="row"
               icon={shown ? ICONS.eye : ICONS.eyeOff}
               label={shown ? `Hide ${row.name}` : `Show ${row.name}`}
               hint={shown ? 'Shown in the view' : 'Hidden in the view'}
-              data-sketch-act="visibility"
+              {...(sk ? { 'data-sketch-act': 'visibility' } : { 'data-construct-act': 'visibility' })}
               data-visible={shown ? '1' : '0'}
-              onClick={() => {
-                // A choice that matches the default is forgotten, so a sketch shown by default still hides once a feature uses it.
-                const next = !shown;
-                const byDefault = sketchShown({ features: d.features }, { sketches: {} }, doc.features, row.id);
-                try {
-                  doc.setSketchVisibility(row.id, next === byDefault ? null : next ? 'shown' : 'hidden');
-                } catch (err) {
-                  ui.fail(next ? `Show ${row.name}` : `Hide ${row.name}`, errText(err));
-                }
-              }}
+              // A sketch's choice that matches the default is forgotten (ui.setFeatureVisible), so a sketch
+              // shown by default still hides once a feature uses it.
+              onClick={() => ui.setFeatureVisible(row.id, !shown)}
             />
-          ) : construct ? (
-            <IconButton
-              size="row"
-              icon={cShown ? ICONS.eye : ICONS.eyeOff}
-              label={cShown ? `Hide ${row.name}` : `Show ${row.name}`}
-              hint={cShown ? 'Shown in the view' : 'Hidden in the view'}
-              data-construct-act="visibility"
-              data-visible={cShown ? '1' : '0'}
-              onClick={() => {
-                try {
-                  doc.setSketchVisibility(row.id, cShown ? 'hidden' : null);
-                } catch (err) {
-                  ui.fail(cShown ? `Hide ${row.name}` : `Show ${row.name}`, errText(err));
-                }
-              }}
-            />
-          ) : undefined
+          )
         }
         rowProps={rowDrag(row)}
         onClick={(e) => onRowClick(row, e)}
@@ -570,7 +559,8 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
   const handle = useStateStore(services.viewport, (s) => s.handle);
   const originOpen = d.expanded.includes('origin');
   const bodiesOpen = d.expanded.includes('bodies');
-  const bodies = bodyRows({ bodies: d.docBodies }, { hiddenBodies: d.hidden }, d.bodies);
+  // Magnusim CAD (no projects, no simulation): no simulation toggle, hint or mark on a body row.
+  const bodies = bodyRows({ bodies: d.docBodies }, { hiddenBodies: d.hidden }, d.bodies, { projectLinks: services.bridge.projectLinks() });
   const picked = selectedBodies(sel);
 
   // Double-click the part's own row: rename it, as the header's crumb does (the study's title).

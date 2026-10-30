@@ -4,7 +4,8 @@
 // connect; 1.5: linking a geometry; 1.6: the exit hook; 1.7: ws.prefs, and
 // Edit in CAD: the geometry a Part edits, its source and its faces; unreleased 1.9:
 // ws.assistant, the tools the Part offers the app's Assistant, and its panel's keys, and the
-// host's appearance, ws.context.appearance and its 'appearance' event).
+// host's appearance, ws.context.appearance and its 'appearance' event; Magnusim CAD's welcome
+// flag ws.context.projectLinks, false where there are no projects and no simulation).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type {
   AssistantHandler,
@@ -136,6 +137,14 @@ export interface Bridge {
   onAppearance(fn: (a: Appearance) => void): () => void;
   /** The study record changed (renamed in the header, or a save echoed back). */
   onStudy(fn: (s: StudyRecord) => void): () => void;
+  /**
+   * The host has projects to link the Part into, and so a simulation: true in Magnusim. Magnusim
+   * CAD (the desktop edition: no projects, no simulations) says false in its welcome
+   * (ws.context.projectLinks, unreleased 1.9); absent, as on Magnusim and older hosts,
+   * it is true. Read once. False: the Part shows no simulation control and the Assistant offers
+   * none; a body's stored choice stays in the document.
+   */
+  projectLinks(): boolean;
   study: {
     get(): Promise<StudyRecord>;
     update(patch: Record<string, unknown>, rev: number): Promise<StudyRecord>;
@@ -338,8 +347,11 @@ export function createBridge(ws: Workspace): Bridge {
           faces: () => (editProject.geometryFaces as EditApi['faces']).call(project),
         }
       : null;
+  // Magnusim CAD's welcome flag (ws.context.projectLinks === false): absent means projects.
+  const projectLinks = ws.context.projectLinks !== false;
   const bridge: Bridge = {
     context: ws.context,
+    projectLinks: () => projectLinks,
     assistant: assistantOf(ws),
     assistantKeys: () => assistantKeys,
     onAssistantKeys(fn) {

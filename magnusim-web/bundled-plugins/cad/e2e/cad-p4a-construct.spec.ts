@@ -11,6 +11,10 @@
 //     with the reason when the block is suppressed (its row in the panel too);
 //   - Axis of a cylinder from the face selected first; Axis where Front and
 //     Right cross (picked in the tree); Point at coordinates, drawn as a dot;
+//   - Hide and Show from the right-click menu of a Plane, an Axis, a Point and
+//     a sketch, and their eyes: gone from the view and not picked there, the
+//     row's eye closed and its name dimmed; kept when the Part is reopened; a
+//     sketch on the hidden plane (picked in the tree) still builds;
 //   - the volume chip: a part and an Enclosure each with its own volume, never
 //     added; the selected body's alone.
 // window.__CAD__ is used only to project model points and read exact figures.
@@ -18,7 +22,7 @@
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSketch, addSolid, drawBlock, modelOnPage, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, groupCommandLabels, commandControl, openSketchDetails } from './helpers';
+import { addSketch, addSolid, drawBlock, modelOnPage, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage, workspaceFrame, runCommand, groupCommandLabels, commandControl, openSketchDetails } from './helpers';
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 async function shot(page: Page, name: string) {
@@ -328,6 +332,147 @@ test('cad:p4a-construct-axis-point Axis of a cylinder (face selected first), Axi
   await featureRow(frame, 'Point 1').locator('[data-construct-act="visibility"]').click();
   await expect(frame.locator('[data-construct-label][data-kind="point"]')).toHaveCount(1);
   await shot(page, 'p4a-axis-point');
+  expect(seen.csp).toEqual([]);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:p4a-construct-hide Hide and Show in the menu of a Plane, an Axis, a Point and a sketch (and their eyes): gone from the view and not picked, the row hidden; kept when the Part is reopened; a sketch on the hidden plane still builds', async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const { seen, frame } = await freshPart(page, request);
+  const p = panel(frame);
+  // Escape lets go of the selection (Plane 1 covers what would be empty view space on an empty Part).
+  const letGo = async () => {
+    await page.keyboard.press('Escape');
+    await expect(frame.locator('[data-cad-tree] [aria-selected="true"]')).toHaveCount(0);
+  };
+  // Plane 1 20 mm above Top, Axis 1 where Front and Right cross, Point 1 at -20, 30, 40.
+  await frame.locator('[data-cad-tree] [data-tree-node="origin:top"] > .tree-row').click();
+  await tb(frame).locator('[data-command="construct.plane"]').click();
+  await expect(p.locator('[data-panel-title]')).toHaveText('Plane 1');
+  await setField(frame, 'distance', '20');
+  await p.locator('[data-panel-done]').click();
+  await letGo();
+  await runCommand(frame, 'construct.axis');
+  await expect(p.locator('[data-panel-title]')).toHaveText('Axis 1');
+  await p.locator('[data-field="method"] select').selectOption('two_planes');
+  await frame.locator('[data-cad-tree] [data-tree-node="origin:front"] > .tree-row').click();
+  await frame.locator('[data-cad-tree] [data-tree-node="origin:right"] > .tree-row').click();
+  await expect(p.locator('[data-pick-list="planes"] [data-pick-row]')).toHaveCount(2);
+  await p.locator('[data-panel-done]').click();
+  await letGo();
+  await runCommand(frame, 'construct.point');
+  await expect(p.locator('[data-panel-title]')).toHaveText('Point 1');
+  await p.locator('[data-field="method"] select').selectOption('coordinates');
+  await setField(frame, 'x', '-20');
+  await setField(frame, 'y', '30');
+  await setField(frame, 'z', '40');
+  await p.locator('[data-panel-done]').click();
+  await expect(p).toHaveCount(0);
+  const refs = ['Plane 1', 'Axis 1', 'Point 1'];
+  for (const n of refs) await expect(featureRow(frame, n)).toHaveAttribute('data-state', 'ok');
+  const label = (n: string) => frame.locator('[data-construct-label]').filter({ hasText: new RegExp(`^${esc(n)}$`) });
+  for (const n of refs) await expect(label(n)).toHaveCount(1);
+  const menuItems = frame.locator('[role="menu"] [role="menuitem"]');
+  const eye = (n: string) => featureRow(frame, n).locator('[data-construct-act="visibility"]');
+  /** What the row shows: its eye's words, whether it is drawn, and its dimmed look. */
+  const rowLook = async (n: string) => [await eye(n).getAttribute('aria-label'), await featureRow(frame, n).getAttribute('data-construct-shown'), /\bis-hidden-feature\b/.test((await featureRow(frame, n).getAttribute('class')) ?? '')];
+
+  // Plane 1 is picked in the view where it is drawn (a point of it away from the axis and the point).
+  await framedAndStill(page, frame, [-35, -10, 20]);
+  const onPlane = await modelOnPage(page, [-35, -10, 20]);
+  await page.mouse.click(onPlane[0], onPlane[1]);
+  await expect(featureRow(frame, 'Plane 1')).toHaveAttribute('aria-selected', 'true');
+  await letGo();
+
+  // Right-click each row: Hide <name> (after Edit, Rename, Suppress): gone from the view, the row hidden.
+  for (const n of refs) {
+    await featureRow(frame, n).locator('> .tree-row').click({ button: 'right' });
+    await expect(menuItems).toContainText([`Edit ${n}`, `Rename ${n}`, `Suppress ${n}`, `Hide ${n}`]);
+    await menuItems.filter({ hasText: `Hide ${n}` }).click();
+    await expect(label(n)).toHaveCount(0);
+    await expect(featureRow(frame, n)).toHaveAttribute('data-construct-shown', '0');
+    expect(await rowLook(n)).toEqual([`Show ${n}`, '0', true]);
+  }
+  await expect(frame.locator('[data-construct-label]')).toHaveCount(0);
+  await shot(page, 'p4a-construct-hidden');
+  // The hidden plane is not picked where it was drawn.
+  await letGo();
+  await page.mouse.click(onPlane[0], onPlane[1]);
+  await page.mouse.move(5, 5);
+  await expect(featureRow(frame, 'Plane 1')).toHaveAttribute('aria-selected', 'false');
+  await expect(label('Plane 1')).toHaveCount(0);
+  // Show from the menu: drawn and picked again; the eye hides it as the menu does.
+  await featureRow(frame, 'Plane 1').locator('> .tree-row').click({ button: 'right' });
+  await menuItems.filter({ hasText: 'Show Plane 1' }).click();
+  await expect(label('Plane 1')).toHaveCount(1);
+  expect(await rowLook('Plane 1')).toEqual(['Hide Plane 1', '1', false]);
+  await letGo();
+  await still(page);
+  await page.mouse.click(onPlane[0], onPlane[1]);
+  await expect(featureRow(frame, 'Plane 1')).toHaveAttribute('aria-selected', 'true');
+  await eye('Plane 1').click();
+  await expect(label('Plane 1')).toHaveCount(0);
+  expect(await rowLook('Plane 1')).toEqual(['Show Plane 1', '0', true]);
+  await featureRow(frame, 'Plane 1').locator('> .tree-row').click({ button: 'right' });
+  await expect(menuItems.filter({ hasText: 'Show Plane 1' })).toHaveCount(1);
+  await page.keyboard.press('Escape');
+
+  // Reopened: all three still hidden.
+  await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 30_000 });
+  await page.locator('#workspace-overlay [data-ws-back]').click();
+  await expect(page.locator('#workspace-overlay')).toBeHidden({ timeout: 120_000 });
+  const again = await openPart(page, page.locator('#plugin-studies-section li[data-plugin="cad"]').filter({ has: page.locator('.tl', { hasText: 'Part 1' }) }));
+  await expect(again.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+  for (const n of refs) await expect(featureRow(again, n)).toHaveAttribute('data-state', 'ok');
+  for (const n of refs) expect(await rowLook(n)).toEqual([`Show ${n}`, '0', true]);
+
+  // A sketch on the hidden plane, picked in the tree: drawn on it at z 20, extruded 10: z 20..30.
+  await letGo();
+  await featureRow(again, 'Plane 1').locator('> .tree-row').click();
+  await tb(again).locator('[data-command="sketch.new"]').click();
+  await expect(again.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await openSketchDetails(page, again);
+  await expect(again.locator('[data-cad-panel] [data-sketch-plane]')).toHaveText('Plane 1');
+  await still(page);
+  await page.keyboard.press('r');
+  const o = await modelOnPage(page, [0, 0, 20]);
+  await page.mouse.click(o[0], o[1]);
+  const c = await modelOnPage(page, [24, 16, 20]);
+  await page.mouse.move(c[0], c[1]);
+  await expect(again.locator('[data-sketch-box="width"]')).toBeVisible();
+  await page.keyboard.type('30');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('20');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Escape');
+  await again.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+  await expect(again.locator('[data-cad-toolbar="model"]')).toBeVisible();
+  const sketchRow = again.locator('[data-cad-tree] [data-feature-row][data-feature-type="sketch"]');
+  await expect(sketchRow).toHaveAttribute('data-state', 'ok');
+  await tb(again).locator('[data-command="solid.extrude"]').click();
+  await expect(p.locator('[data-profile-list] [data-profile]')).toHaveCount(1);
+  await setField(again, 'distance', '10');
+  await p.locator('[data-panel-done]').click();
+  await expect(p).toHaveCount(0);
+  expect((await boxes(page))['Body 1']).toEqual([0, 0, 20, 30, 20, 30]);
+  expect(await rowLook('Plane 1')).toEqual(['Show Plane 1', '0', true]);
+  // Point 1 shown from its menu: drawn (the view draws references), the other two still not.
+  await featureRow(again, 'Point 1').locator('> .tree-row').click({ button: 'right' });
+  await menuItems.filter({ hasText: 'Show Point 1' }).click();
+  await expect(label('Point 1')).toHaveCount(1);
+  await expect(again.locator('[data-construct-label]')).toHaveCount(1);
+
+  // A sketch's menu has Hide and Show too (Sketch 1 is used by Extrude 1: hidden until shown).
+  await sketchRow.locator('> .tree-row').click({ button: 'right' });
+  await menuItems.filter({ hasText: 'Show Sketch 1' }).click();
+  await expect(sketchRow).toHaveAttribute('data-sketch-shown', '1');
+  await expect(sketchRow).not.toHaveClass(/is-hidden-feature/);
+  await sketchRow.locator('> .tree-row').click({ button: 'right' });
+  await menuItems.filter({ hasText: 'Hide Sketch 1' }).click();
+  await expect(sketchRow).toHaveAttribute('data-sketch-shown', '0');
+  // Back to its default (hidden: Extrude 1 uses it), so not dimmed: only a row the person hid is.
+  await expect(sketchRow).not.toHaveClass(/is-hidden-feature/);
+  await expect(sketchRow.locator('[data-sketch-act="visibility"]')).toHaveAttribute('aria-label', 'Show Sketch 1');
   expect(seen.csp).toEqual([]);
   expect(seen.errors).toEqual([]);
 });

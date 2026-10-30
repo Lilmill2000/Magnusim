@@ -737,7 +737,13 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
     },
     setSketchVisibility(id, mode) {
       calls.push(`setSketchVisibility ${id} ${mode}`);
-      state.set((s) => ({ ...s, view: { ...s.view, sketches: { ...(s.view.sketches ?? {}), ...(mode ? { [id]: mode } : {}) } } }));
+      // As the service: null forgets the choice (the default again).
+      state.set((s) => {
+        const sketches = { ...(s.view.sketches ?? {}) };
+        if (mode) sketches[id] = mode;
+        else delete sketches[id];
+        return { ...s, view: { ...s.view, sketches } };
+      });
     },
     // ux010 (TOOLBAR builder): the banana for scale, kept with the view.
     setScaleModel(kind, place) {
@@ -841,8 +847,9 @@ export interface TestServices {
   looks: unknown[][];
 }
 
-export function makeServices(opts: { types?: FeatureType[]; status?: DocState['status']; units?: DocUnits; viewport?: boolean; incompleteExtrude?: boolean; panels?: boolean } = {}): TestServices {
-  const ws = createFakeWorkspace();
+export function makeServices(opts: { types?: FeatureType[]; status?: DocState['status']; units?: DocUnits; viewport?: boolean; incompleteExtrude?: boolean; panels?: boolean; projectLinks?: boolean } = {}): TestServices {
+  // projectLinks false: Magnusim CAD's welcome (no projects, no simulation); left out, Magnusim's.
+  const ws = createFakeWorkspace('projectLinks' in opts ? { projectLinks: opts.projectLinks } : {});
   const bridge = createBridge(ws);
   const bus = createBus<CadEvents>();
   const doc = createFakeDoc({ types: opts.types, status: opts.status, units: opts.units, incompleteExtrude: opts.incompleteExtrude });

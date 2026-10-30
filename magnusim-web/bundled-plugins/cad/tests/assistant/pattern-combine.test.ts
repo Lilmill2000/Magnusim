@@ -6,7 +6,8 @@
 //     changed), edit_feature on count; a circular pattern all round (360 deg: evenly);
 //   - a mirror of the body about "Right offset 40 mm": the construction plane made in the same
 //     step (one undo entry for both), a second mirror there uses it again;
-//   - combine takes "bodies of <pattern>" and joins pieces that do not touch with a warning,
+//   - combine takes "bodies of <pattern>" and joins pieces that do not touch with a note (the
+//     feature's note, as the tree's info mark; warnings still say the body has more solids),
 //     cuts a tool away (it goes, the overlap leaves the target), keeps it when asked (an edit), and
 //     refuses tools that are only the targets ("all bodies" less the targets);
 //   - refused before anything changes: a pitch below 0 (the hint says flip), a count of 1, an
@@ -207,7 +208,7 @@ describe('pattern', () => {
 
 describe('combine', () => {
   it(
-    'joins the copies of a pattern by "bodies of", warning of separate solids',
+    'joins the copies of a pattern by "bodies of", noting the separate pieces (not a warning) and saying the body has more solids',
     async () => {
       h = await assistantHarness();
       await plate(h);
@@ -215,15 +216,20 @@ describe('combine', () => {
       expect(bodies(h).map((b) => b.name)).toEqual(['Body 1', 'Body 1 (Instance 2)', 'Body 1 (Instance 3)']);
       const r = await h.ok('combine', COMBINE({ targets: ['Body 1'], tools: ['bodies of Linear pattern 1'] }));
       expect(r.data).toMatchObject({
-        feature: { name: 'Combine 1', type: 'combine', state: 'warning' },
+        feature: { name: 'Combine 1', type: 'combine', state: 'ok', message: null, note: "Body 1 holds 3 separate pieces: they don't touch, so they stay apart in one body (fine for a group like an inlay; to fuse pieces, they must overlap or share a face)" },
         targets: ['Body 1'],
         tools: ['Body 1 (Instance 2)', 'Body 1 (Instance 3)'],
         bodies: { removed: ['Body 1 (Instance 2)', 'Body 1 (Instance 3)'], changed: [{ body: 'Body 1', volume_mm3: [14400, 43200], solids: [1, 3] }] },
         warnings: expect.arrayContaining([expect.stringContaining('Body 1 now has 3 solids (it had 1)')]),
         resolved: { tools: expect.stringContaining('bodies of Linear pattern 1 -> 2 bodies') },
       });
-      expect(r.text).toBe('Combine 1 warning: joined Body 1 (Instance 2) and Body 1 (Instance 3) to Body 1 · Body 1 14400 → 43200 mm³');
+      expect(r.text).toBe('Combine 1 ok: joined Body 1 (Instance 2) and Body 1 (Instance 3) to Body 1 · Body 1 14400 → 43200 mm³');
       expect(bodies(h)).toEqual([{ name: 'Body 1', volume: expect.any(Number), solids: 3 }]);
+      // get_model says the note as the tree's info mark does.
+      const read = await h.ok('get_model', { detail: 'brief', feature: 'Combine 1' });
+      expect(read.data.feature).toMatchObject({ state: 'ok', note: expect.stringMatching(/^Body 1 holds 3 separate pieces: /) });
+      expect(read.data.feature).not.toHaveProperty('message');
+      expect(read.text).toMatch(/^Combine 1 \(combine\): ok · note: Body 1 holds 3 separate pieces: /);
     },
     REAL_KERNEL_MS,
   );

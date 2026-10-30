@@ -3,7 +3,8 @@
 // Done in the foot (disabled with the reason while a new feature is
 // incomplete), Delete (discards a new feature, removes an existing one), no
 // header tick, the rebuild's error with its fixes ("Try repair") or warning in
-// the foot, and "Not applied: ..." for a typed change that cannot apply.
+// the foot, then its note ("Note: ...", plain), and "Not applied: ..." for a
+// typed change that cannot apply.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Toggle } from '@magnusim/plugin-ui';
@@ -131,6 +132,14 @@ export function P2FeaturePanel<F extends Feature>({
     foot.push(
       <div key="warning" role="status" data-warning="1">
         <Hint tone="warning">{status.message}</Hint>
+      </div>,
+    );
+  }
+  // A note (a Join's pieces left apart): said in plain words, not amber; after a warning too.
+  if ((status?.state === 'ok' || status?.state === 'warning') && status.note && !stale) {
+    foot.push(
+      <div key="note-status" role="status" data-note="1">
+        <Hint>Note: {status.note}</Hint>
       </div>,
     );
   }

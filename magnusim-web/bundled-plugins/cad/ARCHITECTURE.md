@@ -74,7 +74,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
 | `solver-build/**`, `workspace/solver/*`, `src/solver-worker/**`, `tests/solver/**` | P3 (sketcher) | Built and tested now; not wired into the page until P3. |
 | `src/modules.ts`, `src/naming/**`, `src/doc/features/{hooks,body-ids}.ts`, `tests/arch/**`, `docs/p2p3-plan.md` | INTEGRATE (P2/P3 architect) | Module discovery, the naming layer, the feature-type hooks; frozen during the P2/P3 build (requests to INTEGRATE). Builders append only to the plan's §8 contract-change table. |
-| `src/features/{import,delete_faces,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
+| `src/features/{import,delete_faces,delete_body,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts`, `e2e/cad-body-menu.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
 | `src/features/p2/**` | P2-FEATURES | P2's shared building blocks (selection list, viewport picker, stored-face refs, Try repair helpers, in-frame dialog, icons, `p2.css`). No `index.ts`, so module discovery skips it. Its colours are `--cad-p2-*` in `src/styles/tokens.css`. |
 | `src/sketch/**`, the solver worker's `WORKERS` line in `scripts/build.mjs` + their tests | P3-SKETCH | Sketch mode, tools, dimensions and constraints UI, solver client. |
 | `src/features/{sketch,extrude}/**`, `src/ui/tree/**` + their tests | P3-PROFILES | The sketch feature (regions), extrude, sketch rows in the tree. |
@@ -165,7 +165,14 @@ with the host once for the page's life, and its chip goes in the dock.
   command's preselection reads `userItems` / `userSelection`, which leave a
   panel's highlight out (P4a review: the Fillet panel's face opened Chamfer with
   it and chamfered six edges). Any other write makes a new array, so a click on
-  the same item makes it the user's. Body vertices are asked once per drawn
+  the same item makes it the user's, except while a panel's `useSelectionMirror`
+  shows just those items: a selection that is exactly the panel's picks (the body
+  row a field took, the selection a command opened the panel with, that row
+  clicked again) is marked as the panel's too. Delete with only bodies selected
+  and a body's menu ("Delete N bodies") leave a panel's highlight out as well, so
+  Delete with Combine open never deletes its picked bodies (a feature shown for
+  the Assistant's panel is still the person's to delete: that takes it over).
+  Body vertices are asked once per drawn
   `id|tessKey`; a key that stops being drawn leaves both the cache and the
   in-flight set, so a body that comes back (an Undo) is asked again.
 
@@ -419,12 +426,28 @@ with the host once for the page's life, and its chip goes in the dock.
   `exprs`/`mapExprs`, `isolateWhileEditing`; `src/doc/features/hooks.ts` holds
   the P1 defaults). Builds may publish an `output` (a sketch's regions) that
   later features read; a feature's cache key holds its parents' keys. Every body
-  carries face names (`src/naming/`).
+  carries face names (`src/naming/`). v0.5.0 adds `delete_body` (Delete body,
+  SOLIDWORKS' Delete/Keep Body; `src/features/delete_body/`): `bodies` (ids, as
+  Combine and Split name theirs) leave the model from that point in the history
+  (`removed`, no kernel call); a body not there at that point fails the feature,
+  red, with the model as before it. The tree's Delete on a body (its menu, or the
+  Delete key with only bodies selected) adds one through `UiController.deleteBodies`
+  (`beginNew` + `commit`: one undo step for every body selected); its panel edits
+  which bodies; the Assistant's `direct` kind `delete_body` makes the same record.
+  Its rows are named "Body-Delete N" (SOLIDWORKS' Body-Delete/Keep1), never
+  "Delete body N", which read as Body N deleted. An older CAD shows its row red
+  and keeps it.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a
   new version of the design. A derived body (a split piece) gets its BodyDef
-  then, as a rename does.
+  then, as a rename does. Magnusim CAD (the desktop edition: no projects, no
+  simulations) says `ws.context.projectLinks: false` in its welcome
+  (`bridge.projectLinks()`, true when absent): the body row's toggle, its
+  "still in the simulation" hints and data attributes, the body menu's item and
+  the Assistant's `body.simulation` field (`cadToolsFor`, `parityFor`) are not
+  there, and a call that still asks for it is refused in words. The stored
+  field stays, so a design opened later in Magnusim keeps its choice.
 - **View state** (`CadView`: rollback index, hidden bodies, expanded tree
   nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and
@@ -1839,8 +1862,26 @@ with the host once for the page's life, and its chip goes in the dock.
   Sketch cursors are the plugin's own SVGs (`src/sketch/cursors.ts`): CSS `cursor:
   image-set(url(data:...) 1x, url(data:...) 2x) x y, <keyword>` on the canvas (the OS draws them:
   no lag; the frame's CSP allows data: images; tools still ask for keywords, the overlay maps them),
-  the crosshair with the tool's toolbar icon, an open hand (draggable, handles) and a closed hand
-  (dragging); white on a dark view (`cursorTone` of the view palette's background).
+  the crosshair with the tool's toolbar icon (a tool's own cursor, unchanged); under the Select
+  tool (Daniel 2026-10-28: the hand "gets way too big") `pick`, a small arrow (hotspot at its tip,
+  `ARROW_TIP`) with an 11 px icon at its lower right (`PICK_ICON_BOX`, clear of the hotspot) of the
+  kind under it: the tool asks for `pick:<kind>`, `pickKindOf` maps the hit (point hits and point
+  entities: point; line and centerline: line; circle and a closed spline: circle; ellipse and
+  ellipse_arc: ellipse; arc, an open spline, parabola and conic: arc; linked curves by their kind)
+  whether or not it can be dragged; `drag`, the same arrow with a four-way arrow, while a drag is
+  under way (`SketchView.dragging`) and over a drag handle (a fillet's radius arrow, the banana's
+  picture in a sketch; tools ask for `drag`, and `move`, `grab`, `grabbing` map to it); the open
+  and closed hands stay for the 3D banana in model mode only. White on a dark view (`cursorTone`
+  of the view palette's background), the light tone over a light face (`lightSurfaceAt`). The
+  canvas's `data-sketch-cursor` says which (`pick:line`, `drag`, `crosshair`); each SVG's icon
+  group carries `data-pick="<kind>"` or `data-drag` (the e2e reads them).
+  Sketch points (`attachOverlay`): the point under the pointer, or one a hovered or picked relation
+  holds, is drawn at `POINT_HOT_PX` (11) in its own `Dots` set, over a disk of the hover colour
+  (`POINT_HALO_PX`, order 995: behind the lines, at the line halo's opacities, fainter over the
+  dark background, `setFaceOpacity` .85 over a face); a selected point keeps the pick colour and
+  gets a ring (`roundPoints(mat, ring)`: the band outside `RING_INNER` of the sprite's radius,
+  `POINT_RING_PX` across, `POINT_RING_W` thick, order 1009: over the lines, under the dots). All
+  four point sets are E2 two-tone marks (face colours per point).
   Relation glyphs show for the selection only (`src/sketch/relations-view.ts` `relationShown`; a
   conflict always shows; a fillet arc's own while its radius arrow is up stay hidden); Show
   relations (`view.sketch-relations`, VIEW, Shift+R, `CommandDef.pressed`) shows all, ws.prefs key
@@ -1866,7 +1907,15 @@ with the host once for the page's life, and its chip goes in the dock.
   in use; `canRun(id)` asks without running. Shortcuts are mode-aware: a key runs
   the newest command of the current mode with that shortcut (`mode: 'any'`
   matches both), and passes to older bindings when none matches (the shell's
-  Delete and Escape). Fit and the standard views work in both modes. In sketch
+  Delete and Escape). A sketch tool's command pressed by its key while its tool,
+  or (for the flyout's own command, its bar command: `barIdOf`) a variant of its
+  toolbar flyout, is in hand does not run again: it leaves the tool
+  (`bindCommandShortcuts`' `again` hook, `toolKeyAgain` and
+  `isToolKeyAgain` in `src/app/keyboard.ts`, `SketchModeApi.leaveTool`: Escape
+  until the tool is gone; Daniel 2026-10-28), so the person's own keybind does it
+  too; a variant's own key with another variant of its flyout in hand switches
+  to it; a held key's repeats of a sketch tool's command do nothing; a toolbar
+  click is unchanged. Fit and the standard views work in both modes. In sketch
   mode EDIT shows `sketch.undo` / `sketch.redo`. Delete with only faces selected
   runs `modify.delete-faces` when it is registered and enabled.
 - **Viewport.** `addLayer` (three.js group + html element over the canvas;

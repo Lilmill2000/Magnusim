@@ -36,6 +36,8 @@ export const ICONS = {
   viewIso: 'M12 3l8 4.5v9L12 21l-8-4.5v-9z M12 12l8-4.5 M12 12v9 M12 12L4 7.5',
   warning: 'M12 3.5L2.5 20h19z M12 10v4.5 M12 17.5v.01',
   error: 'M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0 M12 7.5v5.5 M12 16.5v.01',
+  /** A note (the tree's info mark): the error's circle with an "i", the dot on top. */
+  info: 'M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0 M12 11v5.5 M12 7.5v.01',
   /** A toolbar group's "More" menu (its folded commands). */
   more: 'M5 12m-1.4 0a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0 M12 12m-1.4 0a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0 M19 12m-1.4 0a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0',
 } as const;

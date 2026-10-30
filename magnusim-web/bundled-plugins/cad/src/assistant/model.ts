@@ -131,6 +131,8 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   const st = s.rebuild.features[f.id];
   const row: Row = { name: f.name, type: f.type, state: stateWord(st) };
   if (st?.message) row.message = st.message;
+  // What the tree shows as the row's info mark (a Join's pieces left apart): said, not warned.
+  if (st?.note && (st.state === 'ok' || st.state === 'warning')) row.note = st.note;
   if (st?.actions?.length) row.actions = [...st.actions];
   if (runtimeOf(services)?.madeBy.has(f.id)) row.by = 'assistant';
   // A kept structural edit of the Assistant's turned it red, and it still fails.
@@ -207,8 +209,9 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
     bbox_mm: [vec(b.bbox.slice(0, 3)), vec(b.bbox.slice(3, 6))],
     faces: b.faces,
     visible: b.visible,
-    simulation: s.doc.bodies[b.id]?.simulation !== false,
   };
+  // Magnusim CAD (projectLinks false) has no simulation: the person sees no such state, nor does the Assistant.
+  if (services.bridge.projectLinks()) row.simulation = s.doc.bodies[b.id]?.simulation !== false;
   if (row.volume_mm3 === null && b.faces > EAGER_FACES) row.measure = 'use measure';
   const maker = bodyMaker(services.doc.features, s.doc, b.id);
   if (maker) row.made_by = maker.name;
@@ -514,7 +517,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     const data = { ...Object.fromEntries(FEATURE_BASE.filter((k) => k in facts).map((k) => [k, facts[k]])), feature: row };
     const state = String(row.state);
     return {
-      text: `${f.name} (${f.type}): ${state}${row.message ? ` · ${String(row.message)}` : ''}`,
+      text: `${f.name} (${f.type}): ${state}${row.message ? ` · ${String(row.message)}` : ''}${row.note ? ` · note: ${String(row.note)}` : ''}`,
       data,
       summary: `Read ${f.name}: ${state}`,
     };

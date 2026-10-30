@@ -28,7 +28,7 @@ import { createCommandRegistry } from './commands';
 import { appearanceTestHandle, exposeTestHandle } from './debug';
 import { createKeybinds, setKeybindsFor } from './keybinds';
 import { installAppearance } from './appearance';
-import { bindCommandShortcuts, createKeyboard, passAssistantKey } from './keyboard';
+import { bindCommandShortcuts, createKeyboard, passAssistantKey, toolKeyAgain } from './keyboard';
 
 function renderFatal(root: HTMLElement, title: string, message: string) {
   root.innerHTML = '';
@@ -94,7 +94,14 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   installViewport(services);
   installUi(services);
   installModules(services, found);
-  bindCommandShortcuts(commands, keyboard, (message) => bridge.toast(message, 'info'), () => services.mode.get().mode);
+  // A sketch tool's key pressed again leaves the tool (Daniel 2026-10-28).
+  bindCommandShortcuts(
+    commands,
+    keyboard,
+    (message) => bridge.toast(message, 'info'),
+    () => services.mode.get().mode,
+    (c) => toolKeyAgain(services.apis.get().sketch, c, commands.all()),
+  );
   // The host's appearance (unreleased; light on an older host): the 3D view's palette and the
   // toolbar's icon scale, now and on each change, before the layout mounts the view.
   const appearance = installAppearance(services);

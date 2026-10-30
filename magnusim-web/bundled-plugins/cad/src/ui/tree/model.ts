@@ -1,12 +1,38 @@
 // What the design tree shows, as plain data (pure functions, unit-tested):
 // history rows in document order with their rollback / suppressed / error
-// states, where the rollback bar sits, and the bodies list.
+// states and notes, where the rollback bar sits, which rows have an eye and
+// whether it is open, and the bodies list.
 // Owner: UI-SHELL; sketch rows (prefix, lock, dimension count): P3-PROFILES.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RebuildState } from '../../types/doc-service';
+import type { FeatureRegistry, RebuildState } from '../../types/doc-service';
 import type { BodyId, CadDoc, CadView, Feature, FeatureId, FeatureType, SketchSolvedState } from '../../types/doc';
 import type { Selection } from '../../types/selection';
 import type { BodyInfo } from '../../types/kernel';
+import { constructKindOfType } from '../../features/refgeom/api';
+import { constructShown } from '../../features/refgeom/scene';
+import { sketchShown } from '../../features/sketch/view';
+
+/**
+ * Whether a feature with an eye is drawn in the view (a sketch, a reference plane, axis or point;
+ * CadView.sketches holds the choice per feature id), or null for a feature with no eye. Its row's
+ * eye, its menu's Hide / Show and the Assistant's workspace show / hide read this.
+ */
+export function featureShown(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, 'sketches'>, registry: Pick<FeatureRegistry, 'get'>, id: FeatureId): boolean | null {
+  const f = doc.features.find((g) => g.id === id);
+  if (!f) return null;
+  if (f.type === 'sketch') return sketchShown(doc, view, registry, id);
+  return constructKindOfType(f.type) ? constructShown(view, id) : null;
+}
+
+/**
+ * The CadView.sketches entry that shows or hides a feature: a choice equal to the default is
+ * forgotten (null), so a sketch shown by default still hides once a later feature uses it; a
+ * reference is shown unless hidden.
+ */
+export function visibilityChoice(doc: Pick<CadDoc, 'features'>, registry: Pick<FeatureRegistry, 'get'>, id: FeatureId, show: boolean): 'shown' | 'hidden' | null {
+  const byDefault = featureShown(doc, {}, registry, id) ?? true;
+  return show === byDefault ? null : show ? 'shown' : 'hidden';
+}
 
 export interface HistoryRow {
   id: FeatureId;
@@ -19,6 +45,11 @@ export interface HistoryRow {
   /** Rebuild outcome shown as a badge. */
   status: 'ok' | 'error' | 'warning' | 'pending';
   message: string | null;
+  /**
+   * What a built feature notes (FeatureStatus.note): an info mark when the row has no error or
+   * warning badge, else said after the warning in its tooltip. Never a status of its own.
+   */
+  note: string | null;
   /** A sketch's row: how defined it is (prefix, lock) and how many dimensions it has. */
   sketch?: SketchRowInfo;
 }
@@ -78,6 +109,8 @@ export function historyRows(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, '
     } else if (st?.state === 'pending') {
       status = 'pending';
     }
+    // Only what was built has a note (a failed feature has its error to say).
+    const note = (st?.state === 'ok' || st?.state === 'warning') && st.note ? st.note : null;
     return {
       id: f.id,
       type: f.type,
@@ -87,6 +120,7 @@ export function historyRows(doc: Pick<CadDoc, 'features'>, view: Pick<CadView, '
       rolledBack: index >= bar,
       status,
       message,
+      note,
       ...(f.type === 'sketch' ? { sketch: sketchInfo(f) } : {}),
     };
   });
@@ -111,7 +145,8 @@ export interface BodyRow {
   valid: boolean;
   /**
    * LINK: "Include in simulation" (the project's geometry gets this body), or
-   * null for a surface body, which is never sent and has no toggle.
+   * null for a surface body, which is never sent and has no toggle, and for
+   * every body where the host has no projects (Magnusim CAD: no simulation).
    */
   inSimulation: boolean | null;
 }
@@ -121,8 +156,10 @@ export interface BodyRow {
  * made them: Body 1, Body 2, Body 3, whatever the history did to them since),
  * with the saved names and visibility.
  */
-export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hiddenBodies'>, bodies: BodyInfo[]): BodyRow[] {
-  // A surface body (measured: no solid) has no simulation toggle: it is never sent.
+export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hiddenBodies'>, bodies: BodyInfo[], o: { projectLinks?: boolean } = {}): BodyRow[] {
+  // A surface body (measured: no solid) has no simulation toggle: it is never sent. Nor has any
+  // body in Magnusim CAD (projectLinks false): it has no simulation.
+  const links = o.projectLinks !== false;
   const made = Object.keys(doc.bodies);
   const rank = (id: BodyId) => {
     const i = made.indexOf(id);
@@ -136,7 +173,7 @@ export function bodyRows(doc: Pick<CadDoc, 'bodies'>, view: Pick<CadView, 'hidde
     visible: !view.hiddenBodies.includes(b.id),
     feature: b.feature,
     valid: b.valid,
-    inSimulation: b.solids === 0 ? null : doc.bodies[b.id]?.simulation !== false,
+    inSimulation: !links || b.solids === 0 ? null : doc.bodies[b.id]?.simulation !== false,
   }));
 }
 

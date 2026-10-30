@@ -591,6 +591,23 @@ export class SketchMode implements SketchModeApi {
     this.view.set({ hint: this.tool?.hint() ?? '' });
   }
 
+  /**
+   * Daniel (2026-10-28: "I want to be able to draw a line and then press L, and it fully escapes
+   * out of the line tool altogether, not just like pressing Escape once"): the tool's own key
+   * pressed again leaves it, exactly as Escape pressed until the tool is gone: an open question or
+   * value box closed, each open step (a line chain, a shape half placed) dropped as Escape drops it,
+   * then Select. The selection stays. False when only Select was in hand (or the sketch is the
+   * Assistant's: its tools are never the person's).
+   */
+  leaveTool(): boolean {
+    const tool = this.tool;
+    if (!this.session || !tool || tool.id === 'select' || this.byAssistant) return false;
+    // A step per press of Escape; a tool whose cancel never says "nothing left" still goes.
+    for (let i = 0; i < 16 && this.tool === tool; i++) this.escape();
+    if (this.tool === tool) this.setTool('select');
+    return true;
+  }
+
   /** ux010 (DRAW): which relation glyphs show (Show relations; src/sketch/relations-view.ts). */
   get relations(): RelationsView {
     return relationsView(this.services);

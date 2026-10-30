@@ -408,7 +408,7 @@ export function filletTool(mode: SketchMode, kind: 'fillet' | 'chamfer'): Sketch
         const onArrow = !!handle?.target && handle.hit(e);
         if (handle && onArrow !== handle.hovered) {
           handle.hovered = onArrow;
-          mode.view.set({ cursor: onArrow ? 'grab' : '' });
+          mode.view.set({ cursor: onArrow ? 'drag' : '' });
         }
         const corner = onArrow ? null : cornerNear(e.uv, e.px);
         mode.setHover(onArrow ? null : corner ? { what: 'point', id: corner } : hitTest(d, e.uv, e.px, { points: false }));

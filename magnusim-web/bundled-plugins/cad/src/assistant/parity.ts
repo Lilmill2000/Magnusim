@@ -23,6 +23,10 @@
 //                                 note: a rule on how, as the keybind changes' "only when asked");
 //   auto(why)                     not a person action: automatic, internal, or only a pointer's way
 //                                 to something mapped elsewhere (the why says which).
+// A row only a host with projects has (Magnusim) is marked `projects` (inProjects, onlyInProjects):
+// Magnusim CAD (projectLinks false: no projects, no simulation) offers neither the person's control
+// nor the Assistant's field, and parityFor(false) gives the tables as they hold there (the row is
+// NO_PROJECTS, and the Assistant's field rows are left out with the field).
 // Not imported by the app (tests and typecheck only).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -40,11 +44,15 @@ import type { ToolbarPrefs } from '../ui/toolbar-layout';
 import type { Keybinds } from '../app/keybinds';
 
 export type Reach =
-  | { kind: 'reach'; tool: string; field: string; value?: string; note?: string }
+  | { kind: 'reach'; tool: string; field: string; value?: string; note?: string; projects?: true }
   | { kind: 'auto'; why: string };
 
 export const reach = (tool: string, field: string, value?: string, note?: string): Reach => ({ kind: 'reach', tool, field, ...(value !== undefined ? { value } : {}), ...(note ? { note } : {}) });
 export const auto = (why: string): Reach => ({ kind: 'auto', why });
+/** Reached only where the host has projects (Magnusim); Magnusim CAD has neither the control nor the field. */
+const inProjects = (r: Reach): Reach => (r.kind === 'reach' ? { ...r, projects: true } : r);
+/** A project-only row where the host has no projects (Magnusim CAD, projectLinks false). */
+export const NO_PROJECTS = auto('not in Magnusim CAD: with no projects there is no simulation, so neither the person nor the Assistant has it there');
 
 const W = (action: string) => reach('workspace', 'action', action);
 const ENTITY = (kind: string) => reach('sketch', 'entities[].kind', kind);
@@ -265,6 +273,7 @@ export const FEATURE_FIELDS: FeatureFields = {
   delete_faces: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), repair: REPAIR },
   press_pull: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), distance: DIRECT_FIELD('distance'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
   split: { ...BASE, targets: DIRECT_FIELD('bodies'), tool: DIRECT_FIELD('tool'), repair: REPAIR },
+  delete_body: { ...BASE, bodies: DIRECT_FIELD('bodies') },
   enclosure: {
     ...BASE,
     shape: DIRECT_FIELD('shape'),
@@ -433,7 +442,9 @@ export const UI: { readonly [K in keyof UiController]: Reach } = {
   rollToEnd: W('roll_to_end'),
   setRollbackIndex: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
-  setBodyInSimulation: reach('body', 'simulation'),
+  setFeatureVisible: W('show'),
+  setBodyInSimulation: inProjects(reach('body', 'simulation')),
+  deleteBodies: DIRECT('delete_body'),
   featureMenu: MENU,
   bodyMenu: MENU,
   showMenu: MENU,
@@ -466,7 +477,7 @@ export const DOC: { readonly [K in keyof DocService]: Reach } = {
   joinSteps: reach('delete', 'features'),
   renameBody: reach('body', 'rename_to'),
   setBodyColor: reach('body', 'color'),
-  setBodyInSimulation: reach('body', 'simulation'),
+  setBodyInSimulation: inProjects(reach('body', 'simulation')),
   addParam: reach('set_params', 'set'),
   updateParam: reach('set_params', 'set'),
   removeParam: reach('set_params', 'remove'),
@@ -705,12 +716,16 @@ export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reac
  *   own(why)                 not a person's action: the Assistant's own plumbing (its ids, a
  *                            reference text, "keep this as it is").
  */
-export type PersonPath =
+export type PersonPath = (
   | { kind: 'command'; id: string }
   | { kind: 'control'; table: ControlTable; method: string }
   | { kind: 'panel'; type: FeatureType; field: string }
   | { kind: 'place'; where: string }
-  | { kind: 'own'; why: string };
+  | { kind: 'own'; why: string }
+) & {
+  /** The Assistant's field is offered only where the host has projects (Magnusim): left out in Magnusim CAD. */
+  projects?: true;
+};
 
 export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport';
 
@@ -733,6 +748,8 @@ const REFERENCE = own("reference text for the model; the person has the program'
 const OPS = (type: FeatureType) => ({ 'op=new': panel(type, 'op'), 'op=join': panel(type, 'op'), 'op=cut': panel(type, 'op'), 'op=intersect': panel(type, 'op') });
 const NEW_BODY = { body_name: control('ui', 'renameBody'), color: control('ui', 'setBodyColor') };
 const each = (values: readonly string[], prefix: string, path: PersonPath) => Object.fromEntries(values.map((v) => [`${prefix}=${v}`, path]));
+/** An Assistant field only a host with projects offers (Magnusim; not Magnusim CAD). */
+const onlyInProjects = (p: PersonPath): PersonPath => ({ ...p, projects: true });
 
 /** Every Assistant tool's fields and enum values (schemas.ts), and the person's path to each. */
 export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPath>>>> = {
@@ -914,9 +931,9 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     body: place("the body's row in the tree (Bodies)"),
     rename_to: control('ui', 'renameBody'),
     color: control('ui', 'setBodyColor'),
-    'simulation=keep': KEEP,
-    'simulation=include': control('ui', 'setBodyInSimulation'),
-    'simulation=exclude': control('ui', 'setBodyInSimulation'),
+    'simulation=keep': onlyInProjects(KEEP),
+    'simulation=include': onlyInProjects(control('ui', 'setBodyInSimulation')),
+    'simulation=exclude': onlyInProjects(control('ui', 'setBodyInSimulation')),
     'visibility=keep': KEEP,
     'visibility=show': control('ui', 'setBodyVisible'),
     'visibility=hide': control('ui', 'setBodyVisible'),
@@ -960,6 +977,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'kind=delete_faces': command('modify.delete-faces'),
     'kind=split': command('modify.split'),
     'kind=enclosure': command('cfd.enclosure'),
+    'kind=delete_body': control('ui', 'deleteBodies'),
     'kind=repair': control('ui', 'runFeatureAction'),
     'kind=retry': control('ui', 'runFeatureAction'),
     faces: panel('press_pull', 'faces'),
@@ -986,8 +1004,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
   workspace: {
     'action=roll_back_to': control('ui', 'rollBackTo'),
     'action=roll_to_end': control('ui', 'rollToEnd'),
-    'action=show': control('doc', 'setSketchVisibility'),
-    'action=hide': control('doc', 'setSketchVisibility'),
+    'action=show': control('ui', 'setFeatureVisible'),
+    'action=hide': control('ui', 'setFeatureVisible'),
     'action=origin_planes': control('viewport', 'setPlanes'),
     'action=rename_part': place("the tree's Part row: a double-click renames the Part"),
     'action=select': command('inspect.find'),
@@ -1029,3 +1047,18 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     person_asked: own("whether the person asked for the view or keybind change: the person's own moves and keybinds need no asking"),
   },
 };
+
+// ------------------------------------------------------------------ where the host has no projects
+
+/**
+ * The tables as they hold on a host with projects (Magnusim: as they are) or without (Magnusim CAD,
+ * bridge.projectLinks() false): there a project-only row is NO_PROJECTS, and the Assistant's
+ * project-only fields (the body tool's simulation) are left out, as cadToolsFor leaves them out of
+ * the tools. tests/assistant/parity-no-projects.test.ts checks Magnusim CAD both ways.
+ */
+export function parityFor(projectLinks: boolean): { tables: Readonly<Record<string, Readonly<Record<string, Reach>>>>; aiTools: Readonly<Record<string, Readonly<Record<string, PersonPath>>>> } {
+  if (projectLinks) return { tables: PARITY_TABLES, aiTools: AI_TOOLS };
+  const tables = Object.fromEntries(Object.entries(PARITY_TABLES).map(([name, t]) => [name, Object.fromEntries(Object.entries(t).map(([k, r]) => [k, r.kind === 'reach' && r.projects ? NO_PROJECTS : r]))]));
+  const aiTools = Object.fromEntries(Object.entries(AI_TOOLS).map(([tool, rows]) => [tool, Object.fromEntries(Object.entries(rows).filter(([, p]) => !p.projects))]));
+  return { tables, aiTools };
+}
