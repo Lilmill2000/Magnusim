@@ -15,6 +15,13 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   -13,565.7 mm³"), and a loft's caps can be moved at all.
 - A Combine Cut by a body that only touches a loft's cap says "Nothing to cut"
   instead of passing with the volume going up.
+- Mass properties' Centroid, the Assistant's measure and the assembly check
+  read the centroid of such bodies right again (a pipe tee's showed
+  1.125, 0, 15.37 mm for 0, 0, 6.128 mm; an airfoil loft's was 318 mm off).
+- After a Press-pull of a lofted or other B-spline part, its volume comes in
+  a fifth of the time (a 206-face pin plate: 1.5 s, not 7.8 s), and a
+  Press-pull on a part of a few hundred such faces is given the time it needs
+  (a 606-face one took 95 s) instead of being stopped at 60 s.
 
 **Delete faces never passes off a wrong body.**
 - Delete faces and heal could fill more than the gap: on a part with a step,
@@ -35,6 +42,16 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   the same check: the rounded L-block, U-channel, pocket, slot and side step
   now come back as their sharp shapes (the L-block's 36,000 mm³). A part with
   a cavity on each side (a T-block) is still refused, in the words above.
+- Rounds and chamfers that end on a face you keep come off again: a boss's
+  corner rounds on its plate, a riser's corners on the step floor, a step
+  edge's round against its wall, a notch edge between its walls. They were
+  refused ("would add 20.6018 mm³ over faces you kept"): the sharp corner's
+  end lies on that face.
+- When the check itself cannot be trusted or run, the result is shown with
+  "check the result" instead of refused or passed in silence: on some lofted
+  bodies (the comparison returned the whole body), on parts over 2,000 faces,
+  and after a delete so slow that comparing would take too long. Retrying in
+  two goes stops after about 5 s.
 
 **Copy and paste sketch geometry.**
 - In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C

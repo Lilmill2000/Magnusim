@@ -359,6 +359,7 @@ export interface KernelOps {
       volume_error?: number;
       /** 'spans' when any face took Gauss-Kronrod (API 7; API 5: sketch-spline faces only). */
       integration?: 'spans';
+      /** The plain rule's over every face (API 7: Gauss-Kronrod gives the volume only). */
       centroid?: Vec3 | null;
       area?: number;
       timings: Record<string, number>;

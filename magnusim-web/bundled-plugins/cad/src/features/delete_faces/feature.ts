@@ -53,6 +53,7 @@ export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, n
     if (!res.ok) return { ok: false, message: `${f.name} failed: ${res.message}` };
     const timeoutMs = timeoutForFaces('defeature', await ctx.faces(body.shape));
     let r;
+    const t0 = performance.now();
     try {
       r = await ctx.kernel.call('defeature', { id: body.shape, faces: res.indices }, timeoutMs ? { timeoutMs } : {});
     } catch (err) {
@@ -76,15 +77,18 @@ export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, n
     }
     const notes: string[] = [];
     // The heal must stay in the gap: no face that was not asked for goes, no material lands on one.
-    const heal = await checkHeal(ctx, body.shape, res.indices, out);
+    const defeatureMs = performance.now() - t0;
+    const heal = await checkHeal(ctx, body.shape, res.indices, out, undefined, { defeatureMs });
+    const costMs = performance.now() - t0;
     let names: FaceNames | null = null;
     let healed = !healRefused(heal);
     if (healed) {
       names = namesFromResult(f.id, out, new Map([[body.shape, body.names]]), { role: 'heal' });
     } else {
       await ctx.release([out.id]);
-      // In two goes the heal may stay in the gap (the L-block, a pocket, a slot: the right body).
-      const again = await retryHoldBack(ctx, body.shape, res.indices, [...heal.lost, ...heal.covered]);
+      // In two goes the heal may stay in the gap (the L-block, a pocket, a slot: the right body),
+      // when the added material can be compared at all.
+      const again = heal.unchecked ? null : await retryHoldBack(ctx, body.shape, res.indices, [...heal.lost, ...heal.covered], { costMs });
       if (again) {
         const mid = namesFromResult(f.id, again.first, new Map([[body.shape, body.names]]), { role: 'heal' });
         names = namesFromResult(f.id, again.second, new Map([[again.first.id, mid]]), { role: 'heal' });

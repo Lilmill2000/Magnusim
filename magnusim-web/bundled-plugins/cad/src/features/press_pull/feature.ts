@@ -19,7 +19,7 @@
 import { newId, nextName } from '../../lib/ids';
 import { describeFace } from '../../naming';
 import { namesFromResult } from '../../naming/result';
-import { timeoutForFaces } from '../../kernel/timeouts';
+import { offsetFacesTimeout, timeoutForFaces } from '../../kernel/timeouts';
 import { formatVolume, MM_PER } from '../../ui/kit/format';
 import type { LengthUnit } from '../../types/units';
 import type { PressPullFeature } from '../../types/doc';
@@ -154,11 +154,11 @@ function faceWords(body: BuiltBody, i: number | undefined, ctx: BuildContext): s
 async function offsetBuild(f: PressPullFeature, d: number, body: BuiltBody, faces: number[], warning: string | null, ctx: BuildContext): Promise<FeatureBuildResult> {
   const faceCount = await ctx.faces(body.shape);
   const carry = (body.names?.faces ?? []).flatMap((n, i) => (CHAMFER_FACE.test(n) && !faces.includes(i) ? [i] : []));
-  const timeoutMs = timeoutForFaces('offset_faces', faceCount);
+  const timeoutMs = offsetFacesTimeout(faceCount);
   const params = { id: body.shape, faces, d, chain: true, ...(carry.length ? { carry } : {}) };
   let out: OffsetFacesResult;
   try {
-    out = (await ctx.kernel.call('offset_faces', params, timeoutMs ? { timeoutMs } : {})).result;
+    out = (await ctx.kernel.call('offset_faces', params, { timeoutMs })).result;
   } catch (err) {
     const k = (err as KernelCallError).kind;
     if (k === 'occt' || k === 'input' || k === 'internal') return { ok: false, message: `${f.name} failed: ${kernelWords(err)}` };

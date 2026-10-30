@@ -56,3 +56,14 @@ export const LARGE_OP_TIMEOUT_MS = 120_000;
 export function timeoutForFaces(op: KernelOp, faces: number): number | undefined {
   return faces > LARGE_PART_FACES ? Math.max(LARGE_OP_TIMEOUT_MS, timeoutFor(op)) : undefined;
 }
+
+/**
+ * offset_faces (a press-pull) on a body of this many faces. Up to LARGE_PART_FACES its volume check
+ * integrates every B-spline face over its knot spans, and converts each face BRepOffset leaves as an
+ * offset surface (about 70 ms a face): a pin cap of a 606-face lofted pin plate took 95 s, past the
+ * flat 60 s, and the person got "was stopped" and a kernel restart instead of the press-pull.
+ */
+export const OFFSET_FACES_MS_PER_FACE = 250;
+export function offsetFacesTimeout(faces: number): number {
+  return timeoutForFaces('offset_faces', faces) ?? Math.max(timeoutFor('offset_faces'), Math.min(5 * 60_000, Math.ceil(faces * OFFSET_FACES_MS_PER_FACE)));
+}

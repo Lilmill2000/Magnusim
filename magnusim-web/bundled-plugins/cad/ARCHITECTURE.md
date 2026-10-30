@@ -231,16 +231,31 @@ with the host once for the page's life, and its chip goes in the dock.
   and 41 wrong or partial ones: no right one refused, every fill caught; a
   rule on where the change lies ("near the faces") refused a wedge's tip
   chamfer, whose heal restores a tip far from the small face, and is not used.
-  A body of more than `LARGE_PART_FACES` faces gets the first rule only (a
-  boolean of two nearly identical 100 MB parts would cost more than the heal).
+  Material on a kept face is allowed where it is a rebuilt corner's end cap
+  (review 2026-10-30: a boss's corner rounds on its plate, a riser's on the
+  step floor, a step edge's round against its wall were refused as fills):
+  each piece of it borders only removed faces that stand on that face (their
+  normals along the shared edge over about 70 degrees apart, from the analytic
+  surfaces; a B-spline face is not judged) and it covers at most half the face.
+  A heal grows the faces a removed blend runs along and never covers them, so
+  a fill (the step's riser and floor, a kept torus bulging into the corner)
+  stays refused. The boolean is trusted only when the volumes add up (on some
+  wavy lofts rounded R1 the cut returned the whole result): otherwise, and on
+  a body of more than `LARGE_PART_FACES` faces (a boolean of two nearly
+  identical 100 MB parts would cost more than the heal), and after a
+  defeature slower than `CHECK_SLOW_MS` (4 s: the cut of two nearly identical
+  B-spline bodies takes 1.7-1.8 times the defeature and would meet the 20 s
+  limit; the check's cut has 60 s), only the first rule runs and the result
+  says "check the result".
   Delete faces then tries again in two goes (`retryHoldBack`: all but one face
   next to a lost or covered face, then that one; up to 8 tries, small parts
-  only) and takes the first result that passes the same check against the body
-  before: the right body on the rounded L-block, U-channel, pocket, slot and
-  side step at the first to third try (0.16-0.36 s); none on the T-block (a
-  cavity each side), which stays refused. Removing the faces in smaller groups
-  (one by one, corners first) was never right on them. A pattern of faces
-  only refuses.
+  only, none starting that would end past `RETRY_BUDGET_MS`, 5 s; none when
+  the check could not run) and takes the first result that passes the same
+  check against the body before: the right body on the rounded L-block,
+  U-channel, pocket, slot and side step at the first to third try
+  (0.16-0.36 s); none on the T-block (a cavity each side), which stays
+  refused. Removing the faces in smaller groups (one by one, corners first)
+  was never right on them. A pattern of faces only refuses.
 - **Mutating ops run on deep copies** (BRepBuilderAPI_Copy under temporary ids;
   several inputs are copied together so shared sub-shapes stay shared): the
   input shape id is never changed, whatever happens. This covers boolean,
@@ -409,7 +424,7 @@ with the host once for the page's life, and its chip goes in the dock.
       them; its volumes equal native OCCT's to the last digit.
 - **API 7 (volumes, 2026-10-30; `volumeOf` in the facade, tests
   `tests/kernel/kernel-api7-volume.test.ts`, `tests/features/solids/volume-accuracy-real.test.ts`,
-  `e2e/cad-volume-accuracy.spec.ts`; build aefc7a5f in `kernel-build/mk32.build.txt`).**
+  `e2e/cad-volume-accuracy.spec.ts`; build 69bb460d in `kernel-build/mk32.build.txt`).**
   `BRepGProp::VolumeProperties` runs one fixed Gauss rule per face over its whole range: exact
   on analytic faces bounded by lines and circles, but a loft read 0.2 % low, a spline revolve
   0.075 %, a 1.5 mm shell 0.58 %, and the error did not cancel across an edit (BRepOffset
@@ -418,8 +433,18 @@ with the host once for the page's life, and its chip goes in the dock.
   volume. `props` (the chip, Mass, Measure, the Assistant, Combine's "Nothing to cut") and
   `offset_faces`' accept rule now take `volumeOf`: the plain rule on the faces where it is
   exact, Gauss-Kronrod over the knot spans to 1e-9 on the others (an offset surface at 0 as its
-  B-spline basis; one at a distance by Gauss-Kronrod on it to 1e-6: its B-spline copy was 2e-4
-  off), all about one point; `integration: "spans"` when any face took Gauss-Kronrod. Over
+  B-spline conversion; one at a distance by Gauss-Kronrod on it to 1e-6: its B-spline copy was
+  2e-4 off), all about one point; `integration: "spans"` when any face took Gauss-Kronrod.
+  Gauss-Kronrod gives the volume only: the centroid is the plain rule's over every face (review
+  2026-10-30: the first API 7 build, aefc7a5f, counted the Gauss-Kronrod faces at one point, a
+  pipe tee 9.3 mm off and a loft 318 mm off; with theCGFlag each first moment converged to a
+  relative 1e-9, four times as long on one face and without end on a 100-face part). The plain
+  centroid: a tee within 1e-4 mm, an airfoil loft 0.07 mm off on a 600 mm chord. The B-spline
+  conversion of an offset face (`BRepBuilderAPI_NurbsConvert`, about 70 ms a face; Gauss-Kronrod
+  on the offset surface or on its basis with BRepOffset's pcurves took 2-5 times as long) is kept
+  per face (the last 512) for the next volume of the same faces: a press-pulled 206-face pin
+  plate's volume 1.5 s, not 7.8 s; `offset_faces` itself still pays it once (a 606-face pin plate
+  95 s), so Press-pull gives it 250 ms a face (`offsetFacesTimeout`) up to 5 minutes. Over
   2000 faces (a large STEP part) the plain rule throughout, as before. The adaptive `volume_eps`
   form stays an option but is not used: 0.44 % off on offset surfaces over B-splines. Timings
   (Node): the bodies above 2-12 ms; a press-pull of a 400 x 380 mm B-spline face 1.4 s.

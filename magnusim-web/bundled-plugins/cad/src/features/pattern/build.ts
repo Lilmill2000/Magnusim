@@ -161,6 +161,7 @@ async function faceSources(f: PatternFeature, ctx: BuildContext, made: ShapeId[]
   const r = await resolveRefs(ctx, body, f.faces);
   if (!r.ok) return { ok: false, message: `${f.name} failed: ${r.message}` };
   let d: { id: ShapeId; valid?: boolean; reason?: string; faces?: number; history?: OpHistory };
+  const t0 = performance.now();
   try {
     const timeoutMs = timeoutForFaces('defeature', await ctx.faces(body.shape));
     d = (await ctx.kernel.call('defeature', { id: body.shape, faces: r.indices }, timeoutMs ? { timeoutMs } : {})).result;
@@ -173,7 +174,7 @@ async function faceSources(f: PatternFeature, ctx: BuildContext, made: ShapeId[]
   made.push(d.id);
   if (d.valid === false) return { ok: false, message: `${f.name} failed: OCCT could not take those faces off ${bodyName} cleanly (the body without them is not a valid solid). Pattern the feature or the body instead` };
   // A heal past the gap (a cavity next to the faces closed too) would copy the wrong shape (p2/heal-check.ts).
-  const heal = await checkHeal(ctx, body.shape, r.indices, d);
+  const heal = await checkHeal(ctx, body.shape, r.indices, d, undefined, { defeatureMs: performance.now() - t0 });
   if (healRefused(heal)) return { ok: false, message: `${f.name} failed: OCCT could not take those faces off ${bodyName} cleanly (${healWords(heal, body, ctx)}). Pattern the feature or the body instead` };
   const dNames = namesFromResult(f.id, d, new Map([[body.shape, body.names]]));
   const sources: Source[] = [];

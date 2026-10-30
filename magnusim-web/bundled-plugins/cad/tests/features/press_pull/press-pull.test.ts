@@ -148,6 +148,15 @@ describe('Press-pull version 2 (kernel API 6, fix round 1)', () => {
     expect(r.output).toEqual({ type: 'press-pull', method: 'cylinder', faces: [about], tangent: 0, note: null, carried: { fillets: 0, chamfers: 0 } });
   });
 
+  it('offset_faces gets a limit for the part: 60 s on a small one, 250 ms a face on a 606-face part (95 s measured on a lofted pin plate), not the flat 60 s that stopped it', async () => {
+    const k = curvedKernel().on('offset_faces', () => ok(400, 'cylinder'));
+    await pressPullDef.build(v2(), { d: 2 }, ctxOf(k, [body]));
+    expect(k.calls.find((c) => c.op === 'offset_faces')!.timeoutMs).toBe(60_000);
+    const big = curvedKernel().on('offset_faces', () => ok(400, 'cylinder'));
+    await pressPullDef.build(v2(), { d: 2 }, ctxOf(big, [body], { faces: () => 606 }));
+    expect(big.calls.find((c) => c.op === 'offset_faces')!.timeoutMs).toBe(151_500);
+  });
+
   it("a Chamfer feature's faces go to the kernel as `carry` (put back at their size); the panel counts them", async () => {
     const chamfered = { ...body, names: { faces: [...names.faces.slice(0, 4), 'F:f_ch:chamfer:E:a&b', names.faces[5]] } };
     const k = curvedKernel().on('offset_faces', () => ok(401, 'offset', { carried: [4] }));

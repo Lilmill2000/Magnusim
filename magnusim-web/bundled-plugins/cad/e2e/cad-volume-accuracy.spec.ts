@@ -7,11 +7,14 @@
 //                   ok with no failure line, and the chip rises by the area x 0.1.
 //  2. combine-touch the 3-section loft and a block on its top cap that only touches it: Combine
 //                   Cut is red, "Nothing to cut ... (touching is not enough)", the chip as before.
+//  3. centroid-tee  review 2026-10-30: a pipe tee (an R10 bar along X, an R8 branch up Z, joined):
+//                   Mass properties' Centroid is on its symmetry planes, 0, 0, 6.1279 mm (it read
+//                   1.12495, 0, 15.3718 mm: the faces integrated over their knot spans had no centre).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -191,5 +194,28 @@ test('cad:volume-combine-touch a block that only touches the top cap of a 3-sect
   await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(/^Combine 1 failed: Nothing to cut: Body 2 does not overlap Body 1 \(touching is not enough\)/, { timeout: 30_000 });
   await shot(page, 'volume-combine-touch');
   await expectChip(frame, body.id, v0, 1e-12);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:volume-centroid-tee Mass properties of a pipe tee (an R10 bar along X, an R8 branch up Z, joined): the centroid on its symmetry planes', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  const bar = await addSolid(page, { circle: true, axis: 'x', at: [-50, 0, 0], size: [20, 100] });
+  await addSolid(page, { circle: true, at: [0, 0, 0], size: [16, 50], op: 'join', scope: [bar.body!] });
+  await settled(page);
+  await page.keyboard.press('Escape');
+  await runCommand(frame, 'inspect.mass');
+  const mass = frame.locator('[data-cad-panel]');
+  await expect(mass.locator('[data-tool-panel="inspect.mass"]')).toBeVisible();
+  // Was "1.12495, 0, 15.3718 mm" (9.3 mm off): the faces integrated over their knot spans counted at one point.
+  const cell = mass.locator('[data-mass-value="centroid"]');
+  await expect(cell).toHaveText(/ mm$/, { timeout: 30_000 });
+  const [x, y, z] = ((await cell.textContent()) ?? '').replace(/ mm$/, '').split(', ').map(Number);
+  expect(Math.abs(x)).toBeLessThan(1e-4);
+  expect(Math.abs(y)).toBeLessThan(1e-4);
+  expect(Math.abs(z - 6.1279)).toBeLessThan(1e-3);
+  await shot(page, 'volume-centroid-tee');
+  await mass.locator('[data-panel-done]').click();
+  await expect(mass).toHaveCount(0);
   expect(seen.errors).toEqual([]);
 });

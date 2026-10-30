@@ -26,6 +26,7 @@
 #include <cctype>
 #include <functional>
 #include <istream>
+#include <deque>
 #include <map>
 #include <memory>
 #include <new>
@@ -2129,9 +2130,19 @@ bool sketchSplineFaces(const TopoDS_Shape& s, bool flatToo = false) {
 // cancel before and after an edit (BRepOffset rewrites a face as an offset surface over a
 // converted B-spline: a good 0.01 mm press-pull read as a 942 mm3 loss and was refused). Here the
 // plain rule runs on the faces where it is exact and Gauss-Kronrod over the knot spans (to 1e-9)
-// on the others, every face about one point so that they add up. An offset surface at distance 0
-// (BRepOffset's untouched neighbours) is integrated as its B-spline basis (exact; GK straight on
-// one took seconds); one at a distance (the moved face) by GK on it to 1e-6 (its B-spline copy,
+// on the others, every face about one point so that they add up. Gauss-Kronrod gives the volume
+// only: the centre (centroid) comes from the plain rule over every face, as before API 7 (a pipe
+// tee's within 1e-4 mm, an airfoil loft's 0.07 mm off on a 600 mm chord). Its first moments to
+// 1e-9 (theCGFlag) took four times as long on one face and did not end on a 100-face part (each
+// moment converges to a relative error, and a face's moment can be near zero); without them the
+// Gauss-Kronrod faces had no centre, and API 7's first build put a tee's centroid 9.3 mm off and
+// a loft's 318 mm off. An offset surface at distance 0 (BRepOffset's untouched neighbours) is
+// integrated as its B-spline conversion (BRepBuilderAPI_NurbsConvert: Gauss-Kronrod on the offset
+// surface itself, or on its basis with BRepOffset's pcurves, took 2 to 5 times as long). The
+// conversion is most of the cost (70 ms a face against 14 for Gauss-Kronrod on it), so each
+// converted face is kept (kConvertedFaces, by face) for the next volume of the same faces: the
+// chip and Mass of a press-pull's result, the next press-pull's volume before (a 206-face pin
+// plate's result: 7.8 s, then 1.5 s). One at a distance (the moved face) by GK on it to 1e-6 (its B-spline copy,
 // approximated to 1e-4 mm, was 2e-4 off on a loft's side offset 1 mm in). The adaptive "eps" form
 // is not used: 0.44 % off on offset surfaces over B-splines. A body of more than
 // kVolumeFaceBudget faces (a large STEP part) keeps the plain rule (20-73 s already on the 113 MB
@@ -2170,6 +2181,56 @@ bool plainRuleExact(const TopoDS_Face& F) {
   return true;
 }
 
+// The B-spline conversions of offset faces at distance 0, newest last, at most kConvertedFaces:
+// each entry holds the face it was made from (so its TShape cannot be freed and its address
+// reused) and the conversion (FORWARD).
+const size_t kConvertedFaces = 512;
+std::unordered_map<const TopoDS_TShape*, std::vector<std::pair<TopoDS_Face, TopoDS_Face>>> gConverted;
+std::deque<std::pair<const TopoDS_TShape*, TopoDS_Face>> gConvertedOrder;
+
+// `F` (an offset surface at distance 0) as a B-spline face, oriented as `F`; a null face when the
+// conversion failed.
+TopoDS_Face convertedOffsetFace(const TopoDS_Face& F) {
+  TopoDS_Face key = F;
+  key.Orientation(TopAbs_FORWARD);
+  const TopoDS_TShape* t = key.TShape().get();
+  auto hit = gConverted.find(t);
+  if (hit != gConverted.end())
+    for (auto& e : hit->second)
+      if (e.first.IsEqual(key)) {
+        TopoDS_Face out = e.second;
+        out.Orientation(F.Orientation());
+        return out;
+      }
+  TopoDS_Face made;
+  try {
+    BRepBuilderAPI_NurbsConvert nc(key, Standard_True);
+    if (nc.IsDone() && !nc.Shape().IsNull() && nc.Shape().ShapeType() == TopAbs_FACE) made = TopoDS::Face(nc.Shape());
+  } catch (const Standard_Failure&) {
+    made.Nullify();
+  }
+  if (made.IsNull()) return made;
+  made.Orientation(TopAbs_FORWARD);
+  gConverted[t].emplace_back(key, made);
+  gConvertedOrder.emplace_back(t, key);
+  while (gConvertedOrder.size() > kConvertedFaces) {
+    const auto old = gConvertedOrder.front();
+    gConvertedOrder.pop_front();
+    auto it = gConverted.find(old.first);
+    if (it == gConverted.end()) continue;
+    auto& v = it->second;
+    for (size_t i = 0; i < v.size(); ++i)
+      if (v[i].first.IsEqual(old.second)) {
+        v.erase(v.begin() + (long)i);
+        break;
+      }
+    if (v.empty()) gConverted.erase(it);
+  }
+  TopoDS_Face out = made;
+  out.Orientation(F.Orientation());
+  return out;
+}
+
 // The surface under any rectangular trims.
 Handle(Geom_Surface) bareSurface(const TopoDS_Face& F) {
   Handle(Geom_Surface) g = BRep_Tool::Surface(F);
@@ -2185,6 +2246,15 @@ struct VolumeRun {
   double error = 0;  // the Gauss-Kronrod faces' error estimates, summed
   int spans = 0;     // faces integrated by Gauss-Kronrod
   bool budget = false;  // over kVolumeFaceBudget faces: the plain rule throughout
+};
+
+// A mass at a centre, about `at` (GProp_GProps keeps its centre relative to its location).
+class MassAt : public GProp_GProps {
+ public:
+  MassAt(const gp_Pnt& at, double mass, const gp_Pnt& centre) : GProp_GProps(at) {
+    dim = mass;
+    g.SetXYZ(centre.XYZ() - at.XYZ());
+  }
 };
 
 // The volume (and centre) of `s` into `props`, as described above.
@@ -2211,34 +2281,30 @@ VolumeRun volumeOf(const TopoDS_Shape& s, GProp_GProps& props) {
   BRepGProp_Face plainFace;
   BRepGProp_Face spanFace(Standard_True);
   BRepGProp_Domain dom;
+  GProp_GProps centre(origin);  // the plain rule over every face: the centre
   for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next()) {
     TopoDS_Face F = TopoDS::Face(ex.Current());
     const TopAbs_Orientation o = F.Orientation();
     if (o != TopAbs_FORWARD && o != TopAbs_REVERSED) continue;
     if (BRep_Tool::Surface(F).IsNull()) continue;
+    plainFace.Load(F);
+    if (F.NbChildren() == 0) {
+      plain.Perform(plainFace);
+    } else {
+      dom.Init(F);
+      plain.Perform(plainFace, dom);
+    }
+    centre.Add(plain);
     if (plainRuleExact(F)) {
-      plainFace.Load(F);
-      if (F.NbChildren() == 0) {
-        plain.Perform(plainFace);
-      } else {
-        dom.Init(F);
-        plain.Perform(plainFace, dom);
-      }
       props.Add(plain);
       continue;
     }
     Handle(Geom_Surface) g = bareSurface(F);
     Handle(Geom_OffsetSurface) off = Handle(Geom_OffsetSurface)::DownCast(g);
     if (!off.IsNull() && off->Offset() == 0.0) {
-      try {
-        BRepBuilderAPI_NurbsConvert nc(F, Standard_True);
-        if (nc.IsDone() && !nc.Shape().IsNull() && nc.Shape().ShapeType() == TopAbs_FACE) {
-          F = TopoDS::Face(nc.Shape());
-          F.Orientation(o);
-        }
-      } catch (const Standard_Failure&) {
-        // Not converted: Gauss-Kronrod on the offset surface itself (slower, as accurate).
-      }
+      // Not converted (a null face): Gauss-Kronrod on the offset surface itself (slower, as accurate).
+      const TopoDS_Face b = convertedOffsetFace(F);
+      if (!b.IsNull()) F = b;
     }
     // An offset surface at a distance (the moved face): Gauss-Kronrod on it to 1e-6 (1.4 s for a
     // press-pull of a 400 x 380 mm B-spline face, 3.5 s at 1e-9; the volume within 2 mm3 of 1e-9's).
@@ -2262,15 +2328,9 @@ VolumeRun volumeOf(const TopoDS_Shape& s, GProp_GProps& props) {
       continue;
     }
     // Gauss-Kronrod gave up on this face (a negative error): the plain rule, as before API 7.
-    plainFace.Load(F);
-    if (F.NbChildren() == 0) {
-      plain.Perform(plainFace);
-    } else {
-      dom.Init(F);
-      plain.Perform(plainFace, dom);
-    }
     props.Add(plain);
   }
+  props = MassAt(origin, props.Mass(), centre.Mass() != 0 ? centre.CentreOfMass() : props.CentreOfMass());
   return run;
 }
 

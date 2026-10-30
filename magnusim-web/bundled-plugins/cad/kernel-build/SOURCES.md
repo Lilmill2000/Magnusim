@@ -81,6 +81,10 @@ node kernel-build/ship.mjs                           # queued with e2e runs; rep
   volumes: `volumeOf` in the facade; built with `FACADE_OBJ` in a folder of its own, `--clean`):
   `mk32.wasm` 22,477,455 bytes, sha256 `aefc7a5ff4a1ed6e…`; `mk32.mjs` unchanged; both
   `repro-check.sh --against-shipped` builds identical to each other and to the shipped pair.
+  API 7 centroid and offset-face fix (2026-10-30, same contract; `FACADE_OBJ` of its own,
+  `--clean`): `mk32.wasm` 22,483,974 bytes, sha256 `69bb460d53a2510f…`; `mk32.mjs` unchanged;
+  `repro-check.sh --against-shipped` (1m06s): both builds identical to each other and to the
+  shipped pair.
 - OCCT rebuilt from nothing (230 s): all 27 static libraries identical to the
   first build, and the facade linked against them identical again.
 - No `/home/...` or other build-machine path is left in `mk32.wasm`.

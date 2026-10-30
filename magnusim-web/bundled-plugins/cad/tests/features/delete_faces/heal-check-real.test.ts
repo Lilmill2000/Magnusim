@@ -8,19 +8,27 @@
 // the body is unchanged. Then the rule (src/features/p2/heal-check.ts) on the real kernel: every
 // wrong fill of the repro corpus refused (and five of the six bodies right in two goes), and none
 // of its right removals (holes, bosses, pockets, slots, fillets, chamfers, ring fillets, wedge
-// tips, a 50-hole plate, BREP round trips).
+// tips, a 50-hole plate, BREP round trips). Review 2026-10-30: rounds and chamfers that end on a
+// face that stays (a boss's corners on its plate, a riser's corners on the step floor, a step edge
+// into its wall, a notch edge between its walls, a tab's edges, the boss after a STEP round trip)
+// were refused as fills, their corners' end caps read as material on the kept face: now the sharp
+// part. A wavy loft rounded R1, whose check boolean returned the whole result, is shown with
+// "check the result" instead of refused for the body's own volume; a defeature too slow for the
+// boolean skips it (said so) instead of meeting the kernel limit.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetBreps } from '../../../src/features/import/feature';
-import { checkHeal, healRefused, retryHoldBack, type HealCheck } from '../../../src/features/p2/heal-check';
+import { checkHeal, healRefused, retryHoldBack, UNCHECKED, type HealCheck } from '../../../src/features/p2/heal-check';
+import { pickFace } from '../../../src/features/p2/refs';
+import { refPlaneDef } from '../../../src/features/refgeom/defs';
 import { PATTERN_DEFS } from '../../../src/features/pattern/defs';
 import type { DeleteFacesFeature } from '../../../src/types/doc';
 import type { BuildContext, FeatureTypeDef } from '../../../src/types/doc-service';
 import type { OpHistory, TopoResult } from '../../../src/types/kernel-protocol';
 import { extentFor } from '../../doc/blocks';
-import type { RealDoc } from '../p2/real-doc';
-import { addFeature, addSketch, close, faceRef, onPlane, openSolids, regionsOf, SketchBuilder, topo, volume } from '../solids/solids-real';
+import { importFixture, type RealDoc } from '../p2/real-doc';
+import { addFeature, addSketch, close, edgeRef, faceRef, onPlane, openSolids, regionsOf, SketchBuilder, topo, volume } from '../solids/solids-real';
 
 const open: RealDoc[] = [];
 afterEach(() => {
@@ -192,6 +200,138 @@ function kit(r: RealDoc) {
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 const along = (e: Edge, axis: number) => e.type === 'line' && !!e.dir && near(Math.abs(e.dir[axis]), 1);
 
+/** The plate 60 x 40 x 10 with a boss 20 x 10 x 6 joined on it, the boss's 4 vertical edges R2 by Fillet 1. */
+async function roundedBoss(r: RealDoc) {
+  await block(r, [0, 0, 0], [60, 40, 10]);
+  await block(r, [20, 15, 10], [20, 10, 6], 'join');
+  const b = bodies(r)[0];
+  const t = await topo(r, b);
+  const vertical = t.edges.filter((e) => e.type === 'line' && e.mid![2] > 10 + 1e-6 && Math.abs(e.mid![2] - 13) < 1e-6).map((e) => e.i);
+  expect(vertical).toHaveLength(4);
+  const fl = await addFeature(r, 'fillet', { body: b.id, edges: await Promise.all(vertical.map((i) => edgeRef(r, b, i))), faces: [], radius: '2 mm' });
+  expect(fl.status.state).toBe('ok');
+  expect(await volume(r, bodies(r)[0].id)).toBeCloseTo(25200 - 4 * (4 - Math.PI) * 6, 6);
+}
+
+describe('Delete faces of rounds that end on a face that stays: the sharp part (review 2026-10-30)', () => {
+  it("a boss's 4 vertical corner rounds R2 on its plate: ok, the sharp boss (25,200 mm³, 11 faces), not refused for the corners' end caps", async () => {
+    const r = await part();
+    await roundedBoss(r);
+    const del = await deleteFaces(r, (f) => f.type === 'cylinder');
+    expect(del.count).toBe(4);
+    // Was: "healing filled more than the gap the deleted faces leave: it would add 20.6018 mm³ over faces you kept (End face of Extrude 1)".
+    expect(del.status).toMatchObject({ state: 'ok' });
+    expect(del.status.message).toBeUndefined();
+    const after = bodies(r)[0];
+    expect(after.faces).toBe(11);
+    expect(close(await volume(r, after.id), 25200)).toBe(true);
+  }, 120_000);
+
+  it('the same after a STEP round trip (an imported boss)', async () => {
+    const r = await part();
+    await roundedBoss(r);
+    const e = await r.kernel.call('export_step', { shapes: [{ id: bodies(r)[0].shape, name: 'Boss' }], schema: 'AP214' } as never);
+    const bytes = new Uint8Array((e as unknown as { buffers: { step: ArrayBuffer } }).buffers.step);
+    const d = await part();
+    await importFixture(d, 'boss.step', { bytes });
+    const b = bodies(d)[0];
+    const t = await topo(d, b);
+    const rounds = t.faces.filter((f) => f.type === 'cylinder').map((f) => f.i);
+    expect(rounds).toHaveLength(4);
+    const refs = [];
+    for (const i of rounds) {
+      const p = await pickFace(d.services, b, i, null);
+      if (!p.ok) throw new Error(p.reason);
+      refs.push(p.ref);
+    }
+    const del = await addFeature(d, 'delete_faces', { body: b.id, faces: refs } as Partial<DeleteFacesFeature> as Record<string, unknown>);
+    expect(del.status).toMatchObject({ state: 'ok' });
+    expect(close(await volume(d, bodies(d)[0].id), 25200)).toBe(true);
+  }, 120_000);
+
+  it('a defeature slow enough that the check would meet the kernel limit: the boolean is skipped and the result shown with "check the result", not stopped', async () => {
+    const r = await part();
+    await roundedBoss(r);
+    // The kernel as on a 606-face lofted part: the defeature takes 12 s, the check's cut of the two
+    // nearly identical bodies 21 s, past the 20 s default limit (the watchdog stops it).
+    const real = r.kernel.call.bind(r.kernel);
+    const now = performance.now.bind(performance);
+    let skew = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now() + skew);
+    const cuts: number[] = [];
+    r.kernel.call = (async (op: string, params: Record<string, unknown>, opts: { timeoutMs?: number } = {}) => {
+      if (op === 'boolean' && params.op === 'cut') {
+        const limit = opts.timeoutMs ?? 20_000;
+        cuts.push(limit);
+        if (limit < 21_000) throw Object.assign(new Error('boolean was stopped'), { kind: 'watchdog', op, seconds: limit / 1000 });
+        skew += 21_000;
+      }
+      const out = await real(op as never, params as never, opts as never);
+      if (op === 'defeature') skew += 12_000;
+      return out;
+    }) as typeof r.kernel.call;
+    try {
+      const del = await deleteFaces(r, (f) => f.type === 'cylinder');
+      expect(del.status.state).toBe('warning');
+      expect(del.status.message).toContain(`${UNCHECKED.slow}: check the result`);
+      expect(cuts).toEqual([]);
+      expect(close(await volume(r, bodies(r)[0].id), 25200)).toBe(true);
+    } finally {
+      clock.mockRestore();
+      r.kernel.call = real;
+    }
+  }, 120_000);
+});
+
+/** A sketch of a 60 x 30 outline whose top edge is a wavy control spline (14 poles), on Top or on ref plane `plane` at height z. */
+async function wavySketch(r: RealDoc, plane: string | null, z: number, amp: number) {
+  const n = 14;
+  const P: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    P.push([60 * (1 - t), 30 + amp * Math.sin(3 * Math.PI * t) * Math.sin(Math.PI * t)]);
+  }
+  P[1] = [P[1][0], 30];
+  P[n - 2] = [P[n - 2][0], 30];
+  const points: Record<string, number[]> = { a: [0, 0], b: [60, 0] };
+  P.forEach((p, i) => (points[`s${i}`] = p));
+  const entities = [
+    { id: 'e1', kind: 'line', p: ['a', 'b'] },
+    { id: 'e2', kind: 'line', p: ['b', 's0'] },
+    { id: 'e3', kind: 'spline', form: 'control', pts: P.map((_, i) => `s${i}`), degree: 3 },
+    { id: 'e4', kind: 'line', p: [`s${n - 1}`, 'a'] },
+  ];
+  const base = onPlane('origin:top', new SketchBuilder());
+  return addSketch(r, { ...base, ...(plane ? { support: { kind: 'feature', feature: plane }, plane: { origin: [0, 0, z], normal: [0, 0, 1], xdir: [1, 0, 0] } } : {}), points, entities } as never);
+}
+
+describe('B-spline bodies whose check boolean returns the whole result (review 2026-10-30)', () => {
+  it('a ruled loft with a wavy top, Fillet of the wavy face R1, Delete faces of its 4 rounds: the sharp loft with "check the result", not refused for the whole volume', async () => {
+    const r = await part();
+    if (!r.doc.features.get('ref_plane')) r.doc.features.register(refPlaneDef as unknown as FeatureTypeDef);
+    const plane = await addFeature(r, 'ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: '40 mm' });
+    const s1 = await wavySketch(r, null, 0, 4);
+    const s2 = await wavySketch(r, plane.id, 40, 4);
+    const lf = await addFeature(r, 'loft', { sections: [...regionsOf(r, s1), ...regionsOf(r, s2)], ruled: true });
+    expect(lf.status.state).toBe('ok');
+    const b = bodies(r).find((x) => x.feature === lf.id)!;
+    const sharp = await volume(r, b.id);
+    const wavy = (await topo(r, b)).faces.find((f) => f.type !== 'plane')!;
+    const fl = await addFeature(r, 'fillet', { body: b.id, edges: [], faces: [await faceRef(r, b, wavy.i)], radius: '1 mm' });
+    expect(fl.status.state).toBe('ok');
+    const b2 = bodies(r).find((x) => x.id === b.id)!;
+    const t2 = await topo(r, b2);
+    const big = t2.faces.filter((f) => f.type !== 'plane').reduce((m, f) => ((f.area ?? 0) > (m.area ?? 0) ? f : m));
+    const rounds = t2.faces.filter((f) => f.type !== 'plane' && f.i !== big.i).map((f) => f.i);
+    expect(rounds).toHaveLength(4);
+    const del = await addFeature(r, 'delete_faces', { body: b2.id, faces: await Promise.all(rounds.map((i) => faceRef(r, b2, i))) } as Partial<DeleteFacesFeature> as Record<string, unknown>);
+    // Was: "Delete faces 1 failed: healing filled more than the gap ...: it would add 71,765.2 mm³ over faces you kept (Side 4 of Loft 1, ...)".
+    expect(del.status.state).toBe('warning');
+    expect(del.status.message).toBe(`${UNCHECKED.failed}: check the result`);
+    expect(Math.abs((await volume(r, bodies(r).find((x) => x.id === b.id)!.id)) - sharp)).toBeLessThan(0.05);
+  }, 120_000);
+});
+
 describe('the heal check on the real kernel: every wrong fill refused', () => {
   it('bodies with every edge rounded around a cavity heal into their box: all refused (lost and covered faces)', async () => {
     const r = await part();
@@ -258,6 +398,34 @@ describe('the heal check on the real kernel: every wrong fill refused', () => {
 });
 
 describe('the heal check on the real kernel: no right removal refused', () => {
+  it("rounds and chamfers that end on a face that stays: a riser's corners, a step edge into its wall, a notch edge between its walls, a tab's edges", async () => {
+    const r = await part();
+    const K = kit(r);
+    const L = await K.cut(await K.box(60, 40, 20), [await K.box(31, 42, 11, [30, -1, 10])]);
+    const riser = (await K.edges(L)).filter((e) => along(e, 2) && near(e.mid![0], 30)).map((e) => e.i);
+    const notch = await K.cut(await K.box(60, 40, 20), [await K.box(20, 11, 11, [20, -1, 10])]);
+    const notchEdge = (await K.edges(notch)).filter((x) => along(x, 0) && near(x.mid![1], 0) && near(x.mid![2], 10) && near(x.mid![0], 30)).map((x) => x.i);
+    const tab = await K.fuse(await K.box(60, 40, 10), [await K.box(30, 5, 25, [15, 0, 10])]);
+    const tabEdges = (await K.edges(tab)).filter((e) => along(e, 2) && e.mid![2] > 10 + 1e-6 && e.mid![1] > 1).map((e) => e.i);
+    const step = await K.fuse(await K.box(30, 40, 20), [await K.box(30, 40, 10, [30, 0, 0])]);
+    const stepEdge = [(await K.edges(step)).find((x) => along(x, 0) && near(x.mid![1], 0) && near(x.mid![2], 10))!.i];
+    const cases: [string, number, Promise<{ id: number; blends: number[] }>][] = [
+      ["L-block riser's vertical rounds R3 (on the step floor)", L, K.blend('fillet', L, riser, 3)],
+      ["L-block riser's vertical chamfers 3", L, K.blend('chamfer', L, riser, 3)],
+      ["L-block riser's vertical rounds R2", L, K.blend('fillet', L, riser, 2)],
+      ["a notch's floor edge R2 (between the notch walls)", notch, K.blend('fillet', notch, notchEdge, 2)],
+      ["an upright tab's back vertical edges R2 (on the plate)", tab, K.blend('fillet', tab, tabEdges, 2)],
+      ["a step's front edge R3 (into the wall)", step, K.blend('fillet', step, stepEdge, 3)],
+      ["a step's front edge chamfer 3 (into the wall)", step, K.blend('chamfer', step, stepEdge, 3)],
+    ];
+    for (const [name, sharp, made] of cases) {
+      const f = await made;
+      const { check, v } = await K.run(f.id, f.blends, name);
+      expect(v, name).toBeCloseTo(await K.vol(sharp), 3);
+      expect(check, name).toMatchObject({ lost: [], covered: [], unchecked: null });
+    }
+  }, 120_000);
+
   it('holes, bosses, a pocket, a slot (each healed exactly)', async () => {
     const r = await part();
     const K = kit(r);

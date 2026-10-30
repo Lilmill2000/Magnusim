@@ -6,7 +6,10 @@
 // the knot spans, sketch_regions) times their length, a revolved spline its Pappus volume
 // (integrated here over the knot spans). The plain rule read them 0.2 %, 0.04 % and 0.075 % off;
 // press-pull refused 0.01 mm moves of their faces with a wrong volume, and a Cut by a block that
-// only touches a cap changed the volume.
+// only touches a cap changed the volume. Review 2026-10-30: the centroid (Mass, the Assistant's
+// measure, the assembly check) came from Gauss-Kronrod faces integrated without their centre (a
+// pipe tee 9.3 mm off, an airfoil loft 318 mm off): now the plain rule's centre over every face;
+// and a press-pull result's B-spline conversions are kept, so its volume is not converted again.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Kernel } from '../../src/kernel-worker/kernel-api';
@@ -182,6 +185,72 @@ describe('props volumes on B-spline bodies (API 7)', () => {
     const b = call(k, 'box', { dx: 10, dy: 20, dz: 30 }).id;
     expect(props(b)).toMatchObject({ volume: 6000 });
     expect(props(b).integration).toBeUndefined();
+  });
+});
+
+describe('props centroids (review 2026-10-30)', () => {
+  const centroid = (id: number) => props(id).centroid as number[];
+  const exact = (id: number) => call(k, 'props', { id, volume: true, bbox: 'none', volume_eps: 1e-9 }).centroid as number[];
+  const off = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  it('a pipe tee (an R10 bar and an R8 branch fused: B-spline edges) has its centroid on its symmetry planes, as the adaptive rule at 1e-9 says', () => {
+    const run = call(k, 'cylinder', { r: 10, h: 100, origin: [-50, 0, 0], axis: [1, 0, 0] }).id;
+    const branch = call(k, 'cylinder', { r: 8, h: 50, origin: [0, 0, 0], axis: [0, 0, 1] }).id;
+    const tee = call(k, 'boolean', { op: 'fuse', targets: [run], tools: [branch] }).id;
+    expect(props(tee).integration).toBe('spans');
+    const c = centroid(tee);
+    // Was 1.1250, 0, 15.3718 (9.3 mm off): the Gauss-Kronrod faces' volume counted at one point.
+    expect(Math.abs(c[0])).toBeLessThan(1e-6);
+    expect(Math.abs(c[1])).toBeLessThan(1e-6);
+    expect(off(c, exact(tee))).toBeLessThan(1e-4);
+  });
+
+  it('a cross-drilled block centred on the origin has its centroid there', () => {
+    const box = call(k, 'box', { dx: 40, dy: 40, dz: 40, origin: [-20, -20, -20] }).id;
+    const hx = call(k, 'cylinder', { r: 5, h: 60, origin: [-30, 0, 0], axis: [1, 0, 0] }).id;
+    const hy = call(k, 'cylinder', { r: 5, h: 60, origin: [0, -30, 0], axis: [0, 1, 0] }).id;
+    const drilled = call(k, 'boolean', { op: 'cut', targets: [box], tools: [hx, hy] }).id;
+    expect(off(centroid(drilled), [0, 0, 0])).toBeLessThan(1e-6);
+  });
+
+  it('a straight airfoil loft 0..400 has its centroid at z 200 and within 0.1 mm of the adaptive rule (was 318 mm off)', () => {
+    const straight = loft([section(0, airfoil(600, 0.24)), section(400, airfoil(600, 0.24))]);
+    const c = centroid(straight);
+    expect(Math.abs(c[2] - 200)).toBeLessThan(1e-6);
+    expect(off(c, exact(straight))).toBeLessThan(0.1);
+  });
+
+  it('a revolved spline (300 mm across) has its centroid within 0.05 mm of its axis', () => {
+    const b = revolveBulb();
+    const c = centroid(b.id);
+    expect(Math.hypot(c[0], c[1])).toBeLessThan(0.05);
+    expect(Math.abs(c[2] - exact(b.id)[2])).toBeLessThan(0.05);
+  });
+});
+
+describe('a press-pull result of a B-spline part (review 2026-10-30)', () => {
+  it("is measured without converting its untouched B-spline faces again: 16 lofted pins on a plate, a pin cap +0.5: the result's volume within 5 times the plate's (was 13 times)", () => {
+    const pin = call(k, 'loft_regions', { sections: [section(-2, airfoil(8, 0.24)), section(6, airfoil(7, 0.22, 0.5, 0.2)), section(14, airfoil(5, 0.2, 1, 0.4))].map(({ plane, curves, regions }) => ({ plane, curves, regions })), check: false }).id;
+    const transforms = Array.from({ length: 16 }, (_, i) => ({ matrix: [1, 0, 0, 10 + 12 * (i % 4), 0, 1, 0, 10 + 12 * Math.floor(i / 4), 0, 0, 1, 0] }));
+    const copies = call(k, 'copies', { id: pin, transforms, check: false }).ids as number[];
+    const plate = call(k, 'box', { dx: 68, dy: 68, dz: 5, origin: [0, 0, -5], check: false }).id;
+    const body = call(k, 'boolean', { op: 'fuse', targets: [plate], tools: copies, check: false }).id;
+    const t = call(k, 'topo', { id: body, faces: 'all', edges: 'all', vertices: 'none', face_bbox: 'none' });
+    const side = t.faces.find((f: R) => f.type === 'bspline').i;
+    const cap = t.edges.filter((e: R) => e.faces.includes(side)).flatMap((e: R) => e.faces).find((i: number) => i !== side && t.faces[i].type === 'plane' && t.faces[i].area < 100);
+    const timed = (id: number) => {
+      const t0 = performance.now();
+      const v = volume(k, id);
+      return { v, ms: performance.now() - t0 };
+    };
+    const before = timed(body);
+    const r = pressPull(body, cap, 0.5);
+    expect(r.refused).toBeUndefined();
+    const after = timed(r.id);
+    const again = timed(r.id);
+    expect(again.v).toBe(after.v);
+    expect(rel(after.v - before.v, t.faces[cap].area * 0.5)).toBeLessThan(5e-2);
+    expect(after.ms).toBeLessThan(5 * Math.max(before.ms, 20));
   });
 });
 
