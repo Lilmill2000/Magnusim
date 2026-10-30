@@ -271,6 +271,15 @@
       "keys": []
     },
     {
+      "id": "modify.move-body",
+      "label": "Move/copy body",
+      "group": "Modify",
+      "context": "model",
+      "keys": [
+        "KeyM"
+      ]
+    },
+    {
       "id": "construct.plane",
       "label": "Plane",
       "group": "Construct",
@@ -397,6 +406,24 @@
       "context": "sketch",
       "keys": [
         "Delete"
+      ]
+    },
+    {
+      "id": "sketch.copy",
+      "label": "Copy",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Ctrl+KeyC"
+      ]
+    },
+    {
+      "id": "sketch.paste",
+      "label": "Paste",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Ctrl+KeyV"
       ]
     },
     {
@@ -699,6 +726,13 @@
     {
       "id": "sketch.intersect",
       "label": "Intersect",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
+      "id": "sketch.import",
+      "label": "Import SVG/DXF",
       "group": "Sketch: Modify",
       "context": "sketch",
       "keys": []

@@ -79,7 +79,7 @@ export async function edgeNearest(kernel: KernelAdapter, shape: number, edge: nu
 /** A stored edge reference on its body, and what the edge is now. */
 export async function edgeInfo(kernel: KernelAdapter, body: BuiltBody, ref: PersistentRef, words: () => string, bodyName: string): Promise<Resolved<EdgeInfo>> {
   const lookup = kernelLookup(kernel);
-  const r = await resolveEdge({ ref, shape: body.shape, names: body.names!, lookup });
+  const r = await resolveEdge({ ref, shape: body.shape, names: body.names!, lookup, placement: body.placement });
   if (!r.ok) return { ok: false, message: `${words()} not found on ${bodyName} after rebuild` };
   const [e] = await lookup.edges!(body.shape, [r.index]);
   if (!e) return { ok: false, message: `${words()} not found on ${bodyName} after rebuild` };
@@ -106,7 +106,7 @@ export async function edgeInfo(kernel: KernelAdapter, body: BuiltBody, ref: Pers
 /** A stored vertex reference on its body, and where the vertex is now. */
 export async function vertexPoint(kernel: KernelAdapter, body: BuiltBody, ref: PersistentRef, words: () => string, bodyName: string): Promise<Resolved<Vec3>> {
   const lookup = kernelLookup(kernel);
-  const r = await resolveVertex({ ref, shape: body.shape, names: body.names!, lookup });
+  const r = await resolveVertex({ ref, shape: body.shape, names: body.names!, lookup, placement: body.placement });
   if (!r.ok) return { ok: false, message: `${words()} not found on ${bodyName} after rebuild` };
   const t = await kernel.call('topo', { id: body.shape, faces: 'none', edges: 'none', vertices: [r.index] });
   const v = t.result.vertices.find((x) => x.i === r.index);
@@ -115,20 +115,20 @@ export async function vertexPoint(kernel: KernelAdapter, body: BuiltBody, ref: P
 }
 
 /** The stored reference for edge `index` of a shown body (made at pick time: the re-anchoring point). */
-export async function pickEdge(kernel: KernelAdapter, body: { shape: number; names?: FaceNames | null }, index: number): Promise<PersistentRef> {
+export async function pickEdge(kernel: KernelAdapter, body: { shape: number; names?: FaceNames | null; placement?: number[] | null }, index: number): Promise<PersistentRef> {
   if (!body.names) throw new Error('the faces of this body have no names');
-  return refOfEdge(kernelLookup(kernel), body.shape, body.names, index);
+  return refOfEdge(kernelLookup(kernel), body, index);
 }
 
 /** The stored reference for vertex `index` of a shown body. */
-export async function pickVertex(kernel: KernelAdapter, body: { shape: number; names?: FaceNames | null }, index: number): Promise<PersistentRef> {
+export async function pickVertex(kernel: KernelAdapter, body: { shape: number; names?: FaceNames | null; placement?: number[] | null }, index: number): Promise<PersistentRef> {
   if (!body.names) throw new Error('the faces of this body have no names');
-  return refOfVertex(kernelLookup(kernel), body.shape, body.names, index);
+  return refOfVertex(kernelLookup(kernel), body, index);
 }
 
 /** Where a stored edge or vertex reference is on a body now (its index), or null when it is not found. */
-export async function resolveIndexOn(kernel: KernelAdapter, kind: 'edge' | 'vertex', shape: number, names: FaceNames, ref: PersistentRef): Promise<number | null> {
-  const input = { ref, shape, names, lookup: kernelLookup(kernel) };
+export async function resolveIndexOn(kernel: KernelAdapter, kind: 'edge' | 'vertex', shape: number, names: FaceNames, ref: PersistentRef, placement: number[] | null | undefined): Promise<number | null> {
+  const input = { ref, shape, names, lookup: kernelLookup(kernel), placement };
   const r = kind === 'edge' ? await resolveEdge(input) : await resolveVertex(input);
   return r.ok ? r.index : null;
 }

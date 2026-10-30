@@ -7,7 +7,9 @@
 //   SKETCH_ENTITIES, SKETCH_CONSTRAINTS, SKETCH_TOOLS  what sketch mode draws, ties and offers;
 //   UI, DOC, RAILS, TOOLBAR, LINK, VIEWPORT, KEYBINDS  the methods the person's controls call (the
 //                     tree, the chips, the panels' rails, the toolbar layout, Back's link, the view,
-//                     the Set keybind dialog and Settings' keybinds).
+//                     the Set keybind dialog and Settings' keybinds);
+//   CHECK             the Check panel's controls (src/features/check/controls.ts): its modes, fields,
+//                     Stop and result rows.
 // And the other way (Daniel: "anything the AI has I should have and anything I have the AI should
 // have"): AI_TOOLS names, for every field of every Assistant tool and every value of its enums
 // (schemas.ts), the person's way to the same thing (person paths, below); the test fails on a
@@ -42,6 +44,7 @@ import type { UiController } from '../ui/controller';
 import type { Rails } from '../ui/left-rails';
 import type { ToolbarPrefs } from '../ui/toolbar-layout';
 import type { Keybinds } from '../app/keybinds';
+import type { CheckControl } from '../features/check/controls';
 
 export type Reach =
   | { kind: 'reach'; tool: string; field: string; value?: string; note?: string; projects?: true; without?: string }
@@ -72,6 +75,8 @@ const CONSTRUCT = (field: string, value?: string) => reach('construct', field, v
 const DIRECT = (kind: string) => reach('direct', 'kind', kind);
 const DIRECT_FIELD = (field: string) => reach('direct', field);
 const SKETCH_OP = (kind: string) => TIE(kind);
+/** Paste (Ctrl+V) brings in what the person copied, from this Part or another: the copy row's "from clipboard" does, and get_model says what is held. */
+const PASTE = reach('sketch', 'constraints[].kind', 'copy', 'value "from clipboard" pastes what the person copied (Ctrl+C in a sketch of any Part); get_model\'s clipboard says what is held');
 const REPAIR = DIRECT('repair');
 
 // ------------------------------------------------------------------ commands, by id
@@ -97,6 +102,7 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'modify.delete-faces': DIRECT('delete_faces'),
   'modify.press-pull': DIRECT('press_pull'),
   'modify.split': DIRECT('split'),
+  'modify.move-body': DIRECT('move_body'),
   'inspect.check': reach('measure', 'targets'),
   'inspect.mass': reach('measure', 'targets'),
   'inspect.measure': reach('measure', 'targets'),
@@ -151,6 +157,11 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'view.sketch-relations': reach('get_model', 'feature'),
   'sketch.project': SKETCH_OP('project'),
   'sketch.intersect': SKETCH_OP('intersect'),
+  'sketch.import': SKETCH_OP('import'),
+  // Copy and Paste: the sketch tool's copy row (this sketch's items, another sketch's of this Part
+  // with "from <sketch>", or what the person copied in any Part with "from clipboard").
+  'sketch.copy': SKETCH_OP('copy'),
+  'sketch.paste': PASTE,
   'sketch.spline': ENTITY('spline'),
   'sketch.spline-control': ENTITY('control_spline'),
   // The Ellipse group.
@@ -281,6 +292,16 @@ export const FEATURE_FIELDS: FeatureFields = {
   press_pull: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), distance: DIRECT_FIELD('distance'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
   split: { ...BASE, targets: DIRECT_FIELD('bodies'), tool: DIRECT_FIELD('tool'), repair: REPAIR },
   delete_body: { ...BASE, bodies: DIRECT_FIELD('bodies') },
+  move_body: {
+    ...BASE,
+    bodies: DIRECT_FIELD('bodies'),
+    move: DIRECT_FIELD('move'),
+    angle: DIRECT_FIELD('turn.angle'),
+    about: DIRECT_FIELD('turn.axis'),
+    axis: DIRECT_FIELD('turn.axis'),
+    pivot: DIRECT_FIELD('turn.pivot'),
+    copy: DIRECT_FIELD('copy'),
+  },
   // Magnusim CAD keeps an Enclosure made in Magnusim as it is (KEPT): name and suppression as any feature's.
   enclosure: {
     ...BASE,
@@ -411,6 +432,8 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   polygon: ENTITY('polygon'),
   sector: ENTITY('sector'),
   intersect: SKETCH_OP('intersect'),
+  import: SKETCH_OP('import'),
+  paste: PASTE,
   ellipse: ENTITY('ellipse'),
   'ellipse-partial': ENTITY('ellipse_arc'),
   parabola: ENTITY('parabola'),
@@ -592,6 +615,25 @@ export const LINK: { readonly [K in keyof LinkController]: Reach } = {
   last: inProjects(W('send_to_simulation')),
 };
 
+/**
+ * INSPECT's Check panel, control by control (the command inspect.check opens it). Solids is the
+ * kernel's check of each body, which measure gives the Assistant per body (valid, its problems);
+ * the other three modes are the check tool's kinds, on the same engine with the same words.
+ */
+export const CHECK: { readonly [K in CheckControl]: Reach } = {
+  solids: reach('measure', 'targets'),
+  interference: reach('check', 'kind', 'interference'),
+  bodies: reach('check', 'bodies'),
+  clearance: reach('check', 'clearance'),
+  stack: reach('check', 'kind', 'stack'),
+  play: reach('check', 'clearance', undefined, 'with kind stack, clearance is the play'),
+  sweep: reach('check', 'kind', 'sweep'),
+  turning: reach('check', 'bodies', undefined, 'with kind sweep, bodies are the ones that turn'),
+  axis: reach('check', 'axis'),
+  stop: auto("a check that runs stops with its call: the person's Stop on the Assistant's turn ends it"),
+  row: W('select'),
+};
+
 const POINTER = auto("the person's pointer in the view (orbit, pick, hover): the Assistant names things by selector");
 /** The view's colours follow the host's appearance (its Settings): nobody sets them in the Part, and every picture is light. */
 const APPEARANCE = auto("the host's appearance (the app's Settings): the view follows it, and every picture is light whatever it is");
@@ -601,6 +643,9 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   setBodies: INTERNAL,
   setVisibility: reach('body', 'visibility'),
   setVertices: INTERNAL,
+  // Move/copy body's handle draws the bodies where a drag takes them: the Assistant sets the same fields.
+  previewMotion: reach('direct', 'move', undefined, "the preview of a drag of Move/copy body's handle; the drag sets move and turn as the Assistant does"),
+  drawnBox: INTERNAL,
   highlight: W('select'),
   flash: reach('find', 'query'),
   setFilter: W('selection_filter'),
@@ -709,6 +754,7 @@ export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reac
   keybinds: KEYBINDS,
   link: LINK,
   viewport: VIEWPORT,
+  check: CHECK,
 };
 
 // ------------------------------------------------------------------ the other way: every Assistant tool's field, the person's path
@@ -733,9 +779,11 @@ export type PersonPath = (
 ) & {
   /** The Assistant's field is offered only where the host has projects (Magnusim): left out in Magnusim CAD. */
   projects?: true;
+  /** Another way the person has to set the same field, in words (a drag handle in the view). */
+  also?: string;
 };
 
-export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport';
+export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport' | 'check';
 
 export const command = (id: string): PersonPath => ({ kind: 'command', id });
 export const control = (table: ControlTable, method: string): PersonPath => ({ kind: 'control', table, method });
@@ -756,6 +804,9 @@ const REFERENCE = own("reference text for the model; the person has the program'
 const OPS = (type: FeatureType) => ({ 'op=new': panel(type, 'op'), 'op=join': panel(type, 'op'), 'op=cut': panel(type, 'op'), 'op=intersect': panel(type, 'op') });
 const NEW_BODY = { body_name: control('ui', 'renameBody'), color: control('ui', 'setBodyColor') };
 const each = (values: readonly string[], prefix: string, path: PersonPath) => Object.fromEntries(values.map((v) => [`${prefix}=${v}`, path]));
+/** Move/copy body's handle in the view (src/features/move_body/handle.ts): its arrows set Move X, Y, Z; its rings the Angle and About. */
+const MOVE_ARROWS = "the arrows of Move/copy body's handle in the view: a drag sets Move X, Y or Z";
+const MOVE_RINGS = "the rings of Move/copy body's handle in the view: a drag sets the Angle about X, Y, Z or the picked axis";
 /** An Assistant field only a host with projects offers (Magnusim; not Magnusim CAD). */
 const onlyInProjects = (p: PersonPath): PersonPath => ({ ...p, projects: true });
 
@@ -781,7 +832,19 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     // The person looks straight at a sketch with Normal to (its row selected, N); the Picture panel has no sketch choice.
     sketch: command('view.normal-to'),
   },
-  help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace'], 'topic', REFERENCE),
+  help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace', 'assemblies', 'printing'], 'topic', REFERENCE),
+  // The assembly checks (src/features/assembly/check.ts): INSPECT's Check panel runs the same engine
+  // and shows the same words, in its Interference, Loose parts and Rotation modes.
+  check: {
+    'kind=interference': control('check', 'interference'),
+    'kind=stack': control('check', 'stack'),
+    'kind=sweep': control('check', 'sweep'),
+    // The bodies checked (selected ones), or with sweep the ones that turn (Rotation's Turning).
+    bodies: control('check', 'bodies'),
+    // Interference's Clearance; with stack, Loose parts' Play.
+    clearance: control('check', 'clearance'),
+    axis: control('check', 'axis'),
+  },
   set_params: {
     'set[].name': PARAMS,
     ...each(['length', 'angle', 'number'], 'set[].kind', PARAMS),
@@ -846,6 +909,10 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'constraints[].kind=circular_pattern': command('sketch.pattern-circular'),
     'constraints[].kind=project': command('sketch.project'),
     'constraints[].kind=intersect': command('sketch.intersect'),
+    'constraints[].kind=import': command('sketch.import'),
+    // Copy (Ctrl+C) in one sketch, Paste (Ctrl+V) in this one or another (of any Part): the same clip
+    // ("from <sketch>" is a sketch of this Part; "from clipboard" is what the person copied).
+    'constraints[].kind=copy': command('sketch.paste'),
     'constraints[].kind=break_link': place("a linked curve's context menu in sketch mode: Break link"),
     'constraints[].refs': place('the curves and points the person picks for the relation, dimension or tool'),
     'constraints[].value': DIMENSION,
@@ -990,6 +1057,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'kind=split': command('modify.split'),
     'kind=enclosure': onlyInProjects(command('cfd.enclosure')),
     'kind=delete_body': control('ui', 'deleteBodies'),
+    'kind=move_body': command('modify.move-body'),
     'kind=repair': control('ui', 'runFeatureAction'),
     'kind=retry': control('ui', 'runFeatureAction'),
     faces: panel('press_pull', 'faces'),
@@ -997,6 +1065,11 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     bodies: panel('split', 'targets'),
     tool: panel('split', 'tool'),
     keep_tool: panel('split', 'tool'),
+    move: { ...panel('move_body', 'move'), also: MOVE_ARROWS },
+    'turn.angle': { ...panel('move_body', 'angle'), also: MOVE_RINGS },
+    'turn.axis': { ...panel('move_body', 'axis'), also: MOVE_RINGS },
+    'turn.pivot': panel('move_body', 'pivot'),
+    copy: panel('move_body', 'copy'),
     // The Enclosure's kind and fields: Magnusim's alone (Magnusim CAD has no Enclosure command).
     'shape=box': onlyInProjects(panel('enclosure', 'shape')),
     ...each(['cylinder_x', 'cylinder_y', 'cylinder_z'], 'shape', onlyInProjects(panel('enclosure', 'axis'))),

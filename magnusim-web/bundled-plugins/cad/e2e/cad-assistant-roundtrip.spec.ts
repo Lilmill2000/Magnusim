@@ -51,7 +51,7 @@ test.afterEach(() => {
 const SEND_TITLE = 'Allow the Assistant to send your design to the simulation?';
 const SETUP = (o: Record<string, unknown>) => ({ project_id: '', simulation_id: '', kind: '', action: '', id: '', other_id: '', name: '', type: '', faces: [], bodies: [], values: [], rev: 0, ...o });
 const SHOW = (o: Record<string, unknown>) => ({ name: 'core__show', input: { target: '', project_id: '', id: '', panel: '', ...o } });
-const DIRECT = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, shape: 'box', padding: 'zero', sides: [], ...o });
+const DIRECT = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: { angle: '', axis: '', pivot: [] }, copy: false, shape: 'box', padding: 'zero', sides: [], ...o });
 
 async function postOk(request: APIRequestContext, path: string, data: Record<string, unknown>) {
   const r = await request.post(`${host.base}${path}`, { data, timeout: 600_000 });

@@ -2,7 +2,7 @@
 // source point gets its copy point (made once, so a corner two lines share
 // stays one corner), each source entity its copy with the mapped points. A
 // mirrored arc runs the other way. Copies keep construction and centerline,
-// never a link or a lineage parent (they are new geometry).
+// never a link or a lineage parent (they are new geometry). Paste (clip.ts) copies the same way.
 // Owner: P4b SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId } from '../../lib/ids';
@@ -18,14 +18,15 @@ export interface CopyMap {
 
 /**
  * Copy `sources` into the builder: `place(p)` gives a source point's new position, or null to
- * share the source point itself (a point on a mirror line). Returns the maps.
+ * share the source point itself (a point on a mirror line). Returns the maps. `at` reads the
+ * source points from elsewhere than the builder (a paste: the copied geometry's own points).
  */
-export function copyEntities(b: SketchBuilder, sources: readonly SketchEntity[], place: (id: string, at: Vec2) => Vec2 | null, opts: { flip?: boolean } = {}): CopyMap {
+export function copyEntities(b: SketchBuilder, sources: readonly SketchEntity[], place: (id: string, at: Vec2) => Vec2 | null, opts: { flip?: boolean; at?: (id: string) => Vec2 | null } = {}): CopyMap {
   const points: Record<string, string> = {};
   const entities: Record<string, string> = {};
   const map = (id: string): string => {
     if (points[id]) return points[id];
-    const at = b.point(id);
+    const at = opts.at ? opts.at(id) : b.point(id);
     const to = at ? place(id, at) : null;
     points[id] = to ? b.addPoint(to) : id;
     return points[id];

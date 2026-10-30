@@ -5,16 +5,18 @@
 //     fields), it builds, get_model full writes it back as construct input that replaces it in
 //     place unchanged, edit_feature changes its choices (flip, method) and values, refusals change
 //     nothing, and one request is one undo entry;
-//   - direct press-pulls faces, deletes faces, splits by a plane, a face or a body, and encloses
-//     bodies, each the record the person's panel makes; edits later; repair takes the person's Try
+//   - direct press-pulls faces, deletes faces, splits by a plane, a face or a body, encloses
+//     bodies, and moves, turns and copies bodies, each the record the person's panel makes; edits
+//     later; repair takes the person's Try
 //     repair and retry refuses a feature that was not stopped;
 //   - extrude of a face with no sketch and along a direction; pattern by extent, symmetric per
 //     direction and skipped copies; measure's totals and a body's check list.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HINTS } from '../../src/assistant/errors';
 import { pickFace } from '../../src/features/p2/refs';
 import { refFromItem, type Accept } from '../../src/features/refgeom/refs';
-import type { EnclosureFeature, Feature, LinearPatternFeature, PressPullFeature, RefAxisFeature, RefPlaneFeature, RefPointFeature, SplitFeature } from '../../src/types/doc';
+import type { EnclosureFeature, Feature, LinearPatternFeature, MoveBodyFeature, PressPullFeature, RefAxisFeature, RefPlaneFeature, RefPointFeature, SplitFeature } from '../../src/types/doc';
 import type { BodyInfo } from '../../src/types/kernel';
 import type { GeomRef } from '../../src/types/references';
 import type { SelectionItem } from '../../src/types/selection';
@@ -31,7 +33,8 @@ afterEach(() => {
 
 type Row = Record<string, unknown>;
 const CONSTRUCT = (o: Row): Row => ({ edit: '', name: '', method: 'offset', refs: [], value: '', xyz: [], flip: false, from_end: false, ...o });
-const DIRECT = (o: Row): Row => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, shape: 'box', padding: 'zero', sides: [], ...o });
+const NO_TURN = { angle: '', axis: '', pivot: [] };
+const DIRECT = (o: Row): Row => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: NO_TURN, copy: false, shape: 'box', padding: 'zero', sides: [], ...o });
 const EDIT = (feature: string, o: Row = {}): Row => ({ feature, set: [], rename_to: '', suppress: 'keep', move: '', ...o });
 const PATTERN = (o: Row): Row => ({ edit: '', name: '', kind: 'linear', of: 'features', items: [], about: '', count: '', spacing: '', flip: false, about2: '', count2: '', spacing2: '', options: [], skip: [], op: 'source', bodies: [], ...o });
 
@@ -378,6 +381,76 @@ describe('direct', () => {
       await h.settle();
       expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 1', 'Body 2', 'Body 3']);
       expect(names(h)).not.toContain('Body-Delete 1');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "moves, turns and copies bodies as the person's Move/copy body does: the reply names them and where they are; the inputs come back; an edit; get_model's words; undo",
+    async () => {
+      h = await assistantHarness();
+      h.fake.emitTurn({ id: 't-test', title: 'Move bodies' });
+      await plate(h);
+      const sk = await sketchOn(h, 'Block sketch', 'origin:top', new Shapes().rect('b', 40, -5, 50, 5));
+      await extrude(h, 'Block', regions(h, sk), { distance: '20 mm' });
+      const block = bodyNamed(h, 'Body 2').id;
+      const centre = (name: string) => {
+        const b = bodyNamed(h!, name).bbox;
+        return [0, 1, 2].map((k) => Math.round(((b[k] + b[k + 3]) / 2) * 1e6) / 1e6 + 0);
+      };
+      expect(centre('Body 2')).toEqual([45, 0, 10]);
+      // A move along X: the reply names the body and where it is now.
+      const m = await h.ok('direct', DIRECT({ kind: 'move_body', bodies: ['Body 2'], move: ['20', '0', '0'] }));
+      expect(m.data).toMatchObject({ feature: { name: 'Body-Move 1', type: 'move_body', state: 'ok' }, resolved: { bodies: 'Body 2', move: '(20 mm, 0 mm, 0 mm)' }, moved: [{ name: 'Body 2', at_mm: [65, 0, 10] }] });
+      expect(m.text).toMatch(/^Body-Move 1 ok: moved Body 2 by \(20, 0, 0\) mm: Body 2 at \(65, 0, 10\)/);
+      expect(centre('Body 2')).toEqual([65, 0, 10]);
+      // The record the person's Move/copy body panel makes with the same values.
+      expect(stored(named(h, 'Body-Move 1'))).toEqual(await personRecord(h, 'move_body', { bodies: [block], move: ['20 mm', '0 mm', '0 mm'] }));
+      expect(await roundTrip(h, 'Body-Move 1', 'direct')).toEqual(DIRECT({ edit: 'Body-Move 1', kind: 'move_body', bodies: ['Body 2'], move: ['20 mm', '0 mm', '0 mm'] }));
+      // get_model says what it does.
+      const brief = (await h.ok('get_model', { detail: 'brief', feature: '', regions: 'short' })).data as { features: Row[] };
+      expect(brief.features.find((f) => f.name === 'Body-Move 1')).toMatchObject({ type: 'move_body', state: 'ok', does: 'moved Body 2 by (20, 0, 0) mm' });
+      // An edit: turned 90 deg about Z through its centre first, then moved; Keep a copy renames it Body-Copy 1.
+      const c = await h.ok('direct', DIRECT({ edit: 'Body-Move 1', kind: 'move_body', bodies: ['Body 2'], move: ['0', '30', '0'], turn: { angle: '90', axis: 'Z', pivot: [] }, copy: true }));
+      expect(c.data).toMatchObject({ feature: { name: 'Body-Copy 1', type: 'move_body', state: 'ok' }, copies: [{ name: 'Body 2 (Copy)', at_mm: [45, 30, 10] }] });
+      expect(c.text).toContain('copied Body 2, turned 90 deg about Z through its centre, then moved by (0, 30, 0) mm: Body 2 (Copy) at (45, 30, 10)');
+      expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 1', 'Body 2', 'Body 2 (Copy)']);
+      expect(centre('Body 2')).toEqual([45, 0, 10]);
+      // Turned: the 10 x 10 block stays 10 x 10 in plan (a square), still 20 high.
+      const box = bodyNamed(h, 'Body 2 (Copy)').bbox;
+      expect([box[3] - box[0], box[4] - box[1], box[5] - box[2]].map((v) => Math.round(v * 1e6) / 1e6)).toEqual([10, 10, 20]);
+      expect(named<MoveBodyFeature>(h, 'Body-Copy 1')).toMatchObject({ move: ['0 mm', '30 mm', '0 mm'], angle: '90 deg', about: 'z', axis: null, pivot: null, copy: true });
+      expect(await roundTrip(h, 'Body-Copy 1', 'direct')).toEqual(DIRECT({ edit: 'Body-Copy 1', kind: 'move_body', bodies: ['Body 2'], move: ['0 mm', '30 mm', '0 mm'], turn: { angle: '90 deg', axis: 'Z', pivot: [] }, copy: true }));
+      // About an axis selector (the origin X axis itself) and a typed pivot with X: refused with the field.
+      const bad = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], turn: { angle: '90', axis: 'X axis', pivot: ['0', '0', '0'] } }));
+      expect((bad as { error: { message: string } }).error.message).toContain('turn.pivot: [] with an axis that is not X, Y or Z');
+      const axis = await h.ok('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], turn: { angle: '180', axis: 'X axis', pivot: [] } }));
+      expect(axis.data).toMatchObject({ feature: { name: 'Body-Move 1', state: 'ok' }, resolved: { turn: expect.stringMatching(/^180 deg about X axis/) }, moved: [{ name: 'Body 1' }] });
+      expect(axis.text).toMatch(/^Body-Move 1 ok: moved Body 1, turned 180 deg about X axis: Body 1 at /);
+      expect(named<MoveBodyFeature>(h, 'Body-Move 1')).toMatchObject({ about: 'axis', axis: { kind: 'origin', axis: 'origin:x' }, pivot: null });
+      // Refused before anything changes.
+      const none = await h.call('direct', DIRECT({ kind: 'move_body', move: ['1', '0', '0'] }));
+      expect((none as { error: { message: string } }).error.message).toContain('bodies: the bodies to move');
+      // Nothing to move asks for a distance or an angle (incomplete), not for a fixed expression.
+      const still = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'] }));
+      expect((still as { error: { message: string; hint: string } }).error).toMatchObject({ message: expect.stringMatching(/^incomplete: move: Nothing to move: give a distance or an angle/), hint: HINTS.incomplete });
+      const kg = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['1 kg', '0', '0'] }));
+      expect((kg as { error: { message: string; hint: string } }).error).toMatchObject({ message: expect.stringMatching(/^expr_error: move: Move X: /), hint: HINTS.expr_error });
+      // A plane's normal is no axis to turn about (the person's panel offers none): refused, with what works.
+      const normal = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], turn: { angle: '90', axis: 'normal of Top', pivot: [] } }));
+      expect((normal as { error: { message: string } }).error.message).toMatch(/^bad_selector: turn\.axis: "normal of Top" is a plane's normal: give X, Y or Z \(through pivot\), an axis, a sketch line, a straight or round edge, or "axis of <round face>"\./);
+      expect(names(h)).not.toContain('Body-Move 2');
+      const two = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['1', '2'] }));
+      expect((two as { error: { message: string } }).error.message).toContain('move: three lengths X, Y, Z');
+      const stray = await h.call('direct', DIRECT({ kind: 'split', bodies: ['Body 1'], tool: 'Top', copy: true }));
+      expect((stray as { error: { message: string } }).error.message).toContain('copy: false with split');
+      expect(undoLabel(h)).toBe('Assistant: Move bodies');
+      h.fake.emitTurn({ id: 't-test', title: 'Move bodies', state: 'ended', end: { state: 'done', reason: 'done' } });
+      h.doc.undo();
+      await h.settle();
+      expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 1', 'Body 2']);
+      expect(centre('Body 2')).toEqual([45, 0, 10]);
+      expect(names(h).filter((n) => n.startsWith('Body-'))).toEqual([]);
     },
     REAL_KERNEL_MS,
   );

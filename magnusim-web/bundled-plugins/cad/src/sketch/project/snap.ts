@@ -90,11 +90,11 @@ function resolve(services: AppServices, plane: PlaneFrame, body: string, kind: '
     try {
       if (kind === 'vertex') {
         const [v] = await lookup.vertices!(info.shape, [index]);
-        const ref = await refOfVertex(lookup, info.shape, names, index);
+        const ref = await refOfVertex(lookup, { shape: info.shape, names, placement: info.placement }, index);
         cache.set(key, v ? { ref, vertex: v.p as Vec3 } : 'none');
       } else {
         const [e] = await lookup.edges!(info.shape, [index]);
-        const ref = await refOfEdge(lookup, info.shape, names, index);
+        const ref = await refOfEdge(lookup, { shape: info.shape, names, placement: info.placement }, index);
         const pr = await projectItem(services.kernel, info.shape, plane, { edge: index });
         let pierce: Vec2[] = [];
         if (e && e.type !== 'line') {

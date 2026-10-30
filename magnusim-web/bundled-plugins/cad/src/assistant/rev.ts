@@ -11,6 +11,9 @@
 // request starts from its own first call.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { storedBodyName } from '../doc/features/body-ids';
+import { moveWords } from '../features/move_body/words';
+import { refWords } from '../features/refgeom/resolve';
 import type { BodyId, CadDoc, Feature } from '../types/doc';
 import type { DocService } from '../types/doc-service';
 import type { EventBus } from '../lib/bus';
@@ -44,6 +47,13 @@ const withoutName = (f: Feature) => {
   return JSON.stringify(rest);
 };
 
+/** What a feature does, after its type, where the type has words for it (a Move/copy body: "moved Body 1 by (20, 0, 0) mm"). */
+function doesWords(doc: CadDoc, f: Feature): string {
+  if (f.type !== 'move_body') return '';
+  const featureName = (id: string) => doc.features.find((g) => g.id === id)?.name ?? null;
+  return `: ${moveWords(f, (id) => storedBodyName(doc, id) ?? 'a deleted body', (a) => refWords(a, featureName, (id) => storedBodyName(doc, id)))}`;
+}
+
 /**
  * The difference between two committed models, as lines a model reads ("renamed Extrude 3 to Boss").
  * `projectLinks` false (Magnusim CAD: no simulation): nothing about a body's simulation setting.
@@ -56,13 +66,13 @@ export function describeChanges(before: CadDoc, after: CadDoc, projectLinks = tr
   for (const f of after.features) {
     const o = old.get(f.id);
     if (!o) {
-      out.push(`added ${f.name} (${f.type})`);
+      out.push(`added ${f.name} (${f.type})${doesWords(after, f)}`);
       continue;
     }
     if (o === f) continue;
     if (o.name !== f.name) out.push(`renamed ${o.name} to ${f.name}`);
     if (!!o.suppressed !== !!f.suppressed) out.push(`${f.suppressed ? 'suppressed' : 'unsuppressed'} ${f.name}`);
-    if (withoutName(o) !== withoutName(f)) out.push(`changed ${f.name}`);
+    if (withoutName(o) !== withoutName(f)) out.push(`changed ${f.name}${doesWords(after, f).replace(/^: /, ': now ')}`);
   }
   for (const f of before.features) if (!now.has(f.id)) out.push(`deleted ${f.name}`);
   const kept = (list: readonly Feature[], other: Map<string, Feature>) => list.filter((f) => other.has(f.id)).map((f) => f.id);

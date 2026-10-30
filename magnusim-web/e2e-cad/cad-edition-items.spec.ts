@@ -6,7 +6,7 @@
 //     Part's commands; the Banana's tooltip says nothing of a simulation; a body's menu has no
 //     simulation item and a hidden body no simulation mark; Settings → Keybinds lists every
 //     command of the Part but the Enclosure;
-//   - the Assistant there is told of none of it: the Part's 21 tools, the workspace's notes and
+//   - the Assistant there is told of none of it: the Part's 22 tools, the workspace's notes and
 //     every help topic, as the model gets them (a scripted model behind Settings → Assistant's
 //     local server, e2e/support/fake-llm.mjs: nothing leaves this PC);
 //   - a Part with an Enclosure made in Magnusim (its model file copied in, as a person copying
@@ -43,7 +43,7 @@ const PROJECT_WORDS = /simulation|enclosure|CFD|fluid|air volume/i;
 const KEPT_WORDS = 'An Enclosure is changed in Magnusim. Here it stays as it is, with its body: suppress or delete it to take the body away.';
 
 /** The Part's tools, as Magnusim offers them too. */
-const PART_TOOLS = ['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace'];
+const PART_TOOLS = ['body', 'check', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace'];
 
 type Schema = { enum?: string[] };
 type ToolDef = { name: string; title?: string; description: string; inputSchema: { properties: Record<string, Schema> } };
@@ -241,7 +241,7 @@ test('the Assistant in a Magnusim CAD Part is told of none of it: its tools, the
   // The Part's tools as it registered them, whole: the workspace tool without send_to_simulation,
   // the direct tool without the enclosure kind or its fields, the body tool without its
   // simulation field, and not one word of a simulation or the Enclosure in any of them.
-  await expect.poll(() => cad(page).evaluate(() => (window as unknown as Cad).__CAD__.assistant?.registered.length ?? 0), { timeout: 30_000 }).toBe(21);
+  await expect.poll(() => cad(page).evaluate(() => (window as unknown as Cad).__CAD__.assistant?.registered.length ?? 0), { timeout: 30_000 }).toBe(22);
   const tools = await cad(page).evaluate(() => (window as unknown as Cad).__CAD__.assistant!.registered);
   expect(tools.map((t) => t.name)).toEqual(PART_TOOLS);
   const tool = (n: string) => tools.find((t) => t.name === n)!;
@@ -249,8 +249,8 @@ test('the Assistant in a Magnusim CAD Part is told of none of it: its tools, the
   expect(actions).toHaveLength(37);
   expect(actions).toContain('roll_back_to');
   expect(actions).not.toContain('send_to_simulation');
-  expect(tool('direct').inputSchema.properties.kind.enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'repair', 'retry']);
-  expect(Object.keys(tool('direct').inputSchema.properties)).toEqual(['edit', 'name', 'kind', 'faces', 'distance', 'bodies', 'tool', 'keep_tool']);
+  expect(tool('direct').inputSchema.properties.kind.enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'move_body', 'repair', 'retry']);
+  expect(Object.keys(tool('direct').inputSchema.properties)).toEqual(['edit', 'name', 'kind', 'faces', 'distance', 'bodies', 'tool', 'keep_tool', 'move', 'turn', 'copy']);
   expect(Object.keys(tool('body').inputSchema.properties)).toEqual(['body', 'rename_to', 'color', 'visibility']);
   expect(tools.filter((t) => PROJECT_WORDS.test(JSON.stringify(t))).map((t) => t.name)).toEqual([]);
 

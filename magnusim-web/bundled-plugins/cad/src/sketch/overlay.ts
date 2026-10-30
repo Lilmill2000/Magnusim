@@ -42,6 +42,7 @@ import { planeY, toModel, type SketchHit, type SketchMode, type SketchPointer, t
 import { drawnPoints, hitTest, samples } from './pick';
 // P4b SELECT
 import { constructionItems } from './select-menu';
+import { COPY_COMMAND, copyRefusal, PASTE_COMMAND, peekClip } from './tools/paste';
 import { linkLook } from './project/style';
 import { linkMenuItems } from './project/menu';
 // ux010 (DRAW)
@@ -1589,13 +1590,19 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
     if (picked.length) {
       // P4b SELECT: Construction as a state item (Make construction / Make normal on a mixed selection), and linked geometry's items.
       items.push(...constructionItems(mode, d, picked), ...linkMenuItems(mode, d, picked));
+      // Copy (Ctrl+C): the selected geometry with the relations and dimensions inside it.
+      items.push({ id: 'copy', label: 'Copy', disabled: copyRefusal(mode), run: () => void services.commands.run(COPY_COMMAND) });
       items.push({ id: 'delete', label: 'Delete', danger: true, disabled: picked.every((h) => h.id === ORIGIN) ? 'The origin cannot be deleted' : null, run: () => void mode.deleteSelected() });
       items.push(keybindMenuItem(services, 'sketch.delete', 'Set keybind for Delete…'));
     }
-    if (items.length) items.push({ sep: true, id: 'sep-sketch' });
+    // Paste (Ctrl+V): what was copied follows the pointer, a click places it.
+    items.push({ id: 'paste', label: 'Paste', disabled: peekClip() ? null : 'Nothing copied yet: select sketch geometry, then Copy', run: () => void services.commands.run(PASTE_COMMAND) });
+    items.push({ sep: true, id: 'sep-sketch' });
     items.push({ id: 'look', label: 'Normal to', run: () => void services.commands.run('view.sketch-look') }, { id: 'finish', label: 'Finish sketch', run: () => mode.finish() });
-    // Finish sketch's key, and Place or finish's (Enter by default: it places what a tool draws, else finishes).
-    items.push({ sep: true, id: 'sep-keybinds' }, keybindMenuItem(services, 'sketch.finish', 'Set keybind for Finish sketch…'), keybindMenuItem(services, 'sketch.enter', 'Set keybind for Place or finish…'));
+    // Copy's and Paste's keys, Finish sketch's, and Place or finish's (Enter by default: it places what a tool draws, else finishes).
+    items.push({ sep: true, id: 'sep-keybinds' });
+    if (picked.length) items.push(keybindMenuItem(services, COPY_COMMAND, 'Set keybind for Copy…'));
+    items.push(keybindMenuItem(services, PASTE_COMMAND, 'Set keybind for Paste…'), keybindMenuItem(services, 'sketch.finish', 'Set keybind for Finish sketch…'), keybindMenuItem(services, 'sketch.enter', 'Set keybind for Place or finish…'));
     uiFor(services).showMenu(e.clientX, e.clientY, items, 'Sketch');
   }
 

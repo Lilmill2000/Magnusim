@@ -1,10 +1,11 @@
 /**
  * Whether the dock offers drawings (SVG, DXF) as attachments beside pictures and geometry files.
- * Off until a workspace that imports drawings ships: the CAD Part's SVG/DXF import turns it on.
- * While it is off the dock leaves drawings out of its accept list and refuses one like any other
- * file, before anything is uploaded. The server takes drawings either way.
+ * On: the CAD Part imports drawings (the person's Import SVG/DXF in a sketch; the Assistant's
+ * sketch tool reads an attached one with its import row). While it is off the dock leaves drawings
+ * out of its accept list and refuses one like any other file, before anything is uploaded. The
+ * server takes drawings either way.
  */
-export const DRAWINGS_OFFERED = false;
+export const DRAWINGS_OFFERED = true;
 
 let offered: boolean = DRAWINGS_OFFERED;
 

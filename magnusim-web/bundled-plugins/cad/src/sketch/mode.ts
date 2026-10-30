@@ -24,6 +24,8 @@ import type { StateStore } from '../types/state';
 import type { ViewportHandle } from '../types/viewport';
 import { uiFor } from '../ui/controller';
 import { kernelLookup, refOfFace, resolveFace } from '../naming';
+import { motionBetween } from '../naming/placement';
+import { placedFaceFrame } from '../features/sketch/plane';
 import { solvedStateOf, statusOf, type SketchStatus } from './dof';
 import { SketchBuilder, asConstruction, drawsConstruction, type EditOutcome, type SketchDraft } from './edit';
 import { relationsView, type RelationsView } from './relations-view';
@@ -511,16 +513,18 @@ export class SketchMode implements SketchModeApi {
         let ref;
         if (support.kind === 'pick') {
           index = support.index;
-          ref = await refOfFace(lookup, info.shape, info.names, index);
+          ref = await refOfFace(lookup, info, index);
         } else {
-          const r = await resolveFace({ ref: support.face, shape: info.shape, names: info.names, lookup });
+          const r = await resolveFace({ ref: support.face, shape: info.shape, names: info.names, lookup, placement: info.placement });
           if (!r.ok) return r.message;
           index = r.index;
           ref = support.face;
         }
         const [topo] = await lookup.faces(info.shape, [index]);
         if (!topo || topo.type !== 'plane' || !topo.normal) return 'sketches go on flat faces: that face is curved';
-        plane = faceFrame(topo.normal, topo.centroid ?? [0, 0, 0]);
+        // As the rebuild will place it (features/sketch/plane.ts): a reference made where the body
+        // was before a Move/copy body takes its frame from there.
+        plane = placedFaceFrame(topo.normal, topo.centroid ?? [0, 0, 0], motionBetween(info.placement, ref.placement));
         sup = { kind: 'face', body: support.body, face: ref };
       } catch (err) {
         return err instanceof Error ? err.message : String(err);

@@ -48,6 +48,8 @@ export interface SketchWrite {
   drawn?: SketchGeometry;
   /** The model's kind of each of its entity ids ("rect", "circle"): the watch path's words. */
   kinds?: Readonly<Record<string, string>>;
+  /** Entities a tool made that are drawn in one step (an import's: its row id), by entity id. */
+  groups?: Readonly<Record<string, string>>;
 }
 
 /** One apply of the watch path. */
@@ -189,7 +191,9 @@ export const whole = (g: SketchGeometry) => ({ points: g.points, entities: g.ent
  * and inferred relations), then the model's relations, then its dimensions; what is already there
  * as it should be is left out.
  */
-export function drawSteps(start: SketchGeometry, target: SketchGeometry, kinds: Readonly<Record<string, string>> = {}): DrawStep[] {
+export function drawSteps(start: SketchGeometry, target: SketchGeometry, kinds: Readonly<Record<string, string>> = {}, toolGroups: Readonly<Record<string, string>> = {}): DrawStep[] {
+  // An entity's group: a macro's (its id before "__"), or the tool row that made it (an import).
+  const groupIn = (id: string) => toolGroups[id] ?? groupOf(id);
   const steps: DrawStep[] = [];
   const ent = new Map(target.entities.map((e) => [e.id, e] as const));
   const con = new Map(target.constraints.map((c) => [c.id, c] as const));
@@ -214,10 +218,10 @@ export function drawSteps(start: SketchGeometry, target: SketchGeometry, kinds: 
   }
   // ---- each entity group, in the target's order
   const groups: string[] = [];
-  for (const e of target.entities) if (!groups.includes(groupOf(e.id))) groups.push(groupOf(e.id));
+  for (const e of target.entities) if (!groups.includes(groupIn(e.id))) groups.push(groupIn(e.id));
   const startE = new Map(start.entities.map((e) => [e.id, e] as const));
   const startC = new Map(start.constraints.map((c) => [c.id, c] as const));
-  const entitiesOf = (g: string) => target.entities.filter((e) => groupOf(e.id) === g);
+  const entitiesOf = (g: string) => target.entities.filter((e) => groupIn(e.id) === g);
   const ownOf = (g: string) => target.constraints.filter((c) => c.id.includes('__') && groupOf(c.id) === g);
   const changed = groups.filter((g) => entitiesOf(g).some((e) => !same(startE.get(e.id), e)) || ownOf(g).some((c) => !same(startC.get(c.id), c)));
   changed.forEach((g, i) => {
@@ -291,7 +295,7 @@ async function drawWatched(ctx: EditCtx, mode: SketchMode, session: EditSession,
   const target = w.geometry;
   const cur0 = mode.stored();
   const start: SketchGeometry = cur0 ? { points: cur0.points, entities: cur0.entities, constraints: cur0.constraints, ...(cur0.ties ? { ties: cur0.ties } : {}), ...(cur0.links ? { links: cur0.links } : {}) } : { points: {}, entities: [], constraints: [] };
-  const steps = drawSteps(start, drawAt(target, w.drawn).geometry, w.kinds);
+  const steps = drawSteps(start, drawAt(target, w.drawn).geometry, w.kinds, w.groups);
   ctx.pacer.plan(paceOf(steps));
   let n = 0;
   for (const st of steps) {

@@ -9,12 +9,21 @@
 // sketches a 96-tooth wheel (198 regions) and extrudes the region whose id the sketch's answer
 // names first: the answer the model got is under 3 KB with the gaps summed, the dock's sketch step
 // says 198 regions and the largest's area, and the tree shows the wheel's body, its volume the
-// toothed wheel's.
+// toothed wheel's. A fourth: the person attaches a DXF in the app's Assistant panel; the model
+// imports it with the sketch tool's import row (the host's readAttachment) and extrudes its slot:
+// made says what the person's Import SVG/DXF panel says, and the tree and the volume chip show it.
+// A fifth: the model copies a sketch's rectangle into a sketch on another plane with the copy row
+// (the person's Copy and Paste) and extrudes it: made says what was copied and what was left out
+// (its tie to the origin), the copy keeps its dimension, and the tree and the volume chip show it.
+// A sixth: the person copies a sketch's rectangle with Ctrl+C (the foot says what was copied); the
+// model reads what is held (get_model's clipboard) and pastes it into a sketch on Front with the
+// copy row's "from clipboard", then extrudes it: the tree and the volume chip show it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
 import { historyNames } from './helpers';
+import { DXF_PART, DXF_PART_AREAS } from '../tests/sketch/import/fixtures';
 // @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
 import * as core from '../../../e2e/support/assistant.js';
 import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost, type FakeRequest } from './assistant-helpers';
@@ -223,4 +232,144 @@ test("cad:assistant-sketch-tools-gear a 96-tooth wheel: the model gets a short a
   if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();
   await expect(frame.locator('[data-cad-tree] [data-body-row] .cad-body-name')).toHaveText(['Great Wheel'], STEP);
   await expect.poll(async () => Math.abs((await volumeNow(page)) - rows[0].area_mm2 * 4) < 1, STEP).toBe(true);
+});
+
+// Import SVG/DXF through the Assistant: the person attaches a DXF in the app's Assistant panel (a
+// drawing chip), the scripted model takes its attachment_id from the person's message and imports
+// it with the sketch tool's import row (the host's readAttachment), then extrudes the largest region.
+test('cad:assistant-sketch-tools-import a DXF the person attaches in the dock: the model imports it into a sketch and extrudes its slot; the tree, the sketch and the volume chip show it', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const pid = await newProject(request, host, 'Assistant drawing');
+  const { frame } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  const attachmentOf = (body: unknown) => /attachment_id (att-[0-9a-f]{16})/.exec(JSON.stringify(body))?.[1] ?? 'att-not-in-the-message';
+  host.fake.reply(
+    (body: unknown) => ({ tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Drawing', on: 'Top', entities: [], constraints: [C('i1', 'import', [attachmentOf(body)])], infer: false } }] }),
+    (body: unknown) => {
+      const [sk] = resultsIn(body);
+      const first = (sk.data!.regions as { id?: string }[])[0];
+      const x = EXTRUDE('Slot', 'Drawing', '10 mm');
+      return { tools: [{ ...x, input: { ...x.input, regions: [first?.id ?? 'r1'] } }] };
+    },
+    { text: 'Your drawing is in the sketch Drawing, and its slot is extruded 10 mm.' },
+  );
+  // The person's way: the drawing attached in the dock (a drawing chip, never a picture), then the message.
+  await core.openDock(page);
+  await core.dockPanel(page).locator('[data-dock-file]').setInputFiles({ name: 'part.dxf', mimeType: 'application/dxf', buffer: Buffer.from(DXF_PART) });
+  await expect(core.dockPanel(page).locator('[data-dock-file-kind="drawing"]')).toHaveCount(1, STEP);
+  const turn = await core.dockSend(page, 'Bring my drawing into a sketch on Top and extrude its slot 10 mm.');
+  expect((await core.followTurn(request, host.base, turn).ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterSketch, afterExtrude] = chats(host).slice(before);
+  const [sk] = resultsIn(afterSketch);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Drawing', state: 'ok' } } });
+  const made = (sk.data!.made as { id: string; kind: string; values: Record<string, unknown> }[])[0];
+  expect(made).toMatchObject({ id: 'i1', kind: 'import', values: { file: 'part.dxf', read: 'Read: 8 lines, 3 arcs, 1 circle, 1 ellipse, 1 spline', skipped: 'Skipped: 1 TEXT', open_ends: 0, scale: 'Scale: 1 unit = 25.4 mm ($INSUNITS 1: inches)' } });
+  expect(sk.data!.regions as unknown[]).toHaveLength(7);
+  expect(sk.data!.open).toEqual([]);
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Slot', state: 'ok' } } });
+  // What the person sees: the sketch (under-defined, as imported geometry is: "(-)") and the body in
+  // the tree, the sketch's 14 curves, the slot's volume.
+  await expect(historyNames(frame)).toHaveText(['(-) Drawing', 'Slot'], STEP);
+  expect((await featureOf(page, 'Drawing'))!.entities).toHaveLength(14);
+  const slot = DXF_PART_AREAS.slot * 25.4 * 25.4 * 10;
+  await expect.poll(async () => Math.abs((await volumeNow(page)) / slot - 1) < 1e-6, STEP).toBe(true);
+});
+
+// Copy and Paste through the Assistant: the copy row takes another sketch's rectangle (its dimension
+// made again on the copy, its tie to the origin left out and said) into a sketch on Front, moved by
+// an offset; the model extrudes the copy.
+test("cad:assistant-sketch-tools-copy the model copies a sketch's rectangle into a sketch on Front and extrudes it: made says what was copied and left out; the tree and the volume chip show it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant copy');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Plate', on: 'Top', entities: [E('r', 'rect', [0, 0, 30, 20])], constraints: [C('d1', 'distance', ['r.bottom'], '30 mm'), C('o1', 'coincident', ['r.bl', 'origin'])], infer: false } }] },
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Copy', on: 'Front', entities: [], constraints: [C('k1', 'copy', ['r'], 'from Plate; offset 50, 0')], infer: false } }] },
+    { tools: [EXTRUDE('Block', 'Copy', '10 mm')] },
+    { text: "Plate's rectangle is copied into Copy on Front, 50 mm along, and extruded 10 mm." },
+  );
+  const t = await startTurn(request, host, { text: "Copy Plate's rectangle onto the Front plane 50 mm along and extrude it 10 mm.", tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, , afterCopy, afterExtrude] = chats(host).slice(before);
+  const [sk] = resultsIn(afterCopy);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Copy', state: 'ok' } } });
+  const made = (sk.data!.made as { id: string; kind: string; entities: string[]; values: Record<string, unknown> }[])[0];
+  expect(made).toMatchObject({ id: 'k1', kind: 'copy', entities: ['k1.r.bottom', 'k1.r.right', 'k1.r.top', 'k1.r.left'], values: { from: 'Plate', copied: '4 lines, 4 relations and 1 dimension', kept: '4 relations and 1 dimension', left_out: '1 relation to other geometry' } });
+  expect(sk.data!.warnings as string[]).toContain('k1 (copy): 1 relation to other geometry was left out');
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Block', state: 'ok' } } });
+  // What the person sees: both sketches (under-defined: "(-)") and the block in the tree, the copy's
+  // four lines and its dimension, the block's volume (30 x 20 x 10).
+  await expect(historyNames(frame)).toHaveText(['(-) Plate', '(-) Copy', 'Block'], STEP);
+  const copy = (await featureOf(page, 'Copy')) as (Sketchy & { constraints: { kind: string; expr?: string }[] }) | null;
+  expect(copy!.entities!.map((e) => e.kind)).toEqual(['line', 'line', 'line', 'line']);
+  expect(copy!.constraints.filter((c) => c.expr != null).map((c) => c.expr)).toEqual(['30 mm']);
+  await expect.poll(async () => Math.abs((await volumeNow(page)) - 6000) < 1e-6, STEP).toBe(true);
+});
+
+test('cad:assistant-sketch-tools-clipboard the person copies a rectangle with Ctrl+C; the model reads what is held, pastes it on Front with "from clipboard" and extrudes it: the tree and the volume chip show it', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant clipboard');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Plate', on: 'Top', entities: [E('r', 'rect', [0, 0, 30, 20])], constraints: [C('d1', 'distance', ['r.bottom'], '30 mm'), C('o1', 'coincident', ['r.bl', 'origin'])], infer: false } }] },
+    { text: 'Plate is a 30 x 20 rectangle on Top.' },
+  );
+  const t1 = await startTurn(request, host, { text: 'Draw a 30 x 20 rectangle on Top.', tab });
+  expect((await t1.ended(STEP_MS * 3)).turn.state).toBe('done');
+  await expect(historyNames(frame)).toHaveText(['(-) Plate'], STEP);
+
+  // The person opens Plate, selects its four lines and presses Ctrl+C.
+  type V = { __CAD__: { services: { apis: { get(): { sketch: { edit(id: string): void; idle?(): Promise<void> } } }; viewport: { get(): { handle: { project(p: number[]): [number, number] | null; state: { get(): { animating: boolean } } } | null } } } } };
+  const plate = (await featureOf(page, 'Plate')) as unknown as { id: string };
+  await cadFrame(page).evaluate((id) => (window as unknown as V).__CAD__.services.apis.get().sketch.edit(id), plate.id);
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await cadFrame(page).evaluate(async () => (window as unknown as V).__CAD__.services.apis.get().sketch.idle?.());
+  await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as V).__CAD__.services.viewport.get().handle?.state.get().animating ?? true)).toBe(false);
+  const clickAt = async (p: number[], shift = false) => {
+    const xy = await cadFrame(page).evaluate((q) => (window as unknown as V).__CAD__.services.viewport.get().handle?.project(q) ?? null, p);
+    expect(xy, `model point ${p} is not on screen`).not.toBeNull();
+    const box = await page.locator('#workspace-frame').boundingBox();
+    if (shift) await page.keyboard.down('Shift');
+    await page.mouse.click(box!.x + xy![0], box!.y + xy![1]);
+    if (shift) await page.keyboard.up('Shift');
+  };
+  await clickAt([15, 0, 0]);
+  for (const p of [[30, 10, 0], [15, 20, 0], [0, 10, 0]]) await clickAt(p, true);
+  await page.keyboard.press('Control+c');
+  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]')).toHaveText('Copied 4 lines, 4 relations and 1 dimension; 1 relation to other geometry will be left out.');
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+
+  // The model reads what is held, pastes all of it on Front with its middle at (65, 10), and extrudes it.
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Copy', on: 'Front', entities: [], constraints: [C('k1', 'copy', ['at(65, 10)'], 'from clipboard')], infer: false } }] },
+    { tools: [EXTRUDE('Block', 'Copy', '10 mm')] },
+    { text: 'What you copied is pasted on Front, 50 mm along, and extruded 10 mm.' },
+  );
+  const t2 = await startTurn(request, host, { text: 'Paste what I copied onto the Front plane, 50 mm along, and extrude it 10 mm.', tab });
+  expect((await t2.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterRead, afterCopy, afterExtrude] = chats(host).slice(before);
+  const [model] = resultsIn(afterRead);
+  expect(model).toMatchObject({ tool: 'cad__get_model', ok: true, data: { clipboard: '4 lines, 4 relations and 1 dimension, copied from Plate' } });
+  const [sk] = resultsIn(afterCopy);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Copy', state: 'ok' } } });
+  const made = (sk.data!.made as { id: string; kind: string; entities: string[]; values: Record<string, unknown> }[])[0];
+  expect(made).toMatchObject({ id: 'k1', kind: 'copy', entities: ['k1.1', 'k1.2', 'k1.3', 'k1.4'], values: { from: 'the clipboard (copied from Plate)', copied: '4 lines, 4 relations and 1 dimension', left_out: '1 relation to other geometry', middle_at: 'at(65, 10)' } });
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Block', state: 'ok' } } });
+  // What the person sees: both sketches and the block in the tree; the block's volume (30 x 20 x 10).
+  await expect(historyNames(frame)).toHaveText(['(-) Plate', '(-) Copy', 'Block'], STEP);
+  const copy = (await featureOf(page, 'Copy')) as (Sketchy & { constraints: { kind: string; expr?: string }[] }) | null;
+  expect(copy!.entities!.map((e) => e.kind)).toEqual(['line', 'line', 'line', 'line']);
+  expect(copy!.constraints.filter((c) => c.expr != null).map((c) => c.expr)).toEqual(['30 mm']);
+  await expect.poll(async () => Math.abs((await volumeNow(page)) - 6000) < 1e-6, STEP).toBe(true);
 });

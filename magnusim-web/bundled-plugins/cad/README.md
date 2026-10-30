@@ -180,6 +180,35 @@ snapping.
   along the sketch normal. Works on imported STEP bodies too.
 - **Intersect**: the curves where the sketch plane cuts the bodies (all shown
   bodies, or the ones you click).
+- **Import SVG/DXF**: pick an SVG or an ASCII DXF file (at most 20 MB). The
+  Sketch panel shows what it read (lines, arcs, circles, ellipses, splines and
+  points), what it skipped and why (text, scripts, pictures, links to other
+  files, DXF dimensions and hatches...), its size in mm and its open ends; the
+  curves preview in the sketch. **Scale** is mm per drawing unit, from the
+  file's units (an SVG's width over its viewBox, else 96 px per inch; a DXF's
+  $INSUNITS, or mm when it has none). **Place**: the drawing's own origin on the
+  sketch origin, or centred there. A DXF's **layers** can be ticked off (one the
+  file has off starts unticked). **OK** adds the curves as one undo step. Ends
+  that meet share one point (the panel says within what distance), so closed
+  outlines are profiles; no relations are added (fix or dimension what must
+  hold). A drawing too heavy for the sketch solver (about 10,000 points, or 400
+  arcs: every later change solves all of it) is refused with what it weighs. An SVG's curves are exact: cubic
+  Beziers are splines, arcs are arcs, transforms are applied; a DXF's splines
+  are exact too, except rational ones (made as fit splines through points of
+  them; the panel says so). A drawing is read as data only: nothing in it runs
+  or loads. Inside a sketch only (start the sketch first).
+- **Copy and Paste** (Ctrl+C, Ctrl+V, or the right-click menu): select sketch
+  geometry and copy it; Paste picks the copy up, held by the middle of its box,
+  and it follows the pointer (snapping as the drawing tools do); click (or
+  Enter) to place it, one undo step, Esc to put it down. Construction stays
+  construction; the relations and dimensions between the copied pieces come
+  with it, so the copy is as defined as the original; those that also tie
+  geometry you did not copy are left out, and the panel says how many. A
+  dimension keeps its expression where it gives the same value there, else the
+  value it had (the panel says which). It pastes into any sketch, on any plane
+  (the same 2D shape), also in another Part. In a text or number field the keys
+  copy and paste text; with text selected (the panel's red note) Ctrl+C copies
+  that text.
 
 Projected and intersected curves are **linked**: drawn purple, fixed in place,
 and recomputed whenever the model rebuilds, so a sketch built on them follows
@@ -253,6 +282,17 @@ touching bodies apart.
 - **Combine**: Join, Cut or Intersect several target bodies with several tool
   bodies; **Keep the tool bodies** is an option.
 - **Split**: cut a body in two by a plane, a flat face or another body.
+- **Move/copy body** (M, or "Move/copy Body 1…" in a body's menu): move bodies
+  by X, Y, Z and turn them by an angle about X, Y or Z through a pivot (the
+  centre of their box unless you type one) or about an axis, a straight or round
+  edge, a round face or a sketch line. It turns first, then moves. A moved body
+  keeps its name and faces, so later features still find them, and what you made
+  on it (a hole sketched on its face, a fillet) goes with it when you change the
+  move or put one in before it. While you edit it, the features after it are
+  rolled back, as for a sketch. **Keep a copy**
+  leaves the bodies and moves copies ("Body 1 (Copy)"). Or drag the handle in
+  the view: its arrows move along X, Y, Z, its rings turn (Ctrl: whole mm and
+  15°); the fields follow, and Escape during a drag puts it back.
 - **Delete faces and heal**: remove faces (a hole, a fillet, a boss) and let
   the kernel close the gap.
 - **Press-pull** (Q): move faces along their normal. Out adds material, in
@@ -384,8 +424,26 @@ comes on). Rename the result, for example to "Fluid".
   radii and areas. Its picks survive a rebuild that keeps their geometry.
 - **Mass properties**: volume, surface area, centroid and size, for each body
   and in total.
-- **Check**: each body is "Valid", or its problems are listed by kind with
-  where they are.
+- **Check**: pick what to check at the top of the panel.
+  - **Solids**: each body is "Valid", or its problems are listed by kind with
+    where they are.
+  - **Interference**: the pairs of bodies that overlap and how much (the
+    selected bodies, or every shown one; one selected body against every other
+    shown body). A bore drawn a little under its shaft is a press fit: listed
+    apart, not as a collision. A clearance also lists the pairs closer than it.
+  - **Loose parts**: the parts on each shaft in order, what holds each one,
+    and which can slide along the shaft (which way and how far), with a play
+    you set (0.5 mm if empty). The play is the gap between the bore and its
+    shaft all round, so a D or hex shaft in a bore of its shape counts as
+    loose, not pressed on. With bodies selected it checks the shafts near them.
+  - **Rotation**: a body turned a full turn about an axis: the first angle it
+    meets each other body, counter-clockwise about the axis's direction (the
+    column says which way, e.g. "Counter-clockwise about +Z") and clockwise.
+
+  Press Check to run one; Stop ends a long one. A check that runs past its
+  time limit (90 s) says "Stopped at the time limit" and what helps: what it
+  lists is only what it reached. Click a row to select its bodies. The
+  Assistant runs the same checks and gets the same words.
 - The **volume chip** shows the selected body's volume; with nothing selected it
   lists each body on its own. It never adds bodies together.
 - **Section view** cuts the view along an origin plane, so you can reach faces
@@ -465,7 +523,9 @@ move a feature, undo its own steps, and delete features. It makes the offset
 planes its sketches and mirrors need. It does not export: use Export STEP, or
 go Back to the simulation. Split, Press-pull, Delete faces, the Enclosure,
 Import STEP, CONSTRUCT's axes and points, a face extrude, Project / Intersect
-and the sketch patterns and offsets are not offered to it; it reads the
+and the sketch patterns and offsets are not offered to it (a drawing you attach
+in the Assistant panel, SVG or DXF, it can import into a sketch, as Import
+SVG/DXF does); it reads the
 features made with them, and can change their values, rename, suppress, move
 or delete them.
 
@@ -601,13 +661,14 @@ The view moves the way the simulation viewer's does, in model and sketch mode:
 | Click, Ctrl+click | Select; Ctrl+click toggles one item (in a sketch it also adds a body vertex or edge, projected) |
 | Right click | The context menu |
 
-**Model mode:** E Extrude, Q Press-pull, F Fit, N Normal to, 1–7 the standard
+**Model mode:** E Extrude, Q Press-pull, M Move/copy body, F Fit, N Normal to, 1–7 the standard
 views (Front, Back, Left, Right, Top, Bottom, Isometric), Delete (on faces:
 Delete faces), Ctrl+Z / Ctrl+Y, Escape clears the selection.
 
 **Sketch mode:** L Line, R Rectangle, C Circle, A 3-point arc, S Spline,
 M Mirror, O Offset, P Project, D Dimension, T Trim, X Construction, N Normal to
-(the open sketch), Enter places an open tool step or finishes the sketch
+(the open sketch), Ctrl+C Copy and Ctrl+V Paste (the selected sketch geometry;
+in a text or number field they are the field's), Enter places an open tool step or finishes the sketch
 (on a menu item, or a button you reached with Tab, Enter presses that instead),
 Escape steps back (a line chain first, then the tool), then clears the selection.
 A tool's own key pressed again while it is in hand (L with Line, or the key you

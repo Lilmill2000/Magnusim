@@ -62,7 +62,25 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
   // P4b: the copies a pattern or mirror made (PATTERN)
   | PatternOutput
   // Press-pull on curved faces (kernel API 6): what Press-pull did, for its panel
-  | PressPullOutput;
+  | PressPullOutput
+  // Move/copy body: the pivot it turned about, for its panel
+  | MoveBodyOutput;
+
+/**
+ * What a Move/copy body did, for its panel: the centre of the bodies' box just before it (the
+ * pivot when none is typed), and the line it turned about (null: no turn).
+ */
+export interface MoveBodyOutput {
+  type: 'move_body';
+  /** The centre of the bodies' box just before it (the pivot when none is typed). */
+  centre: Vec3 | null;
+  /** The line it turned about (null: no turn). */
+  axis: { origin: Vec3; dir: Vec3 } | null;
+  /** About a picked axis: that axis as found just before it, also with no turn (null: not found, or not about one). */
+  turnAxis?: { origin: Vec3; dir: Vec3 } | null;
+  /** The rigid motion it applied to each body (3x4 row-major, as the kernel's `copies`): the view's handle previews from it. */
+  matrix?: number[];
+}
 
 /**
  * What a Press-pull built (kernel API 6), for its panel's words ("Bore radius 10 mm -> 8 mm").
@@ -498,6 +516,8 @@ export interface EndBody {
   names: FaceNames | null;
   name: string;
   color: string;
+  /** BuiltBody.placement. */
+  placement?: number[] | null;
 }
 
 /** LINK: what DocService.bodiesAtEnd() built: the bodies, and the features that failed on the way. */
@@ -517,6 +537,8 @@ export interface BuiltBody {
   feature: FeatureId;
   /** Its faces' persistent names (src/naming), or null when the feature that made it gave none (P1 primitives before naming). */
   names: FaceNames | null;
+  /** Where Move/copy body features took it since it was made (src/naming/placement.ts); absent or null: nowhere. */
+  placement?: number[] | null;
 }
 
 /** Read access to the Part's stored files (ws.files) for feature builds. */
@@ -569,9 +591,11 @@ export type FeatureBuildResult =
       /**
        * `name` / `color`: what a body with no BodyDef is called and drawn in (a
        * split piece "Body 1 (2)" in its target's colour) until the user renames
-       * or recolours it (that stores a BodyDef).
+       * or recolours it (that stores a BodyDef). `placement`: where it is now
+       * against where it was made (a Move/copy body sets it); absent, a body keeps
+       * the one it had, and a new one takes its source's (a split piece) or none.
        */
-      bodies: { id: BodyId; shape: ShapeId; valid: boolean; names?: FaceNames | null; name?: string; color?: string }[];
+      bodies: { id: BodyId; shape: ShapeId; valid: boolean; names?: FaceNames | null; name?: string; color?: string; placement?: number[] | null }[];
       removed: BodyId[];
       warning?: string;
       /**

@@ -51,7 +51,8 @@ const unnamed = (sc: Scene, body: { name: string }) => new ToolError('not_named'
 /** A face a feature keeps: {body, ref}. */
 export async function faceRefOf(sc: Scene, h: FaceHit): Promise<{ body: BodyId; ref: PersistentRef }> {
   if (!h.body.names) throw unnamed(sc, h.body);
-  const r = await pickFace(sc.services, { id: h.body.id, name: h.body.name, shape: h.body.shape, names: h.body.names } as BodyInfo, h.index, sc.self, sc.cache.lookup);
+  // Its placement too: the reference keeps where Move/copy body features had taken the body.
+  const r = await pickFace(sc.services, { id: h.body.id, name: h.body.name, shape: h.body.shape, names: h.body.names, placement: h.body.placement } as BodyInfo, h.index, sc.self, sc.cache.lookup);
   if (!r.ok) {
     if (/made by this feature itself/.test(r.reason)) throw new ToolError('self_reference', `${faceLabel(sc, h) ?? hitWords(sc, h)}: ${r.reason}.`, { detail: { face: faceLabel(sc, h) ?? hitWords(sc, h) } });
     throw new ToolError('not_named', r.reason, { detail: { body: h.body.name } });
@@ -66,7 +67,7 @@ export async function edgeRefOf(sc: Scene, h: EdgeHit): Promise<{ body: BodyId; 
   if (!h.body.names) throw unnamed(sc, h.body);
   let ref: PersistentRef;
   try {
-    ref = await refOfEdge(sc.cache.lookup, h.body.shape, h.body.names, h.index);
+    ref = await refOfEdge(sc.cache.lookup, h.body, h.index);
   } catch (e) {
     throw new ToolError('not_named', `${hitWords(sc, h)}: ${e instanceof Error ? e.message : String(e)}.`, { detail: { body: h.body.name } });
   }
@@ -80,7 +81,7 @@ export async function vertexRefOf(sc: Scene, h: VertexHit): Promise<{ body: Body
   if (!h.body.names) throw unnamed(sc, h.body);
   let ref: PersistentRef;
   try {
-    ref = await refOfVertex(sc.cache.lookup, h.body.shape, h.body.names, h.index);
+    ref = await refOfVertex(sc.cache.lookup, h.body, h.index);
   } catch (e) {
     throw new ToolError('not_named', `${hitWords(sc, h)}: ${e instanceof Error ? e.message : String(e)}.`, { detail: { body: h.body.name } });
   }

@@ -43,6 +43,7 @@ const FOLD_ORDER = [
   'inspect.mass',
   'modify.split',
   'modify.delete-faces',
+  'modify.move-body',
   'construct.axis',
   // P4b PATTERN.
   'pattern.circular',

@@ -876,12 +876,15 @@ export function createUiController(services: AppServices): UiController {
       // Delete, last (Daniel 2026-10-28: a body could be hidden, renamed and coloured, never removed): a
       // Delete body feature in the history, one undo step. Several bodies selected, this one among
       // them: one feature for them all.
-      if (canDelete) {
-        // The person's own selection, not an open panel's picks (Combine's target and tool bodies).
-        const picked = userItems(services.selection).flatMap((it) => (it.kind === 'body' && d.rebuild.bodies.some((b) => b.id === it.body) ? [it.body] : []));
-        const many = picked.length > 1 && picked.includes(id);
-        items.push({ sep: true, id: 'sep-body-delete' }, { id: 'body-delete', label: many ? `Delete ${picked.length} bodies` : `Delete ${info.name}`, danger: true, disabled: block, run: () => c.deleteBodies(many ? picked : [id]) });
-      }
+      // The person's own selection, not an open panel's picks (Combine's target and tool bodies).
+      const picked = userItems(services.selection).flatMap((it) => (it.kind === 'body' && d.rebuild.bodies.some((b) => b.id === it.body) ? [it.body] : []));
+      const many = picked.length > 1 && picked.includes(id);
+      const canMove = !!doc.features.get('move_body');
+      if (canMove || canDelete) items.push({ sep: true, id: 'sep-body-delete' });
+      // Move/copy (Daniel 2026-10-30: a body could not be moved after it was made), above Delete: the
+      // Move/copy body panel with this body (or the selected ones) in it.
+      if (canMove) items.push({ id: 'body-move', label: many ? `Move/copy ${picked.length} bodies…` : `Move/copy ${info.name}…`, disabled: block, run: () => c.openNew('move_body', { bodies: many ? picked : [id] } as Partial<Feature>) });
+      if (canDelete) items.push({ id: 'body-delete', label: many ? `Delete ${picked.length} bodies` : `Delete ${info.name}`, danger: true, disabled: block, run: () => c.deleteBodies(many ? picked : [id]) });
       return items;
     },
     showMenu(x, y, items, label = 'Actions', opts = {}) {

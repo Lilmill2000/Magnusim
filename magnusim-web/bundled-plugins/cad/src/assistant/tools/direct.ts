@@ -1,5 +1,5 @@
 // direct: the person's direct edits and CFD prep in one step, the same records as their panels
-// (src/features/{press_pull,delete_faces,split,enclosure,delete_body}), and their Try repair / Retry on a
+// (src/features/{press_pull,delete_faces,split,enclosure,delete_body,move_body}), and their Try repair / Retry on a
 // failed feature (DocService.repair / retry). edit "" makes a new feature; edit "<name>" replaces
 // that feature's inputs (its type must be the kind's); repair and retry take the feature in edit.
 //   press_pull    faces of one body move along their own normals by distance (> 0 adds, < 0 removes)
@@ -11,6 +11,9 @@
 //                 (distance a length); sides rows set single sides on their own
 //   delete_body   bodies leave the model from this point in the history (the person's Delete on a
 //                 body in the tree): one Delete body feature for them all
+//   move_body     bodies turn by turn.angle about turn.axis (X, Y or Z through turn.pivot, [] the
+//                 centre of their box; or an axis, an edge, "axis of <round face>"), then move by
+//                 move (X, Y, Z); copy keeps them and moves copies (the person's Move/copy body)
 //   repair        the person's Try repair: the feature's booleans again with a looser tolerance
 //   retry         the person's Retry: build again a feature the geometry kernel stopped
 // Selectors read the bodies built now, or for an edit the bodies just before the feature. The
@@ -18,25 +21,31 @@
 // not build changes nothing. get_model full shows these features as this tool's input.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { deriveBodyId } from '../../doc/features/body-ids';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import type { BodyId, DeleteBodyFeature, DeleteFacesFeature, EnclosureFeature, EnclosureSide, Feature, FeatureId, FeatureType, OriginAxisRef, OriginPlaneRef, PersistentRef, PressPullFeature, SplitFeature, SplitTool } from '../../types/doc';
+import type { DocState } from '../../types/doc-service';
+import type { BodyId, DeleteBodyFeature, DeleteFacesFeature, EnclosureFeature, EnclosureSide, ExprVec3, Feature, FeatureId, FeatureType, MoveAbout, MoveBodyFeature, OriginAxisRef, OriginPlaneRef, PersistentRef, PressPullFeature, SplitFeature, SplitTool } from '../../types/doc';
+import type { AxisRef } from '../../types/references';
+import { nameForCopy } from '../../features/move_body/feature';
+import { isZeroExpr, moveWords } from '../../features/move_body/words';
 import { ToolError } from '../errors';
-import { andList, bodyText, createdLabels, editTarget, faceText, fillFeature, nameFor, partOf, str, strings, type RefBodies } from '../feature-tools';
+import { andList, axisText, bodyText, createdLabels, editTarget, faceText, fillFeature, nameFor, partOf, str, strings, type RefBodies } from '../feature-tools';
 import { registerFeatureIo } from '../features-io';
 import { bodyWords } from '../judge';
 import { featureByName, stateWord } from '../model';
 import { runtimeOf } from '../runtime';
-import { faceRefOf } from '../selectors/refs';
-import { echo, faceLabel, hitWords, selectAny, selectSet, withScene, type FaceHit, type Scene } from '../selectors/resolve';
+import { axisRefOf, faceRefOf } from '../selectors/refs';
+import { echo, faceLabel, hitWords, selectAny, selectOne, selectSet, withScene, type AxisHit, type FaceHit, type Scene } from '../selectors/resolve';
+import { vec } from '../numbers';
 import { storeExpr } from '../sketch/compile';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { closestName, closestWords } from '../closest';
 
-export const DIRECT_KINDS = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'repair', 'retry'] as const;
+export const DIRECT_KINDS = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'move_body', 'repair', 'retry'] as const;
 type Kind = (typeof DIRECT_KINDS)[number];
 type MakeKind = Exclude<Kind, 'repair' | 'retry'>;
-const TYPE: Record<MakeKind, FeatureType> = { press_pull: 'press_pull', delete_faces: 'delete_faces', split: 'split', enclosure: 'enclosure', delete_body: 'delete_body' };
+const TYPE: Record<MakeKind, FeatureType> = { press_pull: 'press_pull', delete_faces: 'delete_faces', split: 'split', enclosure: 'enclosure', delete_body: 'delete_body', move_body: 'move_body' };
 export const ENCLOSURE_SHAPES = ['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'] as const;
 export const ENCLOSURE_SIDES: readonly EnclosureSide[] = ['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'];
 const BOX_SIDES: readonly EnclosureSide[] = ['+x', '-x', '+y', '-y', '+z', '-z'];
@@ -58,6 +67,8 @@ interface Plan extends EditPlan {
   target: { id: FeatureId; name: string } | null;
   what: string;
   warnings: string[];
+  /** move_body: the bodies it moves (or copies), for the reply's positions. */
+  moved?: BodyId[];
 }
 
 /** Faces of one body (press-pull, delete faces), as the person's face field keeps them. */
@@ -79,7 +90,7 @@ async function facesOfOneBody(sc: Scene, texts: readonly string[]): Promise<{ bo
   return { body: hits[0].body.id, bodyName: hits[0].body.name, faces, words: echoes.join('; '), warnings };
 }
 
-/** Bodies by selector (split targets, enclosure bodies, bodies to delete), deduplicated. */
+/** Bodies by selector (split targets, enclosure bodies, bodies to delete or move), deduplicated. */
 async function bodiesOf(sc: Scene, texts: readonly string[]): Promise<{ ids: BodyId[]; names: string[] }> {
   const ids: BodyId[] = [];
   const names: string[] = [];
@@ -130,6 +141,12 @@ const direct: EditTool<Plan> = {
     const shape = (str(ctx.input.shape) || 'box') as (typeof ENCLOSURE_SHAPES)[number];
     const padding = (str(ctx.input.padding) || 'zero') as EnclosureFeature['padding'];
     const sides = (Array.isArray(ctx.input.sides) ? ctx.input.sides : []) as { side?: unknown; value?: unknown }[];
+    const move = strings(ctx.input.move);
+    const turn = (ctx.input.turn && typeof ctx.input.turn === 'object' ? ctx.input.turn : {}) as { angle?: unknown; axis?: unknown; pivot?: unknown };
+    const angle = str(turn.angle);
+    const axisWords = str(turn.axis);
+    const pivot = strings(turn.pivot);
+    const copy = ctx.input.copy === true;
     const problems: string[] = [];
     const usesFaces = kind === 'press_pull' || kind === 'delete_faces';
     if (usesFaces && !faces.length) problems.push('faces: at least one face of the body');
@@ -138,10 +155,25 @@ const direct: EditTool<Plan> = {
       if (!t) problems.push(`faces[${i}]: a face selector, not ""`);
     });
     if (kind === 'press_pull' && !distance) problems.push('distance: how far the faces move ("5 mm"; below 0 removes material)');
-    if ((kind === 'delete_faces' || kind === 'delete_body' || kind === 'repair' || kind === 'retry') && distance) problems.push(`distance: "" with ${kind}`);
+    if ((kind === 'delete_faces' || kind === 'delete_body' || kind === 'move_body' || kind === 'repair' || kind === 'retry') && distance) problems.push(`distance: "" with ${kind}`);
     if (kind === 'split' && !bodies.length) problems.push('bodies: the bodies to split');
     if (kind === 'delete_body' && !bodies.length) problems.push('bodies: the bodies to delete');
-    if (kind !== 'split' && kind !== 'enclosure' && kind !== 'delete_body' && bodies.length) problems.push(`bodies: [] with ${kind}`);
+    if (kind === 'move_body' && !bodies.length) problems.push('bodies: the bodies to move');
+    if (kind !== 'split' && kind !== 'enclosure' && kind !== 'delete_body' && kind !== 'move_body' && bodies.length) problems.push(`bodies: [] with ${kind}`);
+    if (kind === 'move_body') {
+      if (move.length && move.length !== 3) problems.push('move: three lengths X, Y, Z ("20 mm", "0", "0"), or [] for no move');
+      move.forEach((t, i) => {
+        if (!t) problems.push(`move[${i}]: a length ("0" for none), not ""`);
+      });
+      if (pivot.length && pivot.length !== 3) problems.push("turn.pivot: three lengths X, Y, Z, or [] for the centre of the bodies' box");
+      if (angle && !axisWords) problems.push('turn.axis: X, Y or Z (through the pivot), or an axis, a straight or round edge, "axis of <round face>"');
+      if (!angle && (axisWords || pivot.length)) problems.push('turn: angle "" turns nothing; send axis "" and pivot [] with it');
+      if (pivot.length && axisWords && !/^[xyz]$/i.test(axisWords)) problems.push('turn.pivot: [] with an axis that is not X, Y or Z (it turns about that axis itself)');
+    } else {
+      if (move.length) problems.push(`move: [] with ${kind}`);
+      if (angle || axisWords || pivot.length) problems.push(`turn: angle "", axis "", pivot [] with ${kind}`);
+      if (copy) problems.push(`copy: false with ${kind}`);
+    }
     bodies.forEach((t, i) => {
       if (!t) problems.push(`bodies[${i}]: a body, not ""`);
     });
@@ -215,6 +247,44 @@ const direct: EditTool<Plan> = {
       fields = { bodies: r.ids } as Partial<DeleteBodyFeature>;
       resolved.bodies = andList(r.names);
       what = `deleted ${andList(r.names)} from the model here on`;
+    } else if (kind === 'move_body') {
+      // An edit names the bodies and the axis as they are just before it (where the bodies were).
+      const xyz = /^[xyz]$/i.test(axisWords) ? (axisWords.toLowerCase() as MoveAbout) : null;
+      const r = await withScene(ctx, { before: self, self }, async (sc) => {
+        const named = await bodiesOf(sc, bodies);
+        let axis: AxisRef | null = null;
+        let words = '';
+        if (angle && !xyz) {
+          const one = await selectOne(sc, axisWords, 'axis', 'turn.axis');
+          // The person's panel turns about an axis, an edge, a round face's axis or a sketch line, never a plane's normal (parity).
+          if ((one.hit as AxisHit).source.s === 'normal')
+            throw new ToolError('bad_selector', `turn.axis: "${axisWords}" is a plane's normal: give X, Y or Z (through pivot), an axis, a sketch line, a straight or round edge, or "axis of <round face>".`, { detail: { field: 'turn.axis' } });
+          axis = await axisRefOf(sc, one.hit as AxisHit);
+          words = echo(sc, one.selected);
+          for (const w of one.hit.warnings ?? []) if (!warnings.includes(w)) warnings.push(w);
+        }
+        return { ...named, axis, words };
+      });
+      const about: MoveAbout = xyz ?? (r.axis ? 'axis' : 'z');
+      const f = {
+        bodies: r.ids,
+        move: (move.length ? move.map((m) => storeExpr(m, 'length', units)) : ['0 mm', '0 mm', '0 mm']) as ExprVec3,
+        angle: angle ? storeExpr(angle, 'angle', units) : '0 deg',
+        about,
+        axis: r.axis,
+        pivot: xyz && pivot.length ? (pivot.map((p) => storeExpr(p, 'length', units)) as ExprVec3) : null,
+        copy,
+      };
+      fields = f as Partial<MoveBodyFeature>;
+      // Keep a copy names it as the person's panel does: Body-Move 1 becomes Body-Copy 1 (a name given stays).
+      if (editing && !name && (editing as MoveBodyFeature).copy !== copy) {
+        const renamed = nameForCopy(editing.name, copy, s.doc.features.filter((g) => g.id !== editing.id).map((g) => g.name));
+        if (renamed !== editing.name) fields = { ...fields, name: renamed } as Partial<MoveBodyFeature>;
+      }
+      resolved.bodies = andList(r.names);
+      if (angle) resolved.turn = `${f.angle} about ${xyz ? `${xyz.toUpperCase()} through ${f.pivot ? `(${f.pivot.join(', ')})` : "the centre of the bodies' box"}` : r.words}`;
+      if (move.length) resolved.move = `(${f.move.join(', ')})`;
+      what = moveWords({ ...(editing ?? {}), ...f, type: 'move_body' } as MoveBodyFeature, (id) => r.names[r.ids.indexOf(id)] ?? id, () => axisWords);
     } else {
       const r = bodies.length ? await withScene(ctx, { before: self, self }, (sc) => bodiesOf(sc, bodies)) : { ids: [], names: [] };
       const own = (editing as EnclosureFeature | null)?.creates;
@@ -246,8 +316,31 @@ const direct: EditTool<Plan> = {
     const draft = { ...(editing ?? def.create(s.doc, {})), ...fields } as Feature;
     const why = def.incomplete(draft, units);
     if (why) {
-      const field = /^(Distance|Offset|Percent)/i.test(why) ? 'distance' : /side|Top|Bottom|Radius|[+-][XYZ]/.test(why) && kind === 'enclosure' ? 'sides' : kind === 'split' ? 'tool' : kind === 'delete_body' ? 'bodies' : 'faces';
-      throw new ToolError(/: /.test(why) ? 'expr_error' : 'bad_input', `${field}: ${why}.`, { detail: { field } });
+      const field =
+        kind === 'move_body'
+          ? /^Move/.test(why)
+            ? 'move'
+            : /^Angle/.test(why)
+              ? 'turn.angle'
+              : /^Pivot/.test(why)
+                ? 'turn.pivot'
+                : /axis/i.test(why)
+                  ? 'turn.axis'
+                  : /^Nothing to move/.test(why)
+                    ? 'move'
+                    : 'bodies'
+          : /^(Distance|Offset|Percent)/i.test(why)
+            ? 'distance'
+            : /side|Top|Bottom|Radius|[+-][XYZ]/.test(why) && kind === 'enclosure'
+              ? 'sides'
+              : kind === 'split'
+                ? 'tool'
+                : kind === 'delete_body'
+                  ? 'bodies'
+                  : 'faces';
+      // A value that does not evaluate is expr_error; Move/copy body's "Nothing to move" and "Pick ..." ask for what is missing.
+      const reason = kind === 'move_body' ? (/^(Move [XYZ]|Angle|Pivot [XYZ]): /.test(why) ? 'expr_error' : 'incomplete') : /: /.test(why) ? 'expr_error' : 'bad_input';
+      throw new ToolError(reason, `${field}: ${why}.`, { detail: { field } });
     }
     if (editing) resolved.edit = editing.name;
     return {
@@ -264,6 +357,7 @@ const direct: EditTool<Plan> = {
       target: null,
       what,
       warnings,
+      ...(kind === 'move_body' ? { moved: (fields as Partial<MoveBodyFeature>).bodies ?? [] } : {}),
     };
   },
 
@@ -303,10 +397,24 @@ const direct: EditTool<Plan> = {
       return { text, summary: text, data: { ...data, feature: { name, type: f?.type ?? '', state }, ...(state === 'error' ? { message: st?.message ?? null, actions: [...(st?.actions ?? [])] } : {}) } };
     }
     const created = createdLabels(ctx.services, id);
-    const text = `${name} ${data.feature?.state ?? 'ok'}${plan.edit ? ' (replaced)' : ''}: ${plan.what}${body ? ` · ${body}` : ''}`;
-    return { text, summary: text, data: { ...data, created: created.labels, ...(created.more ? { created_more: created.more } : {}), warnings: [...plan.warnings, ...data.warnings].slice(0, 20) } };
+    // Move/copy body: where the bodies (or their copies) are now, by the middle of their box.
+    const now = plan.moved ? movedNow(s, f as MoveBodyFeature | undefined, plan.moved) : null;
+    const where = now?.length ? `: ${now.map((b) => `${b.name} at (${b.at_mm.join(', ')})`).join(', ')}` : '';
+    const text = `${name} ${data.feature?.state ?? 'ok'}${plan.edit ? ' (replaced)' : ''}: ${plan.what}${where}${body ? ` · ${body}` : ''}`;
+    return { text, summary: text, data: { ...data, created: created.labels, ...(created.more ? { created_more: created.more } : {}), ...(now ? { [(f as MoveBodyFeature | undefined)?.copy ? 'copies' : 'moved']: now } : {}), warnings: [...plan.warnings, ...data.warnings].slice(0, 20) } };
   },
 };
+
+/** The bodies a Move/copy body moved (or the copies it made, by their derived ids), built now: name and the middle of the box (mm). */
+function movedNow(s: DocState, f: MoveBodyFeature | undefined, sources: readonly BodyId[]): { name: string; at_mm: number[] }[] {
+  const ids = f?.copy ? sources.map((id) => deriveBodyId(f.id, id, 1)) : [...sources];
+  return ids.flatMap((id) => {
+    const b = s.rebuild.bodies.find((x) => x.id === id);
+    if (!b) return [];
+    const box = b.bbox;
+    return [{ name: b.name, at_mm: vec([(box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2]) }];
+  });
+}
 
 /** repair, retry: the feature, and whether its build offers that action. */
 function planAction(services: AppServices, kind: 'repair' | 'retry', featureName: string): Plan {
@@ -348,7 +456,8 @@ export const tool: ToolImpl = {
 
 // ------------------------------------------------------------------ get_model full
 
-const BLANK = { faces: [] as string[], distance: '', bodies: [] as string[], tool: '', keep_tool: false, shape: 'box', padding: 'zero', sides: [] as { side: string; value: string }[] };
+const NO_TURN = { angle: '', axis: '', pivot: [] as string[] };
+const BLANK = { faces: [] as string[], distance: '', bodies: [] as string[], tool: '', keep_tool: false, move: [] as string[], turn: NO_TURN, copy: false, shape: 'box', padding: 'zero', sides: [] as { side: string; value: string }[] };
 
 function facesText(services: AppServices, body: BodyId, faces: readonly PersistentRef[], at: RefBodies | null): string[] | null {
   if (faces.length > FACES_MAX) return null;
@@ -398,6 +507,28 @@ registerFeatureIo('delete_body', {
     if ((g.bodies ?? []).length > BODIES_MAX) return null;
     const s = services.doc.state.get();
     return { edit: g.name, name: '', kind: 'delete_body', ...BLANK, bodies: (g.bodies ?? []).map((id) => bodyText(s, id)) };
+  },
+});
+
+registerFeatureIo('move_body', {
+  tool: 'direct',
+  refs: true,
+  inputsOf(f, services, at = null) {
+    const g = f as MoveBodyFeature;
+    if ((g.bodies ?? []).length > BODIES_MAX) return null;
+    const s = services.doc.state.get();
+    const turning = !isZeroExpr(g.angle);
+    const axis = g.about === 'axis' ? axisText(s, g.axis, at) : g.about.toUpperCase();
+    return {
+      edit: g.name,
+      name: '',
+      kind: 'move_body',
+      ...BLANK,
+      bodies: (g.bodies ?? []).map((id) => bodyText(s, id)),
+      move: (g.move ?? []).every((e) => isZeroExpr(e)) ? [] : [...g.move],
+      turn: turning ? { angle: g.angle, axis, pivot: g.about !== 'axis' && g.pivot ? [...g.pivot] : [] } : NO_TURN,
+      copy: !!g.copy,
+    };
   },
 });
 

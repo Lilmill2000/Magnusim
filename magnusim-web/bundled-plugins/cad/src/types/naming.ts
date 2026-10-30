@@ -94,4 +94,6 @@ export interface ResolveInput {
   shape: ShapeId;
   names: FaceNames;
   lookup: NamingLookup;
+  /** The body's placement now (BuiltBody.placement): every caller says it (src/naming/placement.ts). */
+  placement: readonly number[] | null | undefined;
 }

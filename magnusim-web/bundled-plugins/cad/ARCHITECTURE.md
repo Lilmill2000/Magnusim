@@ -74,7 +74,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
 | `solver-build/**`, `workspace/solver/*`, `src/solver-worker/**`, `tests/solver/**` | P3 (sketcher) | Built and tested now; not wired into the page until P3. |
 | `src/modules.ts`, `src/naming/**`, `src/doc/features/{hooks,body-ids}.ts`, `tests/arch/**`, `docs/p2p3-plan.md` | INTEGRATE (P2/P3 architect) | Module discovery, the naming layer, the feature-type hooks; frozen during the P2/P3 build (requests to INTEGRATE). Builders append only to the plan's §8 contract-change table. |
-| `src/features/{import,delete_faces,delete_body,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts`, `e2e/cad-body-menu.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
+| `src/features/{import,delete_faces,delete_body,move_body,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts`, `e2e/cad-body-menu.spec.ts`, `e2e/cad-move-body.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
 | `src/features/p2/**` | P2-FEATURES | P2's shared building blocks (selection list, viewport picker, stored-face refs, Try repair helpers, in-frame dialog, icons, `p2.css`). No `index.ts`, so module discovery skips it. Its colours are `--cad-p2-*` in `src/styles/tokens.css`. |
 | `src/sketch/**`, the solver worker's `WORKERS` line in `scripts/build.mjs` + their tests | P3-SKETCH | Sketch mode, tools, dimensions and constraints UI, solver client. |
 | `src/features/{sketch,extrude}/**`, `src/ui/tree/**` + their tests | P3-PROFILES | The sketch feature (regions), extrude, sketch rows in the tree. |
@@ -93,6 +93,8 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | The toolbar's fold order (`src/ui/Toolbar.tsx` `FOLD_ORDER`, `KEEP_IN_VIEW`, the More menus), `e2e/cad-p4a-toolbar.spec.ts`, `e2e/cad-p4a-integrate.spec.ts` | INTEGRATE (P4a) | §7 "Toolbar"; the integration gaps (Extrude "Along" a CONSTRUCT plane or axis, sketch points as point inputs). |
 | `src/features/pattern/**`, `tests/features/pattern/**`, the "P4b: patterns and mirror" block of `src/types/doc.ts` and its union members, `PatternOutput` in `src/types/doc-service.ts`, kernel API 5 (`kernel-build/`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`, `src/kernel/timeouts.ts` rows), `tests/kernel/kernel-api5-p4b.test.ts`, `e2e/cad-p4b-pattern.spec.ts`; Measure's pick carry-over block in `src/features/measure/panel.tsx` | P4b PATTERN | Linear pattern, Circular pattern, Mirror (features, bodies, faces); copy names; the kernel ops `copies`, `project`, `section`, `silhouette` and spline curves. In P4b only PATTERN edited the kernel. |
 | `src/sketch/tools/**`, `src/solver-worker/**`, `solver-build/**`, the "P4b (SKETCH)" blocks (`SketchSplineEntity`, `SketchTie`, `SketchFeature.ties`), `tests/sketch/p4b-*.test.ts` but links, `tests/solver/p4b-*`, `e2e/cad-p4b-sketch-tools.spec.ts` | P4b SKETCH | Fit-point and control-point splines, sketch Mirror, Linear and Circular pattern, Offset, Fillet, Chamfer, the pattern and offset rows (`ties`). |
+| `src/sketch/import/**`, `tests/sketch/import/**`, `tests/assistant/sketch-import.test.ts`, `e2e/cad-sketch-import.spec.ts` | P3-SKETCH (Import SVG/DXF) | One parser for the person's Import SVG/DXF and the Assistant's import row (§10 "Import SVG/DXF"). |
+| `src/sketch/tools/clip.ts`, `src/sketch/tools/paste.ts`, `tests/sketch/clipboard.test.ts`, `tests/app/clipboard-keys.test.ts`, `tests/assistant/sketch-copy.test.ts`, `e2e/cad-sketch-copy-paste.spec.ts` | P3-SKETCH (Copy and Paste) | The person's Copy and Paste and the Assistant's copy row (§10 "Copy and Paste"). |
 | `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
 | What the Assistant's tools stand on, each in its area's own files: `doc.assistant`, `settled`, `bodiesBefore`, `committed`, `editParams` and `BodyProps.shells` (`src/doc/service.ts`, `params-bulk.ts`, `person-editing.ts`, `rebuild.ts`), undo tags and snapshots (`src/doc/undo.ts`, `src/types/undo.ts`); `openForAssistant`, `openEditForAssistant`, `openParamsForAssistant`, `doneForAssistant`, `dropForAssistant` and the read-only chrome (`src/ui/controller.ts`, `src/ui/kit/Panel.tsx`, `src/ui/panels/ParametersPanel.tsx`); Assistant sketches (`src/sketch/mode.ts`, `commands.ts`) and `analyzeOnce` (`src/solver-worker/`, `src/sketch/solver-client.ts`); `snapshot`, `project`, `visibleFaceAt`, `userCameraMoves` and `{auto}` camera calls (`src/viewport/snapshot.ts`, `viewport.ts`); `AreaApis.assistant` (`src/types/app.ts`). Tests: `tests/doc/{assistant-step,params-bulk,settled}.test.ts`, `tests/ui/controller-assistant.test.ts`, `tests/sketch/mode-assistant.test.ts`, `tests/viewport/{camera-count,snapshot,snapshot-plain}.test.ts`, the `auto-camera` tests, e2e `cad-assistant-panels` and `cad-viewport-snapshot` (shell), `cad-assistant-sketch` (sketch) | DOC-CORE, UI-SHELL, P3-SKETCH, VIEWPORT | §6 "Assistant steps", §7 "Assistant panels and sketches". ASSISTANT calls them and changes none of them. |
 | `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 18 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
@@ -436,7 +438,60 @@ with the host once for the page's life, and its chip goes in the dock.
   which bodies; the Assistant's `direct` kind `delete_body` makes the same record.
   Its rows are named "Body-Delete N" (SOLIDWORKS' Body-Delete/Keep1), never
   "Delete body N", which read as Body N deleted. An older CAD shows its row red
-  and keeps it.
+  and keeps it. v0.5.0 also adds `move_body` (Move/copy body, SOLIDWORKS'
+  Move/Copy Body; `src/features/move_body/`: `feature.ts` the type, `panel.tsx`,
+  `words.ts` its words for get_model and the person's changes, `index.ts` the
+  MODIFY command `modify.move-body`, key M): `bodies`, `move` (X, Y, Z
+  expressions), `angle`, `about` (`x`/`y`/`z` through `pivot`, null = the centre
+  of the bodies' box just before it, as the build finds it each time; or `axis`,
+  an `AxisRef` resolved by `refgeom/resolve.ts`), `copy`. One rigid transform per
+  body (turn first, then move: `moveMatrix`, the pattern's `transforms.ts`)
+  through the kernel's `copies` (`check: false`: a rigid motion keeps a solid
+  valid). Moved, a body keeps its id, name, colour and face names (the rebuild
+  keeps a body's held name and colour when a later feature changes it), so later
+  references resolve by name; its `feature` becomes the move. With `copy`, each
+  copy is `deriveBodyId(feature, source, 1)` (`ownsBody`), named
+  `copyBodyName` ("Body 1 (Copy)", "(Copy 2)" for a second Move/copy of the same
+  body; `storedBodyName` gives the same from the Part alone) and its faces
+  `F:<feature>:i2:<source face>` (the pattern's copy role, instance 2). Its
+  output (`MoveBodyOutput`) is the centre and the line it turned about, for the
+  panel's pivot fields. Rows are "Body-Move N", "Body-Copy N" with Keep a copy
+  (`nameForCopy`: the panel, `direct` and `edit_feature` rename a name it gave,
+  never the person's). Nothing to move (every distance 0, no turn) is incomplete
+  unless it keeps a copy (a copy in place is built, with a note). The body menu
+  (`UiController.bodyMenu`, item `body-move`, just above `body-delete`) opens its
+  panel with the body (or the selected bodies); the Assistant's `direct` kind
+  `move_body` (`move`, `turn {angle, axis, pivot}`, `copy`) makes the same record
+  and answers with each moved body's or copy's box centre. The output also has
+  `matrix` (the rigid motion applied) and `turnAxis` (a picked axis as found
+  before it, also with no turn). While the person's panel is open,
+  `move_body/handle.ts` draws a handle in the view (layer `move_body.handle`,
+  hidden in pictures; its math in `handle-math.ts`): at the pivot after the move,
+  arrows for Move X, Y, Z and rings for the Angle (three, or one about a picked
+  axis), in `palette.triad` (a picked axis's ring `palette.ink`), each with a rim
+  in the palette's background. A drag sets the same fields as typing (a ring of
+  another of X, Y, Z than About sets About too), shown live in the panel and
+  drawn by `ViewportHandle.previewMotion` (target * shown^-1 on the meshes: no
+  rebuild, no kernel call, no save until the release, which applies the fields
+  through the session as typed values are). Rounded as the Extrude's arrow
+  (`roundedDistance`), Ctrl to whole steps (1 mm, 0.1 in, 15 deg). Escape with the
+  button held puts the drag back; the press never reaches the camera. The parity
+  table notes the handle (`PersonPath.also`) on `direct`'s move and turn fields.
+  `move_body` isolates while edited (`isolateWhileEditing`, as a sketch): the
+  bodies the handle drags are the ones just after it, so the drag draws what the
+  release builds. Placement (`src/naming/placement.ts`): each held body carries
+  `placement`, the rigid motion Move/copy body features gave it since it was made
+  (absent: none; a move composes its matrix onto it, a copy takes its source's
+  times the matrix, a split piece its target's, `rebuild.ts`), on `BuiltBody`,
+  `BodyInfo`, `EndBody` and the selectors' `SelBody`. `refOfFace/Edge/Vertex`
+  take the body and store its placement on the `PersistentRef`; every resolution
+  passes the body's placement now (`ResolveInput.placement`, required) and the
+  stored signature is mapped by now x stored^-1 before `sameKind` and the
+  nearest-candidate choice, so a reference made before or after a move, or
+  across an edit of one, resolves cleanly by name. A face-supported sketch and a
+  construction plane on a face take `placedFaceFrame`: `faceFrame` where the face
+  was when the reference was made, moved by that motion, so a sketch (a hole's)
+  slides and turns with its body; with no motion it is `faceFrame` as before.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a
@@ -1823,6 +1878,63 @@ with the host once for the page's life, and its chip goes in the dock.
   freedom, so DOF words stay honest. Refused in words: a point on a
   control-point spline, extend of a spline, a dimension on a spline curve,
   fillet of two arcs, fillet or chamfer of a linked curve.
+- **Import SVG/DXF (`src/sketch/import/`).** One parser, pure data in and sketch
+  entities out, used by the person and the Assistant alike: `index.ts`
+  `readDrawing(name, bytes)` refuses past 20 MiB (the host's drawing cap) and a
+  binary DXF, then `svg.ts` (its own small XML tokenizer: no DOMParser, nothing
+  inserted in the page, rendered or fetched; entity declarations never
+  expanded; script, foreignObject, style, image, use, text, defs, hidden
+  elements, `on*` attributes and links to other files counted as skipped) or
+  `dxf.ts` (group code / value pairs: LINE, ARC, CIRCLE, ELLIPSE, POINT,
+  LWPOLYLINE and POLYLINE bulges, SPLINE, INSERT of BLOCKS up to 16 deep, the
+  OCS, $INSUNITS, layers) reads it into `common.ts` `DrawingCurve`s in its own
+  units, y up. `planImport(drawing, {scale, place, layers})` scales and places
+  them, drops what is under the join tolerance (max(1e-4 mm, 1e-6 of the
+  size)) and duplicates, joins ends within it into one point, and counts open
+  ends; `importIntoDraft(draft, plan)` makes the sketch entities (lines, arcs,
+  circles, ellipses, ellipse arcs, control splines with their knots, fit
+  splines, points), no constraints; `summaryWords` is the summary both sides
+  show. Exact where the sketch can hold it: SVG cubics are degree-3 splines
+  (quadratics raised), arcs and circles stay circular unless a transform makes
+  them ellipses (`conicPiece`); a DXF spline of degree 3 or 5 is kept, 2 and 4
+  are Bezier pieces raised a degree, unclamped knots are clamped, rational ones
+  and those past degree 5 are fit splines through points of them (a note).
+  The person: MODIFY > Import SVG/DXF (`tool.ts`; `sketch.import`, no default
+  key) picks the file, the `import` sketch tool shows the summary, Scale, Place,
+  the layers, a preview, and OK applies `importIntoDraft` as one sketch undo
+  step. The Assistant: the sketch tool's `import` row (`assistant/sketch/ops.ts`)
+  reads the attachment with the host's `call.readAttachment` (1.9; feature-
+  detected; its codes mapped to honest errors), runs the same plan and edit,
+  names the curves `<id>.1`..., and its `made` row carries the same words; the
+  watch path draws the import in one step (`Compiled.drawGroups`). The app's
+  Assistant panel offers drawings since this (its `DRAWINGS_OFFERED`).
+- **Copy and Paste (`src/sketch/tools/clip.ts`, `paste.ts`).** `clipOf(draft,
+  ids)` takes the picked entities (a picked point under a point entity is that
+  entity), the points they use and every relation and dimension whose refs are
+  all among them, as plain data (`SketchClip`: entities, points, constraints,
+  each dimension's value, the count of those left out because a ref is outside,
+  and the anchor, the middle of the copy's box). `pasteClip(draft, clip, at)`
+  makes new geometry with `copyEntities` (its `at` reader takes the clip's own
+  points), moved so the anchor lands on `at` in the target's u, v (another
+  plane takes the same 2D shape), re-makes the relations and dimensions on the
+  copies (labels and a Fix moved with it; an expression the target cannot
+  evaluate, another Part's parameter, becomes the value it had). The person:
+  `sketch.copy` / `sketch.paste` (Ctrl+C / Ctrl+V, keymap context sketch, Set
+  keybind in the selection's right-click menu, which also has Copy and Paste).
+  Copy holds the clip in the page and in the plugin's prefs (`sketch-clipboard`,
+  when its JSON is at most 16 KB; a bigger one removes the old one), so another
+  Part's page (the frame is made again per Part) or tab pastes it; the
+  `paste` sketch tool shows it under the pointer (`infer` snaps, no relation
+  made), a click or Enter applies `pasteClip` as one sketch undo step and selects
+  the copies, Escape puts it down. `CommandDef.passKey` gives Ctrl+C back to the
+  browser while no sketch geometry is selected; the keyboard never runs a
+  command from a text field (`typingIn`), so a field's own copy and paste stay.
+  The Assistant: the sketch tool's `copy` row (`assistant/sketch/ops.ts`) runs
+  the same two on this call's geometry or, with `from`, another sketch's (its
+  names by `describeSketch` refOf, a macro by its head, or "all"), at
+  `at(u, v)` or an `offset`; made gives copied, kept, left_out and middle_at,
+  a warning says what was left out, the copies are `<id>.<item>`, and the watch
+  path draws them in one step.
 - **Linked sketch geometry (P4b SELECT, `src/sketch/project/`).** Project (P)
   takes a vertex, an edge or a face (its outer edges) of any body, imports
   included, or with Silhouette a body's outline along the sketch normal;
@@ -2238,8 +2350,8 @@ pieces, adding and testing a tool), and each tool's description in
 `src/assistant/schemas.ts` is what the model reads. The user's side is README
 "The Assistant in the Part".
 
-- **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `view`,
-  `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
+- **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `check`,
+  `view`, `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
   `modify` (fillet, chamfer, shell), `pattern` (linear, circular, mirror),
   `combine`, `body`, `edit_feature`, `undo`, `hole`. `delete` is the one
   destructive tool, with its `confirm` note. With the app's three host tools a
@@ -2324,6 +2436,24 @@ pieces, adding and testing a tool), and each tool's description in
   person's undo of its steps while its turn runs. It changes what the person
   made only through its own undoable steps, and its guide tells it not to
   unless asked.
+- **The assembly checks** (`src/features/assembly/check.ts`, UI-free): one
+  engine for the `check` tool and INSPECT's Check panel (interference, the
+  stack on each shared axis, the sweep about an axis). The tool's reply
+  formatters (`interferenceReply`, `stackReply`, `sweepReply`) and `axisOf`
+  are exported, and `src/features/check/assembly.ts` runs the person's checks
+  through them. So the panel's line is the tool's text and its rows are the
+  tool's rows (`tests/assistant/check.test.ts` holds them equal). The panel's
+  controls are `CHECK_CONTROLS` (`src/features/check/controls.ts`); the
+  parity table `CHECK` maps each one to the tool, and `control('check', ...)`
+  maps each of the tool's fields back to a control. The play of a fit is the
+  gap along rays from the axis (`slices.ts` `fitGap`, exact on lines and arcs),
+  so a D or hex shaft is judged by its clearance, not by two circles. An axis
+  cuts the bodies within what its parts reach (a frame plate counts by its
+  bores, not its far corner), its levels are its parts' vertices and face ends
+  first, and an axis the time limit cut short is dropped: the replies then
+  start "Stopped at the time limit" and carry a note the panel shows too.
+  `checkClock.limitMs` (exposed as `window.__CAD__.assemblyCheck`) lets tests
+  reach the limit.
 - **Selectors** (`selectors/`, `labels.ts`): one string language for faces,
   edges, vertices, bodies, regions, planes and axes (role labels such as
   `Base.end`, queries such as `Body 1 faces >Z`, `face at (x, y, z)`, handles),

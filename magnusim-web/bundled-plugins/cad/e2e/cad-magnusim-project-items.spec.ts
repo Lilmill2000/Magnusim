@@ -64,7 +64,7 @@ test('cad:magnusim-project-items in Magnusim the Part keeps CFD PREP and Enclosu
 
   // The Assistant's tools as the Part registered them: send_to_simulation, the enclosure kind and its fields.
   const tools = await workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant?.registered ?? []);
-  expect(tools).toHaveLength(21);
+  expect(tools).toHaveLength(22);
   const tool = (n: string) => tools.find((t) => t.name === n)!;
   expect(tool('workspace').inputSchema.properties.action.enum).toContain('send_to_simulation');
   expect(tool('workspace').description).toContain('send_to_simulation (save and link, as Back does)');

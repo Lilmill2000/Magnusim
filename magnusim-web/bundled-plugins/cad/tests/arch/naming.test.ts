@@ -100,25 +100,25 @@ describe('resolveFace', () => {
 
   it('a name match of the same kind resolves cleanly even after the face moved (an upstream dimension change)', async () => {
     const lookup = lookupOf([plane(0, [0, 0, 0], [0, 0, -1]), plane(1, [0, 0, 25], [0, 0, 1], 400)]);
-    const r = await resolveFace({ ref: ref('F:f_box:primitive:5'), shape: 7, names: { faces: ['F:f_box:primitive:4', 'F:f_box:primitive:5'] }, lookup });
+    const r = await resolveFace({ ref: ref('F:f_box:primitive:5'), shape: 7, names: { faces: ['F:f_box:primitive:4', 'F:f_box:primitive:5'] }, lookup, placement: null });
     expect(r).toMatchObject({ ok: true, index: 1, how: 'name' });
     expect(lookup.asked).toEqual([[1]]);
   });
 
   it('a name match whose kind changed, or a face split in two, resolves with "Reference repaired · check"', async () => {
-    const turned = await resolveFace({ ref: ref('A'), shape: 1, names: { faces: ['A'] }, lookup: lookupOf([plane(0, [0, 0, 10], [1, 0, 0])]) });
+    const turned = await resolveFace({ ref: ref('A'), shape: 1, names: { faces: ['A'] }, lookup: lookupOf([plane(0, [0, 0, 10], [1, 0, 0])]), placement: null });
     expect(turned).toMatchObject({ ok: true, index: 0, how: 'moved', warning: 'Reference repaired · check' });
-    const split = await resolveFace({ ref: ref('A'), shape: 1, names: { faces: ['A#0', 'B', 'A#1'] }, lookup: lookupOf([plane(0, [0, 0, -50], [0, 0, 1]), plane(1, [9, 9, 9], [0, 1, 0]), plane(2, [0, 0, 11], [0, 0, 1])]) });
+    const split = await resolveFace({ ref: ref('A'), shape: 1, names: { faces: ['A#0', 'B', 'A#1'] }, lookup: lookupOf([plane(0, [0, 0, -50], [0, 0, 1]), plane(1, [9, 9, 9], [0, 1, 0]), plane(2, [0, 0, 11], [0, 0, 1])]), placement: null });
     expect(split).toMatchObject({ ok: true, index: 2, how: 'moved' });
     expect(nameCandidates('A', ['A|C', 'B'])).toEqual([0]);
   });
 
   it('with no name, the signature resolves only when the runner-up is at least 50% worse; otherwise "Face not found after rebuild"', async () => {
-    const clear = await resolveFace({ ref: ref('gone'), shape: 1, names: { faces: ['X', 'Y'] }, lookup: lookupOf([plane(0, [0, 0, 10.1], [0, 0, 1]), plane(1, [0, 0, 300], [0, 0, 1])]) });
+    const clear = await resolveFace({ ref: ref('gone'), shape: 1, names: { faces: ['X', 'Y'] }, lookup: lookupOf([plane(0, [0, 0, 10.1], [0, 0, 1]), plane(1, [0, 0, 300], [0, 0, 1])]), placement: null });
     expect(clear).toMatchObject({ ok: true, index: 0, how: 'signature', warning: 'Reference repaired · check' });
-    const twins = await resolveFace({ ref: ref('gone'), shape: 1, names: { faces: ['X', 'Y'] }, lookup: lookupOf([plane(0, [1, 0, 10], [0, 0, 1]), plane(1, [-1, 0, 10], [0, 0, 1])]) });
+    const twins = await resolveFace({ ref: ref('gone'), shape: 1, names: { faces: ['X', 'Y'] }, lookup: lookupOf([plane(0, [1, 0, 10], [0, 0, 1]), plane(1, [-1, 0, 10], [0, 0, 1])]), placement: null });
     expect(twins).toEqual({ ok: false, message: 'Face not found after rebuild' });
-    const otherKind = await resolveFace({ ref: ref('gone'), shape: 1, names: { faces: ['X'] }, lookup: lookupOf([cyl(0, [0, 0, 10], 5)]) });
+    const otherKind = await resolveFace({ ref: ref('gone'), shape: 1, names: { faces: ['X'] }, lookup: lookupOf([cyl(0, [0, 0, 10], 5)]), placement: null });
     expect(otherKind).toEqual({ ok: false, message: 'Face not found after rebuild' });
   });
 });

@@ -16,7 +16,8 @@ import type { FeatureId, PersistentRef, RefSemantic, RefSignature, Vec3 } from '
 import type { ShapeId, TopoResult } from '../types/kernel-protocol';
 import type { FaceNames, NamingLookup, RefResolution } from '../types/naming';
 import { copyRoleWords, edgeName, ENCLOSURE_SIDE_WORDS, insideCopy, isCopyRole, sideNumber, splitMerged, splitSuffix, vertexName } from './names';
-import { sameKind, signatureDistance } from './resolve';
+import { refPlacement, type RefBody } from './refs';
+import { placedRef, sameKind, signatureDistance } from './resolve';
 
 type TopoEdge = TopoResult['edges'][number];
 type TopoVertex = TopoResult['vertices'][number];
@@ -119,25 +120,27 @@ function semanticOf(faceNames: readonly string[]): RefSemantic | undefined {
  * a semantic hint and its signature. Throws when the body or the edge's faces have no
  * names (a bug: every feature names its faces).
  */
-export async function refOfEdge(lookup: NamingLookup, shape: ShapeId, names: FaceNames | null, index: number): Promise<PersistentRef> {
+export async function refOfEdge(lookup: NamingLookup, body: RefBody, index: number): Promise<PersistentRef> {
+  const { shape, names } = body;
   if (!lookup.edges) throw new Error('this lookup cannot read edges');
   const [e] = await lookup.edges(shape, [index]);
   if (!e) throw new Error(`edge ${index} of this body is not there`);
   const name = names ? edgeNameOf(e, names.faces) : null;
   if (!name) throw new Error(`edge ${index} of this body has no name`);
   const sem = semanticOf(splitEdgeName(name) ?? []);
-  return { name, ...(sem ? { semantic: sem } : {}), signature: edgeSignature(e) };
+  return { name, ...(sem ? { semantic: sem } : {}), signature: edgeSignature(e), ...refPlacement(body) };
 }
 
 /** The stored reference for vertex `index` of a body (its faces' names, its point). */
-export async function refOfVertex(lookup: NamingLookup, shape: ShapeId, names: FaceNames | null, index: number): Promise<PersistentRef> {
+export async function refOfVertex(lookup: NamingLookup, body: RefBody, index: number): Promise<PersistentRef> {
+  const { shape, names } = body;
   if (!lookup.vertices) throw new Error('this lookup cannot read vertices');
   const [v] = await lookup.vertices(shape, [index]);
   if (!v) throw new Error(`vertex ${index} of this body is not there`);
   const name = names ? vertexNameOf(v, names.faces) : null;
   if (!name) throw new Error(`vertex ${index} of this body has no name`);
   const sem = semanticOf(splitVertexName(name) ?? []);
-  return { name, ...(sem ? { semantic: sem } : {}), signature: vertexSignature(v) };
+  return { name, ...(sem ? { semantic: sem } : {}), signature: vertexSignature(v), ...refPlacement(body) };
 }
 
 // ------------------------------------------------------------ resolution
@@ -226,11 +229,14 @@ export interface ResolveSubInput {
   shape: ShapeId;
   names: FaceNames;
   lookup: NamingLookup;
+  /** The body's placement now (ResolveInput.placement). */
+  placement: readonly number[] | null | undefined;
 }
 
 /** Resolve a stored edge reference on a body (asks the kernel for every edge's faces). */
 export async function resolveEdge(input: ResolveSubInput): Promise<RefResolution> {
-  const { ref, shape, names, lookup } = input;
+  const { shape, names, lookup } = input;
+  const ref = placedRef(input.ref, input.placement);
   if (!lookup.edges) return { ok: false, message: 'Edge not found after rebuild' };
   const all = await lookup.edges(shape, 'all');
   const current: (string | null)[] = [];
@@ -244,7 +250,8 @@ export async function resolveEdge(input: ResolveSubInput): Promise<RefResolution
 
 /** Resolve a stored vertex reference on a body. */
 export async function resolveVertex(input: ResolveSubInput): Promise<RefResolution> {
-  const { ref, shape, names, lookup } = input;
+  const { shape, names, lookup } = input;
+  const ref = placedRef(input.ref, input.placement);
   if (!lookup.vertices) return { ok: false, message: 'Vertex not found after rebuild' };
   const all = await lookup.vertices(shape, 'all');
   const current: (string | null)[] = [];

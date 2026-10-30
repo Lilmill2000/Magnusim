@@ -82,6 +82,19 @@ export const CHOICE_FIELDS: Readonly<Partial<Record<FeatureType, readonly Choice
     { field: 'mode', path: 'mode', words: same('full', 'angle') },
   ],
   mirror: [{ field: 'op', path: 'op', words: PATTERN_OP }],
+  // Move/copy body: Keep a copy, and the turn about X, Y or Z (a picked axis is sent with direct).
+  move_body: [
+    { field: 'copy', path: 'copy', words: 'bool' },
+    {
+      field: 'about',
+      path: 'about',
+      words: [
+        ['X', 'x'],
+        ['Y', 'y'],
+        ['Z', 'z'],
+      ],
+    },
+  ],
   split: [
     { field: 'plane', aliases: ['tool.plane'], path: 'tool.plane', words: PLANES, when: splitBy('plane') },
     { field: 'keep_tool', aliases: ['keepTool', 'tool.keepTool'], path: 'tool.keepTool', words: 'bool', when: splitBy('body') },

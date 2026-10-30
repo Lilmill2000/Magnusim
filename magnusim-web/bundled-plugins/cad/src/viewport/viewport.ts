@@ -11,7 +11,7 @@
 // the marks' twins); every picture is drawn LIGHT.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { Box3, BufferGeometry, Color, Float32BufferAttribute, Group, LessEqualDepth, LinearSRGBColorSpace, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer, WebGLRenderTarget, type Material, type Object3D } from 'three';
+import { Box3, BufferGeometry, Color, Float32BufferAttribute, Group, LessEqualDepth, LinearSRGBColorSpace, Matrix4, Mesh, Plane, Points, Ray, Scene, Sphere, Vector3, WebGLRenderer, WebGLRenderTarget, type Material, type Object3D } from 'three';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
@@ -1693,6 +1693,34 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       b.vertices = vertices;
       edgeOverlayKey = '';
       applyHighlight();
+    },
+    previewMotion(ids, matrix) {
+      const m = matrix ? new Matrix4().set(matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5], matrix[6], matrix[7], matrix[8], matrix[9], matrix[10], matrix[11], 0, 0, 0, 1) : null;
+      for (const id of ids) {
+        const b = bodies.get(id);
+        if (!b) continue;
+        // The faces and the edges (their face twins and lit faces are children: they follow).
+        for (const o of [b.mesh, b.edges] as Object3D[]) {
+          if (m) {
+            o.matrixAutoUpdate = false;
+            o.matrix.copy(m);
+          } else {
+            o.matrixAutoUpdate = true;
+            o.updateMatrix();
+          }
+          o.matrixWorldNeedsUpdate = true;
+        }
+      }
+      request();
+    },
+    drawnBox(id) {
+      const b = bodies.get(id);
+      if (!b) return null;
+      const g = b.mesh.geometry;
+      if (!g.boundingBox) g.computeBoundingBox();
+      if (b.mesh.matrixAutoUpdate) b.mesh.updateMatrix();
+      const box = g.boundingBox!.clone().applyMatrix4(b.mesh.matrix);
+      return { min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] };
     },
     highlight(items) {
       selected = items.slice();

@@ -187,7 +187,7 @@ function useShownIndices(services: AppServices, refs: readonly GeomRef[]): Map<s
         const b = bodies.find((x) => x.id === r.body);
         if (!b?.names) continue;
         try {
-          const i = await resolveIndexOn(services.kernel, r.kind, b.shape, b.names, r.ref);
+          const i = await resolveIndexOn(services.kernel, r.kind, b.shape, b.names, r.ref, b.placement);
           if (i != null) next.set(refKey(r), { kind: r.kind, body: b.id, index: i });
         } catch {
           /* not found: no highlight; the feature's error says so */

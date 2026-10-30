@@ -1,6 +1,7 @@
 // @vitest-environment node
 // The shipped solver (workspace/solver/planegcs.*) through src/solver-worker/solver-api.mjs:
-// a rectangle with two dimensions is fully defined; with one it has 1 DOF.
+// a rectangle with two dimensions is fully defined; with one it has 1 DOF; a throw from inside the
+// WebAssembly is said in words (errorWords).
 // Owner: the P3 sketcher (extend with the P0 reference sketches).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -52,5 +53,14 @@ describe('solver (PlaneGCS wasm, Node)', () => {
     s.solve();
     expect(s.analyze().dof).toBe(1);
     s.dispose();
+  });
+
+  it("a throw from inside the solver's WebAssembly (a C++ exception: its memory ran out, as 1,500 arcs make it) is said in words, not \"[object WebAssembly.Exception]\"", async () => {
+    const { errorWords } = (await import(/* @vite-ignore */ API)) as { errorWords(e: unknown): string };
+    const W = WebAssembly as unknown as { Tag: new (t: { parameters: string[] }) => object; Exception: new (tag: object, payload: unknown[]) => object };
+    const ex = new W.Exception(new W.Tag({ parameters: [] }), []);
+    expect(String(ex)).toBe('[object WebAssembly.Exception]');
+    expect(errorWords(ex)).toBe('the sketch solver failed inside: the sketch is likely too large for it (fewer arcs, ellipses or points)');
+    expect(errorWords(new Error('bad sketch'))).toBe('bad sketch');
   });
 });

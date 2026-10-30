@@ -7,7 +7,8 @@
 // `refuse: 'not_allowed'` a host whose bridge refuses the call. Undo from the app's panel: `docked`
 // says the host has it; setUndo's offers are recorded (`undoOffers`, the latest per turn in
 // `offered`), and askUndo(turn) runs the page's onUndo handler as the panel's ask would.
-// `undo: false` is a host without setUndo and onUndo.
+// `undo: false` is a host without setUndo and onUndo. `attachments` gives each call
+// readAttachment (host 1.9): a File by id, or a refusal {code, message}; left out, calls have none.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantHandler, AssistantRegistration, AssistantStopAnswer, AssistantTool, AssistantTurn, AssistantUndoAnswer, AssistantUndoOffer } from '@magnusim/workspace';
 
@@ -20,6 +21,8 @@ export interface FakeAssistantOptions {
   docked?: boolean;
   /** A host with setUndo and onUndo: true by default (with the turn events). */
   undo?: boolean;
+  /** call.readAttachment's files by attachment id, or a refusal; left out, a call has no readAttachment. */
+  attachments?: Record<string, File | { code: string; message?: string }>;
 }
 
 export interface FakeProgress {
@@ -47,6 +50,8 @@ export interface FakeAssistant {
   /** Tell this tab's listeners a turn (a full AssistantTurn; missing fields get defaults; `conversation`: a newer host's, 1.9). */
   emitTurn(t: Partial<AssistantTurn> & { id: string; conversation?: string | null }): void;
   readonly progress: FakeProgress[];
+  /** Every readAttachment's id, in order. */
+  readonly reads: string[];
   readonly stops: string[];
   /** stop()'s next answer. */
   stopAnswer: AssistantStopAnswer;
@@ -93,6 +98,7 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
       return [...accepted];
     },
     progress: [],
+    reads: [],
     stops: [],
     stopAnswer: { stopped: true },
     async register(tools, h, opts) {
@@ -117,6 +123,17 @@ export function createFakeAssistant(o: FakeAssistantOptions = {}): FakeAssistant
           input: JSON.parse(JSON.stringify(input)),
           signal,
           progress: (fraction, label, opts) => void fake.progress.push({ call: id, fraction, ...(label ? { label } : {}), waiting: opts?.waiting === true }),
+          ...(o.attachments
+            ? {
+                readAttachment: async (att: string) => {
+                  fake.reads.push(att);
+                  const a = o.attachments![att];
+                  if (!a) throw Object.assign(new Error('The conversation has no such file.'), { code: /^att-[0-9a-f]{16}$/.test(att) ? 'not_found' : 'bad_request' });
+                  if (!(a instanceof File)) throw Object.assign(new Error(a.message ?? 'The file could not be read.'), { code: a.code });
+                  return a;
+                },
+              }
+            : {}),
         });
         const result = (out && typeof out === 'object' ? out : typeof out === 'string' ? { text: out } : {}) as Record<string, unknown>;
         return { ok: true, result: JSON.parse(JSON.stringify(result)) };

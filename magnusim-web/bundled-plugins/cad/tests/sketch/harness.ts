@@ -16,6 +16,7 @@ import type { SolverClient } from '../../src/sketch/solver-client';
 import { toSolverSketch } from '../../src/sketch/model';
 import { makeTool } from '../../src/sketch/tools';
 import { registerSketchCommands } from '../../src/sketch/commands';
+import { registerClipboardCommands } from '../../src/sketch/tools/paste';
 import type { AppServices, AreaApis } from '../../src/types/app';
 import type { Mode } from '../../src/types/commands';
 import type { CadDoc, Feature, SketchFeature, Vec2 } from '../../src/types/doc';
@@ -156,7 +157,12 @@ export async function sketchHarness(start: Partial<SketchFeature> = {}, opts: Ha
     apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null, ...opts.apis }),
   };
   const mode = new SketchMode(services, solver, makeTool);
-  const offCommands = registerSketchCommands(services, mode);
+  const offSketch = registerSketchCommands(services, mode);
+  const offClipboard = registerClipboardCommands(services, mode);
+  const offCommands = () => {
+    offClipboard();
+    offSketch();
+  };
   state.set((s) => ({ ...s, doc: { ...s.doc, features: [draft, ...later] }, session: { id: session.id, feature: session.feature, isNew: true } }));
   await mode.idle();
   const px = 0.1;

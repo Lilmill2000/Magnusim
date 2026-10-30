@@ -4,6 +4,58 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Copy and paste sketch geometry.**
+- In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C
+  (or right-click > Copy): the panel says what was copied. Ctrl+V (or
+  right-click > Paste) picks the copy up: it follows the pointer, held by the
+  middle of its box, and snaps to the sketch's points and curves (Ctrl stops
+  that). A click (or Enter) places it as one undo step, and the copy is
+  selected; Esc puts it down with nothing added.
+- The copy is new geometry: construction stays construction, and the relations
+  and dimensions between the copied pieces are made again on the copy, so the
+  copy is as defined as the original. A dimension keeps its expression where it
+  gives the same value in the sketch it is pasted into; where it would not (a
+  parameter of another Part, or "2*15" pasted into a Part in inches, where it
+  would mean 762 mm) it takes the value it had, and the panel says which.
+  Relations and dimensions that also tie geometry you did not copy (to the
+  origin, say) are left out, and the panel says how many.
+- Paste works in any sketch: another sketch of the Part, on another plane (the
+  same 2D shape in that sketch's own directions), or a sketch of another Part.
+- In a text or number field (a dimension's value, say) Ctrl+C and Ctrl+V copy
+  and paste the text, as always; with no sketch geometry selected, or with text
+  selected (the panel's red note, to put in a report), Ctrl+C copies the text.
+  Settings > Keybinds lists Copy and Paste under Sketch.
+- The Assistant does the same with the sketch tool's copy row: from this sketch
+  or another sketch of the Part, or what you copied (in any Part: it reads what
+  is held, and pastes all of it), placed at a point or moved by an offset, and
+  its answer says what was copied and what was left out.
+
+**Import SVG/DXF into a sketch.**
+- In a sketch, MODIFY > Import SVG/DXF picks an SVG or a DXF file (at most 20 MB).
+  The Sketch panel says what it read: the lines, arcs, circles, ellipses,
+  splines and points, what it left out and why (text, scripts, pictures, links
+  to other files...), the size in mm and the ends that meet nothing. The curves
+  show in the sketch first; OK adds them as one undo step, Cancel or Esc adds
+  nothing.
+- Its units set the scale (an SVG's width over its viewBox, else 96 px per
+  inch; a DXF's $INSUNITS, or mm when it says none); change it in Scale. Place
+  puts the drawing's own origin on the sketch's, or centres it there. A DXF's
+  layers can be left out (one the file has off starts left out).
+- Curves whose ends meet share one point, so a closed outline is a profile that
+  Extrude takes (the panel says how close ends must be to meet; a stray curve
+  far off does not change that). No relation is added: the sketch is
+  under-defined, as imported geometry is.
+- A drawing is only read, never shown as a page: nothing in it runs or loads
+  anything. A binary DXF is refused (save it as ASCII DXF). A drawing too heavy
+  for the sketch solver is refused, with what it weighs: every later change of
+  the sketch solves all of it, so at most about 10,000 points, or 400 arcs, go
+  into one sketch (leave layers out). A file made to stall the reading (deep
+  nesting, numbers past any size, blocks that insert themselves, huge arrays,
+  splines of thousands of points) is read or refused at once.
+- The Assistant does the same with a drawing you attach in its panel: the sketch
+  tool's import row, with the same summary you see. The app's Assistant panel
+  now takes SVG and DXF files.
+
 **What the Assistant can do, you can do too.**
 - Hole (SOLID): click a flat face, click the centres on it (or type them), set
   the diameter and Through or a blind depth, Done. It makes "Hole N sketch" and
@@ -17,6 +69,38 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   none when a feature left still uses one of them.
 - The Back isometric view (key 8, and the views menu); Middle in the section
   view cuts through the middle of the shown bodies.
+- Check (INSPECT) checks an assembly too, as the Assistant does, in the same
+  words. Pick a mode at the top of the panel, then press Check:
+  - **Interference**: the pairs of bodies that overlap and the volume they
+    share (the selected bodies, or every shown body). Type a clearance to also
+    list the pairs closer than it.
+  - **Loose parts**: every axis that bodies share, with its parts in order,
+    what each rides on, and what stops it on each side. It names each part
+    that can slide along its shaft, which way and how far, and each bore with
+    nothing in it. A part may have up to 0.5 mm of play (type another play).
+  - **Rotation**: pick a body (or select several) and an axis (one its round
+    faces lie on, X, Y, Z or a construction axis). It turns the body a full
+    turn both ways and gives the first angle it meets each other body.
+  Click a row to select its bodies (Ctrl adds them); hover it to light them. A
+  long check shows its progress and has Stop. If the Part changes afterwards,
+  the result says so. Solids is the check it always had: is each body a valid
+  solid.
+  - A D or hex shaft in a bore of its shape with clearance all round is loose
+    on its shaft (play the clearance), no longer taken for a press fit.
+  - A check stopped by its time limit says so in its line ("Stopped at the time
+    limit ...") with what helps, and never "Nothing is loose" or "without
+    meeting anything".
+  - A press fit (a bore drawn a little under its shaft) is listed as a press
+    fit in Interference, apart from the bodies that collide.
+  - One selected body in Interference is checked against every other shown
+    body. Loose parts with bodies selected checks only the shafts near them.
+  - A frame plate's clearance hole (a pipe passing through) is no longer
+    reported as "Nothing holds the plate"; a hand or crank with nothing in its
+    bore is.
+  - Rotation's columns say which way they turn: "Counter-clockwise about +Z"
+    and "Clockwise".
+  - Rods lying across a turning part's path, and thin collars among many
+    other bodies, are no longer missed.
 - Find (INSPECT): select faces, edges, bodies or sketch regions by a query in
   the Assistant's own words ("Body 1 faces >Z", "largest", "hole", "edges of
   Extrude 1.end"), then Select all or click a row.
@@ -36,6 +120,39 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   deletes bodies the same way. While a panel is open, the bodies it shows
   picked (Combine's target, say) are the panel's: Delete leaves them alone, and
   a body's menu offers to delete only that body.
+- Move/copy body (MODIFY, key M, or "Move/copy Body 1…" in a body's menu, just
+  above Delete): move bodies by X, Y and Z, and turn them by an angle about X, Y
+  or Z through a pivot (the centre of their box unless you type a point), or
+  about an axis you pick (a construction axis, a straight or round edge, a round
+  face, a sketch line). It turns first, then moves. "Body-Move 1" is added to
+  the history (one undo step; edit, suppress or delete it like any feature). A
+  moved body keeps its name and its faces, so a fillet, a sketch on a face or a
+  Combine made after it still finds them. **Keep a copy** leaves the bodies
+  where they are and moves copies of them instead ("Body 1 (Copy)", new bodies;
+  the feature is "Body-Copy 1"). The Assistant moves and copies bodies the same
+  way, and says where each one is now.
+- Move/copy body has a handle in the view, as Fusion's Move: at the pivot, an
+  arrow along X, Y and Z (red, green, blue, as the view's axes) and a ring about
+  each (about a picked axis: one ring about it). Drag an arrow to move, a ring
+  to turn: the panel's fields show the value as you drag, a label beside the
+  handle says it, and the bodies are drawn there at once. Hold Ctrl for whole
+  millimetres (0.1 in in an inch Part) and steps of 15°. Let go and the model is
+  built there; Done keeps it as one undo step. Escape with the button still down
+  puts the drag back. Typing a value moves the handle too. The camera never
+  turns under the handle.
+- What you made on a moved body goes with it when you change the move or put a
+  Move/copy body in before it: a hole, a slot or a boss sketched on its face
+  stays where it is on the body (it was left behind, with nothing said), and a
+  fillet's edge or a sketch's face on a turned body no longer turns amber with
+  "Reference repaired · check". A construction plane on its face goes along too.
+- While you edit a Move/copy body, the features after it are rolled back (as
+  when you edit a sketch), so the handle drags the bodies as they are just after
+  it and letting go builds them where they were drawn.
+- Taking a body out of the Move/copy body's Bodies field and clicking it again
+  puts it back (it said "That body is a copy this feature makes").
+- The Assistant turns bodies about the axes the panel offers (a plane's normal
+  is refused, with what works), and "Nothing to move" asks it for a distance or
+  an angle instead of a fixed expression.
 - In Magnusim CAD, the desktop edition with no projects, a body has no "Leave
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation
@@ -62,7 +179,8 @@ still in development for Magnusim 0.5.0 (Settings > Assistant: a cloud provider
 with your own key, or a local server on this PC). How to use it: "The Assistant
 in the Part" in `README.md`.
 - In an open Part the Assistant can read the design, find faces and edges,
-  measure, look at pictures of the Part, set parameters, sketch, extrude,
+  measure, check an assembly (parts that overlap, parts loose on their shafts,
+  what a part hits when it turns), look at pictures of the Part, set parameters, sketch, extrude,
   revolve, sweep and loft, drill holes, fillet, chamfer and shell, pattern and
   mirror, combine bodies, name and colour bodies, change, rename, suppress or
   move features, undo its own steps and delete features.

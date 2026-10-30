@@ -1,6 +1,6 @@
 // The Assistant in Magnusim CAD (Daniel 2026-10-29: hide every project and simulation item there,
 // and what the person cannot see the Assistant is not told about either). The host's welcome says
-// projectLinks false: the Part registers the same 21 tools, but the workspace tool has no
+// projectLinks false: the Part registers the same 22 tools, but the workspace tool has no
 // send_to_simulation (enum and words), the direct tool no enclosure kind, fields or words, and help
 // says none of them (features, workspace, details, errors); a call that still names them is
 // refused in plain words. An Enclosure made in Magnusim stays as it is: get_model gives no inputs
@@ -31,7 +31,7 @@ const rowsOf = (r: { data: Row }) => r.data.rows as { about: string; text: strin
 
 describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
   it(
-    'registers the 21 tools without send_to_simulation, the enclosure kind or their words, and help says none of them',
+    'registers the 22 tools without send_to_simulation, the enclosure kind or their words, and help says none of them',
     async () => {
       h = await assistantHarness({ projectLinks: false });
       const reg = h.fake.registrations.at(-1)!;
@@ -45,8 +45,8 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       expect(actions).toHaveLength(37);
       expect(workspace.description).not.toMatch(PROJECT_WORDS);
       const direct = tool('direct');
-      expect((direct.inputSchema.properties.kind as Node).enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'repair', 'retry']);
-      expect(Object.keys(direct.inputSchema.properties)).toEqual(['edit', 'name', 'kind', 'faces', 'distance', 'bodies', 'tool', 'keep_tool']);
+      expect((direct.inputSchema.properties.kind as Node).enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'move_body', 'repair', 'retry']);
+      expect(Object.keys(direct.inputSchema.properties)).toEqual(['edit', 'name', 'kind', 'faces', 'distance', 'bodies', 'tool', 'keep_tool', 'move', 'turn', 'copy']);
       expect(direct.title).toBe('Direct edits');
       expect(JSON.stringify(direct)).not.toMatch(PROJECT_WORDS);
       // No tool says a word of a simulation or the Enclosure (the guide never did).
@@ -58,11 +58,13 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       expect(ws.find((r) => r.about.startsWith('banana_'))!.text).toMatch(/^The banana for scale: never a body\. banana_place/);
       expect(JSON.stringify(ws)).not.toMatch(/simulation/i);
       const features = rowsOf(await h.ok('help', { topic: 'features' }));
-      expect(features.find((r) => r.about === 'direct')!.text).toBe('Direct edits (edit). Fields: edit, name, kind, faces, distance, bodies, tool, keep_tool. Kinds, fields: help details.');
+      expect(features.find((r) => r.about === 'direct')!.text).toBe('Direct edits (edit). Fields: edit, name, kind, faces, distance, bodies, tool, keep_tool, move, turn, copy. Kinds, fields: help details.');
       expect(JSON.stringify(features)).not.toMatch(/simulation|enclosure/i);
       const details = rowsOf(await h.ok('help', { topic: 'details' }));
       expect(JSON.stringify(details)).not.toMatch(/enclosure|fluid/i);
       expect(details.find((r) => r.about === 'direct kinds')!.text).toContain('split: bodies, tool Top|Front|Right');
+      // Move/copy body is the person's in Magnusim CAD too.
+      expect(details.find((r) => r.about === 'direct kinds')!.text).toContain("move_body: bodies (one feature for them all), as the person's Move/copy body");
       const errors = rowsOf(await h.ok('help', { topic: 'errors' }));
       expect(errors.map((r) => r.about)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^(link_failed|no_link|opening_geometry) /)]));
       expect(errors.some((r) => r.about.startsWith('feature_failed '))).toBe(true);
@@ -83,9 +85,9 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       const sendWords = (send as { error: { message: string } }).error.message;
       expect(sendWords).toMatch(/^bad_input: action must be one of roll_back_to, /);
       expect(sendWords).not.toContain('send_to_simulation');
-      const enclose = await h.call('direct', { edit: '', name: '', kind: 'enclosure', faces: [], distance: '', bodies: [], tool: '', keep_tool: false });
+      const enclose = await h.call('direct', { edit: '', name: '', kind: 'enclosure', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: { angle: '', axis: '', pivot: [] }, copy: false });
       expect(enclose).toMatchObject({ ok: false, error: { detail: { reason: 'bad_input' } } });
-      expect((enclose as { error: { message: string } }).error.message).toContain('kind: one of press_pull, delete_faces, split, delete_body, repair, retry.');
+      expect((enclose as { error: { message: string } }).error.message).toContain('kind: one of press_pull, delete_faces, split, delete_body, move_body, repair, retry.');
       expect(h.doc.state.get().doc).toBe(before);
       expect(h.doc.state.get().doc.features.some((f) => f.type === 'enclosure')).toBe(false);
     },

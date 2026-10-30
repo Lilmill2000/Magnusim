@@ -10,15 +10,26 @@
 //          (sketch/regions.ts shortRegions; regions full: each of them, 60, with its place, depth,
 //          box and bounds), its open ends and dangling entities, by the sketch tool's names (r.top,
 //          l1.start), and its inputs in the sketch tool's form (sketch/describe.ts; null when it
-//          cannot be resent). Brief rows list a sketch's regions in short too.
+//          cannot be resent). Brief rows list a sketch's regions in short too. Each reply says
+//          what the person copied in a sketch (clipboard: the copy row's "from clipboard"), if anything.
+// The whole Part (brief or full) also lists `parts`: every body in one short row (name, volume, the
+// size and middle of its box, its colour when set, the feature that made it, hidden), never halved
+// with the budgets (up to PARTS_MAX, the app's cap on a list's items, within PARTS_BYTES), so every
+// part of an assembly can be checked against the request. It comes first in the reply, and the rest
+// fits what the app's result cap (RESULT_DATA_BYTES) leaves: a cut never takes a part's row.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { storedBodyName } from '../doc/features/body-ids';
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
+import { moveWords } from '../features/move_body/words';
+import { DEFAULT_BODY_COLOR } from '../doc/schema';
 import { toModel, ydirOf } from '../features/sketch/plane';
 import { userSelection } from '../lib/selection';
 import { describeFace, isCopyRole, splitMerged } from '../naming/names';
 import { statusOf } from '../sketch/dof';
 import { evaluateDimensions } from '../sketch/model';
+import { clipWords } from '../sketch/tools/clip';
+import { heldClip } from '../sketch/tools/paste';
 import type { AppServices } from '../types/app';
 import type { CallCtx, ReplyBudgets, ToolReply, TurnFacts } from '../types/assistant';
 import type { Feature, FeatureStatus, OriginRef, PlaneFrame, SketchFeature } from '../types/doc';
@@ -29,7 +40,7 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
-import { refBodiesOf, type RefBodies } from './feature-tools';
+import { axisText, refBodiesOf, type RefBodies } from './feature-tools';
 import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { enclosureKept, KEPT_WORDS } from '../features/enclosure/kept';
@@ -47,6 +58,16 @@ import { closestName, closestWords } from './closest';
 export const SKETCH_REGIONS = 60;
 /** Bodies listed (the rest counted). */
 export const BODIES_MAX = 50;
+/** Rows of the parts list at most (the app keeps the first 200 items of a list). */
+export const PARTS_MAX = 200;
+/** The app's cap on a tool result's data (bytes; scripts/server/assistant/sanitize.ts JSON_CAPS.bytes). */
+export const RESULT_DATA_BYTES = 32 * 1024;
+/** Kept for the result's shell and text beside the data (bytes). */
+const RESULT_MARGIN = 2 * 1024;
+/** The rest of a whole-Part reply always has this much room (bytes). */
+const REST_MIN = 4 * 1024;
+/** The parts rows never take more than this (bytes): the rest past it are counted. */
+export const PARTS_BYTES = RESULT_DATA_BYTES - RESULT_MARGIN - REST_MIN;
 /** Selection items in words. */
 export const SELECTION_MAX = 20;
 /** Names listed when a feature is not found. */
@@ -156,6 +177,12 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
     if (made.length) row.made = made;
     const faces = faceRoles(s.rebuild.bodies, f.id);
     if (Object.keys(faces).length) row.faces = faces;
+  } else if (f.type === 'move_body') {
+    // What it does, in words ("moved Body 1 by (20, 0, 0) mm"), and the copies it made.
+    const bodyName = (id: string) => s.rebuild.bodies.find((b) => b.id === id)?.name ?? storedBodyName(s.doc, id) ?? 'a deleted body';
+    row.does = moveWords(f, bodyName, (a) => axisText(s, a));
+    const made = madeBodies(services, s, f);
+    if (made.length) row.made = made;
   }
   return row;
 }
@@ -228,6 +255,41 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
   const last = featureNamer(s)(b.feature);
   if (last) row.last_changed_by = last;
   return row;
+}
+
+/**
+ * Every body built now as one short row: name, volume (mm3; null above EAGER_FACES faces until
+ * measured), the size and middle of its box, its colour when it is not the default, the feature that
+ * made it, hidden when the person hid it. Never halved: the first PARTS_MAX, the rest counted.
+ */
+export async function partRows(services: AppServices, s: DocState): Promise<{ parts: Row[]; more: number }> {
+  const parts: Row[] = [];
+  let size = 2;
+  for (const b of s.rebuild.bodies.slice(0, PARTS_MAX)) {
+    let volume = b.volume;
+    if (volume === null && b.faces <= EAGER_FACES) {
+      try {
+        volume = (await services.doc.measure(b.id)).volume;
+      } catch {
+        // Not measurable now (a rebuild came in between): the row says null.
+      }
+    }
+    const box = b.bbox;
+    const row: Row = {
+      name: b.name,
+      mm3: typeof volume === 'number' ? sig6(volume) : null,
+      size_mm: vec([box[3] - box[0], box[4] - box[1], box[5] - box[2]]),
+      at_mm: vec([(box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2]),
+    };
+    if (b.color && b.color.toLowerCase() !== DEFAULT_BODY_COLOR) row.color = b.color;
+    const maker = bodyMaker(services.doc.features, s.doc, b.id);
+    if (maker) row.by = maker.name;
+    if (!b.visible) row.hidden = true;
+    size += jsonBytes(row) + 1;
+    if (size > PARTS_BYTES) break;
+    parts.push(row);
+  }
+  return { parts, more: Math.max(0, s.rebuild.bodies.length - parts.length) };
 }
 
 /** A selected thing in words ("face Plate.end on Body 1": a face by its label when it has one, else its words). */
@@ -309,6 +371,9 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
     ...(s.rebuild.bodies.length > BODIES_MAX ? { bodies_more: s.rebuild.bodies.length - BODIES_MAX } : {}),
     selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i, labels)),
   };
+  // What the person copied (Ctrl+C in a sketch of any Part): the sketch tool's copy row pastes it ("from clipboard").
+  const clip = await heldClip(services).catch(() => null);
+  if (clip) out.clipboard = `${clipWords(clip)}, copied from ${clip.from}`;
   if (s.rebuild.message) out.rebuild = s.rebuild.message;
   // The pointer to help guide, on the first get_model of each key (a conversation may have kept another workspace's notes).
   if (rt && !rt.guideNoted.has(ctx.key)) {
@@ -536,7 +601,16 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     };
   }
   const base = await partFacts(ctx, s);
-  const data = input.detail === 'full' ? await fitFull(base, services, s, ctx.budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), ctx.budgets);
+  // Every body in one short row, whole and first: the rest of the reply fits the room the parts
+  // leave (at least half the budget), within what the app's result cap leaves after them.
+  const { parts, more } = await partRows(services, s);
+  const listed: Row = { parts, ...(more ? { parts_more: more } : {}) };
+  const room = jsonBytes(listed);
+  const b = ctx.budgets;
+  const cap = Math.max(REST_MIN, RESULT_DATA_BYTES - RESULT_MARGIN - room);
+  const budgets = { ...b, brief: Math.min(cap, Math.max(b.brief / 2, b.brief - room)), full: Math.min(cap, Math.max(b.full / 2, b.full - room)) };
+  const fitted = input.detail === 'full' ? await fitFull(base, services, s, budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), budgets);
+  const data: Row = { ...listed, ...fitted };
   const states = counts(s.doc.features);
   const bad = (states.error ?? 0) + (states.warning ?? 0);
   const nBodies = rebuild.bodies.length;

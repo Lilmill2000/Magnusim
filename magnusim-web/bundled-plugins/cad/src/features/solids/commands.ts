@@ -28,7 +28,7 @@ export async function preselectedEdgesFaces(services: AppServices, opts: { edges
   for (const it of items) {
     if (it.kind === 'edge') {
       try {
-        edges.push(await refOfEdge(kernelLookup(services.kernel), info.shape, info.names ?? null, it.index));
+        edges.push(await refOfEdge(kernelLookup(services.kernel), info, it.index));
       } catch (err) {
         return { refused: err instanceof Error ? err.message : String(err) };
       }

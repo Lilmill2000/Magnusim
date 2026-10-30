@@ -63,7 +63,7 @@ export async function pickFace(services: AppServices, body: BodyInfo, index: num
   if (!name) return { ok: false, reason: `The faces of ${body.name} have no names, so they cannot be kept by a feature` };
   if (self && splitMerged(name).every((n) => featureOfName(n) === self)) return { ok: false, reason: 'That face is made by this feature itself' };
   try {
-    const ref = await refOfFace(lookup ?? kernelLookup(services.kernel), body.shape, names, index);
+    const ref = await refOfFace(lookup ?? kernelLookup(services.kernel), body, index);
     return { ok: true, body: body.id, ref };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
@@ -100,7 +100,7 @@ export async function resolveRefs(ctx: BuildContext, body: BuiltBody, refs: read
   const indices: number[] = [];
   let warning: string | null = null;
   for (const ref of refs) {
-    const r = await resolveFace({ ref, shape: body.shape, names: body.names, lookup: look });
+    const r = await resolveFace({ ref, shape: body.shape, names: body.names, lookup: look, placement: body.placement });
     // Which face, in the words the panels use (review P2/P3 round 2: "Face not found after rebuild" named none).
     if (!r.ok) {
       // P4b (PATTERN, fix round 1 P4): a pattern copy's face that is gone says why.

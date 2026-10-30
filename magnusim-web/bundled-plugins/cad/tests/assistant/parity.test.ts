@@ -18,7 +18,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
 import { keybindsFor } from '../../src/app/keybinds';
-import { AI_TOOLS, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { AI_TOOLS, CHECK, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, SKETCH_TOOLS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { CHECK_CONTROLS } from '../../src/features/check/controls';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
 import { railsFor } from '../../src/ui/left-rails';
@@ -67,6 +68,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
       ['toolbar', toolbarPrefs(services), TOOLBAR],
       ['keybinds', keybindsFor(services), KEYBINDS],
       ['link', services.apis.get().link ?? {}, LINK],
+      ['check', CHECK_CONTROLS, CHECK],
     ];
     for (const [name, obj, table] of methods) for (const k of Object.keys(obj)) if (!table[k]) missing.push(`${name}.${k}`);
     expect(services.apis.get().link, 'bootstrap publishes the project link').toBeTruthy();
@@ -104,7 +106,7 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(missing, 'an Assistant capability with no person path').toEqual([]);
     expect(stale).toEqual([]);
     // Each path is there: the command registered, the control's method on its object, the panel field on a type with a panel.
-    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT };
+    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT, check: CHECK_CONTROLS };
     const bad: string[] = [];
     const check = (where: string, p: PersonPath) => {
       if (p.kind === 'command') {
@@ -147,6 +149,36 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(COMMANDS['solid.hole']).toMatchObject({ tool: 'hole' });
     expect(UI.moveFeature).toMatchObject({ tool: 'edit_feature', field: 'move' });
     expect(DOC.joinSteps).toMatchObject({ tool: 'delete' });
+  });
+
+  it('Paste (Ctrl+V, from this Part or another) reaches the copy row with "from clipboard": the Assistant pastes and reads (get_model clipboard) what the person copied', () => {
+    for (const r of [COMMANDS['sketch.paste'], SKETCH_TOOLS.paste]) expect(r).toEqual({ kind: 'reach', tool: 'sketch', field: 'constraints[].kind', value: 'copy', note: expect.stringMatching(/^value "from clipboard" pastes what the person copied \(Ctrl\+C in a sketch of any Part\); get_model's clipboard says what is held$/) });
+    expect(AI_TOOLS.sketch['constraints[].kind=copy']).toEqual(command('sketch.paste'));
+  });
+
+  it("Move/copy body's drag handle is the person's other way to the same fields: its arrows set move, its rings turn's angle and axis; its preview reaches move", () => {
+    expect(AI_TOOLS.direct.move).toEqual({ kind: 'panel', type: 'move_body', field: 'move', also: expect.stringMatching(/^the arrows of Move\/copy body's handle in the view/) });
+    expect(AI_TOOLS.direct['turn.angle']).toEqual({ kind: 'panel', type: 'move_body', field: 'angle', also: expect.stringMatching(/^the rings of Move\/copy body's handle in the view/) });
+    expect(AI_TOOLS.direct['turn.axis']).toMatchObject({ kind: 'panel', type: 'move_body', field: 'axis', also: expect.stringMatching(/rings/) });
+    // The handle sets nothing the Assistant does not: the same fields of the same feature.
+    expect(VIEWPORT.previewMotion).toMatchObject({ kind: 'reach', tool: 'direct', field: 'move' });
+    expect(VIEWPORT.drawnBox).toMatchObject({ kind: 'auto' });
+  });
+
+  it("the assembly checks both ways: each kind and field of the check tool is a control of INSPECT's Check panel, and each of its controls reaches the check tool", async () => {
+    const services = await boot();
+    expect(services.modules.tool('inspect.check'), "the Check panel is the inspect.check command's tool").toBeTruthy();
+    for (const k of ['interference', 'stack', 'sweep'] as const) {
+      expect(AI_TOOLS.check[`kind=${k}`]).toEqual({ kind: 'control', table: 'check', method: k });
+      expect(CHECK[k]).toEqual({ kind: 'reach', tool: 'check', field: 'kind', value: k });
+    }
+    expect(AI_TOOLS.check.bodies).toEqual({ kind: 'control', table: 'check', method: 'bodies' });
+    expect(AI_TOOLS.check.clearance).toEqual({ kind: 'control', table: 'check', method: 'clearance' });
+    expect(AI_TOOLS.check.axis).toEqual({ kind: 'control', table: 'check', method: 'axis' });
+    expect(CHECK.play).toMatchObject({ tool: 'check', field: 'clearance' });
+    expect(CHECK.turning).toMatchObject({ tool: 'check', field: 'bodies' });
+    expect(CHECK.row).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'select' });
+    expect(Object.keys(CHECK).sort()).toEqual(Object.keys(CHECK_CONTROLS).sort());
   });
 
   it('the workspace tool reaches what this lane added: send to the simulation, the rollback bar, the view, the banana, Export', () => {

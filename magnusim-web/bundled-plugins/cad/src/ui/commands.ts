@@ -264,9 +264,9 @@ export function installUi(services: AppServices): () => void {
         if (item.kind === 'face' || item.kind === 'edge' || item.kind === 'vertex' || item.kind === 'body') {
           if (items.length && !isSep(items[items.length - 1])) items.push({ sep: true, id: 'sep-modules' });
           const menu = ui.bodyMenu(item.body);
-          bodyDelete = menu.filter((e) => e.id === 'body-delete');
+          bodyDelete = menu.filter((e) => e.id === 'body-move' || e.id === 'body-delete');
           // The feature's menu below ends with the keybind items: not twice.
-          items.push(...menu.filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature' && e.id !== 'body-delete' && e.id !== 'sep-body-delete' && !(f0 && (e.id === 'sep-keybinds' || e.id.startsWith('set-keybind')))));
+          items.push(...menu.filter((e) => e.id !== 'body-edit' && e.id !== 'sep-body-feature' && e.id !== 'body-move' && e.id !== 'body-delete' && e.id !== 'sep-body-delete' && !(f0 && (e.id === 'sep-keybinds' || e.id.startsWith('set-keybind')))));
         }
         const f = ui.featureOfItem(item);
         if (f) {

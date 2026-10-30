@@ -21,7 +21,9 @@
 //     features as one undo group;
 //   - the person's Ctrl+Z between the sketch and the cut (forced), or while "Ask each step" asks
 //     "keep it?", takes the whole hole back at once (no sketch left, nothing of it stored, the
-//     history as before the call; Undo's hint says so), and the call answers taken_over (undo).
+//     history as before the call; Undo's hint says so), and the call answers taken_over (undo);
+//   - a hole drilled in a block that Move/copy body moved stays in it when the move is edited (its
+//     distance and a turn): the sketch's face reference keeps where the block was (review fix).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { negated } from '../../src/assistant/tools/hole';
@@ -49,6 +51,7 @@ const HOLE = (o: Row = {}): Row => ({ name: '', face: 'Base.end', centers: [], d
 const CTR = (x: string, y: string, z: string) => ({ x, y, z });
 const P = (name: string, expr: string) => ({ name, kind: 'length', expr, comment: '', rename_to: '' });
 const EDIT = (feature: string, o: Row = {}) => ({ feature, set: [], rename_to: '', suppress: 'keep', move: '', ...o });
+const DIRECT = (o: Row = {}): Row => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: { angle: '', axis: '', pivot: [] }, copy: false, shape: 'box', padding: 'zero', sides: [], ...o });
 
 /** A sketch's dimension expressions by id. */
 function dims(x: AssistantHarness, sketch: string): Record<string, string> {
@@ -396,6 +399,30 @@ describe('hole', () => {
       const kept = await ok(h, 'edit_feature', EDIT('Tab', { suppress: 'suppress' }));
       expect(kept.data.warnings).toContain('Notch cuts nothing away from Body 1');
       expect(names(h)).toContain('Notch');
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a hole in a block Move/copy body moved stays in it when the move is edited and turned: its sketch and cut stay ok, the volume keeps it',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      await ok(h, 'direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['100 mm', '0 mm', '0 mm'] }));
+      // On the moved top face, 12 mm along X and -7 mm along Y from the block's middle (100, 0).
+      const r = await ok(h, 'hole', HOLE({ centers: [CTR('112 mm', '-7 mm', '')], diameter: '3 mm', depth: 'blind', distance: '2 mm' }));
+      expect(r.data).toMatchObject({ feature: { name: 'Hole 1', state: 'ok' }, centers_mm: [[112, -7, 10]] });
+      const holed = BLOCK - PI * 2.25 * 2;
+      expect(volume(h)).toBeCloseTo(holed, 4);
+      // The move edited: 50 mm, turned 90 deg about Z through the block's centre (0, 0, 5) first. The
+      // hole goes with it: (12, -7) from the middle turns to (7, 12), then 50 along X.
+      await ok(h, 'direct', DIRECT({ edit: 'Body-Move 1', kind: 'move_body', bodies: ['Body 1'], move: ['50 mm', '0 mm', '0 mm'], turn: { angle: '90 deg', axis: 'Z', pivot: [] } }));
+      const st = h.doc.state.get();
+      for (const name of ['Body-Move 1', 'Hole 1 sketch', 'Hole 1']) expect(st.rebuild.features[featureNamed(h, name).id], name).toMatchObject({ state: 'ok' });
+      expect(volume(h)).toBeCloseTo(holed, 4);
+      const [cyl] = await cylinders(h, 'Hole 1.side(h1)');
+      expect(offAxis([57, 12, 9], cyl.point, cyl.dir)).toBeLessThan(1e-6);
+      expect(Math.abs(cyl.dir[2])).toBeCloseTo(1, 9);
     },
     HOLE_MS,
   );

@@ -260,6 +260,15 @@ export interface ViewportHandle {
   setVisibility(id: BodyId, visible: boolean): void;
   /** B-rep vertex positions for a body (kernel order), when they arrive after its tessellation. */
   setVertices(id: BodyId, tessKey: string, vertices: Float32Array): void;
+  /**
+   * Draw these bodies moved by a rigid motion (3x4 row-major, as the kernel's `copies` takes it;
+   * null: where they are built), with no rebuild: a drag handle's preview (Move/copy body's).
+   * Their faces and edges move; picking, framing, the section's caps and the highlight of picked
+   * edges keep the bodies as built. A body drawn anew (a new tessKey) starts unmoved.
+   */
+  previewMotion?(ids: readonly BodyId[], matrix: readonly number[] | null): void;
+  /** The box of a body as the view draws it now (a preview's motion included), or null (tests). */
+  drawnBox?(id: BodyId): FrameBox | null;
   /** Show these items as selected (faces/edges/vertices in pick green, bodies in the core's body blue, planes). */
   highlight(items: SelectionItem[]): void;
   /** Temporary hover highlight for hover in lists (the selection list hovers a face); [] clears it. */

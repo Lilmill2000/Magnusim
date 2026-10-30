@@ -20,7 +20,7 @@ const dist3 = (a: Vec3, b: Vec3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - 
 /** What reading a link needs: the bodies as they are before the sketch, the kernel, words. */
 export interface LinkEnv {
   kernel: KernelAdapter;
-  bodies: ReadonlyMap<BodyId, { shape: ShapeId; names: FaceNames | null }>;
+  bodies: ReadonlyMap<BodyId, { shape: ShapeId; names: FaceNames | null; placement?: number[] | null }>;
   bodyName(id: BodyId): string;
   featureName(id: FeatureId): string | null;
 }
@@ -170,7 +170,7 @@ export async function projectFace(env: LinkEnv, shape: ShapeId, names: FaceNames
     let key = `#${k}`;
     if (c.edge != null) {
       try {
-        key = (await refOfEdge(lookup, shape, names, c.edge)).name;
+        key = (await refOfEdge(lookup, { shape, names }, c.edge)).name;
       } catch {
         /* an edge with no name keeps its place in the loop */
       }
@@ -228,13 +228,13 @@ export async function readLink(link: SketchLink, plane: PlaneFrame, env: LinkEnv
     const ref: PersistentRef = src.ref;
     const repaired = (how: string) => (how !== 'name' ? { warning: `${sourceWords(src, env)}: reference repaired · check` } : {});
     if (src.kind === 'vertex') {
-      const res = await resolveVertex({ ref, shape: body.shape, names: body.names, lookup });
+      const res = await resolveVertex({ ref, shape: body.shape, names: body.names, lookup, placement: body.placement });
       if (!res.ok) return lost(src, env, 'not found after rebuild');
       const r = await projectItem(env.kernel, body.shape, plane, { vertex: res.index });
       return r.curves[0] ? { state: 'ok', curves: [{ key: 'v', curve: r.curves[0].curve }], ...repaired(res.how) } : lost(src, env, `: ${r.message ?? 'it cannot be projected'}`);
     }
     if (src.kind === 'pierce') {
-      const res = await resolveEdge({ ref, shape: body.shape, names: body.names, lookup });
+      const res = await resolveEdge({ ref, shape: body.shape, names: body.names, lookup, placement: body.placement });
       if (!res.ok) return lost(src, env, 'not found after rebuild');
       const ev = await env.kernel.call('edge_eval', { id: body.shape, edge: res.index, plane: { origin: [...plane.origin] as Vec3, normal: [...plane.normal] as Vec3 } });
       const xs = ev.result.crossings.map((c) => c.p);
@@ -244,12 +244,12 @@ export async function readLink(link: SketchLink, plane: PlaneFrame, env: LinkEnv
       return { state: 'ok', curves: [{ key: 'p', curve: { kind: 'point', p: toPlaneUv(plane, best) } }], ...repaired(res.how) };
     }
     if (src.kind === 'edge') {
-      const res = await resolveEdge({ ref, shape: body.shape, names: body.names, lookup });
+      const res = await resolveEdge({ ref, shape: body.shape, names: body.names, lookup, placement: body.placement });
       if (!res.ok) return lost(src, env, 'not found after rebuild');
       const r = await projectItem(env.kernel, body.shape, plane, { edge: res.index });
       return r.curves[0] ? { state: 'ok', curves: [{ key: 'e', curve: r.curves[0].curve }], ...repaired(res.how) } : lost(src, env, `: ${r.message ?? 'it cannot be projected'}`);
     }
-    const res = await resolveFace({ ref, shape: body.shape, names: body.names, lookup });
+    const res = await resolveFace({ ref, shape: body.shape, names: body.names, lookup, placement: body.placement });
     if (!res.ok) return lost(src, env, 'not found after rebuild');
     const r = await projectFace(env, body.shape, body.names, plane, res.index);
     return typeof r === 'string' ? lost(src, env, `: ${r}`) : { state: 'ok', curves: r, ...repaired(res.how) };

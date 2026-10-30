@@ -27,7 +27,7 @@ const MODEL_ON_BAR: Record<string, string[]> = {
   sketch: ['sketch.new'],
   solid: ['solid.extrude', 'solid.revolve', 'solid.sweep', 'solid.loft', 'solid.hole'],
   pattern: ['pattern.linear', 'pattern.circular', 'pattern.mirror'],
-  modify: ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.combine', 'modify.parameters'],
+  modify: ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters'],
   construct: ['construct.plane', 'construct.axis', 'construct.point'],
   cfd: ['cfd.enclosure'],
   inspect: ['inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find'],
@@ -130,7 +130,7 @@ test('cad:p4b-toolbar-default the model toolbar shows every command at 1920, 160
   // Sketch mode at 1920: MODIFY in the review's order (P1), every small button's name on one line (P3).
   await page.setViewportSize({ width: 1920, height: 1080 });
   await sketchOnTop(frame);
-  expect(await groupCommandLabels(frame, 'sketch-modify')).toEqual(['Trim', 'Extend', 'Offset', 'Fillet', 'Chamfer', 'Mirror', 'Linear pattern', 'Circular pattern', 'Project', 'Intersect']);
+  expect(await groupCommandLabels(frame, 'sketch-modify')).toEqual(['Trim', 'Extend', 'Offset', 'Fillet', 'Chamfer', 'Mirror', 'Linear pattern', 'Circular pattern', 'Project', 'Intersect', 'Import SVG/DXF']);
   const lines = await tb(frame)
     .locator('.tb-btn.is-small[data-command] .tb-txt')
     .evaluateAll((els) =>

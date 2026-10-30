@@ -1,7 +1,9 @@
 // Where a sketch lies: an origin plane, or a planar face found again at every
 // rebuild through its stored reference (proposal §4.5 point 5: when the face
 // is lost the sketch keeps its stored plane and says so). Also the plane <->
-// model conversions the overlays use.
+// model conversions the overlays use. A face a Move/copy body turned or moved
+// since the sketch was put on it carries the sketch along: the frame is taken
+// where the face was then and moved as the body was (placedFaceFrame).
 // Owner: P3-PROFILES (src/features/sketch/).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { ORIGIN_PLANES, type PlaneFrame, type SketchFeature, type Vec2, type Vec3 } from '../../types/doc';
@@ -9,6 +11,7 @@ import type { BuildContext } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
 import { kernelLookup } from '../../naming/refs';
 import { resolveFace } from '../../naming/resolve';
+import { invertPlacement, mapDir, mapFrame, mapPoint, motionBetween, type Placement } from '../../naming/placement';
 
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -33,6 +36,18 @@ export function faceFrame(normal: Vec3, pointOnPlane: Vec3): PlaneFrame {
   const seed: Vec3 = Math.abs(n[0]) > cos1 ? [0, 1, 0] : [1, 0, 0];
   const x = unit(sub(seed, scale(n, dot(seed, n))));
   return { origin: origin.map((v) => (Object.is(v, -0) ? 0 : v)) as Vec3, normal: n, xdir: x };
+}
+
+/**
+ * faceFrame of a face that `motion` (a Move/copy body's rigid turn and move, null for none) took
+ * from where it was when the sketch was put on it: the frame where it was, moved with it. With no
+ * motion it is faceFrame; a body slid along the face or turned about its normal takes its sketch
+ * along (faceFrame alone keeps the origin and X where the model's are).
+ */
+export function placedFaceFrame(normal: Vec3, pointOnPlane: Vec3, motion: Placement | null): PlaneFrame {
+  const back = motion ? invertPlacement(motion) : null;
+  if (!motion || !back) return faceFrame(normal, pointOnPlane);
+  return mapFrame(motion, faceFrame(mapDir(back, normal), mapPoint(back, pointOnPlane)));
 }
 
 /** The plane's own y direction (normal x xdir). */
@@ -101,11 +116,12 @@ export async function resolveSupport(f: Pick<SketchFeature, 'name' | 'support' |
   if (!body.names) return lost('its body has no face names');
   const lookup = kernelLookup(ctx.kernel);
   try {
-    const r = await resolveFace({ ref: s.face, shape: body.shape, names: body.names, lookup });
+    const r = await resolveFace({ ref: s.face, shape: body.shape, names: body.names, lookup, placement: body.placement });
     if (!r.ok) return lost(r.message);
     const [face] = await lookup.faces(body.shape, [r.index]);
     if (!face || face.type !== 'plane' || !face.normal || !face.centroid) return lost('the face is no longer flat');
-    return { plane: faceFrame(face.normal as Vec3, face.centroid as Vec3), lost: false, ...(r.how !== 'name' ? { warning: `${f.name}: ${r.warning ?? 'Reference repaired · check'}` } : {}) };
+    const plane = placedFaceFrame(face.normal as Vec3, face.centroid as Vec3, motionBetween(body.placement, s.face.placement));
+    return { plane, lost: false, ...(r.how !== 'name' ? { warning: `${f.name}: ${r.warning ?? 'Reference repaired · check'}` } : {}) };
   } catch (err) {
     const e = err as KernelCallError;
     if (e.kind === 'occt' || e.kind === 'input' || e.kind === 'internal') return lost(e.message);

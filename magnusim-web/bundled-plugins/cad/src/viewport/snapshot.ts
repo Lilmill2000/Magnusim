@@ -97,13 +97,14 @@ export function rowsTopDown(src: Uint8Array, width: number, height: number): Uin
 
 /**
  * Overlay layers a picture leaves out: the manipulators and markers (the Extrude's arrow, the
- * Enclosure's handles, Measure's markers, the pattern markers, the solids' pick marks, sketch
+ * Enclosure's handles, Move/copy body's handle, Measure's markers, the pattern markers, the solids' pick marks, sketch
  * mode's plane picker) and the bananas for scale. The sketches and the reference planes stay.
  * tests/viewport/snapshot.test.ts pins each id against its owner's.
  */
 export const SNAPSHOT_HIDDEN_LAYERS: ReadonlySet<string> = new Set([
   'extrude.handle',
   'enclosure.handles',
+  'move_body.handle',
   'p2-measure',
   'pattern.markers',
   'solids.picks',

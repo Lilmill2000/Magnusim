@@ -360,8 +360,8 @@ test('cad:p3-sketch-escape-typed Escape never finishes a sketch; typed length an
   await page.mouse.click(rx, ry, { button: 'right' });
   const menu = frame.locator('[data-cad-menu] [data-menu-item]');
   // P4b SELECT: Construction is a state item; "Look at sketch" is "Normal to" (one name everywhere).
-  // Keybinds: Delete's next to Delete; Finish sketch's and Place or finish's after Finish sketch.
-  await expect(menu).toHaveText(['Construction', 'Delete', 'Set keybind for Delete…', 'Normal to', 'Finish sketch', 'Set keybind for Finish sketch…', 'Set keybind for Place or finish…']);
+  // Keybinds: Delete's next to Delete; Copy's, Paste's, Finish sketch's and Place or finish's after Finish sketch.
+  await expect(menu).toHaveText(['Construction', 'Copy', 'Delete', 'Set keybind for Delete…', 'Paste', 'Normal to', 'Finish sketch', 'Set keybind for Copy…', 'Set keybind for Paste…', 'Set keybind for Finish sketch…', 'Set keybind for Place or finish…']);
   await frame.locator('[data-cad-menu] [data-menu-item="construction"]').click();
   await sketchIdle(page);
   const construction = await workspaceFrame(page).evaluate(

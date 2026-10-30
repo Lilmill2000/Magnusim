@@ -1,10 +1,10 @@
-// The CAD Part's 21 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
+// The CAD Part's 22 Assistant tools against the app's own rules (CAD tools spec §3.0, §12.2): the
 // schemas the Part registers (bundled-plugins/cad/src/assistant/schemas.ts, loaded here with
 // Node's type stripping, as is its guide) pass the app's schema check; the strict dialects are
-// sent only the keywords they take; in a CAD turn the app offers 30 tools (the Part's 21 by name
+// sent only the keywords they take; in a CAD turn the app offers 31 tools (the Part's 22 by name
 // first, then its 9 host and core tools by name: core host tools spec §12.4, §15), strict as
 // strictOf grants them (the workspace's first, by name) on the first cloud dialect; no CAD property is optional;
-// the 30 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
+// the 31 fit the local budget of a 32K context and nothing is cut (their tokens printed); each
 // CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
@@ -66,7 +66,7 @@ function offered({ local = false, tools: cad = CAD_TOOLS } = {}) {
   const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: cad.map((t) => ({ ...t })), guide: GUIDE };
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
-  assert.equal(verdict.accepted.length, 21);
+  assert.equal(verdict.accepted.length, 22);
   // The app page's own registration in the same tab (C7), where it is: the Part's workspace.
   const core = registry.setCore('T1', 'L1', { projectId: 'p1', studyId: 's1', place: 'workspace', tools: CORE_TOOLS.map((t) => ({ ...t })), guide: '' });
   assert.deepEqual(core.refused, []);
@@ -83,7 +83,7 @@ function walk(node, path = '(root)', out = []) {
 
 describe("the CAD Part's tools by the app's rules", () => {
   it('every schema passes the app\'s check', () => {
-    assert.equal(CAD_TOOLS.length, 21);
+    assert.equal(CAD_TOOLS.length, 22);
     for (const t of CAD_TOOLS) assert.deepEqual(checkSchema(t.inputSchema), { ok: true }, t.name);
   });
 
@@ -98,7 +98,7 @@ describe("the CAD Part's tools by the app's rules", () => {
     }
   });
 
-  it("a CAD turn offers 30: the Part's 21 by name first, then the app's 9 for a workspace; strict as strictOf grants them: the Part's first, by name", () => {
+  it("a CAD turn offers 31: the Part's 22 by name first, then the app's 9 for a workspace; strict as strictOf grants them: the Part's first, by name", () => {
     const { tools, dropped } = offered();
     assert.deepEqual(dropped, []);
     const names = tools.map((t) => t.name);
@@ -110,12 +110,12 @@ describe("the CAD Part's tools by the app's rules", () => {
     assert.equal(flags.filter(Boolean).length, STRICT_LIMITS.tools);
   });
 
-  it('the 30 fit the local budget of a 32K context (half of it): nothing is cut', () => {
+  it('the 31 fit the local budget of a 32K context (half of it): nothing is cut', () => {
     const { tools, dropped, budget } = offered({ local: true });
-    assert.equal(tools.length, 30);
+    assert.equal(tools.length, 31);
     assert.deepEqual(dropped, []);
     const tokens = tools.reduce((n, t) => n + toolTokens(t), 0);
-    console.log(`[assistant-cad-tools] the 30 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
+    console.log(`[assistant-cad-tools] the 31 tools: about ${tokens} tokens by the budget's rule; budget ${budget}`);
     assert.equal(budget, 16_384);
     assert.ok(tokens <= budget, `${tokens} tokens`);
   });
@@ -152,7 +152,7 @@ describe("the CAD Part's tools by the app's rules", () => {
     assert.ok(chars <= LOCAL_PREFIX_MAX, `${chars} characters`);
   });
 
-  it("in Magnusim CAD (projectLinks false) the Part's tools make that prefix shorter: the same 21, without a simulation's or the Enclosure's fields", () => {
+  it("in Magnusim CAD (projectLinks false) the Part's tools make that prefix shorter: the same 22, without a simulation's or the Enclosure's fields", () => {
     const edition = cadToolsFor({ projectLinks: false });
     assert.deepEqual(edition.map((t) => t.name), CAD_TOOLS.map((t) => t.name));
     for (const t of edition) assert.deepEqual(checkSchema(t.inputSchema), { ok: true }, t.name);

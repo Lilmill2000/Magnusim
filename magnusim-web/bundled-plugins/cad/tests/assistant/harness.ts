@@ -19,6 +19,7 @@ import { createDocService } from '../../src/doc';
 import chamferModule from '../../src/features/chamfer';
 import combineModule from '../../src/features/combine';
 import deleteBodyModule from '../../src/features/delete_body';
+import moveBodyModule from '../../src/features/move_body';
 import deleteFacesModule from '../../src/features/delete_faces';
 import enclosureModule from '../../src/features/enclosure';
 import extrudeModule from '../../src/features/extrude';
@@ -55,7 +56,7 @@ import { realKernelAnywhere } from '../features/p2/kernel-anywhere';
 import { solverAnywhere } from './solver-anywhere';
 
 /** The feature types a tool may make (every module that makes one). */
-export const FEATURE_MODULES: CadModule[] = [sketchModule, extrudeModule, revolveModule, sweepModule, loftModule, filletModule, chamferModule, shellModule, patternModule, combineModule, refgeomModule, pressPullModule, deleteFacesModule, splitModule, enclosureModule, deleteBodyModule];
+export const FEATURE_MODULES: CadModule[] = [sketchModule, extrudeModule, revolveModule, sweepModule, loftModule, filletModule, chamferModule, shellModule, patternModule, combineModule, refgeomModule, pressPullModule, deleteFacesModule, splitModule, enclosureModule, deleteBodyModule, moveBodyModule];
 
 /** Sketch mode's panel, a stand-in (the UI controller opens a sketch through the panel its type has). */
 const SKETCH_PANEL: CadModule = { id: 'sketch-panel', panels: { sketch: (() => null) as never } };

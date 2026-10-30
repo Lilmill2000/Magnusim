@@ -6,7 +6,8 @@
 // and frames (infer and the solver's rules in sketch_tools), `checks` what to verify and how,
 // `traps` the common mistakes, `examples` the index
 // of the worked parts, `sketch_tools` fix, driven dimensions, places and the person's sketch tools
-// as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link)
+// as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link,
+// import of an attached drawing, copy as the person's Copy and Paste)
 // with examples, and how a pattern's values change later. The example topics are the worked parts of examples.ts, one row per call
 // with its whole input and its key results ({about, text, tool, input, result}: the call sits in
 // the row itself, so a sketch's `at` lists stay at depth 7 of the reply's data, inside the app's
@@ -64,6 +65,7 @@ function errorRows(projects = true): HelpRow[] {
 /** Each tool's rules beyond its description: legal combinations, what it maps to, the faces it names. */
 const FEATURE_NOTES: Readonly<Record<string, string>> = {
   body: 'One step. A body name is unique among bodies; it may equal a feature name. exclude leaves the body out of the geometry the project simulates.',
+  check: 'help assemblies.',
   combine:
     'targets keep the result; tools go unless keep_tools. Entries: a body name, "bodies of <feature>" (a pattern\'s copies), "all bodies"; repeats are dropped and a target is taken out of tools. A join of bodies that do not touch is one body of several solids (a warning).',
   construct:
@@ -71,19 +73,19 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   direct:
     'Kinds, fields: help details.',
   delete:
-    'The person is asked first. in_use (detail.users) while a feature not listed uses one: list those too, or change them first. One step; what fails afterwards is in broke. The person gets them back with Undo; for your own calls use undo.',
+    'in_use (detail.users) while a feature not listed uses one: list those too, or change them first. One step; what fails afterwards is in broke.',
   edit_feature:
     'set: the fields get_model detail full lists for the feature (values; choices: help details) or a sketch dimension id (d, h1x): a value edit, refused (broke_downstream) when a working feature would fail; flipped names a sketch a dimension mirrored. rename_to, suppress and move ("before X", "after X", "end") go in the same step.',
   extrude:
     'face, direction: help details. Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
-  find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets. count is every match, limit only cuts rows.',
+  find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets.',
   get_model:
     "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit. user_changes: what the person changed since your last call (while this one ran too). editable false says why. Holes, a brief short of room: help details.",
   help: 'Fixed text; no Part needed. Every field of every tool is required: "", [] or false when unused.',
   hole:
     'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
   measure:
-    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. One body: volume, area, centroid, bbox, solids, shells, voids. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
+    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
   modify:
     'fillet, chamfer: a face (or "edges of <face>") is kept as the face, a live set; an edge ("A & B", #e3) a fixed set; kept_as says which. size2 "" is an equal chamfer; flip swaps. shell: targets are the faces taken off; inward true keeps the outer size. One body per call. Faces made: <Name>.fillet(k), <Name>.chamfer(k), <Name>.inner(<face>).',
   pattern:
@@ -96,7 +98,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   sweep_loft:
     "sweep: profiles are regions of one sketch; draw them on a plane through the path's start, square to it; path curves run end to end. loft: one region per sketch, in order, none with a hole. Faces: <Name>.side(<profile entity>@<path entity>) (<Name>.side(o): every side swept from o), <Name>.start, <Name>.end.",
   undo: 'steps n: your newest n calls of this request, back to before the oldest. previous_turn true (steps 0): the whole previous request, while it is the newest change. not_own_step when the person changed the Part after one of them.',
-  workspace: 'help workspace has every action. Only reheal is an undo step; the rest is view or session state and says so (undo_step false). The person\'s view moves only with person_asked true or while they have not moved it.',
+  workspace: 'help workspace has every action. Only reheal is an undo step (the rest says undo_step false). The person\'s view moves only with person_asked true or until they move it.',
   view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
@@ -303,6 +305,16 @@ const sketchToolRows = (): HelpRow[] => [
   { about: 'later', text: 'A pattern or offset keeps its row\'s id. edit_feature on the sketch sets its values: "<id>.count", "<id>.spacing", "<id>.angle", "<id>.count2", "<id>.spacing2", "<id>.angle2" (linear), "<id>.count", "<id>.angle" ("full" for the whole circle; circular), "<id>.distance" (offset); copies are made or removed. A replace keeps a row sent with its id (new values lay it out again), and removes one left out.' },
   { about: 'project and intersect', text: 'project [selector]: a face (its outer edges), an edge or a vertex of a body, or a body (its silhouette along the sketch normal), as fixed curves linked to the model (they follow it at every rebuild). intersect [body]: where the sketch plane cuts the body. One per row; the curves are "<id>" (one) or "<id>.1", "<id>.2"... Constrain to them, or trim and offset them after break_link. A replace keeps a row sent with its id (its refs are not read again).' },
   { about: 'break_link', text: 'break_link [curves or a project/intersect row id]: the linked curves become ordinary geometry where they are; constraints on them stay.' },
+  {
+    about: 'import',
+    text: `import [attachment id]: a drawing the person attached (SVG or DXF: the attachment_id att-... of an "Attached drawing" line of their message), read as data and added as the person's Import SVG/DXF adds it: lines, arcs, circles, ellipses, splines and points; ends that meet share one point; no relations (under-defined: fix or dimension what must hold). entities may be [] with it. value "" or any of "scale <mm per drawing unit>; place origin|centre; layers <a>, <b>": the scale is the file's own by default (SVG: its width over its viewBox, else 96 px per inch; DXF: $INSUNITS, none read as mm), place origin puts the drawing's origin on the sketch's, centre its middle; layers (DXF) default to every layer the file has on. made gives read, skipped (text; scripts and links never run or fetched), size, open_ends, scale, layers and notes; its curves are "<id>.1", "<id>.2"... At most 20 MB, and a weight for the sketch solver of 10,000 (each point 1, a circle 1 more, an arc or ellipse 20 more, a partial ellipse 40 more): a heavier drawing is refused with its weight (leave layers out). One-shot: a replace that sends it again imports again. Example: {id:"i1", kind:"import", refs:["att-0123456789abcdef"], value:"place centre"}.`,
+  },
+  {
+    about: 'copy',
+    text: 'copy [items..., at(u, v)?]: new geometry copied from the items (entities, whole macros "r", or "all") as the person\'s Copy and Paste make it: construction kept; the relations and dimensions between copied items made again on the copies (a dimension keeps its expression); those that also tie anything not copied are left out, and made says how many (left_out, and a warning). at(u, v) puts the middle of the copy\'s box there; value "offset <du>, <dv>" moves it by that many mm instead; neither: where it was. value "from <sketch>" copies another sketch of this Part\'s items (its names as get_model gives them, or "all") into this one, at the same u, v whatever plane each lies on. "from clipboard" pastes what the person copied with Ctrl+C (in any Part; get_model\'s clipboard says what): all of it (refs [] or ["all"]), its copies "<id>.1", "<id>.2"... A dimension whose expression reads otherwise here takes the value it had (a warning says so). entities may be [] with it. Copies are "<id>.<item>" in later rows ("k1.c1", "k1.r.top"); get_model reads them back as plain entities. One-shot: a replace that sends it again copies again. Example: {id:"k1", kind:"copy", refs:["r", "c1", "at(60, 0)"], value:""}.',
+  },
+  // The sketch tool's answer (its description's last sentence, moved here for the local prefix).
+  { about: 'answer', text: "The sketch tool returns state, dof, free, moved, regions (r1...) and made (what each of these rows made)." },
   // v0.5.0: help sketch holds every entity kind within its size; the solver's rules sit here.
   { about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours, or cannot hold with one, is left out and said so (dropped_inferred, and a warning naming which).' },
   { about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." },
@@ -376,11 +388,11 @@ const detailRows = (enclosure = true): HelpRow[] => [
   },
   {
     about: 'direct kinds',
-    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"...' + (enclosure ? ' enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid.' : '') + ' delete_body: bodies (one feature for them all) leave the model from this point in the history, as the person\'s Delete on a body in the tree; later features that use them fail; delete or suppress the feature to bring them back (edit changes which bodies). repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
+    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"...' + (enclosure ? ' enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid.' : '') + ' delete_body: bodies (one feature for them all) leave the model from this point in the history, as the person\'s Delete on a body in the tree; later features that use them fail; delete or suppress the feature to bring them back (edit changes which bodies). move_body: bodies (one feature for them all), as the person\'s Move/copy body: turn {angle, axis, pivot} first, then move [X, Y, Z] (lengths; [] none). axis X, Y or Z turns about that direction through pivot [X, Y, Z] ([] the centre of the bodies\' box just before it), or an axis selector (X axis: the origin axis itself, a construction axis, a straight or round edge, "axis of <round face>") with pivot []. Without copy the bodies keep their names and faces, so later features still find them; copy true leaves them and moves copies "<body> (Copy)" (new bodies). The reply gives each moved body or copy and the middle of its box (at_mm). repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
   },
   {
     about: 'edit_feature choices',
-    text: 'set rows with a choice field and one of its words (on/off: "true" or "false"; get_model full shows choices now). extrude, revolve: flip, op (new, join, cut, intersect). sweep: orientation (follow, fixed), op. loft: ruled, op. chamfer: flip, mode (distance, two). shell: direction (inside, outside). combine: op (join, cut, intersect), keep_tools. linear pattern: op (source, new, join, cut, intersect), flip, symmetric, mode (spacing, extent), flip2, symmetric2, mode2. circular pattern: op, flip, symmetric, mode (full, angle). mirror: op. split: plane (Top, Front, Right) by a plane, keep_tool by a body.' + (enclosure ? ' enclosure: shape (box, cylinder), axis (X, Y, Z), padding (zero, percent, fixed).' : '') + ' construction plane, axis: method, flip; point: method, along (distance, percent), from_end. A change that leaves the feature incomplete (a method without its picks) is refused: resend it with its tool.',
+    text: 'set rows with a choice field and one of its words (on/off: "true" or "false"; get_model full shows choices now). extrude, revolve: flip, op (new, join, cut, intersect). sweep: orientation (follow, fixed), op. loft: ruled, op. chamfer: flip, mode (distance, two). shell: direction (inside, outside). combine: op (join, cut, intersect), keep_tools. linear pattern: op (source, new, join, cut, intersect), flip, symmetric, mode (spacing, extent), flip2, symmetric2, mode2. circular pattern: op, flip, symmetric, mode (full, angle). mirror: op. split: plane (Top, Front, Right) by a plane, keep_tool by a body. move_body: copy, about (X, Y, Z).' + (enclosure ? ' enclosure: shape (box, cylinder), axis (X, Y, Z), padding (zero, percent, fixed).' : '') + ' construction plane, axis: method, flip; point: method, along (distance, percent), from_end. A change that leaves the feature incomplete (a method without its picks) is refused: resend it with its tool.',
   },
   {
     about: 'extrude face and direction',
@@ -393,6 +405,83 @@ const detailRows = (enclosure = true): HelpRow[] => [
   {
     about: 'measure totals and checks',
     text: 'Two bodies: total beside the pair. 3 to 32 bodies (all bodies): total {bodies, volume_mm3, area_mm2, centroid_mm, bbox_mm} as the Mass properties panel adds them, and each body\'s volume and valid. One body that is not valid: problems [{status, on ("face 3 of shell 1"), at_mm}], problem_total and problem_counts, as the Check panel lists them.',
+  },
+];
+
+/** How to make a mechanism that holds together and turns, and how to check it (the check tool). */
+const assemblyRows = (): HelpRow[] => [
+  {
+    about: 'a mechanism',
+    text: 'Each part that moves on its own is its own body (op new): a shaft, each wheel, each collar, spacer, nut and washer. Parts that turn together are one body (join) or a press fit. A moving part needs three things: something in its bore holding it radially (a shaft, with a little play), something on each side holding it along the shaft, and room to turn. get_model parts lists every body: compare it with every part the request names.',
+  },
+  {
+    about: 'shafts and bores',
+    text: 'Draw each shaft and the bores on it about one centre (the same axis line: check finds axes by their round faces). A bore for a part that turns is larger than its shaft by a clearance (a D or hex shaft: the same shape of bore, larger all round); a bore the same size as its shaft (or smaller) is a press fit: the two are fixed together. A shaft that turns in a frame needs a bore in each plate. help printing has clearances for printed parts.',
+  },
+  {
+    about: 'holding a part along its shaft',
+    text: 'On each side of a moving part put one of: a shoulder (a step to a larger diameter on the shaft), a collar (a ring press-fitted on the shaft), a spacer (a tube between two parts, its bore like theirs), a nut or a washer, or the frame. Leave a small end play (0.1 to 0.3 mm) so it turns freely. Two wheels with a gap and nothing in it can slide into each other: put a spacer there.',
+  },
+  {
+    about: 'room to turn',
+    text: 'Everything a part sweeps when it turns (its outline turned about the axis) must be free of other parts, except parts that turn with it and gears it meshes with. Hands, cranks and keys sweep large circles: keep nuts, keys and frames out of them or at another height along the axis.',
+  },
+  {
+    about: 'check interference',
+    text: 'check kind interference, bodies [] (every body), a set (its pairs), or one body (it against every other): rows of pairs that overlap (overlap_mm3, at_mm). A bore drawn under its shaft (a press fit, as help printing gives it) shares a thin ring with it: its row says press_fit, counted apart from the overlaps (press_fits); it is expected, keep it. clearance "0.2 mm" also lists pairs closer than it (gap_mm; 0: they touch). Bodies far apart are skipped by their boxes first; rows are capped (rows_more). Meshing gears overlap a little where their teeth meet if the centre distance is short.',
+  },
+  {
+    about: 'moving a part',
+    text: 'direct kind move_body moves or turns a part after it is made (copy true: a copy of it), as the person\'s Move/copy body; its faces keep their names. After moving or turning parts of a mechanism, check interference again (and stack for parts on shafts).',
+  },
+  {
+    about: 'check stack',
+    text: 'check kind stack: each axis two bodies share, its parts in order (from_mm, to_mm along the axis), the bore radius, what each rides on (on) or turns in (in, a frame: a body holding shafts on two axes or more) with its radial play, what is fixed to it by a press fit, and on each side along the axis what it meets and how far ("Collar at 0 mm", or nothing). loose lists what is wrong: a part free to slide (nothing on a side, or it comes off its shaft), one that slides more than the play before it meets something, a bore nothing holds (empty, or much wider than what is inside). clearance: the play still counted as held (0.5 mm if ""). bodies: only the axes near them, and their findings. A frame\'s clearance hole and a body held on another axis are not flagged. Fix each, then check again.',
+  },
+  {
+    about: 'check sweep',
+    text: 'check kind sweep, bodies: the parts that turn together, axis: an axis ("Z axis", a construction axis, "axis of <round face>", an edge) or "" for the axis they share with another body. Each hit: the body met, first_deg turning counter-clockwise about the axis direction (back_deg the other way), at_mm, and overlap_mm3_1deg_past (the kernel turned a copy 1 degree past it). already: pairs that overlap before turning (check interference).',
+  },
+  {
+    about: 'what it measures',
+    text: 'stack and sweep cut the bodies near an axis by planes square to it, one between each two levels where a face starts or ends, so each slab is one shape all along: exact for parts extruded or revolved along the axis, close for others. The play is measured along rays from the axis (a D shaft in a D bore has its clearance). Radii and gaps are in mm, angles in degrees. Read the rows and judge: a stop the check found may be a part that is loose itself (its own row says so). A check the time limit stopped starts its text with "Stopped at the time limit" and lists only what it reached (note: what helps): never read it as all clear.',
+  },
+  {
+    about: "the person's Check",
+    text: 'The person runs the same checks in INSPECT > Check: Interference, Loose parts (stack) and Rotation (sweep), with the same words; a row there selects its bodies. Point them there to see a finding.',
+  },
+];
+
+/** Printing in PLA: rules of thumb, each labelled so: printers and slicers differ. */
+export const RT = '(rule of thumb: test on your printer)';
+const printingRows = (): HelpRow[] => [
+  {
+    about: 'these figures',
+    text: 'For FDM printing in PLA with a 0.4 mm nozzle and 0.2 mm layers. Every figure here is a rule of thumb: printers and slicers differ, so test a fit on the printer first. Tell the person the clearances you used.',
+  },
+  {
+    about: 'holes and fits',
+    text: `Printed holes come out small by about 0.1 to 0.2 mm ${RT}. A part that turns on a shaft: bore diameter = shaft + 0.3 to 0.5 mm ${RT}. A part that slides: + 0.2 to 0.3 mm ${RT}. A press fit: bore = shaft - 0.05 to 0.1 mm ${RT} (check interference lists it as press_fit, not a collision). Between two moving faces leave 0.3 to 0.5 mm ${RT}. Small holes under 3 mm are better drilled out after printing ${RT}.`,
+  },
+  {
+    about: 'walls and pins',
+    text: `Walls at least 1.2 mm (three lines of 0.4 mm) ${RT}; never under 0.8 mm ${RT}. Pins and shafts under 3 mm across break easily: use 4 mm or more, or a metal pin ${RT}. Gear teeth: module 1 mm or more ${RT}.`,
+  },
+  {
+    about: 'overhangs and bridges',
+    text: `Faces leaning out up to about 45 degrees from vertical print without support ${RT}; flatter ones need support, or a 45 degree chamfer under them. Flat bridges between two supports up to about 10 to 20 mm span print without support ${RT}. A horizontal hole is best as a teardrop (a 45 degree point on top) ${RT}.`,
+  },
+  {
+    about: 'first layer',
+    text: `The first layer spreads (elephant foot) by about 0.2 to 0.4 mm ${RT}: chamfer the bottom edges 0.3 to 0.5 mm ${RT}, above all on faces that must fit against another part.`,
+  },
+  {
+    about: 'orientation',
+    text: `Lay each part on its largest flat face. Holes for shafts print rounder standing up (along Z). Layers are the weak direction: a pin or shaft printed lying down is stronger than one standing up ${RT}. Gears and wheels print flat. Split a part that cannot print without much support into parts that join.`,
+  },
+  {
+    about: 'sizes',
+    text: `Heights come in steps of the layer height (0.2 mm) ${RT}; sizes across are good to about 0.1 to 0.2 mm ${RT}. Text and details under 0.5 mm are lost ${RT}.`,
   },
 ];
 
@@ -413,6 +502,8 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   sketch_tools: sketchToolRows(),
   details: detailRows(),
   workspace: workspaceRows(),
+  assemblies: assemblyRows(),
+  printing: printingRows(),
 });
 
 /**

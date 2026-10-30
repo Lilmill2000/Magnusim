@@ -285,8 +285,8 @@ export function useRegionField(services: AppServices, o: RegionFieldOptions): Fi
 
 // ------------------------------------------------------------ axis
 
-/** The live axis of a reference as the bodies are shown (for drawing it), or null. */
-async function liveAxis(services: AppServices, ref: AxisRef): Promise<{ origin: Vec3; dir: Vec3 } | null> {
+/** The live axis of a reference as the bodies are shown (for drawing it; Move/copy body's handle), or null. */
+export async function liveAxis(services: AppServices, ref: AxisRef): Promise<{ origin: Vec3; dir: Vec3 } | null> {
   const s = services.doc.state.get();
   const ctx = {
     bodies: liveBodies(services),
@@ -447,7 +447,7 @@ export function useAxisField(services: AppServices, o: AxisFieldOptions): FieldV
       void (async () => {
         try {
           if (item.kind === 'edge') {
-            const ref = await refOfEdge(kernelLookup(services.kernel), info.shape, info.names ?? null, item.index);
+            const ref = await refOfEdge(kernelLookup(services.kernel), info, item.index);
             if (ref.signature.type !== 'line' && ref.signature.type !== 'circle') {
               setError('That edge is neither straight nor round, so it gives no axis');
               return;
@@ -688,7 +688,7 @@ export function useTargetField(services: AppServices, o: TargetFieldOptions): Fi
           return;
         }
         try {
-          const ref = await refOfVertex(kernelLookup(services.kernel), info.shape, info.names ?? null, item.index);
+          const ref = await refOfVertex(kernelLookup(services.kernel), info, item.index);
           if (splitVertexName(ref.name)?.every((n) => madeBy(n, cur.feature))) {
             setError('That point is made by this feature itself');
             return;
@@ -788,7 +788,7 @@ export function useEdgeSetField(services: AppServices, o: EdgeSetFieldOptions): 
       void (async () => {
         try {
           if (item.kind === 'edge') {
-            const ref = await refOfEdge(kernelLookup(services.kernel), info.shape, info.names ?? null, item.index);
+            const ref = await refOfEdge(kernelLookup(services.kernel), info, item.index);
             const pair = splitEdgeName(ref.name) ?? [];
             if (pair.some((n) => madeBy(n, cur.feature))) {
               setError(`That edge is made by this ${cur.role} itself`);

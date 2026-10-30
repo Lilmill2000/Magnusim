@@ -1,0 +1,78 @@
+/* Check's modes and its assembly results (src/features/check/panel.tsx). Tokens only: light and dark
+   both come from the host's and CAD's tokens. SPDX-License-Identifier: GPL-3.0-or-later */
+
+.cad-check-modes {
+  display: flex;
+  margin: 0 0 8px;
+  border: 1px solid var(--mg-control-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.cad-check-modes button {
+  flex: 1 1 auto;
+  padding: 5px 6px;
+  border: 0;
+  border-left: 1px solid var(--mg-control-border);
+  background: var(--mg-bg);
+  font: 600 11px/1.2 var(--mg-font, "Segoe UI", system-ui, sans-serif);
+  color: var(--mg-text-body);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cad-check-modes button:first-child {
+  border-left: 0;
+}
+.cad-check-modes button:hover {
+  background: var(--cad-menu-hover);
+}
+.cad-check-modes button.is-on {
+  background: var(--cad-toolbar-active-bg);
+  color: var(--cad-toolbar-active-icon);
+}
+.cad-check-modes button:focus-visible {
+  outline: 2px solid var(--mg-focus);
+  outline-offset: -2px;
+}
+
+input.mgk-input.cad-check-length {
+  width: 120px;
+}
+
+.cad-check-result {
+  margin-top: 8px;
+}
+.cad-check-text {
+  margin-bottom: 6px;
+  color: var(--mg-text);
+  font-weight: 500;
+}
+.cad-check-row {
+  cursor: pointer;
+}
+.cad-p2-table tr.cad-check-row:hover td,
+.cad-check-list li.cad-check-row:hover {
+  background: var(--cad-menu-hover);
+}
+.cad-check-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--mg-danger);
+}
+.cad-check-list li {
+  padding: 3px 4px;
+  border-top: 1px solid var(--mg-divider);
+}
+.cad-check-list li:first-child {
+  border-top: 0;
+}
+.cad-check-axis {
+  margin: 6px 0 8px;
+}
+.cad-check-axis-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mg-text-muted);
+  margin-bottom: 2px;
+}

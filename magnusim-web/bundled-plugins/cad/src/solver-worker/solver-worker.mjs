@@ -17,7 +17,7 @@
 // solveOnce(sketch) loads, solves and forgets on a second solver instance, so a rebuild's
 // re-solve never disturbs the sketch being edited in sketch mode. analyzeOnce(sketch) does the same
 // and then analyses the result there (dof, the free parameters, conflicts): {solve, analysis}.
-import { createSolver } from './solver-api.mjs';
+import { createSolver, errorWords } from './solver-api.mjs';
 
 const OPS = new Set(['load', 'solve', 'dragStart', 'dragStartEntity', 'dragMove', 'dragEnd', 'setValue', 'analyze', 'values', 'stats']);
 // A variable, not a literal: the bundler leaves the URL to be resolved at run time.
@@ -55,7 +55,7 @@ async function run(msg) {
     }
     post({ type: 'result', id, ok: true, result });
   } catch (err) {
-    post({ type: 'result', id, ok: false, error: String(err && err.message ? err.message : err) });
+    post({ type: 'result', id, ok: false, error: errorWords(err) });
   }
 }
 
@@ -91,5 +91,5 @@ try {
   post({ type: 'ready', solver: 'planegcs', initMs: performance.now() - t0 });
   schedule();
 } catch (err) {
-  post({ type: 'error', error: String(err && err.message ? err.message : err) });
+  post({ type: 'error', error: errorWords(err) });
 }

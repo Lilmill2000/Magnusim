@@ -79,7 +79,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
 
   // Only commands that work, in the core's toolbar groups. No one-click solids (decision 2026-10-01).
   expect(await groupCommandLabels(frame, 'solid')).toEqual(['Extrude', 'Revolve', 'Sweep', 'Loft', 'Hole']);
-  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Combine', 'Parameters']);
+  expect(await groupCommandLabels(frame, 'modify')).toEqual(['Fillet', 'Chamfer', 'Shell', 'Press-pull', 'Delete faces', 'Split', 'Move/copy body', 'Combine', 'Parameters']);
   await expect(tb.locator('[data-group="edit"] .tb-txt')).toHaveText(['Undo', 'Redo']);
   await expect(tb.locator('.tb-group-label').first()).toHaveText('SKETCH');
   await expect(tb.locator('.tb-group-label').last()).toHaveText('EDIT');
@@ -169,8 +169,9 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   const menu = frame.locator('[data-cad-menu]');
   // The core's viewport items first (proposal §3.2; runtime.js showFaceCtxMenu), then the modules'
   // actions for a face, then the body's and the feature's, the body's and the feature's Delete last of
-  // all (P4a review: the actions first, Delete last; it sat between them).
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Delete Body 1', 'Delete Extrude 1']);
+  // all (P4a review: the actions first, Delete last; it sat between them); the body's Move/copy just
+  // above its Delete.
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Move/copy Body 1…', 'Delete Body 1', 'Delete Extrude 1']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
@@ -272,7 +273,8 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
   // the rest as small buttons": nothing in More, nothing folded); the toolbar does not scroll.
   // Each group's main command is a large button with its name (11 px, radius 4); the rest are small
   // (radius 3), named at 1600 px; at 1280 px the least-used groups' small buttons are their icons
-  // (FILE, INSPECT, CONSTRUCT: SQUEEZE_ORDER), the name staying the tooltip and accessible name.
+  // (FILE, INSPECT, CONSTRUCT, and since Move/copy body joined MODIFY, PATTERN: SQUEEZE_ORDER), the
+  // name staying the tooltip and accessible name.
   const folded: number[] = [];
   for (const size of [
     { width: 1600, height: 1000 },
@@ -282,7 +284,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
     const bar = frame.locator('[data-cad-toolbar="model"]');
     // VIEW and EDIT are icons at both (every model command needs the room); no group collapses.
     if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit', '1');
-    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-labels', size.width > 1280 ? '' : 'file inspect construct');
+    if (process.platform === 'win32') await expect(bar).toHaveAttribute('data-fit-labels', size.width > 1280 ? '' : 'file inspect construct pattern');
     const iconGroups = ((await bar.getAttribute('data-fit-labels')) ?? '').split(' ').filter(Boolean);
     await expect(bar).toHaveAttribute('data-fit-collapsed', '');
     const shown = await bar.locator('.tb-group:not([data-group="view"]):not([data-group="edit"]):not([data-group="scale"]) .tb-btn[data-command]').evaluateAll((els) =>
@@ -300,7 +302,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
       'sketch.new',
       'solid.extrude', 'solid.revolve', 'solid.sweep', 'solid.loft', 'solid.hole',
       'pattern.linear', 'pattern.circular', 'pattern.mirror',
-      'modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.combine', 'modify.parameters',
+      'modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters',
       'construct.plane', 'construct.axis', 'construct.point',
       'cfd.enclosure',
       'inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find',

@@ -27,6 +27,7 @@ export function parseDerivedBodyId(feature: FeatureId, id: BodyId): { target: Bo
  * body without one (a split piece never renamed) the derived-name rule
  * "<target> (k+1)", the name the split gives it. Null when the Part has no such body.
  * (Review P2/P3 round 1: a consumed split piece read "A deleted body".)
+ * A Move/copy body's copy is "<target> (Copy)" (copyBodyName), the name its build gives it.
  */
 export function storedBodyName(doc: Pick<CadDoc, 'bodies' | 'features'>, id: BodyId, depth = 0): string | null {
   const own = doc.bodies[id];
@@ -36,7 +37,23 @@ export function storedBodyName(doc: Pick<CadDoc, 'bodies' | 'features'>, id: Bod
     const d = parseDerivedBodyId(f.id, id);
     if (!d) continue;
     const target = storedBodyName(doc, d.target, depth + 1);
+    if (f.type === 'move_body') return target ? copyBodyName(doc, f.id, d.target, target) : null;
     return target ? `${target} (${d.k + 1})` : null;
   }
   return null;
+}
+
+/**
+ * The name a Move/copy body gives its copy of `target` (named `targetName`): "Body 1 (Copy)", and
+ * "Body 1 (Copy 2)" for the second Move/copy body in the history that copies Body 1 (suppressed
+ * ones counted, so a suppress never renames a later copy). From the Part alone, so a copy that is
+ * not built now reads the same.
+ */
+export function copyBodyName(doc: Pick<CadDoc, 'features'>, feature: FeatureId, target: BodyId, targetName: string): string {
+  let n = 0;
+  for (const f of doc.features) {
+    if (f.type === 'move_body' && f.copy && f.bodies.includes(target)) n += 1;
+    if (f.id === feature) break;
+  }
+  return n > 1 ? `${targetName} (Copy ${n})` : `${targetName} (Copy)`;
 }
