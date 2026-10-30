@@ -2,7 +2,7 @@
 // fake host (tests/fakes/assistant-sdk.ts):
 //   - the bridge's guard: no ws.assistant -> null; a host without turn events -> onTurn and stop
 //     null; an older host's not_allowed -> {available: false, reason: 'not_allowed'};
-//   - one registration of the 18 tools with the guide, the turns heard before it;
+//   - one registration of the 22 tools with the guide, the turns heard before it;
 //   - the eval's core set (setToolset('core')): its 13 tools with the guide that names only them,
 //     help's guide topic that guide and help features marking the 5 not offered; 'all' brings
 //     the 18 and the guide back;
@@ -86,7 +86,7 @@ describe("the bridge's guard", () => {
 });
 
 describe('the registration', () => {
-  it('offers the 18 tools with the guide once, after listening to the turns', async () => {
+  it('offers the 22 tools with the guide once, after listening to the turns', async () => {
     h = await start();
     expect(h.fake.registrations).toHaveLength(1);
     const reg = h.fake.registrations[0];

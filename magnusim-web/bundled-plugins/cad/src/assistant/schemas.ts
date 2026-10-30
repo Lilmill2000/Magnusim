@@ -1,4 +1,4 @@
-// The Part's 21 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
+// The Part's 22 tools for the app's Assistant (CAD tools spec §3): names, titles, risks, stall
 // windows, descriptions and input schemas, in the schema subset the app accepts
 // (scripts/server/assistant/schema.ts): type, description, enum, properties, required,
 // additionalProperties false, items, min/max lengths, values and items; never $ref, unions,
@@ -616,7 +616,7 @@ const toTool = (s: ToolSpec): AssistantTool => ({
   ...(s.confirm ? { confirm: s.confirm } : {}),
 });
 
-/** The 21 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
+/** The 22 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
 export const CAD_TOOLS: readonly AssistantTool[] = Object.freeze(SPECS.map(toTool).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
 
 /**
@@ -631,7 +631,7 @@ const CAD_TOOLS_WITHOUT_PROJECTS: readonly AssistantTool[] = Object.freeze(
 
 /**
  * The tools this page offers, by name: CAD_TOOLS where the host has projects (Magnusim), and in
- * Magnusim CAD (projectLinks false) CAD_TOOLS_WITHOUT_PROJECTS. The same 21 tools either way.
+ * Magnusim CAD (projectLinks false) CAD_TOOLS_WITHOUT_PROJECTS. The same 22 tools either way.
  */
 export function cadToolsFor(o: { projectLinks: boolean }): readonly AssistantTool[] {
   return o.projectLinks ? CAD_TOOLS : CAD_TOOLS_WITHOUT_PROJECTS;

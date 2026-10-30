@@ -97,7 +97,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/sketch/tools/clip.ts`, `src/sketch/tools/paste.ts`, `tests/sketch/clipboard.test.ts`, `tests/app/clipboard-keys.test.ts`, `tests/assistant/sketch-copy.test.ts`, `e2e/cad-sketch-copy-paste.spec.ts` | P3-SKETCH (Copy and Paste) | The person's Copy and Paste and the Assistant's copy row (§10 "Copy and Paste"). |
 | `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
 | What the Assistant's tools stand on, each in its area's own files: `doc.assistant`, `settled`, `bodiesBefore`, `committed`, `editParams` and `BodyProps.shells` (`src/doc/service.ts`, `params-bulk.ts`, `person-editing.ts`, `rebuild.ts`), undo tags and snapshots (`src/doc/undo.ts`, `src/types/undo.ts`); `openForAssistant`, `openEditForAssistant`, `openParamsForAssistant`, `doneForAssistant`, `dropForAssistant` and the read-only chrome (`src/ui/controller.ts`, `src/ui/kit/Panel.tsx`, `src/ui/panels/ParametersPanel.tsx`); Assistant sketches (`src/sketch/mode.ts`, `commands.ts`) and `analyzeOnce` (`src/solver-worker/`, `src/sketch/solver-client.ts`); `snapshot`, `project`, `visibleFaceAt`, `userCameraMoves` and `{auto}` camera calls (`src/viewport/snapshot.ts`, `viewport.ts`); `AreaApis.assistant` (`src/types/app.ts`). Tests: `tests/doc/{assistant-step,params-bulk,settled}.test.ts`, `tests/ui/controller-assistant.test.ts`, `tests/sketch/mode-assistant.test.ts`, `tests/viewport/{camera-count,snapshot,snapshot-plain}.test.ts`, the `auto-camera` tests, e2e `cad-assistant-panels` and `cad-viewport-snapshot` (shell), `cad-assistant-sketch` (sketch) | DOC-CORE, UI-SHELL, P3-SKETCH, VIEWPORT | §6 "Assistant steps", §7 "Assistant panels and sketches". ASSISTANT calls them and changes none of them. |
-| `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 18 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
+| `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 22 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
 | `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `manifest.toml`, `plugin.py`, `README.md`, `ARCHITECTURE.md`, `LICENSES/**` | frozen (INTEGRATE) | New dependency? Ask INTEGRATE: one `npm install` at a time (shared `node_modules`). |
 | `workspace/**` (except `kernel/mk32.*`, `solver/planegcs.*`) | nobody by hand | Written only by `npm run build`. |
 
@@ -1385,9 +1385,10 @@ with the host once for the page's life, and its chip goes in the dock.
   - The app's own check of the set: `scripts/__tests__/assistant-cad-tools.test.mjs`
     (`npm run test:server` in `magnusim-web`) imports `src/assistant/schemas.ts`
     and `guide.ts` and checks every schema against the app's rules, the strict
-    flags (the first 20 of the 31 tools a CAD turn offers strict on the cloud
-    dialects: the Part's 22 first), and, in both editions, that the tools as sent
-    fit the registry's own local budget (`LOCAL_BUDGET`: 16,384 tokens for an
+    flags (the first 20 of the tools a CAD turn offers strict on the cloud
+    dialects: the Part's 22 first), and, in each edition as its server builds the
+    registry (Magnusim offers 31 tools; Magnusim CAD 29, its app tools in its own
+    words), that the tools as sent fit the registry's own local budget (`LOCAL_BUDGET`: 16,384 tokens for an
     unknown 32K model, at 3.5 characters a token) with nothing cut, and that the
     system text (the prompt and the CAD notes) stays within 6,000 characters; it
     prints both and warns past 90% of the tool budget. Run it after any schema or
@@ -2347,7 +2348,7 @@ changes. The host's contract is `docs/plugins/authoring.md` "Linking a geometry
 
 The app's Assistant runs a model the person chose (a cloud provider with their
 own key, or a local server) in turns on the app's server, and a workspace page
-offers it tools through the bridge (§9). The Part offers 18 with one fixed
+offers it tools through the bridge (§9). The Part offers 22 with one fixed
 guide. This section is the design and the rules for changing it;
 `docs/assistant.md` is the developer reference (how a call goes, each tool's
 pieces, adding and testing a tool), and each tool's description in
@@ -2357,13 +2358,17 @@ pieces, adding and testing a tool), and each tool's description in
 - **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `check`,
   `view`, `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
   `modify` (fillet, chamfer, shell), `pattern` (linear, circular, mirror),
-  `combine`, `body`, `edit_feature`, `undo`, `hole`. `delete` is the one
-  destructive tool, with its `confirm` note. With the app's three host tools a
-  CAD turn offers 21 (at most 24 go to a local server, 40 to the cloud). Every
-  property of every object is required (`""`, `[]` or `false` when unused), so
-  the set spends none of the first cloud dialect's strict budget for optional
-  fields: the first 20 tools in the app's order are strict, and `cad__view`
-  (the 21st by name) is checked by the app but not decoded strictly. The
+  `combine`, `body`, `edit_feature`, `undo`, `hole`, `construct`, `direct`,
+  `workspace`. `delete` is the one destructive tool, with its `confirm` note.
+  A CAD turn offers 31 in Magnusim (the Part's 22, then the app's 9) and 29 in
+  Magnusim CAD (the app's 7 it keeps). A local request's tools are limited by
+  tokens, not by count (the registry's `LOCAL_BUDGET`: half the model's context,
+  16,384 tokens for an unknown one; past it the lowest priorities go); the cloud
+  takes at most 40. Every property of every object is required (`""`, `[]` or
+  `false` when unused), so the set spends none of the first cloud dialect's
+  strict budget for optional fields: the first 20 tools in the app's order are
+  strict, and `cad__view` and `cad__workspace` (the 21st and 22nd by name) are
+  checked by the app but not decoded strictly. The
   schemas use only the app's subset (no `$ref`, unions, patterns, formats,
   defaults, consts, titles or type lists), at most 6 KB each and 64 KB in all.
   One more tool, or an optional field, would leave another tool out of strict:

@@ -1,6 +1,6 @@
 // The Assistant in the Part (CAD tools spec §2.1 install.ts): the page's state (runtime.ts), the
 // page API other areas ask (services.apis.assistant: the camera gate, the chip's store), the
-// host's turns heard before the tools are offered, and ONE registration of the 18 tools with the
+// host's turns heard before the tools are offered, and ONE registration of the 22 tools with the
 // guide for the page's life (the grammar and the prompt cache stay stable; availability is
 // answered per call). It registers again on visibilitychange after "not_connected" (a tab opened
 // in the background), and stops for good on "remote", "no_assistant" or "not_allowed". The eval's

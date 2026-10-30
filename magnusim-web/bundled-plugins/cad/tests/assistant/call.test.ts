@@ -1,6 +1,6 @@
 // One call of a Part tool from the bridge to the reply (CAD tools spec §2.1 call.ts, §3.0, §3.1, §8.3),
 // over the fake host and a toy kernel:
-//   - this build answers all 18 tools; a build without one (a tools table without it) answers
+//   - this build answers all 22 tools; a build without one (a tools table without it) answers
 //     not_ready "not in this build yet", with its reason, hint and detail, and help features marks
 //     its row; on a host without turn events the hint is in the message;
 //   - every reply carries rev; a call's key, tool and outcome go to the ledger (__CAD__.assistant.calls)

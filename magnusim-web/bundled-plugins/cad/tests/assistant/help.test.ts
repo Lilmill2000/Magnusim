@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import { WORKED_PARTS } from '../../src/assistant/examples';
 import { GUIDE } from '../../src/assistant/guide';
-import { HELP, HELP_EXAMPLE_BYTES, HELP_STRING_MAX, HELP_TOPIC_BYTES, RT } from '../../src/assistant/help';
+import { HELP, HELP_EXAMPLE_BYTES, HELP_STRING_MAX, HELP_TOPIC_BYTES, helpFor, RT } from '../../src/assistant/help';
 import { CAD_TOOLS, HELP_TOPICS, SKETCH_CONSTRAINT_KINDS, SKETCH_ENTITY_KINDS, type HelpTopic } from '../../src/assistant/schemas';
 import { signatureWords } from '../../src/assistant/sketch/signatures';
 import { tool as helpTool } from '../../src/assistant/tools/help';
@@ -125,6 +125,37 @@ describe('help', () => {
     const guideFaces = GUIDE.split(/\n/).find((l) => l.startsWith('- Faces by outward n:'))!;
     expect(text('planes and faces')).toContain(guideFaces.slice('- Faces by outward n: '.length, guideFaces.indexOf('. Origin')));
     expect(text('joins')).toContain('0.05 mm');
+  });
+
+  it("every refs list the sketch topics give fits the sketch schema's refs (the app refuses refs [] before the Part sees it)", () => {
+    type Arr = { minItems: number; maxItems: number; items: { maxLength: number } };
+    const sketch = CAD_TOOLS.find((t) => t.name === 'sketch')!.inputSchema as unknown as { properties: { constraints: { items: { properties: { refs: Arr } } } } };
+    const refs = sketch.properties.constraints.items.properties.refs;
+    expect(refs.minItems).toBe(1);
+    const lists: string[] = [];
+    for (const projectLinks of [true, false]) {
+      for (const topic of ['sketch', 'sketch_tools'] as const) {
+        for (const row of helpFor(projectLinks)[topic]) {
+          for (const m of row.text.matchAll(/refs:?\s*(\[[^\]]*\])/g)) {
+            let list: unknown;
+            try {
+              list = JSON.parse(m[1]);
+            } catch {
+              continue; // a signature such as [items..., at(u, v)?], not a list to send
+            }
+            lists.push(m[1]);
+            expect(Array.isArray(list), `${topic} ${row.about}: ${m[0]}`).toBe(true);
+            const l = list as string[];
+            expect(l.length, `${topic} ${row.about}: ${m[0]}`).toBeGreaterThanOrEqual(refs.minItems);
+            expect(l.length, `${topic} ${row.about}: ${m[0]}`).toBeLessThanOrEqual(refs.maxItems);
+            for (const r of l) expect(r.length, `${topic} ${row.about}: ${r}`).toBeLessThanOrEqual(refs.items.maxLength);
+          }
+        }
+      }
+    }
+    // The copy row's clipboard paste and its example are among them.
+    expect(lists).toContain('["all"]');
+    expect(lists).toContain('["r", "c1", "at(60, 0)"]');
   });
 
   it("checks and traps hold the spec's lists; the examples index names each worked part", () => {
