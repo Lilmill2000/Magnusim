@@ -2238,8 +2238,8 @@ pieces, adding and testing a tool), and each tool's description in
 `src/assistant/schemas.ts` is what the model reads. The user's side is README
 "The Assistant in the Part".
 
-- **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `view`,
-  `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
+- **The set** (`schemas.ts`). Reads: `get_model`, `find`, `measure`, `check`,
+  `view`, `help`. Edits: `set_params`, `sketch`, `extrude`, `revolve`, `sweep_loft`,
   `modify` (fillet, chamfer, shell), `pattern` (linear, circular, mirror),
   `combine`, `body`, `edit_feature`, `undo`, `hole`. `delete` is the one
   destructive tool, with its `confirm` note. With the app's three host tools a
@@ -2324,6 +2324,16 @@ pieces, adding and testing a tool), and each tool's description in
   person's undo of its steps while its turn runs. It changes what the person
   made only through its own undoable steps, and its guide tells it not to
   unless asked.
+- **The assembly checks** (`src/features/assembly/check.ts`, UI-free): one
+  engine for the `check` tool and INSPECT's Check panel (interference, the
+  stack on each shared axis, the sweep about an axis). The tool's reply
+  formatters (`interferenceReply`, `stackReply`, `sweepReply`) and `axisOf`
+  are exported, and `src/features/check/assembly.ts` runs the person's checks
+  through them. So the panel's line is the tool's text and its rows are the
+  tool's rows (`tests/assistant/check.test.ts` holds them equal). The panel's
+  controls are `CHECK_CONTROLS` (`src/features/check/controls.ts`); the
+  parity table `CHECK` maps each one to the tool, and `control('check', ...)`
+  maps each of the tool's fields back to a control.
 - **Selectors** (`selectors/`, `labels.ts`): one string language for faces,
   edges, vertices, bodies, regions, planes and axes (role labels such as
   `Base.end`, queries such as `Body 1 faces >Z`, `face at (x, y, z)`, handles),

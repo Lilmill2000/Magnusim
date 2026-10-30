@@ -9,11 +9,14 @@
 //   - interference on 48 bodies (a pattern of overlapping cubes) answers within CHECK_48_MS with its
 //     rows capped at CHECK_ROWS and the rest counted; get_model's parts lists all 48, brief and full,
 //     on a local turn's small budget too, while its bodies list is halved;
+//   - the person's Check (INSPECT > Check's Interference, Loose parts, Rotation) on the same Part
+//     gives the tool's own text and rows;
 //   - refusals: a body that does not exist, a body named twice, sweep with no bodies, an axis that
 //     has none, a clearance below 0.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { CHECK_ROWS } from '../../src/assistant/tools/check';
+import { referenceAxis, runAssembly } from '../../src/features/check/assembly';
 import { EXTRUDE, fail, ok } from './extrude-tools';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { E, SK, type Row } from './sketch-tools';
@@ -93,6 +96,39 @@ describe('check sweep', () => {
       // A disc already covers every angle where its rim reaches the block: it overlaps it before turning.
       expect(hit.data).toMatchObject({ already: [['Wheel', 'Key']], hits: [] });
       expect(hit.text).toContain('already overlapping: Key');
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe("the person's Check (src/features/check/assembly.ts) answers in the check tool's own words", () => {
+  it(
+    "stack, interference and sweep on one Part: the person's line is the tool's text, the rows its rows",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await shaftAndWheel(h);
+      // A key block overlapping the wheel's rim (so interference has a pair).
+      await ok(h, 'sketch', SK({ name: 'Key sketch', on: 'Top offset 1 mm', entities: [E('k', 'rect', [14, 3, 18, 6])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Key', sketch: 'Key sketch', distance: '8 mm', body_name: 'Key' }));
+      const s = h.services;
+      const env = { kernel: s.kernel };
+      const ids = s.doc.state.get().rebuild.bodies.map((b) => b.id);
+      const wheel = s.doc.state.get().rebuild.bodies.find((b) => b.name === 'Wheel')!.id;
+
+      const stackAi = await h.ok('check', CHECK());
+      const stack = await runAssembly(s, { kind: 'stack', only: null, play: 0.5 }, env);
+      expect(stack.text).toBe(stackAi.text);
+      expect(stack.stack!.findings.map((f) => f.words)).toEqual((stackAi.data as { loose: string[] }).loose);
+
+      const interAi = await h.ok('check', CHECK({ kind: 'interference', clearance: '0.2 mm' }));
+      const inter = await runAssembly(s, { kind: 'interference', bodies: ids, clearance: 0.2 }, env);
+      expect(inter.text).toBe(interAi.text);
+      expect(inter.interference!.rows.map((r) => [r.a, r.b])).toEqual((interAi.data as { rows: { bodies: string[] }[] }).rows.map((r) => r.bodies));
+
+      const sweepAi = await h.ok('check', CHECK({ kind: 'sweep', bodies: ['Wheel'], axis: 'Z axis' }));
+      const sweep = await runAssembly(s, { kind: 'sweep', turning: [wheel], axis: await referenceAxis(s, 'Z axis') }, env);
+      expect(sweep.text).toBe(sweepAi.text);
+      expect(sweep.sweep!.already).toEqual([{ turning: 'Wheel', with: 'Key' }]);
     },
     REAL_KERNEL_MS,
   );

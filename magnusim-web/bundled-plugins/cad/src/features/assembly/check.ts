@@ -376,12 +376,17 @@ function groupAxes(bodies: readonly AssemblyBody[], topo: Map<string, BodyTopo>)
   return out;
 }
 
-/** The axes two bodies or more share (shafts in bores, wheels on shafts), each with its bodies. */
-export async function sharedAxes(env: CheckEnv, bodies: readonly AssemblyBody[]): Promise<SharedAxis[]> {
+/** Every line a round face of the bodies lies on, each with the bodies that have one there (one body's own too). */
+export async function roundAxes(env: CheckEnv, bodies: readonly AssemblyBody[]): Promise<SharedAxis[]> {
   const run = new Run(env);
   const topo = new Map<string, BodyTopo>();
   await topoAll(run, bodies, topo, 'Reading round faces');
-  return groupAxes(bodies, topo).filter((g) => g.members.length >= 2);
+  return groupAxes(bodies, topo);
+}
+
+/** The axes two bodies or more share (shafts in bores, wheels on shafts), each with its bodies. */
+export async function sharedAxes(env: CheckEnv, bodies: readonly AssemblyBody[]): Promise<SharedAxis[]> {
+  return (await roundAxes(env, bodies)).filter((g) => g.members.length >= 2);
 }
 
 /** One slab between two cuts along an axis, and each body's slice through its middle. */

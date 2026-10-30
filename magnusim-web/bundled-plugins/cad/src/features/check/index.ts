@@ -1,4 +1,4 @@
-// Check (proposal §2.11): INSPECT's "Check", a tool panel.
+// Check (proposal §2.11): INSPECT's "Check", a tool panel: Solids, Interference, Loose parts, Rotation.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import '../p2/p2.css';
@@ -20,7 +20,7 @@ const module: CadModule = {
       group: 'inspect',
       icon: P2_ICONS.check,
       order: 30,
-      hint: 'Whether the selected bodies (or all shown bodies) are valid solids, and what is wrong when not',
+      hint: 'Whether the bodies are valid solids, which overlap, which parts on a shaft are loose, and what a part hits when it turns',
       activeWhen: { tool: CHECK_TOOL },
       enabled: () => (services.doc.state.get().status !== 'ready' ? 'The part is still loading' : services.doc.state.get().rebuild.bodies.length ? true : 'No body yet: make or import one'),
       run: () => {

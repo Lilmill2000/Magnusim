@@ -117,6 +117,8 @@ export const SHARDS = {
     'e2e/cad-body-menu.spec.ts',
     // Combine: a Join of pieces that do not touch is a quiet note in History; a Cut that splits a body warns.
     'e2e/cad-join-note.spec.ts',
+    // Check for an assembly (the person's side of the Assistant's check): Loose parts, Interference, Rotation.
+    'e2e/cad-assembly-check.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [
@@ -207,6 +209,8 @@ export const RULES = [
   [/^src\/features\/(mass|check|delete_faces)\/index\.tsx?$/, ['step', 'shell'], 'body tools, their command'],
   [/^src\/features\/(mass|check|delete_faces)\//, ['step'], 'Mass, Check and Delete faces'],
   ['src/features/delete_body/', ['step'], 'Delete body (the body menu in the tree)'],
+  // The assembly checks: the person's Check (step) and the Assistant's check tool.
+  ['src/features/assembly/', ['step', 'assistant'], 'the assembly checks'],
   ['src/files/', ['step'], 'file transfer (STEP in and out)'],
   // P4b SELECT: the dock's selection count (the box selection's specs read it).
   [/^src\/features\/selectcount\/index\.tsx?$/, ['sketch', 'shell'], 'the selection count chip, its module'],

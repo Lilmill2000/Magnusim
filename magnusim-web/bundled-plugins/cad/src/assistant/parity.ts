@@ -7,7 +7,9 @@
 //   SKETCH_ENTITIES, SKETCH_CONSTRAINTS, SKETCH_TOOLS  what sketch mode draws, ties and offers;
 //   UI, DOC, RAILS, TOOLBAR, LINK, VIEWPORT, KEYBINDS  the methods the person's controls call (the
 //                     tree, the chips, the panels' rails, the toolbar layout, Back's link, the view,
-//                     the Set keybind dialog and Settings' keybinds).
+//                     the Set keybind dialog and Settings' keybinds);
+//   CHECK             the Check panel's controls (src/features/check/controls.ts): its modes, fields,
+//                     Stop and result rows.
 // And the other way (Daniel: "anything the AI has I should have and anything I have the AI should
 // have"): AI_TOOLS names, for every field of every Assistant tool and every value of its enums
 // (schemas.ts), the person's way to the same thing (person paths, below); the test fails on a
@@ -42,6 +44,7 @@ import type { UiController } from '../ui/controller';
 import type { Rails } from '../ui/left-rails';
 import type { ToolbarPrefs } from '../ui/toolbar-layout';
 import type { Keybinds } from '../app/keybinds';
+import type { CheckControl } from '../features/check/controls';
 
 export type Reach =
   | { kind: 'reach'; tool: string; field: string; value?: string; note?: string; projects?: true; without?: string }
@@ -592,6 +595,25 @@ export const LINK: { readonly [K in keyof LinkController]: Reach } = {
   last: inProjects(W('send_to_simulation')),
 };
 
+/**
+ * INSPECT's Check panel, control by control (the command inspect.check opens it). Solids is the
+ * kernel's check of each body, which measure gives the Assistant per body (valid, its problems);
+ * the other three modes are the check tool's kinds, on the same engine with the same words.
+ */
+export const CHECK: { readonly [K in CheckControl]: Reach } = {
+  solids: reach('measure', 'targets'),
+  interference: reach('check', 'kind', 'interference'),
+  bodies: reach('check', 'bodies'),
+  clearance: reach('check', 'clearance'),
+  stack: reach('check', 'kind', 'stack'),
+  play: reach('check', 'clearance', undefined, 'with kind stack, clearance is the play'),
+  sweep: reach('check', 'kind', 'sweep'),
+  turning: reach('check', 'bodies', undefined, 'with kind sweep, bodies are the ones that turn'),
+  axis: reach('check', 'axis'),
+  stop: auto("a check that runs stops with its call: the person's Stop on the Assistant's turn ends it"),
+  row: W('select'),
+};
+
 const POINTER = auto("the person's pointer in the view (orbit, pick, hover): the Assistant names things by selector");
 /** The view's colours follow the host's appearance (its Settings): nobody sets them in the Part, and every picture is light. */
 const APPEARANCE = auto("the host's appearance (the app's Settings): the view follows it, and every picture is light whatever it is");
@@ -709,6 +731,7 @@ export const PARITY_TABLES: Readonly<Record<string, Readonly<Record<string, Reac
   keybinds: KEYBINDS,
   link: LINK,
   viewport: VIEWPORT,
+  check: CHECK,
 };
 
 // ------------------------------------------------------------------ the other way: every Assistant tool's field, the person's path
@@ -735,7 +758,7 @@ export type PersonPath = (
   projects?: true;
 };
 
-export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport';
+export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport' | 'check';
 
 export const command = (id: string): PersonPath => ({ kind: 'command', id });
 export const control = (table: ControlTable, method: string): PersonPath => ({ kind: 'control', table, method });
@@ -751,10 +774,6 @@ const PARAMS = command('modify.parameters');
 const PICTURE = command('file.picture');
 const HOLE = command('solid.hole');
 const MEASURE = command('inspect.measure');
-/** The assembly checks, as far as the person reaches them now: Measure on two bodies (overlap, gap, a round face's axis and radius). */
-const MEASURE_PAIR = place(
-  "Measure, one pair at a time: two bodies give their overlap volume and gap, a round face its axis and radius. The person's assembly check panel on the same engine (src/features/assembly) comes next; until then the whole-Part check is the Assistant's",
-);
 const DIMENSION = command('sketch.dimension');
 const REFERENCE = own("reference text for the model; the person has the program's documentation");
 const OPS = (type: FeatureType) => ({ 'op=new': panel(type, 'op'), 'op=join': panel(type, 'op'), 'op=cut': panel(type, 'op'), 'op=intersect': panel(type, 'op') });
@@ -786,16 +805,17 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     sketch: command('view.normal-to'),
   },
   help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace', 'assemblies', 'printing'], 'topic', REFERENCE),
-  // The assembly checks (src/features/assembly/check.ts). The person's own panel on the same engine
-  // is the next step of this work; until it lands the person reaches only what Measure gives, one
-  // pair of bodies at a time, and these rows say so.
+  // The assembly checks (src/features/assembly/check.ts): INSPECT's Check panel runs the same engine
+  // and shows the same words, in its Interference, Loose parts and Rotation modes.
   check: {
-    'kind=interference': MEASURE_PAIR,
-    'kind=stack': MEASURE_PAIR,
-    'kind=sweep': MEASURE_PAIR,
-    bodies: MEASURE_PAIR,
-    clearance: MEASURE_PAIR,
-    axis: MEASURE_PAIR,
+    'kind=interference': control('check', 'interference'),
+    'kind=stack': control('check', 'stack'),
+    'kind=sweep': control('check', 'sweep'),
+    // The bodies checked (selected ones), or with sweep the ones that turn (Rotation's Turning).
+    bodies: control('check', 'bodies'),
+    // Interference's Clearance; with stack, Loose parts' Play.
+    clearance: control('check', 'clearance'),
+    axis: control('check', 'axis'),
   },
   set_params: {
     'set[].name': PARAMS,

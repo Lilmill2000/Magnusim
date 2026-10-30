@@ -384,8 +384,20 @@ comes on). Rename the result, for example to "Fluid".
   radii and areas. Its picks survive a rebuild that keeps their geometry.
 - **Mass properties**: volume, surface area, centroid and size, for each body
   and in total.
-- **Check**: each body is "Valid", or its problems are listed by kind with
-  where they are.
+- **Check**: pick what to check at the top of the panel.
+  - **Solids**: each body is "Valid", or its problems are listed by kind with
+    where they are.
+  - **Interference**: the pairs of bodies that overlap and how much (the
+    selected bodies, or every shown one). A clearance also lists the pairs
+    closer than it.
+  - **Loose parts**: the parts on each shaft in order, what holds each one,
+    and which can slide along the shaft (which way and how far), with a play
+    you set (0.5 mm if empty).
+  - **Rotation**: a body turned a full turn about an axis: the first angle it
+    meets each other body, both ways.
+
+  Press Check to run one; Stop ends a long one. Click a row to select its
+  bodies. The Assistant runs the same checks and gets the same words.
 - The **volume chip** shows the selected body's volume; with nothing selected it
   lists each body on its own. It never adds bodies together.
 - **Section view** cuts the view along an origin plane, so you can reach faces

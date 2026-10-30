@@ -427,6 +427,10 @@ const assemblyRows = (): HelpRow[] => [
     about: 'what it measures',
     text: 'stack and sweep cut the bodies near an axis by planes square to it, one between each two levels where a face starts or ends, so each slab is one shape all along: exact for parts extruded or revolved along the axis, close for others. Radii and gaps are in mm, angles in degrees. Read the rows and judge: a stop the check found may be a part that is loose itself (its own row says so).',
   },
+  {
+    about: "the person's Check",
+    text: 'The person runs the same checks in INSPECT > Check: Interference, Loose parts (stack) and Rotation (sweep), with the same words; a row there selects its bodies. Point them there to see a finding.',
+  },
 ];
 
 /** Printing in PLA: rules of thumb, each labelled so, for the owner to check. */

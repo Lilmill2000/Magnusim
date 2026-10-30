@@ -13,9 +13,12 @@
 // Rows are capped (rows_more says how many more). A read: it never waits for the person. When the
 // Part changes while it checks, it checks again once; a second change answers busy/changed. Long
 // checks give progress and stop with the call; past the time limit a check says how far it got.
+// The person's side is INSPECT's Check (src/features/check): its Interference, Loose parts and
+// Rotation run the same engine and show these replies' words (interferenceReply, stackReply,
+// sweepReply), and its axis list resolves reference axes with axisOf.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { axisLine, CheckKernelError, checkInterference, checkStack, checkSweep, PLAY_MM, sharedAxes, sideWords, type AssemblyBody, type AxisLine, type CheckEnv, type StackSide } from '../../features/assembly/check';
+import { axisLine, CheckKernelError, checkInterference, checkStack, checkSweep, PLAY_MM, sharedAxes, sideWords, type AssemblyBody, type AxisLine, type CheckEnv, type InterferenceResult, type StackResult, type StackSide, type SweepResult } from '../../features/assembly/check';
 import type { CallCtx, ToolImpl, ToolReply } from '../../types/assistant';
 import type { DocState } from '../../types/doc-service';
 import type { BodyInfo } from '../../types/kernel';
@@ -52,7 +55,8 @@ function inputOf(ctx: CallCtx): Input {
   return { kind: kind as Kind, bodies: bodies as string[], clearance: clearance as string, axis: axis as string };
 }
 
-const asBody = (b: BodyInfo): AssemblyBody => ({ id: b.id, name: b.name, shape: b.shape, bbox: b.bbox, faces: b.faces, solids: b.solids ?? null });
+/** A body as the checks read it. */
+export const asBody = (b: BodyInfo): AssemblyBody => ({ id: b.id, name: b.name, shape: b.shape, bbox: b.bbox, faces: b.faces, solids: b.solids ?? null });
 
 /** The bodies named (each once), or every body built now for []. */
 function bodiesOf(s: DocState, names: readonly string[], kind: Kind): BodyInfo[] {
@@ -80,7 +84,7 @@ function lengthOf(ctx: CallCtx, text: string, none: number): number {
 }
 
 /** The sweep's axis: an axis, a round face's, an edge's, "axis of <round face>"; null for "" (the shared one). */
-async function axisOf(ctx: CallCtx, s: DocState, text: string): Promise<{ line: AxisLine; words: string } | null> {
+export async function axisOf(ctx: CallCtx, s: DocState, text: string): Promise<{ line: AxisLine; words: string } | null> {
   const raw = text.trim();
   if (!raw) return null;
   const face = /^axis\s+of\s+(.+)$/i.exec(raw);
@@ -98,7 +102,11 @@ const word = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one
 const stopped = (complete: boolean, what: string): Row => (complete ? {} : { note: `Stopped at the time limit: ${what}. Check fewer bodies (bodies) to finish.` });
 
 async function interference(env: CheckEnv, bodies: AssemblyBody[], clearance: number): Promise<ToolReply> {
-  const r = await checkInterference(env, bodies, { clearance });
+  return interferenceReply(await checkInterference(env, bodies, { clearance }), clearance);
+}
+
+/** An interference check's reply (clearance in mm, 0 for none). */
+export function interferenceReply(r: InterferenceResult, clearance: number): ToolReply {
   const overlaps = r.rows.filter((x) => x.overlap !== null);
   const gaps = r.rows.filter((x) => x.gap !== null);
   const { rows, more } = roundRows(r.rows, (x) => (x.overlap !== null ? { bodies: [x.a, x.b], overlap_mm3: sig6(x.overlap), at_mm: vec(x.at) } : { bodies: [x.a, x.b], gap_mm: len(x.gap ?? 0), at_mm: vec(x.at) }));
@@ -131,7 +139,11 @@ async function interference(env: CheckEnv, bodies: AssemblyBody[], clearance: nu
 const sideText = (s: StackSide | null): string | null => (s === null ? null : s.by === null ? `nothing${s.off ? ' (comes off its shaft)' : ''}` : `${s.by} at ${len(s.gap ?? 0)} mm`);
 
 async function stack(env: CheckEnv, all: AssemblyBody[], only: number[] | null, play: number): Promise<ToolReply> {
-  const r = await checkStack(env, all, { play, ...(only ? { only } : {}) });
+  return stackReply(await checkStack(env, all, { play, ...(only ? { only } : {}) }), play);
+}
+
+/** A stack check's reply (play in mm). */
+export function stackReply(r: StackResult, play: number): ToolReply {
   const axes = r.axes.map((a) => ({
     axis: a.words,
     point_mm: vec(a.line.point),
@@ -200,7 +212,11 @@ async function sweep(ctx: CallCtx, env: CheckEnv, all: AssemblyBody[], turning: 
     words = 'the axis they share';
   }
   ctx.checkAbort();
-  const r = await checkSweep(env, all, turning, line);
+  return sweepReply(await checkSweep(env, all, turning, line), words);
+}
+
+/** A sweep's reply; `words`: how the axis was given ("" for the result's own words). */
+export function sweepReply(r: SweepResult, words: string): ToolReply {
   const { rows, more } = roundRows(r.hits, (h) => ({
     turning: h.turning,
     hits: h.hits,

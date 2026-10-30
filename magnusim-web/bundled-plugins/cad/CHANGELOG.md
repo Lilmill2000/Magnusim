@@ -17,6 +17,22 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   none when a feature left still uses one of them.
 - The Back isometric view (key 8, and the views menu); Middle in the section
   view cuts through the middle of the shown bodies.
+- Check (INSPECT) checks an assembly too, as the Assistant does, in the same
+  words. Pick a mode at the top of the panel, then press Check:
+  - **Interference**: the pairs of bodies that overlap and the volume they
+    share (the selected bodies, or every shown body). Type a clearance to also
+    list the pairs closer than it.
+  - **Loose parts**: every axis that bodies share, with its parts in order,
+    what each rides on, and what stops it on each side. It names each part
+    that can slide along its shaft, which way and how far, and each bore with
+    nothing in it. A part may have up to 0.5 mm of play (type another play).
+  - **Rotation**: pick a body (or select several) and an axis (one its round
+    faces lie on, X, Y, Z or a construction axis). It turns the body a full
+    turn both ways and gives the first angle it meets each other body.
+  Click a row to select its bodies (Ctrl adds them); hover it to light them. A
+  long check shows its progress and has Stop. If the Part changes afterwards,
+  the result says so. Solids is the check it always had: is each body a valid
+  solid.
 - Find (INSPECT): select faces, edges, bodies or sketch regions by a query in
   the Assistant's own words ("Body 1 faces >Z", "largest", "hole", "edges of
   Extrude 1.end"), then Select all or click a row.
@@ -62,7 +78,8 @@ still in development for Magnusim 0.5.0 (Settings > Assistant: a cloud provider
 with your own key, or a local server on this PC). How to use it: "The Assistant
 in the Part" in `README.md`.
 - In an open Part the Assistant can read the design, find faces and edges,
-  measure, look at pictures of the Part, set parameters, sketch, extrude,
+  measure, check an assembly (parts that overlap, parts loose on their shafts,
+  what a part hits when it turns), look at pictures of the Part, set parameters, sketch, extrude,
   revolve, sweep and loft, drill holes, fillet, chamfer and shell, pattern and
   mirror, combine bodies, name and colour bodies, change, rename, suppress or
   move features, undo its own steps and delete features.
