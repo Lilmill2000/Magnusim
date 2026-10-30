@@ -12,7 +12,9 @@
 // shell outside, topo edge_ends / vertex_faces. API 5 (P4b, the PATTERN builder):
 // B-spline sketch curves (SKETCH's R1), copies (patterns), project, section,
 // silhouette (SELECT); `version` answers api: 5. API 6 (press-pull on curved faces):
-// offset_faces, and press_pull taking curved faces; `version` answers api: 6.
+// offset_faces, and press_pull taking curved faces. API 7 (2026-10-30): volumes (props,
+// press-pull's check) integrate B-spline, swept and offset faces by Gauss-Kronrod over the
+// knot spans, the plain rule only where it is exact; `version` answers api: 7.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -347,9 +349,16 @@ export interface KernelOps {
       shells: number;
       bbox?: BBox | null;
       bbox_mode: 'fast' | 'exact' | 'none';
+      /**
+       * API 7: the plain Gauss rule on faces where it is exact (analytic surfaces bounded by
+       * lines and circles), Gauss-Kronrod over the knot spans to 1e-9 on the others (B-spline,
+       * swept and offset faces, B-spline boundaries); over 2000 faces the plain rule throughout.
+       */
       volume?: number;
-      /** With volume_eps: the integration's error estimate. */
+      /** With volume_eps, or when any face took Gauss-Kronrod: the integration's error estimate. */
       volume_error?: number;
+      /** 'spans' when any face took Gauss-Kronrod (API 7; API 5: sketch-spline faces only). */
+      integration?: 'spans';
       centroid?: Vec3 | null;
       area?: number;
       timings: Record<string, number>;

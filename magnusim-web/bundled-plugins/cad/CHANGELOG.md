@@ -4,6 +4,18 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Volumes of curved (B-spline) bodies are right.**
+- The volume chip, Mass properties, Measure and the Assistant read lofts,
+  revolved splines and other B-spline bodies up to 0.2 % off (an airfoil loft
+  showed 3.9336 × 10⁷ mm³ for 3.94102 × 10⁷), and after a Press-pull of such a
+  body the error could exceed the change itself. They now read what the body
+  holds (kernel API 7: each curved face is integrated piece by piece).
+- Press-pull no longer refuses small moves of such bodies' faces with a wrong
+  volume ("its volume would change by 35,083.5 mm³ instead of about
+  -13,565.7 mm³"), and a loft's caps can be moved at all.
+- A Combine Cut by a body that only touches a loft's cap says "Nothing to cut"
+  instead of passing with the volume going up.
+
 **Delete faces never passes off a wrong body.**
 - Delete faces and heal could fill more than the gap: on a part with a step,
   slot, pocket or channel and every edge rounded, deleting every fillet gave

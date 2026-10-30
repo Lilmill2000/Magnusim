@@ -71,13 +71,16 @@ node kernel-build/ship.mjs                           # queued with e2e runs; rep
   renames), so a page that starts a worker meanwhile does not load halves of
   two builds.
 
-## Reproducibility (measured 2026-09-30; API 3 build 2026-10-01)
+## Reproducibility (measured 2026-09-30; API 3 build 2026-10-01; API 7 build 2026-10-30)
 
 - `repro-check.sh --against-shipped`: two facade builds from clean object
   folders are byte-identical to each other and to the shipped files. API 3
   (2026-10-01, 1m20s for both): `mk32.wasm` 21,262,262 bytes, sha256
   `030265d3a8cc6ebb…`; `mk32.mjs` sha256 `aad011be5d356a6a…` (unchanged). P1.5:
-  `mk32.wasm` 20,821,079 bytes, sha256 `0fd2becb31458d22…`.
+  `mk32.wasm` 20,821,079 bytes, sha256 `0fd2becb31458d22…`. API 7 (2026-10-30,
+  volumes: `volumeOf` in the facade; built with `FACADE_OBJ` in a folder of its own, `--clean`):
+  `mk32.wasm` 22,477,455 bytes, sha256 `aefc7a5ff4a1ed6e…`; `mk32.mjs` unchanged; both
+  `repro-check.sh --against-shipped` builds identical to each other and to the shipped pair.
 - OCCT rebuilt from nothing (230 s): all 27 static libraries identical to the
   first build, and the facade linked against them identical again.
 - No `/home/...` or other build-machine path is left in `mk32.wasm`.

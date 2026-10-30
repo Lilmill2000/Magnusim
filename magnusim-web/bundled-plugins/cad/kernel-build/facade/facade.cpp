@@ -158,6 +158,12 @@
 #include <BRepBndLib.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
+#include <BRepGProp_Domain.hxx>
+#include <BRepGProp_Face.hxx>
+#include <BRepGProp_Vinert.hxx>
+#include <BRepGProp_VinertGK.hxx>
+#include <BRepBuilderAPI_NurbsConvert.hxx>
+#include <Geom_OffsetSurface.hxx>
 #include <Bnd_Box.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
@@ -1007,7 +1013,9 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // 5 = P4b: B-spline sketch curves (R1), copies, project, section, silhouette.
 // 6 = press-pull on curved faces: offset_faces (a true offset of picked faces, fillets
 // re-rounded), press_pull takes curved faces (a thickened face as the tool).
-const int kFacadeApi = 6;
+// 7 = volumes: the plain rule only where it is exact, Gauss-Kronrod over the knot spans on the
+// other faces (props, press-pull's volume check).
+const int kFacadeApi = 7;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
@@ -2081,9 +2089,8 @@ JV opRepair(const JV& q) {
 // (its B-spline faces), which the reference values share.
 // P4b (R5): does the shape have faces made from a sketch's B-spline: an extrusion or revolution of a
 // B-spline curve (or, with flatToo, a flat face bounded by a B-spline edge: a sketch region)? Their
-// volumes are integrated over the knot spans (props). STEP imports keep their own B-spline surfaces,
-// and the B-spline edges a boolean makes lie on other faces, so neither is touched (the native
-// reference values stay those of the default integration).
+// areas are integrated over the knot spans. (P4b did the same for their volumes in props; since API 7
+// volumeOf below does it for every face the plain rule is not exact on.)
 bool sketchSplineFaces(const TopoDS_Shape& s, bool flatToo = false) {
   auto splineCurve = [](Handle(Geom_Curve) c) {
     while (!c.IsNull()) {
@@ -2114,6 +2121,159 @@ bool sketchSplineFaces(const TopoDS_Shape& s, bool flatToo = false) {
   return false;
 }
 
+// API 7 (2026-10-30): the volume every number the person sees comes from (props: the chip, Mass,
+// Measure, the Assistant, Combine's "Nothing to cut") and press-pull's volume check use.
+// BRepGProp::VolumeProperties runs one fixed Gauss rule per face over its whole parameter range:
+// exact on analytic faces bounded by lines and circles, but off on B-spline faces and boundaries
+// (a loft -0.19 %, a spline revolve -0.075 %, a 1.5 mm shell -0.58 %), and its error does not
+// cancel before and after an edit (BRepOffset rewrites a face as an offset surface over a
+// converted B-spline: a good 0.01 mm press-pull read as a 942 mm3 loss and was refused). Here the
+// plain rule runs on the faces where it is exact and Gauss-Kronrod over the knot spans (to 1e-9)
+// on the others, every face about one point so that they add up. An offset surface at distance 0
+// (BRepOffset's untouched neighbours) is integrated as its B-spline basis (exact; GK straight on
+// one took seconds); one at a distance (the moved face) by GK on it to 1e-6 (its B-spline copy,
+// approximated to 1e-4 mm, was 2e-4 off on a loft's side offset 1 mm in). The adaptive "eps" form
+// is not used: 0.44 % off on offset surfaces over B-splines. A body of more than
+// kVolumeFaceBudget faces (a large STEP part) keeps the plain rule (20-73 s already on the 113 MB
+// part natively), as do the native reference values of such parts.
+const int kVolumeFaceBudget = 2000;
+
+// Is the plain rule exact on this face: an analytic surface bounded by lines, circles, ellipses?
+bool plainRuleExact(const TopoDS_Face& F) {
+  BRepAdaptor_Surface as(F, Standard_False);
+  switch (as.GetType()) {
+    case GeomAbs_Plane:
+    case GeomAbs_Cylinder:
+    case GeomAbs_Cone:
+    case GeomAbs_Sphere:
+    case GeomAbs_Torus:
+      break;
+    default:
+      return false;
+  }
+  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
+    if (BRep_Tool::Degenerated(E)) continue;
+    double f = 0, l = 0;
+    Handle(Geom2d_Curve) c = BRep_Tool::CurveOnSurface(E, F, f, l);
+    if (c.IsNull()) return false;
+    Geom2dAdaptor_Curve ac(c, f, l);
+    switch (ac.GetType()) {
+      case GeomAbs_Line:
+      case GeomAbs_Circle:
+      case GeomAbs_Ellipse:
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+}
+
+// The surface under any rectangular trims.
+Handle(Geom_Surface) bareSurface(const TopoDS_Face& F) {
+  Handle(Geom_Surface) g = BRep_Tool::Surface(F);
+  while (!g.IsNull()) {
+    Handle(Geom_RectangularTrimmedSurface) t = Handle(Geom_RectangularTrimmedSurface)::DownCast(g);
+    if (t.IsNull()) break;
+    g = t->BasisSurface();
+  }
+  return g;
+}
+
+struct VolumeRun {
+  double error = 0;  // the Gauss-Kronrod faces' error estimates, summed
+  int spans = 0;     // faces integrated by Gauss-Kronrod
+  bool budget = false;  // over kVolumeFaceBudget faces: the plain rule throughout
+};
+
+// The volume (and centre) of `s` into `props`, as described above.
+VolumeRun volumeOf(const TopoDS_Shape& s, GProp_GProps& props) {
+  VolumeRun run;
+  if (countOf(s, TopAbs_FACE) > kVolumeFaceBudget) {
+    run.budget = true;
+    BRepGProp::VolumeProperties(s, props);
+    return run;
+  }
+  gp_Pnt origin(0, 0, 0);
+  origin.Transform(s.Location());
+  props = GProp_GProps(origin);
+  // One point for every face (BRepGProp's own rough centre: the mean of the vertices).
+  gp_XYZ c(0, 0, 0);
+  int nv = 0;
+  for (TopExp_Explorer ex(s, TopAbs_VERTEX); ex.More(); ex.Next(), ++nv) c += BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())).XYZ();
+  if (nv) c /= nv;
+  const gp_Pnt loc(c);
+  BRepGProp_Vinert plain;
+  plain.SetLocation(loc);
+  BRepGProp_VinertGK gk;
+  gk.SetLocation(loc);
+  BRepGProp_Face plainFace;
+  BRepGProp_Face spanFace(Standard_True);
+  BRepGProp_Domain dom;
+  for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next()) {
+    TopoDS_Face F = TopoDS::Face(ex.Current());
+    const TopAbs_Orientation o = F.Orientation();
+    if (o != TopAbs_FORWARD && o != TopAbs_REVERSED) continue;
+    if (BRep_Tool::Surface(F).IsNull()) continue;
+    if (plainRuleExact(F)) {
+      plainFace.Load(F);
+      if (F.NbChildren() == 0) {
+        plain.Perform(plainFace);
+      } else {
+        dom.Init(F);
+        plain.Perform(plainFace, dom);
+      }
+      props.Add(plain);
+      continue;
+    }
+    Handle(Geom_Surface) g = bareSurface(F);
+    Handle(Geom_OffsetSurface) off = Handle(Geom_OffsetSurface)::DownCast(g);
+    if (!off.IsNull() && off->Offset() == 0.0) {
+      try {
+        BRepBuilderAPI_NurbsConvert nc(F, Standard_True);
+        if (nc.IsDone() && !nc.Shape().IsNull() && nc.Shape().ShapeType() == TopAbs_FACE) {
+          F = TopoDS::Face(nc.Shape());
+          F.Orientation(o);
+        }
+      } catch (const Standard_Failure&) {
+        // Not converted: Gauss-Kronrod on the offset surface itself (slower, as accurate).
+      }
+    }
+    // An offset surface at a distance (the moved face): Gauss-Kronrod on it to 1e-6 (1.4 s for a
+    // press-pull of a 400 x 380 mm B-spline face, 3.5 s at 1e-9; the volume within 2 mm3 of 1e-9's).
+    const double tol = !off.IsNull() && off->Offset() != 0.0 ? 1e-6 : 1e-9;
+    double e = -1;
+    try {
+      spanFace.Load(F);
+      if (F.NbChildren() == 0) {
+        e = gk.Perform(spanFace, tol);
+      } else {
+        dom.Init(F);
+        e = gk.Perform(spanFace, dom, tol);
+      }
+    } catch (const Standard_Failure&) {
+      e = -1;
+    }
+    if (e >= 0) {
+      run.error += e;
+      ++run.spans;
+      props.Add(gk);
+      continue;
+    }
+    // Gauss-Kronrod gave up on this face (a negative error): the plain rule, as before API 7.
+    plainFace.Load(F);
+    if (F.NbChildren() == 0) {
+      plain.Perform(plainFace);
+    } else {
+      dom.Init(F);
+      plain.Perform(plainFace, dom);
+    }
+    props.Add(plain);
+  }
+  return run;
+}
+
 JV opProps(const JV& q) {
   int sid = idParam(q.req("id"), "id");
   const TopoDS_Shape& s = shapeOf(sid);
@@ -2141,14 +2301,15 @@ JV opProps(const JV& q) {
       const double eps = q.num("volume_eps");
       if (!(eps > 0)) throw InputError("volume_eps must be > 0");
       r.set("volume_error", BRepGProp::VolumeProperties(s, vp, eps, Standard_False));
-    } else if (sketchSplineFaces(s)) {
-      // P4b (R5): faces swept from a sketch's B-spline (or flat faces bounded by one): the default
-      // integration was 0.04 % off on them (a closed spline's prism fused with another) and the eps
-      // one worse; Gauss-Kronrod over the knot spans is exact to 1e-12 here (`integration` says so).
-      r.set("volume_error", BRepGProp::VolumePropertiesGK(s, vp, 1e-9, Standard_False, Standard_True));
-      r.set("integration", "spans");
     } else {
-      BRepGProp::VolumeProperties(s, vp);
+      // API 7: volumeOf (the plain rule where it is exact, Gauss-Kronrod over the knot spans on
+      // the other faces); `integration` says "spans" when any face took Gauss-Kronrod. P4b (R5)
+      // did this for faces swept from a sketch's B-spline only.
+      const VolumeRun v = volumeOf(s, vp);
+      if (v.spans) {
+        r.set("volume_error", v.error);
+        r.set("integration", "spans");
+      }
     }
     r.set("volume", vp.Mass());
     r.set("centroid", vp.Mass() != 0 ? p3(vp.CentreOfMass()) : JV());
@@ -4574,7 +4735,8 @@ struct Verdict {
 // plate removes less than the full ring (0.96 at -12). The broken results the review found
 // were at 0.000, -0.000003 and 0.0008 (the thickened fillet at -40, the Vortex's main
 // cylinder and a B-spline face at -1).
-Verdict acceptResult(int sid, const std::vector<OffPick>& picks, const std::set<int>& carried, const std::vector<int>& tangent, double d, const JV& cand, bool selfCheck, double v0) {
+// `inputSelf`: whether the input itself passes the self-interference check (-1: not run yet).
+Verdict acceptResult(int sid, const std::vector<OffPick>& picks, const std::set<int>& carried, const std::vector<int>& tangent, double d, const JV& cand, bool selfCheck, double v0, int* inputSelf) {
   Verdict v;
   const int rid = (int)cand.get("id")->num();
   const TopoDS_Shape& S1 = shapeOf(rid);
@@ -4639,7 +4801,7 @@ Verdict acceptResult(int sid, const std::vector<OffPick>& picks, const std::set<
     return v;
   }
   GProp_GProps gp;
-  BRepGProp::VolumeProperties(S1, gp);
+  volumeOf(S1, gp);  // API 7: the volume the chip shows, so the check reads what the person will
   v.dv = gp.Mass() - v0;
   double E = 0;
   for (auto& p : picks) E += expectedDV(p, d);
@@ -4658,8 +4820,18 @@ Verdict acceptResult(int sid, const std::vector<OffPick>& picks, const std::set<
   if (selfCheck) {
     BRepAlgoAPI_Check chk(S1, Standard_False, Standard_True);
     if (!chk.IsValid()) {
-      v.code = "self";
-      return v;
+      // API 7: a body the check already finds cutting through itself before any move (a loft
+      // with a closed B-spline side: every candidate failed it, so its caps could not be moved
+      // at all) cannot be judged by it; the other rules still hold.
+      if (inputSelf && *inputSelf < 0) {
+        WorkCopies wc0({sid});
+        BRepAlgoAPI_Check c0(wc0.shape(0), Standard_False, Standard_True);
+        *inputSelf = c0.IsValid() ? 1 : 0;
+      }
+      if (!inputSelf || *inputSelf != 0) {
+        v.code = "self";
+        return v;
+      }
     }
   }
   return v;
@@ -4815,8 +4987,9 @@ JV opOffsetFaces(const JV& q) {
     for (int k : p.tangent)
       if (std::find(tangentAll.begin(), tangentAll.end(), k) == tangentAll.end()) tangentAll.push_back(k);
   GProp_GProps g0;
-  BRepGProp::VolumeProperties(shapeOf(sid), g0);
+  volumeOf(shapeOf(sid), g0);
   const double v0 = g0.Mass();
+  int inputSelf = -1;
   const double t1 = nowMs();
 
   static const char* kRank[] = {"radius", "empty", "gone", "lost", "split", "volume", "vanish", "self", "invalid", "fillet", "step", "occt"};
@@ -4860,7 +5033,7 @@ JV opOffsetFaces(const JV& q) {
       }
     for (auto& kv : carried) rw.push_back(kv.second);
     auto judge = [&](JV cand, const std::vector<int>& tangent) -> JV {
-      Verdict v = acceptResult(sid, ps, carriedSet, tangent, dd, cand, selfCheck, v0);
+      Verdict v = acceptResult(sid, ps, carriedSet, tangent, dd, cand, selfCheck, v0, &inputSelf);
       if (v.ok()) {
         if (!keep) g_store.erase((int)cand.get("id")->num());
         return cand;

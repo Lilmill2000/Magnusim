@@ -346,7 +346,7 @@ with the host once for the page's life, and its chip goes in the dock.
   Timeouts (`src/kernel/timeouts.ts`): copies, project and section 60 s, silhouette 120 s.
   | Op / change | Params -> result (abridged) |
   |---|---|
-  | `SketchCurve` `bspline` | `{degree, poles, knots, mults, weights?, pa?, pb?}` in `sketch_regions`, `extrude_regions`, `revolve_regions`, `sweep_regions` (profile and path) and `loft_regions`; closed when the first and last poles are equal; crossings numbered along the spline; refusals "bspline <id>: <reason>". Exact pcurves on the sketch plane; a spline-bounded region's area is integrated adaptively, and `props` integrates the volume of faces swept from a sketch spline over the knot spans (Gauss-Kronrod, `integration: "spans"`; the default rule was 0.04 % off once fused). STEP imports and boolean results keep the default rule |
+  | `SketchCurve` `bspline` | `{degree, poles, knots, mults, weights?, pa?, pb?}` in `sketch_regions`, `extrude_regions`, `revolve_regions`, `sweep_regions` (profile and path) and `loft_regions`; closed when the first and last poles are equal; crossings numbered along the spline; refusals "bspline <id>: <reason>". Exact pcurves on the sketch plane; a spline-bounded region's area is integrated adaptively, and `props` integrates the volume of faces swept from a sketch spline over the knot spans (Gauss-Kronrod, `integration: "spans"`; the default rule was 0.04 % off once fused). Since API 7 every face the default rule is not exact on (below) |
   | `copies` | `{id, transforms: [{matrix}]}` -> one copy per rigid transform or mirror (orthonormal, det ±1, no scale), `valid` per copy, `maps` when a mirrored copy renumbers faces (the patterns' copies) |
   | `project` | edges, vertices or a face's outer wire projected along the plane normal into plane u/v as `PlaneCurve` (line, arc with `ccw`, circle, bspline, point; an end-on line is a point, an edge-on circle a line, an ellipse a rational B-spline), `src` = the edge or vertex index |
   | `section` | `BRepAlgoAPI_Section` of a body with the plane, chained head to tail into loops (`closed`), `src.face` per curve; a miss gives `loops: []` |
@@ -397,6 +397,27 @@ with the host once for the page's life, and its chip goes in the dock.
       re-offset at 0 of the part's B-spline faces, which come back as invalid offset
       surfaces (BRepCheck names faces far from the pick). The ring method does not touch
       them; its volumes equal native OCCT's to the last digit.
+- **API 7 (volumes, 2026-10-30; `volumeOf` in the facade, tests
+  `tests/kernel/kernel-api7-volume.test.ts`, `tests/features/solids/volume-accuracy-real.test.ts`,
+  `e2e/cad-volume-accuracy.spec.ts`; build aefc7a5f in `kernel-build/mk32.build.txt`).**
+  `BRepGProp::VolumeProperties` runs one fixed Gauss rule per face over its whole range: exact
+  on analytic faces bounded by lines and circles, but a loft read 0.2 % low, a spline revolve
+  0.075 %, a 1.5 mm shell 0.58 %, and the error did not cancel across an edit (BRepOffset
+  rewrites faces as offset surfaces over converted B-splines), so Press-pull refused good
+  0.01 mm moves with a wrong volume and a Cut by a block only touching a cap changed the
+  volume. `props` (the chip, Mass, Measure, the Assistant, Combine's "Nothing to cut") and
+  `offset_faces`' accept rule now take `volumeOf`: the plain rule on the faces where it is
+  exact, Gauss-Kronrod over the knot spans to 1e-9 on the others (an offset surface at 0 as its
+  B-spline basis; one at a distance by Gauss-Kronrod on it to 1e-6: its B-spline copy was 2e-4
+  off), all about one point; `integration: "spans"` when any face took Gauss-Kronrod. Over
+  2000 faces (a large STEP part) the plain rule throughout, as before. The adaptive `volume_eps`
+  form stays an option but is not used: 0.44 % off on offset surfaces over B-splines. Timings
+  (Node): the bodies above 2-12 ms; a press-pull of a 400 x 380 mm B-spline face 1.4 s.
+  `offset_faces`' self-interference check no longer refuses a body that fails it before any
+  move (a loft with a closed B-spline side failed it, so its caps could not be moved at all).
+  Native reference values made with the plain rule moved: a loft through circles offset 1 mm
+  in (1.2e-4), an invalid blend (1.2e-6). Not changed (not shown to the person): the thicken
+  tool's sign, a split's piece order and `measure`'s body volume still use the plain rule.
 
 ## 6. Document
 
