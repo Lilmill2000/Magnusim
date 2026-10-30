@@ -28,14 +28,17 @@ import { describeFace } from '../naming/names';
 import { evaluateDimensions, isDimension, quantityOf } from '../sketch/model';
 import type { AppServices } from '../types/app';
 import type { CallCtx, ToolReply } from '../types/assistant';
-import type { BodyId, SketchFeature, Vec3 } from '../types/doc';
+import type { BodyId, PlaneFrame, SketchFeature, Vec3 } from '../types/doc';
+import type { PlaneRef } from '../types/references';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
-import type { EvalResult } from '../types/units';
 import type { DisplayMode, Projection, SnapshotOptions, SnapshotResult, SnapshotView, ViewportHandle } from '../types/viewport';
 import { LIGHT } from '../viewport/palette';
 import { sketchPlane, sketchUp } from '../viewport/normal';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
+import { offsetRange } from '../viewport/section';
+import { findSectionFrame, sectionPlaneWords, sectionWords } from '../features/section/plane';
+import { resolveSectionRef, SECTION_FORMS, splitSection } from './measure-targets';
 import { closestName, closestWords } from './closest';
 import { heartbeat, waitForRead } from './busy';
 import { ToolError } from './errors';
@@ -98,7 +101,7 @@ export function readViewInput(input: Record<string, unknown>): ViewInput {
   const hide = input.hide ?? [];
   if (!Array.isArray(hide) || hide.length > 32 || hide.some((h) => typeof h !== 'string')) throw bad('hide', 'hide must list at most 32 body names.');
   const section = input.section ?? '';
-  if (typeof section !== 'string') throw bad('section', 'section must be "" or "<Top|Front|Right> [offset <length> | middle] [flip]".');
+  if (typeof section !== 'string') throw bad('section', `section must be "" or a plane: ${SECTION_FORMS}.`);
   const labels = input.labels ?? 'none';
   if (!LABELS.includes(labels as ViewLabels)) throw bad('labels', `labels must be one of ${LABELS.join(', ')}.`);
   const size = input.size ?? 'small';
@@ -116,70 +119,54 @@ export function readViewInput(input: Record<string, unknown>): ViewInput {
 
 // ------------------------------------------------------------ the cut
 
-export type SectionPlane = 'top' | 'front' | 'right';
-
 /**
- * A cut parallel to an origin plane, as the snapshot takes it: `offset` mm along the plane's normal.
- * `middle`: asked as "<plane> middle", the offset is the middle of the shown bodies' box along that
- * normal (sectionAtMiddle), 0 until it is known.
+ * A cut as the view tool and the workspace's section take it (the person's Section view keeps the
+ * same): the plane (an origin plane, a construction plane, a flat face: what it is, so the person's
+ * view follows it), where that plane is now, the offset along its normal (mm), the side, and
+ * `middle` when it was asked as "<plane> middle" (the middle of the shown bodies along the normal).
  */
-export interface SectionChoice {
-  plane: SectionPlane;
+export interface SectionCut {
+  plane: PlaneRef;
+  frame: PlaneFrame;
   offset: number;
   flip: boolean;
   middle?: true;
 }
 
-const PLANE_WORDS: Readonly<Record<string, SectionPlane>> = { top: 'top', xy: 'top', front: 'front', xz: 'front', right: 'right', yz: 'right' };
-const PLANE_NAMES: Readonly<Record<SectionPlane, string>> = { top: 'Top', front: 'Front', right: 'Right' };
-/** The axis of each plane's normal and its sign (Front's normal points at -Y: ORIGIN_PLANES). */
-const PLANE_AXIS: Readonly<Record<SectionPlane, { axis: 'x' | 'y' | 'z'; sign: 1 | -1 }>> = { top: { axis: 'z', sign: 1 }, front: { axis: 'y', sign: -1 }, right: { axis: 'x', sign: 1 } };
-
-const SECTION_FORM = '"" or "<Top|Front|Right> [offset <length> | middle] [flip]"';
-
-/** `section` read: null for "", else the cut; bad_section in words when it is neither. */
-export function parseSection(text: string, evaluate: (expr: string) => EvalResult): SectionChoice | null {
-  const t = text.trim();
+/**
+ * `section` read and found on the Part as built: null for "", else the cut; bad_section (or the
+ * selectors' own reasons) in words when it is not one. `boxes` are the shown bodies' boxes, for
+ * "middle".
+ */
+export async function findSection(ctx: CallCtx, text: string, boxes: readonly (readonly number[])[], field = 'section'): Promise<SectionCut | null> {
+  const t = splitSection(text);
   if (!t) return null;
-  const m = /^(\S+)(?:\s+offset\s+(.+?)|\s+(middle))?(\s+flip)?$/i.exec(t);
-  const plane = m ? PLANE_WORDS[m[1].toLowerCase()] : undefined;
-  if (!m || !plane) throw new ToolError('bad_section', `"${t}" is not a section: write ${SECTION_FORM}.`, { detail: { section: t } });
+  const { services } = ctx;
+  if (t.middle && t.offset !== null) throw new ToolError('bad_section', `"${text.trim()}" has both an offset and middle: give one.`, { detail: { section: text.trim(), field } });
   let offset = 0;
-  if (m[2] !== undefined) {
-    const r = evaluate(m[2]);
-    if (!r.ok) throw new ToolError('bad_section', `The offset "${m[2]}" of "${t}" is not a length: ${r.error}`, { detail: { section: t, field: 'offset' } });
+  if (t.offset !== null) {
+    const r = services.doc.units.evaluate(t.offset, 'length');
+    if (!r.ok) throw new ToolError('bad_section', `The offset "${t.offset}" of "${text.trim()}" is not a length: ${r.error}`, { detail: { section: text.trim(), field: 'offset' } });
     offset = r.value;
   }
-  return { plane, offset, flip: !!m[4], ...(m[3] ? { middle: true as const } : {}) };
+  const plane = await resolveSectionRef(ctx, services.doc.state.get(), t.base, field);
+  const found = await findSectionFrame(services, plane);
+  if (!found.ok) throw new ToolError('nothing_selected', `${field}: ${sectionPlaneWords(services.doc.state.get(), plane)}: ${found.message}.`, { detail: { field } });
+  if (t.middle) {
+    const r = offsetRange(found.frame, boxes);
+    offset = r ? (r[0] + r[1]) / 2 : 0;
+  }
+  return { plane, frame: found.frame, offset, flip: t.flip, ...(t.middle ? { middle: true as const } : {}) };
 }
 
-/**
- * A "<plane> middle" cut at the middle of `boxes` (the shown bodies' [xmin, ymin, zmin, xmax, ymax,
- * zmax]) along the plane's normal; any other cut as it is. No box: through the origin.
- */
-export function sectionAtMiddle(c: SectionChoice | null, boxes: readonly (readonly number[])[]): SectionChoice | null {
-  if (!c || !c.middle) return c;
-  const { axis, sign } = PLANE_AXIS[c.plane];
-  const i = axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
-  const ok = boxes.filter((b) => b.length >= 6 && Number.isFinite(b[i]) && Number.isFinite(b[i + 3]));
-  if (!ok.length) return { ...c, offset: 0 };
-  const lo = Math.min(...ok.map((b) => b[i]));
-  const hi = Math.max(...ok.map((b) => b[i + 3]));
-  // The offset is along the plane's normal: Front's points at -Y.
-  return { ...c, offset: (sign * (lo + hi)) / 2 };
+/** The cut as a picture takes it. */
+export function snapshotCut(c: SectionCut): NonNullable<SnapshotOptions['section']> {
+  return { frame: { origin: [...c.frame.origin], normal: [...c.frame.normal] }, offset: c.offset, flip: c.flip };
 }
 
-/** What a cut keeps, in model words ("z <= 4 mm", "y >= -10 mm"). */
-export function keepsWords(c: SectionChoice): string {
-  const { axis, sign } = PLANE_AXIS[c.plane];
-  // Unflipped, the side away from the plane's normal stays (sectionPlane): sign*coord <= offset.
-  const below = (sign === 1) !== c.flip;
-  return `${axis} ${below ? '<=' : '>='} ${len(sign * c.offset)} mm`;
-}
-
-/** The cut as the data gives it. */
-export function sectionData(c: SectionChoice | null): Record<string, unknown> | null {
-  return c ? { plane: PLANE_NAMES[c.plane], offset_mm: len(c.offset), flip: c.flip, ...(c.middle ? { middle: true } : {}), keeps: keepsWords(c) } : null;
+/** The cut as the data gives it: the plane by its words ("Top", "Plane 1", "End face of Extrude 1 on Body 1"). */
+export function sectionData(s: Pick<DocState, 'doc' | 'rebuild'>, c: Pick<SectionCut, 'plane' | 'frame' | 'offset' | 'flip' | 'middle'> | null): Record<string, unknown> | null {
+  return c ? sectionWords(s, c) : null;
 }
 
 // ------------------------------------------------------------ the sheet
@@ -632,10 +619,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
   const hideIds = new Set(hidden.map((b) => b.id));
   // "<plane> middle": through the middle of what is drawn.
   const drawn = bodies.filter((b) => b.visible && !!b.tess && !hideIds.has(b.id));
-  const section = sectionAtMiddle(
-    parseSection(input.section, (e) => services.doc.units.evaluate(e, 'length')),
-    drawn.map((b) => b.bbox),
-  );
+  const section = await findSection(ctx, input.section, drawn.map((b) => b.bbox));
   const size: ViewSize = ctx.budgets.viewSize === 'small' ? 'small' : input.size;
   // A sketch: one picture straight at it, framed on its curves; else the views asked.
   const pictured = input.sketch ? sketchShot(s, input.sketch) : null;
@@ -645,7 +629,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
 
   // Every picture in this task: the Part as it is now in each of them.
   ctx.progress(0, `Drawing ${pictured ? pictured.feature.name : views.join(', ')}`);
-  const base = (t: Tile): SnapshotOptions => ({ view: 'iso', width: t.w, height: t.h, hide: [...hideIds], section: section ? { ...section } : null, display: input.display, projection: input.projection });
+  const base = (t: Tile): SnapshotOptions => ({ view: 'iso', width: t.w, height: t.h, hide: [...hideIds], section: section ? snapshotCut(section) : null, display: input.display, projection: input.projection });
   const shots = pictured
     ? [snap(handle, { ...base(layout.tiles[0]), along: { dir: pictured.dir, up: pictured.up }, fit: boxOfPoints(pictured.points), sketch: pictured.feature.id })]
     : views.map((view, i) => snap(handle, { ...base(layout.tiles[i]), view }));
@@ -680,7 +664,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
     const triangles = shown.reduce((n, b) => n + (b.tess ? b.tess.indices.length / 3 : 0), 0) * shots.length;
     if (triangles > LABEL_TRIANGLES_MAX) notes.push('The Part has too many faces to label them in a picture: find lists faces with their handles.');
     else {
-      const clip = section ? snapshotClip(section) : null;
+      const clip = section ? snapshotClip(snapshotCut(section)) : null;
       const v = new Vector3();
       const keep = clip ? (p: Vec3) => clip.distanceToPoint(v.set(p[0], p[1], p[2])) >= -1e-6 : null;
       const spots = shots.flatMap((shot, i) => shown.flatMap((b) => faceSpots(b, shot, toCamera(i), keep).map((spot) => ({ ...spot, tile: i }))));
@@ -766,7 +750,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
     hidden: hidden.map((b) => b.name),
     ...(inTree.length ? { hidden_in_tree: inTree.slice(0, BODY_NAMES_MAX).map((b) => b.name) } : {}),
     ...(inTree.length > BODY_NAMES_MAX ? { hidden_in_tree_more: inTree.length - BODY_NAMES_MAX } : {}),
-    section: sectionData(section),
+    section: sectionData(s, section),
     ...(input.display !== 'shaded-edges' ? { display: input.display.replace('-', '_') } : {}),
     ...(input.projection !== 'orthographic' ? { projection: input.projection } : {}),
     labels,

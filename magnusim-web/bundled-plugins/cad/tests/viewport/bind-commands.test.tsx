@@ -12,6 +12,8 @@ import { ServicesProvider } from '../../src/lib/services';
 import { createStateStore } from '../../src/lib/store';
 import { createCommandRegistry } from '../../src/app/commands';
 import type { AppServices } from '../../src/types/app';
+import type { DocState } from '../../src/types/doc-service';
+import type { StateStore } from '../../src/types/state';
 import type { CadEvents } from '../../src/types/events';
 import type { BodyInfo, TessPayload } from '../../src/types/kernel';
 import type { PickResult, SelectionItem } from '../../src/types/selection';
@@ -333,16 +335,43 @@ describe('viewport chrome', () => {
   it('the section button turns the cut on at the middle of the bodies, and off again', () => {
     const { el, calls, click } = mount();
     click('[data-vp-opens="section"]');
-    expect(calls.section[0]).toEqual({ on: true, plane: 'origin:front', offset: 10 });
+    // On, on the plane it had (Front by default), at the middle of the bodies.
+    expect(calls.section[0]).toEqual({ on: true, offset: 10 });
     expect(el.querySelector('[data-vp-pop="section"]')).not.toBeNull();
     // Shown as the coordinate the cut fixes: the Front plane's normal is -Y, so offset 10 is y = -10.
     expect(el.querySelector('[data-section-value]')!.textContent).toBe('Y -10 mm');
     click('[data-vp-seg="Section plane"] [data-value="origin:top"]');
-    expect(calls.section[1]).toEqual({ plane: 'origin:top', offset: 10 });
+    expect(calls.section[1]).toEqual({ plane: { kind: 'origin', plane: 'origin:top' }, offset: 10 });
     click('[data-section-flip]');
     expect(calls.section[2]).toEqual({ flip: true });
     click('[data-vp-opens="section"]');
     expect(calls.section[3]).toEqual({ on: false });
+    expect(el.querySelector('[data-vp-pop="section"]')).toBeNull();
+  });
+
+  it("a cut on a construction plane (INSPECT > Section view's) shows by its name, its offset along its own normal; More opens that panel", () => {
+    const { el, h, services, click } = mount();
+    // The Part has Plane 1, and the view is cut on it (as the Section view panel sets it).
+    (services.doc.state as StateStore<DocState>).set((s) => ({ ...s, doc: { features: [{ id: 'f_p', type: 'ref_plane', name: 'Plane 1' }], bodies: {} } }) as unknown as DocState);
+    act(() => h.setSection({ on: true, plane: { kind: 'feature', feature: 'f_p' }, frame: { origin: [0, 0, 5], normal: [0, 0, 1], xdir: [1, 0, 0] }, offset: 2 }));
+    click('[data-vp-opens="section"]');
+    // The button turns it off (it was on); on again: the same plane, at the plane itself (offset 0).
+    click('[data-vp-opens="section"]');
+    expect(h.state.get().section).toMatchObject({ on: true, plane: { kind: 'feature', feature: 'f_p' }, offset: 0 });
+    const seg = [...el.querySelectorAll('[data-vp-seg="Section plane"] button')].map((b) => [b.textContent, b.getAttribute('aria-checked')]);
+    expect(seg).toEqual([
+      ['Top', 'false'],
+      ['Front', 'false'],
+      ['Right', 'false'],
+      ['Plane 1', 'true'],
+    ]);
+    expect(el.querySelector('[data-section-value]')!.textContent).toBe('Offset 0 mm');
+    // More opens INSPECT > Section view (its command runs; the popover closes).
+    const run = vi.fn();
+    services.commands.register({ id: 'inspect.section', label: 'Section view', group: 'inspect', icon: 'M0 0', run });
+    act(() => h.setSection({ offset: 3 }));
+    click('[data-section-more]');
+    expect(run).toHaveBeenCalledTimes(1);
     expect(el.querySelector('[data-vp-pop="section"]')).toBeNull();
   });
 });

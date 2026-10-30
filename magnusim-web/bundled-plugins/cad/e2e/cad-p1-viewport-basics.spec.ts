@@ -396,7 +396,7 @@ test('cad:p1-viewport-box shading, picking, views, section, visibility and the m
   // Flip keeps the other half, and the left face is back.
   await f.locator('[data-vp-opens="section"]').click();
   await expect(f.locator('[data-vp-pop="section"]')).toBeVisible();
-  await expect.poll(async () => (await vpState(frame)).section).toEqual({ on: true, plane: 'origin:front', offset: -10, flip: false });
+  await expect.poll(async () => (await vpState(frame)).section).toEqual({ on: true, plane: { kind: 'origin', plane: 'origin:front' }, frame: { origin: [0, 0, 0], normal: [0, -1, 0], xdir: [1, 0, 0] }, offset: -10, flip: false });
   await expect(f.locator('[data-section-value]')).toHaveText('Y 10 mm');
   // The cap: lit like a face turned to -Y, with diagonal hatching (0.62 of that colour) so it reads as a cut.
   const capLit = lit(BODY, [0, -1, 0], HOME);

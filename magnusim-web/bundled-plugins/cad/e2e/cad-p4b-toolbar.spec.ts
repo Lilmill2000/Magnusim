@@ -30,7 +30,7 @@ const MODEL_ON_BAR: Record<string, string[]> = {
   modify: ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters'],
   construct: ['construct.plane', 'construct.axis', 'construct.point'],
   cfd: ['cfd.enclosure'],
-  inspect: ['inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find'],
+  inspect: ['inspect.measure', 'inspect.section', 'inspect.mass', 'inspect.check', 'inspect.find'],
   file: ['file.import-step', 'file.export-step', 'file.picture'],
   scale: ['scale.banana'],
 };
@@ -274,8 +274,9 @@ test('cad:p4b-toolbar-wide-text with larger text in the ribbon: nothing scrolls 
   expect(ran.labels).toBeGreaterThan(0);
   expect(ran.tight).toBe(true);
   expect(ran.collapsed).toBeGreaterThan(0);
-  // Back to 1600 px: everything named again.
-  const s = await fitAt(page, frame, 1600);
+  // Back to a wide frame: everything named again (1800 px: INSPECT's Section view added a column of
+  // small buttons, and with this larger text FILE goes to icons at 1600 px).
+  const s = await fitAt(page, frame, 1800);
   expect(s.labels).toEqual([]);
   expect(s.collapsed).toEqual([]);
   expect(s.scroll).toBeLessThanOrEqual(1);

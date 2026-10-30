@@ -62,7 +62,7 @@ import { featureShown } from '../../ui/tree/model';
 import { WELL_KNOWN_COMMANDS } from '../../types/modules';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import { type BodyId, type Feature, type FeatureId, type ImportFeature, type OriginPlaneRef, type OriginRef, type Vec2, type Vec3 } from '../../types/doc';
+import { type BodyId, type Feature, type FeatureId, type ImportFeature, type OriginRef, type Vec2, type Vec3 } from '../../types/doc';
 import type { SelectionItem, SelectKind } from '../../types/selection';
 import type { DisplayMode, Projection, StandardView, ViewportHandle } from '../../types/viewport';
 import { heartbeat, waitForRead } from '../busy';
@@ -72,7 +72,9 @@ import { runtimeOf } from '../runtime';
 import { workspaceActionsFor, type WorkspaceAction } from '../schemas';
 import { centreOf, hitWords, selectAny, withScene, type Hit } from '../selectors/resolve';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
-import { parseSection, sectionAtMiddle, sectionData } from '../view';
+import { findSection, sectionData } from '../view';
+import { SECTION_FORMS } from '../measure-targets';
+import { setSectionView } from '../../features/section/bind';
 import { closestName, closestWords } from '../closest';
 
 interface Input {
@@ -666,19 +668,17 @@ function personView(ctx: CallCtx, i: Input): ViewportHandle {
 
 const STANDARD: readonly StandardView[] = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso', 'iso_back', 'home'];
 const DISPLAY: Readonly<Record<string, DisplayMode>> = { shaded_edges: 'shaded-edges', 'shaded-edges': 'shaded-edges', shaded: 'shaded', wireframe: 'wireframe' };
-const SECTION_PLANE: Readonly<Record<string, OriginPlaneRef>> = { top: 'origin:top', front: 'origin:front', right: 'origin:right' };
-
-/** The view's words now (the reply's `view`). */
-function viewNow(h: ViewportHandle): Record<string, unknown> {
+/** The view's words now (the reply's `view`): the section's plane by its words, as the person's Section view panel names it. */
+function viewNow(services: AppServices, h: ViewportHandle): Record<string, unknown> {
   const st = h.state.get();
-  return { display: st.display.replace('-', '_'), projection: st.projection, section: st.section.on ? { plane: st.section.plane.slice('origin:'.length), offset_mm: round(st.section.offset), flip: st.section.flip } : null };
+  return { display: st.display.replace('-', '_'), projection: st.projection, section: st.section.on ? sectionData(services.doc.state.get(), st.section) : null };
 }
 
 async function view(ctx: CallCtx, i: Input): Promise<ToolReply> {
   const { services } = ctx;
   const h = personView(ctx, i);
   const auto = { auto: true, animate: true };
-  const data = (extra: Record<string, unknown> = {}) => ({ ...extra, view: viewNow(h), person_asked: i.asked });
+  const data = (extra: Record<string, unknown> = {}) => ({ ...extra, view: viewNow(services, h), person_asked: i.asked });
   switch (i.action) {
     case 'fit':
       h.fit(auto);
@@ -740,14 +740,16 @@ async function view(ctx: CallCtx, i: Input): Promise<ToolReply> {
         h.setSection({ on: false });
         return done('Section view off in the person\'s view', data());
       }
+      // The person's Section view (INSPECT): the same plane forms as the view tool's section; a
+      // construction plane or a face is kept as what it is, so the cut follows it.
+      await heartbeat(ctx, services.doc.settled(ctx.signal), 'Waiting for the rebuild');
       const drawn = services.doc.state.get().rebuild.bodies.filter((b) => b.visible);
-      const c = sectionAtMiddle(
-        parseSection(i.value, (e) => services.doc.units.evaluate(e, 'length')),
-        drawn.map((b) => b.bbox),
-      );
-      if (!c) throw bad('value', 'value: off, or "<Top|Front|Right> [offset <length> | middle] [flip]".');
-      h.setSection({ on: true, plane: SECTION_PLANE[c.plane], offset: c.offset, flip: c.flip });
-      return done(`Section view on in the person's view: ${String(sectionData(c)?.keeps ?? '')}`, data({ section: sectionData(c) }));
+      const c = await findSection(ctx, i.value, drawn.map((b) => b.bbox), 'value');
+      if (!c) throw bad('value', `value: off, or a plane: ${SECTION_FORMS}.`);
+      const r = await setSectionView(services, { plane: c.plane, offset: c.offset, flip: c.flip });
+      if (!r.ok) throw new ToolError('no_viewport', r.reason);
+      const d = sectionData(services.doc.state.get(), { ...c, frame: r.section.frame, offset: r.section.offset });
+      return done(`Section view on in the person's view: ${String(d?.plane)} offset ${String(d?.offset_mm)} mm, keeps ${String(d?.keeps ?? '')}`, data({ section: d }));
     }
     case 'projection': {
       const p = i.value.toLowerCase() as Projection;

@@ -305,7 +305,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
       'modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters',
       'construct.plane', 'construct.axis', 'construct.point',
       'cfd.enclosure',
-      'inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find',
+      'inspect.measure', 'inspect.section', 'inspect.mass', 'inspect.check', 'inspect.find',
       'file.import-step', 'file.export-step', 'file.picture',
     ]);
     for (const b of shown) {

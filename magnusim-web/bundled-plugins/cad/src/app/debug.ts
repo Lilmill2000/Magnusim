@@ -5,6 +5,7 @@ import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
 import { checkClock } from '../features/assembly/check';
 import { moveHandleTest, type MoveHandleTestView } from '../features/move_body/handle';
+import { sectionArrowTest, type SectionArrowTestView } from '../features/section/handle';
 import type { Appearance } from '../lib/bridge';
 import type { MarkPalette } from '../viewport/palette';
 import type { AppearanceControl } from './appearance';
@@ -40,6 +41,8 @@ export interface CadTestHandle {
   readonly assemblyCheck: { limitMs: number };
   /** Move/copy body's handle in the view while its panel is open (src/features/move_body/handle.ts), or null: where its parts are. */
   readonly moveHandle: MoveHandleTestView | null;
+  /** The section view's arrow in the view while the Section view panel is open (src/features/section/handle.ts), or null. */
+  readonly sectionArrow: SectionArrowTestView | null;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;
@@ -97,6 +100,9 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
     assemblyCheck: checkClock,
     get moveHandle() {
       return moveHandleTest();
+    },
+    get sectionArrow() {
+      return sectionArrowTest();
     },
     keybinds: {
       model: keybindsFor(services),

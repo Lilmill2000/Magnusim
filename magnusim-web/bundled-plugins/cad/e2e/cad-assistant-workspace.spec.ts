@@ -9,6 +9,9 @@
 //   stays where they put it; with person_asked true it turns the view;
 // - Export STEP: the person's own panel opens filled in (format, file name, bodies) and nothing is
 //   downloaded until the person clicks Export;
+// - the section view (Daniel 2026-10-29: any plane, a construction plane too): section on a
+//   construction plane at an angle by its name cuts the person's view on its own normal; the reply's
+//   view and get_model name the plane; INSPECT > Section view shows that plane and offset;
 // - keybinds (Daniel: read any time, changed only when the person asks): keybind_get answers;
 //   keybind_set without person_asked is not_asked; with it the app's dialog names the exact change,
 //   a stray Enter is No (step_declined, nothing changes), a click on Yes changes and stores it.
@@ -19,7 +22,7 @@ import { expect, test, type Page } from '@playwright/test';
 // @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
 import * as core from '../../../e2e/support/assistant.js';
 import { cadFrame, chats, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
-import { addSolid } from './helpers';
+import { addSolid, runCommand } from './helpers';
 
 let host: AssistantHost;
 
@@ -174,6 +177,48 @@ test("cad:assistant-workspace-export the person's Export STEP panel opens filled
   const dl = page.waitForEvent('download', { timeout: STEP_MS * 2 });
   await panel.locator('[data-export-run]').click();
   expect((await dl).suggestedFilename()).toBe('plate export.step');
+});
+
+test("cad:assistant-workspace-section section on a construction plane at an angle by its name: the person's view is cut on its own normal, the reply and get_model name it, and INSPECT > Section view shows it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Workspace section');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await addSolid(page, { size: [20, 20, 20] });
+  // Tilt: the Top plane turned 30 deg about X (normal (0, -1/2, sqrt 3 / 2)), put in as setup.
+  const plane = await cadFrame(page).evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (window as any).__CAD__.services.doc;
+    const s = doc.beginNew('ref_plane', { method: 'angle', plane: { kind: 'origin', plane: 'origin:top' }, axis: { kind: 'origin', axis: 'origin:x' }, angle: '30 deg', name: 'Tilt' });
+    s.commit();
+    return s.feature as string;
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cut = () => cadFrame(page).evaluate(() => (window as any).__CAD__.services.viewport.get().handle.state.get().section as { on: boolean; plane: unknown; frame: { normal: number[] }; offset: number; flip: boolean });
+  await expect(frame.locator('[data-vp-opens="section"]')).toHaveAttribute('aria-pressed', 'false');
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [W('section', { value: 'Tilt offset 2 mm', person_asked: true })] },
+    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
+    { text: 'Cut on Tilt.' },
+  );
+  const t = await startTurn(request, host, { text: 'Cut my view on the Tilt plane, 2 mm up.', tab });
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  // The person's view: cut on Tilt itself (its feature), on its own normal, 2 mm along it.
+  const c = await cut();
+  expect(c).toMatchObject({ on: true, plane: { kind: 'feature', feature: plane }, offset: 2, flip: false });
+  expect(c.frame.normal.map((v) => Math.round(v * 1e6) / 1e6 + 0)).toEqual([0, -0.5, Math.round((Math.sqrt(3) / 2) * 1e6) / 1e6]);
+  await expect(frame.locator('[data-vp-opens="section"]')).toHaveAttribute('aria-pressed', 'true');
+  const r = chats(host).slice(before);
+  const words = { plane: 'Tilt', offset_mm: 2, flip: false, keeps: 'the side against its normal' };
+  expect(resultsIn(r[1])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: "Section view on in the person's view: Tilt offset 2 mm, keeps the side against its normal", data: { undo_step: false, section: words, view: { section: words } } });
+  expect(resultsIn(r[2])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { section: words } });
+  // The person's INSPECT > Section view shows the same plane and offset.
+  await runCommand(frame, 'inspect.section');
+  const panel = frame.locator('[data-tool-panel="inspect.section"]');
+  await expect(panel).toBeVisible(STEP);
+  await expect(panel.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['Tilt']);
+  await expect(panel.locator('.nui[data-field="section-offset"] input')).toHaveValue('2');
+  expect(await cut()).toMatchObject({ on: true, offset: 2 });
 });
 
 // Back from the Part through the app page's core__show (core host tools spec 5.1, 14.2, 8.1): the

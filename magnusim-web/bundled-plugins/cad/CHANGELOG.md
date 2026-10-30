@@ -4,6 +4,27 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Section view on any plane, with an arrow to drag.**
+- INSPECT > Section view (key X, in Settings > Keybinds) opens a panel with the
+  view cut. The plane can be Top, Front or Right, a construction plane (the cut
+  follows its own normal, so a plane at an angle cuts at that angle) or a flat
+  face: click it in the view or the tree. The panel names the plane and says
+  where the cut is and which side it keeps.
+- Offset is a typed length (the Part's units, parameters and expressions as any
+  length field), with Middle and Keep the other side, and Cut the view turns it
+  off. An arrow on the cut, along the plane's normal, moves it when dragged, and
+  Offset follows (Ctrl: whole millimetres).
+- The cut follows its plane when an edit moves it (a construction plane turned
+  by a parameter, a face that moves as its extrude grows). A deleted plane turns
+  the section off with a note.
+- The section is kept with the Part (no undo step) and comes back when it is
+  opened again. The view tools' section button drives the same cut and names a
+  construction plane or face it is on; its More opens the panel.
+- The Assistant's workspace section and view section take the same planes (a
+  construction plane by name, a flat face, "selection", with offset or middle
+  and flip); its answer and get_model name the plane. The Picture panel's
+  Section takes a construction plane or the selected flat face too.
+
 **Copy and paste sketch geometry.**
 - In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C
   (or right-click > Copy): the panel says what was copied. Ctrl+V (or

@@ -8,7 +8,8 @@
 import { describe, expect, it } from 'vitest';
 import { CAD_REVIEW, REVIEW_PROMPT, REVIEW_ROUNDS } from '../../src/assistant/review';
 import { CHECK_KINDS, HELP_TOPICS, toolNamed, VIEW_DIRECTIONS } from '../../src/assistant/schemas';
-import { parseSection, readViewInput } from '../../src/assistant/view';
+import { readViewInput } from '../../src/assistant/view';
+import { splitSection } from '../../src/assistant/measure-targets';
 import { namesVendor } from './vendor';
 
 describe('the review the Part asks for', () => {
@@ -38,6 +39,6 @@ describe('the review the Part asks for', () => {
     expect(() => readViewInput({ views: ['iso', 'top', 'front'], hide: [], section: '', labels: 'bodies', size: 'small' })).not.toThrow();
     const section = /section "([^"]+)"/.exec(REVIEW_PROMPT)![1];
     expect(section).toBe('Front middle');
-    expect(parseSection(section, () => ({ ok: false, error: 'no expressions here' }))).toEqual({ plane: 'front', offset: 0, flip: false, middle: true });
+    expect(splitSection(section)).toEqual({ base: 'Front', offset: null, middle: true, flip: false });
   });
 });

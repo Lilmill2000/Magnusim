@@ -306,7 +306,7 @@ describe('the view and the theme', () => {
     f = frame(gl);
     expect(f.main.surfaces).toEqual({ b_1: 'mark', b_2: 'mark', b_3: 'mark' });
     // A section: the cap, a light surface, sets the bit in dark.
-    h.setSection({ on: true, plane: 'origin:front', offset: 5, flip: false });
+    h.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:front' }, offset: 5, flip: false });
     f = frame(gl);
     expect(f.main.cap).toBe(FACE_BIT);
     // Back to light: the bodies and the cap as before, the mark once.

@@ -1081,6 +1081,20 @@ export interface CadView {
    * geometry never sees it). A model with no entry is not shown. Absent: none.
    */
   scaleModels?: ScaleModels;
+  /**
+   * The section view while it is on (INSPECT > Section view, the view tools' section, the
+   * Assistant's workspace section): the plane it is parallel to (an origin plane, a construction
+   * plane by its feature, a flat face by its stored reference), its offset along that plane's
+   * normal (mm) and its side. A view state: no undo step, never part of the model. Absent: off.
+   */
+  section?: SavedSection;
+}
+
+/** The section view as the Part keeps it (CadView.section). */
+export interface SavedSection {
+  plane: PlaneRef;
+  offset: number;
+  flip: boolean;
 }
 
 /** ux010: where a scale model lies (model mm; its underside at at[2]; rot about +Z in degrees). */

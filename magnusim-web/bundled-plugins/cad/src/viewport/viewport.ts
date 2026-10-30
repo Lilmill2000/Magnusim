@@ -49,7 +49,7 @@ import { kindsForFilter, makeProjector, pickAt, raycastBodies, rayAt, type PickB
 // P4b SELECT: box selection.
 import { BOX_START_PX, boxCaption, boxCombine, boxFrom, boxKinds, boxStarts, type BoxKind, type BoxMode, type Rect } from './boxselect';
 import { visibleInBox } from './boxpick';
-import { DEFAULT_SECTION, SectionCaps, sectionPlane } from './section';
+import { DEFAULT_SECTION, nextSection, offsetRange, SectionCaps, sectionPlane } from './section';
 import { notReady, projectToPicture, rowsTopDown, SNAPSHOT_HIDDEN_LAYERS, snapshotClip, snapshotRig, snapshotSize, snapshotTriadRect } from './snapshot';
 import { buildBodyData, edgeSegments, HL_HOVER, HL_NONE, HL_PICK, meshCentroid, planarFaceNormal, setFaceHl, type BodyData } from './tess';
 import { Triad } from './triad';
@@ -1821,10 +1821,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       cameraMoved();
     },
     setSection(patch: Partial<SectionState>) {
-      const next = { ...state.get().section, ...patch };
-      if (!Number.isFinite(next.offset)) next.offset = 0;
-      if (!(next.plane in ORIGIN_PLANES)) next.plane = 'origin:front';
-      state.set({ section: next });
+      state.set({ section: nextSection(state.get().section, patch) });
       applySection();
       if (state.get().hover) setHover(null);
       request();
@@ -1850,7 +1847,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       applyHighlight();
       request();
     },
-    sectionRange(plane: OriginPlaneRef) {
+    sectionRange(frame) {
       // The kernel's box where there is one (exact), else the tessellation's.
       const box = new Box3();
       for (const b of bodies.values()) {
@@ -1860,17 +1857,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         else box.union(b.data.bounds);
       }
       if (box.isEmpty()) return null;
-      const n = new Vector3(...ORIGIN_PLANES[plane].normal).normalize();
-      let lo = Infinity;
-      let hi = -Infinity;
-      for (const x of [box.min.x, box.max.x])
-        for (const y of [box.min.y, box.max.y])
-          for (const z of [box.min.z, box.max.z]) {
-            const d = n.x * x + n.y * y + n.z * z;
-            lo = Math.min(lo, d);
-            hi = Math.max(hi, d);
-          }
-      return [lo, hi];
+      return offsetRange(frame, [[...box.min.toArray(), ...box.max.toArray()]]);
     },
     pick(clientX, clientY) {
       const r = canvas.getBoundingClientRect();

@@ -441,7 +441,7 @@ describe('snapshot', () => {
     await vi.waitFor(() => expect(h.state.get().bvhPending).toBe(0));
     // The person's view: a face selected, the pointer hovering a face of b_1, a list row flashing a
     // face of b_2, a section on, a manipulator and a sketch layer shown, and a layer with a plain hook.
-    h.setSection({ on: true, plane: 'origin:right', offset: 5 });
+    h.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:right' }, offset: 5 });
     h.highlight([{ kind: 'face', body: 'b_1', index: 4 }]);
     // Hovered: a face of b_1 the selection does not light (lit counts it apart from the pick).
     const at = h.project([2, 5, 5])!;
@@ -587,7 +587,7 @@ describe('snapshot', () => {
     const { h, gl } = viewport();
     withCube(h);
     // The view's own section on: in wireframe it draws no caps; a picture without a cut has none either.
-    h.setSection({ on: true, plane: 'origin:top', offset: 5 });
+    h.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:top' }, offset: 5 });
     for (const [display, mesh, edges, caps] of [
       ['wireframe', false, true, false],
       ['shaded', true, false, true],

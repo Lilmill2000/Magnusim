@@ -70,6 +70,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/types/events.ts` | append-only | Add events **only in your own section**; never change another section. |
 | `src/ui/**`, `src/styles/tokens.css`, `tests/ui/**` | UI-SHELL | Design-language components, design tree, rollback bar, panels (flyout feature panels, parameters), toolbar, context menu, chips, dialogs. |
 | `src/viewport/**`, `src/types/viewport.ts`, `tests/viewport/**` | VIEWPORT | three.js viewport, camera/controls, bodies + edges, origin display, BVH picking in a worker, highlight, fit/standard views, triad/XYZ/Fit chrome. |
+| `src/features/section/**`, `CadView.section` (`src/types/doc.ts`, `readSection` in `src/doc/schema.ts`, `DocService.setSection`), `tests/features/section/**`, `e2e/cad-section-view.spec.ts` | VIEWPORT (the section view's plane) | INSPECT > Section view: its panel, its arrow, the binding that keeps the view's one section state true to the Part (§7 "Section view"). The Assistant's side (`resolveSectionRef` in `src/assistant/measure-targets.ts`, `findSection` in `view.ts`, the workspace's section) is ASSISTANT's. |
 | `src/doc/**`, `src/kernel/**`, `src/types/{doc,doc-service,docstore,undo,units,kernel}.ts`, `tests/doc/**`, `tests/kernel/worker-client.test.ts` | DOC-CORE | Schema v1, feature registry (built-in types: none since the SD pass; removed types read as "Removed feature", `doc/features/removed.ts`), rebuild engine + cache, parameters + expressions, undo/redo, DocStore (WsFilesStore on host API 1.2, WsDataStore on a 1.1 host), conflicts, unsaved work (`nav.setDirty`); KernelAdapter, watchdog, respawn + rebuild. |
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
 | `solver-build/**`, `workspace/solver/*`, `src/solver-worker/**`, `tests/solver/**` | P3 (sketcher) | Built and tested now; not wired into the page until P3. |
@@ -1293,6 +1294,31 @@ with the host once for the page's life, and its chip goes in the dock.
   A feature's error names its fields in the panel's words: an extrude's Two
   sides reason says "Distance 1: ..." under the field "Distance 1", Symmetric
   "Total distance: ...".
+- **Section view** (VIEWPORT, `src/features/section`; Daniel 2026-10-29: any
+  plane, a construction plane's own normal, a draggable arrow, typed offset and
+  flip). One state: the view's `SectionState` (`plane`: a `PlaneRef` of
+  `src/types/references.ts`, an origin plane, a construction plane's feature or
+  a flat face's stored reference; `frame`: where that plane is now; `offset`
+  along its normal; `flip`). The viewport cuts and caps at `frame.origin +
+  offset * normal` and knows nothing of features (`nextSection` in
+  `src/viewport/section.ts`: an origin plane brings its own frame, any other
+  plane comes with the one found for it). Everything else goes through
+  `setSectionView` (`bind.ts`), which finds the plane with the CONSTRUCT
+  resolver (`resolvePlane` on the Part as built: a face by its persistent name,
+  as a feature finds it): INSPECT > Section view's panel (`panel.tsx`, a tool
+  panel; its plane field is a CONSTRUCT pick field with no feature), its arrow
+  (`handle.ts`, Move/copy body's arrow drawing and drag rule: `handle-math.ts`),
+  the Assistant's workspace section. The view tools' popover drives the same
+  state for the origin planes and names any other plane it is on; its More
+  runs the command. `bindSection` (installed with the module) follows the
+  plane after every rebuild, turns the section off with a note when the plane
+  is deleted or does not build while nothing holds it back (a panel editing an
+  earlier feature, the rollback bar), keeps the cut meanwhile, and keeps the
+  section in the Part's view (`CadView.section`, saved, not undoable; written
+  once a drag ends) and puts it back when the Part opens. The arrow points
+  along the plane's own normal whatever Flip keeps (the way Offset grows).
+  Pictures take any plane by its frame (`SnapshotSection`) and leave the arrow
+  out (`section.arrow` in `SNAPSHOT_HIDDEN_LAYERS`).
 
 ## 8. Tests
 

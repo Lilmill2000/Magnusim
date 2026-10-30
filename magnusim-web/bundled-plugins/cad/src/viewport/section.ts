@@ -1,4 +1,5 @@
-// Section view: one clipping plane parallel to an origin plane, and a cap where
+// Section view: one clipping plane parallel to a plane (an origin plane, a construction plane or a
+// flat face: SectionState.frame, found by src/features/section), and a cap where
 // it cuts through material (stencil parity: back faces +1, front faces -1; the
 // cap draws where the count is not 0). The cap is shaded like a body face and
 // hatched, so a cut never reads as an ordinary face. The count keeps to the
@@ -26,22 +27,76 @@ import {
   type BufferGeometry,
   type Sphere,
 } from 'three';
-import { ORIGIN_PLANES } from '../types/doc';
+import { ORIGIN_PLANES, type OriginPlaneRef, type PlaneFrame, type Vec3 } from '../types/doc';
 import type { SectionState } from '../types/viewport';
 import { BODY_COLOR } from './colors';
 import { createBodyMaterial, type BodyMaterial } from './materials';
 import { FACE_BIT, PARITY_MASK } from './onface';
 
-export const DEFAULT_SECTION: SectionState = { on: false, plane: 'origin:front', offset: 0, flip: false };
+/** An origin plane's frame (a copy). */
+export function originFrame(plane: OriginPlaneRef): PlaneFrame {
+  const p = ORIGIN_PLANES[plane];
+  return { origin: [...p.origin] as Vec3, normal: [...p.normal] as Vec3, xdir: [...p.xdir] as Vec3 };
+}
 
-/** The clipping plane for a section state (three keeps points with normal . p + constant >= 0). */
-export function sectionPlane(s: SectionState, out = new Plane()): Plane {
-  const n = new Vector3(...ORIGIN_PLANES[s.plane].normal).normalize();
+export const DEFAULT_SECTION: SectionState = { on: false, plane: { kind: 'origin', plane: 'origin:front' }, frame: originFrame('origin:front'), offset: 0, flip: false };
+
+/** A frame that can carry a cut: finite, with a normal that is not zero. */
+export function usableFrame(f: Pick<PlaneFrame, 'origin' | 'normal'> | null | undefined): boolean {
+  return !!f && f.origin.length === 3 && f.normal.length === 3 && [...f.origin, ...f.normal].every(Number.isFinite) && Math.hypot(...f.normal) > 1e-12;
+}
+
+/**
+ * The section state after a change (ViewportHandle.setSection): a new origin plane brings its own
+ * frame; any other plane needs the frame found for it in the same change, else it throws (the
+ * section module finds it). An unusable frame or offset keeps what was.
+ */
+export function nextSection(cur: SectionState, patch: Partial<SectionState>): SectionState {
+  const next = { ...cur, ...patch };
+  if (!Number.isFinite(next.offset)) next.offset = Number.isFinite(cur.offset) ? cur.offset : 0;
+  if (patch.plane) {
+    if (patch.plane.kind === 'origin') {
+      if (!(patch.plane.plane in ORIGIN_PLANES)) next.plane = { kind: 'origin', plane: 'origin:front' };
+      if (!patch.frame) next.frame = originFrame((next.plane as { plane: OriginPlaneRef }).plane);
+    } else if (!patch.frame) throw new Error('setSection: a construction plane or a face needs its frame');
+  }
+  if (!usableFrame(next.frame)) next.frame = cur.frame;
+  next.frame = { origin: [...next.frame.origin] as Vec3, normal: [...next.frame.normal] as Vec3, xdir: [...(next.frame.xdir ?? [1, 0, 0])] as Vec3 };
+  return next;
+}
+
+/** The clipping plane for a section (three keeps points with normal . p + constant >= 0). */
+export function sectionPlane(s: Pick<SectionState, 'offset' | 'flip'> & { frame: Pick<PlaneFrame, 'origin' | 'normal'> }, out = new Plane()): Plane {
+  const n = new Vector3(...s.frame.normal).normalize();
   // Keep the side behind the plane (away from its normal) unless flipped: the
   // cut face then looks towards the viewer of that plane's standard view.
   const keep = s.flip ? n : n.clone().negate();
-  // Points p with keep . p + c >= 0, the plane through offset * n.
-  return out.set(keep, -keep.dot(n.clone().multiplyScalar(s.offset)));
+  // Points p with keep . p + c >= 0, the plane through origin + offset * n.
+  const at = new Vector3(...s.frame.origin).addScaledVector(n, s.offset);
+  return out.set(keep, -keep.dot(at));
+}
+
+/**
+ * The offsets along a frame's normal (from its origin) that a box spans ([xmin, ymin, zmin, xmax,
+ * ymax, zmax] each), or null without one: the section's range, and its middle.
+ */
+export function offsetRange(frame: Pick<PlaneFrame, 'origin' | 'normal'>, boxes: readonly (readonly number[])[]): [number, number] | null {
+  const l = Math.hypot(...frame.normal);
+  if (!(l > 0)) return null;
+  const n = frame.normal.map((v) => v / l);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const b of boxes) {
+    if (b.length < 6 || !b.slice(0, 6).every(Number.isFinite)) continue;
+    for (const x of [b[0], b[3]])
+      for (const y of [b[1], b[4]])
+        for (const z of [b[2], b[5]]) {
+          const d = n[0] * (x - frame.origin[0]) + n[1] * (y - frame.origin[1]) + n[2] * (z - frame.origin[2]);
+          lo = Math.min(lo, d);
+          hi = Math.max(hi, d);
+        }
+  }
+  return lo <= hi ? [lo, hi] : null;
 }
 
 export class SectionCaps {

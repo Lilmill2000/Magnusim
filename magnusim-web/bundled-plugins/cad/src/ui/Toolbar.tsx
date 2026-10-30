@@ -110,6 +110,8 @@ export const FOLD_ORDER: readonly string[] = [
   'solid.loft',
   'solid.hole',
   'inspect.mass',
+  // Section view (Daniel did not find it in the view tools strip) stays longer than Mass properties.
+  'inspect.section',
   // Split and Delete faces before Axis (P4a review: the reference axis is reached for more often).
   'modify.split',
   'modify.delete-faces',

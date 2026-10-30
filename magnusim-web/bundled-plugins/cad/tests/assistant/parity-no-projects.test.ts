@@ -14,6 +14,7 @@ import { keybindsFor } from '../../src/app/keybinds';
 import { AI_TOOLS, auto, COMMANDS, DOC, ENCLOSURE_KEPT_WHY, NO_PROJECTS, PARITY_TABLES, parityFor, UI, VIEWPORT, type PersonPath } from '../../src/assistant/parity';
 import { CAD_TOOLS, cadToolsFor } from '../../src/assistant/schemas';
 import { CHECK_CONTROLS } from '../../src/features/check/controls';
+import { SECTION_CONTROLS } from '../../src/features/section/controls';
 import type { AppServices } from '../../src/types/app';
 import { hasPanel, uiFor } from '../../src/ui/controller';
 import { railsFor } from '../../src/ui/left-rails';
@@ -112,7 +113,7 @@ describe('parity in Magnusim CAD (projectLinks false: no projects, no simulation
     }
     expect(missing).toEqual([]);
     expect(stale).toEqual([]);
-    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT, check: CHECK_CONTROLS };
+    const controls: Record<string, object> = { ui: uiFor(services), doc: services.doc, rails: railsFor(services), toolbar: toolbarPrefs(services), keybinds: keybindsFor(services), link: services.apis.get().link ?? {}, viewport: VIEWPORT, check: CHECK_CONTROLS, section: SECTION_CONTROLS };
     const bad: string[] = [];
     const check = (where: string, p: PersonPath) => {
       if (p.kind === 'command' && !services.commands.get(p.id)) bad.push(`${where}: command ${p.id} is not registered`);

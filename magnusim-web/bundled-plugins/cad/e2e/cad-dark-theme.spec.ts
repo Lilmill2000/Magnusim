@@ -1242,7 +1242,7 @@ test.describe("E2: a mark's colour follows what is under it", () => {
     // Cut at x 20, seen from the right: the cap faces the eye; the block's own faces at x 40 are cut away.
     await f.evaluate(() => {
       const h = (window as unknown as W).__CAD__.services.viewport.get().handle;
-      h.setSection({ on: true, plane: 'origin:right', offset: 20, flip: false });
+      h.setSection({ on: true, plane: { kind: 'origin', plane: 'origin:right' }, offset: 20, flip: false });
       h.setView('right', { animate: false });
     });
     await runCommand(frame, 'inspect.measure');

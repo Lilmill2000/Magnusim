@@ -44,6 +44,8 @@ export const SHARDS = {
     'e2e/cad-keybinds.spec.ts',
     // The dark set: the host's dark appearance (dark view, light marks that keep their light ink over a face, surfaces kept), pictures stay light.
     'e2e/cad-dark-theme.spec.ts',
+    // Section view (INSPECT): any plane (a construction plane at an angle), the arrow dragged, a typed offset, flip, off, kept with the Part.
+    'e2e/cad-section-view.spec.ts',
   ],
   // The sketcher (tools, relations, dimensions, value boxes), profiles, and Extrude of them
   // (P3's gate and the P2+P3 review rounds).
@@ -217,6 +219,8 @@ export const RULES = [
   ['src/features/delete_body/', ['step'], 'Delete body (the body menu in the tree)'],
   [/^src\/features\/move_body\/index\.tsx?$/, ['step', 'shell'], 'Move/copy body, its command'],
   ['src/features/move_body/', ['step'], 'Move/copy body'],
+  // Section view (INSPECT): the person's panel and arrow (shell), the Assistant's workspace section (assistant).
+  ['src/features/section/', ['shell', 'assistant'], 'Section view'],
   // The assembly checks: the person's Check (step) and the Assistant's check tool.
   ['src/features/assembly/', ['step', 'assistant'], 'the assembly checks'],
   ['src/files/', ['step'], 'file transfer (STEP in and out)'],

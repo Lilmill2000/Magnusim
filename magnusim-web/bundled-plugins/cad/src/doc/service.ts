@@ -10,7 +10,7 @@ import type { EventBus } from '../lib/bus';
 import { newId, nextName } from '../lib/ids';
 import { commitPendingEdits, pendingEditLabel, pendingEdits, subscribePendingEdits } from '../lib/pendingEdits';
 import { createStateStore } from '../lib/store';
-import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera, type ScaleModelPlace, type ScaleModels, type Vec2 } from '../types/doc';
+import { FEATURE_ACTION_LABELS, type BodyDef, type BodyId, type BodyMaking, type CadDoc, type CadView, type Feature, type FeatureId, type FeatureStatus, type FeatureType, type Param, type ParamId, type SavedCamera, type SavedSection, type ScaleModelPlace, type ScaleModels, type Vec2 } from '../types/doc';
 import type { AssistantDoc, AssistantStep, BodyProps, DocMark, DocService, DocState, EditResult, EditSession, EndBodies, FeatureFiles, ParamRows, ParamsResult, RebuildState, SaveState, TakeOverWhy } from '../types/doc-service';
 import type { DocStore } from '../types/docstore';
 import type { CadEvents } from '../types/events';
@@ -28,7 +28,7 @@ import { createParamScope, featureExprs, paramNameProblem, usersOfParam } from '
 import { planParams, stillUsed } from './params-bulk';
 import { PersonEditing } from './person-editing';
 import { RebuildEngine, type RebuildInput, type RebuildOutput } from './rebuild';
-import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readScaleModelPlace, readView } from './schema';
+import { COLOR_RE, DEFAULT_BODY_COLOR, deepFreeze, emptyDoc, emptyView, PLUGIN_VERSION, readCamera, readScaleModelPlace, readSection, readView } from './schema';
 import { openDocStore } from './store/open';
 import { isRemovedFeature } from './features/removed';
 import { createUndoStack } from './undo';
@@ -1332,6 +1332,17 @@ export function createDocService(opts: DocServiceOptions): DocService {
     setView(next);
   }
 
+  function setSection(section: SavedSection | null) {
+    const v = state.get().view;
+    if (state.get().status !== 'ready') return;
+    const next = section ? readSection(section) : null;
+    if (JSON.stringify(v.section ?? null) === JSON.stringify(next)) return;
+    const view: CadView = { ...v };
+    if (next) view.section = next;
+    else delete view.section;
+    setView(view);
+  }
+
   function setCamera(camera: SavedCamera) {
     const v = state.get().view;
     const c = readCamera(camera);
@@ -1629,6 +1640,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     setBodyVisible,
     setExpanded,
     setPlanes,
+    setSection,
     setCamera,
     setSketchVisibility,
     setScaleModel,

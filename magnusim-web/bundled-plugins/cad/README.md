@@ -82,7 +82,7 @@ unit ("125 mm", "5 in").
 - **Viewport** with the view triad, the views menu (the standard views, Normal
   to, Perspective or Orthographic, Shaded, Shaded + edges, Wireframe), the
   **Selection filter** (Bodies, Faces, Edges, Vertices, Planes) and the
-  **Section view**.
+  **Section view** button (the same cut as INSPECT > Section view).
 - **Chips** at the bottom: the selected body's volume (or each body's, never a
   total), the number of items selected, the save state and the sketch's state.
 - **Banana for scale** (SCALE MODELS, after VIEW) puts a yellow banana beside the
@@ -446,8 +446,33 @@ comes on). Rename the result, for example to "Fluid".
   Assistant runs the same checks and gets the same words.
 - The **volume chip** shows the selected body's volume; with nothing selected it
   lists each body on its own. It never adds bodies together.
-- **Section view** cuts the view along an origin plane, so you can reach faces
-  inside the part.
+- **Section view** (INSPECT, key X) cuts the view on a plane, so you can see and
+  reach faces inside the part. The panel opens with the view cut:
+  - **Plane**: click a construction plane or a flat face in the view, or a plane
+    in the tree, or Top, Front or Right. The cut is parallel to it, along its
+    own normal (a construction plane at an angle cuts at that angle), and the
+    panel names it. On a construction plane it starts at the plane itself; on
+    an origin plane or a face, through the middle of the shown bodies.
+  - **Offset**: how far from the plane along its normal (a length in the
+    Part's units; parameters and expressions as in any length field); **Middle**
+    cuts through the middle of the shown bodies. **Keep the other side** flips
+    which half stays. **Cut the view** turns it off and on.
+  - **The arrow** on the cut points along the plane's normal (the way Offset
+    grows): drag it to move the cut, and Offset follows (hold Ctrl for whole
+    millimetres, tenths of an inch in an inch Part). Esc while dragging puts it
+    back.
+  - The cut follows its plane: an edit that moves a construction plane, or a
+    face that moves, moves the cut too. If the plane is deleted (or no longer
+    builds), the section turns off and a note says why; while a panel edits an
+    earlier feature or the rollback bar is above the plane, the cut stays where
+    it was.
+  - It is a view, not a feature: no undo step, never in the model or the
+    simulation. The Part keeps it, so it is there when you open the Part again.
+    The view tools' section button and its quick controls (Top, Front, Right, a
+    slider, Flip side, Middle) drive the same cut; **More** opens this panel.
+  - The Assistant sets the same cut (workspace section, on any of these
+    planes), reads it back, and draws pictures cut on any of them; the Picture
+    panel's Section takes a construction plane or the selected flat face too.
 
 ## History, parameters, undo and saving
 

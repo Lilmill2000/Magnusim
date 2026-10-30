@@ -735,6 +735,15 @@ export function createFakeDoc(opts: { units?: DocUnits; status?: DocState['statu
       calls.push('setCamera');
       state.set((s) => ({ ...s, view: { ...s.view, camera } }));
     },
+    setSection(section) {
+      calls.push(`setSection ${section ? section.plane.kind : 'off'}`);
+      state.set((s) => {
+        const view = { ...s.view };
+        if (section) view.section = section;
+        else delete view.section;
+        return { ...s, view };
+      });
+    },
     setSketchVisibility(id, mode) {
       calls.push(`setSketchVisibility ${id} ${mode}`);
       // As the service: null forgets the choice (the default again).

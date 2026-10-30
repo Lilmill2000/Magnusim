@@ -1,5 +1,6 @@
-// The Picture panel: the view tool's input as fields (directions, bodies left out, section,
-// labels, size, display, projection), drawn by the code the view tool runs (assistant/view.ts
+// The Picture panel: the view tool's input as fields (directions, bodies left out, section on
+// Top, Front, Right, a construction plane or the selected flat face, labels, size, display,
+// projection), drawn by the code the view tool runs (assistant/view.ts
 // takeView) on the person's own handle table, so a face label (#f3) is one the Find panel reads.
 // Take picture draws it; Save PNG keeps it. The person's view never moves.
 // Owner: ASSISTANT (the person's side of view).
@@ -31,7 +32,8 @@ export const VIEW_WORDS: Readonly<Record<PictureView, string>> = {
 export interface PictureChoice {
   views: PictureView[];
   hide: string[];
-  section: { plane: '' | 'Top' | 'Front' | 'Right'; at: 'offset' | 'middle'; offset: string; flip: boolean };
+  /** plane: '' (none), Top, Front, Right, a construction plane's name, or 'selection' (the flat face or plane the person selected). */
+  section: { plane: string; at: 'offset' | 'middle'; offset: string; flip: boolean };
   labels: 'none' | 'bodies' | 'faces';
   size: 'small' | 'large';
   display: 'shaded_edges' | 'shaded' | 'wireframe';
@@ -76,6 +78,8 @@ const DEFAULT: PictureChoice = {
 export function PicturePanel({ close }: ToolPanelProps) {
   const services = useServices();
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
+  // The construction planes, as the view tool's section names them.
+  const planes = useStateStore(services.doc.state, (s) => s.doc.features.filter((f) => f.type === 'ref_plane').map((f) => f.name).join('|'));
   const [c, setC] = useState<PictureChoice>(DEFAULT);
   const [pic, setPic] = useState<Picture | null>(null);
   const [busy, setBusy] = useState(false);
@@ -181,12 +185,14 @@ export function PicturePanel({ close }: ToolPanelProps) {
             label="Section"
             field="section"
             value={c.section.plane}
-            onChange={(v) => set({ section: { ...c.section, plane: v as PictureChoice['section']['plane'] } })}
+            onChange={(v) => set({ section: { ...c.section, plane: v } })}
             options={[
               { value: '', label: 'None' },
               { value: 'Top', label: 'Top plane' },
               { value: 'Front', label: 'Front plane' },
               { value: 'Right', label: 'Right plane' },
+              ...(planes ? planes.split('|').map((n) => ({ value: n, label: n })) : []),
+              { value: 'selection', label: 'The selected flat face or plane' },
             ]}
           />
         </Field>

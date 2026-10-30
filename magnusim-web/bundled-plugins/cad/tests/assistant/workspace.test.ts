@@ -15,6 +15,7 @@ import { LEAVE_AFTER_MS } from '../../src/assistant/tools/workspace';
 import exportModule from '../../src/features/export';
 import { takeExportPrefill } from '../../src/features/export/prefill';
 import { createStateStore } from '../../src/lib/store';
+import { offsetRange, originFrame } from '../../src/viewport/section';
 import { createModuleRegistry } from '../../src/modules';
 import { railsFor } from '../../src/ui/left-rails';
 import { toolbarPrefs } from '../../src/ui/toolbar-layout';
@@ -48,7 +49,7 @@ function viewHandle() {
     (call: string) =>
     (...args: unknown[]) =>
       void calls.push({ call, args });
-  const state = createStateStore({ display: 'shaded-edges', projection: 'perspective', section: { on: false, plane: 'origin:top', offset: 0, flip: false }, planes: 'auto' });
+  const state = createStateStore({ display: 'shaded-edges', projection: 'perspective', section: { on: false, plane: { kind: 'origin', plane: 'origin:top' }, frame: originFrame('origin:top'), offset: 0, flip: false }, planes: 'auto' });
   const handle = {
     moves: 0,
     state,
@@ -71,6 +72,8 @@ function viewHandle() {
       state.set({ display: d });
     },
     setPlanes: rec('setPlanes'),
+    // The two blocks (20 mm cubes): the offsets they span along a plane's normal.
+    sectionRange: (f: { origin: number[]; normal: number[] }) => offsetRange(f as never, [[0, 0, 0, 60, 20, 20]]),
     planeNormal: () => [0, 0, 1],
     refitIfOffScreen: () => false,
     reframe: () => true,
@@ -426,10 +429,28 @@ describe("workspace: the person's view", () => {
     await t.ok('workspace', W('orbit_pivot', { target: '(1, 2, 3)', ...A }));
     expect(vh.calls.at(-1)?.args[0]).toEqual([1, 2, 3]);
     const sec = await t.ok('workspace', W('section', { value: 'Top offset 5 mm flip', ...A }));
-    expect(vh.state.get().section).toMatchObject({ on: true, plane: 'origin:top', offset: 5, flip: true });
-    expect(sec.data.view).toMatchObject({ section: { plane: 'top', offset_mm: 5, flip: true } });
+    expect(vh.state.get().section).toMatchObject({ on: true, plane: { kind: 'origin', plane: 'origin:top' }, frame: { origin: [0, 0, 0], normal: [0, 0, 1] }, offset: 5, flip: true });
+    expect(sec.data.view).toMatchObject({ section: { plane: 'Top', offset_mm: 5, flip: true, keeps: 'z >= 5 mm' } });
+    // A construction plane by its name: the view keeps the plane itself (its feature), at its own frame.
+    await t.add('ref_plane', { method: 'offset', plane: { kind: 'origin', plane: 'origin:top' }, distance: '4 mm', name: 'Shelf' });
+    const shelf = await t.ok('workspace', W('section', { value: 'Shelf offset 2 mm', ...A }));
+    const shelfId = t.doc.state.get().doc.features.find((f) => f.name === 'Shelf')!.id;
+    expect(vh.state.get().section).toMatchObject({ on: true, plane: { kind: 'feature', feature: shelfId }, frame: { origin: [0, 0, 4], normal: [0, 0, 1] }, offset: 2, flip: false });
+    expect(shelf.data.view).toMatchObject({ section: { plane: 'Shelf', offset_mm: 2, flip: false, keeps: 'z <= 6 mm' } });
+    expect(shelf.text).toBe("Section view on in the person's view: Shelf offset 2 mm, keeps z <= 6 mm");
+    // get_model says it too (the Assistant learns the person's section without moving the view).
+    const model = await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' });
+    expect(model.data.section).toEqual({ plane: 'Shelf', offset_mm: 2, flip: false, keeps: 'z <= 6 mm' });
+    // Middle: through the middle of the shown bodies along Shelf's normal (z 0 to 20 from z = 4: offset 6).
+    await t.ok('workspace', W('section', { value: 'Shelf middle', ...A }));
+    expect(vh.state.get().section.offset).toBe(6);
+    // Not a plane: refused in words, the view as it was.
+    const notPlane = await t.call('workspace', W('section', { value: 'Body 1', ...A }));
+    expect(!notPlane.ok && notPlane.error.message).toMatch(/^bad_section: value: Body 1 is a body; a section is a plane/);
+    expect(vh.state.get().section.offset).toBe(6);
     await t.ok('workspace', W('section', { value: 'off', ...A }));
     expect(vh.state.get().section.on).toBe(false);
+    expect((await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' })).data.section).toBeUndefined();
     await t.ok('workspace', W('projection', { value: 'orthographic', ...A }));
     expect(vh.state.get().projection).toBe('orthographic');
     const d = await t.ok('workspace', W('display', { value: 'wireframe', ...A }));
