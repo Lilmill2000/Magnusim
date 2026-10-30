@@ -246,8 +246,8 @@ test('the Assistant in a Magnusim CAD Part is told of none of it: its tools, the
   expect(tools.map((t) => t.name)).toEqual(PART_TOOLS);
   const tool = (n: string) => tools.find((t) => t.name === n)!;
   const actions = tool('workspace').inputSchema.properties.action.enum!;
-  expect(actions).toHaveLength(37);
-  expect(actions).toContain('roll_back_to');
+  expect(actions).toHaveLength(39);
+  expect(actions).toEqual(expect.arrayContaining(['roll_back_to', 'see_through', 'opaque']));
   expect(actions).not.toContain('send_to_simulation');
   expect(tool('direct').inputSchema.properties.kind.enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'move_body', 'repair', 'retry']);
   expect(Object.keys(tool('direct').inputSchema.properties)).toEqual(['edit', 'name', 'kind', 'faces', 'distance', 'bodies', 'tool', 'keep_tool', 'move', 'turn', 'copy']);
