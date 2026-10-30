@@ -42,7 +42,7 @@ export const GUIDE = [
   '- Geometry: "Body 1 faces >Z" (highest; >Z[2] the next); after faces also +Z (facing +Z), |Z, #Z, %cylinder, hole, largest.',
   '- Edges: "edges of Base.end", "Base.end & Base.side(r.top)", "Body 1 edges |Z".',
   '- "Body 1 face at (0, 0, 6)"; #f3 from find; "selection".',
-  '- Empty or ambiguous: an error lists candidates; check with find.',
+  '- Empty or ambiguous: an error lists candidates; try it with find.',
   '',
   'BOOLEANS: cut, intersect need overlap; join also takes bodies sharing a face. Separate pieces: op new, then combine.',
   '',

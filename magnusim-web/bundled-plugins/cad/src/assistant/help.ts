@@ -64,6 +64,7 @@ function errorRows(projects = true): HelpRow[] {
 /** Each tool's rules beyond its description: legal combinations, what it maps to, the faces it names. */
 const FEATURE_NOTES: Readonly<Record<string, string>> = {
   body: 'One step. A body name is unique among bodies; it may equal a feature name. exclude leaves the body out of the geometry the project simulates.',
+  check: 'help assemblies.',
   combine:
     'targets keep the result; tools go unless keep_tools. Entries: a body name, "bodies of <feature>" (a pattern\'s copies), "all bodies"; repeats are dropped and a target is taken out of tools. A join of bodies that do not touch is one body of several solids (a warning).',
   construct:
@@ -76,14 +77,14 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
     'set: the fields get_model detail full lists for the feature (values; choices: help details) or a sketch dimension id (d, h1x): a value edit, refused (broke_downstream) when a working feature would fail; flipped names a sketch a dimension mirrored. rename_to, suppress and move ("before X", "after X", "end") go in the same step.',
   extrude:
     'face, direction: help details. Rules: distance2 only with two; to only with to; distance "" with through and through_both; bodies [] and body_name, color only with op new. Faces made: <Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>) per profile edge (r.top, p.3), <Name>.end(2) for a second profile. A miss gives detail.sub: wrong_side, off_body, too_short or no_overlap.',
-  find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets. count is every match, limit only cuts rows.',
+  find: 'Handles (#f3 face, #e7 edge, #v2 vertex, #b1 body) last for this request; labels, and point_mm as "face at (x, y, z)", work in other fields; a flat face gives the frame a sketch on it gets.',
   get_model:
     "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit. user_changes: what the person changed since your last call (while this one ran too). editable false says why. Holes, a brief short of room: help details.",
   help: 'Fixed text; no Part needed. Every field of every tool is required: "", [] or false when unused.',
   hole:
     'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
   measure:
-    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. One body: volume, area, centroid, bbox, solids, shells, voids. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
+    'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
   modify:
     'fillet, chamfer: a face (or "edges of <face>") is kept as the face, a live set; an edge ("A & B", #e3) a fixed set; kept_as says which. size2 "" is an equal chamfer; flip swaps. shell: targets are the faces taken off; inward true keeps the outer size. One body per call. Faces made: <Name>.fillet(k), <Name>.chamfer(k), <Name>.inner(<face>).',
   pattern:
@@ -96,7 +97,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
   sweep_loft:
     "sweep: profiles are regions of one sketch; draw them on a plane through the path's start, square to it; path curves run end to end. loft: one region per sketch, in order, none with a hole. Faces: <Name>.side(<profile entity>@<path entity>) (<Name>.side(o): every side swept from o), <Name>.start, <Name>.end.",
   undo: 'steps n: your newest n calls of this request, back to before the oldest. previous_turn true (steps 0): the whole previous request, while it is the newest change. not_own_step when the person changed the Part after one of them.',
-  workspace: 'help workspace has every action. Only reheal is an undo step; the rest is view or session state and says so (undo_step false). The person\'s view moves only with person_asked true or while they have not moved it.',
+  workspace: 'help workspace has every action. Only reheal is an undo step (the rest says undo_step false). The person\'s view moves only with person_asked true or until they move it.',
   view: "Checked, but not strict on the first cloud dialect (its 20-tool budget). labels faces gives handles like find's; a section caps the cut. data.note says when the window was hidden or the person's sketch rolls later features back. A model that reads no images gets not_ready no_images: use measure and find.",
 };
 
@@ -392,6 +393,75 @@ const detailRows = (enclosure = true): HelpRow[] => [
   },
 ];
 
+/** How to make a mechanism that holds together and turns, and how to check it (the check tool). */
+const assemblyRows = (): HelpRow[] => [
+  {
+    about: 'a mechanism',
+    text: 'Each part that moves on its own is its own body (op new): a shaft, each wheel, each collar, spacer, nut and washer. Parts that turn together are one body (join) or a press fit. A moving part needs three things: something in its bore holding it radially (a shaft, with a little play), something on each side holding it along the shaft, and room to turn. get_model parts lists every body: compare it with every part the request names.',
+  },
+  {
+    about: 'shafts and bores',
+    text: 'Draw each shaft and the bores on it about one centre (the same axis line: check finds axes by their round faces). A bore for a part that turns is larger than its shaft by a clearance; a bore the same size as its shaft (or smaller) is a press fit: the two are fixed together. A shaft that turns in a frame needs a bore in each plate. help printing has clearances for printed parts.',
+  },
+  {
+    about: 'holding a part along its shaft',
+    text: 'On each side of a moving part put one of: a shoulder (a step to a larger diameter on the shaft), a collar (a ring press-fitted on the shaft), a spacer (a tube between two parts, its bore like theirs), a nut or a washer, or the frame. Leave a small end play (0.1 to 0.3 mm) so it turns freely. Two wheels with a gap and nothing in it can slide into each other: put a spacer there.',
+  },
+  {
+    about: 'room to turn',
+    text: 'Everything a part sweeps when it turns (its outline turned about the axis) must be free of other parts, except parts that turn with it and gears it meshes with. Hands, cranks and keys sweep large circles: keep nuts, keys and frames out of them or at another height along the axis.',
+  },
+  {
+    about: 'check interference',
+    text: 'check kind interference, bodies [] (every body) or a set: rows of pairs that overlap (overlap_mm3, at_mm). clearance "0.2 mm" also lists pairs closer than it (gap_mm; 0: they touch). Bodies far apart are skipped by their boxes first; rows are capped (rows_more). Meshing gears overlap a little where their teeth meet if the centre distance is short.',
+  },
+  {
+    about: 'check stack',
+    text: 'check kind stack: each axis two bodies share, its parts in order (from_mm, to_mm along the axis), the bore radius, what each rides on (on) or turns in (in, a frame: a body holding shafts on two axes or more) with its radial play, what is fixed to it by a press fit, and on each side along the axis what it meets and how far ("Collar at 0 mm", or nothing). loose lists what is wrong: a part free to slide (nothing on a side, or it comes off its shaft), one that slides more than the play before it meets something, a bore nothing holds (empty, or much wider than what is inside). clearance: the play still counted as held (0.5 mm if ""). Fix each, then check again.',
+  },
+  {
+    about: 'check sweep',
+    text: 'check kind sweep, bodies: the parts that turn together, axis: an axis ("Z axis", a construction axis, "axis of <round face>", an edge) or "" for the axis they share with another body. Each hit: the body met, first_deg turning counter-clockwise about the axis direction (back_deg the other way), at_mm, and overlap_mm3_1deg_past (the kernel turned a copy 1 degree past it). already: pairs that overlap before turning (check interference).',
+  },
+  {
+    about: 'what it measures',
+    text: 'stack and sweep cut the bodies near an axis by planes square to it, one between each two levels where a face starts or ends, so each slab is one shape all along: exact for parts extruded or revolved along the axis, close for others. Radii and gaps are in mm, angles in degrees. Read the rows and judge: a stop the check found may be a part that is loose itself (its own row says so).',
+  },
+];
+
+/** Printing in PLA: rules of thumb, each labelled so, for the owner to check. */
+const RT = '(rule of thumb, for Daniel to check)';
+const printingRows = (): HelpRow[] => [
+  {
+    about: 'these figures',
+    text: 'For FDM printing in PLA with a 0.4 mm nozzle and 0.2 mm layers. Every figure here is a rule of thumb, for Daniel to check; printers and slicers differ. Tell the person the clearances you used.',
+  },
+  {
+    about: 'holes and fits',
+    text: `Printed holes come out small by about 0.1 to 0.2 mm ${RT}. A part that turns on a shaft: bore diameter = shaft + 0.3 to 0.5 mm ${RT}. A part that slides: + 0.2 to 0.3 mm ${RT}. A press fit: bore = shaft - 0.05 to 0.1 mm ${RT}. Between two moving faces leave 0.3 to 0.5 mm ${RT}. Small holes under 3 mm are better drilled out after printing ${RT}.`,
+  },
+  {
+    about: 'walls and pins',
+    text: `Walls at least 1.2 mm (three lines of 0.4 mm) ${RT}; never under 0.8 mm ${RT}. Pins and shafts under 3 mm across break easily: use 4 mm or more, or a metal pin ${RT}. Gear teeth: module 1 mm or more ${RT}.`,
+  },
+  {
+    about: 'overhangs and bridges',
+    text: `Faces leaning out up to about 45 degrees from vertical print without support ${RT}; flatter ones need support, or a 45 degree chamfer under them. Flat bridges between two supports up to about 10 to 20 mm span print without support ${RT}. A horizontal hole is best as a teardrop (a 45 degree point on top) ${RT}.`,
+  },
+  {
+    about: 'first layer',
+    text: `The first layer spreads (elephant foot) by about 0.2 to 0.4 mm ${RT}: chamfer the bottom edges 0.3 to 0.5 mm ${RT}, above all on faces that must fit against another part.`,
+  },
+  {
+    about: 'orientation',
+    text: `Lay each part on its largest flat face. Holes for shafts print rounder standing up (along Z). Layers are the weak direction: a pin or shaft printed lying down is stronger than one standing up ${RT}. Gears and wheels print flat. Split a part that cannot print without much support into parts that join.`,
+  },
+  {
+    about: 'sizes',
+    text: `Heights come in steps of the layer height (0.2 mm) ${RT}; sizes across are good to about 0.1 to 0.2 mm ${RT}. Text and details under 0.5 mm are lost ${RT}.`,
+  },
+];
+
 export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
   sketch: sketchRows(),
   selectors: selectorRows(),
@@ -409,6 +479,8 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   sketch_tools: sketchToolRows(),
   details: detailRows(),
   workspace: workspaceRows(),
+  assemblies: assemblyRows(),
+  printing: printingRows(),
 });
 
 /**

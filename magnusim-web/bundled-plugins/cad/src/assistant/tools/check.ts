@@ -1,0 +1,291 @@
+// check: does an assembly hold together and turn (src/features/assembly/check.ts, the checks the
+// person's panel runs too), on the bodies built now after the rebuild caught up:
+//   interference  pairs that overlap (overlap_mm3, at_mm), and with a clearance the pairs closer
+//                 than it (gap_mm); bodies [] for every body, or a chosen set;
+//   stack         each shared axis: its parts in order, what holds each one radially (on, play_mm)
+//                 and on each side along it (the body it meets and how far, or nothing), and what is
+//                 loose: a part free to slide (nothing on a side), one that slides more than the
+//                 play first, a bore nothing holds; clearance: the play counted as held (0.5 mm);
+//   sweep         bodies turned a full turn about an axis (an axis, a round face, a straight or round
+//                 edge, "axis of <round face>", or "" for the axis they share with another body): the
+//                 first angle each meets another body both ways, where, and the kernel's overlap 1
+//                 degree past it.
+// Rows are capped (rows_more says how many more). A read: it never waits for the person. When the
+// Part changes while it checks, it checks again once; a second change answers busy/changed. Long
+// checks give progress and stop with the call; past the time limit a check says how far it got.
+// Owner: ASSISTANT.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { axisLine, CheckKernelError, checkInterference, checkStack, checkSweep, PLAY_MM, sharedAxes, sideWords, type AssemblyBody, type AxisLine, type CheckEnv, type StackSide } from '../../features/assembly/check';
+import type { CallCtx, ToolImpl, ToolReply } from '../../types/assistant';
+import type { DocState } from '../../types/doc-service';
+import type { BodyInfo } from '../../types/kernel';
+import { heartbeat, waitForRead } from '../busy';
+import { ToolError } from '../errors';
+import { entityFacts } from '../measure';
+import { bodyNamed, resolveTarget } from '../measure-targets';
+import { dir, len, oneLine, sig6, vec } from '../numbers';
+
+type Row = Record<string, unknown>;
+
+/** Most rows a reply lists (the rest counted). */
+export const CHECK_ROWS = 40;
+/** Most bodies a set names (the schema's maxItems). */
+const BODIES_MAX = 64;
+const KINDS = ['interference', 'stack', 'sweep'] as const;
+type Kind = (typeof KINDS)[number];
+
+interface Input {
+  kind: Kind;
+  bodies: string[];
+  clearance: string;
+  axis: string;
+}
+
+function inputOf(ctx: CallCtx): Input {
+  const { kind, bodies, clearance, axis } = ctx.input;
+  const problems: string[] = [];
+  if (!KINDS.includes(kind as Kind)) problems.push(`kind must be one of ${KINDS.join(', ')}`);
+  if (!Array.isArray(bodies) || bodies.length > BODIES_MAX || !bodies.every((b) => typeof b === 'string')) problems.push(`bodies must be a list of up to ${BODIES_MAX} body names`);
+  if (typeof clearance !== 'string') problems.push('clearance must be "" or a length');
+  if (typeof axis !== 'string') problems.push('axis must be "" or an axis');
+  if (problems.length) throw new ToolError('bad_input', `${problems.join('; ')}.`, { detail: { field: problems[0].split(' ')[0] } });
+  return { kind: kind as Kind, bodies: bodies as string[], clearance: clearance as string, axis: axis as string };
+}
+
+const asBody = (b: BodyInfo): AssemblyBody => ({ id: b.id, name: b.name, shape: b.shape, bbox: b.bbox, faces: b.faces, solids: b.solids ?? null });
+
+/** The bodies named (each once), or every body built now for []. */
+function bodiesOf(s: DocState, names: readonly string[], kind: Kind): BodyInfo[] {
+  if (!names.length) {
+    if (kind === 'sweep') throw new ToolError('bad_input', 'bodies: name the bodies that turn.', { detail: { field: 'bodies' } });
+    return [...s.rebuild.bodies];
+  }
+  const out: BodyInfo[] = [];
+  names.forEach((n, i) => {
+    const b = bodyNamed(s, n);
+    if (!b) throw new ToolError('not_found', `bodies[${i}]: no body is called "${n}". Bodies: ${s.rebuild.bodies.map((x) => x.name).slice(0, 30).join(', ') || 'none yet'}.`, { detail: { field: `bodies[${i}]`, bodies: s.rebuild.bodies.map((x) => x.name).slice(0, 30) } });
+    if (out.includes(b)) throw new ToolError('bad_input', `bodies: ${b.name} is named twice: name each body once.`, { detail: { field: 'bodies' } });
+    out.push(b);
+  });
+  return out;
+}
+
+/** The clearance (interference: 0 for none) or the play (stack: PLAY_MM for none), in mm. */
+function lengthOf(ctx: CallCtx, text: string, none: number): number {
+  if (!text.trim()) return none;
+  const r = ctx.services.doc.units.evaluate(text, 'length');
+  if (!r.ok) throw new ToolError('expr_error', `clearance "${text}": ${r.error}`, { detail: { field: 'clearance' } });
+  if (r.value < 0) throw new ToolError('bad_input', 'clearance cannot be below 0.', { detail: { field: 'clearance' } });
+  return r.value;
+}
+
+/** The sweep's axis: an axis, a round face's, an edge's, "axis of <round face>"; null for "" (the shared one). */
+async function axisOf(ctx: CallCtx, s: DocState, text: string): Promise<{ line: AxisLine; words: string } | null> {
+  const raw = text.trim();
+  if (!raw) return null;
+  const face = /^axis\s+of\s+(.+)$/i.exec(raw);
+  const e = await resolveTarget(ctx, s, face ? face[1] : raw, 'axis');
+  if (e.kind === 'axis') return { line: axisLine(e.origin, e.dir), words: e.words };
+  if (e.kind === 'face' || e.kind === 'edge') {
+    const f = await entityFacts(ctx.services, e);
+    if (f.axis && (e.kind === 'edge' || f.type !== 'plane')) return { line: axisLine(f.axis.point, f.axis.dir), words: `the axis of ${e.words}` };
+  }
+  throw new ToolError('bad_input', `axis: ${e.words} has no axis. Give X axis, Y axis, Z axis, a construction axis, a round face ("axis of <face>") or a straight or round edge, or "" for the axis the bodies share.`, { detail: { field: 'axis' } });
+}
+
+const roundRows = <T>(list: readonly T[], map: (x: T) => Row): { rows: Row[]; more: number } => ({ rows: list.slice(0, CHECK_ROWS).map(map), more: Math.max(0, list.length - CHECK_ROWS) });
+const word = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const stopped = (complete: boolean, what: string): Row => (complete ? {} : { note: `Stopped at the time limit: ${what}. Check fewer bodies (bodies) to finish.` });
+
+async function interference(env: CheckEnv, bodies: AssemblyBody[], clearance: number): Promise<ToolReply> {
+  const r = await checkInterference(env, bodies, { clearance });
+  const overlaps = r.rows.filter((x) => x.overlap !== null);
+  const gaps = r.rows.filter((x) => x.gap !== null);
+  const { rows, more } = roundRows(r.rows, (x) => (x.overlap !== null ? { bodies: [x.a, x.b], overlap_mm3: sig6(x.overlap), at_mm: vec(x.at) } : { bodies: [x.a, x.b], gap_mm: len(x.gap ?? 0), at_mm: vec(x.at) }));
+  const named = overlaps.slice(0, 3).map((x) => `${x.a} and ${x.b} ${sig6(x.overlap!)} mm3`);
+  const head = overlaps.length ? `${word(overlaps.length, 'pair')} overlap${overlaps.length === 1 ? 's' : ''}` : 'no pair overlaps';
+  const list = named.length ? `: ${named.join(', ')}${overlaps.length > 3 ? ', ...' : ''}` : '';
+  const text = oneLine(`${head}${clearance > 0 ? `, ${word(gaps.length, 'pair')} closer than ${len(clearance)} mm` : ''} (${word(r.bodies, 'body', 'bodies')}, ${r.boxPairs} of ${r.pairs} pairs near enough to measure${r.complete ? '' : `, ${r.checked} measured`})${list}`, 200);
+  return {
+    text,
+    data: {
+      kind: 'interference',
+      bodies: r.bodies,
+      pairs: r.pairs,
+      measured: r.checked,
+      of: r.boxPairs,
+      clearance_mm: len(clearance),
+      overlaps: overlaps.length,
+      ...(clearance > 0 ? { closer: gaps.length } : {}),
+      touching: r.touching,
+      rows,
+      ...(more ? { rows_more: more } : {}),
+      ...(r.surfaces.length ? { surfaces: r.surfaces, surfaces_note: 'surface bodies have no volume to overlap: left out' } : {}),
+      complete: r.complete,
+      ...stopped(r.complete, `${r.checked} of ${r.boxPairs} pairs measured`),
+    },
+    summary: oneLine(`Checked ${word(r.bodies, 'body', 'bodies')} for interference: ${head}${list}`, 160),
+  };
+}
+
+const sideText = (s: StackSide | null): string | null => (s === null ? null : s.by === null ? `nothing${s.off ? ' (comes off its shaft)' : ''}` : `${s.by} at ${len(s.gap ?? 0)} mm`);
+
+async function stack(env: CheckEnv, all: AssemblyBody[], only: number[] | null, play: number): Promise<ToolReply> {
+  const r = await checkStack(env, all, { play, ...(only ? { only } : {}) });
+  const axes = r.axes.map((a) => ({
+    axis: a.words,
+    point_mm: vec(a.line.point),
+    dir: dir(a.line.dir),
+    parts: a.parts.map((p) => {
+      const row: Row = { body: p.body, from_mm: len(p.from), to_mm: len(p.to) };
+      if (p.bore !== null) row.bore_r_mm = len(p.bore);
+      if (p.on) {
+        row[p.inBore ? 'in' : 'on'] = p.on;
+        row.play_mm = len(p.play ?? 0);
+      }
+      if (p.fixed.length) row.fixed_to = p.fixed;
+      const neg = sideText(p.neg);
+      const pos = sideText(p.pos);
+      if (neg !== null) row[a.negWords] = neg;
+      if (pos !== null) row[a.posWords] = pos;
+      return row;
+    }),
+  }));
+  const { rows: axisRows, more: axesMore } = roundRows(axes, (x) => x);
+  const loose = r.findings.map((f) => f.words);
+  const { rows: looseRows, more: looseMore } = roundRows(loose, (x) => ({ words: x }));
+  const sliding = [...new Set(r.findings.filter((f) => f.kind !== 'bore').map((f) => f.body))];
+  const bores = [...new Set(r.findings.filter((f) => f.kind === 'bore').map((f) => f.body))];
+  const sideOf = (body: string) =>
+    r.findings
+      .filter((f) => f.body === body && f.kind !== 'bore')
+      .map((f) => {
+        const a = r.axes[f.axis];
+        return `${f.side === 'neg' ? a.negWords : a.posWords}${f.kind === 'slides' ? ` ${len(f.gap ?? 0)} mm` : ''}`;
+      })
+      .join(', ');
+  const parts = r.axes.reduce((n, a) => n + a.parts.filter((p) => p.on).length, 0);
+  const segs: string[] = [];
+  if (sliding.length) segs.push(`${word(sliding.length, 'part')} can slide along ${sliding.length === 1 ? 'its shaft' : 'their shafts'}: ${sliding.map((b) => `${b} (${sideOf(b)})`).join(', ')}`);
+  if (bores.length) segs.push(`nothing holds ${bores.join(', ')} radially`);
+  const text = oneLine(segs.length ? segs.join('; ') : r.axes.length ? `Nothing is loose: ${word(parts, 'part')} on ${word(r.axes.length, 'axis', 'axes')}, each held both ways within ${len(play)} mm` : 'No two bodies share an axis (no round faces on one line)', 200);
+  return {
+    text,
+    data: {
+      kind: 'stack',
+      play_mm: len(play),
+      axes: axisRows,
+      ...(axesMore ? { axes_more: axesMore } : {}),
+      loose: looseRows.map((x) => x.words),
+      ...(looseMore ? { loose_more: looseMore } : {}),
+      complete: r.complete,
+      ...stopped(r.complete, `${r.axes.length} axes checked`),
+    },
+    summary: oneLine(`Checked the stack: ${text}`, 160),
+  };
+}
+
+async function sweep(ctx: CallCtx, env: CheckEnv, all: AssemblyBody[], turning: number[], given: { line: AxisLine; words: string } | null): Promise<ToolReply> {
+  let line = given?.line ?? null;
+  let words = given?.words ?? '';
+  if (!line) {
+    const axes = (await sharedAxes(env, all)).filter((g) => turning.every((t) => g.members.includes(t)));
+    const names = turning.map((t) => all[t].name).join(', ');
+    if (!axes.length) throw new ToolError('bad_input', `axis: ${names} share${turning.length === 1 ? 's' : ''} no axis with another body (no round faces on one line). Give axis: an axis, "axis of <round face>" or an edge.`, { detail: { field: 'axis' } });
+    if (axes.length > 1) {
+      const list = axes.slice(0, 8).map((a) => `${sideWords(a.line, 1)} through (${vec(a.line.point).join(', ')}) with ${a.members.map((m) => all[m].name).join(', ')}`);
+      throw new ToolError('bad_input', `axis: ${names} share${turning.length === 1 ? 's' : ''} ${axes.length} axes with other bodies: ${list.join('; ')}. Give axis.`, { detail: { field: 'axis' } });
+    }
+    line = axes[0].line;
+    words = 'the axis they share';
+  }
+  ctx.checkAbort();
+  const r = await checkSweep(env, all, turning, line);
+  const { rows, more } = roundRows(r.hits, (h) => ({
+    turning: h.turning,
+    hits: h.hits,
+    first_deg: h.pos === null ? null : len(h.pos),
+    back_deg: h.neg === null ? null : len(h.neg),
+    at_mm: vec(h.at),
+    ...(h.overlap !== null ? { overlap_mm3_1deg_past: sig6(h.overlap) } : {}),
+  }));
+  const first = r.hits[0];
+  const turned = r.turning.join(', ');
+  const text = oneLine(
+    first
+      ? `${first.turning} turned ${r.words} hits ${first.hits} at ${first.pos === null ? '-' : len(first.pos)} deg (${first.neg === null ? 'never' : `${len(first.neg)} deg`} the other way)${r.hits.length > 1 ? `; ${word(r.hits.length - 1, 'more hit')}` : ''}`
+      : `${turned} turn${r.turning.length === 1 ? 's' : ''} a full turn ${r.words} without meeting anything (${word(r.near, 'body', 'bodies')} near)${r.already.length ? `; already overlapping: ${r.already.map((a) => a.with).join(', ')}` : ''}`,
+    200,
+  );
+  return {
+    text,
+    data: {
+      kind: 'sweep',
+      axis: words || r.words,
+      line: r.words,
+      point_mm: vec(r.line.point),
+      dir: dir(r.line.dir),
+      turning: r.turning,
+      hits: rows,
+      ...(more ? { hits_more: more } : {}),
+      ...(r.already.length ? { already: r.already.map((a) => [a.turning, a.with]), already_note: 'these share material before turning: check interference' } : {}),
+      near: r.near,
+      complete: r.complete,
+      ...stopped(r.complete, `${r.hits.length} hits found so far`),
+    },
+    summary: oneLine(`Checked turning ${turned}: ${first ? `hits ${first.hits} at ${first.pos === null ? '-' : len(first.pos)} deg` : 'it meets nothing'}`, 160),
+  };
+}
+
+/** What a call read: the model, the rebuild it checked and the kernel's worker. */
+const stampOf = (ctx: CallCtx) => {
+  const s = ctx.services.doc.state.get();
+  return { doc: s.doc, seq: s.rebuild.seq, respawns: ctx.services.kernel.status.get().respawns };
+};
+
+async function checkOnce(ctx: CallCtx, input: Input): Promise<ToolReply> {
+  const s = ctx.services.doc.state.get();
+  const chosen = bodiesOf(s, input.bodies, input.kind);
+  const env: CheckEnv = { kernel: ctx.services.kernel, signal: ctx.signal, progress: (f, label) => ctx.progress(f, label) };
+  const all = s.rebuild.bodies.map(asBody);
+  const indexOf = (b: BodyInfo) => s.rebuild.bodies.indexOf(b);
+  try {
+    if (input.kind === 'interference') return await interference(env, chosen.map(asBody), lengthOf(ctx, input.clearance, 0));
+    if (input.kind === 'stack') return await stack(env, all, input.bodies.length ? chosen.map(indexOf) : null, lengthOf(ctx, input.clearance, PLAY_MM));
+    const given = await axisOf(ctx, s, input.axis);
+    return await sweep(ctx, env, all, chosen.map(indexOf), given);
+  } catch (e) {
+    ctx.checkAbort();
+    if (e instanceof CheckKernelError) throw new ToolError('kernel_failed', e.message, { detail: { op: e.op } });
+    throw e;
+  }
+}
+
+export const tool: ToolImpl = {
+  kind: 'read',
+  async run(ctx) {
+    const input = inputOf(ctx);
+    await waitForRead(ctx);
+    const settle = () => heartbeat(ctx, ctx.services.doc.settled(ctx.signal), 'Waiting for the rebuild');
+    for (let attempt = 0; ; attempt++) {
+      await settle();
+      if (attempt === 0) {
+        await ctx.hold('after-settled');
+        await settle();
+      }
+      ctx.checkAbort();
+      const before = stampOf(ctx);
+      const same = () => {
+        const now = stampOf(ctx);
+        return now.doc === before.doc && now.seq === before.seq && now.respawns === before.respawns;
+      };
+      try {
+        const reply = await heartbeat(ctx, checkOnce(ctx, input), 'Checking');
+        if (same()) return reply;
+      } catch (e) {
+        if (ctx.signal.aborted || same()) throw e;
+      }
+      if (attempt >= 1) throw new ToolError('changed', 'The Part changed again while it was being checked: nothing was checked.');
+    }
+  },
+};

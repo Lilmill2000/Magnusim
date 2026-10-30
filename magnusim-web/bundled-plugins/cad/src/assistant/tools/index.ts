@@ -8,6 +8,8 @@
 
 // body: Name or colour a body.
 export { tool as body } from './body';
+// check: Check an assembly.
+export { tool as check } from './check';
 // combine: Combine bodies.
 export { tool as combine } from './combine';
 // construct: Construction geometry.

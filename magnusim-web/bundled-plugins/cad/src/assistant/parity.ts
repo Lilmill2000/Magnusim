@@ -751,6 +751,10 @@ const PARAMS = command('modify.parameters');
 const PICTURE = command('file.picture');
 const HOLE = command('solid.hole');
 const MEASURE = command('inspect.measure');
+/** The assembly checks, as far as the person reaches them now: Measure on two bodies (overlap, gap, a round face's axis and radius). */
+const MEASURE_PAIR = place(
+  "Measure, one pair at a time: two bodies give their overlap volume and gap, a round face its axis and radius. The person's assembly check panel on the same engine (src/features/assembly) comes next; until then the whole-Part check is the Assistant's",
+);
 const DIMENSION = command('sketch.dimension');
 const REFERENCE = own("reference text for the model; the person has the program's documentation");
 const OPS = (type: FeatureType) => ({ 'op=new': panel(type, 'op'), 'op=join': panel(type, 'op'), 'op=cut': panel(type, 'op'), 'op=intersect': panel(type, 'op') });
@@ -781,7 +785,18 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     // The person looks straight at a sketch with Normal to (its row selected, N); the Picture panel has no sketch choice.
     sketch: command('view.normal-to'),
   },
-  help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace'], 'topic', REFERENCE),
+  help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace', 'assemblies', 'printing'], 'topic', REFERENCE),
+  // The assembly checks (src/features/assembly/check.ts). The person's own panel on the same engine
+  // is the next step of this work; until it lands the person reaches only what Measure gives, one
+  // pair of bodies at a time, and these rows say so.
+  check: {
+    'kind=interference': MEASURE_PAIR,
+    'kind=stack': MEASURE_PAIR,
+    'kind=sweep': MEASURE_PAIR,
+    bodies: MEASURE_PAIR,
+    clearance: MEASURE_PAIR,
+    axis: MEASURE_PAIR,
+  },
   set_params: {
     'set[].name': PARAMS,
     ...each(['length', 'angle', 'number'], 'set[].kind', PARAMS),

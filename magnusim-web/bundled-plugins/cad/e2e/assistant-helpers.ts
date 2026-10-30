@@ -167,7 +167,7 @@ export async function openNewPart(page: Page, request: APIRequestContext, h: Ass
 }
 
 /** How many tools the Part offers on its tab (src/assistant/schemas.ts CAD_TOOLS). */
-export const PART_TOOLS = 21;
+export const PART_TOOLS = 22;
 
 /** The Part's frame, for evaluate(). */
 export const cadFrame = (page: Page): Frame => workspaceFrame(page);

@@ -55,6 +55,8 @@ export const HELP_TOPICS = [
   'sketch_tools',
   'details',
   'workspace',
+  'assemblies',
+  'printing',
 ] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
@@ -65,6 +67,9 @@ const CONSTRUCT_METHODS = CONSTRUCT_METHOD_NAMES;
 /** The direct tool's kinds. */
 export const DIRECT_KIND_NAMES = ['press_pull', 'delete_faces', 'split', 'enclosure', 'delete_body', 'repair', 'retry'] as const;
 const DIRECT_KINDS = DIRECT_KIND_NAMES;
+
+/** The check tool's kinds. */
+export const CHECK_KINDS = ['interference', 'stack', 'sweep'] as const;
 
 /** The pattern tool's options (on/off choices beyond flip). */
 export const PATTERN_OPTIONS = ['symmetric', 'flip2', 'symmetric2', 'extent', 'extent2'] as const;
@@ -271,7 +276,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 60,
     description:
-      'Read the open Part: units, parameters, every feature in history order with its state (ok, warning, error, suppressed, rolled back) and message, bodies (valid, solids, voids, volume, bounding box), sketches with dof and regions, the person\'s selection, what the person changed since your last call, and whether you may edit now. detail brief is small; full adds each feature\'s inputs in its own tool\'s fields, ready to resend with edit, and its expression fields for edit_feature. feature: one feature\'s name to show only it in full (a sketch: entities, constraints, solver state, regions), or "". Call it first, and after an error you do not understand, a stall or a disconnect.',
+      'Read the open Part: units, parameters, every feature in history order with its state (ok, warning, error, suppressed, rolled back) and message, bodies (valid, solids, voids, volume, bounding box), parts (every body in one short row), sketches with dof and regions, the person\'s selection, what the person changed since your last call, and whether you may edit now. detail brief is small; full adds each feature\'s inputs in its own tool\'s fields, ready to resend with edit, and its expression fields for edit_feature. feature: one feature\'s name to show only it in full (a sketch: entities, constraints, solver state, regions), or "". Call it first, and after an error you do not understand, a stall or a disconnect.',
     schema: obj({
       detail: en(['brief', 'full'], 'brief: names, states, sizes. full: also every input.'),
       feature: str(80, '"" for the whole Part, or one feature name.'),
@@ -300,6 +305,20 @@ const SPECS: ToolSpec[] = [
     }),
   },
   {
+    name: 'check',
+    title: 'Check an assembly',
+    risk: 'read',
+    timeoutS: 180,
+    description:
+      'Assembly checks by the kernel. interference: overlapping pairs (overlap_mm3, at_mm), with clearance also closer pairs (gap_mm). stack: bodies on each shared axis (shafts in bores) in order with gaps; flags a part free to slide (nothing on a side) or with nothing in its bore. sweep: bodies turned a full turn about axis: the first angle each hits another, both ways.',
+    schema: obj({
+      kind: en(CHECK_KINDS, 'Check'),
+      bodies: arr(str(80, 'Body'), 0, 64, '[] all; sweep: the turning ones'),
+      clearance: str(40, '"" or a length; stack: play held (0.5 mm)'),
+      axis: str(200, 'sweep: an axis, or "" for theirs'),
+    }),
+  },
+  {
     name: 'view',
     title: 'Look at the Part',
     risk: 'read',
@@ -323,7 +342,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 30,
     description:
-      'Fixed reference text: sketch (entity kinds and their at numbers, macros and their parts, relations and dimensions with their refs), selectors (every form with examples), features (each tool\'s fields and the faces it names), parameters (expressions, units, functions), checks (what to verify and how), traps (common mistakes and their fixes), errors (each reason and its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls with key results), guide (the CAD workspace notes, if you were not given them), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project, infer, the solver), details (get_model holes and short briefs, set_params comments, construct methods and refs, direct kinds, edit_feature choice fields, extrude face and direction, pattern options and keys, measure totals and checks), workspace (every action of the workspace tool). Read it when unsure instead of guessing.',
+      'Fixed reference text: sketch (entity kinds, at numbers, macros, relations, dimensions), selectors (every form), features (each tool\'s fields, faces it names), parameters, checks (what to verify), traps (common mistakes), errors (each reason, its fix), examples (the worked parts), example_plate, example_bracket, example_flange, example_chip (complete calls), guide (the CAD notes, if not given), sketch_tools (splines, fix, driven dimensions, trim, offset, fillet, mirror, patterns, project, infer, solver), details (get_model holes and briefs, set_params comments, construct, direct, edit_feature choices, extrude face and direction, pattern options, measure totals), workspace (every action), assemblies (shafts, bores, collars, fits, check), printing (PLA rules of thumb). Read it when unsure instead of guessing.',
     schema: obj({ topic: en(HELP_TOPICS, 'Topic') }),
   },
   {

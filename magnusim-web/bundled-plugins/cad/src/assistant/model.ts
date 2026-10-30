@@ -11,9 +11,14 @@
 //          box and bounds), its open ends and dangling entities, by the sketch tool's names (r.top,
 //          l1.start), and its inputs in the sketch tool's form (sketch/describe.ts; null when it
 //          cannot be resent). Brief rows list a sketch's regions in short too.
+// The whole Part (brief or full) also lists `parts`: every body in one short row (name, volume, the
+// size and middle of its box, its colour when set, the feature that made it, hidden), never halved
+// with the budgets (up to PARTS_MAX, the app's cap on a list's items), so every part of an
+// assembly can be checked against the request.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
+import { DEFAULT_BODY_COLOR } from '../doc/schema';
 import { toModel, ydirOf } from '../features/sketch/plane';
 import { userSelection } from '../lib/selection';
 import { describeFace, isCopyRole, splitMerged } from '../naming/names';
@@ -47,6 +52,8 @@ import { closestName, closestWords } from './closest';
 export const SKETCH_REGIONS = 60;
 /** Bodies listed (the rest counted). */
 export const BODIES_MAX = 50;
+/** Rows of the parts list at most (the app keeps the first 200 items of a list). */
+export const PARTS_MAX = 200;
 /** Selection items in words. */
 export const SELECTION_MAX = 20;
 /** Names listed when a feature is not found. */
@@ -228,6 +235,38 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
   const last = featureNamer(s)(b.feature);
   if (last) row.last_changed_by = last;
   return row;
+}
+
+/**
+ * Every body built now as one short row: name, volume (mm3; null above EAGER_FACES faces until
+ * measured), the size and middle of its box, its colour when it is not the default, the feature that
+ * made it, hidden when the person hid it. Never halved: the first PARTS_MAX, the rest counted.
+ */
+export async function partRows(services: AppServices, s: DocState): Promise<{ parts: Row[]; more: number }> {
+  const parts: Row[] = [];
+  for (const b of s.rebuild.bodies.slice(0, PARTS_MAX)) {
+    let volume = b.volume;
+    if (volume === null && b.faces <= EAGER_FACES) {
+      try {
+        volume = (await services.doc.measure(b.id)).volume;
+      } catch {
+        // Not measurable now (a rebuild came in between): the row says null.
+      }
+    }
+    const box = b.bbox;
+    const row: Row = {
+      name: b.name,
+      mm3: typeof volume === 'number' ? sig6(volume) : null,
+      size_mm: vec([box[3] - box[0], box[4] - box[1], box[5] - box[2]]),
+      at_mm: vec([(box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2]),
+    };
+    if (b.color && b.color.toLowerCase() !== DEFAULT_BODY_COLOR) row.color = b.color;
+    const maker = bodyMaker(services.doc.features, s.doc, b.id);
+    if (maker) row.by = maker.name;
+    if (!b.visible) row.hidden = true;
+    parts.push(row);
+  }
+  return { parts, more: Math.max(0, s.rebuild.bodies.length - PARTS_MAX) };
 }
 
 /** A selected thing in words ("face Plate.end on Body 1": a face by its label when it has one, else its words). */
@@ -536,7 +575,14 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     };
   }
   const base = await partFacts(ctx, s);
-  const data = input.detail === 'full' ? await fitFull(base, services, s, ctx.budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), ctx.budgets);
+  // Every body in one short row, whole: the rest of the reply fits the room the parts leave (at least half the budget).
+  const { parts, more } = await partRows(services, s);
+  const listed: Row = { parts, ...(more ? { parts_more: more } : {}) };
+  const room = jsonBytes(listed);
+  const b = ctx.budgets;
+  const budgets = { ...b, brief: Math.max(b.brief / 2, b.brief - room), full: Math.max(b.full / 2, b.full - room) };
+  const fitted = input.detail === 'full' ? await fitFull(base, services, s, budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), budgets);
+  const data: Row = { ...fitted, ...listed };
   const states = counts(s.doc.features);
   const bad = (states.error ?? 0) + (states.warning ?? 0);
   const nBodies = rebuild.bodies.length;

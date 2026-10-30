@@ -33,14 +33,15 @@ function nodes(n: Node, path = '', depth = 1): { n: Node; path: string; depth: n
 }
 
 
-describe('the 21 tools', () => {
-  it('are the spec\'s 21, by name, with their titles, risks and stall windows', () => {
-    expect(TOOL_NAMES).toEqual(['body', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace']);
+describe('the 22 tools', () => {
+  it('are the spec\'s 21 and check, by name, with their titles, risks and stall windows', () => {
+    expect(TOOL_NAMES).toEqual(['body', 'check', 'combine', 'construct', 'delete', 'direct', 'edit_feature', 'extrude', 'find', 'get_model', 'help', 'hole', 'measure', 'modify', 'pattern', 'revolve', 'set_params', 'sketch', 'sweep_loft', 'undo', 'view', 'workspace']);
     for (const t of CAD_TOOLS) expect(t.name).toMatch(/^[a-z][a-z0-9_]{0,31}$/);
     for (const t of CAD_TOOLS) expect(t.name.includes('__'), t.name).toBe(false);
     const risks = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, t.risk]));
     expect(risks).toEqual({
       body: 'edit',
+      check: 'read',
       combine: 'edit',
       construct: 'edit',
       delete: 'destructive',
@@ -65,6 +66,7 @@ describe('the 21 tools', () => {
     const windows = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, t.timeoutS]));
     expect(windows).toEqual({
       body: 60,
+      check: 180,
       combine: 180,
       construct: 180,
       delete: 120,
@@ -87,6 +89,7 @@ describe('the 21 tools', () => {
       workspace: 180,
     });
     expect(toolNamed('get_model')?.title).toBe('Read the Part');
+    expect(toolNamed('check')?.title).toBe('Check an assembly');
     expect(toolNamed('undo')?.title).toBe('Undo or redo');
     expect(toolNamed('workspace')?.title).toBe('Workspace and view');
     for (const t of CAD_TOOLS) expect(t.title, t.name).toBeTruthy();
@@ -154,7 +157,7 @@ describe('the 21 tools', () => {
   });
 
   it('the help topics, the core set and the enums the guide uses exist', () => {
-    expect(HELP_TOPICS).toEqual(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace']);
+    expect(HELP_TOPICS).toEqual(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace', 'assemblies', 'printing']);
     expect((toolNamed('help')!.inputSchema.properties.topic as { enum: string[] }).enum).toEqual([...HELP_TOPICS]);
     expect(CORE_TOOLSET).toHaveLength(13);
     for (const n of CORE_TOOLSET) expect(TOOL_NAMES).toContain(n);
