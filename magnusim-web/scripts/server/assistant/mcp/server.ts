@@ -208,8 +208,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+/** Where an app's calls answer to (chat_history asks before a saved chat's words go there). */
+const APP_DESTINATION = Object.freeze({ key: MCP_DESTINATION, label: 'the app that asks' });
+
 /** No tab (none, or two or more windows): Home (core host tools spec 9.5); each project tool by its project_id. */
-const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null });
+const TABLESS: ToolCtx = Object.freeze({ tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null, destination: APP_DESTINATION });
 
 /** Schema keys that carry a registration's own words or values. */
 const WITHHELD_KEYS = new Set(['description', 'title', 'enum', 'const', 'default', 'examples']);
@@ -535,13 +538,13 @@ export function createMcpService(d: McpServiceDeps): McpService {
       const hit = projectId ? (d.resolveTabForProject?.(projectId) ?? null) : null;
       if (hit) {
         const pid = hit.projectId || null;
-        return { ctx: { tab: hit.tab, projectId: pid, simulationId: hit.studyId || null, cloud: true, local: false, place: d.registry.placeOf(hit.tab, pid), budgetTokens: null, prompt: null }, why: null };
+        return { ctx: { tab: hit.tab, projectId: pid, simulationId: hit.studyId || null, cloud: true, local: false, place: d.registry.placeOf(hit.tab, pid), budgetTokens: null, prompt: null, destination: APP_DESTINATION }, why: null };
       }
       const why = APP_TAB_TEXTS.get(String(t.body.code)) ?? (typeof t.body.error === 'string' ? t.body.error : null);
       return { ctx: TABLESS, why };
     }
     const pid = t.projectId || null;
-    return { ctx: { tab: t.tab, projectId: pid, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, pid), budgetTokens: null, prompt: null }, why: null };
+    return { ctx: { tab: t.tab, projectId: pid, simulationId: t.studyId || null, cloud: true, local: false, place: d.registry.placeOf(t.tab, pid), budgetTokens: null, prompt: null, destination: APP_DESTINATION }, why: null };
   }
 
   /**

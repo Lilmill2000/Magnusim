@@ -688,6 +688,35 @@ test("on $8 a turn (the default), Claude Opus 5.5 is full where $8 could no long
   await expect(dock(page).locator('[data-dock-continue]')).toHaveText('Continue in a new chat', STEP);
 });
 
+test("a saved chat whose words went to the local server: a cloud request's chat_history read asks first, naming where they went (Can't be undone), and Don't sends nothing of it", async ({ page, request }) => {
+  // A chat on the local server: its words stay on this PC.
+  await useScriptedModel(request, host.base, fake, 'local');
+  await openCounter(page, request);
+  await openDock(page);
+  fake.reply({ text: 'Noted: SECRET-LOAD 42 kN at the left bolt.' });
+  await dockSend(page, 'Remember the private load: 42 kN.');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  const local = (await getJson(request, `/api/assistant/history?project=${project}`)).chats.find((c) => c.label === 'Local server');
+  expect(local, 'the local chat is saved').toBeTruthy();
+  // A cloud provider from now on, in a new conversation.
+  await useScriptedModel(request, host.base, fake, 'cloud');
+  await openCounter(page, request);
+  await openDock(page);
+  await dock(page).locator('[data-dock-new]').first().click();
+  const before = chats().length;
+  fake.reply({ tools: [{ name: 'chat_history', input: { action: 'read', id: local.id, from: 0 } }] }, { text: 'I was not allowed to read it.' });
+  await dockSend(page, 'What did we note before?');
+  const card = dockGate(page);
+  await expect(card.locator('.dock-gate-title')).toHaveText(`Allow the Assistant to read a saved chat that went to Local server at ${new URL(fake.compatBase).hostname}?`, STEP);
+  await expect(card.locator('[data-gate-badge]')).toHaveText(["Can't be undone"]);
+  await expect(card.locator('.dock-gate-copy')).toContainText('Read here, they go to Anthropic');
+  await card.locator('[data-gate-answer="no"]').click();
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  const sent = JSON.stringify(chats().slice(before).map((c) => c.body.messages));
+  expect(sent).not.toContain('SECRET-LOAD');
+  expect(sent).not.toContain('Remember the private load');
+});
+
 test('Claude Opus 5.5 keeps its own 1M context: after a 300,000-token request the next message goes and is answered, with no full line', async ({ page, request }) => {
   await openCounter(page, request);
   await openDock(page);

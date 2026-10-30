@@ -70,6 +70,12 @@ export interface ToolCtx {
   prompt: string | null;
   /** The turn's provider and model (app_status reports them); absent outside a turn. */
   assistant?: { provider: string; model: string };
+  /**
+   * Where what a call gives goes: the turn's destination (providers/index.ts destinationOf: a cloud
+   * provider, `host:<name>`, `agent:<id>`), or another app's (`mcp`), with how the person reads it.
+   * chat_history asks before a saved chat goes where its words didn't go (absent: it always asks).
+   */
+  destination?: { key: string; label: string };
   /** The turn's conversation (attachments are bound to it); absent outside a turn. */
   conversation?: string | null;
   /** What the turn used so far of its limits, read when asked (app_status shows it, read-only); absent outside a turn. */

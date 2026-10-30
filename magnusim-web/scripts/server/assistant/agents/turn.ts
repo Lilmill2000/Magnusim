@@ -359,6 +359,8 @@ class AgentTurnRun implements AgentDispatch {
       conversation: t.conv.id,
       used: () => t.toolUse?.() ?? null,
       assistant: { provider: t.settings.provider, model: t.settings.model },
+      // Its answers go to the agent (chat_history asks before a saved chat's words go anywhere else).
+      destination: { key: destinationOf({ provider: t.settings.provider, base_url: '' }), label: t.settings.agent.name },
     };
   }
 

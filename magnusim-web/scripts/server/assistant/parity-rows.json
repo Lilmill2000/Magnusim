@@ -200,6 +200,6 @@
 
     { "row": "A1-A14", "editions": ["magnusim"], "deferred": "v0.5.x, release notes", "notes": "Airfoil" },
     { "row": "T1-T16", "editions": ["magnusim"], "deferred": "v0.5.x, release notes", "notes": "2D Wind Tunnel" },
-    { "row": "D1", "editions": ["magnusim", "cad"], "cad_control": { "reach": "dock", "selector": "#assistant-dock [data-dock-history]" }, "notes": "The Assistant dock's History (this project's saved chats, kept 31 days, each read-only) and Clear history (asked first)", "paths": [{ "tool": "chat_history", "where": { "action": ["list", "read", "clear"] } }] }
+    { "row": "D1", "editions": ["magnusim", "cad"], "cad_control": { "reach": "dock", "selector": "#assistant-dock [data-dock-history]" }, "notes": "The Assistant dock's History (this project's saved chats, kept 31 days, each read-only) and Clear history (asked first); the AI reads a chat whose words went to another provider or server once the person allows it", "paths": [{ "tool": "chat_history", "where": { "action": ["list", "read", "clear"] } }] }
   ]
 }

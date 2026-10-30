@@ -22,7 +22,7 @@ const { answerGates, hostTool, makeManager, relayServer, startTurn, settled } = 
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const { CARRY_GONE_TEXT } = await import('../assistant/turns.ts');
-const { ChatHistory, chatHistory, DATA_LEFT_OUT, historyKey, historyLine, HISTORY_LIMITS, HOME_KEY } = await import('../assistant/history.ts');
+const { ChatHistory, chatHistory, DATA_LEFT_OUT, historyKey, historyLine, HISTORY_LIMITS, HOME_KEY, lineDestination } = await import('../assistant/history.ts');
 const { chatHistoryTool } = await import('../assistant/host/chat-history.ts');
 const { createToolRegistry } = await import('../assistant/registry.ts');
 const { PROVIDER_LABELS } = await import('../assistant/providers/index.ts');
@@ -42,9 +42,11 @@ const P = { p1: { id: 'p1', title: 'Wing', created_at: null }, p2: { id: 'p2', t
 /** Each test its own chats folder: a ChatHistory the manager and the tool share. */
 const newStore = () => new ChatHistory({ dir: mkdtempSync(join(ROOT, 'chats-')) });
 const mk = (store, o = {}) => {
-  const tool = chatHistoryTool({ history: () => store });
+  // The tool reads the manager's live settings ("never send project data"), as the server's does.
+  let m = null;
+  const tool = chatHistoryTool({ history: () => store, settings: async () => m.state.settings });
   const registry = createToolRegistry({ hostTools: [tool, ...(o.hostTools ?? [])] });
-  const m = makeManager({ dir: ROOT, projects: P, settings: { privacy: 'allow' }, registry, ...o });
+  m = makeManager({ dir: ROOT, projects: P, settings: { privacy: 'allow' }, registry, ...o });
   // The manager reads its deps when it needs them: this store from now on (and the routes' manager's).
   m.deps.history = store;
   return m;
@@ -300,6 +302,123 @@ describe('the AI: chat_history', () => {
     // Only this request's own line is there now (it ended after the clear); p2's stayed.
     assert.equal(files(store.dir).filter((f) => f.startsWith('p1')).length, 1);
     assert.equal(files(store.dir).filter((f) => f.startsWith('p2')).length, 1);
+  });
+
+  /** A saved request of `conversation` in `project` (null: Home), its words having gone to `destination`. */
+  const saveLine = (store, project, conversation, o = {}) =>
+    store.append({
+      turn: `t-${conversation}`,
+      conversation,
+      project_id: project,
+      provider: o.provider ?? 'openai_compatible',
+      ...(o.destination === null ? {} : { destination: o.destination ?? 'host:127.0.0.1' }),
+      label: o.label ?? 'Local server',
+      model: 'qwen3.8-27b',
+      title: 'Bracket loads',
+      prompt: 'my private note on the bracket',
+      pictures: 0,
+      files: [],
+      answer: 'Wing (p1): SECRET lift 4321 N',
+      steps: [{ step: 1, tool: 'read_results', title: 'Read results', ok: true, code: null, line: 'Wing: lift 4321 N' }],
+      steps_left_out: 0,
+      end: { state: 'done', reason: 'end_turn', message: null },
+      full: null,
+      usage: { usd: 0, estimated: false, tokens: 10, steps: 1, billing: 'free' },
+      started_by: 'window',
+      started_at: '2026-10-16T12:00:00.000Z',
+      ended_at: '2026-10-16T12:01:00.000Z',
+      carried_from: null,
+    });
+  /** Everything the provider was sent in the last request, as text. */
+  const sentText = (m) => JSON.stringify(m.provider.requests.at(-1).req.messages);
+
+  it("each saved line keeps where its words went (the turn's destination); a line from before that by its provider, a local server's as not known", async () => {
+    const store = newStore();
+    const m = mk(store);
+    const a = await turnOf(m, store, { text: 'Hello' }, { text: 'Hi.' });
+    const [line] = linesOf(join(store.dir, HOME_KEY, `${a.conv.id}.jsonl`));
+    assert.equal(line.destination, 'anthropic');
+    assert.deepEqual((await store.list(null)).chats.map((c) => c.destinations), [['anthropic']]);
+    assert.deepEqual(
+      [lineDestination({ provider: 'anthropic' }), lineDestination({ provider: 'agent:claude' }), lineDestination({ provider: 'openai_compatible' }), lineDestination({ provider: 'openai_compatible', destination: 'host:10.0.0.2' })],
+      ['anthropic', 'agent:claude', '', 'host:10.0.0.2'],
+    );
+  });
+
+  it("a chat whose words went to another provider or server: listed without them; a read asks the person first, naming where they went and where they would go (Don't: nothing of it is sent)", async () => {
+    const store = newStore();
+    const m = mk(store);
+    const own = await turnOf(m, store, { text: 'A Home chat' }, { text: 'Hi.' });
+    const local = 'c-local-0000abcd';
+    await saveLine(store, null, local);
+    let { result, asked } = await call(m, store, { action: 'list' }, { context: null });
+    assert.deepEqual(asked, []);
+    const byId = Object.fromEntries(result.data.chats.map((c) => [c.id, c]));
+    assert.equal(byId[own.conv.id].title, 'A Home chat');
+    assert.deepEqual(byId[local], { id: local, provider: 'Local server', went_to: 'Local server at 127.0.0.1', elsewhere: true, started_at: '2026-10-16T12:00:00.000Z', ended_at: '2026-10-16T12:01:00.000Z', last_end: 'done' });
+    assert.ok(!sentText(m).includes('my private note') && !sentText(m).includes('Bracket loads'), 'its words never reach the provider in a list');
+    // Read: the person is asked; Don't sends nothing of it.
+    ({ result, asked } = await call(m, store, { action: 'read', id: local }, { context: null, answer: false }));
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].title, 'Allow the Assistant to read a saved chat that went to Local server at 127.0.0.1?');
+    assert.equal(asked[0].copy, "Its prompts and answers went only to Local server at 127.0.0.1. Read here, they go to Anthropic, and that can't be undone.");
+    assert.equal(asked[0].risk, 'destructive');
+    assert.deepEqual(asked[0].detail, [
+      { label: 'Chat', value: 'Bracket loads' },
+      { label: 'Went to', value: 'Local server at 127.0.0.1' },
+      { label: 'Would go to', value: 'Anthropic' },
+    ]);
+    assert.equal(result.error.code, 'declined');
+    assert.ok(!sentText(m).includes('SECRET') && !sentText(m).includes('Wing: lift'), 'nothing of it was sent');
+    // Allow: read.
+    ({ result, asked } = await call(m, store, { action: 'read', id: local }, { context: null, answer: true }));
+    assert.equal(asked.length, 1);
+    assert.deepEqual(result.data.requests.map((x) => [x.prompt, x.answer, x.steps[0].line]), [['my private note on the bracket', 'Wing (p1): SECRET lift 4321 N', 'Wing: lift 4321 N']]);
+    // Its own provider's chat: nothing asked.
+    ({ result, asked } = await call(m, store, { action: 'read', id: own.conv.id }, { context: null }));
+    assert.deepEqual([asked, result.ok], [[], true]);
+    // A chat saved before lines said where they went: a local server's is asked about as elsewhere.
+    await saveLine(store, null, 'c-older-0000abcd', { destination: null });
+    ({ asked } = await call(m, store, { action: 'read', id: 'c-older-0000abcd' }, { context: null, answer: false }));
+    assert.equal(asked[0].title, 'Allow the Assistant to read a saved chat that went to Local server?');
+    // Another cloud provider's, in a project: asked too.
+    await saveLine(store, 'p1', 'c-openai-0000abcd', { provider: 'openai', destination: 'openai', label: 'OpenAI' });
+    ({ result, asked } = await call(m, store, { action: 'read', id: 'c-openai-0000abcd' }, { answer: false }));
+    assert.deepEqual([asked.length, asked[0].title, result.error.code], [1, 'Allow the Assistant to read a saved chat that went to OpenAI?', 'declined']);
+  });
+
+  it('"never send project data" (Settings): a cloud turn on Home does not read a chat whose words went elsewhere at all, and asks nothing', async () => {
+    const store = newStore();
+    const m = mk(store, { settings: { privacy: 'deny' } });
+    const local = 'c-local-0000abcd';
+    await saveLine(store, null, local);
+    const { result, asked } = await call(m, store, { action: 'read', id: local }, { context: null });
+    assert.deepEqual(asked, []);
+    assert.equal(result.error.code, 'privacy_denied');
+    assert.equal(result.error.message, "Settings → Assistant is set to never send project data off this PC, and this chat's words went only to Local server at 127.0.0.1, so it isn't read here.");
+    assert.ok(!sentText(m).includes('SECRET') && !sentText(m).includes('my private note'));
+  });
+
+  it("another app (MCP) and a coding agent: an app's call meets every saved chat as elsewhere; an agent reads its own chats and is asked about the rest", async () => {
+    const store = newStore();
+    const tool = chatHistoryTool({ history: () => store });
+    await saveLine(store, null, 'c-local-0000abcd');
+    await saveLine(store, null, 'c-agent-0000abcd', { provider: 'agent:helper', destination: 'agent:helper', label: 'Helper' });
+    const home = { tab: null, projectId: null, simulationId: null, cloud: true, local: false, place: 'home', budgetTokens: null, prompt: null };
+    const app = { ...home, destination: { key: 'mcp', label: 'the app that asks' } };
+    const list = await tool.run({ action: 'list', id: '', from: 0 }, { ctx: app, signal: new AbortController().signal });
+    assert.ok(list.data.chats.every((c) => c.elsewhere === true && !('first_prompt' in c)));
+    const asked = await tool.escalate({ action: 'read', id: 'c-agent-0000abcd', from: 0 }, { ctx: app, signal: new AbortController().signal, turn: null });
+    assert.equal(asked.risk, 'destructive');
+    assert.equal(asked.note, "Its prompts and answers went only to Helper. Read here, they go to the app that asks, and that can't be undone.");
+    const agent = { ...home, destination: { key: 'agent:helper', label: 'Helper' } };
+    assert.equal(await tool.escalate({ action: 'read', id: 'c-agent-0000abcd', from: 0 }, { ctx: agent, signal: new AbortController().signal, turn: null }), null, 'its own chat');
+    assert.notEqual(await tool.escalate({ action: 'read', id: 'c-local-0000abcd', from: 0 }, { ctx: agent, signal: new AbortController().signal, turn: null }), null);
+    // A read the person was never asked about (no escalate ran for this input): nothing of it.
+    const unasked = await tool.run({ action: 'read', id: 'c-local-0000abcd', from: 0 }, { ctx: agent, signal: new AbortController().signal });
+    assert.equal(unasked.error.code, 'not_allowed');
+    // A caller that names no destination is asked about every chat.
+    assert.notEqual(await tool.escalate({ action: 'read', id: 'c-agent-0000abcd', from: 0 }, { ctx: home, signal: new AbortController().signal, turn: null }), null);
   });
 
   it('on Home it reads Home\'s chats', async () => {

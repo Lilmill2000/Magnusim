@@ -62,7 +62,7 @@ import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
 import { clearedResults, isStrictNote, sentMessages, strictNoteKey } from './providers/common.ts';
 import { alog } from './log.ts';
 import { debugScoped } from './debug-log.ts';
-import { destinationOf, sendWithOneResend } from './providers/index.ts';
+import { destinationOf, PROVIDER_LABELS, sendWithOneResend } from './providers/index.ts';
 import { costOf, estimateStep, estimateTokens, modelLabel, promptTokens, requestCost, type EstimateInput } from './prices.ts';
 import {
   destinationHost,
@@ -247,6 +247,12 @@ export function capText(reason: CapReason, caps: Caps, dayLeft?: number): string
 }
 
 const grouped = (tokens: number) => String(Math.round(tokens)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+/** Where a model turn's requests go, as the person reads it ("Local server at 127.0.0.1"). */
+export function destinationLabel(s: Pick<ModelTurnSettings, 'provider' | 'base_url'>): string {
+  const label = PROVIDER_LABELS[s.provider] ?? s.provider;
+  return s.provider === 'openai_compatible' ? `${label} at ${destinationHost(s.provider, s.base_url)}` : label;
+}
 
 /** A local model's context leaves too little room for an answer (the turn ends failed, `context`). */
 export function contextText(tokens: number): string {
@@ -753,6 +759,8 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       used: () => t.toolUse?.() ?? null,
       // app_status reports the turn's own provider and model, not the default's.
       assistant: { provider: t.settings.provider, model: t.settings.model },
+      // Where what a tool gives goes (chat_history asks before a saved chat goes somewhere else).
+      destination: { key: destinationOf(t.settings), label: destinationLabel(t.settings) },
     };
     let tools: ToolDef[];
     if (finalStep && lastTools) {

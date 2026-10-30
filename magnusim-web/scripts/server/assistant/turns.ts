@@ -80,7 +80,7 @@ import { checkPromptImages, cleanText } from './sanitize.ts';
 import { agentPrefs, isAgentOf, PROVIDER_IDS, setAgentLockdownFailed, type AssistantSettings } from './settings.ts';
 import type { SpendLedger } from './ledger.ts';
 import { onAssistantShutdown, assistantState } from './state.ts';
-import { isCloud, PROVIDER_LABELS } from './providers/index.ts';
+import { destinationOf, isCloud, PROVIDER_LABELS } from './providers/index.ts';
 import { ProviderError, type ImagePart, type ProviderAdapter, type ProviderId, type Risk, type StreamEvent } from './types.ts';
 import type { KeySlot, StorageStatus, KeyStatus } from './secrets/store.ts';
 import { AGENT_ID_RE, agentIdOf, knownAgent, type AgentProviderId } from './agents/known.ts';
@@ -542,8 +542,9 @@ export class Turn implements AnyTurn {
 
   /**
    * What the chat history keeps of it (history.ts), once it ended: the person's prompt, all the
-   * model said, its tool steps' lines, how it ended (and why its conversation is full now), its
-   * usage and times. Never a picture or a result's data: those are not here to give.
+   * model said, its tool steps' lines, how it ended (and why its conversation is full now), where
+   * its words went, its usage and times. Never a picture or a result's data: those are not here
+   * to give.
    */
   historyInput(): HistoryInput {
     const sum = this.summary();
@@ -555,6 +556,7 @@ export class Turn implements AnyTurn {
       conversation: this.conv.id,
       project_id: this.conv.projectId,
       provider: this.settings.provider,
+      destination: destinationOf({ provider: this.settings.provider, base_url: model?.base_url ?? '' }),
       label: agent ? agent.name : (PROVIDER_LABELS[this.settings.provider as ProviderId] ?? this.settings.provider),
       model: this.settings.model,
       title: this.conv.title || sum.title,

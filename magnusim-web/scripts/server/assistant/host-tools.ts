@@ -71,7 +71,8 @@ export function createHostTools(deps: HostToolDeps): ToolDef[] {
     setupEditTool(d),
     importFileTool(d),
     deleteTool(d),
-    chatHistoryTool({ history: d.history }),
+    // "Never send project data" keeps a saved chat's words from going somewhere they never went.
+    chatHistoryTool({ history: d.history, ...(d.assistantSettings ? { settings: d.assistantSettings } : {}) }),
   ];
 }
 

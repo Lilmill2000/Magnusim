@@ -9,7 +9,8 @@
  *
  * - A line (HistoryLine) holds the person's prompt, the model's text, one line per tool step (its
  *   tool, title, ok or its code, and the result's one-line summary: never its data), how the
- *   request ended (state, reason, message; why the conversation was full), its usage and times.
+ *   request ended (state, reason, message; why the conversation was full), where its words went
+ *   (`destination`: chat_history asks before they go anywhere else), its usage and times.
  *   Pictures only by their count, files by their names. Every string is redacted (redact.ts: the
  *   keys this server knows, anything shaped like one) and loses each run of base64. A line is at
  *   most HISTORY_LIMITS.lineBytes: past it the answer, the steps and the prompt are cut until it
@@ -96,6 +97,11 @@ export interface HistoryLine {
   conversation: string;
   project_id: string | null;
   provider: string;
+  /**
+   * Where its words went (providers/index.ts destinationOf: `anthropic`, `openai`, `host:<name>`,
+   * `agent:<id>`); absent on a line written before it was kept (lineDestination).
+   */
+  destination?: string;
   /** How the person reads its provider: the provider's label, or the coding agent's name. */
   label: string;
   model: string;
@@ -134,6 +140,8 @@ export interface HistoryChat {
   provider: string;
   label: string;
   model: string;
+  /** Where its words went (its first and its last saved request's: lineDestination), each once. */
+  destinations: string[];
   /** Its first saved request's start, and its last one's end. */
   started_at: string;
   ended_at: string;
@@ -184,6 +192,15 @@ export function scrub(v: unknown): string {
   return redact(typeof v === 'string' ? v : v == null ? '' : String(v)).replace(BASE64_RUN, DATA_LEFT_OUT);
 }
 
+/**
+ * Where a line's words went: its `destination`, else (a line written before that was kept) its
+ * provider for a cloud provider or a coding agent, and '' (not known) for a local server's.
+ */
+export function lineDestination(l: Pick<HistoryLine, 'provider' | 'destination'>): string {
+  if (typeof l.destination === 'string' && l.destination) return l.destination;
+  return l.provider === 'openai_compatible' ? '' : String(l.provider ?? '');
+}
+
 /** The line for `input`, as its JSON text (no newline), at most HISTORY_LIMITS.lineBytes. */
 export function historyLine(input: HistoryInput): string {
   const L = HISTORY_LIMITS;
@@ -207,6 +224,7 @@ export function historyLine(input: HistoryInput): string {
     conversation: firstChars(scrub(input.conversation), 64),
     project_id: input.project_id === null ? null : firstChars(scrub(input.project_id), 200),
     provider: firstChars(scrub(input.provider), 80),
+    ...(input.destination ? { destination: firstChars(scrub(input.destination), 300) } : {}),
     label: firstChars(scrub(input.label), 80),
     model: firstChars(scrub(input.model), 120),
     title: firstChars(scrub(input.title), 200),
@@ -275,6 +293,7 @@ function chatOf(id: string, first: HistoryLine, last: HistoryLine): HistoryChat 
     provider: last.provider,
     label: last.label,
     model: last.model,
+    destinations: [...new Set([lineDestination(first), lineDestination(last)])],
     started_at: first.started_at,
     ended_at: last.ended_at,
     first_prompt: firstChars(first.prompt, 300),

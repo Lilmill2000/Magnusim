@@ -101,8 +101,8 @@
  *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it (its saved
  *                                        chat stays in History)
  *   GET  /api/assistant/history         ?project=<id>|home → {ok, kept_days, chats:[{id, title, provider,
- *                                        label, model, started_at, ended_at, first_prompt, end_state,
- *                                        full}], total}: the dock's History, the saved chats of a project
+ *                                        label, model, destinations, started_at, ended_at, first_prompt,
+ *                                        end_state, full}], total}: the dock's History, the saved chats of a project
  *                                        (or Home), newest end first, kept 31 days (assistant/history.ts:
  *                                        one line per request's end, redacted, no pictures); 400 bad_project
  *   GET  /api/assistant/history/:id     ?project=<id>|home&from=N → {ok, chat, total, from, next,
