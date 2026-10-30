@@ -185,8 +185,8 @@ with the host once for the page's life, and its chip goes in the dock.
 - Facade C ABI and ops: `p0/CONTRACT.md` and `src/types/kernel-protocol.ts`
   (`KernelOps` maps op -> params/result; the typed file is the one to read).
   Shape ids are integers owned by the worker; face/edge/vertex indices start at
-  0 and are stable per shape id. `version` returns `api: 5` (the contract below plus
-  the API 3, API 4 and API 5 tables at the end of this section).
+  0 and are stable per shape id. `version` returns `api: 7` (the contract below plus
+  the API 3 to API 7 tables at the end of this section).
 - Worker protocol: `ready` | `fatal` | `result` (worker -> main), `call`
   (main -> worker, `bytes` transferred as `params.ptr/len`). Buffers come back
   as ArrayBuffers in the transfer list.
