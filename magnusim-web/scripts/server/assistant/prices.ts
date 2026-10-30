@@ -276,9 +276,9 @@ export interface Estimate {
   maxOut: number;
   /** The estimated prompt tokens (prefix + fresh). */
   promptTokens: number;
-  /** USD of the input estimate alone (one attempt: what an answer cut off is billed for). */
+  /** USD of the input estimate alone (the model's own attempt: what an answer cut off is billed for). */
   inputUsd: number;
-  /** USD of the input a refusal fallback may add: one more attempt per fallback target. */
+  /** USD of the input a refusal fallback may add: one more attempt per fallback target, each at its own row. */
   fallbackInputUsd: number;
   /** maxOut < MIN_OUT: the turn ends capped before sending. */
   capped: boolean;
@@ -286,24 +286,26 @@ export interface Estimate {
   noRoom: boolean;
   /** The model has no row (priced at the provider's dearest). */
   estimated: boolean;
-  /** The prices used (the dearest among the model and its fallback targets). */
+  /** The dearest prices among the model and its fallback targets (the output's, and an attempt cut off). */
   rates: Rates;
 }
 
 /**
- * The cost of the next request, made before it is sent (spec 5.7). Each price is the
- * dearest among the model and its refusal-fallback targets, on a long tier from 90% of its line
- * (LONG_TIER_MARGIN). The previous request's
- * prompt is priced as a cache read only if that request used the cache and started
- * under 4 minutes ago (an entry's 5-minute life counts from the start of the request
- * that used it); new text and images are priced as cache writes. A refusal fallback runs
- * the request again on another model within the same request, and the declined attempt
- * can be billed too, so each fallback target adds one more input to the reservation. When
- * this request leaves out more old tool results than the previous one, the prefix ends where
- * the first of them was, and what it sends from there is written again. The
- * output limit is what the remaining money buys, at most 32,000 (cloud) or 8,192 (local)
- * tokens. A local server costs nothing; when it reported the model's context, the answer
- * gets what that context leaves: min(the cap, context − prompt estimate − 1,024).
+ * The cost of the next request, made before it is sent (spec 5.7), on a long tier from 90% of
+ * its line (LONG_TIER_MARGIN). The previous request's prompt is priced as a cache read only if
+ * that request used the cache and started under 4 minutes ago (an entry's 5-minute life counts
+ * from the start of the request that used it); past that it is written again (the last block
+ * carries a breakpoint), and a prompt that never used the cache is plain input. New text and
+ * images are priced as cache writes. A refusal fallback runs the request again on another
+ * model within the same request, and the declined attempt can be billed too, so each fallback
+ * target adds one more input to the reservation, at its own row: the provider reprices a
+ * fallback as if the conversation had been on that model all along (its cached prefix a read,
+ * the rest written). When this request leaves out more old tool results than the previous
+ * one, the prefix ends where the first of them was, and what it sends from there is written
+ * again. The output limit is what the remaining money buys at the dearest output price (a
+ * fallback model may answer), at most 32,000 (cloud) or 8,192 (local) tokens. A local server
+ * costs nothing; when it reported the model's context, the answer gets what that context
+ * leaves: min(the cap, context − prompt estimate − 1,024).
  */
 export function estimateStep(e: EstimateInput): Estimate {
   const fresh =
@@ -319,10 +321,13 @@ export function estimateStep(e: EstimateInput): Estimate {
   const models = [e.model, ...e.fallbackTargets];
   const known = models.map((m) => priceRow(m));
   const estimated = known.some((r) => !r);
-  const rates = maxRates(known.map((r) => (r ? ratesFor(r, prompt, LONG_TIER_MARGIN) : dearestRates(e.provider, prompt, LONG_TIER_MARGIN))));
+  const each = known.map((r) => (r ? ratesFor(r, prompt, LONG_TIER_MARGIN) : dearestRates(e.provider, prompt, LONG_TIER_MARGIN)));
+  const rates = maxRates(each);
   const cached = !!e.prev && e.prev.cacheUsed && e.now - e.prev.startedAt < CACHE_FRESH_MS;
-  const inputUsd = (prefix * (cached ? rates.read : rates.input) + fresh * rates.write5m) / 1e6;
-  const fallbackInputUsd = inputUsd * e.fallbackTargets.length;
+  const rewritten = !!e.prev && e.prev.cacheUsed && !cached;
+  const inputOf = (r: Rates) => (prefix * (cached ? r.read : rewritten ? r.write5m : r.input) + fresh * r.write5m) / 1e6;
+  const inputUsd = inputOf(each[0]);
+  const fallbackInputUsd = each.slice(1).reduce((n, r) => n + inputOf(r), 0);
   const room = e.remainingUsd - inputUsd - fallbackInputUsd;
   const affordable = rates.output > 0 ? Math.floor((room / rates.output) * 1e6) : cap;
   const maxOut = Math.max(0, Math.min(cap, affordable));
@@ -337,6 +342,53 @@ export function estimateStep(e: EstimateInput): Estimate {
     estimated,
     rates,
   };
+}
+
+/** The refusal-fallback targets a request of `model` carries (the first provider's only: providers/anthropic.ts). */
+export function fallbackTargetsOf(provider: ProviderId | string, model: string): readonly string[] {
+  return provider === 'anthropic' ? (FALLBACK_TARGETS[model] ?? []) : [];
+}
+
+/** The search's ceiling: a line past it is as good as none. */
+const COLD_LINE_MAX = 1 << 30;
+
+/**
+ * The largest prompt (tokens) one request can send with nothing cached and still keep MIN_OUT
+ * tokens for its answer within `usd`, as estimateStep prices it: written to the cache by the
+ * model and by each refusal-fallback target at its own row. What one turn's money can resend
+ * of a conversation whose cache has expired (conversations.ts limits). Null for a local server.
+ */
+export function coldLine(provider: ProviderId | string, model: string, fallbackTargets: readonly string[], usd: number): number | null {
+  if (provider !== 'anthropic' && provider !== 'openai') return null;
+  const capped = (tokens: number) =>
+    estimateStep({
+      provider,
+      model,
+      cloud: true,
+      fallbackTargets,
+      newChars: 0,
+      newImages: [],
+      toolCount: 0,
+      firstStep: false,
+      prev: { promptTokens: tokens, startedAt: 0, cacheUsed: true },
+      now: CACHE_FRESH_MS,
+      remainingUsd: usd,
+    }).capped;
+  if (capped(0)) return 0;
+  // Each price only rises with the prompt (a long tier from its line on): the last size that fits.
+  let lo = 0;
+  let hi = 1 << 20;
+  while (!capped(hi)) {
+    if (hi >= COLD_LINE_MAX) return COLD_LINE_MAX;
+    lo = hi;
+    hi *= 2;
+  }
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (capped(mid)) hi = mid;
+    else lo = mid;
+  }
+  return lo;
 }
 
 // ---------------------------------------------------------------- what Settings shows

@@ -517,7 +517,8 @@ describe('a conversation the next step could fill: the model sums up first (conv
     await settled(r.turn);
     assert.equal(m.provider.requests.length, 1, 'the sum-up is never sent');
     assert.deepEqual([r.turn.state, r.turn.endReason], ['capped', 'conversation_full']);
-    assert.match(r.turn.message, /^The next step could go over this turn's \$1\.00 limit\. This conversation is full: the last request used 159,990 of the 200,000 tokens/);
+    // $1 a turn resends 151,808 tokens of it once the cache expires: that line comes before the 160,000 one.
+    assert.match(r.turn.message, /^The next step could go over this turn's \$1\.00 limit\. This conversation is full: its last request sent 159,990 tokens, and once its cache expires, sending that again could cost more than the \$1\.00 per turn set in Settings → Assistant \(its next step could pass that\)\. Start a new one\.$/);
     const next = await startTurn(m, { text: 'y', conversation: r.body.conversation });
     assert.deepEqual([next.status, next.body.code], [409, 'conversation_full']);
   });
@@ -861,7 +862,9 @@ describe('the spend caps', () => {
       const { turn: t } = await startTurn(m, 'x');
       await settled(t);
       assert.deepEqual([t.state, t.endReason], ['capped', reason]);
-      assert.equal(t.message, capText(reason, caps));
+      // Today's limit isn't reached (what is left can't pay for the resend): it says what is left.
+      assert.equal(t.message, capText(reason, caps, caps.day_usd - t.usd));
+      if (reason === 'day_usd') assert.equal(t.message, "The next step could go over today's $0.65 limit ($0.01 left); it resets at midnight.");
       assert.equal(m.provider.requests.length, 1, reason);
       assert.equal(t.conv.messages.length, 1, 'nothing appended');
       assert.ok(t.usd > 0 && t.usd <= 0.65 + 1e-6, `${reason}: spent ${t.usd}`);
@@ -953,6 +956,108 @@ describe('the spend caps', () => {
     assert.equal(r.body.code, 'cap_day');
     assert.equal(r.body.error, "Today's $1.00 limit is reached; it resets at midnight.");
     assert.equal(m.provider.requests.length, 0);
+  });
+});
+
+describe("a priced turn's first request goes on from the conversation's last one (Claude Opus 5.5, $8 a turn and $15 a day: the defaults)", () => {
+  const TARGETS = ['claude-opus-5', 'claude-opus-4-8'];
+  const opusMk = (o = {}) => mk({ model: 'claude-opus-5-5', adapter: new ScriptedProvider({ id: 'anthropic', fallbackTargets: TARGETS }), ...o });
+  const peek = () => hostTool('peek', { run: async () => ({ ok: true, data: { seen: true }, summary: 'peeked' }) });
+  /** A first turn whose request used `cacheRead` tokens of cache (and 10 more); settled. */
+  async function longTurn(m, cacheRead) {
+    m.provider.script({ text: 'Read it all.', usage: { input: 10, cacheRead } });
+    const r = await startTurn(m, 'Read everything.');
+    await settled(r.turn);
+    assert.equal(r.turn.state, 'done', r.turn.message);
+    return r;
+  }
+
+  it('within 4 minutes its 440,000-token prompt is a cache read: $8 sends it with the whole 32,000-token answer (it was capped as all written three times); after 5 minutes, or with another effort, it is written again and the answer gets what $8 leaves', async () => {
+    const m = opusMk();
+    const a = await longTurn(m, 439_990);
+    assert.equal(a.turn.conv.lastRequest.promptTokens, 440_000);
+    m.clock.advance(60_000);
+    m.provider.script({ text: 'Again.', usage: { input: 300, cacheRead: 439_990 } });
+    const b = await startTurn(m, { text: 'Once more.', conversation: a.body.conversation });
+    await settled(b.turn);
+    assert.deepEqual([b.turn.state, b.turn.endReason], ['done', 'end_turn'], b.turn.message);
+    assert.equal(m.provider.requests[1].req.maxOutputTokens, 32_000);
+    // 440,290 tokens and the new ones, written by Claude Opus 5.5 and both fallbacks: about $7.71 of the $8.
+    const written = (out) => assert.ok(out > 2048 && out < 13_000, String(out));
+    // Another effort rewrites the cached prefix, however fresh.
+    m.clock.advance(60_000);
+    m.state.settings.effort = 'high';
+    m.provider.script({ text: 'Harder.', usage: { input: 300, cacheRead: 439_990 } });
+    const c = await startTurn(m, { text: 'Think harder.', conversation: a.body.conversation });
+    await settled(c.turn);
+    assert.deepEqual([c.turn.state, c.turn.endReason], ['done', 'end_turn'], c.turn.message);
+    written(m.provider.requests[2].req.maxOutputTokens);
+    m.clock.advance(5 * 60_000);
+    m.provider.script({ text: 'And again.' });
+    const d = await startTurn(m, { text: 'Last one.', conversation: a.body.conversation });
+    await settled(d.turn);
+    assert.deepEqual([d.turn.state, d.turn.endReason], ['done', 'end_turn'], d.turn.message);
+    written(m.provider.requests[3].req.maxOutputTokens);
+    checkInvariants(assert, d.turn.conv, m.provider.requests);
+  });
+
+  it("a request past what $8 resends once the cache expires ends the conversation full before it is sent, in the money's words; the next start is refused with them (the dock offers Continue in a new chat)", async () => {
+    // Within 4 minutes the same request is a read, and goes.
+    const warm = opusMk();
+    const w = await longTurn(warm, 451_990);
+    warm.clock.advance(60_000);
+    warm.provider.script({ text: 'Fine.' });
+    const sent = await startTurn(warm, { text: 'x'.repeat(6000), conversation: w.body.conversation });
+    await settled(sent.turn);
+    assert.deepEqual([sent.turn.state, warm.provider.requests.length], ['done', 2]);
+
+    const m = opusMk();
+    const a = await longTurn(m, 451_990);
+    assert.equal(a.turn.conv.fullDetail(m.state.settings.base_url, 8), null, '452,000 is under the 454,217 a turn resends');
+    m.clock.advance(5 * 60_000);
+    const b = await startTurn(m, { text: 'x'.repeat(6000), conversation: a.body.conversation });
+    await settled(b.turn);
+    const said =
+      'This conversation is full: its last request sent 452,000 tokens, and once its cache expires, sending that again, with a re-run on each of its 2 refusal-fallback models counted, could cost more than the $8.00 per turn set in Settings → Assistant (its next step could pass that). Start a new one.';
+    assert.deepEqual([b.turn.state, b.turn.endReason, b.turn.message], ['capped', 'conversation_full', said]);
+    assert.equal(m.provider.requests.length, 1, 'nothing sent');
+    assert.equal(b.turn.usd, 0);
+    assert.equal(b.turn.conv.closedBy?.usd, 8);
+    const next = await startTurn(m, { text: 'y', conversation: a.body.conversation });
+    assert.deepEqual([next.status, next.body.code, next.body.error], [409, 'conversation_full', said]);
+  });
+
+  it("a step past what $8 resends: the model sums up while its cache is fresh (cheap), and the conversation is full in the money's words", async () => {
+    const m = opusMk({ hostTools: [peek()] });
+    m.provider.script({ tools: [{ name: 'peek' }], usage: { input: 10, cacheRead: 459_990 } }, { text: 'Done: the bracket. Left: the holes.' });
+    const r = await startTurn(m, 'Build the bracket.');
+    await settled(r.turn);
+    const t = r.turn;
+    assert.deepEqual([t.state, t.endReason], ['capped', 'conversation_full'], t.message);
+    assert.match(t.message, /^This conversation is full: its last request sent 460,000 tokens, and once its cache expires, .* \(its next step could pass that\)\. Start a new one\.$/);
+    assert.equal(m.provider.requests.length, 2, 'the sum-up went');
+    const note = m.provider.requests[1].req.messages.at(-1).parts.filter((p) => p.type === 'text').map((p) => p.text);
+    assert.deepEqual(note, ["This conversation is nearly full (context 460,000 of the 454,217 tokens $8.00 per turn can resend). Don't call tools now: say what is done and what is left."]);
+    assert.equal(t.summary().text_so_far, 'Done: the bracket. Left: the holes.');
+    checkInvariants(assert, t.conv, m.provider.requests);
+  });
+
+  it("today's money: a step only what is left today can't pay for says it could go over, with what is left; reached only when nothing is", async () => {
+    const caps = { turn_usd: 8, day_usd: 1, steps: 120, turn_minutes: 60, turn_tokens: 1e7 };
+    assert.equal(capText('day_usd', caps, 0.04), "The next step could go over today's $1.00 limit ($0.04 left); it resets at midnight.");
+    assert.equal(capText('day_usd', caps, 0.001), "Today's $1.00 limit is reached; it resets at midnight.");
+    assert.equal(capText('day_usd', caps), "Today's $1.00 limit is reached; it resets at midnight.");
+    assert.equal(capText('turn_usd', caps, 0.04), "The next step could go over this turn's $8.00 limit.");
+    const m = opusMk({ caps: { turn_usd: 8, day_usd: 1 } });
+    // $0.96 of input (240,000 tokens at Claude Opus 5.5's $4).
+    m.provider.script({ text: 'Read it.', usage: { input: 240_000, output: 10 } });
+    const a = await startTurn(m, 'Read the counter.');
+    await settled(a.turn);
+    const b = await startTurn(m, { text: 'Read it again.', conversation: a.body.conversation });
+    await settled(b.turn);
+    assert.deepEqual([b.turn.state, b.turn.endReason], ['capped', 'day_usd']);
+    assert.match(b.turn.message, /^The next step could go over today's \$1\.00 limit \(\$0\.0[34] left\); it resets at midnight\.$/);
+    assert.equal(m.provider.requests.length, 1, 'nothing sent');
   });
 });
 

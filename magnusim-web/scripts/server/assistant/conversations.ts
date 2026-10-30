@@ -18,8 +18,12 @@
  * conversation holds (each request sends them all; its context editing clears them only after
  * the upload) against 600 for a model of more than 200K tokens of context, else 100; OpenAI
  * and a local server count only the pictures a request sends (its oldest results go without
- * theirs, providers/common.ts) against 100. Nothing of it is written to disk (each request's
- * end is, as the chat history keeps it: history.ts).
+ * theirs, providers/common.ts) against 100. A priced model's context is full sooner when one
+ * turn's money (Settings → Assistant, $ per turn: `turnUsd`) can't resend that much once the
+ * cache has expired (prices.ts coldLine): the next turn's first request would be capped before
+ * it is sent, so the conversation is full at that line, which says so with the money (`usd`).
+ * Nothing of it is written to disk (each request's end is, as the chat history keeps it:
+ * history.ts).
  * fullDetail() names the limit a conversation reached with its numbers (fullText words it for
  * the person), and room() how close it is to the nearest one. nearlyFull() says when the next
  * step could reach one (the loop then asks the model to sum up, and closes the conversation:
@@ -42,7 +46,7 @@
  * onDrop's listeners, so the agent working for it ends with it.
  */
 import { randomBytes } from 'node:crypto';
-import { contextWindow } from './prices.ts';
+import { coldLine, contextWindow, fallbackTargetsOf } from './prices.ts';
 import { clearedResults, sentMessages } from './providers/common.ts';
 import { capResult } from './sanitize.ts';
 import { assistantState } from './state.ts';
@@ -159,12 +163,15 @@ export type FullReason = 'messages' | 'images' | 'bytes' | 'context';
 
 /**
  * One of a conversation's limits with its numbers: `used` of `limit` (full at `used >= limit`).
- * For the context, `used` is the last request's prompt tokens and `limit` 80% of `window`.
+ * For the context, `used` is the last request's prompt tokens and `limit` 80% of `window`, or
+ * what one turn's `usd` can resend with nothing cached when that is less.
  */
 export interface Room {
   reason: FullReason;
   used: number;
   limit: number;
+  /** The context's limit is what this much money per turn can resend (prices.ts coldLine). */
+  usd?: number;
 }
 
 /**
@@ -177,6 +184,8 @@ export interface FullDetail extends Room {
   near?: boolean;
   /** Pictures counted as each request sends them (OpenAI, a local server), not all it holds. */
   sent?: boolean;
+  /** With `usd`: the refusal-fallback models whose re-run that money counts too. */
+  retries?: number;
 }
 
 /** What one step added, or the most any step of a conversation added (nearlyFull's margin). */
@@ -187,6 +196,7 @@ export interface Growth {
 }
 
 const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const money = (n: number) => `$${n.toFixed(2)}`;
 const megabytes = (bytes: number) => {
   const mb = bytes / (1024 * 1024);
   return `${mb < 10 ? Math.floor(mb * 10) / 10 : Math.floor(mb)} MB`;
@@ -202,7 +212,9 @@ export function roomNumbers(r: Room): string {
     case 'bytes':
       return `results and pictures ${megabytes(r.used).replace(' MB', '')} of ${megabytes(r.limit)}`;
     case 'context':
-      return `context ${grouped(r.used)} of ${grouped(r.limit)} tokens`;
+      return r.usd === undefined
+        ? `context ${grouped(r.used)} of ${grouped(r.limit)} tokens`
+        : `context ${grouped(r.used)} of the ${grouped(r.limit)} tokens ${money(r.usd)} per turn can resend`;
   }
 }
 
@@ -225,6 +237,11 @@ export function fullText(d: FullDetail, label: string): string {
       break;
     case 'context': {
       const window = d.window ?? Math.round(d.limit / CONVERSATION_LIMITS.fullFraction);
+      if (d.usd !== undefined) {
+        const retried = d.retries ? `, with a re-run on ${d.retries === 1 ? 'its refusal-fallback model' : `each of its ${d.retries} refusal-fallback models`} counted,` : '';
+        why = `its last request sent ${grouped(d.used)} tokens, and once its cache expires, sending that again${retried} could cost more than the ${money(d.usd)} per turn set in Settings → Assistant`;
+        break;
+      }
       why = d.of === 'model'
         ? `the last request used ${grouped(d.used)} of ${label}'s ${grouped(window)}-token context, and a conversation is full at ${Math.round(CONVERSATION_LIMITS.fullFraction * 100)}%`
         : `the last request used ${grouped(d.used)} of the ${grouped(window)} tokens Magnusim counts for ${label}, and a conversation is full at ${Math.round(CONVERSATION_LIMITS.fullFraction * 100)}%`;
@@ -263,6 +280,13 @@ export class Conversation {
   running: string | null = null;
   /** The last request's prompt tokens (for "full"). */
   promptTokens = 0;
+  /**
+   * The last request sent in it (the loop's): its prompt tokens, when it started, whether it used
+   * the cache, the messages it carried, the old tool results it left out, and `key` (its system,
+   * tools and effort): the next turn's first estimate goes on from it (a read while that key holds
+   * and the cache is fresh).
+   */
+  lastRequest: { promptTokens: number; startedAt: number; cacheUsed: boolean; messages: number; cleared: number; key: string } | null = null;
   /** The local server's context for this conversation's model, once its model row said (tokens). */
   contextTokens: number | null = null;
   /** The base URL of the server that said contextTokens (another server's model may differ). */
@@ -424,14 +448,25 @@ export class Conversation {
     return this.contextBaseUrl === baseUrl ? this.contextTokens : null;
   }
 
-  /** Each limit with its numbers, in the order they are checked; with `baseUrl`, a context only that server reported counts. */
-  limits(baseUrl?: string): FullDetail[] {
+  /**
+   * Each limit with its numbers, in the order they are checked; with `baseUrl`, a context only that
+   * server reported counts; with `turnUsd` (the money one turn may spend), a priced model's context
+   * is full where that money could no longer resend it with nothing cached, if that comes first.
+   */
+  limits(baseUrl?: string, turnUsd?: number): FullDetail[] {
     const L = CONVERSATION_LIMITS;
     const context = baseUrl === undefined ? this.contextTokens : this.contextAt(baseUrl);
     const local = this.provider === 'openai_compatible';
     const window = local ? (context ?? CONTEXT_TOKENS.local) : (this.window?.tokens ?? CONTEXT_TOKENS.cloud);
     const known = local ? !!context : !!this.window?.known;
     const sent = this.provider !== 'anthropic';
+    const share = Math.floor(L.fullFraction * window);
+    const retries = fallbackTargetsOf(this.provider, this.model);
+    const line = turnUsd === undefined ? null : coldLine(this.provider, this.model, retries, turnUsd);
+    const contextLimit: FullDetail =
+      line !== null && line < share
+        ? { reason: 'context', used: this.promptTokens, limit: line, of: 'app', window, usd: turnUsd, ...(retries.length ? { retries: retries.length } : {}) }
+        : { reason: 'context', used: this.promptTokens, limit: share, of: known ? 'model' : 'app', window };
     return [
       { reason: 'messages', used: this.list.length, limit: L.messages, of: 'app' },
       {
@@ -442,7 +477,7 @@ export class Conversation {
         ...(sent ? { sent: true } : {}),
       },
       { reason: 'bytes', used: this.byteCount, limit: L.bytes, of: 'app' },
-      { reason: 'context', used: this.promptTokens, limit: Math.floor(L.fullFraction * window), of: known ? 'model' : 'app', window },
+      contextLimit,
     ];
   }
 
@@ -461,8 +496,8 @@ export class Conversation {
   }
 
   /** The first limit this conversation reached, with its numbers (null while more turns fit); a closed one's, else. */
-  fullDetail(baseUrl?: string): FullDetail | null {
-    return this.limits(baseUrl).find((l) => l.used >= l.limit) ?? this.closedBy;
+  fullDetail(baseUrl?: string, turnUsd?: number): FullDetail | null {
+    return this.limits(baseUrl, turnUsd).find((l) => l.used >= l.limit) ?? this.closedBy;
   }
 
   /** Its counts now (messages, pictures, bytes), for what a step adds (noteStep). */
@@ -491,9 +526,9 @@ export class Conversation {
    * context's limit, or pictures, bytes or messages within the largest step it made so far (and
    * 2 more messages: the note that asks for a sum-up, and the answer). Null while there is room.
    */
-  nearlyFull(next: { promptTokens: number }, baseUrl?: string): FullDetail | null {
+  nearlyFull(next: { promptTokens: number }, baseUrl?: string, turnUsd?: number): FullDetail | null {
     const margin: Growth = { ...this.largest, messages: this.largest.messages + 2 };
-    for (const l of this.limits(baseUrl)) {
+    for (const l of this.limits(baseUrl, turnUsd)) {
       const reached = l.reason === 'context' ? next.promptTokens >= l.limit : l.used + margin[l.reason] >= l.limit;
       if (reached) return { ...l, near: true };
     }
@@ -501,16 +536,16 @@ export class Conversation {
   }
 
   /** Why no more turns fit (null while they do); with `baseUrl`, a context only that server reported counts. */
-  fullReason(baseUrl?: string): FullReason | null {
-    return this.fullDetail(baseUrl)?.reason ?? null;
+  fullReason(baseUrl?: string, turnUsd?: number): FullReason | null {
+    return this.fullDetail(baseUrl, turnUsd)?.reason ?? null;
   }
 
   /** The limit it is closest to (the largest share of one), with its numbers; null for a conversation that keeps no messages. */
-  room(baseUrl?: string): Room | null {
+  room(baseUrl?: string, turnUsd?: number): Room | null {
     if (String(this.provider).startsWith('agent:')) return null;
     let best: FullDetail | null = null;
-    for (const l of this.limits(baseUrl)) if (l.limit > 0 && (!best || l.used / l.limit > best.used / best.limit)) best = l;
-    return best ? { reason: best.reason, used: best.used, limit: best.limit } : null;
+    for (const l of this.limits(baseUrl, turnUsd)) if (l.limit > 0 && (!best || l.used / l.limit > best.used / best.limit)) best = l;
+    return best ? { reason: best.reason, used: best.used, limit: best.limit, ...(best.usd !== undefined ? { usd: best.usd } : {}) } : null;
   }
 
   /** The field a turn would change, or null when it fits this conversation. */

@@ -9,7 +9,12 @@
  *   for each step:
  *     the caps (minutes, tokens; then the spend estimate and the day's reservation); a full
  *       conversation (conversations.ts fullDetail) → capped (conversation_full), but for the
- *       request that sums up
+ *       request that sums up. A priced turn's first estimate goes on from the conversation's last
+ *       request (a read while its cache is fresh and it sends the same system, tools and effort,
+ *       else written again). A request not even a whole turn's money could send (past what
+ *       one turn resends once the cache has expired: conversations.ts limits) ends the turn
+ *       capped (conversation_full) and closes the conversation; one only today's money left
+ *       can't send says what is left of it
  *     privacy again, read live (cloud turns with a project): "Always deny" ends the turn
  *       before this request, forgotten answers ask again
  *     a local server's model row (its context, kept 60 s), read before the tools are chosen:
@@ -49,6 +54,7 @@
  *
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
+import { createHash } from 'node:crypto';
 import { carryBlock, contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
 import { IMAGE_CAPS } from './sanitize.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
@@ -222,7 +228,8 @@ export interface LoopDeps {
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-export function capText(reason: CapReason, caps: Caps): string {
+/** A cap's words; `dayLeft`: what today's limit leaves, when only the next step's estimate can't fit in it. */
+export function capText(reason: CapReason, caps: Caps, dayLeft?: number): string {
   switch (reason) {
     case 'steps':
       return `This turn reached its ${caps.steps}-step limit (Settings → Assistant).`;
@@ -233,7 +240,9 @@ export function capText(reason: CapReason, caps: Caps): string {
     case 'turn_usd':
       return `The next step could go over this turn's ${money(caps.turn_usd)} limit.`;
     case 'day_usd':
-      return `Today's ${money(caps.day_usd)} limit is reached; it resets at midnight.`;
+      return dayLeft !== undefined && dayLeft >= 0.005
+        ? `The next step could go over today's ${money(caps.day_usd)} limit (${money(dayLeft)} left); it resets at midnight.`
+        : `Today's ${money(caps.day_usd)} limit is reached; it resets at midnight.`;
   }
 }
 
@@ -642,10 +651,11 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     if (known !== null) t.setModelFacts({ images: known });
   };
   // Whether the next step could fill the conversation: the next request's prompt is the last
-  // one's and what was added since, as it would be sent (images a model doesn't read left out).
-  const nearNow = (): FullDetail | null => {
+  // one's and what was added since, as it would be sent (images a model doesn't read left out);
+  // its context as far as one turn's money (`turnUsd`) resends it once the cache has expired.
+  const nearNow = (turnUsd: number): FullDetail | null => {
     const added = freshOf(sentMessages(conv.messages, clearedResults(conv.messages)).slice(counted));
-    return conv.nearlyFull({ promptTokens: conv.promptTokens + estimateTokens(added.chars, t.images === false ? [] : added.images) }, t.settings.base_url);
+    return conv.nearlyFull({ promptTokens: conv.promptTokens + estimateTokens(added.chars, t.images === false ? [] : added.images) }, t.settings.base_url, turnUsd);
   };
   // A turn that ends the conversation full: logged with its numbers, and the conversation keeps it.
   const endFull = (d: FullDetail) => {
@@ -684,7 +694,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     // A full conversation sends nothing more, but for the request that sums up (it stays within
     // every provider's limits: a step's calls stop before their pictures could pass one).
     // A context counts only for the server that reported it (the turn's address).
-    const full = conv.fullDetail(t.settings.base_url);
+    const full = conv.fullDetail(t.settings.base_url, caps.turn_usd);
     if (full && !finalStep) return endFull(full);
     // The turn follows its tab (§9.4): a project opened there since the last step (core__show, or
     // the person) is this step's, and its privacy is asked before this request carries any of it.
@@ -770,6 +780,20 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     lastTools = tools;
     const offered = new Map(tools.map((x) => [x.name, x] as const));
     const req = buildRequest(conv, tools, t.settings);
+    // What a cached prefix rests on: its system, its tools and the effort (a change rewrites it all).
+    const key = createHash('sha256').update(JSON.stringify([req.system, req.tools, req.effort])).digest('hex');
+    // A priced turn's first request goes on from the conversation's last one, as many tokens as that
+    // sent: a read while its cache is fresh, else written again (prices.ts estimateStep), and written
+    // again too when this one sends another system, other tools or another effort (taken as the
+    // same size). A local server's room is still its estimate of everything sent (CAD tools spec H5).
+    const last = step === 1 && priced ? conv.lastRequest : null;
+    if (last) {
+      prev = { promptTokens: last.promptTokens, startedAt: last.key === key ? last.startedAt : Number.NEGATIVE_INFINITY, cacheUsed: last.cacheUsed };
+      counted = last.messages;
+      sentCleared = last.cleared;
+    }
+    // Nothing of it was sent before: its system and tool definitions are written too.
+    const whole = !prev;
 
     // The spend estimate and the day's reservation (cloud only; a local server costs nothing), on
     // the messages as this request sends them.
@@ -788,7 +812,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     }
     counted = conv.messages.length;
     sentCleared = cleared;
-    const systemChars = step === 1 ? req.system.reduce((n, s) => n + s.text.length, 0) : 0;
+    const systemChars = whole ? req.system.reduce((n, s) => n + s.text.length, 0) : 0;
     const turnRoom = turnRoomNow();
     const dayRoom = dayRoomNow();
     const estimate = (remainingUsd: number) =>
@@ -800,7 +824,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
         newChars: fresh.chars + systemChars,
         newImages: seen(fresh.images),
         toolCount: tools.length,
-        firstStep: step === 1,
+        firstStep: whole,
         prev,
         ...(jump ? { prevDropTokens: jump.drop, rewriteChars: jump.rewrite.chars, rewriteImages: seen(jump.rewrite.images) } : {}),
         now: d.clock.now(),
@@ -815,11 +839,15 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       return t.end('failed', 'context', contextText(t.contextTokens));
     }
     if (priced && est.capped) {
+      // Not even a whole turn's money could send it (the conversation past what one turn resends
+      // once its cache has expired): the conversation is full, and goes on in a new one.
+      const size = !finalReason && estimate(caps.turn_usd).capped ? conv.nearlyFull({ promptTokens: est.promptTokens }, t.settings.base_url, caps.turn_usd) : null;
+      if (size) return endFull(size);
       const reason: CapReason = turnRoom <= dayRoom ? 'turn_usd' : 'day_usd';
-      return endCapped(reason, capText(reason, caps));
+      return endCapped(reason, capText(reason, caps, dayRoom));
     }
     let reservation = ledger ? await ledger.reserve(est.usd, { dayCapUsd: caps.day_usd }) : null;
-    if (ledger && !reservation) return endCapped('day_usd', capText('day_usd', caps));
+    if (ledger && !reservation) return endCapped('day_usd', capText('day_usd', caps, dayRoomNow()));
     if (t.signal.aborted) {
       if (ledger && reservation) await ledger.settle(reservation, 0);
       stoppedNow(t);
@@ -902,6 +930,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       }
       t.tokens += used + out.usage.output;
       prev = { promptTokens: used, startedAt, cacheUsed: out.usage.cacheRead + out.usage.cacheWrite5m + out.usage.cacheWrite1h > 0 };
+      conv.lastRequest = { ...prev, messages: counted, cleared, key };
     } catch (err) {
       const aborted = t.signal.aborted || (err instanceof ProviderError && err.code === 'aborted');
       cost = resentCost;
@@ -927,7 +956,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
       // Only an overload whose resend no longer fits the money left gets here.
       if (stoppedNow(t)) return;
       const reason = capEnd ?? 'turn_usd';
-      return endCapped(reason, capText(reason, caps));
+      return endCapped(reason, capText(reason, caps, dayRoomNow()));
     }
     t.servedBy = out.servedBy || t.servedBy;
     for (const text of out.notes ?? []) {
@@ -965,7 +994,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
           return t.end('done', 'end_turn', null);
         }
         // Nor in a conversation the round could fill: the answer stands, and the conversation ends here.
-        const near = nearNow();
+        const near = nearNow(caps.turn_usd);
         if (near) {
           t.note(REVIEW_NO_ROOM_FULL_NOTE);
           return endFull(near);
@@ -1077,7 +1106,7 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     // with the same tools (the cached prefix holds), told so after this step's results. The
     // conversation is full from now on, however this turn ends (a cap, Stop): no later turn
     // starts after the note.
-    const near = finalStep ? null : (roomStop ?? nearNow());
+    const near = finalStep ? null : (roomStop ?? nearNow(caps.turn_usd));
     if (near) {
       conv.append({ role: 'user', parts: [{ type: 'text', text: nearlyFullText(near) }] });
       conv.closedBy = near;

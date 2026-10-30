@@ -71,6 +71,8 @@ test.afterAll(async () => {
 test.beforeEach(async ({ request, page }) => {
   await postOk(request, '/api/test/assistant/reset', {});
   await useScriptedModel(request, host.base, fake, 'cloud');
+  // The default money limits, whatever a test before set ($ per turn sets how much a conversation resends).
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 8, day_usd: 15 } });
   // DOCK_WIDTH: another window width (the screenshots at 760 px); 1280 by default.
   await page.setViewportSize({ width: Number(process.env.DOCK_WIDTH) || 1280, height: 800 });
 });
@@ -604,6 +606,8 @@ test('a long build in one conversation: 120 calls over three requests never fill
 });
 
 test('a conversation the next step could fill: the model sums up after its results, the request ends "Limit reached" with the full line in numbers, and Send says the same with New conversation', async ({ page, request }) => {
+  // $20 a turn resends more than 800,000 tokens once the cache expires: the model's own line is the nearer.
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 15 } });
   await openCounter(page, request);
   await openDock(page);
   const before = chats().length;
@@ -626,6 +630,7 @@ test('a conversation the next step could fill: the model sums up after its resul
 });
 
 test('Continue in a new chat: the text typed in a full conversation moves into a new one that says what goes with it; its first request carries the earlier prompts, the last answer and where to start', async ({ page, request }) => {
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 15 } });
   await openCounter(page, request);
   await openDock(page);
   // 799,990 tokens: the model sums up and the conversation is full (as above).
@@ -659,6 +664,30 @@ test('Continue in a new chat: the text typed in a full conversation moves into a
   await shot(page, 'continue-in-new-chat');
 });
 
+test("on $8 a turn (the default), Claude Opus 5.5 is full where $8 could no longer resend it once its cache expires: the room readout names the money, the next message within 4 minutes reads its cache and goes, and past the line the model sums up and Continue in a new chat is offered (never a money limit)", async ({ page, request }) => {
+  await openCounter(page, request);
+  await openDock(page);
+  // 400,000 tokens, cached: 88% of the 454,217 that $8 resends with nothing cached (written by Claude Opus 5.5 and both fallback models).
+  fake.reply({ text: 'Read it all.', usage: { input: 10, cacheRead: 399_990 } });
+  await dockSend(page, 'Read everything');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+  await expect(dock(page).locator('[data-dock-room="context"]')).toHaveText('Conversation: 88% full (context 400,000 of the 454,217 tokens $8.00 per turn can resend)', STEP);
+  // The next message reads that cache: $8 sends it with the whole answer (it used to end "could go over this turn's $8.00 limit").
+  const before = chats().length;
+  fake.reply({ tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, cacheRead: 459_990 } }, { text: 'Added one. Nothing is left to do.' });
+  await dockSend(page, 'Add one');
+  const turn = dockTurn(page);
+  const said =
+    'This conversation is full: its last request sent 460,000 tokens, and once its cache expires, sending that again, with a re-run on each of its 2 refusal-fallback models counted, could cost more than the $8.00 per turn set in Settings → Assistant (its next step could pass that). Start a new one.';
+  await expect(turn.locator('[data-turn-end="capped"]')).toHaveText(`Limit reached${said}`, STEP);
+  await expect(turn.locator('[data-turn-end="capped"]')).not.toContainText('Send another message');
+  const [first, sumUp] = chats().slice(before);
+  expect(first.body.max_tokens, 'the whole answer').toBe(32_000);
+  expect(sumUp.body.messages.at(-1).content.at(-1).text).toBe("This conversation is nearly full (context 460,000 of the 454,217 tokens $8.00 per turn can resend). Don't call tools now: say what is done and what is left.");
+  await expect(dock(page).locator('[data-dock-blocked]')).toHaveText(said, STEP);
+  await expect(dock(page).locator('[data-dock-continue]')).toHaveText('Continue in a new chat', STEP);
+});
+
 test('Claude Opus 5.5 keeps its own 1M context: after a 300,000-token request the next message goes and is answered, with no full line', async ({ page, request }) => {
   await openCounter(page, request);
   await openDock(page);
@@ -676,7 +705,8 @@ test("today's limit: the request ends \"Limit reached\" saying to raise it in Se
   // A clean day and $1 limits (restored after).
   await postOk(request, '/api/test/assistant/reset', { files: true });
   await useScriptedModel(request, host.base, fake, 'cloud');
-  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 1, day_usd: 1 } });
+  // $8 a turn: a conversation of 240,000 tokens is under what a turn resends (454,217), so only today's $1 is short.
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 8, day_usd: 1 } });
   try {
     await openCounter(page, request);
     await openDock(page);
@@ -686,11 +716,11 @@ test("today's limit: the request ends \"Limit reached\" saying to raise it in Se
     const first = dockTurn(page);
     await expect(first.locator('[data-turn-end="done"]')).toBeVisible(STEP);
     await expect(first.locator('[data-dock-day-near]')).toHaveText(/^Today: \$0\.96 of \$1\.00\. A cheaper model or a lower Effort costs less\.$/);
-    // The next request can't fit in the $0.04 left today: nothing is sent.
+    // The next request can't fit in the $0.04 left today: nothing is sent, and the end says what is left (the limit isn't reached).
     const before = chats().length;
     await dockSend(page, 'Read it again');
     const second = dockTurn(page);
-    await expect(second.locator('[data-turn-end="capped"]')).toHaveText("Limit reachedToday's $1.00 limit is reached; it resets at midnight. Raise it in Settings → Assistant.", STEP);
+    await expect(second.locator('[data-turn-end="capped"]')).toHaveText("Limit reachedThe next step could go over today's $1.00 limit ($0.04 left); it resets at midnight. Raise it in Settings → Assistant.", STEP);
     await expect(second.locator('[data-turn-end="capped"]')).not.toContainText('Send another message');
     expect(chats().length, 'nothing sent').toBe(before);
   } finally {

@@ -490,6 +490,11 @@ export interface ConversationRoom {
   reason: 'messages' | 'images' | 'bytes' | 'context';
   used: number;
   limit: number;
+  /**
+   * The context's limit is what this much money per turn (Settings → Assistant) can resend once the
+   * cache has expired, lower than 80% of the model's context (absent otherwise, and from an older server).
+   */
+  usd?: number;
 }
 
 export interface ConversationTurn {

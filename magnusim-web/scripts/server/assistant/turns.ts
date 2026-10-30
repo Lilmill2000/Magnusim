@@ -548,7 +548,8 @@ export class Turn implements AnyTurn {
   historyInput(): HistoryInput {
     const sum = this.summary();
     const agent = isAgentSettings(this.settings) ? this.settings.agent : null;
-    const full = isModelSettings(this.settings) ? this.conv.fullDetail(this.settings.base_url) : null;
+    const model = isModelSettings(this.settings) ? this.settings : null;
+    const full = model ? this.conv.fullDetail(model.base_url, model.caps.turn_usd) : null;
     return {
       turn: this.id,
       conversation: this.conv.id,
@@ -1714,7 +1715,7 @@ export class TurnManager {
       const field = conv.mismatch(binding);
       if (field) return refuse(409, 'conversation_changed', `This conversation is bound to another ${field}. Start a new one.`, { field });
       if (conv.running) return refuse(409, 'conversation_busy', 'A turn is already running in this conversation.');
-      const full = conv.fullDetail(settings.base_url);
+      const full = conv.fullDetail(settings.base_url, settings.caps.turn_usd);
       if (full) {
         alog('info', 'conversation full', { conversation: conv.id, reason: full.reason, used: full.used, limit: full.limit });
         return refuse(409, 'conversation_full', fullText(full, modelLabel(conv.model)));
@@ -1732,7 +1733,7 @@ export class TurnManager {
       if (field) return refuse(409, 'conversation_changed', `That conversation is bound to another ${field}, so it can't be continued here. Start a new one.`, { field });
       if (from?.running) return refuse(409, 'conversation_busy', 'A turn is still running in that conversation. Wait for it, or stop it.');
       if (from) {
-        const full = from.fullDetail(settings.base_url);
+        const full = from.fullDetail(settings.base_url, settings.caps.turn_usd);
         carry = from.carried(full ? fullText(full, modelLabel(from.model)) : null);
       } else {
         carry = carriedFromSaved(carryId, (saved as SavedChat).lines);
@@ -2078,7 +2079,7 @@ export class TurnManager {
     const conversations = convs.map((c) => {
       const kept = c.turns.map((id) => this.turns().get(id)).filter((t): t is Turn => !!t && t.conv === c);
       const agent = isAgentChoice(c.provider) ? agentIdOf(c.provider) : null;
-      const full = c.fullDetail(settings.base_url);
+      const full = c.fullDetail(settings.base_url, settings.caps.turn_usd);
       return {
         id: c.id,
         provider: c.provider,
@@ -2092,7 +2093,7 @@ export class TurnManager {
         running: c.running,
         full: full?.reason ?? null,
         full_text: full ? fullText(full, modelLabel(c.model)) : null,
-        room: c.room(settings.base_url),
+        room: c.room(settings.base_url, settings.caps.turn_usd),
         // A coding agent's: how much of its own context it uses (it shortens its memory itself).
         context: isAgentChoice(c.provider) && c.agentContext ? { ...c.agentContext } : null,
         title: c.title,

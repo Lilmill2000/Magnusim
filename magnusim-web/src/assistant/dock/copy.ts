@@ -308,9 +308,14 @@ const ROOM_NUMBERS: Record<RoomReason, (used: number, limit: number) => string> 
   bytes: (u, l) => `results and pictures ${megabytes(u)} of ${megabytes(l)} MB`,
   context: (u, l) => `context ${grouped(u)} of ${grouped(l)} tokens`,
 };
-/** How full the conversation is, by the limit it is closest to: "Conversation: 72% full (pictures 72 of 100)". */
-export const roomLine = (reason: RoomReason, used: number, limit: number): string =>
-  `Conversation: ${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, limit)) * 100))}% full (${ROOM_NUMBERS[reason](used, limit)})`;
+/**
+ * How full the conversation is, by the limit it is closest to: "Conversation: 72% full (pictures 72
+ * of 100)". `perTurn`: the context's limit is what that much per turn can resend once the cache expires.
+ */
+export const roomLine = (reason: RoomReason, used: number, limit: number, perTurn?: number): string =>
+  `Conversation: ${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, limit)) * 100))}% full (${
+    reason === 'context' && perTurn !== undefined ? `context ${grouped(used)} of the ${grouped(limit)} tokens ${usd(perTurn)} per turn can resend` : ROOM_NUMBERS[reason](used, limit)
+  })`;
 /** A coding agent's chat: how much of its own context it uses (it shortens its memory itself when it fills). */
 export const agentContextLine = (used: number, size: number): string =>
   `Context: ${grouped(used)} of ${grouped(size)} tokens (${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, size)) * 100))}%)`;

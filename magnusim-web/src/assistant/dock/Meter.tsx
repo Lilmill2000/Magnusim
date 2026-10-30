@@ -35,7 +35,7 @@ export interface MeterNumbers {
 /** The room readout for a conversation's row, or null below ROOM_FROM (or without a room). */
 export function roomOf(room: ConversationRoom | null | undefined): string | null {
   if (!room || !(room.limit > 0) || room.used / room.limit < ROOM_FROM) return null;
-  return roomLine(room.reason, room.used, room.limit);
+  return roomLine(room.reason, room.used, room.limit, typeof room.usd === 'number' ? room.usd : undefined);
 }
 
 export function meterOf(v: TurnView, status: AssistantStatus | null): MeterNumbers | null {

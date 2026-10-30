@@ -221,12 +221,16 @@ describe('the dock copy', () => {
       copy.roomLine('bytes', 15 * 1024 * 1024 + 400 * 1024, 20 * 1024 * 1024),
       copy.roomLine('context', 115_200, 160_000),
       copy.roomLine('images', 140, 100),
+      copy.roomLine('context', 400_000, 454_217, 8),
+      copy.roomLine('images', 72, 100, 8),
     ]).toEqual([
       'Conversation: 72% full (pictures 72 of 100)',
       'Conversation: 72% full (messages 216 of 300)',
       'Conversation: 76% full (results and pictures 15 of 20 MB)',
       'Conversation: 72% full (context 115,200 of 160,000 tokens)',
       'Conversation: 100% full (pictures 140 of 100)',
+      'Conversation: 88% full (context 400,000 of the 454,217 tokens $8.00 per turn can resend)',
+      'Conversation: 72% full (pictures 72 of 100)',
     ]);
     expect(copy.METER_FREE).toBe('Local server · no cost');
     expect(copy.meterAgent('Helper')).toBe("Billed to your Helper account (Magnusim can't see the cost)");

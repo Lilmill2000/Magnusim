@@ -246,6 +246,9 @@ describe('the footer, the end and the meter', () => {
     expect(block(view([], { billing: 'free' }), { room: room(90), newest: false }).querySelector('[data-dock-room]')).toBeNull();
     const local = block(view([], { billing: 'free' }), { room: { reason: 'context', used: 92_000, limit: 102_400 } });
     expect(local.querySelector('[data-dock-room="context"]')?.textContent).toBe('Conversation: 89% full (context 92,000 of 102,400 tokens)');
+    // A turn's money is the nearer line (Claude Opus 5.5 on $8 a turn): the readout names it.
+    const money = block(view([], { billing: 'usd', used: USED }), { room: { reason: 'context', used: 400_000, limit: 454_217, usd: 8 } });
+    expect(money.querySelector('[data-dock-room="context"]')?.textContent).toBe('Conversation: 88% full (context 400,000 of the 454,217 tokens $8.00 per turn can resend)');
   });
 
   it("a coding agent's conversation: how much of its own context the agent uses, under its meter, whatever the share; none before it said, and never for another billing", () => {

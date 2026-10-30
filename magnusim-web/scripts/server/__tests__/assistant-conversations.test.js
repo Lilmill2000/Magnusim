@@ -19,7 +19,8 @@ for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSIST
 const { answerGates, makeManager, relayServer, startTurn, settled, eventsOf, ScriptedProvider } = await import('./assistant-harness.js');
 const { resetAssistantState } = await import('../assistant/state.ts');
 const { TURN_LIMITS, CARRY_AGENT_TEXT } = await import('../assistant/turns.ts');
-const { CARRY_LIMITS, Conversation, fullText, imageLimit } = await import('../assistant/conversations.ts');
+const { CARRY_LIMITS, Conversation, fullText, imageLimit, roomNumbers } = await import('../assistant/conversations.ts');
+const { coldLine } = await import('../assistant/prices.ts');
 const { carriedNote } = await import('../assistant/loop.ts');
 const { PROVIDER_LABELS } = await import('../assistant/providers/index.ts');
 
@@ -329,8 +330,57 @@ describe('which limit a full conversation reached, and how close it is (the full
     assert.equal(conv('agent:helper', 'agent').room(), null);
   });
 
+  it("one turn's money is a line too (prices.ts coldLine): Claude Opus 5.5 on $8 a turn is full where it couldn't resend its prompt once the cache expires, and says so with the money; $20 a turn keeps the 800,000 line", () => {
+    const opus = conv('anthropic', 'claude-opus-5-5');
+    const line = coldLine('anthropic', 'claude-opus-5-5', ['claude-opus-5', 'claude-opus-4-8'], 8);
+    assert.equal(line, 454_217);
+    opus.promptTokens = line - 1;
+    assert.equal(opus.fullDetail(undefined, 8), null);
+    assert.deepEqual(opus.room(undefined, 8), { reason: 'context', used: line - 1, limit: line, usd: 8 });
+    assert.deepEqual(opus.nearlyFull({ promptTokens: line }, undefined, 8), { reason: 'context', used: line - 1, limit: line, of: 'app', window: 1_000_000, usd: 8, retries: 2, near: true });
+    opus.promptTokens = line;
+    const d = opus.fullDetail(undefined, 8);
+    assert.deepEqual(d, { reason: 'context', used: line, limit: line, of: 'app', window: 1_000_000, usd: 8, retries: 2 });
+    assert.equal(
+      fullText(d, 'Claude Opus 5.5'),
+      'This conversation is full: its last request sent 454,217 tokens, and once its cache expires, sending that again, with a re-run on each of its 2 refusal-fallback models counted, could cost more than the $8.00 per turn set in Settings → Assistant. Start a new one.',
+    );
+    assert.equal(roomNumbers(d), 'context 454,217 of the 454,217 tokens $8.00 per turn can resend');
+    assert.equal(opus.fullReason(undefined, 8), 'context');
+    // Without the money, or with more of it, the model's own line holds.
+    assert.equal(opus.fullDetail(), null);
+    assert.equal(opus.fullDetail(undefined, 20), null);
+    assert.deepEqual(opus.room(undefined, 20), { reason: 'context', used: line, limit: 800_000 });
+    // Claude Sonnet 5.5's writes are cheaper: $8 resends past its 800,000 line. A local server costs nothing.
+    assert.equal(conv('anthropic', 'claude-sonnet-5-5').limits(undefined, 8).find((l) => l.reason === 'context').limit, 800_000);
+    assert.equal(conv('openai_compatible', 'qwen3.8-27b').limits(undefined, 0.01).find((l) => l.reason === 'context').usd, undefined);
+    assert.match(fullText({ ...d, retries: 1 }, 'x'), /, with a re-run on its refusal-fallback model counted, /);
+    assert.doesNotMatch(fullText({ ...d, retries: undefined }, 'x'), /re-run/);
+  });
+
+  it("the row's room and full line count a turn's money (Settings' $ per turn): from 70% of what it resends, and a start past it is refused with the money's words", async () => {
+    const m = mk({ model: 'claude-opus-5-5' });
+    const s = await relayServer(m);
+    servers.push(s);
+    const first = await quickTurn(m, { text: 'one' });
+    first.conv.promptTokens = 400_000;
+    let row = (await s.get('/api/assistant/conversations')).json.conversations[0];
+    assert.deepEqual([row.full, row.room], [null, { reason: 'context', used: 400_000, limit: 454_217, usd: 8 }]);
+    first.conv.promptTokens = 460_000;
+    row = (await s.get('/api/assistant/conversations')).json.conversations[0];
+    assert.equal(row.full, 'context');
+    assert.match(row.full_text, /^This conversation is full: its last request sent 460,000 tokens, and once its cache expires, sending that again, .* could cost more than the \$8\.00 per turn set in Settings → Assistant\. Start a new one\.$/);
+    const r = await startTurn(m, { text: 'two', conversation: first.conv.id });
+    assert.deepEqual([r.status, r.body.code, r.body.error], [409, 'conversation_full', row.full_text]);
+    // Raised in Settings: the conversation goes on.
+    m.state.settings.caps.turn_usd = 20;
+    row = (await s.get('/api/assistant/conversations')).json.conversations[0];
+    assert.deepEqual([row.full, row.room], [null, { reason: 'context', used: 460_000, limit: 800_000 }]);
+  });
+
   it('the conversation row says why it is full in the same words (full_text) and how close it is (room); a start in it is refused with them', async () => {
-    const m = mk();
+    // $20 a turn resends more than the model's own line once the cache expires: that line holds.
+    const m = mk({ caps: { turn_usd: 20 } });
     const s = await relayServer(m);
     servers.push(s);
     const first = await quickTurn(m, { text: 'one' });
@@ -358,7 +408,7 @@ describe('Continue in a new chat (carry_from): the new conversation carries what
   };
 
   it("a full conversation's prompts in order, its last answer and why it is full go with the new one's first message, after the prompt; a note says so; the new one names the one it continues", async () => {
-    const m = mk();
+    const m = mk({ caps: { turn_usd: 20 } });
     m.provider.script({ text: 'Built the base.' }, { text: 'Done: the gears. Left: the hands.' });
     const a = await startTurn(m, { text: 'Build the base.', context: { project_id: 'p1' } });
     await settled(a.turn);

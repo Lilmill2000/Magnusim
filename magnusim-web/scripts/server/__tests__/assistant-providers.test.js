@@ -2130,7 +2130,7 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     remainingUsd: 100,
   };
 
-  it('estimateStep: fresh text, images and tools as cache writes; the prefix read only within 4 minutes of its start', () => {
+  it('estimateStep: fresh text, images and tools as cache writes; the prefix read within 4 minutes of its start, written again after, plain input when it never used the cache', () => {
     const e = prices.estimateStep({ ...base, firstStep: true, newImages: [{ width: 1000, height: 750 }, { width: 8000, height: 8000 }] });
     const fresh = Math.ceil((1.2 * 3000) / 3) + 1000 + 5334 + 4 * 500;
     assert.equal(e.promptTokens, fresh);
@@ -2140,9 +2140,9 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     const warm = prices.estimateStep({ ...base, prev });
     assert.ok(Math.abs(warm.inputUsd - (50_000 * 0.01 + 1200 * 0.125) / 1e6) < 1e-12, 'read under 4 minutes');
     const cold = prices.estimateStep({ ...base, prev: { ...prev, startedAt: base.now - 241_000 } });
-    assert.ok(Math.abs(cold.inputUsd - (50_000 * 0.1 + 1200 * 0.125) / 1e6) < 1e-12, 'input after 4 minutes');
+    assert.ok(Math.abs(cold.inputUsd - (50_000 * 0.125 + 1200 * 0.125) / 1e6) < 1e-12, 'after 4 minutes the cached prefix is written again (the last block carries a breakpoint)');
     const uncached = prices.estimateStep({ ...base, prev: { ...prev, cacheUsed: false } });
-    assert.equal(uncached.inputUsd, cold.inputUsd);
+    assert.ok(Math.abs(uncached.inputUsd - (50_000 * 0.1 + 1200 * 0.125) / 1e6) < 1e-12, 'a prompt that never used the cache: plain input');
   });
 
   it("Claude Haiku 5.5's long card: the estimate takes it from 90% of its 100K line; a request whose context editing moved its prompt across the line is estimated", () => {
@@ -2224,19 +2224,56 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
     assert.equal(u.rates.output, 25);
   });
 
-  it('estimateStep: a fallback-capable request reserves one input for each model that may run (the declined attempt is billed too)', () => {
+  it('estimateStep: a fallback-capable request reserves one input for each model that may run (the declined attempt is billed too), each at its own row', () => {
     const targets = ['claude-opus-5', 'claude-opus-4-8'];
     const e = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, remainingUsd: 100 });
-    const input = (1200 * 6.25) / 1e6;
-    assert.ok(Math.abs(e.inputUsd - input) < 1e-12, 'one attempt’s input (what a cut-off answer is billed)');
-    assert.ok(Math.abs(e.fallbackInputUsd - 2 * input) < 1e-12);
-    assert.ok(Math.abs(e.usd - (3 * input + (32_000 * 25) / 1e6)) < 1e-12, String(e.usd));
-    // The output limit is what is left once every attempt's input is reserved.
+    const input = (1200 * 5) / 1e6;
+    const retry = (1200 * 6.25) / 1e6;
+    assert.ok(Math.abs(e.inputUsd - input) < 1e-12, 'the model’s own attempt (what a cut-off answer is billed)');
+    assert.ok(Math.abs(e.fallbackInputUsd - 2 * retry) < 1e-12, 'each fallback at its own row');
+    assert.ok(Math.abs(e.usd - (input + 2 * retry + (32_000 * 25) / 1e6)) < 1e-12, String(e.usd));
+    // The output limit is what is left once every attempt's input is reserved (at the dearest output: a fallback may answer).
     const tight = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, remainingUsd: 0.5 });
-    assert.equal(tight.maxOut, Math.floor(((0.5 - 3 * input) / 25) * 1e6));
+    assert.equal(tight.maxOut, Math.floor(((0.5 - input - 2 * retry) / 25) * 1e6));
     assert.ok(tight.usd <= 0.5 + 1e-12);
     const none = prices.estimateStep({ ...base, model: 'claude-haiku-5-5', remainingUsd: 100 });
     assert.equal(none.fallbackInputUsd, 0);
+  });
+
+  it("estimateStep: a fallback re-runs as if the conversation had been on its model all along: a fresh cached prefix is a read at each model's own row, a stale one written again at each (Claude Opus 5.5, 440,000 tokens)", () => {
+    const targets = ['claude-opus-5', 'claude-opus-4-8'];
+    const prev = { promptTokens: 440_000, startedAt: base.now - 60_000, cacheUsed: true };
+    const warm = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, prev, remainingUsd: 8 });
+    assert.ok(Math.abs(warm.inputUsd - (440_000 * 0.2 + 1200 * 5) / 1e6) < 1e-9, String(warm.inputUsd));
+    assert.ok(Math.abs(warm.fallbackInputUsd - 2 * (440_000 * 0.5 + 1200 * 6.25) / 1e6) < 1e-9, String(warm.fallbackInputUsd));
+    assert.deepEqual([warm.maxOut, warm.capped], [32_000, false], "a read of 440,000 tokens fits a turn's $8 with room to answer");
+    const stale = prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: targets, prev: { ...prev, startedAt: base.now - 300_000 }, remainingUsd: 8 });
+    const written = 441_200 * (5 + 6.25 + 6.25) / 1e6;
+    assert.ok(Math.abs(stale.inputUsd + stale.fallbackInputUsd - written) < 1e-9, String(stale.inputUsd + stale.fallbackInputUsd));
+    assert.ok(Math.abs(stale.maxOut - Math.floor(((8 - written) / 25) * 1e6)) <= 1, 'what $8 leaves once all of it is written three times');
+    assert.equal(stale.capped, false);
+  });
+
+  it("coldLine: the largest prompt a turn's money can send with nothing cached, every attempt written at its own row, MIN_OUT left to answer", () => {
+    const opus = prices.coldLine('anthropic', 'claude-opus-5-5', prices.fallbackTargetsOf('anthropic', 'claude-opus-5-5'), 8);
+    // (8 - 2048 × $25/MTok) / ($5 + $6.25 + $6.25 per MTok written).
+    assert.equal(opus, Math.floor((8 - (2048 * 25) / 1e6) / ((5 + 6.25 + 6.25) / 1e6)));
+    assert.equal(opus, 454_217);
+    const at = (tokens, usd) =>
+      prices.estimateStep({ ...base, model: 'claude-opus-5-5', fallbackTargets: ['claude-opus-5', 'claude-opus-4-8'], newChars: 0, prev: { promptTokens: tokens, startedAt: 0, cacheUsed: true }, now: prices.CACHE_FRESH_MS, remainingUsd: usd });
+    assert.equal(at(opus, 8).capped, false, 'the line itself fits');
+    assert.equal(at(opus + 1, 8).capped, true, 'a token past it does not');
+    assert.deepEqual(prices.fallbackTargetsOf('anthropic', 'claude-opus-5-5'), ['claude-opus-5', 'claude-opus-4-8']);
+    assert.deepEqual([prices.fallbackTargetsOf('openai', 'gpt-6.1-sol'), prices.fallbackTargetsOf('anthropic', 'claude-haiku-5-5')], [[], []]);
+    // Claude Sonnet 5.5 (and Claude Sonnet 5 for its fallback) resends 1.6M on $8: past its 800,000-token line.
+    assert.ok(prices.coldLine('anthropic', 'claude-sonnet-5-5', prices.fallbackTargetsOf('anthropic', 'claude-sonnet-5-5'), 8) > 1_500_000);
+    assert.ok(prices.coldLine('anthropic', 'claude-opus-5-5', prices.fallbackTargetsOf('anthropic', 'claude-opus-5-5'), 20) > 1_000_000, '$20 a turn resends the 800,000 line');
+    // Claude Haiku 5.5's long card from 90% of its 100K line on: the line is where the long card stops fitting.
+    const haiku = prices.coldLine('anthropic', 'claude-haiku-5-5', [], 0.1);
+    assert.equal(haiku, Math.floor((0.1 - (2048 * 2.5) / 1e6) / (0.625 / 1e6)));
+    assert.equal(prices.coldLine('anthropic', 'claude-opus-5-5', [], 0.01), 0, 'not even an answer fits');
+    assert.equal(prices.coldLine('openai_compatible', 'qwen', [], 8), null, 'a local server costs nothing');
+    assert.equal(prices.coldLine('agent:helper', 'x', [], 8), null);
   });
 
   it('priceInfo for Settings', () => {
