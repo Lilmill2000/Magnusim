@@ -89,7 +89,8 @@ import {
   remember as rememberConsent,
   type ProjectInfo,
 } from '../privacy.ts';
-import { guideBlock, LEFT_OUT_RULE, SYSTEM_PROMPT } from '../prompt.ts';
+import { isCadEdition } from '../../../edition.js';
+import { appWords, guideBlock, LEFT_OUT_RULE, systemPrompt } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
 import type { Registry, ToolCtx, ToolDef } from '../registry.ts';
@@ -109,12 +110,19 @@ export const MCP_LINE_MAX = 8 * 1024 * 1024;
 /** External apps' calls per rolling hour, process-wide. */
 export const MCP_RATES = Object.freeze({ calls: 1200, changes: 120, windowMs: 60 * 60_000 });
 
-export const MCP_INSTRUCTIONS = [
-  "These are Magnusim's tools. Magnusim is a CFD and CAD app on this PC, and the tools act in it for the person at this PC.",
-  ...SYSTEM_PROMPT.split('\n')
-    .slice(1)
-    .filter((line) => line !== LEFT_OUT_RULE),
-].join('\n');
+export function mcpInstructions(cad: boolean = isCadEdition()): string {
+  const app = appWords(cad).app;
+  const name = app.split(',')[0];
+  return [
+    `These are ${name}'s tools. ${name} is ${app.slice(name.length + 2)} on this PC, and the tools act in it for the person at this PC.`,
+    ...systemPrompt(cad)
+      .split('\n')
+      .slice(1)
+      .filter((line) => line !== LEFT_OUT_RULE),
+  ].join('\n');
+}
+
+export const MCP_INSTRUCTIONS = mcpInstructions(false);
 
 /** How long an external app's question waits before it is declined. */
 export const MCP_GATE_TIMEOUT_MS = GATE_TIMEOUT_MS;
@@ -617,12 +625,13 @@ export function createMcpService(d: McpServiceDeps): McpService {
   async function instructions(session: McpSession): Promise<string> {
     // A Test binding gets the rules alone. So does an external app until privacy allows the
     // project: the workspace guide is registration text, as the tools' own text is.
-    if (session.binding?.test) return MCP_INSTRUCTIONS;
+    const rules = mcpInstructions();
+    if (session.binding?.test) return rules;
     const { ctx } = contextOf(session);
     const ws = ctx.tab ? d.registry.workspaceOf(ctx.tab) : null;
-    if (!ws?.guide) return MCP_INSTRUCTIONS;
-    if (!(await projectOpen(session, ctx).catch(() => false))) return MCP_INSTRUCTIONS;
-    return `${MCP_INSTRUCTIONS}\n\n${guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin)}`;
+    if (!ws?.guide) return rules;
+    if (!(await projectOpen(session, ctx).catch(() => false))) return rules;
+    return `${rules}\n\n${guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin)}`;
   }
 
   async function listTools(session: McpSession): Promise<Array<Record<string, unknown>>> {

@@ -55,7 +55,7 @@
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
 import { createHash } from 'node:crypto';
-import { carryBlock, contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
+import { carryBlock, contextBlock, guideBlock, reviewText, systemPrompt } from './prompt.ts';
 import { IMAGE_CAPS } from './sanitize.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
@@ -323,7 +323,7 @@ function callCap(t: LoopTurn, caps: Caps): CapHit | null {
 
 /** The request for this step (maxOutputTokens is set from the estimate); its oldest tool results left out (clearedResults). */
 export function buildRequest(conv: Conversation, tools: readonly ToolDef[], s: ModelTurnSettings): ProviderRequest {
-  const system = [{ text: SYSTEM_PROMPT, cache: true }];
+  const system = [{ text: systemPrompt(), cache: true }];
   if (conv.guide) system.push({ text: guideBlock(conv.guide.text, conv.guide.pluginName), cache: true });
   return {
     model: s.model,
