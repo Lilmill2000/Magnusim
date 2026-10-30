@@ -196,6 +196,17 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(DOC.setSection).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'section' });
   });
 
+  it("see-through bodies both ways: INSPECT > See-through, the body's menu and the Part's view state reach workspace see_through (opaque back); the workspace's see_through and opaque are that command and that menu", async () => {
+    const services = await boot();
+    expect(services.commands.get('inspect.see-through'), 'INSPECT > See-through is registered').toBeTruthy();
+    const SEE = { kind: 'reach', tool: 'workspace', field: 'action', value: 'see_through', note: 'action opaque makes them opaque again' };
+    expect(COMMANDS['inspect.see-through']).toEqual(SEE);
+    expect(UI.setBodiesSeeThrough).toEqual(SEE);
+    expect(DOC.setBodiesSeeThrough).toEqual(SEE);
+    expect(AI_TOOLS.workspace['action=see_through']).toEqual({ kind: 'command', id: 'inspect.see-through', also: "the body's menu in the tree or the view: Make <body> see-through" });
+    expect(AI_TOOLS.workspace['action=opaque']).toEqual({ kind: 'command', id: 'inspect.see-through', also: "the body's menu in the tree or the view: Make <body> opaque" });
+  });
+
   it('the workspace tool reaches what this lane added: send to the simulation, the rollback bar, the view, the banana, Export', () => {
     // Magnusim's alone (projects): Magnusim CAD has no simulation (parity-no-projects.test.ts).
     for (const k of ['sync'] as const) expect(LINK[k]).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'send_to_simulation', projects: true });

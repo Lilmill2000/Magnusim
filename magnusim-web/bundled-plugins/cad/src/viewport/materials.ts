@@ -83,7 +83,10 @@ export interface BodyMaterial extends ShaderMaterial {
   };
 }
 
-/** How much of a see-through body's colour covers what is behind it (an Enclosure's air). */
+/**
+ * How much of a see-through body's colour covers what is behind it: one level for an Enclosure's
+ * air and a body the person made see-through (INSPECT > See-through), and their section cap.
+ */
 export const SEE_THROUGH_OPACITY = 0.28;
 
 /** A see-through body's polygon offset units: behind every opaque body's surface it shares a plane with. */

@@ -139,6 +139,11 @@ export function readView(raw: unknown, featureCount: number): CadView {
   const view = emptyView();
   if (typeof v.rollback === 'number' && Number.isInteger(v.rollback) && v.rollback >= 0 && v.rollback < featureCount) view.rollback = v.rollback;
   if (Array.isArray(v.hiddenBodies)) view.hiddenBodies = v.hiddenBodies.filter((x): x is string => typeof x === 'string');
+  // See-through bodies, as hidden ones (older views have none: the field stays absent).
+  if (Array.isArray(v.seeThroughBodies)) {
+    const see = [...new Set(v.seeThroughBodies.filter((x): x is string => typeof x === 'string'))];
+    if (see.length) view.seeThroughBodies = see;
+  }
   if (Array.isArray(v.expanded)) view.expanded = v.expanded.filter((x): x is string => typeof x === 'string');
   if (v.planes === 'always') view.planes = 'always';
   const camera = readCamera(v.camera);

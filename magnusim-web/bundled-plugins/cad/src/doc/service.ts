@@ -1040,8 +1040,14 @@ export function createDocService(opts: DocServiceOptions): DocService {
       const next = gcBodies({ ...doc, features });
       const v = state.get().view;
       const gone = Object.keys(doc.bodies).filter((b) => !next.bodies[b]);
-      if ((v.rollback != null && idx < v.rollback) || gone.some((b) => v.hiddenBodies.includes(b))) {
-        setView({ ...v, rollback: v.rollback != null && idx < v.rollback ? v.rollback - 1 : v.rollback, hiddenBodies: v.hiddenBodies.filter((b) => !gone.includes(b)) });
+      // A body that is gone leaves the hidden and the see-through lists.
+      const see = v.seeThroughBodies ?? [];
+      if ((v.rollback != null && idx < v.rollback) || gone.some((b) => v.hiddenBodies.includes(b) || see.includes(b))) {
+        const view: CadView = { ...v, rollback: v.rollback != null && idx < v.rollback ? v.rollback - 1 : v.rollback, hiddenBodies: v.hiddenBodies.filter((b) => !gone.includes(b)) };
+        const kept = see.filter((b) => !gone.includes(b));
+        if (kept.length) view.seeThroughBodies = kept;
+        else delete view.seeThroughBodies;
+        setView(view);
       }
       return { doc: next, label: `Delete ${f.name}` };
     });
@@ -1314,6 +1320,17 @@ export function createDocService(opts: DocServiceOptions): DocService {
     const has = v.hiddenBodies.includes(id);
     if (has === !visible) return;
     setView({ ...v, hiddenBodies: visible ? v.hiddenBodies.filter((b) => b !== id) : [...v.hiddenBodies, id] });
+  }
+
+  function setBodiesSeeThrough(ids: readonly BodyId[], on: boolean) {
+    const v = state.get().view;
+    const was = v.seeThroughBodies ?? [];
+    const now = on ? [...was, ...ids.filter((id, i) => !was.includes(id) && ids.indexOf(id) === i)] : was.filter((b) => !ids.includes(b));
+    if (now.length === was.length) return;
+    const view: CadView = { ...v };
+    if (now.length) view.seeThroughBodies = now;
+    else delete view.seeThroughBodies;
+    setView(view);
   }
 
   function setExpanded(key: string, expanded: boolean) {
@@ -1638,6 +1655,7 @@ export function createDocService(opts: DocServiceOptions): DocService {
     retry,
     setRollback,
     setBodyVisible,
+    setBodiesSeeThrough,
     setExpanded,
     setPlanes,
     setSection,

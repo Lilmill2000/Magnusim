@@ -10,14 +10,19 @@
 // What an Assistant step brings (its bodies, its finished sketch) is framed only as the
 // Assistant's page API allows (autoFrame: not once the person moved the camera during the
 // request, nor while the window is hidden; review: the refits ran outside the camera latch).
+// A body is drawn see-through when its feature draws it so (an Enclosure) or the Part's view lists
+// it (CadView.seeThroughBodies: INSPECT > See-through, the body's menu); a change of that list
+// sets the bodies again, with no rebuild.
 // Owner: VIEWPORT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { clearSelection, isSelected, selectItem } from '../lib/selection';
 import { selectionKey } from '../types/selection';
 import { combineSelection } from './boxselect';
+import { ownsBody } from '../doc/features/hooks';
 import type { AppServices } from '../types/app';
 import type { DocState } from '../types/doc-service';
 import type { BodyInfo } from '../types/kernel';
+import type { CadDoc, Feature } from '../types/doc';
 import type { Selection } from '../types/selection';
 import type { ViewportBody, ViewportHandle } from '../types/viewport';
 
@@ -37,15 +42,31 @@ export function toViewportBodies(list: readonly BodyInfo[], vertices: ReadonlyMa
   return out;
 }
 
-/** Whether the feature that owns body `id` draws it see-through (FeatureTypeDef.seeThrough: an Enclosure's body). */
-export function seeThroughOf(s: Pick<DocState, 'doc'>, services: Pick<AppServices, 'doc'>, id: BodyInfo['id']): boolean {
+/**
+ * Why body `id` is drawn see-through: 'feature' when the feature that owns it draws it so
+ * (FeatureTypeDef.seeThrough: an Enclosure's body, always), 'view' when the person (or the
+ * Assistant) made it so (CadView.seeThroughBodies: INSPECT > See-through, the body's menu), or null
+ * when it is opaque.
+ */
+export function seeThroughWhy(s: Pick<DocState, 'doc' | 'view'>, services: Pick<AppServices, 'doc'>, id: BodyInfo['id']): 'feature' | 'view' | null {
+  if (seeThroughBy(s, services, id)) return 'feature';
+  return s.view?.seeThroughBodies?.includes(id) ? 'view' : null;
+}
+
+/** The feature that always draws body `id` see-through (an Enclosure), or null. */
+export function seeThroughBy(s: { doc: Pick<CadDoc, 'features'> }, services: Pick<AppServices, 'doc'>, id: BodyInfo['id']): Feature | null {
   const registry = services.doc.features;
-  if (!registry) return false;
+  if (!registry) return null;
   for (const f of s.doc.features) {
     const def = registry.get(f.type);
-    if (def?.seeThrough && def.ownsBody?.(f, id) && def.seeThrough(f, id)) return true;
+    if (def?.seeThrough && ownsBody(registry, f, id) && def.seeThrough(f, id)) return f;
   }
-  return false;
+  return null;
+}
+
+/** Whether body `id` is drawn see-through (seeThroughWhy: its feature's or the person's). */
+export function seeThroughOf(s: Pick<DocState, 'doc' | 'view'>, services: Pick<AppServices, 'doc'>, id: BodyInfo['id']): boolean {
+  return seeThroughWhy(s, services, id) !== null;
 }
 
 export function bindViewport(handle: ViewportHandle, services: AppServices): () => void {
@@ -117,7 +138,8 @@ export function bindViewport(handle: ViewportHandle, services: AppServices): () 
   restore(doc.state.get());
   offs.push(
     doc.state.subscribe((s, prev) => {
-      if (s.rebuild.bodies !== prev.rebuild.bodies) syncBodies(s);
+      // The bodies, and which of them are see-through (a view state: no rebuild).
+      if (s.rebuild.bodies !== prev.rebuild.bodies || s.view?.seeThroughBodies !== prev.view?.seeThroughBodies) syncBodies(s);
       // Loaded again (Reload after a conflict): its saved view applies again.
       if (s.status === 'loading' && prev.status !== 'loading') {
         restorePlanes = true;

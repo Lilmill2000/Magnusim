@@ -6,6 +6,7 @@
 // them are one step, so a refused second change takes the first back too. `visibility` show or
 // hide is the tree's eye (uiFor.setBodyVisible): view state, saved, not an undo step, so it is
 // set after the step (or alone, with no step, when nothing else changes) and the reply says so.
+// Its replies say see_through when the body is drawn see-through (workspace see_through sets it).
 // Magnusim CAD (bridge.projectLinks() false: no projects, no simulation) offers the tool without
 // `simulation` (schemas.ts cadToolsFor); an input that still asks to include or exclude a body is
 // refused in plain words, and the reply says nothing of the simulation.
@@ -20,6 +21,7 @@ import { waitForRead } from '../busy';
 import { currentHandles } from '../selectors/handles';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { uiFor } from '../../ui/controller';
+import { seeThroughOf } from '../../viewport/bind';
 
 interface Plan extends EditPlan {
   body: BodyId;
@@ -132,7 +134,7 @@ const bodyTool: EditTool<Plan> = {
     const info = s.rebuild.bodies.find((b) => b.id === plan.body);
     // Magnusim CAD: no simulation to speak of.
     const links = ctx.services.bridge.projectLinks();
-    const body = { name: info?.name ?? def?.name ?? plan.name, color: info?.color ?? def?.color ?? null, ...(links ? { simulation: def?.simulation !== false } : {}) };
+    const body = { name: info?.name ?? def?.name ?? plan.name, color: info?.color ?? def?.color ?? null, ...(links ? { simulation: def?.simulation !== false } : {}), ...(seeThroughOf(s, ctx.services, plan.body) ? { see_through: true } : {}) };
     const bits: string[] = [];
     if (plan.renameTo !== null) bits.push(`renamed ${body.name}`);
     if (plan.color !== null) bits.push(`colour ${plan.color}`);
@@ -166,7 +168,8 @@ export const tool: ToolImpl = {
       const b = findBody(ctx);
       const words = setShown(ctx, b, shown);
       const text = `Body ${b.name}: ${words} (view state, not an undo step)`;
-      return { text, data: { body: { name: b.name }, visibility: shown ? 'shown' : 'hidden', undo_step: false }, summary: text };
+      const see = seeThroughOf(ctx.services.doc.state.get(), ctx.services, b.id) ? { see_through: true } : {};
+      return { text, data: { body: { name: b.name, ...see }, visibility: shown ? 'shown' : 'hidden', undo_step: false }, summary: text };
     }
     const b = findBody(ctx);
     const reply = await runEdit(ctx, bodyTool);

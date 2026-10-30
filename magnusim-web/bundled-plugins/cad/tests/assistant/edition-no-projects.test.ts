@@ -42,7 +42,7 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       const workspace = tool('workspace');
       const actions = (workspace.inputSchema.properties.action as Node).enum!;
       expect(actions).not.toContain('send_to_simulation');
-      expect(actions).toHaveLength(37);
+      expect(actions).toHaveLength(39);
       expect(workspace.description).not.toMatch(PROJECT_WORDS);
       const direct = tool('direct');
       expect((direct.inputSchema.properties.kind as Node).enum).toEqual(['press_pull', 'delete_faces', 'split', 'delete_body', 'move_body', 'repair', 'retry']);

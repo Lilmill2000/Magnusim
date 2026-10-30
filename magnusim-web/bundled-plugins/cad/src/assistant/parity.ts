@@ -66,6 +66,8 @@ export const ENCLOSURE_KEPT_WHY =
 const KEPT = (r: Reach) => inProjects(r, ENCLOSURE_KEPT_WHY);
 
 const W = (action: string) => reach('workspace', 'action', action);
+/** See-through bodies (INSPECT > See-through, the body's menu): workspace see_through, and opaque the other way. */
+const SEE = reach('workspace', 'action', 'see_through', 'action opaque makes them opaque again');
 const ENTITY = (kind: string) => reach('sketch', 'entities[].kind', kind);
 const TIE = (kind: string) => reach('sketch', 'constraints[].kind', kind);
 const MODIFY = (kind: string) => reach('modify', 'kind', kind);
@@ -108,6 +110,7 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'inspect.mass': reach('measure', 'targets'),
   'inspect.measure': reach('measure', 'targets'),
   'inspect.section': W('section'),
+  'inspect.see-through': SEE,
   'cfd.enclosure': inProjects(DIRECT('enclosure')),
   'file.export-step': W('export_step'),
   'file.import-step': W('import_step'),
@@ -475,6 +478,7 @@ export const UI: { readonly [K in keyof UiController]: Reach } = {
   rollToEnd: W('roll_to_end'),
   setRollbackIndex: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
+  setBodiesSeeThrough: SEE,
   setFeatureVisible: W('show'),
   setBodyInSimulation: inProjects(reach('body', 'simulation')),
   deleteBodies: DIRECT('delete_body'),
@@ -521,6 +525,7 @@ export const DOC: { readonly [K in keyof DocService]: Reach } = {
   retry: DIRECT('retry'),
   setRollback: W('roll_back_to'),
   setBodyVisible: reach('body', 'visibility'),
+  setBodiesSeeThrough: SEE,
   setExpanded: W('expand'),
   setPlanes: W('origin_planes'),
   setCamera: auto('the view keeps its camera by itself'),
@@ -1113,6 +1118,9 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=roll_to_end': control('ui', 'rollToEnd'),
     'action=show': control('ui', 'setFeatureVisible'),
     'action=hide': control('ui', 'setFeatureVisible'),
+    // INSPECT > See-through on the selected bodies (again: opaque), and the body's menu in the tree or the view.
+    'action=see_through': { ...command('inspect.see-through'), also: "the body's menu in the tree or the view: Make <body> see-through" },
+    'action=opaque': { ...command('inspect.see-through'), also: "the body's menu in the tree or the view: Make <body> opaque" },
     'action=origin_planes': control('viewport', 'setPlanes'),
     'action=rename_part': place("the tree's Part row: a double-click renames the Part"),
     'action=select': command('inspect.find'),

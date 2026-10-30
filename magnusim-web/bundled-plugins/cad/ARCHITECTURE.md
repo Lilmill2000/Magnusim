@@ -70,6 +70,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/types/events.ts` | append-only | Add events **only in your own section**; never change another section. |
 | `src/ui/**`, `src/styles/tokens.css`, `tests/ui/**` | UI-SHELL | Design-language components, design tree, rollback bar, panels (flyout feature panels, parameters), toolbar, context menu, chips, dialogs. |
 | `src/viewport/**`, `src/types/viewport.ts`, `tests/viewport/**` | VIEWPORT | three.js viewport, camera/controls, bodies + edges, origin display, BVH picking in a worker, highlight, fit/standard views, triad/XYZ/Fit chrome. |
+| `src/features/see_through/**`, `CadView.seeThroughBodies` (`src/types/doc.ts`, `readView` in `src/doc/schema.ts`, `DocService.setBodiesSeeThrough`), `tests/features/see_through/**`, `tests/doc/see-through.test.ts`, `e2e/cad-see-through.spec.ts` | VIEWPORT (see-through bodies) | INSPECT > See-through and its rule (§7 "See-through bodies"); the body menu's item and the tree's mark are UI-SHELL's, the workspace's see_through and opaque ASSISTANT's. |
 | `src/features/section/**`, `CadView.section` (`src/types/doc.ts`, `readSection` in `src/doc/schema.ts`, `DocService.setSection`), `tests/features/section/**`, `e2e/cad-section-view.spec.ts` | VIEWPORT (the section view's plane) | INSPECT > Section view: its panel, its arrow, the binding that keeps the view's one section state true to the Part (§7 "Section view"). The Assistant's side (`resolveSectionRef` in `src/assistant/measure-targets.ts`, `findSection` in `view.ts`, the workspace's section) is ASSISTANT's. |
 | `src/doc/**`, `src/kernel/**`, `src/types/{doc,doc-service,docstore,undo,units,kernel}.ts`, `tests/doc/**`, `tests/kernel/worker-client.test.ts` | DOC-CORE | Schema v1, feature registry (built-in types: none since the SD pass; removed types read as "Removed feature", `doc/features/removed.ts`), rebuild engine + cache, parameters + expressions, undo/redo, DocStore (WsFilesStore on host API 1.2, WsDataStore on a 1.1 host), conflicts, unsaved work (`nav.setDirty`); KernelAdapter, watchdog, respawn + rebuild. |
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
@@ -519,8 +520,8 @@ with the host once for the page's life, and its chip goes in the dock.
   (`features/enclosure/kept.ts`): built, read-only panel, edit_feature refuses
   its values, get_model gives no inputs. Magnusim's schemas, help and prefix are
   byte for byte as before (tests/assistant/edition-no-projects.test.ts).
-- **View state** (`CadView`: rollback index, hidden bodies, expanded tree
-  nodes, the origin planes' mode and the camera) is saved but not undoable.
+- **View state** (`CadView`: rollback index, hidden bodies, see-through bodies,
+  expanded tree nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and
   the camera after its first rebuild (over the framing of the first bodies);
   user changes go back with `doc.setPlanes` / `doc.setCamera` (a camera move
@@ -1319,6 +1320,31 @@ with the host once for the page's life, and its chip goes in the dock.
   along the plane's own normal whatever Flip keeps (the way Offset grows).
   Pictures take any plane by its frame (`SnapshotSection`) and leave the arrow
   out (`section.arrow` in `SNAPSHOT_HIDDEN_LAYERS`).
+- **See-through bodies** (VIEWPORT, `src/features/see_through`; Daniel
+  2026-10-29: per-body see-through as a view state, like a hidden body). The
+  Part's view lists them (`CadView.seeThroughBodies`, absent when none: an older
+  view.json loads unchanged; read as `hiddenBodies` is, strings only, once
+  each); `DocService.setBodiesSeeThrough` changes it with no undo step, and a
+  body that goes with its feature's delete leaves it as it leaves
+  `hiddenBodies`. A body is drawn see-through when its feature draws it so (an
+  Enclosure's air, `FeatureTypeDef.seeThrough`) or the list has it
+  (`seeThroughWhy` in `src/viewport/bind.ts`); the binding sets the bodies again
+  when the list changes (no rebuild). The viewport's one rule for both: the
+  material is translucent at `SEE_THROUGH_OPACITY` (0.28) with no depth writes
+  and pushed back (opaque bodies draw first and write depth, so they sort right
+  against it), its B-rep edges stay; a pick goes to an opaque face behind it
+  first, its own face where nothing opaque is behind (`raycastBodies`), and it
+  hides nothing for edge and vertex picks. A cut caps it with a cap of its own
+  (`SectionCaps` `seeThrough`: its own stencil count in three's transparent
+  pass after every opaque surface, translucent, no depth, never FACE_BIT), so an
+  opaque body inside keeps its cap. INSPECT > See-through (`rule.ts`) acts on the
+  bodies the person's selection touches: all see-through, opaque again; else all
+  see-through; an Enclosure's air is left alone. The body menu has Make <body>
+  see-through / opaque (`ui.setBodiesSeeThrough`), the Bodies row a mark of its
+  own (`data-see-through`, apart from a hidden body's dimming). Pictures follow
+  the tree as for hidden bodies: the snapshot draws the materials as they are
+  (see-through stays see-through), and the view tool's data lists `see_through`
+  as it lists `hidden_in_tree`.
 
 ## 8. Tests
 

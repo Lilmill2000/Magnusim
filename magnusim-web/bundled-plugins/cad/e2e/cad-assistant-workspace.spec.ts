@@ -12,6 +12,8 @@
 // - the section view (Daniel 2026-10-29: any plane, a construction plane too): section on a
 //   construction plane at an angle by its name cuts the person's view on its own normal; the reply's
 //   view and get_model name the plane; INSPECT > Section view shows that plane and offset;
+// - see-through bodies (Daniel 2026-10-29): see_through marks Body 1 in the tree and the view draws
+//   it translucent, get_model's parts say see_through, opaque takes it back; no undo step;
 // - keybinds (Daniel: read any time, changed only when the person asks): keybind_get answers;
 //   keybind_set without person_asked is not_asked; with it the app's dialog names the exact change,
 //   a stray Enter is No (step_declined, nothing changes), a click on Yes changes and stores it.
@@ -219,6 +221,42 @@ test("cad:assistant-workspace-section section on a construction plane at an angl
   await expect(panel.locator('[data-pick-field="section-plane"] .cad-pick-name')).toHaveText(['Tilt']);
   await expect(panel.locator('.nui[data-field="section-offset"] input')).toHaveValue('2');
   expect(await cut()).toMatchObject({ on: true, offset: 2 });
+});
+
+test("cad:assistant-workspace-see-through see_through draws Body 1 see-through: the tree marks it, the view draws it translucent, get_model says so; opaque takes it back; no undo step", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Workspace see-through');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await addSolid(page, { size: [30, 20, 10] });
+  const bodyRow = frame.locator('[data-body-row]').first();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opacity = () => cadFrame(page).evaluate(() => Object.values((window as any).__CAD__.services.viewport.get().handle.stats().opacity) as number[]);
+  await expect.poll(opacity, STEP).toEqual([1]);
+  const undoBefore = await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.doc.state.get().history.undoLabel);
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [W('see_through', { target: 'Body 1' })] },
+    { hold: 'seen', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
+    { hold: 'back', tools: [W('opaque', { target: 'Body 1' })] },
+    { text: 'Done.' },
+  );
+  const t = await startTurn(request, host, { text: 'Make the body see-through, then opaque again.', tab });
+  // The person's tree marks it and the view draws it see-through.
+  await expect(bodyRow).toHaveAttribute('data-see-through', 'view', STEP);
+  await expect(bodyRow.locator('[data-see-through-badge]')).toHaveCount(1);
+  await expect.poll(opacity, STEP).toEqual([0.28]);
+  host.fake.release('seen');
+  await expect.poll(() => chats(host).length - before, STEP).toBeGreaterThanOrEqual(3);
+  host.fake.release('back');
+  expect((await t.ended(STEP_MS * 2)).turn.state).toBe('done');
+  await expect(bodyRow).not.toHaveAttribute('data-see-through', /./, STEP);
+  await expect.poll(opacity, STEP).toEqual([1]);
+  const r = chats(host).slice(before);
+  expect(resultsIn(r[1])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: 'Made Body 1 see-through in the view', data: { see_through: true, undo_step: false } });
+  expect(resultsIn(r[2])[0]).toMatchObject({ tool: 'cad__get_model', ok: true, data: { parts: [{ name: 'Body 1', see_through: true }] } });
+  expect(resultsIn(r[3])[0]).toMatchObject({ tool: 'cad__workspace', ok: true, text: 'Made Body 1 opaque in the view', data: { see_through: false, undo_step: false } });
+  // A view state: no undo step.
+  expect(await cadFrame(page).evaluate(() => (window as unknown as WW).__CAD__.services.doc.state.get().history.undoLabel)).toBe(undoBefore);
 });
 
 // Back from the Part through the app page's core__show (core host tools spec 5.1, 14.2, 8.1): the

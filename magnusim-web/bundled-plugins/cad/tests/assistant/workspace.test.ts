@@ -137,6 +137,48 @@ describe('workspace: the tree and the view state', () => {
     expect(vh.calls.find((c) => c.call === 'setPlanes')?.args).toEqual(['always']);
   });
 
+  it("see_through and opaque: bodies drawn see-through as INSPECT > See-through does (view state, no undo step), said by get_model and body; an Enclosure's air stays see-through", async () => {
+    const t = await part();
+    const [b1, b2] = t.doc.state.get().rebuild.bodies.map((b) => b.id);
+    const steps = t.doc.state.get().history.undoLabel;
+    const one = await t.ok('workspace', W('see_through', { target: 'Body 1' }));
+    expect(one.text).toBe('Made Body 1 see-through in the view');
+    expect(one.data).toMatchObject({ bodies: ['Body 1'], see_through: true, changed: ['Body 1'], undo_step: false });
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1]);
+    expect(t.doc.state.get().history.undoLabel).toBe(steps);
+    // Several by items; one already so.
+    const both = await t.ok('workspace', W('see_through', { items: ['Body 1', 'body 2'] }));
+    expect(both.text).toBe('Made Body 2 see-through in the view; Body 1 is already see-through');
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1, b2]);
+    // get_model's parts and the body tool say so.
+    const m = await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' });
+    expect((m.data.parts as { name: string; see_through?: boolean }[]).map((p) => [p.name, p.see_through ?? false])).toEqual([
+      ['Body 1', true],
+      ['Body 2', true],
+    ]);
+    const body = await t.ok('body', { body: 'Body 1', rename_to: '', color: '', simulation: 'keep', visibility: 'hide' });
+    expect(body.data.body).toEqual({ name: 'Body 1', see_through: true });
+    // Opaque again.
+    const op = await t.ok('workspace', W('opaque', { target: 'Body 2' }));
+    expect(op.text).toBe('Made Body 2 opaque in the view');
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1]);
+    const m2 = await t.ok('get_model', { detail: 'brief', feature: '', regions: 'short' });
+    expect((m2.data.parts as { see_through?: boolean }[])[1]).not.toHaveProperty('see_through');
+    // What it cannot name, or nothing named.
+    const miss = await t.call('workspace', W('opaque', { target: 'Body 9' }));
+    expect(!miss.ok && miss.error.message).toMatch(/No body is called "Body 9"/);
+    const none = await t.call('workspace', W('see_through'));
+    expect(!none.ok && none.error.message).toMatch(/target: a body, or items: bodies/);
+    // A body its feature always draws see-through (an Enclosure's air): opaque refuses, nothing changes.
+    const def = t.doc.features.get('extrude')!;
+    const second = t.doc.state.get().doc.features.filter((f) => f.type === 'extrude')[1];
+    t.doc.features.register({ ...def, seeThrough: (f: { id: string }) => f.id === second.id } as typeof def);
+    const always = await t.call('workspace', W('opaque', { items: ['Body 1', 'Body 2'] }));
+    expect(!always.ok && always.error.message).toMatch(/Body 2 is always see-through: Extrude 2 draws it so \(an Enclosure's air\)\. Nothing changed\./);
+    expect(t.doc.state.get().view.seeThroughBodies).toEqual([b1]);
+    expect((await t.ok('workspace', W('see_through', { target: 'Body 2' }))).text).toBe('Body 2 is already see-through');
+  });
+
   it("shows and hides a reference plane, axis and point as the person's eye and menu do: view state, no undo step; the person's menu then offers Show", async () => {
     const t = await part();
     const C = (o: Record<string, unknown>) => ({ edit: '', name: '', method: 'offset', refs: [], value: '', xyz: [], flip: false, from_end: false, ...o });

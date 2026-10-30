@@ -439,7 +439,8 @@ make a 2 x 2 sheet with each tile's name. The long side is 768 px (`small`) or 1
   label, in the key's one table (`selectors/handles.ts`): find and every selector read a
   picture's `#f3`, and find numbers on after it.
 - The data lists the views and their mm per px, the shown and hidden bodies (and those
-  hidden in the tree), the cut, the labels, the shown sketches' dimension values
+  hidden in the tree, and the shown ones drawn see-through: `see_through`, as the
+  tree has them), the cut, the labels, the shown sketches' dimension values
   (pictures carry no HTML overlays), `software_renderer`, and a `note` when the person's
   sketch or the rollback bar rolls later features back, or the window is hidden.
 - A turn whose model reads no images (the host's turn says `images: false`) answers

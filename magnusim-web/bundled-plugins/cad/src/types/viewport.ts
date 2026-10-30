@@ -210,6 +210,8 @@ export interface ViewportStats {
    * frame 0 (e2e cad:dark-first-paint).
    */
   looks?: { frame: number; palette: MarkPalette['name']; background: number }[];
+  /** Each body's surface opacity as it is drawn now: 1 opaque, less see-through (materials.ts SEE_THROUGH_OPACITY). */
+  opacity?: Record<BodyId, number>;
 }
 
 /** Directions of ViewportHandle.snapshot: the standard views but Home, and iso from back-left-top. */

@@ -6,6 +6,8 @@
 //                                    rolled back makes its own edits answer rolled_back at once
 //                                    (own-rollback.ts), never a ten-minute wait.
 //     show, hide                     the eye of a sketch, a construction feature or a body.
+//     see_through, opaque            bodies drawn see-through or opaque again (INSPECT > See-through,
+//                                    the body's menu); an Enclosure's air stays see-through.
 //     origin_planes                  Auto or Always.
 //     select, selection_filter       the shared selection and the filter chips.
 //     expand, collapse               the Origin and Bodies folders, the tree card, the Sketch panel
@@ -75,6 +77,7 @@ import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { findSection, sectionData } from '../view';
 import { SECTION_FORMS } from '../measure-targets';
 import { setSectionView } from '../../features/section/bind';
+import { seeThroughBy, seeThroughWhy } from '../../viewport/bind';
 import { closestName, closestWords } from '../closest';
 
 interface Input {
@@ -199,6 +202,48 @@ function eye(ctx: CallCtx, i: Input): ToolReply {
     return done(`${show ? 'Showed' : 'Hid'} ${f.name} in the view`, { feature: f.name, shown: show });
   }
   throw bad('target', `${f.name} has no eye: only sketches, construction planes, axes and points, and bodies (the bodies it makes: name them).`);
+}
+
+/**
+ * see_through, opaque: bodies drawn see-through or opaque again, as INSPECT > See-through and the
+ * body's menu do (uiFor.setBodiesSeeThrough): view state kept with the Part, no undo step. target a
+ * body, items more; an Enclosure's air is always see-through, so opaque refuses it and changes nothing.
+ */
+function seeThrough(ctx: CallCtx, i: Input): ToolReply {
+  const { services } = ctx;
+  const on = i.action === 'see_through';
+  const names = i.target ? [i.target, ...i.items] : i.items;
+  if (!names.length) throw bad('target', 'target: a body, or items: bodies.');
+  const bodies: { id: BodyId; name: string }[] = [];
+  for (const n of names) {
+    const b = bodyNamed(services, n);
+    if (!b) {
+      const all = services.doc.state.get().rebuild.bodies.map((x) => x.name);
+      const near = closestName(n, all);
+      throw new ToolError('not_found', `No body is called "${n}".${closestWords(near)} Bodies: ${all.slice(0, 30).join(', ') || 'none yet'}.`, { detail: { field: i.target ? 'target' : 'items', ...(near ? { closest: near } : {}) } });
+    }
+    if (!bodies.some((x) => x.id === b.id)) bodies.push(b);
+  }
+  const s = services.doc.state.get();
+  const why = (id: BodyId) => seeThroughWhy(s, services, id);
+  const always = on ? [] : bodies.filter((b) => why(b.id) === 'feature');
+  if (always.length) {
+    const b = always[0];
+    throw bad(i.target ? 'target' : 'items', `${b.name} is always see-through: ${seeThroughBy(s, services, b.id)?.name ?? 'its feature'} draws it so (an Enclosure's air). Nothing changed.`);
+  }
+  const change = bodies.filter((b) => (why(b.id) !== null) !== on);
+  if (change.length) {
+    const refused = uiFor(services).setBodiesSeeThrough(
+      change.map((b) => b.id),
+      on,
+    );
+    if (refused) throw bad(i.target ? 'target' : 'items', `${refused}.`);
+  }
+  const list = (bs: { name: string }[]) => bs.map((b) => b.name).join(', ');
+  const word = on ? 'see-through' : 'opaque';
+  const already = bodies.filter((b) => !change.includes(b));
+  const bits = [change.length ? `Made ${list(change)} ${word} in the view` : '', already.length ? `${list(already)} ${already.length === 1 ? 'is' : 'are'} already ${word}` : ''].filter(Boolean);
+  return done(bits.join('; '), { bodies: bodies.map((b) => b.name), see_through: on, changed: change.map((b) => b.name) });
 }
 
 function planes(ctx: CallCtx, i: Input): ToolReply {
@@ -964,6 +1009,9 @@ async function run(ctx: CallCtx): Promise<ToolReply> {
     case 'show':
     case 'hide':
       return eye(ctx, i);
+    case 'see_through':
+    case 'opaque':
+      return seeThrough(ctx, i);
     case 'origin_planes':
       return planes(ctx, i);
     case 'rename_part':

@@ -424,6 +424,15 @@ describe('view', () => {
       expect(fv.shots[0].hide.sort()).toEqual([a.body, b.body].sort());
       expect(r.data).toMatchObject({ shown: [], hidden: ['Body 2', 'Body 1'], hidden_in_tree: ['Body 3'] });
       expect(r.text).toContain('no bodies shown; hidden Body 2, Body 1, Body 3');
+      // See-through in the tree (INSPECT > See-through): the picture follows the tree as for hidden
+      // ones, drawing it see-through (the view's own material), and lists it; one the picture leaves out is not listed.
+      h.doc.setBodyVisible(c.body, true);
+      h.doc.setBodiesSeeThrough([b.body, c.body], true);
+      const see = await h.ok('view', { ...VIEW, hide: [a.body, b.body] });
+      expect(see.data).toMatchObject({ shown: ['Body 3'], hidden: ['Body 1', 'Body 2'], see_through: ['Body 3'] });
+      expect(see.text).toContain('shown Body 3; hidden Body 1, Body 2; see-through Body 3');
+      h.doc.setBodiesSeeThrough([b.body, c.body], false);
+      expect((await h.ok('view', { ...VIEW })).data).not.toHaveProperty('see_through');
       const miss = await h.call('view', { ...VIEW, hide: ['Body 9'] });
       expect(miss).toEqual({
         ok: false,

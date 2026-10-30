@@ -325,6 +325,13 @@
       ]
     },
     {
+      "id": "inspect.see-through",
+      "label": "See-through",
+      "group": "Inspect",
+      "context": "model",
+      "keys": []
+    },
+    {
       "id": "inspect.find",
       "label": "Find",
       "group": "Inspect",

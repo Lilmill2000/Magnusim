@@ -153,6 +153,8 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   e('inspect.measure', 'Measure', 'Inspect', 'model'),
   // Section view: X, a cross-section (free in model mode; X is Construction only in a sketch).
   e('inspect.section', 'Section view', 'Inspect', 'model', ['KeyX']),
+  // See-through: the selected bodies drawn see-through, or opaque again (no default key).
+  e('inspect.see-through', 'See-through', 'Inspect', 'model'),
   e('inspect.find', 'Find', 'Inspect', 'model'),
   e('inspect.mass', 'Mass properties', 'Inspect', 'model'),
   e('inspect.check', 'Check', 'Inspect', 'model'),

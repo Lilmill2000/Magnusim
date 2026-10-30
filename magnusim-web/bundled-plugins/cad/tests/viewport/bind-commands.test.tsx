@@ -163,6 +163,26 @@ describe('bindViewport', () => {
     off();
   });
 
+  it("draws the bodies the Part's view lists see-through (INSPECT > See-through), at once when the list changes, with no rebuild; opaque again when they leave it", () => {
+    const { h, calls } = fakeHandle();
+    const { services, setBodies } = fakeServices(h);
+    const off = bindViewport(h, services);
+    setBodies([bodyInfo('b_1'), bodyInfo('b_2', 8)]);
+    const seq = services.doc.state.get().rebuild.seq;
+    const docState = services.doc.state as unknown as StateStore<DocState>;
+    const see = (ids: string[] | undefined) => docState.set((s) => ({ ...s, view: { ...s.view, seeThroughBodies: ids } }));
+    const drawn = () => calls.setBodies.at(-1)!.map((b) => [b.id, !!b.seeThrough]);
+    expect(drawn()).toEqual([['b_1', false], ['b_2', false]]);
+    see(['b_2']);
+    expect(drawn()).toEqual([['b_1', false], ['b_2', true]]);
+    expect(services.doc.state.get().rebuild.seq).toBe(seq);
+    see(['b_1', 'b_2']);
+    expect(drawn()).toEqual([['b_1', true], ['b_2', true]]);
+    see(undefined);
+    expect(drawn()).toEqual([['b_1', false], ['b_2', false]]);
+    off();
+  });
+
   it('draws the rebuilt bodies and asks the kernel for their vertices (vertices only)', async () => {
     const { h, calls } = fakeHandle();
     const { services, setBodies, topoCalls } = fakeServices(h);

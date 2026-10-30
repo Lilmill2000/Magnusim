@@ -34,6 +34,7 @@ import { constructView, ORIGIN_AXIS_NAMES, ORIGIN_AXIS_REFS } from '../../featur
 import { RAIL_COMMAND, railsFor, useRailFocus } from '../left-rails';
 import { keybindMenuItem, railKeybindMenu, useKeyLabel } from '../keybinds';
 import { CHEVRON_LEFT } from './TreeRail';
+import { seeThroughBy } from '../../viewport/bind';
 import { barIndexAt, bodyRows, dimensionsText, featureShown, historyRows, rollbackIndex, selectedBodies, selectedFeatures, sketchPrefix, type BodyRow, type HistoryRow } from './model';
 
 /** A padlock (24 viewBox outline): the sketch is fully defined. */
@@ -447,6 +448,8 @@ function BodyNode({ row, selected }: { row: BodyRow; selected: boolean }) {
   const renaming = useStateStore(ui.state, (s) => s.renaming?.kind === 'body' && s.renaming.id === row.id);
   const handle = useStateStore(services.viewport, (s) => s.handle);
   const tipInvalid = useTip(row.valid ? null : { text: "What's wrong", detail: 'The kernel reports this body as invalid geometry' });
+  const seeWords = row.seeThrough === 'feature' ? 'Always drawn see-through (the air of an Enclosure)' : 'Drawn see-through: right-click for Make opaque, or INSPECT > See-through';
+  const tipSee = useTip(row.seeThrough ? { text: 'See-through', detail: seeWords } : null);
   return (
     <TreeNode
       nodeKey={`body:${row.id}`}
@@ -463,14 +466,28 @@ function BodyNode({ row, selected }: { row: BodyRow; selected: boolean }) {
       }
       labelTitle={!row.visible && row.inSimulation ? `${row.name} (hidden, still in the simulation)` : row.name}
       selected={selected}
-      className={row.visible ? undefined : 'is-hidden-body'}
-      attrs={{ 'data-body-row': row.id, 'data-visible': row.visible ? '1' : '0', 'data-in-simulation': row.inSimulation == null ? undefined : row.inSimulation ? '1' : '0', 'data-hidden-in-simulation': !row.visible && row.inSimulation ? '1' : undefined }}
+      className={[row.visible ? '' : 'is-hidden-body', row.seeThrough ? 'is-see-through-body' : ''].filter(Boolean).join(' ') || undefined}
+      attrs={{
+        'data-body-row': row.id,
+        'data-visible': row.visible ? '1' : '0',
+        'data-see-through': row.seeThrough ?? undefined,
+        'data-in-simulation': row.inSimulation == null ? undefined : row.inSimulation ? '1' : '0',
+        'data-hidden-in-simulation': !row.visible && row.inSimulation ? '1' : undefined,
+      }}
       badge={
-        row.valid ? null : (
-          <span className="cad-badge is-warning" role="img" aria-label="What's wrong: the kernel reports this body as invalid geometry" tabIndex={0} {...tipInvalid}>
-            <Icon d={ICONS.warning} size={13} />
-          </span>
-        )
+        <>
+          {/* See-through: its own mark, apart from a hidden body's dimmed name (a hidden body may be see-through too). */}
+          {row.seeThrough ? (
+            <span className="cad-badge is-see-through" role="img" aria-label={`See-through: ${seeWords}`} tabIndex={0} data-see-through-badge {...tipSee}>
+              <Icon d={ICONS.seeThrough} size={13} />
+            </span>
+          ) : null}
+          {row.valid ? null : (
+            <span className="cad-badge is-warning" role="img" aria-label="What's wrong: the kernel reports this body as invalid geometry" tabIndex={0} {...tipInvalid}>
+              <Icon d={ICONS.warning} size={13} />
+            </span>
+          )}
+        </>
       }
       actions={
         <>
@@ -552,7 +569,15 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
   const ui = uiFor(services);
   const { doc, selection } = services;
   const name = usePartName();
-  const d = useStateStore(doc.state, (s) => ({ expanded: s.view.expanded, hidden: s.view.hiddenBodies, bodies: s.rebuild.bodies, docBodies: s.doc.bodies, params: s.doc.params.length }));
+  const d = useStateStore(doc.state, (s) => ({
+    expanded: s.view.expanded,
+    hidden: s.view.hiddenBodies,
+    see: s.view.seeThroughBodies,
+    bodies: s.rebuild.bodies,
+    docBodies: s.doc.bodies,
+    features: s.doc.features,
+    params: s.doc.params.length,
+  }));
   const sel = useStateStore(selection);
   const paramsOpen = useStateStore(ui.state, (s) => s.panel?.kind === 'params');
   const hasParams = useCommandPresent(PARAMS_ID);
@@ -560,7 +585,11 @@ function Part({ collapse }: { collapse: ReactElement | null }) {
   const originOpen = d.expanded.includes('origin');
   const bodiesOpen = d.expanded.includes('bodies');
   // Magnusim CAD (no projects, no simulation): no simulation toggle, hint or mark on a body row.
-  const bodies = bodyRows({ bodies: d.docBodies }, { hiddenBodies: d.hidden }, d.bodies, { projectLinks: services.bridge.projectLinks() });
+  // A body is marked see-through when the person made it so, or its feature always draws it so (an Enclosure).
+  const bodies = bodyRows({ bodies: d.docBodies }, { hiddenBodies: d.hidden, seeThroughBodies: d.see }, d.bodies, {
+    projectLinks: services.bridge.projectLinks(),
+    alwaysSeeThrough: (id) => !!seeThroughBy({ doc: { features: d.features } }, services, id),
+  });
   const picked = selectedBodies(sel);
 
   // Double-click the part's own row: rename it, as the header's crumb does (the study's title).

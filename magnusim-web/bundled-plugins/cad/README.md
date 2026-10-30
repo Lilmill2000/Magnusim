@@ -473,6 +473,23 @@ comes on). Rename the result, for example to "Fluid".
   - The Assistant sets the same cut (workspace section, on any of these
     planes), reads it back, and draws pictures cut on any of them; the Picture
     panel's Section takes a construction plane or the selected flat face too.
+- **See-through** (INSPECT) draws the selected bodies see-through (a selected
+  face counts for its body), so you can see what is inside and behind them.
+  Their edges stay drawn, and a click on them goes through to an opaque face
+  behind (pick the see-through body itself in the tree, by an edge, or where
+  nothing is behind it). Run it again while all of them are see-through to make
+  them opaque; a mix of the two all turn see-through.
+  - A body's menu (right-click its Bodies row, or the body in the view) has
+    **Make Body 1 see-through** or **Make Body 1 opaque**, next to Hide. The row
+    shows a see-through mark; a hidden body is dimmed instead, and a body can be
+    both. An Enclosure's air is always see-through: its menu says so.
+  - A section cuts a see-through body with a see-through cap, so a body inside
+    it keeps its own cap and shows through.
+  - It is a view, as hiding is: no undo step, never in the model or the
+    simulation. The Part keeps it, so it is there when you open the Part again.
+    Pictures draw see-through bodies see-through, as they leave out hidden ones.
+  - The Assistant does the same (workspace see_through and opaque) and reads it
+    back (get_model's parts say see_through).
 
 ## History, parameters, undo and saving
 

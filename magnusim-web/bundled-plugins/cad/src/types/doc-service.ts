@@ -421,6 +421,8 @@ export interface DocService {
   // --- view state: saved, not undoable ---
   setRollback(index: number | null): void;
   setBodyVisible(id: BodyId, visible: boolean): void;
+  /** Draw bodies see-through (on) or opaque again (CadView.seeThroughBodies). */
+  setBodiesSeeThrough(ids: readonly BodyId[], on: boolean): void;
   setExpanded(key: string, expanded: boolean): void;
   /** The origin planes' mode, kept per Part. */
   setPlanes(mode: 'auto' | 'always'): void;

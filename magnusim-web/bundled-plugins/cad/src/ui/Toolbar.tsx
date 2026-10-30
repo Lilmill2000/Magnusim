@@ -104,6 +104,8 @@ export const FOLD_ORDER: readonly string[] = [
   // Find fold first; Hole stays with the solid commands longest of the three.
   'file.picture',
   'inspect.find',
+  // See-through (a view setting the body's menu also has) folds right after Find.
+  'inspect.see-through',
   'modify.parameters',
   'inspect.check',
   'construct.point',

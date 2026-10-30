@@ -4,6 +4,27 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**See-through bodies.**
+- INSPECT > See-through draws the selected bodies see-through (a selected face
+  counts for its body): what is inside and behind them shows, their edges stay,
+  and a click goes through them to an opaque face behind. Run again while all of
+  them are see-through and they are opaque again; a mix all turn see-through. It
+  is in Settings > Keybinds (no key by default) and refuses, with the reason,
+  when no body is selected.
+- A body's menu (its Bodies row, or a right-click on it in the view) has
+  **Make Body 1 see-through** and **Make Body 1 opaque**, next to Hide. The
+  Bodies row shows a see-through mark of its own (a hidden body is dimmed; a body
+  can be both).
+- A section cuts a see-through body with a see-through cap: a body inside it
+  keeps its own cap and shows through.
+- It is a view, as hiding is: no undo step, never in the model or the
+  simulation; the Part keeps it when it is opened again. Pictures (the Assistant's
+  and the Picture panel's) draw see-through bodies see-through, as they leave
+  out hidden ones.
+- The Assistant's workspace see_through and opaque do the same (a body, or
+  several); get_model's parts, the body tool and the view tool say which bodies
+  are see-through.
+
 **Section view on any plane, with an arrow to drag.**
 - INSPECT > Section view (key X, in Settings > Keybinds) opens a panel with the
   view cut. The plane can be Top, Front or Right, a construction plane (the cut

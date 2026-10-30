@@ -108,8 +108,19 @@ describe('bodies and selection', () => {
       [body('b1', 'f1', 'Body 1'), body('b2', 'f3', 'Body 2')],
     );
     expect(rows).toEqual([
-      { id: 'b1', name: 'Housing', color: '#ff0000', visible: true, feature: 'f1', valid: true, inSimulation: true },
-      { id: 'b2', name: 'Body 2', color: '#bdc9db', visible: false, feature: 'f3', valid: true, inSimulation: true },
+      { id: 'b1', name: 'Housing', color: '#ff0000', visible: true, feature: 'f1', valid: true, inSimulation: true, seeThrough: null },
+      { id: 'b2', name: 'Body 2', color: '#bdc9db', visible: false, feature: 'f3', valid: true, inSimulation: true, seeThrough: null },
+    ]);
+  });
+
+  it("says which bodies are see-through: the person's (the view's list) and those a feature always draws so (an Enclosure's air); a hidden one keeps its mark", () => {
+    const rows = bodyRows({ bodies: {} }, { hiddenBodies: ['b2'], seeThroughBodies: ['b2', 'gone'] }, [body('b1', 'f1', 'Body 1'), body('b2', 'f3', 'Body 2'), body('b3', 'f4', 'Body 3')], {
+      alwaysSeeThrough: (id) => id === 'b3',
+    });
+    expect(rows.map((r) => [r.name, r.visible, r.seeThrough])).toEqual([
+      ['Body 1', true, null],
+      ['Body 2', false, 'view'],
+      ['Body 3', true, 'feature'],
     ]);
   });
 

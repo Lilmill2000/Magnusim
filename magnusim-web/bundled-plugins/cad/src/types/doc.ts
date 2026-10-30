@@ -1064,6 +1064,12 @@ export interface CadView {
   /** Features with index >= rollback are rolled back (not built). null = at the end. */
   rollback: number | null;
   hiddenBodies: BodyId[];
+  /**
+   * Bodies the person drew see-through (INSPECT > See-through, the body's menu, the Assistant's
+   * workspace see_through): translucent in the view and in pictures, as hidden bodies are left out
+   * of both. A view state like hiddenBodies: no undo step, never part of the model. Absent: none.
+   */
+  seeThroughBodies?: BodyId[];
   /** Tree node keys that are expanded (e.g. "origin"). */
   expanded: string[];
   /** The origin planes: drawn only when needed ('auto', the default) or all the time ('always'). */

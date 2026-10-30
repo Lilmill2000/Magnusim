@@ -11,6 +11,8 @@
 //   - `sketch` names a sketch: one picture straight at it (normal to its plane, its up as Normal
 //     to shows it), framed on its curves so all of it is in the picture, and drawn over the bodies
 //     whether the view shows it or not (views are then not used).
+// Pictures show the bodies as the person's tree has them: one hidden there is left out
+// (hidden_in_tree), one drawn see-through there is see-through in the picture too (see_through).
 // The data says what was drawn and what not, the scale, the cut, the values of the shown
 // sketches' dimensions (pictures carry no HTML overlays), whether a software renderer drew it,
 // and a note when the picture is not the whole Part (the person's sketch or the rollback bar
@@ -37,6 +39,7 @@ import { LIGHT } from '../viewport/palette';
 import { sketchPlane, sketchUp } from '../viewport/normal';
 import { SNAPSHOT_DIRS, snapshotClip } from '../viewport/snapshot';
 import { offsetRange } from '../viewport/section';
+import { seeThroughOf } from '../viewport/bind';
 import { findSectionFrame, sectionPlaneWords, sectionWords } from '../features/section/plane';
 import { resolveSectionRef, SECTION_FORMS, splitSection } from './measure-targets';
 import { closestName, closestWords } from './closest';
@@ -637,6 +640,8 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
   const toCamera = (i: number): Vec3 => (pictured ? pictured.dir : SNAPSHOT_DIRS[views[i]].dir);
   const shown = drawn;
   const inTree = bodies.filter((b) => !b.visible && !hideIds.has(b.id));
+  // The person's see-through bodies are drawn see-through here too (the same rule as the tree's hidden ones).
+  const through = shown.filter((b) => seeThroughOf(s, services, b.id));
 
   const marks = titleMarks(layout, views, font);
   const notes = notesNow(services, s);
@@ -750,6 +755,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
     hidden: hidden.map((b) => b.name),
     ...(inTree.length ? { hidden_in_tree: inTree.slice(0, BODY_NAMES_MAX).map((b) => b.name) } : {}),
     ...(inTree.length > BODY_NAMES_MAX ? { hidden_in_tree_more: inTree.length - BODY_NAMES_MAX } : {}),
+    ...(through.length ? { see_through: through.slice(0, BODY_NAMES_MAX).map((b) => b.name) } : {}),
     section: sectionData(s, section),
     ...(input.display !== 'shaded-edges' ? { display: input.display.replace('-', '_') } : {}),
     ...(input.projection !== 'orthographic' ? { projection: input.projection } : {}),
@@ -762,6 +768,7 @@ export async function takeView(ctx: CallCtx): Promise<ToolReply> {
   const what = pictured ? `${pictured.feature.name} normal to its plane` : views.join(', ');
   const bits = [`Pictured ${what} (${layout.width}x${layout.height} px, ${Number(scale.toPrecision(3))} mm/px)`, shown.length ? `shown ${shown.map((b) => b.name).join(', ')}` : 'no bodies shown'];
   if (hidden.length || inTree.length) bits.push(`hidden ${[...hidden, ...inTree].map((b) => b.name).join(', ')}`);
+  if (through.length) bits.push(`see-through ${through.map((b) => b.name).join(', ')}`);
   if (dims.length) bits.push(`dimensions ${dims.map((d) => `${d.id} ${d.value} ${d.unit}`).join(', ')}`);
   return { text: bits.join('; '), data, summary: `Pictured ${pictured ? pictured.feature.name : views.join(', ')}`, images: [image] };
 }

@@ -30,7 +30,7 @@ const MODEL_ON_BAR: Record<string, string[]> = {
   modify: ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters'],
   construct: ['construct.plane', 'construct.axis', 'construct.point'],
   cfd: ['cfd.enclosure'],
-  inspect: ['inspect.measure', 'inspect.section', 'inspect.mass', 'inspect.check', 'inspect.find'],
+  inspect: ['inspect.measure', 'inspect.section', 'inspect.see-through', 'inspect.mass', 'inspect.check', 'inspect.find'],
   file: ['file.import-step', 'file.export-step', 'file.picture'],
   scale: ['scale.banana'],
 };

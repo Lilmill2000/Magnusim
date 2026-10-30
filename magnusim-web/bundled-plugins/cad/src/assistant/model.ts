@@ -13,7 +13,7 @@
 //          cannot be resent). Brief rows list a sketch's regions in short too. Each reply says
 //          what the person copied in a sketch (clipboard: the copy row's "from clipboard"), if anything.
 // The whole Part (brief or full) also lists `parts`: every body in one short row (name, volume, the
-// size and middle of its box, its colour when set, the feature that made it, hidden), never halved
+// size and middle of its box, its colour when set, the feature that made it, hidden, see_through), never halved
 // with the budgets (up to PARTS_MAX, the app's cap on a list's items, within PARTS_BYTES), so every
 // part of an assembly can be checked against the request. It comes first in the reply, and the rest
 // fits what the app's result cap (RESULT_DATA_BYTES) leaves: a cut never takes a part's row.
@@ -23,6 +23,7 @@ import { storedBodyName } from '../doc/features/body-ids';
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
 import { moveWords } from '../features/move_body/words';
 import { sectionWords } from '../features/section/plane';
+import { seeThroughOf } from '../viewport/bind';
 import type { SectionState } from '../types/viewport';
 import { DEFAULT_BODY_COLOR } from '../doc/schema';
 import { toModel, ydirOf } from '../features/sketch/plane';
@@ -262,7 +263,7 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
 /**
  * Every body built now as one short row: name, volume (mm3; null above EAGER_FACES faces until
  * measured), the size and middle of its box, its colour when it is not the default, the feature that
- * made it, hidden when the person hid it. Never halved: the first PARTS_MAX, the rest counted.
+ * made it, hidden when the person hid it, see_through when drawn see-through. Never halved: the first PARTS_MAX, the rest counted.
  */
 export async function partRows(services: AppServices, s: DocState): Promise<{ parts: Row[]; more: number }> {
   const parts: Row[] = [];
@@ -287,6 +288,8 @@ export async function partRows(services: AppServices, s: DocState): Promise<{ pa
     const maker = bodyMaker(services.doc.features, s.doc, b.id);
     if (maker) row.by = maker.name;
     if (!b.visible) row.hidden = true;
+    // Drawn see-through (the person's INSPECT > See-through or workspace see_through; an Enclosure's air).
+    if (seeThroughOf(s, services, b.id)) row.see_through = true;
     size += jsonBytes(row) + 1;
     if (size > PARTS_BYTES) break;
     parts.push(row);

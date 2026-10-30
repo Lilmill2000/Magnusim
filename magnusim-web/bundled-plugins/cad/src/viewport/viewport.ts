@@ -157,6 +157,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   const triad = new Triad();
   const caps = new SectionCaps(pixelRatio);
   scene.add(caps.group);
+  // The see-through bodies' caps: translucent, after every opaque surface (section.ts SectionCaps).
+  const seeCaps = new SectionCaps(pixelRatio, { seeThrough: true });
+  scene.add(seeCaps.group);
   const clip = new Plane();
 
   const bvhClient = new BvhClient({
@@ -577,13 +580,22 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     for (const m of [selEdgeMat, hovEdgeMat, pointsMat, litFacesMat]) setClipping(m, planes);
     const shaded = state.get().display !== 'wireframe';
     caps.group.visible = s.on && shaded;
-    if (s.on) {
-      caps.setBodies(
-        [...bodies.values()].map((b) => ({ key: `${b.id}|${b.tessKey}`, geometry: b.data.geometry, visible: visibleOf(b) })),
-        clip,
-      );
-      caps.place(clip, sceneSphere(), BODY_COLOR);
-    } else caps.setBodies([], clip);
+    seeCaps.group.visible = s.on && shaded;
+    if (s.on) placeCaps(clip, sceneSphere(), visibleOf);
+    else {
+      caps.setBodies([], clip);
+      seeCaps.setBodies([], clip);
+    }
+  }
+
+  /** Both caps on a cut: the opaque bodies' and the see-through bodies' (each its own bodies and count), of the bodies `shown`. */
+  function placeCaps(cut: Plane, sphere: Sphere, shown: (b: BodyRec) => boolean) {
+    const all = [...bodies.values()];
+    const of = (see: boolean) => all.filter((b) => b.seeThrough === see).map((b) => ({ key: `${b.id}|${b.tessKey}`, geometry: b.data.geometry, visible: shown(b) }));
+    caps.setBodies(of(false), cut);
+    seeCaps.setBodies(of(true), cut);
+    caps.place(cut, sphere, BODY_COLOR);
+    seeCaps.place(cut, sphere, BODY_COLOR);
   }
 
   // ------------------------------------------------------------ theme (palette.ts)
@@ -1605,11 +1617,9 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
         setClipping(b.edgeMat, planes);
       }
       for (const m of [selEdgeMat, hovEdgeMat, pointsMat]) setClipping(m, planes);
-      if (cut) {
-        caps.setBodies([...bodies.values()].map((b) => ({ key: `${b.id}|${b.tessKey}`, geometry: b.data.geometry, visible: drawn(b) })), cut);
-        caps.place(cut, snapRig.scene, BODY_COLOR);
-      }
+      if (cut) placeCaps(cut, snapRig.scene, drawn);
       caps.group.visible = !!cut;
+      seeCaps.group.visible = !!cut;
       for (const m of lineMats()) m.resolution.set(w, h);
       for (const m of layerLineMats()) m.resolution.set(w, h);
       // A render target's viewport and scissor are its own pixels (no pixel ratio), set on the target.
@@ -2019,7 +2029,14 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       };
     },
     lineResolution: () => [width, height],
-    stats: () => ({ ...stats, bvh: { ...stats.bvh }, looks: stats.looks.map((l) => ({ ...l })), contextLost: renderer.getContext().isContextLost(), framed }),
+    stats: () => ({
+      ...stats,
+      bvh: { ...stats.bvh },
+      looks: stats.looks.map((l) => ({ ...l })),
+      contextLost: renderer.getContext().isContextLost(),
+      framed,
+      opacity: Object.fromEntries([...bodies.values()].map((b) => [b.id, b.mesh.material.uniforms.uOpacity.value])),
+    }),
     measure(frames) {
       const gl = renderer.getContext();
       const px = new Uint8Array(4);
@@ -2063,6 +2080,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       origin.dispose();
       triad.dispose();
       caps.dispose();
+      seeCaps.dispose();
       for (const m of [selEdgeMat, hovEdgeMat, pointsMat, litFacesMat]) m.dispose();
       selEdges.geometry.dispose();
       hovEdges.geometry.dispose();

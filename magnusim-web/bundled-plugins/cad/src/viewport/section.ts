@@ -30,7 +30,7 @@ import {
 import { ORIGIN_PLANES, type OriginPlaneRef, type PlaneFrame, type Vec3 } from '../types/doc';
 import type { SectionState } from '../types/viewport';
 import { BODY_COLOR } from './colors';
-import { createBodyMaterial, type BodyMaterial } from './materials';
+import { createBodyMaterial, SEE_THROUGH_OPACITY, type BodyMaterial } from './materials';
 import { FACE_BIT, PARITY_MASK } from './onface';
 
 /** An origin plane's frame (a copy). */
@@ -99,14 +99,26 @@ export function offsetRange(frame: Pick<PlaneFrame, 'origin' | 'normal'>, boxes:
   return lo <= hi ? [lo, hi] : null;
 }
 
+/**
+ * The caps of the cut. Two of them in the view: the opaque bodies' (drawn first, before every body,
+ * writing depth), and the see-through bodies' (`seeThrough`: drawn in three's transparent pass, after
+ * every opaque surface and before the see-through bodies, at their opacity, writing no depth), so an
+ * opaque body inside or behind a see-through one keeps its own cap and shows through the other's
+ * (an Enclosure's air, a body the person made see-through). Each counts its own bodies: the opaque
+ * cap leaves the count at 0 wherever it drew, and the see-through one counts again from there and
+ * clears it as it draws or is hidden. A see-through cap never touches FACE_BIT (onface.ts), as a
+ * see-through body does not.
+ */
 export class SectionCaps {
   readonly group = new Group();
   private readonly capMat: BodyMaterial;
   private readonly cap: Mesh;
   private stencils = new Map<string, Mesh[]>();
+  private readonly seeThrough: boolean;
 
-  constructor(pixelRatio = 1) {
-    this.group.name = 'section-caps';
+  constructor(pixelRatio = 1, opts: { seeThrough?: boolean } = {}) {
+    this.seeThrough = !!opts.seeThrough;
+    this.group.name = this.seeThrough ? 'section-caps-see-through' : 'section-caps';
     this.group.visible = false;
     this.capMat = createBodyMaterial(BODY_COLOR, undefined, { hatchPixelRatio: pixelRatio });
     this.capMat.polygonOffset = false;
@@ -116,13 +128,22 @@ export class SectionCaps {
     this.capMat.stencilFuncMask = PARITY_MASK;
     this.capMat.stencilFail = KeepStencilOp;
     this.capMat.stencilZPass = ReplaceStencilOp;
+    if (this.seeThrough) {
+      // Translucent as the see-through bodies, no depth (what is behind shows); the count only.
+      this.capMat.transparent = true;
+      this.capMat.depthWrite = false;
+      this.capMat.uniforms.uOpacity.value = SEE_THROUGH_OPACITY;
+      this.capMat.stencilWriteMask = PARITY_MASK;
+      this.capMat.stencilRef = 0;
+      this.capMat.stencilZFail = ReplaceStencilOp;
+    }
     this.setFaceBit(false);
     const g = new PlaneGeometry(2, 2);
     g.setAttribute('hl', new BufferAttribute(new Uint8Array(g.getAttribute('position').count), 1));
     this.cap = new Mesh(g, this.capMat);
     this.cap.matrixAutoUpdate = false;
     this.cap.renderOrder = -1;
-    this.cap.name = 'section-cap';
+    this.cap.name = this.seeThrough ? 'section-cap-see-through' : 'section-cap';
     this.group.add(this.cap);
   }
 
@@ -131,6 +152,8 @@ export class SectionCaps {
    * is hidden it leaves the stencil); in light it writes 0 as it always did.
    */
   setFaceBit(on: boolean): void {
+    // A see-through cap shows what is behind it: never a light surface of its own.
+    if (this.seeThrough) return;
     this.capMat.stencilRef = on ? FACE_BIT : 0;
     this.capMat.stencilZFail = on ? KeepStencilOp : ReplaceStencilOp;
   }
@@ -166,6 +189,8 @@ export class SectionCaps {
       colorWrite: false,
       depthWrite: false,
       depthTest: false,
+      // The see-through caps' count in the transparent pass, with their cap (after every opaque surface).
+      transparent: this.seeThrough,
       stencilWrite: true,
       // The count only: FACE_BIT is the bodies' and the cap's.
       stencilWriteMask: PARITY_MASK,
@@ -176,7 +201,7 @@ export class SectionCaps {
     });
     const m = new Mesh(geometry, mat);
     m.renderOrder = -2;
-    m.name = 'section-stencil';
+    m.name = this.seeThrough ? 'section-stencil-see-through' : 'section-stencil';
     return m;
   }
 

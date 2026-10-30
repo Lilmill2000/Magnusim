@@ -171,7 +171,7 @@ test('cad:p1-ui-box toolbar, the Extrude flyout with live apply and inline error
   // actions for a face, then the body's and the feature's, the body's and the feature's Delete last of
   // all (P4a review: the actions first, Delete last; it sat between them); the body's Move/copy just
   // above its Delete.
-  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Move/copy Body 1…', 'Delete Body 1', 'Delete Extrude 1']);
+  await expect(menu.locator('[data-menu-item]')).toHaveText(['Normal to', 'Orbit around this face', 'Orbit around model center', 'Orbit around origin', 'Delete faces and heal', 'Extrude face', 'Hole', 'Measure', 'Press-pull', 'New sketch on this face', 'Hide Body 1', 'Make Body 1 see-through', 'Leave Body 1 out of the simulation', 'Rename Body 1', 'Colour…', 'Edit Extrude 1', 'Rename Extrude 1', 'Suppress Extrude 1', 'Move up', 'Move down', 'Roll back to here', 'Set keybind for Delete…', 'Set keybind for Rename…', 'Move/copy Body 1…', 'Delete Body 1', 'Delete Extrude 1']);
   await menu.locator('[data-menu-item="edit"]').click();
   await expect(menu).toHaveCount(0);
   await expect(panel.locator('[data-panel-title]')).toHaveText('Extrude 1');
@@ -305,7 +305,7 @@ test('cad:p1-ui-parity tree, flyout, Done, toolbar and chips use the core recipe
       'modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters',
       'construct.plane', 'construct.axis', 'construct.point',
       'cfd.enclosure',
-      'inspect.measure', 'inspect.section', 'inspect.mass', 'inspect.check', 'inspect.find',
+      'inspect.measure', 'inspect.section', 'inspect.see-through', 'inspect.mass', 'inspect.check', 'inspect.find',
       'file.import-step', 'file.export-step', 'file.picture',
     ]);
     for (const b of shown) {
