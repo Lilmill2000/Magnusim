@@ -187,22 +187,27 @@ export const moveBodyDef: FeatureTypeDef<MoveBodyFeature, MoveValues> = {
     const sources = ids.map((id) => ctx.bodies.get(id)!);
     const centre = await centreOf(ctx, sources.map((b) => b.shape));
     let line: { origin: Vec3; dir: Vec3 } | null = null;
+    // The picked axis as found here, also with no turn: the view's handle draws its ring on it.
+    let turnAxis: { origin: Vec3; dir: Vec3 } | null = null;
     let warning: string | undefined;
-    if (!turnless(v.angle)) {
-      if (f.about === 'axis') {
-        if (!f.axis) return { ok: false, message: `${f.name} failed: ${AXIS_WANTED}` };
+    const turning = !turnless(v.angle);
+    if (f.about === 'axis') {
+      if (f.axis) {
         const a = await resolveAxis(f.axis, ctx);
-        if (!a.ok) return { ok: false, message: `${f.name} failed: Axis: ${a.message}` };
-        const dir = unitOf(a.value.dir);
-        if (!dir) return { ok: false, message: `${f.name} failed: the axis has no direction` };
-        line = { origin: a.value.origin, dir };
-        if (a.warning) warning = `Axis: ${a.warning}`;
-      } else {
-        line = { origin: v.pivot ?? centre ?? [0, 0, 0], dir: AXIS_DIR[f.about] ?? AXIS_DIR.z };
-      }
+        const dir = a.ok ? unitOf(a.value.dir) : null;
+        if (a.ok && dir) turnAxis = { origin: a.value.origin, dir };
+        if (turning) {
+          if (!a.ok) return { ok: false, message: `${f.name} failed: Axis: ${a.message}` };
+          if (!dir) return { ok: false, message: `${f.name} failed: the axis has no direction` };
+          line = turnAxis;
+          if (a.warning) warning = `Axis: ${a.warning}`;
+        }
+      } else if (turning) return { ok: false, message: `${f.name} failed: ${AXIS_WANTED}` };
+    } else if (turning) {
+      line = { origin: v.pivot ?? centre ?? [0, 0, 0], dir: AXIS_DIR[f.about] ?? AXIS_DIR.z };
     }
     const matrix = moveMatrix(v, line);
-    const output = { type: 'move_body' as const, centre, axis: line };
+    const output = { type: 'move_body' as const, centre, axis: line, turnAxis, matrix };
     const made: ShapeId[] = [];
     const bodies: Extract<FeatureBuildResult, { ok: true }>['bodies'] = [];
     let done = false;

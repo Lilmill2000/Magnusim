@@ -79,6 +79,15 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   where they are and moves copies of them instead ("Body 1 (Copy)", new bodies;
   the feature is "Body-Copy 1"). The Assistant moves and copies bodies the same
   way, and says where each one is now.
+- Move/copy body has a handle in the view, as Fusion's Move: at the pivot, an
+  arrow along X, Y and Z (red, green, blue, as the view's axes) and a ring about
+  each (about a picked axis: one ring about it). Drag an arrow to move, a ring
+  to turn: the panel's fields show the value as you drag, a label beside the
+  handle says it, and the bodies are drawn there at once. Hold Ctrl for whole
+  millimetres (0.1 in in an inch Part) and steps of 15°. Let go and the model is
+  built there; Done keeps it as one undo step. Escape with the button still down
+  puts the drag back. Typing a value moves the handle too. The camera never
+  turns under the handle.
 - In Magnusim CAD, the desktop edition with no projects, a body has no "Leave
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation

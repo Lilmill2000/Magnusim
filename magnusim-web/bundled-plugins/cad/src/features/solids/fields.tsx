@@ -285,8 +285,8 @@ export function useRegionField(services: AppServices, o: RegionFieldOptions): Fi
 
 // ------------------------------------------------------------ axis
 
-/** The live axis of a reference as the bodies are shown (for drawing it), or null. */
-async function liveAxis(services: AppServices, ref: AxisRef): Promise<{ origin: Vec3; dir: Vec3 } | null> {
+/** The live axis of a reference as the bodies are shown (for drawing it; Move/copy body's handle), or null. */
+export async function liveAxis(services: AppServices, ref: AxisRef): Promise<{ origin: Vec3; dir: Vec3 } | null> {
   const s = services.doc.state.get();
   const ctx = {
     bodies: liveBodies(services),

@@ -258,7 +258,9 @@ touching bodies apart.
   centre of their box unless you type one) or about an axis, a straight or round
   edge, a round face or a sketch line. It turns first, then moves. A moved body
   keeps its name and faces, so later features still find them. **Keep a copy**
-  leaves the bodies and moves copies ("Body 1 (Copy)").
+  leaves the bodies and moves copies ("Body 1 (Copy)"). Or drag the handle in
+  the view: its arrows move along X, Y, Z, its rings turn (Ctrl: whole mm and
+  15°); the fields follow, and Escape during a drag puts it back.
 - **Delete faces and heal**: remove faces (a hole, a fillet, a boss) and let
   the kernel close the gap.
 - **Press-pull** (Q): move faces along their normal. Out adds material, in

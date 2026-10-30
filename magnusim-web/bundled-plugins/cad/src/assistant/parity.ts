@@ -634,6 +634,9 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   setBodies: INTERNAL,
   setVisibility: reach('body', 'visibility'),
   setVertices: INTERNAL,
+  // Move/copy body's handle draws the bodies where a drag takes them: the Assistant sets the same fields.
+  previewMotion: reach('direct', 'move', undefined, "the preview of a drag of Move/copy body's handle; the drag sets move and turn as the Assistant does"),
+  drawnBox: INTERNAL,
   highlight: W('select'),
   flash: reach('find', 'query'),
   setFilter: W('selection_filter'),
@@ -767,6 +770,8 @@ export type PersonPath = (
 ) & {
   /** The Assistant's field is offered only where the host has projects (Magnusim): left out in Magnusim CAD. */
   projects?: true;
+  /** Another way the person has to set the same field, in words (a drag handle in the view). */
+  also?: string;
 };
 
 export type ControlTable = 'ui' | 'doc' | 'rails' | 'toolbar' | 'keybinds' | 'link' | 'viewport' | 'check';
@@ -790,6 +795,9 @@ const REFERENCE = own("reference text for the model; the person has the program'
 const OPS = (type: FeatureType) => ({ 'op=new': panel(type, 'op'), 'op=join': panel(type, 'op'), 'op=cut': panel(type, 'op'), 'op=intersect': panel(type, 'op') });
 const NEW_BODY = { body_name: control('ui', 'renameBody'), color: control('ui', 'setBodyColor') };
 const each = (values: readonly string[], prefix: string, path: PersonPath) => Object.fromEntries(values.map((v) => [`${prefix}=${v}`, path]));
+/** Move/copy body's handle in the view (src/features/move_body/handle.ts): its arrows set Move X, Y, Z; its rings the Angle and About. */
+const MOVE_ARROWS = "the arrows of Move/copy body's handle in the view: a drag sets Move X, Y or Z";
+const MOVE_RINGS = "the rings of Move/copy body's handle in the view: a drag sets the Angle about X, Y, Z or the picked axis";
 /** An Assistant field only a host with projects offers (Magnusim; not Magnusim CAD). */
 const onlyInProjects = (p: PersonPath): PersonPath => ({ ...p, projects: true });
 
@@ -1044,9 +1052,9 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     bodies: panel('split', 'targets'),
     tool: panel('split', 'tool'),
     keep_tool: panel('split', 'tool'),
-    move: panel('move_body', 'move'),
-    'turn.angle': panel('move_body', 'angle'),
-    'turn.axis': panel('move_body', 'axis'),
+    move: { ...panel('move_body', 'move'), also: MOVE_ARROWS },
+    'turn.angle': { ...panel('move_body', 'angle'), also: MOVE_RINGS },
+    'turn.axis': { ...panel('move_body', 'axis'), also: MOVE_RINGS },
     'turn.pivot': panel('move_body', 'pivot'),
     copy: panel('move_body', 'copy'),
     // The Enclosure's kind and fields: Magnusim's alone (Magnusim CAD has no Enclosure command).

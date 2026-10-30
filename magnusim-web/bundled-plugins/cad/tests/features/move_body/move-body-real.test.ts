@@ -244,3 +244,32 @@ describe('Move/copy body: failures in the panel\'s words', () => {
     expect(gone.status).toMatchObject({ state: 'error', message: 'Body-Move 2 failed: a deleted body is not there at this point' });
   });
 });
+
+describe("Move/copy body: what the view's handle reads of the build", () => {
+  it('the transform it applied, and a picked axis found also with no turn (its ring); none for a flat face with no turn, which still builds', async () => {
+    const r = await part();
+    const b = await block(r, 20, 10, 10);
+    const m = await addFeature(r, 'move_body', move([b], { move: ['5 mm', '0 mm', '0 mm'], about: 'axis', axis: { kind: 'origin', axis: 'origin:x' } }));
+    expect(m.status).toMatchObject({ state: 'ok' });
+    const out = r.doc.state.get().rebuild.outputs[m.id] as { matrix: number[]; turnAxis: unknown; axis: unknown };
+    expect(out.axis).toBeNull();
+    expect(out.turnAxis).toEqual({ origin: [0, 0, 0], dir: [1, 0, 0] });
+    expect(out.matrix).toEqual([1, 0, 0, 5, 0, 1, 0, 0, 0, 0, 1, 0]);
+    // A turn of 90 about Z through the centre (10, 5, 5), then 5 along X: the matrix is the build's.
+    const s = r.doc.beginEdit(m.id);
+    s.update({ about: 'z', angle: '90 deg' } as never);
+    s.commit();
+    await settle(r.doc);
+    const o2 = r.doc.state.get().rebuild.outputs[m.id] as { matrix: number[]; turnAxis: unknown };
+    expect(o2.turnAxis).toBeNull();
+    expect(o2.matrix.map((v) => Math.round(v * 1e9) / 1e9 + 0)).toEqual([0, -1, 0, 20, 1, 0, 0, -5, 0, 0, 1, 0]);
+    expect(box(bodies(r)[0])).toEqual([10, -5, 0, 20, 15, 10]);
+    // About a flat face with no turn: it builds (nothing turns), with no axis for a ring.
+    const top = bodies(r)[0];
+    const t = await topo(r, top);
+    const flat = await faceRef(r, top, t.faces.findIndex((f) => f.type === 'plane'));
+    const m2 = await addFeature(r, 'move_body', move([b], { move: ['1 mm', '0 mm', '0 mm'], about: 'axis', axis: { kind: 'face-axis', body: b, ref: flat } }));
+    expect(m2.status).toMatchObject({ state: 'ok' });
+    expect((r.doc.state.get().rebuild.outputs[m2.id] as { turnAxis: unknown }).turnAxis).toBeNull();
+  });
+});

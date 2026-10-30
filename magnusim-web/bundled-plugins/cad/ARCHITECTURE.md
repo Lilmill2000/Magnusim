@@ -460,7 +460,21 @@ with the host once for the page's life, and its chip goes in the dock.
   (`UiController.bodyMenu`, item `body-move`, just above `body-delete`) opens its
   panel with the body (or the selected bodies); the Assistant's `direct` kind
   `move_body` (`move`, `turn {angle, axis, pivot}`, `copy`) makes the same record
-  and answers with each moved body's or copy's box centre.
+  and answers with each moved body's or copy's box centre. The output also has
+  `matrix` (the rigid motion applied) and `turnAxis` (a picked axis as found
+  before it, also with no turn). While the person's panel is open,
+  `move_body/handle.ts` draws a handle in the view (layer `move_body.handle`,
+  hidden in pictures; its math in `handle-math.ts`): at the pivot after the move,
+  arrows for Move X, Y, Z and rings for the Angle (three, or one about a picked
+  axis), in `palette.triad` (a picked axis's ring `palette.ink`), each with a rim
+  in the palette's background. A drag sets the same fields as typing (a ring of
+  another of X, Y, Z than About sets About too), shown live in the panel and
+  drawn by `ViewportHandle.previewMotion` (target * shown^-1 on the meshes: no
+  rebuild, no kernel call, no save until the release, which applies the fields
+  through the session as typed values are). Rounded as the Extrude's arrow
+  (`roundedDistance`), Ctrl to whole steps (1 mm, 0.1 in, 15 deg). Escape with the
+  button held puts the drag back; the press never reaches the camera. The parity
+  table notes the handle (`PersonPath.also`) on `direct`'s move and turn fields.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a

@@ -151,6 +151,15 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(DOC.joinSteps).toMatchObject({ tool: 'delete' });
   });
 
+  it("Move/copy body's drag handle is the person's other way to the same fields: its arrows set move, its rings turn's angle and axis; its preview reaches move", () => {
+    expect(AI_TOOLS.direct.move).toEqual({ kind: 'panel', type: 'move_body', field: 'move', also: expect.stringMatching(/^the arrows of Move\/copy body's handle in the view/) });
+    expect(AI_TOOLS.direct['turn.angle']).toEqual({ kind: 'panel', type: 'move_body', field: 'angle', also: expect.stringMatching(/^the rings of Move\/copy body's handle in the view/) });
+    expect(AI_TOOLS.direct['turn.axis']).toMatchObject({ kind: 'panel', type: 'move_body', field: 'axis', also: expect.stringMatching(/rings/) });
+    // The handle sets nothing the Assistant does not: the same fields of the same feature.
+    expect(VIEWPORT.previewMotion).toMatchObject({ kind: 'reach', tool: 'direct', field: 'move' });
+    expect(VIEWPORT.drawnBox).toMatchObject({ kind: 'auto' });
+  });
+
   it("the assembly checks both ways: each kind and field of the check tool is a control of INSPECT's Check panel, and each of its controls reaches the check tool", async () => {
     const services = await boot();
     expect(services.modules.tool('inspect.check'), "the Check panel is the inspect.check command's tool").toBeTruthy();

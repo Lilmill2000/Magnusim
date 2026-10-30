@@ -8,9 +8,12 @@
 //   Keep a copy   the originals stay, copies are moved (Body-Move 1 becomes Body-Copy 1 while its
 //                 name is still the one it was given)
 // One line says the order: it turns first, then moves.
+// The view shows a drag handle at the pivot for as long as the person's panel is open (handle.ts:
+// arrows for Move X, Y, Z, rings for the Angle); the fields show a drag's values as it runs, and
+// its release applies them as typed values are. None while the Assistant fills the panel.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useServices } from '../../lib/services';
 import { useStateStore } from '../../lib/store';
 import type { Expr } from '../../types/units';
@@ -21,9 +24,12 @@ import { Button, Field, FieldGroup, Hint, NumberUnitInput, Select } from '../../
 import { useBodyField } from '../p2/fields';
 import { P2FeaturePanel, useFeaturePanel } from '../p2/panel';
 import { useSelectionMirror } from '../p2/pick';
-import { useAxisField } from '../solids/fields';
+import { liveAxis, useAxisField } from '../solids/fields';
 import { usePicksLines } from '../solids/view';
+import { uiFor } from '../../ui/controller';
 import { nameForCopy, XYZ } from './feature';
+import { startMoveHandle } from './handle';
+import { snapLengthWords, type Line } from './handle-math';
 
 const ABOUT: { value: MoveAbout; label: string }[] = [
   { value: 'x', label: 'X' },
@@ -39,7 +45,12 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
   const services = useServices();
   const kit = useFeaturePanel<MoveBodyFeature>(props);
   const f = kit.draft;
+  // A drag of the view's handle: its fields while the button is held (null: the draft's).
+  const [live, setLive] = useState<Partial<MoveBodyFeature> | null>(null);
+  const shown = live ? ({ ...f, ...live } as MoveBodyFeature) : f;
   const units = services.doc.units;
+  const lengthUnit = useStateStore(services.doc.state, (s) => s.doc.units.length);
+  const handle = useStateStore(services.viewport, (s) => s.handle);
   const out = useStateStore(services.doc.state, (s) => (s.rebuild.outputs[props.feature]?.type === 'move_body' ? (s.rebuild.outputs[props.feature] as MoveBodyOutput) : null));
   const boxes = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
   const [chosen, choose] = useState<'bodies' | 'axis' | null>(null);
@@ -68,6 +79,49 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
   });
   usePicksLines(services, f.about === 'axis' ? axis.lines : []);
 
+  // The picked axis as found now, for the handle's ring while no build has found it (nothing to move yet).
+  const pickedAxis = useRef<Line | null>(null);
+  const axisKey = f.about === 'axis' && f.axis && !out?.turnAxis ? JSON.stringify(f.axis) : '';
+  useEffect(() => {
+    pickedAxis.current = null;
+    if (!axisKey || !f.axis) return;
+    let on = true;
+    void liveAxis(services, f.axis).then((a) => {
+      if (!on) return;
+      pickedAxis.current = a;
+      tool.current?.refresh();
+    });
+    return () => {
+      on = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [services, axisKey]);
+  // The handle in the view while the person's panel is open.
+  const tool = useRef<ReturnType<typeof startMoveHandle> | null>(null);
+  const kitNow = useRef(kit);
+  kitNow.current = kit;
+  useEffect(() => {
+    if (!handle || typeof handle.pushTool !== 'function' || props.session.owner) return;
+    const t = startMoveHandle(services, handle, {
+      session: props.session,
+      liveAxis: () => pickedAxis.current,
+      live: setLive,
+      commit(patch) {
+        const why = kitNow.current.update(patch);
+        if (why) uiFor(services).setPanelNote(why);
+        return why;
+      },
+    });
+    tool.current = t;
+    return () => {
+      t.stop();
+      tool.current = null;
+    };
+  }, [services, handle, props.session]);
+  useEffect(() => {
+    tool.current?.refresh();
+  });
+
   // The centre of the bodies' box just before this feature: as the build found it, or (not built
   // yet: nothing to move typed) the boxes the tree shows now, where the bodies still are.
   const fallback = (() => {
@@ -94,20 +148,20 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
       <FieldGroup title="Move">
         {XYZ.map((a, i) => (
           <Field key={a} label={a} htmlFor={id(`move-${a.toLowerCase()}`)} field={`move-${a.toLowerCase()}`}>
-            <NumberUnitInput id={id(`move-${a.toLowerCase()}`)} field={`move-${a.toLowerCase()}`} label={`Move ${a}`} expr={f.move[i]} quantity="length" units={units} onCommit={(e) => setMove(i, e)} />
+            <NumberUnitInput id={id(`move-${a.toLowerCase()}`)} field={`move-${a.toLowerCase()}`} label={`Move ${a}`} expr={shown.move[i]} quantity="length" units={units} onCommit={(e) => setMove(i, e)} />
           </Field>
         ))}
       </FieldGroup>
       <FieldGroup title="Turn">
         <Field label="Angle" htmlFor={id('angle')} field="angle">
-          <NumberUnitInput id={id('angle')} field="angle" label="Angle" expr={f.angle} quantity="angle" units={units} onCommit={(angle) => kit.update({ angle })} />
+          <NumberUnitInput id={id('angle')} field="angle" label="Angle" expr={shown.angle} quantity="angle" units={units} onCommit={(angle) => kit.update({ angle })} />
         </Field>
         <Field label="About" htmlFor={id('about')} field="about">
           <Select
             id={id('about')}
             label="About"
             field="about"
-            value={f.about}
+            value={shown.about}
             onChange={(v) => {
               kit.set({ about: v as MoveAbout });
               choose(v === 'axis' ? 'axis' : null);
@@ -140,6 +194,11 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
       <div data-move-order="1">
         <Hint>{f.copy ? 'The originals stay; the copies turn first, then move.' : 'It turns first, then moves.'}</Hint>
       </div>
+      {handle && !props.session.owner ? (
+        <div data-move-drag="1">
+          <Hint>{`Or drag the arrows and rings in the view (Ctrl: steps of ${snapLengthWords(lengthUnit)} and 15°).`}</Hint>
+        </div>
+      ) : null}
     </P2FeaturePanel>
   );
 }

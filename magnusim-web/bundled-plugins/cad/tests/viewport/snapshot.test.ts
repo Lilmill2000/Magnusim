@@ -13,6 +13,7 @@ import { Sphere, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { HANDLES_LAYER } from '../../src/features/enclosure/handles';
 import { HANDLE_LAYER } from '../../src/features/extrude/handle';
+import { MOVE_HANDLE_LAYER } from '../../src/features/move_body/handle';
 import { MARKERS_LAYER } from '../../src/features/pattern/markers';
 import { LAYER_CONSTRUCT } from '../../src/features/refgeom/overlay';
 import { SKETCH_BANANA_LAYER } from '../../src/features/scale/sketch-banana';
@@ -152,7 +153,7 @@ describe('the layers a picture leaves out', () => {
   }
 
   it('manipulators, markers and bananas; the sketches and reference planes stay', () => {
-    expect([...SNAPSHOT_HIDDEN_LAYERS].sort()).toEqual([HANDLE_LAYER, HANDLES_LAYER, 'p2-measure', MARKERS_LAYER, PICKS_LAYER, 'sketch.pick', BANANA_LAYER, SKETCH_BANANA_LAYER].sort());
+    expect([...SNAPSHOT_HIDDEN_LAYERS].sort()).toEqual([HANDLE_LAYER, HANDLES_LAYER, MOVE_HANDLE_LAYER, 'p2-measure', MARKERS_LAYER, PICKS_LAYER, 'sketch.pick', BANANA_LAYER, SKETCH_BANANA_LAYER].sort());
     const kept = [LAYER_CONSTRUCT, LAYER_REGIONS, LAYER_SKETCHES, LAYER_MARKERS, 'sketch-geometry', 'sketch-annotations'];
     for (const id of kept) expect(SNAPSHOT_HIDDEN_LAYERS.has(id), id).toBe(false);
     // Every layer the app adds is one or the other (a new layer must be placed in one list).

@@ -4,6 +4,7 @@
 import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
 import { checkClock } from '../features/assembly/check';
+import { moveHandleTest, type MoveHandleTestView } from '../features/move_body/handle';
 import type { Appearance } from '../lib/bridge';
 import type { MarkPalette } from '../viewport/palette';
 import type { AppearanceControl } from './appearance';
@@ -37,6 +38,8 @@ export interface CadTestHandle {
   appearance?: CadAppearanceHandle;
   /** The assembly checks' time limit (ms; src/features/assembly/check.ts checkClock): an e2e sets it low to see a check stop. */
   readonly assemblyCheck: { limitMs: number };
+  /** Move/copy body's handle in the view while its panel is open (src/features/move_body/handle.ts), or null: where its parts are. */
+  readonly moveHandle: MoveHandleTestView | null;
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;
@@ -92,6 +95,9 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
       return assistantTestHandle(services);
     },
     assemblyCheck: checkClock,
+    get moveHandle() {
+      return moveHandleTest();
+    },
     keybinds: {
       model: keybindsFor(services),
       open: (id) => void openSetKeybind(services, id),

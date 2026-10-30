@@ -72,8 +72,14 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
  */
 export interface MoveBodyOutput {
   type: 'move_body';
+  /** The centre of the bodies' box just before it (the pivot when none is typed). */
   centre: Vec3 | null;
+  /** The line it turned about (null: no turn). */
   axis: { origin: Vec3; dir: Vec3 } | null;
+  /** About a picked axis: that axis as found just before it, also with no turn (null: not found, or not about one). */
+  turnAxis?: { origin: Vec3; dir: Vec3 } | null;
+  /** The rigid motion it applied to each body (3x4 row-major, as the kernel's `copies`): the view's handle previews from it. */
+  matrix?: number[];
 }
 
 /**
