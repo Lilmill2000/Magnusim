@@ -10,7 +10,7 @@
  * changes, spec 8.3).
  */
 import { useEffect, useReducer, type ReactNode } from 'react';
-import type { AssistantStatus, ConversationRoom, ConversationTurn } from '../wire';
+import type { AgentContext, AssistantStatus, ConversationRoom, ConversationTurn } from '../wire';
 import { AgentLine, AgentLineItem, AgentPlan, AgentTools } from './AgentBits';
 import {
   ATTACHED_FILES,
@@ -58,6 +58,8 @@ export interface TurnBlockProps {
   endExtra?: ReactNode;
   /** The conversation's nearest limit (its row's room), for the meter's readout under the newest turn. */
   room?: ConversationRoom | null;
+  /** A coding agent's: the context its agent uses (its row's context), for the meter under the newest turn. */
+  agentContext?: AgentContext | null;
 }
 
 function Row({ view, item, open, workspace, streaming, onOpenPicture }: { view: TurnView; item: TurnItem; open: boolean; workspace: string; streaming: boolean; onOpenPicture?: (turn: string, n: string) => void }) {
@@ -146,7 +148,7 @@ function EndBlock({ view, extra }: { view: TurnView; extra?: ReactNode }) {
   );
 }
 
-export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = null, localPictures, onOpenPicture, note, cards, endExtra, room = null }: TurnBlockProps) {
+export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = null, localPictures, onOpenPicture, note, cards, endExtra, room = null, agentContext = null }: TurnBlockProps) {
   const ended = isEnded(view);
   // "Still stopping…" once the Stop's bound passed.
   const [, tick] = useReducer((n: number) => n + 1, 0);
@@ -219,7 +221,7 @@ export function TurnBlock({ view, row, newest, status, workspace, stopSentAt = n
         </div>
       ) : null}
       <EndBlock view={view} extra={endExtra} />
-      {newest ? <Meter view={view} status={status} room={room} /> : null}
+      {newest ? <Meter view={view} status={status} room={room} agentContext={agentContext} /> : null}
     </article>
   );
 }

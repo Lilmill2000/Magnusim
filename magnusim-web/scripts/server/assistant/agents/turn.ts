@@ -16,7 +16,11 @@
  *                the attached files' lines; the person's pictures; the app context]
  *   model ─ while it runs:
  *     the agent's updates go to the log (text, plan, its own tools, its mode and model; our
- *       own tools' updates are not logged: the runner's tool_call / tool_result are their record)
+ *       own tools' updates are not logged: the runner's tool_call / tool_result are their record);
+ *       a compaction that ended (the agent shortened its memory of the chat: session.ts, in either
+ *       form, never its own tool nor the tripwire) is a note, as are those that ended between
+ *       prompts, at the next turn's start; its usage (the context it uses, of its size) is kept on
+ *       the conversation (agentContext), for the conversation list
  *     its MCP calls run here (AgentTurnRun.run): the turn's owner, tab, caps, log and signal; a
  *       call that arrived before this prompt went out (an earlier message's) answers `stopped`;
  *       one still open when the turn ends, however it ends, logs its result before the end
@@ -75,7 +79,7 @@ import { placeOf, tabHere } from '../tab-place.ts';
 import { bindingServes, notePromptSent, type AgentDispatch } from '../mcp/sessions.ts';
 import type { EndState, PageLimits, TurnState } from '../loop.ts';
 import type { ImagePart, StreamEvent, ToolCallPart } from '../types.ts';
-import { noteBlock, noteInSystemPrompt, OursMatcher, pickOption, REJECT_KINDS, type AgentUpdate, type PermissionView } from './acp.ts';
+import { noteBlock, noteInSystemPrompt, OursMatcher, pickOption, REJECT_KINDS, type AgentUpdate, type CompactionView, type PermissionView } from './acp.ts';
 import type { AgentProviderId, KnownAgent } from './known.ts';
 import { policyOf } from './known.ts';
 import { AGENTS_BUSY_TEXT, NOTHING_RUNS_TEXT, RESTARTED_TEXT, type AgentHost, type AgentTimings } from './host.ts';
@@ -201,6 +205,13 @@ export const AGENT_CALLS_END_TEXT = (n: number) => `The agent went on calling to
 /** A request with pictures on an agent whose initialize said it takes none (nothing was sent to it). */
 export const AGENT_IMAGES_TEXT = (name: string): string => `${name} doesn't take pictures. Send the message without them.`;
 export const PICTURE_NOTE = '(The agent showed a picture; the chat will show it.)';
+/** The agent shortened its memory of this chat (a compaction that completed). */
+export const COMPACTED_NOTE = (name: string) => `${name} shortened its memory of this chat to make room.`;
+/** One that failed, with its own words when it gave any (their last full stop is the note's). */
+export const COMPACTION_FAILED_NOTE = (name: string, error: string | null) => {
+  const why = (error ?? '').replace(/[\s.]+$/, '');
+  return `${name} tried to shorten its memory of this chat and couldn't${why ? `: ${why}` : ''}.`;
+};
 export const HOME_OWN_TOOL_NOTE = (name: string) => `${name} asked to use its own tool; answer such questions in a project's Magnusim window.`;
 /** A permission request for a tool of Magnusim's server that isn't allowed without asking now (it left the list served to the agent). */
 export const NOT_OFFERED_NOTE = (name: string) =>
@@ -704,7 +715,12 @@ class AgentTurnRun implements AgentDispatch {
         }
         return;
       case 'thought':
+        return;
       case 'usage':
+        if (Number.isFinite(u.used) && Number.isFinite(u.size) && u.size > 0) t.conv.agentContext = { used: Math.max(0, u.used), size: u.size };
+        return;
+      case 'compaction':
+        this.compactionNote(u);
         return;
       case 'tool': {
         if (this.matcher.tool(u) !== null) return;
@@ -738,6 +754,12 @@ class AgentTurnRun implements AgentDispatch {
         if (u.model !== null) this.modelSeen(u.model);
         return;
     }
+  }
+
+  /** A compaction that ended (session.ts says each once): a note. */
+  private compactionNote(c: CompactionView): void {
+    if (c.status === 'completed') this.t.note(COMPACTED_NOTE(this.name));
+    else if (c.status === 'failed') this.t.note(COMPACTION_FAILED_NOTE(this.name, c.error ? cleanText(redact(c.error), 200) || null : null));
   }
 
   /** A mode the agent reports: one outside the allowed ones stops the turn and ends the agent. */
@@ -945,6 +967,10 @@ class AgentTurnRun implements AgentDispatch {
       if (got.restarted) t.note(RESTARTED_TEXT(this.name));
       // Why the earlier agent was ended between messages.
       if (got.offence) t.note(got.offence === 'agent_lockdown' ? LOCKDOWN_TEXT(this.name) : MODE_TEXT(this.name));
+      // What it did between messages: compactions that ended then, and the context it uses (a new
+      // session's none yet).
+      for (const c of got.session.takeCompactions()) this.compactionNote(c);
+      t.conv.agentContext = got.session.usage ? { ...got.session.usage } : null;
     } catch (err) {
       if (this.stoppedNow()) return;
       if ((err as { code?: unknown } | null)?.code === 'agents_busy') {

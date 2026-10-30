@@ -278,6 +278,9 @@ const ROOM_NUMBERS: Record<RoomReason, (used: number, limit: number) => string> 
 /** How full the conversation is, by the limit it is closest to: "Conversation: 72% full (pictures 72 of 100)". */
 export const roomLine = (reason: RoomReason, used: number, limit: number): string =>
   `Conversation: ${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, limit)) * 100))}% full (${ROOM_NUMBERS[reason](used, limit)})`;
+/** A coding agent's chat: how much of its own context it uses (it shortens its memory itself when it fills). */
+export const agentContextLine = (used: number, size: number): string =>
+  `Context: ${grouped(used)} of ${grouped(size)} tokens (${Math.min(100, Math.floor((Math.max(0, used) / Math.max(1, size)) * 100))}%)`;
 export const METER_FREE = 'Local server · no cost';
 export const meterAgent = (name: string): string => `Billed to your ${name} account (Magnusim can't see the cost)`;
 

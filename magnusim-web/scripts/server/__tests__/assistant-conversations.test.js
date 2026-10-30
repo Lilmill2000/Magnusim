@@ -66,8 +66,9 @@ describe('GET /api/assistant/conversations', () => {
     const [proj, home] = r.json.conversations;
     assert.equal(r.json.conversations.length, 2);
     assert.deepEqual(Object.keys(proj).sort(), [
-      'billing', 'created_at', 'dropped_turns', 'full', 'full_text', 'id', 'label', 'last_used_at', 'model', 'project_id', 'project_title', 'provider', 'room', 'running', 'title', 'turns',
+      'billing', 'context', 'created_at', 'dropped_turns', 'full', 'full_text', 'id', 'label', 'last_used_at', 'model', 'project_id', 'project_title', 'provider', 'room', 'running', 'title', 'turns',
     ]);
+    assert.equal(proj.context, null, "a coding agent's only");
     assert.deepEqual(
       [proj.id, proj.provider, proj.label, proj.billing, proj.project_id, proj.project_title, proj.running, proj.title, proj.full, proj.dropped_turns],
       [held.body.conversation, 'openai_compatible', PROVIDER_LABELS.openai_compatible, 'free', 'p1', 'Wing', held.body.turn, 'Look at the wing', null, 0],

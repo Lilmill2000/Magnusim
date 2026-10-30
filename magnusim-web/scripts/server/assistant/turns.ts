@@ -1966,7 +1966,8 @@ export class TurnManager {
   /**
    * GET /api/assistant/conversations[?project=<id>|home] (phase 4 spec 9.3): each conversation
    * this server holds, newest use first, with its kept turns (oldest first) and how many are no
-   * longer kept. `project`: only that project's ('home': those with none).
+   * longer kept. `project`: only that project's ('home': those with none). A coding agent's says
+   * how much of its context its agent uses (`context`, its last usage_update).
    */
   async conversationsView(project: string | null): Promise<Answer> {
     if (project !== null && project !== 'home' && !ID_RE.test(project)) return refuse(400, 'bad_project', 'project is a project id, or home.');
@@ -1997,6 +1998,8 @@ export class TurnManager {
         full: full?.reason ?? null,
         full_text: full ? fullText(full, modelLabel(c.model)) : null,
         room: c.room(settings.base_url),
+        // A coding agent's: how much of its own context it uses (it shortens its memory itself).
+        context: isAgentChoice(c.provider) && c.agentContext ? { ...c.agentContext } : null,
         title: c.title,
         turns: kept.map((t) => ({ id: t.id, title: t.title(), state: t.state, started_at: iso(t.startedAt), ended_at: t.endedAt === null ? null : iso(t.endedAt), started_by: t.startedBy })),
         dropped_turns: c.turnsDropped + (c.turns.length - kept.length),

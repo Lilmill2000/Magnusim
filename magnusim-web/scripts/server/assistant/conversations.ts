@@ -34,8 +34,9 @@
  * ended. carried() takes them as they are then.
  *
  * A conversation on a coding agent (provider `agent:<id>`, phase 3 spec 4.7) keeps no
- * messages: the agent keeps the history, so its list stays empty and repair() has nothing to
- * do. Whatever drops a conversation (forget, the 2-hour expiry, the eviction past 20) tells
+ * messages: the agent keeps the history (and shortens it itself when it fills: it is never
+ * full here; agentContext says how much of its context it uses), so its list stays empty and
+ * repair() has nothing to do. Whatever drops a conversation (forget, the 2-hour expiry, the eviction past 20) tells
  * onDrop's listeners, so the agent working for it ends with it.
  */
 import { randomBytes } from 'node:crypto';
@@ -243,6 +244,11 @@ export class Conversation {
   carry: Carried | null = null;
   /** How its last turn ended (null before any did). */
   lastEnd: LastEnd | null = null;
+  /**
+   * A coding agent's: the context its session uses, of its size (tokens), as its last usage_update
+   * said (agents/turn.ts); null before any, and for a new session of it (it remembers nothing yet).
+   */
+  agentContext: { used: number; size: number } | null = null;
   /** Its last answer's text ('' before any; a turn that said nothing keeps the one before). */
   lastAnswer = '';
   /** The person's prompts, oldest first, within CARRY_LIMITS (notePrompt). */

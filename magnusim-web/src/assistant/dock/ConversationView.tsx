@@ -228,6 +228,7 @@ export function useDockContent(): DockContent | null {
         stops={store.stops}
         localPictures={localPicturesOf}
         room={row && !row.running ? (row.room ?? null) : null}
+        agentContext={row && !row.running ? (row.context ?? null) : null}
       />
     ),
     composer:

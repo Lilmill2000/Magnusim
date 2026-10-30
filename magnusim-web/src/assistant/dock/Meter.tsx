@@ -8,10 +8,13 @@
  * - agent_account: "Billed to your <Name> account (Magnusim can't see the cost)".
  * Under it, from 70% of the conversation's nearest limit (its row's room, read when the dock
  * opens and after each request: shown only while none runs, so the numbers are current), how
- * full the conversation is: "Conversation: 72% full (pictures 72 of 100)".
+ * full the conversation is: "Conversation: 72% full (pictures 72 of 100)". A coding agent's
+ * conversation is never full (its agent shortens its memory itself): under its meter, how much of
+ * its own context the agent uses, as it last said (the row's context, shown while none runs):
+ * "Context: 150,000 of 200,000 tokens (75%)".
  */
-import type { AssistantStatus, ConversationRoom } from '../wire';
-import { dayNear, METER_FREE, meterAgent, meterUsd, roomLine } from './copy';
+import type { AgentContext, AssistantStatus, ConversationRoom } from '../wire';
+import { agentContextLine, dayNear, METER_FREE, meterAgent, meterUsd, roomLine } from './copy';
 import type { TurnView } from './turnView';
 
 /** The room readout shows from this share of the conversation's nearest limit. */
@@ -55,9 +58,10 @@ export function meterOf(v: TurnView, status: AssistantStatus | null): MeterNumbe
   return { billing, text: meterUsd(turnUsd, turnCap, estimated, dayUsd, dayCap), share, warn: shares.some((x) => x >= 0.8), ...(day ? { day } : {}) };
 }
 
-export function Meter({ view, status, room = null }: { view: TurnView; status: AssistantStatus | null; room?: ConversationRoom | null }) {
+export function Meter({ view, status, room = null, agentContext = null }: { view: TurnView; status: AssistantStatus | null; room?: ConversationRoom | null; agentContext?: AgentContext | null }) {
   const m = meterOf(view, status);
   const roomText = roomOf(room);
+  const contextText = m?.billing === 'agent_account' && agentContext && agentContext.size > 0 ? agentContextLine(agentContext.used, agentContext.size) : null;
   if (!m && !roomText) return null;
   return (
     <>
@@ -79,6 +83,11 @@ export function Meter({ view, status, room = null }: { view: TurnView; status: A
       {roomText ? (
         <p className="dock-muted dock-meter-note" data-dock-room={room?.reason}>
           {roomText}
+        </p>
+      ) : null}
+      {contextText ? (
+        <p className="dock-muted dock-meter-note" data-dock-agent-context="1">
+          {contextText}
         </p>
       ) : null}
     </>

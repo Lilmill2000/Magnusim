@@ -406,12 +406,23 @@ export interface ConversationRow {
    * 80% of the model's); null for a coding agent's (absent from an older server).
    */
   room?: ConversationRoom | null;
+  /**
+   * A coding agent's: the context its agent uses, of its size (tokens), as the agent last said;
+   * null before it said, and for any other conversation (absent from an older server).
+   */
+  context?: AgentContext | null;
   /** Its first turn's title ('' before any). */
   title: string;
   /** Its turns the server still keeps, oldest first (a turn's events: GET /api/assistant/turns/:id or the turn channel). */
   turns: ConversationTurn[];
   /** Its turns no longer kept (older than its newest 50 once an hour passed, or past 200). */
   dropped_turns: number;
+}
+
+/** How much of its own context a coding agent uses: `used` of `size` tokens. */
+export interface AgentContext {
+  used: number;
+  size: number;
 }
 
 export interface ConversationRoom {

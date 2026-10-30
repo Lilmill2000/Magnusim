@@ -91,9 +91,11 @@
  *                                        the window only); 409 {already} (the first answer wins); 404
  *   GET  /api/assistant/conversations   ?project=<id>|home → {ok, conversations:[{id, provider, label,
  *                                        billing, model, project_id, project_title, created_at,
- *                                        last_used_at, running, full, title, turns:[{id, title, state,
- *                                        started_at, ended_at, started_by}], dropped_turns}]}: this
- *                                        server's conversations (memory only), newest use first; 400
+ *                                        last_used_at, running, full, full_text, room, context, title,
+ *                                        turns:[{id, title, state, started_at, ended_at, started_by}],
+ *                                        dropped_turns}]}: this server's conversations (memory only),
+ *                                        newest use first (context: a coding agent's {used, size}
+ *                                        of its own context, else null); 400
  *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
  *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools):
  *                                        {ok, tabs:[{tab, connected, since, workspace, tools, refused,

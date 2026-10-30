@@ -33,6 +33,11 @@
  * (between prompts), or (an agent whose own tools are off) a tool or a permission request that
  * isn't Magnusim's, is an offence (`offence`, onOffence): the host ends the agent at once, and a
  * turn never prompts it again.
+ * A compaction (the agent shortening its memory of the chat: acp.ts update(), and the older
+ * tool_call form legacyCompaction reads from adapter-set fields) is never an offence: its end
+ * (completed or failed, once per id) goes to the prompt's handlers as a `compaction` update, or,
+ * between prompts, is kept for the next turn to say (takeCompactions). Its last usage_update
+ * (the context it uses, of its size) is kept too (`usage`).
  *
  * cancel(): every open permission request is answered `cancelled` first, then session/cancel
  * goes out (ACP's order). end(): the tree kill, the working folder removed, the binding
@@ -63,6 +68,7 @@ import {
   ACP,
   agentInfo,
   authenticateParams,
+  legacyCompaction,
   authMethods,
   cancelParams,
   configCurrent,
@@ -87,9 +93,11 @@ import {
   takesImages,
   type AgentUpdate,
   type AuthMethodView,
+  type CompactionView,
   type ConfigOptionView,
   type ModelsView,
   type ModesView,
+  type OursRule,
   type PermissionView,
   type StopReasonView,
 } from './acp.ts';
@@ -291,6 +299,12 @@ export class AgentSession {
    * first prompt, with the first prompt's blocks.
    */
   promptsSent = 0;
+  /** Its last usage_update: the context it uses, of its size (tokens); null before any. */
+  usage: { used: number; size: number } | null = null;
+  /** The compactions that ended (completed or failed), by id: each is said once. */
+  private readonly compactionsEnded = new Set<string>();
+  /** Those that ended between prompts, for the next turn to say (takeCompactions). */
+  private between: CompactionView[] = [];
   proc: AgentProcess | null = null;
   private rpc: RpcPeer | null = null;
   private readonly o: AgentSessionOptions;
@@ -313,6 +327,8 @@ export class AgentSession {
    * while a prompt runs.
    */
   private readonly ours: OursMatcher;
+  /** Which adapter fields it sets (legacyCompaction reads the older compaction form by them). */
+  private readonly oursRule: OursRule | null;
 
   constructor(o: AgentSessionOptions) {
     this.o = o;
@@ -321,7 +337,15 @@ export class AgentSession {
     this.binding = o.binding;
     this.info.name = o.agent.name;
     this.info.version = o.agent.version;
-    this.ours = new OursMatcher(policyOf(o.known).ours, (name) => bindingServes(o.binding.id, name));
+    this.oursRule = policyOf(o.known).ours;
+    this.ours = new OursMatcher(this.oursRule, (name) => bindingServes(o.binding.id, name));
+  }
+
+  /** The compactions that ended between prompts, oldest first, each once (the turn that takes them says so). */
+  takeCompactions(): CompactionView[] {
+    const out = this.between;
+    this.between = [];
+    return out;
   }
 
   get alive(): boolean {
@@ -707,6 +731,15 @@ export class AgentSession {
     return false;
   }
 
+  /** An update for the prompt's handlers (one that throws is logged, never breaks the pipe). */
+  private handOn(h: PromptHandlers, update: AgentUpdate): void {
+    try {
+      h.onUpdate(update);
+    } catch (err) {
+      alog('warn', 'an agent update could not be handled', { agent: this.agent.id, error: cleanText(String((err as Error)?.message ?? err), 200) });
+    }
+  }
+
   private onNotification(method: string, params: unknown): void {
     if (method === ACP.update) {
       const { sessionId, update } = sessionUpdate(params);
@@ -722,15 +755,22 @@ export class AgentSession {
       } else if (update.kind === 'model') this.model = update.model;
       // A mode it reports while its mode is being set is its own word (applyMode never overwrites it).
       if (mode !== null) this.modeReports += 1;
+      if (update.kind === 'usage' && Number.isFinite(update.used) && Number.isFinite(update.size) && update.size > 0) this.usage = { used: Math.max(0, update.used), size: update.size };
+      const h = this.state === 'prompting' || this.state === 'cancelling' ? this.handlers : null;
+      // A compaction, in either form: never its own tool, never an offence; its end said once.
+      const compaction = update.kind === 'compaction' ? update : update.kind === 'tool' ? legacyCompaction(update, this.oursRule) : null;
+      if (compaction) {
+        const ended = (compaction.status === 'completed' || compaction.status === 'failed') && !this.compactionsEnded.has(compaction.id);
+        if (!ended) return;
+        this.compactionsEnded.add(compaction.id);
+        if (h) this.handOn(h, compaction);
+        else if (this.state !== 'ended' && this.between.length < 8) this.between.push(compaction);
+        return;
+      }
       // Every tool update teaches the session's matcher (a later update may leave the fields out).
       const ours = update.kind === 'tool' ? this.ours.tool(update) : null;
-      const h = this.handlers;
-      if (h && (this.state === 'prompting' || this.state === 'cancelling')) {
-        try {
-          h.onUpdate(update);
-        } catch (err) {
-          alog('warn', 'an agent update could not be handled', { agent: this.agent.id, error: cleanText(String((err as Error)?.message ?? err), 200) });
-        }
+      if (h) {
+        this.handOn(h, update);
         return;
       }
       // Between prompts and while it starts: nobody is asked, but it is still checked (a mode

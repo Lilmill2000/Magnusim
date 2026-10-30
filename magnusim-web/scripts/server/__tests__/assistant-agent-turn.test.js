@@ -3377,6 +3377,116 @@ describe('more of an agent turn’s start (spec 4.6, 5.1, 5.2, 7.1)', LIMIT, () 
 });
 
 // ------------------------------------------------------------------------------------------------
+// An agent that shortens its memory of a long chat (compaction): a note, never the tripwire
+// ------------------------------------------------------------------------------------------------
+
+describe('an agent that shortens its memory of the chat (compaction): a note, never the lockdown tripwire', LIMIT, () => {
+  /** The adapter-set fields of the older form (claude-agent-acp 0.89.0, tool-calls/reporters/compaction.js). */
+  const FIELDS = { claudeCode: { toolName: 'compact' } };
+  const recorded = () => {
+    const file = join(HOME, 'assistant', 'settings.json');
+    return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')).agents?.claude?.lockdown_failed ?? null) : null;
+  };
+
+  it('during a message: a compaction update and the older tool_call form are each one note at their end (duplicates once), no step of its own tools; the turn ends done; its usage is kept and listed; the next message goes to the same agent, which was told Magnusim takes compaction updates', async () => {
+    const T = await import('../assistant/agents/turn.ts');
+    const w = await world();
+    try {
+      const r = await w.turn({ text: 'A long job.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script(
+        { update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'in_progress' } },
+        { update: { sessionUpdate: 'compaction_summary_chunk', compactionId: 'cmp-1', content: { type: 'text', text: 'What was done.' } } },
+        { update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'completed', summary: [{ type: 'text', text: 'What was done.' }] } },
+        // The adapter can send a terminal frame twice.
+        { update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'completed' } },
+        { update: { sessionUpdate: 'tool_call', toolCallId: 'cmp-2', title: 'Compact conversation', kind: 'think', status: 'in_progress', _meta: FIELDS } },
+        { update: { sessionUpdate: 'tool_call_update', toolCallId: 'cmp-2', status: 'in_progress', _meta: FIELDS } },
+        { update: { sessionUpdate: 'tool_call_update', toolCallId: 'cmp-2', status: 'failed', content: [{ type: 'content', content: { type: 'text', text: 'Compaction failed: busy' } }], _meta: FIELDS } },
+        { update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-3', status: 'failed', error: 'The summary was too long.' } },
+        { update: { sessionUpdate: 'usage_update', used: 150_000, size: 200_000 } },
+        { say: 'Done.' },
+      );
+      await settledTurn(r.turn);
+      const e = endOf(r.turn);
+      assert.deepEqual([e.state, e.reason], ['done', 'end_turn'], e.message);
+      const notes = H.eventsOf(r.turn)
+        .filter((x) => x.type === 'note')
+        .map((x) => x.text);
+      assert.deepEqual(notes, [T.COMPACTED_NOTE('Claude Code'), T.COMPACTION_FAILED_NOTE('Claude Code', null), T.COMPACTION_FAILED_NOTE('Claude Code', 'The summary was too long.')]);
+      assert.equal(notes[0], 'Claude Code shortened its memory of this chat to make room.');
+      assert.equal(notes[2], "Claude Code tried to shorten its memory of this chat and couldn't: The summary was too long.");
+      assert.equal(H.eventsOf(r.turn).filter((x) => x.type === 'agent_tool').length, 0, 'not a tool of its own');
+      assert.equal(recorded(), null, 'no tripwire recorded');
+      assert.deepEqual(r.turn.conv.agentContext, { used: 150_000, size: 200_000 });
+      const row = (await w.m.manager.conversationsView(null)).body.conversations.find((c) => c.id === r.body.conversation);
+      assert.deepEqual([row.context, row.room, row.full], [{ used: 150_000, size: 200_000 }, null, null]);
+      const pid = lastPid(claude);
+      const init = claude.received(pid).find((m) => m.method === 'initialize');
+      assert.deepEqual(init.params.clientCapabilities.session, { compaction: {} });
+      const r2 = await w.turn({ text: 'Go on.', provider: 'agent:claude', conversation: r.body.conversation });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      claude.script({ say: 'Going on.' });
+      await settledTurn(r2.turn);
+      assert.equal(endOf(r2.turn).state, 'done');
+      assert.equal(lastPid(claude), pid, 'the same agent');
+      assert.equal(claude.received(pid).filter((m) => m.method === 'session/prompt').length, 2);
+      assert.deepEqual(r2.turn.conv.agentContext, { used: 150_000, size: 200_000 }, 'kept for the same session');
+    } finally {
+      await w.close();
+    }
+  });
+
+  it('between messages: the older form is no offence (the agent stays) and the next message says it happened; a tool call that only looks like it still trips the lockdown', async () => {
+    const T = await import('../assistant/agents/turn.ts');
+    const S = await import('../assistant/settings.ts');
+    const w = await world();
+    try {
+      const r = await w.turn({ text: 'One.', provider: 'agent:claude' });
+      assert.equal(r.status, 202, JSON.stringify(r.body));
+      claude.script(
+        { say: 'one' },
+        { later: { hold: 'cmp-later', update: { sessionUpdate: 'tool_call', toolCallId: 'cmp-9', title: 'Compact conversation', kind: 'think', status: 'completed', rawOutput: { trigger: 'automatic', preTokens: 180_000 }, _meta: FIELDS } } },
+        { later: { update: { sessionUpdate: 'current_model_update', currentModelId: 'fake-small' } } },
+      );
+      await settledTurn(r.turn);
+      assert.equal(endOf(r.turn).state, 'done');
+      const pid = lastPid(claude);
+      const session = host.sessionOf(r.body.conversation);
+      claude.release('cmp-later');
+      await H.until(() => session.model === 'fake-small' || !session.alive, CEILING, 'the late updates');
+      assert.equal(session.alive, true, 'no offence');
+      assert.equal(session.offence, null);
+      const r2 = await w.turn({ text: 'Two.', provider: 'agent:claude', conversation: r.body.conversation });
+      assert.equal(r2.status, 202, JSON.stringify(r2.body));
+      claude.script({ say: 'two' });
+      await settledTurn(r2.turn);
+      assert.equal(endOf(r2.turn).state, 'done');
+      assert.equal(lastPid(claude), pid, 'the same agent');
+      assert.deepEqual(
+        H.eventsOf(r2.turn)
+          .filter((x) => x.type === 'note')
+          .map((x) => x.text),
+        [T.COMPACTED_NOTE('Claude Code')],
+      );
+      // The title and kind alone (its own tool's fields, or none): the agent's own tool, the tripwire.
+      const r3 = await w.turn({ text: 'Three.', provider: 'agent:claude', conversation: r.body.conversation });
+      assert.equal(r3.status, 202, JSON.stringify(r3.body));
+      claude.script({ update: { sessionUpdate: 'tool_call', toolCallId: 'fake-cmp', title: 'Compact conversation', kind: 'think', status: 'in_progress', _meta: { claudeCode: { toolName: 'Bash' } } } }, { hold: 'never' });
+      await settledTurn(r3.turn);
+      assert.deepEqual([endOf(r3.turn).state, endOf(r3.turn).reason], ['failed', 'agent_lockdown']);
+      await gone(pid);
+      await H.until(() => recorded(), CEILING, 'the tripwire record');
+    } finally {
+      claude.release('cmp-later');
+      claude.release('never');
+      await S.setAgentLockdownFailed('claude', null);
+      await w.close();
+    }
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
 // The scripted agent's own records (test support)
 // ------------------------------------------------------------------------------------------------
 

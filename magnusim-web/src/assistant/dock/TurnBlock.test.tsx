@@ -248,6 +248,18 @@ describe('the footer, the end and the meter', () => {
     expect(local.querySelector('[data-dock-room="context"]')?.textContent).toBe('Conversation: 89% full (context 92,000 of 102,400 tokens)');
   });
 
+  it("a coding agent's conversation: how much of its own context the agent uses, under its meter, whatever the share; none before it said, and never for another billing", () => {
+    const agent = view([], { billing: 'agent_account', agent: { id: 'helper', name: 'Helper', version: null } });
+    const ctx = { used: 150_000, size: 200_000 };
+    const c = block(agent, { agentContext: ctx });
+    expect(c.querySelector('[data-dock-meter]')?.textContent).toBe("Billed to your Helper account (Magnusim can't see the cost)");
+    expect(c.querySelector('[data-dock-agent-context]')?.textContent).toBe('Context: 150,000 of 200,000 tokens (75%)');
+    expect(block(agent, { agentContext: { used: 2_000, size: 200_000 } }).querySelector('[data-dock-agent-context]')?.textContent).toBe('Context: 2,000 of 200,000 tokens (1%)');
+    expect(block(agent).querySelector('[data-dock-agent-context]')).toBeNull();
+    expect(block(agent, { agentContext: ctx, newest: false }).querySelector('[data-dock-agent-context]')).toBeNull();
+    expect(block(view([], { billing: 'free' }), { agentContext: ctx }).querySelector('[data-dock-agent-context]')).toBeNull();
+  });
+
   it('every end: its label and body, and no footer', () => {
     const end = (state: string, message: string | null, summary: Partial<TurnSummary> = {}) =>
       block(view([{ type: 'end', state, reason: 'x', message }], { state: state as TurnSummary['state'], ...summary }));

@@ -5,7 +5,13 @@
  *
  * - What Magnusim says it can do (initializeParams): no file system, no terminal, no
  *   elicitation; terminal sign-in, so an agent that needs one describes a command for the
- *   person to run instead of asking for a key.
+ *   person to run instead of asking for a key; context compaction updates (session.compaction,
+ *   unstable in the protocol), so an agent that shortens its memory of a long chat says so as a
+ *   compaction_update, never as a tool call of its own (update(): kind 'compaction').
+ * - The older form an adapter sends to a client without that capability (the Claude Code
+ *   adapter: a tool_call whose adapter-set `_meta.claudeCode.toolName` is 'compact', kind 'think',
+ *   no MCP server) is read as a compaction too (legacyCompaction), only from those fields, never
+ *   from its title: it is no tool of the agent's own, so never the lockdown tripwire.
  * - session/new hands the agent Magnusim's MCP server through the bridge: Magnusim's own Node
  *   and scripts/assistant-mcp.mjs with --binding and --info, and no environment. No token and
  *   no Magnusim variable ever goes in it; the bridge reads the token from the owner-only file.
@@ -100,7 +106,10 @@ export function noteBlock(): ContentBlock {
 // Builders
 // ---------------------------------------------------------------------------------------------
 
-/** `initialize`: no file system, no terminal, terminal sign-in (both the v1 field and the `_meta` convention). */
+/**
+ * `initialize`: no file system, no terminal, terminal sign-in (both the v1 field and the `_meta`
+ * convention), and context compaction updates (`session.compaction: {}`, the whole contract).
+ */
 export function initializeParams(version: string): InitializeRequest {
   return {
     protocolVersion: PROTOCOL_VERSION,
@@ -108,6 +117,7 @@ export function initializeParams(version: string): InitializeRequest {
       fs: { readTextFile: false, writeTextFile: false },
       terminal: false,
       auth: { terminal: true },
+      session: { compaction: {} },
       _meta: { 'terminal-auth': true },
     },
     clientInfo: { name: 'magnusim', title: 'Magnusim', version },
@@ -552,6 +562,20 @@ export interface PlanEntryView {
   priority: 'high' | 'medium' | 'low';
 }
 
+export type CompactionStatus = 'in_progress' | 'completed' | 'failed' | 'cancelled';
+const COMPACTION_STATUSES = new Set<string>(['in_progress', 'completed', 'failed', 'cancelled']);
+
+/** The agent shortening its memory of the chat: a compaction_update, or the older tool_call form (legacyCompaction). */
+export interface CompactionView {
+  kind: 'compaction';
+  /** Raw (at most 256; a longer one drops the update). */
+  id: string;
+  /** null: a status Magnusim doesn't know, or an update without one. */
+  status: CompactionStatus | null;
+  /** Raw, cut to 2000: the agent's own words on a failed one; redact() and cleanText() before display. */
+  error: string | null;
+}
+
 export type AgentUpdate =
   | { kind: 'text'; text: string }
   /** A message part that isn't text (image, resource, ...): the chat shows it later. */
@@ -565,7 +589,8 @@ export type AgentUpdate =
   | { kind: 'model'; model: string }
   /** `mode` and `model` raw (the current values of the mode and model options). */
   | { kind: 'config'; options: ConfigOptionView[]; mode: string | null; model: string | null }
-  | { kind: 'usage'; used: number; size: number };
+  | { kind: 'usage'; used: number; size: number }
+  | CompactionView;
 
 export const PLAN_MAX = 32;
 
@@ -633,9 +658,33 @@ export function update(u: unknown): AgentUpdate | null {
       const size = typeof o.size === 'number' ? o.size : 0;
       return { kind: 'usage', used, size };
     }
+    case 'compaction_update': {
+      const id = str(o.compactionId);
+      if (!id || id.length > 256) return null;
+      const status = str(o.status);
+      return { kind: 'compaction', id, status: status && COMPACTION_STATUSES.has(status) ? (status as CompactionStatus) : null, error: typeof o.error === 'string' ? o.error.slice(0, 2000) : null };
+    }
+    // Its summary's text as it streams: the person reads only that it happened.
+    case 'compaction_summary_chunk':
     default:
       return null;
   }
+}
+
+/**
+ * The older compaction form (a client without session.compaction): the Claude Code adapter's
+ * tool_call / tool_call_update whose `_meta.claudeCode.toolName` is 'compact', with no MCP server
+ * and kind 'think' (or none, on an update). Adapter-set fields only (OursMatcher's rule
+ * 'tool_name_meta'); the title ("Compact conversation") never counts, so a tool call that only
+ * looks like it is still the agent's own. Null for anything else.
+ */
+export function legacyCompaction(u: ToolUpdateView, rule: OursRule | null): CompactionView | null {
+  if (rule !== 'tool_name_meta') return null;
+  const cc = obj(u.meta?.claudeCode);
+  if (!cc || cc.toolName !== 'compact' || cc.mcpServer !== undefined) return null;
+  if (u.toolKind !== null && u.toolKind !== 'think') return null;
+  const status: CompactionStatus | null = u.status === 'pending' ? 'in_progress' : u.status;
+  return { kind: 'compaction', id: u.id, status, error: null };
 }
 
 /** A `session/update` notification: its session and its mapped update. */

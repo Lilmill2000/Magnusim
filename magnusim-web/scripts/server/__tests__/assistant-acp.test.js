@@ -274,15 +274,18 @@ describe('rpc.ts: newline JSON-RPC over the agent pipes', LIMIT, () => {
 describe('acp.ts builders', () => {
   const BRIDGE = { command: process.execPath, script: join(ROOT, 'web', 'scripts', 'assistant-mcp.mjs'), binding: 'b-0123456789abcdef01234567', info: join(ROOT, 'home', 'assistant', 'mcp.json') };
 
-  it('initialize says: no file system, no terminal, terminal sign-in (spec 4.5, exactly)', () => {
+  it('initialize says: no file system, no terminal, terminal sign-in, compaction updates (spec 4.5, exactly)', () => {
     const p = acp.initializeParams('0.3.0');
     assert.deepEqual(p, {
       protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, auth: { terminal: true }, _meta: { 'terminal-auth': true } },
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, auth: { terminal: true }, session: { compaction: {} }, _meta: { 'terminal-auth': true } },
       clientInfo: { name: 'magnusim', title: 'Magnusim', version: '0.3.0' },
     });
     assert.ok(!('elicitation' in p.clientCapabilities));
     conforms('InitializeRequest', p);
+    // The Claude Code adapter's own check (0.89.0 context-compaction.js clientSupportsCompactionUpdates): a non-null object, not an array.
+    const compaction = p.clientCapabilities.session?.compaction;
+    assert.ok(typeof compaction === 'object' && compaction !== null && !Array.isArray(compaction));
   });
 
   it('session/new hands over the bridge with --binding and --info, no environment, no type key, no token', () => {
@@ -510,6 +513,15 @@ describe('acp.ts readers', () => {
     assert.equal(cfg.mode, 'plan');
     assert.equal(cfg.model, null);
     assert.deepEqual(u({ sessionUpdate: 'usage_update', used: 10, size: 100 }), { kind: 'usage', used: 10, size: 100 });
+    // Compaction (unstable): its updates, by id; its summary's chunks are ignored.
+    assert.deepEqual(u({ sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'in_progress' }), { kind: 'compaction', id: 'cmp-1', status: 'in_progress', error: null });
+    assert.deepEqual(u({ sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'completed', summary: [{ type: 'text', text: 'kept' }] }), { kind: 'compaction', id: 'cmp-1', status: 'completed', error: null });
+    assert.deepEqual(u({ sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'failed', error: 'x'.repeat(3000) }).error.length, 2000);
+    assert.equal(u({ sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'paused' }).status, null);
+    assert.equal(u({ sessionUpdate: 'compaction_update', compactionId: 'c'.repeat(257), status: 'completed' }), null);
+    assert.equal(u({ sessionUpdate: 'compaction_update', status: 'completed' }), null);
+    assert.equal(u({ sessionUpdate: 'compaction_summary_chunk', compactionId: 'cmp-1', content: { type: 'text', text: 'kept' } }), null);
+    conforms('SessionNotification', { sessionId: 's', update: { sessionUpdate: 'compaction_update', compactionId: 'cmp-1', status: 'completed' } });
     for (const ignored of ['available_commands_update', 'session_info_update', 'user_message_chunk', 'notice']) {
       assert.equal(u({ sessionUpdate: ignored }), null, ignored);
     }
@@ -651,6 +663,31 @@ describe('which tool calls are Magnusim tools: only adapter-set fields count', (
     const m = new acp.OursMatcher(null, served);
     assert.equal(m.tool(tool({ toolCallId: 'a', title: 'mcp.magnusim.add', _meta: { is_mcp_tool_call: true, ...META('mcp__magnusim__add') } })), null);
     assert.equal(m.permission(perm({ toolCallId: 'a', _meta: META('mcp__magnusim__add') }, { is_mcp_tool_approval: true })), null);
+  });
+
+  it("the older compaction form (a client without session.compaction) is read only from the adapter's fields; a tool call that only looks like it is not one", () => {
+    // Exactly as claude-agent-acp 0.89.0 builds it (tool-calls/reporters/compaction.js: started, inProgress, finished).
+    const FIELDS = { claudeCode: { toolName: 'compact' } };
+    const started = tool({ toolCallId: 'cmp-1', title: 'Compact conversation', kind: 'think', status: 'in_progress', _meta: FIELDS });
+    const going = toolUpd({ toolCallId: 'cmp-1', status: 'in_progress', _meta: FIELDS });
+    const done = toolUpd({ toolCallId: 'cmp-1', status: 'completed', rawOutput: { trigger: 'automatic', preTokens: 180000 }, _meta: FIELDS });
+    const failed = toolUpd({ toolCallId: 'cmp-1', status: 'failed', content: [{ type: 'content', content: { type: 'text', text: 'Compaction failed: x' } }], _meta: FIELDS });
+    const firstAndLast = tool({ toolCallId: 'cmp-2', title: 'Compact conversation', kind: 'think', status: 'completed', _meta: FIELDS });
+    const R = 'tool_name_meta';
+    assert.deepEqual(acp.legacyCompaction(started, R), { kind: 'compaction', id: 'cmp-1', status: 'in_progress', error: null });
+    assert.equal(acp.legacyCompaction(going, R).status, 'in_progress');
+    assert.equal(acp.legacyCompaction(done, R).status, 'completed');
+    assert.equal(acp.legacyCompaction(failed, R).status, 'failed');
+    assert.equal(acp.legacyCompaction(firstAndLast, R).status, 'completed');
+    // The same title, or the same kind, with another tool or no fields: the agent's own tool.
+    assert.equal(acp.legacyCompaction(tool({ toolCallId: 'x', title: 'Compact conversation', kind: 'think', status: 'pending' }), R), null);
+    assert.equal(acp.legacyCompaction(tool({ toolCallId: 'x', title: 'Compact conversation', kind: 'think', _meta: META('Bash', null) }), R), null);
+    assert.equal(acp.legacyCompaction(tool({ toolCallId: 'x', title: 'Compact conversation', kind: 'think', _meta: META('compact') }), R), null, 'a server named: not the adapter’s own');
+    assert.equal(acp.legacyCompaction(tool({ toolCallId: 'x', title: 'Compact conversation', kind: 'execute', _meta: FIELDS }), R), null);
+    assert.equal(acp.legacyCompaction(tool({ toolCallId: 'x', title: 'mcp.magnusim.compact', kind: 'think', _meta: { is_mcp_tool_call: true, ...FIELDS } }), 'mcp_call_flag'), null, 'only the adapter that sets those fields');
+    assert.equal(acp.legacyCompaction(started, null), null);
+    // It is not one of Magnusim's tools either (the matcher's answer stays the agent's own).
+    assert.equal(new acp.OursMatcher(R, served).tool(started), null);
   });
 });
 
