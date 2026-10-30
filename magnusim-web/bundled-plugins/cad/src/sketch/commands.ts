@@ -11,8 +11,8 @@
 //                (Ctrl+Z / Ctrl+Y, inside the sketch); VIEW: Look at.
 // Escape cancels the tool's step, then the tool, then the selection, and
 // never finishes the sketch (also in a field). A tool's own key pressed again
-// with it in hand leaves it, as Escape until the tool is gone (src/app/keyboard.ts
-// toolKeyAgain: the press of its command, not a toolbar click). Ctrl+Shift+Z redoes inside the
+// with it in hand, or its toolbar button clicked again, leaves it, as Escape until
+// the tool is gone (src/app/keyboard.ts toolKeyAgain). Ctrl+Shift+Z redoes inside the
 // sketch. Only commands that work end to end are registered. In a sketch the
 // Assistant draws, Escape, Undo, Redo and Finish sketch take it over, and the
 // tools and edits are refused with the reason (SketchMode).

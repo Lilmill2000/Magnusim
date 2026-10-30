@@ -611,8 +611,8 @@ M Mirror, O Offset, P Project, D Dimension, T Trim, X Construction, N Normal to
 (on a menu item, or a button you reached with Tab, Enter presses that instead),
 Escape steps back (a line chain first, then the tool), then clears the selection.
 A tool's own key pressed again while it is in hand (L with Line, or the key you
-gave it) puts the tool down at once, as Escape pressed until the tool is gone;
-what you drew stays. Ctrl held while drawing turns
+gave it), or its toolbar button clicked again, puts the tool down at once, as
+Escape pressed until the tool is gone; what you drew stays. Ctrl held while drawing turns
 snapping off. `Ctrl+\` collapses or expands the Sketch panel (in model mode: the
 design tree).
 

@@ -1,7 +1,7 @@
 // Frame keyboard: combos -> handlers, and command shortcuts (their keys from the keybinding
 // registry and the person's keybinds: src/app/keymap.ts, src/app/keybinds.ts); the app's
 // Assistant panel key goes past every handler of the Part (passAssistantKey); a sketch tool's key
-// pressed again leaves the tool (toolKeyAgain). Owner: INTEGRATE.
+// pressed again (or its toolbar button clicked again) leaves the tool (toolKeyAgain). Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cycleDialogFocus, openModal } from '../lib/modal';
 import type { Bridge } from '../lib/bridge';
@@ -165,10 +165,10 @@ export function isToolKeyAgain(c: ToolKeyCmd, active: string | null | undefined,
 }
 
 /**
- * The key of the sketch tool in hand pressed again: the tool is left entirely, as Escape pressed
- * until it is gone (SketchModeApi.leaveTool); true when it was. Whichever key the person bound to
- * the tool's command (the press reached it by that key). Only from the keyboard: a toolbar click
- * on the active tool's button stays as it is.
+ * The key of the sketch tool in hand pressed again, or its toolbar button clicked again (Daniel
+ * 2026-10-29: src/ui/Toolbar.tsx runClicked): the tool is left entirely, as Escape pressed until it
+ * is gone (SketchModeApi.leaveTool); true when it was. Whichever key the person bound to the tool's
+ * command (the press reached it by that key).
  */
 export function toolKeyAgain(sketch: Pick<SketchModeApi, 'state' | 'leaveTool'> | null | undefined, c: CommandDef, all: readonly CommandDef[]): boolean {
   if (!sketch || !isToolKeyAgain(c, sketch.state.get().tool, all)) return false;

@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { barIdOf, collapseFlyouts, FLYOUTS } from '../../src/ui/flyouts';
 import type { CommandDef } from '../../src/types/commands';
+import { createStateStore } from '../../src/lib/store';
 import { makeServices, type TestServices } from './fake-doc';
 import { mountUi } from './mount';
 
@@ -164,5 +165,81 @@ describe('the ribbon (v0.5.0): where a dragged command lands', () => {
     // Daniel's key tools are large; DRAW collapses last.
     for (const id of ['sketch.line', 'sketch.trim', 'sketch.dimension']) expect(RIBBON_LARGE.has(id)).toBe(true);
     expect(SQUEEZE_ORDER[SQUEEZE_ORDER.length - 1]).toBe('draw');
+  });
+});
+
+describe('a click on the toolbar button of the sketch tool in hand (Daniel 2026-10-29)', () => {
+  /** The draw tools as sketch tools, a sketch mode whose tool is `tool`: leaveTool puts it down (Select). */
+  async function setup(tool: string): Promise<{ t: TestServices; ran: string[]; left: string[]; now: () => string }> {
+    const t = makeServices();
+    const ran: string[] = [];
+    const left: string[] = [];
+    const TOOLS: Record<string, string> = { 'sketch.line': 'line', 'sketch.centerline': 'centerline', 'sketch.rectangle': 'rectangle-corner', 'sketch.rectangle-center': 'rectangle-center', 'sketch.circle': 'circle' };
+    const state = createStateStore<{ tool: string }>({ tool });
+    for (const c of DRAW) {
+      const own = TOOLS[c.id];
+      t.services.commands.register({
+        ...c,
+        ...(own ? { activeWhen: { sketchTool: own as never } } : {}),
+        run: () => {
+          ran.push(c.id);
+          if (own) state.set({ tool: own });
+        },
+      });
+    }
+    const sketch = {
+      state,
+      leaveTool: () => {
+        left.push(state.get().tool);
+        state.set({ tool: 'select' });
+        return true;
+      },
+    };
+    t.services.apis.set({ sketch: sketch as never, solver: null, files: null });
+    t.services.mode.set({ mode: 'sketch' });
+    await act(async () => {
+      ui = mountUi(t);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    return { t, ran, left, now: () => state.get().tool };
+  }
+  const button = (bar: string) => ui!.$<HTMLButtonElement>(`.tb-btn[data-command="${bar}"]`)!;
+  const arrow = (bar: string) => ui!.$<HTMLButtonElement>(`[data-tb-flyout="${bar}"]`)!;
+
+  it('puts it down, as its key pressed again; a click on another tool switches; a click with Select in hand takes the tool up', async () => {
+    const { ran, left, now } = await setup('line');
+    await act(async () => fireEvent.click(button('sketch.line')));
+    expect(left).toEqual(['line']);
+    expect(ran).toEqual([]);
+    expect(now()).toBe('select');
+    // Select in hand: the click takes Line up again.
+    await act(async () => fireEvent.click(button('sketch.line')));
+    expect(ran).toEqual(['sketch.line']);
+    expect(now()).toBe('line');
+    // Another tool: it switches, nothing is put down.
+    await act(async () => fireEvent.click(button('sketch.circle')));
+    expect(ran).toEqual(['sketch.line', 'sketch.circle']);
+    expect(left).toEqual(['line']);
+    expect(now()).toBe('circle');
+  });
+
+  it("a flyout's row of the tool in hand puts it down; a row of another variant switches to it", async () => {
+    const { ran, left, now } = await setup('rectangle-corner');
+    await act(async () => fireEvent.click(arrow('sketch.rectangle')));
+    await act(async () => fireEvent.click(ui!.$('[data-cad-menu] [data-command="sketch.rectangle-center"]')!));
+    expect(ran).toEqual(['sketch.rectangle-center']);
+    expect(left).toEqual([]);
+    expect(now()).toBe('rectangle-center');
+    // The button now shows Center rectangle, the tool in hand: a click puts it down.
+    expect(button('sketch.rectangle').getAttribute('data-variant')).toBe('sketch.rectangle-center');
+    await act(async () => fireEvent.click(button('sketch.rectangle')));
+    expect(left).toEqual(['rectangle-center']);
+    expect(now()).toBe('select');
+    await act(async () => fireEvent.click(button('sketch.rectangle')));
+    expect(now()).toBe('rectangle-center');
+    await act(async () => fireEvent.click(arrow('sketch.rectangle')));
+    await act(async () => fireEvent.click(ui!.$('[data-cad-menu] [data-command="sketch.rectangle-center"]')!));
+    expect(left).toEqual(['rectangle-center', 'rectangle-center']);
+    expect(now()).toBe('select');
   });
 });

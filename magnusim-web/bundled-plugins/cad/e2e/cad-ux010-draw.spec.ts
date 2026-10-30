@@ -23,6 +23,10 @@
 //    Escape after a segment still only ends the chain; R with a corner placed drops it and leaves
 //    Rectangle, and R leaves Center rectangle too (the Rectangle flyout's key); a key typed into a
 //    value box stays there.
+//  - tool-click-leaves (Daniel 2026-10-29): the toolbar button of the tool in hand clicked again
+//    puts it down as its key does (Line after a segment: Select, its button not pressed, a click
+//    draws nothing, the segment stays); a click on another tool switches (Line to Circle); Center
+//    rectangle taken from its flyout's list, then its button (which shows it) clicked: put down.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { commandControl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
@@ -704,5 +708,49 @@ test("cad:tool-key-leaves a tool's own key pressed again leaves the tool entirel
   await page.keyboard.press('Escape');
   await expect.poll(() => toolNow(page)).toBe('select');
   expect(await lineCount(page)).toBe(2);
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:tool-click-leaves the toolbar button of the tool in hand clicked again puts it down, as its key does; a click on another tool switches", async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  const tb = frame.locator('[data-cad-toolbar="sketch"]');
+  const lineBtn = tb.locator('.tb-btn[data-command="sketch.line"]');
+  // Line's button, one segment, Line's button again: the tool is gone, the segment stays.
+  await lineBtn.click();
+  await expect.poll(() => toolNow(page)).toBe('line');
+  await expect(lineBtn).toHaveClass(/is-active/);
+  await clickAt(page, [-30, 10]);
+  await clickAt(page, [0, 10]);
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(1);
+  const [mx, my] = await at(page, [10, 20, 0]);
+  await page.mouse.move(mx, my, { steps: 3 });
+  await expect(hint(frame)).toContainText('Click the next point');
+  await lineBtn.click();
+  await expect.poll(() => toolNow(page)).toBe('select');
+  await expect(lineBtn).not.toHaveClass(/is-active/);
+  await expect(hint(frame)).toContainText('Click to select');
+  await clickAt(page, [20, 30]);
+  await clickAt(page, [40, 30]);
+  await sketchIdle(page);
+  expect(await lineCount(page)).toBe(1);
+  // A click on another tool switches to it.
+  await lineBtn.click();
+  await expect.poll(() => toolNow(page)).toBe('line');
+  await runCommand(frame, 'sketch.circle');
+  await expect.poll(() => toolNow(page)).toBe('circle');
+  await expect(lineBtn).not.toHaveClass(/is-active/);
+  await expect(tb.locator('.tb-btn[data-command="sketch.circle"]')).toHaveClass(/is-active/);
+  // Center rectangle from the Rectangle flyout's list; its button then shows it, and a click on it puts it down.
+  await runCommand(frame, 'sketch.rectangle-center');
+  await expect.poll(() => toolNow(page)).toBe('rectangle-center');
+  const rectBtn = tb.locator('.tb-btn[data-command="sketch.rectangle"]');
+  await expect(rectBtn).toHaveAttribute('data-variant', 'sketch.rectangle-center');
+  await expect(rectBtn).toHaveClass(/is-active/);
+  await rectBtn.click();
+  await expect.poll(() => toolNow(page)).toBe('select');
+  await expect(rectBtn).not.toHaveClass(/is-active/);
+  expect(await lineCount(page)).toBe(1);
   expect(seen.errors).toEqual([]);
 });

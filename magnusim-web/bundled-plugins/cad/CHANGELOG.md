@@ -156,6 +156,9 @@ is changed with the Part open, from any Magnusim window:
   key you gave one of a group's other tools (Centerline, say) takes that tool
   up even while another tool of its group is in hand, as its row in the
   group's list says.
+- Clicking the toolbar button of the tool in hand puts it down too, exactly
+  as its key does (also its row in a group's list or a More menu); a click on
+  another tool still takes that one up.
 
 **A Join of pieces that do not touch is a note, not a warning.** Joining tools
 that do not touch the target (an inlay grouped from spots and rings, used later
