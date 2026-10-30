@@ -43,8 +43,11 @@ const withoutName = (f: Feature) => {
   return JSON.stringify(rest);
 };
 
-/** The difference between two committed models, as lines a model reads ("renamed Extrude 3 to Boss"). */
-export function describeChanges(before: CadDoc, after: CadDoc): string[] {
+/**
+ * The difference between two committed models, as lines a model reads ("renamed Extrude 3 to Boss").
+ * `projectLinks` false (Magnusim CAD: no simulation): nothing about a body's simulation setting.
+ */
+export function describeChanges(before: CadDoc, after: CadDoc, projectLinks = true): string[] {
   if (before === after) return [];
   const out: string[] = [];
   const old = new Map(before.features.map((f) => [f.id, f]));
@@ -87,7 +90,7 @@ export function describeChanges(before: CadDoc, after: CadDoc): string[] {
     if (!o || !b2) continue;
     if (o.name !== b2.name) out.push(`renamed body ${o.name} to ${b2.name}`);
     if (o.color !== b2.color) out.push(`set the colour of ${b2.name} to ${b2.color}`);
-    if ((o.simulation === false) !== (b2.simulation === false)) out.push(b2.simulation === false ? `left ${b2.name} out of the simulation` : `put ${b2.name} back into the simulation`);
+    if (projectLinks && (o.simulation === false) !== (b2.simulation === false)) out.push(b2.simulation === false ? `left ${b2.name} out of the simulation` : `put ${b2.name} back into the simulation`);
   }
   return out;
 }
@@ -98,7 +101,8 @@ function capped(lines: string[]): string[] {
   return [...lines.slice(0, USER_CHANGES_MAX - 1), `and ${lines.length - USER_CHANGES_MAX + 1} more changes`];
 }
 
-export function createRevTracker(o: { doc: DocService; bus: EventBus<CadEvents> }): RevTracker {
+export function createRevTracker(o: { doc: DocService; bus: EventBus<CadEvents>; projectLinks?: () => boolean }): RevTracker {
+  const links = () => o.projectLinks?.() !== false;
   let rev = 0;
   let last = o.doc.committed();
   const offState = o.doc.state.subscribe(() => {
@@ -146,10 +150,10 @@ export function createRevTracker(o: { doc: DocService; bus: EventBus<CadEvents> 
         // The person's: before each own step, and after the last one.
         let from = was;
         for (const st of owns.get(key) ?? []) {
-          diff.push(...describeChanges(from, st.before));
+          diff.push(...describeChanges(from, st.before, links()));
           from = st.after;
         }
-        diff.push(...describeChanges(from, o.doc.committed()));
+        diff.push(...describeChanges(from, o.doc.committed(), links()));
       }
       return capped([...notes, ...diff]);
     },

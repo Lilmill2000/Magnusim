@@ -25,6 +25,7 @@
 //                                    bodies); the person clicks Export (the download is theirs).
 //     send_to_simulation             save, then link, as the app's Back runs it (services.apis.link);
 //                                    value "leave": then Back itself, after this call has answered.
+//                                    Not in Magnusim CAD (projectLinks false): no such action there.
 //   Keybinds (src/app/keybinds.ts, the person's ws.prefs "keybinds"):
 //     keybind_get                    one command's keys (target an id or a label) or all ("").
 //     keybind_set, keybind_reset, keybind_clear   Daniel: the AI may read keybinds but changes them
@@ -68,7 +69,7 @@ import { heartbeat, waitForRead } from '../busy';
 import { ToolError } from '../errors';
 import { noteOwnRollback } from '../own-rollback';
 import { runtimeOf } from '../runtime';
-import { WORKSPACE_ACTIONS, type WorkspaceAction } from '../schemas';
+import { workspaceActionsFor, type WorkspaceAction } from '../schemas';
 import { centreOf, hitWords, selectAny, withScene, type Hit } from '../selectors/resolve';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { parseSection, sectionAtMiddle, sectionData } from '../view';
@@ -85,9 +86,11 @@ interface Input {
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 const bad = (field: string, message: string, detail: Record<string, unknown> = {}) => new ToolError('bad_input', message, { detail: { field, ...detail } });
 
-function readInput(input: Record<string, unknown>): Input {
+/** The call's input; `projectLinks` false (Magnusim CAD): the actions offered there (no send_to_simulation). */
+function readInput(input: Record<string, unknown>, projectLinks = true): Input {
   const action = input.action as WorkspaceAction;
-  if (!(WORKSPACE_ACTIONS as readonly string[]).includes(String(action))) throw bad('action', `action must be one of ${WORKSPACE_ACTIONS.join(', ')}.`);
+  const actions = workspaceActionsFor(projectLinks);
+  if (!(actions as readonly string[]).includes(String(action))) throw bad('action', `action must be one of ${actions.join(', ')}.`);
   const raw = input.items ?? [];
   if (!Array.isArray(raw) || raw.length > 40 || raw.some((x) => typeof x !== 'string')) throw bad('items', 'items must list at most 40 strings.');
   return { action, target: str(input.target), value: str(input.value), items: (raw as string[]).map((x) => x.trim()).filter(Boolean), asked: input.person_asked === true };
@@ -449,7 +452,9 @@ async function banana(ctx: CallCtx, i: Input): Promise<ToolReply> {
     if (r !== true) throw new ToolError('not_editable', `The banana cannot be shown now: ${r}.`);
     if (!shown()) throw new ToolError('internal', 'The banana could not be shown (its model did not load).');
   } else return done('The banana is already shown', { banana: placeWords(shown()!) });
-  return done(`The banana for scale is at ${placeWords(shown()!).at} (not part of the model or the simulation)`, { banana: placeWords(shown()!) });
+  // Magnusim CAD (no projects) has no simulation to speak of.
+  const not = services.bridge.projectLinks() ? 'not part of the model or the simulation' : 'not part of the model';
+  return done(`The banana for scale is at ${placeWords(shown()!).at} (${not})`, { banana: placeWords(shown()!) });
 }
 
 const round = (x: number) => Math.round(x * 1000) / 1000;
@@ -943,7 +948,7 @@ async function keybind(ctx: CallCtx, i: Input): Promise<ToolReply> {
 const NO_KERNEL_WAIT: ReadonlySet<WorkspaceAction> = new Set(['reload', 'keep_mine', 'retry_save', 'retry_kernel', 'import_step', 'keybind_get', 'keybind_set', 'keybind_reset', 'keybind_clear']);
 
 async function run(ctx: CallCtx): Promise<ToolReply> {
-  const i = readInput(ctx.input);
+  const i = readInput(ctx.input, ctx.services.bridge.projectLinks());
   // The heal is a change of the Part: one Assistant step, on the person's own Import panel.
   if (i.action === 'reheal') return runEdit(ctx, healTool);
   // Reload, Keep mine and the retries are what a Part that cannot answer needs: no wait for the kernel.

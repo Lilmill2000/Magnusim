@@ -40,6 +40,16 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation
   there. A choice made in Magnusim stays with the design.
+- In Magnusim CAD nothing else speaks of projects or a simulation either: no
+  CFD PREP group or Enclosure command (toolbar, keys, Settings → Keybinds), no
+  "or the simulation" in the Banana's hint, no "From the project" row in an
+  import's panel, and a missing stored file "is not with the Part any more". A
+  Combine on an Enclosure's body leaves Keep the tool bodies as you set it, and
+  the volume chip lists the biggest bodies first. An Enclosure made in Magnusim
+  stays as it is there: its body is built, and its panel shows its shape,
+  bodies and size read-only, with Done and Delete. The Assistant there has no
+  send to the simulation, no enclosure and no words of either, and its
+  instructions are shorter. In Magnusim all of these are as before.
 - The sketch toolbar's drawing tools come in groups, one button each with an
   arrow beside it that lists the group's tools (the button runs the one used
   last): Line (Centerline, Midpoint line), Rectangle (Center, 3-point corner,

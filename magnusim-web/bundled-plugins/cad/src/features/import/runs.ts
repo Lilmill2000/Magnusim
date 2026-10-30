@@ -182,7 +182,8 @@ export function createImportRuns(services: AppServices, deps: () => PipelineDeps
           const since = performance.now();
           onStage({ stage: 'loading', done: 0, total: f.source.size, since });
           const bytes = await d.files.read(f.source, { signal: abort.signal, onProgress: (p) => onStage({ stage: 'loading', done: p.done, total: p.total, since }) });
-          if (!bytes) throw new Error(`its source STEP (${f.source.rel}) is not in the project any more`);
+          // Magnusim CAD (projectLinks false) has no projects: a Part's files are its own.
+          if (!bytes) throw new Error(`its source STEP (${f.source.rel}) is not ${services.bridge.projectLinks() ? 'in the project' : 'with the Part'} any more`);
           h = await readAndHeal(d, { bytes, fileName: f.source.fileName, tolerance, sew, large: f.source.size > LARGE_STEP_BYTES }, abort.signal, onStage);
           if (h.raw) {
             if (l.raw?.length) await services.kernel.call('release', { ids: l.raw }).catch(() => {});

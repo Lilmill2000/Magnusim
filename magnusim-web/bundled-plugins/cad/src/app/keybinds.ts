@@ -33,8 +33,8 @@ import {
   defaultKeys,
   displayCombo,
   isAssistantCombo,
-  KEYMAP,
   keymapEntry,
+  keymapFor,
   normaliseCombo,
   parseCombo,
   SHOWN_VIA,
@@ -189,7 +189,13 @@ async function readLayout(): Promise<LayoutMap | null> {
   }
 }
 
-export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; assistant?: AssistantKeysSource | null }): Keybinds {
+export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; assistant?: AssistantKeysSource | null; projectLinks?: boolean }): Keybinds {
+  // The commands this Part has: in Magnusim CAD (projectLinks false) none of a project's (keymap.ts `projects`).
+  const map = keymapFor(o.projectLinks !== false);
+  const entryOf = (id: string): KeymapEntry | null => {
+    const e = keymapEntry(id);
+    return e && (o.projectLinks !== false || !e.projects) ? e : null;
+  };
   // The overrides in effect: the stored ones (as last read) with this page's changes on top.
   let over: Record<string, string[]> = {};
   let stored: Record<string, string[]> = {};
@@ -295,13 +301,13 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
     over = next;
   };
   const conflictsWith = (id: string, combo: string): string[] => {
-    const me = keymapEntry(id);
+    const me = entryOf(id);
     if (!me) return [];
-    return KEYMAP.filter((x) => x.id !== id && contextsMeet(me.context, x.context) && keysOf(x.id).includes(combo)).map((x) => x.id);
+    return map.filter((x) => x.id !== id && contextsMeet(me.context, x.context) && keysOf(x.id).includes(combo)).map((x) => x.id);
   };
-  const named = (id: string) => ({ id, label: keymapEntry(id)?.label ?? id, name: whereName(id) });
+  const named = (id: string) => ({ id, label: entryOf(id)?.label ?? id, name: whereName(id) });
   const assign = (id: string, combos: readonly string[], replace: boolean): KeybindResult => {
-    const entry = keymapEntry(id);
+    const entry = entryOf(id);
     if (!entry) return { ok: false, reason: 'unknown', id, message: `No command or key action is called ${id}` };
     // Worked out from the saved keybinds only (review: from the defaults a Replace took a saved key
     // from a command nobody named and left a clash). An unreadable read is tried again.
@@ -322,7 +328,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
     const takers = [...new Set(taken.map((t) => t.w))];
     if (taken.length && !replace) {
       const first = taken[0];
-      return { ok: false, reason: 'conflict', id, combo: first.c, with: first.w, label: keymapEntry(first.w)?.label ?? first.w, conflicts: takers.map(named) };
+      return { ok: false, reason: 'conflict', id, combo: first.c, with: first.w, label: entryOf(first.w)?.label ?? first.w, conflicts: takers.map(named) };
     }
     for (const { c, w } of taken) put(w, keysOf(w).filter((k) => k !== c));
     put(id, keys);
@@ -408,14 +414,14 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
     if (!v || keysOf(id).length) return null;
     const w = working(v);
     if (!w.length) return null;
-    return { id: v, label: keymapEntry(v)?.label ?? v, shown: displayCombo(w[0], layout) };
+    return { id: v, label: entryOf(v)?.label ?? v, shown: displayCombo(w[0], layout) };
   };
   return {
     ready,
     load,
     known,
-    entries: () => KEYMAP,
-    entry: keymapEntry,
+    entries: () => map,
+    entry: entryOf,
     current: keysOf,
     keys: keysOf,
     defaults: defaultKeys,
@@ -426,13 +432,13 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
     assistantKeys,
     appClashes: () => appClashesIn(keysOf, assistantKeys()),
     shown(id) {
-      if (!keymapEntry(id)) return undefined;
+      if (!entryOf(id)) return undefined;
       const k = working(id);
       if (k.length) return displayCombo(k[0], layout);
       return via(id)?.shown;
     },
     via,
-    owners: (combo) => KEYMAP.filter((x) => keysOf(x.id).includes(combo)).map((x) => x.id),
+    owners: (combo) => map.filter((x) => keysOf(x.id).includes(combo)).map((x) => x.id),
     conflictsWith: (id, combo) => conflictsWith(id, normaliseCombo(combo)),
     setKeybind: (id, combo) => assign(id, [combo], false),
     replace: (id, combo) => assign(id, [combo], true),
@@ -452,7 +458,7 @@ export function createKeybinds(o: { prefs: PrefsApi | null; layout?: boolean; as
       const a = assistantKeys();
       const next: Record<string, string[]> = {};
       const kept: ResetAllResult['kept'] = [];
-      for (const e of KEYMAP) {
+      for (const e of map) {
         const keys = defaultKeys(e.id);
         const off = keys.filter((c) => isAssistantCombo(c, a));
         if (!off.length) continue;

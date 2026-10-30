@@ -47,6 +47,10 @@ describe('describeChanges', () => {
       'left Plate out of the simulation',
     ]);
     expect(describeChanges(a, a)).toEqual([]);
+    // Magnusim CAD (projectLinks false: no simulation): nothing of a body's simulation setting.
+    expect(describeChanges(a, b, false)).not.toContain('left Plate out of the simulation');
+    expect(describeChanges(a, b, false).at(-1)).toBe('set the colour of Plate to #ff0000');
+    expect(describeChanges(a, b, true)).toEqual(describeChanges(a, b));
   });
 });
 

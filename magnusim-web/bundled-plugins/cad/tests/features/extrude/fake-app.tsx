@@ -136,10 +136,11 @@ export interface FakeApp {
   dispose(): void;
 }
 
-export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: CadModule[] } = {}): Promise<FakeApp> {
+export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: CadModule[]; projectLinks?: boolean } = {}): Promise<FakeApp> {
   const errors: string[] = [];
   const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => void errors.push(args.map(String).join(' ')));
-  const ws = createFakeWorkspace({ units: opts.units ?? 'metric' });
+  // projectLinks false: Magnusim CAD's welcome (no projects, no simulation); left out, Magnusim's.
+  const ws = createFakeWorkspace({ units: opts.units ?? 'metric', ...('projectLinks' in opts ? { projectLinks: opts.projectLinks } : {}) });
   const kernel = new ProfilesFakeKernel();
   const bus = createBus<CadEvents>();
   const doc = createDocService({ bridge: createBridge(ws), kernel, bus, saveIntervalMs: 20, saveViewIntervalMs: 20, log: () => {} });

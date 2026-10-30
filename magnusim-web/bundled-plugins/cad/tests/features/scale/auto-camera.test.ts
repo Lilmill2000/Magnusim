@@ -52,7 +52,7 @@ function app() {
       },
     },
     viewport: createStateStore({ handle }),
-    bridge: { toast: vi.fn() },
+    bridge: { toast: vi.fn(), projectLinks: () => true },
   } as unknown as AppServices;
   const off = scale.install!(services);
   return { services, commands, refits, placed, off };

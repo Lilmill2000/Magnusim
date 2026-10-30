@@ -15,6 +15,10 @@
 //   Size      what was made, and a word on the air volume (a separate Combine)
 // No Operation row: it only ever makes a new body. Every valid change applies
 // live; Done closes; Delete removes it (a new one: discards it).
+// Magnusim CAD (projectLinks false: no simulation, no Enclosure command) keeps
+// an Enclosure made in Magnusim as it is (kept.ts): the panel shows its shape,
+// bodies and size read-only with KEPT_WORDS, no arrows in the view, and no word
+// of the fluid or the air (Done, Delete and rename as on any panel).
 // Owner: SD pass (src/features/enclosure/).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Fragment, useEffect, useRef, useState } from 'react';
@@ -34,6 +38,7 @@ import { paletteOf } from '../../viewport/palette';
 import { isEnclosureBody } from './def';
 import { AXIS_LABELS, enclosureShape, paddingFromMode, resolveEnclosure, shapeVolume, sideCuts, SIDE_KEYS, sideLabel, sidesOf } from './geometry';
 import { shapeOfOutput, startEnclosureHandles } from './handles';
+import { enclosureKept, KEPT_WORDS } from './kept';
 
 /** "A", "A and B", "A, B and C". */
 function listWords(items: string[]): string {
@@ -74,6 +79,8 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   }) as EnclosureOutput | null;
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
   const handle = useStateStore(services.viewport, (s) => s.handle);
+  // Magnusim CAD keeps an Enclosure made in Magnusim as it is: shown, not changed (kept.ts).
+  const kept = enclosureKept(services, f);
   const [picking, setPicking] = useState(false);
   // Sides whose field shows a refusal for typed text: the cut note does not speak for them (UX review).
   const [refused, setRefused] = useState<ReadonlySet<EnclosureSide>>(() => new Set());
@@ -114,14 +121,14 @@ export function EnclosurePanel(props: FeaturePanelProps) {
   const outRef = useRef(output);
   outRef.current = output;
   useEffect(() => {
-    if (!handle || typeof handle.pushTool !== 'function' || props.session.owner) return;
+    if (!handle || typeof handle.pushTool !== 'function' || props.session.owner || kept) return;
     const t = startEnclosureHandles(services, handle, { session: props.session, color: paletteOf(handle).ink, faceColor: paletteOf(handle).face?.ink ?? null, output: () => outRef.current });
     tool.current = t;
     return () => {
       t.stop();
       tool.current = null;
     };
-  }, [handle, props.session]);
+  }, [handle, props.session, kept]);
   useEffect(() => {
     tool.current?.refresh();
   });
@@ -176,6 +183,32 @@ export function EnclosurePanel(props: FeaturePanelProps) {
 
   const id = (k: string) => `cad-enclosure-${props.feature}-${k}`;
   const padding = PADDINGS.find((p) => p.value === f.padding) ?? PADDINGS[0];
+
+  if (kept) {
+    const picked = (f.bodies ?? []).map(nameOf);
+    return (
+      <P2FeaturePanel props={props} kit={kit}>
+        <Field label="Shape" field="shape">
+          <span className="cad-p2-readout" data-enclosure-readout="shape">
+            {f.shape === 'box' ? 'Box' : `Cylinder about ${AXIS_LABELS[f.axis]}`}
+          </span>
+        </Field>
+        <Field label="Bodies" field="bodies">
+          <span className="cad-p2-readout" data-enclosure-readout="bodies">
+            {picked.length ? picked.join(', ') : allText}
+          </span>
+        </Field>
+        {sizeText ? (
+          <div className="cad-p2-sub" data-enclosure-size="1">
+            Size: {sizeText}
+          </div>
+        ) : null}
+        <div data-enclosure-kept="1">
+          <Hint>{KEPT_WORDS}</Hint>
+        </div>
+      </P2FeaturePanel>
+    );
+  }
 
   return (
     <P2FeaturePanel props={props} kit={kit} fieldsSay={built && !built.ok ? built.message : null}>

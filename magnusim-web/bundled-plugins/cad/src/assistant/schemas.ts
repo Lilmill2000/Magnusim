@@ -114,6 +114,12 @@ export const WORKSPACE_ACTIONS = [
   'keybind_clear',
 ] as const;
 export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
+/** The workspace actions where the host has no projects (Magnusim CAD): no send_to_simulation. */
+const WORKSPACE_ACTIONS_WITHOUT_PROJECTS: readonly WorkspaceAction[] = Object.freeze(WORKSPACE_ACTIONS.filter((a) => a !== 'send_to_simulation'));
+/** The workspace tool's actions on this host: every one where it has projects (Magnusim), none of a simulation's in Magnusim CAD. */
+export function workspaceActionsFor(projectLinks: boolean): readonly WorkspaceAction[] {
+  return projectLinks ? WORKSPACE_ACTIONS : WORKSPACE_ACTIONS_WITHOUT_PROJECTS;
+}
 
 /** The sketch entity kinds and relation/dimension kinds (the sketch tool's enums). */
 export const SKETCH_ENTITY_KINDS = ['point', 'line', 'centerline', 'polyline', 'midpoint_line', 'circle', 'circle_3pt', 'arc', 'rect', 'center_rect', 'rect_3pt', 'center_rect_3pt', 'parallelogram', 'slot', 'arc_slot', 'polygon', 'sector', 'spline', 'control_spline', 'ellipse', 'ellipse_arc', 'parabola', 'conic'] as const;
@@ -168,6 +174,92 @@ function bodySpec(simulation: boolean): ToolSpec {
       color: str(7, '"#rrggbb" or ""'),
       ...(simulation ? { simulation: en(['keep', 'include', 'exclude'], 'In the simulation geometry') } : {}),
       visibility: en(['keep', 'show', 'hide'], "In the person's view"),
+    }),
+  };
+}
+
+/**
+ * The direct tool. `enclosure`: where the host has projects (Magnusim), the Enclosure (CFD prep: a
+ * box or a cylinder around the bodies) is one of its kinds; Magnusim CAD (projectLinks false) has no
+ * Enclosure command, and the tool there has neither the kind nor its fields, nor speaks of them.
+ */
+function directSpec(enclosure: boolean): ToolSpec {
+  return {
+    name: 'direct',
+    title: enclosure ? 'Direct edits and enclosure' : 'Direct edits',
+    risk: 'edit',
+    timeoutS: 240,
+    description: enclosure
+      ? 'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). delete_body: bodies leave the model from here on. repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.'
+      : 'Direct edits (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). delete_body: bodies leave the model from here on. repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false. A failure changes nothing.',
+    schema: obj({
+      edit: EDIT,
+      name: NAME,
+      kind: en(enclosure ? DIRECT_KINDS : DIRECT_KINDS.filter((k) => k !== 'enclosure'), 'What to do'),
+      faces: arr(SEL('A face selector'), 0, 60, 'press_pull, delete_faces: faces of one body; else [].'),
+      distance: enclosure
+        ? EXPR('press_pull: the distance; split by Top, Front, Right: the offset; enclosure percent or fixed: the padding; else ""')
+        : EXPR('press_pull: the distance; split by Top, Front, Right: the offset; else ""'),
+      bodies: enclosure
+        ? arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; delete_body: the bodies to delete; else [].')
+        : arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; delete_body: the bodies to delete; else [].'),
+      tool: SEL('split: Top, Front, Right, a flat face or a body; else ""'),
+      keep_tool: bool('split by a body: keep the tool body'),
+      ...(enclosure
+        ? {
+            shape: en(['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'], 'enclosure: box or a cylinder about X, Y, Z; else box'),
+            padding: en(['zero', 'percent', 'fixed'], 'enclosure: how far the sides sit out; else zero'),
+            sides: arr(obj({ side: en(['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'], 'A side'), value: EXPR('A length out from the part', 1) }), 0, 9, 'enclosure: sides set on their own; else [].'),
+          }
+        : {}),
+    }),
+  };
+}
+
+/**
+ * The workspace tool. `simulation`: where the host has projects (Magnusim), the action that sends the
+ * Part to the project (send_to_simulation, as Back does); Magnusim CAD (projectLinks false) has no
+ * simulation, and the tool there neither has the action nor speaks of it.
+ */
+function workspaceSpec(simulation: boolean): ToolSpec {
+  return {
+    name: 'workspace',
+    title: 'Workspace and view',
+    risk: 'edit',
+    timeoutS: 180,
+    description: simulation
+      ? "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, body or construction), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export), send_to_simulation (save and link, as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana: banana_show, banana_hide, banana_place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true)."
+      : "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, body or construction), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana: banana_show, banana_hide, banana_place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true).",
+    schema: obj({
+      action: en(workspaceActionsFor(simulation), 'What to do'),
+      target: str(300, 'What it acts on, or ""'),
+      value: str(200, 'The value, or ""'),
+      items: arr(str(300, 'A selector, name or kind'), 0, 40, 'Lists: selection, filter, export bodies; else []'),
+      person_asked: bool('The person asked for this view or keybind change in this request'),
+    }),
+  };
+}
+
+/**
+ * The edit_feature tool. `enclosure`: where the host has projects (Magnusim), its words name the
+ * Enclosure's choice fields (padding, shape, axis) among the examples; Magnusim CAD keeps an Enclosure
+ * made in Magnusim as it is (edit_feature refuses its values there), and the tool there names none.
+ */
+function editFeatureSpec(enclosure: boolean): ToolSpec {
+  return {
+    name: 'edit_feature',
+    title: 'Change a feature',
+    risk: 'edit',
+    timeoutS: 180,
+    description: enclosure
+      ? 'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", padding "fixed", shape "cylinder", axis "Z", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason. To Try repair or Retry a failed feature use direct.'
+      : 'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason. To Try repair or Retry a failed feature use direct.',
+    schema: obj({
+      feature: str(80, 'The feature', 1),
+      set: arr(obj({ field: str(40, 'Field', 1), value: EXPR('An expression, or a choice field\'s word ("true", "false" for on/off)') }), 0, 20, 'Values to change.'),
+      rename_to: str(40, '"" keeps it'),
+      suppress: en(['keep', 'suppress', 'unsuppress'], 'Suppression'),
+      move: str(120, '"", "end", "before X" or "after X"'),
     }),
   };
 }
@@ -423,21 +515,7 @@ const SPECS: ToolSpec[] = [
     }),
   },
   bodySpec(true),
-  {
-    name: 'edit_feature',
-    title: 'Change a feature',
-    risk: 'edit',
-    timeoutS: 180,
-    description:
-      'Change one feature without resending everything: set expression fields by their tool field name (distance, distance2, angle, angle2, size, size2, count, spacing, count2, spacing2, or a sketch dimension\'s id), and choice or on/off fields by name with one of their words (flip "true", op "cut", method "midplane", padding "fixed", shape "cylinder", axis "Z", keepTool, orientation, ruled, along, fromEnd: get_model full lists a feature\'s values and choices); rename it (rename_to), suppress or unsuppress it, or move it in the history (move: "end", "before <feature>", "after <feature>", or "" to keep). A change that makes a working feature fail, or leaves it incomplete, changes nothing and names it. A move that breaks an order a later feature needs is refused with the reason. To Try repair or Retry a failed feature use direct.',
-    schema: obj({
-      feature: str(80, 'The feature', 1),
-      set: arr(obj({ field: str(40, 'Field', 1), value: EXPR('An expression, or a choice field\'s word ("true", "false" for on/off)') }), 0, 20, 'Values to change.'),
-      rename_to: str(40, '"" keeps it'),
-      suppress: en(['keep', 'suppress', 'unsuppress'], 'Suppression'),
-      move: str(120, '"", "end", "before X" or "after X"'),
-    }),
-  },
+  editFeatureSpec(true),
   {
     name: 'undo',
     title: 'Undo or redo',
@@ -479,27 +557,7 @@ const SPECS: ToolSpec[] = [
       from_end: bool('on_edge: measured from the other end'),
     }),
   },
-  {
-    name: 'direct',
-    title: 'Direct edits and enclosure',
-    risk: 'edit',
-    timeoutS: 240,
-    description:
-      'Direct edits and CFD prep (edit "" makes one; edit: a name replaces its inputs), as the person\'s panels do. kind press_pull: faces of one body move along their own normals by distance (above 0 adds, below 0 removes). delete_faces: faces of one body go and their neighbours grow over the gap. split: bodies split by tool: Top, Front or Right moved distance ("" for 0), the plane of a flat face, or another body (keep_tool keeps it). enclosure: a box or a cylinder about X, Y or Z (shape) around bodies ([] every solid body before it); padding zero, percent (distance "10") or fixed (distance "10 mm"); sides rows set single sides on their own (box +x, -x, +y, -y, +z, -z; cylinder radius, top, bottom). delete_body: bodies leave the model from here on. repair: the person\'s Try repair of the failed feature named in edit; retry: build again the feature in edit that the geometry kernel stopped. Fields a kind does not use: "", [], false, shape box, padding zero. A failure changes nothing.',
-    schema: obj({
-      edit: EDIT,
-      name: NAME,
-      kind: en(DIRECT_KINDS, 'What to do'),
-      faces: arr(SEL('A face selector'), 0, 60, 'press_pull, delete_faces: faces of one body; else [].'),
-      distance: EXPR('press_pull: the distance; split by Top, Front, Right: the offset; enclosure percent or fixed: the padding; else ""'),
-      bodies: arr(str(200, 'A body'), 0, 32, 'split: the bodies to split; enclosure: the bodies to enclose; delete_body: the bodies to delete; else [].'),
-      tool: SEL('split: Top, Front, Right, a flat face or a body; else ""'),
-      keep_tool: bool('split by a body: keep the tool body'),
-      shape: en(['box', 'cylinder_x', 'cylinder_y', 'cylinder_z'], 'enclosure: box or a cylinder about X, Y, Z; else box'),
-      padding: en(['zero', 'percent', 'fixed'], 'enclosure: how far the sides sit out; else zero'),
-      sides: arr(obj({ side: en(['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'], 'A side'), value: EXPR('A length out from the part', 1) }), 0, 9, 'enclosure: sides set on their own; else [].'),
-    }),
-  },
+  directSpec(true),
   {
     name: 'hole',
     title: 'Holes',
@@ -521,21 +579,7 @@ const SPECS: ToolSpec[] = [
       distance: EXPR('blind: the depth; through: ""'),
     }),
   },
-  {
-    name: 'workspace',
-    title: 'Workspace and view',
-    risk: 'edit',
-    timeoutS: 180,
-    description:
-      "Things the person controls around the model, one action per call (unused target, value, items: \"\" or []; help workspace has each in full). Tree: roll_back_to (target a feature), roll_to_end, show and hide (a sketch, body or construction), expand, collapse, origin_planes, select (items: selectors), selection_filter. Part and session: rename_part, reload, keep_mine, retry_save, retry_kernel, import_step (the person picks the file), reheal (an import: the one undo step here), export_step (fills in the person's Export STEP panel; they click Export), send_to_simulation (save and link, as Back does). Toolbar: toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows. Banana: banana_show, banana_hide, banana_place. The person's view: fit, standard_view, normal_to, orbit_pivot, section, projection, display; only with person_asked true, or until they move it in this request. Keybinds: keybind_get; keybind_set, keybind_reset, keybind_clear only if the person asked (person_asked true).",
-    schema: obj({
-      action: en(WORKSPACE_ACTIONS, 'What to do'),
-      target: str(300, 'What it acts on, or ""'),
-      value: str(200, 'The value, or ""'),
-      items: arr(str(300, 'A selector, name or kind'), 0, 40, 'Lists: selection, filter, export bodies; else []'),
-      person_asked: bool('The person asked for this view or keybind change in this request'),
-    }),
-  },
+  workspaceSpec(true),
 ];
 
 const toTool = (s: ToolSpec): AssistantTool => ({
@@ -551,16 +595,22 @@ const toTool = (s: ToolSpec): AssistantTool => ({
 /** The 21 tools, by name (the order the app offers them in: it sorts workspace tools by name). */
 export const CAD_TOOLS: readonly AssistantTool[] = Object.freeze(SPECS.map(toTool).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)));
 
-/** The body tool as Magnusim CAD offers it (projectLinks false): no simulation field. */
-const BODY_WITHOUT_SIMULATION: AssistantTool = Object.freeze(toTool(bodySpec(false)));
+/**
+ * The tools as Magnusim CAD offers them (projectLinks false: no projects, no simulation, no
+ * Enclosure command): the body tool without its simulation field, the workspace tool without
+ * send_to_simulation, the direct tool without the enclosure kind and its fields, and edit_feature's
+ * words without the Enclosure's choice fields.
+ */
+const CAD_TOOLS_WITHOUT_PROJECTS: readonly AssistantTool[] = Object.freeze(
+  CAD_TOOLS.map((t) => (t.name === 'body' ? toTool(bodySpec(false)) : t.name === 'workspace' ? toTool(workspaceSpec(false)) : t.name === 'direct' ? toTool(directSpec(false)) : t.name === 'edit_feature' ? toTool(editFeatureSpec(false)) : t)),
+);
 
 /**
  * The tools this page offers, by name: CAD_TOOLS where the host has projects (Magnusim), and in
- * Magnusim CAD (projectLinks false: no projects, no simulation) the body tool without its
- * simulation field. The same 21 tools either way.
+ * Magnusim CAD (projectLinks false) CAD_TOOLS_WITHOUT_PROJECTS. The same 21 tools either way.
  */
 export function cadToolsFor(o: { projectLinks: boolean }): readonly AssistantTool[] {
-  return o.projectLinks ? CAD_TOOLS : CAD_TOOLS.map((t) => (t.name === 'body' ? BODY_WITHOUT_SIMULATION : t));
+  return o.projectLinks ? CAD_TOOLS : CAD_TOOLS_WITHOUT_PROJECTS;
 }
 
 /** The tools' names, by name. */

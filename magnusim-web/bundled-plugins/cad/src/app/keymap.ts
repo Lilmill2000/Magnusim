@@ -42,6 +42,12 @@ export interface KeymapEntry {
   keys: readonly string[];
   /** A keyboard-only action: no command of the registry runs it (its own handler binds the keys). */
   keyOnly?: true;
+  /**
+   * Only where the host has projects (Magnusim): Magnusim CAD (the welcome's projectLinks false) has
+   * no such command, and neither the Part's keybinds (keymapFor) nor its Settings list it
+   * (commands.json carries "projects": true, which that app's Settings leaves out).
+   */
+  projects?: true;
 }
 
 /** Keys the app, the browser or the system keeps, under the words that say what they do. */
@@ -140,7 +146,8 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   e('construct.plane', 'Plane', 'Construct', 'model'),
   e('construct.axis', 'Axis', 'Construct', 'model'),
   e('construct.point', 'Point', 'Construct', 'model'),
-  e('cfd.enclosure', 'Enclosure', 'CFD prep', 'model'),
+  // CFD PREP: Magnusim's alone (Magnusim CAD has no simulation, and no Enclosure command).
+  Object.freeze({ ...e('cfd.enclosure', 'Enclosure', 'CFD prep', 'model'), projects: true as const }),
   e('inspect.measure', 'Measure', 'Inspect', 'model'),
   e('inspect.find', 'Find', 'Inspect', 'model'),
   e('inspect.mass', 'Mass properties', 'Inspect', 'model'),
@@ -215,6 +222,10 @@ const BY_ID: ReadonlyMap<string, KeymapEntry> = new Map(KEYMAP.map((x) => [x.id,
 
 /** The registry's entry for an id, or null. */
 export const keymapEntry = (id: string): KeymapEntry | null => BY_ID.get(id) ?? null;
+
+const WITHOUT_PROJECTS: readonly KeymapEntry[] = Object.freeze(KEYMAP.filter((x) => !x.projects));
+/** The registry on this host: every entry where it has projects (Magnusim), none of a project's in Magnusim CAD. */
+export const keymapFor = (projectLinks: boolean): readonly KeymapEntry[] => (projectLinks ? KEYMAP : WITHOUT_PROJECTS);
 
 /**
  * A command whose tooltip shows another one's key while it has none of its own: Finish sketch's
@@ -635,6 +646,6 @@ export function appClashesIn(keysOf: (id: string) => readonly string[] = default
 
 /** The file the build writes (workspace/commands.json): the registry with its default keys. */
 export function commandsJson(): string {
-  const commands = KEYMAP.map((x) => ({ id: x.id, label: x.label, group: x.group, context: x.context, keys: [...x.keys] }));
+  const commands = KEYMAP.map((x) => ({ id: x.id, label: x.label, group: x.group, context: x.context, keys: [...x.keys], ...(x.projects ? { projects: true } : {}) }));
   return `${JSON.stringify({ version: 1, contexts: CONTEXTS, commands }, null, 2)}\n`;
 }

@@ -117,7 +117,9 @@ async function readWorkspace(plugin: string, ws: NonNullable<PluginRow['workspac
   }
   const { file, problems } = readCommandsFile(doc);
   if (!file) return { ...out, error: problems.length > 1 ? `${problems[0]} (and ${problems.length - 1} more)` : problems[0] || `${path} lists no commands` };
-  return { ...out, contexts: file.contexts, commands: file.commands };
+  // Magnusim CAD has no projects: a command that acts only where the app has them ("projects": true,
+  // the CAD Part's Enclosure) is not one the person has there, so it is not listed.
+  return { ...out, contexts: file.contexts, commands: isCad() ? file.commands.filter((c) => !c.projects) : file.commands };
 }
 
 /** Every command a plugin lists (each id once: a plugin's ids are unique, plugin:check holds it). */

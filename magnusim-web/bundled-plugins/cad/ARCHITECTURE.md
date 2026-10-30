@@ -448,6 +448,20 @@ with the host once for the page's life, and its chip goes in the dock.
   the Assistant's `body.simulation` field (`cadToolsFor`, `parityFor`) are not
   there, and a call that still asks for it is refused in words. The stored
   field stays, so a design opened later in Magnusim keeps its choice.
+  The same flag leaves out every other project and simulation item there
+  (Daniel 2026-10-29): the Enclosure command (CFD PREP; `enclosureModule.install`
+  registers none, `keymapFor(false)` and the Part's keybinds leave out the
+  keymap entry marked `projects`, and commands.json's `"projects": true` keeps
+  it out of that app's Settings), Combine's Keep-tools-on for an Enclosure's
+  body, the volume chip's Enclosure-first order (`cfdFirst`), the Banana's
+  "or the simulation", the import panel's "From the project" row, and the
+  Assistant's `workspace.send_to_simulation`, `direct` kind `enclosure` with its
+  fields, and their words in the schemas (`cadToolsFor`), help (`helpFor`),
+  get_model and the rev words. A missing stored file is "not with the Part"
+  (`FeatureFiles.where`). An Enclosure made in Magnusim is kept as it is
+  (`features/enclosure/kept.ts`): built, read-only panel, edit_feature refuses
+  its values, get_model gives no inputs. Magnusim's schemas, help and prefix are
+  byte for byte as before (tests/assistant/edition-no-projects.test.ts).
 - **View state** (`CadView`: rollback index, hidden bodies, expanded tree
   nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and

@@ -38,9 +38,10 @@ export interface RealDoc {
 }
 
 /** A Part on the real kernel. Pass `folder` to reopen the same project folder. */
-export async function openRealDoc(opts: { folder?: FakeFolder; units?: 'metric' | 'imperial' } = {}): Promise<RealDoc> {
+export async function openRealDoc(opts: { folder?: FakeFolder; units?: 'metric' | 'imperial'; projectLinks?: boolean } = {}): Promise<RealDoc> {
   const folder = opts.folder ?? new FakeFolder();
-  const ws = createFakeWorkspace({ units: opts.units ?? 'metric', hostVersion: '1.2', folder });
+  // projectLinks false: Magnusim CAD's welcome (no projects); left out, Magnusim's.
+  const ws = createFakeWorkspace({ units: opts.units ?? 'metric', hostVersion: '1.2', folder, ...('projectLinks' in opts ? { projectLinks: opts.projectLinks } : {}) });
   const real = realKernelAnywhere();
   await real.start();
   const kernel = hybridKernel(real);

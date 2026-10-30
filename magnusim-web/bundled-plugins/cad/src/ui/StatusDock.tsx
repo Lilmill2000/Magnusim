@@ -29,6 +29,7 @@ import { useStateStore } from '../lib/store';
 import { isRemovedFeature } from '../doc/features/removed';
 import { Chip, formatQuantity, formatVolume } from './kit';
 import { selectedBodies } from './tree/model';
+import type { Feature } from '../types/doc';
 import type { DocUnits } from '../types/units';
 
 /**
@@ -126,6 +127,15 @@ function volumeWords(b: VolumeBody, units: DocUnits): string {
  * 6283.19 mm³", never added together. A surface body has no volume ("Surface body: no volume").
  * Hidden bodies are not listed and the chip says how many.
  */
+/**
+ * The bodies a volume list puts first: the Enclosures' (the fluid domain) where the host has projects
+ * (Magnusim); none in Magnusim CAD (projectLinks false: no simulation), where the biggest come first.
+ */
+export function cfdFirst(features: readonly Feature[], projectLinks: boolean): ReadonlySet<string> {
+  if (!projectLinks) return new Set();
+  return new Set(features.flatMap((f) => (f.type === 'enclosure' && 'creates' in f && f.creates ? [f.creates as string] : [])));
+}
+
 /**
  * The bodies a list of more than VOLUME_LIST_MAX shows, in their own order: the CFD bodies
  * (`first`, an Enclosure's) and then the biggest, so the fluid domain is never the one behind
@@ -300,7 +310,7 @@ export function StatusDock() {
     if (chosen.length && !unmeasured.length) {
       chips.push(
         <Chip key="volume" chip="volume" k="Volume">
-          <VolumeList bodies={chosen} named={named} hidden={hidden} units={d.units} first={new Set(d.features.flatMap((f) => (f.type === 'enclosure' && 'creates' in f && f.creates ? [f.creates as string] : [])))} />
+          <VolumeList bodies={chosen} named={named} hidden={hidden} units={d.units} first={cfdFirst(d.features, services.bridge.projectLinks())} />
         </Chip>,
       );
     } else if (chosen.length) {
