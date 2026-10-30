@@ -735,7 +735,7 @@ describe('a call still open when the turn ends says why: never the person when i
     const model = { provider: 'anthropic', model: 'm', caps: {} };
     let n = 0;
     const openCall = (settings, end) => {
-      const t = new Turn({ id: `t-why-${(n += 1)}`, prompt: 'x', conv: { id: 'c-why' }, tab: null, projectId: null, simulationId: null, settings, clock: realClock, gates: new GateBroker() });
+      const t = new Turn({ id: `t-why-${(n += 1)}`, prompt: 'x', conv: { id: 'c-why', noteEnd() {} }, tab: null, projectId: null, simulationId: null, settings, clock: realClock, gates: new GateBroker() });
       const signal = t.callSignal();
       end(t);
       assert.ok(signal.aborted);

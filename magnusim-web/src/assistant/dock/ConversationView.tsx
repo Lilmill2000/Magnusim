@@ -234,7 +234,7 @@ export function useDockContent(): DockContent | null {
       elsewhereProject && row ? (
         <ReadOnly row={row} onNew={onNew} />
       ) : (
-        <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} busy={busy} />
+        <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} carry={store.carry} busy={busy} />
       ),
   };
 }

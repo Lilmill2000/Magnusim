@@ -40,7 +40,7 @@
  *                                        turn that names it (assistant/attachments.ts); only GET
  *                                        /relay/attachment serves its bytes back; 400 bad_type,
  *                                        empty_file, bad_name; 409 no_channel; 413 too_large; 415 octet_only
- *   POST /api/assistant/turns           {text, conversation?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
+ *   POST /api/assistant/turns           {text, conversation?, carry_from?, tab?, context?:{project_id?, simulation_id?}, provider?, link?,
  *                                        attachments?:['att-…'], images?:[{media_type, data}]}
  *                                        (attachments: ≤ 4 files this tab attached, unbound or this
  *                                        conversation's, then bound to it; 400 bad_attachments,
@@ -62,6 +62,12 @@
  *                                        per-launch token in x-magnusim-launch (the CLI) or `link`
  *                                        = an app tab's live relay link, any tab's (the page): else
  *                                        403 launch_proof (TurnManager.launchProven)
+ *                                        carry_from: Continue in a new chat, an earlier conversation
+ *                                        of the same provider and project (its provider when none
+ *                                        is named), never with `conversation`: the new one's first
+ *                                        message carries its prompts, last answer and end (400
+ *                                        bad_carry, carry_agent; 404 unknown_conversation; 409
+ *                                        conversation_changed {field}, conversation_busy)
  *   POST /api/assistant/launch/check    {nonce: 32 hex} → {ok, proof}: HMAC-SHA256(token, "l<port>:<nonce>"),
  *                                        port = the app port the request reached, so the terminal
  *                                        client sends this launch's token only to the Magnusim that

@@ -32,6 +32,8 @@ export interface DockSend {
   /** The conversation shown (null: a new one, which takes `provider`). */
   conversation: string | null;
   provider: string | null;
+  /** A new one that continues this earlier conversation (Continue in a new chat): its provider, so `provider` goes unsent. */
+  carryFrom?: string | null;
   place: DockPlace;
   pictures: readonly PreparedPicture[];
   /** The files attached and uploaded (their attachment ids; core host tools spec 13.1). */
@@ -47,7 +49,7 @@ export function turnBody(s: DockSend, toWindow = false): Record<string, unknown>
   const bound = toWindow || (!!ws && ws.state === 'tools');
   return {
     text: s.text,
-    ...(s.conversation ? { conversation: s.conversation } : s.provider ? { provider: s.provider } : {}),
+    ...(s.conversation ? { conversation: s.conversation } : s.carryFrom ? { carry_from: s.carryFrom } : s.provider ? { provider: s.provider } : {}),
     ...(bound
       ? { tab: 'link' }
       : s.place.projectId

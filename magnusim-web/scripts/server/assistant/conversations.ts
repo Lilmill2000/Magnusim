@@ -28,6 +28,11 @@
  * title as its own (phase 4 spec 9.3): the turn manager keeps its newest 50 turns while it
  * lives (turns.ts sweep), so a window that reloads replays it.
  *
+ * What a new conversation carries from it (Continue in a new chat, turns.ts carry_from; a coding
+ * agent's too): the person's prompts, newest CARRY_LIMITS.prompts within promptBytes (each cut to
+ * promptMax), its last answer's text (the end of it, within answerBytes) and how its last turn
+ * ended. carried() takes them as they are then.
+ *
  * A conversation on a coding agent (provider `agent:<id>`, phase 3 spec 4.7) keeps no
  * messages: the agent keeps the history, so its list stays empty and repair() has nothing to
  * do. Whatever drops a conversation (forget, the 2-hour expiry, the eviction past 20) tells
@@ -51,6 +56,49 @@ export const CONVERSATION_LIMITS = Object.freeze({
   /** Turn ids it lists (the oldest go first past it, counted in turnsDropped). */
   turns: 200,
 });
+
+/** What a new conversation carries from one (carried()): its newest prompts within their bytes (each cut to promptMax), and its last answer's end. */
+export const CARRY_LIMITS = Object.freeze({ prompts: 40, promptBytes: 16 * 1024, promptMax: 4 * 1024, answerBytes: 4 * 1024 });
+
+/** How a conversation's last turn ended. */
+export interface LastEnd {
+  state: string;
+  reason: string;
+  message: string | null;
+}
+
+/** What a new conversation carries from an earlier one (Continue in a new chat): taken when it starts. */
+export interface Carried {
+  /** The earlier conversation's id. */
+  from: string;
+  /** The person's prompts there, oldest first. */
+  prompts: string[];
+  /** Its earlier prompts not carried (past CARRY_LIMITS). */
+  promptsLeftOut: number;
+  /** Its last answer's text ('' when none); cut at the start past answerBytes. */
+  lastAnswer: string;
+  lastEnd: LastEnd | null;
+  /** Why it was full, in the person's words (fullText), or null. */
+  full: string | null;
+}
+
+const utf8 = (s: string) => Buffer.byteLength(s, 'utf8');
+
+/** `s` cut to at most `max` UTF-8 bytes, never splitting a character: its start, or (`fromEnd`) its end. */
+export function cutBytes(s: string, max: number, fromEnd = false): string {
+  if (utf8(s) <= max) return s;
+  const chars = [...s];
+  if (fromEnd) chars.reverse();
+  const out: string[] = [];
+  let n = 0;
+  for (const c of chars) {
+    n += utf8(c);
+    if (n > max) break;
+    out.push(c);
+  }
+  if (fromEnd) out.reverse();
+  return out.join('');
+}
 
 /** Context windows, in tokens: a local model's when its server reports none, and a safe 200K for cloud models (prices.ts contextWindow). */
 export const CONTEXT_TOKENS = Object.freeze({ cloud: 200_000, local: 128_000 });
@@ -188,6 +236,18 @@ export class Conversation {
   readonly window: { tokens: number; known: boolean } | null;
   /** Set when a turn ended it nearly full (after the model summed up): it is full from then on. */
   closedBy: FullDetail | null = null;
+  /**
+   * What it carries from the conversation it continues (Continue in a new chat), taken when it
+   * was made; its first message sends it (a first turn that ended before that leaves it to the next).
+   */
+  carry: Carried | null = null;
+  /** How its last turn ended (null before any did). */
+  lastEnd: LastEnd | null = null;
+  /** Its last answer's text ('' before any; a turn that said nothing keeps the one before). */
+  lastAnswer = '';
+  /** The person's prompts, oldest first, within CARRY_LIMITS (notePrompt). */
+  private readonly prompts: string[] = [];
+  private promptsDropped = 0;
   private readonly list: Message[] = [];
   private imageCount = 0;
   private byteCount = 0;
@@ -206,6 +266,11 @@ export class Conversation {
 
   get projectId(): string | null {
     return this.boundProject;
+  }
+
+  /** The conversation it continues (Continue in a new chat), or null. */
+  get carriedFrom(): string | null {
+    return this.carry?.from ?? null;
   }
 
   /**
@@ -236,6 +301,36 @@ export class Conversation {
       this.turns.shift();
       this.turnsDropped += 1;
     }
+  }
+
+  /** A turn started with the person's `prompt`: kept for a conversation that continues this one (carried()). */
+  notePrompt(prompt: string): void {
+    const L = CARRY_LIMITS;
+    this.prompts.push(cutBytes(prompt, L.promptMax));
+    let bytes = this.prompts.reduce((n, p) => n + utf8(p), 0);
+    while (this.prompts.length > L.prompts || (bytes > L.promptBytes && this.prompts.length > 1)) {
+      bytes -= utf8(this.prompts.shift() as string);
+      this.promptsDropped += 1;
+    }
+  }
+
+  /** Its turn ended so, its last words `answer` ('' keeps the answer before). */
+  noteEnd(end: LastEnd, answer: string): void {
+    this.lastEnd = { ...end };
+    const text = answer.trim();
+    if (text) this.lastAnswer = cutBytes(text, CARRY_LIMITS.answerBytes, true);
+  }
+
+  /** What a conversation that continues this one carries (`full`: why this one is full, in the person's words). */
+  carried(full: string | null): Carried {
+    return {
+      from: this.id,
+      prompts: [...this.prompts],
+      promptsLeftOut: this.promptsDropped,
+      lastAnswer: this.lastAnswer,
+      lastEnd: this.lastEnd ? { ...this.lastEnd } : null,
+      full,
+    };
   }
 
   /** Adds a message at the end (the only way messages change). Frozen, so nothing edits it later. */

@@ -19,6 +19,10 @@
  *   Only events newer than the view's are applied and announced (live.ts); the first data of a
  *   watch (its snapshot, the turn's past) is announced only for a turn this dock just started.
  *   An unwatched turn's view is dropped.
+ * - **Continue in a new chat** (continueInNewChat): a new conversation is shown, the earlier
+ *   one's draft moves into its box, and `carry` names the earlier one until the new one's first
+ *   message goes (its start sends carry_from), the person picks a conversation (or New), or the
+ *   context moves.
  * - **What the page keeps** (per viewer, never needed for correctness; every read and write in
  *   try/catch): the conversation shown and each conversation's draft (sessionStorage). Open or
  *   closed is dockState's (localStorage).
@@ -45,6 +49,13 @@ export interface ConversationsState {
   error: string | null;
 }
 
+/** The earlier conversation a new one continues (Continue in a new chat): its id, provider (the new one's too) and label. */
+export interface DockCarry {
+  from: string;
+  provider: string;
+  label: string;
+}
+
 export interface DockStoreSnapshot {
   /** Questions shown as cards in this tab, oldest first (their gate ids). */
   questions: readonly string[];
@@ -52,6 +63,8 @@ export interface DockStoreSnapshot {
   conversations: ConversationsState;
   /** The conversation shown; null: a new one. */
   shown: string | null;
+  /** The new conversation shown continues this one (only while `shown` is null). */
+  carry: DockCarry | null;
   /** The turns watched, by id. */
   turns: Readonly<Record<string, TurnView>>;
   /** Turns this tab started, by conversation, until the server's list names them. */
@@ -121,6 +134,7 @@ let offDock: (() => void) | null = null;
 let context: DockContext = { project_id: null, workspace: null };
 let conversations: ConversationsState = { state: 'idle', list: [], error: null };
 let shown: string | null = null;
+let carry: DockCarry | null = null;
 /** The person picked the conversation shown (or a new one) in this context. */
 let picked = false;
 let turns: Record<string, TurnView> = {};
@@ -147,7 +161,7 @@ function running(id: string): boolean {
 }
 
 function build(): DockStoreSnapshot {
-  return { questions, context, conversations, shown, turns, local, stops };
+  return { questions, context, conversations, shown, carry, turns, local, stops };
 }
 
 function publish(): void {
@@ -320,6 +334,8 @@ export function setDockContext(next: DockContext): void {
   if (!moved && next.workspace === context.workspace) return;
   context = { project_id: next.project_id ?? null, workspace: next.workspace ?? null };
   if (moved) {
+    // A conversation continues one of its own context only.
+    carry = null;
     if (runningHere(shown)) {
       picked = true;
       void refreshConversations();
@@ -332,12 +348,32 @@ export function setDockContext(next: DockContext): void {
   publish();
 }
 
-/** The person shows a conversation (null: a new one). */
+/** The person shows a conversation (null: a new one, which carries nothing). */
 export function showConversation(id: string | null): void {
   start();
   picked = true;
   shown = id;
+  carry = null;
   writeKey(STORAGE_KEYS.conv, id);
+  publish();
+}
+
+/**
+ * Continue in a new chat: a new conversation is shown that continues `from` (its first message
+ * sends carry_from), with `from`'s draft moved into its box (a new conversation's draft stays
+ * when `from` has none).
+ */
+export function continueInNewChat(from: DockCarry): void {
+  start();
+  const text = draftOf(from.from);
+  if (text) {
+    setDraft(null, text);
+    setDraft(from.from, '');
+  }
+  picked = true;
+  shown = null;
+  carry = { ...from };
+  writeKey(STORAGE_KEYS.conv, null);
   publish();
 }
 
@@ -643,6 +679,7 @@ export function resetDockStoreForTests(): void {
   context = { project_id: null, workspace: null };
   conversations = { state: 'idle', list: [], error: null };
   shown = null;
+  carry = null;
   picked = false;
   turns = {};
   local = {};

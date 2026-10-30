@@ -224,11 +224,15 @@ export interface GateView {
  * 'window' (409 no_channel when the link is no longer live: get a fresh one and send again).
  * `tab: 'link'` binds the turn to this tab's workspace (409 no_channel, 400 bad_tab, 409
  * tab_hidden, 409 tab_busy as for a tab id); else `context` names the project and study.
- * `provider` only before a conversation's first message (it keeps its provider).
+ * `provider` only before a conversation's first message (it keeps its provider). `carry_from`
+ * (Continue in a new chat, never with `conversation`): an earlier conversation of the same
+ * provider and project, whose prompts, last answer and end go with the new one's first message
+ * (400 bad_carry, carry_agent; 404 unknown_conversation; 409 conversation_changed, conversation_busy).
  */
 export interface TurnStartBody {
   text: string;
   conversation?: string;
+  carry_from?: string;
   provider?: string;
   link?: string;
   /** 'link' (this window's workspace), an app tab's id, or 'auto' (the only connected one: the CLI). */

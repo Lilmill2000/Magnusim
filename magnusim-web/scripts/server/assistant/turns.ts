@@ -19,6 +19,13 @@
  * - The minutes cap counts active time only: questions waiting for an answer don't count.
  * - A turn runs on the provider its start names, else its conversation's own, else the
  *   default; every check of the start is about that provider.
+ * - Continue in a new chat: a start without `conversation` may name `carry_from`, an earlier
+ *   conversation (its provider is the turn's when none is named). The new conversation's first
+ *   message carries what that one did (conversations.ts carried(), prompt.ts carryBlock).
+ *   Refused: 400 bad_carry (not an id, or with `conversation`), 400 carry_agent (a coding agent
+ *   on either side: it keeps its own history), 404 unknown_conversation, 409
+ *   conversation_changed (another provider or project: its words go only where they went
+ *   before, `field`), 409 conversation_busy (a turn runs in it).
  * - A turn's questions are answered only by the program that started it (the answer key
  *   of its 202) or by the app tab that shows them (its live relay link); see answerGate.
  * - A turn started with `link` (an app tab's live relay link: the window's dock, phase 4 spec
@@ -59,7 +66,7 @@ import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import { grants } from './grants.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
-import { Conversations, fullText, type Conversation } from './conversations.ts';
+import { Conversations, fullText, type Carried, type Conversation } from './conversations.ts';
 import { modelLabel } from './prices.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
@@ -630,6 +637,13 @@ export class Turn implements AnyTurn {
       .join('\n\n');
   }
 
+  /** Its last step's text, the answer it ended with ('' when it said nothing). */
+  lastWords(): string {
+    let at = -1;
+    for (const [step, text] of this.stepText) if (step > at && text.trim()) at = step;
+    return at < 0 ? '' : (this.stepText.get(at) as string).trim();
+  }
+
   /** Events after `since` (marks them read). */
   eventsSince(since: number): TurnEvent[] {
     const out = this.log.filter((e) => e.seq > since);
@@ -915,6 +929,8 @@ export class Turn implements AnyTurn {
     this.push({ type: 'state', state });
     this.push({ type: 'end', state, reason: this.endReason, message: this.message });
     this.closed = true;
+    // What a conversation that continues this one carries (Continue in a new chat).
+    this.conv.noteEnd({ state, reason: this.endReason, message: this.message }, this.lastWords());
     alog('info', 'turn ended', {
       id: this.id,
       provider: this.settings.provider,
@@ -1181,6 +1197,8 @@ const isAgentChoice = (p: unknown): p is AgentProviderId => typeof p === 'string
 export const agentUnknownText = (id: string) => `No coding agent called ${cleanText(id, 40) || '(none)'}. Settings → Assistant lists them.`;
 
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
+export const CARRY_WITH_CONVERSATION_TEXT = 'carry_from starts a new conversation: send it without conversation.';
+export const CARRY_AGENT_TEXT = 'A coding agent keeps its own history, so a conversation with one is not carried into a new one. Start a new conversation.';
 
 /** How long the conversation list keeps a project's title. */
 const PROJECT_TITLE_MS = 60_000;
@@ -1394,6 +1412,7 @@ export class TurnManager {
   /** A turn starts in `conv`: listed there; the turn that falls out of its newest kept ones is released. */
   private listInConversation(conv: Conversation, t: Turn): void {
     conv.addTurn(t.id, t.title());
+    conv.notePrompt(t.prompt);
     const out = conv.turns[conv.turns.length - 1 - TURN_LIMITS.keptPerConversation];
     const old = out ? this.turns().get(out) : undefined;
     if (old) old.releasedAt ??= this.clock.now();
@@ -1509,6 +1528,9 @@ export class TurnManager {
     const convId = optionalId(body.conversation);
     const tab = optionalId(body.tab);
     if (convId === false) return refuse(400, 'bad_conversation', 'That is not a conversation id.');
+    const carryId = optionalId(body.carry_from);
+    if (carryId === false) return refuse(400, 'bad_carry', 'carry_from is a conversation id.');
+    if (carryId && convId) return refuse(400, 'bad_carry', CARRY_WITH_CONVERSATION_TEXT);
     if (tab === false) return refuse(400, 'bad_tab', BAD_TAB_TEXT);
     if (body.context !== undefined && body.context !== null && !isRecord(body.context)) return refuse(400, 'bad_context', 'context must be an object.');
     const context = isRecord(body.context) ? body.context : {};
@@ -1521,9 +1543,13 @@ export class TurnManager {
 
     const settings = await this.d.settings();
     // The turn's provider: the one its start names, else its conversation's own (a conversation
-    // stays bound to its provider), else the default. Every check below is about this one.
-    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? settings.provider;
+    // stays bound to its provider), else the one it continues, else the default. Every check
+    // below is about this one.
+    const carryFrom = carryId ? this.conversations.get(carryId) : null;
+    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? carryFrom?.provider ?? settings.provider;
     if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
+    // A coding agent keeps its own history: nothing is carried to or from one.
+    if (carryId && (isAgentChoice(provider) || (carryFrom && isAgentChoice(carryFrom.provider)))) return refuse(400, 'carry_agent', CARRY_AGENT_TEXT);
     if (isAgentChoice(provider)) {
       const agentId = agentIdOf(provider);
       if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
@@ -1605,6 +1631,18 @@ export class TurnManager {
         return refuse(409, 'conversation_full', fullText(full, modelLabel(conv.model)));
       }
     }
+    // Continue in a new chat: what the earlier conversation did, as it is now.
+    let carry: Carried | null = null;
+    if (carryId) {
+      const from = this.conversations.get(carryId);
+      if (!from) return refuse(404, 'unknown_conversation', 'That conversation has ended (2 hours idle, or forgotten). Start a new one.');
+      // Its words go only to the provider they went to, about the same project (or Home).
+      const field = from.provider !== provider ? 'provider' : (from.projectId ?? null) !== (projectId ?? null) ? 'project' : null;
+      if (field) return refuse(409, 'conversation_changed', `That conversation is bound to another ${field}, so it can't be continued here. Start a new one.`, { field });
+      if (from.running) return refuse(409, 'conversation_busy', 'A turn is still running in that conversation. Wait for it, or stop it.');
+      const full = from.fullDetail(settings.base_url);
+      carry = from.carried(full ? fullText(full, modelLabel(from.model)) : null);
+    }
     // The window still has its link (the checks above awaited).
     if (linkGiven && this.tabOfLink(body.link) !== linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
     const attached = this.attachmentsOf(body.attachments, linkTab, conv?.id ?? null);
@@ -1612,6 +1650,10 @@ export class TurnManager {
     const refused = this.admitRefusal(boundTab);
     if (refused) return refused;
     if (!conv) conv = this.conversations.create(binding);
+    if (carry) {
+      conv.carry = carry;
+      alog('info', 'conversation continued', { conversation: conv.id, from: carry.from, prompts: carry.prompts.length, left_out: carry.promptsLeftOut });
+    }
     this.bindAttachments(attached, conv.id);
     const turnSettings: TurnSettings = {
       kind: 'model',

@@ -11,6 +11,7 @@ import {
   addLocalTurn,
   answerKeyOf,
   chooseConversation,
+  continueInNewChat,
   dockStoreSnapshot,
   draftOf,
   keepAnswerKey,
@@ -519,6 +520,29 @@ describe('drafts', () => {
     setDraft('c1', '');
     expect(draftOf('c1')).toBe('');
     expect(sessionStorage.getItem(`${STORAGE_KEYS.draftPrefix}c1`)).toBeNull();
+  });
+
+  it("Continue in a new chat: a new conversation shown, the earlier one's draft moved into it, `carry` held until the person picks one, New, or the context moves", () => {
+    const from = { from: 'c1', provider: 'anthropic', label: 'Cloud A' };
+    setDockContext({ project_id: 'p1', workspace: null });
+    showConversation('c1');
+    setDraft('c1', 'Now the hands.');
+    setDraft(null, 'an older new draft');
+    continueInNewChat(from);
+    expect(dockStoreSnapshot()).toMatchObject({ shown: null, carry: from });
+    expect([draftOf('c1'), draftOf(null)]).toEqual(['', 'Now the hands.']);
+    expect(sessionStorage.getItem(`${STORAGE_KEYS.draftPrefix}c1`)).toBeNull();
+    // New conversation: nothing is carried.
+    showConversation(null);
+    expect(dockStoreSnapshot().carry).toBeNull();
+    // An earlier one with no draft leaves the new one's.
+    continueInNewChat(from);
+    expect([dockStoreSnapshot().carry, draftOf(null)]).toEqual([from, 'Now the hands.']);
+    showConversation('c2');
+    expect(dockStoreSnapshot().carry).toBeNull();
+    continueInNewChat(from);
+    setDockContext({ project_id: 'p2', workspace: null });
+    expect(dockStoreSnapshot().carry, 'only in its own context').toBeNull();
   });
 });
 

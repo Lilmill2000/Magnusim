@@ -107,6 +107,10 @@ export const tabBusy = (workspace: string): string => `A request is already work
 export const STOP_THAT_REQUEST = 'Stop that request';
 /** A full conversation whose row names no limit (an older server); the server's own words otherwise (full_text). */
 export const CONVERSATION_FULL = 'This conversation is full. Start a new one.';
+/** A full conversation's second way on: a new one that carries what this one did (carry_from). */
+export const CONTINUE_IN_NEW_CHAT = 'Continue in a new chat';
+/** Over the box of a new conversation that continues an earlier one: what goes with its first message. */
+export const CARRY_LINE = 'Continuing the earlier chat: your earlier prompts, its last answer and how it ended go with this message.';
 // Pictures (3.2) and files (core host tools spec 13.1). A line that names what can be attached
 // names drawings only while the dock offers them (drawings.ts): the caller says which.
 export const ATTACH_LABEL = 'Attach pictures or files';

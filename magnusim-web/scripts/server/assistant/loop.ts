@@ -4,7 +4,8 @@
  *
  *   starting ─ privacy (cloud turns with a project: allowed, remembered, or a question);
  *     then the prompt, its reference pictures (none for a local model known not to read
- *     images) and the app context, as one user message
+ *     images), a new conversation's earlier one (Continue in a new chat: prompt.ts carryBlock,
+ *     and a note says so) and the app context, as one user message
  *   for each step:
  *     the caps (minutes, tokens; then the spend estimate and the day's reservation); a full
  *       conversation (conversations.ts fullDetail) → capped (conversation_full), but for the
@@ -48,7 +49,7 @@
  *
  * Caps are min(the turn's snapshot, the live settings); privacy is read live.
  */
-import { contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
+import { carryBlock, contextBlock, guideBlock, reviewText, SYSTEM_PROMPT } from './prompt.ts';
 import { IMAGE_CAPS } from './sanitize.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
@@ -70,7 +71,7 @@ import {
   projectListGate,
   type ProjectInfo,
 } from './privacy.ts';
-import { localBudget, LOCAL_BUDGET, providerTools, type CorePlace, type ToolCtx, type ToolDef, type ToolSelection, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
+import { localBudget, LOCAL_BUDGET, providerTools, workspaceToolName, type CorePlace, type ToolCtx, type ToolDef, type ToolSelection, type WorkspaceRegistration, type WorkspaceReview } from './registry.ts';
 import { placeOf, tabHere } from './tab-place.ts';
 import { callAbortOf, errorResult, stoppedText, toolCallEvent, type RunnerTurn, type ToolRunner } from './runner.ts';
 import type { Caps, AssistantSettings } from './settings.ts';
@@ -120,6 +121,12 @@ export interface CapHit {
 export const NEARLY_FULL_NOTE = 'This conversation is nearly full; asking the model to sum up.';
 /** A review round was due, but the conversation is nearly full: its answer stands. */
 export const REVIEW_NO_ROOM_FULL_NOTE = 'No review round: this conversation is nearly full.';
+
+/** The person reads what a new conversation carried to the model (Continue in a new chat), with its first request. */
+export function carriedNote(prompts: number): string {
+  const which = prompts === 1 ? 'your earlier prompt' : prompts > 1 ? `your ${prompts} earlier prompts` : 'no earlier prompt';
+  return `Continued from an earlier conversation: ${which}, its last answer and how it ended went to the model with this message.`;
+}
 
 /** What the model is told when the next step could fill the conversation (after the step's results). */
 export function nearlyFullText(d: FullDetail): string {
@@ -191,7 +198,7 @@ export interface LoopTurn extends RunnerTurn {
 
 export interface LoopRegistry {
   selectTools(ctx: ToolCtx): ToolSelection;
-  workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string; review?: WorkspaceReview | null } | null;
+  workspaceOf(tab: string): { connected: boolean; reg: WorkspaceRegistration; guide: string; review?: WorkspaceReview | null; tools?: string[] } | null;
   /** The tab's core page registration (C7): where the window is now (the turn follows its tab). */
   coreOf?(tab: string): { connected: boolean; projectId: string; studyId: string; place: CorePlace } | null;
 }
@@ -581,12 +588,22 @@ async function steps(t: LoopTurn, d: LoopDeps): Promise<void> {
     notedByAdapter.add(IMAGES_LEFT_OUT_NOTE);
     t.note(IMAGES_LEFT_OUT_NOTE);
   }
+  // Continue in a new chat: the earlier conversation goes after the prompt, once (its first message).
+  const carry = fixed ? null : conv.carry;
+  let carried: string | null = null;
+  if (carry) {
+    const getModel = ws ? workspaceToolName(ws.reg.plugin, 'get_model') : null;
+    const readTool = getModel && ws?.tools?.includes(getModel) ? getModel : null;
+    carried = carryBlock(carry, ws ? 'workspace' : t.projectId ? 'project' : 'home', readTool);
+    t.note(carriedNote(carry.prompts.length));
+  }
   conv.append({
     role: 'user',
     parts: withGuide([
       { type: 'text', text: t.prompt },
       ...(t.attachments?.length ? [{ type: 'text' as const, text: attachmentLines(t.attachments) }] : []),
       ...pictures.map((p) => ({ ...p })),
+      ...(carried ? [{ type: 'text' as const, text: carried }] : []),
       {
         type: 'text',
         text: contextBlock({
