@@ -606,8 +606,9 @@ test('a long build in one conversation: 120 calls over three requests never fill
 });
 
 test('a conversation the next step could fill: the model sums up after its results, the request ends "Limit reached" with the full line in numbers, and Send says the same with New conversation', async ({ page, request }) => {
-  // $20 a turn resends more than 800,000 tokens once the cache expires: the model's own line is the nearer.
-  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 15 } });
+  // $20 a turn resends more than 800,000 tokens once the cache expires: the model's own line is the nearer
+  // (a day is never less than a turn).
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 40 } });
   await openCounter(page, request);
   await openDock(page);
   const before = chats().length;
@@ -616,7 +617,9 @@ test('a conversation the next step could fill: the model sums up after its resul
   await dockSend(page, 'Add one');
   const turn = dockTurn(page);
   const said = "This conversation is full: the last request used 799,990 of Claude Opus 5.5's 1,000,000-token context, and a conversation is full at 80% (its next step could pass that). Start a new one.";
-  await expect(turn.locator('[data-turn-end="capped"]')).toHaveText(`Limit reached${said}`, STEP);
+  // The end's words (the counter's "Undo these changes" follows them in the end block).
+  await expect(turn.locator('[data-turn-end="capped"] > p').first()).toHaveText(said, STEP);
+  await expect(turn.locator('[data-turn-end="capped"] .dock-end-label')).toHaveText('Limit reached');
   await expect(turn.locator('[data-dock-text]').last()).toHaveText('Added one. Nothing is left to do.');
   await expect(turn.locator('[data-dock-line="note"]')).toContainText(['This conversation is nearly full; asking the model to sum up.']);
   await expect(dock(page).locator('[data-dock-blocked]')).toHaveText(said, STEP);
@@ -630,7 +633,7 @@ test('a conversation the next step could fill: the model sums up after its resul
 });
 
 test('Continue in a new chat: the text typed in a full conversation moves into a new one that says what goes with it; its first request carries the earlier prompts, the last answer and where to start', async ({ page, request }) => {
-  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 15 } });
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 20, day_usd: 40 } });
   await openCounter(page, request);
   await openDock(page);
   // 799,990 tokens: the model sums up and the conversation is full (as above).
@@ -679,7 +682,9 @@ test("on $8 a turn (the default), Claude Opus 5.5 is full where $8 could no long
   const turn = dockTurn(page);
   const said =
     'This conversation is full: its last request sent 460,000 tokens, and once its cache expires, sending that again, with a re-run on each of its 2 refusal-fallback models counted, could cost more than the $8.00 per turn set in Settings → Assistant (its next step could pass that). Start a new one.';
-  await expect(turn.locator('[data-turn-end="capped"]')).toHaveText(`Limit reached${said}`, STEP);
+  // The end's words (the counter's "Undo these changes" follows them in the end block).
+  await expect(turn.locator('[data-turn-end="capped"] > p').first()).toHaveText(said, STEP);
+  await expect(turn.locator('[data-turn-end="capped"] .dock-end-label')).toHaveText('Limit reached');
   await expect(turn.locator('[data-turn-end="capped"]')).not.toContainText('Send another message');
   const [first, sumUp] = chats().slice(before);
   expect(first.body.max_tokens, 'the whole answer').toBe(32_000);
@@ -698,8 +703,10 @@ test("a saved chat whose words went to the local server: a cloud request's chat_
   await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
   const local = (await getJson(request, `/api/assistant/history?project=${project}`)).chats.find((c) => c.label === 'Local server');
   expect(local, 'the local chat is saved').toBeTruthy();
-  // A cloud provider from now on, in a new conversation.
+  // A cloud provider from now on, in a new conversation, on a page loaded afresh (a goto that changes
+  // only the hash keeps the page and its event stream).
   await useScriptedModel(request, host.base, fake, 'cloud');
+  await page.goto('about:blank');
   await openCounter(page, request);
   await openDock(page);
   await dock(page).locator('[data-dock-new]').first().click();
@@ -734,13 +741,16 @@ test("today's limit: the request ends \"Limit reached\" saying to raise it in Se
   // A clean day and $1 limits (restored after).
   await postOk(request, '/api/test/assistant/reset', { files: true });
   await useScriptedModel(request, host.base, fake, 'cloud');
-  // $8 a turn: a conversation of 240,000 tokens is under what a turn resends (454,217), so only today's $1 is short.
-  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 8, day_usd: 1 } });
+  await postOk(request, '/api/assistant/settings', { caps: { turn_usd: 1, day_usd: 1 } });
   try {
     await openCounter(page, request);
     await openDock(page);
-    // $0.96 of input (240,000 tokens at Claude Opus 5.5's $4): 96% of the day.
-    fake.reply({ text: 'Read it.', usage: { input: 240_000, output: 10 } });
+    // $0.96 of answers (32,000 + 16,000 tokens at Claude Opus 5.5's $20) on 10-token prompts: 96% of the
+    // day, and the conversation far under what $1 a turn resends, so only today's $1 is short.
+    fake.reply(
+      { tools: [{ name: `${PLUGIN}__add`, input: { by: 1 } }], usage: { input: 10, output: 32_000 } },
+      { text: 'Read it.', usage: { input: 10, output: 16_000 } },
+    );
     await dockSend(page, 'Read the counter');
     const first = dockTurn(page);
     await expect(first.locator('[data-turn-end="done"]')).toBeVisible(STEP);
