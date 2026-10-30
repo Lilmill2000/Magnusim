@@ -46,6 +46,7 @@ import { firstLegacySimId, getActiveSimulation, readCatalog } from './w17-sim-ca
 import { createDraftRun, projectSolveSummary } from './w27-solve.js';
 import { computeSlotHolder, folderBusyMessage, holderNamesProject, projectBusyMessage } from './compute-slot.js';
 import { computeRowsForProject, dropComputeRows } from './server/compute-queue.ts';
+import { projectDeleted } from './server/project-deleted.ts';
 import { envGet } from './env-compat.js';
 import { thumbRenderTimeoutMs, thumbTestStandIn } from './server/thumb-render.js';
 import { matchFaces, readPreviewFaces } from './geometry-face-match.js';
@@ -564,6 +565,8 @@ export function deleteProject(id) {
   removeTreeSync(abs, { maxRetries: 8, retryDelay: 50 });
   // Its queued jobs go with it (a plugin case's record finishes stopped).
   dropComputeRows(rowIds, 'The project was deleted');
+  // So do the Assistant's saved chats of it (its History), the person's delete or the AI's.
+  projectDeleted(id);
   if (readActiveId() === id) {
     writeActiveId(null);
   }

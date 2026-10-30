@@ -18,7 +18,8 @@
  * conversation holds (each request sends them all; its context editing clears them only after
  * the upload) against 600 for a model of more than 200K tokens of context, else 100; OpenAI
  * and a local server count only the pictures a request sends (its oldest results go without
- * theirs, providers/common.ts) against 100. Nothing is written to disk.
+ * theirs, providers/common.ts) against 100. Nothing of it is written to disk (each request's
+ * end is, as the chat history keeps it: history.ts).
  * fullDetail() names the limit a conversation reached with its numbers (fullText words it for
  * the person), and room() how close it is to the nearest one. nearlyFull() says when the next
  * step could reach one (the loop then asks the model to sum up, and closes the conversation:
@@ -31,7 +32,8 @@
  * What a new conversation carries from it (Continue in a new chat, turns.ts carry_from; a coding
  * agent's too): the person's prompts, newest CARRY_LIMITS.prompts within promptBytes (each cut to
  * promptMax), its last answer's text (the end of it, within answerBytes) and how its last turn
- * ended. carried() takes them as they are then.
+ * ended. carried() takes them as they are then; carriedFromSaved() the same from a saved chat
+ * (history.ts) once the conversation is gone. Its turns' lines are saved there as they end.
  *
  * A conversation on a coding agent (provider `agent:<id>`, phase 3 spec 4.7) keeps no
  * messages: the agent keeps the history (and shortens it itself when it fills: it is never
@@ -84,6 +86,44 @@ export interface Carried {
 }
 
 const utf8 = (s: string) => Buffer.byteLength(s, 'utf8');
+
+/** Adds `prompt` (cut to promptMax) to `prompts`, oldest first, within CARRY_LIMITS: answers how many old ones went. */
+function keepPrompt(prompts: string[], prompt: string): number {
+  const L = CARRY_LIMITS;
+  prompts.push(cutBytes(prompt, L.promptMax));
+  let bytes = prompts.reduce((n, p) => n + utf8(p), 0);
+  let dropped = 0;
+  while (prompts.length > L.prompts || (bytes > L.promptBytes && prompts.length > 1)) {
+    bytes -= utf8(prompts.shift() as string);
+    dropped += 1;
+  }
+  return dropped;
+}
+
+/**
+ * What a new conversation carries from a saved chat (history.ts) whose conversation is gone (a
+ * restart, the 2-hour expiry, Forget): as carried() would have, from its saved requests, oldest
+ * first (the end of their last answer: everything the model said in it).
+ */
+export function carriedFromSaved(from: string, saved: ReadonlyArray<{ prompt: string; answer: string; end: LastEnd; full: string | null }>): Carried {
+  const prompts: string[] = [];
+  let dropped = 0;
+  let lastAnswer = '';
+  for (const s of saved) {
+    dropped += keepPrompt(prompts, s.prompt);
+    const text = s.answer.trim();
+    if (text) lastAnswer = cutBytes(text, CARRY_LIMITS.answerBytes, true);
+  }
+  const last = saved.length ? saved[saved.length - 1] : null;
+  return {
+    from,
+    prompts,
+    promptsLeftOut: dropped,
+    lastAnswer,
+    lastEnd: last ? { state: last.end.state, reason: last.end.reason, message: last.end.message } : null,
+    full: last?.full ?? null,
+  };
+}
 
 /** `s` cut to at most `max` UTF-8 bytes, never splitting a character: its start, or (`fromEnd`) its end. */
 export function cutBytes(s: string, max: number, fromEnd = false): string {
@@ -311,13 +351,7 @@ export class Conversation {
 
   /** A turn started with the person's `prompt`: kept for a conversation that continues this one (carried()). */
   notePrompt(prompt: string): void {
-    const L = CARRY_LIMITS;
-    this.prompts.push(cutBytes(prompt, L.promptMax));
-    let bytes = this.prompts.reduce((n, p) => n + utf8(p), 0);
-    while (this.prompts.length > L.prompts || (bytes > L.promptBytes && this.prompts.length > 1)) {
-      bytes -= utf8(this.prompts.shift() as string);
-      this.promptsDropped += 1;
-    }
+    this.promptsDropped += keepPrompt(this.prompts, prompt);
   }
 
   /** Its turn ended so, its last words `answer` ('' keeps the answer before). */

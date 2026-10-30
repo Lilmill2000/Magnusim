@@ -66,7 +66,8 @@ import { alog } from './log.ts';
 import { redact } from './redact.ts';
 import { grants } from './grants.ts';
 import { runTurn, type EndState, type LoopDeps, type LoopTurn, type ModelTurnSettings, type PageLimits, type TurnState } from './loop.ts';
-import { Conversations, fullText, type Carried, type Conversation } from './conversations.ts';
+import { carriedFromSaved, Conversations, fullText, type Carried, type Conversation } from './conversations.ts';
+import { chatHistory, historyKey, HISTORY_LIMITS, type ChatHistory, type HistoryInput, type HistoryLine, type HistoryStep } from './history.ts';
 import { modelLabel } from './prices.ts';
 import { GateBroker, realClock, tabOf, type Clock, type GateEvent, type GateOwner, type GatePresenter, type GateView } from './gates.ts';
 import { agentOwnToolsDeniedText, agentPrivacyDeniedText, destinationHost, privacyDeniedText, quotedTitle, type ProjectInfo } from './privacy.ts';
@@ -401,6 +402,9 @@ export class Turn implements AnyTurn {
   releasedAt: number | null = null;
   /** Its log and pictures were dropped (past TURN_LIMITS.keptEnded): only its summary is kept. */
   logDropped = false;
+  /** Its tool steps as the chat history keeps them (the first HISTORY_LIMITS.steps; the rest counted), with their calls. */
+  private readonly toolSteps: Array<HistoryStep & { call: string }> = [];
+  private toolStepsLeftOut = 0;
 
   constructor(o: TurnInit) {
     this.id = o.id;
@@ -513,9 +517,60 @@ export class Turn implements AnyTurn {
     if (e.type === 'agent') this.agentVersion = e.version;
     if (e.type === 'tool_call') this.openCall = e.call;
     else if (e.type === 'tool_result' && e.call === this.openCall) this.openCall = null;
+    if (!this.closed) this.noteStep(e);
     this.push(e as TurnEventBody);
     // A call's result: the steps and money its tab's page shows moved on.
     if (e.type === 'tool_result') this.changed();
+  }
+
+  /** A tool step for the chat history: its call, then its result's line (never its data). */
+  private noteStep(e: RunnerEvent | TurnEventBody): void {
+    if (e.type === 'tool_call') {
+      if (this.toolSteps.length < HISTORY_LIMITS.steps) this.toolSteps.push({ call: e.call, step: e.step, tool: e.tool, title: e.title, ok: null, code: null, line: '' });
+      else this.toolStepsLeftOut += 1;
+    } else if (e.type === 'tool_result') {
+      for (let i = this.toolSteps.length - 1; i >= 0; i -= 1) {
+        const s = this.toolSteps[i];
+        if (s.call !== e.call) continue;
+        s.ok = e.ok;
+        s.code = e.ok ? null : (e.code ?? null);
+        s.line = e.summary;
+        break;
+      }
+    }
+  }
+
+  /**
+   * What the chat history keeps of it (history.ts), once it ended: the person's prompt, all the
+   * model said, its tool steps' lines, how it ended (and why its conversation is full now), its
+   * usage and times. Never a picture or a result's data: those are not here to give.
+   */
+  historyInput(): HistoryInput {
+    const sum = this.summary();
+    const agent = isAgentSettings(this.settings) ? this.settings.agent : null;
+    const full = isModelSettings(this.settings) ? this.conv.fullDetail(this.settings.base_url) : null;
+    return {
+      turn: this.id,
+      conversation: this.conv.id,
+      project_id: this.conv.projectId,
+      provider: this.settings.provider,
+      label: agent ? agent.name : (PROVIDER_LABELS[this.settings.provider as ProviderId] ?? this.settings.provider),
+      model: this.settings.model,
+      title: this.conv.title || sum.title,
+      prompt: this.prompt,
+      pictures: sum.prompt_images.length,
+      files: this.attachments.map((a) => a.name),
+      answer: this.textSoFar(),
+      steps: this.toolSteps.map((x) => ({ step: x.step, tool: x.tool, title: x.title, ok: x.ok, code: x.code, line: x.line })),
+      steps_left_out: this.toolStepsLeftOut,
+      end: { state: this.state, reason: this.endReason ?? this.state, message: this.message },
+      full: full ? fullText(full, modelLabel(this.conv.model)) : null,
+      usage: { usd: sum.usd, estimated: sum.estimated, tokens: this.tokens, steps: sum.used.steps, billing: sum.billing },
+      started_by: this.startedBy,
+      started_at: sum.started_at,
+      ended_at: sum.ended_at ?? new Date(this.clock.now()).toISOString(),
+      carried_from: this.conv.carriedFrom,
+    };
   }
 
   /** A write of one of its calls (C2): the log's `ui_sync` row, under the call that made it. */
@@ -1115,6 +1170,8 @@ export interface TurnManagerDeps {
   registry: Registry;
   projects(id: string, o: { signal: AbortSignal; turn: string }): Promise<ProjectInfo | null>;
   remember(projectId: string, createdAt: string | null, destination: string): Promise<void>;
+  /** Where each request's end is saved, and a saved chat is found again (tests: their own; else the Assistant home's). */
+  history?: ChatHistory;
   presenter?: GatePresenter;
   clock?: Clock;
   gateTimeoutMs?: number;
@@ -1199,6 +1256,10 @@ export const agentUnknownText = (id: string) => `No coding agent called ${cleanT
 export const PROVIDER_OFF_TEXT = 'The Assistant is off. Choose a provider in Settings → Assistant.';
 export const CARRY_WITH_CONVERSATION_TEXT = 'carry_from starts a new conversation: send it without conversation.';
 export const CARRY_AGENT_TEXT = 'A coding agent keeps its own history, so a conversation with one is not carried into a new one. Start a new conversation.';
+export const CARRY_GONE_TEXT = 'That conversation has ended, and History has no saved copy of it (it keeps 31 days). Start a new one.';
+
+/** A chat the history saved (history.ts find): its project's folder and its requests. */
+type SavedChat = { key: string; lines: HistoryLine[] };
 
 /** How long the conversation list keeps a project's title. */
 const PROJECT_TITLE_MS = 60_000;
@@ -1348,6 +1409,21 @@ export class TurnManager {
     return () => {
       this.turnListeners.delete(fn);
     };
+  }
+
+  /** The chat history this manager saves to (history.ts). */
+  history(): ChatHistory {
+    return this.d.history ?? chatHistory();
+  }
+
+  /** A turn ended: its line goes to the chat history (written after, never awaited), and its listeners hear it. */
+  private ended(t: Turn): void {
+    try {
+      void this.history().append(t.historyInput());
+    } catch (err) {
+      alog('warn', 'a request could not be saved to the chat history', { error: redact(err instanceof Error ? err.message : String(err)).slice(0, 200) });
+    }
+    this.turnChanged(t, 'ended');
   }
 
   private turnChanged(t: Turn, change: TurnChange): void {
@@ -1514,6 +1590,16 @@ export class TurnManager {
     return this.startOnce(body, launch, 1);
   }
 
+  /** A conversation's saved chat (history.ts), or null when none is saved (or it can't be read). */
+  private async savedChat(id: string): Promise<SavedChat | null> {
+    try {
+      return await this.history().find(id);
+    } catch (err) {
+      alog('warn', 'a saved chat could not be read', { error: redact(err instanceof Error ? err.message : String(err)).slice(0, 200) });
+      return null;
+    }
+  }
+
   /** One pass of start()'s checks; an agent whose switch went off while they ran is checked again. */
   private async startOnce(body: Record<string, unknown>, launch: LaunchProof, attempt: number): Promise<Answer> {
     // Before the first await (the settings read): see agentHost().offSince().
@@ -1544,12 +1630,15 @@ export class TurnManager {
     const settings = await this.d.settings();
     // The turn's provider: the one its start names, else its conversation's own (a conversation
     // stays bound to its provider), else the one it continues, else the default. Every check
-    // below is about this one.
+    // below is about this one. The one it continues may be gone from memory (a restart, the
+    // 2-hour expiry, Forget) and saved in the chat history: that copy stands in for it.
     const carryFrom = carryId ? this.conversations.get(carryId) : null;
-    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? carryFrom?.provider ?? settings.provider;
+    const saved = carryId && !carryFrom ? await this.savedChat(carryId) : null;
+    const carriedProvider = carryFrom?.provider ?? (saved ? (saved.lines[saved.lines.length - 1].provider as ProviderId | AgentProviderId) : undefined);
+    const provider = named ?? (convId ? this.conversations.get(convId)?.provider : undefined) ?? carriedProvider ?? settings.provider;
     if (provider === 'off') return refuse(400, 'provider_off', PROVIDER_OFF_TEXT);
     // A coding agent keeps its own history: nothing is carried to or from one.
-    if (carryId && (isAgentChoice(provider) || (carryFrom && isAgentChoice(carryFrom.provider)))) return refuse(400, 'carry_agent', CARRY_AGENT_TEXT);
+    if (carryId && (isAgentChoice(provider) || (carriedProvider !== undefined && isAgentChoice(carriedProvider)))) return refuse(400, 'carry_agent', CARRY_AGENT_TEXT);
     if (isAgentChoice(provider)) {
       const agentId = agentIdOf(provider);
       if (agentId === null) return refuse(400, 'agent_unknown', agentUnknownText(provider.slice('agent:'.length)));
@@ -1631,17 +1720,23 @@ export class TurnManager {
         return refuse(409, 'conversation_full', fullText(full, modelLabel(conv.model)));
       }
     }
-    // Continue in a new chat: what the earlier conversation did, as it is now.
+    // Continue in a new chat: what the earlier conversation did, as it is now (or as the chat
+    // history saved it, once it is gone).
     let carry: Carried | null = null;
     if (carryId) {
       const from = this.conversations.get(carryId);
-      if (!from) return refuse(404, 'unknown_conversation', 'That conversation has ended (2 hours idle, or forgotten). Start a new one.');
+      if (!from && !saved) return refuse(404, 'unknown_conversation', CARRY_GONE_TEXT);
       // Its words go only to the provider they went to, about the same project (or Home).
-      const field = from.provider !== provider ? 'provider' : (from.projectId ?? null) !== (projectId ?? null) ? 'project' : null;
+      const was = from ? { provider: from.provider, project: historyKey(from.projectId ?? null) } : { provider: carriedProvider, project: (saved as SavedChat).key };
+      const field = was.provider !== provider ? 'provider' : was.project !== historyKey(projectId || null) ? 'project' : null;
       if (field) return refuse(409, 'conversation_changed', `That conversation is bound to another ${field}, so it can't be continued here. Start a new one.`, { field });
-      if (from.running) return refuse(409, 'conversation_busy', 'A turn is still running in that conversation. Wait for it, or stop it.');
-      const full = from.fullDetail(settings.base_url);
-      carry = from.carried(full ? fullText(full, modelLabel(from.model)) : null);
+      if (from?.running) return refuse(409, 'conversation_busy', 'A turn is still running in that conversation. Wait for it, or stop it.');
+      if (from) {
+        const full = from.fullDetail(settings.base_url);
+        carry = from.carried(full ? fullText(full, modelLabel(from.model)) : null);
+      } else {
+        carry = carriedFromSaved(carryId, (saved as SavedChat).lines);
+      }
     }
     // The window still has its link (the checks above awaited).
     if (linkGiven && this.tabOfLink(body.link) !== linkTab) return refuse(409, 'no_channel', WINDOW_LOST_TEXT);
@@ -1652,7 +1747,7 @@ export class TurnManager {
     if (!conv) conv = this.conversations.create(binding);
     if (carry) {
       conv.carry = carry;
-      alog('info', 'conversation continued', { conversation: conv.id, from: carry.from, prompts: carry.prompts.length, left_out: carry.promptsLeftOut });
+      alog('info', 'conversation continued', { conversation: conv.id, from: carry.from, prompts: carry.prompts.length, left_out: carry.promptsLeftOut, saved: !!saved });
     }
     this.bindAttachments(attached, conv.id);
     const turnSettings: TurnSettings = {
@@ -1678,7 +1773,7 @@ export class TurnManager {
       gates: this.gates,
       startedBy: linkTab ? 'window' : 'program',
       showTab: linkTab ?? boundTab,
-      onEnded: (ended) => this.turnChanged(ended, 'ended'),
+      onEnded: (ended) => this.ended(ended),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
     // The person's pictures, kept for the window before anyone hears of the turn: its summary's
@@ -1811,7 +1906,7 @@ export class TurnManager {
       gates: this.gates,
       startedBy: shownBy ? 'window' : 'program',
       showTab: shownBy ?? boundTab,
-      onEnded: (ended) => this.turnChanged(ended, 'ended'),
+      onEnded: (ended) => this.ended(ended),
       onUpdated: (changed) => this.turnChanged(changed, 'updated'),
     });
     // The person's pictures, kept for the window as a model turn's are (prompt_images p1..p4).

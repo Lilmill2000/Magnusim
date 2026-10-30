@@ -8,6 +8,7 @@
  * `escalate`, `gateText` and `projectOf` (C3, C5).
  */
 import type { GateDetail } from '../gates.ts';
+import type { ChatHistory } from '../history.ts';
 import { HostCallError, type HostCall, type HostCallOptions } from '../host-call.ts';
 import { HOST_STALL_MS, type Assessed, type AssessContext, type Place, type ToolCtx, type ToolDef, type ToolOutcome, type ToolRunContext, type TurnUse } from '../registry.ts';
 import { cleanText, TEXT_CAPS } from '../sanitize.ts';
@@ -83,6 +84,8 @@ export interface HostToolDeps {
   statFile?(path: string): Promise<{ size: number; file: boolean } | null>;
   /** The export jobs a turn started (lane D), for read_results {kind:'exports'}. */
   knownExports?(turn: string | null): string[];
+  /** The saved chats chat_history reads (tests: their own; else the Assistant home's, history.ts). */
+  history?: () => ChatHistory;
 }
 
 // ---------------------------------------------------------------- small helpers

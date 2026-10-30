@@ -5,15 +5,18 @@
 // conversation and never in another. A long conversation: its old tool results go through the
 // provider's context editing, the model sums up before it fills, and the full line, the room it
 // has and today's limit say what is true, with their numbers; Continue in a new chat carries the
-// text typed and what the full one did.
+// text typed and what the full one did. History keeps a chat past a restart (read only), and Clear
+// history empties it.
 // Its own server with the Assistant's test switches (a test home, never this PC's keys), the
 // scripted model (support/fake-llm.mjs) and the ai-demo test plugin
 // (python/tests/fixtures/assistant-plugins) for a workspace. Rect checks allow 2 px (fonts
 // differ under Linux); no pixel snapshots; races are held by the fake, never slept.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { answerGate, dockGate, dockSend, dockTurn, openDock, resultsIn, startTurn, trackTab, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm, userImagesOf } from './support/fake-llm.mjs';
-import { startHost } from './support/host-server.mjs';
+import { e2eTemp, startHost } from './support/host-server.mjs';
 import { serverStream, setHidden } from './support/link-streams.js';
 import { expect, test } from './support/stress.js';
 
@@ -692,5 +695,73 @@ test("today's limit: the request ends \"Limit reached\" saying to raise it in Se
     expect(chats().length, 'nothing sent').toBe(before);
   } finally {
     await postOk(request, '/api/test/assistant/reset', { files: true });
+  }
+});
+
+test("History keeps a chat past a restart: after a new server on the same folders, the chat's title, prompt and answer show read only; Clear history empties it", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  // Its own server, on a projects folder and an Assistant home that outlive it: a second server finds the chat.
+  const keep = e2eTemp('dock-history');
+  const projects = join(keep, 'projects');
+  const env = {
+    MAGNUSIM_TEST_ASSISTANT: '1',
+    MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base,
+    MAGNUSIM_TEST_EVENT_HUB: '1',
+    MAGNUSIM_ASSISTANT_HOME: join(keep, 'assistant'),
+  };
+  const start = () => startHost({ name: 'dock-history', projects, seed: false, env });
+  const openProject = async (base, id) => {
+    await page.goto(`${base}/#/p/${id}`);
+    await page.waitForFunction((pid) => window.__CFD_PROJECT_READY__ === pid, id, { timeout: 60_000 });
+    await openDock(page);
+  };
+  let h = await start();
+  try {
+    await useScriptedModel(request, h.base, fake, 'cloud');
+    const made = await request.post(`${h.base}/api/project`, { data: { title: 'History project', folder: 'My Projects', units: 'Metric', category: 'Other' } });
+    expect(made.ok()).toBe(true);
+    const pid = (await made.json()).id;
+    await openProject(h.base, pid);
+    fake.reply({ text: 'The project has no geometry yet.' });
+    await dockSend(page, 'What is in this project?');
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible(STEP);
+
+    // A new server on the same folders: the conversation is gone from memory, its saved chat is not.
+    h.stop();
+    h = await start();
+    await useScriptedModel(request, h.base, fake, 'cloud');
+    await openProject(h.base, pid);
+    await expect(dock(page).locator('[data-dock-turn]')).toHaveCount(0);
+    await dock(page).locator('[data-dock-menu]').click();
+    await dock(page).locator('[data-dock-history]').click();
+    const row = dock(page).locator('[data-dock-saved-chat]');
+    await expect(row).toHaveCount(1, STEP);
+    await expect(row.locator('.dock-menu-row-title')).toHaveText('What is in this project?');
+    await expect(row.locator('.dock-menu-row-prompt')).toHaveText('What is in this project?');
+    await row.locator('.dock-menu-row').click();
+    const saved = dock(page).locator('[data-dock-saved-turn]');
+    await expect(saved).toHaveCount(1, STEP);
+    await expect(saved.locator('[data-dock-prompt]')).toHaveText('What is in this project?');
+    await expect(saved.locator('[data-dock-text]')).toHaveText('The project has no geometry yet.');
+    await expect(saved.locator('[data-turn-end="done"]')).toBeVisible();
+    await expect(dock(page).locator('.dock-menu-title')).toHaveText('What is in this project?');
+    await expect(dock(page).locator('[data-dock-saved-continue]')).toHaveText('Continue in a new chat');
+    await expect(composer(page)).toHaveCount(0);
+    await shot(page, 'history-saved-chat');
+
+    // Clear history, asked first with the app's dialog: History is empty, and the saved chat goes.
+    await dock(page).locator('[data-dock-menu]').click();
+    await dock(page).locator('[data-dock-history]').click();
+    await expect(row).toHaveCount(1, STEP);
+    await dock(page).locator('[data-dock-clear-history]').click();
+    await expect(page.locator('#cf-heading')).toHaveText("Clear this project's chat history?");
+    await page.locator('#cf-confirm').click();
+    await expect(dock(page).locator('[data-dock-history-empty]')).toHaveText('No saved chats here in the last 31 days.', STEP);
+    await expect(dock(page).locator('[data-dock-history-notice]')).toHaveText('Cleared 1 saved chat.');
+    await expect(dock(page).locator('[data-dock-saved]')).toHaveCount(0);
+    expect((await (await request.get(`${h.base}/api/assistant/history?project=${pid}`)).json()).chats).toEqual([]);
+  } finally {
+    h.stop();
+    rmSync(keep, { recursive: true, force: true, maxRetries: 5 });
   }
 });

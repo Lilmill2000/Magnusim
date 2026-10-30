@@ -21,11 +21,11 @@ export const CLOSE_DOCK = 'Close the Assistant';
 export const GROUP_HERE = 'Here';
 export const GROUP_HOME = 'Home';
 export const GROUP_OTHER_PROJECTS = 'Other projects';
-export const CONVERSATIONS_EMPTY = 'No conversations yet. Magnusim keeps them while it runs; a restart clears them.';
+export const CONVERSATIONS_EMPTY = 'No conversations yet. Magnusim keeps them while it runs; History keeps what they said for 31 days.';
 export const FORGET = 'Forget';
 export const forgetLabel = (title: string): string => `Forget ${title}`;
 export const FORGET_TITLE = 'Forget this conversation?';
-export const FORGET_COPY = "The Assistant forgets its messages; this can't be undone. What it changed in your projects stays.";
+export const FORGET_COPY = "The Assistant forgets its messages; this can't be undone. Its saved copy stays in History, and what it changed in your projects stays.";
 export const FORGET_KEEP = 'Keep';
 export const FORGET_BUSY = 'A request is running in this conversation. Stop it first.';
 /** A conversation row's second line: its provider and the time it was last used. */
@@ -33,6 +33,39 @@ export const conversationMeta = (label: string, hhmm: string): string => `${labe
 export const readOnlyConversation = (projectTitle: string): string =>
   `This conversation is about project "${projectTitle}". Open that project to continue it, or start a new conversation here.`;
 export const OPEN_PROJECT = 'Open project';
+
+// ---------------------------------------------------------------- History: the saved chats (31 days)
+
+export const HISTORY = 'History';
+export const CLEAR_HISTORY = 'Clear history';
+export const BACK = 'Back';
+/** Over the History list: whose chats, and how long they are kept. */
+export const historyOf = (home: boolean): string => (home ? 'Chats saved on Home, newest first. Kept 31 days.' : 'Chats saved in this project, newest first. Kept 31 days.');
+export const HISTORY_EMPTY = 'No saved chats here in the last 31 days.';
+export const HISTORY_LOADING = 'Loading the saved chats…';
+export const historyMore = (n: number): string => `${n} older ${n === 1 ? 'chat is' : 'chats are'} saved but not listed.`;
+/** A saved chat's day and time as History shows it: "29 Oct, 09:41". */
+export const dayTime = (iso: string): string => {
+  const t = new Date(iso);
+  if (!Number.isFinite(t.getTime())) return '';
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${t.getDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][t.getMonth()]}, ${two(t.getHours())}:${two(t.getMinutes())}`;
+};
+export const clearHistoryTitle = (home: boolean): string => (home ? "Clear Home's chat history?" : "Clear this project's chat history?");
+export const CLEAR_HISTORY_COPY = "Magnusim deletes the chats it saved here; this can't be undone. Conversations still open stay, and what the Assistant changed in your projects stays.";
+export const CLEAR_HISTORY_KEEP = 'Keep';
+export const clearedChats = (n: number): string => (n ? `Cleared ${n} saved ${n === 1 ? 'chat' : 'chats'}.` : 'There were no saved chats to clear.');
+/** Under a saved chat, in place of the composer. */
+export const savedLine = (when: string, carry: boolean): string =>
+  carry ? `A saved chat, last used ${when}. It is read only: Continue in a new chat takes up where it ended.` : `A saved chat, last used ${when}. It is read only.`;
+export const SAVED_LOADING = 'Loading the saved chat…';
+export const SHOW_MORE = 'Show more';
+export const savedPictures = (n: number): string => `${n} ${n === 1 ? 'picture' : 'pictures'} sent (not saved)`;
+/** A saved tool step: its title, and its result's line, or how it failed. */
+export const savedStep = (ok: boolean | null, title: string, line: string, code: string | null): string =>
+  ok === null ? `… ${title}: no answer` : ok ? `✓ ${title}${line ? `: ${line}` : ''}` : `✗ ${title}${line ? `: ${line}` : ''}${code ? ` (${code})` : ''}`;
+export const stepsLeftOut = (n: number): string => `${n} more ${n === 1 ? 'step' : 'steps'} not saved`;
+export const SAVED_CUT = 'Cut to fit what History keeps of one request.';
 
 // ---------------------------------------------------------------- the person's message (2.4)
 

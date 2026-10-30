@@ -1,10 +1,11 @@
 {
-  "about": "Each row and each tool names the editions it is in (editions: magnusim, cad), and each Magnusim CAD row the CAD app's control a person uses for it (cad_control: where it is reached, and its selector); tool_editions names every host and core page tool, with the values it keeps in Magnusim CAD (cad_values: assistant-routes.ts CAD_EDITION_TOOLS). Every Tier 0 and Tier 1 row of the core parity audit, and the Tier 2 rows the host tools cover, with the Assistant's way to do it (core host tools spec 1.5). A row has tool paths (tool, where: its enum values or its properties, routes: HOST_ROUTES ids the tool's code calls, or page: a core page tool), a deferral (named in the release notes' Not yet list), person_only (never a tool) or not_owed (route only, no UI). scripts/__tests__/assistant-parity.test.mjs holds it to the code.",
+  "about": "Each row and each tool names the editions it is in (editions: magnusim, cad), and each Magnusim CAD row the CAD app's control a person uses for it (cad_control: where it is reached, and its selector; D rows are the Assistant dock's own controls); tool_editions names every host and core page tool, with the values it keeps in Magnusim CAD (cad_values: assistant-routes.ts CAD_EDITION_TOOLS). Every Tier 0 and Tier 1 row of the core parity audit, and the Tier 2 rows the host tools cover, with the Assistant's way to do it (core host tools spec 1.5). A row has tool paths (tool, where: its enum values or its properties, routes: HOST_ROUTES ids the tool's code calls, or page: a core page tool), a deferral (named in the release notes' Not yet list), person_only (never a tool) or not_owed (route only, no UI). scripts/__tests__/assistant-parity.test.mjs holds it to the code.",
   "required": ["H1-H14", "G1-G18", "S1-S15", "M1-M7", "B1-B10", "X1-X19", "R1-R22", "V1-V25", "Q1-Q5", "P2", "P6", "P8", "P23", "P24", "L7", "L9"],
   "release_notes": "docs/releases/v0.5.0.md",
   "tool_editions": {
     "app_status": {"editions": ["magnusim", "cad"]},
     "catalog": {"editions": ["magnusim"]},
+    "chat_history": {"editions": ["magnusim", "cad"]},
     "compute": {"editions": ["magnusim"]},
     "core__appearance": {"editions": ["magnusim", "cad"]},
     "core__set_appearance": {"editions": ["magnusim", "cad"]},
@@ -198,6 +199,7 @@
     { "row": "L9", "editions": ["magnusim"], "paths": [{ "tool": "project_summary", "where": { "project_id": true }, "context": "home" }, { "tool": "read_setup", "where": { "project_id": true }, "context": "home" }, { "tool": "projects", "context": "home" }] },
 
     { "row": "A1-A14", "editions": ["magnusim"], "deferred": "v0.5.x, release notes", "notes": "Airfoil" },
-    { "row": "T1-T16", "editions": ["magnusim"], "deferred": "v0.5.x, release notes", "notes": "2D Wind Tunnel" }
+    { "row": "T1-T16", "editions": ["magnusim"], "deferred": "v0.5.x, release notes", "notes": "2D Wind Tunnel" },
+    { "row": "D1", "editions": ["magnusim", "cad"], "cad_control": { "reach": "dock", "selector": "#assistant-dock [data-dock-history]" }, "notes": "The Assistant dock's History (this project's saved chats, kept 31 days, each read-only) and Clear history (asked first)", "paths": [{ "tool": "chat_history", "where": { "action": ["list", "read", "clear"] } }] }
   ]
 }

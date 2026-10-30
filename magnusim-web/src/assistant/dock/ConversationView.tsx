@@ -5,6 +5,9 @@
  * conversation's newest requests (10, "Show earlier requests" for 10 more), and builds the
  * header's menu, the transcript and the composer.
  *
+ * A saved chat picked in History shows read only in the transcript's place (SavedChat.tsx), with
+ * its line and Continue in a new chat in the composer's.
+ *
  * Questions (spec 4): a card of a request shown here sits under it; any other card in the
  * questions strip at the top. Requests of other origins bound to this tab (the command line),
  * and those whose card shows here, show read-only under "Elsewhere". After a reload, a running
@@ -33,6 +36,7 @@ import {
 } from './copy';
 import { useDockPlace, type DockPlace } from './context';
 import { ConversationMenu } from './ConversationMenu';
+import { SavedBar, SavedChat } from './SavedChat';
 import { useDock } from './dockState';
 import type { DockContent } from './DockShell';
 import { setShownTurn } from './follow';
@@ -180,7 +184,8 @@ export function useDockContent(): DockContent | null {
     if (endedKey) void refreshConversations();
   }, [endedKey]);
 
-  const state: DockContent['state'] = store.questions.length ? 'question' : running.length ? 'running' : turns.length ? 'ready' : 'empty';
+  const saved = store.saved;
+  const state: DockContent['state'] = store.questions.length ? 'question' : running.length ? 'running' : turns.length || saved ? 'ready' : 'empty';
   const onNew = () => showConversation(null);
   const elsewhereProject = !!row && (row.project_id ?? null) !== place.projectId;
 
@@ -211,9 +216,20 @@ export function useDockContent(): DockContent | null {
   const elsewhereTurns: TranscriptTurn[] = elsewhereShown.map((id) => ({ id, row: null, view: store.turns[id] ?? emptyTurnView(id) }));
   return {
     state,
-    header: <ConversationMenu list={list} shown={row} projectId={place.projectId} onPick={(id) => showConversation(id)} onNew={onNew} />,
+    header: (
+      <ConversationMenu
+        list={list}
+        shown={row}
+        projectId={place.projectId}
+        onPick={(id) => showConversation(id)}
+        onNew={onNew}
+        shownTitle={saved ? saved.chat?.title || NEW_CONVERSATION : null}
+      />
+    ),
     questions: cardList(strip),
-    log: (
+    log: saved ? (
+      <SavedChat saved={saved} />
+    ) : (
       <Transcript
         turns={turns}
         elsewhere={elsewhereTurns}
@@ -231,11 +247,12 @@ export function useDockContent(): DockContent | null {
         agentContext={row && !row.running ? (row.context ?? null) : null}
       />
     ),
-    composer:
-      elsewhereProject && row ? (
-        <ReadOnly row={row} onNew={onNew} />
-      ) : (
-        <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} carry={store.carry} busy={busy} />
-      ),
+    composer: saved ? (
+      <SavedBar saved={saved} />
+    ) : elsewhereProject && row ? (
+      <ReadOnly row={row} onNew={onNew} />
+    ) : (
+      <Composer place={place} status={status.status} conversation={row} conversationId={store.shown} running={newestRunning} onNew={onNew} carry={store.carry} busy={busy} />
+    ),
   };
 }

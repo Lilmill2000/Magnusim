@@ -6,15 +6,39 @@ describe('the dock copy', () => {
   it('header, conversations and the person\'s message', () => {
     expect([copy.DOCK_TITLE, copy.NEW_CONVERSATION, copy.ASSISTANT_SETTINGS, copy.CLOSE_DOCK]).toEqual(['Assistant', 'New conversation', 'Assistant settings', 'Close the Assistant']);
     expect([copy.GROUP_HERE, copy.GROUP_HOME, copy.GROUP_OTHER_PROJECTS]).toEqual(['Here', 'Home', 'Other projects']);
-    expect(copy.CONVERSATIONS_EMPTY).toBe('No conversations yet. Magnusim keeps them while it runs; a restart clears them.');
+    expect(copy.CONVERSATIONS_EMPTY).toBe('No conversations yet. Magnusim keeps them while it runs; History keeps what they said for 31 days.');
     expect(copy.forgetLabel('Box')).toBe('Forget Box');
     expect([copy.FORGET, copy.FORGET_TITLE, copy.FORGET_KEEP]).toEqual(['Forget', 'Forget this conversation?', 'Keep']);
-    expect(copy.FORGET_COPY).toBe("The Assistant forgets its messages; this can't be undone. What it changed in your projects stays.");
+    expect(copy.FORGET_COPY).toBe("The Assistant forgets its messages; this can't be undone. Its saved copy stays in History, and what it changed in your projects stays.");
     expect(copy.FORGET_BUSY).toBe('A request is running in this conversation. Stop it first.');
     expect(copy.conversationMeta('Local server', '09:41')).toBe('Local server · 09:41');
     expect(copy.readOnlyConversation('Wing')).toBe('This conversation is about project "Wing". Open that project to continue it, or start a new conversation here.');
     expect(copy.OPEN_PROJECT).toBe('Open project');
     expect(copy.FROM_PROGRAM).toBe('From the command line or another program');
+  });
+
+  it('History: the saved chats, Clear history and a saved chat read only', () => {
+    expect([copy.HISTORY, copy.CLEAR_HISTORY, copy.BACK, copy.CLEAR_HISTORY_KEEP]).toEqual(['History', 'Clear history', 'Back', 'Keep']);
+    expect([copy.historyOf(false), copy.historyOf(true)]).toEqual(['Chats saved in this project, newest first. Kept 31 days.', 'Chats saved on Home, newest first. Kept 31 days.']);
+    expect([copy.HISTORY_EMPTY, copy.HISTORY_LOADING, copy.historyMore(1), copy.historyMore(3)]).toEqual([
+      'No saved chats here in the last 31 days.',
+      'Loading the saved chats…',
+      '1 older chat is saved but not listed.',
+      '3 older chats are saved but not listed.',
+    ]);
+    expect([copy.dayTime('2026-10-28T09:05:00'), copy.dayTime('not a date')]).toEqual(['28 Oct, 09:05', '']);
+    expect([copy.clearHistoryTitle(false), copy.clearHistoryTitle(true)]).toEqual(["Clear this project's chat history?", "Clear Home's chat history?"]);
+    expect(copy.CLEAR_HISTORY_COPY).toBe("Magnusim deletes the chats it saved here; this can't be undone. Conversations still open stay, and what the Assistant changed in your projects stays.");
+    expect([copy.clearedChats(0), copy.clearedChats(1), copy.clearedChats(4)]).toEqual(['There were no saved chats to clear.', 'Cleared 1 saved chat.', 'Cleared 4 saved chats.']);
+    expect(copy.savedLine('28 Oct, 09:05', true)).toBe('A saved chat, last used 28 Oct, 09:05. It is read only: Continue in a new chat takes up where it ended.');
+    expect(copy.savedLine('28 Oct, 09:05', false)).toBe('A saved chat, last used 28 Oct, 09:05. It is read only.');
+    expect([copy.SAVED_LOADING, copy.SHOW_MORE, copy.savedPictures(1), copy.savedPictures(2)]).toEqual(['Loading the saved chat…', 'Show more', '1 picture sent (not saved)', '2 pictures sent (not saved)']);
+    expect([copy.savedStep(true, 'Extrude', 'Extruded 10 mm', null), copy.savedStep(false, 'Fillet', 'Edge too short', 'bad_values'), copy.savedStep(null, 'Look', '', null)]).toEqual([
+      '✓ Extrude: Extruded 10 mm',
+      '✗ Fillet: Edge too short (bad_values)',
+      '… Look: no answer',
+    ]);
+    expect([copy.stepsLeftOut(1), copy.stepsLeftOut(5), copy.SAVED_CUT]).toEqual(['1 more step not saved', '5 more steps not saved', 'Cut to fit what History keeps of one request.']);
   });
 
   it('the menu, the transcript and the intros', () => {

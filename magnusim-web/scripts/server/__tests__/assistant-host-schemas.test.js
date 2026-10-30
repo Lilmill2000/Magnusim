@@ -28,7 +28,7 @@ function walk(node, path = '(root)', out = []) {
 }
 
 describe('the host tools’ schemas', () => {
-  it('are the twelve of this lane, each with its contexts and priority', () => {
+  it('are the thirteen of this lane, each with its contexts and priority', () => {
     assert.deepEqual(
       TOOLS.map((t) => [t.name, t.priority, [...t.contexts]]),
       [
@@ -44,6 +44,7 @@ describe('the host tools’ schemas', () => {
         ['setup_edit', 88, ['workbench']],
         ['import_file', 56, ['workbench']],
         ['delete', 60, ['home', 'workbench']],
+        ['chat_history', 30, ['home', 'workbench', 'workspace']],
       ],
     );
   });

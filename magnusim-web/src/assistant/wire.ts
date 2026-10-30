@@ -375,8 +375,68 @@ export interface TurnChannelFrameData {
 }
 
 /**
+ * GET /api/assistant/history?project=<id>|home: the dock's History, the chats saved for a project
+ * (or Home), newest end first, kept 31 days (scripts/server/assistant/history.ts).
+ */
+export interface HistoryAnswer {
+  ok: true;
+  kept_days: number;
+  chats: HistoryChat[];
+  /** Saved chats in all (at most 200 are listed). */
+  total: number;
+}
+
+export interface HistoryChat {
+  /** Its conversation's id (Continue in a new chat sends it as carry_from). */
+  id: string;
+  title: string;
+  provider: string;
+  /** How the person reads its provider: its label, or the coding agent's name (server data). */
+  label: string;
+  model: string;
+  started_at: string;
+  ended_at: string;
+  first_prompt: string;
+  end_state: string;
+  /** Its conversation was full after its last request. */
+  full: boolean;
+}
+
+/** One saved request: never a picture or a result's data. */
+export interface HistoryRequest {
+  turn: string;
+  conversation: string;
+  prompt: string;
+  /** The person's pictures sent with it (their number only). */
+  pictures: number;
+  files: string[];
+  /** Everything the model said in it (its end kept when cut). */
+  answer: string;
+  steps: Array<{ step: number; tool: string; title: string; ok: boolean | null; code: string | null; line: string }>;
+  steps_left_out: number;
+  end: { state: string; reason: string; message: string | null };
+  full: string | null;
+  usage: { usd: number; estimated: boolean; tokens: number; steps: number; billing: string };
+  started_by: string;
+  started_at: string;
+  ended_at: string;
+  /** The fields cut to fit the saved line. */
+  cut?: string[];
+}
+
+/** GET /api/assistant/history/:id?project=&from=: a page of one saved chat. */
+export interface HistoryPageAnswer {
+  ok: true;
+  chat: HistoryChat;
+  total: number;
+  from: number;
+  next: number | null;
+  requests: HistoryRequest[];
+}
+
+/**
  * GET /api/assistant/conversations[?project=<id>|home]: the conversations this server holds
- * (memory only: a restart clears them), newest use first.
+ * (memory only: a restart clears them; History keeps what they said), newest use first.
  */
 export interface ConversationsAnswer {
   ok: true;

@@ -16,9 +16,11 @@
  *   setup_edit       materials, BCs, meshes, refinements, runs, monitors, geometry
  *   import_file      a dock attachment or a typed path as a new geometry
  *   delete           anything the person can delete, with its knock-on effects named
+ *   chat_history     this project's saved Assistant chats (the dock's History), and Clear history
  *
  * Reads take a project_id (the turn's by default); writes go only to the project open in
- * the turn's window. connection_check {word} exists for Settings' Test only; it is never
+ * the turn's window. chat_history reads the Assistant's own files (history.ts), not the app's
+ * routes, and only the turn's own project's (or Home's). connection_check {word} exists for Settings' Test only; it is never
  * offered to a turn.
  */
 import { readFile } from 'node:fs/promises';
@@ -39,6 +41,7 @@ import { catalogTool } from './host/catalog.ts';
 import { hostTool, NO_PROJECT, paced, type HostToolDeps } from './host/common.ts';
 import { createHostTransport } from './host-call.ts';
 import { uiSync, uiSyncOrigin, type UiSyncInput } from '../ui-sync.ts';
+import { chatHistoryTool } from './host/chat-history.ts';
 import { deleteTool } from './host/delete.ts';
 import { explainReadyTool } from './host/explain-ready.ts';
 import { importFileTool } from './host/import-file.ts';
@@ -68,6 +71,7 @@ export function createHostTools(deps: HostToolDeps): ToolDef[] {
     setupEditTool(d),
     importFileTool(d),
     deleteTool(d),
+    chatHistoryTool({ history: d.history }),
   ];
 }
 

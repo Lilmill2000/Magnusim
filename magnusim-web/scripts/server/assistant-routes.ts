@@ -98,7 +98,18 @@
  *                                        dropped_turns}]}: this server's conversations (memory only),
  *                                        newest use first (context: a coding agent's {used, size}
  *                                        of its own context, else null); 400
- *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it
+ *   POST /api/assistant/conversations/:id/forget  {} → {ok}; 409 while a turn runs in it (its saved
+ *                                        chat stays in History)
+ *   GET  /api/assistant/history         ?project=<id>|home → {ok, kept_days, chats:[{id, title, provider,
+ *                                        label, model, started_at, ended_at, first_prompt, end_state,
+ *                                        full}], total}: the dock's History, the saved chats of a project
+ *                                        (or Home), newest end first, kept 31 days (assistant/history.ts:
+ *                                        one line per request's end, redacted, no pictures); 400 bad_project
+ *   GET  /api/assistant/history/:id     ?project=<id>|home&from=N → {ok, chat, total, from, next,
+ *                                        requests:[HistoryLine]}: one saved chat of that project, a page
+ *                                        of its requests from `from`; 400 bad_project; 404 not_found
+ *   POST /api/assistant/history/clear   {project: <id>|'home'} → {ok, removed}: Clear history (the dock
+ *                                        asks first); 400 bad_project
  *   GET  /api/assistant/tabs            what each app tab offers the Assistant (its workspace tools):
  *                                        {ok, tabs:[{tab, connected, since, workspace, tools, refused,
  *                                        active_turns, hold_until}]} (since and hold_until: ms since 1970)
@@ -153,7 +164,7 @@
  * MAGNUSIM_TEST_ASSISTANT=1 (read when the routes are registered) also registers, for tests:
  *   GET  /api/test/assistant/state      what the Assistant holds in memory (turn_channels: the turn
  *                                        channels open, by tab; attachments: the files kept)
- *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files and attachments)
+ *   POST /api/test/assistant/reset      {files?} forget it all (files: also the test home's files, attachments and saved chats)
  *   POST /api/test/assistant/attachments/sweep  {later_ms?} the attachments' sweep, as if run that much later → {ok, removed}
  */
 import { access, mkdir, rm } from 'node:fs/promises';
@@ -184,6 +195,8 @@ import { createHostCaller } from './assistant/host-call.ts';
 import { projectLookup, remember } from './assistant/privacy.ts';
 import { createTurnManager, IMAGE_GONE_TEXT, WINDOW_LOST_TEXT, type TurnManager, type TurnManagerDeps } from './assistant/turns.ts';
 import { attachmentStore, isAttachmentId, kindOfFormat, NO_SUCH_ATTACHMENT_TEXT, type AttachmentStore } from './assistant/attachments.ts';
+import { CONVERSATION_ID_RE, HISTORY_LIMITS } from './assistant/history.ts';
+import { onProjectDeleted } from './project-deleted.ts';
 import { createRelay, relaySwitches, type Relay, type RelayOptions } from './assistant/relay.ts';
 import { turnChannelsOpen } from './assistant/turn-channel.ts';
 import { closeExternalMcpConnections, mcpClientConfig, mcpConnections, mcpLaunchCheck, mcpListenerStatus, setMcpHandler, startMcpListener } from './assistant/mcp/listener.ts';
@@ -717,6 +730,7 @@ function registerTestRoutes(router: Router, turns: TurnManager, relay: Relay, ke
           await rm(f, { force: true });
         }
         await kept().clear();
+        await turns.history().clearAll();
       }
       ctx.sendJson(200, { ok: true, boot: assistantState().bootId });
     }),
@@ -801,6 +815,8 @@ export const CAD_EDITION_TOOLS: Readonly<Record<string, EditionTool>> = {
     values: { target: ['home', 'project', 'workspace'], panel: [''] },
     props: { id: 'workspace: the Part; "" when the target needs none' },
   },
+  // The dock's History is the same in both apps.
+  chat_history: {},
   // Settings → Keybinds and Settings → Appearance are the same in both apps.
   core__keybinds: {},
   core__set_keybind: {},
@@ -966,6 +982,67 @@ function registerTurnRoutes(router: Router, turns: TurnManager): void {
     local(async (ctx) => {
       const r = turns.tabs();
       ctx.sendJson(r.status, r.body);
+    }),
+  );
+
+  registerHistoryRoutes(router, turns);
+}
+
+const HISTORY_PROJECT_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const BAD_HISTORY_PROJECT = 'project is a project id, or home.';
+
+/** A History route's `project`: an id, null for 'home', or false when it is neither. */
+function historyProject(v: unknown): string | null | false {
+  if (v === 'home') return null;
+  return typeof v === 'string' && HISTORY_PROJECT_RE.test(v) ? v : false;
+}
+
+/**
+ * The dock's History and Clear history (assistant/history.ts): a project's saved chats, one of
+ * them a page at a time, and every one of them removed. The AI does the same with chat_history.
+ */
+function registerHistoryRoutes(router: Router, turns: TurnManager): void {
+  router.get(
+    '/api/assistant/history',
+    local(async (ctx) => {
+      const project = historyProject(ctx.url.searchParams.get('project'));
+      if (project === false) {
+        ctx.sendJson(400, { ok: false, code: 'bad_project', error: BAD_HISTORY_PROJECT });
+        return;
+      }
+      const { chats, total } = await turns.history().list(project);
+      ctx.sendJson(200, { ok: true, kept_days: HISTORY_LIMITS.keepDays, chats, total });
+    }),
+  );
+
+  router.get(
+    '/api/assistant/history/:id',
+    local(async (ctx) => {
+      const project = historyProject(ctx.url.searchParams.get('project'));
+      if (project === false) {
+        ctx.sendJson(400, { ok: false, code: 'bad_project', error: BAD_HISTORY_PROJECT });
+        return;
+      }
+      const from = Number(ctx.url.searchParams.get('from') ?? 0);
+      const page = CONVERSATION_ID_RE.test(ctx.params.id) ? await turns.history().read(project, ctx.params.id, { from: Number.isFinite(from) ? from : 0 }) : null;
+      if (!page) {
+        ctx.sendJson(404, { ok: false, code: 'not_found', error: 'No saved chat of that id here (History keeps 31 days).' });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, chat: page.chat, total: page.total, from: page.from, next: page.next, requests: page.lines });
+    }),
+  );
+
+  router.post(
+    '/api/assistant/history/clear',
+    local(async (ctx) => {
+      const body = await ctx.readJsonBody();
+      const project = historyProject(body.project);
+      if (project === false) {
+        ctx.sendJson(400, { ok: false, code: 'bad_project', error: BAD_HISTORY_PROJECT });
+        return;
+      }
+      ctx.sendJson(200, { ok: true, removed: await turns.history().clear(project) });
     }),
   );
 }
@@ -1405,6 +1482,14 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       .catch(() => undefined);
   });
   const stopSweeps = files().startSweeps();
+  // The saved chats past 31 days go (at boot and every 6 h), and a deleted project's at once.
+  const stopHistorySweeps = turns.history().startSweeps();
+  const offProjectDeleted = onProjectDeleted((id) => {
+    turns
+      .history()
+      .forgetProject(id)
+      .catch((err: unknown) => alog('warn', "a deleted project's chats could not be removed", { error: redact(String((err as Error)?.message ?? err)).slice(0, 200) }));
+  });
 
   registerTurnRoutes(router, turns);
   registerAttachmentRoutes(router, relay, files);
@@ -1447,6 +1532,8 @@ export function registerAssistantRoutes(router: Router, deps: AssistantDeps = {}
       unwatch();
       offDrop();
       stopSweeps();
+      stopHistorySweeps();
+      offProjectDeleted();
       // Explicitly, superseded or not: the connections this lifetime's handler served close,
       // and the coding agents its turns started end (their turns failed/shutdown).
       disposeMcp();
