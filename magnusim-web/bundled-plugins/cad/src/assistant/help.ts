@@ -211,7 +211,7 @@ const buildChecks = (): HelpRow[] => [
   { about: 'symmetry', text: "A symmetric part's centroid_mm (measure) lies on its planes of symmetry." },
   {
     about: 'pictures',
-    text: 'An edit that answers ok carries one small picture of the Part (iso, framed on every shown body, their own colours) when the model reads images and the person has Pictures on; data.picture says what it shows, data.picture_note why there is none. Look at it after each step: a feature missing, in the wrong place, the wrong way round or the wrong size shows there; fix it before going on. End with view iso, plus top, a section or labels faces for inner features. Pictures show shape, never sizes.',
+    text: "An edit that answers ok carries one small picture of the Part (iso, framed on every shown body, their own colours) when the model reads images and the person has Pictures on; in a step (one answer) of several edits only the last carries it, the others say \"see this step's last edit\" (if it fails, a read after it or your next step brings it). data.picture says what it shows, data.picture_note why there is none. Look at it after each step: a feature missing, in the wrong place, the wrong way round or the wrong size shows there; fix it before going on. End with view iso, plus top, a section or labels faces for inner features. Pictures show shape, never sizes.",
   },
   { about: 'files', text: 'There is no export tool: tell the person to use Export STEP for a file.' },
 ];

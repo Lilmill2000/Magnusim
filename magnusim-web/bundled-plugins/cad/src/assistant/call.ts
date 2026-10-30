@@ -13,7 +13,7 @@ import type { AssistantCall, AssistantResult } from '@magnusim/workspace';
 import type { CallCtx, ToolImpl, ToolReply } from '../types/assistant';
 import { asToolError, sdkError, ToolError } from './errors';
 import { oneLine } from './numbers';
-import { editPicture, wantsPicture } from './pictures';
+import { editPicture, owePicture, PICTURE_LATER, PICTURE_NEXT, picturesOn, placeOf, stepPicture, wantsPicture } from './pictures';
 import { CALLS_KEPT, type AssistantRuntime } from './runtime';
 import { toolNamed, TOOL_NAMES } from './schemas';
 import { conversationOf } from './session-key';
@@ -100,6 +100,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     let ok = false;
     let error: ToolError | null = null;
     let images = 0;
+    // Its place in the model's step, when the host says it: one picture per step (pictures.ts).
+    const place = placeOf(call);
     try {
       if (!spec || !TOOL_NAMES.includes(call.tool)) throw new ToolError('bad_input', `No Part tool is called ${call.tool}.`);
       if (rt.stopped.has(key)) throw new ToolError('stopped', STOPPED_WORDS);
@@ -109,8 +111,17 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       ok = true;
       // An edit that answered ok: one picture of the Part as it is now (pictures.ts); never a failure.
       // A reply that changed no model (undo_step false: the workspace tool's view state) gets none.
-      if (!reply.images?.length && reply.data.undo_step !== false && wantsPicture(ctx, rt.pictures.get())) {
-        const pic = await editPicture(ctx);
+      // With the host's place: the call after which no edit of the step follows brings it (stepPicture).
+      const pics = rt.pictures.get();
+      const own = !!reply.images?.length;
+      const editsLeft = place?.editsLeft ?? null;
+      const when = stepPicture({ editsLeft, edits: !own && reply.data.undo_step !== false && wantsPicture(ctx, pics), owed: rt.picturesOwed.has(key), on: !own && picturesOn(ctx, pics) });
+      if (when === 'later') {
+        owePicture(rt.picturesOwed, key);
+        reply.data = { ...reply.data, picture: PICTURE_LATER };
+      } else {
+        if (editsLeft === 0 || when === 'now') rt.picturesOwed.delete(key);
+        const pic = when === 'now' ? await editPicture(ctx) : null;
         if (pic && 'image' in pic) {
           reply.images = [pic.image];
           reply.data = { ...reply.data, picture: pic.caption };
@@ -131,6 +142,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       error = signal.aborted && !(e instanceof ToolError) ? new ToolError('stopped', 'The call was stopped.') : asToolError(e);
       const changes = rt.rev.changesFor(key);
       if (changes.length) error.detail.user_changes = changes;
+      // The step's last call failed with an earlier edit's picture owed: the next step brings it.
+      if (place?.callsLeft === 0 && rt.picturesOwed.has(key)) error.detail.picture = PICTURE_NEXT;
       throw sdkError(error, rt.hostKeepsHints);
     } finally {
       merged.off();

@@ -9,9 +9,12 @@
 // turn's model reads no images (TurnFacts.images false), for an outside client's call (ext:, mcp:)
 // unless its model is known to read images, and when the Part has no 3D view or its graphics
 // context is lost. The pace and the approval are done before it: the picture is the kept step.
+// When the host says each call's place in the model's step (placeOf), one picture per step: on
+// the call after which no edit of the step follows, when an edit of it changed the Part
+// (stepPicture); its earlier edits say PICTURE_LATER.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { AssistantImage } from '@magnusim/workspace';
+import type { AssistantCall, AssistantImage } from '@magnusim/workspace';
 import type { PrefsApi } from '../lib/bridge';
 import type { CallCtx } from '../types/assistant';
 import type { ViewportHandle } from '../types/viewport';
@@ -103,15 +106,70 @@ export function createPictures(o: { prefs: PrefsApi | null }): PicturesControl {
 /** An outside client's call (no turn of the app's: ext:<n>, or another app's over MCP). */
 export const isExternalKey = (key: string) => key.startsWith('ext:') || key.startsWith('mcp:');
 
-/** Whether this call's ok answer gets a picture (before anything is drawn). */
-export function wantsPicture(ctx: Pick<CallCtx, 'tool' | 'key' | 'turn'>, pictures: Pictures): boolean {
+/** Whether this call's turn gets pictures at all: Pictures on, and a model that reads images (an outside client's only when known to). */
+export function picturesOn(ctx: Pick<CallCtx, 'key' | 'turn'>, pictures: Pictures): boolean {
   if (pictures !== 'each') return false;
-  const spec = toolNamed(ctx.tool);
-  if (!spec || spec.risk === 'read') return false;
   const images = ctx.turn?.images ?? null;
   if (images === false) return false;
   if (isExternalKey(ctx.key) && images !== true) return false;
   return true;
+}
+
+/** Whether this call's ok answer gets a picture (before anything is drawn). */
+export function wantsPicture(ctx: Pick<CallCtx, 'tool' | 'key' | 'turn'>, pictures: Pictures): boolean {
+  const spec = toolNamed(ctx.tool);
+  if (!spec || spec.risk === 'read') return false;
+  return picturesOn(ctx, pictures);
+}
+
+/** What an edit's answer says when a later call of its step brings the picture. */
+export const PICTURE_LATER = "see this step's last edit";
+/** Keys still owed a picture, kept at most (the newest). */
+const OWED_KEPT = 32;
+
+/** What a step's last call says when it failed with an earlier edit's picture still owed. */
+export const PICTURE_NEXT = 'comes with your next step';
+
+/** A call's place in its model step (one answer of the model): the host's AssistantCall fields. */
+export interface StepPlace {
+  step: number;
+  callsLeft: number;
+  /** How many of the calls after it are edits (0: no edit of the step follows). */
+  editsLeft: number;
+}
+
+/**
+ * The call's place in its step (AssistantCall.step, callsLeftInStep, editsLeftInStep; unreleased
+ * 1.9, not in the SDK's types yet). Null when the host does not say it (an older host, another
+ * app's call over MCP, a coding agent) or says it out of shape: then each edit that answers ok
+ * gets its own picture, as before.
+ */
+export function placeOf(call: AssistantCall): StepPlace | null {
+  const c = call as { step?: unknown; callsLeftInStep?: unknown; editsLeftInStep?: unknown };
+  const whole = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+  const [step, callsLeft, editsLeft] = [whole(c.step), whole(c.callsLeftInStep), whole(c.editsLeftInStep)];
+  return step !== null && step >= 1 && callsLeft !== null && editsLeft !== null && editsLeft <= callsLeft ? { step, callsLeft, editsLeft } : null;
+}
+
+/**
+ * What an ok answer gets: 'now' the picture, 'later' the PICTURE_LATER line (its key then owes
+ * one), or 'none'. `editsLeft`: the place's (null: no place). `edits`: wantsPicture, and the reply
+ * changed the model and has no image of its own; `owed`: an earlier 'later' had no picture yet;
+ * `on`: picturesOn, and no image of its own. The call after which no edit follows brings it,
+ * after its own edit or an owed one (a read after the step's last edit, or the next step's when
+ * that edit failed).
+ */
+export function stepPicture(o: { editsLeft: number | null; edits: boolean; owed: boolean; on: boolean }): 'now' | 'later' | 'none' {
+  if (o.editsLeft === null) return o.edits ? 'now' : 'none';
+  if (o.editsLeft > 0) return o.edits ? 'later' : 'none';
+  return o.edits || (o.owed && o.on) ? 'now' : 'none';
+}
+
+/** `key` is owed a picture (a 'later' answer); only the newest OWED_KEPT keys are kept. */
+export function owePicture(owed: Set<string>, key: string): void {
+  owed.delete(key);
+  owed.add(key);
+  if (owed.size > OWED_KEPT) owed.delete(owed.values().next().value as string);
 }
 
 /** What an edit's answer gets: the picture and its line, or a note why there is none; null: nothing at all. */

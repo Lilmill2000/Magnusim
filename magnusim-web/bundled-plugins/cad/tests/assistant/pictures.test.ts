@@ -4,24 +4,28 @@
 // model that reads no images, the person's Pictures off, an outside client's call (ext:, mcp:)
 // unless its model reads images, no 3D view and a lost context get none; a failed edit gets none;
 // a snapshot or encoding that fails keeps the edit ok with data.picture_note; the ledger counts
-// the images. The person's choice is read from ws.prefs, written there, heard from another tab,
-// and the test handle's override is never written.
+// the images. When the host says each call's place in its step (step, callsLeftInStep,
+// editsLeftInStep), one picture per step, on the edit after which no edit follows: a lone edit
+// keeps it, reads between edits change nothing, a read after the step's last edit that failed
+// carries it, else the failed edit says "comes with your next step" and that step brings it; the
+// earlier edits say "see this step's last edit"; a place out of shape reads as none. The person's
+// choice is read from ws.prefs, written there, heard from another tab, and the test
+// handle's override is never written.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { AssistantCall } from '@magnusim/workspace';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createCallHandler } from '../../src/assistant/call';
 import { ToolError } from '../../src/assistant/errors';
-import { createPictures, EDIT_PICTURE_PX, editPicture, PICTURE_SETTLE_MS, PICTURES_PREF, wantsPicture, type Pictures } from '../../src/assistant/pictures';
+import { createPictures, EDIT_PICTURE_PX, editPicture, PICTURE_LATER, PICTURE_NEXT, PICTURE_SETTLE_MS, PICTURES_PREF, placeOf, stepPicture, wantsPicture, type Pictures } from '../../src/assistant/pictures';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { CAD_TOOLS } from '../../src/assistant/schemas';
 import { assistantTestHandle } from '../../src/assistant/install';
-import { setViewRaster, type Ctx2D, type Raster } from '../../src/assistant/view';
+import { setViewRaster } from '../../src/assistant/view';
+import type { AssistantCall } from '@magnusim/workspace';
 import type { PrefsApi } from '../../src/lib/bridge';
 import type { AppServices } from '../../src/types/app';
 import type { ToolImpl, TurnFacts } from '../../src/types/assistant';
-import type { SnapshotOptions, SnapshotResult, ViewportHandle } from '../../src/types/viewport';
 import { FakeKernel } from '../doc/fake-kernel';
 import { assistantHarness, type AssistantHarness } from './harness';
+import { call, fakeRaster, fakeViewport, placesOf, STUBS, type Answer } from './picture-fakes';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -33,65 +37,6 @@ afterEach(() => {
 // The workspace tool's answers are view and session state (undo_step false): no picture (the last test).
 const EDITS = CAD_TOOLS.filter((t) => t.risk !== 'read' && t.name !== 'workspace').map((t) => t.name);
 const READS = CAD_TOOLS.filter((t) => t.risk === 'read').map((t) => t.name);
-
-/** Every tool answers ok at once with a line of its own (the edit tools' work is not what is tested here). */
-const STUBS: Record<string, ToolImpl> = Object.fromEntries(CAD_TOOLS.map((t) => [t.name, { kind: t.risk === 'read' ? 'read' : 'edit', run: async () => ({ text: `${t.name} ok`, data: { did: t.name, ...(t.name === 'workspace' ? { undo_step: false } : {}) } }) } as ToolImpl]));
-
-interface FakeView {
-  shots: SnapshotOptions[];
-  lost: boolean;
-  fail: Error | null;
-}
-
-/** A viewport whose snapshot answers one grey picture of the size asked. */
-function fakeViewport(x: AssistantHarness, o: { snapshot?: boolean } = {}): FakeView {
-  const fv: FakeView = { shots: [], lost: false, fail: null };
-  const snapshot = (opts: SnapshotOptions): SnapshotResult => {
-    if (fv.lost) throw Object.assign(new Error('not_ready'), { code: 'not_ready' });
-    if (fv.fail) throw fv.fail;
-    fv.shots.push(JSON.parse(JSON.stringify(opts)));
-    return { rgba: new Uint8ClampedArray(opts.width * opts.height * 4).fill(128), width: opts.width, height: opts.height, mmPerPx: 0.1, project: () => null, visibleFaceAt: () => null };
-  };
-  const handle = {
-    camera: () => ({ position: [100, -100, 100], target: [0, 0, 0], up: [0, 0, 1], projection: 'perspective' }),
-    userCameraMoves: () => 0,
-    stats: () => ({ frames: 0, lastFrameMs: 0, lastSetBodiesMs: 0, lastUploadFrameMs: 0, lastPickMs: 0, bvh: {}, triangles: 0, drawCalls: 0, contextLost: fv.lost }),
-    ...(o.snapshot === false ? {} : { snapshot }),
-  } as unknown as ViewportHandle;
-  x.services.viewport.set({ handle });
-  return fv;
-}
-
-/** A canvas that encodes a PNG of 4 KB (null: a page with no 2D canvas). */
-function fakeRaster(o: { context?: boolean } = {}): { sizes: [number, number][] } {
-  const sizes: [number, number][] = [];
-  const raster: Raster = (width, height) => {
-    sizes.push([width, height]);
-    const g = {
-      createImageData: (w: number, ht: number) => ({ width: w, height: ht, data: new Uint8ClampedArray(w * ht * 4) }) as unknown as ImageData,
-      putImageData: () => undefined,
-      fillRect: () => undefined,
-      strokeRect: () => undefined,
-      fillText: () => undefined,
-    } as unknown as Ctx2D;
-    return { getContext: () => (o.context === false ? null : g), convertToBlob: async (b) => new Blob([new Uint8Array(4096)], { type: b.type }) };
-  };
-  setViewRaster(raster);
-  return { sizes };
-}
-
-type Answer = { ok: true; result: { text: string; data: Record<string, unknown>; images?: { mediaType: string; data: Blob }[] } } | { ok: false; error: { code: string } };
-
-/** One call through the page's handler with the stub tools, as the bridge sends it. */
-async function call(x: AssistantHarness, tool: string, turn = 't-test', tools: Record<string, ToolImpl> = STUBS): Promise<Answer> {
-  const handler = createCallHandler(runtimeOf(x.services)!, tools);
-  const c: AssistantCall = { call: `c-${Math.random().toString(36).slice(2)}`, turn, tool, input: {}, signal: new AbortController().signal, progress: () => {} };
-  try {
-    return { ok: true, result: (await handler(c)) as Answer extends { result: infer R } ? R : never };
-  } catch (e) {
-    return { ok: false, error: { code: String((e as { code?: unknown }).code) } };
-  }
-}
 
 const start = async (images: boolean | null = true) => {
   const x = await assistantHarness({ kernel: new FakeKernel() });
@@ -239,6 +184,120 @@ describe('a picture after every edit', () => {
     expect(res.images).toHaveLength(1);
     expect(res.data.picture).toMatch(/^Picture: iso view of the Part framed on the shown sketches \(no body yet\)/);
     expect(fv.shots).toHaveLength(1);
+  });
+});
+
+describe("one picture per model step (the host's place of each call)", () => {
+  /** One model step: its calls in order, each told its place (edits counted as the host counts them). */
+  async function runStep(x: AssistantHarness, tools: string[], o: { turn?: string; table?: Record<string, ToolImpl>; step?: number } = {}): Promise<Answer[]> {
+    const out: Answer[] = [];
+    const places = placesOf(tools, o.step);
+    for (const [i, tool] of tools.entries()) out.push(await call(x, tool, o.turn ?? 't-test', o.table ?? STUBS, places[i]));
+    return out;
+  }
+  const imagesOf = (rs: Answer[]) => rs.map((r) => (r.ok ? (r.result.images?.length ?? 0) : -1));
+  const linesOf = (rs: Answer[]) => rs.map((r) => (r.ok ? r.result.data.picture : undefined));
+  const CAPTION = expect.stringMatching(/^Picture: iso view of the Part/);
+  const failing = (tool: string) => ({ ...STUBS, [tool]: { kind: 'edit', run: async () => Promise.reject(new ToolError('bad_input', 'No.')) } as ToolImpl });
+
+  it('a lone edit still gets its picture; reads after the last edit get none, and a step of reads only gets none', async () => {
+    h = await start(true);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    const lone = await runStep(h, ['extrude']);
+    expect([imagesOf(lone), linesOf(lone)]).toEqual([[1], [CAPTION]]);
+    const rs = await runStep(h, ['extrude', 'pattern', 'get_model', 'measure'], { step: 2 });
+    expect(imagesOf(rs)).toEqual([0, 1, 0, 0]);
+    expect(linesOf(rs)).toEqual([PICTURE_LATER, CAPTION, undefined, undefined]);
+    const reads = await runStep(h, ['find', 'measure'], { step: 3 });
+    expect([imagesOf(reads), linesOf(reads)]).toEqual([[0, 0], [undefined, undefined]]);
+    expect(fv.shots).toHaveLength(2);
+  });
+
+  it("a step whose last edit fails: a read after it brings the picture; when the failed edit is the step's last call it says so, and the turn's next step brings it once", async () => {
+    h = await start(true);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    const rs = await runStep(h, ['sketch', 'extrude', 'get_model'], { table: failing('extrude') });
+    expect(imagesOf(rs)).toEqual([0, -1, 1]);
+    expect(linesOf(rs)).toEqual([PICTURE_LATER, undefined, CAPTION]);
+    expect(fv.shots).toHaveLength(1);
+    // The failed edit is the step's last call: its error says the next step brings the picture.
+    h.fake.emitTurn({ id: 't-other', title: 'Other', images: true });
+    const ends = await runStep(h, ['sketch', 'extrude'], { table: failing('extrude'), step: 2 });
+    expect(imagesOf(ends)).toEqual([0, -1]);
+    expect(ends[1].ok ? null : ends[1].error.detail).toMatchObject({ picture: PICTURE_NEXT });
+    expect(PICTURE_NEXT).toBe('comes with your next step');
+    // Another turn's step owes nothing; this turn's next step brings it at its last edit, once.
+    expect(imagesOf(await runStep(h, ['get_model'], { turn: 't-other' }))).toEqual([0]);
+    const next = await runStep(h, ['get_model', 'extrude', 'extrude'], { step: 3 });
+    expect([imagesOf(next), linesOf(next)]).toEqual([[0, 0, 1], [undefined, PICTURE_LATER, CAPTION]]);
+    expect(imagesOf(await runStep(h, ['get_model'], { step: 4 }))).toEqual([0]);
+    // A step that ends on a failed edit, then a step of reads: its first read brings it.
+    await runStep(h, ['sketch', 'extrude'], { table: failing('extrude'), step: 5 });
+    expect(imagesOf(await runStep(h, ['get_model', 'find'], { step: 6 }))).toEqual([1, 0]);
+    // A failed last call owing nothing says nothing of a picture.
+    const plain = await runStep(h, ['extrude'], { table: failing('extrude'), step: 7 });
+    expect(plain[0].ok ? null : plain[0].error.detail).not.toHaveProperty('picture');
+    expect(fv.shots).toHaveLength(3);
+  });
+
+  it("undo_step false changes nothing in a step and its last call brings an earlier edit's picture; a last call with its own picture (view) takes none and nothing stays owed", async () => {
+    h = await start(true);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    const ws = await runStep(h, ['workspace', 'workspace']);
+    expect([imagesOf(ws), linesOf(ws)]).toEqual([[0, 0], [undefined, undefined]]);
+    const shown = await runStep(h, ['extrude', 'workspace'], { step: 2 });
+    expect([imagesOf(shown), linesOf(shown)]).toEqual([[0, 1], [PICTURE_LATER, CAPTION]]);
+    const own = new Blob([new Uint8Array(8)], { type: 'image/png' });
+    const table = { ...STUBS, view: { kind: 'read', run: async () => ({ text: 'view ok', data: {}, images: [{ mediaType: 'image/png', data: own }] }) } as ToolImpl };
+    const rs = await runStep(h, ['extrude', 'view', 'workspace'], { table, step: 3 });
+    expect(imagesOf(rs)).toEqual([0, 1, 1]);
+    expect(rs[1].ok && rs[1].result.images![0].data).toBe(own);
+    expect(imagesOf(await runStep(h, ['get_model'], { step: 4 }))).toEqual([0]);
+    expect(fv.shots).toHaveLength(2);
+  });
+
+  it('no pointer and no picture with the place either for a model that reads no images, with Pictures off, or for an outside client', async () => {
+    h = await start(false);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    for (const rs of [await runStep(h, ['extrude', 'extrude']), await runStep(h, ['extrude', 'extrude'], { turn: '' })]) expect([imagesOf(rs), linesOf(rs)]).toEqual([[0, 0], [undefined, undefined]]);
+    h.fake.emitTurn({ id: 't-yes', title: 'Build', images: true });
+    runtimeOf(h.services)!.pictures.force('off');
+    const off = await runStep(h, ['extrude', 'extrude'], { turn: 't-yes' });
+    expect([imagesOf(off), linesOf(off)]).toEqual([[0, 0], [undefined, undefined]]);
+    expect(fv.shots).toHaveLength(0);
+  });
+
+  it('the place is read defensively: all three whole numbers (step from 1, edits no more than calls) or none, and with none each ok edit gets its picture as before', async () => {
+    const place = (o: Record<string, unknown>) => placeOf(o as unknown as AssistantCall);
+    expect(place({ step: 2, callsLeftInStep: 3, editsLeftInStep: 1 })).toEqual({ step: 2, callsLeft: 3, editsLeft: 1 });
+    expect(place({})).toBeNull();
+    const bad: Record<string, unknown>[] = [
+      { callsLeftInStep: 4, editsLeftInStep: 3 },
+      { step: 1, editsLeftInStep: 3 },
+      { step: 1, callsLeftInStep: 4 },
+      { step: 0, callsLeftInStep: 4, editsLeftInStep: 3 },
+      { step: 1, callsLeftInStep: 1, editsLeftInStep: 3 },
+      ...[-1, 1.5, '2', Number.NaN, Number.POSITIVE_INFINITY, null].map((v) => ({ step: 1, callsLeftInStep: v, editsLeftInStep: 0 })),
+      ...[-1, 0.5, '0'].map((v) => ({ step: 1, callsLeftInStep: 4, editsLeftInStep: v })),
+    ];
+    for (const b of bad) expect(place(b), JSON.stringify(b)).toBeNull();
+    expect(stepPicture({ editsLeft: null, edits: true, owed: false, on: true })).toBe('now');
+    expect(stepPicture({ editsLeft: 2, edits: true, owed: false, on: true })).toBe('later');
+    expect(stepPicture({ editsLeft: 2, edits: false, owed: true, on: true })).toBe('none');
+    expect(stepPicture({ editsLeft: 0, edits: false, owed: true, on: false })).toBe('none');
+    h = await start(true);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    // Each of the first five would say "an edit follows" (3) if it were read: read as none, each gets its picture.
+    const rs: Answer[] = [];
+    for (const b of bad.slice(0, 5)) rs.push(await call(h, 'extrude', 't-test', STUBS, b));
+    expect(imagesOf(rs)).toEqual([1, 1, 1, 1, 1]);
+    expect(linesOf(rs).every((l) => l !== PICTURE_LATER)).toBe(true);
+    expect(fv.shots).toHaveLength(5);
   });
 });
 

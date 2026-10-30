@@ -96,6 +96,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     askEach,
     approvals,
     pictures,
+    picturesOwed: new Set(),
     active: new Map(),
     stopped: new Set(),
     lastKey: null,
