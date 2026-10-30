@@ -11,7 +11,8 @@
 // context is lost. The pace and the approval are done before it: the picture is the kept step.
 // When the host says each call's place in the model's step (placeOf), one picture per step: on
 // the call after which no edit of the step follows, when an edit of it changed the Part
-// (stepPicture); its earlier edits say PICTURE_LATER.
+// (stepPicture); its earlier edits say PICTURE_LATER. A picture still owed when the step ends is
+// the conversation's when the turn names one (its next request brings it), else the turn's.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantCall, AssistantImage } from '@magnusim/workspace';
@@ -133,8 +134,9 @@ export const PICTURE_NEXT = 'comes with your next step';
 /** A call's place in its model step (one answer of the model): the host's AssistantCall fields. */
 export interface StepPlace {
   step: number;
+  /** The calls of the step after it that the host sends to this page (not one it answers itself: capped, skipped, stopped). */
   callsLeft: number;
-  /** How many of the calls after it are edits (0: no edit of the step follows). */
+  /** How many of those are edits (0: no edit of the step follows). */
   editsLeft: number;
 }
 

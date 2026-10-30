@@ -282,13 +282,37 @@ describe('get_model full and one feature', () => {
 });
 
 describe('a feature name not found', () => {
-  it('the closest name: case, spaces and punctuation aside, a few letters off; never another number', () => {
+  it('the closest name: the same words (case, spaces, punctuation, a plural s, and/of/the aside, any order) or one typo in a long word; never another word or number', () => {
     expect(closestName('Join and Inlay', ['Sketch 1', 'Join inlay'])).toBe('Join inlay');
     expect(closestName('join-inlay', ['Join inlay'])).toBe('Join inlay');
+    expect(closestName('Inlay join', ['Join inlay'])).toBe('Join inlay');
+    expect(closestName('Baseplate', ['Base plate'])).toBe('Base plate');
+    expect(closestName('Mounting hole', ['Mounting holes'])).toBe('Mounting holes');
+    expect(closestName('Extrude1', ['Extrude 1'])).toBe('Extrude 1');
     expect(closestName('Skecth 1', ['Sketch 1', 'Sketch 2'])).toBe('Sketch 1');
+    expect(closestName('Filet 2', ['Fillet 2'])).toBe('Fillet 2');
+    // The same words win over a typo, whatever the order.
+    expect(closestName('Skecth', ['Sketch', 'skecth'])).toBe('skecth');
     expect(closestName('Extrude 12', ['Extrude 1', 'Extrude 2'])).toBeNull();
     expect(closestName('Boss', ['Sketch 1', 'Extrude 1'])).toBeNull();
     expect(closestName('', ['Sketch 1'])).toBeNull();
+    expect(closestName('the', ['The'])).toBeNull();
+    // A word for another, or a word more: never (each would name another feature).
+    for (const [want, name] of [
+      ['Gear A', 'Gear B'],
+      ['Inner ring', 'Outer ring'],
+      ['Base', 'Boss'],
+      ['Hub', 'Hut'],
+      ['Top plate', 'Top plane'],
+      ['Extrude 3', 'Extrude 3 copy'],
+      ['Join', 'Join inlay'],
+      ['Planet', 'Plane'],
+      ['Pocket', 'Socket'],
+      ['Angle', 'Angel'],
+    ]) {
+      expect(closestName(want, [name]), `${want} -> ${name}`).toBeNull();
+      expect(closestName(name, [want]), `${name} -> ${want}`).toBeNull();
+    }
     // The name a selector that does not read starts with.
     expect(nameAt('"Join and Inlay".end', 1)).toBe('Join and Inlay');
     expect(nameAt('Body 1 faces >Z', 1)).toBe('Body 1');

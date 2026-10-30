@@ -7,8 +7,9 @@
 // the images. When the host says each call's place in its step (step, callsLeftInStep,
 // editsLeftInStep), one picture per step, on the edit after which no edit follows: a lone edit
 // keeps it, reads between edits change nothing, a read after the step's last edit that failed
-// carries it, else the failed edit says "comes with your next step" and that step brings it; the
-// earlier edits say "see this step's last edit"; a place out of shape reads as none. The person's
+// carries it, else the failed edit says "comes with your next step" and that step brings it (the
+// chat's next request when the turn names its conversation); the earlier edits say "see this
+// step's last edit"; a place out of shape reads as none. The person's
 // choice is read from ws.prefs, written there, heard from another tab, and the test
 // handle's override is never written.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -240,6 +241,25 @@ describe("one picture per model step (the host's place of each call)", () => {
     const plain = await runStep(h, ['extrude'], { table: failing('extrude'), step: 7 });
     expect(plain[0].ok ? null : plain[0].error.detail).not.toHaveProperty('picture');
     expect(fv.shots).toHaveLength(3);
+  });
+
+  it("a request that ends on a step whose failed edit owes the picture: the conversation's next request brings it at its first read, another conversation's never", async () => {
+    h = await start(true);
+    const fv = fakeViewport(h);
+    fakeRaster();
+    h.fake.emitTurn({ id: 't-r1', title: 'Build', images: true, conversation: 'conv-1' });
+    const ends = await runStep(h, ['sketch', 'extrude'], { table: failing('extrude'), turn: 't-r1' });
+    expect(imagesOf(ends)).toEqual([0, -1]);
+    expect(ends[1].ok ? null : ends[1].error.detail).toMatchObject({ picture: PICTURE_NEXT });
+    // The model ends its turn with text. Another chat's request owes nothing.
+    h.fake.emitTurn({ id: 't-x', title: 'Other', images: true, conversation: 'conv-2' });
+    expect(imagesOf(await runStep(h, ['get_model'], { turn: 't-x' }))).toEqual([0]);
+    // The person's next message in the same chat: its first read brings the sketch's picture, once.
+    h.fake.emitTurn({ id: 't-r2', title: 'Build', images: true, conversation: 'conv-1' });
+    const next = await runStep(h, ['get_model'], { turn: 't-r2' });
+    expect([imagesOf(next), linesOf(next)]).toEqual([[1], [CAPTION]]);
+    expect(imagesOf(await runStep(h, ['get_model'], { turn: 't-r2', step: 2 }))).toEqual([0]);
+    expect(fv.shots).toHaveLength(1);
   });
 
   it("undo_step false changes nothing in a step and its last call brings an earlier edit's picture; a last call with its own picture (view) takes none and nothing stays owed", async () => {

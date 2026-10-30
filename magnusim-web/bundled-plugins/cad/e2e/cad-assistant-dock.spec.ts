@@ -8,7 +8,8 @@
 // focused while the Part had the keyboard (Enter answers No); the app's toasts stay clear of the
 // Part's chips; a sketch the person draws between two dock messages is pictured whole by view's
 // sketch, named in the dock's step (this host names no conversation on a turn yet, so the next
-// request's user_changes do not tell it: the fallback).
+// request's user_changes do not tell it: the fallback); view's picture of a hidden sketch far
+// above the part shows its lines; a feature name one word off gets no closest name.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -317,4 +318,60 @@ test("cad:assistant-dock-sketch-spec the person draws a sketch between two dock 
   await expect(img).toBeVisible(STEP);
   await expect.poll(() => img.evaluate((el: Element) => (el as HTMLImageElement).naturalWidth), STEP).toBe(768);
   await shot(page, 'cad-dock-sketch-spec');
+});
+
+test("cad:assistant-dock-sketch-far a sketch the view hides, far above the part: view's picture of it shows its lines; a name one word off gets no closest name, the same words do", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Dock far sketch');
+  await openNewPart(page, request, host, pid);
+  await forcePace(page, 'fast', 0);
+  // A 40 x 20 rectangle on Top offset 60 mm (its plane "Lid sketch plane"), beside the disc and
+  // far above it, then the sketch and its plane hidden: nothing the view shows is near it.
+  const LID = { name: 'cad__sketch', input: { edit: '', name: 'Lid sketch', on: 'Top offset 60 mm', entities: [{ id: 'r', kind: 'rect', at: [40, -10, 80, 10], construction: false }], constraints: [], infer: false } };
+  const HIDE = (target: string) => ({ name: 'cad__workspace', input: { action: 'hide', target, value: '', items: [], person_asked: false } });
+  const VIEW = { name: 'cad__view', input: { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic', sketch: 'Lid sketch' } };
+  const READ = (feature: string) => ({ name: 'cad__get_model', input: { detail: 'brief', feature, regions: 'short' } });
+  const before = chats(host).length;
+  host.fake.reply({ tools: [SKETCH] }, { tools: [EXTRUDE] }, { tools: [LID] }, { tools: [HIDE('Lid sketch'), HIDE('Lid sketch plane')] }, { tools: [VIEW] }, { tools: [READ('Lip sketch')] }, { tools: [READ('lid-sketch')] }, { text: 'Done.' });
+  await core.dockSend(page, 'Make a disc, and a lid sketch above it');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 3 });
+  expect(resultsIn(chats(host)[before + 4])).toMatchObject([{ tool: 'cad__workspace', ok: true }, { tool: 'cad__workspace', ok: true }]);
+  const [viewed] = resultsIn(chats(host)[before + 5]);
+  expect(viewed).toMatchObject({ tool: 'cad__view', ok: true, data: { sketch: { name: 'Lid sketch', normal: [0, 0, 1] } } });
+  // What the person sees: the dock's view step with a picture that shows the rectangle's lines
+  // (left out of the camera's depth, the picture was the background alone).
+  const step = dockTurn(page).locator('[data-dock-step]').filter({ hasText: 'Pictured Lid sketch' });
+  await expect(step).toBeVisible(STEP);
+  const img = step.locator('.dock-step-pictures img').first();
+  await expect.poll(() => img.evaluate((el: Element) => (el as HTMLImageElement).naturalWidth), STEP).toBe(768);
+  const ink = await img.evaluate((el: Element) => {
+    const im = el as HTMLImageElement;
+    const c = document.createElement('canvas');
+    [c.width, c.height] = [im.naturalWidth, im.naturalHeight];
+    const g = c.getContext('2d')!;
+    g.drawImage(im, 0, 0);
+    const { data } = g.getImageData(0, 0, c.width, c.height);
+    const bg = [data[0], data[1], data[2]];
+    let n = 0;
+    // The triad's corner (bottom right) left out.
+    for (let y = 0; y < c.height; y++)
+      for (let x = 0; x < c.width; x++) {
+        if (x > 0.75 * c.width && y > 0.75 * c.height) continue;
+        const i = 4 * (y * c.width + x);
+        if (Math.max(Math.abs(data[i] - bg[0]), Math.abs(data[i + 1] - bg[1]), Math.abs(data[i + 2] - bg[2])) > 40) n++;
+      }
+    return n;
+  });
+  expect(ink).toBeGreaterThan(500);
+  // A name one word off ("Lip" for "Lid") names no other feature; the same words ("lid-sketch") do.
+  const [lip] = resultsIn(chats(host)[before + 6]);
+  expect(lip).toMatchObject({ tool: 'cad__get_model', ok: false });
+  expect(JSON.stringify(lip)).not.toContain('losest');
+  const [lid] = resultsIn(chats(host)[before + 7]);
+  expect(lid).toMatchObject({ tool: 'cad__get_model', ok: false, error: { detail: { closest: 'Lid sketch' } } });
+  const failed = dockTurn(page).locator('[data-dock-step][data-dock-step-state="failed"] [data-dock-result]');
+  await expect(failed.filter({ hasText: 'Lip sketch' })).toBeVisible(STEP);
+  await expect(failed.filter({ hasText: 'Lip sketch' })).not.toContainText('Closest');
+  await expect(failed.filter({ hasText: 'lid-sketch' })).toContainText('Closest: "Lid sketch".');
+  await shot(page, 'cad-dock-sketch-far');
 });

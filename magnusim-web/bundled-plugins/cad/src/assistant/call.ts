@@ -101,6 +101,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     let images = 0;
     // Its place in the model's step, when the host says it: one picture per step (pictures.ts).
     const place = placeOf(call);
+    // An owed picture is the conversation's when the turn names one: its next request brings it.
+    const owedKey = turn?.conversation ? `conv:${turn.conversation}` : key;
     try {
       if (!spec || !TOOL_NAMES.includes(call.tool)) throw new ToolError('bad_input', `No Part tool is called ${call.tool}.`);
       if (rt.stopped.has(key)) throw new ToolError('stopped', STOPPED_WORDS);
@@ -114,12 +116,12 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       const pics = rt.pictures.get();
       const own = !!reply.images?.length;
       const editsLeft = place?.editsLeft ?? null;
-      const when = stepPicture({ editsLeft, edits: !own && reply.data.undo_step !== false && wantsPicture(ctx, pics), owed: rt.picturesOwed.has(key), on: !own && picturesOn(ctx, pics) });
+      const when = stepPicture({ editsLeft, edits: !own && reply.data.undo_step !== false && wantsPicture(ctx, pics), owed: rt.picturesOwed.has(owedKey), on: !own && picturesOn(ctx, pics) });
       if (when === 'later') {
-        owePicture(rt.picturesOwed, key);
+        owePicture(rt.picturesOwed, owedKey);
         reply.data = { ...reply.data, picture: PICTURE_LATER };
       } else {
-        if (editsLeft === 0 || when === 'now') rt.picturesOwed.delete(key);
+        if (editsLeft === 0 || when === 'now') rt.picturesOwed.delete(owedKey);
         const pic = when === 'now' ? await editPicture(ctx) : null;
         if (pic && 'image' in pic) {
           reply.images = [pic.image];
@@ -142,7 +144,7 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       const changes = rt.rev.changesFor(key);
       if (changes.length) error.detail.user_changes = changes;
       // The step's last call failed with an earlier edit's picture owed: the next step brings it.
-      if (place?.callsLeft === 0 && rt.picturesOwed.has(key)) error.detail.picture = PICTURE_NEXT;
+      if (place?.callsLeft === 0 && rt.picturesOwed.has(owedKey)) error.detail.picture = PICTURE_NEXT;
       throw sdkError(error, rt.hostKeepsHints);
     } finally {
       merged.off();

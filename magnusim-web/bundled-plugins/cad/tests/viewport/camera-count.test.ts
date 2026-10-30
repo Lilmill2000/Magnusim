@@ -19,8 +19,8 @@
 //     bodies and caps; it runs no frame of the view (onFrame), then puts back the target, the
 //     flags, the display, the view's cut and caps, the highlight and the line widths, and moves,
 //     counts and writes nothing; a lost context throws not_ready; a picture of one sketch looks
-//     along the direction asked, frames the box asked instead of the bodies and tells the layers'
-//     plain hook which sketch it pictures.
+//     along the direction asked, frames the box asked instead of the bodies (inside its depth
+//     range however far from them) and tells the layers' plain hook which sketch it pictures.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { BoxGeometry, Mesh, Plane, type Object3D } from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -566,6 +566,21 @@ describe('snapshot', () => {
       [false, null],
     ]);
     expect(h.camera()).toEqual(camera);
+  });
+
+  it('a picture of a sketch the view hides, far along its normal from the bodies: every point of it inside the depth range', async () => {
+    const { h } = viewport();
+    withCube(h);
+    await vi.waitFor(() => expect(h.state.get().bvhPending).toBe(0));
+    // A sketch on "Front offset <y>" beside the cubes (x 40 to 60, z 0 to 10), no layer drawing it.
+    for (const y of [-200, -60, 60, 200]) {
+      const r = h.snapshot!({ view: 'iso', width: 160, height: 120, hide: [], section: null, along: { dir: [0, -1, 0], up: [0, 0, 1] }, fit: { min: [40, y, 0], max: [60, y, 10] }, sketch: 'f_sk' });
+      for (const p of [[40, y, 0], [60, y, 0], [60, y, 10], [40, y, 10], [50, y, 5]] as [number, number, number][]) {
+        const at = r.project(p);
+        expect(at, `${p.join(', ')} at y ${y}`).not.toBeNull();
+        expect(at![0] >= 0 && at![1] >= 0 && at![0] <= r.width && at![1] <= r.height, p.join(', ')).toBe(true);
+      }
+    }
   });
 
   it("draws shaded with edges whatever the view's display mode, which the next frame has again", async () => {

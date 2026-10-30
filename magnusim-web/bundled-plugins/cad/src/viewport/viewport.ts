@@ -1553,7 +1553,8 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     sphere.radius *= FIT_MARGIN;
     const snapRig = snapshotRig(o.along ?? o.view, sphere, w, h, o.projection ?? 'orthographic');
     const display = o.display ?? 'shaded-edges';
-    snapRig.scene.copy(sceneSphere());
+    // What it frames is in its depth range too (a sketch the view hides, far along its normal).
+    snapRig.scene.copy(sceneSphere().union(sphere));
     const cam = snapRig.apply(w / h);
     const cut = o.section ? snapshotClip(o.section) : null;
     const layerShown = [...layers.values()].map((l) => [l.group, l.group.visible] as const);
