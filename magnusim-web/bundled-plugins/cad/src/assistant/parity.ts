@@ -155,6 +155,7 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'view.sketch-relations': reach('get_model', 'feature'),
   'sketch.project': SKETCH_OP('project'),
   'sketch.intersect': SKETCH_OP('intersect'),
+  'sketch.import': SKETCH_OP('import'),
   'sketch.spline': ENTITY('spline'),
   'sketch.spline-control': ENTITY('control_spline'),
   // The Ellipse group.
@@ -425,6 +426,7 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   polygon: ENTITY('polygon'),
   sector: ENTITY('sector'),
   intersect: SKETCH_OP('intersect'),
+  import: SKETCH_OP('import'),
   ellipse: ENTITY('ellipse'),
   'ellipse-partial': ENTITY('ellipse_arc'),
   parabola: ENTITY('parabola'),
@@ -900,6 +902,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'constraints[].kind=circular_pattern': command('sketch.pattern-circular'),
     'constraints[].kind=project': command('sketch.project'),
     'constraints[].kind=intersect': command('sketch.intersect'),
+    'constraints[].kind=import': command('sketch.import'),
     'constraints[].kind=break_link': place("a linked curve's context menu in sketch mode: Break link"),
     'constraints[].refs': place('the curves and points the person picks for the relation, dimension or tool'),
     'constraints[].value': DIMENSION,

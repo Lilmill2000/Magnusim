@@ -18,6 +18,12 @@
 //                                   a body: its silhouette along the sketch normal (readLink)
 //   intersect [body]                where the sketch plane cuts the body (linked)
 //   break_link [curves or a link]   breakLinks: ordinary geometry where it is
+//   import [attachment id]          a drawing the person attached (SVG, DXF; the host's
+//                                   call.readAttachment), read and added as the person's Import
+//                                   SVG/DXF adds it (sketch/import: importIntoDraft), value
+//                                   "scale <mm per unit>; place origin|centre; layers <a>, <b>";
+//                                   its curves are "<id>.1", "<id>.2"... and `made` gives the
+//                                   summary the person's panel shows
 // Ties and links keep the row's id, so they stay the model's rows: a replace that sends a row with
 // the id of one the sketch has keeps it, its copies or curves with their ids (a pattern's or an
 // offset's new values lay it out again: updatePattern); left out, it goes with its copies. Their
@@ -35,6 +41,7 @@ import { chamferCorner, filletCorner, sharedCorner } from '../../sketch/tools/fi
 import { mirrorEntities } from '../../sketch/tools/mirror';
 import { chainOf, offsetChain, sideOf } from '../../sketch/tools/offset';
 import { createPattern, updatePattern } from '../../sketch/tools/pattern';
+import { DrawingRefused, importIntoDraft, planImport, summaryWords, tryReadDrawing, type ImportOptions } from '../../sketch/import';
 import { promoteTies, prunedTies } from '../../sketch/tools/ties';
 import type { CallCtx } from '../../types/assistant';
 import type { PlaneFrame, SketchFeature, SketchLink, SketchLinkSource, SketchTie } from '../../types/doc';
@@ -44,11 +51,14 @@ import { placeOf, storeExpr, type ConstraintIn, type MadeRow, type SketchCompile
 import { linkEntityNames, tieCopyNames } from './names';
 import { solverReady } from './solve';
 
-type Pick2 = Pick<CallCtx, 'services' | 'key' | 'signal' | 'progress'>;
+type Pick2 = Pick<CallCtx, 'services' | 'key' | 'signal' | 'progress'> & Partial<Pick<CallCtx, 'call'>>;
 
 /** The keys a pattern's value takes. */
 const LINEAR_KEYS = ['count', 'spacing', 'angle', 'along', 'count2', 'spacing2', 'angle2', 'along2'] as const;
 const CIRCULAR_KEYS = ['count', 'angle'] as const;
+const IMPORT_KEYS = ['scale', 'place', 'layers'] as const;
+/** An attachment id as the host gives one. */
+const ATTACHMENT_ID = /^att-[0-9a-f]{16}$/;
 
 /** "count 4; spacing 10 mm" as keys and values (every problem named). */
 export function parseValues(text: string, keys: readonly string[]): { values: Record<string, string> } | { problem: string } {
@@ -419,6 +429,65 @@ export function toolHost(ctx: Pick2, o: { frame: PlaneFrame; scene: SceneOptions
             for (const [e, name] of linkEntityNames(a.link)) c.aliasOf(name, e, true);
             record({ id: row.id, kind, entities: [...linkEntityNames(a.link).values()], values: { source: words } });
           });
+          return;
+        }
+        case 'import': {
+          if (places.length || refs.length !== 1) fail('import takes one attachment id: the drawing the person attached ("att-" and 16 hex digits, from their message)', 'bad_ref');
+          const att = refs[0];
+          if (!ATTACHMENT_ID.test(att)) fail(`"${att}" is not an attachment id: the person's message names each attached drawing's attachment_id ("att-" and 16 hex digits)`, 'bad_ref');
+          const parsed = parseValues(value, IMPORT_KEYS);
+          if ('problem' in parsed) fail(`value: ${parsed.problem}`);
+          const v = (parsed as { values: Record<string, string> }).values;
+          const opts: ImportOptions = {};
+          if (v.scale !== undefined) {
+            const s = Number(v.scale.replace(/\s*mm$/i, ''));
+            if (!(Number.isFinite(s) && s > 0)) fail(`value: scale is the mm per drawing unit, a number above 0 ("scale 25.4"), not "${v.scale}"`);
+            opts.scale = s;
+          }
+          if (v.place !== undefined) {
+            const pl = v.place.toLowerCase();
+            if (pl !== 'origin' && pl !== 'centre' && pl !== 'center') fail(`value: place is origin (the drawing's origin on the sketch origin) or centre, not "${v.place}"`);
+            opts.place = pl === 'origin' ? 'origin' : 'centre';
+          }
+          if (v.layers !== undefined && v.layers.toLowerCase() !== 'all') opts.layers = v.layers.split(',').map((x) => x.trim()).filter(Boolean);
+          const call = ctx.call as { readAttachment?: (id: string) => Promise<File> } | undefined;
+          if (!call || typeof call.readAttachment !== 'function') {
+            throw new ToolError('not_editable', `${at} (${row.id}, import): this Magnusim cannot hand an attached file to a tool: the person can bring the drawing in with Import SVG/DXF in the sketch (MODIFY).`, { detail: { field: at, row: row.id } });
+          }
+          let file: File;
+          try {
+            file = await call.readAttachment(att);
+          } catch (err) {
+            const code = err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : 'failed';
+            const said = err instanceof Error && err.message ? ` (${err.message.replace(/\.$/, '')})` : '';
+            if (code === 'not_found') throw new ToolError('not_found', `${at} (${row.id}, import): no attached file ${att} in this conversation${said}: use the attachment_id of an "Attached drawing" line of the person's message.`, { detail: { field: at, row: row.id } });
+            if (code === 'bad_request') fail(`"${att}" is not an attachment id the host takes${said}`, 'bad_ref');
+            if (code === 'not_allowed') throw new ToolError('not_editable', `${at} (${row.id}, import): the host did not let this call read ${att}${said}.`, { detail: { field: at, row: row.id } });
+            throw new ToolError('internal', `${at} (${row.id}, import): ${att} could not be read${said}: try again.`, { detail: { field: at, row: row.id } });
+          }
+          const read = tryReadDrawing(file!.name || att, new Uint8Array(await file!.arrayBuffer()));
+          if ('refused' in read) fail(read.refused);
+          const drawing = (read as Exclude<typeof read, { refused: string }>).drawing;
+          let plan: ReturnType<typeof planImport>;
+          try {
+            plan = planImport(drawing, opts);
+          } catch (err) {
+            if (err instanceof DrawingRefused) fail(`value: ${err.message}`);
+            throw err;
+          }
+          if (plan!.summary.refused) fail(plan!.summary.refused);
+          const { outcome, added } = importIntoDraft(c.g as Parameters<typeof importIntoDraft>[0], plan!);
+          take(outcome);
+          added.forEach((e, k) => {
+            c.aliasOf(`${row.id}.${k + 1}`, e, true);
+            // Watched, the drawing goes in as one step (sketch/write.ts drawSteps).
+            c.drawGroups[e] = row.id;
+          });
+          const w = summaryWords(plan!.summary);
+          const values: Record<string, string | number> = { file: drawing.name, read: w.read, skipped: w.skipped, size: w.size, open_ends: plan!.summary.openEnds, scale: w.scale };
+          if (w.layers) values.layers = w.layers;
+          if (w.notes.length) values.notes = w.notes.join(' ');
+          record({ id: row.id, kind, entities: added.slice(0, 60).map((_, k) => `${row.id}.${k + 1}`), values });
           return;
         }
         case 'break_link': {

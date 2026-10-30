@@ -23,6 +23,8 @@ import { makeTool } from './tools';
 import { registerLinkCommands } from './project/commands';
 // P4b (SKETCH): splines, mirror, patterns, offset, fillet, chamfer.
 import { registerSketchToolCommands } from './tools/commands';
+// Import SVG/DXF (src/sketch/import).
+import { registerImportCommand } from './import/tool';
 
 function contextMenu(services: AppServices, pick: PickResult | null): ContextMenuContribution[] {
   const mode = modeFor(services);
@@ -67,7 +69,9 @@ const sketchModule: CadModule = {
     const offLinks = registerLinkCommands(services, mode);
     // P4b (SKETCH)
     const offTools = registerSketchToolCommands(services, mode);
+    const offImport = registerImportCommand(services, mode);
     return () => {
+      offImport();
       offTools();
       offLinks();
       offCommands();

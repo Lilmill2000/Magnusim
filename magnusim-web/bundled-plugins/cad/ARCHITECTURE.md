@@ -93,6 +93,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | The toolbar's fold order (`src/ui/Toolbar.tsx` `FOLD_ORDER`, `KEEP_IN_VIEW`, the More menus), `e2e/cad-p4a-toolbar.spec.ts`, `e2e/cad-p4a-integrate.spec.ts` | INTEGRATE (P4a) | §7 "Toolbar"; the integration gaps (Extrude "Along" a CONSTRUCT plane or axis, sketch points as point inputs). |
 | `src/features/pattern/**`, `tests/features/pattern/**`, the "P4b: patterns and mirror" block of `src/types/doc.ts` and its union members, `PatternOutput` in `src/types/doc-service.ts`, kernel API 5 (`kernel-build/`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`, `src/kernel/timeouts.ts` rows), `tests/kernel/kernel-api5-p4b.test.ts`, `e2e/cad-p4b-pattern.spec.ts`; Measure's pick carry-over block in `src/features/measure/panel.tsx` | P4b PATTERN | Linear pattern, Circular pattern, Mirror (features, bodies, faces); copy names; the kernel ops `copies`, `project`, `section`, `silhouette` and spline curves. In P4b only PATTERN edited the kernel. |
 | `src/sketch/tools/**`, `src/solver-worker/**`, `solver-build/**`, the "P4b (SKETCH)" blocks (`SketchSplineEntity`, `SketchTie`, `SketchFeature.ties`), `tests/sketch/p4b-*.test.ts` but links, `tests/solver/p4b-*`, `e2e/cad-p4b-sketch-tools.spec.ts` | P4b SKETCH | Fit-point and control-point splines, sketch Mirror, Linear and Circular pattern, Offset, Fillet, Chamfer, the pattern and offset rows (`ties`). |
+| `src/sketch/import/**`, `tests/sketch/import/**`, `tests/assistant/sketch-import.test.ts`, `e2e/cad-sketch-import.spec.ts` | P3-SKETCH (Import SVG/DXF) | One parser for the person's Import SVG/DXF and the Assistant's import row (§10 "Import SVG/DXF"). |
 | `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
 | What the Assistant's tools stand on, each in its area's own files: `doc.assistant`, `settled`, `bodiesBefore`, `committed`, `editParams` and `BodyProps.shells` (`src/doc/service.ts`, `params-bulk.ts`, `person-editing.ts`, `rebuild.ts`), undo tags and snapshots (`src/doc/undo.ts`, `src/types/undo.ts`); `openForAssistant`, `openEditForAssistant`, `openParamsForAssistant`, `doneForAssistant`, `dropForAssistant` and the read-only chrome (`src/ui/controller.ts`, `src/ui/kit/Panel.tsx`, `src/ui/panels/ParametersPanel.tsx`); Assistant sketches (`src/sketch/mode.ts`, `commands.ts`) and `analyzeOnce` (`src/solver-worker/`, `src/sketch/solver-client.ts`); `snapshot`, `project`, `visibleFaceAt`, `userCameraMoves` and `{auto}` camera calls (`src/viewport/snapshot.ts`, `viewport.ts`); `AreaApis.assistant` (`src/types/app.ts`). Tests: `tests/doc/{assistant-step,params-bulk,settled}.test.ts`, `tests/ui/controller-assistant.test.ts`, `tests/sketch/mode-assistant.test.ts`, `tests/viewport/{camera-count,snapshot,snapshot-plain}.test.ts`, the `auto-camera` tests, e2e `cad-assistant-panels` and `cad-viewport-snapshot` (shell), `cad-assistant-sketch` (sketch) | DOC-CORE, UI-SHELL, P3-SKETCH, VIEWPORT | §6 "Assistant steps", §7 "Assistant panels and sketches". ASSISTANT calls them and changes none of them. |
 | `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 18 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
@@ -1876,6 +1877,36 @@ with the host once for the page's life, and its chip goes in the dock.
   freedom, so DOF words stay honest. Refused in words: a point on a
   control-point spline, extend of a spline, a dimension on a spline curve,
   fillet of two arcs, fillet or chamfer of a linked curve.
+- **Import SVG/DXF (`src/sketch/import/`).** One parser, pure data in and sketch
+  entities out, used by the person and the Assistant alike: `index.ts`
+  `readDrawing(name, bytes)` refuses past 20 MiB (the host's drawing cap) and a
+  binary DXF, then `svg.ts` (its own small XML tokenizer: no DOMParser, nothing
+  inserted in the page, rendered or fetched; entity declarations never
+  expanded; script, foreignObject, style, image, use, text, defs, hidden
+  elements, `on*` attributes and links to other files counted as skipped) or
+  `dxf.ts` (group code / value pairs: LINE, ARC, CIRCLE, ELLIPSE, POINT,
+  LWPOLYLINE and POLYLINE bulges, SPLINE, INSERT of BLOCKS up to 16 deep, the
+  OCS, $INSUNITS, layers) reads it into `common.ts` `DrawingCurve`s in its own
+  units, y up. `planImport(drawing, {scale, place, layers})` scales and places
+  them, drops what is under the join tolerance (max(1e-4 mm, 1e-6 of the
+  size)) and duplicates, joins ends within it into one point, and counts open
+  ends; `importIntoDraft(draft, plan)` makes the sketch entities (lines, arcs,
+  circles, ellipses, ellipse arcs, control splines with their knots, fit
+  splines, points), no constraints; `summaryWords` is the summary both sides
+  show. Exact where the sketch can hold it: SVG cubics are degree-3 splines
+  (quadratics raised), arcs and circles stay circular unless a transform makes
+  them ellipses (`conicPiece`); a DXF spline of degree 3 or 5 is kept, 2 and 4
+  are Bezier pieces raised a degree, unclamped knots are clamped, rational ones
+  and those past degree 5 are fit splines through points of them (a note).
+  The person: MODIFY > Import SVG/DXF (`tool.ts`; `sketch.import`, no default
+  key) picks the file, the `import` sketch tool shows the summary, Scale, Place,
+  the layers, a preview, and OK applies `importIntoDraft` as one sketch undo
+  step. The Assistant: the sketch tool's `import` row (`assistant/sketch/ops.ts`)
+  reads the attachment with the host's `call.readAttachment` (1.9; feature-
+  detected; its codes mapped to honest errors), runs the same plan and edit,
+  names the curves `<id>.1`..., and its `made` row carries the same words; the
+  watch path draws the import in one step (`Compiled.drawGroups`). The app's
+  Assistant panel offers drawings since this (its `DRAWINGS_OFFERED`).
 - **Linked sketch geometry (P4b SELECT, `src/sketch/project/`).** Project (P)
   takes a vertex, an edge or a face (its outer edges) of any body, imports
   included, or with Silhouette a body's outline along the sketch normal;

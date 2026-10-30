@@ -204,6 +204,7 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   e('sketch.pattern-circular', 'Circular pattern', 'Sketch: Modify', 'sketch'),
   e('sketch.project', 'Project', 'Sketch: Modify', 'sketch', ['KeyP']),
   e('sketch.intersect', 'Intersect', 'Sketch: Modify', 'sketch'),
+  e('sketch.import', 'Import SVG/DXF', 'Sketch: Modify', 'sketch'),
   e('sketch.coincident', 'Coincident', 'Sketch: Constrain', 'sketch'),
   e('sketch.horizontal', 'Horizontal', 'Sketch: Constrain', 'sketch'),
   e('sketch.vertical', 'Vertical', 'Sketch: Constrain', 'sketch'),

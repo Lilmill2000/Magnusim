@@ -9,12 +9,15 @@
 // sketches a 96-tooth wheel (198 regions) and extrudes the region whose id the sketch's answer
 // names first: the answer the model got is under 3 KB with the gaps summed, the dock's sketch step
 // says 198 regions and the largest's area, and the tree shows the wheel's body, its volume the
-// toothed wheel's.
+// toothed wheel's. A fourth: the person attaches a DXF in the app's Assistant panel; the model
+// imports it with the sketch tool's import row (the host's readAttachment) and extrudes its slot:
+// made says what the person's Import SVG/DXF panel says, and the tree and the volume chip show it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
 import { historyNames } from './helpers';
+import { DXF_PART, DXF_PART_AREAS } from '../tests/sketch/import/fixtures';
 // @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
 import * as core from '../../../e2e/support/assistant.js';
 import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost, type FakeRequest } from './assistant-helpers';
@@ -223,4 +226,48 @@ test("cad:assistant-sketch-tools-gear a 96-tooth wheel: the model gets a short a
   if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();
   await expect(frame.locator('[data-cad-tree] [data-body-row] .cad-body-name')).toHaveText(['Great Wheel'], STEP);
   await expect.poll(async () => Math.abs((await volumeNow(page)) - rows[0].area_mm2 * 4) < 1, STEP).toBe(true);
+});
+
+// Import SVG/DXF through the Assistant: the person attaches a DXF in the app's Assistant panel (a
+// drawing chip), the scripted model takes its attachment_id from the person's message and imports
+// it with the sketch tool's import row (the host's readAttachment), then extrudes the largest region.
+test('cad:assistant-sketch-tools-import a DXF the person attaches in the dock: the model imports it into a sketch and extrudes its slot; the tree, the sketch and the volume chip show it', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const pid = await newProject(request, host, 'Assistant drawing');
+  const { frame } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  const attachmentOf = (body: unknown) => /attachment_id (att-[0-9a-f]{16})/.exec(JSON.stringify(body))?.[1] ?? 'att-not-in-the-message';
+  host.fake.reply(
+    (body: unknown) => ({ tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Drawing', on: 'Top', entities: [], constraints: [C('i1', 'import', [attachmentOf(body)])], infer: false } }] }),
+    (body: unknown) => {
+      const [sk] = resultsIn(body);
+      const first = (sk.data!.regions as { id?: string }[])[0];
+      const x = EXTRUDE('Slot', 'Drawing', '10 mm');
+      return { tools: [{ ...x, input: { ...x.input, regions: [first?.id ?? 'r1'] } }] };
+    },
+    { text: 'Your drawing is in the sketch Drawing, and its slot is extruded 10 mm.' },
+  );
+  // The person's way: the drawing attached in the dock (a drawing chip, never a picture), then the message.
+  await core.openDock(page);
+  await core.dockPanel(page).locator('[data-dock-file]').setInputFiles({ name: 'part.dxf', mimeType: 'application/dxf', buffer: Buffer.from(DXF_PART) });
+  await expect(core.dockPanel(page).locator('[data-dock-file-kind="drawing"]')).toHaveCount(1, STEP);
+  const turn = await core.dockSend(page, 'Bring my drawing into a sketch on Top and extrude its slot 10 mm.');
+  expect((await core.followTurn(request, host.base, turn).ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterSketch, afterExtrude] = chats(host).slice(before);
+  const [sk] = resultsIn(afterSketch);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Drawing', state: 'ok' } } });
+  const made = (sk.data!.made as { id: string; kind: string; values: Record<string, unknown> }[])[0];
+  expect(made).toMatchObject({ id: 'i1', kind: 'import', values: { file: 'part.dxf', read: 'Read: 8 lines, 3 arcs, 1 circle, 1 ellipse, 1 spline', skipped: 'Skipped: 1 TEXT', open_ends: 0, scale: 'Scale: 1 unit = 25.4 mm ($INSUNITS 1: inches)' } });
+  expect(sk.data!.regions as unknown[]).toHaveLength(7);
+  expect(sk.data!.open).toEqual([]);
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Slot', state: 'ok' } } });
+  // What the person sees: the sketch (under-defined, as imported geometry is: "(-)") and the body in
+  // the tree, the sketch's 14 curves, the slot's volume.
+  await expect(historyNames(frame)).toHaveText(['(-) Drawing', 'Slot'], STEP);
+  expect((await featureOf(page, 'Drawing'))!.entities).toHaveLength(14);
+  const slot = DXF_PART_AREAS.slot * 25.4 * 25.4 * 10;
+  await expect.poll(async () => Math.abs((await volumeNow(page)) / slot - 1) < 1e-6, STEP).toBe(true);
 });

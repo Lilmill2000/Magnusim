@@ -99,6 +99,8 @@ export interface Compiled {
   guess: Record<string, Vec2>;
   /** What each of the person's tools made, in row order. */
   made: MadeRow[];
+  /** Entities a tool made that the watch path draws as one step, by entity id: the step's name (an import row's id). */
+  drawGroups: Record<string, string>;
   /** The model's name for a stored id (a part "r.top", an id, or the stored id itself). */
   refOf(stored: string): string;
   /** A constraint in the model's words ("horizontal r.top", "distance r.bottom = w"). */
@@ -299,6 +301,8 @@ export class SketchCompiler {
   readonly otherProblems: string[] = [];
   /** New driven dimensions: their expressions are what they measure once solved (solve.ts). */
   readonly driven: string[] = [];
+  /** Entities a tool made that the watch path draws in one step (an import's), by entity id. */
+  readonly drawGroups: Record<string, string> = {};
   private readonly input: SketchIn;
 
   constructor(input: SketchIn, o: { units: UnitsService; stored: SketchFeature | null }) {
@@ -308,7 +312,8 @@ export class SketchCompiler {
     this.stored = stored;
     const entitiesIn = input.entities ?? [];
     const constraintsIn = input.constraints ?? [];
-    if (!entitiesIn.length) refuse('bad_input', ['entities: give at least one shape']);
+    // An import row brings its own shapes (ops.ts): entities may be [] with one.
+    if (!entitiesIn.length && !constraintsIn.some((r) => r?.kind === 'import')) refuse('bad_input', ['entities: give at least one shape (or an import row)']);
     if (constraintsIn.length > MODEL_CONSTRAINTS_MAX) refuse('bad_input', [`constraints: at most ${MODEL_CONSTRAINTS_MAX}, not ${constraintsIn.length}: split the sketch`]);
     const storedIds = new Set<string>(
       stored ? [...Object.keys(stored.points), ...stored.entities.map((e) => e.id), ...stored.constraints.map((c) => c.id), ...(stored.ties ?? []).map((t) => t.id), ...(stored.links ?? []).map((l) => l.id)] : [],
@@ -836,7 +841,7 @@ export class SketchCompiler {
       const v = 'expr' in c && typeof c.expr === 'string' ? ` = ${'driving' in c && c.driving === false ? DRIVEN : c.expr}` : '';
       return `${k} ${c.refs.map(refOf).join(', ')}${v}`;
     };
-    return { draft: g, rows: this.rows, inferred: this.inferred, optional: this.optional, own: this.own, joined: this.joined, warnings: this.warnings, guess: this.guess, made: this.made, refOf, words };
+    return { draft: g, rows: this.rows, inferred: this.inferred, optional: this.optional, own: this.own, joined: this.joined, warnings: this.warnings, guess: this.guess, made: this.made, drawGroups: this.drawGroups, refOf, words };
   }
 }
 

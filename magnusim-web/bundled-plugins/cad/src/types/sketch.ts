@@ -192,6 +192,8 @@ export type SketchToolId =
   // ---- P4b (SELECT): linked geometry
   | 'project'
   | 'intersect'
+  // ---- Import SVG/DXF (src/sketch/import/tool.ts): what a drawing read, then OK
+  | 'import'
   // ---- v0.5.0 (SHAPES): the person's tools for the Assistant's shape macros (src/sketch/tools/shapes.ts)
   | 'line-midpoint'
   | 'rectangle-3pt'

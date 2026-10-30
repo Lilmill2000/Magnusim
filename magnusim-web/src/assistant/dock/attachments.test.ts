@@ -30,11 +30,11 @@ const GEOMETRY_ACCEPT = '.step,.stp,.iges,.igs,.brep,.brp,.stl,.obj,.ply';
 afterEach(() => setDrawingsOfferedForTests(null));
 
 describe('drawings offered (drawings.ts)', () => {
-  it('ships off, until a workspace that imports drawings ships: turning it on is a change made on purpose', () => {
-    expect(DRAWINGS_OFFERED).toBe(false);
+  it("ships on, since the CAD Part imports drawings (Import SVG/DXF, the sketch tool's import row): turning it off is a change made on purpose", () => {
+    expect(DRAWINGS_OFFERED).toBe(true);
     expect(drawingsOffered()).toBe(DRAWINGS_OFFERED);
-    setDrawingsOfferedForTests(true);
-    expect(drawingsOffered()).toBe(true);
+    setDrawingsOfferedForTests(false);
+    expect(drawingsOffered()).toBe(false);
     setDrawingsOfferedForTests(null);
     expect(drawingsOffered()).toBe(DRAWINGS_OFFERED);
   });

@@ -409,7 +409,7 @@ test('cad:toolbar-resize-review a narrowed group keeps its first command and Mor
   await expect(frame.locator('[data-cad-menu] [data-menu-item="tb-left"]')).toHaveText('Move earlier');
   await expect(frame.locator('[data-cad-menu] [data-menu-item="tb-right"]')).toHaveText('Move later');
   await frame.locator('[data-cad-menu] [data-menu-item="tb-left"]').click();
-  await expect.poll(ids).toEqual(['sketch.trim', 'sketch.offset', 'sketch.extend', 'sketch.fillet', 'sketch.chamfer', 'sketch.mirror', 'sketch.pattern-linear', 'sketch.pattern-circular', 'sketch.project', 'sketch.intersect']);
+  await expect.poll(ids).toEqual(['sketch.trim', 'sketch.offset', 'sketch.extend', 'sketch.fillet', 'sketch.chamfer', 'sketch.mirror', 'sketch.pattern-linear', 'sketch.pattern-circular', 'sketch.project', 'sketch.intersect', 'sketch.import']);
   const off = (await tb(frame).locator('.tb-btn[data-command="sketch.offset"]').boundingBox())!;
   const ext = (await tb(frame).locator('.tb-btn[data-command="sketch.extend"]').boundingBox())!;
   expect(Math.abs(off.x - ext.x), 'the same column').toBeLessThanOrEqual(1);

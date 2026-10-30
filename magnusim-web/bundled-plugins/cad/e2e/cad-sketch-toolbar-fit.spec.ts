@@ -41,6 +41,7 @@ const tip = (frame: FrameLocator) => frame.locator('[data-cad-tip]');
 
 /** The sketch part of the decided fold order (src/ui/Toolbar.tsx FOLD_ORDER): the first folds first. */
 const FOLD_ORDER = [
+  'sketch.import',
   'sketch.intersect',
   'sketch.project',
   'sketch.point',
@@ -348,8 +349,9 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
       await expect(tb(frame)).toHaveAttribute('data-fit-folded', '0');
       await expect(tb(frame)).toHaveAttribute('data-fit-labels', '');
       await expect(tb(frame).locator('[data-tb-more]')).toHaveCount(0);
-      // VIEW and EDIT keep their names down to 1440; at 1280 they are icons.
-      await expect(tb(frame)).toHaveAttribute('data-fit', width >= 1440 ? '0' : '1');
+      // VIEW and EDIT keep their names at 1600; at 1440 and 1280 they are icons (down to 1440 before
+      // Import SVG/DXF joined MODIFY).
+      await expect(tb(frame)).toHaveAttribute('data-fit', width >= 1600 ? '0' : '1');
     }
     for (const id of DRAW_GROUPS) await expect(tb(frame).locator(`.tb-btn[data-command="${id}"]`), `${id} at ${width}`).toBeVisible();
     if (width === 1600) {
@@ -377,13 +379,13 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
   }
   if (process.platform === 'win32') {
     // Measured (bundled Chromium, Segoe UI): at 1000 px MODIFY's names go; at 760 DRAW's too and
-    // six commands fold (Intersect, Project, Point, Construction, Chamfer, Extend).
+    // seven commands fold (Import SVG/DXF, Intersect, Project, Point, Construction, Chamfer, Extend).
     await resizeTo(page, frame, 1000);
     await expect(tb(frame)).toHaveAttribute('data-fit-labels', 'sketch-modify');
     await expect(tb(frame)).toHaveAttribute('data-fit-folded', '0');
     await resizeTo(page, frame, 760);
     await expect(tb(frame)).toHaveAttribute('data-fit-labels', 'sketch-modify draw');
-    await expect(tb(frame)).toHaveAttribute('data-fit-folded', '6');
+    await expect(tb(frame)).toHaveAttribute('data-fit-folded', '7');
   }
 
   // ---- back to the model ribbon at 1600, then narrow enough that a whole group collapses: FILE

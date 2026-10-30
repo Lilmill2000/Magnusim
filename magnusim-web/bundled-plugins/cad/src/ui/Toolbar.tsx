@@ -128,7 +128,9 @@ export const FOLD_ORDER: readonly string[] = [
   // Sketch mode (CONSTRAIN is icons by design: its glyphs are the constraints' own).
   // P4b fix round 1 (sketch review P2): Intersect and Project fold first (a greyed Project held its
   // slot while every new tool folded at 1600 px), then the least-used drawing helpers; Daniel's
-  // headline tools (Spline, Mirror, the patterns) stay longest of the new ones.
+  // headline tools (Spline, Mirror, the patterns) stay longest of the new ones. Import SVG/DXF, a
+  // once-a-sketch command, folds before them.
+  'sketch.import',
   'sketch.intersect',
   'sketch.project',
   'sketch.point',

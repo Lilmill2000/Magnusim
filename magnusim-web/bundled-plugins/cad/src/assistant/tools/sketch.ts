@@ -123,7 +123,9 @@ const sketchTool: EditTool<Plan> = {
     // The watch path draws each entity where the model put it, and names it by its kind.
     const kinds: Record<string, string> = {};
     for (const e of (Array.isArray(ctx.input.entities) ? ctx.input.entities : []) as EntityIn[]) if (e && typeof e.id === 'string') kinds[e.id] = String(e.kind);
-    const watch = { drawn: plan.compiled.draft, kinds };
+    // An import's curves are drawn in one step, named by its row.
+    for (const g of new Set(Object.values(plan.compiled.drawGroups))) kinds[g] = 'drawing';
+    const watch = { drawn: plan.compiled.draft, kinds, groups: plan.compiled.drawGroups };
     let id: FeatureId;
     if (!edit) {
       id = await writeSketch(ctx, { target: { kind: 'new', support: support!, name: plan.name }, geometry: plan.solved.geometry, ...watch }, plan.compiled.refOf);

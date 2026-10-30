@@ -713,6 +713,13 @@
       "keys": []
     },
     {
+      "id": "sketch.import",
+      "label": "Import SVG/DXF",
+      "group": "Sketch: Modify",
+      "context": "sketch",
+      "keys": []
+    },
+    {
       "id": "sketch.coincident",
       "label": "Coincident",
       "group": "Sketch: Constrain",

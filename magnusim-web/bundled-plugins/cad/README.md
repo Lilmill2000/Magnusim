@@ -180,6 +180,21 @@ snapping.
   along the sketch normal. Works on imported STEP bodies too.
 - **Intersect**: the curves where the sketch plane cuts the bodies (all shown
   bodies, or the ones you click).
+- **Import SVG/DXF**: pick an SVG or an ASCII DXF file (at most 20 MB). The
+  Sketch panel shows what it read (lines, arcs, circles, ellipses, splines and
+  points), what it skipped and why (text, scripts, pictures, links to other
+  files, DXF dimensions and hatches...), its size in mm and its open ends; the
+  curves preview in the sketch. **Scale** is mm per drawing unit, from the
+  file's units (an SVG's width over its viewBox, else 96 px per inch; a DXF's
+  $INSUNITS, or mm when it has none). **Place**: the drawing's own origin on the
+  sketch origin, or centred there. A DXF's **layers** can be ticked off (one the
+  file has off starts unticked). **OK** adds the curves as one undo step. Ends
+  that meet share one point, so closed outlines are profiles; no relations are
+  added (fix or dimension what must hold). An SVG's curves are exact: cubic
+  Beziers are splines, arcs are arcs, transforms are applied; a DXF's splines
+  are exact too, except rational ones (made as fit splines through points of
+  them; the panel says so). A drawing is read as data only: nothing in it runs
+  or loads. Inside a sketch only (start the sketch first).
 
 Projected and intersected curves are **linked**: drawn purple, fixed in place,
 and recomputed whenever the model rebuilds, so a sketch built on them follows
@@ -494,7 +509,9 @@ move a feature, undo its own steps, and delete features. It makes the offset
 planes its sketches and mirrors need. It does not export: use Export STEP, or
 go Back to the simulation. Split, Press-pull, Delete faces, the Enclosure,
 Import STEP, CONSTRUCT's axes and points, a face extrude, Project / Intersect
-and the sketch patterns and offsets are not offered to it; it reads the
+and the sketch patterns and offsets are not offered to it (a drawing you attach
+in the Assistant panel, SVG or DXF, it can import into a sketch, as Import
+SVG/DXF does); it reads the
 features made with them, and can change their values, rename, suppress, move
 or delete them.
 

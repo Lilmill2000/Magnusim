@@ -151,7 +151,7 @@ export const SKETCH_CONSTRAINT_KINDS = [
   'angle',
 ] as const;
 /** Fix and the person's sketch tools, as rows of the sketch tool's constraints (help sketch_tools). */
-export const SKETCH_TOOL_KINDS = ['fix', 'trim', 'extend', 'offset', 'fillet', 'chamfer', 'mirror', 'linear_pattern', 'circular_pattern', 'project', 'intersect', 'break_link'] as const;
+export const SKETCH_TOOL_KINDS = ['fix', 'trim', 'extend', 'offset', 'fillet', 'chamfer', 'mirror', 'linear_pattern', 'circular_pattern', 'project', 'intersect', 'break_link', 'import'] as const;
 
 interface ToolSpec {
   name: string;
@@ -379,7 +379,7 @@ const SPECS: ToolSpec[] = [
     risk: 'edit',
     timeoutS: 180,
     description:
-      'Make a sketch (edit "") or replace one (edit: name). on: Top, Front, Right, "<plane> offset <length>", a construction plane or a flat face ("Base.end"). entities {id, kind, at, construction}, at in mm of sketch u, v: point [u,v]; line, centerline [u1,v1,u2,v2]; polyline [u1,v1,...] (closed if last = first); rect [u1,v1,u2,v2] corners; center_rect [cu,cv,width,height]; circle [cu,cv,r]; arc [cu,cv,r,start,end deg] ccw; slot [u1,v1,u2,v2,r]; polygon [cu,cv,R,sides]; sector [cu,cv,r1,r2,start,end deg]; spline [u1,v1,...] fit points; ellipse [cu,cv,a,b,deg]; more (help sketch): control_spline, midpoint_line, rect_3pt, center_rect_3pt, parallelogram, circle_3pt, arc_slot, ellipse_arc, parabola, conic. constraints {id, kind, refs, value} in order: value "" (relation), an expression or "driven"; refs: ids, parts (l.start, c.center, r.top), origin, at(u, v) a place. fix and the person\'s tools (trim, offset, fillet, patterns...) are rows: help sketch_tools. Returns state, dof, free, moved, regions (r1...), made.',
+      'Make a sketch (edit "") or replace one (edit: name). on: Top, Front, Right, "<plane> offset <length>", a construction plane or a flat face ("Base.end"). entities {id, kind, at, construction}, at in mm of sketch u, v: point [u,v]; line, centerline [u1,v1,u2,v2]; polyline [u1,v1,...] (closed if last = first); rect [u1,v1,u2,v2] corners; center_rect [cu,cv,width,height]; circle [cu,cv,r]; arc [cu,cv,r,start,end deg] ccw; slot [u1,v1,u2,v2,r]; polygon [cu,cv,R,sides]; sector [cu,cv,r1,r2,start,end deg]; spline [u1,v1,...] fit points; ellipse [cu,cv,a,b,deg]; more (help sketch): control_spline, midpoint_line, rect_3pt, center_rect_3pt, parallelogram, circle_3pt, arc_slot, ellipse_arc, parabola, conic. constraints {id, kind, refs, value} in order: value "" (relation), an expression or "driven"; refs: ids, parts (l.start, c.center, r.top), origin, at(u, v) a place. fix and the person\'s tools (trim, offset, fillet, patterns, import of an attached drawing...) are rows: help sketch_tools.',
     schema: obj({
       edit: EDIT,
       name: NAME,
@@ -391,7 +391,7 @@ const SPECS: ToolSpec[] = [
           at: arr(num('mm'), 2, 200, 'Numbers for the kind, mm in sketch u, v (polygon: the fourth number is the side count; control_spline: the degree, 3 or 5; conic: rho)'),
           construction: bool('Reference only: bounds no region'),
         }),
-        1,
+        0,
         150,
         'Shapes.',
       ),

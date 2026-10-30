@@ -4,6 +4,27 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Import SVG/DXF into a sketch.**
+- In a sketch, MODIFY > Import SVG/DXF picks an SVG or a DXF file (at most 20 MB).
+  The Sketch panel says what it read: the lines, arcs, circles, ellipses,
+  splines and points, what it left out and why (text, scripts, pictures, links
+  to other files...), the size in mm and the ends that meet nothing. The curves
+  show in the sketch first; OK adds them as one undo step, Cancel or Esc adds
+  nothing.
+- Its units set the scale (an SVG's width over its viewBox, else 96 px per
+  inch; a DXF's $INSUNITS, or mm when it says none); change it in Scale. Place
+  puts the drawing's own origin on the sketch's, or centres it there. A DXF's
+  layers can be left out (one the file has off starts left out).
+- Curves whose ends meet share one point, so a closed outline is a profile that
+  Extrude takes. No relation is added: the sketch is under-defined, as imported
+  geometry is.
+- A drawing is only read, never shown as a page: nothing in it runs or loads
+  anything. A binary DXF is refused (save it as ASCII DXF); more than 20,000
+  curves is refused with the count.
+- The Assistant does the same with a drawing you attach in its panel: the sketch
+  tool's import row, with the same summary you see. The app's Assistant panel
+  now takes SVG and DXF files.
+
 **What the Assistant can do, you can do too.**
 - Hole (SOLID): click a flat face, click the centres on it (or type them), set
   the diameter and Through or a blind depth, Done. It makes "Hole N sketch" and

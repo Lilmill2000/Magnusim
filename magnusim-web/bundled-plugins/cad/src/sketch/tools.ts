@@ -35,6 +35,7 @@ import { filletTool } from './tools/fillet';
 import { SHAPE_SPEC, shapeTool } from './tools/shapes';
 // The Ellipse group: Ellipse, Partial ellipse, Parabola, Conic.
 import { conicTool, ellipseTool, parabolaTool, partialEllipseTool } from './tools/ellipse';
+import { importTool } from './import/tool';
 
 type Draft = SketchFeature;
 const DRAG_PX = 4;
@@ -1137,6 +1138,9 @@ export function makeTool(mode: SketchMode, id: SketchToolId): SketchTool {
       return projectTool(mode);
     case 'intersect':
       return intersectTool(mode);
+    // Import SVG/DXF: the panel's summary and options, the preview, OK.
+    case 'import':
+      return importTool(mode);
     // P4b (SKETCH)
     case 'spline-fit':
       return splineTool(mode, 'fit');

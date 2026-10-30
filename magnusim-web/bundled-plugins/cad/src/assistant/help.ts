@@ -6,7 +6,8 @@
 // and frames (infer and the solver's rules in sketch_tools), `checks` what to verify and how,
 // `traps` the common mistakes, `examples` the index
 // of the worked parts, `sketch_tools` fix, driven dimensions, places and the person's sketch tools
-// as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link)
+// as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link,
+// import of an attached drawing)
 // with examples, and how a pattern's values change later. The example topics are the worked parts of examples.ts, one row per call
 // with its whole input and its key results ({about, text, tool, input, result}: the call sits in
 // the row itself, so a sketch's `at` lists stay at depth 7 of the reply's data, inside the app's
@@ -304,6 +305,12 @@ const sketchToolRows = (): HelpRow[] => [
   { about: 'later', text: 'A pattern or offset keeps its row\'s id. edit_feature on the sketch sets its values: "<id>.count", "<id>.spacing", "<id>.angle", "<id>.count2", "<id>.spacing2", "<id>.angle2" (linear), "<id>.count", "<id>.angle" ("full" for the whole circle; circular), "<id>.distance" (offset); copies are made or removed. A replace keeps a row sent with its id (new values lay it out again), and removes one left out.' },
   { about: 'project and intersect', text: 'project [selector]: a face (its outer edges), an edge or a vertex of a body, or a body (its silhouette along the sketch normal), as fixed curves linked to the model (they follow it at every rebuild). intersect [body]: where the sketch plane cuts the body. One per row; the curves are "<id>" (one) or "<id>.1", "<id>.2"... Constrain to them, or trim and offset them after break_link. A replace keeps a row sent with its id (its refs are not read again).' },
   { about: 'break_link', text: 'break_link [curves or a project/intersect row id]: the linked curves become ordinary geometry where they are; constraints on them stay.' },
+  {
+    about: 'import',
+    text: `import [attachment id]: a drawing the person attached (SVG or DXF: the attachment_id att-... of an "Attached drawing" line of their message), read as data and added as the person's Import SVG/DXF adds it: lines, arcs, circles, ellipses, splines and points; ends that meet share one point; no relations (under-defined: fix or dimension what must hold). entities may be [] with it. value "" or any of "scale <mm per drawing unit>; place origin|centre; layers <a>, <b>": the scale is the file's own by default (SVG: its width over its viewBox, else 96 px per inch; DXF: $INSUNITS, none read as mm), place origin puts the drawing's origin on the sketch's, centre its middle; layers (DXF) default to every layer the file has on. made gives read, skipped (text; scripts and links never run or fetched), size, open_ends, scale, layers and notes; its curves are "<id>.1", "<id>.2"... At most 20,000 curves and 20 MB. One-shot: a replace that sends it again imports again. Example: {id:"i1", kind:"import", refs:["att-0123456789abcdef"], value:"place centre"}.`,
+  },
+  // The sketch tool's answer (its description's last sentence, moved here for the local prefix).
+  { about: 'answer', text: "The sketch tool returns state, dof, free, moved, regions (r1...) and made (what each of these rows made)." },
   // v0.5.0: help sketch holds every entity kind within its size; the solver's rules sit here.
   { about: 'infer', text: 'infer true: lines, centerlines and polyline sides whose ends share v (or u) within 0.05 mm also get horizontal (or vertical). One that repeats a constraint of yours, or cannot hold with one, is left out and said so (dropped_inferred, and a warning naming which).' },
   { about: 'the solver', text: "It always runs. Coordinates are guesses: constraints and dimensions set the shape (moved: points that ended far from where you drew them). A conflict or duplicate is refused with the ids (a macro's own relation as internal): remove yours. No solution, or a shape shrunk to nothing, is refused. Under-defined is kept with a warning: free says what still moves; dof 0 is fully defined." },

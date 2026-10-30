@@ -73,6 +73,8 @@ describe('the file-to-shard map', () => {
   const cases: [string, string[]][] = [
     // Areas.
     ['src/sketch/mode.ts', ['sketch', 'assistant']],
+    // Import SVG/DXF: the person's tool (sketch) and the Assistant's import row (assistant) read one parser.
+    ['src/sketch/import/svg.ts', ['sketch', 'assistant']],
     ['src/solver-worker/solver-worker.mjs', ['sketch', 'assistant']],
     ['solver-build/build.sh', ['sketch']],
     ['src/link/controller.ts', ['link']],
