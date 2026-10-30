@@ -128,6 +128,8 @@ export const SHARDS = {
     'e2e/cad-start.spec.ts',
     // Edit in CAD (host API 1.7): a project geometry opened in a Part, adopted on the first Back with a change (gate:l3-cad).
     'e2e/cad-edit-in-cad.spec.ts',
+    // Magnusim keeps every project and simulation item (CFD PREP, the simulation words, the Assistant's send and enclosure).
+    'e2e/cad-magnusim-project-items.spec.ts',
   ],
   // The Part's tools for the app's Assistant, each spec on its own host with the Assistant's test
   // switches and the scripted model (e2e/assistant-helpers.ts): the tools offered, watch mode,

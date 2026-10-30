@@ -57,7 +57,8 @@ const module: CadModule = {
       icon: BANANA_ICON,
       iconColors: BANANA_ICON_COLORS,
       order: 10,
-      hint: "Show a banana for scale. It's not part of the model or the simulation",
+      // Magnusim CAD (projectLinks false) has no simulation to speak of.
+      hint: services.bridge.projectLinks() ? "Show a banana for scale. It's not part of the model or the simulation" : "Show a banana for scale. It's not part of the model",
       pressed: shown,
       enabled: () => (services.doc.state.get().status !== 'ready' ? 'The part is still loading' : true),
       run: async () => {

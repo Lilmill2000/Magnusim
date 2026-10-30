@@ -32,6 +32,7 @@ import { ToolError } from './errors';
 import { refBodiesOf, type RefBodies } from './feature-tools';
 import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
+import { enclosureKept, KEPT_WORDS } from '../features/enclosure/kept';
 import { LabelIndex } from './labels';
 import { madeWith } from './made-with';
 import { dir, jsonBytes, len, sig6, vec } from './numbers';
@@ -168,6 +169,14 @@ export function fullFeature(services: AppServices, s: DocState, f: Feature, at: 
   // A feature another tool made as part of its work (a hole's sketch and cut): edited as its own type.
   const by = madeWith(services, f.id);
   if (by) row.made_by = by;
+  // Magnusim CAD keeps an Enclosure made in Magnusim as it is (no Enclosure command, its panel read-only):
+  // nothing to resend or set, only what it is.
+  if (enclosureKept(services, f)) {
+    row.inputs = null;
+    row.summary = summaryOf(f, services);
+    row.kept = KEPT_WORDS;
+    return row;
+  }
   const inputs = inputsOf(f, services, at);
   row.inputs = inputs;
   if (!inputs) row.summary = summaryOf(f, services);

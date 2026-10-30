@@ -68,7 +68,8 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
   registerModuleFeatures(doc.features, found);
   // The person's keybinds (ws.prefs "keybinds", live): the keyboard, the tooltips and the Assistant
   // read them. The app's Assistant panel key the person chose is no command's (live too).
-  const keybinds = createKeybinds({ prefs: bridge.prefs, assistant: bridge });
+  // Magnusim CAD (projectLinks false): none of a project's commands (the Enclosure) among its keys.
+  const keybinds = createKeybinds({ prefs: bridge.prefs, assistant: bridge, projectLinks: bridge.projectLinks() });
   const commands = createCommandRegistry(() => services, keybinds);
   const keyboard = createKeyboard(document);
   // Typed text not applied yet: focus coming back finds its field, Enter applies it (UX review U1).
@@ -100,7 +101,7 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
     keyboard,
     (message) => bridge.toast(message, 'info'),
     () => services.mode.get().mode,
-    (c) => toolKeyAgain(services.apis.get().sketch, c, commands.all()),
+    (c) => toolKeyAgain(services.apis.get().sketch, c),
   );
   // The host's appearance (unreleased; light on an older host): the 3D view's palette and the
   // toolbar's icon scale, now and on each change, before the layout mounts the view.

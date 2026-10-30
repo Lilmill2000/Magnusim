@@ -128,6 +128,27 @@ describe('loadPluginKeys', () => {
     expect(errors.d).toBe('workspace/x.json is missing');
   });
 
+  it('a command that acts only where the app has projects ("projects": true) is listed in Magnusim, and not in Magnusim CAD', async () => {
+    const withEnclosure = {
+      ...ALT_DEMO,
+      commands: [...ALT_DEMO.commands, { id: 'cfd.enclosure', label: 'Enclosure', group: 'CFD prep', context: 'model', keys: [], projects: true }],
+    };
+    const ws = { key: 'part', title: 'Part', commands: 'workspace/commands.json', commands_error: '' };
+    const serve = () => fakeKeysServer({ rows: [{ key: 'demo', name: 'Demo', status: 'enabled', workspaces: [ws] }], files: { '/plugins/demo/workspace/commands.json': withEnclosure } });
+    serve();
+    const magnusim = (await loadPluginKeys()).plugins[0];
+    expect(commandsOf(magnusim).map((c) => c.id)).toEqual(['sketch.line', 'sketch.arc', 'model.extrude', 'cfd.enclosure']);
+    expect(commandsOf(magnusim).find((c) => c.id === 'cfd.enclosure')).toMatchObject({ label: 'Enclosure', group: 'CFD prep', projects: true });
+    window.__MAGNUSIM_EDITION__ = 'cad';
+    try {
+      serve();
+      const cad = (await loadPluginKeys()).plugins[0];
+      expect(commandsOf(cad).map((c) => c.id)).toEqual(['sketch.line', 'sketch.arc', 'model.extrude']);
+    } finally {
+      delete window.__MAGNUSIM_EDITION__;
+    }
+  });
+
   it('reads a key as people write it too ("shift+r"), as the CAD plugin reads them', async () => {
     const { p } = await demo({ 'sketch.rectangle': ['shift+r'], 'sketch.line': ['ctrl+w'] });
     expect(keysOf(p, 'sketch.rectangle')).toEqual(['Shift+KeyR']);

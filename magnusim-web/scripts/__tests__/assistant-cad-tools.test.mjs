@@ -8,7 +8,8 @@
 // CAD schema's size is
 // printed and stays within the app's 16 KB; the registration is within
 // 512 KB; and what a local model reads before the conversation (the tools as sent, the CAD notes,
-// the system prompt) is at most 52,000 characters, its estimated tokens printed.
+// the system prompt) is at most 52,000 characters, its estimated tokens printed; in Magnusim CAD
+// (projectLinks false: the tools without a simulation's or the Enclosure's fields) it is shorter.
 // The CAD suite's hand copies of the app's rules stay the app's: tests/assistant/sanitize-copy.ts
 // (help.test.ts checks every help reply through it) has the server's caps and gives what
 // resultText gives, on replies shaped as help sends them (the guide, the core set's guide, every
@@ -27,7 +28,7 @@ process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = join(ROOT, 'home');
 after(() => rmSync(ROOT, { recursive: true, force: true }));
 
-const { CAD_TOOLS } = await import('../../bundled-plugins/cad/src/assistant/schemas.ts');
+const { CAD_TOOLS, cadToolsFor } = await import('../../bundled-plugins/cad/src/assistant/schemas.ts');
 const { CORE_TOOLSET, TOOL_NAMES } = await import('../../bundled-plugins/cad/src/assistant/schemas.ts');
 const { GUIDE, guideWithout } = await import('../../bundled-plugins/cad/src/assistant/guide.ts');
 const { WORKED_PARTS } = await import('../../bundled-plugins/cad/src/assistant/examples.ts');
@@ -59,10 +60,10 @@ const hostTools = () => [
 /** The app's tools a workspace turn is offered, by name (core host tools spec §15): 5 host tools and the core page's core__show and Settings → Appearance's two. */
 const HOST_IN_WORKSPACE = ['app_status', 'core__appearance', 'core__set_appearance', 'core__show', 'explain_ready', 'project_summary', 'read_setup', 'wait'];
 
-/** The tools the app offers a turn on the Part's tab, in order (the registry's own selection). */
-function offered({ local = false } = {}) {
+/** The tools the app offers a turn on the Part's tab, in order (the registry's own selection); `tools` the Part's (Magnusim's by default). */
+function offered({ local = false, tools: cad = CAD_TOOLS } = {}) {
   const registry = createToolRegistry({ hostTools: hostTools(), pluginEpoch: () => 'e1' });
-  const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: CAD_TOOLS.map((t) => ({ ...t })), guide: GUIDE };
+  const reg = { plugin: 'cad', pluginName: 'Magnusim CAD', workspace: 'part', workspaceName: 'Part', projectId: 'p1', studyId: 's1', tools: cad.map((t) => ({ ...t })), guide: GUIDE };
   const verdict = registry.setWorkspace('T1', 'L1', reg);
   assert.deepEqual(verdict.refused, []);
   assert.equal(verdict.accepted.length, 21);
@@ -132,9 +133,7 @@ describe("the CAD Part's tools by the app's rules", () => {
 
   it(`what a local model reads before the conversation is at most ${LOCAL_PREFIX_MAX} characters`, () => {
     const { tools } = offered({ local: true });
-    const sent = providerTools(tools).map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: emitSchema('openai_compatible', t.schema) } }));
-    const system = `${SYSTEM_PROMPT}\n${guideBlock(GUIDE, 'Magnusim CAD')}`;
-    const chars = JSON.stringify(sent).length + system.length;
+    const { chars, sent, system } = prefixOf(tools);
     const est = estimateStep({
       provider: 'openai_compatible',
       model: 'local',
@@ -152,7 +151,26 @@ describe("the CAD Part's tools by the app's rules", () => {
     console.log(`[assistant-cad-tools] local prefix: ${chars} characters (tools ${JSON.stringify(sent).length}, system ${system.length}), about ${est.promptTokens} tokens by the estimate's rule`);
     assert.ok(chars <= LOCAL_PREFIX_MAX, `${chars} characters`);
   });
+
+  it("in Magnusim CAD (projectLinks false) the Part's tools make that prefix shorter: the same 21, without a simulation's or the Enclosure's fields", () => {
+    const edition = cadToolsFor({ projectLinks: false });
+    assert.deepEqual(edition.map((t) => t.name), CAD_TOOLS.map((t) => t.name));
+    for (const t of edition) assert.deepEqual(checkSchema(t.inputSchema), { ok: true }, t.name);
+    const magnusim = prefixOf(offered({ local: true }).tools).chars;
+    const { tools, dropped } = offered({ local: true, tools: edition });
+    assert.deepEqual(dropped, []);
+    const { chars } = prefixOf(tools);
+    console.log(`[assistant-cad-tools] local prefix in Magnusim CAD: ${chars} characters (Magnusim ${magnusim}, ${magnusim - chars} fewer)`);
+    assert.ok(chars < magnusim, `${chars} characters, Magnusim ${magnusim}`);
+  });
 });
+
+/** What a local model reads before the conversation: the tools as sent and the system text (the prompt and the CAD notes). */
+function prefixOf(tools) {
+  const sent = providerTools(tools).map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: emitSchema('openai_compatible', t.schema) } }));
+  const system = `${SYSTEM_PROMPT}\n${guideBlock(GUIDE, 'Magnusim CAD')}`;
+  return { chars: JSON.stringify(sent).length + system.length, sent, system };
+}
 
 /** A help reply's data as the help tool gives it (CAD's help.ts), rev first as the call handler adds it. */
 const helpData = (topic, rows) => ({ rev: 3, topic, rows });

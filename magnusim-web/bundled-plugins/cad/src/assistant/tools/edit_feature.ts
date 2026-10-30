@@ -14,6 +14,8 @@
 //     orientation, ruled, along, fromEnd, a pattern's symmetric and mode...) go the same way, a
 //     row's value one of the field's words; the feature with every row applied must be complete
 //     by its type's own check (a method that needs a pick it has not got is refused).
+//   - Magnusim CAD keeps an Enclosure made in Magnusim as it is (features/enclosure/kept.ts): its
+//     values are refused with the read-only panel's words; rename, suppress and move work.
 //   - A sketch's dimension values (set rows naming its dimension ids) are checked headless first and
 //     go through sketch mode, which solves the stored geometry with them (sketch/dims.ts); the answer
 //     says when a change turned a sketch over (`flipped`).
@@ -35,6 +37,7 @@ import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { applyDimensions, planDimensions, type DimensionEdit } from '../sketch/dims';
 import { flippedSketches } from '../sketch/flip';
 import { closestName, closestWords } from '../closest';
+import { enclosureKept, KEPT_WORDS } from '../../features/enclosure/kept';
 
 interface SetRow {
   field: string;
@@ -140,6 +143,8 @@ const editFeature: EditTool<Plan> = {
       });
     }
     const rows = (Array.isArray(ctx.input.set) ? ctx.input.set : []) as SetRow[];
+    // Magnusim CAD keeps an Enclosure made in Magnusim as it is: its panel is read-only, and so are its values here.
+    if (rows.length && enclosureKept(services, f)) throw new ToolError('bad_input', `set: ${f.name}: ${KEPT_WORDS} rename_to, suppress and move work.`, { detail: { field: 'set' } });
     const set: Plan['set'] = [];
     // A sketch's dimensions: checked headless now, written through sketch mode (sketch/dims.ts).
     const dims = rows.length && f.type === 'sketch' ? await planDimensions(ctx, f, rows.map((r) => ({ field: str(r?.field), value: str(r?.value) }))) : null;

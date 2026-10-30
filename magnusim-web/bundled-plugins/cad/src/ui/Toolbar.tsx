@@ -52,6 +52,7 @@
 // Owner: UI-SHELL.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { toolKeyAgain } from '../app/keyboard';
 import { useServices } from '../lib/services';
 import { useStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
@@ -259,6 +260,17 @@ function isActive(c: CommandDef, panel: UiState['panel'], sketchTool: string | n
   return c.id === `solid.${panel.type}` || c.activeWhen?.featureType === panel.type;
 }
 
+/**
+ * A toolbar click (a button, a flyout's row, a More menu's item): the sketch tool in hand clicked
+ * again is put down, exactly as its key pressed again (Daniel 2026-10-29; src/app/keyboard.ts
+ * toolKeyAgain); any other command runs, so a click on a different tool switches to it.
+ */
+function runClicked(services: AppServices, id: string): void {
+  const c = services.commands.get(id);
+  if (c && toolKeyAgain(services.apis.get().sketch, c)) return;
+  void services.commands.run(id);
+}
+
 /** Why a command cannot run right now, or null. */
 function reasonOf(c: CommandDef, services: AppServices): string | null {
   let ok: true | string = true;
@@ -336,7 +348,7 @@ function ToolbarButton({
         if (ui.state.get().menu) ui.closeMenu();
         if (reason) return;
         if (variant && c.flyout) setLastUsed(services, c.flyout, variant.id);
-        void services.commands.run(shown.id);
+        runClicked(services, shown.id);
       }}
     >
       <span className="tb-ico">{shown.icon ? <Icon d={shown.icon} size={size === 'large' ? 24 : 16} stroke={1.7} className="tb-svg" {...(shown.iconColors ? { colors: shown.iconColors } : {})} /> : null}</span>
@@ -405,7 +417,7 @@ function FlyoutButton({
       ...(custom?.menuAt ? { onContext: (mx: number, my: number) => custom.menuAt!(mx, my, x.id) } : {}),
       run: () => {
         setLastUsed(services, def.id, x.id);
-        void services.commands.run(x.id);
+        runClicked(services, x.id);
       },
     }));
     ui.showMenu(r.left, r.bottom + 2, items, name, { owner, anchor: el });
@@ -519,7 +531,7 @@ function MoreButton({
       ...(c.pressed ? { checked: !!c.pressed() } : {}),
       ...(itemMenu ? { onContext: (x: number, y: number) => itemMenu(c, x, y) } : {}),
       ...(onItemPress ? { onPress: (e: React.PointerEvent<HTMLButtonElement>) => onItemPress(c, e) } : {}),
-      run: () => void services.commands.run(c.id),
+      run: () => runClicked(services, c.id),
     }));
     ui.showMenu(r.left, r.bottom + 2, items, name, { owner, anchor: el });
     if (last) {

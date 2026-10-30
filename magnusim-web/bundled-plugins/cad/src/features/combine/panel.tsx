@@ -3,6 +3,8 @@
 // A new Combine whose first target is an Enclosure's body turns Keep the tool
 // bodies on (the fluid domain needs the part kept; SD review round 1: off by
 // default, forgetting it consumed the part), unless the user set the switch.
+// Only where the host has projects (Magnusim): Magnusim CAD (projectLinks
+// false) has no simulation, and an Enclosure's body is a target as any other.
 // Every valid change applies live. Done closes.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -23,7 +25,7 @@ export function CombinePanel(props: FeaturePanelProps) {
   const [active, setActive] = useState<'targets' | 'tools'>(f.targets.length ? 'tools' : 'targets');
   /** The user set Keep the tool bodies in this panel: it is theirs from then on. */
   const keepSet = useRef(false);
-  const enclosureBody = (id: string) => services.doc.state.get().doc.features.some((g) => g.type === 'enclosure' && (g as { creates?: string }).creates === id);
+  const enclosureBody = (id: string) => services.bridge.projectLinks() && services.doc.state.get().doc.features.some((g) => g.type === 'enclosure' && (g as { creates?: string }).creates === id);
   const targets = useBodyField(services, {
     feature: props.feature,
     ids: f.targets,

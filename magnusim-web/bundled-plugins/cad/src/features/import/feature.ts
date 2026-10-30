@@ -130,7 +130,7 @@ async function buildImport(f: ImportFeature, ctx: BuildContext): Promise<Feature
   } catch (err) {
     return { ok: false, message: `${f.name} failed: ${kernelWords(err)}` };
   }
-  if (!bytes) return { ok: false, message: `${f.name} failed: its stored shapes (${f.brep.rel}) are not in the project any more` };
+  if (!bytes) return { ok: false, message: `${f.name} failed: its stored shapes (${f.brep.rel}) are not ${ctx.files.where ?? 'in the project'} any more` };
   let shapes: { id: ShapeId; type: string; faces: number }[] = [];
   try {
     const r = await ctx.kernel.call('brep_read', { check: false }, { bytes });
@@ -174,7 +174,7 @@ async function bodiesOf(f: ImportFeature, ctx: BuildContext, shapes: { id: Shape
 async function rehealFromSource(f: ImportFeature, ctx: BuildContext, occt: string): Promise<FeatureBuildResult> {
   const t0 = performance.now();
   const bytes = await ctx.files!.read(f.source);
-  if (!bytes) return { ok: false, message: `${f.name} failed: it was stored by OCCT ${f.brep.occt} and its source STEP (${f.source.rel}) is not in the project any more` };
+  if (!bytes) return { ok: false, message: `${f.name} failed: it was stored by OCCT ${f.brep.occt} and its source STEP (${f.source.rel}) is not ${ctx.files!.where ?? 'in the project'} any more` };
   const h = await readAndHeal({ kernel: ctx.kernel }, { bytes, fileName: f.source.fileName, tolerance: f.heal.tolerance, sew: f.heal.sew, large: f.source.size > LARGE_STEP_BYTES }, undefined, () => {});
   if (h.raw?.length) await ctx.release(h.raw);
   const shapes = h.healed.map((s) => ({ id: s.id, faces: s.faces ?? 0, valid: s.valid, reason: s.reason }));

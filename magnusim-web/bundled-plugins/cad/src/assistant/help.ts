@@ -48,11 +48,14 @@ export function guideRows(guide: string = GUIDE): HelpRow[] {
   });
 }
 
-/** Every reason with its code and fix, then the sub-reasons. */
-function errorRows(): HelpRow[] {
+/** The reasons only a host with projects gives (sending to the simulation, Edit in CAD's project geometry). */
+const PROJECT_REASONS: ReadonlySet<string> = new Set(['link_failed', 'no_link', 'opening_geometry']);
+
+/** Every reason with its code and fix, then the sub-reasons (Magnusim CAD, `projects` false: none of a project's). */
+function errorRows(projects = true): HelpRow[] {
   const rows: HelpRow[] = [];
   for (const code of Object.keys(REASONS) as ToolCode[]) {
-    for (const reason of REASONS[code]) rows.push({ about: `${reason} (${code})`, text: HINTS[reason] });
+    for (const reason of REASONS[code]) if (projects || !PROJECT_REASONS.has(reason)) rows.push({ about: `${reason} (${code})`, text: HINTS[reason] });
   }
   for (const sub of ['no_overlap', 'wrong_side', 'too_short', 'off_body'] as const) rows.push({ about: `${sub} (detail.sub)`, text: HINTS[sub] });
   return rows;
@@ -102,13 +105,13 @@ function toolRow(t: AssistantTool, note: string | undefined = FEATURE_NOTES[t.na
   return { about: t.name, text: `${t.title} (${t.risk}). Fields: ${Object.keys(t.inputSchema.properties).join(', ')}.${note ? ` ${note}` : ''}` };
 }
 
-/** Each tool: its title, how much it may change, its fields, and its rules. */
-function featureRows(): HelpRow[] {
-  return CAD_TOOLS.map((t) => toolRow(t));
-}
+/** The body tool's rules in Magnusim CAD (no projects, no simulation). */
+const BODY_NOTE_WITHOUT_SIMULATION = 'One step. A body name is unique among bodies; it may equal a feature name.';
 
-/** The features topic's body row in Magnusim CAD (projectLinks false: no projects, no simulation): the tool as offered there. */
-export const BODY_ROW_WITHOUT_SIMULATION: HelpRow = toolRow(cadToolsFor({ projectLinks: false }).find((t) => t.name === 'body')!, 'One step. A body name is unique among bodies; it may equal a feature name.');
+/** Each tool: its title, how much it may change, its fields, and its rules (the tools as this host offers them). */
+function featureRows(tools: readonly AssistantTool[] = CAD_TOOLS, projects = true): HelpRow[] {
+  return tools.map((t) => toolRow(t, !projects && t.name === 'body' ? BODY_NOTE_WITHOUT_SIMULATION : FEATURE_NOTES[t.name]));
+}
 
 const parameterRows = (): HelpRow[] => [
   {
@@ -242,8 +245,11 @@ const exampleRows = (topic: string): HelpRow[] => {
   return [{ about: 'the part', text: p.part }, ...p.calls.map((c) => ({ about: c.about, text: c.text, tool: c.tool, input: c.input, result: c.result })), { about: 'checks', text: p.checks }];
 };
 
-/** The workspace tool: every action, what it takes and what it does (none of them but reheal is an undo step). */
-const workspaceRows = (): HelpRow[] => [
+/**
+ * The workspace tool: every action, what it takes and what it does (none of them but reheal is an
+ * undo step). Magnusim CAD (`simulation` false): no send_to_simulation, and no word of a simulation.
+ */
+const workspaceRows = (simulation = true): HelpRow[] => [
   { about: 'fields', text: 'action names what to do; target, value and items carry what it needs ("" and [] when unused); person_asked true only when the person asked in this request for a change of their view or of a keybind. Every answer says what changed; data.undo_step false: view or session state, not an undo step (only reheal is one).' },
   { about: 'roll_back_to, roll_to_end', text: 'target: a feature; the bar goes just after it and later features roll back (not built). While the bar is not at the end your edits answer rolled_back at once: call roll_to_end first. roll_to_end takes no target.' },
   { about: 'show, hide', text: "target: a sketch, a construction plane, axis or point, or a body: the tree\'s eye. A sketch is shown until a later feature uses it, unless shown on purpose. body visibility does the same for bodies." },
@@ -251,11 +257,18 @@ const workspaceRows = (): HelpRow[] => [
   { about: 'select, selection_filter', text: 'select items: selectors (help selectors), feature names, Top, Front, Right, X axis, Y axis, Z axis or origin; [] clears the selection. The person sees it selected; "selection" in later selectors reads it. selection_filter items: face, edge, vertex, body, feature, origin, sketch, region; [] lets everything be picked.' },
   { about: 'expand, collapse', text: 'target origin or bodies (the tree folders), tree (the design tree card; in a sketch for that sketch only), sketch_panel (the Sketch panel), sketch_details (its Details).' },
   { about: 'toolbar_show, toolbar_hide, toolbar_move, toolbar_reset, toolbar_width, toolbar_rows', text: 'target: a toolbar command id (solid.extrude, modify.shell, sketch.spline, ...). show puts it on the bar, hide in its group\'s More menu; move value "before <command id of the same group>" or end. toolbar_reset value model, sketch or "" (both). toolbar_width: target a group id (draw, sketch-modify, constrain, solid, modify, view, ...; sketch groups are on the sketch toolbar), value a width in px (24 to 1200), auto, or "" to read it; what does not fit goes into the More of the group and comes back when it is widened, as when the person drags the line at the right of the group; never narrower than its first command and its More (the reply gives the width applied, what is on the bar and what is in its More). toolbar_rows: target model, sketch or "" (the toolbar shown now), value 1 to 4, auto (3), or "" to read the rows and the widths set; large buttons need three rows, as when the person drags the bottom edge of the toolbar. Every command is on the toolbar by default (the main command of each group large, the rest small); toolbar_show answers where the person sees it. A drawing tool in a flyout (sketch.centerline in Line) moves with its flyout. The layout is the person\'s, in every project.' },
-  { about: 'banana_show, banana_hide, banana_place', text: 'The banana for scale: never a body, never in the simulation. banana_place value "x, y, z[, rot deg]" (mm; its underside at z). With target a sketch: that sketch\'s taped banana picture (seen while the sketch is edited), banana_place value "u, v" mm.' },
+  { about: 'banana_show, banana_hide, banana_place', text: `The banana for scale: never a body${simulation ? ', never in the simulation' : ''}. banana_place value "x, y, z[, rot deg]" (mm; its underside at z). With target a sketch: that sketch\'s taped banana picture (seen while the sketch is edited), banana_place value "u, v" mm.` },
   { about: 'reload, keep_mine, retry_save, retry_kernel', text: 'reload: after another tab saved (the save chip); when this tab has a change of its own the person confirms first, as it is lost. keep_mine: this tab\'s version over the other tab\'s save; the person confirms. retry_save: a save that failed, now. retry_kernel: the geometry kernel that failed to start.' },
   { about: 'import_step, reheal', text: 'import_step: the file picker is the person\'s, so they are asked to pick the STEP (Import STEP in FILE, or a drop on the Part); call get_model after. reheal target: an Imported STEP; value the heal tolerance ("0.01 mm"; "" keeps it); items ["knit"] knits loose faces into solids, [] does not. One undo step, as Heal all in its panel.' },
   { about: 'export_step', text: 'target AP214 or AP242 ("": AP214); value the file name ("": the Part\'s name); items the bodies ([]: every shown body). The person\'s Export STEP panel opens filled in and they click Export: the download is theirs. Refused while they have a panel open.' },
-  { about: 'send_to_simulation', text: 'Save, then link the bodies included in the simulation into the project\'s geometry, as the app\'s Back does (body simulation include or exclude chooses them). Outcomes: linked, unchanged (the geometry has this design), nothing (no body included), kept-editing (the person answered the app\'s question with Keep editing), not-now; a refusal is link_failed with the app\'s words. value leave: after a send that went through, the Part closes as Back: no Part tool answers after it.' },
+  ...(simulation
+    ? [
+        {
+          about: 'send_to_simulation',
+          text: 'Save, then link the bodies included in the simulation into the project\'s geometry, as the app\'s Back does (body simulation include or exclude chooses them). Outcomes: linked, unchanged (the geometry has this design), nothing (no body included), kept-editing (the person answered the app\'s question with Keep editing), not-now; a refusal is link_failed with the app\'s words. value leave: after a send that went through, the Part closes as Back: no Part tool answers after it.',
+        },
+      ]
+    : []),
   { about: 'keybind_get, keybind_set, keybind_reset, keybind_clear', text: 'The person\'s keyboard shortcuts for this Part\'s commands, while CAD is open (the app\'s own keybind tools serve Home and the project page). keybind_get target a command id (sketch.rectangle) or label, or "" for all: keys as stored (physical keys: "Shift+KeyR") and shown ("Shift+R"). Read them any time. Change them only when the person explicitly asked for that change in this request: person_asked true (else not_asked), and the app asks the person to confirm each change (No: step_declined, nothing changes). keybind_set value the keys ("Shift+R", "Ctrl+Alt+K", "F7"); a key another command has is key_taken unless items ["replace"]; keys the browser or Magnusim keep are refused, the app\'s Assistant panel key too (the person\'s, from Settings: assistant_panel_keys in keybind_get; a row\'s taken_by_app says a key of it is that key: it opens the panel, not the command). keybind_reset puts the defaults back; keybind_clear leaves it no key. Otherwise tell the person where to set it themselves: set_in in keybind_get (a right-click on the command on the toolbar or a views-menu row; Delete and Rename from the right-click on the Part row or a feature row; the tree or Sketch panel toggle from its collapse arrow; sketch Delete from the right-click on the selection; Place or finish from the right-click on Finish sketch). If the keybinds of the person could not be read, keybind_get says so and changes are refused.' },
   { about: "the person\'s view", text: 'fit; standard_view value front, back, left, right, top, bottom, iso, iso_back or home; normal_to target a flat face, a plane or a sketch; orbit_pivot target center, origin, "(x, y, z)" or a selector; section value off or "<Top|Front|Right> [offset <length> | middle] [flip]"; projection value perspective or orthographic; display value shaded_edges, shaded or wireframe. These move what the person sees: only with person_asked true, or while they have not moved the view in this request (else busy view_latched). Pictures (view) never move it.' },
 ];
@@ -339,8 +352,8 @@ const sketchRows = (): HelpRow[] => {
   return rows;
 };
 
-/** The details of get_model's holes and short brief, set_params' comments, construct, direct, edit_feature's choice fields, extrude's face and direction, pattern's options and keys, measure's totals and checks. */
-const detailRows = (): HelpRow[] => [
+/** The details of get_model's holes and short brief, set_params' comments, construct, direct, edit_feature's choice fields, extrude's face and direction, pattern's options and keys, measure's totals and checks. In Magnusim CAD (`enclosure` false) none of the Enclosure: no command makes one there, and one made in Magnusim is not edited there. */
+const detailRows = (enclosure = true): HelpRow[] => [
   {
     about: 'get_model and set_params',
     text: "get_model: a hole's sketch and cut show made_by hole and are edited as sketch and extrude. A brief short of room leaves out the parameters' comments, then their expressions (params_cut says so; every name stays), and counts older features ({earlier}): detail full or feature <name> has them. set_params: a change keeps the comment the parameter has (comment \"-\" removes it); each answer row says added or changed, and was.",
@@ -359,11 +372,11 @@ const detailRows = (): HelpRow[] => [
   },
   {
     about: 'direct kinds',
-    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"... enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid. delete_body: bodies (one feature for them all) leave the model from this point in the history, as the person\'s Delete on a body in the tree; later features that use them fail; delete or suppress the feature to bring them back (edit changes which bodies). repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
+    text: 'press_pull: faces (of one body), distance (above 0 adds, below 0 removes). delete_faces: faces; the neighbours grow over the gap. split: bodies, tool Top|Front|Right with distance the offset ("" for 0), or a flat face (its whole plane), or a body (keep_tool keeps it, else it is used up); the first piece keeps each body\'s name, the others are "<body> (2)"...' + (enclosure ? ' enclosure: bodies ([] every solid body made before it, other enclosures left out), shape box or cylinder_x|y|z, padding zero, percent (distance "10": of the part\'s size along each direction) or fixed (distance a length), sides rows {side, value} out from the part on one side; it never cuts: combine cut with keep_tools makes the fluid.' : '') + ' delete_body: bodies (one feature for them all) leave the model from this point in the history, as the person\'s Delete on a body in the tree; later features that use them fail; delete or suppress the feature to bring them back (edit changes which bodies). repair: edit the feature whose get_model actions has repair; retry: edit the feature with retry. The reply says its state after (it may still fail).',
   },
   {
     about: 'edit_feature choices',
-    text: 'set rows with a choice field and one of its words (on/off: "true" or "false"; get_model full shows choices now). extrude, revolve: flip, op (new, join, cut, intersect). sweep: orientation (follow, fixed), op. loft: ruled, op. chamfer: flip, mode (distance, two). shell: direction (inside, outside). combine: op (join, cut, intersect), keep_tools. linear pattern: op (source, new, join, cut, intersect), flip, symmetric, mode (spacing, extent), flip2, symmetric2, mode2. circular pattern: op, flip, symmetric, mode (full, angle). mirror: op. split: plane (Top, Front, Right) by a plane, keep_tool by a body. enclosure: shape (box, cylinder), axis (X, Y, Z), padding (zero, percent, fixed). construction plane, axis: method, flip; point: method, along (distance, percent), from_end. A change that leaves the feature incomplete (a method without its picks) is refused: resend it with its tool.',
+    text: 'set rows with a choice field and one of its words (on/off: "true" or "false"; get_model full shows choices now). extrude, revolve: flip, op (new, join, cut, intersect). sweep: orientation (follow, fixed), op. loft: ruled, op. chamfer: flip, mode (distance, two). shell: direction (inside, outside). combine: op (join, cut, intersect), keep_tools. linear pattern: op (source, new, join, cut, intersect), flip, symmetric, mode (spacing, extent), flip2, symmetric2, mode2. circular pattern: op, flip, symmetric, mode (full, angle). mirror: op. split: plane (Top, Front, Right) by a plane, keep_tool by a body.' + (enclosure ? ' enclosure: shape (box, cylinder), axis (X, Y, Z), padding (zero, percent, fixed).' : '') + ' construction plane, axis: method, flip; point: method, along (distance, percent), from_end. A change that leaves the feature incomplete (a method without its picks) is refused: resend it with its tool.',
   },
   {
     about: 'extrude face and direction',
@@ -397,5 +410,21 @@ export const HELP: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.free
   details: detailRows(),
   workspace: workspaceRows(),
 });
+
+/**
+ * The reference as Magnusim CAD gives it (projectLinks false: no projects, no simulation, no
+ * Enclosure command): the tools as offered there (features), the workspace actions without
+ * send_to_simulation, the details without the Enclosure, and no project's reasons (errors).
+ */
+const HELP_WITHOUT_PROJECTS: Readonly<Record<HelpTopic, readonly HelpRow[]>> = Object.freeze({
+  ...HELP,
+  features: featureRows(cadToolsFor({ projectLinks: false }), false),
+  errors: errorRows(false),
+  details: detailRows(false),
+  workspace: workspaceRows(false),
+});
+
+/** The reference on this host: HELP where it has projects (Magnusim), else HELP_WITHOUT_PROJECTS. */
+export const helpFor = (projectLinks: boolean): Readonly<Record<HelpTopic, readonly HelpRow[]>> => (projectLinks ? HELP : HELP_WITHOUT_PROJECTS);
 
 export const isHelpTopic = (t: unknown): t is HelpTopic => typeof t === 'string' && (HELP_TOPICS as readonly string[]).includes(t);

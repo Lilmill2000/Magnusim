@@ -1,14 +1,13 @@
 // Frame keyboard: combos -> handlers, and command shortcuts (their keys from the keybinding
 // registry and the person's keybinds: src/app/keymap.ts, src/app/keybinds.ts); the app's
 // Assistant panel key goes past every handler of the Part (passAssistantKey); a sketch tool's key
-// pressed again leaves the tool (toolKeyAgain). Owner: INTEGRATE.
+// pressed again (or its toolbar button clicked again) leaves the tool (toolKeyAgain). Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cycleDialogFocus, openModal } from '../lib/modal';
 import type { Bridge } from '../lib/bridge';
 import type { CommandDef, CommandRegistry, KeyBinding, KeyboardManager, Mode } from '../types/commands';
 import type { SketchModeApi } from '../types/sketch';
 import { combosOf, isAssistantPress, normaliseCombo } from './keymap';
-import { barIdOf } from '../ui/flyouts';
 
 // Combos in the registry's form (src/app/keymap.ts); a press means combosOf(e): a Latin letter by
 // the letter it types, anything else by the key's place (punctuation by its character too).
@@ -144,34 +143,29 @@ export function createKeyboard(doc: Document): KeyboardManager {
 }
 
 /** What isToolKeyAgain reads of a command. */
-type ToolKeyCmd = Pick<CommandDef, 'id' | 'activeWhen' | 'flyout' | 'group' | 'mode' | 'order'>;
+type ToolKeyCmd = Pick<CommandDef, 'activeWhen'>;
 
 /**
- * Whether a command pressed by its key now is that of the sketch tool in hand (Daniel 2026-10-28:
- * "click L again and it acts just like me clicking Escape ... fully escapes out of that"): the
- * command's tool (activeWhen.sketchTool) is the one in hand, or the command is its toolbar
- * flyout's own (the bar command, src/ui/flyouts.ts barIdOf) and one of the flyout's variants is in
- * hand (R while Center rectangle is in hand: the Rectangle flyout's key). A variant's own key with
- * another variant of its flyout in hand is no such press: it switches to that variant (Centerline's
- * key with Line in hand takes up Centerline, as its row in the flyout list says). Select is no
- * tool to leave.
+ * Whether a command pressed by its key (or clicked on the toolbar) now is that of the sketch tool
+ * in hand (Daniel 2026-10-28: "click L again and it acts just like me clicking Escape ... fully
+ * escapes out of that"): the command's own tool (activeWhen.sketchTool) is the one in hand. Every
+ * other tool's command switches to its tool, a toolbar flyout's main one too (Daniel 2026-10-29: R
+ * with Center rectangle in hand takes up the corner Rectangle, and R again puts it down; a
+ * variant's own key takes the variant up, and again puts it down). Select is no tool to leave.
  */
-export function isToolKeyAgain(c: ToolKeyCmd, active: string | null | undefined, all: readonly ToolKeyCmd[]): boolean {
+export function isToolKeyAgain(c: ToolKeyCmd, active: string | null | undefined): boolean {
   const own = c.activeWhen?.sketchTool;
-  if (!own || !active || active === 'select') return false;
-  if (own === active) return true;
-  if (!c.flyout || barIdOf(all, c.id) !== c.id) return false;
-  return all.some((x) => x.flyout === c.flyout && x.activeWhen?.sketchTool === active);
+  return !!own && !!active && active !== 'select' && own === active;
 }
 
 /**
- * The key of the sketch tool in hand pressed again: the tool is left entirely, as Escape pressed
- * until it is gone (SketchModeApi.leaveTool); true when it was. Whichever key the person bound to
- * the tool's command (the press reached it by that key). Only from the keyboard: a toolbar click
- * on the active tool's button stays as it is.
+ * The key of the sketch tool in hand pressed again, or its toolbar button clicked again (Daniel
+ * 2026-10-29: src/ui/Toolbar.tsx runClicked): the tool is left entirely, as Escape pressed until it
+ * is gone (SketchModeApi.leaveTool); true when it was. Whichever key the person bound to the tool's
+ * command (the press reached it by that key).
  */
-export function toolKeyAgain(sketch: Pick<SketchModeApi, 'state' | 'leaveTool'> | null | undefined, c: CommandDef, all: readonly CommandDef[]): boolean {
-  if (!sketch || !isToolKeyAgain(c, sketch.state.get().tool, all)) return false;
+export function toolKeyAgain(sketch: Pick<SketchModeApi, 'state' | 'leaveTool'> | null | undefined, c: CommandDef): boolean {
+  if (!sketch || !isToolKeyAgain(c, sketch.state.get().tool)) return false;
   return sketch.leaveTool();
 }
 

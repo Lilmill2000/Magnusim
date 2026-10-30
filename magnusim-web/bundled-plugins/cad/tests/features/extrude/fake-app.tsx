@@ -9,11 +9,12 @@ import { act, render } from '@testing-library/react';
 import { Group } from 'three';
 import { vi } from 'vitest';
 import { createCommandRegistry } from '../../../src/app/commands';
+import { createKeybinds, setKeybindsFor } from '../../../src/app/keybinds';
 import { bindCommandShortcuts, createKeyboard } from '../../../src/app/keyboard';
 import { createDocService } from '../../../src/doc';
 import extrudeModule from '../../../src/features/extrude';
 import sketchModule from '../../../src/features/sketch';
-import { createBridge } from '../../../src/lib/bridge';
+import { createBridge, type PrefsApi } from '../../../src/lib/bridge';
 import { createBus } from '../../../src/lib/bus';
 import { createSelectionStore } from '../../../src/lib/selection';
 import { ServicesProvider } from '../../../src/lib/services';
@@ -136,10 +137,32 @@ export interface FakeApp {
   dispose(): void;
 }
 
-export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: CadModule[] } = {}): Promise<FakeApp> {
+/** ws.prefs in memory, holding `initial` (the person's stored preferences: "keybinds" and so on). */
+export function memoryPrefs(initial: Record<string, unknown>): { api: PrefsApi; values: Record<string, unknown> } {
+  const values: Record<string, unknown> = JSON.parse(JSON.stringify(initial));
+  const api: PrefsApi = {
+    get: async <T,>(key: string) => (key in values ? (JSON.parse(JSON.stringify(values[key])) as T) : null),
+    set: async (key, value) => {
+      values[key] = JSON.parse(JSON.stringify(value));
+    },
+    remove: async (key) => {
+      delete values[key];
+    },
+    onChange: () => () => {},
+  };
+  return { api, values };
+}
+
+/**
+ * `prefs`: the person's stored preferences: the keys then come as bootstrap gives them (the
+ * keybinds over ws.prefs, edition-aware, behind the registry and the keyboard); left out, each
+ * command's own shortcut.
+ */
+export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: CadModule[]; projectLinks?: boolean; prefs?: PrefsApi } = {}): Promise<FakeApp> {
   const errors: string[] = [];
   const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => void errors.push(args.map(String).join(' ')));
-  const ws = createFakeWorkspace({ units: opts.units ?? 'metric' });
+  // projectLinks false: Magnusim CAD's welcome (no projects, no simulation); left out, Magnusim's.
+  const ws = createFakeWorkspace({ units: opts.units ?? 'metric', ...('projectLinks' in opts ? { projectLinks: opts.projectLinks } : {}) });
   const kernel = new ProfilesFakeKernel();
   const bus = createBus<CadEvents>();
   const doc = createDocService({ bridge: createBridge(ws), kernel, bus, saveIntervalMs: 20, saveViewIntervalMs: 20, log: () => {} });
@@ -148,10 +171,12 @@ export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: 
   registerModuleFeatures(doc.features, modules);
   const vp = fakeViewport();
   let services: AppServices | null = null;
-  const commands = createCommandRegistry(() => services!);
+  const bridge = createBridge(ws);
+  const keybinds = opts.prefs ? createKeybinds({ prefs: opts.prefs, layout: false, projectLinks: bridge.projectLinks() }) : null;
+  const commands = createCommandRegistry(() => services!, keybinds ?? undefined);
   const keyboard = createKeyboard(document);
   services = {
-    bridge: createBridge(ws),
+    bridge,
     bus,
     commands,
     keyboard,
@@ -163,6 +188,10 @@ export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: 
     modules: createModuleRegistry(modules),
     apis: createStateStore<AreaApis>({ sketch: null, solver: null, files: null }),
   };
+  if (keybinds) {
+    setKeybindsFor(services, keybinds);
+    await keybinds.ready;
+  }
   const offUi = installUi(services);
   const offModules = installModules(services, modules);
   const unbind = bindCommandShortcuts(commands, keyboard, undefined, () => services!.mode.get().mode);
@@ -211,6 +240,7 @@ export async function startApp(opts: { units?: 'metric' | 'imperial'; modules?: 
       offModules();
       offUi();
       keyboard.dispose();
+      keybinds?.dispose();
       doc.dispose();
       spy.mockRestore();
       if (errors.length) throw new Error('console errors: ' + errors.join(' | ').slice(0, 800));

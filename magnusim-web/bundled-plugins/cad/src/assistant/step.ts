@@ -177,7 +177,7 @@ function rememberSelection(services: AppServices): { restore(): void; quietly<T>
 
 /** What stayed after a refused revert, in words (detail.kept). */
 function keptWords(step: AssistantStep, services: AppServices): string[] {
-  return describeChanges(step.mark.doc, services.doc.committed()).slice(0, 20);
+  return describeChanges(step.mark.doc, services.doc.committed(), services.bridge.projectLinks()).slice(0, 20);
 }
 
 /** The answer of a call the person took over (it pauses the Assistant in this Part). */

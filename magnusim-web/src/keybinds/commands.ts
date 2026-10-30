@@ -45,6 +45,8 @@ export interface Command {
   group: string;
   context: string;
   keys: string[];
+  /** The file's `"projects": true`: the command acts only where the app has projects (Magnusim CAD lists none of them). */
+  projects?: true;
 }
 
 export interface CommandsFile {
@@ -197,7 +199,7 @@ export function readCommandsFile(doc: unknown, appKeys: AppKeys = APP_KEYS): { f
           else keys.push(k);
         }
       }
-      commands.push({ id: valid ? id : '', label: label ?? '', group: group ?? '', context: typeof context === 'string' ? context : '', keys });
+      commands.push({ id: valid ? id : '', label: label ?? '', group: group ?? '', context: typeof context === 'string' ? context : '', keys, ...(c.projects === true ? { projects: true as const } : {}) });
       names.push(valid ? id : `commands[${i}]`);
     });
     // A key is one command's in a context: two commands whose contexts meet (the same, or either "any").

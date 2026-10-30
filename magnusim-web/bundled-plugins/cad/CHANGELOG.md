@@ -40,6 +40,16 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation
   there. A choice made in Magnusim stays with the design.
+- In Magnusim CAD nothing else speaks of projects or a simulation either: no
+  CFD PREP group or Enclosure command (toolbar, keys, Settings → Keybinds), no
+  "or the simulation" in the Banana's hint, no "From the project" row in an
+  import's panel, and a missing stored file "is not with the Part any more". A
+  Combine on an Enclosure's body leaves Keep the tool bodies as you set it, and
+  the volume chip lists the biggest bodies first. An Enclosure made in Magnusim
+  stays as it is there: its body is built, and its panel shows its shape,
+  bodies and size read-only, with Done and Delete. The Assistant there has no
+  send to the simulation, no enclosure and no words of either, and its
+  instructions are shorter. In Magnusim all of these are as before.
 - The sketch toolbar's drawing tools come in groups, one button each with an
   arrow beside it that lists the group's tools (the button runs the one used
   last): Line (Centerline, Midpoint line), Rectangle (Center, 3-point corner,
@@ -140,12 +150,15 @@ is changed with the Part open, from any Magnusim window:
 - A tool's own key pressed again puts the tool down: L, draw a line, L, and the
   Line tool is gone (what you drew stays; a line or shape you had started is
   dropped, as Escape drops it). It is the key you gave the tool, if you changed
-  it; R also puts down Center rectangle and the other rectangles, and so on for
-  each toolbar group. Escape still steps back one step at a time (it ends a line
-  chain and keeps the Line tool). A key typed into a value box stays there. A
-  key you gave one of a group's other tools (Centerline, say) takes that tool
-  up even while another tool of its group is in hand, as its row in the
-  group's list says.
+  it. R with Center rectangle (or another rectangle) in hand takes up the
+  Rectangle, and R again puts it down; the same for each toolbar group's key.
+  Escape still steps back one step at a time (it ends a line chain and keeps
+  the Line tool). A key typed into a value box stays there. A key you gave one
+  of a group's other tools (Centerline, say) takes that tool up even while
+  another tool of its group is in hand, as its row in the group's list says.
+- Clicking the toolbar button of the tool in hand puts it down too, exactly
+  as its key does (also its row in a group's list or a More menu); a click on
+  another tool still takes that one up.
 
 **A Join of pieces that do not touch is a note, not a warning.** Joining tools
 that do not touch the target (an inlay grouped from spots and rings, used later
