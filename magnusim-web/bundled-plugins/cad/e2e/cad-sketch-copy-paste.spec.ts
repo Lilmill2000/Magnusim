@@ -1,5 +1,6 @@
 // Sketch Copy and Paste in the real host frame, asserting what the person sees: a rectangle with a
-// dimension, its four lines selected, Ctrl+C (the panel's foot says what was copied), Ctrl+V: the
+// dimension, its four lines selected, Ctrl+C (the panel's foot says what was copied, in its plain
+// note, never in the red of a refusal: amber when something is left out), Ctrl+V: the
 // copy follows the pointer (its middle under it), a click places it: four more lines, the dimension
 // on the copy too ("30 mm" twice), the DOF chip grows by the original's own (3 -> 6), and Ctrl+Z
 // takes the whole paste out. Escape while pasting adds nothing. Ctrl+C in the dimension's value field
@@ -13,7 +14,7 @@
 // pasted into a Part of an Imperial project, keeps 30 mm (as "30 mm"; "2*15" would be 762 mm in
 // inches) and the foot says so.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test, type FrameLocator, type Page } from '@playwright/test';
+import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test';
 import { bytesOf, DXF_BINARY } from '../tests/sketch/import/fixtures';
 import { baseUrl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
@@ -68,6 +69,30 @@ const moveTo = async (page: Page, p: V3) => {
 
 const chip = (frame: FrameLocator) => frame.locator('[data-chip="sketch"]');
 const foot = (frame: FrameLocator) => frame.locator('[data-cad-panel="sketch"] [data-run-reason]');
+/** What an action did, in the foot's note line (not a refusal). */
+const note = (frame: FrameLocator) => frame.locator('[data-cad-panel="sketch"] [data-panel-note]');
+
+/** The colour these words are drawn in and the theme's error colour (--mg-danger), both as the page computes them. */
+const inkOf = (words: Locator) =>
+  words.evaluate((el) => {
+    const ink = getComputedStyle(el.querySelector('.mgk-hint') ?? el).color;
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--mg-danger)';
+    el.append(probe);
+    const danger = getComputedStyle(probe).color;
+    probe.remove();
+    return { ink, danger };
+  });
+
+/** A success (or a partial one) is never drawn in the error colour; `tone`: plain or amber. */
+async function notRed(frame: FrameLocator, text: string, tone: 'info' | 'warning') {
+  await expect(note(frame)).toHaveText(text);
+  await expect(note(frame)).toHaveAttribute('data-panel-note', tone);
+  await expect(foot(frame)).toHaveCount(0);
+  const { ink, danger } = await inkOf(note(frame));
+  expect(danger).toMatch(/^rgb/);
+  expect(ink, `"${text}" is drawn in the error colour`).not.toBe(danger);
+}
 const dims = (frame: FrameLocator) => frame.locator('[data-sketch-dim]');
 
 /** The sketch's lines, and its dimensions' expressions. */
@@ -144,12 +169,13 @@ test('cad:sketch-copy-paste a rectangle with a dimension: Ctrl+C, Ctrl+V, the co
   await page.keyboard.press('Control+c');
   await expect.poll(() => workspaceFrame(page).evaluate(() => (window as unknown as { __copied?: string[] }).__copied)).toEqual(['INPUT']);
   await expect(foot(frame)).toHaveCount(0);
+  await expect(note(frame)).toHaveCount(0);
   await edit.press('Escape');
   await expect(edit).toHaveCount(0);
 
-  // Ctrl+C on the sketch: the lines, with their relations and the dimension.
+  // Ctrl+C on the sketch: the lines, with their relations and the dimension (said plainly, not in red).
   await page.keyboard.press('Control+c');
-  await expect(foot(frame)).toHaveText('Copied 4 lines, 4 relations and 1 dimension.');
+  await notRed(frame, 'Copied 4 lines, 4 relations and 1 dimension.', 'info');
   expect(await workspaceFrame(page).evaluate(() => (window as unknown as { __copied?: string[] }).__copied)).toEqual(['INPUT']);
 
   // Ctrl+V: the copy follows the pointer, held by its middle; nothing added yet.
@@ -225,7 +251,7 @@ test("cad:sketch-copy-paste-menu Copy and Paste from the right-click menu: a rec
   await clickAt(page, [20, 20.2, 0], { button: 'right' });
   await expect(menu).toHaveText(['Construction', 'Copy', 'Delete', 'Set keybind for Delete…', 'Paste', 'Normal to', 'Finish sketch', 'Set keybind for Copy…', 'Set keybind for Paste…', 'Set keybind for Finish sketch…', 'Set keybind for Place or finish…']);
   await frame.locator('[data-cad-menu] [data-menu-item="copy"]').click();
-  await expect(foot(frame)).toHaveText('Copied 4 lines and 4 relations; 1 relation to other geometry will be left out.');
+  await notRed(frame, 'Copied 4 lines and 4 relations; 1 relation to other geometry will be left out.', 'warning');
   // Paste from the menu of an empty place (nothing selected): the copy follows the pointer; a click places it.
   await page.keyboard.press('Escape');
   await clickAt(page, [80, -30, 0], { button: 'right' });
@@ -238,7 +264,7 @@ test("cad:sketch-copy-paste-menu Copy and Paste from the right-click menu: a rec
   await clickAt(page, [80, -30, 0]);
   await sketchIdle(page);
   expect((await drawn(page)).lines).toBe(8);
-  await expect(foot(frame)).toHaveText('Pasted 4 lines and 4 relations: 1 relation to other geometry was left out.');
+  await notRed(frame, 'Pasted 4 lines and 4 relations: 1 relation to other geometry was left out.', 'warning');
   // The original's 2 DOF, and the copy's 4: its corner is no longer held at the origin.
   await expect(chip(frame)).toHaveText('Under defined · 6 DOF');
   // Settings > Keybinds reads the Part's commands file: Copy and Paste under Sketch.
@@ -272,7 +298,7 @@ test('cad:sketch-copy-paste-text-units Ctrl+C with the red reason selected copie
   };
   await selectLines();
   await page.keyboard.press('Control+c');
-  await expect(foot(frame)).toHaveText('Copied 4 lines, 4 relations and 1 dimension.');
+  await notRed(frame, 'Copied 4 lines, 4 relations and 1 dimension.', 'info');
 
   // A red reason in the foot (a binary DXF refused), the lines still selected; the person selects the reason's text and presses Ctrl+C.
   const chooser = page.waitForEvent('filechooser');
@@ -280,6 +306,9 @@ test('cad:sketch-copy-paste-text-units Ctrl+C with the red reason selected copie
   await (await chooser).setFiles({ name: 'b.dxf', mimeType: 'application/octet-stream', buffer: Buffer.from(DXF_BINARY) });
   const said = 'Not imported: b.dxf is a binary DXF: save it as an ASCII DXF (R12 or later) and import that';
   await expect(foot(frame)).toHaveText(said);
+  // A real problem stays in the error colour.
+  const refused = await inkOf(foot(frame));
+  expect(refused.ink).toBe(refused.danger);
   await workspaceFrame(page).evaluate(() => {
     const w = window as unknown as { __copiedText?: string[] };
     w.__copiedText = [];
@@ -294,7 +323,7 @@ test('cad:sketch-copy-paste-text-units Ctrl+C with the red reason selected copie
   await selectLines();
   expect(await workspaceFrame(page).evaluate(() => document.getSelection()?.toString() ?? '')).toBe('');
   await page.keyboard.press('Control+c');
-  await expect(foot(frame)).toHaveText('Copied 4 lines, 4 relations and 1 dimension.');
+  await notRed(frame, 'Copied 4 lines, 4 relations and 1 dimension.', 'info');
   expect(await workspaceFrame(page).evaluate(() => (window as unknown as { __copiedText?: string[] }).__copiedText)).toEqual([said]);
 
   // A Part of an Imperial project (inches): Ctrl+V, a click places it; the dimension keeps 30 mm, said in the foot.
@@ -313,6 +342,6 @@ test('cad:sketch-copy-paste-text-units Ctrl+C with the red reason selected copie
   await clickAt(page, [20, 10, 0]);
   await sketchIdle(page);
   expect(await drawn(page)).toEqual({ lines: 4, dims: ['30 mm'] });
-  await expect(foot(inch)).toHaveText('Pasted 4 lines, 4 relations and 1 dimension: 1 dimension took the value it had (its expression "2*15" reads otherwise here).');
+  await notRed(inch, 'Pasted 4 lines, 4 relations and 1 dimension: 1 dimension took the value it had (its expression "2*15" reads otherwise here).', 'warning');
   expect(seen.errors).toEqual([]);
 });

@@ -108,7 +108,8 @@ export function copySelection(services: Pick<AppServices, 'bridge'>, mode: Sketc
   const where = holdClip(services, clip);
   const left = leftOutWords(clip.outside);
   const words = [`Copied ${clipWords(clip)}`, left ? `${left.replace(/ (was|were) left out$/, '')} will be left out` : '', where === 'page' && services.bridge?.prefs ? 'only for this Part (too big to keep for another)' : ''].filter(Boolean);
-  mode.note(`${words.join('; ')}.`);
+  // What it did, never in a refusal's red: amber when something will be left out.
+  mode.note(`${words.join('; ')}.`, left ? 'warning' : 'info');
   return clip;
 }
 
@@ -181,7 +182,8 @@ export function pasteTool(mode: SketchMode): SketchTool {
       mode.setTool('select');
       mode.select((r.added ?? []).map((id) => ({ what: 'entity' as const, id })), false);
       const said = [leftOutWords(clip.outside), valuedWords(r.valued ?? [])].filter(Boolean);
-      mode.note(said.length ? `Pasted ${clipWords(clip)}: ${said.join('; ')}.` : null);
+      // Said only when something was left out or a dimension took its value: amber, never a refusal's red.
+      mode.note(said.length ? `Pasted ${clipWords(clip)}: ${said.join('; ')}.` : null, 'warning');
     });
   };
 

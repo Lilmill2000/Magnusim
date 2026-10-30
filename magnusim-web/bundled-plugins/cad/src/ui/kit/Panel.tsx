@@ -215,6 +215,22 @@ export function Hint({ children, tone = 'muted' }: { children: ReactNode; tone?:
 }
 
 /**
+ * A note in a panel's note line that is no problem: what an action did ("Copied 4 lines..."), in
+ * the kit's plain hint ('info'), or what it did only in part (something left out), in the kit's
+ * amber ('warning'). Never DisabledReason's red: a success must not look like a failure. On the
+ * host's --mg-* tokens through the kit, so the dark theme has its own. data-panel-note marks it.
+ */
+export function Note({ children, tone = 'info' }: { children: string; tone?: 'info' | 'warning' }) {
+  return (
+    <div className="cad-note" data-panel-note={tone} role="status">
+      <KitHint as="div" tone={tone === 'warning' ? 'warning' : 'muted'}>
+        {children}
+      </KitHint>
+    </div>
+  );
+}
+
+/**
  * Why something cannot happen yet, in red, with a fix link: the kit's
  * DisabledReason (the core's Run reason). data-run-reason marks it for tests.
  * The kit takes one fix; a second one (none today) follows it as a kit fix button.

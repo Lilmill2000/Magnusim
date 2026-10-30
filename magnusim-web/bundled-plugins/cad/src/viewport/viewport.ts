@@ -1798,6 +1798,13 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
       cameraMoved();
       return true;
     },
+    offView(points) {
+      const free = coverLeft();
+      return points.some((p) => {
+        const s = projectLocal(new Vector3(p[0], p[1], p[2]));
+        return !s || s[0] < free || s[1] < 0 || s[0] > width || s[1] > height;
+      });
+    },
     setDisplay(mode: DisplayMode) {
       if (state.get().display === mode) return;
       state.set({ display: mode });

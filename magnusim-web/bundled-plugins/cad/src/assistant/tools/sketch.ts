@@ -24,7 +24,7 @@ import { registerFeatureIo } from '../features-io';
 import { featureByName, frameWords, supportText } from '../model';
 import { dir, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
-import { compileSketchRows, type Compiled, type ConstraintIn, type EntityIn } from '../sketch/compile';
+import { compileSketchRows, type Compiled, type ConstraintIn, type EntityIn, type MadeRow } from '../sketch/compile';
 import { tieFields } from '../sketch/dims';
 import { toolHost } from '../sketch/ops';
 import { describeSketch, TOO_BIG_WORDS } from '../sketch/describe';
@@ -49,6 +49,49 @@ const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 const sameSupport = (a: SketchSupport, b: SketchSupport) => JSON.stringify(a) === JSON.stringify(b);
+
+/** The dock's step line, at most (call.ts SUMMARY_MAX: the host's 160). */
+const SUMMARY_ROOM = 160;
+
+/** The sum of the counts a list of words starts its items with ("8 lines, 3 arcs" is 11). */
+const countOf = (words: string) => [...words.matchAll(/(?:^|, )(\d+) /g)].reduce((a, m) => a + Number(m[1]), 0);
+
+/** One import or copy row in the step's words, from the most said (0) to the least (4). */
+function madeWords(m: MadeRow, tier: number): string {
+  const v = m.values ?? {};
+  if (m.kind === 'import') {
+    const file = `imported ${String(v.file ?? m.id)}`;
+    if (tier === 4) return file;
+    // Each list in full, or as its total ("14 curves", "19 parts"): the read list goes first.
+    const readAll = String(v.read ?? '').replace(/^Read: /, '');
+    const skippedAll = String(v.skipped ?? '').replace(/^Skipped: /, '');
+    const nSkipped = countOf(skippedAll);
+    const read = tier === 1 || tier === 3 ? plural(countOf(readAll), 'curve') : readAll;
+    const skipped = tier >= 2 ? (nSkipped ? plural(nSkipped, 'part') : 'nothing') : skippedAll;
+    return `${file} (read ${read}; skipped ${skipped})`;
+  }
+  const from = String(v.from ?? 'this sketch');
+  const verb = from.startsWith('the clipboard') ? 'pasted' : 'copied';
+  if (tier === 4) return `${verb} from ${from}`;
+  // What it copied, or not; what it left out, in full or without "to other geometry".
+  const copied = tier < 2 ? ` ${String(v.copied ?? '')}` : '';
+  const leftOut = v.left_out && v.left_out !== 'nothing' ? String(v.left_out) : '';
+  const left = leftOut ? ` (left out ${tier === 1 || tier === 3 ? leftOut.replace(/ to other geometry$/, '') : leftOut})` : '';
+  return `${verb}${copied} from ${from}${left}`;
+}
+
+/**
+ * What the person's Import SVG/DXF and Copy rows brought in, for the dock's step (the owner's rule:
+ * what the model gets, the person gets: an import step said only the sketch's state): an import's
+ * file, what it read and what it skipped; a copy's source, what it copied and what it left out.
+ * Within `room` characters: every word, else totals, else the file or the source alone.
+ */
+export function madeSummary(made: readonly MadeRow[], room: number): string {
+  const rows = made.filter((m) => m.kind === 'import' || m.kind === 'copy');
+  if (!rows.length) return '';
+  const tiers = [0, 1, 2, 3, 4].map((t) => rows.map((m) => madeWords(m, t)).join('; '));
+  return tiers.find((w) => w.length <= room) ?? tiers[4];
+}
 
 const sketchTool: EditTool<Plan> = {
   async plan(ctx) {
@@ -203,8 +246,12 @@ const sketchTool: EditTool<Plan> = {
     const state = solved.state === 'fully' ? 'fully defined' : `under-defined (dof ${solved.dof})`;
     const n = regions.length;
     const area = n ? ` (${n === 1 ? '' : 'largest '}${sig6(regions[0].area_mm2)} mm²)` : out?.type === 'sketch' && out.open.length ? ` (not closed: ${plural(out.open.length, 'open end')})` : '';
-    const text = `Sketch "${plan.name}" on ${on}: ${state}, ${plural(n, 'region')}${area}${data.broke.length ? ` · ${plural(data.broke.length, 'feature')} broke` : ''}`;
-    return { text, data: row, summary: text };
+    const head = `Sketch "${plan.name}" on ${on}: `;
+    const tail = `${state}, ${plural(n, 'region')}${area}${data.broke.length ? ` · ${plural(data.broke.length, 'feature')} broke` : ''}`;
+    const text = `${head}${tail}`;
+    // The dock's step names what an import or a copy brought in (made, in short), before the state.
+    const brought = madeSummary(plan.compiled.made, SUMMARY_ROOM - text.length - 2);
+    return { text, data: row, summary: brought ? `${head}${brought}, ${tail}` : text };
   },
 };
 

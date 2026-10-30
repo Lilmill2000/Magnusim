@@ -25,7 +25,7 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { Icon } from '../ui/Icon';
 import { usePanelDelete, usePanelDeleteBlock } from '../ui/panel-delete';
-import { Button, buttonClass, DisabledReason, Field, Hint, PanelChrome, useTip } from '../ui/kit';
+import { Button, buttonClass, DisabledReason, Field, Hint, Note, PanelChrome, useTip } from '../ui/kit';
 import { RAIL_COMMAND, railsFor, useRailFocus } from '../ui/left-rails';
 import { railKeybindMenu, useKeyLabel } from '../ui/keybinds';
 import { CHEVRON_LEFT } from '../ui/tree/TreeRail';
@@ -187,7 +187,9 @@ export function SketchPanel({ session, feature, isNew }: FeaturePanelProps) {
   const overList = flagged.length ? flagged : unsolvable;
 
   const foot = [];
-  if (view.note) foot.push(<DisabledReason key="sketch-note">{view.note}</DisabledReason>);
+  // A refusal in red; what an action did (Copied..., Pasted...) in the plain or amber note line.
+  const noteTone = view.noteTone ?? 'error';
+  if (view.note) foot.push(noteTone === 'error' ? <DisabledReason key="sketch-note">{view.note}</DisabledReason> : <Note key="sketch-note" tone={noteTone}>{view.note}</Note>);
   if (note) foot.push(<DisabledReason key="note">{note}</DisabledReason>);
   if (status?.state === 'error' && status.message) {
     const fixes = (status.actions ?? []).map((a) => ({ label: FEATURE_ACTION_LABELS[a], run: () => ui.runFeatureAction(feature, a) }));
@@ -208,7 +210,7 @@ export function SketchPanel({ session, feature, isNew }: FeaturePanelProps) {
   const lostCount = lostLinks ? lostLinks.split(',').length : 0;
   const problem =
     (status?.state === 'error' && status.message) ||
-    view.note ||
+    (noteTone !== 'info' && view.note) ||
     note ||
     (state === 'over' || state === 'unsolved' ? words : null) ||
     (lostCount ? (lostCount === 1 ? 'Lost reference: open the panel to see it' : `${lostCount} lost references: open the panel to see them`) : null) ||

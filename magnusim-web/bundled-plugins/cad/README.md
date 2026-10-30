@@ -521,13 +521,12 @@ and loft, drill holes into a flat face, fillet, chamfer and shell, pattern and
 mirror, combine bodies, name and colour a body, change, rename, suppress or
 move a feature, undo its own steps, and delete features. It makes the offset
 planes its sketches and mirrors need. It does not export: use Export STEP, or
-go Back to the simulation. Split, Press-pull, Delete faces, the Enclosure,
-Import STEP, CONSTRUCT's axes and points, a face extrude, Project / Intersect
-and the sketch patterns and offsets are not offered to it (a drawing you attach
-in the Assistant panel, SVG or DXF, it can import into a sketch, as Import
-SVG/DXF does); it reads the
-features made with them, and can change their values, rename, suppress, move
-or delete them.
+go Back to the simulation. It can also use the Part's other tools: Split,
+Press-pull and Delete faces, the Enclosure, Import STEP (you pick the file),
+CONSTRUCT's axes and points, an extrude of a face, and in a sketch Project /
+Intersect, offsets, the linear and circular patterns, Copy and Paste (it copies
+geometry from a sketch, or pastes what you copied with Ctrl+C) and Import
+SVG/DXF (a drawing you attach in the Assistant panel, SVG or DXF).
 
 **Watching it work.** It works in the Part's own panels and in sketch mode, as
 you would: a panel opens, its values go in, the part rebuilds, and the tree and

@@ -424,6 +424,13 @@ export interface ViewportHandle {
    * mode's end calls it (P4a review: a first large sketch stayed half off-screen after Finish).
    */
   refitIfOffScreen?(opts?: CameraCallOpts): boolean;
+  /**
+   * Whether any of these model points is off the part of the view the floating panels leave free
+   * ([data-view-cover] over its left), with the camera where it is now (mid-transition too: ask
+   * once it rests). Sketch mode's Import SVG/DXF asks it of the drawing it previews, and fits
+   * (its preview counting: the tool's frameUv) when the drawing does not all show.
+   */
+  offView?(points: readonly Vec3[]): boolean;
   /** Push a pointer tool on the stack; returns pop (safe to call twice). */
   pushTool(tool: ViewportTool): () => void;
   /** The ray under frame client coordinates (model mm). */
