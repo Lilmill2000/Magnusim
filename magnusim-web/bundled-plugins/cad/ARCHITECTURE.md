@@ -2333,7 +2333,15 @@ pieces, adding and testing a tool), and each tool's description in
   tool's rows (`tests/assistant/check.test.ts` holds them equal). The panel's
   controls are `CHECK_CONTROLS` (`src/features/check/controls.ts`); the
   parity table `CHECK` maps each one to the tool, and `control('check', ...)`
-  maps each of the tool's fields back to a control.
+  maps each of the tool's fields back to a control. The play of a fit is the
+  gap along rays from the axis (`slices.ts` `fitGap`, exact on lines and arcs),
+  so a D or hex shaft is judged by its clearance, not by two circles. An axis
+  cuts the bodies within what its parts reach (a frame plate counts by its
+  bores, not its far corner), its levels are its parts' vertices and face ends
+  first, and an axis the time limit cut short is dropped: the replies then
+  start "Stopped at the time limit" and carry a note the panel shows too.
+  `checkClock.limitMs` (exposed as `window.__CAD__.assemblyCheck`) lets tests
+  reach the limit.
 - **Selectors** (`selectors/`, `labels.ts`): one string language for faces,
   edges, vertices, bodies, regions, planes and axes (role labels such as
   `Base.end`, queries such as `Body 1 faces >Z`, `face at (x, y, z)`, handles),

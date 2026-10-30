@@ -13,8 +13,9 @@
 //          cannot be resent). Brief rows list a sketch's regions in short too.
 // The whole Part (brief or full) also lists `parts`: every body in one short row (name, volume, the
 // size and middle of its box, its colour when set, the feature that made it, hidden), never halved
-// with the budgets (up to PARTS_MAX, the app's cap on a list's items), so every part of an
-// assembly can be checked against the request.
+// with the budgets (up to PARTS_MAX, the app's cap on a list's items, within PARTS_BYTES), so every
+// part of an assembly can be checked against the request. It comes first in the reply, and the rest
+// fits what the app's result cap (RESULT_DATA_BYTES) leaves: a cut never takes a part's row.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
@@ -54,6 +55,14 @@ export const SKETCH_REGIONS = 60;
 export const BODIES_MAX = 50;
 /** Rows of the parts list at most (the app keeps the first 200 items of a list). */
 export const PARTS_MAX = 200;
+/** The app's cap on a tool result's data (bytes; scripts/server/assistant/sanitize.ts JSON_CAPS.bytes). */
+export const RESULT_DATA_BYTES = 32 * 1024;
+/** Kept for the result's shell and text beside the data (bytes). */
+const RESULT_MARGIN = 2 * 1024;
+/** The rest of a whole-Part reply always has this much room (bytes). */
+const REST_MIN = 4 * 1024;
+/** The parts rows never take more than this (bytes): the rest past it are counted. */
+export const PARTS_BYTES = RESULT_DATA_BYTES - RESULT_MARGIN - REST_MIN;
 /** Selection items in words. */
 export const SELECTION_MAX = 20;
 /** Names listed when a feature is not found. */
@@ -244,6 +253,7 @@ export async function bodyRow(services: AppServices, s: DocState, b: BodyInfo): 
  */
 export async function partRows(services: AppServices, s: DocState): Promise<{ parts: Row[]; more: number }> {
   const parts: Row[] = [];
+  let size = 2;
   for (const b of s.rebuild.bodies.slice(0, PARTS_MAX)) {
     let volume = b.volume;
     if (volume === null && b.faces <= EAGER_FACES) {
@@ -264,9 +274,11 @@ export async function partRows(services: AppServices, s: DocState): Promise<{ pa
     const maker = bodyMaker(services.doc.features, s.doc, b.id);
     if (maker) row.by = maker.name;
     if (!b.visible) row.hidden = true;
+    size += jsonBytes(row) + 1;
+    if (size > PARTS_BYTES) break;
     parts.push(row);
   }
-  return { parts, more: Math.max(0, s.rebuild.bodies.length - PARTS_MAX) };
+  return { parts, more: Math.max(0, s.rebuild.bodies.length - parts.length) };
 }
 
 /** A selected thing in words ("face Plate.end on Body 1": a face by its label when it has one, else its words). */
@@ -575,14 +587,16 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
     };
   }
   const base = await partFacts(ctx, s);
-  // Every body in one short row, whole: the rest of the reply fits the room the parts leave (at least half the budget).
+  // Every body in one short row, whole and first: the rest of the reply fits the room the parts
+  // leave (at least half the budget), within what the app's result cap leaves after them.
   const { parts, more } = await partRows(services, s);
   const listed: Row = { parts, ...(more ? { parts_more: more } : {}) };
   const room = jsonBytes(listed);
   const b = ctx.budgets;
-  const budgets = { ...b, brief: Math.max(b.brief / 2, b.brief - room), full: Math.max(b.full / 2, b.full - room) };
+  const cap = Math.max(REST_MIN, RESULT_DATA_BYTES - RESULT_MARGIN - room);
+  const budgets = { ...b, brief: Math.min(cap, Math.max(b.brief / 2, b.brief - room)), full: Math.min(cap, Math.max(b.full / 2, b.full - room)) };
   const fitted = input.detail === 'full' ? await fitFull(base, services, s, budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), budgets);
-  const data: Row = { ...fitted, ...listed };
+  const data: Row = { ...listed, ...fitted };
   const states = counts(s.doc.features);
   const bad = (states.error ?? 0) + (states.warning ?? 0);
   const nBodies = rebuild.bodies.length;

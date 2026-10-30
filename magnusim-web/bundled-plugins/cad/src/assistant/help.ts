@@ -401,7 +401,7 @@ const assemblyRows = (): HelpRow[] => [
   },
   {
     about: 'shafts and bores',
-    text: 'Draw each shaft and the bores on it about one centre (the same axis line: check finds axes by their round faces). A bore for a part that turns is larger than its shaft by a clearance; a bore the same size as its shaft (or smaller) is a press fit: the two are fixed together. A shaft that turns in a frame needs a bore in each plate. help printing has clearances for printed parts.',
+    text: 'Draw each shaft and the bores on it about one centre (the same axis line: check finds axes by their round faces). A bore for a part that turns is larger than its shaft by a clearance (a D or hex shaft: the same shape of bore, larger all round); a bore the same size as its shaft (or smaller) is a press fit: the two are fixed together. A shaft that turns in a frame needs a bore in each plate. help printing has clearances for printed parts.',
   },
   {
     about: 'holding a part along its shaft',
@@ -413,11 +413,11 @@ const assemblyRows = (): HelpRow[] => [
   },
   {
     about: 'check interference',
-    text: 'check kind interference, bodies [] (every body) or a set: rows of pairs that overlap (overlap_mm3, at_mm). clearance "0.2 mm" also lists pairs closer than it (gap_mm; 0: they touch). Bodies far apart are skipped by their boxes first; rows are capped (rows_more). Meshing gears overlap a little where their teeth meet if the centre distance is short.',
+    text: 'check kind interference, bodies [] (every body), a set (its pairs), or one body (it against every other): rows of pairs that overlap (overlap_mm3, at_mm). A bore drawn under its shaft (a press fit, as help printing gives it) shares a thin ring with it: its row says press_fit, counted apart from the overlaps (press_fits); it is expected, keep it. clearance "0.2 mm" also lists pairs closer than it (gap_mm; 0: they touch). Bodies far apart are skipped by their boxes first; rows are capped (rows_more). Meshing gears overlap a little where their teeth meet if the centre distance is short.',
   },
   {
     about: 'check stack',
-    text: 'check kind stack: each axis two bodies share, its parts in order (from_mm, to_mm along the axis), the bore radius, what each rides on (on) or turns in (in, a frame: a body holding shafts on two axes or more) with its radial play, what is fixed to it by a press fit, and on each side along the axis what it meets and how far ("Collar at 0 mm", or nothing). loose lists what is wrong: a part free to slide (nothing on a side, or it comes off its shaft), one that slides more than the play before it meets something, a bore nothing holds (empty, or much wider than what is inside). clearance: the play still counted as held (0.5 mm if ""). Fix each, then check again.',
+    text: 'check kind stack: each axis two bodies share, its parts in order (from_mm, to_mm along the axis), the bore radius, what each rides on (on) or turns in (in, a frame: a body holding shafts on two axes or more) with its radial play, what is fixed to it by a press fit, and on each side along the axis what it meets and how far ("Collar at 0 mm", or nothing). loose lists what is wrong: a part free to slide (nothing on a side, or it comes off its shaft), one that slides more than the play before it meets something, a bore nothing holds (empty, or much wider than what is inside). clearance: the play still counted as held (0.5 mm if ""). bodies: only the axes near them, and their findings. A frame\'s clearance hole and a body held on another axis are not flagged. Fix each, then check again.',
   },
   {
     about: 'check sweep',
@@ -425,7 +425,7 @@ const assemblyRows = (): HelpRow[] => [
   },
   {
     about: 'what it measures',
-    text: 'stack and sweep cut the bodies near an axis by planes square to it, one between each two levels where a face starts or ends, so each slab is one shape all along: exact for parts extruded or revolved along the axis, close for others. Radii and gaps are in mm, angles in degrees. Read the rows and judge: a stop the check found may be a part that is loose itself (its own row says so).',
+    text: 'stack and sweep cut the bodies near an axis by planes square to it, one between each two levels where a face starts or ends, so each slab is one shape all along: exact for parts extruded or revolved along the axis, close for others. The play is measured along rays from the axis (a D shaft in a D bore has its clearance). Radii and gaps are in mm, angles in degrees. Read the rows and judge: a stop the check found may be a part that is loose itself (its own row says so). A check the time limit stopped starts its text with "Stopped at the time limit" and lists only what it reached (note: what helps): never read it as all clear.',
   },
   {
     about: "the person's Check",
@@ -433,16 +433,16 @@ const assemblyRows = (): HelpRow[] => [
   },
 ];
 
-/** Printing in PLA: rules of thumb, each labelled so, for the owner to check. */
-const RT = '(rule of thumb, for Daniel to check)';
+/** Printing in PLA: rules of thumb, each labelled so: printers and slicers differ. */
+export const RT = '(rule of thumb: test on your printer)';
 const printingRows = (): HelpRow[] => [
   {
     about: 'these figures',
-    text: 'For FDM printing in PLA with a 0.4 mm nozzle and 0.2 mm layers. Every figure here is a rule of thumb, for Daniel to check; printers and slicers differ. Tell the person the clearances you used.',
+    text: 'For FDM printing in PLA with a 0.4 mm nozzle and 0.2 mm layers. Every figure here is a rule of thumb: printers and slicers differ, so test a fit on the printer first. Tell the person the clearances you used.',
   },
   {
     about: 'holes and fits',
-    text: `Printed holes come out small by about 0.1 to 0.2 mm ${RT}. A part that turns on a shaft: bore diameter = shaft + 0.3 to 0.5 mm ${RT}. A part that slides: + 0.2 to 0.3 mm ${RT}. A press fit: bore = shaft - 0.05 to 0.1 mm ${RT}. Between two moving faces leave 0.3 to 0.5 mm ${RT}. Small holes under 3 mm are better drilled out after printing ${RT}.`,
+    text: `Printed holes come out small by about 0.1 to 0.2 mm ${RT}. A part that turns on a shaft: bore diameter = shaft + 0.3 to 0.5 mm ${RT}. A part that slides: + 0.2 to 0.3 mm ${RT}. A press fit: bore = shaft - 0.05 to 0.1 mm ${RT} (check interference lists it as press_fit, not a collision). Between two moving faces leave 0.3 to 0.5 mm ${RT}. Small holes under 3 mm are better drilled out after printing ${RT}.`,
   },
   {
     about: 'walls and pins',

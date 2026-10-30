@@ -1,33 +1,43 @@
 // The assembly checks: does a mechanism hold together and turn? Shared by the person's panel and
 // the Assistant's check tool (src/assistant/tools/check.ts): UI-free, on the geometry kernel and the
 // bodies built now, raw numbers (mm, mm³, degrees; the callers round them), words for each finding.
-//   interference  every pair of bodies (or of a chosen set) whose boxes meet: the kernel's minimum
-//                 distance, then for pairs that meet the volume they share (boolean common, props):
-//                 rows of pairs that overlap and, with a clearance, of pairs closer than it, each
-//                 with a point where;
-//   stack         every axis two bodies share (round faces on one line) or a body's own centred
-//                 bore: the bodies there cut by planes square to the axis between their faces
-//                 (slices.ts), so each slab between two cuts is one shape all along it. A bore round
-//                 a shaft within the play is held radially (a bore no larger than its shaft is a
-//                 press fit: the two are fixed together); along the axis each part that rides on
-//                 a shaft (or a shaft that turns in a frame: a body holding shafts on two axes or
-//                 more) is moved each way until it meets another body (a shoulder, a collar, a
-//                 spacer, a nut, the frame) or leaves its shaft. Findings: free to slide, slides
-//                 more than the play before it meets something, nothing in its bore;
+//   interference  every pair of bodies (or of a chosen set, or one body against every other) whose
+//                 boxes meet: the kernel's minimum distance, then for pairs that meet the volume
+//                 they share (boolean common, props): rows of pairs that overlap and, with a
+//                 clearance, of pairs closer than it, each with a point where. An overlap that is a
+//                 thin ring round a line both bodies have round faces on (a bore drawn a little under
+//                 its shaft) is a press fit, counted apart from the collisions;
+//   stack         every axis two bodies share (round faces on one line) or a body's own bore (its
+//                 centroid on the line, or its only such line when the material goes round it):
+//                 the bodies near it cut by planes square to the axis between their faces (their
+//                 vertices and each face's ends along it; slices.ts), so each slab between two cuts
+//                 is one shape all along it. Near: within what the axis's parts reach (a frame plate
+//                 by its bores there, not its far corner). A bore round a shaft within the play is
+//                 held radially, the play measured along rays from the axis (a D or hex shaft in a
+//                 bore of its shape); a bore no larger than its shaft is a press fit: the two are
+//                 fixed together. Along the axis each part that rides on a shaft (or a shaft that
+//                 turns in a frame: a body holding shafts on two axes or more) is moved each way
+//                 until it meets another body (a shoulder, a collar, a spacer, a nut, the frame) or
+//                 leaves its shaft. Findings: free to slide, slides more than the play before it
+//                 meets something, nothing in its bore (not a frame's hole, nor a body held on
+//                 another axis). With some bodies only, the axes near them (and a frame's other axes,
+//                 to know it is one);
 //   sweep         bodies turned about an axis a full turn, both ways, on the same slices: the first
 //                 angle each meets another body, exact for parts made along the axis (extrusions,
 //                 revolves) and to a slab's middle otherwise, then the kernel's overlap of the
 //                 turned copy 1 degree past it (copies with a rigid transform, boolean common).
+// Past SLABS_MAX levels on an axis the axis's own parts keep theirs and the others are thinned (said
+// in the result: thinned).
 // Kernel shapes made here are released (not after a worker restart: the next one numbers its own).
 // Long checks report progress and stop at the signal; past the time limit a check stops and says
-// how far it got.
+// how far it got: an axis it could not cut to the end is left out, never half read.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { timeoutFor, timeoutForFaces } from '../../kernel/timeouts';
 import type { Vec3 } from '../../types/doc';
 import type { KernelAdapter, KernelReply } from '../../types/kernel';
 import type { BBox, KernelOp, KernelParams, ShapeId, TopoResult } from '../../types/kernel-protocol';
-import { boreOf, firstContact, goesRound, overlaps, radialSet, sliceOf, spanOverlap, type Slice } from './slices';
+import { boreOf, firstContact, fitGap, goesRound, overlaps, radialSet, sliceOf, spanOverlap, type Slice } from './slices';
 
 /** A body as the checks read it (BodyInfo has all of it). */
 export interface AssemblyBody {
@@ -45,7 +55,7 @@ export interface CheckEnv {
   signal?: AbortSignal;
   /** Progress: a fraction (null when unknown) and what it does now. */
   progress?: (fraction: number | null, label: string) => void;
-  /** Stop after this long (ms) and say so; CHECK_TIME_MS by default. */
+  /** Stop after this long (ms) and say so; checkClock.limitMs (CHECK_TIME_MS) by default. */
   timeLimitMs?: number;
   now?: () => number;
 }
@@ -62,6 +72,8 @@ export class CheckKernelError extends Error {
 
 /** How long a check may run before it stops and says how far it got (ms). */
 export const CHECK_TIME_MS = 90_000;
+/** The time limit a check takes when none is given (ms): CHECK_TIME_MS; an e2e shortens it (window.__CAD__.assemblyCheck). */
+export const checkClock = { limitMs: CHECK_TIME_MS };
 /** Two bodies closer than this (mm) meet. */
 export const TOUCH_MM = 5e-5;
 /** A shared volume below this (mm³) is a touch, not an overlap. */
@@ -70,6 +82,8 @@ export const OVERLAP_MIN_MM3 = 1e-3;
 export const PLAY_MM = 0.5;
 /** A bore no larger than its shaft by this (mm) is a press fit: the two are fixed together. */
 export const PRESS_MM = 1e-3;
+/** An overlap that is a ring round both bodies' axis no thicker than this (mm) is a press fit (interference). */
+export const PRESS_RING_MM = 0.25;
 /** Two round faces on lines this close (mm) and this parallel (sine of the angle) share an axis. */
 export const AXIS_MM = 0.02;
 const AXIS_SIN = 1e-4;
@@ -141,21 +155,66 @@ function frameAt(ax: AxisLine, s: number) {
   return { origin: add(ax.point, scale(ax.dir, s)), normal: [...ax.dir] as Vec3, xdir: u, v: cross(ax.dir, u) };
 }
 
-/** A box's span along the axis and its nearest and farthest distance from it (the nearest a lower bound). */
+/**
+ * A box's span along the axis and its nearest and farthest distance from it: the nearest is the
+ * distance from the axis to the box's outline seen along the axis (the hull of its corners there).
+ */
 function boxAbout(ax: AxisLine, b: BBox): { s0: number; s1: number; rNear: number; rFar: number } {
   let s0 = Infinity;
   let s1 = -Infinity;
   let rFar = 0;
+  const f = frameAt(ax, 0);
+  const flat: [number, number][] = [];
   for (let i = 0; i < 8; i++) {
     const p: Vec3 = [i & 1 ? b[3] : b[0], i & 2 ? b[4] : b[1], i & 4 ? b[5] : b[2]];
     const s = along(ax, p);
     s0 = Math.min(s0, s);
     s1 = Math.max(s1, s);
     rFar = Math.max(rFar, off(ax, p));
+    const q = sub(p, ax.point);
+    flat.push([dot(q, f.xdir), dot(q, f.v)]);
   }
-  const c: Vec3 = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, (b[2] + b[5]) / 2];
-  const half = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) / 2;
-  return { s0, s1, rNear: Math.max(0, off(ax, c) - half), rFar };
+  return { s0, s1, rNear: hullDistance(flat), rFar };
+}
+
+/** The distance from (0, 0) to the convex hull of `pts` (0 inside it). */
+function hullDistance(pts: [number, number][]): number {
+  const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const turn = (o: number[], a: number[], c: number[]) => (a[0] - o[0]) * (c[1] - o[1]) - (a[1] - o[1]) * (c[0] - o[0]);
+  const half = (list: [number, number][]) => {
+    const h: [number, number][] = [];
+    for (const q of list) {
+      while (h.length >= 2 && turn(h[h.length - 2], h[h.length - 1], q) <= 1e-12) h.pop();
+      h.push(q);
+    }
+    h.pop();
+    return h;
+  };
+  const hull = [...half(p), ...half([...p].reverse())];
+  if (hull.length < 3) {
+    // Seen end on: a point or a segment.
+    let d = Infinity;
+    for (let i = 0; i < p.length; i++) for (let j = i; j < p.length; j++) d = Math.min(d, segDistance(p[i], p[j]));
+    return d;
+  }
+  let inside = true;
+  let d = Infinity;
+  for (let i = 0; i < hull.length; i++) {
+    const a = hull[i];
+    const c = hull[(i + 1) % hull.length];
+    if (turn(a, c, [0, 0]) < 0) inside = false;
+    d = Math.min(d, segDistance(a, c));
+  }
+  return inside ? 0 : d;
+}
+
+/** The distance from (0, 0) to the segment a-c. */
+function segDistance(a: [number, number], c: [number, number]): number {
+  const dx = c[0] - a[0];
+  const dy = c[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  const t = l2 < 1e-24 ? 0 : Math.max(0, Math.min(1, -(a[0] * dx + a[1] * dy) / l2));
+  return Math.hypot(a[0] + t * dx, a[1] + t * dy);
 }
 
 // ------------------------------------------------------------------ the kernel, the clock, the stop
@@ -173,7 +232,7 @@ class Run {
     this.epoch = env.kernel.status.get().respawns;
     this.now = env.now ?? (() => performance.now());
     this.start = this.now();
-    this.limit = env.timeLimitMs ?? CHECK_TIME_MS;
+    this.limit = env.timeLimitMs ?? checkClock.limitMs;
   }
 
   /** Throws the signal's stop when it aborted. */
@@ -237,6 +296,8 @@ export interface InterferenceRow {
   b: string;
   /** The volume they share (mm³), or null for a pair that only comes close. */
   overlap: number | null;
+  /** The overlap is a thin ring round a line both have round faces on: a bore drawn under its shaft (a press fit), not a collision. */
+  press: boolean;
   /** Their distance (mm) when they do not overlap: below the clearance (0: they touch). */
   gap: number | null;
   /** Where: the middle of what they share, or halfway between their nearest points. */
@@ -245,13 +306,15 @@ export interface InterferenceRow {
 
 export interface InterferenceResult {
   bodies: number;
-  /** Every pair of the bodies. */
+  /** The one body checked against every other, or null (every pair of the bodies). */
+  one: string | null;
+  /** Every pair of the bodies (with one: each other body with it). */
   pairs: number;
   /** Pairs whose boxes (grown by the clearance) meet: the ones measured. */
   boxPairs: number;
   /** Of those, how many were measured before the end (all, unless the time limit stopped it). */
   checked: number;
-  /** Overlaps first (largest first), then gaps (smallest first). */
+  /** Overlaps first (largest first; press fits after the collisions), then gaps (smallest first). */
   rows: InterferenceRow[];
   /** Pairs that touch without overlapping. */
   touching: number;
@@ -283,13 +346,16 @@ const boxSlack = (bodies: readonly AssemblyBody[]) => {
   return 0.01 + 1e-4 * size;
 };
 
-/** Every pair of `bodies` that overlaps, or (clearance > 0) comes closer than `clearance` mm. */
-export async function checkInterference(env: CheckEnv, bodies: readonly AssemblyBody[], o: { clearance: number }): Promise<InterferenceResult> {
+/** Every pair of `bodies` that overlaps, or (clearance > 0) comes closer than `clearance` mm; with `one` (an index), only the pairs with that body. */
+export async function checkInterference(env: CheckEnv, bodies: readonly AssemblyBody[], o: { clearance: number; one?: number }): Promise<InterferenceResult> {
   const run = new Run(env);
   const surfaces = bodies.filter((b) => b.solids === 0).map((b) => b.name);
   const solid = bodies.filter((b) => b.solids !== 0);
-  const pairs = boxPairs(solid, o.clearance + boxSlack(solid));
+  const one = o.one === undefined ? null : bodies[o.one];
+  const k = one ? solid.indexOf(one) : -1;
+  const pairs = boxPairs(solid, o.clearance + boxSlack(solid)).filter(([i, j]) => !one || i === k || j === k);
   const rows: InterferenceRow[] = [];
+  const topo = new Map<string, BodyTopo>();
   let touching = 0;
   let checked = 0;
   try {
@@ -303,7 +369,7 @@ export async function checkInterference(env: CheckEnv, bodies: readonly Assembly
       const d = m.distance ?? 0;
       const mid: Vec3 = m.p1 && m.p2 ? scale(add(m.p1, m.p2), 0.5) : [0, 0, 0];
       if (d > TOUCH_MM) {
-        if (d < o.clearance) rows.push({ a: a.name, b: b.name, overlap: null, gap: d, at: mid });
+        if (d < o.clearance) rows.push({ a: a.name, b: b.name, overlap: null, press: false, gap: d, at: mid });
         checked++;
         continue;
       }
@@ -317,43 +383,94 @@ export async function checkInterference(env: CheckEnv, bodies: readonly Assembly
         volume = Math.max(0, p.volume ?? 0);
         if (p.centroid) at = [...p.centroid] as Vec3;
       }
+      const press = volume > OVERLAP_MIN_MM3 && (await pressRing(run, a, b, common.id, topo));
       // Released in batches: one call less per pair that meets.
       await run.trim();
-      if (volume > OVERLAP_MIN_MM3) rows.push({ a: a.name, b: b.name, overlap: volume, gap: null, at });
+      if (volume > OVERLAP_MIN_MM3) rows.push({ a: a.name, b: b.name, overlap: volume, press, gap: null, at });
       else {
         touching++;
-        if (o.clearance > 0) rows.push({ a: a.name, b: b.name, overlap: null, gap: 0, at: mid });
+        if (o.clearance > 0) rows.push({ a: a.name, b: b.name, overlap: null, press: false, gap: 0, at: mid });
       }
       checked++;
     }
   } finally {
     await run.release();
   }
-  rows.sort((p, q) => (q.overlap ?? -1) - (p.overlap ?? -1) || (p.gap ?? 0) - (q.gap ?? 0));
+  const rank = (x: InterferenceRow) => (x.overlap === null ? 2 : x.press ? 1 : 0);
+  rows.sort((p, q) => rank(p) - rank(q) || (q.overlap ?? -1) - (p.overlap ?? -1) || (p.gap ?? 0) - (q.gap ?? 0));
   const n = solid.length;
-  return { bodies: bodies.length, pairs: (n * (n - 1)) / 2, boxPairs: pairs.length, checked, rows, touching, surfaces, complete: checked === pairs.length };
+  return { bodies: bodies.length, one: one?.name ?? null, pairs: one ? Math.max(0, n - 1) : (n * (n - 1)) / 2, boxPairs: pairs.length, checked, rows, touching, surfaces, complete: checked === pairs.length };
+}
+
+/**
+ * Whether what two bodies share (`common`) is a press fit: a ring round a line both have round faces
+ * on, no thicker than PRESS_RING_MM (a bore drawn a little under its shaft). The ring's round faces
+ * lie on that line, and all its corners between their radii.
+ */
+async function pressRing(run: Run, a: AssemblyBody, b: AssemblyBody, common: ShapeId, topo: Map<string, BodyTopo>): Promise<boolean> {
+  await topoAll(run, [a, b], topo, 'Reading round faces');
+  const lines = (topo.get(a.id)?.round ?? []).filter((f) => (topo.get(b.id)?.round ?? []).some((g) => sameLine(f.line, g.line))).map((f) => f.line);
+  if (!lines.length) return false;
+  const t = topoOf((await run.call('topo', { id: common, faces: 'all', edges: 'none', vertices: 'all', face_bbox: 'none', face_mass: false }, `read what ${a.name} and ${b.name} share`, a.faces + b.faces)).result);
+  return lines.some((line) => {
+    const radii = t.round.filter((f) => sameLine(f.line, line)).map((f) => f.r);
+    if (radii.length < 2) return false;
+    const r0 = Math.min(...radii);
+    const r1 = Math.max(...radii);
+    return r1 - r0 <= PRESS_RING_MM && t.vertices.every((p) => off(line, p) >= r0 - AXIS_MM && off(line, p) <= r1 + AXIS_MM);
+  });
 }
 
 // ------------------------------------------------------------------ axes and slices
 
 interface BodyTopo {
-  /** Round faces: radius and axis line. */
-  round: { r: number; line: AxisLine }[];
+  /** Round faces: radius, axis line and the face's box. */
+  round: { r: number; line: AxisLine; box: BBox | null }[];
   /** Every vertex. */
   vertices: Vec3[];
+  /** Each face's box (the kernel's fast one): where a face starts and ends along an axis. */
+  boxes: BBox[];
 }
 
-/** Each body's round faces and vertices (one kernel topo call each, kept for the check). */
+/** A shape's round faces, vertices and face boxes. */
+function topoOf(t: TopoResult): BodyTopo {
+  const round = t.faces.filter((f) => f.type === 'cylinder' && f.axis && typeof f.radius === 'number').map((f) => ({ r: f.radius!, line: axisLine(f.axis!.origin, f.axis!.dir), box: f.bbox ?? null }));
+  return { round, vertices: t.vertices.map((v) => [...v.p] as Vec3), boxes: t.faces.map((f) => f.bbox).filter((b): b is BBox => !!b) };
+}
+
+/** Each body's round faces, vertices and face boxes (one kernel topo call each, kept for the check). */
 async function topoAll(run: Run, bodies: readonly AssemblyBody[], cache: Map<string, BodyTopo>, label: string): Promise<void> {
   let n = 0;
   for (const b of bodies) {
     n++;
     if (cache.has(b.id)) continue;
     run.progress(n / bodies.length, label);
-    const t: TopoResult = (await run.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'all', face_bbox: 'none', face_mass: false }, `read the faces of ${b.name}`, b.faces)).result;
-    const round = t.faces.filter((f) => f.type === 'cylinder' && f.axis && typeof f.radius === 'number').map((f) => ({ r: f.radius!, line: axisLine(f.axis!.origin, f.axis!.dir) }));
-    cache.set(b.id, { round, vertices: t.vertices.map((v) => [...v.p] as Vec3) });
+    const t: TopoResult = (await run.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'all', face_bbox: 'fast', face_mass: false }, `read the faces of ${b.name}`, b.faces)).result;
+    cache.set(b.id, topoOf(t));
   }
+}
+
+/** A box's span along the axis. */
+function spanAlong(ax: AxisLine, b: BBox): [number, number] {
+  let s0 = Infinity;
+  let s1 = -Infinity;
+  for (let i = 0; i < 8; i++) {
+    const s = along(ax, [i & 1 ? b[3] : b[0], i & 2 ? b[4] : b[1], i & 4 ? b[5] : b[2]]);
+    s0 = Math.min(s0, s);
+    s1 = Math.max(s1, s);
+  }
+  return [s0, s1];
+}
+
+/**
+ * Where bodies' shapes change along the axis: their vertices, then each face's ends (a rod lying
+ * across the axis has no vertex at its lowest line; exact along X, Y and Z, the fast boxes padded by
+ * the tolerance, so a vertex wins over a face's end beside it).
+ */
+function levelsAlong(ax: AxisLine, list: readonly (BodyTopo | undefined)[]): number[][] {
+  const at = list.flatMap((t) => t?.vertices.map((p) => along(ax, p)) ?? []);
+  const ends = list.flatMap((t) => t?.boxes.flatMap((b) => spanAlong(ax, b)) ?? []);
+  return [at, ends];
 }
 
 /** An axis bodies share (or one body's own): its line and the bodies with round faces on it. */
@@ -396,17 +513,38 @@ interface Slab {
   slices: Map<number, Slice>;
 }
 
-/** The levels along the axis where the bodies' shapes change (their vertices), within [lo, hi]. */
-function levelsOf(ax: AxisLine, verts: readonly Vec3[], lo: number, hi: number): number[] {
-  const s = [lo, hi, ...verts.map((p) => along(ax, p)).filter((x) => x > lo + LEVEL_MM && x < hi - LEVEL_MM)].sort((a, b) => a - b);
-  const out: number[] = [];
-  for (const x of s) if (!out.length || x - out[out.length - 1] > LEVEL_MM) out.push(x);
-  if (out.length - 1 <= SLABS_MAX) return out;
-  // Too many: keep evenly spaced ones (the slabs are then approximate).
-  const step = (out.length - 1) / SLABS_MAX;
-  const kept = Array.from({ length: SLABS_MAX }, (_, i) => out[Math.round(i * step)]);
-  kept.push(out[out.length - 1]);
-  return kept;
+/**
+ * The levels along the axis where the bodies' shapes change, within [lo, hi], at most SLABS_MAX
+ * slabs: `tiers` in order of need (the axis's own parts, then bodies at the axis, then the rest),
+ * each in parts (vertices, then faces' ends), each part kept whole while it fits, the first that
+ * does not thinned evenly and the later ones left out. thinned: some level was left out; lost: one
+ * of the first tier's own.
+ */
+function levelsOf(tiers: readonly (readonly (readonly number[])[])[], lo: number, hi: number): { levels: number[]; thinned: boolean; lost: boolean } {
+  const kept: number[] = [];
+  let thinned = false;
+  let lost = false;
+  tiers.forEach((parts, t) => parts.forEach((tier) => {
+    const s = tier.filter((x) => x > lo + LEVEL_MM && x < hi - LEVEL_MM).sort((a, b) => a - b);
+    const have = [...kept].sort((a, b) => a - b);
+    const fresh: number[] = [];
+    let j = 0;
+    for (const x of s) {
+      while (j < have.length && have[j] < x - LEVEL_MM) j++;
+      if (j < have.length && Math.abs(have[j] - x) <= LEVEL_MM) continue;
+      if (fresh.length && x - fresh[fresh.length - 1] <= LEVEL_MM) continue;
+      fresh.push(x);
+    }
+    const room = SLABS_MAX - 1 - kept.length;
+    if (fresh.length <= room) kept.push(...fresh);
+    else {
+      thinned = true;
+      if (t === 0) lost = true;
+      const step = fresh.length / Math.max(1, room);
+      for (let i = 0; i < room; i++) kept.push(fresh[Math.floor(i * step)]);
+    }
+  }));
+  return { levels: [lo, ...kept.sort((a, b) => a - b), hi], thinned, lost };
 }
 
 /** The bodies `idx` cut through the middle of each slab between `levels` (one kernel section per slab). */
@@ -499,10 +637,15 @@ export interface StackFinding {
 }
 
 export interface StackResult {
+  /** The axes checked to the end (an axis the time limit cut short is left out). */
   axes: StackAxis[];
+  /** The axes there were to check (all of them, or those near the bodies asked about). */
+  axesTotal: number;
   findings: StackFinding[];
   /** The play counted as held (mm). */
   play: number;
+  /** Some axis had more levels than SLABS_MAX: others' were left out, so a thin part away from its own may be missed. */
+  thinned: boolean;
   complete: boolean;
 }
 
@@ -530,6 +673,13 @@ interface Fit {
   slab: number;
 }
 
+/** The nearest thing inside a bore: its body, its largest radius there, and the gap between them (mm). */
+interface Inside {
+  body: number;
+  r: number;
+  gap: number;
+}
+
 /** What one axis holds: its slabs, its fits, its bores with nothing in them. */
 interface AxisWork {
   ax: AxisLine;
@@ -538,39 +688,53 @@ interface AxisWork {
   slabs: Slab[];
   fits: Fit[];
   /** Members with a bore here that no shaft holds: the bore and the nearest thing inside it. */
-  empty: { body: number; bore: number; nearest: { body: number; r: number } | null }[];
+  empty: { body: number; bore: number; nearest: Inside | null }[];
+  /** Levels were left out (too many): thin parts away from the axis's own may be missed. */
+  thinned: boolean;
 }
 
-/** The fits of one slab: each bore with the nearest thing inside it that goes round the axis, within the play. */
-function fitsOf(slab: Slab, k: number, play: number, members: ReadonlySet<number>, empty: Map<number, { bore: number; nearest: { body: number; r: number } | null }>): Fit[] {
+/**
+ * The fits of one slab: each bore with the nearest thing inside it that goes round the axis, within
+ * the play. The play is the gap along rays from the axis (slices.ts fitGap): a D or hex shaft in a
+ * bore of its shape has its clearance, though the largest circle in the bore is smaller than the
+ * smallest round the shaft. Slices that share material are a press fit.
+ */
+function fitsOf(slab: Slab, k: number, play: number, members: ReadonlySet<number>, empty: Map<number, { bore: number; nearest: Inside | null }>): Fit[] {
   const out: Fit[] = [];
   for (const [o, so] of slab.slices) {
     const bore = boreOf(so);
     if (bore === null) continue;
-    // The nearest material inside the bore that goes round the axis (a shaft, a tube).
-    let best: { body: number; r: number } | null = null;
+    let best: Inside | null = null;
     for (const [x, sx] of slab.slices) {
       if (x === o || !goesRound(sx)) continue;
-      for (const [a, b] of radialSet(sx)) {
-        if (a >= bore - 1e-7) continue;
-        if (!best || b > best.r) best = { body: x, r: b };
-      }
+      let r = -Infinity;
+      for (const [a, b] of radialSet(sx)) if (a < bore - 1e-7) r = Math.max(r, b);
+      if (r === -Infinity) continue;
+      // Between two circles: a lower bound (the bore's edge is no nearer than `bore`, the material inside no farther than r).
+      const circles = bore - r;
+      const gap = overlaps(so, sx) ? Math.min(circles, 0) : Math.max(circles, fitGap(so, sx) ?? circles);
+      if (!best || gap < best.gap) best = { body: x, r, gap };
     }
-    if (best && bore - best.r <= play) out.push({ outer: o, inner: best.body, play: bore - best.r, slab: k });
+    if (best && best.gap <= play) out.push({ outer: o, inner: best.body, play: best.gap, slab: k });
     else if (members.has(o)) {
       const was = empty.get(o);
-      if (!was || (best && (!was.nearest || bore - best.r < was.bore - was.nearest.r))) empty.set(o, { bore, nearest: best });
+      if (!was || (best && (!was.nearest || best.gap < was.nearest.gap))) empty.set(o, { bore, nearest: best });
     }
   }
   return out;
 }
 
-/** The bodies near one axis, cut into slabs, and the fits there. */
-async function axisWork(run: Run, bodies: readonly AssemblyBody[], topo: Map<string, BodyTopo>, g: SharedAxis, play: number, from: number, share: number): Promise<AxisWork> {
+/** One axis to cut: its line and members, how far from it its parts reach, and the bodies near it. */
+interface AxisPlan {
+  g: SharedAxis;
+  reach: number;
+  idx: number[];
+}
+
+/** The bodies near one axis, cut into slabs, and the fits there; null when the time limit stopped it before its last slab. */
+async function axisWork(run: Run, bodies: readonly AssemblyBody[], topo: Map<string, BodyTopo>, plan: AxisPlan, play: number, from: number, share: number): Promise<AxisWork | null> {
+  const { g, idx } = plan;
   const ax = g.line;
-  let reach = 0;
-  for (const m of g.members) reach = Math.max(reach, boxAbout(ax, bodies[m].bbox).rFar);
-  const idx = nearAxis(ax, bodies, reach);
   let lo = Infinity;
   let hi = -Infinity;
   for (const i of idx) {
@@ -578,13 +742,40 @@ async function axisWork(run: Run, bodies: readonly AssemblyBody[], topo: Map<str
     lo = Math.min(lo, r.s0);
     hi = Math.max(hi, r.s1);
   }
-  const verts = idx.flatMap((i) => topo.get(bodies[i].id)?.vertices ?? []);
-  const slabs = await slabsOf(run, ax, bodies, idx, levelsOf(ax, verts, lo, hi), `Cutting the bodies ${axisWords(ax)}`, from, share);
+  // The axis's own parts keep every level; then the bodies at the axis (a pin across it); then the rest.
   const members = new Set(g.members);
-  const empty = new Map<number, { bore: number; nearest: { body: number; r: number } | null }>();
+  const core = axisCore(topo, bodies, g);
+  const atAxis = (i: number) => boxAbout(ax, bodies[i].bbox).rNear <= core;
+  const tier = (pick: (i: number) => boolean) => levelsAlong(ax, idx.filter(pick).map((i) => topo.get(bodies[i].id)));
+  const { levels, thinned } = levelsOf([tier((i) => members.has(i)), tier((i) => !members.has(i) && atAxis(i)), tier((i) => !members.has(i) && !atAxis(i))], lo, hi);
+  const slabs = await slabsOf(run, ax, bodies, idx, levels, `Cutting the bodies ${axisWords(ax)}`, from, share);
+  if (slabs.length < levels.length - 1) return null;
+  const empty = new Map<number, { bore: number; nearest: Inside | null }>();
   const fits = slabs.flatMap((s, k) => fitsOf(s, k, play, members, empty));
   const outers = new Set(fits.map((f) => f.outer));
-  return { ax, members: g.members, idx, slabs, fits, empty: [...empty].filter(([b]) => !outers.has(b)).map(([body, e]) => ({ body, ...e })) };
+  return { ax, members: g.members, idx, slabs, fits, empty: [...empty].filter(([b]) => !outers.has(b)).map(([body, e]) => ({ body, ...e })), thinned };
+}
+
+/** The smallest round face the axis's members have on it (a shaft, a bore): a body whose box comes within it is at the axis. */
+function axisCore(topo: Map<string, BodyTopo>, bodies: readonly AssemblyBody[], g: SharedAxis): number {
+  let r = Infinity;
+  for (const m of g.members) for (const f of topo.get(bodies[m].id)?.round ?? []) if (sameLine(f.line, g.line)) r = Math.min(r, f.r);
+  return Number.isFinite(r) ? r : 0;
+}
+
+/**
+ * How far from an axis its parts reach: each member's box, but a body with round faces on two
+ * shared axes or more (a frame plate, whose far corner covers the whole frame) only by its round
+ * faces on this one.
+ */
+function reachOf(topo: Map<string, BodyTopo>, bodies: readonly AssemblyBody[], g: SharedAxis, axesOfBody: ReadonlyMap<number, number>): number {
+  let reach = 0;
+  for (const m of g.members) {
+    if ((axesOfBody.get(m) ?? 0) >= 2) {
+      for (const f of topo.get(bodies[m].id)?.round ?? []) if (sameLine(f.line, g.line)) reach = Math.max(reach, f.r);
+    } else reach = Math.max(reach, boxAbout(g.line, bodies[m].bbox).rFar);
+  }
+  return reach;
 }
 
 /** How far a group moves along the axis (side +1 or -1) before it meets another body, and which. */
@@ -636,45 +827,97 @@ function holdingSpan(w: AxisWork, body: number, bore: number, play: number, near
 export async function checkStack(env: CheckEnv, bodies: readonly AssemblyBody[], o: { play: number; only?: readonly number[] }): Promise<StackResult> {
   const run = new Run(env);
   const play = o.play;
+  const inScope = o.only ? new Set(o.only) : null;
   const topo = new Map<string, BodyTopo>();
   await topoAll(run, bodies, topo, 'Reading round faces');
-  // Shared axes, and a body's own centred round face (a wheel alone: is anything in its bore?).
   const groups = groupAxes(bodies, topo);
-  const single = groups.filter((g) => g.members.length === 1);
+  const shared = groups.filter((g) => g.members.length >= 2);
+  const axesOfBody = new Map<number, number>();
+  for (const g of shared) for (const m of g.members) axesOfBody.set(m, (axesOfBody.get(m) ?? 0) + 1);
+  // A body's own bore (a wheel or a hand alone: is anything in it?): a line only its round faces lie
+  // on, with its centroid on it (a wheel with lightening holes), else its only such line when its
+  // material goes all the way round it there (a hand, a crank; a fillet's line never has that).
+  const own = new Map<number, SharedAxis[]>();
+  for (const g of groups) {
+    const b = g.members[0];
+    if (g.members.length !== 1 || bodies[b].solids === 0 || (inScope && !inScope.has(b))) continue;
+    own.set(b, [...(own.get(b) ?? []), g]);
+  }
   const centred: SharedAxis[] = [];
-  for (const g of single) {
+  for (const [i, lines] of own) {
     if (run.overTime()) break;
-    const b = bodies[g.members[0]];
-    if (b.solids === 0) continue;
+    const b = bodies[i];
     const p = (await run.call('props', { id: b.shape, volume: true, bbox: 'none' }, `measure ${b.name}`, b.faces)).result;
     const size = Math.hypot(b.bbox[3] - b.bbox[0], b.bbox[4] - b.bbox[1], b.bbox[5] - b.bbox[2]);
-    if (p.centroid && off(g.line, p.centroid) <= 0.01 + 1e-4 * size) centred.push(g);
+    const on = p.centroid ? lines.find((g) => off(g.line, p.centroid!) <= 0.01 + 1e-4 * size) : undefined;
+    if (on) {
+      centred.push(on);
+      continue;
+    }
+    if (lines.length !== 1) continue;
+    const g = lines[0];
+    const spans = (topo.get(b.id)?.round ?? []).filter((f) => f.box && sameLine(f.line, g.line)).map((f) => spanAlong(g.line, f.box!));
+    const [s0, s1] = spans.length ? [Math.min(...spans.map((s) => s[0])), Math.max(...spans.map((s) => s[1]))] : spanAlong(g.line, b.bbox);
+    const f = frameAt(g.line, (s0 + s1) / 2);
+    const sec = (await run.call('section', { plane: { origin: f.origin, normal: f.normal, xdir: f.xdir }, ids: [b.shape] }, 'cut the bodies across their axis', b.faces)).result;
+    const loops = sec.bodies[0]?.loops ?? [];
+    if (loops.length && boreOf(sliceOf(loops)) !== null) centred.push(g);
   }
-  const axes = [...groups.filter((g) => g.members.length >= 2), ...centred];
-  const works: AxisWork[] = [];
-  for (let i = 0; i < axes.length; i++) {
+  const axes = [...shared, ...centred];
+  const plans: AxisPlan[] = axes.map((g) => {
+    const reach = reachOf(topo, bodies, g, axesOfBody);
+    return { g, reach, idx: nearAxis(g.line, bodies, reach) };
+  });
+  // With some bodies only, the axes near them.
+  const wanted = plans.map((_, i) => i).filter((i) => !inScope || plans[i].idx.some((b) => inScope.has(b)));
+  const works = new Map<number, AxisWork>();
+  const cut = async (i: number, k: number, n: number) => {
+    const w = await axisWork(run, bodies, topo, plans[i], play, k / n, 1 / n);
+    if (w) works.set(i, w);
+  };
+  for (let k = 0; k < wanted.length; k++) {
     if (run.overTime()) break;
-    works.push(await axisWork(run, bodies, topo, axes[i], play, i / axes.length, 1 / axes.length));
+    await cut(wanted[k], k, wanted.length);
+  }
+  // A body holding a shaft on one axis checked may be a frame (two axes or more): with some bodies
+  // only, its other shared axes are cut too until that is known (not listed).
+  if (inScope) {
+    const tried = new Set(wanted);
+    for (;;) {
+      if (run.overTime()) break;
+      const holds = new Map<number, Set<number>>();
+      for (const [a, w] of works) for (const f of w.fits) if (f.play > PRESS_MM) holds.set(f.outer, (holds.get(f.outer) ?? new Set()).add(a));
+      const next = [...holds].filter(([, on]) => on.size === 1).flatMap(([b]) => shared.map((g) => axes.indexOf(g)).filter((i) => !tried.has(i) && axes[i].members.includes(b)))[0];
+      if (next === undefined) break;
+      tried.add(next);
+      await cut(next, 0, 1);
+    }
   }
   // Press fits join bodies; a group holding shafts on two axes or more is a frame (it does not turn).
   const groupsOf = new Groups();
-  for (const w of works) for (const f of w.fits) if (f.play <= PRESS_MM) groupsOf.join(f.outer, f.inner);
+  for (const w of works.values()) for (const f of w.fits) if (f.play <= PRESS_MM) groupsOf.join(f.outer, f.inner);
   const outerAxes = new Map<number, Set<number>>();
-  works.forEach((w, a) => {
+  for (const [a, w] of works) {
     for (const f of w.fits) {
       if (f.play <= PRESS_MM) continue;
       const r = groupsOf.root(f.outer);
       if (!outerAxes.has(r)) outerAxes.set(r, new Set());
       outerAxes.get(r)!.add(a);
     }
-  });
+  }
   const isFrame = (i: number) => (outerAxes.get(groupsOf.root(i))?.size ?? 0) >= 2;
   const groupOf = (i: number) => new Set(bodies.map((_, k) => k).filter((k) => groupsOf.root(k) === groupsOf.root(i)));
-  const inScope = o.only ? new Set(o.only) : null;
+  /** The body (or what it is pressed onto) rides, or holds a shaft, on another axis: it is held there (a press fit inside its own group is not). */
+  const heldElsewhere = (i: number, a: number) => [...works].some(([b, w]) => b !== a && w.fits.some((f) => f.play > PRESS_MM && (groupsOf.root(f.outer) === groupsOf.root(i) || groupsOf.root(f.inner) === groupsOf.root(i))));
 
   const out: StackAxis[] = [];
   const findings: StackFinding[] = [];
-  works.forEach((w, a) => {
+  let thinned = false;
+  for (const a of wanted) {
+    const w = works.get(a);
+    if (!w) continue;
+    thinned ||= w.thinned;
+    const at = out.length;
     const negWords = sideWords(w.ax, -1);
     const posWords = sideWords(w.ax, 1);
     // The riders: the bore's body rides on its shaft, unless the bore is a frame's (then the shaft turns in it).
@@ -690,8 +933,9 @@ export async function checkStack(env: CheckEnv, bodies: readonly AssemblyBody[],
     }
     const checked = new Map<number, { neg: StackSide; pos: StackSide; holder: number; inBore: boolean; play: number }>();
     for (const r of riders.values()) {
-      if (isFrame(r.body) || (inScope && !inScope.has(r.body))) continue;
       const group = groupOf(r.body);
+      // With some bodies only: a part asked about, or what it is pressed onto (a wheel on its arbor).
+      if (isFrame(r.body) || (inScope && ![...group].some((k) => inScope.has(k)))) continue;
       // Riding on a shaft, it may slide off its end first.
       const span = r.inBore ? null : holdingSpan(w, r.holder, r.bore, play, r.slab);
       const engaged = w.fits.filter((f) => f.outer === r.body && f.inner === r.holder).map((f) => w.slabs[f.slab]);
@@ -742,21 +986,22 @@ export async function checkStack(env: CheckEnv, bodies: readonly AssemblyBody[],
       for (const [side, s] of [['neg', c.neg], ['pos', c.pos]] as const) {
         const dir = side === 'neg' ? negWords : posWords;
         if (s.by === null) {
-          findings.push({ body: name, axis: a, kind: 'free', side, gap: null, words: `${name} can slide ${how} toward ${dir}: nothing stops it${s.off ? ` before it comes off ${holder}` : ''}` });
+          findings.push({ body: name, axis: at, kind: 'free', side, gap: null, words: `${name} can slide ${how} toward ${dir}: nothing stops it${s.off ? ` before it comes off ${holder}` : ''}` });
         } else if ((s.gap ?? 0) > play) {
-          findings.push({ body: name, axis: a, kind: 'slides', side, gap: s.gap, words: `${name} can slide ${round(s.gap!)} mm ${how} toward ${dir} before it meets ${s.by}` });
+          findings.push({ body: name, axis: at, kind: 'slides', side, gap: s.gap, words: `${name} can slide ${round(s.gap!)} mm ${how} toward ${dir} before it meets ${s.by}` });
         }
       }
     }
+    // A frame's hole (a pipe passing through a plate) and a body held on another axis need nothing here.
     for (const e of w.empty) {
-      if (inScope && !inScope.has(e.body)) continue;
+      if ((inScope && !inScope.has(e.body)) || isFrame(e.body) || heldElsewhere(e.body, a)) continue;
       const name = bodies[e.body].name;
-      const what = e.nearest ? `is ${round(e.bore - e.nearest.r)} mm wider than ${bodies[e.nearest.body].name} (radius ${round(e.nearest.r)} mm) inside it` : 'is empty';
-      findings.push({ body: name, axis: a, kind: 'bore', side: null, gap: null, words: `Nothing holds ${name} radially: its bore ${axisWords(w.ax)} (radius ${round(e.bore)} mm) ${what}` });
+      const what = e.nearest ? `is ${round(e.nearest.gap)} mm wider than ${bodies[e.nearest.body].name} (radius ${round(e.nearest.r)} mm) inside it` : 'is empty';
+      findings.push({ body: name, axis: at, kind: 'bore', side: null, gap: null, words: `Nothing holds ${name} radially: its bore ${axisWords(w.ax)} (radius ${round(e.bore)} mm) ${what}` });
     }
-  });
+  }
   await run.release();
-  return { axes: out, findings, play, complete: !run.timedOut };
+  return { axes: out, axesTotal: wanted.length, findings, play, thinned, complete: !run.timedOut };
 }
 
 const round = (v: number) => Math.round(v * 1e4) / 1e4;
@@ -785,6 +1030,9 @@ export interface SweepResult {
   already: { turning: string; with: string }[];
   /** Bodies near enough to be hit, all looked at. */
   near: number;
+  /** More levels than SLABS_MAX: the others' were left out, so a thin body may be missed. */
+  thinned: boolean;
+  /** False when the time limit stopped it: the slabs or the pairs it did not reach are not checked. */
   complete: boolean;
 }
 
@@ -823,8 +1071,12 @@ export async function checkSweep(env: CheckEnv, bodies: readonly AssemblyBody[],
   const idx = [...turning, ...near];
   const topo = new Map<string, BodyTopo>();
   await topoAll(run, idx.map((i) => bodies[i]), topo, 'Reading the bodies');
-  const verts = idx.flatMap((i) => topo.get(bodies[i].id)?.vertices ?? []);
-  const slabs = near.length ? await slabsOf(run, ax, bodies, idx, levelsOf(ax, verts, lo, hi), `Cutting the bodies ${axisWords(ax)}`, 0.1, 0.6) : [];
+  // The turning bodies keep every level; then the bodies at the axis; then the rest.
+  const tier = (list: readonly number[]) => levelsAlong(ax, list.map((i) => topo.get(bodies[i].id)));
+  const core = Math.min(...turning.map((t) => (topo.get(bodies[t].id)?.round ?? []).filter((f) => sameLine(f.line, ax)).reduce((m, f) => Math.min(m, f.r), Infinity)));
+  const atAxis = (i: number) => boxAbout(ax, bodies[i].bbox).rNear <= (Number.isFinite(core) ? core : 0);
+  const { levels, thinned } = levelsOf([tier(turning), tier(near.filter(atAxis)), tier(near.filter((i) => !atAxis(i)))], lo, hi);
+  const slabs = near.length ? await slabsOf(run, ax, bodies, idx, levels, `Cutting the bodies ${axisWords(ax)}`, 0.1, 0.6) : [];
   const hits: SweepHit[] = [];
   const already: { turning: string; with: string }[] = [];
   const frame = (s: number) => frameAt(ax, s);
@@ -874,5 +1126,5 @@ export async function checkSweep(env: CheckEnv, bodies: readonly AssemblyBody[],
   } finally {
     await run.release();
   }
-  return { line: ax, words: axisWords(ax), turning: turning.map((t) => bodies[t].name), hits, already, near: near.length, complete: !run.timedOut };
+  return { line: ax, words: axisWords(ax), turning: turning.map((t) => bodies[t].name), hits, already, near: near.length, thinned: near.length > 0 && thinned, complete: !run.timedOut };
 }

@@ -8,12 +8,13 @@
 // the features topic names each tool's fields and rules; the sketch topic each entity kind with
 // its parts and DOF and every relation and dimension with the solver's ref signatures; checks,
 // traps and the examples index are filled; the example topics are the worked parts, call by call
-// (guide-example.test.ts runs them); no vendor names.
+// (guide-example.test.ts runs them); no vendor names; printing's figures each labelled a rule of
+// thumb to test, no person named; assemblies on press fits, one body, a stopped check.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { WORKED_PARTS } from '../../src/assistant/examples';
 import { GUIDE } from '../../src/assistant/guide';
-import { HELP, HELP_EXAMPLE_BYTES, HELP_STRING_MAX, HELP_TOPIC_BYTES } from '../../src/assistant/help';
+import { HELP, HELP_EXAMPLE_BYTES, HELP_STRING_MAX, HELP_TOPIC_BYTES, RT } from '../../src/assistant/help';
 import { CAD_TOOLS, HELP_TOPICS, SKETCH_CONSTRAINT_KINDS, SKETCH_ENTITY_KINDS, type HelpTopic } from '../../src/assistant/schemas';
 import { signatureWords } from '../../src/assistant/sketch/signatures';
 import { tool as helpTool } from '../../src/assistant/tools/help';
@@ -188,5 +189,23 @@ describe('help', () => {
         for (const v of Object.values(r.result!)) expect(v === null || typeof v !== 'object', `${part.topic} ${r.about}`).toBe(true);
       }
     }
+  });
+
+  it("printing labels every figure a rule of thumb to test on the person's printer, and no help names a person", () => {
+    const [these, ...figures] = HELP.printing;
+    expect(these.about).toBe('these figures');
+    expect(these.text).toContain('Every figure here is a rule of thumb');
+    expect(RT).toBe('(rule of thumb: test on your printer)');
+    // Each row with a number in mm or degrees carries the label.
+    for (const r of figures) if (/\d/.test(r.text)) expect(r.text, r.about).toContain(RT);
+    for (const [topic, rows] of Object.entries(HELP)) for (const t of strings(rows)) expect(t, topic).not.toMatch(/\bDaniel\b|for the owner/);
+  });
+
+  it('assemblies says a press fit drawn under its shaft is listed as press_fit, and one body is checked against the rest', () => {
+    const rows = Object.fromEntries(HELP.assemblies.map((r) => [r.about, r.text]));
+    expect(rows['check interference']).toContain('press_fit');
+    expect(rows['check interference']).toContain('one body (it against every other)');
+    expect(HELP.printing.find((r) => r.about === 'holes and fits')!.text).toContain('check interference lists it as press_fit');
+    expect(rows['what it measures']).toContain('Stopped at the time limit');
   });
 });

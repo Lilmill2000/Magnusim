@@ -388,16 +388,22 @@ comes on). Rename the result, for example to "Fluid".
   - **Solids**: each body is "Valid", or its problems are listed by kind with
     where they are.
   - **Interference**: the pairs of bodies that overlap and how much (the
-    selected bodies, or every shown one). A clearance also lists the pairs
-    closer than it.
+    selected bodies, or every shown one; one selected body against every other
+    shown body). A bore drawn a little under its shaft is a press fit: listed
+    apart, not as a collision. A clearance also lists the pairs closer than it.
   - **Loose parts**: the parts on each shaft in order, what holds each one,
     and which can slide along the shaft (which way and how far), with a play
-    you set (0.5 mm if empty).
+    you set (0.5 mm if empty). The play is the gap between the bore and its
+    shaft all round, so a D or hex shaft in a bore of its shape counts as
+    loose, not pressed on. With bodies selected it checks the shafts near them.
   - **Rotation**: a body turned a full turn about an axis: the first angle it
-    meets each other body, both ways.
+    meets each other body, counter-clockwise about the axis's direction (the
+    column says which way, e.g. "Counter-clockwise about +Z") and clockwise.
 
-  Press Check to run one; Stop ends a long one. Click a row to select its
-  bodies. The Assistant runs the same checks and gets the same words.
+  Press Check to run one; Stop ends a long one. A check that runs past its
+  time limit (90 s) says "Stopped at the time limit" and what helps: what it
+  lists is only what it reached. Click a row to select its bodies. The
+  Assistant runs the same checks and gets the same words.
 - The **volume chip** shows the selected body's volume; with nothing selected it
   lists each body on its own. It never adds bodies together.
 - **Section view** cuts the view along an origin plane, so you can reach faces

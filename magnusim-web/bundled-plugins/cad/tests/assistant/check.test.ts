@@ -12,19 +12,26 @@
 //   - the person's Check (INSPECT > Check's Interference, Loose parts, Rotation) on the same Part
 //     gives the tool's own text and rows;
 //   - refusals: a body that does not exist, a body named twice, sweep with no bodies, an axis that
-//     has none, a clearance below 0.
+//     has none, a clearance below 0;
+//   - a check the time limit stopped: its text starts with the stop and is never an all-clear (stack,
+//     sweep, interference), its note says what helps; interference on one body is it against the
+//     rest; get_model full on 180 coloured parts and a long history reaches the model whole within
+//     the app's 32 KB.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
-import { CHECK_ROWS } from '../../src/assistant/tools/check';
+import { CHECK_ROWS, interferenceReply, stackReply, sweepReply } from '../../src/assistant/tools/check';
+import { axisLine, checkClock, CHECK_TIME_MS } from '../../src/features/assembly/check';
 import { referenceAxis, runAssembly } from '../../src/features/check/assembly';
 import { EXTRUDE, fail, ok } from './extrude-tools';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
+import { resultAsSent } from './sanitize-copy';
 import { E, SK, type Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
   h?.dispose();
   h = null;
+  checkClock.limitMs = CHECK_TIME_MS;
 });
 
 const CHECK = (o: Row = {}): Row => ({ kind: 'stack', bodies: [], clearance: '', axis: '', ...o });
@@ -75,9 +82,33 @@ describe('check stack', () => {
       const held = await h.ok('check', CHECK());
       expect(held.text).toBe('Nothing is loose: 1 part on 1 axis, each held both ways within 0.5 mm');
       expect(held.data).toMatchObject({ loose: [], axes: [{ parts: [{ body: 'Shaft', fixed_to: ['Collar'] }, { body: 'Wheel', '-Z': 'Shaft at 0 mm', '+Z': 'Collar at 0 mm' }, { body: 'Collar', fixed_to: ['Shaft'] }] }] });
+      // Past the time limit before its one axis was cut to the end: it says so, never "Nothing is loose".
+      checkClock.limitMs = -1;
+      const late = await h.ok('check', CHECK());
+      expect(late.text).toBe('Stopped at the time limit after 0 of 1 axis: none checked to the end');
+      expect(late.data).toMatchObject({ complete: false, axes: [], loose: [], note: 'Stopped at the time limit: 0 of 1 axis checked. Check fewer bodies: only the axes near them are checked.' });
     },
     REAL_KERNEL_MS,
   );
+});
+
+describe('a check the time limit stopped', () => {
+  it('starts its text with the stop and never reads as all clear: stack, sweep, interference', () => {
+    const line = axisLine([0, 0, 0], [0, 0, 1]);
+    const stack = stackReply({ axes: [], axesTotal: 3, findings: [], play: 0.5, thinned: false, complete: false }, 0.5);
+    expect(stack.text).toBe('Stopped at the time limit after 0 of 3 axes: none checked to the end');
+    expect(stack.data.note).toBe('Stopped at the time limit: 0 of 3 axes checked. Check fewer bodies: only the axes near them are checked.');
+    const parts = [{ body: 'Shaft', from: 0, to: 30, bore: null, on: null, inBore: false, play: null, fixed: [], neg: null, pos: null }];
+    const one = stackReply({ axes: [{ line, words: 'along Z through (0, 0, 0)', negWords: '-Z', posWords: '+Z', parts }], axesTotal: 2, findings: [], play: 0.5, thinned: false, complete: false }, 0.5);
+    expect(one.text).toBe('Stopped at the time limit after 1 of 2 axes: nothing loose on that one');
+    const sweep = sweepReply({ line, words: 'along Z through (0, 0, 0)', turning: ['Hand'], hits: [], already: [], near: 2, thinned: false, complete: false }, '');
+    expect(sweep.text).toBe('Stopped at the time limit before the whole turn was checked: no hit found so far for Hand along Z through (0, 0, 0)');
+    expect(sweep.data.note).toBe('Stopped at the time limit: 0 hits found so far. Turn fewer bodies at once.');
+    const inter = interferenceReply({ bodies: 4, one: null, pairs: 6, boxPairs: 3, checked: 1, rows: [], touching: 0, surfaces: [], complete: false }, 0);
+    expect(inter.text).toBe('Stopped at the time limit: no pair overlaps (4 bodies, 3 of 6 pairs near enough to measure, 1 measured)');
+    // Finished, they read as before.
+    expect(stackReply({ axes: [], axesTotal: 0, findings: [], play: 0.5, thinned: false, complete: true }, 0.5).text).toBe('No two bodies share an axis (no round faces on one line)');
+  });
 });
 
 describe('check sweep', () => {
@@ -125,6 +156,13 @@ describe("the person's Check (src/features/check/assembly.ts) answers in the che
       expect(inter.text).toBe(interAi.text);
       expect(inter.interference!.rows.map((r) => [r.a, r.b])).toEqual((interAi.data as { rows: { bodies: string[] }[] }).rows.map((r) => r.bodies));
 
+      // One body: it against every other body (the person's one selected body).
+      const keyAi = await h.ok('check', CHECK({ kind: 'interference', bodies: ['Key'] }));
+      expect(keyAi.text).toMatch(/^1 pair overlaps \(Key against 2 other bodies, 1 near enough to measure\): Wheel and Key [\d.]+ mm3$/);
+      expect(keyAi.data).toMatchObject({ against: 'Key', pairs: 2, overlaps: 1, complete: true });
+      const key = s.doc.state.get().rebuild.bodies.find((b) => b.name === 'Key')!.id;
+      expect((await runAssembly(s, { kind: 'interference', bodies: ids, clearance: 0, one: key }, env)).text).toBe(keyAi.text);
+
       const sweepAi = await h.ok('check', CHECK({ kind: 'sweep', bodies: ['Wheel'], axis: 'Z axis' }));
       const sweep = await runAssembly(s, { kind: 'sweep', turning: [wheel], axis: await referenceAxis(s, 'Z axis') }, env);
       expect(sweep.text).toBe(sweepAi.text);
@@ -170,6 +208,33 @@ describe('check interference and get_model parts on 48 bodies', () => {
       const local = await h.ok('get_model', MODEL(), { turn: 't-local' });
       expect((local.data.bodies as Row[]).length).toBeLessThan(48);
       expect(local.data.parts as Row[]).toHaveLength(48);
+    },
+    REAL_KERNEL_MS * 2,
+  );
+});
+
+describe('get_model parts within the app\'s result cap', () => {
+  it(
+    'detail full on 180 coloured parts and a long history: the parts come first and every row reaches the model whole',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await ok(h, 'sketch', SK({ name: 'Cube sketch', entities: [E('r', 'rect', [0, 0, 5, 5])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Cube', sketch: 'Cube sketch', distance: '5 mm', body_name: 'Cube' }));
+      await h.ok('pattern', PATTERN({ of: 'bodies', items: ['Cube'], about: 'X axis', count: '15', spacing: '6 mm', about2: 'Y axis', count2: '12', spacing2: '6 mm', op: 'new' }));
+      const bodies = h.doc.state.get().rebuild.bodies;
+      expect(bodies).toHaveLength(180);
+      bodies.forEach((b, i) => h!.doc.setBodyColor(b.id, `#${(0x204060 + i * 97).toString(16).padStart(6, '0')}`));
+      // A long history: construction planes, each a row of its own in full.
+      for (let i = 0; i < 60; i++) await h.add('ref_plane', { plane: { kind: 'origin', plane: 'origin:top' }, distance: `${i + 20} mm`, name: `Construction plane number ${i + 1}` });
+      await h.settle();
+      const m = await h.ok('get_model', MODEL({ detail: 'full' }));
+      const sent = resultAsSent('cad__get_model', { data: m.data, text: m.text });
+      const parts = (sent.data as Row).parts as Row[];
+      expect(parts).toHaveLength(180);
+      expect(sent.truncated).toBeUndefined();
+      const keys = Object.keys(m.data);
+      expect(keys.indexOf('parts')).toBeLessThan(keys.indexOf('features'));
+      expect(parts[179]).toMatchObject({ name: 'Cube (Instance 15, 12)', color: expect.stringMatching(/^#[0-9a-f]{6}$/) });
     },
     REAL_KERNEL_MS * 2,
   );

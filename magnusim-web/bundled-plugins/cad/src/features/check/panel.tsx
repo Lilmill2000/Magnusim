@@ -1,12 +1,16 @@
 // Check (proposal §2.11), INSPECT's tool panel, in four modes:
 //   Solids        BRepCheck of the selected bodies (or every shown body), each "Valid" or its
 //                 problems by kind with where they are; it runs again after every rebuild;
-//   Interference  the pairs of the selected bodies (or every shown body) that overlap, with the
-//                 volume they share, and with a clearance the pairs closer than it;
-//   Loose parts   each axis bodies share: its parts in order, what holds each radially and along it,
-//                 and what can slide or has nothing in its bore (the play typed, 0.5 mm when empty);
+//   Interference  the pairs of the selected bodies (or every shown body; one selected body against
+//                 every other shown body) that overlap, with the volume they share (a press fit,
+//                 a bore drawn under its shaft, apart), and with a clearance the pairs closer than it;
+//   Loose parts   each axis bodies share (with bodies selected, the axes near them): its parts in
+//                 order, what holds each radially and along it, and what can slide or has nothing
+//                 in its bore (the play typed, 0.5 mm when empty);
 //   Rotation      a body (or the selected bodies) turned a full turn about an axis round faces lie
-//                 on, X, Y, Z or a construction axis: the first angle it meets each other body.
+//                 on, X, Y, Z or a construction axis: the first angle it meets each other body,
+//                 counter-clockwise about the axis's direction (named in the table) and clockwise.
+// A check the time limit stopped says so in its line and under it, with what helps (the tool's note).
 // The last three are the Assistant's check tool (src/assistant/tools/check.ts) on the same engine
 // (src/features/assembly), run when the person presses Check: its line of text is the tool's own,
 // its rows click to select their bodies (Ctrl adds) and light them on hover, a long check shows its
@@ -28,7 +32,7 @@ import { Button, DisabledReason, Field, Hint, PanelChrome, Select } from '../../
 import { formatQuantity, formatReadout, formatVolume, MM_PER } from '../../ui/kit/format';
 import { timeoutForFaces } from '../../kernel/timeouts';
 import { selectedBodies } from '../../ui/tree/model';
-import { axisWords, PLAY_MM, type CheckEnv, type InterferenceResult, type SharedAxis, type StackResult, type StackSide, type SweepResult } from '../assembly/check';
+import { axisWords, PLAY_MM, sideWords as directionWords, type CheckEnv, type InterferenceResult, type SharedAxis, type StackResult, type StackSide, type SweepResult } from '../assembly/check';
 import { axesNow, lengthIn, referenceAxes, referenceAxis, runAssembly, type AssemblyKind, type AssemblyOutcome, type AssemblyRequest } from './assembly';
 import { CHECK_MODE_LABELS, CHECK_MODES, type CheckMode } from './controls';
 import './check.css';
@@ -315,19 +319,22 @@ function AssemblyCheck({ kind, runs }: { kind: AssemblyKind; runs: Runs }) {
   let start: (() => void) | null = null;
   let form: ReactNode = null;
   if (kind === 'interference') {
-    const scope = chosen.length ? chosen : bodies.filter((b) => b.visible);
-    scopeWords = chosen.length ? `Checks the ${chosen.length === 1 ? 'selected body' : `${chosen.length} selected bodies`}` : `Checks every shown body (${scope.length})`;
+    // One selected body: it against every other shown body (as the check tool's one body).
+    const one = chosen.length === 1 ? chosen[0] : null;
+    const shown = bodies.filter((b) => b.visible || b === one);
+    const scope = one ? shown : chosen.length ? chosen : shown;
+    scopeWords = one ? `Checks ${one.name} against every other shown body (${scope.length - 1})` : chosen.length ? `Checks the ${chosen.length} selected bodies` : `Checks every shown body (${scope.length})`;
     const c = lengthIn(services, fields.clearance, units, 0);
-    if (scope.length < 2) reason = chosen.length ? 'Select two bodies or more, or none for every shown body' : 'Show two bodies or more';
+    if (scope.length < 2) reason = one ? 'Show another body to check it against' : 'Show two bodies or more';
     else if ('error' in c) reason = `Clearance: ${c.error}`;
-    else start = () => runs.run('interference', async () => ({ kind: 'interference', bodies: scope.map((b) => b.id), clearance: c.value }));
+    else start = () => runs.run('interference', async () => ({ kind: 'interference', bodies: scope.map((b) => b.id), clearance: c.value, one: one?.id ?? null }));
     form = (
       <Field label="Clearance" field="clearance" help="Also list the pairs closer than this">
         <input className="mgk-input cad-check-length" aria-label="Clearance" placeholder="none" spellCheck={false} data-check-clearance="1" value={fields.clearance} onChange={(e) => runs.setField('clearance', e.target.value)} />
       </Field>
     );
   } else if (kind === 'stack') {
-    scopeWords = chosen.length ? `Checks every body on a shared axis; lists the ${chosen.length === 1 ? 'selected body' : `${chosen.length} selected bodies`}` : 'Checks every body on a shared axis';
+    scopeWords = chosen.length ? `Checks the axes near the ${chosen.length === 1 ? 'selected body' : `${chosen.length} selected bodies`}, and lists ${chosen.length === 1 ? 'its' : 'their'} findings` : 'Checks every body on a shared axis';
     const p = lengthIn(services, fields.play, units, PLAY_MM);
     if (!bodies.length) reason = 'No body yet';
     else if ('error' in p) reason = `Play: ${p.error}`;
@@ -410,6 +417,11 @@ function AssemblyCheck({ kind, runs }: { kind: AssemblyKind; runs: Runs }) {
           <div className="cad-check-text" data-check-text="1">
             {shown.outcome.text}
           </div>
+          {shown.outcome.notes.map((n) => (
+            <div key={n} data-check-note="1">
+              <Hint tone="warning">{n}</Hint>
+            </div>
+          ))}
           {shown.outcome.seq !== seq ? (
             <div data-check-stale="1">
               <Hint tone="warning">The Part has changed since this check: press Check again.</Hint>
@@ -449,11 +461,11 @@ function InterferenceRows({ r, units, rowProps }: { r: InterferenceResult; units
         <table className="cad-p2-table" data-check-pairs="1">
           <tbody>
             {r.rows.map((x) => (
-              <tr key={`${x.a}|${x.b}`} {...rowProps([x.a, x.b])} title={`${x.overlap !== null ? 'The middle of what they share' : 'Halfway between their nearest points'}: ${pointWords(x.at, units)}`} data-check-pair={`${x.a}|${x.b}`} data-check-overlap-mm3={x.overlap ?? undefined} data-check-gap-mm={x.gap ?? undefined}>
+              <tr key={`${x.a}|${x.b}`} {...rowProps([x.a, x.b])} title={`${x.press ? 'A press fit: a ring round the axis both have round faces on. ' : ''}${x.overlap !== null ? 'The middle of what they share' : 'Halfway between their nearest points'}: ${pointWords(x.at, units)}`} data-check-pair={`${x.a}|${x.b}`} data-check-overlap-mm3={x.overlap ?? undefined} data-check-press={x.press ? '1' : undefined} data-check-gap-mm={x.gap ?? undefined}>
                 <td>
                   {x.a} and {x.b}
                 </td>
-                <td className={`num${x.overlap !== null ? ' cad-p2-bad' : ''}`}>{x.overlap !== null ? `${formatVolume(x.overlap, units)} overlap` : x.gap ? `${formatQuantity(x.gap, 'length', units)} apart` : 'touching'}</td>
+                <td className={`num${x.overlap !== null && !x.press ? ' cad-p2-bad' : ''}`}>{x.overlap !== null ? `${formatVolume(x.overlap, units)} ${x.press ? 'press fit' : 'overlap'}` : x.gap ? `${formatQuantity(x.gap, 'length', units)} apart` : 'touching'}</td>
               </tr>
             ))}
           </tbody>
@@ -521,8 +533,8 @@ function SweepRows({ r, units, rowProps }: { r: SweepResult; units: DocUnits; ro
             <tr>
               <th>Turning</th>
               <th>Meets</th>
-              <th>First angle</th>
-              <th>The other way</th>
+              <th data-check-ccw="1">Counter-clockwise about {directionWords(r.line, 1)}</th>
+              <th data-check-cw="1">Clockwise</th>
             </tr>
           </thead>
           <tbody>

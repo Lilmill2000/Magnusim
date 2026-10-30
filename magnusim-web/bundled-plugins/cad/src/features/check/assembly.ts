@@ -1,7 +1,8 @@
 // The person's assembly checks (INSPECT > Check: Interference, Loose parts, Rotation): the engine the
 // Assistant's check tool runs (src/features/assembly/check.ts) on the bodies built now, once the
 // rebuild has caught up, and the tool's own reply words (interferenceReply, stackReply,
-// sweepReply), so the person reads what the Assistant reads. Rotation's axes: every line round
+// sweepReply) and notes (a check the time limit stopped, levels left out), so the person reads what
+// the Assistant reads. Rotation's axes: every line round
 // faces lie on (roundAxes: shared with other bodies, or a body's own), X, Y, Z and the construction
 // axes, the last ones resolved by the tool's axisOf (its words: "Z axis", "axis Pivot").
 // Owner: ASSISTANT (the person's side of check).
@@ -24,7 +25,8 @@ export interface AxisPick {
 }
 
 export type AssemblyRequest =
-  | { kind: 'interference'; bodies: readonly BodyId[]; clearance: number }
+  /** one: a body checked against every other of `bodies` (null: every pair of them). */
+  | { kind: 'interference'; bodies: readonly BodyId[]; clearance: number; one?: BodyId | null }
   /** only: the bodies whose findings are listed (null: every body). */
   | { kind: 'stack'; only: readonly BodyId[] | null; play: number }
   | { kind: 'sweep'; turning: readonly BodyId[]; axis: AxisPick };
@@ -33,6 +35,8 @@ export interface AssemblyOutcome {
   kind: AssemblyKind;
   /** The reply's text: the words the Assistant's check gets. */
   text: string;
+  /** The reply's notes (data.note: stopped at the time limit and what helps; data.thinned_note). */
+  notes: string[];
   /** The rebuild it checked. */
   seq: number;
   interference?: InterferenceResult;
@@ -52,6 +56,9 @@ export function lengthIn(services: AppServices, text: string, units: DocUnits, n
 /** Bodies by id, in the rebuild's order; a body gone since is left out. */
 const byIds = (bodies: readonly BodyInfo[], ids: readonly BodyId[]) => bodies.filter((b) => ids.includes(b.id));
 
+/** A reply's notes, as the Assistant gets them in its data. */
+const notesOf = (data: Record<string, unknown>): string[] => [data.note, data.thinned_note].filter((x): x is string => typeof x === 'string');
+
 /** Runs one check on the Part as built once the rebuild has caught up. Throws the signal's stop, or an Error with the kernel's words. */
 export async function runAssembly(services: AppServices, req: AssemblyRequest, env: CheckEnv): Promise<AssemblyOutcome> {
   await services.doc.settled(env.signal);
@@ -60,19 +67,25 @@ export async function runAssembly(services: AppServices, req: AssemblyRequest, e
   const seq = s.rebuild.seq;
   try {
     if (req.kind === 'interference') {
-      const r = await checkInterference(env, byIds(all, req.bodies).map(asBody), { clearance: req.clearance });
-      return { kind: 'interference', text: interferenceReply(r, req.clearance).text, seq, interference: r };
+      const list = byIds(all, req.bodies);
+      const one = req.one ? list.findIndex((b) => b.id === req.one) : -1;
+      if (req.one && one < 0) throw new Error('The selected body is gone: select it again.');
+      const r = await checkInterference(env, list.map(asBody), { clearance: req.clearance, ...(one >= 0 ? { one } : {}) });
+      const reply = interferenceReply(r, req.clearance);
+      return { kind: 'interference', text: reply.text, notes: notesOf(reply.data), seq, interference: r };
     }
     const every = all.map(asBody);
     const index = (ids: readonly BodyId[]) => byIds(all, ids).map((b) => all.indexOf(b));
     if (req.kind === 'stack') {
       const r = await checkStack(env, every, { play: req.play, ...(req.only ? { only: index(req.only) } : {}) });
-      return { kind: 'stack', text: stackReply(r, req.play).text, seq, stack: r };
+      const reply = stackReply(r, req.play);
+      return { kind: 'stack', text: reply.text, notes: notesOf(reply.data), seq, stack: r };
     }
     const turning = index(req.turning);
     if (!turning.length) throw new Error('The body to turn is gone: pick another.');
     const r = await checkSweep(env, every, turning, req.axis.line);
-    return { kind: 'sweep', text: sweepReply(r, req.axis.words).text, seq, sweep: r };
+    const reply = sweepReply(r, req.axis.words);
+    return { kind: 'sweep', text: reply.text, notes: notesOf(reply.data), seq, sweep: r };
   } catch (e) {
     if (env.signal?.aborted) throw env.signal.reason ?? e;
     if (e instanceof CheckKernelError) throw new Error(`The geometry kernel could not ${e.op === 'boolean' ? 'intersect two bodies' : `run ${e.op}`}: ${e.message}`);

@@ -95,7 +95,7 @@ const value = (at: string, v: string) => expect(VALUES.get(at), at).toContain(v)
 /** Reply keys the guide and help name (each one a key the tools' replies carry). */
 const REPLY_KEYS = [
   // check's rows (interference, stack, sweep).
-  'gap_mm', 'rows_more', 'from_mm', 'to_mm', 'first_deg', 'back_deg', 'overlap_mm3_1deg_past',
+  'gap_mm', 'rows_more', 'from_mm', 'to_mm', 'first_deg', 'back_deg', 'overlap_mm3_1deg_past', 'press_fit', 'press_fits',
   'volume_mm3', 'area_mm2', 'bbox_mm', 'at_mm', 'problem_total', 'problem_counts', 'dropped_inferred', 'user_changes', 'made_by', 'kept_as', 'overlap_mm3', 'union_solids', 'union_voids', 'point_mm', 'centroid_mm', 'params_cut', 'steps_left', 'usd_left', 'changes_left',
   // The workspace tool: its answers' undo_step, and the targets of expand and collapse.
   'undo_step', 'sketch_panel', 'sketch_details',

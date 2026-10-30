@@ -16,7 +16,12 @@
 //   - 48 small bodies (a grid of rings on pins, every second one overlapping its neighbours) are
 //     checked for interference and stack within CHECK_48_MS, every pair near enough measured;
 //   - a check reports progress, stops with the signal, and past its time limit says how far it got;
-//     the shapes it made are released.
+//     the shapes it made are released; an axis the limit cut short is left out (no half-read finding);
+//   - a D shaft in a D bore with 0.2 mm all round rides on it with that play (no press fit);
+//   - a frame plate does not bring every body into each axis; bodies narrow the axes cut; a collar
+//     keeps its levels among a comb's 900; a rod lying across a hand's path is met;
+//   - interference: a collar drawn under its shaft is a press fit, apart from collisions; one body
+//     against the rest; the stack: a frame's clearance hole is no finding, a lone hand's empty bore is.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { axisLine, checkInterference, checkStack, checkSweep, type StackPart } from '../../../src/features/assembly/check';
@@ -275,6 +280,189 @@ describe('progress, the stop and the time limit', () => {
         ['Box 2', 'Box 3'],
         ['Box 3', 'Box 4'],
       ]);
+    },
+    MS,
+  );
+});
+
+describe('fits that are not round, the time limit, which bodies an axis cuts, and its levels', () => {
+  it(
+    'a D shaft in a D bore 0.2 mm larger all round rides on it with that play (not a press fit): the wheel slides down to the head and off the top',
+    async () => {
+      const f = await fixture();
+      await f.dShaft('Shaft', 2, 1.5, 0, 30, { head: [6, 2] });
+      await f.dRing('Wheel', 2.2, 1.7, 12, 10, 4);
+      const r = await checkStack(env(), f.bodies, { play: 0.5 });
+      expect(r.complete).toBe(true);
+      const wheel = part(r.axes[0].parts, 'Wheel');
+      expect(wheel).toMatchObject({ on: 'Shaft', inBore: false, fixed: [] });
+      expect(wheel.play!).toBeCloseTo(0.2, 6);
+      expect(r.findings.map((x) => x.words)).toEqual(['Wheel can slide 8 mm along Shaft toward -Z before it meets Shaft', 'Wheel can slide along Shaft toward +Z: nothing stops it before it comes off Shaft']);
+    },
+    MS,
+  );
+
+  it(
+    'an axis the time limit cut short is left out, never read half way: no finding from its first slabs, and the result says how many axes it checked',
+    async () => {
+      const f = await fixture();
+      await f.shaft('Shaft', 2, 0, 30, { head: [6, 2] });
+      await f.ring('Wheel 1', 2.2, 15, 2, 4);
+      await f.ring('Spacer', 2.2, 4, 6, 4);
+      await f.ring('Wheel 2', 2.2, 12, 10, 4);
+      await f.ring('Collar', 2, 5, 14, 3);
+      expect((await checkStack(env(), f.bodies, { play: 0.5 })).findings).toEqual([]);
+      // A clock that passes the limit after two slabs (one tick per look at it).
+      let tick = 0;
+      const r = await checkStack({ kernel: kernel!, now: () => tick++, timeLimitMs: 3 }, f.bodies, { play: 0.5 });
+      expect(r).toMatchObject({ complete: false, axes: [], axesTotal: 1, findings: [] });
+    },
+    MS,
+  );
+
+  it(
+    "a frame plate's far corner does not bring every body into each axis; with some bodies only, the axes near them (and one more to know the plates are a frame)",
+    async () => {
+      const f = await fixture();
+      const k = kernel!;
+      for (const [name, z] of [['Front plate', 0], ['Back plate', 20]] as const) await f.box(name, [-10, -10, z], [100, 20, 3]);
+      for (const b of f.bodies) {
+        let id = b.shape;
+        for (const x of [0, 30, 60]) {
+          const hole = (await k.call('cylinder', { r: 2.2, h: 3, origin: [x, 0, b.bbox[2]], axis: [0, 0, 1] })).result.id;
+          id = (await k.call('boolean', { op: 'cut', targets: [id], tools: [hole] })).result.id;
+        }
+        b.shape = id;
+        b.faces = (await k.call('props', { id })).result.faces;
+      }
+      for (const x of [0, 30, 60]) {
+        await f.shaft(`Arbor ${x}`, 2, -3, 29, { at: [x, 0] });
+        await f.ring(`Wheel ${x}`, 2, 12, 8, 4, [x, 0]);
+      }
+      const sections: { x: number; ids: number }[] = [];
+      const spy = new Proxy(k, {
+        get(target, key, receiver) {
+          if (key !== 'call') return Reflect.get(target, key, receiver);
+          return (op: string, params: { plane?: { origin: number[] }; ids?: unknown[] }, o?: unknown) => {
+            if (op === 'section') sections.push({ x: Math.round(params.plane!.origin[0]), ids: params.ids!.length });
+            return (target.call as (...a: unknown[]) => unknown)(op, params, o);
+          };
+        },
+      }) as KernelAdapter;
+      const all = await checkStack({ kernel: spy }, f.bodies, { play: 0.5 });
+      expect(all.axes.map((a) => a.words)).toEqual(['along Z through (0, 0, 0)', 'along Z through (30, 0, 0)', 'along Z through (60, 0, 0)']);
+      // Each axis cuts its own arbor and wheel and the two plates, not the others' (8 bodies).
+      expect(Math.max(...sections.map((s) => s.ids))).toBe(4);
+      sections.length = 0;
+      const wheel0 = f.bodies.findIndex((b) => b.name === 'Wheel 0');
+      const only = await checkStack({ kernel: spy }, f.bodies, { play: 0.5, only: [wheel0] });
+      expect(only).toMatchObject({ complete: true, axesTotal: 1 });
+      expect(only.axes.map((a) => a.words)).toEqual(['along Z through (0, 0, 0)']);
+      expect([...new Set(sections.map((s) => s.x))].sort((a, b) => a - b)).toEqual([0, 30]);
+      // The wheel is pressed on its arbor, which turns in the plates: its findings are the full run's.
+      const mine = new Set(['Wheel 0', 'Arbor 0']);
+      expect(only.findings.map((x) => x.words)).toEqual(all.findings.filter((x) => mine.has(x.body)).map((x) => x.words));
+      expect(only.findings.length).toBeGreaterThan(0);
+    },
+    MS,
+  );
+
+  it(
+    "a collar one slab thick keeps its levels among a comb's 900 (the axis's own parts first): the wheel is held both ways",
+    async () => {
+      const f = await fixture();
+      await f.shaft('Shaft', 2, 0, 40, { head: [6, 2] });
+      await f.ring('Wheel', 2.2, 12, 2, 4);
+      await f.ring('Collar', 2, 5, 6, 1);
+      const alone = await checkStack(env(), f.bodies, { play: 0.5 });
+      expect(alone.findings).toEqual([]);
+      const comb = await f.comb('Comb', 7, 9, 9, 39, 450, -1, 2);
+      expect([comb.bbox[2], comb.bbox[5]].map((z) => Math.round(z))).toEqual([9, 39]);
+      const r = await checkStack(env(), f.bodies, { play: 0.5 });
+      expect(r).toMatchObject({ complete: true, thinned: true });
+      expect(r.axes[0].parts.map((p) => p.body)).toEqual(['Shaft', 'Wheel', 'Collar']);
+      expect(part(r.axes[0].parts, 'Wheel')).toMatchObject({ from: 2, to: 6, neg: { by: 'Shaft', gap: 0 }, pos: { by: 'Collar', gap: 0 } });
+      expect(r.findings).toEqual([]);
+    },
+    MS * 2,
+  );
+
+  it(
+    "a rod lying across the hand's path, dipping 0.4 mm into it, is met (its lowest line is a face's end, not a vertex)",
+    async () => {
+      const f = await fixture();
+      await f.shaft('Arbor', 2, 0, 30);
+      await f.hand('Hand', 2.1, 4, 10, 1, 40, 4);
+      await f.rodX('Rod', 2, -50, 100, 30, 12.6);
+      const r = await checkSweep(env(), f.bodies, [1], axisLine([0, 0, 0], [0, 0, 1]));
+      expect(r).toMatchObject({ complete: true, already: [] });
+      expect(r.hits.map((h) => h.hits)).toEqual(['Rod']);
+      // The kernel's turned copy 1 degree past the contact shares material with the rod.
+      expect(r.hits[0].overlap!).toBeGreaterThan(0);
+    },
+    MS,
+  );
+});
+
+describe('press fits in interference, frame holes and lone hands in the stack', () => {
+  it(
+    'a collar drawn 0.05 mm under its shaft is a press fit, apart from a real collision; two coaxial wheels overlapping 0.2 mm along the axis are a collision; one body against the rest',
+    async () => {
+      const f = await fixture();
+      await f.shaft('Shaft', 2, 0, 20);
+      await f.ring('Collar', 1.95, 5, 5, 4);
+      await f.box('Block', [4, -1, 5], [3, 2, 2]);
+      await f.ring('Wheel A', 2.2, 10, 10, 4);
+      await f.ring('Wheel B', 2.2, 10, 13.8, 4);
+      const r = await checkInterference(env(), f.bodies, { clearance: 0 });
+      expect(r.rows.map((x) => [x.a, x.b, x.press])).toEqual([
+        ['Wheel A', 'Wheel B', false],
+        ['Collar', 'Block', false],
+        ['Shaft', 'Collar', true],
+      ]);
+      expect(r.rows[2].overlap!).toBeCloseTo(Math.PI * (4 - 1.95 ** 2) * 4, 3);
+      expect(r.one).toBeNull();
+      // The block against every other body: only its pairs.
+      const one = await checkInterference(env(), f.bodies, { clearance: 0, one: 2 });
+      expect(one).toMatchObject({ one: 'Block', pairs: 4, complete: true });
+      expect(one.rows.map((x) => [x.a, x.b])).toEqual([['Collar', 'Block']]);
+    },
+    MS,
+  );
+
+  it(
+    "a frame plate's clearance hole round a pipe that bears in the other plate is no finding",
+    async () => {
+      const f = await fixture();
+      const k = kernel!;
+      for (const [name, z] of [['Front plate', 0], ['Back plate', 20]] as const) await f.box(name, [-10, -10, z], [80, 20, 3]);
+      for (const b of f.bodies) {
+        let id = b.shape;
+        for (const [x, r] of [[0, 2.2], [30, 2.2], [60, b.name === 'Front plate' ? 5 : 4.2]]) {
+          const hole = (await k.call('cylinder', { r, h: 3, origin: [x, 0, b.bbox[2]], axis: [0, 0, 1] })).result.id;
+          id = (await k.call('boolean', { op: 'cut', targets: [id], tools: [hole] })).result.id;
+        }
+        b.shape = id;
+        b.faces = (await k.call('props', { id })).result.faces;
+      }
+      await f.shaft('Arbor 1', 2, -3, 29);
+      await f.shaft('Arbor 2', 2, -3, 29, { at: [30, 0] });
+      await f.shaft('Pipe', 4, -3, 29, { at: [60, 0] });
+      const r = await checkStack(env(), f.bodies, { play: 0.5 });
+      expect(r.complete).toBe(true);
+      expect(r.findings.filter((x) => x.kind === 'bore')).toEqual([]);
+      expect(r.findings.some((x) => x.body === 'Front plate' || x.body === 'Back plate')).toBe(false);
+    },
+    MS,
+  );
+
+  it(
+    'a hand alone (its centroid out on its arm) with nothing in its bore is a finding',
+    async () => {
+      const f = await fixture();
+      await f.hand('Lonely hand', 2.1, 4, 0, 1, 30, 4);
+      const r = await checkStack(env(), f.bodies, { play: 0.5 });
+      expect(r.findings.map((x) => x.words)).toEqual(['Nothing holds Lonely hand radially: its bore along Z through (0, 0, 0) (radius 2.1 mm) is empty']);
     },
     MS,
   );

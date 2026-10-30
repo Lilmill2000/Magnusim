@@ -33,6 +33,22 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   long check shows its progress and has Stop. If the Part changes afterwards,
   the result says so. Solids is the check it always had: is each body a valid
   solid.
+  - A D or hex shaft in a bore of its shape with clearance all round is loose
+    on its shaft (play the clearance), no longer taken for a press fit.
+  - A check stopped by its time limit says so in its line ("Stopped at the time
+    limit ...") with what helps, and never "Nothing is loose" or "without
+    meeting anything".
+  - A press fit (a bore drawn a little under its shaft) is listed as a press
+    fit in Interference, apart from the bodies that collide.
+  - One selected body in Interference is checked against every other shown
+    body. Loose parts with bodies selected checks only the shafts near them.
+  - A frame plate's clearance hole (a pipe passing through) is no longer
+    reported as "Nothing holds the plate"; a hand or crank with nothing in its
+    bore is.
+  - Rotation's columns say which way they turn: "Counter-clockwise about +Z"
+    and "Clockwise".
+  - Rods lying across a turning part's path, and thin collars among many
+    other bodies, are no longer missed.
 - Find (INSPECT): select faces, edges, bodies or sketch regions by a query in
   the Assistant's own words ("Body 1 faces >Z", "largest", "hole", "edges of
   Extrude 1.end"), then Select all or click a row.

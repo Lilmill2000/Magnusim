@@ -11,7 +11,10 @@
 //                 it without covering it (a wheel's bore), else null;
 //   overlaps      whether two slices share material (more than a sliver along any circle);
 //   firstContact  turning one slice about the axis: the first angle each way at which it meets the
-//                 other (0 when they touch, `already` when they share material before turning).
+//                 other (0 when they touch, `already` when they share material before turning);
+//   fitGap        the radial gap between a bore and what is inside it, along rays from the axis on
+//                 the curves themselves (lines and arcs exact): a D or hex shaft in its own shape of
+//                 bore has the clearance between them, not the gap between two circles.
 // Circles about the axis are where a turning part goes, so every test runs along them, at the radii
 // where either slice changes (between those radii nothing appears or goes) and between them.
 // Owner: ASSISTANT.
@@ -39,6 +42,8 @@ const SAMPLES_MAX = 900;
 export interface Slice {
   /** Closed loops as polylines (the first point not repeated). */
   loops: P2[][];
+  /** Each loop's curves as the kernel gave them (fitGap reads lines and arcs exactly). */
+  curves: PlaneCurve[][];
   /** The radii where a circle about the axis starts or stops meeting the material, sorted, unique. */
   crit: number[];
   /** The axis lies in the material. */
@@ -174,6 +179,7 @@ function footDistance(a: P2, b: P2): number {
 /** The kernel's section loops of one body as a slice. */
 export function sliceOf(loops: readonly { closed: boolean; curves: readonly PlaneCurve[] }[]): Slice {
   const polys: P2[][] = [];
+  const curves: PlaneCurve[][] = [];
   const radii: number[] = [];
   let open = 0;
   for (const loop of loops) {
@@ -198,9 +204,12 @@ export function sliceOf(loops: readonly { closed: boolean; curves: readonly Plan
     }
     // The last point closes onto the first.
     if (poly.length > 1 && hyp(poly[0][0] - poly[poly.length - 1][0], poly[0][1] - poly[poly.length - 1][1]) < 1e-9) poly.pop();
-    if (poly.length >= 3) polys.push(poly);
+    if (poly.length >= 3) {
+      polys.push(poly);
+      curves.push([...loop.curves]);
+    }
   }
-  const s: Slice = { loops: polys, crit: uniqueSorted(radii), centerIn: false, open };
+  const s: Slice = { loops: polys, curves, crit: uniqueSorted(radii), centerIn: false, open };
   s.centerIn = inside(s, 0, 0);
   return s;
 }
@@ -419,4 +428,131 @@ export function firstContact(a: Slice, b: Slice): { already: boolean; pos: Conta
     }
   }
   return { already: false, pos, neg };
+}
+
+/** A curve of a slice as fitGap reads it: a segment, or an arc of a circle (exact); its nearest distance to the axis (a lower bound for arcs). */
+type Edge =
+  | { kind: 'seg'; a: P2; b: P2; near: number }
+  | { kind: 'arc'; c: P2; r: number; a0: number; a1: number; ccw: boolean; full: boolean; near: number };
+
+const edgeCache = new WeakMap<Slice, Edge[][]>();
+
+/** Each loop's curves as edges: lines and arcs exact, B-splines as their sampled points. */
+function edgesOf(s: Slice): Edge[][] {
+  const hit = edgeCache.get(s);
+  if (hit) return hit;
+  const out = s.curves.map((loop) => {
+    const edges: Edge[] = [];
+    for (const c of loop) {
+      if (c.kind === 'line') {
+        const a: P2 = [c.a[0], c.a[1]];
+        const b: P2 = [c.b[0], c.b[1]];
+        edges.push({ kind: 'seg', a, b, near: footDistance(a, b) });
+      } else if (c.kind === 'arc' || c.kind === 'circle') {
+        const full = c.kind === 'circle';
+        const d = hyp(c.c[0], c.c[1]);
+        // The circle's nearest point to the axis when the arc holds it, else the nearer end.
+        const ends = full ? [] : [c.a0, c.a1].map((deg) => hyp(c.c[0] + c.r * Math.cos((deg * Math.PI) / 180), c.c[1] + c.r * Math.sin((deg * Math.PI) / 180)));
+        const toward = d < 1e-12 ? 0 : Math.atan2(-c.c[1], -c.c[0]);
+        const near = full || d < 1e-12 || onArc(toward, c.a0, c.a1, c.ccw) ? Math.abs(d - c.r) : Math.min(...ends);
+        edges.push({ kind: 'arc', c: [c.c[0], c.c[1]], r: c.r, a0: full ? 0 : c.a0, a1: full ? 360 : c.a1, ccw: full ? true : c.ccw, full, near });
+      } else {
+        const pts = curvePoints(c);
+        for (let i = 0; i + 1 < pts.length; i++) edges.push({ kind: 'seg', a: pts[i], b: pts[i + 1], near: footDistance(pts[i], pts[i + 1]) });
+      }
+    }
+    return edges;
+  });
+  edgeCache.set(s, out);
+  return out;
+}
+
+/** Where the ray from the axis along (dx, dy) crosses an edge: its distances along the ray (above 0). */
+function rayHits(e: Edge, dx: number, dy: number, out: number[]): void {
+  if (e.kind === 'seg') {
+    const ex = e.b[0] - e.a[0];
+    const ey = e.b[1] - e.a[1];
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-15) return;
+    const t = (e.a[0] * ey - e.a[1] * ex) / den;
+    const s = (e.a[0] * dy - e.a[1] * dx) / den;
+    if (t > 0 && s >= -1e-12 && s <= 1 + 1e-12) out.push(t);
+    return;
+  }
+  const b = dx * e.c[0] + dy * e.c[1];
+  const disc = b * b - (e.c[0] * e.c[0] + e.c[1] * e.c[1]) + e.r * e.r;
+  if (disc < 0) return;
+  const sq = Math.sqrt(disc);
+  for (const t of [b - sq, b + sq]) {
+    if (t <= 0) continue;
+    if (!e.full && !onArc(Math.atan2(t * dy - e.c[1], t * dx - e.c[0]), e.a0, e.a1, e.ccw)) continue;
+    out.push(t);
+  }
+}
+
+/** Rays per turn fitGap always tries, besides where the curves end or come nearest the axis. */
+const GAP_RAYS = 360;
+/** A crossing of the material inside this far (mm) past the bore's edge still ends it there (a press fit drawn equal). */
+const GAP_TOUCH = 1e-3;
+
+/**
+ * The radial gap between the bore of `outer` (its loop nearest the axis: the edge of the hole the
+ * axis is in) and the material of `inner` inside it: the least, over rays from the axis, of how far
+ * the bore's edge lies beyond the inner material's last edge before it. Exact on lines and arcs at
+ * the rays tried (every degree, where each curve ends, where each line and circle comes nearest the
+ * axis). Null when no ray finds both. For slices that do not share material (overlaps): it reads
+ * their edges, not what lies between them.
+ */
+export function fitGap(outer: Slice, inner: Slice): number | null {
+  const loops = edgesOf(outer);
+  let bore = -1;
+  let nearest = Infinity;
+  loops.forEach((loop, k) => {
+    for (const e of loop) {
+      if (e.near < nearest) {
+        nearest = e.near;
+        bore = k;
+      }
+    }
+  });
+  if (bore < 0) return null;
+  const be = loops[bore];
+  // The inner material that can lie inside the bore: within its farthest point.
+  const far = Math.max(...outer.loops[bore].map((p) => hyp(p[0], p[1]))) * 1.001 + 1e-6;
+  const ie = edgesOf(inner)
+    .flat()
+    .filter((e) => e.near <= far);
+  if (!ie.length) return null;
+  const angles: number[] = [];
+  for (let i = 0; i < GAP_RAYS; i++) angles.push((i * TAU) / GAP_RAYS);
+  for (const e of [...be, ...ie]) {
+    if (e.kind === 'seg') {
+      angles.push(Math.atan2(e.a[1], e.a[0]), Math.atan2(e.b[1], e.b[0]));
+      const dx = e.b[0] - e.a[0];
+      const dy = e.b[1] - e.a[1];
+      const l2 = dx * dx + dy * dy;
+      const t = l2 < 1e-24 ? 0 : Math.max(0, Math.min(1, -(e.a[0] * dx + e.a[1] * dy) / l2));
+      angles.push(Math.atan2(e.a[1] + t * dy, e.a[0] + t * dx));
+    } else {
+      if (!e.full) for (const deg of [e.a0, e.a1]) angles.push(Math.atan2(e.c[1] + e.r * Math.sin((deg * Math.PI) / 180), e.c[0] + e.r * Math.cos((deg * Math.PI) / 180)));
+      if (hyp(e.c[0], e.c[1]) > 1e-12) angles.push(Math.atan2(e.c[1], e.c[0]), Math.atan2(-e.c[1], -e.c[0]));
+    }
+  }
+  let best = Infinity;
+  const hits: number[] = [];
+  for (const th of angles) {
+    const dx = Math.cos(th);
+    const dy = Math.sin(th);
+    hits.length = 0;
+    for (const e of be) rayHits(e, dx, dy, hits);
+    if (!hits.length) continue;
+    const edge = Math.min(...hits);
+    hits.length = 0;
+    for (const e of ie) rayHits(e, dx, dy, hits);
+    let last = -Infinity;
+    for (const t of hits) if (t <= edge + GAP_TOUCH && t > last) last = t;
+    const gap = last === -Infinity ? (inner.centerIn ? 0 : null) : edge - last;
+    if (gap !== null && gap < best) best = gap;
+  }
+  return Number.isFinite(best) ? best : null;
 }

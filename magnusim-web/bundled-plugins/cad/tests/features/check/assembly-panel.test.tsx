@@ -3,17 +3,21 @@
 // extrudes as the app makes them; never a person's Parts):
 //   - Interference: two blocks that share 4000 mm³: the line is the check tool's own words, the row
 //     lists the pair with its volume (and where, on hover), a click selects both bodies and hovering lights them; a
-//     clearance that does not read is refused under Check with its reason;
+//     clearance that does not read is refused under Check with its reason; one selected body is
+//     checked against every other shown body, in the tool's words for one body;
 //   - Loose parts: a wheel on a headed shaft with nothing above it: the finding names the wheel and
 //     +Z, the parts table says what holds each side, a click on the finding selects the wheel; a
-//     collar pressed on above it: nothing is loose;
+//     collar pressed on above it: nothing is loose; past the time limit the line says it stopped
+//     (never "Nothing is loose") and a warning under it says what helps;
 //   - Rotation: an arm on a pin turned about the axis they share meets a post at the angle the
-//     geometry gives (atan2(8, 14) - asin(1.5 / |(14, 8)|) = 24.407 degrees);
+//     geometry gives (atan2(8, 14) - asin(1.5 / |(14, 8)|) = 24.407 degrees), under a header that
+//     says it is counter-clockwise about +Z (and the other column clockwise);
 //   - Stop ends a check before it reads anything ("Stopped: nothing was checked.") and the Part
 //     changing after a check says so; the mode stays when the panel opens again.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { act, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { checkClock, CHECK_TIME_MS } from '../../../src/features/assembly/check';
 import { block, cylinder, registerSolidFeatures } from '../../doc/blocks';
 import { mountApp, type TestApp } from '../p2/app';
 import { hybridKernel } from '../p2/hybrid-kernel';
@@ -23,6 +27,7 @@ let app: TestApp | null = null;
 afterEach(() => {
   app?.dispose();
   app = null;
+  checkClock.limitMs = CHECK_TIME_MS;
 });
 
 /** Real-kernel tests: each one's ceiling (Linux CI runs on 2 slow cores). */
@@ -133,6 +138,10 @@ describe("INSPECT's Check: Interference, Loose parts, Rotation", () => {
       expect(selectedIds(a)).toEqual([idOf(a, 'Block A'), idOf(a, 'Block B')]);
       // Now the two selected bodies are what it checks.
       expect(a.$('[data-check-scope]')?.textContent).toBe('Checks the 2 selected bodies');
+      // One selected body: it against every other shown body, in the tool's words for one body.
+      act(() => a.services.selection.set((s) => ({ ...s, items: [{ kind: 'body', body: idOf(a, 'Block A') }] })));
+      expect(a.$('[data-check-scope]')?.textContent).toBe('Checks Block A against every other shown body (1)');
+      expect(await check(a, 'interference')).toBe('1 pair overlaps (Block A against 1 other body, 1 near enough to measure): Block A and Block B 4000 mm3');
     },
     MS,
   );
@@ -163,6 +172,11 @@ describe("INSPECT's Check: Interference, Loose parts, Rotation", () => {
       expect(a.$('[data-check-result="stack"] [data-check-text]')?.textContent).toBe('Nothing is loose: 1 part on 1 axis, each held both ways within 0.5 mm');
       expect(a.$$('[data-check-loose]')).toHaveLength(0);
       expect(a.$('[data-check-part="Wheel"]')?.textContent).toBe('Wheelon Shaft, play 0.2 mmShaft, 0 mmCollar, 0 mm');
+      expect(a.$$('[data-check-note]')).toHaveLength(0);
+      // Past the time limit before its one axis was cut to the end: the line says so, and what helps.
+      checkClock.limitMs = -1;
+      expect(await check(a, 'stack')).toBe('Stopped at the time limit after 0 of 1 axis: none checked to the end');
+      expect(a.$$('[data-check-note]').map((n) => n.textContent)).toEqual(['Stopped at the time limit: 0 of 1 axis checked. Check fewer bodies: only the axes near them are checked.']);
     },
     MS,
   );
@@ -192,6 +206,9 @@ describe("INSPECT's Check: Interference, Loose parts, Rotation", () => {
       const text = await check(a, 'sweep');
       expect(text).toMatch(/^Arm turned along Z through \(0, 0, 0\) hits Post at 24\.40\d+ deg \(\d+(\.\d+)? deg the other way\)$/);
       const hit = a.$('[data-check-hit="Post"]')!;
+      // Which way the first angle turns: counter-clockwise about the axis's direction.
+      expect(a.$('[data-check-hits] [data-check-ccw]')?.textContent).toBe('Counter-clockwise about +Z');
+      expect(a.$('[data-check-hits] [data-check-cw]')?.textContent).toBe('Clockwise');
       const want = (Math.atan2(8, 14) - Math.asin(1.5 / Math.hypot(14, 8))) * (180 / Math.PI);
       expect(Number(hit.getAttribute('data-check-first-deg'))).toBeCloseTo(want, 2);
       // Where they meet, and the kernel's word on it (the turned copy 1 degree past overlaps the post).

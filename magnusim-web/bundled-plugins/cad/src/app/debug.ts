@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
+import { checkClock } from '../features/assembly/check';
 import type { Appearance } from '../lib/bridge';
 import type { MarkPalette } from '../viewport/palette';
 import type { AppearanceControl } from './appearance';
@@ -34,6 +35,8 @@ export interface CadTestHandle {
   readonly assistant: AssistantTestHandle | null;
   /** The host's appearance in the Part (src/app/appearance.ts): set once the app has installed it. */
   appearance?: CadAppearanceHandle;
+  /** The assembly checks' time limit (ms; src/features/assembly/check.ts checkClock): an e2e sets it low to see a check stop. */
+  readonly assemblyCheck: { limitMs: number };
   /** A JSON-safe snapshot for Playwright's evaluate(). */
   snapshot(): {
     kernel: ReturnType<AppServices['kernel']['status']['get']>;
@@ -88,6 +91,7 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
     get assistant() {
       return assistantTestHandle(services);
     },
+    assemblyCheck: checkClock,
     keybinds: {
       model: keybindsFor(services),
       open: (id) => void openSetKeybind(services, id),
