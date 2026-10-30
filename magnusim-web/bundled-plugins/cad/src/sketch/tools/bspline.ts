@@ -140,9 +140,19 @@ export function domain(b: BSpline): [number, number] {
   return [b.knots[0], b.knots[b.knots.length - 1]];
 }
 
+/** Flat knots by the knot and multiplicity arrays they came from (made once: a long spline sampled at many points would remake them at each). */
+const flatMemo = new WeakMap<readonly number[], { mults: readonly number[]; U: number[] }>();
+function flatOf(b: Pick<BSpline, 'knots' | 'mults'>): number[] {
+  const m = flatMemo.get(b.knots);
+  if (m && m.mults === b.mults) return m.U;
+  const U = flatKnots(b);
+  flatMemo.set(b.knots, { mults: b.mults, U });
+  return U;
+}
+
 /** The point and derivatives (order 0..nd) at u. */
 export function derivs(b: BSpline, u: number, nd = 1): Vec2[] {
-  const U = flatKnots(b);
+  const U = flatOf(b);
   const n = b.poles.length - 1;
   const p = b.degree;
   const [u0, u1] = domain(b);
@@ -173,23 +183,122 @@ export function pointAtParam(b: BSpline, u: number): Vec2 {
 
 // ------------------------------------------------------------ building
 
-/** Solve A x = B (dense, partial pivoting); B has two columns (x, y). Throws when singular. */
-function solveDense(A: number[][], B: Vec2[]): Vec2[] {
-  const n = A.length;
-  const M = A.map((row, i) => [...row, B[i][0], B[i][1]]);
-  for (let c = 0; c < n; c++) {
+/** A row of the system: column j's coefficient (only the nonzero ones), and its right side (x, y). */
+interface SparseRow {
+  cells: Map<number, number>;
+  rhs: Vec2;
+}
+
+/**
+ * Solve the rows for n unknowns, every column but the last `border` ones in a band: a spline's
+ * rows touch p + 1 poles each, a closed spline's seam rows its first poles and its last ones. Each
+ * row keeps a window over the band columns and the border columns apart (dense, `border` long),
+ * so elimination with partial pivoting costs O(n p (p + border)), not the O(n^3) time and n^2
+ * memory of a dense solve; the border is a small dense solve at the end. Throws when singular.
+ */
+function solveBanded(rows: readonly SparseRow[], n: number, border: number): Vec2[] {
+  const nb = Math.max(0, n - border);
+  const nbd = n - nb;
+  interface W {
+    lo: number;
+    a: number[];
+    b: number[];
+    rhs: Vec2;
+  }
+  const work: W[] = rows.map((r) => {
+    const b = new Array(nbd).fill(0);
+    const band = [...r.cells.entries()].filter(([j]) => j < nb);
+    for (const [j, v] of r.cells) if (j >= nb) b[j - nb] += v;
+    if (!band.length) return { lo: Infinity, a: [], b, rhs: [r.rhs[0], r.rhs[1]] as Vec2 };
+    const lo = Math.min(...band.map(([j]) => j));
+    const a = new Array(Math.max(...band.map(([j]) => j)) - lo + 1).fill(0);
+    for (const [j, v] of band) a[j - lo] = v;
+    return { lo, a, b, rhs: [r.rhs[0], r.rhs[1]] as Vec2 };
+  });
+  work.sort((x, y) => x.lo - y.lo);
+  const at = (r: W, j: number) => (j >= r.lo && j < r.lo + r.a.length ? r.a[j - r.lo] : 0);
+  const singular = () => new Error('the spline points do not give a curve (two points in one place?)');
+  const pivots: W[] = [];
+  let head = 0;
+  for (let c = 0; c < nb; c++) {
+    let end = head;
+    let bi = -1;
+    let bv = 0;
+    for (; end < work.length && work[end].lo <= c; end++) {
+      const v = Math.abs(at(work[end], c));
+      if (v > bv) {
+        bv = v;
+        bi = end;
+      }
+    }
+    if (bi < 0 || !(bv >= 1e-14)) throw singular();
+    const piv = work[bi];
+    work[bi] = work[head];
+    work[head] = piv;
+    head++;
+    pivots.push(piv);
+    const hi = piv.lo + piv.a.length;
+    const pc = piv.a[c - piv.lo];
+    // Column c out of the rows left that reach it; then those rows start after it.
+    for (let k = head; k < end; k++) {
+      const r = work[k];
+      const v = at(r, c);
+      if (v) {
+        const f = v / pc;
+        while (r.lo + r.a.length < hi) r.a.push(0);
+        for (let j = c + 1; j < hi; j++) r.a[j - r.lo] -= f * piv.a[j - piv.lo];
+        for (let j = 0; j < nbd; j++) r.b[j] -= f * piv.b[j];
+        r.rhs = [r.rhs[0] - f * piv.rhs[0], r.rhs[1] - f * piv.rhs[1]];
+      }
+      r.a.splice(0, c + 1 - r.lo);
+      r.lo = r.a.length ? c + 1 : Infinity;
+    }
+    // Rows with nothing left in the band go to the end (the border's rows).
+    for (let k = end - 1; k >= head; k--) {
+      if (work[k].lo !== Infinity) continue;
+      const r = work.splice(k, 1)[0];
+      work.push(r);
+    }
+  }
+  // The border: what is left, a small dense solve (partial pivoting).
+  const tail = work.slice(head);
+  if (tail.length !== nbd) throw singular();
+  const M = tail.map((r) => [...r.b, r.rhs[0], r.rhs[1]]);
+  for (let c = 0; c < nbd; c++) {
     let piv = c;
-    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
-    if (Math.abs(M[piv][c]) < 1e-14) throw new Error('the spline points do not give a curve (two points in one place?)');
+    for (let r = c + 1; r < nbd; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+    if (!(Math.abs(M[piv][c]) >= 1e-14)) throw singular();
     [M[c], M[piv]] = [M[piv], M[c]];
-    for (let r = 0; r < n; r++) {
+    for (let r = 0; r < nbd; r++) {
       if (r === c) continue;
       const f = M[r][c] / M[c][c];
       if (!f) continue;
-      for (let k = c; k <= n + 1; k++) M[r][k] -= f * M[c][k];
+      for (let k = c; k <= nbd + 1; k++) M[r][k] -= f * M[c][k];
     }
   }
-  return M.map((row, i) => [row[n] / M[i][i], row[n + 1] / M[i][i]] as Vec2);
+  const x: Vec2[] = new Array(n);
+  for (let k = 0; k < nbd; k++) x[nb + k] = [M[k][nbd] / M[k][k], M[k][nbd + 1] / M[k][k]];
+  for (let c = nb - 1; c >= 0; c--) {
+    const r = pivots[c];
+    let sx = r.rhs[0];
+    let sy = r.rhs[1];
+    for (let j = c + 1; j < r.lo + r.a.length; j++) {
+      const a = r.a[j - r.lo];
+      if (a) {
+        sx -= a * x[j][0];
+        sy -= a * x[j][1];
+      }
+    }
+    for (let k = 0; k < nbd; k++) {
+      if (r.b[k]) {
+        sx -= r.b[k] * x[nb + k][0];
+        sy -= r.b[k] * x[nb + k][1];
+      }
+    }
+    const d = r.a[c - r.lo];
+    x[c] = [sx / d, sy / d];
+  }
+  return x;
 }
 
 /** One row of the interpolation system: sum_j coef_j P_j = rhs. */
@@ -207,18 +316,19 @@ function polesFor(U: readonly number[], p: number, rows: readonly Row[]): Vec2[]
   const nPoles = U.length - p - 1;
   if (rows.length !== nPoles) throw new Error('spline interpolation: rows and poles differ');
   const n = nPoles - 1;
-  const rowOf = (u: number, order: number, sign: number, into: number[]) => {
-    const span = findSpan(n, p, u, U);
-    const N = dersBasis(span, u, p, order, U);
-    for (let j = 0; j <= p; j++) into[span - p + j] += sign * N[order][j];
-  };
-  const A = rows.map((r) => {
-    const a = new Array(nPoles).fill(0);
-    rowOf(r.u, r.order, 1, a);
-    if (r.minus) rowOf(r.minus.u, r.minus.order, -1, a);
-    return a;
+  // Each row by its nonzero columns (a seam row of a closed spline reaches both ends: the last p + 1 are the border).
+  const sparse = rows.map((r): SparseRow => {
+    const cells = new Map<number, number>();
+    const add = (u: number, order: number, sign: number) => {
+      const span = findSpan(n, p, u, U);
+      const N = dersBasis(span, u, p, order, U);
+      for (let j = 0; j <= p; j++) if (N[order][j]) cells.set(span - p + j, (cells.get(span - p + j) ?? 0) + sign * N[order][j]);
+    };
+    add(r.u, r.order, 1);
+    if (r.minus) add(r.minus.u, r.minus.order, -1);
+    return { cells, rhs: r.rhs };
   });
-  return solveDense(A, rows.map((r) => r.rhs));
+  return solveBanded(sparse, nPoles, p + 1);
 }
 
 /** Chord-length parameters in [0, 1] for points (closed: the closing chord back to the first counts). */

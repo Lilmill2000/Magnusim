@@ -3,8 +3,9 @@
 //    geometry with its points and the relations and dimensions inside it (src/sketch/tools/clip.ts)
 //    in the page; it is kept in the plugin's prefs too (when small enough), so a sketch of another
 //    Part pastes it as well, and another open tab hears it. The panel's foot says what was copied.
-//    With no sketch geometry selected the key is the browser's (it copies selected text); in a text
-//    or number field it is the field's, never sketch mode's (the keyboard leaves fields alone).
+//    With no sketch geometry selected, or with text selected on the page (the panel's red reason,
+//    which stays selectable to copy into a report), the key is the browser's (it copies the text);
+//    in a text or number field it is the field's, never sketch mode's (the keyboard leaves fields alone).
 //  - Paste (Ctrl+V, or the sketch's right-click menu) takes up the paste tool: the copy follows the
 //    pointer, held by the middle of its box (snapping to the sketch's points and curves as the
 //    drawing tools do; Ctrl stops it), a click (or Enter) places it as one sketch undo step and
@@ -18,7 +19,7 @@ import type { Vec2 } from '../../types/doc';
 import { uiFor } from '../../ui/controller';
 import { infer } from '../inference';
 import { emptyPreview, type ApplyResult, type SketchMode, type SketchPreview, type SketchTool } from '../mode';
-import { clipOf, clipSegments, clipWords, leftOutWords, pasteClip, readClip, type SketchClip } from './clip';
+import { clipOf, clipSegments, clipWords, leftOutWords, pasteClip, readClip, valuedWords, type SketchClip } from './clip';
 import { placeKey } from './place-key';
 import type { ToolOption } from './options';
 
@@ -75,6 +76,12 @@ export async function heldClip(services: Pick<AppServices, 'bridge'>): Promise<S
 
 // ------------------------------------------------------------------ copy
 
+/** Whether the person has text selected on the page (a panel's reason drag-selected): Ctrl+C copies that, not the sketch. */
+export function pageTextSelected(doc: Document | null = typeof document === 'undefined' ? null : document): boolean {
+  const sel = doc?.getSelection?.() ?? null;
+  return !!sel && !sel.isCollapsed && sel.rangeCount > 0 && sel.toString().trim() !== '';
+}
+
 /** Why Copy has nothing to take now, or null. */
 export function copyRefusal(mode: Pick<SketchMode, 'active' | 'selected' | 'draft'>): string | null {
   if (!mode.active) return 'Edit a sketch first';
@@ -89,7 +96,11 @@ export function copyRefusal(mode: Pick<SketchMode, 'active' | 'selected' | 'draf
 export function copySelection(services: Pick<AppServices, 'bridge'>, mode: SketchMode): SketchClip | string {
   const d = mode.draft();
   if (!d) return 'Edit a sketch first';
-  const clip = clipOf(d, mode.selected().map((h) => h.id));
+  const clip = clipOf(
+    d,
+    mode.selected().map((h) => h.id),
+    mode.services.doc.units.units(),
+  );
   if (typeof clip === 'string') {
     mode.note(`Not copied: ${clip}`);
     return clip;
@@ -116,16 +127,24 @@ export function startPaste(mode: SketchMode, clip: SketchClip): boolean {
 }
 
 /** The paste as one sketch undo step, the copy's middle on `at`: what a click does. */
-export function applyPaste(mode: SketchMode, clip: SketchClip, at: Vec2): Promise<ApplyResult & { added?: string[] }> {
+export function applyPaste(mode: SketchMode, clip: SketchClip, at: Vec2): Promise<ApplyResult & { added?: string[]; valued?: string[] }> {
   let added: string[] = [];
+  let valued: string[] = [];
   const units = mode.services.doc.units;
   return mode
     .apply('Paste', (cur) => {
-      const r = pasteClip(cur, clip, at, { evaluate: (expr, q) => units.evaluate(expr, q).ok });
+      const r = pasteClip(cur, clip, at, { evaluate: (expr, q) => evaluatedIn(units, expr, q), units: units.units() });
       added = r.added;
+      valued = r.valued;
       return r.outcome;
     })
-    .then((r) => (r.ok ? { ...r, added } : r));
+    .then((r) => (r.ok ? { ...r, added, valued } : r));
+}
+
+/** What a Part reads an expression as (mm or deg), or null when it cannot. */
+export function evaluatedIn(units: AppServices['doc']['units'], expr: string, q: 'length' | 'angle'): number | null {
+  const r = units.evaluate(expr, q);
+  return r.ok ? r.value : null;
 }
 
 /** The paste tool: the copy follows the pointer; a click places it, Escape puts it down. */
@@ -161,8 +180,8 @@ export function pasteTool(mode: SketchMode): SketchTool {
       if (!r.ok || mode.tool !== tool) return;
       mode.setTool('select');
       mode.select((r.added ?? []).map((id) => ({ what: 'entity' as const, id })), false);
-      const left = leftOutWords(clip.outside);
-      mode.note(left ? `Pasted ${clipWords(clip)}: ${left}.` : null);
+      const said = [leftOutWords(clip.outside), valuedWords(r.valued ?? [])].filter(Boolean);
+      mode.note(said.length ? `Pasted ${clipWords(clip)}: ${said.join('; ')}.` : null);
     });
   };
 
@@ -229,8 +248,8 @@ export function registerClipboardCommands(services: AppServices, mode: SketchMod
     hint: 'Copy the selected sketch geometry, with the relations and dimensions between its pieces',
     explainRefusal: true,
     enabled: () => copyRefusal(mode) ?? true,
-    // Nothing of the sketch selected: the browser's own copy (selected text).
-    passKey: () => copyRefusal(mode) != null,
+    // Nothing of the sketch selected, or text selected on the page: the browser's own copy (the text).
+    passKey: () => copyRefusal(mode) != null || pageTextSelected(),
     run: () => {
       copySelection(services, mode);
     },

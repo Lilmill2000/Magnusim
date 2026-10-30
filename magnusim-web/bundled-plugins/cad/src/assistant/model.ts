@@ -10,7 +10,8 @@
 //          (sketch/regions.ts shortRegions; regions full: each of them, 60, with its place, depth,
 //          box and bounds), its open ends and dangling entities, by the sketch tool's names (r.top,
 //          l1.start), and its inputs in the sketch tool's form (sketch/describe.ts; null when it
-//          cannot be resent). Brief rows list a sketch's regions in short too.
+//          cannot be resent). Brief rows list a sketch's regions in short too. Each reply says
+//          what the person copied in a sketch (clipboard: the copy row's "from clipboard"), if anything.
 // The whole Part (brief or full) also lists `parts`: every body in one short row (name, volume, the
 // size and middle of its box, its colour when set, the feature that made it, hidden), never halved
 // with the budgets (up to PARTS_MAX, the app's cap on a list's items, within PARTS_BYTES), so every
@@ -27,6 +28,8 @@ import { userSelection } from '../lib/selection';
 import { describeFace, isCopyRole, splitMerged } from '../naming/names';
 import { statusOf } from '../sketch/dof';
 import { evaluateDimensions } from '../sketch/model';
+import { clipWords } from '../sketch/tools/clip';
+import { heldClip } from '../sketch/tools/paste';
 import type { AppServices } from '../types/app';
 import type { CallCtx, ReplyBudgets, ToolReply, TurnFacts } from '../types/assistant';
 import type { Feature, FeatureStatus, OriginRef, PlaneFrame, SketchFeature } from '../types/doc';
@@ -368,6 +371,9 @@ async function partFacts(ctx: CallCtx, s: DocState): Promise<Row> {
     ...(s.rebuild.bodies.length > BODIES_MAX ? { bodies_more: s.rebuild.bodies.length - BODIES_MAX } : {}),
     selection: sel.slice(0, SELECTION_MAX).map((i) => selectionWords(s, i, labels)),
   };
+  // What the person copied (Ctrl+C in a sketch of any Part): the sketch tool's copy row pastes it ("from clipboard").
+  const clip = await heldClip(services).catch(() => null);
+  if (clip) out.clipboard = `${clipWords(clip)}, copied from ${clip.from}`;
   if (s.rebuild.message) out.rebuild = s.rebuild.message;
   // The pointer to help guide, on the first get_model of each key (a conversation may have kept another workspace's notes).
   if (rt && !rt.guideNoted.has(ctx.key)) {

@@ -143,7 +143,7 @@ export const squareDxf = (gap: number) =>
     0, 'ENDSEC', 0, 'EOF',
   ]);
 
-/** `n` separate short lines (a drawing over the import cap when n > 20,000). */
+/** `n` separate short lines (2n points: a drawing over the import's load cap when n > 5,000). */
 export const manyLinesDxf = (n: number) =>
   dxf([0, 'SECTION', 2, 'ENTITIES', ...Array.from({ length: n }, (_, i) => line('0', [i, 0], [i, 1])).flat(), 0, 'ENDSEC', 0, 'EOF']);
 

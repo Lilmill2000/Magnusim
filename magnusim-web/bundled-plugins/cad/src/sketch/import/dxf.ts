@@ -13,7 +13,7 @@
 // ones the file has off or frozen start left out.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Vec2 } from '../../types/doc';
-import { bsplineCurves, conicPiece, deBoor, deBoorRational, DrawingRefused, READ_MAX_CURVES, skip, type Drawing, type DrawingCurve } from './common';
+import { bsplineCurves, conicPiece, deBoor, DrawingRefused, finiteCurve, knotsFit, rationalAt, READ_MAX_CURVES, READ_MAX_DEGREE, READ_MAX_SPLINE_POINTS, skip, type Drawing, type DrawingCurve } from './common';
 
 type V2 = Vec2;
 type V3 = [number, number, number];
@@ -21,6 +21,17 @@ type V3 = [number, number, number];
 type M3 = number[];
 
 const I3: M3 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+const TAU = 2 * Math.PI;
+/** Entities visited through INSERTs (each cell of an array counts): past this the blocks expand too far. */
+const READ_MAX_VISITS = 1_000_000;
+/** An angle past this (degrees or radians) is not one: the file's numbers are wrong. */
+const MAX_ANGLE = 1e6;
+
+/** A counter-clockwise sweep from the start angle by `raw` radians, in (0, 2 pi], in one step whatever its size; one within `slack` past a whole turn is the whole turn. */
+function turnOf(raw: number, slack = 0): number {
+  const sw = ((raw % TAU) + TAU) % TAU;
+  return sw === 0 || (raw > 0 && sw <= slack) ? sw + TAU : sw;
+}
 const mulM = (a: M3, b: M3): M3 => {
   const o: number[] = [];
   for (let r = 0; r < 3; r++) {
@@ -129,14 +140,30 @@ function grouped(recs: readonly Rec[], skipped: Record<string, number>): Rec[] {
 
 /** Read a DXF file's text. */
 export function readDxf(name: string, text: string): Drawing {
-  const lines = text.split(/\r\n|\r|\n/);
+  // Its pairs, line by line from the text (no array of every line beside them).
   const P: [number, string][] = [];
-  for (let i = 0; i + 1 < lines.length; i += 2) {
-    const s = lines[i].trim();
-    if (s === '' && i >= lines.length - 2) break;
+  const n = text.length;
+  let pos = 0;
+  let nl = -2;
+  let cr = -2;
+  const nextLine = (): string | null => {
+    if (pos > n) return null;
+    if (nl !== -1 && nl < pos) nl = text.indexOf('\n', pos);
+    if (cr !== -1 && cr < pos) cr = text.indexOf('\r', pos);
+    const e = Math.min(nl < 0 ? n : nl, cr < 0 ? n : cr);
+    const line = text.slice(pos, e);
+    pos = e < n && text[e] === '\r' && text[e + 1] === '\n' ? e + 2 : e + 1;
+    return line;
+  };
+  for (let line = 1; ; line += 2) {
+    const c = nextLine();
+    const v = c === null ? null : nextLine();
+    if (c === null || v === null) break;
+    const s = c.trim();
+    if (s === '' && !text.slice(pos).trim()) break;
     const code = Number(s);
-    if (!/^-?\d+$/.test(s) || !Number.isInteger(code)) throw new DrawingRefused(`${name} is not an ASCII DXF drawing (line ${i + 1} is "${s.slice(0, 20)}", not a group code)`);
-    P.push([code, lines[i + 1].trim()]);
+    if (!/^-?\d+$/.test(s) || !Number.isInteger(code)) throw new DrawingRefused(`${name} is not an ASCII DXF drawing (line ${line} is "${s.slice(0, 20)}", not a group code)`);
+    P.push([code, v.trim()]);
   }
   const skipped: Record<string, number> = {};
   const notes: string[] = [];
@@ -196,6 +223,11 @@ export function readDxf(name: string, text: string): Drawing {
   let fitOnly = 0;
   let span = 1;
   const emit = (c: DrawingCurve, layer: string) => {
+    // Numbers that overflow (a block scaled 1e200 in one scaled 1e200) draw nothing readable.
+    if (!finiteCurve(c)) {
+      skip(skipped, 'unreadable');
+      return;
+    }
     curves.push({ ...c, layer });
     counts.set(layer, (counts.get(layer) ?? 0) + 1);
     if (curves.length > READ_MAX_CURVES) throw new DrawingRefused(`${name} has more than ${READ_MAX_CURVES.toLocaleString('en-US')} curves: too many to import`);
@@ -246,8 +278,14 @@ export function readDxf(name: string, text: string): Drawing {
     }
   };
 
-  const draw = (recs: readonly Rec[], M: M3, depth: number, insertLayer: string | null) => {
+  let visits = 0;
+  const visit = () => {
+    if (++visits > READ_MAX_VISITS) throw new DrawingRefused(`${name}'s blocks expand too far: its INSERTs place more than ${READ_MAX_VISITS.toLocaleString('en-US')} entities (blocks in blocks, or arrays of many rows and columns)`);
+  };
+  /** The entities under M; `within`: the blocks being drawn now (one that inserts itself is left out, counted once each time). */
+  const draw = (recs: readonly Rec[], M: M3, depth: number, insertLayer: string | null, within: ReadonlySet<string> = new Set()) => {
     for (const r of recs) {
+      visit();
       if (num(r, 67, 0) === 1) {
         skip(skipped, 'paper');
         continue;
@@ -280,11 +318,14 @@ export function readDxf(name: string, text: string): Drawing {
             conic(M, c, U, V, 0, 2 * Math.PI, null, layer);
             break;
           }
-          const a0 = (num(r, 50, 0) * Math.PI) / 180;
-          const a1 = (num(r, 51, 360) * Math.PI) / 180;
-          let sw = a1 - a0;
-          while (sw <= 0) sw += 2 * Math.PI;
-          while (sw > 2 * Math.PI) sw -= 2 * Math.PI;
+          const d0 = num(r, 50, 0);
+          const d1 = num(r, 51, 360);
+          if (Math.abs(d0) > MAX_ANGLE || Math.abs(d1) > MAX_ANGLE) {
+            skip(skipped, 'unreadable');
+            break;
+          }
+          const a0 = (d0 * Math.PI) / 180;
+          const sw = turnOf(((d1 - d0) * Math.PI) / 180);
           const at = (t: number): V3 => [c[0] + U[0] * Math.cos(t) + V[0] * Math.sin(t), c[1] + U[1] * Math.cos(t) + V[1] * Math.sin(t), c[2] + U[2] * Math.cos(t) + V[2] * Math.sin(t)];
           conic(M, c, U, V, a0, sw, sw >= 2 * Math.PI - 1e-12 ? null : [at(a0), at(a0 + sw)], layer);
           break;
@@ -300,9 +341,11 @@ export function readDxf(name: string, text: string): Drawing {
           const V = scale3(cross3(norm3(extrusion(r)), U), ratio);
           const p0 = num(r, 41, 0);
           const p1 = num(r, 42, 2 * Math.PI);
-          let sw = p1 - p0;
-          while (sw <= 0) sw += 2 * Math.PI;
-          while (sw > 2 * Math.PI + 1e-12) sw -= 2 * Math.PI;
+          if (Math.abs(p0) > MAX_ANGLE || Math.abs(p1) > MAX_ANGLE) {
+            skip(skipped, 'unreadable');
+            break;
+          }
+          const sw = turnOf(p1 - p0, 1e-12);
           const whole = Math.abs(sw - 2 * Math.PI) < 1e-9;
           conic(M, c, U, V, p0, whole ? 2 * Math.PI : sw, null, layer);
           break;
@@ -341,9 +384,14 @@ export function readDxf(name: string, text: string): Drawing {
           spline(r, M, layer);
           break;
         case 'INSERT': {
-          const b = blocks.get(get(r, 2) ?? '');
+          const bn = get(r, 2) ?? '';
+          const b = blocks.get(bn);
           if (!b) {
             skip(skipped, 'missingBlock');
+            break;
+          }
+          if (within.has(bn)) {
+            skip(skipped, 'selfInsert');
             break;
           }
           if (depth >= 16) {
@@ -359,10 +407,14 @@ export function readDxf(name: string, text: string): Drawing {
           const S: M3 = [num(r, 41, 1), 0, 0, 0, 0, num(r, 42, 1), 0, 0, 0, 0, num(r, 43, 1), 0];
           const cols = Math.max(1, Math.floor(num(r, 70, 1)));
           const rows = Math.max(1, Math.floor(num(r, 71, 1)));
+          const head = mulM(M, mulM(O, mulM(T(...ins), R)));
+          const tail = mulM(S, T(-b.base[0], -b.base[1], -b.base[2]));
+          const inner = new Set(within).add(bn);
           for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
-              const X = mulM(O, mulM(T(...ins), mulM(R, mulM(T(col * num(r, 44, 0), row * num(r, 45, 0), 0), mulM(S, T(-b.base[0], -b.base[1], -b.base[2]))))));
-              draw(b.recs, mulM(M, X), depth + 1, layer);
+              // Each cell counts (an array of an empty block is work too).
+              visit();
+              draw(b.recs, mulM(head, mulM(T(col * num(r, 44, 0), row * num(r, 45, 0), 0), tail)), depth + 1, layer, inner);
             }
           }
           break;
@@ -376,6 +428,7 @@ export function readDxf(name: string, text: string): Drawing {
   const spline = (r: Rec, M: M3, layer: string) => {
     const flags = num(r, 70, 0);
     const p = Math.floor(num(r, 71, 3));
+    if (p > READ_MAX_DEGREE) return skip(skipped, 'highDegree');
     const knots: number[] = [];
     const weights: number[] = [];
     const ctrl: V3[] = [];
@@ -401,9 +454,10 @@ export function readDxf(name: string, text: string): Drawing {
       const closed = pts.length > 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) <= 1e-9 * Math.max(1, span);
       emit({ kind: 'fit', pts: closed ? pts.slice(0, -1) : pts, closed: closed || ((flags & 1) !== 0 && pts.length > 2) }, layer);
     };
+    if (ctrl.length > READ_MAX_SPLINE_POINTS || fit.length > READ_MAX_SPLINE_POINTS) return skip(skipped, 'longSpline');
     if (ctrl.length >= 2 && knots.length === ctrl.length + p + 1 && knots.every(Number.isFinite)) {
       const P2 = flat(ctrl);
-      if (!P2) return skip(skipped, 'badSpline');
+      if (!P2 || !knotsFit(p, ctrl.length, knots)) return skip(skipped, 'badSpline');
       const rational = weights.length === ctrl.length && weights.some((w) => Math.abs(w - weights[0]) > 1e-12 * Math.abs(weights[0]));
       const exact = rational ? 'approx' : bsplineCurves(p, P2, knots);
       if (exact === null) return skip(skipped, 'badSpline');
@@ -417,7 +471,8 @@ export function readDxf(name: string, text: string): Drawing {
       const z = knots[ctrl.length];
       if (!(z > a)) return skip(skipped, 'badSpline');
       const n = Math.min(400, Math.max(16, 8 * (ctrl.length - p + 1)));
-      const pts = Array.from({ length: n + 1 }, (_, k) => (rational ? deBoorRational(p, P2, weights, knots, a + ((z - a) * k) / n) : deBoor(p, P2, knots, a + ((z - a) * k) / n)));
+      const at = rational ? rationalAt(p, P2, weights, knots) : (u: number) => deBoor(p, P2, knots, u);
+      const pts = Array.from({ length: n + 1 }, (_, k) => at(a + ((z - a) * k) / n));
       approximated++;
       asFit(pts);
       return;

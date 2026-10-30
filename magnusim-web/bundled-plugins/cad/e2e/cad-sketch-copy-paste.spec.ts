@@ -7,10 +7,15 @@
 // same 2D shape with its dimension and the original's DOF, as one undo step. From the right-click menu (Copy on the
 // selection, Paste anywhere in the sketch): a rectangle from the origin is pasted, and the foot says
 // its tie to the origin was left out. Settings > Keybinds lists Copy and Paste under Sketch with
-// Ctrl+C and Ctrl+V (the commands file the app's Settings reads).
+// Ctrl+C and Ctrl+V (the commands file the app's Settings reads). With the lines selected and the
+// panel's red reason drag-selected, Ctrl+C copies that text (the browser's copy), and the reason
+// stays; the text let go (a click on the panel's hint), Ctrl+C copies the lines, still selected. A bottom dimensioned "2*15" in a mm Part,
+// pasted into a Part of an Imperial project, keeps 30 mm (as "30 mm"; "2*15" would be 762 mm in
+// inches) and the foot says so.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { baseUrl, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
+import { bytesOf, DXF_BINARY } from '../tests/sketch/import/fixtures';
+import { baseUrl, ensureCadOn, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 type V2 = [number, number];
 type V3 = [number, number, number];
@@ -242,5 +247,72 @@ test("cad:sketch-copy-paste-menu Copy and Paste from the right-click menu: a rec
     ['Copy', 'sketch', ['Ctrl+KeyC']],
     ['Paste', 'sketch', ['Ctrl+KeyV']],
   ]);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:sketch-copy-paste-text-units Ctrl+C with the red reason selected copies that text, not the lines; a "2*15" dimension pasted into an inch Part keeps 30 mm, and the foot says so', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(page, frame);
+  await rectangle(page, frame, [10, 10, 0], [40, 30, 0]);
+  // Its bottom dimensioned with a unitless expression: 30 in this mm Part.
+  await page.keyboard.press('d');
+  await clickAt(page, [25, 10, 0]);
+  await clickAt(page, [25, 3, 0]);
+  const edit = frame.locator('[data-sketch-dim-edit]');
+  await expect(edit).toBeFocused();
+  await edit.fill('2*15');
+  await edit.press('Enter');
+  await sketchIdle(page);
+  await page.keyboard.press('d');
+  await expect(frame.locator('[data-cad-toolbar] [data-command="sketch.dimension"]')).not.toHaveClass(/is-active/);
+  expect((await drawn(page)).dims).toEqual(['2*15']);
+  const selectLines = async () => {
+    await clickAt(page, [25, 10, 0]);
+    for (const p of [[40, 20, 0], [25, 30, 0], [10, 20, 0]] as V3[]) await clickAt(page, p, { shift: true });
+  };
+  await selectLines();
+  await page.keyboard.press('Control+c');
+  await expect(foot(frame)).toHaveText('Copied 4 lines, 4 relations and 1 dimension.');
+
+  // A red reason in the foot (a binary DXF refused), the lines still selected; the person selects the reason's text and presses Ctrl+C.
+  const chooser = page.waitForEvent('filechooser');
+  await runCommand(frame, 'sketch.import');
+  await (await chooser).setFiles({ name: 'b.dxf', mimeType: 'application/octet-stream', buffer: Buffer.from(DXF_BINARY) });
+  const said = 'Not imported: b.dxf is a binary DXF: save it as an ASCII DXF (R12 or later) and import that';
+  await expect(foot(frame)).toHaveText(said);
+  await workspaceFrame(page).evaluate(() => {
+    const w = window as unknown as { __copiedText?: string[] };
+    w.__copiedText = [];
+    document.addEventListener('copy', () => w.__copiedText!.push(document.getSelection()?.toString().trim() ?? ''), true);
+  });
+  await foot(frame).click({ clickCount: 3 });
+  await page.keyboard.press('Control+c');
+  // The browser copied the text; the foot still says the reason (Copy did not take the key).
+  await expect.poll(() => workspaceFrame(page).evaluate(() => (window as unknown as { __copiedText?: string[] }).__copiedText)).toEqual([said]);
+  await expect(foot(frame)).toHaveText(said);
+  // The lines clicked again in the view: the text is let go, and Ctrl+C copies them.
+  await selectLines();
+  expect(await workspaceFrame(page).evaluate(() => document.getSelection()?.toString() ?? '')).toBe('');
+  await page.keyboard.press('Control+c');
+  await expect(foot(frame)).toHaveText('Copied 4 lines, 4 relations and 1 dimension.');
+  expect(await workspaceFrame(page).evaluate(() => (window as unknown as { __copiedText?: string[] }).__copiedText)).toEqual([said]);
+
+  // A Part of an Imperial project (inches): Ctrl+V, a click places it; the dimension keeps 30 mm, said in the foot.
+  await ensureCadOn(request);
+  const r = await request.post(`${baseUrl()}/api/project`, { data: { title: `CAD e2e inches ${Date.now()}`, category: 'Other', units: 'Imperial' } });
+  expect(r.ok(), await r.text()).toBe(true);
+  await openProject(page, String((await r.json()).id));
+  await newPartFromTree(page, 'Part 1');
+  const inch = await partOpened(page);
+  await expect(inch.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+  await enterSketchOnTop(page, inch);
+  await page.keyboard.press('Control+v');
+  await expect.poll(() => toolNow(page)).toBe('paste');
+  await moveTo(page, [20, 10, 0]);
+  await expect.poll(() => previewMiddle(page)).toEqual([20, 10]);
+  await clickAt(page, [20, 10, 0]);
+  await sketchIdle(page);
+  expect(await drawn(page)).toEqual({ lines: 4, dims: ['30 mm'] });
+  await expect(foot(inch)).toHaveText('Pasted 4 lines, 4 relations and 1 dimension: 1 dimension took the value it had (its expression "2*15" reads otherwise here).');
   expect(seen.errors).toEqual([]);
 });

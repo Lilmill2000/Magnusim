@@ -1,12 +1,12 @@
 // Import SVG/DXF, the import itself (src/sketch/import/common.ts planImport, importIntoDraft):
 // ends within the tolerance share one sketch point (a closed outline has no open end), ends
 // farther apart stay open and are counted, duplicates and pieces too small to draw are left out
-// and counted, the scale and the place (origin or centre), the 20,000-curve cap, and the sketch
-// entities made (no relation added; a curve whose ends meet keeps two points).
+// and counted, the scale and the place (origin or centre), the cap on what it weighs for the sketch
+// solver, and the sketch entities made (no relation added; a curve whose ends meet keeps two points).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { entityPoints } from '../../../src/sketch/model';
-import { IMPORT_MAX_CURVES, importIntoDraft, planImport, readDrawing, summaryWords } from '../../../src/sketch/import';
+import { IMPORT_MAX_LOAD, importIntoDraft, planImport, readDrawing, summaryWords } from '../../../src/sketch/import';
 import type { SketchEntity } from '../../../src/types/doc';
 import { bytesOf, DXF_PART, dxf, manyLinesDxf, squareDxf, SVG_MM } from './fixtures';
 
@@ -76,10 +76,12 @@ describe('joining and the import', () => {
     expect([at(el.c), at(el.major), at(el.minor)]).toEqual([[16 * 25.4, 25.4], [18 * 25.4, 25.4], [16 * 25.4, 2 * 25.4]]);
   });
 
-  it(`more than ${IMPORT_MAX_CURVES.toLocaleString('en-US')} curves are refused with their count; that many go in`, () => {
-    const over = planImport(readDrawing('many.dxf', bytesOf(manyLinesDxf(IMPORT_MAX_CURVES + 1))));
-    expect(over.summary.refused).toBe('many.dxf has 20,001 curves to import: at most 20,000 go into one sketch');
+  it(`a drawing that weighs more than ${IMPORT_MAX_LOAD.toLocaleString('en-US')} for the sketch solver is refused with its weight and why; one at the cap goes in`, () => {
+    // 5,001 separate lines: 10,002 points.
+    const over = planImport(readDrawing('many.dxf', bytesOf(manyLinesDxf(5_001))));
+    expect(over.summary.refused).toBe('many.dxf is too large for one sketch: its 10,002 points weigh 10,002 for the sketch solver (each point 1), at most 10,000');
     expect(importIntoDraft(EMPTY, over).outcome).toEqual({ ok: false, reason: over.summary.refused });
-    expect(planImport(readDrawing('many.dxf', bytesOf(manyLinesDxf(IMPORT_MAX_CURVES)))).summary.refused).toBeNull();
+    const at = planImport(readDrawing('many.dxf', bytesOf(manyLinesDxf(5_000))));
+    expect(at.summary).toMatchObject({ refused: null, load: 10_000 });
   });
 });

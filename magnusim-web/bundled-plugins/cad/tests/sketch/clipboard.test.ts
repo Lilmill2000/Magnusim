@@ -14,8 +14,11 @@
 //     has none.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createUnitsService } from '../../src/doc/units';
 import { isDimension } from '../../src/sketch/model';
-import { clipOf, clipWords, leftOutWords, pasteClip, readClip, type SketchClip } from '../../src/sketch/tools/clip';
+import { clipOf, clipWords, leftOutWords, pasteClip, readClip, valuedWords, type SketchClip } from '../../src/sketch/tools/clip';
+import { evaluatedIn } from '../../src/sketch/tools/paste';
+import type { DocUnits } from '../../src/types/units';
 import { CLIP_PREF, CLIP_PREF_MAX, forgetClip, heldClip, holdClip, peekClip } from '../../src/sketch/tools/paste';
 import type { SketchDimension, SketchEntity, Vec2 } from '../../src/types/doc';
 import { sketchHarness, type Harness } from './harness';
@@ -109,14 +112,44 @@ describe('paste', () => {
     const clip = clipOf(d, ['e1', 'e2', 'e3', 'e4']) as SketchClip;
     expect(clip.values).toEqual({ w: 40, h: 20 });
     const empty = sketchOf({}, { name: 'B' });
-    const out = (pasteClip(empty, clip, [0, 0], { evaluate: (expr) => expr !== 'width' }).outcome as unknown as { draft: typeof d }).draft;
+    const r = pasteClip(empty, clip, [0, 0], { evaluate: (expr) => (expr === 'width' ? null : 20) });
+    const out = (r.outcome as unknown as { draft: typeof d }).draft;
     expect(out.constraints.filter(isDimension).map((c) => [c.expr, c.driving])).toEqual([
       ['40 mm', true],
       ['20 mm', false],
     ]);
-    // Read by the target: kept as it is.
-    const kept = (pasteClip(empty, clip, [0, 0], { evaluate: () => true }).outcome as unknown as { draft: typeof d }).draft;
-    expect(kept.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['width', '20 mm']);
+    expect(r.valued).toEqual(['width']);
+    // Read by the target as the value it had: kept as it is.
+    const same = pasteClip(empty, clip, [0, 0], { evaluate: (expr) => (expr === 'width' ? 40 : 20) });
+    expect((same.outcome as unknown as { draft: typeof d }).draft.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['width', '20 mm']);
+    expect(same.valued).toEqual([]);
+    // Read, but as another value (the target's own "width" is 55), with no units to go by: the value it had.
+    const other = pasteClip(empty, clip, [0, 0], { evaluate: (expr) => (expr === 'width' ? 55 : 20) });
+    expect((other.outcome as unknown as { draft: typeof d }).draft.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['40 mm', '20 mm']);
+    // The copy says its Part's units and the target's are the same: the parameter keeps its link.
+    const mm = { length: 'mm', angle: 'deg' } as DocUnits;
+    const linked = pasteClip(empty, clipOf(d, ['e1', 'e2', 'e3', 'e4'], mm) as SketchClip, [0, 0], { evaluate: (expr) => (expr === 'width' ? 55 : 20), units: mm });
+    expect((linked.outcome as unknown as { draft: typeof d }).draft.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['width', '20 mm']);
+  });
+
+  it('a unitless expression ("2*15") copied in a mm Part and pasted into an inch Part takes the value it had (30 mm), not 762 mm; the words say so; a mm one ("30 mm") keeps its text', () => {
+    const mm = createUnitsService(() => ({ length: 'mm', angle: 'deg' }) as DocUnits);
+    const inch = createUnitsService(() => ({ length: 'in', angle: 'deg' }) as DocUnits);
+    const d = sketchOf(rectangle(0, 0, 30, 20, { hv: false }), { name: 'A' });
+    d.constraints.push({ id: 'w', kind: 'distance', refs: ['e1'], expr: '2*15', driving: true } as SketchDimension);
+    d.constraints.push({ id: 'h', kind: 'distance', refs: ['e2'], expr: '20 mm', driving: true } as SketchDimension);
+    d.solved = { values: { w: evaluatedIn(mm, '2*15', 'length')!, h: 20 }, dof: 0, state: 'under' } as typeof d.solved;
+    const clip = clipOf(d, ['e1', 'e2', 'e3', 'e4'], mm.units()) as SketchClip;
+    expect(clip).toMatchObject({ values: { w: 30, h: 20 }, units: { length: 'mm', angle: 'deg' } });
+    expect(readClip(JSON.parse(JSON.stringify(clip)))).toEqual(clip);
+    expect(evaluatedIn(inch, '2*15', 'length')).toBeCloseTo(762, 9);
+    const r = pasteClip(sketchOf({}, { name: 'B' }), clip, [0, 0], { evaluate: (expr, q) => evaluatedIn(inch, expr, q), units: inch.units() });
+    expect((r.outcome as unknown as { draft: typeof d }).draft.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['30 mm', '20 mm']);
+    expect(valuedWords(r.valued)).toBe('1 dimension took the value it had (its expression "2*15" reads otherwise here)');
+    // In a mm Part both read as they did: both kept.
+    const same = pasteClip(sketchOf({}, { name: 'C' }), clip, [0, 0], { evaluate: (expr, q) => evaluatedIn(mm, expr, q), units: mm.units() });
+    expect((same.outcome as unknown as { draft: typeof d }).draft.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['2*15', '20 mm']);
+    expect(valuedWords(same.valued)).toBeNull();
   });
 
   it('a clip read back from the prefs is checked: anything that is not a whole copy is none', () => {

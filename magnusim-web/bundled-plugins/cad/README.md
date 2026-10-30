@@ -189,8 +189,10 @@ snapping.
   $INSUNITS, or mm when it has none). **Place**: the drawing's own origin on the
   sketch origin, or centred there. A DXF's **layers** can be ticked off (one the
   file has off starts unticked). **OK** adds the curves as one undo step. Ends
-  that meet share one point, so closed outlines are profiles; no relations are
-  added (fix or dimension what must hold). An SVG's curves are exact: cubic
+  that meet share one point (the panel says within what distance), so closed
+  outlines are profiles; no relations are added (fix or dimension what must
+  hold). A drawing too heavy for the sketch solver (about 10,000 points, or 400
+  arcs: every later change solves all of it) is refused with what it weighs. An SVG's curves are exact: cubic
   Beziers are splines, arcs are arcs, transforms are applied; a DXF's splines
   are exact too, except rational ones (made as fit splines through points of
   them; the panel says so). A drawing is read as data only: nothing in it runs
@@ -201,9 +203,12 @@ snapping.
   Enter) to place it, one undo step, Esc to put it down. Construction stays
   construction; the relations and dimensions between the copied pieces come
   with it, so the copy is as defined as the original; those that also tie
-  geometry you did not copy are left out, and the panel says how many. It
-  pastes into any sketch, on any plane (the same 2D shape), also in another
-  Part. In a text or number field the keys copy and paste text.
+  geometry you did not copy are left out, and the panel says how many. A
+  dimension keeps its expression where it gives the same value there, else the
+  value it had (the panel says which). It pastes into any sketch, on any plane
+  (the same 2D shape), also in another Part. In a text or number field the keys
+  copy and paste text; with text selected (the panel's red note) Ctrl+C copies
+  that text.
 
 Projected and intersected curves are **linked**: drawn purple, fixed in place,
 and recomputed whenever the model rebuilds, so a sketch built on them follows

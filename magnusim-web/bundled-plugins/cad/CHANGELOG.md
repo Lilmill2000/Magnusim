@@ -12,18 +12,23 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   that). A click (or Enter) places it as one undo step, and the copy is
   selected; Esc puts it down with nothing added.
 - The copy is new geometry: construction stays construction, and the relations
-  and dimensions between the copied pieces are made again on the copy (a
-  dimension keeps its value or expression, so the copy is as defined as the
-  original). Relations and dimensions that also tie geometry you did not copy
-  (to the origin, say) are left out, and the panel says how many.
+  and dimensions between the copied pieces are made again on the copy, so the
+  copy is as defined as the original. A dimension keeps its expression where it
+  gives the same value in the sketch it is pasted into; where it would not (a
+  parameter of another Part, or "2*15" pasted into a Part in inches, where it
+  would mean 762 mm) it takes the value it had, and the panel says which.
+  Relations and dimensions that also tie geometry you did not copy (to the
+  origin, say) are left out, and the panel says how many.
 - Paste works in any sketch: another sketch of the Part, on another plane (the
   same 2D shape in that sketch's own directions), or a sketch of another Part.
 - In a text or number field (a dimension's value, say) Ctrl+C and Ctrl+V copy
-  and paste the text, as always; with no sketch geometry selected, Ctrl+C copies
-  the selected text. Settings > Keybinds lists Copy and Paste under Sketch.
+  and paste the text, as always; with no sketch geometry selected, or with text
+  selected (the panel's red note, to put in a report), Ctrl+C copies the text.
+  Settings > Keybinds lists Copy and Paste under Sketch.
 - The Assistant does the same with the sketch tool's copy row: from this sketch
-  or another, placed at a point or moved by an offset, and its answer says what
-  was copied and what was left out.
+  or another sketch of the Part, or what you copied (in any Part: it reads what
+  is held, and pastes all of it), placed at a point or moved by an offset, and
+  its answer says what was copied and what was left out.
 
 **Import SVG/DXF into a sketch.**
 - In a sketch, MODIFY > Import SVG/DXF picks an SVG or a DXF file (at most 20 MB).
@@ -37,11 +42,16 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   puts the drawing's own origin on the sketch's, or centres it there. A DXF's
   layers can be left out (one the file has off starts left out).
 - Curves whose ends meet share one point, so a closed outline is a profile that
-  Extrude takes. No relation is added: the sketch is under-defined, as imported
-  geometry is.
+  Extrude takes (the panel says how close ends must be to meet; a stray curve
+  far off does not change that). No relation is added: the sketch is
+  under-defined, as imported geometry is.
 - A drawing is only read, never shown as a page: nothing in it runs or loads
-  anything. A binary DXF is refused (save it as ASCII DXF); more than 20,000
-  curves is refused with the count.
+  anything. A binary DXF is refused (save it as ASCII DXF). A drawing too heavy
+  for the sketch solver is refused, with what it weighs: every later change of
+  the sketch solves all of it, so at most about 10,000 points, or 400 arcs, go
+  into one sketch (leave layers out). A file made to stall the reading (deep
+  nesting, numbers past any size, blocks that insert themselves, huge arrays,
+  splines of thousands of points) is read or refused at once.
 - The Assistant does the same with a drawing you attach in its panel: the sketch
   tool's import row, with the same summary you see. The app's Assistant panel
   now takes SVG and DXF files.

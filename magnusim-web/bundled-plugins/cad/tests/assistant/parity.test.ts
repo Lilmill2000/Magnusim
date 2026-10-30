@@ -18,7 +18,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CAD_TOOLS, SKETCH_ENTITY_KINDS } from '../../src/assistant/schemas';
 import { keybindsFor } from '../../src/app/keybinds';
-import { AI_TOOLS, CHECK, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
+import { AI_TOOLS, CHECK, command, COMMANDS, DOC, FEATURE_FIELDS, KEYBINDS, LINK, PARITY_TABLES, PERSON_SKETCH_KINDS, RAILS, SKETCH_CONSTRAINTS, SKETCH_TOOLS, sketchKindsWithoutPersonTool, TOOLBAR, UI, VIEWPORT, type PersonPath, type Reach } from '../../src/assistant/parity';
 import { CHECK_CONTROLS } from '../../src/features/check/controls';
 import { hasPanel } from '../../src/ui/controller';
 import { DIMENSION_KINDS, RELATION_KINDS } from '../../src/sketch/model';
@@ -149,6 +149,11 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(COMMANDS['solid.hole']).toMatchObject({ tool: 'hole' });
     expect(UI.moveFeature).toMatchObject({ tool: 'edit_feature', field: 'move' });
     expect(DOC.joinSteps).toMatchObject({ tool: 'delete' });
+  });
+
+  it('Paste (Ctrl+V, from this Part or another) reaches the copy row with "from clipboard": the Assistant pastes and reads (get_model clipboard) what the person copied', () => {
+    for (const r of [COMMANDS['sketch.paste'], SKETCH_TOOLS.paste]) expect(r).toEqual({ kind: 'reach', tool: 'sketch', field: 'constraints[].kind', value: 'copy', note: expect.stringMatching(/^value "from clipboard" pastes what the person copied \(Ctrl\+C in a sketch of any Part\); get_model's clipboard says what is held$/) });
+    expect(AI_TOOLS.sketch['constraints[].kind=copy']).toEqual(command('sketch.paste'));
   });
 
   it("Move/copy body's drag handle is the person's other way to the same fields: its arrows set move, its rings turn's angle and axis; its preview reaches move", () => {

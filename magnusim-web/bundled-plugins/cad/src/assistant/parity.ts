@@ -75,6 +75,8 @@ const CONSTRUCT = (field: string, value?: string) => reach('construct', field, v
 const DIRECT = (kind: string) => reach('direct', 'kind', kind);
 const DIRECT_FIELD = (field: string) => reach('direct', field);
 const SKETCH_OP = (kind: string) => TIE(kind);
+/** Paste (Ctrl+V) brings in what the person copied, from this Part or another: the copy row's "from clipboard" does, and get_model says what is held. */
+const PASTE = reach('sketch', 'constraints[].kind', 'copy', 'value "from clipboard" pastes what the person copied (Ctrl+C in a sketch of any Part); get_model\'s clipboard says what is held');
 const REPAIR = DIRECT('repair');
 
 // ------------------------------------------------------------------ commands, by id
@@ -156,9 +158,10 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'sketch.project': SKETCH_OP('project'),
   'sketch.intersect': SKETCH_OP('intersect'),
   'sketch.import': SKETCH_OP('import'),
-  // Copy and Paste: the sketch tool's copy row (this sketch's items, or another's with "from").
+  // Copy and Paste: the sketch tool's copy row (this sketch's items, another sketch's of this Part
+  // with "from <sketch>", or what the person copied in any Part with "from clipboard").
   'sketch.copy': SKETCH_OP('copy'),
-  'sketch.paste': SKETCH_OP('copy'),
+  'sketch.paste': PASTE,
   'sketch.spline': ENTITY('spline'),
   'sketch.spline-control': ENTITY('control_spline'),
   // The Ellipse group.
@@ -430,7 +433,7 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   sector: ENTITY('sector'),
   intersect: SKETCH_OP('intersect'),
   import: SKETCH_OP('import'),
-  paste: SKETCH_OP('copy'),
+  paste: PASTE,
   ellipse: ENTITY('ellipse'),
   'ellipse-partial': ENTITY('ellipse_arc'),
   parabola: ENTITY('parabola'),
@@ -907,7 +910,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'constraints[].kind=project': command('sketch.project'),
     'constraints[].kind=intersect': command('sketch.intersect'),
     'constraints[].kind=import': command('sketch.import'),
-    // Copy (Ctrl+C) in one sketch, Paste (Ctrl+V) in this one or another: the same clip.
+    // Copy (Ctrl+C) in one sketch, Paste (Ctrl+V) in this one or another (of any Part): the same clip
+    // ("from <sketch>" is a sketch of this Part; "from clipboard" is what the person copied).
     'constraints[].kind=copy': command('sketch.paste'),
     'constraints[].kind=break_link': place("a linked curve's context menu in sketch mode: Break link"),
     'constraints[].refs': place('the curves and points the person picks for the relation, dimension or tool'),

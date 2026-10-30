@@ -5,12 +5,14 @@
 // pasteClip makes new geometry of it (copyEntities, src/sketch/tools/copy.ts) moved so that the
 // copy's anchor, the middle of its box, lands on the place given, in the target sketch's own u/v
 // (a sketch on another plane takes the same 2D shape), and re-makes the relations and dimensions
-// on the copies: a dimension keeps its expression (or the value it had, when the target cannot
-// read it: a parameter of another Part), its label moves with it, a Fix holds the copy where it
-// lands.
+// on the copies: a dimension keeps its expression where the target reads it (in a Part of the
+// same units, as written: a parameter keeps its link; in a Part of other units only where it reads
+// as the value the dimension had: a bare "2*15" copied in mm would read 762 mm in inches), else it
+// takes that value in mm or deg; its label moves with it, a Fix holds the copy where it lands.
 // Owner: SKETCH.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { SketchConstraint, SketchEntity, SketchFeature, Vec2 } from '../../types/doc';
+import type { DocUnits } from '../../types/units';
 import { SketchBuilder, type EditOutcome, type SketchDraft } from '../edit';
 import { entityPoints, isDimension, measureDimension, pointAt, quantityOf } from '../model';
 import { samples } from '../pick';
@@ -32,6 +34,8 @@ export interface SketchClip {
   outside: { relations: number; dimensions: number };
   /** Where the copy is held while it is placed: the middle of its box (mm, source u/v). */
   anchor: Vec2;
+  /** The source Part's units (a bare number in an expression is in its length unit); left out by an older copy. */
+  units?: { length: string; angle: string };
 }
 
 type Source = Pick<SketchFeature, 'points' | 'entities' | 'constraints'> & Partial<Pick<SketchFeature, 'name' | 'solved'>>;
@@ -42,7 +46,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  * The clip of these entities (a picked point that a point entity stands on counts as that point
  * entity; other picks are ignored), or why there is none.
  */
-export function clipOf(d: Source, ids: readonly string[]): SketchClip | string {
+export function clipOf(d: Source, ids: readonly string[], units?: Pick<DocUnits, 'length' | 'angle'>): SketchClip | string {
   const want = new Set(ids);
   for (const e of d.entities) if (e.kind === 'point' && want.has(e.p)) want.add(e.id);
   const entities = d.entities.filter((e) => want.has(e.id));
@@ -74,7 +78,7 @@ export function clipOf(d: Source, ids: readonly string[]): SketchClip | string {
     }
   }
   const copied = entities.map((e) => JSON.parse(JSON.stringify(e)) as SketchEntity);
-  return { v: 1, from: d.name ?? 'a sketch', points, entities: copied, constraints, values, outside, anchor: boxMiddle({ points, entities: copied }) };
+  return { v: 1, from: d.name ?? 'a sketch', points, entities: copied, constraints, values, outside, anchor: boxMiddle({ points, entities: copied }), ...(units ? { units: { length: units.length, angle: units.angle } } : {}) };
 }
 
 /** The middle of the box round the drawn geometry. */
@@ -113,20 +117,27 @@ export interface PasteResult {
   map: CopyMap;
   /** The relations and dimensions made on the copies. */
   kept: { relations: number; dimensions: number };
+  /** The dimensions whose expression the target reads otherwise: they took the value they had (their exprs as copied). */
+  valued: string[];
 }
 
 /**
  * The clip pasted into a sketch as new geometry, its anchor on `at` (mm, the target's u/v).
- * `evaluate`: whether the target reads a dimension's expression (a parameter of another Part may
- * not be there); one it cannot read takes the value the dimension had.
+ * `evaluate`: what the target reads a dimension's expression as (mm or deg), or null when it
+ * cannot (a parameter of another Part may not be there); `units`: the target Part's. A dimension
+ * keeps its expression where the target reads it and its units are the clip's (a parameter keeps
+ * its link); in other units (or a copy that does not say its own) only where it reads as the value
+ * the dimension had (a unitless "2*15" is 30 mm in a mm Part, 762 mm in an inch Part); else it
+ * takes that value.
  */
-export function pasteClip(d: SketchDraft, clip: SketchClip, at: Vec2, o: { evaluate?: (expr: string, q: 'length' | 'angle') => boolean } = {}): PasteResult {
+export function pasteClip(d: SketchDraft, clip: SketchClip, at: Vec2, o: { evaluate?: (expr: string, q: 'length' | 'angle') => number | null; units?: Pick<DocUnits, 'length' | 'angle'> } = {}): PasteResult {
   const dx = at[0] - clip.anchor[0];
   const dy = at[1] - clip.anchor[1];
   const shift = (p: Vec2): Vec2 => [p[0] + dx, p[1] + dy];
   const b = new SketchBuilder(d);
   const map = copyEntities(b, clip.entities, (_id, p) => shift(p), { at: (id) => clip.points[id] ?? null });
   const kept = { relations: 0, dimensions: 0 };
+  const valued: string[] = [];
   const ref = (r: string) => map.entities[r] ?? map.points[r] ?? null;
   for (const c of clip.constraints) {
     const refs = c.refs.map(ref);
@@ -134,7 +145,11 @@ export function pasteClip(d: SketchDraft, clip: SketchClip, at: Vec2, o: { evalu
     if (isDimension(c)) {
       const q = quantityOf(c.kind);
       const v = clip.values[c.id];
-      const expr = o.evaluate && !o.evaluate(c.expr, q) && v != null ? `${Number(v.toPrecision(6))} ${q === 'angle' ? 'deg' : 'mm'}` : c.expr;
+      const here = o.evaluate ? o.evaluate(c.expr, q) : null;
+      const sameUnits = !!clip.units && !!o.units && clip.units.length === o.units.length && clip.units.angle === o.units.angle;
+      const keep = !o.evaluate || v == null || (here != null && (sameUnits || Math.abs(here - v) <= 1e-6 * Math.max(1, Math.abs(v))));
+      const expr = keep ? c.expr : `${Number(v.toPrecision(6))} ${q === 'angle' ? 'deg' : 'mm'}`;
+      if (expr !== c.expr) valued.push(c.expr);
       b.addDimension(c.kind, refs as string[], expr, { driving: c.driving, ...(c.at ? { at: shift(c.at) } : {}) });
       kept.dimensions++;
     } else {
@@ -143,7 +158,14 @@ export function pasteClip(d: SketchDraft, clip: SketchClip, at: Vec2, o: { evalu
     }
   }
   const added = clip.entities.map((e) => map.entities[e.id]);
-  return { outcome: { ok: true, draft: b.result(), optional: [], removed: [] }, added, map, kept };
+  return { outcome: { ok: true, draft: b.result(), optional: [], removed: [] }, added, map, kept, valued };
+}
+
+/** "1 dimension took the value it had (its expression 2*15 reads otherwise here)" (null when none did). */
+export function valuedWords(exprs: readonly string[]): string | null {
+  if (!exprs.length) return null;
+  const list = exprs.slice(0, 3).map((e) => `"${e}"`).join(', ') + (exprs.length > 3 ? ', ...' : '');
+  return `${plural(exprs.length, 'dimension')} took the value ${exprs.length === 1 ? 'it' : 'they'} had (${exprs.length === 1 ? 'its expression' : 'their expressions'} ${list} ${exprs.length === 1 ? 'reads' : 'read'} otherwise here)`;
 }
 
 /** "2 relations to other geometry were left out" (null when none were). */
@@ -185,6 +207,7 @@ export function readClip(v: unknown): SketchClip | null {
   if (c.v !== 1 || typeof c.from !== 'string' || !vec(c.anchor) || !c.points || typeof c.points !== 'object') return null;
   if (!Array.isArray(c.entities) || !c.entities.length || !Array.isArray(c.constraints) || !c.values || typeof c.values !== 'object') return null;
   if (!c.outside || typeof c.outside.relations !== 'number' || typeof c.outside.dimensions !== 'number') return null;
+  if (c.units !== undefined && (!c.units || typeof c.units.length !== 'string' || typeof c.units.angle !== 'string')) return null;
   if (!Object.values(c.points).every(vec)) return null;
   // Every point an entity uses is in the clip, every reference of a relation is copied.
   const ids = new Set<string>();

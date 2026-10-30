@@ -6,10 +6,14 @@
 // depth). A DXF's layers are ticked as the file has them (one it has off unticked); leaving a
 // layer out, the scale and Centred change what the panel says and what goes in. A hostile SVG:
 // nothing of it runs or is fetched, and the panel counts each part it left out. A binary DXF is
-// refused in the panel's foot. The drawings are this suite's own (tests/sketch/import/fixtures.ts).
+// refused in the panel's foot. Files that would stall or break it: an ARC whose angle is 1e300 is
+// read at once (that arc counted as unreadable); an SVG whose root is 0 wide and 0 high reads in CSS
+// px and says so; a loop of one cubic has no open end; a stray point far off leaves the join
+// tolerance at the part's size, and the panel says it; 1,000 arcs are refused with their weight for
+// the sketch solver, OK disabled. The drawings are this suite's own (tests/sketch/import/fixtures.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
-import { bytesOf, DXF_BINARY, DXF_PART, SVG_HOSTILE, SVG_MM, SVG_MM_RECT_AREA } from '../tests/sketch/import/fixtures';
+import { bytesOf, DXF_BINARY, DXF_PART, dxf, SVG_HOSTILE, SVG_MM, SVG_MM_RECT_AREA } from '../tests/sketch/import/fixtures';
 import { chipVolumes, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 type V2 = [number, number];
@@ -167,5 +171,52 @@ test('cad:sketch-import-hostile a hostile SVG: nothing of it runs or is fetched;
   expect((await drawn(page)).kinds).toEqual({ line: 5 });
   expect(await ran()).toEqual([null, null]);
   expect(fetched).toEqual([]);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:sketch-import-limits files that would stall or break the import: read or refused at once, and the panel says what is true', async ({ page, request }) => {
+  const { seen, frame } = await freshPart(page, request);
+  await enterSketchOnTop(frame);
+  const LINE = (a: V2, b: V2) => [0, 'LINE', 8, '0', 10, a[0], 20, a[1], 30, 0, 11, b[0], 21, b[1], 31, 0];
+  const entities = (...recs: (string | number)[][]) => dxf([0, 'SECTION', 2, 'HEADER', 9, '$INSUNITS', 70, 4, 0, 'ENDSEC', 0, 'SECTION', 2, 'ENTITIES', ...recs.flat(), 0, 'ENDSEC', 0, 'EOF']);
+  const square = [LINE([0, 0], [10, 0]), LINE([10, 0], [10, 10]), LINE([10, 10], [0, 10]), LINE([0, 10], [0, 0])];
+  // An ARC whose start angle is 1e300 (its sweep never settled before): the square reads at once.
+  await importFile(page, frame, 'angles.dxf', bytesOf(entities(...square, [0, 'ARC', 8, '0', 10, 0, 20, 0, 30, 0, 40, 5, 50, 1e300, 51, 90])));
+  await expect(opt(frame, 'read')).toHaveText('Read: 4 lines');
+  await expect(opt(frame, 'skipped')).toHaveText('Skipped: 1 shape with numbers that cannot be read');
+  await expect(opt(frame, 'open')).toHaveText('Open ends: 0');
+  await expect(opt(frame, 'join')).toHaveText('Ends joined within 0.0001 mm');
+  await expect(opt(frame, 'ok')).toBeEnabled();
+  // (Cancel before each next file: Import pressed while its tool is in hand puts the tool down.)
+  const cancel = async () => {
+    await opt(frame, 'cancel').click();
+    await expect(opts(frame)).toHaveCount(0);
+  };
+  await cancel();
+  // A root 0 wide and 0 high (a sprite sheet's): CSS px, said; the panel shows (it threw before).
+  await importFile(page, frame, 'sprites.svg', bytesOf('<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" viewBox="0 0 100 100"><rect width="96" height="48"/></svg>'), 'image/svg+xml');
+  await expect(opt(frame, 'units')).toHaveText('Units: CSS px, 96 per inch (1 unit = 0.264583 mm)');
+  await expect(opt(frame, 'note-0')).toHaveText('Its width or height is 0, so it gives no size: read as CSS px (set the scale)');
+  await expect(opt(frame, 'size')).toHaveText('Size: 25.4 × 12.7 mm');
+  await cancel();
+  // A loop of one cubic: closed, no open end.
+  await importFile(page, frame, 'loop.svg', bytesOf('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M0 0 C5 5 10 -5 0 0 Z"/></svg>'), 'image/svg+xml');
+  await expect(opt(frame, 'read')).toHaveText('Read: 1 spline');
+  await expect(opt(frame, 'open')).toHaveText('Open ends: 0');
+  await cancel();
+  // Two lines 0.02 mm apart and a stray point 100 m off: the gap stays open (4 ends), and the panel says the tolerance and why.
+  await importFile(page, frame, 'stray.dxf', bytesOf(entities(LINE([0, 0], [10, 0]), LINE([10.02, 0], [20, 0]), [0, 'POINT', 8, '0', 10, 100000, 20, 100000, 30, 0])));
+  await expect(opt(frame, 'open')).toHaveText('Open ends: 4 (where a curve ends and nothing else does)');
+  await expect(opt(frame, 'join')).toHaveText('Ends joined within 0.01 mm');
+  await expect(opts(frame)).toContainText('A few curves lie far from the rest (it spans 100000 × 100000 mm): ends are joined within 0.01 mm, by the size of its curves');
+  await cancel();
+  // 1,000 arcs: too heavy for the sketch solver (every later edit would take seconds, 1,500 break it): refused, OK disabled.
+  const arcs = entities(...Array.from({ length: 1000 }, (_, i) => [0, 'ARC', 8, '0', 10, (i % 100) * 20, 20, Math.floor(i / 100) * 20, 30, 0, 40, 5, 50, 0, 51, 90]));
+  await importFile(page, frame, 'arcs.dxf', bytesOf(arcs));
+  await expect(opt(frame, 'read')).toHaveText('Read: 1000 arcs');
+  await expect(opt(frame, 'problem')).toHaveText('arcs.dxf is too large for one sketch: its 3,000 points and 1,000 arcs weigh 23,000 for the sketch solver (each point 1, each arc 20 more), at most 10,000');
+  await expect(opt(frame, 'ok')).toBeDisabled();
+  await cancel();
+  expect((await drawn(page)).kinds).toEqual({});
   expect(seen.errors).toEqual([]);
 });

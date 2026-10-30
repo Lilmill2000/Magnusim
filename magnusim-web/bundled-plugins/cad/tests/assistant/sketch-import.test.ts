@@ -7,9 +7,12 @@
 //     row stores the same entities on the same points;
 //   - value: scale, place and layers; the curves' names "<id>.1"...;
 //   - honest errors: no readAttachment on the host, an id the conversation does not have, an id
-//     that is not one, a read that failed, a binary DXF, a drawing past the cap, bad values.
+//     that is not one, a read that failed (each with a hint that says what to do: ask the person
+//     to attach it again, send the row again), a binary DXF, a drawing too heavy for the sketch
+//     solver, bad values.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ATTACHMENT_HINTS } from '../../src/assistant/sketch/ops';
 import { drawSteps } from '../../src/assistant/sketch/write';
 import { planImport, readDrawing, summaryWords } from '../../src/sketch/import';
 import { applyImport } from '../../src/sketch/import/tool';
@@ -72,7 +75,7 @@ describe('the import row', () => {
         id: 'i1',
         kind: 'import',
         entities: Array.from({ length: 14 }, (_, k) => `i1.${k + 1}`),
-        values: { file: 'part.dxf', read: panel.read, skipped: panel.skipped, size: panel.size, open_ends: 0, scale: panel.scale, layers: panel.layers, notes: panel.notes.join(' ') },
+        values: { file: 'part.dxf', read: panel.read, skipped: panel.skipped, size: panel.size, open_ends: 0, join: panel.join, scale: panel.scale, layers: panel.layers, notes: panel.notes.join(' ') },
       });
       expect(made.values).toMatchObject({ read: 'Read: 8 lines, 3 arcs, 1 circle, 1 ellipse, 1 spline', skipped: 'Skipped: 1 TEXT', open_ends: 0 });
       // Every outline closed: seven regions (the slot round its hole, the hole, the half disc, the
@@ -146,15 +149,20 @@ describe('the import row', () => {
       h.dispose();
       h = await assistantHarness({
         sketchMode: true,
-        assistant: { attachments: { [ATT]: fileOf('b.dxf', DXF_BINARY), [ATT2]: { code: 'failed', message: 'The file did not arrive whole. Try again.' }, 'att-1111111111111111': fileOf('many.dxf', manyLinesDxf(20_001)) } },
+        assistant: { attachments: { [ATT]: fileOf('b.dxf', DXF_BINARY), [ATT2]: { code: 'failed', message: 'The file did not arrive whole. Try again.' }, 'att-1111111111111111': fileOf('many.dxf', manyLinesDxf(5_001)) } },
       });
       const missing = await fail(h, 'sketch', IMPORT('A', 'att-2222222222222222'));
       expect(missing.message).toContain('no attached file att-2222222222222222 in this conversation');
       expect(missing.code).toBe('invalid_input');
+      // Not "get_model lists them all" (it lists no attachments): ask the person to attach it again.
+      expect(missing.hint).toBe(ATTACHMENT_HINTS.not_found);
       expect((await fail(h, 'sketch', IMPORT('A', 'plate.svg'))).message).toContain('"plate.svg" is not an attachment id');
-      expect((await fail(h, 'sketch', IMPORT('A', ATT2))).message).toBe(`internal: constraints[0] (i1, import): ${ATT2} could not be read (The file did not arrive whole. Try again): try again.`);
+      const failed = await fail(h, 'sketch', IMPORT('A', ATT2));
+      expect(failed.message).toBe(`internal: constraints[0] (i1, import): ${ATT2} could not be read (The file did not arrive whole. Try again): try again.`);
+      // Not "something went wrong in the CAD workspace": send the row again.
+      expect(failed.hint).toBe(ATTACHMENT_HINTS.failed);
       expect((await fail(h, 'sketch', IMPORT('A'))).message).toBe('bad_input: constraints[0] (i1, import): b.dxf is a binary DXF: save it as an ASCII DXF (R12 or later) and import that.');
-      expect((await fail(h, 'sketch', IMPORT('A', 'att-1111111111111111'))).message).toBe('bad_input: constraints[0] (i1, import): many.dxf has 20,001 curves to import: at most 20,000 go into one sketch.');
+      expect((await fail(h, 'sketch', IMPORT('A', 'att-1111111111111111'))).message).toBe('bad_input: constraints[0] (i1, import): many.dxf is too large for one sketch: its 10,002 points weigh 10,002 for the sketch solver (each point 1), at most 10,000.');
       expect((await fail(h, 'sketch', IMPORT('A', ATT, 'scale -2'))).message).toContain('scale is the mm per drawing unit, a number above 0');
       expect((await fail(h, 'sketch', IMPORT('A', ATT, 'place left'))).message).toContain('place is origin');
       expect((await fail(h, 'sketch', IMPORT('A', ATT, 'colour red'))).message).toContain('"colour" is not one of scale, place, layers');

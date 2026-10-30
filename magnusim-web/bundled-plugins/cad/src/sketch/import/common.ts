@@ -3,9 +3,10 @@
 // points, in the drawing's own units with y up), the caps on an untrusted file, the exact maths
 // (an affine map of a circle or an ellipse piece, a B-spline as Bezier pieces, degree elevation),
 // and the import itself (planImport, importIntoDraft): the curves of the layers kept, scaled and
-// placed, joined where their ends meet within max(1e-4 mm, 1e-6 of the drawing's size) (one
-// sketch point; no other relation is added, so the result is under-defined as imported geometry
-// is), duplicates and pieces too small to draw left out, and the summary the person's panel and
+// placed, joined where their ends meet within max(1e-4 mm, min(1e-6 of the drawing's size, 1e-3 of
+// its middle-sized curve)) (one sketch point; no other relation is added, so the result is
+// under-defined as imported geometry is), duplicates and pieces too small to draw left out, what
+// it weighs for the sketch solver capped (solverLoad), and the summary the person's panel and
 // the Assistant's reply both give (summaryWords). Pure data in and out (unit-tested): the
 // person's Import SVG/DXF (tool.ts) and the Assistant's import row (assistant/sketch/ops.ts) both
 // run importIntoDraft on what readDrawing (index.ts) read.
@@ -19,10 +20,21 @@ type V2 = Vec2;
 
 /** The host's cap on an attached drawing, and the person's file: 20 MiB. */
 export const DRAWING_MAX_BYTES = 20 * 1024 * 1024;
-/** The most curves one import adds (a drawing with more is refused with its count). */
-export const IMPORT_MAX_CURVES = 20_000;
+/**
+ * The most one import may weigh for the sketch solver (solverLoad: each sketch point 1, a circle 1
+ * more, an arc or an ellipse 20 more, a partial ellipse 40 more): a drawing over it is refused
+ * with its weight. Every later edit of the sketch solves and analyses all of it: at this load each
+ * takes about a second, where 1,000 arcs take ten and 1,500 break the solver.
+ */
+export const IMPORT_MAX_LOAD = 10_000;
+/** What a curve the solver holds by rules of its own weighs over its points (solverLoad). */
+const RULE_LOAD: Readonly<Partial<Record<DrawingCurve['kind'], number>>> = { circle: 1, arc: 20, ellipse: 20, ellipse_arc: 40 };
 /** The most curves a file is read for (blocks inserted many times stop here): the reading's own cap. */
 export const READ_MAX_CURVES = 100_000;
+/** A SPLINE past this degree is left out (its maths grows with the square of it). */
+export const READ_MAX_DEGREE = 25;
+/** A SPLINE with more control or fit points than this is left out (no sketch carries it). */
+export const READ_MAX_SPLINE_POINTS = 100_000;
 
 /** A drawing that cannot be imported, with the reason in the person's words. */
 export class DrawingRefused extends Error {}
@@ -93,8 +105,11 @@ const SKIP_WORDS: Readonly<Record<string, [string, string]>> = {
   deep: ['element nested too deep', 'elements nested too deep'],
   edgeOn: ['curve seen edge-on (its plane stands on the drawing)', 'curves seen edge-on (their plane stands on the drawing)'],
   nested: ['block nested past 16 levels', 'blocks nested past 16 levels'],
+  selfInsert: ['INSERT of a block inside itself', 'INSERTs of a block inside itself'],
   missingBlock: ['INSERT of a block the file does not have', 'INSERTs of blocks the file does not have'],
   badSpline: ['SPLINE whose numbers do not make a curve', 'SPLINEs whose numbers do not make a curve'],
+  highDegree: [`SPLINE of degree past ${READ_MAX_DEGREE}`, `SPLINEs of degree past ${READ_MAX_DEGREE}`],
+  longSpline: [`SPLINE with more than ${READ_MAX_SPLINE_POINTS.toLocaleString('en-US')} points`, `SPLINEs with more than ${READ_MAX_SPLINE_POINTS.toLocaleString('en-US')} points`],
   mesh: ['polygon mesh or polyface', 'polygon meshes or polyfaces'],
   paper: ['entity in paper space', 'entities in paper space'],
 };
@@ -176,12 +191,23 @@ const binom = (n: number, k: number) => {
   return r;
 };
 
+/** The knot span of u (the last k in p..n with U[k] <= u, else p), found by halving: a long spline costs log n per point. */
+function spanOf(p: number, n: number, U: readonly number[], u: number): number {
+  if (u >= U[n + 1]) return n;
+  let lo = p;
+  let hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (U[mid] <= u) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 /** De Boor at u: degree p, poles P, flat knots U (clamped or not); u within [U[p], U[n+1]]. */
 export function deBoor(p: number, P: readonly V2[], U: readonly number[], u: number): V2 {
   const n = P.length - 1;
-  let k = p;
-  if (u >= U[n + 1]) k = n;
-  else while (k < n && u >= U[k + 1]) k++;
+  const k = spanOf(p, n, U, u);
   const d: V2[] = [];
   for (let j = 0; j <= p; j++) d.push([P[j + k - p][0], P[j + k - p][1]]);
   for (let r = 1; r <= p; r++) {
@@ -195,17 +221,23 @@ export function deBoor(p: number, P: readonly V2[], U: readonly number[], u: num
   return d[p];
 }
 
-/** A rational B-spline's point at u (weights per pole). */
-export function deBoorRational(p: number, P: readonly V2[], W: readonly number[], U: readonly number[], u: number): V2 {
+/** A rational B-spline (weights per pole) as a function of u: its weighted poles made once. */
+export function rationalAt(p: number, P: readonly V2[], W: readonly number[], U: readonly number[]): (u: number) => V2 {
   const H = P.map((q, i) => [q[0] * W[i], q[1] * W[i]] as V2);
-  const num = deBoor(p, H, U, u);
-  const w = deBoor(
-    p,
-    W.map((x) => [x, 0] as V2),
-    U,
-    u,
-  )[0];
-  return [num[0] / w, num[1] / w];
+  const WW = W.map((x) => [x, 0] as V2);
+  return (u) => {
+    const num = deBoor(p, H, U, u);
+    const w = deBoor(p, WW, U, u)[0];
+    return [num[0] / w, num[1] / w];
+  };
+}
+
+/** Whether flat knots U suit degree p and n + 1 poles (as many as they need, never decreasing, a domain of some length). */
+export function knotsFit(p: number, poles: number, U: readonly number[]): boolean {
+  const n = poles - 1;
+  if (!Number.isInteger(p) || p < 1 || n < p || U.length !== n + p + 2) return false;
+  for (let i = 1; i < U.length; i++) if (!(U[i] >= U[i - 1])) return false;
+  return U[n + 1] > U[p] && Number.isFinite(U[0]) && Number.isFinite(U[U.length - 1]);
 }
 
 /** The Bezier poles of a degree-p piece from its points at t = k / p (k = 0..p) on [0, 1]. */
@@ -278,9 +310,7 @@ function compress(U: readonly number[]): { knots: number[]; mults: number[] } {
  */
 export function bsplineCurves(p: number, P: readonly V2[], U: readonly number[]): DrawingCurve[] | null | 'approx' {
   const n = P.length - 1;
-  if (!Number.isInteger(p) || p < 1 || n < p || U.length !== n + p + 2) return null;
-  for (let i = 1; i < U.length; i++) if (!(U[i] >= U[i - 1])) return null;
-  if (!(U[n + 1] > U[p])) return null;
+  if (!knotsFit(p, P.length, U)) return null;
   if (p > 5) return 'approx';
   if ((p === 3 || p === 5) && clamped(p, U)) {
     const { knots, mults } = compress(U);
@@ -466,10 +496,12 @@ export interface ImportSummary {
   joins: number;
   /** The join tolerance (mm). */
   tolerance: number;
+  /** What it weighs for the sketch solver (solverLoad; at most IMPORT_MAX_LOAD goes in). */
+  load: number;
   notes: string[];
   /** Layers (DXF): each one's curves and whether it is taken. */
   layers: { name: string; count: number; on: boolean }[];
-  /** Why it cannot go in (too many curves, nothing to draw), or null. */
+  /** Why it cannot go in (too large for the sketch solver, nothing to draw), or null. */
   refused: string | null;
 }
 
@@ -489,24 +521,66 @@ export function layersTaken(d: Drawing, o: ImportOptions): Set<string> {
   return new Set(o.layers ?? d.layers.filter((l) => !l.off).map((l) => l.name));
 }
 
+/** Whether every number of a curve is finite (1e999 in a file, or a transform that overflows, gives one that is not). */
+export function finiteCurve(c: DrawingCurve): boolean {
+  const f = (p: V2) => Number.isFinite(p[0]) && Number.isFinite(p[1]);
+  switch (c.kind) {
+    case 'line':
+      return f(c.a) && f(c.b);
+    case 'point':
+      return f(c.p);
+    case 'circle':
+      return f(c.c) && Number.isFinite(c.r);
+    case 'arc':
+      return f(c.c) && Number.isFinite(c.r) && f(c.a) && f(c.b);
+    case 'ellipse':
+      return f(c.c) && f(c.ux) && Number.isFinite(c.A) && Number.isFinite(c.B);
+    case 'ellipse_arc':
+      return f(c.c) && f(c.ux) && Number.isFinite(c.A) && Number.isFinite(c.B) && f(c.a) && f(c.b);
+    case 'bspline':
+      return c.poles.every(f) && c.knots.every(Number.isFinite);
+    case 'fit':
+      return c.pts.every(f);
+  }
+}
+
+const fmt = (n: number) => n.toLocaleString('en-US');
+const plural = (n: number, one: string, many = `${one}s`) => `${fmt(n)} ${n === 1 ? one : many}`;
+const andList = (xs: readonly string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : (xs[0] ?? ''));
+
 /** What an import of the drawing with these options adds, and its summary (nothing changes yet). */
 export function planImport(d: Drawing, o: ImportOptions = {}): ImportPlan {
   const s = o.scale ?? d.mmPerUnit;
-  if (!(Number.isFinite(s) && s > 0)) throw new DrawingRefused(`The scale must be a number above 0, not ${o.scale}`);
+  if (!(Number.isFinite(s) && s > 0)) throw new DrawingRefused(o.scale === undefined ? `${d.name}'s own units (${d.units}) give no scale: set the scale (mm per drawing unit)` : `The scale must be a number above 0, not ${o.scale}`);
   const on = layersTaken(d, o);
   const unknown = (o.layers ?? []).filter((l) => !d.layers.some((x) => x.name === l));
   if (unknown.length) throw new DrawingRefused(`${d.name} has no layer ${unknown.map((l) => `"${l}"`).join(', ')}${d.layers.length ? ` (its layers: ${d.layers.map((l) => l.name).join(', ')})` : ' (an SVG has no layers)'}`);
   const picked = d.curves.filter((c) => !d.layers.length || on.has(c.layer ?? '0'));
-  // Scaled, then placed.
-  let curves = picked.map((c) => scaled(c, s, [0, 0]));
-  let box = boxOf(curves);
+  const skipped = { ...d.skipped };
+  // Scaled, then placed; a curve whose numbers are not finite (or overflow at this scale) cannot be drawn.
+  let curves: DrawingCurve[] = [];
+  for (const c of picked) {
+    const k = scaled(c, s, [0, 0]);
+    if (finiteCurve(k)) curves.push(k);
+    else skip(skipped, 'unreadable');
+  }
+  let boxes = curves.map(curveBox);
+  let box = unionBox(boxes);
   if (o.place === 'centre' && box) {
     const t: V2 = [-(box.min[0] + box.max[0]) / 2, -(box.min[1] + box.max[1]) / 2];
     curves = curves.map((c) => scaled(c, 1, t));
-    box = boxOf(curves);
+    boxes = boxes.map((b) => (b ? { min: [b.min[0] + t[0], b.min[1] + t[1]] as V2, max: [b.max[0] + t[0], b.max[1] + t[1]] as V2 } : null));
+    box = unionBox(boxes);
   }
   const diag = box ? Math.hypot(box.max[0] - box.min[0], box.max[1] - box.min[1]) : 0;
-  const tol = Math.max(1e-4, 1e-6 * diag);
+  // The join tolerance: 1e-6 of the drawing's size, but at most 1e-3 of its middle-sized curve (a
+  // curve far off the rest widens the box, never the tolerance), and never under 1e-4 mm.
+  const sizes = curves
+    .map((c, i) => (c.kind === 'point' || !boxes[i] ? -1 : Math.hypot(boxes[i]!.max[0] - boxes[i]!.min[0], boxes[i]!.max[1] - boxes[i]!.min[1])))
+    .filter((x) => x >= 0)
+    .sort((a, b) => a - b);
+  const typical = sizes.length ? sizes[sizes.length >> 1] : diag;
+  const tol = Math.max(1e-4, Math.min(1e-6 * diag, 1e-3 * typical));
   // Too small to draw: under the join tolerance (the kernel refuses a curve of no length).
   let tooSmall = 0;
   const kept: DrawingCurve[] = [];
@@ -571,11 +645,22 @@ export function planImport(d: Drawing, o: ImportOptions = {}): ImportPlan {
     curvesOut.push(c);
     endsOut.push(ends[i]?.map(clusterOf) ?? null);
   });
-  // Open ends: a cluster holding one curve end (a point entity is not an end).
+  // A curve whose own two ends meet (a closed spline, a loop of one cubic) closes there: that
+  // place is one, not two open ends (the sketch still gives it two points: a curve never ends on itself).
+  const closedAt = new Map<number, number>();
+  curvesOut.forEach((c, i) => {
+    const e = endsOut[i];
+    if (c.kind === 'point' || !e || e.length < 2 || e[0] === e[1]) return;
+    if (dist(places[e[0]], places[e[1]]) <= tol) closedAt.set(e[1], e[0]);
+  });
+  // Open ends: a place holding one curve end (a point entity is not an end).
   const endsAt = new Map<number, number>();
   curvesOut.forEach((c, i) => {
     if (c.kind === 'point') return;
-    for (const k of endsOut[i] ?? []) endsAt.set(k, (endsAt.get(k) ?? 0) + 1);
+    for (const k of endsOut[i] ?? []) {
+      const at = closedAt.get(k) ?? k;
+      endsAt.set(at, (endsAt.get(at) ?? 0) + 1);
+    }
   });
   let openEnds = 0;
   let joins = 0;
@@ -588,12 +673,19 @@ export function planImport(d: Drawing, o: ImportOptions = {}): ImportPlan {
     const k: ImportKind = c.kind === 'bspline' || c.kind === 'fit' ? 'spline' : c.kind;
     read[k] = (read[k] ?? 0) + 1;
   }
-  const outBox = boxOf(curvesOut);
+  const outBox = unionBox(curvesOut.map(curveBox));
   const size: [number, number] = outBox ? [outBox.max[0] - outBox.min[0], outBox.max[1] - outBox.min[1]] : [0, 0];
   const layers = d.layers.map((l) => ({ name: l.name, count: l.count, on: on.has(l.name) }));
+  const notes = [...d.notes];
+  if (1e-6 * diag > 10 * tol) notes.push(`A few curves lie far from the rest (it spans ${sig(size[0])} × ${sig(size[1])} mm): ends are joined within ${sig(tol)} mm, by the size of its curves`);
+  const load = solverLoad(curvesOut, endsOut);
   let refused: string | null = null;
-  if (curvesOut.length > IMPORT_MAX_CURVES) refused = `${d.name} has ${curvesOut.length.toLocaleString('en-US')} curves to import: at most ${IMPORT_MAX_CURVES.toLocaleString('en-US')} go into one sketch${d.layers.length > 1 ? ' (leave some layers out)' : ''}`;
-  else if (!curvesOut.length) refused = `${d.name} has nothing to draw${picked.length < d.curves.length ? ' on the layers taken' : ''}`;
+  if (load.load > IMPORT_MAX_LOAD) {
+    const k = load.kinds;
+    const parts = [plural(load.points, 'point'), k.circle ? plural(k.circle, 'circle') : '', k.arc ? plural(k.arc, 'arc') : '', k.ellipse ? plural(k.ellipse, 'ellipse') : '', k.ellipse_arc ? plural(k.ellipse_arc, 'partial ellipse', 'partial ellipses') : ''].filter(Boolean);
+    const weights = ['each point 1', k.circle ? 'each circle 1 more' : '', k.arc || k.ellipse ? `each ${k.arc && k.ellipse ? 'arc or ellipse' : k.arc ? 'arc' : 'ellipse'} 20 more` : '', k.ellipse_arc ? 'each partial ellipse 40 more' : ''].filter(Boolean);
+    refused = `${d.name} is too large for one sketch: its ${andList(parts)} weigh ${fmt(load.load)} for the sketch solver (${weights.join(', ')}), at most ${fmt(IMPORT_MAX_LOAD)}${d.layers.length > 1 ? ' (leave some layers out)' : ''}`;
+  } else if (!curvesOut.length) refused = `${d.name} has nothing to draw${picked.length < d.curves.length ? ' on the layers taken' : ''}`;
   return {
     curves: curvesOut,
     ends: endsOut,
@@ -603,7 +695,7 @@ export function planImport(d: Drawing, o: ImportOptions = {}): ImportPlan {
       format: d.format,
       read,
       total: curvesOut.length,
-      skipped: { ...d.skipped },
+      skipped,
       duplicates,
       tooSmall,
       size,
@@ -614,11 +706,53 @@ export function planImport(d: Drawing, o: ImportOptions = {}): ImportPlan {
       openEnds,
       joins,
       tolerance: tol,
-      notes: [...d.notes],
+      load: load.load,
+      notes,
       layers,
       refused,
     },
   };
+}
+
+/**
+ * What the curves weigh for the sketch solver once in the sketch: each sketch point the import
+ * makes 1 (a join is one, the centres, an ellipse's axis ends and a spline's inner points too), and
+ * each curve the solver holds by rules of its own more (RULE_LOAD). Every solve and analysis of
+ * the sketch grows with it (measured with the shipped PlaneGCS: 10,000 points of lines take about
+ * a second; 500 arcs as long; 1,500 arcs break the solver).
+ */
+export function solverLoad(curves: readonly DrawingCurve[], ends: readonly (number[] | null)[]): { load: number; points: number; kinds: Partial<Record<DrawingCurve['kind'], number>> } {
+  const used = new Set<number>();
+  let points = 0;
+  let ruled = 0;
+  const kinds: Partial<Record<DrawingCurve['kind'], number>> = {};
+  curves.forEach((c, i) => {
+    const e = ends[i];
+    if (e) {
+      for (const k of e) used.add(k);
+      if (e.length > 1 && e[0] === e[1]) points++;
+    }
+    switch (c.kind) {
+      case 'circle':
+      case 'arc':
+        points++;
+        break;
+      case 'ellipse':
+      case 'ellipse_arc':
+        points += 3;
+        break;
+      case 'bspline':
+        points += Math.max(0, c.poles.length - 2);
+        break;
+      case 'fit':
+        points += c.closed ? c.pts.length : Math.max(0, c.pts.length - 2);
+        break;
+    }
+    ruled += RULE_LOAD[c.kind] ?? 0;
+    kinds[c.kind] = (kinds[c.kind] ?? 0) + 1;
+  });
+  points += used.size;
+  return { load: points + ruled, points, kinds };
 }
 
 /** A curve fit to draw at this tolerance (an arc whose ends meet is its circle), or null when it is too small. */
@@ -687,16 +821,27 @@ function shapeKey(c: DrawingCurve, ends: number[] | null, tol: number): string {
   }
 }
 
-/** The box of curves (sampled), or null for none. */
-function boxOf(curves: readonly DrawingCurve[]): { min: V2; max: V2 } | null {
+/** A curve's box (sampled; an ellipse's exact), or null when it has no finite point. */
+function curveBox(c: DrawingCurve): { min: V2; max: V2 } | null {
   let min: V2 = [Infinity, Infinity];
   let max: V2 = [-Infinity, -Infinity];
-  for (const c of curves) {
-    const pts = c.kind === 'ellipse' ? ellipseBox(c) : curveSamples(c, 16);
-    for (const p of pts) {
-      min = [Math.min(min[0], p[0]), Math.min(min[1], p[1])];
-      max = [Math.max(max[0], p[0]), Math.max(max[1], p[1])];
-    }
+  const pts = c.kind === 'ellipse' ? ellipseBox(c) : curveSamples(c, 16);
+  for (const p of pts) {
+    if (!(Number.isFinite(p[0]) && Number.isFinite(p[1]))) continue;
+    min = [Math.min(min[0], p[0]), Math.min(min[1], p[1])];
+    max = [Math.max(max[0], p[0]), Math.max(max[1], p[1])];
+  }
+  return Number.isFinite(min[0]) ? { min, max } : null;
+}
+
+/** The box round boxes, or null for none. */
+function unionBox(boxes: readonly ({ min: V2; max: V2 } | null)[]): { min: V2; max: V2 } | null {
+  let min: V2 = [Infinity, Infinity];
+  let max: V2 = [-Infinity, -Infinity];
+  for (const b of boxes) {
+    if (!b) continue;
+    min = [Math.min(min[0], b.min[0]), Math.min(min[1], b.min[1])];
+    max = [Math.max(max[0], b.max[0]), Math.max(max[1], b.max[1])];
   }
   return Number.isFinite(min[0]) ? { min, max } : null;
 }
@@ -775,7 +920,7 @@ export function importIntoDraft(draft: SketchDraft, plan: ImportPlan): { outcome
 }
 
 /** The summary in words, line by line: what the person's panel shows and the Assistant's reply says. */
-export function summaryWords(s: ImportSummary): { read: string; skipped: string; size: string; open: string; scale: string; layers: string | null; notes: string[] } {
+export function summaryWords(s: ImportSummary): { read: string; skipped: string; size: string; open: string; join: string; scale: string; layers: string | null; notes: string[] } {
   const kinds = (Object.keys(KIND_WORDS) as ImportKind[]).filter((k) => s.read[k]).map((k) => `${s.read[k]} ${KIND_WORDS[k][s.read[k] === 1 ? 0 : 1]}`);
   const skipped = Object.entries(s.skipped)
     .filter(([, n]) => n > 0)
@@ -788,6 +933,7 @@ export function summaryWords(s: ImportSummary): { read: string; skipped: string;
     skipped: `Skipped: ${skipped.length ? skipped.join(', ') : 'nothing'}`,
     size: `Size: ${sig(s.size[0])} × ${sig(s.size[1])} mm`,
     open: `Open ends: ${s.openEnds}${s.openEnds ? ' (where a curve ends and nothing else does)' : ''}`,
+    join: `Ends joined within ${sig(s.tolerance)} mm`,
     scale: `Scale: 1 unit = ${sig(s.scale)} mm (${s.units})`,
     layers: s.layers.length ? `Layers: ${s.layers.map((l) => `${l.name} (${l.count})`).join(', ')}${off.length ? `; left out: ${off.map((l) => l.name).join(', ')}` : ''}` : null,
     notes: [...s.notes],

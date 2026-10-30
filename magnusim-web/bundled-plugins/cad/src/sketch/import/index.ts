@@ -7,7 +7,7 @@ import { DRAWING_MAX_BYTES, DrawingRefused, type Drawing } from './common';
 import { readDxf } from './dxf';
 import { readSvg } from './svg';
 
-export { DRAWING_MAX_BYTES, DrawingRefused, IMPORT_MAX_CURVES, importIntoDraft, planImport, previewSegments, summaryWords, type Drawing, type ImportOptions, type ImportPlan, type ImportSummary } from './common';
+export { DRAWING_MAX_BYTES, DrawingRefused, IMPORT_MAX_LOAD, importIntoDraft, planImport, previewSegments, summaryWords, type Drawing, type ImportOptions, type ImportPlan, type ImportSummary } from './common';
 
 /** The file picker's accept list. */
 export const DRAWING_ACCEPT = ['.svg', '.dxf'];

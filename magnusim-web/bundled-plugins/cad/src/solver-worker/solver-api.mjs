@@ -62,6 +62,18 @@ import { closestOnSpline, splineAffine, splineCurve } from '../sketch/tools/bspl
 
 export class SketchInputError extends Error {}
 
+/**
+ * A thrown error in words for the person. One thrown inside the solver's WebAssembly (a C++
+ * exception: most often its memory ran out, as 1,500 arcs make it) has no words of its own and
+ * would read "[object WebAssembly.Exception]".
+ */
+export function errorWords(err) {
+  if (typeof WebAssembly !== 'undefined' && typeof WebAssembly.Exception === 'function' && err instanceof WebAssembly.Exception) {
+    return 'the sketch solver failed inside: the sketch is likely too large for it (fewer arcs, ellipses or points)';
+  }
+  return String(err && err.message ? err.message : err);
+}
+
 function vecToArray(vec) {
   const out = new Array(vec.size());
   for (let i = 0; i < out.length; i++) out[i] = vec.get(i);

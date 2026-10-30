@@ -15,6 +15,9 @@
 // A fifth: the model copies a sketch's rectangle into a sketch on another plane with the copy row
 // (the person's Copy and Paste) and extrudes it: made says what was copied and what was left out
 // (its tie to the origin), the copy keeps its dimension, and the tree and the volume chip show it.
+// A sixth: the person copies a sketch's rectangle with Ctrl+C (the foot says what was copied); the
+// model reads what is held (get_model's clipboard) and pastes it into a sketch on Front with the
+// copy row's "from clipboard", then extrudes it: the tree and the volume chip show it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -302,6 +305,68 @@ test("cad:assistant-sketch-tools-copy the model copies a sketch's rectangle into
   expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Block', state: 'ok' } } });
   // What the person sees: both sketches (under-defined: "(-)") and the block in the tree, the copy's
   // four lines and its dimension, the block's volume (30 x 20 x 10).
+  await expect(historyNames(frame)).toHaveText(['(-) Plate', '(-) Copy', 'Block'], STEP);
+  const copy = (await featureOf(page, 'Copy')) as (Sketchy & { constraints: { kind: string; expr?: string }[] }) | null;
+  expect(copy!.entities!.map((e) => e.kind)).toEqual(['line', 'line', 'line', 'line']);
+  expect(copy!.constraints.filter((c) => c.expr != null).map((c) => c.expr)).toEqual(['30 mm']);
+  await expect.poll(async () => Math.abs((await volumeNow(page)) - 6000) < 1e-6, STEP).toBe(true);
+});
+
+test('cad:assistant-sketch-tools-clipboard the person copies a rectangle with Ctrl+C; the model reads what is held, pastes it on Front with "from clipboard" and extrudes it: the tree and the volume chip show it', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant clipboard');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Plate', on: 'Top', entities: [E('r', 'rect', [0, 0, 30, 20])], constraints: [C('d1', 'distance', ['r.bottom'], '30 mm'), C('o1', 'coincident', ['r.bl', 'origin'])], infer: false } }] },
+    { text: 'Plate is a 30 x 20 rectangle on Top.' },
+  );
+  const t1 = await startTurn(request, host, { text: 'Draw a 30 x 20 rectangle on Top.', tab });
+  expect((await t1.ended(STEP_MS * 3)).turn.state).toBe('done');
+  await expect(historyNames(frame)).toHaveText(['(-) Plate'], STEP);
+
+  // The person opens Plate, selects its four lines and presses Ctrl+C.
+  type V = { __CAD__: { services: { apis: { get(): { sketch: { edit(id: string): void; idle?(): Promise<void> } } }; viewport: { get(): { handle: { project(p: number[]): [number, number] | null; state: { get(): { animating: boolean } } } | null } } } } };
+  const plate = (await featureOf(page, 'Plate')) as unknown as { id: string };
+  await cadFrame(page).evaluate((id) => (window as unknown as V).__CAD__.services.apis.get().sketch.edit(id), plate.id);
+  await expect(frame.locator('[data-cad-toolbar="sketch"]')).toBeVisible();
+  await cadFrame(page).evaluate(async () => (window as unknown as V).__CAD__.services.apis.get().sketch.idle?.());
+  await expect.poll(() => cadFrame(page).evaluate(() => (window as unknown as V).__CAD__.services.viewport.get().handle?.state.get().animating ?? true)).toBe(false);
+  const clickAt = async (p: number[], shift = false) => {
+    const xy = await cadFrame(page).evaluate((q) => (window as unknown as V).__CAD__.services.viewport.get().handle?.project(q) ?? null, p);
+    expect(xy, `model point ${p} is not on screen`).not.toBeNull();
+    const box = await page.locator('#workspace-frame').boundingBox();
+    if (shift) await page.keyboard.down('Shift');
+    await page.mouse.click(box!.x + xy![0], box!.y + xy![1]);
+    if (shift) await page.keyboard.up('Shift');
+  };
+  await clickAt([15, 0, 0]);
+  for (const p of [[30, 10, 0], [15, 20, 0], [0, 10, 0]]) await clickAt(p, true);
+  await page.keyboard.press('Control+c');
+  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]')).toHaveText('Copied 4 lines, 4 relations and 1 dimension; 1 relation to other geometry will be left out.');
+  await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
+  await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
+
+  // The model reads what is held, pastes all of it on Front with its middle at (65, 10), and extrudes it.
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Copy', on: 'Front', entities: [], constraints: [C('k1', 'copy', ['at(65, 10)'], 'from clipboard')], infer: false } }] },
+    { tools: [EXTRUDE('Block', 'Copy', '10 mm')] },
+    { text: 'What you copied is pasted on Front, 50 mm along, and extruded 10 mm.' },
+  );
+  const t2 = await startTurn(request, host, { text: 'Paste what I copied onto the Front plane, 50 mm along, and extrude it 10 mm.', tab });
+  expect((await t2.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, afterRead, afterCopy, afterExtrude] = chats(host).slice(before);
+  const [model] = resultsIn(afterRead);
+  expect(model).toMatchObject({ tool: 'cad__get_model', ok: true, data: { clipboard: '4 lines, 4 relations and 1 dimension, copied from Plate' } });
+  const [sk] = resultsIn(afterCopy);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Copy', state: 'ok' } } });
+  const made = (sk.data!.made as { id: string; kind: string; entities: string[]; values: Record<string, unknown> }[])[0];
+  expect(made).toMatchObject({ id: 'k1', kind: 'copy', entities: ['k1.1', 'k1.2', 'k1.3', 'k1.4'], values: { from: 'the clipboard (copied from Plate)', copied: '4 lines, 4 relations and 1 dimension', left_out: '1 relation to other geometry', middle_at: 'at(65, 10)' } });
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Block', state: 'ok' } } });
+  // What the person sees: both sketches and the block in the tree; the block's volume (30 x 20 x 10).
   await expect(historyNames(frame)).toHaveText(['(-) Plate', '(-) Copy', 'Block'], STEP);
   const copy = (await featureOf(page, 'Copy')) as (Sketchy & { constraints: { kind: string; expr?: string }[] }) | null;
   expect(copy!.entities!.map((e) => e.kind)).toEqual(['line', 'line', 'line', 'line']);

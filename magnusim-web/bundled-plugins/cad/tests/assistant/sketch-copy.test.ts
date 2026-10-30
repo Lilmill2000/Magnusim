@@ -6,12 +6,15 @@
 //   - from another sketch (value "from <sketch>"), by its names as get_model gives them or "all",
 //     moved by "offset du, dv", into a sketch on another plane at the same u, v;
 //   - parity: the person's Copy in one sketch and Paste in another store what the row stores;
+//   - what the person copied in another Part (kept in the plugin's prefs): get_model says what is
+//     held, and value "from clipboard" pastes all of it as the person's Ctrl+V would; nothing held,
+//     or items named with it, is said;
 //   - honest errors: an offset that is not one, offset and at(u, v) together, no such sketch, a
 //     feature that is not a sketch, a name the sketch has not, a key that is not one.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clipOf, type SketchClip } from '../../src/sketch/tools/clip';
-import { applyPaste } from '../../src/sketch/tools/paste';
+import { applyPaste, forgetClip, holdClip } from '../../src/sketch/tools/paste';
 import { isDimension } from '../../src/sketch/model';
 import type { SketchFeature } from '../../src/types/doc';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
@@ -21,6 +24,7 @@ let h: AssistantHarness | null = null;
 afterEach(() => {
   h?.dispose();
   h = null;
+  forgetClip();
 });
 
 const ok = async (x: AssistantHarness, tool: string, input: Row) => {
@@ -124,6 +128,37 @@ describe('the copy row', () => {
   );
 
   it(
+    'from clipboard: what the person copied in another Part (kept in the prefs) is in get_model and pastes through the row, all of it, where the person would put it; nothing held, or items named, is said',
+    async () => {
+      forgetClip();
+      h = await assistantHarness({ sketchMode: true });
+      const B = (refs: string[]) => SK({ name: 'B', on: 'Front', entities: [], constraints: [C('k1', 'copy', refs, 'from clipboard')] });
+      expect((await fail(h, 'sketch', B(['at(0, 0)']))).message).toContain('the person has copied no sketch geometry (Ctrl+C in a sketch): nothing is on the clipboard');
+      // The person's Copy in Part A, on another page: kept in the plugin's prefs; this page holds nothing.
+      await ok(h, 'sketch', PLATE('A'));
+      const a = featureNamed(h, 'A');
+      const clip = clipOf(a, a.entities.filter((e) => e.id.startsWith('r__')).map((e) => e.id)) as SketchClip;
+      const store = new Map<string, unknown>();
+      const prefs = { get: async (k: string) => store.get(k) ?? null, set: async (k: string, v: unknown) => void store.set(k, v), remove: async (k: string) => void store.delete(k), onChange: () => () => {} };
+      expect(holdClip({ bridge: { prefs } } as never, clip)).toBe('prefs');
+      forgetClip();
+      Object.assign(h.services.bridge, { prefs });
+      const model = await ok(h, 'get_model', { detail: 'brief', feature: '', regions: 'short' });
+      expect(model.data.clipboard).toBe('4 lines, 4 relations and 1 dimension, copied from A');
+      const r = await ok(h, 'sketch', B(['at(60, 30)']));
+      expect((r.data.made as Row[])[0]).toMatchObject({ id: 'k1', kind: 'copy', entities: ['k1.1', 'k1.2', 'k1.3', 'k1.4'], values: { from: 'the clipboard (copied from A)', copied: '4 lines, 4 relations and 1 dimension', kept: '4 relations and 1 dimension', left_out: '1 relation to other geometry', middle_at: 'at(60, 30)' } });
+      const b = featureNamed(h, 'B');
+      expect(boxOf(b, b.entities.map((e) => e.id))).toEqual([45, 20, 75, 40]);
+      expect(b.constraints.filter(isDimension).map((c) => c.expr)).toEqual(['30 mm']);
+      // "all" is the same; a named item is not (the clipboard pastes whole).
+      await ok(h, 'sketch', SK({ name: 'C', on: 'Right', entities: [], constraints: [C('k1', 'copy', ['all'], 'from clipboard')] }));
+      expect(featureNamed(h, 'C').entities).toHaveLength(4);
+      expect((await fail(h, 'sketch', SK({ name: 'D', on: 'Right', entities: [], constraints: [C('k1', 'copy', ['r'], 'from clipboard')] }))).message).toContain('value "from clipboard" pastes all of what the person copied');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
     'honest errors, and nothing changes',
     async () => {
       h = await assistantHarness({ sketchMode: true });
@@ -133,7 +168,7 @@ describe('the copy row', () => {
       const before = h.doc.state.get().doc.features.map((f) => f.name);
       expect((await fail(h, 'sketch', B(['r'], 'from A; offset 10'))).message).toContain('offset is "<du>, <dv>" in mm ("offset 40, 0"), not "10"');
       expect((await fail(h, 'sketch', B(['r', 'at(0, 0)'], 'from A; offset 1, 2'))).message).toContain('offset or at(u, v), not both');
-      expect((await fail(h, 'sketch', B(['r'], 'from Nope'))).message).toContain('no feature is called "Nope"');
+      expect((await fail(h, 'sketch', B(['r'], 'from Nope'))).message).toContain('no feature is called "Nope" (from takes a sketch, or "clipboard": what the person copied)');
       expect((await fail(h, 'sketch', B(['r'], 'from Base'))).message).toContain('Base is a extrude, not a sketch');
       expect((await fail(h, 'sketch', B(['zz'], 'from A'))).message).toContain('A has no entity called "zz"');
       expect((await fail(h, 'sketch', B(['r'], 'colour red'))).message).toContain('"colour" is not one of from, offset');

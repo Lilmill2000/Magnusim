@@ -117,7 +117,7 @@ describe('the DXF reader', () => {
     expect(fit.notes[0]).toContain('fit points only');
   });
 
-  it('a POLYLINE with VERTEXes and a bulge; a block that inserts itself stops at 16 levels; an INSERT of no block is counted', () => {
+  it('a POLYLINE with VERTEXes and a bulge; a block that inserts itself is left out and counted once; an INSERT of no block is counted', () => {
     const d = readDrawing(
       'p.dxf',
       bytesOf(
@@ -140,7 +140,7 @@ describe('the DXF reader', () => {
     near(a.c, [1, 0]);
     expect(a.ccw).toBe(false);
     expect(l).toMatchObject({ kind: 'line', a: [2, 0], b: [2, 2] });
-    expect(d.skipped).toEqual({ nested: 1, missingBlock: 1 });
+    expect(d.skipped).toEqual({ selfInsert: 1, missingBlock: 1 });
   });
 
   it('a binary DXF is refused with what to do; text that is not a DXF is refused', () => {

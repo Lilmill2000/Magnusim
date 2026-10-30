@@ -124,7 +124,7 @@ export function importTool(mode: SketchMode): SketchTool {
       const out: ToolOption[] = [];
       if (plan) {
         const w = summaryWords(plan.summary);
-        out.push({ kind: 'text', id: 'read', text: w.read }, { kind: 'text', id: 'skipped', text: w.skipped }, { kind: 'text', id: 'size', text: w.size }, { kind: 'text', id: 'open', text: w.open });
+        out.push({ kind: 'text', id: 'read', text: w.read }, { kind: 'text', id: 'skipped', text: w.skipped }, { kind: 'text', id: 'size', text: w.size }, { kind: 'text', id: 'open', text: w.open }, { kind: 'text', id: 'join', text: w.join });
         for (const [i, n] of w.notes.entries()) out.push({ kind: 'text', id: `note-${i}`, text: n });
       }
       out.push({ kind: 'text', id: 'units', text: `Units: ${d.units} (1 unit = ${sig(d.mmPerUnit)} mm)` });
