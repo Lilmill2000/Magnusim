@@ -581,9 +581,12 @@ No test reaches a real model provider or this PC's real Assistant files.
   - The app's side: `scripts/__tests__/assistant-cad-tools.test.mjs` (in
     `npm run test:server`) imports CAD's `src/assistant/schemas.ts` and `guide.ts`:
     every schema passes the app's checks, no CAD property is optional, the first 20 of
-    the 21 tools a CAD turn offers are strict on the cloud dialects (`cad__view` is
-    not), and the local prefix (the tools, the guide and the system prompt) stays within
-    52,000 characters; it prints the size and the estimated tokens.
+    the 31 tools a CAD turn offers are strict on the cloud dialects (the Part's 22
+    first), and, in Magnusim and in Magnusim CAD, the tools as sent fit the registry's
+    own local budget (`LOCAL_BUDGET`: 16,384 tokens for an unknown 32K model, counted at
+    3.5 characters a token) with nothing cut, and the system text (the prompt and the
+    CAD notes) stays within 6,000 characters; it prints both with their share and
+    warns past 90% of the tool budget.
 
 ## A bundled plugin's own suite
 

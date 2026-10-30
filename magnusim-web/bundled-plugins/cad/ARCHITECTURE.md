@@ -1385,9 +1385,13 @@ with the host once for the page's life, and its chip goes in the dock.
   - The app's own check of the set: `scripts/__tests__/assistant-cad-tools.test.mjs`
     (`npm run test:server` in `magnusim-web`) imports `src/assistant/schemas.ts`
     and `guide.ts` and checks every schema against the app's rules, the strict
-    flags (the first 20 of the 21 tools strict on the cloud dialects,
-    `cad__view` not), and that the local prefix stays within 52,000 characters.
-    Run it after any schema or guide change.
+    flags (the first 20 of the 31 tools a CAD turn offers strict on the cloud
+    dialects: the Part's 22 first), and, in both editions, that the tools as sent
+    fit the registry's own local budget (`LOCAL_BUDGET`: 16,384 tokens for an
+    unknown 32K model, at 3.5 characters a token) with nothing cut, and that the
+    system text (the prompt and the CAD notes) stays within 6,000 characters; it
+    prints both and warns past 90% of the tool budget. Run it after any schema or
+    guide change.
 - Phase exit gates: `e2e/cad-p1-document.spec.js` is P1's (proposal §7, one
   test per bullet), against host API 1.2: CAD is On on a fresh install (it
   ships on since D33; `resetCadToDefault()` forgets the choice in the server's
