@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { HELP, helpFor } from '../../src/assistant/help';
 import { assistantTestHandle } from '../../src/assistant/install';
-import { CAD_TOOLS, TOOL_NAMES } from '../../src/assistant/schemas';
+import { CAD_TOOLS, HELP_TOPICS, TOOL_NAMES } from '../../src/assistant/schemas';
 import { KEPT_WORDS } from '../../src/features/enclosure/kept';
 import type { EnclosureFeature } from '../../src/types/doc';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
@@ -66,6 +66,8 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       const errors = rowsOf(await h.ok('help', { topic: 'errors' }));
       expect(errors.map((r) => r.about)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^(link_failed|no_link|opening_geometry) /)]));
       expect(errors.some((r) => r.about.startsWith('feature_failed '))).toBe(true);
+      // Every topic, as a model reading them all gets them (the selectors' role list named the Enclosure).
+      for (const topic of HELP_TOPICS) expect(JSON.stringify(rowsOf(await h.ok('help', { topic }))), topic).not.toMatch(PROJECT_WORDS);
     },
     REAL_KERNEL_MS,
   );

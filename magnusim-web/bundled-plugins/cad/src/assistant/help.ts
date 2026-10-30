@@ -132,11 +132,15 @@ const parameterRows = (): HelpRow[] => [
   },
 ];
 
-/** Every form of the selector language (selectors/parse.ts), with examples. */
-const selectorRows = (): HelpRow[] => [
+/**
+ * Every form of the selector language (selectors/parse.ts), with examples. Magnusim CAD (no
+ * projects) does not name the Enclosure's role: a kept Enclosure's faces still carry it, but the
+ * Part there says nothing of the Enclosure (Daniel: hide all).
+ */
+const selectorRows = (projects = true): HelpRow[] => [
   {
     about: 'made by a feature',
-    text: `FEATURE.ROLE: Base.start, Base.end, Base.side (all its sides), Base.side(l2) (the side swept from sketch entity l2; macro parts as r.top, p.3), Base.end(2) (the second profile's cap), Pipe.side(o@a2) (a sweep side: profile entity @ path entity; Pipe.side(o) is every side swept from o), Fillet 1.fillet(1), Shell 1.inner(Base.end), Row.copy(2) (a pattern copy), Flip.mirror, Split 1.cut. Roles: start, end, side, cut, inner, fillet, chamfer, copy, mirror, import, heal, enclosure. A face merged by a join has every part's label.`,
+    text: `FEATURE.ROLE: Base.start, Base.end, Base.side (all its sides), Base.side(l2) (the side swept from sketch entity l2; macro parts as r.top, p.3), Base.end(2) (the second profile's cap), Pipe.side(o@a2) (a sweep side: profile entity @ path entity; Pipe.side(o) is every side swept from o), Fillet 1.fillet(1), Shell 1.inner(Base.end), Row.copy(2) (a pattern copy), Flip.mirror, Split 1.cut. Roles: start, end, side, cut, inner, fillet, chamfer, copy, mirror, import, heal${projects ? ', enclosure' : ''}. A face merged by a join has every part's label.`,
   },
   {
     about: '~k',
@@ -422,6 +426,7 @@ const HELP_WITHOUT_PROJECTS: Readonly<Record<HelpTopic, readonly HelpRow[]>> = O
   errors: errorRows(false),
   details: detailRows(false),
   workspace: workspaceRows(false),
+  selectors: selectorRows(false),
 });
 
 /** The reference on this host: HELP where it has projects (Magnusim), else HELP_WITHOUT_PROJECTS. */
