@@ -139,9 +139,10 @@ export interface AssistantStatus {
   /**
    * The provider log for a problem report (Settings → Assistant): `on` the switch as saved, `env`
    * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, `folder` where it is kept
-   * (absent from an older server).
+   * (absent from an older server), `server_log` the server's own log's file name when that folder
+   * holds it too (Magnusim CAD's server.log; null otherwise, absent from an older server).
    */
-  provider_log?: { on: boolean; env: boolean; folder: string };
+  provider_log?: { on: boolean; env: boolean; folder: string; server_log?: string | null };
   /** When the coding agents were last looked for (null: not since the server started). */
   agents_checked_at?: string | null;
   /** How an agent's whole tree is stopped on this PC ('best_effort': Windows PowerShell is blocked). */

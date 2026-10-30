@@ -19,6 +19,8 @@ process.env.MAGNUSIM_PROJECTS_ROOT = join(ROOT, 'projects');
 process.env.MAGNUSIM_LOCAL_JSON = join(ROOT, 'local.json');
 process.env.MAGNUSIM_ASSISTANT_HOME = HOME;
 for (const k of Object.keys(process.env)) if (k.startsWith('MAGNUSIM_TEST_ASSISTANT')) delete process.env[k];
+// Magnusim CAD's server log (set only where a test says so).
+delete process.env.MAGNUSIM_SERVER_LOG;
 // The test routes, and the file protector (no helper runs; the switch shows in status).
 process.env.MAGNUSIM_TEST_ASSISTANT = '1';
 process.env.MAGNUSIM_TEST_ASSISTANT_PROTECTOR = 'file';
@@ -36,6 +38,7 @@ const { assistantState, onAssistantShutdown, resetAssistantState } = await impor
 const { registerSecretForRedaction } = await import('../assistant/redact.ts');
 const home = await import('../assistant/home.ts');
 const { TAB_BUSY_TEXT } = await import('../assistant/turns.ts');
+const debugLog = await import('../assistant/debug-log.ts');
 
 const CANARY = 'sk-ant-api03-CANARY-route-canary-0123456789-XyZ9';
 
@@ -400,17 +403,40 @@ describe('status, settings and keys', () => {
   it("the provider log for a problem report: the status says the switch, the variable and the folder; Open log folder makes the folder and shows it; the switch saves", async () => {
     const folder = join(ROOT, 'home', 'assistant', 'logs');
     let r = await get('/api/assistant/status');
-    assert.deepEqual(r.json.provider_log, { on: false, env: false, folder });
+    assert.deepEqual(r.json.provider_log, { on: false, env: false, folder, server_log: null });
     assert.ok(!existsSync(folder), 'reading the status makes nothing');
     r = await post('/api/assistant/log-folder/open', {});
     assert.deepEqual([r.status, r.json], [200, { ok: true, folder }]);
     assert.deepEqual(opened, [folder]);
     assert.ok(existsSync(folder));
     r = await post('/api/assistant/settings', { provider_log: true });
-    assert.deepEqual([r.status, r.json.provider_log], [200, { on: true, env: false, folder }]);
+    assert.deepEqual([r.status, r.json.provider_log], [200, { on: true, env: false, folder, server_log: null }]);
     r = await post('/api/assistant/settings', { provider_log: false });
     assert.equal(r.json.provider_log.on, false);
     rmSync(folder, { recursive: true, force: true });
+  });
+
+  it("Magnusim CAD (MAGNUSIM_SERVER_LOG): the provider log's folder is the server log's, the status names that log, and Open log folder shows that one folder", async () => {
+    const cadLogs = join(ROOT, 'Magnusim CAD', 'logs');
+    process.env.MAGNUSIM_SERVER_LOG = join(cadLogs, 'server.log');
+    debugLog.resetDebugLogForTests();
+    try {
+      let r = await get('/api/assistant/status');
+      assert.deepEqual(r.json.provider_log, { on: false, env: false, folder: cadLogs, server_log: 'server.log' });
+      r = await post('/api/assistant/settings', { provider_log: true });
+      assert.deepEqual(r.json.provider_log, { on: true, env: false, folder: cadLogs, server_log: 'server.log' });
+      assert.equal(debugLog.debugLogDir(), cadLogs, 'the switched-on log goes there');
+      opened.length = 0;
+      r = await post('/api/assistant/log-folder/open', {});
+      assert.deepEqual([r.status, r.json, opened], [200, { ok: true, folder: cadLogs }, [cadLogs]]);
+      assert.ok(existsSync(cadLogs), 'made when missing');
+      r = await post('/api/assistant/settings', { provider_log: false });
+      assert.equal(r.json.provider_log.on, false);
+    } finally {
+      delete process.env.MAGNUSIM_SERVER_LOG;
+      debugLog.resetDebugLogForTests();
+      opened.length = 0;
+    }
   });
 
   it('settings: saved at once, answered with the status; 400 with the field; 409 to confirm a server outside this PC', async () => {

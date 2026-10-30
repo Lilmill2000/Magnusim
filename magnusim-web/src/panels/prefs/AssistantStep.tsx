@@ -119,7 +119,9 @@ export const PROVIDER_LOG_TEXT =
   'While on, every request to a cloud provider or local server is written to a file on this PC, with what came back: your messages and the project data they carry, but never a key. Turn it off when the report is sent.';
 export const PROVIDER_LOG_ENV_TEXT = 'MAGNUSIM_ASSISTANT_DEBUG_LOG keeps the log on while Magnusim runs, whatever this switch says.';
 export const OPEN_LOG_FOLDER = 'Open log folder';
-export const logFolderText = (folder: string): string => `Kept in ${folder}`;
+/** Where the log is kept; with the server's own log there too (Magnusim CAD), it says so: one folder for a problem report. */
+export const logFolderText = (folder: string, serverLog: string | null = null): string =>
+  serverLog ? `Kept in ${folder}, with the server's log (${serverLog})` : `Kept in ${folder}`;
 const OLLAMA_HINT_TEXT =
   "Ollama gives a model a 4K context unless told otherwise, which can silently cut off the tools Magnusim sends. Give the model a larger context (num_ctx in its Modelfile).";
 const TEMPLATE_FIX = 'In LM Studio, pick a model marked for tool use or load a template that has them.';
@@ -1260,7 +1262,7 @@ function ProblemReportBlock({ status }: { status: AssistantStatus }) {
           {OPEN_LOG_FOLDER}
         </button>
         <span className="wiz-assistant-meta" data-assistant-log-folder-path="1">
-          {logFolderText(part.folder)}
+          {logFolderText(part.folder, part.server_log ?? null)}
         </span>
       </div>
       <ErrorLine text={error} hook={{ 'data-assistant-provider-log-error': '1' }} />

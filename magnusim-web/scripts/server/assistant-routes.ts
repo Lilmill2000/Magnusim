@@ -18,7 +18,9 @@
  *   POST /api/assistant/settings        a partial change → status; 400 {error, field}; 409 {needs_confirm:'base_url'}.
  *                                        models: {<provider>: id} saves each provider's own model
  *   POST /api/assistant/log-folder/open {} → {ok, folder}: File Explorer on the provider log's folder
- *                                        (made when missing): MAGNUSIM_ASSISTANT_DEBUG_LOG's, else
+ *                                        (made when missing): MAGNUSIM_ASSISTANT_DEBUG_LOG's, else the
+ *                                        folder of MAGNUSIM_SERVER_LOG's file (Magnusim CAD: one folder
+ *                                        holds the server's log and the provider log), else
  *                                        <home>/assistant/logs (Settings' "Keep a provider log for a
  *                                        problem report", settings.provider_log); 500 open_failed
  *   POST /api/assistant/key             {provider, key} → status (+ warning); 400; 409 storage_unavailable; 500
@@ -202,7 +204,7 @@ import { agentProviderTest, agentSignInRequest, agentTestRequest, WINDOW_PROOF_T
 import { agentIdOf, knownAgent } from './assistant/agents/known.ts';
 import { setAgentRunHooks } from './assistant/agents/discover.ts';
 import { appVersion } from './assistant/host-tools.ts';
-import { debugLogDir, debugLogEnvDir, providerLogDir } from './assistant/debug-log.ts';
+import { debugLogDir, debugLogEnvDir, providerLogDir, serverLogIn } from './assistant/debug-log.ts';
 import { openFolderOnThisPc } from './vtk-export.ts';
 import { mcpSdkInstalled } from './assistant/providers/load-sdk.ts';
 
@@ -311,6 +313,12 @@ export type StatusPart = (s: StatusSources) => Record<string, unknown>;
 
 const round4 = (n: number) => Math.round(n * 1e4) / 1e4;
 
+/** The status's provider_log: the switch, the variable that keeps it on, its folder and the server's log beside it (or null). */
+function providerLogStatus(on: boolean): { on: boolean; env: boolean; folder: string; server_log: string | null } {
+  const folder = debugLogEnvDir() ?? providerLogDir();
+  return { on, env: debugLogEnvDir() !== null, folder, server_log: serverLogIn(folder) };
+}
+
 const STATUS_PARTS: StatusPart[] = [
   ({ settings: s }) => ({
     provider: s.provider,
@@ -326,9 +334,10 @@ const STATUS_PARTS: StatusPart[] = [
     agent_caps: s.agent_caps,
     /**
      * The provider log for a problem report: the switch as saved, whether
-     * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, and its folder.
+     * MAGNUSIM_ASSISTANT_DEBUG_LOG keeps it on whatever the switch says, its folder, and the
+     * server's own log's file name when that folder holds it too (MAGNUSIM_SERVER_LOG).
      */
-    provider_log: { on: s.provider_log, env: debugLogEnvDir() !== null, folder: debugLogEnvDir() ?? providerLogDir() },
+    provider_log: providerLogStatus(s.provider_log),
   }),
   ({ store }) => ({ keys: store.status(), storage: store.storage(), keys_notice: store.notice() }),
   ({ ledger }) => ({ spent_today_usd: round4(ledger.spentToday()) }),

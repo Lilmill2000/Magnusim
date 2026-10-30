@@ -2,10 +2,11 @@
  * The provider debug log, opt-in: with MAGNUSIM_ASSISTANT_DEBUG_LOG=<folder> in the server's
  * environment (read once, at the first use), or while Settings → Assistant's "Keep a provider
  * log for a problem report" is on (settings.provider_log, read at each request: then the folder
- * is <home>/assistant/logs, providerLogDir), every model request an adapter sends appends one
- * JSON row to <folder>/provider.jsonl, a local file only. Off, nothing is kept and nothing
- * costs anything (debugCall() returns null). Past PROVIDER_LOG_MAX the file becomes
- * provider.1.jsonl (the one before it goes) and a new one starts.
+ * is providerLogDir: the server's own log's folder when MAGNUSIM_SERVER_LOG names one, as Magnusim
+ * CAD's desktop app does, so one folder holds both; else <home>/assistant/logs), every model
+ * request an adapter sends appends one JSON row to <folder>/provider.jsonl, a local file only.
+ * Off, nothing is kept and nothing costs anything (debugCall() returns null). Past
+ * PROVIDER_LOG_MAX the file becomes provider.1.jsonl (the one before it goes) and a new one starts.
  *
  * A row: time, turn and step (debugScoped, from the loop), dialect, model, attempt (strict,
  * reduced, loose; for a local server no_images, with_images, without_images), for a cloud request
@@ -24,7 +25,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { assistantDataDir } from './home.ts';
 import { alog } from './log.ts';
 import { redact } from './redact.ts';
@@ -32,6 +33,8 @@ import { assistantState } from './state.ts';
 import type { ProviderAdapter, ProviderId, ProviderResult } from './types.ts';
 
 export const DEBUG_LOG_ENV = 'MAGNUSIM_ASSISTANT_DEBUG_LOG';
+/** The server's own console log, a file (Magnusim CAD's desktop app sets it: desktop/config.mjs serverEnv). */
+export const SERVER_LOG_ENV = 'MAGNUSIM_SERVER_LOG';
 export const DEBUG_LOG_FILE = 'provider.jsonl';
 /** The file before the current one (PROVIDER_LOG_MAX). */
 export const DEBUG_LOG_OLD = 'provider.1.jsonl';
@@ -51,6 +54,7 @@ const REQUEST_ID_HEADERS = ['request-id', 'x-request-id'];
 const BASE64 = /^(data:[\w.+/-]+;base64,)?[A-Za-z0-9+/=\r\n]+$/;
 
 let envDir: string | null | undefined;
+let serverLog: string | null | undefined;
 let made: string | null = null;
 let warned = false;
 let queue: Promise<void> = Promise.resolve();
@@ -64,9 +68,28 @@ export function debugLogEnvDir(): string | null {
   return envDir;
 }
 
-/** Where Settings' provider log goes: <home>/assistant/logs. */
+/** The server's own log file MAGNUSIM_SERVER_LOG names, or null (the environment is read once). */
+export function serverLogFile(): string | null {
+  if (serverLog === undefined) {
+    const v = String(process.env[SERVER_LOG_ENV] ?? '').trim();
+    serverLog = v ? resolve(v) : null;
+  }
+  return serverLog;
+}
+
+/**
+ * Where Settings' provider log goes: the server's log's folder when MAGNUSIM_SERVER_LOG names one
+ * (Magnusim CAD: %APPDATA%\Magnusim CAD\logs, beside server.log), else <home>/assistant/logs.
+ */
 export function providerLogDir(): string {
-  return join(assistantDataDir(), 'logs');
+  const server = serverLogFile();
+  return server ? dirname(server) : join(assistantDataDir(), 'logs');
+}
+
+/** The server's log's file name when it is kept in `folder` (the provider log's), else null. */
+export function serverLogIn(folder: string): string | null {
+  const server = serverLogFile();
+  return server && resolve(dirname(server)) === resolve(folder) ? basename(server) : null;
 }
 
 /** The folder rows go to, or null when the log is off: the environment's, else Settings' switch's (as last read or saved). */
@@ -79,6 +102,7 @@ export function debugLogDir(): string | null {
 /** Tests: read the environment again at the next use. */
 export function resetDebugLogForTests(): void {
   envDir = undefined;
+  serverLog = undefined;
   made = null;
   warned = false;
 }

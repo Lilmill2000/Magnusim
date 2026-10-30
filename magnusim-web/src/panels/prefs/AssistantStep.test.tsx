@@ -12,6 +12,7 @@ import {
   LOCAL_LIMITS_TEXT,
   LOCAL_PRICE_TEXT,
   LOCAL_PRIVACY_TEXT,
+  logFolderText,
   NOT_USED_TEXT,
   OPEN_LOG_FOLDER,
   PRIVACY_COPY,
@@ -1192,5 +1193,16 @@ describe('AssistantStep problem report', () => {
     resetStatusStore();
     await ready();
     expect(q('[data-assistant-provider-log]')).toBeNull();
+  });
+
+  it("Magnusim CAD (the server's log in the same folder): the line names the folder and the server's log; Open log folder shows that folder", async () => {
+    const folder = 'C:/Users/me/AppData/Roaming/Magnusim CAD/logs';
+    await ready({ provider_log: { ...LOG, folder, server_log: 'server.log' } });
+    expect(q('[data-assistant-log-folder-path]')!.textContent).toBe(`Kept in ${folder}, with the server's log (server.log)`);
+    expect(logFolderText(folder, null)).toBe(`Kept in ${folder}`);
+    await act(async () => {
+      fireEvent.click(within(q('[data-assistant-provider-log]')!).getByRole('button', { name: OPEN_LOG_FOLDER }));
+    });
+    await waitFor(() => expect(posts('/api/assistant/log-folder/open')).toHaveLength(1));
   });
 });
