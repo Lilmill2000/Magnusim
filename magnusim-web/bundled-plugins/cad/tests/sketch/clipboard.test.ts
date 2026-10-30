@@ -242,6 +242,8 @@ describe('copy and paste in sketch mode (real solver)', () => {
     h.mode.select(ids.map((id) => ({ what: 'entity', id })), false);
     expect(await run(h, 'sketch.copy')).toBe(true);
     expect(h.mode.view.get().note).toBe('Copied 4 lines, 4 relations and 1 dimension.');
+    // What it did, never in a refusal's red: the panel's plain note.
+    expect(h.mode.view.get().noteTone).toBe('info');
     const clip = peekClip()!;
     expect(near(clip.anchor, [25, 20])).toBe(true);
     expect(await run(h, 'sketch.paste')).toBe(true);
@@ -297,6 +299,7 @@ describe('copy and paste in sketch mode (real solver)', () => {
     h.mode.select(ids.map((id) => ({ what: 'entity', id })), false);
     await run(h, 'sketch.copy');
     expect(h.mode.view.get().note).toBe('Copied 4 lines and 4 relations; 1 relation to other geometry will be left out.');
+    expect(h.mode.view.get().noteTone).toBe('warning');
     await run(h, 'sketch.paste');
     expect(h.mode.tool?.options?.().map((o) => ('text' in o ? o.text : o.id))).toEqual(['From Sketch 1: 4 lines and 4 relations', '1 relation to other geometry will be left out', 'cancel']);
     // Escape: the paste goes, nothing added.
@@ -313,6 +316,7 @@ describe('copy and paste in sketch mode (real solver)', () => {
     await h.idle();
     expect(lines(h)).toHaveLength(8);
     expect(h.mode.view.get().note).toBe('Pasted 4 lines and 4 relations: 1 relation to other geometry was left out.');
+    expect(h.mode.view.get().noteTone).toBe('warning');
     expect(h.mode.state.get().status).toMatchObject({ dof: 6 });
   });
 
@@ -320,6 +324,7 @@ describe('copy and paste in sketch mode (real solver)', () => {
     h = await sketchHarness();
     await run(h, 'sketch.paste');
     expect(h.mode.view.get().note).toBe('Nothing to paste: select sketch geometry and Copy it first');
+    expect(h.mode.view.get().noteTone).toBe('error');
     expect(h.mode.state.get().tool).toBe('select');
     // Copy needs geometry selected: the key is the browser's then.
     expect(h.services.commands.get('sketch.copy')!.passKey!()).toBe(true);

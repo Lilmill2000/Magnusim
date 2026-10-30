@@ -4,7 +4,10 @@
 // sketch, and OK adds them in one undo step; Ctrl+Z takes them out and Ctrl+Y brings them back;
 // the outlines close into profiles that Extrude takes (the volume chip is their areas times the
 // depth). A DXF's layers are ticked as the file has them (one it has off unticked); leaving a
-// layer out, the scale and Centred change what the panel says and what goes in. A hostile SVG:
+// layer out, the scale and Centred change what the panel says and what goes in. The DXF (533 mm
+// wide, the sketch empty) is framed whole beside the panels when it opens; zoomed in on, Fit
+// frames it again; a layer left out keeps the camera where it is (it all shows); a scale that takes
+// it out of view frames it again. A hostile SVG:
 // nothing of it runs or is fetched, and the panel counts each part it left out. A binary DXF is
 // refused in the panel's foot. Files that would stall or break it: an ARC whose angle is 1e300 is
 // read at once (that arc counted as unreadable); an SVG whose root is 0 wide and 0 high reads in CSS
@@ -17,7 +20,15 @@ import { bytesOf, DXF_BINARY, DXF_PART, dxf, SVG_HOSTILE, SVG_MM, SVG_MM_RECT_AR
 import { chipVolumes, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 type V2 = [number, number];
-type W = { __CAD__: { services: { apis: { get(): { sketch: { idle?(): Promise<void>; draft(): { points: Record<string, V2>; entities: { id: string; kind: string; construction?: boolean }[] } | null; view: { get(): { preview: { lines: unknown[] } | null } } } } } } } };
+type Handle = { project(p: number[]): [number, number] | null; camera(): unknown; state: { get(): { animating: boolean } } };
+type W = {
+  __CAD__: {
+    services: {
+      apis: { get(): { sketch: { idle?(): Promise<void>; draft(): { points: Record<string, V2>; entities: { id: string; kind: string; construction?: boolean }[] } | null; view: { get(): { preview: { lines: [V2, V2][] } | null } } } } };
+      viewport: { get(): { handle: Handle | null } };
+    };
+  };
+};
 
 async function freshPart(page: Page, request: Parameters<typeof newProject>[0]) {
   const seen = await watchPage(page);
@@ -50,6 +61,43 @@ async function drawn(page: Page): Promise<{ kinds: Record<string, number>; point
 }
 
 const previewLines = (page: Page) => workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.apis.get().sketch.view.get().preview?.lines.length ?? 0);
+
+/**
+ * Whether the whole preview shows: its box's four corners (a sketch on Top: u, v = x, y), each
+ * projected through the view, inside the canvas and right of the panels over it ([data-view-cover]).
+ */
+const previewInView = (page: Page) =>
+  workspaceFrame(page).evaluate(() => {
+    const cad = (window as unknown as W).__CAD__.services;
+    const p = cad.apis.get().sketch.view.get().preview;
+    const h = cad.viewport.get().handle;
+    if (!p || !p.lines.length || !h) return 'no preview';
+    let [u0, v0, u1, v1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const seg of p.lines)
+      for (const [u, v] of seg) {
+        u0 = Math.min(u0, u);
+        v0 = Math.min(v0, v);
+        u1 = Math.max(u1, u);
+        v1 = Math.max(v1, v);
+      }
+    const c = document.querySelector('[data-cad-viewport] canvas')!.getBoundingClientRect();
+    let left = c.left;
+    for (const el of Array.from(document.querySelectorAll('[data-view-cover]'))) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) left = Math.max(left, r.right);
+    }
+    const off = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]].filter(([u, v]) => {
+      const s = h.project([u, v, 0]);
+      return !s || s[0] < left || s[0] > c.right || s[1] < c.top || s[1] > c.bottom;
+    });
+    return off.length ? `${off.length} of 4 corners off the view: ${JSON.stringify(off)}` : 'in view';
+  });
+
+const camera = (page: Page) => workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle?.camera() ?? null);
+
+async function settled(page: Page) {
+  await expect.poll(() => workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.viewport.get().handle?.state.get().animating ?? true)).toBe(false);
+}
 
 async function enterSketchOnTop(frame: FrameLocator) {
   await frame.locator('[data-tree-node="origin:top"] > .tree-row').click();
@@ -123,12 +171,40 @@ test("cad:sketch-import-dxf a DXF in inches: its layers ticked as the file has t
   await expect(opts(frame).locator('input[data-sketch-option="layer:Parts"]')).toBeChecked();
   await expect(opts(frame).locator('input[data-sketch-option="layer:Hidden"]')).not.toBeChecked();
   await expect(opts(frame).locator('label', { hasText: 'Layer Hidden (1) · off in the file' })).toHaveCount(1);
-  // Only the inserted block's square: 2 x 2 inches.
+  // The whole drawing shows (533 x 65 mm; the sketch is empty): framed beside the panels as it opened.
+  await expect.poll(() => previewInView(page), { timeout: 15_000 }).toBe('in view');
+  await settled(page);
+  // Zoomed in on its middle, it reaches off the view; Fit frames it whole again (the preview counts).
+  const mid = await workspaceFrame(page).evaluate(() => {
+    const cad = (window as unknown as W).__CAD__.services;
+    const pts = cad.apis.get().sketch.view.get().preview!.lines.flat();
+    const at = (k: 0 | 1) => (Math.min(...pts.map((q) => q[k])) + Math.max(...pts.map((q) => q[k]))) / 2;
+    return cad.viewport.get().handle!.project([at(0), at(1), 0]);
+  });
+  const host = (await page.locator('#workspace-frame').boundingBox())!;
+  await page.mouse.move(host.x + mid![0], host.y + mid![1]);
+  for (let i = 0; i < 15; i++) await page.mouse.wheel(0, -100);
+  await settled(page);
+  await expect.poll(() => previewInView(page)).toMatch(/corners off the view/);
+  await runCommand(frame, 'view.fit');
+  await expect.poll(() => previewInView(page), { timeout: 15_000 }).toBe('in view');
+  await settled(page);
+  const fitted = await camera(page);
+  // Only the inserted block's square: 2 x 2 inches; it shows where it is, so the camera stays.
   await opts(frame).locator('input[data-sketch-option="layer:0"]').uncheck();
   await expect(opt(frame, 'read')).toHaveText('Read: 4 lines');
   await expect(opt(frame, 'size')).toHaveText('Size: 50.8 × 50.8 mm');
-  // A scale of 1 mm per unit, centred on the origin.
+  await settled(page);
+  expect(await previewInView(page)).toBe('in view');
+  expect(await camera(page)).toEqual(fitted);
+  // 2540 mm per unit takes it far out of view: framed again.
   const scale = opts(frame).locator('.nui[data-field="sk-scale"] input');
+  await scale.fill('2540');
+  await scale.press('Enter');
+  await expect(opt(frame, 'size')).toHaveText('Size: 5080 × 5080 mm');
+  await expect.poll(() => previewInView(page), { timeout: 15_000 }).toBe('in view');
+  await settled(page);
+  // A scale of 1 mm per unit, centred on the origin.
   await scale.fill('1');
   await scale.press('Enter');
   await expect(opt(frame, 'size')).toHaveText('Size: 2 × 2 mm');

@@ -11,11 +11,13 @@
 // says 198 regions and the largest's area, and the tree shows the wheel's body, its volume the
 // toothed wheel's. A fourth: the person attaches a DXF in the app's Assistant panel; the model
 // imports it with the sketch tool's import row (the host's readAttachment) and extrudes its slot:
-// made says what the person's Import SVG/DXF panel says, and the tree and the volume chip show it.
+// made says what the person's Import SVG/DXF panel says, the dock's sketch step names the drawing,
+// what it read and what it skipped (the person gets what the model gets), and the tree and the
+// volume chip show it.
 // A fifth: the model copies a sketch's rectangle into a sketch on another plane with the copy row
 // (the person's Copy and Paste) and extrudes it: made says what was copied and what was left out
 // (its tie to the origin), the copy keeps its dimension, and the tree and the volume chip show it.
-// A sixth: the person copies a sketch's rectangle with Ctrl+C (the foot says what was copied); the
+// A sixth: the person copies a sketch's rectangle with Ctrl+C (the foot's note says what was copied); the
 // model reads what is held (get_model's clipboard) and pastes it into a sketch on Front with the
 // copy row's "from clipboard", then extrudes it: the tree and the volume chip show it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
@@ -270,6 +272,9 @@ test('cad:assistant-sketch-tools-import a DXF the person attaches in the dock: t
   expect(sk.data!.open).toEqual([]);
   const [ex] = resultsIn(afterExtrude);
   expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Slot', state: 'ok' } } });
+  // What the person sees in the dock: the sketch step names the drawing, what it read and the TEXT it skipped.
+  const step = core.dockTurn(page).locator('[data-dock-step] [data-dock-result]').filter({ hasText: 'Sketch "Drawing"' });
+  await expect(step).toHaveText(/^✓ Sketch "Drawing" on Top: imported part\.dxf \(read 14 curves; skipped 1 TEXT\), under-defined \(dof \d+\), 7 regions \(largest [\d.]+ mm²\) · /, STEP);
   // What the person sees: the sketch (under-defined, as imported geometry is: "(-)") and the body in
   // the tree, the sketch's 14 curves, the slot's volume.
   await expect(historyNames(frame)).toHaveText(['(-) Drawing', 'Slot'], STEP);
@@ -343,7 +348,7 @@ test('cad:assistant-sketch-tools-clipboard the person copies a rectangle with Ct
   await clickAt([15, 0, 0]);
   for (const p of [[30, 10, 0], [15, 20, 0], [0, 10, 0]]) await clickAt(p, true);
   await page.keyboard.press('Control+c');
-  await expect(frame.locator('[data-cad-panel="sketch"] [data-run-reason]')).toHaveText('Copied 4 lines, 4 relations and 1 dimension; 1 relation to other geometry will be left out.');
+  await expect(frame.locator('[data-cad-panel="sketch"] [data-panel-note]')).toHaveText('Copied 4 lines, 4 relations and 1 dimension; 1 relation to other geometry will be left out.');
   await frame.locator('[data-cad-toolbar] [data-command="sketch.finish"]').click();
   await expect(frame.locator('[data-cad-toolbar="model"]')).toBeVisible();
 

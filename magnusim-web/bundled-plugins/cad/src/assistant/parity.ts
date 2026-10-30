@@ -681,6 +681,7 @@ export const VIEWPORT: { readonly [K in keyof ViewportHandle]-?: Reach } = {
   addLayer: INTERNAL,
   reframe: W('fit'),
   refitIfOffScreen: W('fit'),
+  offView: INTERNAL,
   pushTool: POINTER,
   rayAt: POINTER,
   toPlane: POINTER,

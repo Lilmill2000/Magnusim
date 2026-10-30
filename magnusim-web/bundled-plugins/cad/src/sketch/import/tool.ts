@@ -6,13 +6,15 @@
 // unit, from its units), where it goes (its own origin on the sketch origin, or centred there), the
 // DXF's layers to take, and OK / Cancel. The curves are previewed in the sketch while it is open;
 // OK adds them in one sketch undo step (common.ts importIntoDraft, the Assistant's import row runs
-// the same), Cancel or Escape adds nothing.
+// the same), Cancel or Escape adds nothing. The drawing is framed when it opens partly off the view,
+// and when a Scale, Place or layer change takes it out of view; Fit counts it while the tool is open.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { filesFor } from '../../files/transfer';
 import type { AppServices } from '../../types/app';
 import type { CommandDef } from '../../types/commands';
 import { uiFor } from '../../ui/controller';
-import { emptyPreview, type ApplyResult, type SketchMode, type SketchTool } from '../mode';
+import type { Vec2 } from '../../types/doc';
+import { emptyPreview, toModel, type ApplyResult, type SketchMode, type SketchTool } from '../mode';
 import type { ToolOption } from '../tools/options';
 import { sig, type ImportPlan } from './common';
 import { DRAWING_ACCEPT, DRAWING_MAX_BYTES, importIntoDraft, planImport, previewSegments, summaryWords, tooLarge, tryReadDrawing, type Drawing, type ImportOptions } from './index';
@@ -94,9 +96,52 @@ export function importTool(mode: SketchMode): SketchTool {
     mode.setPreview(plan && !problem ? { ...emptyPreview(), lines: previewSegments(plan) } : null);
     mode.refreshHint();
   };
+  /** The drawing's box as previewed (sketch u/v: min, max), or null when nothing previews. */
+  const box = (): [Vec2, Vec2] | null => {
+    const b = plan && !problem ? plan.summary.box : null;
+    return b ? [[b.min[0], b.min[1]], [b.max[0], b.max[1]]] : null;
+  };
+  // The drawing in view (the owner's review: part.dxf, 533 mm wide, lay mostly off the view, and
+  // Fit framed nothing, the sketch being empty). Opening it fits the view (its preview counting:
+  // frameUv) when part of it is off what the panels leave free, once the camera rests; so does a
+  // Scale, Place or layer change that takes it out of view. The camera stays when it all shows,
+  // and when it did not all show before the change (the person zoomed in on a part of it).
+  let waiting: (() => void) | null = null;
+  /** Whether the previewed drawing reaches off the view now (null: nothing previews, or no view). */
+  const offView = (): boolean | null => {
+    const h = mode.services.viewport.get().handle;
+    const plane = mode.plane();
+    const b = box();
+    if (!h?.offView || !plane || !b) return null;
+    const [lo, hi] = b;
+    return h.offView(([lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]] as Vec2[]).map((uv) => toModel(plane, uv)));
+  };
+  const frame = () => {
+    waiting?.();
+    waiting = null;
+    const h = mode.services.viewport.get().handle;
+    if (!h) return;
+    const go = () => {
+      if (mode.tool === tool && offView()) h.fit({ auto: true });
+    };
+    if (!h.state.get().animating) {
+      go();
+      return;
+    }
+    const off = h.state.subscribe((s) => {
+      if (s.animating) return;
+      off();
+      waiting = null;
+      go();
+    });
+    waiting = off;
+  };
   const refresh = () => {
+    // All in view before the change (nothing previewed counts so; a transition running is a framing).
+    const shown = mode.services.viewport.get().handle?.state.get().animating === true || offView() !== true;
     replan();
     show();
+    if (shown) frame();
   };
   const ok = () => {
     if (!d || !plan || problem || busy) return;
@@ -178,14 +223,19 @@ export function importTool(mode: SketchMode): SketchTool {
       ok();
       return true;
     },
+    frameUv: () => box(),
     dispose() {
+      waiting?.();
+      waiting = null;
       mode.setPreview(null);
     },
   };
   replan();
-  // The preview once the tool is in hand (setTool clears the preview after making it).
+  // The preview once the tool is in hand (setTool clears the preview after making it), in view.
   queueMicrotask(() => {
-    if (mode.tool === tool) show();
+    if (mode.tool !== tool) return;
+    show();
+    frame();
   });
   return tool;
 }

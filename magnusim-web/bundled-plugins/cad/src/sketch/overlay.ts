@@ -418,7 +418,9 @@ export function attachOverlay(mode: SketchMode, handle: ViewportHandle): () => v
   let curvesUv: UvBox | null = null;
   let dimsUv: UvBox | null = null;
   function frameBox(): FrameBox | null {
-    const b = unionUv(curvesUv, dimsUv);
+    // What the tool shows that counts too (Import SVG/DXF's drawing before it is in the sketch).
+    const t = mode.tool?.frameUv?.() ?? null;
+    const b = unionUv(unionUv(curvesUv, dimsUv), t ? uvBoxOf(t) : null);
     if (!plane || !b) return null;
     const min: Vec3 = [Infinity, Infinity, Infinity];
     const max: Vec3 = [-Infinity, -Infinity, -Infinity];
