@@ -312,8 +312,8 @@ export class SketchCompiler {
     this.stored = stored;
     const entitiesIn = input.entities ?? [];
     const constraintsIn = input.constraints ?? [];
-    // An import row brings its own shapes (ops.ts): entities may be [] with one.
-    if (!entitiesIn.length && !constraintsIn.some((r) => r?.kind === 'import')) refuse('bad_input', ['entities: give at least one shape (or an import row)']);
+    // An import or copy row brings its own shapes (ops.ts): entities may be [] with one.
+    if (!entitiesIn.length && !constraintsIn.some((r) => r?.kind === 'import' || r?.kind === 'copy')) refuse('bad_input', ['entities: give at least one shape (or an import or copy row)']);
     if (constraintsIn.length > MODEL_CONSTRAINTS_MAX) refuse('bad_input', [`constraints: at most ${MODEL_CONSTRAINTS_MAX}, not ${constraintsIn.length}: split the sketch`]);
     const storedIds = new Set<string>(
       stored ? [...Object.keys(stored.points), ...stored.entities.map((e) => e.id), ...stored.constraints.map((c) => c.id), ...(stored.ties ?? []).map((t) => t.id), ...(stored.links ?? []).map((l) => l.id)] : [],

@@ -8,7 +8,8 @@
 //  - tree: Delete and Rename in the right-click menu of the Part's row (always there, an empty Part
 //    too: DesignTree), and of a feature's row (Rename also a body's: controller featureMenu, bodyMenu);
 //  - rail: a right-click on the arrow that collapses the design tree or the Sketch panel;
-//  - sketch-menu: Delete in the right-click menu of the selected sketch geometry (overlay);
+//  - sketch-menu: Delete and Copy in the right-click menu of the selected sketch geometry, Paste in
+//    every right-click menu of the sketch (overlay);
 //  - sketch-finish: Place or finish in Finish sketch's right-click menu and the sketch's.
 // Owner: INTEGRATE.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -23,6 +24,8 @@ const EXPLICIT: Readonly<Record<string, { place: KeybindPlace; words: string }>>
   'ui.rename': { place: 'tree', words: "right-click the Part's row at the top of the design tree (or a feature's or a body's row), then Set keybind for Rename…" },
   'ui.toggle-rail': { place: 'rail', words: 'right-click the arrow that collapses the design tree or the Sketch panel, then Set keybind…' },
   'sketch.delete': { place: 'sketch-menu', words: 'in a sketch, right-click the selected geometry, then Set keybind for Delete…' },
+  'sketch.copy': { place: 'sketch-menu', words: 'in a sketch, right-click the selected geometry, then Set keybind for Copy…' },
+  'sketch.paste': { place: 'sketch-menu', words: 'in a sketch, right-click the selected geometry or an empty place of the sketch, then Set keybind for Paste…' },
   'sketch.enter': { place: 'sketch-finish', words: 'in a sketch, right-click Finish sketch on the toolbar (or an empty place of the sketch), then Set keybind for Place or finish…' },
 });
 

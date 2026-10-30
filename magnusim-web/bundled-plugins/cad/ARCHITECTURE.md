@@ -94,6 +94,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `src/features/pattern/**`, `tests/features/pattern/**`, the "P4b: patterns and mirror" block of `src/types/doc.ts` and its union members, `PatternOutput` in `src/types/doc-service.ts`, kernel API 5 (`kernel-build/`, `workspace/kernel/mk32.*`, `src/types/kernel-protocol.ts`, `src/kernel/timeouts.ts` rows), `tests/kernel/kernel-api5-p4b.test.ts`, `e2e/cad-p4b-pattern.spec.ts`; Measure's pick carry-over block in `src/features/measure/panel.tsx` | P4b PATTERN | Linear pattern, Circular pattern, Mirror (features, bodies, faces); copy names; the kernel ops `copies`, `project`, `section`, `silhouette` and spline curves. In P4b only PATTERN edited the kernel. |
 | `src/sketch/tools/**`, `src/solver-worker/**`, `solver-build/**`, the "P4b (SKETCH)" blocks (`SketchSplineEntity`, `SketchTie`, `SketchFeature.ties`), `tests/sketch/p4b-*.test.ts` but links, `tests/solver/p4b-*`, `e2e/cad-p4b-sketch-tools.spec.ts` | P4b SKETCH | Fit-point and control-point splines, sketch Mirror, Linear and Circular pattern, Offset, Fillet, Chamfer, the pattern and offset rows (`ties`). |
 | `src/sketch/import/**`, `tests/sketch/import/**`, `tests/assistant/sketch-import.test.ts`, `e2e/cad-sketch-import.spec.ts` | P3-SKETCH (Import SVG/DXF) | One parser for the person's Import SVG/DXF and the Assistant's import row (§10 "Import SVG/DXF"). |
+| `src/sketch/tools/clip.ts`, `src/sketch/tools/paste.ts`, `tests/sketch/clipboard.test.ts`, `tests/app/clipboard-keys.test.ts`, `tests/assistant/sketch-copy.test.ts`, `e2e/cad-sketch-copy-paste.spec.ts` | P3-SKETCH (Copy and Paste) | The person's Copy and Paste and the Assistant's copy row (§10 "Copy and Paste"). |
 | `src/sketch/select-tool.ts`, `select-filter.ts`, `select-menu.ts`, `src/sketch/pick.ts`, `src/sketch/project/**`, `src/viewport/boxselect.ts`, `boxpick.ts`, `normal.ts`, `src/features/selectcount/**`, the "P4b: linked sketch geometry" block of `src/types/doc.ts`, `tests/viewport/{boxselect,normal}.test.ts`, `tests/sketch/p4b-links.test.ts`, `e2e/cad-p4b-select.spec.ts`, `e2e/cad-p4b-project.spec.ts`, `e2e/cad-p4b-project-step.spec.ts` | P4b SELECT | Construction from the right-click menu, box selection in both modes, Project / Intersect (linked geometry, Lost reference, Break link), snaps on the model, Normal to for planes and sketches. The mouse binding (§7 "Mouse") is INTEGRATE's since Daniel's decision of 2026-10-06. |
 | What the Assistant's tools stand on, each in its area's own files: `doc.assistant`, `settled`, `bodiesBefore`, `committed`, `editParams` and `BodyProps.shells` (`src/doc/service.ts`, `params-bulk.ts`, `person-editing.ts`, `rebuild.ts`), undo tags and snapshots (`src/doc/undo.ts`, `src/types/undo.ts`); `openForAssistant`, `openEditForAssistant`, `openParamsForAssistant`, `doneForAssistant`, `dropForAssistant` and the read-only chrome (`src/ui/controller.ts`, `src/ui/kit/Panel.tsx`, `src/ui/panels/ParametersPanel.tsx`); Assistant sketches (`src/sketch/mode.ts`, `commands.ts`) and `analyzeOnce` (`src/solver-worker/`, `src/sketch/solver-client.ts`); `snapshot`, `project`, `visibleFaceAt`, `userCameraMoves` and `{auto}` camera calls (`src/viewport/snapshot.ts`, `viewport.ts`); `AreaApis.assistant` (`src/types/app.ts`). Tests: `tests/doc/{assistant-step,params-bulk,settled}.test.ts`, `tests/ui/controller-assistant.test.ts`, `tests/sketch/mode-assistant.test.ts`, `tests/viewport/{camera-count,snapshot,snapshot-plain}.test.ts`, the `auto-camera` tests, e2e `cad-assistant-panels` and `cad-viewport-snapshot` (shell), `cad-assistant-sketch` (sketch) | DOC-CORE, UI-SHELL, P3-SKETCH, VIEWPORT | §6 "Assistant steps", §7 "Assistant panels and sketches". ASSISTANT calls them and changes none of them. |
 | `src/assistant/**`, `src/features/assistant/**`, `src/types/assistant.ts`, `tests/assistant/**`, `tests/fakes/assistant-sdk.ts`, `e2e/assistant-helpers.ts`, `e2e/cad-assistant-{watch,honest,coexist,takeover,eval}.spec.ts`, `eval/**`, `docs/assistant.md` | ASSISTANT | The Part's 18 tools for the app's Assistant and the chip (§12). Its hooks in shared files are small and additive: `assistantOf` in `src/lib/bridge.ts`, the `assistant` getter in `src/app/debug.ts`, `data-assistant` in `src/app/App.tsx`, its section of `src/types/events.ts`, the fake host's `assistant` (`tests/fakes/workspace-sdk.ts`), the `assistant` shard, its `RULES` and `npm run test:e2e:assistant`. The app's host test `scripts/__tests__/assistant-cad-tools.test.mjs` imports `src/assistant/schemas.ts` and `guide.ts`, so those two keep type-only imports. |
@@ -1907,6 +1908,33 @@ with the host once for the page's life, and its chip goes in the dock.
   names the curves `<id>.1`..., and its `made` row carries the same words; the
   watch path draws the import in one step (`Compiled.drawGroups`). The app's
   Assistant panel offers drawings since this (its `DRAWINGS_OFFERED`).
+- **Copy and Paste (`src/sketch/tools/clip.ts`, `paste.ts`).** `clipOf(draft,
+  ids)` takes the picked entities (a picked point under a point entity is that
+  entity), the points they use and every relation and dimension whose refs are
+  all among them, as plain data (`SketchClip`: entities, points, constraints,
+  each dimension's value, the count of those left out because a ref is outside,
+  and the anchor, the middle of the copy's box). `pasteClip(draft, clip, at)`
+  makes new geometry with `copyEntities` (its `at` reader takes the clip's own
+  points), moved so the anchor lands on `at` in the target's u, v (another
+  plane takes the same 2D shape), re-makes the relations and dimensions on the
+  copies (labels and a Fix moved with it; an expression the target cannot
+  evaluate, another Part's parameter, becomes the value it had). The person:
+  `sketch.copy` / `sketch.paste` (Ctrl+C / Ctrl+V, keymap context sketch, Set
+  keybind in the selection's right-click menu, which also has Copy and Paste).
+  Copy holds the clip in the page and in the plugin's prefs (`sketch-clipboard`,
+  when its JSON is at most 16 KB; a bigger one removes the old one), so another
+  Part's page (the frame is made again per Part) or tab pastes it; the
+  `paste` sketch tool shows it under the pointer (`infer` snaps, no relation
+  made), a click or Enter applies `pasteClip` as one sketch undo step and selects
+  the copies, Escape puts it down. `CommandDef.passKey` gives Ctrl+C back to the
+  browser while no sketch geometry is selected; the keyboard never runs a
+  command from a text field (`typingIn`), so a field's own copy and paste stay.
+  The Assistant: the sketch tool's `copy` row (`assistant/sketch/ops.ts`) runs
+  the same two on this call's geometry or, with `from`, another sketch's (its
+  names by `describeSketch` refOf, a macro by its head, or "all"), at
+  `at(u, v)` or an `offset`; made gives copied, kept, left_out and middle_at,
+  a warning says what was left out, the copies are `<id>.<item>`, and the watch
+  path draws them in one step.
 - **Linked sketch geometry (P4b SELECT, `src/sketch/project/`).** Project (P)
   takes a vertex, an edge or a face (its outer edges) of any body, imports
   included, or with Silhouette a body's outline along the sketch normal;

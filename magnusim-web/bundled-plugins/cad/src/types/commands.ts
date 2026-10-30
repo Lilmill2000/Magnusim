@@ -92,6 +92,11 @@ export interface CommandDef {
   activeWhen?: { featureType?: string; tool?: string; sketchTool?: string };
   /** ux010 (DRAW): drawn pressed while this is true, a mode the command toggles (sketch mode's construction drawing). */
   pressed?(): boolean;
+  /**
+   * While this is true a press of its key is not the command's: the key goes on to the page and the
+   * browser (sketch Copy with no sketch geometry selected: Ctrl+C copies the selected text).
+   */
+  passKey?(): boolean;
   run(services: AppServices): void | Promise<void>;
 }
 

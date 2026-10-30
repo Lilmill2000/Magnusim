@@ -103,7 +103,9 @@ const REPLY_KEYS = [
   // now; its answer: the app's Assistant panel key as the person chose it.
   'set_in', 'taken_by_app', 'assistant_panel_keys',
   // The sketch tool's import row: its made row's open ends, and the host's attachment_id line it reads.
-  'open_ends', 'attachment_id'];
+  'open_ends', 'attachment_id',
+  // The sketch tool's copy row: what its made row says was left out.
+  'left_out'];
 
 /** Every text of help, and the guide. */
 const helpTexts = () => Object.values(HELP).flatMap((rows) => rows.flatMap((r) => [r.about, r.text]));

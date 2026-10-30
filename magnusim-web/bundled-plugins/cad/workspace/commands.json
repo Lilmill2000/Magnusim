@@ -409,6 +409,24 @@
       ]
     },
     {
+      "id": "sketch.copy",
+      "label": "Copy",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Ctrl+KeyC"
+      ]
+    },
+    {
+      "id": "sketch.paste",
+      "label": "Paste",
+      "group": "Sketch",
+      "context": "sketch",
+      "keys": [
+        "Ctrl+KeyV"
+      ]
+    },
+    {
       "id": "view.sketch-look",
       "label": "Normal to",
       "group": "Sketch",

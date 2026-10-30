@@ -24,6 +24,13 @@
 //                                   "scale <mm per unit>; place origin|centre; layers <a>, <b>";
 //                                   its curves are "<id>.1", "<id>.2"... and `made` gives the
 //                                   summary the person's panel shows
+//   copy [items..., at(u, v)?]      the person's Copy and Paste (sketch/tools/clip.ts clipOf,
+//                                   pasteClip): new geometry, the relations and dimensions between
+//                                   the items made again on the copies, those to anything else left
+//                                   out and counted; value "from <sketch>" copies another sketch's
+//                                   items (its names as get_model gives them), "offset <du>, <dv>"
+//                                   moves it; at(u, v) puts the middle of its box there; neither:
+//                                   where it was. Copies are "<id>.<item>"
 // Ties and links keep the row's id, so they stay the model's rows: a replace that sends a row with
 // the id of one the sketch has keeps it, its copies or curves with their ids (a pattern's or an
 // offset's new values lay it out again: updatePattern); left out, it goes with its copies. Their
@@ -43,10 +50,13 @@ import { chainOf, offsetChain, sideOf } from '../../sketch/tools/offset';
 import { createPattern, updatePattern } from '../../sketch/tools/pattern';
 import { DrawingRefused, importIntoDraft, planImport, summaryWords, tryReadDrawing, type ImportOptions } from '../../sketch/import';
 import { promoteTies, prunedTies } from '../../sketch/tools/ties';
+import { clipOf, clipWords, leftOutWords, pasteClip } from '../../sketch/tools/clip';
 import type { CallCtx } from '../../types/assistant';
 import type { PlaneFrame, SketchFeature, SketchLink, SketchLinkSource, SketchTie } from '../../types/doc';
 import { ToolError } from '../errors';
+import { featureByName } from '../model';
 import { selectAny, withScene, type SceneOptions } from '../selectors/resolve';
+import { describeSketch } from './describe';
 import { placeOf, storeExpr, type ConstraintIn, type MadeRow, type SketchCompiler, type SketchGeometry, type ToolHost } from './compile';
 import { linkEntityNames, tieCopyNames } from './names';
 import { solverReady } from './solve';
@@ -57,6 +67,9 @@ type Pick2 = Pick<CallCtx, 'services' | 'key' | 'signal' | 'progress'> & Partial
 const LINEAR_KEYS = ['count', 'spacing', 'angle', 'along', 'count2', 'spacing2', 'angle2', 'along2'] as const;
 const CIRCULAR_KEYS = ['count', 'angle'] as const;
 const IMPORT_KEYS = ['scale', 'place', 'layers'] as const;
+const COPY_KEYS = ['from', 'offset'] as const;
+/** "40, 0" or "40 mm, -12.5 mm": an offset in mm. */
+const OFFSET = /^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:mm)?\s*,\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*(?:mm)?\s*$/i;
 /** An attachment id as the host gives one. */
 const ATTACHMENT_ID = /^att-[0-9a-f]{16}$/;
 
@@ -488,6 +501,78 @@ export function toolHost(ctx: Pick2, o: { frame: PlaneFrame; scene: SceneOptions
           if (w.layers) values.layers = w.layers;
           if (w.notes.length) values.notes = w.notes.join(' ');
           record({ id: row.id, kind, entities: added.slice(0, 60).map((_, k) => `${row.id}.${k + 1}`), values });
+          return;
+        }
+        case 'copy': {
+          if (places.length > 1) fail('copy takes one at(u, v) at most: where the middle of the copy goes', 'bad_ref');
+          if (!refs.length) fail('copy takes what it copies: entities, whole macros ("r") or "all"', 'bad_ref');
+          const parsed = parseValues(value, COPY_KEYS);
+          if ('problem' in parsed) fail(`value: ${parsed.problem}`);
+          const v = (parsed as { values: Record<string, string> }).values;
+          let offset: [number, number] | null = null;
+          if (v.offset !== undefined) {
+            if (places.length) fail('value: offset or at(u, v), not both');
+            const m = OFFSET.exec(v.offset);
+            if (!m) fail(`value: offset is "<du>, <dv>" in mm ("offset 40, 0"), not "${v.offset}"`);
+            offset = [Number(m![1]), Number(m![2])];
+          }
+          await settle();
+          // From another sketch (as stored), or from this one as the rows so far leave it.
+          const st = services.doc.state.get();
+          const from = v.from !== undefined ? featureByName(st, v.from) : null;
+          if (v.from !== undefined && !from) fail(`value: no feature is called "${v.from}"`, 'bad_ref');
+          if (from && from.type !== 'sketch') fail(`value: ${from.name} is a ${from.type}, not a sketch`, 'bad_ref');
+          const other = from && from.id !== c.stored?.id ? (from as SketchFeature) : null;
+          const ids: string[] = [];
+          const nameOf = new Map<string, string>();
+          if (other) {
+            const form = describeSketch(other, st);
+            const exact = new Map<string, string>();
+            const heads = new Map<string, string[]>();
+            for (const e of other.entities) {
+              const n = form.refOf(e.id);
+              exact.set(n, e.id);
+              if (!exact.has(e.id)) exact.set(e.id, e.id);
+              nameOf.set(e.id, n);
+              const dot = n.indexOf('.');
+              if (dot > 0) heads.set(n.slice(0, dot), [...(heads.get(n.slice(0, dot)) ?? []), e.id]);
+            }
+            for (const r of refs) {
+              const got = r === 'all' && !exact.has(r) ? other.entities.map((e) => e.id) : exact.has(r) ? [exact.get(r)!] : (heads.get(r) ?? []);
+              if (!got.length) fail(`refs[${refsAll.indexOf(r)}]: ${other.name} has no entity called "${r}" (its names: ${[...exact.keys()].slice(0, 20).join(', ')})`, 'bad_ref');
+              for (const id of got) if (!ids.includes(id)) ids.push(id);
+            }
+          } else {
+            if (refs.length === 1 && refs[0] === 'all' && !('id' in c.resolve('all'))) ids.push(...c.g.entities.map((e) => e.id));
+            else ids.push(...items(refs));
+            for (const id of ids) nameOf.set(id, c.refOf(id));
+          }
+          const clip = clipOf(other ?? (c.g as unknown as SketchFeature), ids);
+          if (typeof clip === 'string') fail(clip);
+          const k = clip as Exclude<typeof clip, string>;
+          const to: [number, number] = places.length ? [places[0][0], places[0][1]] : offset ? [k.anchor[0] + offset[0], k.anchor[1] + offset[1]] : [k.anchor[0], k.anchor[1]];
+          const before = c.g;
+          const pasted = pasteClip(c.g, k, to, { evaluate: (expr, q) => units.evaluate(expr, q).ok });
+          const after = take(pasted.outcome);
+          const names: string[] = [];
+          for (const e of k.entities) {
+            const name = `${row.id}.${nameOf.get(e.id) ?? e.id}`;
+            c.aliasOf(name, pasted.map.entities[e.id], true);
+            // Watched, the copy goes in as one step (sketch/write.ts drawSteps), as the person's paste.
+            c.drawGroups[pasted.map.entities[e.id]] = row.id;
+            names.push(name);
+          }
+          const left = leftOutWords(k.outside);
+          if (left) c.warnings.push(`${row.id} (copy): ${left}`);
+          const n = pasted.kept;
+          const kept = [n.relations ? `${n.relations} relation${n.relations === 1 ? '' : 's'}` : '', n.dimensions ? `${n.dimensions} dimension${n.dimensions === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+          record({
+            id: row.id,
+            kind,
+            entities: names.slice(0, 60),
+            dimensions: newDimensions(before, after),
+            values: { from: other ? other.name : 'this sketch', copied: clipWords(k), kept: kept || 'none', left_out: left ? left.replace(/ (was|were) left out$/, '') : 'nothing', middle_at: `at(${+to[0].toFixed(6)}, ${+to[1].toFixed(6)})` },
+          });
           return;
         }
         case 'break_link': {

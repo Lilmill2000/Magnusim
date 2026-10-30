@@ -4,6 +4,27 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Copy and paste sketch geometry.**
+- In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C
+  (or right-click > Copy): the panel says what was copied. Ctrl+V (or
+  right-click > Paste) picks the copy up: it follows the pointer, held by the
+  middle of its box, and snaps to the sketch's points and curves (Ctrl stops
+  that). A click (or Enter) places it as one undo step, and the copy is
+  selected; Esc puts it down with nothing added.
+- The copy is new geometry: construction stays construction, and the relations
+  and dimensions between the copied pieces are made again on the copy (a
+  dimension keeps its value or expression, so the copy is as defined as the
+  original). Relations and dimensions that also tie geometry you did not copy
+  (to the origin, say) are left out, and the panel says how many.
+- Paste works in any sketch: another sketch of the Part, on another plane (the
+  same 2D shape in that sketch's own directions), or a sketch of another Part.
+- In a text or number field (a dimension's value, say) Ctrl+C and Ctrl+V copy
+  and paste the text, as always; with no sketch geometry selected, Ctrl+C copies
+  the selected text. Settings > Keybinds lists Copy and Paste under Sketch.
+- The Assistant does the same with the sketch tool's copy row: from this sketch
+  or another, placed at a point or moved by an offset, and its answer says what
+  was copied and what was left out.
+
 **Import SVG/DXF into a sketch.**
 - In a sketch, MODIFY > Import SVG/DXF picks an SVG or a DXF file (at most 20 MB).
   The Sketch panel says what it read: the lines, arcs, circles, ellipses,

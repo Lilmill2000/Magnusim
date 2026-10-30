@@ -160,7 +160,7 @@ describe('the import row', () => {
       expect((await fail(h, 'sketch', IMPORT('A', ATT, 'colour red'))).message).toContain('"colour" is not one of scale, place, layers');
       expect(h.doc.state.get().doc.features).toEqual([]);
       // entities [] needs an import row.
-      expect((await fail(h, 'sketch', SK({ name: 'A' }))).message).toContain('entities: give at least one shape (or an import row)');
+      expect((await fail(h, 'sketch', SK({ name: 'A' }))).message).toContain('entities: give at least one shape (or an import or copy row)');
     },
     REAL_KERNEL_MS,
   );

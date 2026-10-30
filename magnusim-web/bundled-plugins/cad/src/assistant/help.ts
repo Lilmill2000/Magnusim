@@ -7,7 +7,7 @@
 // `traps` the common mistakes, `examples` the index
 // of the worked parts, `sketch_tools` fix, driven dimensions, places and the person's sketch tools
 // as rows (trim, extend, offset, fillet, chamfer, mirror, patterns, project, intersect, break link,
-// import of an attached drawing)
+// import of an attached drawing, copy as the person's Copy and Paste)
 // with examples, and how a pattern's values change later. The example topics are the worked parts of examples.ts, one row per call
 // with its whole input and its key results ({about, text, tool, input, result}: the call sits in
 // the row itself, so a sketch's `at` lists stay at depth 7 of the reply's data, inside the app's
@@ -308,6 +308,10 @@ const sketchToolRows = (): HelpRow[] => [
   {
     about: 'import',
     text: `import [attachment id]: a drawing the person attached (SVG or DXF: the attachment_id att-... of an "Attached drawing" line of their message), read as data and added as the person's Import SVG/DXF adds it: lines, arcs, circles, ellipses, splines and points; ends that meet share one point; no relations (under-defined: fix or dimension what must hold). entities may be [] with it. value "" or any of "scale <mm per drawing unit>; place origin|centre; layers <a>, <b>": the scale is the file's own by default (SVG: its width over its viewBox, else 96 px per inch; DXF: $INSUNITS, none read as mm), place origin puts the drawing's origin on the sketch's, centre its middle; layers (DXF) default to every layer the file has on. made gives read, skipped (text; scripts and links never run or fetched), size, open_ends, scale, layers and notes; its curves are "<id>.1", "<id>.2"... At most 20,000 curves and 20 MB. One-shot: a replace that sends it again imports again. Example: {id:"i1", kind:"import", refs:["att-0123456789abcdef"], value:"place centre"}.`,
+  },
+  {
+    about: 'copy',
+    text: 'copy [items..., at(u, v)?]: new geometry copied from the items (entities, whole macros "r", or "all") as the person\'s Copy and Paste make it: construction kept; the relations and dimensions between copied items made again on the copies (a dimension keeps its expression); those that also tie anything not copied are left out, and made says how many (left_out, and a warning). at(u, v) puts the middle of the copy\'s box there; value "offset <du>, <dv>" moves it by that many mm instead; neither: where it was. value "from <sketch>" copies another sketch\'s items (its names as get_model gives them, or "all") into this one, at the same u, v whatever plane each lies on. entities may be [] with it. Copies are "<id>.<item>" in later rows ("k1.c1", "k1.r.top"); get_model reads them back as plain entities. One-shot: a replace that sends it again copies again. Example: {id:"k1", kind:"copy", refs:["r", "c1", "at(60, 0)"], value:""}.',
   },
   // The sketch tool's answer (its description's last sentence, moved here for the local prefix).
   { about: 'answer', text: "The sketch tool returns state, dof, free, moved, regions (r1...) and made (what each of these rows made)." },

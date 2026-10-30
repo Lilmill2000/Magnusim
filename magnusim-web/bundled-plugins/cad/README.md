@@ -195,6 +195,15 @@ snapping.
   are exact too, except rational ones (made as fit splines through points of
   them; the panel says so). A drawing is read as data only: nothing in it runs
   or loads. Inside a sketch only (start the sketch first).
+- **Copy and Paste** (Ctrl+C, Ctrl+V, or the right-click menu): select sketch
+  geometry and copy it; Paste picks the copy up, held by the middle of its box,
+  and it follows the pointer (snapping as the drawing tools do); click (or
+  Enter) to place it, one undo step, Esc to put it down. Construction stays
+  construction; the relations and dimensions between the copied pieces come
+  with it, so the copy is as defined as the original; those that also tie
+  geometry you did not copy are left out, and the panel says how many. It
+  pastes into any sketch, on any plane (the same 2D shape), also in another
+  Part. In a text or number field the keys copy and paste text.
 
 Projected and intersected curves are **linked**: drawn purple, fixed in place,
 and recomputed whenever the model rebuilds, so a sketch built on them follows
@@ -653,7 +662,8 @@ Delete faces), Ctrl+Z / Ctrl+Y, Escape clears the selection.
 
 **Sketch mode:** L Line, R Rectangle, C Circle, A 3-point arc, S Spline,
 M Mirror, O Offset, P Project, D Dimension, T Trim, X Construction, N Normal to
-(the open sketch), Enter places an open tool step or finishes the sketch
+(the open sketch), Ctrl+C Copy and Ctrl+V Paste (the selected sketch geometry;
+in a text or number field they are the field's), Enter places an open tool step or finishes the sketch
 (on a menu item, or a button you reached with Tab, Enter presses that instead),
 Escape steps back (a line chain first, then the tool), then clears the selection.
 A tool's own key pressed again while it is in hand (L with Line, or the key you

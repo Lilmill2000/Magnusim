@@ -164,6 +164,8 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   e('sketch.undo', 'Undo', 'Sketch', 'sketch', ['Ctrl+KeyZ']),
   e('sketch.redo', 'Redo', 'Sketch', 'sketch', ['Ctrl+KeyY', 'Ctrl+Shift+KeyZ']),
   e('sketch.delete', 'Delete', 'Sketch', 'sketch', ['Delete']),
+  e('sketch.copy', 'Copy', 'Sketch', 'sketch', ['Ctrl+KeyC']),
+  e('sketch.paste', 'Paste', 'Sketch', 'sketch', ['Ctrl+KeyV']),
   e('view.sketch-look', 'Normal to', 'Sketch', 'sketch', ['KeyN']),
   e('view.sketch-relations', 'Show relations', 'Sketch', 'sketch', ['Shift+KeyR']),
   e('sketch.line', 'Line', 'Sketch: Draw', 'sketch', ['KeyL']),

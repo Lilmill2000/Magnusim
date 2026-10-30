@@ -194,6 +194,8 @@ export type SketchToolId =
   | 'intersect'
   // ---- Import SVG/DXF (src/sketch/import/tool.ts): what a drawing read, then OK
   | 'import'
+  // ---- Paste (src/sketch/tools/paste.ts): the copy follows the pointer, a click places it
+  | 'paste'
   // ---- v0.5.0 (SHAPES): the person's tools for the Assistant's shape macros (src/sketch/tools/shapes.ts)
   | 'line-midpoint'
   | 'rectangle-3pt'

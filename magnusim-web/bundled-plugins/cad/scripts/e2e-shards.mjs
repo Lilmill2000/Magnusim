@@ -87,6 +87,8 @@ export const SHARDS = {
     'e2e/cad-sketch-relations-palette.spec.ts',
     // Import SVG/DXF: what the panel says a drawing read, the preview, OK as one undo step, layers, scale, a hostile SVG.
     'e2e/cad-sketch-import.spec.ts',
+    // Copy and Paste: Ctrl+C / Ctrl+V and the right-click menu, the copy following the pointer, its dimension, undo, Escape, a value field's own copy.
+    'e2e/cad-sketch-copy-paste.spec.ts',
   ],
   // P4a: Revolve, Sweep, Loft, Fillet, Chamfer, Shell, the Extrude extents, CONSTRUCT,
   // edge and vertex names.

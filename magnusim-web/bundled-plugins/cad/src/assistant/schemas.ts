@@ -151,7 +151,7 @@ export const SKETCH_CONSTRAINT_KINDS = [
   'angle',
 ] as const;
 /** Fix and the person's sketch tools, as rows of the sketch tool's constraints (help sketch_tools). */
-export const SKETCH_TOOL_KINDS = ['fix', 'trim', 'extend', 'offset', 'fillet', 'chamfer', 'mirror', 'linear_pattern', 'circular_pattern', 'project', 'intersect', 'break_link', 'import'] as const;
+export const SKETCH_TOOL_KINDS = ['fix', 'trim', 'extend', 'offset', 'fillet', 'chamfer', 'mirror', 'linear_pattern', 'circular_pattern', 'project', 'intersect', 'break_link', 'import', 'copy'] as const;
 
 interface ToolSpec {
   name: string;

@@ -12,6 +12,9 @@
 // toothed wheel's. A fourth: the person attaches a DXF in the app's Assistant panel; the model
 // imports it with the sketch tool's import row (the host's readAttachment) and extrudes its slot:
 // made says what the person's Import SVG/DXF panel says, and the tree and the volume chip show it.
+// A fifth: the model copies a sketch's rectangle into a sketch on another plane with the copy row
+// (the person's Copy and Paste) and extrudes it: made says what was copied and what was left out
+// (its tie to the origin), the copy keeps its dimension, and the tree and the volume chip show it.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -270,4 +273,38 @@ test('cad:assistant-sketch-tools-import a DXF the person attaches in the dock: t
   expect((await featureOf(page, 'Drawing'))!.entities).toHaveLength(14);
   const slot = DXF_PART_AREAS.slot * 25.4 * 25.4 * 10;
   await expect.poll(async () => Math.abs((await volumeNow(page)) / slot - 1) < 1e-6, STEP).toBe(true);
+});
+
+// Copy and Paste through the Assistant: the copy row takes another sketch's rectangle (its dimension
+// made again on the copy, its tie to the origin left out and said) into a sketch on Front, moved by
+// an offset; the model extrudes the copy.
+test("cad:assistant-sketch-tools-copy the model copies a sketch's rectangle into a sketch on Front and extrudes it: made says what was copied and left out; the tree and the volume chip show it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant copy');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Plate', on: 'Top', entities: [E('r', 'rect', [0, 0, 30, 20])], constraints: [C('d1', 'distance', ['r.bottom'], '30 mm'), C('o1', 'coincident', ['r.bl', 'origin'])], infer: false } }] },
+    { tools: [{ name: 'cad__sketch', input: { edit: '', name: 'Copy', on: 'Front', entities: [], constraints: [C('k1', 'copy', ['r'], 'from Plate; offset 50, 0')], infer: false } }] },
+    { tools: [EXTRUDE('Block', 'Copy', '10 mm')] },
+    { text: "Plate's rectangle is copied into Copy on Front, 50 mm along, and extruded 10 mm." },
+  );
+  const t = await startTurn(request, host, { text: "Copy Plate's rectangle onto the Front plane 50 mm along and extrude it 10 mm.", tab });
+  expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
+  const [, , afterCopy, afterExtrude] = chats(host).slice(before);
+  const [sk] = resultsIn(afterCopy);
+  expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true, data: { feature: { name: 'Copy', state: 'ok' } } });
+  const made = (sk.data!.made as { id: string; kind: string; entities: string[]; values: Record<string, unknown> }[])[0];
+  expect(made).toMatchObject({ id: 'k1', kind: 'copy', entities: ['k1.r.bottom', 'k1.r.right', 'k1.r.top', 'k1.r.left'], values: { from: 'Plate', copied: '4 lines, 4 relations and 1 dimension', kept: '4 relations and 1 dimension', left_out: '1 relation to other geometry' } });
+  expect(sk.data!.warnings as string[]).toContain('k1 (copy): 1 relation to other geometry was left out');
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Block', state: 'ok' } } });
+  // What the person sees: both sketches (under-defined: "(-)") and the block in the tree, the copy's
+  // four lines and its dimension, the block's volume (30 x 20 x 10).
+  await expect(historyNames(frame)).toHaveText(['(-) Plate', '(-) Copy', 'Block'], STEP);
+  const copy = (await featureOf(page, 'Copy')) as (Sketchy & { constraints: { kind: string; expr?: string }[] }) | null;
+  expect(copy!.entities!.map((e) => e.kind)).toEqual(['line', 'line', 'line', 'line']);
+  expect(copy!.constraints.filter((c) => c.expr != null).map((c) => c.expr)).toEqual(['30 mm']);
+  await expect.poll(async () => Math.abs((await volumeNow(page)) - 6000) < 1e-6, STEP).toBe(true);
 });

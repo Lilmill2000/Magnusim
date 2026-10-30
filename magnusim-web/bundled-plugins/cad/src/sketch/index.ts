@@ -25,6 +25,8 @@ import { registerLinkCommands } from './project/commands';
 import { registerSketchToolCommands } from './tools/commands';
 // Import SVG/DXF (src/sketch/import).
 import { registerImportCommand } from './import/tool';
+// Copy and Paste (src/sketch/tools/paste.ts).
+import { registerClipboardCommands } from './tools/paste';
 
 function contextMenu(services: AppServices, pick: PickResult | null): ContextMenuContribution[] {
   const mode = modeFor(services);
@@ -70,7 +72,9 @@ const sketchModule: CadModule = {
     // P4b (SKETCH)
     const offTools = registerSketchToolCommands(services, mode);
     const offImport = registerImportCommand(services, mode);
+    const offClipboard = registerClipboardCommands(services, mode);
     return () => {
+      offClipboard();
       offImport();
       offTools();
       offLinks();

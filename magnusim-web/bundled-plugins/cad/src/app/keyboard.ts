@@ -215,6 +215,8 @@ export function bindCommandShortcuts(
           const fromField = typingIn(e?.target ?? null);
           const c = [...list].reverse().find((x) => (x.mode === 'any' || (x.mode ?? 'model') === m) && (!fromField || APP_UNDO.has(x.id)));
           if (!c) return false;
+          // The key is the browser's while the command says so (sketch Copy with no geometry selected).
+          if (c.passKey?.()) return false;
           if (e?.repeat && c.activeWhen?.sketchTool) return true;
           if (again?.(c)) return true;
           void commands.run(c.id).then((r) => {

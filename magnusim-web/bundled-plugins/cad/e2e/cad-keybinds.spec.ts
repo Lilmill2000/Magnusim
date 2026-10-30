@@ -490,6 +490,9 @@ test('cad:keybinds-person-paths every key action has a Set keybind where the per
     await expect(frame.locator('[data-chip="sketch"]')).toHaveText('Under defined · 3 DOF');
     const mid = await modelOnPage(page, [15, 27, 0]);
     await viaMenu(() => page.mouse.click(mid[0], mid[1], { button: 'right' }), 'set-keybind-sketch.delete', 'Set keybind for Delete…', 'sketch.delete', 'Delete', 'Delete');
+    // Copy's and Paste's, in the same menu.
+    await viaMenu(() => page.mouse.click(mid[0], mid[1], { button: 'right' }), 'set-keybind-sketch.copy', 'Set keybind for Copy…', 'sketch.copy', 'Copy', 'Ctrl+C');
+    await viaMenu(() => page.mouse.click(mid[0], mid[1], { button: 'right' }), 'set-keybind-sketch.paste', 'Set keybind for Paste…', 'sketch.paste', 'Paste', 'Ctrl+V');
     // Finish sketch's right-click on the toolbar: its own key, and Place or finish's (Enter).
     const finish = frame.locator('[data-cad-toolbar="sketch"] [data-command="sketch.finish"]');
     await viaMenu(finish, 'set-keybind', 'Set keybind…', 'sketch.finish', 'Finish sketch', 'None of its own (Enter runs Place or finish)');

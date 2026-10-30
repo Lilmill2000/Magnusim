@@ -156,6 +156,9 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'sketch.project': SKETCH_OP('project'),
   'sketch.intersect': SKETCH_OP('intersect'),
   'sketch.import': SKETCH_OP('import'),
+  // Copy and Paste: the sketch tool's copy row (this sketch's items, or another's with "from").
+  'sketch.copy': SKETCH_OP('copy'),
+  'sketch.paste': SKETCH_OP('copy'),
   'sketch.spline': ENTITY('spline'),
   'sketch.spline-control': ENTITY('control_spline'),
   // The Ellipse group.
@@ -427,6 +430,7 @@ export const SKETCH_TOOLS: { readonly [K in SketchToolId]: Reach } = {
   sector: ENTITY('sector'),
   intersect: SKETCH_OP('intersect'),
   import: SKETCH_OP('import'),
+  paste: SKETCH_OP('copy'),
   ellipse: ENTITY('ellipse'),
   'ellipse-partial': ENTITY('ellipse_arc'),
   parabola: ENTITY('parabola'),
@@ -903,6 +907,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'constraints[].kind=project': command('sketch.project'),
     'constraints[].kind=intersect': command('sketch.intersect'),
     'constraints[].kind=import': command('sketch.import'),
+    // Copy (Ctrl+C) in one sketch, Paste (Ctrl+V) in this one or another: the same clip.
+    'constraints[].kind=copy': command('sketch.paste'),
     'constraints[].kind=break_link': place("a linked curve's context menu in sketch mode: Break link"),
     'constraints[].refs': place('the curves and points the person picks for the relation, dimension or tool'),
     'constraints[].value': DIMENSION,
