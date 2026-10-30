@@ -49,7 +49,7 @@ describe('the strict places', () => {
     assert.deepEqual(turn.names, [...turn.names].sort(), 'offered by name, as before');
     for (const name of ['wait', 'setup_edit', 'study_edit', 'compute', 'core__show']) assert.ok(turn.strict.has(name), `${name} strict`);
     assert.equal(turn.strict.size, STRICT_LIMITS.tools);
-    assert.deepEqual(turn.loose, ['core__set_appearance']);
+    assert.deepEqual(turn.loose, ['core__appearance', 'core__set_appearance']);
     // Never sent: what decides it.
     assert.ok(turn.sent.some((t) => t.priority === 82 && t.name === 'wait'));
   });
