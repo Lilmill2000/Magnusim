@@ -4,7 +4,10 @@
 // picked axis (a CONSTRUCT or origin axis, a straight or round edge, a round face's axis, a sketch
 // line); then they move by X, Y, Z. One rigid transform per body, through the kernel's `copies`.
 //   Moved      the bodies keep their ids, names, colours and face names: a fillet on a moved
-//              body's edge, a sketch on its face, a Combine of it still find them.
+//              body's edge, a sketch on its face, a Combine of it still find them. Each body's
+//              placement (src/naming/placement.ts) takes the transform too, so references made
+//              before or after the move, or across an edit of it, resolve where the body is now
+//              and a sketch on its face moves with it (an edit of the move is not a repair).
 //   Keep a copy  the originals stay; each copy is a new body, its id derived from its source's
 //              (deriveBodyId, k 1), named "Body 1 (Copy)" (copyBodyName), its faces named as a
 //              pattern copy's (F:<feature>:i2:<source face>, instance 2 of the feature).
@@ -17,7 +20,7 @@ import { copyBodyName, deriveBodyId, parseDerivedBodyId, storedBodyName } from '
 import { plainKernelMessage } from '../../doc/rebuild';
 import { timeoutForFaces } from '../../kernel/timeouts';
 import { newId, nextName } from '../../lib/ids';
-import type { MoveBodyFeature, Vec3 } from '../../types/doc';
+import type { BodyId, FeatureId, MoveBodyFeature, Vec3 } from '../../types/doc';
 import type { BuildContext, ExprField, FeatureBuildResult, FeatureTypeDef } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
 import type { BBox, ShapeId } from '../../types/kernel-protocol';
@@ -26,6 +29,7 @@ import type { Expr, UnitsService } from '../../types/units';
 import { copyNames } from '../pattern/naming';
 import { compose, rotation, translation, unitOf, type Mat } from '../pattern/transforms';
 import { refBodies, refParents, resolveAxis } from '../refgeom/resolve';
+import { composePlacement } from '../../naming/placement';
 
 /** Four arrows from a box (24 viewBox outline, as P2_ICONS). */
 export const MOVE_BODY_ICON = 'M8 9l4-2 4 2v5l-4 2-4-2z M8 9l4 2 4-2 M12 11v5 M12 2v3 M10.5 3.5L12 2l1.5 1.5 M12 19v3 M10.5 20.5L12 22l1.5-1.5 M2 12h3 M3.5 10.5L2 12l1.5 1.5 M19 12h3 M20.5 10.5L22 12l-1.5 1.5';
@@ -69,6 +73,16 @@ export const still = (v: MoveValues) => v.move.every((x) => Math.abs(x) < 1e-9) 
 /** The words of a picked axis the panel's field asks for. */
 export const AXIS_WANTED = 'Pick the axis to turn about: an axis, a straight or round edge, a round face or a sketch line (or turn about X, Y or Z)';
 export const NOTHING_TO_MOVE = 'Nothing to move: give a distance or an angle';
+export const OWN_COPY = 'That body is a copy this feature makes';
+
+/**
+ * Why the Bodies field of `feature` refuses `id`: one of the feature's own copies (Keep a copy), never
+ * a body it only moves (a moved body is "last changed" by the move too, and taking it out then
+ * clicking it again puts it back).
+ */
+export function bodyRefusal(feature: FeatureId, picked: readonly BodyId[], id: BodyId): string | null {
+  return parseDerivedBodyId(feature, id)?.k === 1 && !picked.includes(id) ? OWN_COPY : null;
+}
 
 const turnRefs = (f: MoveBodyFeature) => (f.about === 'axis' && f.axis ? [f.axis] : []);
 
@@ -127,6 +141,10 @@ export const moveBodyDef: FeatureTypeDef<MoveBodyFeature, MoveValues> = {
   type: 'move_body',
   label: 'Move/copy body',
   icon: MOVE_BODY_ICON,
+  // While its panel is open the bodies are drawn just after it (later features rolled back, as a
+  // sketch's): what the handle drags and what the rebuild builds are the same bodies, also when a
+  // later feature turns, joins or reshapes them.
+  isolateWhileEditing: true,
   create(doc, init = {}) {
     const names = doc.features.map((f) => f.name);
     return {
@@ -225,8 +243,10 @@ export const moveBodyDef: FeatureTypeDef<MoveBodyFeature, MoveValues> = {
         }
         const shape = r.ids[0];
         made.push(...r.ids);
+        // The copy as the original: where its source was made, then moved by this feature.
+        const placement = composePlacement(matrix, b.placement);
         if (!f.copy) {
-          bodies.push({ id: b.id, shape, valid: b.valid, names: renumbered(b.names, r.maps[0], r.faces[0]) });
+          bodies.push({ id: b.id, shape, valid: b.valid, names: renumbered(b.names, r.maps[0], r.faces[0]), placement });
           continue;
         }
         const base = storedBodyName(ctx.doc, b.id) ?? ctx.bodyName(b.id);
@@ -238,6 +258,7 @@ export const moveBodyDef: FeatureTypeDef<MoveBodyFeature, MoveValues> = {
           names: copyNames(f.id, COPY_KEY, b.names, r.maps[0], r.faces[0]),
           name: copyBodyName(ctx.doc, f.id, b.id, base),
           ...(color ? { color } : {}),
+          placement,
         });
       }
       done = true;

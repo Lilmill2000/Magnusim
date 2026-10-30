@@ -257,7 +257,10 @@ touching bodies apart.
   by X, Y, Z and turn them by an angle about X, Y or Z through a pivot (the
   centre of their box unless you type one) or about an axis, a straight or round
   edge, a round face or a sketch line. It turns first, then moves. A moved body
-  keeps its name and faces, so later features still find them. **Keep a copy**
+  keeps its name and faces, so later features still find them, and what you made
+  on it (a hole sketched on its face, a fillet) goes with it when you change the
+  move or put one in before it. While you edit it, the features after it are
+  rolled back, as for a sketch. **Keep a copy**
   leaves the bodies and moves copies ("Body 1 (Copy)"). Or drag the handle in
   the view: its arrows move along X, Y, Z, its rings turn (Ctrl: whole mm and
   15°); the fields follow, and Escape during a drag puts it back.

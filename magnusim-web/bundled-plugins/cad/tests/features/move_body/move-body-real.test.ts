@@ -6,7 +6,9 @@
 // body whose faces are named as a pattern copy's, "Body 1 (Copy 2)" for a second copy, a Combine
 // can use it), a fillet made after the move on the moved body's edge that still builds when the
 // move is edited, Undo, suppress, and the honest failures (nothing to move, a bad expression, a
-// flat face as the axis, a body that is not there).
+// flat face as the axis, a body that is not there). Review fix: a hole sketched on the moved body's
+// face stays in the body when the move's distance or turn is edited or a move is put in before it,
+// and references on a turned body (a fillet's edge, a sketch's face) stay clean, with no repair.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,7 +18,7 @@ import type { MoveBodyFeature } from '../../../src/types/doc';
 import type { FeatureTypeDef } from '../../../src/types/doc-service';
 import type { BodyInfo } from '../../../src/types/kernel';
 import type { RealDoc } from '../p2/real-doc';
-import { addFeature, addSketch, close, edgeRef, faceRef, onPlane, openSolids, regionsOf, settle, SketchBuilder, topo, volume } from '../solids/solids-real';
+import { addFeature, addSketch, close, edgeRef, faceRef, onFace, onPlane, openSolids, regionsOf, settle, SketchBuilder, topo, volume } from '../solids/solids-real';
 
 const open: RealDoc[] = [];
 afterEach(() => {
@@ -51,6 +53,38 @@ async function block(r: RealDoc, w: number, d: number, h: number, x = 0, y = 0) 
 }
 
 const move = (bodyIds: string[], o: Partial<MoveBodyFeature> = {}) => ({ bodies: bodyIds, ...o }) as Record<string, unknown>;
+const round = (v: number) => Math.round(v * 1e6) / 1e6 + 0;
+
+/** Edit a feature with `patch` (one panel session) and wait for the rebuild. */
+async function edit(r: RealDoc, id: string, patch: Record<string, unknown>) {
+  const s = r.doc.beginEdit(id);
+  s.update(patch as never);
+  s.commit();
+  return settle(r.doc);
+}
+
+/** A hole 4 mm across and 4 mm deep at (x, y) of the top face of the first body: its sketch and its cut. */
+async function holeOnTop(r: RealDoc, x: number, y: number) {
+  const b = bodies(r)[0];
+  const t = await topo(r, b);
+  const top = t.faces.find((f) => f.type === 'plane' && f.normal![2] > 0.99)!;
+  const sk = new SketchBuilder();
+  sk.circle([x, y], 2);
+  const sketch = await addSketch(r, await onFace(r, b, top.i, sk));
+  const cut = await addFeature(r, 'extrude', { profiles: regionsOf(r, sketch), extent: { kind: 'blind', distance: '4 mm' }, op: 'cut', creates: null, flip: true });
+  expect(cut.status.state).toBe('ok');
+  return { sketch, cut: cut.id };
+}
+
+/** Where the hole is: the middle of its round face (2 mm radius). */
+async function holeAt(r: RealDoc): Promise<number[]> {
+  const t = await topo(r, bodies(r)[0]);
+  const c = t.faces.filter((f) => f.type === 'cylinder' && Math.abs((f.radius ?? 0) - 2) < 1e-6);
+  expect(c).toHaveLength(1);
+  return c[0].centroid!.map(round);
+}
+
+const HOLED = 2000 - Math.PI * 2 * 2 * 4;
 
 describe('Move/copy body: moves and turns', () => {
   it('a move along X keeps the body, its name and its faces; Undo puts it back', async () => {
@@ -216,6 +250,121 @@ describe('Move/copy body: later features', () => {
     expect(rb.features[fl.id]).toMatchObject({ state: 'ok' });
     expect(box(bodies(r)[0])).toEqual([50, 0, 0, 70, 10, 10]);
     expect(close(await volume(r, b), filleted, 1e-6)).toBe(true);
+  });
+});
+
+describe('Move/copy body: what was made on a moved body follows it (review fix)', () => {
+  it("a hole sketched on the moved body's top face stays at the body's middle when the move's distance and turn are edited; nothing says repaired", async () => {
+    const r = await part();
+    const b = await block(r, 20, 10, 10);
+    const m = await addFeature(r, 'move_body', move([b], { move: ['20 mm', '0 mm', '0 mm'] }));
+    // The body carries where the move took it; a reference made on it keeps that.
+    expect(bodies(r)[0].placement).toEqual([1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0]);
+    const h = await holeOnTop(r, 30, 5);
+    const sketchRef = (r.doc.state.get().doc.features.find((f) => f.id === h.sketch) as unknown as { support: { face: { placement?: number[] } } }).support.face;
+    expect(sketchRef.placement).toEqual([1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0]);
+    expect(close(await volume(r, b), HOLED)).toBe(true);
+    expect(await holeAt(r)).toEqual([30, 5, 8]);
+    const states = (rb: Awaited<ReturnType<typeof settle>>) => [m.id, h.sketch, h.cut].map((id) => rb.features[id]?.state);
+    // 50 mm: the body, its sketch and its hole go together (the hole was lost: volume 2000).
+    let rb = await edit(r, m.id, { move: ['50 mm', '0 mm', '0 mm'] });
+    expect(states(rb)).toEqual(['ok', 'ok', 'ok']);
+    expect(box(bodies(r)[0])).toEqual([50, 0, 0, 70, 10, 10]);
+    expect(close(await volume(r, b), HOLED)).toBe(true);
+    expect(await holeAt(r)).toEqual([60, 5, 8]);
+    // Turned 90 deg about Z through its centre first: the hole stays at the body's middle.
+    rb = await edit(r, m.id, { angle: '90 deg', about: 'z' });
+    expect(states(rb)).toEqual(['ok', 'ok', 'ok']);
+    expect(box(bodies(r)[0])).toEqual([55, -5, 0, 65, 15, 10]);
+    expect(close(await volume(r, b), HOLED)).toBe(true);
+    expect(await holeAt(r)).toEqual([60, 5, 8]);
+    // Turned about X: the top face now faces -Y; the sketch keeps its face with no repair, the hole goes along.
+    rb = await edit(r, m.id, { about: 'x' });
+    expect(states(rb)).toEqual(['ok', 'ok', 'ok']);
+    expect(box(bodies(r)[0])).toEqual([50, 0, 0, 70, 10, 10]);
+    expect(close(await volume(r, b), HOLED)).toBe(true);
+    expect(await holeAt(r)).toEqual([60, 2, 5]);
+  });
+
+  it('a move put in before a hole and a fillet made with no move: both go with the body, with no repair', async () => {
+    const r = await part();
+    const b = await block(r, 20, 10, 10);
+    const h = await holeOnTop(r, 10, 5);
+    // A top edge along X (y = 0), filleted.
+    const t = await topo(r, bodies(r)[0]);
+    const top = t.edges.find((e) => e.type === 'line' && [e.first!, e.last!].every((p) => Math.abs(p[2] - 10) < 1e-6 && Math.abs(p[1]) < 1e-6))!;
+    const fl = await addFeature(r, 'fillet', { body: b, edges: [await edgeRef(r, bodies(r)[0], top.i)], faces: [], radius: '1 mm' });
+    expect(fl.status.state).toBe('ok');
+    const done = await volume(r, b);
+    // The bar after Extrude 1: the move goes in there, turning 90 deg about Y through its centre, then 100 mm along X.
+    r.doc.setRollback(2);
+    await settle(r.doc);
+    const m = await addFeature(r, 'move_body', move([b], { angle: '90 deg', about: 'y', move: ['100 mm', '0 mm', '0 mm'] }));
+    r.doc.setRollback(null);
+    const rb = await settle(r.doc);
+    expect(r.doc.state.get().doc.features.map((f) => f.id)).toEqual([expect.any(String), expect.any(String), m.id, h.sketch, h.cut, fl.id]);
+    expect([m.id, h.sketch, h.cut, fl.id].map((id) => rb.features[id]?.state)).toEqual(['ok', 'ok', 'ok', 'ok']);
+    // About Y through (10, 5, 5): x 5..15, z -5..15; then 100 along X. The hole's axis was (10, 5) at z 8: now x 113, z 5.
+    expect(box(bodies(r)[0])).toEqual([105, 0, -5, 115, 10, 15]);
+    expect(close(await volume(r, b), done)).toBe(true);
+    expect(await holeAt(r)).toEqual([113, 5, 5]);
+  });
+
+  it('while Body-Move 1 is edited the bodies are drawn just after it (a later turning Move rolled back): what its handle drags is what is built', async () => {
+    const r = await part();
+    const b = await block(r, 20, 10, 10);
+    const m1 = await addFeature(r, 'move_body', move([b], { move: ['20 mm', '0 mm', '0 mm'] }));
+    const m2 = await addFeature(r, 'move_body', move([b], { angle: '90 deg', about: 'z', pivot: ['0 mm', '0 mm', '0 mm'] }));
+    // Turned about Z at the origin: (x, y) -> (-y, x).
+    expect(box(bodies(r)[0])).toEqual([-10, 20, 0, 0, 40, 10]);
+    const s = r.doc.beginEdit(m1.id);
+    let rb = await settle(r.doc);
+    expect(rb.features[m2.id]).toMatchObject({ state: 'rolled-back' });
+    expect(box(bodies(r)[0])).toEqual([20, 0, 0, 40, 10, 10]);
+    s.update({ move: ['30 mm', '0 mm', '0 mm'] } as never);
+    await settle(r.doc);
+    expect(box(bodies(r)[0])).toEqual([30, 0, 0, 50, 10, 10]);
+    s.commit();
+    rb = await settle(r.doc);
+    expect(rb.features[m2.id]).toMatchObject({ state: 'ok' });
+    expect(box(bodies(r)[0])).toEqual([-10, 30, 0, 0, 50, 10]);
+  });
+
+  it("a fillet on a turned body's edge stays clean when the turn is edited (it read Reference repaired · check)", async () => {
+    const r = await part();
+    const b = await block(r, 20, 10, 10);
+    const m = await addFeature(r, 'move_body', move([b], { angle: '90 deg', about: 'z' }));
+    const t = await topo(r, bodies(r)[0]);
+    const top = t.edges.find((e) => e.type === 'line' && [e.first!, e.last!].every((p) => Math.abs(p[2] - 10) < 1e-6))!;
+    const ref = await edgeRef(r, bodies(r)[0], top.i);
+    expect(ref.placement).toHaveLength(12);
+    const fl = await addFeature(r, 'fillet', { body: b, edges: [ref], faces: [], radius: '2 mm' });
+    expect(fl.status).toMatchObject({ state: 'ok' });
+    const filleted = await volume(r, b);
+    const rb = await edit(r, m.id, { angle: '45 deg' });
+    expect(rb.features[m.id]).toMatchObject({ state: 'ok' });
+    expect(rb.features[fl.id]).toEqual(expect.objectContaining({ state: 'ok' }));
+    expect(rb.features[fl.id]?.message).toBeUndefined();
+    expect(close(await volume(r, b), filleted, 1e-6)).toBe(true);
+    // A copy carries the same placement as a moved body, then its own move; a body never moved carries none.
+    const c = await addFeature(r, 'move_body', move([b], { move: ['0 mm', '40 mm', '0 mm'], copy: true }));
+    expect(c.status.state).toBe('ok');
+    const moved = bodies(r).find((x) => x.id === b)!.placement!;
+    expect(named(r, 'Body 1 (Copy)').placement!.map(round)).toEqual(moved.map((v, i) => (i === 7 ? v + 40 : v)).map(round));
+    const other = await block(r, 5, 5, 5, 100, 100);
+    expect(bodies(r).find((x) => x.id === other)!.placement).toBeUndefined();
+  });
+
+  it("a moved body's split pieces carry its placement (a reference made on a piece compares where the body was made)", async () => {
+    const r = await part();
+    const b = await block(r, 20, 10, 10);
+    await addFeature(r, 'move_body', move([b], { move: ['20 mm', '0 mm', '0 mm'] }));
+    const sp = await addFeature(r, 'split', { targets: [b], tool: { kind: 'plane', plane: 'origin:right', offset: '30 mm' } });
+    expect(sp.status.state).toBe('ok');
+    expect(bodies(r).map((x) => [x.id === b ? 'kept' : 'piece', x.placement])).toEqual([
+      ['kept', [1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0]],
+      ['piece', [1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0]],
+    ]);
   });
 });
 

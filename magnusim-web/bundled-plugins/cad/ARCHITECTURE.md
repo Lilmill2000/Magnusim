@@ -475,6 +475,21 @@ with the host once for the page's life, and its chip goes in the dock.
   (`roundedDistance`), Ctrl to whole steps (1 mm, 0.1 in, 15 deg). Escape with the
   button held puts the drag back; the press never reaches the camera. The parity
   table notes the handle (`PersonPath.also`) on `direct`'s move and turn fields.
+  `move_body` isolates while edited (`isolateWhileEditing`, as a sketch): the
+  bodies the handle drags are the ones just after it, so the drag draws what the
+  release builds. Placement (`src/naming/placement.ts`): each held body carries
+  `placement`, the rigid motion Move/copy body features gave it since it was made
+  (absent: none; a move composes its matrix onto it, a copy takes its source's
+  times the matrix, a split piece its target's, `rebuild.ts`), on `BuiltBody`,
+  `BodyInfo`, `EndBody` and the selectors' `SelBody`. `refOfFace/Edge/Vertex`
+  take the body and store its placement on the `PersistentRef`; every resolution
+  passes the body's placement now (`ResolveInput.placement`, required) and the
+  stored signature is mapped by now x stored^-1 before `sameKind` and the
+  nearest-candidate choice, so a reference made before or after a move, or
+  across an edit of one, resolves cleanly by name. A face-supported sketch and a
+  construction plane on a face take `placedFaceFrame`: `faceFrame` where the face
+  was when the reference was made, moved by that motion, so a sketch (a hole's)
+  slides and turns with its body; with no motion it is `faceFrame` as before.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a

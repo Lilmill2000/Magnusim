@@ -58,7 +58,7 @@ async function vertexRef(x: AssistantHarness, body: BodyInfo, at: [number, numbe
   const t = await x.services.kernel.call('topo', { id: body.shape, faces: 'none', edges: 'none', vertices: 'all' });
   const v = t.result.vertices.find((p) => Math.hypot(p.p[0] - at[0], p.p[1] - at[1], p.p[2] - at[2]) < 1e-6);
   if (!v) throw new Error('no vertex there');
-  return { body: body.id, ref: await refOfVertex(kernelLookup(x.services.kernel), body.shape, body.names ?? null, v.i) };
+  return { body: body.id, ref: await refOfVertex(kernelLookup(x.services.kernel), body, v.i) };
 }
 
 describe('extrudes the person made, as extrude input', () => {
@@ -145,7 +145,7 @@ describe('revolves the person made, as revolve input', () => {
       const side = b.names!.faces.findIndex((n) => n.startsWith(`F:${p.extrude}:side:e1`));
       const e = t.result.edges.find((x) => new Set(x.faces).size === 2 && x.faces.includes(end) && x.faces.includes(side))!;
       const { refOfEdge } = await import('../../src/naming/edges');
-      const ref = await refOfEdge(kernelLookup(h.services.kernel), b.shape, b.names ?? null, e.i);
+      const ref = await refOfEdge(kernelLookup(h.services.kernel), b, e.i);
       await h.add('revolve', { name: 'Edge cut', profiles: regions(h, edgeSketch), axis: { kind: 'edge', body: b.id, ref }, extent: { kind: 'symmetric', angle: '20 deg' }, flip: false, op: 'join', creates: null, scope: [b.id] });
       expect(await roundTrip(h, 'Edge cut', 'revolve')).toMatchObject({ axis: 'Plate.end & Plate.side(e1)', extent: 'symmetric', angle: '20 deg', op: 'join', bodies: ['Body 1'] });
       expect(featureNamed<RevolveFeature>(h, 'Edge cut').axis).toMatchObject({ kind: 'edge' });

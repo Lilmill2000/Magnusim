@@ -21,7 +21,8 @@ import type { BBox, ShapeId } from '../types/kernel-protocol';
 import type { SketchSolverClient } from '../types/sketch';
 import { LARGE_PART_FACES } from '../kernel/timeouts';
 import { canonicalJson, hashString } from './canonical';
-import { storedBodyName } from './features/body-ids';
+import { parseDerivedBodyId, storedBodyName } from './features/body-ids';
+import { keptPlacement } from '../naming/placement';
 import { featureUses } from './features/hooks';
 import { removedFeatureMessage } from './features/removed';
 import { DEFAULT_BODY_COLOR } from './schema';
@@ -243,6 +244,7 @@ export class RebuildEngine {
             names: b.names,
             name: doc.bodies[b.id]?.name ?? b.name ?? 'Body',
             color: doc.bodies[b.id]?.color ?? b.color ?? DEFAULT_BODY_COLOR,
+            ...(b.placement ? { placement: b.placement } : {}),
           })),
         };
       });
@@ -428,7 +430,7 @@ export class RebuildEngine {
         ...(parents.length ? { p: parents.map((id) => [id, featureKeys.get(id) ?? null]) } : {}),
         // A sketch built while the solver was not running shows its stored shape with a
         // warning: once the solver runs, the key differs, so it re-solves (P3 integration).
-        ...(def.isolateWhileEditing && !this.opts.solver?.() ? { nosolver: true } : {}),
+        ...(f.type === 'sketch' && !this.opts.solver?.() ? { nosolver: true } : {}),
       });
       featureKeys.set(f.id, key);
 
@@ -446,7 +448,7 @@ export class RebuildEngine {
         const ctx: BuildContext = {
           kernel,
           units,
-          bodies: new Map([...bodies].map(([id, b]) => [id, { id: b.id, shape: b.shape, valid: b.valid, feature: b.feature, names: b.names }])),
+          bodies: new Map([...bodies].map(([id, b]) => [id, { id: b.id, shape: b.shape, valid: b.valid, feature: b.feature, names: b.names, ...(b.placement ? { placement: b.placement } : {}) }])),
           doc,
           bodyName,
           featureName,
@@ -495,7 +497,14 @@ export class RebuildEngine {
         for (const b of r.bodies) {
           // A body a later feature changes keeps the default name and colour it was given (a split piece).
           const was = bodies.get(b.id);
-          bodies.set(b.id, { id: b.id, shape: b.shape, valid: b.valid, feature: f.id, names: b.names ?? null, name: b.name ?? was?.name, color: b.color ?? was?.color, key: hashString(`${key}#${b.id}`) });
+          // Where Move/copy body features took it: as the feature says, else as it was, else (a new
+          // body derived from another, a split piece) its source's.
+          const from = was ?? (() => {
+            const d = parseDerivedBodyId(f.id, b.id);
+            return d ? bodies.get(d.target) : undefined;
+          })();
+          const placement = keptPlacement(b.placement !== undefined ? b.placement : from?.placement);
+          bodies.set(b.id, { id: b.id, shape: b.shape, valid: b.valid, feature: f.id, names: b.names ?? null, name: b.name ?? was?.name, color: b.color ?? was?.color, key: hashString(`${key}#${b.id}`), ...(placement ? { placement } : {}) });
         }
         for (const id of r.removed) bodies.delete(id);
         if (r.output) outputs.set(f.id, r.output);
@@ -576,6 +585,7 @@ export class RebuildEngine {
         tessKey: b.key,
         tess: t ?? null,
         names: b.names,
+        ...(b.placement ? { placement: b.placement } : {}),
       });
     }
     if (epoch !== this.epoch) return null;

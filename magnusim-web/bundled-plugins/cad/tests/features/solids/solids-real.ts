@@ -116,11 +116,11 @@ export async function faceRef(r: RealDoc, b: BodyInfo, i: number): Promise<Persi
 }
 
 export async function edgeRef(r: RealDoc, b: BodyInfo, i: number): Promise<PersistentRef> {
-  return refOfEdge(kernelLookup(r.kernel), b.shape, b.names ?? null, i);
+  return refOfEdge(kernelLookup(r.kernel), b, i);
 }
 
 export async function vertexRef(r: RealDoc, b: BodyInfo, i: number): Promise<PersistentRef> {
-  return refOfVertex(kernelLookup(r.kernel), b.shape, b.names ?? null, i);
+  return refOfVertex(kernelLookup(r.kernel), b, i);
 }
 
 /** A sketch on a flat face of a body (the frame the sketch would take). */

@@ -7,7 +7,8 @@
 //                 person picks (an axis, a straight or round edge, a round face, a sketch line)
 //   Keep a copy   the originals stay, copies are moved (Body-Move 1 becomes Body-Copy 1 while its
 //                 name is still the one it was given)
-// One line says the order: it turns first, then moves.
+// One line says the order: it turns first, then moves. With features after it, one line says they
+// wait until Done (the rebuild stops after it while it is edited: isolateWhileEditing).
 // The view shows a drag handle at the pivot for as long as the person's panel is open (handle.ts:
 // arrows for Move X, Y, Z, rings for the Angle); the fields show a drag's values as it runs, and
 // its release applies them as typed values are. None while the Assistant fills the panel.
@@ -27,7 +28,7 @@ import { useSelectionMirror } from '../p2/pick';
 import { liveAxis, useAxisField } from '../solids/fields';
 import { usePicksLines } from '../solids/view';
 import { uiFor } from '../../ui/controller';
-import { nameForCopy, XYZ } from './feature';
+import { bodyRefusal, nameForCopy, XYZ } from './feature';
 import { startMoveHandle } from './handle';
 import { snapLengthWords, type Line } from './handle-math';
 
@@ -53,6 +54,12 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
   const handle = useStateStore(services.viewport, (s) => s.handle);
   const out = useStateStore(services.doc.state, (s) => (s.rebuild.outputs[props.feature]?.type === 'move_body' ? (s.rebuild.outputs[props.feature] as MoveBodyOutput) : null));
   const boxes = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
+  // Features after it that wait while it is open (not rolled back by the bar already).
+  const later = useStateStore(services.doc.state, (s) => {
+    const i = s.doc.features.findIndex((g) => g.id === props.feature);
+    const end = s.view.rollback ?? s.doc.features.length;
+    return i >= 0 && i + 1 < end;
+  });
   const [chosen, choose] = useState<'bodies' | 'axis' | null>(null);
   const empty: ('bodies' | 'axis')[] = [...(!f.bodies.length ? (['bodies'] as const) : []), ...(f.about === 'axis' && !f.axis ? (['axis'] as const) : [])];
   const active = chosen ?? empty[0] ?? null;
@@ -60,8 +67,8 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
     feature: props.feature,
     ids: f.bodies,
     active: active === 'bodies',
-    // A copy this feature makes is not one of its own sources.
-    refuse: (id) => (services.doc.state.get().rebuild.bodies.find((b) => b.id === id)?.feature === props.feature && !f.bodies.includes(id) ? 'That body is a copy this feature makes' : null),
+    // A copy this feature makes is not one of its own sources (a body it only moves is).
+    refuse: (id) => bodyRefusal(props.feature, f.bodies, id),
     onChange: (ids) => {
       kit.set({ bodies: ids });
       choose('bodies');
@@ -194,6 +201,11 @@ export function MoveBodyPanel(props: FeaturePanelProps) {
       <div data-move-order="1">
         <Hint>{f.copy ? 'The originals stay; the copies turn first, then move.' : 'It turns first, then moves.'}</Hint>
       </div>
+      {later ? (
+        <div data-move-later="1">
+          <Hint>Until Done, the features after it wait: the bodies are drawn as it leaves them.</Hint>
+        </div>
+      ) : null}
       {handle && !props.session.owner ? (
         <div data-move-drag="1">
           <Hint>{`Or drag the arrows and rings in the view (Ctrl: steps of ${snapLengthWords(lengthUnit)} and 15°).`}</Hint>

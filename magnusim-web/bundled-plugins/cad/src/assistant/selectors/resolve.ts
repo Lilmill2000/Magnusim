@@ -63,6 +63,8 @@ export interface SelBody {
   faces: number | null;
   /** 0: a surface body (its normals may point either way). */
   solids: number | null;
+  /** Where Move/copy body features took it (BuiltBody.placement). */
+  placement?: number[] | null;
 }
 
 /** What the selectors of one call read: the bodies, their labels, the names, the handle key. */
@@ -159,9 +161,9 @@ async function sceneBodies(services: AppServices, before: FeatureId | null): Pro
   const s = services.doc.state.get();
   if (before) {
     const eb = await services.doc.bodiesBefore(before);
-    return eb.bodies.map((b) => ({ id: b.id, name: b.name, shape: b.shape, names: b.names, feature: b.feature, tess: null, bbox: null, faces: null, solids: null }));
+    return eb.bodies.map((b) => ({ id: b.id, name: b.name, shape: b.shape, names: b.names, feature: b.feature, tess: null, bbox: null, faces: null, solids: null, ...(b.placement ? { placement: b.placement } : {}) }));
   }
-  return s.rebuild.bodies.map((b) => ({ id: b.id, name: b.name, shape: b.shape, names: b.names ?? null, feature: b.feature, tess: b.tess, bbox: b.bbox, faces: b.faces, solids: typeof b.solids === 'number' ? b.solids : null }));
+  return s.rebuild.bodies.map((b) => ({ id: b.id, name: b.name, shape: b.shape, names: b.names ?? null, feature: b.feature, tess: b.tess, bbox: b.bbox, faces: b.faces, solids: typeof b.solids === 'number' ? b.solids : null, ...(b.placement ? { placement: b.placement } : {}) }));
 }
 
 export async function buildScene(call: SceneCall, opts: SceneOptions = {}): Promise<Scene> {
@@ -310,12 +312,12 @@ export function centreOf(h: Hit): Vec3 | null {
 }
 
 /** The stored reference of face, edge or vertex `index` of a body (null when the body has no names). */
-async function refAt(sc: Scene, kind: 'face' | 'edge' | 'vertex', body: Pick<SelBody, 'shape' | 'names'>, index: number): Promise<PersistentRef | null> {
+async function refAt(sc: Scene, kind: 'face' | 'edge' | 'vertex', body: Pick<SelBody, 'shape' | 'names' | 'placement'>, index: number): Promise<PersistentRef | null> {
   if (!body.names) return null;
   try {
-    if (kind === 'face') return await refOfFace(sc.cache.lookup, body.shape, body.names, index);
-    if (kind === 'edge') return await refOfEdge(sc.cache.lookup, body.shape, body.names, index);
-    return await refOfVertex(sc.cache.lookup, body.shape, body.names, index);
+    if (kind === 'face') return await refOfFace(sc.cache.lookup, body, index);
+    if (kind === 'edge') return await refOfEdge(sc.cache.lookup, body, index);
+    return await refOfVertex(sc.cache.lookup, body, index);
   } catch {
     return null;
   }
@@ -411,7 +413,7 @@ async function byHandle(sc: Scene, sel: Extract<Sel, { t: 'handle' }>): Promise<
   const after = featureById(sc, body.feature)?.name;
   const gone = () => new ToolError('selector_stale', `${sel.text} is gone after ${after ?? 'a change'}; call find again.`, { detail: { handle: sel.text, was: e.label ?? e.words } });
   if (!body.names || !e.ref) throw gone();
-  const input = { ref: e.ref, shape: body.shape, names: body.names, lookup: sc.cache.lookup };
+  const input = { ref: e.ref, shape: body.shape, names: body.names, lookup: sc.cache.lookup, placement: body.placement };
   const r = e.kind === 'face' ? await resolveFace(input) : e.kind === 'edge' ? await resolveEdge(input) : await resolveVertex(input);
   if (!r.ok) throw gone();
   const warnings = r.how === 'name' ? [] : [`${sel.text} moved: check`];
@@ -446,9 +448,9 @@ async function bySelection(sc: Scene, want: Want): Promise<Hit[]> {
       let index: number | null = it.index;
       if (!from || from.shape !== body.shape) {
         if (!from?.names || !body.names) continue;
-        const ref = await refAt(sc, it.kind, { shape: from.shape, names: from.names }, it.index);
+        const ref = await refAt(sc, it.kind, { shape: from.shape, names: from.names, placement: from.placement }, it.index);
         if (!ref) continue;
-        const input = { ref, shape: body.shape, names: body.names, lookup: sc.cache.lookup };
+        const input = { ref, shape: body.shape, names: body.names, lookup: sc.cache.lookup, placement: body.placement };
         const r = it.kind === 'face' ? await resolveFace(input) : it.kind === 'edge' ? await resolveEdge(input) : await resolveVertex(input);
         index = r.ok ? r.index : null;
       }

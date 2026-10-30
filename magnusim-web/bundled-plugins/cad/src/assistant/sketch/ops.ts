@@ -396,12 +396,12 @@ export function toolHost(ctx: Pick2, o: { frame: PlaneFrame; scene: SceneOptions
               const b = hit.body;
               if (!b.names) fail(`${b.name} has no face names, so its geometry cannot be followed`);
               const lookup = kernelLookup(services.kernel);
-              const ref = hit.kind === 'vertex' ? await refOfVertex(lookup, b.shape, b.names, hit.index) : hit.kind === 'edge' ? await refOfEdge(lookup, b.shape, b.names, hit.index) : await refOfFace(lookup, b.shape, b.names, hit.index);
+              const ref = hit.kind === 'vertex' ? await refOfVertex(lookup, b, hit.index) : hit.kind === 'edge' ? await refOfEdge(lookup, b, hit.index) : await refOfFace(lookup, b, hit.index);
               source = { kind: hit.kind, body: b.id, ref };
             } else fail(`${refs[0]} is a ${hit.kind}: project takes a face, an edge, a vertex or a body`, 'bad_ref');
             const env: LinkEnv = {
               kernel: services.kernel,
-              bodies: new Map(sc.bodies.map((b) => [b.id, { shape: b.shape, names: b.names }] as const)),
+              bodies: new Map(sc.bodies.map((b) => [b.id, { shape: b.shape, names: b.names, placement: b.placement }] as const)),
               bodyName: (id) => sc.bodies.find((b) => b.id === id)?.name ?? sc.state.doc.bodies[id]?.name ?? 'a body',
               featureName: (id) => sc.state.doc.features.find((f) => f.id === id)?.name ?? null,
             };

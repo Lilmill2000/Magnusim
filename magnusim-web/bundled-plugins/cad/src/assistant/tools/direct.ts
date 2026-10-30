@@ -256,6 +256,9 @@ const direct: EditTool<Plan> = {
         let words = '';
         if (angle && !xyz) {
           const one = await selectOne(sc, axisWords, 'axis', 'turn.axis');
+          // The person's panel turns about an axis, an edge, a round face's axis or a sketch line, never a plane's normal (parity).
+          if ((one.hit as AxisHit).source.s === 'normal')
+            throw new ToolError('bad_selector', `turn.axis: "${axisWords}" is a plane's normal: give X, Y or Z (through pivot), an axis, a sketch line, a straight or round edge, or "axis of <round face>".`, { detail: { field: 'turn.axis' } });
           axis = await axisRefOf(sc, one.hit as AxisHit);
           words = echo(sc, one.selected);
           for (const w of one.hit.warnings ?? []) if (!warnings.includes(w)) warnings.push(w);
@@ -335,7 +338,9 @@ const direct: EditTool<Plan> = {
                 : kind === 'delete_body'
                   ? 'bodies'
                   : 'faces';
-      throw new ToolError(/: /.test(why) ? 'expr_error' : 'bad_input', `${field}: ${why}.`, { detail: { field } });
+      // A value that does not evaluate is expr_error; Move/copy body's "Nothing to move" and "Pick ..." ask for what is missing.
+      const reason = kind === 'move_body' ? (/^(Move [XYZ]|Angle|Pivot [XYZ]): /.test(why) ? 'expr_error' : 'incomplete') : /: /.test(why) ? 'expr_error' : 'bad_input';
+      throw new ToolError(reason, `${field}: ${why}.`, { detail: { field } });
     }
     if (editing) resolved.edit = editing.name;
     return {

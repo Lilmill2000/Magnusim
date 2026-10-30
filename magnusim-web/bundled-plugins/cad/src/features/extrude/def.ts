@@ -143,11 +143,11 @@ export async function kernelExtent(f: ExtrudeFeature, v: ExtentValues, ctx: Ctx)
   if (!body.names) return { ok: false, message: `Up to: the faces of ${ctx.bodyName(t.body)} have no names` };
   const lookup = kernelLookup(ctx.kernel);
   if (t.ref.signature.kind === 'vertex') {
-    const r = await resolveVertex({ ref: t.ref, shape: body.shape, names: body.names, lookup });
+    const r = await resolveVertex({ ref: t.ref, shape: body.shape, names: body.names, lookup, placement: body.placement });
     if (!r.ok) return { ok: false, message: `Up to: ${words} not found on ${ctx.bodyName(t.body)} after rebuild` };
     return { ok: true, extent: { kind: 'to_vertex', target: body.shape, vertex: r.index, offset: v.offset }, ...(r.warning ? { warning: `Up to: ${r.warning}` } : {}) };
   }
-  const r = await resolveFace({ ref: t.ref, shape: body.shape, names: body.names, lookup });
+  const r = await resolveFace({ ref: t.ref, shape: body.shape, names: body.names, lookup, placement: body.placement });
   if (!r.ok) return { ok: false, message: `Up to: ${words} not found on ${ctx.bodyName(t.body)} after rebuild` };
   if (r.signature.type !== 'plane') return { ok: false, message: `Up to: ${words} is curved; pick a flat face or a vertex` };
   return { ok: true, extent: { kind: 'to_face', target: body.shape, face: r.index, offset: v.offset }, ...(r.warning ? { warning: `Up to: ${r.warning}` } : {}) };
@@ -348,7 +348,7 @@ async function buildFace(f: ExtrudeFeature, v: ExtrudeValues, ctx: BuildContext)
   const words = describeFace(t.ref.name, (id) => ctx.featureName(id), ctx.bodies.get(t.body)?.names?.faces ?? null);
   if (!body) return { ok: false, message: `${f.name} failed: ${ctx.bodyName(t.body)} is not there at this point` };
   if (!body.names) return { ok: false, message: `${f.name} failed: the faces of ${ctx.bodyName(t.body)} have no names` };
-  const r = await resolveFace({ ref: t.ref, shape: body.shape, names: body.names, lookup: kernelLookup(ctx.kernel) });
+  const r = await resolveFace({ ref: t.ref, shape: body.shape, names: body.names, lookup: kernelLookup(ctx.kernel), placement: body.placement });
   if (!r.ok) return { ok: false, message: `${f.name} failed: ${words} not found on ${ctx.bodyName(t.body)} after rebuild` };
   if (r.signature.type !== 'plane') return { ok: false, message: `${f.name} failed: ${words} is no longer flat` };
   const ext = await kernelExtent(f, v.extent, ctx);

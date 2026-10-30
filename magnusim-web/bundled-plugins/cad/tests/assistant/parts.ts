@@ -100,7 +100,7 @@ export function sketchOn(h: AssistantHarness, name: string, plane: OriginPlaneRe
 export async function sketchOnFace(h: AssistantHarness, name: string, body: BodyInfo, face: number, s: Shapes): Promise<string> {
   const t = await h.services.kernel.call('topo', { id: body.shape, faces: [face], edges: 'none', vertices: 'none', face_bbox: 'fast', face_mass: true });
   const f = t.result.faces[0];
-  const ref: PersistentRef = await refOfFace(kernelLookup(h.services.kernel), body.shape, body.names ?? null, face);
+  const ref: PersistentRef = await refOfFace(kernelLookup(h.services.kernel), body, face);
   return h.add('sketch', { name, support: { kind: 'face', body: body.id, face: ref }, plane: faceFrame(f.normal as Vec3, f.centroid as Vec3), points: s.points, entities: s.entities, constraints: [], solved: { values: {}, dof: 1, state: 'under' } });
 }
 
@@ -136,6 +136,6 @@ export async function filletEdge(h: AssistantHarness, name: string, body: BodyIn
   const t = await h.services.kernel.call('topo', { id: body.shape, faces: 'none', edges: 'all', vertices: 'none', edge_length: true, edge_ends: true });
   const e = t.result.edges.find((x) => new Set(x.faces).size === 2 && x.faces.includes(a) && x.faces.includes(b));
   if (!e) throw new Error('no edge between those faces');
-  const ref = await refOfEdge(kernelLookup(h.services.kernel), body.shape, body.names ?? null, e.i);
+  const ref = await refOfEdge(kernelLookup(h.services.kernel), body, e.i);
   return h.add('fillet', { name, body: body.id, edges: [ref], faces: [], radius });
 }

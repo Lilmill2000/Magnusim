@@ -15,7 +15,8 @@ import type { BuildContext, BuiltBody, FeatureOutput } from '../../types/doc-ser
 import type { KernelCallError } from '../../types/kernel';
 import type { TopoResult } from '../../types/kernel-protocol';
 import type { AxisRef, EdgeRef, FaceRef, GeomRef, PlaneRef, PointRef } from '../../types/references';
-import { faceFrame, toModel } from '../sketch/plane';
+import { placedFaceFrame, toModel } from '../sketch/plane';
+import { motionBetween } from '../../naming/placement';
 import { curveWords, sketchPointWords } from '../solids/geom';
 import { edgeInfo, edgeWords, vertexPoint, vertexWords, type EdgeInfo } from './brep';
 import { axisThrough, unit } from './geom';
@@ -138,7 +139,7 @@ export async function resolveFaceRef(ref: FaceRef | Extract<GeomRef, { kind: 'fa
   if (!b.ok) return b;
   const lookup = kernelLookup(ctx.kernel);
   try {
-    const r = await resolveFace({ ref: ref.ref, shape: b.body.shape, names: b.body.names!, lookup });
+    const r = await resolveFace({ ref: ref.ref, shape: b.body.shape, names: b.body.names!, lookup, placement: b.body.placement });
     if (!r.ok) return { ok: false, message: `${ctxWords(ctx, ref)} not found on ${ctx.bodyName(ref.body)} after rebuild` };
     const [face] = await lookup.faces(b.body.shape, [r.index]);
     if (!face) return { ok: false, message: `${ctxWords(ctx, ref)} not found on ${ctx.bodyName(ref.body)} after rebuild` };
@@ -175,7 +176,10 @@ export async function resolvePlane(ref: PlaneRef, ctx: Ctx): Promise<Resolved<Pl
   if (!r.ok) return r;
   const f = r.value;
   if (f.type !== 'plane' || !f.normal || !f.centroid) return { ok: false, message: `${ctxWords(ctx, ref)} is not flat` };
-  return { ok: true, value: faceFrame(f.normal as Vec3, f.centroid as Vec3), ...(r.warning ? { warning: r.warning } : {}) };
+  // A face a Move/copy body moved since the plane was put on it takes the plane along (as a sketch's).
+  const body = ctx.bodies.get(ref.body);
+  const frame = placedFaceFrame(f.normal as Vec3, f.centroid as Vec3, motionBetween(body?.placement, ref.ref.placement));
+  return { ok: true, value: frame, ...(r.warning ? { warning: r.warning } : {}) };
 }
 
 export async function resolveAxis(ref: AxisRef, ctx: Ctx): Promise<Resolved<Axis>> {

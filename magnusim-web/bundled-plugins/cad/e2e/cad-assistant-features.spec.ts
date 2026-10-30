@@ -8,7 +8,9 @@
 // changes. One Undo, named for the request, takes all three away.
 // Move/copy body, as the person sees it: the scripted model copies the person's block 30 mm along Y
 // (direct, kind move_body, copy true): the tree shows Body-Copy 1 built and the bodies Body 1 and
-// Body 1 (Copy), and the dock's step names the copy and where it is (the middle of its box).
+// Body 1 (Copy), and the dock's step names the copy and where it is (the middle of its box). Before
+// it, a turn about a plane's normal (the person's panel offers none) and a move of nothing are
+// refused in the dock's words, nothing made, "Nothing to move" as incomplete (it read expr_error).
 // The assembly check, as the person sees it in the Assistant's dock: the scripted model builds a
 // shaft (a head and a rod) and a wheel resting on its head with nothing above it, and checks the
 // stack: the dock's check step says one part can slide along its shaft and names the wheel (+Z);
@@ -110,10 +112,20 @@ test("cad:assistant-features-move the model copies the person's block 30 mm alon
   await addSolid(page, { size: [20, 10, 10] });
   await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok']);
   const before = chats(host).length;
-  host.fake.reply({ tools: [{ name: 'cad__direct', input: DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['0', '30 mm', '0'], copy: true }) }] }, { text: 'Body 1 (Copy) is 30 mm along Y from Body 1.' });
+  const refusals = [
+    { name: 'cad__direct', input: DIRECT({ kind: 'move_body', bodies: ['Body 1'], turn: { angle: '90', axis: 'normal of Top', pivot: [] } }) },
+    { name: 'cad__direct', input: DIRECT({ kind: 'move_body', bodies: ['Body 1'] }) },
+  ];
+  host.fake.reply({ tools: refusals }, { tools: [{ name: 'cad__direct', input: DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['0', '30 mm', '0'], copy: true }) }] }, { text: 'Body 1 (Copy) is 30 mm along Y from Body 1.' });
   await core.dockSend(page, 'Copy the block 30 mm along Y');
   await expect(core.dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 4 });
-  const [moved] = resultsIn(chats(host)[before + 1]);
+  const [normal, still] = resultsIn(chats(host)[before + 1]);
+  expect(normal).toMatchObject({ tool: 'cad__direct', ok: false, error: { message: expect.stringContaining('turn.axis: "normal of Top" is a plane\'s normal: give X, Y or Z (through pivot), an axis') } });
+  expect(still).toMatchObject({ tool: 'cad__direct', ok: false, error: { message: expect.stringMatching(/^incomplete: move: Nothing to move: give a distance or an angle/), hint: 'Give what the message asks for and call again.' } });
+  const failed = core.dockTurn(page).locator('[data-dock-step][data-dock-step-state="failed"] [data-dock-result]');
+  await expect(failed.filter({ hasText: "is a plane's normal" })).toBeVisible(STEP);
+  await expect(failed.filter({ hasText: 'Nothing to move: give a distance or an angle' })).toBeVisible(STEP);
+  const [moved] = resultsIn(chats(host)[before + 2]);
   expect(moved).toMatchObject({ tool: 'cad__direct', ok: true, data: { feature: { name: 'Body-Copy 1', type: 'move_body', state: 'ok' }, copies: [{ name: 'Body 1 (Copy)', at_mm: [10, 35, 5] }] } });
   // What the person sees: the copy beside the block in the tree, and the step that made it.
   await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok', 'Body-Copy 1 move_body ok']);

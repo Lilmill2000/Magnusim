@@ -6,13 +6,16 @@
 // whose kind changed, or a signature-only match, resolves with a warning
 // ("Reference repaired · check"); nothing found is an error. Nothing is
 // repaired silently, and nothing here writes the document (a caller re-anchors
-// only on a user edit).
+// only on a user edit). A body a Move/copy body turned or moved since the
+// reference was made is compared where it is now: the stored signature is
+// mapped by the body's placement now x the one stored with it (placement.ts).
 // Owner: DOC-CORE (naming layer).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { RefSignature, Vec3 } from '../types/doc';
+import type { PersistentRef, RefSignature, Vec3 } from '../types/doc';
 import type { TopoResult } from '../types/kernel-protocol';
 import type { RefResolution, ResolveInput } from '../types/naming';
 import { splitMerged, splitSuffix } from './names';
+import { mapSignature, motionBetween } from './placement';
 
 type TopoFace = TopoResult['faces'][number];
 
@@ -83,6 +86,12 @@ function sizeOf(faces: readonly TopoFace[]): number {
   return Number.isFinite(d) && d > 0 ? d : 1;
 }
 
+/** The reference as it compares against a body placed at `placement` now (its signature moved with the body). */
+export function placedRef<R extends PersistentRef>(ref: R, placement: readonly number[] | null | undefined): R {
+  const m = motionBetween(placement, ref.placement);
+  return m ? { ...ref, signature: mapSignature(m, ref.signature) } : ref;
+}
+
 /** Faces whose name is the reference's, contains it (merged), or is it split (#k). */
 export function nameCandidates(refName: string, faces: readonly string[]): number[] {
   const exact: number[] = [];
@@ -103,7 +112,8 @@ const REPAIRED = 'Reference repaired · check';
  * only when a name is lost.
  */
 export async function resolveFace(input: ResolveInput): Promise<RefResolution> {
-  const { ref, shape, names, lookup } = input;
+  const { shape, names, lookup } = input;
+  const ref = placedRef(input.ref, input.placement);
   const candidates = nameCandidates(ref.name, names.faces);
   if (candidates.length) {
     const topo = await lookup.faces(shape, candidates);

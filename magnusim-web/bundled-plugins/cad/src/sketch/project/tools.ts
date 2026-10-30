@@ -43,7 +43,7 @@ export function projectStateOf(services: object): StateStore<ProjectState> {
 /** The env to read links in sketch mode: the bodies drawn now (the rebuild stops after the edited sketch). */
 export function sketchEnv(services: AppServices): LinkEnv {
   const s = services.doc.state.get();
-  const bodies = new Map(s.rebuild.bodies.map((b) => [b.id, { shape: b.shape, names: b.names ?? null }] as const));
+  const bodies = new Map(s.rebuild.bodies.map((b) => [b.id, { shape: b.shape, names: b.names ?? null, placement: b.placement }] as const));
   const names = new Map(s.rebuild.bodies.map((b) => [b.id, b.name] as const));
   return {
     kernel: services.kernel,
@@ -106,9 +106,9 @@ export async function sourceOfPick(services: AppServices, item: SelectionItem, s
   if (item.kind === 'body') return 'Click a vertex, an edge or a face';
   if (!info.names) return `${info.name} has no face names, so its geometry cannot be followed`;
   const lookup = kernelLookup(services.kernel);
-  if (item.kind === 'vertex') return { kind: 'vertex', body: item.body, ref: await refOfVertex(lookup, info.shape, info.names, item.index) };
-  if (item.kind === 'edge') return { kind: 'edge', body: item.body, ref: await refOfEdge(lookup, info.shape, info.names, item.index) };
-  return { kind: 'face', body: item.body, ref: await refOfFace(lookup, info.shape, info.names, item.index) };
+  if (item.kind === 'vertex') return { kind: 'vertex', body: item.body, ref: await refOfVertex(lookup, info, item.index) };
+  if (item.kind === 'edge') return { kind: 'edge', body: item.body, ref: await refOfEdge(lookup, info, item.index) };
+  return { kind: 'face', body: item.body, ref: await refOfFace(lookup, info, item.index) };
 }
 
 function flash(services: AppServices, items: SelectionItem[]) {

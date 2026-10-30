@@ -198,7 +198,7 @@ export function MeasurePanel({ close }: ToolPanelProps) {
       const b = services.doc.state.get().rebuild.bodies.find((x) => x.id === p.body);
       if (!b) continue;
       const lookup = kernelLookup(services.kernel);
-      const made = p.kind === 'face' ? refOfFace(lookup, b.shape, b.names ?? null, p.index) : p.kind === 'edge' ? refOfEdge(lookup, b.shape, b.names ?? null, p.index) : refOfVertex(lookup, b.shape, b.names ?? null, p.index);
+      const made = p.kind === 'face' ? refOfFace(lookup, b, p.index) : p.kind === 'edge' ? refOfEdge(lookup, b, p.index) : refOfVertex(lookup, b, p.index);
       pins.current.set(k, { tessKey: b.tessKey, ref: made.catch(() => null) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -247,7 +247,7 @@ export function MeasurePanel({ close }: ToolPanelProps) {
           continue;
         }
         try {
-          const input = { ref, shape: b.shape, names: b.names, lookup };
+          const input = { ref, shape: b.shape, names: b.names, lookup, placement: b.placement };
           const r = p.kind === 'face' ? await resolveFace(input) : p.kind === 'edge' ? await resolveEdge(input) : await resolveVertex(input);
           // Still there and still the same (a dimension that moved the face changes what is measured).
           const bb = b.bbox;

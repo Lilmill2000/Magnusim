@@ -20,13 +20,24 @@
 //                          turned; Ctrl held snaps to 15 deg (87 -> 90); the X ring dragged, then
 //                          Escape with the button held: Angle, About and the body as before, no
 //                          rebuild, the history as it was, the panel open.
+//   cad:move-body-move     (also) Body 1 taken out of the Bodies field with its ×, then its row
+//                          clicked: it is back in the field, with no "That body is a copy this
+//                          feature makes" (review fix: a body the move only moves is no copy);
+//   cad:move-body-hole-follows  a Hole drilled in the top face of the moved block, then the move
+//                          edited to 50 mm and turned 90 deg about Z, then about X: the volume chip
+//                          keeps the hole each time, the hole stays at the block's middle, and the
+//                          tree's rows stay ok (the hole was left behind: volume 2000, nothing said);
+//   cad:move-body-edit-later-turn  Body-Move 1 edited with a turning Body-Move 2 after it: the panel
+//                          says the features after it wait until Done, the body is drawn as built
+//                          just after Body-Move 1, the X arrow drags it and the release builds it
+//                          where it was drawn (it jumped along Y); Done turns it again.
 // Setup (blocks) goes in through the document as the other specs do; what is asserted is what the
 // person sees: the tree, the panel, the bodies' boxes as the view draws them (the rebuild's bodies,
 // the same numbers the volume chip and Measure read).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
-import { addSolid, historyNames, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { addSolid, historyNames, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -83,6 +94,13 @@ test('cad:move-body-move a selected body, Move/copy body, Move X 20: the body mo
   await expect(p.locator('[data-pivot="centre"]')).toBeVisible();
   await expect(p.locator('.nui[data-field="pivot-x"] input')).toHaveValue('10');
   await typeIn(frame, 'move-x', '20');
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [20, 0, 0, 40, 10, 10]]]);
+  // Taken out with its ×, then its row clicked: back in the field, nothing refused.
+  await p.locator(`[data-pick-field="bodies"] [data-pick-remove="${b}"]`).click();
+  await expect(p.locator('[data-pick-field="bodies"] .cad-pick-name')).toHaveCount(0);
+  await frame.locator(`[data-body-row="${b}"] > .tree-row`).click();
+  await expect(p.locator('[data-pick-field="bodies"] .cad-pick-name')).toHaveText(['Body 1']);
+  await expect(p.locator('[data-pick-error]')).toHaveCount(0);
   await expect.poll(() => boxes(page)).toEqual([['Body 1', [20, 0, 0, 40, 10, 10]]]);
   await p.locator('[data-panel-done]').click();
   await expect(p).toHaveCount(0);
@@ -330,4 +348,139 @@ test('cad:move-body-drag-ring the Z ring dragged: Angle and the drawn body follo
   expect(await fieldValue(frame, 'angle')).toBe(90);
   expect(near(await drawn(page, b), [5, -5, 0, 15, 15, 10], 1e-3)).toBe(true);
   expect(await boxes(page)).toEqual([['Body 1', [5, -5, 0, 15, 15, 10]]]);
+});
+
+// ---------------------------------------------------------------- what was made on a moved body
+
+/** Open the history row's panel (its menu's Edit). */
+async function editRow(frame: FrameLocator, name: string) {
+  await featureRow(frame, name).locator('> .tree-row').click({ button: 'right' });
+  await frame.locator('[data-cad-menu] [data-menu-item="edit"]').click();
+  await expect(panel(frame).locator('[data-feature-panel="move_body"]')).toBeVisible();
+}
+
+/** The rows' states as the tree shows them: [name, data-state]. */
+const rowStates = (frame: FrameLocator) => frame.locator('[data-cad-tree] [data-feature-row]').evaluateAll((els) => els.map((e) => [e.querySelector(':scope > .tree-row .tl')?.textContent ?? '', e.getAttribute('data-state') ?? '']));
+
+/** The middle of the hole's round face (2 mm radius) on Body 1, as the kernel has it now. */
+const holeAt = (page: Page) =>
+  workspaceFrame(page).evaluate(async () => {
+    const s = (window as unknown as W).__CAD__.services;
+    const b = s.doc.state.get().rebuild.bodies[0];
+    const t = await s.kernel.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'none', face_mass: true });
+    const c = (t.result.faces as { type: string; radius?: number; centroid: number[] }[]).filter((f) => f.type === 'cylinder' && Math.abs((f.radius ?? 0) - 2) < 1e-6);
+    return c.length === 1 ? c[0].centroid.map((v) => Math.round(v * 1000) / 1000 + 0) : null;
+  });
+
+test('cad:move-body-hole-follows a Hole in the moved block stays in it when the move is edited and turned: the volume keeps the hole, the rows stay ok', async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const frame = await freshPart(page, request);
+  const b = await oneBlock(page, frame);
+  await frame.locator(`[data-body-row="${b}"] > .tree-row`).click();
+  await runCommand(frame, 'modify.move-body');
+  await typeIn(frame, 'move-x', '20');
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [20, 0, 0, 40, 10, 10]]]);
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await settledNow(page);
+  // SOLID's Hole on the moved block's top face, at its middle (30, 5), 4 mm across and 4 deep.
+  await runCommand(frame, 'solid.hole');
+  const tool = frame.locator('[data-cad-panel="tool"]');
+  await expect(tool.locator('[data-tool-panel="solid.hole"]')).toBeVisible();
+  const face = await modelOnPage(page, [32, 7, 10]);
+  await page.mouse.click(face[0], face[1]);
+  await expect(tool.locator('[data-pick-field="hole-face"] [data-pick-row]')).toHaveCount(1);
+  const at = await modelOnPage(page, [30, 5, 10]);
+  await page.mouse.click(at[0], at[1]);
+  await expect(tool.locator('[data-hole-centre]')).toHaveCount(1);
+  await tool.locator('[data-hole-coord="0-x"]').fill('30 mm');
+  await tool.locator('[data-hole-coord="0-y"]').fill('5 mm');
+  await tool.locator('[data-field="diameter"]').fill('4 mm');
+  await tool.locator('[data-field="depth"] select').selectOption('blind');
+  await tool.locator('[data-field="distance"]').fill('4 mm');
+  await tool.locator('[data-panel-done]').click();
+  await expect(tool).toHaveCount(0);
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Body-Move 1', 'Hole 1 sketch', 'Hole 1']);
+  const holed = 2000 - Math.PI * 2 * 2 * 4;
+  await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(holed, 2);
+  expect(await holeAt(page)).toEqual([30, 5, 8]);
+  const allOk = [
+    ['Sketch 1', 'ok'],
+    ['Extrude 1', 'ok'],
+    ['Body-Move 1', 'ok'],
+    ['Hole 1 sketch', 'ok'],
+    ['Hole 1', 'ok'],
+  ];
+  // The move edited to 50 mm: the hole goes with the block.
+  await editRow(frame, 'Body-Move 1');
+  await typeIn(frame, 'move-x', '50');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [50, 0, 0, 70, 10, 10]]]);
+  await settledNow(page);
+  await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(holed, 2);
+  expect(await holeAt(page)).toEqual([60, 5, 8]);
+  await expect.poll(() => rowStates(frame)).toEqual(allOk);
+  // Turned 90 deg about Z through its centre too: the hole stays at the block's middle.
+  await editRow(frame, 'Body-Move 1');
+  await typeIn(frame, 'angle', '90');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [55, -5, 0, 65, 15, 10]]]);
+  await settledNow(page);
+  await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(holed, 2);
+  expect(await holeAt(page)).toEqual([60, 5, 8]);
+  await expect.poll(() => rowStates(frame)).toEqual(allOk);
+  // About X instead: the top face turns to -Y, the hole with it; nothing says repaired.
+  await editRow(frame, 'Body-Move 1');
+  await panel(frame).locator('[data-field="about"] select').selectOption('x');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [50, 0, 0, 70, 10, 10]]]);
+  await settledNow(page);
+  await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(holed, 2);
+  expect(await holeAt(page)).toEqual([60, 2, 5]);
+  await expect.poll(() => rowStates(frame)).toEqual(allOk);
+  await expect(frame.locator('[data-cad-tree]')).not.toContainText('repaired');
+});
+
+test('cad:move-body-edit-later-turn Body-Move 1 edited with a turning Body-Move 2 after it: Body-Move 2 rolled back while it is open, the drag draws what the release builds', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const frame = await freshPart(page, request);
+  const b = await oneBlock(page, frame);
+  // Set up through the document: Body-Move 1 (20 mm along X), then Body-Move 2 (90 deg about Z at the origin).
+  await workspaceFrame(page).evaluate((body) => {
+    const doc = (window as unknown as W).__CAD__.services.doc;
+    doc.beginNew('move_body', { bodies: [body], move: ['20 mm', '0 mm', '0 mm'] }).commit();
+    doc.beginNew('move_body', { bodies: [body], angle: '90 deg', about: 'z', pivot: ['0 mm', '0 mm', '0 mm'] }).commit();
+  }, b);
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [-10, 20, 0, 0, 40, 10]]]);
+  await editRow(frame, 'Body-Move 1');
+  // Open: the panel says the features after it wait; the body is drawn as built just after Body-Move 1, the handle on it.
+  await expect(panel(frame).locator('[data-move-later]')).toHaveText('Until Done, the features after it wait: the bodies are drawn as it leaves them.');
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', [20, 0, 0, 40, 10, 10]]]);
+  await settledNow(page);
+  await expect.poll(async () => near((await handleOf(page))?.origin ?? [0, 0, 0], [30, 5, 5], 1e-6)).toBe(true);
+  const h = (await handleOf(page))!;
+  const grab = at(h.origin, [1, 0, 0], 30 * h.pixelMm);
+  let held = NaN;
+  await dragAlong(page, [grab, at(grab, [1, 0, 0], 8)], async () => {
+    await expect.poll(() => fieldValue(frame, 'move-x')).toBeGreaterThan(27.8);
+    held = await fieldValue(frame, 'move-x');
+    await expect.poll(async () => near(await drawn(page, b), [held, 0, 0, 20 + held, 10, 10], 1e-3)).toBe(true);
+  });
+  const kept = await fieldValue(frame, 'move-x');
+  expect(Math.abs(kept - held)).toBeLessThan(0.05);
+  // Let go: built where it was drawn (it jumped to the other side of the turn).
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', round3([kept, 0, 0, 20 + kept, 10, 10])]]);
+  await settledNow(page);
+  expect(near(await drawn(page, b), [kept, 0, 0, 20 + kept, 10, 10], 1e-3)).toBe(true);
+  // Done: Body-Move 2 turns it again; the last move's panel has no such line.
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect.poll(() => boxes(page)).toEqual([['Body 1', round3([-10, kept, 0, 0, 20 + kept, 10])]]);
+  await editRow(frame, 'Body-Move 2');
+  await expect(panel(frame).locator('[data-move-order]')).toBeVisible();
+  await expect(panel(frame).locator('[data-move-later]')).toHaveCount(0);
+  await panel(frame).locator('[data-panel-done]').click();
 });

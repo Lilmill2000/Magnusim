@@ -63,13 +63,13 @@ export async function resolveEdgeSet(name: string, body: BuiltBody, edges: reado
   const fname = (id: string) => ctx.featureName(id);
   const faceNames = body.names?.faces ?? null;
   for (const ref of edges) {
-    const r = await resolveEdge({ ref, shape: body.shape, names: body.names!, lookup });
+    const r = await resolveEdge({ ref, shape: body.shape, names: body.names!, lookup, placement: body.placement });
     if (!r.ok) return { ok: false, message: `${name} failed: ${edgeWords(ref.name, fname, faceNames) ?? 'An edge'} not found on ${ctx.bodyName(body.id)} after rebuild${why(ref.name)}` };
     if (r.warning) warning = `${edgeWords(ref.name, fname, faceNames) ?? 'An edge'}: ${r.warning}`;
     if (!out.includes(r.index)) out.push(r.index);
   }
   for (const ref of faces) {
-    const r = await resolveFace({ ref, shape: body.shape, names: body.names!, lookup });
+    const r = await resolveFace({ ref, shape: body.shape, names: body.names!, lookup, placement: body.placement });
     if (!r.ok) return { ok: false, message: `${name} failed: ${describeFace(ref.name, fname, faceNames)} not found on ${ctx.bodyName(body.id)} after rebuild${why(ref.name)}` };
     if (r.warning) warning = `${describeFace(ref.name, fname, faceNames)}: ${r.warning}`;
     for (const e of await edgesOfFace(lookup, body.shape, r.index)) if (!out.includes(e)) out.push(e);

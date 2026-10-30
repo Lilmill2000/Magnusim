@@ -88,7 +88,7 @@ async function faceRef(doc: DocService, kernel: KernelAdapter, body: string, n: 
   const faces = await lookup.faces(b.shape, 'all');
   const f = faces.find((x) => x.type === 'plane' && x.normal && round(x.normal, 6).join() === round(n, 6).join() && where(x.centroid as Vec3));
   if (!f) throw new Error('no such face');
-  return refOfFace(lookup, b.shape, b.names!, f.i);
+  return refOfFace(lookup, b, f.i);
 }
 
 const same = (a: readonly number[] | undefined, b: readonly number[], eps = 1e-6) => !!a && a.every((x, i) => Math.abs(x - b[i]) <= eps);
@@ -99,7 +99,7 @@ async function edgeRef(doc: DocService, kernel: KernelAdapter, body: string, pic
   const lookup = kernelLookup(kernel);
   const e = (await lookup.edges!(b.shape, 'all')).find((x) => pick(x as never));
   if (!e) throw new Error('no such edge');
-  return refOfEdge(lookup, b.shape, b.names!, e.i);
+  return refOfEdge(lookup, b, e.i);
 }
 
 /** The stored reference of the vertex of `body` at `p`. */
@@ -108,7 +108,7 @@ async function vertexRef(doc: DocService, kernel: KernelAdapter, body: string, p
   const lookup = kernelLookup(kernel);
   const v = (await lookup.vertices!(b.shape, 'all')).find((x) => same(x.p, p));
   if (!v) throw new Error('no such vertex');
-  return refOfVertex(lookup, b.shape, b.names!, v.i);
+  return refOfVertex(lookup, b, v.i);
 }
 
 describe('CONSTRUCT features on the real kernel', () => {
@@ -200,7 +200,7 @@ describe('CONSTRUCT features on the real kernel', () => {
     const b = doc.state.get().rebuild.bodies.find((x) => x.id === cyl.body)!;
     const lookup = kernelLookup(kernel);
     const side = (await lookup.faces(b.shape, 'all')).find((f) => f.type === 'cylinder')!;
-    const ref = await refOfFace(lookup, b.shape, b.names!, side.i);
+    const ref = await refOfFace(lookup, b, side.i);
     const ax = add<RefAxisFeature>(doc, 'ref_axis', { method: 'cylinder', face: { kind: 'face', body: cyl.body!, ref } });
     const cross = add<RefAxisFeature>(doc, 'ref_axis', { method: 'two_planes', planes: [{ kind: 'origin', plane: 'origin:front' }, { kind: 'origin', plane: 'origin:right' }] });
     const par = add<RefAxisFeature>(doc, 'ref_axis', { method: 'two_planes', planes: [{ kind: 'origin', plane: 'origin:top' }, { kind: 'origin', plane: 'origin:top' }] });
@@ -214,7 +214,7 @@ describe('CONSTRUCT features on the real kernel', () => {
     expect(r.features[par]).toMatchObject({ state: 'error', message: 'Axis 3 failed: Top plane and Top plane are parallel, so they do not cross' });
     // A flat face is not a cylinder.
     const flat = (await lookup.faces(b.shape, 'all')).find((f) => f.type === 'plane')!;
-    const flatRef = await refOfFace(lookup, b.shape, b.names!, flat.i);
+    const flatRef = await refOfFace(lookup, b, flat.i);
     edit(doc, ax, { face: { kind: 'face', body: cyl.body!, ref: flatRef } } as Partial<Feature>);
     const r2 = await settle(doc);
     expect(r2.features[ax]?.state).toBe('error');

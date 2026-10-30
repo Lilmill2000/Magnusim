@@ -60,28 +60,28 @@ const ref = (name: string, mid: [number, number, number], dir: [number, number, 
 describe('resolving edge references', () => {
   const names = { faces: ['F:a:end', 'F:a:side:s1', 'F:a:side:s2', 'F:a:start'] };
   it('by name (moved by a dimension change: still clean), and by name among two edges of the same faces (nearest)', async () => {
-    const r = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names, lookup: lookup([line(0, [0, 1], [15, 0, 20], [1, 0, 0], 30), line(1, [0, 2], [30, 10, 20], [0, 1, 0])]) });
+    const r = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names, lookup: lookup([line(0, [0, 1], [15, 0, 20], [1, 0, 0], 30), line(1, [0, 2], [30, 10, 20], [0, 1, 0])]), placement: null });
     expect(r).toMatchObject({ ok: true, index: 0, how: 'name' });
-    const two = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names, lookup: lookup([line(0, [0, 1], [10, 0, 20], [1, 0, 0]), line(1, [0, 1], [10, 40, 20], [1, 0, 0])]) });
+    const two = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names, lookup: lookup([line(0, [0, 1], [10, 0, 20], [1, 0, 0]), line(1, [0, 1], [10, 40, 20], [1, 0, 0])]), placement: null });
     expect(two).toMatchObject({ ok: true, index: 0, how: 'name' });
   });
 
   it('a name whose edge turned another way is a repair; no name and nothing alike is a miss', async () => {
-    const turned = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names, lookup: lookup([line(0, [0, 1], [10, 0, 20], [0, 1, 0])]) });
+    const turned = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names, lookup: lookup([line(0, [0, 1], [10, 0, 20], [0, 1, 0])]), placement: null });
     expect(turned).toMatchObject({ ok: true, how: 'moved', warning: 'Reference repaired · check' });
-    const gone = await resolveEdge({ ref: ref(edgeName('F:x:end', 'F:x:side:q'), [500, 0, 0], [0, 0, 1], 3), shape: 1, names, lookup: lookup([line(0, [0, 1], [10, 0, 20], [1, 0, 0]), line(1, [1, 2], [10, 9, 20], [1, 0, 0])]) });
+    const gone = await resolveEdge({ ref: ref(edgeName('F:x:end', 'F:x:side:q'), [500, 0, 0], [0, 0, 1], 3), shape: 1, names, lookup: lookup([line(0, [0, 1], [10, 0, 20], [1, 0, 0]), line(1, [1, 2], [10, 9, 20], [1, 0, 0])]), placement: null });
     expect(gone).toEqual({ ok: false, message: 'Edge not found after rebuild' });
   });
 
   it('a face split in two (#0, #1) still finds its edge, with a warning', async () => {
     const split = { faces: ['F:a:end#0', 'F:a:side:s1', 'F:a:end#1'] };
-    const r = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names: split, lookup: lookup([line(0, [0, 1], [5, 0, 20], [1, 0, 0], 10), line(1, [1, 2], [15, 0, 20], [1, 0, 0], 10)]) });
+    const r = await resolveEdge({ ref: ref(edgeName('F:a:end', 'F:a:side:s1'), [10, 0, 20], [1, 0, 0]), shape: 1, names: split, lookup: lookup([line(0, [0, 1], [5, 0, 20], [1, 0, 0], 10), line(1, [1, 2], [15, 0, 20], [1, 0, 0], 10)]), placement: null });
     expect(r).toMatchObject({ ok: true, how: 'moved' });
   });
 
   it('vertices resolve by their faces', async () => {
     const vref: PersistentRef = { name: vertexName(['F:a:end', 'F:a:side:s1', 'F:a:side:s2']), signature: { kind: 'vertex', type: 'vertex', at: [20, 0, 20] } };
-    const r = await resolveVertex({ ref: vref, shape: 1, names, lookup: lookup([], [{ i: 0, p: [0, 0, 20], faces: [0, 1, 3] }, { i: 1, p: [25, 0, 20], faces: [0, 1, 2] }]) });
+    const r = await resolveVertex({ ref: vref, shape: 1, names, lookup: lookup([], [{ i: 0, p: [0, 0, 20], faces: [0, 1, 3] }, { i: 1, p: [25, 0, 20], faces: [0, 1, 2] }]), placement: null });
     expect(r).toMatchObject({ ok: true, index: 1, how: 'name' });
   });
 });

@@ -16,7 +16,7 @@ import { copyBodyName, storedBodyName } from '../../../src/doc/features/body-ids
 import deleteBodyModule from '../../../src/features/delete_body';
 import { deleteBodyDef } from '../../../src/features/delete_body/feature';
 import moveBodyModule, { MOVE_BODY_COMMAND } from '../../../src/features/move_body';
-import { moveBodyDef, nameForCopy } from '../../../src/features/move_body/feature';
+import { bodyRefusal, moveBodyDef, nameForCopy, OWN_COPY } from '../../../src/features/move_body/feature';
 import { isZeroExpr, moveWords, vecWords } from '../../../src/features/move_body/words';
 import { createBridge } from '../../../src/lib/bridge';
 import { createBus } from '../../../src/lib/bus';
@@ -120,6 +120,20 @@ describe('Move/copy body: where the person finds it', () => {
     ]);
     off();
     ui.dispose();
+  });
+});
+
+describe("Move/copy body: the Bodies field", () => {
+  it('refuses only the copies this feature makes: a body it only moves, taken out of the field, is taken again (it said "That body is a copy this feature makes")', () => {
+    // Without Keep a copy a moved body is "last changed" by the move: that is not a copy.
+    expect(bodyRefusal('f_m1', [], 'b_1')).toBeNull();
+    // Its own copy (Keep a copy: b_1.m1.1) is refused; another feature's copy, or one already listed, is not.
+    expect(bodyRefusal('f_m1', [], 'b_1.m1.1')).toBe(OWN_COPY);
+    expect(OWN_COPY).toBe('That body is a copy this feature makes');
+    expect(bodyRefusal('f_m1', ['b_1.m1.1'], 'b_1.m1.1')).toBeNull();
+    expect(bodyRefusal('f_m1', [], 'b_1.m2.1')).toBeNull();
+    // Its copies are k 1 only.
+    expect(bodyRefusal('f_m1', [], 'b_1.m1.2')).toBeNull();
   });
 });
 

@@ -13,6 +13,7 @@
 //     direction and skipped copies; measure's totals and a body's check list.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HINTS } from '../../src/assistant/errors';
 import { pickFace } from '../../src/features/p2/refs';
 import { refFromItem, type Accept } from '../../src/features/refgeom/refs';
 import type { EnclosureFeature, Feature, LinearPatternFeature, MoveBodyFeature, PressPullFeature, RefAxisFeature, RefPlaneFeature, RefPointFeature, SplitFeature } from '../../src/types/doc';
@@ -430,8 +431,15 @@ describe('direct', () => {
       // Refused before anything changes.
       const none = await h.call('direct', DIRECT({ kind: 'move_body', move: ['1', '0', '0'] }));
       expect((none as { error: { message: string } }).error.message).toContain('bodies: the bodies to move');
+      // Nothing to move asks for a distance or an angle (incomplete), not for a fixed expression.
       const still = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'] }));
-      expect((still as { error: { code: string; message: string } }).error.message).toContain('move: Nothing to move: give a distance or an angle');
+      expect((still as { error: { message: string; hint: string } }).error).toMatchObject({ message: expect.stringMatching(/^incomplete: move: Nothing to move: give a distance or an angle/), hint: HINTS.incomplete });
+      const kg = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['1 kg', '0', '0'] }));
+      expect((kg as { error: { message: string; hint: string } }).error).toMatchObject({ message: expect.stringMatching(/^expr_error: move: Move X: /), hint: HINTS.expr_error });
+      // A plane's normal is no axis to turn about (the person's panel offers none): refused, with what works.
+      const normal = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], turn: { angle: '90', axis: 'normal of Top', pivot: [] } }));
+      expect((normal as { error: { message: string } }).error.message).toMatch(/^bad_selector: turn\.axis: "normal of Top" is a plane's normal: give X, Y or Z \(through pivot\), an axis, a sketch line, a straight or round edge, or "axis of <round face>"\./);
+      expect(names(h)).not.toContain('Body-Move 2');
       const two = await h.call('direct', DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['1', '2'] }));
       expect((two as { error: { message: string } }).error.message).toContain('move: three lengths X, Y, Z');
       const stray = await h.call('direct', DIRECT({ kind: 'split', bodies: ['Body 1'], tool: 'Top', copy: true }));

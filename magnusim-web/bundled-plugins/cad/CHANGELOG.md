@@ -88,6 +88,19 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   built there; Done keeps it as one undo step. Escape with the button still down
   puts the drag back. Typing a value moves the handle too. The camera never
   turns under the handle.
+- What you made on a moved body goes with it when you change the move or put a
+  Move/copy body in before it: a hole, a slot or a boss sketched on its face
+  stays where it is on the body (it was left behind, with nothing said), and a
+  fillet's edge or a sketch's face on a turned body no longer turns amber with
+  "Reference repaired · check". A construction plane on its face goes along too.
+- While you edit a Move/copy body, the features after it are rolled back (as
+  when you edit a sketch), so the handle drags the bodies as they are just after
+  it and letting go builds them where they were drawn.
+- Taking a body out of the Move/copy body's Bodies field and clicking it again
+  puts it back (it said "That body is a copy this feature makes").
+- The Assistant turns bodies about the axes the panel offers (a plane's normal
+  is refused, with what works), and "Nothing to move" asks it for a distance or
+  an angle instead of a fixed expression.
 - In Magnusim CAD, the desktop edition with no projects, a body has no "Leave
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation

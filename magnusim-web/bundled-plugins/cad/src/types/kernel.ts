@@ -158,4 +158,6 @@ export interface BodyInfo {
   tess: TessPayload | null;
   /** Its faces' persistent names (panels list faces by them; references store them), or null when none were made. */
   names?: FaceNames | null;
+  /** Where Move/copy body features took it since it was made (BuiltBody.placement); references made on it keep it. */
+  placement?: number[] | null;
 }

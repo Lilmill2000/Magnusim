@@ -175,6 +175,12 @@ export interface PersistentRef {
   name: string;
   semantic?: RefSemantic;
   signature: RefSignature;
+  /**
+   * Its body's placement when it was made (src/naming/placement.ts: the Move/copy body turns and
+   * moves since the body was made), absent when none had moved it. Resolution maps the signature
+   * by the placement now x this^-1 first, so a Move made or edited later is not a repair.
+   */
+  placement?: number[];
 }
 
 /** A reference to a face, edge or vertex of one body. */
