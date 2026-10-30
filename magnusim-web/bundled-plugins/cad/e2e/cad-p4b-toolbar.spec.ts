@@ -27,7 +27,7 @@ const MODEL_ON_BAR: Record<string, string[]> = {
   sketch: ['sketch.new'],
   solid: ['solid.extrude', 'solid.revolve', 'solid.sweep', 'solid.loft', 'solid.hole'],
   pattern: ['pattern.linear', 'pattern.circular', 'pattern.mirror'],
-  modify: ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.combine', 'modify.parameters'],
+  modify: ['modify.fillet', 'modify.chamfer', 'modify.shell', 'modify.press-pull', 'modify.delete-faces', 'modify.split', 'modify.move-body', 'modify.combine', 'modify.parameters'],
   construct: ['construct.plane', 'construct.axis', 'construct.point'],
   cfd: ['cfd.enclosure'],
   inspect: ['inspect.measure', 'inspect.mass', 'inspect.check', 'inspect.find'],

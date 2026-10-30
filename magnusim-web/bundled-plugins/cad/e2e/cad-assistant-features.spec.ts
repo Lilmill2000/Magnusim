@@ -6,6 +6,9 @@
 // body by Right moved 10 mm (the tree shows Split 1 and the bodies Body 1 and Body 1 (2)). Each call
 // answers ok with what it made. A split by a body that is also a target is refused before anything
 // changes. One Undo, named for the request, takes all three away.
+// Move/copy body, as the person sees it: the scripted model copies the person's block 30 mm along Y
+// (direct, kind move_body, copy true): the tree shows Body-Copy 1 built and the bodies Body 1 and
+// Body 1 (Copy), and the dock's step names the copy and where it is (the middle of its box).
 // The assembly check, as the person sees it in the Assistant's dock: the scripted model builds a
 // shaft (a head and a rod) and a wheel resting on its head with nothing above it, and checks the
 // stack: the dock's check step says one part can slide along its shaft and names the wheel (+Z);
@@ -43,7 +46,7 @@ test.afterEach(() => {
 
 type W = { __CAD__: { services: { doc: { state: { get(): { history: { undoLabel: string | null } } } } }; assistant: { setPace(p: string | null, scale?: number | null): void } } };
 
-const DIRECT = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, shape: 'box', padding: 'zero', sides: [], ...o });
+const DIRECT = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: { angle: '', axis: '', pivot: [] }, copy: false, shape: 'box', padding: 'zero', sides: [], ...o });
 const CONSTRUCT = (o: Record<string, unknown>) => ({ edit: '', name: '', method: 'offset', refs: [], value: '', xyz: [], flip: false, from_end: false, ...o });
 
 /** The tree's feature rows as the person reads them: name, type and state. */
@@ -97,6 +100,27 @@ test('cad:assistant-features press-pull, a construction axis and a split, as the
   await expect.poll(() => bodyRows(page), STEP).toEqual(['Body 1']);
   await expect.poll(mm3, STEP).toBe(7200);
   expect(await label()).toBe(undoBefore);
+});
+
+test("cad:assistant-features-move the model copies the person's block 30 mm along Y: the tree shows the copy, and the dock's step names it and where it is", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const pid = await newProject(request, host, 'Assistant move');
+  await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  await addSolid(page, { size: [20, 10, 10] });
+  await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok']);
+  const before = chats(host).length;
+  host.fake.reply({ tools: [{ name: 'cad__direct', input: DIRECT({ kind: 'move_body', bodies: ['Body 1'], move: ['0', '30 mm', '0'], copy: true }) }] }, { text: 'Body 1 (Copy) is 30 mm along Y from Body 1.' });
+  await core.dockSend(page, 'Copy the block 30 mm along Y');
+  await expect(core.dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 4 });
+  const [moved] = resultsIn(chats(host)[before + 1]);
+  expect(moved).toMatchObject({ tool: 'cad__direct', ok: true, data: { feature: { name: 'Body-Copy 1', type: 'move_body', state: 'ok' }, copies: [{ name: 'Body 1 (Copy)', at_mm: [10, 35, 5] }] } });
+  // What the person sees: the copy beside the block in the tree, and the step that made it.
+  await expect.poll(() => treeRows(page), STEP).toEqual(['Sketch 1 sketch ok', 'Extrude 1 extrude ok', 'Body-Copy 1 move_body ok']);
+  await expect.poll(() => bodyRows(page), STEP).toEqual(['Body 1', 'Body 1 (Copy)']);
+  const step = core.dockTurn(page).locator('[data-dock-step]').filter({ hasText: 'Body 1 (Copy)' });
+  await expect(step.locator('[data-dock-result]')).toContainText('copied Body 1 by (0, 30, 0) mm: Body 1 (Copy) at (10, 35, 5)', STEP);
+  await expect(step).toHaveAttribute('data-dock-step-state', 'ok');
 });
 
 const SKETCH = (name: string, on: string, circles: [number, number][]) => ({

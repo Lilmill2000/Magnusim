@@ -38,6 +38,7 @@ import { applyDimensions, planDimensions, type DimensionEdit } from '../sketch/d
 import { flippedSketches } from '../sketch/flip';
 import { closestName, closestWords } from '../closest';
 import { enclosureKept, KEPT_WORDS } from '../../features/enclosure/kept';
+import { nameForCopy } from '../../features/move_body/feature';
 
 interface SetRow {
   field: string;
@@ -209,6 +210,15 @@ const editFeature: EditTool<Plan> = {
       }
     }
     const keys = new Set(set.map((x) => String(pathKeys(x.path)[0])));
+    // Keep a copy names a Move/copy body as the person's panel does (Body-Move 1 becomes Body-Copy 1;
+    // a name given to it stays), unless this call renames it.
+    if (patched.type === 'move_body' && f.type === 'move_body' && patched.copy !== f.copy && !str(ctx.input.rename_to)) {
+      const named = nameForCopy(f.name, patched.copy, s.doc.features.filter((g) => g.id !== f.id).map((g) => g.name));
+      if (named !== f.name) {
+        patched = { ...patched, name: named };
+        keys.add('name');
+      }
+    }
     if (patched !== f && patched.type === 'ref_point' && (f as Feature & { face?: unknown }).face !== (patched as Feature & { face?: unknown }).face) keys.add('face');
     const patch: Partial<Feature> | null = set.length && !dims ? (Object.fromEntries([...keys].map((k) => [k, (patched as unknown as Record<string, unknown>)[k]])) as Partial<Feature>) : null;
     const renameTo = str(ctx.input.rename_to);

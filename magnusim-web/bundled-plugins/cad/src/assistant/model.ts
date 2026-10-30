@@ -18,7 +18,9 @@
 // fits what the app's result cap (RESULT_DATA_BYTES) leaves: a cut never takes a part's row.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { storedBodyName } from '../doc/features/body-ids';
 import { bodyMaker, isBodyMaking } from '../doc/features/hooks';
+import { moveWords } from '../features/move_body/words';
 import { DEFAULT_BODY_COLOR } from '../doc/schema';
 import { toModel, ydirOf } from '../features/sketch/plane';
 import { userSelection } from '../lib/selection';
@@ -35,7 +37,7 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
-import { refBodiesOf, type RefBodies } from './feature-tools';
+import { axisText, refBodiesOf, type RefBodies } from './feature-tools';
 import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { enclosureKept, KEPT_WORDS } from '../features/enclosure/kept';
@@ -172,6 +174,12 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
     if (made.length) row.made = made;
     const faces = faceRoles(s.rebuild.bodies, f.id);
     if (Object.keys(faces).length) row.faces = faces;
+  } else if (f.type === 'move_body') {
+    // What it does, in words ("moved Body 1 by (20, 0, 0) mm"), and the copies it made.
+    const bodyName = (id: string) => s.rebuild.bodies.find((b) => b.id === id)?.name ?? storedBodyName(s.doc, id) ?? 'a deleted body';
+    row.does = moveWords(f, bodyName, (a) => axisText(s, a));
+    const made = madeBodies(services, s, f);
+    if (made.length) row.made = made;
   }
   return row;
 }

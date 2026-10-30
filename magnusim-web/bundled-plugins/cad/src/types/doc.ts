@@ -14,6 +14,8 @@
 //      new. The schema stays 2 (no released build reads schema 2).
 //   v0.5.0: Delete body (delete_body) is new. The schema stays 2: an older CAD shows its row red
 //      ("cannot build delete_body features") with the bodies still there, and keeps it.
+//   v0.5.0: Move/copy body (move_body) is new, the same way: an older CAD shows its row red with
+//      the bodies where they were before it, and keeps it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { DocUnits, Expr } from './units';
 import type { AxisRef, CurveRef, EdgeRef, FaceRef, PlaneRef, PointRef } from './references';
@@ -394,6 +396,32 @@ export interface CombineFeature extends FeatureBase<'combine'> {
  */
 export interface DeleteBodyFeature extends FeatureBase<'delete_body'> {
   bodies: BodyId[];
+}
+
+/** What a Move/copy body turns about: X, Y or Z through its pivot, or a picked axis. */
+export type MoveAbout = 'x' | 'y' | 'z' | 'axis';
+
+/**
+ * Move/copy body (SOLIDWORKS' Move/Copy Body, Fusion's Move; Daniel 2026-10-30: a body could not
+ * be moved after it was made). The bodies turn by `angle` about `about` (first), then move by
+ * `move` (X, Y, Z): one rigid transform per body. Without `copy` they keep their ids, names and
+ * face names, so later features still find them; with `copy` the originals stay and each copy is
+ * a new body (an id derived from its source's, its faces named as a pattern copy's).
+ */
+export interface MoveBodyFeature extends FeatureBase<'move_body'> {
+  bodies: BodyId[];
+  /** The move along X, Y and Z (length expressions), after the turn. */
+  move: ExprVec3;
+  /** The turn (an angle expression; "0 deg" none), before the move, right hand about the axis. */
+  angle: Expr;
+  /** X, Y or Z through `pivot`, or `axis`. */
+  about: MoveAbout;
+  /** about 'axis': a CONSTRUCT or origin axis, a straight or round edge, a round face's axis, a sketch line. */
+  axis: AxisRef | null;
+  /** about x, y or z: the point the turn goes through (length expressions); null: the centre of the bodies' box just before this feature. */
+  pivot: ExprVec3 | null;
+  /** Keep a copy: the originals stay where they are, and copies of them are turned and moved. */
+  copy: boolean;
 }
 
 // ------------------------------------------------------------ P3: sketches
@@ -977,6 +1005,7 @@ export type Feature =
   | SplitFeature
   | CombineFeature
   | DeleteBodyFeature
+  | MoveBodyFeature
   | SketchFeature
   | ExtrudeFeature
   | EnclosureFeature

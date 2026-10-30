@@ -113,6 +113,8 @@ export const FOLD_ORDER: readonly string[] = [
   // Split and Delete faces before Axis (P4a review: the reference axis is reached for more often).
   'modify.split',
   'modify.delete-faces',
+  // Move/copy body after them (a body is moved more often than split), still before Axis.
+  'modify.move-body',
   'construct.axis',
   // P4b (PATTERN): Circular pattern and Mirror fold before Sweep (Linear pattern stays in view).
   'pattern.circular',

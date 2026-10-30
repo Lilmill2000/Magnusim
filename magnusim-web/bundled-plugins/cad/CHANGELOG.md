@@ -68,6 +68,17 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   deletes bodies the same way. While a panel is open, the bodies it shows
   picked (Combine's target, say) are the panel's: Delete leaves them alone, and
   a body's menu offers to delete only that body.
+- Move/copy body (MODIFY, key M, or "Move/copy Body 1…" in a body's menu, just
+  above Delete): move bodies by X, Y and Z, and turn them by an angle about X, Y
+  or Z through a pivot (the centre of their box unless you type a point), or
+  about an axis you pick (a construction axis, a straight or round edge, a round
+  face, a sketch line). It turns first, then moves. "Body-Move 1" is added to
+  the history (one undo step; edit, suppress or delete it like any feature). A
+  moved body keeps its name and its faces, so a fillet, a sketch on a face or a
+  Combine made after it still finds them. **Keep a copy** leaves the bodies
+  where they are and moves copies of them instead ("Body 1 (Copy)", new bodies;
+  the feature is "Body-Copy 1"). The Assistant moves and copies bodies the same
+  way, and says where each one is now.
 - In Magnusim CAD, the desktop edition with no projects, a body has no "Leave
   out of the simulation" toggle or menu item and no "still in the simulation"
   words, and the Assistant offers no simulation choice: there is no simulation

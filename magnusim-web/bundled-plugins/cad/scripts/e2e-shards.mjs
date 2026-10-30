@@ -115,6 +115,8 @@ export const SHARDS = {
     'e2e/cad-p5-pressPull-curved.spec.ts',
     // A body's menu in the tree: Delete (a Delete body feature, Undo, Redo, several bodies, the Delete key), and its simulation item in Magnusim.
     'e2e/cad-body-menu.spec.ts',
+    // Move/copy body: MODIFY's command and the body's menu, a move, Keep a copy and a turn, Undo, Edit, the key M.
+    'e2e/cad-move-body.spec.ts',
     // Combine: a Join of pieces that do not touch is a quiet note in History; a Cut that splits a body warns.
     'e2e/cad-join-note.spec.ts',
     // Check for an assembly (the person's side of the Assistant's check): Loose parts, Interference, Rotation.
@@ -209,6 +211,8 @@ export const RULES = [
   [/^src\/features\/(mass|check|delete_faces)\/index\.tsx?$/, ['step', 'shell'], 'body tools, their command'],
   [/^src\/features\/(mass|check|delete_faces)\//, ['step'], 'Mass, Check and Delete faces'],
   ['src/features/delete_body/', ['step'], 'Delete body (the body menu in the tree)'],
+  [/^src\/features\/move_body\/index\.tsx?$/, ['step', 'shell'], 'Move/copy body, its command'],
+  ['src/features/move_body/', ['step'], 'Move/copy body'],
   // The assembly checks: the person's Check (step) and the Assistant's check tool.
   ['src/features/assembly/', ['step', 'assistant'], 'the assembly checks'],
   ['src/files/', ['step'], 'file transfer (STEP in and out)'],

@@ -271,6 +271,15 @@
       "keys": []
     },
     {
+      "id": "modify.move-body",
+      "label": "Move/copy body",
+      "group": "Modify",
+      "context": "model",
+      "keys": [
+        "KeyM"
+      ]
+    },
+    {
       "id": "construct.plane",
       "label": "Plane",
       "group": "Construct",

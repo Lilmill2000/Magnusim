@@ -401,12 +401,13 @@ test('cad:sketch-toolbar-fit the ribbon: at 1920 x 1000 every sketch group and d
   await page.mouse.move(900, 600);
   await shot(page, frame, 'model-ribbon-1600');
   // 1280 (Daniel's narrowest): nothing folds, nothing scrolls; the least-used groups' small buttons
-  // are icons (Segoe UI: FILE, INSPECT, CONSTRUCT); Undo and Redo in view.
+  // are icons (Segoe UI: FILE, INSPECT, CONSTRUCT, and PATTERN since Move/copy body joined MODIFY);
+  // Undo and Redo in view.
   await resizeTo(page, frame, 1280, 'model');
   await expect(tb(frame, 'model')).toHaveAttribute('data-fit-collapsed', '');
   if (process.platform === 'win32') {
     await expect(tb(frame, 'model')).toHaveAttribute('data-fit-folded', '0');
-    await expect(tb(frame, 'model')).toHaveAttribute('data-fit-labels', 'file inspect construct');
+    await expect(tb(frame, 'model')).toHaveAttribute('data-fit-labels', 'file inspect construct pattern');
   }
   for (const id of ['edit.undo', 'edit.redo']) await expect(tb(frame, 'model').locator(`.tb-btn[data-command="${id}"]`)).toBeInViewport();
   expect((await tb(frame, 'model').boundingBox())!.height, 'the same height').toBeCloseTo(modelHeight, 0);

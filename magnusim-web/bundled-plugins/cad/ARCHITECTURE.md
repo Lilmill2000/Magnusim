@@ -74,7 +74,7 @@ INTEGRATE for frozen files) and wait; never edit it yourself.
 | `kernel-build/**`, `workspace/kernel/mk32.*`, `src/kernel-worker/**`, `src/types/kernel-protocol.ts`, `tests/kernel/kernel-*` (tests, `kernel-lib.ts`, `kernel-oom-worker.mjs`), `fixtures/kernel/**` (P2/P3 added `box20-faces.step`, `box20-gap.step`, `box10-sheet.step`, generated natively; README rows there), `e2e/cad-p1-kernel-*.spec.ts`, `e2e/cad-p2-kernel-*.spec.ts` | KERNEL-HARDENING | Facade, OCCT build, `valid` on every op, deep copies, repair, per-op behaviour, memory. `npm run test:kernel`. |
 | `solver-build/**`, `workspace/solver/*`, `src/solver-worker/**`, `tests/solver/**` | P3 (sketcher) | Built and tested now; not wired into the page until P3. |
 | `src/modules.ts`, `src/naming/**`, `src/doc/features/{hooks,body-ids}.ts`, `tests/arch/**`, `docs/p2p3-plan.md` | INTEGRATE (P2/P3 architect) | Module discovery, the naming layer, the feature-type hooks; frozen during the P2/P3 build (requests to INTEGRATE). Builders append only to the plan's §8 contract-change table. |
-| `src/features/{import,delete_faces,delete_body,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts`, `e2e/cad-body-menu.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
+| `src/features/{import,delete_faces,delete_body,move_body,press_pull,split,combine,measure,mass,check,export}/**`, `src/files/**` + their tests, `e2e/cad-p2-features-*.spec.ts`, `e2e/cad-body-menu.spec.ts`, `e2e/cad-move-body.spec.ts` | P2-FEATURES | One module per folder (`index.ts` default export, plan §3.1). |
 | `src/features/p2/**` | P2-FEATURES | P2's shared building blocks (selection list, viewport picker, stored-face refs, Try repair helpers, in-frame dialog, icons, `p2.css`). No `index.ts`, so module discovery skips it. Its colours are `--cad-p2-*` in `src/styles/tokens.css`. |
 | `src/sketch/**`, the solver worker's `WORKERS` line in `scripts/build.mjs` + their tests | P3-SKETCH | Sketch mode, tools, dimensions and constraints UI, solver client. |
 | `src/features/{sketch,extrude}/**`, `src/ui/tree/**` + their tests | P3-PROFILES | The sketch feature (regions), extrude, sketch rows in the tree. |
@@ -436,7 +436,31 @@ with the host once for the page's life, and its chip goes in the dock.
   which bodies; the Assistant's `direct` kind `delete_body` makes the same record.
   Its rows are named "Body-Delete N" (SOLIDWORKS' Body-Delete/Keep1), never
   "Delete body N", which read as Body N deleted. An older CAD shows its row red
-  and keeps it.
+  and keeps it. v0.5.0 also adds `move_body` (Move/copy body, SOLIDWORKS'
+  Move/Copy Body; `src/features/move_body/`: `feature.ts` the type, `panel.tsx`,
+  `words.ts` its words for get_model and the person's changes, `index.ts` the
+  MODIFY command `modify.move-body`, key M): `bodies`, `move` (X, Y, Z
+  expressions), `angle`, `about` (`x`/`y`/`z` through `pivot`, null = the centre
+  of the bodies' box just before it, as the build finds it each time; or `axis`,
+  an `AxisRef` resolved by `refgeom/resolve.ts`), `copy`. One rigid transform per
+  body (turn first, then move: `moveMatrix`, the pattern's `transforms.ts`)
+  through the kernel's `copies` (`check: false`: a rigid motion keeps a solid
+  valid). Moved, a body keeps its id, name, colour and face names (the rebuild
+  keeps a body's held name and colour when a later feature changes it), so later
+  references resolve by name; its `feature` becomes the move. With `copy`, each
+  copy is `deriveBodyId(feature, source, 1)` (`ownsBody`), named
+  `copyBodyName` ("Body 1 (Copy)", "(Copy 2)" for a second Move/copy of the same
+  body; `storedBodyName` gives the same from the Part alone) and its faces
+  `F:<feature>:i2:<source face>` (the pattern's copy role, instance 2). Its
+  output (`MoveBodyOutput`) is the centre and the line it turned about, for the
+  panel's pivot fields. Rows are "Body-Move N", "Body-Copy N" with Keep a copy
+  (`nameForCopy`: the panel, `direct` and `edit_feature` rename a name it gave,
+  never the person's). Nothing to move (every distance 0, no turn) is incomplete
+  unless it keeps a copy (a copy in place is built, with a note). The body menu
+  (`UiController.bodyMenu`, item `body-move`, just above `body-delete`) opens its
+  panel with the body (or the selected bodies); the Assistant's `direct` kind
+  `move_body` (`move`, `turn {angle, axis, pivot}`, `copy`) makes the same record
+  and answers with each moved body's or copy's box centre.
 - **Include in simulation** (LINK, §11): `BodyDef.simulation === false` leaves
   a body out of the project's geometry (absent = included). It is a model change
   (one undo step: "Leave Body 1 out of the simulation"), so it is saved and is a

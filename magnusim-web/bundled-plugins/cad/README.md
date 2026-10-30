@@ -253,6 +253,12 @@ touching bodies apart.
 - **Combine**: Join, Cut or Intersect several target bodies with several tool
   bodies; **Keep the tool bodies** is an option.
 - **Split**: cut a body in two by a plane, a flat face or another body.
+- **Move/copy body** (M, or "Move/copy Body 1…" in a body's menu): move bodies
+  by X, Y, Z and turn them by an angle about X, Y or Z through a pivot (the
+  centre of their box unless you type one) or about an axis, a straight or round
+  edge, a round face or a sketch line. It turns first, then moves. A moved body
+  keeps its name and faces, so later features still find them. **Keep a copy**
+  leaves the bodies and moves copies ("Body 1 (Copy)").
 - **Delete faces and heal**: remove faces (a hole, a fillet, a boss) and let
   the kernel close the gap.
 - **Press-pull** (Q): move faces along their normal. Out adds material, in
@@ -619,7 +625,7 @@ The view moves the way the simulation viewer's does, in model and sketch mode:
 | Click, Ctrl+click | Select; Ctrl+click toggles one item (in a sketch it also adds a body vertex or edge, projected) |
 | Right click | The context menu |
 
-**Model mode:** E Extrude, Q Press-pull, F Fit, N Normal to, 1–7 the standard
+**Model mode:** E Extrude, Q Press-pull, M Move/copy body, F Fit, N Normal to, 1–7 the standard
 views (Front, Back, Left, Right, Top, Bottom, Isometric), Delete (on faces:
 Delete faces), Ctrl+Z / Ctrl+Y, Escape clears the selection.
 

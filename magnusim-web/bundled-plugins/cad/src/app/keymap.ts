@@ -143,6 +143,8 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   e('modify.combine', 'Combine', 'Modify', 'model'),
   e('modify.split', 'Split', 'Modify', 'model'),
   e('modify.delete-faces', 'Delete faces', 'Modify', 'model'),
+  // Move/copy body: M, as Fusion's Move (free in model mode; M is Mirror only in a sketch).
+  e('modify.move-body', 'Move/copy body', 'Modify', 'model', ['KeyM']),
   e('construct.plane', 'Plane', 'Construct', 'model'),
   e('construct.axis', 'Axis', 'Construct', 'model'),
   e('construct.point', 'Point', 'Construct', 'model'),

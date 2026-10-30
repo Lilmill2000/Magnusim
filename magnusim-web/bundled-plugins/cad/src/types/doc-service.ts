@@ -62,7 +62,19 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
   // P4b: the copies a pattern or mirror made (PATTERN)
   | PatternOutput
   // Press-pull on curved faces (kernel API 6): what Press-pull did, for its panel
-  | PressPullOutput;
+  | PressPullOutput
+  // Move/copy body: the pivot it turned about, for its panel
+  | MoveBodyOutput;
+
+/**
+ * What a Move/copy body did, for its panel: the centre of the bodies' box just before it (the
+ * pivot when none is typed), and the line it turned about (null: no turn).
+ */
+export interface MoveBodyOutput {
+  type: 'move_body';
+  centre: Vec3 | null;
+  axis: { origin: Vec3; dir: Vec3 } | null;
+}
 
 /**
  * What a Press-pull built (kernel API 6), for its panel's words ("Bore radius 10 mm -> 8 mm").
