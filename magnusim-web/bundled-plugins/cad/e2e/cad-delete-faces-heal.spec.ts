@@ -1,10 +1,13 @@
-// Delete faces never shows a heal past the gap as a success (2026-10-30): an L-block (Extrude
-// 60 x 40 x 20, Extrude Cut 30 x 40 x 10 off one end), every face's edges rounded R2 by Fillet 1,
-// then the 30 blends selected, Delete faces, "Delete faces and heal". OCCT's heal filled the step
-// and the app showed Delete faces 1 ok with the volume chip at 48,000 mm³ (the full box). Now
-// Delete faces 1 is red and says what the heal would have done, that the body is unchanged and
-// that deleting Fillet 1 takes the fillet off; the chip keeps 35,601.6 mm³ and the size chip the
-// L-block's 60 x 40 x 20. Done keeps the red row; the body stays as Fillet 1 left it.
+// Delete faces never shows a heal past the gap as a success (2026-10-30): a part's every face's
+// edges rounded R2 by Fillet 1, then the blends selected, Delete faces, "Delete faces and heal".
+//  1. heal-fill   an L-block (Extrude 60 x 40 x 20, Extrude Cut 30 x 40 x 10 off one end): OCCT's
+//                 heal filled the step and the app showed Delete faces 1 ok with the volume chip
+//                 at 48,000 mm³ (the full box). Now the heal is tried again in two goes: Delete
+//                 faces 1 is ok and the chip shows the sharp L-block's 36,000 mm³, its 8 faces.
+//  2. heal-refuse a T-block (a bar 60 x 40 x 10 on a stem 20 x 40 x 10), which two goes cannot
+//                 make right: Delete faces 1 is red and says what the heal would have done, that
+//                 the body is unchanged and that deleting Fillet 1 takes the fillet off; the chip
+//                 keeps Fillet 1's volume. Done keeps the red row.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
@@ -76,15 +79,9 @@ async function selectFaces(page: Page, which: 'all' | 'round'): Promise<number> 
   }) as never, which);
 }
 
-test('cad:delete-faces-heal-fill Delete faces of every blend of a rounded L-block: red with what the heal would do, the body and its chips unchanged', async ({ page, request }) => {
-  test.setTimeout(180_000);
-  const { seen, frame } = await freshPart(page, request);
-  const block = await addSolid(page, { size: [60, 40, 20] });
-  await addSolid(page, { at: [30, 0, 10], size: [30, 40, 10], op: 'cut', scope: [block.body!] });
-  await settled(page);
-  await expectOneVolume(frame, 36000);
-  // Fillet 1: every face selected (all their edges), radius 2.
-  expect(await selectFaces(page, 'all')).toBe(8);
+/** Fillet 1 of every face (radius 2, through the panel), then the blends selected, Delete faces, "Delete faces and heal". */
+async function roundThenDelete(page: Page, frame: FrameLocator, faces: number, blends: number | null): Promise<number> {
+  expect(await selectFaces(page, 'all')).toBe(faces);
   await runCommand(frame, 'modify.fillet');
   await expect(panel(frame).locator('[data-panel-title]')).toHaveText('Fillet 1');
   const radius = panel(frame).locator('.nui[data-field="radius"] input');
@@ -92,34 +89,69 @@ test('cad:delete-faces-heal-fill Delete faces of every blend of a rounded L-bloc
   await radius.press('Enter');
   await settled(page);
   await expect(featureRowNamed(frame as never, 'Fillet 1')).toHaveAttribute('data-state', 'ok');
-  const filleted = 35601.6258;
-  await expectOneVolume(frame, filleted);
+  const filleted = (await chipVolumes(frame))[0];
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);
-  // The 30 blends, Delete faces, "Delete faces and heal".
-  expect(await selectFaces(page, 'round')).toBe(30);
+  const picked = await selectFaces(page, 'round');
+  if (blends !== null) expect(picked).toBe(blends);
+  else expect(picked).toBeGreaterThan(faces);
   await runCommand(frame, 'modify.delete-faces');
   const dlg = frame.locator('[data-cad-dialog]');
   await expect(dlg.locator('h2')).toHaveText('Delete faces of Fillet 1?');
   await dlg.locator('[data-dialog-choice="faces"]').click();
   await expect(panel(frame).locator('[data-feature-panel="delete_faces"]')).toBeVisible();
   await settled(page);
+  return filleted;
+}
+
+const bodyFaces = (page: Page) => cad<number>(page, (() => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.bodies[0].faces) as never);
+const sizeOf = async (frame: FrameLocator) => ((await sizeChip(frame).locator('[data-size-mm]').getAttribute('data-size-mm')) ?? '').split(',').map((v) => Math.round(Number(v) * 1e6) / 1e6);
+
+test('cad:delete-faces-heal-fill Delete faces of every blend of a rounded L-block: ok, the chip shows the sharp L-block (36,000 mm³), not the box', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  const block = await addSolid(page, { size: [60, 40, 20] });
+  await addSolid(page, { at: [30, 0, 10], size: [30, 40, 10], op: 'cut', scope: [block.body!] });
+  await settled(page);
+  await expectOneVolume(frame, 36000);
+  const filleted = await roundThenDelete(page, frame, 8, 30);
+  expect(Math.abs(filleted / 35601.6258 - 1)).toBeLessThan(1e-6);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'ok');
+  await expect(panel(frame).locator('[data-run-reason]')).toHaveCount(0);
+  // The sharp L-block (the heal in one go made the 60 x 40 x 20 box of 48,000 mm³).
+  await expectOneVolume(frame, 36000);
+  await expect(volumeChip(frame)).not.toContainText('48,000');
+  await expect.poll(() => sizeOf(frame)).toEqual([60, 40, 20]);
+  expect(await bodyFaces(page)).toBe(8);
+  await shot(page, 'delete-faces-heal-fill');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-state', 'ok');
+  await expectOneVolume(frame, 36000);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:delete-faces-heal-refuse Delete faces of every blend of a rounded T-block: red with what the heal would do, the body and its chips unchanged', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  const bar = await addSolid(page, { at: [0, 0, 10], size: [60, 40, 10] });
+  await addSolid(page, { at: [20, 0, 0], size: [20, 40, 10], op: 'join', scope: [bar.body!] });
+  await settled(page);
+  await expectOneVolume(frame, 32000);
+  const faces0 = await bodyFaces(page);
+  const filleted = await roundThenDelete(page, frame, faces0, null);
   const row = featureRowNamed(frame as never, 'Delete faces 1');
   await expect(row).toHaveAttribute('data-state', 'error');
   const reason = panel(frame).locator('[data-run-reason]').first();
   await expect(reason).toHaveText(
-    /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 12,398\.\d+ mm³ over faces you kept \([^)]*Extrude 2[^)]*\); the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead/,
+    /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 16,39\d\.\d+ mm³ over faces you kept \([^)]*Extrude [12][^)]*\); the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead/,
     { timeout: 30_000 },
   );
   // The body is as Fillet 1 left it: not the 60 x 40 x 20 box of 48,000 mm³ the heal made.
   await expectOneVolume(frame, filleted);
   await expect(volumeChip(frame)).not.toContainText('48,000');
-  await expect
-    .poll(async () => ((await sizeChip(frame).locator('[data-size-mm]').getAttribute('data-size-mm')) ?? '').split(',').map((v) => Math.round(Number(v) * 1e6) / 1e6))
-    .toEqual([60, 40, 20]);
-  const faces = await cad<number>(page, (() => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.bodies[0].faces) as never);
-  expect(faces).toBe(38);
-  await shot(page, 'delete-faces-heal-fill');
+  await shot(page, 'delete-faces-heal-refuse');
   // Done: the row stays red, the body unchanged.
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);

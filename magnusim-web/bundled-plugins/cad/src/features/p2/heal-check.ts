@@ -12,9 +12,15 @@
 // fillets, a variable fillet from STEP, a 50-hole plate, wedge tips) and 41 wrong or subset runs:
 // no refusal of a right body, every fill caught. A rule "the change stays near the faces" refused
 // a wedge's tip chamfer, whose heal brings back a tip far from the small face, so it is not used.
+// When the check refuses, retryHoldBack tries the faces in two goes: all but one face next to a
+// face the heal took or covered, then that one; the first result that passes the same check
+// against the body before is taken. Measured on the six refused bodies: the right body at the
+// first to third try (0.16-0.36 s) on the L-block, U-channel, pocket, slot and side step; none
+// on the T-block (two cavities: 1.5 s), which stays refused. Removing the faces in smaller groups
+// (one by one, or blends at corners first) was never right on them.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { timeoutForFaces } from '../../kernel/timeouts';
+import { LARGE_PART_FACES } from '../../kernel/timeouts';
 import { describeFace } from '../../naming/names';
 import { formatVolume } from '../../ui/kit/format';
 import type { BuildContext, BuiltBody } from '../../types/doc-service';
@@ -59,13 +65,19 @@ export function coveredFaces(added: { history?: OpHistory }, areas: readonly num
   return [...on].filter(([, a]) => a > COVER_SHARE * total && a > 1e-9).map(([f]) => f).sort((a, b) => a - b);
 }
 
-/** Both rules on a defeature result `out` of `input` with faces `picked` removed. Shapes it makes are released. */
-export async function checkHeal(ctx: BuildContext, input: ShapeId, picked: readonly number[], out: { id: ShapeId; history?: OpHistory }): Promise<HealCheck> {
-  const lost = out.history ? lostFaces(out.history, input, picked) : [];
-  const timeoutMs = timeoutForFaces('boolean', await ctx.faces(input));
+/**
+ * Both rules on a defeature result `out` of `input` with faces `picked` removed (`lostKnown`: the
+ * lost faces when `out` came in more than one step). Shapes it makes are released.
+ */
+export async function checkHeal(ctx: BuildContext, input: ShapeId, picked: readonly number[], out: { id: ShapeId; history?: OpHistory }, lostKnown?: number[]): Promise<HealCheck> {
+  const lost = lostKnown ?? (out.history ? lostFaces(out.history, input, picked) : []);
+  // A large part (a 100 MB STEP import: one Cut of it took 21.6 s, and a boolean of two nearly
+  // identical bodies is OCCT's slowest case) gets the history rule only (on its own it caught every
+  // whole fill of the corpus and 24 of the 26 fills of partial picks).
+  if ((await ctx.faces(input)) > LARGE_PART_FACES) return { lost, covered: [], added: null, unchecked: null };
   let added: { id: ShapeId; empty: boolean; history?: OpHistory };
   try {
-    added = (await ctx.kernel.call('boolean', { op: 'cut', targets: [out.id], tools: [input] }, timeoutMs ? { timeoutMs } : {})).result;
+    added = (await ctx.kernel.call('boolean', { op: 'cut', targets: [out.id], tools: [input] })).result;
   } catch (err) {
     const k = (err as { kind?: string }).kind;
     if (k === 'occt' || k === 'input' || k === 'internal') return { lost, covered: [], added: null, unchecked: 'the kernel could not compare the result with the body before it' };
@@ -86,6 +98,79 @@ export async function checkHeal(ctx: BuildContext, input: ShapeId, picked: reado
 
 /** Is the heal refused? */
 export const healRefused = (c: HealCheck) => c.lost.length > 0 || c.covered.length > 0;
+
+/** At most this many faces are held back in turn. */
+const RETRY_TRIES = 8;
+
+type Defeatured = { id: ShapeId; valid?: boolean; warnings?: boolean; faces?: number; history?: OpHistory };
+
+/** The result faces that come from input face `i` (modified or the same). */
+function imagesOf(h: OpHistory, input: ShapeId, i: number): number[] {
+  return h.faces.filter((e) => e.from.some((x) => x.shape === input && x.face === i && x.how !== 'generated')).map((e) => e.out);
+}
+
+/**
+ * A refused heal tried again in two goes (see the top): each of up to RETRY_TRIES asked-for faces next
+ * to a `bad` face (lost or covered), those touching fewest first, is held back while the others are
+ * removed, then removed from that result. Returns both steps of the first try whose final body passes
+ * checkHeal against `input`, or null (small parts only: on a large one every try is a full defeature).
+ * The caller releases `first` once it has named the result.
+ */
+export async function retryHoldBack(ctx: BuildContext, input: ShapeId, picked: readonly number[], bad: readonly number[]): Promise<{ first: Defeatured; second: Defeatured } | null> {
+  const nFaces = await ctx.faces(input);
+  if (nFaces > LARGE_PART_FACES || picked.length < 2 || !bad.length) return null;
+  const edges = (await ctx.kernel.call('topo', { id: input, faces: 'none', edges: 'all', vertices: 'none' })).result.edges;
+  const next = new Map<number, Set<number>>();
+  for (const e of edges) {
+    if (e.faces.length !== 2) continue;
+    for (const [a, b] of [e.faces, [e.faces[1], e.faces[0]]]) {
+      if (!next.has(a)) next.set(a, new Set());
+      next.get(a)!.add(b);
+    }
+  }
+  const badSet = new Set(bad);
+  const touching = (h: number) => [...(next.get(h) ?? [])].filter((x) => badSet.has(x)).length;
+  const tries = picked.filter((h) => touching(h) > 0).sort((a, b) => touching(a) - touching(b) || a - b).slice(0, RETRY_TRIES);
+  const asked = new Set(picked);
+  const defeature = async (id: ShapeId, faces: number[]): Promise<Defeatured | null> => {
+    try {
+      return (await ctx.kernel.call('defeature', { id, faces })).result;
+    } catch (err) {
+      const k = (err as { kind?: string }).kind;
+      if (k === 'occt' || k === 'input' || k === 'internal') return null;
+      throw err;
+    }
+  };
+  for (const h of tries) {
+    const rest = picked.filter((x) => x !== h);
+    const first = await defeature(input, rest);
+    if (!first) continue;
+    const h1 = first.history;
+    const gone1 = new Set((h1?.deleted ?? []).filter((d) => d.shape === input && d.face != null).map((d) => d.face as number));
+    const img = h1 ? imagesOf(h1, input, h) : [];
+    if (!h1 || first.warnings || first.valid === false || rest.some((i) => !gone1.has(i)) || img.length !== 1) {
+      await ctx.release([first.id]);
+      continue;
+    }
+    const second = await defeature(first.id, img);
+    const h2 = second?.history;
+    if (!second || !h2 || second.warnings || second.valid === false || !h2.deleted.some((d) => d.shape === first.id && d.face === img[0])) {
+      await ctx.release([first.id, ...(second ? [second.id] : [])]);
+      continue;
+    }
+    const gone2 = new Set(h2.deleted.filter((d) => d.shape === first.id && d.face != null).map((d) => d.face as number));
+    const lost: number[] = [];
+    for (let i = 0; i < nFaces; i++) {
+      if (asked.has(i)) continue;
+      const im = imagesOf(h1, input, i);
+      if (!im.length || im.every((o) => gone2.has(o))) lost.push(i);
+    }
+    const c = await checkHeal(ctx, input, picked, second, lost);
+    if (!healRefused(c) && !c.unchecked) return { first, second };
+    await ctx.release([first.id, second.id]);
+  }
+  return null;
+}
 
 /** A face of the body in the panels' words ("Side face of Extrude 2"). */
 function faceWords(body: BuiltBody, i: number, ctx: BuildContext): string {

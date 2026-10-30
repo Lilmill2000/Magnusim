@@ -2,16 +2,18 @@
 // Delete faces must never pass off a heal that filled more than the gap (2026-10-30): on an
 // L-block with every edge rounded R2, removing the 30 blends gave a valid 60 x 40 x 20 box
 // (48,000 mm³ instead of 36,000) and Delete faces 1 was "ok". Through the document as the
-// person does it (Sketch + Extrude, a cut, Fillet of every face, Delete faces of the blends): a
-// red Delete faces 1 that says what the heal would have done and that the body is unchanged.
-// Then the rule (src/features/p2/heal-check.ts) on the real kernel: every wrong fill of the
-// repro corpus refused, and none of its right removals (holes, bosses, pockets, slots, fillets,
-// chamfers, ring fillets, wedge tips, a 50-hole plate, BREP round trips).
+// person does it (Sketch + Extrude, a cut, Fillet of every face, Delete faces of the blends): the
+// L-block's heal is tried again in two goes and gives the sharp L-block; a T-block's cannot be
+// made right that way, and Delete faces 1 is red, says what the heal would have done and that
+// the body is unchanged. Then the rule (src/features/p2/heal-check.ts) on the real kernel: every
+// wrong fill of the repro corpus refused (and five of the six bodies right in two goes), and none
+// of its right removals (holes, bosses, pockets, slots, fillets, chamfers, ring fillets, wedge
+// tips, a 50-hole plate, BREP round trips).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { forgetBreps } from '../../../src/features/import/feature';
-import { checkHeal, healRefused, type HealCheck } from '../../../src/features/p2/heal-check';
+import { checkHeal, healRefused, retryHoldBack, type HealCheck } from '../../../src/features/p2/heal-check';
 import { PATTERN_DEFS } from '../../../src/features/pattern/defs';
 import type { DeleteFacesFeature } from '../../../src/types/doc';
 import type { BuildContext, FeatureTypeDef } from '../../../src/types/doc-service';
@@ -74,25 +76,43 @@ async function deleteFaces(r: RealDoc, pick: (f: TopoResult['faces'][number]) =>
   return { ...d, count: idx.length };
 }
 
-describe('Delete faces through the document: a heal past the gap is refused, the body unchanged', () => {
-  it('L-block (Extrude, Extrude Cut), Fillet of every face R2, Delete faces of the 30 blends: red, words, volume and faces as before', async () => {
+describe('Delete faces through the document: a heal past the gap is tried again, else refused with the body unchanged', () => {
+  it('L-block (Extrude, Extrude Cut), Fillet of every face R2, Delete faces of the 30 blends: ok, the sharp L-block (36,000 mm³, 8 faces, named)', async () => {
     const r = await part();
     await block(r, [0, 0, 0], [60, 40, 20]);
-    const cut = await block(r, [30, 0, 10], [30, 40, 10], 'cut');
+    await block(r, [30, 0, 10], [30, 40, 10], 'cut');
     expect(close(await volume(r, bodies(r)[0].id), 36000)).toBe(true);
+    await roundAll(r, 2);
+    expect(await volume(r, bodies(r)[0].id)).toBeCloseTo(35601.626, 2);
+    const del = await deleteFaces(r, (f) => f.type !== 'plane');
+    expect(del.count).toBe(30);
+    // One go gave the 48,000 mm³ box; two goes (all but the fillet on the riser's top, then it) the right body.
+    expect(del.status).toMatchObject({ state: 'ok' });
+    expect(del.status.message).toBeUndefined();
+    const after = bodies(r)[0];
+    expect(after.faces).toBe(8);
+    expect(close(await volume(r, after.id), 36000)).toBe(true);
+    const names = after.names?.faces ?? [];
+    expect(names).toHaveLength(8);
+    expect(new Set(names).size).toBe(8);
+  }, 120_000);
+
+  it('T-block (a bar on a stem), Fillet of every face R2, Delete faces of every blend: red, words, volume and faces as before', async () => {
+    const r = await part();
+    const bar = await block(r, [0, 0, 10], [60, 40, 10]);
+    await block(r, [20, 0, 0], [20, 40, 10], 'join');
+    expect(close(await volume(r, bodies(r)[0].id), 32000)).toBe(true);
     const fillet = await roundAll(r, 2);
     const before = bodies(r)[0];
     const v0 = await volume(r, before.id);
-    expect(v0).toBeCloseTo(35601.626, 2);
     const del = await deleteFaces(r, (f) => f.type !== 'plane');
-    expect(del.count).toBe(30);
     const st = del.status;
     expect(st.state).toBe('error');
     const fname = r.doc.state.get().doc.features.find((f) => f.id === fillet)!.name;
-    const cutName = r.doc.state.get().doc.features.find((f) => f.id === cut)!.name;
-    // What the heal would have done (12,398 mm³ more, on the step's riser and floor, which the cut made), that nothing changed, and the way that works.
-    expect(st.message).toMatch(/^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 12,398\.\d* mm³ over faces you kept \(/);
-    expect(st.message).toContain(cutName);
+    const barName = r.doc.state.get().doc.features.find((f) => f.id === bar)!.name;
+    // What the heal would have done (fill both sides of the stem: 16,395 mm³ more, on faces the bar and the stem made), that nothing changed, and the way that works.
+    expect(st.message).toMatch(/^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 16,39\d\.\d* mm³ over faces you kept \(/);
+    expect(st.message).toContain(barName);
     expect(st.message).toContain(`; the body is unchanged. To take the whole fillet off, delete ${fname} instead`);
     const after = bodies(r)[0];
     expect(after.shape).toBe(before.shape);
@@ -166,7 +186,7 @@ function kit(r: RealDoc) {
     await ctx.release([d.id]);
     return { check, v };
   };
-  return { c, box, cyl, cut, fuse, edges, faces, vol, blend, run, extrude: (profile: unknown, d: number) => id('extrude', { profile, extent: { kind: 'blind', d } }) };
+  return { c, ctx, box, cyl, cut, fuse, edges, faces, vol, blend, run, extrude: (profile: unknown, d: number) => id('extrude', { profile, extent: { kind: 'blind', d } }) };
 }
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
@@ -198,6 +218,15 @@ describe('the heal check on the real kernel: every wrong fill refused', () => {
       expect(healRefused(check), `${name} R${rad} refused`).toBe(true);
       expect(check.lost.length, name).toBeGreaterThan(0);
       expect(check.covered.length, name).toBeGreaterThan(0);
+      // Two goes: the sharp body, except the T-block (a cavity each side of its stem).
+      const again = await retryHoldBack(K.ctx, f.id, f.blends, [...check.lost, ...check.covered]);
+      if (name === 'T-block') {
+        expect(again, name).toBeNull();
+      } else {
+        expect(again, `${name} R${rad} in two goes`).not.toBeNull();
+        expect(await K.vol(again!.second.id), `${name} R${rad} in two goes`).toBeCloseTo(sharp, 3);
+        await K.ctx.release([again!.first.id, again!.second.id]);
+      }
     }
   }, 120_000);
 

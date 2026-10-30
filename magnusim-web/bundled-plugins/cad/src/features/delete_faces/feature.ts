@@ -6,7 +6,9 @@
 // invalid result is red with "Try repair" (ShapeFix, kept only when valid and
 // the volume holds). A heal that fills more than the gap (OCCT closing a cavity
 // next to the faces: every edge of an L-block rounded and every blend removed
-// gave the full box) is refused with what it would have done (p2/heal-check.ts).
+// gave the full box) is tried again in two goes (all but one face next to the
+// fill, then that one) and refused with what it would have done when that is not
+// right either (p2/heal-check.ts).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -16,7 +18,7 @@ import type { DeleteFacesFeature } from '../../types/doc';
 import type { FeatureBuildResult, FeatureTypeDef } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
 import type { FaceNames } from '../../types/naming';
-import { checkHeal, healRefused, healWords } from '../p2/heal-check';
+import { checkHeal, healRefused, healWords, retryHoldBack } from '../p2/heal-check';
 import { P2_ICONS } from '../p2/icons';
 import { makerOf, resolveRefs } from '../p2/refs';
 import { invalidWords, kernelWords, occtWords, repairFuzzy, shapeFix } from '../p2/repair';
@@ -58,7 +60,7 @@ export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, n
       if (k === 'occt' || k === 'input' || k === 'internal') return { ok: false, message: `${f.name} failed: ${kernelWords(err)}` };
       throw err;
     }
-    const out = r.result;
+    let out = r.result;
     // Every face asked for must be gone: OCCT leaves a face it cannot remove in place with only a warning.
     if (out.history) {
       const gone = new Set(out.history.deleted.filter((d) => d.shape === body.shape && d.face != null).map((d) => d.face as number));
@@ -75,16 +77,30 @@ export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, n
     const notes: string[] = [];
     // The heal must stay in the gap: no face that was not asked for goes, no material lands on one.
     const heal = await checkHeal(ctx, body.shape, res.indices, out);
-    if (healRefused(heal)) {
+    let names: FaceNames | null = null;
+    let healed = !healRefused(heal);
+    if (healed) {
+      names = namesFromResult(f.id, out, new Map([[body.shape, body.names]]), { role: 'heal' });
+    } else {
       await ctx.release([out.id]);
+      // In two goes the heal may stay in the gap (the L-block, a pocket, a slot: the right body).
+      const again = await retryHoldBack(ctx, body.shape, res.indices, [...heal.lost, ...heal.covered]);
+      if (again) {
+        const mid = namesFromResult(f.id, again.first, new Map([[body.shape, body.names]]), { role: 'heal' });
+        names = namesFromResult(f.id, again.second, new Map([[again.first.id, mid]]), { role: 'heal' });
+        await ctx.release([again.first.id]);
+        out = again.second as typeof out;
+        healed = true;
+      }
+    }
+    if (!healed) {
       const makers = [...new Set(res.indices.map((i) => makerOf(ctx.doc.features, body.names?.faces[i] ?? '')))];
       const maker = makers.length === 1 && makers[0] && (makers[0].type === 'fillet' || makers[0].type === 'chamfer') ? makers[0] : null;
       const hint = maker ? `. To take the whole ${maker.type} off, delete ${maker.name} instead` : '';
       return { ok: false, message: `${f.name} failed: ${healWords(heal, body, ctx)}; the body is unchanged${hint}` };
     }
-    if (heal.unchecked) notes.push(`${heal.unchecked}: check the result`);
+    if (heal.unchecked && !healRefused(heal)) notes.push(`${heal.unchecked}: check the result`);
     let shape = out.id;
-    let names: FaceNames | null = namesFromResult(f.id, out, new Map([[body.shape, body.names]]), { role: 'heal' });
     if (res.warning) notes.push(res.warning);
     if (out.valid === false) {
       const fuzzy = repairFuzzy(f);

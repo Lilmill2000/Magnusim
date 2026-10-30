@@ -231,6 +231,16 @@ with the host once for the page's life, and its chip goes in the dock.
   and 41 wrong or partial ones: no right one refused, every fill caught; a
   rule on where the change lies ("near the faces") refused a wedge's tip
   chamfer, whose heal restores a tip far from the small face, and is not used.
+  A body of more than `LARGE_PART_FACES` faces gets the first rule only (a
+  boolean of two nearly identical 100 MB parts would cost more than the heal).
+  Delete faces then tries again in two goes (`retryHoldBack`: all but one face
+  next to a lost or covered face, then that one; up to 8 tries, small parts
+  only) and takes the first result that passes the same check against the body
+  before: the right body on the rounded L-block, U-channel, pocket, slot and
+  side step at the first to third try (0.16-0.36 s); none on the T-block (a
+  cavity each side), which stays refused. Removing the faces in smaller groups
+  (one by one, corners first) was never right on them. A pattern of faces
+  only refuses.
 - **Mutating ops run on deep copies** (BRepBuilderAPI_Copy under temporary ids;
   several inputs are copied together so shared sub-shapes stay shared): the
   input shape id is never changed, whatever happens. This covers boolean,

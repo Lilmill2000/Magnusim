@@ -23,13 +23,18 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   and Delete faces showed it as done. Now each result is checked: no face you
   kept may go, and no material may be added on one. When the heal does that,
   Delete faces is red and says so: "healing filled more than the gap the
-  deleted faces leave: it would add 12,398.4 mm³ over faces you kept (Side 1
-  of Extrude 2 and Start face of Extrude 2); the body is unchanged". For the
+  deleted faces leave: it would add 16,395.4 mm³ over faces you kept (...);
+  the body is unchanged". For the
   faces of one Fillet or Chamfer it adds that deleting that feature takes it
   off. Holes, bosses, pockets, slots, single fillets and chamfers, rounded
   boxes and plates, and a wedge's tip come out as before.
 - A pattern of faces checks the same, and the Assistant's Delete faces gets
   the same words.
+- When the check refuses, Delete faces tries again in two goes (all the faces
+  but one next to the fill, then that one) and takes the result if it passes
+  the same check: the rounded L-block, U-channel, pocket, slot and side step
+  now come back as their sharp shapes (the L-block's 36,000 mm³). A part with
+  a cavity on each side (a T-block) is still refused, in the words above.
 
 **Copy and paste sketch geometry.**
 - In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C
