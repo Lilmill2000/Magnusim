@@ -4,7 +4,9 @@
 // its faces keep their names (faces the heal makes are F:<feature>:heal...).
 // A face OCCT could not remove is an error, never a quiet partial result; an
 // invalid result is red with "Try repair" (ShapeFix, kept only when valid and
-// the volume holds).
+// the volume holds). A heal that fills more than the gap (OCCT closing a cavity
+// next to the faces: every edge of an L-block rounded and every blend removed
+// gave the full box) is refused with what it would have done (p2/heal-check.ts).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -14,8 +16,9 @@ import type { DeleteFacesFeature } from '../../types/doc';
 import type { FeatureBuildResult, FeatureTypeDef } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
 import type { FaceNames } from '../../types/naming';
+import { checkHeal, healRefused, healWords } from '../p2/heal-check';
 import { P2_ICONS } from '../p2/icons';
-import { resolveRefs } from '../p2/refs';
+import { makerOf, resolveRefs } from '../p2/refs';
 import { invalidWords, kernelWords, occtWords, repairFuzzy, shapeFix } from '../p2/repair';
 
 export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, never>> = {
@@ -69,9 +72,19 @@ export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, n
       await ctx.release([out.id]);
       return { ok: false, message: `${f.name} failed: the kernel could not remove every face${out.warning_text ? ` (${occtWords(out.warning_text)})` : ''}` };
     }
+    const notes: string[] = [];
+    // The heal must stay in the gap: no face that was not asked for goes, no material lands on one.
+    const heal = await checkHeal(ctx, body.shape, res.indices, out);
+    if (healRefused(heal)) {
+      await ctx.release([out.id]);
+      const makers = [...new Set(res.indices.map((i) => makerOf(ctx.doc.features, body.names?.faces[i] ?? '')))];
+      const maker = makers.length === 1 && makers[0] && (makers[0].type === 'fillet' || makers[0].type === 'chamfer') ? makers[0] : null;
+      const hint = maker ? `. To take the whole ${maker.type} off, delete ${maker.name} instead` : '';
+      return { ok: false, message: `${f.name} failed: ${healWords(heal, body, ctx)}; the body is unchanged${hint}` };
+    }
+    if (heal.unchecked) notes.push(`${heal.unchecked}: check the result`);
     let shape = out.id;
     let names: FaceNames | null = namesFromResult(f.id, out, new Map([[body.shape, body.names]]), { role: 'heal' });
-    const notes: string[] = [];
     if (res.warning) notes.push(res.warning);
     if (out.valid === false) {
       const fuzzy = repairFuzzy(f);

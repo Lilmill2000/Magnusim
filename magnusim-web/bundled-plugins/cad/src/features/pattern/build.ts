@@ -19,6 +19,7 @@ import type { KernelCallError } from '../../types/kernel';
 import type { BBox, OpHistory, ShapeId } from '../../types/kernel-protocol';
 import type { FaceNames } from '../../types/naming';
 import { timeoutForFaces } from '../../kernel/timeouts';
+import { checkHeal, healRefused, healWords } from '../p2/heal-check';
 import { resolveRefs } from '../p2/refs';
 import { copyNames } from './naming';
 import { applyPoint, type PatternCopy } from './transforms';
@@ -171,6 +172,9 @@ async function faceSources(f: PatternFeature, ctx: BuildContext, made: ShapeId[]
   }
   made.push(d.id);
   if (d.valid === false) return { ok: false, message: `${f.name} failed: OCCT could not take those faces off ${bodyName} cleanly (the body without them is not a valid solid). Pattern the feature or the body instead` };
+  // A heal past the gap (a cavity next to the faces closed too) would copy the wrong shape (p2/heal-check.ts).
+  const heal = await checkHeal(ctx, body.shape, r.indices, d);
+  if (healRefused(heal)) return { ok: false, message: `${f.name} failed: OCCT could not take those faces off ${bodyName} cleanly (${healWords(heal, body, ctx)}). Pattern the feature or the body instead` };
   const dNames = namesFromResult(f.id, d, new Map([[body.shape, body.names]]));
   const sources: Source[] = [];
   for (const part of ['boss', 'pocket'] as const) {

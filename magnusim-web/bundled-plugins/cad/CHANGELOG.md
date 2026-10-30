@@ -4,6 +4,21 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Delete faces never passes off a wrong body.**
+- Delete faces and heal could fill more than the gap: on a part with a step,
+  slot, pocket or channel and every edge rounded, deleting every fillet gave
+  the full block (an L-block of 36,000 mm³ came back as its 48,000 mm³ box),
+  and Delete faces showed it as done. Now each result is checked: no face you
+  kept may go, and no material may be added on one. When the heal does that,
+  Delete faces is red and says so: "healing filled more than the gap the
+  deleted faces leave: it would add 12,398.4 mm³ over faces you kept (Side 1
+  of Extrude 2 and Start face of Extrude 2); the body is unchanged". For the
+  faces of one Fillet or Chamfer it adds that deleting that feature takes it
+  off. Holes, bosses, pockets, slots, single fillets and chamfers, rounded
+  boxes and plates, and a wedge's tip come out as before.
+- A pattern of faces checks the same, and the Assistant's Delete faces gets
+  the same words.
+
 **Copy and paste sketch geometry.**
 - In a sketch, select lines, arcs, circles, splines or points and press Ctrl+C
   (or right-click > Copy): the panel says what was copied. Ctrl+V (or

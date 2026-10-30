@@ -220,6 +220,17 @@ with the host once for the page's life, and its chip goes in the dock.
   about 57,000 mm³ too little volume); repair makes it valid at the native
   ShapeFix volume, within 0.02 standard errors of an independent Monte Carlo
   estimate. A fuzzy value (1e-5 to 1e-2 mm) does not fix it.
+- **A valid defeature is not necessarily a right one either** (2026-10-30): on
+  an L-block with every edge rounded, removing every blend gave a valid 60 x 40
+  x 20 box with no warning (OCCT orients the grown neighbour faces only by the
+  faces that survive, and closed the step). Delete faces and a pattern of faces
+  check each result (`src/features/p2/heal-check.ts`): every face not asked
+  for keeps a face (history), and the material the heal added (result minus
+  body, one boolean) lies on no face that was not asked for. Either one failing
+  is a red feature in words, the body unchanged. Measured on 30 right removals
+  and 41 wrong or partial ones: no right one refused, every fill caught; a
+  rule on where the change lies ("near the faces") refused a wedge's tip
+  chamfer, whose heal restores a tip far from the small face, and is not used.
 - **Mutating ops run on deep copies** (BRepBuilderAPI_Copy under temporary ids;
   several inputs are copied together so shared sub-shapes stay shared): the
   input shape id is never changed, whatever happens. This covers boolean,

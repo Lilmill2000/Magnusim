@@ -125,6 +125,8 @@ export const SHARDS = {
     'e2e/cad-join-note.spec.ts',
     // Check for an assembly (the person's side of the Assistant's check): Loose parts, Interference, Rotation.
     'e2e/cad-assembly-check.spec.ts',
+    // Delete faces whose heal would fill past the gap (every blend of a rounded L-block): red, words, the body unchanged.
+    'e2e/cad-delete-faces-heal.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [
