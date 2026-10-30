@@ -242,32 +242,33 @@ describe("a sketch tool's key pressed again", () => {
   const dim = tool('sketch.dimension', 'dimension');
   const all = [line, centerline, rect, rectCenter, dim, { id: 'sketch.construction', label: 'Construction', mode: 'sketch', run() {} } as CommandDef];
 
-  it("is the key of the tool in hand, or of its flyout's variant in hand; never Select, never another tool, never a command that is no tool", () => {
-    expect(isToolKeyAgain(line, 'line', all)).toBe(true);
-    expect(isToolKeyAgain(dim, 'dimension', all)).toBe(true);
-    // The Rectangle flyout's R with Center rectangle in hand; the Line flyout's L with Centerline.
-    expect(isToolKeyAgain(rect, 'rectangle-center', all)).toBe(true);
-    expect(isToolKeyAgain(line, 'centerline', all)).toBe(true);
-    // Another tool's key switches to it, as before.
-    expect(isToolKeyAgain(rect, 'line', all)).toBe(false);
-    expect(isToolKeyAgain(dim, 'line', all)).toBe(false);
-    expect(isToolKeyAgain(line, 'select', all)).toBe(false);
-    expect(isToolKeyAgain(line, null, all)).toBe(false);
-    expect(isToolKeyAgain(all[5], 'line', all)).toBe(false);
+  it('is the key of the tool in hand only; never Select, never another tool, never a command that is no tool', () => {
+    expect(isToolKeyAgain(line, 'line')).toBe(true);
+    expect(isToolKeyAgain(dim, 'dimension')).toBe(true);
+    // Another tool's key switches to it.
+    expect(isToolKeyAgain(rect, 'line')).toBe(false);
+    expect(isToolKeyAgain(dim, 'line')).toBe(false);
+    expect(isToolKeyAgain(line, 'select')).toBe(false);
+    expect(isToolKeyAgain(line, null)).toBe(false);
+    expect(isToolKeyAgain(all[5], 'line')).toBe(false);
   });
 
-  it("a variant's own key with another variant of its flyout in hand switches to it: only the flyout's own key (its bar command's) leaves a variant", () => {
-    // Centerline's key (the person gave it one) with Line in hand: Centerline, as its flyout row says.
-    expect(isToolKeyAgain(centerline, 'line', all)).toBe(false);
-    expect(isToolKeyAgain(rectCenter, 'rectangle-corner', all)).toBe(false);
-    // Its own tool in hand: the key leaves it.
-    expect(isToolKeyAgain(centerline, 'centerline', all)).toBe(true);
-    expect(isToolKeyAgain(rectCenter, 'rectangle-center', all)).toBe(true);
-    // A flyout whose main is not registered: its first variant by order stands for it on the bar.
-    const ellipse = { ...tool('sketch.ellipse-partial', 'ellipse-partial', 'ellipse'), order: 21 };
-    const parabola = { ...tool('sketch.parabola', 'parabola', 'ellipse'), order: 22 };
-    expect(isToolKeyAgain(ellipse, 'parabola', [ellipse, parabola])).toBe(true);
-    expect(isToolKeyAgain(parabola, 'ellipse-partial', [ellipse, parabola])).toBe(false);
+  it("Daniel 2026-10-29: a flyout's main key with another variant in hand switches to the main tool; with the main tool in hand it leaves it; a variant's own key takes it up, again leaves it", () => {
+    // R with Center rectangle in hand: the corner Rectangle (the flyout's main command), not a leave.
+    expect(isToolKeyAgain(rect, 'rectangle-center')).toBe(false);
+    expect(isToolKeyAgain(rect, 'rectangle-corner')).toBe(true);
+    // L with Centerline in hand: Line.
+    expect(isToolKeyAgain(line, 'centerline')).toBe(false);
+    expect(isToolKeyAgain(line, 'line')).toBe(true);
+    // A variant's own key (the person gave Centerline one) with another variant in hand switches to it; with it in hand, leaves it.
+    expect(isToolKeyAgain(centerline, 'line')).toBe(false);
+    expect(isToolKeyAgain(rectCenter, 'rectangle-corner')).toBe(false);
+    expect(isToolKeyAgain(centerline, 'centerline')).toBe(true);
+    expect(isToolKeyAgain(rectCenter, 'rectangle-center')).toBe(true);
+    // Every flyout the same way (Ellipse's: Ellipse's key with Parabola in hand switches).
+    const ellipse = tool('sketch.ellipse', 'ellipse', 'ellipse');
+    expect(isToolKeyAgain(ellipse, 'parabola')).toBe(false);
+    expect(isToolKeyAgain(ellipse, 'ellipse')).toBe(true);
   });
 
   function setup(active: string) {
@@ -288,7 +289,7 @@ describe("a sketch tool's key pressed again", () => {
         return true;
       },
     };
-    const off = bindCommandShortcuts(reg, kb, undefined, () => 'sketch', (c) => toolKeyAgain(sketch, c, reg.all()));
+    const off = bindCommandShortcuts(reg, kb, undefined, () => 'sketch', (c) => toolKeyAgain(sketch, c));
     const press = (init: KeyboardEventInit, target: EventTarget = document.body) => {
       const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
       target.dispatchEvent(e);
@@ -314,11 +315,18 @@ describe("a sketch tool's key pressed again", () => {
     await Promise.resolve();
     expect(t.ran).toEqual(['sketch.line', 'sketch.dimension']);
     expect(t.left).toEqual(['line']);
-    // R with Center rectangle in hand (the Rectangle flyout's key): leaves it.
+    // R with Center rectangle in hand (the Rectangle flyout's main key): the corner Rectangle runs, nothing is left.
     t.state.set({ tool: 'rectangle-center' });
     t.press({ key: 'r', code: 'KeyR' });
     await Promise.resolve();
-    expect(t.left).toEqual(['line', 'rectangle-center']);
+    expect(t.ran).toEqual(['sketch.line', 'sketch.dimension', 'sketch.rectangle']);
+    expect(t.left).toEqual(['line']);
+    // R again with the corner Rectangle in hand: leaves it.
+    t.state.set({ tool: 'rectangle-corner' });
+    t.press({ key: 'r', code: 'KeyR' });
+    await Promise.resolve();
+    expect(t.left).toEqual(['line', 'rectangle-corner']);
+    expect(t.ran).toEqual(['sketch.line', 'sketch.dimension', 'sketch.rectangle']);
     t.dispose();
   });
 

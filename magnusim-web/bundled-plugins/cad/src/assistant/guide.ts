@@ -3,9 +3,9 @@
 // bridge keeps them), at most 3950 characters (the app keeps 4000), vendor-neutral, no project
 // data. The help tool's `guide` topic returns it too, for a conversation that froze another
 // workspace's notes. tests/assistant/guide.test.ts pins its facts against the code (the frames,
-// the join, the parts, every tool, field, value and selector it names), and
-// guide-example.test.ts builds its EXAMPLES, which are help's worked parts (examples.ts)
-// abridged, on the real kernel. guideWithout(tools) is the guide of a Part that offers only some
+// the join, the parts, every tool, field, value and selector it names). Its worked parts are in
+// help examples (examples.ts; guide-example.test.ts builds them on the real kernel).
+// guideWithout(tools) is the guide of a Part that offers only some
 // of its tools (the eval's core set, testing.ts setToolset): the words that send the model to the
 // others go, and one line names the tools not offered.
 // No runtime imports: the app's host test imports this file with Node's type stripping.
@@ -35,6 +35,7 @@ export const GUIDE = [
   '- Parts: l.start l.end c.center a.end r.top r.bl r.center origin; polyline p: points p.p0, p.p1...; side p.k runs from p.p(k-1) to p.pk.',
   '- Anchor to origin, then dimension from parameters until dof is 0; "free" says what still moves. A conflict or duplicate is refused naming ids: remove yours.',
   '- Regions come back as r1, r2... extrude ["all"] (holes stay open), ["r2"] or ["at(u, v)"].',
+  '- When the person names or draws a sketch, read it (get_model feature <name>) and view it; it is the spec. If a shape is still wrong after one correction, ask for a sketch or a picture.',
   '',
   'SELECTORS (strings)',
   '- Made by a feature: "Base.start", "Base.end", "Base.side", "Base.side(l2)".',
@@ -49,15 +50,13 @@ export const GUIDE = [
   '',
   'ERRORS: read code, message, hint, detail; change the call, never resend it unchanged. busy: the person comes first: follow the hint; most end your turn. After stalled or disconnected, get_model first.',
   '',
-  'EXAMPLES (full calls: help examples)',
-  '1 Plate, 4 holes. set_params w 60 mm, d 40 mm, t 6 mm, hd 5 mm, e 8 mm. sketch on Top: center_rect r [0,0,60,40]; coincident [r.center, origin]; distance [r.bottom] "w", [r.left] "d". extrude "Plate" ["all"] blind "t" new. hole on "Plate.end": 4 centers, x "w/2 - e" or "-(w/2 - e)", y the same with d, z ""; diameter "hd"; through.',
-  '2 L bracket. sketch on Front: polyline p [0,0,50,0,50,5,5,5,5,40,0,40,0,0], infer; coincident [p.p0, origin]; distance [p.1] "a", [p.6] "b", [p.2] "t", [p.5] "t". extrude "Bracket" symmetric "wid" new. modify fillet ["Bracket.side(p.3) & Bracket.side(p.4)"] "r".',
-  '3 Flange. sketch on Front: rect r [10,0,40,8]; horizontal [r.bl, origin]; distance_x [origin, r.bl] "bore/2", [origin, r.br] "od/2"; distance [r.left] "t". revolve "Flange" axis "Z axis" full new. hole on "Flange.side(r.top)" at x "pcd/2" y "0" z "" diameter "hd", then pattern circular features ["Hole 1"] about "Z axis" count "n" spacing "360 deg".',
+  'EXAMPLES: help examples (worked parts, every call whole).',
 ].join('\n');
 
 /** The guide's words that send the model to a tool, and what they say without it (each once in GUIDE). */
 export const GUIDE_TOOL_WORDS: readonly (readonly [tool: string, words: string, without: string])[] = Object.freeze([
   ['view', '; view at milestones and at the end.', '.'],
+  ['view', ' and view it;', ';'],
   ['edit_feature', ' or edit_feature;', ';'],
   ['delete', '; delete asks the person.', '.'],
 ] as const);

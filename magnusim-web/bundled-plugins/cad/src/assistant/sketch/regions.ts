@@ -8,12 +8,13 @@
 // hole). Even depths are material when a tool takes "all": a plate with holes extrudes as the
 // plate (its holes open, overlapping or split ones too), a ring as a ring, an island in a hole as
 // material again; shapes that overlap with nothing around them are their union.
-// The triangles are left out.
+// The triangles are left out. A reply lists them short by default (shortRegions): at most 8 rows
+// of {id, area_mm2, at, holes}; past 8 regions, a run of one size is one row.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Vec2 } from '../../types/doc';
 import type { SketchOutput } from '../../types/sketch';
-import { len, sig6 } from '../numbers';
+import { jsonBytes, len, sig6 } from '../numbers';
 
 export interface RegionRow {
   /** "r1", "r2", ...: per output, by area (largest first), then by where it sits. */
@@ -112,4 +113,53 @@ export function regionRows(out: Pick<SketchOutput, 'regions'>): RegionRow[] {
     ],
     entities: [...r.entities],
   }));
+}
+
+/** Rows a short region list holds at most. */
+export const SHORT_REGIONS = 8;
+/**
+ * Areas this close (relative) are one size in a short list. Replies give areas to 6 significant
+ * digits, so these read the same anyway; equal pattern copies differ by about 1e-12 (a 96-tooth
+ * wheel's teeth: the kernel's last bits), sizes drawn apart by far more than 1e-6.
+ */
+export const SAME_SIZE = 1e-6;
+
+/** A region in short, or a run of one size: ids "r7..r102" (each still names its region), its first's at. */
+export type ShortRegion = { id: string; area_mm2: number; at: Vec2; holes: number } | { ids: string; count: number; area_mm2: number; at: Vec2; holes: number };
+
+const regionsIn = (r: Record<string, unknown>) => (typeof r.count === 'number' ? r.count : 1);
+
+/**
+ * The regions in short, largest first (r1 always leads): each {id, area_mm2, at, holes} while
+ * there are at most `max`; past that, a run of one size (SAME_SIZE) is one row, and at most `max`
+ * rows go, `more` counting the regions left out.
+ */
+export function shortRegions(rows: readonly RegionRow[], max = SHORT_REGIONS): { regions: ShortRegion[]; more: number } {
+  const one = (r: RegionRow): ShortRegion => ({ id: r.id, area_mm2: r.area_mm2, at: r.at, holes: r.holes });
+  if (rows.length <= max) return { regions: rows.map(one), more: 0 };
+  const out: ShortRegion[] = [];
+  let shown = 0;
+  for (let i = 0; i < rows.length && out.length < max; ) {
+    let j = i + 1;
+    while (j < rows.length && Math.abs(rows[i].area_mm2 - rows[j].area_mm2) <= SAME_SIZE * Math.abs(rows[i].area_mm2)) j++;
+    const r = rows[i];
+    out.push(j - i === 1 ? one(r) : { ids: `${r.id}..${rows[j - 1].id}`, count: j - i, area_mm2: r.area_mm2, at: r.at, holes: r.holes });
+    shown += j - i;
+    i = j;
+  }
+  return { regions: out, more: rows.length - shown };
+}
+
+/**
+ * A reply's region rows within `budget` bytes: their bounds go first (bounded_by), then the
+ * later half of the rows at a time, counted in regions_more; the first row (r1) stays.
+ */
+export function fitRegions(reply: Record<string, unknown>, budget: number): void {
+  const rows = () => (Array.isArray(reply.regions) ? (reply.regions as Record<string, unknown>[]) : null);
+  if (jsonBytes(reply) > budget && rows()?.some((r) => 'bounded_by' in r)) reply.regions = rows()!.map(({ bounded_by: _b, ...r }) => r);
+  for (let r = rows(); r && r.length > 1 && jsonBytes(reply) > budget; r = rows()) {
+    const keep = Math.floor(r.length / 2);
+    reply.regions_more = (Number(reply.regions_more) || 0) + r.slice(keep).reduce((n, x) => n + regionsIn(x), 0);
+    reply.regions = r.slice(0, keep);
+  }
 }

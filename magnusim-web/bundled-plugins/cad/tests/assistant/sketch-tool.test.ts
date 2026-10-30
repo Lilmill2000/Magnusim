@@ -11,18 +11,27 @@
 //   - edit_feature on a sketch's dimension ids: checked headless first (no solution, a bad field),
 //     written through sketch mode; a value that breaks a feature after it changes nothing; on a
 //     person's sketch with a sketch pattern the check keeps the pattern's ties, so its state, dof,
-//     free and moved are the sketch's (get_model's), the copies moving with their source.
+//     free and moved are the sketch's (get_model's), the copies moving with their source;
+//   - a 96-tooth wheel (198 regions): the answer, as the model reads it, within 3 KB, its regions
+//     in short (r1 the wheel first, the teeth's gaps summed with their ids), an extrude by r1 builds
+//     the toothed wheel and one by an id inside a summed row its region; get_model feature is short
+//     too, regions full gives each one's bounds and depth; find gives 10 rows by default, 25 at most,
+//     with a count of the rest; the extrude lists 12 faces made and counts the rest.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { CREATED_MAX } from '../../src/assistant/feature-tools';
 import { runtimeOf } from '../../src/assistant/runtime';
+import { LIMIT_DEFAULT, LIMIT_MAX } from '../../src/assistant/tools/find';
 import { freeRows } from '../../src/assistant/sketch/solve';
 import { createUnitsService } from '../../src/doc/units';
 import { refOfRegion } from '../../src/features/extrude/profiles';
 import { createPattern } from '../../src/sketch/tools/pattern';
 import type { SketchFeature } from '../../src/types/doc';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
+import { EXTRUDE } from './extrude-tools';
 import { fillet } from './parts';
-import { block, C, E, featureNamed, outputOf, partNow, rectInput, SK, type Row } from './sketch-tools';
+import { resultAsSent } from './sanitize-copy';
+import { block, C, E, featureNamed, gearInput, outputOf, partNow, rectInput, SK, type Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -47,6 +56,8 @@ const inputsOf = async (x: AssistantHarness, name: string) => {
 /** A sketch as stored, without what a resend may renumber (nothing should). */
 const stored = (f: SketchFeature) => ({ support: f.support, points: f.points, entities: f.entities, constraints: f.constraints });
 const EDIT = (feature: string, o: Row = {}) => ({ feature, set: [], rename_to: '', suppress: 'keep', move: '', ...o });
+/** A reply's bytes as the model reads it (the server's rules: tests/assistant/sanitize-copy.ts). */
+const sent = (tool: string, r: { text: string; data: Row }) => Buffer.byteLength(JSON.stringify(resultAsSent(`cad__${tool}`, r)), 'utf8');
 
 describe('a new sketch, and its replace', () => {
   it(
@@ -72,9 +83,9 @@ describe('a new sketch, and its replace', () => {
       expect(again.data.step).toBe(2);
       expect(featureNamed(h, 'Plate sketch').points).toMatchObject(points);
       const rows = again.data.regions as Row[];
-      expect(rows.map((x) => [x.id, x.holes, x.depth])).toEqual([
-        ['r1', 1, 0],
-        ['r2', 0, 1],
+      expect(rows.map((x) => [x.id, x.holes])).toEqual([
+        ['r1', 1],
+        ['r2', 0],
       ]);
       const plate = [...outputOf(h, 'Plate sketch').regions].sort((a, b) => b.area - a.area)[0];
       expect(plate.loops[0].join(' ')).toBe(key);
@@ -343,6 +354,56 @@ describe("edit_feature on a sketch's dimensions", () => {
       const moved = r.data.moved as { by_mm: number }[];
       expect(moved).toHaveLength(3);
       for (const m of moved) expect(m.by_mm).toBeCloseTo(5, 6);
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe('a big sketch in short', () => {
+  it(
+    "a 96-tooth wheel: the answer within 3 KB names r1 and sums the gaps; extrudes by r1 and by an id in a summed row; regions full, find's rows, the faces an extrude made",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      const r = await ok(h, 'sketch', gearInput());
+      expect(r.text).toMatch(/^Sketch "Gear sketch" on Top: fully defined, 198 regions \(largest 1837\.\d+ mm²\)$/);
+      expect(sent('sketch', r)).toBeLessThan(3 * 1024);
+      const rows = r.data.regions as Row[];
+      expect(rows.map((x) => x.id ?? x.ids)).toEqual(['r1', 'r2..r5', 'r6', 'r7..r102', 'r103..r198']);
+      expect(rows.map((x) => x.count ?? 1)).toEqual([1, 4, 1, 96, 96]);
+      expect(r.data.regions_more).toBeUndefined();
+      for (const x of rows) for (const k of ['bounded_by', 'at_mm', 'bbox_uv', 'depth']) expect(x).not.toHaveProperty(k);
+      // r1 is the wheel: the tip circle less the bore, the four windows and the 96 gaps.
+      const window = 0.5 * (22 ** 2 - 10 ** 2) * ((70 * Math.PI) / 180);
+      expect(rows[0]).toMatchObject({ id: 'r1', holes: 5 });
+      expect(rows[0].area_mm2 as number).toBeCloseTo(Math.PI * (31.5 ** 2 - 25) - 4 * window - 96 * (rows[3].area_mm2 as number), 1);
+      // Extruded by r1: the toothed wheel; the faces it made, 12 listed and the rest counted.
+      const wheel = await ok(h, 'extrude', EXTRUDE({ name: 'Wheel', sketch: 'Gear sketch', regions: ['r1'], distance: '4 mm', body_name: 'Wheel' }));
+      expect(wheel.data.feature).toMatchObject({ name: 'Wheel', state: 'ok' });
+      expect(wheel.data.created).toHaveLength(CREATED_MAX);
+      expect(wheel.data.created_more as number).toBeGreaterThan(96 * 3);
+      expect(sent('extrude', wheel)).toBeLessThan(1024);
+      const volume = async (body: string) => (await ok(h!, 'measure', { targets: [body], section: '' })).data.volume_mm3 as number;
+      expect(await volume('Wheel')).toBeCloseTo((rows[0].area_mm2 as number) * 4, 0);
+      // An id inside a summed row names its region: one gap's piece inside the tip circle.
+      await ok(h, 'extrude', EXTRUDE({ name: 'Gap', sketch: 'Gear sketch', regions: ['r50'], distance: '4 mm', body_name: 'Gap' }));
+      expect(await volume('Gap')).toBeCloseTo((rows[3].area_mm2 as number) * 4, 2);
+      // get_model feature: the same short rows; regions full gives each one's bounds and depth (60, the rest counted).
+      const read = await ok(h, 'get_model', { detail: 'brief', feature: 'Gear sketch', regions: 'short' });
+      expect((read.data.feature as Row).regions).toEqual(rows);
+      expect(sent('get_model', read)).toBeLessThan(3 * 1024);
+      const full = (await ok(h, 'get_model', { detail: 'brief', feature: 'Gear sketch', regions: 'full' })).data.feature as Row;
+      const each = full.regions as Row[];
+      expect(each.length + (full.regions_more as number)).toBe(198);
+      expect(each[0]).toMatchObject({ id: 'r1', depth: 0, holes: 5, bounded_by: expect.arrayContaining(['b']) });
+      expect(each[5]).toMatchObject({ id: 'r6', depth: 1, bounded_by: ['b'] });
+      // find: 10 rows by default, 25 at most, more counts the rest; its region rows have the bounds.
+      const ten = await ok(h, 'find', { query: 'Wheel faces' });
+      const count = ten.data.count as number;
+      expect(count).toBeGreaterThan(LIMIT_MAX);
+      expect(ten.data).toMatchObject({ rows: { length: LIMIT_DEFAULT }, more: count - LIMIT_DEFAULT });
+      expect((await ok(h, 'find', { query: 'Wheel faces', limit: 50 })).data).toMatchObject({ rows: { length: LIMIT_MAX }, more: count - LIMIT_MAX });
+      const regions = (await ok(h, 'find', { query: 'Gear sketch regions', limit: 6 })).data.rows as Row[];
+      expect(regions[5]).toMatchObject({ handle: 'Gear sketch r6', depth: 1, bounded_by: ['b'] });
     },
     REAL_KERNEL_MS,
   );

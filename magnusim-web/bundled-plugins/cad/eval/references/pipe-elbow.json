@@ -3,7 +3,7 @@
   "about": "A ring on Top swept along a path on Front: a straight leg up, a quarter bend tangent to it, a straight leg along X tangent to the bend.",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

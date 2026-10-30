@@ -11,6 +11,8 @@ export const tool: ToolImpl = {
     await waitForRead(ctx);
     const detail = ctx.input.detail === 'full' ? 'full' : 'brief';
     const feature = typeof ctx.input.feature === 'string' ? ctx.input.feature : '';
-    return readModel(ctx, { detail, feature });
+    // One sketch's regions in short unless asked for in full.
+    const regions = ctx.input.regions === 'full' ? 'full' : 'short';
+    return readModel(ctx, { detail, feature, regions });
   },
 };

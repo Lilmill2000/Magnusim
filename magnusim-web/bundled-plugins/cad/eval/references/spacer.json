@@ -3,7 +3,7 @@
   "about": "Two concentric circles on Top, dimensioned from parameters, extruded as one ring (all is even-odd: the bore stays open).",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

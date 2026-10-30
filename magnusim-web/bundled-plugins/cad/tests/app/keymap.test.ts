@@ -210,7 +210,7 @@ describe('combos: how a press is read, what people read, a key press captured', 
 });
 
 describe('workspace/commands.json', () => {
-  it('is the registry as the build writes it: version 1, the contexts, every command with id, label, group, context and keys', () => {
+  it('is the registry as the build writes it: version 1, the contexts, every command with id, label, group, context and keys (and projects on a project-only one)', () => {
     const text = readFileSync(join(ROOT, 'workspace', 'commands.json'), 'utf8');
     expect(text).toBe(commandsJson());
     expect(text).not.toContain('\r');
@@ -222,7 +222,10 @@ describe('workspace/commands.json', () => {
     ]);
     expect(json.contexts).toEqual(CONTEXTS);
     expect(json.commands).toHaveLength(KEYMAP.length);
-    for (const c of json.commands) expect(Object.keys(c)).toEqual(['id', 'label', 'group', 'context', 'keys']);
+    // "projects": true only on a command that exists only where the host has projects (Magnusim CAD's Settings leaves it out).
+    for (const c of json.commands) expect(Object.keys(c)).toEqual(c.id === 'cfd.enclosure' ? ['id', 'label', 'group', 'context', 'keys', 'projects'] : ['id', 'label', 'group', 'context', 'keys']);
+    expect(json.commands.find((c) => c.id === 'cfd.enclosure')).toEqual({ id: 'cfd.enclosure', label: 'Enclosure', group: 'CFD prep', context: 'model', keys: [], projects: true });
+    expect(json.commands.filter((c) => c.projects).map((c) => c.id)).toEqual(['cfd.enclosure']);
     expect(json.commands.find((c) => c.id === 'sketch.rectangle')).toEqual({ id: 'sketch.rectangle', label: 'Rectangle', group: 'Sketch: Draw', context: 'sketch', keys: ['KeyR'] });
   });
 });

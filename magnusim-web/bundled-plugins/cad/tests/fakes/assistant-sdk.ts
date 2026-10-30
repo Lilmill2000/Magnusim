@@ -44,8 +44,8 @@ export interface FakeAssistant {
   readonly accepted: string[];
   /** Run a call as the bridge would; `abort` aborts its signal. */
   invoke(tool: string, input: Record<string, unknown>, o?: { turn?: string; signal?: AbortSignal; call?: string }): Promise<FakeOutcome>;
-  /** Tell this tab's listeners a turn (a full AssistantTurn; missing fields get defaults). */
-  emitTurn(t: Partial<AssistantTurn> & { id: string }): void;
+  /** Tell this tab's listeners a turn (a full AssistantTurn; missing fields get defaults; `conversation`: a newer host's, 1.9). */
+  emitTurn(t: Partial<AssistantTurn> & { id: string; conversation?: string | null }): void;
   readonly progress: FakeProgress[];
   readonly stops: string[];
   /** stop()'s next answer. */

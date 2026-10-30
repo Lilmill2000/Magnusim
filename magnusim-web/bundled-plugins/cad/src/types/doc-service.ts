@@ -523,6 +523,12 @@ export interface BuiltBody {
 export interface FeatureFiles {
   /** The bytes, checked against ref.sha256 (a mismatch rejects: "the stored file changed"). null when the file is gone. */
   read(ref: StoredFileRef): Promise<ArrayBuffer | null>;
+  /**
+   * Where a stored file gone missing is not, in the person's words: "in the project" where the host
+   * has projects (Magnusim), "with the Part" in Magnusim CAD ("... is not in the project any more").
+   * Absent: the project's words.
+   */
+  where?: string;
 }
 
 /** Context a feature's build gets: the kernel and the bodies built before it. */

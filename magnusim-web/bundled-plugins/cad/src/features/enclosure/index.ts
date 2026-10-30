@@ -2,6 +2,9 @@
 // place a box or a cylinder is made. A box or a cylinder around the bodies,
 // as a new body; the air volume is a separate Combine (Cut, keep tools).
 // Offered once a body exists ("Add or import a body first" before that).
+// Only where the host has projects (Magnusim): Magnusim CAD (projectLinks false:
+// no projects, no simulation) has no CFD PREP and no Enclosure command (toolbar,
+// key, Assistant), and keeps an Enclosure made in Magnusim as it is (kept.ts).
 // Owner: SD pass (src/features/enclosure/).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import './enclosure.css';
@@ -49,6 +52,8 @@ const enclosureModule: CadModule = {
   features: [enclosureDef as unknown as FeatureTypeDef],
   panels: { enclosure: EnclosurePanel },
   install(services: AppServices) {
+    // The feature type and its panel stay (a Part made in Magnusim builds and shows its Enclosure).
+    if (!services.bridge.projectLinks()) return () => {};
     return services.commands.register(enclosureCommand(services));
   },
 };

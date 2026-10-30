@@ -10,13 +10,17 @@
 //     first, params_cut says so), and a long list is halved only once its names do not fit;
 //   - full: inputs null with a summary while no tool writes the type, expression fields;
 //   - one sketch: its plane in numbers and words, the solver's state now (free parameters by the
-//     sketch tool's names), every region with its depth and model point, its input form for the
-//     sketch tool; a name not found lists the names;
+//     sketch tool's names), its regions in short (regions full: each with its depth, model point,
+//     box and bounds), its input form for the sketch tool; a name not found lists the names and the
+//     closest one (in every tool's feature or sketch name, and a selector's);
 //   - rev unchanged across a live draft, +1 per commit; what the person changed told once, the
-//     person's undo of the Assistant's steps with it; the person's open panel in words.
+//     person's undo of the Assistant's steps with it; with the turn's conversation, a sketch drawn
+//     between two messages told at the next request's first call; the person's open panel in words.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { closestName } from '../../src/assistant/closest';
 import { GUIDE_NOTE } from '../../src/assistant/model';
+import { nameAt } from '../../src/assistant/selectors/resolve';
 import type { Feature, RegionRef } from '../../src/types/doc';
 import type { SketchOutput } from '../../src/types/sketch';
 import { assistantHarness, REAL_KERNEL_MS, rectangle, type AssistantHarness } from './harness';
@@ -243,7 +247,10 @@ describe('get_model full and one feature', () => {
       // A rectangle of four lines with no relation: 4 points free in u and v, by the sketch tool's names.
       expect(f.solver).toMatchObject({ state: 'under', dof: 8, source: 'solver', conflicting: [], redundant: [] });
       expect((f.solver as { free: { of: string; moves: string[] }[] }).free.map((x) => x.of).sort()).toEqual(['e_1.end', 'e_1.start', 'e_2.end', 'e_3.end']);
-      expect(f.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), at_mm: expect.any(Array), holes: 0, depth: 0, bbox_uv: [[-30, -20], [30, 20]], bounded_by: ['e_1', 'e_2', 'e_3', 'e_4'] }]);
+      expect(f.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), holes: 0 }]);
+      // Asked for in full: each region's place, depth, box and bounds too.
+      const full = (await h.ok('get_model', { detail: 'brief', feature: 'sketch 1', regions: 'full' })).data.feature as Row;
+      expect(full.regions).toEqual([{ id: 'r1', area_mm2: 2400, at: expect.any(Array), at_mm: expect.any(Array), holes: 0, depth: 0, bbox_uv: [[-30, -20], [30, 20]], bounded_by: ['e_1', 'e_2', 'e_3', 'e_4'] }]);
       // Its input form, ready to resend to the sketch tool (the person's lines by their own ids).
       expect(f).toMatchObject({ entities: 4, constraints: 0, open: [], dangling: [] });
       expect(f.inputs).toEqual({
@@ -269,6 +276,70 @@ describe('get_model full and one feature', () => {
         ok: false,
         error: { code: 'invalid_input', message: 'not_found: No feature is called "Boss". Features: Sketch 1, Extrude 1.', detail: { reason: 'not_found', names: ['Sketch 1', 'Extrude 1'], more: 0 } },
       });
+    },
+    REAL_KERNEL_MS,
+  );
+});
+
+describe('a feature name not found', () => {
+  it('the closest name: the same words (case, spaces, punctuation, a plural s, and/of/the aside, any order) or one typo in a long word; never another word or number', () => {
+    expect(closestName('Join and Inlay', ['Sketch 1', 'Join inlay'])).toBe('Join inlay');
+    expect(closestName('join-inlay', ['Join inlay'])).toBe('Join inlay');
+    expect(closestName('Inlay join', ['Join inlay'])).toBe('Join inlay');
+    expect(closestName('Baseplate', ['Base plate'])).toBe('Base plate');
+    expect(closestName('Mounting hole', ['Mounting holes'])).toBe('Mounting holes');
+    expect(closestName('Extrude1', ['Extrude 1'])).toBe('Extrude 1');
+    expect(closestName('Skecth 1', ['Sketch 1', 'Sketch 2'])).toBe('Sketch 1');
+    expect(closestName('Filet 2', ['Fillet 2'])).toBe('Fillet 2');
+    // The same words win over a typo, whatever the order.
+    expect(closestName('Skecth', ['Sketch', 'skecth'])).toBe('skecth');
+    expect(closestName('Extrude 12', ['Extrude 1', 'Extrude 2'])).toBeNull();
+    expect(closestName('Boss', ['Sketch 1', 'Extrude 1'])).toBeNull();
+    expect(closestName('', ['Sketch 1'])).toBeNull();
+    expect(closestName('the', ['The'])).toBeNull();
+    // A word for another, or a word more: never (each would name another feature).
+    for (const [want, name] of [
+      ['Gear A', 'Gear B'],
+      ['Inner ring', 'Outer ring'],
+      ['Base', 'Boss'],
+      ['Hub', 'Hut'],
+      ['Top plate', 'Top plane'],
+      ['Extrude 3', 'Extrude 3 copy'],
+      ['Join', 'Join inlay'],
+      ['Planet', 'Plane'],
+      ['Pocket', 'Socket'],
+      ['Angle', 'Angel'],
+    ]) {
+      expect(closestName(want, [name]), `${want} -> ${name}`).toBeNull();
+      expect(closestName(name, [want]), `${name} -> ${want}`).toBeNull();
+    }
+    // The name a selector that does not read starts with.
+    expect(nameAt('"Join and Inlay".end', 1)).toBe('Join and Inlay');
+    expect(nameAt('Body 1 faces >Z', 1)).toBe('Body 1');
+    expect(nameAt('edges of Join and Inlay.end', 10)).toBe('Join and Inlay');
+  });
+
+  it(
+    'get_model, a sketch field, delete and a selector say the closest feature name ("Join and Inlay": "Join inlay")',
+    async () => {
+      h = await assistantHarness();
+      const { extrude } = await plate(h);
+      expect(h.doc.rename(extrude, 'Join inlay')).toMatchObject({ ok: true });
+      const miss = await h.call('get_model', { detail: 'brief', feature: 'Join and Inlay', regions: 'short' });
+      expect(miss).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_input', message: 'not_found: No feature is called "Join and Inlay". Closest: "Join inlay". Features: Sketch 1, Join inlay.', detail: { reason: 'not_found', closest: 'Join inlay' } },
+      });
+      const sk = await h.call('extrude', { edit: '', name: '', sketch: 'Skecth 1', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '2 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' });
+      expect(sk).toMatchObject({ ok: false, error: { message: expect.stringContaining('sketch: no sketch is called "Skecth 1". Closest: "Sketch 1".'), detail: { closest: 'Sketch 1' } } });
+      const del = await h.call('delete', { features: ['Join and Inlay'] });
+      expect(del).toMatchObject({ ok: false, error: { message: expect.stringContaining('features[0]: no feature is called "Join and Inlay" (closest: "Join inlay")') } });
+      const sel = await h.call('find', { query: '"Join and Inlay".end', limit: 10 });
+      expect(sel).toMatchObject({ ok: false, error: { message: expect.stringContaining('Closest: "Join inlay".'), detail: { closest: 'Join inlay' } } });
+      // Nothing near: no closest.
+      const far = await h.call('get_model', { detail: 'brief', feature: 'Extrude 2', regions: 'short' });
+      expect(far.ok).toBe(false);
+      expect(JSON.stringify(far)).not.toContain('losest');
     },
     REAL_KERNEL_MS,
   );
@@ -307,6 +378,31 @@ describe("rev and the person's changes", () => {
       expect(told.data.rev).toBe(rev0 + 2);
       // Another key's baseline starts at its own first call.
       expect((await h.ok('get_model', BRIEF, { turn: 't-other' })).data.user_changes).toBeUndefined();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a host that names each turn's conversation: the next request's first call tells the sketch the person drew between two messages; a turn that names none starts afresh",
+    async () => {
+      h = await assistantHarness();
+      await plate(h);
+      for (const id of ['t-r1', 't-r2', 't-r4']) h.fake.emitTurn({ id, title: 'Build', conversation: 'conv-1' });
+      h.fake.emitTurn({ id: 't-r3', title: 'Build' });
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r1' })).data.user_changes).toBeUndefined();
+      // The person draws a sketch beside the plate between two messages.
+      const rect = rectangle(10, 30, 40, -15);
+      const sample = await h.add('sketch', { points: rect.points, entities: rect.entities });
+      expect(h.doc.rename(sample, 'Sample "S" Sketch')).toMatchObject({ ok: true });
+      const next = await h.ok('get_model', BRIEF, { turn: 't-r2' });
+      expect(next.data.user_changes).toEqual(['added Sample "S" Sketch (sketch)']);
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r2' })).data.user_changes).toBeUndefined();
+      // A request whose turn names no conversation starts at its own first call: nothing told.
+      const rect2 = rectangle(5, 5, -50, 0);
+      await h.add('sketch', { points: rect2.points, entities: rect2.entities });
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r3' })).data.user_changes).toBeUndefined();
+      // The chat's next request still tells it (its baseline is its own last call).
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r4' })).data.user_changes).toEqual(['added Sketch 2 (sketch)']);
     },
     REAL_KERNEL_MS,
   );

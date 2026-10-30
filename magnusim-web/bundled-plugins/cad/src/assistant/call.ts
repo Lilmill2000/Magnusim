@@ -1,7 +1,8 @@
 // One call of a Part tool, as the app's bridge hands it (CAD tools spec §2.1 call.ts): its key,
 // its context, the tool's code from tools/index.ts (a tool not in this build answers not_ready
 // "not in this build yet"), the reply's revision and the person's changes since the key's last
-// call (worked out as the call answers: what they did while it ran is told too), an honest error
+// call, or the conversation's when its turn names it (worked out as the call answers: what they
+// did while it ran is told too), an honest error
 // with its reason, hint and detail, the turn log's summary, and the chip
 // and the test ledger kept up to date. The call's signal is the SDK's merged with the chip's
 // Stop (a call of a key the person stopped answers busy stopped at once); the camera latch takes
@@ -12,7 +13,7 @@ import type { AssistantCall, AssistantResult } from '@magnusim/workspace';
 import type { CallCtx, ToolImpl, ToolReply } from '../types/assistant';
 import { asToolError, sdkError, ToolError } from './errors';
 import { oneLine } from './numbers';
-import { editPicture, wantsPicture } from './pictures';
+import { editPicture, owePicture, PICTURE_LATER, PICTURE_NEXT, picturesOn, placeOf, stepPicture, wantsPicture } from './pictures';
 import { CALLS_KEPT, type AssistantRuntime } from './runtime';
 import { toolNamed, TOOL_NAMES } from './schemas';
 import * as BUILT from './tools';
@@ -62,7 +63,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     rt.seenKeys.add(key);
     const spec = toolNamed(call.tool);
     const label = spec?.title ?? call.tool;
-    rt.rev.begin(key);
+    // What the person changed: from the conversation's last call when the turn names it.
+    rt.rev.begin(key, turn?.conversation ?? null);
     // The chip's Stop aborts this one here, at once (its step reverts synchronously).
     const local = new AbortController();
     const merged = bothSignals(call.signal, local.signal);
@@ -97,6 +99,10 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
     let ok = false;
     let error: ToolError | null = null;
     let images = 0;
+    // Its place in the model's step, when the host says it: one picture per step (pictures.ts).
+    const place = placeOf(call);
+    // An owed picture is the conversation's when the turn names one: its next request brings it.
+    const owedKey = turn?.conversation ? `conv:${turn.conversation}` : key;
     try {
       if (!spec || !TOOL_NAMES.includes(call.tool)) throw new ToolError('bad_input', `No Part tool is called ${call.tool}.`);
       if (rt.stopped.has(key)) throw new ToolError('stopped', STOPPED_WORDS);
@@ -106,8 +112,17 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       ok = true;
       // An edit that answered ok: one picture of the Part as it is now (pictures.ts); never a failure.
       // A reply that changed no model (undo_step false: the workspace tool's view state) gets none.
-      if (!reply.images?.length && reply.data.undo_step !== false && wantsPicture(ctx, rt.pictures.get())) {
-        const pic = await editPicture(ctx);
+      // With the host's place: the call after which no edit of the step follows brings it (stepPicture).
+      const pics = rt.pictures.get();
+      const own = !!reply.images?.length;
+      const editsLeft = place?.editsLeft ?? null;
+      const when = stepPicture({ editsLeft, edits: !own && reply.data.undo_step !== false && wantsPicture(ctx, pics), owed: rt.picturesOwed.has(owedKey), on: !own && picturesOn(ctx, pics) });
+      if (when === 'later') {
+        owePicture(rt.picturesOwed, owedKey);
+        reply.data = { ...reply.data, picture: PICTURE_LATER };
+      } else {
+        if (editsLeft === 0 || when === 'now') rt.picturesOwed.delete(owedKey);
+        const pic = when === 'now' ? await editPicture(ctx) : null;
         if (pic && 'image' in pic) {
           reply.images = [pic.image];
           reply.data = { ...reply.data, picture: pic.caption };
@@ -128,6 +143,8 @@ export function createCallHandler(rt: AssistantRuntime, tools: Readonly<Record<s
       error = signal.aborted && !(e instanceof ToolError) ? new ToolError('stopped', 'The call was stopped.') : asToolError(e);
       const changes = rt.rev.changesFor(key);
       if (changes.length) error.detail.user_changes = changes;
+      // The step's last call failed with an earlier edit's picture owed: the next step brings it.
+      if (place?.callsLeft === 0 && rt.picturesOwed.has(owedKey)) error.detail.picture = PICTURE_NEXT;
       throw sdkError(error, rt.hostKeepsHints);
     } finally {
       merged.off();

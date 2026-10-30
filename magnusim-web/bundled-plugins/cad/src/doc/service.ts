@@ -154,6 +154,8 @@ export function createDocService(opts: DocServiceOptions): DocService {
   // Feature builds read stored files (an import's healed BREP) through ws.files, checked against their sha256.
   const files: FeatureFiles | null = bridge.files
     ? {
+        // Magnusim CAD (projectLinks false) has no projects: a Part's files are its own.
+        where: bridge.projectLinks() ? 'in the project' : 'with the Part',
         async read(ref) {
           const buf = await bridge.files!.read(ref.rel);
           if (!buf) return null;

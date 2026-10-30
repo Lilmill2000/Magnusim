@@ -89,6 +89,8 @@ function Progress({ p, fileName, onCancel, cancelLabel }: { p: StageProgress; fi
 
 export function ImportPanel(props: FeaturePanelProps) {
   const services = useServices();
+  // Magnusim CAD (projectLinks false): no projects, so no project geometry to name.
+  const links = services.bridge.projectLinks();
   const ui = uiFor(services);
   const kit = useFeaturePanel<ImportFeature>(props);
   const runs = importRunsFor(services);
@@ -139,14 +141,15 @@ export function ImportPanel(props: FeaturePanelProps) {
           </span>
         </Field>
       ) : null}
-      {f.origin ? (
+      {/* Edit in CAD's project geometry: Magnusim's alone (Magnusim CAD has no projects). */}
+      {f.origin && links ? (
         <Field label="From the project" field="origin">
           <span className="cad-p2-readout" data-import-origin={f.origin.geometryId}>
             {edit?.geometryName ?? 'A project geometry'}
           </span>
         </Field>
       ) : null}
-      {f.origin && edit?.note ? <Hint>{edit.note}</Hint> : null}
+      {f.origin && links && edit?.note ? <Hint>{edit.note}</Hint> : null}
       {f.source?.unit ? (
         <Field label="Length unit" field="unit">
           <span data-import-unit="1">{f.source.unit}</span>

@@ -5,6 +5,7 @@
 // the Part has settled). Inert unless a test holds one.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import type { AssistantTool } from '@magnusim/workspace';
 import type { AssistantUiState, TurnFacts } from '../types/assistant';
 import type { Pause } from './busy';
 import type { EvalAsk, EvalFacts } from './eval-types';
@@ -87,6 +88,11 @@ export function createHoldPoints(): HoldPoints {
 export interface AssistantTestHandle {
   /** The tools this page offers ('cad__' is the app's prefix, not theirs). */
   readonly tools: string[];
+  /**
+   * The tools as this page last registered them, whole (name, description, input schema): what the
+   * model is told (Magnusim CAD's have no simulation or Enclosure fields). [] before the first.
+   */
+  readonly registered: AssistantTool[];
   /** The chip's state now. */
   state(): AssistantUiState;
   /** Every call this page answered, oldest first. */

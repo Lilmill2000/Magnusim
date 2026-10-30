@@ -3,7 +3,7 @@
   "about": "The guide's L bracket: a closed polyline on Front with infer, extruded symmetric, the inner fillet, then one hole through each flange's outer face at its centre (hole works in model coordinates on the -Z and -X faces).",
   "turns": [
     [
-      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "" } }] },
+      { "tools": [{ "name": "cad__get_model", "input": { "detail": "brief", "feature": "", "regions": "short" } }] },
       {
         "tools": [
           {

@@ -16,8 +16,8 @@ afterEach(() => {
   forgetBreps();
 });
 
-async function part(folder?: RealDoc['folder']) {
-  const r = await openRealDoc({ folder });
+async function part(folder?: RealDoc['folder'], o: { projectLinks?: boolean } = {}) {
+  const r = await openRealDoc({ folder, ...o });
   open.push(r);
   return r;
 }
@@ -88,6 +88,21 @@ describe('Import STEP on the real kernel', () => {
     expect(rb.features[feature]).toMatchObject({ state: 'error' });
     expect(rb.features[feature].message).toBe(`Imported 1 (flange.step) failed: its stored shapes (${f.brep.rel}) are not in the project any more`);
     expect(rb.bodies).toHaveLength(0);
+  });
+
+  it("in Magnusim CAD (projectLinks false: no projects) a stored BREP that is gone is said with the Part's words", async () => {
+    const r = await part(undefined, { projectLinks: false });
+    const { feature } = await importFixture(r, 'flange.step');
+    await r.doc.flush();
+    const f = r.doc.state.get().doc.features[0] as ImportFeature;
+    r.dispose();
+    open.splice(open.indexOf(r), 1);
+    forgetBreps();
+    r.folder.entries.delete(f.brep.rel);
+    const again = await part(r.folder, { projectLinks: false });
+    const rb = await settle(again.doc);
+    expect(rb.features[feature]).toMatchObject({ state: 'error' });
+    expect(rb.features[feature].message).toBe(`Imported 1 (flange.step) failed: its stored shapes (${f.brep.rel}) are not with the Part any more`);
   });
 
   it('a stored BREP that changed is refused by its checksum', async () => {

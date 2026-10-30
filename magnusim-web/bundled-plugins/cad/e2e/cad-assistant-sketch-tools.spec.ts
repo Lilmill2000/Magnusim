@@ -5,13 +5,19 @@
 // entity is the person's fit spline, the volume chip is the section's area times the span, and
 // one Undo ("Undo Assistant: <request>") takes both away. A second test rounds a plate's corner
 // with fillet and lays a circular pattern of holes; a later turn sets the pattern's count with
-// edit_feature and extrudes the plate: the tree and the volume chip show the eight holes.
+// edit_feature and extrudes the plate: the tree and the volume chip show the eight holes. A third
+// sketches a 96-tooth wheel (198 regions) and extrudes the region whose id the sketch's answer
+// names first: the answer the model got is under 3 KB with the gaps summed, the dock's sketch step
+// says 198 regions and the largest's area, and the tree shows the wheel's body, its volume the
+// toothed wheel's.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from '@playwright/test';
 import { historyNames } from './helpers';
-import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
+// @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
+import * as core from '../../../e2e/support/assistant.js';
+import { cadFrame, chats, chipWords, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost, type FakeRequest } from './assistant-helpers';
 
 let host: AssistantHost;
 
@@ -75,9 +81,8 @@ test('cad:assistant-sketch-tools-airfoil a closed spline the model draws and ext
   const [, afterSketch, afterExtrude] = chats(host).slice(before);
   const [sketch] = resultsIn(afterSketch);
   expect(sketch).toMatchObject({ tool: 'cad__sketch', ok: true, data: { solver: { state: 'fully', dof: 0 }, feature: { name: 'Section', state: 'ok' } } });
-  const regions = sketch.data!.regions as { area_mm2: number; bounded_by: string[] }[];
-  expect(regions).toHaveLength(1);
-  expect(regions[0].bounded_by).toEqual(['w']);
+  const regions = sketch.data!.regions as { id: string; area_mm2: number; holes: number }[];
+  expect(regions).toEqual([{ id: 'r1', area_mm2: expect.any(Number), at: expect.any(Array), holes: 0 }]);
   const area = regions[0].area_mm2;
   expect(area).toBeGreaterThan(600);
   expect(area).toBeLessThan(1000);
@@ -151,4 +156,71 @@ test("cad:assistant-sketch-tools-pattern a fillet and a circular pattern the mod
   const plateVolume = (holes: number) => (3600 - corner - holes * 4 * Math.PI) * 5;
   await expect.poll(async () => Math.abs((await volumeNow(page)) - plateVolume(8)) < 0.5, STEP).toBe(true);
   await expect(frame.locator('[data-cad-panel]')).toHaveCount(0);
+});
+
+// A 96-tooth wheel as a model draws a clock's great wheel (tests/assistant/sketch-tools.ts gearInput):
+// the tip circle, a bore, four spoke windows and one tooth gap across the tip circle, patterned.
+const polar = (r: number, deg: number) => [r * Math.cos((deg * Math.PI) / 180), r * Math.sin((deg * Math.PI) / 180)].map((x) => Number(x.toFixed(4)));
+const GAP = [polar(29, -0.9), polar(33, -1.3), polar(33, 1.3), polar(29, 0.9), polar(29, -0.9)].flat();
+const GEAR = {
+  edit: '',
+  name: 'Gear sketch',
+  on: 'Top',
+  entities: [E('o', 'circle', [0, 0, 31.5]), E('b', 'circle', [0, 0, 5]), E('w', 'sector', [0, 0, 10, 22, 10, 80]), E('g', 'polyline', GAP)],
+  constraints: [
+    C('fo', 'fix', ['o']),
+    C('fb', 'fix', ['b']),
+    C('fw', 'fix', ['w.inner']),
+    C('fv', 'fix', ['w.outer']),
+    ...[0, 1, 2, 3].map((k) => C(`f${k}`, 'fix', [`g.p${k}`])),
+    C('pw', 'circular_pattern', ['origin', 'w'], 'count 4'),
+    C('pg', 'circular_pattern', ['origin', 'g'], 'count 96'),
+  ],
+  infer: false,
+};
+/** The bytes of each tool result a request carries (the text the model reads). */
+const resultBytes = (req: FakeRequest): number[] => {
+  const user = [...(req.body.messages as { role: string; content: unknown }[])].reverse().find((m) => m.role === 'user');
+  return ((user?.content ?? []) as { type: string; content: { text: string }[] }[]).filter((b) => b.type === 'tool_result').map((b) => Buffer.byteLength(b.content[0].text, 'utf8'));
+};
+
+test("cad:assistant-sketch-tools-gear a 96-tooth wheel: the model gets a short answer naming r1 and extrudes it; the dock's step and the tree show the wheel", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const pid = await newProject(request, host, 'Assistant gear');
+  const { frame } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  const before = chats(host).length;
+  host.fake.reply(
+    { tools: [{ name: 'cad__sketch', input: GEAR }] },
+    // The model takes the region id the sketch's answer names first (the largest).
+    (body: unknown) => {
+      const [sk] = resultsIn(body);
+      const first = (sk.data!.regions as { id?: string }[])[0];
+      const x = EXTRUDE('Great Wheel', 'Gear sketch', '4 mm');
+      return { tools: [{ ...x, input: { ...x.input, regions: [first.id], body_name: 'Great Wheel' } }] };
+    },
+    { text: 'The great wheel is 4 mm thick.' },
+  );
+  await core.dockSend(page, 'A 96-tooth great wheel, 4 mm thick.');
+  await expect(core.dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 3 });
+  const [, afterSketch, afterExtrude] = chats(host).slice(before);
+  // What the model got: under 3 KB, r1 first, the gaps summed with their ids.
+  expect(resultBytes(afterSketch)).toHaveLength(1);
+  expect(resultBytes(afterSketch)[0]).toBeLessThan(3 * 1024);
+  const [sk] = resultsIn(afterSketch);
+  const rows = sk.data!.regions as { id?: string; ids?: string; count?: number; area_mm2: number }[];
+  expect(rows.map((r) => r.id ?? r.ids)).toEqual(['r1', 'r2..r5', 'r6', 'r7..r102', 'r103..r198']);
+  expect(rows[3].count).toBe(96);
+  const [ex] = resultsIn(afterExtrude);
+  expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Great Wheel', state: 'ok' } } });
+  // What the person sees: the dock's sketch step with the count and the largest's area.
+  const step = core.dockTurn(page).locator('[data-dock-step] [data-dock-result]').filter({ hasText: 'regions (largest' });
+  await expect(step).toHaveText(new RegExp(`^✓ Sketch "Gear sketch" on Top: fully defined, 198 regions \\(largest ${rows[0].area_mm2} mm²\\) · `), STEP);
+  // The tree: the sketch, the extrude, and the wheel's body; its volume is the toothed wheel's.
+  await expect(historyNames(frame)).toHaveText(['Gear sketch', 'Great Wheel'], STEP);
+  const folder = frame.locator('[data-cad-tree] [data-bodies-folder]');
+  if ((await folder.getAttribute('aria-expanded')) !== 'true') await folder.locator('> .tree-row .tw').click();
+  await expect(frame.locator('[data-cad-tree] [data-body-row] .cad-body-name')).toHaveText(['Great Wheel'], STEP);
+  await expect.poll(async () => Math.abs((await volumeNow(page)) - rows[0].area_mm2 * 4) < 1, STEP).toBe(true);
 });

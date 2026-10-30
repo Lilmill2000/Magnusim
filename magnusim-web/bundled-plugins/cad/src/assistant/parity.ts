@@ -44,15 +44,22 @@ import type { ToolbarPrefs } from '../ui/toolbar-layout';
 import type { Keybinds } from '../app/keybinds';
 
 export type Reach =
-  | { kind: 'reach'; tool: string; field: string; value?: string; note?: string; projects?: true }
+  | { kind: 'reach'; tool: string; field: string; value?: string; note?: string; projects?: true; without?: string }
   | { kind: 'auto'; why: string };
 
 export const reach = (tool: string, field: string, value?: string, note?: string): Reach => ({ kind: 'reach', tool, field, ...(value !== undefined ? { value } : {}), ...(note ? { note } : {}) });
 export const auto = (why: string): Reach => ({ kind: 'auto', why });
-/** Reached only where the host has projects (Magnusim); Magnusim CAD has neither the control nor the field. */
-const inProjects = (r: Reach): Reach => (r.kind === 'reach' ? { ...r, projects: true } : r);
+/**
+ * Reached only where the host has projects (Magnusim); Magnusim CAD has neither the control nor the
+ * field (`without`: why, where NO_PROJECTS does not say it).
+ */
+const inProjects = (r: Reach, without?: string): Reach => (r.kind === 'reach' ? { ...r, projects: true, ...(without ? { without } : {}) } : r);
 /** A project-only row where the host has no projects (Magnusim CAD, projectLinks false). */
 export const NO_PROJECTS = auto('not in Magnusim CAD: with no projects there is no simulation, so neither the person nor the Assistant has it there');
+/** An Enclosure's input where the host has no projects: Magnusim CAD keeps an Enclosure made in Magnusim as it is. */
+export const ENCLOSURE_KEPT_WHY =
+  "not in Magnusim CAD: it has no Enclosure command, and an Enclosure made in Magnusim stays as it is there (its panel shows it read-only, edit_feature refuses its values), so neither the person nor the Assistant changes it";
+const KEPT = (r: Reach) => inProjects(r, ENCLOSURE_KEPT_WHY);
 
 const W = (action: string) => reach('workspace', 'action', action);
 const ENTITY = (kind: string) => reach('sketch', 'entities[].kind', kind);
@@ -93,7 +100,7 @@ export const COMMANDS: Readonly<Record<string, Reach>> = {
   'inspect.check': reach('measure', 'targets'),
   'inspect.mass': reach('measure', 'targets'),
   'inspect.measure': reach('measure', 'targets'),
-  'cfd.enclosure': DIRECT('enclosure'),
+  'cfd.enclosure': inProjects(DIRECT('enclosure')),
   'file.export-step': W('export_step'),
   'file.import-step': W('import_step'),
   'solid.extrude': reach('extrude', 'extent'),
@@ -274,15 +281,16 @@ export const FEATURE_FIELDS: FeatureFields = {
   press_pull: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), distance: DIRECT_FIELD('distance'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
   split: { ...BASE, targets: DIRECT_FIELD('bodies'), tool: DIRECT_FIELD('tool'), repair: REPAIR },
   delete_body: { ...BASE, bodies: DIRECT_FIELD('bodies') },
+  // Magnusim CAD keeps an Enclosure made in Magnusim as it is (KEPT): name and suppression as any feature's.
   enclosure: {
     ...BASE,
-    shape: DIRECT_FIELD('shape'),
-    axis: reach('direct', 'shape', 'cylinder_z'),
-    bodies: DIRECT_FIELD('bodies'),
-    padding: DIRECT_FIELD('padding'),
-    percent: DIRECT_FIELD('distance'),
-    distance: DIRECT_FIELD('distance'),
-    sides: DIRECT_FIELD('sides'),
+    shape: KEPT(DIRECT_FIELD('shape')),
+    axis: KEPT(reach('direct', 'shape', 'cylinder_z')),
+    bodies: KEPT(DIRECT_FIELD('bodies')),
+    padding: KEPT(DIRECT_FIELD('padding')),
+    percent: KEPT(DIRECT_FIELD('distance')),
+    distance: KEPT(DIRECT_FIELD('distance')),
+    sides: KEPT(DIRECT_FIELD('sides')),
     creates: auto('the body it makes, fixed when made (body rename_to names it)'),
   },
   ref_plane: {
@@ -502,7 +510,7 @@ export const DOC: { readonly [K in keyof DocService]: Reach } = {
   checkStored: INTERNAL,
   reload: W('reload'),
   keepMine: W('keep_mine'),
-  bodiesAtEnd: W('send_to_simulation'),
+  bodiesAtEnd: inProjects(W('send_to_simulation')),
   bodiesBefore: INTERNAL,
   settled: INTERNAL,
   committed: INTERNAL,
@@ -579,9 +587,9 @@ export const KEYBINDS: { readonly [K in keyof Keybinds]: Reach } = {
 };
 
 export const LINK: { readonly [K in keyof LinkController]: Reach } = {
-  sync: W('send_to_simulation'),
+  sync: inProjects(W('send_to_simulation')),
   running: INTERNAL,
-  last: W('send_to_simulation'),
+  last: inProjects(W('send_to_simulation')),
 };
 
 const POINTER = auto("the person's pointer in the view (orbit, pick, hover): the Assistant names things by selector");
@@ -757,6 +765,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'detail=brief': place("the design tree: every feature with its state badge and message, the bodies, the sketches' (-)/(+) and the DOF chip"),
     'detail=full': EDIT_ROW,
     feature: EDIT_ROW,
+    'regions=short': own("how much of a sketch's region list the model is sent"),
+    'regions=full': place('the view in model mode: hovering a sketch region lights it, a click selects it'),
   },
   find: { query: command('inspect.find'), limit: own('how many rows the model is sent; the Find panel lists them all') },
   measure: { targets: MEASURE, section: MEASURE },
@@ -768,6 +778,8 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     ...each(['small', 'large'], 'size', PICTURE),
     ...each(['shaded_edges', 'shaded', 'wireframe'], 'display', PICTURE),
     ...each(['orthographic', 'perspective'], 'projection', PICTURE),
+    // The person looks straight at a sketch with Normal to (its row selected, N); the Picture panel has no sketch choice.
+    sketch: command('view.normal-to'),
   },
   help: each(['sketch', 'selectors', 'features', 'parameters', 'checks', 'traps', 'errors', 'examples', 'example_plate', 'example_bracket', 'example_flange', 'example_chip', 'guide', 'sketch_tools', 'details', 'workspace'], 'topic', REFERENCE),
   set_params: {
@@ -976,7 +988,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'kind=press_pull': command('modify.press-pull'),
     'kind=delete_faces': command('modify.delete-faces'),
     'kind=split': command('modify.split'),
-    'kind=enclosure': command('cfd.enclosure'),
+    'kind=enclosure': onlyInProjects(command('cfd.enclosure')),
     'kind=delete_body': control('ui', 'deleteBodies'),
     'kind=repair': control('ui', 'runFeatureAction'),
     'kind=retry': control('ui', 'runFeatureAction'),
@@ -985,11 +997,12 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     bodies: panel('split', 'targets'),
     tool: panel('split', 'tool'),
     keep_tool: panel('split', 'tool'),
-    'shape=box': panel('enclosure', 'shape'),
-    ...each(['cylinder_x', 'cylinder_y', 'cylinder_z'], 'shape', panel('enclosure', 'axis')),
-    ...each(['zero', 'percent', 'fixed'], 'padding', panel('enclosure', 'padding')),
-    ...each(['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'], 'sides[].side', panel('enclosure', 'sides')),
-    'sides[].value': panel('enclosure', 'sides'),
+    // The Enclosure's kind and fields: Magnusim's alone (Magnusim CAD has no Enclosure command).
+    'shape=box': onlyInProjects(panel('enclosure', 'shape')),
+    ...each(['cylinder_x', 'cylinder_y', 'cylinder_z'], 'shape', onlyInProjects(panel('enclosure', 'axis'))),
+    ...each(['zero', 'percent', 'fixed'], 'padding', onlyInProjects(panel('enclosure', 'padding'))),
+    ...each(['+x', '-x', '+y', '-y', '+z', '-z', 'radius', 'top', 'bottom'], 'sides[].side', onlyInProjects(panel('enclosure', 'sides'))),
+    'sides[].value': onlyInProjects(panel('enclosure', 'sides')),
   },
   hole: {
     name: HOLE,
@@ -1028,7 +1041,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'action=import_step': command('file.import-step'),
     'action=reheal': panel('import', 'heal'),
     'action=export_step': command('file.export-step'),
-    'action=send_to_simulation': control('link', 'sync'),
+    'action=send_to_simulation': onlyInProjects(control('link', 'sync')),
     'action=fit': command('view.fit'),
     'action=standard_view': command('view.iso_back'),
     'action=normal_to': command('view.normal-to'),
@@ -1052,13 +1065,14 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
 
 /**
  * The tables as they hold on a host with projects (Magnusim: as they are) or without (Magnusim CAD,
- * bridge.projectLinks() false): there a project-only row is NO_PROJECTS, and the Assistant's
- * project-only fields (the body tool's simulation) are left out, as cadToolsFor leaves them out of
- * the tools. tests/assistant/parity-no-projects.test.ts checks Magnusim CAD both ways.
+ * bridge.projectLinks() false): there a project-only row is NO_PROJECTS (or its own why: an
+ * Enclosure's inputs), and the Assistant's project-only fields (the body tool's simulation, the
+ * workspace's send_to_simulation, the direct tool's enclosure kind and fields) are left out, as
+ * cadToolsFor leaves them out of the tools. tests/assistant/parity-no-projects.test.ts checks Magnusim CAD both ways.
  */
 export function parityFor(projectLinks: boolean): { tables: Readonly<Record<string, Readonly<Record<string, Reach>>>>; aiTools: Readonly<Record<string, Readonly<Record<string, PersonPath>>>> } {
   if (projectLinks) return { tables: PARITY_TABLES, aiTools: AI_TOOLS };
-  const tables = Object.fromEntries(Object.entries(PARITY_TABLES).map(([name, t]) => [name, Object.fromEntries(Object.entries(t).map(([k, r]) => [k, r.kind === 'reach' && r.projects ? NO_PROJECTS : r]))]));
+  const tables = Object.fromEntries(Object.entries(PARITY_TABLES).map(([name, t]) => [name, Object.fromEntries(Object.entries(t).map(([k, r]) => [k, r.kind === 'reach' && r.projects ? (r.without ? auto(r.without) : NO_PROJECTS) : r]))]));
   const aiTools = Object.fromEntries(Object.entries(AI_TOOLS).map(([tool, rows]) => [tool, Object.fromEntries(Object.entries(rows).filter(([, p]) => !p.projects))]));
   return { tables, aiTools };
 }

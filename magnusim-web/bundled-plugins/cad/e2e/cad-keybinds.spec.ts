@@ -155,7 +155,7 @@ test('cad:keybinds-dialog Set keybind: Rectangle to Shift+R (Replace takes it fr
   }
 });
 
-test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again leaves it (the segment drawn stays, the next click draws nothing); L does neither; Centerline on K: K with Line in hand switches to Centerline", { tag: '@serial' }, async ({ page, request }) => {
+test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again leaves it (the segment drawn stays, the next click draws nothing); L does neither; Centerline on K: K with Line in hand switches to Centerline, G with Centerline in hand switches back to Line", { tag: '@serial' }, async ({ page, request }) => {
   test.setTimeout(180_000);
   await ensureCadOn(request);
   await setPref(request, { 'sketch.line': ['KeyG'], 'sketch.centerline': ['KeyK'] });
@@ -203,11 +203,15 @@ test("cad:keybinds-tool-key-again Line rebound to G: G takes it up and G again l
     await page.keyboard.press('k');
     await expect.poll(() => toolNow(page)).toBe('centerline');
     await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-btn[data-variant="sketch.centerline"]')).toHaveClass(/is-active/);
-    // K again: Centerline is put down. K, then G (the Line flyout's own key): put down too.
+    // K again: Centerline is put down. K, then G (the Line flyout's main key, Daniel 2026-10-29):
+    // Line is taken up in its place; G again puts Line down.
     await page.keyboard.press('k');
     await expect.poll(() => toolNow(page)).toBe('select');
     await page.keyboard.press('k');
     await expect.poll(() => toolNow(page)).toBe('centerline');
+    await page.keyboard.press('g');
+    await expect.poll(() => toolNow(page)).toBe('line');
+    await expect(frame.locator('[data-cad-toolbar="sketch"] .tb-btn[data-command="sketch.line"]')).toHaveClass(/is-active/);
     await page.keyboard.press('g');
     await expect.poll(() => toolNow(page)).toBe('select');
     expect(seen.errors).toEqual([]);

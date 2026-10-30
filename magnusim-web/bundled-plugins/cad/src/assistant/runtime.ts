@@ -47,6 +47,8 @@ export interface AssistantRuntime {
   readonly approvals: Approvals;
   /** A picture of the Part after each edit, the person's choice (pictures.ts). */
   readonly pictures: PicturesControl;
+  /** Keys whose step said "see this step's last edit" and had no picture yet (pictures.ts stepPicture). */
+  readonly picturesOwed: Set<string>;
   /** The calls running now, by call id: their key and turn, and the chip's Stop of each. */
   readonly active: Map<string, ActiveCall>;
   /** Keys the person stopped from the chip: every later call of them answers busy stopped. */

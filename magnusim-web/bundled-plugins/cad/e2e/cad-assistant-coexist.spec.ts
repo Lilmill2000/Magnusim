@@ -277,7 +277,7 @@ test('cad:assistant-coexist-hidden a hidden window with no animation frames: a w
   // The person chose watch, with every delay as it is.
   await forcePace(page, 'watch', 1);
   const before = chats(host).length;
-  host.fake.reply({ tools: [PLATE] }, { tools: [SET('t', '8 mm')] }, { tools: [{ name: 'cad__view', input: { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic' } }] }, { text: 'Built.' });
+  host.fake.reply({ tools: [PLATE] }, { tools: [SET('t', '8 mm')] }, { tools: [{ name: 'cad__view', input: { views: ['iso'], hide: [], section: '', labels: 'none', size: 'small', display: 'shaded_edges', projection: 'orthographic', sketch: '' } }] }, { text: 'Built.' });
   const t = await startTurn(request, host, { text: 'Build it while I look away.', tab });
   expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
   const [sketched] = resultsIn(chats(host)[before + 1]);

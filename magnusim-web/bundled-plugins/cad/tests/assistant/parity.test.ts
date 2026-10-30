@@ -150,7 +150,8 @@ describe('parity: every person-facing capability has an Assistant tool and field
   });
 
   it('the workspace tool reaches what this lane added: send to the simulation, the rollback bar, the view, the banana, Export', () => {
-    for (const k of ['sync'] as const) expect(LINK[k]).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'send_to_simulation' });
+    // Magnusim's alone (projects): Magnusim CAD has no simulation (parity-no-projects.test.ts).
+    for (const k of ['sync'] as const) expect(LINK[k]).toEqual({ kind: 'reach', tool: 'workspace', field: 'action', value: 'send_to_simulation', projects: true });
     expect(UI.rollBackTo).toMatchObject({ tool: 'workspace', value: 'roll_back_to' });
     expect(UI.setBodyVisible).toMatchObject({ tool: 'body', field: 'visibility' });
     // Hide / Show in a sketch's or a reference's menu (and its eye) is the workspace tool's show / hide, both ways.

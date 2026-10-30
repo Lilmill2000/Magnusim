@@ -1,6 +1,7 @@
 // Shared pieces of the sketch tool's tests: the tool's input with every field, the Part's state in
-// short (feature names, undo label, the open session and panel), and a block made from a sketch the
-// tool drew (its faces labelled Base.start, Base.end, Base.side(r.bottom) ...).
+// short (feature names, undo label, the open session and panel), a block made from a sketch the
+// tool drew (its faces labelled Base.start, Base.end, Base.side(r.bottom) ...), a sketch's regions
+// in full, and a 96-tooth wheel as the model draws one (many small regions of one size).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect } from 'vitest';
 import { refOfRegion } from '../../src/features/extrude/profiles';
@@ -40,6 +41,38 @@ export function outputOf(h: AssistantHarness, name: string): SketchOutput {
   const out = h.doc.state.get().rebuild.outputs[featureNamed(h, name).id] as SketchOutput | undefined;
   if (out?.type !== 'sketch') throw new Error(`${name} did not build`);
   return out;
+}
+
+/** A sketch's regions in full (get_model feature <name> regions full): each with its place, depth, box and bounds. */
+export async function fullRegions(h: AssistantHarness, name: string): Promise<Row[]> {
+  const r = await h.ok('get_model', { detail: 'brief', feature: name, regions: 'full' });
+  return (r.data.feature as Row).regions as Row[];
+}
+
+const polar = (r: number, deg: number) => [r * Math.cos((deg * Math.PI) / 180), r * Math.sin((deg * Math.PI) / 180)].map((x) => Number(x.toFixed(4)));
+
+/**
+ * A 96-tooth wheel on Top as a model draws a clock's great wheel, every point fixed: the tip
+ * circle (r 31.5), a bore (r 5), four spoke windows (a sector, patterned), and one tooth gap (a
+ * closed 4-sided polyline across the tip circle, patterned 96 times). 198 regions: r1 the wheel
+ * with its teeth (largest), r2..r5 the windows, r6 the bore, r7..r102 the gaps inside the tip
+ * circle, r103..r198 their ends outside it.
+ */
+export function gearInput(name = 'Gear sketch'): Row {
+  const gap = [polar(29, -0.9), polar(33, -1.3), polar(33, 1.3), polar(29, 0.9), polar(29, -0.9)].flat();
+  return SK({
+    name,
+    entities: [E('o', 'circle', [0, 0, 31.5]), E('b', 'circle', [0, 0, 5]), E('w', 'sector', [0, 0, 10, 22, 10, 80]), E('g', 'polyline', gap)],
+    constraints: [
+      C('fo', 'fix', ['o']),
+      C('fb', 'fix', ['b']),
+      C('fw', 'fix', ['w.inner']),
+      C('fv', 'fix', ['w.outer']),
+      ...[0, 1, 2, 3].map((k) => C(`f${k}`, 'fix', [`g.p${k}`])),
+      C('pw', 'circular_pattern', ['origin', 'w'], 'count 4'),
+      C('pg', 'circular_pattern', ['origin', 'g'], 'count 96'),
+    ],
+  });
 }
 
 /** A w x d rectangle sketched by the tool on Top, centred and fully defined. */

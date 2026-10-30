@@ -6,20 +6,23 @@
 //     (pick green) and the hovered region (hover blue) in the normal shading, their states kept;
 //   - the reference geometry (CONSTRUCT): a selected or edited plane in its plain look, and the
 //     origin's axes drawn only because they are selected or hovered left out.
-// Both come back as they were when the hook is called with false.
+// Both come back as they were when the hook is called with false. A picture of one sketch (the
+// view tool's sketch: the hook's picture) draws that sketch although the view hides it, and every
+// sketch over the bodies; with false it goes again.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { Group, type LineBasicMaterial, type LineLoop, type Mesh, type MeshBasicMaterial } from 'three';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LAYER_CONSTRUCT, ConstructOverlay } from '../../src/features/refgeom/overlay';
 import { constructView } from '../../src/features/refgeom/scene';
-import { LAYER_REGIONS, ProfileOverlay } from '../../src/features/sketch/overlay';
+import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LAYER_REGIONS, LAYER_SKETCHES, ProfileOverlay } from '../../src/features/sketch/overlay';
 import { profilesView } from '../../src/features/sketch/view';
 import { createSelectionStore } from '../../src/lib/selection';
 import { createStateStore } from '../../src/lib/store';
 import type { AppServices } from '../../src/types/app';
 import type { Mode } from '../../src/types/commands';
 import type { SketchOutput, SketchRegion } from '../../src/types/sketch';
-import type { ViewportHandle } from '../../src/types/viewport';
+import type { SnapshotPicture, ViewportHandle } from '../../src/types/viewport';
 import { HOVER_COLOR, PICK_COLOR, PLANE_BORDER, PLANE_FILL, PLANE_PICK_FILL } from '../../src/viewport/colors';
 import { DARK, LIGHT, type MarkPalette } from '../../src/viewport/palette';
 import { wantOriginAxes } from '../../src/features/refgeom/scene';
@@ -32,9 +35,9 @@ afterEach(() => {
 
 /** A viewport handle with what the overlays use; addLayer keeps each layer's group and options. */
 function fakeHandle() {
-  const layers = new Map<string, { group: Group; plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void }>();
+  const layers = new Map<string, { group: Group; plain?: (on: boolean, picture?: SnapshotPicture) => void; palette?: (p: MarkPalette) => void }>();
   const handle = {
-    addLayer(id: string, o: { plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void } = {}) {
+    addLayer(id: string, o: { plain?: (on: boolean, picture?: SnapshotPicture) => void; palette?: (p: MarkPalette) => void } = {}) {
       const group = new Group();
       layers.set(id, { group, plain: o.plain, palette: o.palette });
       const html = document.createElement('div');
@@ -108,6 +111,55 @@ describe('the profile regions in a snapshot', () => {
     expect(look()).toEqual({ r1: ['picked', 0.12], r2: ['picked', 0.12], r3: ['hover', 0.12], r4: ['normal', 0.12] });
     plain(false);
     expect(look()).toEqual(before);
+  });
+});
+
+describe('a picture of one sketch', () => {
+  it('draws that sketch although the view hides it, every sketch over the bodies, and puts both back', () => {
+    const output: SketchOutput = {
+      type: 'sketch',
+      plane: { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] },
+      points: { a: [40, 0], b: [55, 0], c: [55, 30] },
+      radii: {},
+      curves: [],
+      regions: [region('r1', 40)],
+      open: [],
+      dangling: [],
+      measured: {},
+      source: 'stored',
+    };
+    const s = services({
+      doc: { features: [{ id: SK, type: 'sketch', name: 'Sample sketch', entities: [{ id: 'l1', kind: 'line', p: ['a', 'b'] }, { id: 'l2', kind: 'line', p: ['b', 'c'] }], constraints: [] }] },
+      view: { sketches: { [SK]: 'hidden' } },
+      rebuild: { outputs: { [SK]: output }, bodies: [], features: {} },
+      session: null,
+    });
+    const { handle, layers } = fakeHandle();
+    const overlay = new ProfileOverlay(s, handle);
+    disposers.push(() => overlay.dispose());
+    overlay.sync();
+    const lines = () => layers.get(LAYER_SKETCHES)!.group.children as LineSegments2[];
+    const regions = () => layers.get(LAYER_REGIONS)!.group.children as Mesh<never, MeshBasicMaterial>[];
+    expect(overlay.shown()).toEqual([]);
+    const plain = layers.get(LAYER_REGIONS)!.plain!;
+    // A picture of nothing in particular: the hidden sketch stays out.
+    plain(true, { sketch: null });
+    expect(overlay.shown()).toEqual([]);
+    plain(false);
+    plain(true, { sketch: SK });
+    expect(overlay.shown()).toEqual([SK]);
+    expect(lines().length).toBeGreaterThan(0);
+    expect(regions().length).toBe(1);
+    for (const m of [...lines().map((l) => l.material), ...regions().map((r) => r.material)]) expect(m.depthTest).toBe(false);
+    plain(false);
+    expect(overlay.shown()).toEqual([]);
+    expect(lines()).toEqual([]);
+    // Shown again by the person: drawn as usual, behind the bodies.
+    const store = s.doc.state as unknown as { get(): object; set(v: object): void };
+    store.set({ ...store.get(), view: { sketches: { [SK]: 'shown' } } });
+    overlay.sync();
+    expect(overlay.shown()).toEqual([SK]);
+    for (const m of [...lines().map((l) => l.material), ...regions().map((r) => r.material)]) expect(m.depthTest).toBe(true);
   });
 });
 

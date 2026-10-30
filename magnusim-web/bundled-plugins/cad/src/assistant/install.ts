@@ -20,7 +20,7 @@
 // once it is not), and the panel's ask undoes that group (onUndo; not_newest otherwise).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { AssistantRegistration } from '@magnusim/workspace';
+import type { AssistantRegistration, AssistantTool } from '@magnusim/workspace';
 import type { AppServices } from '../types/app';
 import type { AssistantActions, AssistantPageApi, TurnFacts } from '../types/assistant';
 import { createApprovals, createAskEach } from './approval';
@@ -64,7 +64,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   const store = createAssistantStore();
   const turns = createTurnInfo();
   const keys = createSessionKeys({ committed: () => services.doc.committed(), now: o.now });
-  const rev = createRevTracker({ doc: services.doc, bus: services.bus });
+  const rev = createRevTracker({ doc: services.doc, bus: services.bus, projectLinks: () => services.bridge.projectLinks() });
   const holds = createHoldPoints();
   // A turn the host said has ended takes no pause (it would outlive the turn: nothing ends it).
   const pause = createPause({ isOver: (id) => turns.get(id)?.state === 'ended', sameSession: (a, b) => keys.sameSession(a, b) });
@@ -96,6 +96,7 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
     askEach,
     approvals,
     pictures,
+    picturesOwed: new Set(),
     active: new Map(),
     stopped: new Set(),
     lastKey: null,
@@ -337,11 +338,14 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   // ---- one registration
   const handler = createCallHandler(rt);
   let disposed = false;
+  /** The tools as last registered (the test handle's `registered`). */
+  let registered: readonly AssistantTool[] = [];
   let waitingForVisible = false;
   const register = async (): Promise<AssistantRegistration> => {
     const offered = rt.offered;
     // Magnusim CAD (no projects, no simulation): the body tool without its simulation field.
     const tools = cadToolsFor({ projectLinks: services.bridge.projectLinks() }).filter((t) => offered.includes(t.name));
+    registered = tools;
     // The guide names only tools offered (the eval's core set leaves some out).
     const guide = guideWithout(TOOL_NAMES.filter((n) => !offered.includes(n)));
     let verdict: AssistantRegistration;
@@ -377,6 +381,9 @@ export function installAssistant(services: AppServices, o: InstallOptions = {}):
   testHandles.set(services, {
     get tools() {
       return [...rt.offered];
+    },
+    get registered() {
+      return JSON.parse(JSON.stringify(registered)) as AssistantTool[];
     },
     state: () => store.get(),
     get calls() {

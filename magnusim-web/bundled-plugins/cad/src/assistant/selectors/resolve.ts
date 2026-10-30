@@ -42,6 +42,7 @@ import { regionRows, type RegionRow } from '../sketch/regions';
 import { boxDiagonal, boxDistance, distance, dot, holeOrBoss, unionBox, unit } from './geometry';
 import { currentHandles, handlesOf, type HandleEntry, type HandleKind } from './handles';
 import { parseSelector, SelectorSyntaxError, type Filter, type KnownNames, type Sel, type SelKind, type Want } from './parse';
+import { closestName, closestWords } from '../closest';
 import { topoCacheOf, type Topo, type TopoCache } from './topo-cache';
 
 export type TopoFace = TopoResult['faces'][number];
@@ -1023,18 +1024,29 @@ function textOf(sel: Sel): string {
 /** A selector that does not read and starts with a filter (>Z, +Z, |Z, #Z, %cylinder, hole, boss, largest, smallest, radius, nearest): its scope is missing. */
 const BARE_FILTER = /^(?:[<>+|%-]|#(?![fevb][1-9])|(?:hole|boss|largest|smallest|radius|nearest)(?:\s|$))/i;
 
-/** Parse `text` for `want`, a syntax error as bad_selector with its column. */
+/** The name a selector that does not read starts with at `column` (1-based): up to its first ".", "&", ",", "(" or kind word, unquoted. */
+export function nameAt(text: string, column: number): string {
+  const rest = text.slice(Math.max(0, column - 1));
+  return rest
+    .split(/[.&,(]|\s+(?:faces|edges|vertices|face|edge|vertex|bodies|body|of)\b/i)[0]
+    .replace(/^\s*"|"\s*$/g, '')
+    .trim();
+}
+
+/** Parse `text` for `want`, a syntax error as bad_selector with its column (a name it does not know: the closest one too). */
 export function parseFor(sc: Scene, text: string, want: Want, field?: string): Sel {
   try {
     return parseSelector(text, sc.known, want);
   } catch (e) {
     if (!(e instanceof SelectorSyntaxError)) throw e;
-    const names = /no .* (starts here|is called)/.test(e.message) ? { features: sc.known.features.slice(0, 20).map((f) => f.name), bodies: sc.known.bodies.slice(0, 20).map((b) => b.name) } : null;
+    const unknownName = /no .* starts here|is called/.test(e.message);
+    const names = unknownName ? { features: sc.known.features.slice(0, 20).map((f) => f.name), bodies: sc.known.bodies.slice(0, 20).map((b) => b.name) } : null;
+    const near = unknownName ? closestName(nameAt(text, e.column), [...sc.known.features.map((f) => f.name), ...sc.known.bodies.map((b) => b.name)]) : null;
     // A filter alone ("+Z", "hole", "largest" as a face): it goes after its scope.
     const bare = want !== 'region' && want !== 'body' && want !== 'plane' && want !== 'axis' && BARE_FILTER.test(text.trim());
     const example = bare ? `${sc.known.bodies[0]?.name ?? 'Body 1'} ${want === 'edge' ? 'edges' : want === 'vertex' ? 'vertices' : 'faces'} ${text.trim()}` : '';
-    throw new ToolError('bad_selector', `${field ? `${field}: ` : ''}${e.message} (column ${e.column} of "${text}")${bare ? `: a filter goes after its scope, as in "${example}"` : ''}.`, {
-      detail: { ...(field ? { field } : {}), selector: text, column: e.column, ...(names ? { names } : {}) },
+    throw new ToolError('bad_selector', `${field ? `${field}: ` : ''}${e.message} (column ${e.column} of "${text}")${bare ? `: a filter goes after its scope, as in "${example}"` : ''}.${closestWords(near)}`, {
+      detail: { ...(field ? { field } : {}), selector: text, column: e.column, ...(names ? { names } : {}), ...(near ? { closest: near } : {}) },
       ...(bare ? { hint: `Put the body (or "all") and the kind first: "${example}"; find lists what it names.` } : {}),
     });
   }

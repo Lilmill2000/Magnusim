@@ -21,7 +21,7 @@ import { createStateStore } from '../lib/store';
 import type { AppServices } from '../types/app';
 import { ORIGIN_PLANES, type BodyId, type OriginPlaneRef, type SavedCamera, type Vec2, type Vec3 } from '../types/doc';
 import type { PickResult, SelectionItem, SelectKind } from '../types/selection';
-import type { BoxSelectEvent, CameraCallOpts, DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, SnapshotOptions, SnapshotResult, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
+import type { BoxSelectEvent, CameraCallOpts, DisplayMode, FrameBox, OverlayLayer, PlanesMode, Projection, SectionState, SnapshotOptions, SnapshotPicture, SnapshotResult, StandardView, ViewportBody, ViewportHandle, ViewportPickEvent, ViewportPointer, ViewportState, ViewportStats, ViewportTool } from '../types/viewport';
 import { bindViewport } from './bind';
 import { BvhClient } from './bvh';
 import { CameraRig, VIEW_DIRS, type CameraPose } from './camera';
@@ -208,7 +208,7 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
   // ------------------------------------------------------------ overlays and tools (P2/P3)
   // Layers: other areas' drawing (sketch geometry, regions, handles, measure
   // markers) in model coordinates, plus an html element over the canvas each.
-  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null); plain?: (on: boolean) => void; palette?: (p: MarkPalette) => void }>();
+  const layers = new Map<string, { layer: OverlayLayer; group: Group; html: HTMLElement; frame: boolean | (() => FrameBox | null); plain?: (on: boolean, picture?: SnapshotPicture) => void; palette?: (p: MarkPalette) => void }>();
   const frameListeners = new Set<() => void>();
   /** Fat lines in layers get the viewport's size, as the bodies' edges do. */
   function layerLineMats(): LineMaterial[] {
@@ -1541,17 +1541,20 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const hide = new Set(o.hide ?? []);
     const drawn = (b: BodyRec) => visibleOf(b) && !hide.has(b.id);
     const shown = order.map((id) => bodies.get(id)).filter((b): b is BodyRec => !!b && drawn(b));
-    // It frames the bodies it shows; without any, the sketches (and reference planes) it shows; else the origin planes.
+    // It frames the box asked (a sketch's curves); else the bodies it shows; without any, the
+    // sketches (and reference planes) it shows; else the origin planes.
     const box = new Box3();
-    for (const b of shown) box.union(b.data.bounds);
+    if (o.fit) box.set(new Vector3(...o.fit.min), new Vector3(...o.fit.max));
+    else for (const b of shown) box.union(b.data.bounds);
     if (box.isEmpty()) box.union(layersBox(false, SNAPSHOT_HIDDEN_LAYERS));
     if (box.isEmpty()) box.copy(origin.box());
     const sphere = box.getBoundingSphere(new Sphere());
     if (!(sphere.radius > 1e-6)) sphere.radius = 1;
     sphere.radius *= FIT_MARGIN;
-    const snapRig = snapshotRig(o.view, sphere, w, h, o.projection ?? 'orthographic');
+    const snapRig = snapshotRig(o.along ?? o.view, sphere, w, h, o.projection ?? 'orthographic');
     const display = o.display ?? 'shaded-edges';
-    snapRig.scene.copy(sceneSphere());
+    // What it frames is in its depth range too (a sketch the view hides, far along its normal).
+    snapRig.scene.copy(sceneSphere().union(sphere));
     const cam = snapRig.apply(w / h);
     const cut = o.section ? snapshotClip(o.section) : null;
     const layerShown = [...layers.values()].map((l) => [l.group, l.group.visible] as const);
@@ -1561,14 +1564,16 @@ export function createViewport(host: HTMLElement, opts: ViewportOptions = {}): V
     const target = new WebGLRenderTarget(w, h, { samples: renderer.capabilities.maxSamples >= 4 ? 4 : 0, depthBuffer: true, stencilBuffer: true });
     const pixels = new Uint8Array(w * h * 4);
     // Layers that colour by the selection or hover draw plain for the picture (addLayer's `plain`).
-    const plainLayers: ((on: boolean) => void)[] = [];
+    const plainLayers: ((on: boolean, picture?: SnapshotPicture) => void)[] = [];
+    const picture: SnapshotPicture = { sketch: o.sketch ?? null };
     // A picture is light whatever the host's theme (D1): with a dark palette live, the marks and the
     // layers it shows swap to LIGHT here and back in the finally, in this task (no frame shows LIGHT).
     const swap = !samePalette(live, LIGHT);
     const paletteLayers: ((p: MarkPalette) => void)[] = [];
-    const plainCall = (fn: (on: boolean) => void, on: boolean) => {
+    const plainCall = (fn: (on: boolean, picture?: SnapshotPicture) => void, on: boolean) => {
       try {
-        fn(on);
+        if (on) fn(on, { ...picture });
+        else fn(on);
       } catch (err) {
         console.error('[cad] layer plain failed', err);
       }

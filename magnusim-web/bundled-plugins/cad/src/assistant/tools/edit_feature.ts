@@ -14,6 +14,8 @@
 //     orientation, ruled, along, fromEnd, a pattern's symmetric and mode...) go the same way, a
 //     row's value one of the field's words; the feature with every row applied must be complete
 //     by its type's own check (a method that needs a pick it has not got is refused).
+//   - Magnusim CAD keeps an Enclosure made in Magnusim as it is (features/enclosure/kept.ts): its
+//     values are refused with the read-only panel's words; rename, suppress and move work.
 //   - A sketch's dimension values (set rows naming its dimension ids) are checked headless first and
 //     go through sketch mode, which solves the stored geometry with them (sketch/dims.ts); the answer
 //     says when a change turned a sketch over (`flipped`).
@@ -34,6 +36,8 @@ import { bodyWords } from '../judge';
 import { runEdit, type EditCtx, type EditPlan, type EditTool } from '../step';
 import { applyDimensions, planDimensions, type DimensionEdit } from '../sketch/dims';
 import { flippedSketches } from '../sketch/flip';
+import { closestName, closestWords } from '../closest';
+import { enclosureKept, KEPT_WORDS } from '../../features/enclosure/kept';
 
 interface SetRow {
   field: string;
@@ -97,7 +101,10 @@ function moveIndex(features: readonly Feature[], f: Feature, move: string, findN
   const r = /^(before|after)\s+(.+)$/i.exec(m);
   if (!r) throw new ToolError('bad_input', `move: "", "end", "before <feature>" or "after <feature>", not "${m}".`, { detail: { field: 'move' } });
   const other = findName(r[2]);
-  if (!other) throw new ToolError('not_found', `move: no feature is called "${r[2].trim()}". Features: ${features.map((g) => g.name).slice(0, 30).join(', ')}.`, { detail: { field: 'move' } });
+  if (!other) {
+    const near = closestName(r[2], features.map((g) => g.name));
+    throw new ToolError('not_found', `move: no feature is called "${r[2].trim()}".${closestWords(near)} Features: ${features.map((g) => g.name).slice(0, 30).join(', ')}.`, { detail: { field: 'move', ...(near ? { closest: near } : {}) } });
+  }
   if (other.id === f.id) throw new ToolError('bad_input', `move: ${f.name} cannot move ${r[1].toLowerCase()} itself.`, { detail: { field: 'move' } });
   const at = features.indexOf(other);
   const before = r[1].toLowerCase() === 'before';
@@ -130,11 +137,14 @@ const editFeature: EditTool<Plan> = {
     const f = featureByName(s, str(ctx.input.feature));
     if (!f) {
       const names = s.doc.features.map((g) => g.name);
-      throw new ToolError('not_found', `No feature is called "${str(ctx.input.feature)}". Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, {
-        detail: { field: 'feature', names: names.slice(0, 30) },
+      const near = closestName(str(ctx.input.feature), names);
+      throw new ToolError('not_found', `No feature is called "${str(ctx.input.feature)}".${closestWords(near)} Features: ${names.length ? names.slice(0, 30).join(', ') : 'none yet'}.`, {
+        detail: { field: 'feature', names: names.slice(0, 30), ...(near ? { closest: near } : {}) },
       });
     }
     const rows = (Array.isArray(ctx.input.set) ? ctx.input.set : []) as SetRow[];
+    // Magnusim CAD keeps an Enclosure made in Magnusim as it is: its panel is read-only, and so are its values here.
+    if (rows.length && enclosureKept(services, f)) throw new ToolError('bad_input', `set: ${f.name}: ${KEPT_WORDS} rename_to, suppress and move work.`, { detail: { field: 'set' } });
     const set: Plan['set'] = [];
     // A sketch's dimensions: checked headless now, written through sketch mode (sketch/dims.ts).
     const dims = rows.length && f.type === 'sketch' ? await planDimensions(ctx, f, rows.map((r) => ({ field: str(r?.field), value: str(r?.value) }))) : null;

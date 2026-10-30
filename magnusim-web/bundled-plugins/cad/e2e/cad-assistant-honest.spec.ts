@@ -713,15 +713,10 @@ test('cad:assistant-honest-keyhole a plate with a keyhole extruded as "all" keep
   const t = await startTurn(request, host, { text: 'A 60 x 40 x 5 plate with a keyhole.', tab });
   expect((await t.ended(STEP_MS * 3)).turn.state).toBe('done');
   const [, afterSketch, afterExtrude] = chats(host).slice(before);
-  // The sketch's answer: the plate (one hole) and the keyhole's three pieces, each in the hole.
+  // The sketch's answer: the plate (one hole) and the keyhole's three pieces.
   const [sk] = resultsIn(afterSketch);
   expect(sk).toMatchObject({ tool: 'cad__sketch', ok: true });
-  expect((sk.data!.regions as { holes: number; depth: number }[]).map((r) => [r.holes, r.depth])).toEqual([
-    [1, 0],
-    [0, 1],
-    [0, 1],
-    [0, 1],
-  ]);
+  expect((sk.data!.regions as { holes: number }[]).map((r) => r.holes)).toEqual([1, 0, 0, 0]);
   const [ex] = resultsIn(afterExtrude);
   expect(ex).toMatchObject({ tool: 'cad__extrude', ok: true, data: { feature: { name: 'Plate', state: 'ok' } } });
   // What the person sees: the plate less the keyhole (a circle r 5 and a 4 x 12 slot overlapping it).
@@ -820,7 +815,7 @@ test('cad:assistant-honest-rolled-back with the rollback bar above the end the e
 
   const before = chats(host).length;
   host.fake.reply(
-    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '' } }] },
+    { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
     { tools: [{ name: 'cad__set_params', input: { set: [row('w', '40 mm')], remove: [] } }] },
     { text: 'w is set.' },
   );

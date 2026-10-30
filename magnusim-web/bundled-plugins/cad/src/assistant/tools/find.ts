@@ -57,7 +57,9 @@ export type FindRow = {
 
 /** How long the matches stay lit in the person's view. */
 export const FLASH_MS = 1500;
-export const LIMIT_MAX = 50;
+/** Rows by default, and at most (more counts the rest). */
+export const LIMIT_DEFAULT = 10;
+export const LIMIT_MAX = 25;
 
 const ROLE_WORD = (role: string) => (role === 'm' ? 'mirror' : /^i-?\d/.test(role) ? 'copy' : role);
 
@@ -216,7 +218,7 @@ export const tool: ToolImpl = {
     const query = typeof ctx.input.query === 'string' ? ctx.input.query.trim() : '';
     if (!query) throw new ToolError('bad_input', 'query must be a selector (help selectors), not "".', { detail: { field: 'query' } });
     const raw = Number(ctx.input.limit);
-    const limit = Number.isFinite(raw) ? Math.min(LIMIT_MAX, Math.max(1, Math.floor(raw))) : 20;
+    const limit = Number.isFinite(raw) ? Math.min(LIMIT_MAX, Math.max(1, Math.floor(raw))) : LIMIT_DEFAULT;
     await heartbeat(ctx, ctx.services.doc.settled(ctx.signal), 'Waiting for the rebuild');
     ctx.checkAbort();
     return withScene(ctx, {}, async (sc) => {

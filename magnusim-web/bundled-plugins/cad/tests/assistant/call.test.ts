@@ -4,7 +4,7 @@
 //     not_ready "not in this build yet", with its reason, hint and detail, and help features marks
 //     its row; on a host without turn events the hint is in the message;
 //   - every reply carries rev; a call's key, tool and outcome go to the ledger (__CAD__.assistant.calls)
-//     and the 'assistant:call' events;
+//     and the 'assistant:call' events; a step's edits told their place get one picture, on the last;
 //   - a read waits for the kernel to start (a sign of life every 5 s) and answers not_ready after 30 s;
 //   - the chip's phase: thinking while the turn runs, working during a call, ended when it ended
 //     (until the next change of the Part, or 120 s), idle; on a host without turn events, the chip
@@ -15,13 +15,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { READ_WAIT_MS } from '../../src/assistant/busy';
 import { createCallHandler, isBuilt } from '../../src/assistant/call';
 import { HINTS } from '../../src/assistant/errors';
+import { PICTURE_LATER } from '../../src/assistant/pictures';
 import { runtimeOf } from '../../src/assistant/runtime';
 import { ENDED_MS, LINGER_MS } from '../../src/assistant/state';
 import { TOOL_NAMES } from '../../src/assistant/schemas';
 import * as BUILT from '../../src/assistant/tools';
+import { setViewRaster } from '../../src/assistant/view';
 import type { ToolImpl } from '../../src/types/assistant';
 import { FakeKernel } from '../doc/fake-kernel';
 import { assistantHarness, type AssistantHarness, type HarnessOptions } from './harness';
+import { call as stubCall, fakeRaster, fakeViewport, placesOf, STUBS, type Answer } from './picture-fakes';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -110,6 +113,42 @@ describe('the reply and the ledger', () => {
       { turn: '', call: 'c-2', tool: 'help', phase: 'start' },
       { turn: '', call: 'c-2', tool: 'help', phase: 'end', ok: false },
     ]);
+  });
+
+  it("a step of 5 extrudes told editsLeftInStep 4..0: one picture, on the 5th; the first 4 say picture: see this step's last edit; reads between them change nothing; without the place, 5 pictures as before", async () => {
+    h = await start();
+    const fv = fakeViewport(h);
+    fakeRaster();
+    try {
+      const rt = runtimeOf(h.services)!;
+      const run = async (tools: string[], turn: string, place: boolean) => {
+        const places = placesOf(tools);
+        const out: Answer[] = [];
+        for (const [i, tool] of tools.entries()) out.push(await stubCall(h!, tool, turn, STUBS, place ? places[i] : {}));
+        return out;
+      };
+      const images = (rs: Answer[]) => rs.map((r) => (r.ok ? (r.result.images?.length ?? 0) : -1));
+      const CAPTION = expect.stringMatching(/^Picture: iso view of the Part/);
+      const FIVE = ['extrude', 'extrude', 'extrude', 'extrude', 'extrude'];
+      expect(placesOf(FIVE).map((p) => p.editsLeftInStep)).toEqual([4, 3, 2, 1, 0]);
+      const step = await run(FIVE, 't-step', true);
+      expect(images(step)).toEqual([0, 0, 0, 0, 1]);
+      expect(step.map((r) => r.ok && r.result.data.picture)).toEqual([...Array(4).fill(PICTURE_LATER), CAPTION]);
+      expect(PICTURE_LATER).toBe("see this step's last edit");
+      expect(fv.shots).toHaveLength(1);
+      expect(rt.calls.slice(-5).map((c) => c.images ?? 0)).toEqual([0, 0, 0, 0, 1]);
+      // Reads between the edits: still one picture, on the last edit.
+      const mixed = await run(['extrude', 'get_model', 'extrude', 'find', 'extrude', 'measure'], 't-mixed', true);
+      expect(images(mixed)).toEqual([0, 0, 0, 0, 1, 0]);
+      expect(mixed.map((r) => r.ok && r.result.data.picture)).toEqual([PICTURE_LATER, undefined, PICTURE_LATER, undefined, CAPTION, undefined]);
+      expect(fv.shots).toHaveLength(2);
+      // A host that says no place: each extrude gets its own.
+      const each = await run(FIVE, 't-each', false);
+      expect(images(each)).toEqual([1, 1, 1, 1, 1]);
+      expect(fv.shots).toHaveLength(7);
+    } finally {
+      setViewRaster(null);
+    }
   });
 
   it('an aborted call answers busy stopped', async () => {

@@ -127,6 +127,8 @@ export interface TurnFacts {
   end: { state: AssistantTurnEnd; reason: string } | null;
   /** The review round it is in (the host's turn events), absent before the first. */
   review?: { round: number; of: number };
+  /** The conversation it runs in (AssistantTurn.conversation, unreleased 1.9), or null when the host names none. */
+  conversation: string | null;
 }
 
 /** Reply budgets for one call (bytes of `data` as JSON), by turn kind (CAD tools spec §3.1). */

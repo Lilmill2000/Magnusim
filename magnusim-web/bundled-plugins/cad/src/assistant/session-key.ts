@@ -11,6 +11,8 @@
 //                 the same for every call on that connection, which may stay open as long as
 //                 the app runs. Its calls are grouped by the same rules as ext:<n>, per
 //                 connection: mcp:<session> first, then mcp:<session>#2, #3, ...
+// "What the person changed" is kept per conversation when the call's turn names its conversation
+// (TurnFacts.conversation, turn-info.ts), else per key as above.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { CadDoc } from '../types/doc';

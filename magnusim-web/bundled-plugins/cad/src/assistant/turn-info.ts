@@ -1,6 +1,7 @@
 // What the host tells this page of the Assistant's turns bound to its tab (ws.assistant.onTurn,
 // CAD tools spec H3): each turn's title, whether it runs on a local server, its model's context
-// and image reading, what it used, its review round and how it ended, kept per turn id. And the reply budgets of a
+// and image reading, what it used, its review round, its conversation and how it ended, kept per
+// turn id. And the reply budgets of a
 // call (§3.1): smaller on a local turn; external calls (no turn) and hosts without turn events
 // count as cloud.
 // Owner: ASSISTANT.
@@ -54,7 +55,17 @@ export function factsOf(t: AssistantTurn): TurnFacts {
     used: { steps: num(u.steps), stepsCap: num(u.stepsCap), changes: num(u.changes), changesCap: num(u.changesCap), usd: num(u.usd), usdCap: num(u.usdCap) },
     end: end && ['done', 'stopped', 'failed', 'capped'].includes(end.state) ? { state: end.state, reason: String(end.reason ?? '') } : null,
     ...reviewOf(t.review),
+    conversation: conversationOf(t),
   };
+}
+
+/**
+ * The conversation a turn runs in: AssistantTurn.conversation, the same for every turn of one chat
+ * (unreleased 1.9, not in the SDK's types yet: read defensively), or null when the host names none.
+ */
+export function conversationOf(t: AssistantTurn): string | null {
+  const c = (t as { conversation?: unknown }).conversation;
+  return typeof c === 'string' && c.trim() ? c.trim() : null;
 }
 
 /** A turn event's review round, kept only when it reads as one (1 <= round <= of). */

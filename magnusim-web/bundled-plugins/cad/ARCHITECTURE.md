@@ -448,6 +448,21 @@ with the host once for the page's life, and its chip goes in the dock.
   the Assistant's `body.simulation` field (`cadToolsFor`, `parityFor`) are not
   there, and a call that still asks for it is refused in words. The stored
   field stays, so a design opened later in Magnusim keeps its choice.
+  The same flag leaves out every other project and simulation item there
+  (Daniel 2026-10-29): the Enclosure command (CFD PREP; `enclosureModule.install`
+  registers none, `keymapFor(false)` and the Part's keybinds leave out the
+  keymap entry marked `projects`, so a key stored for it in Magnusim is inert
+  there and free for another command with no conflict, and commands.json's
+  `"projects": true` keeps it out of that app's Settings), Combine's Keep-tools-on for an Enclosure's
+  body, the volume chip's Enclosure-first order (`cfdFirst`), the Banana's
+  "or the simulation", the import panel's "From the project" row, and the
+  Assistant's `workspace.send_to_simulation`, `direct` kind `enclosure` with its
+  fields, and their words in the schemas (`cadToolsFor`), help (`helpFor`),
+  get_model and the rev words. A missing stored file is "not with the Part"
+  (`FeatureFiles.where`). An Enclosure made in Magnusim is kept as it is
+  (`features/enclosure/kept.ts`): built, read-only panel, edit_feature refuses
+  its values, get_model gives no inputs. Magnusim's schemas, help and prefix are
+  byte for byte as before (tests/assistant/edition-no-projects.test.ts).
 - **View state** (`CadView`: rollback index, hidden bodies, expanded tree
   nodes, the origin planes' mode and the camera) is saved but not undoable.
   The viewport's binding puts the planes mode back when the Part is read and
@@ -1907,15 +1922,18 @@ with the host once for the page's life, and its chip goes in the dock.
   in use; `canRun(id)` asks without running. Shortcuts are mode-aware: a key runs
   the newest command of the current mode with that shortcut (`mode: 'any'`
   matches both), and passes to older bindings when none matches (the shell's
-  Delete and Escape). A sketch tool's command pressed by its key while its tool,
-  or (for the flyout's own command, its bar command: `barIdOf`) a variant of its
-  toolbar flyout, is in hand does not run again: it leaves the tool
-  (`bindCommandShortcuts`' `again` hook, `toolKeyAgain` and
-  `isToolKeyAgain` in `src/app/keyboard.ts`, `SketchModeApi.leaveTool`: Escape
-  until the tool is gone; Daniel 2026-10-28), so the person's own keybind does it
-  too; a variant's own key with another variant of its flyout in hand switches
-  to it; a held key's repeats of a sketch tool's command do nothing; a toolbar
-  click is unchanged. Fit and the standard views work in both modes. In sketch
+  Delete and Escape). A sketch tool's command pressed by its key while its own
+  tool is in hand does not run again: it leaves the tool (`bindCommandShortcuts`'
+  `again` hook, `toolKeyAgain` and `isToolKeyAgain` in `src/app/keyboard.ts`,
+  `SketchModeApi.leaveTool`: Escape until the tool is gone; Daniel 2026-10-28),
+  so the person's own keybind does it too. Any other tool's key switches to its
+  tool: a flyout's main key with another variant in hand takes up the main
+  tool (R with Center rectangle in hand: Rectangle; R again leaves it; Daniel
+  2026-10-29), and a variant's own key takes up the variant; a held key's
+  repeats of a sketch tool's command do nothing. A toolbar click (a button, a
+  flyout's row, a More menu's item) on the tool in hand does the same as its key
+  (`runClicked` in `src/ui/Toolbar.tsx`; Daniel 2026-10-29); a click on another
+  tool switches to it. Fit and the standard views work in both modes. In sketch
   mode EDIT shows `sketch.undo` / `sketch.redo`. Delete with only faces selected
   runs `modify.delete-faces` when it is registered and enabled.
 - **Viewport.** `addLayer` (three.js group + html element over the canvas;

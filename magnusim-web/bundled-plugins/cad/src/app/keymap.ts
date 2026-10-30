@@ -42,6 +42,12 @@ export interface KeymapEntry {
   keys: readonly string[];
   /** A keyboard-only action: no command of the registry runs it (its own handler binds the keys). */
   keyOnly?: true;
+  /**
+   * Only where the host has projects (Magnusim): Magnusim CAD (the welcome's projectLinks false) has
+   * no such command, and neither the Part's keybinds (keymapFor) nor its Settings list it
+   * (commands.json carries "projects": true, which that app's Settings leaves out).
+   */
+  projects?: true;
 }
 
 /** Keys the app, the browser or the system keeps, under the words that say what they do. */
@@ -140,7 +146,8 @@ export const KEYMAP: readonly KeymapEntry[] = Object.freeze([
   e('construct.plane', 'Plane', 'Construct', 'model'),
   e('construct.axis', 'Axis', 'Construct', 'model'),
   e('construct.point', 'Point', 'Construct', 'model'),
-  e('cfd.enclosure', 'Enclosure', 'CFD prep', 'model'),
+  // CFD PREP: Magnusim's alone (Magnusim CAD has no simulation, and no Enclosure command).
+  Object.freeze({ ...e('cfd.enclosure', 'Enclosure', 'CFD prep', 'model'), projects: true as const }),
   e('inspect.measure', 'Measure', 'Inspect', 'model'),
   e('inspect.find', 'Find', 'Inspect', 'model'),
   e('inspect.mass', 'Mass properties', 'Inspect', 'model'),
@@ -215,6 +222,10 @@ const BY_ID: ReadonlyMap<string, KeymapEntry> = new Map(KEYMAP.map((x) => [x.id,
 
 /** The registry's entry for an id, or null. */
 export const keymapEntry = (id: string): KeymapEntry | null => BY_ID.get(id) ?? null;
+
+const WITHOUT_PROJECTS: readonly KeymapEntry[] = Object.freeze(KEYMAP.filter((x) => !x.projects));
+/** The registry on this host: every entry where it has projects (Magnusim), none of a project's in Magnusim CAD. */
+export const keymapFor = (projectLinks: boolean): readonly KeymapEntry[] => (projectLinks ? KEYMAP : WITHOUT_PROJECTS);
 
 /**
  * A command whose tooltip shows another one's key while it has none of its own: Finish sketch's
@@ -605,15 +616,18 @@ export function isAssistantPress(e: KeyLike, keys: readonly string[] | null): bo
 /** Whether two contexts meet (the same one, or either is 'any'). */
 export const contextsMeet = (a: KeyContext, b: KeyContext): boolean => a === b || a === 'any' || b === 'any';
 
-/** Every pair of entries whose keys conflict, under `keysOf` (the defaults when left out). */
-export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultKeys): { combo: string; ids: [string, string] }[] {
+/**
+ * Every pair of entries whose keys conflict, under `keysOf` (the defaults when left out), among
+ * `entries` (the registry; keymapFor(false) in Magnusim CAD, where a project's command is no one's).
+ */
+export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultKeys, entries: readonly KeymapEntry[] = KEYMAP): { combo: string; ids: [string, string] }[] {
   const out: { combo: string; ids: [string, string] }[] = [];
-  for (let i = 0; i < KEYMAP.length; i++) {
-    const a = KEYMAP[i];
+  for (let i = 0; i < entries.length; i++) {
+    const a = entries[i];
     const ka = keysOf(a.id);
     if (!ka.length) continue;
-    for (let j = i + 1; j < KEYMAP.length; j++) {
-      const b = KEYMAP[j];
+    for (let j = i + 1; j < entries.length; j++) {
+      const b = entries[j];
       if (!contextsMeet(a.context, b.context)) continue;
       for (const c of keysOf(b.id)) if (ka.includes(c)) out.push({ combo: c, ids: [a.id, b.id] });
     }
@@ -625,16 +639,16 @@ export function conflictsIn(keysOf: (id: string) => readonly string[] = defaultK
  * Every entry whose keys (under `keysOf`) take a key no keybind may have (the app's, the browser's
  * and the system's reserved ones, CAD's built-in Escape) or one a press never gives; `by` says why.
  * `assistant`: the Assistant panel's keys the person chose (a stored keybind may have one of them:
- * it stays stored, but the press is the app's).
+ * it stays stored, but the press is the app's). `entries`: as conflictsIn's.
  */
-export function appClashesIn(keysOf: (id: string) => readonly string[] = defaultKeys, assistant: readonly string[] | null = null): { combo: string; id: string; by: string }[] {
-  return KEYMAP.flatMap((x) => keysOf(x.id).flatMap((c) => (refusal(c, assistant) ? [{ combo: c, id: x.id, by: refusal(c, assistant) }] : [])));
+export function appClashesIn(keysOf: (id: string) => readonly string[] = defaultKeys, assistant: readonly string[] | null = null, entries: readonly KeymapEntry[] = KEYMAP): { combo: string; id: string; by: string }[] {
+  return entries.flatMap((x) => keysOf(x.id).flatMap((c) => (refusal(c, assistant) ? [{ combo: c, id: x.id, by: refusal(c, assistant) }] : [])));
 }
 
 // ------------------------------------------------------------------ workspace/commands.json
 
 /** The file the build writes (workspace/commands.json): the registry with its default keys. */
 export function commandsJson(): string {
-  const commands = KEYMAP.map((x) => ({ id: x.id, label: x.label, group: x.group, context: x.context, keys: [...x.keys] }));
+  const commands = KEYMAP.map((x) => ({ id: x.id, label: x.label, group: x.group, context: x.context, keys: [...x.keys], ...(x.projects ? { projects: true } : {}) }));
   return `${JSON.stringify({ version: 1, contexts: CONTEXTS, commands }, null, 2)}\n`;
 }
