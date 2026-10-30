@@ -1,11 +1,11 @@
 // @vitest-environment node
 // The turns the host tells this page of (turn-info.ts, CAD tools spec H3): facts kept per turn id
-// (title, local, context, images, used, end); an ended turn stays ended; the newest 16 ended turns
-// are kept; listeners hear each event; odd or missing fields read as unknown.
+// (title, local, context, images, used, conversation, end); an ended turn stays ended; the newest
+// 16 ended turns are kept; listeners hear each event; odd or missing fields read as unknown.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { AssistantTurn } from '@magnusim/workspace';
 import { describe, expect, it } from 'vitest';
-import { createTurnInfo, factsOf } from '../../src/assistant/turn-info';
+import { conversationOf, createTurnInfo, factsOf } from '../../src/assistant/turn-info';
 
 const turn = (over: Partial<AssistantTurn> & { id: string }): AssistantTurn => ({
   state: 'running',
@@ -61,9 +61,19 @@ describe('turn info', () => {
     }
   });
 
+  it("keeps the conversation the host names on a turn (trimmed); a host that names none, or not a string, gives null", () => {
+    const t = createTurnInfo();
+    t.take({ ...turn({ id: 't-c' }), conversation: 'conv-1' } as AssistantTurn);
+    expect(t.forKey('turn:t-c')?.conversation).toBe('conv-1');
+    const of = (v: unknown) => conversationOf({ ...turn({ id: 't-c' }), conversation: v } as unknown as AssistantTurn);
+    expect(of(' conv-2 ')).toBe('conv-2');
+    expect(conversationOf(turn({ id: 't-c' }))).toBeNull();
+    for (const v of [undefined, null, '', '   ', 7, {}]) expect(of(v), String(v)).toBeNull();
+  });
+
   it('reads odd or missing fields as unknown', () => {
     const f = factsOf({ id: 't-x', state: 'ended', title: 7, used: null, contextTokens: 'big', images: 'yes', end: { state: 'gone' } } as unknown as AssistantTurn);
-    expect(f).toEqual({ id: 't-x', state: 'ended', title: '', local: false, contextTokens: null, images: null, used: { steps: 0, stepsCap: 0, changes: 0, changesCap: 0, usd: 0, usdCap: 0 }, end: null });
+    expect(f).toEqual({ id: 't-x', state: 'ended', title: '', local: false, contextTokens: null, images: null, used: { steps: 0, stepsCap: 0, changes: 0, changesCap: 0, usd: 0, usdCap: 0 }, end: null, conversation: null });
     const t = createTurnInfo();
     t.take({} as AssistantTurn);
     expect(t.all()).toEqual([]);

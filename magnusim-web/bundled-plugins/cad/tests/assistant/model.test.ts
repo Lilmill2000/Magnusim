@@ -14,7 +14,7 @@
 //     box and bounds), its input form for the sketch tool; a name not found lists the names and the
 //     closest one (in every tool's feature or sketch name, and a selector's);
 //   - rev unchanged across a live draft, +1 per commit; what the person changed told once, the
-//     person's undo of the Assistant's steps with it; with the host's conversation, a sketch drawn
+//     person's undo of the Assistant's steps with it; with the turn's conversation, a sketch drawn
 //     between two messages told at the next request's first call; the person's open panel in words.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
@@ -359,25 +359,26 @@ describe("rev and the person's changes", () => {
   );
 
   it(
-    "a host that names the conversation: the next request's first call tells the sketch the person drew between two messages; a host that names none starts each request afresh",
+    "a host that names each turn's conversation: the next request's first call tells the sketch the person drew between two messages; a turn that names none starts afresh",
     async () => {
       h = await assistantHarness();
       await plate(h);
-      const chat = { conversation: 'conv-1' };
-      expect((await h.ok('get_model', BRIEF, { turn: 't-r1', ...chat })).data.user_changes).toBeUndefined();
+      for (const id of ['t-r1', 't-r2', 't-r4']) h.fake.emitTurn({ id, title: 'Build', conversation: 'conv-1' });
+      h.fake.emitTurn({ id: 't-r3', title: 'Build' });
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r1' })).data.user_changes).toBeUndefined();
       // The person draws a sketch beside the plate between two messages.
       const rect = rectangle(10, 30, 40, -15);
       const sample = await h.add('sketch', { points: rect.points, entities: rect.entities });
       expect(h.doc.rename(sample, 'Sample "S" Sketch')).toMatchObject({ ok: true });
-      const next = await h.ok('get_model', BRIEF, { turn: 't-r2', ...chat });
+      const next = await h.ok('get_model', BRIEF, { turn: 't-r2' });
       expect(next.data.user_changes).toEqual(['added Sample "S" Sketch (sketch)']);
-      expect((await h.ok('get_model', BRIEF, { turn: 't-r2', ...chat })).data.user_changes).toBeUndefined();
-      // A request whose host names no conversation starts at its own first call: nothing told.
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r2' })).data.user_changes).toBeUndefined();
+      // A request whose turn names no conversation starts at its own first call: nothing told.
       const rect2 = rectangle(5, 5, -50, 0);
       await h.add('sketch', { points: rect2.points, entities: rect2.entities });
       expect((await h.ok('get_model', BRIEF, { turn: 't-r3' })).data.user_changes).toBeUndefined();
       // The chat's next request still tells it (its baseline is its own last call).
-      expect((await h.ok('get_model', BRIEF, { turn: 't-r4', ...chat })).data.user_changes).toEqual(['added Sketch 2 (sketch)']);
+      expect((await h.ok('get_model', BRIEF, { turn: 't-r4' })).data.user_changes).toEqual(['added Sketch 2 (sketch)']);
     },
     REAL_KERNEL_MS,
   );

@@ -71,9 +71,9 @@ export interface AssistantHarness {
   /** Sketch mode (with `sketchMode`), else null. */
   mode: SketchMode | null;
   /** Run a tool as the bridge would (turn "" is an outside client's call). */
-  call(tool: string, input: Record<string, unknown>, o?: { turn?: string; signal?: AbortSignal; conversation?: string }): Promise<FakeOutcome>;
-  /** A call that must answer ok: its result (`conversation`: a host that names it). */
-  ok(tool: string, input: Record<string, unknown>, o?: { turn?: string; conversation?: string }): Promise<{ text: string; data: Record<string, unknown>; summary: string }>;
+  call(tool: string, input: Record<string, unknown>, o?: { turn?: string; signal?: AbortSignal }): Promise<FakeOutcome>;
+  /** A call that must answer ok: its result. */
+  ok(tool: string, input: Record<string, unknown>, o?: { turn?: string }): Promise<{ text: string; data: Record<string, unknown>; summary: string }>;
   /** Add a feature as the person's panel would (one undo step) and wait for its rebuild. */
   add(type: Feature['type'], init: Record<string, unknown>): Promise<string>;
   /** Wait until the rebuild caught up with the model. */
@@ -149,9 +149,9 @@ export async function assistantHarness(o: HarnessOptions = {}): Promise<Assistan
     ws,
     fake,
     mode,
-    call: (tool, input, c = {}) => fake.invoke(tool, input, { turn: c.turn ?? 't-test', signal: c.signal, conversation: c.conversation }),
+    call: (tool, input, c = {}) => fake.invoke(tool, input, { turn: c.turn ?? 't-test', signal: c.signal }),
     async ok(tool, input, c = {}) {
-      const r = await fake.invoke(tool, input, { turn: c.turn ?? 't-test', conversation: c.conversation });
+      const r = await fake.invoke(tool, input, { turn: c.turn ?? 't-test' });
       if (!r.ok) throw new Error(`${tool} failed: ${JSON.stringify(r.error)}`);
       return r.result as { text: string; data: Record<string, unknown>; summary: string };
     },

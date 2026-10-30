@@ -4,13 +4,11 @@
 // keep coming within 5 minutes and the person changed nothing between them; a change by the person
 // or 5 idle minutes starts a new one; "mcp:<session>" turns key by their session, by the same
 // rules (#2, #3, …); a new page starts again; keys that went up only because the person changed
-// the Part are one session for the pause (sameSession), 5 idle minutes are not. The conversation
-// a host names on a call (conversationOf), else none. And the reply budgets by key (turn-info.ts):
-// local turns get the smaller ones.
+// the Part are one session for the pause (sameSession), 5 idle minutes are not. And the reply
+// budgets by key (turn-info.ts): local turns get the smaller ones.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import type { AssistantCall } from '@magnusim/workspace';
-import { conversationOf, createSessionKeys, EXTERNAL_IDLE_MS, keyKind } from '../../src/assistant/session-key';
+import { createSessionKeys, EXTERNAL_IDLE_MS, keyKind } from '../../src/assistant/session-key';
 import { BUDGETS, createTurnInfo } from '../../src/assistant/turn-info';
 import type { CadDoc } from '../../src/types/doc';
 
@@ -121,16 +119,6 @@ describe('session keys', () => {
     expect(k.sameSession('mcp:m-1#3', 'ext:1')).toBe(false);
     expect(call('')).toBe('ext:1');
     expect(keyKind('mcp:m-1#3')).toBe('external');
-  });
-});
-
-describe("a call's conversation", () => {
-  it('is the one the host names on the call (trimmed); a host that names none, or not a string, gives null', () => {
-    const call = (o: Record<string, unknown>) => ({ call: 'c-1', turn: 't-1', tool: 'get_model', input: {}, signal: new AbortController().signal, progress() {}, ...o }) as unknown as AssistantCall;
-    expect(conversationOf(call({ conversation: 'conv-1' }))).toBe('conv-1');
-    expect(conversationOf(call({ conversation: ' conv-2 ' }))).toBe('conv-2');
-    expect(conversationOf(call({}))).toBeNull();
-    for (const v of [undefined, null, '', '   ', 7, {}]) expect(conversationOf(call({ conversation: v })), String(v)).toBeNull();
   });
 });
 

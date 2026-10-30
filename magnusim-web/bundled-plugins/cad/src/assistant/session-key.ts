@@ -11,11 +11,10 @@
 //                 the same for every call on that connection, which may stay open as long as
 //                 the app runs. Its calls are grouped by the same rules as ext:<n>, per
 //                 connection: mcp:<session> first, then mcp:<session>#2, #3, ...
-// "What the person changed" is kept per conversation when the host names the call's conversation
-// (conversationOf), else per key as above.
+// "What the person changed" is kept per conversation when the call's turn names its conversation
+// (TurnFacts.conversation, turn-info.ts), else per key as above.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { AssistantCall } from '@magnusim/workspace';
 import type { CadDoc } from '../types/doc';
 
 /** An outside session ends after this long without a call. */
@@ -104,13 +103,4 @@ export function createSessionKeys(o: { now?: () => number; committed: () => CadD
 /** The key's kind, for labels ("Assistant (other app): ..."). */
 export function keyKind(key: string): 'turn' | 'external' {
   return key.startsWith('turn:') ? 'turn' : 'external';
-}
-
-/**
- * The conversation the host says a call belongs to: `conversation`, the same for every request of
- * one chat (not in the SDK's AssistantCall yet: read defensively), or null when it names none.
- */
-export function conversationOf(call: AssistantCall): string | null {
-  const c = (call as { conversation?: unknown }).conversation;
-  return typeof c === 'string' && c.trim() ? c.trim() : null;
 }

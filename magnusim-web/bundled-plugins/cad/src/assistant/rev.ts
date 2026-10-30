@@ -5,9 +5,10 @@
 // so what the person did while it ran (an edit waits for them) is told in that answer; the
 // call's own kept step (own(): from its mark to the model after it) never counts. Reported once,
 // with the person's undo or redo of the Assistant's own steps (one that came while the call ran
-// too). A call whose host names its conversation shares that conversation's baseline with every
-// request of it, so a new request's first call tells what the person did between two messages;
-// without one, each request starts from its own first call.
+// too). A call whose turn names its conversation (TurnFacts.conversation, the host's
+// AssistantTurn.conversation) shares that conversation's baseline with every request of it, so a
+// new request's first call tells what the person did between two messages; without one, each
+// request starts from its own first call.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { BodyId, CadDoc, Feature } from '../types/doc';
@@ -25,8 +26,8 @@ export interface RevTracker {
   current(): number;
   /**
    * A call under `key` starts: a key's first call takes the model now as its baseline. With a
-   * `conversation` (the host's, when it names one) the key shares that conversation's baseline,
-   * taken at the conversation's first call.
+   * `conversation` (its turn's, when the host names one) the key shares that conversation's
+   * baseline, taken at the conversation's first call.
    */
   begin(key: string, conversation?: string | null): void;
   /** The call under `key` kept a step of its own, from `before` to `after` (never told as the person's). */
