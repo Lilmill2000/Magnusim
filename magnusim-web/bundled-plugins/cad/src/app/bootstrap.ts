@@ -101,7 +101,7 @@ export async function bootstrap(root: HTMLElement): Promise<AppServices | null> 
     keyboard,
     (message) => bridge.toast(message, 'info'),
     () => services.mode.get().mode,
-    (c) => toolKeyAgain(services.apis.get().sketch, c, commands.all()),
+    (c) => toolKeyAgain(services.apis.get().sketch, c),
   );
   // The host's appearance (unreleased; light on an older host): the 3D view's palette and the
   // toolbar's icon scale, now and on each change, before the layout mounts the view.

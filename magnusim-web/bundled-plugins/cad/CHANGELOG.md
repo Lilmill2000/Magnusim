@@ -150,12 +150,12 @@ is changed with the Part open, from any Magnusim window:
 - A tool's own key pressed again puts the tool down: L, draw a line, L, and the
   Line tool is gone (what you drew stays; a line or shape you had started is
   dropped, as Escape drops it). It is the key you gave the tool, if you changed
-  it; R also puts down Center rectangle and the other rectangles, and so on for
-  each toolbar group. Escape still steps back one step at a time (it ends a line
-  chain and keeps the Line tool). A key typed into a value box stays there. A
-  key you gave one of a group's other tools (Centerline, say) takes that tool
-  up even while another tool of its group is in hand, as its row in the
-  group's list says.
+  it. R with Center rectangle (or another rectangle) in hand takes up the
+  Rectangle, and R again puts it down; the same for each toolbar group's key.
+  Escape still steps back one step at a time (it ends a line chain and keeps
+  the Line tool). A key typed into a value box stays there. A key you gave one
+  of a group's other tools (Centerline, say) takes that tool up even while
+  another tool of its group is in hand, as its row in the group's list says.
 - Clicking the toolbar button of the tool in hand puts it down too, exactly
   as its key does (also its row in a group's list or a More menu); a click on
   another tool still takes that one up.

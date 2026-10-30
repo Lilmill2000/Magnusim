@@ -21,8 +21,9 @@
 //    the line tool altogether, not just like pressing Escape once"): L, one segment, L: the Line
 //    tool is gone (Select, its button not pressed, a click draws nothing), the segment stays;
 //    Escape after a segment still only ends the chain; R with a corner placed drops it and leaves
-//    Rectangle, and R leaves Center rectangle too (the Rectangle flyout's key); a key typed into a
-//    value box stays there.
+//    Rectangle; R with Center rectangle in hand takes up the corner Rectangle (the Rectangle
+//    flyout's main key, Daniel 2026-10-29) and R again puts it down; a key typed into a value box
+//    stays there.
 //  - tool-click-leaves (Daniel 2026-10-29): the toolbar button of the tool in hand clicked again
 //    puts it down as its key does (Line after a segment: Select, its button not pressed, a click
 //    draws nothing, the segment stays); a click on another tool switches (Line to Circle); Center
@@ -628,7 +629,7 @@ test('cad:ux010-draw-fillet-direct the radius arrow is direct manipulation: 20 p
 const toolNow = (page: Page) => cad<string | null>(page, (() => (window as unknown as W).__CAD__.services.apis.get().sketch?.tool?.id ?? null) as never);
 const lineCount = async (page: Page) => (await drawn(page)).entities.filter((e) => e.kind === 'line').length;
 
-test("cad:tool-key-leaves a tool's own key pressed again leaves the tool entirely (Line, Rectangle, Center rectangle); Escape still ends only the chain; a key typed in a value box stays there", async ({ page, request }) => {
+test("cad:tool-key-leaves a tool's own key pressed again leaves the tool entirely (Line, Rectangle); R with Center rectangle in hand switches to Rectangle, R again leaves it; Escape still ends only the chain; a key typed in a value box stays there", async ({ page, request }) => {
   const { seen, frame } = await freshPart(page, request);
   await enterSketchOnTop(page, frame);
   const tb = frame.locator('[data-cad-toolbar="sketch"]');
@@ -685,11 +686,18 @@ test("cad:tool-key-leaves a tool's own key pressed again leaves the tool entirel
   await expect(frame.locator('[data-sketch-box="width"]')).toHaveCount(0);
   await sketchIdle(page);
   expect(await lineCount(page)).toBe(2);
-  // Center rectangle (the Rectangle flyout's variant): R leaves it too.
+  // Center rectangle (the Rectangle flyout's variant): R takes up the corner Rectangle (the flyout's
+  // main command; its button shows Rectangle again), and R again puts it down.
   await runCommand(frame, 'sketch.rectangle-center');
   await expect.poll(() => toolNow(page)).toBe('rectangle-center');
   await page.keyboard.press('r');
+  await expect.poll(() => toolNow(page)).toBe('rectangle-corner');
+  const rectBtn = tb.locator('.tb-btn[data-command="sketch.rectangle"]');
+  await expect(rectBtn).toHaveClass(/is-active/);
+  await expect(rectBtn).toHaveAttribute('data-variant', 'sketch.rectangle');
+  await page.keyboard.press('r');
   await expect.poll(() => toolNow(page)).toBe('select');
+  await expect(rectBtn).not.toHaveClass(/is-active/);
   // A key typed into a value box is the box's: L there leaves nothing.
   await page.keyboard.press('l');
   await expect.poll(() => toolNow(page)).toBe('line');

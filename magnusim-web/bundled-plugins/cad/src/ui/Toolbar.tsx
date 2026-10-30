@@ -267,7 +267,7 @@ function isActive(c: CommandDef, panel: UiState['panel'], sketchTool: string | n
  */
 function runClicked(services: AppServices, id: string): void {
   const c = services.commands.get(id);
-  if (c && toolKeyAgain(services.apis.get().sketch, c, services.commands.all())) return;
+  if (c && toolKeyAgain(services.apis.get().sketch, c)) return;
   void services.commands.run(id);
 }
 
