@@ -1,7 +1,8 @@
 // Magnusim CAD as a person meets it: Home and Settings with nothing of the simulation app,
 // New project making a Part that opens in CAD with its kernel running, a block drawn and
-// kept, and the project page's Parts (New part, Rename, Delete). No Python, no WSL
-// (e2e-cad/server.mjs), and Magnusim's workbench is never loaded.
+// kept (its body with no simulation item, its menu ending in Delete), and the project page's
+// Parts (New part, Rename, Delete). No Python, no WSL (e2e-cad/server.mjs), and Magnusim's
+// workbench is never loaded.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type Page } from './pw';
 import { drawBlock, historyNames, partOpened, watchPage } from '../bundled-plugins/cad/e2e/helpers';
@@ -59,6 +60,21 @@ test('New project makes a Part that opens in CAD, and the project page keeps its
   const part = page.frames().find((f) => /\/plugins\/cad\/workspace\//.test(f.url()));
   expect(await part!.evaluate(() => (window as unknown as { __CAD__: { services: { bridge: { context: { projectLinks?: boolean } } } } }).__CAD__.services.bridge.context.projectLinks)).toBe(false);
   await drawBlock(page, frame, 40, 20, 10);
+  await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
+  // Its body as this app shows it: no simulation toggle or mark, and its menu has no simulation
+  // item and ends with Delete (cad-body-menu.spec.ts deletes; here the menu closes on Escape).
+  await frame.locator('[data-bodies-folder] > .tree-row').click();
+  const body = frame.locator('[data-body-row]');
+  await expect(body.locator('.cad-body-name')).toHaveText(['Body 1']);
+  await expect(body.locator('[data-body-act="visibility"]')).toBeVisible();
+  await expect(body.locator('[data-body-act="simulation"]')).toHaveCount(0);
+  await expect(body).not.toHaveAttribute('data-in-simulation');
+  await body.locator('> .tree-row').click({ button: 'right' });
+  const menu = frame.locator('[data-cad-menu]');
+  await expect(menu.locator('[data-menu-item]').last()).toHaveText('Delete Body 1');
+  await expect(menu.locator('[data-menu-item]').filter({ hasText: /simulation/i })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
 
   // Back to the project: its page lists the Part.

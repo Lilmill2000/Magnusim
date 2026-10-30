@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isAppUrl, isExternalUrl, serverEnv, windowBackground } from '../config.mjs';
 
@@ -15,9 +16,28 @@ describe('serverEnv', () => {
     assert.equal(env.MAGNUSIM_PROJECTS_ROOT, join(where.documents, 'Magnusim CAD'));
     assert.equal(env.MAGNUSIM_LOCAL_JSON, join(where.userData, 'local.json'));
     assert.equal(env.PATH, 'x', "the rest of the app's environment goes with it");
-    assert.equal(env.MAGNUSIM_ASSISTANT_HOME, undefined, "the Assistant's home stays Magnusim's");
+    assert.equal(env.MAGNUSIM_ASSISTANT_HOME, undefined, "the Assistant's home follows MAGNUSIM_LOCAL_JSON: local.assistant in the app's own folder");
     // In the utility process's own environment it would start that process as Node (exit 9).
     assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
+  });
+
+  it('asks for Documents only when the projects folder is not set (Windows may fail to name it)', () => {
+    let asked = 0;
+    const documents = () => {
+      asked += 1;
+      throw new Error("Failed to get 'documents' path");
+    };
+    assert.equal(serverEnv({ documents, userData: where.userData, env: { MAGNUSIM_PROJECTS_ROOT: 'D:\\parts' } }).MAGNUSIM_PROJECTS_ROOT, 'D:\\parts');
+    assert.equal(asked, 0);
+    assert.equal(serverEnv({ documents: () => where.documents, userData: where.userData, env: {} }).MAGNUSIM_PROJECTS_ROOT, join(where.documents, 'Magnusim CAD'));
+  });
+
+  it("carries the installed-app marker, so the Assistant's home is never taken for a test one", () => {
+    assert.equal(serverEnv({ ...where, env: {} }).MAGNUSIM_PACKAGED, '1');
+    // Whatever the environment says: a home the person or a test set, or the marker blanked.
+    const set = serverEnv({ ...where, env: { MAGNUSIM_LOCAL_JSON: 'D:\\p.json', MAGNUSIM_ASSISTANT_HOME: 'D:\\a', MAGNUSIM_PACKAGED: '' } });
+    assert.equal(set.MAGNUSIM_PACKAGED, '1');
+    assert.equal(set.MAGNUSIM_LOCAL_JSON, 'D:\\p.json');
   });
 
   it("keeps a projects folder or prefs file the person set (Magnusim's, to share them)", () => {
@@ -25,6 +45,22 @@ describe('serverEnv', () => {
     assert.equal(env.MAGNUSIM_PROJECTS_ROOT, 'D:\Magnusim\projects');
     assert.equal(env.MAGNUSIM_LOCAL_JSON, 'D:\p.json');
     assert.equal(env.MAGNUSIM_EDITION, 'cad', 'never Magnusim');
+  });
+
+  it("keeps the server's log in the app's user data, logs\\server.log; one the environment names wins", () => {
+    assert.equal(serverEnv({ ...where, env: {} }).MAGNUSIM_SERVER_LOG, join(where.userData, 'logs', 'server.log'));
+    assert.equal(serverEnv({ ...where, env: { MAGNUSIM_SERVER_LOG: '  ' } }).MAGNUSIM_SERVER_LOG, join(where.userData, 'logs', 'server.log'), 'blank is not set');
+    assert.equal(serverEnv({ ...where, env: { MAGNUSIM_SERVER_LOG: 'D:\\logs\\cad.log' } }).MAGNUSIM_SERVER_LOG, 'D:\\logs\\cad.log');
+  });
+});
+
+describe('the uninstaller (resources/uninstall.nsh)', () => {
+  it("asks plainly: the settings it removes include the Assistant's saved API keys; projects stay", () => {
+    const nsh = readFileSync(new URL('../resources/uninstall.nsh', import.meta.url), 'utf8');
+    const question = /MessageBox [^"]*"([^"]*)"/.exec(nsh)?.[1] ?? '';
+    assert.match(question, /^Also remove Magnusim CAD's settings, including the Assistant's settings and its saved API keys\?/);
+    assert.match(question, /Your projects in Documents\\Magnusim CAD are kept either way\./);
+    assert.match(nsh, /RMDir \/r "\$APPDATA\\Magnusim CAD"/, 'the folder that holds local.json and local.assistant');
   });
 });
 

@@ -2,17 +2,19 @@
 // folder of the test's own, per-user and silent. The installed app runs the built page with no
 // Python, makes a Part with CAD's kernel, and carries its licences; its CAD workspace is the
 // plugin's, byte for byte (the two apps mirror each other). A person who keeps the dark look has
-// it from the page as served, and in the Part's frame. Uninstalling keeps the person's settings
-// and projects.
+// it from the page as served, and in the Part's frame. Its server keeps its log in the person's
+// user data. Uninstalling keeps the person's settings and projects.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test } from '../e2e-cad/pw';
 import { drawBlock, historyNames, partOpened } from '../bundled-plugins/cad/e2e/helpers';
+// @ts-expect-error plain ESM script with no types
+import { removeTreeSync } from '../scripts/remove-tree.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(WEB, 'desktop', 'dist');
@@ -80,6 +82,12 @@ test('the installed app: built page, a Part with CAD, its licences, the plugin\'
     await expect(page).toHaveTitle('Magnusim CAD - Projects', { timeout: 60_000 });
     const origin = new URL(page.url()).origin;
     process.env.CAD_E2E_BASE_URL = origin;
+    // What a person reporting a problem has: the server's own lines in its log in the user data,
+    // each with its time (the installed app's server keeps it, with the Assistant's redact as shipped).
+    const serverLog = readFileSync(join(userData, 'logs', 'server.log'), 'utf8');
+    expect(serverLog).toMatch(/^\S+Z info  Magnusim CAD server starting \(the built page; pid \d+, Node v[\d.]+, Electron [\d.]+\)$/m);
+    expect(serverLog).toContain(`info  server listening on 127.0.0.1:${new URL(origin).port}\n`);
+    for (const l of serverLog.split('\n').filter(Boolean)) expect(l).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z (info |warn |error|debug) /);
     // The built page: no dev server's client.
     const scripts = await page.evaluate(() => [...document.scripts].map((s) => s.src));
     expect(scripts.some((s) => s.includes('/@vite/client'))).toBe(false);
@@ -114,5 +122,5 @@ test('the installed app: built page, a Part with CAD, its licences, the plugin\'
   await expect.poll(() => existsSync(exe), { timeout: 30_000 }).toBe(false);
   expect(existsSync(userData), 'settings kept').toBe(true);
   expect(statSync(projects).isDirectory(), 'projects kept').toBe(true);
-  rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  removeTreeSync(root);
 });

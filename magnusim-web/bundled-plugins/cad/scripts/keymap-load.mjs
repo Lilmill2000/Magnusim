@@ -1,7 +1,8 @@
 // The command and keybinding registry (src/app/keymap.ts) loaded in Node for the build
 // (scripts/build.mjs writes workspace/commands.json from it). It is compiled here (esbuild,
 // through Vite) rather than read with Node's type stripping, which Node has by default only from
-// 22.18 while engines allows 22.12: keymap.ts has no runtime imports, so one file is the module.
+// 22.18, and the plugin's build names no Node version: keymap.ts has no runtime imports, so one
+// file is the module.
 // tests/app/keymap-load.test.ts loads it with type stripping turned off.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';

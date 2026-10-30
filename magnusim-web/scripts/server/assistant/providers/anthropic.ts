@@ -196,7 +196,8 @@ export function usesFallback(model: string): boolean {
  * place's own set, core host tools spec 12), so a turn that opened a project from Home was
  * refused (seen live, 2026-10-24). With this beta and `drop_block`, the provider drops the
  * blocks that no longer hold, and every one after them, and the request goes on without that
- * reasoning (claude-api model-migration guide, "Migrating to Claude Fable 5.1", breaking change 3).
+ * reasoning (the provider's migration guide for Claude Fable 5.1, "Breaking changes", preserved
+ * thinking: https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
  */
 export const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01';
 

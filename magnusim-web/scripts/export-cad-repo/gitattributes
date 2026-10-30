@@ -1,0 +1,9 @@
+# Every text file is LF, in the repository and in every checkout: the CAD workspace's
+# build check (npm run build:cad:check) compares bytes, and a CRLF checkout fails it.
+* text=auto eol=lf
+# Never converted.
+*.wasm binary
+*.bin binary
+*.webp binary
+*.png binary
+*.ico binary

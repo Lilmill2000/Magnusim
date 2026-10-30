@@ -258,7 +258,7 @@ export function installSketchBanana(services: AppServices): () => void {
         }
         swallowClick = false;
         // Only the Select tool moves it: with a drawing tool in hand the picture is ignored, so a
-        // shape can be drawn or traced over it (the coordinator's decision, 2026-10-09).
+        // shape can be drawn or traced over it (decided 2026-10-09).
         const selecting = (modeFor(services)?.state.get().tool ?? 'select') === 'select';
         if (!selecting) {
           if (cursorSet) cursor(s, '');

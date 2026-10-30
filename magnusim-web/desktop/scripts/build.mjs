@@ -1,4 +1,5 @@
 // Builds Magnusim CAD's Windows installer (npm run dist in desktop/):
+//   0. Electron's runtime, fetched when it is not there yet (electronRuntime);
 //   1. the page: cad.html built by Vite into the app's page/;
 //   2. the app, staged in build/app: the desktop shell, the server's source (scripts/, src/,
 //      bundled-plugins/cad's manifest, workspace and licences) and only the npm packages the
@@ -21,6 +22,63 @@ const BUILD = join(DESKTOP, 'build');
 const APP = join(BUILD, 'app');
 const DIST = join(DESKTOP, 'dist');
 const REPO_URL = 'https://github.com/Lilmill2000/Magnusim';
+/** The Magnusim CAD repository: a copy of this app's code, made by Magnusim's scripts/export-cad-repo.mjs. */
+export const CAD_REPO_URL = 'https://github.com/Lilmill2000/Magnusim-CAD';
+/** The kind of the EXPORT.json that copy has at its root. */
+const EXPORT_KIND = 'magnusim-cad-export';
+
+/** A development snapshot's label in EXPORT.json (scripts/export-cad-repo.mjs --dev). */
+const DEV_LABEL = /^development version \S+ \(\d{4}-\d{2}-\d{2}\)$/;
+
+/**
+ * Where the installer says its source is. In Magnusim: Magnusim's repository at this checkout's
+ * HEAD (no commit outside a checkout). In the Magnusim CAD repository, whose EXPORT.json (at the
+ * root, one level above magnusim-web/) says what its code was copied from: that repository, and
+ * what in Magnusim, since a copy's own commits are not Magnusim's. A development snapshot
+ * (magnusim.public false: its commit is not published, and its record has none) is named by its
+ * label, "development version <version> (<date>)", and no commit; a release export by its
+ * commit, with its release tag (the label) when it has one.
+ */
+export function sourceOf(repoRoot) {
+  let record = null;
+  try {
+    record = JSON.parse(readFileSync(join(repoRoot, 'EXPORT.json'), 'utf8'));
+  } catch {
+    /* no copy's record: Magnusim itself */
+  }
+  if (record && record.kind === EXPORT_KIND) {
+    const m = record.magnusim || {};
+    const dev = m.public === false;
+    if (!dev && !/^[0-9a-f]{40}$/.test(String(m.commit))) throw new Error(`${join(repoRoot, 'EXPORT.json')} names no Magnusim commit`);
+    if (record.incomplete || (record.selfCheck !== undefined && record.selfCheck?.passed !== true)) throw new Error(`${join(repoRoot, 'EXPORT.json')}: the export that wrote this copy did not finish, or failed its self-check`);
+    if (dev && !DEV_LABEL.test(String(m.label))) throw new Error(`${join(repoRoot, 'EXPORT.json')}: a development snapshot without its label ("development version <version> (<date>)")`);
+    const changed = Array.isArray(m.uncommitted) ? m.uncommitted.length : 0;
+    return { repo: CAD_REPO_URL, commit: '', copiedFrom: { repo: m.repository || REPO_URL, label: typeof m.label === 'string' ? m.label : '', commit: dev ? '' : m.commit, changed } };
+  }
+  let commit = '';
+  try {
+    // Its "fatal: not a git repository" (a folder that is no checkout) is not shown: the notices then name no commit.
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    /* not a checkout */
+  }
+  return { repo: REPO_URL, commit, copiedFrom: null };
+}
+
+/**
+ * Electron's runtime, node_modules/electron/dist, where the icon and electron-builder take it
+ * from. Electron 44 fetches it on its first require('electron'), not at npm ci, so a fresh
+ * install has none: its install.js fetches this version when it is missing (from Electron's
+ * download cache when it is there) and does nothing when it is installed already.
+ */
+function electronRuntime() {
+  const pkg = join(DESKTOP, 'node_modules', 'electron');
+  const r = spawnSync(process.execPath, [join(pkg, 'install.js')], { stdio: 'inherit', timeout: 600_000 });
+  const pathFile = join(pkg, 'path.txt');
+  const exe = existsSync(pathFile) ? join(pkg, 'dist', readFileSync(pathFile, 'utf8').trim()) : '';
+  if (r.status !== 0 || !exe || !existsSync(exe)) throw new Error(`Electron's runtime is not in ${join(pkg, 'dist')} (node_modules/electron/install.js: exit ${r.status ?? r.signal})`);
+  return exe;
+}
 
 /**
  * The most the installer and the installed app may take (plan §7); the build fails above it.
@@ -99,13 +157,13 @@ async function sdkPackages() {
   return [...keys].sort();
 }
 
-async function stage() {
+async function stage(source) {
   rmSync(BUILD, { recursive: true, force: true, maxRetries: 5 });
   mkdirSync(APP, { recursive: true });
   for (const dir of ['scripts', 'src']) cpSync(join(WEB, dir), join(APP, dir), { recursive: true, filter: notTest });
   const cad = join(WEB, 'bundled-plugins', 'cad');
   for (const part of ['manifest.toml', 'plugin.py', 'README.md', 'workspace', 'LICENSES']) cpSync(join(cad, part), join(APP, 'bundled-plugins', 'cad', part), { recursive: true });
-  for (const f of ['main.mjs', 'config.mjs', 'server.mjs']) cpSync(join(DESKTOP, f), join(APP, 'desktop', f));
+  for (const f of ['main.mjs', 'config.mjs', 'server.mjs', 'server-log.mjs']) cpSync(join(DESKTOP, f), join(APP, 'desktop', f));
   const modules = [...new Set([...serverClosure(await serverPackages()), ...(await sdkPackages())])].sort();
   for (const key of modules) cpSync(join(WEB, key), join(APP, key), { recursive: true, filter: runtimeFile });
   // electron-builder ships the node_modules its package.json's dependencies name: each
@@ -129,7 +187,7 @@ async function stage() {
         description: desktopPkg.description,
         license: desktopPkg.license,
         author: desktopPkg.author,
-        homepage: REPO_URL,
+        homepage: source.repo,
         private: true,
         type: 'module',
         main: 'desktop/main.mjs',
@@ -158,26 +216,19 @@ async function page() {
   renameSync(join(out, 'cad.html'), join(out, 'index.html'));
 }
 
-function notices() {
+function notices(source) {
   const packages = [
     ...productionPackages(join(WEB, 'package-lock.json'), join(WEB, 'node_modules')),
     ...productionPackages(join(WEB, 'bundled-plugins', 'cad', 'package-lock.json'), join(WEB, 'bundled-plugins', 'cad', 'node_modules')),
   ];
   const rows = licenceRows(packages);
-  let commit = '';
-  try {
-    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
-  } catch {
-    /* not a checkout */
-  }
   const electron = JSON.parse(readFileSync(join(DESKTOP, 'node_modules', 'electron', 'package.json'), 'utf8')).version;
-  writeFileSync(join(APP, 'THIRD_PARTY_NOTICES.txt'), noticesText({ version: desktopPkg.version, commit, repo: REPO_URL, cad: cadSection(join(REPO, 'THIRD_PARTY_NOTICES.md')), rows, electron }));
+  writeFileSync(join(APP, 'THIRD_PARTY_NOTICES.txt'), noticesText({ version: desktopPkg.version, ...source, cad: cadSection(join(REPO, 'THIRD_PARTY_NOTICES.md')), rows, electron }));
   return rows.length;
 }
 
-function icon() {
+function icon(exe) {
   const out = join(BUILD, 'icon.png');
-  const exe = join(DESKTOP, 'node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   const r = spawnSync(exe, [join(DESKTOP, 'scripts', 'icon.mjs'), out], { env, stdio: 'inherit', timeout: 60_000 });
@@ -186,8 +237,9 @@ function icon() {
 
 /**
  * The staged app, before it is packaged: its plugin SDK builds from what was staged, and its
- * server starts (the built page, no Python) and answers the page, the plugin list, CAD's
- * workspace and the SDK. A package left out fails here, not in a person's app.
+ * server starts (the built page, no Python), answers the page, the plugin list, CAD's
+ * workspace and the SDK, and keeps its log (server-log.mjs, through the Assistant's redact as
+ * staged). A package left out fails here, not in a person's app.
  */
 async function checkStaged() {
   const sdk = spawnSync(process.execPath, ['--input-type=module', '-e', "const { pathToFileURL } = await import('node:url'); const m = await import(pathToFileURL(process.argv[1]).href); const files = await m.buildPluginSdk(process.argv[2], 'prod'); console.log([...files.keys()].join(' '));", join(APP, 'scripts', 'server', 'plugin-sdk.ts'), APP], { encoding: 'utf8', timeout: 120_000 });
@@ -195,7 +247,7 @@ async function checkStaged() {
   const root = join(BUILD, 'check');
   rmSync(root, { recursive: true, force: true });
   mkdirSync(join(root, 'projects'), { recursive: true });
-  const env = { ...process.env, MAGNUSIM_PROJECTS_ROOT: join(root, 'projects'), MAGNUSIM_LOCAL_JSON: join(root, 'local.json'), MAGNUSIM_ASSISTANT_HOME: join(root, 'assistant'), MAGNUSIM_PYTHON: join(root, 'no-python.exe') };
+  const env = { ...process.env, MAGNUSIM_PROJECTS_ROOT: join(root, 'projects'), MAGNUSIM_LOCAL_JSON: join(root, 'local.json'), MAGNUSIM_ASSISTANT_HOME: join(root, 'assistant'), MAGNUSIM_PYTHON: join(root, 'no-python.exe'), MAGNUSIM_SERVER_LOG: join(root, 'logs', 'server.log') };
   const { spawn } = await import('node:child_process');
   const child = spawn(process.execPath, [join(APP, 'desktop', 'server.mjs'), '--static', join(APP, 'page')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let said = '';
@@ -219,6 +271,8 @@ async function checkStaged() {
       const r = await fetch(base + path);
       if (!r.ok) throw new Error(`the staged server answered ${r.status} for ${path}`);
     }
+    const kept = existsSync(env.MAGNUSIM_SERVER_LOG) ? readFileSync(env.MAGNUSIM_SERVER_LOG, 'utf8') : '';
+    if (!kept.includes(`server listening on 127.0.0.1:${port}`)) throw new Error(`the staged server kept no log in ${env.MAGNUSIM_SERVER_LOG}:\n${said}`);
   } finally {
     child.kill();
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });
@@ -257,7 +311,7 @@ async function buildOnce(build, Platform, Arch) {
   await build({
     projectDir: DESKTOP,
     targets: Platform.WINDOWS.createTarget(['nsis'], Arch.x64),
-    // The Electron npm install fetched already (no second download).
+    // The runtime electronRuntime() made sure of (no second download).
     config: { ...JSON.parse(readFileSync(join(DESKTOP, 'electron-builder.json'), 'utf8')), electronDist: join(DESKTOP, 'node_modules', 'electron', 'dist') },
     publish: 'never',
   });
@@ -276,13 +330,17 @@ function sizes() {
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   try {
-    step(`staging the app: ${await stage()} npm packages for the server`);
+    step('Electron runtime');
+    const electronExe = electronRuntime();
+    const source = sourceOf(REPO);
+    step(`staging the app: ${await stage(source)} npm packages for the server`);
     step('page');
     await page();
     step(`staged app checked: its plugin SDK (${await checkStaged()} files) and its server`);
-    step(`notices: ${notices()} npm packages`);
+    const from = source.copiedFrom;
+    step(`notices: ${notices(source)} npm packages, source ${from ? `${source.repo} (Magnusim${from.label ? ` ${from.label}` : ''}${from.commit ? ` ${from.commit.slice(0, 10)}` : ''})` : `${source.repo}${source.commit ? ` at ${source.commit.slice(0, 10)}` : ''}`}`);
     step('icon');
-    icon();
+    icon(electronExe);
     step('installer');
     await installer();
     step(sizes());

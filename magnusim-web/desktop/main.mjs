@@ -35,7 +35,7 @@ let quitting = false;
 let win = null;
 
 function startServer() {
-  const env = serverEnv({ documents: app.getPath('documents'), userData: app.getPath('userData') });
+  const env = serverEnv({ documents: () => app.getPath('documents'), userData: app.getPath('userData') });
   mkdirSync(env.MAGNUSIM_PROJECTS_ROOT, { recursive: true });
   // Installed: the page built with the app (build.mjs); from a checkout: the page from source.
   const args = app.isPackaged ? ['--static', join(HERE, '..', 'page')] : ['--dev'];

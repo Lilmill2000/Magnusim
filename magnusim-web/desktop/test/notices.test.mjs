@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { compatible, licenceRows, noticesText } from '../scripts/notices.mjs';
+import { compatible, copiedFromWords, licenceRows, noticesText } from '../scripts/notices.mjs';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-cad-notices-'));
 after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -65,5 +65,27 @@ describe('noticesText', () => {
     for (const part of ['GNU General Public License, version 3', 'https://example.org/repo, at commit abc123', 'OCCT 7.9.3 and PlaneGCS', 'kernel-build', 'Electron 44.9.3', 'LICENSES.chromium.html', 'react 19.3.0: MIT', 'Copyright Meta']) {
       assert.ok(text.includes(part), part);
     }
+  });
+
+  it('names the Magnusim CAD repository and the Magnusim commit its code was copied from, for a build from a release export', () => {
+    const base = { version: '0.5.0', repo: 'https://example.org/cad', cad: 'OCCT', rows: [], electron: '44.9.3' };
+    const sha = 'f'.repeat(40);
+    const text = noticesText({ ...base, commit: '', copiedFrom: { repo: 'https://example.org/magnusim', commit: sha, changed: 0 } });
+    assert.ok(text.includes(`Its source is the\nMagnusim CAD repository, https://example.org/cad, whose code is copied from\nMagnusim, https://example.org/magnusim, at commit\n${sha}.\n`), text.slice(0, 400));
+    assert.ok(!text.includes('Magnusim repository'), 'not "the Magnusim repository" as its source');
+    assert.match(noticesText({ ...base, copiedFrom: { repo: 'https://example.org/magnusim', commit: sha, changed: 2 } }).replace(/\n/g, ' '), / \(with 2 files changed from that commit\)\./);
+    const tagged = noticesText({ ...base, copiedFrom: { repo: 'https://example.org/magnusim', label: 'v0.5.0', commit: sha, changed: 0 } });
+    assert.ok(tagged.replace(/\n/g, ' ').includes(`copied from Magnusim v0.5.0, https://example.org/magnusim, at commit ${sha}.`), tagged.slice(0, 400));
+  });
+
+  it("names a development snapshot by Magnusim's development version and date, with no commit", () => {
+    const text = noticesText({ version: '0.5.0-dev', repo: 'https://github.com/Lilmill2000/Magnusim-CAD', cad: 'OCCT', rows: [], electron: '44.9.3', commit: '', copiedFrom: { repo: 'https://github.com/Lilmill2000/Magnusim', label: 'development version 0.5.0-dev (2026-10-29)', commit: '', changed: 0 } });
+    assert.ok(
+      text.includes("Its source is the\nMagnusim CAD repository, https://github.com/Lilmill2000/Magnusim-CAD, whose\ncode is copied from Magnusim's development version 0.5.0-dev (2026-10-29),\nhttps://github.com/Lilmill2000/Magnusim.\n"),
+      text.slice(0, 500),
+    );
+    assert.ok(!/commit/.test(text.split('It ships the software below')[0]), 'no commit named');
+    for (const line of text.split('Its source is the\n')[1].split('\n\n')[0].split('\n')) assert.ok(line.length <= 78, line);
+    assert.equal(copiedFromWords({ repo: 'R', label: 'development version 1 (2026-01-01)', changed: 3 }), "Magnusim's development version 1 (2026-01-01), R (with 3 files changed from it)");
   });
 });

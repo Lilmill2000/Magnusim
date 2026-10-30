@@ -109,16 +109,47 @@ export function cadSection(repoNotices) {
   return m[1].trim();
 }
 
-/** THIRD_PARTY_NOTICES.txt as the installer ships it. */
-export function noticesText({ version, commit, repo, cad, rows, electron }) {
+/**
+ * What a copy of Magnusim CAD's code is copied from (`copiedFrom`: repo, label, commit, changed),
+ * in words, for the installer's notices and the copy's README: a development snapshot (no commit:
+ * not published) by its label, "Magnusim's development version 0.5.0-dev (2026-10-29), <repo>";
+ * a release export by its release, when it has one, and its commit, "Magnusim v0.5.0, <repo>, at
+ * commit <sha>". `changed`: files an --allow-dirty export took from a working tree.
+ */
+export function copiedFromWords({ repo, label = '', commit = '', changed = 0 }) {
+  const what = commit ? `Magnusim${label ? ` ${label}` : ''}, ${repo}, at commit ${commit}` : `Magnusim's ${label || 'development version'}, ${repo}`;
+  return `${what}${changed ? ` (with ${changed} files changed from ${commit ? 'that commit' : 'it'})` : ''}`;
+}
+
+/** `text` in lines of at most `width` characters (a longer word gets a line of its own). */
+function wrap(text, width = 78) {
+  const lines = [];
+  let line = '';
+  for (const word of text.split(' ')) {
+    if (line && line.length + 1 + word.length > width) {
+      lines.push(line);
+      line = word;
+    } else line = line ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/**
+ * THIRD_PARTY_NOTICES.txt as the installer ships it. Its source is `repo` (at `commit`), or, for
+ * a build from the Magnusim CAD repository, that repository (`repo`) with what its code was copied
+ * from (`copiedFrom`, as copiedFromWords takes it).
+ */
+export function noticesText({ version, commit, repo, copiedFrom, cad, rows, electron }) {
   const rule = '='.repeat(78);
+  const source = copiedFrom ? wrap(`Magnusim CAD repository, ${repo}, whose code is copied from ${copiedFromWords(copiedFrom)}.`) : [`Magnusim repository, ${repo}${commit ? `, at commit ${commit}` : ''}.`];
   const out = [
     `Magnusim CAD ${version}: third-party software`,
     rule,
     '',
     'Magnusim CAD is free software under the GNU General Public License, version 3 or',
     '(at your option) any later version: LICENSE, next to this file. Its source is the',
-    `Magnusim repository, ${repo}${commit ? `, at commit ${commit}` : ''}.`,
+    ...source,
     '',
     'It ships the software below, each under its own licence.',
     '',

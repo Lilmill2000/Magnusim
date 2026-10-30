@@ -1,6 +1,6 @@
 // @vitest-environment node
 // The build reads the keybinding registry without Node's type stripping (review: on Node 22.12 to
-// 22.17, which engines allows, an import of keymap.ts failed and the build stopped before
+// 22.17, which the app's engines allowed then, an import of keymap.ts failed and the build stopped before
 // workspace/commands.json): scripts/keymap-load.mjs, run here with type stripping turned off,
 // gives the registry the build writes.
 // SPDX-License-Identifier: GPL-3.0-or-later

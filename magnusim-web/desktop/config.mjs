@@ -9,17 +9,30 @@ export const APP_NAME = 'Magnusim CAD';
 /**
  * The server's environment: the CAD edition; projects in Documents\Magnusim CAD (D5: the app's
  * own folder; MAGNUSIM_PROJECTS_ROOT set by the person wins, e.g. Magnusim's folder to share it);
- * prefs in the app's user data. The Assistant's home stays Magnusim's (%APPDATA%\Magnusim), so
- * one sign-in covers both apps.
- * @param {{ documents: string, userData: string, env?: NodeJS.ProcessEnv }} o
+ * prefs in the app's user data (%APPDATA%\Magnusim CAD\local.json). The Assistant's settings and
+ * keys live beside them in the app's own folder (%APPDATA%\Magnusim CAD\local.assistant: the
+ * Assistant's home follows MAGNUSIM_LOCAL_JSON, assistant/home.ts), not in Magnusim's, and the
+ * uninstaller's "Also remove settings" (resources/uninstall.nsh) removes them too.
+ * The server's console (the Assistant's [assistant] lines, a plugin's error, a crash) is kept
+ * in %APPDATA%\Magnusim CAD\logs\server.log, on this PC only (server.mjs, server-log.mjs:
+ * scrubbed of keys, moved on to server.1.log and server.2.log past 5 MiB; the server makes the
+ * folder); MAGNUSIM_SERVER_LOG set already wins. desktop.log keeps the app's own start and stop.
+ * MAGNUSIM_PACKAGED marks the desktop app (installed, or npm start: the same user data): its home
+ * is the person's real folder, never a test one, so no Assistant test switch is honoured in it
+ * (assistant/home.ts assistantHomeIsOverridden).
+ * `documents` may be a function: it is asked only when MAGNUSIM_PROJECTS_ROOT does not say where
+ * projects go (Windows can fail to name Documents, e.g. under another profile folder).
+ * @param {{ documents: string | (() => string), userData: string, env?: NodeJS.ProcessEnv }} o
  */
 export function serverEnv({ documents, userData, env = process.env }) {
-  const projects = String(env.MAGNUSIM_PROJECTS_ROOT || '').trim() || join(documents, APP_NAME);
+  const projects = String(env.MAGNUSIM_PROJECTS_ROOT || '').trim() || join(typeof documents === 'function' ? documents() : documents, APP_NAME);
   return {
     ...env,
     MAGNUSIM_EDITION: 'cad',
     MAGNUSIM_PROJECTS_ROOT: projects,
     MAGNUSIM_LOCAL_JSON: String(env.MAGNUSIM_LOCAL_JSON || '').trim() || join(userData, 'local.json'),
+    MAGNUSIM_SERVER_LOG: String(env.MAGNUSIM_SERVER_LOG || '').trim() || join(userData, 'logs', 'server.log'),
+    MAGNUSIM_PACKAGED: '1',
   };
 }
 

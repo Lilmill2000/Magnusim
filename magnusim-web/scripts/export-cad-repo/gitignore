@@ -1,0 +1,18 @@
+# npm installs: npm ci in magnusim-web/, bundled-plugins/cad/ and desktop/.
+node_modules/
+# Build output and caches: the page (npm run build), the installer (desktop/build, desktop/dist),
+# the CAD workspace's build check and Vite's temporary config copies.
+/magnusim-web/dist/
+/magnusim-web/desktop/build/
+/magnusim-web/desktop/dist/
+.cache/
+*.timestamp-*.mjs
+*.log
+# What the app writes next to its source when it runs from it (npm run dev, npm start).
+/magnusim-web/projects/
+.magnusim-local.json
+.magnusim-plugin-prefs/
+.magnusim-ready
+test-results/
+.DS_Store
+Thumbs.db

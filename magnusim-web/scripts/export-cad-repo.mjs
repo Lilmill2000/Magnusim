@@ -1,0 +1,1113 @@
+// Exports Magnusim CAD's code into its own repository folder (the public "Magnusim CAD"
+// repository): only the files the CAD edition's page, server, desktop shell and installer
+// build use, as this commit has them. Magnusim CAD and the CAD plugin stay one code base:
+// changes are made here, in Magnusim, and the copy is refreshed from it (one commit per copy in
+// the CAD repository).
+//
+//   node scripts/export-cad-repo.mjs [<out folder>] [--dev] [--allow-dirty] [--record <file>]
+//                                                             (default C:/mcad-export)
+//   node scripts/export-cad-repo.mjs --check [<out folder>] [--record <file>]
+//                                                             the self-check alone, on a copy
+//                                                             (after a build in it, say)
+//
+// --dev: a development snapshot, from a commit that is not published. The copy (its README, and
+// the installer's notices through EXPORT.json) then says it is copied from Magnusim's
+// "development version <desktop/package.json version> (<commit date>)" and names no commit,
+// EXPORT.json included (magnusim.public false). Without it (a release export) the copy names the
+// commit, and the release tag (vX.Y.Z) at it.
+// Each export also writes Magnusim's own bookkeeping OUTSIDE the copy (never published): the
+// commit, and the sha256 of the EXPORT.json it wrote, in --record <file> (default
+// <out folder>.bookkeeping/last-export.json, beside the out folder). --check takes the commit
+// from EXPORT.json when it names one, else from that file when it is this copy's (the same
+// EXPORT.json), else HEAD when its date is EXPORT.json's; otherwise it stops.
+//
+// What goes in, each list worked out from the code as it runs, where it can be:
+//   page       the page's Vite build as desktop/scripts/build.mjs page() runs it (cad.html):
+//              every module and file it reads (getModuleIds, getWatchFiles, the tsconfig.json
+//              it compiles with);
+//   server     esbuild's metafile of the server and the desktop shell (SERVER_ENTRIES);
+//   sdk-build  the builds the server runs itself: the plugin SDK and its UI kit (sdk-build.ts);
+//   read       files the server reads by path, which no bundler sees (READ_BY_PATH);
+//   types      what tsc needs on top for npm run typecheck (type-only imports, ambient .d.ts),
+//              from TypeScript's own program for each of TSCONFIGS;
+//   tooling    the desktop shell and its installer build, the CAD plugin (its source, its
+//              committed workspace/ build output, its licences, the kernel and solver sources),
+//              the tsconfigs (TOOLING, and esbuild's metafile of TOOLING_ENTRIES);
+// and it writes, at the new repository's root: README.md (with where the copy comes from),
+// .gitignore and .gitattributes (from scripts/export-cad-repo/), LICENSE (Magnusim's),
+// THIRD_PARTY_NOTICES.md (Magnusim's, with only the sections about what the copy holds:
+// NOTICE_SECTIONS) and EXPORT.json (what the copy comes from, its own changes, the files git has
+// as executable (100755: "executables", which the CAD repository's commit adds with
+// git add --chmod=+x, as no file system here keeps the bit), and each exported path with the
+// lists that put it there); in magnusim-web/: package.json with
+// only the dependencies those lists use, and package-lock.json pruned from Magnusim's
+// (npm install --package-lock-only --offline: the same versions, or the export stops).
+// The app keeps its magnusim-web/ folder, so desktop/scripts/build.mjs and the installer's
+// notices find LICENSE, THIRD_PARTY_NOTICES.md and kernel-build/ where they do in Magnusim.
+//
+// Contents come from git (this commit, as committed: LF), not from the working tree, the files
+// of scripts/export-cad-repo/ too; a needed file that is changed or not committed stops the
+// export (--allow-dirty copies the working tree instead and EXPORT.json says so). Then the
+// self-check (scripts/export-cad-repo/self-check.mjs) reads the written copy: every file git's
+// or the export's own, no AI-tool traces, models, test data, secrets, paths of this PC or a
+// private part's name, the licences in place. A failed check lists each offender and fails the
+// export; EXPORT.json keeps each check's counts. The copy's few changes to Magnusim's files are
+// declared (rewritesFor, LEFT_OUT, the notices' dropped paragraphs) and listed in EXPORT.json; the
+// self-check applies each rewrite to the commit's file again and refuses any other difference.
+// Never exported: tests and e2e, python/, other plugins, docs
+// (but the two .d.ts files the server serves), hidden folders, AI-tool files, STEP and IGES files,
+// npm packages, build output (but CAD's committed workspace/). A list that needs an excluded file
+// stops the export: the copy would not run.
+//
+// The out folder is emptied first, keeping its .git (it can be a clone of the CAD repository);
+// a folder that is not empty and holds no EXPORT.json written by this script is refused.
+// Needs Node 24 (or 22.18 and later): it imports the server's TypeScript (sdk-build.ts, load-sdk.ts).
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { builtinModules, createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, parse as parsePath, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { cadSection, copiedFromWords } from '../desktop/scripts/notices.mjs';
+import { applyEdits, BINARY, executablesOf, report, selfCheck, summary } from './export-cad-repo/self-check.mjs';
+import { removeTreeSync } from './remove-tree.js';
+
+const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const MAGNUSIM_URL = 'https://github.com/Lilmill2000/Magnusim';
+/** EXPORT.json's kind: the out folder's marker (an export may replace a folder that has it). */
+const MARKER_KIND = 'magnusim-cad-export';
+/** The app's folder in the new repository: as in Magnusim (desktop/scripts/build.mjs reads WEB/..). */
+const APP_DIR = 'magnusim-web';
+
+/** What runs: the server, the desktop shell, the two scripts the server starts by path, and the Assistant's terminal client. */
+const SERVER_ENTRIES = [
+  'scripts/server/cad-edition/serve.mjs', // the server (npm run dev)
+  'desktop/server.mjs', // the server in the desktop app (an Electron utility process)
+  'desktop/main.mjs', // the desktop shell
+  'desktop/config.mjs',
+  'scripts/assistant-mcp.mjs', // the Assistant's MCP bridge
+  'scripts/server/assistant/agents/launch.mjs', // a coding agent's launcher
+  'scripts/assistant-run.mjs', // the Assistant from a terminal: the app's refusal of an unproven coding agent turn names it
+];
+
+/**
+ * Run by path, not imported: the module that names each and the name it uses, so a script no
+ * longer started, or no longer pointed to, is noticed.
+ */
+const BY_PATH = {
+  'scripts/assistant-mcp.mjs': ['scripts/server/assistant/mcp/listener.ts', 'assistant-mcp.mjs'], // BRIDGE_SCRIPT
+  'scripts/server/assistant/agents/launch.mjs': ['scripts/server/assistant/agents/process.ts', 'launch.mjs'], // LAUNCH_SCRIPT
+  'scripts/assistant-run.mjs': ['scripts/server/assistant/turns.ts', 'with assistant-run'], // LAUNCH_PROOF_TEXT
+};
+
+/** Read by path at run time (no bundler sees them). A path ending in / is every file under it. */
+const READ_BY_PATH = [
+  'package.json', // "type": "module" for scripts/*.js; createRequire's base; the version (host-tools.ts)
+  'cad.html', // the page from source (--dev), and the desktop build's input
+  'scripts/generated/cad-edition-registry.json', // cad-edition/registry.js; made by gen:cad-edition (Python): copied as committed
+  'scripts/generated/registry.json', // registry-defaults.js
+  'src/plugin-sdk/workspace.ts', // plugin-sdk.ts bundles its text, and reads SDK_VERSION
+  'src/plugin-sdk/base.css', // the SDK's theme.css: tokens.css + base.css
+  'src/theme/tokens.css',
+  'src/plugin-ui/version.ts', // pluginSdkInfo: PLUGIN_UI_API_VERSION
+  'docs/plugins/workspace-sdk.d.ts', // the SDK's published types, served when present
+  'docs/plugins/plugin-ui.d.ts',
+  'bundled-plugins/cad/workspace/', // CAD's workspace, served as committed (routes.ts safePluginFile)
+  'src/plugin-ui/colormaps/LICENSES/', // the licences of the colour maps in plugin-ui.js and the page
+];
+
+/** The desktop shell and its installer build, the CAD plugin, the typecheck configs. */
+const TOOLING = [
+  'desktop/', // all of it but its tests: main/server/config, scripts/ (build, notices, icon), resources/, package*.json
+  'bundled-plugins/cad/package.json',
+  'bundled-plugins/cad/package-lock.json',
+  'bundled-plugins/cad/.gitignore',
+  'bundled-plugins/cad/tsconfig.json',
+  'bundled-plugins/cad/vite.config.ts',
+  'bundled-plugins/cad/manifest.toml', // these three: desktop/scripts/build.mjs stage() copies them (it fails without one)
+  'bundled-plugins/cad/plugin.py',
+  'bundled-plugins/cad/README.md',
+  'bundled-plugins/cad/CHANGELOG.md', // named by the plugin's README and source
+  'bundled-plugins/cad/src/',
+  'bundled-plugins/cad/workspace/',
+  'bundled-plugins/cad/LICENSES/',
+  'bundled-plugins/cad/kernel-build/', // the LGPL corresponding source of workspace/kernel/mk32.wasm
+  'bundled-plugins/cad/solver-build/', // and of workspace/solver/planegcs.wasm
+  'tsconfig.json', // also the page's: Vite compiles src/ with it
+  'tsconfig.src.json',
+  'scripts/server/tsconfig.json',
+  'scripts/server/assistant/tsconfig.json',
+];
+
+/** Build scripts whose own imports come too (CAD's build: keymap-load, make-banana, lock). */
+const TOOLING_ENTRIES = ['desktop/scripts/build.mjs', 'desktop/scripts/icon.mjs', 'bundled-plugins/cad/scripts/build.mjs', 'bundled-plugins/cad/kernel-build/ship.mjs'];
+
+/** npm run typecheck: Magnusim's own configs, run over what is exported. */
+const TSCONFIGS = ['tsconfig.json', 'scripts/server/tsconfig.json', 'tsconfig.src.json', 'scripts/server/assistant/tsconfig.json'];
+
+/** Tools the scripts run that no import names: the page build (Vite) and tsc. */
+const TOOL_PACKAGES = ['vite', '@vitejs/plugin-react', 'typescript'];
+
+const PAGE_BUILD = [
+  "import{build}from'vite';import react from'@vitejs/plugin-react';",
+  "await build({configFile:false,root:process.cwd(),plugins:[react()],build:{outDir:'dist/page',emptyOutDir:true,chunkSizeWarningLimit:10000,rollupOptions:{input:'cad.html'}}})",
+].join('');
+
+const SCRIPTS = {
+  build: `node --input-type=module -e "${PAGE_BUILD}"`,
+  'build:cad': 'npm --prefix bundled-plugins/cad run build',
+  'build:cad:check': 'npm --prefix bundled-plugins/cad run build:check',
+  dev: 'node scripts/server/cad-edition/serve.mjs --dev',
+  typecheck: TSCONFIGS.map((c) => `tsc -p ${c}`).join(' && '),
+  'typecheck:cad': 'tsc -p bundled-plugins/cad/tsconfig.json',
+  start: 'npm --prefix desktop start',
+  // CAD's packages first: the installer's notices list three.js and three-mesh-bvh from its node_modules.
+  // The desktop build fetches Electron's runtime itself when npm ci left none (Electron 44 fetches it on use).
+  dist: 'npm ci --prefix bundled-plugins/cad && cd desktop && npm ci && npm run dist',
+};
+
+/**
+ * Magnusim's THIRD_PARTY_NOTICES.md, section by section ("## " headings): keep, drop, replace
+ * with scripts/export-cad-repo/notices-<file>, or keep with some paragraphs changed
+ * ({ paragraphs: [{ starts, put }], why }: the paragraph that starts with `starts`, exactly one
+ * in the section, dropped when `put` is null, else replaced by it). A heading not listed stops
+ * the export (decide whether Magnusim CAD ships it); a kept one that is gone does too.
+ */
+const NOTICE_SECTIONS = {
+  'Gmsh and the mesher': 'drop',
+  'OpenFOAM and cfMesh': 'drop',
+  'Magnusim CAD plugin': 'keep', // desktop/scripts/notices.mjs cadSection() puts it in the installer's notices
+  '2D Wind Tunnel plugin': 'drop',
+  'XFOIL and the Airfoil plugin': 'drop',
+  "The Assistant's provider packages": 'keep',
+  "The Assistant's tool-connection package (MCP)": {
+    paragraphs: [{ starts: "The tests also use the SDK's client package", put: null }],
+    why: 'the copy has no tests, and @modelcontextprotocol/client is not in its lockfile',
+  },
+  "The Assistant's coding agents": {
+    // acp.ts's MIT notice (SolidCraft) stays.
+    paragraphs: [
+      {
+        starts: "The tests check Magnusim's side of the Agent Client Protocol",
+        put: "`npm run typecheck` checks Magnusim CAD's side of the Agent Client Protocol\nagainst the protocol's own types with `@agentclientprotocol/sdk` 1.7.0\n(Apache-2.0), a development dependency the app never runs.",
+      },
+    ],
+    why: 'the copy has no tests; its typecheck reads the package (the agents code imports its types)',
+  },
+  'Other dependencies': 'other.md', // Magnusim's names Python, PyVista and cadquery-ocp
+  'Colour maps': 'keep',
+};
+/** Magnusim's setup files that the copy has none of. */
+const NOTICE_WORDING = [[/Setup \(`npm ci`\) or `run\.bat`/g, '`npm ci`']];
+
+/** The CAD plugin's manifest: its version names the plugin in the copy's README (cadTitle). */
+const CAD_MANIFEST = 'bundled-plugins/cad/manifest.toml';
+
+/** The version in the CAD plugin's manifest.toml text. */
+function cadVersionOf(manifest) {
+  const m = /^version\s*=\s*"([^"]+)"/m.exec(manifest);
+  if (!m) throw new Error(`${CAD_MANIFEST} names no version`);
+  return m[1];
+}
+
+/** The CAD plugin README's title in the copy: the manifest's version, and a pre-release one said to be the development version. */
+const cadTitle = (version) => (/-/.test(version) ? `# Magnusim CAD ${version}: the CAD plugin's development version` : `# Magnusim CAD ${version}`);
+
+/**
+ * Where the copy's CAD texts say the plugin's tests and developer scripts are (EXPORT.json's
+ * magnusim record): for a development snapshot, Magnusim's development version, with no branch
+ * claimed (its commit is not published); for a release export, that release (or commit).
+ */
+function testsIn(m) {
+  const repo = m.repository || MAGNUSIM_URL;
+  if (m.public === false) return `Magnusim's development version, in its \`magnusim-web/bundled-plugins/cad\` folder (<${repo}>)`;
+  const ref = m.label || m.commit;
+  return `Magnusim ${m.label || `at commit ${String(m.commit).slice(0, 10)}`}, in its \`magnusim-web/bundled-plugins/cad\` folder (<${repo}/tree/${ref}/magnusim-web/bundled-plugins/cad>)`;
+}
+
+/**
+ * Magnusim's files the copy holds with its own words (Daniel, 2026-10-29: the public copy leaves
+ * out internal working notes and the name of his private test part; Magnusim's files stay as
+ * they are). `path`: web-root relative; `what` and `why` go into EXPORT.json, so they never name
+ * the part; `edits`: exact texts (self-check.mjs applyEdits). The self-check applies them to the
+ * commit's file again and refuses any other difference; an edit whose text is gone stops the export.
+ * `magnusim`: EXPORT.json's record (where the tests are); `cadVersion`: the CAD manifest's version
+ * at the commit (the plugin README's title).
+ */
+const rewritesFor = ({ magnusim, cadVersion }) => [
+  {
+    path: 'bundled-plugins/cad/README.md',
+    what: "the title names the plugin's version (a development one as such); the Developer section without the scripts, tests and notes the copy does not hold (one line says where in Magnusim they are), and no reference to ARCHITECTURE.md (left out) or a private test part",
+    why: "the copy's README must not describe scripts that do not run here, or files it does not have, nor claim a release or branch it was not copied from",
+    edits: [
+      { find: '# Magnusim CAD 0.1.0\n\nA parametric part modeler', put: `${cadTitle(cadVersion)}\n\nA parametric part modeler` },
+      { find: 'How it is built: the\n[Developer](#developer) section below and `ARCHITECTURE.md`.', put: 'How it is built: the\n[Developer](#developer) section below.' },
+      { find: '`ws.nav.onLeave`, 1.6); ARCHITECTURE.md §11 has the export, the face names and\nthe exit hook. From 1.2', put: '`ws.nav.onLeave`, 1.6). From 1.2' },
+      { find: 'else it is kept per project (ARCHITECTURE.md §7 "Toolbar").', put: 'else it is kept per project.' },
+      { find: 'Part offers no tools and works as before. ARCHITECTURE.md §12 has the design,\n`docs/assistant.md` the developer reference.', put: 'Part offers no tools and works as before.' },
+      { find: 'names only what ships: update it\nas features land, and run `npm run gen:registry` in `magnusim-web` after.', put: 'names only what ships: it is updated\nin Magnusim as features land.' },
+      {
+        from: '| `tests/` |',
+        to: '| `CHANGELOG.md` |',
+        put: '| `scripts/` | `build.mjs` (page + workers) and what it runs (`keymap-load.mjs`, `make-banana.mjs`, `lock.mjs`). |\n',
+      },
+      {
+        from: '### Build and test\n',
+        to: '### Separation rules\n',
+        put: [
+          '### Build and test',
+          '',
+          "The plugin has its own toolchain and packages; the app's typecheck never sees",
+          'its `src/`.',
+          '',
+          '```',
+          'cd bundled-plugins/cad',
+          'npm ci                 # own node_modules (gitignored)',
+          'npm run build          # src/ -> workspace/ (page + worker modules)',
+          'npm run build:check    # workspace/ must be exactly the build of src/',
+          '```',
+          '',
+          "`npm run typecheck:cad` in `magnusim-web` checks the plugin's TypeScript. The",
+          'kernel and solver binaries are rebuilt only when their sources change, on Linux',
+          'or WSL: `kernel-build/build.sh`, `solver-build/build.sh`.',
+          '',
+          `The plugin's tests and its other developer scripts for this version are in ${testsIn(magnusim)}.`,
+          '',
+          '',
+        ].join('\n'),
+      },
+      { find: '(`python/tools/plugin_boundary.py` checks', put: "(Magnusim's `python/tools/plugin_boundary.py` checks" },
+      { find: "they are never bundled. The unit tests run the\n  kit's own source (`vitest.config.ts` alias). Workers", put: 'they are never bundled. Workers' },
+      { find: 'generic host APIs, listed in `ARCHITECTURE.md` §9.', put: 'generic host APIs.' },
+      { find: "a coding tool's file: the app's\n  `scripts/__tests__/vendor-names.test.mjs`", put: "a coding tool's file: Magnusim's\n  `scripts/__tests__/vendor-names.test.mjs`" },
+    ],
+  },
+  {
+    path: 'bundled-plugins/cad/LICENSES/README.md',
+    what: "the kernel's and solver's source archives: attached to each Magnusim CAD release, and which files",
+    why: "Magnusim's text names a release of Magnusim CAD 0.1.0 on Magnusim's GitHub, which has no such release",
+    edits: [
+      {
+        find: 'The GitHub release of Magnusim CAD 0.1.0 attaches the exact upstream sources\nthe shipped modules were built from, so they can be had from the same place as\nthe plugin.',
+        put: 'Each release of Magnusim CAD\n(<https://github.com/Lilmill2000/Magnusim-CAD/releases>) attaches, beside its\ninstaller, the exact upstream sources the shipped modules were built from (the\nfour archives below and `SHA256SUMS-cad-sources.txt`), so they can be had from\nthe same place as the app.',
+      },
+    ],
+  },
+  {
+    path: 'bundled-plugins/cad/kernel-build/SOURCES.md',
+    what: "no reference to ARCHITECTURE.md (left out); the build lock and the Tests section say where in Magnusim the e2e runs and the kernel's tests are, instead of naming scripts the copy does not hold; a private test part named generically",
+    why: 'internal notes and the tests stay in Magnusim',
+    edits: [
+      { find: 'What it does and its rules: `ARCHITECTURE.md` §5 and the typed contract in\n`src/types/kernel-protocol.ts`.', put: 'What it does and its rules: the typed contract in\n`src/types/kernel-protocol.ts`.' },
+      {
+        find: 'node kernel-build/ship.mjs                           # queued with e2e runs; replaces workspace/kernel between them',
+        put: 'node kernel-build/ship.mjs                           # waits its turn for the lock, then replaces workspace/kernel',
+      },
+      {
+        from: '- `build.sh` waits (bounded, `CAD_KERNEL_LOCK_WAIT`',
+        to: '\n\n## Tests',
+        put: [
+          '- `build.sh` waits (bounded, `CAD_KERNEL_LOCK_WAIT`, default 900 s) while',
+          '  another run holds `.cache/build.lock` before it replaces the shipped pair (in',
+          "  Magnusim the plugin's e2e runs hold it, so a running suite never gets a new",
+          '  kernel mid-run); `CAD_KERNEL_IGNORE_BUILD_LOCK=1` for a lock left by a stopped',
+          '  run. `node kernel-build/ship.mjs` waits its turn for the lock, holds it, and',
+          '  runs build.sh inside it.',
+        ].join('\n'),
+      },
+      {
+        from: '## Tests\n',
+        to: 'Commit `workspace/kernel/*.wasm`',
+        put: [
+          '## Tests',
+          '',
+          "The kernel's tests are not in this repository: they and the scripts that run",
+          `them (the plugin's \`npm run test:kernel\`) are in ${testsIn(magnusim)}.`,
+          '`EXTRA_CXXFLAGS=-DMK_TEST_NO_WORK_COPY FACADE_OBJ=<tmp> build.sh --out <dir>`',
+          'makes a test-only kernel that runs ops on the stored shapes themselves; with it',
+          "the hazard those tests guard against comes back (a test part's tube cut removes",
+          '0.015 mm³ instead of 42,353 mm³).',
+          '',
+          '',
+        ].join('\n'),
+      },
+    ],
+  },
+  ...[
+    ['bundled-plugins/cad/src/features/import/pipeline.ts', "polish 5: the Vortex's cell read", "polish 5: a test part's cell read"],
+    ['bundled-plugins/cad/src/features/press_pull/feature.ts', 'was false for the Vortex outlet bores', "was false for a test part's outlet bores"],
+    ['bundled-plugins/cad/src/link/edit-open.css', '("Opening Vortex CFD Test from the project",', '("Opening Bracket from the project",'],
+    ['bundled-plugins/cad/src/link/edit-open.ts', 'The Vortex (0.1 MB BREP) never left 64 MiB.', 'A small part (0.1 MB BREP) never left 64 MiB.'],
+    ['bundled-plugins/cad/src/viewport/viewport.ts', "the Vortex's fluid-domain Box was cut off", "a test part's fluid-domain Box was cut off"],
+  ].map(([path, find, put]) => ({ path, what: 'a comment: a private test part named generically', why: 'internal notes stay in Magnusim (the build strips comments: workspace/ is unchanged)', edits: [{ find, put }] })),
+  {
+    path: 'src/home/controller.ts',
+    what: "the new-project title's placeholder outside the CAD edition: a generic example",
+    why: "Magnusim's placeholder names a private part (Magnusim CAD shows its own, 'Mounting bracket')",
+    edits: [{ find: "'Vortex separator — incompressible'", put: "'Pipe elbow — incompressible'" }],
+  },
+  {
+    path: 'src/app/shell.html',
+    what: "the new-project description's placeholder: a generic one",
+    why: "Magnusim's placeholder names a private part",
+    edits: [{ find: 'placeholder="Test for the vortex"', put: 'placeholder="What this project is for"' }],
+  },
+  {
+    path: 'scripts/w16-project-geometry.js',
+    what: "the default STEP's source tag and a geometry's fallback name: generic",
+    why: "Magnusim's strings name a private part; neither is reached in Magnusim CAD (no DEFAULT_STEP, and an import always has a file name)",
+    edits: [
+      { find: "stepSource = 'default-vortex';", put: "stepSource = 'default-step';" },
+      { find: "String(originalName || 'Vortex CFD Test.step')", put: "String(originalName || 'geometry.step')" },
+      { find: ".trim() || 'Vortex CFD Test';", put: ".trim() || 'geometry';" },
+    ],
+  },
+];
+
+/** Magnusim's files the copy leaves out, with why: no list of what runs or builds needs them (one that did would stop the export). */
+const LEFT_OUT = [
+  {
+    path: 'bundled-plugins/cad/ARCHITECTURE.md',
+    why: "the plugin's internal working notes (area ownership for parallel builders, plan rules); the copy's README and notes no longer refer to it",
+  },
+];
+
+// ---------------------------------------------------------------------------------------------
+
+const slash = (p) => p.split(sep).join('/');
+const WEB_N = slash(WEB);
+const caseless = process.platform === 'win32';
+
+/** `abs` relative to the web root (forward slashes), or null outside it. */
+function inWeb(abs) {
+  const p = slash(resolve(abs));
+  const a = caseless ? p.toLowerCase() : p;
+  const b = caseless ? WEB_N.toLowerCase() : WEB_N;
+  return a.startsWith(`${b}/`) ? p.slice(WEB_N.length + 1) : null;
+}
+
+/** The npm package a node_modules path is in (the innermost), or null. */
+function packageOf(p) {
+  const s = slash(p);
+  const i = s.lastIndexOf('/node_modules/');
+  if (i < 0) return null;
+  const rest = s.slice(i + '/node_modules/'.length).split('/');
+  return rest[0].startsWith('@') ? `${rest[0]}/${rest[1]}` : rest[0];
+}
+
+/** A bare import's package name, or null for node: and relative imports. */
+function bareName(spec) {
+  if (spec.startsWith('.') || spec.startsWith('/') || isAbsolute(spec) || spec.startsWith('node:') || builtinModules.includes(spec.split('/')[0])) return null;
+  return spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+}
+
+const TEST_DIRS = new Set(['__tests__', 'tests', 'test', 'e2e', 'e2e-cad', 'e2e-desktop', 'fixtures', 'test-results', 'playwright-report', 'coverage']);
+const AI_FILE = /^(agents|claude|gemini|copilot-instructions)\.md$|^\.(cursorrules|windsurfrules|aider.*|clinerules)$|\.mdc$/i;
+const DOCS_KEPT = new Set(READ_BY_PATH.filter((p) => p.startsWith('docs/')));
+
+/** Why the export never takes `p` (web-root relative), or null. */
+function excludedBy(p) {
+  const parts = p.split('/');
+  const dirs = parts.slice(0, -1);
+  const name = parts[parts.length - 1];
+  if (p === 'scripts/export-cad-repo.mjs' || p.startsWith('scripts/export-cad-repo/')) return 'this export';
+  if (LEFT_OUT.some((x) => x.path === p)) return 'left out of the copy (LEFT_OUT)';
+  if (dirs.some((d) => d.startsWith('.'))) return 'a hidden folder';
+  if (name.startsWith('.') && name !== '.gitignore') return 'a hidden file';
+  if (AI_FILE.test(name)) return 'an AI-tool file';
+  if (/\.(step|stp|iges|igs)$/i.test(name)) return 'a STEP or IGES file';
+  if (dirs.some((d) => TEST_DIRS.has(d)) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(name) || /^(vitest|playwright)(\.[\w-]+)?\.config\./.test(name)) return 'a test';
+  if (dirs.includes('node_modules')) return 'an npm package';
+  if (dirs.includes('dist') || dirs.includes('build')) return 'build output';
+  if (parts[0] === 'python') return "Magnusim's Python";
+  if ((parts[0] === 'bundled-plugins' && parts[1] !== 'cad') || parts[0] === 'plugins') return 'another plugin';
+  if ((parts[0] === 'docs' && !DOCS_KEPT.has(p)) || (parts[0] === 'bundled-plugins' && parts[2] === 'docs')) return 'docs';
+  return null;
+}
+
+function git(args, opts = {}) {
+  return execFileSync('git', ['-C', WEB, ...args], { encoding: 'utf8', maxBuffer: 1 << 28, ...opts });
+}
+
+/** Blobs of `commit`, by repository path, in one git process. */
+function catFiles(commit, paths) {
+  const out = execFileSync('git', ['-C', WEB, 'cat-file', '--batch'], { input: paths.map((p) => `${commit}:${p}`).join('\n') + '\n', maxBuffer: 1 << 30 });
+  const blobs = new Map();
+  let pos = 0;
+  for (const p of paths) {
+    const nl = out.indexOf(10, pos);
+    const header = out.subarray(pos, nl).toString();
+    const [, type, size] = header.split(' ');
+    if (type !== 'blob') throw new Error(`${p} is not a file in ${commit} (${header})`);
+    const n = Number(size);
+    blobs.set(p, out.subarray(nl + 1, nl + 1 + n));
+    pos = nl + 1 + n + 1;
+  }
+  return blobs;
+}
+
+// --- the lists --------------------------------------------------------------------------------
+
+/** The page's Vite build, in a temporary folder: its repository files and the npm packages in it. */
+async function pageList() {
+  const req = createRequire(join(WEB, 'package.json'));
+  const { build } = await import(pathToFileURL(req.resolve('vite')).href);
+  const { default: react } = await import(pathToFileURL(req.resolve('@vitejs/plugin-react')).href);
+  const tmp = mkdtempSync(join(tmpdir(), 'magnusim-cad-export-'));
+  const ids = new Set();
+  const recorder = () => ({
+    name: 'magnusim-cad-export-recorder',
+    enforce: 'post',
+    generateBundle() {
+      for (const id of this.getModuleIds()) ids.add(id);
+      for (const f of this.getWatchFiles()) ids.add(f);
+    },
+  });
+  try {
+    await build({
+      configFile: false,
+      root: WEB,
+      logLevel: 'error',
+      cacheDir: join(tmp, 'cache'),
+      plugins: [react(), recorder()],
+      worker: { plugins: () => [recorder()] },
+      build: { outDir: join(tmp, 'out'), emptyOutDir: true, chunkSizeWarningLimit: 10_000, rollupOptions: { input: join(WEB, 'cad.html') } },
+    });
+  } finally {
+    removeTreeSync(tmp);
+  }
+  const files = new Set();
+  const packages = new Set();
+  for (const raw of ids) {
+    if (raw.startsWith('\0')) continue;
+    const id = raw.split('?')[0];
+    const abs = isAbsolute(id) ? id : join(WEB, id);
+    const pkg = packageOf(abs);
+    if (pkg) {
+      packages.add(pkg);
+      continue;
+    }
+    if (!existsSync(abs)) continue; // a virtual module
+    const rel = inWeb(abs);
+    if (!rel) throw new Error(`the page build reads ${abs}, outside ${WEB}`);
+    files.add(rel);
+  }
+  // esbuild compiles each TypeScript module with its nearest tsconfig.json (tsconfck).
+  for (const rel of [...files]) {
+    if (!/\.[cm]?tsx?$|\.jsx$/.test(rel)) continue;
+    for (let dir = dirname(join(WEB, rel)); inWeb(join(dir, 'x')) !== null; dir = dirname(dir)) {
+      if (existsSync(join(dir, 'tsconfig.json'))) {
+        files.add(inWeb(join(dir, 'tsconfig.json')));
+        break;
+      }
+    }
+  }
+  return { files, packages };
+}
+
+/** esbuild's metafile of `entries`, npm packages left out: repository files, and bare imports by importer. */
+async function esbuildList(entries) {
+  const req = createRequire(join(WEB, 'package.json'));
+  const esbuild = req('esbuild');
+  const files = new Set();
+  const imports = new Map();
+  for (const entry of entries) {
+    if (!existsSync(join(WEB, entry))) throw new Error(`${entry} (an entry) does not exist`);
+    const r = await esbuild.build({
+      entryPoints: [join(WEB, entry)],
+      absWorkingDir: WEB,
+      platform: 'node',
+      format: 'esm',
+      target: 'node22',
+      packages: 'external',
+      bundle: true,
+      metafile: true,
+      write: false,
+      outdir: join(tmpdir(), 'magnusim-cad-export-unused'),
+      loader: { '.node': 'empty' },
+      logLevel: 'silent',
+    });
+    for (const w of r.warnings) console.warn(`  esbuild (${entry}): ${w.text}${w.location ? ` at ${w.location.file}:${w.location.line}` : ''}`);
+    for (const [input, info] of Object.entries(r.metafile.inputs)) {
+      const abs = join(WEB, input);
+      const rel = inWeb(abs);
+      if (!rel || packageOf(abs)) throw new Error(`${entry} bundles ${input}, which is not a repository file`);
+      files.add(rel);
+      for (const imp of info.imports) {
+        const name = imp.external ? bareName(imp.path) : null;
+        if (!name) continue;
+        if (!imports.has(name)) imports.set(name, new Set());
+        imports.get(name).add(rel);
+      }
+    }
+  }
+  return { files, imports };
+}
+
+/** The builds the server runs (plugin-sdk.ts): the UI kit (JS and kit.css) and the workspace bridge. */
+async function sdkList() {
+  const sdk = await import(pathToFileURL(join(WEB, 'scripts', 'server', 'sdk-build.ts')).href);
+  const req = createRequire(join(WEB, 'package.json'));
+  const esbuild = req('esbuild');
+  const kit = await sdk.bundle(WEB, "export * from './src/plugin-ui/index.ts';", 'prod', 'ts', { external: sdk.KIT_EXTERNAL });
+  const bridge = await sdk.bundle(WEB, readFileSync(join(WEB, 'src', 'plugin-sdk', 'workspace.ts'), 'utf8'), 'prod', 'ts');
+  // As sdk-build.ts buildKitCss(), with a metafile.
+  const css = await esbuild.build({ entryPoints: [join(WEB, 'src', 'plugin-ui', 'kit.css')], absWorkingDir: WEB, bundle: true, write: false, metafile: true, logLevel: 'silent' });
+  const files = new Set();
+  const packages = new Set();
+  for (const m of [kit.metafile, bridge.metafile, css.metafile]) {
+    for (const input of Object.keys(m.inputs)) {
+      if (input === sdk.SDK_ENTRY_NAME) continue;
+      const abs = join(WEB, input);
+      const pkg = packageOf(abs);
+      if (pkg) packages.add(pkg);
+      else if (inWeb(abs)) files.add(inWeb(abs));
+      else throw new Error(`the plugin SDK build reads ${input}, outside ${WEB}`);
+    }
+  }
+  return { files, packages };
+}
+
+/**
+ * What tsc needs for TSCONFIGS over the exported files: each config's program, from the
+ * exported files it includes (and its ambient .d.ts), until nothing new comes in.
+ */
+function typesList(have) {
+  const ts = createRequire(join(WEB, 'package.json'))('typescript');
+  const files = new Set();
+  const packages = new Set();
+  for (let round = 0, grew = true; grew; round++) {
+    if (round > 8) throw new Error('the typecheck file list does not settle');
+    grew = false;
+    for (const cfg of TSCONFIGS) {
+      const parsed = ts.getParsedCommandLineOfConfigFile(join(WEB, cfg), {}, {
+        ...ts.sys,
+        onUnRecoverableConfigFileDiagnostic: (d) => {
+          throw new Error(`${cfg}: ${ts.flattenDiagnosticMessageText(d.messageText, '\n')}`);
+        },
+      });
+      const roots = parsed.fileNames.filter((f) => {
+        const rel = inWeb(f);
+        return rel && !excludedBy(rel) && (have.has(rel) || files.has(rel) || f.endsWith('.d.ts'));
+      });
+      const program = ts.createProgram({ rootNames: roots, options: parsed.options });
+      for (const sf of program.getSourceFiles()) {
+        const pkg = packageOf(sf.fileName);
+        if (pkg) {
+          packages.add(pkg);
+          continue;
+        }
+        const rel = inWeb(sf.fileName);
+        if (!rel) throw new Error(`${cfg}'s program reads ${sf.fileName}, outside ${WEB}`);
+        if (!have.has(rel) && !files.has(rel)) {
+          files.add(rel);
+          grew = true;
+        }
+      }
+    }
+  }
+  return { files, packages };
+}
+
+/** The packages that `roots` need, as the lockfile resolves them (dependencies, optional, peers). */
+function lockClosure(lock, roots) {
+  const keep = new Set();
+  const visit = (key) => {
+    if (keep.has(key) || !lock[key]) return;
+    keep.add(key);
+    const e = lock[key];
+    for (const dep of [...Object.keys(e.dependencies || {}), ...Object.keys(e.optionalDependencies || {}), ...Object.keys(e.peerDependencies || {})]) {
+      for (let base = key; ; ) {
+        if (lock[`${base}/node_modules/${dep}`]) {
+          visit(`${base}/node_modules/${dep}`);
+          break;
+        }
+        const up = base.lastIndexOf('/node_modules/');
+        if (up < 0) {
+          visit(`node_modules/${dep}`);
+          break;
+        }
+        base = base.slice(0, up);
+      }
+    }
+  };
+  for (const name of roots) visit(`node_modules/${name}`);
+  return new Set([...keep].map((k) => packageOf(`/${k}`)));
+}
+
+// --- the out folder ---------------------------------------------------------------------------
+
+function prepareOut(out, top) {
+  const o = slash(resolve(out));
+  const t = slash(resolve(top));
+  const cmp = (s) => (caseless ? s.toLowerCase() : s);
+  if (resolve(out) === parsePath(resolve(out)).root) throw new Error(`${out} is a drive's root`);
+  if (cmp(o) === cmp(t) || cmp(o).startsWith(`${cmp(t)}/`) || cmp(t).startsWith(`${cmp(o)}/`)) throw new Error(`${out} is in or around the Magnusim checkout ${top}`);
+  if (existsSync(out)) {
+    if (!statSync(out).isDirectory()) throw new Error(`${out} is not a folder`);
+    const entries = readdirSync(out).filter((e) => e !== '.git');
+    if (entries.length) {
+      let kind = null;
+      try {
+        kind = JSON.parse(readFileSync(join(out, 'EXPORT.json'), 'utf8')).kind;
+      } catch {
+        /* no marker */
+      }
+      if (kind !== MARKER_KIND) throw new Error(`${out} is not empty and holds no EXPORT.json from this script: refused (empty it, or choose another folder)`);
+      for (const e of entries) removeTreeSync(join(out, e));
+    }
+  }
+  mkdirSync(out, { recursive: true });
+}
+
+function writeOut(out, rel, data) {
+  const p = join(out, ...rel.split('/'));
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, data);
+}
+
+/** A notices section with NOTICE_SECTIONS' paragraph changes: each `starts` starts exactly one paragraph. */
+function changedParagraphs(heading, body, changes) {
+  let paragraphs = body.split(/\n{2,}/);
+  for (const { starts, put } of changes) {
+    const n = paragraphs.filter((p) => p.startsWith(starts)).length;
+    if (n !== 1) throw new Error(`THIRD_PARTY_NOTICES.md "## ${heading}": ${n} paragraphs start with "${starts}", and NOTICE_SECTIONS changes exactly one (update it)`);
+    paragraphs = paragraphs.flatMap((p) => (!p.startsWith(starts) ? [p] : put === null ? [] : [put]));
+  }
+  return paragraphs.join('\n\n');
+}
+
+/**
+ * Magnusim's notices, with only NOTICE_SECTIONS' kept (and replaced) sections, after
+ * notices-intro.md. `fixed(name)`: a file of scripts/export-cad-repo/, as the commit has it.
+ */
+function cadNotices(text, fixed) {
+  const parts = text.replace(/\r\n/g, '\n').split(/^## /m);
+  const out = [fixed('notices-intro.md').toString('utf8').trim()];
+  const seen = new Set();
+  for (const part of parts.slice(1)) {
+    const nl = part.indexOf('\n');
+    const heading = part.slice(0, nl).trim();
+    const what = NOTICE_SECTIONS[heading];
+    if (!what) throw new Error(`THIRD_PARTY_NOTICES.md has a section the export does not know, "## ${heading}": add it to NOTICE_SECTIONS (keep, drop, or a replacement)`);
+    seen.add(heading);
+    if (what === 'drop') continue;
+    let body = what === 'keep' ? part.slice(nl + 1).trim() : typeof what === 'string' ? fixed(`notices-${what}`).toString('utf8').trim() : changedParagraphs(heading, part.slice(nl + 1).trim(), what.paragraphs);
+    for (const [from, to] of NOTICE_WORDING) body = body.replace(from, to);
+    out.push(`## ${heading}\n\n${body}`);
+  }
+  const missing = Object.keys(NOTICE_SECTIONS).filter((h) => NOTICE_SECTIONS[h] !== 'drop' && !seen.has(h));
+  if (missing.length) throw new Error(`THIRD_PARTY_NOTICES.md has no "## ${missing.join('", "## ')}" section any more: update NOTICE_SECTIONS`);
+  return `${out.join('\n\n')}\n`;
+}
+
+/** The files of scripts/export-cad-repo/ the export writes or composes from (the self-check's code is not one). */
+const FIXED_FILES = ['README.md', 'gitignore', 'gitattributes', 'notices-intro.md', ...Object.values(NOTICE_SECTIONS).filter((v) => typeof v === 'string' && v !== 'keep' && v !== 'drop').map((v) => `notices-${v}`)];
+
+/** The copy's root files that are Magnusim's git files as they are: copy path -> repository path. */
+const rootFromGit = (prefix) => ({
+  '.gitignore': `${prefix}scripts/export-cad-repo/gitignore`,
+  '.gitattributes': `${prefix}scripts/export-cad-repo/gitattributes`,
+  LICENSE: 'LICENSE',
+});
+
+/** The README's placeholder for where this copy comes from. */
+const README_SOURCE = '{{copied-from}}';
+
+/**
+ * The README's words for where this copy comes from (EXPORT.json's magnusim record): a
+ * development snapshot names Magnusim's development version and no commit, a release export
+ * the release and the commit, in the installer notices' words (notices.mjs copiedFromWords).
+ */
+function readmeSource(m) {
+  const dev = m.public === false;
+  const words = copiedFromWords({ repo: m.repository || MAGNUSIM_URL, label: m.label || '', commit: dev ? '' : m.commit, changed: (m.uncommitted || []).length });
+  return dev ? `This one is copied from ${words}. A copy made from a Magnusim release names that release instead.` : `This one is copied from ${words}.`;
+}
+
+/**
+ * The self-check's rewrites (copy path -> { source, edits }): `rewrites` (rewritesFor), and the
+ * README from scripts/export-cad-repo/README.md with its placeholder filled from `magnusim`.
+ */
+function resolvedRewrites(prefix, magnusim, rewrites) {
+  const out = { 'README.md': { source: `${prefix}scripts/export-cad-repo/README.md`, edits: [{ find: README_SOURCE, put: readmeSource(magnusim) }] } };
+  for (const r of rewrites) out[`${APP_DIR}/${r.path}`] = { source: `${prefix}${r.path}`, edits: r.edits };
+  return out;
+}
+
+/** What EXPORT.json says about the copy's own changes (`rewrites`: rewritesFor). */
+function copyChanges(rewrites) {
+  return {
+    about: "Magnusim's files this copy changes or leaves out (the self-check applies each rewrite to the commit's file again and refuses any other difference)",
+    rewritten: [
+      { path: 'README.md', from: 'magnusim-web/scripts/export-cad-repo/README.md', what: 'where this copy comes from, filled in from "magnusim" above', why: "the copy's own README" },
+      ...rewrites.map((r) => ({ path: `${APP_DIR}/${r.path}`, what: r.what, why: r.why, edits: r.edits.length })),
+    ],
+    leftOut: LEFT_OUT.map((x) => ({ path: `${APP_DIR}/${x.path}`, why: x.why })),
+    notices: Object.entries(NOTICE_SECTIONS)
+      .filter(([, v]) => v !== 'keep')
+      .map(([section, v]) => (v === 'drop' ? { section, kept: false } : typeof v === 'string' ? { section, replacedBy: `magnusim-web/scripts/export-cad-repo/notices-${v}` } : { section, paragraphs: v.paragraphs.map((p) => ({ starts: `${p.starts}...`, ...(p.put === null ? { dropped: true } : { replacedWith: p.put.replace(/\n/g, ' ') }) })), why: v.why })),
+  };
+}
+
+/** The kind of Magnusim's own bookkeeping of an export, kept outside the copy and never published. */
+const BOOK_KIND = 'magnusim-cad-export-bookkeeping';
+
+/** The bookkeeping file of the copy in `out`: `record` (--record), else beside the out folder. */
+const bookkeepingFile = (out, record) => resolve(record || join(dirname(out), `${basename(out)}.bookkeeping`, 'last-export.json'));
+
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+
+/**
+ * The commit a copy was exported from, for --check: EXPORT.json's when it names one (a release
+ * export); else the bookkeeping file's when it is this copy's (it holds the sha256 of this very
+ * EXPORT.json); else HEAD when its date is EXPORT.json's (the commit's date). Otherwise it stops.
+ */
+function commitOfCopy(out, record, bookFile) {
+  const m = record.magnusim || {};
+  if (/^[0-9a-f]{40}$/.test(String(m.commit))) return { commit: m.commit, from: 'EXPORT.json' };
+  let book = null;
+  try {
+    book = JSON.parse(readFileSync(bookFile, 'utf8'));
+  } catch {
+    /* none: HEAD below */
+  }
+  const ours = book?.kind === BOOK_KIND && book.exportJsonSha256 === sha256(readFileSync(join(out, 'EXPORT.json'))) && /^[0-9a-f]{40}$/.test(String(book.commit));
+  if (ours) return { commit: book.commit, from: bookFile };
+  const head = git(['rev-parse', 'HEAD']).trim();
+  const headDate = git(['show', '-s', '--format=%cI', head]).trim();
+  if (m.date && headDate === m.date) return { commit: head, from: `HEAD, whose date is EXPORT.json's (${m.date})` };
+  throw new Error(
+    `${join(out, 'EXPORT.json')} names no commit (a development snapshot), ${bookFile} ${book ? "is another export's" : 'is not there'}, and HEAD (${head.slice(0, 10)}, ${headDate}) is not the commit the copy was made from (${m.date || 'no date'}): pass --record <file>, this copy's bookkeeping`,
+  );
+}
+
+/** The CAD manifest's version at `commit` (or in `file`, for one taken from a working tree). */
+const cadVersionAt = (commit, prefix, file = null) => cadVersionOf(file ? readFileSync(file, 'utf8') : git(['show', `${commit}:${prefix}${CAD_MANIFEST}`]));
+
+/** The self-check alone, on a copy this script wrote. */
+function checkOnly(out, prefix, bookFile) {
+  let record = null;
+  try {
+    record = JSON.parse(readFileSync(join(out, 'EXPORT.json'), 'utf8'));
+  } catch {
+    /* refused below */
+  }
+  if (!record || record.kind !== MARKER_KIND || !record.magnusim) throw new Error(`${out} holds no EXPORT.json from this script`);
+  const { commit, from } = commitOfCopy(out, record, bookFile);
+  const { uncommitted = [] } = record.magnusim;
+  console.log(`Self-check of ${out} (Magnusim ${commit.slice(0, 10)}, from ${from}${record.magnusim.label ? `; ${record.magnusim.label}` : ''})`);
+  const leftOut = LEFT_OUT.map((x) => `${APP_DIR}/${x.path}`);
+  // An --allow-dirty copy's manifest may be the working tree's: the copy's own, then.
+  const cadVersion = cadVersionAt(commit, prefix, uncommitted.includes(`${prefix}${CAD_MANIFEST}`) ? join(out, APP_DIR, CAD_MANIFEST) : null);
+  const rewrites = resolvedRewrites(prefix, record.magnusim, rewritesFor({ magnusim: record.magnusim, cadVersion }));
+  const result = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted, rewrites, leftOut });
+  if (!report(result)) throw new Error(`the self-check failed: ${Object.values(result.checks).reduce((n, c) => n + c.offenders.length, 0)} offenders`);
+  console.log('Self-check passed');
+}
+
+/** The command line: [<out folder>] [--dev] [--allow-dirty] [--check] [--record <file>]. */
+function parseArgs(args) {
+  const o = { allowDirty: false, check: false, dev: false, record: null, out: null };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--allow-dirty') o.allowDirty = true;
+    else if (a === '--check') o.check = true;
+    else if (a === '--dev') o.dev = true;
+    else if (a === '--record') {
+      o.record = args[++i];
+      if (!o.record || o.record.startsWith('--')) throw new Error('--record needs a file');
+    } else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
+    else if (o.out) throw new Error(`one out folder only: ${o.out}, ${a}`);
+    else o.out = a;
+  }
+  return o;
+}
+
+// --- the export -------------------------------------------------------------------------------
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const { allowDirty, dev: devSnapshot } = opts;
+  const out = resolve(opts.out || (process.platform === 'win32' ? 'C:/mcad-export' : join(WEB, '..', '..', 'mcad-export')));
+  const bookFile = bookkeepingFile(out, opts.record);
+  const within = (p, dir) => {
+    const cmp = (s) => (caseless ? slash(s).toLowerCase() : slash(s));
+    return cmp(p).startsWith(`${cmp(dir)}/`);
+  };
+  if (within(bookFile, out)) throw new Error(`the bookkeeping file ${bookFile} is in the copy ${out}: it must stay outside it (--record)`);
+
+  const top = git(['rev-parse', '--show-toplevel']).trim();
+  const prefix = git(['rev-parse', '--show-prefix']).trim();
+  if (prefix !== `${APP_DIR}/` || slash(resolve(top)) !== slash(resolve(WEB, '..'))) throw new Error(`expected the app in ${APP_DIR}/ at the repository's root, found ${top} + ${prefix}`);
+  if (opts.check) return checkOnly(out, prefix, bookFile);
+  const commit = git(['rev-parse', 'HEAD']).trim();
+  const commitDate = git(['show', '-s', '--format=%cI', commit]).trim();
+  // The whole repository's (':/'): LICENSE and THIRD_PARTY_NOTICES.md are at its root, above the app.
+  const tracked = new Set(git(['ls-files', '-z', '--full-name', '--', ':/']).split('\0').filter(Boolean));
+  const dirtyTop = new Set(
+    git(['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+      .split('\0')
+      .filter((e) => /^[ MADRCU?!]{2} /.test(e))
+      .map((e) => e.slice(3)),
+  );
+  const isDirty = (rel) => dirtyTop.has(`${prefix}${rel}`);
+  // A release export names the release tag at the commit (Magnusim's are vX.Y.Z).
+  const releaseTag = devSnapshot ? '' : git(['tag', '--points-at', commit]).split(/\r?\n/).filter((t) => /^v\d+\.\d+\.\d+$/.test(t)).sort()[0] || '';
+  console.log(`Magnusim ${commit.slice(0, 10)} (${commitDate})${devSnapshot ? ', a development snapshot' : releaseTag ? `, ${releaseTag}` : ''} -> ${out}`);
+  if (!devSnapshot && !git(['branch', '-r', '--contains', commit]).trim()) console.warn(`  warning: ${commit.slice(0, 10)} is on no remote branch, and the copy names it: --dev makes a development snapshot, which names no commit`);
+
+  // Magnusim's files the export writes its own from (repository paths): from git too.
+  const readFrom = ['LICENSE', 'THIRD_PARTY_NOTICES.md', ...['package.json', 'package-lock.json', 'desktop/package.json', ...FIXED_FILES.map((f) => `scripts/export-cad-repo/${f}`)].map((p) => `${prefix}${p}`)];
+  const readDirty = readFrom.filter((p) => !tracked.has(p) || dirtyTop.has(p));
+  if (readDirty.length && !allowDirty) throw new Error(`these files are changed or not committed (commit them, or --allow-dirty):\n  ${readDirty.join('\n  ')}`);
+  const committed = catFiles(commit, readFrom.filter((p) => !readDirty.includes(p)));
+  /** One of readFrom, as the commit has it (or, with --allow-dirty, as the working tree has it when changed). */
+  const source = (repoPath) => (readDirty.includes(repoPath) ? readFileSync(join(top, repoPath)) : committed.get(repoPath));
+  const fixed = (name) => source(`${prefix}scripts/export-cad-repo/${name}`);
+
+  /** path -> the lists that put it there */
+  const lists = new Map();
+  const add = (rel, list) => {
+    if (!lists.has(rel)) lists.set(rel, new Set());
+    lists.get(rel).add(list);
+  };
+  /** A named file: it must exist and the export must take it. */
+  const need = (rel, list) => {
+    const why = excludedBy(rel);
+    if (why) throw new Error(`${list} needs ${rel}, but the export leaves it out (${why})`);
+    if (!existsSync(join(WEB, rel))) throw new Error(`${list} names ${rel}, which does not exist`);
+    add(rel, list);
+  };
+  /** A folder: every tracked file under it that the export takes (at least one). */
+  const folder = (dir, list) => {
+    const under = [...tracked].filter((p) => p.startsWith(`${prefix}${dir}`)).map((p) => p.slice(prefix.length));
+    const taken = under.filter((p) => !excludedBy(p));
+    if (!taken.length) throw new Error(`${list} names ${dir}, which holds no file the export takes`);
+    for (const p of taken) add(p, list);
+  };
+  const named = (items, list) => {
+    for (const item of items) (item.endsWith('/') ? folder(item, list) : need(item, list));
+  };
+
+  console.log('  page: the Vite build of cad.html');
+  const page = await pageList();
+  for (const f of page.files) need(f, 'page');
+  console.log('  server: esbuild of the server and the desktop shell');
+  const server = await esbuildList(SERVER_ENTRIES);
+  for (const f of server.files) need(f, 'server');
+  for (const [script, [owner, name]] of Object.entries(BY_PATH)) {
+    if (!readFileSync(join(WEB, owner), 'utf8').includes(name)) throw new Error(`${owner} no longer says "${name}": is ${script} still run? (update BY_PATH)`);
+  }
+  console.log('  sdk-build: the plugin SDK and its UI kit');
+  const sdk = await sdkList();
+  for (const f of sdk.files) need(f, 'sdk-build');
+  named(READ_BY_PATH, 'read');
+  console.log('  tooling: the desktop shell, the CAD plugin, the typecheck configs');
+  named(TOOLING, 'tooling');
+  const tooling = await esbuildList(TOOLING_ENTRIES);
+  for (const f of tooling.files) need(f, 'tooling');
+  console.log('  types: what tsc needs on top');
+  const types = typesList(new Set(lists.keys()));
+  for (const f of types.files) need(f, 'types');
+
+  // The root package.json's dependencies: those the lists use, as Magnusim declares them (at the commit).
+  const rootPkg = JSON.parse(source(`${prefix}package.json`).toString('utf8'));
+  const desktopPkg = JSON.parse(source(`${prefix}desktop/package.json`).toString('utf8'));
+  /**
+   * What the copy says it comes from (EXPORT.json's magnusim; the README and desktop/scripts/build.mjs
+   * sourceOf read it). A development snapshot's commit is not published: the copy names its
+   * label and no commit (public: false); the commit stays in Magnusim's bookkeeping, outside it.
+   */
+  const magnusim = devSnapshot
+    ? { repository: MAGNUSIM_URL, label: `development version ${desktopPkg.version} (${commitDate.slice(0, 10)})`, public: false, date: commitDate }
+    : { repository: MAGNUSIM_URL, ...(releaseTag ? { label: releaseTag } : {}), public: true, commit, date: commitDate };
+  const declared = new Set([...Object.keys(rootPkg.dependencies || {}), ...Object.keys(rootPkg.devDependencies || {})]);
+  const desktopDeclared = new Set([...Object.keys(desktopPkg.dependencies || {}), ...Object.keys(desktopPkg.devDependencies || {})]);
+  for (const [name, by] of server.imports) {
+    if (!declared.has(name) && !desktopDeclared.has(name)) throw new Error(`${[...by].join(', ')} import ${name}, which neither package.json declares`);
+  }
+  const loadSdk = await import(pathToFileURL(join(WEB, 'scripts', 'server', 'assistant', 'providers', 'load-sdk.ts')).href);
+  const roots = new Set([
+    ...page.packages,
+    ...server.imports.keys(),
+    ...sdk.packages,
+    ...types.packages,
+    ...TOOL_PACKAGES,
+    // What desktop/scripts/build.mjs serverPackages() ships: loaded by name (load-sdk.ts), React, esbuild.
+    ...loadSdk.SDK_NAMES,
+    loadSdk.MCP_SDK_NAME,
+    'react',
+    'react-dom',
+    'esbuild',
+  ]);
+  const lockText = source(`${prefix}package-lock.json`);
+  const magnusimLock = JSON.parse(lockText.toString('utf8'));
+  const used = lockClosure(magnusimLock.packages, roots);
+  const pick = (deps) => Object.fromEntries(Object.entries(deps || {}).filter(([n]) => used.has(n)));
+  const pkg = {
+    name: 'magnusim-cad',
+    private: true,
+    version: desktopPkg.version,
+    type: 'module',
+    description: 'Magnusim CAD: parametric parts and STEP files with the Assistant, as a desktop app (the CAD edition of Magnusim, copied from its repository)',
+    scripts: SCRIPTS,
+    dependencies: pick(rootPkg.dependencies),
+    devDependencies: pick(rootPkg.devDependencies),
+    license: 'GPL-3.0-or-later',
+    engines: rootPkg.engines,
+    overrides: rootPkg.overrides,
+  };
+  if (!pkg.overrides) delete pkg.overrides;
+  add('package.json', 'export');
+  add('package-lock.json', 'export');
+
+  // Every file comes from git, as committed, unless --allow-dirty.
+  const files = [...lists.keys()].filter((p) => p !== 'package.json' && p !== 'package-lock.json').sort();
+  const dirty = files.filter((p) => !tracked.has(`${prefix}${p}`) || isDirty(p));
+  if (dirty.length && !allowDirty) throw new Error(`these files are changed or not committed (commit them, or --allow-dirty):\n  ${dirty.join('\n  ')}`);
+
+  /** What came from the working tree (--allow-dirty): repository paths. */
+  const uncommitted = [...dirty.map((p) => `${prefix}${p}`), ...readDirty].sort();
+  if (uncommitted.length) magnusim.uncommitted = uncommitted;
+
+  // Each declared rewrite is of a file the copy holds, and applies (it throws otherwise).
+  const cadVersion = cadVersionAt(commit, prefix, dirty.includes(CAD_MANIFEST) ? join(WEB, CAD_MANIFEST) : null);
+  const rewriteList = rewritesFor({ magnusim, cadVersion });
+  const rewriteOf = new Map(rewriteList.map((r) => [r.path, r]));
+  for (const r of rewriteList) if (!lists.has(r.path)) throw new Error(`rewritesFor names ${r.path}, which the copy does not hold: update it`);
+  if (!fixed('README.md').toString('utf8').includes(README_SOURCE)) throw new Error(`scripts/export-cad-repo/README.md has no ${README_SOURCE}`);
+
+  prepareOut(out, top);
+  // The marker first: an export that fails from here on leaves a folder the next one may replace.
+  writeOut(out, 'EXPORT.json', `${JSON.stringify({ kind: MARKER_KIND, incomplete: 'the export did not finish', magnusim }, null, 2)}\n`);
+  const blobs = catFiles(commit, files.filter((p) => !dirty.includes(p)).map((p) => `${prefix}${p}`));
+  for (const p of files) {
+    const data = dirty.includes(p) ? readFileSync(join(WEB, p)) : blobs.get(`${prefix}${p}`);
+    const rw = rewriteOf.get(p);
+    writeOut(out, `${APP_DIR}/${p}`, rw ? applyEdits(data.toString('utf8'), rw.edits, p) : data);
+  }
+
+  // package.json, and the lockfile pruned from Magnusim's (the same versions).
+  const outWeb = join(out, APP_DIR);
+  writeOut(out, `${APP_DIR}/package.json`, `${JSON.stringify(pkg, null, 2)}\n`);
+  writeOut(out, `${APP_DIR}/package-lock.json`, lockText);
+  const npm = spawnSync('npm install --package-lock-only --offline --ignore-scripts --no-audit --no-fund', { cwd: outWeb, encoding: 'utf8', shell: true, timeout: 300_000 });
+  let lockfile = "pruned from Magnusim's (npm install --package-lock-only --offline)";
+  const warnings = [];
+  if (npm.status !== 0) {
+    writeOut(out, `${APP_DIR}/package-lock.json`, lockText);
+    lockfile = "Magnusim's, copied: npm could not prune it offline (npm ci will refuse it until npm install --package-lock-only is run)";
+    warnings.push(`package-lock.json: ${lockfile}\n${(npm.stderr || npm.stdout || '').trim()}`);
+  } else {
+    const after = JSON.parse(readFileSync(join(outWeb, 'package-lock.json'), 'utf8')).packages;
+    const drift = [];
+    for (const [key, e] of Object.entries(after)) {
+      if (!key) continue;
+      const was = magnusimLock.packages[key];
+      if (!was) drift.push(`${key} ${e.version}: not in Magnusim's lockfile`);
+      else if (was.version !== e.version || was.resolved !== e.resolved || was.integrity !== e.integrity) drift.push(`${key}: ${was.version} -> ${e.version}`);
+    }
+    if (drift.length) throw new Error(`the pruned lockfile is not Magnusim's versions:\n  ${drift.join('\n  ')}`);
+    lockfile += `: ${Object.keys(after).length - 1} packages, all as in Magnusim's`;
+  }
+
+  // The new repository's root.
+  const rewrites = resolvedRewrites(prefix, magnusim, rewriteList);
+  const rootFiles = {
+    'README.md': applyEdits(fixed('README.md').toString('utf8'), rewrites['README.md'].edits, 'README.md'),
+    '.gitignore': fixed('gitignore'),
+    '.gitattributes': fixed('gitattributes'),
+    LICENSE: source('LICENSE'),
+    'THIRD_PARTY_NOTICES.md': cadNotices(source('THIRD_PARTY_NOTICES.md').toString('utf8'), fixed),
+  };
+  for (const [name, data] of Object.entries(rootFiles)) writeOut(out, name, data);
+  cadSection(join(out, 'THIRD_PARTY_NOTICES.md')); // the installer's notices need it (throws if gone)
+
+  const all = [...Object.keys(rootFiles), 'EXPORT.json', ...[...lists.keys()].map((p) => `${APP_DIR}/${p}`)].sort();
+  for (const rel of all) {
+    if (rel === 'EXPORT.json' || BINARY.test(rel)) continue;
+    if (readFileSync(join(out, ...rel.split('/')), 'utf8').includes('\r\n') && !/\.(bat|cmd)$/i.test(rel)) warnings.push(`${rel} has CRLF line ends as committed (the CAD repository's .gitattributes stores LF)`);
+  }
+
+  const record = {
+    kind: MARKER_KIND,
+    about:
+      "A copy of Magnusim CAD's code, made by Magnusim's scripts/export-cad-repo.mjs. Code changes are made in Magnusim, and arrive here with the next copy. \"executables\": the files Magnusim's git has as executable (100755), which this repository's commit adds with git add --chmod=+x.",
+    magnusim,
+    executables: executablesOf({ web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), rewrites, files: all }),
+    lockfile,
+    copyChanges: copyChanges(rewriteList),
+    selfCheck: 'not run yet',
+    lists: {
+      page: 'the page: the Vite build of cad.html (modules, files it reads, its tsconfig.json)',
+      server: "the server and the desktop shell: esbuild's metafile of their entries",
+      'sdk-build': 'the plugin SDK and UI kit the server builds at run time',
+      read: 'files the server reads by path',
+      types: 'what npm run typecheck needs on top (type-only imports, ambient types)',
+      tooling: "the desktop shell's installer build, the CAD plugin (source, workspace, licences, kernel and solver sources), the tsconfigs",
+      export: 'written by the export',
+      licence: 'licence and notices',
+    },
+    files: {},
+  };
+  const rootLists = { 'README.md': ['export'], '.gitignore': ['export'], '.gitattributes': ['export'], LICENSE: ['licence'], 'THIRD_PARTY_NOTICES.md': ['licence', 'export'], 'EXPORT.json': ['export'] };
+  for (const rel of all) record.files[rel] = rootLists[rel] || [...lists.get(rel.slice(APP_DIR.length + 1))].sort();
+  // One line per file, so a sync's diff of EXPORT.json reads as the files that came and went.
+  const fileLines = Object.entries(record.files).map(([rel, l]) => `    ${JSON.stringify(rel)}: ${JSON.stringify(l)}`);
+  const writeRecord = () => writeOut(out, 'EXPORT.json', `${JSON.stringify({ ...record, files: '<files>' }, null, 2).replace(/"files": "<files>"/, `"files": {\n${fileLines.join(',\n')}\n  }`)}\n`);
+  writeRecord();
+
+  // The self-check reads what was written (EXPORT.json too), and its counts go into EXPORT.json.
+  console.log('  self-check: the written copy');
+  const checked = selfCheck({ out, web: WEB, commit, prefix, appDir: APP_DIR, fromGit: rootFromGit(prefix), uncommitted, rewrites, leftOut: LEFT_OUT.map((x) => `${APP_DIR}/${x.path}`) });
+  record.selfCheck = summary(checked);
+  writeRecord();
+
+  // Magnusim's own bookkeeping, outside the copy: the commit, and the EXPORT.json it belongs to.
+  const book = {
+    kind: BOOK_KIND,
+    about: "Magnusim's bookkeeping of a Magnusim CAD export (scripts/export-cad-repo.mjs): kept outside the copy and never published; --check finds the commit here",
+    out,
+    commit,
+    date: commitDate,
+    label: magnusim.label || '',
+    public: magnusim.public,
+    exportJsonSha256: sha256(readFileSync(join(out, 'EXPORT.json'))),
+    selfCheckPassed: checked.passed,
+  };
+  mkdirSync(dirname(bookFile), { recursive: true });
+  writeFileSync(bookFile, `${JSON.stringify(book, null, 2)}\n`);
+
+  // Files and size per top folder.
+  const sizes = new Map();
+  for (const rel of all) {
+    const parts = rel.split('/');
+    const key = parts.length === 1 ? '(root)' : parts[0] === APP_DIR ? (parts.length === 2 ? `${APP_DIR}/(files)` : `${APP_DIR}/${parts[1]}`) : parts[0];
+    const s = sizes.get(key) || { files: 0, bytes: 0 };
+    s.files += 1;
+    s.bytes += statSync(join(out, ...parts)).size;
+    sizes.set(key, s);
+  }
+  let total = 0;
+  for (const [key, s] of [...sizes].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    console.log(`  ${key.padEnd(34)} ${String(s.files).padStart(5)} files ${(s.bytes / 2 ** 20).toFixed(2).padStart(8)} MiB`);
+    total += s.bytes;
+  }
+  console.log(`  ${'total'.padEnd(34)} ${String(all.length).padStart(5)} files ${(total / 2 ** 20).toFixed(2).padStart(8)} MiB`);
+  console.log(`  dependencies: ${Object.keys(pkg.dependencies).join(' ')}`);
+  console.log(`  devDependencies: ${Object.keys(pkg.devDependencies).join(' ')}`);
+  console.log(`  lockfile: ${lockfile}`);
+  console.log(`  executables: ${record.executables.length} (EXPORT.json "executables")`);
+  console.log(`  bookkeeping, outside the copy: ${bookFile}`);
+  for (const w of warnings) console.warn(`  warning: ${w}`);
+  if (!report(checked)) throw new Error(`the self-check failed: ${Object.values(checked.checks).reduce((n, c) => n + c.offenders.length, 0)} offenders in ${out} (above); EXPORT.json records it`);
+  console.log(`Exported ${all.length} files to ${out}`);
+}
+
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+});
