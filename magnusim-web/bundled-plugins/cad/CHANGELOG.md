@@ -11,8 +11,11 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   yet, and say what they added ("Added 8 faces: 1 fillet chain, R2", "Added 4
   faces: 4 holes up to Ø6 mm (4 through)") or why nothing ("No fillets up to 2
   mm on Body 1 that are not already picked (Body 1 has 12 fillet faces, R2 to
-  R5)", or a body too large, a surface body). The sizes start from the body's
-  size. With no face picked yet they use the Part's one solid body; with two,
+  R5)", or a body too large, a surface body). "Up to" is the size itself:
+  Holes up to Ø 5.95 mm adds no 6 mm hole. Round voids and other holes with no
+  cylinder are not counted as drilled holes ("Body 1 has 1 drilled hole, Ø6,
+  and 3 round hollows with no cylinder, which no size matches"). The sizes
+  start from the body's size. With no face picked yet they use the Part's one solid body; with two,
   they ask for a click on the body first.
 - They pick exactly what the Assistant's `"Body 1 faces fillet <= 2 mm"` and
   `"Body 1 faces hole <= 6 mm"` pick, so a rounded T-block's fillets added this
@@ -39,7 +42,11 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   fillet up to R2 on Body 1 is 40 faces and 39 are picked: with all 40, Delete
   faces can take them off as fillets", or the rest of the fillets and holes
   the picked faces are part of), and its panel's Add the rest adds them. The
-  Assistant reads them as `rest` in get_model.
+  Assistant reads them as `rest` in get_model. When those fillets include
+  rings round a boss or a hole (a hole's rim), which cannot come off as
+  fillets, it says so instead ("Delete faces cannot take the fillets up to R2
+  on Body 1 off as fillets: 2 of the 42 are rings round a boss or a hole") and
+  offers no rings to add.
 - A Delete faces saved before this keeps the old heal, so the Part rebuilds as
   it was made; when its faces would qualify, its red text says a new Delete
   faces of them may take them off as fillets.

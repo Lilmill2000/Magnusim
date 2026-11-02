@@ -299,7 +299,8 @@ touching bodies apart.
   are every fillet of the body up to the largest picked radius, they are taken
   off as fillets (Analysis Situs) and the row says so. A red Delete faces names
   the faces that would make the pick whole, and **Add the rest** in its panel
-  adds them. In the panel, **Fillets up to** [R] **Add** and **Holes up to Ø**
+  adds them; when the fillets up to that radius include rings round a boss or a
+  hole, which cannot come off as fillets, it says so instead. In the panel, **Fillets up to** [R] **Add** and **Holes up to Ø**
   [D] **Add** pick the faces by size (whole drilled holes, through holes too)
   and say what they added; with no face picked yet they use the Part's one solid
   body. A Ctrl+drag box in the view adds the faces it selects while the panel is
