@@ -4,10 +4,12 @@
 // inside R included, nothing 'uncertain'), on one solid of at most 2,000 faces, Try repair not
 // used; "the rest" is every fillet up to R when only part of it is picked (version 2), else the
 // rest of the chains and holes the picks are part of; a mixed pick whose fillets alone qualify and
-// a Delete faces saved before version 2 whose pick qualifies are told so.
+// a Delete faces saved before version 2 whose pick qualifies are told so. Rings (faces closing on
+// themselves, which SuppressBlendsInc never takes off) in every fillet up to R: none of those
+// sentences, and never that set as the rest; the words say the rings stop it (review 2026-11-02).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, type RedPlanInput } from '../../../src/features/delete_faces/plan';
+import { groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, ringWords, type RedPlanInput } from '../../../src/features/delete_faces/plan';
 import type { RecognizeResult, RecognizedBlend } from '../../../src/types/kernel-protocol';
 
 const MM = { length: 'mm', angle: 'deg' } as const;
@@ -24,7 +26,7 @@ const rec = (blends: RecognizedBlend[], o: Partial<RecognizeResult> = {}): Recog
 const range = (a: number, b: number) => Array.from({ length: b - a }, (_, i) => a + i);
 /** A rounded T-block's 40 blends R2, faces 10..49 (one chain). */
 const T = rec(range(10, 50).map((i) => blend(i, 2, i >= 46 ? 'vertex' : 'ordinary')));
-const input = (o: Partial<RedPlanInput>): RedPlanInput => ({ version: 2, repair: false, picks: range(10, 50), faces: 50, rec: T, atR: T, bodyName: 'Body 1', units: MM, ...o });
+const input = (o: Partial<RedPlanInput>): RedPlanInput => ({ version: 2, repair: false, picks: range(10, 50), faces: 50, rec: T, atR: T, rings: null, bodyName: 'Body 1', units: MM, ...o });
 
 describe('readPick and matchSet', () => {
   it('a pick reads as fillets (recognised blends, not uncertain: cliffs count, as the kernel counts them) and others, with the largest radius', () => {
@@ -108,6 +110,38 @@ describe('planRed', () => {
     expect(p.sentences).toEqual(['The fillets alone (40 faces, every fillet up to R2) can be taken off as fillets in a Delete faces of their own', 'The picked faces are part of holes with 1 more face']);
     // Not every fillet up to R among the picks: no mixed words.
     expect(planRed(input({ rec: r, picks: [...range(11, 50), 3] })).sentences).toEqual(['The picked faces are part of fillets and holes with 2 more faces']);
+  });
+
+  it('every fillet up to R holds rings (a hole rim, a boss foot): never "can take them off", never that set as the rest; the rings are named', () => {
+    // A holed T-block: faces 48 and 49 are the hole's rim rings, each its own chain; 3 is the hole's wall.
+    const ringed = rec(
+      range(10, 50).map((i) => blend(i, 2, 'ordinary', i < 48 ? 0 : i - 47)),
+      { chains: [{ faces: range(10, 48), r_min: 2, r_max: 2, length: 400 }, { faces: [48], r_min: 2, r_max: 2, length: 25 }, { faces: [49], r_min: 2, r_max: 2, length: 25 }], holes: [{ faces: [3, 48, 49], d_min: 8, d_max: 8, through: true }] },
+    );
+    const rings = new Set([3, 48, 49]);
+    const at = { rec: ringed, atR: ringed, rings };
+    const said = 'Delete faces cannot take the fillets up to R2 on Body 1 off as fillets: 2 of the 40 are rings round a boss or a hole';
+    // Every fillet but the rings picked: without the rings known, the promise and the rings as the rest (which the kernel would refuse).
+    expect(planRed(input({ rec: ringed, atR: ringed, picks: range(10, 48) }))).toMatchObject({ rest: [48, 49], sentences: [expect.stringMatching(/with all 40, Delete faces can take them off as fillets$/)] });
+    expect(planRed(input({ ...at, picks: range(10, 48) }))).toEqual({ takeOff: false, r: 2, rest: [], sentences: [said] });
+    // A mixed pick (every fillet and the hole's wall): no "the fillets alone can be taken off".
+    const mixed = planRed(input({ ...at, picks: [...range(10, 50), 3] }));
+    expect(mixed.sentences).toEqual([said]);
+    expect(mixed.rest).toEqual([]);
+    expect(planRed(input({ rec: ringed, atR: ringed, picks: [...range(10, 50), 3] })).sentences).toEqual(['The fillets alone (40 faces, every fillet up to R2) can be taken off as fillets in a Delete faces of their own']);
+    // Saved before version 2: not "a new Delete faces may do it".
+    expect(planRed(input({ ...at, version: undefined }))).toEqual({ takeOff: false, r: 2, rest: [], sentences: [said] });
+    // Version 2 with every fillet picked: the kernel is asked, and its refusal names the rings.
+    expect(planRed(input(at))).toEqual({ takeOff: true, r: 2, rest: [], sentences: [] });
+    // A ring outside the set changes nothing.
+    expect(planRed(input({ picks: range(11, 50), rings: new Set([3]) })).rest).toEqual([10]);
+  });
+
+  it('the ring words: some, all, the one', () => {
+    expect(ringWords('Body 1', 2, MM, 42, 1)).toBe('Delete faces cannot take the fillets up to R2 on Body 1 off as fillets: 1 of the 42 is a ring round a boss or a hole');
+    expect(ringWords('Body 1', 2, MM, 2, 2)).toBe('Delete faces cannot take the fillets up to R2 on Body 1 off as fillets: all 2 are rings round a boss or a hole');
+    expect(ringWords('Body 1', 2, MM, 1, 1)).toBe('Delete faces cannot take the fillets up to R2 on Body 1 off as fillets: it is a ring round a boss or a hole');
+    expect(ringWords('flange', 2, { length: 'in', angle: 'deg' }, 1200, 2)).toBe('Delete faces cannot take the fillets up to R0.07874 in on flange off as fillets: 2 of the 1,200 are rings round a boss or a hole');
   });
 
   it('a hole picked in part (no fillet): the rest of the hole; nothing recognised: nothing said', () => {

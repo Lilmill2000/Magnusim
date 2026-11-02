@@ -15,6 +15,10 @@
 //    with all of them it may be taken off as fillets), else the rest of the fillet chains and holes
 //    the picked faces are part of. A mixed pick whose fillets alone would qualify is told so, and a
 //    Delete faces saved before version 2 whose pick would qualify says a new one may do it.
+//  - Rings: SuppressBlendsInc never takes off a fillet face that closes on itself (a seamed ring,
+//    such as the round on a hole's rim or a boss's foot; the kernel says so in words). When every
+//    fillet up to R holds rings, none of those three sentences is said and the set is never the
+//    rest (adding it would only be refused): the words say the rings stop it instead.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { LARGE_PART_FACES } from '../../kernel/timeouts';
@@ -130,6 +134,8 @@ export interface RedPlanInput {
   rec: RecognizeResult | null;
   /** Fillets of the body at limitOf(readPick(rec, picks).r), or null (none picked, or not found). */
   atR: RecognizeResult | null;
+  /** Faces of the body that close on themselves (a seamed ring), at least those of `atR`; null when not looked up. */
+  rings: ReadonlySet<number> | null;
   bodyName: string;
   units: DocUnits;
 }
@@ -154,21 +160,33 @@ export function planRed(input: RedPlanInput): RedPlan {
   const set = atR && read.fillets.length ? matchSet(atR, read.fillets) : null;
   const fits = rec.solids === 1 && input.faces <= SECOND_WAY_MAX_FACES;
   const qualifies = !!set && set.same && set.uncertain === 0 && fits;
+  // Rings in the set: taking every fillet up to R off as fillets is refused, so it is never offered.
+  const rings = atR && set && input.rings ? atR.blends.filter((b) => input.rings!.has(b.face)).length : 0;
   const plan: RedPlan = { ...none, r: read.r };
+  const ringSaid = () => plan.sentences.push(ringWords(input.bodyName, read.r!, input.units, set!.size, rings));
   if (read.fillets.length && !read.others.length) {
     if (qualifies) {
-      if (input.version !== 2) plan.sentences.push(LEGACY_WORDS);
-      else if (!input.repair) plan.takeOff = true;
+      // Version 2 still asks the kernel, whose refusal names the rings ("a ring round a boss or a hole ...").
+      if (input.version !== 2) {
+        if (rings) ringSaid();
+        else plan.sentences.push(LEGACY_WORDS);
+      } else if (!input.repair) plan.takeOff = true;
       return plan;
     }
-    // Only part of every fillet up to R: with the rest, version 2 may take them off as fillets.
+    // Only part of every fillet up to R: with the rest, version 2 may take them off as fillets (never with rings in it).
     if (input.version === 2 && set && fits && !set.extra.length && set.missing.length && set.uncertain === 0 && read.r !== null) {
-      plan.rest = set.missing;
-      plan.sentences.push(setWords(input.bodyName, read.r, input.units, set.size, read.fillets.length, set.cliffs));
-      return plan;
+      if (rings) ringSaid();
+      else {
+        plan.rest = set.missing;
+        plan.sentences.push(setWords(input.bodyName, read.r, input.units, set.size, read.fillets.length, set.cliffs));
+        return plan;
+      }
     }
   }
-  if (read.fillets.length && read.others.length && qualifies && read.r !== null) plan.sentences.push(mixedWords(read.fillets.length, read.r, input.units));
+  if (read.fillets.length && read.others.length && qualifies && read.r !== null) {
+    if (rings) ringSaid();
+    else plan.sentences.push(mixedWords(read.fillets.length, read.r, input.units));
+  }
   const g = groupRest(rec, input.picks);
   if (g.faces.length) {
     plan.rest = g.faces;
@@ -206,6 +224,12 @@ export function setWords(bodyName: string, r: number, units: DocUnits, size: num
 
 export function mixedWords(fillets: number, r: number, units: DocUnits): string {
   return `The fillets alone (${withCommas(fillets)} ${plural(fillets, 'face', 'faces')}, every fillet up to ${radiusWords(r, units)}) can be taken off as fillets in a Delete faces of their own`;
+}
+
+/** Every fillet up to R holds rings, which SuppressBlendsInc never takes off: the second way cannot do it. */
+export function ringWords(bodyName: string, r: number, units: DocUnits, size: number, rings: number): string {
+  const which = rings === size ? (size === 1 ? 'it is a ring' : `all ${withCommas(size)} are rings`) : `${withCommas(rings)} of the ${withCommas(size)} ${plural(rings, 'is a ring', 'are rings')}`;
+  return `Delete faces cannot take the fillets up to ${radiusWords(r, units)} on ${bodyName} off as fillets: ${which} round a boss or a hole`;
 }
 
 export function groupWords(picked: number, more: number, fillets: boolean, holes: boolean): string {

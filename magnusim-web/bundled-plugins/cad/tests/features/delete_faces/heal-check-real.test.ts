@@ -235,6 +235,41 @@ describe('Delete faces version 2 through the document: still refused in words, t
     expect(await volume(d, after.id)).toBeCloseTo(v0, 6);
   }, 180_000);
 
+  it('the same holed T-block with every fillet but the rim rings picked, or every fillet and the hole wall: red, and the words say the rings stop taking them off as fillets, never "with all 42" or "the fillets alone" (review 2026-11-02)', async () => {
+    const d = await part();
+    await block(d, [0, 0, 10], [60, 40, 10]);
+    await block(d, [20, 0, 0], [20, 40, 10], 'join');
+    await hole(d, 10, 20, 4, 20);
+    const fillet = await roundAll(d, 2);
+    const fname = d.doc.state.get().doc.features.find((f) => f.id === fillet)!.name;
+    const before = bodies(d)[0];
+    const v0 = await volume(d, before.id);
+    const t = await topo(d, before);
+    const wall = (f: TopoResult['faces'][number]) => f.type === 'cylinder' && near(f.radius ?? 0, 4);
+    // The hole's two rim rounds: tori round its axis, each closing on itself (a seam).
+    const rim = (f: TopoResult['faces'][number]) => f.type === 'torus' && !!f.axis && near(f.axis.origin[0], 10) && near(f.axis.origin[1], 20);
+    expect(t.faces.filter(rim)).toHaveLength(2);
+    const rings = 'Delete faces cannot take the fillets up to R2 on Body 1 off as fillets: 2 of the 42 are rings round a boss or a hole';
+    // Every fillet but the rims: was "Every fillet up to R2 on Body 1 is 42 faces and 40 are picked: with all 42, Delete faces can
+    // take them off as fillets" with the rims as the rest, which taking off as fillets then refuses.
+    const del = await deleteFaces(d, (f) => f.type !== 'plane' && !wall(f) && !rim(f));
+    expect(del.count).toBe(40);
+    expect(del.status.state).toBe('error');
+    expect(del.status.message).toMatch(new RegExp(`^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add [\\d,.]+ mm³ over faces you kept \\([^)]*\\); the body is unchanged\\. To take the whole fillet off, delete ${fname} instead\\. `));
+    expect(del.status.message!.endsWith(`. ${rings}`)).toBe(true);
+    expect(del.status.message).not.toContain('Delete faces can take them off');
+    expect(del.rb.outputs[del.id]).toBeUndefined();
+    // Every fillet and the hole's wall: was "The fillets alone (42 faces, every fillet up to R2) can be taken off as fillets in a Delete faces of their own".
+    const ses = d.doc.beginEdit(del.id);
+    ses.update({ faces: await Promise.all(t.faces.filter((f) => f.type !== 'plane').map((f) => faceRef(d, before, f.i))) } as Partial<DeleteFacesFeature>);
+    ses.commit();
+    const rb = await settle(d.doc);
+    expect(rb.features[del.id]).toMatchObject({ state: 'error', message: `Delete faces 1 failed: 3 of the 43 faces could not be removed and healed (the faces around them cannot be extended to close the gap). ${rings}` });
+    expect(rb.outputs[del.id]).toBeUndefined();
+    expect(bodies(d)[0].shape).toBe(before.shape);
+    expect(await volume(d, bodies(d)[0].id)).toBeCloseTo(v0, 6);
+  }, 180_000);
+
   it('a T-block with all its fillets but one picked: red with every fillet up to R2 and how many are picked; Add the rest (the panel and get_model) makes it the sharp T-block', async () => {
     const r = await part();
     await roundedT(r);

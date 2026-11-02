@@ -19,7 +19,9 @@
 //    "Taken off as fillets up to R2 by Analysis Situs..."; else red with "; taking them off as
 //    fillets did not work either: <why>; the body is unchanged";
 //  - any red Delete faces says "the rest" (plan.ts) and publishes it for the panel's Add the rest
-//    and get_model; one saved before version 2 whose pick would qualify says a new one may do it.
+//    and get_model; one saved before version 2 whose pick would qualify says a new one may do it;
+//    when every fillet up to R holds rings (faces closing on themselves, which never come off as
+//    fillets), the words say so instead of offering that set.
 // Every result that is ok today stays as it is: the second way never runs before OCCT's heal.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -31,13 +33,13 @@ import { timeoutForFaces } from '../../kernel/timeouts';
 import type { DeleteFacesFeature, PersistentRef } from '../../types/doc';
 import type { BuildContext, BuiltBody, DeleteFacesOutput, FeatureBuildResult, FeatureTypeDef } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
-import type { RecognizeResult, SuppressBlendsResult } from '../../types/kernel-protocol';
+import type { RecognizeResult, ShapeId, SuppressBlendsResult } from '../../types/kernel-protocol';
 import type { FaceNames } from '../../types/naming';
 import { checkFilletsOff, checkHeal, healRefused, healWords, retryHoldBack } from '../p2/heal-check';
 import { P2_ICONS } from '../p2/icons';
 import { makerOf, resolveRefs } from '../p2/refs';
 import { invalidWords, kernelWords, occtWords, repairFuzzy, shapeFix } from '../p2/repair';
-import { filletsNote, limitOf, planRed, readPick, secondWayFailed } from './plan';
+import { filletsNote, limitOf, planRed, readPick, SECOND_WAY_MAX_FACES, secondWayFailed } from './plan';
 
 /** Where today's heal ended red: its words, and what follows them when the second way is not tried. */
 interface Red {
@@ -181,7 +183,9 @@ async function redExit(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody
     const at = await recog.features(body.shape, { holes: false, max_r: limitOf(r) }, { faces });
     atR = at.ok ? at.result : null;
   }
-  const plan = planRed({ version: f.version, repair: !!f.repair, picks, faces, rec, atR, bodyName: ctx.bodyName(body.id), units: ctx.units.units() });
+  // Rings among every fillet up to R (only where a sentence about that set may be said).
+  const rings = atR?.blends.length && faces <= SECOND_WAY_MAX_FACES ? await ringFaces(ctx, body.shape) : null;
+  const plan = planRed({ version: f.version, repair: !!f.repair, picks, faces, rec, atR, rings, bodyName: ctx.bodyName(body.id), units: ctx.units.units() });
   let message = `${red.head}${red.tail}`;
   if (plan.takeOff && atR && plan.r !== null) {
     const sw = await takeOffAsFillets(ctx, body, picks, atR);
@@ -196,6 +200,25 @@ async function redExit(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody
   if (!plan.rest.length) return { ok: false, message };
   const output: DeleteFacesOutput = { type: 'delete-faces', how: null, rest: plan.rest, restRefs: await refsOf(ctx, body, plan.rest) };
   return { ok: false, message, output };
+}
+
+/**
+ * The faces of a solid that close on themselves (a seamed ring, such as the round on a hole's rim or
+ * a boss's foot): those with an edge no other face has (the seam), as the kernel's own words tell a
+ * ring (asi_ops.cpp whyLeft: BRep_Tool::IsClosed). A pole (degenerate edge) is not a seam. Null when
+ * the kernel cannot say: then nothing is said about rings.
+ */
+export async function ringFaces(ctx: BuildContext, shape: ShapeId): Promise<Set<number> | null> {
+  try {
+    const t = (await ctx.kernel.call('topo', { id: shape, faces: 'none', edges: 'all', vertices: 'none', edge_length: false })).result;
+    const out = new Set<number>();
+    for (const e of t.edges) if (e.type !== 'degenerate' && e.faces.length === 1) out.add(e.faces[0]);
+    return out;
+  } catch (err) {
+    const k = (err as KernelCallError).kind;
+    if (k === 'occt' || k === 'input' || k === 'internal') return null;
+    throw err;
+  }
 }
 
 /**
