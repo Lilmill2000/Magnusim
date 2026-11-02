@@ -42,7 +42,7 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
-import { axisText, faceText, refBodiesOf, type RefBodies } from './feature-tools';
+import { axisText, faceText, writtenAgainst, type RefBodies } from './feature-tools';
 import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { enclosureKept, KEPT_WORDS } from '../features/enclosure/kept';
@@ -224,7 +224,7 @@ export function fullFeature(services: AppServices, s: DocState, f: Feature, at: 
 
 /** One feature, full, its references written against the bodies just before it (where a resend with edit reads them). */
 async function fullFeatureNow(services: AppServices, s: DocState, f: Feature): Promise<Row> {
-  return fullFeature(services, s, f, inputsNameRefs(f) ? await refBodiesOf(services, f.id) : null);
+  return inputsNameRefs(f) ? writtenAgainst(services, f.id, (at) => fullFeature(services, s, f, at)) : fullFeature(services, s, f);
 }
 
 /** A body: what it is, how big, where; null properties above EAGER_FACES (measure gives them). */

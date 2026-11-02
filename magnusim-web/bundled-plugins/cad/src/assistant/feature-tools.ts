@@ -14,16 +14,18 @@
 //     (where a resend reads it: refBodiesOf; the shown bodies when those cannot be built), so a
 //     label that several faces share (a mirror copy's, a pattern copy's, a trimmed side) names the
 //     one face, and a fillet face's number counts there; "<body> face at (x, y, z)" when it has
-//     none, or is a split face; an edge as "<label A> & <label B>" (or "<body> edge at (x, y, z)"),
-//     axes and planes as selectors, bodies by their names.
+//     none, or is a split face, at a point that lies on the face there (writtenAgainst: a curved
+//     face's centre is off it, past the point rule's reach); an edge as "<label A> & <label B>"
+//     (or "<body> edge at (x, y, z)"), axes and planes as selectors, bodies by their names.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { storedBodyName } from '../doc/features/body-ids';
 import { splitEdgeName } from '../naming/edges';
 import { splitMerged, splitSuffix } from '../naming/names';
+import { resolveFace } from '../naming/resolve';
 import type { AppServices } from '../types/app';
 import type { BodyId, Feature, FeatureId, FeatureType, PersistentRef, Vec3 } from '../types/doc';
-import type { DocState } from '../types/doc-service';
+import type { DocState, EndBody } from '../types/doc-service';
 import type { AxisRef, PlaneRef } from '../types/references';
 import { uiFor } from '../ui/controller';
 import { heartbeat } from './busy';
@@ -34,6 +36,8 @@ import { baseLabel, LabelIndex, modelId, parsePart, quoteName, type LabelBody, t
 import { featureByName, stateWord } from './model';
 import { len } from './numbers';
 import { macrotask } from './pace';
+import { boxDiagonal, pointOnFace, unionBox } from './selectors/geometry';
+import { topoCacheOf } from './selectors/topo-cache';
 import type { EditCtx } from './step';
 import { closestName, closestWords } from './closest';
 
@@ -191,6 +195,13 @@ const isSplit = (name: string) => splitMerged(name).some((p) => splitSuffix(p).k
 export interface RefBodies {
   bodies: readonly LabelBody[];
   labels: LabelIndex;
+  /** The bodies as built (their shapes), where points on their faces are found; absent for the shown bodies. */
+  built?: readonly EndBody[];
+  /**
+   * The faces faceText wrote by a point, by body and stored name: `p` a point that lies on the face
+   * (onFacePoints), null when none was found (the signature's centre stays), undefined until looked for.
+   */
+  points?: Map<string, { body: BodyId; ref: PersistentRef; p?: Vec3 | null }>;
 }
 
 /** The bodies just before feature `id` with their labels, or null when they cannot be built now. */
@@ -198,10 +209,53 @@ export async function refBodiesOf(services: AppServices, id: FeatureId): Promise
   try {
     const eb = await services.doc.bodiesBefore(id);
     const bodies = eb.bodies.map((b) => ({ id: b.id, names: b.names }));
-    return { bodies, labels: new LabelIndex(bodies, labelNames(services.doc.state.get())) };
+    return { bodies, labels: new LabelIndex(bodies, labelNames(services.doc.state.get())), built: eb.bodies, points: new Map() };
   } catch {
     return null;
   }
+}
+
+/** A point that lies on face `index` of `b`: find's point (selectors/geometry.ts), then the face's nearest point to it. */
+async function onFace(services: AppServices, b: EndBody, index: number): Promise<Vec3 | null> {
+  const cache = topoCacheOf(services);
+  const t = await cache.topo(b.shape);
+  const topo = t.faceAt.get(index);
+  if (!topo) return null;
+  // The size the selectors tessellate a body they do not draw at (selectors/resolve.ts tessFor).
+  const tess = await cache.tess(b.shape, Math.max(1, boxDiagonal(unionBox(t.faces.map((f) => f.bbox ?? null)))));
+  const seed = pointOnFace(tess, index, topo);
+  if (!seed) return null;
+  // A triangle's point on a curved face (a fillet's corner) is under it by the tessellation's sag.
+  const m = await services.kernel.call('measure', { a: { id: b.shape, face: index }, b: { point: seed } });
+  return m.result.p1 ?? seed;
+}
+
+/** Points on the faces faceText wrote by a point on `at`'s bodies, each looked for once (the face the feature's build resolves). */
+async function onFacePoints(services: AppServices, at: RefBodies): Promise<void> {
+  for (const fp of at.points?.values() ?? []) {
+    if (fp.p !== undefined) continue;
+    fp.p = null;
+    const b = at.built?.find((x) => x.id === fp.body);
+    if (!b?.names) continue;
+    try {
+      const r = await resolveFace({ ref: fp.ref, shape: b.shape, names: b.names, lookup: topoCacheOf(services).lookup, placement: b.placement });
+      if (r.ok) fp.p = await onFace(services, b, r.index);
+    } catch {
+      // Not readable now (a kernel restart): the signature's centre stays.
+    }
+  }
+}
+
+/**
+ * `write`'s answer with stored references written against the bodies just before feature `id`
+ * (refBodiesOf): when it wrote a face by a point, once more with a point that lies on each such face.
+ */
+export async function writtenAgainst<T>(services: AppServices, id: FeatureId, write: (at: RefBodies | null) => T): Promise<T> {
+  const at = await refBodiesOf(services, id);
+  const out = write(at);
+  if (!at?.points?.size) return out;
+  await onFacePoints(services, at);
+  return write(at);
 }
 
 const SHOWN = new WeakMap<object, RefBodies>();
@@ -233,10 +287,18 @@ function labelOn(at: RefBodies, body: BodyId, name: string): string | null {
   return fl.label && !fl.warning ? fl.label : null;
 }
 
-/** A stored face reference as a face selector: its label on `at`'s bodies (the shown ones by default), else a point on the body (its signature's centre). */
+/**
+ * A stored face reference as a face selector: its label on `at`'s bodies (the shown ones by
+ * default), else a point on the face (one found on `at`'s bodies by writtenAgainst; till then,
+ * and on the shown bodies, its signature's centre).
+ */
 export function faceText(s: DocState, body: BodyId, ref: PersistentRef, at: RefBodies | null = null): string {
   const lb = labelOn(at ?? shownBodies(s), body, ref.name);
-  return lb ?? `${bodyText(s, body)} face at ${point(ref.signature.at)}`;
+  if (lb) return lb;
+  const key = `${body}\u0000${ref.name}`;
+  let fp = at?.points?.get(key);
+  if (!fp && at?.points) at.points.set(key, (fp = { body, ref }));
+  return `${bodyText(s, body)} face at ${point(fp?.p ?? ref.signature.at)}`;
 }
 
 /** A stored edge reference as an edge selector: "<label A> & <label B>" on `at`'s bodies, else a point on the body. */

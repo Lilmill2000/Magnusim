@@ -18,6 +18,9 @@
 // on a body over the holes' face limit (lowered as the person's e2e lowers it), the red reply says
 // the holes were not looked for and names both limits, the person's words; over the fillets' limit
 // it says nothing was looked for (the rest left holes out, or was missing, with no word).
+// On the two-extrude T-block rounded on every face, where some of the fillet faces are split (no
+// label), get_model writes them at a point on the face, so the feature resent unchanged names the
+// same faces.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { secondWayBudget } from '../../src/features/delete_faces/plan';
@@ -26,6 +29,8 @@ import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/
 import { pickFace } from '../../src/features/p2/refs';
 import { kernelLookup } from '../../src/naming';
 import { refOfEdge } from '../../src/naming/edges';
+import { splitMerged, splitSuffix } from '../../src/naming/names';
+import type { DeleteFacesFeature } from '../../src/types/doc';
 import type { DeleteFacesOutput } from '../../src/types/doc-service';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { bodyNamed, extrude, regions, Shapes, sketchOn } from './parts';
@@ -283,6 +288,50 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
         limits.maxFilletFaces = RECOGNIZE_MAX_FILLET_FACES;
         limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
       }
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'the two-extrude T-block, one fillet left out: its split fillet faces are written at a point on them, so Delete faces 1 resent unchanged names the same faces, and with the rest takes them off as fillets',
+    async () => {
+      h = await assistantHarness();
+      await tBlock(h);
+      await roundAll(h);
+      const b = bodyNamed(h, 'Body 1');
+      const t = (await h.services.kernel.call('topo', { id: b.shape, edges: 'none', vertices: 'none', face_bbox: 'none' })).result;
+      const round = t.faces.filter((f) => f.type !== 'plane').map((f) => f.i);
+      expect(round).toHaveLength(40);
+      const refs = [];
+      for (const i of round.slice(1)) {
+        const p = await pickFace(h.services, b, i, null);
+        if (!p.ok) throw new Error(p.reason);
+        refs.push(p.ref);
+      }
+      // The bar's split underside splits some of the fillets: those faces have no label to be written by.
+      expect(refs.some((r) => splitMerged(r.name).some((part) => splitSuffix(part).k !== null))).toBe(true);
+      await h.add('delete_faces', { body: b.id, faces: refs });
+      const { id, st } = statusOf(h, 'Delete faces 1');
+      expect(st.state).toBe('error');
+      const picked = () => (h!.doc.state.get().doc.features.find((f) => f.id === id) as DeleteFacesFeature).faces.map((r) => r.name).sort();
+      const before = picked();
+      type Full = { inputs: { faces: string[] }; rest: string[] };
+      const read = async () => (await h!.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Full;
+      const full = await read();
+      expect(full.inputs.faces).toHaveLength(39);
+      expect(full.rest).toHaveLength(1);
+      expect(full.inputs.faces.some((x) => x.startsWith('Body 1 face at ('))).toBe(true);
+      // Resent unchanged: every selector reads back to its own face (a fillet's centre is 0.2 mm inside it, past the point rule's reach).
+      await h.ok('direct', DIRECT({ edit: 'Delete faces 1', kind: 'delete_faces', faces: full.inputs.faces }));
+      expect(picked()).toEqual(before);
+      expect(statusOf(h, 'Delete faces 1').st.state).toBe('error');
+      const again = await read();
+      expect(again.inputs.faces).toEqual(full.inputs.faces);
+      expect(again.rest).toEqual(full.rest);
+      // With the rest (the panel's Add the rest): every fillet up to R2, off as fillets, the sharp T-block.
+      const r = await h.ok('direct', DIRECT({ edit: 'Delete faces 1', kind: 'delete_faces', faces: [...full.inputs.faces, ...full.rest] }));
+      expect(r.data).toMatchObject({ feature: { name: 'Delete faces 1', state: 'ok', note: NOTE } });
+      expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(32000, 6);
     },
     REAL_KERNEL_MS,
   );
