@@ -9,6 +9,9 @@
 // shorter one for such far-grown faces (far_budget_ms) or none at all (far_skip), and answers
 // `stopped` in time with the body unchanged; occt-patches/0002 makes OCCT poll the budget while it
 // trims each grown face. A heal that is ok without a budget is the same with one.
+// Review 2026-11-02: a far-grown face is also curved (the growth turns it more than half a turn):
+// flat B-spline faces (a rib's or a heat sink's fin ends, as exporters write planes) grown 6 times
+// their size heal in 0.4-7 s, and far_skip skipped those ok heals.
 // On a kernel before API 9 these heals run for minutes: each test first checks the API.
 // Every part is built here with kernel ops. Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -88,7 +91,10 @@ describe8('defeature time budget (API 9)', () => {
     const stored = shapesStored();
     const r = call(k, 'defeature', { id: t.body, faces: t.picks, budget_ms: 2000 });
     expect(r.id).toBeUndefined();
-    expect(r.stopped).toMatchObject({ budget_ms: 2000, far_grown: [] });
+    // A stop names the faces the heal grows far past their size (looked up for any budget): the 12
+    // corner pieces, curved, so that the words can say so.
+    expect(r.stopped).toMatchObject({ budget_ms: 2000 });
+    expect(r.stopped.far_grown).toHaveLength(12);
     expect(r.stopped.skipped).toBeUndefined();
     expect(r.stopped.after_ms).toBeGreaterThan(2000);
     // Measured: 2.01 s. Without 0002 OCCT did not poll for 8-11 s while it trimmed one grown face.
@@ -124,6 +130,42 @@ describe8('defeature time budget (API 9)', () => {
     }
     kit.release(a.id);
   }, 60_000);
+
+  it('flat B-spline faces grown far are not far-grown (their heal finishes): far_skip starts it, the result is the plain heal; B-spline corner pieces still are', () => {
+    expect(api).toBeGreaterThanOrEqual(9);
+    const topLong = (s: number, z: number) => kit.edges(s).filter((e) => e.type === 'line' && near(e.first[2], z) && near(e.last[2], z) && !near(e.first[0], e.last[0]));
+    const bspline = (id: number) => call(k, 'debug_reshape', { id, bspline: true }).id as number;
+    const blends = (id: number, maxR?: number): number[] => call(k, 'recognize', { id, holes: false, ...(maxR ? { max_r: maxR * 1.001 } : {}) }).blends.map((b: R) => b.face);
+    // A 60 x 2 x 10 rib, its two long top edges R0.5, every surface a B-spline: its 2 mm wide ends
+    // (flat) are grown 5.9 times their size.
+    const bar = kit.box(60, 2, 10);
+    const rib = bspline(kit.fillet(bar, topLong(bar, 10).map((e) => e.i), 0.5).id);
+    // A heat sink: a 70 x 30 x 4 base with 5 fins 60 x 1 x 10 set 5 mm in, fin tops R0.4, B-spline:
+    // its 10 fin ends (flat, 1 x 10 mm) are grown 6 times their size.
+    let sink = kit.box(70, 30, 4);
+    for (let i = 0; i < 5; i++) sink = kit.fuse(sink, kit.box(60, 1, 10, [5, 3 + 6 * i, 4]));
+    sink = bspline(kit.fillet(sink, topLong(sink, 14).map((e) => e.i), 0.4).id);
+    for (const [body, faces] of [[rib, blends(rib)], [sink, blends(sink, 0.4)]] as const) {
+      const plain = call(k, 'defeature', { id: body, faces });
+      expect(plain.valid).toBe(true);
+      expect(plain.warnings).toBe(false);
+      const timed = call(k, 'defeature', { id: body, faces, budget_ms: 20000, far_skip: true });
+      expect(timed.stopped, 'not skipped').toBeUndefined();
+      expect(timed.far_grown).toBeUndefined();
+      expect(brepBytes(timed.id)).toBe(brepBytes(plain.id));
+      expect(timed.history).toEqual(plain.history);
+      kit.release(plain.id, timed.id, body);
+    }
+    // A box rounded R2 on every edge as B-splines: one edge round's corner pieces (curved, 2.8 mm
+    // across, grown 4.7 times) are far-grown; that heal fails ("unable to remove the feature").
+    const box = bspline(kit.filletAll(kit.box(40, 30, 20), 2).id);
+    const one = blends(box)[0];
+    const skip = call(k, 'defeature', { id: box, faces: [one], far_skip: true });
+    expect(skip.stopped).toMatchObject({ skipped: true, far_grown: [expect.any(Number), expect.any(Number)] });
+    const heal = call(k, 'defeature', { id: box, faces: [one], budget_ms: 20000 });
+    expect(heal).toMatchObject({ warnings: true, warning_text: 'BOPAlgo_AlertUnableToRemoveTheFeature' });
+    kit.release(heal.id, box);
+  }, 120_000);
 
   it('refusals in words: a budget must be > 0', () => {
     const b = kit.box(10, 10, 10);

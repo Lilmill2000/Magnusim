@@ -237,12 +237,21 @@ must go, and the heal only grows faces. The other build order (R1 first) runs
   `budget_ms: 2000` stops at 2.01 s (8.8 s without 0002); one step it still
   does not poll (that 13 s projection on the app's order) remains.
 - `far_budget_ms`, `far_skip`: the kept faces next to the pick that the heal
-  would grow more than 4 times their own box diagonal and that are not planes,
-  cylinders, cones, spheres or tori (those grow exactly). The T-block has 16
-  (ratio 10.4); `far_budget_ms` is the budget for such a heal (the smaller of
-  the two), and `far_skip` does not start it (`stopped.skipped`). Their
-  results report the faces in `far_grown`. No body of the 127-case corpus, the
-  unit tests or the e2e has such a face.
+  would grow more than 4 times their own box diagonal, that are not planes,
+  cylinders, cones, spheres or tori (those grow exactly), and that the growth
+  turns more than half a turn (the growth times the face's largest curvature,
+  sampled on a 6 x 6 grid inside it, over pi): a flat B-spline grows as a
+  plane. The T-block has 16 (ratio 10.4, turned 36 radians); `far_budget_ms`
+  is the budget for such a heal (the smaller of the two), and `far_skip` does
+  not start it (`stopped.skipped`). Any budget looks them up: a stop and a
+  result report them in `far_grown`. No body of the 127-case corpus, the unit
+  tests or the e2e has such a face. Of 28 measured that have (blocks rounded
+  twice; B-spline copies of rounded boxes, T, L, plus and comb blocks, some
+  rounds picked), 20 heals ran past 20 s and 8 failed in 1.2-7.6 s ("unable to
+  remove the feature"). Review 2026-11-02: without the turn, flat B-spline
+  faces counted too (a rib's and a heat sink's fin ends grown 5.9-6 times
+  their size, as exporters that write every face as a B-spline give them), and
+  those heals finish in 0.4-7 s.
 - Without any of them the heal runs to the end, as before. The 127-case
   defeature corpus (the round 1 gate corpus and its messy variants; the
   scratch probe builds each in code) gives the same BREP bytes, history,
@@ -250,7 +259,8 @@ must go, and the heal only grows faces. The other build order (R1 first) runs
   without a budget, and with `budget_ms: 16000, far_budget_ms: 2500,
   far_skip: true` on 126 of 127; the one that differs is a comb whose every
   surface is a B-spline, whose heal takes 58 s (past the 20 s watchdog already),
-  stopped at 16 s.
+  stopped at 16 s. The app sends `budget_ms` = the call's whole watchdog limit
+  (20 s) and, first on a new Delete faces, `far_skip`; never `far_budget_ms`.
 - Tests: `tests/kernel/kernel-api9-defeature.test.ts` (fails on the API 8
   kernel; the budget test fails without 0002), `e2e/cad-kernel-api8.spec.ts`
   in the Part's own worker.

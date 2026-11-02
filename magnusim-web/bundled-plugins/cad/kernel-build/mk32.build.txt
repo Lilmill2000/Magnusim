@@ -20,6 +20,6 @@ compile_asi_ops: the same, plus -ffile-prefix-map=<asi build>=/cad-asi -include 
 link: -O3 -fwasm-exceptions -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sEXPORTED_FUNCTIONS=[_mk_call,_mk_alloc,_mk_free,_malloc,_free] -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0 
 occt_install: occt-wasm32-db14f4e021d2
 link_inputs: facade.o, asi_ops.o, libasi.a (Analysis Situs), then the OCCT libraries
-facade_sources: ebdef859e2bcd03d2c18eb4f08e932b73fa174bd017dfceee3a2cf7e61108460
-mk32.wasm: 23288644 bytes sha256=5ca039450e62038c852f968c98da1a78606886a82685f80c58f46ca4922a8657
+facade_sources: d6ff58a8b62ace8e09f8fad4a3b9ec2e1df931bf63585de712e6f45c626cbe76
+mk32.wasm: 23290883 bytes sha256=c59b3a0fe921600e57e3a8fc9d1e512d96d456b566fa05dd46a5376c3cbbece0
 mk32.mjs: 29426 bytes sha256=aad011be5d356a6a96a5c7e5eed1264a2c59382849d9a475fa9300732a856c59

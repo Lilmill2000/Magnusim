@@ -162,6 +162,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepLProp_SLProps.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
@@ -1979,19 +1980,49 @@ class BudgetProgress : public Message_ProgressIndicator {
 };
 
 // BRepAlgoAPI_Defeaturing grows every face next to a group of removed faces by that group's
-// box diagonal (BOPAlgo_RemoveFeatures, FillGap::ExtendAdjacentFaces). A B-spline face much
+// box diagonal (BOPAlgo_RemoveFeatures, FillGap::ExtendAdjacentFaces). A curved B-spline face much
 // smaller than that is extrapolated far past its own patch (a 2 mm corner piece of a fillet grown
 // 36 mm: 22 times its parameter range), and trimming the result takes OCCT seconds per edge and
 // usually ends in "unable to remove the feature". The kept faces it would grow that far: grown
-// by more than kFarGrowRatio times their own box diagonal, and not planes, cylinders, cones,
-// spheres or tori (those grow exactly).
+// by more than kFarGrowRatio times their own box diagonal, not planes, cylinders, cones,
+// spheres or tori (those grow exactly), and curved enough that the growth turns them more than
+// kFarTurn radians (the growth times the face's largest curvature). A flat B-spline (how many
+// STEP exporters write a plane) grows as a plane: a heat sink's flat B-spline fin ends grown 6
+// times their size healed in 0.5-9 s, while the corner pieces above turn 18-36 radians.
 const double kFarGrowRatio = 4;
+const double kFarTurn = M_PI;
 struct FarGrow {
   std::vector<int> faces;  // 0-based on the input
   double ratio = 0;        // the largest grow / size
 };
+
+// The largest absolute principal curvature (1/mm) of a face, sampled on a 6 x 6 grid inside its
+// parameter box (cell centres: no boundary or pole); 0 where it is not defined.
+double maxCurvature(const TopoDS_Face& F) {
+  BRepAdaptor_Surface S(F, Standard_True);
+  double u0, u1, v0, v1;
+  BRepTools::UVBounds(F, u0, u1, v0, v1);
+  BRepLProp_SLProps P(S, 2, Precision::Confusion());
+  double k = 0;
+  const int n = 6;
+  for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j) {
+      P.SetParameters(u0 + (u1 - u0) * (i + 0.5) / n, v0 + (v1 - v0) * (j + 0.5) / n);
+      if (!P.IsCurvatureDefined()) continue;
+      const double c = std::max(std::fabs(P.MaxCurvature()), std::fabs(P.MinCurvature()));
+      if (std::isfinite(c)) k = std::max(k, c);
+    }
+  return k;
+}
+#ifdef MK_TEST_FAR_DEBUG
+// Test builds: every kept non-analytic face grown more than kFarGrowRatio, with its ratio and turn.
+JV gFarDebug = JV::arr();
+#endif
 FarGrow farGrown(int sid, const std::vector<int>& picks) {
   FarGrow out;
+#ifdef MK_TEST_FAR_DEBUG
+  gFarDebug = JV::arr();
+#endif
   Indexed& in = indexOf(sid);
   const auto& ef = edgeFacesOf(sid);
   std::set<int> picked(picks.begin(), picks.end());
@@ -2027,6 +2058,17 @@ FarGrow farGrown(int sid, const std::vector<int>& picks) {
         const double size = b.IsVoid() ? 0 : std::sqrt(b.SquareExtent());
         const double ratio = size > 0 ? grow / size : 1e9;
         if (ratio <= kFarGrowRatio) continue;
+        const double turn = grow * maxCurvature(F);
+#ifdef MK_TEST_FAR_DEBUG
+        {
+          JV d = JV::obj();
+          d.set("face", (double)o);
+          d.set("ratio", ratio);
+          d.set("turn", turn);
+          gFarDebug.push(std::move(d));
+        }
+#endif
+        if (turn <= kFarTurn) continue;
         if (seen.insert(o).second) out.faces.push_back(o);
         out.ratio = std::max(out.ratio, ratio);
       }
@@ -2041,11 +2083,15 @@ FarGrow farGrown(int sid, const std::vector<int>& picks) {
 //  - budget_ms: OCCT's heal stops at its first progress poll after that long, and the answer is
 //    {stopped: {budget_ms, after_ms, far_grown, far_ratio?}} with no shape (the body is unchanged).
 //  - far_budget_ms: the budget instead when OCCT would grow a kept curved face far past its size
-//    (farGrown; the smaller of the two when both are given).
+//    (farGrown; the smaller of the two when both are given). The app does not send it.
 //  - far_skip: such a heal is not started at all: {stopped: {budget_ms: 0, skipped: true, ...}}.
 //    Its slowest step on a rounded T-block (a p-curve projected onto a grown corner piece) runs
-//    13 s between two progress polls, and every such heal measured hung or failed.
-// A result that was checked reports far_grown when it found such faces.
+//    13 s between two progress polls. Of the 28 such heals measured (blocks rounded twice; B-spline
+//    copies of rounded blocks and combs, some rounds picked) 20 ran past 20 s and 8 failed in
+//    1.2-7.6 s ("unable to remove the feature"); flat B-spline faces, which farGrown leaves out,
+//    healed in 0.4-7 s.
+// A call with any of the three looks such faces up: a stop answers them in far_grown (empty when
+// none), and a result reports far_grown when it found any.
 JV opDefeature(const JV& q) {
   int sid = idParam(q.req("id"), "id");
   std::vector<int> picks;
@@ -2062,7 +2108,8 @@ JV opDefeature(const JV& q) {
   const int wid = wc.id(0);
   const TopoDS_Shape& s = wc.shape(0);
   FarGrow far;
-  if (farBudget > 0 || farSkipAsked) far = farGrown(wid, picks);
+  // Looked up for any budget, so that a stop names the faces (the app sends budget_ms alone on most heals).
+  if (budget > 0 || farBudget > 0 || farSkipAsked) far = farGrown(wid, picks);
   const double runBudget =
       !far.faces.empty() && farBudget > 0 ? (budget > 0 ? std::min(budget, farBudget) : farBudget) : budget;
   const bool farSkip = farSkipAsked && !far.faces.empty();
@@ -2091,6 +2138,9 @@ JV opDefeature(const JV& q) {
     for (int f : far.faces) ff.push((double)f);
     st.set("far_grown", std::move(ff));
     if (!far.faces.empty()) st.set("far_ratio", far.ratio);
+#ifdef MK_TEST_FAR_DEBUG
+    st.set("far_debug", gFarDebug);
+#endif
     JV r = JV::obj();
     r.set("stopped", std::move(st));
     return r;
@@ -2116,6 +2166,9 @@ JV opDefeature(const JV& q) {
     for (int f : far.faces) ff.push((double)f);
     r.set("far_grown", std::move(ff));
   }
+#ifdef MK_TEST_FAR_DEBUG
+  if (budget > 0 || farBudget > 0 || farSkipAsked) r.set("far_debug", gFarDebug);
+#endif
   addValidity(r, id, q);
   JV tm = JV::obj();
   tm.set("copy_ms", wc.ms);
