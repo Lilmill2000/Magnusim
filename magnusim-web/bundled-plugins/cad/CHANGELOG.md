@@ -4,6 +4,30 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Delete faces takes fillets off as fillets where the heal cannot.**
+- Deleting every fillet of a part with a cavity on each side (a T-block, an
+  I-beam, a plus, a comb, a Z-block) was refused ("healing filled more than the
+  gap ..."). When the faces are every fillet of the body up to the largest
+  picked radius, Delete faces now takes them off as fillets (Analysis Situs)
+  and keeps the result only when it passes the same checks and three more: no
+  material taken from a face you kept, no more material changed than the
+  fillets held, every face on the surface it came from. The rounded T-block
+  comes back as its sharp 32,000 mm³ with every face keeping its name, and the
+  row says "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could
+  not do it cleanly". Anything that was right before stays the same.
+- When that fails too, the red text says why after the heal's words ("...;
+  taking them off as fillets did not work either: 1 of the 42 fillet faces
+  could not be taken off (a ring round a boss or a hole cannot be taken off as
+  a fillet); the body is unchanged").
+- A red Delete faces names the faces that would make the pick whole ("Every
+  fillet up to R2 on Body 1 is 40 faces and 39 are picked: with all 40, Delete
+  faces can take them off as fillets", or the rest of the fillets and holes
+  the picked faces are part of), and its panel's Add the rest adds them. The
+  Assistant reads them as `rest` in get_model.
+- A Delete faces saved before this keeps the old heal, so the Part rebuilds as
+  it was made; when its faces would qualify, its red text says a new Delete
+  faces of them may take them off as fillets.
+
 **Volumes of curved (B-spline) bodies are right.**
 - The volume chip, Mass properties, Measure and the Assistant read lofts,
   revolved splines and other B-spline bodies up to 0.2 % off (an airfoil loft

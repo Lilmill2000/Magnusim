@@ -8,7 +8,7 @@
 // earlier features (a sketch's regions), the sketch solver and face names;
 // RebuildState publishes every feature's output.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, SavedCamera, SavedSection, ScaleModelPlace, StoredFileRef, Vec2, Vec3 } from './doc';
+import type { BodyDef, BodyId, CadDoc, CadView, EnclosureSide, Feature, FeatureAction, FeatureId, FeatureStatus, FeatureType, Param, ParamId, PersistentRef, SavedCamera, SavedSection, ScaleModelPlace, StoredFileRef, Vec2, Vec3 } from './doc';
 import type { BodyInfo, KernelAdapter } from './kernel';
 import type { BBox, OffsetFaceAbout, ShapeId } from './kernel-protocol';
 import type { FaceNames } from './naming';
@@ -64,7 +64,25 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
   // Press-pull on curved faces (kernel API 6): what Press-pull did, for its panel
   | PressPullOutput
   // Move/copy body: the pivot it turned about, for its panel
-  | MoveBodyOutput;
+  | MoveBodyOutput
+  // Delete faces (kernel API 8): how the faces came off, and "the rest" on a red result
+  | DeleteFacesOutput;
+
+/**
+ * What a Delete faces did, for its panel and get_model (kernel API 8): `how` is 'fillets' when
+ * Analysis Situs took the faces off as fillets (OCCT's heal could not), null when it failed; on a
+ * red result, "the rest": faces of the body just before it that would make the pick whole (the
+ * rest of the fillet chains and holes the picked faces are part of, or every fillet up to the
+ * largest picked radius), by index on that body and as references the panel's Add the rest adds
+ * and get_model writes as face selectors. Published when the faces came off as fillets, and on a
+ * failure with a rest (an ok heal publishes nothing: its result stays as before API 8).
+ */
+export interface DeleteFacesOutput {
+  type: 'delete-faces';
+  how: 'fillets' | null;
+  rest: number[];
+  restRefs: PersistentRef[];
+}
 
 /**
  * What a Move/copy body did, for its panel: the centre of the bodies' box just before it (the

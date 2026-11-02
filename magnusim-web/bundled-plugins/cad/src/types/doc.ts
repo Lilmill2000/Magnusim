@@ -328,12 +328,21 @@ export interface ImportFeature extends FeatureBase<'import'> {
  * Delete faces and heal (proposal §2.8): the kernel's `defeature`
  * (BRepAlgoAPI_Defeaturing, with history) on `body`; the neighbours grow to
  * close the gap. The body keeps its id.
+ * - No `version` (made before 2026-11-02, kernel API 7 and earlier): OCCT's heal only, forever,
+ *   so a saved document rebuilds exactly as it was made. A red result may only gain words (the
+ *   faces "the rest" would add, and that a new Delete faces may take fillets off as fillets).
+ * - `version: 2` (kernel API 8; every new Delete faces): the same OCCT heal, and where it ends red
+ *   (a kernel refusal, faces not removed, a heal refused after two goes) and the pick is every
+ *   fillet of one solid up to its largest radius, the fillets taken off as fillets (Analysis
+ *   Situs' SuppressBlendsInc), kept only when the heal check and the taken, bound and surface
+ *   rules pass (src/features/delete_faces/plan.ts, src/features/p2/heal-check.ts).
  */
 export interface DeleteFacesFeature extends FeatureBase<'delete_faces'> {
   body: BodyId;
   faces: PersistentRef[];
   /** Set by "Try repair" (DocService.repair): ShapeFix on an invalid result. */
   repair?: { fuzzy: number };
+  version?: 2;
 }
 
 /**
