@@ -16,6 +16,13 @@
 //                 "Taken off as fillets up to R2 by Analysis Situs ...", the chip at 32,000 mm³.
 // Without S5 there is no data-delete-add (step 1 fails at once), and the box step fails without
 // useBoxPicks.
+// Review 2026-11-02: in by-size, Holes up to Ø 5.95 first adds nothing and says what Body 1 has (<=
+// had the plain size's 1 %: it added the four 6 mm holes as "4 holes up to Ø5.95 mm (4 through)").
+// A known class, not changed here (it needs Daniel's decision against F3, OCCT first): a T-block with
+// its non-lateral edges R2 and its lateral edges R1, "Fillets up to 1 mm" adds its 8 R1 faces, and
+// OCCT's defeature of them never returns (the same on the API 7 kernel): the kernel's 20 s watchdog
+// stops the worker, the Part rebuilds and the row reads "was stopped after 20.0 s"; the second way
+// never runs, though suppress_blends alone refuses that pick in words at once.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
@@ -119,6 +126,12 @@ test('cad:delete-faces-by-size Fillets up to and Holes up to add faces by size o
   await expect(row).toHaveAttribute('data-state', 'ok', { timeout: 60_000 });
   await expectOneVolume(frame, made.sharp);
   await shot(page, 'delete-faces-by-size-fillets');
+
+  // Holes up to Ø 5.95 mm, just under the bores: nothing added, and what Body 1 has.
+  await sizeInput(frame, 'holes').fill('5.95');
+  await addButton(frame, 'holes').click();
+  await expect(added(frame)).toHaveText('No holes up to Ø5.95 mm on Body 1 that are not already picked (Body 1 has 5 drilled holes, Ø6 to Ø10)', { timeout: 60_000 });
+  await expect(pickLabel(frame)).toHaveText('Faces to delete (8)');
 
   // Holes up to Ø 6 mm, Add: the four 6 mm holes, through; the chip with them filled.
   await sizeInput(frame, 'holes').fill('6');

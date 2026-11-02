@@ -61,9 +61,32 @@ export async function roundedBlockInPage(): Promise<RoundedBlockMade> {
   return { b64: btoa(bin), volume, sharp };
 }
 
+/**
+ * Runs in the Part's frame: a 60 x 40 x 20 box with one 6 mm through hole and three closed round voids
+ * (r4) inside, as STEP (review 2026-11-02: recognition reads each void as a hole with no cylinder,
+ * and the words counted them as drilled holes). Self-contained (it is sent as text).
+ */
+export async function voidBlockInPage(): Promise<RoundedBlockMade> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type R = Record<string, any>;
+  const k = (window as unknown as { __CAD__: { services: { kernel: { call(op: string, p: R): Promise<{ result: R; buffers: Record<string, ArrayBuffer> }> } } } }).__CAD__.services.kernel;
+  const r = async (op: string, p: R) => (await k.call(op, p)).result;
+  const tools = [(await r('cylinder', { r: 3, h: 22, origin: [20, 35, -1], axis: [0, 0, 1] })).id];
+  for (const x of [10, 30, 50]) tools.push((await r('sphere', { r: 4, center: [x, 20, 10] })).id);
+  const box = (await r('box', { dx: 60, dy: 40, dz: 20, origin: [0, 0, 0] })).id;
+  const id = (await r('boolean', { op: 'cut', targets: [box], tools })).id;
+  const volume = (await r('props', { id, volume: true, bbox: 'none' })).volume;
+  const step = (await k.call('export_step', { shapes: [{ id, name: 'Body 2' }], schema: 'AP214' })).buffers.step;
+  await r('release', { ids: [id, box, ...tools] });
+  let bin = '';
+  const u8 = new Uint8Array(step);
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  return { b64: btoa(bin), volume, sharp: volume };
+}
+
 /** Make the part in the open Part's page and import it with FILE > Import STEP (the panel's Done): what was made. */
-export async function importRoundedBlock(page: Page, frame: FrameLocator): Promise<RoundedBlockMade> {
-  const made = await workspaceFrame(page).evaluate(roundedBlockInPage);
+export async function importRoundedBlock(page: Page, frame: FrameLocator, make: () => Promise<RoundedBlockMade> = roundedBlockInPage): Promise<RoundedBlockMade> {
+  const made = await workspaceFrame(page).evaluate(make);
   const dir = join(tmpdir(), 'cad-e2e-s4');
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `rounded-block-${process.pid}-${Date.now()}.step`);

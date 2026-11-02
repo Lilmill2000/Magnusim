@@ -14,12 +14,21 @@
 //      select its faces in the view instead: no count line, no empty list.
 // Without S4, "fillet" is a bad selector and step 1 fails; step 5 fails if the body answers an
 // empty list instead of the words.
+// Review 2026-11-02:
+//   3b. "edges of (Body 1 faces hole <= 6 mm)": "12 edges match ..." with no hole count (it said
+//       "(0 holes)") and no hint about lit faces; "hole <= 5.95 mm" matches nothing (<= gets no 1 %:
+//       it took the 6 mm holes);
+//   6.  with a Fillet 1 in the Part, "Fillet 1 facs" gets the words at its column, not "a filter goes
+//       after its scope, as in "Body 1 faces Fillet 1 facs"";
+//   find-fillets-holes-words: on a Part in inches, a no-match gives the sizes in inches as Delete
+//       faces' Add line does (it gave mm numbers with no unit), and a body with three round voids
+//       has 1 drilled hole and 3 round hollows (it said "4 drilled holes").
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
-import { importRoundedBlock } from './rounded-block';
+import { baseUrl, ensureCadOn, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { importRoundedBlock, voidBlockInPage } from './rounded-block';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; recognition: { maxFaces: number } } };
@@ -107,6 +116,13 @@ test('cad:find-fillets-holes Find fillets and holes by size on an imported STEP 
   await expect(count).toHaveText('7 faces match Body 1 faces hole <= 10 mm (5 holes)', { timeout: 30_000 });
   await expect(panel.locator('[data-find-row] [data-find-type]').filter({ hasText: 'hole Ø6–Ø10 through' })).toHaveCount(3);
   await shot(page, 'find-holes');
+  // 3b. Their edges: no hole count, no hint about lit faces. A size just under the bores: nothing.
+  await find(frame, 'edges of (Body 1 faces hole <= 6 mm)');
+  await expect(count).toHaveText('12 edges match edges of (Body 1 faces hole <= 6 mm)', { timeout: 30_000 });
+  await expect(count).not.toHaveAttribute('data-find-holes', /./);
+  await expect(panel.locator('[data-find-shape-hint]')).toHaveCount(0);
+  await find(frame, 'Body 1 faces hole <= 5.95 mm');
+  await expect(panel.locator('[data-find-nothing]')).toHaveText('"Body 1 faces hole <= 5.95 mm" matches nothing: Body 1 has 5 drilled holes, Ø6 to Ø10.', { timeout: 30_000 });
   // A plain query: no hint, its type cell as before.
   await find(frame, 'Body 1 faces >Z');
   await expect(count).toHaveText('1 face match Body 1 faces >Z', { timeout: 30_000 });
@@ -138,6 +154,75 @@ test('cad:find-fillets-holes Find fillets and holes by size on an imported STEP 
       (window as unknown as W).__CAD__.recognition.maxFaces = 2000;
     });
   }
+
+  // 6. A Fillet 1 (one hole's two rims, R0.5), then "Fillet 1 facs": the words at its column, not the bare filter's.
+  await panel.locator('[data-panel-done]').click();
+  await workspaceFrame(page).evaluate(async () => {
+    const s = (window as unknown as W).__CAD__.services;
+    const b = s.doc.state.get().rebuild.bodies[0];
+    const t = (await s.kernel.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'none', face_bbox: 'none', face_mass: true })).result;
+    const wall = t.faces.find((f: { type: string; radius?: number; centroid?: number[] }) => f.type === 'cylinder' && Math.abs((f.radius ?? 0) - 3) < 1e-6 && Math.abs((f.centroid?.[0] ?? 0) - 15) < 1e-6 && Math.abs((f.centroid?.[1] ?? 0) - 12) < 1e-6);
+    s.selection.set((st: object) => ({ ...st, items: [{ kind: 'face', body: b.id, index: wall.i }] }));
+  });
+  await runCommand(frame, 'modify.fillet');
+  await expect(featurePanel(frame).locator('[data-panel-title]')).toHaveText('Fillet 1');
+  const radius = featurePanel(frame).locator('.nui[data-field="radius"] input');
+  await radius.fill('0.5');
+  await radius.press('Enter');
+  await settled(page);
+  await expect(featureRowNamed(frame as never, 'Fillet 1')).toHaveAttribute('data-state', 'ok');
+  await featurePanel(frame).locator('[data-panel-done]').click();
+  await expect(featurePanel(frame)).toHaveCount(0);
+  await runCommand(frame, 'inspect.find');
+  await find(frame, 'Fillet 1 facs');
+  const slip = panel.locator('[data-run-reason]');
+  await expect(slip).toContainText('(column 10 of "Fillet 1 facs").', { timeout: 30_000 });
+  await expect(slip).not.toContainText('a filter goes after its scope');
+  await find(frame, 'fillet <= 2 mm');
+  await expect(slip).toContainText('a filter goes after its scope, as in "Body 1 faces fillet <= 2 mm"', { timeout: 30_000 });
+  expect(seen.errors, 'console errors').toEqual([]);
+  expect(seen.csp, 'CSP violations').toEqual([]);
+});
+
+test('cad:find-fillets-holes-words on a Part in inches a no-match says the sizes in inches; a body with three round voids has 1 drilled hole and 3 round hollows, not 4 drilled holes', async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const seen = await watchPage(page);
+  await ensureCadOn(request);
+  const r = await request.post(`${baseUrl()}/api/project`, { data: { title: `CAD e2e ${Date.now()}`, category: 'Other', units: 'Imperial' } });
+  expect(r.ok(), await r.text()).toBe(true);
+  await openProject(page, String((await r.json()).id));
+  await newPartFromTree(page, 'Part 1');
+  const frame = await partOpened(page);
+  await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
+  await importRoundedBlock(page, frame);
+  await settled(page);
+
+  // Inches: the sizes in the Part's unit, as the type cells and Delete faces' Add line give them (it said "R2 to R5").
+  await runCommand(frame, 'inspect.find');
+  const panel = toolPanel(frame);
+  await find(frame, 'Body 1 faces fillet <= 1 mm');
+  await expect(panel.locator('[data-find-nothing]')).toHaveText('"Body 1 faces fillet <= 1 mm" matches nothing: Body 1 has 12 fillet faces, R0.07874 to R0.1969 in.', { timeout: 30_000 });
+  await find(frame, 'Body 1 faces hole <= 1 mm');
+  await expect(panel.locator('[data-find-nothing]')).toHaveText('"Body 1 faces hole <= 1 mm" matches nothing: Body 1 has 5 drilled holes, Ø0.2362 to Ø0.3937 in.', { timeout: 30_000 });
+  await find(frame, 'Body 1 faces fillet <= 2 mm');
+  await expect(panel.locator('[data-find-row] [data-find-type]').first()).toHaveText(/^fillet R0\.0787\d* in$/, { timeout: 30_000 });
+  await shot(page, 'find-words-inches');
+  await panel.locator('[data-panel-done]').click();
+
+  // A second body: a box with one 6 mm hole and three round voids inside (recognition reads each void as a hole with no cylinder).
+  await importRoundedBlock(page, frame, voidBlockInPage);
+  await settled(page);
+  const names = await workspaceFrame(page).evaluate(() => {
+    const st = (window as unknown as W).__CAD__.services.doc.state.get();
+    return st.rebuild.bodies.map((b: { id: string; name?: string }) => st.doc.bodies[b.id]?.name ?? b.name) as string[];
+  });
+  expect(names).toHaveLength(2);
+  const second = names[1];
+  await runCommand(frame, 'inspect.find');
+  const q = `${second} faces hole <= 1 mm`;
+  await find(frame, q);
+  await expect(panel.locator('[data-find-nothing]')).toHaveText(`"${q}" matches nothing: ${second} has 1 drilled hole, Ø0.2362 in, and 3 round hollows with no cylinder, which no size matches.`, { timeout: 30_000 });
+  await shot(page, 'find-words-voids');
   expect(seen.errors, 'console errors').toEqual([]);
   expect(seen.csp, 'CSP violations').toEqual([]);
 });

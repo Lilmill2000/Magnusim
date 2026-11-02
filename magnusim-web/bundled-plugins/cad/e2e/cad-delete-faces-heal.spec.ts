@@ -41,6 +41,12 @@
 //                 refusal and "This Delete faces was made before Delete faces could take fillets
 //                 off as fillets: a new Delete faces of these faces may do it", the chip as Fillet 1
 //                 left it.
+// Review 2026-11-02:
+// 10. heal-rings  the T-block with a hole through its bar, every fillet but the hole's two rim rings
+//                 picked: red, and the words say "Delete faces cannot take the fillets up to R2 on Body
+//                 1 off as fillets: 2 of the 42 are rings round a boss or a hole", with no Add the rest
+//                 (it said "with all 42, Delete faces can take them off as fillets" and offered the
+//                 rims, which taking off as fillets then refused), the chip as Fillet 1 left it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -183,17 +189,19 @@ async function roundAll(page: Page, frame: FrameLocator): Promise<number> {
   return filletSelected(page, frame, '2');
 }
 
-/** Select the fillet faces of the one body: not flat, not the hole's wall (radius 4), but for the first `skip` of them. */
-async function selectFillets(page: Page, skip = 0): Promise<number[]> {
-  return cad<number[]>(page, (async (n: number) => {
+/** Select the fillet faces of the one body: not flat, not the hole's wall (radius 4), but for the first `skip` of them; without the hole's rim rounds (tori round its axis at (10, 20)) when `rims` is false. */
+async function selectFillets(page: Page, skip = 0, rims = true): Promise<number[]> {
+  return cad<number[]>(page, (async (a: { n: number; rims: boolean }) => {
     const s = (window as unknown as W).__CAD__.services;
     const b = s.doc.state.get().rebuild.bodies[0];
     const t = (await s.kernel.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'none', face_bbox: 'none', face_mass: false })).result;
-    const all = t.faces.filter((f: { type: string; radius?: number }) => f.type !== 'plane' && !(f.type === 'cylinder' && Math.abs((f.radius ?? 0) - 4) < 1e-6)).map((f: { i: number }) => f.i);
-    const idx = all.slice(n);
+    type F = { i: number; type: string; radius?: number; axis?: { origin: number[] } };
+    const rim = (f: F) => f.type === 'torus' && !!f.axis && Math.abs(f.axis.origin[0] - 10) < 1e-6 && Math.abs(f.axis.origin[1] - 20) < 1e-6;
+    const all = t.faces.filter((f: F) => f.type !== 'plane' && !(f.type === 'cylinder' && Math.abs((f.radius ?? 0) - 4) < 1e-6) && (a.rims || !rim(f))).map((f: F) => f.i);
+    const idx = all.slice(a.n);
     s.selection.set((st: object) => ({ ...st, items: idx.map((index: number) => ({ kind: 'face', body: b.id, index })) }));
     return all;
-  }) as never, skip);
+  }) as never, { n: skip, rims });
 }
 
 test('cad:delete-faces-heal-tblock Delete faces of every blend of a rounded T-block: OCCT cannot, the fillets come off as fillets: ok with the note, the chip at the sharp T-block (32,000 mm³)', async ({ page, request }) => {
@@ -268,6 +276,32 @@ test('cad:delete-faces-heal-rest the rounded T-block\'s fillets but one: red wit
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);
   await expect(row).toHaveAttribute('data-state', 'ok');
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:delete-faces-heal-rings the holed T-block's fillets but its hole's rim rings: red, and the words say the rings stop taking them off as fillets, with no Add the rest; the body unchanged", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  await tBlock(page, frame, true);
+  const filleted = await roundAll(page, frame);
+  expect(await selectFillets(page, 0, false)).toHaveLength(40);
+  await deleteSelected(page, frame, true);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
+  const reason = panel(frame).locator('[data-run-reason]').first();
+  await expect(reason).toHaveText(
+    /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add [\d,.]+ mm³ over faces you kept \([^)]*\); the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead\. Delete faces cannot take the fillets up to R2 on Body 1 off as fillets: 2 of the 42 are rings round a boss or a hole$/,
+  );
+  // It said "with all 42, Delete faces can take them off as fillets" and offered the two rims, which then were refused.
+  await expect(reason).not.toContainText('can take them off as fillets');
+  await expect(panel(frame).locator('[data-delete-rest]')).toHaveCount(0);
+  await expect(panel(frame).locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(40);
+  await expectOneVolume(frame, filleted);
+  await shot(page, 'delete-faces-heal-rings');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-state', 'error');
+  await expectOneVolume(frame, filleted);
   expect(seen.errors).toEqual([]);
 });
 
