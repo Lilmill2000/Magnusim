@@ -19,10 +19,13 @@
 //    such as the round on a hole's rim or a boss's foot; the kernel says so in words). When every
 //    fillet up to R holds rings, none of those three sentences is said and the set is never the
 //    rest (adding it would only be refused): the words say the rings stop it instead.
+//  - Face limits (kernel API 9): on a body over the holes' limit the rest is the fillet chains'
+//    alone, and over the fillets' limit there is none; the words say what was not looked for and
+//    name both limits, never a rest that silently leaves holes out.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { LARGE_PART_FACES } from '../../kernel/timeouts';
-import { withCommas } from '../../kernel/recognition';
+import { limitWords, withCommas, type FaceLimits, type LimitKind } from '../../kernel/recognition';
 import type { RecognizeResult, RecognizedBlend } from '../../types/kernel-protocol';
 import type { DocUnits } from '../../types/units';
 import { toDisplay } from '../../ui/kit/format';
@@ -146,6 +149,12 @@ export interface RedPlanInput {
   atR: RecognizeResult | null;
   /** Faces of the body that close on themselves (a seamed ring), at least those of `atR`; null when not looked up. */
   rings: ReadonlySet<number> | null;
+  /**
+   * The search a face limit refused for this body (`over`: 'fillets' when the body is over the
+   * fillets' limit, so nothing was looked for; 'holes' when only its holes were not), with both
+   * limits; null or absent when both searches ran (or failed for another reason).
+   */
+  unsearched?: { over: LimitKind; limits: FaceLimits } | null;
   bodyName: string;
   units: DocUnits;
 }
@@ -165,7 +174,9 @@ export interface RedPlan {
 export function planRed(input: RedPlanInput): RedPlan {
   const none: RedPlan = { takeOff: false, r: null, rest: [], sentences: [] };
   const { rec, atR } = input;
-  if (!rec || !input.picks.length) return none;
+  // Over the fillets' limit: nothing was looked for, and the words say so (no rest).
+  if (!rec) return input.unsearched?.over === 'fillets' && input.picks.length ? { ...none, sentences: [unsearchedWords(input.bodyName, input.picks.length, input.faces, input.unsearched)] } : none;
+  if (!input.picks.length) return none;
   const read = readPick(rec, input.picks);
   const set = atR && read.fillets.length ? matchSet(atR, read.fillets) : null;
   const fits = rec.solids === 1 && input.faces <= SECOND_WAY_MAX_FACES;
@@ -202,6 +213,8 @@ export function planRed(input: RedPlanInput): RedPlan {
     plan.rest = g.faces;
     plan.sentences.push(groupWords(input.picks.length, g.faces.length, g.fillets, g.holes));
   }
+  // Over the holes' limit: the rest above is the fillet chains' alone.
+  if (input.unsearched?.over === 'holes') plan.sentences.push(unsearchedWords(input.bodyName, input.picks.length, input.faces, input.unsearched));
   return plan;
 }
 
@@ -218,48 +231,66 @@ export function radiusWords(r: number, units: DocUnits): string {
 /**
  * Kernel API 9: the kept curved faces next to the picked ones that OCCT's heal grows far past their
  * size (the kernel's far_grown: faces that are not a plane, cylinder, cone, sphere or torus, grown
- * more than 4 times their own size), the class whose heal ran for minutes: "16 small curved faces
- * far past their size".
+ * more than 4 times their own size and turned more than half a turn by it), the class whose heal
+ * ran for minutes or failed: "16 small curved faces far past their size".
  */
 export function farWords(n: number): string {
   return `${withCommas(n)} small curved ${plural(n, 'face', 'faces')} far past ${plural(n, 'its', 'their')} size`;
 }
 
+/** A heal the kernel did not start (far_skip): its far_grown faces and the largest ratio of growth to size. */
+export interface FarSkipped {
+  far_grown: readonly number[];
+  far_ratio?: number;
+}
+
 /**
- * Why another way did it, at the end of its note: OCCT's heal ran and could not, or (`far`: the
- * kernel's far_grown count when the heal was not started) it was not run, as it would grow those
- * faces far past their size and not finish.
+ * Why OCCT's heal was not run (far_skip), as measured, not as a forecast: "OCCT's heal was not run:
+ * it would grow 16 small curved faces up to 10 times their size, which failed or ran past 20 s on
+ * every part measured" (28 bodies, 2026-11-02: FAR_HEAL_LAST in feature.ts).
  */
-function healCouldNot(far: number, cleanly: boolean): string {
-  if (far > 0) return `OCCT's heal was not run, as it would grow ${farWords(far)} and not finish`;
+export function notRunWords(s: FarSkipped): string {
+  const n = s.far_grown.length;
+  if (!n) return "OCCT's heal was not run";
+  const their = plural(n, 'its', 'their');
+  const how = s.far_ratio && s.far_ratio > 0 ? `up to ${withCommas(s.far_ratio)} times ${their} size` : `far past ${their} size`;
+  return `OCCT's heal was not run: it would grow ${withCommas(n)} small curved ${plural(n, 'face', 'faces')} ${how}, which failed or ran past 20 s on every part measured`;
+}
+
+/**
+ * Why another way did it, at the end of its note: OCCT's heal ran and could not, or (`skipped`: the
+ * kernel's answer when the heal was not started) it was not run (notRunWords).
+ */
+function healCouldNot(skipped: FarSkipped | null | undefined, cleanly: boolean): string {
+  if (skipped?.far_grown.length) return notRunWords(skipped);
   return `OCCT's heal could not do it${cleanly ? ' cleanly' : ''}`;
 }
 
-/** The note of a Delete faces whose faces came off as fillets (`far`: see healCouldNot). */
-export function filletsNote(r: number, units: DocUnits, far = 0): string {
-  return `Taken off as fillets up to ${radiusWords(r, units)} by Analysis Situs: ${healCouldNot(far, true)}`;
+/** The note of a Delete faces whose faces came off as fillets (`skipped`: see healCouldNot). */
+export function filletsNote(r: number, units: DocUnits, skipped?: FarSkipped | null): string {
+  return `Taken off as fillets up to ${radiusWords(r, units)} by Analysis Situs: ${healCouldNot(skipped, true)}`;
 }
 
 /**
  * The note of a Delete faces whose rounds came off with the corner faces of other fillets at their
  * ends (corners.ts): `rounds` picked, taken off in `groups` goes, with `corners` corner faces
- * (`far`: see healCouldNot). "Taken off one round at a time, with the 16 corner faces where they
+ * (`skipped`: see healCouldNot). "Taken off one round at a time, with the 16 corner faces where they
  * meet other fillets: OCCT's heal could not do it".
  */
-export function cornersNote(rounds: number, groups: number, corners: number, far = 0): string {
+export function cornersNote(rounds: number, groups: number, corners: number, skipped?: FarSkipped | null): string {
   const how = groups === 1 ? 'Taken off' : groups === rounds ? 'Taken off one round at a time,' : `Taken off in ${withCommas(groups)} goes,`;
-  return `${how} with the ${withCommas(corners)} corner ${plural(corners, 'face', 'faces')} where ${plural(rounds, 'it meets', 'they meet')} other fillets: ${healCouldNot(far, false)}`;
+  return `${how} with the ${withCommas(corners)} corner ${plural(corners, 'face', 'faces')} where ${plural(rounds, 'it meets', 'they meet')} other fillets: ${healCouldNot(skipped, false)}`;
 }
 
 /**
  * Kernel API 9: a heal its budget stopped (after "Delete faces 1 failed: "): "OCCT's heal did not
- * finish in 16.0 s", with the kept curved faces it grows far past their size when there are any
+ * finish in 20.0 s", with the kept curved faces it grows far past their size when there are any
  * (": it grows 16 small curved faces far past their size"). One not started (far_skip) is never the
  * last word (the build runs the heal after the other ways), but reads honestly if it is.
  */
-export function stoppedWords(s: { budget_ms: number; far_grown: readonly number[]; skipped?: boolean }): string {
+export function stoppedWords(s: { budget_ms: number; far_grown: readonly number[]; far_ratio?: number; skipped?: boolean }): string {
   const n = s.far_grown.length;
-  if (s.skipped) return n ? `OCCT's heal was not run, as it would grow ${farWords(n)} and not finish` : "OCCT's heal was not run";
+  if (s.skipped) return notRunWords(s);
   return `OCCT's heal did not finish in ${(s.budget_ms / 1000).toFixed(1)} s${n ? `: it grows ${farWords(n)}` : ''}`;
 }
 
@@ -312,6 +343,17 @@ export function mixedWords(fillets: number, r: number, units: DocUnits): string 
 export function ringWords(bodyName: string, r: number, units: DocUnits, size: number, rings: number): string {
   const which = rings === size ? (size === 1 ? 'it is a ring' : `all ${withCommas(size)} are rings`) : `${withCommas(rings)} of the ${withCommas(size)} ${plural(rings, 'is a ring', 'are rings')}`;
   return `Delete faces cannot take the fillets up to ${radiusWords(r, units)} on ${bodyName} off as fillets: ${which} round a boss or a hole`;
+}
+
+/**
+ * What the rest leaves out on a body over a face limit, naming both limits (the one it is over
+ * first): "The holes the picked faces are part of are not looked for on Body 1: it has 3,000 faces,
+ * and holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000"; over the
+ * fillets' limit, "The fillets and holes the picked faces are part of ...".
+ */
+export function unsearchedWords(bodyName: string, picked: number, faces: number, u: { over: LimitKind; limits: FaceLimits }): string {
+  const what = u.over === 'fillets' ? 'fillets and holes' : 'holes';
+  return `The ${what} ${plural(picked, 'the picked face is', 'the picked faces are')} part of are not looked for on ${bodyName}: it has ${withCommas(faces)} faces, and ${limitWords(u.over, u.limits)}`;
 }
 
 export function groupWords(picked: number, more: number, fillets: boolean, holes: boolean): string {

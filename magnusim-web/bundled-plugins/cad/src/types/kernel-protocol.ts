@@ -334,10 +334,12 @@ export interface KernelOps {
    * API 9, a time budget (none given: the heal runs to the end, as before): budget_ms stops OCCT's
    * heal at its first progress poll after that long (kernel-build/occt-patches/0002 polls while each
    * grown face is trimmed); far_budget_ms is the budget instead when the heal would grow a kept curved
-   * face (not a plane, cylinder, cone, sphere or torus) more than 4 times its own size (the smaller of
-   * the two when both are given); far_skip does not start such a heal at all. A stopped heal answers
-   * `stopped` and nothing else (no id, history or validity: the body is unchanged); a checked result
-   * that found such faces reports them in `far_grown`.
+   * face (not a plane, cylinder, cone, sphere or torus, and turned more than half a turn by the growth:
+   * a flat B-spline is not) more than 4 times its own size (the smaller of the two when both are
+   * given); far_skip does not start such a heal at all. The page sends budget_ms (the call's watchdog
+   * limit) and, first on a version 2 Delete faces, far_skip; never far_budget_ms. A stopped heal answers
+   * `stopped` and nothing else (no id, history or validity: the body is unchanged); a result of a
+   * call with a budget that found such faces reports them in `far_grown`.
    */
   defeature: {
     params: CheckParam & { id: ShapeId; faces: number[]; budget_ms?: number; far_budget_ms?: number; far_skip?: boolean };
@@ -859,8 +861,8 @@ export interface RecognizeResult {
 /**
  * API 9: a defeature its budget stopped (the body is unchanged): the budget it ran with (0 when
  * far_skip did not start it), how long it ran, and the kept curved faces OCCT would grow more than
- * 4 times their size (0-based on the input; empty unless far_budget_ms or far_skip asked for them)
- * with the largest ratio.
+ * 4 times their size and turn more than half a turn (0-based on the input; empty when there are
+ * none) with the largest ratio of growth to size.
  */
 export interface DefeatureStopped {
   budget_ms: number;

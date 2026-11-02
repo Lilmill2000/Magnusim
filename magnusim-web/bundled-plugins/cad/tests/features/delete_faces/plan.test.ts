@@ -11,10 +11,12 @@
 // and the 1.4 s Delete faces allows, never "did not work either" for a run that was not started.
 // Kernel API 9 (round 2): a heal its budget stopped, or not started where it would grow small curved
 // faces far past their size, in words; the note of rounds taken off with the corner faces of other
-// fillets at their ends (the third way), and its words when it is refused.
+// fillets at their ends (the third way), and its words when it is refused. A heal not run says why
+// as measured (no forecast). Review 2026-11-02: on a body over a face limit the red words say what
+// was not looked for, naming both limits (the rest silently left holes out over 2,600 faces).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { cornersFailed, cornersNote, farWords, filletsNote, groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, ringWords, secondWayClause, secondWayFailed, stoppedWords, type RedPlanInput } from '../../../src/features/delete_faces/plan';
+import { cornersFailed, cornersNote, farWords, filletsNote, groupRest, LEGACY_WORDS, limitOf, matchSet, notRunWords, planRed, radiusWords, readPick, ringWords, secondWayClause, secondWayFailed, stoppedWords, unsearchedWords, type RedPlanInput } from '../../../src/features/delete_faces/plan';
 import type { RecognizeResult, RecognizedBlend } from '../../../src/types/kernel-protocol';
 
 const MM = { length: 'mm', angle: 'deg' } as const;
@@ -149,6 +151,27 @@ describe('planRed', () => {
     expect(ringWords('flange', 2, { length: 'in', angle: 'deg' }, 1200, 2)).toBe('Delete faces cannot take the fillets up to R0.07874 in on flange off as fillets: 2 of the 1,200 are rings round a boss or a hole');
   });
 
+  it("kernel API 9 face limits: over the holes' limit the rest is the fillet chains' and the words say holes were not looked for, naming both limits; over the fillets' limit nothing was looked for, and that is said", () => {
+    const limits = { fillets: 5000, holes: 2600 };
+    const holesOut = 'The holes the picked faces are part of are not looked for on Body 1: it has 3,000 faces, and holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000';
+    // Fillets found (the chain's rest), holes not looked for.
+    expect(planRed(input({ version: undefined, faces: 3000, picks: range(11, 50), unsearched: { over: 'holes', limits } }))).toEqual({ takeOff: false, r: 2, rest: [10], sentences: ['The picked faces are part of fillets with 1 more face', holesOut] });
+    // A hole's wall picked alone: no rest, and why.
+    const one = planRed(input({ rec: rec([], { chains: [] }), atR: null, faces: 3000, picks: [3], unsearched: { over: 'holes', limits } }));
+    expect(one).toEqual({ takeOff: false, r: null, rest: [], sentences: ['The holes the picked face is part of are not looked for on Body 1: it has 3,000 faces, and holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000'] });
+    // Over the fillets' limit: nothing recognised, nothing offered, and both limits named.
+    expect(planRed(input({ rec: null, atR: null, faces: 5200, picks: [3, 4], unsearched: { over: 'fillets', limits } }))).toEqual({
+      takeOff: false,
+      r: null,
+      rest: [],
+      sentences: ['The fillets and holes the picked faces are part of are not looked for on Body 1: it has 5,200 faces, and fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600'],
+    });
+    // Recognition that failed for another reason (no solid, an old kernel): today's words, nothing more.
+    expect(planRed(input({ rec: null, atR: null, picks: [3] }))).toEqual({ takeOff: false, r: null, rest: [], sentences: [] });
+    // The same limit for both: one number.
+    expect(unsearchedWords('Body 1', 1, 2001, { over: 'holes', limits: { fillets: 2000, holes: 2000 } })).toBe('The holes the picked face is part of are not looked for on Body 1: it has 2,001 faces, and fillets and holes are found on bodies of up to 2,000');
+  });
+
   it('a hole picked in part (no fillet): the rest of the hole; nothing recognised: nothing said', () => {
     const r = rec([], { chains: [], holes: [{ faces: [3, 4, 5], d_min: 6, d_max: 11, through: false }] });
     expect(planRed(input({ rec: r, atR: null, picks: [3] }))).toEqual({ takeOff: false, r: null, rest: [4, 5], sentences: ['The picked face is part of holes with 2 more faces'] });
@@ -177,19 +200,26 @@ describe('planRed', () => {
     );
   });
 
-  it('kernel API 9: a heal its budget stopped says how long it had, and the small curved faces it grows far past their size; one not started says why', () => {
-    expect(stoppedWords({ budget_ms: 16000, far_grown: [] })).toBe("OCCT's heal did not finish in 16.0 s");
-    expect(stoppedWords({ budget_ms: 2500, far_grown: range(0, 16) })).toBe("OCCT's heal did not finish in 2.5 s: it grows 16 small curved faces far past their size");
-    expect(stoppedWords({ budget_ms: 2500, far_grown: [7] })).toBe("OCCT's heal did not finish in 2.5 s: it grows 1 small curved face far past its size");
-    expect(stoppedWords({ budget_ms: 0, far_grown: range(0, 16), skipped: true })).toBe("OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish");
+  it('kernel API 9: a heal its budget stopped says how long it had, and the small curved faces it grows far past their size; one not started says why, as measured (no forecast that it would not finish)', () => {
+    expect(stoppedWords({ budget_ms: 20000, far_grown: [] })).toBe("OCCT's heal did not finish in 20.0 s");
+    expect(stoppedWords({ budget_ms: 20000, far_grown: range(0, 16) })).toBe("OCCT's heal did not finish in 20.0 s: it grows 16 small curved faces far past their size");
+    expect(stoppedWords({ budget_ms: 120000, far_grown: [7] })).toBe("OCCT's heal did not finish in 120.0 s: it grows 1 small curved face far past its size");
+    const notRun = "OCCT's heal was not run: it would grow 16 small curved faces up to 10 times their size, which failed or ran past 20 s on every part measured";
+    expect(stoppedWords({ budget_ms: 0, far_grown: range(0, 16), far_ratio: 10.4, skipped: true })).toBe(notRun);
+    expect(notRunWords({ far_grown: range(0, 16), far_ratio: 10.4 })).toBe(notRun);
+    expect(notRunWords({ far_grown: [3], far_ratio: 4.6 })).toBe("OCCT's heal was not run: it would grow 1 small curved face up to 5 times its size, which failed or ran past 20 s on every part measured");
+    expect(notRunWords({ far_grown: [3, 4] })).toBe("OCCT's heal was not run: it would grow 2 small curved faces far past their size, which failed or ran past 20 s on every part measured");
+    expect(notRunWords({ far_grown: [] })).toBe("OCCT's heal was not run");
+    for (const w of [notRun, notRunWords({ far_grown: [3] })]) expect(w).not.toMatch(/not finish|would not|would fail/);
     expect(farWords(1200)).toBe('1,200 small curved faces far past their size');
   });
 
   it("the notes: why another way did it, OCCT's heal tried or not run", () => {
+    const far = { far_grown: range(0, 16), far_ratio: 10.4 };
     expect(filletsNote(2, MM)).toBe("Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly");
-    expect(filletsNote(2, MM, 4)).toBe("Taken off as fillets up to R2 by Analysis Situs: OCCT's heal was not run, as it would grow 4 small curved faces far past their size and not finish");
+    expect(filletsNote(2, MM, { far_grown: [1, 2, 3, 4], far_ratio: 6.5 })).toBe("Taken off as fillets up to R2 by Analysis Situs: OCCT's heal was not run: it would grow 4 small curved faces up to 7 times their size, which failed or ran past 20 s on every part measured");
     expect(cornersNote(8, 8, 16)).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal could not do it");
-    expect(cornersNote(8, 8, 16, 16)).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish");
+    expect(cornersNote(8, 8, 16, far)).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run: it would grow 16 small curved faces up to 10 times their size, which failed or ran past 20 s on every part measured");
     expect(cornersNote(1, 1, 2)).toBe("Taken off with the 2 corner faces where it meets other fillets: OCCT's heal could not do it");
     expect(cornersNote(12, 3, 1)).toBe("Taken off in 3 goes, with the 1 corner face where they meet other fillets: OCCT's heal could not do it");
   });

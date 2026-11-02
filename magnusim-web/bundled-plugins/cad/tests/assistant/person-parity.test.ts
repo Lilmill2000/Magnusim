@@ -253,6 +253,11 @@ describe("the person's side of the Assistant's tools stores what the tools store
         const fillets = await ok(h, 'find', { query: 'Body 1 faces fillet <= 2 mm', limit: 10 });
         expect(fillets.data.count).toBe(8);
         expect((await runFind(h.services, 'Body 1 faces fillet <= 2 mm')).count).toBe(8);
+        // A fillet query that matches nothing still says what Body 1 has (its fillets are searched
+        // without holes, within their own limit), for both (review 2026-11-02: no test held it).
+        const noneOver = await fail(h, 'find', { query: q0, limit: 10 });
+        expect(noneOver.message).toBe(`nothing_selected: "${q0}" matches nothing: Body 1 has 12 fillet faces, R2 to R5.`);
+        expect((await runFind(h.services, q0)).nothing).toBe(`"${q0}" matches nothing: Body 1 has 12 fillet faces, R2 to R5.`);
         expect(await overWords('Body 1 faces hole <= 6 mm')).toEqual({
           person: 'Body 1 has 25 faces: holes are found on bodies of up to 10 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.',
           detail: { reason: 'bad_selector', body: 'Body 1', why: 'too_large', faces: 25, over: 'holes', limit: 10, limits: { fillets: 5000, holes: 10 } },

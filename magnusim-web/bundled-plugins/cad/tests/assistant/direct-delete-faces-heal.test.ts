@@ -14,10 +14,15 @@
 // what Delete faces allows, in the person's words. Kernel API 9 (round 2): on a T-block rounded R2
 // across and then R1 along it, "Body 1 faces fillet <= 1 mm" (the person's Fillets up to 1 mm) comes
 // off with the corner pieces at the rounds' ends: the reply ok with the person's note, word for word,
-// get_model says it, and Body 1 is the T with only its R2 fillets (no 20 s stop).
+// get_model says it, and Body 1 is the T with only its R2 fillets (no 20 s stop). Review 2026-11-02:
+// on a body over the holes' face limit (lowered as the person's e2e lowers it), the red reply says
+// the holes were not looked for and names both limits, the person's words; over the fillets' limit
+// it says nothing was looked for (the rest left holes out, or was missing, with no word).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { secondWayBudget } from '../../src/features/delete_faces/plan';
+import { recognitionOf } from '../../src/kernel/recognition';
+import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/kernel/timeouts';
 import { pickFace } from '../../src/features/p2/refs';
 import { kernelLookup } from '../../src/naming';
 import { refOfEdge } from '../../src/naming/edges';
@@ -229,7 +234,7 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
       const reference = bodyNamed(h, 'Body 1').volume!;
       expect(await filletAlongY(h, 'Fillet 2', true, '1 mm')).toBe(8);
       const r = await h.ok('direct', DIRECT({ kind: 'delete_faces', faces: ['Body 1 faces fillet <= 1 mm'] }));
-      const NOTE_CORNERS = "Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish";
+      const NOTE_CORNERS = "Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run: it would grow 16 small curved faces up to 10 times their size, which failed or ran past 20 s on every part measured";
       expect(r.data).toMatchObject({ feature: { name: 'Delete faces 1', type: 'delete_faces', state: 'ok', note: NOTE_CORNERS } });
       // The person's feature, its 8 faces, and the note their panel and tree show.
       const { id, st } = statusOf(h, 'Delete faces 1');
@@ -244,6 +249,40 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
       const full = (await h.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Record<string, unknown>;
       expect(full).toMatchObject({ state: 'ok', note: NOTE_CORNERS });
       expect(full.rest).toBeUndefined();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a blind hole's wall alone on a body over the holes' face limit (lowered): the red reply says the holes were not looked for, naming both limits, the person's words; over the fillets' limit too, that nothing was",
+    async () => {
+      h = await assistantHarness();
+      const sk1 = await sketchOn(h, 'Sketch 1', 'origin:top', new Shapes().rect('a', 0, 0, 40, 30));
+      await extrude(h, 'Extrude 1', regions(h, sk1), { distance: '20 mm' });
+      const sk2 = await sketchOn(h, 'Sketch 2', 'origin:top', new Shapes().circle('h', [20, 15], 3));
+      await extrude(h, 'Extrude 2', regions(h, sk2), { op: 'cut', extent: { kind: 'two', distance: '20 mm', distance2: '-10 mm' } });
+      expect(bodyNamed(h, 'Body 1').faces).toBe(8);
+      expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(24000 - Math.PI * 9 * 10, 6);
+      const limits = recognitionOf(h.services.kernel).limits;
+      limits.maxHoleFaces = 5;
+      try {
+        const r = (await h.call('direct', DIRECT({ kind: 'delete_faces', faces: ['Body 1 faces %cylinder'] }))) as unknown as Failed;
+        expect(r.ok).toBe(false);
+        const message = r.error.detail.message;
+        expect(message).toMatch(/^Delete faces 1 failed: the faces could not be removed and healed \([^)]*\)\. The holes the picked face is part of are not looked for on Body 1: it has 8 faces, and holes are found on bodies of up to 5 faces and fillets on bodies of up to 5,000$/);
+        // The person's words (the feature's own build: cad-delete-faces-heal.spec.ts heal-limits), whole: the reply carries them.
+        expect(r.error.message).toContain(message);
+        expect(r.error.detail.feature).toBe('Delete faces 1');
+        expect(bodyNamed(h, 'Body 1').faces).toBe(8);
+        // Over the fillets' limit too: nothing was looked for, and the words say so.
+        limits.maxFilletFaces = 6;
+        const r2 = (await h.call('direct', DIRECT({ kind: 'delete_faces', faces: ['Body 1 faces %cylinder'] }))) as unknown as Failed;
+        expect(r2.ok).toBe(false);
+        expect(r2.error.detail.message).toMatch(/^Delete faces 1 failed: .*\. The fillets and holes the picked face is part of are not looked for on Body 1: it has 8 faces, and fillets are found on bodies of up to 6 faces and holes on bodies of up to 5$/);
+      } finally {
+        limits.maxFilletFaces = RECOGNIZE_MAX_FILLET_FACES;
+        limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
+      }
     },
     REAL_KERNEL_MS,
   );

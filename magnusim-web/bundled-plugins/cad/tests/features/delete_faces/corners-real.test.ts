@@ -10,7 +10,8 @@
 //    the body before, well within the watchdog;
 //  - the other order (R1 first, then R2: a torus at each concave round's ends): the same body;
 //  - the same T with R1 along y first and R3 across: every way refused, each said once, then that
-//    the body is unchanged once (OCCT's heal, run after the other ways, stopped by its 2.5 s).
+//    the body is unchanged once (OCCT's heal, run after the other ways with its whole budget, the
+//    20 s its call had before API 9, stopped by it).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { deleteFacesOn } from '../../../src/features/delete_faces/feature';
@@ -92,7 +93,7 @@ async function deleteUpTo(body: number, rad: number) {
   return { picks, res, ms: performance.now() - t0 };
 }
 
-const NOT_RUN = "OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish";
+const NOT_RUN = "OCCT's heal was not run: it would grow 16 small curved faces up to 10 times their size, which failed or ran past 20 s on every part measured";
 
 describe('the third way: rounds whose ends carry corner pieces of other fillets', () => {
   it("the app's T-block (R2 across, then R1 along): the 8 R1 rounds come off with their 16 corner pieces, the T with only its R2 fillets", async () => {
@@ -121,18 +122,18 @@ describe('the third way: rounds whose ends carry corner pieces of other fillets'
     const { res } = await deleteUpTo(t.body, 1);
     expect(res.ok ? 'ok' : res.message).toBe('ok');
     if (!res.ok) return;
-    expect(res.note).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 12 small curved faces far past their size and not finish");
+    expect(res.note).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run: it would grow 12 small curved faces up to 10 times their size, which failed or ran past 20 s on every part measured");
     expect(await symdiff(res.bodies[0].shape, t.ref)).toBeLessThan(1e-6);
     expect(await nfaces(res.bodies[0].shape)).toBe(26);
   }, 120_000);
 
-  it("R1 along first, then R3 across: every way refused, each said once, then that the body is unchanged once; OCCT's heal runs after the other ways and its budget stops it", async () => {
+  it("R1 along first, then R3 across: every way refused, each said once, then that the body is unchanged once; OCCT's heal runs after the other ways with its whole budget (never a shorter one: a heal that ends in it is never cut) and its budget stops it", async () => {
     const t = await tBlock(1, 3, true);
     const { res } = await deleteUpTo(t.body, 1);
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.message).toMatch(
-      /^Delete faces 1 failed: OCCT's heal did not finish in 2\.5 s: it grows 12 small curved faces far past their size; taking them off as fillets did not work either: [^;]+; taking them off with the 16 corner faces where they meet other fillets did not work either: [^;]+; the body is unchanged$/,
+      /^Delete faces 1 failed: OCCT's heal did not finish in 20\.0 s: it grows 12 small curved faces far past their size; taking them off as fillets did not work either: [^;]+; taking them off with the 16 corner faces where they meet other fillets did not work either: [^;]+; the body is unchanged$/,
     );
-  }, 120_000);
+  }, 180_000);
 });

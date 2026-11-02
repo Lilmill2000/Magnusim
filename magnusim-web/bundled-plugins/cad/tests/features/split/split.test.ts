@@ -4,8 +4,11 @@
 // kept or removed, the derived ids and default names of pieces, a target the
 // plane misses, an invalid piece with Try repair; Delete faces refusing a
 // result that kept a face it was asked to remove, and giving OCCT's heal its
-// time budget (kernel API 9: 0.8 of the 20 s watchdog, 2.5 s where it would grow
-// a small curved face far past its size; far_skip only on a version 2 one).
+// time budget (kernel API 9: the call's whole watchdog limit, 20 s or 120 s on a
+// large part, whatever it would grow, and its call 20 s more for the kernel's stop
+// to answer in words; far_skip only on a version 2 one). Review 2026-11-02: a 16 s
+// budget (0.8 of the limit) stopped heals that end ok today in 16-19 s, and 2.5 s
+// where far-grown stopped ok heals of flat B-spline faces.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { indexedNames } from '../../../src/naming/names';
@@ -136,7 +139,10 @@ describe('Delete faces build', () => {
         history: { faces: [0, 1, 2, 3].map((i) => ({ out: i, from: [{ shape: 1, face: i, how: 'modified' }] })), edges: [], deleted: [{ shape: 1, face: 4 }, { shape: 1, face: 5 }] },
       }));
     const r = await deleteFacesDef.build(del(), {}, ctxOf(k, [b('b_1', 1)], { doc }));
-    expect(k.calls.find((c) => c.op === 'defeature')!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 16000, far_budget_ms: 2500 });
+    // The heal has the whole 20 s the watchdog gave the call before API 9 (a heal that ended in it is
+    // never stopped), never far_budget_ms; the call 20 s more, so the kernel's stop answers in words.
+    expect(k.calls.find((c) => c.op === 'defeature')).toMatchObject({ params: { id: 1, faces: [4, 5], budget_ms: 20000 }, timeoutMs: 40000 });
+    expect(k.calls.find((c) => c.op === 'defeature')!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 20000 });
     expect(r).toMatchObject({ ok: true, removed: [] });
     if (r.ok) {
       expect(r.bodies[0]).toMatchObject({ id: 'b_1', shape: 9, valid: true });
@@ -145,17 +151,21 @@ describe('Delete faces build', () => {
     // A version 2 one (every new one) also asks the kernel not to start a heal that would grow a
     // small curved face far past its size (it runs after the fillet ways); one repaired does not.
     await deleteFacesDef.build(del({ version: 2 }), {}, ctxOf(k, [b('b_1', 1)], { doc }));
-    expect(k.calls.filter((c) => c.op === 'defeature').at(-1)!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 16000, far_budget_ms: 2500, far_skip: true });
+    expect(k.calls.filter((c) => c.op === 'defeature').at(-1)!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 20000, far_skip: true });
     await deleteFacesDef.build(del({ version: 2, repair: { fuzzy: 0.001 } }), {}, ctxOf(k, [b('b_1', 1)], { doc }));
-    expect(k.calls.filter((c) => c.op === 'defeature').at(-1)!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 16000, far_budget_ms: 2500 });
+    expect(k.calls.filter((c) => c.op === 'defeature').at(-1)!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 20000 });
+    // A large part (over 2,000 faces): the 120 s its call had, and 20 s more.
+    const big = scriptKernel().on('topo', topo).on('defeature', (p) => ({ id: 9, valid: true, faces: 5, warnings: false, history: { faces: [], edges: [], deleted: (p.faces as number[]).map((face) => ({ shape: 1, face })) } }));
+    await deleteFacesDef.build(del(), {}, ctxOf(big, [b('b_1', 1)], { doc, faces: () => 2500 }));
+    expect(big.calls.find((c) => c.op === 'defeature')).toMatchObject({ params: { budget_ms: 120000 }, timeoutMs: 140000 });
   });
 
   it('kernel API 9: a heal its budget stopped is red in words, with no shape made and the body unchanged', async () => {
     const k = scriptKernel()
       .on('topo', topo)
-      .on('defeature', () => ({ stopped: { budget_ms: 16000, after_ms: 16004, far_grown: [] } }));
+      .on('defeature', () => ({ stopped: { budget_ms: 20000, after_ms: 20004, far_grown: [] } }));
     const r = await deleteFacesDef.build(del(), {}, ctxOf(k, [b('b_1', 1)], { doc }));
-    expect(r).toEqual({ ok: false, message: "Delete faces 1 failed: OCCT's heal did not finish in 16.0 s; the body is unchanged" });
+    expect(r).toEqual({ ok: false, message: "Delete faces 1 failed: OCCT's heal did not finish in 20.0 s; the body is unchanged" });
   });
 
   it('an invalid result offers Try repair once (ShapeFix); a failed repair offers nothing more', async () => {
