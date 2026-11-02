@@ -284,18 +284,31 @@ with the host once for the page's life, and its chip goes in the dock.
   Delete faces also says "the rest" (`src/features/delete_faces/plan.ts`) and
   publishes it (`DeleteFacesOutput`) for the panel's Add the rest and
   get_model's `rest`.
-  Kernel API 9 (round 2): OCCT's heal gets `budget_ms` = 0.8 of the call's
-  watchdog limit (16 s, 96 s on a large part) and `far_budget_ms` 2.5 s, so a
-  heal that never ends is red in words ("OCCT's heal did not finish in 16.0 s";
-  with far-grown faces ": it grows 16 small curved faces far past their size")
-  before the watchdog stops the worker. A version 2 Delete faces not repaired
-  also passes `far_skip` (`FAR_HEAL_LAST` in `feature.ts`): where the heal would
-  grow a kept curved face more than 4 times its size it is not started; the
-  fillet ways run first and OCCT's heal (with the 2.5 s) only when both refuse,
-  as today's build. Measured: no body of the gate's 127 cases or the other
-  Delete faces tests has such a face; each of the 19 measured ones that has
-  (T, L, U, plus, box, I and Z blocks rounded twice, either order) had a heal
-  that did not finish in 20 s (today's watchdog stop). Then, after the
+  Kernel API 9 (round 2): OCCT's heal gets `budget_ms` = the call's whole
+  watchdog limit before API 9 (20 s, 120 s on a large part), and the call that
+  limit plus `HEAL_STOP_MARGIN_MS` (20 s), so a heal that ended in time before
+  is never stopped (review 2026-11-02: a budget of 0.8 of the limit stopped
+  heals that end ok in 16-19 s) and one that never ends is red in words ("OCCT's
+  heal did not finish in 20.0 s"; with far-grown faces ": it grows 16 small
+  curved faces far past their size") before the watchdog stops the worker. The
+  page never sends `far_budget_ms` (2.5 s stopped ok heals of flat B-spline
+  fin ends). A version 2 Delete faces not repaired also passes `far_skip`
+  (`FAR_HEAL_LAST` in `feature.ts`), the one departure from "OCCT's heal runs
+  first", left for Daniel to confirm: where the heal would grow a kept curved
+  face (not analytic, grown more than 4 times its size, and turned more than
+  half a turn by the growth: flat B-splines are left out) it is not started;
+  the fillet ways run first and OCCT's heal (with its whole budget) only when
+  both refuse, as today's build. Measured: no body of the gate's 127 cases or
+  the other Delete faces tests has such a face; of the 28 measured that have
+  (T, L, U, plus, box, I and Z blocks rounded twice, either order; B-spline
+  copies of rounded boxes, T, L, plus and comb blocks with some rounds picked)
+  20 heals ran past 20 s and 8 failed ("unable to remove the feature"); none
+  was ok. Flat B-spline faces grown 6 times their size (a rib's and a heat
+  sink's fin ends) healed in 0.4-7 s and are not far-grown. Its note says so
+  as measured, not as a forecast ("OCCT's heal was not run: it would grow 16
+  small curved faces up to 10 times their size, which failed or ran past 20 s
+  on every part measured"). On a body over a face limit the red words say what
+  the rest did not look for, naming both limits (`unsearchedWords`). Then, after the
   second way, the third way (`src/features/delete_faces/corners.ts`) for a
   pick of fillets only: each picked round with its riders (kept faces across
   its cross edges that are corner pieces of another fillet: a recognised blend
@@ -308,8 +321,8 @@ with the host once for the page's life, and its chip goes in the dock.
   counting a rider's chain by the rider's share of its area. Output how
   `'corners'`, the note "Taken off one round at a time, with the 16 corner
   faces where they meet other fillets: OCCT's heal could not do it" (or "...:
-  OCCT's heal was not run, as it would grow 16 small curved faces far past
-  their size and not finish"); refused: "; taking them off with the 16 corner
+  OCCT's heal was not run: it would grow 16 small curved faces up to 10 times
+  their size, which failed or ran past 20 s on every part measured"); refused: "; taking them off with the 16 corner
   faces where they meet other fillets did not work either: <why>". Every way
   tried is said once, then "; the body is unchanged" once. Measured on the
   app's T-block (R2 across, then R1 along): ok in 4.4 s in Node (the browser

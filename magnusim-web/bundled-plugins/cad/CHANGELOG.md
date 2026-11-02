@@ -85,19 +85,28 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   at a time, checked as fillets taken off as fillets are: the row is ok in a
   few seconds with the T-block that has only its R2 fillets, and says "Taken
   off one round at a time, with the 16 corner faces where they meet other
-  fillets: OCCT's heal was not run, as it would grow 16 small curved faces far
-  past their size and not finish". The same works on L, U, plus and plain
-  blocks rounded twice, in either order.
-- OCCT's heal now has a time limit, 16 s (it was stopped only by the 20 s
-  stop), and 2.5 s where it would grow a small curved face far past its size.
-  A heal that does not finish in it is red in words, and the kernel is not
-  restarted for it (a B-spline comb's 20 rounds took 58 s): "Delete faces 1
-  failed: OCCT's heal did not finish in 16.0 s; the body is unchanged". OCCT
-  checks the time between its steps, so a single step that runs on longer can
-  still meet the 20 s stop. Where it would grow such faces, a new Delete
-  faces first takes the faces off the other ways and runs OCCT's heal only
-  when they refuse; everywhere else OCCT's heal still runs first, and every
-  result it gave before within its time limit stays the same.
+  fillets: OCCT's heal was not run: it would grow 16 small curved faces up to
+  10 times their size, which failed or ran past 20 s on every part measured".
+  The same works on L, U, plus and plain blocks rounded twice, in either order.
+- OCCT's heal now has a time limit: the 20 s (120 s on a part of over 2,000
+  faces) the kernel's stop gave it before, so every heal that ended in time
+  before ends the same way. Its call gets 20 s more, so a heal that does not
+  finish is red in words and the kernel is not restarted for it (a B-spline
+  comb's 20 rounds took 58 s): "Delete faces 1 failed: OCCT's heal did not
+  finish in 20.0 s; the body is unchanged". OCCT checks the time between its
+  steps, so a single step that runs on longer can still meet the stop.
+- The one place OCCT's heal does not run first: where it would grow a kept
+  curved face (not flat, and not a plane, cylinder, cone, sphere or torus) more
+  than 4 times its size, a new Delete faces first takes the faces off the
+  other ways, and runs OCCT's heal (with its whole 20 s) only when they
+  refuse. Every such heal measured (28 parts) failed or ran past 20 s. Flat
+  faces written as B-splines (a heat sink's fin ends, as some exporters write
+  every face) are not counted: their heal runs first, as before.
+- A red Delete faces on a body over a face limit says what was not looked
+  for, naming both limits: "The holes the picked face is part of are not
+  looked for on Body 1: it has 3,000 faces, and holes are found on bodies of
+  up to 2,600 faces and fillets on bodies of up to 5,000" (it left the holes
+  out of the rest with no word, and over 5,000 faces said nothing).
 - When every way refuses, the red text says each one once and then that the
   body is unchanged ("...; taking them off as fillets did not work either:
   ...; taking them off with the 16 corner faces where they meet other fillets
