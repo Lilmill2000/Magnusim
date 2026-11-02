@@ -294,7 +294,12 @@ touching bodies apart.
   the view: its arrows move along X, Y, Z, its rings turn (Ctrl: whole mm and
   15°); the fields follow, and Escape during a drag puts it back.
 - **Delete faces and heal**: remove faces (a hole, a fillet, a boss) and let
-  the kernel close the gap.
+  the kernel close the gap. When that heal cannot do it cleanly (the fillets of
+  a part with a cavity on each side, such as a rounded T-block) and the faces
+  are every fillet of the body up to the largest picked radius, they are taken
+  off as fillets (Analysis Situs) and the row says so. A red Delete faces names
+  the faces that would make the pick whole, and **Add the rest** in its panel
+  adds them.
 - **Press-pull** (Q): move faces along their normal. Out adds material, in
   removes it. Flat and curved faces, several at once:
   - a sloping neighbour is extended to meet the moved face, so no step is left;

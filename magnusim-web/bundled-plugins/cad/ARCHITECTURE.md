@@ -259,6 +259,31 @@ with the host once for the page's life, and its chip goes in the dock.
   (0.16-0.36 s); none on the T-block (a cavity each side), which stays
   refused. Removing the faces in smaller groups (one by one, corners first)
   was never right on them. A pattern of faces only refuses.
+  Kernel API 8 (Delete faces `version: 2`, every new one; one saved without a
+  version keeps the path above forever): at those red exits only (a kernel
+  refusal, faces not removed, the heal refused after two goes; never after an
+  invalid result or Try repair), the faces are looked up in the page's
+  recognition (`src/kernel/recognition.ts`, cached per shape), and a pick that
+  is every fillet of the one solid up to its largest radius R (Analysis Situs'
+  own set at R x 1.001, cliffs inside R included: the kernel's own pick rule)
+  on a body of at most `LARGE_PART_FACES` faces goes to `suppress_blends`. Its
+  result is kept only when `checkFilletsOff` passes: every pick gone, valid,
+  as many solids, the full `checkHeal`, and three rules OCCT's heal never
+  needed: taken (body minus result lies only on the faces asked for, end caps
+  excepted), the chain bound (per chain r_max² (tan(a/2) − a/2) L, convex or
+  concave by the turn of the fillet's own outward normal between its spring
+  edges, never Analysis Situs' flag, which reads a saddle corner piece the
+  other way; accepted up to 1.5 x plus r_max³ per corner blend) and the
+  surface rule (every result face from a kept face and on its analytic
+  surface: the only rule that catches a void, a bead in a restored corner or
+  swapped names). Measured on the gate's 127 cases (76 right bodies kept, none
+  refused, none wrong) and 56 wrong bodies handed in its place (all refused).
+  Words: the note "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal
+  could not do it cleanly", or "; taking them off as fillets did not work
+  either: <the kernel's or the rule's words>; the body is unchanged". Any red
+  Delete faces also says "the rest" (`src/features/delete_faces/plan.ts`) and
+  publishes it (`DeleteFacesOutput`) for the panel's Add the rest and
+  get_model's `rest`.
 - **Mutating ops run on deep copies** (BRepBuilderAPI_Copy under temporary ids;
   several inputs are copied together so shared sub-shapes stay shared): the
   input shape id is never changed, whatever happens. This covers boolean,
