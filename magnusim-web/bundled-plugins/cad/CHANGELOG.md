@@ -4,6 +4,22 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Delete faces picks fillets and holes by size.**
+- Its panel has **Fillets up to** [2 mm] **Add** and **Holes up to Ø** [6 mm]
+  **Add**: they add the faces of the fillets up to that radius, or of the
+  drilled holes up to that diameter (through holes too), that are not picked
+  yet, and say what they added ("Added 8 faces: 1 fillet chain, R2", "Added 4
+  faces: 4 holes up to Ø6 mm (4 through)") or why nothing ("No fillets up to 2
+  mm on Body 1 that are not already picked (Body 1 has 12 fillet faces, R2 to
+  R5)", or a body too large, a surface body). The sizes start from the body's
+  size. With no face picked yet they use the Part's one solid body; with two,
+  they ask for a click on the body first.
+- They pick exactly what the Assistant's `"Body 1 faces fillet <= 2 mm"` and
+  `"Body 1 faces hole <= 6 mm"` pick, so a rounded T-block's fillets added this
+  way come off as fillets in one go.
+- A Ctrl+drag box in the view adds the faces it selects while the panel is
+  open (it used to replace the panel's highlight and add nothing).
+
 **Delete faces takes fillets off as fillets where the heal cannot.**
 - Deleting every fillet of a part with a cavity on each side (a T-block, an
   I-beam, a plus, a comb, a Z-block) was refused ("healing filled more than the
