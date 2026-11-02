@@ -111,6 +111,8 @@ export const SHARDS = {
     'e2e/cad-person-parity.spec.ts',
     // Volumes of B-spline bodies (kernel API 7): a loft's chip, Press-pull of its cap, a Cut by a block that only touches it.
     'e2e/cad-volume-accuracy.spec.ts',
+    // INSPECT > Find of fillets and holes by size (kernel API 8) on an imported STEP part: rows, Select all, Delete, refusals.
+    'e2e/cad-find-fillets-holes.spec.ts',
   ],
   // STEP in and out and the body tools: import and edit (press-pull, delete faces, split),
   // Combine, Measure, Mass, Check, Export, the Enclosure (P2's gate, the SD pass).
@@ -152,7 +154,7 @@ export const SHARDS = {
   // The Part's tools for the app's Assistant, each spec on its own host with the Assistant's test
   // switches and the scripted model (e2e/assistant-helpers.ts): the tools offered, watch mode,
   // honest errors, the person first, take-overs, the eval set.
-  assistant: ['e2e/cad-assistant-watch.spec.ts', 'e2e/cad-assistant-honest.spec.ts', 'e2e/cad-assistant-coexist.spec.ts', 'e2e/cad-assistant-takeover.spec.ts', 'e2e/cad-assistant-eval.spec.ts', 'e2e/cad-assistant-sketch-tools.spec.ts', 'e2e/cad-assistant-features.spec.ts', 'e2e/cad-assistant-workspace.spec.ts', 'e2e/cad-assistant-dock.spec.ts', 'e2e/cad-assistant-roundtrip.spec.ts'],
+  assistant: ['e2e/cad-assistant-watch.spec.ts', 'e2e/cad-assistant-honest.spec.ts', 'e2e/cad-assistant-coexist.spec.ts', 'e2e/cad-assistant-takeover.spec.ts', 'e2e/cad-assistant-eval.spec.ts', 'e2e/cad-assistant-sketch-tools.spec.ts', 'e2e/cad-assistant-features.spec.ts', 'e2e/cad-assistant-workspace.spec.ts', 'e2e/cad-assistant-dock.spec.ts', 'e2e/cad-assistant-roundtrip.spec.ts', 'e2e/cad-assistant-fillet-selectors.spec.ts'],
   // Opt-in: Daniel's 113 MB STEP (CAD_E2E_BIG_STEP); its tests skip without it.
   // Edit in CAD on the 113 MB STEP (CAD_KERNEL_BIG_STEP or CAD_E2E_BIG_STEP): its timings.
   big: ['e2e/cad-large-step.spec.js', 'e2e/cad-p4b-select-big.spec.ts', 'e2e/cad-edit-in-cad-big.spec.ts'],
@@ -243,6 +245,9 @@ export const RULES = [
   // dock. The camera latch (camera.ts) is asked only for the Assistant's own sessions.
   ['src/assistant/install.ts', ALL, "the Assistant's install: the camera gate of every sketch and Extrude"],
   ['src/assistant/AssistantChip.tsx', ['assistant', 'shell'], 'the chip in the dock'],
+  // The selectors and find's rows run the person's Find too (INSPECT > Find, cad-person-parity).
+  ['src/assistant/selectors/', ['assistant', 'solids'], "the selectors, which the person's Find runs"],
+  ['src/assistant/tools/find.ts', ['assistant', 'solids'], "find's rows, which the person's Find lists"],
   // The Assistant's tools (src/assistant), their module (its chip: the dock), the eval harness.
   ['src/assistant/', ['assistant'], 'the Assistant tools'],
   [/^src\/features\/assistant\//, ['assistant', 'shell'], 'its module'],

@@ -10,13 +10,18 @@
 //               with the selector language and Select all, Picture with body names from two
 //               directions;
 //   cad:pp-measure  Measure of a body (solids, sealed voids) and its cross-section at Top offset 5,
-//               two typed points, and a parameter's comment in the Parameters panel.
+//               two typed points, and a parameter's comment in the Parameters panel;
+//   cad:pp-find-fillets  Find of fillets and holes by size (S4) on an imported STEP part: the
+//               find tool's counts (8 fillet faces up to 2 mm, 4 holes up to 6 mm; the unit test
+//               person-parity.test.ts and cad-assistant-fillet-selectors.spec.ts check the tool
+//               gives the same), the rows' sizes, and Select all of the 8 faces.
 // Setup (a block) goes in through the document as the other specs do; everything asserted is what
 // the person sees (the tree, the panels, the chips) or the record their click stored.
 // Owner: ASSISTANT (the person's side of the Assistant's tools).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { addSolid, historyNames, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+import { importRoundedBlock } from './rounded-block';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -277,4 +282,25 @@ test("cad:pp-measure Measure of a body (solids, voids) and its cross-section, tw
   await params.locator('[data-param-comment="new"]').fill('Plate thickness');
   await params.locator('[data-param-add-btn]').click();
   await expect(params.locator('[data-param-comment="t"]')).toHaveValue('Plate thickness');
+});
+
+test('cad:pp-find-fillets Find of fillets and holes by size: the counts the find tool gives, the sizes in the rows, Select all', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const frame = await freshPart(page, request);
+  await importRoundedBlock(page, frame);
+  await settled(page);
+  await runCommand(frame, 'inspect.find');
+  const find = toolPanel(frame);
+  await find.locator('[data-find-query]').fill('Body 1 faces fillet <= 2 mm');
+  await find.locator('[data-find-query]').press('Enter');
+  await expect(find.locator('[data-find-count]')).toHaveAttribute('data-find-count', '8', { timeout: 30_000 });
+  await expect(find.locator('[data-find-row] [data-find-type]')).toHaveText(Array(8).fill('fillet R2'));
+  await find.locator('[data-find-select-all]').click();
+  const picked = await workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.selection.get().items as { kind: string }[]);
+  expect(picked.map((it) => it.kind)).toEqual(Array(8).fill('face'));
+  await find.locator('[data-find-query]').fill('Body 1 faces hole <= 6 mm');
+  await find.locator('[data-find-query]').press('Enter');
+  await expect(find.locator('[data-find-count]')).toHaveAttribute('data-find-holes', '4', { timeout: 30_000 });
+  await expect(find.locator('[data-find-count]')).toHaveAttribute('data-find-count', '4');
+  await expect(find.locator('[data-find-row] [data-find-type]')).toHaveText(Array(4).fill('hole Ø6 through'));
 });
