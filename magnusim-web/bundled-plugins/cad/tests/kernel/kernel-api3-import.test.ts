@@ -22,8 +22,8 @@ const read = (file: string, extra: R = {}) => call(k, 'import_step', { ...k.putB
 const readVortex = (extra: R = {}) => call(k, 'import_step', { ...k.putBytes(vortexBytes()), name: 'Vortex CFD Test.step', ...extra });
 
 describe('version and face counts', () => {
-  it('answers api 3', () => {
-    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 7 });
+  it('answers api 3 or later (8 now)', () => {
+    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 8 });
   });
 
   it('every shape result says its face count (the naming layer needs no props call)', () => {

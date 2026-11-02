@@ -84,14 +84,25 @@ struct Suppression {
   double recognize_ms = 0, suppress_ms = 0, history_ms = 0;
   // Analysis Situs' own ConvertToOcc read the facade's way, against our history (comparison).
   int occ_disagree = 0, occ_fewer_images = 0, occ_no_source = 0;
+  // What SuppressBlendsInc was predicted to take before it ran (asi_ops.cpp, costCounts and
+  // predictSuppressMs): the chains of the pick at R, the adjacency work of one graph build before
+  // and after the picks are gone, the chains among and the picks that are free-form faces, the
+  // prediction and the budget it was held to.
+  int cost_chains = 0, cost_free_chains = 0, cost_free_picks = 0;
+  double cost_pair_work = 0, cost_pair_work_after = 0, predicted_ms = 0, budget_ms = 0;
 };
+
+// The longest SuppressBlendsInc run suppress_blends starts, predicted from counts (asi_ops.cpp).
+double suppressBudgetMs();
 
 // Take the picked fillets (0-based face indices of `body`) off its one solid with
 // asiAlgo_SuppressBlendsInc. The pick must be every fillet up to the largest picked radius,
-// checked against SuppressBlendsInc's own recognition. `useConvertToOcc` (tests only) reports
-// Analysis Situs' ConvertToOcc history instead of the all-leaves one; the self-check still runs.
+// checked against SuppressBlendsInc's own recognition, and its predicted run time must be within
+// `budgetMs` (0 = suppressBudgetMs(); a caller may only lower it). `useConvertToOcc` (tests only)
+// reports Analysis Situs' ConvertToOcc history instead of the all-leaves one; the self-check still
+// runs.
 Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShape& faces, const std::vector<int>& picks,
-                       bool useConvertToOcc, Suppression& out);
+                       bool useConvertToOcc, double budgetMs, Suppression& out);
 
 // The Analysis Situs release the kernel carries.
 const char* version();

@@ -202,19 +202,38 @@ describe8('recognize (API 8)', () => {
     expect(rec.holes[0].faces).toContain(f.made[0]);
   });
 
-  it('documented misses, as they are: cross-drilled holes (soft mode finds the narrower only; hard mode joins both), an inclined hole into a fillet', () => {
+  it('a documented miss, as it is: cross-drilled holes (soft mode finds the narrower only; hard mode joins both)', () => {
     const cross = kit.cut(kit.box(40, 40, 40), kit.cyl(3, 42, [20, 20, -1]), kit.cyl(2, 42, [-1, 20, 20], [1, 0, 0]));
     expect(holeRows(kit, cross, recognize(cross))).toEqual([{ faces: ['cylinder'], d_min: 4, d_max: 4, through: true }]);
     const hard = recognize(cross, { blends: false, holes_mode: 'hard' });
     expect(holeRows(kit, cross, hard)).toEqual([{ faces: ['cylinder', 'cylinder', 'cylinder'], d_min: 4, d_max: 6, through: true }]);
+  });
 
-    const b = kit.box(60, 40, 20);
-    const edge = kit.edges(b).filter((e) => [e.first, e.last].every((p) => Math.abs(p[2] - 20) < 1e-9 && Math.abs(p[1]) < 1e-9)).map((e) => e.i);
-    const f = kit.fillet(b, edge, 6);
-    const inclined = kit.cut(f.id, kit.cyl(2, 30, [30, -5, 17], [0, 1, 1]));
-    const rec = recognize(inclined);
-    expect(rec.holes).toEqual([]);
-    expect(rec.blends).toHaveLength(1);
+  it("holes drilled into a fillet along its normal are found exactly: blind 4 mm, and 4 mm through the bottom", () => {
+    // A 60 x 40 x 20 box rounded R6 on its top front edge: the fillet's axis is at y 6, z 14, its
+    // 45 degree point at (y, z) = (6 - 6/sqrt2, 14 + 6/sqrt2), its inward normal there (0, 1, -1).
+    const rounded = () => {
+      const b = kit.box(60, 40, 20);
+      const edge = kit.edges(b).filter((e) => [e.first, e.last].every((p) => Math.abs(p[2] - 20) < 1e-9 && Math.abs(p[1]) < 1e-9)).map((e) => e.i);
+      return kit.fillet(b, edge, 6).id;
+    };
+    const mid = [6 - 6 / Math.SQRT2, 14 + 6 / Math.SQRT2];
+    // Each drill starts 3 mm (along y and z) outside that point: 15 long stops inside, 40 long leaves through the bottom.
+    const start = [30, mid[0] - 3, mid[1] + 3];
+    for (const [what, h, rows] of [
+      ['blind', 15, [{ faces: ['cylinder', 'plane'], d_min: 4, d_max: 4, through: false }]],
+      ['through', 40, [{ faces: ['cylinder'], d_min: 4, d_max: 4, through: true }]],
+    ] as [string, number, R[]][]) {
+      const body = rounded();
+      const drilled = kit.cut(body, kit.cyl(2, h, start, [0, 1, -1]));
+      // The drill really meets the body (S2's version of this test cut nothing).
+      expect(kit.vol(body) - kit.vol(drilled), what).toBeGreaterThan(100);
+      const rec = recognize(drilled);
+      expect(rec.blends, what).toHaveLength(1);
+      expect(rec.blends[0], what).toMatchObject({ r_min: 6, r_max: 6, kind: 'ordinary' });
+      expect(holeRows(kit, drilled, rec), what).toEqual(rows);
+      expect(recognize(drilled, { blends: false, holes_mode: 'hard' }).holes, what).toEqual(rec.holes);
+    }
   });
 
   it('a body of two solids: each searched, indices in the body\'s own face map', () => {

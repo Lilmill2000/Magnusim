@@ -26,6 +26,8 @@
 #include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
@@ -288,6 +290,142 @@ std::string whyLeft(const TopTools_IndexedMapOfShape& solidFaces, const std::vec
   return "(the faces around them could not be rebuilt)";
 }
 
+// ------------------------------------------------------------- run-time budget ---
+
+// 1,234 and 12,345.
+std::string commas(long long n) {
+  std::string d = std::to_string(n < 0 ? -n : n), o;
+  for (size_t i = 0; i < d.size(); ++i) {
+    if (i && (d.size() - i) % 3 == 0) o += ',';
+    o += d[i];
+  }
+  return n < 0 ? "-" + o : o;
+}
+
+// A predicted time in words: "about 0.4 s", "about 6 s", "about 30 s", "about 3 min".
+std::string aboutTime(double ms) {
+  const double s = ms / 1000.;
+  if (s < 1.45) {
+    char b[16];
+    std::snprintf(b, sizeof b, "%.1f", std::max(0.1, s));
+    return std::string("about ") + b + " s";
+  }
+  if (s < 9.5) return "about " + std::to_string((int)std::lround(s)) + " s";
+  if (s < 92.5) return "about " + std::to_string(5 * (int)std::lround(s / 5.)) + " s";
+  return "about " + std::to_string(std::max(2, (int)std::lround(s / 60.))) + " min";
+}
+
+bool freeForm(const TopoDS_Face& f) {
+  switch (BRepAdaptor_Surface(f, false).GetType()) {
+    case GeomAbs_Plane:
+    case GeomAbs_Cylinder:
+    case GeomAbs_Cone:
+    case GeomAbs_Sphere:
+    case GeomAbs_Torus: return false;
+    default: return true;
+  }
+}
+
+// The counts SuppressBlendsInc's run time is predicted from, in one pass over the solid's edges
+// (faces are 1-based indices of the solid's face map).
+//  - pair_work: the work of one adjacency-graph build. asiAlgo_CheckDihedralAngle copies each
+//    face's edge map and compares the two faces' edges in a double loop for every adjacent pair,
+//    so a pair of faces with e1 and e2 edges costs about e1 * e2 + e1 + e2.
+//  - pair_work_after: the same once the picked faces are gone (each kept face loses the edges it
+//    shares with picks): the graph is rebuilt after every chain, on a body that shrinks.
+//  - free_form_chains: chains at R with a face that is not a plane, cylinder, cone, sphere or
+//    torus in them or next to them (rebuilding those edges intersects B-splines);
+//    free_form_picks: picked faces of that kind.
+struct CostCounts {
+  double pairWork = 0, pairWorkAfter = 0;
+  int freeChains = 0, freePicks = 0;
+};
+
+CostCounts costCounts(const TopoDS_Shape& solid, const TopTools_IndexedMapOfShape& solidFaces, const std::vector<bool>& picked,
+                      const std::vector<std::vector<int>>& chains) {
+  CostCounts c;
+  const int n = solidFaces.Extent();
+  TopTools_IndexedDataMapOfShapeListOfShape ef;
+  TopExp::MapShapesAndUniqueAncestors(solid, TopAbs_EDGE, TopAbs_FACE, ef);
+  std::vector<double> e(n + 1, 0.), lost(n + 1, 0.);
+  std::vector<std::pair<int, int>> pairs;
+  std::vector<int> fs;
+  for (int i = 1; i <= ef.Extent(); ++i) {
+    fs.clear();
+    for (TopTools_ListIteratorOfListOfShape it(ef(i)); it.More(); it.Next()) {
+      const int k = solidFaces.FindIndex(it.Value());
+      if (k > 0 && std::find(fs.begin(), fs.end(), k) == fs.end()) fs.push_back(k);
+    }
+    bool touchesPick = false;
+    for (int k : fs) {
+      e[k] += 1.;
+      if (picked[k]) touchesPick = true;
+    }
+    if (touchesPick)
+      for (int k : fs)
+        if (!picked[k]) lost[k] += 1.;
+    for (size_t a = 0; a < fs.size(); ++a)
+      for (size_t b = a + 1; b < fs.size(); ++b) pairs.emplace_back(std::min(fs[a], fs[b]), std::max(fs[a], fs[b]));
+  }
+  std::sort(pairs.begin(), pairs.end());
+  pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+  std::vector<std::vector<int>> next(n + 1);
+  for (const auto& p : pairs) {
+    const double a = e[p.first], b = e[p.second];
+    c.pairWork += a * b + a + b;
+    if (!picked[p.first] && !picked[p.second]) {
+      const double a2 = a - lost[p.first], b2 = b - lost[p.second];
+      c.pairWorkAfter += a2 * b2 + a2 + b2;
+    }
+    next[p.first].push_back(p.second);
+    next[p.second].push_back(p.first);
+  }
+  std::vector<char> isFree(n + 1, 0);
+  for (int k = 1; k <= n; ++k) {
+    isFree[k] = freeForm(TopoDS::Face(solidFaces(k))) ? 1 : 0;
+    if (isFree[k] && picked[k]) ++c.freePicks;
+  }
+  for (const std::vector<int>& ch : chains) {
+    bool free = false;
+    for (int k : ch) {
+      if (isFree[k]) free = true;
+      for (int g : next[k])
+        if (isFree[g]) free = true;
+      if (free) break;
+    }
+    if (free) ++c.freeChains;
+  }
+  return c;
+}
+
+// SuppressBlendsInc's run time in Node, predicted from counts before it runs (a running wasm call
+// cannot be stopped: one past the watchdog kills the worker and rebuilds the whole Part). For every
+// chain it takes off it re-recognises the fillets and builds a new adjacency graph of the body
+// (chains x faces, and chains x the graph's pair work, averaged between the body before and after:
+// (w0 + w1 + sqrt(w0 w1)) / 3); each chain's faces are killed and their edges rebuilt against the
+// whole body (picks x faces); chains among free-form faces cost more. Fitted (least squares on the
+// relative error) on 124 measured rows, Node 24, 2026-11-02: combs with 5-60 teeth rounded on their
+// lateral edges (24-244 one-face chains) or every edge (one chain of 120-1,220 faces), plates with
+// 100-1,900 holes and 4 or 1 chains, 3x3-11x11 pegs (36-484 chains) and 2x2-6x6 pegs rounded on
+// every edge, their B-spline copies, the Step 0 family and part A, and 10 NIST parts at 5 radii each.
+// The model reads within 0.8-1.3x on built parts; on two NIST parts (CTC-02, CTC-05) it reads 1.8-2.6x
+// low, hence the budget: kernel-build/SOURCES.md, "suppress_blends' budget".
+const double kMsPerChainPairWork = 1.7893e-5;
+const double kMsPerChainFace = 2.7171e-2;
+const double kMsPerPickFace = 2.4577e-3;
+const double kMsPerFreeFormChain = 13.920;
+const double kMsPerFreeFormPick = 1.2587;
+// The longest predicted run started: the slowest accepted measured run then took 2.0 s (2.25 s for the
+// whole op; a NIST part the model reads 1.8x low) and every faster-predicted built part under 1.5 s;
+// refused runs measured 1.6 s to 36 s.
+const double kSuppressBudgetMs = 1400.;
+
+double predictSuppressMs(int faces, int picks, int chains, const CostCounts& c) {
+  const double w = (c.pairWork + c.pairWorkAfter + std::sqrt(c.pairWork * c.pairWorkAfter)) / 3.;
+  return kMsPerChainPairWork * chains * w + kMsPerChainFace * chains * faces + kMsPerPickFace * picks * faces +
+         kMsPerFreeFormChain * c.freeChains + kMsPerFreeFormPick * c.freePicks;
+}
+
 // ------------------------------------------------------------------- history ---
 
 typedef asiAlgo_History::t_item Item;
@@ -387,6 +525,8 @@ void record(BRepTools_History& oh, const TopTools_IndexedMapOfShape& in, const T
 
 const char* version() { return "2026.1.1"; }
 
+double suppressBudgetMs() { return kSuppressBudgetMs; }
+
 Refusal recognize(const TopoDS_Shape& body, const TopTools_IndexedMapOfShape& faces, const RecognizeOptions& opts,
                   Recognition& out) {
   out = Recognition();
@@ -435,7 +575,7 @@ Refusal recognize(const TopoDS_Shape& body, const TopTools_IndexedMapOfShape& fa
 }
 
 Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShape& faces, const std::vector<int>& picksIn,
-                       bool useConvertToOcc, Suppression& out) {
+                       bool useConvertToOcc, double budgetMs, Suppression& out) {
   out = Suppression();
   std::vector<int> picks(picksIn);
   std::sort(picks.begin(), picks.end());
@@ -483,6 +623,7 @@ Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShap
   // 3. The pick is every fillet up to R, as SuppressBlendsInc itself will recognise them
   //    (a fresh AAG, RecognizeBlends(R)): it takes off all of them or refuses here.
   std::vector<int> atR;
+  std::vector<std::vector<int>> chainsAtR;  // body face indices
   r = guarded("fillet recognition", [&] {
     Handle(asiAlgo_AAG) aag = new asiAlgo_AAG(solid, false);
     std::vector<int> toBody;
@@ -491,6 +632,12 @@ Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShap
     asiAlgo_RecognizeBlends rb(aag);
     if (!rb.Perform(out.max_r)) return refuse("occt", "fillet recognition failed");
     atR = sortedIds(rb.GetResultIndices(), toBody);
+    std::vector<asiAlgo_BlendChain> raw;
+    rb.GetChains(raw);
+    for (const asiAlgo_BlendChain& c : raw) {
+      std::vector<int> ch = sortedIds(c.first, toBody);
+      if (!ch.empty()) chainsAtR.push_back(std::move(ch));
+    }
     return done();
   });
   if (!r.ok()) return r;
@@ -504,7 +651,29 @@ Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShap
                                " of them read as larger fillets)");
   }
 
-  // 4. SuppressBlendsInc on a fresh AAG.
+  // 4. The run-time budget: a running wasm call cannot be stopped, and one past the watchdog
+  //    kills the worker and rebuilds the whole Part, so a run predicted to take too long is
+  //    refused in words before it starts.
+  std::vector<bool> pickedSolid(solidFaces.Extent() + 1, false);
+  for (int p : picks) pickedSolid[solidFaces.FindIndex(faces(p + 1))] = true;
+  for (std::vector<int>& ch : chainsAtR)
+    for (int& f : ch) f = solidFaces.FindIndex(faces(f + 1));
+  const CostCounts cc = costCounts(solid, solidFaces, pickedSolid, chainsAtR);
+  out.cost_chains = (int)chainsAtR.size();
+  out.cost_pair_work = cc.pairWork;
+  out.cost_pair_work_after = cc.pairWorkAfter;
+  out.cost_free_chains = cc.freeChains;
+  out.cost_free_picks = cc.freePicks;
+  out.predicted_ms = predictSuppressMs(solidFaces.Extent(), (int)picks.size(), out.cost_chains, cc);
+  out.budget_ms = budgetMs > 0 ? std::min(budgetMs, kSuppressBudgetMs) : kSuppressBudgetMs;
+#ifndef MK_TEST_NO_SUPPRESS_BUDGET
+  if (out.predicted_ms > out.budget_ms)
+    return refuse("input", "taking " + commas((long long)picks.size()) + " fillet face" + (picks.size() == 1 ? "" : "s") +
+                               " off as fillets on a body of " + commas(solidFaces.Extent()) + " faces would take too long here (" +
+                               aboutTime(out.predicted_ms) + ")");
+#endif
+
+  // 5. SuppressBlendsInc on a fresh AAG.
   Handle(asiAlgo_History) hist;
   TopoDS_Shape res;
   int n = 0;
@@ -526,7 +695,7 @@ Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShap
   }
   out.chains = n;
 
-  // 5. History: every input face and edge walked to all its leaves.
+  // 6. History: every input face and edge walked to all its leaves.
   t0 = nowMs();
   TopTools_IndexedMapOfShape resFaces, resEdges;
   TopExp::MapShapes(res, TopAbs_FACE, resFaces);
@@ -535,7 +704,7 @@ Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShap
   const std::vector<Fate> ff = fates(hist, solidFaces, resFaces, TopAbs_FACE, out.dropped);
   const std::vector<Fate> fe = fates(hist, solidEdges, resEdges, TopAbs_EDGE, droppedEdges);
 
-  // 6. The self-check: an input face is gone exactly when it was picked, and every result face
+  // 7. The self-check: an input face is gone exactly when it was picked, and every result face
   //    is an input face or has a source.
   std::set<int> picked;
   for (int p : picks) picked.insert(solidFaces.FindIndex(faces(p + 1)));

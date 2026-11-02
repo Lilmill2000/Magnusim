@@ -2111,7 +2111,11 @@ JV opRecognize(const JV& q) {
 // every fillet of the solid up to the largest picked radius, which the kernel checks against
 // SuppressBlendsInc's own recognition. The history walks every input face to all its images
 // (asi_ops.cpp), and the kernel refuses a result unless exactly the picked faces are gone and
-// every result face has a source. Nothing taken off is refused, never passed through.
+// every result face has a source. Nothing taken off is refused, never passed through. A run its
+// cost model predicts over the budget is refused in words before it starts (budget_ms may only
+// lower the budget; `cost` reports the prediction). Test builds: -DMK_TEST_NO_SUPPRESS_BUDGET
+// skips that refusal, -DMK_TEST_COST_IN_WORDS adds SuppressBlendsInc's time to a later refusal's
+// words (measuring the model, kernel-build/SOURCES.md).
 JV opSuppressBlends(const JV& q) {
   const int sid = idParam(q.req("id"), "id");
   std::vector<int> picks;
@@ -2125,10 +2129,18 @@ JV opSuppressBlends(const JV& q) {
 #else
   const std::string hist = q.str("debug_history", "leaves");
   if (hist != "leaves" && hist != "convert_to_occ") throw InputError("debug_history must be leaves or convert_to_occ");
+  // budget_ms may only lower the run-time budget (asi_ops.cpp, predictSuppressMs).
+  const double budget = q.num("budget_ms", 0);
+  if (q.has("budget_ms") && !(budget > 0)) throw InputError("budget_ms must be > 0");
   WorkCopies wc({sid});
   mkasi::Suppression s;
   const double t0 = nowMs();
-  throwRefusal(mkasi::suppressBlends(wc.shape(0), indexOf(wc.id(0)).f, picks, hist == "convert_to_occ", s));
+  mkasi::Refusal refusal = mkasi::suppressBlends(wc.shape(0), indexOf(wc.id(0)).f, picks, hist == "convert_to_occ", budget, s);
+#ifdef MK_TEST_COST_IN_WORDS
+  // Measuring the budget's cost model (kernel-build/SOURCES.md): a refusal after SuppressBlendsInc ran says how long it took.
+  if (!refusal.ok() && s.suppress_ms > 0) refusal.words += " [suppress_ms " + std::to_string(s.suppress_ms) + "]";
+#endif
+  throwRefusal(refusal);
   const double t1 = nowMs();
   const int id = putShape(s.shape);
   JV r = JV::obj();
@@ -2150,6 +2162,15 @@ JV opSuppressBlends(const JV& q) {
   oc.set("fewer_images", s.occ_fewer_images);
   oc.set("no_source", s.occ_no_source);
   r.set("convert_to_occ", std::move(oc));
+  JV cost = JV::obj();
+  cost.set("chains", s.cost_chains);
+  cost.set("pair_work", s.cost_pair_work);
+  cost.set("pair_work_after", s.cost_pair_work_after);
+  cost.set("free_form_chains", s.cost_free_chains);
+  cost.set("free_form_picks", s.cost_free_picks);
+  cost.set("predicted_ms", s.predicted_ms);
+  cost.set("budget_ms", s.budget_ms);
+  r.set("cost", std::move(cost));
   addValidity(r, id, q);
   JV tm = JV::obj();
   tm.set("copy_ms", wc.ms);

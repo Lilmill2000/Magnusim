@@ -14,7 +14,7 @@
 import { Worker } from 'node:worker_threads';
 import { expect, it } from 'vitest';
 import { call, importStep, KERNEL_DIR, loadKernel, rel, tryCall, type R } from './kernel-lib';
-import { api8Gate, FAMILY, familyPart, partKit, PROOF_A_SHARP, proofA, ringBoss, type Face } from './asi-lib';
+import { api8Gate, FAMILY, familyPart, partKit, poly, PROOF_A_SHARP, proofA, ringBoss, XY, type Face } from './asi-lib';
 
 const k = await loadKernel();
 const { describe8 } = api8Gate(k);
@@ -240,6 +240,52 @@ describe8('suppress_blends (API 8)', () => {
       expect(occ.history).toEqual(ours.history);
     }
   });
+
+  it('a run predicted over the budget is refused in words before SuppressBlendsInc starts (a comb of 404 one-face chains took 30 s), one under it runs; budget_ms may only lower the budget', () => {
+    // A comb of m teeth (base 4m+2 x 10, teeth 2 x 6, extruded 8), its edges along the extrusion R0.4:
+    // 4m + 4 chains of one face each. SuppressBlendsInc rebuilds the adjacency graph after every
+    // chain, so its time grows faster than the chains: measured (Node, without the budget) 0.2 s at
+    // m = 10, 5.7 s at m = 50, 30 s at m = 100.
+    const comb = (m: number) => {
+      const pts: number[][] = [[0, 0], [m * 4 + 2, 0], [m * 4 + 2, 10]];
+      for (let i = m - 1; i >= 0; i--) {
+        const x = 2 + i * 4;
+        pts.push([x + 2, 10], [x + 2, 16], [x, 16], [x, 10]);
+      }
+      pts.push([0, 10]);
+      const sharp = kit.id('extrude', { profile: poly(pts, XY), extent: { kind: 'blind', d: 8 }, check: false });
+      const lateral = kit.edges(sharp).filter((e) => Math.abs(e.first[0] - e.last[0]) < 1e-9 && Math.abs(e.first[1] - e.last[1]) < 1e-9).map((e) => e.i);
+      return kit.id('fillet', { id: sharp, edges: lateral, r: 0.4, check: false });
+    };
+    const big = comb(100);
+    const picks = allBlends(big);
+    expect(picks).toHaveLength(404);
+    const words = /^taking 404 fillet faces off as fillets on a body of 810 faces would take too long here \(about (\d+) s\)$/;
+    const t0 = performance.now();
+    const r = refusal(big, picks);
+    const ms = performance.now() - t0;
+    expect(r).toMatchObject({ ok: false, kind: 'input' });
+    expect(r.error).toMatch(words);
+    // The model's figure is near what it measured (30 s), and the refusal costs two recognitions, not the run.
+    expect(Number(words.exec(r.error)![1])).toBeGreaterThanOrEqual(20);
+    expect(Number(words.exec(r.error)![1])).toBeLessThanOrEqual(45);
+    expect(ms).toBeLessThan(5000);
+    // A caller cannot raise the budget.
+    expect(tryCall(k, 'suppress_blends', { id: big, faces: picks, budget_ms: 1e9 }).error).toMatch(words);
+    expect(tryCall(k, 'suppress_blends', { id: big, faces: picks, budget_ms: 0 })).toMatchObject({ ok: false, error: 'budget_ms must be > 0' });
+
+    // Under the budget it runs, and says what it predicted.
+    const small = comb(10);
+    const s = suppress(small, allBlends(small));
+    expect(s).toMatchObject({ valid: true, faces: 46, chains: 44, removed: 44 });
+    expect(s.cost).toMatchObject({ chains: 44, free_form_chains: 0, free_form_picks: 0, budget_ms: 1400 });
+    expect(s.cost.pair_work).toBeGreaterThan(s.cost.pair_work_after);
+    expect(s.cost.predicted_ms).toBeGreaterThan(0);
+    expect(s.cost.predicted_ms).toBeLessThan(1400);
+    // A lower budget refuses the same run, with the prediction in words.
+    expect(tryCall(k, 'suppress_blends', { id: small, faces: allBlends(small), budget_ms: 10 })).toMatchObject({ ok: false, kind: 'input', error: expect.stringMatching(/^taking 44 fillet faces off as fillets on a body of 90 faces would take too long here \(about 0\.\d s\)$/) });
+    kit.release(big, small, s.id);
+  }, 60_000);
 
   it('the same result from a fresh kernel and from one that has run 200 ops (gate G5)', async () => {
     const used = await loadKernel();
