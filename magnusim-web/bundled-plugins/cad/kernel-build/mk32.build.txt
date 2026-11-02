@@ -4,21 +4,22 @@ emscripten: emcc 6.0.10 (d6c521a7f05449857c76bd99e396895583cf2083)
 emsdk: 6.0.10
 occt: V7_9_3 a016080bf6738d6aeae020badee4e888ad1540a5
 occt_patch: 0001-allocate-optimal-throws.patch sha256=28c3e5f2dc2aaed3d5a32c904e1358f033511a88a677935e872de46f17168e4f
+occt_patch: 0002-defeature-trim-progress.patch sha256=222a0efd5910ddcf1808575e6a1f72cca2694f85aa537d66926569e7f39c385d
 occt_flags: -O3 -fwasm-exceptions -msimd128 -UOCC_CONVERT_SIGNALS -ffile-prefix-map=<build root>=/cad-build
-occt_key: 55fc9e3e1aa4
+occt_key: db14f4e021d2
 asi: v2026.1.1 3c3ec3ff077ef71eaee39dc062e01aada475808f (169 files + LICENSE, FILES.sha256 sha256=069ec95f966768c882dace266e5974aed6bba3cc557a39a850e5afb94113047c)
 asi_sources: sources.txt 43 files sha256=d59b7e60435dda8cbdbd8e5263f2931415ada510f26870c9fdfde02797b7e5b3
-asi_patch: asi-occt79-wasm.patch sha256=d5a3c890ef082a184811ae6182623cb98a72378aae33b6e41018981473d69ac2
+asi_patch: asi-occt79-wasm.patch sha256=d9ae5cdd85a01ef378a2029f716c0bcee70f642d3b0459d0d6aa98f4c7f2c6da
 asi_compat: asi_occt79_compat.h sha256=9f3dba071898adc45a0101701ba2e8513d997c07f83faa934decbc8c3647db45
 asi_flags: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin -ffile-prefix-map=<asi work>=/cad-asi -include asi_occt79_compat.h -I<asiAlgo and its folders> -I<asiActiveData/API, asiActiveData, asiActiveData/Mesh/DS> -I<occt install>/inc -DASI_NO_VIS_IO -DASI_NO_EIGEN -Wno-deprecated-declarations
-asi_occt_install: occt-wasm32-55fc9e3e1aa4
-asi_key: 5b5ae6dd837b
-asi_lib: libasi.a 4133068 bytes sha256=102b2d769f72f28a0b138d869a8a35dcf43b300d7f37837f6e34d921565d42b8
+asi_occt_install: occt-wasm32-db14f4e021d2
+asi_key: 2820993ed2e1
+asi_lib: libasi.a 4133036 bytes sha256=35f508e99510efaeead6901e6c3e057b0868f84fe5d23ae314b65c02fcea6d62
 compile: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin 
 compile_asi_ops: the same, plus -ffile-prefix-map=<asi build>=/cad-asi -include asi_occt79_compat.h -I<asiAlgo and its folders> -I<asiActiveData/API, asiActiveData, asiActiveData/Mesh/DS> -DASI_NO_VIS_IO -DASI_NO_EIGEN -Wno-deprecated-declarations
 link: -O3 -fwasm-exceptions -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sEXPORTED_FUNCTIONS=[_mk_call,_mk_alloc,_mk_free,_malloc,_free] -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0 
-occt_install: occt-wasm32-55fc9e3e1aa4
+occt_install: occt-wasm32-db14f4e021d2
 link_inputs: facade.o, asi_ops.o, libasi.a (Analysis Situs), then the OCCT libraries
-facade_sources: 22813c34ee95b1e81dd30623ef6d8ef6c21964aacf7ed4e69aa02904cda3a7f1
-mk32.wasm: 23263432 bytes sha256=e1c42b60a14eb2139c1af59a0172a1edfbf17b63c5999aef6f77af41940a8875
+facade_sources: ebdef859e2bcd03d2c18eb4f08e932b73fa174bd017dfceee3a2cf7e61108460
+mk32.wasm: 23288644 bytes sha256=5ca039450e62038c852f968c98da1a78606886a82685f80c58f46ca4922a8657
 mk32.mjs: 29426 bytes sha256=aad011be5d356a6a96a5c7e5eed1264a2c59382849d9a475fa9300732a856c59

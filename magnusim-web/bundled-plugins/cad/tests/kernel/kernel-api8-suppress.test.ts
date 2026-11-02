@@ -260,14 +260,15 @@ describe8('suppress_blends (API 8)', () => {
     const big = comb(100);
     const picks = allBlends(big);
     expect(picks).toHaveLength(404);
-    const words = /^taking 404 fillet faces off as fillets on a body of 810 faces would take too long here \(about (\d+) s\)$/;
+    const words = /^taking 404 fillet faces off as fillets on a body of 810 faces would take about (\d+) s; Delete faces allows 1\.4 s for taking fillets off as fillets$/;
     const t0 = performance.now();
     const r = refusal(big, picks);
     const ms = performance.now() - t0;
     expect(r).toMatchObject({ ok: false, kind: 'input' });
     expect(r.error).toMatch(words);
-    // The model's figure is near what it measured (30 s), and the refusal costs two recognitions, not the run.
-    expect(Number(words.exec(r.error)![1])).toBeGreaterThanOrEqual(20);
+    // The model's figure is near what it measured (24.6 s with the adjacency graph's speed hunk, 30 s
+    // before; predicted 19.9 s), and the refusal costs two recognitions, not the run.
+    expect(Number(words.exec(r.error)![1])).toBeGreaterThanOrEqual(15);
     expect(Number(words.exec(r.error)![1])).toBeLessThanOrEqual(45);
     expect(ms).toBeLessThan(5000);
     // A caller cannot raise the budget.
@@ -283,9 +284,37 @@ describe8('suppress_blends (API 8)', () => {
     expect(s.cost.predicted_ms).toBeGreaterThan(0);
     expect(s.cost.predicted_ms).toBeLessThan(1400);
     // A lower budget refuses the same run, with the prediction in words.
-    expect(tryCall(k, 'suppress_blends', { id: small, faces: allBlends(small), budget_ms: 10 })).toMatchObject({ ok: false, kind: 'input', error: expect.stringMatching(/^taking 44 fillet faces off as fillets on a body of 90 faces would take too long here \(about 0\.\d s\)$/) });
+    expect(tryCall(k, 'suppress_blends', { id: small, faces: allBlends(small), budget_ms: 10 })).toMatchObject({
+      ok: false,
+      kind: 'input',
+      error: expect.stringMatching(/^taking 44 fillet faces off as fillets on a body of 90 faces would take about 0\.\d s; Delete faces allows 0\.01 s for taking fillets off as fillets$/),
+    });
     kit.release(big, small, s.id);
   }, 60_000);
+
+  it("the budget's words (API 9): the time with one decimal below 10 s and never at or under the allowance, then to 5 s, then minutes", () => {
+    const words = (predicted_ms: number, extra: R = {}) => call(k, 'debug_budget_words', { picks: 404, faces: 810, predicted_ms, ...extra });
+    const tail = '; Delete faces allows 1.4 s for taking fillets off as fillets';
+    const head = 'taking 404 fillet faces off as fillets on a body of 810 faces would take ';
+    expect(words(1450)).toMatchObject({ refused: true, budget_ms: 1400, words: `${head}about 1.5 s${tail}` });
+    expect(words(2000).words).toBe(`${head}about 2.0 s${tail}`);
+    expect(words(30000).words).toBe(`${head}about 30 s${tail}`);
+    // Just over the allowance never reads as the allowance: 1.401 s and 1.449 s read 1.5 s.
+    expect(words(1401).words).toBe(`${head}about 1.5 s${tail}`);
+    expect(words(1449).words).toBe(`${head}about 1.5 s${tail}`);
+    expect(words(9940).words).toBe(`${head}about 9.9 s${tail}`);
+    expect(words(9960).words).toBe(`${head}about 10 s${tail}`);
+    expect(words(95000).words).toBe(`${head}about 2 min${tail}`);
+    expect(words(180000).words).toBe(`${head}about 3 min${tail}`);
+    // A lower budget is the allowance named; the time still reads over it.
+    expect(words(1370, { budget_ms: 1350 })).toMatchObject({ refused: true, budget_ms: 1350, words: `${head}about 1.4 s; Delete faces allows 1.35 s for taking fillets off as fillets` });
+    expect(words(1040, { budget_ms: 1000 }).words).toBe(`${head}about 1.1 s; Delete faces allows 1 s for taking fillets off as fillets`);
+    // One fillet face; a prediction within the budget is not refused; the budget cannot be raised.
+    expect(call(k, 'debug_budget_words', { picks: 1, faces: 10, predicted_ms: 1500 }).words).toBe(`taking 1 fillet face off as fillets on a body of 10 faces would take about 1.5 s${tail}`);
+    expect(words(1400)).toMatchObject({ refused: false, budget_ms: 1400 });
+    expect(words(2000, { budget_ms: 1e9 })).toMatchObject({ refused: true, budget_ms: 1400 });
+    expect(tryCall(k, 'debug_budget_words', { picks: 0, faces: 10, predicted_ms: 1 })).toMatchObject({ ok: false, kind: 'input', error: 'picks and faces must be >= 1' });
+  });
 
   it('the same result from a fresh kernel and from one that has run 200 ops (gate G5)', async () => {
     const used = await loadKernel();

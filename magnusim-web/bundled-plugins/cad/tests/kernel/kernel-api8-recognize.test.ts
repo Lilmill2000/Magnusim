@@ -7,9 +7,12 @@
 // B-spline, split-closed and loose-tolerance variants (debug_reshape) are recorded as they are.
 // Also: every index is the face it names, refusals in words, the input unchanged, and the same
 // answer from a fresh kernel and from one that has run 200 ops (gate G5).
+// API 9: the two face limits (fillets 5,000, holes 2,600) on each side, their words, and the
+// adjacency graph's speed hunk (faster, the same answers).
 // Until the shipped kernel is API 8 this runs on a dev kernel (CAD_KERNEL_DIR; tests/kernel/asi-lib.ts).
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { call, importStep, loadKernel, tryCall, type R } from './kernel-lib';
 import { api8Gate, FAMILY, familyPart, noTimings, partKit, poly, proofA, ringBoss, XY, type Kit } from './asi-lib';
@@ -33,8 +36,8 @@ const holeRows = (kt: Kit, id: number, rec: R) => {
 const brepBytes = (id: number): string => Buffer.from(k.takeBuffers(k.call('brep_write', { ids: [id] })).brep as Uint8Array).toString('base64');
 
 describe8('recognize (API 8)', () => {
-  it('version answers api 8 with Analysis Situs 2026.1.1', () => {
-    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 8, asi: '2026.1.1' });
+  it('version answers api 9 (the defeature budget and the two face limits) with Analysis Situs 2026.1.1', () => {
+    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 9, asi: '2026.1.1' });
   });
 
   it('the Step 0 family rounded R1 and R2 on every edge: every fillet face found and nothing else, radius exact, one chain', () => {
@@ -250,22 +253,113 @@ describe8('recognize (API 8)', () => {
     expect(rec.chains[1].faces.every((i: number) => (fs[i].centroid as number[])[0] > 25)).toBe(true);
   });
 
-  it('refusals in words: a surface body, over the face limit (2,000 unless the call says), a bad mode', () => {
+  it('refusals in words: a surface body, over a face limit the call sets (max_faces: one limit, API 8\'s words), a bad mode', () => {
     const shell = importStep(k, 'box20-faces.step', { heal: false });
     expect(shell.shapes[0]).toMatchObject({ type: 'shell', faces: 6 });
     expect(tryCall(k, 'recognize', { id: shell.shapes[0].id })).toMatchObject({ ok: false, kind: 'input', error: 'no solid in this body (fillets and holes are found on solids only)' });
     const b = kit.box(10, 10, 10);
     expect(tryCall(k, 'recognize', { id: b, max_faces: 5 })).toMatchObject({ ok: false, kind: 'input', error: 'this body has 6 faces: fillets and holes are found on bodies of up to 5' });
-    // A prism of 2,002 faces with no max_faces: refused before any work.
-    const n = 2000;
-    const pts = Array.from({ length: n }, (_, i) => [100 * Math.cos((2 * Math.PI * i) / n), 100 * Math.sin((2 * Math.PI * i) / n)]);
-    const big = kit.id('extrude', { profile: poly(pts, XY), extent: { kind: 'blind', d: 10 }, check: false });
-    expect(tryCall(k, 'recognize', { id: big })).toMatchObject({ ok: false, kind: 'input', error: 'this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000' });
-    expect(recognize(big, { max_faces: 2002 })).toMatchObject({ faces: 2002, blends: [], holes: [] });
     expect(tryCall(k, 'recognize', { id: b, holes_mode: 'firm' })).toMatchObject({ ok: false, kind: 'input', error: 'holes_mode must be soft or hard' });
     expect(tryCall(k, 'recognize', { id: 987654 })).toMatchObject({ ok: false, kind: 'input', error: 'unknown shape id 987654' });
-    kit.release(big);
   });
+
+  // An n-sided prism (n + 2 faces) has no fillet and no hole, so only the face limits tell its answers apart.
+  const prism = (n: number): number => {
+    const pts = Array.from({ length: n }, (_, i) => [100 * Math.cos((2 * Math.PI * i) / n), 100 * Math.sin((2 * Math.PI * i) / n)]);
+    return kit.id('extrude', { profile: poly(pts, XY), extent: { kind: 'blind', d: 10 }, check: false });
+  };
+
+  it('two face limits (API 9): fillets on bodies of up to 5,000 faces, holes on bodies of up to 2,600; each side of each, refused before any work in words naming both', () => {
+    const fillets = { holes: false };
+    // Holes: 2,600 faces answered, 2,601 refused, whether fillets are asked too or not; fillets alone go on.
+    const h0 = prism(2598);
+    const h1 = prism(2599);
+    expect(recognize(h0)).toMatchObject({ faces: 2600, blends: [], holes: [] });
+    expect(recognize(h0, { blends: false })).toMatchObject({ faces: 2600, blends: [], holes: [] });
+    const holeWords = 'this body has 2,601 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000';
+    expect(tryCall(k, 'recognize', { id: h1 })).toMatchObject({ ok: false, kind: 'input', error: holeWords });
+    expect(tryCall(k, 'recognize', { id: h1, blends: false, holes_mode: 'hard' })).toMatchObject({ ok: false, kind: 'input', error: holeWords });
+    expect(recognize(h1, fillets)).toMatchObject({ faces: 2601, blends: [], chains: [], holes: [] });
+    // Fillets: 5,000 faces answered, 5,001 refused; a query with holes on 5,000 faces meets the holes limit first.
+    const f0 = prism(4998);
+    const f1 = prism(4999);
+    expect(recognize(f0, fillets)).toMatchObject({ faces: 5000, blends: [], chains: [], holes: [] });
+    expect(tryCall(k, 'recognize', { id: f0 })).toMatchObject({
+      ok: false,
+      kind: 'input',
+      error: 'this body has 5,000 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000',
+    });
+    const filletWords = 'this body has 5,001 faces: fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600';
+    expect(tryCall(k, 'recognize', { id: f1, ...fillets })).toMatchObject({ ok: false, kind: 'input', error: filletWords });
+    expect(tryCall(k, 'recognize', { id: f1 })).toMatchObject({ ok: false, kind: 'input', error: filletWords });
+    // A call's own limits: max_faces sets both (API 8's words above), max_fillet_faces and max_hole_faces each, over it.
+    const b = kit.box(10, 10, 10);
+    expect(tryCall(k, 'recognize', { id: b, max_hole_faces: 5 })).toMatchObject({ ok: false, kind: 'input', error: 'this body has 6 faces: holes are found on bodies of up to 5 faces and fillets on bodies of up to 5,000' });
+    expect(recognize(b, { max_hole_faces: 5, holes: false })).toMatchObject({ faces: 6, blends: [] });
+    expect(tryCall(k, 'recognize', { id: b, max_fillet_faces: 5, holes: false })).toMatchObject({ ok: false, kind: 'input', error: 'this body has 6 faces: fillets are found on bodies of up to 5 faces and holes on bodies of up to 2,600' });
+    expect(tryCall(k, 'recognize', { id: b, max_faces: 5, max_hole_faces: 4 })).toMatchObject({ ok: false, kind: 'input', error: 'this body has 6 faces: fillets are found on bodies of up to 5 faces and holes on bodies of up to 4' });
+    expect(recognize(b, { max_faces: 5, max_fillet_faces: 6, holes: false })).toMatchObject({ faces: 6, blends: [] });
+    for (const key of ['max_faces', 'max_fillet_faces', 'max_hole_faces'])
+      expect(tryCall(k, 'recognize', { id: b, [key]: 0 })).toMatchObject({ ok: false, kind: 'input', error: `${key} must be >= 1` });
+    kit.release(h0, h1, f0, f1, b);
+  }, 60_000);
+
+  it("the adjacency graph's speed hunk (asi-occt79-wasm.patch): a 5,000-face prism's graph in well under the 2.3 s it took before", () => {
+    // asiAlgo_CheckDihedralAngle copied both faces' edge maps for every adjacent pair, so a face that
+    // carries every edge made the graph slow. Measured (Node 24, 2026-11-02, the fastest of 3): 0.62 s
+    // with the hunk, 2.26 s without (e1c42b60). max_faces lets the old kernel run it too.
+    const p = prism(4998);
+    const runs = [0, 1, 2].map(() => recognize(p, { holes: false, max_faces: 5000 }));
+    expect(Math.min(...runs.map((r) => r.timings.aag_ms as number))).toBeLessThan(1200);
+    expect(noTimings(runs[1])).toEqual(noTimings(runs[0]));
+    kit.release(p);
+  }, 60_000);
+
+  it('the speed hunk changes no answer: the same fillets, chains and holes as the kernel before it (e1c42b60), soft, hard and fillets only', () => {
+    // Digests of the full answers (timings left out) on the kernel before the hunk. The measure step
+    // compared 254 bodies (round 1's corpus and the 11 NIST parts) the same way: no difference.
+    const comb = (m: number, every: boolean) => {
+      const pts: number[][] = [[0, 0], [m * 4 + 2, 0], [m * 4 + 2, 10]];
+      for (let i = m - 1; i >= 0; i--) {
+        const x = 2 + i * 4;
+        pts.push([x + 2, 10], [x + 2, 16], [x, 16], [x, 10]);
+      }
+      pts.push([0, 10]);
+      const sharp = kit.id('extrude', { profile: poly(pts, XY), extent: { kind: 'blind', d: 8 }, check: false });
+      const es = kit.edges(sharp).filter((e) => every || (Math.abs(e.first[0] - e.last[0]) < 1e-9 && Math.abs(e.first[1] - e.last[1]) < 1e-9)).map((e) => e.i);
+      return kit.id('fillet', { id: sharp, edges: es, r: 0.4, check: false });
+    };
+    const plate = (n: number) => {
+      const tools: number[] = [];
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) tools.push(kit.cyl(1, 12, [5 + 6 * i, 5 + 6 * j, -1]));
+      const p = kit.cut(kit.box(6 * n + 4, 6 * n + 4, 10), ...tools);
+      return kit.id('fillet', { id: p, edges: kit.edges(p).filter((e) => e.type === 'circle').map((e) => e.i), r: 0.3 });
+    };
+    const bodies: Record<string, number> = {
+      'part A': proofA(kit).id,
+      'T R2 every edge': familyPart(kit, 'T', 2).id,
+      'T R1 lateral': familyPart(kit, 'T', 1, 'lat').id,
+      'ring boss': ringBoss(kit).id,
+      'comb of 60 teeth, lateral R0.4': comb(60, false),
+      'comb of 20 teeth, every edge R0.4': comb(20, true),
+      'plate of 36 holes, rims R0.3': plate(6),
+    };
+    const got: Record<string, string> = {};
+    for (const [name, id] of Object.entries(bodies)) {
+      const answers = [{}, { holes_mode: 'hard' }, { holes: false }].map((q) => JSON.stringify(noTimings(recognize(id, q))));
+      got[name] = createHash('sha256').update(answers.join('\n')).digest('hex').slice(0, 16);
+    }
+    expect(got).toEqual({
+      'part A': '7a4159d256d95bb7',
+      'T R2 every edge': '2431d2f5fc7ff17c',
+      'T R1 lateral': '568ff93eae577700',
+      'ring boss': 'ca7c2bca463c73ee',
+      'comb of 60 teeth, lateral R0.4': '4180d9049ce5579c',
+      'comb of 20 teeth, every edge R0.4': 'd737e6c10bf8d329',
+      'plate of 36 holes, rims R0.3': '235b46bf51711206',
+    });
+    kit.release(...Object.values(bodies));
+  }, 60_000);
 
   it('the input is unchanged: the same BREP bytes before and after', () => {
     for (const id of [proofA(kit).id, familyPart(kit, 'T', 2).id, ringBoss(kit).id]) {

@@ -13,7 +13,7 @@
 //  - surface: a void in the bar, a 1 x 1 bead in each restored concave corner, the right body with
 //    two kept faces' histories swapped (wrong names): all pass checkHeal, taken and the bound;
 //  - the kernel's words pass through as the reason: a comb of 100 single-face chains is refused
-//    before it runs as too long here (decision D3, the kernel's budget).
+//    before it runs, with its time and the 1.4 s Delete faces allows (decision D3, the kernel's budget).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { takeOffAsFillets } from '../../../src/features/delete_faces/feature';
@@ -241,7 +241,7 @@ describe('the bound takes convexity from the solid, not from Analysis Situs (dec
 });
 
 describe("the kernel's words are the reason", () => {
-  it('a comb of 100 single-face chains: refused before it runs, as too long here (the kernel budget, D3)', async () => {
+  it('a comb of 100 single-face chains: refused before it runs, with its time and the 1.4 s Delete faces allows (the kernel budget, D3)', async () => {
     const m = 50;
     const xz: number[][] = [[0, 0], [4 * m + 2, 0], [4 * m + 2, 10]];
     for (let i = m - 1; i >= 0; i--) xz.push([4 * i + 4, 10], [4 * i + 4, 16], [4 * i + 2, 16], [4 * i + 2, 10]);
@@ -256,7 +256,7 @@ describe("the kernel's words are the reason", () => {
     const sw = await takeOffAsFillets(ctx(), bodyOf(input), picks, atR);
     expect(sw).toMatchObject({ ok: false });
     if (sw.ok) return;
-    expect(sw.reason).toMatch(new RegExp(`^taking ${picks.length} fillet faces off as fillets on a body of 410 faces would take too long here \\(about \\d+ s\\)$`));
+    expect(sw.reason).toMatch(new RegExp(`^taking ${picks.length} fillet faces off as fillets on a body of 410 faces would take about \\d+(\\.\\d)? s; Delete faces allows 1\\.4 s for taking fillets off as fillets$`));
     expect(performance.now() - t0).toBeLessThan(5000);
   }, 120_000);
 });

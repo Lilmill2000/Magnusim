@@ -110,6 +110,16 @@ describe('recognition client (fake kernel)', () => {
       throw kernelError('this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000');
     });
     expect(await createRecognitionClient(big.kernel).features(1)).toEqual({ ok: false, reason: 'too_large', faces: 2002, limit: 2000, words: 'this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000' });
+    // API 9's two limits: the limit is the one the query ran into, named first.
+    for (const [words, faces, limit] of [
+      ['this body has 3,000 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000', 3000, 2600],
+      ['this body has 5,400 faces: fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600', 5400, 5000],
+    ] as const) {
+      const two = fakeKernel(() => {
+        throw kernelError(words);
+      });
+      expect(await createRecognitionClient(two.kernel).features(1)).toEqual({ ok: false, reason: 'too_large', faces, limit, words });
+    }
 
     const shell = fakeKernel(() => {
       throw kernelError('no solid in this body (fillets and holes are found on solids only)');
@@ -173,7 +183,7 @@ describe('recognition client (the real kernel)', () => {
   it("part A (60 x 40 x 20, R5 verticals, R3 round the top, a 6 mm through hole and an 8 mm hole 10 deep): what recognize answers; the lowered limit says the kernel's words; a restart forgets", async () => {
     const { kernel } = realKernelAdapter();
     const info = await kernel.start();
-    expect(info).toMatchObject({ api: 8, asi: '2026.1.1' });
+    expect(info).toMatchObject({ api: 9, asi: '2026.1.1' });
     const call = async (op: string, p: R): Promise<R> => (await kernel.call(op as never, p as never)).result as R;
     const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
     const box = (await call('box', { dx: 60, dy: 40, dz: 20, origin: [0, 0, 0] })).id;

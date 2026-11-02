@@ -18,6 +18,11 @@
 // 2026.1.1 in the kernel: recognize (fillets and drilled holes found by their shape),
 // suppress_blends (every fillet up to R taken off as fillets, with history), debug_reshape
 // (tests); `version` answers api: 8 and asi: '2026.1.1', and the ready message carries both.
+// API 9 (2026-11-02): defeature takes a time budget (budget_ms, far_budget_ms, far_skip) and a heal
+// stopped in time answers `stopped` with no shape (OCCT polls while it trims grown faces:
+// kernel-build/occt-patches/0002); recognize has two face limits (max_fillet_faces 5,000,
+// max_hole_faces 2,600) and its refusal names both; suppress_blends' budget refusal names the time
+// and the allowance; debug_budget_words (tests). `version` answers api: 9.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -29,7 +34,7 @@ export interface KernelReadyMsg {
   variant: 'wasm32';
   /** OCCT version the kernel was built from, "7.9.3". */
   occt: string;
-  /** API 8: the facade contract revision `version` answers (8 = fillet and hole recognition). */
+  /** API 8: the facade contract revision `version` answers (8 = fillet and hole recognition, 9 = defeature's time budget). */
   api: number;
   /** API 8: the Analysis Situs release linked into the kernel ("2026.1.1"), or null when it has none. */
   asi: string | null;
@@ -324,23 +329,44 @@ export interface KernelOps {
    * the other; flip:true swaps which face is the reference); `contours` as fillet.
    */
   chamfer: { params: CheckParam & { id: ShapeId; edges: number[]; d: number; d2?: number; flip?: boolean }; result: ShapeResult & { contours?: number[][] } };
-  /** OCCT's BRepAlgoAPI_Defeaturing: the faces taken off and the gap healed; history against the input, always. */
-  defeature: { params: CheckParam & { id: ShapeId; faces: number[] }; result: ShapeResult & { history: OpHistory; warnings: boolean; warning_text?: string } };
+  /**
+   * OCCT's BRepAlgoAPI_Defeaturing: the faces taken off and the gap healed; history against the input, always.
+   * API 9, a time budget (none given: the heal runs to the end, as before): budget_ms stops OCCT's
+   * heal at its first progress poll after that long (kernel-build/occt-patches/0002 polls while each
+   * grown face is trimmed); far_budget_ms is the budget instead when the heal would grow a kept curved
+   * face (not a plane, cylinder, cone, sphere or torus) more than 4 times its own size (the smaller of
+   * the two when both are given); far_skip does not start such a heal at all. A stopped heal answers
+   * `stopped` and nothing else (no id, history or validity: the body is unchanged); a checked result
+   * that found such faces reports them in `far_grown`.
+   */
+  defeature: {
+    params: CheckParam & { id: ShapeId; faces: number[]; budget_ms?: number; far_budget_ms?: number; far_skip?: boolean };
+    result: ShapeResult & { history: OpHistory; warnings: boolean; warning_text?: string; far_grown?: number[]; stopped?: DefeatureStopped };
+  };
   /**
    * API 8. Fillets and drilled holes of a body found by their shape (Analysis Situs asiAlgo
    * RecognizeBlends and RecognizeDrillHoles), whatever made them. Read-only: nothing is stored.
    * Face indices are the body's (0-based); every list is sorted by its smallest face. Refused in
-   * words: no solid ("no solid in this body (fillets and holes are found on solids only)"), and more
-   * faces than max_faces ("this body has 2,002 faces: fillets and holes are found on bodies of up to
-   * 2,000"; RECOGNIZE_MAX_FACES in src/kernel/timeouts.ts).
+   * words: no solid ("no solid in this body (fillets and holes are found on solids only)"), and a
+   * body over a face limit. API 9: two limits, max_fillet_faces (5,000) for a query that finds
+   * fillets and max_hole_faces (2,600) for one that finds holes, and the words name both, the one
+   * the query ran into first: "this body has 5,400 faces: fillets are found on bodies of up to 5,000
+   * faces and holes on bodies of up to 2,600", "this body has 3,000 faces: holes are found on bodies
+   * of up to 2,600 faces and fillets on bodies of up to 5,000". max_faces sets both (API 8's one
+   * limit) and keeps API 8's words: "this body has 2,002 faces: fillets and holes are found on
+   * bodies of up to 2,000" (RECOGNIZE_MAX_FACES in src/kernel/timeouts.ts).
    */
   recognize: {
     params: {
       id: ShapeId;
       blends?: boolean;
       holes?: boolean;
-      /** The largest body searched (default 2,000 faces, measured: a running call cannot be stopped). */
+      /** One limit for the call, fillets and holes alike (API 8's parameter); max_fillet_faces and max_hole_faces override it. */
       max_faces?: number;
+      /** API 9: the largest body whose fillets are found (default 5,000 faces, measured: a running call cannot be stopped). */
+      max_fillet_faces?: number;
+      /** API 9: the largest body whose holes are found (default 2,600 faces; the drill-hole search is quadratic). */
+      max_hole_faces?: number;
       /** Analysis Situs' own radius limit: the set suppress_blends takes at R (default: every fillet). */
       max_r?: number;
       /** asiAlgo_RecognizeDrillHoles' mode (default soft). */
@@ -353,7 +379,8 @@ export interface KernelOps {
    * be every fillet of the solid up to the largest picked radius R (checked against its own
    * recognition at R), and the run must be predicted to fit the kernel's budget (`budget_ms` may
    * only lower it), else words such as "taking 404 fillet faces off as fillets on a body of 810
-   * faces would take too long here (about 30 s)". The history walks every input face to all its
+   * faces would take about 20 s; Delete faces allows 1.4 s for taking fillets off as fillets"
+   * (API 9; below 10 s one decimal, never at or under the allowance). The history walks every input face to all its
    * images; the kernel refuses unless exactly the picked faces are gone and every result face has a
    * source. Nothing taken off is refused, never passed through.
    */
@@ -367,6 +394,12 @@ export interface KernelOps {
    * A new stored shape with `valid` and no history; the input never changes.
    */
   debug_reshape: { params: CheckParam & { id: ShapeId; bspline?: boolean; split_closed?: boolean; tolerance_scale?: number }; result: ShapeResult };
+  /**
+   * API 9, tests only: suppress_blends' words for a run predicted at `predicted_ms` over its budget
+   * (budget_ms may only lower suppress_blends' own 1,400 ms), so tests can check the rounding at
+   * chosen times. `refused` is whether suppress_blends would refuse that prediction.
+   */
+  debug_budget_words: { params: { picks: number; faces: number; predicted_ms: number; budget_ms?: number }; result: { refused: boolean; budget_ms: number; words: string } };
   /** API 4: outside:true puts the wall outside the body's faces (the body becomes the cavity). */
   shell: { params: CheckParam & { id: ShapeId; faces: number[]; t: number; tol?: number; outside?: boolean }; result: ShapeResult };
   /**
@@ -820,6 +853,21 @@ export interface RecognizeResult {
    */
   holes: { faces: number[]; d_min: number | null; d_max: number | null; through: boolean }[];
   timings: { copy_ms: number; aag_ms: number; blends_ms: number; holes_ms: number };
+}
+
+/**
+ * API 9: a defeature its budget stopped (the body is unchanged): the budget it ran with (0 when
+ * far_skip did not start it), how long it ran, and the kept curved faces OCCT would grow more than
+ * 4 times their size (0-based on the input; empty unless far_budget_ms or far_skip asked for them)
+ * with the largest ratio.
+ */
+export interface DefeatureStopped {
+  budget_ms: number;
+  after_ms: number;
+  far_grown: number[];
+  far_ratio?: number;
+  /** far_skip: the heal was not started. */
+  skipped?: boolean;
 }
 
 /** API 8: what `suppress_blends` answers (a shape result with the history every naming step reads). */

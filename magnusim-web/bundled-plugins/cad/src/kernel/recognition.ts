@@ -164,8 +164,9 @@ export function createRecognitionClient(kernel: KernelAdapter): RecognitionClien
           return { ok: false, reason: 'old_kernel', api: said, words: oldKernelWords(said) };
         }
         if (words === NOT_SOLID) return { ok: false, reason: 'not_solid', words };
-        const m = /^this body has ([\d,]+) faces: fillets and holes are found on bodies of up to ([\d,]+)$/.exec(words);
-        if (m) return { ok: false, reason: 'too_large', words, faces: Number(m[1].replace(/,/g, '')), limit: Number(m[2].replace(/,/g, '')) };
+        // One limit (max_faces, API 8's words) or API 9's two, the one the query ran into first.
+        const m = /^this body has ([\d,]+) faces: (?:fillets and holes are found on bodies of up to ([\d,]+)|(?:fillets|holes) are found on bodies of up to ([\d,]+) faces and (?:fillets|holes) on bodies of up to [\d,]+)$/.exec(words);
+        if (m) return { ok: false, reason: 'too_large', words, faces: Number(m[1].replace(/,/g, '')), limit: Number((m[2] ?? m[3]).replace(/,/g, '')) };
       }
       // Anything else (an OCCT failure, a stopped or restarted kernel) is not kept: the next call asks again.
       throw Object.assign(new Error(words), { kind: e?.kind, refusal: { ok: false, reason: 'failed', words } satisfies Features });
