@@ -16,21 +16,40 @@
 //                 then Delete faces with nothing selected, Fillets up to 2, Enter: the 40 fillet
 //                 faces; OCCT's heal cannot, they come off as fillets: the row ok with the note
 //                 "Taken off as fillets up to R2 by Analysis Situs ...", the chip at 32,000 mm³.
+//  3. by-size-tblock-corners  round 2 (kernel API 9, the third way): a T-block, Fillet 1 of every
+//                 edge but the 8 lateral ones R2, then Fillet 2 of the 8 lateral edges R1 (each R1
+//                 round ends in two small B-spline corner pieces where it meets the R2 fillets);
+//                 Delete faces with nothing selected, Fillets up to 1, Enter: "Added 8 faces: 8
+//                 fillet chains, R1" (the corner pieces read R1.02). OCCT's heal of them grows those
+//                 pieces 36 mm past their 2 mm and ran 568 s natively before it failed; in the app the
+//                 kernel's 20 s watchdog stopped it ("Delete faces 1 was stopped after 20.0 s", a
+//                 kernel restart). Now the kernel does not start a heal that would grow a small
+//                 curved face that far, taking them off as fillets refuses at once, and each round
+//                 comes off with its 2 corner pieces, one at a time: the row ok well within 20 s with
+//                 the note "Taken off one round at a time, with the 16 corner faces ...", the chip at
+//                 the T-block with only Fillet 1 (31,731.445 mm³, measured here as the reference), no
+//                 kernel restart.
+//  4. by-size-tblock-corners-refused  the T-block rounded the other way (R1 along y first, then
+//                 R2: tori at the concave rounds' ends), made in the page as STEP, with the third
+//                 way's time for each round lowered to 1 ms (window.__CAD__.corners): red, its words
+//                 name OCCT's heal (run after the other two ways, stopped by its 2.5 s), taking them
+//                 off as fillets and with the corner faces, each once, then that the body is
+//                 unchanged; no kernel restart.
+//  5. by-size-heal-time  OCCT's heal's time limit (kernel API 9): a comb's 20 rounds R1 on a body
+//                 whose every surface is a B-spline (made in the page as STEP), whose heal took 58 s
+//                 (the watchdog stopped it at 20 s): Fillets up to 1, Enter: red with "OCCT's heal
+//                 did not finish in 16.0 s; taking them off as fillets did not work either: ...; the
+//                 body is unchanged", the chip unchanged, no kernel restart.
 // Without S5 there is no data-delete-add (step 1 fails at once), and the box step fails without
 // useBoxPicks.
 // Review 2026-11-02: in by-size, Holes up to Ø 5.95 first adds nothing and says what Body 1 has (<=
 // had the plain size's 1 %: it added the four 6 mm holes as "4 holes up to Ø5.95 mm (4 through)").
-// A known class, not changed here (it needs Daniel's decision against F3, OCCT first): a T-block with
-// its non-lateral edges R2 and its lateral edges R1, "Fillets up to 1 mm" adds its 8 R1 faces, and
-// OCCT's defeature of them never returns (the same on the API 7 kernel): the kernel's 20 s watchdog
-// stops the worker, the Part rebuilds and the row reads "was stopped after 20.0 s"; the second way
-// never runs, though suppress_blends alone refuses that pick in words at once.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
-import { ctrlBox, importRoundedBlock, r5OnPage } from './rounded-block';
+import { ctrlBox, importRoundedBlock, r5OnPage, type RoundedBlockMade } from './rounded-block';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
@@ -224,5 +243,205 @@ test('cad:delete-faces-by-size-tblock Fillets up to 2 mm on a rounded T-block ad
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);
   await expect(row).toHaveAttribute('data-state', 'ok');
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+/** Select the one body's edges along the extrusion (y: lateral), or every other edge; their count. */
+async function selectTEdges(page: Page, lateral: boolean): Promise<number> {
+  return cad<number>(page, (async (lat: boolean) => {
+    const s = (window as unknown as W).__CAD__.services;
+    const b = s.doc.state.get().rebuild.bodies[0];
+    const t = (await s.kernel.call('topo', { id: b.shape, faces: 'none', edges: 'all', vertices: 'none', edge_ends: true })).result;
+    const near = (a: number, c: number) => Math.abs(a - c) < 1e-6;
+    const isLat = (e: { type: string; first: number[]; last: number[] }) => e.type === 'line' && near(e.first[0], e.last[0]) && near(e.first[2], e.last[2]) && !near(e.first[1], e.last[1]);
+    const idx = t.edges.filter((e: { type: string; first: number[]; last: number[] }) => isLat(e) === lat).map((e: { i: number }) => e.i);
+    s.selection.set((st: object) => ({ ...st, items: idx.map((index: number) => ({ kind: 'edge', body: b.id, index })) }));
+    return idx.length;
+  }) as never, lateral);
+}
+
+/** MODIFY > Fillet of the selection at radius r: the row ok, Done. */
+async function filletSelected(page: Page, frame: FrameLocator, name: string, r: number) {
+  await runCommand(frame, 'modify.fillet');
+  await expect(panel(frame).locator('[data-panel-title]')).toHaveText(name);
+  const radius = panel(frame).locator('.nui[data-field="radius"] input');
+  await radius.fill(String(r));
+  await radius.press('Enter');
+  await settled(page);
+  await expect(featureRowNamed(frame as never, name)).toHaveAttribute('data-state', 'ok');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+}
+
+const respawns = (page: Page) => cad<number>(page, (() => (window as unknown as W).__CAD__.services.kernel.status.get().respawns) as never);
+
+// The T-block with only its non-lateral edges R2 (lateral edges sharp), measured in Node on a
+// kernel-built copy: 31,731.445350 mm³, 26 faces. Fillet 1's own result here is that body.
+const T_CAPS_R2 = 31731.44535019923;
+
+test('cad:delete-faces-by-size-tblock-corners Fillets up to 1 mm on a T-block rounded R2 and then R1 along it takes the 8 R1 rounds off with their 16 corner pieces: ok well within 20 s, the T with only its R2 fillets, no kernel restart', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const { seen, frame } = await freshPart(page, request);
+  // The T-block: a bar 60 x 40 x 10 on a stem 20 x 40 x 10; Fillet 1 R2 on its 16 edges across y,
+  // Fillet 2 R1 on its 8 edges along y.
+  const bar = await addSolid(page, { at: [0, 0, 10], size: [60, 40, 10] });
+  await addSolid(page, { at: [20, 0, 0], size: [20, 40, 10], op: 'join', scope: [bar.body!] });
+  await settled(page);
+  await expectOneVolume(frame, 32000);
+  expect(await selectTEdges(page, false)).toBe(16);
+  await filletSelected(page, frame, 'Fillet 1', 2);
+  // The reference: the T with only Fillet 1, as the chip reads it now.
+  const reference = (await chipVolumes(frame))[0];
+  expect(Math.abs(reference / T_CAPS_R2 - 1)).toBeLessThan(1e-9);
+  expect(await selectTEdges(page, true)).toBe(8);
+  await filletSelected(page, frame, 'Fillet 2', 1);
+  const respawns0 = await respawns(page);
+
+  // Delete faces, nothing selected; Fillets up to 1 mm, Enter: the 8 R1 rounds.
+  await openEmpty(page, frame);
+  await sizeInput(frame, 'fillets').fill('1');
+  await sizeInput(frame, 'fillets').press('Enter');
+  await expect(added(frame)).toHaveText('Added 8 faces: 8 fillet chains, R1', { timeout: 60_000 });
+  const t0 = Date.now();
+  await expect(pickLabel(frame)).toHaveText('Faces to delete (8)');
+  await settled(page);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'ok', { timeout: 60_000 });
+  // Well within the kernel's 20 s watchdog (4.4 s in Node: no heal started, taking them off as
+  // fillets refused at once, 8 rounds with their corners one at a time and the checks).
+  expect(Date.now() - t0, 'ms to ok').toBeLessThan(15_000);
+  const NOTE = "Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish";
+  await expect(panel(frame).locator('[data-note]')).toHaveText(`Note: ${NOTE}`);
+  await expect(row.locator('[data-feature-badge="note"]')).toHaveAttribute('data-message', NOTE);
+  await expectOneVolume(frame, reference, 1e-9);
+  expect(await cad<number>(page, (() => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.bodies[0].faces) as never), 'faces').toBe(26);
+  expect(await respawns(page), 'kernel restarts').toBe(respawns0);
+  await shot(page, 'delete-faces-by-size-tblock-corners');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-state', 'ok');
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+/**
+ * Runs in the Part's frame: the T-block rounded the other way round, its 8 edges along y R1 first
+ * and then its 16 edges across R2 (a torus at each concave round's ends), as STEP: the app's Fillet
+ * cannot round it R2 after R1. `volume` is that body, `sharp` the T with only its R2 fillets.
+ * Self-contained (it is sent as text).
+ */
+async function tAlongFirstInPage(): Promise<RoundedBlockMade> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type R = Record<string, any>;
+  const k = (window as unknown as { __CAD__: { services: { kernel: { call(op: string, p: R): Promise<{ result: R; buffers: Record<string, ArrayBuffer> }> } } } }).__CAD__.services.kernel;
+  const r = async (op: string, p: R) => (await k.call(op, p)).result;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  const along = (e: R) => e.type === 'line' && near(e.first[0], e.last[0]) && near(e.first[2], e.last[2]) && !near(e.first[1], e.last[1]);
+  const edges = async (id: number) => (await r('topo', { id, faces: 'none', vertices: 'none', edge_ends: true })).edges as R[];
+  const bar = (await r('box', { dx: 60, dy: 40, dz: 10, origin: [0, 0, 10] })).id;
+  const stem = (await r('box', { dx: 20, dy: 40, dz: 10, origin: [20, 0, 0] })).id;
+  const sharp = (await r('boolean', { op: 'fuse', targets: [bar], tools: [stem] })).id;
+  const ref = (await r('fillet', { id: sharp, edges: (await edges(sharp)).filter((e) => !along(e)).map((e) => e.i), r: 2 })).id;
+  const first = (await r('fillet', { id: sharp, edges: (await edges(sharp)).filter(along).map((e) => e.i), r: 1 })).id;
+  const id = (await r('fillet', { id: first, edges: (await edges(first)).filter((e) => !along(e)).map((e) => e.i), r: 2 })).id;
+  const volume = (await r('props', { id, volume: true, bbox: 'none' })).volume;
+  const only = (await r('props', { id: ref, volume: true, bbox: 'none' })).volume;
+  const step = (await k.call('export_step', { shapes: [{ id, name: 'Body 1' }], schema: 'AP214' })).buffers.step;
+  await r('release', { ids: [id, first, ref, sharp, stem, bar] });
+  let bin = '';
+  const u8 = new Uint8Array(step);
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  return { b64: btoa(bin), volume, sharp: only };
+}
+
+test("cad:delete-faces-by-size-tblock-corners-refused the T-block rounded R1 along it first and then R2, as STEP, with each round and its corner pieces allowed 1 ms: Fillets up to 1 mm is red in words that name each way tried once, OCCT's heal after them stopped by its 2.5 s, and that the body is unchanged, with no kernel restart", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const { seen, frame } = await freshPart(page, request);
+  const made = await importRoundedBlock(page, frame, tAlongFirstInPage);
+  await settled(page);
+  await expectOneVolume(frame, made.volume);
+  const respawns0 = await respawns(page);
+  // The third way's time for each round with its corner pieces, lowered from its 2.5 s
+  // (window.__CAD__.corners) so that it refuses on a body it takes off.
+  await cad(page, (() => {
+    (window as unknown as { __CAD__: { corners: { groupMs: number | null } } }).__CAD__.corners.groupMs = 1;
+  }) as never);
+  try {
+    await openEmpty(page, frame);
+    await sizeInput(frame, 'fillets').fill('1');
+    await sizeInput(frame, 'fillets').press('Enter');
+    await expect(added(frame)).toHaveText(/^Added 8 faces: /, { timeout: 60_000 });
+    const t0 = Date.now();
+    await settled(page);
+    const row = featureRowNamed(frame as never, 'Delete faces 1');
+    await expect(row).toHaveAttribute('data-state', 'error', { timeout: 60_000 });
+    // OCCT's heal, not started first (it would grow the 12 corner pieces far past their size), ran
+    // after both other ways refused, and its 2.5 s stopped it.
+    expect(Date.now() - t0, 'ms to the red words').toBeLessThan(15_000);
+    await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(
+      /^Delete faces 1 failed: OCCT's heal did not finish in 2\.5 s: it grows 12 small curved faces far past their size; taking them off as fillets did not work either: [^;]+; taking them off with the 16 corner faces where they meet other fillets did not work either: taking a round off with its corner faces did not finish in 0\.001 s; the body is unchanged$/,
+    );
+    await expectOneVolume(frame, made.volume);
+    expect(await respawns(page), 'kernel restarts').toBe(respawns0);
+    await shot(page, 'delete-faces-by-size-tblock-corners-refused');
+  } finally {
+    await cad(page, (() => {
+      (window as unknown as { __CAD__: { corners: { groupMs: number | null } } }).__CAD__.corners.groupMs = null;
+    }) as never);
+  }
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+/**
+ * Runs in the Part's frame: a comb (a base 60 x 10 with 4 teeth 6 x 15, 20 deep) whose 20 edges
+ * along y are rounded R1, with every surface made a B-spline (the kernel's test reshape), as STEP:
+ * OCCT's heal of its 20 rounds took 58 s on the kernel before API 9 (in the app the 20 s watchdog
+ * stopped it). Self-contained (it is sent as text).
+ */
+async function bsplineCombInPage(): Promise<RoundedBlockMade> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type R = Record<string, any>;
+  const k = (window as unknown as { __CAD__: { services: { kernel: { call(op: string, p: R): Promise<{ result: R; buffers: Record<string, ArrayBuffer> }> } } } }).__CAD__.services.kernel;
+  const r = async (op: string, p: R) => (await k.call(op, p)).result;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  const xz = [[0, 0], [60, 0], [60, 10], [54, 10], [54, 25], [48, 25], [48, 10], [40, 10], [40, 25], [34, 25], [34, 10], [26, 10], [26, 25], [20, 25], [20, 10], [12, 10], [12, 25], [6, 25], [6, 10], [0, 10]];
+  const profile = { plane: { origin: [0, 0, 0], normal: [0, -1, 0], xdir: [1, 0, 0] }, loops: [xz.map((a, i) => ({ id: `s${i}`, kind: 'line', a, b: xz[(i + 1) % xz.length] }))] };
+  const sharp = (await r('extrude', { profile, extent: { kind: 'blind', d: 20 } })).id;
+  const along = ((await r('topo', { id: sharp, faces: 'none', vertices: 'none', edge_ends: true })).edges as R[]).filter((e) => e.type === 'line' && near(e.first[0], e.last[0]) && near(e.first[2], e.last[2])).map((e) => e.i);
+  const rounded = (await r('fillet', { id: sharp, edges: along, r: 1 })).id;
+  const id = (await r('debug_reshape', { id: rounded, bspline: true })).id;
+  const volume = (await r('props', { id, volume: true, bbox: 'none' })).volume;
+  const step = (await k.call('export_step', { shapes: [{ id, name: 'Body 1' }], schema: 'AP214' })).buffers.step;
+  await r('release', { ids: [id, rounded, sharp] });
+  let bin = '';
+  const u8 = new Uint8Array(step);
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  return { b64: btoa(bin), volume, sharp: volume };
+}
+
+test("cad:delete-faces-by-size-heal-time a B-spline comb's 20 rounds, whose heal took 58 s: Fillets up to 1 mm is red in words once OCCT's heal has had its 16 s, then why taking them off as fillets failed too, the body unchanged, no kernel restart", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const { seen, frame } = await freshPart(page, request);
+  const made = await importRoundedBlock(page, frame, bsplineCombInPage);
+  await settled(page);
+  await expectOneVolume(frame, made.volume);
+  const respawns0 = await respawns(page);
+  await openEmpty(page, frame);
+  await sizeInput(frame, 'fillets').fill('1');
+  await sizeInput(frame, 'fillets').press('Enter');
+  await expect(added(frame)).toHaveText(/^Added 20 faces: /, { timeout: 60_000 });
+  await settled(page);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'error', { timeout: 60_000 });
+  await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(
+    /^Delete faces 1 failed: OCCT's heal did not finish in 16\.0 s; taking them off as fillets did not work either: [^;]+; the body is unchanged$/,
+  );
+  await expectOneVolume(frame, made.volume);
+  // The heal's budget ended it in words: the kernel's 20 s watchdog never stopped the worker.
+  expect(await respawns(page), 'kernel restarts').toBe(respawns0);
+  await shot(page, 'delete-faces-by-size-heal-time');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
   expect(seen.errors, 'console errors').toEqual([]);
 });
