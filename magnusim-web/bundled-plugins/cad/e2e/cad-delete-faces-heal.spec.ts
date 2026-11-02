@@ -4,10 +4,12 @@
 //                 heal filled the step and the app showed Delete faces 1 ok with the volume chip
 //                 at 48,000 mm³ (the full box). Now the heal is tried again in two goes: Delete
 //                 faces 1 is ok and the chip shows the sharp L-block's 36,000 mm³, its 8 faces.
-//  2. heal-refuse a T-block (a bar 60 x 40 x 10 on a stem 20 x 40 x 10), which two goes cannot
-//                 make right: Delete faces 1 is red and says what the heal would have done, that
-//                 the body is unchanged and that deleting Fillet 1 takes the fillet off; the chip
-//                 keeps Fillet 1's volume. Done keeps the red row.
+//  2. heal-tblock a T-block (a bar 60 x 40 x 10 on a stem 20 x 40 x 10), which two goes cannot
+//                 make right (it was heal-refuse: red, "would add 16,39x mm³ over faces you kept"):
+//                 kernel API 8 takes the fillets off as fillets (Analysis Situs). Delete faces 1 is
+//                 ok, its panel's note and the tree row's info mark say "Taken off as fillets up to
+//                 R2 by Analysis Situs: OCCT's heal could not do it cleanly", the chip shows the
+//                 sharp T-block's 32,000 mm³, its 10 faces.
 // Review 2026-10-30:
 //  3. heal-boss   a plate with a boss joined on it, Fillet 1 of the boss's 4 vertical edges R2,
 //                 Delete faces of the 4 rounds: ok, the chip at the sharp boss's 25,200 mm³ (it was
@@ -25,6 +27,20 @@
 //  6. pattern     a Linear pattern of the rounded L-block's blend faces (picked, then the
 //                 command): red, "OCCT could not take those faces off Body 1 cleanly (healing
 //                 filled more than the gap ...)", the chip as Fillet 1 left it.
+// Kernel API 8 (Delete faces version 2, the Analysis Situs plan §3.4):
+//  7. heal-refuse the T-block with a hole through its bar: its rims are rings, which cannot come off
+//                 as fillets either. Red with the heal's words, then "; taking them off as fillets
+//                 did not work either: 1 of the 42 fillet faces could not be taken off (a ring round a
+//                 boss or a hole ...); the body is unchanged", the chip as Fillet 1 left it.
+//  8. heal-rest   the T-block's fillets but one picked: red with "Every fillet up to R2 on Body 1 is
+//                 40 faces and 39 are picked: with all 40, Delete faces can take them off as fillets"
+//                 and the panel's "Add the rest (+1)"; pressed, the faces are 40, the row ok, the
+//                 chip at 32,000 mm³.
+//  9. heal-legacy the T-block's Delete faces as a Part saved before version 2 keeps it (the model
+//                 file written here without the version, the Part read again): red with OCCT's
+//                 refusal and "This Delete faces was made before Delete faces could take fillets
+//                 off as fillets: a new Delete faces of these faces may do it", the chip as Fillet 1
+//                 left it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -150,31 +166,151 @@ test('cad:delete-faces-heal-fill Delete faces of every blend of a rounded L-bloc
   expect(seen.errors).toEqual([]);
 });
 
-test('cad:delete-faces-heal-refuse Delete faces of every blend of a rounded T-block: red with what the heal would do, the body and its chips unchanged', async ({ page, request }) => {
-  test.setTimeout(180_000);
-  const { seen, frame } = await freshPart(page, request);
+const NOTE = "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly";
+
+/** The T-block: a bar 60 x 40 x 10 on a stem 20 x 40 x 10 (32,000 mm³), with a 8 mm hole through the bar at (10, 20) when `hole`. */
+async function tBlock(page: Page, frame: FrameLocator, hole = false) {
   const bar = await addSolid(page, { at: [0, 0, 10], size: [60, 40, 10] });
   await addSolid(page, { at: [20, 0, 0], size: [20, 40, 10], op: 'join', scope: [bar.body!] });
+  if (hole) await addSolid(page, { circle: true, at: [10, 20, 0], size: [8, 20], op: 'cut', scope: [bar.body!] });
   await settled(page);
-  await expectOneVolume(frame, 32000);
+  await expectOneVolume(frame, hole ? 32000 - Math.PI * 16 * 10 : 32000);
+}
+
+/** Fillet 1 of every face R2 through its panel, Done; its chip volume. */
+async function roundAll(page: Page, frame: FrameLocator): Promise<number> {
+  expect(await selectFaces(page, 'all')).toBe(await bodyFaces(page));
+  return filletSelected(page, frame, '2');
+}
+
+/** Select the fillet faces of the one body: not flat, not the hole's wall (radius 4), but for the first `skip` of them. */
+async function selectFillets(page: Page, skip = 0): Promise<number[]> {
+  return cad<number[]>(page, (async (n: number) => {
+    const s = (window as unknown as W).__CAD__.services;
+    const b = s.doc.state.get().rebuild.bodies[0];
+    const t = (await s.kernel.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'none', face_bbox: 'none', face_mass: false })).result;
+    const all = t.faces.filter((f: { type: string; radius?: number }) => f.type !== 'plane' && !(f.type === 'cylinder' && Math.abs((f.radius ?? 0) - 4) < 1e-6)).map((f: { i: number }) => f.i);
+    const idx = all.slice(n);
+    s.selection.set((st: object) => ({ ...st, items: idx.map((index: number) => ({ kind: 'face', body: b.id, index })) }));
+    return all;
+  }) as never, skip);
+}
+
+test('cad:delete-faces-heal-tblock Delete faces of every blend of a rounded T-block: OCCT cannot, the fillets come off as fillets: ok with the note, the chip at the sharp T-block (32,000 mm³)', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  await tBlock(page, frame);
   const faces0 = await bodyFaces(page);
-  const filleted = await roundThenDelete(page, frame, faces0, null);
+  await roundThenDelete(page, frame, faces0, null);
   const row = featureRowNamed(frame as never, 'Delete faces 1');
-  await expect(row).toHaveAttribute('data-state', 'error');
-  const reason = panel(frame).locator('[data-run-reason]').first();
-  await expect(reason).toHaveText(
-    /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 16,39\d\.\d+ mm³ over faces you kept \([^)]*Extrude [12][^)]*\); the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead/,
-    { timeout: 30_000 },
+  // Was red: "healing filled more than the gap ...: it would add 16,39x mm³ over faces you kept (...)".
+  await expect(row).toHaveAttribute('data-state', 'ok', { timeout: 30_000 });
+  await expect(panel(frame).locator('[data-run-reason]')).toHaveCount(0);
+  await expect(panel(frame).locator('[data-note]')).toHaveText(`Note: ${NOTE}`);
+  await expect(row.locator('[data-feature-badge="note"]')).toHaveAttribute('data-message', NOTE);
+  await expectOneVolume(frame, 32000);
+  await expect.poll(() => sizeOf(frame)).toEqual([60, 40, 20]);
+  expect(await bodyFaces(page)).toBe(10);
+  await expect(panel(frame).locator('[data-delete-rest]')).toHaveCount(0);
+  await shot(page, 'delete-faces-heal-tblock');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-state', 'ok');
+  await expectOneVolume(frame, 32000);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:delete-faces-heal-refuse a rounded T-block with a hole through its bar: red, OCCT\'s words then why taking the fillets off failed too, the body and its chip unchanged', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  await tBlock(page, frame, true);
+  const filleted = await roundAll(page, frame);
+  expect(await selectFillets(page)).toHaveLength(42);
+  await deleteSelected(page, frame, true);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
+  await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(
+    /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add [\d,.]+ mm³ over faces you kept \([^)]*\); taking them off as fillets did not work either: 1 of the 42 fillet faces could not be taken off \(a ring round a boss or a hole cannot be taken off as a fillet\); the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead$/,
   );
-  // The body is as Fillet 1 left it: not the 60 x 40 x 20 box of 48,000 mm³ the heal made.
+  // Nothing to add: no Add the rest. The body as Fillet 1 left it.
+  await expect(panel(frame).locator('[data-delete-rest]')).toHaveCount(0);
   await expectOneVolume(frame, filleted);
-  await expect(volumeChip(frame)).not.toContainText('48,000');
   await shot(page, 'delete-faces-heal-refuse');
-  // Done: the row stays red, the body unchanged.
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);
   await expect(row).toHaveAttribute('data-state', 'error');
   await expectOneVolume(frame, filleted);
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:delete-faces-heal-rest the rounded T-block\'s fillets but one: red with every fillet up to R2 and how many are picked; Add the rest (+1) makes it the sharp T-block', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  await tBlock(page, frame);
+  const filleted = await roundAll(page, frame);
+  expect(await selectFillets(page, 1)).toHaveLength(40);
+  await deleteSelected(page, frame, true);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
+  await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(/\. Every fillet up to R2 on Body 1 is 40 faces and 39 are picked: with all 40, Delete faces can take them off as fillets$/);
+  await expect(panel(frame).locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(39);
+  await expectOneVolume(frame, filleted);
+  const rest = panel(frame).locator('[data-delete-rest]');
+  await expect(rest).toHaveText('Add the rest (+1)');
+  await shot(page, 'delete-faces-heal-rest');
+  await rest.click();
+  await settled(page);
+  await expect(panel(frame).locator('[data-pick-field="faces"] [data-pick-row]')).toHaveCount(40);
+  await expect(row).toHaveAttribute('data-state', 'ok', { timeout: 30_000 });
+  await expect(panel(frame).locator('[data-note]')).toHaveText(`Note: ${NOTE}`);
+  await expect(rest).toHaveCount(0);
+  await expectOneVolume(frame, 32000);
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-state', 'ok');
+  expect(seen.errors).toEqual([]);
+});
+
+test('cad:delete-faces-heal-legacy a Part whose Delete faces was saved before version 2 stays red as before, says a new Delete faces may take the fillets off, the body as Fillet 1 left it', async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  await tBlock(page, frame);
+  const filleted = await roundAll(page, frame);
+  expect(await selectFillets(page)).toHaveLength(40);
+  await deleteSelected(page, frame, true);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  await expect(row).toHaveAttribute('data-state', 'ok', { timeout: 30_000 });
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(frame.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 20_000 });
+  // The model file as a build before version 2 wrote it: the Delete faces with no version. Then the Part reads it again.
+  const was = await cad<number | null>(page, (async () => {
+    const s = (window as unknown as W).__CAD__.services;
+    const rel = `studies/${s.bridge.studyId}/model.json`;
+    const text = new TextDecoder().decode(await s.bridge.files.read(rel));
+    const model = JSON.parse(text);
+    const df = model.doc.features.find((f: { type: string }) => f.type === 'delete_faces');
+    const version = df.version ?? null;
+    delete df.version;
+    await s.bridge.files.write(rel, JSON.stringify(model));
+    await s.doc.reload();
+    return version;
+  }) as never);
+  expect(was).toBe(2);
+  await settled(page);
+  await expect(row).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
+  await expect(row.locator('[data-feature-badge="error"]')).toHaveAttribute(
+    'data-message',
+    /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 16,39\d\.\d+ mm³ over faces you kept \([^)]*\); the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead\. This Delete faces was made before Delete faces could take fillets off as fillets: a new Delete faces of these faces may do it$/,
+  );
+  await expectOneVolume(frame, filleted);
+  await expect(volumeChip(frame)).not.toContainText('32,000');
+  // Its panel says the same, and offers nothing to add (the pick is every fillet up to R2).
+  await row.locator('> .tree-row').dblclick();
+  await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(/a new Delete faces of these faces may do it$/);
+  await expect(panel(frame).locator('[data-delete-rest]')).toHaveCount(0);
+  await shot(page, 'delete-faces-heal-legacy');
+  await panel(frame).locator('[data-panel-done]').click();
   expect(seen.errors).toEqual([]);
 });
 
