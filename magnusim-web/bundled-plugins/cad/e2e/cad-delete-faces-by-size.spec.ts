@@ -7,7 +7,9 @@
 //                 "Faces to delete (8)", "Added 8 faces: 1 fillet chain, R2", the row ok and the chip
 //                 at the sharp block's volume. Holes up to Ø 6, Add: "(4 through)", 12 faces, the
 //                 chip with the holes filled. Again: the words of what Body 1 has, nothing added. With
-//                 the page's face limit lowered, Add says the limit in Find's words. A Ctrl+drag box
+//                 the page's holes' face limit lowered (kernel API 9: fillets and holes each have
+//                 one), Holes Add says both limits in Find's words and Fillets Add still searches
+//                 (what Body 1 has, as before). A Ctrl+drag box
 //                 on an R5 vertical while the panel is open adds the faces it touches (the count
 //                 rises; without useBoxPicks it stays).
 //  2. by-size-tblock  Add by size meets the second way (S6): a T-block, Fillet 1 of every face R2,
@@ -31,7 +33,7 @@ import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, pa
 import { ctrlBox, importRoundedBlock, r5OnPage } from './rounded-block';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type W = { __CAD__: { services: any; recognition: { maxFaces: number } } };
+type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
 
 async function shot(page: Page, name: string) {
   const dir = process.env.CAD_E2E_SHOTS;
@@ -149,17 +151,21 @@ test('cad:delete-faces-by-size Fillets up to and Holes up to add faces by size o
   await expect(added(frame)).toHaveAttribute('data-delete-added', 'none');
   await expect(picked(frame)).toHaveCount(12);
 
-  // With the page's face limit lowered (as a part over 2,000 faces meets it): Find's words, nothing added.
+  // With the page's holes' limit lowered (as a part over 2,600 faces meets it): Find's words naming
+  // both limits, nothing added; fillets are still searched (their limit is 5,000).
   await cad(page, (() => {
-    (window as unknown as W).__CAD__.recognition.maxFaces = 10;
+    (window as unknown as W).__CAD__.recognition.maxHoleFaces = 10;
   }) as never);
   try {
     await addButton(frame, 'holes').click();
-    await expect(added(frame)).toHaveText('Body 1 has 25 faces: fillets and holes are found on bodies of up to 10 faces. Select its faces in the view instead.', { timeout: 60_000 });
+    await expect(added(frame)).toHaveText('Body 1 has 25 faces: holes are found on bodies of up to 10 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.', { timeout: 60_000 });
+    await expect(picked(frame)).toHaveCount(12);
+    await addButton(frame, 'fillets').click();
+    await expect(added(frame)).toHaveText('No fillets up to 2 mm on Body 1 that are not already picked (Body 1 has 12 fillet faces, R2 to R5)', { timeout: 60_000 });
     await expect(picked(frame)).toHaveCount(12);
   } finally {
     await cad(page, (() => {
-      (window as unknown as W).__CAD__.recognition.maxFaces = 2000;
+      (window as unknown as W).__CAD__.recognition.maxHoleFaces = 2600;
     }) as never);
   }
 

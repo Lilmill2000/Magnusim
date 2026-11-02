@@ -6,8 +6,9 @@
 // shows the same counts for the same queries; then direct delete_faces with the same fillet
 // selector: the tree shows Delete faces 1 ok and the volume chip the sharp part's volume, as the
 // person's Find, Select all and Delete give (cad-find-fillets-holes.spec.ts). A body over the face
-// limit (lowered) is refused in the same words the Find panel shows, and the dock's step says
-// them. Without S4, "fillet" is a bad selector and the find fails.
+// limits (lowered) is refused in the same words the Find panel shows, naming both limits (fillets
+// and holes each have one, kernel API 9) with both numbers in the tool's detail, and the dock's
+// step says them. Without S4, "fillet" is a bad selector and the find fails.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -40,7 +41,7 @@ test.afterEach(() => {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type W = { __CAD__: { services: any; recognition: { maxFaces: number }; assistant: { setPace(p: string | null, scale?: number | null): void } } };
+type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number }; assistant: { setPace(p: string | null, scale?: number | null): void } } };
 
 const DIRECT = (o: Record<string, unknown>) => ({ edit: '', name: '', kind: 'press_pull', faces: [], distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: { angle: '', axis: '', pivot: [] }, copy: false, shape: 'box', padding: 'zero', sides: [], ...o });
 const FIND = (query: string) => ({ name: 'cad__find', input: { query, limit: 25 } });
@@ -99,9 +100,9 @@ test('cad:assistant-fillet-selectors find "Body 1 faces fillet <= 2 mm" and "hol
   await expect.poll(() => treeRows(page), STEP).toEqual([expect.stringMatching(/^Imported 1 .* import ok$/), 'Delete faces 1 delete_faces ok']);
   await expect.poll(async () => Math.abs((await chipVolume(page)) / made.sharp - 1), STEP).toBeLessThan(1e-6);
 
-  // Over the face limit: the tool's words, as the Find panel shows them, in the dock's step.
+  // Over the face limits: the tool's words, as the Find panel shows them, in the dock's step.
   await cadFrame(page).evaluate(() => {
-    (window as unknown as W).__CAD__.recognition.maxFaces = 10;
+    Object.assign((window as unknown as W).__CAD__.recognition, { maxFilletFaces: 10, maxHoleFaces: 8 });
   });
   try {
     const n = chats(host).length;
@@ -110,12 +111,12 @@ test('cad:assistant-fillet-selectors find "Body 1 faces fillet <= 2 mm" and "hol
     await expect(core.dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: STEP_MS * 4 });
     const [big] = resultsIn(chats(host)[n + 1]);
     const faces = await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.bodies[0].faces as number);
-    const words = `Body 1 has ${faces} faces: fillets and holes are found on bodies of up to 10 faces.`;
-    expect(big).toMatchObject({ tool: 'cad__find', ok: false, error: { message: expect.stringContaining(words), detail: { why: 'too_large', faces, limit: 10 } } });
+    const words = `Body 1 has ${faces} faces: fillets are found on bodies of up to 10 faces and holes on bodies of up to 8 faces.`;
+    expect(big).toMatchObject({ tool: 'cad__find', ok: false, error: { message: expect.stringContaining(words), detail: { why: 'too_large', faces, over: 'fillets', limit: 10, limits: { fillets: 10, holes: 8 } } } });
     await expect(core.dockTurn(page).locator('[data-dock-step][data-dock-step-state="failed"] [data-dock-result]').filter({ hasText: words })).toBeVisible(STEP);
   } finally {
     await cadFrame(page).evaluate(() => {
-      (window as unknown as W).__CAD__.recognition.maxFaces = 2000;
+      Object.assign((window as unknown as W).__CAD__.recognition, { maxFilletFaces: 5000, maxHoleFaces: 2600 });
     });
   }
 });

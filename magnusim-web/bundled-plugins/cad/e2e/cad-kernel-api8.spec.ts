@@ -3,10 +3,11 @@
 // budget's words), `version` answers the same, and `recognize` on the proof's part A,
 // built here with kernel ops (a 60 x 40 x 20 box, R5 on its 4 vertical edges, R3 round the top,
 // a 6 mm through hole and an 8 mm hole 10 deep), finds its 12 fillet faces (4 R5, 8 R3) and its
-// 2 holes (6 mm through, 8 mm blind). The page's recognition limit (window.__CAD__.recognition,
-// what the Find e2e lowers) is RECOGNIZE_MAX_FACES. No UI uses these ops yet: this checks the
-// kernel the page really loads (no file, no Vortex STEP), plus no CSP violation, no console error
-// and no worker respawn. On the API 7 kernel it fails (api 7, unknown op 'recognize').
+// 2 holes (6 mm through, 8 mm blind). The page's recognition limits (window.__CAD__.recognition,
+// what the Find e2e lowers) are RECOGNIZE_MAX_FILLET_FACES and RECOGNIZE_MAX_HOLE_FACES, the
+// kernel's own defaults (5,000 and 2,600). This checks the kernel the page really loads (no file,
+// no Vortex STEP), plus no CSP violation, no console error and no worker respawn. On the API 7
+// kernel it fails (api 7, unknown op 'recognize').
 // API 9 in the browser worker: the app's T-block (R2 on the 16 edges not along y, then R1 on the 8
 // along y) whose 8 R1 rounds OCCT's heal never finished in time (the watchdog stopped the worker
 // after 20 s): with far_skip it is not started (16 corner pieces it would grow 10 times their size),
@@ -28,13 +29,13 @@ test('cad:kernel-api8 the Part worker answers API 9 with Analysis Situs, finds p
   const out = await frame.evaluate(async () => {
     type R = Record<string, any>;
     type Kernel = { call(op: string, p: R): Promise<R>; start(): Promise<R>; status: { get(): R } };
-    const cad = (window as unknown as { __CAD__: { services: { kernel: Kernel }; recognition: { maxFaces: number } } }).__CAD__;
+    const cad = (window as unknown as { __CAD__: { services: { kernel: Kernel }; recognition: { maxFilletFaces: number; maxHoleFaces: number } } }).__CAD__;
     const kernel = cad.services.kernel;
     const ready = await kernel.start();
     const call = async (op: string, p: R) => (await kernel.call(op, p)).result as R;
     const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
     const edges = async (id: number) => (await call('topo', { id, faces: 'none', vertices: 'none', edge_ends: true })).edges as R[];
-    const r: R = { ready: { api: ready.api, asi: ready.asi }, info: kernel.status.get().info, version: await call('version', {}), limit: cad.recognition.maxFaces };
+    const r: R = { ready: { api: ready.api, asi: ready.asi }, info: kernel.status.get().info, version: await call('version', {}), pageLimits: { ...cad.recognition } };
 
     const box = (await call('box', { dx: 60, dy: 40, dz: 20, origin: [0, 0, 0] })).id;
     const vertical = (await edges(box)).filter((e) => near(e.first[0], e.last[0]) && near(e.first[1], e.last[1])).map((e) => e.i);
@@ -94,7 +95,7 @@ test('cad:kernel-api8 the Part worker answers API 9 with Analysis Situs, finds p
   expect(out.ready).toEqual({ api: 9, asi: '2026.1.1' });
   expect(out.info).toMatchObject({ api: 9, asi: '2026.1.1', occt: '7.9.3' });
   expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 9, asi: '2026.1.1' });
-  expect(out.limit).toBe(2000);
+  expect(out.pageLimits).toEqual({ maxFilletFaces: 5000, maxHoleFaces: 2600 });
   // Part A, as built, and what recognize finds on it.
   expect(out.part).toEqual({ valid: true, faces: 21 });
   expect(out.rec).toMatchObject({ faces: 21, solids: 1 });

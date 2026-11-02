@@ -47,6 +47,15 @@
 //                 1 off as fillets: 2 of the 42 are rings round a boss or a hole", with no Add the rest
 //                 (it said "with all 42, Delete faces can take them off as fillets" and offered the
 //                 rims, which taking off as fillets then refused), the chip as Fillet 1 left it.
+// Kernel API 9 (the budget's words):
+// 11. heal-budget the T-block's fillets with the time Delete faces allows for taking them off as
+//                 fillets lowered to 0.001 s (window.__CAD__.secondWay: suppress_blends' own
+//                 budget_ms; no body that OCCT's heal refuses in time is over the real 1.4 s): red,
+//                 the heal's words, then "; taking them off as fillets would take about 0.N s (40
+//                 fillet faces on a body of 50 faces), and Delete faces allows 0.001 s for taking
+//                 fillets off as fillets; the body is unchanged" (it said "did not work either:
+//                 taking 40 fillet faces off as fillets on a body of 50 faces would take ..."), the
+//                 chip as Fillet 1 left it (with the kernel's own 1.4 s they come off: heal-tblock).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -55,7 +64,7 @@ import { join } from 'node:path';
 import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type W = { __CAD__: { services: any } };
+type W = { __CAD__: { services: any; secondWay: { budgetMs: number | null } } };
 
 async function shot(page: Page, name: string) {
   const dir = process.env.CAD_E2E_SHOTS;
@@ -244,6 +253,39 @@ test('cad:delete-faces-heal-refuse a rounded T-block with a hole through its bar
   await expect(panel(frame).locator('[data-delete-rest]')).toHaveCount(0);
   await expectOneVolume(frame, filleted);
   await shot(page, 'delete-faces-heal-refuse');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  await expect(row).toHaveAttribute('data-state', 'error');
+  await expectOneVolume(frame, filleted);
+  expect(seen.errors).toEqual([]);
+});
+
+test("cad:delete-faces-heal-budget the rounded T-block's fillets with the time allowed for taking them off as fillets lowered: red, how long it would take and what Delete faces allows, the body unchanged", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  await tBlock(page, frame);
+  const filleted = await roundAll(page, frame);
+  expect(await selectFillets(page)).toHaveLength(40);
+  expect(await bodyFaces(page)).toBe(50);
+  await cad(page, (() => {
+    (window as unknown as W).__CAD__.secondWay.budgetMs = 1;
+  }) as never);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  try {
+    await deleteSelected(page, frame, true);
+    await expect(row).toHaveAttribute('data-state', 'error', { timeout: 30_000 });
+    await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(
+      /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add [\d,.]+ mm³ over faces you kept \([^)]*\); taking them off as fillets would take about \d\.\d s \(40 fillet faces on a body of 50 faces\), and Delete faces allows 0\.001 s for taking fillets off as fillets; the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead$/,
+    );
+    await expect(panel(frame).locator('[data-run-reason]').first()).not.toContainText('did not work either');
+    await expect(panel(frame).locator('[data-delete-rest]')).toHaveCount(0);
+    await expectOneVolume(frame, filleted);
+    await shot(page, 'delete-faces-heal-budget');
+  } finally {
+    await cad(page, (() => {
+      (window as unknown as W).__CAD__.secondWay.budgetMs = null;
+    }) as never);
+  }
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);
   await expect(row).toHaveAttribute('data-state', 'error');

@@ -4,14 +4,16 @@
 // "Body 1 faces fillet <= 2 mm" lists its 8 faces as "fillet R2" with the hint to check them;
 // Select all, then the Delete key: Delete faces 1 is ok and the volume chip shows the sharp
 // part's volume; "Body 1 faces hole <= 6 mm" counts 4 holes. Without S4, "fillet" is a bad
-// selector there.
+// selector there. Kernel API 9's two face limits: with the page's holes' limit lowered under the
+// body (window.__CAD__.recognition), a sized hole is refused in words naming both limits, the
+// holes' first, and fillets are still found, as in Magnusim.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from './pw';
 import { featureRowNamed, partOpened, runCommand, watchPage, workspaceFrame } from '../bundled-plugins/cad/e2e/helpers';
 import { importRoundedBlock } from '../bundled-plugins/cad/e2e/rounded-block';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type W = { __CAD__: { services: any } };
+type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
 
 const toolPanel = (frame: FrameLocator) => frame.locator('[data-cad-panel="tool"]');
 const featurePanel = (frame: FrameLocator) => frame.locator('[data-cad-panel="feature"]');
@@ -67,5 +69,24 @@ test('Find of fillets and holes by size, Select all, Delete: the sharp part, as 
   await panel.locator('[data-find-query]').press('Enter');
   await expect(panel.locator('[data-find-count]')).toHaveText('4 faces match Body 1 faces hole <= 6 mm (4 holes)', { timeout: 30_000 });
   await expect(panel.locator('[data-find-row] [data-find-type]')).toHaveText(Array(4).fill('hole Ø6 through'));
+
+  // The holes' face limit under the body: a sized hole refused in words naming both limits; fillets still found.
+  const faces = await workspaceFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.bodies[0].faces as number);
+  await workspaceFrame(page).evaluate(() => {
+    (window as unknown as W).__CAD__.recognition.maxHoleFaces = 10;
+  });
+  try {
+    await panel.locator('[data-find-query]').fill('Body 1 faces hole <= 10 mm');
+    await panel.locator('[data-find-query]').press('Enter');
+    await expect(panel.locator('[data-run-reason]')).toHaveText(`Body 1 has ${faces} faces: holes are found on bodies of up to 10 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.`, { timeout: 30_000 });
+    await expect(panel.locator('[data-find-row]')).toHaveCount(0);
+    await panel.locator('[data-find-query]').fill('Body 1 faces fillet');
+    await panel.locator('[data-find-query]').press('Enter');
+    await expect(panel.locator('[data-find-count]')).toHaveText('4 faces match Body 1 faces fillet', { timeout: 30_000 });
+  } finally {
+    await workspaceFrame(page).evaluate(() => {
+      (window as unknown as W).__CAD__.recognition.maxHoleFaces = 2600;
+    });
+  }
   expect(seen.errors, 'console errors').toEqual([]);
 });
