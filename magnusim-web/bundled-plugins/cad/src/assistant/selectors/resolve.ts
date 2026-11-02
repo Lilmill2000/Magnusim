@@ -46,7 +46,7 @@ import { boxDiagonal, boxDistance, distance, dot, holeOrBoss, unionBox, unit } f
 import { currentHandles, handlesOf, type HandleEntry, type HandleKind } from './handles';
 import { parseSelector, SelectorSyntaxError, type Filter, type KnownNames, type Sel, type SelKind, type SizeCmp, type Want } from './parse';
 import { closestName, closestWords } from '../closest';
-import { isFillet, recognitionOf, withCommas } from '../../kernel/recognition';
+import { isFillet, limitWords, overLimit, recognitionOf, withCommas, type FaceLimits, type FeaturesQuery, type LimitKind } from '../../kernel/recognition';
 import { topoCacheOf, type Topo, type TopoCache } from './topo-cache';
 
 export type TopoFace = TopoResult['faces'][number];
@@ -987,30 +987,52 @@ export function fitsSize(lo: number, hi: number, cmp: SizeCmp, v: number): boole
   return lo >= v - tol && hi <= v + tol;
 }
 
-/** A body that cannot be searched, from what is known without a kernel call (a surface body, more faces than the limit), or null. */
-function unsearchable(sc: Scene, b: SelBody): ToolError | null {
-  if (b.solids === 0) return new ToolError('bad_selector', `${b.name} is a surface body: fillets and holes are found on solids only.`, { detail: { body: b.name, why: 'not_solid' }, hint: SELECT_INSTEAD });
-  const limit = recognitionOf(sc.services.kernel).limits.maxFaces;
-  if (typeof b.faces === 'number' && b.faces > limit) return tooLarge(b, b.faces, limit);
-  return null;
+/** The search of one kind: fillets only, or drilled holes only (each with its own face limit). */
+const searchOf = (what: 'Fillets' | 'Holes'): FeaturesQuery => (what === 'Fillets' ? { holes: false } : { blends: false });
+
+/** The page's two face limits now (tests lower them). */
+function limitsOf(sc: Scene): FaceLimits {
+  const l = recognitionOf(sc.services.kernel).limits;
+  return { fillets: l.maxFilletFaces, holes: l.maxHoleFaces };
 }
 
-const tooLarge = (b: SelBody, faces: number, limit: number) =>
-  new ToolError('bad_selector', `${b.name} has ${withCommas(faces)} faces: fillets and holes are found on bodies of up to ${withCommas(limit)} faces.`, { detail: { body: b.name, why: 'too_large', faces, limit }, hint: SELECT_INSTEAD });
+/**
+ * A body that cannot be searched for `what`, from what is known without a kernel call (a surface
+ * body, more faces than that search's limit), or null.
+ */
+function unsearchable(sc: Scene, b: SelBody, what: 'Fillets' | 'Holes'): ToolError | null {
+  if (b.solids === 0) return new ToolError('bad_selector', `${b.name} is a surface body: fillets and holes are found on solids only.`, { detail: { body: b.name, why: 'not_solid' }, hint: SELECT_INSTEAD });
+  const limits = limitsOf(sc);
+  const over = typeof b.faces === 'number' ? overLimit(b.faces, searchOf(what), limits) : null;
+  return over ? tooLarge(b, b.faces!, over, limits) : null;
+}
 
 /**
- * The fillets and drilled holes recognition finds on a body (the page's client, cached per shape),
- * or its refusal as a ToolError in words. `what` names the search in a failure's words.
+ * A body over a face limit, naming both, the one the search ran into first: "Body 1 has 3,000
+ * faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000 faces."
+ * The person's Find and Add by size read these words, and the Assistant gets them with both limits
+ * in detail.
+ */
+const tooLarge = (b: SelBody, faces: number, over: LimitKind, limits: FaceLimits) =>
+  new ToolError('bad_selector', `${b.name} has ${withCommas(faces)} faces: ${limitWords(over, limits)} faces.`, {
+    detail: { body: b.name, why: 'too_large', faces, over, limit: limits[over], limits: { ...limits } },
+    hint: SELECT_INSTEAD,
+  });
+
+/**
+ * The fillets (or the drilled holes) recognition finds on a body (the page's client, cached per
+ * shape and search), or its refusal as a ToolError in words. `what` is the search, and names it in
+ * a failure's words: fillets are searched without holes (the larger face limit), holes alone.
  */
 export async function recognizedOf(sc: Scene, b: SelBody, what: 'Fillets' | 'Holes' = 'Fillets'): Promise<RecognizeResult> {
-  const early = unsearchable(sc, b);
+  const early = unsearchable(sc, b, what);
   if (early) throw early;
-  sc.progress(`Finding the fillets and holes of ${b.name}`);
-  const r = await recognitionOf(sc.services.kernel).features(b.shape, {}, { faces: b.faces, signal: sc.signal });
+  sc.progress(`Finding the ${what === 'Fillets' ? 'fillets' : 'holes'} of ${b.name}`);
+  const r = await recognitionOf(sc.services.kernel).features(b.shape, searchOf(what), { faces: b.faces, signal: sc.signal });
   if (r.ok) return r.result;
   switch (r.reason) {
     case 'too_large':
-      throw tooLarge(b, r.faces ?? b.faces ?? 0, r.limit ?? recognitionOf(sc.services.kernel).limits.maxFaces);
+      throw tooLarge(b, r.faces ?? b.faces ?? 0, r.over ?? (what === 'Fillets' ? 'fillets' : 'holes'), r.limits ?? limitsOf(sc));
     case 'not_solid':
       throw new ToolError('bad_selector', `${b.name} is a surface body: fillets and holes are found on solids only.`, { detail: { body: b.name, why: 'not_solid' }, hint: SELECT_INSTEAD });
     case 'old_kernel':
@@ -1035,13 +1057,14 @@ async function byShape(sc: Scene, hits: Geo[], f: Extract<Filter, { f: 'fillet' 
     want = r.value;
   }
   const bodies = [...new Set(hits.map((h) => h.bi))];
+  const what = f.f === 'fillet' ? 'Fillets' : 'Holes';
   for (const bi of bodies) {
-    const early = unsearchable(sc, sc.bodies[bi]);
+    const early = unsearchable(sc, sc.bodies[bi], what);
     if (early) throw early;
   }
   const found = new Map<number, { blendAt: Map<number, RecognizeResult['blends'][number]>; holeAt: Map<number, number>; rec: RecognizeResult }>();
   for (const bi of bodies) {
-    const rec = await recognizedOf(sc, sc.bodies[bi], f.f === 'fillet' ? 'Fillets' : 'Holes');
+    const rec = await recognizedOf(sc, sc.bodies[bi], what);
     const holeAt = new Map<number, number>();
     rec.holes.forEach((h, k) => h.faces.forEach((face) => holeAt.has(face) || holeAt.set(face, k)));
     found.set(bi, { blendAt: new Map(rec.blends.map((b) => [b.face, b])), holeAt, rec });

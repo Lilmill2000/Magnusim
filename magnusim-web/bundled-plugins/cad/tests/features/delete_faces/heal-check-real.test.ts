@@ -30,6 +30,8 @@ import { checkHeal, healRefused, retryHoldBack, UNCHECKED, type HealCheck } from
 import { pickFace } from '../../../src/features/p2/refs';
 import { deleteFacesOn } from '../../../src/features/delete_faces/feature';
 import { LEGACY_WORDS } from '../../../src/features/delete_faces/plan';
+import { recognitionOf } from '../../../src/kernel/recognition';
+import { RECOGNIZE_MAX_HOLE_FACES } from '../../../src/kernel/timeouts';
 import { FakeFolder } from '../../doc/fake-files';
 import { FAMILY, poly, polyArea } from '../../kernel/asi-lib';
 import { refPlaneDef } from '../../../src/features/refgeom/defs';
@@ -295,6 +297,34 @@ describe('Delete faces version 2 through the document: still refused in words, t
     const rb = await settle(r.doc);
     expect(rb.features[del.id]).toMatchObject({ state: 'ok', note: "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly" });
     expect(close(await volume(r, bodies(r)[0].id), 32000)).toBe(true);
+  }, 180_000);
+
+  it("the same on a body over the holes' face limit but not the fillets' (kernel API 9: two limits, lowered here): fillets are still found, so the same words and the same rest, and with it the sharp T-block", async () => {
+    const r = await part();
+    await roundedT(r);
+    const b = bodies(r)[0];
+    const limits = recognitionOf(r.kernel).limits;
+    expect(b.faces).toBeGreaterThan(10);
+    limits.maxHoleFaces = 10;
+    try {
+      // The body is over the holes' limit and within the fillets'.
+      expect(await recognitionOf(r.kernel).features(b.shape, { blends: false }, { faces: b.faces })).toMatchObject({ ok: false, reason: 'too_large', over: 'holes' });
+      expect(await recognitionOf(r.kernel).features(b.shape, { holes: false }, { faces: b.faces })).toMatchObject({ ok: true });
+      const round = (await topo(r, b)).faces.filter((f) => f.type !== 'plane').map((f) => f.i);
+      const del = await deleteFaces(r, (f) => round.slice(1).includes(f.i));
+      expect(del.status.state).toBe('error');
+      expect(del.status.message).toMatch(/^Delete faces 1 failed: .*\. Every fillet up to R2 on Body 1 is 40 faces and 39 are picked: with all 40, Delete faces can take them off as fillets$/);
+      const out = del.rb.outputs[del.id] as DeleteFacesOutput;
+      expect(out).toMatchObject({ type: 'delete-faces', how: null, rest: [round[0]] });
+      const ses = r.doc.beginEdit(del.id);
+      ses.update({ faces: [...(ses.draft as DeleteFacesFeature).faces, ...out.restRefs] } as Partial<DeleteFacesFeature>);
+      ses.commit();
+      const rb = await settle(r.doc);
+      expect(rb.features[del.id]).toMatchObject({ state: 'ok', note: "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly" });
+      expect(close(await volume(r, bodies(r)[0].id), 32000)).toBe(true);
+    } finally {
+      limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
+    }
   }, 180_000);
 
   it('a Part saved with a Delete faces before version 2 (its JSON written here without the version) opens red with the legacy words, the body as Fillet 1 left it; with version 2 the same file opens ok', async () => {

@@ -130,7 +130,10 @@ export interface RedPlanInput {
   picks: readonly number[];
   /** The body's face count. */
   faces: number;
-  /** Fillets and holes of the body (the default limit), or null when they could not be found. */
+  /**
+   * Fillets of the body (searched without holes) and its drilled holes (none when they could not be
+   * found, such as on a body over the holes' face limit), or null when the fillets could not be found.
+   */
   rec: RecognizeResult | null;
   /** Fillets of the body at limitOf(readPick(rec, picks).r), or null (none picked, or not found). */
   atR: RecognizeResult | null;

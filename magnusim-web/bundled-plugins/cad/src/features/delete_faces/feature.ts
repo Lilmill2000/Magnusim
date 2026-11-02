@@ -169,14 +169,17 @@ async function healBuild(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBo
 
 /**
  * At today's red exits: recognition (cached per shape), then for a version 2 Delete faces whose pick
- * qualifies the second way; the rest, mixed and legacy words for any. Recognition that cannot run
- * (a body over its face limit, no solid, a kernel below API 8, its own failure) leaves today's words.
+ * qualifies the second way; the rest, mixed and legacy words for any. Fillets are searched without
+ * holes (their own, larger face limit), holes alone, for the rest only: fillet recognition that
+ * cannot run (a body over its face limit, no solid, a kernel below API 8, its own failure) leaves
+ * today's words, and on a body over the holes' limit the rest is the fillet chains' alone.
  */
 async function redExit(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody, picks: number[], refWarning: string | null, red: Red): Promise<FeatureBuildResult> {
   const faces = await ctx.faces(body.shape);
   const recog = recognitionOf(ctx.kernel);
-  const full = await recog.features(body.shape, {}, { faces });
-  const rec = full.ok ? full.result : null;
+  const fillets = await recog.features(body.shape, { holes: false }, { faces });
+  const holes = fillets.ok ? await recog.features(body.shape, { blends: false }, { faces }) : null;
+  const rec = fillets.ok ? { ...fillets.result, holes: holes?.ok ? holes.result.holes : [] } : null;
   const r = rec ? readPick(rec, picks).r : null;
   let atR: RecognizeResult | null = null;
   if (rec && r !== null) {

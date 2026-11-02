@@ -4,13 +4,17 @@
 // second way). One client per kernel: answers are cached per shape and query (the newest 32
 // shapes), and dropped when the kernel restarts (every shape id dies then), as the selectors'
 // topo cache is. Every refusal comes back as words with its reason, never as an empty answer:
-// a body over the face limit, a body with no solid, a kernel below API 8, or the kernel's own
-// words when recognition failed. Callers add the body's name ("Body 1 has 2,412 faces: ...").
+// a body over its face limit, a body with no solid, a kernel below API 8, or the kernel's own
+// words when recognition failed. Two face limits (kernel API 9): one for a search of fillets only,
+// one for any search with holes (the drill-hole recogniser is quadratic); every caller asks for
+// holes only when it needs them, and the words of a body over a limit name both, the one the
+// search ran into first. Callers add the body's name ("Body 1 has 3,000 faces: holes are found on
+// bodies of up to 2,600 faces and fillets on bodies of up to 5,000 faces").
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { KernelAdapter, KernelCallError } from '../types/kernel';
 import type { RecognizeResult, RecognizedBlend, ShapeId } from '../types/kernel-protocol';
-import { RECOGNIZE_MAX_FACES } from './timeouts';
+import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from './timeouts';
 
 /** The kernel contract revision that has `recognize` and `suppress_blends`. */
 export const RECOGNIZE_API = 8;
@@ -49,7 +53,7 @@ export interface FeaturesOptions {
 
 /** Why fillets and holes could not be found on a body. */
 export type FeaturesRefusal =
-  /** More faces than the limit: `faces`, `limit`. */
+  /** More faces than a limit: `faces`, `over` (the search the limit is for), `limit` (that one), `limits` (both). */
   | 'too_large'
   /** A surface body (no solid). */
   | 'not_solid'
@@ -58,18 +62,29 @@ export type FeaturesRefusal =
   /** The kernel could not do it (`words` are its own). */
   | 'failed';
 
+/** The two face limits: fillets (a search without holes) and holes (any search with them). */
+export interface FaceLimits {
+  fillets: number;
+  holes: number;
+}
+
+/** Which search a limit is for. */
+export type LimitKind = 'fillets' | 'holes';
+
 export type Features =
   | { ok: true; result: RecognizeResult }
-  | { ok: false; reason: FeaturesRefusal; words: string; faces?: number; limit?: number; api?: number };
+  | { ok: false; reason: FeaturesRefusal; words: string; faces?: number; over?: LimitKind; limit?: number; limits?: FaceLimits; api?: number };
 
 export interface RecognitionClient {
   /** Fillets, chains and drilled holes of `shape` (cached per shape and query), or the refusal in words. */
   features(shape: ShapeId, query?: FeaturesQuery, opts?: FeaturesOptions): Promise<Features>;
   /**
-   * The limits every call uses. `maxFaces` is RECOGNIZE_MAX_FACES; tests lower it (window.__CAD__.recognition)
-   * to show the over-limit words on a small body. Changing it drops nothing: it is part of the cache key.
+   * The limits every call uses: `maxFilletFaces` (RECOGNIZE_MAX_FILLET_FACES) for a search without
+   * holes, `maxHoleFaces` (RECOGNIZE_MAX_HOLE_FACES) for any search with holes. Tests lower them
+   * (window.__CAD__.recognition) to show the over-limit words on a small body. Changing them drops
+   * nothing: they are part of the cache key.
    */
-  readonly limits: { maxFaces: number };
+  readonly limits: { maxFilletFaces: number; maxHoleFaces: number };
   /** How many recognize calls went to the kernel (tests). */
   readonly calls: number;
   clear(): void;
@@ -78,9 +93,27 @@ export interface RecognitionClient {
 /** 2,412 */
 export const withCommas = (n: number): string => Math.round(n).toLocaleString('en-US');
 
-/** The kernel's own words for a body over the limit (facade.cpp opRecognize), so both refusals read the same. */
-export function tooLargeWords(faces: number, limit: number): string {
-  return `this body has ${withCommas(faces)} faces: fillets and holes are found on bodies of up to ${withCommas(limit)}`;
+/**
+ * Both limits, the one a search ran into (`over`) first: "holes are found on bodies of up to 2,600
+ * faces and fillets on bodies of up to 5,000"; one number when they are the same ("fillets and
+ * holes are found on bodies of up to 2,000"). The kernel's own words (facade.cpp tooManyFacesWords).
+ */
+export function limitWords(over: LimitKind, limits: FaceLimits): string {
+  if (limits.fillets === limits.holes) return `fillets and holes are found on bodies of up to ${withCommas(limits.fillets)}`;
+  const [a, b] = over === 'fillets' ? (['fillets', 'holes'] as const) : (['holes', 'fillets'] as const);
+  return `${a} are found on bodies of up to ${withCommas(limits[a])} faces and ${b} on bodies of up to ${withCommas(limits[b])}`;
+}
+
+/** The kernel's own words for a body over a limit (facade.cpp opRecognize), so both refusals read the same. */
+export function tooLargeWords(faces: number, over: LimitKind, limits: FaceLimits): string {
+  return `this body has ${withCommas(faces)} faces: ${limitWords(over, limits)}`;
+}
+
+/** The limit a search of a body of `faces` faces runs into, as the kernel tells it (fillets first, then holes), or null. */
+export function overLimit(faces: number, q: FeaturesQuery, limits: FaceLimits): LimitKind | null {
+  if (q.blends !== false && faces > limits.fillets) return 'fillets';
+  if (q.holes !== false && faces > limits.holes) return 'holes';
+  return null;
 }
 
 /** The words for a kernel too old to find fillets or holes (plan §3.2). */
@@ -126,14 +159,30 @@ function abortError(): Error {
   return e;
 }
 
-function keyOf(q: FeaturesQuery, maxFaces: number): string {
-  return [q.blends === false ? 0 : 1, q.holes === false ? 0 : 1, q.max_r ?? '', q.holes === false ? '' : (q.holes_mode ?? HOLES_MODE), maxFaces].join('|');
+function keyOf(q: FeaturesQuery, limits: FaceLimits): string {
+  return [q.blends === false ? 0 : 1, q.holes === false ? 0 : 1, q.max_r ?? '', q.holes === false ? '' : (q.holes_mode ?? HOLES_MODE), limits.fillets, limits.holes].join('|');
+}
+
+/** recognize's refusal of a body over a limit (one limit, API 8's words, or API 9's two) as a Features; null for any other words. */
+function tooLargeOf(words: string, q: FeaturesQuery): Features | null {
+  const m = /^this body has ([\d,]+) faces: (?:fillets and holes are found on bodies of up to ([\d,]+)|(fillets|holes) are found on bodies of up to ([\d,]+) faces and (?:fillets|holes) on bodies of up to ([\d,]+))$/.exec(words);
+  if (!m) return null;
+  const n = (t: string) => Number(t.replace(/,/g, ''));
+  const faces = n(m[1]);
+  if (m[2]) {
+    const both = n(m[2]);
+    return { ok: false, reason: 'too_large', words, faces, over: q.blends === false ? 'holes' : 'fillets', limit: both, limits: { fillets: both, holes: both } };
+  }
+  const over = m[3] as LimitKind;
+  const limit = n(m[4]);
+  const other = n(m[5]);
+  return { ok: false, reason: 'too_large', words, faces, over, limit, limits: over === 'fillets' ? { fillets: limit, holes: other } : { fillets: other, holes: limit } };
 }
 
 export function createRecognitionClient(kernel: KernelAdapter): RecognitionClient {
   // shape -> query key -> answer. A Map keeps insertion order: the first key is the oldest shape.
   const cache = new Map<ShapeId, Map<string, Promise<Features>>>();
-  const limits = { maxFaces: RECOGNIZE_MAX_FACES };
+  const limits = { maxFilletFaces: RECOGNIZE_MAX_FILLET_FACES, maxHoleFaces: RECOGNIZE_MAX_HOLE_FACES };
   let calls = 0;
   const clear = () => cache.clear();
   kernel.onRespawn(clear);
@@ -147,12 +196,19 @@ export function createRecognitionClient(kernel: KernelAdapter): RecognitionClien
     return m;
   };
 
-  const ask = async (shape: ShapeId, q: FeaturesQuery, maxFaces: number): Promise<Features> => {
+  const ask = async (shape: ShapeId, q: FeaturesQuery, lim: FaceLimits): Promise<Features> => {
     const api = kernel.status.get().info?.api;
     if (typeof api === 'number' && api > 0 && api < RECOGNIZE_API) return { ok: false, reason: 'old_kernel', api, words: oldKernelWords(api) };
     calls++;
     try {
-      const params = { id: shape, max_faces: maxFaces, ...(q.blends === false ? { blends: false } : {}), ...(q.holes === false ? { holes: false } : { holes_mode: q.holes_mode ?? HOLES_MODE }), ...(q.max_r !== undefined ? { max_r: q.max_r } : {}) };
+      const params = {
+        id: shape,
+        max_fillet_faces: lim.fillets,
+        max_hole_faces: lim.holes,
+        ...(q.blends === false ? { blends: false } : {}),
+        ...(q.holes === false ? { holes: false } : { holes_mode: q.holes_mode ?? HOLES_MODE }),
+        ...(q.max_r !== undefined ? { max_r: q.max_r } : {}),
+      };
       const r = await kernel.call('recognize', params);
       return { ok: true, result: r.result };
     } catch (err) {
@@ -165,8 +221,8 @@ export function createRecognitionClient(kernel: KernelAdapter): RecognitionClien
         }
         if (words === NOT_SOLID) return { ok: false, reason: 'not_solid', words };
         // One limit (max_faces, API 8's words) or API 9's two, the one the query ran into first.
-        const m = /^this body has ([\d,]+) faces: (?:fillets and holes are found on bodies of up to ([\d,]+)|(?:fillets|holes) are found on bodies of up to ([\d,]+) faces and (?:fillets|holes) on bodies of up to [\d,]+)$/.exec(words);
-        if (m) return { ok: false, reason: 'too_large', words, faces: Number(m[1].replace(/,/g, '')), limit: Number((m[2] ?? m[3]).replace(/,/g, '')) };
+        const big = tooLargeOf(words, q);
+        if (big) return big;
       }
       // Anything else (an OCCT failure, a stopped or restarted kernel) is not kept: the next call asks again.
       throw Object.assign(new Error(words), { kind: e?.kind, refusal: { ok: false, reason: 'failed', words } satisfies Features });
@@ -175,13 +231,14 @@ export function createRecognitionClient(kernel: KernelAdapter): RecognitionClien
 
   const features = async (shape: ShapeId, query: FeaturesQuery = {}, opts: FeaturesOptions = {}): Promise<Features> => {
     if (opts.signal?.aborted) throw abortError();
-    const maxFaces = limits.maxFaces;
-    if (typeof opts.faces === 'number' && opts.faces > maxFaces) return { ok: false, reason: 'too_large', faces: opts.faces, limit: maxFaces, words: tooLargeWords(opts.faces, maxFaces) };
-    const key = keyOf(query, maxFaces);
+    const lim: FaceLimits = { fillets: limits.maxFilletFaces, holes: limits.maxHoleFaces };
+    const over = typeof opts.faces === 'number' ? overLimit(opts.faces, query, lim) : null;
+    if (over) return { ok: false, reason: 'too_large', faces: opts.faces!, over, limit: lim[over], limits: lim, words: tooLargeWords(opts.faces!, over, lim) };
+    const key = keyOf(query, lim);
     const m = touch(shape);
     let p = m.get(key);
     if (!p) {
-      p = ask(shape, query, maxFaces);
+      p = ask(shape, query, lim);
       m.set(key, p);
       p.catch(() => {
         if (cache.get(shape)?.get(key) === p) cache.get(shape)!.delete(key);

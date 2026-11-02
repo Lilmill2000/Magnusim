@@ -8,7 +8,8 @@
 //   - the find tool's rows (fillet_mm, hole_mm, through), data.holes and its text "(4 holes)" (the
 //     person's Find gives the same: person-parity.test.ts);
 //   - a query that matches nothing says what the body has ("Body 1 has 12 fillet faces, R2 to R5");
-//   - a body over the face limit (lowered as the e2e does) is refused before any kernel call;
+//   - a body over a face limit (lowered as the e2e does; fillets and holes each have one, and the
+//     words name both, the one the search ran into first) is refused before any kernel call;
 //     several bodies, one a surface body, are refused as a whole with that body's words; a bare
 //     "fillet <= 2 mm" gets the put-the-scope-first words; Body 1 edges fillet gets its words;
 //   - the Assistant's direct delete_faces with "Body 1 faces fillet <= 2 mm" stores the same
@@ -26,12 +27,13 @@ import type { DeleteFacesFeature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { importRoundedBlock, ROUNDED_BLOCK } from './rounded-block';
+import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/kernel/timeouts';
 
 type Row = Record<string, unknown>;
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
-  if (h) recognitionOf(h.services.kernel).limits.maxFaces = 2000;
+  if (h) Object.assign(recognitionOf(h.services.kernel).limits, { maxFilletFaces: RECOGNIZE_MAX_FILLET_FACES, maxHoleFaces: RECOGNIZE_MAX_HOLE_FACES });
   h?.dispose();
   h = null;
   forgetBreps();
@@ -177,18 +179,25 @@ describe('fillet and sized hole selectors on an imported STEP part (real kernel)
       // Both bodies searched: Body 2 has none.
       expect(await count(h, 'all faces fillet')).toBe(12);
       const client = recognitionOf(h.services.kernel);
-      // Over the limit (the e2e lowers it the same way): refused before any kernel call, never an empty list.
-      client.limits.maxFaces = 10;
+      // Over a limit (the e2e lowers them the same way): refused before any kernel call, never an
+      // empty list, with both limits named (the one the search ran into first) and in detail.
+      client.limits.maxFilletFaces = 10;
+      client.limits.maxHoleFaces = 8;
       const before = client.calls;
       const big = await fail(h, 'find', { query: 'Body 1 faces fillet <= 2 mm', limit: 10 });
-      expect(big.message).toBe(`bad_selector: Body 1 has ${ROUNDED_BLOCK.faces} faces: fillets and holes are found on bodies of up to 10 faces.`);
+      expect(big.message).toBe(`bad_selector: Body 1 has ${ROUNDED_BLOCK.faces} faces: fillets are found on bodies of up to 10 faces and holes on bodies of up to 8 faces.`);
       expect(big.hint).toBe('Select its faces in the view instead.');
-      expect(big.detail).toMatchObject({ reason: 'bad_selector', body: 'Body 1', why: 'too_large', faces: ROUNDED_BLOCK.faces, limit: 10 });
+      expect(big.detail).toMatchObject({ reason: 'bad_selector', body: 'Body 1', why: 'too_large', faces: ROUNDED_BLOCK.faces, over: 'fillets', limit: 10, limits: { fillets: 10, holes: 8 } });
       // The whole query is refused for the one body that cannot be searched (Body 2 has 6 faces).
       const many = await fail(h, 'find', { query: 'all faces hole <= 6 mm', limit: 10 });
-      expect(many.message).toMatch(/^bad_selector: Body 1 has 25 faces: fillets and holes are found on bodies of up to 10 faces\.$/);
+      expect(many.message).toMatch(/^bad_selector: Body 1 has 25 faces: holes are found on bodies of up to 8 faces and fillets on bodies of up to 10 faces\.$/);
       expect(client.calls).toBe(before);
-      client.limits.maxFaces = 2000;
+      // The same limit for both: one number.
+      client.limits.maxHoleFaces = 10;
+      expect((await fail(h, 'find', { query: 'Body 1 faces hole <= 6 mm', limit: 10 })).message).toBe('bad_selector: Body 1 has 25 faces: fillets and holes are found on bodies of up to 10 faces.');
+      expect(client.calls).toBe(before);
+      client.limits.maxFilletFaces = RECOGNIZE_MAX_FILLET_FACES;
+      client.limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
       // A surface body among the scope's bodies: the whole query is refused with its words.
       const surface = await scene(h, async (sc) => {
         const bodies = sc.bodies.map((b) => (b.name === 'Body 2' ? { ...b, solids: 0 } : b));

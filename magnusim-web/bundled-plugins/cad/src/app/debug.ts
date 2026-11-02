@@ -42,9 +42,11 @@ export interface CadTestHandle {
   readonly assemblyCheck: { limitMs: number };
   /**
    * The page's fillet and hole recognition limits (src/kernel/recognition.ts, over services.kernel):
-   * an e2e lowers maxFaces (RECOGNIZE_MAX_FACES) to see the over-limit words on a small body.
+   * an e2e lowers maxFilletFaces (RECOGNIZE_MAX_FILLET_FACES, a search without holes) or
+   * maxHoleFaces (RECOGNIZE_MAX_HOLE_FACES, any search with holes) to see the over-limit words on a
+   * small body.
    */
-  readonly recognition: { maxFaces: number };
+  readonly recognition: { maxFilletFaces: number; maxHoleFaces: number };
   /** Move/copy body's handle in the view while its panel is open (src/features/move_body/handle.ts), or null: where its parts are. */
   readonly moveHandle: MoveHandleTestView | null;
   /** The section view's arrow in the view while the Section view panel is open (src/features/section/handle.ts), or null. */

@@ -77,8 +77,10 @@ export async function addBySize(services: AppServices, req: AddBySize, call: Per
         added.push(ref);
         fresh.push(h);
       }
-      // The same recognition the filter read (the page's client, cached per shape and query).
-      const rec = await recognitionOf(services.kernel).features(b.shape, {}, { faces: b.faces, signal: sc.signal });
+      // The same recognition the filter read (the page's client, cached per shape and query): fillets
+      // without holes, or holes alone, each within its own face limit.
+      const search = req.kind === 'fillets' ? { holes: false } : { blends: false };
+      const rec = await recognitionOf(services.kernel).features(b.shape, search, { faces: b.faces, signal: sc.signal });
       if (!added.length) {
         if (!rec.ok) return { ok: false, words: rec.words };
         return { ok: false, words: noneWords(req.kind, req.size, b.name, summaryOf(rec.result), units) };

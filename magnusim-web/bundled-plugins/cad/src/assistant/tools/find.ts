@@ -19,7 +19,7 @@ import { modelId, parsePart } from '../labels';
 import { frameWords } from '../model';
 import { dir, jsonBytes, len, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
-import { recognitionOf, summaryOf, type FeaturesSummary } from '../../kernel/recognition';
+import { recognitionOf, summaryOf, type Features, type FeaturesSummary } from '../../kernel/recognition';
 import { hasWords } from '../../features/delete_faces/words';
 import type { DocUnits } from '../../types/units';
 import { faceFrameRow, pointOnFace } from '../selectors/geometry';
@@ -126,11 +126,15 @@ export async function nothingFound(sc: Scene, r: Selected): Promise<{ words: str
   const bodies = scope.s === 'body' ? sc.bodies.filter((b) => b.id === scope.body.id) : sc.bodies;
   const words: string[] = [];
   const recognized: Record<string, unknown>[] = [];
+  const rc = recognitionOf(sc.services.kernel);
   for (const b of bodies) {
     if (b.solids === 0) continue;
-    const f = await recognitionOf(sc.services.kernel).features(b.shape, {}, { faces: b.faces, signal: sc.signal });
-    if (!f.ok) continue;
-    const s = summaryOf(f.result);
+    // The searches the query made (fillets without holes, holes alone: each within its own face limit), cached.
+    const opts = { faces: b.faces, signal: sc.signal };
+    const fil = what.fillet ? await rc.features(b.shape, { holes: false }, opts) : null;
+    const hol = what.hole ? await rc.features(b.shape, { blends: false }, opts) : null;
+    if ((fil && !fil.ok) || (hol && !hol.ok)) continue;
+    const s = summaryOf({ ...((fil ?? hol) as Extract<Features, { ok: true }>).result, blends: fil?.ok ? fil.result.blends : [], holes: hol?.ok ? hol.result.holes : [] });
     words.push(summaryWords(b.name, s, what, sc.state.doc.units));
     recognized.push({ body: b.name, ...(what.fillet ? { fillets: s.fillets } : {}), ...(what.hole ? { holes: s.holes } : {}) });
   }

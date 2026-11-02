@@ -20,13 +20,16 @@
 //     Holes up to): the same face references, in the same order, as direct delete_faces stores for
 //     "Body 1 faces fillet <= 2 mm" and "Body 1 faces hole <= 6 mm", only faces not picked yet, and
 //     the same refusal words as Find for a body over the face limit.
+//     Two face limits (kernel API 9): a fillet search within the fillets' limit works on a body over
+//     the holes' limit, a hole search there is refused, and the person and the Assistant get the
+//     same words naming both limits (the Assistant both numbers in detail too).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { addBySize, type AddedBySize } from '../../src/features/delete_faces/by-size';
 import { findError, runFind } from '../../src/features/find/panel';
 import { forgetBreps } from '../../src/features/import/feature';
 import { recognitionOf } from '../../src/kernel/recognition';
-import { RECOGNIZE_MAX_FACES } from '../../src/kernel/timeouts';
+import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/kernel/timeouts';
 import { makeHoles, planFor } from '../../src/features/hole/make';
 import { bodyRows, sectionRows } from '../../src/features/measure/panel';
 import { madeWith } from '../../src/assistant/made-with';
@@ -232,18 +235,36 @@ describe("the person's side of the Assistant's tools stores what the tools store
       const none = await fail(h, 'find', { query: q0, limit: 10 });
       expect(none.message).toContain('matches nothing: Body 1 has 12 fillet faces, R2 to R5.');
       expect((await runFind(h.services, q0)).nothing).toBe(none.message.replace(/^nothing_selected: /, ''));
-      // Over the face limit: the same words and the same hint (the panel shows them together).
-      recognitionOf(h.services.kernel).limits.maxFaces = 10;
-      try {
-        const big = await fail(h, 'find', { query: 'Body 1 faces fillet <= 2 mm', limit: 10 });
-        const person = await runFind(h.services, 'Body 1 faces fillet <= 2 mm').then(
+      // Over a face limit: the same words and the same hint (the panel shows them together), naming
+      // both limits; the Assistant gets both numbers in detail. A body over the holes' limit only:
+      // fillets are still found, for both.
+      const limits = recognitionOf(h.services.kernel).limits;
+      const overWords = async (q: string) => {
+        const big = await fail(h!, 'find', { query: q, limit: 10 });
+        const person = await runFind(h!.services, q).then(
           () => null,
           (e: unknown) => findError(e),
         );
-        expect(person).toBe(`${big.message.replace(/^bad_selector: /, '')} ${big.hint}`);
-        expect(person).toBe('Body 1 has 25 faces: fillets and holes are found on bodies of up to 10 faces. Select its faces in the view instead.');
+        expect(person, q).toBe(`${big.message.replace(/^bad_selector: /, '')} ${big.hint}`);
+        return { person, detail: (big as unknown as { detail: unknown }).detail };
+      };
+      limits.maxHoleFaces = 10;
+      try {
+        const fillets = await ok(h, 'find', { query: 'Body 1 faces fillet <= 2 mm', limit: 10 });
+        expect(fillets.data.count).toBe(8);
+        expect((await runFind(h.services, 'Body 1 faces fillet <= 2 mm')).count).toBe(8);
+        expect(await overWords('Body 1 faces hole <= 6 mm')).toEqual({
+          person: 'Body 1 has 25 faces: holes are found on bodies of up to 10 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.',
+          detail: { reason: 'bad_selector', body: 'Body 1', why: 'too_large', faces: 25, over: 'holes', limit: 10, limits: { fillets: 5000, holes: 10 } },
+        });
+        limits.maxFilletFaces = 12;
+        expect(await overWords('Body 1 faces fillet <= 2 mm')).toEqual({
+          person: 'Body 1 has 25 faces: fillets are found on bodies of up to 12 faces and holes on bodies of up to 10 faces. Select its faces in the view instead.',
+          detail: { reason: 'bad_selector', body: 'Body 1', why: 'too_large', faces: 25, over: 'fillets', limit: 12, limits: { fillets: 12, holes: 10 } },
+        });
       } finally {
-        recognitionOf(h.services.kernel).limits.maxFaces = RECOGNIZE_MAX_FACES;
+        limits.maxFilletFaces = RECOGNIZE_MAX_FILLET_FACES;
+        limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
       }
     },
     MS,
@@ -307,9 +328,11 @@ describe("the person's side of the Assistant's tools stores what the tools store
       h.doc.undo();
       await h.settle();
 
-      // Over the face limit: Find's words and hint, and nothing added.
+      // Over the holes' face limit: Find's words and hint for holes, both limits named, and nothing
+      // added; fillets (within their own limit) are still added.
       const t = h.doc.beginNew('delete_faces');
-      recognitionOf(h.services.kernel).limits.maxFaces = 10;
+      const limits = recognitionOf(h.services.kernel).limits;
+      limits.maxHoleFaces = 10;
       try {
         const big = await addBySize(h.services, { feature: t.feature, body: '', kind: 'holes', size: 6, picked: [] });
         const find = await runFind(h.services, 'Body 1 faces hole <= 6 mm').then(
@@ -317,9 +340,10 @@ describe("the person's side of the Assistant's tools stores what the tools store
           (e: unknown) => findError(e),
         );
         expect(big).toEqual({ ok: false, words: find });
-        expect(find).toMatch(/^Body 1 has \d+ faces: fillets and holes are found on bodies of up to 10 faces\. Select its faces in the view instead\.$/);
+        expect(find).toMatch(/^Body 1 has \d+ faces: holes are found on bodies of up to 10 faces and fillets on bodies of up to 5,000 faces\. Select its faces in the view instead\.$/);
+        expect(added(await addBySize(h.services, { feature: t.feature, body: '', kind: 'fillets', size: 2, picked: [] })).words).toBe('Added 8 faces: 1 fillet chain, R2');
       } finally {
-        recognitionOf(h.services.kernel).limits.maxFaces = RECOGNIZE_MAX_FACES;
+        limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
       }
       t.discard();
     },

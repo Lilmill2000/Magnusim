@@ -354,7 +354,8 @@ export interface KernelOps {
    * faces and holes on bodies of up to 2,600", "this body has 3,000 faces: holes are found on bodies
    * of up to 2,600 faces and fillets on bodies of up to 5,000". max_faces sets both (API 8's one
    * limit) and keeps API 8's words: "this body has 2,002 faces: fillets and holes are found on
-   * bodies of up to 2,000" (RECOGNIZE_MAX_FACES in src/kernel/timeouts.ts).
+   * bodies of up to 2,000". The page sends both of its own (RECOGNIZE_MAX_FILLET_FACES and
+   * RECOGNIZE_MAX_HOLE_FACES in src/kernel/timeouts.ts, the kernel's defaults).
    */
   recognize: {
     params: {

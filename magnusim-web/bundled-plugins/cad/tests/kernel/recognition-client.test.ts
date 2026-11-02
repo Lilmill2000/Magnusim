@@ -1,17 +1,20 @@
 // @vitest-environment node
 // The page's recognition client (src/kernel/recognition.ts): one per kernel adapter, answers
 // cached per shape and query and dropped on a kernel restart, and every refusal in words (over
-// the face limit, no solid, a kernel below API 8, a failure) - never an empty answer. With the
-// real kernel behind the real adapter: the proof's part A as `recognize` answers it, the lowered
-// limit (window.__CAD__.recognition) gives the kernel's own words, and D7's fillets.
+// a face limit, no solid, a kernel below API 8, a failure) - never an empty answer. Two face
+// limits (kernel API 9): fillets (a search without holes) 5,000 and holes (any search with them)
+// 2,600, both sent, and a body over one is refused in words naming both, the one the search ran
+// into first, as the kernel says it. With the real kernel behind the real adapter: the proof's
+// part A as `recognize` answers it, the lowered limits (window.__CAD__.recognition) give the
+// kernel's own words, and D7's fillets.
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createRecognitionClient, isFillet, oldKernelWords, recognitionOf, summaryOf, tooLargeWords } from '../../src/kernel/recognition';
+import { createRecognitionClient, isFillet, limitWords, oldKernelWords, overLimit, recognitionOf, summaryOf, tooLargeWords } from '../../src/kernel/recognition';
 import { hasWords } from '../../src/features/delete_faces/words';
-import { RECOGNIZE_MAX_FACES } from '../../src/kernel/timeouts';
+import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/kernel/timeouts';
 import { createStateStore } from '../../src/lib/store';
 import type { KernelAdapter, KernelStatus } from '../../src/types/kernel';
 import type { RecognizeResult } from '../../src/types/kernel-protocol';
@@ -63,30 +66,58 @@ function fakeKernel(reply: (params: R) => R, api = 8) {
 const kernelError = (message: string, kind = 'input') => Object.assign(new Error(message), { kind, op: 'recognize' });
 
 describe('recognition client (fake kernel)', () => {
-  it('caches per shape and query, passes the limit, and forgets everything on a kernel restart', async () => {
+  it('caches per shape and query, passes both limits, and forgets everything on a kernel restart', async () => {
     const f = fakeKernel(() => ANSWER);
     const c = createRecognitionClient(f.kernel);
-    expect(c.limits.maxFaces).toBe(RECOGNIZE_MAX_FACES);
+    expect(c.limits).toEqual({ maxFilletFaces: RECOGNIZE_MAX_FILLET_FACES, maxHoleFaces: RECOGNIZE_MAX_HOLE_FACES });
+    expect([RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES]).toEqual([5000, 2600]);
     const a = await c.features(5);
     expect(a).toEqual({ ok: true, result: ANSWER });
     await c.features(5);
     await c.features(5, {});
     expect(c.calls).toBe(1);
     // Holes in the app's one mode (HOLES_MODE, decision D6: hard).
-    expect(f.sent).toEqual([{ op: 'recognize', id: 5, max_faces: 2000, holes_mode: 'hard' }]);
+    expect(f.sent).toEqual([{ op: 'recognize', id: 5, max_fillet_faces: 5000, max_hole_faces: 2600, holes_mode: 'hard' }]);
     await c.features(5, { holes: false, max_r: 2.002 });
     await c.features(5, { holes_mode: 'hard', blends: false });
     expect(f.sent.slice(1)).toEqual([
-      { op: 'recognize', id: 5, max_faces: 2000, holes: false, max_r: 2.002 },
-      { op: 'recognize', id: 5, max_faces: 2000, blends: false, holes_mode: 'hard' },
+      { op: 'recognize', id: 5, max_fillet_faces: 5000, max_hole_faces: 2600, holes: false, max_r: 2.002 },
+      { op: 'recognize', id: 5, max_fillet_faces: 5000, max_hole_faces: 2600, blends: false, holes_mode: 'hard' },
     ]);
     f.respawn('watchdog');
     await c.features(5);
     expect(c.calls).toBe(4);
     // A lowered limit is part of the key and reaches the kernel.
-    c.limits.maxFaces = 10;
+    c.limits.maxFilletFaces = 10;
     await c.features(5);
-    expect(f.sent.at(-1)).toMatchObject({ max_faces: 10 });
+    expect(f.sent.at(-1)).toMatchObject({ max_fillet_faces: 10, max_hole_faces: 2600 });
+    c.limits.maxHoleFaces = 9;
+    await c.features(5);
+    expect(f.sent.at(-1)).toMatchObject({ max_fillet_faces: 10, max_hole_faces: 9 });
+    expect(c.calls).toBe(6);
+  });
+
+  it('each search meets its own limit: fillets alone the fillets\' (5,000), any search with holes the holes\' (2,600) too', async () => {
+    const f = fakeKernel(() => ANSWER);
+    const c = createRecognitionClient(f.kernel);
+    // 4,000 faces: fillets alone are found; holes, alone or with fillets, are refused before any kernel call.
+    expect(await c.features(1, { holes: false }, { faces: 4000 })).toEqual({ ok: true, result: ANSWER });
+    const holeWords = 'this body has 4,000 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000';
+    const holes = { ok: false, reason: 'too_large', faces: 4000, over: 'holes', limit: 2600, limits: { fillets: 5000, holes: 2600 }, words: holeWords };
+    expect(await c.features(1, { blends: false }, { faces: 4000 })).toEqual(holes);
+    expect(await c.features(1, {}, { faces: 4000 })).toEqual(holes);
+    // Over both: the fillets' limit first, unless the search has no fillets.
+    const filletWords = 'this body has 5,001 faces: fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600';
+    expect(await c.features(1, {}, { faces: 5001 })).toEqual({ ok: false, reason: 'too_large', faces: 5001, over: 'fillets', limit: 5000, limits: { fillets: 5000, holes: 2600 }, words: filletWords });
+    expect(await c.features(1, { holes: false }, { faces: 5001 })).toMatchObject({ over: 'fillets', words: filletWords });
+    expect(await c.features(1, { blends: false }, { faces: 5001 })).toMatchObject({ over: 'holes', words: 'this body has 5,001 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000' });
+    // At the limits: searched.
+    expect(await c.features(2, { holes: false }, { faces: 5000 })).toMatchObject({ ok: true });
+    expect(await c.features(2, { blends: false }, { faces: 2600 })).toMatchObject({ ok: true });
+    expect(c.calls).toBe(3);
+    expect(overLimit(2601, {}, { fillets: 5000, holes: 2600 })).toBe('holes');
+    expect(overLimit(2601, { holes: false }, { fillets: 5000, holes: 2600 })).toBeNull();
+    expect(limitWords('fillets', { fillets: 10, holes: 10 })).toBe('fillets and holes are found on bodies of up to 10');
   });
 
   it('keeps the newest 32 shapes', async () => {
@@ -102,23 +133,25 @@ describe('recognition client (fake kernel)', () => {
   it("refuses in words: over the limit without a kernel call (the kernel's own words), no solid, a kernel below API 8, and an unknown op", async () => {
     const f = fakeKernel(() => ANSWER);
     const c = createRecognitionClient(f.kernel);
-    expect(await c.features(1, {}, { faces: 2412 })).toEqual({ ok: false, reason: 'too_large', faces: 2412, limit: 2000, words: 'this body has 2,412 faces: fillets and holes are found on bodies of up to 2,000' });
+    expect(await c.features(1, {}, { faces: 2612 })).toEqual({ ok: false, reason: 'too_large', faces: 2612, over: 'holes', limit: 2600, limits: { fillets: 5000, holes: 2600 }, words: 'this body has 2,612 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000' });
     expect(c.calls).toBe(0);
-    expect(tooLargeWords(14212, 2000)).toBe('this body has 14,212 faces: fillets and holes are found on bodies of up to 2,000');
+    expect(tooLargeWords(14212, 'fillets', { fillets: 5000, holes: 2600 })).toBe('this body has 14,212 faces: fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600');
+    expect(tooLargeWords(14212, 'holes', { fillets: 2000, holes: 2000 })).toBe('this body has 14,212 faces: fillets and holes are found on bodies of up to 2,000');
 
+    // The kernel's words (a call with no face count): API 8's one limit, and API 9's two, the one the query ran into named first.
     const big = fakeKernel(() => {
       throw kernelError('this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000');
     });
-    expect(await createRecognitionClient(big.kernel).features(1)).toEqual({ ok: false, reason: 'too_large', faces: 2002, limit: 2000, words: 'this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000' });
-    // API 9's two limits: the limit is the one the query ran into, named first.
-    for (const [words, faces, limit] of [
-      ['this body has 3,000 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000', 3000, 2600],
-      ['this body has 5,400 faces: fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600', 5400, 5000],
+    expect(await createRecognitionClient(big.kernel).features(1)).toEqual({ ok: false, reason: 'too_large', faces: 2002, over: 'fillets', limit: 2000, limits: { fillets: 2000, holes: 2000 }, words: 'this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000' });
+    expect(await createRecognitionClient(big.kernel).features(1, { blends: false })).toMatchObject({ over: 'holes', limit: 2000 });
+    for (const [words, faces, over, limit, limits] of [
+      ['this body has 3,000 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000', 3000, 'holes', 2600, { fillets: 5000, holes: 2600 }],
+      ['this body has 5,400 faces: fillets are found on bodies of up to 5,000 faces and holes on bodies of up to 2,600', 5400, 'fillets', 5000, { fillets: 5000, holes: 2600 }],
     ] as const) {
       const two = fakeKernel(() => {
         throw kernelError(words);
       });
-      expect(await createRecognitionClient(two.kernel).features(1)).toEqual({ ok: false, reason: 'too_large', faces, limit, words });
+      expect(await createRecognitionClient(two.kernel).features(1)).toEqual({ ok: false, reason: 'too_large', faces, over, limit, limits, words });
     }
 
     const shell = fakeKernel(() => {
@@ -212,11 +245,19 @@ describe('recognition client (the real kernel)', () => {
     expect(atR.ok && atR.result.blends.length).toBe(8);
     expect(c.calls).toBe(2);
 
-    // The limit lowered as an e2e lowers it: without a face count the kernel refuses, with the same words.
-    c.limits.maxFaces = 20;
-    expect(await c.features(a)).toEqual({ ok: false, reason: 'too_large', faces: 21, limit: 20, words: 'this body has 21 faces: fillets and holes are found on bodies of up to 20' });
-    expect(await c.features(a, {}, { faces: 21 })).toEqual({ ok: false, reason: 'too_large', faces: 21, limit: 20, words: 'this body has 21 faces: fillets and holes are found on bodies of up to 20' });
-    c.limits.maxFaces = RECOGNIZE_MAX_FACES;
+    // The limits lowered as an e2e lowers them: without a face count the kernel refuses, with the same words.
+    c.limits.maxHoleFaces = 20;
+    const holes = { ok: false, reason: 'too_large', faces: 21, over: 'holes', limit: 20, limits: { fillets: 5000, holes: 20 }, words: 'this body has 21 faces: holes are found on bodies of up to 20 faces and fillets on bodies of up to 5,000' };
+    expect(await c.features(a)).toEqual(holes);
+    expect(await c.features(a, {}, { faces: 21 })).toEqual(holes);
+    // Fillets alone are still found.
+    expect(await c.features(a, { holes: false })).toMatchObject({ ok: true, result: { faces: 21 } });
+    c.limits.maxFilletFaces = 19;
+    const fillets = { ok: false, reason: 'too_large', faces: 21, over: 'fillets', limit: 19, limits: { fillets: 19, holes: 20 }, words: 'this body has 21 faces: fillets are found on bodies of up to 19 faces and holes on bodies of up to 20' };
+    expect(await c.features(a)).toEqual(fillets);
+    expect(await c.features(a, {}, { faces: 21 })).toEqual(fillets);
+    c.limits.maxFilletFaces = RECOGNIZE_MAX_FILLET_FACES;
+    c.limits.maxHoleFaces = RECOGNIZE_MAX_HOLE_FACES;
 
     // A surface body (six faces, not sewn).
     const bytes = readFileSync(join(FIXTURES, 'box20-faces.step'));
