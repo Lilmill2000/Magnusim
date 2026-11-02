@@ -14,7 +14,7 @@ import type { BodyId, FeatureId, PersistentRef } from '../../types/doc';
 import type { SelectionItem } from '../../types/selection';
 import { PickList, type PickRow } from './PickList';
 import { usePicker } from './pick';
-import { faceIndexIn, pickFace, refLabel, shownFaces, statusLostFace } from './refs';
+import { faceIndexIn, pickFace, refLabel, selectedFaces, shownFaces, statusLostFace } from './refs';
 
 export interface FaceFieldOptions {
   /** The feature being edited (its own faces cannot be picked for it). */
@@ -44,10 +44,20 @@ export interface FieldHandle {
   highlight: SelectionItem[];
 }
 
+export interface FaceFieldHandle extends FieldHandle {
+  /**
+   * Faces a Ctrl+drag box in the view selected while the panel is open (pick.ts useBoxPicks): added
+   * to the field as clicks would add them, never taken out. Faces of another body
+   * than the field's (or of two bodies with none picked yet) get the one-body words, as a click does;
+   * a face a click would refuse (one this feature made) is left out.
+   */
+  take(items: SelectionItem[]): void;
+}
+
 /** Face names that say what the face is (a feature's start, end, side, fillet ...), not only its number. */
 const SEMANTIC_FACE = /^F:[^:]+:(start|end|side|fillet|chamfer|inner|cut)(:|#|$)/;
 
-export function useFaceField(services: AppServices, o: FaceFieldOptions): FieldHandle {
+export function useFaceField(services: AppServices, o: FaceFieldOptions): FaceFieldHandle {
   const bodies = useStateStore(services.doc.state, (s) => s.rebuild.bodies);
   const status = useStateStore(services.doc.state, (s) => s.rebuild.features[o.feature]);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +147,36 @@ export function useFaceField(services: AppServices, o: FaceFieldOptions): FieldH
   const highlight: SelectionItem[] = info ? shownFaces(info, o.refs).map((index) => ({ kind: 'face', body: info.id, index })) : [];
   return {
     highlight,
+    take(items) {
+      const cur = latest.current;
+      const picked = selectedFaces(items);
+      if (!cur.active || cur.single || !picked.length) return;
+      const on = [...new Set(picked.map((it) => it.body))];
+      const body = cur.body || (on.length === 1 ? on[0] : null);
+      if (!body) {
+        if (cur.oneBody) setError(cur.oneBody);
+        return;
+      }
+      const other = picked.some((it) => it.body !== body);
+      const shownBody = services.doc.state.get().rebuild.bodies.find((b) => b.id === body);
+      if (!shownBody) return;
+      void (async () => {
+        const refs: PersistentRef[] = [];
+        let why: string | null = null;
+        for (const it of picked) {
+          if (it.body !== body) continue;
+          const r = await pickFace(services, shownBody, it.index, cur.feature);
+          if (!r.ok) why ??= r.reason;
+          else refs.push(r.ref);
+        }
+        const now = latest.current;
+        if (now.body && now.body !== body) return;
+        const next = [...now.refs];
+        for (const r of refs) if (!next.some((x) => x.name === r.name)) next.push(r);
+        if (next.length !== now.refs.length) now.onChange(body, next);
+        setError(other && cur.oneBody ? cur.oneBody : refs.length ? null : why);
+      })();
+    },
     element: (label, field, onActivate, hint) => (
       <PickList
         field={field}

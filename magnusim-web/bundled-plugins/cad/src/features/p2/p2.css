@@ -354,3 +354,19 @@ input.mgk-input.cad-p2-name-input {
   margin: 6px 0;
   border: 1px solid var(--mg-divider);
 }
+
+/* ---- Delete faces: Add by size ("Fillets up to [2] mm [Add]", "Holes up to Ø [6] mm [Add]") ---- */
+.cad-delete-add {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.cad-delete-add-lead {
+  align-self: center;
+  color: var(--mg-text-muted);
+}
+.cad-delete-by-size [data-delete-added],
+.cad-delete-by-size [data-delete-adding] {
+  margin: 2px 0 6px;
+}

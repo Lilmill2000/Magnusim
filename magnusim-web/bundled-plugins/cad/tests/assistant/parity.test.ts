@@ -240,6 +240,8 @@ describe('parity: every person-facing capability has an Assistant tool and field
     // Delete faces' build version (kernel API 8): set by create() for the person and the Assistant alike, never by hand.
     expect(FEATURE_FIELDS.delete_faces.version).toMatchObject({ kind: 'auto' });
     expect(FEATURE_FIELDS.press_pull.version).toMatchObject({ kind: 'auto' });
+    // Delete faces' Add by size and box select (S5): the person's other ways to direct's faces, named with the selectors they run.
+    expect(FEATURE_FIELDS.delete_faces.faces).toMatchObject({ kind: 'reach', tool: 'direct', field: 'faces', note: expect.stringMatching(/Fillets up to \/ Holes up to Add \(= "<body> faces fillet <= R" \/ "<body> faces hole <= D"\) and a Ctrl\+drag box/) });
   });
 
   it('the other way (Daniel: parity both ways): every sketch entity kind the Assistant draws has a person sketch tool, a registered command, that draws it', async () => {

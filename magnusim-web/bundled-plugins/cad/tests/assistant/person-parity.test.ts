@@ -15,9 +15,14 @@
 //   - Measure (features/measure bodyRows, sectionRows): the measure tool's solids, voids, overlap and
 //     section area;
 //   - a parameter's comment (the Parameters panel's updateParam) as set_params stores it;
-//   - the Back isometric view: the same direction as the pictures' iso_back.
+//   - the Back isometric view: the same direction as the pictures' iso_back;
+//   - Delete faces' Add by size (S5: features/delete_faces/by-size.ts, the panel's Fillets up to and
+//     Holes up to): the same face references, in the same order, as direct delete_faces stores for
+//     "Body 1 faces fillet <= 2 mm" and "Body 1 faces hole <= 6 mm", only faces not picked yet, and
+//     the same refusal words as Find for a body over the face limit.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { addBySize, type AddedBySize } from '../../src/features/delete_faces/by-size';
 import { findError, runFind } from '../../src/features/find/panel';
 import { forgetBreps } from '../../src/features/import/feature';
 import { recognitionOf } from '../../src/kernel/recognition';
@@ -240,6 +245,101 @@ describe("the person's side of the Assistant's tools stores what the tools store
       } finally {
         recognitionOf(h.services.kernel).limits.maxFaces = RECOGNIZE_MAX_FACES;
       }
+    },
+    MS,
+  );
+
+  it(
+    "Delete faces' Add by size (S5): the references direct delete_faces stores for the same selectors, only faces not picked, and Find's refusal words",
+    async () => {
+      h = await assistantHarness({ solver: false });
+      await importRoundedBlock(h);
+      const added = (r: AddedBySize) => {
+        if (!r.ok) throw new Error(`Add refused: ${r.words}`);
+        return r;
+      };
+      // The person: MODIFY > Delete faces with nothing picked (the Part's one solid body), Fillets up
+      // to 2 mm, Add; Holes up to Ø 6 mm, Add (the panel applies each as clicks would).
+      const s = h.doc.beginNew('delete_faces');
+      const f1 = added(await addBySize(h.services, { feature: s.feature, body: '', kind: 'fillets', size: 2, picked: [] }));
+      expect(f1.query).toBe('Body 1 faces fillet <= 2 mm');
+      expect(f1.words).toBe('Added 8 faces: 1 fillet chain, R2');
+      expect(f1.added).toHaveLength(8);
+      expect(f1.refs).toEqual(f1.added);
+      s.update({ body: f1.body, faces: f1.added });
+      await h.settle();
+      // The Delete faces is in the Part now: Add reads the body as it is just before it.
+      expect(docNow(h).features.some((f) => f.id === s.feature)).toBe(true);
+      const f2 = added(await addBySize(h.services, { feature: s.feature, body: f1.body, kind: 'holes', size: 6, picked: f1.added }));
+      expect(f2.query).toBe('Body 1 faces hole <= 6 mm');
+      expect(f2.words).toBe('Added 4 faces: 4 holes up to Ø6 mm (4 through)');
+      s.update({ faces: [...f1.added, ...f2.added] });
+      await h.settle();
+      // Nothing new: what the body has, in words (the faces before this Delete faces).
+      const again = await addBySize(h.services, { feature: s.feature, body: f1.body, kind: 'fillets', size: 2, picked: [...f1.added, ...f2.added] });
+      expect(again).toEqual({ ok: false, words: 'No fillets up to 2 mm on Body 1 that are not already picked (Body 1 has 12 fillet faces, R2 to R5)' });
+      // R5 too, past the picked R2s: only the 4 R5 faces are added.
+      const f5 = added(await addBySize(h.services, { feature: s.feature, body: f1.body, kind: 'fillets', size: 5, picked: [...f1.added, ...f2.added] }));
+      expect(f5.words).toBe('Added 4 faces: 4 fillet chains, R5');
+      expect(f5.refs).toHaveLength(12);
+      expect(f5.added.every((r) => !f1.added.some((x) => x.name === r.name))).toBe(true);
+      s.update({ faces: [...f1.added, ...f2.added, ...f5.added] });
+      await h.settle();
+      s.commit();
+      await h.settle();
+      const person = docNow(h).features.find((f) => f.type === 'delete_faces') as Feature & { faces: { name: string }[]; body: string };
+      const personFaces = person.faces;
+      const personVolume = h.doc.state.get().rebuild.bodies[0].volume;
+      const personState = h.doc.state.get().rebuild.features[person.id]?.state;
+      expect(personFaces).toHaveLength(16);
+      h.doc.undo();
+      await h.settle();
+      expect(docNow(h).features.some((f) => f.type === 'delete_faces')).toBe(false);
+
+      // The Assistant: direct delete_faces with the selectors Add runs: the same references, in the same order.
+      const DIRECT = { edit: '', name: '', kind: 'delete_faces', distance: '', bodies: [], tool: '', keep_tool: false, move: [], turn: { angle: '', axis: '', pivot: [] }, copy: false };
+      await ok(h, 'direct', { ...DIRECT, faces: ['Body 1 faces fillet <= 2 mm', 'Body 1 faces hole <= 6 mm', 'Body 1 faces fillet <= 5 mm'] });
+      const ai = docNow(h).features.find((f) => f.type === 'delete_faces') as Feature & { faces: { name: string }[]; body: string };
+      expect(ai.body).toBe(person.body);
+      expect(ai.faces).toEqual(personFaces);
+      expect(h.doc.state.get().rebuild.features[ai.id]?.state).toBe(personState);
+      expect(h.doc.state.get().rebuild.bodies[0].volume).toBe(personVolume);
+      h.doc.undo();
+      await h.settle();
+
+      // Over the face limit: Find's words and hint, and nothing added.
+      const t = h.doc.beginNew('delete_faces');
+      recognitionOf(h.services.kernel).limits.maxFaces = 10;
+      try {
+        const big = await addBySize(h.services, { feature: t.feature, body: '', kind: 'holes', size: 6, picked: [] });
+        const find = await runFind(h.services, 'Body 1 faces hole <= 6 mm').then(
+          () => null,
+          (e: unknown) => findError(e),
+        );
+        expect(big).toEqual({ ok: false, words: find });
+        expect(find).toMatch(/^Body 1 has \d+ faces: fillets and holes are found on bodies of up to 10 faces\. Select its faces in the view instead\.$/);
+      } finally {
+        recognitionOf(h.services.kernel).limits.maxFaces = RECOGNIZE_MAX_FACES;
+      }
+      t.discard();
+    },
+    MS,
+  );
+
+  it(
+    "Delete faces' Add by size with two solid bodies and none picked: words, never a guess; a body picked, it works on that one",
+    async () => {
+      h = await assistantHarness({ solver: false });
+      await importRoundedBlock(h, { body2: true });
+      expect(h.doc.state.get().rebuild.bodies.map((b) => b.name)).toEqual(['Body 1', 'Body 2']);
+      const s = h.doc.beginNew('delete_faces');
+      expect(await addBySize(h.services, { feature: s.feature, body: '', kind: 'fillets', size: 2, picked: [] })).toEqual({ ok: false, words: 'Click a face of the body first' });
+      const [b1, b2] = h.doc.state.get().rebuild.bodies.map((b) => b.id);
+      const one = await addBySize(h.services, { feature: s.feature, body: b1, kind: 'fillets', size: 2, picked: [] });
+      expect(one).toMatchObject({ ok: true, body: b1, words: 'Added 8 faces: 1 fillet chain, R2' });
+      // Body 2 (a plain box) has none: what it has, in words.
+      expect(await addBySize(h.services, { feature: s.feature, body: b2, kind: 'holes', size: 6, picked: [] })).toEqual({ ok: false, words: 'No holes up to Ø6 mm on Body 2 that are not already picked (Body 2 has no drilled holes)' });
+      s.discard();
     },
     MS,
   );

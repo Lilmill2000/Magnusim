@@ -293,7 +293,14 @@ export const FEATURE_FIELDS: FeatureFields = {
     diagnostics: auto('what the heal found (get_model full reads it)'),
     origin: auto('Edit in CAD: the project geometry the Part was opened on'),
   },
-  delete_faces: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), repair: REPAIR, version: auto('the build version a saved Delete faces keeps (2: fillets may come off as fillets where the heal is refused)') },
+  delete_faces: {
+    ...BASE,
+    body: DIRECT_FIELD('faces'),
+    // The panel's Add by size and its box select are the person's ways to the same faces (features/delete_faces/by-size.ts runs these selectors).
+    faces: reach('direct', 'faces', undefined, 'also the panel\'s Fillets up to / Holes up to Add (= "<body> faces fillet <= R" / "<body> faces hole <= D") and a Ctrl+drag box while the panel is open'),
+    repair: REPAIR,
+    version: auto('the build version a saved Delete faces keeps (2: fillets may come off as fillets where the heal is refused)'),
+  },
   press_pull: { ...BASE, body: DIRECT_FIELD('faces'), faces: DIRECT_FIELD('faces'), distance: DIRECT_FIELD('distance'), repair: REPAIR, version: auto('the build version a saved press-pull keeps') },
   split: { ...BASE, targets: DIRECT_FIELD('bodies'), tool: DIRECT_FIELD('tool'), repair: REPAIR },
   delete_body: { ...BASE, bodies: DIRECT_FIELD('bodies') },

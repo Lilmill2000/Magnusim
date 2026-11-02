@@ -73,6 +73,37 @@ export function usePicker(services: AppServices, opts: PickerOptions): void {
 }
 
 /**
+ * A Ctrl+drag box in the view while the panel's field is `active` (Delete faces, the Analysis Situs
+ * plan §3.3): `onBox` gets what the box selected (the viewport's box event; viewport/bind.ts makes
+ * it the selection as well). Only a box: a click is the field's own (usePicker), and a right-click
+ * selects what it is on for its menu, which a field must not take (it would add a face to Delete
+ * faces whenever the person opened a menu over one). Never on a panel the Assistant fills.
+ */
+export function useBoxPicks(services: AppServices, active: boolean, onBox: (items: SelectionItem[]) => void): void {
+  const ref = useRef(onBox);
+  ref.current = onBox;
+  const on = usePanelOwner() !== 'assistant' && active;
+  useEffect(() => {
+    if (!on) return;
+    let off: (() => void) | null = null;
+    let handle: ViewportHandle | null = null;
+    const attach = (h: ViewportHandle | null) => {
+      if (h === handle) return;
+      off?.();
+      off = null;
+      handle = h;
+      if (h?.onBoxSelect) off = h.onBoxSelect((e) => ref.current(e.items));
+    };
+    attach(services.viewport.get().handle);
+    const offView = services.viewport.subscribe((s) => attach(s.handle));
+    return () => {
+      offView();
+      off?.();
+    };
+  }, [services, on]);
+}
+
+/**
  * Show `items` as the shared selection (the viewport highlights it) while the
  * panel is open; on close, a selection that is still ours is cleared.
  * Selection changes from elsewhere (a body row clicked in the tree) are passed

@@ -68,6 +68,8 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       expect(details.find((r) => r.about === 'direct kinds')!.text).toContain("move_body: bodies (one feature for them all), as the person's Move/copy body");
       // Delete faces takes fillets off as fillets, and gives the rest, in Magnusim CAD as in Magnusim (kernel API 8).
       expect(details.find((r) => r.about === 'direct kinds')!.text).toContain('delete_faces: faces; the neighbours grow over the gap; failing that, picked fillets (every one up to the largest) come off as fillets; a red one may list rest (get_model full) to add.');
+      // Its panel's Add by size is the same selectors in both editions (S5).
+      expect(details.find((r) => r.about === 'direct kinds')!.text).toContain('Its panel\'s Fillets up to R / Holes up to D add what "<body> faces fillet <= R" / "<body> faces hole <= D" name.');
       const errors = rowsOf(await h.ok('help', { topic: 'errors' }));
       expect(errors.map((r) => r.about)).not.toEqual(expect.arrayContaining([expect.stringMatching(/^(link_failed|no_link|opening_geometry) /)]));
       expect(errors.some((r) => r.about.startsWith('feature_failed '))).toBe(true);

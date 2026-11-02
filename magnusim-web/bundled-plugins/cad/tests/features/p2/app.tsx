@@ -21,7 +21,8 @@ import type { Vec3 } from '../../../src/types/doc';
 import type { CadEvents } from '../../../src/types/events';
 import type { KernelAdapter } from '../../../src/types/kernel';
 import type { CadModule, ModuleRegistry } from '../../../src/types/modules';
-import type { PickResult, SelectionItem } from '../../../src/types/selection';
+import type { PickResult, Selection, SelectionItem } from '../../../src/types/selection';
+import type { StateStore } from '../../../src/types/state';
 import type { OverlayLayer, ViewportHandle, ViewportPointer, ViewportTool } from '../../../src/types/viewport';
 import { LeftStack, Overlays, StatusDock, Toolbar } from '../../../src/ui';
 import { installUi } from '../../../src/ui/commands';
@@ -65,17 +66,27 @@ export interface FakeView {
   flat: Set<string> | null;
   /** A left click (no drag) in the viewport with `item` under the pointer: offered to the tools as the viewport does. Returns whether a tool took it. */
   click(item: SelectionItem | null, opts?: { ctrl?: boolean }): boolean;
+  /** A Ctrl+drag box that selected `items`: the box listeners hear it (viewport.ts finishBox), then it is the selection (viewport/bind.ts, a plain box replaces). */
+  box(items: SelectionItem[], selection: StateStore<Selection>): void;
 }
 
 export function fakeView(): FakeView {
   const tools: ViewportTool[] = [];
   const layers = new Map<string, OverlayLayer>();
+  const boxes = new Set<(e: { items: SelectionItem[]; mode: 'enclose' | 'touch'; combine: 'replace' | 'add' | 'toggle' }) => void>();
   const v: FakeView = {
     tools,
     layers,
     under: null,
     flat: null,
     handle: null as unknown as ViewportHandle,
+    box(items, selection) {
+      act(() => {
+        // viewport/bind.ts listens first (it binds the view before any panel opens): the box is the selection.
+        selection.set((s) => ({ ...s, items: [...items] }));
+        for (const fn of [...boxes]) fn({ items, mode: 'touch', combine: 'replace' });
+      });
+    },
     click(item, opts = {}) {
       v.under = item ? { item, point: [0, 0, 0], normal: null, depth: 1, screen: [10, 10] } : null;
       const e: ViewportPointer = { type: 'click', button: 0, buttons: 0, clientX: 10, clientY: 10, ctrl: !!opts.ctrl, shift: false, alt: false, ray: { origin: [0, 0, 100], dir: [0, 0, -1] }, native: new MouseEvent('click') };
@@ -116,6 +127,10 @@ export function fakeView(): FakeView {
         const i = tools.indexOf(t);
         if (i >= 0) tools.splice(i, 1);
       };
+    },
+    onBoxSelect(fn: (e: { items: SelectionItem[]; mode: 'enclose' | 'touch'; combine: 'replace' | 'add' | 'toggle' }) => void) {
+      boxes.add(fn);
+      return () => void boxes.delete(fn);
     },
   } as unknown as ViewportHandle;
   return v;
