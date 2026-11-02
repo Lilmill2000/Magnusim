@@ -12,6 +12,7 @@ the page uses the app's font.
 |---|---|---|---|
 | Open CASCADE Technology 7.9.3 (the modeling kernel) | `workspace/kernel/mk32.wasm` | LGPL-2.1 with the Open CASCADE exception | `OCCT-LGPL-2.1.txt`, `OCCT-LGPL-EXCEPTION.txt` |
 | Code inside OCCT under other licences: DELABELLA (Marcin Sokalski), flex's `FlexLexer.h` (University of California), David M. Gay's `strtod` (Lucent Technologies), Unicode conversion tables (Unicode, Inc.) | inside `mk32.wasm` | MIT; BSD-3-Clause; Gay's permissive notice; the Unicode notice | `OCCT-third-party-notices.txt` |
+| Analysis Situs 2026.1.1, asiAlgo: fillet and drilled-hole recognition, fillet removal (169 files) | source in `kernel-build/asi/upstream/`, which the kernel build compiles and links; no kernel op calls it yet, so `mk32.wasm` holds none of it | BSD-3-Clause (Sergey Slyadnev, OPEN CASCADE SAS, Quaoar Studio LLC, Julia Slyadneva); `asiAlgo_UnifySameDomain.{h,cpp}`: LGPL-2.1 with the Open CASCADE exception | `AnalysisSitus-BSD-3-Clause.txt`; `OCCT-LGPL-2.1.txt`, `OCCT-LGPL-EXCEPTION.txt` |
 | FreeCAD PlaneGCS (the sketch solver) and the Salusoft89 `planegcs` WebAssembly wrapper | `workspace/solver/planegcs.wasm` | LGPL-2.0-or-later (FreeCAD sources), LGPL-2.1-or-later (wrapper) | `PlaneGCS-LGPL-2.1.txt` |
 | Eigen 3.4.0 (built with `EIGEN_MPL2_ONLY`) | inside `planegcs.wasm` | MPL-2.0 | `Eigen-MPL-2.0.txt` |
 | Boost 1.86 headers | inside `planegcs.wasm` | BSL-1.0 | `Boost-BSL-1.0.txt` |
@@ -44,6 +45,15 @@ this plugin, pinned to exact upstream versions:
   pinned commit plus our patch, `mk32.build.txt` records the hashes of the build
   that ships, and `repro-check.sh` shows that these sources give the shipped
   bytes.
+- **Analysis Situs** (`kernel-build/asi/`): 169 files of tag `v2026.1.1`,
+  commit `3c3ec3ff077ef71eaee39dc062e01aada475808f` of
+  <https://gitlab.com/ssv/AnalysisSitus>, as published (`asi/upstream/`,
+  checked against `asi/FILES.sha256`), our port to OCCT 7.9.3
+  (`asi-occt79-wasm.patch`, `asi_occt79_compat.h`) and `build-asi.sh`, which
+  `build.sh` runs. Two of those files, `asiAlgo_UnifySameDomain.{h,cpp}`, are
+  derived from OCCT and under its LGPL-2.1 with the Open CASCADE exception; the
+  others are BSD-3-Clause. No archive is needed for them: the files the build
+  uses are all in the plugin.
 - **PlaneGCS** (`solver-build/`): the wrapper commit
   `ee9b156da9827a91a56a888a53520f63d5cffaa6` of
   <https://github.com/Salusoft89/planegcs> (it carries FreeCAD's PlaneGCS

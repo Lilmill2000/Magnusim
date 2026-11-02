@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the CAD kernel: OCCT 7.9.3 (only when the libraries for the current pins
-# are missing), then the facade, into the workspace.
+# Build the CAD kernel: OCCT 7.9.3 and Analysis Situs' libasi.a (each only when
+# the libraries for the current pins are missing), then the facade, into the workspace.
 #   kernel-build/build.sh                     wasm32 -> workspace/kernel/mk32.{mjs,wasm}
 #                                             + kernel-build/mk32.build.txt (build record)
 #   kernel-build/build.sh --variant wasm64    wasm64 -> $CAD_BUILD_ROOT/facade-out-wasm64/
@@ -39,6 +39,11 @@ fi
 if [ -z "${OCCT_INSTALL:-}" ] && [ ! -f "$(occt_dir "$VARIANT")/install/lib/libTKernel.a" ]; then
   "$HERE/build-occt.sh" "$VARIANT"
 fi
+# Analysis Situs (wasm32 only): libasi.a for the current inputs, built when missing.
+if [ "$VARIANT" = wasm32 ]; then
+  ASI_LIB_DIR="${ASI_OBJ:-$(asi_dir "$VARIANT")}"
+  if [ ! -f "$ASI_LIB_DIR/libasi.a" ]; then "$HERE/build-asi.sh" "$VARIANT"; fi
+fi
 
 # Build into a staging folder, then move the pair into place (the workspace may be
 # served while this runs: the .mjs and .wasm must never be from different builds
@@ -65,6 +70,16 @@ emcc_line=$(emcc --version | head -1)
   done
   echo "occt_flags: $KERNEL_CFLAGS -UOCC_CONVERT_SIGNALS -ffile-prefix-map=<build root>=/cad-build"
   echo "occt_key: $(occt_key "$VARIANT")"
+  if [ "$VARIANT" = wasm32 ]; then
+    files=$(grep -c . "$ASI_DIR/FILES.sha256")
+    echo "asi: $ASI_TAG $ASI_COMMIT ($((files - 1)) files + LICENSE, FILES.sha256 sha256=$(sha256sum "$ASI_DIR/FILES.sha256" | cut -c1-64))"
+    echo "asi_sources: sources.txt $(grep -c . "$ASI_DIR/sources.txt") files sha256=$(sha256sum "$ASI_DIR/sources.txt" | cut -c1-64)"
+    echo "asi_patch: asi-occt79-wasm.patch sha256=$(sha256sum "$ASI_DIR/asi-occt79-wasm.patch" | cut -c1-64)"
+    echo "asi_compat: asi_occt79_compat.h sha256=$(sha256sum "$ASI_DIR/asi_occt79_compat.h" | cut -c1-64)"
+    cat "$ASI_LIB_DIR/asi.flags.txt"
+    echo "asi_key: $(asi_key "$VARIANT")"
+    echo "asi_lib: libasi.a $(stat -c %s "$ASI_LIB_DIR/libasi.a") bytes sha256=$(sha256sum "$ASI_LIB_DIR/libasi.a" | cut -c1-64)"
+  fi
   cat "$STAGE/$NAME.flags.txt"
   echo "facade_sources: $(cat "$HERE"/facade/*.cpp "$HERE"/facade/*.hpp | sha256sum | cut -c1-64)"
   echo "$NAME.wasm: $(stat -c %s "$STAGE/$NAME.wasm") bytes sha256=$(sha256sum "$STAGE/$NAME.wasm" | cut -c1-64)"

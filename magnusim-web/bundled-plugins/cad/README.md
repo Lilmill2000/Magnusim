@@ -834,7 +834,7 @@ as features land, and run `npm run gen:registry` in `magnusim-web` after.
 | `manifest.toml`, `plugin.py` | What the host reads. `plugin.py` is the only Python file in the plugin. |
 | `src/` | TypeScript source of the workspace page and its workers. `src/assistant/` holds the Part's tools for the app's Assistant. |
 | `workspace/` | **Built output only** (what the host serves to the frame): `index.html`, `app.js`, `app.css`, `kernel/` (kernel worker + `mk32.mjs/.wasm`), `solver/` (`planegcs.mjs/.wasm`), `pick/` (the picking worker). Never edit by hand. |
-| `kernel-build/` | OCCT + facade build (pinned sources, patches, scripts). See `kernel-build/SOURCES.md`. |
+| `kernel-build/` | OCCT + facade build (pinned sources, patches, scripts), and the vendored Analysis Situs files it links (`kernel-build/asi/`). See `kernel-build/SOURCES.md`. |
 | `solver-build/` | PlaneGCS build (pinned upstream, our patch, script). See `solver-build/SOURCES.md`. |
 | `LICENSES/` | Third-party licence texts and the LGPL source and relinking notes. |
 | `tests/` | Unit tests (vitest; kernel and solver tests load the real wasm in Node). |

@@ -1,0 +1,365 @@
+Analysis Situs v2026.1.1 (commit 3c3ec3ff) for OCCT 7.9.3 and WebAssembly: the port the
+kernel build applies to the vendored files (build-asi.sh), 13 files. No algorithm changes.
+* OCCT 7.8 changed the hasher protocol of its NCollection maps. Each old-style hasher gets
+  ASI_OCCT78_HASHER(key) from asi_occt79_compat.h (force-included), the removed
+  Standard_GUID::HashCode / IsEqual calls become the compat header's globals, maps keyed by
+  Standard_GUID drop their hasher argument, and asiAlgo_DiscrSequenceOfPointer.h gets a
+  hasher of its own.
+* ASI_NO_VIS_IO: no windowing system, offscreen rendering or STL reading and writing in
+  asiAlgo_Utils.cpp (those functions report failure).
+* ASI_NO_EIGEN: no Eigen include; asiAlgo_Utils::InterpolatePoints returns false.
+These hunks change Analysis Situs files and are under those files' licence (BSD-3-Clause:
+LICENSES/AnalysisSitus-BSD-3-Clause.txt).
+diff --git a/src/asiActiveData/API/ActAPI_Common.h b/src/asiActiveData/API/ActAPI_Common.h
+index b8c8358..303159f 100755
+--- a/src/asiActiveData/API/ActAPI_Common.h
++++ b/src/asiActiveData/API/ActAPI_Common.h
+@@ -275,10 +275,12 @@ namespace ActiveData
+     //! \param theGuid [in] GUID to calculate a hash code for.
+     //! \param theUpper [in] upper index.
+     //! \return hash code.
++    ASI_OCCT78_HASHER(Standard_GUID)
++
+     static Standard_Integer HashCode(const Standard_GUID& theGuid,
+                                      const Standard_Integer theUpper)
+     {
+-      return Standard_GUID::HashCode(theGuid, theUpper);
++      return ::HashCode(theGuid, theUpper);
+     }
+ 
+     //! Check equality of the two passed GUIDs.
+@@ -288,7 +290,7 @@ namespace ActiveData
+     static Standard_Boolean IsEqual(const Standard_GUID& theGuid1,
+                                     const Standard_GUID& theGuid2)
+     {
+-      return Standard_GUID::IsEqual(theGuid1, theGuid2);
++      return ::IsEqual(theGuid1, theGuid2);
+     }
+   };
+ } // ActiveData namespace.
+diff --git a/src/asiActiveData/API/ActAPI_IDataCursor.h b/src/asiActiveData/API/ActAPI_IDataCursor.h
+index fd831f7..16937af 100755
+--- a/src/asiActiveData/API/ActAPI_IDataCursor.h
++++ b/src/asiActiveData/API/ActAPI_IDataCursor.h
+@@ -92,6 +92,8 @@ public:
+     //! \param theDC [in] Data Cursor to calculate a hash code for.
+     //! \param theUpper [in] upper index.
+     //! \return hash code.
++    ASI_OCCT78_HASHER(Handle(ActAPI_IDataCursor))
++
+     static inline Standard_Integer HashCode(const Handle(ActAPI_IDataCursor)& theDC,
+                                             const Standard_Integer theUpper)
+     {
+diff --git a/src/asiActiveData/API/ActAPI_IParameter.h b/src/asiActiveData/API/ActAPI_IParameter.h
+index d46cb10..c2a89f8 100755
+--- a/src/asiActiveData/API/ActAPI_IParameter.h
++++ b/src/asiActiveData/API/ActAPI_IParameter.h
+@@ -481,6 +481,8 @@ struct ActAPI_ParameterGID
+     //! Calculates hash code for Parameter GID.
+     //! \param theNbBuckets [in] number of buckets.
+     //! \return hash code.
++    ASI_OCCT78_HASHER(ActAPI_ParameterGID)
++
+     static Standard_Integer HashCode(const ActAPI_ParameterGID& theGID,
+                                      const Standard_Integer     theNbBuckets = 100)
+     {
+diff --git a/src/asiAlgo/auxiliary/asiAlgo_Utils.cpp b/src/asiAlgo/auxiliary/asiAlgo_Utils.cpp
+index c319172..9051d56 100755
+--- a/src/asiAlgo/auxiliary/asiAlgo_Utils.cpp
++++ b/src/asiAlgo/auxiliary/asiAlgo_Utils.cpp
+@@ -38,7 +38,9 @@ typedef rapidjson::Document::Object    t_jsonObject;
+ #endif
+ 
+ // OS-dependent
+-#ifdef _WIN32
++#if defined ASI_NO_VIS_IO
++  // WebAssembly build: no windowing system (offscreen rendering is compiled out).
++#elif defined _WIN32
+   #include <Windows.h>
+   #include <WNT_Window.hxx>
+   #include <WNT_WClass.hxx>
+@@ -158,7 +160,9 @@ typedef rapidjson::Document::Object    t_jsonObject;
+ #include <OSD_OpenFile.hxx>
+ #include <Poly_CoherentTriangulation.hxx>
+ #include <Precision.hxx>
++#if !defined ASI_NO_VIS_IO
+ #include <RWStl.hxx>
++#endif
+ #include <ShapeAnalysis_Edge.hxx>
+ #include <ShapeAnalysis_ShapeTolerance.hxx>
+ #include <ShapeAnalysis_Surface.hxx>
+@@ -185,15 +189,19 @@ typedef rapidjson::Document::Object    t_jsonObject;
+ #include <Image_AlienPixMap.hxx>
+ #include <V3d_DirectionalLight.hxx>
+ #include <V3d_View.hxx>
++#if !defined ASI_NO_VIS_IO
+ #include <OpenGl_GraphicDriver.hxx>
++#endif
+ #include <BRepBuilderAPI_Transform.hxx>
+ 
+ // Eigen includes
++#if !defined ASI_NO_EIGEN
+ #pragma warning(push, 0)
+ #pragma warning(disable : 4702 4701)
+ #include <Eigen/Dense>
+ #pragma warning(default : 4702 4701)
+ #pragma warning(pop)
++#endif
+ 
+ // Standard includes
+ #include <map>
+@@ -3199,7 +3207,13 @@ bool asiAlgo_Utils::ReadStl(const TCollection_AsciiString& filename,
+                             Handle(Poly_Triangulation)&    triangulation,
+                             ActAPI_ProgressEntry           progress)
+ {
++#if defined ASI_NO_VIS_IO
++  (void) filename;
++  progress.SendLogMessage(LogErr(Normal) << "STL reader is not built (ASI_NO_VIS_IO).");
++  triangulation.Nullify();
++#else
+   triangulation = RWStl::ReadFile(filename);
++#endif
+ 
+   if ( triangulation.IsNull() )
+     return false;
+@@ -3471,6 +3485,10 @@ bool asiAlgo_Utils::WriteStl(const Handle(Poly_Triangulation)& triangulation,
+ {
+   bool isOK = true;
+ 
++#if defined ASI_NO_VIS_IO
++  (void) triangulation; (void) filename; (void) isBinary;
++  isOK = false;
++#else
+   if ( isBinary )
+   {
+     isOK = RWStl::WriteBinary(triangulation, filename);
+@@ -3479,6 +3497,7 @@ bool asiAlgo_Utils::WriteStl(const Handle(Poly_Triangulation)& triangulation,
+   {
+     isOK = RWStl::WriteAscii(triangulation, filename);
+   }
++#endif
+ 
+   return isOK;
+ }
+@@ -3944,6 +3963,12 @@ bool asiAlgo_Utils::InterpolatePoints(const std::vector<gp_XYZ>& points,
+                                       const int                  p,
+                                       Handle(Geom_BSplineCurve)& result)
+ {
++#if defined ASI_NO_EIGEN
++  // Built without Eigen (ASI_NO_EIGEN): no interpolation.
++  (void) points; (void) p;
++  result.Nullify();
++  return false;
++#else
+   // Number of unknown control points
+   const int numPoles = (int) points.size();
+   const int n        = numPoles - 1;
+@@ -4136,6 +4161,7 @@ bool asiAlgo_Utils::InterpolatePoints(const std::vector<gp_XYZ>& points,
+   delete[] pKnots;
+ 
+   return true;
++#endif
+ }
+ 
+ //-----------------------------------------------------------------------------
+@@ -7044,6 +7070,10 @@ Handle(Image_AlienPixMap)
+                                           const std::optional<gp_Dir>&       viewDir,
+                                           const std::optional<gp_Dir>&       viewUp)
+ {
++#if defined ASI_NO_VIS_IO
++  (void) shape; (void) width; (void) height; (void) shapeColor; (void) bgColor; (void) dm; (void) viewDir; (void) viewUp;
++  return nullptr;
++#else
+   Handle(Aspect_DisplayConnection)
+     displayConnection = new Aspect_DisplayConnection();
+ 
+@@ -7141,6 +7171,7 @@ Handle(Image_AlienPixMap)
+   bool isOk = view->ToPixMap(*pixmap, width, height);
+ 
+   return isOk ? pixmap : nullptr;
++#endif
+ }
+ 
+ //-----------------------------------------------------------------------------
+diff --git a/src/asiAlgo/discr/asiAlgo_DiscrSequenceOfPointer.h b/src/asiAlgo/discr/asiAlgo_DiscrSequenceOfPointer.h
+index ec5ad26..84fabf2 100755
+--- a/src/asiAlgo/discr/asiAlgo_DiscrSequenceOfPointer.h
++++ b/src/asiAlgo/discr/asiAlgo_DiscrSequenceOfPointer.h
+@@ -62,7 +62,15 @@ inline int HashCode(const PairOfPEdgeBoolean& val,
+ 
+ typedef NCollection_Sequence<void*>                SequenceOfPointer;
+ typedef NCollection_List<void*>                    ListOfPointer;
+-typedef NCollection_IndexedMap<PairOfPEdgeBoolean> IMapOfPointerBoolean;
++//! OCCT 7.8+ hasher protocol for (edge pointer, flag) pairs: hash = the pointer
++//! (as the old HashCode above), equality = both members.
++struct PairOfPEdgeBooleanHasher
++{
++  size_t operator()(const PairOfPEdgeBoolean& val) const { return std::hash<Edge*>{}(val.first); }
++  bool operator()(const PairOfPEdgeBoolean& a, const PairOfPEdgeBoolean& b) const { return a == b; }
++};
++
++typedef NCollection_IndexedMap<PairOfPEdgeBoolean, PairOfPEdgeBooleanHasher> IMapOfPointerBoolean;
+ 
+ }
+ }
+diff --git a/src/asiAlgo/editing/asiAlgo_Edge2Rebuild.h b/src/asiAlgo/editing/asiAlgo_Edge2Rebuild.h
+index 432803f..5070a4f 100755
+--- a/src/asiAlgo/editing/asiAlgo_Edge2Rebuild.h
++++ b/src/asiAlgo/editing/asiAlgo_Edge2Rebuild.h
+@@ -112,6 +112,8 @@ struct asiAlgo_Edge2Rebuild
+   //! Hasher for data maps.
+   struct Hasher
+   {
++    ASI_OCCT78_HASHER(asiAlgo_Edge2Rebuild)
++
+     static int HashCode(const asiAlgo_Edge2Rebuild& e, const int upper)
+     {
+       return ::HashCode(e.edge, upper);
+diff --git a/src/asiAlgo/editing/asiAlgo_History.h b/src/asiAlgo/editing/asiAlgo_History.h
+index e15d6b3..f793ab0 100755
+--- a/src/asiAlgo/editing/asiAlgo_History.h
++++ b/src/asiAlgo/editing/asiAlgo_History.h
+@@ -152,6 +152,8 @@ public:
+     //! Hasher for using history items in OCCT data maps.
+     struct Hasher
+     {
++      ASI_OCCT78_HASHER(t_item*)
++
+       static int HashCode(const t_item* pItem, const int Upper)
+       {
+         const int I  = (int) ptrdiff_t(pItem);
+diff --git a/src/asiAlgo/features/asiAlgo_AAG.cpp b/src/asiAlgo/features/asiAlgo_AAG.cpp
+index c6c440b..4a8336c 100755
+--- a/src/asiAlgo/features/asiAlgo_AAG.cpp
++++ b/src/asiAlgo/features/asiAlgo_AAG.cpp
+@@ -1334,7 +1334,7 @@ void asiAlgo_AAG::RemoveNodeAttributes()
+ 
+ //-----------------------------------------------------------------------------
+ 
+-void asiAlgo_AAG::RemoveNodeAttributes(const NCollection_Map<Standard_GUID, Standard_GUID>& keep)
++void asiAlgo_AAG::RemoveNodeAttributes(const NCollection_Map<Standard_GUID>& keep)
+ {
+   for ( t_node_attributes::Iterator it(m_nodeAttributes); it.More(); it.Next() )
+   {
+diff --git a/src/asiAlgo/features/asiAlgo_AAG.h b/src/asiAlgo/features/asiAlgo_AAG.h
+index 12150cf..08f6426 100755
+--- a/src/asiAlgo/features/asiAlgo_AAG.h
++++ b/src/asiAlgo/features/asiAlgo_AAG.h
+@@ -120,8 +120,7 @@ public:
+ 
+   //! Type definition for map of attributes.
+   typedef NCollection_DataMap<Standard_GUID,
+-                              Handle(asiAlgo_FeatureAttr),
+-                              Standard_GUID> t_attrMap;
++                              Handle(asiAlgo_FeatureAttr)> t_attrMap;
+ 
+   //---------------------------------------------------------------------------
+ 
+@@ -139,6 +138,8 @@ public:
+     t_arc(const t_topoId _F1, const t_topoId _F2) : F1(_F1), F2(_F2) {}
+ 
+     //! \return hash code for the arc.
++    ASI_OCCT78_HASHER(t_arc)
++
+     static int HashCode(const t_arc& arc, const int upper)
+     {
+       int key = arc.F1 + arc.F2;
+@@ -855,7 +856,7 @@ public:
+   //! the ones having the GUIDs from the passed `keep` collection.
+   //! \param[in] keep the attribute types to keep alive on removal.
+   asiAlgo_EXPORT void
+-    RemoveNodeAttributes(const NCollection_Map<Standard_GUID, Standard_GUID>& keep);
++    RemoveNodeAttributes(const NCollection_Map<Standard_GUID>& keep);
+ 
+   //! Sets the entire collection of nodal attributes.
+   //! \param[in] attrs attributes to set.
+diff --git a/src/asiAlgo/features/asiAlgo_FeatureAttr.h b/src/asiAlgo/features/asiAlgo_FeatureAttr.h
+index def9422..ce86c7f 100755
+--- a/src/asiAlgo/features/asiAlgo_FeatureAttr.h
++++ b/src/asiAlgo/features/asiAlgo_FeatureAttr.h
+@@ -133,14 +133,16 @@ public:
+   //! Hasher for sets.
+   struct t_hasher
+   {
++    ASI_OCCT78_HASHER(Handle(asiAlgo_FeatureAttr))
++
+     static int HashCode(const Handle(asiAlgo_FeatureAttr)& attr, const int upper)
+     {
+-      return Standard_GUID::HashCode(attr->GetGUID(), upper);
++      return ::HashCode(attr->GetGUID(), upper);
+     }
+ 
+     static bool IsEqual(const Handle(asiAlgo_FeatureAttr)& attr, const Handle(asiAlgo_FeatureAttr)& other)
+     {
+-      return Standard_GUID::IsEqual( attr->GetGUID(), other->GetGUID() );
++      return ::IsEqual( attr->GetGUID(), other->GetGUID() );
+     }
+   };
+ 
+diff --git a/src/asiAlgo/features/asiAlgo_ShapePartnerHasher.h b/src/asiAlgo/features/asiAlgo_ShapePartnerHasher.h
+index f483ad1..3489fb6 100755
+--- a/src/asiAlgo/features/asiAlgo_ShapePartnerHasher.h
++++ b/src/asiAlgo/features/asiAlgo_ShapePartnerHasher.h
+@@ -47,6 +47,8 @@ class asiAlgo_ShapePartnerHasher
+ {
+ public:
+ 
++  ASI_OCCT78_HASHER(TopoDS_Shape)
++
+   static int HashCode(const TopoDS_Shape& S, const int Upper)
+   {
+     const int I  = (int) ptrdiff_t( S.TShape().operator->() );
+diff --git a/src/asiAlgo/features/asiAlgo_TopoAttr.h b/src/asiAlgo/features/asiAlgo_TopoAttr.h
+index 0b9ee5d..0a34c45 100755
+--- a/src/asiAlgo/features/asiAlgo_TopoAttr.h
++++ b/src/asiAlgo/features/asiAlgo_TopoAttr.h
+@@ -70,14 +70,16 @@ public:
+   //! Hasher for sets.
+   struct t_hasher
+   {
++    ASI_OCCT78_HASHER(Handle(asiAlgo_TopoAttr))
++
+     static int HashCode(const Handle(asiAlgo_TopoAttr)& attr, const int upper)
+     {
+-      return Standard_GUID::HashCode(attr->GetGUID(), upper);
++      return ::HashCode(attr->GetGUID(), upper);
+     }
+ 
+     static bool IsEqual(const Handle(asiAlgo_TopoAttr)& attr, const Handle(asiAlgo_TopoAttr)& other)
+     {
+-      return Standard_GUID::IsEqual( attr->GetGUID(), other->GetGUID() );
++      return ::IsEqual( attr->GetGUID(), other->GetGUID() );
+     }
+   };
+ 
+diff --git a/src/asiAlgo/features/asiAlgo_TopoGraph.h b/src/asiAlgo/features/asiAlgo_TopoGraph.h
+index 660f48b..d37b529 100755
+--- a/src/asiAlgo/features/asiAlgo_TopoGraph.h
++++ b/src/asiAlgo/features/asiAlgo_TopoGraph.h
+@@ -157,6 +157,8 @@ public:
+     t_arc(const int _iParent, const int _iChild) : iParent(_iParent), iChild(_iChild) {}
+ 
+     //! \return hash code for the arc.
++    ASI_OCCT78_HASHER(t_arc)
++
+     static int HashCode(const t_arc& arc, const int upper)
+     {
+       int key = arc.iParent + arc.iChild;
+@@ -208,7 +210,7 @@ public:
+     }
+ 
+     //! \return internal collection.
+-    const NCollection_DataMap<Standard_GUID, Handle(asiAlgo_TopoAttr), Standard_GUID>& GetMap() const
++    const NCollection_DataMap<Standard_GUID, Handle(asiAlgo_TopoAttr)>& GetMap() const
+     {
+       return m_set;
+     }
+@@ -225,7 +227,7 @@ public:
+   private:
+ 
+     //! Internal set storing attributes in association with their global IDs.
+-    NCollection_DataMap<Standard_GUID, Handle(asiAlgo_TopoAttr), Standard_GUID> m_set;
++    NCollection_DataMap<Standard_GUID, Handle(asiAlgo_TopoAttr)> m_set;
+ 
+   };
+ 

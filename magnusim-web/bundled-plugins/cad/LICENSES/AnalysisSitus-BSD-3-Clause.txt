@@ -1,0 +1,50 @@
+Analysis Situs 2026.1.1 (commit 3c3ec3ff077ef71eaee39dc062e01aada475808f,
+https://gitlab.com/ssv/AnalysisSitus): the part of its asiAlgo library, and of the
+Active Data interfaces asiAlgo uses, that the CAD plugin's kernel build compiles.
+Those files are in kernel-build/asi/upstream/ exactly as published (169 files);
+kernel-build/asi/asi-occt79-wasm.patch is our port of 13 of them to OCCT 7.9.3
+and WebAssembly (see kernel-build/SOURCES.md).
+
+The copyright lines of those files:
+
+Copyright (c) 2015-present, Sergey Slyadnev
+Copyright (c) 2017, OPEN CASCADE SAS
+Copyright (c) 2022-present, Quaoar Studio LLC
+Copyright (c) 2021-present, Julia Slyadneva
+All rights reserved.
+
+Analysis Situs' licence (its LICENSE file), under which all of these files but
+the two named below are distributed. The Active Data files
+(src/asiActiveData/, Copyright (c) 2017, OPEN CASCADE SAS) carry the same terms
+with "Neither the name of OPEN CASCADE SAS" in the third condition, and the
+other files' headers say "Neither the name of the copyright holder(s)":
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright
+  notice, this list of conditions and the following disclaimer in the
+  documentation and/or other materials provided with the distribution.
+* Neither the name of Sergey Slyadnev nor the
+  names of all contributors may be used to endorse or promote products
+  derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Two of the files are not under the licence above:
+src/asiAlgo/auxiliary/asiAlgo_UnifySameDomain.h and asiAlgo_UnifySameDomain.cpp
+are derived from OCCT's ShapeUpgrade_UnifySameDomain (Copyright (c) 2012-2014
+OPEN CASCADE SAS) and are distributed under the GNU Lesser General Public
+License version 2.1 with the Open CASCADE exception, the licence of OCCT itself:
+OCCT-LGPL-2.1.txt and OCCT-LGPL-EXCEPTION.txt in this folder.

@@ -6,9 +6,18 @@ occt: V7_9_3 a016080bf6738d6aeae020badee4e888ad1540a5
 occt_patch: 0001-allocate-optimal-throws.patch sha256=28c3e5f2dc2aaed3d5a32c904e1358f033511a88a677935e872de46f17168e4f
 occt_flags: -O3 -fwasm-exceptions -msimd128 -UOCC_CONVERT_SIGNALS -ffile-prefix-map=<build root>=/cad-build
 occt_key: 55fc9e3e1aa4
+asi: v2026.1.1 3c3ec3ff077ef71eaee39dc062e01aada475808f (169 files + LICENSE, FILES.sha256 sha256=069ec95f966768c882dace266e5974aed6bba3cc557a39a850e5afb94113047c)
+asi_sources: sources.txt 43 files sha256=d59b7e60435dda8cbdbd8e5263f2931415ada510f26870c9fdfde02797b7e5b3
+asi_patch: asi-occt79-wasm.patch sha256=d5a3c890ef082a184811ae6182623cb98a72378aae33b6e41018981473d69ac2
+asi_compat: asi_occt79_compat.h sha256=9f3dba071898adc45a0101701ba2e8513d997c07f83faa934decbc8c3647db45
+asi_flags: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin -ffile-prefix-map=<asi work>=/cad-asi -include asi_occt79_compat.h -I<asiAlgo and its folders> -I<asiActiveData/API, asiActiveData, asiActiveData/Mesh/DS> -I<occt install>/inc -DASI_NO_VIS_IO -DASI_NO_EIGEN -Wno-deprecated-declarations
+asi_occt_install: occt-wasm32-55fc9e3e1aa4
+asi_key: b922d5f45c50
+asi_lib: libasi.a 4133068 bytes sha256=102b2d769f72f28a0b138d869a8a35dcf43b300d7f37837f6e34d921565d42b8
 compile: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin 
 link: -O3 -fwasm-exceptions -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sEXPORTED_FUNCTIONS=[_mk_call,_mk_alloc,_mk_free,_malloc,_free] -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0 
 occt_install: occt-wasm32-55fc9e3e1aa4
+link_inputs: facade.o, libasi.a (Analysis Situs), then the OCCT libraries
 facade_sources: 72ad8b707db5db9db3710643de33d6a47c882557e932621a35c66060008577b3
 mk32.wasm: 22483974 bytes sha256=69bb460d53a2510f3b909ed3c15cdb851ce45ef8158622f054d64b7cae06aeaa
 mk32.mjs: 29426 bytes sha256=aad011be5d356a6a96a5c7e5eed1264a2c59382849d9a475fa9300732a856c59

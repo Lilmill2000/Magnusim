@@ -41,6 +41,30 @@ occt_key() {
 }
 occt_dir() { echo "$CAD_BUILD_ROOT/occt-$1-$(occt_key "$1")"; }
 
+# Analysis Situs (asi/, SOURCES.md): the vendored asiAlgo subset, linked into the wasm32 kernel.
+ASI_TAG=v2026.1.1
+ASI_COMMIT=3c3ec3ff077ef71eaee39dc062e01aada475808f
+ASI_REPO=https://gitlab.com/ssv/AnalysisSitus.git
+ASI_DIR="$KERNEL_BUILD_DIR/asi"
+# The vendored files compile only with these: no visualisation or STL I/O, no Eigen, and
+# USE_TBB, USE_MOBIUS, USE_VTK and USE_RAPIDJSON left undefined.
+ASI_DEFS="-DASI_NO_VIS_IO -DASI_NO_EIGEN"
+
+# libasi.a lives in a folder named after everything that shapes it (the pin, the vendored
+# files' hashes, the patch, the compat header, the source list, build-asi.sh, the flags,
+# Emscripten and the OCCT it compiles against), as OCCT's does:
+#   $CAD_BUILD_ROOT/asi-<variant>-<key>/libasi.a
+asi_key() {
+  local variant="$1"
+  {
+    echo "asi=$ASI_COMMIT emsdk=$EMSDK_VERSION/$EMSDK_EMCC_COMMIT variant=$variant cflags=$KERNEL_CFLAGS defs=$ASI_DEFS"
+    echo "occt_key=$(occt_key "$variant") occt_install=${OCCT_INSTALL:-keyed}"
+    cat "$ASI_DIR/FILES.sha256" "$ASI_DIR/sources.txt" "$ASI_DIR/asi-occt79-wasm.patch" \
+      "$ASI_DIR/asi_occt79_compat.h" "$KERNEL_BUILD_DIR/build-asi.sh"
+  } | sha256sum | cut -c1-12
+}
+asi_dir() { echo "$CAD_BUILD_ROOT/asi-$1-$(asi_key "$1")"; }
+
 # Put the pinned Emscripten on PATH (installs it on first use).
 use_emsdk() {
   local dir="$CAD_BUILD_ROOT/emsdk"

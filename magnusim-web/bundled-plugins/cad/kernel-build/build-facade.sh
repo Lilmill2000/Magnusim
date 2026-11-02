@@ -4,6 +4,8 @@
 # Writes <outdir>/mk32.{mjs,wasm} (or mk64.*). Uses the OCCT install that
 # build-occt.sh makes for the current pins ($(occt_dir <variant>)/install);
 # OCCT_INSTALL=<dir> overrides it (development only: the build record says so).
+# wasm32 also links Analysis Situs' libasi.a from build-asi.sh ($ASI_OBJ, or
+# $(asi_dir wasm32)).
 # Plain extern "C" ABI (mk_call / mk_alloc / mk_free), no embind: nothing needs
 # eval or new Function under the workspace frame's Content-Security-Policy.
 # EXTRA_CXXFLAGS adds compile flags (tests only, e.g. -DMK_TEST_NO_WORK_COPY).
@@ -46,12 +48,21 @@ LINKFLAGS="-O3 -fwasm-exceptions -msimd128 \
 -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] \
 -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0"
 
+# Analysis Situs (wasm32 only): libasi.a from build-asi.sh, before the OCCT libraries.
+# wasm-ld takes from it only the members something references.
+ASI_LIB=""
+if [ "$VARIANT" = wasm32 ]; then
+  ASI_LIB="${ASI_OBJ:-$(asi_dir "$VARIANT")}/libasi.a"
+  [ -f "$ASI_LIB" ] || { echo "Analysis Situs is not built in $(dirname "$ASI_LIB"): run build-asi.sh $VARIANT" >&2; exit 1; }
+fi
+
 # shellcheck disable=SC2086
-em++ "$OBJ/facade.o" -L"$INST/lib" -Wl,--start-group $LIBS -Wl,--end-group $LINKFLAGS ${EXTRA_LDFLAGS:-} -o "$OUT/$NAME.mjs"
+em++ "$OBJ/facade.o" $ASI_LIB -L"$INST/lib" -Wl,--start-group $LIBS -Wl,--end-group $LINKFLAGS ${EXTRA_LDFLAGS:-} -o "$OUT/$NAME.mjs"
 # What the build record (build.sh) quotes.
 {
   echo "compile: em++ -std=c++17 $KERNEL_CFLAGS -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin ${EXTRA_CXXFLAGS:-}"
   echo "link: $LINKFLAGS ${EXTRA_LDFLAGS:-}"
   echo "occt_install: ${OCCT_INSTALL:+override }$(basename "$(dirname "$INST")")"
+  if [ -n "$ASI_LIB" ]; then echo "link_inputs: facade.o, libasi.a (Analysis Situs), then the OCCT libraries"; fi
 } > "$OUT/$NAME.flags.txt"
 ls -l "$OUT/$NAME.mjs" "$OUT/$NAME.wasm"

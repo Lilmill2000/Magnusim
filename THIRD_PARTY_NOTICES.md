@@ -54,6 +54,13 @@ exact upstream commits, with our patches and the scripts that rebuild both
 modules, in `kernel-build/` and `solver-build/`; `LICENSES/README.md` also says
 how to rebuild the plugin with a changed OCCT or PlaneGCS.
 
+The kernel's build (`kernel-build/asi/`) also holds 169 source files of
+Analysis Situs 2026.1.1's asiAlgo (BSD-3-Clause; Sergey Slyadnev, OPEN CASCADE
+SAS, Quaoar Studio LLC, Julia Slyadneva; two of its files under OCCT's
+LGPL-2.1 with the Open CASCADE exception), which it compiles and links. No
+kernel op calls them yet, so `mk32.wasm` holds none of their code. Their
+licences and copyright lines: `LICENSES/AnalysisSitus-BSD-3-Clause.txt`.
+
 ## 2D Wind Tunnel plugin
 
 The 2D Wind Tunnel plugin (`magnusim-web/bundled-plugins/tunnel2d`, bundled,

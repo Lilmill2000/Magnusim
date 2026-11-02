@@ -4,3 +4,7 @@ magnusim-web/runs export-ignore
 *.key export-ignore
 *.sh text eol=lf
 *.bat text eol=crlf
+# The CAD kernel build is LF everywhere (its sha256 checks, patches and build record hash these files),
+# and the vendored Analysis Situs files are kept byte for byte (kernel-build/asi/FILES.sha256).
+magnusim-web/bundled-plugins/cad/kernel-build/** text eol=lf
+magnusim-web/bundled-plugins/cad/kernel-build/asi/upstream/** -text
