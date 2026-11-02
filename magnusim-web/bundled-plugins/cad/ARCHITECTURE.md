@@ -284,6 +284,42 @@ with the host once for the page's life, and its chip goes in the dock.
   Delete faces also says "the rest" (`src/features/delete_faces/plan.ts`) and
   publishes it (`DeleteFacesOutput`) for the panel's Add the rest and
   get_model's `rest`.
+  Kernel API 9 (round 2): OCCT's heal gets `budget_ms` = 0.8 of the call's
+  watchdog limit (16 s, 96 s on a large part) and `far_budget_ms` 2.5 s, so a
+  heal that never ends is red in words ("OCCT's heal did not finish in 16.0 s";
+  with far-grown faces ": it grows 16 small curved faces far past their size")
+  before the watchdog stops the worker. A version 2 Delete faces not repaired
+  also passes `far_skip` (`FAR_HEAL_LAST` in `feature.ts`): where the heal would
+  grow a kept curved face more than 4 times its size it is not started; the
+  fillet ways run first and OCCT's heal (with the 2.5 s) only when both refuse,
+  as today's build. Measured: no body of the gate's 127 cases or the other
+  Delete faces tests has such a face; each of the 19 measured ones that has
+  (T, L, U, plus, box, I and Z blocks rounded twice, either order) had a heal
+  that did not finish in 20 s (today's watchdog stop). Then, after the
+  second way, the third way (`src/features/delete_faces/corners.ts`) for a
+  pick of fillets only: each picked round with its riders (kept faces across
+  its cross edges that are corner pieces of another fillet: a recognised blend
+  of another chain, or an unrecognised curved face between two kept blends),
+  one group of faces sharing edges at a time, each a defeature with 2.5 s on
+  the result before (10 s in all), named step by step; kept only when
+  `checkFilletsOff` passes with the riders counted as picked, its taken rule's
+  faces left out (at a concave round the right body takes 19.3 mm³ off the end
+  faces under its torus riders) but its volume bound kept, the chain bound
+  counting a rider's chain by the rider's share of its area. Output how
+  `'corners'`, the note "Taken off one round at a time, with the 16 corner
+  faces where they meet other fillets: OCCT's heal could not do it" (or "...:
+  OCCT's heal was not run, as it would grow 16 small curved faces far past
+  their size and not finish"); refused: "; taking them off with the 16 corner
+  faces where they meet other fillets did not work either: <why>". Every way
+  tried is said once, then "; the body is unchanged" once. Measured on the
+  app's T-block (R2 across, then R1 along): ok in 4.4 s in Node (the browser
+  test's whole run 9 s), the volume of the T with only its R2 fillets to
+  2.4e-11, symmetric difference 0, all 26 faces named from the body before;
+  of 26 blocks rounded twice, 17 ok this way (L, U, plus, box and Z in either
+  order among them), each with a symmetric difference of 0; on the gate's 127
+  cases it never runs (none of those still red after the second way has
+  riders). The test hook `window.__CAD__.corners` lowers each group's 2.5 s
+  (`cornersBudget`) so an e2e sees its refusal.
 - **Mutating ops run on deep copies** (BRepBuilderAPI_Copy under temporary ids;
   several inputs are copied together so shared sub-shapes stay shared): the
   input shape id is never changed, whatever happens. This covers boolean,
@@ -532,7 +568,8 @@ with the host once for the page's life, and its chip goes in the dock.
   `limits`). A red Delete faces whose fillets `suppress_blends` refuses for its time says so in
   the kernel's words ("taking them off as fillets would take about 6.5 s (100 fillet faces on a
   body of 410 faces), and Delete faces allows 1.4 s for taking fillets off as fillets").
-  The page passes no defeature budget until its own step uses it.
+  Delete faces passes the defeature budget and `far_skip`, and runs its third way (the Delete
+  faces paragraph of the kernel section above).
 
 ## 6. Document
 

@@ -74,6 +74,36 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   it was made; when its faces would qualify, its red text says a new Delete
   faces of them may take them off as fillets.
 
+**Delete faces no longer runs into the 20 s stop on fillets that end on other fillets.**
+- A T-block rounded R2 on its edges across and then R1 along it: Fillets up to
+  1 mm picked the 8 R1 rounds, and OCCT's heal of them ran on until the kernel
+  was stopped and restarted ("Delete faces 1 was stopped after 20.0 s"). Each
+  R1 round ends in two small corner pieces where it meets the R2 fillets, and
+  OCCT's heal grows every face next to a round by the round's length: grown
+  36 mm past their 2 mm, the corner pieces took it minutes (568 s, and then it
+  failed). Now each round comes off with the corner pieces at its ends, one
+  at a time, checked as fillets taken off as fillets are: the row is ok in a
+  few seconds with the T-block that has only its R2 fillets, and says "Taken
+  off one round at a time, with the 16 corner faces where they meet other
+  fillets: OCCT's heal was not run, as it would grow 16 small curved faces far
+  past their size and not finish". The same works on L, U, plus and plain
+  blocks rounded twice, in either order.
+- OCCT's heal now has a time limit, 16 s (it was stopped only by the 20 s
+  stop), and 2.5 s where it would grow a small curved face far past its size.
+  A heal that does not finish in it is red in words, and the kernel is not
+  restarted for it (a B-spline comb's 20 rounds took 58 s): "Delete faces 1
+  failed: OCCT's heal did not finish in 16.0 s; the body is unchanged". OCCT
+  checks the time between its steps, so a single step that runs on longer can
+  still meet the 20 s stop. Where it would grow such faces, a new Delete
+  faces first takes the faces off the other ways and runs OCCT's heal only
+  when they refuse; everywhere else OCCT's heal still runs first, and every
+  result it gave before within its time limit stays the same.
+- When every way refuses, the red text says each one once and then that the
+  body is unchanged ("...; taking them off as fillets did not work either:
+  ...; taking them off with the 16 corner faces where they meet other fillets
+  did not work either: ...; the body is unchanged"). The Assistant gets the
+  same words and notes.
+
 **Volumes of curved (B-spline) bodies are right.**
 - The volume chip, Mass properties, Measure and the Assistant read lofts,
   revolved splines and other B-spline bodies up to 0.2 % off (an airfoil loft

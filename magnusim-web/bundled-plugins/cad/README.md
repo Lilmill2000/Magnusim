@@ -300,7 +300,11 @@ touching bodies apart.
   off as fillets (Analysis Situs) and the row says so. A red Delete faces names
   the faces that would make the pick whole, and **Add the rest** in its panel
   adds them; when the fillets up to that radius include rings round a boss or a
-  hole, which cannot come off as fillets, it says so instead. In the panel, **Fillets up to** [R] **Add** and **Holes up to Ø**
+  hole, which cannot come off as fillets, it says so instead. Rounds that end
+  on other fillets' corner pieces (a T-block rounded R2 and then R1 along it)
+  come off one round at a time with those corner pieces, and the row says so.
+  The heal has 16 s (2.5 s where it would grow small curved faces far past
+  their size); one that does not finish is red in words, the body unchanged. In the panel, **Fillets up to** [R] **Add** and **Holes up to Ø**
   [D] **Add** pick the faces by size (whole drilled holes, through holes too)
   and say what they added; with no face picked yet they use the Part's one solid
   body. A Ctrl+drag box in the view adds the faces it selects while the panel is
