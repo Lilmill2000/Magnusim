@@ -876,12 +876,12 @@ export function makeServices(opts: { types?: FeatureType[]; status?: DocState['s
   const kernelStatus = createStateStore<KernelStatus>({ state: 'ready', info: null, message: null, respawns: 0, busy: null, heap_bytes: null, memory_high: false });
   const kernel = {
     status: kernelStatus,
-    start: async () => ({ occt: '7.9.3', variant: 'wasm32', ready_ms: 1, init_ms: 1, heap_bytes: 1 }),
+    start: async () => ({ occt: '7.9.3', variant: 'wasm32', api: 8, asi: '2026.1.1', ready_ms: 1, init_ms: 1, heap_bytes: 1 }),
     call: async () => {
       throw new Error('no kernel in UI tests');
     },
     onRespawn: () => () => {},
-    restart: async () => ({ occt: '7.9.3', variant: 'wasm32', ready_ms: 1, init_ms: 1, heap_bytes: 1 }),
+    restart: async () => ({ occt: '7.9.3', variant: 'wasm32', api: 8, asi: '2026.1.1', ready_ms: 1, init_ms: 1, heap_bytes: 1 }),
     dispose() {},
   } as unknown as KernelAdapter;
   const flashes: unknown[][] = [];

@@ -25,7 +25,7 @@ export function kernelError(message: string, kind: KernelCallErrorKind = 'occt',
 
 export function scriptKernel(occt = '7.9.3'): ScriptKernel {
   const handlers = new Map<string, Handler>();
-  const status = createStateStore<KernelStatus>({ state: 'ready', info: { occt, variant: 'wasm32', ready_ms: 1, init_ms: 1, heap_bytes: 1 }, message: null, respawns: 0, busy: null, heap_bytes: 1, memory_high: false });
+  const status = createStateStore<KernelStatus>({ state: 'ready', info: { occt, variant: 'wasm32', api: 8, asi: '2026.1.1', ready_ms: 1, init_ms: 1, heap_bytes: 1 }, message: null, respawns: 0, busy: null, heap_bytes: 1, memory_high: false });
   const k: ScriptKernel = {
     calls: [],
     released: [],

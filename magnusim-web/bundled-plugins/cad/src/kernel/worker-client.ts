@@ -128,7 +128,7 @@ export class WorkerClient {
       if (this.bootTimer) clearTimeout(this.bootTimer);
       this.ready = true;
       const r = m as KernelReadyMsg;
-      this.readyInfo = { occt: r.occt, variant: r.variant, init_ms: r.init_ms, heap_bytes: r.heap_bytes, ready_ms: performance.now() - t0 };
+      this.readyInfo = { occt: r.occt, variant: r.variant, api: Number(r.api ?? 0), asi: r.asi ?? null, init_ms: r.init_ms, heap_bytes: r.heap_bytes, ready_ms: performance.now() - t0 };
       if (this.boot && this.boot.gen === gen) this.boot.resolve(this.readyInfo);
       this.emit({ type: 'ready', info: this.readyInfo });
       this.pump();

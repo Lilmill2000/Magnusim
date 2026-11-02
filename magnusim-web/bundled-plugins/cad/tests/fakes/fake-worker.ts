@@ -21,7 +21,7 @@ export class FakeWorker {
   }
 
   ready(occt = '7.9.3') {
-    this.send({ type: 'ready', variant: 'wasm32', occt, init_ms: 1, heap_bytes: 64 << 20 });
+    this.send({ type: 'ready', variant: 'wasm32', occt, api: 8, asi: '2026.1.1', init_ms: 1, heap_bytes: 64 << 20 });
   }
 
   postMessage(m: KernelCallMsg) {

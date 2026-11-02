@@ -39,7 +39,8 @@ export interface RawResult {
 
 export interface Kernel {
   variant: 'wasm32';
-  version: { occt: string; build: string };
+  /** What `version` answered at start: api (8 = Analysis Situs), asi (its release, absent without it). */
+  version: { occt: string; build: string; api?: number; asi?: string };
   initMs: number;
   module: EmModule;
   /** {ok:false,...} for an ordinary failure; throws KernelError(kind "trap") when the instance died. */
@@ -145,7 +146,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     return out;
   }
 
-  const version = call('version') as unknown as { occt: string; build: string };
+  const version = call('version') as unknown as Kernel['version'];
   return {
     variant: 'wasm32',
     version,

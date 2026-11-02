@@ -79,7 +79,15 @@ const EM_MODULE = 'mk32.mjs';
 createKernel({ moduleUrl: new URL(EM_MODULE, import.meta.url).href })
   .then((k) => {
     kernel = k;
-    self.postMessage({ type: 'ready', variant: 'wasm32', occt: k.version.occt, init_ms: performance.now() - t0, heap_bytes: heap() });
+    self.postMessage({
+      type: 'ready',
+      variant: 'wasm32',
+      occt: k.version.occt,
+      api: Number(k.version.api ?? 0),
+      asi: typeof k.version.asi === 'string' ? k.version.asi : null,
+      init_ms: performance.now() - t0,
+      heap_bytes: heap(),
+    });
     while (queue.length) handle(queue.shift()!);
   })
   .catch((e: unknown) => {

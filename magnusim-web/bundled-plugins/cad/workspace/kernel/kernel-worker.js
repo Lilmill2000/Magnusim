@@ -2,72 +2,72 @@ class w extends Error {
   kind;
   oom;
   detail;
-  constructor(s, l = "internal", c = null) {
-    super(s), this.name = "KernelError", this.kind = l, this.oom = !!(c && c.oom), this.detail = c;
+  constructor(s, c = "internal", l = null) {
+    super(s), this.name = "KernelError", this.kind = c, this.oom = !!(l && l.oom), this.detail = l;
   }
 }
-const M = () => typeof performance < "u" ? performance.now() : Date.now(), $ = new TextEncoder(), q = new TextDecoder();
-async function x(t) {
-  const s = String(t.moduleUrl), l = M(), c = await import(
+const U = () => typeof performance < "u" ? performance.now() : Date.now(), N = new TextEncoder(), $ = new TextDecoder();
+async function q(e) {
+  const s = String(e.moduleUrl), c = U(), l = await import(
     /* @vite-ignore */
     s
   ), r = {
-    locateFile: (e) => new URL(e, s).href,
-    print: t.print ?? (() => {
+    locateFile: (n) => new URL(n, s).href,
+    print: e.print ?? (() => {
     }),
-    printErr: t.printErr ?? ((e) => console.warn("[kernel]", e))
+    printErr: e.printErr ?? ((n) => console.warn("[kernel]", n))
   };
-  t.wasmBinary && (r.wasmBinary = t.wasmBinary);
-  const i = await c.default(r), b = M() - l, d = (e) => typeof e == "bigint" ? Number(e) : e >>> 0;
+  e.wasmBinary && (r.wasmBinary = e.wasmBinary);
+  const i = await l.default(r), g = U() - c, y = (n) => typeof n == "bigint" ? Number(n) : n >>> 0;
   let f = null;
-  const m = () => i.HEAPU8, g = (e) => d(i._mk_alloc(e)), y = (e) => i._mk_free(e);
-  function h(e) {
+  const m = () => i.HEAPU8, k = (n) => y(i._mk_alloc(n)), d = (n) => i._mk_free(n);
+  function h(n) {
     const o = m();
-    let n = o.indexOf(0, e);
-    return n < 0 && (n = o.length), q.decode(o.subarray(e, n));
+    let t = o.indexOf(0, n);
+    return t < 0 && (t = o.length), $.decode(o.subarray(n, t));
   }
-  function u(e, o = {}) {
+  function u(n, o = {}) {
     if (f) throw new w(`kernel is dead after a trap: ${f}`, "trap");
-    const n = $.encode(JSON.stringify({ op: e, params: o }));
+    const t = N.encode(JSON.stringify({ op: n, params: o }));
     let a = 0, _ = 0;
     try {
-      if (a = g(n.length + 1), !a) return { ok: !1, error: "out of memory (request buffer)", kind: "internal", oom: !0 };
+      if (a = k(t.length + 1), !a) return { ok: !1, error: "out of memory (request buffer)", kind: "internal", oom: !0 };
       const p = m();
-      p.set(n, a), p[a + n.length] = 0, _ = d(i._mk_call(a));
+      p.set(t, a), p[a + t.length] = 0, _ = y(i._mk_call(a));
     } catch (p) {
-      throw f = String(p instanceof Error ? p.message : p), new w(`kernel trapped in ${e}: ${f}`, "trap");
+      throw f = String(p instanceof Error ? p.message : p), new w(`kernel trapped in ${n}: ${f}`, "trap");
     } finally {
-      a && !f && y(a);
+      a && !f && d(a);
     }
     if (!_) return { ok: !1, error: "out of memory (no result)", kind: "internal", oom: !0 };
     const A = h(_);
-    return y(_), JSON.parse(A);
+    return d(_), JSON.parse(A);
   }
-  function U(e, o = {}) {
-    const n = u(e, o);
-    if (!n.ok) throw new w(n.error ?? "failed", n.kind ?? "internal", n);
-    return n;
+  function B(n, o = {}) {
+    const t = u(n, o);
+    if (!t.ok) throw new w(t.error ?? "failed", t.kind ?? "internal", t);
+    return t;
   }
-  function S(e) {
-    const o = g(e.length);
-    if (!o) throw new w(`out of memory (cannot place ${e.length} bytes)`, "internal", { oom: !0 });
-    return m().set(e, o), { ptr: o, len: e.length };
+  function S(n) {
+    const o = k(n.length);
+    if (!o) throw new w(`out of memory (cannot place ${n.length} bytes)`, "internal", { oom: !0 });
+    return m().set(n, o), { ptr: o, len: n.length };
   }
-  function O(e) {
+  function O(n) {
     const o = {};
-    for (const n of e.buffers ?? []) {
-      const a = m().slice(n.ptr, n.ptr + n.len);
-      y(n.ptr), n.type === "f32" ? o[n.name] = new Float32Array(a.buffer, 0, a.byteLength / 4) : n.type === "u32" ? o[n.name] = new Uint32Array(a.buffer, 0, a.byteLength / 4) : o[n.name] = a;
+    for (const t of n.buffers ?? []) {
+      const a = m().slice(t.ptr, t.ptr + t.len);
+      d(t.ptr), t.type === "f32" ? o[t.name] = new Float32Array(a.buffer, 0, a.byteLength / 4) : t.type === "u32" ? o[t.name] = new Uint32Array(a.buffer, 0, a.byteLength / 4) : o[t.name] = a;
     }
-    return e.buffers = [], o;
+    return n.buffers = [], o;
   }
   return {
     variant: "wasm32",
-    version: U("version"),
-    initMs: b,
+    version: B("version"),
+    initMs: g,
     module: i,
     tryCall: u,
-    call: U,
+    call: B,
     putBytes: S,
     takeBuffers: O,
     heapBytes: () => m().buffer.byteLength,
@@ -76,52 +76,60 @@ async function x(t) {
     }
   };
 }
-const C = performance.now(), E = [];
-let k = null;
-function B() {
+const x = performance.now(), E = [];
+let b = null;
+function v() {
   try {
-    return k ? k.heapBytes() : 0;
+    return b ? b.heapBytes() : 0;
   } catch {
     return 0;
   }
 }
-function v(t, s, l) {
-  const c = { type: "result", id: t, ok: !1, error: l, ms: performance.now() - s, heap_bytes: B() };
-  self.postMessage(c);
+function M(e, s, c) {
+  const l = { type: "result", id: e, ok: !1, error: c, ms: performance.now() - s, heap_bytes: v() };
+  self.postMessage(l);
 }
-function L(t) {
-  const s = performance.now(), l = k, c = { ...t.params || {} };
+function L(e) {
+  const s = performance.now(), c = b, l = { ...e.params || {} };
   try {
-    if (t.bytes) {
-      const { ptr: h, len: u } = l.putBytes(new Uint8Array(t.bytes));
-      c.ptr = h, c.len = u;
+    if (e.bytes) {
+      const { ptr: h, len: u } = c.putBytes(new Uint8Array(e.bytes));
+      l.ptr = h, l.len = u;
     }
-    const r = l.tryCall(t.op, c);
+    const r = c.tryCall(e.op, l);
     if (!r.ok) {
-      v(t.id, s, { message: r.error ?? "failed", kind: r.kind ?? "internal", oom: !!r.oom, low_memory: !!r.low_memory });
+      M(e.id, s, { message: r.error ?? "failed", kind: r.kind ?? "internal", oom: !!r.oom, low_memory: !!r.low_memory });
       return;
     }
-    const i = l.takeBuffers(r), b = {}, d = [];
+    const i = c.takeBuffers(r), g = {}, y = [];
     for (const [h, u] of Object.entries(i))
-      b[h] = u.buffer, d.push(u.buffer);
-    const { ok: f, buffers: m, ...g } = r, y = { type: "result", id: t.id, ok: !0, result: g, buffers: b, ms: performance.now() - s, heap_bytes: B() };
-    self.postMessage(y, d);
+      g[h] = u.buffer, y.push(u.buffer);
+    const { ok: f, buffers: m, ...k } = r, d = { type: "result", id: e.id, ok: !0, result: k, buffers: g, ms: performance.now() - s, heap_bytes: v() };
+    self.postMessage(d, y);
   } catch (r) {
     const i = r instanceof w ? r : null;
-    v(t.id, s, {
+    M(e.id, s, {
       message: String(r instanceof Error ? r.message : r),
       kind: i ? i.kind : "internal",
       oom: !!(i && i.oom)
     });
   }
 }
-self.addEventListener("message", (t) => {
-  const s = t.data;
-  !s || s.type !== "call" || (k ? L(s) : E.push(s));
+self.addEventListener("message", (e) => {
+  const s = e.data;
+  !s || s.type !== "call" || (b ? L(s) : E.push(s));
 });
-const D = "mk32.mjs";
-x({ moduleUrl: new URL(D, import.meta.url).href }).then((t) => {
-  for (k = t, self.postMessage({ type: "ready", variant: "wasm32", occt: t.version.occt, init_ms: performance.now() - C, heap_bytes: B() }); E.length; ) L(E.shift());
-}).catch((t) => {
-  self.postMessage({ type: "fatal", error: String(t instanceof Error ? t.message : t) });
+const C = "mk32.mjs";
+q({ moduleUrl: new URL(C, import.meta.url).href }).then((e) => {
+  for (b = e, self.postMessage({
+    type: "ready",
+    variant: "wasm32",
+    occt: e.version.occt,
+    api: Number(e.version.api ?? 0),
+    asi: typeof e.version.asi == "string" ? e.version.asi : null,
+    init_ms: performance.now() - x,
+    heap_bytes: v()
+  }); E.length; ) L(E.shift());
+}).catch((e) => {
+  self.postMessage({ type: "fatal", error: String(e instanceof Error ? e.message : e) });
 });

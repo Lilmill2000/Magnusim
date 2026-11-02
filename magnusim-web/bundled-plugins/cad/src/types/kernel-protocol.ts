@@ -14,7 +14,10 @@
 // silhouette (SELECT); `version` answers api: 5. API 6 (press-pull on curved faces):
 // offset_faces, and press_pull taking curved faces. API 7 (2026-10-30): volumes (props,
 // press-pull's check) integrate B-spline, swept and offset faces by Gauss-Kronrod over the
-// knot spans, the plain rule only where it is exact; `version` answers api: 7.
+// knot spans, the plain rule only where it is exact. API 8 (2026-11-02): Analysis Situs asiAlgo
+// 2026.1.1 in the kernel: recognize (fillets and drilled holes found by their shape),
+// suppress_blends (every fillet up to R taken off as fillets, with history), debug_reshape
+// (tests); `version` answers api: 8 and asi: '2026.1.1', and the ready message carries both.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -26,6 +29,10 @@ export interface KernelReadyMsg {
   variant: 'wasm32';
   /** OCCT version the kernel was built from, "7.9.3". */
   occt: string;
+  /** API 8: the facade contract revision `version` answers (8 = fillet and hole recognition). */
+  api: number;
+  /** API 8: the Analysis Situs release linked into the kernel ("2026.1.1"), or null when it has none. */
+  asi: string | null;
   /** Milliseconds from the worker module's start to `ready` (import + instantiate). */
   init_ms: number;
   heap_bytes: number;
@@ -240,8 +247,12 @@ export type TopoSelector = 'all' | 'none' | number[] | { start: number; count: n
  * in `buffers` come back as ArrayBuffers in the reply.
  */
 export interface KernelOps {
-  /** `api`: facade contract revision (3 = docs/p2p3-plan.md §2; 4 = P4a solids; 5 = P4b, this file). */
-  version: { params: Record<string, never>; result: { occt: string; build: 'wasm32' | 'wasm64'; api?: number } };
+  /**
+   * `api`: facade contract revision (3 = docs/p2p3-plan.md §2; 4 = P4a solids; 5 = P4b; 6 = offset_faces;
+   * 7 = volumes; 8 = Analysis Situs, this file's header). `asi`: the Analysis Situs release linked in
+   * (API 8; absent from a build without it, such as wasm64).
+   */
+  version: { params: Record<string, never>; result: { occt: string; build: 'wasm32' | 'wasm64'; api?: number; asi?: string } };
   mem: {
     params: Record<string, never>;
     result: { heap_bytes: number; used_bytes: number; sbrk_top: number; shapes: number; alloc_failures: number; reserve: boolean };
@@ -313,7 +324,49 @@ export interface KernelOps {
    * the other; flip:true swaps which face is the reference); `contours` as fillet.
    */
   chamfer: { params: CheckParam & { id: ShapeId; edges: number[]; d: number; d2?: number; flip?: boolean }; result: ShapeResult & { contours?: number[][] } };
-  defeature: { params: CheckParam & { id: ShapeId; faces: number[] }; result: ShapeResult & { warnings: boolean; warning_text?: string } };
+  /** OCCT's BRepAlgoAPI_Defeaturing: the faces taken off and the gap healed; history against the input, always. */
+  defeature: { params: CheckParam & { id: ShapeId; faces: number[] }; result: ShapeResult & { history: OpHistory; warnings: boolean; warning_text?: string } };
+  /**
+   * API 8. Fillets and drilled holes of a body found by their shape (Analysis Situs asiAlgo
+   * RecognizeBlends and RecognizeDrillHoles), whatever made them. Read-only: nothing is stored.
+   * Face indices are the body's (0-based); every list is sorted by its smallest face. Refused in
+   * words: no solid ("no solid in this body (fillets and holes are found on solids only)"), and more
+   * faces than max_faces ("this body has 2,002 faces: fillets and holes are found on bodies of up to
+   * 2,000"; RECOGNIZE_MAX_FACES in src/kernel/timeouts.ts).
+   */
+  recognize: {
+    params: {
+      id: ShapeId;
+      blends?: boolean;
+      holes?: boolean;
+      /** The largest body searched (default 2,000 faces, measured: a running call cannot be stopped). */
+      max_faces?: number;
+      /** Analysis Situs' own radius limit: the set suppress_blends takes at R (default: every fillet). */
+      max_r?: number;
+      /** asiAlgo_RecognizeDrillHoles' mode (default soft). */
+      holes_mode?: 'soft' | 'hard';
+    };
+    result: RecognizeResult;
+  };
+  /**
+   * API 8. Take fillets off one solid as fillets (asiAlgo_SuppressBlendsInc). The picked faces must
+   * be every fillet of the solid up to the largest picked radius R (checked against its own
+   * recognition at R), and the run must be predicted to fit the kernel's budget (`budget_ms` may
+   * only lower it), else words such as "taking 404 fillet faces off as fillets on a body of 810
+   * faces would take too long here (about 30 s)". The history walks every input face to all its
+   * images; the kernel refuses unless exactly the picked faces are gone and every result face has a
+   * source. Nothing taken off is refused, never passed through.
+   */
+  suppress_blends: {
+    params: CheckParam & { id: ShapeId; faces: number[]; budget_ms?: number; debug_history?: 'leaves' | 'convert_to_occ' };
+    result: SuppressBlendsResult;
+  };
+  /**
+   * API 8, tests only: an exporter-like "messy" copy of a body (bspline: every surface and curve a
+   * B-spline; split_closed: closed faces cut in two; tolerance_scale: every tolerance multiplied).
+   * A new stored shape with `valid` and no history; the input never changes.
+   */
+  debug_reshape: { params: CheckParam & { id: ShapeId; bspline?: boolean; split_closed?: boolean; tolerance_scale?: number }; result: ShapeResult };
   /** API 4: outside:true puts the wall outside the body's faces (the body becomes the cavity). */
   shell: { params: CheckParam & { id: ShapeId; faces: number[]; t: number; tol?: number; outside?: boolean }; result: ShapeResult };
   /**
@@ -734,6 +787,69 @@ export interface KernelOps {
   };
   /** Buffer: step (u8, the file's bytes). */
   export_step: { params: { shapes: { id: ShapeId; name: string; color?: [number, number, number] }[]; schema: 'AP214' | 'AP242' }; result: Record<string, never> };
+}
+
+/**
+ * API 8: one recognised fillet face. `r` is Analysis Situs' own radius (one sample per face);
+ * r_min / r_max are exact for a cylinder, a torus (its tube radius) and a sphere, otherwise
+ * 1 / the largest principal curvature over a 5 x 5 grid of the face. `convex` is null when mixed
+ * or not known. kind 'cliff' is tangent on one side only, 'uncertain' could not be classed: neither
+ * is counted as a fillet by the app. `chain`: index into `chains`, null for none.
+ */
+export interface RecognizedBlend {
+  face: number;
+  r: number;
+  r_min: number;
+  r_max: number;
+  convex: boolean | null;
+  kind: 'ordinary' | 'vertex' | 'cliff' | 'uncertain';
+  chain: number | null;
+}
+
+/** API 8: what `recognize` answers. Faces are the body's (0-based); each list sorted by its smallest face. */
+export interface RecognizeResult {
+  faces: number;
+  solids: number;
+  blends: RecognizedBlend[];
+  /** Fillet faces joined smoothly into one chain (the faces SuppressBlendsInc takes off together). */
+  chains: { faces: number[]; r_min: number; r_max: number; length: number }[];
+  /**
+   * Drilled holes: their faces (wall, bottom, countersink, rounded rim), the narrowest and widest
+   * bore (2 x the smallest and largest cylinder radius; null when the hole has no cylinder) and
+   * whether it goes through (no face of the hole closes its axis).
+   */
+  holes: { faces: number[]; d_min: number | null; d_max: number | null; through: boolean }[];
+  timings: { copy_ms: number; aag_ms: number; blends_ms: number; holes_ms: number };
+}
+
+/** API 8: what `suppress_blends` answers (a shape result with the history every naming step reads). */
+export interface SuppressBlendsResult extends ShapeResult {
+  history: OpHistory;
+  faces: number;
+  /** Chains SuppressBlendsInc took off. */
+  chains: number;
+  /** The largest picked fillet radius, and the limit SuppressBlendsInc ran with (r x 1.001). */
+  r: number;
+  max_r: number;
+  asked: number;
+  removed: number;
+  left: number;
+  /** The kernel's self-check (split may be > 0 on a returned result; the others are 0). */
+  self_check: { split: number; stale_leaves: number; dropped: number };
+  /** Analysis Situs' ConvertToOcc read against the facade's own history (comparison only). */
+  convert_to_occ: { disagree: number; fewer_images: number; no_source: number };
+  /** The run-time prediction the kernel checked before SuppressBlendsInc ran, and its budget. */
+  cost: {
+    /** Chains of the pick at R; the adjacency work of one graph build before and after the picks are gone; chains among and picks that are free-form faces. */
+    chains: number;
+    pair_work: number;
+    pair_work_after: number;
+    free_form_chains: number;
+    free_form_picks: number;
+    predicted_ms: number;
+    budget_ms: number;
+  };
+  timings: { copy_ms: number; recognize_ms: number; suppress_ms: number; history_ms: number; op_ms: number };
 }
 
 /** A shape as import_step / heal give it back. */

@@ -37,6 +37,18 @@ export const OP_TIMEOUTS: Partial<Record<KernelOp, number>> = {
   // API 6: a whole-body offset, its validity and self-interference checks; with diagnose
   // up to 10 more runs on work copies.
   offset_faces: 60_000,
+  // API 8 (Analysis Situs; measured in Node 24, 2026-11-01/02). recognize refuses a body over
+  // RECOGNIZE_MAX_FACES before any work; at the limit the slowest measured body, a plate with
+  // 2,000 holes (2,006 faces), takes 2.24 s (2.03 s in the app's browser worker), a 2,002-face
+  // prism 0.82 s; a call that raises max_faces may take longer (a 5,000-hole plate: 13.6-15.3 s).
+  recognize: 60_000,
+  // suppress_blends refuses in words, before it starts, a run its cost model predicts over
+  // 2 s (the kernel's budget, asi_ops.cpp; the slowest accepted measured run: 3.1 s on a
+  // 663-face NIST part, where the model reads low). Around that: two recognitions (0.64 s on
+  // a 1,910-face plate), the history (under 50 ms) and the result's validity check (4.6 s on
+  // that plate, as for any op on it). Refused runs measured 2.6 s to 44 s (a comb of 484
+  // one-face chains); before the budget they ran on into the 20 s default and killed the worker.
+  suppress_blends: 60_000,
 };
 
 export function timeoutFor(op: KernelOp): number {
@@ -51,6 +63,17 @@ export function timeoutFor(op: KernelOp): number {
  */
 export const LARGE_PART_FACES = 2000;
 export const LARGE_OP_TIMEOUT_MS = 120_000;
+
+/**
+ * API 8: the largest body whose fillets and holes are found (recognize's max_faces; the kernel's
+ * own default is the same). A running call cannot be stopped, so a bigger body is refused in words
+ * before any work. Measured 2026-11-01 (gate G4, Node): building the adjacency graph is quadratic
+ * in the edges of the largest face and the drill-hole recogniser quadratic on a perforated plate,
+ * so a 2,006-face plate with 2,000 holes takes 2.24 s and a 2,606-face one 3.7 s; 2,000 is the
+ * largest size every measured body met within 3 s. Tests lower it through the page's
+ * recognition client (src/kernel/recognition.ts, window.__CAD__.recognition).
+ */
+export const RECOGNIZE_MAX_FACES = 2000;
 
 /** The limit for a modelling op on inputs with this many faces in all (undefined: the op's default). */
 export function timeoutForFaces(op: KernelOp, faces: number): number | undefined {

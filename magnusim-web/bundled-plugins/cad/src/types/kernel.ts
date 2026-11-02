@@ -12,6 +12,10 @@ export type KernelState = 'idle' | 'starting' | 'ready' | 'restarting' | 'failed
 export interface KernelReadyInfo {
   occt: string;
   variant: 'wasm32';
+  /** API 8: the facade contract revision the kernel answers (0 when the worker did not say). */
+  api: number;
+  /** API 8: the Analysis Situs release in the kernel ("2026.1.1"), or null. */
+  asi: string | null;
   /** Spawn to `ready`, measured on the frame's main thread. */
   ready_ms: number;
   init_ms: number;

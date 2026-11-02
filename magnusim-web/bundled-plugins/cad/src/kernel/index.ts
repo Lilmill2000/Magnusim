@@ -10,8 +10,11 @@ import { WorkerClient } from './worker-client';
 /** Where the built kernel worker lives, relative to the workspace page (workspace/index.html). */
 export const KERNEL_WORKER_PATH = 'kernel/kernel-worker.js';
 
-/** Ops that make a shape and must report `valid` (decision: every op checks its result). */
-const SHAPE_OPS = new Set<KernelOp>(['box', 'cylinder', 'sphere', 'extrude', 'revolve', 'boolean', 'split', 'fillet', 'chamfer', 'defeature', 'shell', 'repair']);
+/**
+ * Ops that make a shape and must report `valid` (decision: every op checks its result). API 8:
+ * suppress_blends and debug_reshape make shapes; recognize makes none.
+ */
+const SHAPE_OPS = new Set<KernelOp>(['box', 'cylinder', 'sphere', 'extrude', 'revolve', 'boolean', 'split', 'fillet', 'chamfer', 'defeature', 'shell', 'repair', 'suppress_blends', 'debug_reshape']);
 
 export interface KernelAdapterOptions {
   spawn: (url: string) => Worker;

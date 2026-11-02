@@ -30,7 +30,7 @@ class Worker0 {
     createKernel({ moduleUrl: MODULE, wasmBinary: wasm }).then(
       (k) => {
         this.kernel = k;
-        this.post({ type: 'ready', variant: 'wasm32', occt: k.version.occt, init_ms: performance.now() - t0, heap_bytes: k.heapBytes() });
+        this.post({ type: 'ready', variant: 'wasm32', occt: k.version.occt, api: Number(k.version.api ?? 0), asi: k.version.asi ?? null, init_ms: performance.now() - t0, heap_bytes: k.heapBytes() });
         for (const m of this.queue.splice(0)) this.handle(m);
       },
       (e: unknown) => this.post({ type: 'fatal', error: String(e) }),

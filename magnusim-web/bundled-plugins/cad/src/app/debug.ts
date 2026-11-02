@@ -4,6 +4,7 @@
 import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
 import { checkClock } from '../features/assembly/check';
+import { recognitionOf } from '../kernel/recognition';
 import { moveHandleTest, type MoveHandleTestView } from '../features/move_body/handle';
 import { sectionArrowTest, type SectionArrowTestView } from '../features/section/handle';
 import type { Appearance } from '../lib/bridge';
@@ -39,6 +40,11 @@ export interface CadTestHandle {
   appearance?: CadAppearanceHandle;
   /** The assembly checks' time limit (ms; src/features/assembly/check.ts checkClock): an e2e sets it low to see a check stop. */
   readonly assemblyCheck: { limitMs: number };
+  /**
+   * The page's fillet and hole recognition limits (src/kernel/recognition.ts, over services.kernel):
+   * an e2e lowers maxFaces (RECOGNIZE_MAX_FACES) to see the over-limit words on a small body.
+   */
+  readonly recognition: { maxFaces: number };
   /** Move/copy body's handle in the view while its panel is open (src/features/move_body/handle.ts), or null: where its parts are. */
   readonly moveHandle: MoveHandleTestView | null;
   /** The section view's arrow in the view while the Section view panel is open (src/features/section/handle.ts), or null. */
@@ -98,6 +104,7 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
       return assistantTestHandle(services);
     },
     assemblyCheck: checkClock,
+    recognition: recognitionOf(services.kernel).limits,
     get moveHandle() {
       return moveHandleTest();
     },

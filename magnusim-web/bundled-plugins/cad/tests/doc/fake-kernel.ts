@@ -46,7 +46,7 @@ export class FakeKernel implements KernelAdapter {
   recycles = 0;
 
   async start() {
-    if (this.status.get().state !== 'ready') this.status.set({ state: 'ready', info: { occt: '7.9.3', variant: 'wasm32', ready_ms: 1, init_ms: 1, heap_bytes: this.heap }, heap_bytes: this.heap });
+    if (this.status.get().state !== 'ready') this.status.set({ state: 'ready', info: { occt: '7.9.3', variant: 'wasm32', api: 8, asi: '2026.1.1', ready_ms: 1, init_ms: 1, heap_bytes: this.heap }, heap_bytes: this.heap });
     return this.status.get().info!;
   }
 

@@ -185,8 +185,9 @@ with the host once for the page's life, and its chip goes in the dock.
 - Facade C ABI and ops: `p0/CONTRACT.md` and `src/types/kernel-protocol.ts`
   (`KernelOps` maps op -> params/result; the typed file is the one to read).
   Shape ids are integers owned by the worker; face/edge/vertex indices start at
-  0 and are stable per shape id. `version` returns `api: 7` (the contract below plus
-  the API 3 to API 7 tables at the end of this section).
+  0 and are stable per shape id. `version` returns `api: 8` and `asi: '2026.1.1'` (the
+  contract below plus the API 3 to API 8 tables at the end of this section); the worker's
+  `ready` message carries both, and so does `KernelReadyInfo`.
 - Worker protocol: `ready` | `fatal` | `result` (worker -> main), `call`
   (main -> worker, `bytes` transferred as `params.ptr/len`). Buffers come back
   as ArrayBuffers in the transfer list.
@@ -455,6 +456,29 @@ with the host once for the page's life, and its chip goes in the dock.
   Native reference values made with the plain rule moved: a loft through circles offset 1 mm
   in (1.2e-4), an invalid blend (1.2e-6). Not changed (not shown to the person): the thicken
   tool's sign, a split's piece order and `measure`'s body volume still use the plain rule.
+- **API 8 (Analysis Situs, 2026-11-02; `facade/asi_ops.cpp`, the only facade source compiled
+  against Analysis Situs' asiAlgo 2026.1.1, `kernel-build/asi/`; tests
+  `tests/kernel/kernel-api8-{recognize,suppress,nist}.test.ts`, `tests/kernel/recognition-client.test.ts`,
+  `e2e/cad-kernel-api8.spec.ts`; build e1c42b60 in `kernel-build/mk32.build.txt`).** Licences:
+  `LICENSES/README.md`.
+
+  | Op | What | Refusals (words) |
+  |---|---|---|
+  | `recognize {id, blends?, holes?, max_faces?, max_r?, holes_mode?}` | Fillets (`blends`: face, Analysis Situs' `r`, `r_min`/`r_max` exact on cylinders, tori (tube radius) and spheres, else 1 / the largest principal curvature over a 5 x 5 grid; `convex`, `kind` ordinary / vertex / cliff / uncertain, `chain`), `chains`, drilled `holes` (faces, `d_min`/`d_max` from the cylinders, `through`). Read-only on a work copy; a fresh adjacency graph per solid and algorithm; sorted by face, never by map order. `max_r` is RecognizeBlends' own limit: the set suppress_blends takes at R. | "no solid in this body (fillets and holes are found on solids only)"; "this body has 2,002 faces: fillets and holes are found on bodies of up to 2,000" (`RECOGNIZE_MAX_FACES`, before any work) |
+  | `suppress_blends {id, faces, budget_ms?}` | Every fillet up to R taken off as fillets (asiAlgo_SuppressBlendsInc) on a work copy, with a history that walks every input face to all its images; `cost` (the prediction below), `self_check`, `timings`. | not one solid; "N of the M faces are not fillets"; "the fillets up to R2 are 40 faces; 36 are picked"; "taking 404 fillet faces off as fillets on a body of 810 faces would take too long here (about 35 s)"; "the faces next to the fillets could not be rebuilt"; "no fillet could be taken off (a ring round a boss or a hole cannot be taken off as a fillet)" or "(the faces around them could not be rebuilt)"; "faces that were not picked were taken off"; "the result had faces with no source" |
+  | `debug_reshape {id, bspline?, split_closed?, tolerance_scale?}` | Tests only: an exporter-like copy (B-splines, closed faces split, tolerances scaled), no history. | "nothing to reshape: ..." |
+  | `version` | adds `asi: '2026.1.1'` | |
+
+  suppress_blends' budget: SuppressBlendsInc rebuilds the adjacency graph after every chain, so
+  its time grows faster than the chains (a comb of 404 one-face chains took 30 s, one of 604
+  84 s), and a running call cannot be stopped. Before it starts, the kernel predicts its time
+  from counts (chains at R, faces, picks, the graph's pair work before and after, chains among
+  free-form faces; fitted on 124 measured rows) and refuses over 1.4 s, so every accepted
+  measured run took at most 2.0 s (2.25 s for the whole op). `OP_TIMEOUTS.suppress_blends` and
+  `.recognize` are 60 s (`src/kernel/timeouts.ts`, with the measured numbers). The page's one
+  way to the op is `src/kernel/recognition.ts` (`recognitionOf(kernel).features(shape, query)`,
+  cached per shape, words for every refusal, the limit an e2e lowers through
+  `window.__CAD__.recognition`).
 
 ## 6. Document
 

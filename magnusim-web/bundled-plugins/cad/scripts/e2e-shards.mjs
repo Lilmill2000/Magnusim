@@ -16,6 +16,8 @@ export const SHARDS = {
     'e2e/cad-p1-document.spec.js',
     'e2e/cad-p1-doc-storage.spec.ts',
     'e2e/cad-p1-kernel-ops.spec.ts',
+    // Kernel API 8 in the Part's worker (Analysis Situs): ready {api: 8, asi}, recognize on part A built in the page.
+    'e2e/cad-kernel-api8.spec.ts',
     'e2e/cad-p1-leave-f5.spec.js',
     'e2e/cad-p1-ui-shell.spec.ts',
     'e2e/cad-p1-viewport-basics.spec.ts',

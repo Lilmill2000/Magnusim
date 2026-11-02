@@ -1,0 +1,207 @@
+// Fillets and drilled holes found by their shape (kernel API 8 `recognize`, Analysis Situs
+// asiAlgo), for every caller in the page: the selectors and Find (`fillet`, sized `hole`), the
+// Delete faces panel's Add by size, and Delete faces' build at its red exits ("the rest", the
+// second way). One client per kernel: answers are cached per shape and query (the newest 32
+// shapes), and dropped when the kernel restarts (every shape id dies then), as the selectors'
+// topo cache is. Every refusal comes back as words with its reason, never as an empty answer:
+// a body over the face limit, a body with no solid, a kernel below API 8, or the kernel's own
+// words when recognition failed. Callers add the body's name ("Body 1 has 2,412 faces: ...").
+// Owner: KERNEL-HARDENING.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import type { KernelAdapter, KernelCallError } from '../types/kernel';
+import type { RecognizeResult, RecognizedBlend, ShapeId } from '../types/kernel-protocol';
+import { RECOGNIZE_MAX_FACES } from './timeouts';
+
+/** The kernel contract revision that has `recognize` and `suppress_blends`. */
+export const RECOGNIZE_API = 8;
+/** Shapes kept. */
+export const RECOGNITION_CACHE_SHAPES = 32;
+
+export interface FeaturesQuery {
+  /** Fillets (default true). */
+  blends?: boolean;
+  /** Drilled holes (default true). */
+  holes?: boolean;
+  /**
+   * Analysis Situs' own radius limit: the fillets SuppressBlendsInc takes at R (suppress_blends
+   * runs at the largest picked r_max x 1.001). Default: every fillet (the body's box diagonal).
+   */
+  max_r?: number;
+  /** asiAlgo_RecognizeDrillHoles' mode (default 'soft'). */
+  holes_mode?: 'soft' | 'hard';
+}
+
+export interface FeaturesOptions {
+  /** The body's face count when the caller knows it: a body over the limit is refused without a kernel call. */
+  faces?: number | null;
+  /** Stops waiting (rejects with an AbortError). A running recognition is not cut off: its answer is still cached. */
+  signal?: AbortSignal;
+}
+
+/** Why fillets and holes could not be found on a body. */
+export type FeaturesRefusal =
+  /** More faces than the limit: `faces`, `limit`. */
+  | 'too_large'
+  /** A surface body (no solid). */
+  | 'not_solid'
+  /** The kernel answers an API below 8 (`api`). */
+  | 'old_kernel'
+  /** The kernel could not do it (`words` are its own). */
+  | 'failed';
+
+export type Features =
+  | { ok: true; result: RecognizeResult }
+  | { ok: false; reason: FeaturesRefusal; words: string; faces?: number; limit?: number; api?: number };
+
+export interface RecognitionClient {
+  /** Fillets, chains and drilled holes of `shape` (cached per shape and query), or the refusal in words. */
+  features(shape: ShapeId, query?: FeaturesQuery, opts?: FeaturesOptions): Promise<Features>;
+  /**
+   * The limits every call uses. `maxFaces` is RECOGNIZE_MAX_FACES; tests lower it (window.__CAD__.recognition)
+   * to show the over-limit words on a small body. Changing it drops nothing: it is part of the cache key.
+   */
+  readonly limits: { maxFaces: number };
+  /** How many recognize calls went to the kernel (tests). */
+  readonly calls: number;
+  clear(): void;
+}
+
+/** 2,412 */
+export const withCommas = (n: number): string => Math.round(n).toLocaleString('en-US');
+
+/** The kernel's own words for a body over the limit (facade.cpp opRecognize), so both refusals read the same. */
+export function tooLargeWords(faces: number, limit: number): string {
+  return `this body has ${withCommas(faces)} faces: fillets and holes are found on bodies of up to ${withCommas(limit)}`;
+}
+
+/** The words for a kernel too old to find fillets or holes (plan §3.2). */
+export function oldKernelWords(api: number): string {
+  return `This kernel cannot find fillets or holes (it answers API ${api}; they need API ${RECOGNIZE_API}).`;
+}
+
+const NOT_SOLID = 'no solid in this body (fillets and holes are found on solids only)';
+
+/**
+ * Whether a recognised blend counts as a fillet in the app: 'ordinary' and 'vertex' do; 'cliff'
+ * (tangent on one side only, such as engraved-text arcs) and 'uncertain' do not (decision D7).
+ */
+export function isFillet(b: Pick<RecognizedBlend, 'kind'>): boolean {
+  return b.kind === 'ordinary' || b.kind === 'vertex';
+}
+
+/** What a body has, for "matches nothing" words: its fillet faces (D7's fillets) and their radii, its holes and their bores. */
+export interface FeaturesSummary {
+  fillets: { faces: number; r_min: number | null; r_max: number | null };
+  holes: { count: number; d_min: number | null; d_max: number | null };
+}
+
+export function summaryOf(r: RecognizeResult): FeaturesSummary {
+  const fillets = r.blends.filter(isFillet);
+  const sized = r.holes.filter((h) => h.d_min !== null && h.d_max !== null);
+  const min = (v: number[]) => (v.length ? Math.min(...v) : null);
+  const max = (v: number[]) => (v.length ? Math.max(...v) : null);
+  return {
+    fillets: { faces: fillets.length, r_min: min(fillets.map((b) => b.r_min)), r_max: max(fillets.map((b) => b.r_max)) },
+    holes: { count: r.holes.length, d_min: min(sized.map((h) => h.d_min as number)), d_max: max(sized.map((h) => h.d_max as number)) },
+  };
+}
+
+function abortError(): Error {
+  const e = new Error('The search was stopped');
+  e.name = 'AbortError';
+  return e;
+}
+
+function keyOf(q: FeaturesQuery, maxFaces: number): string {
+  return [q.blends === false ? 0 : 1, q.holes === false ? 0 : 1, q.max_r ?? '', q.holes_mode ?? 'soft', maxFaces].join('|');
+}
+
+export function createRecognitionClient(kernel: KernelAdapter): RecognitionClient {
+  // shape -> query key -> answer. A Map keeps insertion order: the first key is the oldest shape.
+  const cache = new Map<ShapeId, Map<string, Promise<Features>>>();
+  const limits = { maxFaces: RECOGNIZE_MAX_FACES };
+  let calls = 0;
+  const clear = () => cache.clear();
+  kernel.onRespawn(clear);
+
+  const touch = (shape: ShapeId): Map<string, Promise<Features>> => {
+    let m = cache.get(shape);
+    if (m) cache.delete(shape);
+    else m = new Map();
+    cache.set(shape, m);
+    while (cache.size > RECOGNITION_CACHE_SHAPES) cache.delete(cache.keys().next().value as ShapeId);
+    return m;
+  };
+
+  const ask = async (shape: ShapeId, q: FeaturesQuery, maxFaces: number): Promise<Features> => {
+    const api = kernel.status.get().info?.api;
+    if (typeof api === 'number' && api > 0 && api < RECOGNIZE_API) return { ok: false, reason: 'old_kernel', api, words: oldKernelWords(api) };
+    calls++;
+    try {
+      const params = { id: shape, max_faces: maxFaces, ...(q.blends === false ? { blends: false } : {}), ...(q.holes === false ? { holes: false } : {}), ...(q.max_r !== undefined ? { max_r: q.max_r } : {}), ...(q.holes_mode ? { holes_mode: q.holes_mode } : {}) };
+      const r = await kernel.call('recognize', params);
+      return { ok: true, result: r.result };
+    } catch (err) {
+      const e = err as KernelCallError;
+      const words = String(e?.message ?? err);
+      if (e?.kind === 'input') {
+        if (/^unknown op 'recognize'/.test(words)) {
+          const said = typeof api === 'number' && api > 0 ? api : RECOGNIZE_API - 1;
+          return { ok: false, reason: 'old_kernel', api: said, words: oldKernelWords(said) };
+        }
+        if (words === NOT_SOLID) return { ok: false, reason: 'not_solid', words };
+        const m = /^this body has ([\d,]+) faces: fillets and holes are found on bodies of up to ([\d,]+)$/.exec(words);
+        if (m) return { ok: false, reason: 'too_large', words, faces: Number(m[1].replace(/,/g, '')), limit: Number(m[2].replace(/,/g, '')) };
+      }
+      // Anything else (an OCCT failure, a stopped or restarted kernel) is not kept: the next call asks again.
+      throw Object.assign(new Error(words), { kind: e?.kind, refusal: { ok: false, reason: 'failed', words } satisfies Features });
+    }
+  };
+
+  const features = async (shape: ShapeId, query: FeaturesQuery = {}, opts: FeaturesOptions = {}): Promise<Features> => {
+    if (opts.signal?.aborted) throw abortError();
+    const maxFaces = limits.maxFaces;
+    if (typeof opts.faces === 'number' && opts.faces > maxFaces) return { ok: false, reason: 'too_large', faces: opts.faces, limit: maxFaces, words: tooLargeWords(opts.faces, maxFaces) };
+    const key = keyOf(query, maxFaces);
+    const m = touch(shape);
+    let p = m.get(key);
+    if (!p) {
+      p = ask(shape, query, maxFaces);
+      m.set(key, p);
+      p.catch(() => {
+        if (cache.get(shape)?.get(key) === p) cache.get(shape)!.delete(key);
+      });
+    }
+    let answer: Features;
+    try {
+      answer = await p;
+    } catch (err) {
+      const refusal = (err as { refusal?: Features }).refusal;
+      if (!refusal) throw err;
+      answer = refusal;
+    }
+    if (opts.signal?.aborted) throw abortError();
+    return answer;
+  };
+
+  return {
+    features,
+    limits,
+    get calls() {
+      return calls;
+    },
+    clear,
+  };
+}
+
+const clients = new WeakMap<KernelAdapter, RecognitionClient>();
+
+/** The page's recognition client (one per kernel adapter: the services' kernel and every feature build's ctx.kernel share it). */
+export function recognitionOf(kernel: KernelAdapter): RecognitionClient {
+  let c = clients.get(kernel);
+  if (!c) {
+    c = createRecognitionClient(kernel);
+    clients.set(kernel, c);
+  }
+  return c;
+}
