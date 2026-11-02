@@ -5,7 +5,8 @@
 //          above 80 features (30 on a local turn) or past the budget;
 //   full   also each feature's inputs in its tool's fields (inputs: null and a summary for a type
 //          no tool writes yet) and its expression fields; cut at the budget, the rest brief with
-//          "more": "get_model feature <name>";
+//          "more": "get_model feature <name>"; a red Delete faces also its `rest` (the faces its
+//          panel's Add the rest adds, as face selectors);
 //   one feature  in full; a sketch with its plane, the solver's state now, its regions in short
 //          (sketch/regions.ts shortRegions; regions full: each of them, 60, with its place, depth,
 //          box and bounds), its open ends and dangling entities, by the sketch tool's names (r.top,
@@ -41,7 +42,7 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
-import { axisText, refBodiesOf, type RefBodies } from './feature-tools';
+import { axisText, faceText, refBodiesOf, type RefBodies } from './feature-tools';
 import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { enclosureKept, KEPT_WORDS } from '../features/enclosure/kept';
@@ -209,6 +210,10 @@ export function fullFeature(services: AppServices, s: DocState, f: Feature, at: 
   const inputs = inputsOf(f, services, at);
   row.inputs = inputs;
   if (!inputs) row.summary = summaryOf(f, services);
+  // A red Delete faces: the faces that would make its pick whole, as its panel's Add the rest adds them
+  // (kernel API 8; edit with faces + rest to add them).
+  const out = s.rebuild.outputs[f.id];
+  if (f.type === 'delete_faces' && out?.type === 'delete-faces' && out.restRefs.length && s.rebuild.features[f.id]?.state === 'error') row.rest = out.restRefs.map((r) => faceText(s, f.body, r, at));
   const values = valuesOf(f, services);
   if (values.length) row.values = values.slice(0, 200);
   // Its choice and on/off fields, as edit_feature sets them (choices.ts; help features has their words).

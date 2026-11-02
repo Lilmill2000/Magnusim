@@ -237,6 +237,9 @@ describe('parity: every person-facing capability has an Assistant tool and field
     expect(UI.deleteBodies).toEqual({ kind: 'reach', tool: 'direct', field: 'kind', value: 'delete_body' });
     expect(FEATURE_FIELDS.delete_body.bodies).toEqual({ kind: 'reach', tool: 'direct', field: 'bodies' });
     expect(AI_TOOLS.direct['kind=delete_body']).toEqual({ kind: 'control', table: 'ui', method: 'deleteBodies' });
+    // Delete faces' build version (kernel API 8): set by create() for the person and the Assistant alike, never by hand.
+    expect(FEATURE_FIELDS.delete_faces.version).toMatchObject({ kind: 'auto' });
+    expect(FEATURE_FIELDS.press_pull.version).toMatchObject({ kind: 'auto' });
   });
 
   it('the other way (Daniel: parity both ways): every sketch entity kind the Assistant draws has a person sketch tool, a registered command, that draws it', async () => {

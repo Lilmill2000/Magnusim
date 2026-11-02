@@ -15,20 +15,31 @@
 // part. A wavy loft rounded R1, whose check boolean returned the whole result, is shown with
 // "check the result" instead of refused for the body's own volume; a defeature too slow for the
 // boolean skips it (said so) instead of meeting the kernel limit.
+// Kernel API 8 (Delete faces version 2, every new one): where OCCT's heal stays refused, a pick of
+// every fillet up to its largest radius is taken off as fillets (Analysis Situs). The T-block is now
+// the sharp T-block (32,000 mm³) with every face keeping its name, and a later Fillet on its restored
+// edges builds; a Delete faces saved without a version keeps OCCT's refusal and says a new one may
+// do it, also when a Part saved that way is opened. The corpus under version 2: every body that was
+// right stays the same body, no wrong body is kept, and the bodies newly right are listed with
+// their sharp volumes (the T, I, plus, comb and Z blocks at R1 and R2).
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forgetBreps } from '../../../src/features/import/feature';
 import { checkHeal, healRefused, retryHoldBack, UNCHECKED, type HealCheck } from '../../../src/features/p2/heal-check';
 import { pickFace } from '../../../src/features/p2/refs';
+import { deleteFacesOn } from '../../../src/features/delete_faces/feature';
+import { LEGACY_WORDS } from '../../../src/features/delete_faces/plan';
+import { FakeFolder } from '../../doc/fake-files';
+import { FAMILY, poly, polyArea } from '../../kernel/asi-lib';
 import { refPlaneDef } from '../../../src/features/refgeom/defs';
 import { PATTERN_DEFS } from '../../../src/features/pattern/defs';
 import type { DeleteFacesFeature } from '../../../src/types/doc';
-import type { BuildContext, FeatureTypeDef } from '../../../src/types/doc-service';
+import type { BuildContext, BuiltBody, DeleteFacesOutput, FeatureTypeDef } from '../../../src/types/doc-service';
 import type { OpHistory, TopoResult } from '../../../src/types/kernel-protocol';
 import { extentFor } from '../../doc/blocks';
 import { importFixture, type RealDoc } from '../p2/real-doc';
-import { addFeature, addSketch, close, edgeRef, faceRef, onPlane, openSolids, regionsOf, SketchBuilder, topo, volume } from '../solids/solids-real';
+import { addFeature, addSketch, close, edgeRef, faceRef, onPlane, openSolids, regionsOf, settle, SketchBuilder, topo, volume } from '../solids/solids-real';
 
 const open: RealDoc[] = [];
 afterEach(() => {
@@ -36,8 +47,8 @@ afterEach(() => {
   forgetBreps();
 });
 
-async function part() {
-  const r = await openSolids();
+async function part(folder?: FakeFolder) {
+  const r = await openSolids(folder ? { folder } : {});
   for (const d of PATTERN_DEFS) if (!r.doc.features.get(d.type)) r.doc.features.register(d as unknown as FeatureTypeDef);
   open.push(r);
   return r;
@@ -74,14 +85,34 @@ async function roundAll(r: RealDoc, radius: number) {
   return fl.id;
 }
 
-/** Delete faces `pick` (indices on the body now) of the one body. */
-async function deleteFaces(r: RealDoc, pick: (f: TopoResult['faces'][number]) => boolean) {
+/** Delete faces `pick` (indices on the body now) of the one body; `legacy`: as saved before version 2 (no version). */
+async function deleteFaces(r: RealDoc, pick: (f: TopoResult['faces'][number]) => boolean, legacy = false) {
   const b = bodies(r)[0];
   const t = await topo(r, b);
   const idx = t.faces.filter(pick).map((f) => f.i);
   const refs = await Promise.all(idx.map((i) => faceRef(r, b, i)));
-  const d = await addFeature(r, 'delete_faces', { body: b.id, faces: refs } as Partial<DeleteFacesFeature> as Record<string, unknown>);
+  const d = await addFeature(r, 'delete_faces', { body: b.id, faces: refs, ...(legacy ? { version: undefined } : {}) } as Partial<DeleteFacesFeature> as Record<string, unknown>);
   return { ...d, count: idx.length };
+}
+
+/** The T-block as the person builds it (a bar 60 x 40 x 10 on a stem 20 x 40 x 10, joined), Fillet 1 of every face R2: the feature ids, and the sharp T-block's faces by name. */
+async function roundedT(r: RealDoc) {
+  const bar = await block(r, [0, 0, 10], [60, 40, 10]);
+  const stem = await block(r, [20, 0, 0], [20, 40, 10], 'join');
+  expect(close(await volume(r, bodies(r)[0].id), 32000)).toBe(true);
+  const sharp = await faceSignatures(r);
+  const fillet = await roundAll(r, 2);
+  return { bar, stem, fillet, sharp };
+}
+
+/** Each face of the one body by its name: type, plane normal, centroid and area (rounded), so two faces' names cannot swap unseen. */
+async function faceSignatures(r: RealDoc): Promise<Map<string, string>> {
+  const b = bodies(r)[0];
+  const t = await r.kernel.call('topo', { id: b.shape, edges: 'none', vertices: 'none', face_bbox: 'none', face_mass: true });
+  const round = (v: readonly number[] | null | undefined) => (v ? v.map((x) => Math.round(x * 1e6) / 1e6 + 0).join(',') : '-');
+  const out = new Map<string, string>();
+  for (const f of t.result.faces) out.set(b.names!.faces[f.i], `${f.type} ${round(f.normal)} ${round(f.centroid)} ${Math.round((f.area ?? 0) * 1e6) / 1e6}`);
+  return out;
 }
 
 describe('Delete faces through the document: a heal past the gap is tried again, else refused with the body unchanged', () => {
@@ -105,15 +136,43 @@ describe('Delete faces through the document: a heal past the gap is tried again,
     expect(new Set(names).size).toBe(8);
   }, 120_000);
 
-  it('T-block (a bar on a stem), Fillet of every face R2, Delete faces of every blend: red, words, volume and faces as before', async () => {
+  it('T-block (a bar on a stem), Fillet of every face R2, Delete faces of every blend: OCCT cannot, the fillets come off as fillets: the sharp T-block, every face keeping its name', async () => {
     const r = await part();
-    const bar = await block(r, [0, 0, 10], [60, 40, 10]);
-    await block(r, [20, 0, 0], [20, 40, 10], 'join');
-    expect(close(await volume(r, bodies(r)[0].id), 32000)).toBe(true);
-    const fillet = await roundAll(r, 2);
+    const t = await roundedT(r);
+    const del = await deleteFaces(r, (f) => f.type !== 'plane');
+    expect(del.count).toBe(40);
+    // Was red: "healing filled more than the gap ...: it would add 16,395 mm³ over faces you kept (...)".
+    expect(del.status).toMatchObject({ state: 'ok', note: "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly" });
+    expect(del.status.message).toBeUndefined();
+    expect(del.rb.outputs[del.id]).toEqual({ type: 'delete-faces', how: 'fillets', rest: [], restRefs: [] } satisfies DeleteFacesOutput);
+    const after = bodies(r)[0];
+    expect(after.faces).toBe(10);
+    expect(close(await volume(r, after.id), 32000)).toBe(true);
+    // Every one of the 10 faces, by its name, is the face it was before Fillet 1 (decision D10: by name, not by plane).
+    const now = await faceSignatures(r);
+    expect(now.size).toBe(10);
+    expect([...now.keys()].sort()).toEqual([...t.sharp.keys()].sort());
+    for (const [name, sig] of t.sharp) expect(now.get(name), name).toBe(sig);
+    // A later Fillet on the two restored concave edges (named by their faces, E:A&B) builds: R1.5 adds 2 x 40 x 2.25 (1 - pi/4).
+    const b = bodies(r)[0];
+    const tp = await topo(r, b);
+    const concave = tp.edges.filter((e) => e.type === 'line' && e.first && e.last && near(e.first[2], 10) && near(e.last[2], 10) && (near(e.first[0], 20) || near(e.first[0], 40)) && near(e.first[0], e.last[0]));
+    expect(concave).toHaveLength(2);
+    const refs = await Promise.all(concave.map((e) => edgeRef(r, b, e.i)));
+    for (const ref of refs) expect(ref.name).toMatch(/^E:F:[^&]+&F:/);
+    const f2 = await addFeature(r, 'fillet', { body: b.id, edges: refs, faces: [], radius: '1.5 mm' });
+    expect(f2.status).toMatchObject({ state: 'ok' });
+    expect(f2.status.message).toBeUndefined();
+    expect(await volume(r, bodies(r)[0].id)).toBeCloseTo(32000 + 2 * 40 * 2.25 * (1 - Math.PI / 4), 6);
+  }, 120_000);
+
+  it('the same T-block with a Delete faces saved before version 2: red as before, with what a new Delete faces may do; volume and faces as before', async () => {
+    const r = await part();
+    const { bar, fillet } = await roundedT(r);
     const before = bodies(r)[0];
     const v0 = await volume(r, before.id);
-    const del = await deleteFaces(r, (f) => f.type !== 'plane');
+    const del = await deleteFaces(r, (f) => f.type !== 'plane', true);
+    expect((r.doc.state.get().doc.features.find((f) => f.id === del.id) as DeleteFacesFeature).version).toBeUndefined();
     const st = del.status;
     expect(st.state).toBe('error');
     const fname = r.doc.state.get().doc.features.find((f) => f.id === fillet)!.name;
@@ -121,7 +180,8 @@ describe('Delete faces through the document: a heal past the gap is tried again,
     // What the heal would have done (fill both sides of the stem: 16,395 mm³ more, on faces the bar and the stem made), that nothing changed, and the way that works.
     expect(st.message).toMatch(/^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add 16,39\d\.\d* mm³ over faces you kept \(/);
     expect(st.message).toContain(barName);
-    expect(st.message).toContain(`; the body is unchanged. To take the whole fillet off, delete ${fname} instead`);
+    expect(st.message).toContain(`; the body is unchanged. To take the whole fillet off, delete ${fname} instead. ${LEGACY_WORDS}`);
+    expect(st.message!.endsWith(LEGACY_WORDS)).toBe(true);
     const after = bodies(r)[0];
     expect(after.shape).toBe(before.shape);
     expect(after.faces).toBe(before.faces);
@@ -150,6 +210,112 @@ describe('Delete faces through the document: a heal past the gap is tried again,
     expect(lp.status.state).toBe('error');
     expect(lp.status.message).toMatch(/OCCT could not take those faces off Body 1 cleanly \(healing filled more than the gap the deleted faces leave: it would add .* over faces you kept/);
   }, 120_000);
+});
+
+describe('Delete faces version 2 through the document: still refused in words, the rest, a Part saved before version 2', () => {
+  it('a T-block with a hole in its bar, every face R2: the hole rims are rings, so taking the fillets off fails too: red with both reasons, the body unchanged', async () => {
+    const d = await part();
+    await block(d, [0, 0, 10], [60, 40, 10]);
+    await block(d, [20, 0, 0], [20, 40, 10], 'join');
+    await hole(d, 10, 20, 4, 20);
+    const fillet = await roundAll(d, 2);
+    const before = bodies(d)[0];
+    const v0 = await volume(d, before.id);
+    const del = await deleteFaces(d, (f) => f.type !== 'plane' && !(f.type === 'cylinder' && near(f.radius ?? 0, 4)));
+    expect(del.count).toBe(42);
+    expect(del.status.state).toBe('error');
+    const fname = d.doc.state.get().doc.features.find((f) => f.id === fillet)!.name;
+    expect(del.status.message).toMatch(
+      new RegExp(`^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add [\\d,.]+ mm³ over faces you kept \\([^)]*\\); taking them off as fillets did not work either: 1 of the 42 fillet faces could not be taken off \\(a ring round a boss or a hole cannot be taken off as a fillet\\); the body is unchanged\\. To take the whole fillet off, delete ${fname} instead$`),
+    );
+    // Nothing more to add: no rest.
+    expect(del.rb.outputs[del.id]).toBeUndefined();
+    const after = bodies(d)[0];
+    expect(after.shape).toBe(before.shape);
+    expect(await volume(d, after.id)).toBeCloseTo(v0, 6);
+  }, 180_000);
+
+  it('a T-block with all its fillets but one picked: red with every fillet up to R2 and how many are picked; Add the rest (the panel and get_model) makes it the sharp T-block', async () => {
+    const r = await part();
+    await roundedT(r);
+    const b = bodies(r)[0];
+    const t = await topo(r, b);
+    const round = t.faces.filter((f) => f.type !== 'plane').map((f) => f.i);
+    expect(round).toHaveLength(40);
+    const v0 = await volume(r, b.id);
+    // All but the first: OCCT's heal fills the cavities, two goes cannot, and the pick is not every fillet up to R2.
+    const del = await deleteFaces(r, (f) => round.slice(1).includes(f.i));
+    expect(del.status.state).toBe('error');
+    expect(del.status.message).toMatch(/^Delete faces 1 failed: .*\. Every fillet up to R2 on Body 1 is 40 faces and 39 are picked: with all 40, Delete faces can take them off as fillets$/);
+    expect(del.status.message).not.toContain('taking them off as fillets did not work');
+    const out = del.rb.outputs[del.id] as DeleteFacesOutput;
+    expect(out).toMatchObject({ type: 'delete-faces', how: null, rest: [round[0]] });
+    expect(out.restRefs.map((x) => x.name)).toEqual([b.names!.faces[round[0]]]);
+    expect(await volume(r, bodies(r)[0].id)).toBeCloseTo(v0, 6);
+    // Add the rest: the faces field gains the rest's references, as the panel's button does.
+    const ses = r.doc.beginEdit(del.id);
+    const f = ses.draft as DeleteFacesFeature;
+    ses.update({ faces: [...f.faces, ...out.restRefs] } as Partial<DeleteFacesFeature>);
+    ses.commit();
+    const rb = await settle(r.doc);
+    expect(rb.features[del.id]).toMatchObject({ state: 'ok', note: "Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly" });
+    expect(close(await volume(r, bodies(r)[0].id), 32000)).toBe(true);
+  }, 180_000);
+
+  it('a Part saved with a Delete faces before version 2 (its JSON written here without the version) opens red with the legacy words, the body as Fillet 1 left it; with version 2 the same file opens ok', async () => {
+    const r = await part();
+    const { fillet } = await roundedT(r);
+    const v0 = await volume(r, bodies(r)[0].id);
+    const del = await deleteFaces(r, (f) => f.type !== 'plane');
+    expect(del.status.state).toBe('ok');
+    await r.doc.flush();
+    const saved = new Map([...r.folder.entries].map(([rel, e]) => [rel, new TextDecoder().decode(e.bytes)]));
+    const rel = [...saved.keys()].find((k) => k.endsWith('model.json'))!;
+    const model = JSON.parse(saved.get(rel)!);
+    const df = (model.doc ?? model).features.find((x: { type: string }) => x.type === 'delete_faces');
+    expect(df.version).toBe(2);
+    for (const legacy of [true, false]) {
+      if (legacy) delete df.version;
+      else df.version = 2;
+      const folder = new FakeFolder();
+      for (const [k, text] of saved) folder.put(k, new TextEncoder().encode(k === rel ? JSON.stringify(model) : text));
+      const d = await part(folder);
+      // openRealDoc loads before the solid feature types are registered: read the Part again with them.
+      await d.doc.reload();
+      const rb = await settle(d.doc);
+      const fname = d.doc.state.get().doc.features.find((f) => f.id === fillet)!.name;
+      if (legacy) {
+        expect(d.doc.state.get().doc.features.find((f) => f.id === del.id)).not.toHaveProperty('version');
+        expect(rb.features[del.id].state).toBe('error');
+        expect(rb.features[del.id].message).toMatch(new RegExp(`; the body is unchanged\\. To take the whole fillet off, delete ${fname} instead\\. ${LEGACY_WORDS}$`));
+        expect(await volume(d, rb.bodies[0].id)).toBeCloseTo(v0, 6);
+      } else {
+        expect(rb.features[del.id]).toMatchObject({ state: 'ok' });
+        expect(close(await volume(d, rb.bodies[0].id), 32000)).toBe(true);
+      }
+    }
+  }, 180_000);
+
+  it('a version-less L-block (OCCT right in two goes) opens as it was made: ok, 36,000 mm³, the same names', async () => {
+    const r = await part();
+    await block(r, [0, 0, 0], [60, 40, 20]);
+    await block(r, [30, 0, 10], [30, 40, 10], 'cut');
+    await roundAll(r, 2);
+    const del = await deleteFaces(r, (f) => f.type !== 'plane', true);
+    expect(del.status).toMatchObject({ state: 'ok' });
+    expect(del.status.note).toBeUndefined();
+    const names = bodies(r)[0].names!.faces;
+    await r.doc.flush();
+    const folder = new FakeFolder();
+    for (const [rel, e] of r.folder.entries) folder.put(rel, e.bytes);
+    const d = await part(folder);
+    await d.doc.reload();
+    const rb = await settle(d.doc);
+    expect(rb.features[del.id]).toMatchObject({ state: 'ok' });
+    expect(rb.outputs[del.id]).toBeUndefined();
+    expect(close(await volume(d, rb.bodies[0].id), 36000)).toBe(true);
+    expect(rb.bodies[0].names!.faces).toEqual(names);
+  }, 180_000);
 });
 
 // ---------------------------------------------------------------- the rule on the kernel corpus
@@ -561,4 +727,109 @@ describe('the heal check on the real kernel: no right removal refused', () => {
       expect(check, name).toMatchObject({ lost: [], covered: [], unchecked: null });
     }
   }, 120_000);
+});
+
+// ---------------------------------------------------------------- the corpus under version 2
+
+describe('the corpus under version 2: the right bodies stay, nothing wrong is kept, the newly right listed', () => {
+  /** Delete faces version 2 (or legacy) on a kernel-built body, as its build runs once the faces are found. */
+  async function v2(K: ReturnType<typeof kit>, input: number, picks: number[], legacy = false) {
+    const body: BuiltBody = { id: 'b_k', shape: input, valid: true, feature: 'f_k', names: null };
+    const f = { id: 'f_d', type: 'delete_faces', name: 'Delete faces 1', body: 'b_k', faces: [], ...(legacy ? {} : { version: 2 }) } as DeleteFacesFeature;
+    const ctx = { ...K.ctx, units: { units: () => ({ length: 'mm', angle: 'deg' }) }, bodyName: () => 'Body 1', featureName: () => null, doc: { features: [] } } as unknown as BuildContext;
+    return deleteFacesOn(f, ctx, body, picks);
+  }
+  /** The symmetric difference of two shapes (mm³). */
+  async function symdiff(K: ReturnType<typeof kit>, a: number, b: number) {
+    let s = 0;
+    for (const [x, y] of [[a, b], [b, a]]) {
+      const d = await K.c('boolean', { op: 'cut', targets: [x], tools: [y] });
+      if (!d.empty) s += await K.vol(d.id);
+      await K.ctx.release([d.id]);
+    }
+    return s;
+  }
+
+  it('the bodies rounded round a cavity: OCCT right in two goes stays so; the T-block, which it fills, is now the sharp T-block; never a wrong body', async () => {
+    const r = await part();
+    const K = kit(r);
+    const cases: [string, () => Promise<number>, number, 'today' | 'fillets'][] = [
+      ['L-block', async () => K.cut(await K.box(60, 40, 20), [await K.box(31, 42, 11, [30, -1, 10])]), 2, 'today'],
+      ['U-channel', async () => K.cut(await K.box(60, 40, 20), [await K.box(20, 42, 11, [20, -1, 10])]), 2, 'today'],
+      ['T-block', async () => K.fuse(await K.box(60, 40, 10, [0, 0, 10]), [await K.box(20, 40, 10, [20, 0, 0])]), 2, 'fillets'],
+      ['pocket', async () => K.cut(await K.box(60, 40, 20), [await K.box(20, 10, 9, [20, 15, 12])]), 3, 'today'],
+      ['slot', async () => K.cut(await K.box(60, 40, 20), [await K.box(62, 10, 5, [-1, 15, 15])]), 1, 'today'],
+      ['side step', async () => K.cut(await K.box(60, 40, 20), [await K.box(11, 42, 6, [50, -1, 15])]), 1, 'today'],
+    ];
+    for (const [name, make, rad, how] of cases) {
+      const s = await make();
+      const sharp = await K.vol(s);
+      const f = await K.blend('fillet', s, (await K.edges(s)).map((e) => e.i), rad);
+      const res = await v2(K, f.id, f.blends);
+      expect(res.ok, name).toBe(true);
+      if (!res.ok) continue;
+      expect(res.note ?? null, name).toBe(how === 'fillets' ? `Taken off as fillets up to R${rad} by Analysis Situs: OCCT's heal could not do it cleanly` : null);
+      expect(await symdiff(K, res.bodies[0].shape, s), name).toBeLessThan(1e-6 * sharp);
+      // Saved before version 2: the same as before kernel API 8 (the T-block red, the others the same body).
+      const old = await v2(K, f.id, f.blends, true);
+      expect(old.ok ? (old.warning ?? 'ok') : 'red', `${name} legacy`).toBe(how === 'today' ? 'ok' : 'red');
+    }
+  }, 180_000);
+
+  it('the right removals that never reach the second way keep their body exactly (holes, bosses, a pocket, chamfers, ring fillets, a wedge tip)', async () => {
+    const r = await part();
+    const K = kit(r);
+    const B = () => K.box(60, 40, 20);
+    const boss = await K.fuse(await K.box(60, 40, 10), [await K.cyl(10, 10, [30, 20, 10])]);
+    const ring = (await K.edges(boss)).find((e) => e.type === 'circle' && near(e.center![2], 10))!.i;
+    const lblock = await K.cut(await K.box(60, 40, 20), [await K.box(31, 42, 11, [30, -1, 10])]);
+    const concave = (await K.edges(lblock)).find((e) => along(e, 1) && near(e.mid![0], 30) && near(e.mid![2], 10))!.i;
+    const cases: [string, number, number[], number][] = [];
+    {
+      const s = await K.cut(await B(), [await K.cyl(4, 22, [20, 20, -1])]);
+      cases.push(['through hole r4', s, (await K.faces(s)).filter((f) => f.type === 'cylinder').map((f) => f.i), 48000]);
+    }
+    {
+      const s = await K.fuse(await K.box(60, 40, 10), [await K.box(20, 10, 6, [20, 15, 10])]);
+      cases.push(['rect boss', s, (await K.faces(s)).filter((f) => f.centroid![2] > 10 + 1e-6).map((f) => f.i), 24000]);
+    }
+    {
+      const f = await K.blend('fillet', boss, [ring], 3);
+      cases.push(['ring fillet R3 at a boss foot', f.id, f.blends, 24000 + Math.PI * 100 * 10]);
+      const ch = await K.blend('chamfer', lblock, [concave], 4);
+      cases.push(['concave chamfer 4', ch.id, ch.blends, 36000]);
+      const cf = await K.blend('fillet', lblock, [concave], 2);
+      cases.push(['concave fillet R2', cf.id, cf.blends, 36000]);
+    }
+    for (const [name, input, picks, want] of cases) {
+      const res = await v2(K, input, picks);
+      expect(res.ok, name).toBe(true);
+      if (!res.ok) continue;
+      expect(res.note, name).toBeUndefined();
+      expect(await K.vol(res.bodies[0].shape), name).toBeCloseTo(want, 3);
+    }
+  }, 180_000);
+
+  it('newly right: the T, I, plus, comb and Z blocks with every edge R1 or R2, which OCCT fills, are their sharp blocks', async () => {
+    const r = await part();
+    const K = kit(r);
+    const listed: Record<string, number> = {};
+    for (const name of ['T', 'I', 'plus', 'comb', 'Z']) {
+      const d = FAMILY[name];
+      const want = polyArea(d.xz) * d.depth;
+      for (const rad of [1, 2]) {
+        const sharp = await K.c('extrude', { profile: poly(d.xz), extent: { kind: 'blind', d: d.depth } });
+        const f = await K.blend('fillet', sharp.id, (await K.edges(sharp.id)).map((e) => e.i), rad);
+        const res = await v2(K, f.id, f.blends);
+        expect(res.ok ? res.note : (res as { message: string }).message, `${name} R${rad}`).toBe(`Taken off as fillets up to R${rad} by Analysis Situs: OCCT's heal could not do it cleanly`);
+        if (!res.ok) continue;
+        const v = await K.vol(res.bodies[0].shape);
+        expect(Math.abs(v / want - 1), `${name} R${rad}`).toBeLessThan(1e-9);
+        expect(await symdiff(K, res.bodies[0].shape, sharp.id), `${name} R${rad}`).toBeLessThan(1e-6 * want);
+        listed[`${name} R${rad}`] = Math.round(v * 1e6) / 1e6;
+      }
+    }
+    // The sharp volumes (mm³): the body each Delete faces now gives.
+    expect(listed).toEqual(Object.fromEntries(['T', 'I', 'plus', 'comb', 'Z'].flatMap((n) => [1, 2].map((rad) => [`${n} R${rad}`, Math.round(polyArea(FAMILY[n].xz) * FAMILY[n].depth * 1e6) / 1e6]))));
+  }, 180_000);
 });
