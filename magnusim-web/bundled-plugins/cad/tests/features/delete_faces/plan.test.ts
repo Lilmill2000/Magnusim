@@ -9,9 +9,12 @@
 // sentences, and never that set as the rest; the words say the rings stop it (review 2026-11-02).
 // Taking them off as fillets refused for its time (kernel API 9's words): how long it would take
 // and the 1.4 s Delete faces allows, never "did not work either" for a run that was not started.
+// Kernel API 9 (round 2): a heal its budget stopped, or not started where it would grow small curved
+// faces far past their size, in words; the note of rounds taken off with the corner faces of other
+// fillets at their ends (the third way), and its words when it is refused.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, ringWords, secondWayFailed, type RedPlanInput } from '../../../src/features/delete_faces/plan';
+import { cornersFailed, cornersNote, farWords, filletsNote, groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, ringWords, secondWayClause, secondWayFailed, stoppedWords, type RedPlanInput } from '../../../src/features/delete_faces/plan';
 import type { RecognizeResult, RecognizedBlend } from '../../../src/types/kernel-protocol';
 
 const MM = { length: 'mm', angle: 'deg' } as const;
@@ -172,5 +175,31 @@ describe('planRed', () => {
     expect(secondWayFailed('taking 404 fillet faces off as fillets on a body of 810 faces would take about 3 min; Delete faces allows 0.35 s for taking fillets off as fillets')).toBe(
       '; taking them off as fillets would take about 3 min (404 fillet faces on a body of 810 faces), and Delete faces allows 0.35 s for taking fillets off as fillets; the body is unchanged',
     );
+  });
+
+  it('kernel API 9: a heal its budget stopped says how long it had, and the small curved faces it grows far past their size; one not started says why', () => {
+    expect(stoppedWords({ budget_ms: 16000, far_grown: [] })).toBe("OCCT's heal did not finish in 16.0 s");
+    expect(stoppedWords({ budget_ms: 2500, far_grown: range(0, 16) })).toBe("OCCT's heal did not finish in 2.5 s: it grows 16 small curved faces far past their size");
+    expect(stoppedWords({ budget_ms: 2500, far_grown: [7] })).toBe("OCCT's heal did not finish in 2.5 s: it grows 1 small curved face far past its size");
+    expect(stoppedWords({ budget_ms: 0, far_grown: range(0, 16), skipped: true })).toBe("OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish");
+    expect(farWords(1200)).toBe('1,200 small curved faces far past their size');
+  });
+
+  it("the notes: why another way did it, OCCT's heal tried or not run", () => {
+    expect(filletsNote(2, MM)).toBe("Taken off as fillets up to R2 by Analysis Situs: OCCT's heal could not do it cleanly");
+    expect(filletsNote(2, MM, 4)).toBe("Taken off as fillets up to R2 by Analysis Situs: OCCT's heal was not run, as it would grow 4 small curved faces far past their size and not finish");
+    expect(cornersNote(8, 8, 16)).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal could not do it");
+    expect(cornersNote(8, 8, 16, 16)).toBe("Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish");
+    expect(cornersNote(1, 1, 2)).toBe("Taken off with the 2 corner faces where it meets other fillets: OCCT's heal could not do it");
+    expect(cornersNote(12, 3, 1)).toBe("Taken off in 3 goes, with the 1 corner face where they meet other fillets: OCCT's heal could not do it");
+  });
+
+  it('every way tried is said once, then that the body is unchanged once', () => {
+    expect(secondWayClause('the result was not a valid solid')).toBe('; taking them off as fillets did not work either: the result was not a valid solid');
+    expect(secondWayFailed('the result was not a valid solid')).toBe(`${secondWayClause('the result was not a valid solid')}; the body is unchanged`);
+    expect(cornersFailed(16, 'the kernel could not compare the result with the body before it')).toBe(
+      '; taking them off with the 16 corner faces where they meet other fillets did not work either: the kernel could not compare the result with the body before it',
+    );
+    expect(cornersFailed(1, 'x')).toBe('; taking them off with the 1 corner face where they meet other fillets did not work either: x');
   });
 });

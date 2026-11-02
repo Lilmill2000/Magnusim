@@ -37,7 +37,9 @@
 // faces in smaller groups (one by one, or blends at corners first) was never right on them.
 // Delete faces version 2 (kernel API 8) then tries taking the fillets off as fillets (Analysis
 // Situs): its result passes checkHeal and three more rules, taken, bound and surface (the last
-// section: checkFilletsOff), never used on OCCT's heal.
+// section: checkFilletsOff), never used on OCCT's heal. Kernel API 9: its third way (rounds with
+// the corner faces of other fillets at their ends, delete_faces/corners.ts) passes the same
+// checks with those corner faces counted as picked, but the taken rule's faces.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { LARGE_PART_FACES } from '../../kernel/timeouts';
@@ -686,9 +688,11 @@ export interface FilletsCheck {
  * Every check on a second way's result `out` (suppress_blends of `picked` on `body`, with
  * recognition at R `atR`; `suppressMs`: how long it took): its history, every picked face gone,
  * valid, the solids as many, then checkHeal (the full check), taken, the chain bound and the
- * surface rule (see the section's top). The result is not released here.
+ * surface rule (see the section's top). `takenRule: false` (Delete faces' third way,
+ * delete_faces/corners.ts) leaves out the taken rule's faces, never its volume bound or its
+ * "could not compare". The result is not released here.
  */
-export async function checkFilletsOff(ctx: BuildContext, body: BuiltBody, picked: readonly number[], out: { id: ShapeId; history?: OpHistory; valid?: boolean }, atR: RecognizeResult, opts: { suppressMs?: number } = {}): Promise<FilletsCheck> {
+export async function checkFilletsOff(ctx: BuildContext, body: BuiltBody, picked: readonly number[], out: { id: ShapeId; history?: OpHistory; valid?: boolean }, atR: RecognizeResult, opts: { suppressMs?: number; takenRule?: false } = {}): Promise<FilletsCheck> {
   const input = body.shape;
   const res: FilletsCheck = { refused: null, heal: null, taken: null, bound: null, surface: null, added: null };
   const refuse = (rule: FilletsRule, words: string): FilletsCheck => ({ ...res, refused: { rule, words } });
@@ -712,7 +716,7 @@ export async function checkFilletsOff(ctx: BuildContext, body: BuiltBody, picked
   const units = ctx.units.units();
   if (healRefused(res.heal)) return refuse('heal', healWords(res.heal, body, ctx));
   if (res.taken.unchecked) return refuse('taken', res.taken.unchecked);
-  if (res.taken.taken.length) return refuse('taken', `it would take material away from faces you kept (${listWords(body, res.taken.taken, ctx)})`);
+  if (opts.takenRule !== false && res.taken.taken.length) return refuse('taken', `it would take material away from faces you kept (${listWords(body, res.taken.taken, ctx)})`);
   const added = res.added ?? 0;
   const taken = res.taken.volume ?? 0;
   if (added > res.bound.addLimit) return refuse('bound', `the volume changed by ${formatVolume(added, units)}, more than the fillets hold (about ${formatVolume(res.bound.convex, units)})`);

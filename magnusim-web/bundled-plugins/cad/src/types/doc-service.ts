@@ -70,16 +70,18 @@ export type FeatureOutput = SketchOutput | ImportOutput | EnclosureOutput
 
 /**
  * What a Delete faces did, for its panel and get_model (kernel API 8): `how` is 'fillets' when
- * Analysis Situs took the faces off as fillets (OCCT's heal could not), null when it failed; on a
- * red result, "the rest": faces of the body just before it that would make the pick whole (the
- * rest of the fillet chains and holes the picked faces are part of, or every fillet up to the
- * largest picked radius), by index on that body and as references the panel's Add the rest adds
- * and get_model writes as face selectors. Published when the faces came off as fillets, and on a
- * failure with a rest (an ok heal publishes nothing: its result stays as before API 8).
+ * Analysis Situs took the faces off as fillets (OCCT's heal could not), 'corners' (kernel API 9)
+ * when the rounds came off one at a time with the corner faces of other fillets at their ends
+ * (delete_faces/corners.ts), null when it failed; on a red result, "the rest": faces of the body
+ * just before it that would make the pick whole (the rest of the fillet chains and holes the
+ * picked faces are part of, or every fillet up to the largest picked radius), by index on that
+ * body and as references the panel's Add the rest adds and get_model writes as face selectors.
+ * Published when the faces came off as fillets or with their corners, and on a failure with a rest
+ * (an ok heal publishes nothing: its result stays as before API 8).
  */
 export interface DeleteFacesOutput {
   type: 'delete-faces';
-  how: 'fillets' | null;
+  how: 'fillets' | 'corners' | null;
   rest: number[];
   restRefs: PersistentRef[];
 }

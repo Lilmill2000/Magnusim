@@ -3,7 +3,9 @@
 // plane of an origin plane with its offset and of a flat face, a tool body
 // kept or removed, the derived ids and default names of pieces, a target the
 // plane misses, an invalid piece with Try repair; Delete faces refusing a
-// result that kept a face it was asked to remove.
+// result that kept a face it was asked to remove, and giving OCCT's heal its
+// time budget (kernel API 9: 0.8 of the 20 s watchdog, 2.5 s where it would grow
+// a small curved face far past its size; far_skip only on a version 2 one).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { indexedNames } from '../../../src/naming/names';
@@ -134,12 +136,26 @@ describe('Delete faces build', () => {
         history: { faces: [0, 1, 2, 3].map((i) => ({ out: i, from: [{ shape: 1, face: i, how: 'modified' }] })), edges: [], deleted: [{ shape: 1, face: 4 }, { shape: 1, face: 5 }] },
       }));
     const r = await deleteFacesDef.build(del(), {}, ctxOf(k, [b('b_1', 1)], { doc }));
-    expect(k.calls.find((c) => c.op === 'defeature')!.params).toEqual({ id: 1, faces: [4, 5] });
+    expect(k.calls.find((c) => c.op === 'defeature')!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 16000, far_budget_ms: 2500 });
     expect(r).toMatchObject({ ok: true, removed: [] });
     if (r.ok) {
       expect(r.bodies[0]).toMatchObject({ id: 'b_1', shape: 9, valid: true });
       expect(r.bodies[0].names?.faces).toEqual([...names.faces.slice(0, 4), 'F:f_d:heal']);
     }
+    // A version 2 one (every new one) also asks the kernel not to start a heal that would grow a
+    // small curved face far past its size (it runs after the fillet ways); one repaired does not.
+    await deleteFacesDef.build(del({ version: 2 }), {}, ctxOf(k, [b('b_1', 1)], { doc }));
+    expect(k.calls.filter((c) => c.op === 'defeature').at(-1)!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 16000, far_budget_ms: 2500, far_skip: true });
+    await deleteFacesDef.build(del({ version: 2, repair: { fuzzy: 0.001 } }), {}, ctxOf(k, [b('b_1', 1)], { doc }));
+    expect(k.calls.filter((c) => c.op === 'defeature').at(-1)!.params).toEqual({ id: 1, faces: [4, 5], budget_ms: 16000, far_budget_ms: 2500 });
+  });
+
+  it('kernel API 9: a heal its budget stopped is red in words, with no shape made and the body unchanged', async () => {
+    const k = scriptKernel()
+      .on('topo', topo)
+      .on('defeature', () => ({ stopped: { budget_ms: 16000, after_ms: 16004, far_grown: [] } }));
+    const r = await deleteFacesDef.build(del(), {}, ctxOf(k, [b('b_1', 1)], { doc }));
+    expect(r).toEqual({ ok: false, message: "Delete faces 1 failed: OCCT's heal did not finish in 16.0 s; the body is unchanged" });
   });
 
   it('an invalid result offers Try repair once (ShapeFix); a failed repair offers nothing more', async () => {

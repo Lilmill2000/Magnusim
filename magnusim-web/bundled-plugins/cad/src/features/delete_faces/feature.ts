@@ -23,23 +23,36 @@
 //    when every fillet up to R holds rings (faces closing on themselves, which never come off as
 //    fillets), the words say so instead of offering that set.
 // Every result that is ok today stays as it is: the second way never runs before OCCT's heal.
+// Kernel API 9 (round 2): OCCT's heal runs with a time budget, 0.8 of the call's watchdog limit
+// (16 s; the kernel stops it at its next progress poll, kernel-build/occt-patches/0002), so a heal
+// that never ends is red in words ("OCCT's heal did not finish in 16.0 s") instead of the 20 s
+// watchdog stopping the worker. Where the heal would grow a kept curved face (not a plane,
+// cylinder, cone, sphere or torus) more than 4 times its size (the kernel's far_grown), the budget
+// is 2.5 s, and a version 2 Delete faces runs the fillet ways first and OCCT's heal after them
+// (FAR_HEAL_LAST): on a T-block rounded R2 and then R1 along it, the heal of the R1 rounds grows
+// the 16 small corner pieces at their ends 10 times their size and ran 568 s natively before it
+// failed, and one of its steps ran 13 s without a progress poll. At the red exits, after the second
+// way, the third way (corners.ts) takes each round off with the corner faces of other fillets at
+// its ends, one group at a time: ok with the note "Taken off one round at a time, with the 16
+// corner faces where they meet other fillets: ..." (output how 'corners'), else its words follow.
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
 import { recognitionOf } from '../../kernel/recognition';
 import { kernelLookup, refOfFace } from '../../naming';
 import { namesFromResult } from '../../naming/result';
-import { timeoutForFaces } from '../../kernel/timeouts';
+import { DEFAULT_TIMEOUT_MS, timeoutForFaces } from '../../kernel/timeouts';
 import type { DeleteFacesFeature, PersistentRef } from '../../types/doc';
 import type { BuildContext, BuiltBody, DeleteFacesOutput, FeatureBuildResult, FeatureTypeDef } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
-import type { RecognizeResult, ShapeId, SuppressBlendsResult } from '../../types/kernel-protocol';
+import type { DefeatureStopped, RecognizeResult, ShapeId, SuppressBlendsResult } from '../../types/kernel-protocol';
 import type { FaceNames } from '../../types/naming';
 import { checkFilletsOff, checkHeal, healRefused, healWords, retryHoldBack } from '../p2/heal-check';
 import { P2_ICONS } from '../p2/icons';
 import { makerOf, resolveRefs } from '../p2/refs';
 import { invalidWords, kernelWords, occtWords, repairFuzzy, shapeFix } from '../p2/repair';
-import { filletsNote, limitOf, planRed, readPick, SECOND_WAY_MAX_FACES, secondWayBudget, secondWayFailed } from './plan';
+import { cornersOff } from './corners';
+import { cornersFailed, cornersNote, filletsNote, limitOf, planRed, readPick, SECOND_WAY_MAX_FACES, secondWayBudget, secondWayClause, stoppedWords } from './plan';
 
 /** Where today's heal ended red: its words, and what follows them when the second way is not tried. */
 interface Red {
@@ -49,10 +62,40 @@ interface Red {
   tail: string;
   /** The Fillet-N hint (". To take the whole fillet off, delete Fillet 1 instead"), or "". */
   hint: string;
+  /** The heal was not started (far_skip, FAR_HEAL_LAST): the kernel's answer. It runs after the fillet ways. */
+  skipped?: DefeatureStopped;
 }
 
 /** Today's build (OCCT's heal, two goes, Try repair): a result, or where it ended red. */
 type Today = { result: FeatureBuildResult } | { red: Red };
+
+/** OCCT's heal gets this share of the call's watchdog limit as its budget (kernel API 9 budget_ms). */
+export const HEAL_BUDGET_SHARE = 0.8;
+/** The heal's budget (ms) where it would grow a kept curved face far past its size (far_budget_ms). */
+export const FAR_HEAL_BUDGET_MS = 2500;
+/**
+ * Where the heal would grow a kept curved face far past its size, a version 2 Delete faces that is
+ * not repaired runs the fillet ways first and OCCT's heal (with FAR_HEAL_BUDGET_MS) only when both
+ * refuse (far_skip). Measured: no body of the heal corpus (127 cases, the 82 ok today among them) or
+ * of the other Delete faces tests has such a face; each of the 19 measured ones that has (T, L, U,
+ * plus, box, I and Z blocks rounded twice, either order) had a heal that did not finish in 20 s,
+ * the app's watchdog stop today. false keeps OCCT's heal first there too: the
+ * app's T-block (R2, then R1 along it) then ends ok after about 17.5 s in Node, as one step of the
+ * heal runs 13 s without a progress poll before the budget can stop it.
+ */
+export const FAR_HEAL_LAST = true;
+
+const healBudgetMs = (timeoutMs: number | undefined) => Math.round(HEAL_BUDGET_SHARE * (timeoutMs ?? DEFAULT_TIMEOUT_MS));
+
+/** The Fillet-N hint: when every face comes from one fillet or chamfer, deleting it instead. */
+function makerHint(ctx: BuildContext, body: BuiltBody, indices: readonly number[]): string {
+  const makers = [...new Set(indices.map((i) => makerOf(ctx.doc.features, body.names?.faces[i] ?? '')))];
+  const maker = makers.length === 1 && makers[0] && (makers[0].type === 'fillet' || makers[0].type === 'chamfer') ? makers[0] : null;
+  return maker ? `. To take the whole ${maker.type} off, delete ${maker.name} instead` : '';
+}
+
+/** The fillet ways may run on this Delete faces (version 2, not repaired): then a far-grown heal runs after them. */
+const filletWays = (f: DeleteFacesFeature) => f.version === 2 && !f.repair;
 
 export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, never>> = {
   type: 'delete_faces',
@@ -89,22 +132,33 @@ export const deleteFacesDef: FeatureTypeDef<DeleteFacesFeature, Record<string, n
 
 /** The build once its faces are found (`indices` on body.shape): today's heal, then its red exits. Tests run it on kernel-built bodies. */
 export async function deleteFacesOn(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody, indices: number[], refWarning: string | null = null): Promise<FeatureBuildResult> {
-  const today = await healBuild(f, ctx, body, indices, refWarning);
+  const today = await healBuild(f, ctx, body, indices, refWarning, FAR_HEAL_LAST && filletWays(f));
   if ('result' in today) return today.result;
   return redExit(f, ctx, body, indices, refWarning, today.red);
 }
 
-/** OCCT's defeature, the completeness check, checkHeal and the two goes, Try repair: the build before kernel API 8, unchanged. */
-async function healBuild(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody, indices: number[], refWarning: string | null): Promise<Today> {
+/**
+ * OCCT's defeature, the completeness check, checkHeal and the two goes, Try repair: the build before
+ * kernel API 8, with API 9's time budget (`farLast`: a heal that would grow a kept curved face far
+ * past its size is not started, and red with `skipped`).
+ */
+async function healBuild(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody, indices: number[], refWarning: string | null, farLast: boolean): Promise<Today> {
   const timeoutMs = timeoutForFaces('defeature', await ctx.faces(body.shape));
   let r;
   const t0 = performance.now();
   try {
-    r = await ctx.kernel.call('defeature', { id: body.shape, faces: indices }, timeoutMs ? { timeoutMs } : {});
+    const budget = { budget_ms: healBudgetMs(timeoutMs), far_budget_ms: FAR_HEAL_BUDGET_MS, ...(farLast ? { far_skip: true } : {}) };
+    r = await ctx.kernel.call('defeature', { id: body.shape, faces: indices, ...budget }, timeoutMs ? { timeoutMs } : {});
   } catch (err) {
     const k = (err as KernelCallError).kind;
     if (k === 'occt' || k === 'input' || k === 'internal') return { red: { head: `${f.name} failed: ${kernelWords(err)}`, tail: '', hint: '' } };
     throw err;
+  }
+  // Stopped by its budget, or not started (far_skip): nothing was made, the body is unchanged.
+  const stopped = r.result.stopped;
+  if (stopped) {
+    const hint = makerHint(ctx, body, indices);
+    return { red: { head: `${f.name} failed: ${stoppedWords(stopped)}`, tail: `; the body is unchanged${hint}`, hint, ...(stopped.skipped ? { skipped: stopped } : {}) } };
   }
   let out = r.result;
   // Every face asked for must be gone: OCCT leaves a face it cannot remove in place with only a warning.
@@ -143,9 +197,7 @@ async function healBuild(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBo
     }
   }
   if (!healed) {
-    const makers = [...new Set(indices.map((i) => makerOf(ctx.doc.features, body.names?.faces[i] ?? '')))];
-    const maker = makers.length === 1 && makers[0] && (makers[0].type === 'fillet' || makers[0].type === 'chamfer') ? makers[0] : null;
-    const hint = maker ? `. To take the whole ${maker.type} off, delete ${maker.name} instead` : '';
+    const hint = makerHint(ctx, body, indices);
     return { red: { head: `${f.name} failed: ${healWords(heal, body, ctx)}`, tail: `; the body is unchanged${hint}`, hint } };
   }
   if (heal.unchecked && !healRefused(heal)) notes.push(`${heal.unchecked}: check the result`);
@@ -172,9 +224,14 @@ async function healBuild(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBo
  * qualifies the second way; the rest, mixed and legacy words for any. Fillets are searched without
  * holes (their own, larger face limit), holes alone, for the rest only: fillet recognition that
  * cannot run (a body over its face limit, no solid, a kernel below API 8, its own failure) leaves
- * today's words, and on a body over the holes' limit the rest is the fillet chains' alone.
+ * today's words, and on a body over the holes' limit the rest is the fillet chains' alone. Then the
+ * third way (corners.ts) for a version 2 Delete faces whose picks are all fillets; and a heal not
+ * started (far_skip) runs now, after both, as today's build (its result, or its red words). The
+ * words say each way tried and why it refused, and once that the body is unchanged.
  */
-async function redExit(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody, picks: number[], refWarning: string | null, red: Red): Promise<FeatureBuildResult> {
+async function redExit(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody, picks: number[], refWarning: string | null, first: Red): Promise<FeatureBuildResult> {
+  let red = first;
+  const far = red.skipped?.far_grown.length ?? 0;
   const faces = await ctx.faces(body.shape);
   const recog = recognitionOf(ctx.kernel);
   const fillets = await recog.features(body.shape, { holes: false }, { faces });
@@ -189,16 +246,36 @@ async function redExit(f: DeleteFacesFeature, ctx: BuildContext, body: BuiltBody
   // Rings among every fillet up to R (only where a sentence about that set may be said).
   const rings = atR?.blends.length && faces <= SECOND_WAY_MAX_FACES ? await ringFaces(ctx, body.shape) : null;
   const plan = planRed({ version: f.version, repair: !!f.repair, picks, faces, rec, atR, rings, bodyName: ctx.bodyName(body.id), units: ctx.units.units() });
-  let message = `${red.head}${red.tail}`;
+  // What was tried after OCCT's heal and refused, each "; taking them off ... : <why>".
+  const tried: string[] = [];
   if (plan.takeOff && atR && plan.r !== null) {
     const sw = await takeOffAsFillets(ctx, body, picks, atR);
     if (sw.ok) {
       const names = namesFromResult(f.id, sw.out, new Map([[body.shape, body.names]]), { role: 'heal' });
       const output: DeleteFacesOutput = { type: 'delete-faces', how: 'fillets', rest: [], restRefs: [] };
-      return { ok: true, bodies: [{ id: f.body, shape: sw.out.id, valid: true, names }], removed: [], note: filletsNote(plan.r, ctx.units.units()), output, ...(refWarning ? { warning: refWarning } : {}) };
+      return { ok: true, bodies: [{ id: f.body, shape: sw.out.id, valid: true, names }], removed: [], note: filletsNote(plan.r, ctx.units.units(), far), output, ...(refWarning ? { warning: refWarning } : {}) };
     }
-    message = `${red.head}${secondWayFailed(sw.reason)}${red.hint}`;
+    tried.push(secondWayClause(sw.reason));
   }
+  // The third way: rounds with the corner faces of other fillets at their ends.
+  if (filletWays(f) && rec && rec.solids === 1 && faces <= SECOND_WAY_MAX_FACES && picks.length && !readPick(rec, picks).others.length) {
+    const cw = await cornersOff(ctx, body, picks, rec);
+    if (cw.ok) {
+      // Named step by step, as the two goes are (the faces each heal makes are F:<feature>:heal...).
+      let names = body.names;
+      for (const s of cw.steps) names = namesFromResult(f.id, s.result, new Map([[s.from, names]]), { role: 'heal' });
+      const output: DeleteFacesOutput = { type: 'delete-faces', how: 'corners', rest: [], restRefs: [] };
+      return { ok: true, bodies: [{ id: f.body, shape: cw.out.id, valid: true, names }], removed: [], note: cornersNote(picks.length, cw.groups, cw.riders.length, far), output, ...(refWarning ? { warning: refWarning } : {}) };
+    }
+    if (cw.tried) tried.push(cornersFailed(cw.riders.length, cw.reason));
+  }
+  // Not started (far_skip): OCCT's heal runs now, as today's build, with the far budget.
+  if (red.skipped) {
+    const again = await healBuild(f, ctx, body, picks, refWarning, false);
+    if ('result' in again) return again.result;
+    red = again.red;
+  }
+  let message = tried.length ? `${red.head}${tried.join('')}; the body is unchanged${red.hint}` : `${red.head}${red.tail}`;
   if (plan.sentences.length) message += `. ${plan.sentences.join('. ')}`;
   if (!plan.rest.length) return { ok: false, message };
   const output: DeleteFacesOutput = { type: 'delete-faces', how: null, rest: plan.rest, restRefs: await refsOf(ctx, body, plan.rest) };

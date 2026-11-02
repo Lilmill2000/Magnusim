@@ -5,6 +5,7 @@ import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
 import { checkClock } from '../features/assembly/check';
 import { recognitionOf } from '../kernel/recognition';
+import { cornersBudget } from '../features/delete_faces/corners';
 import { secondWayBudget } from '../features/delete_faces/plan';
 import { moveHandleTest, type MoveHandleTestView } from '../features/move_body/handle';
 import { sectionArrowTest, type SectionArrowTestView } from '../features/section/handle';
@@ -54,6 +55,12 @@ export interface CadTestHandle {
    * the budget's words on a small body; null is the kernel's own.
    */
   readonly secondWay: { budgetMs: number | null };
+  /**
+   * The time Delete faces' third way allows each group of a round and its corner faces
+   * (src/features/delete_faces/corners.ts cornersBudget, which may only lower its 2.5 s): an e2e
+   * lowers groupMs to see the third way's refusal; null is its own.
+   */
+  readonly corners: { groupMs: number | null };
   /** Move/copy body's handle in the view while its panel is open (src/features/move_body/handle.ts), or null: where its parts are. */
   readonly moveHandle: MoveHandleTestView | null;
   /** The section view's arrow in the view while the Section view panel is open (src/features/section/handle.ts), or null. */
@@ -115,6 +122,7 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
     assemblyCheck: checkClock,
     recognition: recognitionOf(services.kernel).limits,
     secondWay: secondWayBudget,
+    corners: cornersBudget,
     get moveHandle() {
       return moveHandleTest();
     },

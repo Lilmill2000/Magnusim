@@ -215,9 +215,60 @@ export function radiusWords(r: number, units: DocUnits): string {
   return units.length === 'mm' ? `R${n}` : `R${n} ${units.length}`;
 }
 
-/** The note of a Delete faces whose faces came off as fillets. */
-export function filletsNote(r: number, units: DocUnits): string {
-  return `Taken off as fillets up to ${radiusWords(r, units)} by Analysis Situs: OCCT's heal could not do it cleanly`;
+/**
+ * Kernel API 9: the kept curved faces next to the picked ones that OCCT's heal grows far past their
+ * size (the kernel's far_grown: faces that are not a plane, cylinder, cone, sphere or torus, grown
+ * more than 4 times their own size), the class whose heal ran for minutes: "16 small curved faces
+ * far past their size".
+ */
+export function farWords(n: number): string {
+  return `${withCommas(n)} small curved ${plural(n, 'face', 'faces')} far past ${plural(n, 'its', 'their')} size`;
+}
+
+/**
+ * Why another way did it, at the end of its note: OCCT's heal ran and could not, or (`far`: the
+ * kernel's far_grown count when the heal was not started) it was not run, as it would grow those
+ * faces far past their size and not finish.
+ */
+function healCouldNot(far: number, cleanly: boolean): string {
+  if (far > 0) return `OCCT's heal was not run, as it would grow ${farWords(far)} and not finish`;
+  return `OCCT's heal could not do it${cleanly ? ' cleanly' : ''}`;
+}
+
+/** The note of a Delete faces whose faces came off as fillets (`far`: see healCouldNot). */
+export function filletsNote(r: number, units: DocUnits, far = 0): string {
+  return `Taken off as fillets up to ${radiusWords(r, units)} by Analysis Situs: ${healCouldNot(far, true)}`;
+}
+
+/**
+ * The note of a Delete faces whose rounds came off with the corner faces of other fillets at their
+ * ends (corners.ts): `rounds` picked, taken off in `groups` goes, with `corners` corner faces
+ * (`far`: see healCouldNot). "Taken off one round at a time, with the 16 corner faces where they
+ * meet other fillets: OCCT's heal could not do it".
+ */
+export function cornersNote(rounds: number, groups: number, corners: number, far = 0): string {
+  const how = groups === 1 ? 'Taken off' : groups === rounds ? 'Taken off one round at a time,' : `Taken off in ${withCommas(groups)} goes,`;
+  return `${how} with the ${withCommas(corners)} corner ${plural(corners, 'face', 'faces')} where ${plural(rounds, 'it meets', 'they meet')} other fillets: ${healCouldNot(far, false)}`;
+}
+
+/**
+ * Kernel API 9: a heal its budget stopped (after "Delete faces 1 failed: "): "OCCT's heal did not
+ * finish in 16.0 s", with the kept curved faces it grows far past their size when there are any
+ * (": it grows 16 small curved faces far past their size"). One not started (far_skip) is never the
+ * last word (the build runs the heal after the other ways), but reads honestly if it is.
+ */
+export function stoppedWords(s: { budget_ms: number; far_grown: readonly number[]; skipped?: boolean }): string {
+  const n = s.far_grown.length;
+  if (s.skipped) return n ? `OCCT's heal was not run, as it would grow ${farWords(n)} and not finish` : "OCCT's heal was not run";
+  return `OCCT's heal did not finish in ${(s.budget_ms / 1000).toFixed(1)} s${n ? `: it grows ${farWords(n)}` : ''}`;
+}
+
+/**
+ * After today's red words when the third way (corners.ts) was tried and refused: "; taking them off
+ * with the 16 corner faces where they meet other fillets did not work either: <reason>".
+ */
+export function cornersFailed(corners: number, reason: string): string {
+  return `; taking them off with the ${withCommas(corners)} corner ${plural(corners, 'face', 'faces')} where they meet other fillets did not work either: ${reason}`;
 }
 
 /**
@@ -236,9 +287,14 @@ const BUDGET_WORDS = /^taking ([\d,]+ fillet faces?) off as fillets on a body of
  * taking fillets off as fillets; the body is unchanged".
  */
 export function secondWayFailed(reason: string): string {
+  return `${secondWayClause(reason)}; the body is unchanged`;
+}
+
+/** secondWayFailed without its "; the body is unchanged" (the build says that once, after every way tried). */
+export function secondWayClause(reason: string): string {
   const t = BUDGET_WORDS.exec(reason);
-  if (t) return `; taking them off as fillets would take ${t[3]} (${t[1]} on a body of ${t[2]}), and ${t[4]}; the body is unchanged`;
-  return `; taking them off as fillets did not work either: ${reason}; the body is unchanged`;
+  if (t) return `; taking them off as fillets would take ${t[3]} (${t[1]} on a body of ${t[2]}), and ${t[4]}`;
+  return `; taking them off as fillets did not work either: ${reason}`;
 }
 
 export const LEGACY_WORDS = 'This Delete faces was made before Delete faces could take fillets off as fillets: a new Delete faces of these faces may do it';

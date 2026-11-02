@@ -11,11 +11,16 @@
 // one fillet left out, get_model full lists the rest, and the Assistant's edit with faces plus rest
 // makes it right, as the person's Add the rest does. With less time allowed for taking them off as
 // fillets than they need (kernel API 9's budget words), the reply says how long it would take and
-// what Delete faces allows, in the person's words.
+// what Delete faces allows, in the person's words. Kernel API 9 (round 2): on a T-block rounded R2
+// across and then R1 along it, "Body 1 faces fillet <= 1 mm" (the person's Fillets up to 1 mm) comes
+// off with the corner pieces at the rounds' ends: the reply ok with the person's note, word for word,
+// get_model says it, and Body 1 is the T with only its R2 fillets (no 20 s stop).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { secondWayBudget } from '../../src/features/delete_faces/plan';
 import { pickFace } from '../../src/features/p2/refs';
+import { kernelLookup } from '../../src/naming';
+import { refOfEdge } from '../../src/naming/edges';
 import type { DeleteFacesOutput } from '../../src/types/doc-service';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
 import { bodyNamed, extrude, regions, Shapes, sketchOn } from './parts';
@@ -69,6 +74,18 @@ async function tProfile(x: AssistantHarness) {
   const sk = await sketchOn(x, 'Sketch 1', 'origin:front', s);
   await extrude(x, 'Extrude 1', regions(x, sk), { distance: '40 mm' });
   expect(bodyNamed(x, 'Body 1').volume).toBeCloseTo(32000, 3);
+}
+
+/** A Fillet named `name` of Body 1's edges along y (`along`) or across it, radius `radius`. */
+async function filletAlongY(x: AssistantHarness, name: string, along: boolean, radius: string) {
+  const b = bodyNamed(x, 'Body 1');
+  const t = (await x.services.kernel.call('topo', { id: b.shape, faces: 'none', edges: 'all', vertices: 'none', edge_ends: true })).result;
+  const near = (p: number, q: number) => Math.abs(p - q) < 1e-6;
+  const edges = t.edges.filter((e) => (e.type === 'line' && !!e.first && !!e.last && near(e.first[0], e.last[0]) && near(e.first[2], e.last[2]) && !near(e.first[1], e.last[1])) === along);
+  const refs = [];
+  for (const e of edges) refs.push(await refOfEdge(kernelLookup(x.services.kernel), b, e.i));
+  await x.add('fillet', { name, body: b.id, edges: refs, faces: [], radius });
+  return edges.length;
 }
 
 const statusOf = (x: AssistantHarness, name: string) => {
@@ -199,6 +216,34 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
       const r = await h.ok('direct', DIRECT({ edit: 'Delete faces 1', kind: 'delete_faces', faces: [...full.inputs.faces, ...full.rest] }));
       expect(r.data).toMatchObject({ feature: { name: 'Delete faces 1', state: 'ok', note: NOTE } });
       expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(32000, 6);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a T-block rounded R2 across and then R1 along it: fillets up to 1 mm come off with the corner pieces at the rounds' ends; the reply ok with the person's note, word for word, and Body 1 the T with only its R2 fillets",
+    async () => {
+      h = await assistantHarness();
+      await tBlock(h);
+      expect(await filletAlongY(h, 'Fillet 1', false, '2 mm')).toBe(16);
+      const reference = bodyNamed(h, 'Body 1').volume!;
+      expect(await filletAlongY(h, 'Fillet 2', true, '1 mm')).toBe(8);
+      const r = await h.ok('direct', DIRECT({ kind: 'delete_faces', faces: ['Body 1 faces fillet <= 1 mm'] }));
+      const NOTE_CORNERS = "Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish";
+      expect(r.data).toMatchObject({ feature: { name: 'Delete faces 1', type: 'delete_faces', state: 'ok', note: NOTE_CORNERS } });
+      // The person's feature, its 8 faces, and the note their panel and tree show.
+      const { id, st } = statusOf(h, 'Delete faces 1');
+      const made = h.doc.state.get().doc.features.find((f) => f.id === id) as { version?: number; faces: unknown[] };
+      expect(made.version).toBe(2);
+      expect(made.faces).toHaveLength(8);
+      expect(st.note).toBe(NOTE_CORNERS);
+      expect((h.doc.state.get().rebuild.outputs[id] as DeleteFacesOutput).how).toBe('corners');
+      expect(Math.abs(bodyNamed(h, 'Body 1').volume! / reference - 1)).toBeLessThan(1e-9);
+      expect(bodyNamed(h, 'Body 1').faces).toBe(26);
+      expect(h.services.kernel.status.get().respawns).toBe(0);
+      const full = (await h.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Record<string, unknown>;
+      expect(full).toMatchObject({ state: 'ok', note: NOTE_CORNERS });
+      expect(full.rest).toBeUndefined();
     },
     REAL_KERNEL_MS,
   );
