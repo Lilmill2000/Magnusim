@@ -4,12 +4,14 @@
 // straight rounds, 4 corner pieces), four 6 mm through holes and a counterbore (6 mm through,
 // 10 mm 5 deep) in its middle: 25 faces, 12 fillet faces, 5 drilled holes. Imported through
 // FILE > Import STEP as a person does. The same part as tests/assistant/rounded-block.ts.
+// Also (S5, Delete faces' box select): where on the page an R5 vertical faces the camera, and a
+// Ctrl+drag box there.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workspaceFrame } from './helpers';
+import { modelOnPage, workspaceFrame } from './helpers';
 
 export interface RoundedBlockMade {
   /** The STEP file, base64. */
@@ -75,4 +77,54 @@ export async function importRoundedBlock(page: Page, frame: FrameLocator): Promi
   await panel.locator('[data-panel-done]').click();
   await expect(panel).toHaveCount(0);
   return made;
+}
+
+/** The view is still (no camera transition running). */
+export async function viewStill(page: Page) {
+  await expect
+    .poll(() => workspaceFrame(page).evaluate(() => (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { state: { get(): { animating?: boolean } } } | null } } } } }).__CAD__.services.viewport.get().handle?.state.get().animating ?? true))
+    .toBe(false);
+}
+
+/**
+ * The page point in the middle of the R5 vertical that faces the camera (the block's corners at
+ * (5, 5), (75, 5), (5, 45), (75, 45), 9 mm up: under the R2 round the top).
+ */
+export async function r5OnPage(page: Page): Promise<[number, number]> {
+  await viewStill(page);
+  const cam = await workspaceFrame(page).evaluate(() => {
+    const c = (window as unknown as { __CAD__: { services: { viewport: { get(): { handle: { camera(): { position: number[]; target: number[] } } } } } } }).__CAD__.services.viewport.get().handle.camera();
+    return [c.position[0] - c.target[0], c.position[1] - c.target[1]];
+  });
+  let best: [number, number, number] = [5, 5, 9];
+  let score = -Infinity;
+  for (const [cx, cy] of [
+    [5, 5],
+    [75, 5],
+    [5, 45],
+    [75, 45],
+  ]) {
+    const ox = cx < 40 ? -Math.SQRT1_2 : Math.SQRT1_2;
+    const oy = cy < 25 ? -Math.SQRT1_2 : Math.SQRT1_2;
+    const s = ox * cam[0] + oy * cam[1];
+    if (s > score) {
+      score = s;
+      best = [cx + 5 * ox, cy + 5 * oy, 9];
+    }
+  }
+  return modelOnPage(page, best);
+}
+
+/** A Ctrl + left drag from `a` to `b` (page px): right to left, a box that takes what it touches. */
+export async function ctrlBox(page: Page, frame: FrameLocator, a: [number, number], b: [number, number]) {
+  await page.mouse.move(a[0], a[1]);
+  await page.keyboard.down('Control');
+  await page.mouse.down();
+  await page.mouse.move((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, { steps: 4 });
+  await page.mouse.move(b[0], b[1], { steps: 4 });
+  await expect(frame.locator('[data-box-select]')).toHaveCount(1);
+  await expect(frame.locator('[data-box-select]')).toHaveAttribute('data-box-mode', b[0] < a[0] ? 'touch' : 'enclose');
+  await page.mouse.up();
+  await page.keyboard.up('Control');
+  await expect(frame.locator('[data-box-select]')).toHaveCount(0);
 }

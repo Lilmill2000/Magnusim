@@ -137,6 +137,8 @@ export const SHARDS = {
     'e2e/cad-assembly-check.spec.ts',
     // Delete faces whose heal would fill past the gap (every blend of a rounded L-block): red, words, the body unchanged.
     'e2e/cad-delete-faces-heal.spec.ts',
+    // Delete faces' Add by size (Fillets up to, Holes up to; kernel API 8) and a Ctrl+drag box while its panel is open.
+    'e2e/cad-delete-faces-by-size.spec.ts',
   ],
   // The Part as a project geometry (gate:l2-cad and gate:l3-cad's specs) and CAD's start actions.
   link: [
