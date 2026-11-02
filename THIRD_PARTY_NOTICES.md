@@ -37,7 +37,11 @@ libraries:
   the Open CASCADE exception), including code under its own permissive notices:
   DELABELLA (MIT, Marcin Sokalski), flex's `FlexLexer.h` (BSD-3-Clause,
   University of California), David M. Gay's `strtod` (Lucent Technologies) and
-  Unicode conversion tables (Unicode, Inc.);
+  Unicode conversion tables (Unicode, Inc.); and Analysis Situs 2026.1.1's
+  asiAlgo, which finds fillets and drilled holes and takes fillets off
+  (BSD-3-Clause; Sergey Slyadnev, OPEN CASCADE SAS, Quaoar Studio LLC, Julia
+  Slyadneva), two of its files under OCCT's LGPL-2.1 with the Open CASCADE
+  exception;
 - `workspace/solver/planegcs.wasm`: FreeCAD's PlaneGCS sketch solver
   (LGPL-2.0-or-later) through the Salusoft89 `planegcs` wrapper
   (LGPL-2.1-or-later), with Eigen 3.4.0 (MPL-2.0) and Boost 1.86 headers
@@ -51,15 +55,11 @@ libraries:
 Their licence texts and notices are in the plugin's `LICENSES/`
 (`LICENSES/README.md` lists each one). The corresponding sources are pinned to
 exact upstream commits, with our patches and the scripts that rebuild both
-modules, in `kernel-build/` and `solver-build/`; `LICENSES/README.md` also says
-how to rebuild the plugin with a changed OCCT or PlaneGCS.
-
-The kernel's build (`kernel-build/asi/`) also holds 169 source files of
-Analysis Situs 2026.1.1's asiAlgo (BSD-3-Clause; Sergey Slyadnev, OPEN CASCADE
-SAS, Quaoar Studio LLC, Julia Slyadneva; two of its files under OCCT's
-LGPL-2.1 with the Open CASCADE exception), which it compiles and links. No
-kernel op calls them yet, so `mk32.wasm` holds none of their code. Their
-licences and copyright lines: `LICENSES/AnalysisSitus-BSD-3-Clause.txt`.
+modules, in `kernel-build/` and `solver-build/` (Analysis Situs: the 169 files
+the kernel compiles, as published, in `kernel-build/asi/`); `LICENSES/README.md`
+also says how to rebuild the plugin with a changed OCCT, Analysis Situs or
+PlaneGCS. Analysis Situs' licence and copyright lines:
+`LICENSES/AnalysisSitus-BSD-3-Clause.txt`.
 
 ## 2D Wind Tunnel plugin
 

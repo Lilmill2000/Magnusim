@@ -12,7 +12,7 @@ the page uses the app's font.
 |---|---|---|---|
 | Open CASCADE Technology 7.9.3 (the modeling kernel) | `workspace/kernel/mk32.wasm` | LGPL-2.1 with the Open CASCADE exception | `OCCT-LGPL-2.1.txt`, `OCCT-LGPL-EXCEPTION.txt` |
 | Code inside OCCT under other licences: DELABELLA (Marcin Sokalski), flex's `FlexLexer.h` (University of California), David M. Gay's `strtod` (Lucent Technologies), Unicode conversion tables (Unicode, Inc.) | inside `mk32.wasm` | MIT; BSD-3-Clause; Gay's permissive notice; the Unicode notice | `OCCT-third-party-notices.txt` |
-| Analysis Situs 2026.1.1, asiAlgo: fillet and drilled-hole recognition, fillet removal (169 files) | source in `kernel-build/asi/upstream/`, which the kernel build compiles and links; no kernel op calls it yet, so `mk32.wasm` holds none of it | BSD-3-Clause (Sergey Slyadnev, OPEN CASCADE SAS, Quaoar Studio LLC, Julia Slyadneva); `asiAlgo_UnifySameDomain.{h,cpp}`: LGPL-2.1 with the Open CASCADE exception | `AnalysisSitus-BSD-3-Clause.txt`; `OCCT-LGPL-2.1.txt`, `OCCT-LGPL-EXCEPTION.txt` |
+| Analysis Situs 2026.1.1, asiAlgo: fillet and drilled-hole recognition, fillet removal (169 files) | inside `workspace/kernel/mk32.wasm` (kernel API 8: `recognize`, `suppress_blends`); source in `kernel-build/asi/upstream/` | BSD-3-Clause (Sergey Slyadnev, OPEN CASCADE SAS, Quaoar Studio LLC, Julia Slyadneva); `asiAlgo_UnifySameDomain.{h,cpp}`: LGPL-2.1 with the Open CASCADE exception | `AnalysisSitus-BSD-3-Clause.txt`; `OCCT-LGPL-2.1.txt`, `OCCT-LGPL-EXCEPTION.txt` |
 | FreeCAD PlaneGCS (the sketch solver) and the Salusoft89 `planegcs` WebAssembly wrapper | `workspace/solver/planegcs.wasm` | LGPL-2.0-or-later (FreeCAD sources), LGPL-2.1-or-later (wrapper) | `PlaneGCS-LGPL-2.1.txt` |
 | Eigen 3.4.0 (built with `EIGEN_MPL2_ONLY`) | inside `planegcs.wasm` | MPL-2.0 | `Eigen-MPL-2.0.txt` |
 | Boost 1.86 headers | inside `planegcs.wasm` | BSL-1.0 | `Boost-BSL-1.0.txt` |
@@ -62,7 +62,7 @@ this plugin, pinned to exact upstream versions:
   (`build.sh`); `solver-build/SOURCES.md` lists every source with its version.
 - **Relinking:** each library is its own pair of files (`mk32.wasm` with
   `mk32.mjs`, `planegcs.wasm` with `planegcs.mjs`) that the workspace's workers
-  load at run time. To use a changed OCCT or PlaneGCS, change its source under
+  load at run time. To use a changed OCCT, Analysis Situs or PlaneGCS, change its source under
   `$CAD_BUILD_ROOT` (or add a patch), run `kernel-build/build.sh` or
   `solver-build/build.sh` on Linux or WSL, and the new pair replaces the old one
   in `workspace/kernel/` or `workspace/solver/`. Nothing else in the plugin has

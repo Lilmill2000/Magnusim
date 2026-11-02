@@ -51,7 +51,8 @@ test('the installed app: built page, a Part with CAD, its licences, the plugin\'
     for (const f of ['LICENSE', 'THIRD_PARTY_NOTICES.txt', 'bundled-plugins/cad/LICENSES/OCCT-LGPL-2.1.txt', 'page/index.html']) expect(existsSync(join(app, f)), f).toBe(true);
     expect(readFileSync(join(app, 'LICENSE'), 'utf8')).toMatch(/GNU GENERAL PUBLIC LICENSE\s+Version 3/);
     const notices = readFileSync(join(app, 'THIRD_PARTY_NOTICES.txt'), 'utf8');
-    for (const part of ['Open CASCADE Technology 7.9.3', 'PlaneGCS', 'kernel-build', 'LICENSES.chromium.html', 'react ', 'three ']) expect(notices, part).toContain(part);
+    for (const part of ['Open CASCADE Technology 7.9.3', 'Analysis Situs', 'PlaneGCS', 'kernel-build', 'LICENSES.chromium.html', 'react ', 'three ']) expect(notices, part).toContain(part);
+    for (const f of ['bundled-plugins/cad/LICENSES/AnalysisSitus-BSD-3-Clause.txt']) expect(existsSync(join(app, f)), f).toBe(true);
     expect(existsSync(join(app, 'python'))).toBe(false);
     const shipped = [...files(dir).keys()];
     // No hidden file or folder (a coding tool's own files start with a dot), no agent notes, no Python.

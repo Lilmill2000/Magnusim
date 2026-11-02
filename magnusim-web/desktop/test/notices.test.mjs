@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { compatible, copiedFromWords, licenceRows, noticesText } from '../scripts/notices.mjs';
+import { fileURLToPath } from 'node:url';
+import { cadSection, compatible, copiedFromWords, licenceRows, noticesText } from '../scripts/notices.mjs';
 
 const ROOT = mkdtempSync(join(tmpdir(), 'magnusim-cad-notices-'));
 after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -87,5 +88,18 @@ describe('noticesText', () => {
     assert.ok(!/commit/.test(text.split('It ships the software below')[0]), 'no commit named');
     for (const line of text.split('Its source is the\n')[1].split('\n\n')[0].split('\n')) assert.ok(line.length <= 78, line);
     assert.equal(copiedFromWords({ repo: 'R', label: 'development version 1 (2026-01-01)', changed: 3 }), "Magnusim's development version 1 (2026-01-01), R (with 3 files changed from it)");
+  });
+});
+
+describe("Magnusim CAD's installer notices, from the repository's CAD section", () => {
+  it('name what mk32.wasm holds since kernel API 8: Analysis Situs and its four copyright holders, in the kernel bullet', () => {
+    const section = cadSection(fileURLToPath(new URL('../../../THIRD_PARTY_NOTICES.md', import.meta.url)));
+    const kernel = /^- `workspace\/kernel\/mk32\.wasm`:([\s\S]*?)(?=^- )/m.exec(section);
+    assert.ok(kernel, section.slice(0, 400));
+    const bullet = kernel[1].replace(/\s+/g, ' ');
+    for (const part of ['Open CASCADE Technology 7.9.3', "Analysis Situs 2026.1.1's asiAlgo", 'BSD-3-Clause', 'Sergey Slyadnev', 'OPEN CASCADE SAS', 'Quaoar Studio LLC', 'Julia Slyadneva', "OCCT's LGPL-2.1"]) assert.ok(bullet.includes(part), part);
+    assert.ok(!/holds none of their code|No kernel op calls them yet/.test(section), 'the API 7 wording is gone');
+    const text = noticesText({ version: '0.5.0', commit: 'abc123', repo: 'https://example.org/repo', cad: section, rows: [], electron: '44.9.3' });
+    assert.ok(text.replace(/\s+/g, ' ').includes("Analysis Situs 2026.1.1's asiAlgo"), 'the installer text names Analysis Situs');
   });
 });

@@ -7,3 +7,5 @@
 *.webp binary
 *.png binary
 *.ico binary
+# The vendored Analysis Situs files, byte for byte (kernel-build/asi/FILES.sha256 checks them).
+magnusim-web/bundled-plugins/cad/kernel-build/asi/upstream/** -text
