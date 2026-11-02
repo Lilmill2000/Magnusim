@@ -434,6 +434,13 @@ comes on). Rename the result, for example to "Fluid".
   radii and areas. Its picks survive a rebuild that keeps their geometry.
 - **Mass properties**: volume, surface area, centroid and size, for each body
   and in total.
+- **Find**: type what to find ("Body 1 faces >Z", "edges of Base.end") and see
+  the matches lit, listed and counted; **Select all** selects them. Fillets and
+  drilled holes are found by their shape, whatever made them: "Body 1 faces
+  fillet <= 2 mm", "Body 1 faces hole <= 6 mm" (every face of the whole holes
+  with that bore). Fillets are found on bodies of up to 5,000 faces, holes on
+  bodies of up to 2,600; a larger body is refused in words that name both
+  limits, and you select its faces in the view instead.
 - **Check**: pick what to check at the top of the panel.
   - **Solids**: each body is "Valid", or its problems are listed by kind with
     where they are.

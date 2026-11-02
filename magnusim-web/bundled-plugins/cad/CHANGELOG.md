@@ -4,6 +4,25 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Find picks fillets and drilled holes by their shape.**
+- INSPECT > Find (and the Assistant's find) takes `fillet` (a round face
+  joining two faces smoothly, whatever made it; chamfers are not fillets),
+  `fillet 2 mm`, `fillet <= 2 mm` and `fillet >= 5 mm`, `hole 6 mm`,
+  `hole <= 6 mm` and `hole >= 10 mm` (every face of the whole drilled holes
+  with that bore, through holes too; holes that cross are one hole), and for
+  any round face `radius <= 3 mm` / `radius >= 3 mm`: "Body 1 faces fillet <= 2 mm" lists
+  "8 faces match ...", each row's type "fillet R2" or "hole Ø6 through", the
+  number of holes ("(4 holes)") and a reminder to check the lit faces. A
+  query that matches nothing says what the body has ("Body 1 has 4 fillet
+  faces, R5").
+- Fillets are found on bodies of up to 5,000 faces and drilled holes on bodies
+  of up to 2,600 (finding holes takes longer). A larger body is refused in
+  words that name both limits, the one the search met first ("Body 1 has 3,000
+  faces: holes are found on bodies of up to 2,600 faces and fillets on bodies
+  of up to 5,000 faces. Select its faces in the view instead."), and on a body
+  between the two its fillets are still found. The Assistant gets the same
+  words.
+
 **Delete faces picks fillets and holes by size.**
 - Its panel has **Fillets up to** [2 mm] **Add** and **Holes up to Ø** [6 mm]
   **Add**: they add the faces of the fillets up to that radius, or of the
@@ -37,7 +56,11 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 - When that fails too, the red text says why after the heal's words ("...;
   taking them off as fillets did not work either: 1 of the 42 fillet faces
   could not be taken off (a ring round a boss or a hole cannot be taken off as
-  a fillet); the body is unchanged").
+  a fillet); the body is unchanged"). Delete faces allows 1.4 s for taking
+  fillets off as fillets: when it would take longer, it is not started and the
+  red text says how long ("...; taking them off as fillets would take about
+  6.5 s (100 fillet faces on a body of 410 faces), and Delete faces allows
+  1.4 s for taking fillets off as fillets; the body is unchanged").
 - A red Delete faces names the faces that would make the pick whole ("Every
   fillet up to R2 on Body 1 is 40 faces and 39 are picked: with all 40, Delete
   faces can take them off as fillets", or the rest of the fillets and holes

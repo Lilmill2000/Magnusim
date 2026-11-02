@@ -502,7 +502,7 @@ with the host once for the page's life, and its chip goes in the dock.
   measured run took at most 3.0 s (3.1 s for the whole op: the roots of a pin-fin heat sink, read 2.7x low). `OP_TIMEOUTS.suppress_blends` and
   `.recognize` are 60 s (`src/kernel/timeouts.ts`, with the measured numbers). The page's one
   way to the op is `src/kernel/recognition.ts` (`recognitionOf(kernel).features(shape, query)`,
-  cached per shape, words for every refusal, the limit an e2e lowers through
+  cached per shape and query, words for every refusal, the limits an e2e lowers through
   `window.__CAD__.recognition`).
 - **API 9 (defeature's time budget, 2026-11-02; `facade/facade.cpp` `opDefeature`,
   `kernel-build/occt-patches/0002-defeature-trim-progress.patch`; the speed hunk in
@@ -520,8 +520,19 @@ with the host once for the page's life, and its chip goes in the dock.
 
   The adjacency graph is 2.5-3.7x faster on bodies whose faces carry many edges (a 5,000-face
   prism's 2.3 s graph now 0.6 s) with the same answers; `suppress_blends`' cost model was refitted
-  on it (the budget stays 1.4 s). The page still sends `max_faces` (`RECOGNIZE_MAX_FACES`, 2,000)
-  and no defeature budget until its own step uses them.
+  on it (the budget stays 1.4 s). The page sends both face limits (`RECOGNIZE_MAX_FILLET_FACES`
+  5,000 and `RECOGNIZE_MAX_HOLE_FACES` 2,600 in `src/kernel/timeouts.ts`, with the measured bodies
+  that bind them) and asks for holes only where it needs them: Find's `fillet` filter, Add by size's
+  Fillets up to and Delete faces' second way search fillets alone (`{holes: false}`), a sized
+  `hole` filter and Holes up to holes alone (`{blends: false}`), and Delete faces' rest adds the
+  holes when the body is within their limit. A body over a limit is refused before any kernel call
+  in the kernel's words, both limits named, the one the search ran into first ("Body 1 has 3,000
+  faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000
+  faces"), to the person and the Assistant alike (its `detail` carries `over`, `limit` and both
+  `limits`). A red Delete faces whose fillets `suppress_blends` refuses for its time says so in
+  the kernel's words ("taking them off as fillets would take about 6.5 s (100 fillet faces on a
+  body of 410 faces), and Delete faces allows 1.4 s for taking fillets off as fillets").
+  The page passes no defeature budget until its own step uses it.
 
 ## 6. Document
 
