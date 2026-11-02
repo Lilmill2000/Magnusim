@@ -39,7 +39,7 @@ import { checkFilletsOff, checkHeal, healRefused, healWords, retryHoldBack } fro
 import { P2_ICONS } from '../p2/icons';
 import { makerOf, resolveRefs } from '../p2/refs';
 import { invalidWords, kernelWords, occtWords, repairFuzzy, shapeFix } from '../p2/repair';
-import { filletsNote, limitOf, planRed, readPick, SECOND_WAY_MAX_FACES, secondWayFailed } from './plan';
+import { filletsNote, limitOf, planRed, readPick, SECOND_WAY_MAX_FACES, secondWayBudget, secondWayFailed } from './plan';
 
 /** Where today's heal ended red: its words, and what follows them when the second way is not tried. */
 interface Red {
@@ -254,7 +254,8 @@ export async function takeOffAsFillets(ctx: BuildContext, body: BuiltBody, picks
   let out: SuppressBlendsResult;
   const t0 = performance.now();
   try {
-    out = (await ctx.kernel.call('suppress_blends', { id: body.shape, faces: [...picks] })).result;
+    const budget = secondWayBudget.budgetMs;
+    out = (await ctx.kernel.call('suppress_blends', { id: body.shape, faces: [...picks], ...(budget !== null ? { budget_ms: budget } : {}) })).result;
   } catch (err) {
     const e = err as KernelCallError;
     if ((e.kind === 'occt' || e.kind === 'input' || e.kind === 'internal') && !e.oom) return { ok: false, reason: kernelWords(err) };

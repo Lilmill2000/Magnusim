@@ -5,6 +5,7 @@ import type { ViewState } from '@magnusim/workspace';
 import { assistantTestHandle } from '../assistant/install';
 import { checkClock } from '../features/assembly/check';
 import { recognitionOf } from '../kernel/recognition';
+import { secondWayBudget } from '../features/delete_faces/plan';
 import { moveHandleTest, type MoveHandleTestView } from '../features/move_body/handle';
 import { sectionArrowTest, type SectionArrowTestView } from '../features/section/handle';
 import type { Appearance } from '../lib/bridge';
@@ -47,6 +48,12 @@ export interface CadTestHandle {
    * small body.
    */
   readonly recognition: { maxFilletFaces: number; maxHoleFaces: number };
+  /**
+   * The time Delete faces' second way allows (src/features/delete_faces/plan.ts secondWayBudget:
+   * suppress_blends' own budget_ms, which may only lower its 1.4 s): an e2e lowers budgetMs to see
+   * the budget's words on a small body; null is the kernel's own.
+   */
+  readonly secondWay: { budgetMs: number | null };
   /** Move/copy body's handle in the view while its panel is open (src/features/move_body/handle.ts), or null: where its parts are. */
   readonly moveHandle: MoveHandleTestView | null;
   /** The section view's arrow in the view while the Section view panel is open (src/features/section/handle.ts), or null. */
@@ -107,6 +114,7 @@ export function exposeTestHandle(services: AppServices, version: string, link: L
     },
     assemblyCheck: checkClock,
     recognition: recognitionOf(services.kernel).limits,
+    secondWay: secondWayBudget,
     get moveHandle() {
       return moveHandleTest();
     },

@@ -32,6 +32,13 @@ export const R_SLACK = 1e-3;
 /** The second way runs on bodies of at most this many faces (where the full heal check runs). */
 export const SECOND_WAY_MAX_FACES = LARGE_PART_FACES;
 
+/**
+ * The time the second way allows (ms), as suppress_blends' own `budget_ms`, which may only lower
+ * the kernel's 1.4 s (kSuppressBudgetMs); null: the kernel's. Tests lower it
+ * (window.__CAD__.secondWay) to show the budget's words on a small body.
+ */
+export const secondWayBudget: { budgetMs: number | null } = { budgetMs: null };
+
 /** Analysis Situs' radius limit for picked fillets of largest radius r (mm). */
 export const limitOf = (r: number): number => r * (1 + R_SLACK);
 
@@ -213,8 +220,24 @@ export function filletsNote(r: number, units: DocUnits): string {
   return `Taken off as fillets up to ${radiusWords(r, units)} by Analysis Situs: OCCT's heal could not do it cleanly`;
 }
 
-/** After today's red words when the second way was tried and refused (`reason`: the kernel's or a rule's words). */
+/**
+ * suppress_blends' refusal of a run its cost model predicts over the kernel's budget, before it
+ * starts (asi_ops.cpp budgetWords): "taking 100 fillet faces off as fillets on a body of 410 faces
+ * would take about 6.5 s; Delete faces allows 1.4 s for taking fillets off as fillets".
+ */
+const BUDGET_WORDS = /^taking ([\d,]+ fillet faces?) off as fillets on a body of ([\d,]+ faces) would take (about [^;]+); (Delete faces allows [^;]+ for taking fillets off as fillets)$/;
+
+/**
+ * After today's red words when the second way was tried and refused (`reason`: the kernel's or a
+ * rule's words): "; taking them off as fillets did not work either: <reason>; the body is
+ * unchanged". A run refused for its time was never started, so its words say how long it would
+ * take and what Delete faces allows, as the kernel says them: "; taking them off as fillets would
+ * take about 6.5 s (100 fillet faces on a body of 410 faces), and Delete faces allows 1.4 s for
+ * taking fillets off as fillets; the body is unchanged".
+ */
 export function secondWayFailed(reason: string): string {
+  const t = BUDGET_WORDS.exec(reason);
+  if (t) return `; taking them off as fillets would take ${t[3]} (${t[1]} on a body of ${t[2]}), and ${t[4]}; the body is unchanged`;
   return `; taking them off as fillets did not work either: ${reason}; the body is unchanged`;
 }
 

@@ -9,9 +9,12 @@
 // for word, and Body 1 is the sharp T-block. With a hole in the bar (its rims are rings) that fails
 // too: the reply says why both failed and that the body is unchanged, in the person's words. With
 // one fillet left out, get_model full lists the rest, and the Assistant's edit with faces plus rest
-// makes it right, as the person's Add the rest does.
+// makes it right, as the person's Add the rest does. With less time allowed for taking them off as
+// fillets than they need (kernel API 9's budget words), the reply says how long it would take and
+// what Delete faces allows, in the person's words.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { secondWayBudget } from '../../src/features/delete_faces/plan';
 import { pickFace } from '../../src/features/p2/refs';
 import type { DeleteFacesOutput } from '../../src/types/doc-service';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
@@ -135,6 +138,30 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
       expect(r.error.message).toContain(message);
       expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(v0, 6);
       expect(bodyNamed(h, 'Body 1').faces).toBe(faces0);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "the T-block's fillets with less time allowed for taking them off as fillets than they need (lowered as the person's e2e lowers it): the reply says how long it would take and what Delete faces allows, the person's words, the body unchanged",
+    async () => {
+      h = await assistantHarness();
+      await tBlock(h);
+      const v0 = await roundAll(h);
+      secondWayBudget.budgetMs = 1;
+      try {
+        const r = (await h.call('direct', DIRECT({ kind: 'delete_faces', faces: ['feature Fillet 1 faces'] }))) as unknown as Failed;
+        expect(r.ok).toBe(false);
+        const message = r.error.detail.message;
+        expect(message).toMatch(
+          /^Delete faces 1 failed: healing filled more than the gap the deleted faces leave: it would add [\d,.]+ mm³ over faces you kept \([^)]*\); taking them off as fillets would take about \d\.\d s \(40 fillet faces on a body of 50 faces\), and Delete faces allows 0\.001 s for taking fillets off as fillets; the body is unchanged\. To take the whole fillet off, delete Fillet 1 instead$/,
+        );
+        // The person's words (the feature's own build: cad-delete-faces-heal.spec.ts heal-budget), whole: the reply carries them.
+        expect(r.error.message).toContain(message);
+        expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(v0, 6);
+      } finally {
+        secondWayBudget.budgetMs = null;
+      }
     },
     REAL_KERNEL_MS,
   );

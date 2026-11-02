@@ -7,9 +7,11 @@
 // a Delete faces saved before version 2 whose pick qualifies are told so. Rings (faces closing on
 // themselves, which SuppressBlendsInc never takes off) in every fillet up to R: none of those
 // sentences, and never that set as the rest; the words say the rings stop it (review 2026-11-02).
+// Taking them off as fillets refused for its time (kernel API 9's words): how long it would take
+// and the 1.4 s Delete faces allows, never "did not work either" for a run that was not started.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
-import { groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, ringWords, type RedPlanInput } from '../../../src/features/delete_faces/plan';
+import { groupRest, LEGACY_WORDS, limitOf, matchSet, planRed, radiusWords, readPick, ringWords, secondWayFailed, type RedPlanInput } from '../../../src/features/delete_faces/plan';
 import type { RecognizeResult, RecognizedBlend } from '../../../src/types/kernel-protocol';
 
 const MM = { length: 'mm', angle: 'deg' } as const;
@@ -155,5 +157,20 @@ describe('planRed', () => {
     expect(radiusWords(1.23456, MM)).toBe('R1.235');
     expect(radiusWords(2, { length: 'in', angle: 'deg' })).toBe('R0.07874 in');
     expect(planRed(input({ picks: range(11, 50), units: { length: 'in', angle: 'deg' } })).sentences[0]).toMatch(/^Every fillet up to R0\.07874 in on Body 1 is 40 faces/);
+  });
+
+  it("after the heal's words: why taking them off as fillets failed, or for a run refused for its time how long it would take and what Delete faces allows", () => {
+    expect(secondWayFailed('1 of the 42 fillet faces could not be taken off (a ring round a boss or a hole cannot be taken off as a fillet)')).toBe(
+      '; taking them off as fillets did not work either: 1 of the 42 fillet faces could not be taken off (a ring round a boss or a hole cannot be taken off as a fillet); the body is unchanged',
+    );
+    expect(secondWayFailed('taking 100 fillet faces off as fillets on a body of 410 faces would take about 6.5 s; Delete faces allows 1.4 s for taking fillets off as fillets')).toBe(
+      '; taking them off as fillets would take about 6.5 s (100 fillet faces on a body of 410 faces), and Delete faces allows 1.4 s for taking fillets off as fillets; the body is unchanged',
+    );
+    expect(secondWayFailed('taking 1 fillet face off as fillets on a body of 1,810 faces would take about 1.5 s; Delete faces allows 1.4 s for taking fillets off as fillets')).toBe(
+      '; taking them off as fillets would take about 1.5 s (1 fillet face on a body of 1,810 faces), and Delete faces allows 1.4 s for taking fillets off as fillets; the body is unchanged',
+    );
+    expect(secondWayFailed('taking 404 fillet faces off as fillets on a body of 810 faces would take about 3 min; Delete faces allows 0.35 s for taking fillets off as fillets')).toBe(
+      '; taking them off as fillets would take about 3 min (404 fillet faces on a body of 810 faces), and Delete faces allows 0.35 s for taking fillets off as fillets; the body is unchanged',
+    );
   });
 });
