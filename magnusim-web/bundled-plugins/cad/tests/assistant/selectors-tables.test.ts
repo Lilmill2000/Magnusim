@@ -4,11 +4,14 @@
 // when the key changes, at most 2000 kept (the oldest dropped); the topo cache: one kernel call
 // per small shape with every option a selector and a pick need, chunks with progress above 2000
 // faces or when the size is not known, the newest 32 shapes kept, a failed read not kept, all
-// dropped when the kernel restarts. And the guide's and the help's selector examples read.
+// dropped when the kernel restarts. And the guide's and the help's selector examples read, the
+// Find panel's chips and the find tool's query examples too (fillet and sized holes, S4).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { describe, expect, it } from 'vitest';
 import { GUIDE } from '../../src/assistant/guide';
 import { HELP } from '../../src/assistant/help';
+import { CAD_TOOLS } from '../../src/assistant/schemas';
+import { FIND_EXAMPLES } from '../../src/features/find/panel';
 import { currentHandles, handlesOf, HANDLES_MAX, type HandleEntry } from '../../src/assistant/selectors/handles';
 import { parseSelector, type KnownNames } from '../../src/assistant/selectors/parse';
 import { createTopoCache, TOPO_CACHE_SHAPES } from '../../src/assistant/selectors/topo-cache';
@@ -171,7 +174,8 @@ describe("the guide's and help's selectors", () => {
     const quoted = [...section.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(quoted).toEqual(['Base.start', 'Base.end', 'Base.side', 'Base.side(l2)', 'Body 1 faces >Z', 'edges of Base.end', 'Base.end & Base.side(r.top)', 'Body 1 edges |Z', 'Body 1 face at (0, 0, 6)', 'selection']);
     for (const q of quoted) reads(q, 'any');
-    for (const f of ['>Z[2]', '+Z', '|Z', '#Z', '%cylinder', 'hole', 'largest']) reads(`Body 1 faces ${f}`, 'face');
+    for (const f of ['>Z[2]', '+Z', '|Z', '#Z', '%cylinder', 'hole', 'largest', 'fillet <= 2 mm', 'hole <= 6 mm']) reads(`Body 1 faces ${f}`, 'face');
+    expect(section).toContain('%cylinder, hole, largest, fillet <= 2 mm, hole <= 6 mm.');
     reads('#f3', 'face');
     for (const q of ['Bracket.side(p.3) & Bracket.side(p.4)']) reads(q, 'edge');
     for (const q of ['Plate.end', 'Flange.side(r.top)']) reads(q, 'face');
@@ -189,8 +193,25 @@ describe("the guide's and help's selectors", () => {
     for (const q of ['all', 'largest', 'r1', 'at(10, 5)', 'Plate sketch r2', 'Plate sketch']) reads(q, 'region');
     reads('Plate sketch regions', 'any');
     reads('"Boss.v2".end', 'face');
+    // The filters row: every filter it names reads after a face scope, the S4 sizes too.
+    const filters = HELP.selectors.find((r) => r.about === 'filters')!.text;
+    const shaped = ['radius 3 mm', 'radius <= 3 mm', 'radius >= 3 mm', 'fillet', 'fillet 2 mm', 'fillet <= 2 mm', 'fillet >= 5 mm', 'hole 6 mm', 'hole <= 6 mm', 'hole >= 10 mm'];
+    for (const f of shaped) {
+      expect(filters, f).toContain(f);
+      reads(`Body 1 faces ${f}`, 'face');
+    }
     // Each of those appears in the topic's text.
     const text = HELP.selectors.map((r) => r.text).join(' ');
     for (const q of [...faces.slice(0, 11), 'edges of Base.end %line', 'bodies of Pattern 1', 'Front offset t/2 flip', 'normal of Top', 'Plate sketch regions']) expect(text, q).toContain(q);
+  });
+  it("every example chip of the Find panel and every query example of the find tool reads (fillet and sized hole ones too)", () => {
+    // The chips name Extrude 1 and Sketch 1 (a new Part's first features).
+    const part: KnownNames = { features: [...names.features, { id: 'f_x', name: 'Extrude 1', type: 'extrude' }, { id: 'f_k', name: 'Sketch 1', type: 'sketch' }], bodies: names.bodies };
+    for (const q of FIND_EXAMPLES) expect(() => parseSelector(q, part, 'any'), q).not.toThrow();
+    expect(FIND_EXAMPLES).toEqual(expect.arrayContaining(['Body 1 faces fillet <= 2 mm', 'Body 1 faces hole <= 6 mm']));
+    const find = CAD_TOOLS.find((t) => t.name === 'find')!.description;
+    const quoted = [...find.slice(find.indexOf('query examples:')).matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(quoted).toEqual(['Body 1 faces >Z', 'edges of Base.end', 'Plate sketch regions', 'Body 1 faces hole', 'Body 1 faces fillet <= 2 mm', 'Body 1 faces hole <= 6 mm', 'bodies']);
+    for (const q of quoted) reads(q, 'any');
   });
 });

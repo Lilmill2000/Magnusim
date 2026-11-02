@@ -2,7 +2,9 @@
 // matches, each row with a handle for the rest of the request (#f3, #e7, #v2, #b1; regions as
 // "<sketch> r2"), the person's words, the label (Base.end), the body, the feature and role that
 // made it, its type, size, radius, centre, normal or axis, a point on it, hole or boss for a round
-// face, the faces an edge joins, and for a flat face the frame a sketch on it gets. The matches
+// face, the faces an edge joins, and for a flat face the frame a sketch on it gets; for a query with
+// fillet or a sized hole, each face's fillet radius or hole bore (and through) and the number of
+// holes, and a no-match says what the bodies have ("Body 1 has 12 fillet faces, R3 to R5"). The matches
 // flash in the person's view at the watch pace (the shown bodies only, and not while the window is
 // hidden); at the fast pace nothing lights.
 // Owner: ASSISTANT.
@@ -17,6 +19,7 @@ import { modelId, parsePart } from '../labels';
 import { frameWords } from '../model';
 import { dir, jsonBytes, len, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
+import { recognitionOf, summaryOf, type FeaturesSummary } from '../../kernel/recognition';
 import { faceFrameRow, pointOnFace } from '../selectors/geometry';
 import {
   centreOf,
@@ -26,6 +29,7 @@ import {
   hitWords,
   holeOrBossOf,
   selectAny,
+  shapeFiltersOf,
   withScene,
   type Hit,
   type Scene,
@@ -50,6 +54,11 @@ export type FindRow = {
   axis?: { point_mm: number[]; dir: number[] };
   point_mm?: number[];
   hole?: boolean;
+  /** A fillet query's face: its radius (a torus's tube radius), [smallest, largest] when it varies by more than 1 %. */
+  fillet_mm?: number | [number, number];
+  /** A sized hole query's face: its hole's bore diameter, [narrowest, widest] for a stepped bore, and whether it goes through. */
+  hole_mm?: number | [number, number];
+  through?: boolean;
   faces?: [string, string];
   frame?: { origin_mm: number[]; u: number[]; v: number[]; normal: number[]; words: string };
   warning?: string;
@@ -73,6 +82,67 @@ function madeBy(sc: Scene, name: string | null): { feature?: string; role?: stri
 }
 
 const warningOf = (warnings: readonly string[]) => (warnings.length ? { warning: [...new Set(warnings)].join('; ') } : {});
+
+/** A recognised size: one value, or [smallest, largest] when they differ by more than 1 % (a variable fillet, a stepped bore). */
+export function spanOf(lo: number, hi: number): number | [number, number] {
+  return hi - lo > 0.01 * Math.abs(hi) ? [len(lo), len(hi)] : len((lo + hi) / 2);
+}
+
+/** How many drilled holes the hits of a sized hole query belong to (null for any other query). */
+export function holesOf(r: Selected): number | null {
+  if (!shapeFiltersOf(r.sel).hole) return null;
+  return new Set(r.hits.flatMap((h) => (h.kind === 'face' && h.recognized?.hole ? [h.recognized.hole.key] : []))).size;
+}
+
+/** "R3", "R3 to R5"; "Ø8", "Ø8 to Ø12". */
+const rangeWords = (p: string, lo: number | null, hi: number | null) => (lo === null || hi === null ? '' : len(lo) === len(hi) ? `${p}${len(lo)}` : `${p}${len(lo)} to ${p}${len(hi)}`);
+
+/** What one body has, for a query that matched nothing: its fillet faces and radii, its drilled holes and bores. */
+export function summaryWords(body: string, s: FeaturesSummary, what: { fillet: boolean; hole: boolean }): string {
+  const parts: string[] = [];
+  if (what.fillet) {
+    const f = s.fillets;
+    parts.push(f.faces ? `${body} has ${f.faces} fillet ${f.faces === 1 ? 'face' : 'faces'}, ${rangeWords('R', f.r_min, f.r_max)}` : `${body} has no fillets`);
+  }
+  if (what.hole) {
+    const h = s.holes;
+    const sizes = rangeWords('Ø', h.d_min, h.d_max);
+    parts.push(h.count ? `${body} has ${h.count} drilled ${h.count === 1 ? 'hole' : 'holes'}${sizes ? `, ${sizes}` : ''}` : `${body} has no drilled holes`);
+  }
+  return parts.join('; ');
+}
+
+/**
+ * Why a query with fillet or a sized hole matched nothing, in words: what its bodies have ("Body 1
+ * has 12 fillet faces, R3 to R5"), from the same recognition (cached), with the numbers in
+ * `recognized`; null for any other query, or when no body of its scope could be searched.
+ */
+export async function nothingFound(sc: Scene, r: Selected): Promise<{ words: string; recognized: Record<string, unknown>[] } | null> {
+  const sel = r.sel;
+  if (sel.t !== 'query') return null;
+  const what = shapeFiltersOf(sel);
+  if (!what.fillet && !what.hole) return null;
+  const scope = sel.scope;
+  const bodies = scope.s === 'body' ? sc.bodies.filter((b) => b.id === scope.body.id) : sc.bodies;
+  const words: string[] = [];
+  const recognized: Record<string, unknown>[] = [];
+  for (const b of bodies) {
+    if (b.solids === 0) continue;
+    const f = await recognitionOf(sc.services.kernel).features(b.shape, {}, { faces: b.faces, signal: sc.signal });
+    if (!f.ok) continue;
+    const s = summaryOf(f.result);
+    words.push(summaryWords(b.name, s, what));
+    recognized.push({ body: b.name, ...(what.fillet ? { fillets: s.fillets } : {}), ...(what.hole ? { holes: s.holes } : {}) });
+  }
+  return words.length ? { words: words.join('; '), recognized } : null;
+}
+
+/** The words of a query that matched nothing (the find tool's message, the Find panel's line). */
+export async function nothingWords(sc: Scene, r: Selected, query: string): Promise<{ message: string; detail: Record<string, unknown> }> {
+  const found = await nothingFound(sc, r);
+  const why = r.sel.t === 'selection' ? ': the person has nothing selected' : found ? `: ${found.words}` : '';
+  return { message: `"${query}" matches nothing${why}.`, detail: found ? { recognized: found.recognized } : {} };
+}
 
 /** A row of find for one hit. */
 export async function rowOf(sc: Scene, h: Hit, text: string): Promise<FindRow> {
@@ -99,6 +169,8 @@ export async function rowOf(sc: Scene, h: Hit, text: string): Promise<FindRow> {
         ...(t.axis ? { axis: { point_mm: vec(t.axis.origin), dir: dir(t.axis.dir) } } : {}),
         ...(p ? { point_mm: vec(p) } : {}),
         ...(hb ? { hole: hb === 'hole' } : {}),
+        ...(h.recognized?.fillet ? { fillet_mm: spanOf(h.recognized.fillet.r_min, h.recognized.fillet.r_max) } : {}),
+        ...(h.recognized?.hole ? { hole_mm: spanOf(h.recognized.hole.d_min, h.recognized.hole.d_max), through: h.recognized.hole.through } : {}),
         ...(frame ? { frame } : {}),
         ...(h.body.names ? {} : { warning: `The faces of ${h.body.name} have no names: pick them by a point (face at (x, y, z)).` }),
         ...warningOf(h.warnings),
@@ -224,11 +296,13 @@ export const tool: ToolImpl = {
     return withScene(ctx, {}, async (sc) => {
       const r = await selectAny(sc, query);
       if (!r.hits.length) {
-        throw new ToolError('nothing_selected', `"${query}" matches nothing${r.sel.t === 'selection' ? ': the person has nothing selected' : ''}.`, { detail: { query, ...(await exists(sc, r)) } });
+        const no = await nothingWords(sc, r, query);
+        throw new ToolError('nothing_selected', no.message, { detail: { query, ...(await exists(sc, r)), ...no.detail } });
       }
       const rows: FindRow[] = [];
       for (const h of r.hits.slice(0, limit)) rows.push(await rowOf(sc, h, r.text));
-      const data: Record<string, unknown> = { query, kind: r.kind, count: r.hits.length, rows, more: r.hits.length - rows.length };
+      const holes = holesOf(r);
+      const data: Record<string, unknown> = { query, kind: r.kind, count: r.hits.length, ...(holes !== null ? { holes } : {}), rows, more: r.hits.length - rows.length };
       if (r.live) data.live = `${r.text} keeps every edge of ${r.live.length === 1 ? 'the face' : `the ${r.live.length} faces`} as the part changes (a fillet or chamfer stores the face); add a filter for a fixed set of edges`;
       // Within the reply's budget: the last rows go first.
       while (rows.length > 1 && jsonBytes(data) > ctx.budgets.full) {
@@ -240,7 +314,7 @@ export const tool: ToolImpl = {
       const first = rows[0];
       const firstWords = first.label ?? first.handle ?? first.words;
       return {
-        text: `find "${query}": ${r.hits.length} ${kindWord}${r.hits.length === 1 ? ` (${firstWords || first.words})` : ''}`,
+        text: `find "${query}": ${r.hits.length} ${kindWord}${holes !== null ? ` (${holes} ${holes === 1 ? 'hole' : 'holes'})` : r.hits.length === 1 ? ` (${firstWords || first.words})` : ''}`,
         data,
         summary: `Found ${r.hits.length} ${kindWord} for ${query}`,
       };

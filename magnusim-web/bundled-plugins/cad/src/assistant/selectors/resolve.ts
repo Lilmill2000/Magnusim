@@ -4,7 +4,10 @@
 //            the feature an edit changes (doc.bodiesBefore: a feature never picks what it made)
 //   roles    a face matches when any part of its stored name has the feature and role (labels.ts);
 //            none left lists the roles that are
-//   queries  run on the page over the kernel's topo (one call per shape, topo-cache.ts)
+//   queries  run on the page over the kernel's topo (one call per shape, topo-cache.ts); fillet and
+//            a sized hole over the kernel's recognition (src/kernel/recognition.ts, cached per shape):
+//            a body that cannot be searched (a surface body, over the face limit, a kernel below
+//            API 8, a failure) refuses the whole query in words, never a partial list
 //   points   the faces whose box is nearest first, measured by the kernel until the next box is
 //            farther than the best; within max(0.05 mm, 0.002 x the body's size), one wins when it is
 //            at most half as far as the next, else the selector is ambiguous
@@ -29,7 +32,7 @@ import type { CallCtx } from '../../types/assistant';
 import { ORIGIN_PLANES, type BodyId, type Feature, type FeatureId, type PersistentRef, type PlaneFrame, type RegionRef, type SketchFeature, type Vec2, type Vec3 } from '../../types/doc';
 import type { DocState } from '../../types/doc-service';
 import type { KernelCallError, TessPayload } from '../../types/kernel';
-import type { BBox, ShapeId, TopoResult } from '../../types/kernel-protocol';
+import type { BBox, RecognizeResult, ShapeId, TopoResult } from '../../types/kernel-protocol';
 import type { FaceNames } from '../../types/naming';
 import type { SketchOutput, SketchRegion } from '../../types/sketch';
 import type { AxisOutput, PlaneOutput } from '../../types/references';
@@ -41,8 +44,9 @@ import { len, vec } from '../numbers';
 import { regionRows, type RegionRow } from '../sketch/regions';
 import { boxDiagonal, boxDistance, distance, dot, holeOrBoss, unionBox, unit } from './geometry';
 import { currentHandles, handlesOf, type HandleEntry, type HandleKind } from './handles';
-import { parseSelector, SelectorSyntaxError, type Filter, type KnownNames, type Sel, type SelKind, type Want } from './parse';
+import { parseSelector, SelectorSyntaxError, type Filter, type KnownNames, type Sel, type SelKind, type SizeCmp, type Want } from './parse';
 import { closestName, closestWords } from '../closest';
+import { isFillet, recognitionOf, withCommas } from '../../kernel/recognition';
 import { topoCacheOf, type Topo, type TopoCache } from './topo-cache';
 
 export type TopoFace = TopoResult['faces'][number];
@@ -89,8 +93,15 @@ export interface Scene {
   readonly selection?: readonly SelectionItem[] | null;
 }
 
+/** What recognition found a face to be: set by the fillet and sized-hole filters only (find's fillet_mm, hole_mm, through). */
+export interface Recognized {
+  fillet?: { r_min: number; r_max: number };
+  /** key: the hole's own (body and hole), to count holes. */
+  hole?: { key: string; d_min: number; d_max: number; through: boolean };
+}
+
 /** `handle`: the handle a hit was named by (it keeps it). */
-export type FaceHit = { kind: 'face'; bi: number; body: SelBody; index: number; topo: TopoFace; name: string | null; warnings: string[]; handle?: string };
+export type FaceHit = { kind: 'face'; bi: number; body: SelBody; index: number; topo: TopoFace; name: string | null; warnings: string[]; handle?: string; recognized?: Recognized };
 export type EdgeHit = { kind: 'edge'; bi: number; body: SelBody; index: number; topo: TopoEdge; warnings: string[]; handle?: string };
 export type VertexHit = { kind: 'vertex'; bi: number; body: SelBody; index: number; topo: TopoVertex; warnings: string[]; handle?: string };
 export type BodyHit = { kind: 'body'; bi: number; body: SelBody; warnings: string[]; handle?: string };
@@ -914,9 +925,14 @@ export async function applyFilters(sc: Scene, start: Geo[], filters: readonly Fi
         if (!r.ok) throw new ToolError('expr_error', `radius "${f.expr}": ${r.error}`, { detail: { column: f.col } });
         const want = r.value;
         const tol = Math.max(1e-4, 1e-6 * Math.abs(want));
-        hits = hits.filter((h) => h.kind !== 'vertex' && typeof h.topo.radius === 'number' && Math.abs(h.topo.radius - want) <= tol);
+        const ok = (v: number) => (f.cmp === '<=' ? v <= want + tol : f.cmp === '>=' ? v >= want - tol : Math.abs(v - want) <= tol);
+        hits = hits.filter((h) => h.kind !== 'vertex' && typeof h.topo.radius === 'number' && ok(h.topo.radius));
         break;
       }
+      case 'fillet':
+      case 'sized-hole':
+        hits = await byShape(sc, hits, f);
+        break;
       case 'largest':
       case 'smallest': {
         const size = (h: Geo) => (h.kind === 'face' ? (h.topo.area ?? 0) : h.kind === 'edge' ? (h.topo.length ?? 0) : 0);
@@ -942,6 +958,124 @@ export async function applyFilters(sc: Scene, start: Geo[], filters: readonly Fi
     }
   }
   return hits;
+}
+
+// ------------------------------------------------------------------ fillets and holes by shape
+
+/** What a refusal to search a body tells the person (and the Assistant) to do instead. */
+const SELECT_INSTEAD = 'Select its faces in the view instead.';
+
+/** A size's margin: equal within max(0.001 mm, 1 %) (plan 3.2); <= and >= allow the same, so a size's equal set is inside both. */
+export function sizeTolerance(v: number): number {
+  return Math.max(1e-3, 0.01 * Math.abs(v));
+}
+
+/** Whether a fillet's radii or a hole's bores [lo, hi] fit a size: <= compares the largest, >= the smallest, = both (decision D8). */
+export function fitsSize(lo: number, hi: number, cmp: SizeCmp, v: number): boolean {
+  const tol = sizeTolerance(v);
+  if (cmp === '<=') return hi <= v + tol;
+  if (cmp === '>=') return lo >= v - tol;
+  return lo >= v - tol && hi <= v + tol;
+}
+
+/** A body that cannot be searched, from what is known without a kernel call (a surface body, more faces than the limit), or null. */
+function unsearchable(sc: Scene, b: SelBody): ToolError | null {
+  if (b.solids === 0) return new ToolError('bad_selector', `${b.name} is a surface body: fillets and holes are found on solids only.`, { detail: { body: b.name, why: 'not_solid' }, hint: SELECT_INSTEAD });
+  const limit = recognitionOf(sc.services.kernel).limits.maxFaces;
+  if (typeof b.faces === 'number' && b.faces > limit) return tooLarge(b, b.faces, limit);
+  return null;
+}
+
+const tooLarge = (b: SelBody, faces: number, limit: number) =>
+  new ToolError('bad_selector', `${b.name} has ${withCommas(faces)} faces: fillets and holes are found on bodies of up to ${withCommas(limit)} faces.`, { detail: { body: b.name, why: 'too_large', faces, limit }, hint: SELECT_INSTEAD });
+
+/**
+ * The fillets and drilled holes recognition finds on a body (the page's client, cached per shape),
+ * or its refusal as a ToolError in words. `what` names the search in a failure's words.
+ */
+export async function recognizedOf(sc: Scene, b: SelBody, what: 'Fillets' | 'Holes' = 'Fillets'): Promise<RecognizeResult> {
+  const early = unsearchable(sc, b);
+  if (early) throw early;
+  sc.progress(`Finding the fillets and holes of ${b.name}`);
+  const r = await recognitionOf(sc.services.kernel).features(b.shape, {}, { faces: b.faces, signal: sc.signal });
+  if (r.ok) return r.result;
+  switch (r.reason) {
+    case 'too_large':
+      throw tooLarge(b, r.faces ?? b.faces ?? 0, r.limit ?? recognitionOf(sc.services.kernel).limits.maxFaces);
+    case 'not_solid':
+      throw new ToolError('bad_selector', `${b.name} is a surface body: fillets and holes are found on solids only.`, { detail: { body: b.name, why: 'not_solid' }, hint: SELECT_INSTEAD });
+    case 'old_kernel':
+      throw new ToolError('kernel_failed', r.words, { detail: { body: b.name, why: 'old_kernel', api: r.api }, hint: SELECT_INSTEAD });
+    default:
+      throw new ToolError('kernel_failed', `${what} could not be found on ${b.name}: ${r.words.replace(/\.$/, '')}.`, { detail: { body: b.name, why: 'failed' }, hint: SELECT_INSTEAD });
+  }
+}
+
+/**
+ * The fillet and sized-hole filters: the faces recognition reads as a fillet (D7: ordinary and
+ * vertex blends; 'cliff', tangent on one side only, and 'uncertain' are not) whose radius fits the
+ * size, or that belong to a drilled hole whose bore fits it. Every body with faces left must be
+ * searchable, else the whole query is refused with that body's words (checked from what is known
+ * before any kernel call, then by the kernel).
+ */
+async function byShape(sc: Scene, hits: Geo[], f: Extract<Filter, { f: 'fillet' | 'sized-hole' }>): Promise<Geo[]> {
+  let want: number | null = null;
+  if (f.size) {
+    const r = sc.services.doc.units.evaluate(f.size.expr, 'length');
+    if (!r.ok) throw new ToolError('expr_error', `${f.f === 'fillet' ? 'fillet' : 'hole'} "${f.size.expr}": ${r.error}`, { detail: { column: f.col } });
+    want = r.value;
+  }
+  const bodies = [...new Set(hits.map((h) => h.bi))];
+  for (const bi of bodies) {
+    const early = unsearchable(sc, sc.bodies[bi]);
+    if (early) throw early;
+  }
+  const found = new Map<number, { blendAt: Map<number, RecognizeResult['blends'][number]>; holeAt: Map<number, number>; rec: RecognizeResult }>();
+  for (const bi of bodies) {
+    const rec = await recognizedOf(sc, sc.bodies[bi], f.f === 'fillet' ? 'Fillets' : 'Holes');
+    const holeAt = new Map<number, number>();
+    rec.holes.forEach((h, k) => h.faces.forEach((face) => holeAt.has(face) || holeAt.set(face, k)));
+    found.set(bi, { blendAt: new Map(rec.blends.map((b) => [b.face, b])), holeAt, rec });
+  }
+  const out: Geo[] = [];
+  for (const h of hits) {
+    if (h.kind !== 'face') continue;
+    const { blendAt, holeAt, rec } = found.get(h.bi)!;
+    if (f.f === 'fillet') {
+      const b = blendAt.get(h.index);
+      if (!b || !isFillet(b)) continue;
+      if (want !== null && !fitsSize(b.r_min, b.r_max, f.size!.cmp, want)) continue;
+      out.push({ ...h, recognized: { ...h.recognized, fillet: { r_min: b.r_min, r_max: b.r_max } } });
+    } else {
+      const k = holeAt.get(h.index);
+      if (k === undefined) continue;
+      const hole = rec.holes[k];
+      // A hole with no cylinder has no bore to size.
+      if (hole.d_min === null || hole.d_max === null || want === null) continue;
+      if (!fitsSize(hole.d_min, hole.d_max, f.size.cmp, want)) continue;
+      out.push({ ...h, recognized: { ...h.recognized, hole: { key: `${h.bi}:${k}`, d_min: hole.d_min, d_max: hole.d_max, through: hole.through } } });
+    }
+  }
+  return out;
+}
+
+/** Which shape filters a selector uses (fillet, a sized hole), its bracketed face queries too. */
+export function shapeFiltersOf(sel: Sel): { fillet: boolean; hole: boolean } {
+  const out = { fillet: false, hole: false };
+  const walk = (s: Sel) => {
+    if (s.t === 'query' || s.t === 'edges-of') {
+      for (const f of s.filters) {
+        if (f.f === 'fillet') out.fillet = true;
+        if (f.f === 'sized-hole') out.hole = true;
+      }
+      if (s.t === 'edges-of') walk(s.face);
+    } else if (s.t === 'pair') {
+      walk(s.a);
+      walk(s.b);
+    }
+  };
+  walk(sel);
+  return out;
 }
 
 const holeCache = new WeakMap<TessPayload, Map<number, 'hole' | 'boss' | null>>();
@@ -1023,8 +1157,8 @@ function textOf(sel: Sel): string {
   }
 }
 
-/** A selector that does not read and starts with a filter (>Z, +Z, |Z, #Z, %cylinder, hole, boss, largest, smallest, radius, nearest): its scope is missing. */
-const BARE_FILTER = /^(?:[<>+|%-]|#(?![fevb][1-9])|(?:hole|boss|largest|smallest|radius|nearest)(?:\s|$))/i;
+/** A selector that does not read and starts with a filter (>Z, +Z, |Z, #Z, %cylinder, hole, boss, largest, smallest, radius, nearest, fillet): its scope is missing. */
+const BARE_FILTER = /^(?:[<>+|%-]|#(?![fevb][1-9])|(?:hole|boss|largest|smallest|radius|nearest|fillet)(?:\s|$))/i;
 
 /** The name a selector that does not read starts with at `column` (1-based): up to its first ".", "&", ",", "(" or kind word, unquoted. */
 export function nameAt(text: string, column: number): string {

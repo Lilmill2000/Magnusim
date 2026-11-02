@@ -16,6 +16,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { FUNCTION_NAMES, UNIT_NAMES } from '../doc/expr';
 import { MAX_PARAM_NAME } from '../doc/params';
+import { withCommas } from '../kernel/recognition';
+import { RECOGNIZE_MAX_FACES } from '../kernel/timeouts';
 import { HINTS, REASONS, type ToolCode } from './errors';
 import { WORKED_PARTS, type ResultValue } from './examples';
 import { GUIDE } from './guide';
@@ -154,7 +156,7 @@ const selectorRows = (projects = true): HelpRow[] => [
   },
   {
     about: 'filters',
-    text: `>Z farthest along Z by centre, >Z[2] the next level (levels count from [1]; ties within a millionth of the part size share a level), <Z nearest; +Z -Z flat faces facing +Z or -Z (out of the material); |Z faces whose normal (or a round face's axis) is parallel to Z, edges along Z; #Z perpendicular (circles lying across Z); axes X, Y, Z or (x, y, z); %plane %cylinder %cone %sphere %torus %bspline for faces, %line %circle %ellipse %bspline for edges; hole, boss (round faces going at least half way round); radius 3 mm; largest; smallest; nearest (x, y, z).`,
+    text: `>Z farthest along Z by centre, >Z[2] the next level (levels count from [1]; ties within a millionth of the part size share a level), <Z nearest; +Z -Z flat faces facing +Z or -Z (out of the material); |Z faces whose normal (or a round face's axis) is parallel to Z, edges along Z; #Z perpendicular (circles lying across Z); axes X, Y, Z or (x, y, z); %plane %cylinder %cone %sphere %torus %bspline for faces, %line %circle %ellipse %bspline for edges; hole, boss (round faces going at least half way round); radius 3 mm, radius <= 3 mm, radius >= 3 mm; largest; smallest; nearest (x, y, z). Found by shape, on solids of up to ${withCommas(RECOGNIZE_MAX_FACES)} faces (else refused in words): fillet (a round face joining two faces smoothly, whatever made it; chamfers and rounds tangent on one side only are not), fillet 2 mm, fillet <= 2 mm (its largest radius), fillet >= 5 mm (its smallest; a torus's tube radius); hole 6 mm, hole <= 6 mm, hole >= 10 mm: every face of the whole drilled holes with that bore (wall, bottom, countersink, a rounded rim, which is a fillet too; holes that cross are one hole), while plain hole is per face. Sizes match within max(0.001 mm, 1 %); write <= or >= (< and > are levels).`,
   },
   {
     about: 'points',

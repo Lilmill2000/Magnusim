@@ -18,8 +18,12 @@
 //              "<sketch> "; "<sketch> regions" lists them all (find); "<sketch>" alone is "all"
 //   SCOPE      BODY | feature FEATURE | FEATURE | all     (a plain name is the body when one has it)
 //   FILTER     >AX[n] <AX[n] (farthest / nearest by centre, n = 1 the first level) | +AX -AX (facing)
-//              | |AX #AX (parallel / perpendicular) | %TYPE | hole | boss | radius EXPR | largest
-//              | smallest | nearest (x, y, z)            AX: X | Y | Z | (x, y, z)
+//              | |AX #AX (parallel / perpendicular) | %TYPE | hole | boss | radius [SIZE] | largest
+//              | smallest | nearest (x, y, z) | fillet [SIZE] | hole SIZE
+//              AX: X | Y | Z | (x, y, z)      SIZE: EXPR | <= EXPR | >= EXPR
+//              (fillet and a sized hole are faces found by their shape, kernel API 8: a fillet face, a
+//              whole drilled hole; a plain hole stays the per-face filter. A bare < or > after
+//              fillet, hole or radius is refused with words: <Z and >Z are levels)
 // A name that is both a body and a feature is read by the grammar: X.role, bodies of X and
 // feature X take the feature; a plain name in a body place takes the body.
 // Errors give the 1-based column of the first character the parser could not read.
@@ -55,14 +59,27 @@ export interface Ax {
   text: string;
 }
 
+/** How a size compares: `<=` the largest, `>=` the smallest, `=` equal within the filter's tolerance. */
+export type SizeCmp = '<=' | '>=' | '=';
+
+/** A size after fillet, hole or radius: "2 mm", "<= 2 mm", ">= 5 mm" (the expression as written). */
+export interface Size {
+  cmp: SizeCmp;
+  expr: string;
+}
+
 export type Filter =
   | { f: '>' | '<'; ax: Ax; n: number; col: number; text: string }
   | { f: '+' | '-'; ax: Ax; col: number; text: string }
   | { f: '|' | '#'; ax: Ax; col: number; text: string }
   | { f: '%'; type: string; col: number; text: string }
   | { f: 'hole' | 'boss' | 'largest' | 'smallest'; col: number; text: string }
-  | { f: 'radius'; expr: string; col: number; text: string }
-  | { f: 'nearest'; p: Vec3; col: number; text: string };
+  | { f: 'radius'; expr: string; cmp: SizeCmp; col: number; text: string }
+  | { f: 'nearest'; p: Vec3; col: number; text: string }
+  /** Faces shaped like a fillet (any size, or a size of the fillet's own radius). */
+  | { f: 'fillet'; size: Size | null; col: number; text: string }
+  /** Every face of the drilled holes whose bore diameter fits the size (wall, bottom, countersink, rim). */
+  | { f: 'sized-hole'; size: Size; col: number; text: string };
 
 export type Scope = { s: 'body'; body: Named } | { s: 'feature'; feature: Named } | { s: 'all' };
 
@@ -121,7 +138,9 @@ export class SelectorSyntaxError extends Error {
 
 const FACE_TYPES = ['plane', 'cylinder', 'cone', 'sphere', 'torus', 'bspline'];
 const EDGE_TYPES = ['line', 'circle', 'ellipse', 'bspline'];
-const FILTER_WORDS = ['hole', 'boss', 'largest', 'smallest', 'radius', 'nearest'];
+const FILTER_WORDS = ['hole', 'boss', 'largest', 'smallest', 'radius', 'nearest', 'fillet'];
+/** What a size-taking filter's refusal words show when no size was written. */
+const SIZE_EXAMPLE: Record<'fillet' | 'hole' | 'radius', string> = { fillet: '2 mm', hole: '6 mm', radius: '3 mm' };
 const ORIGIN_PLANES: Record<string, OriginPlane> = { top: 'origin:top', xy: 'origin:top', front: 'origin:front', xz: 'origin:front', right: 'origin:right', yz: 'origin:right' };
 const PLANE_WORDS: Record<OriginPlane, string> = { 'origin:top': 'Top', 'origin:front': 'Front', 'origin:right': 'Right' };
 const AXES: Record<string, { axis: OriginAxis; dir: Vec3 }> = { x: { axis: 'origin:x', dir: [1, 0, 0] }, y: { axis: 'origin:y', dir: [0, 1, 0] }, z: { axis: 'origin:z', dir: [0, 0, 1] } };
@@ -139,6 +158,8 @@ class Parser {
   private errRank = 0;
   private readonly features: (FeatureRow & { low: string })[];
   private readonly bodies: (Named & { low: string })[];
+  /** The scope an example in refusal words names when the query has none ("edges of ..."). */
+  private readonly firstBody: string;
 
   constructor(
     readonly src: string,
@@ -148,6 +169,7 @@ class Parser {
     const byLength = <T extends Named>(rows: readonly T[]) => rows.map((r) => ({ ...r, low: r.name.toLowerCase() })).sort((a, b) => b.low.length - a.low.length);
     this.features = byLength(names.features);
     this.bodies = byLength(names.bodies);
+    this.firstBody = names.bodies[0]?.name ?? 'Body 1';
   }
 
   // ---------------------------------------------------------------- errors
@@ -287,7 +309,7 @@ class Parser {
     return this.fail(i, 'expected X, Y, Z or (x, y, z)');
   }
 
-  /** Where a filter could start (stops a radius expression). */
+  /** Where a filter could start (stops a size's expression). */
   private filterStarts(i: number): boolean {
     const c = this.src[i];
     if (!c) return true;
@@ -297,10 +319,80 @@ class Parser {
     return FILTER_WORDS.some((w) => this.word(i, w) >= 0);
   }
 
-  filter(i: number, of: 'face' | 'edge' | 'vertex'): R<Filter> {
+  /** Whether an axis (X, Y, Z or "(x, y, z)") starts at i: "fillet <Z" is a level filter after fillet, "fillet < 2 mm" is not. */
+  private axisAt(i: number): boolean {
+    return /^([xyzXYZ](?![A-Za-z0-9_])|\()/.test(this.src.slice(i));
+  }
+
+  /**
+   * An expression's words from k (its first word's start), up to the next filter, "offset" (a
+   * plane's), "&" (an edge's two faces) or a ")" it did not open, or the end: its end (k for none).
+   */
+  private exprFrom(k: number): number {
+    let at = k;
+    let end = k;
+    let depth = 0;
+    for (;;) {
+      const s = at === k ? k : this.sp(at);
+      if (s >= this.src.length || (s !== k && s === at)) break;
+      const c = this.src[s];
+      if (c === '&' || (c === ')' && depth === 0)) break;
+      if (s !== k && (this.filterStarts(s) || this.word(s, 'offset') >= 0)) break;
+      let e = s;
+      let closed = false;
+      while (e < this.src.length && !/\s/.test(this.src[e])) {
+        if (this.src[e] === '(') depth++;
+        else if (this.src[e] === ')') {
+          if (depth === 0) {
+            closed = true;
+            break;
+          }
+          depth--;
+        }
+        e++;
+      }
+      if (e === s) break;
+      end = e;
+      at = e;
+      if (closed) break;
+    }
+    return end;
+  }
+
+  /**
+   * The size after fillet, hole or radius (i: just after the word): "<= EXPR", ">= EXPR", a plain
+   * EXPR (equal), or none (the end, the next filter, "offset", "&", ")"). A bare < or > that is no
+   * level filter ("fillet <Z" is fillet, then the nearest level along Z) is refused with words.
+   */
+  private size(i: number, word: 'fillet' | 'hole' | 'radius'): R<Size | null> {
+    const s = this.sp(i);
+    const none: R<Size | null> = { v: null, at: i };
+    if (s >= this.src.length || s === i) return none;
+    const two = this.src.slice(s, s + 2);
+    if (two === '<=' || two === '>=') {
+      const k = this.sp(s + 2);
+      const e = k < this.src.length ? this.exprFrom(k) : k;
+      if (e === k) return this.fail(k, `expected a size after "${word} ${two}" (${word} ${two} ${SIZE_EXAMPLE[word]})`, 3);
+      return { v: { cmp: two, expr: this.src.slice(k, e).trim() }, at: e };
+    }
+    const c = this.src[s];
+    if ((c === '<' || c === '>') && (word === 'radius' || !this.axisAt(s + 1))) {
+      const k = this.sp(s + 1);
+      const e = k < this.src.length ? this.exprFrom(k) : k;
+      const typed = this.src.slice(k, e).trim() || SIZE_EXAMPLE[word];
+      return this.fail(s, `write <= or >= after ${word} (<Z and >Z are levels): ${word} ${c}= ${typed}`, 3);
+    }
+    if (this.filterStarts(s) || this.word(s, 'offset') >= 0 || c === '&' || c === ')') return none;
+    const e = this.exprFrom(s);
+    return e === s ? none : { v: { cmp: '=', expr: this.src.slice(s, e).trim() }, at: e };
+  }
+
+  /** One filter at i. scope: the query's scope as written, for the examples in refusal words. */
+  filter(i: number, of: 'face' | 'edge' | 'vertex', scope = ''): R<Filter> {
     const c = this.src[i];
     const col = i + 1;
     const cut = (at: number) => this.src.slice(i, at);
+    const facesOf = `${scope || this.firstBody} faces`;
     if (c === '>' || c === '<') {
       const a = this.ax(i + 1);
       if (!a) return null;
@@ -333,37 +425,45 @@ class Parser {
     for (const w of ['hole', 'boss', 'largest', 'smallest'] as const) {
       const at = this.word(i, w);
       if (at < 0) continue;
+      if (w === 'hole') {
+        // A sized hole: whole drilled holes by their bore.
+        const sz = this.size(at, 'hole');
+        if (!sz) return null;
+        if (sz.v) {
+          const text = cut(sz.at);
+          if (of !== 'face') return this.fail(i, `${text} filters faces: ${facesOf} ${text}`, 3);
+          return { v: { f: 'sized-hole', size: sz.v, col, text }, at: sz.at };
+        }
+      }
       if ((w === 'hole' || w === 'boss') && of !== 'face') return this.fail(i, `${w} filters round faces`);
       if (of === 'vertex') return this.fail(i, `${w} does not apply to vertices`);
       return { v: { f: w, col, text: w }, at };
     }
-    let at = this.word(i, 'radius');
+    let at = this.word(i, 'fillet');
+    if (at >= 0) {
+      const sz = this.size(at, 'fillet');
+      if (!sz) return null;
+      const text = cut(sz.at);
+      if (of !== 'face') return this.fail(i, `fillet filters faces: ${facesOf} ${sz.v ? text : 'fillet <= 2 mm'}`, 3);
+      return { v: { f: 'fillet', size: sz.v, col, text }, at: sz.at };
+    }
+    at = this.word(i, 'radius');
     if (at >= 0) {
       if (of === 'vertex') return this.fail(i, 'radius does not apply to vertices');
-      // The expression: the words after it, up to the next filter (or the end).
-      let j = at;
-      let last = at;
-      for (let first = true; ; first = false) {
-        const k = this.sp(j);
-        if (k >= this.src.length || k === j || (!first && this.filterStarts(k))) break;
-        let e = k;
-        while (e < this.src.length && !/\s/.test(this.src[e])) e++;
-        last = e;
-        j = e;
-      }
-      const expr = this.src.slice(at, last).trim();
-      if (!expr) return this.fail(this.sp(at), 'expected a radius after "radius" ("3 mm", "r")');
-      return { v: { f: 'radius', expr, col, text: cut(last) }, at: last };
+      const sz = this.size(at, 'radius');
+      if (!sz) return null;
+      if (!sz.v) return this.fail(this.sp(at), 'expected a radius after "radius" ("3 mm", "<= 3 mm", "r")');
+      return { v: { f: 'radius', expr: sz.v.expr, cmp: sz.v.cmp, col, text: cut(sz.at) }, at: sz.at };
     }
     at = this.word(i, 'nearest');
     if (at >= 0) {
       const t = this.tuple(at, 3);
       return t ? { v: { f: 'nearest', p: t.v as Vec3, col, text: cut(t.at) }, at: t.at } : null;
     }
-    return this.fail(i, 'expected a filter (>Z, +Z, |Z, #Z, %plane, hole, largest, radius 3 mm, nearest (x, y, z))');
+    return this.fail(i, 'expected a filter (>Z, +Z, |Z, #Z, %plane, hole, largest, radius 3 mm, fillet <= 2 mm, nearest (x, y, z))');
   }
 
-  filters(i: number, of: 'face' | 'edge' | 'vertex'): R<Filter[]> {
+  filters(i: number, of: 'face' | 'edge' | 'vertex', scope = ''): R<Filter[]> {
     const out: Filter[] = [];
     let at = i;
     for (;;) {
@@ -374,7 +474,7 @@ class Parser {
       if (c === '&' || c === ')') return { v: out, at };
       // "offset" (a plane from a face) ends a face's filters.
       if (this.word(j, 'offset') >= 0) return { v: out, at };
-      const f = this.filter(j, of);
+      const f = this.filter(j, of, scope);
       if (!f) return null;
       out.push(f.v);
       at = f.at;
@@ -389,7 +489,7 @@ class Parser {
       if (s === at && at < this.src.length) return this.fail(at, `expected " ${word}"`);
       const w = this.word(s, word);
       if (w < 0) return this.fail(s, `expected "${word}" after the scope`);
-      const f = bare ? { v: [], at: w } : this.filters(w, of);
+      const f = bare ? { v: [], at: w } : this.filters(w, of, this.src.slice(i, at).trim());
       return f ? { v: { t: 'query', of, scope, filters: f.v, text: this.src.slice(i, f.at).trim() }, at: f.at } : null;
     };
     let at = this.word(i, 'all');

@@ -296,7 +296,7 @@ const SPECS: ToolSpec[] = [
     risk: 'read',
     timeoutS: 90,
     description:
-      'Preview a selector without changing anything. Lists what it matches, with handles for later calls of this request (#f3 face, #e7 edge, #v2 vertex, #b1 body; regions as "<sketch> r2"). Each row: handle, words, label (Base.end), body, owning feature and role, type, area or length, radius, centre, normal or axis, a point on it in mm, hole or boss for cylinders, the faces an edge joins, and for a flat face the frame a sketch on it gets. query examples: "Body 1 faces >Z", "edges of Base.end", "Plate sketch regions", "Body 1 faces hole", "bodies". limit: 1 to 25 rows. The matches flash in the person\'s view.',
+      'Preview a selector without changing anything. Lists what it matches, with handles for later calls of this request (#f3 face, #e7 edge, #v2 vertex, #b1 body; regions as "<sketch> r2"). Each row: handle, words, label (Base.end), body, owning feature and role, type, area or length, radius, centre, normal or axis, a point on it in mm, hole or boss for cylinders, fillet_mm or hole_mm ([min, max] when it varies) and through for fillet and sized hole queries, the faces an edge joins, and for a flat face the frame a sketch on it gets. query examples: "Body 1 faces >Z", "edges of Base.end", "Plate sketch regions", "Body 1 faces hole", "Body 1 faces fillet <= 2 mm", "Body 1 faces hole <= 6 mm", "bodies". limit: 1 to 25 rows. The matches flash in the person\'s view.',
     schema: obj({ query: str(300, 'A selector (help selectors).', 1), limit: int(1, 25, 'Most rows, 10 usually; count says how many matched.') }),
   },
   {

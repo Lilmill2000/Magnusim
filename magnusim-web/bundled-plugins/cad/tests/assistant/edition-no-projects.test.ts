@@ -5,7 +5,8 @@
 // says none of them (features, workspace, details, errors); a call that still names them is
 // refused in plain words. An Enclosure made in Magnusim stays as it is: get_model gives no inputs
 // to resend, edit_feature refuses its values with the panel's words, and rename works. Absent, the
-// flag means Magnusim: the registration and help are Magnusim's, byte for byte.
+// flag means Magnusim: the registration and help are Magnusim's, byte for byte. The fillet and sized
+// hole words (S4) are the same in both editions.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
 import { HELP, helpFor } from '../../src/assistant/help';
@@ -70,6 +71,14 @@ describe('the Assistant in Magnusim CAD (projectLinks false)', () => {
       expect(errors.some((r) => r.about.startsWith('feature_failed '))).toBe(true);
       // Every topic, as a model reading them all gets them (the selectors' role list named the Enclosure).
       for (const topic of HELP_TOPICS) expect(JSON.stringify(rowsOf(await h.ok('help', { topic }))), topic).not.toMatch(PROJECT_WORDS);
+      // Fillets and sized holes (S4) are nothing of a project's: the same words as Magnusim's, the
+      // find tool's description, help's filters row and the guide's selector line.
+      expect(JSON.stringify(tool('find'))).toBe(JSON.stringify(CAD_TOOLS.find((t) => t.name === 'find')));
+      expect(tool('find').description).toContain('"Body 1 faces fillet <= 2 mm", "Body 1 faces hole <= 6 mm"');
+      const filters = rowsOf(await h.ok('help', { topic: 'selectors' })).find((r) => r.about === 'filters');
+      expect(filters).toEqual(HELP.selectors.find((r) => r.about === 'filters'));
+      expect(filters!.text).toContain('fillet <= 2 mm (its largest radius)');
+      expect(reg.guide).toContain('%cylinder, hole, largest, fillet <= 2 mm, hole <= 6 mm.');
     },
     REAL_KERNEL_MS,
   );

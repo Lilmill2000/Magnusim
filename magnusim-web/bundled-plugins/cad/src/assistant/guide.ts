@@ -39,7 +39,7 @@ export const GUIDE = [
   '',
   'SELECTORS (strings)',
   '- Made by a feature: "Base.start", "Base.end", "Base.side", "Base.side(l2)".',
-  '- Geometry: "Body 1 faces >Z" (highest; >Z[2] the next); after faces also +Z (facing +Z), |Z, #Z, %cylinder, hole, largest.',
+  '- Geometry: "Body 1 faces >Z" (highest; >Z[2] the next); after faces also +Z (facing +Z), |Z, #Z, %cylinder, hole, largest, fillet <= 2 mm, hole <= 6 mm.',
   '- Edges: "edges of Base.end", "Base.end & Base.side(r.top)", "Body 1 edges |Z".',
   '- "Body 1 face at (0, 0, 6)"; #f3 from find; "selection".',
   '- Empty or ambiguous: an error lists candidates; try it with find.',

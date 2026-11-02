@@ -71,7 +71,8 @@ describe('recognition client (fake kernel)', () => {
     await c.features(5);
     await c.features(5, {});
     expect(c.calls).toBe(1);
-    expect(f.sent).toEqual([{ op: 'recognize', id: 5, max_faces: 2000 }]);
+    // Holes in the app's one mode (HOLES_MODE, decision D6: hard).
+    expect(f.sent).toEqual([{ op: 'recognize', id: 5, max_faces: 2000, holes_mode: 'hard' }]);
     await c.features(5, { holes: false, max_r: 2.002 });
     await c.features(5, { holes_mode: 'hard', blends: false });
     expect(f.sent.slice(1)).toEqual([

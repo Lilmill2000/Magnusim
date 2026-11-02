@@ -210,6 +210,81 @@ describe('the selector grammar', () => {
   });
 });
 
+describe('fillets and sized holes (S4: faces found by their shape)', () => {
+  const filters = (text: string) => (p(text, 'face') as Extract<Sel, { t: 'query' }>).filters;
+
+  it('reads fillet with no size, a plain size (equal), <= and >=', () => {
+    expect(filters('Body 1 faces fillet')).toEqual([{ f: 'fillet', size: null, col: 14, text: 'fillet' }]);
+    expect(filters('Body 1 faces fillet 2 mm')).toEqual([{ f: 'fillet', size: { cmp: '=', expr: '2 mm' }, col: 14, text: 'fillet 2 mm' }]);
+    expect(filters('Body 1 faces fillet <= 2 mm')).toEqual([{ f: 'fillet', size: { cmp: '<=', expr: '2 mm' }, col: 14, text: 'fillet <= 2 mm' }]);
+    expect(filters('Body 1 faces fillet >= 5 mm')).toEqual([{ f: 'fillet', size: { cmp: '>=', expr: '5 mm' }, col: 14, text: 'fillet >= 5 mm' }]);
+    expect(filters('Body 1 faces fillet <=2mm')).toMatchObject([{ size: { cmp: '<=', expr: '2mm' } }]);
+    // An expression of parameters, brackets and all; it stops at the next filter.
+    expect(filters('Body 1 faces fillet <= (r + 1) mm >Z')).toMatchObject([{ f: 'fillet', size: { cmp: '<=', expr: '(r + 1) mm' } }, { f: '>' }]);
+    expect(filters('all faces fillet r/2 largest')).toMatchObject([{ f: 'fillet', size: { cmp: '=', expr: 'r/2' } }, { f: 'largest' }]);
+    // With no size, the next filter reads as a filter: "<Z" is a level, "hole" plain.
+    expect(filters('Body 1 faces fillet <Z')).toMatchObject([{ f: 'fillet', size: null }, { f: '<', ax: { text: 'Z' } }]);
+    expect(filters('Body 1 faces fillet >Z[2]')).toMatchObject([{ f: 'fillet', size: null }, { f: '>', n: 2 }]);
+    expect(filters('Body 1 faces fillet hole')).toMatchObject([{ f: 'fillet', size: null }, { f: 'hole' }]);
+    expect(filters('Body 1 faces fillet %torus')).toMatchObject([{ f: 'fillet', size: null }, { f: '%', type: 'torus' }]);
+  });
+
+  it('reads a sized hole as whole drilled holes, and a plain hole as the per-face filter it was', () => {
+    expect(filters('Body 1 faces hole <= 6 mm')).toEqual([{ f: 'sized-hole', size: { cmp: '<=', expr: '6 mm' }, col: 14, text: 'hole <= 6 mm' }]);
+    expect(filters('Body 1 faces hole 6 mm')).toEqual([{ f: 'sized-hole', size: { cmp: '=', expr: '6 mm' }, col: 14, text: 'hole 6 mm' }]);
+    expect(filters('Body 1 faces hole >= 10 mm')).toMatchObject([{ f: 'sized-hole', size: { cmp: '>=', expr: '10 mm' } }]);
+    expect(filters('Body 1 faces hole')).toEqual([{ f: 'hole', col: 14, text: 'hole' }]);
+    // help's own example ("hole radius <r>") is still a plain hole then a radius.
+    expect(filters('Body 1 faces hole radius 3 mm')).toMatchObject([{ f: 'hole' }, { f: 'radius', expr: '3 mm', cmp: '=' }]);
+    expect(filters('Body 1 faces hole <Z')).toMatchObject([{ f: 'hole' }, { f: '<' }]);
+    expect(filters('Body 1 faces hole boss')).toMatchObject([{ f: 'hole' }, { f: 'boss' }]);
+  });
+
+  it('reads radius <= and >=; a plain radius as it was; a radius stops at fillet', () => {
+    expect(filters('Body 1 faces radius <= 3 mm')).toEqual([{ f: 'radius', expr: '3 mm', cmp: '<=', col: 14, text: 'radius <= 3 mm' }]);
+    expect(filters('Body 1 faces radius >= 3 mm')).toMatchObject([{ f: 'radius', expr: '3 mm', cmp: '>=' }]);
+    expect(filters('Body 1 faces radius 3 mm')).toMatchObject([{ f: 'radius', expr: '3 mm', cmp: '=' }]);
+    expect(filters('Body 1 faces radius 2 mm fillet')).toMatchObject([{ f: 'radius', expr: '2 mm', cmp: '=' }, { f: 'fillet', size: null }]);
+    expect(filters('Body 1 faces radius 2 mm fillet <= 3 mm')).toMatchObject([{ f: 'radius', expr: '2 mm' }, { f: 'fillet', size: { cmp: '<=', expr: '3 mm' } }]);
+  });
+
+  it('ends a size at a bracket, "&" and "offset" (an edge query, two faces, a plane)', () => {
+    expect(p('edges of (Body 1 faces fillet <= 2 mm) |X', 'edge')).toMatchObject({ t: 'edges-of', face: { t: 'query', filters: [{ f: 'fillet', size: { expr: '2 mm' } }] }, filters: [{ f: '|' }] });
+    expect(p('edges of (Body 1 faces radius 3 mm) |X', 'edge')).toMatchObject({ face: { t: 'query', filters: [{ f: 'radius', expr: '3 mm' }] }, filters: [{ f: '|' }] });
+    expect(p('Body 1 faces fillet 2 mm & Base.end', 'edge')).toMatchObject({ t: 'pair', a: { t: 'query', filters: [{ f: 'fillet', size: { expr: '2 mm' } }] } });
+    expect(p('Body 1 faces hole 6 mm >Z offset 2 mm', 'plane')).toMatchObject({ t: 'plane', offset: '2 mm', base: { b: 'face', face: { filters: [{ f: 'sized-hole', size: { expr: '6 mm' } }, { f: '>' }] } } });
+  });
+
+  it('refuses fillet and a sized hole on edges or vertices, naming the faces form', () => {
+    const e = err('Body 1 edges fillet');
+    expect(e.message).toBe('fillet filters faces: Body 1 faces fillet <= 2 mm');
+    expect(e.column).toBe(14);
+    expect(err('Body 1 vertices fillet').message).toBe('fillet filters faces: Body 1 faces fillet <= 2 mm');
+    expect(err('Body 1 edges fillet >= 5 mm').message).toBe('fillet filters faces: Body 1 faces fillet >= 5 mm');
+    expect(err('all edges hole <= 6 mm').message).toBe('hole <= 6 mm filters faces: all faces hole <= 6 mm');
+    expect(err('edges of Base.end fillet', 'edge').message).toBe('fillet filters faces: Body 1 faces fillet <= 2 mm');
+    // A plain hole keeps its words.
+    expect(err('Body 1 edges hole', 'edge').message).toBe('hole filters round faces');
+  });
+
+  it('refuses a bare < or > after fillet, hole or radius (<Z and >Z are levels), with the form to write', () => {
+    const e = err('Body 1 faces fillet < 2 mm');
+    expect(e.message).toBe('write <= or >= after fillet (<Z and >Z are levels): fillet <= 2 mm');
+    expect(e.column).toBe(21);
+    expect(err('Body 1 faces fillet > 5 mm').message).toBe('write <= or >= after fillet (<Z and >Z are levels): fillet >= 5 mm');
+    expect(err('Body 1 faces fillet <3').message).toBe('write <= or >= after fillet (<Z and >Z are levels): fillet <= 3');
+    expect(err('Body 1 faces fillet <').message).toBe('write <= or >= after fillet (<Z and >Z are levels): fillet <= 2 mm');
+    expect(err('Body 1 faces hole < 6 mm').message).toBe('write <= or >= after hole (<Z and >Z are levels): hole <= 6 mm');
+    expect(err('Body 1 faces radius > 3 mm').message).toBe('write <= or >= after radius (<Z and >Z are levels): radius >= 3 mm');
+    expect(err('Body 1 faces fillet <=').message).toBe('expected a size after "fillet <=" (fillet <= 2 mm)');
+    expect(err('Body 1 faces radius').message).toMatch(/expected a radius after "radius"/);
+  });
+
+  it('a bare fillet <= 2 mm, with no scope, does not read (resolve adds "put the scope first")', () => {
+    for (const q of ['fillet <= 2 mm', 'fillet', 'hole <= 6 mm']) expect(() => p(q)).toThrow(SelectorSyntaxError);
+  });
+});
+
 describe('labels', () => {
   const featureName = (id: string) => NAMES.features.find((f) => f.id === id)?.name ?? null;
   const names = { featureName };

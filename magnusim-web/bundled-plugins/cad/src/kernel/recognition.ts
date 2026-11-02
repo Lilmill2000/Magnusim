@@ -16,6 +16,15 @@ import { RECOGNIZE_MAX_FACES } from './timeouts';
 export const RECOGNIZE_API = 8;
 /** Shapes kept. */
 export const RECOGNITION_CACHE_SHAPES = 32;
+/**
+ * The drill-hole mode every caller gets unless it asks for another (decision D6, measured 2026-11-02
+ * on the shipped kernel): hard finds the holes whose mouth straddles a fillet and the next face (5 of
+ * the verifier's 7 such bodies; soft finds none of them), loses no hole soft finds on the gate's 216
+ * code-built rows or the 11 NIST parts, and differs elsewhere only where holes cross: it joins them
+ * into one hole (cross-drilled 6 and 4: one hole of bores 4 to 6), as on NIST FTC-10 (26 soft holes,
+ * 16 hard). Same cost: a 2,006-face plate of 2,000 holes 2.16 s soft, 2.12 s hard.
+ */
+export const HOLES_MODE: 'soft' | 'hard' = 'hard';
 
 export interface FeaturesQuery {
   /** Fillets (default true). */
@@ -27,7 +36,7 @@ export interface FeaturesQuery {
    * runs at the largest picked r_max x 1.001). Default: every fillet (the body's box diagonal).
    */
   max_r?: number;
-  /** asiAlgo_RecognizeDrillHoles' mode (default 'soft'). */
+  /** asiAlgo_RecognizeDrillHoles' mode (default HOLES_MODE). */
   holes_mode?: 'soft' | 'hard';
 }
 
@@ -113,7 +122,7 @@ function abortError(): Error {
 }
 
 function keyOf(q: FeaturesQuery, maxFaces: number): string {
-  return [q.blends === false ? 0 : 1, q.holes === false ? 0 : 1, q.max_r ?? '', q.holes_mode ?? 'soft', maxFaces].join('|');
+  return [q.blends === false ? 0 : 1, q.holes === false ? 0 : 1, q.max_r ?? '', q.holes === false ? '' : (q.holes_mode ?? HOLES_MODE), maxFaces].join('|');
 }
 
 export function createRecognitionClient(kernel: KernelAdapter): RecognitionClient {
@@ -138,7 +147,7 @@ export function createRecognitionClient(kernel: KernelAdapter): RecognitionClien
     if (typeof api === 'number' && api > 0 && api < RECOGNIZE_API) return { ok: false, reason: 'old_kernel', api, words: oldKernelWords(api) };
     calls++;
     try {
-      const params = { id: shape, max_faces: maxFaces, ...(q.blends === false ? { blends: false } : {}), ...(q.holes === false ? { holes: false } : {}), ...(q.max_r !== undefined ? { max_r: q.max_r } : {}), ...(q.holes_mode ? { holes_mode: q.holes_mode } : {}) };
+      const params = { id: shape, max_faces: maxFaces, ...(q.blends === false ? { blends: false } : {}), ...(q.holes === false ? { holes: false } : { holes_mode: q.holes_mode ?? HOLES_MODE }), ...(q.max_r !== undefined ? { max_r: q.max_r } : {}) };
       const r = await kernel.call('recognize', params);
       return { ok: true, result: r.result };
     } catch (err) {

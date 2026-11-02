@@ -10,14 +10,18 @@
 //   - Delete of several features (UiController.deleteFeatures, Delete with several selected): the
 //     same Part as the delete tool's, one undo step; refused as a whole while a feature left uses one;
 //   - Find (features/find runFind): the find tool's rows for the same query, and Select all the
-//     same items as workspace select;
+//     same items as workspace select; for fillets and sized holes (S4) the same rows, count and
+//     holes, and the same words for a no-match and a body over the face limit;
 //   - Measure (features/measure bodyRows, sectionRows): the measure tool's solids, voids, overlap and
 //     section area;
 //   - a parameter's comment (the Parameters panel's updateParam) as set_params stores it;
 //   - the Back isometric view: the same direction as the pictures' iso_back.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
-import { runFind } from '../../src/features/find/panel';
+import { findError, runFind } from '../../src/features/find/panel';
+import { forgetBreps } from '../../src/features/import/feature';
+import { recognitionOf } from '../../src/kernel/recognition';
+import { RECOGNIZE_MAX_FACES } from '../../src/kernel/timeouts';
 import { makeHoles, planFor } from '../../src/features/hole/make';
 import { bodyRows, sectionRows } from '../../src/features/measure/panel';
 import { madeWith } from '../../src/assistant/made-with';
@@ -29,12 +33,14 @@ import { SNAPSHOT_DIRS } from '../../src/viewport/snapshot';
 import { fail, ok } from './extrude-tools';
 import { assistantHarness, type AssistantHarness } from './harness';
 import { undoLabel } from './parts';
+import { importRoundedBlock } from './rounded-block';
 import { block, featureNamed, partNow, type Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
   h?.dispose();
   h = null;
+  forgetBreps();
 });
 
 const MS = 240_000;
@@ -195,6 +201,45 @@ describe("the person's side of the Assistant's tools stores what the tools store
       expect(docNow(h).params.find((p) => p.name === 'w')!.comment).toBeUndefined();
       expect(h.doc.updateParam(ai.id, { comment: 'Plate width' }).ok).toBe(true);
       expect(docNow(h).params.find((p) => p.name === 'w')).toEqual(ai);
+    },
+    MS,
+  );
+
+  it(
+    "Find of fillets and sized holes (S4): the find tool's count, rows and holes; the same words for a no-match and a body over the face limit",
+    async () => {
+      h = await assistantHarness({ solver: false });
+      await importRoundedBlock(h);
+      const strip = (r: Row) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'handle' && k !== 'items'));
+      for (const q of ['Body 1 faces fillet <= 2 mm', 'Body 1 faces fillet', 'Body 1 faces hole <= 6 mm', 'Body 1 faces hole <= 10 mm']) {
+        const mine = await runFind(h.services, q);
+        const tool = await ok(h, 'find', { query: q, limit: 25 });
+        expect(mine.count, q).toBe(tool.data.count);
+        expect(mine.holes, q).toBe((tool.data.holes as number | undefined) ?? null);
+        expect(mine.rows.map(strip), q).toEqual((tool.data.rows as Row[]).map(strip));
+        expect(mine.items.length, q).toBe(tool.data.count);
+        // The hint to check the lit faces: for these queries only.
+        expect(mine.shape, q).toBe(true);
+      }
+      expect((await runFind(h.services, 'Body 1 faces >Z')).shape).toBe(false);
+      // A no-match: the panel's line is the tool's message.
+      const q0 = 'Body 1 faces fillet <= 1 mm';
+      const none = await fail(h, 'find', { query: q0, limit: 10 });
+      expect(none.message).toContain('matches nothing: Body 1 has 12 fillet faces, R2 to R5.');
+      expect((await runFind(h.services, q0)).nothing).toBe(none.message.replace(/^nothing_selected: /, ''));
+      // Over the face limit: the same words and the same hint (the panel shows them together).
+      recognitionOf(h.services.kernel).limits.maxFaces = 10;
+      try {
+        const big = await fail(h, 'find', { query: 'Body 1 faces fillet <= 2 mm', limit: 10 });
+        const person = await runFind(h.services, 'Body 1 faces fillet <= 2 mm').then(
+          () => null,
+          (e: unknown) => findError(e),
+        );
+        expect(person).toBe(`${big.message.replace(/^bad_selector: /, '')} ${big.hint}`);
+        expect(person).toBe('Body 1 has 25 faces: fillets and holes are found on bodies of up to 10 faces. Select its faces in the view instead.');
+      } finally {
+        recognitionOf(h.services.kernel).limits.maxFaces = RECOGNIZE_MAX_FACES;
+      }
     },
     MS,
   );
