@@ -12,7 +12,7 @@ asi_patch: asi-occt79-wasm.patch sha256=d5a3c890ef082a184811ae6182623cb98a72378a
 asi_compat: asi_occt79_compat.h sha256=9f3dba071898adc45a0101701ba2e8513d997c07f83faa934decbc8c3647db45
 asi_flags: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin -ffile-prefix-map=<asi work>=/cad-asi -include asi_occt79_compat.h -I<asiAlgo and its folders> -I<asiActiveData/API, asiActiveData, asiActiveData/Mesh/DS> -I<occt install>/inc -DASI_NO_VIS_IO -DASI_NO_EIGEN -Wno-deprecated-declarations
 asi_occt_install: occt-wasm32-55fc9e3e1aa4
-asi_key: b922d5f45c50
+asi_key: 5b5ae6dd837b
 asi_lib: libasi.a 4133068 bytes sha256=102b2d769f72f28a0b138d869a8a35dcf43b300d7f37837f6e34d921565d42b8
 compile: em++ -std=c++17 -O3 -fwasm-exceptions -msimd128 -ffile-prefix-map=<build root>=/cad-build -ffile-prefix-map=<plugin>=/cad-plugin 
 link: -O3 -fwasm-exceptions -msimd128 -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sEXPORTED_FUNCTIONS=[_mk_call,_mk_alloc,_mk_free,_malloc,_free] -sEXPORTED_RUNTIME_METHODS=[ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8,HEAPU8,HEAPF32,HEAPU32] -sEXPORT_NAME=createMagnusimKernel -sFILESYSTEM=0 

@@ -21,6 +21,12 @@ VARIANT="${1:?usage: build-asi.sh wasm32}"
 [ "$VARIANT" = wasm32 ] || { echo "Analysis Situs is built for wasm32 only (the kernel that ships); $VARIANT links without it" >&2; exit 2; }
 
 # 1. The vendored files are the pinned ones, and only those.
+for f in FILES.sha256 sources.txt asi-occt79-wasm.patch asi_occt79_compat.h; do
+  if grep -q $'\r' "$ASI_DIR/$f"; then
+    echo "kernel-build/asi/$f has CRLF line ends: kernel-build/ was checked out with line-end conversion. The root .gitattributes keeps kernel-build/ LF and asi/upstream/ byte for byte; check kernel-build/ out again with those lines (or with core.autocrlf=false)." >&2
+    exit 1
+  fi
+done
 listed=$(sed -E 's/^[0-9a-f]{64}  //' "$ASI_DIR/FILES.sha256" | LC_ALL=C sort)
 present=$(cd "$ASI_DIR/upstream" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
 extra=$(comm -13 <(echo "$listed") <(echo "$present"))
