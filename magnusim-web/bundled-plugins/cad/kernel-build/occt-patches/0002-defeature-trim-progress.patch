@@ -1,0 +1,40 @@
+BOPAlgo_RemoveFeatures (BRepAlgoAPI_Defeaturing) trimmed each grown face with a
+BOPAlgo_Builder that was given no progress range, so a progress indicator's
+UserBreak was not polled while it ran: a small B-spline face grown far past its
+size took 8-11 s to trim without one poll. Give the trim the loop's range. Results
+are unchanged unless the indicator breaks.
+--- a/src/BOPAlgo/BOPAlgo_RemoveFeatures.cxx
++++ b/src/BOPAlgo/BOPAlgo_RemoveFeatures.cxx
+@@ -583,11 +583,11 @@
+     TopExp::MapShapes(myFeature, TopAbs_EDGE, aFeatureEdgesMap);
+ 
+     Message_ProgressScope aPS(aPSOuter.Next(), "Trimming faces", aNbF);
+-    for (Standard_Integer i = 1; i <= aNbF && aPS.More(); ++i, aPS.Next())
++    for (Standard_Integer i = 1; i <= aNbF && aPS.More(); ++i)
+     {
+       const TopoDS_Face& aFOriginal = TopoDS::Face(theFaceExtFaceMap.FindKey(i));
+       const TopoDS_Face& aFExt      = TopoDS::Face(theFaceExtFaceMap(i));
+-      TrimFace(aFExt, aFOriginal, aFeatureEdgesMap, anEFExtMap, aGFInter);
++      TrimFace(aFExt, aFOriginal, aFeatureEdgesMap, anEFExtMap, aGFInter, aPS.Next());
+     }
+   }
+ 
+@@ -597,7 +597,8 @@
+                 const TopoDS_Face&                               theFOriginal,
+                 const TopTools_IndexedMapOfShape&                theFeatureEdgesMap,
+                 const TopTools_IndexedDataMapOfShapeListOfShape& theEFExtMap,
+-                BOPAlgo_Builder&                                 theGFInter)
++                BOPAlgo_Builder&                                 theGFInter,
++                const Message_ProgressRange&                     theRange)
+   {
+     // Map all edges of the extended face, to filter the result of trim
+     // from the faces containing these edges
+@@ -650,7 +651,7 @@
+     aGFTrim.SetRunParallel(myRunParallel);
+     aGFTrim.SetNonDestructive(Standard_True);
+ 
+-    aGFTrim.Perform();
++    aGFTrim.Perform(theRange);
+     if (aGFTrim.HasErrors())
+       return;
+ 

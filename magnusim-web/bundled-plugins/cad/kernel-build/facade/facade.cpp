@@ -46,6 +46,8 @@
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <Message_PrinterOStream.hxx>
+#include <Message_ProgressIndicator.hxx>
+#include <Message_ProgressScope.hxx>
 
 #include <TopoDS.hxx>
 #include <TopoDS_Shape.hxx>
@@ -1023,7 +1025,12 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // other faces (props, press-pull's volume check).
 // 8 = Analysis Situs asiAlgo 2026.1.1: recognize (fillets, drilled holes), suppress_blends (every
 // fillet up to R, with history), debug_reshape.
-const int kFacadeApi = 8;
+// 9 = defeature's time budget: budget_ms, far_budget_ms and far_skip; a heal stopped in time
+// answers `stopped` and no shape (OCCT polls while it trims grown faces: occt-patches/0002).
+// recognize's two face limits (max_fillet_faces 5,000, max_hole_faces 2,600, words naming both)
+// on the faster adjacency graph; suppress_blends' budget refusal names the time and the allowance;
+// debug_budget_words (tests).
+const int kFacadeApi = 9;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
@@ -1955,20 +1962,139 @@ JV opFillet(const JV& q, bool chamfer) {
   return r;
 }
 
+// A progress indicator whose UserBreak trips once the run has taken budgetMs. OCCT polls it
+// between its steps and (occt-patches/0002) while it trims each grown face.
+class BudgetProgress : public Message_ProgressIndicator {
+ public:
+  explicit BudgetProgress(double budgetMs) : t0_(nowMs()), budget_(budgetMs) {}
+  Standard_Boolean UserBreak() override {
+    if (!tripped && nowMs() - t0_ > budget_) tripped = true;
+    return tripped;
+  }
+  void Show(const Message_ProgressScope&, const Standard_Boolean) override {}
+  bool tripped = false;
+
+ private:
+  double t0_, budget_;
+};
+
+// BRepAlgoAPI_Defeaturing grows every face next to a group of removed faces by that group's
+// box diagonal (BOPAlgo_RemoveFeatures, FillGap::ExtendAdjacentFaces). A B-spline face much
+// smaller than that is extrapolated far past its own patch (a 2 mm corner piece of a fillet grown
+// 36 mm: 22 times its parameter range), and trimming the result takes OCCT seconds per edge and
+// usually ends in "unable to remove the feature". The kept faces it would grow that far: grown
+// by more than kFarGrowRatio times their own box diagonal, and not planes, cylinders, cones,
+// spheres or tori (those grow exactly).
+const double kFarGrowRatio = 4;
+struct FarGrow {
+  std::vector<int> faces;  // 0-based on the input
+  double ratio = 0;        // the largest grow / size
+};
+FarGrow farGrown(int sid, const std::vector<int>& picks) {
+  FarGrow out;
+  Indexed& in = indexOf(sid);
+  const auto& ef = edgeFacesOf(sid);
+  std::set<int> picked(picks.begin(), picks.end());
+  // Groups of removed faces that share an edge (OCCT's features: MakeConnexityBlocks).
+  std::map<int, int> group;
+  for (int p : picks) group[p] = p;
+  std::function<int(int)> root = [&](int a) { return group[a] == a ? a : group[a] = root(group[a]); };
+  for (int p : picks)
+    for (TopExp_Explorer ex(in.f(p + 1), TopAbs_EDGE); ex.More(); ex.Next()) {
+      const int k = ef.FindIndex(ex.Current());
+      if (!k) continue;
+      for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+        const int o = in.f.FindIndex(it.Value()) - 1;
+        if (o >= 0 && picked.count(o)) group[root(o)] = root(p);
+      }
+    }
+  std::map<int, Bnd_Box> boxes;
+  for (int p : picks) BRepBndLib::Add(in.f(p + 1), boxes[root(p)]);
+  std::set<int> seen;
+  for (int p : picks) {
+    const double grow = std::sqrt(boxes[root(p)].SquareExtent());
+    for (TopExp_Explorer ex(in.f(p + 1), TopAbs_EDGE); ex.More(); ex.Next()) {
+      const int k = ef.FindIndex(ex.Current());
+      if (!k) continue;
+      for (TopTools_ListIteratorOfListOfShape it(ef(k)); it.More(); it.Next()) {
+        const int o = in.f.FindIndex(it.Value()) - 1;
+        if (o < 0 || picked.count(o)) continue;
+        const TopoDS_Face& F = TopoDS::Face(in.f(o + 1));
+        const GeomAbs_SurfaceType t = BRepAdaptor_Surface(F, Standard_False).GetType();
+        if (t == GeomAbs_Plane || t == GeomAbs_Cylinder || t == GeomAbs_Cone || t == GeomAbs_Sphere || t == GeomAbs_Torus) continue;
+        Bnd_Box b;
+        BRepBndLib::Add(F, b);
+        const double size = b.IsVoid() ? 0 : std::sqrt(b.SquareExtent());
+        const double ratio = size > 0 ? grow / size : 1e9;
+        if (ratio <= kFarGrowRatio) continue;
+        if (seen.insert(o).second) out.faces.push_back(o);
+        out.ratio = std::max(out.ratio, ratio);
+      }
+    }
+  }
+  std::sort(out.faces.begin(), out.faces.end());
+  return out;
+}
+
 // Remove faces (holes, bosses, fillets) and heal the gap (BRepAlgoAPI_Defeaturing).
+// API 9, a time budget (none given: it runs to the end, as before):
+//  - budget_ms: OCCT's heal stops at its first progress poll after that long, and the answer is
+//    {stopped: {budget_ms, after_ms, far_grown, far_ratio?}} with no shape (the body is unchanged).
+//  - far_budget_ms: the budget instead when OCCT would grow a kept curved face far past its size
+//    (farGrown; the smaller of the two when both are given).
+//  - far_skip: such a heal is not started at all: {stopped: {budget_ms: 0, skipped: true, ...}}.
+//    Its slowest step on a rounded T-block (a p-curve projected onto a grown corner piece) runs
+//    13 s between two progress polls, and every such heal measured hung or failed.
+// A result that was checked reports far_grown when it found such faces.
 JV opDefeature(const JV& q) {
   int sid = idParam(q.req("id"), "id");
-  for (auto& f : q.req("faces").items()) faceAt(sid, f);  // index check against the input
+  std::vector<int> picks;
+  for (auto& f : q.req("faces").items()) {
+    faceAt(sid, f);  // index check against the input
+    picks.push_back((int)f.num());
+  }
+  const double budget = q.num("budget_ms", 0);
+  if (q.has("budget_ms") && !(budget > 0)) throw InputError("budget_ms must be > 0");
+  const double farBudget = q.num("far_budget_ms", 0);
+  if (q.has("far_budget_ms") && !(farBudget > 0)) throw InputError("far_budget_ms must be > 0");
+  const bool farSkipAsked = q.boolean("far_skip", false);
   WorkCopies wc({sid});
   const int wid = wc.id(0);
   const TopoDS_Shape& s = wc.shape(0);
+  FarGrow far;
+  if (farBudget > 0 || farSkipAsked) far = farGrown(wid, picks);
+  const double runBudget =
+      !far.faces.empty() && farBudget > 0 ? (budget > 0 ? std::min(budget, farBudget) : farBudget) : budget;
+  const bool farSkip = farSkipAsked && !far.faces.empty();
   BRepAlgoAPI_Defeaturing df;
   df.SetShape(s);
   for (auto& f : q.req("faces").items()) df.AddFaceToRemove(faceAt(wid, f));
   df.SetRunParallel(false);
   df.SetToFillHistory(true);
   const double t0 = nowMs();
-  df.Build();
+  Handle(BudgetProgress) prog;
+  if (farSkip) {
+    prog = new BudgetProgress(0);
+    prog->tripped = true;
+  } else if (runBudget > 0) {
+    prog = new BudgetProgress(runBudget);
+    df.Build(prog->Start());
+  } else {
+    df.Build();
+  }
+  if (!prog.IsNull() && prog->tripped) {
+    JV st = JV::obj();
+    st.set("budget_ms", farSkip ? 0.0 : runBudget);
+    if (farSkip) st.set("skipped", true);
+    st.set("after_ms", nowMs() - t0);
+    JV ff = JV::arr();
+    for (int f : far.faces) ff.push((double)f);
+    st.set("far_grown", std::move(ff));
+    if (!far.faces.empty()) st.set("far_ratio", far.ratio);
+    JV r = JV::obj();
+    r.set("stopped", std::move(st));
+    return r;
+  }
   if (df.HasErrors()) throw OcctError("defeature failed: " + algoErrors(df) + "; the body is unchanged");
   if (df.Shape().IsNull()) throw OcctError("defeature returned no shape; the body is unchanged");
   const double t1 = nowMs();
@@ -1985,6 +2111,11 @@ JV opDefeature(const JV& q) {
   std::string wtext = algoWarnings(df);
   if (!wtext.empty()) r.set("warning_text", wtext);
   r.set("history", historyForPairs(wc.pairs(), *h, id));
+  if (!far.faces.empty()) {
+    JV ff = JV::arr();
+    for (int f : far.faces) ff.push((double)f);
+    r.set("far_grown", std::move(ff));
+  }
   addValidity(r, id, q);
   JV tm = JV::obj();
   tm.set("copy_ms", wc.ms);
@@ -2007,13 +2138,36 @@ std::string withCommas(long long n) {
   return n < 0 ? "-" + o : o;
 }
 
-// The largest body `recognize` searches when the call gives no max_faces: a running wasm call
-// cannot be stopped, so a body too big to search in time is refused before it starts. Measured
-// 2026-11-01 (Node, S2 gate G4): building the adjacency graph is quadratic in the edges of the
-// largest face, so a prism whose two end faces carry every edge takes 0.9 s at 2,000 faces and
-// 5.2 s at 5,000, and a plate with 2,000 holes 2.1 s (15 s at 5,000); bodies whose faces have
-// few edges take 1 s at 20,000. 2,000 is the largest size every measured body met in 3 s.
-const int kRecognizeMaxFaces = 2000;
+// The largest bodies `recognize` searches (API 9: one limit for fillets, one for holes): a running
+// wasm call cannot be stopped, so a body too big to search in time is refused before it starts.
+// The rule (gate G4): the slowest measured body at the limit takes at most 3 s in Node and 4.5 s in
+// the app's browser worker. Measured 2026-11-02 with the adjacency graph's speed hunk
+// (asi-occt79-wasm.patch), on real parts (NIST copies patterned or fused to 2,600 and 5,000 faces,
+// heat sinks, gears, brackets and plates with rounded holes) and the synthetic families:
+//  - fillets (a query without holes): bodies whose faces carry every edge bind it; a comb rounded
+//    on its lateral edges takes 1.00 s at 5,010 faces (0.87 s in the browser), a 620-tooth gear
+//    0.98 s at 4,983, a 5,002-sided prism 0.74 s; every real part 0.33-0.98 s.
+//  - holes (any query that asks for holes): the drill-hole recogniser is quadratic; a plain plate
+//    with one face per hole binds it: 2.52 s at 2,606 faces (2.49 s in the browser), 3.23 s at
+//    2,906. Real parts with holes near 2,600 faces take 0.53-0.73 s.
+// kernel-build/SOURCES.md, "recognize's face limits".
+const int kRecognizeMaxFilletFaces = 5000;
+const int kRecognizeMaxHoleFaces = 2600;
+
+// recognize's refusal of a body over its limits, naming both. The one the query ran into comes
+// first: "this body has 5,400 faces: fillets are found on bodies of up to 5,000 faces and holes on
+// bodies of up to 2,600", "this body has 3,000 faces: holes are found on bodies of up to 2,600
+// faces and fillets on bodies of up to 5,000". One limit for both (a call's max_faces) keeps
+// API 8's words: "this body has 2,412 faces: fillets and holes are found on bodies of up to 2,000".
+std::string tooManyFacesWords(int nf, long long filletMax, long long holeMax, bool filletsFirst) {
+  const std::string head = "this body has " + withCommas(nf) + " faces: ";
+  if (filletMax == holeMax) return head + "fillets and holes are found on bodies of up to " + withCommas(filletMax);
+  if (filletsFirst)
+    return head + "fillets are found on bodies of up to " + withCommas(filletMax) + " faces and holes on bodies of up to " +
+           withCommas(holeMax);
+  return head + "holes are found on bodies of up to " + withCommas(holeMax) + " faces and fillets on bodies of up to " +
+         withCommas(filletMax);
+}
 
 #ifndef MK_NO_ASI
 void throwRefusal(const mkasi::Refusal& e) {
@@ -2027,14 +2181,25 @@ void throwRefusal(const mkasi::Refusal& e) {
 // Fillets and drilled holes of a body, found by their shape (asiAlgo_RecognizeBlends,
 // asiAlgo_RecognizeDrillHoles). Read-only: it runs on a work copy (building the adjacency
 // graph may add curves to the shape), stores nothing and leaves nothing to release.
+// Face limits (API 9): max_fillet_faces (default 5,000) for a query that finds fillets,
+// max_hole_faces (default 2,600) for one that finds holes; max_faces sets both (one limit for the
+// call, API 8's parameter), and either of the other two overrides it.
 JV opRecognize(const JV& q) {
   const int sid = idParam(q.req("id"), "id");
   const int nf = indexOf(sid).f.Extent();
-  const double maxFaces = q.num("max_faces", kRecognizeMaxFaces);
-  if (!(maxFaces >= 1)) throw InputError("max_faces must be >= 1");
-  if (nf > maxFaces)
-    throw InputError("this body has " + withCommas(nf) + " faces: fillets and holes are found on bodies of up to " +
-                     withCommas((long long)maxFaces));
+  const bool blendsAsked = q.boolean("blends", true);
+  const bool holesAsked = q.boolean("holes", true);
+  auto limit = [&](const char* key, double fallback) {
+    const double v = q.num(key, fallback);
+    if (!(v >= 1)) throw InputError(std::string(key) + " must be >= 1");
+    return (long long)std::floor(v);
+  };
+  const double both = q.has("max_faces") ? (double)limit("max_faces", 0) : 0;
+  const long long filletMax = limit("max_fillet_faces", both > 0 ? both : kRecognizeMaxFilletFaces);
+  const long long holeMax = limit("max_hole_faces", both > 0 ? both : kRecognizeMaxHoleFaces);
+  const bool overFillets = blendsAsked && nf > filletMax;
+  const bool overHoles = holesAsked && nf > holeMax;
+  if (overFillets || overHoles) throw InputError(tooManyFacesWords(nf, filletMax, holeMax, overFillets));
 #ifdef MK_NO_ASI
   throw InputError("this build has no Analysis Situs: fillets and holes cannot be found");
 #else
@@ -2042,8 +2207,8 @@ JV opRecognize(const JV& q) {
   if (mode != "soft" && mode != "hard") throw InputError("holes_mode must be soft or hard");
   WorkCopies wc({sid});
   mkasi::RecognizeOptions o;
-  o.blends = q.boolean("blends", true);
-  o.holes = q.boolean("holes", true);
+  o.blends = blendsAsked;
+  o.holes = holesAsked;
   o.hardHoles = mode == "hard";
   // max_r: RecognizeBlends' own radius limit, as suppress_blends runs it (default: every fillet).
   o.maxR = q.num("max_r", 0);
@@ -8601,6 +8766,27 @@ JV opSilhouette(const JV& q) {
   return r;
 }
 
+// Test hook (API 9): suppress_blends' words for a run predicted over its budget, for any
+// prediction (tests check the rounding at chosen times: 1.45 s, 2 s, 30 s). picks and faces are
+// the counts the words name; budget_ms defaults to suppress_blends' own and may only lower it.
+JV opDebugBudgetWords(const JV& q) {
+  const double picks = q.num("picks"), faces = q.num("faces"), predicted = q.num("predicted_ms");
+  if (!(picks >= 1) || !(faces >= 1)) throw InputError("picks and faces must be >= 1");
+  if (!(predicted > 0)) throw InputError("predicted_ms must be > 0");
+#ifdef MK_NO_ASI
+  throw InputError("this build has no Analysis Situs: fillets cannot be taken off as fillets");
+#else
+  const double budget = q.num("budget_ms", 0);
+  if (q.has("budget_ms") && !(budget > 0)) throw InputError("budget_ms must be > 0");
+  const double used = budget > 0 ? std::min(budget, mkasi::suppressBudgetMs()) : mkasi::suppressBudgetMs();
+  JV r = JV::obj();
+  r.set("refused", predicted > used);
+  r.set("budget_ms", used);
+  r.set("words", mkasi::budgetWords((long long)picks, (long long)faces, predicted, used));
+  return r;
+#endif
+}
+
 // Test hook (API 8): an exporter-like "messy" copy of a body, so tests can try recognition on
 // shapes no modelling op makes, with no outside file. bspline: every surface and curve as
 // B-splines (BRepBuilderAPI_NurbsConvert); split_closed: closed faces cut in two
@@ -8746,6 +8932,7 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "debug_oom") return opDebugOom(q);
   if (op == "debug_hold") return opDebugHold(q);
   if (op == "debug_reshape") return opDebugReshape(q);
+  if (op == "debug_budget_words") return opDebugBudgetWords(q);
   throw InputError("unknown op '" + op + "'");
 }
 

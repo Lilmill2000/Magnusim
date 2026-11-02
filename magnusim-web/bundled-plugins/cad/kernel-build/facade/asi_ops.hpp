@@ -95,6 +95,12 @@ struct Suppression {
 // The longest SuppressBlendsInc run suppress_blends starts, predicted from counts (asi_ops.cpp).
 double suppressBudgetMs();
 
+// suppress_blends' refusal of a run predicted over its budget: "taking 404 fillet faces off as
+// fillets on a body of 810 faces would take about 20 s; Delete faces allows 1.4 s for taking
+// fillets off as fillets". Below 10 s the time has one decimal and never reads at or under the
+// budget ("about 1.5 s" for 1.42 s over 1.4 s).
+std::string budgetWords(long long picks, long long faces, double predictedMs, double budgetMs);
+
 // Take the picked fillets (0-based face indices of `body`) off its one solid with
 // asiAlgo_SuppressBlendsInc. The pick must be every fillet up to the largest picked radius,
 // checked against SuppressBlendsInc's own recognition, and its predicted run time must be within

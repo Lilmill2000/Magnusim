@@ -1,5 +1,5 @@
 Analysis Situs v2026.1.1 (commit 3c3ec3ff) for OCCT 7.9.3 and WebAssembly: the port the
-kernel build applies to the vendored files (build-asi.sh), 13 files. No algorithm changes.
+kernel build applies to the vendored files (build-asi.sh), 14 files. No algorithm changes.
 * OCCT 7.8 changed the hasher protocol of its NCollection maps. Each old-style hasher gets
   ASI_OCCT78_HASHER(key) from asi_occt79_compat.h (force-included), the removed
   Standard_GUID::HashCode / IsEqual calls become the compat header's globals, maps keyed by
@@ -8,6 +8,9 @@ kernel build applies to the vendored files (build-asi.sh), 13 files. No algorith
 * ASI_NO_VIS_IO: no windowing system, offscreen rendering or STL reading and writing in
   asiAlgo_Utils.cpp (those functions report failure).
 * ASI_NO_EIGEN: no Eigen include; asiAlgo_Utils::InterpolatePoints returns false.
+* Speed, same answers: asiAlgo_CheckDihedralAngle::AngleBetweenFaces reads its cached edge
+  maps of the two faces in place instead of copying both for every face pair (the copies
+  made building the adjacency graph quadratic in the edges of a face).
 These hunks change Analysis Situs files and are under those files' licence (BSD-3-Clause:
 LICENSES/AnalysisSitus-BSD-3-Clause.txt).
 diff --git a/src/asiActiveData/API/ActAPI_Common.h b/src/asiActiveData/API/ActAPI_Common.h
@@ -273,6 +276,60 @@ index 12150cf..08f6426 100755
  
    //! Sets the entire collection of nodal attributes.
    //! \param[in] attrs attributes to set.
+diff --git a/src/asiAlgo/features/asiAlgo_CheckDihedralAngle.cpp b/src/asiAlgo/features/asiAlgo_CheckDihedralAngle.cpp
+index 0f5ba6e..dc2bc2d 100755
+--- a/src/asiAlgo/features/asiAlgo_CheckDihedralAngle.cpp
++++ b/src/asiAlgo/features/asiAlgo_CheckDihedralAngle.cpp
+@@ -104,33 +104,38 @@ asiAlgo_FeatureAngleType
+     else
+     {
+       // Extract edges for faces
+-      TopTools_IndexedMapOfShape EdgesF, EdgesG;
++      TopTools_IndexedMapOfShape EdgesFLocal, EdgesGLocal;
+ 
+       // Use cached map of F edges.
+       if ( !m_bUseCache || !m_FECache.Contains(F) )
+       {
+-        TopExp::MapShapes(F, TopAbs_EDGE, EdgesF);
++        TopExp::MapShapes(F, TopAbs_EDGE, EdgesFLocal);
+ 
+         if ( m_bUseCache )
+-          m_FECache.Add( F, EdgesF );
+-      }
+-      else
+-      {
+-        EdgesF = m_FECache.FindFromKey(F);
++          m_FECache.Add( F, EdgesFLocal );
+       }
+ 
+       // Use cached map of G edges.
+       if ( !m_bUseCache || !m_FECache.Contains(G) )
+       {
+-        TopExp::MapShapes(G, TopAbs_EDGE, EdgesG);
++        TopExp::MapShapes(G, TopAbs_EDGE, EdgesGLocal);
+ 
+         if ( m_bUseCache )
+-          m_FECache.Add( G, EdgesG );
++          m_FECache.Add( G, EdgesGLocal );
+       }
+-      else
++
++      // Read the cached maps in place, not copies of them: a copy for every face pair made the
++      // graph quadratic in the edges of a face. Taken after both Add calls, so they never
++      // depend on how the map stores its items.
++      const TopTools_IndexedMapOfShape* pEdgesF = &EdgesFLocal;
++      const TopTools_IndexedMapOfShape* pEdgesG = &EdgesGLocal;
++      if ( m_bUseCache )
+       {
+-        EdgesG = m_FECache.FindFromKey(G);
++        pEdgesF = &m_FECache.FindFromKey(F);
++        pEdgesG = &m_FECache.FindFromKey(G);
+       }
++      const TopTools_IndexedMapOfShape& EdgesF = *pEdgesF;
++      const TopTools_IndexedMapOfShape& EdgesG = *pEdgesG;
+ 
+       // Collect common edges
+       for ( int ef = 1; ef <= EdgesF.Extent(); ++ef )
 diff --git a/src/asiAlgo/features/asiAlgo_FeatureAttr.h b/src/asiAlgo/features/asiAlgo_FeatureAttr.h
 index def9422..ce86c7f 100755
 --- a/src/asiAlgo/features/asiAlgo_FeatureAttr.h

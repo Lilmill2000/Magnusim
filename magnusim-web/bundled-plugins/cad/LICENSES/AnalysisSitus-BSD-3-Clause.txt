@@ -3,7 +3,7 @@ https://gitlab.com/ssv/AnalysisSitus): the part of its asiAlgo library, and of t
 Active Data interfaces asiAlgo uses, that the CAD plugin's kernel build compiles.
 Those files are in kernel-build/asi/upstream/ exactly as published (169 files);
 kernel-build/asi/asi-occt79-wasm.patch is our port of 13 of them to OCCT 7.9.3
-and WebAssembly (see kernel-build/SOURCES.md).
+and WebAssembly, and a speed change to a 14th (see kernel-build/SOURCES.md).
 
 The copyright lines of those files:
 

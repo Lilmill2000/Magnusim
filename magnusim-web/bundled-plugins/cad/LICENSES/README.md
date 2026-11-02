@@ -38,19 +38,19 @@ this plugin, pinned to exact upstream versions:
 - **OCCT** (`kernel-build/`): the upstream tag `V7_9_3`, commit
   `a016080bf6738d6aeae020badee4e888ad1540a5` of
   <https://github.com/Open-Cascade-SAS/OCCT> (`kernel-build/SOURCES.md`,
-  `env.sh`); our one patch (`occt-patches/`); the facade that uses it
+  `env.sh`); our two patches (`occt-patches/`); the facade that uses it
   (`facade/`, GPL-3.0-or-later source); and the scripts that build OCCT and the
   kernel (`build-occt.sh`, `build-facade.sh`, `build.sh`) with the pinned
   Emscripten 6.0.10. `build-occt.sh` refuses any OCCT source other than the
-  pinned commit plus our patch, `mk32.build.txt` records the hashes of the build
+  pinned commit plus our patches, `mk32.build.txt` records the hashes of the build
   that ships, and `repro-check.sh` shows that these sources give the shipped
   bytes.
 - **Analysis Situs** (`kernel-build/asi/`): 169 files of tag `v2026.1.1`,
   commit `3c3ec3ff077ef71eaee39dc062e01aada475808f` of
   <https://gitlab.com/ssv/AnalysisSitus>, as published (`asi/upstream/`,
-  checked against `asi/FILES.sha256`), our port to OCCT 7.9.3
-  (`asi-occt79-wasm.patch`, `asi_occt79_compat.h`) and `build-asi.sh`, which
-  `build.sh` runs. Two of those files, `asiAlgo_UnifySameDomain.{h,cpp}`, are
+  checked against `asi/FILES.sha256`), our port to OCCT 7.9.3 and one speed
+  change (`asi-occt79-wasm.patch`, `asi_occt79_compat.h`) and `build-asi.sh`,
+  which `build.sh` runs. Two of those files, `asiAlgo_UnifySameDomain.{h,cpp}`, are
   derived from OCCT and under its LGPL-2.1 with the Open CASCADE exception; the
   others are BSD-3-Clause. No archive is needed for them: the files the build
   uses are all in the plugin.

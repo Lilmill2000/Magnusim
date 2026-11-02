@@ -302,17 +302,31 @@ std::string commas(long long n) {
   return n < 0 ? "-" + o : o;
 }
 
-// A predicted time in words: "about 0.4 s", "about 6 s", "about 30 s", "about 3 min".
-std::string aboutTime(double ms) {
-  const double s = ms / 1000.;
-  if (s < 1.45) {
-    char b[16];
-    std::snprintf(b, sizeof b, "%.1f", std::max(0.1, s));
+// A predicted time in words: one decimal below 10 s ("about 0.4 s", "about 2.0 s", "about 6.8 s"),
+// then to 5 s ("about 30 s") and in minutes ("about 3 min"). A prediction over `overMs` never reads
+// at or under it: one that rounds down to it reads the next tenth over it (1.42 s over 1.4 s reads
+// "about 1.5 s"), so a refusal never says "about 1.4 s; ... allows 1.4 s".
+std::string aboutTime(double ms, double overMs) {
+  long tenths = std::max(1L, std::lround(ms / 100.));
+  if (ms > overMs && tenths * 100. <= overMs) tenths = (long)std::floor(overMs / 100.) + 1;
+  if (tenths < 100) {
+    char b[24];
+    std::snprintf(b, sizeof b, "%ld.%ld", tenths / 10, tenths % 10);
     return std::string("about ") + b + " s";
   }
-  if (s < 9.5) return "about " + std::to_string((int)std::lround(s)) + " s";
-  if (s < 92.5) return "about " + std::to_string(5 * (int)std::lround(s / 5.)) + " s";
+  const double s = ms / 1000.;
+  if (s < 92.5) return "about " + std::to_string(std::max(10, 5 * (int)std::lround(s / 5.))) + " s";
   return "about " + std::to_string(std::max(2, (int)std::lround(s / 60.))) + " min";
+}
+
+// A budget in seconds, as short as it is exact to the millisecond: "1.4 s", "0.35 s", "0.01 s".
+std::string secondsText(double ms) {
+  char b[32];
+  std::snprintf(b, sizeof b, "%.3f", std::max(0., ms) / 1000.);
+  std::string t = b;
+  while (t.size() > 1 && t.back() == '0') t.pop_back();
+  if (!t.empty() && t.back() == '.') t.pop_back();
+  return t + " s";
 }
 
 bool freeForm(const TopoDS_Face& f) {
@@ -328,9 +342,10 @@ bool freeForm(const TopoDS_Face& f) {
 
 // The counts SuppressBlendsInc's run time is predicted from, in one pass over the solid's edges
 // (faces are 1-based indices of the solid's face map).
-//  - pair_work: the work of one adjacency-graph build. asiAlgo_CheckDihedralAngle copies each
-//    face's edge map and compares the two faces' edges in a double loop for every adjacent pair,
-//    so a pair of faces with e1 and e2 edges costs about e1 * e2 + e1 + e2.
+//  - pair_work: the work of one adjacency-graph build. asiAlgo_CheckDihedralAngle compares the
+//    two faces' edges in a double loop for every adjacent pair (it copied both faces' edge maps
+//    too before the speed hunk in asi-occt79-wasm.patch), so a pair of faces with e1 and e2 edges
+//    costs about e1 * e2 + e1 + e2.
 //  - pair_work_after: the same once the picked faces are gone (each kept face loses the edges it
 //    shares with picks): the graph is rebuilt after every chain, on a body that shrinks.
 //  - free_form_chains: chains at R with a face that is not a plane, cylinder, cone, sphere or
@@ -403,21 +418,27 @@ CostCounts costCounts(const TopoDS_Shape& solid, const TopTools_IndexedMapOfShap
 // chain it takes off it re-recognises the fillets and builds a new adjacency graph of the body
 // (chains x faces, and chains x the graph's pair work, averaged between the body before and after:
 // (w0 + w1 + sqrt(w0 w1)) / 3); each chain's faces are killed and their edges rebuilt against the
-// whole body (picks x faces); chains among free-form faces cost more. Fitted (least squares on the
-// relative error) on 124 measured rows, Node 24, 2026-11-02: combs with 5-60 teeth rounded on their
-// lateral edges (24-244 one-face chains) or every edge (one chain of 120-1,220 faces), plates with
-// 100-1,900 holes and 4 or 1 chains, 3x3-11x11 pegs (36-484 chains) and 2x2-6x6 pegs rounded on
-// every edge, their B-spline copies, the Step 0 family and part A, and 10 NIST parts at 5 radii each.
-// The model reads within 0.8-1.3x on built parts; on two NIST parts (CTC-02, CTC-05) it reads 1.8-2.6x
-// low, hence the budget: kernel-build/SOURCES.md, "suppress_blends' budget".
-const double kMsPerChainPairWork = 1.7893e-5;
-const double kMsPerChainFace = 2.7171e-2;
-const double kMsPerPickFace = 2.4577e-3;
-const double kMsPerFreeFormChain = 13.920;
-const double kMsPerFreeFormPick = 1.2587;
-// The longest predicted run started: the slowest accepted measured run then took 2.0 s (2.25 s for the
-// whole op; a NIST part the model reads 1.8x low) and every faster-predicted built part under 1.5 s;
-// refused runs measured 1.6 s to 36 s.
+// whole body (picks x faces); chains among free-form faces cost more. Refitted (least squares on the
+// relative error) on 175 rows measured on the kernel with the adjacency-graph speed hunk
+// (asi-occt79-wasm.patch), Node 24, 2026-11-02: combs with 5-100 teeth rounded on their lateral
+// edges (24-404 one-face chains) or every edge (one chain of 120-1,220 faces), plates with 100-5,000
+// holes and 4 or 1 chains, 3x3-11x11 pegs (36-484 chains) and 2x2-6x6 pegs rounded on every edge,
+// their B-spline copies, the Step 0 family and part A, 10 NIST parts at 5 radii each, pin-fin and
+// plate-fin heat sinks, a perforated plate with rounded holes, gears, an L bracket, and the rounded
+// L-block with a 1,000-5,000-sided prism on it. The speed hunk cut the pair-work term to 0.43x
+// (1.7893e-5 before); the others moved under 10 %. The model reads within 0.7-1.5x on most built parts; it
+// reads 2.3-2.9x low on the rings of fillets round the pins of a pin-fin heat sink (its roots alone)
+// and up to 3.6x low on two NIST parts (CTC-02, CTC-05), hence the budget: kernel-build/SOURCES.md,
+// "suppress_blends' budget".
+const double kMsPerChainPairWork = 7.6630e-6;
+const double kMsPerChainFace = 2.6603e-2;
+const double kMsPerPickFace = 2.4951e-3;
+const double kMsPerFreeFormChain = 14.835;
+const double kMsPerFreeFormPick = 1.3371;
+// The longest predicted run started: the slowest accepted measured runs then took 3.0 s and 2.1 s
+// (3.1 s and 2.2 s for the whole op; the roots of 5 x 6 and 5 x 5 pin-fin heat sinks, which the
+// model reads 2.7-2.8x low) and 2.0 s (a NIST part), every other accepted run under 1.6 s; refused
+// runs measured 1.4 s to 37 s.
 const double kSuppressBudgetMs = 1400.;
 
 double predictSuppressMs(int faces, int picks, int chains, const CostCounts& c) {
@@ -526,6 +547,12 @@ void record(BRepTools_History& oh, const TopTools_IndexedMapOfShape& in, const T
 const char* version() { return "2026.1.1"; }
 
 double suppressBudgetMs() { return kSuppressBudgetMs; }
+
+std::string budgetWords(long long picks, long long faces, double predictedMs, double budgetMs) {
+  return "taking " + commas(picks) + " fillet face" + (picks == 1 ? "" : "s") + " off as fillets on a body of " +
+         commas(faces) + " faces would take " + aboutTime(predictedMs, budgetMs) + "; Delete faces allows " +
+         secondsText(budgetMs) + " for taking fillets off as fillets";
+}
 
 Refusal recognize(const TopoDS_Shape& body, const TopTools_IndexedMapOfShape& faces, const RecognizeOptions& opts,
                   Recognition& out) {
@@ -668,9 +695,7 @@ Refusal suppressBlends(const TopoDS_Shape& body, const TopTools_IndexedMapOfShap
   out.budget_ms = budgetMs > 0 ? std::min(budgetMs, kSuppressBudgetMs) : kSuppressBudgetMs;
 #ifndef MK_TEST_NO_SUPPRESS_BUDGET
   if (out.predicted_ms > out.budget_ms)
-    return refuse("input", "taking " + commas((long long)picks.size()) + " fillet face" + (picks.size() == 1 ? "" : "s") +
-                               " off as fillets on a body of " + commas(solidFaces.Extent()) + " faces would take too long here (" +
-                               aboutTime(out.predicted_ms) + ")");
+    return refuse("input", budgetWords((long long)picks.size(), solidFaces.Extent(), out.predicted_ms, out.budget_ms));
 #endif
 
   // 5. SuppressBlendsInc on a fresh AAG.
