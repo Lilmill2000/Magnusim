@@ -56,6 +56,13 @@
 //                 fillets off as fillets; the body is unchanged" (it said "did not work either:
 //                 taking 40 fillet faces off as fillets on a body of 50 faces would take ..."), the
 //                 chip as Fillet 1 left it (with the kernel's own 1.4 s they come off: heal-tblock).
+// Review 2026-11-02 (kernel API 9's two face limits):
+// 12. heal-limits a block with a blind Ø6 hole, its wall alone picked (OCCT cannot remove it): red,
+//                 "The picked face is part of holes with 1 more face" and Add the rest (+1). With the
+//                 page's holes' limit lowered under the body (window.__CAD__.recognition), the words
+//                 say the holes were not looked for and name both limits, with no Add the rest (the
+//                 rest left holes out with no word); with the fillets' limit under it too, that the
+//                 fillets and holes were not looked for (nothing was said). The chip as before.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -64,7 +71,7 @@ import { join } from 'node:path';
 import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type W = { __CAD__: { services: any; secondWay: { budgetMs: number | null } } };
+type W = { __CAD__: { services: any; secondWay: { budgetMs: number | null }; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
 
 async function shot(page: Page, name: string) {
   const dir = process.env.CAD_E2E_SHOTS;
@@ -641,5 +648,80 @@ test("cad:delete-faces-heal-pattern a Linear pattern of a rounded L-block's blen
   await expect(panel(frame)).toHaveCount(0);
   await expect(row).toHaveAttribute('data-state', 'error');
   await expectOneVolume(frame, filleted);
+  expect(seen.errors).toEqual([]);
+});
+
+/** Select the one body's cylindrical faces (a hole's wall); their count. */
+async function selectWalls(page: Page): Promise<number> {
+  return cad<number>(page, (async () => {
+    const s = (window as unknown as W).__CAD__.services;
+    const b = s.doc.state.get().rebuild.bodies[0];
+    const t = (await s.kernel.call('topo', { id: b.shape, faces: 'all', edges: 'none', vertices: 'none', face_bbox: 'none' })).result;
+    const idx = t.faces.filter((f: { type: string }) => f.type === 'cylinder').map((f: { i: number }) => f.i);
+    s.selection.set((st: object) => ({ ...st, items: idx.map((index: number) => ({ kind: 'face', body: b.id, index })) }));
+    return idx.length;
+  }) as never);
+}
+
+test("cad:delete-faces-heal-limits a blind hole's wall alone: red with the rest of the hole; on a body over the holes' face limit the words say holes were not looked for and name both limits, over the fillets' too that nothing was; never a silent rest", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const { seen, frame } = await freshPart(page, request);
+  const block = await addSolid(page, { size: [40, 30, 20] });
+  await addSolid(page, { circle: true, at: [20, 15, 10], size: [6, 10], op: 'cut', scope: [block.body!] });
+  await settled(page);
+  const v0 = 24000 - Math.PI * 9 * 10;
+  await expectOneVolume(frame, v0);
+  expect(await bodyFaces(page)).toBe(8);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  const reason = panel(frame).locator('[data-run-reason]').first();
+  const rest = panel(frame).locator('[data-delete-rest]');
+  const setLimits = (l: { maxFilletFaces: number; maxHoleFaces: number }) =>
+    cad(page, ((x: { maxFilletFaces: number; maxHoleFaces: number }) => {
+      Object.assign((window as unknown as W).__CAD__.recognition, x);
+    }) as never, l);
+  const deleteWall = async () => {
+    expect(await selectWalls(page)).toBe(1);
+    // The wall was made by Extrude 2: the dialog's "Delete faces and heal".
+    await runCommand(frame, 'modify.delete-faces');
+    const dlg = frame.locator('[data-cad-dialog]');
+    await expect(dlg.locator('h2')).toHaveText('Delete faces of Extrude 2?');
+    await dlg.locator('[data-dialog-choice="faces"]').click();
+    await expect(panel(frame).locator('[data-feature-panel="delete_faces"]')).toBeVisible();
+    await settled(page);
+    await expect(row).toHaveAttribute('data-state', 'error', { timeout: 60_000 });
+  };
+  const undoIt = async () => {
+    await panel(frame).locator('[data-panel-done]').click();
+    await expect(panel(frame)).toHaveCount(0);
+    await cad(page, (() => (window as unknown as W).__CAD__.services.doc.undo()) as never);
+    await settled(page);
+    await expect(row).toHaveCount(0);
+  };
+  const HEAD = /^Delete faces 1 failed: the faces could not be removed and healed \([^)]*\)\. /;
+  try {
+    // Within both limits: the rest of the hole (its bottom), and Add the rest.
+    await deleteWall();
+    await expect(reason).toHaveText(new RegExp(`${HEAD.source}The picked face is part of holes with 1 more face$`));
+    await expect(rest).toHaveText('Add the rest (+1)');
+    await undoIt();
+    // Over the holes' limit only: no rest, and the words say why, naming both limits (the holes' first).
+    await setLimits({ maxFilletFaces: 5000, maxHoleFaces: 5 });
+    await deleteWall();
+    await expect(reason).toHaveText(new RegExp(`${HEAD.source}The holes the picked face is part of are not looked for on Body 1: it has 8 faces, and holes are found on bodies of up to 5 faces and fillets on bodies of up to 5,000$`));
+    await expect(rest).toHaveCount(0);
+    await expectOneVolume(frame, v0);
+    await shot(page, 'delete-faces-heal-limits');
+    await undoIt();
+    // Over the fillets' limit too: nothing was looked for, and that is said.
+    await setLimits({ maxFilletFaces: 6, maxHoleFaces: 5 });
+    await deleteWall();
+    await expect(reason).toHaveText(new RegExp(`${HEAD.source}The fillets and holes the picked face is part of are not looked for on Body 1: it has 8 faces, and fillets are found on bodies of up to 6 faces and holes on bodies of up to 5$`));
+    await expect(rest).toHaveCount(0);
+    await expectOneVolume(frame, v0);
+  } finally {
+    await setLimits({ maxFilletFaces: 5000, maxHoleFaces: 2600 });
+  }
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
   expect(seen.errors).toEqual([]);
 });

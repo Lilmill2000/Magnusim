@@ -13,7 +13,8 @@
 //      one, kernel API 9), "Body 1 faces fillet": the words name Body 1, its faces and both limits,
 //      the fillets' first, and say to select its faces in the view instead: no count line, no empty
 //      list; with only the holes' limit under the body, fillets are found and a sized hole is
-//      refused, the holes' limit named first.
+//      refused, the holes' limit named first; "fillet <= 1 mm" still says what the body has (its
+//      fillets are searched without holes; review 2026-11-02: no test held it).
 // Without S4, "fillet" is a bad selector and step 1 fails; step 5 fails if the body answers an
 // empty list instead of the words.
 // Review 2026-11-02:
@@ -164,6 +165,10 @@ test('cad:find-fillets-holes Find fillets and holes by size on an imported STEP 
     });
     await find(frame, 'Body 1 faces fillet');
     await expect(count).toHaveText('4 faces match Body 1 faces fillet', { timeout: 30_000 });
+    // A fillet query that matches nothing: what Body 1 has, as within both limits.
+    await find(frame, 'Body 1 faces fillet <= 1 mm');
+    await expect(panel.locator('[data-find-nothing]')).toHaveText('"Body 1 faces fillet <= 1 mm" matches nothing: Body 1 has 4 fillet faces, R5.', { timeout: 30_000 });
+    await expect(panel.locator('[data-find-row]')).toHaveCount(0);
     await find(frame, 'Body 1 faces hole <= 6 mm');
     await expect(panel.locator('[data-run-reason]')).toHaveText(`Body 1 has ${faces} faces: holes are found on bodies of up to 8 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.`, { timeout: 30_000 });
     await expect(count).toHaveCount(0);

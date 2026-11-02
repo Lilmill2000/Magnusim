@@ -26,20 +26,30 @@
 //                 kernel restart). Now the kernel does not start a heal that would grow a small
 //                 curved face that far, taking them off as fillets refuses at once, and each round
 //                 comes off with its 2 corner pieces, one at a time: the row ok well within 20 s with
-//                 the note "Taken off one round at a time, with the 16 corner faces ...", the chip at
-//                 the T-block with only Fillet 1 (31,731.445 mm³, measured here as the reference), no
-//                 kernel restart.
+//                 the note "Taken off one round at a time, with the 16 corner faces ...: OCCT's heal
+//                 was not run: it would grow 16 small curved faces up to 10 times their size, which
+//                 failed or ran past 20 s on every part measured" (it said, as a forecast, that the
+//                 heal would "not finish"), the chip at the T-block with only Fillet 1 (31,731.445
+//                 mm³, measured here as the reference), no kernel restart.
 //  4. by-size-tblock-corners-refused  the T-block rounded the other way (R1 along y first, then
 //                 R2: tori at the concave rounds' ends), made in the page as STEP, with the third
 //                 way's time for each round lowered to 1 ms (window.__CAD__.corners): red, its words
-//                 name OCCT's heal (run after the other two ways, stopped by its 2.5 s), taking them
-//                 off as fillets and with the corner faces, each once, then that the body is
-//                 unchanged; no kernel restart.
+//                 name OCCT's heal (run after the other two ways with its whole 20 s, never a shorter
+//                 one, and stopped by it), taking them off as fillets and with the corner faces, each
+//                 once, then that the body is unchanged; no kernel restart.
 //  5. by-size-heal-time  OCCT's heal's time limit (kernel API 9): a comb's 20 rounds R1 on a body
 //                 whose every surface is a B-spline (made in the page as STEP), whose heal took 58 s
 //                 (the watchdog stopped it at 20 s): Fillets up to 1, Enter: red with "OCCT's heal
-//                 did not finish in 16.0 s; taking them off as fillets did not work either: ...; the
-//                 body is unchanged", the chip unchanged, no kernel restart.
+//                 did not finish in 20.0 s; taking them off as fillets did not work either: ...; the
+//                 body is unchanged", the chip unchanged, no kernel restart. The heal has the whole
+//                 20 s its call had (it had 16 s, which stopped heals that end ok in 16-19 s).
+//  6. by-size-flat-bspline  review 2026-11-02: a heat sink (a 70 x 30 x 4 base, 5 fins 60 x 1 x 10
+//                 set 5 mm in, fin tops R0.4) whose every surface is a B-spline (made in the page as
+//                 STEP): Fillets up to 0.4, Enter: its 10 fin rounds; OCCT's heal grows the flat
+//                 B-spline fin ends 6 times their size and ends ok in seconds, as it did before API 9.
+//                 The row is not red, has no note (OCCT's heal did it), and the chip shows the sharp
+//                 sink (11,400 mm³); no kernel restart. It was red in 3 s: "OCCT's heal did not
+//                 finish in 2.5 s: it grows 10 small curved faces far past their size; ...".
 // Without S5 there is no data-delete-add (step 1 fails at once), and the box step fails without
 // useBoxPicks.
 // Review 2026-11-02: in by-size, Holes up to Ø 5.95 first adds nothing and says what Body 1 has (<=
@@ -310,7 +320,7 @@ test('cad:delete-faces-by-size-tblock-corners Fillets up to 1 mm on a T-block ro
   // Well within the kernel's 20 s watchdog (4.4 s in Node: no heal started, taking them off as
   // fillets refused at once, 8 rounds with their corners one at a time and the checks).
   expect(Date.now() - t0, 'ms to ok').toBeLessThan(15_000);
-  const NOTE = "Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run, as it would grow 16 small curved faces far past their size and not finish";
+  const NOTE = "Taken off one round at a time, with the 16 corner faces where they meet other fillets: OCCT's heal was not run: it would grow 16 small curved faces up to 10 times their size, which failed or ran past 20 s on every part measured";
   await expect(panel(frame).locator('[data-note]')).toHaveText(`Note: ${NOTE}`);
   await expect(row.locator('[data-feature-badge="note"]')).toHaveAttribute('data-message', NOTE);
   await expectOneVolume(frame, reference, 1e-9);
@@ -353,7 +363,7 @@ async function tAlongFirstInPage(): Promise<RoundedBlockMade> {
   return { b64: btoa(bin), volume, sharp: only };
 }
 
-test("cad:delete-faces-by-size-tblock-corners-refused the T-block rounded R1 along it first and then R2, as STEP, with each round and its corner pieces allowed 1 ms: Fillets up to 1 mm is red in words that name each way tried once, OCCT's heal after them stopped by its 2.5 s, and that the body is unchanged, with no kernel restart", async ({ page, request }) => {
+test("cad:delete-faces-by-size-tblock-corners-refused the T-block rounded R1 along it first and then R2, as STEP, with each round and its corner pieces allowed 1 ms: Fillets up to 1 mm is red in words that name each way tried once, OCCT's heal after them stopped by its whole 20 s, and that the body is unchanged, with no kernel restart", async ({ page, request }) => {
   test.setTimeout(240_000);
   const { seen, frame } = await freshPart(page, request);
   const made = await importRoundedBlock(page, frame, tAlongFirstInPage);
@@ -375,10 +385,11 @@ test("cad:delete-faces-by-size-tblock-corners-refused the T-block rounded R1 alo
     const row = featureRowNamed(frame as never, 'Delete faces 1');
     await expect(row).toHaveAttribute('data-state', 'error', { timeout: 60_000 });
     // OCCT's heal, not started first (it would grow the 12 corner pieces far past their size), ran
-    // after both other ways refused, and its 2.5 s stopped it.
-    expect(Date.now() - t0, 'ms to the red words').toBeLessThan(15_000);
+    // after both other ways refused, with the whole 20 s its call had (never less: a heal that ends
+    // in it is never cut), and the budget stopped it, in words, before the call's 40 s.
+    expect(Date.now() - t0, 'ms to the red words').toBeLessThan(40_000);
     await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(
-      /^Delete faces 1 failed: OCCT's heal did not finish in 2\.5 s: it grows 12 small curved faces far past their size; taking them off as fillets did not work either: [^;]+; taking them off with the 16 corner faces where they meet other fillets did not work either: taking a round off with its corner faces did not finish in 0\.001 s; the body is unchanged$/,
+      /^Delete faces 1 failed: OCCT's heal did not finish in 20\.0 s: it grows 12 small curved faces far past their size; taking them off as fillets did not work either: [^;]+; taking them off with the 16 corner faces where they meet other fillets did not work either: taking a round off with its corner faces did not finish in 0\.001 s; the body is unchanged$/,
     );
     await expectOneVolume(frame, made.volume);
     expect(await respawns(page), 'kernel restarts').toBe(respawns0);
@@ -420,7 +431,7 @@ async function bsplineCombInPage(): Promise<RoundedBlockMade> {
   return { b64: btoa(bin), volume, sharp: volume };
 }
 
-test("cad:delete-faces-by-size-heal-time a B-spline comb's 20 rounds, whose heal took 58 s: Fillets up to 1 mm is red in words once OCCT's heal has had its 16 s, then why taking them off as fillets failed too, the body unchanged, no kernel restart", async ({ page, request }) => {
+test("cad:delete-faces-by-size-heal-time a B-spline comb's 20 rounds, whose heal took 58 s: Fillets up to 1 mm is red in words once OCCT's heal has had the whole 20 s its call had, then why taking them off as fillets failed too, the body unchanged, no kernel restart", async ({ page, request }) => {
   test.setTimeout(240_000);
   const { seen, frame } = await freshPart(page, request);
   const made = await importRoundedBlock(page, frame, bsplineCombInPage);
@@ -435,12 +446,73 @@ test("cad:delete-faces-by-size-heal-time a B-spline comb's 20 rounds, whose heal
   const row = featureRowNamed(frame as never, 'Delete faces 1');
   await expect(row).toHaveAttribute('data-state', 'error', { timeout: 60_000 });
   await expect(panel(frame).locator('[data-run-reason]').first()).toHaveText(
-    /^Delete faces 1 failed: OCCT's heal did not finish in 16\.0 s; taking them off as fillets did not work either: [^;]+; the body is unchanged$/,
+    /^Delete faces 1 failed: OCCT's heal did not finish in 20\.0 s; taking them off as fillets did not work either: [^;]+; the body is unchanged$/,
   );
   await expectOneVolume(frame, made.volume);
-  // The heal's budget ended it in words: the kernel's 20 s watchdog never stopped the worker.
+  // The heal's budget ended it in words: the call's watchdog (20 s more) never stopped the worker.
   expect(await respawns(page), 'kernel restarts').toBe(respawns0);
   await shot(page, 'delete-faces-by-size-heal-time');
+  await panel(frame).locator('[data-panel-done]').click();
+  await expect(panel(frame)).toHaveCount(0);
+  expect(seen.errors, 'console errors').toEqual([]);
+});
+
+/**
+ * Runs in the Part's frame: a heat sink, a base 70 x 30 x 4 with 5 fins 60 x 1 x 10 set 5 mm in from
+ * its ends, the fins' top edges along x rounded R0.4, with every surface made a B-spline (the
+ * kernel's test reshape, as some exporters write every face), as STEP. `sharp` is the sink with no
+ * rounds (11,400 mm³). Self-contained (it is sent as text).
+ */
+async function bsplineSinkInPage(): Promise<RoundedBlockMade> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type R = Record<string, any>;
+  const k = (window as unknown as { __CAD__: { services: { kernel: { call(op: string, p: R): Promise<{ result: R; buffers: Record<string, ArrayBuffer> }> } } } }).__CAD__.services.kernel;
+  const r = async (op: string, p: R) => (await k.call(op, p)).result;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  let sharp = (await r('box', { dx: 70, dy: 30, dz: 4, origin: [0, 0, 0] })).id;
+  const ids: number[] = [sharp];
+  for (let i = 0; i < 5; i++) {
+    const fin = (await r('box', { dx: 60, dy: 1, dz: 10, origin: [5, 3 + 6 * i, 4] })).id;
+    sharp = (await r('boolean', { op: 'fuse', targets: [sharp], tools: [fin] })).id;
+    ids.push(fin, sharp);
+  }
+  const tops = ((await r('topo', { id: sharp, faces: 'none', vertices: 'none', edge_ends: true })).edges as R[]).filter((e) => e.type === 'line' && near(e.first[2], 14) && near(e.last[2], 14) && !near(e.first[0], e.last[0])).map((e) => e.i);
+  const rounded = (await r('fillet', { id: sharp, edges: tops, r: 0.4 })).id;
+  const id = (await r('debug_reshape', { id: rounded, bspline: true })).id;
+  const volume = (await r('props', { id, volume: true, bbox: 'none' })).volume;
+  const plain = (await r('props', { id: sharp, volume: true, bbox: 'none' })).volume;
+  const step = (await k.call('export_step', { shapes: [{ id, name: 'Body 1' }], schema: 'AP214' })).buffers.step;
+  await r('release', { ids: [id, rounded, ...ids] });
+  let bin = '';
+  const u8 = new Uint8Array(step);
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+  return { b64: btoa(bin), volume, sharp: plain };
+}
+
+test("cad:delete-faces-by-size-flat-bspline a heat sink whose every surface is a B-spline: Fillets up to 0.4 mm takes its 10 fin rounds off by OCCT's heal, as before kernel API 9 (its flat fin ends grown 6 times their size are not far-grown), not red, no note, the sharp sink", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const { seen, frame } = await freshPart(page, request);
+  const made = await importRoundedBlock(page, frame, bsplineSinkInPage);
+  expect(Math.abs(made.sharp / 11400 - 1)).toBeLessThan(1e-9);
+  await settled(page);
+  await expectOneVolume(frame, made.volume);
+  const respawns0 = await respawns(page);
+  await openEmpty(page, frame);
+  await sizeInput(frame, 'fillets').fill('0.4');
+  await sizeInput(frame, 'fillets').press('Enter');
+  await expect(added(frame)).toHaveText('Added 10 faces: 10 fillet chains, R0.4', { timeout: 60_000 });
+  await settled(page);
+  const row = featureRowNamed(frame as never, 'Delete faces 1');
+  // OCCT's heal ran first and did it, as before API 9: not red (it was "OCCT's heal did not finish
+  // in 2.5 s: it grows 10 small curved faces far past their size; ..." after 3 s).
+  await expect(row).not.toHaveAttribute('data-state', 'pending', { timeout: 60_000 });
+  await expect(row).not.toHaveAttribute('data-state', 'error');
+  await expect(panel(frame).locator('[data-run-reason]')).toHaveCount(0);
+  await expect(panel(frame).locator('[data-note]')).toHaveCount(0);
+  await expectOneVolume(frame, 11400, 1e-9);
+  expect(await cad<number>(page, (() => (window as unknown as W).__CAD__.services.doc.state.get().rebuild.bodies[0].faces) as never), 'faces').toBe(31);
+  expect(await respawns(page), 'kernel restarts').toBe(respawns0);
+  await shot(page, 'delete-faces-by-size-flat-bspline');
   await panel(frame).locator('[data-panel-done]').click();
   await expect(panel(frame)).toHaveCount(0);
   expect(seen.errors, 'console errors').toEqual([]);
