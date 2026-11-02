@@ -332,10 +332,18 @@ describe('selectors on a real block', () => {
         expect(await reasonOf(selectOne(sc, 'Body 1 faces %sphere', 'face', 'on'))).toMatchObject({ reason: 'nothing_selected', detail: { field: 'on' } });
         expect(await reasonOf(selectOne(sc, 'Body 1 fcaes', 'face', 'on'))).toMatchObject({ reason: 'bad_selector', detail: { field: 'on', column: 8 } });
         // A filter alone: the answer says it goes after its scope, with the form.
-        for (const [text, want] of [['+Z', 'face'], ['hole', 'face'], ['largest', 'face'], ['|Z', 'edge']] as const) {
+        for (const [text, want] of [['+Z', 'face'], ['hole', 'face'], ['largest', 'face'], ['|Z', 'edge'], ['fillet <= 2 mm', 'face'], ['hole 6 mm', 'face']] as const) {
           const bare = await reasonOf(selectOne(sc, text, want, 'face'));
           expect(bare.reason, text).toBe('bad_selector');
           expect(bare.message, text).toMatch(new RegExp(`: a filter goes after its scope, as in "[^"]+ ${want === 'edge' ? 'edges' : 'faces'} ${text.replace(/[|+]/g, (c) => `\\${c}`)}"\\.$`));
+        }
+        // A feature named like a filter ("Fillet 1", every Fillet's name) with a slip: the plain words at the column, not the bare
+        // filter's (review 2026-11-02: "Fillet 1 facs" was told to read "Body 1 faces Fillet 1 facs").
+        for (const [text, column] of [['Fillet 1 facs', 10], ['Fillet 1.start(x', 15], ['Fillet 2 faces', 1], ['"Fillet 1" facs', 12]] as const) {
+          const slip = await reasonOf(selectOne(sc, text, 'face', 'face'));
+          expect(slip.reason, text).toBe('bad_selector');
+          expect(slip.message, text).not.toContain('a filter goes after its scope');
+          expect(slip.message, text).toContain(`(column ${column} of "${text}").`);
         }
       });
     },

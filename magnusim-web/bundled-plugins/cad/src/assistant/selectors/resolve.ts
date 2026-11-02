@@ -965,16 +965,25 @@ export async function applyFilters(sc: Scene, start: Geo[], filters: readonly Fi
 /** What a refusal to search a body tells the person (and the Assistant) to do instead. */
 const SELECT_INSTEAD = 'Select its faces in the view instead.';
 
-/** A size's margin: equal within max(0.001 mm, 1 %) (plan 3.2); <= and >= allow the same, so a size's equal set is inside both. */
+/** A plain size's margin: equal within max(0.001 mm, 1 %) (plan 3.2, decision D8). */
 export function sizeTolerance(v: number): number {
   return Math.max(1e-3, 0.01 * Math.abs(v));
 }
 
+/**
+ * The margin of <= and >=: 0.001 mm (a millionth of the size past 1 m), room for a sampled radius,
+ * never the plain size's 1 %, which D8 gives a plain size only: "hole <= 5.95 mm" takes no 6 mm
+ * bore, and Add by size's "4 holes up to Ø5.95 mm" is never said of them (review 2026-11-02).
+ */
+export function boundMargin(v: number): number {
+  return Math.max(1e-3, 1e-6 * Math.abs(v));
+}
+
 /** Whether a fillet's radii or a hole's bores [lo, hi] fit a size: <= compares the largest, >= the smallest, = both (decision D8). */
 export function fitsSize(lo: number, hi: number, cmp: SizeCmp, v: number): boolean {
+  if (cmp === '<=') return hi <= v + boundMargin(v);
+  if (cmp === '>=') return lo >= v - boundMargin(v);
   const tol = sizeTolerance(v);
-  if (cmp === '<=') return hi <= v + tol;
-  if (cmp === '>=') return lo >= v - tol;
   return lo >= v - tol && hi <= v + tol;
 }
 
@@ -1160,6 +1169,32 @@ function textOf(sel: Sel): string {
 /** A selector that does not read and starts with a filter (>Z, +Z, |Z, #Z, %cylinder, hole, boss, largest, smallest, radius, nearest, fillet): its scope is missing. */
 const BARE_FILTER = /^(?:[<>+|%-]|#(?![fevb][1-9])|(?:hole|boss|largest|smallest|radius|nearest|fillet)(?:\s|$))/i;
 
+/** A feature's name and what follows it ("Fillet 2 faces", "Hole 3.end"): a word, a number, then a kind or a role; never a filter and its size ("fillet 2 mm"). */
+const NAME_SHAPED = /^[a-z][\w-]*\s+\d+\s*(?:\.(?!\d)|(?:faces|edges|vertices|face|edge|vertex|bodies|body|of)\b)/i;
+
+const wordChar = (c: string | undefined) => !!c && /[A-Za-z0-9_]/.test(c);
+
+/** Whether `text` starts with a name of the Part, whole (as the parser reads names, quoted too): "Fillet 1 facs" names Fillet 1. */
+export function startsWithName(text: string, known: KnownNames): boolean {
+  const low = text.trim().toLowerCase();
+  return [...known.features, ...known.bodies].some((n) => {
+    const name = n.name.toLowerCase();
+    if (!name) return false;
+    if (low.startsWith(`"${name}"`)) return true;
+    return low.startsWith(name) && !(wordChar(name[name.length - 1]) && wordChar(low[name.length]));
+  });
+}
+
+/**
+ * Whether a selector that does not read is a filter with no scope ("fillet <= 2 mm", "+Z", "hole"),
+ * not a feature or body named like one whose selector has a slip ("Fillet 1 facs", "Hole 2.start(x",
+ * "Fillet 2 faces" when there is no Fillet 2): those get the plain words at the column (review 2026-11-02).
+ */
+export function bareFilter(text: string, known: KnownNames): boolean {
+  const t = text.trim();
+  return BARE_FILTER.test(t) && !startsWithName(t, known) && !NAME_SHAPED.test(t);
+}
+
 /** The name a selector that does not read starts with at `column` (1-based): up to its first ".", "&", ",", "(" or kind word, unquoted. */
 export function nameAt(text: string, column: number): string {
   const rest = text.slice(Math.max(0, column - 1));
@@ -1179,7 +1214,7 @@ export function parseFor(sc: Scene, text: string, want: Want, field?: string): S
     const names = unknownName ? { features: sc.known.features.slice(0, 20).map((f) => f.name), bodies: sc.known.bodies.slice(0, 20).map((b) => b.name) } : null;
     const near = unknownName ? closestName(nameAt(text, e.column), [...sc.known.features.map((f) => f.name), ...sc.known.bodies.map((b) => b.name)]) : null;
     // A filter alone ("+Z", "hole", "largest" as a face): it goes after its scope.
-    const bare = want !== 'region' && want !== 'body' && want !== 'plane' && want !== 'axis' && BARE_FILTER.test(text.trim());
+    const bare = want !== 'region' && want !== 'body' && want !== 'plane' && want !== 'axis' && bareFilter(text, sc.known);
     const example = bare ? `${sc.known.bodies[0]?.name ?? 'Body 1'} ${want === 'edge' ? 'edges' : want === 'vertex' ? 'vertices' : 'faces'} ${text.trim()}` : '';
     throw new ToolError('bad_selector', `${field ? `${field}: ` : ''}${e.message} (column ${e.column} of "${text}")${bare ? `: a filter goes after its scope, as in "${example}"` : ''}.${closestWords(near)}`, {
       detail: { ...(field ? { field } : {}), selector: text, column: e.column, ...(names ? { names } : {}), ...(near ? { closest: near } : {}) },

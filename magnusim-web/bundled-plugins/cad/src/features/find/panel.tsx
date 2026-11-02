@@ -36,7 +36,7 @@ export interface FindResult {
   live: boolean;
   /** A sized hole query: how many drilled holes the matches belong to; else null. */
   holes: number | null;
-  /** The query finds faces by their shape (fillet, a sized hole): the hint to check them is shown. */
+  /** The query lists faces found by their shape (fillet, a sized hole): the hint to check the lit faces is shown (not over edges). */
   shape: boolean;
   /** A shape query that matched nothing: the find tool's words, saying what the bodies have. */
   nothing: string | null;
@@ -74,7 +74,7 @@ export async function runFind(services: AppServices, query: string): Promise<Fin
     const items = r.hits.flatMap(itemsOfHit);
     const what = shapeFiltersOf(r.sel);
     const nothing = r.hits.length || (!what.fillet && !what.hole) ? null : (await nothingWords(sc, r, query)).message;
-    return { query, count: r.hits.length, kind: r.kind, rows, items, live: !!r.live, holes: holesOf(r), shape: what.fillet || what.hole, nothing };
+    return { query, count: r.hits.length, kind: r.kind, rows, items, live: !!r.live, holes: holesOf(r), shape: (what.fillet || what.hole) && r.kind === 'face', nothing };
   });
 }
 

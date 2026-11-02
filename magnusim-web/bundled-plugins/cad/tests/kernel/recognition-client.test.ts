@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRecognitionClient, isFillet, oldKernelWords, recognitionOf, summaryOf, tooLargeWords } from '../../src/kernel/recognition';
+import { hasWords } from '../../src/features/delete_faces/words';
 import { RECOGNIZE_MAX_FACES } from '../../src/kernel/timeouts';
 import { createStateStore } from '../../src/lib/store';
 import type { KernelAdapter, KernelStatus } from '../../src/types/kernel';
@@ -154,10 +155,10 @@ describe('recognition client (fake kernel)', () => {
     expect(c.calls).toBe(1);
   });
 
-  it("D7: 'cliff' and 'uncertain' are not fillets; the summary counts fillets and holes with their sizes", () => {
+  it("D7: 'cliff' and 'uncertain' are not fillets; the summary counts fillets and holes with their sizes, a hole with no cylinder apart (not a drilled hole)", () => {
     expect(ANSWER.blends.map(isFillet)).toEqual([true, true, false, false]);
-    expect(summaryOf(ANSWER)).toEqual({ fillets: { faces: 2, r_min: 3, r_max: 5 }, holes: { count: 3, d_min: 6, d_max: 11 } });
-    expect(summaryOf({ ...ANSWER, blends: [], holes: [] })).toEqual({ fillets: { faces: 0, r_min: null, r_max: null }, holes: { count: 0, d_min: null, d_max: null } });
+    expect(summaryOf(ANSWER)).toEqual({ fillets: { faces: 2, r_min: 3, r_max: 5 }, holes: { count: 2, d_min: 6, d_max: 11, unsized: 1 } });
+    expect(summaryOf({ ...ANSWER, blends: [], holes: [] })).toEqual({ fillets: { faces: 0, r_min: null, r_max: null }, holes: { count: 0, d_min: null, d_max: null, unsized: 0 } });
   });
 
   it('one client per kernel adapter', () => {
@@ -195,7 +196,7 @@ describe('recognition client (the real kernel)', () => {
       { d: 6, through: true },
       { d: 8, through: false },
     ]);
-    expect(summaryOf(got.result)).toEqual({ fillets: { faces: 12, r_min: 3, r_max: 5 }, holes: { count: 2, d_min: 6, d_max: 8 } });
+    expect(summaryOf(got.result)).toEqual({ fillets: { faces: 12, r_min: 3, r_max: 5 }, holes: { count: 2, d_min: 6, d_max: 8, unsized: 0 } });
     // max_r: Analysis Situs' own set at R3 (what suppress_blends takes at R3) is the 8 R3 faces.
     const atR = await c.features(a, { holes: false, max_r: 3.003 });
     expect(atR.ok && atR.result.blends.length).toBe(8);
@@ -218,6 +219,30 @@ describe('recognition client (the real kernel)', () => {
     const box2 = (await call('box', { dx: 10, dy: 10, dz: 10, origin: [0, 0, 0] })).id;
     expect(await c.features(box2)).toMatchObject({ ok: true, result: { faces: 6, blends: [], holes: [] } });
     expect(c.calls).toBe(before + 1);
+    kernel.dispose();
+  }, 60_000);
+
+  it('a box with a 6 mm hole and three round voids inside: one drilled hole, the voids apart (recognition reads each void as a hole with no cylinder; review 2026-11-02)', async () => {
+    const { kernel } = realKernelAdapter();
+    await kernel.start();
+    const call = async (op: string, p: R): Promise<R> => (await kernel.call(op as never, p as never)).result as R;
+    const box = (await call('box', { dx: 60, dy: 40, dz: 20, origin: [0, 0, 0] })).id;
+    const tools = [(await call('cylinder', { r: 3, h: 22, origin: [20, 35, -1], axis: [0, 0, 1] })).id];
+    for (const x of [10, 30, 50]) tools.push((await call('sphere', { r: 4, center: [x, 20, 10] })).id);
+    const part = (await call('boolean', { op: 'cut', targets: [box], tools })).id;
+    const got = await recognitionOf(kernel).features(part);
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+    expect(got.result.holes.map((h) => [h.d_min, h.through])).toEqual([
+      [6, true],
+      [null, false],
+      [null, false],
+      [null, false],
+    ]);
+    // It said "Body 1 has 4 drilled holes, Ø6".
+    const s = summaryOf(got.result);
+    expect(s.holes).toEqual({ count: 1, d_min: 6, d_max: 6, unsized: 3 });
+    expect(hasWords('Body 1', 'holes', s, { length: 'mm', angle: 'deg' })).toBe('Body 1 has 1 drilled hole, Ø6, and 3 round hollows with no cylinder, which no size matches');
     kernel.dispose();
   }, 60_000);
 });

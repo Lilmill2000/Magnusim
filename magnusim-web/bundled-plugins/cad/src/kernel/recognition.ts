@@ -98,10 +98,15 @@ export function isFillet(b: Pick<RecognizedBlend, 'kind'>): boolean {
   return b.kind === 'ordinary' || b.kind === 'vertex';
 }
 
-/** What a body has, for "matches nothing" words: its fillet faces (D7's fillets) and their radii, its holes and their bores. */
+/**
+ * What a body has, for "matches nothing" words: its fillet faces (D7's fillets) and their radii; its
+ * drilled holes (those with a bore: a cylinder) and their bores, and apart from them the holes
+ * recognition found with no cylinder (`unsized`: a bore made of B-splines, a closed round void; no
+ * size ever matches them, so they are not counted as drilled holes).
+ */
 export interface FeaturesSummary {
   fillets: { faces: number; r_min: number | null; r_max: number | null };
-  holes: { count: number; d_min: number | null; d_max: number | null };
+  holes: { count: number; d_min: number | null; d_max: number | null; unsized: number };
 }
 
 export function summaryOf(r: RecognizeResult): FeaturesSummary {
@@ -111,7 +116,7 @@ export function summaryOf(r: RecognizeResult): FeaturesSummary {
   const max = (v: number[]) => (v.length ? Math.max(...v) : null);
   return {
     fillets: { faces: fillets.length, r_min: min(fillets.map((b) => b.r_min)), r_max: max(fillets.map((b) => b.r_max)) },
-    holes: { count: r.holes.length, d_min: min(sized.map((h) => h.d_min as number)), d_max: max(sized.map((h) => h.d_max as number)) },
+    holes: { count: sized.length, d_min: min(sized.map((h) => h.d_min as number)), d_max: max(sized.map((h) => h.d_max as number)), unsized: r.holes.length - sized.length },
   };
 }
 

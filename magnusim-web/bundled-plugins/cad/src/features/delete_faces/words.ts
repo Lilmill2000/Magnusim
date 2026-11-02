@@ -81,7 +81,13 @@ export function addedWords(a: Added, units: DocUnits): string {
   return `${head}: ${a.holes} ${plural(a.holes, 'hole', 'holes')} up to Ø${sizeWords(a.size, units)}${a.through ? ` (${a.through} through)` : ''}`;
 }
 
-/** What the body has (recognition's summary), in the Part's units: "Body 1 has 6 fillet faces, R3 to R5", "Body 1 has no drilled holes". */
+/**
+ * What the body has (recognition's summary), in the Part's units, for Delete faces' Add line and
+ * Find's no-match line alike: "Body 1 has 6 fillet faces, R3 to R5", "Body 1 has 4 drilled holes,
+ * Ø8 to Ø12", "Body 1 has no drilled holes". Holes recognised with no cylinder (no bore to size: a
+ * B-spline bore, a closed round void) are not drilled holes: "..., and 3 round hollows with no
+ * cylinder, which no size matches".
+ */
 export function hasWords(body: string, kind: SizeKind, s: FeaturesSummary, units: DocUnits): string {
   if (kind === 'fillets') {
     const f = s.fillets;
@@ -89,9 +95,11 @@ export function hasWords(body: string, kind: SizeKind, s: FeaturesSummary, units
     return `${body} has ${f.faces} fillet ${plural(f.faces, 'face', 'faces')}, ${rangeWords('R', f.r_min, f.r_max, units)}`;
   }
   const h = s.holes;
-  if (!h.count) return `${body} has no drilled holes`;
+  const u = h.unsized;
+  const hollows = `${u} round ${plural(u, 'hollow', 'hollows')} with no cylinder, which no size matches`;
+  if (!h.count) return u ? `${body} has no drilled holes, only ${hollows}` : `${body} has no drilled holes`;
   const sizes = h.d_min !== null && h.d_max !== null ? `, ${rangeWords('Ø', h.d_min, h.d_max, units)}` : '';
-  return `${body} has ${h.count} drilled ${plural(h.count, 'hole', 'holes')}${sizes}`;
+  return `${body} has ${h.count} drilled ${plural(h.count, 'hole', 'holes')}${sizes}${u ? `, and ${hollows}` : ''}`;
 }
 
 /** Add found nothing new: "No fillets up to 2 mm on Body 1 that are not already picked (Body 1 has 6 fillet faces, R3 to R5)". */

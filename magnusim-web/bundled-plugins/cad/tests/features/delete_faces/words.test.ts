@@ -49,8 +49,8 @@ describe('Add by size: which body', () => {
 });
 
 describe('Add by size: the line', () => {
-  const summary: FeaturesSummary = { fillets: { faces: 6, r_min: 3, r_max: 5 }, holes: { count: 4, d_min: 8, d_max: 12 } };
-  const none: FeaturesSummary = { fillets: { faces: 0, r_min: null, r_max: null }, holes: { count: 0, d_min: null, d_max: null } };
+  const summary: FeaturesSummary = { fillets: { faces: 6, r_min: 3, r_max: 5 }, holes: { count: 4, d_min: 8, d_max: 12, unsized: 0 } };
+  const none: FeaturesSummary = { fillets: { faces: 0, r_min: null, r_max: null }, holes: { count: 0, d_min: null, d_max: null, unsized: 0 } };
 
   it('says what was added: fillet chains and their radii, holes up to the size and how many go through', () => {
     expect(addedWords({ kind: 'fillets', faces: 12, chains: 3, r_min: 1.5, r_max: 2 }, MM)).toBe('Added 12 faces: 3 fillet chains, R1.5 to R2');
@@ -67,6 +67,15 @@ describe('Add by size: the line', () => {
     expect(noneWords('holes', 6, 'flange', none, MM)).toBe('No holes up to Ø6 mm on flange that are not already picked (flange has no drilled holes)');
     expect(hasWords('Body 1', 'fillets', { ...summary, fillets: { faces: 1, r_min: 25.4, r_max: 25.4 } }, IN)).toBe('Body 1 has 1 fillet face, R1 in');
     expect(rangeWords('Ø', 6, 10, MM)).toBe('Ø6 to Ø10');
+  });
+
+  it('holes recognised with no cylinder (a closed round void, a B-spline bore) are not drilled holes: said apart (review 2026-11-02)', () => {
+    // A box with one 6 mm hole and three spherical voids: it said "Body 1 has 4 drilled holes, Ø6".
+    expect(hasWords('Body 1', 'holes', { ...summary, holes: { count: 1, d_min: 6, d_max: 6, unsized: 3 } }, MM)).toBe('Body 1 has 1 drilled hole, Ø6, and 3 round hollows with no cylinder, which no size matches');
+    expect(hasWords('Body 1', 'holes', { ...summary, holes: { count: 0, d_min: null, d_max: null, unsized: 1 } }, MM)).toBe('Body 1 has no drilled holes, only 1 round hollow with no cylinder, which no size matches');
+    expect(noneWords('holes', 6, 'Body 1', { ...summary, holes: { count: 1, d_min: 6, d_max: 6, unsized: 3 } }, MM)).toBe(
+      'No holes up to Ø6 mm on Body 1 that are not already picked (Body 1 has 1 drilled hole, Ø6, and 3 round hollows with no cylinder, which no size matches)',
+    );
   });
 
   it('the hint names both rows', () => {

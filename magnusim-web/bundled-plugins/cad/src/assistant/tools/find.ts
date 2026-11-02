@@ -20,6 +20,8 @@ import { frameWords } from '../model';
 import { dir, jsonBytes, len, sig6, vec } from '../numbers';
 import { runtimeOf } from '../runtime';
 import { recognitionOf, summaryOf, type FeaturesSummary } from '../../kernel/recognition';
+import { hasWords } from '../../features/delete_faces/words';
+import type { DocUnits } from '../../types/units';
 import { faceFrameRow, pointOnFace } from '../selectors/geometry';
 import {
   centreOf,
@@ -88,27 +90,25 @@ export function spanOf(lo: number, hi: number): number | [number, number] {
   return hi - lo > 0.01 * Math.abs(hi) ? [len(lo), len(hi)] : len((lo + hi) / 2);
 }
 
-/** How many drilled holes the hits of a sized hole query belong to (null for any other query). */
+/**
+ * How many drilled holes the faces of a sized hole query belong to; null for any other query, and
+ * for one that lists edges or anything but faces ("edges of (Body 1 faces hole <= 6 mm)": its edges
+ * carry no hole, so a count would say "0 holes").
+ */
 export function holesOf(r: Selected): number | null {
-  if (!shapeFiltersOf(r.sel).hole) return null;
+  if (r.kind !== 'face' || !shapeFiltersOf(r.sel).hole) return null;
   return new Set(r.hits.flatMap((h) => (h.kind === 'face' && h.recognized?.hole ? [h.recognized.hole.key] : []))).size;
 }
 
-/** "R3", "R3 to R5"; "Ø8", "Ø8 to Ø12". */
-const rangeWords = (p: string, lo: number | null, hi: number | null) => (lo === null || hi === null ? '' : len(lo) === len(hi) ? `${p}${len(lo)}` : `${p}${len(lo)} to ${p}${len(hi)}`);
-
-/** What one body has, for a query that matched nothing: its fillet faces and radii, its drilled holes and bores. */
-export function summaryWords(body: string, s: FeaturesSummary, what: { fillet: boolean; hole: boolean }): string {
+/**
+ * What one body has, for a query that matched nothing: its fillet faces and radii, its drilled holes
+ * and bores, in the Part's units: Delete faces' own words (delete_faces/words.ts hasWords), so the
+ * Find panel, the find tool and Add by size read the same ("R2 to R5"; "R0.07874 to R0.1969 in").
+ */
+export function summaryWords(body: string, s: FeaturesSummary, what: { fillet: boolean; hole: boolean }, units: DocUnits): string {
   const parts: string[] = [];
-  if (what.fillet) {
-    const f = s.fillets;
-    parts.push(f.faces ? `${body} has ${f.faces} fillet ${f.faces === 1 ? 'face' : 'faces'}, ${rangeWords('R', f.r_min, f.r_max)}` : `${body} has no fillets`);
-  }
-  if (what.hole) {
-    const h = s.holes;
-    const sizes = rangeWords('Ø', h.d_min, h.d_max);
-    parts.push(h.count ? `${body} has ${h.count} drilled ${h.count === 1 ? 'hole' : 'holes'}${sizes ? `, ${sizes}` : ''}` : `${body} has no drilled holes`);
-  }
+  if (what.fillet) parts.push(hasWords(body, 'fillets', s, units));
+  if (what.hole) parts.push(hasWords(body, 'holes', s, units));
   return parts.join('; ');
 }
 
@@ -131,7 +131,7 @@ export async function nothingFound(sc: Scene, r: Selected): Promise<{ words: str
     const f = await recognitionOf(sc.services.kernel).features(b.shape, {}, { faces: b.faces, signal: sc.signal });
     if (!f.ok) continue;
     const s = summaryOf(f.result);
-    words.push(summaryWords(b.name, s, what));
+    words.push(summaryWords(b.name, s, what, sc.state.doc.units));
     recognized.push({ body: b.name, ...(what.fillet ? { fillets: s.fillets } : {}), ...(what.hole ? { holes: s.holes } : {}) });
   }
   return words.length ? { words: words.join('; '), recognized } : null;

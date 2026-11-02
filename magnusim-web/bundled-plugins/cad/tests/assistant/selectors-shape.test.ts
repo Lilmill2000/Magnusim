@@ -3,7 +3,8 @@
 // verticals, R2 round the top, four 6 mm holes and a 6/10 mm counterbore):
 //   - fillet, fillet 2 mm (equal within max(0.001 mm, 1 %)), fillet <= 2 mm (largest radius),
 //     fillet >= 5 mm (smallest); hole 6 mm, hole <= 6 mm, hole >= 10 mm as whole drilled holes
-//     (the counterbore is 6 to 10 mm); radius <= and >=; plain hole stays per face;
+//     (the counterbore is 6 to 10 mm); <= and >= within 0.001 mm only (hole <= 5.95 mm takes no
+//     6 mm bore, review 2026-11-02); radius <= and >=; plain hole stays per face;
 //   - the find tool's rows (fillet_mm, hole_mm, through), data.holes and its text "(4 holes)" (the
 //     person's Find gives the same: person-parity.test.ts);
 //   - a query that matches nothing says what the body has ("Body 1 has 12 fillet faces, R2 to R5");
@@ -18,6 +19,7 @@ import { applyFilters, selectAny, withScene, type FaceHit, type Scene } from '..
 import { parseSelector, type Sel } from '../../src/assistant/selectors/parse';
 import { runFind } from '../../src/features/find/panel';
 import { runDeleteFaces } from '../../src/features/delete_faces';
+import { addBySize } from '../../src/features/delete_faces/by-size';
 import { forgetBreps } from '../../src/features/import/feature';
 import { recognitionOf } from '../../src/kernel/recognition';
 import type { DeleteFacesFeature } from '../../src/types/doc';
@@ -74,6 +76,13 @@ describe('fillet and sized hole selectors on an imported STEP part (real kernel)
       expect(await count(h, 'Body 1 faces hole <= 10 mm')).toBe(7);
       expect(await count(h, 'Body 1 faces hole >= 10 mm')).toBe(0);
       expect(await count(h, 'Body 1 faces hole >= 6 mm')).toBe(7);
+      // <= and >= get 0.001 mm, not the plain size's 1 % (they took the 6 mm holes, the R2s and the R5s).
+      expect(await count(h, 'Body 1 faces hole <= 5.95 mm')).toBe(0);
+      expect(await count(h, 'Body 1 faces hole <= 5.9995 mm')).toBe(4);
+      expect(await count(h, 'Body 1 faces fillet <= 1.99 mm')).toBe(0);
+      expect(await count(h, 'Body 1 faces fillet >= 2.01 mm')).toBe(4);
+      expect(await count(h, 'Body 1 faces fillet >= 5.04 mm')).toBe(0);
+      expect(await count(h, 'Body 1 faces hole >= 6.05 mm')).toBe(0);
       // Plain hole is still per face (a round face going at least half way round, inward).
       expect(await count(h, 'Body 1 faces hole')).toBe(6);
       // radius <= / >= on the face's own radius (topo).
@@ -107,6 +116,15 @@ describe('fillet and sized hole selectors on an imported STEP part (real kernel)
       const cb = await h.ok('find', { query: 'Body 1 faces hole <= 10 mm', limit: 25 });
       expect(cb.data).toMatchObject({ count: 7, holes: 5 });
       expect((cb.data.rows as Row[]).filter((r) => Array.isArray(r.hole_mm)).map((r) => r.hole_mm)).toEqual(Array(3).fill([6, 10]));
+      // Edges of sized holes: no hole count (the edges carry none; it said "(0 holes)"), in the tool and the Find panel, and no hint about lit faces.
+      const he = await h.ok('find', { query: 'edges of (Body 1 faces hole <= 6 mm)', limit: 25 });
+      expect(he.data).toMatchObject({ count: 12, kind: 'edge' });
+      expect(he.data).not.toHaveProperty('holes');
+      expect(he.text).toBe('find "edges of (Body 1 faces hole <= 6 mm)": 12 edges');
+      const panelEdges = await runFind(h.services, 'edges of (Body 1 faces hole <= 6 mm)');
+      expect(panelEdges).toMatchObject({ count: 12, kind: 'edge', holes: null, shape: false, nothing: null });
+      // Faces of them keep both.
+      expect(await runFind(h.services, 'Body 1 faces hole <= 6 mm')).toMatchObject({ count: 4, holes: 4, shape: true });
       // Queries without them keep their rows: no fillet_mm, no holes.
       const plain = await h.ok('find', { query: 'Body 1 faces hole', limit: 25 });
       expect(plain.data).not.toHaveProperty('holes');
@@ -118,11 +136,34 @@ describe('fillet and sized hole selectors on an imported STEP part (real kernel)
       expect(none.detail.recognized).toEqual([{ body: 'Body 1', fillets: { faces: 12, r_min: 2, r_max: 5 } }]);
       const noHole = await fail(h, 'find', { query: 'Body 1 faces hole >= 10 mm', limit: 10 });
       expect(noHole.message).toBe('nothing_selected: "Body 1 faces hole >= 10 mm" matches nothing: Body 1 has 5 drilled holes, Ø6 to Ø10.');
-      expect(noHole.detail.recognized).toEqual([{ body: 'Body 1', holes: { count: 5, d_min: 6, d_max: 10 } }]);
+      expect(noHole.detail.recognized).toEqual([{ body: 'Body 1', holes: { count: 5, d_min: 6, d_max: 10, unsized: 0 } }]);
       // A plain query that matches nothing: as before (no recognition words).
       const plainNone = await fail(h, 'find', { query: 'Body 1 faces %sphere', limit: 10 });
       expect(plainNone.message).toBe('nothing_selected: "Body 1 faces %sphere" matches nothing.');
       expect(plainNone.detail).not.toHaveProperty('recognized');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "on a Part in inches, a no-match says the sizes in inches, as Delete faces' Add line does (review 2026-11-02: it gave mm numbers with no unit)",
+    async () => {
+      h = await assistantHarness({ solver: false, units: 'imperial' });
+      await importRoundedBlock(h);
+      expect(h.doc.state.get().doc.units.length).toBe('in');
+      const fillets = 'Body 1 has 12 fillet faces, R0.07874 to R0.1969 in';
+      const holes = 'Body 1 has 5 drilled holes, Ø0.2362 to Ø0.3937 in';
+      // The find tool and the Find panel.
+      expect((await fail(h, 'find', { query: 'Body 1 faces fillet <= 1 mm', limit: 10 })).message).toBe(`nothing_selected: "Body 1 faces fillet <= 1 mm" matches nothing: ${fillets}.`);
+      expect((await runFind(h.services, 'Body 1 faces fillet <= 1 mm')).nothing).toBe(`"Body 1 faces fillet <= 1 mm" matches nothing: ${fillets}.`);
+      expect((await runFind(h.services, 'Body 1 faces hole <= 1 mm')).nothing).toBe(`"Body 1 faces hole <= 1 mm" matches nothing: ${holes}.`);
+      // Delete faces' Add by size on the same Part says the same.
+      const s = h.doc.beginNew('delete_faces');
+      try {
+        expect(await addBySize(h.services, { feature: s.feature, body: '', kind: 'fillets', size: 1, picked: [] })).toEqual({ ok: false, words: `No fillets up to 0.03937 in on Body 1 that are not already picked (${fillets})` });
+      } finally {
+        s.discard();
+      }
     },
     REAL_KERNEL_MS,
   );
