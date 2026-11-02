@@ -15,6 +15,10 @@
 //   per requested sub-shape).
 
 #include "mkjson.hpp"
+#ifndef MK_NO_ASI
+// Analysis Situs (API 8): plain OCCT types only; asi_ops.cpp holds everything else.
+#include "asi_ops.hpp"
+#endif
 
 #include <emscripten.h>
 #include <emscripten/heap.h>
@@ -178,6 +182,7 @@
 
 #include <ShapeFix_Shape.hxx>
 #include <ShapeFix_Solid.hxx>
+#include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <ShapeAnalysis_Shell.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BinTools.hxx>
@@ -1016,13 +1021,18 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // re-rounded), press_pull takes curved faces (a thickened face as the tool).
 // 7 = volumes: the plain rule only where it is exact, Gauss-Kronrod over the knot spans on the
 // other faces (props, press-pull's volume check).
-const int kFacadeApi = 7;
+// 8 = Analysis Situs asiAlgo 2026.1.1: recognize (fillets, drilled holes), suppress_blends (every
+// fillet up to R, with history), debug_reshape.
+const int kFacadeApi = 8;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
   r.set("occt", OCC_VERSION_COMPLETE);
   r.set("build", sizeof(void*) == 8 ? "wasm64" : "wasm32");
   r.set("api", kFacadeApi);
+#ifndef MK_NO_ASI
+  r.set("asi", mkasi::version());
+#endif
   return r;
 }
 
@@ -1981,6 +1991,175 @@ JV opDefeature(const JV& q) {
   tm.set("op_ms", t1 - t0);
   r.set("timings", std::move(tm));
   return r;
+}
+
+// ------------------------------------------------------ Analysis Situs (API 8) ---
+// The algorithms live in asi_ops.cpp; these ops check indices, run them on work copies,
+// store the result with its history and validity, and turn their {code, words} into this
+// file's errors. A build without Analysis Situs (wasm64: -DMK_NO_ASI) answers in words.
+
+std::string withCommas(long long n) {
+  std::string d = std::to_string(n < 0 ? -n : n), o;
+  for (size_t i = 0; i < d.size(); ++i) {
+    if (i && (d.size() - i) % 3 == 0) o += ',';
+    o += d[i];
+  }
+  return n < 0 ? "-" + o : o;
+}
+
+// The largest body `recognize` searches when the call gives no max_faces: a running wasm call
+// cannot be stopped, so a body too big to search in time is refused before it starts. Measured
+// 2026-11-01 (Node, S2 gate G4): building the adjacency graph is quadratic in the edges of the
+// largest face, so a prism whose two end faces carry every edge takes 0.9 s at 2,000 faces and
+// 5.2 s at 5,000, and a plate with 2,000 holes 2.1 s (15 s at 5,000); bodies whose faces have
+// few edges take 1 s at 20,000. 2,000 is the largest size every measured body met in 3 s.
+const int kRecognizeMaxFaces = 2000;
+
+#ifndef MK_NO_ASI
+void throwRefusal(const mkasi::Refusal& e) {
+  if (e.ok()) return;
+  if (e.code == "input") throw InputError(e.words);
+  if (e.code == "occt") throw OcctError(e.words);
+  throw std::runtime_error(e.words);
+}
+#endif
+
+// Fillets and drilled holes of a body, found by their shape (asiAlgo_RecognizeBlends,
+// asiAlgo_RecognizeDrillHoles). Read-only: it runs on a work copy (building the adjacency
+// graph may add curves to the shape), stores nothing and leaves nothing to release.
+JV opRecognize(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const int nf = indexOf(sid).f.Extent();
+  const double maxFaces = q.num("max_faces", kRecognizeMaxFaces);
+  if (!(maxFaces >= 1)) throw InputError("max_faces must be >= 1");
+  if (nf > maxFaces)
+    throw InputError("this body has " + withCommas(nf) + " faces: fillets and holes are found on bodies of up to " +
+                     withCommas((long long)maxFaces));
+#ifdef MK_NO_ASI
+  throw InputError("this build has no Analysis Situs: fillets and holes cannot be found");
+#else
+  const std::string mode = q.str("holes_mode", "soft");
+  if (mode != "soft" && mode != "hard") throw InputError("holes_mode must be soft or hard");
+  WorkCopies wc({sid});
+  mkasi::RecognizeOptions o;
+  o.blends = q.boolean("blends", true);
+  o.holes = q.boolean("holes", true);
+  o.hardHoles = mode == "hard";
+  // max_r: RecognizeBlends' own radius limit, as suppress_blends runs it (default: every fillet).
+  o.maxR = q.num("max_r", 0);
+  if (q.has("max_r") && !(o.maxR > 0)) throw InputError("max_r must be > 0");
+  mkasi::Recognition rec;
+  throwRefusal(mkasi::recognize(wc.shape(0), indexOf(wc.id(0)).f, o, rec));
+  auto at = [&](int i) {
+    if (i < 0 || i >= nf)
+      throw std::runtime_error("internal: recognize answered face " + std::to_string(i) + " of a body with " +
+                               std::to_string(nf) + " faces");
+    return i;
+  };
+  auto faceList = [&](const std::vector<int>& v) {
+    JV a = JV::arr();
+    for (int i : v) a.push(at(i));
+    return a;
+  };
+  JV r = JV::obj();
+  r.set("faces", rec.faces);
+  r.set("solids", rec.solids);
+  JV blends = JV::arr();
+  for (const mkasi::Blend& b : rec.blends) {
+    JV o = JV::obj();
+    o.set("face", at(b.face));
+    o.set("r", b.r);
+    o.set("r_min", b.r_min);
+    o.set("r_max", b.r_max);
+    o.set("convex", b.convex < 0 ? JV() : JV(b.convex == 1));
+    o.set("kind", b.kind);
+    o.set("chain", b.chain < 0 ? JV() : JV(b.chain));
+    blends.push(std::move(o));
+  }
+  r.set("blends", std::move(blends));
+  JV chains = JV::arr();
+  for (const mkasi::Chain& c : rec.chains) {
+    JV o = JV::obj();
+    o.set("faces", faceList(c.faces));
+    o.set("r_min", c.r_min);
+    o.set("r_max", c.r_max);
+    o.set("length", c.length);
+    chains.push(std::move(o));
+  }
+  r.set("chains", std::move(chains));
+  JV holes = JV::arr();
+  for (const mkasi::Hole& h : rec.holes) {
+    JV o = JV::obj();
+    o.set("faces", faceList(h.faces));
+    o.set("d_min", h.sized ? JV(h.d_min) : JV());
+    o.set("d_max", h.sized ? JV(h.d_max) : JV());
+    o.set("through", h.through);
+    holes.push(std::move(o));
+  }
+  r.set("holes", std::move(holes));
+  JV tm = JV::obj();
+  tm.set("copy_ms", wc.ms);
+  tm.set("aag_ms", rec.aag_ms);
+  tm.set("blends_ms", rec.blends_ms);
+  tm.set("holes_ms", rec.holes_ms);
+  r.set("timings", std::move(tm));
+  return r;
+#endif
+}
+
+// Take fillets off one solid as fillets (asiAlgo_SuppressBlendsInc): the picked faces must be
+// every fillet of the solid up to the largest picked radius, which the kernel checks against
+// SuppressBlendsInc's own recognition. The history walks every input face to all its images
+// (asi_ops.cpp), and the kernel refuses a result unless exactly the picked faces are gone and
+// every result face has a source. Nothing taken off is refused, never passed through.
+JV opSuppressBlends(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  std::vector<int> picks;
+  for (auto& f : q.req("faces").items()) {
+    faceAt(sid, f);  // index check against the input
+    picks.push_back((int)f.num());
+  }
+  if (picks.empty()) throw InputError("no faces given");
+#ifdef MK_NO_ASI
+  throw InputError("this build has no Analysis Situs: fillets cannot be taken off as fillets");
+#else
+  const std::string hist = q.str("debug_history", "leaves");
+  if (hist != "leaves" && hist != "convert_to_occ") throw InputError("debug_history must be leaves or convert_to_occ");
+  WorkCopies wc({sid});
+  mkasi::Suppression s;
+  const double t0 = nowMs();
+  throwRefusal(mkasi::suppressBlends(wc.shape(0), indexOf(wc.id(0)).f, picks, hist == "convert_to_occ", s));
+  const double t1 = nowMs();
+  const int id = putShape(s.shape);
+  JV r = JV::obj();
+  r.set("id", id);
+  r.set("history", historyForPairs(wc.pairs(), *s.history, id));
+  r.set("chains", s.chains);
+  r.set("r", s.r);
+  r.set("max_r", s.max_r);
+  r.set("asked", s.asked);
+  r.set("removed", s.removed);
+  r.set("left", s.left);
+  JV sc = JV::obj();
+  sc.set("split", s.split);
+  sc.set("stale_leaves", s.stale);
+  sc.set("dropped", s.dropped);
+  r.set("self_check", std::move(sc));
+  JV oc = JV::obj();
+  oc.set("disagree", s.occ_disagree);
+  oc.set("fewer_images", s.occ_fewer_images);
+  oc.set("no_source", s.occ_no_source);
+  r.set("convert_to_occ", std::move(oc));
+  addValidity(r, id, q);
+  JV tm = JV::obj();
+  tm.set("copy_ms", wc.ms);
+  tm.set("recognize_ms", s.recognize_ms);
+  tm.set("suppress_ms", s.suppress_ms);
+  tm.set("history_ms", s.history_ms);
+  tm.set("op_ms", t1 - t0);
+  r.set("timings", std::move(tm));
+  return r;
+#endif
 }
 
 // Hollow a body to wall thickness t, opening the given faces. API 4: outside:true puts the
@@ -8401,6 +8580,45 @@ JV opSilhouette(const JV& q) {
   return r;
 }
 
+// Test hook (API 8): an exporter-like "messy" copy of a body, so tests can try recognition on
+// shapes no modelling op makes, with no outside file. bspline: every surface and curve as
+// B-splines (BRepBuilderAPI_NurbsConvert); split_closed: closed faces cut in two
+// (ShapeUpgrade_ShapeDivideClosed: a cylinder becomes two half-cylinders); tolerance_scale:
+// every vertex, edge and face tolerance multiplied. A new stored shape with `valid` and no
+// history; the input is never changed.
+JV opDebugReshape(const JV& q) {
+  const int sid = idParam(q.req("id"), "id");
+  const bool bspline = q.boolean("bspline", false);
+  const bool split = q.boolean("split_closed", false);
+  const double scale = q.num("tolerance_scale", 1);
+  if (!(scale >= 1)) throw InputError("tolerance_scale must be >= 1");
+  if (!bspline && !split && scale == 1) throw InputError("nothing to reshape: give bspline, split_closed or tolerance_scale");
+  BRepBuilderAPI_Copy cp(shapeOf(sid), Standard_True, Standard_False);
+  TopoDS_Shape s = cp.Shape();
+  if (bspline) {
+    BRepBuilderAPI_NurbsConvert nc(s, Standard_True);
+    if (!nc.IsDone()) throw OcctError("the B-spline conversion failed");
+    s = nc.Shape();
+  }
+  if (split) {
+    ShapeUpgrade_ShapeDivideClosed dc(s);
+    dc.SetNbSplitPoints(1);
+    dc.Perform();
+    s = dc.Result();
+  }
+  if (scale > 1) {
+    BRep_Builder bb;
+    TopTools_IndexedMapOfShape vs, es, fs;
+    TopExp::MapShapes(s, TopAbs_VERTEX, vs);
+    TopExp::MapShapes(s, TopAbs_EDGE, es);
+    TopExp::MapShapes(s, TopAbs_FACE, fs);
+    for (int i = 1; i <= vs.Extent(); ++i) bb.UpdateVertex(TopoDS::Vertex(vs(i)), BRep_Tool::Tolerance(TopoDS::Vertex(vs(i))) * scale);
+    for (int i = 1; i <= es.Extent(); ++i) bb.UpdateEdge(TopoDS::Edge(es(i)), BRep_Tool::Tolerance(TopoDS::Edge(es(i))) * scale);
+    for (int i = 1; i <= fs.Extent(); ++i) bb.UpdateFace(TopoDS::Face(fs(i)), BRep_Tool::Tolerance(TopoDS::Face(fs(i))) * scale);
+  }
+  return shapeResult(unwrap(s), q);
+}
+
 // Deliberately exhaust memory through OCCT's allocator (gate 9 test hook).
 JV opDebugOom(const JV& q) {
   size_t step = (size_t)(q.num("step_mb", 64) * 1048576.0);
@@ -8477,6 +8695,8 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "fillet") return opFillet(q, false);
   if (op == "chamfer") return opFillet(q, true);
   if (op == "defeature") return opDefeature(q);
+  if (op == "recognize") return opRecognize(q);
+  if (op == "suppress_blends") return opSuppressBlends(q);
   if (op == "shell") return opShell(q);
   if (op == "repair") return opRepair(q);
   if (op == "props") return opProps(q);
@@ -8504,6 +8724,7 @@ JV dispatch(const std::string& op, const JV& q) {
   if (op == "silhouette") return opSilhouette(q);
   if (op == "debug_oom") return opDebugOom(q);
   if (op == "debug_hold") return opDebugHold(q);
+  if (op == "debug_reshape") return opDebugReshape(q);
   throw InputError("unknown op '" + op + "'");
 }
 

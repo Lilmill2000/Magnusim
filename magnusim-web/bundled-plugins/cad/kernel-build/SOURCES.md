@@ -5,9 +5,13 @@ compiled to WebAssembly with a small C++ facade (`facade/`). JavaScript calls
 the facade through a plain C ABI (`mk_call(json)`, `mk_alloc`, `mk_free`):
 no embind, so nothing needs `eval` or `new Function` under the workspace
 frame's Content-Security-Policy. The build also compiles a pinned part of
-Analysis Situs' asiAlgo (`asi/`, below) into `libasi.a` and links it; no
-facade op calls it yet, so the linker takes none of it and `mk32.wasm` is the
-same bytes as without it (kernel API 7).
+Analysis Situs' asiAlgo (`asi/`, below) into `libasi.a` and links it. The
+facade's Analysis Situs ops (`facade/asi_ops.cpp`: `recognize`,
+`suppress_blends`, `debug_reshape`; kernel API 8) are built into development
+kernels only for now: the shipped `mk32.wasm` is still the API 7 build, in
+which no op calls asiAlgo, so the linker took none of it, and
+`mk32.build.txt`'s `facade_sources` is that build's facade. They are shipped
+together, with the kernel binaries, as every API change is.
 
 ## Pins
 
@@ -83,7 +87,9 @@ Our changes, all outside `asi/upstream/`:
 - Built with `-DASI_NO_VIS_IO -DASI_NO_EIGEN`, and `USE_TBB`, `USE_MOBIUS`,
   `USE_VTK` and `USE_RAPIDJSON` undefined (single-threaded; no Mobius, VTK or
   RapidJSON): the vendored set is complete only under these.
-- wasm32 only: `build.sh --variant wasm64` links without it.
+- wasm32 only: `build.sh --variant wasm64` links without it, and builds the
+  facade with `-DMK_NO_ASI` (its Analysis Situs ops answer that the build has
+  none).
 
 ## Flags
 
@@ -92,8 +98,12 @@ Our changes, all outside `asi/upstream/`:
   `__FILE__` strings read `/cad-build/occt-7.9.3/src/...`).
 - Analysis Situs: the same, plus `-ffile-prefix-map=<asi work>=/cad-asi`,
   `-include asi_occt79_compat.h`, the two defines above and
-  `-Wno-deprecated-declarations` (the build record's `asi_flags`). `libasi.a`
-  is linked after `facade.o` and before the OCCT libraries.
+  `-Wno-deprecated-declarations` (the build record's `asi_flags`). The facade's
+  `asi_ops.cpp`, the only facade source that sees Analysis Situs, is compiled
+  the same way against the patched headers build-asi.sh leaves next to
+  `libasi.a` (`compile_asi_ops`); `facade.cpp` never sees them.
+  `libasi.a` is linked after `facade.o` and `asi_ops.o` and before the OCCT
+  libraries.
 - Link: `-sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
   -sDYNAMIC_EXECUTION=0 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB
   -sINITIAL_MEMORY=64MB -sSTACK_SIZE=8MB -sFILESYSTEM=0
