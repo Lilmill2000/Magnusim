@@ -779,6 +779,25 @@ describe('A stopped or failed run started over (runReopen.ts)', () => {
     }
   });
 
+  it("a solving, starting or stopping run's solve settings are refused before its study's default for new runs is written", async () => {
+    const before = JSON.stringify(w27.getSimulationControl(PID, SID).transient);
+    const block = { end_time: 1, write_count: 10, max_co: 100, n_outer_correctors: 1 };
+    for (const [extra, code] of [
+      [{ status: 'running' }, 'run_running'],
+      [{ status: 'starting' }, 'run_running'],
+      [{ status: 'running', stop_requested: true }, 'still_stopping'],
+    ]) {
+      const rid = draftRun({ time_dependency: 'Transient', transient: block, ...extra });
+      for (const change of [{ transient: { ...block, max_co: 5 } }, { endTime: 300 }, { writeInterval: 10 }, { mesh_id: 'm-other' }]) {
+        const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, ...change });
+        assert.deepEqual([out.status, out.code], [409, code], `${extra.status}${extra.stop_requested ? ' (stopping)' : ''}: ${JSON.stringify(change)}`);
+      }
+      const doc = runDoc(rid);
+      assert.deepEqual([doc.status, doc.transient.max_co, doc.endTime, doc.writeInterval, doc.mesh_id], [extra.status, 100, 100, 50, MID]);
+    }
+    assert.equal(JSON.stringify(w27.getSimulationControl(PID, SID).transient), before, "the study's default for new runs is as it was");
+  });
+
   it('a file of its case in use: nothing changes, and the refusal says so', { skip: WINDOWS_ONLY }, async () => {
     const rid = await stoppedWithFrame();
     const before = readFileSync(join(io.runFolderOf(PID, rid, SID).dir, 'run.json'), 'utf8');

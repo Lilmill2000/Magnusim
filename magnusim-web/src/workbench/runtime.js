@@ -33096,6 +33096,8 @@ async function createRunClient(opts) {
   expandRunFolders(id);
   try { refreshSetupTree(); } catch (_) {}
   openRunPanel(id);
+  // What the panel shows of the stand-in before the server's run comes (its transient numbers).
+  const shownAtCreate = JSON.stringify(transientSettingsFor(local));
   const pending = (async () => {
     const posted = await postJson('/api/run/create', {
       name,
@@ -33123,6 +33125,21 @@ async function createRunClient(opts) {
     }
     const created = typeof findRunRecord === 'function' ? findRunRecord(newId) : null;
     if (local.mesh_id && created && !created.mesh_id) rememberRunMesh(created, local.mesh_id);
+    // Until the server answered, the panel showed the stand-in's transient numbers (the
+    // analysis's defaults); the new run has its study's saved ones. Unless the person changed
+    // one meanwhile, the panel shows (and later saves) the run's own.
+    if (
+      !copyFrom &&
+      created &&
+      created.transient &&
+      String(runCatalog.transient_run_id || '') === String(newId) &&
+      JSON.stringify(runCatalog.transient) === shownAtCreate
+    ) {
+      runCatalog.transient = transientSettingsFor(created);
+      runCatalog.transient_preview = null;
+      runCatalog.transient_preview_key = '';
+      try { syncSimControlPanel(); } catch (_) {}
+    }
     if (copyFrom) {
       try {
         await copyRunSettingsFrom(copyFrom, { insideCreate: true, unresolve: !!(opts && opts.unresolve) });
