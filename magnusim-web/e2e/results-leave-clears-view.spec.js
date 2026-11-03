@@ -9,8 +9,10 @@
 // What the person sees is checked three ways: the actors the view draws
 // (window.__CFD_VIEW_ACTORS__), the view's pixels with the camera on where the trace was (a
 // forced render), and a screenshot of the canvas as the screen shows it (no render forced).
-// Late answers are forced by holding the trace requests. Reopening the run brings its trace
-// back, and a transient run's Results still follow its new frames.
+// Late answers are forced by holding the trace and iso requests: one asked for on a run the
+// person left draws nothing, on the setup view or on the next run's Results. Leaving a run's
+// Results and reopening them brings its trace back by itself, and a transient run's Results
+// still follow its new frames.
 //
 // No WSL: the steady runs are copies of the committed cavity case (with an inlet row, so
 // the trace has seeds), the transient study's mesh and solves are the fake compute's.
@@ -285,6 +287,20 @@ async function ensureTrace(page) {
   return (await viewActors(page)).main.find((a) => a.name === 'particle-trace').bounds;
 }
 
+/** The trace of a run's saved view back by itself, nothing clicked, and drawn. */
+async function traceRestored(page, label) {
+  await expect
+    .poll(async () => (await viewActors(page)).pt.enabled, { timeout: 30_000, message: `${label}: the saved view switches the trace on` })
+    .toBe(true);
+  await expect(page.locator('#pt-faces-hint')).toHaveText(TRACE_HINT, { timeout: 90_000 });
+  await expect.poll(async () => (await viewActors(page)).main.find((a) => a.name === 'particle-trace')?.points || 0, STEP).toBeGreaterThan(0);
+  return (await viewActors(page)).main.find((a) => a.name === 'particle-trace').bounds;
+}
+
+/** Run A's view as the server keeps it. */
+const savedViewOfA = async (request) =>
+  (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${SIM_A}`)).runs?.find((r) => String(r.id) === runA.rid)?.current_view;
+
 /**
  * Coloured pixels in the view (max - min channel > 80: the trace's velocity colours; the CAD,
  * its edges and the background are greys), outside the axes triad. With `tb` the camera
@@ -423,7 +439,7 @@ test("Daniel's flow: a steady run's trace, then another study's Run 2 started: t
   await expect.poll(async () => (await viewActors(page)).anim_type, STEP).toBe('Particle Trace');
   const before = await colouredPixels(page, tb);
   expect(before, 'the trace shows in its Results').toBeGreaterThanOrEqual(500);
-  await expect.poll(async () => (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${SIM_A}`)).runs?.find((r) => String(r.id) === runA.rid)?.current_view?.pt?.enabled, { timeout: 15_000, message: "A's view is saved with its trace" }).toBe(true);
+  await expect.poll(async () => (await savedViewOfA(request))?.pt?.enabled, { timeout: 15_000, message: "A's view is saved with its trace" }).toBe(true);
 
   // To study B, its Run 2, Start.
   await clickStudy(page, simB);
@@ -435,6 +451,8 @@ test("Daniel's flow: a steady run's trace, then another study's Run 2 started: t
   const samples = await staysClear(page, 4_000, 'Run 2 solving');
   expect(await colouredPixels(page, tb), 'nothing where the trace was').toBe(0);
   stage(`clear over ${samples} samples`);
+  // Leaving switched the trace off in the page only: A's saved view still has it.
+  expect((await savedViewOfA(request))?.pt?.enabled, "A's saved view keeps its trace after leaving").toBe(true);
 
   // After a reload: the same, and the detector reads 0 here too (it sees no false colour).
   await page.reload();
@@ -528,6 +546,53 @@ test("late trace answers: one asked before leaving never draws on the setup view
   await page.unroute('**/api/particle-trace**', hold);
 });
 
+test("late iso answers: A's iso surface and iso volume still loading when A2's Results open never draw on them", async ({ page }) => {
+  test.setTimeout(300_000);
+  // The drawings (not their meta) of A's iso surface and iso volume are held: the person
+  // turns both on in A's Results and opens A2's before they answer.
+  const held = { '/api/iso-surface': [], '/api/iso-volume': [] };
+  let holding = true;
+  const ofA = (url) => url.pathname in held && norm(url.searchParams.get('case')) === norm(runA.caseDir);
+  const hold = async (route) => {
+    if (holding) held[new URL(route.request().url()).pathname].push(route);
+    else await route.continue().catch(() => {});
+  };
+  await page.route(ofA, hold);
+  await openProject(page);
+  await openResults(page, SIM_A, runA.rid);
+  const filters = page.locator('#filters-toolbar-group');
+  await filters.locator('.tb-btn[data-label="Iso Surface"]').click();
+  await expect.poll(() => held['/api/iso-surface'].length, { timeout: 90_000, message: "A's iso surface is asked for" }).toBeGreaterThan(0);
+  await filters.locator('.tb-btn[data-label="Iso Volume"]').click();
+  await expect.poll(() => held['/api/iso-volume'].length, { timeout: 90_000, message: "A's iso volume is asked for" }).toBeGreaterThan(0);
+
+  // A2's Results from the tree (its saved view has the trace on), then A's answers land.
+  await expand(page.locator(`#left-tree li[data-w27-run="${runA2.rid}"]`).first());
+  await page.locator(`#left-tree [data-w27-run-results="${runA2.rid}"] > .tree-row .tl`).first().click();
+  await expect(page.locator('#pt-faces-hint')).toHaveText(TRACE_HINT, { timeout: 90_000 });
+  await expect.poll(async () => norm(((await viewActors(page)).pt.frame || {}).case), STEP).toBe(norm(runA2.caseDir));
+  holding = false;
+  const late = [...held['/api/iso-surface'].splice(0), ...held['/api/iso-volume'].splice(0)];
+  for (const r of late) await r.continue().catch(() => {});
+  stage(`released ${late.length} held iso answers of A on A2's Results`);
+  await page.waitForTimeout(1_500);
+  const until = Date.now() + 3_000;
+  let samples = 0;
+  do {
+    const names = (await viewActors(page)).main.map((a) => a.name);
+    expect(names.filter((n) => /^iso/.test(n)), `A's iso drawings on A2's Results (sample ${samples})`).toEqual([]);
+    expect(names, "A2's own trace stays").toContain('particle-trace');
+    samples += 1;
+    await page.waitForTimeout(250);
+  } while (Date.now() < until);
+  // A2's Results show neither filter switched on.
+  await expect(filters.locator('.tb-btn[data-label="Iso Surface"]')).not.toHaveClass(/is-active/);
+  await expect(filters.locator('.tb-btn[data-label="Iso Volume"]')).not.toHaveClass(/is-active/);
+  await expect(page.locator('#iso-block')).toBeHidden();
+  await expect(page.locator('#iv-block')).toBeHidden();
+  await page.unroute(ofA, hold);
+});
+
 test('iso surface and iso volume with arrows, a plot path and a seed region: none stays after leaving Results', async ({ page }) => {
   test.setTimeout(300_000);
   await openProject(page);
@@ -567,15 +632,35 @@ test('iso surface and iso volume with arrows, a plot path and a seed region: non
   await staysClear(page, 3_000, 'after a seed region');
 });
 
-test("no over-correction: reopening A's Results brings its trace back, and a transient run's Results follow its new frames", async ({ page, request }) => {
+test("no over-correction: leaving A's Results and reopening them brings its trace back by itself, and a transient run's Results follow its new frames", async ({ page, request }) => {
   test.setTimeout(300_000);
   await waitSlotFree(request, { base: host.base });
+  // A's saved view has the trace on, as the person left it (whatever ran before).
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: SIM_A, run_id: runA.rid, current_view: traceView() });
   await openProject(page);
   await openResults(page, SIM_A, runA.rid);
-  const tb = await ensureTrace(page);
-  expect(await colouredPixels(page, tb), 'the trace shows again').toBeGreaterThanOrEqual(500);
+  const tb = await traceRestored(page, "opening A's Results");
+  // The person opens the Animation (a change the live view saves 0.7 s later) and leaves for
+  // the other study before that, so the view is saved on the way out: it still has the trace.
+  // Back in the same page, the trace and the animation return with nothing clicked.
   const anim = page.locator('#filters-toolbar-group .tb-btn[data-label="Animation"]');
-  if (!(await anim.evaluate((el) => el.classList.contains('is-active')))) await anim.click();
+  await page.evaluate((sim) => {
+    document.querySelector('#filters-toolbar-group .tb-btn[data-label="Animation"]').click();
+    document.querySelector(`#left-tree [data-w17-sim-id="${sim}"] > .tree-row .tl`).click();
+  }, simB);
+  await expect.poll(() => page.evaluate(() => window.__CFD_W17__.activeId), STEP).toBe(simB);
+  await expand(page.locator(`#left-tree li[data-w17-sim-id="${simB}"]`).first());
+  await staysClear(page, 1_000, 'left A');
+  await expect
+    .poll(async () => {
+      const v = await savedViewOfA(request);
+      return `trace ${v?.pt?.enabled}, animation ${v?.anim?.open} ${v?.anim?.type}`;
+    }, { timeout: 15_000, message: "A's saved view as the person left it" })
+    .toBe('trace true, animation true Particle Trace');
+  await openResults(page, SIM_A, runA.rid);
+  await traceRestored(page, "reopening A's Results");
+  expect(await colouredPixels(page, tb), 'the trace shows again').toBeGreaterThanOrEqual(500);
+  await expect(anim).toHaveClass(/is-active/);
   await expect.poll(async () => (await viewActors(page)).anim_type, STEP).toBe('Particle Trace');
 
   // To study B, Run 1, Start (the fake solve); the solver writes its first two frames.

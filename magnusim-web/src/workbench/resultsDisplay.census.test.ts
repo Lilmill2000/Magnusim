@@ -14,7 +14,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const RUNTIME = readFileSync(join(__dirname, 'runtime.js'), 'utf8');
+// A checkout with Windows line endings (core.autocrlf) reads the same as one with LF.
+const RUNTIME = readFileSync(join(__dirname, 'runtime.js'), 'utf8').replace(/\r\n/g, '\n');
 const LINES = RUNTIME.split(/\r?\n/);
 
 /** The top-level function (or wired handler) a line is in; '<module>' at the top level. */
@@ -222,7 +223,15 @@ describe("the census of the view's result drawings", () => {
     expect(body('hidePrefetchedResultSurface')).toMatch(/hideResultActors\(\)/);
     expect(body('applyWorkbenchStage')).toMatch(/if \(stage !== 'results'\) hideResultActors\(\);/);
     expect(body('applyTimeFilters')).toMatch(/if \(!resultsDrawAllowed\(\)\) return;/);
-    expect(body('resetPostFilters')).toMatch(/resultsShowGen \+= 1/);
+    expect(body('resetPostFilters')).toMatch(/resultsShowGen \+= 1;\n {2}dropFilterLoads\(\);/);
+    // The trace, path, iso and iso-volume loads of the run left, or of the run shown before
+    // another run's Results opened, stop at their next step: each checks its token after
+    // every await, and dropFilterLoads moves all four.
+    const drop = body('dropFilterLoads');
+    for (const t of ['ptLoadToken', 'popLoadToken', 'isoLoadToken', 'ivLoadToken']) {
+      expect(drop, `dropFilterLoads moves ${t}`).toContain(`${t} += 1;`);
+    }
+    expect(body('clearResultActors')).toMatch(/dropFilterLoads\(\);/);
     // A saved set that loads while the person leaves stops after each of its loads.
     expect(body('applyFilterSet').match(/if \(shownGen !== resultsShowGen\) return false;/g)?.length).toBe(2);
     // A trace frame asked for before then, or for another case or time, draws nothing.

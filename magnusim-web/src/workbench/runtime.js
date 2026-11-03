@@ -12960,8 +12960,10 @@ function resetResultFilterFlags() {
 }
 
 function resetPostFilters() {
-  // Answers asked for the run shown before draw nothing on this one.
+  // Answers asked for the run shown before draw nothing on this one: its trace, path, iso
+  // surface and iso volume loads still on their way stop at their next step.
   resultsShowGen += 1;
+  dropFilterLoads();
   try { stopAnimationPlay(); } catch (_) {}
   cutState.enabled = false;
   cutState.partsColor = true;
@@ -19163,14 +19165,22 @@ function hideResultActors() {
   ptShownFrame = null;
 }
 
-function clearResultActors() {
-  hideResultActors();
-  try { clearInspect(false); } catch (_) {}
-  ivLoadToken += 1;
-  isoLoadToken += 1;
+/**
+ * The particle trace, plot over path, iso surface and iso volume loads on their way stop at
+ * their next step and draw nothing (each checks its token after every await).
+ */
+function dropFilterLoads() {
   ptLoadToken += 1;
   ptLoading = false;
   popLoadToken += 1;
+  isoLoadToken += 1;
+  ivLoadToken += 1;
+}
+
+function clearResultActors() {
+  hideResultActors();
+  try { clearInspect(false); } catch (_) {}
+  dropFilterLoads();
   inspectLoadToken += 1;
   fieldLoadToken += 1;
   cutLoadToken += 1;
