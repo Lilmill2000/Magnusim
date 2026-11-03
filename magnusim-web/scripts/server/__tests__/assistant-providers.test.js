@@ -2053,7 +2053,7 @@ describe('prices (as of 2026-10-16) and the spend estimate', () => {
   // [model, input, 5 m write, 1 h write, cache read, output, long: [above, input, 5 m, 1 h, read, output] | null, picker]
   const TABLE = [
     ['claude-opus-5-5', 4, 5, 8, 0.2, 20, null, true],
-    // The pricing page, read again 2026-10-29: cache reads $0.10 (0.05x input); the claude-api skill's notes say $0.20.
+    // The pricing page, read again 2026-10-29: cache reads $0.10 (0.05x input).
     ['claude-sonnet-5-5', 2, 2.5, 4, 0.1, 10, null, true],
     ['claude-haiku-5-5', 0.1, 0.125, 0.2, 0.01, 0.5, [100_000, 0.5, 0.625, 1, 0.05, 2.5], true],
     ['claude-opus-5', 5, 6.25, 10, 0.5, 25, null, false],

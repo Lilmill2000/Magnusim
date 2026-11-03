@@ -42,9 +42,9 @@ export interface PriceRow extends Rates {
 
 const ANTHROPIC_PRICES = 'https://platform.claude.com/docs/en/about-claude/pricing';
 /**
- * The 1M-token context of the Anthropic rows: the "Current Models" table of the claude-api
- * skill's model reference (read 2026-10-29), Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5
- * and Haiku 5.5 alike.
+ * The 1M-token context of the Anthropic rows: "Context window sizes by model" on
+ * https://platform.claude.com/docs/en/build-with-claude/context-windows (read 2026-11-02),
+ * Opus 5.5, Opus 5, Opus 4.8, Sonnet 5.5, Sonnet 5 and Haiku 5.5 alike.
  */
 const ONE_MILLION = 1_000_000;
 const OPENAI_PRICES = 'https://developers.openai.com/api/docs/pricing';
@@ -77,8 +77,8 @@ export const PRICES: readonly PriceRow[] = Object.freeze([
   // ANTHROPIC_PRICES, read 2026-10-16. Cache reads are 0.05x input on this model.
   row('anthropic', 'claude-opus-5-5', 'Claude Opus 5.5', [4, 5, 8, 0.2, 20], { context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16. Cache reads $0.10 (0.05x input), not the $0.20 of the plan.
-  // Read again 2026-10-29: still $0.10 there ("0.05x the base input price"), where the claude-api
-  // skill's model notes (cached 2026-10-06) say $0.20; the pricing page is what is billed.
+  // Read again 2026-10-29: still $0.10 there ("0.05x the base input price"); the pricing page is
+  // what is billed.
   row('anthropic', 'claude-sonnet-5-5', 'Claude Sonnet 5.5', [2, 2.5, 4, 0.1, 10], { context: ONE_MILLION }),
   // ANTHROPIC_PRICES, read 2026-10-16: prompts over 100,000 tokens pay the second row.
   row('anthropic', 'claude-haiku-5-5', 'Claude Haiku 5.5', [0.1, 0.125, 0.2, 0.01, 0.5], { long: [100_000, 0.5, 0.625, 1, 0.05, 2.5], context: ONE_MILLION }),
