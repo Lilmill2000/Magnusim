@@ -150,7 +150,7 @@ def test_key_must_be_the_folder_name(tmp_path: Path):
 def test_key_of_a_bundled_plugin_is_taken(tmp_path: Path):
     # A user plugin with a bundled plugin's key takes that plugin's place in the host.
     folder = make_plugin(tmp_path, "incompressible_flow")
-    assert any("is a bundled plugin's key (bundled-plugins/incompressible_flow, v1.1.0)" in m for m in found(run(folder), "key"))
+    assert any("is a bundled plugin's key (bundled-plugins/incompressible_flow, v1.2.0)" in m for m in found(run(folder), "key"))
     # The bundled plugin itself is not taking anyone's key.
     assert not found(run(WEB_ROOT / "bundled-plugins" / "incompressible_flow"), "key")
 
@@ -164,11 +164,11 @@ def test_a_newer_copy_of_a_bundled_plugin_is_an_update(tmp_path: Path):
     folder = upd / "incompressible_flow"
     text = (folder / "manifest.toml").read_text(encoding="utf-8")
     report = run(folder)
-    assert any("v1.1.0) and this copy (v1.1.0) is not newer" in m for m in found(report, "key"))
-    (folder / "manifest.toml").write_text(text.replace('version = "1.1.0"', 'version = "1.1.1"'), encoding="utf-8")
+    assert any("v1.2.0) and this copy (v1.2.0) is not newer" in m for m in found(report, "key"))
+    (folder / "manifest.toml").write_text(text.replace('version = "1.2.0"', 'version = "1.2.1"'), encoding="utf-8")
     report = run(folder)
     assert not found(report, "key")
-    assert "an update of the bundled plugin incompressible_flow (v1.1.0)" in report.notes["key"]
+    assert "an update of the bundled plugin incompressible_flow (v1.2.0)" in report.notes["key"]
 
 
 # -- api_version -------------------------------------------------------------------------

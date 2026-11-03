@@ -1,9 +1,9 @@
 // Heat Transfer (HT6, release): the plugin as a package, the way `npm run plugin:pack`
 // zips it, installed through Settings > Plugins > Install plugin from zip.
-// - An app without Heat Transfer: the 0.1.0 zip installs (after Install), is on, and
-//   Home opens its heat-sink sample, a conjugate heat transfer study. A 0.1.1 zip then
-//   updates it ("Update Heat Transfer from 0.1.0 to 0.1.1.") and the sample still opens.
-// - The app as it ships (Heat Transfer 0.1.0 bundled): a 0.1.1 zip installs as an update
+// - An app without Heat Transfer: the 0.2.0 zip installs (after Install), is on, and
+//   Home opens its heat-sink sample, a conjugate heat transfer study. A 0.2.1 zip then
+//   updates it ("Update Heat Transfer from 0.2.0 to 0.2.1.") and the sample still opens.
+// - The app as it ships (Heat Transfer 0.2.0 bundled): a 0.2.1 zip installs as an update
 //   that is used in place of the bundled copy (a newer copy wins).
 // Each on a second app server of its own (startHost), with only the plugins it names.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -103,14 +103,14 @@ async function openTheSample(page, base) {
   return pid;
 }
 
-test('a fresh install from the 0.1.0 zip: on, its sample opens as conjugate heat transfer; the 0.1.1 zip updates it', async ({ page }) => {
+test('a fresh install from the 0.2.0 zip: on, its sample opens as conjugate heat transfer; the 0.2.1 zip updates it', async ({ page }) => {
   test.setTimeout(600_000);
   page.setDefaultTimeout(30_000);
   const tmp = e2eTemp('ht6-install');
   const projects = join(tmp, 'projects');
   prepareE2eProjectsRoot(projects);
   const first = packed(tmp, readFileSync(join(PLUGIN, 'manifest.toml'), 'utf8').match(/^version = "([^"]+)"/m)[1]);
-  const next = packed(tmp, '0.1.1');
+  const next = packed(tmp, '0.2.1');
   const host = await startHost({ name: 'ht6-install', tmp, projects, bundledDir: bundledFolder(tmp, false) });
   const s = settings(page);
   try {
@@ -118,16 +118,16 @@ test('a fresh install from the 0.1.0 zip: on, its sample opens as conjugate heat
     await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
     await s.open();
     await expect(s.row).toHaveCount(0);
-    await s.install(first, 'Install Heat Transfer 0.1.0.', 'Heat Transfer 0.1.0 is installed.');
-    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.1\.0/);
+    await s.install(first, 'Install Heat Transfer 0.2.0.', 'Heat Transfer 0.2.0 is installed.');
+    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.2\.0/);
     expect(readdirSync(host.pluginsDir)).toEqual(['heat_transfer']);
     await s.close();
     // A page load reads the new plugin's panels.
     await openTheSample(page, host.base);
 
     await s.open();
-    await s.install(next, 'Update Heat Transfer from 0.1.0 to 0.1.1.', 'Heat Transfer 0.1.1 is installed.');
-    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.1\.1/);
+    await s.install(next, 'Update Heat Transfer from 0.2.0 to 0.2.1.', 'Heat Transfer 0.2.1 is installed.');
+    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.2\.1/);
     await s.close();
     await page.reload();
     await openTheSample(page, host.base);
@@ -136,13 +136,13 @@ test('a fresh install from the 0.1.0 zip: on, its sample opens as conjugate heat
   }
 });
 
-test('the app as it ships (Heat Transfer bundled): a 0.1.1 zip is used in place of the bundled copy', async ({ page }) => {
+test('the app as it ships (Heat Transfer bundled): a 0.2.1 zip is used in place of the bundled copy', async ({ page }) => {
   test.setTimeout(600_000);
   page.setDefaultTimeout(30_000);
   const tmp = e2eTemp('ht6-update');
   const projects = join(tmp, 'projects');
   prepareE2eProjectsRoot(projects);
-  const next = packed(tmp, '0.1.1');
+  const next = packed(tmp, '0.2.1');
   const host = await startHost({ name: 'ht6-update', tmp, projects, bundledDir: bundledFolder(tmp, true) });
   const s = settings(page);
   try {
@@ -150,10 +150,10 @@ test('the app as it ships (Heat Transfer bundled): a 0.1.1 zip is used in place 
     await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PROJECT, { timeout: 60_000 });
     await s.open();
     await expect(s.row).toHaveAttribute('data-plugin-copy', 'app');
-    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.1\.0 · bundled/);
-    await s.install(next, 'Update Heat Transfer from 0.1.0 to 0.1.1.', 'Heat Transfer 0.1.1 is installed.');
+    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.2\.0 · bundled/);
+    await s.install(next, 'Update Heat Transfer from 0.2.0 to 0.2.1.', 'Heat Transfer 0.2.1 is installed.');
     await expect(s.row).toHaveAttribute('data-plugin-copy', 'update');
-    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.1\.1 · update/);
+    await expect(s.row.locator('.wiz-plugin-meta').first()).toHaveText(/v0\.2\.1 · update/);
     await s.close();
     await page.reload();
     await openTheSample(page, host.base);

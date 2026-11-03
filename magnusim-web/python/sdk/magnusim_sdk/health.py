@@ -82,7 +82,14 @@ RE_MONITOR_HEAD = re.compile(r"^(\w+) (\S+) write:\s*$")
 RE_MONITOR_VALUE = re.compile(r"^\s+(\w+)\((\S+)\) of (\w+) = (.+?)\s*$")
 RE_SELECTED = re.compile(rf"selected (\d+) cell\(s\) with volume {NUM}")
 RE_HOST = re.compile(r'^Host\s*:\s*"?([^"\s]+)"?\s*$')
-RE_PIMPLE_ITER = re.compile(r"^PIMPLE: [Ii]teration (\d+)")
+# The pressure-velocity loop names as OpenFOAM prints them in the log and the plugin's
+# health hints give them (``mode``). The tracker only reads them; it sets no numerics.
+LOOP_PISO, LOOP_PIMPLE, LOOP_SIMPLE, LOOP_SIMPLEC = "PISO", "PIMPLE", "SIMPLE", "SIMPLEC"
+TRANSIENT_LOOPS = (LOOP_PISO, LOOP_PIMPLE)
+STEADY_LOOPS = (LOOP_SIMPLE, LOOP_SIMPLEC)
+OUTER_PREFIX = LOOP_PIMPLE + ":"
+STEADY_CONVERGED = LOOP_SIMPLE + " solution converged"
+RE_PIMPLE_ITER = re.compile("^" + re.escape(OUTER_PREFIX) + r" [Ii]teration (\d+)")
 RE_FATAL_HEAD = re.compile(r"^--> FOAM FATAL (?:IO )?ERROR")
 RE_FATAL_FRAME = re.compile(r"^\s*#\d+\s+Foam::sig(?:Fpe|Segv)::sigHandler")
 RE_WARNING = re.compile(r"^--> FOAM Warning\s*:?\s*(.*)$")
@@ -325,7 +332,7 @@ class HealthTracker:
         self.hints = dict(hints) if isinstance(hints, dict) else None
         h = self.hints or {}
         mode = str(h.get("mode") or "").upper() or None
-        self.mode: str | None = mode if mode in ("PISO", "PIMPLE", "SIMPLE", "SIMPLEC") else None
+        self.mode: str | None = mode if mode in TRANSIENT_LOOPS + STEADY_LOOPS else None
         self.n_outer = _int(h.get("n_outer"), None)
         self.n_correctors = _int(h.get("n_correctors"), None)
         self.max_co = _num(h.get("max_co"))
@@ -348,9 +355,9 @@ class HealthTracker:
         self.max_di = _num(h.get("max_di"))
         self.t_bc_max = _num(h.get("t_bc_max"))
         self.transient: bool | None = None
-        if self.mode in ("PISO", "PIMPLE"):
+        if self.mode in TRANSIENT_LOOPS:
             self.transient = True
-        elif self.mode in ("SIMPLE", "SIMPLEC"):
+        elif self.mode in STEADY_LOOPS:
             self.transient = False
         if self.transient is None and self.hints is not None and "app" in h:
             app = str(h.get("app") or "")
@@ -529,12 +536,12 @@ class HealthTracker:
                 self._close()
             return
         if c == "P":
-            if s.startswith("PIMPLE:"):
+            if s.startswith(OUTER_PREFIX):
                 if self.mode is None:
                     if "PISO mode" in s:
-                        self.mode = "PISO"
+                        self.mode = LOOP_PISO
                     elif "iteration" in s.lower():
-                        self.mode = "PIMPLE"
+                        self.mode = LOOP_PIMPLE
                     if self.mode:
                         self.transient = True
                 m = RE_PIMPLE_ITER.match(s)
@@ -544,7 +551,7 @@ class HealthTracker:
         if c == "S":
             if s.startswith("Starting time loop"):
                 self.time_loop = True
-            elif s.startswith("SIMPLE solution converged") and RE_SOLUTION_CONVERGED.match(s):
+            elif s.startswith(STEADY_CONVERGED) and RE_SOLUTION_CONVERGED.match(s):
                 self.converged_flag = True
             elif s.startswith("Solving for "):
                 m = RE_REGION_BLOCK.match(s)
@@ -939,7 +946,7 @@ class HealthTracker:
         lv: dict[str, int] = {}
         info: dict[str, bool] = {}
         # pv_coupling (PISO and PIMPLE only).
-        if transient and self.mode in ("PISO", "PIMPLE", None) and cur.p_groups:
+        if transient and (self.mode is None or self.mode in TRANSIENT_LOOPS) and cur.p_groups:
             p_final, p_ev = cur.p_groups[-1]
             one = (self.n_correctors or 0) == 1 or (self.n_correctors is None and len(cur.p_groups) == 1)
             lp = 2 if p_final >= (0.8 if one else 0.5) else 1 if p_final >= 0.1 else 0
@@ -1093,9 +1100,9 @@ class HealthTracker:
         return max(abs(self.mon_base), 0.5 * (self.uref or 1.0) ** 2)
 
     def _co_watch(self) -> float | None:
-        if self.mode == "PISO" or (self.n_outer is not None and self.n_outer <= 1):
+        if self.mode == LOOP_PISO or (self.n_outer is not None and self.n_outer <= 1):
             return 1.5
-        if self.mode == "PIMPLE":
+        if self.mode == LOOP_PIMPLE:
             return 7.5
         return None
 
@@ -1396,7 +1403,7 @@ class HealthTracker:
         else:
             skip("velocity_clipped", "no health hints from this analysis" if no_hints else "no velocity limit")
         if transient:
-            if self.mode in ("PISO", "PIMPLE") or self.mode is None:
+            if self.mode in TRANSIENT_LOOPS or self.mode is None:
                 checked.append("pv_coupling")
             checked.append("residuals_high")
             checked += ["courant_mode", "courant_spread"]
@@ -1707,7 +1714,7 @@ class HealthTracker:
             )
         if code == "courant_mode":
             n_outer = self.n_outer or 1
-            mode = self.mode or ("PISO" if n_outer <= 1 else "PIMPLE")
+            mode = self.mode or (LOOP_PISO if n_outer <= 1 else LOOP_PIMPLE)
             corr = f"{n_outer} outer corrector{'s' if n_outer != 1 else ''}"
             if self.max_co is not None and self._co_setting_level():
                 lead = "Likely cause: " if self.verdict in ("unhealthy", "failed") else ""

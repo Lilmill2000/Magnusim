@@ -36,6 +36,34 @@
       "reason": "The product's required bundled plugin, by key and display name, so the app can say which plugin is missing when it cannot load it. Only that line is allowed."
     },
     {
+      "file": "python/sdk/magnusim_sdk/health.py",
+      "line_contains": [
+        "LOOP_PISO, LOOP_PIMPLE, LOOP_SIMPLE, LOOP_SIMPLEC = "
+      ],
+      "reason": "The run health tracker reads a solver log: the pressure-velocity loop names OpenFOAM prints there (PIMPLE: Iteration n, SIMPLE solution converged) and the plugin's health hints give as mode. It sets no numerics. Only the one line that names them is allowed."
+    },
+    {
+      "file": "python/sdk/magnusim_sdk/numerics_advice.py",
+      "line_contains": [
+        "\"PIMPLE outer loops per time step."
+      ],
+      "reason": "The one source of the Max Courant and outer-corrector advice (RH1, A1) that the plugins' setting descriptions, the run health fixes and the Assistant's guide all read. Only the outer-corrector rule's line is allowed."
+    },
+    {
+      "file": "scripts/server/assistant/cfdGuide.ts",
+      "line_contains": [
+        "k-omega SST handles both"
+      ],
+      "reason": "The Assistant's CFD guide (core edition): its mesh rule tells the AI which wall treatment suits a y+ range, in the spec's words. Only that line is allowed."
+    },
+    {
+      "file": "scripts/test-solve.js",
+      "line_contains": [
+        "let app = 'pimpleFoam';"
+      ],
+      "reason": "The fake solve's log replay (MAGNUSIM_TEST_SOLVE_LOG): the solver log name it writes when the fixture's hints name none, as the real transient solve names it. Only that line is allowed."
+    },
+    {
       "file": "docs/plugins/plugin-api.d.ts",
       "line_contains": [
         "export type AnalysisKey = "
