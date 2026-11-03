@@ -179,6 +179,14 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`), and
   each hardware probe answers after `MAGNUSIM_TEST_HW_PROBE_MS` (default 1500) with a
   plausible PC (`e2e/assistant-jobs.spec.js`, `e2e/assistant-core-chain.spec.js`).
+  `MAGNUSIM_TEST_SOLVE_LOG=<solver log>` (`.gz` too) makes the fake solve "solve" that
+  log for run health: the real tracker (`python -m magnusim_sdk.health replay --events`)
+  writes it into the run's `case/log.<app>` a time step every
+  `MAGNUSIM_TEST_SOLVE_PACE_MS` (default 40), with the hints of
+  `MAGNUSIM_TEST_SOLVE_HINTS` (else the log's `<name>.hints.json`), and the run doc gets
+  each health event through the runner's shape check and scrub; the run ends once the log
+  is read and `MAGNUSIM_TEST_SOLVE_SECONDS` have passed (`e2e/run-health.spec.js`, with
+  Run_2's log in `python/tests/fixtures/health/`).
 - **A plugin's tests go in its own suite**, not in `e2e/`.
 - **To let a stress run reach a spec**, import `test` and `expect` from the harness:
   `./support/stress.js` (core), `../../../e2e/support/plugin-suite.js` (a plugin

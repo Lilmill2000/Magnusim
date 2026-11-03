@@ -2512,6 +2512,7 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
     const SESSION = await import('../assistant/agents/session.ts');
     const { NOTE_PREFIX } = await import('../assistant/agents/acp.ts');
     const { guideBlock } = await import('../assistant/prompt.ts');
+    const { cfdGuideText } = await import('../assistant/cfdGuide.ts');
     for (const how of ['no_tools', 'stop']) {
       const w = await world({ custom: true, allow: [CUSTOM_ID] });
       const hold = `f5-first-${how}`;
@@ -2540,8 +2541,10 @@ describe('the agent session (spec 4.6)', LIMIT, () => {
         assert.equal(prompts.length, 1, how);
         const texts = prompts[0].params.prompt.map((b) => b.text);
         assert.ok(texts[0].startsWith(`${NOTE_PREFIX} `), `${how}: the agent note first: ${texts[0].slice(0, 60)}`);
-        assert.equal(texts[1], guideBlock(GUIDE, 'Workspace demo'), `${how}: the workspace notes`);
-        assert.equal(texts[2], 'Two.');
+        // RH1: the CFD guide right after the note (Magnusim).
+        assert.equal(texts[1], cfdGuideText(), `${how}: the CFD guide`);
+        assert.equal(texts[2], guideBlock(GUIDE, 'Workspace demo'), `${how}: the workspace notes`);
+        assert.equal(texts[3], 'Two.');
         assert.ok(!H.eventsOf(r2.turn).some((x) => x.type === 'note' && /new conversation/.test(x.text)), `${how}: no note that the workspace notes changed`);
       } finally {
         custom.configure({ mcpLate: null });

@@ -15,11 +15,13 @@ const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ASSISTANT = join(WEB, 'scripts', 'server', 'assistant');
 const { cfdGuide, cfdGuideText, withCfdGuide, CFD_GUIDE_MAX } = await import('../server/assistant/cfdGuide.ts');
 const { buildRequest } = await import('../server/assistant/loop.ts');
-const { sessionNewParams, CLAUDE_CODE_SESSION, agentNote } = await import('../server/assistant/agents/acp.ts');
+const { sessionNewParams, agentNote } = await import('../server/assistant/agents/acp.ts');
 const { mcpInstructions } = await import('../server/assistant/mcp/server.ts');
 const { systemPrompt } = await import('../server/assistant/prompt.ts');
 
 const SIMULATION = /\b(simulat\w*|CFD|mesh\w*|solv\w*|run(s|ning)?\b|Courant|turbulen\w*)/i;
+/** An agent hook whose note goes in its system prompt (as the first agent's does). */
+const HOOK = { carriesNote: true, meta: (note) => ({ systemPrompt: { append: note } }) };
 const bridge = { command: 'node', script: '/x/assistant-mcp.mjs', binding: 'b-000000000000000000000000', info: '/x/mcp.json' };
 const conv = (guide = null) => ({ id: 'c1', messages: [{ role: 'user', parts: [{ type: 'text', text: 'hi' }] }], guide });
 const settings = { model: 'm', effort: 'default' };
@@ -42,7 +44,7 @@ describe('the CFD guide in Magnusim', () => {
 
   it('goes in the MCP instructions and in an agent note in its system prompt', () => {
     assert.equal(withCfdGuide(mcpInstructions()), `${mcpInstructions()}\n\n${cfdGuideText()}`);
-    const meta = sessionNewParams('/w', bridge, { sessionMeta: CLAUDE_CODE_SESSION })._meta;
+    const meta = sessionNewParams('/w', bridge, { sessionMeta: HOOK })._meta;
     assert.equal(meta.systemPrompt.append, `${agentNote()}\n\n${cfdGuideText()}`);
     // The MCP server and the agents' first prompt use it (one helper each).
     assert.match(readFileSync(join(ASSISTANT, 'mcp', 'server.ts'), 'utf8'), /const rules = withCfdGuide\(mcpInstructions\(\)\);/);
@@ -61,7 +63,7 @@ describe('the CFD guide in Magnusim CAD', () => {
       const mcp = withCfdGuide(mcpInstructions());
       assert.equal(mcp, mcpInstructions());
       assert.doesNotMatch(mcp, SIMULATION);
-      const meta = sessionNewParams('/w', bridge, { sessionMeta: CLAUDE_CODE_SESSION })._meta;
+      const meta = sessionNewParams('/w', bridge, { sessionMeta: HOOK })._meta;
       assert.equal(meta.systemPrompt.append, agentNote());
       assert.doesNotMatch(meta.systemPrompt.append, SIMULATION);
     } finally {

@@ -22,10 +22,10 @@ const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 const STUDY_ADDED = '[data-study-reference]';
 // Rows the run panel gained after v0.2.0, left out of the comparison: Average from
 // (F2, transient), "Stop when a monitor settles" and how a finished run ended (F5),
-// and a finished run's Continue (F6).
-const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue]';
-// A converged run's tree badge (F5), left out of the tree's comparison.
-const TREE_ADDED = '[data-run-converged]';
+// and a finished run's Continue (F6), and a run's Health block (RH1).
+const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue], [data-run-health-block]';
+// A converged run's tree badge (F5) and an unhealthy one's (RH1), left out of the tree's comparison.
+const TREE_ADDED = '[data-run-converged], [data-run-health-badge]';
 // The Create Simulation list's rows of the analyses of a bundled plugin that ships on
 // after the baseline was recorded (Heat Transfer, HT4), left out of the comparison: every
 // row the baseline has (Incompressible Flow's and the test plugins') still must match.

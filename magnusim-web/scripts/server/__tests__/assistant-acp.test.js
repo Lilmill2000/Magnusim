@@ -312,10 +312,12 @@ describe('acp.ts builders', () => {
     }
   });
 
-  it('the first agent hook turns its own tools off and appends the note (spec 4.9)', () => {
+  it('the first agent hook turns its own tools off and appends the note (spec 4.9)', async () => {
     const p = acp.sessionNewParams('/w', BRIDGE, { sessionMeta: acp.CLAUDE_CODE_SESSION });
     const m = p._meta;
-    assert.deepEqual(m.systemPrompt, { append: acp.AGENT_NOTE }, 'an object appends; a string would replace');
+    // RH1: in Magnusim the CFD guide follows the note.
+    const { cfdGuideText } = await import('../assistant/cfdGuide.ts');
+    assert.deepEqual(m.systemPrompt, { append: `${acp.AGENT_NOTE}\n\n${cfdGuideText()}` }, 'an object appends; a string would replace');
     assert.equal(m.disableBuiltInTools, true);
     const o = m.claudeCode.options;
     assert.deepEqual(o.tools, []);
