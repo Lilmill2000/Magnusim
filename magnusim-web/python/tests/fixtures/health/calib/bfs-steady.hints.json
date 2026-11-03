@@ -1,0 +1,49 @@
+{
+ "app": "simpleFoam",
+ "mode": "SIMPLE",
+ "n_outer": null,
+ "n_correctors": null,
+ "max_co": null,
+ "end_time": 3000,
+ "average_from": null,
+ "uref": 10.0,
+ "uref_source": "inlet",
+ "fixed_inflow": true,
+ "turbulence": "kOmegaSST",
+ "limiter": {
+  "name": "limitU",
+  "cap": 100.0,
+  "factor": 10,
+  "floor": 50
+ },
+ "linsolve": {
+  "p": {
+   "max_iter": 200,
+   "tol": 1e-07,
+   "rel_tol": 0.01,
+   "final_rel_tol": 0.01
+  },
+  "U": {
+   "max_iter": 50,
+   "tol": 1e-08,
+   "rel_tol": 0.1,
+   "final_rel_tol": 0.1
+  },
+  "k": {
+   "max_iter": 50,
+   "tol": 1e-08,
+   "rel_tol": 0.1,
+   "final_rel_tol": 0.1
+  },
+  "omega": {
+   "max_iter": 50,
+   "tol": 1e-08,
+   "rel_tol": 0.1,
+   "final_rel_tol": 0.1
+  }
+ },
+ "monitors": {
+  "inlet": "mon_inlet",
+  "outlet": "mon_outlet"
+ }
+}

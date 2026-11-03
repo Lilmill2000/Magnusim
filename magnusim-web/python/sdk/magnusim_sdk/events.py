@@ -35,6 +35,9 @@ EventKind = Literal[
     # API 1.8: the plain reason a solver died, as an analysis's log parser read it
     # from the solver's output ({"reason": "..."}); a failed run says it.
     "failed_reason",
+    # API 1.9: the run's health (magnusim_sdk.health): its verdict, checks and findings,
+    # the run record's ``health`` (at most 4 KB). The relay's stream sends it.
+    "health",
 ]
 
 KNOWN_KINDS = frozenset(
@@ -52,6 +55,7 @@ KNOWN_KINDS = frozenset(
         "error",
         "converged",
         "failed_reason",
+        "health",
     }
 )
 

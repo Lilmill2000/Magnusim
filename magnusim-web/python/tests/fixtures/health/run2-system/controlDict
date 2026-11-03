@@ -1,0 +1,146 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     pimpleFoam;
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         10;
+deltaT          1.286435e-5;
+writeControl    adjustableRunTime;
+writeInterval   0.16666667;
+purgeWrite      0;
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+timeFormat      general;
+timePrecision   8;
+runTimeModifiable true;
+
+adjustTimeStep  yes;
+maxCo           100;
+maxDeltaT       0.16666667;
+
+functions
+{
+    mon_velocity_inlet_1_1
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00333333;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            velocity_inlet_1_1;
+        operation       areaAverage;
+        fields          ( U p );
+    }
+    flow_velocity_inlet_1_1
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00333333;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            velocity_inlet_1_1;
+        operation       sum;
+        fields          ( phi );
+    }
+    mon_pressure_2
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00333333;
+        log             true;
+        writeFields     false;
+        regionType      patch;
+        name            pressure_2;
+        operation       areaAverage;
+        fields          ( U p );
+    }
+    flow_pressure_2
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    runTime;
+        writeInterval   0.00333333;
+        log             false;
+        writeFields     false;
+        regionType      patch;
+        name            pressure_2;
+        operation       sum;
+        fields          ( phi );
+    }
+    yPlus
+    {
+        type            yPlus;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+        log             false;
+    }
+    wallShearStress
+    {
+        type            wallShearStress;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+        log             false;
+    }
+    pTotal
+    {
+        type            pressure;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+        mode            total;
+        result          pTotal;
+        rho             rhoInf;
+        rhoInf          0.545;
+    }
+    vorticity
+    {
+        type            vorticity;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+    }
+    Q
+    {
+        type            Q;
+        libs            ("libfieldFunctionObjects.so");
+        executeControl  writeTime;
+        writeControl    writeTime;
+    }
+    fieldAverage
+    {
+        type            fieldAverage;
+        libs            ("libfieldFunctionObjects.so");
+        writeControl    writeTime;
+        fields
+        (
+            U
+            {
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }
+            p
+            {
+                mean        on;
+                prime2Mean  off;
+                base        time;
+            }
+        );
+    }
+}

@@ -1,0 +1,16 @@
+{
+ "app": "buoyantPimpleFoam",
+ "mode": "PISO",
+ "n_outer": 1,
+ "n_correctors": 2,
+ "max_co": null,
+ "end_time": 1000,
+ "average_from": 0,
+ "uref": null,
+ "uref_source": null,
+ "fixed_inflow": false,
+ "turbulence": "kEpsilon",
+ "limiter": null,
+ "linsolve": {},
+ "monitors": null
+}

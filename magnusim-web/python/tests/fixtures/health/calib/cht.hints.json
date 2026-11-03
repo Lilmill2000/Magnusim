@@ -1,0 +1,8 @@
+{
+ "app": "chtMultiRegionSimpleFoam",
+ "mode": "SIMPLE",
+ "turbulence": "laminar",
+ "fixed_inflow": false,
+ "limiter": null,
+ "monitors": null
+}
