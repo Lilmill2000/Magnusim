@@ -554,6 +554,14 @@ describe('Continue (F6)', () => {
 // failed run and a run with no saved time cannot wait (not_continue_settings).
 describe('A2: a change for when a stopped run continues', () => {
   const BLOCK = { end_time: 1, write_count: 4, max_co: 100, n_outer_correctors: 1, n_correctors: 2, max_delta_t: 0.25 };
+  /** The study's mode (its folder's id.json, as the study catalog walks it). */
+  const studyMode = (td) => {
+    const idPath = join(layout.findStudy(join(PROJECTS, PID), SID).dir, 'id.json');
+    writeFileSync(idPath, JSON.stringify({ ...JSON.parse(readFileSync(idPath, 'utf8')), time_dependency: td }));
+  };
+  // A transient run's A2 needs its study to be Transient still (runReopen.ts runEditState).
+  beforeEach(() => studyMode('Transient'));
+  afterEach(() => studyMode(undefined));
   const transientPlan = () =>
     planAnswer({
       analysis_key: 'incompressible_transient',
@@ -669,6 +677,69 @@ describe('A2: a change for when a stopped run continues', () => {
     assert.equal(doc.continue_changes.length, 1);
     assert.equal(typeof doc.continue_changes[0].applied_at, 'string');
     assert.deepEqual(doc.continue_changes[0].changes.map((c) => c.key), ['transient.max_co', 'transient.n_outer_correctors']);
+  });
+
+  it('a change for Continue keeps the block the run solved with: Continue saves as often as it did, and new runs get the settings as typed', async () => {
+    const rid = await stoppedTransient();
+    // As its Start worked it out (control_to_web): the write interval Continue reads, the auto time steps.
+    const solved = { ...BLOCK, write_interval: 0.25, delta_t: 0.004, adjust_time_step: true, source: { delta_t: 'auto', max_delta_t: 'auto' }, estimate: { delta_t: 0.004, steps: 250 } };
+    io.persistRun(PID, SID, { id: rid, run_id: rid, transient: solved });
+    // The analysis's normalizer as it is: the settings over the stored block, only its own keys kept.
+    const KEYS = ['end_time', 'write_count', 'time_step_mode', 'max_co', 'delta_t', 'max_delta_t', 'time_scheme', 'n_outer_correctors', 'n_correctors', 'n_non_orth_correctors', 'average_from'];
+    attachWorkerBridge(async (method, params) => {
+      if (method === 'analysis.validate_ready') return { ready: true, issues: [] };
+      if (method === 'analysis.run_normalize') {
+        const raw = { ...(params && params.base), ...(params && params.settings) };
+        return { settings: Object.fromEntries(KEYS.filter((k) => k in raw).map((k) => [k, raw[k]])) };
+      }
+      if (method === 'analysis.plan_run') {
+        fx.plans.push(params);
+        return fx.plan(params);
+      }
+      return { ok: true };
+    });
+    // The page sends its whole block: the change, and what its Start worked out as it was.
+    const out0 = await update(rid, { transient: { ...solved, max_co: 5 }, at_continue: true });
+    assert.equal(out0.ok, true, JSON.stringify(out0));
+    const doc = runDoc(rid);
+    assert.deepEqual(doc.transient, { ...solved, max_co: 5 });
+    assert.deepEqual(doc.continue_changes[0].changes, [{ key: 'transient.max_co', from: 100, to: 5 }]);
+    // New runs start with the settings as typed: what the Start worked out stays blank there.
+    const study = w27.getSimulationControl(PID, SID).transient;
+    assert.deepEqual([study.max_co, study.delta_t, study.max_delta_t, 'source' in study, 'estimate' in study, 'adjust_time_step' in study], [5, null, null, false, false, false]);
+    // A Max time step typed for Continue is the person's from then on.
+    const out1 = await update(rid, { transient: { ...solved, max_co: 5, max_delta_t: 0.1 }, at_continue: true });
+    assert.equal(out1.ok, true, JSON.stringify(out1));
+    assert.deepEqual([runDoc(rid).transient.max_delta_t, runDoc(rid).transient.source, runDoc(rid).transient.write_interval], [0.1, { delta_t: 'auto', max_delta_t: 'user' }, 0.25]);
+    assert.equal(w27.getSimulationControl(PID, SID).transient.max_delta_t, 0.1);
+    // Continue to 2 s saves every 0.25 s as before: 8 frames.
+    const { out } = await cont(rid, { endTime: 2 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    const spec = specOf(out.bodyExtra.runner_job_id);
+    assert.deepEqual(JSON.parse(argOf(spec, '--restart')), { end_time: 2, write_interval: 0.25 });
+    const tr = JSON.parse(argOf(spec, '--transient'));
+    assert.deepEqual([tr.end_time, tr.write_count, tr.max_co, tr.max_delta_t], [2, 8, 5, 0.1]);
+  });
+
+  it("a study now Steady-state: a transient run's change starts it over (the two-way question), never waits for Continue", async () => {
+    const rid = await stoppedTransient();
+    studyMode('Steady-state');
+    let out = await update(rid, { transient: { ...BLOCK, max_co: 5 } });
+    assert.deepEqual([out.status, out.code], [409, 'overwrites_results']);
+    out = await update(rid, { transient: { ...BLOCK, max_co: 5 }, at_continue: true });
+    assert.deepEqual([out.status, out.code], [409, 'not_continue_settings']);
+    assert.equal(out.error, `"${runDoc(rid).name}" solved Transient; its study is now Steady-state: a change of its settings starts it over as a Steady-state run.`);
+    assert.deepEqual([runDoc(rid).status, runDoc(rid).transient.max_co, runDoc(rid).continue_changes], ['stopped', 100, undefined]);
+  });
+
+  it("a steady run's Continue never uses the four: their change starts it over, and cannot wait for Continue", async () => {
+    const rid = await solvedRun('stopped');
+    let out = await update(rid, { transient: { max_co: 5 } });
+    assert.deepEqual([out.status, out.code], [409, 'overwrites_results']);
+    out = await update(rid, { transient: { max_co: 5 }, at_continue: true });
+    assert.deepEqual([out.status, out.code], [409, 'not_continue_settings']);
+    assert.match(out.error, /solved Steady-state: its Continue goes on in iterations/);
+    assert.equal(runDoc(rid).continue_changes, undefined);
   });
 
   it('continuedRunFields stamps the waiting change applied, and leaves an applied one as it was', () => {

@@ -52,8 +52,9 @@ const TRANSIENT_BOOKKEEPING = new Set(['source', 'estimate']);
  * - draft: saved on it;
  * - free: an ended run with nothing to overwrite: it becomes a draft quietly, then saved;
  * - overwrites: an ended run with results: asks first, then deletes them;
- * - continues: a stopped run with a saved time Continue goes on from: as overwrites, but a
- *   change of only CONTINUE_KEYS may instead wait for Continue (A2, three answers);
+ * - continues: a stopped Transient run with a saved time Continue goes on from, in a study that
+ *   is still Transient: as overwrites, but a change of only CONTINUE_KEYS may instead wait for
+ *   Continue (A2, three answers);
  * - new_run: a finished run: a new run with its settings and the change;
  * - locked: solving or stopping: refused until it has ended.
  */
@@ -117,14 +118,21 @@ export function savedTimeOf(rec: RunLike | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** What a change of this run's solve settings does (RunEditState). */
-export function runEditState(rec: RunLike | null | undefined): RunEditState {
+/**
+ * What a change of this run's solve settings does (RunEditState). `studyTransient`: its study's
+ * mode now, when the caller knows it.
+ */
+export function runEditState(rec: RunLike | null | undefined, opts?: { studyTransient?: boolean | null }): RunEditState {
   const st = statusOf(rec);
   if (!st || st === 'draft' || st === 'idle') return 'draft';
   if (st === 'done' || st === 'finished') return 'new_run';
   if (REOPENABLE.includes(st)) {
-    // Continue is offered for a stopped run with a saved time only (never a failed one).
-    if (st === 'stopped' && savedTimeOf(rec) !== null) return 'continues';
+    // Continue is offered for a stopped run with a saved time only (never a failed one). The four
+    // settings that can wait for it are transient ones: a steady run's Continue never uses them,
+    // and a run whose study is now Steady-state starts over as one (endedRunReason says so).
+    if (st === 'stopped' && savedTimeOf(rec) !== null) {
+      return solvedTransient(rec) && opts?.studyTransient !== false ? 'continues' : 'overwrites';
+    }
     return hasOverwritable(rec) ? 'overwrites' : 'free';
   }
   return 'locked';
@@ -193,6 +201,26 @@ export function unresolveTransient(t: unknown): Record<string, unknown> | null {
     if (TRANSIENT_BOOKKEEPING.has(k)) continue;
     out[k] = source[k] === 'auto' ? null : v;
   }
+  return out;
+}
+
+/**
+ * A stopped run's transient block once a change waits for its Continue (A2): the block it solved
+ * with, kept whole (its write interval and what its Start worked out, which Continue reads), with
+ * only the changed CONTINUE_KEYS taken from `clean` (the edit as its analysis cleaned it). A Max
+ * time step given is the person's now ('user'), a blank one is worked out again ('auto').
+ */
+export function continueTransient(old: unknown, clean: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = isObj(old) ? { ...old } : {};
+  const source = isObj(out.source) ? { ...out.source } : null;
+  for (const key of changed) {
+    if (!CONTINUE_KEYS.includes(key)) continue;
+    const k = key.slice('transient.'.length);
+    const v = clean[k] === undefined ? null : clean[k];
+    out[k] = v;
+    if (source && k === 'max_delta_t') source[k] = v === null || v === '' ? 'auto' : 'user';
+  }
+  if (source) out.source = source;
   return out;
 }
 
@@ -634,8 +662,11 @@ export function continueDoneWords(rec: RunLike): string {
   return line ? 'Saved for when ' + quoted(rec) + ' continues. ' + line + ' Its results are kept.' : 'Nothing is left waiting for ' + quoted(rec) + ' to continue.';
 }
 
-/** Why a change cannot wait for Continue (not_continue_settings). `changed`: the keys it changes. */
-export function notContinueWords(rec: RunLike, changed: readonly string[]): string {
+/**
+ * Why a change cannot wait for Continue (not_continue_settings). `changed`: the keys it changes;
+ * `studyTransient`: the run's study's mode now, when known.
+ */
+export function notContinueWords(rec: RunLike, changed: readonly string[], studyTransient?: boolean | null): string {
   const other = changed.find((k) => !CONTINUE_KEYS.includes(k));
   if (other) {
     return 'Only Max Courant, the outer and pressure correctors and Max time step can wait for Continue. ' + labelOf(other) + ' needs Start over or a new run.';
@@ -643,6 +674,15 @@ export function notContinueWords(rec: RunLike, changed: readonly string[]): stri
   const st = statusOf(rec);
   if (st === 'failed') return 'A failed run does not continue (Continue is offered only for stopped and finished runs): a change of its settings starts it over.';
   if (st === 'done' || st === 'finished') return finishedRefusal(rec);
-  if (st === 'stopped') return quoted(rec) + ' has no saved time to continue from: a change of its settings starts it over.';
+  if (st === 'stopped') {
+    if (savedTimeOf(rec) === null) return quoted(rec) + ' has no saved time to continue from: a change of its settings starts it over.';
+    if (!solvedTransient(rec)) {
+      return quoted(rec) + ' solved Steady-state: its Continue goes on in iterations and never uses Max Courant, the correctors or Max time step. A change of them starts it over.';
+    }
+    if (studyTransient === false) {
+      return quoted(rec) + ' solved Transient; its study is now Steady-state: a change of its settings starts it over as a Steady-state run.';
+    }
+    if (!changed.length) return 'This changes none of Max Courant, the correctors or Max time step of ' + quoted(rec) + ': nothing new waits for its Continue.';
+  }
   return 'Only a stopped run with a saved time can take a change for when it continues.';
 }

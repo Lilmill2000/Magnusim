@@ -32116,9 +32116,12 @@ function runEditView(rec) {
   };
 }
 
-/** What a change of this run's solve settings does (runReopen.ts), as its panel knows it. */
+/**
+ * What a change of this run's solve settings does (runReopen.ts), as its panel knows it: with its
+ * study's mode now (a run whose study changed mode starts over in it, as the reason line says).
+ */
 function runEditStateOf(rec) {
-  return rec ? runEditState(runEditView(rec)) : 'draft';
+  return rec ? runEditState(runEditView(rec), { studyTransient: simIsTransientClient() }) : 'draft';
 }
 
 /**

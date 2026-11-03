@@ -2,13 +2,15 @@
 // solves, the Assistant's setup_edit of its solve settings is refused (run_running) before
 // anything is saved, as the person's Run panel keeps them locked. The panel still shows Max
 // Courant 100, the study's default for new runs is not rewritten (Add run shows 100), and the
-// route refuses the same change for every caller.
+// route refuses the same change for every caller. A save that changes none of its settings goes
+// through and leaves them as it solves with them: the time steps its Start worked out are not
+// written into the study's default (Add run shows them blank).
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake: no WSL) and the scripted model.
 // Fails on the code before the stopped-run feature: the change was saved onto the running run and
 // into the study's default while the person's panel was locked.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { seedElbowProject } from './prepare-projects.js';
 import { dockGate, dockSend, dockTurn, openDock, resultsIn, useScriptedModel } from './support/assistant.js';
 import { openRunPanel } from './support/compute-slot.js';
@@ -110,6 +112,31 @@ test("the Assistant's change of a running run's Max Courant is refused: the pane
     expect(result.error.code).toBe('run_running');
     expect(fake.pending()).toBe(0);
 
+    // As a real Start leaves it (the analysis's plan): its time steps worked out (`auto`), its
+    // write interval. Written beside the fake solve's own writes, so checked and written again.
+    const worked = { delta_t: 0.0005, max_delta_t: 0.1, write_interval: 0.1, adjust_time_step: true, source: { delta_t: 'auto', max_delta_t: 'auto' } };
+    const runJson = join(dirname((await runRow(request, rid)).case_dir), 'run.json');
+    await expect.poll(async () => {
+      const doc = JSON.parse(readFileSync(runJson, 'utf8'));
+      if (doc.transient?.delta_t !== worked.delta_t) writeFileSync(runJson, JSON.stringify({ ...doc, transient: { ...doc.transient, ...worked } }, null, 2));
+      await new Promise((r) => setTimeout(r, 400));
+      return JSON.parse(readFileSync(runJson, 'utf8')).transient?.delta_t;
+    }, STEP).toBe(worked.delta_t);
+    // The Assistant's save of the value it already has: it changes nothing, and is not refused.
+    const chatsBefore = fake.requests().filter((r) => r.kind === 'chat').length;
+    fake.reply(
+      { text: 'Keeping Max Courant.', tools: [{ name: 'setup_edit', input: setup({ kind: 'run', action: 'update', id: rid, values: [{ key: 'transient.max_co', value: '100' }] }) }] },
+      { text: 'It stays 100.' },
+    );
+    await dockSend(page, 'Keep Max Courant at 100.');
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 90_000 });
+    await expect(dockGate(page)).toHaveCount(0);
+    const kept = resultsIn(fake.requests().filter((r) => r.kind === 'chat')[chatsBefore + 1])[0];
+    expect(kept.ok, JSON.stringify(kept)).toBe(true);
+    expect(fake.pending()).toBe(0);
+    const solving = JSON.parse(readFileSync(runJson, 'utf8')).transient;
+    expect(solving).toMatchObject({ max_co: 100, ...worked });
+
     // What the person sees: the running run's Max Courant as it solves.
     await expect(maxCo(panel)).toHaveValue('100');
     const row = await runRow(request, rid);
@@ -138,6 +165,9 @@ test("the Assistant's change of a running run's Max Courant is refused: the pane
     await expect(maxCo(panel)).toHaveValue('100', STEP);
     await expect(maxCo(panel)).toBeEnabled();
     await expect(panel.getByLabel('Result frames', { exact: true })).toHaveValue('10');
+    // Its time steps blank (worked out at its own Start), not the ones the running run's Start worked out.
+    await expect(panel.getByLabel('Time step in seconds', { exact: true })).toHaveValue('');
+    await expect(panel.getByLabel('Maximum time step in seconds', { exact: true })).toHaveValue('');
     expect((await runRow(request, added)).transient?.max_co).toBe(100);
     expect((await getJson(request, `/api/simulation-control?project_id=${PID}&simulation_id=${sim}`)).transient?.max_co).toBe(100);
     // After a reload, the same.

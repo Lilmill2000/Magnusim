@@ -12,7 +12,12 @@
 //   new run.
 // - The Assistant states its choice in setup_edit's type: none is refused (choose_restart, no
 //   card); "at_continue" asks with a compute card, then the panel shows the marks; "start_over"
-//   asks with the destructive overwrite card.
+//   asks with the destructive overwrite card; "at_continue" of a value it already has saves as
+//   any change and says nothing new waits.
+// - The run keeps the block it solved with (what its Start worked out stays for Continue), and a
+//   new run (Add run) gets the settings as typed: its time steps blank, worked out at its Start.
+// - A transient run whose study is now Steady-state, or a steady run, never waits for Continue:
+//   the person gets the two-way Overwrite question, the Assistant the destructive card.
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake: no WSL) and the scripted model.
 // Fails on the code before: the change asked the two-way Overwrite question only (or, from the
 // Assistant, was saved with nothing recorded).
@@ -90,10 +95,11 @@ const runDoc = async (request, rid) => JSON.parse(readFileSync(join(await runDir
 
 /**
  * A transient run with Max Courant 100 and 1 outer corrector, stopped with its result saved at
- * t = 0.05 (the cavity's case, its last frame renamed), as a solve that stopped there leaves it.
- * `status` 'done' makes it finished instead.
+ * t = 0.05 (the cavity's case, its last frame renamed), as a solve that stopped there leaves it:
+ * its transient block as its Start worked it out (the time steps `auto`, the write interval).
+ * `status` 'done' makes it finished instead; `steady` makes it a steady run saved at iteration 50.
  */
-async function endedRun(request, name, status = 'stopped') {
+async function endedRun(request, name, status = 'stopped', { steady = false } = {}) {
   const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name, mesh_id: meshId });
   const rid = String(made.run_id || made.run?.id || made.run?.run_id);
   await postOk(request, '/api/run/update', {
@@ -110,7 +116,7 @@ async function endedRun(request, name, status = 'stopped') {
   delete side.plugin;
   delete side.study_id;
   writeFileSync(sidecar, JSON.stringify(side, null, 2));
-  renameSync(join(caseDir, '0.5'), join(caseDir, '0.05'));
+  renameSync(join(caseDir, '0.5'), join(caseDir, steady ? '50' : '0.05'));
   for (const t of ['0.1', '0.2', '0.3', '0.4']) rmSync(join(caseDir, t), { recursive: true, force: true });
   const runJson = join(runDir, 'run.json');
   const rec = JSON.parse(readFileSync(runJson, 'utf8'));
@@ -121,18 +127,32 @@ async function endedRun(request, name, status = 'stopped') {
         ...rec,
         status,
         stage: status,
-        time_dependency: 'Transient',
-        analysis_key: 'incompressible_transient',
-        path_kind: 'pimpleFoam',
+        ...(steady
+          ? { time_dependency: 'Steady-state', analysis_key: 'incompressible_steady', path_kind: 'simpleFoam', last_saved_iteration: 50, iteration: 55, n_steps: 55 }
+          : {
+              time_dependency: 'Transient',
+              analysis_key: 'incompressible_transient',
+              path_kind: 'pimpleFoam',
+              last_saved_iteration: 0.05,
+              iteration: 0.06,
+              sim_time: 0.06,
+              n_steps: 30,
+              // As its Start worked it out (the analysis's plan): the steps `auto`, the write interval.
+              transient: {
+                ...rec.transient,
+                delta_t: 0.0005,
+                max_delta_t: 0.05,
+                write_interval: 0.05,
+                adjust_time_step: true,
+                source: { delta_t: 'auto', max_delta_t: 'auto' },
+                estimate: { delta_t: 0.0005, steps: 200 },
+              },
+            }),
         has_results: true,
         n_saved_times: 1,
-        last_saved_iteration: 0.05,
-        iteration: 0.06,
-        sim_time: 0.06,
-        n_steps: 30,
         residuals: [
-          { t: 0.01, Ux: 0.1, p: 0.5 },
-          { t: 0.05, Ux: 0.01, p: 0.05 },
+          { t: steady ? 10 : 0.01, Ux: 0.1, p: 0.5 },
+          { t: steady ? 50 : 0.05, Ux: 0.01, p: 0.05 },
         ],
         started_at: new Date(Date.now() - 60_000).toISOString(),
         finished_at: new Date().toISOString(),
@@ -256,6 +276,25 @@ test('Cancel keeps it; Use when continuing keeps the results and marks the field
   await expect(panel.locator('[data-run-status="done"]')).toBeVisible(STEP);
   await expect(panel.locator('[data-run-takes-effect]')).toHaveCount(0, STEP);
   await expect(panel.locator('[data-run-continue-changes]')).toHaveCount(0);
+  // It kept the block it solved with (Continue saves as often as it did, every 0.05 s).
+  expect([doc.transient.write_interval, doc.transient.delta_t, doc.transient.source]).toEqual([0.05, 0.0005, { delta_t: 'auto', max_delta_t: 'auto' }]);
+
+  // Add run: the new run gets the settings as typed (Max Courant 5, 3 outer correctors); the time
+  // steps "Run 1" worked out at its Start are blank, worked out again at the new run's Start.
+  await page.locator('#left-tree [data-w27-sim-control="1"] > .tree-row').first().click();
+  const before = (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${sim}`)).runs.map((r) => String(r.id));
+  await page.locator('#btn-create-run').click();
+  let added = '';
+  await expect.poll(async () => {
+    added = (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${sim}`)).runs.map((r) => String(r.id)).find((id) => !before.includes(id)) || '';
+    return added;
+  }, STEP).not.toBe('');
+  await expect(panel).toHaveAttribute('data-run-id', added, STEP);
+  await openAdvanced(panel);
+  await expect(panel.getByLabel('Max Courant number', { exact: true })).toHaveValue('5', STEP);
+  await expect(panel.getByLabel('Outer correctors', { exact: true })).toHaveValue('3');
+  await expect(panel.getByLabel('Time step in seconds', { exact: true })).toHaveValue('');
+  await expect(panel.getByLabel('Maximum time step in seconds', { exact: true })).toHaveValue('');
 });
 
 test('Start over deletes its results; another setting asks the two-way question; a finished run offers a new run', async ({ page, request }) => {
@@ -358,6 +397,19 @@ test("the Assistant says how the change applies: none is refused, at_continue as
   expect(doc.continue_changes[0]).toMatchObject({ by: 'assistant', applied_at: null });
   expect(existsSync(join(caseDir, '0.05'))).toBe(true);
 
+  // at_continue of the value it already has: nothing to ask or refuse; it says nothing new waits.
+  const again = chats().length;
+  fake.reply({ text: 'Again.', tools: [{ name: 'setup_edit', input: maxCo('at_continue') }] }, { text: 'It already waits.' });
+  await dockSend(page, 'Max Courant 5 for when it continues, please.');
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 90_000 });
+  await expect(dockTurn(page).locator('[data-gate]')).toHaveCount(0);
+  const same = resultsIn(chats()[again + 1])[0];
+  expect(same.ok, JSON.stringify(same)).toBe(true);
+  expect(same.data.done).toBe(
+    'Saved transient.max_co of run "Run 4". No solve setting changed: nothing new waits for its Continue. Continue applies: Max Courant 100 → 5 (from t = 0.05 s).',
+  );
+  await expect(panel.locator('[data-run-continue-changes]')).toHaveText('Continue applies: Max Courant 100 → 5 (from t = 0.05 s).');
+
   // start_over: the destructive overwrite card; declined, nothing changes.
   fake.reply(
     { text: 'Starting it over.', tools: [{ name: 'setup_edit', input: setup({ kind: 'run', action: 'update', id: rid, type: 'start_over', values: [{ key: 'transient.max_co', value: '2' }] }) }] },
@@ -372,4 +424,65 @@ test("the Assistant says how the change applies: none is refused, at_continue as
   expect((await runRow(request, rid)).status).toBe('stopped');
   expect(existsSync(join(caseDir, '0.05'))).toBe(true);
   expect(fake.pending()).toBe(0);
+});
+
+test('a transient run whose study is now Steady-state, or a steady run: the two-way question and the destructive card, never "Use when continuing"', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
+  await postOk(request, '/api/test/assistant/reset', {});
+  await useScriptedModel(request, host.base, fake, 'cloud');
+  const { rid, caseDir } = await endedRun(request, 'Run 5');
+  await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Steady-state' });
+  try {
+    const steady = await endedRun(request, 'Run 6', 'stopped', { steady: true });
+    const panel = await open(page, rid);
+    await expect(panel.locator('[data-run-status="stopped"]')).toBeVisible(STEP);
+    await openAdvanced(panel);
+    // The person: Max Courant asks the two-way Overwrite question, as the reason line says.
+    await setField(panel, 'Max Courant number', 5);
+    await expect(confirm(page)).toBeVisible(STEP);
+    await expect(choice(page)).toBeHidden();
+    await expect(page.locator('#cf-heading')).toHaveText('Overwrite "Run 5"?');
+    await expect(page.locator('#cf-copy')).toContainText('It becomes a Steady-state run, as its study is now.');
+    await page.locator('#cf-cancel').click();
+    await expect(confirm(page)).toBeHidden();
+    await expect(panel.getByLabel('Max Courant number', { exact: true })).toHaveValue('100', STEP);
+
+    // The Assistant: at_continue is refused with why (no card) for both; without a type, the destructive card.
+    const edit = (id, type) => setup({ kind: 'run', action: 'update', id, type, values: [{ key: 'transient.max_co', value: '5' }] });
+    const chats = () => fake.requests().filter((r) => r.kind === 'chat');
+    const before = chats().length;
+    fake.reply(
+      { text: 'For when it continues.', tools: [{ name: 'setup_edit', input: edit(rid, 'at_continue') }] },
+      { text: 'And the steady one.', tools: [{ name: 'setup_edit', input: edit(steady.rid, 'at_continue') }] },
+      { text: 'Then it starts over.', tools: [{ name: 'setup_edit', input: edit(rid, '') }] },
+      { text: 'Left as it is.' },
+    );
+    await openDock(page);
+    await dockSend(page, 'Set Max Courant to 5 for when they continue.');
+    const card = dockGate(page);
+    await expect(card.locator('.dock-gate-title')).toHaveText('Allow the Assistant to overwrite "Run 5"?', { timeout: 60_000 });
+    await expect(card.locator('.dock-gate-copy')).toContainText('It becomes a Steady-state run, as its study is now.');
+    const mismatch = resultsIn(chats()[before + 1])[0];
+    expect([mismatch.ok, mismatch.error.code, mismatch.error.message]).toEqual([
+      false,
+      'not_continue_settings',
+      '"Run 5" solved Transient; its study is now Steady-state: a change of its settings starts it over as a Steady-state run.',
+    ]);
+    const steadyRefused = resultsIn(chats()[before + 2])[0];
+    expect([steadyRefused.ok, steadyRefused.error.code]).toEqual([false, 'not_continue_settings']);
+    expect(steadyRefused.error.message).toBe(
+      '"Run 6" solved Steady-state: its Continue goes on in iterations and never uses Max Courant, the correctors or Max time step. A change of them starts it over.',
+    );
+    await card.locator('[data-gate-answer="no"]').click(STEP);
+    await expect(dockTurn(page).locator('[data-turn-end]')).toBeVisible({ timeout: 90_000 });
+    expect(fake.pending()).toBe(0);
+    for (const [id, dir, t] of [[rid, caseDir, '0.05'], [steady.rid, steady.caseDir, '50']]) {
+      const d = await runDoc(request, id);
+      expect([d.status, d.transient?.max_co, d.continue_changes]).toEqual(['stopped', 100, undefined]);
+      expect(existsSync(join(dir, t))).toBe(true);
+    }
+  } finally {
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Transient' });
+  }
 });

@@ -779,7 +779,7 @@ describe('A stopped or failed run started over (runReopen.ts)', () => {
     }
   });
 
-  it("a solving, starting or stopping run's solve settings are refused before its study's default for new runs is written", async () => {
+  it("a solving, starting or stopping run's solve settings are refused before its study's default for new runs is written (and a save that changes none leaves them)", async () => {
     const before = JSON.stringify(w27.getSimulationControl(PID, SID).transient);
     const block = { end_time: 1, write_count: 10, max_co: 100, n_outer_correctors: 1 };
     for (const [extra, code] of [
@@ -792,8 +792,11 @@ describe('A stopped or failed run started over (runReopen.ts)', () => {
         const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, ...change });
         assert.deepEqual([out.status, out.code], [409, code], `${extra.status}${extra.stop_requested ? ' (stopping)' : ''}: ${JSON.stringify(change)}`);
       }
+      // A save that changes none of them goes through, and leaves its block as it solves with it.
+      const same = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, transient: { ...block }, endTime: 100 });
+      assert.equal(same.ok, true, JSON.stringify(same));
       const doc = runDoc(rid);
-      assert.deepEqual([doc.status, doc.transient.max_co, doc.endTime, doc.writeInterval, doc.mesh_id], [extra.status, 100, 100, 50, MID]);
+      assert.deepEqual([doc.status, doc.transient, doc.endTime, doc.writeInterval, doc.mesh_id], [extra.status, block, 100, 50, MID]);
     }
     assert.equal(JSON.stringify(w27.getSimulationControl(PID, SID).transient), before, "the study's default for new runs is as it was");
   });

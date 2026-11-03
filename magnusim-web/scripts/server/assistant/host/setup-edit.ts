@@ -23,6 +23,7 @@ import { carrySettle } from '../../../../src/workbench/runSettle.ts';
 import { runCopyBody } from '../../../../src/workbench/runCopyBody.ts';
 import {
   chooseRestartWords,
+  continueAppliesLine,
   continueCardWords,
   continueChangesOf,
   continueDoneWords,
@@ -191,7 +192,11 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     if (kind === 'run' && (action === 'update' || action === 'copy_from') && sim) {
       const st = (await d.hostCall('run.status', { project_id: project, simulation_id: sim, run_id: idOf(input) }, o)) as Record<string, unknown>;
       const run = isRecord(st.run) && (!idOf(input) || st.run.id === idOf(input) || st.run.run_id === idOf(input)) ? st.run : null;
-      const state = run ? runEditState(run) : 'draft';
+      // Its study's mode now: a run whose study changed mode starts over in it (runReopen.ts).
+      const studies = run ? ((await d.hostCall('simulation.get', { project_id: project, simulation_id: sim }, o)) as Record<string, unknown>) : {};
+      const study = isRecord(studies.simulation) ? studies.simulation : {};
+      const studyTransient = /transient/i.test(str(study.time_dependency));
+      const state = run ? runEditState(run, { studyTransient }) : 'draft';
       const changes = changesOf(input.values);
       const changed = run && action === 'update' ? solveChanged(run, changes) : [];
       const solve = action === 'copy_from' || changed.length > 0;
@@ -211,9 +216,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       // "at_continue" for anything else is refused in run() (not_continue_settings): nothing is asked.
       if (action === 'update' && type === 'at_continue') return null;
       if (run && solve && overwritesResults(state)) {
-        const studies = (await d.hostCall('simulation.get', { project_id: project, simulation_id: sim }, o)) as Record<string, unknown>;
-        const study = isRecord(studies.simulation) ? studies.simulation : {};
-        const w = overwriteWords(run, { action: 'edit', studyTransient: /transient/i.test(str(study.time_dependency)), assistant: true });
+        const w = overwriteWords(run, { action: 'edit', studyTransient, assistant: true });
         overwriteAsked.set(input, w.title);
         return { risk: 'destructive', note: w.copy, detail: [{ label: 'Run', value: cleanText(str(run.name), 60) }] };
       }
@@ -870,14 +873,20 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
         return fail('invalid_input', `A run update's type is "at_continue", "start_over" or "", not "${cleanText(type, 40)}".`, 'type says how a stopped run\'s change of Max Courant, the correctors or Max time step applies.');
       }
       const changedKeys = solveChanged(run, nested);
-      if (!overwrite && !atContinue && runEditState(run) === 'continues' && onlyContinueKeys(changedKeys)) {
+      const studyTransient = /transient/i.test(str(study.time_dependency));
+      if (!overwrite && !atContinue && runEditState(run, { studyTransient }) === 'continues' && onlyContinueKeys(changedKeys)) {
         const w = chooseRestartWords(run, continueChangesOf(run, nested, changedKeys));
         return fail('choose_restart', w.message, w.hint);
       }
-      if (type === 'at_continue' && !atContinue) {
+      // A type with no solve setting changed has nothing to apply: saved as any other change, and said so.
+      const typeIdle =
+        type && !changedKeys.length
+          ? ` No solve setting changed: ${type === 'start_over' ? 'it is not started over' : 'nothing new waits for its Continue'}.${pendingContinue(run) ? ` ${continueAppliesLine(run)}` : ''}`
+          : '';
+      if (type === 'at_continue' && !atContinue && changedKeys.length) {
         return fail(
           'not_continue_settings',
-          notContinueWords(run, changedKeys),
+          notContinueWords(run, changedKeys, studyTransient),
           `Leave type "" to start it over (the person is asked), or setup_edit {kind:'run', action:'add', other_id:'${cleanText(id, 80)}', values} makes a new run with its settings and these changes.`,
         );
       }
@@ -890,7 +899,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
         done:
           (reopened
             ? `${quoted(run.name)} starts over: its old results were deleted. Saved ${Object.keys(parsed.values).join(', ')}.`
-            : `Saved ${Object.keys(parsed.values).join(', ')} of run ${quoted(run.name)}.`) + continueNote(),
+            : `Saved ${Object.keys(parsed.values).join(', ')} of run ${quoted(run.name)}.`) + continueNote() + typeIdle,
         ids: { run: id },
         rev: revOf(saved),
       });

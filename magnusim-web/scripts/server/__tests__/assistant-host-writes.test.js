@@ -571,15 +571,24 @@ describe("setup_edit on a run that ended: the person's rules and words", () => {
     const { readSetupTool } = await import('../assistant/host/read-setup.ts');
     const read = readSetupTool(deps());
     const out = await read.run({ project_id: '', simulation_id: '', what: 'runs', id: '', other_id: '', page: 0 }, rt());
-    // A stopped run with a saved time continues (A2: some of its settings may wait for Continue).
+    // A steady stopped run with a saved iteration starts over (its Continue never uses the A2 settings).
     assert.deepEqual(out.data.runs.map((r) => [r.id, r.settings]), [
       ['r1', 'new_run'],
       ['r2', 'editable'],
-      ['r3', 'continues'],
+      ['r3', 'overwrites'],
     ]);
+    // A transient one in a transient study continues (A2: some of its settings may wait for Continue).
+    withStopped({ time_dependency: 'Transient', last_saved_iteration: 0.5 });
+    app.w.studies[0].time_dependency = 'Transient';
+    const listed = await read.run({ project_id: '', simulation_id: '', what: 'runs', id: '', other_id: '', page: 0 }, rt());
+    assert.equal(listed.data.runs.find((r) => r.id === 'r3').settings, 'continues');
     const one = await read.run({ project_id: '', simulation_id: '', what: 'run', id: 'r3', other_id: '', page: 0 }, rt());
     assert.equal(one.data.settings, 'continues');
     assert.deepEqual([one.data.continue_pending, one.data.continue_changes], [[], []]);
+    // Its study now Steady-state: a change starts it over as one.
+    app.w.studies[0].time_dependency = 'Steady-state';
+    const now = await read.run({ project_id: '', simulation_id: '', what: 'run', id: 'r3', other_id: '', page: 0 }, rt());
+    assert.equal(now.data.settings, 'overwrites');
     // A failed run with results only starts over.
     withStopped({ status: 'failed' });
     const failed = await read.run({ project_id: '', simulation_id: '', what: 'run', id: 'r3', other_id: '', page: 0 }, rt());
@@ -609,8 +618,10 @@ describe("setup_edit A2: a stopped run's Max Courant, correctors and Max time st
     result_controls: [],
   };
   const WAITING = { from_t: 0.1667, from_iteration: null, at: 'a', by: 'person', kind: 'settings', changes: [{ key: 'transient.max_co', from: 100, to: 5 }], applied_at: null };
-  const withRun = (o = {}) => {
+  // A transient run in its study, Transient still (a study now Steady-state starts it over as one).
+  const withRun = (o = {}, studyMode = 'Transient') => {
     fresh();
+    app.w.studies[0].time_dependency = studyMode;
     app.w.runs.push({ ...stopped, ...o });
   };
   const maxCo = (v, o = {}) => setup({ kind: 'run', action: 'update', id: 'r4', values: [{ key: 'transient.max_co', value: String(v) }], ...o });
@@ -700,5 +711,51 @@ describe("setup_edit A2: a stopped run's Max Courant, correctors and Max time st
     withRun();
     r = await sent(t(), maxCo(5, { type: 'later' }));
     assert.deepEqual([r.out.error.code, r.writes], ['invalid_input', []]);
+  });
+
+  it("its study now Steady-state, or a steady run: the destructive overwrite card, and at_continue is refused with why (never 'no saved time')", async () => {
+    withRun({}, 'Steady-state');
+    let tool = t();
+    const plain = maxCo(5);
+    const a = await tool.escalate(plain, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.match(a.note, / It becomes a Steady-state run, as its study is now\.$/);
+    let input = maxCo(5, { type: 'at_continue' });
+    assert.equal(await tool.escalate(input, ac()), null);
+    let r = await sent(tool, input);
+    assert.deepEqual([r.out.error.code, r.writes], ['not_continue_settings', []]);
+    assert.equal(r.out.error.message, '"Run_2" solved Transient; its study is now Steady-state: a change of its settings starts it over as a Steady-state run.');
+    withRun({ time_dependency: 'Steady-state', continue_from: 450, last_saved_iteration: 450 }, 'Steady-state');
+    tool = t();
+    assert.equal((await tool.escalate(maxCo(5), ac())).risk, 'destructive');
+    input = maxCo(5, { type: 'at_continue' });
+    assert.equal(await tool.escalate(input, ac()), null);
+    r = await sent(tool, input);
+    assert.deepEqual([r.out.error.code, r.writes], ['not_continue_settings', []]);
+    assert.match(r.out.error.message, /^"Run_2" solved Steady-state: its Continue goes on in iterations/);
+  });
+
+  it('a type with no solve setting changed: saved as any other change, and the answer says nothing waits or starts over', async () => {
+    withRun({ transient: { ...BLOCK, max_co: 5 }, continue_changes: [WAITING] });
+    let tool = t();
+    // The value it already has: nothing to ask, nothing refused.
+    let input = maxCo(5, { type: 'at_continue' });
+    assert.equal(await tool.escalate(input, ac()), null);
+    let r = await sent(tool, input);
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.deepEqual([r.writes.length, 'at_continue' in r.writes[0].body, 'overwrite' in r.writes[0].body], [1, false, false]);
+    assert.equal(
+      r.out.data.done,
+      'Saved transient.max_co of run "Run_2". No solve setting changed: nothing new waits for its Continue. Continue applies: Max Courant 100 → 5 (from t = 0.1667 s).',
+    );
+    // Only a free setting, type start_over: not started over.
+    withRun();
+    tool = t();
+    input = setup({ kind: 'run', action: 'update', id: 'r4', type: 'start_over', values: [{ key: 'cores', value: '4' }] });
+    assert.equal(await tool.escalate(input, ac()), null);
+    r = await sent(tool, input);
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.equal('overwrite' in r.writes[0].body, false);
+    assert.equal(r.out.data.done, 'Saved cores of run "Run_2". No solve setting changed: it is not started over.');
   });
 });

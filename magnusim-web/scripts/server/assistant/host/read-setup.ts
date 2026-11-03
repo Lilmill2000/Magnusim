@@ -267,6 +267,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
           case 'runs': {
             const doc = (await d.hostCall('run.status', q, o)) as Record<string, unknown>;
             const active = str(doc.active_run_id);
+            const studyTransient = study ? /transient/i.test(str(study.time_dependency)) : null;
             const runs = records(doc.runs).map((r) => ({
               id: text(r.id, 80),
               name: text(r.name),
@@ -275,7 +276,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
               // first, its results deleted), continues (as overwrites, but Max Courant, the
               // correctors and Max time step may wait for Continue: setup_edit type), new_run
               // (finished: add a run copying it), locked.
-              settings: runSettingsWord(runEditState(r)),
+              settings: runSettingsWord(runEditState(r, { studyTransient })),
               mesh_id: text(r.mesh_id, 80),
               active: r.id === active,
               ...(revOf(r) !== null ? { rev: revOf(r) } : {}),
@@ -286,7 +287,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             const doc = (await d.hostCall('run.status', { ...q, run_id: id }, o)) as Record<string, unknown>;
             const r = isRecord(doc.run) ? doc.run : null;
             if (!r || (id && r.id !== id && r.run_id !== id)) return fail('not_found', id ? `No run "${cleanText(id, 80)}" in this study.` : 'This study has no run yet.', "read_setup {what:'runs'} lists them.");
-            return okData(runRow(r, str(doc.active_run_id)), `Run ${quoted(r.name)}`);
+            return okData(runRow(r, str(doc.active_run_id), study ? /transient/i.test(str(study.time_dependency)) : null), `Run ${quoted(r.name)}`);
           }
           default:
             return fail('invalid_input', `Unknown what "${cleanText(what, 40)}".`);
@@ -348,7 +349,7 @@ function continueChangesRows(raw: unknown): Record<string, unknown>[] {
     }));
 }
 
-export function runRow(r: Record<string, unknown>, activeId: string): Record<string, unknown> {
+export function runRow(r: Record<string, unknown>, activeId: string, studyTransient: boolean | null = null): Record<string, unknown> {
   const monitors = records(r.result_controls).map((rc) => ({
     id: text(rc.id, 80),
     type: text(rc.monitor_type ?? rc.kind, 80),
@@ -363,7 +364,7 @@ export function runRow(r: Record<string, unknown>, activeId: string): Record<str
     id: text(r.id ?? r.run_id, 80),
     name: text(r.name),
     status: text(r.status ?? 'draft', 20),
-    settings: runSettingsWord(runEditState(r)),
+    settings: runSettingsWord(runEditState(r, { studyTransient })),
     mesh_id: text(r.mesh_id, 80),
     time_dependency: text(r.time_dependency, 20),
     cores: num(r.cores),

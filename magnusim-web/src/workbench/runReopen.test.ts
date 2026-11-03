@@ -9,6 +9,7 @@ import {
   continueChoiceWords,
   continueDoneWords,
   continuePendingKeys,
+  continueTransient,
   endedRunReason,
   mergeContinueChanges,
   notContinueWords,
@@ -54,8 +55,15 @@ describe('runEditState', () => {
     expect(runEditState(null)).toBe('draft');
     expect(runEditState({ status: 'draft' })).toBe('draft');
     expect(runEditState({})).toBe('draft');
-    // A stopped run with a saved time: Continue can go on from it (A2).
-    expect(runEditState(stopped)).toBe('continues');
+    // A stopped Transient run with a saved time: Continue can go on from it (A2), unless its study
+    // is now Steady-state (it starts over as one: the two-way question).
+    const tr = { ...stopped, time_dependency: 'Transient' };
+    expect(runEditState(tr)).toBe('continues');
+    expect(runEditState(tr, { studyTransient: true })).toBe('continues');
+    expect(runEditState(tr, { studyTransient: false })).toBe('overwrites');
+    // A steady run's Continue never uses Max Courant, the correctors or Max time step: a plain start-over.
+    expect(runEditState(stopped)).toBe('overwrites');
+    expect(runEditState(stopped, { studyTransient: true })).toBe('overwrites');
     expect(runEditState({ ...stopped, status: 'failed' })).toBe('overwrites');
     // Its case folder has no saved time (the read says so): no Continue, a plain start-over.
     expect(runEditState({ ...stopped, continue_from: null })).toBe('overwrites');
@@ -329,5 +337,38 @@ describe('A2: a change for when a stopped run continues', () => {
     expect(notContinueWords(tr, ['transient.end_time'])).toMatch(/ Simulation time needs Start over or a new run\.$/);
     expect(notContinueWords({ ...tr, status: 'failed' }, ['transient.max_co'])).toMatch(/^A failed run does not continue/);
     expect(notContinueWords({ ...tr, continue_from: null }, ['transient.max_co'])).toBe('"Run 1" has no saved time to continue from: a change of its settings starts it over.');
+    // A saved time, but a steady run, or a study now Steady-state: said as it is, never "no saved time".
+    expect(notContinueWords({ ...tr, time_dependency: 'Steady-state' }, ['transient.max_co'])).toBe(
+      '"Run 1" solved Steady-state: its Continue goes on in iterations and never uses Max Courant, the correctors or Max time step. A change of them starts it over.',
+    );
+    expect(notContinueWords(tr, ['transient.max_co'], false)).toBe('"Run 1" solved Transient; its study is now Steady-state: a change of its settings starts it over as a Steady-state run.');
+    expect(notContinueWords(tr, [], true)).toBe('This changes none of Max Courant, the correctors or Max time step of "Run 1": nothing new waits for its Continue.');
+    for (const c of [[], ['transient.max_co']]) expect(notContinueWords(tr, c, false)).not.toMatch(/no saved time/);
+  });
+
+  it('a change for Continue keeps the block the run solved with and takes only the changed keys', () => {
+    // As its Start worked it out: the write interval Continue reads, the auto time steps.
+    const solved = {
+      end_time: 1,
+      write_count: 4,
+      write_interval: 0.25,
+      max_co: 100,
+      delta_t: 0.001,
+      max_delta_t: 0.25,
+      n_outer_correctors: 1,
+      n_correctors: 2,
+      adjust_time_step: true,
+      source: { delta_t: 'auto', max_delta_t: 'auto' },
+      estimate: { delta_t: 0.001 },
+    };
+    // The analysis's clean copy of the edit (unknown keys gone, auto values blank).
+    const clean = { end_time: 1, write_count: 4, max_co: 5, delta_t: null, max_delta_t: null, n_outer_correctors: 3, n_correctors: 2 };
+    expect(continueTransient(solved, clean, ['transient.max_co', 'transient.n_outer_correctors'])).toEqual({ ...solved, max_co: 5, n_outer_correctors: 3 });
+    // A Max time step given is the person's now; a blank one is worked out again.
+    expect(continueTransient(solved, { ...clean, max_delta_t: 0.1 }, ['transient.max_delta_t'])).toEqual({ ...solved, max_delta_t: 0.1, source: { delta_t: 'auto', max_delta_t: 'user' } });
+    const typed = { ...solved, max_delta_t: 0.1, source: { delta_t: 'auto', max_delta_t: 'user' } };
+    expect(continueTransient(typed, clean, ['transient.max_delta_t'])).toEqual({ ...solved, max_delta_t: null, source: { delta_t: 'auto', max_delta_t: 'auto' } });
+    // Only the four keys: anything else in `changed` is not taken.
+    expect(continueTransient(solved, { ...clean, end_time: 9 }, ['transient.end_time'])).toEqual(solved);
   });
 });

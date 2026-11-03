@@ -37,10 +37,11 @@ export interface StudySettingsProps {
  * stopping, or finished). A finished run's solve fields stay usable when `run.edit` is
  * `new_run`: the core asks, and a change goes to a new run with the same settings. On a
  * stopped or failed run the core asks before a change starts it over, and a save the person
- * cancels resolves without saving: the fields show `run` again. On a stopped run with a saved
- * time (`run.edit` `continues`) a change of only its Max Courant, outer or pressure correctors
- * or Max time step may instead wait for its Continue: the fields show the new values, and
- * `run.continue_pending` lists the keys that wait (show "Takes effect when you Continue").
+ * cancels resolves without saving: the fields show `run` again. On a stopped transient run with
+ * a saved time, its study still transient (`run.edit` `continues`), a change of only its Max
+ * Courant, outer or pressure correctors or Max time step may instead wait for its Continue: the
+ * fields show the new values, and `run.continue_pending` lists the keys that wait (show "Takes
+ * effect when you Continue").
  */
 export interface RunSettingsProps {
   run: RunState;

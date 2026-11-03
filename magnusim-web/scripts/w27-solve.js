@@ -49,6 +49,7 @@ import {
   applyContinueChanges,
   continueChangesOf,
   continueChoiceWords,
+  continueTransient,
   finishedRefusal,
   keepAutoBlank,
   mergeContinueChanges,
@@ -1578,14 +1579,19 @@ async function applyRunSettings(id, runId, partial) {
   // without it nor `overwrite`, it is refused choose_restart with the question's words).
   const changed = solveChanged(rec, partial);
   const atContinue = partial.at_continue === true;
+  // A started run's solve settings are saved only when they change (below): a save that changes
+  // none leaves its block as it solved with it, and the study's default for new runs, alone.
+  const solveSaves = changed.length > 0 || runEditState(rec) === 'draft';
   let reopened = null;
   let oldTransient = null;
   /** @type {null | { by: 'person' | 'assistant', from: number | null, transient: boolean }} */
   let waitsForContinue = null;
   if (changed.length) {
-    // Where Continue goes on from: the latest saved time in its case folder.
+    // Where Continue goes on from: the latest saved time in its case folder; the study's mode
+    // now (a run whose study changed mode starts over in it: the two-way question, runReopen.ts).
     const view = { ...rec, continue_from: continueFromOf(rec) };
-    const state = runEditState(view);
+    const studyTransient = projectIsTransient(id, rec.simulation_id || found.sid);
+    const state = runEditState(view, { studyTransient });
     if (state === 'locked') {
       const stopping = !!rec.stop_requested;
       return { ok: false, status: 409, code: stopping ? 'still_stopping' : 'run_running', error: stopping ? STOPPING_REFUSAL : RUNNING_REFUSAL, changed };
@@ -1594,7 +1600,7 @@ async function applyRunSettings(id, runId, partial) {
     const onlyContinue = onlyContinueKeys(changed);
     if (atContinue) {
       if (state !== 'continues' || !onlyContinue) {
-        return { ok: false, status: 409, code: 'not_continue_settings', error: notContinueWords(view, changed), changed };
+        return { ok: false, status: 409, code: 'not_continue_settings', error: notContinueWords(view, changed, studyTransient), changed };
       }
       const held = runStillHeld(id, String(runId), rec);
       if (held) return { ...held, changed };
@@ -1618,7 +1624,7 @@ async function applyRunSettings(id, runId, partial) {
     if (next) rec.name = next.slice(0, 64);
   }
   // Steady settings, stored as the run's analysis cleans them (its limits and defaults).
-  if (partial.endTime != null || partial.writeInterval != null) {
+  if (solveSaves && (partial.endTime != null || partial.writeInterval != null)) {
     // As typed: rounding, limits and what a non-number means are the analysis's call.
     /** @type {Record<string, unknown>} */
     const edits = {};
@@ -1640,19 +1646,25 @@ async function applyRunSettings(id, runId, partial) {
   }
   // W30 transient settings. Drafts may also switch time dependency (the
   // Incompressible panel changed it); started runs keep what they solved with.
-  if (partial.transient && typeof partial.transient === 'object') {
+  if (solveSaves && partial.transient && typeof partial.transient === 'object') {
+    let clean;
     try {
-      rec.transient = await normalizeTransientSettings(id, {
+      clean = await normalizeTransientSettings(id, {
         simulationId: rec.simulation_id || found.sid,
         runId,
-        settings: reopened ? keepAutoBlank(oldTransient, partial.transient) : partial.transient,
-        base: rec.transient,
+        // What the old block worked out at its Start (`auto`) stays blank unless the edit changes it.
+        settings: reopened || waitsForContinue ? keepAutoBlank(oldTransient, partial.transient) : partial.transient,
+        // A change for Continue: over the settings as typed (unresolveTransient), not the numbers worked out.
+        base: waitsForContinue ? unresolveTransient(oldTransient) || {} : rec.transient,
       });
     } catch (e) {
       return { ok: false, error: 'Run settings not saved: ' + String((e && e.message) || e) };
     }
-    // Remember the latest transient settings as the study default for new runs.
-    await saveSimulationControl(id, { transient: rec.transient }, rec.simulation_id || found.sid);
+    // A change for Continue keeps the block the run solved with (its write interval and what its
+    // Start worked out, which Continue reads) and takes only the changed keys (runReopen.ts).
+    rec.transient = waitsForContinue ? continueTransient(oldTransient, clean, changed) : clean;
+    // Remember the latest transient settings as the study default for new runs (as typed).
+    await saveSimulationControl(id, { transient: clean }, rec.simulation_id || found.sid);
   }
   // Waits for Continue (A2): the run records the change (runReopen.ts mergeContinueChanges).
   if (waitsForContinue) {

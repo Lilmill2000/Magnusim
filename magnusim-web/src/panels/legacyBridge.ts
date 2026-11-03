@@ -280,9 +280,10 @@ export interface RunState {
   /**
    * What a change of its solve settings does (runReopen.ts): `draft` saves it; `free` (a
    * stopped or failed run with nothing saved) makes it a draft again; `overwrites` (one with
-   * results) asks first, then deletes them; `continues` (a stopped run with a saved time
-   * Continue goes on from) asks the same, but a change of only its Max Courant, outer and
-   * pressure correctors or Max time step may instead wait for Continue (its results kept);
+   * results) asks first, then deletes them; `continues` (a stopped transient run with a saved
+   * time Continue goes on from, its study still transient) asks the same, but a change of only
+   * its Max Courant, outer and pressure correctors or Max time step may instead wait for
+   * Continue (its results kept);
    * `new_run` (a finished run, locked) asks to make a new run with its settings and the
    * change, so its solve fields stay usable; `locked` (solving or stopping) refuses. Absent in
    * a state published before it existed.
