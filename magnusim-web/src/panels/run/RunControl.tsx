@@ -85,7 +85,8 @@ function RunTitle({ name, canRename }: { name: string; canRename: boolean }) {
 
 /**
  * An analysis without its own run settings: its run model's fields
- * (control_schema), read-only once the run has started.
+ * (control_schema), read-only while the run solves or stops. A finished run's
+ * fields stay usable (run.edit 'new_run': the change goes to a new run).
  */
 export function GenericRunSettings({ run, row, saveSteady, saveTransient }: RunSettingsProps) {
   const schema = mergeObjectSchemas([row?.control_schema as RJSFSchema | undefined]);
@@ -94,7 +95,7 @@ export function GenericRunSettings({ run, row, saveSteady, saveTransient }: RunS
     ? { ...run.transient_settings }
     : { end_time: run.settings.end_time, write_interval: run.settings.write_interval };
   if (!Object.keys(props).length) return null;
-  if (run.locked) {
+  if (run.locked && run.edit !== 'new_run') {
     return (
       <div data-run-settings="generic">
         {Object.entries(props).map(([key, prop]) => (

@@ -1013,6 +1013,39 @@ describe('mergeRunCatalogRow', () => {
     expect(merged && merged.n_saved_times).toBe(9);
   });
 
+  // A run started over (runReopen.ts): its old results never come back in the open page.
+  const stopped = { id: 'run-1', status: 'stopped', mesh_id: 'mesh-1', has_results: true, n_saved_times: 9, last_saved_iteration: 450, sim_time: 450 };
+  const reset = {
+    id: 'run-1',
+    status: 'draft',
+    mesh_id: 'mesh-1',
+    has_results: false,
+    n_saved_times: 0,
+    last_saved_iteration: 0,
+    reopened_at: '2026-11-03T10:00:00.000Z',
+  };
+
+  it('a row started over replaces the old one as it is: no results, a draft', () => {
+    const merged = mergeRunCatalogRow<Record<string, unknown>>(stopped, reset);
+    expect(merged).toEqual(reset);
+  });
+
+  it('a stale refresh from before the start-over keeps the started-over row', () => {
+    expect(mergeRunCatalogRow<Record<string, unknown>>(reset, stopped)).toEqual(reset);
+    // Started over once more: the newer one wins again.
+    const again = { ...reset, endTime: 300, reopened_at: '2026-11-03T11:00:00.000Z' };
+    expect(mergeRunCatalogRow<Record<string, unknown>>(reset, again)).toEqual(again);
+    expect(mergeRunCatalogRow<Record<string, unknown>>(again, reset)).toEqual(again);
+  });
+
+  it('rows of the same start-over merge as before (its new results grow)', () => {
+    const solving = { ...reset, status: 'running', n_saved_times: 2, last_saved_iteration: 100 };
+    const merged = mergeRunCatalogRow<Record<string, unknown>>(solving, { ...reset, status: 'running', n_saved_times: 1, last_saved_iteration: 50 });
+    expect(merged && merged.n_saved_times).toBe(2);
+    expect(merged && merged.last_saved_iteration).toBe(100);
+    expect(merged && merged.has_results).toBe(true);
+  });
+
   it('promotes a stuck starting stage when saved times exist', () => {
     const merged = mergeRunCatalogRow(
       { id: 'run-1', stage: 'starting', n_saved_times: 8, last_saved_iteration: 0.26 },

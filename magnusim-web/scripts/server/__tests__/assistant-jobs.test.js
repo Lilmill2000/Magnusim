@@ -101,6 +101,7 @@ function answer(method, path, q, body) {
     return [200, { ok: true, run, runs: [S.run], runs_all: [S.run], active_run_id: S.run.id }];
   }
   if (path === '/api/run/start' || path === '/api/run/continue') return S.start;
+  if (path === '/api/run/reopen') return [200, { ok: true, reopened: true, run: { ...S.run, status: 'draft', has_results: false } }];
   if (path === '/api/run/update') return [200, { ok: true, run: { ...S.run, ...(body || {}) } }];
   if (path === '/api/run/stop') return S.runStop;
   if (path === '/api/times') return [200, { times: S.times, case_dir: q.get('case') }];
@@ -913,5 +914,53 @@ describe('the cards through the runner', () => {
     await runVia(runner, t.jobs, { project_id: '', action: 'stop', job_id: 'solve.r1', ids: [] }, `t-s-${++turnN}`);
     assert.equal(asked.length, 1);
     assert.equal(writes().filter((x) => x.path === '/api/run/stop').length, 1);
+  });
+});
+
+describe('compute run_start of a stopped run with results (runReopen.ts)', () => {
+  const ac = (o = {}) => ({ ctx: ctx(o), signal: new AbortController().signal, turn: `t-card-${++turnN}` });
+  const stoppedRun = () => {
+    S.mesh.generated = true;
+    S.run.status = 'stopped';
+    S.run.has_results = true;
+    S.run.n_saved_times = 3;
+    S.run.last_saved_iteration = 150;
+    S.run.rev = 6;
+  };
+
+  it("asks as destructive with the person's Start words, then starts it over (reopen, then start)", async () => {
+    stoppedRun();
+    const t = tools();
+    const i = input({ action: 'run_start' });
+    const a = await t.compute.escalate(i, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(a.note, 'Its results (3 saved, up to iteration 150) are deleted, and it solves again from the beginning. To keep them, cancel and use Continue to go on from iteration 150, or add a run.');
+    assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to start "Run 1" over?');
+    const out = await t.compute.run(i, rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    const writes = app.seen.filter((s) => s.method === 'POST').map((s) => s.path);
+    assert.deepEqual(writes.filter((p) => p.startsWith('/api/run/')), ['/api/run/reopen', '/api/run/start']);
+    const reopen = app.seen.find((s) => s.path === '/api/run/reopen');
+    assert.deepEqual([reopen.body.run_id, reopen.body.overwrite, reopen.body.base_rev], [S.run.id, true, 6]);
+    assert.ok(t.syncs.some((e) => e.kinds.includes('tree')));
+  });
+
+  it('a chain card never claims to cover starting it over: that start asks on its own', async () => {
+    stoppedRun();
+    const t = tools();
+    const a = await t.compute.escalate(input({ action: 'mesh_generate', mesh_id: 'm1', chain: ['solve.r1'] }), ac());
+    assert.match(a.note, /2\. Start "Run 1" over, which asks first: its results are deleted\./);
+    assert.deepEqual(a.labels || {}, {});
+  });
+
+  it('a start that was not asked about is refused by the route, and says how to ask', async () => {
+    stoppedRun();
+    S.start = [409, { ok: false, code: 'overwrites_results', final: true, error: 'Its results (3 saved, up to iteration 150) are deleted, and it solves again from the beginning.' }];
+    const t = tools();
+    const out = await t.compute.run(input({ action: 'run_start' }), rt());
+    assert.equal(out.ok, false);
+    assert.equal(out.error.code, 'overwrites_results');
+    assert.match(out.error.hint, /call compute run_start again, and the person is asked first/);
+    assert.equal(app.seen.some((s) => s.path === '/api/run/reopen'), false);
   });
 });

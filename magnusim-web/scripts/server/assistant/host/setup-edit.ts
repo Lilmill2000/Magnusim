@@ -21,6 +21,7 @@ import type { ToolCtx, ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { carrySettle } from '../../../../src/workbench/runSettle.ts';
 import { runCopyBody } from '../../../../src/workbench/runCopyBody.ts';
+import { finishedRefusal, overwriteWords, runEditState, solveChanged, unresolveTransient } from '../../../../src/workbench/runReopen.ts';
 import { bcFamily, materialModel, meshFields, REFINEMENT_FIELDS, runFields } from './catalog.ts';
 import {
   badValues,
@@ -83,6 +84,27 @@ const WALL_TYPES = ['No-slip', 'Slip'];
 const newId = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 const rcId = () => `rc-${randomBytes(4).toString('hex')}`;
 
+/**
+ * The calls whose card asked to start a run over (runReopen.ts): only those send `overwrite`.
+ * A call that reached the route without the card is refused with its words, and asks when
+ * the model tries again. The card's title, by call.
+ */
+const overwriteAsked = new WeakMap<Record<string, unknown>, string>();
+
+/** A run update's values as the route's body (run.update changes), read without the registry: for the overwrite check. */
+function changesOf(values: unknown): Record<string, unknown> {
+  const flat: Record<string, unknown> = {};
+  for (const pair of Array.isArray(values) ? values : []) {
+    if (!isRecord(pair)) continue;
+    try {
+      flat[str(pair.key).trim()] = JSON.parse(str(pair.value));
+    } catch {
+      /* parseValues says so in run() */
+    }
+  }
+  return nest(flat);
+}
+
 /** The id a call names, normalized. */
 const idOf = (input: Record<string, unknown>) => str(input.id).trim();
 const strList = (v: unknown, max: number) => (Array.isArray(v) ? v.map((x) => str(x).trim()).filter(Boolean).slice(0, max) : []);
@@ -139,7 +161,26 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       const n = records(doc.refinements).filter((r) => r.mesh_id === idOf(input)).length;
       if (n) note = `Its ${n} refinement${n === 1 ? ' is' : 's are'} replaced by the copied ones.`;
     }
-    if (['material', 'bc', 'refinement', 'mesh', 'run', 'monitor'].includes(kind) && CHANGES_SETTINGS.has(action) && sim) {
+    // A run that ended (runReopen.ts): a change of a stopped or failed run's solve settings with
+    // results deletes them first (the card says so, as the person's dialog does); a finished or
+    // solving run's change is refused in run(), so nothing is asked for it.
+    if (kind === 'run' && (action === 'update' || action === 'copy_from') && sim) {
+      const st = (await d.hostCall('run.status', { project_id: project, simulation_id: sim, run_id: idOf(input) }, o)) as Record<string, unknown>;
+      const run = isRecord(st.run) && (!idOf(input) || st.run.id === idOf(input) || st.run.run_id === idOf(input)) ? st.run : null;
+      const state = run ? runEditState(run) : 'draft';
+      const solve = action === 'copy_from' || (!!run && solveChanged(run, changesOf(input.values)).length > 0);
+      if (run && solve && state === 'overwrites') {
+        const studies = (await d.hostCall('simulation.get', { project_id: project, simulation_id: sim }, o)) as Record<string, unknown>;
+        const study = isRecord(studies.simulation) ? studies.simulation : {};
+        const w = overwriteWords(run, { action: 'edit', studyTransient: /transient/i.test(str(study.time_dependency)), assistant: true });
+        overwriteAsked.set(input, w.title);
+        return { risk: 'destructive', note: w.copy, detail: [{ label: 'Run', value: cleanText(str(run.name), 60) }] };
+      }
+      // Anything else of a run asks nothing, as the person's panel asks nothing: a draft's
+      // change, a free setting (Continue uses it), a run with nothing to overwrite.
+      return null;
+    }
+    if (['material', 'bc', 'refinement', 'mesh', 'monitor'].includes(kind) && CHANGES_SETTINGS.has(action) && sim) {
       const names = await runsWithResults(d.hostCall, rt, project, sim, 'setup_edit');
       if (names.length) {
         note = note ? `${note} ${resultsNote(names)}` : resultsNote(names);
@@ -198,7 +239,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
           ? 'Allow the Assistant to add the original geometry?'
           : input.kind === 'geometry'
             ? 'Allow the Assistant to overwrite this geometry?'
-            : `Allow the Assistant to change this ${str(input.kind).replace('_', ' ')}?`,
+            : (overwriteAsked.get(input) ?? `Allow the Assistant to change this ${str(input.kind).replace('_', ' ')}?`),
       copy: a?.note || 'It changes the study setup.',
       ...(a?.detail.length ? { detail: a.detail } : {}),
     }),
@@ -574,6 +615,73 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     },
   });
 
+  /**
+   * setup_edit {kind:'run', action:'add', other_id, values}: the next run of the study with the
+   * settings of run `other_id` (as Add run copies them: the study's time dependency, the time
+   * step its Start worked out left blank) and `values` as changes on it. What the person's
+   * "Make new run" does for a finished run's change; the source is not touched.
+   */
+  async function runAddFrom(
+    project: string,
+    sim: string,
+    study: Record<string, unknown>,
+    input: Record<string, unknown>,
+    rt: ToolRunContext,
+    sync: (kinds: SyncKind[], sim: string | null, ids: Record<string, string[]>, revs?: Record<string, number>, active?: Record<string, string>) => void,
+  ): Promise<ToolOutcome> {
+    const o = via(rt, 'setup_edit.run.add');
+    const q = { project_id: project, simulation_id: sim };
+    const from = str(input.other_id).trim();
+    const status = (await d.hostCall('run.status', q, o)) as Record<string, unknown>;
+    const all = [...records(status.runs_all), ...records(status.runs)];
+    const src = all.find((r) => r.id === from || r.run_id === from);
+    if (!src) return fail('not_found', `No run "${cleanText(from, 80)}" to copy.`, "read_setup {what:'runs'} lists them.");
+    const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
+    const fields = runFields(registry, str(study.analysis_type));
+    const parsed = parseValues(input.values, fields, { settle: (v) => (v === null || isRecord(v) ? null : 'an object, or null for off') });
+    if (!parsed.ok) return badValues(parsed.problems, `catalog {kind:'analyses', key:'${cleanText(str(study.analysis_type), 80)}'} lists the run_settings.`);
+    const made = (await d.hostCall('run.create', { ...q, name: cleanText(str(input.name).trim(), 64), mesh_id: str(src.mesh_id) }, o)) as Record<string, unknown>;
+    const dest = isRecord(made.run) ? made.run : {};
+    const newRun = str(dest.id ?? dest.run_id);
+    const bcs = (await d.hostCall('bcs.get', q, o)) as Record<string, unknown>;
+    const studyBcIds = records(bcs.boundary_conditions).filter((b) => strList(b.faces, 1).length).map((b) => str(b.id));
+    const transient: Record<string, unknown> = {};
+    for (const f of fields) if (f.key.startsWith('transient.')) transient[f.key.slice(10)] = defaultOf(registry, str(study.analysis_type), f.key.slice(10));
+    const srcT = unresolveTransient(src.transient);
+    if (srcT) for (const k of Object.keys(transient)) if (srcT[k] !== undefined) transient[k] = srcT[k];
+    const studyTransient = /transient/i.test(str(study.time_dependency));
+    const copied = runCopyBody({
+      src,
+      dest,
+      studyId: sim,
+      fallback: { endTime: dest.endTime, writeInterval: dest.writeInterval },
+      insideCreate: true,
+      studyTransient,
+      srcTransient: src.time_dependency ? /transient/i.test(str(src.time_dependency)) : studyTransient,
+      transient,
+      cores: Number.isInteger(src.cores) && Number(src.cores) >= 1 ? Number(src.cores) : null,
+      studyBcIds,
+      newRcId: rcId,
+      carry: carrySettle,
+    });
+    const changes: Record<string, unknown> = { ...copied.body };
+    delete changes.run_id;
+    const nested = nest(parsed.values);
+    if (isRecord(nested.transient)) nested.transient = { ...(isRecord(changes.transient) ? changes.transient : {}), ...nested.transient };
+    Object.assign(changes, nested);
+    if ('settle' in nested) changes.settle_time_dependency = studyTransient ? 'Transient' : 'Steady-state';
+    const proj = await readProject(d.hostCall, rt, project, 'setup_edit.run.add');
+    const geometryRev = geometryRevOf(proj, studyGeometry(proj, study));
+    const r = (await d.hostCall('run.update', { ...q, run_id: newRun, changes, geometry_rev: geometryRev ?? undefined, base_rev: revOf(dest) ?? undefined }, o)) as Record<string, unknown>;
+    if (r.ok === false) refuse('refused', cleanText(str(r.error) || 'The new run was made, but its settings were not saved.', 300));
+    sync(['runs', 'tree'], sim, { run: [newRun] });
+    const keys = Object.keys(parsed.values);
+    return okDone({
+      done: `Added run ${quoted(dest.name)} with the settings of ${quoted(src.name)}${keys.length ? ` and ${keys.join(', ')} changed` : ''}.${copied.note ? ` ${copied.note}` : ''}`,
+      ids: { run: newRun },
+    });
+  }
+
   // ------------------------------------------------------------------ runs, monitors, saved views
   async function runEdit(
     project: string,
@@ -589,9 +697,10 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const action = str(input.action);
     const o = via(rt, `setup_edit.${kind}.${action}`);
     const q = { project_id: project, simulation_id: sim };
+    if (kind === 'run' && action === 'add' && str(input.other_id).trim()) return await runAddFrom(project, sim, study, input, rt, sync);
     if (kind === 'run' && action === 'add') {
       const parsed = parseValues(input.values, [], { mesh_id: (v) => (typeof v === 'string' ? null : 'a mesh id (text)') });
-      if (!parsed.ok) return badValues(parsed.problems, 'add takes values mesh_id only; change the rest with update.');
+      if (!parsed.ok) return badValues(parsed.problems, "add takes values mesh_id only; change the rest with update, or give other_id to copy a run's settings with values as changes.");
       const made = (await d.hostCall('run.create', { ...q, name: cleanText(str(input.name).trim(), 64), mesh_id: str(parsed.values.mesh_id) }, o)) as Record<string, unknown>;
       const run = isRecord(made.run) ? made.run : {};
       sync(['runs', 'tree'], sim, { run: [str(run.id)] });
@@ -607,10 +716,31 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const id = str(run.id ?? run.run_id);
     const base = baseRev(kind === 'run' ? input : { rev: 0 }, run);
     const g = await ctxOf();
+    // Only a call whose card asked to start the run over sends overwrite (runReopen.ts).
+    const overwrite = kind === 'run' && overwriteAsked.has(input);
+    let reopened = false;
     const update = async (changes: Record<string, unknown>) => {
-      const r = (await d.hostCall('run.update', { ...q, run_id: id, changes, geometry_rev: g.geometryRev ?? undefined, base_rev: base }, o)) as Record<string, unknown>;
+      const r = (await d.hostCall('run.update', { ...q, run_id: id, changes, ...(overwrite ? { overwrite: true } : {}), geometry_rev: g.geometryRev ?? undefined, base_rev: base }, o)) as Record<string, unknown>;
       if (r.ok === false) refuse('refused', cleanText(str(r.error) || 'The run was not saved.', 300));
+      if (r.reopened === true) reopened = true;
       return isRecord(r.run) ? r.run : {};
+    };
+    /** A finished or solving run's solve settings don't change in place: refused with the person's words and the one call that does it. */
+    const endedRefusal = (changes: Record<string, unknown>): ToolOutcome | null => {
+      if (kind !== 'run' || !solveChanged(run, changes).length) return null;
+      const state = runEditState(run);
+      if (state === 'new_run') {
+        const vals = JSON.stringify(Array.isArray(input.values) ? input.values : []);
+        return fail(
+          'run_finished',
+          finishedRefusal(run),
+          `setup_edit {kind:'run', action:'add', other_id:'${cleanText(id, 80)}', values:${cleanText(vals, 600)}} makes the next run with the settings of ${quoted(run.name)} and these changes; ${quoted(run.name)} keeps its results.`,
+        );
+      }
+      if (state === 'locked') {
+        return fail('run_running', 'This run is solving or stopping: its settings can change once it has ended.', "wait {job_ids:['solve.<run id>']} until it ends, or setup_edit {kind:'run', action:'add'} for another run.");
+      }
+      return null;
     };
     if (kind === 'run') {
       if (action === 'activate') {
@@ -655,6 +785,8 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
         });
         const changes: Record<string, unknown> = { ...copied.body };
         delete changes.run_id;
+        const no = endedRefusal(changes);
+        if (no) return no;
         await update(changes);
         sync(['runs', 'tree'], sim, { run: [id] });
         return okDone({
@@ -671,11 +803,19 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       if (!parsed.ok) return badValues(parsed.problems, `catalog {kind:'analyses', key:'${cleanText(str(study.analysis_type), 80)}'} lists the run_settings.`);
       if (!Object.keys(parsed.values).length) return fail('invalid_input', 'update needs values.', "catalog {kind:'analyses', key} lists the run_settings.");
       const nested = nest(parsed.values);
+      const no = endedRefusal(nested);
+      if (no) return no;
       if (isRecord(nested.transient)) nested.transient = { ...(isRecord(run.transient) ? run.transient : {}), ...nested.transient };
       if ('settle' in nested) nested.settle_time_dependency = str(run.time_dependency) || str(study.time_dependency);
       const saved = await update(nested);
-      sync(['runs'], sim, { run: [id] }, revOf(saved) !== null ? { [id]: revOf(saved) as number } : {});
-      return okDone({ done: `Saved ${Object.keys(parsed.values).join(', ')} of run ${quoted(run.name)}.`, ids: { run: id }, rev: revOf(saved) });
+      sync(reopened ? ['runs', 'tree'] : ['runs'], sim, { run: [id] }, revOf(saved) !== null ? { [id]: revOf(saved) as number } : {});
+      return okDone({
+        done: reopened
+          ? `${quoted(run.name)} starts over: its old results were deleted. Saved ${Object.keys(parsed.values).join(', ')}.`
+          : `Saved ${Object.keys(parsed.values).join(', ')} of run ${quoted(run.name)}.`,
+        ids: { run: id },
+        rev: revOf(saved),
+      });
     }
     if (kind === 'saved_view') {
       if (action !== 'rename') {

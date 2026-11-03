@@ -178,6 +178,14 @@ test('gate:h15-core-drain: core Stop while starting, draining and after a relay 
     panel = await panelOf(R);
     await expect(panel.locator('[data-run-start]')).toHaveText('Add to queue', { timeout: 30_000 });
     await panel.locator('[data-run-start]').click();
+    // R has results from before its stop: starting it again deletes them, and asks first
+    // (Start "R" over?, runReopen.ts). Whether it saved one before the forced stop is timing.
+    const modal = page.locator('#modal-confirm');
+    if (await modal.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false)) {
+      await expect(page.locator('#cf-heading')).toHaveText(/^Start ".*" over\?$/);
+      await page.locator('#cf-confirm').click();
+      await expect(modal).toBeHidden();
+    }
     await expect(panel.locator('[data-run-start]')).toHaveText('Remove from queue', { timeout: 15_000 });
 
     // 4. The mesh runs with nothing of R left; then R runs once (one solve script).

@@ -472,3 +472,99 @@ describe('setup_edit: every kind × action, the exact routes and bodies', () => 
     assert.match(t().available({ tab: 'T1', projectId: 'p1', simulationId: 's1', cloud: true, local: false }), /workspace/);
   });
 });
+
+// ------------------------------------------------------------------ a run that ended (runReopen.ts)
+
+describe("setup_edit on a run that ended: the person's rules and words", () => {
+  const t = () => setupEditTool(deps());
+  const ac = () => ({ ctx: rt().ctx, signal: new AbortController().signal, turn: 't' });
+  const stopped = { id: 'r3', name: 'Run 3', status: 'stopped', mesh_id: 'm1', endTime: 100, writeInterval: 50, time_dependency: 'Steady-state', has_results: true, n_saved_times: 2, last_saved_iteration: 100, iteration: 120, n_steps: 120, rev: 4, result_controls: [] };
+  const withStopped = (o = {}) => {
+    fresh();
+    app.w.runs.push({ ...stopped, ...o });
+  };
+
+  it("a change of a stopped run's solve settings asks as destructive with the dialog's words, then sends overwrite with the rev it read", async () => {
+    withStopped();
+    const tool = t();
+    const input = setup({ kind: 'run', action: 'update', id: 'r3', values: [{ key: 'endTime', value: '300' }] });
+    const a = await tool.escalate(input, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(
+      a.note,
+      'Changing this setting starts "Run 3" over. Its results (2 saved, up to iteration 100) are deleted now, and Start solves it again from the beginning. To keep them, cancel and add a run, or use Continue to go on from iteration 100.',
+    );
+    assert.deepEqual(a.detail, [{ label: 'Run', value: 'Run 3' }]);
+    assert.equal(tool.gateText(input, a).title, 'Allow the Assistant to overwrite "Run 3"?');
+    const r = await sent(tool, input);
+    assert.deepEqual(r.writes[0].body, { endTime: 300, project_id: 'p1', simulation_id: 's1', run_id: 'r3', overwrite: true, base_rev: 4 });
+    // copy_from into it asks the same.
+    const copy = setup({ kind: 'run', action: 'copy_from', id: 'r3', other_id: 'r1' });
+    const c = await tool.escalate(copy, ac());
+    assert.equal(c.risk, 'destructive');
+    assert.equal(tool.gateText(copy, c).title, 'Allow the Assistant to overwrite "Run 3"?');
+  });
+
+  it('asks nothing for a free setting, a draft, or a stopped run with nothing saved, and never sends overwrite then', async () => {
+    withStopped();
+    const tool = t();
+    const cores = setup({ kind: 'run', action: 'update', id: 'r3', values: [{ key: 'cores', value: '2' }] });
+    assert.equal(await tool.escalate(cores, ac()), null);
+    assert.equal(await tool.escalate(setup({ kind: 'run', action: 'update', id: 'r2', values: [{ key: 'endTime', value: '300' }] }), ac()), null);
+    withStopped({ has_results: false, n_saved_times: 0, last_saved_iteration: 0, n_steps: 0, iteration: 0 });
+    const quiet = setup({ kind: 'run', action: 'update', id: 'r3', values: [{ key: 'endTime', value: '300' }] });
+    assert.equal(await t().escalate(quiet, ac()), null);
+    const r = await sent(t(), quiet);
+    assert.equal('overwrite' in r.writes[0].body, false);
+    // A call that never had the card (the run gained results meanwhile) does not send it either: the route refuses, and asking again shows the card.
+    withStopped();
+    const unasked = await sent(t(), setup({ kind: 'run', action: 'update', id: 'r3', values: [{ key: 'endTime', value: '300' }] }));
+    assert.equal('overwrite' in unasked.writes[0].body, false);
+  });
+
+  it("a finished run's solve settings are refused with the person's words and the one call that makes a new run; nothing is written", async () => {
+    fresh();
+    const tool = t();
+    const input = setup({ kind: 'run', action: 'update', id: 'r1', values: [{ key: 'endTime', value: '300' }] });
+    assert.equal(await tool.escalate(input, ac()), null, 'nothing is asked for what is refused');
+    const r = await sent(tool, input);
+    assert.deepEqual([r.out.error.code, r.writes], ['run_finished', []]);
+    assert.equal(r.out.error.message, '"Run 1" has finished and its results stay as they are: a change of its settings goes to a new run with the same settings.');
+    assert.equal(
+      r.out.error.hint,
+      `setup_edit {kind:'run', action:'add', other_id:'r1', values:[{"key":"endTime","value":"300"}]} makes the next run with the settings of "Run 1" and these changes; "Run 1" keeps its results.`,
+    );
+    // Its free settings still save (a monitor, a name).
+    const named = await sent(tool, setup({ kind: 'run', action: 'update', id: 'r1', values: [{ key: 'cores', value: '2' }] }));
+    assert.equal(named.out.ok, true, JSON.stringify(named.out));
+  });
+
+  it('add with other_id: the next run with that run\'s settings and the changes, in one call; the finished run untouched', async () => {
+    fresh();
+    const r = await sent(t(), setup({ kind: 'run', action: 'add', other_id: 'r1', values: [{ key: 'endTime', value: '300' }] }));
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.deepEqual(r.writes.map((w) => w.path), ['/api/run/create', '/api/run/update']);
+    assert.deepEqual(r.writes[0].body, { project_id: 'p1', simulation_id: 's1', name: '', mesh_id: 'm1' });
+    const b = r.writes[1].body;
+    assert.deepEqual([b.run_id, b.mesh_id, b.endTime, b.writeInterval, b.time_dependency, b.cores], ['r-new', 'm1', 300, 50, 'Steady-state', 4]);
+    assert.equal(b.result_controls.length, 1);
+    assert.notEqual(b.result_controls[0].id, 'rc-1');
+    assert.equal(r.out.data.done, 'Added run "Run 3" with the settings of "Run 1" and endTime changed.');
+    assert.equal(r.writes.some((w) => w.body && w.body.run_id === 'r1'), false, 'the finished run is not written');
+    assert.deepEqual(synced.at(-1).kinds, ['runs', 'tree']);
+  });
+
+  it('read_setup says what a change of each run does (settings)', async () => {
+    withStopped();
+    const { readSetupTool } = await import('../assistant/host/read-setup.ts');
+    const read = readSetupTool(deps());
+    const out = await read.run({ project_id: '', simulation_id: '', what: 'runs', id: '', other_id: '', page: 0 }, rt());
+    assert.deepEqual(out.data.runs.map((r) => [r.id, r.settings]), [
+      ['r1', 'new_run'],
+      ['r2', 'editable'],
+      ['r3', 'overwrites'],
+    ]);
+    const one = await read.run({ project_id: '', simulation_id: '', what: 'run', id: 'r3', other_id: '', page: 0 }, rt());
+    assert.equal(one.data.settings, 'overwrites');
+  });
+});

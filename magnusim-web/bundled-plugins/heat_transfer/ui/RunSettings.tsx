@@ -3,7 +3,9 @@
  * write interval, or a transient run's simulation time, result frames and time
  * step (its analysis's control schema), and "Stop when a monitor settles" on
  * one of the run's Heat Transfer monitors (heat_transfer/settle.py writes it).
- * Locked once the run has started.
+ * Locked while the run solves or stops. A finished run's solve fields stay usable
+ * (run.edit 'new_run': the core asks, and the change goes to a new run); its stop
+ * is shown read-only.
  */
 import type { RJSFSchema } from '@rjsf/utils';
 import type { RunSettingsProps } from '../../../src/plugin-api';
@@ -242,7 +244,7 @@ export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }:
     : { end_time: run.settings.end_time, write_interval: run.settings.write_interval };
   return (
     <div data-run-settings="heat_transfer">
-      {run.locked ? (
+      {run.locked && run.edit !== 'new_run' ? (
         Object.entries(props).map(([key, prop]) => (
           <div className="mat-row" key={key}>
             <span className="mat-k">{prop.title || key}</span>

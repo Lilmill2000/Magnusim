@@ -401,7 +401,13 @@ describe('Continue (F6)', () => {
     endRun(rid, 'stopped');
     assert.equal(runDoc(rid).status, 'stopped');
     assert.ok(runDoc(rid).continued);
-    const again = await start(rid);
+    // Starting it again deletes its results: refused until the person was asked (runReopen.ts),
+    // the run left as it ended.
+    const refused = await start(rid);
+    assert.deepEqual([refused.out.status, refused.out.bodyExtra.code, refused.out.bodyExtra.final], [409, 'overwrites_results', true]);
+    assert.equal(runDoc(rid).status, 'stopped');
+    assert.ok(existsSync(join(caseOf(rid), '100')), 'its frames stay');
+    const again = await start(rid, { overwrite: true });
     assert.equal(again.out.ok, true, JSON.stringify(again.out.bodyExtra));
     const spec = specOf(again.out.bodyExtra.runner_job_id);
     assert.equal('restart' in spec.solver, false);

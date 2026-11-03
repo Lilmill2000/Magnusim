@@ -6,6 +6,7 @@
  * answer is built from a whitelist of fields: no path ever reaches the model, and every
  * record carries its `rev` once records have one.
  */
+import { runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { meshFields, REFINEMENT_FIELDS, studyFields } from './catalog.ts';
@@ -270,6 +271,9 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
               id: text(r.id, 80),
               name: text(r.name),
               status: text(r.status ?? 'draft', 20),
+              // What a change of its solve settings does (runReopen.ts): editable, overwrites (asks
+              // first, its results deleted), new_run (finished: add a run copying it), locked.
+              settings: runSettingsWord(runEditState(r)),
               mesh_id: text(r.mesh_id, 80),
               active: r.id === active,
               ...(revOf(r) !== null ? { rev: revOf(r) } : {}),
@@ -340,6 +344,7 @@ export function runRow(r: Record<string, unknown>, activeId: string): Record<str
     id: text(r.id ?? r.run_id, 80),
     name: text(r.name),
     status: text(r.status ?? 'draft', 20),
+    settings: runSettingsWord(runEditState(r)),
     mesh_id: text(r.mesh_id, 80),
     time_dependency: text(r.time_dependency, 20),
     cores: num(r.cores),

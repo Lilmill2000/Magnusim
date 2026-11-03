@@ -580,6 +580,12 @@ export function runHasVisibleResults(rec?: {
   return String(rec.status || '') === 'done' && hasCase;
 }
 
+/** When a run was last started over (its reopened_at, ms), else 0. */
+function reopenedAt(r: Record<string, unknown>): number {
+  const t = Date.parse(String(r.reopened_at || ''));
+  return Number.isFinite(t) ? t : 0;
+}
+
 /** Merge a catalog refresh so a settings save cannot drop mesh or results. */
 export function mergeRunCatalogRow<T extends Record<string, unknown>>(
   prev: T | null | undefined,
@@ -587,6 +593,13 @@ export function mergeRunCatalogRow<T extends Record<string, unknown>>(
 ): T | null {
   if (!next) return (prev as T) || null;
   if (!prev) return next;
+  // A run started over (runReopen.ts) is stamped reopened_at: the newer start-over wins as it
+  // is. A row from after it says its results are gone (the larger counts were the old run's);
+  // a stale refresh from before it never brings them back.
+  const nextAt = reopenedAt(next);
+  const prevAt = reopenedAt(prev);
+  if (nextAt > prevAt) return next;
+  if (prevAt > nextAt) return prev;
   const nSaved = Math.max(Number(next.n_saved_times) || 0, Number(prev.n_saved_times) || 0);
   const lastNext = Number(next.last_saved_iteration);
   const lastPrev = Number(prev.last_saved_iteration);

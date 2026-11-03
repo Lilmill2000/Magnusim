@@ -1837,7 +1837,7 @@ interface RegistryRow
 interface RunSettingsProps
 ```
 
-What a run-settings component gets. Settings are locked once a run has started.
+What a run-settings component gets. `run.locked`: its settings can't change now (solving or stopping, or finished). A finished run's solve fields stay usable when `run.edit` is `new_run`: the core asks, and a change goes to a new run with the same settings. On a stopped or failed run the core asks before a change starts it over, and a save the person cancels resolves without saving: the fields show `run` again.
 
 - `run: RunState`
 - `row: RegistryRow | undefined`: The run's analysis row (registry.describe).
@@ -1860,7 +1860,8 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `name: string`
 - `status: string`
 - `transient: boolean`
-- `locked: boolean`: Started or finished runs keep their settings.
+- `locked: boolean`: Its settings can't change in place now: it solves or stops, or it finished (a finished run keeps its results). A stopped or failed run is not locked.
+- `edit?: "draft" | "free" | "overwrites" | "new_run" | "locked" | undefined`: What a change of its solve settings does (runReopen.ts): `draft` saves it; `free` (a stopped or failed run with nothing saved) makes it a draft again; `overwrites` (one with results) asks first, then deletes them; `new_run` (a finished run, locked) asks to make a new run with its settings and the change, so its solve fields stay usable; `locked` (solving or stopping) refuses. Absent in a state published before it existed.
 - `running: boolean`
 - `done: boolean`
 - `can_start: boolean`

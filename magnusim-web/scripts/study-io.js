@@ -651,6 +651,58 @@ export function persistRun(projectId, simId, run, opts) {
   return persistRunAt(projectDir(projectId), simId, run, opts);
 }
 
+/**
+ * What a run started over (w27-solve.js reopenRun) no longer has: how it ended, its results and
+ * progress, and what its last Start planned and ran with. Its settings, monitors, saved views and
+ * media stay.
+ */
+export const REOPEN_CLEARED = Object.freeze([
+  // how it ended, and when
+  'stage', 'stop_requested', 'draining', 'pid', 'signal', 'exit_code', 'error', 'note', 'fix',
+  'started_at', 'finished_at', 'solve_started_at',
+  // its results and progress
+  'has_results', 'last_saved_iteration', 'n_saved_times', 'saved_times', 'iteration', 'sim_time', 'n_steps', 'residuals',
+  'co_max', 'co_mean', 'delta_t', 'phases', 'warnings', 'log_excerpt', 'converged', 'continued', 'attempts', 'continue_from',
+  // what its last Start planned and ran with
+  'runner_job_id', 'log_path', 'log_jsonl_path', 'wsl_case', 'wsl_case_path', 'command', 'argv', 'n_procs', 'solve_protocol',
+  'prepare_run', 'mesh_source', 'bcs', 'wall_default', 'launch', 'path_kind', 'mode', 'analysis_key', 'built_from',
+]);
+
+/**
+ * Write a run that is started over as a draft again (w27-solve.js reopenRun): the normal
+ * writer keeps a started status, its results and its build stamp, so this one writes run.json
+ * itself. `timeDependency` is its study's mode now (a draft follows its study); `transient` its
+ * transient block with the values its analysis worked out blank again (runReopen.ts
+ * unresolveTransient). Moves its rev, and stamps `reopened_at` (the open page keeps the newer).
+ * @param {string} projectDirPath
+ * @param {string} simId
+ * @param {string} runId
+ * @param {{ timeDependency: string, transient?: Record<string, unknown> | null, at?: string }} opts
+ * @returns {Record<string, any>}
+ */
+export function reopenRunAt(projectDirPath, simId, runId, opts) {
+  const sid = String(simId || '');
+  const folder = findRun(projectDirPath, String(runId), sid || undefined);
+  if (!folder) throw new Error('run folder missing for ' + runId);
+  const onDisk = readJsonFile(join(folder.dir, 'run.json')) || {};
+  /** @type {Record<string, any>} */
+  const rec = { ...onDisk };
+  for (const k of REOPEN_CLEARED) delete rec[k];
+  rec.status = 'draft';
+  rec.has_results = false;
+  rec.n_saved_times = 0;
+  rec.last_saved_iteration = 0;
+  rec.residuals = [];
+  rec.stop_requested = false;
+  rec.time_dependency = /transient/i.test(String(opts.timeDependency || '')) ? 'Transient' : 'Steady-state';
+  if (opts.transient && typeof opts.transient === 'object') rec.transient = { ...opts.transient };
+  rec.reopened_at = opts.at || new Date().toISOString();
+  rec.case_dir = join(folder.dir, 'case');
+  stampRev(rec, onDisk, { bump: true, ignore: ['current_view'] });
+  writeJsonAtomic(join(folder.dir, 'run.json'), rec);
+  return { ...rec, dir: folder.dir, folder: folder.folder };
+}
+
 export function assembleRuns(projectId, simId) {
   if (!projectId || !simId) return [];
   return walkRuns(projectDir(projectId), String(simId));

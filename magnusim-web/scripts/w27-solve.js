@@ -38,10 +38,23 @@ import {
   assembleRuns,
   persistRun,
   readStudyJson,
+  reopenRunAt,
   runFolderOf,
   studyFilePath,
   writeStudyJson,
 } from './study-io.js';
+import {
+  RUNNING_REFUSAL,
+  STOPPING_REFUSAL,
+  finishedRefusal,
+  keepAutoBlank,
+  noSavedTimeText,
+  overwriteWords,
+  REOPENABLE,
+  runEditState,
+  solveChanged,
+  unresolveTransient,
+} from '../src/workbench/runReopen.ts';
 import { listFoamTimeDirs } from './project-layout.js';
 import { solveStartBlockReason } from './solve-start-block.js';
 import {
@@ -441,6 +454,8 @@ export function slimRunDoc(doc) {
     solve_started_at: doc.solve_started_at || null,
     simulation_id: doc.simulation_id || null,
     time_dependency: doc.time_dependency || null,
+    // A run started over: the open page keeps the newer start-over (jobQueueOrder.ts).
+    reopened_at: doc.reopened_at || null,
     result_controls: Array.isArray(doc.result_controls) ? doc.result_controls : [],
     pid: doc.pid != null ? doc.pid : null,
     n_procs: doc.n_procs != null ? doc.n_procs : null,
@@ -1505,12 +1520,12 @@ function catalogForRun(projectId, runId, hintSimId) {
  * the one before, so two quick edits (or two tabs) never undo each other. */
 const runSettingsUpdates = new Map();
 
-export function updateRunSettings(projectId, partial) {
-  const id = projectId || projectIdOrActive('', readActiveId);
-  const runId = partial && (partial.run_id || partial.id);
-  if (!id || !runId) return Promise.resolve({ ok: false, error: 'run_id required' });
-  const key = `${id}\u0000${runId}`;
-  const apply = () => applyRunSettings(id, runId, partial);
+/** A run's key in runSettingsUpdates and in the runs being started over. */
+const runUpdateKey = (projectId, runId) => `${projectId}\u0000${runId}`;
+
+/** Run `apply` after the run's settings updates before it (one read-modify-write of a run at a time). */
+function chainRunUpdate(projectId, runId, apply) {
+  const key = runUpdateKey(projectId, runId);
   const next = (runSettingsUpdates.get(key) || Promise.resolve()).then(apply, apply);
   runSettingsUpdates.set(key, next);
   const settle = () => {
@@ -1518,6 +1533,13 @@ export function updateRunSettings(projectId, partial) {
   };
   next.then(settle, settle);
   return next;
+}
+
+export function updateRunSettings(projectId, partial) {
+  const id = projectId || projectIdOrActive('', readActiveId);
+  const runId = partial && (partial.run_id || partial.id);
+  if (!id || !runId) return Promise.resolve({ ok: false, error: 'run_id required' });
+  return chainRunUpdate(id, runId, () => applyRunSettings(id, runId, partial));
 }
 
 async function applyRunSettings(id, runId, partial) {
@@ -1539,6 +1561,29 @@ async function applyRunSettings(id, runId, partial) {
     const stamp = checkRecordSave(projectDir(id), rec.simulation_id || found.sid, [partial], partial.geometry_rev);
     if (!stamp.ok) return { ...stamp.body, status: stamp.status, headers: stamp.headers };
     geometryRev = stamp.rev;
+  }
+  // A run that ended (runReopen.ts): a change of its solve settings starts a stopped or failed
+  // run over (once asked: `overwrite`, when it has results) and goes to a new run for a
+  // finished one; a run that solves or stops keeps them. Its free settings always save.
+  const changed = solveChanged(rec, partial);
+  let reopened = null;
+  let oldTransient = null;
+  if (changed.length) {
+    const state = runEditState(rec);
+    if (state === 'locked') {
+      const stopping = !!rec.stop_requested;
+      return { ok: false, status: 409, code: stopping ? 'still_stopping' : 'run_running', error: stopping ? STOPPING_REFUSAL : RUNNING_REFUSAL, changed };
+    }
+    if (state === 'new_run') return { ok: false, status: 409, code: 'run_finished', error: finishedRefusal(rec), changed };
+    if (state === 'overwrites' || state === 'free') {
+      oldTransient = rec.transient;
+      const r = await reopenRunNow(id, String(runId), { simulationId: rec.simulation_id || found.sid, overwrite: partial.overwrite === true });
+      if (!r.ok) return { ...r, changed };
+      reopened = r;
+      // The run as it is now (a draft again): every key below is applied on it.
+      for (const k of Object.keys(rec)) delete rec[k];
+      Object.assign(rec, r.run);
+    }
   }
   if (partial.name != null) {
     const next = String(partial.name || '').trim();
@@ -1572,7 +1617,7 @@ async function applyRunSettings(id, runId, partial) {
       rec.transient = await normalizeTransientSettings(id, {
         simulationId: rec.simulation_id || found.sid,
         runId,
-        settings: partial.transient,
+        settings: reopened ? keepAutoBlank(oldTransient, partial.transient) : partial.transient,
         base: rec.transient,
       });
     } catch (e) {
@@ -1626,6 +1671,7 @@ async function applyRunSettings(id, runId, partial) {
   return {
     ok: true,
     run: rec,
+    ...(reopened ? { reopened: true, reopened_at: rec.reopened_at || reopened.reopened_at } : {}),
     ...runListPayload(id, cat, { simulation_id: rec.simulation_id || found.sid || (partial && partial.simulation_id) }),
     meshes: listGeneratedMeshes(id, rec.simulation_id || found.sid || (partial && partial.simulation_id)),
   };
@@ -1680,7 +1726,7 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
   const inFlight = pendingRunWrites.get(String(runId));
   if (inFlight) await inFlight;
   // A settings save still queued for this run would write into the folder being removed.
-  const queued = runSettingsUpdates.get(`${id} ${runId}`);
+  const queued = runSettingsUpdates.get(runUpdateKey(id, runId));
   if (queued) {
     try {
       await queued;
@@ -1707,6 +1753,156 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
     run_id: runId,
     ...runListPayload(id, cat, { simulation_id: sid }),
   };
+}
+
+/** Runs being started over now (runUpdateKey): Start, Continue and another reset refuse them meanwhile. */
+const reopening = new Set();
+
+/**
+ * Told when a run is about to be started over and its case folder moved away (live-routes.js:
+ * the Results view lets go of a case under it, and its mesh-surface cache goes).
+ * @type {null | ((info: { project_id: string, run_id: string, run_dir: string, case_dir: string }) => unknown)}
+ */
+let runReopenHook = null;
+export function setRunReopenHook(fn) {
+  runReopenHook = typeof fn === 'function' ? fn : null;
+}
+
+/** Whether this run is being started over now. */
+export function runIsReopening(projectId, runId) {
+  return reopening.has(runUpdateKey(projectId, runId));
+}
+
+/** Rename a folder, retrying while Windows holds a file in it (about 5 s in all, as removeTree). */
+async function renameWithRetries(from, to) {
+  let last = null;
+  for (let i = 0; i < 10; i++) {
+    try {
+      renameSync(from, to);
+      return null;
+    } catch (e) {
+      last = e;
+      if (!['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'].includes(e && e.code)) break;
+      await new Promise((r) => setTimeout(r, 100 * (i + 1)));
+    }
+  }
+  return last;
+}
+
+/**
+ * POST /api/run/reopen: start a stopped or failed run over (runReopen.ts). Its results go now
+ * (asked first: `overwrite: true` when it has any), and it is a draft again that follows its
+ * study's time dependency. Chained on the run's settings updates. A finished run is refused
+ * (its change goes to a new run), and so is one that solves or still stops.
+ * @param {string} projectId
+ * @param {{ run_id?: string, id?: string, simulation_id?: string, overwrite?: boolean, base_rev?: number }} body
+ */
+export function reopenCatalogRun(projectId, body) {
+  const id = projectId || projectIdOrActive('', readActiveId);
+  const runId = body && (body.run_id || body.id);
+  if (!id || !runId) return Promise.resolve({ ok: false, status: 400, error: 'run_id required' });
+  return chainRunUpdate(id, runId, () =>
+    reopenRunNow(id, String(runId), { simulationId: body.simulation_id, overwrite: body.overwrite === true, baseRev: baseRevOf(body) }),
+  );
+}
+
+/**
+ * Start a run over, now: the checks (synchronous, then the run is marked), its case folder
+ * renamed away (all or nothing: a file in use leaves the run as it was), run.json written as a
+ * draft, its queue rows and legacy sidecar gone, then the renamed folder removed.
+ * `insideStart`: its own Start does it (that Start holds the compute slot).
+ * @param {string} id
+ * @param {string} runId
+ * @param {{ simulationId?: string, overwrite?: boolean, baseRev?: number | null, insideStart?: boolean }} [opts]
+ */
+async function reopenRunNow(id, runId, opts = {}) {
+  const found = catalogForRun(id, runId, opts.simulationId);
+  const rec = (found.cat.runs || []).find((r) => String(r.id) === String(runId));
+  if (!rec) return { ok: false, status: 404, error: 'Run not found' };
+  const sid = rec.simulation_id || found.sid;
+  const payload = () => runListPayload(id, loadCatalog(id, { simulation_id: sid }), { simulation_id: sid });
+  const state = runEditState(rec);
+  if (state === 'draft') return { ok: true, reopened: false, run: rec, ...payload() };
+  if (state === 'new_run') return { ok: false, status: 409, code: 'run_finished', error: finishedRefusal(rec) };
+  const key = runUpdateKey(id, runId);
+  if (reopening.has(key)) return { ok: false, status: 409, code: 'reopening', error: 'This run is being started over already.' };
+  const doc = readRunDocFile(id, runId, sid) || rec;
+  const holder = computeSlotHolder();
+  const held =
+    !opts.insideStart &&
+    !!holder &&
+    holder.kind === 'solve' &&
+    String(holder.run_id) === String(runId) &&
+    sameProjectFolder(holder.project_id, id);
+  if (state === 'locked' || held || runnerJobActive(runnerRecordOf(doc))) {
+    const stopping = state !== 'locked' || !!rec.stop_requested || (holder && holder.phase === 'draining');
+    return { ok: false, status: 409, code: stopping ? 'still_stopping' : 'run_running', error: stopping ? STOPPING_REFUSAL : RUNNING_REFUSAL };
+  }
+  const studyTransient = projectIsTransient(id, sid);
+  if (state === 'overwrites' && opts.overwrite !== true) {
+    const w = overwriteWords(rec, { action: opts.insideStart ? 'start' : 'edit', studyTransient });
+    return { ok: false, status: 409, code: 'overwrites_results', error: w.copy, title: w.title, run_id: runId };
+  }
+  if (opts.baseRev !== null && opts.baseRev !== undefined && opts.baseRev !== recordRev(rec)) {
+    const stale = new StaleRecord('run', String(runId), recordRev(rec));
+    return { ...staleBody(stale), status: 409 };
+  }
+  reopening.add(key);
+  try {
+    const inFlight = pendingRunWrites.get(String(runId));
+    if (inFlight) await inFlight;
+    const folder = runFolderOf(id, runId, sid) || runFolderOf(id, runId);
+    if (!folder) return { ok: false, status: 404, error: 'Run not found' };
+    const caseDir = join(folder.dir, 'case');
+    try {
+      if (runReopenHook) await runReopenHook({ project_id: id, run_id: runId, run_dir: folder.dir, case_dir: caseDir });
+    } catch (e) {
+      console.warn('[CFD] run reopen hook', e);
+    }
+    // Moved away first: the switch is all or nothing, and nothing writes into a folder being removed.
+    let moved = null;
+    if (existsSync(caseDir)) {
+      moved = join(folder.dir, 'case.overwritten-' + Date.now().toString(36));
+      const err = await renameWithRetries(caseDir, moved);
+      if (err) {
+        return {
+          ok: false,
+          status: 409,
+          code: 'case_in_use',
+          error: `"${rec.name || 'This run'}" was not started over: a file in its case folder is in use (${(err && err.code) || 'locked'}). Close what has it open, then try again.`,
+        };
+      }
+    }
+    const reset = reopenRunAt(projectDir(id), sid, runId, {
+      timeDependency: studyTransient ? 'Transient' : 'Steady-state',
+      transient: unresolveTransient(rec.transient),
+    });
+    const row = { ...reset };
+    delete row.dir;
+    delete row.folder;
+    try {
+      if (existsSync(runSidecarPath(id, runId))) rmSync(runSidecarPath(id, runId), { force: true });
+    } catch {}
+    // A queued Start or Continue of it would start what is gone.
+    try {
+      removeComputeJob('solve', runId, id);
+    } catch {}
+    // This reset's folder, and any an earlier one left behind.
+    let names = [];
+    try {
+      names = readdirSync(folder.dir).filter((n) => /^case\.overwritten-/.test(n));
+    } catch {}
+    for (const n of names) {
+      try {
+        await removeTree(join(folder.dir, n), { maxRetries: 10, retryDelay: 100 });
+      } catch (e) {
+        console.warn('[CFD] remove overwritten case', e);
+      }
+    }
+    return { ok: true, reopened: true, reopened_at: row.reopened_at, run: row, ...payload() };
+  } finally {
+    reopening.delete(key);
+  }
 }
 
 function loadRunDoc(projectId, runId) {
@@ -1806,6 +2002,9 @@ export function continuePlan(projectId, draft, ask) {
     return { ok: false, status: 409, code: 'not_continuable', error: 'Only a finished or stopped run can continue.' };
   }
   const runId = String(draft.id || draft.run_id || '');
+  if (reopening.has(runUpdateKey(projectId, runId))) {
+    return { ok: false, status: 409, code: 'reopening', error: 'This run is being started over: it has nothing to continue from.' };
+  }
   const doc = readRunDocFile(projectId, runId, draft.simulation_id ? String(draft.simulation_id) : undefined) || draft;
   const caseDir = doc.case_dir || draft.case_dir || (doc.prepare_run && doc.prepare_run.case_dir);
   const times = caseDir ? listSavedTimes(caseDir) : [];
@@ -1814,7 +2013,7 @@ export function continuePlan(projectId, draft, ask) {
       ok: false,
       status: 409,
       code: 'no_saved_time',
-      error: "This run can't continue: its case folder has no saved result. Add a run to solve again.",
+      error: noSavedTimeText(status),
     };
   }
   const from = times[times.length - 1];
@@ -1932,7 +2131,9 @@ export function continuedRunFields(old, cont) {
  *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
  *   startId?: string,
  *   continueRun?: { extra_iterations?: unknown, end_time?: unknown },
- * }} [opts] continueRun: a Continue (continueSolve)
+ *   overwrite?: boolean,
+ * }} [opts] continueRun: a Continue (continueSolve); overwrite: a stopped or failed run with
+ *   results starts over (the person was asked; runReopen.ts)
  */
 
 export async function startSolve(opts = {}) {
@@ -2020,6 +2221,31 @@ async function startSolveBody(opts = {}, slot) {
         fix: { go: 'sim-hub' },
       },
     };
+  }
+  // A stopped or failed run starts over (runReopen.ts): one with results only once asked (the
+  // page and the Assistant start it over first, or send `overwrite`); one with none, quietly.
+  if (!cont && draft && REOPENABLE.includes(String(draft.status || ''))) {
+    const queued = runSettingsUpdates.get(runUpdateKey(id, runId));
+    if (queued) {
+      try {
+        await queued;
+      } catch (_) {}
+    }
+    const r = await reopenRunNow(id, String(runId), {
+      simulationId: draft.simulation_id || simulationId || (found && found.simulation_id),
+      overwrite: opts.overwrite === true,
+      insideStart: true,
+    });
+    if (!r.ok) {
+      const final = r.code === 'overwrites_results' || r.code === 'case_in_use';
+      return {
+        ok: false,
+        status: r.status || 409,
+        bodyExtra: { error: r.error, code: r.code, run_id: runId, ...(r.title ? { title: r.title } : {}), ...(final ? { final: true } : {}), increment: INCREMENT },
+      };
+    }
+    const again = loadCatalog(id, { simulation_id: draft.simulation_id || simulationId || (found && found.simulation_id) });
+    draft = again.runs.find((x) => String(x.id) === String(runId)) || draft;
   }
   // On the runner: its record says whether it still runs; an ended one is written now.
   const draftRunner = draft && (draft.status === 'running' || draft.status === 'starting') ? runnerRecordOf(draft) : null;
@@ -3214,6 +3440,7 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         transient: body.transient,
         simulationId: body.simulation_id || u.searchParams.get('simulation_id'),
         startId: body.start_id,
+        overwrite: body.overwrite === true,
       });
       if (!started.ok) {
         return sendJson(res, started.status, { ok: false, ...(started.bodyExtra || {}) });
@@ -3337,6 +3564,19 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       for (const [k, v] of Object.entries(updated.headers || {})) res.setHeader(k, String(v));
       if (!updated.ok) return sendJson(res, updated.status || 400, updated);
       return sendJson(res, 200, { ok: true, ...updated, increment: INCREMENT });
+    }
+    if (req.method === 'POST' && b === 'reopen') {
+      // Start a stopped or failed run over: its results go now (runReopen.ts).
+      let body = {};
+      try {
+        body = (await readJsonBody(req)) || {};
+      } catch {
+        body = {};
+      }
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
+      const reopened = await reopenCatalogRun(id, body);
+      if (!reopened.ok) return sendJson(res, reopened.status || 400, { ...reopened, increment: INCREMENT });
+      return sendJson(res, 200, { ...reopened, increment: INCREMENT });
     }
     if (req.method === 'POST' && b === 'delete') {
       let body = {};

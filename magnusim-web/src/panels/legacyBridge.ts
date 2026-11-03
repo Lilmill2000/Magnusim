@@ -267,8 +267,19 @@ export interface RunState {
   name: string;
   status: string;
   transient: boolean;
-  /** Started or finished runs keep their settings. */
+  /**
+   * Its settings can't change in place now: it solves or stops, or it finished (a finished
+   * run keeps its results). A stopped or failed run is not locked.
+   */
   locked: boolean;
+  /**
+   * What a change of its solve settings does (runReopen.ts): `draft` saves it; `free` (a
+   * stopped or failed run with nothing saved) makes it a draft again; `overwrites` (one with
+   * results) asks first, then deletes them; `new_run` (a finished run, locked) asks to make a
+   * new run with its settings and the change, so its solve fields stay usable; `locked`
+   * (solving or stopping) refuses. Absent in a state published before it existed.
+   */
+  edit?: 'draft' | 'free' | 'overwrites' | 'new_run' | 'locked';
   running: boolean;
   done: boolean;
   can_start: boolean;

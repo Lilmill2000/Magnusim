@@ -490,7 +490,8 @@ describe('the end', () => {
     assert.ok(existsSync(join(caseOf(rid), '.magnusim-run.json')));
     writeFileSync(join(caseOf(rid), '.magnusim-ran'), JSON.stringify({ job_id: doc.runner_job_id, token: 'old00000' }));
     const before = fx.spawned.length;
-    const { out } = await start(rid);
+    // Its results are deleted by the Start: the person was asked (runReopen.ts).
+    const { out } = await start(rid, { overwrite: true });
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     assert.equal(fx.spawned.length, before + 1);
     // The relay files of the last attempt were gone before this one was spawned.
@@ -610,5 +611,164 @@ describe('Delete a run', () => {
     assert.equal(existsSync(dir), false);
     assert.equal(w27.getRunStatus(PID, rid, SID).body.runs?.some((r) => r.id === rid) ?? false, false);
     await reader.done;
+  });
+});
+
+describe('A stopped or failed run started over (runReopen.ts)', () => {
+  /** A run solved two steps with a frame saved at 50, stopped (its stop ended). */
+  async function stoppedWithFrame() {
+    const rid = draftRun();
+    const { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    relay([{ event: 'stage', stage: 'solve' }, ...step(1), ...step(2)]);
+    saveFrame(rid, 50);
+    relay([{ event: 'time_saved', t: 50 }]);
+    w27.stopSolve({ projectId: PID, runId: rid });
+    writeStatus(rid, { outcome: { ok: false, phase: 'solve', stopped: true, exit_code: 0 }, clean: true, exit_code: 0, n_procs: 1 });
+    const spawn = fx.spawned[fx.spawned.length - 1];
+    spawn.onExit(0);
+    spawn.onClose();
+    const doc = runDoc(rid);
+    assert.deepEqual([doc.status, doc.has_results, doc.n_saved_times], ['stopped', true, 1]);
+    assert.equal(slot.computeSlotHolder(), null);
+    return rid;
+  }
+  const queued = (rid) => queue.snapshotComputeQueue(PID).items.some((r) => String(r.run_id) === rid);
+
+  it('a change of its solve settings without overwrite is refused with the words; the run, its frames and its queue row stay; a free setting saves', async () => {
+    const rid = await stoppedWithFrame();
+    assert.equal(queue.enqueueComputeJob({ kind: 'solve', run_id: rid, simulation_id: SID, project_id: PID, mesh_id: MID }).ok, true);
+    const rev = runDoc(rid).rev;
+    const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, endTime: 200 });
+    assert.deepEqual([out.ok, out.status, out.code], [false, 409, 'overwrites_results']);
+    assert.equal(
+      out.error,
+      `Changing this setting starts "${runDoc(rid).name}" over. Its results (1 saved, up to iteration 50) are deleted now, and Start solves it again from the beginning. To keep them, cancel and add a run, or use Continue to go on from iteration 50.`,
+    );
+    const doc = runDoc(rid);
+    assert.deepEqual([doc.status, doc.endTime, doc.has_results, doc.rev], ['stopped', 100, true, rev]);
+    assert.ok(existsSync(join(caseOf(rid), '50')));
+    assert.equal(queued(rid), true);
+    // Cores is a free setting: Continue uses it, so it saves and deletes nothing.
+    const cores = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, cores: 2 });
+    assert.equal(cores.ok, true, JSON.stringify(cores));
+    assert.equal(cores.reopened, undefined);
+    assert.deepEqual([runDoc(rid).status, runDoc(rid).cores], ['stopped', 2]);
+    assert.ok(existsSync(join(caseOf(rid), '50')));
+    // Start says the same, and leaves it as it ended (a queued row of it leaves the queue: final).
+    const started = await start(rid);
+    assert.deepEqual([started.out.status, started.out.bodyExtra.code, started.out.bodyExtra.final], [409, 'overwrites_results', true]);
+    assert.match(started.out.bodyExtra.error, /^Its results \(1 saved, up to iteration 50\) are deleted, and it solves again from the beginning\./);
+    assert.equal(runDoc(rid).status, 'stopped');
+    assert.equal(slot.computeSlotHolder(), null);
+  });
+
+  it('with overwrite it is a draft at once: its case folder, results and queue rows go; its settings stay; nothing to continue', async () => {
+    const rid = await stoppedWithFrame();
+    queue.enqueueComputeJob({ kind: 'solve', run_id: rid, simulation_id: SID, project_id: PID, mesh_id: MID, settings: { continue: { extra_iterations: 10 } } });
+    const before = runDoc(rid);
+    const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, endTime: 200, cores: 3, overwrite: true });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.reopened, true);
+    const doc = runDoc(rid);
+    assert.deepEqual(
+      [doc.status, doc.endTime, doc.writeInterval, doc.cores, doc.mesh_id, doc.has_results, doc.n_saved_times, doc.last_saved_iteration, doc.residuals],
+      ['draft', 200, 50, 3, MID, false, 0, 0, []],
+    );
+    for (const k of ['note', 'runner_job_id', 'iteration', 'n_steps', 'started_at', 'finished_at', 'prepare_run', 'launch', 'built_from', 'continued']) {
+      assert.equal(doc[k], undefined, `${k} is gone`);
+    }
+    assert.equal(typeof doc.reopened_at, 'string');
+    assert.ok((doc.rev || 0) > (before.rev || 0), 'its rev moved');
+    assert.equal(existsSync(caseOf(rid)), false, 'its case folder is gone');
+    const left = (await import('node:fs')).readdirSync(io.runFolderOf(PID, rid, SID).dir).filter((n) => n.startsWith('case'));
+    assert.deepEqual(left, [], 'nothing of the old case is left');
+    assert.equal(queued(rid), false, 'its queue row went');
+    const row = w27.getRunStatus(PID, rid, SID).body.runs.find((r) => r.id === rid);
+    assert.deepEqual([row.status, row.has_results, row.reopened_at], ['draft', false, doc.reopened_at]);
+    // Continue has nothing to go on from now.
+    const c = await w27.continueSolve({ projectId: PID, runId: rid, simulationId: SID, extraIterations: 10 });
+    assert.deepEqual([c.status, c.bodyExtra.code], [409, 'not_continuable']);
+    // A draft: later changes save as any draft's.
+    const later = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, writeInterval: 25 });
+    assert.deepEqual([later.ok, later.reopened, runDoc(rid).writeInterval], [true, undefined, 25]);
+  });
+
+  it('POST /api/run/reopen: asks for overwrite, checks the rev, and refuses a finished or solving run', async () => {
+    const rid = await stoppedWithFrame();
+    let out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID });
+    assert.deepEqual([out.status, out.code, out.title], [409, 'overwrites_results', `Overwrite "${runDoc(rid).name}"?`]);
+    const rev = runDoc(rid).rev || 0;
+    out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true, base_rev: rev + 5 });
+    assert.deepEqual([out.status, out.code], [409, 'stale_record']);
+    assert.equal(runDoc(rid).status, 'stopped');
+    out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true, base_rev: rev });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual([out.reopened, out.run.status], [true, 'draft']);
+    // A draft: nothing to do.
+    out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true });
+    assert.deepEqual([out.ok, out.reopened], [true, false]);
+    const done = draftRun({ status: 'done', has_results: true, n_saved_times: 2 });
+    out = await w27.reopenCatalogRun(PID, { run_id: done, simulation_id: SID, overwrite: true });
+    assert.deepEqual([out.status, out.code], [409, 'run_finished']);
+    assert.equal(runDoc(done).status, 'done');
+  });
+
+  it("a finished run's solve settings are refused (a new run takes them); a running run's too; their free settings save", async () => {
+    const done = draftRun({ status: 'done', has_results: true, n_saved_times: 2, name: 'Finished' });
+    let out = await w27.updateRunSettings(PID, { run_id: done, simulation_id: SID, endTime: 300, overwrite: true });
+    assert.deepEqual([out.status, out.code, out.error], [409, 'run_finished', '"Finished" has finished and its results stay as they are: a change of its settings goes to a new run with the same settings.']);
+    assert.equal(runDoc(done).endTime, 100);
+    out = await w27.updateRunSettings(PID, { run_id: done, simulation_id: SID, name: 'Finished again', result_controls: [] });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    const live = draftRun();
+    await start(live);
+    out = await w27.updateRunSettings(PID, { run_id: live, simulation_id: SID, endTime: 300, overwrite: true });
+    assert.deepEqual([out.status, out.code], [409, 'run_running']);
+    out = await w27.updateRunSettings(PID, { run_id: live, simulation_id: SID, name: 'Renamed while it runs' });
+    assert.equal(out.ok, true, JSON.stringify(out));
+  });
+
+  it('refused while its stop still drains: the slot still holds it', async () => {
+    const rid = await stoppedWithFrame();
+    const claim = slot.claimComputeSlot('solve', { project_id: PID, run_id: rid, name: 'drain' }, { phase: 'draining' });
+    assert.equal(claim.ok, true);
+    try {
+      const out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true });
+      assert.deepEqual([out.status, out.code, out.error], [409, 'still_stopping', 'This run is still stopping. Its settings can change once it has stopped.']);
+      const up = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, endTime: 200, overwrite: true });
+      assert.deepEqual([up.status, up.code], [409, 'still_stopping']);
+      assert.deepEqual([runDoc(rid).status, existsSync(join(caseOf(rid), '50'))], ['stopped', true]);
+    } finally {
+      slot.releaseComputeSlot(claim.token);
+    }
+  });
+
+  it('a file of its case in use: nothing changes, and the refusal says so', { skip: WINDOWS_ONLY }, async () => {
+    const rid = await stoppedWithFrame();
+    const before = readFileSync(join(io.runFolderOf(PID, rid, SID).dir, 'run.json'), 'utf8');
+    const reader = await holdOpen(join(caseOf(rid), '50', 'U'), 9000);
+    const out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true });
+    assert.deepEqual([out.status, out.code], [409, 'case_in_use']);
+    assert.match(out.error, /was not started over: a file in its case folder is in use/);
+    assert.equal(readFileSync(join(io.runFolderOf(PID, rid, SID).dir, 'run.json'), 'utf8'), before, 'run.json as it was');
+    assert.ok(existsSync(join(caseOf(rid), '50', 'U')));
+    await reader.done;
+  });
+
+  it('a stopped run with nothing saved starts over quietly at Start: its study\'s mode, the worked-out time step blank again', async () => {
+    const rid = draftRun({
+      status: 'stopped',
+      time_dependency: 'Transient',
+      note: 'Run stopped before the first saved iteration.',
+      transient: { end_time: 1, write_count: 10, delta_t: 0.001, max_delta_t: 0.1, source: { delta_t: 'auto', max_delta_t: 'user' }, estimate: { cells: 8 } },
+    });
+    const { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    const doc = runDoc(rid);
+    assert.equal(doc.time_dependency, 'Steady-state', 'its study is Steady-state');
+    assert.deepEqual([doc.transient.delta_t, doc.transient.max_delta_t, doc.transient.source, doc.transient.estimate], [null, 0.1, undefined, undefined]);
+    assert.equal(typeof doc.reopened_at, 'string');
+    assert.equal(doc.status, 'running');
   });
 });

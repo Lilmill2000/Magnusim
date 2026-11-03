@@ -21,7 +21,7 @@ import {
 } from '../w21-mesh-generate.js';
 import { handleW26Api } from '../w26-mesh-refinements.js';
 import { handleResultControlsApi } from '../w22-area-average.js';
-import { handleW27Api, startQueuedSolve, startSolve } from '../w27-solve.js';
+import { handleW27Api, setRunReopenHook, startQueuedSolve, startSolve } from '../w27-solve.js';
 import { scheduleWslPrune } from '../wsl-prune.js';
 import { computeSlotHolder, holderIsRow, setSlotReleaseHook } from '../compute-slot.js';
 import { rediscoverAtBoot } from '../compute-rediscover.js';
@@ -149,6 +149,31 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
   attachLiveMeshJobReader(liveMeshJobSnapshot);
   attachActiveProjectListener(api.syncActiveCaseToActiveProject);
   wireComputeQueue(api);
+  // A run started over (POST /api/run/reopen, a setting change, Start): before its case folder
+  // moves away, the Results view lets go of a case under it, and its mesh-surface cache goes.
+  setRunReopenHook(async ({ run_dir, case_dir }) => {
+    const active = api.caseSnapshot().case_dir;
+    if (active) {
+      const a = resolve(active).toLowerCase();
+      const p = resolve(run_dir).toLowerCase();
+      if (a === p || a.startsWith(`${p}\\`) || a.startsWith(`${p}/`)) {
+        api.resetActiveCaseIdle('Run started over');
+        try {
+          await api.releaseVolume();
+        } catch {
+          /* worker may already be idle */
+        }
+      }
+    }
+    try {
+      const vtp = api.meshSurfaceCacheKey(case_dir);
+      const meta = vtp.replace(/\.vtp$/i, '.meta.json');
+      if (existsSync(vtp)) rmSync(vtp, { force: true });
+      if (existsSync(meta)) rmSync(meta, { force: true });
+    } catch {
+      /* ignore */
+    }
+  });
   // Jobs a previous server left running hold the slot before the first request is served.
   try {
     void rediscoverAtBoot();

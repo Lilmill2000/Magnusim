@@ -260,12 +260,22 @@ export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
   // ---------------------------------------------------------------- setup_edit: runs, monitors, saved views
   'run.create': write('/api/run/create', (a) => ({ project_id: str(a.project_id), simulation_id: str(a.simulation_id), name: str(a.name), mesh_id: opt(str(a.mesh_id)) })),
   // `changes`: run settings keys as the route takes them (camelCase), checked by setup_edit.
+  // `overwrite` (never inside changes): the person allowed starting a stopped run over.
   'run.update': write('/api/run/update', (a) => ({
     ...obj(a.changes),
     project_id: str(a.project_id),
     simulation_id: str(a.simulation_id),
     run_id: str(a.run_id),
+    overwrite: a.overwrite === true ? true : undefined,
     geometry_rev: opt(a.geometry_rev as number),
+    base_rev: opt(a.base_rev as number),
+  })),
+  // Start a stopped or failed run over (runReopen.ts): its results go now.
+  'run.reopen': write('/api/run/reopen', (a) => ({
+    project_id: str(a.project_id),
+    simulation_id: str(a.simulation_id),
+    run_id: str(a.run_id),
+    overwrite: a.overwrite === true ? true : undefined,
     base_rev: opt(a.base_rev as number),
   })),
   'run.activate': write('/api/run/activate', (a) => ({ project_id: str(a.project_id), run_id: str(a.run_id), simulation_id: str(a.simulation_id) })),

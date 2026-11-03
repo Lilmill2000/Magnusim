@@ -205,6 +205,21 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
     await f.fill(String(value));
     await f.press('Enter');
   };
+  // A change of a stopped run's solve setting, or its Start, asks first when the run has
+  // results (runReopen.ts: Overwrite "Run …"? / Start "Run …" over?). Whether a run stopped
+  // with a frame or a step is timing; the question, when it comes, is answered yes.
+  const overwriteIfAsked = async () => {
+    const modal = page.locator('#modal-confirm');
+    try {
+      await modal.waitFor({ state: 'visible', timeout: 5_000 });
+    } catch {
+      return false;
+    }
+    await expect(page.locator('#cf-heading')).toHaveText(/^(Overwrite ".*"\?|Start ".*" over\?)$/);
+    await page.locator('#cf-confirm').click();
+    await expect(modal).toBeHidden();
+    return true;
+  };
   const waitStatus = async (rid, want, timeout) => {
     await expect
       .poll(
@@ -317,17 +332,16 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await waitSlotFree(request);
   stage(t0, 'run A stopped');
 
-  // Switch the study to Steady-state. Run A solved Transient, so it stays Transient
-  // (the panel says so) and a restart solves that: case, launch and panel agree.
+  // Switch the study to Steady-state. Run A solved Transient: the panel says Start or a change
+  // solves Steady-state in it (Daniel, 2026-11-03: a stopped run can be changed once asked,
+  // and it follows its study then), and still offers the other mode as a new run.
   const panel2 = await openStudyPanel(page, SIM);
   await panel2.getByLabel('Time dependency').selectOption('Steady-state');
   await expect.poll(async () => (await getJson(request, simUrl(SIM))).simulation?.analysis_type).toBe('incompressible_steady');
   await openRun(runA);
   await expect(runPanel.locator('[data-run-transient]')).toBeVisible();
-  // It says so, and offers the study's other mode as a new run (decided with
-  // Daniel 2026-09-29: a started run keeps its mode; the toggle is for new runs).
   const reason = runPanel.locator('[data-run-reason="1"]');
-  await expect(reason).toContainText('This run solved Transient, so a restart continues Transient. Add a run to solve Steady-state.');
+  await expect(reason).toContainText('This run solved Transient; its study is now Steady-state. Start or a settings change solves Steady-state in this run');
   await expect(runPanel.locator('[data-run-start]')).toBeEnabled();
   const runsBefore = new Set((await runs()).map((r) => String(r.id)));
   await reason.getByRole('button', { name: 'Add run' }).click();
@@ -344,21 +358,28 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await expect.poll(async () => (await runRow(added)).time_dependency).toBe('Steady-state');
   await request.post('/api/run/delete', { data: { project_id: PROJECT, simulation_id: SIM, run_id: added } });
   stage(t0, 'stopped transient run offers a Steady-state run');
+  // A change starts run A over (asked first when it has results): it is a Steady-state draft
+  // now, as its study, and solves that.
   await openRun(runA);
   await expect(runPanel.locator('[data-run-transient]')).toBeVisible();
   await setField('Simulation time', sig4(dt * 10));
-  await setField('Result frames', 1);
+  await overwriteIfAsked();
+  await expect.poll(async () => (await runRow(runA)).time_dependency).toBe('Steady-state');
+  await expect(runPanel.locator('[data-run-mode="1"]')).toHaveText('Steady-state');
+  await expect(runPanel.locator('[data-run-transient]')).toHaveCount(0);
+  await setField('Iterations', 10);
+  await setField('Write interval', 5);
   await runPanel.locator('[data-run-start]').click();
   await waitStatus(runA, /^done$/, 900_000);
-  expect(controlDict(runA).application).toBe('pimpleFoam');
-  // The case solves the simulation time typed for the restart.
-  expect(sig4(controlDict(runA).endTime)).toBe(sig4(dt * 10));
-  expect((await runRow(runA)).path_kind).toBe('pimpleFoam');
+  expect(controlDict(runA).application).toBe('simpleFoam');
+  expect(controlDict(runA)).toMatchObject({ endTime: 10, writeInterval: 5 });
+  expect((await runRow(runA)).path_kind).toBe('simpleFoam');
   expect((await runRow(runA)).status).toBe('done');
-  stage(t0, 'run A restarted after the switch: pimpleFoam, done');
+  stage(t0, 'run A started over after the switch: simpleFoam, done');
 
   // Run B: new after the switch, so Steady-state. Stop it, switch the study back to
-  // Transient, restart: it stays Steady-state (simpleFoam) and completes.
+  // Transient, Start: it starts over (asked first when it has results) as Transient, as its
+  // study is now (pimpleFoam), and completes.
   const runB = await createRun('H7 steady');
   await openRun(runB);
   await expect(runPanel.locator('[data-run-transient]')).toHaveCount(0);
@@ -378,15 +399,20 @@ test('gate:h7-restart-after-toggle and gate:h7-dt-preview-matches-case', async (
   await expect.poll(async () => (await getJson(request, simUrl(SIM))).simulation?.analysis_type).toBe('incompressible_transient');
   await openRun(runB);
   await expect(runPanel.locator('[data-run-transient]')).toHaveCount(0);
+  await expect(runPanel.locator('[data-run-reason="1"]')).toContainText('This run solved Steady-state; its study is now Transient.');
+  // A change starts it over as Transient: the transient fields, then a short solve.
   await setField('Iterations', 10);
-  await setField('Write interval', 5);
+  await overwriteIfAsked();
+  await expect.poll(async () => (await runRow(runB)).time_dependency).toBe('Transient');
+  await expect(runPanel.locator('[data-run-transient]')).toBeVisible();
+  await setField('Simulation time', sig4(dt * 10));
+  await setField('Result frames', 1);
   await runPanel.locator('[data-run-start]').click();
   await waitStatus(runB, /^done$/, 900_000);
-  expect(controlDict(runB).application).toBe('simpleFoam');
-  // The iterations typed for the restart, not the 5000 it first ran with.
-  expect(controlDict(runB)).toMatchObject({ endTime: 10, writeInterval: 5 });
-  expect((await runRow(runB)).path_kind).toBe('simpleFoam');
-  stage(t0, 'run B restarted after the switch back: simpleFoam, done');
+  expect(controlDict(runB).application).toBe('pimpleFoam');
+  expect(sig4(controlDict(runB).endTime)).toBe(sig4(dt * 10));
+  expect((await runRow(runB)).path_kind).toBe('pimpleFoam');
+  stage(t0, 'run B started over after the switch back: pimpleFoam, done');
 
   // Run C: a draft (never started) follows its study. Made while the study is
   // Transient, it becomes Steady-state when the study is switched, and solves that.

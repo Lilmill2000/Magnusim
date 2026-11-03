@@ -78,6 +78,42 @@ afterEach(() => {
 const renderPanel = () => render(<RunControl panelId="panel-sim-control" scope="p:proj/s:sim_1" />);
 
 describe('run settings', () => {
+  // A run that ended (runReopen.ts): the core asks before a change, so the fields stay usable.
+  it("a finished run (edit new_run): its solve fields stay usable and save through the core; a running run's are off", async () => {
+    window.__CFD_RUN_STATE__ = runState({ status: 'done', done: true, locked: true, edit: 'new_run' });
+    renderPanel();
+    const it = screen.getByLabelText('Iterations');
+    expect(it).toBeEnabled();
+    expect(screen.getByLabelText('Write interval')).toBeEnabled();
+    fireEvent.change(it, { target: { value: '300' } });
+    fireEvent.blur(it);
+    await waitFor(() => expect(window.__CFD_RUN_SAVE__).toHaveBeenCalledWith({ end_time: 300 }));
+    cleanup();
+    window.__CFD_RUN_STATE__ = runState({ status: 'running', running: true, locked: true, edit: 'locked' });
+    renderPanel();
+    expect(screen.getByLabelText('Iterations')).toBeDisabled();
+    cleanup();
+    // A state from before `edit`: locked is locked.
+    window.__CFD_RUN_STATE__ = runState({ status: 'done', done: true, locked: true });
+    renderPanel();
+    expect(screen.getByLabelText('Iterations')).toBeDisabled();
+  });
+
+  it('a finished transient run (edit new_run): its transient fields stay usable', () => {
+    window.__CFD_RUN_STATE__ = runState({
+      status: 'done',
+      done: true,
+      locked: true,
+      edit: 'new_run',
+      transient: true,
+      analysis_key: 'incompressible_transient',
+      transient_settings: { ...TRANSIENT_DEFAULTS },
+    });
+    renderPanel();
+    expect(screen.getByLabelText('Simulation time')).toBeEnabled();
+    expect(screen.getByLabelText('Result frames')).toBeEnabled();
+  });
+
   it('steady: iterations and write interval, saved as whole numbers', async () => {
     window.__CFD_RUN_STATE__ = runState();
     renderPanel();

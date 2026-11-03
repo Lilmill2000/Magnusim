@@ -2,7 +2,11 @@
  * The run panel's settings: a steady run's iterations and write interval, or a
  * transient run's simulation time, result frames, the calculated time step
  * (hint) and the advanced PIMPLE settings; for either, "Stop when a monitor
- * settles" (settle.ts). Locked once the run has started.
+ * settles" (settle.ts). Locked while the run solves or stops. A finished run's
+ * solve fields stay usable (run.edit 'new_run': the core asks, and the change goes
+ * to a new run); its stop is shown read-only. On a stopped run the core asks before
+ * a change starts it over; a change the person cancels is not saved, and the fields
+ * show the run's values again.
  */
 import { useEffect, useState } from 'react';
 import type { RunSettingsProps } from '../../../src/plugin-api';
@@ -20,6 +24,9 @@ import {
   type SettleSetting,
 } from './settle';
 import { frameInterval, normalizeTransient, transientHint, type TransientSettings } from './transient';
+
+/** The run's solve fields can't change now (it solves or stops); a finished run's change goes to a new run. */
+const solveLocked = (run: RunState) => run.locked && run.edit !== 'new_run';
 
 function NumberRow({
   label,
@@ -305,7 +312,7 @@ function TransientFields({
   saveSettle: RunSettingsProps['saveSettle'];
 }) {
   const t = normalizeTransient(run.transient_settings, {}, defaults);
-  const locked = run.locked;
+  const locked = solveLocked(run);
   const fixed = t.time_step_mode === 'fixed';
   const save = (patch: Partial<TransientSettings>) =>
     void saveTransient({ ...normalizeTransient({ ...t, ...patch }, t, defaults) });
@@ -433,7 +440,8 @@ function TransientFields({
           disabled={locked}
           onCommit={(v) => v != null && save({ n_non_orth_correctors: Math.round(v) })}
         />
-        {!locked ? (
+        {/* Not on a finished run: its change goes to a new run, field by field. */}
+        {!run.locked ? (
           <button
             type="button"
             className="mat-clear-link sim-tr-reset"
@@ -466,14 +474,14 @@ export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }:
         label="Iterations"
         title="SIMPLE iteration count. Not seconds — this is a steady run (deltaT = 1)."
         value={run.settings.end_time}
-        disabled={run.locked}
+        disabled={solveLocked(run)}
         onCommit={(v) => v != null && void saveSteady({ end_time: Math.max(1, Math.round(v)) })}
       />
       <NumberRow
         label="Write interval"
         title="Write a results folder every N iterations"
         value={run.settings.write_interval}
-        disabled={run.locked}
+        disabled={solveLocked(run)}
         onCommit={(v) => v != null && void saveSteady({ write_interval: Math.max(1, Math.round(v)) })}
       />
       <SettleStop run={run} saveSettle={saveSettle} frame={0} />

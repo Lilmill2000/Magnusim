@@ -12,8 +12,10 @@
  *   queue_kick          POST /api/compute-queue/kick (starts only what is already queued)
  *
  * Every call but queue_kick asks first (a compute card); a declared `chain` lets one card
- * cover the later steps (C3, §7.2). Continuing a converged run and generating a generated
- * mesh again ask as destructive. Writes go only to the project open in the turn's window.
+ * cover the later steps (C3, §7.2). Continuing a converged run, generating a generated
+ * mesh again and starting a stopped or failed run with results over (runReopen.ts: they are
+ * deleted first, POST /api/run/reopen) ask as destructive. Writes go only to the project open
+ * in the turn's window.
  */
 import type { GateDetail } from '../gates.ts';
 import { HostCallError } from '../host-call.ts';
@@ -39,6 +41,14 @@ import {
 } from './job-common.ts';
 import { jobIdOf, parseJobId, type JobKind } from './job-state.ts';
 import { rememberJob } from './turn-jobs.ts';
+import { overwriteWords, runEditState } from '../../../../src/workbench/runReopen.ts';
+
+/**
+ * The run_start calls whose card asked to start a stopped or failed run over (its results
+ * deleted first), by call, with the card's title: only those start it over. Another reaches
+ * the route's refusal, and asks when the model tries again.
+ */
+const startOverAsked = new WeakMap<Record<string, unknown>, string>();
 
 export const COMPUTE_ACTIONS = ['mesh_generate', 'run_start', 'run_continue', 'vtk_export', 'hardware_check', 'plugin_env_install', 'queue_kick'] as const;
 type Action = (typeof COMPUTE_ACTIONS)[number];
@@ -155,7 +165,15 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       let step = ref.job_id;
       try {
         if (ref.kind === 'mesh') step = `Generate ${quoted(text((await meshOf(projectId, simId, ref.id, rt))?.name) || ref.id)}`;
-        else if (ref.kind === 'solve') step = `Start ${quoted((await runOf(projectId, simId, ref.id, rt))?.name || ref.id)}`;
+        else if (ref.kind === 'solve') {
+          const found = await runOf(projectId, simId, ref.id, rt);
+          step = `Start ${quoted(found?.name || ref.id)}`;
+          // Starting it deletes its results: that start asks on its own (a grant never covers it).
+          if (found && runEditState(found.run) === 'overwrites') {
+            steps.push(`${step} over, which asks first: its results are deleted`);
+            continue;
+          }
+        }
       } catch {
         step = ref.job_id;
       }
@@ -249,6 +267,13 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       const found = await runOf(projectId, study.id, str(input.run_id), rt);
       if (!found) return plain;
       const { run, name } = found;
+      if (action === 'run_start' && runEditState(run) === 'overwrites') {
+        // A stopped or failed run with results: started over, its results deleted first (the
+        // person's Start asks the same).
+        const w = overwriteWords(run, { action: 'start', studyTransient: study.transient, assistant: true });
+        startOverAsked.set(input, w.title);
+        return withChain({ risk: 'destructive', note: w.copy, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Start ${quoted(name)} over`, steps, labels);
+      }
       if (action === 'run_continue' && runConverged(run)) {
         return withChain({ risk: 'destructive', note: `${name} has converged; continuing changes its results.`, detail: [{ label: 'Run', value: name }] }, `Continue ${quoted(name)}`, steps, labels);
       }
@@ -300,7 +325,10 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     const name = a?.detail.find((d) => d.label === 'Mesh' || d.label === 'Run')?.value ?? '';
     let title = 'Allow the Assistant to start a computation?';
     const named = chained && !!a?.labels && Object.keys(a.labels).length > 0;
-    if (a?.risk === 'destructive') {
+    if (a?.risk === 'destructive' && action === 'run_start') {
+      const asked = startOverAsked.get(input) || `Allow the Assistant to start ${quoted(name || 'the run')} over?`;
+      title = named ? `${asked.replace(/\?$/, '')}, and the steps after it?` : asked;
+    } else if (a?.risk === 'destructive') {
       title =
         action === 'run_continue'
           ? `Allow the Assistant to continue ${quoted(name || 'the run')} past convergence${named ? ', and the steps after it' : ''}?`
@@ -394,6 +422,16 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
         return failedCall(err);
       }
     }
+    // The person allowed starting it over (its card): its results go first, then it starts (or
+    // queues) as a draft.
+    if (!cont && startOverAsked.has(input)) {
+      try {
+        await call('run.reopen', { project_id: projectId, simulation_id: study.id, run_id: runId, overwrite: true, base_rev: typeof run.rev === 'number' ? run.rev : undefined }, o(rt));
+      } catch (err) {
+        return failedCall(err);
+      }
+      emitSync(deps, rt, { project_id: projectId, simulation_id: study.id, kinds: ['runs', 'tree'], ids: { run: [runId] }, revs: {}, tool: 'compute.run_start' });
+    }
     const startId = `ai-${newId()}`;
     const remember = (state: 'running' | 'queued') => started({ kind: 'solve', id: runId, name, project_id: projectId, simulation_id: study.id }, rt.turn, state);
     const sync = () => emitSync(deps, rt, { project_id: projectId, simulation_id: study.id, kinds: ['runs'], ids: { run: [runId] }, revs: {}, tool: `compute.${cont ? 'run_continue' : 'run_start'}` });
@@ -444,6 +482,9 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       }
       if (err instanceof HostCallError && err.code === 'aborted') {
         return fail('stopped', `Stopped while ${name} was starting; it may or may not have started.`, `Check with wait {job_ids:["solve.${runId}"]}.`);
+      }
+      if (err instanceof HostCallError && code === 'overwrites_results') {
+        return fail('overwrites_results', cleanText(err.message, 400), 'Starting it deletes its results: call compute run_start again, and the person is asked first.');
       }
       const out = failedCall(err);
       if (out.error && err instanceof HostCallError && err.status === 400) out.error.code = 'not_ready';

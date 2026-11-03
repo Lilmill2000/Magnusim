@@ -96,14 +96,14 @@ export function readProject(input: Record<string, unknown>, ctx: ToolCtx): strin
 }
 
 /** The study a call means (§2.3): the given one, else the one shown, else the project's active study. */
-export async function studyFor(call: JsonCall, projectId: string, input: Record<string, unknown>, rt: ToolRunContext): Promise<{ id: string; name: string; geometryId: string } | null> {
+export async function studyFor(call: JsonCall, projectId: string, input: Record<string, unknown>, rt: ToolRunContext): Promise<{ id: string; name: string; geometryId: string; transient: boolean } | null> {
   const asked = str(input.simulation_id) || rt.ctx.simulationId || '';
   const doc = await call('simulation.get', { project_id: projectId, simulation_id: asked }, { signal: rt.signal, turn: rt.turn });
   const list = rows(doc.simulations);
   const id = asked || text(doc.active_id, 80) || (isRecord(doc.simulation) ? text(doc.simulation.id, 80) : '');
   const row = list.find((s) => String(s.id) === id) ?? (isRecord(doc.simulation) && String(doc.simulation.id) === id ? doc.simulation : null);
   if (!row) return null;
-  return { id, name: text(row.name) || id, geometryId: text(row.geometry_id, 80) };
+  return { id, name: text(row.name) || id, geometryId: text(row.geometry_id, 80), transient: /transient/i.test(str(row.time_dependency)) };
 }
 
 /** The project's title for a card ("Wing"), or its id. */

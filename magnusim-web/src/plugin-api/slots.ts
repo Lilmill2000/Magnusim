@@ -32,7 +32,13 @@ export interface StudySettingsProps {
   setTimeDependency: (value: TimeDependency) => Promise<void>;
 }
 
-/** What a run-settings component gets. Settings are locked once a run has started. */
+/**
+ * What a run-settings component gets. `run.locked`: its settings can't change now (solving or
+ * stopping, or finished). A finished run's solve fields stay usable when `run.edit` is
+ * `new_run`: the core asks, and a change goes to a new run with the same settings. On a
+ * stopped or failed run the core asks before a change starts it over, and a save the person
+ * cancels resolves without saving: the fields show `run` again.
+ */
 export interface RunSettingsProps {
   run: RunState;
   /** The run's analysis row (registry.describe). */
