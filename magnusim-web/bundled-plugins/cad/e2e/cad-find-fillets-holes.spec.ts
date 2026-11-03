@@ -35,10 +35,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { baseUrl, ensureCadOn, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { baseUrl, ensureCadOn, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, tempFilesRemovedAfterEach, watchPage, workspaceFrame } from './helpers';
 import { importRoundedBlock, voidBlockInPage } from './rounded-block';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
@@ -278,7 +279,7 @@ test('cad:find-fillets-holes-limits on a STEP part of 2,739 faces (between the t
     for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
     return btoa(bin);
   });
-  const file = join(tmpdir(), `cad-e2e-limits-${process.pid}-${Date.now()}.step`);
+  const file = tempFile(`cad-e2e-limits-${process.pid}-${Date.now()}.step`);
   writeFileSync(file, Buffer.from(b64, 'base64'));
   const chooser = page.waitForEvent('filechooser');
   await frame.locator('[data-cad-toolbar] [data-command="file.import-step"]').click();

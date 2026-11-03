@@ -3,6 +3,9 @@
 // from the page and the frame. Owner: INTEGRATE (builders may add helpers at the end).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test';
+import { existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 export function baseUrl(): string {
   const b = process.env.CAD_E2E_BASE_URL;
@@ -911,4 +914,31 @@ export function putLookBackAfterSerialTests(): void {
     for (const p of page.context().pages()) await p.close();
     await saveLook(request, 'light');
   });
+}
+
+/**
+ * Call once at the top of a spec that writes files into the OS temp folder (a STEP part made in
+ * the page, then imported): it gives the path for such a file, and after each test the files it
+ * gave that test are removed (one never written is fine). It is an afterEach hook because
+ * Playwright runs those after a failed test and after a timed-out one; after a timeout, a finally
+ * in the test does not run (the test is left running). The page is closed first, so a test left
+ * running stops at its next step instead of writing its file after the removal. After the spec,
+ * every path it gave is checked gone (each such run left 3 to 4 MB in the temp folder).
+ */
+export function tempFilesRemovedAfterEach(): (name: string) => string {
+  const given: string[] = [];
+  const thisTest: string[] = [];
+  test.afterEach(async ({ page }) => {
+    await page.close();
+    for (const f of thisTest.splice(0)) rmSync(f, { force: true });
+  });
+  test.afterAll(() => {
+    expect(given.filter((f) => existsSync(f)), 'temp files this spec wrote, left behind').toEqual([]);
+  });
+  return (name) => {
+    const f = join(tmpdir(), name);
+    given.push(f);
+    thisTest.push(f);
+    return f;
+  };
 }

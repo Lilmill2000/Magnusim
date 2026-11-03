@@ -66,9 +66,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, tempFilesRemovedAfterEach, watchPage, workspaceFrame } from './helpers';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; secondWay: { budgetMs: number | null }; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
@@ -585,7 +586,7 @@ test('cad:delete-faces-heal-large Delete faces on a STEP part of over 2000 faces
     for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
     return btoa(bin);
   }) as never);
-  const file = join(tmpdir(), `cad-e2e-large-${process.pid}-${Date.now()}.step`);
+  const file = tempFile(`cad-e2e-large-${process.pid}-${Date.now()}.step`);
   writeFileSync(file, Buffer.from(b64, 'base64'));
   const chooser = page.waitForEvent('filechooser');
   await frame.locator('[data-cad-toolbar] [data-command="file.import-step"]').click();
