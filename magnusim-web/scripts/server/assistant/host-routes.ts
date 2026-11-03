@@ -85,6 +85,16 @@ export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
 
   // ---------------------------------------------------------------- read_results
   'run.monitors': read('/api/run/monitors', (a) => ({ ...PS(a), run_id: opt(str(a.run_id)) })),
+  // RH1: a run's health record (recompute "1": an ended run with none checks its log) and its solver output.
+  'run.health': read('/api/run/health', (a) => ({ ...PS(a), run_id: opt(str(a.run_id)), recompute: a.recompute === '1' ? '1' : undefined })),
+  'run.solver_log': read('/api/run/solver-log', (a) => ({
+    ...PS(a),
+    run_id: opt(str(a.run_id)),
+    lines: opt(str(a.lines)),
+    at: opt(str(a.at)),
+    key: opt(str(a.key)),
+    filter: opt(str(a.filter)),
+  })),
   // `case` is the run's case folder, read from run.status: the model never gives or sees it.
   'results.times': read('/api/times', (a) => ({ project_id: str(a.project_id), case: str(a.case) })),
   'results.field_meta': read('/api/fields/:field/meta', (a) => ({ project_id: str(a.project_id), case: str(a.case), time: opt(str(a.time)) }), { maxBytes: MB16 }),

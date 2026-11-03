@@ -361,3 +361,94 @@ describe('read_results', () => {
     assert.deepEqual(req.body, { project_id: 'p1', run_id: 'r1', simulation_id: 's1', transient: { max_co: 0.8 } });
   });
 });
+
+describe('read_results: health, log_tail and the status fields (RH1)', () => {
+  const res = (kind, more = {}) => ok('read_results', { project_id: '', simulation_id: '', run_id: '', kind, field: '', time: -1, points: [], samples: 0, filter_key: '', values: [], ...more });
+  const FIX = { label: 'New run: 3 outer correctors, Max Courant 5', target: 'new_run', values: [{ key: 'transient.n_outer_correctors', value: 3 }, { key: 'transient.max_co', value: 5 }], cost: { steps: 177878, wall_s: 308946 } };
+  const health = {
+    v: 1,
+    verdict: 'unhealthy',
+    unit: 'time step',
+    window: 50,
+    t: 0.0188,
+    first_unhealthy: { t: 0.0069061069, step: 25, wall_s: 15 },
+    restart: 'from_zero',
+    checked: ['velocity_clipped', 'pv_coupling'],
+    skipped: [],
+    findings: [
+      { code: 'velocity_clipped', level: 'error', text: 'Velocity clipped in 100% of steps: the 226 m/s limit caught 57% of cells.', evidence: { line: 786, text: `limitVelocity on ${WIN}\p1 /home/someone/x`, log_at: 46273, key: '76dd40d7d1a9' }, fix: [FIX] },
+      { code: 'courant_mode', level: 'warn', text: 'Likely cause: Max Courant 100 with 1 outer corrector (PISO).', evidence: null, fix: [FIX] },
+    ],
+  };
+  const withRun = (extra) => {
+    fresh();
+    Object.assign(app.w.runs[0], { status: 'stopped', time_dependency: 'Transient', co_mean: 0.94, co_max: 82.3, delta_t: 9.1e-4, n_steps: 119, stop_requested: false, warnings: [{ code: 'x', message: `copy failed to ${WIN}\p1\s1\r1` }], health, health_checked: true, continue_from: 0.1667, ...extra });
+  };
+
+  it('status gives the Courant number, the time step, steps, warnings (scrubbed) and the health verdict', async () => {
+    withRun();
+    const st = await res('status');
+    assert.deepEqual(st.courant, { mean: 0.94, max: 82.3 });
+    assert.equal(st.delta_t, 9.1e-4);
+    assert.equal(st.n_steps, 119);
+    assert.equal(st.stopping, false);
+    assert.deepEqual(st.health, { verdict: 'unhealthy', codes: ['velocity_clipped', 'courant_mode'], restart: 'from_zero' });
+    assert.equal(st.health_checked, true);
+    assert.equal(st.warnings[0].scrubbed, true);
+    assert.ok(!st.warnings[0].message.includes(WIN), st.warnings[0].message);
+  });
+
+  it("health: the record, the panel's next words and the fix as setup_edit's one call; path-free and within 8 KB", async () => {
+    withRun();
+    app.over = (m, path) => (path === '/api/run/health' ? { ok: true, run_id: 'r1', health, health_checked: true } : undefined);
+    const h = await res('health');
+    assert.equal(h.verdict, 'unhealthy');
+    assert.equal(h.word, 'Unhealthy');
+    assert.equal(h.shown_in, 'Run panel → Health');
+    assert.match(h.next.text, /^Its saved results \(from t = 0\.167 s\) come after the problem began \(t = 0\.0069 s\)/);
+    const fix = h.next.fixes[0];
+    assert.equal(fix.name, 'Run 1 fixed');
+    assert.deepEqual(fix.values, [{ key: 'transient.n_outer_correctors', value: '3' }, { key: 'transient.max_co', value: '5' }]);
+    assert.equal(fix.call, `setup_edit {kind:'run', action:'add', other_id:'r1', name:'Run 1 fixed', values:${JSON.stringify(fix.values)}}`);
+    assert.ok(!JSON.stringify(h).includes('/home/someone'));
+    assert.ok(Buffer.byteLength(JSON.stringify(h), 'utf8') <= 8 * 1024);
+  });
+
+  it('health on an old ended run starts "Check its log" (no card); a kind of run not checked says so', async () => {
+    withRun({ health: null, health_checked: undefined, status: 'done' });
+    const asks = [];
+    app.over = (m, path, q) => {
+      if (path !== '/api/run/health') return undefined;
+      asks.push(q.get('recompute'));
+      return { ok: true, run_id: 'r1', health: null, health_checked: null, checking: q.get('recompute') === '1' };
+    };
+    const h = await res('health');
+    assert.deepEqual(h, { run_id: 'r1', checking: true, hint: 'read_results {kind:"health"} again in a few seconds' });
+    assert.deepEqual(asks, [null, '1']);
+    withRun({ health: null, health_checked: false });
+    app.over = (m, path) => (path === '/api/run/health' ? { ok: true, run_id: 'r1', health: null, health_checked: false } : undefined);
+    const no = await res('health');
+    assert.deepEqual(no, { run_id: 'r1', health: null, checked: false, why: 'Health is not checked for this kind of run.' });
+  });
+
+  it("log_tail: the end, the start, or a finding's line (its key passed); at most 200 lines and 24 KB; path-free", async () => {
+    withRun();
+    const asked = [];
+    app.over = (m, path, q) => {
+      if (path !== '/api/run/solver-log') return undefined;
+      asked.push(Object.fromEntries(q));
+      const n = Number(q.get('lines'));
+      return { ok: true, lines: Array.from({ length: n }, (_, i) => `line ${i} ${'x'.repeat(200)} ${WIN}\p1`), hit_line: q.get('key') ? 3 : null, first_line: null, truncated: true, live: false, as_of: '2026-11-03T10:00:00Z' };
+    };
+    const end = await res('log_tail', { samples: 500 });
+    assert.equal(asked[0].at, 'end');
+    assert.equal(asked[0].lines, '200');
+    assert.ok(Buffer.byteLength(JSON.stringify(end), 'utf8') <= 24 * 1024);
+    assert.ok(end.lines.length < 200 && end.truncated === true);
+    await res('log_tail', { time: 0, filter_key: 'issues' });
+    assert.deepEqual([asked[1].at, asked[1].filter], ['start', 'issues']);
+    const at = await res('log_tail', { time: 46273 });
+    assert.deepEqual([asked[2].at, asked[2].key], ['46273', '76dd40d7d1a9']);
+    assert.equal(at.hit_line, 3);
+  });
+});

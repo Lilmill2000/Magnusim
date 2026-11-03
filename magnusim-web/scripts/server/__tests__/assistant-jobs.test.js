@@ -990,3 +990,95 @@ describe('compute run_start of a stopped run with results (runReopen.ts)', () =>
     assert.equal(app.seen.some((s) => s.path === '/api/run/reopen'), false);
   });
 });
+
+describe('run health in the job tools (RH1)', () => {
+  const ac = (o = {}) => ({ ctx: ctx(o), signal: new AbortController().signal, turn: `t-health-${++turnN}` });
+  const HEALTH = {
+    v: 1,
+    verdict: 'unhealthy',
+    unit: 'time step',
+    window: 50,
+    first_unhealthy: { t: 0.0069061069, step: 25, wall_s: 15 },
+    restart: 'from_zero',
+    findings: [
+      { code: 'velocity_clipped', level: 'error', text: 'Velocity clipped' },
+      { code: 'pv_coupling', level: 'error', text: 'Pressure' },
+      { code: 'turbulence_bounded', level: 'error', text: 'k' },
+    ],
+  };
+  const stoppedUnhealthy = (extra = {}) => {
+    S.mesh.generated = true;
+    Object.assign(S.run, { status: 'stopped', time_dependency: 'Transient', has_results: true, n_saved_times: 12, last_saved_iteration: 0.1667, continue_from: 0.1667, health: HEALTH, ...extra });
+  };
+
+  it('wait: a solving run that turns Unhealthy ends the wait at once with the alert, once; the run keeps running', async () => {
+    const { resetWaitAlertsForTests } = await import('../assistant/host/wait.ts');
+    resetWaitAlertsForTests();
+    Object.assign(S.run, { status: 'running', iteration: 0.018, sim_time: 0.018, time_dependency: 'Transient', co_mean: 0.93, co_max: 104, started_at: new Date().toISOString(), health: HEALTH });
+    S.live = { kind: 'solve', run_id: 'r1', project_id: P };
+    let now = 0;
+    const t = tools({ now: () => now, sleep: async (ms) => { now += ms; }, pollMs: 2_000 });
+    const r = rt();
+    const out = await t.wait.run({ project_id: '', job_ids: ['solve.r1'], until: 'all', timeout_s: 0 }, r);
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual(out.data.alert, { job_id: 'solve.r1', verdict: 'unhealthy', top: 'velocity_clipped' });
+    assert.equal(out.data.ended, false);
+    assert.match(out.data.hint, /read_results \{kind:'health'\}/);
+    assert.equal(out.data.jobs[0].progress.label, 'Run 1: t = 0.018 of 500 s · Co 0.93 (max 104) · health: Unhealthy (velocity_clipped, pv_coupling, +1)');
+    assert.equal(writes().length, 0, 'nothing is stopped');
+    // The next wait follows it on: it ends when the run ends.
+    S.run.status = 'stopped';
+    S.live = null;
+    const again = await t.wait.run({ project_id: '', job_ids: ['solve.r1'], until: 'all', timeout_s: 0 }, rt());
+    assert.equal(again.data.alert, undefined);
+    assert.deepEqual(again.data.jobs[0].result.health, { verdict: 'unhealthy', codes: ['velocity_clipped', 'pv_coupling', 'turbulence_bounded'], restart: 'from_zero' });
+  });
+
+  it('a stopping run says so', async () => {
+    Object.assign(S.run, { status: 'running', stop_requested: true, time_dependency: 'Transient', sim_time: 0.1 });
+    S.live = { kind: 'solve', run_id: 'r1', project_id: P };
+    let now = 0;
+    const t = tools({ now: () => now, sleep: async (ms) => { now += ms; }, pollMs: 2_000 });
+    const out = await t.wait.run({ project_id: '', job_ids: ['solve.r1'], until: 'all', timeout_s: 1 }, rt());
+    assert.equal(out.data.jobs[0].stopping, true);
+    assert.equal(out.data.jobs[0].progress.label, 'Run 1: stopping: writing its current time step');
+  });
+
+  it("run_continue on a run whose saved results come after the onset: destructive, with the person's Continue words", async () => {
+    stoppedUnhealthy();
+    const t = tools();
+    const i = input({ action: 'run_continue', end_time: 1 });
+    const a = await t.compute.escalate(i, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(
+      a.note,
+      'Runs "Run 1" on to t = 1 s. Its saved results (t = 0.167 s) are from after it became unhealthy (t = 0.0069 s); continuing carries that on. A new run from t = 0 is safer.',
+    );
+    assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to continue "Run 1"?');
+  });
+
+  it('run_continue on an unhealthy run: compute, it will likely repeat; a pending change: only Health on the continued part can tell', async () => {
+    stoppedUnhealthy({ health: { ...HEALTH, restart: 'continue_after_fix' }, continue_from: 0.005, last_saved_iteration: 0.005 });
+    const t = tools();
+    const a = await t.compute.escalate(input({ action: 'run_continue', end_time: 1 }), ac());
+    assert.equal(a.risk, 'compute');
+    assert.match(a.note, /It became unhealthy at t = 0\.0069 s and its settings have not changed since, so Continue will likely repeat the problem\.$/);
+    S.run.continue_changes = [{ from_t: 0.005, applied_at: null, changes: [{ key: 'transient.max_co', from: 100, to: 5 }] }];
+    const b = await t.compute.escalate(input({ action: 'run_continue', end_time: 1 }), ac());
+    assert.equal(b.risk, 'compute');
+    assert.match(b.note, /Continue applies: Max Courant 100 → 5 \(from t = 0\.005 s\)\. Health checks the continued part from t = 0\.005 s; whether the change is enough shows only there\.$/);
+    // No card says the change is enough, fixes the run, or makes it safe.
+    assert.doesNotMatch(b.note.replace('whether the change is enough', ''), /\benough\b|\bfixe[sd]\b|\bsafe\b/i);
+  });
+
+  it("run_start of a run that became unhealthy: the card's copy is the person's Start question's (overwriteWords)", async () => {
+    stoppedUnhealthy();
+    const { overwriteWords } = await import('../../../src/workbench/runReopen.ts');
+    const t = tools();
+    const a = await t.compute.escalate(input({ action: 'run_start' }), ac());
+    assert.equal(a.risk, 'destructive');
+    const person = overwriteWords(S.run, { action: 'start', studyTransient: false, health: HEALTH });
+    assert.equal(a.note, person.copy);
+    assert.match(a.note, / "Run 1" became unhealthy at t = 0\.0069 s\. A new run with the fix keeps these results\.$/);
+  });
+});

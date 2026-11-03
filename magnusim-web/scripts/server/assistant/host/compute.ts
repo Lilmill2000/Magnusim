@@ -42,6 +42,7 @@ import {
 import { jobIdOf, parseJobId, type JobKind } from './job-state.ts';
 import { rememberJob } from './turn-jobs.ts';
 import { overwritesResults, overwriteWords, runEditState } from '../../../../src/workbench/runReopen.ts';
+import { atWords, changeWords, continueAskWords, repeatSentence, type HealthRecord, type HealthRunView } from '../../../../src/workbench/runHealthWords.ts';
 
 /**
  * The run_start calls whose card asked to start a stopped or failed run over (its results
@@ -49,6 +50,8 @@ import { overwritesResults, overwriteWords, runEditState } from '../../../../src
  * the route's refusal, and asks when the model tries again.
  */
 const startOverAsked = new WeakMap<Record<string, unknown>, string>();
+/** RH1: a Continue of a run whose saved results come after it became unhealthy (from_zero): the card's title. */
+const continueHealthAsked = new WeakMap<Record<string, unknown>, string>();
 
 export const COMPUTE_ACTIONS = ['mesh_generate', 'run_start', 'run_continue', 'vtk_export', 'hardware_check', 'plugin_env_install', 'queue_kick'] as const;
 type Action = (typeof COMPUTE_ACTIONS)[number];
@@ -270,9 +273,39 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       if (action === 'run_start' && overwritesResults(runEditState(run))) {
         // A stopped or failed run with results: started over, its results deleted first (the
         // person's Start asks the same).
-        const w = overwriteWords(run, { action: 'start', studyTransient: study.transient, assistant: true });
+        // RH1 (A3): a run that became unhealthy says so, in the same words as the person's Start question.
+        const w = overwriteWords(run, { action: 'start', studyTransient: study.transient, assistant: true, health: run.health });
         startOverAsked.set(input, w.title);
         return withChain({ risk: 'destructive', note: w.copy, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Start ${quoted(name)} over`, steps, labels);
+      }
+      // RH1 (spec 3.12): Continue of a run that became unhealthy. Its saved results after the onset
+      // (from_zero): destructive, with the person's Continue question. Unhealthy otherwise: it says
+      // Continue will likely repeat it, or (a change waits for Continue) that only Health on the
+      // continued part can tell; never that the change is enough.
+      const health = isRecord(run.health) ? (run.health as unknown as HealthRecord) : null;
+      if (action === 'run_continue' && health && health.first_unhealthy) {
+        const view: HealthRunView = {
+          name,
+          status: String(run.status ?? ''),
+          saved: num(run.continue_from) ?? (num(run.last_saved_iteration) && Number(run.last_saved_iteration) > 0 ? Number(run.last_saved_iteration) : null),
+          transient: /transient/i.test(String(run.time_dependency ?? '')),
+        };
+        const pending = rows(run.continue_changes).find((c) => !c.applied_at && Array.isArray(c.changes) && c.changes.length);
+        const more = num(input.extra_iterations) ?? 0;
+        const to = num(input.end_time) ?? 0;
+        const runs = more > 0 ? `Runs ${quoted(name)} for ${more} more iterations.` : `Runs ${quoted(name)} on to t = ${to} s.`;
+        if (health.restart === 'from_zero') {
+          const w = continueAskWords(view, health);
+          continueHealthAsked.set(input, `Allow the Assistant to continue ${quoted(name)}?`);
+          return withChain({ risk: 'destructive', note: `${runs} ${w.copy}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
+        }
+        if (health.verdict === 'unhealthy' || health.verdict === 'failed') {
+          const from = view.saved !== null ? atWords(view.saved, view.transient) : 'its last saved time';
+          const extra = pending
+            ? ` Continue applies: ${changeWords(rows(pending.changes) as Array<{ key: string; from: unknown; to: unknown }>)} (from ${from}). Health checks the continued part from ${from}; whether the change is enough shows only there.`
+            : ` ${repeatSentence(view, health)}`;
+          return withChain({ risk: 'compute', note: `${runs}${extra}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
+        }
       }
       if (action === 'run_continue' && runConverged(run)) {
         return withChain({ risk: 'destructive', note: `${name} has converged; continuing changes its results.`, detail: [{ label: 'Run', value: name }] }, `Continue ${quoted(name)}`, steps, labels);
@@ -327,6 +360,9 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     const named = chained && !!a?.labels && Object.keys(a.labels).length > 0;
     if (a?.risk === 'destructive' && action === 'run_start') {
       const asked = startOverAsked.get(input) || `Allow the Assistant to start ${quoted(name || 'the run')} over?`;
+      title = named ? `${asked.replace(/\?$/, '')}, and the steps after it?` : asked;
+    } else if (a?.risk === 'destructive' && action === 'run_continue' && continueHealthAsked.has(input)) {
+      const asked = continueHealthAsked.get(input) as string;
       title = named ? `${asked.replace(/\?$/, '')}, and the steps after it?` : asked;
     } else if (a?.risk === 'destructive') {
       title =

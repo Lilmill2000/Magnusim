@@ -70,6 +70,16 @@ function pollCall(call: JsonCall): JsonCall {
   };
 }
 
+/**
+ * RH1: runs whose Unhealthy verdict a wait has already reported (`project|run|started_at`): the
+ * next wait on them follows them on instead of returning at once again.
+ */
+const alerted = new Set<string>();
+
+export function resetWaitAlertsForTests(): void {
+  alerted.clear();
+}
+
 /** "Mesh 1 done; Run 1 running (iteration 120 of 500)". */
 function summaryOf(jobs: JobState[], timedOut: boolean): string {
   const parts = jobs.map((j) => `${j.name || j.job_id} ${j.status}`);
@@ -144,12 +154,33 @@ export function createWaitTool(deps: JobToolDeps): ToolDef {
         }
         if (rt.signal.aborted) return fail('stopped', 'Stopped while waiting; the jobs keep running.', 'Call wait again with the same job ids.');
         const list = refs.map((r) => states.get(r.job_id)).filter((s): s is JobState => !!s);
+        // RH1: a solving run that turned Unhealthy ends the wait at once (once per attempt); it keeps running.
+        const sick = list.find((s) => s.unhealthy && !alerted.has(s.unhealthy.key));
+        if (sick && sick.unhealthy) {
+          alerted.add(sick.unhealthy.key);
+          if (alerted.size > 500) alerted.delete(alerted.values().next().value as string);
+          const jobs = list.map((s) => {
+            const { download: _dl, unhealthy: _u, ...rest } = s;
+            return rest;
+          });
+          return {
+            ok: true,
+            data: {
+              ended: false,
+              timed_out: false,
+              alert: { job_id: sick.job_id, verdict: 'unhealthy', top: sick.unhealthy.top },
+              jobs,
+              hint: "read_results {kind:'health'} says what was found and what to do; the run keeps running.",
+            },
+            summary: cleanText(`${sick.name || sick.job_id} is unhealthy (${sick.unhealthy.top}); it keeps running`, 160),
+          };
+        }
         const live = list.find((s) => !ENDED.has(s.status));
         if (live) rt.progress(live.progress.fraction, live.progress.label || `${live.name}: ${live.status}`, live.waiting ? { waiting: true } : undefined);
         const timedOut = !done() && now() + Math.min(pollMs, 250) >= deadline;
         if (done() || timedOut) {
           const jobs = list.map((s) => {
-            const { download: _dl, ...rest } = s;
+            const { download: _dl, unhealthy: _u, ...rest } = s;
             return rest;
           });
           const links = list

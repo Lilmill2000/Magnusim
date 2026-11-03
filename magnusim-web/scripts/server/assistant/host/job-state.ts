@@ -40,6 +40,10 @@ export interface JobState {
   waiting?: boolean;
   /** A finished export: the file the person can save (never sent to the model). */
   download?: { name: string; bytes: number | null; href: string };
+  /** RH1: a solving run whose Stop is writing its current time step. */
+  stopping?: boolean;
+  /** RH1: a solving run that is Unhealthy: its top finding (wait returns early, once per attempt). */
+  unhealthy?: { top: string; key: string };
 }
 
 export const ENDED: ReadonlySet<JobStatus> = new Set(['done', 'failed', 'stopped', 'cancelled', 'unknown']);
@@ -215,7 +219,18 @@ async function followSolve(f: FollowContext, projectId: string, ref: JobRef): Pr
   if ((live && live.kind === 'solve' && String(live.run_id) === ref.id) || st === 'running' || st === 'starting') {
     const p = solveProgress(run);
     out.status = 'running';
-    out.progress = { fraction: p.fraction, label: `${out.name}: ${p.words}` };
+    if (run.stop_requested === true) {
+      // RH1: a Stop on its way writes the current time step first.
+      out.stopping = true;
+      out.progress = { fraction: p.fraction, label: `${out.name}: stopping: writing its current time step` };
+      return out;
+    }
+    out.progress = { fraction: p.fraction, label: `${out.name}: ${p.words}${courantWords(run)}${healthWords(run.health)}` };
+    const h = isRecord(run.health) ? run.health : null;
+    if (h && h.verdict === 'unhealthy') {
+      const top = rows(h.findings).find((f) => f.level === 'error') || rows(h.findings)[0];
+      out.unhealthy = { top: text(top && top.code, 40) || 'unhealthy', key: `${projectId}|${ref.id}|${text(run.started_at, 40) || ''}` };
+    }
     return out;
   }
   const row = items.find((r) => r.kind === 'solve' && String(r.run_id) === ref.id);
@@ -234,15 +249,44 @@ async function followSolve(f: FollowContext, projectId: string, ref: JobRef): Pr
     out.status = 'done';
     out.progress = { fraction: 1, label: `${out.name}: done` };
     const conv = isRecord(run.converged) ? { iteration: num(run.converged.iteration), by: text(run.converged.by, 40) } : null;
-    out.result = { iterations: num(run.iteration), saved_times: num(run.n_saved_times), converged: conv };
+    out.result = { iterations: num(run.iteration), saved_times: num(run.n_saved_times), converged: conv, health: endedHealth(run.health) };
   } else if (st === 'stopped') {
     out.status = 'stopped';
-    out.result = { iterations: num(run.iteration), saved_times: num(run.n_saved_times) };
+    out.result = { iterations: num(run.iteration), saved_times: num(run.n_saved_times), health: endedHealth(run.health) };
   } else if (st === 'failed') {
     out.status = 'failed';
     out.error = text(run.error, 400) || text(run.note, 400) || 'The run failed.';
+    out.result = { health: endedHealth(run.health) };
   }
   return out;
+}
+
+/** " · Co 0.93 (max 104)" of a solving transient run, else ''. */
+function courantWords(run: Record<string, unknown>): string {
+  const mean = num(run.co_mean);
+  const max = num(run.co_max);
+  if (mean === null || max === null) return '';
+  const r = (v: number) => (Math.abs(v) >= 10 ? String(Math.round(v)) : String(Number(v.toPrecision(2))));
+  return ` · Co ${r(mean)} (max ${r(max)})`;
+}
+
+/** " · health: Unhealthy (velocity_clipped, pv_coupling, +4)" of a solving run's health, else ''. */
+function healthWords(raw: unknown): string {
+  if (!isRecord(raw) || typeof raw.verdict !== 'string') return '';
+  const word: Record<string, string> = { pending: 'Checking', healthy: 'Healthy', watch: 'Watch closely', unhealthy: 'Unhealthy', failed: 'Failed' };
+  const codes = rows(raw.findings).map((f) => text(f.code, 40) || '').filter(Boolean);
+  const list = codes.length ? ` (${codes.slice(0, 2).join(', ')}${codes.length > 2 ? `, +${codes.length - 2}` : ''})` : '';
+  return ` · health: ${word[raw.verdict] || raw.verdict}${raw.verdict === 'healthy' || raw.verdict === 'pending' ? '' : list}`;
+}
+
+/** An ended run's health as wait reports it: {verdict, codes, restart}, or null. */
+function endedHealth(raw: unknown): { verdict: string; codes: string[]; restart: string | null } | null {
+  if (!isRecord(raw) || typeof raw.verdict !== 'string') return null;
+  return {
+    verdict: raw.verdict,
+    codes: rows(raw.findings).map((f) => text(f.code, 40) || '').filter(Boolean).slice(0, 6),
+    restart: typeof raw.restart === 'string' ? raw.restart : null,
+  };
 }
 
 async function followExport(f: FollowContext, projectId: string, ref: JobRef): Promise<JobState> {

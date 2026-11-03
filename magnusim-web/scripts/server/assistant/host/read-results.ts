@@ -10,6 +10,8 @@
  */
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
+import { scrubContext, scrubText } from '../../../solver-log-scrub.js';
+import { NOT_CHECKED, VERDICT_WORDS, earlierPartLines, healthNextWords, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
 import { runFields } from './catalog.ts';
 import {
   badValues,
@@ -38,7 +40,10 @@ import {
   type HostToolDef,
 } from './common.ts';
 
-export const RESULT_KINDS = ['status', 'residuals', 'monitors', 'times', 'field_range', 'point', 'line', 'plugin_filter', 'media', 'exports', 'transient_preview'] as const;
+export const RESULT_KINDS = ['status', 'residuals', 'monitors', 'times', 'field_range', 'point', 'line', 'plugin_filter', 'media', 'exports', 'transient_preview', 'health', 'log_tail'] as const;
+/** RH1: the most a `health` and a `log_tail` answer carries. */
+export const HEALTH_ANSWER_MAX = 8 * 1024;
+export const LOG_TAIL_MAX = 24 * 1024;
 const SERIES_MAX = 200;
 const FIELD_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
@@ -77,22 +82,22 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
     name: 'read_results',
     title: 'Read the results',
     description:
-      'A run\'s numbers: status, residuals, monitors, times, field_range, point, line, plugin_filter, media, exports, transient_preview. "" = this window\'s project, the shown study, its active run; time -1 = latest; unused: "", [], 0.',
+      'A run\'s numbers: status, residuals, monitors, times, field_range, point, line, plugin_filter, media, exports, transient_preview, health, log_tail. "" = this window\'s project, the shown study, its active run; time -1 = latest; unused: "", [], 0.',
     schema: objectSchema({
       project_id: S.id('"" = this window\'s project'),
       simulation_id: S.id('"" = the study shown'),
       run_id: S.id('"" = the study\'s active run'),
       kind: S.enum(RESULT_KINDS),
       field: S.text(80, 'e.g. U, p, T; "" when unused'),
-      time: { type: 'number', description: '-1 = the latest written time' },
+      time: { type: 'number', description: '-1 = the latest written time; log_tail: -1 end, 0 start, or a finding\'s log_at' },
       points: {
         type: 'array',
         maxItems: 64,
         description: 'point: 1..64 points; line: exactly 2 (start, end)',
         items: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'number' } },
       },
-      samples: { type: 'integer', minimum: 0, maximum: 2000, description: 'line: samples along it; 0 = 100' },
-      filter_key: S.text(80, 'plugin_filter: the filter (catalog filters)'),
+      samples: { type: 'integer', minimum: 0, maximum: 2000, description: 'line: samples along it; log_tail: lines (max 200); 0 = 100' },
+      filter_key: S.text(80, 'plugin_filter: the filter (catalog filters); log_tail: "" or "issues"'),
       values: S.values(24, 400, 'plugin_filter: its fields; transient_preview: transient.* keys. Each value is JSON text.'),
     }),
     risk: 'read',
@@ -147,10 +152,23 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
                 has_results: run.has_results === true,
                 saved_times: num(run.n_saved_times),
                 queue_position: position,
+                // RH1 (R22): the run panel's line, and its health.
+                courant: num(run.co_max) !== null ? { mean: num(run.co_mean), max: num(run.co_max) } : null,
+                delta_t: num(run.delta_t),
+                n_steps: num(run.n_steps),
+                cells: num(isRecord(run.mesh_source) ? run.mesh_source.n_cells : null),
+                stopping: run.stop_requested === true && ['running', 'starting'].includes(str(run.status)),
+                warnings: statusWarnings(run.warnings),
+                health: healthSummary(run.health),
+                health_checked: typeof run.health_checked === 'boolean' ? run.health_checked : null,
               },
-              `${runName}: ${str(run.status) || 'draft'}`,
+              `${runName}: ${str(run.status) || 'draft'}${isRecord(run.health) && typeof run.health.verdict === 'string' ? ` · health ${String(run.health.verdict)}` : ''}`,
             );
           }
+          case 'health':
+            return await healthAnswer(d, rt, o, { project, sim, runId, runName, run });
+          case 'log_tail':
+            return await logTail(d, o, { project, sim, runId, run, input });
           case 'residuals': {
             const rows = records(run.residuals);
             if (!rows.length) return noResults();
@@ -306,6 +324,195 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
       }
     },
   });
+}
+
+/** A run's warnings as read_results status gives them: scrubbed, at most 10. */
+function statusWarnings(raw: unknown): Array<{ code: string; message: string; scrubbed: true }> {
+  const ctx = scrubContext();
+  return records(raw)
+    .slice(0, 10)
+    .map((w) => ({ code: text(w.code, 40) || '', message: scrubText(str(w.message), ctx, 300), scrubbed: true as const }));
+}
+
+/** What read_results status says of a run's health: its verdict, its finding codes and where Continue would go on from. */
+function healthSummary(raw: unknown): { verdict: string; codes: string[]; restart: string | null } | null {
+  if (!isRecord(raw) || typeof raw.verdict !== 'string') return null;
+  return {
+    verdict: raw.verdict,
+    codes: records(raw.findings)
+      .map((f) => text(f.code, 40) || '')
+      .slice(0, 6),
+    restart: typeof raw.restart === 'string' ? raw.restart : null,
+  };
+}
+
+type Ctx = { project: string; sim: string; runId: string; runName: string; run: Record<string, unknown> };
+
+/** The view of the run the Health words read (the same as the Run panel's). */
+function runView(run: Record<string, unknown>, name: string) {
+  const status = str(run.status);
+  const raw = run.continue_from ?? (num(run.last_saved_iteration) && Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null);
+  return {
+    name,
+    status,
+    stopping: run.stop_requested === true && ['running', 'starting'].includes(status),
+    saved: num(raw),
+    transient: /transient/i.test(str(run.time_dependency)),
+  };
+}
+
+/** A fix as setup_edit's one call that makes the new run (A3: from t = 0; the run keeps its results). */
+function fixCall(f: Record<string, unknown>, runId: string, runName: string) {
+  const values = records(f.values).map((v) => ({ key: text(v.key, 80), value: JSON.stringify(v.value ?? null) }));
+  const name = text(f.name, 64) || `${runName} fixed`;
+  return {
+    label: text(f.label, 60),
+    target: text(f.target, 20),
+    name,
+    values,
+    cost: isRecord(f.cost) ? { steps: num(f.cost.steps), wall_s: num(f.cost.wall_s) } : null,
+    call: f.target === 'new_run' ? `setup_edit {kind:'run', action:'add', other_id:'${runId}', name:'${name}', values:${JSON.stringify(values)}}` : null,
+  };
+}
+
+/**
+ * read_results {kind:'health'} (RH1, spec 3.13): the run's health record with what to do (the
+ * Run panel's words), its algorithm, earlier parts and pending changes. An ended run that ran
+ * before health checks existed starts "Check its log" (a read of its own log: no card).
+ */
+async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<typeof via>, c: Ctx): Promise<ToolOutcome> {
+  const { project, sim, runId, runName, run } = c;
+  const got = (await d.hostCall('run.health', { project_id: project, simulation_id: sim, run_id: runId }, o)) as Record<string, unknown>;
+  let rec = isRecord(got.health) ? got.health : null;
+  const checkedFlag = typeof got.health_checked === 'boolean' ? got.health_checked : null;
+  if (!rec) {
+    if (checkedFlag === false) return okData({ run_id: runId, health: null, checked: false, why: NOT_CHECKED }, `${runName}: health is not checked`);
+    const ended = ['done', 'stopped', 'failed'].includes(str(run.status));
+    if (ended && checkedFlag === null) {
+      const again = (await d.hostCall('run.health', { project_id: project, simulation_id: sim, run_id: runId, recompute: '1' }, o)) as Record<string, unknown>;
+      if (isRecord(again.health)) rec = again.health;
+      else if (again.checking === true) {
+        return okData({ run_id: runId, checking: true, hint: 'read_results {kind:"health"} again in a few seconds' }, `${runName}: checking its log`);
+      } else return fail('no_results', text(again.error, 200) || 'Its log could not be checked.');
+    } else {
+      return okData(
+        { run_id: runId, health: null, checked: true, why: `Not judged yet: health is judged from the 6th ${/transient/i.test(str(run.time_dependency)) ? 'time step' : 'iteration'} on.` },
+        `${runName}: health not judged yet`,
+      );
+    }
+  }
+  if (!rec) return fail('no_results', 'This run has no health record.');
+  const ctx = scrubContext();
+  const h = rec as unknown as HealthRecord;
+  const view = runView(run, runName);
+  const next = healthNextWords(view, h);
+  const findings = records(rec.findings).map((f) => ({
+    code: text(f.code, 40),
+    level: text(f.level, 10),
+    text: scrubText(str(f.text), ctx, 240),
+    evidence: isRecord(f.evidence)
+      ? {
+          line: num(f.evidence.line),
+          log_at: num(f.evidence.log_at),
+          key: text(f.evidence.key, 12),
+          ...(typeof f.evidence.text === 'string' ? { text: scrubText(f.evidence.text, ctx, 200) } : {}),
+        }
+      : null,
+    since_t: num(f.since_t),
+    fix: records(f.fix).map((x) => fixCall(x, runId, runName)),
+  }));
+  const prep = isRecord(run.prepare_run) ? run.prepare_run : {};
+  const turb = isRecord(prep.turbulence) ? prep.turbulence : {};
+  const attempts = records(run.attempts);
+  const changes = records(run.continue_changes);
+  const out: Record<string, unknown> = {
+    run_id: runId,
+    name: text(runName),
+    status: text(run.status, 20),
+    verdict: text(rec.verdict, 20),
+    word: rec.verdict === 'pending' ? 'Checking' : VERDICT_WORDS[rec.verdict as keyof typeof VERDICT_WORDS] || text(rec.verdict, 20),
+    at: text(rec.at, 40),
+    step: num(rec.step),
+    t: num(rec.t),
+    unit: text(rec.unit, 12),
+    window: num(rec.window),
+    live: rec.live === true,
+    ...(rec.stale ? { stale: true } : {}),
+    ...(rec.head_missing ? { head_missing: true } : {}),
+    mode: text(rec.mode, 10) || null,
+    checked: Array.isArray(rec.checked) ? rec.checked.map((x) => text(x, 40)).slice(0, 16) : [],
+    skipped: records(rec.skipped).map((x) => ({ code: text(x.code, 40), why: text(x.why, 60) })).slice(0, 8),
+    courant: isRecord(rec.courant) ? rec.courant : null,
+    delta_t: isRecord(rec.delta_t) ? rec.delta_t : null,
+    rates: isRecord(rec.rates) ? rec.rates : null,
+    first_unhealthy: isRecord(rec.first_unhealthy) ? rec.first_unhealthy : null,
+    restart: typeof rec.restart === 'string' ? rec.restart : null,
+    findings,
+    warnings: records(rec.warnings).map((w) => ({ text: scrubText(str(w.text), ctx, 160), count: num(w.count) })).slice(0, 3),
+    next: { text: next.text, stop: next.stop, fixes: next.fixes.map((f) => fixCall(f as unknown as Record<string, unknown>, runId, runName)) },
+    algorithm: {
+      solver: text(run.path_kind, 40) || null,
+      turbulence: text(turb.model, 40) || null,
+      cells: num(isRecord(run.mesh_source) ? run.mesh_source.n_cells : null),
+      ranks: num(run.n_procs),
+    },
+    earlier: earlierPartLines(attempts as never, changes as never, view.transient),
+    continue_changes: changes.slice(-3),
+    checked_at_start: Array.isArray(prep.checks) ? records(prep.checks).map((x) => text(x.code, 40)) : null,
+    shown_in: 'Run panel → Health',
+  };
+  // At most 8 KB: the evidence words go first, then the earlier parts, then the info findings.
+  const size = () => Buffer.byteLength(JSON.stringify(out), 'utf8');
+  if (size() > HEALTH_ANSWER_MAX) for (const f of findings) if (f.evidence) delete (f.evidence as Record<string, unknown>).text;
+  if (size() > HEALTH_ANSWER_MAX) out.earlier = (out.earlier as string[]).slice(-1);
+  if (size() > HEALTH_ANSWER_MAX) out.findings = findings.filter((f) => f.level !== 'info');
+  void rt;
+  return okData(out, `${runName}: ${String(out.word)} · ${findings.length} findings`);
+}
+
+/**
+ * read_results {kind:'log_tail'} (RH1, spec 3.13): the run's solver output, scrubbed: the end
+ * (time -1), the start (time 0), or around a finding's line (time = its evidence's log_at; the
+ * finding's key finds the line when the offset drifted). filter_key "issues": the problem lines.
+ */
+async function logTail(d: HostToolDeps, o: ReturnType<typeof via>, c: { project: string; sim: string; runId: string; run: Record<string, unknown>; input: Record<string, unknown> }): Promise<ToolOutcome> {
+  const { project, sim, runId, run, input } = c;
+  const want = Number(input.samples) > 0 ? Math.min(200, Math.floor(Number(input.samples))) : 100;
+  const t = Number(input.time);
+  let at = 'end';
+  let key = '';
+  if (Number.isFinite(t) && t === 0) at = 'start';
+  else if (Number.isFinite(t) && t > 0) {
+    at = String(Math.floor(t));
+    const hit = records(isRecord(run.health) ? run.health.findings : []).find((f) => isRecord(f.evidence) && Number(f.evidence.log_at) === Math.floor(t));
+    if (hit && isRecord(hit.evidence)) key = text(hit.evidence.key, 12) || '';
+  }
+  const filter = str(input.filter_key).trim() === 'issues' ? 'issues' : '';
+  const r = (await d.hostCall('run.solver_log', { project_id: project, simulation_id: sim, run_id: runId, lines: String(want), at, key, filter }, o)) as Record<string, unknown>;
+  if (r.missing === true) return fail('no_results', 'This run has no solver output.');
+  const ctx = scrubContext();
+  let lines = (Array.isArray(r.lines) ? r.lines : []).map((l) => scrubText(str(l), ctx, 240));
+  let hit = num(r.hit_line);
+  const out = () => ({
+    run_id: runId,
+    at,
+    filter,
+    lines,
+    first_line: num(r.first_line),
+    hit_line: hit,
+    total_lines: num(r.total_lines),
+    truncated: r.truncated === true || lines.length < (Array.isArray(r.lines) ? r.lines.length : 0),
+    live: r.live === true,
+    as_of: text(r.as_of, 40),
+  });
+  // At most 24 KB: lines leave from the end farther from the hit.
+  while (lines.length > 1 && Buffer.byteLength(JSON.stringify(out()), 'utf8') > LOG_TAIL_MAX) {
+    if (hit !== null && hit > lines.length / 2) {
+      lines = lines.slice(1);
+      hit -= 1;
+    } else lines = lines.slice(0, -1);
+  }
+  return okData(out(), `${lines.length} lines of its solver output`);
 }
 
 /** The time to read: the given one if saved, the latest for -1; refused when not saved. */
