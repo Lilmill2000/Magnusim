@@ -32081,7 +32081,7 @@ async function persistTransientSettings(next) {
 /** persistRunSettings' options for an answer of askRunSolveEdit. */
 function runSaveOpts(save) {
   if (save && save.overwrite) return { overwrite: true, baseRev: save.base_rev };
-  if (save && save.at_continue) return { at_continue: true };
+  if (save && save.at_continue) return { at_continue: true, baseRev: save.base_rev };
   return undefined;
 }
 
@@ -32173,7 +32173,7 @@ async function askRunSolveEdit(rec, applyToNew, body) {
         runsReopening.add(String(rec.id || rec.run_id));
         return { go: true, overwrite: true, base_rev: baseRev };
       }
-      if (answer === 'continue') return { go: true, at_continue: true, changes };
+      if (answer === 'continue') return { go: true, at_continue: true, changes, base_rev: baseRev };
       return { go: false };
     }
   }
@@ -32598,7 +32598,8 @@ async function persistRunSettings(partial, opts) {
   const send = async () => {
     // A save queued before a refusal carries the edits refused with it.
     if (checked && (runRefusals.get(String(runId)) || 0) !== epoch) return { ok: false, code: 'stale_record', error: 'This was changed elsewhere.' };
-    const askedRev = overwrite && opts.baseRev !== null && opts.baseRev !== undefined ? opts.baseRev : null;
+    // Asked first (Overwrite, or Use when continuing): the rev the run had when the person was asked.
+    const askedRev = (overwrite || atContinue) && opts.baseRev !== null && opts.baseRev !== undefined ? opts.baseRev : null;
     const rev = checked ? (askedRev !== null ? askedRev : revOf(findRunRecord(runId))) : null;
     let asked = overwrite;
     let posted = await postRunUpdate(rev === null ? body : { ...body, base_rev: rev });
@@ -32641,10 +32642,8 @@ async function persistRunSettings(partial, opts) {
     if (posted.response && posted.response.status === 409 && isStaleRecord(j)) {
       releaseFocus();
       runRefusals.set(String(runId), epoch + 1);
-      // The person's unsaved edits of this run go with it: the panel shows what is saved.
-      delete runCatalog.pending_control[runId];
-      delete runCatalog.pending_cores[runId];
-      delete runCatalog.pending_settle[runId];
+      // The person's unsaved edits of this run go with it (its transient numbers too): the panel shows what is saved.
+      dropUnsavedRunEdits(runId);
       try { await refreshRunCatalog(); } catch (_) {}
       try { publishRunState(); } catch (_) {}
       try { syncSimControlPanel(); } catch (_) {}

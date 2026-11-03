@@ -274,6 +274,25 @@ test('Start over deletes its results; another setting asks the two-way question;
   await expect(confirm(page)).toBeHidden();
   await expect(panel.getByLabel('Simulation time', { exact: true })).toHaveValue('0.1');
 
+  // The run changed elsewhere while the question was open: "Use when continuing" saves nothing
+  // over that change (the rev it had when asked), and says so.
+  await openAdvanced(panel);
+  await setField(panel, 'Max Courant number', 5);
+  await expect(choice(page)).toBeVisible(STEP);
+  const revBefore = (await runDoc(request, rid)).rev;
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, cores: 2 });
+  expect((await runDoc(request, rid)).rev).not.toBe(revBefore);
+  await page.locator('#rcc-continue').click();
+  await expect(confirm(page)).toBeVisible(STEP);
+  await expect(page.locator('#cf-heading')).toHaveText('Not saved: changed elsewhere');
+  await page.locator('#cf-confirm').click();
+  await expect(confirm(page)).toBeHidden();
+  await openAdvanced(panel);
+  await expect(panel.getByLabel('Max Courant number', { exact: true })).toHaveValue('100', STEP);
+  const kept = await runDoc(request, rid);
+  expect([kept.status, kept.transient.max_co, kept.continue_changes, kept.cores]).toEqual(['stopped', 100, undefined, 2]);
+  expect(existsSync(join(caseDir, '0.05'))).toBe(true);
+
   // Start over: the existing overwrite path.
   await openAdvanced(panel);
   await setField(panel, 'Max Courant number', 5);
