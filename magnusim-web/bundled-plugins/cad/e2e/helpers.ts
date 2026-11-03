@@ -918,8 +918,9 @@ export function putLookBackAfterSerialTests(): void {
 
 /**
  * Call once at the top of a spec that writes files into the OS temp folder (a STEP part made in
- * the page, then imported): it gives the path for such a file, and after each test the files it
- * gave that test are removed (one never written is fine). It is an afterEach hook because
+ * the page, then imported, or an exported STEP saved to read it back): it gives the path for such
+ * a file (a name may start with a folder, which the writer makes and which stays), and after each
+ * test the files it gave that test are removed (one never written is fine). It is an afterEach hook because
  * Playwright runs those after a failed test and after a timed-out one; after a timeout, a finally
  * in the test does not run (the test is left running). The page is closed first, so a test left
  * running stops at its next step instead of writing its file after the removal. After the spec,

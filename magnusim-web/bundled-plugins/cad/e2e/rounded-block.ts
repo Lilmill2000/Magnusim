@@ -9,8 +9,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { modelOnPage, workspaceFrame } from './helpers';
 
 export interface RoundedBlockMade {
@@ -84,12 +83,15 @@ export async function voidBlockInPage(): Promise<RoundedBlockMade> {
   return { b64: btoa(bin), volume, sharp: volume };
 }
 
-/** Make the part in the open Part's page and import it with FILE > Import STEP (the panel's Done): what was made. */
-export async function importRoundedBlock(page: Page, frame: FrameLocator, make: () => Promise<RoundedBlockMade> = roundedBlockInPage): Promise<RoundedBlockMade> {
+/**
+ * Make the part in the open Part's page and import it with FILE > Import STEP (the panel's Done): what was made.
+ * The STEP goes to the temp folder's cad-e2e-s4, at the path tempFile gives (the spec's
+ * tempFilesRemovedAfterEach, which removes it after the test).
+ */
+export async function importRoundedBlock(page: Page, frame: FrameLocator, tempFile: (name: string) => string, make: () => Promise<RoundedBlockMade> = roundedBlockInPage): Promise<RoundedBlockMade> {
   const made = await workspaceFrame(page).evaluate(make);
-  const dir = join(tmpdir(), 'cad-e2e-s4');
-  mkdirSync(dir, { recursive: true });
-  const file = join(dir, `rounded-block-${process.pid}-${Date.now()}.step`);
+  const file = tempFile(join('cad-e2e-s4', `rounded-block-${process.pid}-${Date.now()}.step`));
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, Buffer.from(made.b64, 'base64'));
   const chooser = page.waitForEvent('filechooser');
   await frame.locator('[data-cad-toolbar] [data-command="file.import-step"]').click();

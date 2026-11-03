@@ -8,8 +8,10 @@
 // there is no Add row, and the box step fails without useBoxPicks (features/p2/pick.ts).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from './pw';
-import { featureRowNamed, partOpened, runCommand, watchPage, workspaceFrame } from '../bundled-plugins/cad/e2e/helpers';
+import { featureRowNamed, partOpened, runCommand, tempFilesRemovedAfterEach, watchPage, workspaceFrame } from '../bundled-plugins/cad/e2e/helpers';
 import { ctrlBox, importRoundedBlock, r5OnPage } from '../bundled-plugins/cad/e2e/rounded-block';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -44,7 +46,7 @@ test('Delete faces: Fillets up to and Holes up to add faces by size, a Ctrl+drag
   await dialog.locator('#np-create').click();
   const frame = await partOpened(page);
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  const made = await importRoundedBlock(page, frame);
+  const made = await importRoundedBlock(page, frame, tempFile);
   await settled(page);
 
   // MODIFY > Delete faces, nothing selected: the rows, the sizes from the block's box.

@@ -15,9 +15,11 @@
 import { expect, test, type Page } from '@playwright/test';
 // @ts-expect-error the app's helpers are plain JavaScript (the suite's tsconfig has no allowJs)
 import * as core from '../../../e2e/support/assistant.js';
-import { runCommand } from './helpers';
+import { runCommand, tempFilesRemovedAfterEach } from './helpers';
 import { cadFrame, chats, newProject, openNewPart, resetAssistant, resultsIn, startAssistantHost, startTurn, STEP, STEP_MS, useScriptedModel, type AssistantHost } from './assistant-helpers';
 import { importRoundedBlock } from './rounded-block';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 let host: AssistantHost;
 
@@ -56,7 +58,7 @@ test('cad:assistant-fillet-selectors find "Body 1 faces fillet <= 2 mm" and "hol
   const pid = await newProject(request, host, 'Assistant fillets');
   const { frame, tab } = await openNewPart(page, request, host, pid);
   await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
-  const made = await importRoundedBlock(page, frame);
+  const made = await importRoundedBlock(page, frame, tempFile);
   await expect.poll(() => treeRows(page), STEP).toEqual([expect.stringMatching(/^Imported 1 .* import ok$/)]);
 
   const before = chats(host).length;

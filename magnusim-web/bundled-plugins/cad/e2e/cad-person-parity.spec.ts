@@ -20,8 +20,10 @@
 // Owner: ASSISTANT (the person's side of the Assistant's tools).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
-import { addSolid, historyNames, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, watchPage, workspaceFrame } from './helpers';
+import { addSolid, historyNames, modelOnPage, newPartFromTree, newProject, openProject, partOpened, runCommand, singleVolume, tempFilesRemovedAfterEach, watchPage, workspaceFrame } from './helpers';
 import { importRoundedBlock } from './rounded-block';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any } };
@@ -287,7 +289,7 @@ test("cad:pp-measure Measure of a body (solids, voids) and its cross-section, tw
 test('cad:pp-find-fillets Find of fillets and holes by size: the counts the find tool gives, the sizes in the rows, Select all', async ({ page, request }) => {
   test.setTimeout(240_000);
   const frame = await freshPart(page, request);
-  await importRoundedBlock(page, frame);
+  await importRoundedBlock(page, frame, tempFile);
   await settled(page);
   await runCommand(frame, 'inspect.find');
   const find = toolPanel(frame);

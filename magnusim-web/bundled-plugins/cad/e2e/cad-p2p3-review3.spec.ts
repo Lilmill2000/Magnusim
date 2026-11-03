@@ -36,9 +36,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand } from './helpers';
+import { addSolid, newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame, runCommand, tempFilesRemovedAfterEach } from './helpers';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 const SHOTS = process.env.CAD_E2E_SHOTS || '';
 
@@ -456,7 +457,7 @@ test("cad:p2p3-review3-step-header the exported STEP's FILE_NAME names the file 
   await ex.locator('[data-export-run]').click();
   const download = await dl;
   expect(download.suggestedFilename()).toBe('Part 1.step');
-  const path = join(tmpdir(), `cad-r3-header-${Date.now()}.step`);
+  const path = tempFile(`cad-r3-header-${Date.now()}.step`);
   await download.saveAs(path);
   const text = readFileSync(path, 'latin1');
   const header = text.slice(0, text.indexOf('ENDSEC;'));

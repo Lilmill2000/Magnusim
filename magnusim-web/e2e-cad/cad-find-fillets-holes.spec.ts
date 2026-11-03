@@ -11,8 +11,10 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type FrameLocator, type Page } from './pw';
-import { featureRowNamed, partOpened, runCommand, watchPage, workspaceFrame } from '../bundled-plugins/cad/e2e/helpers';
+import { featureRowNamed, partOpened, runCommand, tempFilesRemovedAfterEach, watchPage, workspaceFrame } from '../bundled-plugins/cad/e2e/helpers';
 import { importRoundedBlock } from '../bundled-plugins/cad/e2e/rounded-block';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
@@ -53,7 +55,7 @@ test('Find of fillets and holes by size, Select all, Delete: the sharp part, as 
   await dialog.locator('#np-create').click();
   const frame = await partOpened(page);
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  const made = await importRoundedBlock(page, frame);
+  const made = await importRoundedBlock(page, frame, tempFile);
   await settled(page);
 
   await runCommand(frame, 'inspect.find');

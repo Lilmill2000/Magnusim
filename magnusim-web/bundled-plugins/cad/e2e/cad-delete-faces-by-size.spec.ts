@@ -58,8 +58,10 @@
 import { expect, test, type APIRequestContext, type FrameLocator, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, watchPage, workspaceFrame } from './helpers';
+import { addSolid, featureRowNamed, newPartFromTree, newProject, openProject, partOpened, runCommand, tempFilesRemovedAfterEach, watchPage, workspaceFrame } from './helpers';
 import { ctrlBox, importRoundedBlock, r5OnPage, type RoundedBlockMade } from './rounded-block';
+
+const tempFile = tempFilesRemovedAfterEach();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
@@ -130,7 +132,7 @@ const HOLES_FILLED = 4 * Math.PI * 3 * 3 * 20;
 test('cad:delete-faces-by-size Fillets up to and Holes up to add faces by size on an imported STEP part, say what they added, refuse in words; a Ctrl+drag box adds faces while the panel is open', async ({ page, request }) => {
   test.setTimeout(300_000);
   const { seen, frame } = await freshPart(page, request);
-  const made = await importRoundedBlock(page, frame);
+  const made = await importRoundedBlock(page, frame, tempFile);
   await settled(page);
   await expectOneVolume(frame, made.volume);
 
@@ -366,7 +368,7 @@ async function tAlongFirstInPage(): Promise<RoundedBlockMade> {
 test("cad:delete-faces-by-size-tblock-corners-refused the T-block rounded R1 along it first and then R2, as STEP, with each round and its corner pieces allowed 1 ms: Fillets up to 1 mm is red in words that name each way tried once, OCCT's heal after them stopped by its whole 20 s, and that the body is unchanged, with no kernel restart", async ({ page, request }) => {
   test.setTimeout(240_000);
   const { seen, frame } = await freshPart(page, request);
-  const made = await importRoundedBlock(page, frame, tAlongFirstInPage);
+  const made = await importRoundedBlock(page, frame, tempFile, tAlongFirstInPage);
   await settled(page);
   await expectOneVolume(frame, made.volume);
   const respawns0 = await respawns(page);
@@ -434,7 +436,7 @@ async function bsplineCombInPage(): Promise<RoundedBlockMade> {
 test("cad:delete-faces-by-size-heal-time a B-spline comb's 20 rounds, whose heal took 58 s: Fillets up to 1 mm is red in words once OCCT's heal has had the whole 20 s its call had, then why taking them off as fillets failed too, the body unchanged, no kernel restart", async ({ page, request }) => {
   test.setTimeout(240_000);
   const { seen, frame } = await freshPart(page, request);
-  const made = await importRoundedBlock(page, frame, bsplineCombInPage);
+  const made = await importRoundedBlock(page, frame, tempFile, bsplineCombInPage);
   await settled(page);
   await expectOneVolume(frame, made.volume);
   const respawns0 = await respawns(page);
@@ -492,7 +494,7 @@ async function bsplineSinkInPage(): Promise<RoundedBlockMade> {
 test("cad:delete-faces-by-size-flat-bspline a heat sink whose every surface is a B-spline: Fillets up to 0.4 mm takes its 10 fin rounds off by OCCT's heal, as before kernel API 9 (its flat fin ends grown 6 times their size are not far-grown), not red, no note, the sharp sink", async ({ page, request }) => {
   test.setTimeout(240_000);
   const { seen, frame } = await freshPart(page, request);
-  const made = await importRoundedBlock(page, frame, bsplineSinkInPage);
+  const made = await importRoundedBlock(page, frame, tempFile, bsplineSinkInPage);
   expect(Math.abs(made.sharp / 11400 - 1)).toBeLessThan(1e-9);
   await settled(page);
   await expectOneVolume(frame, made.volume);

@@ -84,7 +84,7 @@ test('cad:find-fillets-holes Find fillets and holes by size on an imported STEP 
   await newPartFromTree(page, 'Part 1');
   const frame = await partOpened(page);
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  const made = await importRoundedBlock(page, frame);
+  const made = await importRoundedBlock(page, frame, tempFile);
   await settled(page);
   await expect.poll(() => chipVolumes(frame)).toEqual([expect.closeTo(made.volume, 0)]);
 
@@ -219,7 +219,7 @@ test('cad:find-fillets-holes-words on a Part in inches a no-match says the sizes
   await newPartFromTree(page, 'Part 1');
   const frame = await partOpened(page);
   await expect(frame.locator('[data-cad-app]')).toHaveAttribute('data-doc', 'ready');
-  await importRoundedBlock(page, frame);
+  await importRoundedBlock(page, frame, tempFile);
   await settled(page);
 
   // Inches: the sizes in the Part's unit, as the type cells and Delete faces' Add line give them (it said "R2 to R5").
@@ -235,7 +235,7 @@ test('cad:find-fillets-holes-words on a Part in inches a no-match says the sizes
   await panel.locator('[data-panel-done]').click();
 
   // A second body: a box with one 6 mm hole and three round voids inside (recognition reads each void as a hole with no cylinder).
-  await importRoundedBlock(page, frame, voidBlockInPage);
+  await importRoundedBlock(page, frame, tempFile, voidBlockInPage);
   await settled(page);
   const names = await workspaceFrame(page).evaluate(() => {
     const st = (window as unknown as W).__CAD__.services.doc.state.get();
