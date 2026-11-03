@@ -541,6 +541,62 @@ def _clean_regions(out: Path) -> None:
                 shutil.rmtree(child, ignore_errors=True)
 
 
+def health_hints(
+    spec: HtSpec,
+    *,
+    app: str,
+    model: str,
+    records: dict[str, dict[str, Any]] | None,
+    speed_ref: float | None,
+    max_di: float | None = None,
+) -> dict[str, Any]:
+    """The run's ``health_hints`` (RH1, magnusim_sdk.health): the solver mode, Courant
+    setting, reference speed, linear solver caps (p_rgh 200; the rest OpenFOAM's 1000), no
+    velocity limit, and a fixed inflow only when every opening that brings flow in holds a
+    fixed velocity (never for natural convection)."""
+    t = spec.transient
+    n_outer = max(1, int(t.n_outer_correctors)) if t is not None else None
+    if t is not None:
+        mode = "PISO" if (n_outer or 1) <= 1 else "PIMPLE"
+    else:
+        mode = "SIMPLE"
+    final = 0.0 if t is not None else None
+    linsolve: dict[str, dict[str, Any]] = {
+        "p_rgh": {"max_iter": 200, "tol": 1e-7, "rel_tol": 0.01, "final_rel_tol": final if final is not None else 0.01}
+    }
+    for f in ("U", "h", *solved_turbulence_fields(model)):
+        linsolve[f] = {"max_iter": 1000, "tol": 1e-8, "rel_tol": 0.1, "final_rel_tol": final if final is not None else 0.1}
+    inlets = 0
+    driven = False
+    for rec in (records or {}).values():
+        kind = str(rec.get("bc_type") or "").strip().lower()
+        if kind in ("velocity inlet",):
+            if rec.get("time_varying") and t is not None:
+                driven = True
+            inlets += 1
+        elif "pressure" in kind and "inlet" in kind:
+            driven = True
+    hints: dict[str, Any] = {
+        "app": app,
+        "mode": mode,
+        "n_outer": n_outer,
+        "n_correctors": max(1, int(t.n_correctors)) if t is not None else None,
+        "max_co": float(t.max_co) if t is not None and t.adjust_time_step else None,
+        "end_time": float(spec.end_time),
+        "average_from": None,
+        "uref": float(speed_ref) if speed_ref else None,
+        "uref_source": "inlet" if inlets else None,
+        "fixed_inflow": bool(inlets) and not driven,
+        "turbulence": model,
+        "limiter": None,
+        "linsolve": linsolve,
+        "monitors": None,
+    }
+    if max_di is not None:
+        hints["max_di"] = float(max_di)
+    return hints
+
+
 def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
     """Write the whole case into ``out_dir``; the report the core records."""
     from incompressible_flow.flow_bcs import flow_patches
@@ -721,6 +777,7 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
         sidecar["settle"] = settle
     if transient and spec.transient is not None:
         sidecar["transient"] = dataclasses.asdict(spec.transient)
+    sidecar["health_hints"] = health_hints(spec, app=app, model=model, records=flow.records, speed_ref=flow.speed_ref)
     if restart_from is not None:
         sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}
         if stops_off:
@@ -733,6 +790,7 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
         "n_procs": int(spec.n_procs),
         "patches": flow.patch_names,
         "polyMesh_copied": poly_dst is not None,
+        "health_hints": sidecar["health_hints"],
     }
     if restart_from is not None:
         report["restart"] = dict(sidecar["restart"])

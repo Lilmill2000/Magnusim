@@ -328,12 +328,88 @@ def kill_solve(
     )
 
 
+def job_event_of(line: str) -> dict[str, Any] | None:
+    """A job-event line (``MAGNUSIM_EVENT {…}``, ``CFDDESK_EVENT {…}`` or a bare
+    ``{"event": …}``) as the relay's ``parse_job_line`` reads it; None otherwise."""
+    raw = str(line or "").strip()
+    if not raw or ("EVENT " not in raw and not raw.startswith(("{", "["))):
+        return None
+    if raw.startswith("[") and 0 < raw.find("]") < 8:
+        raw = raw[raw.find("]") + 1 :].strip()
+    payload = None
+    for prefix in ("MAGNUSIM_EVENT ", "CFDDESK_EVENT "):
+        if raw.startswith(prefix):
+            payload = raw[len(prefix) :].strip()
+            break
+    if payload is None and raw.startswith("{") and '"event"' in raw:
+        payload = raw
+    if not payload:
+        return None
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not data.get("event"):
+        return None
+    return data
+
+
+class SolverLogCounter:
+    """Which lines of the solve's output are the solver's own (the ones ``tee`` writes to
+    ``log.<app>``) and the byte offset of each in the run's whole log (spec 2.3 "Log offsets").
+
+    - Counting starts at the ``stage`` event ``solve``, at ``log_base`` (the earlier parts'
+      size: a number, or a function read at that moment). Lines before it (the copy in,
+      decomposePar's output) are not the solver's.
+    - Every event line is skipped (``time_saved`` and ``log`` events come between solver lines).
+    - A solver line's offset is the running count; the count then grows by its UTF-8 length + 1.
+    - The next ``stage`` event (``solve_end``, ``reconstruct``) ends the span.
+
+    Known drift: the pipe is read as text with ``errors="replace"`` and universal newlines, so
+    an invalid byte, a CR, or an event line written into the middle of a solver line shifts
+    later offsets by a few bytes; the solver-log route then finds the line by its key.
+    """
+
+    def __init__(self, log_base: int | Callable[[], int] = 0) -> None:
+        self._base = log_base
+        self.active = False
+        self.done = False
+        self.at = 0
+        self.last_event: dict[str, Any] | None = None
+
+    def feed(self, line: str) -> int | None:
+        """The line's offset when it is a solver line, else None (``last_event``: its event)."""
+        ev = job_event_of(line)
+        self.last_event = ev
+        if ev is not None:
+            if ev.get("event") == "stage":
+                stage = str(ev.get("stage") or "")
+                if stage == "solve" and not self.active and not self.done:
+                    self.active = True
+                    base = self._base
+                    try:
+                        self.at = int(base() if callable(base) else base)
+                    except Exception:
+                        self.at = 0
+                elif self.active:
+                    self.active = False
+                    self.done = True
+            return None
+        if not self.active:
+            return None
+        at = self.at
+        self.at += len(line.encode("utf-8", errors="replace")) + 1
+        return at
+
+
 def stream_events_to_stdout(
     proc: subprocess.Popen,
     parser: Any = None,
     *,
     on_line: Callable[[str, list[Event]], None] | None = None,
     out: LineOut | None = None,
+    health: Any = None,
+    log_base: int | Callable[[], int] = 0,
 ) -> tuple[int, Any]:
     """Relay events as ``MAGNUSIM_EVENT`` JSONL; return (exit_code, parser).
 
@@ -341,21 +417,85 @@ def stream_events_to_stdout(
     :class:`GenericParser` when none is given. ``on_line(line, events)`` sees
     every line (solve hooks queue it and return at once); ``out`` is where the
     events go (default stdout).
+
+    ``health`` (a :class:`magnusim_sdk.health.HealthTracker`, RH1) sees each solver line,
+    with its offset in the run's whole log (:class:`SolverLogCounter`, from ``log_base``),
+    before ``parser.feed``; ``health`` events go out with the parser's (at once on a verdict
+    change, at most every 15 s on a change of its checks, every 60 s, and once at the end).
+    The parser's optional ``health_advice(report, hints)`` replaces the words and fixes.
     """
     parser = parser if parser is not None else GenericParser()
-    if on_line is None and out is None:
+    if on_line is None and out is None and health is None:
         for ev in iter_events(proc, parser=parser):
             # Re-emit with prefix so Node parse_line works uniformly.
             print(EVENT_PREFIX + ev.to_json(), flush=True)
-    else:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            evs = parser.feed(line.rstrip("\n"))
-            _tell_line(on_line, line, evs)
-            if out is None:
-                for ev in evs:
-                    print(EVENT_PREFIX + ev.to_json(), flush=True)
-            else:
-                _write_events(out, evs)
+        rc = proc.wait()
+        return int(rc if rc is not None else -1), parser
+    emitter = None
+    counter = None
+    if health is not None:
+        from magnusim_sdk.health import HealthEmitter
+
+        emitter = HealthEmitter(health, advice=getattr(parser, "health_advice", None))
+        counter = SolverLogCounter(log_base)
+
+    def send(evs: list[Event]) -> None:
+        if not evs:
+            return
+        if out is None:
+            for ev in evs:
+                print(EVENT_PREFIX + ev.to_json(), flush=True)
+        else:
+            _write_events(out, evs)
+
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        text = line.rstrip("\n")
+        if counter is not None:
+            _health_line(counter, health, text)
+        evs = parser.feed(text)
+        _tell_line(on_line, line, evs)
+        if emitter is not None:
+            for ev in evs:
+                if ev.event == "converged":
+                    health.converged()
+            payload = _health_poll(emitter)
+            if payload is not None:
+                evs = [*evs, _health_event(payload)]
+        send(evs)
     rc = proc.wait()
+    if emitter is not None:
+        try:
+            final = emitter.final()
+        except Exception:
+            final = None
+        if final is not None:
+            send([_health_event(final)])
     return int(rc if rc is not None else -1), parser
+
+
+def _health_event(payload: dict[str, Any]) -> Event:
+    return Event(event="health", fields={k: v for k, v in payload.items() if k != "event"})
+
+
+def _health_line(counter: SolverLogCounter, health: Any, text: str) -> None:
+    """One output line to the tracker when it is the solver's; a saved time is noted."""
+    try:
+        at = counter.feed(text)
+        if at is not None:
+            health.line(text, at)
+        elif counter.last_event is not None and counter.last_event.get("event") == "time_saved":
+            t = counter.last_event.get("t")
+            if isinstance(t, (int, float)) and not isinstance(t, bool):
+                health.saved(float(t))
+    except Exception:
+        # Health never stops a solve.
+        pass
+
+
+def _health_poll(emitter: Any) -> dict[str, Any] | None:
+    try:
+        payload = emitter.poll()
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None

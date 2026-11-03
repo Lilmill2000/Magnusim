@@ -542,3 +542,17 @@ def test_a_finished_cht_case_reads_its_monitors_and_balance():
     assert labels == ["Heat in", "out", "imbalance"] and answer["summary"][2]["value"] < 1.0
     assert answer["summary_warn"] is False
     assert answer["interfaces"][0]["from_label"] == "Body1 (Air)" and answer["interfaces"][0]["W"] < 0
+
+
+def test_cht_health_hints(tmp_path):
+    """RH1: a conjugate case's health hints: SIMPLE, no velocity limit, and (transient) the
+    solid diffusion number its controlDict allows."""
+    case, _report = _write(
+        tmp_path,
+        bcs=WALLS_FIXED,
+        materials=[AIR, {**ALUMINIUM, "heat_source_W": 2, "heat_source_W_m3": 0}],
+        study={"gravity": "-y", "turbulence_model": "kOmegaSST"},
+    )
+    h = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))["health_hints"]
+    assert h["app"] == "chtMultiRegionSimpleFoam" and h["mode"] == "SIMPLE"
+    assert h["limiter"] is None and "max_di" not in h

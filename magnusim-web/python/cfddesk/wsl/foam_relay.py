@@ -95,6 +95,7 @@ from cfddesk.wsl.foam_case import (
     STATUS_FILE,
     STOP_MARKER,
     FoamCaseError,
+    case_health_hints,
     case_pre_steps,
     case_region_names,
     check_case_local,
@@ -309,6 +310,12 @@ class RelayState:
         self.stdout_lost = False
         self.final: dict[str, Any] = {}
         self.stage_listener: Callable[[str], None] | None = None
+        # RH1: the run's latest health (its last ``health`` event) and its log parser's
+        # ``converged`` and ``failed_reason``, kept in the status file so a run the app
+        # adopts after a restart still has them.
+        self.health: dict[str, Any] | None = None
+        self.converged: dict[str, Any] | None = None
+        self.failed_reason: str | None = None
 
     def observe(self, ev: dict[str, Any]) -> None:
         kind = ev.get("event")
@@ -337,6 +344,14 @@ class RelayState:
                 self.result_ok = bool(ev.get("ok"))
             elif kind == "pre_result":
                 self.pre_ok = bool(ev.get("ok"))
+            elif kind == "health":
+                self.health = {k: v for k, v in ev.items() if k != "event"}
+            elif kind == "converged":
+                self.converged = {k: v for k, v in ev.items() if k in ("by", "time")}
+            elif kind == "failed_reason":
+                reason = ev.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    self.failed_reason = reason.strip()[:160]
         if stage is not None and self.stage_listener is not None:
             self.stage_listener(stage)
 
@@ -361,6 +376,9 @@ class RelayState:
                 "result_ok": self.result_ok,
                 "stop": json.loads(json.dumps(self.stop)) if self.stop else None,
                 "stdout_lost": self.stdout_lost,
+                "health": json.loads(json.dumps(self.health)) if self.health else None,
+                "converged": dict(self.converged) if self.converged else None,
+                "failed_reason": self.failed_reason,
             }
             doc.update(self.final)
         return doc
@@ -1477,6 +1495,17 @@ class Relay:
             return self._stopped("solve")
         return self._run_solve(n)
 
+    def _health_tracker(self) -> Any:
+        """The run's health tracker, built from its case's ``health_hints`` (w27-case.json,
+        written by its analysis's case writer; None hints: a third-party analysis's case)."""
+        try:
+            from magnusim_sdk.health import HealthTracker
+
+            return HealthTracker(case_health_hints(self.case) if self.case is not None else None)
+        except Exception as exc:
+            self.writer.log(f"run health is not checked: {exc}")
+            return None
+
     def _remove_case(self) -> None:
         try:
             self.deps.remove_case(str(self.spec["wsl_case"]))
@@ -1607,7 +1636,18 @@ class Relay:
         )
         on_line = self.hooks.feed if self.hooks is not None else None
         parser = self.parser if self.parser is not None else GenericParser()
-        code, _parser = stream_events_to_stdout(proc, parser, on_line=on_line, out=self.writer)
+        health = self._health_tracker() if s["kind"] == "solve" else None
+        app = str(solver["app"])
+        case = self.case
+        restart = bool(solver["restart"])
+        code, _parser = stream_events_to_stdout(
+            proc,
+            parser,
+            on_line=on_line,
+            out=self.writer,
+            health=health,
+            log_base=(lambda: earlier_log_bytes(case, app)) if restart else 0,
+        )
         outcome = {
             "ok": bool(self.state.result_ok and code == 0),
             "phase": "solve",
@@ -1615,6 +1655,21 @@ class Relay:
             "stopped": self._stopped_now(),
         }
         return int(code), outcome
+
+
+def earlier_log_bytes(case: Path, app: str) -> int:
+    """The summed size of a run's earlier log parts (``log.<app>.1``, ``.2``, … in its case
+    folder): where this part's lines start in the run's whole log (RH1 ``log_at``). solve.sh
+    moves a continued run's last ``log.<app>`` aside before its solver starts."""
+    total = 0
+    n = 1
+    while True:
+        part = Path(case) / f"log.{app}.{n}"
+        try:
+            total += part.stat().st_size
+        except OSError:
+            return total
+        n += 1
 
 
 def _t_wall(ev: dict[str, Any]) -> float | None:

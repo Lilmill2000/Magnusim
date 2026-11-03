@@ -36,6 +36,11 @@
  *   the parser's `failed_reason` event, read back the same way, is the failed
  *   run's error and starts its note.
  *
+ * - Health (RH1): the relay's `health` event (checked and scrubbed by the runner) is the
+ *   live run's `health` (w27's enrichRunDoc shows it), written to its doc at once when the
+ *   verdict changes and at most every 30 s otherwise; the end writes the last one (live, else
+ *   the status file's, else the job log's last row). A run that solves on the runner says
+ *   `health_checked: true` from its start.
  * - A continued run (F6: its runner record says restart, its doc has `continued`):
  *   the relay counts its steps from 0 and its residuals start at the time it
  *   continued from; withContinued puts the earlier parts first (the doc's
@@ -55,6 +60,10 @@ import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
 import { flushJobLogs } from './log.js';
 import { persistRun, runFolderOf } from './study-io.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
+import { healthPatch as shapeHealthPatch, scrubbedReason } from './run-health-shape.js';
+
+/** How often a live run's health is written to its doc when its verdict has not changed (RH1). */
+export const HEALTH_PATCH_MS = 30_000;
 
 const ACTIVE = new Set(['queued', 'running']);
 /** Stages after the solver: a step or a saved frame does not bring "solve" back. */
@@ -566,6 +575,24 @@ export function onCoreSolveEvent(rec, ev) {
       patchRun(rec, { warnings: [...had, { code, message }] });
       return;
     }
+    case 'health': {
+      const health = healthPatch(live.health || null, ev.health || ev);
+      if (!health) return;
+      const changed = !live.health || live.health.verdict !== health.verdict;
+      live.health = health;
+      const now = Date.now();
+      if (changed || !live.health_patched_at || now - live.health_patched_at >= HEALTH_PATCH_MS) {
+        live.health_patched_at = now;
+        patchRun(rec, { health });
+      }
+      return;
+    }
+    case 'converged':
+      if (ev.by) live.converged = { by: String(ev.by), time: finite(ev.time) ? Number(ev.time) : null };
+      return;
+    case 'failed_reason':
+      if (typeof ev.reason === 'string') live.failed_reason = ev.reason;
+      return;
     case 'ranks': {
       const n = Math.floor(Number(ev.n_procs));
       if (!Number.isFinite(n) || n < 1) return;
@@ -593,7 +620,8 @@ export function onCoreSolveEvent(rec, ev) {
  * @param {any} rec the ended runner record
  * A failed run whose log parser named the cause (`ctx.reason`, API 1.8) has it as its
  * error, and its note starts with it.
- * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string, converged?: { by: string, time: number | null } | null, reason?: string | null }} [ctx]
+ * The run's last health (`ctx.health`, RH1) is its doc's `health`, no longer live.
+ * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string, converged?: { by: string, time: number | null } | null, reason?: string | null, health?: any }} [ctx]
  */
 export function endedRunDoc(doc, rec, ctx = {}) {
   const d = doc || {};
@@ -669,7 +697,56 @@ export function endedRunDoc(doc, rec, ctx = {}) {
   if (Number.isFinite(n) && n >= 1) out.n_procs = n;
   if (converged !== undefined) out.converged = converged;
   if (typeof ctx.excerpt === 'string') out.log_excerpt = ctx.excerpt;
+  if (ctx.health && typeof ctx.health === 'object') out.health = { ...ctx.health, live: false };
   return out;
+}
+
+/**
+ * A run's health event as its doc keeps it (RH1): checked, scrubbed, at most 4 KB
+ * (run-health-shape.js). The runner's path, the fake solve and the old-run check all use it.
+ * @param {any} prev
+ * @param {any} ev
+ */
+export function healthPatch(prev, ev) {
+  return shapeHealthPatch(prev, ev);
+}
+
+/** The relay's status file of a run's case (`.magnusim-run.json`), or null. @param {unknown} caseDir */
+function statusFileOf(caseDir) {
+  if (!caseDir) return null;
+  try {
+    return JSON.parse(readFileSync(join(String(caseDir), '.magnusim-run.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A run's last health when it ended: its live one, else its relay's status file's, else the
+ * last `health` row of its job log (RH1).
+ * @param {any} live
+ * @param {any} rec
+ */
+export function endedHealth(live, rec) {
+  if (live && live.health) return live.health;
+  const st = statusFileOf(rec && rec.case_dir);
+  const fromStatus = st && st.health ? healthPatch(null, st.health) : null;
+  if (fromStatus) return fromStatus;
+  const ev = lastJobLogEvent(rec && rec.log_path, 'health', (e) => typeof e.verdict === 'string');
+  return ev ? healthPatch(null, ev) : null;
+}
+
+/** A run's converged as its relay's status file kept it (when its job log has none), or null. @param {any} rec */
+function convergedFromStatus(rec) {
+  const st = statusFileOf(rec && rec.case_dir);
+  const c = st && st.converged;
+  return c && CONVERGED_BY.has(String(c.by)) ? { by: String(c.by), time: finite(c.time) ? Number(c.time) : null } : null;
+}
+
+/** A failed run's reason as its relay's status file kept it, scrubbed, or null. @param {any} rec */
+function failedReasonFromStatus(rec) {
+  const st = statusFileOf(rec && rec.case_dir);
+  return st && typeof st.failed_reason === 'string' ? scrubbedReason(st.failed_reason) : null;
 }
 
 /**
@@ -717,8 +794,9 @@ export function onCoreSolveEnd(rec) {
       snap: endProgress(live, rec),
       saved: savedTimesIn(rec.case_dir),
       excerpt: solverLogExcerpt(rec),
-      converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) : null,
-      reason: rec.status === 'failed' ? failedReasonFromJobLog(rec.log_path) : null,
+      converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) || (live && live.converged) || convergedFromStatus(rec) : null,
+      reason: rec.status === 'failed' ? failedReasonFromJobLog(rec.log_path) || (live && live.failed_reason) || failedReasonFromStatus(rec) : null,
+      health: endedHealth(live, rec),
     });
     // A run deleted meanwhile stays deleted.
     if (doc && s.host) s.host.writeRunDoc(String(rec.project_id), { ...doc, ...out, run_id: String(rec.run_id) });
@@ -765,8 +843,9 @@ export function reconcileEndedRun(projectId, doc, rec) {
       snap: endProgress(null, rec),
       saved: savedTimesIn(rec.case_dir),
       excerpt: solverLogExcerpt(rec),
-      converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) : null,
-      reason: rec.status === 'failed' ? failedReasonFromJobLog(rec.log_path) : null,
+      converged: rec.status === 'done' ? convergedFromJobLog(rec.log_path) || convergedFromStatus(rec) : null,
+      reason: rec.status === 'failed' ? failedReasonFromJobLog(rec.log_path) || failedReasonFromStatus(rec) : null,
+      health: endedHealth(null, rec),
     }),
   };
   const sid = String(doc.simulation_id || rec.simulation_id || '');

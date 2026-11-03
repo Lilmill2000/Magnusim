@@ -654,6 +654,87 @@ def freestream_pressure_pa(bc: dict) -> float:
     return p if math.isfinite(p) else 0.0
 
 
+# The linear solvers the case's fvSolution names (write_fv_solution_pimple and the steady
+# body): their caps and tolerances, for the health check of solves at their limit.
+_LINSOLVE_P = {"max_iter": 200, "tol": 1e-7, "rel_tol": 0.01}
+_LINSOLVE_EQ = {"max_iter": 50, "tol": 1e-8, "rel_tol": 0.1}
+
+
+def fixed_inflow(spec: Any) -> bool:
+    """Every inlet holds a fixed velocity or flow rate (RH1 ``fixed_inflow``): a velocity
+    inlet with no "Varies with time" table in effect, and no total-pressure inlet. False for a
+    pressure-driven case (no velocity inlet) and for a table inlet."""
+    _ensure_web_imports()
+    from . import time_table as _tt
+
+    transient = spec_is_transient(spec)
+    inlets = 0
+    for m in spec.mapped or []:
+        bc = m.get("bc")
+        if is_total_pressure_inlet(bc):
+            return False
+        if is_velocity_inlet(bc):
+            if _tt.in_effect(_bc_dict(bc), transient):
+                return False
+            inlets += 1
+    return inlets > 0
+
+
+def health_hints(
+    spec: Any,
+    *,
+    physics: StudyPhysics,
+    model: str,
+    speed_ref: float,
+    u_max: float,
+    patch_names: list[str],
+) -> dict[str, Any]:
+    """The run's ``health_hints`` (w27-case.json and the case report): the solver mode, the
+    Courant setting, the reference speed and velocity limit, the linear solvers' caps, and the
+    inlet and outlet monitors (their function objects are ``mon_<patch>``)."""
+    _ensure_web_imports()
+    t = getattr(spec, "transient", None)
+    transient = t is not None
+    n_outer: int | None = None
+    if t is not None:
+        n_outer = max(1, int(round(t.n_outer_correctors)))
+        mode = "PISO" if n_outer <= 1 else "PIMPLE"
+    else:
+        mode = "SIMPLEC" if physics.simplec else "SIMPLE"
+    # A transient run's last loop solves with the *Final dictionaries (relTol 0); a steady run has none.
+    linsolve: dict[str, dict[str, Any]] = {}
+    for f, base in (("p", _LINSOLVE_P), *((f, _LINSOLVE_EQ) for f in ("U", *turbulence_fields(model)) if f not in ("nut", "R"))):
+        linsolve[f] = {**base, "final_rel_tol": 0.0 if transient else base["rel_tol"]}
+    inlet = outlet = None
+    for m in spec.mapped or []:
+        patch = m.get("patch")
+        if not patch or patch not in patch_names:
+            continue
+        bc = m.get("bc")
+        if inlet is None and is_velocity_inlet(bc):
+            inlet = f"mon_{patch}"
+        elif outlet is None and is_pressure_bc(bc) and not is_total_pressure_inlet(bc):
+            outlet = f"mon_{patch}"
+    from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
+
+    return {
+        "app": "pimpleFoam" if transient else "simpleFoam",
+        "mode": mode,
+        "n_outer": n_outer,
+        "n_correctors": max(1, int(round(t.n_correctors))) if t is not None else None,
+        "max_co": float(t.max_co) if t is not None and t.adjust_time_step else None,
+        "end_time": float(spec.end_time),
+        "average_from": float(t.average_from) if t is not None else None,
+        "uref": float(speed_ref),
+        "uref_source": "inlet" if any(is_velocity_inlet(m.get("bc")) for m in spec.mapped or []) else "pressure",
+        "fixed_inflow": fixed_inflow(spec),
+        "turbulence": model,
+        "limiter": {"name": "limitU", "cap": float(u_max), "factor": LIMIT_FACTOR, "floor": LIMIT_FLOOR},
+        "linsolve": linsolve,
+        "monitors": {"inlet": inlet, "outlet": outlet} if inlet and outlet else None,
+    }
+
+
 def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
     """Port of writeSolveCase speedRef / dHyd selection."""
     _ensure_web_imports()
@@ -1758,7 +1839,9 @@ RAS
             _steady_fv_solution_body(physics, residual_control=not stops_off),
         )
 
-    u_max = max(50.0, 10.0 * abs(speed_ref))
+    from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
+
+    u_max = max(float(LIMIT_FLOOR), float(LIMIT_FACTOR) * abs(speed_ref))
     write_fv_options_limit_u(out / "system" / "fvOptions", max_u=u_max)
 
     if int(spec.n_procs) > 1:
@@ -1873,6 +1956,10 @@ RAS
         "turbulence": sidecar["turbulence"],
         "polyMesh_copied": poly_dst is not None,
     }
+    # What the run's health checks need to know of it (RH1, magnusim_sdk.health).
+    hints = health_hints(spec, physics=physics, model=model, speed_ref=speed_ref, u_max=u_max, patch_names=mon_patches)
+    sidecar["health_hints"] = hints
+    report["health_hints"] = hints
     if restart_from is not None:
         report["restart"] = dict(sidecar["restart"])
         # The steps a run takes before its solver (pre_steps, e.g. potentialFoam's

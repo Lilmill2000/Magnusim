@@ -141,6 +141,7 @@ import { jobArgsFromParams, pluginJobEnv } from './server/registered-tool.js';
 import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
 import { hardwareRankCap } from './ranks.js';
 import { STEP_METRICS, closeStep as closeSolveStep, foldSolveEvent, newSolveFold } from './solve-fold.js';
+import { healthPatch, scrubbedReason } from './run-health-shape.js';
 
 export { createFoamRecord };
 
@@ -239,6 +240,7 @@ const GATE_TEXT = Object.freeze({
  *   allKilledAt: number | null, timers: Set<ReturnType<typeof setTimeout>>, release: () => void,
  *   gone: boolean, fold: ReturnType<typeof newFoamFold>, savedSeen: Set<number>, lastStage: string | null,
  *   relayKillTimer: ReturnType<typeof setTimeout> | null, staleLogged: boolean,
+ *   health?: any, healthAt?: string | null, convergedSeen?: boolean, failedReasonSeen?: boolean,
  * }} Entry
  */
 
@@ -350,6 +352,10 @@ function newEntry(base) {
     gone: false,
     fold: newFoamFold(),
     savedSeen: new Set(),
+    health: null,
+    healthAt: null,
+    convergedSeen: false,
+    failedReasonSeen: false,
     lastStage: null,
     relayKillTimer: null,
     staleLogged: false,
@@ -924,6 +930,17 @@ export function relayEvent(id, entry, ev) {
       // The relay's first line: it started (afterRelayGone tells this from a relay that died starting).
       entry.relayAlive = true;
       return;
+    case 'health': {
+      // RH1: the run's health, checked and scrubbed (run-health-shape.js); an oversize one keeps
+      // the last record with the new verdict (stale).
+      if (entry.kind !== 'solve') return;
+      const health = healthPatch(entry.health || null, ev);
+      if (!health) return;
+      entry.health = health;
+      if (typeof health.at === 'string') entry.healthAt = health.at;
+      deliver(id, { event: 'health', health });
+      return;
+    }
     case 'relay_launch': {
       // A core solve's Run panel names the process that runs it on Windows (its relay),
       // as it named run_solve's. Plugin cases get no such event.
@@ -1316,7 +1333,7 @@ export function adoptFoamCase(rec, token, release, { relayGone = false } = {}) {
  * @param {Entry} entry
  * @param {any} st
  */
-function applyStatus(id, entry, st) {
+export function applyStatus(id, entry, st) {
   const stage = String(st.stage || '');
   if (FRAME_STAGES.has(stage) && stage !== entry.lastStage) setStage(id, stage);
   for (const raw of Array.isArray(st.saved) ? st.saved : []) {
@@ -1324,6 +1341,27 @@ function applyStatus(id, entry, st) {
     if (!Number.isFinite(t) || entry.savedSeen.has(t)) continue;
     entry.savedSeen.add(t);
     deliver(id, { event: 'time_saved', t });
+  }
+  // RH1: what the status file keeps of the run's health, converged and failed_reason (a run
+  // adopted after a restart has no live events of them).
+  if (entry.kind === 'solve' && st.health && typeof st.health === 'object' && st.health.at !== entry.healthAt) {
+    const health = healthPatch(entry.health || null, st.health);
+    if (health) {
+      entry.health = health;
+      entry.healthAt = st.health.at;
+      deliver(id, { event: 'health', health });
+    }
+  }
+  if (entry.kind === 'solve' && st.converged && typeof st.converged === 'object' && !entry.convergedSeen) {
+    entry.convergedSeen = true;
+    deliver(id, { event: 'converged', by: String(st.converged.by || ''), time: finite(st.converged.time) ? Number(st.converged.time) : null });
+  }
+  if (entry.kind === 'solve' && typeof st.failed_reason === 'string' && !entry.failedReasonSeen) {
+    const reason = scrubbedReason(st.failed_reason);
+    if (reason) {
+      entry.failedReasonSeen = true;
+      deliver(id, { event: 'failed_reason', reason });
+    }
   }
   const time = Number(st.time);
   const steps = Number(st.n_steps);

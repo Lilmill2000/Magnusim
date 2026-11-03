@@ -639,6 +639,22 @@ def case_regions(case_dir: str | Path, *, strict: bool = True) -> list[dict[str,
     return out
 
 
+def case_health_hints(case_dir: str | Path) -> dict[str, Any] | None:
+    """The case's ``health_hints`` (RH1): ``w27-case.json``'s top-level ``health_hints``, or
+    its ``prepare_report.health_hints``; None when the sidecar has none or cannot be read."""
+    try:
+        doc = json.loads((Path(case_dir) / CASE_SIDECAR).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    hints = doc.get("health_hints")
+    if not isinstance(hints, dict):
+        report = doc.get("prepare_report")
+        hints = report.get("health_hints") if isinstance(report, dict) else None
+    return dict(hints) if isinstance(hints, dict) else None
+
+
 def case_region_names(case_dir: str | Path, *, strict: bool = True) -> list[str]:
     """The names of :func:`case_regions`."""
     return [r["name"] for r in case_regions(case_dir, strict=strict)]

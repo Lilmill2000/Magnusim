@@ -305,6 +305,7 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
         control_dict_text,
         fv_schemes_text,
         fv_solution_text,
+        health_hints,
         reference_density,
         thermal_entries,
         thermophysical_text,
@@ -575,6 +576,14 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
         sidecar["settle"] = settle
     if transient and spec.transient is not None:
         sidecar["transient"] = {**dataclasses.asdict(spec.transient), "max_di": MAX_DI}
+    sidecar["health_hints"] = health_hints(
+        spec,
+        app=app,
+        model=model,
+        records=flow.records if flow is not None else None,
+        speed_ref=flow.speed_ref if flow is not None else None,
+        max_di=MAX_DI if transient else None,
+    )
     if restart_from is not None:
         sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}
         if stops_off:
@@ -588,6 +597,7 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
         "patches": all_patches,
         "regions": names,
         "polyMesh_copied": True,
+        "health_hints": sidecar["health_hints"],
     }
     if restart_from is not None:
         report["restart"] = dict(sidecar["restart"])

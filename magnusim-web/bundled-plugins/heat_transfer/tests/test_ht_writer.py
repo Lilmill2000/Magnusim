@@ -321,3 +321,22 @@ def test_untouched_thermal_fields_solve_at_what_the_editor_shows(tmp_path):
     # The study's reference temperature is still where the fluid starts and what htc is against.
     assert "internalField   uniform 350;" in t_field
     assert "TRef            350;" in _text(case, "system/controlDict")
+
+
+def test_health_hints_of_a_natural_convection_cavity(tmp_path):
+    """RH1: a buoyant cavity's health hints: PISO at its Max Courant, p_rgh's 200-iteration cap,
+    no velocity limit, and no fixed inflow (natural convection)."""
+    case = _write(
+        tmp_path,
+        materials=[WATER],
+        bcs=CAVITY_BCS,
+        study={"gravity": "-y", "turbulence_model": "laminar", "reference_temperature": 298.15},
+        transient={"end_time": 20, "write_count": 10, "max_co": 0.5},
+    )
+    h = json.loads(_text(case, "w27-case.json"))["health_hints"]
+    assert h["app"] == "buoyantPimpleFoam" and h["mode"] == "PISO" and h["n_outer"] == 1
+    assert h["max_co"] == 0.5 and h["limiter"] is None and h["fixed_inflow"] is False
+    assert h["linsolve"]["p_rgh"]["max_iter"] == 200 and h["linsolve"]["h"]["max_iter"] == 1000
+    steady = _write(tmp_path / "s", materials=[WATER], bcs=CAVITY_BCS, study={"gravity": "-y", "turbulence_model": "laminar"})
+    hs = json.loads(_text(steady, "w27-case.json"))["health_hints"]
+    assert hs["mode"] == "SIMPLE" and hs["max_co"] is None

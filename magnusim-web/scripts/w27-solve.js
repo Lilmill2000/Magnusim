@@ -92,6 +92,8 @@ import {
 import { killWslCase, probeWslCase } from './wsl-case-watch.js';
 import { coreOwner, solveHookNames } from './solve-hooks.js';
 import { stepRunRecord, stopFoamCase } from './foam-runner.js';
+import { attemptHealth } from './run-health-shape.js';
+import { healthCheckState, healthForRead, solverLogExcerptAt, startHealthCheck } from './run-health-routes.js';
 import {
   activeCoreSolves,
   attachCoreSolveHost,
@@ -473,10 +475,31 @@ export function slimRunDoc(doc) {
     // reached its end without converging) and its "Stop when a monitor settles".
     converged: doc.converged !== undefined ? doc.converged : null,
     settle: doc.settle || null,
+    // RH1: the verdict and its onset (the tree's badge, the queue line); the record is the run doc's.
+    health: slimHealth(doc.health),
+    health_checked: doc.health_checked !== undefined ? doc.health_checked : null,
     project_id: doc.project_id || null,
     project_title: doc.project_title || null,
     study_label: doc.study_label || null,
   };
+}
+
+/** What a slim run row keeps of its health: the verdict and when it began (RH1). @param {any} h */
+function slimHealth(h) {
+  if (!h || typeof h !== 'object' || !h.verdict) return null;
+  return { verdict: h.verdict, first_unhealthy: h.first_unhealthy || null, live: !!h.live };
+}
+
+/**
+ * A run doc's health as it is read (RH1): the live one while it solves on the runner, with its
+ * restart from the run's own latest saved time.
+ * @param {any} doc
+ * @param {any} runnerLive
+ * @param {number | null} latest
+ */
+function readHealth(doc, runnerLive, latest) {
+  const h = (runnerLive && runnerLive.health) || doc.health || null;
+  return h ? healthForRead(h, latest) : null;
 }
 
 function progressSnapshotIsThin(progress) {
@@ -515,8 +538,10 @@ function enrichRunDoc(doc, opts) {
   const saved = liveSavedFields(doc);
   // The latest saved result on disk: what Continue starts from (null: nothing saved).
   const continueFrom = continueFromOf(doc);
+  const latestSaved = continueFrom ?? (Number(saved.last_saved_iteration ?? doc.last_saved_iteration) > 0 ? Number(saved.last_saved_iteration ?? doc.last_saved_iteration) : null);
+  const health = readHealth(doc, runnerLive, latestSaved);
   if (!progress) {
-    const next = { ...doc, ...saved, continue_from: continueFrom };
+    const next = { ...doc, ...saved, continue_from: continueFrom, ...(health ? { health } : {}) };
     const shown = solveDisplayStage(next);
     if (shown) next.stage = shown;
     return next;
@@ -548,6 +573,7 @@ function enrichRunDoc(doc, opts) {
     solve_started_at: startedAt,
     ...saved,
     continue_from: continueFrom,
+    ...(health ? { health } : {}),
   };
   // A run on the runner shows its own Courant number and time step only: the doc may
   // still hold the last attempt's until this one ends.
@@ -2219,8 +2245,12 @@ export function continuedRunFields(old, cont) {
     end_time: d.transient && d.transient.end_time != null ? d.transient.end_time : d.endTime ?? null,
     runner_job_id: d.runner_job_id || null,
     log_path: d.log_path || null,
+    // RH1: how healthy that part was ({verdict, codes, first_unhealthy}, under 300 bytes).
+    health: attemptHealth(d.health),
   };
   return {
+    // RH1: Health judges the continued part from its first step.
+    health: null,
     has_results: true,
     last_saved_iteration: from,
     n_saved_times: cont.times.length,
@@ -2553,7 +2583,7 @@ async function startSolveBody(opts = {}, slot) {
     if (cont && Array.isArray(cont.doc.continue_changes)) {
       persistRun(id, simId, { id: runId, run_id: runId, continue_changes: applyContinueChanges(cont.doc.continue_changes, cont.at || new Date().toISOString()) });
     }
-    return startFakeSolve({ id, runId, simId, slot, endTime: et, onDone });
+    return startFakeSolve({ id, runId, simId, slot, endTime: et, onDone, caseDir: winOut });
   }
   // The run solves on the step-list runner (core-solve.js).
   return startSolveOnRunner({
@@ -2816,6 +2846,10 @@ async function startSolveOnRunner(c) {
         runner_job_id: rec.id,
         // This attempt's warnings only (the runner's warning events; core-solve.js).
         warnings: [],
+        // RH1: the relay checks its health; this attempt's starts empty (a Continue's earlier
+        // parts keep theirs in attempts[]).
+        health: null,
+        health_checked: true,
         // Continued (F6): the run so far stays (frames, residuals, steps, elapsed time, attempts).
         // A Start from the beginning is no continued run (an earlier Continue's parts are gone).
         ...(cont ? continuedRunFields(cont.doc, cont) : { continued: null, attempts: null }),
@@ -3521,6 +3555,42 @@ export async function previewTransient(projectId, runId, settings, simulationId)
   return pv && typeof pv === 'object' ? pv : { ok: false, error: 'transient preview failed' };
 }
 
+/**
+ * GET /api/run/health (RH1, spec 3.9): the run's health; `recompute` on an ended run that has
+ * none starts "Check its log" in the background and answers `checking: true`.
+ * @param {string} projectId
+ * @param {any} run the run, enriched
+ * @param {boolean} recompute
+ */
+function runHealthAnswer(projectId, run, recompute) {
+  const runId = String(run.run_id || run.id);
+  const key = `${projectId}|${runId}`;
+  const base = { ok: true, run_id: runId, status: run.status || null, health_checked: run.health_checked !== undefined ? run.health_checked : null };
+  if (run.health) return { ...base, health: run.health, checking: false };
+  const state = healthCheckState(key);
+  const ended = ['done', 'stopped', 'failed'].includes(String(run.status || ''));
+  if (recompute && ended && run.health_checked !== false && !(state && !state.done)) {
+    const latest = run.continue_from != null ? Number(run.continue_from) : Number(run.last_saved_iteration) > 0 ? Number(run.last_saved_iteration) : null;
+    const sim = String(run.simulation_id || '');
+    startHealthCheck(
+      key,
+      run,
+      (health) => {
+        if (!health || !sim) return;
+        try {
+          persistRun(projectId, sim, { id: runId, run_id: runId, simulation_id: sim, health });
+          invalidateLiveSolveCache();
+        } catch (e) {
+          console.warn('[CFD run health] the check was not saved', e);
+        }
+      },
+      { latestSaved: latest },
+    );
+  }
+  const now = healthCheckState(key);
+  return { ...base, health: null, checking: !!(now && !now.done), ...(now && now.error ? { error: now.error } : {}) };
+}
+
 export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody }) {
   const a = parts[1];
   const b = parts[2];
@@ -3641,6 +3711,22 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       } catch (e) {
         return sendJson(res, 500, { ok: false, error: String((e && e.message) || e) });
       }
+    }
+    if (req.method === 'GET' && (b === 'health' || b === 'solver-log' || b === 'solver_log')) {
+      const pid = u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
+      const rid = u.searchParams.get('run_id') || '';
+      const sid = u.searchParams.get('simulation_id') || '';
+      const st = getRunStatus(pid, rid, sid);
+      const run = st.body && st.body.run;
+      if (!run || (rid && String(run.run_id || run.id) !== rid)) return sendJson(res, 404, { ok: false, code: 'not_found', error: 'No such run in this study.' });
+      if (b === 'health') return sendJson(res, 200, runHealthAnswer(pid, run, u.searchParams.get('recompute') === '1'));
+      const out = solverLogExcerptAt(run, {
+        lines: u.searchParams.get('lines'),
+        at: u.searchParams.get('at') || 'end',
+        key: u.searchParams.get('key') || '',
+        filter: u.searchParams.get('filter') || '',
+      });
+      return sendJson(res, 200, { ok: true, run_id: String(run.run_id || run.id), ...out });
     }
     if (req.method === 'GET' && b === 'monitors') {
       const mon = await getRunMonitors(

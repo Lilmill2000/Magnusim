@@ -47,6 +47,12 @@ export function parseJobLine(line) {
   }
 }
 
+/** A health event's verdict and finding codes (its job-log row is kept when they change). @param {Record<string, any>} ev */
+function healthKey(ev) {
+  const codes = Array.isArray(ev.findings) ? ev.findings.map((/** @type {any} */ f) => (f && f.code) || '').join(',') : '';
+  return `${String(ev.verdict || '')}|${codes}`;
+}
+
 /**
  * Which of a job's output goes to its log file. Every event still reaches
  * onEvent; this only keeps a fast job's file small (a solver sends about ten
@@ -68,6 +74,8 @@ export function parseJobLine(line) {
  *   Plain stderr lines (a traceback) are no step's: they wait in their own tail
  *   (the last `tailLines` of them, written whole at the end), as they may be
  *   read before the end of stdout.
+ * - A run's `health` events (RH1): a row only when its verdict or finding codes change, and
+ *   its last one (live false).
  * - Every other event: always.
  *
  * Rows keep their order (stderr's among themselves: past `linesFull` they come
@@ -104,6 +112,8 @@ export function createLogThinner(opts = {}) {
   let errTail = [];
   /** @type {Array<[string, Record<string, any>]>} */
   let out = [];
+  /** The verdict and finding codes of the last health row written. */
+  let lastHealth = '';
 
   /** @param {Row} r */
   const writeLine = (r) => {
@@ -219,7 +229,11 @@ export function createLogThinner(opts = {}) {
         }
       } else if (kind === 'log') {
         addLine(row);
+      } else if (kind === 'health' && ev.live !== false && healthKey(ev) === lastHealth) {
+        // RH1: a run's health refresh with the verdict and findings it had is not written
+        // again; the run doc has it, and its last row (live false) always is.
       } else {
+        if (kind === 'health') lastHealth = healthKey(ev);
         release();
         emit(row);
       }
