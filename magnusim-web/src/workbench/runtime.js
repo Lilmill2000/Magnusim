@@ -221,6 +221,7 @@ import {
   unresolveTransient,
 } from './runReopen';
 import { askRunChange } from './runChangeChoice';
+import { badgeTitle as healthBadgeTitle, fixedRunName as healthFixedRunName, unhealthyNotice as healthNoticeText } from './runHealthWords';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
@@ -17501,6 +17502,49 @@ function jobChipWho(rec, fallbackName) {
   return [jobChipProjectLabel(rec), study, fallbackName].filter(Boolean).join(' · ');
 }
 
+/**
+ * RH1: a solving run whose health turns Unhealthy, on any open project: one notice per run
+ * attempt ("<who> is unhealthy since t = 0.0069 s. See Health in its Run panel.", through the
+ * finish-toast queue), and the queue line's " · Unhealthy" while it solves.
+ */
+const healthNoticed = (() => {
+  try {
+    return new Set(JSON.parse(sessionStorage.getItem('cfd.health.noticed') || '[]'));
+  } catch (_) {
+    return new Set();
+  }
+})();
+/** The running run's health verdict the queue line shows: {run_id, verdict}, or null. */
+let liveRunHealth = null;
+
+function noteRunHealth(j) {
+  if (!j || typeof j !== 'object') return;
+  const rows = [].concat(j.live_run ? [j.live_run] : [], j.run ? [j.run] : [], Array.isArray(j.runs) ? j.runs : []);
+  let live = null;
+  for (const r of rows) {
+    if (!r || !(r.status === 'running' || r.status === 'starting')) continue;
+    const h = r.health;
+    const rid = String(r.run_id || r.id || '');
+    if (!live && h && h.verdict) live = { run_id: rid, verdict: String(h.verdict), project_id: String(r.project_id || j.project_id || '') };
+    if (!h || h.verdict !== 'unhealthy') continue;
+    const key = String(r.project_id || j.project_id || '') + '|' + rid + '|' + String(r.started_at || '');
+    if (healthNoticed.has(key)) continue;
+    healthNoticed.add(key);
+    try {
+      sessionStorage.setItem('cfd.health.noticed', JSON.stringify([...healthNoticed].slice(-50)));
+    } catch (_) {}
+    const who = jobChipWho(r, r.name || 'Run');
+    finishToasts.push({ text: healthNoticeText(who, h, runRecIsTransient(r)), fail: true, ms: 6000 });
+  }
+  if (live || (rows.length && !rows.some((r) => r && (r.status === 'running' || r.status === 'starting')))) {
+    const changed = JSON.stringify(live) !== JSON.stringify(liveRunHealth);
+    liveRunHealth = live;
+    if (changed) {
+      try { syncQueueMenu(document.getElementById('job-queue-chip')); } catch (_) {}
+    }
+  }
+}
+
 let lastFinishToastKey = '';
 let lastFinishToastAt = 0;
 // The one #job-finish-toast: run-finished toasts and queue notices are shown in turn.
@@ -22080,6 +22124,7 @@ function refreshSetupTree() {
                 escapeHtml(label) +
                 '</span>' +
                 runConvergedBadge(rec) +
+                runHealthBadge(rec) +
                 treeJobMark(
                   rec.status === 'running' || activityBusy('solve', rid),
                   activityQueuePos('solve', rid),
@@ -30438,11 +30483,24 @@ function syncQueueMenu(chip) {
   }
   if (now) {
     now.hidden = !running;
-    now.textContent = running ? 'Running: ' + running : '';
+    // RH1: the running run's health, when it is Unhealthy.
+    const unhealthy = !!running && !!liveRunHealth && liveRunHealth.verdict === 'unhealthy' && liveSolveIsRun(liveRunHealth.run_id);
+    now.textContent = running ? 'Running: ' + running + (unhealthy ? ' · Unhealthy' : '') : '';
   }
   if (head) head.hidden = !waiting;
   if (empty) empty.hidden = !!(waiting || running);
   if (chip) chip.hidden = !jobQueue.menuOpen;
+}
+
+/** Whether the job running now is this run's solve (RH1's queue line). */
+function liveSolveIsRun(runId) {
+  try {
+    const busy = jobQueue.busy;
+    if (busy && busy.kind) return busy.kind === 'solve' && (!busy.run_id || String(busy.run_id) === String(runId));
+    return jobState.mode === 'solve';
+  } catch (_) {
+    return false;
+  }
 }
 
 function setQueueMenuOpen(open) {
@@ -30686,7 +30744,7 @@ async function onSimStartClick() {
   }
   if (rec && overwritesResults(runEditStateOf(rec)) && !runIsReopeningHere(rec)) {
     const baseRev = revOf(rec);
-    const w = overwriteWords(rec, { action: 'start', studyTransient: simIsTransientClient() });
+    const w = overwriteWords(rec, { action: 'start', studyTransient: simIsTransientClient(), health: runHealthOf(rec) });
     if (!(await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, safe: true }))) return;
     if (!(await reopenRunClient(rec, baseRev))) return;
     rec = findRunRecord(runId) || rec;
@@ -32204,10 +32262,10 @@ async function askRunSolveEdit(rec, applyToNew, body) {
  * with its settings (Add run's copy, in the study's time dependency), selected in the panel and
  * the tree, then the change on it. The finished run is not touched.
  */
-async function makeRunFromFinished(rec, applyToNew) {
+async function makeRunFromFinished(rec, applyToNew, opts) {
   const from = { ...rec };
   try {
-    await createRunClient({ copyFrom: rec.id, unresolve: true });
+    await createRunClient({ copyFrom: rec.id, unresolve: true, ...(opts && opts.name ? { name: opts.name } : {}) });
   } catch (e) {
     console.warn('[CFD] new run from a finished one', e);
     setRunHint((e && e.message) || 'The new run was not made.');
@@ -33147,7 +33205,7 @@ async function createRunClient(opts) {
   try { clearSolveUiLeak(); } catch (_) {}
   const copyFrom = opts && opts.copyFrom;
   const nameEl = document.getElementById('sim-new-run-name');
-  const name = String((nameEl && nameEl.value) || '').trim() || nextClientRunName();
+  const name = String((opts && opts.name) || '').trim() || String((nameEl && nameEl.value) || '').trim() || nextClientRunName();
   const id = newClientRunId();
   const studyId =
     (typeof studyCatalog !== 'undefined' && studyCatalog.simulation && studyCatalog.simulation.id) || null;
@@ -33823,7 +33881,60 @@ function computeRunState() {
     // Its part now (or last) runs past its convergence: written without its stops.
     stops_off: !!(run && run.prepare_run && typeof run.prepare_run === 'object' && run.prepare_run.stops_off),
     study: runStudyRecord(rec),
+    // RH1: its health record, whether its kind is checked (null: it ran before checks
+    // existed), and what its Health block reads of the run.
+    health: run && run.health && typeof run.health === 'object' ? run.health : null,
+    health_checked: run ? (run.health_checked === undefined ? null : run.health_checked) : null,
+    health_run: run ? runHealthView(run, running) : null,
   };
+}
+
+/** What a run's Health block reads of it (RH1): its status, a Stop on its way, its latest saved time, earlier parts. */
+function runHealthView(run, running) {
+  const raw = run.continue_from !== undefined && run.continue_from !== null ? run.continue_from : Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null;
+  const saved = raw !== null && raw !== undefined && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  return {
+    status: String(run.status || ''),
+    stopping: !!(running && run.stop_requested),
+    saved,
+    attempts: Array.isArray(run.attempts) ? run.attempts : [],
+    continue_changes: Array.isArray(run.continue_changes) ? run.continue_changes : [],
+  };
+}
+
+/**
+ * RH1 (A3): the Health block's fix makes a NEW run from t = 0: "<run> fixed" (unique), with
+ * the run's settings and the fix's values, selected and not started. The run keeps its status
+ * and its results (the person's Start is theirs to make).
+ */
+async function addHealthFixRun(runId, fix) {
+  const rec = findRunRecord(runId) || selectedRunRecord();
+  if (!rec) return null;
+  const values = Array.isArray(fix && fix.values) ? fix.values : [];
+  const name = uniqueRunName(String((fix && fix.name) || healthFixedRunName(String(rec.name || 'Run'))));
+  return makeRunFromFinished(
+    rec,
+    async (made) => {
+      const transient = { ...transientSettingsFor(made) };
+      for (const v of values) {
+        const key = String((v && v.key) || '');
+        if (key.startsWith('transient.')) transient[key.slice('transient.'.length)] = v.value;
+      }
+      runCatalog.transient_run_id = String(made.id || made.run_id);
+      runCatalog.transient = transient;
+      await persistRunSettings({ run_id: made.id || made.run_id, transient });
+    },
+    { name },
+  );
+}
+
+/** `base`, or "base 2", "base 3", ... when the study has a run of that name. */
+function uniqueRunName(base) {
+  const used = new Set(studyRunList().map((r) => String(r.name || '')));
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(base + ' ' + n)) n += 1;
+  return base + ' ' + n;
 }
 
 /** A run's Cores setting: a whole number, or null for Auto. A choice not saved yet wins over the record. */
@@ -33928,6 +34039,25 @@ function runConvergedNote(run, done, transient) {
       ? 'Reached the iteration limit before the residuals met their targets or the monitor settled.'
       : 'Reached the iteration limit before the residuals met their targets.',
   };
+}
+
+/** RH1: an unhealthy run's tree badge ("Unhealthy", its onset in the title), else ''. */
+function runHealthBadge(rec) {
+  const h = rec && rec.health;
+  if (!h || h.verdict !== 'unhealthy') return '';
+  return (
+    '<span class="tree-health" data-run-health-badge="unhealthy" title="' +
+    escapeHtml(healthBadgeTitle(h, runRecIsTransient(rec))) +
+    '">Unhealthy</span>'
+  );
+}
+
+/** A run's health record: the panel's run doc when it is that run, else its catalog row's (RH1). */
+function runHealthOf(rec) {
+  const id = String((rec && (rec.id || rec.run_id)) || '');
+  const run = runCatalog.run;
+  if (run && String(run.run_id || run.id || '') === id && run.health) return run.health;
+  return (rec && rec.health) || null;
 }
 
 /** A converged run's tree badge (API 1.4), else ''. */
@@ -34123,6 +34253,8 @@ function runsTreeKey(list, activeId) {
           runHasResults(r) ? 'R' : '',
           // A monitor renamed (the Assistant's, or another window's) is drawn again too.
           (r.result_controls || []).map((c) => (c.id || '') + '=' + (c.name || '')).join(','),
+          // RH1: the run's health badge.
+          (r.health && r.health.verdict) || '',
         ].join(':')
       )
       .join('|')
@@ -34175,6 +34307,7 @@ function adoptReopenedRun() {
 }
 
 function applyRunCatalog(j) {
+  try { noteRunHealth(j); } catch (e) { console.warn('[CFD] run health', e); }
   if (j && j.transient_defaults && typeof j.transient_defaults === 'object') runCatalog.transient_defaults = j.transient_defaults;
   if (j && j.steady_defaults && typeof j.steady_defaults === 'object') runCatalog.steady_defaults = j.steady_defaults;
   const curPid = typeof currentProjectId === 'function' ? currentProjectId() : '';
@@ -34975,6 +35108,12 @@ async function renameActiveRunClient(name) {
   };
   window.__CFD_RUN_COPY_FROM__ = (id) => copyRunSettingsFrom(id);
   window.__CFD_RUN_SETUP_FIX__ = () => openSetupFix(runCatalog.start_fix);
+  // RH1: the Health block's new run with a fix, and a read of the selected run again.
+  window.__CFD_RUN_HEALTH_FIX__ = (runId, fix) => addHealthFixRun(runId, fix);
+  window.__CFD_RUN_REFRESH__ = () =>
+    refreshRunCatalog()
+      .then(() => publishRunState())
+      .catch((e) => console.warn('[CFD] run refresh', e));
   document.getElementById('btn-create-run')?.addEventListener('click', () => {
     createRunClient().catch((e) => console.error('[CFD] create run', e));
   });

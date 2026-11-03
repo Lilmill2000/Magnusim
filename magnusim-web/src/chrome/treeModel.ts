@@ -1,3 +1,4 @@
+import { badgeTitle } from '../workbench/runHealthWords';
 import { isPlaced } from '../monitorTargets';
 import { scopeBelongsToProject } from '../scope';
 import { runHasVisibleResults } from '../workbench/jobQueueOrder';
@@ -63,6 +64,8 @@ export interface StudyNode {
     olderGeometry?: boolean;
     /** A finished run that converged (API 1.4): how, and at which iteration or time. */
     converged?: RunConverged;
+    /** RH1: an Unhealthy run's badge title ("Health: Unhealthy since t = 0.0069 s"). */
+    unhealthy?: string;
   }>;
 }
 
@@ -256,6 +259,8 @@ interface ProjectTreeRun {
   result_controls?: Array<{ id?: string; name?: string; faces?: string[]; placed?: boolean; key?: string }>;
   older_geometry?: boolean;
   converged?: RunConverged;
+  /** RH1: its health verdict and onset (scope.py _run_health). */
+  health?: { verdict?: string; unit?: 'time step' | 'iteration'; first_unhealthy?: { t?: number | null; approx?: boolean } | null };
 }
 
 type QueueRow = NonNullable<TreeActivity['queue']>[number];
@@ -507,6 +512,9 @@ export function readSetupTree(
               })),
               ...(run.older_geometry ? { olderGeometry: true } : {}),
               ...(done && run.converged && typeof run.converged === 'object' ? { converged: run.converged } : {}),
+              ...(run.health && run.health.verdict === 'unhealthy'
+                ? { unhealthy: badgeTitle({ v: 1, verdict: 'unhealthy', unit: run.health.unit, first_unhealthy: run.health.first_unhealthy ? { t: run.health.first_unhealthy.t ?? null, approx: run.health.first_unhealthy.approx } : null }, run.health.unit !== 'iteration') }
+                : {}),
             };
           }),
         };

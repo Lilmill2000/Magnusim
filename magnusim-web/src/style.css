@@ -6399,3 +6399,122 @@ body.on-workbench.results-chrome-shown .right-chrome { bottom: 64px; }
 .vtk-export-folder {
   margin-right: auto;
 }
+/* RH1: the Run panel's Health block, its findings, what to do and the solver's output. */
+.run-health {
+  margin-top: 8px;
+}
+.run-health-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-health-chip {
+  padding: 0 8px;
+  font-size: var(--mg-text-sm);
+  font-weight: 600;
+  line-height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--mg-border-subtle);
+  color: var(--mg-text-muted);
+}
+.run-health-chip.is-healthy {
+  color: var(--mg-success);
+  background: var(--mg-success-bg);
+  border-color: var(--mg-success-border);
+}
+.run-health-chip.is-watch {
+  color: var(--mg-warning);
+  background: var(--mg-warning-bg);
+  border-color: var(--mg-warning-border);
+}
+.run-health-chip.is-unhealthy,
+.run-health-chip.is-failed {
+  color: var(--mg-danger);
+  background: var(--mg-danger-bg);
+  border-color: var(--mg-danger-border);
+}
+.run-health-findings {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.run-health-finding {
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border-left: 3px solid var(--mg-border-subtle);
+}
+.run-health-finding.is-error {
+  border-left-color: var(--mg-danger-border);
+}
+.run-health-finding.is-warn {
+  border-left-color: var(--mg-warning-border);
+}
+.run-health-text {
+  margin: 0;
+  font-size: var(--mg-text-sm);
+  line-height: 1.4;
+}
+.run-health-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.run-health-why summary {
+  cursor: pointer;
+  font-size: var(--mg-text-sm);
+  color: var(--mg-text-muted);
+}
+.run-health-fix {
+  margin-top: 6px;
+}
+.run-health-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.run-solver-log {
+  margin-top: 8px;
+}
+.run-solver-log summary {
+  cursor: pointer;
+  font-size: var(--mg-text-sm);
+}
+.run-solver-log-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+.run-solver-log-at .fp-btn.is-on {
+  font-weight: 600;
+}
+.run-solver-log-lines {
+  max-height: 260px;
+  margin: 0;
+  padding: 6px;
+  overflow: auto;
+  font-family: var(--mg-font-mono);
+  font-size: var(--mg-text-micro);
+  line-height: 1.35;
+  white-space: pre;
+  background: var(--mg-plot-bg);
+  border: 1px solid var(--mg-border-subtle);
+  border-radius: 4px;
+}
+.run-solver-log-lines .is-hit {
+  background: var(--mg-warning-bg);
+  outline: 1px solid var(--mg-warning-border);
+}
+.tree-health {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: var(--mg-text-micro);
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--mg-danger);
+  background: var(--mg-danger-bg);
+  border: 1px solid var(--mg-danger-border);
+  border-radius: 999px;
+}

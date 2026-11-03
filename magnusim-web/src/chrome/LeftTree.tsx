@@ -335,9 +335,14 @@ function StudyBlock({ study, selectedKey }: { study: StudyNode; selectedKey: str
         busy={r.busy}
         queuePos={r.queuePos}
         extra={
-          r.olderGeometry || r.converged ? (
+          r.olderGeometry || r.converged || r.unhealthy ? (
             <>
               {r.converged ? <ConvergedBadge converged={r.converged} /> : null}
+              {r.unhealthy ? (
+                <span className="tree-health" data-run-health-badge="unhealthy" title={r.unhealthy}>
+                  Unhealthy
+                </span>
+              ) : null}
               {r.olderGeometry ? (
                 <span className="tree-sub" data-run-older-geometry="1" title="Made on an older version of its geometry.">
                   Older geometry

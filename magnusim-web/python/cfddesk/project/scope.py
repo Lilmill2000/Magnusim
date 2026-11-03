@@ -477,7 +477,23 @@ def _run_node(
         "result_controls": controls,
         **_run_build_fields(run, rev),
         **_run_converged(run),
+        **_run_health(run),
     }
+
+
+def _run_health(run: dict[str, Any]) -> dict[str, Any]:
+    """A run's health verdict (RH1) for its tree badge: ``health`` ``{verdict, unit,
+    first_unhealthy}``; nothing for a run with none."""
+    h = run.get("health")
+    if not isinstance(h, dict) or h.get("verdict") not in ("pending", "healthy", "watch", "unhealthy", "failed"):
+        return {}
+    out: dict[str, Any] = {"verdict": h["verdict"]}
+    if h.get("unit") in ("time step", "iteration"):
+        out["unit"] = h["unit"]
+    fu = h.get("first_unhealthy")
+    if isinstance(fu, dict) and isinstance(fu.get("t"), (int, float)) and not isinstance(fu.get("t"), bool):
+        out["first_unhealthy"] = {"t": fu["t"], **({"approx": True} if fu.get("approx") else {})}
+    return {"health": out}
 
 
 def _run_converged(run: dict[str, Any]) -> dict[str, Any]:

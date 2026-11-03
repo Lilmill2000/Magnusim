@@ -283,7 +283,10 @@ export interface Words {
  * (`action: 'edit'`) or on Start (`action: 'start'`). `studyTransient`: the run's study's mode
  * now (a run started over takes it). `assistant`: the Assistant's card asks it.
  */
-export function overwriteWords(rec: RunLike, opts: { action: 'edit' | 'start'; studyTransient?: boolean | null; assistant?: boolean }): Words {
+export function overwriteWords(
+  rec: RunLike,
+  opts: { action: 'edit' | 'start'; studyTransient?: boolean | null; assistant?: boolean; health?: unknown },
+): Words {
   const name = quoted(rec);
   const goes = whatGoes(rec);
   const modeChanges = typeof opts.studyTransient === 'boolean' && opts.studyTransient !== solvedTransient(rec);
@@ -294,7 +297,9 @@ export function overwriteWords(rec: RunLike, opts: { action: 'edit' | 'start'; s
       : ' To keep them, cancel and add a run.';
     return {
       title: opts.assistant ? 'Allow the Assistant to start ' + name + ' over?' : 'Start ' + name + ' over?',
-      copy: goes + ' are deleted, and it solves again from the beginning.' + keep + (modeChanges ? ' It solves ' + study + ', as its study is now.' : ''),
+      copy:
+        goes + ' are deleted, and it solves again from the beginning.' + keep + (modeChanges ? ' It solves ' + study + ', as its study is now.' : '') +
+        unhealthySentence(rec, opts.health),
       yes: 'Overwrite and start',
     };
   }
@@ -308,6 +313,19 @@ export function overwriteWords(rec: RunLike, opts: { action: 'edit' | 'start'; s
       (modeChanges ? ' It becomes a ' + study + ' run, as its study is now.' : ''),
     yes: 'Overwrite',
   };
+}
+
+/**
+ * RH1 (A3): the sentence Start's question and the Assistant's run_start card add for a run that
+ * became unhealthy (its health record's `first_unhealthy`), else ''. One function makes both
+ * texts, so they are the same.
+ */
+export function unhealthySentence(rec: RunLike, health: unknown): string {
+  const fu = isObj(health) && isObj(health.first_unhealthy) ? health.first_unhealthy : null;
+  const t = fu ? Number(fu.t) : NaN;
+  if (!fu || fu.t === null || fu.t === undefined || !Number.isFinite(t)) return '';
+  const at = solvedTransient(rec) ? 't = ' + simTime(t) : 'iteration ' + Math.round(t);
+  return ' ' + quoted(rec) + ' became unhealthy at ' + at + '. A new run with the fix keeps these results.';
 }
 
 /** The question on the first change of a finished run's settings: a new run takes the change. */

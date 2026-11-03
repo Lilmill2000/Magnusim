@@ -24,7 +24,10 @@ import {
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { ResidualPlot } from './ResidualPlot';
 import { RunCores, runCanUseCores, useRankCap } from './RunCores';
+import { RunHealth, healthRunView } from './RunHealth';
 import { RunMonitors } from './RunMonitors';
+import { confirmAction } from '../../workbench/dialogs';
+import { continueAskWords, continueHealthWords, type ContinueChange, type HealthRecord } from '../../workbench/runHealthWords';
 
 function RunTitle({ name, canRename }: { name: string; canRename: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -164,6 +167,7 @@ function RunStatus({
           {p.converged.text}
         </p>
       ) : null}
+      <RunHealth state={state} ids={ids} />
       {p.elapsed ? <div className="mesh-elapsed">{p.elapsed}</div> : null}
       {(state.warnings || []).map((w) => (
         <p className="mat-assign-hint" data-run-warning="1" key={w}>
@@ -227,6 +231,13 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
     text.trim() !== '' &&
     (c.transient ? Number.isFinite(amount) && c.from != null && amount > c.from : Number.isInteger(amount) && amount >= 1);
   const hint = continueHint(c, amount, valid);
+  // RH1: what its health says of continuing (spec 3.12), and whether Continue asks first.
+  const view = healthRunView(state);
+  const health = (state.health as HealthRecord | null | undefined) || null;
+  const pending = ((state.health_run && state.health_run.continue_changes) || []).find(
+    (x) => x && !(x as ContinueChange).applied_at,
+  ) as ContinueChange | undefined;
+  const healthLine = continueHealthWords(view, health, pending || null);
   const invalid =
     text.trim() === '' || valid
       ? ''
@@ -267,8 +278,13 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
                 : 'Run more iterations from the last saved result'
           }
           disabled={!c.enabled || !valid}
-          onClick={() => {
+          onClick={async () => {
             const ask = c.transient ? { end_time: amount } : { extra_iterations: amount };
+            if (healthLine && healthLine.ask && health) {
+              const w = continueAskWords(view, health);
+              const ok = await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, no: w.no, safe: true });
+              if (!ok) return;
+            }
             void simContinue(ask, scope).catch(onError);
           }}
         >
@@ -278,6 +294,11 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
       {c.applies ? (
         <p className="mat-assign-hint" data-run-continue-changes="1">
           {c.applies}
+        </p>
+      ) : null}
+      {healthLine ? (
+        <p className="mat-assign-hint" data-run-continue-health="1">
+          {healthLine.text}
         </p>
       ) : null}
       {c.reason ? (

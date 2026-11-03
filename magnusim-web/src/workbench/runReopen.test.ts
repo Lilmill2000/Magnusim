@@ -30,6 +30,7 @@ import {
   runSettingsWord,
   solveChanged,
   STOPPING_REASON,
+  unhealthySentence,
   unresolveTransient,
 } from './runReopen';
 
@@ -370,5 +371,21 @@ describe('A2: a change for when a stopped run continues', () => {
     expect(continueTransient(typed, clean, ['transient.max_delta_t'])).toEqual({ ...solved, max_delta_t: null, source: { delta_t: 'auto', max_delta_t: 'auto' } });
     // Only the four keys: anything else in `changed` is not taken.
     expect(continueTransient(solved, { ...clean, end_time: 9 }, ['transient.end_time'])).toEqual(solved);
+  });
+});
+
+describe('RH1: Start over on a run that became unhealthy (A3)', () => {
+  const run = { id: 'r2', name: 'Run_2', status: 'stopped', time_dependency: 'Transient', has_results: true, n_saved_times: 12, last_saved_iteration: 0.1667 };
+  it('adds the health sentence to the Start question, the same text the Assistant card shows', () => {
+    const health = { first_unhealthy: { t: 0.0069061069 } };
+    const person = overwriteWords(run, { action: 'start', studyTransient: true, health });
+    const card = overwriteWords(run, { action: 'start', studyTransient: true, health, assistant: true });
+    expect(person.copy).toMatch(/ "Run_2" became unhealthy at t = 0\.0069 s\. A new run with the fix keeps these results\.$/);
+    expect(card.copy).toBe(person.copy);
+  });
+  it('says nothing of health without an onset', () => {
+    expect(overwriteWords(run, { action: 'start', studyTransient: true, health: { first_unhealthy: null } }).copy).not.toMatch(/unhealthy/);
+    expect(overwriteWords(run, { action: 'start', studyTransient: true }).copy).not.toMatch(/unhealthy/);
+    expect(unhealthySentence(run, null)).toBe('');
   });
 });

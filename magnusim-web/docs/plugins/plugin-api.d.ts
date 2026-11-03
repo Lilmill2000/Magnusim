@@ -484,6 +484,21 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       stops_off?: boolean;
       /** The record of the run's study when it is the open one (its analysis's settings), else null. */
       study?: Record<string, unknown> | null;
+      /**
+       * RH1: the run's health record (verdict, checks, findings; spec 3.6), or null when it has
+       * none (not checked, not judged yet, or it ran before health checks existed).
+       */
+      health?: Record<string, unknown> | null;
+      /** RH1: true when its runs are health-checked, false when not, null when it ran before checks existed. */
+      health_checked?: boolean | null;
+      /** RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts. */
+      health_run?: {
+          status: string;
+          stopping: boolean;
+          saved: number | null;
+          attempts: Array<Record<string, unknown>>;
+          continue_changes: Array<Record<string, unknown>>;
+      } | null;
   }
   /** A monitor a run's "Stop when a monitor settles" can watch (API 1.4). */
   export interface RunSettleMonitor {

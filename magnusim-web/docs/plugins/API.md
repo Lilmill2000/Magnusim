@@ -1909,6 +1909,9 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `stop_when?: { label?: string; text?: string; error?: string; } | null | undefined`: A started run: what its plan said of that stop (prepare_run.stop_when: {label, text} or {error}), else null.
 - `stops_off?: boolean | undefined`: A started run whose part now (or last) ran past its convergence: its stops were off (prepare_run.stops_off).
 - `study?: Record<string, unknown> | null | undefined`: The record of the run's study when it is the open one (its analysis's settings), else null.
+- `health?: Record<string, unknown> | null | undefined`: RH1: the run's health record (verdict, checks, findings; spec 3.6), or null when it has none (not checked, not judged yet, or it ran before health checks existed).
+- `health_checked?: boolean | null | undefined`: RH1: true when its runs are health-checked, false when not, null when it ran before checks existed.
+- `health_run?: { status: string; stopping: boolean; saved: number | null; attempts: Array<Record<string, unknown>>; continue_changes: Array<Record<string, unknown>>; } | nu...`: RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts.
 
 #### SchemaFormProps
 
@@ -2173,7 +2176,7 @@ Constants:
 
 - `EVENT_PREFIX = "MAGNUSIM_EVENT "`
 - `EVENT_PREFIX_ALIASES = ("MAGNUSIM_EVENT ", "CFDDESK_EVENT ")`
-- `KNOWN_KINDS = frozenset({"start", "stage", "progress", "log", "residual", "courant", "time_saved", "counts", "phase", "result", "error", "converged", "failed_reason"})`
+- `KNOWN_KINDS = frozenset({"start", "stage", "progress", "log", "residual", "courant", "time_saved", "counts", "phase", "result", "error", "converged", "failed_reason", "health"})`
 
 ### magnusim_sdk.fluids
 
@@ -2351,6 +2354,160 @@ apply_boundary_patch_types(boundary_path: Path, patch_types: dict[str, str]) -> 
 
 Rewrite ``type`` lines in polyMesh/boundary for known patch names.
 
+### magnusim_sdk.health
+
+Run health: how stable a solve is, from its solver's own log (RH1).
+
+#### line_key
+
+```python
+line_key(raw: str) -> str
+```
+
+The first 12 hex characters of the SHA-1 of a solver line as written (no LF).
+
+#### fmt
+
+```python
+fmt(x: float | None, sig: int = 2) -> str
+```
+
+A number as the panel writes it: ``sig`` significant figures, thousands separated (4,970), small ones in exponent form (7.4e-5).
+
+#### pct
+
+```python
+pct(x: float) -> str
+```
+
+A share as a percentage: "100%", "57%", "8.2%", "0.08%".
+
+#### cells_pct
+
+```python
+cells_pct(p: float) -> str
+```
+
+A percentage of cells as the limiter prints it, rounded: "57%", "8.2%".
+
+#### class HealthTracker
+
+A solver log's health, line by line. ``hints`` are the analysis's ``health_hints`` (w27-case.json), or None for an analysis that writes none.
+
+- `line(raw: str, offset: int | None = None) -> None`: One solver line as written (``offset``: its byte offset in the run's whole log).
+- `gap() -> None`: The lines that come next do not follow the last ones (an unread middle).
+- `saved(t: float) -> None`: A result was saved at time ``t``.
+- `converged() -> None`: The analysis's parser said the run converged (its ``converged`` event).
+- `missing_head() -> None`: The start of the log is gone (deleted parts): its onset is unknown.
+- `extras(cur: _Step) -> None`
+- `codes() -> list[str]`: The codes at watch or worse, and the info ones, in finding order.
+- `restart(latest_saved: float | None = None) -> str | None`: Where Continue would go on from, against the onset (spec 3.6): ``from_zero``, ``continue_after_fix`` or None. It never says Continue will be healthy.
+- `report(*, latest_saved: float | None = None, final: bool = False) -> dict[str, Any]`: The run record's ``health`` (at most 4 KB, ``shrink``).
+
+#### restart_of
+
+```python
+restart_of(first_unhealthy: dict[str, Any] | None, timeline: list[dict[str, Any]], latest_saved: float | None, head_missing: bool = False) -> str | None
+```
+
+``from_zero``: the latest saved time is at or after the onset and the verdict was not Healthy again by then; ``continue_after_fix``: it is before the onset, or the verdict was Healthy again by then; None: never unhealthy, or the onset is unknown.
+
+#### record_size
+
+```python
+record_size(rec: dict[str, Any]) -> int
+```
+
+#### shrink
+
+```python
+shrink(rec: dict[str, Any], limit: int = RECORD_MAX) -> dict[str, Any]
+```
+
+The record within ``limit`` bytes (deterministic, spec 3.6): each step in turn until it fits.
+
+#### with_advice
+
+```python
+with_advice(rec: dict[str, Any], hints: dict[str, Any] | None, advice: Callable[..., Any] | None) -> dict[str, Any]
+```
+
+The analysis's own words and fixes (``health_advice``), else the generic record.
+
+#### class HealthEmitter
+
+When a ``health`` event goes out (spec 3.5 item 4): at once on a verdict change, on a change of the codes at most every ``change_s`` seconds, a refresh every ``refresh_s`` seconds, and once at the end.
+
+- `poll() -> dict[str, Any] | None`: After a line: the event to send now, else None (cheap when nothing changed).
+- `final(latest_saved: float | None = None) -> dict[str, Any]`: The last event, with the open step closed.
+
+#### iter_log_lines
+
+```python
+iter_log_lines(path: str, *, start: int = 0, limit: int | None = None) -> Iterator[tuple[str, int]]
+```
+
+``(line, offset)`` for each line of a log (``.gz`` too) from byte ``start``: the line as written (no LF, CR kept off) and its byte offset in the file.
+
+#### check_log
+
+```python
+check_log(parts: list[str], hints: dict[str, Any] | None, *, head_bytes: int = 16 * 1024 * 1024, tail_bytes: int = 16 * 1024 * 1024, head_missing: bool = False, latest_saved: float | None = None, advice: Callable[..., Any] | None = None) -> dict[str, Any]
+```
+
+An ended run's health from its log parts (oldest first, spec 3.9): the head of the oldest part and the tail of the newest, with ``gap()`` between them when the middle is not read. ``log_at`` is the line's position in the whole log (earlier parts' sizes added).
+
+#### main
+
+```python
+main(argv: list[str] | None = None) -> int
+```
+
+Constants:
+
+- `RECORD_MAX = 4096`
+- `WINDOW = 50`
+- `SCORED_FROM = 6`
+- `BASELINE_TO = 25`
+- `BASELINE_CHECKS_FROM = BASELINE_TO + 1`
+- `IMPROVE_AFTER = 5`
+- `TIMELINE_MAX = 20`
+- `VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}`
+- `LEVEL_WORD = {0: "", 1: "warn", 2: "error"}`
+- `LEVEL_RANK = {"error": 0, "warn": 1, "info": 2}`
+- `NUM = r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|[-+]?(?i:nan|inf))"`
+- `RE_MPI = re.compile(r"^\s*\[\d+\]\s*")`
+- `RE_TIME = re.compile(rf"^Time\s*=\s*{NUM}s?\s*$")`
+- `RE_COURANT = re.compile(rf"^Courant Number mean:\s*{NUM}\s+max:\s*{NUM}")`
+- `RE_REGION_COURANT = re.compile(rf"^Region:\s*(\w+)\s+Courant Number mean:\s*{NUM}\s+max:\s*{NUM}")`
+- `RE_REGION_DIFFUSION = re.compile(rf"^Region:\s*(\w+)\s+Diffusion Number mean:\s*{NUM}\s+max:\s*{NUM}")`
+- `RE_DELTAT = re.compile(rf"^deltaT\s*=\s*{NUM}")`
+- `RE_SOLVE = re.compile( rf"^(\w+):\s+Solving for (\w+), Initial residual = {NUM}, Final residual = {NUM}, No ...`
+- `RE_LIMIT = re.compile(rf"^limitVelocity (\S+) Limited (\d+) \({NUM}%\) of cells, .*with max limit {NUM}")`
+- `RE_BOUND = re.compile(rf"^bounding (\w+), min: {NUM} max: {NUM} average: {NUM}")`
+- `RE_CONT = re.compile( rf"^time step continuity errors\s*(?:\((\w+)\))?\s*: sum local = {NUM}, global = {NUM...`
+- `RE_TIMING = re.compile(rf"^ExecutionTime = {NUM} s\s+ClockTime = {NUM} s")`
+- `RE_REGION_BLOCK = re.compile(r"^Solving for (?:fluid|solid) region (\w+)\s*$")`
+- `RE_MINMAX_T = re.compile(rf"^Min/max T:\s*{NUM}\s+{NUM}")`
+- `RE_MONITOR_HEAD = re.compile(r"^(\w+) (\S+) write:\s*$")`
+- `RE_MONITOR_VALUE = re.compile(r"^\s+(\w+)\((\S+)\) of (\w+) = (.+?)\s*$")`
+- `RE_SELECTED = re.compile(rf"selected (\d+) cell\(s\) with volume {NUM}")`
+- `RE_HOST = re.compile(r'^Host\s*:\s*"?([^"\s]+)"?\s*$')`
+- `RE_PIMPLE_ITER = re.compile(r"^PIMPLE: [Ii]teration (\d+)")`
+- `RE_FATAL_HEAD = re.compile(r"^--> FOAM FATAL (?:IO )?ERROR")`
+- `RE_FATAL_FRAME = re.compile(r"^\s*#\d+\s+Foam::sig(?:Fpe|Segv)::sigHandler")`
+- `RE_WARNING = re.compile(r"^--> FOAM Warning\s*:?\s*(.*)$")`
+- `RE_SOLUTION_CONVERGED = re.compile(r"^\s*\w+ solution converged in \S+ iterations\s*$")`
+- `BENIGN_WARNINGS = ("allowSystemOperations",)`
+- `PRESSURE = frozenset({"p", "p_rgh"})`
+- `TURBULENCE = frozenset({"k", "omega", "epsilon", "nuTilda", "v2", "f"})`
+- `TRANSPORTED = frozenset({"U", "h", "T", "e"})`
+- `SOLVER_DEFAULT_MAX_ITER = 1000`
+- `CHECK_LABEL = { "velocity_clipped": "velocity clipping", "pv_coupling": "pressure-velocity coupling", "residual...`
+- `SYMPTOMS = frozenset({"velocity_clipped", "pv_coupling", "residuals_high", "residuals_stalled", "solver_at_limit", "turbulence_bounded", "speed_growth", "monitor_drift", "continuity_bias", "temperature_range"})`
+- `FINDING_ORDER = ("failed", "velocity_clipped", "pv_coupling", "turbulence_bounded", "speed_growth", "solver_at_limit", "residuals_high", "residuals_stalled", "monitor_drift", "temperature_range", "courant_mode", "diffusion_high", "continuity_bias", "courant_spread", "bounded_from_start", "not_settled")`
+- `SHRINK_KEEP = ("v", "verdict", "at", "step", "t", "unit", "window", "checked", "skipped", "first_unhealthy", "restart")`
+
 ### magnusim_sdk.link
 
 Linking a geometry (host API 1.5): the face numbering rule and the face-name sidecar.
@@ -2463,6 +2620,45 @@ Constants:
 - `HEX = 5`
 - `PRISM = 6`
 - `PYR = 7`
+
+### magnusim_sdk.numerics_advice
+
+The one source of the numerics advice texts (run health, RH1).
+
+#### class Advice(TypedDict)
+
+#### rule
+
+```python
+rule(key: str) -> str
+```
+
+The advice's first sentence(s) for ``key``.
+
+#### description
+
+```python
+description(key: str) -> str
+```
+
+A setting's schema description: its rule, then the rest.
+
+#### as_json
+
+```python
+as_json() -> dict[str, dict[str, str]]
+```
+
+The table as plain JSON (scripts/generated/numerics-advice.json).
+
+Constants:
+
+- `CO_PISO = 1`
+- `CO_PIMPLE = 5`
+- `LIMIT_FACTOR = 10`
+- `LIMIT_FLOOR = 50`
+- `ADVICE = { "max_co": { "rule": ( "Max Courant is not a speed setting on its own. With 1 outer corrector (P...`
+- `RULE_MAX = 160`
 
 ### magnusim_sdk.proc
 

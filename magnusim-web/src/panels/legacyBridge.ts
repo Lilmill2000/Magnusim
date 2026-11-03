@@ -107,6 +107,21 @@ export async function simContinue(ask: { extra_iterations?: number; end_time?: n
   return fn(ask);
 }
 
+/**
+ * RH1 (A3): add a new run with the run's settings and a Health fix's values ("Run_2 fixed"),
+ * selected and not started; the run keeps its status and results.
+ */
+export async function addHealthFixRun(runId: string, fix: { label: string; values: Array<{ key: string; value: unknown }>; name?: string }): Promise<unknown> {
+  const fn = window.__CFD_RUN_HEALTH_FIX__;
+  if (!fn) throw new Error('The Run panel is not ready yet.');
+  return fn(runId, fix);
+}
+
+/** Read the selected run again (its health after "Check its log"). */
+export function refreshRunPanel(): void {
+  void window.__CFD_RUN_REFRESH__?.();
+}
+
 export async function simStop(): Promise<unknown> {
   const fn = window.__CFD_SIM_STOP__;
   if (!fn) return undefined;
@@ -347,6 +362,21 @@ export interface RunState {
   stops_off?: boolean;
   /** The record of the run's study when it is the open one (its analysis's settings), else null. */
   study?: Record<string, unknown> | null;
+  /**
+   * RH1: the run's health record (verdict, checks, findings; spec 3.6), or null when it has
+   * none (not checked, not judged yet, or it ran before health checks existed).
+   */
+  health?: Record<string, unknown> | null;
+  /** RH1: true when its runs are health-checked, false when not, null when it ran before checks existed. */
+  health_checked?: boolean | null;
+  /** RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts. */
+  health_run?: {
+    status: string;
+    stopping: boolean;
+    saved: number | null;
+    attempts: Array<Record<string, unknown>>;
+    continue_changes: Array<Record<string, unknown>>;
+  } | null;
 }
 
 /** A monitor a run's "Stop when a monitor settles" can watch (API 1.4). */

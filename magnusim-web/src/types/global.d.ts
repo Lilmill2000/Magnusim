@@ -105,6 +105,8 @@ declare global {
     __CFD_RUN_COPY_PICK__?: (on: boolean) => void;
     __CFD_RUN_COPY_FROM__?: (runId: string) => Promise<unknown>;
     __CFD_RUN_SETUP_FIX__?: () => void;
+    __CFD_RUN_HEALTH_FIX__?: (runId: string, fix: { label: string; values: Array<{ key: string; value: unknown }>; name?: string }) => Promise<unknown>;
+    __CFD_RUN_REFRESH__?: () => Promise<unknown>;
     __CFD_STUDY_STATE__?: import('../panels/legacyBridge').StudyState;
     __CFD_GEOMETRY_STATE__?: import('../panels/legacyBridge').GeometryState;
     __CFD_GEOMETRY_STATE_NOW__?: () => import('../panels/legacyBridge').GeometryState | null;
