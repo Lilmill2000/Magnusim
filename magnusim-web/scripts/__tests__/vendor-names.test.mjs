@@ -57,9 +57,10 @@ const ALLOWED_CONTENT = [
   'magnusim-web/e2e-desktop/assistant-*.spec.ts',
   'magnusim-web/e2e/support/fake-llm.mjs',
   'magnusim-web/e2e/support/assistant.js',
-  // The Magnusim CAD export and its self-check: they name AI tools' files and vendors to keep them out of the copy.
+  // The Magnusim CAD export, its self-check and that check's test: they name AI tools' files and vendors to keep them out of the copy.
   'magnusim-web/scripts/export-cad-repo.mjs',
   'magnusim-web/scripts/export-cad-repo/self-check.mjs',
+  'magnusim-web/scripts/__tests__/export-cad-self-check.test.mjs',
   'magnusim-web/package.json',
   'magnusim-web/package-lock.json',
   'THIRD_PARTY_NOTICES.md',

@@ -17,7 +17,10 @@ app.
 The installer is on this repository's [Releases](../../releases) page:
 `Magnusim-CAD-Setup-<version>.exe`, for 64-bit Windows. It installs for your
 Windows account only, without administrator rights. It is not code-signed, so
-Windows SmartScreen may ask before it runs it (More info > Run anyway).
+Windows SmartScreen may ask before it runs it (More info > Run anyway). On
+Windows 11 with Smart App Control turned on, Windows blocks unsigned apps and
+offers no Run anyway: Magnusim CAD runs there only with Smart App Control off
+(Windows Security > App & browser control).
 
 ## The Assistant
 
