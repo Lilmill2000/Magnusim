@@ -28,7 +28,7 @@ class FakeWorker {
   }
 }
 
-/** The app's router, as index.ts builds it: live, phase 3 and VTK export routes. */
+/** The app's router, as index.ts builds it: live, phase 3, Assistant and VTK export routes. */
 async function appRouter() {
   const { registerLiveRoutes } = await import('../live-routes.js');
   const { registerPhase3Routes } = await import('../routes.ts');
@@ -52,6 +52,8 @@ async function appRouter() {
     resetCaseIdle() {},
     envInstaller: () => ({ get: () => null, start: () => ({ state: 'installing', log: [] }) }),
   });
+  const { registerAssistantRoutes } = await import('../assistant-routes.ts');
+  registerAssistantRoutes(router, { worker, services: null, port: () => 0 });
   registerVtkExportRoutes(router, { jobs, cacheDir: join(ROOT, 'cache') });
   return router;
 }
