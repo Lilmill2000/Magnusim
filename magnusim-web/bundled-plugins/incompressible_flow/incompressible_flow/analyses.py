@@ -7,6 +7,7 @@ from typing import Any
 from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
+from magnusim_sdk.numerics_advice import description as advice_description
 
 from . import physics as _physics
 from .bcs import BC_KEYS
@@ -426,10 +427,8 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             min=0.0,
             group="control",
             advanced=True,
-            description=(
-                "Largest Courant number allowed when the time step adjusts: how many cells "
-                "flow may cross in one step. Keep at or below 1 for stability."
-            ),
+            # RH1 (A1): one advice text (magnusim_sdk.numerics_advice); warned about, never capped.
+            description=advice_description("max_co"),
         ),
         SchemaField(
             "delta_t",
@@ -475,7 +474,7 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             max=50,
             group="control",
             advanced=True,
-            description="PIMPLE outer loops per time step. 1 is PISO mode.",
+            description=advice_description("n_outer_correctors"),
         ),
         SchemaField(
             "n_correctors",

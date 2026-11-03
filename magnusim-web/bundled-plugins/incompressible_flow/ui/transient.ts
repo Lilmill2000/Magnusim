@@ -128,7 +128,7 @@ export function transientHint(t: TransientSettings, pv: RunPreview | null): { te
   }
   let warn = '';
   if (ctrl && ctrl.estimate && Number.isFinite(ctrl.estimate.steps) && Number(ctrl.estimate.steps) > 200000) {
-    warn = 'That is a long run — a shorter simulation time, a coarser mesh or a higher Courant number (Advanced) will finish sooner.';
+    warn = 'That is a long run. A shorter simulation time or fewer small cells will finish sooner; Before you start lists options.';
   } else if (pv && pv.partial) {
     warn = 'Assign a mesh and boundary conditions to see the calculated time step.';
   }

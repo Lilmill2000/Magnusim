@@ -7,6 +7,7 @@ from typing import Any
 from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
+from magnusim_sdk.numerics_advice import description as advice_description
 
 from .bcs import BC_FIELDS, BC_SEEDS, BC_TYPES
 from .materials import FLUID_MODEL, SOLID_MODEL
@@ -223,7 +224,7 @@ def control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
                     choice_labels=("Adjustable", "Fixed"), group="control", advanced=True,
                     description="Adjustable keeps the Courant number at or below the maximum; fixed uses one step throughout."),
         SchemaField("max_co", "Max Courant", "float", default=float(d["max_co"]), min=0.0, group="control", advanced=True,
-                    description="Largest Courant number allowed when the time step adjusts."),
+                    description=advice_description("max_co")),
         SchemaField("delta_t", "Initial time step", "float", default=d["delta_t"], min=0.0, unit="s", group="control",
                     advanced=True, optional=True,
                     description="Blank calculates it from the mean cell size and the case's speed."),
@@ -232,7 +233,7 @@ def control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
         SchemaField("time_scheme", "Time scheme", "choice", default=str(d["time_scheme"]), choices=("Euler", "backward"),
                     choice_labels=("Euler (1st order)", "Backward (2nd order)"), group="control", advanced=True),
         SchemaField("n_outer_correctors", "Outer correctors", "int", default=int(d["n_outer_correctors"]), min=1, max=50,
-                    group="control", advanced=True, description="PIMPLE outer loops per time step. 1 is PISO mode."),
+                    group="control", advanced=True, description=advice_description("n_outer_correctors")),
         SchemaField("n_correctors", "Pressure correctors", "int", default=int(d["n_correctors"]), min=1, max=10,
                     group="control", advanced=True),
     )

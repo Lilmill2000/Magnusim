@@ -5,6 +5,7 @@
 //   verdict; health carries the findings (their words are the Run panel's) and what to do;
 //   log_tail "issues" and log_tail at a finding's log_at (its hit_line is the finding's line).
 //   Nothing in any answer is a path.
+// - The request's system blocks carry the CFD guide (Magnusim only).
 // - With the run stopped: health's `next` is the Run panel's What to do sentence, word for word;
 //   the new-run fix is one setup_edit {kind:'run', action:'add', other_id, name, values} call that
 //   makes "Run_2 fixed" with the fix's values, while Run_2 keeps its results.
@@ -174,6 +175,10 @@ test('the AI follows a solving run: the alert, status, health, its problem lines
   if (seen.finding.evidence.text) expect(at.lines[at.hit_line]).toBe(seen.finding.evidence.text);
   // No paths anywhere.
   for (const r of [seen.wait, seen.status, seen.health, seen.issues, seen.at]) expect(JSON.stringify(r)).not.toMatch(PATHS);
+  // The CFD guide went with the system prompt, in its own block.
+  const chat = fake.requests().filter((r) => r.kind === 'chat');
+  const system = chat[0].body.system || [];
+  expect(system.map((b) => String(b.text || '')).some((t) => t.startsWith('Judging and fixing CFD runs\n1. Is a run healthy:'))).toBe(true);
 });
 
 test("with the run stopped: health's next is the panel's What to do; the fix is one setup_edit call that keeps Run_2's results", async ({ page, request }) => {

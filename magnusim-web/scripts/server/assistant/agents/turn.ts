@@ -53,6 +53,7 @@
  * the turn with the prompt still out, the same cancel and kill follow (the finally).
  */
 import type { ContentBlock } from '@agentclientprotocol/sdk';
+import { cfdGuide } from '../cfdGuide.ts';
 import { capText as loopCapText } from '../loop.ts';
 import { contextBlock, guideBlock } from '../prompt.ts';
 import { attachmentLines, type AttachmentRef } from '../attachments.ts';
@@ -1106,7 +1107,12 @@ class AgentTurnRun implements AgentDispatch {
     const ws = t.tab ? this.d.registry.workspaceOf(t.tab) : null;
     const out: ContentBlock[] = [];
     if (first) {
-      if (!noteInSystemPrompt({ sessionMeta: policyOf(this.d.known).sessionMeta })) out.push(noteBlock());
+      if (!noteInSystemPrompt({ sessionMeta: policyOf(this.d.known).sessionMeta })) {
+        out.push(noteBlock());
+        // RH1: the CFD guide right after the note (Magnusim only).
+        const cfd = cfdGuide();
+        if (cfd) out.push({ type: 'text', text: cfd });
+      }
       if (ws?.guide) {
         sessionGuides.set(session, ws.guide);
         out.push({ type: 'text', text: guideBlock(ws.guide, ws.reg.pluginName || ws.reg.plugin) });

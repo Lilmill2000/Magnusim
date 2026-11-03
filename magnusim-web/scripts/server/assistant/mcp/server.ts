@@ -90,6 +90,7 @@ import {
   type ProjectInfo,
 } from '../privacy.ts';
 import { isCadEdition } from '../../../edition.js';
+import { withCfdGuide } from '../cfdGuide.ts';
 import { appWords, guideBlock, LEFT_OUT_RULE, systemPrompt } from '../prompt.ts';
 import { CONNECTION_CHECK, CONNECTION_CHECK_SCHEMA } from '../provider-test.ts';
 import { loadMcpSdk, type McpSdkModules } from '../providers/load-sdk.ts';
@@ -624,8 +625,9 @@ export function createMcpService(d: McpServiceDeps): McpService {
 
   async function instructions(session: McpSession): Promise<string> {
     // A Test binding gets the rules alone. So does an external app until privacy allows the
-    // project: the workspace guide is registration text, as the tools' own text is.
-    const rules = mcpInstructions();
+    // project: the workspace guide is registration text, as the tools' own text is. The CFD
+    // guide (Magnusim only, RH1) is static product text, as the rules are: every binding has it.
+    const rules = withCfdGuide(mcpInstructions());
     if (session.binding?.test) return rules;
     const { ctx } = contextOf(session);
     const ws = ctx.tab ? d.registry.workspaceOf(ctx.tab) : null;

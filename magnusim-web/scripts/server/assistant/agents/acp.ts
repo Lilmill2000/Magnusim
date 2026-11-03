@@ -62,6 +62,7 @@ import type {
   SetSessionModeRequest,
 } from '@agentclientprotocol/sdk';
 import { isCadEdition } from '../../../edition.js';
+import { withCfdGuide } from '../cfdGuide.ts';
 import { appWords } from '../prompt.ts';
 import { cleanText } from '../sanitize.ts';
 import { agentNode } from './node.ts';
@@ -220,7 +221,8 @@ export interface SessionAgent {
 /** `session/new`: the private working folder, the bridge, and the agent's own `_meta` when it has a hook. */
 export function sessionNewParams(cwd: string, bridge: McpBridge, agent: SessionAgent = {}): NewSessionRequest {
   const params: NewSessionRequest = { cwd, mcpServers: [bridgeServer(bridge)] };
-  if (agent.sessionMeta) params._meta = agent.sessionMeta.meta(agentNote());
+  // RH1: an agent whose note goes in its system prompt gets the CFD guide after it (Magnusim only).
+  if (agent.sessionMeta) params._meta = agent.sessionMeta.meta(withCfdGuide(agentNote()));
   return params;
 }
 

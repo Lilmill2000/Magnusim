@@ -1,0 +1,10 @@
+{
+  "max_co": {
+    "rule": "Max Courant is not a speed setting on its own. With 1 outer corrector (PISO) keep it at or below 1; 2-3 outer correctors allow up to about 5.",
+    "more": "Largest cell Courant number the adjustable time step allows. Above 1 the steps are larger only if each has 2-3 outer correctors, and each step then costs about that many times more; without them the run becomes unstable."
+  },
+  "n_outer_correctors": {
+    "rule": "PIMPLE outer loops per time step. 1 = PISO: keep Max Courant at or below 1. 2-3 allow up to about 5, and each step then costs about that many times more.",
+    "more": "More than 1 pays off only with Max Courant above 1."
+  }
+}

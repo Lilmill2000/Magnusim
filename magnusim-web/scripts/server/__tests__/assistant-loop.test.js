@@ -855,7 +855,9 @@ describe('the spend caps', () => {
   it('an overload with too little left for a resend ends capped: nothing more is sent', async () => {
     for (const [caps, reason] of [
       [{ turn_usd: 0.65, day_usd: 15 }, 'turn_usd'],
-      [{ turn_usd: 3, day_usd: 0.65 }, 'day_usd'],
+      // RH1: the CFD guide's system block makes the first request cost more: the day's cap leaves
+      // a little for the resend it cannot pay for.
+      [{ turn_usd: 3, day_usd: 0.66 }, 'day_usd'],
     ]) {
       const m = mk({ caps });
       m.provider.script({ text: 'part', error: 'overloaded', streamed: true }, { text: 'never' });
@@ -864,10 +866,10 @@ describe('the spend caps', () => {
       assert.deepEqual([t.state, t.endReason], ['capped', reason]);
       // Today's limit isn't reached (what is left can't pay for the resend): it says what is left.
       assert.equal(t.message, capText(reason, caps, caps.day_usd - t.usd));
-      if (reason === 'day_usd') assert.equal(t.message, "The next step could go over today's $0.65 limit ($0.01 left); it resets at midnight.");
+      if (reason === 'day_usd') assert.equal(t.message, "The next step could go over today's $0.66 limit ($0.01 left); it resets at midnight.");
       assert.equal(m.provider.requests.length, 1, reason);
       assert.equal(t.conv.messages.length, 1, 'nothing appended');
-      assert.ok(t.usd > 0 && t.usd <= 0.65 + 1e-6, `${reason}: spent ${t.usd}`);
+      assert.ok(t.usd > 0 && t.usd <= Math.min(caps.turn_usd, caps.day_usd) + 1e-6, `${reason}: spent ${t.usd}`);
       await m.ledger.load();
       assert.ok(Math.abs(m.ledger.spentToday() - t.usd) < 1e-6);
       assert.equal(m.ledger.openCount(), 0);
@@ -2301,8 +2303,9 @@ describe('untrusted text', () => {
     const a = await startTurn(m, { text: 'x', tab: 'T1' });
     await settled(a.turn);
     const sys1 = m.provider.requests[0].req.system;
-    assert.equal(sys1.length, 2);
-    assert.equal(sys1[1].text, 'Notes from the Workspace demo workspace (installed plugin):\nCounter notes, version one.');
+    // The system prompt, the CFD guide (RH1), the workspace's notes.
+    assert.equal(sys1.length, 3);
+    assert.equal(sys1[2].text, 'Notes from the Workspace demo workspace (installed plugin):\nCounter notes, version one.');
     m.registry.setWorkspace('T1', 'L1', reg('Counter notes, version TWO.'));
     const b = await startTurn(m, { text: 'y', tab: 'T1', conversation: a.body.conversation });
     await settled(b.turn);
@@ -2336,7 +2339,7 @@ describe('untrusted text', () => {
     await settled(t);
     assert.equal(t.state, 'done');
     const second = m.provider.requests[1].req;
-    assert.equal(second.system.length, 1, 'the system blocks stay as the first request sent them');
+    assert.equal(second.system.length, 2, 'the system blocks stay as the first request sent them (the prompt and the CFD guide)');
     const parts = second.messages[2].parts;
     assert.deepEqual(parts.map((p) => p.type), ['tool_result', 'text']);
     assert.equal(parts[1].text, 'Notes from the Workspace demo workspace (installed plugin):\nCounter notes.');
@@ -2355,7 +2358,7 @@ describe('untrusted text', () => {
     const a = await startTurn(m, { text: 'x', tab: 'T1' });
     await settled(a.turn);
     assert.equal(
-      m.provider.requests[0].req.system[1].text,
+      m.provider.requests[0].req.system[2].text,
       'Notes from the Workspace demo workspace (installed plugin):\nSketch rules:\n1. Pick a face first.\n2. Then call sketch_on_face .\n\n| unit |\tmm |',
     );
   });

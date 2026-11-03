@@ -312,14 +312,26 @@ function SettleStop({
   );
 }
 
+/**
+ * A run setting's description in the registry (its run model's control_schema): the tooltip
+ * text, so the advice is written once (magnusim_sdk.numerics_advice), never here.
+ */
+export function fieldDescription(row: RunSettingsProps['row'], key: string): string | undefined {
+  const schema = (row?.control_schema || {}) as { properties?: Record<string, { description?: unknown }> };
+  const d = schema.properties?.[key]?.description;
+  return typeof d === 'string' && d ? d : undefined;
+}
+
 function TransientFields({
   run,
   defaults,
+  describe,
   saveTransient,
   saveSettle,
 }: {
   run: RunState;
   defaults: Record<string, unknown>;
+  describe: (key: string) => string | undefined;
   saveTransient: RunSettingsProps['saveTransient'];
   saveSettle: RunSettingsProps['saveSettle'];
 }) {
@@ -382,7 +394,7 @@ function TransientFields({
           <>
             <NumberRow
               label="Max Courant number"
-              title="Largest cell Courant number allowed. 1 is time-accurate; up to ~5 runs faster with more outer correctors."
+              title={describe('max_co')}
               value={t.max_co}
               disabled={locked}
               onCommit={(v) => v != null && save({ max_co: v })}
@@ -437,7 +449,7 @@ function TransientFields({
         </div>
         <NumberRow
           label="Outer correctors"
-          title="PIMPLE outer loops per time step. 1 = PISO; 2–3 allow a higher Courant number."
+          title={describe('n_outer_correctors')}
           value={t.n_outer_correctors}
           disabled={locked}
           onCommit={(v) => v != null && save({ n_outer_correctors: Math.round(v) })}
@@ -484,7 +496,7 @@ function TransientFields({
 export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }: RunSettingsProps) {
   const defaults = { ...(row?.run_defaults || {}) };
   if (run.transient) {
-    return <TransientFields run={run} defaults={defaults} saveTransient={saveTransient} saveSettle={saveSettle} />;
+    return <TransientFields run={run} defaults={defaults} describe={(key) => fieldDescription(row, key)} saveTransient={saveTransient} saveSettle={saveSettle} />;
   }
   return (
     <div data-run-steady="1">

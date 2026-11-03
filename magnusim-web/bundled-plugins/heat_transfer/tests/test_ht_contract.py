@@ -254,7 +254,7 @@ def test_the_host_loads_it_from_a_plugins_folder(tmp_path):
         assert [f for f in hub.failures if f["key"] == "heat_transfer"] == []
         manifest = hub.manifests["heat_transfer"]
         assert manifest.license == "GPL-3.0-or-later"
-        assert manifest.version == "0.1.0"
+        assert manifest.version == "0.2.0"
     finally:
         reset_for_tests()
 

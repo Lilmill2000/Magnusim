@@ -1482,7 +1482,7 @@
               "advanced": true
             },
             "title": "Max Courant",
-            "description": "Largest Courant number allowed when the time step adjusts: how many cells flow may cross in one step. Keep at or below 1 for stability."
+            "description": "Max Courant is not a speed setting on its own. With 1 outer corrector (PISO) keep it at or below 1; 2-3 outer correctors allow up to about 5. Largest cell Courant number the adjustable time step allows. Above 1 the steps are larger only if each has 2-3 outer correctors, and each step then costs about that many times more; without them the run becomes unstable."
           },
           "delta_t": {
             "type": "number",
@@ -1538,7 +1538,7 @@
               "advanced": true
             },
             "title": "Outer correctors",
-            "description": "PIMPLE outer loops per time step. 1 is PISO mode."
+            "description": "PIMPLE outer loops per time step. 1 = PISO: keep Max Courant at or below 1. 2-3 allow up to about 5, and each step then costs about that many times more. More than 1 pays off only with Max Courant above 1."
           },
           "n_correctors": {
             "type": "integer",
@@ -3604,7 +3604,7 @@
               "advanced": true
             },
             "title": "Max Courant",
-            "description": "Largest Courant number allowed when the time step adjusts."
+            "description": "Max Courant is not a speed setting on its own. With 1 outer corrector (PISO) keep it at or below 1; 2-3 outer correctors allow up to about 5. Largest cell Courant number the adjustable time step allows. Above 1 the steps are larger only if each has 2-3 outer correctors, and each step then costs about that many times more; without them the run becomes unstable."
           },
           "delta_t": {
             "type": "number",
@@ -3659,7 +3659,7 @@
               "advanced": true
             },
             "title": "Outer correctors",
-            "description": "PIMPLE outer loops per time step. 1 is PISO mode."
+            "description": "PIMPLE outer loops per time step. 1 = PISO: keep Max Courant at or below 1. 2-3 allow up to about 5, and each step then costs about that many times more. More than 1 pays off only with Max Courant above 1."
           },
           "n_correctors": {
             "type": "integer",
@@ -7824,7 +7824,7 @@
     {
       "key": "incompressible_flow",
       "name": "Incompressible Flow",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "requires": [],
       "provides": {},
       "ui": "ui",
@@ -7843,7 +7843,7 @@
     {
       "key": "heat_transfer",
       "name": "Heat Transfer",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "requires": [],
       "provides": {},
       "ui": "ui",

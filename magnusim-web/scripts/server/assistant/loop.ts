@@ -56,6 +56,7 @@
  */
 import { createHash } from 'node:crypto';
 import { carryBlock, contextBlock, guideBlock, reviewText, systemPrompt } from './prompt.ts';
+import { cfdGuide } from './cfdGuide.ts';
 import { IMAGE_CAPS } from './sanitize.ts';
 import { attachmentLines, type AttachmentRef } from './attachments.ts';
 import { IMAGES_LEFT_OUT_NOTE } from './providers/openai-compatible.ts';
@@ -324,6 +325,9 @@ function callCap(t: LoopTurn, caps: Caps): CapHit | null {
 /** The request for this step (maxOutputTokens is set from the estimate); its oldest tool results left out (clearedResults). */
 export function buildRequest(conv: Conversation, tools: readonly ToolDef[], s: ModelTurnSettings): ProviderRequest {
   const system = [{ text: systemPrompt(), cache: true }];
+  // RH1: how to judge and fix CFD runs (Magnusim only); no cache breakpoint of its own.
+  const cfd = cfdGuide();
+  if (cfd) system.push({ text: cfd, cache: true });
   if (conv.guide) system.push({ text: guideBlock(conv.guide.text, conv.guide.pluginName), cache: true });
   return {
     model: s.model,
