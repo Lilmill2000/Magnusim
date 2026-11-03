@@ -1032,7 +1032,7 @@ declare module '@magnusim/workspace' {
            * Returns a function that stops listening.
            */
           events(jobId: string, onEvent: (ev: JobEvent) => void): () => void;
-          /** Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again to stop harder; `force` at once. */
+          /** Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again without `force` changes nothing (it is already stopping); `force` ends it at once. */
           stop(jobId: string, opts?: {
               force?: boolean;
           }): Promise<{

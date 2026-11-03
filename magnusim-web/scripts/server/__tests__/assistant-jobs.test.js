@@ -648,6 +648,32 @@ describe('jobs', () => {
     assert.equal(mesh.error.code, 'invalid_input');
   });
 
+  // Run health spec RH1 §3.4: a second plain stop never becomes a forced stop, and asks nothing.
+  it('two stops make one POST: the second answers that it is already stopping, with no card; force_stop is still the destructive one', async () => {
+    S.run.status = 'running';
+    S.live = { kind: 'solve', run_id: 'r1', project_id: P };
+    S.runStop = [200, { ok: true, stopping: true, run_id: 'r1' }];
+    const ac = () => ({ ctx: ctx(), signal: new AbortController().signal, turn: 't-stop-twice' });
+    let out = await tools().jobs.run(j({ job_id: 'solve.r1' }), rt());
+    assert.equal(out.data.status, 'stopping');
+    assert.equal(writes().filter((w) => w.path === '/api/run/stop').length, 1);
+    // The slot says it is stopping now.
+    S.live = { ...S.live, stopping: true };
+    const t = tools();
+    assert.equal(await t.jobs.escalate(j({ job_id: 'solve.r1' }), ac()), null, 'a plain stop asks nothing');
+    out = await t.jobs.run(j({ job_id: 'solve.r1' }), rt());
+    assert.equal(writes().filter((w) => w.path === '/api/run/stop').length, 1, 'no second POST');
+    assert.deepEqual([out.ok, out.data.status, out.data.already], [true, 'stopping', true]);
+    assert.equal(out.data.done, 'Run 1 is already stopping: it writes its current step first');
+    assert.equal(out.data.hint, 'It is writing its current step; wait, or force_stop ends it at once (the person is asked).');
+    // The route says so too when the slot had not (already): the same answer.
+    S.live = { kind: 'solve', run_id: 'r1', project_id: P };
+    S.runStop = [200, { ok: true, stopping: true, already: true, run_id: 'r1' }];
+    out = await tools().jobs.run(j({ job_id: 'solve.r1' }), rt());
+    assert.deepEqual([out.data.status, out.data.already], ['stopping', true]);
+    assert.equal((await t.jobs.escalate(j({ action: 'force_stop', job_id: 'solve.r1' }), ac())).risk, 'destructive');
+  });
+
   it("unqueue and reorder take only this project's rows (the queue's routes take any project's)", async () => {
     S.items = [
       { id: 'q-a', kind: 'mesh', mesh_id: 'm1', project_id: P, name: 'Mesh 1' },

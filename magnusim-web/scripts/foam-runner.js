@@ -156,7 +156,6 @@ const PROGRESS_EVERY_MS = 250;
 const POINTS_MAX = 400;
 const PENDING_MAX = 2000;
 const CTL_TIMEOUT_MS = 15_000;
-const LEVELS = ['graceful', 'solver', 'all'];
 const FRAME_STAGES = new Set([
   'prepare',
   'pre_copy_in',
@@ -1409,9 +1408,11 @@ export function killRelay(jobId) {
 
 /**
  * Stop a run. The first stop is saved (with who and why) before anything else, so
- * a restart keeps it; a later user stop raises the level (graceful → solver →
- * all, or to all with force); a host stop of a run already stopping changes
- * nothing. A queued plugin case leaves the queue.
+ * a restart keeps it (graceful, or all with force). A repeated stop raises the level
+ * only with force, to all (run health spec RH1 §3.4: a second plain Stop never
+ * silently becomes a forced one, for a core run and a plugin case alike); without
+ * it, and for any host stop of a run already stopping, it changes nothing. A queued
+ * plugin case leaves the queue.
  * @param {string} id
  * @param {{ force?: boolean, by?: string, reason?: string | null }} [opts]
  * @returns {{ ok: boolean, status: string, stopping: boolean }}
@@ -1427,16 +1428,15 @@ export function stopFoamCase(id, { force = false, by = 'user', reason = null } =
     const after = readFoamRecord(id);
     return { ok: true, status: after ? after.status : 'stopped', stopping: false };
   }
-  if (rec.stop && host) return { ok: true, status: rec.status, stopping: true };
-  const at = new Date().toISOString();
-  let stop;
-  if (!rec.stop) {
-    stop = { at, by: String(by), level: force ? 'all' : 'graceful', reason: reason === undefined || reason === null ? null : String(reason), seq: 1 };
-  } else {
-    const i = LEVELS.indexOf(rec.stop.level);
-    const level = force ? 'all' : LEVELS[Math.min(LEVELS.length - 1, (i < 0 ? 0 : i) + 1)];
-    stop = { ...rec.stop, level, seq: (Number(rec.stop.seq) || 1) + 1 };
+  if (rec.stop && (host || !force)) {
+    // Already stopping: nothing more is asked of it (the claim says so once it describes it).
+    patchComputeSlotFor(id, { stop_requested: true });
+    return { ok: true, status: rec.status, stopping: true };
   }
+  const at = new Date().toISOString();
+  const stop = !rec.stop
+    ? { at, by: String(by), level: force ? 'all' : 'graceful', reason: reason === undefined || reason === null ? null : String(reason), seq: 1 }
+    : { ...rec.stop, level: 'all', seq: (Number(rec.stop.seq) || 1) + 1 };
   const raisedToAll = stop.level === 'all' && (!rec.stop || rec.stop.level !== 'all');
   const saved = updateFoamRecord(id, { stop }) || { ...rec, stop };
   patchComputeSlotFor(id, { stop_requested: true });

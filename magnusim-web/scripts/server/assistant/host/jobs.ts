@@ -96,8 +96,12 @@ export function createJobsTool(deps: JobToolDeps): ToolDef {
     const row = rows(q.items).find((r) => r.kind === 'solve' && String(r.run_id) === ref.id);
     const live = isRecord(q.live) && q.live.kind === 'solve' && String(q.live.run_id) === ref.id;
     if (row && !live) return unqueueRow(projectId, row, rt, `${name} left the queue`);
+    // A plain stop of a run already stopping changes nothing (run health spec RH1 §3.4): it is
+    // never a forced stop, which only force_stop asks for (the person is asked).
+    if (!force && live && isRecord(q.live) && q.live.stopping === true) return alreadyStopping(name, ref);
     try {
       const r = await call('run.stop', { project_id: projectId, run_id: ref.id, force }, o(rt));
+      if (!force && r.already === true && r.stopped !== true) return alreadyStopping(name, ref);
       const forced = r.forced === true || force;
       noteJobState(rt.turn, ref.job_id, r.stopped === true ? 'stopped' : 'running');
       emitSync(deps, rt, { project_id: projectId, simulation_id: jobHint(projectId, ref.job_id)?.simulation_id || null, kinds: ['runs'], ids: { run: [ref.id] }, revs: {}, tool: `jobs.${force ? 'force_stop' : 'stop'}` });
@@ -107,6 +111,16 @@ export function createJobsTool(deps: JobToolDeps): ToolDef {
       if (err instanceof HostCallError && err.status === 409) return fail('not_running', `${name} is not running.`);
       return failedCall(err);
     }
+  }
+
+  /** The answer to a plain stop of a run that is already stopping: nothing more is done. */
+  function alreadyStopping(name: string, ref: JobRef): ToolOutcome {
+    return ok(`${name} is already stopping: it writes its current step first`, {
+      job_id: ref.job_id,
+      status: 'stopping',
+      already: true,
+      hint: 'It is writing its current step; wait, or force_stop ends it at once (the person is asked).',
+    });
   }
 
   async function unqueueRow(projectId: string, row: Record<string, unknown>, rt: ToolRunContext, done?: string): Promise<ToolOutcome> {

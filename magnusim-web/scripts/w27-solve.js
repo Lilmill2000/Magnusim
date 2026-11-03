@@ -76,6 +76,7 @@ import { removeComputeJob, scheduleComputeQueueKick, snapshotComputeQueue } from
 import { polyMeshComplete } from './poly-mesh.js';
 import { fakeCompute } from './test-compute.js';
 import { startFakeSolve, stopFakeSolve } from './test-solve.js';
+import { stopDecision } from './stop-decision.js';
 import {
   claimComputeSlot,
   computeSlotHolder,
@@ -2995,7 +2996,7 @@ function resolveStopTarget(projectId, runId) {
 export function stopSolve({ projectId, force, runId, starting, startId } = {}) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (fakeCompute()) {
-    const fake = stopFakeSolve(id, runId);
+    const fake = stopFakeSolve(id, runId, force === true);
     if (fake) return fake;
   }
   // The slot's own solve first: a start in progress, a drain, or the live run.
@@ -3057,17 +3058,17 @@ export function stopSolve({ projectId, force, runId, starting, startId } = {}) {
   // boot check's drain does); a probe then finds them gone and the run is reaped.
   const rec = target.rec;
   const rid = runIdOf(rec);
-  const again = !!rec.stop_requested;
+  // A repeated plain Stop stays a plain one (stopDecision): "Stopping." unless forced.
+  const d = stopDecision(rec, force === true);
   killLegacyCase(rec);
-  if (rid) patchRunDocIfPresent(id, rid, { stop_requested: true, stage: 'stopping', note: again || force ? 'Force-stopping.' : 'Stopping.' });
+  if (rid) patchRunDocIfPresent(id, rid, { stop_requested: true, stage: 'stopping', note: d.note });
   scheduleComputeQueueKick(250);
   return {
     ok: true,
     status: 200,
-    bodyExtra:
-      force || again
-        ? { ok: true, stopped: true, forced: true, run_id: rid, increment: INCREMENT }
-        : { ok: true, stopping: true, run_id: rid, increment: INCREMENT },
+    bodyExtra: d.forced
+      ? { ok: true, stopped: true, forced: true, run_id: rid, increment: INCREMENT }
+      : { ok: true, stopping: true, ...(d.already ? { already: true } : {}), run_id: rid, increment: INCREMENT },
   };
 }
 
@@ -3092,24 +3093,24 @@ function runnerSolveToStop(projectId, runId, holder) {
 }
 
 /**
- * Stop a run on the runner (stopFoamCase): the first Stop is graceful (the current
- * step is written), a second raises the level, force ends everything now. The run
- * doc says stopping, as before.
+ * Stop a run on the runner (stopFoamCase): a Stop is graceful (the current step is
+ * written), force ends everything now. A repeated plain Stop stays graceful and answers
+ * `already` (stopDecision): it never becomes a forced stop. The run doc says stopping, as
+ * before.
  */
 function stopRunnerSolve(projectId, rec, { force, holder }) {
-  const again = !!rec.stop;
-  const forced = !!force || again;
+  const d = stopDecision(rec, force === true);
   if (holder) patchComputeSlot(holder.token, { stop_requested: true });
-  stopFoamCase(rec.id, { force: !!force });
+  stopFoamCase(rec.id, { force: d.forced });
   const doc = readRunDocFile(String(rec.project_id), String(rec.run_id), String(rec.simulation_id || ''));
-  if (doc) persistStopping(String(rec.project_id || projectId), { ...doc, project_id: rec.project_id }, forced ? { note: 'Force-stopping.' } : undefined);
-  if (forced) scheduleComputeQueueKick(250);
+  if (doc) persistStopping(String(rec.project_id || projectId), { ...doc, project_id: rec.project_id }, d.forced ? { note: 'Force-stopping.' } : undefined);
+  if (d.forced) scheduleComputeQueueKick(250);
   return {
     ok: true,
     status: 200,
-    bodyExtra: forced
+    bodyExtra: d.forced
       ? { ok: true, stopped: true, forced: true, run_id: rec.run_id, increment: INCREMENT }
-      : { ok: true, stopping: true, run_id: rec.run_id, increment: INCREMENT },
+      : { ok: true, stopping: true, ...(d.already ? { already: true } : {}), run_id: rec.run_id, increment: INCREMENT },
   };
 }
 

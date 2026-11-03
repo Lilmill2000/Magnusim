@@ -844,7 +844,7 @@ interface Workspace
 - `compute: { … }`: OpenFOAM cases this study's page writes and runs (host 1.3: check `context.hostVersion`; an older host refuses with code "not_allowed"). A case runs once, from its `0/` folder, on the app's one compute slot, so it may wait in the queue. Refusals carry `.code` ("app_not_allowed", "has_results", "invalid_path", "busy", …).
 - `compute.submitOpenFOAM(opts: SubmitOpenFOAM): Promise<{ id: string; ahead: number; existing: boolean; }>`: Queue a case; `existing` when that folder is already queued or running (its id comes back).
 - `compute.events(jobId: string, onEvent: (ev: JobEvent) => void): () => void`: Follow a case of this study: first where it is now (queued, start, or end), then each event (stage, pre, ranks, phase, progress, time_saved, warning, end). Returns a function that stops listening.
-- `compute.stop(jobId: string, opts?: { force?: boolean; } | undefined): Promise<{ status: string; stopping: boolean; }>`: Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again to stop harder; `force` at once.
+- `compute.stop(jobId: string, opts?: { force?: boolean; } | undefined): Promise<{ status: string; stopping: boolean; }>`: Stop a case: a queued one leaves the queue; a running one saves its latest frame and ends. Again without `force` changes nothing (it is already stopping); `force` ends it at once.
 - `compute.status(jobId: string): Promise<ComputeJob>`
 - `compute.list(): Promise<ComputeJob[]>`: This study's cases, newest first (a reopened page finds its running case here).
 - `results: { … }`

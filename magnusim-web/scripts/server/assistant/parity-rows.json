@@ -130,7 +130,7 @@
     { "row": "R12", "editions": ["magnusim"], "paths": [{ "tool": "explain_ready", "routes": ["run.ready"] }] },
     { "row": "R13", "editions": ["magnusim"], "paths": [{ "tool": "compute", "where": { "action": "run_start" }, "routes": ["run.start"] }] },
     { "row": "R14", "editions": ["magnusim"], "paths": [{ "tool": "compute", "where": { "action": "run_start" }, "routes": ["run.start", "queue.add"] }, { "tool": "jobs", "where": { "action": "unqueue" }, "routes": ["queue.remove"] }] },
-    { "row": "R15", "editions": ["magnusim"], "paths": [{ "tool": "jobs", "where": { "action": ["stop", "force_stop"] }, "routes": ["run.stop"] }] },
+    { "row": "R15", "editions": ["magnusim"], "notes": "A second plain stop never forces (run health spec RH1): jobs stop of a run already stopping answers already, with no card and nothing sent; only force_stop (destructive, asked) ends it at once, as the person's Force stop", "paths": [{ "tool": "jobs", "where": { "action": ["stop", "force_stop"] }, "routes": ["run.stop"] }] },
     { "row": "R16", "editions": ["magnusim"], "paths": [{ "tool": "compute", "where": { "action": "run_continue" }, "routes": ["run.continue"] }] },
     { "row": "R17", "editions": ["magnusim"], "paths": [{ "tool": "delete", "where": { "kind": "run" }, "routes": ["run.delete"] }] },
     { "row": "R18", "editions": ["magnusim"], "paths": [{ "tool": "wait", "routes": ["run.status"] }, { "tool": "read_results", "where": { "kind": ["status", "residuals"] }, "routes": ["run.status"] }] },

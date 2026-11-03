@@ -185,10 +185,14 @@ describe('Stop of the slot holder', () => {
     assert.deepEqual(spawned, [], 'no stop tool, no other process');
     const doc = JSON.parse(readFileSync(join(run.dir, 'run.json'), 'utf8'));
     assert.deepEqual([doc.status, doc.stage, doc.stop_requested], ['running', 'stopping', true], 'running until a probe finds its processes gone');
-    // A second Stop ends them again and says forced.
+    // A second plain Stop ends them again, but stays a plain one: already stopping, never forced (RH1 §3.4).
     const again = stopSolve({ projectId: PID, runId: 'run_r' });
-    assert.equal(again.bodyExtra.forced, true);
+    assert.deepEqual([again.bodyExtra.stopping, again.bodyExtra.already, again.bodyExtra.forced], [true, true, undefined]);
+    assert.equal(JSON.parse(readFileSync(join(run.dir, 'run.json'), 'utf8')).note, 'Stopping.');
     assert.equal(kills.filter((k) => k[0] === 'kill').length, 2);
+    const forced = stopSolve({ projectId: PID, runId: 'run_r', force: true });
+    assert.equal(forced.bodyExtra.forced, true);
+    assert.equal(JSON.parse(readFileSync(join(run.dir, 'run.json'), 'utf8')).note, 'Force-stopping.');
   });
 
   it('while draining (a run the boot check follows): its doc is asked to stop and its WSL processes are killed once now', () => {
@@ -305,7 +309,7 @@ describe('Stop of a run on the runner (kind solve)', () => {
   const marker = (caseDir) => JSON.parse(readFileSync(join(caseDir, '.magnusim-stop'), 'utf8'));
   const runJson = (folder) => JSON.parse(readFileSync(join(folder.dir, 'run.json'), 'utf8'));
 
-  it('running: the first Stop is graceful, the next raises it, force ends everything now; the doc says stopping', () => {
+  it('running: the first Stop is graceful, a repeated plain Stop stays so (already), force ends everything now; the doc says stopping', () => {
     const { rec, caseDir, folder } = onRunner('run_q');
     const first = stopSolve({ projectId: PID, runId: 'run_q' });
     assert.deepEqual([first.status, first.bodyExtra.stopping, first.bodyExtra.forced], [200, true, undefined]);
@@ -315,10 +319,13 @@ describe('Stop of a run on the runner (kind solve)', () => {
     assert.deepEqual([runJson(folder).stop_requested, runJson(folder).stage], [true, 'stopping']);
     assert.deepEqual(spawned.filter((s) => s.includes('stop_solve.py')), [], 'not the old stop');
     assert.deepEqual(rx.kills, []);
+    // Run health spec RH1 §3.4: a second plain Stop never silently becomes a forced stop.
     const second = stopSolve({ projectId: PID, runId: 'run_q' });
-    assert.equal(second.bodyExtra.forced, true);
-    assert.equal(store.readFoamRecord(rec.id).stop.level, 'solver');
-    assert.equal(runJson(folder).note, 'Force-stopping.');
+    assert.deepEqual([second.status, second.bodyExtra.stopping, second.bodyExtra.already, second.bodyExtra.forced, second.bodyExtra.stopped], [200, true, true, undefined, undefined]);
+    assert.equal(store.readFoamRecord(rec.id).stop.level, 'graceful');
+    assert.equal(marker(caseDir).level, 'graceful');
+    assert.equal(runJson(folder).note, 'Stopping — writing the current iteration.', 'a plain stop, not Force-stopping.');
+    assert.deepEqual(rx.kills, []);
     const forced = stopSolve({ projectId: PID, runId: 'run_q', force: true });
     assert.equal(forced.bodyExtra.forced, true);
     assert.equal(store.readFoamRecord(rec.id).stop.level, 'all');

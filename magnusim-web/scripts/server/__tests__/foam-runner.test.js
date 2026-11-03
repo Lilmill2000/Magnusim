@@ -723,7 +723,7 @@ describe('the launch is decided at close', () => {
 });
 
 describe('stop', () => {
-  it('saved first, then the marker; a later user stop raises the level; all kills WSL now', () => {
+  it('saved first, then the marker; a repeated plain stop keeps the level, force raises it to all, which kills WSL now', () => {
     const { rec } = started();
     const out = stopFoamCase(rec.id, { by: 'user' });
     assert.deepEqual(out, { ok: true, status: 'running', stopping: true });
@@ -735,13 +735,16 @@ describe('stop', () => {
     assert.equal(marker.by, 'user');
     assert.equal(fx.kills.length, 0);
     assert.equal(computeSlotHolder().stop_requested, true);
+    // Run health spec RH1 §3.4: a repeated plain stop (a plugin case's compute.stop too) never escalates.
+    assert.deepEqual(stopFoamCase(rec.id, { by: 'user' }), { ok: true, status: 'running', stopping: true });
     stopFoamCase(rec.id, { by: 'user' });
-    assert.equal(readFoamRecord(rec.id).stop.level, 'solver');
+    assert.deepEqual([readFoamRecord(rec.id).stop.level, readFoamRecord(rec.id).stop.seq], ['graceful', 1]);
+    assert.equal(JSON.parse(readFileSync(join(rec.case_dir, '.magnusim-stop'), 'utf8')).level, 'graceful');
     assert.equal(fx.kills.length, 0);
-    stopFoamCase(rec.id, { by: 'user' });
+    stopFoamCase(rec.id, { by: 'user', force: true });
     assert.equal(readFoamRecord(rec.id).stop.level, 'all');
     assert.equal(fx.kills.length, 1, 'level all: WSL is killed at once');
-    assert.equal(JSON.parse(readFileSync(join(rec.case_dir, '.magnusim-stop'), 'utf8')).seq, 3);
+    assert.equal(JSON.parse(readFileSync(join(rec.case_dir, '.magnusim-stop'), 'utf8')).seq, 2);
     stopFoamCase(rec.id, { by: 'user', force: true });
     assert.equal(fx.kills.length, 1, 'once');
     assert.ok(frames(rec.id).some((e) => e.event === 'stage' && e.stage === 'stopping'));
@@ -773,7 +776,7 @@ describe('stop', () => {
     assert.deepEqual(fx.relayKills, [], 'the relay still follows a live case');
   });
 
-  it('a host stop never escalates; by and reason are written once; a user stop after it raises the level', () => {
+  it('a host stop never escalates; by and reason are written once; a plain user stop after it changes nothing, force raises it', () => {
     const { rec } = started();
     stopFoamCasesFor({ plugin: 'foam-demo' }, 'plugin_off', 'Foam demo was turned off');
     const r1 = readFoamRecord(rec.id);
@@ -786,8 +789,10 @@ describe('stop', () => {
     assert.deepEqual([r2.stop.level, r2.stop.by, r2.stop.reason], ['graceful', 'plugin_off', 'Foam demo was turned off']);
     assert.equal(fx.notices.length, 1, 'no second notice');
     stopFoamCase(rec.id, { by: 'user' });
+    assert.deepEqual([readFoamRecord(rec.id).stop.level, readFoamRecord(rec.id).stop.by], ['graceful', 'plugin_off']);
+    stopFoamCase(rec.id, { by: 'user', force: true });
     const r3 = readFoamRecord(rec.id);
-    assert.deepEqual([r3.stop.level, r3.stop.by], ['solver', 'plugin_off']);
+    assert.deepEqual([r3.stop.level, r3.stop.by], ['all', 'plugin_off']);
     // Its end reads the host's reason.
     writeStatus(rec.case_dir, { outcome: { ok: false, stopped: true, phase: 'solve' }, clean: true });
     fx.spawned[0].onExit(0);
