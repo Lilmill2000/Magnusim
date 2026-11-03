@@ -197,6 +197,7 @@ import { runProgressText } from './runProgressText';
 import { importFailureText } from './importFailureText';
 import { waitCadPreview } from './cadPreviewWait';
 import { carrySettle } from './runSettle';
+import { answerStillCurrent, resultsDrawAllowed as resultsDrawRule } from './resultsDisplay';
 import { runCopyBody } from './runCopyBody';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
@@ -1186,6 +1187,13 @@ let ptLoading = false;
 let ptFaceCatalog = [];
 let ptFacesHydratedFor = '';
 let ptLinePd = null;
+// The case and time of the trace frame on screen (tests read it through __CFD_VIEW_ACTORS__).
+let ptShownFrame = null;
+// Result drawings (resultsDisplay.ts). resultsShowGen moves whenever they are taken away
+// (hideResultActors, resetPostFilters), so an answer asked for before then draws nothing;
+// shownResultActors are the ones showResultActor made visible, hidden again with the rest.
+let resultsShowGen = 0;
+const shownResultActors = new Set();
 
 const popState = {
   enabled: true,
@@ -2256,8 +2264,7 @@ function syncFieldVectorGlyphs(bundle, pd, enabled) {
   const diag = Math.hypot((b[1] - b[0]) || 0, (b[3] - b[2]) || 0, (b[5] - b[4]) || 0);
   try { bundle.mapper.setScaleFactor(Math.max(diag * 0.028, 1e-5)); } catch (_) {}
   try { applyResultDisplayScale(bundle.actor); } catch (_) {}
-  bundle.actor.setVisibility(true);
-  return true;
+  return showResultActor(bundle.actor);
 }
 
 const isoVecGlyph = makeFieldVectorGlyph();
@@ -2721,8 +2728,7 @@ function syncPlaneVectorGlyph(bundle, pd, spec) {
   if (s.offset) {
     try { bundle.actor.setPosition(s.offset[0], s.offset[1], s.offset[2]); } catch (_) {}
   }
-  bundle.actor.setVisibility(true);
-  return true;
+  return showResultActor(bundle.actor);
 }
 
 function planeActorOffset(plane) {
@@ -3542,7 +3548,10 @@ function applyPartsAppearance() {
     ? sourcePolyData.getNumberOfPoints()
     : 0;
   const show = !!cutState.partsColor && nPts > 0 && resultsViewOpen && !meshInspectOpen;
-  try { surfaceActor.setVisibility(show); } catch (_) {}
+  if (show) showResultActor(surfaceActor);
+  else {
+    try { surfaceActor.setVisibility(false); } catch (_) {}
+  }
   try { applyResultDisplayScale(surfaceActor); } catch (_) {}
   const op = Number(cutState.partsOpacity);
   const opacity = Number.isFinite(op) ? Math.min(1, Math.max(0, op)) : 1;
@@ -5412,7 +5421,7 @@ function restorePtRepAfterAnim() {
 function applyPtRepresentation() {
   const pd = ptLinePd;
   const n = pd && pd.getNumberOfPoints ? pd.getNumberOfPoints() : 0;
-  if (!n || !ptState.enabled) {
+  if (!n || !ptState.enabled || !resultsDrawAllowed()) {
     hidePtActors();
     return;
   }
@@ -5464,7 +5473,7 @@ function applyPtRepresentation() {
       ptActor.getProperty().setColor(rgb[0], rgb[1], rgb[2]);
     }
     try { applyResultDisplayScale(ptActor); } catch (_) {}
-    ptActor.setVisibility(true);
+    showResultActor(ptActor);
     const seeds = clipPointCloudByResultPlanes(ptSeedCloudFromLines(pd));
     const nSeeds = seeds.getNumberOfPoints ? seeds.getNumberOfPoints() : 0;
     if (nSeeds > 0) {
@@ -5474,7 +5483,7 @@ function applyPtRepresentation() {
       ptSeedMapper.setScaleFactor(Math.max(size * 1.7, 0.0012));
       ptSeedMapper.setScalarVisibility(false);
       try { applyResultDisplayScale(ptSeedActor); } catch (_) {}
-      ptSeedActor.setVisibility(true);
+      showResultActor(ptSeedActor);
     } else {
       ptSeedActor.setVisibility(false);
     }
@@ -5483,7 +5492,7 @@ function applyPtRepresentation() {
     try {
       ptMapper.setInputData(pd);
       ptActor.setMapper(ptMapper);
-      ptActor.setVisibility(true);
+      showResultActor(ptActor);
     } catch (_) {}
     try { ptSeedActor.setVisibility(false); } catch (_) {}
   }
@@ -5847,7 +5856,7 @@ function syncPtAssignGeom() {
   try { hilite.mapper.setInputData(pd); } catch (_) {}
   try { hilite.actor.setPickable(true); } catch (_) {}
   try { applyCadActorViewScale(hilite.actor); } catch (_) {}
-  try { hilite.actor.setVisibility(true); } catch (_) {}
+  showResultActor(hilite.actor);
 }
 
 function setPtFacesHint(text) {
@@ -6223,7 +6232,8 @@ function syncPtRegionOverlay(draft) {
   const show = !!(
     ptState.enabled &&
     isRegionSeedMode() &&
-    regionIsUsable(live)
+    regionIsUsable(live) &&
+    resultsDrawAllowed()
   );
   if (!show) {
     hidePtRegionOverlay();
@@ -6248,7 +6258,10 @@ function syncPtRegionOverlay(draft) {
   pd.setLines(cells);
   try { hilite.mapper.setInputData(pd); } catch (_) {}
   try { hilite.actor.setScale(1, 1, 1); } catch (_) {}
-  try { hilite.actor.setVisibility(true); } catch (_) {}
+  if (!showResultActor(hilite.actor)) {
+    hidePtRegionOverlay();
+    return;
+  }
   layoutPtRegionHandles(live);
 }
 
@@ -6996,12 +7009,13 @@ async function loadParticleTrace(overrides) {
       ptState.regionShape = overrides.regionShape;
     }
   }
-  if (!hasAttachedCase() || !ptState.enabled) {
+  if (!hasAttachedCase() || !ptState.enabled || !resultsDrawAllowed()) {
     bindParticleTrace(null);
     try { hidePtRegionOverlay(); } catch (_) {}
     try { applyPartsAppearance(); } catch (_) {}
     try { renderWindow.render(); } catch (_) {}
-    return { empty: true, skipped: hasAttachedCase() ? 'disabled' : 'no_case' };
+    const skipped = !hasAttachedCase() ? 'no_case' : !resultsDrawAllowed() ? 'no_results_view' : 'disabled';
+    return { empty: true, skipped };
   }
   try {
     await hydratePtFaceCatalog();
@@ -7246,6 +7260,7 @@ async function prefetchPtFrame(time) {
   if (!ptState.enabled) return null;
   ensurePtCacheSettings();
   const key = ptFrameKey(time);
+  const askedCase = String(getCaseDir() || '');
   if (ptFrameCache.has(key)) return ptFrameCache.get(key);
   if (ptFrameInflight.has(key)) return ptFrameInflight.get(key);
   const ctx = { time: String(time) };
@@ -7266,7 +7281,7 @@ async function prefetchPtFrame(time) {
       meta = { empty: true, error: String(e) };
     }
     if (!meta || meta.empty) {
-      const emptyEntry = { pd: null, meta, time: String(time), empty: true };
+      const emptyEntry = { pd: null, meta, time: String(time), case: askedCase, empty: true };
       ptFrameCache.set(key, emptyEntry);
       return emptyEntry;
     }
@@ -7277,7 +7292,7 @@ async function prefetchPtFrame(time) {
     const tmp = vtkXMLPolyDataReader.newInstance();
     tmp.parseAsArrayBuffer(buf);
     const pd = tmp.getOutputData ? tmp.getOutputData() : null;
-    const entry = { pd, meta, time: String(time), empty: false };
+    const entry = { pd, meta, time: String(time), case: askedCase, empty: false };
     ptFrameCache.set(key, entry);
     return entry;
   })();
@@ -7290,7 +7305,7 @@ async function prefetchPtFrame(time) {
 }
 
 function applyPtFrame(entry, opts) {
-  if (!ptState.enabled) {
+  if (!ptState.enabled || !resultsDrawAllowed()) {
     bindParticleTrace(null);
     return;
   }
@@ -7300,6 +7315,7 @@ function applyPtFrame(entry, opts) {
   } else {
     bindParticleTrace(entry.pd);
   }
+  ptShownFrame = entry && entry.pd && ptActor.getVisibility() ? { case: String(entry.case || ''), time: String(entry.time) } : null;
   if (!(opts && opts.quiet)) {
     try { applyPartsAppearance(); } catch (_) {}
     try { syncPtAssignGeom(); } catch (_) {}
@@ -7307,8 +7323,11 @@ function applyPtFrame(entry, opts) {
 }
 
 async function applyPtForTime(time, opts) {
-  if (!ptState.enabled || !hasAttachedCase()) return null;
+  if (!ptState.enabled || !hasAttachedCase() || !resultsDrawAllowed()) return null;
+  const asked = resultsAskNow(time);
   const entry = await prefetchPtFrame(time);
+  // Results left, another run opened or the time moved on meanwhile: this frame is not the view's.
+  if (!resultsAnswerCurrent(asked)) return null;
   applyPtFrame(entry, opts);
   return entry;
 }
@@ -7393,7 +7412,7 @@ function applyCutPlaneEntry(plane, entry) {
         plane.vecGlyph.actor.setPosition(nudge[0], nudge[1], nudge[2]);
       }
     } catch (_) {}
-    plane.actor.setVisibility(true);
+    if (!showResultActor(plane.actor)) return;
     applyCutClipAndParts();
     try { syncCutPlaneVectors(plane); } catch (_) {}
     try { syncCutPlaneVectorChrome(); } catch (_) {}
@@ -7511,6 +7530,9 @@ function applyCutsForTime(time, opts) {
 }
 
 async function applyTimeFilters(time, opts) {
+  // A run's filters are its Results' own: a case attached outside them (the results
+  // prefetch warming a finished run) draws none of them.
+  if (!resultsDrawAllowed()) return;
   const tstr = String(time);
   const cachedOnly = !!(opts && opts.cachedOnly);
   if (typeof applyCompareResultsTime === 'function' && compareResultsFollowsTime()) {
@@ -7922,7 +7944,8 @@ function updatePopPathActor() {
   pd.setPoints(vtkPts);
   pd.setLines(cells);
   popPathMapper.setInputData(pd);
-  popPathActor.setVisibility(!!popState.enabled);
+  if (popState.enabled) showResultActor(popPathActor);
+  else popPathActor.setVisibility(false);
 }
 
 function renderPopChart(meta) {
@@ -8080,6 +8103,10 @@ async function loadPlotOverPath(overrides) {
     if (overrides.pick != null) popState.pick = String(overrides.pick || '');
   }
   syncPopChromeFromState();
+  if (!resultsDrawAllowed()) {
+    try { popPathActor.setVisibility(false); } catch (_) {}
+    return window.__CFD_W9__;
+  }
   const n = (popState.points || []).length;
   // Honest empty: Generate disabled / no series with 0 points — do not invent a curve
   if (n < 1) {
@@ -8120,7 +8147,7 @@ async function loadPlotOverPath(overrides) {
     console.error('[CFD W9] plot-over-path failed', e);
     meta = { empty: true, n_samples: 0, reason: 'fetch_error', error: String(e) };
   }
-  if (token !== popLoadToken) return null;
+  if (token !== popLoadToken || !resultsDrawAllowed()) return null;
   popMeta = meta;
   popSeries = meta;
   renderPopChart(meta);
@@ -8212,12 +8239,13 @@ function publishW10(extra) {
 
 async function loadIsoSurface(overrides) {
   const token = ++isoLoadToken;
-  if (!hasAttachedCase()) {
+  if (!hasAttachedCase() || !resultsDrawAllowed()) {
     const emptyPd = vtkPolyData.newInstance();
     isoMapper.setInputData(emptyPd);
     isoActor.setVisibility(false);
+    syncFieldVectorGlyphs(isoVecGlyph, null, false);
     try { renderWindow.render(); } catch (_) {}
-    return { empty: true, skipped: 'no_case' };
+    return { empty: true, skipped: hasAttachedCase() ? 'no_results_view' : 'no_case' };
   }
   if (overrides && typeof overrides === 'object') {
     if (overrides.iso_field != null) isoState.iso_field = String(overrides.iso_field);
@@ -8261,12 +8289,12 @@ async function loadIsoSurface(overrides) {
     syncFieldVectorGlyphs(isoVecGlyph, null, false);
   } else {
     await isoReader.setUrl(assetUrl);
-    if (token !== isoLoadToken) return null;
+    if (token !== isoLoadToken || !resultsDrawAllowed()) return null;
     isoMapper.setInputConnection(isoReader.getOutputPort());
     if (resultRegionIndex() >= 0) isoMapper.setInputData(regionView(isoReader.getOutputData()));
     isoMapper.setColorByArrayName(colorArr);
     try { applyResultDisplayScale(isoActor); } catch (_) {}
-    isoActor.setVisibility(true);
+    showResultActor(isoActor);
     const livePd = isoMapper.getInputData ? isoMapper.getInputData() : isoReader.getOutputData();
     syncFieldVectorGlyphs(isoVecGlyph, livePd, !!isoState.vectors);
   }
@@ -8473,12 +8501,13 @@ function syncIvChromeFromState() {
 
 async function loadIsoVolume(overrides) {
   const token = ++ivLoadToken;
-  if (!hasAttachedCase()) {
+  if (!hasAttachedCase() || !resultsDrawAllowed()) {
     const emptyPd = vtkPolyData.newInstance();
     ivMapper.setInputData(emptyPd);
     ivActor.setVisibility(false);
+    syncFieldVectorGlyphs(ivVecGlyph, null, false);
     try { renderWindow.render(); } catch (_) {}
-    return { empty: true, skipped: 'no_case' };
+    return { empty: true, skipped: hasAttachedCase() ? 'no_results_view' : 'no_case' };
   }
   if (overrides && typeof overrides === 'object') {
     if (overrides.iso_field != null) ivState.iso_field = String(overrides.iso_field);
@@ -8516,12 +8545,12 @@ async function loadIsoVolume(overrides) {
     syncFieldVectorGlyphs(ivVecGlyph, null, false);
   } else {
     await ivReader.setUrl(assetUrl);
-    if (token !== ivLoadToken) return null;
+    if (token !== ivLoadToken || !resultsDrawAllowed()) return null;
     ivMapper.setInputConnection(ivReader.getOutputPort());
     if (resultRegionIndex() >= 0) ivMapper.setInputData(regionView(ivReader.getOutputData()));
     ivMapper.setColorByArrayName(colorArr);
     try { applyResultDisplayScale(ivActor); } catch (_) {}
-    ivActor.setVisibility(true);
+    showResultActor(ivActor);
     const livePd = ivMapper.getInputData ? ivMapper.getInputData() : ivReader.getOutputData();
     syncFieldVectorGlyphs(ivVecGlyph, livePd, !!ivState.vectors);
   }
@@ -8983,10 +9012,12 @@ function holdCadDuringResultsLoad() {
 }
 
 function revealResultSurface() {
-  if (!resultsViewOpen || meshInspectOpen) {
+  if (meshInspectOpen) {
     try { setGeomVisible(false); } catch (_) {}
     return;
   }
+  // Results closed while they loaded (the person went on): the CAD they left stays shown.
+  if (!resultsViewOpen) return;
   const n = sourcePolyData && sourcePolyData.getNumberOfPoints && sourcePolyData.getNumberOfPoints();
   if (!(n > 0)) {
     resultsSurfaceLive = false;
@@ -9024,6 +9055,9 @@ function hideRunResultsView(opts) {
   window.__CFD_RESULTS_VIEW__ = false;
   resultsSurfaceLive = false;
   try { stopAnimationPlay(); } catch (_) {}
+  // Its filters end with it (the run's saved view, flushed above, keeps them for next time):
+  // nothing outside Results can draw them again.
+  try { resetResultFilterFlags(); } catch (_) {}
   try { setFiltersVisible(false); } catch (_) {}
   try { setLegendVisible(false); } catch (_) {}
   try { clearResultActors(); } catch (_) {}
@@ -9172,8 +9206,7 @@ function pickPrefetchResultsRuns() {
 
 function hidePrefetchedResultSurface() {
   if (resultsViewOpen) return;
-  try { surfaceActor.setVisibility(false); } catch (_) {}
-  try { cutActor.setVisibility(false); } catch (_) {}
+  hideResultActors();
   try { setGeomVisible(true); } catch (_) {}
 }
 
@@ -9456,7 +9489,8 @@ window.__CFD_OPEN_PLUGIN_RESULTS__ = async function openPluginResults(info) {
   syncPluginResultsChrome();
   runCatalog.selected_run_id = rec.id;
   const out = await openRunResults(rec.id, { token });
-  if ((out && out.stale) || token !== studySwitchGen || pluginResultsRec !== rec) return { ok: false, stale: true };
+  // A study click, a geometry switch or leaving the results meanwhile wins over this open.
+  if ((out && (out.stale || out.left)) || token !== studySwitchGen || pluginResultsRec !== rec) return { ok: false, stale: true };
   if (String(resultsRunId || '') !== rec.id) {
     // The case could not be attached: back to the project as it was.
     hideRunResultsView();
@@ -9580,6 +9614,8 @@ async function openRunResults(runId, opts) {
     return;
   }
   if (stale()) return { stale: true };
+  // Results were left while the case attached: the view the person went to stays as it is.
+  if (!resultsViewOpen) return { left: true };
   try { applyWorkbenchStage(); } catch (_) {}
   try { setFiltersToolbarMode('post'); } catch (_) {}
   try { setFiltersVisible(false); } catch (_) {}
@@ -9612,8 +9648,10 @@ async function openRunResults(runId, opts) {
     if (loaded) {
       try { await restoreCurrentFilterSet(runId); } catch (_) {}
       if (stale()) return { stale: true };
+      if (!resultsViewOpen || treeUi.selectedKey !== selKey) return { left: true };
       try { await lockSeriesLutFromServer(activeField || defaultResultField()); } catch (_) {}
       if (stale()) return { stale: true };
+      if (!resultsViewOpen || treeUi.selectedKey !== selKey) return { left: true };
       // A failed earlier attach can autosave CAD leftovers (solid grey parts,
       // group-hidden planes). Show the field and any enabled planes.
       if (!ptState.enabled && cutState.partsStyle === 'solid') {
@@ -11918,7 +11956,7 @@ function applyComparePlanePd(R, p, pd, entry) {
   const s = meshDisplayScaleFromBounds(R.bounds) || 1;
   const eps = Math.max(2e-4, span * 4e-4) * s;
   p.actor.setPosition(-n[0] * eps, -n[1] * eps, -n[2] * eps);
-  p.actor.setVisibility(true);
+  if (!showResultActor(p.actor)) return;
   const vset = (p.def && p.def.vectors) || (R.set && R.set.vectors) || {};
   const pos = p.actor.getPosition ? p.actor.getPosition() : [0, 0, 0];
   syncPlaneVectorGlyph(p.vecGlyph, mesh, {
@@ -12012,13 +12050,16 @@ async function prefetchComparePtFrame(R, time) {
 
 function applyCompareFiltersCached(R, time) {
   const tstr = String(time);
+  // A frame of an earlier load of pane B (another run picked since) is not drawn.
+  const token = R.loadToken;
+  const current = () => compareResultsFollowsTime() && compareState.res === R && R.loadToken === token && String(R.time) === tstr;
   applyCompareResultsClipping(R);
   for (const p of R.planes) {
     if (!compareResultsPlaneActive(R, p.def)) continue;
     const hit = compareFrameExtra.cuts.get(compareCutFrameKey(R, p, tstr));
     if (hit && hit.pd) applyComparePlanePd(R, p, hit.pd, hit);
     else prefetchCompareCutFrame(R, p, tstr, { live: true }).then((entry) => {
-      if (!compareResultsFollowsTime() || String(R.time) !== tstr) return;
+      if (!current()) return;
       if (entry && entry.pd) {
         applyComparePlanePd(R, p, entry.pd, entry);
         try { compareState.viewer && compareState.viewer.renderWindow.render(); } catch (_) {}
@@ -12032,7 +12073,7 @@ function applyCompareFiltersCached(R, time) {
       applyCompareResultsPtLook(R);
     } else {
       prefetchComparePtFrame(R, tstr).then((entry) => {
-        if (!compareResultsFollowsTime() || String(R.time) !== tstr) return;
+        if (!current()) return;
         R.pt.pd = entry && !entry.empty ? entry.pd : null;
         applyCompareResultsPtLook(R);
         try { compareState.viewer && compareState.viewer.renderWindow.render(); } catch (_) {}
@@ -12183,7 +12224,8 @@ function applyCompareResultsParts(R) {
     R.surfMapper.setScalarVisibility(true);
     R.surfMapper.setColorByArrayName(R.field);
   }
-  R.surfActor.setVisibility(on);
+  if (on) showResultActor(R.surfActor);
+  else R.surfActor.setVisibility(false);
   try { applyMeshDisplayScale(R.surfActor, R.bounds); } catch (_) {}
 }
 
@@ -12427,14 +12469,14 @@ function applyCompareResultsPtLook(R) {
     P.actor.getProperty().setColor(rgb[0], rgb[1], rgb[2]);
   }
   try { applyMeshDisplayScale(P.actor, R.bounds); } catch (_) {}
-  P.actor.setVisibility(true);
+  showResultActor(P.actor);
   const seeds = clipPointCloudByPlanes(ptSeedCloudFromLines(pd), planes);
   if (seeds.getNumberOfPoints() > 0) {
     try { P.seedMapper.setInputData(ptSphereSrc.getOutputData(), 1); } catch (_) {}
     P.seedMapper.setInputData(seeds);
     P.seedMapper.setScaleFactor(Math.max(size * 1.7, 0.0012));
     try { applyMeshDisplayScale(P.seedActor, R.bounds); } catch (_) {}
-    P.seedActor.setVisibility(true);
+    showResultActor(P.seedActor);
   } else {
     P.seedActor.setVisibility(false);
   }
@@ -12901,20 +12943,34 @@ function revealPostFilter(blockId, opts) {
   setFiltersVisible(true);
 }
 
-function resetPostFilters() {
-  cutState.enabled = false;
-  cutState.partsColor = true;
-  cutState.partsStyle = 'field';
-  cutState.partsOpacity = 1;
+/**
+ * The filters' on flags off and the animation back to time steps: a run's filters belong to
+ * its Results. Its saved view (flushed before Results close) brings them back when they open
+ * again. Leaving Results and opening a run's Results (resetPostFilters) both start here.
+ */
+function resetResultFilterFlags() {
   ptState.enabled = false;
   popState.enabled = false;
   isoState.enabled = false;
   ivState.enabled = false;
+  ptLinePd = null;
+  animState.type = 'Time Step';
+  try { cancelPtRegionDraw(); cancelPtRegionEdit(); } catch (_) {}
+  try { restorePtRegionCamera(); } catch (_) {}
+}
+
+function resetPostFilters() {
+  // Answers asked for the run shown before draw nothing on this one.
+  resultsShowGen += 1;
+  try { stopAnimationPlay(); } catch (_) {}
+  cutState.enabled = false;
+  cutState.partsColor = true;
+  cutState.partsStyle = 'field';
+  cutState.partsOpacity = 1;
+  resetResultFilterFlags();
   isoValueTyped = false;
   isoCentredFor = '';
   partsBeforeInnerFilter = null;
-  ptLinePd = null;
-  try { stopAnimationPlay(); } catch (_) {}
   try {
     animState.start = null;
     animState.end = null;
@@ -13054,6 +13110,8 @@ async function applyFilterSet(rawSet, opts) {
   if (!rawSet || typeof rawSet !== 'object') return false;
   // A saved field this case does not show opens on its first field instead.
   const set = normalizeFilterSet(rawSet, resultFieldNames());
+  // Results left or another run opened while this set loads: it stops at its next step.
+  const shownGen = resultsShowGen;
   applyingFilterSet = true;
   try {
     try { stopAnimationPlay(); } catch (_) {}
@@ -13142,12 +13200,14 @@ async function applyFilterSet(rawSet, opts) {
     if (hasAttachedCase()) {
       if (activeField !== field || !sourcePolyData) {
         await loadField(field);
+        if (shownGen !== resultsShowGen) return false;
       } else {
         try { applyPartsAppearance(); } catch (_) {}
         try { updateCuttingPlane(); } catch (_) {}
       }
       if (ptState.enabled) {
         await loadParticleTrace();
+        if (shownGen !== resultsShowGen) return false;
       } else {
         try { hidePtActors(); } catch (_) {}
         try { hidePtRegionOverlay(); } catch (_) {}
@@ -14036,7 +14096,8 @@ btnPlotOverPath?.addEventListener('click', () => {
   en?.addEventListener('change', () => {
     popState.enabled = !!en.checked;
     btnPlotOverPath?.classList.toggle('is-active', popState.enabled);
-    popPathActor.setVisibility(!!popState.enabled && (popState.points || []).length >= 2);
+    if (popState.enabled && (popState.points || []).length >= 2) showResultActor(popPathActor);
+    else popPathActor.setVisibility(false);
     const wrap = document.getElementById('pop-chart-wrap');
     if (wrap && !popState.enabled) wrap.hidden = true;
     renderWindow.render();
@@ -16363,7 +16424,7 @@ function placeInspectMarker(marker, world) {
   try { marker.sphere.modified(); } catch (_) {}
   try { marker.actor.setScale(1, 1, 1); } catch (_) {}
   try { marker.actor.setPosition(world[0], world[1], world[2]); } catch (_) {}
-  try { marker.actor.setVisibility(true); } catch (_) {}
+  showResultActor(marker.actor);
 }
 
 function syncInspectMarkers() {
@@ -19043,7 +19104,67 @@ function emptyVtkPolyData() {
   return vtkPolyData.newInstance();
 }
 
+/** Result drawings may be shown now: a Results view is open and the mesh view is not. */
+function resultsDrawAllowed() {
+  return resultsDrawRule({ resultsViewOpen, meshInspectOpen });
+}
+
+/**
+ * The one way a result drawing (main view or pane B) is made visible. Outside an open
+ * Results view it is hidden instead and the answer is false. hideResultActors takes away
+ * every actor shown here (resultsDisplay.census.test.ts keeps it the only way).
+ */
+function showResultActor(actor) {
+  if (!actor) return false;
+  if (!resultsDrawAllowed()) {
+    try { actor.setVisibility(false); } catch (_) {}
+    return false;
+  }
+  shownResultActors.add(actor);
+  try { actor.setVisibility(true); } catch (_) {}
+  return true;
+}
+
+/** What a result drawing is asked for now: the results generation, the case and the time. */
+function resultsAskNow(time) {
+  return { gen: resultsShowGen, caseDir: String(getCaseDir() || ''), time: String(time != null ? time : getTime()) };
+}
+
+/** An answer asked for `asked` may still draw (resultsDisplay.ts answerStillCurrent). */
+function resultsAnswerCurrent(asked) {
+  return answerStillCurrent(asked, { ...resultsAskNow(), resultsViewOpen, meshInspectOpen });
+}
+
+/**
+ * The one place result drawings end: every result actor of the main view and of pane B is
+ * hidden (their data and warm frames stay), a trace reload still waiting is dropped, and an
+ * answer asked for before now draws nothing (resultsShowGen).
+ */
+function hideResultActors() {
+  resultsShowGen += 1;
+  if (ptReloadTimer) {
+    clearTimeout(ptReloadTimer);
+    ptReloadTimer = null;
+  }
+  const hide = (a) => {
+    try { if (a) a.setVisibility(false); } catch (_) {}
+  };
+  [surfaceActor, cutActor, ptActor, ptSeedActor, popPathActor, isoActor, ivActor, isoVecGlyph.actor, ivVecGlyph.actor].forEach(hide);
+  inspectMarkerPool.forEach((m) => hide(m.actor));
+  resultPlanes.forEach((p) => {
+    hide(p.actor);
+    if (p.vecGlyph) hide(p.vecGlyph.actor);
+  });
+  try { hidePtFaceOverlay(); } catch (_) {}
+  try { hidePtRegionOverlay(); } catch (_) {}
+  try { hideCompareResultsActors(); } catch (_) {}
+  shownResultActors.forEach(hide);
+  shownResultActors.clear();
+  ptShownFrame = null;
+}
+
 function clearResultActors() {
+  hideResultActors();
   try { clearInspect(false); } catch (_) {}
   ivLoadToken += 1;
   isoLoadToken += 1;
@@ -19067,16 +19188,11 @@ function clearResultActors() {
   for (const m of [surfaceMapper, ptMapper, ptGlyphMapper, ptSeedMapper]) {
     try { if (m && m.removeAllClippingPlanes) m.removeAllClippingPlanes(); } catch (_) {}
   }
-  try { hidePtFaceOverlay(); } catch (_) {}
   ptLinePd = null;
   sourcePolyData = null;
   sourceBounds = null;
   resultsSurfaceLive = false;
   cutBins = null;
-  const actors = [surfaceActor, cutActor, ptActor, ptSeedActor, popPathActor, isoActor, ivActor, inspectMarkerActor];
-  for (const a of actors) {
-    try { a.setVisibility(false); } catch (_) {}
-  }
 }
 
 const TREE_DETAIL_IDS = {
@@ -19780,6 +19896,9 @@ function applyWorkbenchStage() {
   if (cta) cta.hidden = stage !== 'empty' || !!linkWaitText;
 
   if (!stageChanged) {
+    // Result drawings belong to Results: outside them, whatever drew one (an answer that
+    // landed late) is taken away on every study, run, geometry and Start path that gets here.
+    if (stage !== 'results') hideResultActors();
     try { syncViewportChromeInset(); } catch (_) {}
     return stage;
   }
@@ -20875,6 +20994,15 @@ function resetWorkbenchScope(nextId) {
   try { clearCadEdgeDisplay(); } catch (_) {}
   try { setGeomVisible(false); } catch (_) {}
   try { if (typeof clearResultActors === 'function') clearResultActors(); } catch (_) {}
+  // The filters and the trace's seed faces were that project's runs'.
+  try {
+    resetResultFilterFlags();
+    ptState.faces = [];
+    ptState.focusFace = null;
+    ptState.region = null;
+    ptFaceCatalog = [];
+    ptFacesHydratedFor = '';
+  } catch (_) {}
   try { if (typeof detachResultsCase === 'function') detachResultsCase(); } catch (_) {}
   try { renderWindow.render(); } catch (_) {}
   if (!switching) {
@@ -38120,6 +38248,51 @@ function holdCameraOverLoad() {
 
 // The viewport's camera as the snapshot has it (pos, fp, vu, parallel, scale, angle): tests read it.
 window.__CFD_CAMERA__ = () => snapshotCamera(renderer.getActiveCamera());
+// The 3D actors each view draws now, by name (tests): a results view leaves none of its own
+// behind. `main` is the viewport, `compare` the split view's pane B; an actor no name fits is 'other'.
+window.__CFD_VIEW_ACTORS__ = () => {
+  const names = new Map([
+    [surfaceActor, 'results-surface'], [cutActor, 'cut'], [meshSurfActor, 'mesh'],
+    [ptActor, 'particle-trace'], [ptSeedActor, 'particle-seeds'], [popPathActor, 'plot-path'],
+    [orbitFlashActor, 'orbit-flash'], [isoActor, 'iso'], [ivActor, 'iso-volume'],
+    [isoVecGlyph.actor, 'iso-vectors'], [ivVecGlyph.actor, 'iso-volume-vectors'],
+    [geomActor, 'cad'], [geomEdgeActor, 'cad-edges'], [geomEdgeSelActor, 'cad-edge-sel'], [geomVertexSelActor, 'cad-vertex-sel'],
+  ]);
+  inspectMarkerPool.forEach((m) => names.set(m.actor, 'inspect-marker'));
+  if (ptFaceHilite) names.set(ptFaceHilite.actor, 'pt-face-overlay');
+  if (ptRegionHilite) names.set(ptRegionHilite.actor, 'pt-region-outline');
+  resultPlanes.forEach((p) => {
+    names.set(p.actor, 'cut-plane');
+    if (p.vecGlyph) names.set(p.vecGlyph.actor, 'cut-plane-vectors');
+  });
+  const R = compareState.res;
+  if (R) {
+    names.set(R.surfActor, 'b:results-surface');
+    names.set(R.pt.actor, 'b:particle-trace');
+    names.set(R.pt.seedActor, 'b:particle-seeds');
+    (R.planes || []).forEach((p) => {
+      names.set(p.actor, 'b:cut-plane');
+      if (p.vecGlyph) names.set(p.vecGlyph.actor, 'b:cut-plane-vectors');
+    });
+  }
+  const list = (r) => (r ? r.getActors() : []).filter((a) => a.getVisibility()).map((a) => {
+    let points = 0;
+    try {
+      const pd = a.getMapper() && a.getMapper().getInputData();
+      points = (pd && pd.getNumberOfPoints && pd.getNumberOfPoints()) || 0;
+    } catch (_) {}
+    let bounds = null;
+    try { bounds = Array.from(a.getBounds()); } catch (_) {}
+    return { name: names.get(a) || 'other', points, bounds };
+  });
+  return {
+    main: list(renderer),
+    compare: compareState.on && compareState.viewer ? list(compareState.viewer.renderer) : [],
+    results_view: !!resultsViewOpen,
+    anim_type: String(animState.type || ''),
+    pt: { enabled: !!ptState.enabled, has_paths: !!ptLinePd, loading: !!ptLoading, frame: ptActor.getVisibility() ? ptShownFrame : null },
+  };
+};
 // The results surface's opacity (a CAD load fades it), and whether a linked part waits for the results to close.
 window.__CFD_RESULTS_SURFACE_OPACITY__ = () => surfaceActor.getProperty().getOpacity();
 window.__CFD_LINK_CAD_PENDING__ = () => linkCadPending;
