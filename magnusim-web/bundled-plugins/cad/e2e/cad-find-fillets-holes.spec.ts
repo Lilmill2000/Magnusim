@@ -299,6 +299,7 @@ test('cad:find-fillets-holes-limits on a STEP part of 2,739 faces (between the t
   await expect(count).toHaveText('30 faces match Body 1 faces fillet <= 2 mm', { timeout: 60_000 });
   await expect(panel.locator('[data-find-row] [data-find-type]').first()).toHaveText('fillet R2');
   await expect(panel.locator('[data-run-reason]')).toHaveCount(0);
+  await shot(page, 'find-limits-fillets');
   // A sized hole: refused (over the holes' 2,600), both limits named, the holes' first.
   const words = 'Body 1 has 2,739 faces: holes are found on bodies of up to 2,600 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.';
   await find(frame, 'Body 1 faces hole <= 6 mm');

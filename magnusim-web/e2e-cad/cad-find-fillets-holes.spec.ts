@@ -8,12 +8,22 @@
 // body (window.__CAD__.recognition), a sized hole is refused in words naming both limits, the
 // holes' first, and fillets are still found, as in Magnusim.
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test, type FrameLocator, type Page } from './pw';
 import { featureRowNamed, partOpened, runCommand, watchPage, workspaceFrame } from '../bundled-plugins/cad/e2e/helpers';
 import { importRoundedBlock } from '../bundled-plugins/cad/e2e/rounded-block';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type W = { __CAD__: { services: any; recognition: { maxFilletFaces: number; maxHoleFaces: number } } };
+
+/** A picture of the page in CAD_E2E_SHOTS, when it is set. */
+async function shot(page: Page, name: string) {
+  const dir = process.env.CAD_E2E_SHOTS;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  await page.screenshot({ path: join(dir, `${name}.png`) });
+}
 
 const toolPanel = (frame: FrameLocator) => frame.locator('[data-cad-panel="tool"]');
 const featurePanel = (frame: FrameLocator) => frame.locator('[data-cad-panel="feature"]');
@@ -80,6 +90,7 @@ test('Find of fillets and holes by size, Select all, Delete: the sharp part, as 
     await panel.locator('[data-find-query]').press('Enter');
     await expect(panel.locator('[data-run-reason]')).toHaveText(`Body 1 has ${faces} faces: holes are found on bodies of up to 10 faces and fillets on bodies of up to 5,000 faces. Select its faces in the view instead.`, { timeout: 30_000 });
     await expect(panel.locator('[data-find-row]')).toHaveCount(0);
+    await shot(page, 'cad-edition-find-limits');
     await panel.locator('[data-find-query]').fill('Body 1 faces fillet');
     await panel.locator('[data-find-query]').press('Enter');
     await expect(panel.locator('[data-find-count]')).toHaveText('4 faces match Body 1 faces fillet', { timeout: 30_000 });
