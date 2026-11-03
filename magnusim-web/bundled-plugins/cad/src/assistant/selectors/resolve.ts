@@ -91,6 +91,8 @@ export interface Scene {
   readonly progress: (label: string) => void;
   /** What "selection" names: a panel's own picks (the person's Hole panel's face), or null for the person's selection. */
   readonly selection?: readonly SelectionItem[] | null;
+  /** false: a read the model does not see (get_model's read-back of a point it writes), whose errors' candidates take no handles. */
+  readonly handles?: boolean;
 }
 
 /** What recognition found a face to be: set by the fillet and sized-hole filters only (find's fillet_mm, hole_mm, through). */
@@ -341,6 +343,7 @@ export async function handleFor(sc: Scene, h: Hit): Promise<string> {
   if (h.kind === 'region') return `${h.sketch.name} ${h.row.id}`;
   if (h.kind === 'plane' || h.kind === 'axis') return '';
   if (h.handle) return h.handle;
+  if (sc.handles === false) return '';
   const table = handlesOf(sc.services, sc.key);
   const words = hitWords(sc, h);
   if (h.kind === 'body') return table.give({ kind: 'body', body: h.body.id, bodyName: h.body.name, ref: null, label: h.body.name, words });

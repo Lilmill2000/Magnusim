@@ -20,9 +20,13 @@
 // it says nothing was looked for (the rest left holes out, or was missing, with no word).
 // On the two-extrude T-block rounded on every face, where some of the fillet faces are split (no
 // label), get_model writes them at a point on the face, so the feature resent unchanged names the
-// same faces.
+// same faces: each at its centroid moved onto it when the point rule reads that back (no
+// tessellation), else at find's tessellated point (a half ring's centroid is in its bore), and in
+// words when neither reads back; it says what it is doing, and a stop stops it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { afterEach, describe, expect, it } from 'vitest';
+import { currentHandles } from '../../src/assistant/selectors/handles';
+import { topoCacheOf } from '../../src/assistant/selectors/topo-cache';
 import { secondWayBudget } from '../../src/features/delete_faces/plan';
 import { recognitionOf } from '../../src/kernel/recognition';
 import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/kernel/timeouts';
@@ -71,6 +75,52 @@ async function tBlock(x: AssistantHarness, hole = false) {
     await extrude(x, 'Extrude 3', regions(x, sk3), { op: 'cut', distance: '20 mm' });
     expect(bodyNamed(x, 'Body 1').volume).toBeCloseTo(32000 - Math.PI * 16 * 10, 3);
   }
+}
+
+type Full = { inputs: { faces: string[] }; rest: string[] };
+
+/**
+ * The two-extrude T-block rounded on every face, then Delete faces 1 of all but one of its 40
+ * fillets: red, its rest the one left out; some picks are split faces (no label to be written by).
+ */
+async function splitFillets(x: AssistantHarness): Promise<{ id: string; picked: () => string[] }> {
+  await tBlock(x);
+  await roundAll(x);
+  const b = bodyNamed(x, 'Body 1');
+  const t = (await x.services.kernel.call('topo', { id: b.shape, edges: 'none', vertices: 'none', face_bbox: 'none' })).result;
+  const round = t.faces.filter((f) => f.type !== 'plane').map((f) => f.i);
+  expect(round).toHaveLength(40);
+  const refs = [];
+  for (const i of round.slice(1)) {
+    const p = await pickFace(x.services, b, i, null);
+    if (!p.ok) throw new Error(p.reason);
+    refs.push(p.ref);
+  }
+  // The bar's split underside splits some of the fillets.
+  expect(refs.some((r) => splitMerged(r.name).some((part) => splitSuffix(part).k !== null))).toBe(true);
+  await x.add('delete_faces', { body: b.id, faces: refs });
+  const { id, st } = statusOf(x, 'Delete faces 1');
+  expect(st.state).toBe('error');
+  const picked = () => (x.doc.state.get().doc.features.find((f) => f.id === id) as DeleteFacesFeature).faces.map((r) => r.name).sort();
+  return { id, picked };
+}
+
+/** Every kernel call from now (its op, shape and faces), `each` told of each one first, till off(). */
+function kernelSpy(x: AssistantHarness, each?: (op: string, params: unknown) => void) {
+  const kernel = x.services.kernel;
+  const real = kernel.call;
+  const calls: { op: string; id: unknown; faces: unknown }[] = [];
+  kernel.call = ((op: string, params: Record<string, unknown>, ...rest: unknown[]) => {
+    calls.push({ op, id: params?.id, faces: params?.faces });
+    each?.(op, params);
+    return (real as (...a: unknown[]) => unknown).call(kernel, op, params, ...rest);
+  }) as typeof kernel.call;
+  return {
+    calls,
+    off: () => {
+      kernel.call = real;
+    },
+  };
 }
 
 /**
@@ -296,26 +346,8 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
     'the two-extrude T-block, one fillet left out: its split fillet faces are written at a point on them, so Delete faces 1 resent unchanged names the same faces, and with the rest takes them off as fillets',
     async () => {
       h = await assistantHarness();
-      await tBlock(h);
-      await roundAll(h);
-      const b = bodyNamed(h, 'Body 1');
-      const t = (await h.services.kernel.call('topo', { id: b.shape, edges: 'none', vertices: 'none', face_bbox: 'none' })).result;
-      const round = t.faces.filter((f) => f.type !== 'plane').map((f) => f.i);
-      expect(round).toHaveLength(40);
-      const refs = [];
-      for (const i of round.slice(1)) {
-        const p = await pickFace(h.services, b, i, null);
-        if (!p.ok) throw new Error(p.reason);
-        refs.push(p.ref);
-      }
-      // The bar's split underside splits some of the fillets: those faces have no label to be written by.
-      expect(refs.some((r) => splitMerged(r.name).some((part) => splitSuffix(part).k !== null))).toBe(true);
-      await h.add('delete_faces', { body: b.id, faces: refs });
-      const { id, st } = statusOf(h, 'Delete faces 1');
-      expect(st.state).toBe('error');
-      const picked = () => (h!.doc.state.get().doc.features.find((f) => f.id === id) as DeleteFacesFeature).faces.map((r) => r.name).sort();
+      const { picked } = await splitFillets(h);
       const before = picked();
-      type Full = { inputs: { faces: string[] }; rest: string[] };
       const read = async () => (await h!.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Full;
       const full = await read();
       expect(full.inputs.faces).toHaveLength(39);
@@ -332,6 +364,116 @@ describe("direct delete_faces: a heal past the gap, as the person's Delete faces
       const r = await h.ok('direct', DIRECT({ edit: 'Delete faces 1', kind: 'delete_faces', faces: [...full.inputs.faces, ...full.rest] }));
       expect(r.data).toMatchObject({ feature: { name: 'Delete faces 1', state: 'ok', note: NOTE } });
       expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(32000, 6);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "get_model full writes the split fillet faces at their centroids moved onto them, as the point rule reads them back: no tessellation of the bodies before Delete faces 1, it says what it is doing, the whole Part's full read writes them the same, and resent unchanged they name the same faces",
+    async () => {
+      h = await assistantHarness();
+      const { id, picked } = await splitFillets(h);
+      const before = picked();
+      const shape = (await h.services.doc.bodiesBefore(id)).bodies[0].shape;
+      const spy = kernelSpy(h);
+      // Nothing of that body kept from the pick (a large part's bodies before are read here first).
+      topoCacheOf(h.services).clear();
+      try {
+        const full = (await h.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Full & { faces_note?: string };
+        expect(full.inputs.faces.some((x) => x.startsWith('Body 1 face at ('))).toBe(true);
+        expect(full.faces_note).toBeUndefined();
+        expect(spy.calls.filter((c) => c.id === shape && c.op === 'tessellate')).toEqual([]);
+        expect(h.fake.progress.some((p) => p.label?.startsWith('Finding points on the faces of Delete faces 1 with no label (1 of '))).toBe(true);
+        spy.off();
+        // The whole Part in full keeps the row (it fits), so its points are looked for there too.
+        const rows = (await h.ok('get_model', { detail: 'full', feature: '' })).data.features as (Full & { name?: string })[];
+        expect(rows.find((r) => r.name === 'Delete faces 1')?.inputs.faces).toEqual(full.inputs.faces);
+        await h.ok('direct', DIRECT({ edit: 'Delete faces 1', kind: 'delete_faces', faces: full.inputs.faces }));
+        expect(picked()).toEqual(before);
+      } finally {
+        spy.off();
+      }
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a split face whose centroid is off it (half of a ring's end, its centroid in the bore): get_model full writes it at a point inside it, not on the edge it shares with the bore, so Delete faces 1 resent unchanged names the same face",
+    async () => {
+      h = await assistantHarness();
+      const sk1 = await sketchOn(h, 'Sketch 1', 'origin:top', new Shapes().circle('o', [0, 0], 15).circle('i', [0, 0], 10));
+      await extrude(h, 'Extrude 1', regions(h, sk1, (_s, area) => area > 350), { distance: '20 mm' });
+      expect(bodyNamed(h, 'Body 1').volume).toBeCloseTo(Math.PI * 125 * 20, 3);
+      const sk2 = await sketchOn(h, 'Sketch 2', 'origin:top', new Shapes().rect('s', -20, -1, 20, 1));
+      await extrude(h, 'Extrude 2', regions(h, sk2), { op: 'cut', distance: '5 mm' });
+      const b = bodyNamed(h, 'Body 1');
+      const t = (await h.services.kernel.call('topo', { id: b.shape, edges: 'none', vertices: 'none', face_bbox: 'fast', face_mass: true })).result;
+      // The ring's end at z = 0, cut in two by the slot: two half rings, each one's centroid in the bore (about 8.1 mm from the axis; the bore is 10).
+      const halves = t.faces.filter((f) => f.type === 'plane' && !!f.centroid && Math.abs(f.centroid[2]) < 1e-6);
+      expect(halves).toHaveLength(2);
+      for (const f of halves) expect(Math.hypot(f.centroid![0], f.centroid![1])).toBeLessThan(10);
+      const p = await pickFace(h.services, b, halves[0].i, null);
+      if (!p.ok) throw new Error(p.reason);
+      expect(splitMerged(p.ref.name).some((part) => splitSuffix(part).k !== null)).toBe(true);
+      await h.add('delete_faces', { body: b.id, faces: [p.ref] });
+      const { id } = statusOf(h, 'Delete faces 1');
+      const picked = () => (h!.doc.state.get().doc.features.find((f) => f.id === id) as DeleteFacesFeature).faces.map((r) => r.name);
+      const before = picked();
+      const full = (await h.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Full & { faces_note?: string };
+      expect(full.inputs.faces).toHaveLength(1);
+      expect(full.inputs.faces[0]).toMatch(/^Body 1 face at \(/);
+      expect(full.faces_note).toBeUndefined();
+      // The centroid's read-back failed (on the edge with the bore): its error's candidates took none of the model's handles.
+      expect(currentHandles(h.services, 'turn:t-test')?.size ?? 0).toBe(0);
+      await h.ok('direct', DIRECT({ edit: 'Delete faces 1', kind: 'delete_faces', faces: full.inputs.faces }));
+      expect(picked()).toEqual(before);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'when no point on a split face reads back to it (the kernel cannot measure there), get_model full says so in words: faces_note',
+    async () => {
+      h = await assistantHarness();
+      const { id } = await splitFillets(h);
+      const shape = (await h.services.doc.bodiesBefore(id)).bodies[0].shape;
+      const spy = kernelSpy(h, (op, params) => {
+        if (op === 'measure' && (params as { a?: { id?: unknown } }).a?.id === shape) throw new Error('no measure here (test)');
+      });
+      try {
+        const full = (await h.ok('get_model', { detail: 'full', feature: 'Delete faces 1' })).data.feature as Full & { faces_note?: string };
+        const n = full.inputs.faces.filter((x) => x.startsWith('Body 1 face at (')).length + full.rest.filter((x) => x.startsWith('Body 1 face at (')).length;
+        expect(n).toBeGreaterThan(1);
+        expect(full.faces_note).toBe(`${n} faces are written at their centre: no point on them reads back to them on the bodies before Delete faces 1, so sent back unchanged they may not be found`);
+      } finally {
+        spy.off();
+      }
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    "a get_model full stopped while it finds those points stops there: the reply is stopped, and no face after the one being looked at is measured",
+    async () => {
+      h = await assistantHarness();
+      const { id } = await splitFillets(h);
+      const shape = (await h.services.doc.bodiesBefore(id)).bodies[0].shape;
+      const stop = new AbortController();
+      let measured = 0;
+      const spy = kernelSpy(h, (op, params) => {
+        if (op === 'measure' && (params as { a?: { id?: unknown } }).a?.id === shape) {
+          measured++;
+          stop.abort();
+        }
+      });
+      topoCacheOf(h.services).clear();
+      try {
+        const r = await h.call('get_model', { detail: 'full', feature: 'Delete faces 1' }, { signal: stop.signal });
+        expect(r).toMatchObject({ ok: false, error: { code: 'busy', message: 'stopped: The call was stopped.', detail: { reason: 'stopped' } } });
+        expect(measured).toBe(1);
+      } finally {
+        spy.off();
+      }
     },
     REAL_KERNEL_MS,
   );

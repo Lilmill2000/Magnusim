@@ -15,17 +15,21 @@
 //     label that several faces share (a mirror copy's, a pattern copy's, a trimmed side) names the
 //     one face, and a fillet face's number counts there; "<body> face at (x, y, z)" when it has
 //     none, or is a split face, at a point that lies on the face there (writtenAgainst: a curved
-//     face's centre is off it, past the point rule's reach); an edge as "<label A> & <label B>"
+//     face's centre is off it, past the point rule's reach; the point is the face's centroid or
+//     find's tessellated point moved onto it, whichever the point rule reads back as that face,
+//     and none is said in words: get_model's faces_note); an edge as "<label A> & <label B>"
 //     (or "<body> edge at (x, y, z)"), axes and planes as selectors, bodies by their names.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { storedBodyName } from '../doc/features/body-ids';
 import { splitEdgeName } from '../naming/edges';
 import { splitMerged, splitSuffix } from '../naming/names';
+import { kernelLookup } from '../naming/refs';
 import { resolveFace } from '../naming/resolve';
 import type { AppServices } from '../types/app';
 import type { BodyId, Feature, FeatureId, FeatureType, PersistentRef, Vec3 } from '../types/doc';
 import type { DocState, EndBody } from '../types/doc-service';
+import type { NamingLookup } from '../types/naming';
 import type { AxisRef, PlaneRef } from '../types/references';
 import { uiFor } from '../ui/controller';
 import { heartbeat } from './busy';
@@ -37,6 +41,7 @@ import { featureByName, stateWord } from './model';
 import { len } from './numbers';
 import { macrotask } from './pace';
 import { boxDiagonal, pointOnFace, unionBox } from './selectors/geometry';
+import { buildScene, evaluate, parseFor, type Scene, type SceneCall } from './selectors/resolve';
 import { topoCacheOf } from './selectors/topo-cache';
 import type { EditCtx } from './step';
 import { closestName, closestWords } from './closest';
@@ -197,11 +202,16 @@ export interface RefBodies {
   labels: LabelIndex;
   /** The bodies as built (their shapes), where points on their faces are found; absent for the shown bodies. */
   built?: readonly EndBody[];
-  /**
-   * The faces faceText wrote by a point, by body and stored name: `p` a point that lies on the face
-   * (onFacePoints), null when none was found (the signature's centre stays), undefined until looked for.
-   */
-  points?: Map<string, { body: BodyId; ref: PersistentRef; p?: Vec3 | null }>;
+  /** The faces faceText wrote by a point, by body and stored name. */
+  points?: Map<string, FacePoint>;
+}
+
+/** A face faceText wrote by a point. */
+export interface FacePoint {
+  body: BodyId;
+  ref: PersistentRef;
+  /** A point on the face that reads back to it (onFacePoints), null when none does (the signature's centre stays), undefined until looked for. */
+  p?: Vec3 | null;
 }
 
 /** The bodies just before feature `id` with their labels, or null when they cannot be built now. */
@@ -215,47 +225,134 @@ export async function refBodiesOf(services: AppServices, id: FeatureId): Promise
   }
 }
 
-/** A point that lies on face `index` of `b`: find's point (selectors/geometry.ts), then the face's nearest point to it. */
-async function onFace(services: AppServices, b: EndBody, index: number): Promise<Vec3 | null> {
+/** What looking for those points reports to, is stopped by, and reads selectors with (get_model's call). */
+export type PointsCall = SceneCall;
+
+const stopped = () => new ToolError('stopped', 'The call was stopped.');
+
+/** The feature build's lookup (naming/refs.ts kernelLookup: the faces a name has), with every face read through the cache in chunks. */
+function buildLookup(services: AppServices, faces: number, signal: AbortSignal | undefined): NamingLookup {
+  const k = kernelLookup(services.kernel);
   const cache = topoCacheOf(services);
-  const t = await cache.topo(b.shape);
-  const topo = t.faceAt.get(index);
-  if (!topo) return null;
-  // The size the selectors tessellate a body they do not draw at (selectors/resolve.ts tessFor).
-  const tess = await cache.tess(b.shape, Math.max(1, boxDiagonal(unionBox(t.faces.map((f) => f.bbox ?? null)))));
-  const seed = pointOnFace(tess, index, topo);
-  if (!seed) return null;
-  // A triangle's point on a curved face (a fillet's corner) is under it by the tessellation's sag.
-  const m = await services.kernel.call('measure', { a: { id: b.shape, face: index }, b: { point: seed } });
-  return m.result.p1 ?? seed;
+  return { ...k, faces: (shape, indices) => (indices === 'all' ? cache.topo(shape, { faces, signal }).then((t) => t.faces) : k.faces(shape, indices)) };
 }
 
-/** Points on the faces faceText wrote by a point on `at`'s bodies, each looked for once (the face the feature's build resolves). */
-async function onFacePoints(services: AppServices, at: RefBodies): Promise<void> {
-  for (const fp of at.points?.values() ?? []) {
-    if (fp.p !== undefined) continue;
-    fp.p = null;
-    const b = at.built?.find((x) => x.id === fp.body);
-    if (!b?.names) continue;
-    try {
-      const r = await resolveFace({ ref: fp.ref, shape: b.shape, names: b.names, lookup: topoCacheOf(services).lookup, placement: b.placement });
-      if (r.ok) fp.p = await onFace(services, b, r.index);
-    } catch {
-      // Not readable now (a kernel restart): the signature's centre stays.
-    }
+/** The nearest point of face `index` of `b` to `near` (one that lies on it), else `fallback`. */
+async function ontoFace(services: AppServices, b: EndBody, index: number, near: Vec3, fallback: Vec3 | null): Promise<Vec3 | null> {
+  try {
+    const m = await services.kernel.call('measure', { a: { id: b.shape, face: index }, b: { point: near } });
+    return m.result.p1 ?? fallback;
+  } catch {
+    return fallback;
   }
 }
 
 /**
- * `write`'s answer with stored references written against the bodies just before feature `id`
- * (refBodiesOf): when it wrote a face by a point, once more with a point that lies on each such face.
+ * Whether `p`, written as faceText writes it, reads back on `sc` (the bodies before the feature)
+ * as face `index` of `body`: the point rule a resend reads it by, one face and no other.
  */
-export async function writtenAgainst<T>(services: AppServices, id: FeatureId, write: (at: RefBodies | null) => T): Promise<T> {
+async function readsBack(sc: Scene, body: BodyId, index: number, p: Vec3): Promise<boolean> {
+  try {
+    const got = await evaluate(sc, parseFor(sc, `${bodyText(sc.state, body)} face at ${point(p)}`, 'face'), 'face');
+    const h = got.hits[0];
+    return got.hits.length === 1 && h.kind === 'face' && h.body.id === body && h.index === index;
+  } catch {
+    if (sc.signal?.aborted) throw stopped();
+    // Ambiguous, nothing there, or not readable now.
+    return false;
+  }
+}
+
+/**
+ * A point on the face `fp` names on `b` (the face the feature's build resolves) that reads back
+ * to it: its centroid moved onto it (one measure), else find's point on the body's coarse
+ * tessellation (selectors/geometry.ts) moved onto it; null when neither does. A centroid can be
+ * off its face (a half ring's is in the bore): moved onto the face it is on its edge, where the
+ * point rule may read the next face.
+ */
+async function pointFor(services: AppServices, sc: Scene, b: EndBody, names: NonNullable<EndBody['names']>, fp: FacePoint): Promise<Vec3 | null> {
+  const live = () => {
+    if (sc.signal?.aborted) throw stopped();
+  };
+  const faces = names.faces.length;
+  const r = await resolveFace({ ref: fp.ref, shape: b.shape, names, lookup: buildLookup(services, faces, sc.signal), placement: b.placement });
+  live();
+  if (!r.ok) return null;
+  const [topo] = await kernelLookup(services.kernel).faces(b.shape, [r.index]);
+  live();
+  if (!topo) return null;
+  if (topo.centroid) {
+    const p = await ontoFace(services, b, r.index, [...topo.centroid] as Vec3, null);
+    live();
+    if (p && (await readsBack(sc, fp.body, r.index, p))) return p;
+  }
+  live();
+  // The whole body read and tessellated, once per shape (kept): seconds on a large part.
+  const cache = topoCacheOf(services);
+  const t = await cache.topo(b.shape, { faces, signal: sc.signal });
+  // The size the selectors tessellate a body they do not draw at (selectors/resolve.ts tessFor).
+  const tess = await cache.tess(b.shape, Math.max(1, boxDiagonal(unionBox(t.faces.map((f) => f.bbox ?? null)))));
+  live();
+  const seed = tess ? pointOnFace(tess, r.index, topo) : null;
+  if (!seed) return null;
+  // A triangle's point on a curved face (a fillet's corner) is under it by the tessellation's sag.
+  const p = await ontoFace(services, b, r.index, seed, seed);
+  live();
+  return p && (await readsBack(sc, fp.body, r.index, p)) ? p : null;
+}
+
+/**
+ * Points on the faces faceText wrote by a point on `at`'s bodies (pointFor), each looked for once,
+ * saying which feature's faces as it goes and stopping when the call is stopped.
+ */
+async function onFacePoints(id: FeatureId, at: RefBodies, call: PointsCall): Promise<void> {
+  const todo = [...(at.points?.values() ?? [])].filter((fp) => fp.p === undefined);
+  if (!todo.length) return;
+  for (const fp of todo) fp.p = null;
+  let sc: Scene;
+  try {
+    // The model never sees these reads: a failed one's candidates take none of its handles.
+    sc = { ...(await buildScene(call, { before: id })), handles: false };
+  } catch {
+    if (call.signal.aborted) throw stopped();
+    // The bodies before it cannot be built now: the signatures' centres stay.
+    return;
+  }
+  const name = sc.state.doc.features.find((f) => f.id === id)?.name ?? 'the feature';
+  for (let i = 0; i < todo.length; i++) {
+    if (call.signal.aborted) throw stopped();
+    const fp = todo[i];
+    const b = at.built?.find((x) => x.id === fp.body);
+    const names = b?.names;
+    if (!b || !names) continue;
+    const label = `Finding points on the faces of ${name} with no label (${i + 1} of ${todo.length})`;
+    call.progress(null, label);
+    try {
+      fp.p = await heartbeat(call, pointFor(call.services, sc, b, names, fp), label);
+    } catch {
+      if (call.signal.aborted) throw stopped();
+      // Not readable now (a kernel restart): the signature's centre stays.
+    }
+  }
+  if (call.signal.aborted) throw stopped();
+}
+
+/**
+ * `write`'s answer with stored references written against the bodies just before feature `id`
+ * (refBodiesOf): when it wrote a face by a point, once more with a point on each such face that
+ * reads back to it, unless `keep` turns the first answer down (get_model full: a row that does not fit).
+ */
+export async function writtenAgainst<T>(services: AppServices, id: FeatureId, write: (at: RefBodies | null) => T, o: { call: PointsCall; keep?: (first: T) => boolean }): Promise<T> {
   const at = await refBodiesOf(services, id);
   const out = write(at);
-  if (!at?.points?.size) return out;
-  await onFacePoints(services, at);
+  if (!at?.points?.size || (o.keep && !o.keep(out))) return out;
+  await onFacePoints(id, at, o.call);
   return write(at);
+}
+
+/** How many of the faces `at`'s answer wrote by a point were looked for and have none that reads back (written at their signature's centre). */
+export function unreadPoints(at: RefBodies | null): number {
+  return [...(at?.points?.values() ?? [])].filter((fp) => fp.p === null).length;
 }
 
 const SHOWN = new WeakMap<object, RefBodies>();

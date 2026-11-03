@@ -42,7 +42,7 @@ import type { SketchOutput } from '../types/sketch';
 import { uiFor } from '../ui/controller';
 import { heartbeat, personBusy } from './busy';
 import { ToolError } from './errors';
-import { axisText, faceText, writtenAgainst, type RefBodies } from './feature-tools';
+import { axisText, faceText, unreadPoints, writtenAgainst, type RefBodies } from './feature-tools';
 import { choicesOf } from './choices';
 import { inputsNameRefs, inputsOf, summaryOf, valuesOf } from './features-io';
 import { enclosureKept, KEPT_WORDS } from '../features/enclosure/kept';
@@ -222,9 +222,25 @@ export function fullFeature(services: AppServices, s: DocState, f: Feature, at: 
   return row;
 }
 
-/** One feature, full, its references written against the bodies just before it (where a resend with edit reads them). */
-async function fullFeatureNow(services: AppServices, s: DocState, f: Feature): Promise<Row> {
-  return inputsNameRefs(f) ? writtenAgainst(services, f.id, (at) => fullFeature(services, s, f, at)) : fullFeature(services, s, f);
+/**
+ * One feature, full, its references written against the bodies just before it (where a resend
+ * with edit reads them); the points on faces with no label looked for only when `keep` keeps it,
+ * and the faces none reads back to said in words (faces_note).
+ */
+async function fullFeatureNow(ctx: CallCtx, s: DocState, f: Feature, keep?: (row: Row) => boolean): Promise<Row> {
+  const { services } = ctx;
+  if (!inputsNameRefs(f)) return fullFeature(services, s, f);
+  return writtenAgainst(
+    services,
+    f.id,
+    (at) => {
+      const row = fullFeature(services, s, f, at);
+      const n = unreadPoints(at);
+      if (n) row.faces_note = n === 1 ? `1 face is written at its centre: no point on it reads back to it on the bodies before ${f.name}, so sent back unchanged it may not be found` : `${n} faces are written at their centre: no point on them reads back to them on the bodies before ${f.name}, so sent back unchanged they may not be found`;
+      return row;
+    },
+    { call: ctx, keep },
+  );
 }
 
 /** A body: what it is, how big, where; null properties above EAGER_FACES (measure gives them). */
@@ -472,14 +488,16 @@ function fitBrief(facts: Row, rows: Row[], budgets: ReplyBudgets): Row {
 }
 
 /** The whole Part, full: features in full while they fit, then brief with a pointer, then counted. */
-async function fitFull(facts: Row, services: AppServices, s: DocState, budgets: ReplyBudgets): Promise<Row> {
+async function fitFull(facts: Row, ctx: CallCtx, s: DocState, budgets: ReplyBudgets): Promise<Row> {
+  const { services } = ctx;
   const features: Row[] = [];
   const data: Row = { ...fitBase(facts, budgets.full / 3, false), features };
   let size = jsonBytes(data);
   const list = s.doc.features;
   for (let i = 0; i < list.length; i++) {
     const f = list[i];
-    const full = await fullFeatureNow(services, s, f);
+    // A row that does not fit as first written goes brief: no points are looked for for it.
+    const full = await fullFeatureNow(ctx, s, f, (row) => size + jsonBytes(row) + 1 <= budgets.full);
     const fullBytes = jsonBytes(full) + 1;
     if (size + fullBytes <= budgets.full) {
       features.push(full);
@@ -603,7 +621,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
       });
     }
     const facts = await partFacts(ctx, s);
-    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f, input.regions === 'full') : await fullFeatureNow(services, s, f);
+    const row = f.type === 'sketch' ? await sketchDetail(ctx, s, f, input.regions === 'full') : await fullFeatureNow(ctx, s, f);
     const data = { ...Object.fromEntries(FEATURE_BASE.filter((k) => k in facts).map((k) => [k, facts[k]])), feature: row };
     const state = String(row.state);
     return {
@@ -621,7 +639,7 @@ export async function readModel(ctx: CallCtx, input: ModelInput): Promise<ToolRe
   const b = ctx.budgets;
   const cap = Math.max(REST_MIN, RESULT_DATA_BYTES - RESULT_MARGIN - room);
   const budgets = { ...b, brief: Math.min(cap, Math.max(b.brief / 2, b.brief - room)), full: Math.min(cap, Math.max(b.full / 2, b.full - room)) };
-  const fitted = input.detail === 'full' ? await fitFull(base, services, s, budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), budgets);
+  const fitted = input.detail === 'full' ? await fitFull(base, ctx, s, budgets) : fitBrief(base, s.doc.features.map((f) => briefFeature(services, s, f)), budgets);
   const data: Row = { ...listed, ...fitted };
   const states = counts(s.doc.features);
   const bad = (states.error ?? 0) + (states.warning ?? 0);
