@@ -152,7 +152,7 @@ installed by Setup (`npm ci`) or `run.bat` into `magnusim-web/node_modules`; non
 is shipped in the repository:
 
 - `@modelcontextprotocol/server` 2.3.0 (Apache-2.0), with
-  `@modelcontextprotocol/core` 2.3.0 (Apache-2.0) and `zod` 4.6.5 (MIT).
+  `@modelcontextprotocol/core` 2.3.0 (Apache-2.0) and `zod` 4.6.7 (MIT).
 
 The tests also use the SDK's client package, `@modelcontextprotocol/client` 2.3.0
 (Apache-2.0), a development dependency the app never runs.
