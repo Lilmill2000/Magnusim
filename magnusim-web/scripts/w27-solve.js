@@ -76,7 +76,7 @@ import {
 import { removeComputeJob, scheduleComputeQueueKick, snapshotComputeQueue } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
 import { fakeCompute } from './test-compute.js';
-import { startFakeSolve, stopFakeSolve } from './test-solve.js';
+import { fakeStartFails, startFakeSolve, stopFakeSolve } from './test-solve.js';
 import { stopDecision } from './stop-decision.js';
 import {
   claimComputeSlot,
@@ -2579,6 +2579,8 @@ async function startSolveBody(opts = {}, slot) {
   mkdirSync(winOut, { recursive: true });
   // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in solve after every real check (test-solve.js).
   if (fakeCompute()) {
+    // A run named in MAGNUSIM_TEST_SOLVE_FAIL_START fails before its solver starts, as a plan that fails does.
+    if (fakeStartFails(stored.name)) return failBeforeRunner({ id, runId, simId, draft, stored, cont }, 'Failed to prepare solve case: the test made this Start fail');
     // As the runner's start does (continuedRunFields): a change that waited for this Continue applies.
     if (cont && Array.isArray(cont.doc.continue_changes)) {
       persistRun(id, simId, { id: runId, run_id: runId, continue_changes: applyContinueChanges(cont.doc.continue_changes, cont.at || new Date().toISOString()) });
@@ -2642,6 +2644,56 @@ export function runRanks(nCells, opts = {}) {
 }
 
 /**
+ * A Start that fails before its solver starts (its plan failed): the run is failed with the
+ * error and its analysis's fix. Its health was to be checked (`health_checked: true`), so its
+ * Health block says it failed before its solver started, not that it predates health checks.
+ * A Continue that could not start leaves the run as it ended.
+ * @param {{ id: string, runId: string, simId: string, draft: any, stored: any, cont: any }} c
+ * @param {string} error
+ * @param {{ fix?: any, patches?: any }} [extra]
+ */
+function failBeforeRunner(c, error, extra = {}) {
+  const { id, runId, simId, draft, stored, cont } = c;
+  if (cont) {
+    // A continue that could not start leaves the run as it ended (its frames and status).
+    patchRunDocIfPresent(id, runId, { status: draft.status, stage: draft.stage || null });
+    return {
+      ok: false,
+      status: 409,
+      bodyExtra: { error, final: true, increment: INCREMENT, run_id: runId, simulation_id: simId, ...(extra.fix ? { fix: extra.fix } : {}) },
+    };
+  }
+  try {
+    persistRun(id, simId, {
+      ...stored,
+      status: 'failed',
+      error,
+      note: error,
+      fix: extra.fix || null,
+      finished_at: new Date().toISOString(),
+      pid: null,
+      health_checked: true,
+    });
+  } catch (e) {
+    console.warn('[CFD] run not marked failed', e);
+  }
+  return {
+    ok: false,
+    status: 500,
+    bodyExtra: {
+      error,
+      increment: INCREMENT,
+      run_id: runId,
+      simulation_id: simId,
+      // The run's health was to be checked; it has no solver output (the page's Health block).
+      health_checked: true,
+      ...(extra.fix ? { fix: extra.fix } : {}),
+      ...(Array.isArray(extra.patches) ? { patches: extra.patches } : {}),
+    },
+  };
+}
+
+/**
  * The rest of a Start on the step-list runner (core-solve.js). The run doc already
  * says running, with its build stamp. Its analysis plans the run on the worker
  * (analysis.plan_run: nothing here waits for Python), the ranks follow from the
@@ -2651,42 +2703,7 @@ export function runRanks(nCells, opts = {}) {
  */
 async function startSolveOnRunner(c) {
   const { id, runId, simId, slot, draft, ready, stored, winOut, isTransient, timeDependency, transientSettings, et, wi, startMeshId, onDone, cont } = c;
-  const failRun = (error, extra = {}) => {
-    if (cont) {
-      // A continue that could not start leaves the run as it ended (its frames and status).
-      patchRunDocIfPresent(id, runId, { status: draft.status, stage: draft.stage || null });
-      return {
-        ok: false,
-        status: 409,
-        bodyExtra: { error, final: true, increment: INCREMENT, run_id: runId, simulation_id: simId, ...(extra.fix ? { fix: extra.fix } : {}) },
-      };
-    }
-    try {
-      persistRun(id, simId, {
-        ...stored,
-        status: 'failed',
-        error,
-        note: error,
-        fix: extra.fix || null,
-        finished_at: new Date().toISOString(),
-        pid: null,
-      });
-    } catch (e) {
-      console.warn('[CFD] run not marked failed', e);
-    }
-    return {
-      ok: false,
-      status: 500,
-      bodyExtra: {
-        error,
-        increment: INCREMENT,
-        run_id: runId,
-        simulation_id: simId,
-        ...(extra.fix ? { fix: extra.fix } : {}),
-        ...(Array.isArray(extra.patches) ? { patches: extra.patches } : {}),
-      },
-    };
-  };
+  const failRun = (/** @type {string} */ error, /** @type {{ fix?: any, patches?: any }} */ extra = {}) => failBeforeRunner(c, error, extra);
   let plan;
   try {
     plan = await commitRpc('analysis.plan_run', {
@@ -3556,6 +3573,28 @@ export async function previewTransient(projectId, runId, settings, simulationId)
 }
 
 /**
+ * Keep "Check its log"'s answer (RH1, spec 3.9), which can come minutes after the check began:
+ * only when the run is still there, still ended, still has no health, and is the same attempt
+ * (`asBegun`: its started_at and finished_at when the check began). A run deleted meanwhile is
+ * never made again, and a run started over or continued meanwhile never gets the old verdict.
+ * True when it was kept.
+ * @param {string} projectId
+ * @param {string} simId
+ * @param {string} runId
+ * @param {{ started_at: string | null, finished_at: string | null }} asBegun
+ * @param {any} health
+ */
+export function saveCheckedHealth(projectId, simId, runId, asBegun, health) {
+  const folder = runFolderOf(projectId, runId, simId);
+  if (!folder) return false;
+  const now = readRunDocFile(projectId, runId, simId);
+  if (!now || now.health) return false;
+  if (!['done', 'stopped', 'failed'].includes(String(now.status || ''))) return false;
+  if (String(now.started_at || '') !== String(asBegun.started_at || '') || String(now.finished_at || '') !== String(asBegun.finished_at || '')) return false;
+  return !!persistRun(projectId, simId, { id: runId, run_id: runId, simulation_id: simId, health }, { noCreate: true });
+}
+
+/**
  * GET /api/run/health (RH1, spec 3.9): the run's health; `recompute` on an ended run that has
  * none starts "Check its log" in the background and answers `checking: true`.
  * @param {string} projectId
@@ -3572,14 +3611,16 @@ function runHealthAnswer(projectId, run, recompute) {
   if (recompute && ended && run.health_checked !== false && !(state && !state.done)) {
     const latest = run.continue_from != null ? Number(run.continue_from) : Number(run.last_saved_iteration) > 0 ? Number(run.last_saved_iteration) : null;
     const sim = String(run.simulation_id || '');
+    // The run as the check began: its answer is kept only for that run, as it still is.
+    const disk = readRunDocFile(projectId, runId, sim) || run;
+    const asBegun = { started_at: disk.started_at || null, finished_at: disk.finished_at || null };
     startHealthCheck(
       key,
       run,
       (health) => {
         if (!health || !sim) return;
         try {
-          persistRun(projectId, sim, { id: runId, run_id: runId, simulation_id: sim, health });
-          invalidateLiveSolveCache();
+          if (saveCheckedHealth(projectId, sim, runId, asBegun, health)) invalidateLiveSolveCache();
         } catch (e) {
           console.warn('[CFD run health] the check was not saved', e);
         }

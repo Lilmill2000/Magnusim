@@ -481,9 +481,15 @@ def _run_node(
     }
 
 
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def _run_health(run: dict[str, Any]) -> dict[str, Any]:
-    """A run's health verdict (RH1) for its tree badge: ``health`` ``{verdict, unit,
-    first_unhealthy}``; nothing for a run with none."""
+    """A run's health verdict (RH1) for its tree badge and Start's question: ``health``
+    ``{verdict, unit, first_unhealthy, has_fix?}`` (``first_unhealthy`` keeps ``approx`` and
+    ``by_t`` of an onset in an old log's unread middle; ``has_fix``: a finding offers a new run
+    with a fix); nothing for a run with none."""
     h = run.get("health")
     if not isinstance(h, dict) or h.get("verdict") not in ("pending", "healthy", "watch", "unhealthy", "failed"):
         return {}
@@ -491,8 +497,20 @@ def _run_health(run: dict[str, Any]) -> dict[str, Any]:
     if h.get("unit") in ("time step", "iteration"):
         out["unit"] = h["unit"]
     fu = h.get("first_unhealthy")
-    if isinstance(fu, dict) and isinstance(fu.get("t"), (int, float)) and not isinstance(fu.get("t"), bool):
-        out["first_unhealthy"] = {"t": fu["t"], **({"approx": True} if fu.get("approx") else {})}
+    if isinstance(fu, dict) and _is_num(fu.get("t")):
+        slim: dict[str, Any] = {"t": fu["t"]}
+        if fu.get("approx"):
+            slim["approx"] = True
+            if _is_num(fu.get("by_t")):
+                slim["by_t"] = fu["by_t"]
+        out["first_unhealthy"] = slim
+    raw = h.get("findings")
+    findings: list[Any] = raw if isinstance(raw, list) else []
+    if any(
+        isinstance(f, dict) and isinstance(f.get("fix"), list) and any(isinstance(x, dict) and x.get("target") == "new_run" for x in f["fix"])
+        for f in findings
+    ):
+        out["has_fix"] = True
     return {"health": out}
 
 

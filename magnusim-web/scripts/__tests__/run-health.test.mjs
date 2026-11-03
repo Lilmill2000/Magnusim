@@ -218,6 +218,55 @@ describe('core-solve: live health, the end, a Continue', () => {
     assert.equal(core.endedHealth(null, { case_dir: join(ROOT, 'none'), log_path: logPath }).verdict, 'watch');
   });
 
+  it('a run that fails while its health is pending ends Failed with its reason; done or stopped ones stay pending', () => {
+    const pending = record({ verdict: 'pending', step: 3, t: 0.0001, window: 0, findings: [], first_unhealthy: null, restart: null, timeline: [] });
+    const failed = core.endedRunDoc({ time_dependency: 'Transient' }, { status: 'failed', error: `pimpleFoam failed (exit 1)` }, { health: pending, reason: `FOAM FATAL IO ERROR in /home/${USER}/case/0/U` });
+    assert.equal(failed.health.verdict, 'failed');
+    assert.equal(failed.health.live, false);
+    assert.equal(failed.health.findings[0].code, 'failed');
+    assert.match(failed.health.findings[0].text, /^The run failed at time step 3, before its health could be judged \(from the 6th time step on\): FOAM FATAL IO ERROR/);
+    assert.ok(!failed.health.findings[0].text.includes(`/home/${USER}`), failed.health.findings[0].text);
+    assert.equal(shape.healthProblem(failed.health), '');
+    // Before its time loop (no step yet).
+    const early = core.endedRunDoc({ time_dependency: 'Transient' }, { status: 'failed', error: 'pimpleFoam failed (exit 1)' }, { health: { ...pending, step: 0, t: null } });
+    assert.match(early.health.findings[0].text, /^The run failed before its time loop started/);
+    // Done or stopped: still pending, no longer live.
+    for (const status of ['stopped', 'done']) {
+      const out = core.endedRunDoc({ time_dependency: 'Transient' }, { status }, { health: pending });
+      assert.equal(out.health.verdict, 'pending', status);
+      assert.equal(out.health.live, false, status);
+    }
+    // A judged verdict is never changed by the end.
+    const judged = core.endedRunDoc({ time_dependency: 'Transient' }, { status: 'failed', error: 'x' }, { health: record({ verdict: 'unhealthy' }) });
+    assert.equal(judged.health.verdict, 'unhealthy');
+  });
+
+  it("\"Check its log\"'s late answer is kept only for the same run, still there, still ended, with no health", () => {
+    const stamp = { started_at: '2026-11-03T09:00:00.000Z', finished_at: '2026-11-03T09:10:00.000Z' };
+    const ended = { name: 'Old', simulation_id: SID, status: 'done', time_dependency: 'Transient', ...stamp };
+    const health = record({ live: false });
+    // Deleted meanwhile: no folder comes back.
+    io.persistRun(PID, SID, { id: 'old-del', run_id: 'old-del', ...ended });
+    const delDir = io.runFolderOf(PID, 'old-del', SID).dir;
+    rmSync(delDir, { recursive: true, force: true });
+    assert.equal(w27.saveCheckedHealth(PID, SID, 'old-del', stamp, health), false);
+    assert.equal(io.runFolderOf(PID, 'old-del', SID), null, 'a deleted run is not made again');
+    // Started over meanwhile: running now (another attempt), and later ended again.
+    io.persistRun(PID, SID, { id: 'old-re', run_id: 'old-re', ...ended });
+    io.persistRun(PID, SID, { id: 'old-re', run_id: 'old-re', status: 'running', started_at: '2026-11-03T10:00:00.000Z', finished_at: null, has_results: false });
+    assert.equal(w27.saveCheckedHealth(PID, SID, 'old-re', stamp, health), false);
+    assert.equal(core.readRunDocFile(PID, 'old-re', SID).health ?? null, null, 'the new attempt gets no old verdict');
+    io.persistRun(PID, SID, { id: 'old-re', run_id: 'old-re', status: 'stopped', finished_at: '2026-11-03T10:05:00.000Z' });
+    assert.equal(w27.saveCheckedHealth(PID, SID, 'old-re', stamp, health), false);
+    assert.equal(core.readRunDocFile(PID, 'old-re', SID).health ?? null, null);
+    // The same attempt, still ended with no health: kept once; a second answer does not replace it.
+    io.persistRun(PID, SID, { id: 'old-ok', run_id: 'old-ok', ...ended });
+    assert.equal(w27.saveCheckedHealth(PID, SID, 'old-ok', stamp, health), true);
+    assert.equal(core.readRunDocFile(PID, 'old-ok', SID).health.verdict, 'unhealthy');
+    assert.equal(w27.saveCheckedHealth(PID, SID, 'old-ok', stamp, record({ verdict: 'healthy' })), false);
+    assert.equal(core.readRunDocFile(PID, 'old-ok', SID).health.verdict, 'unhealthy');
+  });
+
   it("a Continue moves the run's health into attempts[] and starts it fresh", () => {
     const old = { status: 'stopped', n_steps: 165, residuals: [], health: record() };
     const fields = w27.continuedRunFields(old, { from: 0.1667, times: [0.1667] });

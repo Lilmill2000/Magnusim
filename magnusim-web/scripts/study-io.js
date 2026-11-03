@@ -533,12 +533,16 @@ export function assembleRefinements(projectId, simId, meshId) {
   return { refinements: refs, simulation_id: simId, mesh_id: want || null };
 }
 
-/** Write one run folder only. case/ always stays under that run. */
+/**
+ * Write one run folder only. case/ always stays under that run. `opts.noCreate`: a run that is
+ * not there (deleted meanwhile) is not made again; the answer is null.
+ */
 export function persistRunAt(projectDirPath, simId, run, opts) {
   const sid = String(simId || (run && run.simulation_id) || '');
   if (!sid) throw new Error('simulation_id required to persist run');
   const rid = run && (run.id || run.run_id);
   let folder = rid ? findRun(projectDirPath, String(rid), sid) : null;
+  if (!folder && opts && opts.noCreate) return null;
   if (!folder) folder = createRunFolder(projectDirPath, sid, run);
   const onDisk = readJsonFile(join(folder.dir, 'run.json'));
   const existing = onDisk || {};

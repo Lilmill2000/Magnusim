@@ -157,9 +157,23 @@ function lastSteps(window: number, transientUnit: boolean, capital = false): str
   return capital ? s[0].toUpperCase() + s.slice(1) : `the ${s}`;
 }
 
-/** The chip's word (spec 2.1). */
-export function chipWord(h: HealthRecord | null | undefined, transient: boolean): string {
-  if (!h || h.verdict === 'pending') return unitOf(h, transient) ? 'Checking (needs 6 time steps)' : 'Checking (needs 6 iterations)';
+/** The word of a run that ended before its health was judged (never "Checking" on an ended run). */
+export const NOT_JUDGED = 'Not judged';
+
+/** "It ended before its health could be judged (from the 6th time step on)." */
+export function endedBeforeJudged(transient: boolean): string {
+  return `It ended before its health could be judged (from the 6th ${transient ? 'time step' : 'iteration'} on).`;
+}
+
+/**
+ * The chip's word (spec 2.1). `ended`: the run has ended, so a record still pending reads
+ * "Not judged", not "Checking".
+ */
+export function chipWord(h: HealthRecord | null | undefined, transient: boolean, ended = false): string {
+  if (!h || h.verdict === 'pending') {
+    if (ended) return NOT_JUDGED;
+    return unitOf(h, transient) ? 'Checking (needs 6 time steps)' : 'Checking (needs 6 iterations)';
+  }
   return VERDICT_WORDS[h.verdict] || 'Checking';
 }
 
@@ -170,14 +184,15 @@ export function notCheckedWords(h: HealthRecord | null | undefined): string {
   return ' Not checked: ' + skipped.map((s) => `${CHECK_NAMES[s.code] || s.code.replace(/_/g, ' ')} (${s.why})`).join(', ') + '.';
 }
 
-/** The chip's title (spec 2.1): "Healthy" never reads as good results. */
-export function chipTitle(h: HealthRecord | null | undefined, transient: boolean): string {
+/** The chip's title (spec 2.1): "Healthy" never reads as good results. `ended` as chipWord. */
+export function chipTitle(h: HealthRecord | null | undefined, transient: boolean, ended = false): string {
   const t = unitOf(h, transient);
   const window = isNum(h?.window) ? (h?.window as number) : 0;
   const last = lastSteps(Math.min(50, window), t);
   const settled = t ? 'whether averages have settled' : 'whether the residuals have reached their targets';
   let text: string;
-  if (!h || h.verdict === 'pending') text = `Health is judged from the 6th ${t ? 'time step' : 'iteration'} on: the start is not scored.`;
+  if ((!h || h.verdict === 'pending') && ended) text = endedBeforeJudged(t);
+  else if (!h || h.verdict === 'pending') text = `Health is judged from the 6th ${t ? 'time step' : 'iteration'} on: the start is not scored.`;
   else if (h.verdict === 'healthy') text = `No stability problems found in ${last}. This does not check mesh independence or ${settled}.`;
   else if (h.verdict === 'watch') text = `Something in ${last} needs watching: see the findings. This does not check mesh independence or ${settled}.`;
   else if (h.verdict === 'unhealthy') text = `Stability problems found in ${last}: see the findings.`;
@@ -197,12 +212,36 @@ export function sinceWords(h: HealthRecord, transient: boolean): string {
   const fu = h.first_unhealthy;
   if (!fu || !isNum(fu.t)) return '';
   const t = unitOf(h, transient);
-  if (fu.approx) {
-    const by = isNum(fu.by_t) ? ` and ${atWords(fu.by_t, t)}` : '';
-    return `between ${atWords(fu.t, t)}${by}`;
-  }
+  if (fu.approx) return onsetAt(h, transient);
   const wall = isNum(fu.wall_s) && fu.wall_s > 0 ? ` (${wallWords(fu.wall_s)})` : '';
   return `since ${atWords(fu.t, t)}${wall}`;
+}
+
+/**
+ * When it became unhealthy: "t = 0.0069 s". An onset in the unread middle of an old run's log
+ * (`approx`, spec 3.9) is not a time: "between t = 0.0031 s and t = 0.0069 s" (or "after
+ * t = 0.0031 s" when the later time is unknown). '' when unknown.
+ */
+export function onsetAt(h: HealthRecord | null | undefined, transient: boolean): string {
+  const fu = h?.first_unhealthy;
+  if (!fu || !isNum(fu.t)) return '';
+  const t = unitOf(h, transient);
+  if (fu.approx) return isNum(fu.by_t) ? `between ${atWords(fu.t, t)} and ${atWords(fu.by_t, t)}` : `after ${atWords(fu.t, t)}`;
+  return atWords(fu.t, t);
+}
+
+/** "at t = 0.0069 s", or "between t = A and t = B" for an approximate onset; '' when unknown. */
+export function onsetWhen(h: HealthRecord | null | undefined, transient: boolean): string {
+  const at = onsetAt(h, transient);
+  if (!at) return '';
+  return h?.first_unhealthy?.approx ? at : `at ${at}`;
+}
+
+/** "since t = 0.0069 s", or "since some time between t = A and t = B"; '' when unknown. */
+export function onsetSince(h: HealthRecord | null | undefined, transient: boolean): string {
+  const at = onsetAt(h, transient);
+  if (!at) return '';
+  return h?.first_unhealthy?.approx ? `since some time ${at}` : `since ${at}`;
 }
 
 /** The subline under the chip (spec 3.10). `ageS`: seconds since its `at`, for a live record. */
@@ -212,7 +251,8 @@ export function healthSubline(h: HealthRecord, run: HealthRunView, ageS: number 
   const ended = !['running', 'starting', 'queued'].includes(run.status) && h.live !== true;
   const where = isNum(h.t) ? atWords(h.t, t) : '';
   let s: string;
-  if (!window) s = where ? (ended ? `Ended at ${where}` : `Up to ${where}`) : 'Not scored yet';
+  if (ended && h.verdict === 'pending') s = endedBeforeJudged(t).slice(0, -1);
+  else if (!window) s = where ? (ended ? `Ended at ${where}` : `Up to ${where}`) : 'Not scored yet';
   else if (ended) s = `${lastSteps(window, t, true)} before it ended${where ? ` at ${where}` : ''}`;
   else s = `${lastSteps(window, t, true)}${where ? `, up to ${where}` : ''}`;
   if (!ended && isNum(ageS)) s += ` · updated ${Math.max(0, Math.round(ageS))} s ago`;
@@ -291,7 +331,7 @@ export function restartSentence(run: HealthRunView, h: HealthRecord): string {
   }
   if (!isNum(onset)) return '';
   const saved = isNum(run.saved) ? atWords(run.saved, t) : 'its last saved time';
-  const began = atWords(onset, t);
+  const began = onsetAt(h, run.transient);
   if (h.restart === 'from_zero') {
     return `Its saved results (from ${saved}) come after the problem began (${began}), so Continue would carry it on. Start again from ${t ? 't = 0' : 'iteration 0'} in a new run; ${name} and its results stay.`;
   }
@@ -303,7 +343,8 @@ export function restartSentence(run: HealthRunView, h: HealthRecord): string {
     return `Its last saved time (${saved}) is before it became unhealthy (${began}). Continue goes on from there; with the same settings it will likely become unhealthy again. ${end}`;
   }
   const doneEnd = state === 'done' ? end : 'A new run from t = 0 is the surer way.';
-  return `It was unhealthy from ${began} and Healthy again by its last saved time (${saved}). Results saved in between hold the problem, and Continue with the same settings may repeat it. ${doneEnd}`;
+  const from = h.first_unhealthy?.approx ? `from some time ${began}` : `from ${began}`;
+  return `It was unhealthy ${from} and Healthy again by its last saved time (${saved}). Results saved in between hold the problem, and Continue with the same settings may repeat it. ${doneEnd}`;
 }
 
 export interface HealthNext {
@@ -370,7 +411,7 @@ export function continueHealthWords(
   const state = healthRunState(run);
   if (state !== 'stopped_saved' && state !== 'done') return null;
   const t = unitOf(h, run.transient);
-  const began = atWords(h.first_unhealthy.t, t);
+  const began = onsetAt(h, run.transient);
   const saved = isNum(run.saved) ? atWords(run.saved, t) : '';
   const parts: string[] = [];
   let ask = false;
@@ -383,7 +424,7 @@ export function continueHealthWords(
   } else if (h.restart === 'continue_after_fix') {
     parts.push(restartSentence(run, h));
   } else if (!ask && h.verdict === 'unhealthy') {
-    parts.push(`It became unhealthy at ${began} and its settings have not changed since, so Continue will likely repeat the problem.`);
+    parts.push(`It became unhealthy ${onsetWhen(h, run.transient)} and its settings have not changed since, so Continue will likely repeat the problem.`);
   }
   const text = parts.filter(Boolean).join(' ');
   return text ? { text, ask } : null;
@@ -398,7 +439,7 @@ export function continueAskWords(run: HealthRunView, h: HealthRecord): { title: 
 /** The "will likely repeat" sentence of a run that became unhealthy and whose settings have not changed. */
 export function repeatSentence(run: HealthRunView, h: HealthRecord): string {
   if (!h.first_unhealthy || !isNum(h.first_unhealthy.t)) return '';
-  return `It became unhealthy at ${atWords(h.first_unhealthy.t, unitOf(h, run.transient))} and its settings have not changed since, so Continue will likely repeat the problem.`;
+  return `It became unhealthy ${onsetWhen(h, run.transient)} and its settings have not changed since, so Continue will likely repeat the problem.`;
 }
 
 /** "Unhealthy (velocity clipping, turbulence bounding)" of an earlier part's health. */
@@ -433,17 +474,33 @@ export function earlierPartLines(
 
 /** The one-time notice when a run turns unhealthy (spec 3.11). */
 export function unhealthyNotice(who: string, h: HealthRecord, transient: boolean): string {
-  const fu = h.first_unhealthy;
-  const since = fu && isNum(fu.t) ? ` since ${atWords(fu.t, unitOf(h, transient))}` : '';
-  return `${who} is unhealthy${since}. See Health in its Run panel.`;
+  const since = onsetSince(h, transient);
+  return `${who} is unhealthy${since ? ' ' + since : ''}. See Health in its Run panel.`;
 }
 
 /** The tree badge's title (spec 3.11). */
 export function badgeTitle(h: HealthRecord, transient: boolean): string {
-  const fu = h.first_unhealthy;
-  return `Health: Unhealthy${fu && isNum(fu.t) ? ` since ${atWords(fu.t, unitOf(h, transient))}` : ''}`;
+  const since = onsetSince(h, transient);
+  return `Health: Unhealthy${since ? ' ' + since : ''}`;
 }
 
 /** Runs that are not checked, or ran before checks existed (spec 3.10). */
 export const NOT_CHECKED = 'Health is not checked for this kind of run.';
 export const BEFORE_CHECKS = 'This run ran before health checks existed.';
+export const FAILED_BEFORE_SOLVER = 'It failed before its solver started, so there is no solver output to check.';
+export const NOT_RECORDED = 'Its health was not recorded.';
+
+/**
+ * What the Health block (and the Assistant) say of an ENDED run that has no health record, as
+ * its `health_checked` and its progress tell: '' when there is nothing to say this way (a
+ * running run, or one from before health checks: "Check its log" is offered there).
+ */
+export function noRecordWords(run: HealthRunView & { n_steps?: number | null }, healthChecked: boolean | null | undefined): string {
+  if (healthChecked === false) return NOT_CHECKED;
+  const ended = ['done', 'stopped', 'failed', 'finished'].includes(String(run.status || ''));
+  if (healthChecked !== true || !ended) return '';
+  const steps = isNum(run.n_steps) ? run.n_steps : 0;
+  if (run.status === 'failed' && steps <= 0) return FAILED_BEFORE_SOLVER;
+  if (steps >= 6) return NOT_RECORDED;
+  return endedBeforeJudged(run.transient);
+}

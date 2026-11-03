@@ -102,6 +102,24 @@ describe('the Health block', () => {
     expect(document.querySelector('[data-run-health-subline]')?.textContent).toMatch(/ · details from t = 0\.18 s \(the latest check was too large to keep\)$/);
   });
 
+  it('an ended run is never "Checking": not judged, failed before its solver, or not recorded', () => {
+    const ended = (status: string, n_steps: number | null) => ({ status, health_run: { status, stopping: false, saved: null, n_steps, attempts: [], continue_changes: [] } });
+    // A pending record on a stopped run: "Not judged", and why.
+    const pending = record({ verdict: 'pending', window: 0, t: 0.0002, live: false, first_unhealthy: null, restart: null, findings: [] });
+    const a = render(<RunHealth state={state(ended('stopped', 2), pending)} ids={IDS} />);
+    expect(chip().textContent).toBe('Not judged');
+    expect(document.querySelector('[data-run-health-subline]')?.textContent).toBe('It ended before its health could be judged (from the 6th time step on)');
+    a.unmount();
+    // No record: a Start that failed before its solver; a long run whose health was not recorded.
+    const b = render(<RunHealth state={state(ended('failed', null), null)} ids={IDS} />);
+    expect(document.querySelector('[data-run-health-none]')?.textContent).toBe('It failed before its solver started, so there is no solver output to check.');
+    expect(chip()).toBeNull();
+    b.unmount();
+    render(<RunHealth state={state(ended('done', 5000), null)} ids={IDS} />);
+    expect(document.querySelector('[data-run-health-none]')?.textContent).toBe('Its health was not recorded.');
+    expect(screen.queryByText('This run ran before health checks existed.')).toBeNull();
+  });
+
   it('"Check its log" asks the server and shows "Checking its log…" while it runs', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, checking: true, health: null }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

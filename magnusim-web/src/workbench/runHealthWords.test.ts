@@ -10,7 +10,11 @@ import {
   fixLabel,
   healthNextWords,
   healthSubline,
+  noRecordWords,
+  onsetAt,
+  repeatSentence,
   restartSentence,
+  unhealthyNotice,
   type HealthRecord,
   type HealthRunView,
 } from './runHealthWords';
@@ -54,6 +58,28 @@ describe('the chip', () => {
     expect(chipWord(rec({ verdict: 'watch' }), true)).toBe('Watch closely');
     expect(chipWord(rec(), true)).toBe('Unhealthy');
     expect(chipWord(rec({ verdict: 'failed' }), true)).toBe('Failed');
+  });
+
+  it('never says "Checking" on a run that has ended: "Not judged", and why', () => {
+    const pending = rec({ verdict: 'pending', window: 0, t: 0.0002, live: false, first_unhealthy: null, restart: null });
+    expect(chipWord(pending, true, true)).toBe('Not judged');
+    expect(chipWord(null, false, true)).toBe('Not judged');
+    expect(chipTitle(pending, true, true)).toBe('It ended before its health could be judged (from the 6th time step on).');
+    expect(healthSubline(pending, run('stopped', null), null)).toBe('It ended before its health could be judged (from the 6th time step on)');
+    expect(healthSubline({ ...pending, unit: 'iteration' }, run('done', null, { transient: false }), null)).toBe('It ended before its health could be judged (from the 6th iteration on)');
+    // Solving: still "Checking".
+    expect(chipWord(pending, true, false)).toBe('Checking (needs 6 time steps)');
+  });
+
+  it('an ended run with no record says why it has none', () => {
+    expect(noRecordWords({ ...run('failed', null), n_steps: 0 }, true)).toBe('It failed before its solver started, so there is no solver output to check.');
+    expect(noRecordWords({ ...run('failed', null), n_steps: null }, true)).toBe('It failed before its solver started, so there is no solver output to check.');
+    expect(noRecordWords({ ...run('stopped', null), n_steps: 3 }, true)).toBe('It ended before its health could be judged (from the 6th time step on).');
+    expect(noRecordWords({ ...run('done', 0.2), n_steps: 5000 }, true)).toBe('Its health was not recorded.');
+    expect(noRecordWords({ ...run('done', 0.2), n_steps: 10 }, false)).toBe('Health is not checked for this kind of run.');
+    // From before health checks ("Check its log" is offered), or still solving: nothing here.
+    expect(noRecordWords({ ...run('done', 0.2), n_steps: 10 }, null)).toBe('');
+    expect(noRecordWords({ ...run('running', null), n_steps: 3 }, true)).toBe('');
   });
 
   it("its title: Healthy never reads as good results, with the real window and what was not checked", () => {
@@ -196,5 +222,18 @@ describe('labels, earlier parts and the badge', () => {
 
   it('the tree badge title', () => {
     expect(badgeTitle(rec(), true)).toBe('Health: Unhealthy since t = 0.0069 s');
+  });
+
+  it('an onset in the unread middle of an old log reads as a span everywhere', () => {
+    const approx = rec({ first_unhealthy: { t: 0.0031, step: null, wall_s: null, approx: true, by_t: 0.0069061069 } });
+    expect(onsetAt(approx, true)).toBe('between t = 0.0031 s and t = 0.0069 s');
+    expect(badgeTitle(approx, true)).toBe('Health: Unhealthy since some time between t = 0.0031 s and t = 0.0069 s');
+    expect(unhealthyNotice('"Run_2"', approx, true)).toBe('"Run_2" is unhealthy since some time between t = 0.0031 s and t = 0.0069 s. See Health in its Run panel.');
+    expect(repeatSentence(run('stopped', 0.2), approx)).toBe(
+      'It became unhealthy between t = 0.0031 s and t = 0.0069 s and its settings have not changed since, so Continue will likely repeat the problem.',
+    );
+    expect(restartSentence(run('stopped', 0.2), approx)).toMatch(/come after the problem began \(between t = 0\.0031 s and t = 0\.0069 s\)/);
+    expect(healthSubline(approx, run('stopped', 0.2), null)).toMatch(/ · Unhealthy between t = 0\.0031 s and t = 0\.0069 s$/);
+    expect(onsetAt(rec({ first_unhealthy: { t: 0.0031, approx: true } }), true)).toBe('after t = 0.0031 s');
   });
 });

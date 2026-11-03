@@ -53,6 +53,18 @@ SCORED_FROM = 6
 BASELINE_TO = 25
 BASELINE_CHECKS_FROM = BASELINE_TO + 1
 IMPROVE_AFTER = 5
+# After an unread middle (``gap()``), a verdict that turns unhealthy within this many scored steps
+# may have begun in the middle: its onset is approximate. Later, the tail read shows it begin.
+GAP_SETTLE = 5
+# omega and epsilon peak at the walls, so their mean is set by a few near-wall cells, and an
+# undershoot below zero in a few cells is routinely larger than a tenth of that mean on real
+# meshes. Calibration (spec 2.6): Run_2's own 625k-cell mesh solved with the fix the Health block
+# offers (3 outer correctors, Max Courant 5; fixture calib/run2-fixed) bounds omega in every step
+# at min about -2x its mean, while the mean stays flat (0.8x its early value) and the flow is
+# stable. For these fields a deep undershoot alone is not "Watch closely": the mean has to grow
+# too, to this many times its early value. k keeps the spec's rule (it feeds the flow).
+DISSIPATION_FIELDS = ("omega", "epsilon")
+DISSIPATION_WATCH_GROWTH = 2.0
 TIMELINE_MAX = 20
 
 VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}
@@ -384,6 +396,7 @@ class HealthTracker:
         self.gaps = 0
         self.after_gap = False
         self.gap_t: float | None = None
+        self.since_gap = 0
         self.head_missing = False
         # Verdict.
         self.verdict = "pending"
@@ -626,6 +639,7 @@ class HealthTracker:
         self.gaps += 1
         self.after_gap = True
         self.gap_t = self._last_t
+        self.since_gap = 0
         for d in self.cont_levels.values():
             d.clear()
         self.win.clear()
@@ -852,6 +866,8 @@ class HealthTracker:
         if n < SCORED_FROM and not self.after_gap:
             return
         self.scored += 1
+        if self.after_gap:
+            self.since_gap += 1
         if cur.clock is not None and n <= BASELINE_TO and not self.after_gap:
             self.base_clock.append(cur.clock)
         if not self.after_gap and n <= BASELINE_TO:
@@ -1181,6 +1197,11 @@ class HealthTracker:
             if share < 0.05:
                 continue
             lvl = 1 if self.agg.bound_deep.get(f, 0) > 0 else 0
+            if lvl and _field(f) in DISSIPATION_FIELDS:
+                base = self._bound_base(f)
+                last = self._bound_last(f)
+                if not (last and base and base > 0 and last[1] / base >= DISSIPATION_WATCH_GROWTH):
+                    lvl = 0
             if late and share >= 0.5:
                 base = self._bound_base(f)
                 last = self._bound_last(f)
@@ -1285,10 +1306,12 @@ class HealthTracker:
         if len(self.timeline) > TIMELINE_MAX:
             self.timeline = self.timeline[:1] + self.timeline[-(TIMELINE_MAX - 1) :]
         if v in ("unhealthy", "failed") and self.first_unhealthy is None:
-            step = cur.n if cur is not None else self.steps
+            # After an unread middle the steps counted are not the run's step numbers.
+            step = None if self.gaps else (cur.n if cur is not None else self.steps)
             fu: dict[str, Any] = {"t": t, "step": step, "wall_s": cur.clock if cur is not None else None}
-            if self.after_gap and self.gap_t is not None:
-                # It began somewhere in the unread middle: between the gap's start and now.
+            if self.after_gap and self.gap_t is not None and self.since_gap <= GAP_SETTLE:
+                # Unhealthy as soon as the tail is read: it may have begun anywhere in the unread
+                # middle, between the gap's start and now. Later in the tail it begins where seen.
                 fu = {"t": self.gap_t, "step": None, "wall_s": None, "approx": True, "by_t": t}
             self.first_unhealthy = fu
 

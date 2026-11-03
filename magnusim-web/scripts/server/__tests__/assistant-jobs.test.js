@@ -1031,7 +1031,7 @@ describe('run health in the job tools (RH1)', () => {
     S.live = null;
     const again = await t.wait.run({ project_id: '', job_ids: ['solve.r1'], until: 'all', timeout_s: 0 }, rt());
     assert.equal(again.data.alert, undefined);
-    assert.deepEqual(again.data.jobs[0].result.health, { verdict: 'unhealthy', codes: ['velocity_clipped', 'pv_coupling', 'turbulence_bounded'], restart: 'from_zero' });
+    assert.deepEqual(again.data.jobs[0].result.health, { verdict: 'unhealthy', word: 'Unhealthy', codes: ['velocity_clipped', 'pv_coupling', 'turbulence_bounded'], restart: 'from_zero' });
   });
 
   it('a stopping run says so', async () => {
@@ -1079,6 +1079,13 @@ describe('run health in the job tools (RH1)', () => {
     assert.equal(a.risk, 'destructive');
     const person = overwriteWords(S.run, { action: 'start', studyTransient: false, health: HEALTH });
     assert.equal(a.note, person.copy);
-    assert.match(a.note, / "Run 1" became unhealthy at t = 0\.0069 s\. A new run with the fix keeps these results\.$/);
+    // Its health offers no new run with a fix: the card promises none.
+    assert.match(a.note, / "Run 1" became unhealthy at t = 0\.0069 s\. A new run keeps these results\.$/);
+    // With a fix offered, both say "with the fix".
+    const fixed = { ...HEALTH, findings: [...HEALTH.findings, { code: 'courant_mode', level: 'warn', text: 'Max Courant', fix: [{ label: 'New run: Max Courant 1', target: 'new_run', values: [{ key: 'transient.max_co', value: 1 }] }] }] };
+    stoppedUnhealthy({ health: fixed });
+    const b = await t.compute.escalate(input({ action: 'run_start' }), ac());
+    assert.equal(b.note, overwriteWords(S.run, { action: 'start', studyTransient: false, health: fixed }).copy);
+    assert.match(b.note, / "Run 1" became unhealthy at t = 0\.0069 s\. A new run with the fix keeps these results\.$/);
   });
 });

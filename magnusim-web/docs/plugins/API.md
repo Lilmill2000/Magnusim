@@ -1911,7 +1911,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `study?: Record<string, unknown> | null | undefined`: The record of the run's study when it is the open one (its analysis's settings), else null.
 - `health?: Record<string, unknown> | null | undefined`: RH1: the run's health record (verdict, checks, findings; spec 3.6), or null when it has none (not checked, not judged yet, or it ran before health checks existed).
 - `health_checked?: boolean | null | undefined`: RH1: true when its runs are health-checked, false when not, null when it ran before checks existed.
-- `health_run?: { status: string; stopping: boolean; saved: number | null; attempts: Array<Record<string, unknown>>; continue_changes: Array<Record<string, unknown>>; } | nu...`: RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts.
+- `health_run?: { status: string; stopping: boolean; saved: number | null; n_steps?: number | null; attempts: Array<Record<string, unknown>>; continue_changes: Array<Record<...`: RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts.
 
 #### SchemaFormProps
 
@@ -2471,6 +2471,9 @@ Constants:
 - `BASELINE_TO = 25`
 - `BASELINE_CHECKS_FROM = BASELINE_TO + 1`
 - `IMPROVE_AFTER = 5`
+- `GAP_SETTLE = 5`
+- `DISSIPATION_FIELDS = ("omega", "epsilon")`
+- `DISSIPATION_WATCH_GROWTH = 2.0`
 - `TIMELINE_MAX = 20`
 - `VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}`
 - `LEVEL_WORD = {0: "", 1: "warn", 2: "error"}`
@@ -2493,7 +2496,11 @@ Constants:
 - `RE_MONITOR_VALUE = re.compile(r"^\s+(\w+)\((\S+)\) of (\w+) = (.+?)\s*$")`
 - `RE_SELECTED = re.compile(rf"selected (\d+) cell\(s\) with volume {NUM}")`
 - `RE_HOST = re.compile(r'^Host\s*:\s*"?([^"\s]+)"?\s*$')`
-- `RE_PIMPLE_ITER = re.compile(r"^PIMPLE: [Ii]teration (\d+)")`
+- `TRANSIENT_LOOPS = (LOOP_PISO, LOOP_PIMPLE)`
+- `STEADY_LOOPS = (LOOP_SIMPLE, LOOP_SIMPLEC)`
+- `OUTER_PREFIX = LOOP_PIMPLE + ":"`
+- `STEADY_CONVERGED = LOOP_SIMPLE + " solution converged"`
+- `RE_PIMPLE_ITER = re.compile("^" + re.escape(OUTER_PREFIX) + r" [Ii]teration (\d+)")`
 - `RE_FATAL_HEAD = re.compile(r"^--> FOAM FATAL (?:IO )?ERROR")`
 - `RE_FATAL_FRAME = re.compile(r"^\s*#\d+\s+Foam::sig(?:Fpe|Segv)::sigHandler")`
 - `RE_WARNING = re.compile(r"^--> FOAM Warning\s*:?\s*(.*)$")`

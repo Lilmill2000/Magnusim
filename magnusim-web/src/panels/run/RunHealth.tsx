@@ -4,19 +4,19 @@ import { addHealthFixRun, refreshRunPanel, simStop } from '../legacyBridge';
 import {
   BEFORE_CHECKS,
   HEALTH_WHY,
-  NOT_CHECKED,
   chipTitle,
   chipWord,
   earlierPartLines,
   healthNextWords,
   healthSubline,
+  noRecordWords,
   type HealthFix,
   type HealthRecord,
   type HealthRunView,
 } from '../../workbench/runHealthWords';
 
 /** The view of the run the Health words read (runHealthWords.ts). */
-export function healthRunView(state: RunState): HealthRunView {
+export function healthRunView(state: RunState): HealthRunView & { n_steps: number | null } {
   const r = state.health_run;
   return {
     name: state.name,
@@ -24,6 +24,7 @@ export function healthRunView(state: RunState): HealthRunView {
     stopping: !!(r && r.stopping),
     saved: r && typeof r.saved === 'number' ? r.saved : null,
     transient: state.transient,
+    n_steps: r && typeof r.n_steps === 'number' ? r.n_steps : null,
   };
 }
 
@@ -198,22 +199,15 @@ export function RunHealth({ state, ids }: { state: RunState; ids: { project_id: 
   }, [checking, state.run_id, ids.project_id, ids.simulation_id]);
 
   if (!h) {
-    if (state.health_checked === false) {
+    // Not checked, or ended with no record: its words say why (a failed Start, a run that
+    // ended before its 6th step, or one whose health was not recorded).
+    const none = noRecordWords(view, state.health_checked);
+    if (none) {
       return (
         <div className="run-health" data-run-health-block="1">
           <div className="mat-k">Health</div>
           <p className="mat-assign-hint" data-run-health-none="1">
-            {NOT_CHECKED}
-          </p>
-        </div>
-      );
-    }
-    if (state.health_checked === true && ended) {
-      return (
-        <div className="run-health" data-run-health-block="1">
-          <div className="mat-k">Health</div>
-          <p className="mat-assign-hint" data-run-health-none="1">
-            It ended before its health could be judged (from the 6th {view.transient ? 'time step' : 'iteration'} on).
+            {none}
           </p>
         </div>
       );
@@ -294,8 +288,8 @@ export function RunHealth({ state, ids }: { state: RunState; ids: { project_id: 
     <div className="run-health" data-run-health-block="1" data-run-health-verdict={h.verdict}>
       <div className="run-health-head">
         <span className="mat-k">Health</span>
-        <span className={'run-health-chip is-' + h.verdict} data-run-health={h.verdict} title={chipTitle(h, view.transient)}>
-          {chipWord(h, view.transient)}
+        <span className={'run-health-chip is-' + h.verdict} data-run-health={h.verdict} title={chipTitle(h, view.transient, ended)}>
+          {chipWord(h, view.transient, ended)}
         </span>
       </div>
       <div className="mesh-finished-line" data-run-health-subline="1">

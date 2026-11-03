@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import time
 import tracemalloc
 from pathlib import Path
@@ -331,7 +332,35 @@ def test_memory_is_bounded_after_200k_steps():
     assert second - first < 512 * 1024, (first, second)
 
 
+# The plain loop below (strip each line, try three of the tracker's regexes) took about 0.55 s
+# for the million lines on the PC the 3 s bound was set on, where the tracker took 2.6-2.7 s.
+REF_LOOP_S = 0.55
+_REF_PATTERNS = (
+    re.compile(r"^Time\s*=\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)s?\s*$"),
+    re.compile(r"^(\w+):\s+Solving for (\w+), Initial residual = (\S+), Final residual = (\S+), No Iterations (\d+)"),
+    re.compile(r"^Courant Number mean: (\S+) max: (\S+)"),
+)
+
+
+def _ref_loop(lines: list[str]) -> float:
+    t0 = time.perf_counter()
+    n = 0
+    for line in lines:
+        s = line.strip()
+        for p in _REF_PATTERNS:
+            m = p.match(s)
+            if m:
+                n += len(m.groups())
+                break
+    took = time.perf_counter() - t0
+    assert n > 0
+    return took
+
+
 def test_a_million_lines_take_under_3_s():
+    """Spec 3.17: 1M lines in under 3 s on the PC the bound was set on. A slower or busier
+    machine (CI) gets the bound scaled by how long the plain loop takes there, measured now:
+    the test catches the tracker growing slower, not the machine being slower."""
     block = step_lines(1e-3)
     t2 = HealthTracker(PISO_HINTS)
     feed(t2, HEADER)
@@ -341,11 +370,13 @@ def test_a_million_lines_take_under_3_s():
         i += 1
         lines += [x if not x.startswith("Time") else f"Time = {i * 1e-3}" for x in block]
     lines = lines[:1_000_000]
+    ref = min(_ref_loop(lines), _ref_loop(lines))
     t0 = time.perf_counter()
     for line in lines:
         t2.line(line, None)
     took = time.perf_counter() - t0
-    assert took < 3.0, took
+    bound = 3.0 * max(1.0, ref / REF_LOOP_S)
+    assert took < bound, (took, bound, ref)
 
 
 def test_full_lists_shrink_in_order_within_4kb():

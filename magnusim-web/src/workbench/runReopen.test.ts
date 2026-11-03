@@ -376,12 +376,25 @@ describe('A2: a change for when a stopped run continues', () => {
 
 describe('RH1: Start over on a run that became unhealthy (A3)', () => {
   const run = { id: 'r2', name: 'Run_2', status: 'stopped', time_dependency: 'Transient', has_results: true, n_saved_times: 12, last_saved_iteration: 0.1667 };
+  const fix = { label: 'New run: 3 outer correctors, Max Courant 5', target: 'new_run', values: [{ key: 'transient.max_co', value: 5 }] };
   it('adds the health sentence to the Start question, the same text the Assistant card shows', () => {
-    const health = { first_unhealthy: { t: 0.0069061069 } };
+    const health = { first_unhealthy: { t: 0.0069061069 }, findings: [{ code: 'courant_mode', level: 'warn', fix: [fix] }] };
     const person = overwriteWords(run, { action: 'start', studyTransient: true, health });
     const card = overwriteWords(run, { action: 'start', studyTransient: true, health, assistant: true });
     expect(person.copy).toMatch(/ "Run_2" became unhealthy at t = 0\.0069 s\. A new run with the fix keeps these results\.$/);
     expect(card.copy).toBe(person.copy);
+    // The tree's slim record says it with has_fix.
+    expect(unhealthySentence(run, { first_unhealthy: { t: 0.0069061069 }, has_fix: true })).toMatch(/A new run with the fix keeps these results\.$/);
+  });
+  it('promises no fix when its health offers none', () => {
+    const health = { first_unhealthy: { t: 0.0069061069 }, findings: [{ code: 'pv_coupling', level: 'error' }] };
+    expect(unhealthySentence(run, health)).toBe(' "Run_2" became unhealthy at t = 0.0069 s. A new run keeps these results.');
+    expect(unhealthySentence(run, { first_unhealthy: { t: 0.0069061069 } })).not.toMatch(/the fix/);
+  });
+  it('an onset in the unread middle of an old log is a span, not a time', () => {
+    const health = { first_unhealthy: { t: 0.0031, approx: true, by_t: 0.0069061069 } };
+    expect(unhealthySentence(run, health)).toBe(' "Run_2" became unhealthy between t = 0.0031 s and t = 0.0069 s. A new run keeps these results.');
+    expect(unhealthySentence(run, { first_unhealthy: { t: 0.0031, approx: true } })).toMatch(/became unhealthy after t = 0\.0031 s\./);
   });
   it('says nothing of health without an onset', () => {
     expect(overwriteWords(run, { action: 'start', studyTransient: true, health: { first_unhealthy: null } }).copy).not.toMatch(/unhealthy/);

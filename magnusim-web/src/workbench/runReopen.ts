@@ -315,17 +315,29 @@ export function overwriteWords(
   };
 }
 
+/** Whether a health record offers a new run with a fix (a finding's `new_run` fix, or the tree's `has_fix`). */
+function offersNewRunFix(health: Record<string, unknown>): boolean {
+  if (health.has_fix === true) return true;
+  const findings = Array.isArray(health.findings) ? health.findings : [];
+  return findings.some((f) => isObj(f) && Array.isArray(f.fix) && f.fix.some((x) => isObj(x) && x.target === 'new_run'));
+}
+
 /**
  * RH1 (A3): the sentence Start's question and the Assistant's run_start card add for a run that
  * became unhealthy (its health record's `first_unhealthy`), else ''. One function makes both
- * texts, so they are the same.
+ * texts, so they are the same. "with the fix" only when its health offers one; an onset in the
+ * unread middle of an old log (`approx`) reads "between t = A and t = B".
  */
 export function unhealthySentence(rec: RunLike, health: unknown): string {
   const fu = isObj(health) && isObj(health.first_unhealthy) ? health.first_unhealthy : null;
   const t = fu ? Number(fu.t) : NaN;
-  if (!fu || fu.t === null || fu.t === undefined || !Number.isFinite(t)) return '';
-  const at = solvedTransient(rec) ? 't = ' + simTime(t) : 'iteration ' + Math.round(t);
-  return ' ' + quoted(rec) + ' became unhealthy at ' + at + '. A new run with the fix keeps these results.';
+  if (!isObj(health) || !fu || fu.t === null || fu.t === undefined || !Number.isFinite(t)) return '';
+  const transient = solvedTransient(rec);
+  const at = (v: number) => (transient ? 't = ' + simTime(v) : 'iteration ' + Math.round(v));
+  const by = fu.by_t === null || fu.by_t === undefined ? NaN : Number(fu.by_t);
+  const when = fu.approx ? (Number.isFinite(by) ? 'between ' + at(t) + ' and ' + at(by) : 'after ' + at(t)) : 'at ' + at(t);
+  const keeps = offersNewRunFix(health) ? 'A new run with the fix keeps these results.' : 'A new run keeps these results.';
+  return ' ' + quoted(rec) + ' became unhealthy ' + when + '. ' + keeps;
 }
 
 /** The question on the first change of a finished run's settings: a new run takes the change. */

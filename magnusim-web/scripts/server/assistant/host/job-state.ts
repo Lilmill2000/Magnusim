@@ -16,6 +16,7 @@ import { HostCallError } from '../host-call.ts';
 import { cleanText, TEXT_CAPS } from '../sanitize.ts';
 import type { JsonCall } from './job-common.ts';
 import { jobHint, type StartedJob } from './turn-jobs.ts';
+import { chipWord, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
 
 export type JobKind = 'mesh' | 'solve' | 'export' | 'link' | 'env' | 'hw';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'cancelled' | 'unknown';
@@ -273,17 +274,22 @@ function courantWords(run: Record<string, unknown>): string {
 /** " · health: Unhealthy (velocity_clipped, pv_coupling, +4)" of a solving run's health, else ''. */
 function healthWords(raw: unknown): string {
   if (!isRecord(raw) || typeof raw.verdict !== 'string') return '';
-  const word: Record<string, string> = { pending: 'Checking', healthy: 'Healthy', watch: 'Watch closely', unhealthy: 'Unhealthy', failed: 'Failed' };
+  // The Run panel chip's word ("Checking (needs 6 time steps)", "Unhealthy", ...).
+  const word = chipWord(raw as unknown as HealthRecord, raw.unit !== 'iteration');
   const codes = rows(raw.findings).map((f) => text(f.code, 40) || '').filter(Boolean);
   const list = codes.length ? ` (${codes.slice(0, 2).join(', ')}${codes.length > 2 ? `, +${codes.length - 2}` : ''})` : '';
-  return ` · health: ${word[raw.verdict] || raw.verdict}${raw.verdict === 'healthy' || raw.verdict === 'pending' ? '' : list}`;
+  return ` · health: ${word}${raw.verdict === 'healthy' || raw.verdict === 'pending' ? '' : list}`;
 }
 
-/** An ended run's health as wait reports it: {verdict, codes, restart}, or null. */
-function endedHealth(raw: unknown): { verdict: string; codes: string[]; restart: string | null } | null {
+/**
+ * An ended run's health as wait reports it: {verdict, word, codes, restart}, or null. `word` is
+ * the Run panel chip's: "Not judged" for one that ended before its health was judged.
+ */
+function endedHealth(raw: unknown): { verdict: string; word: string; codes: string[]; restart: string | null } | null {
   if (!isRecord(raw) || typeof raw.verdict !== 'string') return null;
   return {
     verdict: raw.verdict,
+    word: chipWord(raw as unknown as HealthRecord, raw.unit !== 'iteration', true),
     codes: rows(raw.findings).map((f) => text(f.code, 40) || '').filter(Boolean).slice(0, 6),
     restart: typeof raw.restart === 'string' ? raw.restart : null,
   };

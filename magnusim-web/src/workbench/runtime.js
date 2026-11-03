@@ -33893,10 +33893,12 @@ function computeRunState() {
 function runHealthView(run, running) {
   const raw = run.continue_from !== undefined && run.continue_from !== null ? run.continue_from : Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null;
   const saved = raw !== null && raw !== undefined && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  const steps = Number(run.n_steps);
   return {
     status: String(run.status || ''),
     stopping: !!(running && run.stop_requested),
     saved,
+    n_steps: Number.isFinite(steps) ? steps : null,
     attempts: Array.isArray(run.attempts) ? run.attempts : [],
     continue_changes: Array.isArray(run.continue_changes) ? run.continue_changes : [],
   };
@@ -34760,14 +34762,18 @@ async function startSolveClient(opts) {
     jobState.path_kind = 'solve';
     jobState.simulation_id = runCatalog.start_error_study_id;
     const rec = findRunRecord(runCatalog.start_error_run_id);
+    // RH1: the server failed it before its solver started (its health was to be checked, and it
+    // has no solver output): the Health block says so, not that it predates health checks.
+    const unsolved = extra && extra.health_checked === true ? { health_checked: true, health: null, n_steps: null } : {};
     if (rec) {
       rec.status = 'failed';
       rec.error = msg;
       rec.note = msg;
       rec.fix = (extra && extra.fix) || null;
+      Object.assign(rec, unsolved);
     }
     if (runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id) === String(runCatalog.start_error_run_id)) {
-      runCatalog.run = { ...runCatalog.run, status: 'failed', error: msg, note: msg };
+      runCatalog.run = { ...runCatalog.run, status: 'failed', error: msg, note: msg, ...unsolved };
     }
     showHint(msg, extra && extra.fix);
     syncJobStatusChrome();

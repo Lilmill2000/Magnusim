@@ -78,3 +78,41 @@ def test_the_tool_reads_the_case_folder(tmp_path: Path):
     (tmp_path / "log.pimpleFoam.1").rename(tmp_path / "log.pimpleFoam.2")
     r2 = subprocess.run([sys.executable, str(TOOL), "--case", str(tmp_path), "--app", "pimpleFoam"], capture_output=True, text=True, encoding="utf-8")
     assert json.loads(r2.stdout)["health"]["head_missing"] is True
+
+
+def test_an_onset_well_inside_the_read_tail_is_exact(tmp_path: Path):
+    # A healthy run's log, then Run_2's head: the middle of the healthy part is not read, and the
+    # problem begins about 300 KB into the tail that is. Its onset is where it is seen, exact.
+    healthy = gzip.decompress((FIX / "calib" / "bfs-piso-co1.log.gz").read_bytes())
+    head = gzip.decompress((FIX / "run2-head.log.gz").read_bytes())
+    p1 = tmp_path / "log.pimpleFoam.1"
+    p1.write_bytes(healthy)
+    p2 = tmp_path / "log.pimpleFoam"
+    p2.write_bytes(head)
+    assert len(healthy) > 400_000
+    rec = check_log([str(p1), str(p2)], HINTS, head_bytes=100_000, tail_bytes=len(head) + 300_000)
+    fu = rec["first_unhealthy"]
+    assert not fu.get("approx"), fu
+    assert fu["t"] == 0.0069061069
+    assert fu["step"] is None  # the steps counted after a gap are not the run's step numbers
+
+
+def test_the_tree_keeps_a_span_onset_and_whether_a_fix_is_offered():
+    # The tree's slim health (tree badge, Start's question when the run is not the open one).
+    from cfddesk.project.scope import _run_health
+
+    fix = {"label": "New run: Max Courant 1", "target": "new_run", "values": [{"key": "transient.max_co", "value": 1}]}
+    run = {
+        "health": {
+            "v": 1,
+            "verdict": "unhealthy",
+            "unit": "time step",
+            "first_unhealthy": {"t": 0.0031, "step": None, "wall_s": None, "approx": True, "by_t": 0.0069},
+            "findings": [{"code": "courant_mode", "level": "warn", "fix": [fix]}],
+        }
+    }
+    slim = _run_health(run)["health"]
+    assert slim == {"verdict": "unhealthy", "unit": "time step", "first_unhealthy": {"t": 0.0031, "approx": True, "by_t": 0.0069}, "has_fix": True}
+    run["health"]["findings"] = [{"code": "pv_coupling", "level": "error"}]
+    run["health"]["first_unhealthy"] = {"t": 0.0069, "step": 25, "wall_s": 15}
+    assert _run_health(run)["health"] == {"verdict": "unhealthy", "unit": "time step", "first_unhealthy": {"t": 0.0069}}

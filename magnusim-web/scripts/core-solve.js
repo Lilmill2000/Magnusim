@@ -60,7 +60,7 @@ import { LEGACY_FRAME_FIELDS, listFoamTimeDirs } from './project-layout.js';
 import { flushJobLogs } from './log.js';
 import { persistRun, runFolderOf } from './study-io.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
-import { healthPatch as shapeHealthPatch, scrubbedReason } from './run-health-shape.js';
+import { endedHealthRecord, healthPatch as shapeHealthPatch, scrubbedReason } from './run-health-shape.js';
 
 /** How often a live run's health is written to its doc when its verdict has not changed (RH1). */
 export const HEALTH_PATCH_MS = 30_000;
@@ -620,7 +620,8 @@ export function onCoreSolveEvent(rec, ev) {
  * @param {any} rec the ended runner record
  * A failed run whose log parser named the cause (`ctx.reason`, API 1.8) has it as its
  * error, and its note starts with it.
- * The run's last health (`ctx.health`, RH1) is its doc's `health`, no longer live.
+ * The run's last health (`ctx.health`, RH1) is its doc's `health`, no longer live; a failed run's
+ * still-pending health becomes `failed` with its reason (endedHealthRecord).
  * @param {{ snap?: any, saved?: number[], excerpt?: string | null, now?: string, converged?: { by: string, time: number | null } | null, reason?: string | null, health?: any }} [ctx]
  */
 export function endedRunDoc(doc, rec, ctx = {}) {
@@ -697,7 +698,8 @@ export function endedRunDoc(doc, rec, ctx = {}) {
   if (Number.isFinite(n) && n >= 1) out.n_procs = n;
   if (converged !== undefined) out.converged = converged;
   if (typeof ctx.excerpt === 'string') out.log_excerpt = ctx.excerpt;
-  if (ctx.health && typeof ctx.health === 'object') out.health = { ...ctx.health, live: false };
+  // Its last health, no longer live; a failed run whose health was still pending is `failed` (spec 2.1).
+  if (ctx.health && typeof ctx.health === 'object') out.health = endedHealthRecord(ctx.health, status, error || note);
   return out;
 }
 

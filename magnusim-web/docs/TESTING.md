@@ -187,6 +187,10 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   each health event through the runner's shape check and scrub; the run ends once the log
   is read and `MAGNUSIM_TEST_SOLVE_SECONDS` have passed (`e2e/run-health.spec.js`, with
   Run_2's log in `python/tests/fixtures/health/`).
+  `MAGNUSIM_TEST_SOLVE_FAIL_START=<run name>[|<run name>]` makes a fake Start of a run of
+  that name fail before its solver starts, as a plan that fails does, and
+  `MAGNUSIM_TEST_HEALTH_CHECK_HOLD_MS` holds "Check its log"'s answer that long after the
+  log was read, as a long log's would (`e2e/run-health-ended.spec.js`).
 - **A plugin's tests go in its own suite**, not in `e2e/`.
 - **To let a stress run reach a spec**, import `test` and `expect` from the harness:
   `./support/stress.js` (core), `../../../e2e/support/plugin-suite.js` (a plugin

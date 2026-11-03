@@ -19,6 +19,9 @@
  * and the scrub the runner's path uses). The hints are MAGNUSIM_TEST_SOLVE_HINTS, else the
  * fixture's `<name>.hints.json` (or the one of its name before the first "-"). The run ends done
  * once the log is read and MAGNUSIM_TEST_SOLVE_SECONDS have passed, or stopped by Stop.
+ *
+ * MAGNUSIM_TEST_SOLVE_FAIL_START=<run name>[|<run name>] (RH1): a Start of a run of that name fails
+ * before its solver starts (w27-solve.js failBeforeRunner), as a plan that fails does.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -26,7 +29,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { patchComputeSlot, releaseComputeSlot } from './compute-slot.js';
 import { corePythonPath } from './job-runner.js';
 import { PYTHON, WEB_ROOT } from './python-env.js';
-import { healthPatch } from './run-health-shape.js';
+import { endedHealthRecord, healthPatch } from './run-health-shape.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { persistRun } from './study-io.js';
 import { stopDecision } from './stop-decision.js';
@@ -45,6 +48,19 @@ const key = (/** @type {string} */ projectId, /** @type {string} */ runId) => `$
 function solveSeconds() {
   const n = Number(process.env.MAGNUSIM_TEST_SOLVE_SECONDS);
   return Number.isFinite(n) && n >= 0 ? Math.min(600, n) : 6;
+}
+
+/**
+ * Whether a fake Start of the run named `name` fails before its solver starts, as a plan that
+ * fails does (MAGNUSIM_TEST_SOLVE_FAIL_START: run names, separated by "|").
+ * @param {unknown} name
+ */
+export function fakeStartFails(name) {
+  const names = String(process.env.MAGNUSIM_TEST_SOLVE_FAIL_START || '')
+    .split('|')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  return names.includes(String(name || '').trim());
 }
 
 /** The solver log a fake solve replays (MAGNUSIM_TEST_SOLVE_LOG), absolute, or ''. */
@@ -241,7 +257,7 @@ function startLogReplay({ id, runId, simId, slot, endTime, onDone, caseDir, log 
       error: status === 'failed' ? 'Fake solver failed' : null,
       note: status === 'stopped' ? 'Stopped.' : status === 'done' ? 'Fake solve done.' : 'Fake solver failed',
       pid: null,
-      ...(health ? { health: { ...health, live: false } } : {}),
+      ...(health ? { health: endedHealthRecord(health, status, status === 'failed' ? 'Fake solver failed' : null) } : {}),
     });
     releaseComputeSlot(slot.token);
     scheduleComputeQueueKick(250);

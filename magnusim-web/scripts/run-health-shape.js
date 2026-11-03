@@ -149,6 +149,40 @@ export function restartOf(h, latestSaved) {
 }
 
 /**
+ * A run's health as the run ended (spec 2.1): no longer live. A run that failed while its health
+ * was still `pending` (before its time loop, or before the 6th step that is scored first) is
+ * `failed`, with the run's own reason (`reason`, scrubbed) as its finding: never "Checking" on a
+ * failed run. A done or stopped run keeps `pending` (the Health block says it ended before its
+ * health could be judged). Null when `h` is not a record.
+ * @param {any} h the run's last health (already shape-checked and scrubbed)
+ * @param {string} status the run's ended status ('done', 'stopped' or 'failed')
+ * @param {unknown} [reason] why it failed, as its run doc says it
+ * @param {{ hosts: string[], user: string }} [ctx]
+ */
+export function endedHealthRecord(h, status, reason, ctx = scrubContext()) {
+  if (!isObj(h)) return null;
+  /** @type {Record<string, any>} */
+  const out = { ...h, live: false };
+  if (h.verdict !== 'pending' || status !== 'failed') return out;
+  const step = Number(h.step);
+  const unit = h.unit === 'iteration' ? 'iteration' : 'time step';
+  const lead =
+    Number.isFinite(step) && step > 0
+      ? `The run failed at ${unit} ${Math.round(step)}, before its health could be judged (from the 6th ${unit} on)`
+      : 'The run failed before its time loop started';
+  const why = scrubbedReason(reason, ctx);
+  const text = (why ? `${lead}: ${why}` : `${lead}.`).slice(0, 240);
+  const t = h.t !== null && h.t !== undefined && Number.isFinite(Number(h.t)) ? Number(h.t) : null;
+  const others = (Array.isArray(h.findings) ? h.findings : []).filter((/** @type {any} */ f) => isObj(f) && f.code !== 'failed');
+  out.verdict = 'failed';
+  out.findings = [{ code: 'failed', level: 'error', text, evidence: null, since_t: t }, ...others].slice(0, 6);
+  out.timeline = [...(Array.isArray(h.timeline) ? h.timeline : []), { t, verdict: 'failed' }].slice(-20);
+  out.restart = null;
+  if (healthBytes(out) <= HEALTH_MAX_BYTES && !healthProblem(out)) return out;
+  return { v: 1, verdict: 'failed', at: h.at, step: h.step ?? null, t, unit, window: h.window ?? 0, live: false, findings: [out.findings[0]] };
+}
+
+/**
  * What an earlier attempt keeps of its health (attempts[i].health, under 300 bytes).
  * @param {any} h
  */

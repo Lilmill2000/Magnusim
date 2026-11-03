@@ -496,6 +496,8 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
           status: string;
           stopping: boolean;
           saved: number | null;
+          /** Its time steps (or iterations) solved so far, when known. */
+          n_steps?: number | null;
           attempts: Array<Record<string, unknown>>;
           continue_changes: Array<Record<string, unknown>>;
       } | null;

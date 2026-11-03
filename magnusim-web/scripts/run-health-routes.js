@@ -379,17 +379,24 @@ export function startHealthCheck(key, doc, onDone, opts = {}) {
   if (typeof timer.unref === 'function') timer.unref();
   if (child.stdout) child.stdout.on('data', (d) => (out += String(d)));
   child.on('error', () => finish(null, 'Its log could not be checked.'));
+  // Tests: the answer comes this much later (MAGNUSIM_TEST_HEALTH_CHECK_HOLD_MS), as a long log's
+  // would, so a run can be deleted or started over after its log was read and before it is kept.
+  const hold = Number(process.env.MAGNUSIM_TEST_HEALTH_CHECK_HOLD_MS) || 0;
+  const answer = (/** @type {any} */ health, /** @type {string | null} */ error) => {
+    if (hold > 0) setTimeout(() => finish(health, error), hold);
+    else finish(health, error);
+  };
   child.on('close', () => {
     clearTimeout(timer);
     try {
       const last = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop() || 'null';
       const doc2 = JSON.parse(last);
-      if (!doc2 || !doc2.ok) return finish(null, String((doc2 && doc2.error) || 'Its log could not be checked.').slice(0, 200));
+      if (!doc2 || !doc2.ok) return answer(null, String((doc2 && doc2.error) || 'Its log could not be checked.').slice(0, 200));
       const health = healthPatch(null, doc2.health);
-      if (!health) return finish(null, 'Its log could not be checked.');
-      finish({ ...health, live: false, checked_from_log: true }, null);
+      if (!health) return answer(null, 'Its log could not be checked.');
+      answer({ ...health, live: false, checked_from_log: true }, null);
     } catch {
-      finish(null, 'Its log could not be checked.');
+      answer(null, 'Its log could not be checked.');
     }
   });
   return true;

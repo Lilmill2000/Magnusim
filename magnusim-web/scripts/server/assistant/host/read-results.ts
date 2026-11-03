@@ -11,7 +11,7 @@
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { scrubContext, scrubText } from '../../../solver-log-scrub.js';
-import { NOT_CHECKED, VERDICT_WORDS, earlierPartLines, healthNextWords, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
+import { NOT_CHECKED, chipWord, earlierPartLines, healthNextWords, noRecordWords, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
 import { runFields } from './catalog.ts';
 import {
   badValues,
@@ -358,6 +358,7 @@ function runView(run: Record<string, unknown>, name: string) {
     stopping: run.stop_requested === true && ['running', 'starting'].includes(status),
     saved: num(raw),
     transient: /transient/i.test(str(run.time_dependency)),
+    n_steps: num(run.n_steps),
   };
 }
 
@@ -395,9 +396,11 @@ async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<t
         return okData({ run_id: runId, checking: true, hint: 'read_results {kind:"health"} again in a few seconds' }, `${runName}: checking its log`);
       } else return fail('no_results', text(again.error, 200) || 'Its log could not be checked.');
     } else {
+      // The Run panel's words: an ended run says why it has none; a solving one is not judged yet.
+      const none = ended ? noRecordWords(runView(run, runName), checkedFlag) : '';
       return okData(
-        { run_id: runId, health: null, checked: true, why: `Not judged yet: health is judged from the 6th ${/transient/i.test(str(run.time_dependency)) ? 'time step' : 'iteration'} on.` },
-        `${runName}: health not judged yet`,
+        { run_id: runId, health: null, checked: true, why: none || `Not judged yet: health is judged from the 6th ${/transient/i.test(str(run.time_dependency)) ? 'time step' : 'iteration'} on.` },
+        `${runName}: ${none ? 'no health record' : 'health not judged yet'}`,
       );
     }
   }
@@ -430,7 +433,8 @@ async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<t
     name: text(runName),
     status: text(run.status, 20),
     verdict: text(rec.verdict, 20),
-    word: rec.verdict === 'pending' ? 'Checking' : VERDICT_WORDS[rec.verdict as keyof typeof VERDICT_WORDS] || text(rec.verdict, 20),
+    // The chip's word: "Checking (needs 6 time steps)" while it solves, "Not judged" once it ended.
+    word: chipWord(h, view.transient, ['done', 'stopped', 'failed'].includes(view.status)),
     at: text(rec.at, 40),
     step: num(rec.step),
     t: num(rec.t),

@@ -260,7 +260,13 @@ interface ProjectTreeRun {
   older_geometry?: boolean;
   converged?: RunConverged;
   /** RH1: its health verdict and onset (scope.py _run_health). */
-  health?: { verdict?: string; unit?: 'time step' | 'iteration'; first_unhealthy?: { t?: number | null; approx?: boolean } | null };
+  health?: {
+    verdict?: string;
+    unit?: 'time step' | 'iteration';
+    first_unhealthy?: { t?: number | null; approx?: boolean; by_t?: number | null } | null;
+    /** It offers a new run with a fix (a finding's `new_run` fix). */
+    has_fix?: boolean;
+  };
 }
 
 type QueueRow = NonNullable<TreeActivity['queue']>[number];
@@ -513,7 +519,7 @@ export function readSetupTree(
               ...(run.older_geometry ? { olderGeometry: true } : {}),
               ...(done && run.converged && typeof run.converged === 'object' ? { converged: run.converged } : {}),
               ...(run.health && run.health.verdict === 'unhealthy'
-                ? { unhealthy: badgeTitle({ v: 1, verdict: 'unhealthy', unit: run.health.unit, first_unhealthy: run.health.first_unhealthy ? { t: run.health.first_unhealthy.t ?? null, approx: run.health.first_unhealthy.approx } : null }, run.health.unit !== 'iteration') }
+                ? { unhealthy: badgeTitle({ v: 1, verdict: 'unhealthy', unit: run.health.unit, first_unhealthy: run.health.first_unhealthy ? { t: run.health.first_unhealthy.t ?? null, approx: run.health.first_unhealthy.approx, by_t: run.health.first_unhealthy.by_t ?? null } : null }, run.health.unit !== 'iteration') }
                 : {}),
             };
           }),

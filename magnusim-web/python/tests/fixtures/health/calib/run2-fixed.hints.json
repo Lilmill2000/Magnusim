@@ -1,0 +1,49 @@
+{
+ "app": "pimpleFoam",
+ "mode": "PIMPLE",
+ "n_outer": 3,
+ "n_correctors": 2,
+ "max_co": 5,
+ "end_time": 10,
+ "average_from": 0,
+ "uref": 22.6113,
+ "uref_source": "inlet velocity_inlet_1_1",
+ "fixed_inflow": true,
+ "turbulence": "kOmegaSST",
+ "limiter": {
+  "name": "limitU",
+  "cap": 226.113,
+  "factor": 10,
+  "floor": 50
+ },
+ "linsolve": {
+  "p": {
+   "max_iter": 200,
+   "tol": 1e-07,
+   "rel_tol": 0.01,
+   "final_rel_tol": 0
+  },
+  "U": {
+   "max_iter": 50,
+   "tol": 1e-08,
+   "rel_tol": 0.1,
+   "final_rel_tol": 0
+  },
+  "k": {
+   "max_iter": 50,
+   "tol": 1e-08,
+   "rel_tol": 0.1,
+   "final_rel_tol": 0
+  },
+  "omega": {
+   "max_iter": 50,
+   "tol": 1e-08,
+   "rel_tol": 0.1,
+   "final_rel_tol": 0
+  }
+ },
+ "monitors": {
+  "inlet": "mon_velocity_inlet_1_1",
+  "outlet": "mon_pressure_2"
+ }
+}
