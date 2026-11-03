@@ -1927,6 +1927,7 @@ The core's schema form (the study panel's generic form).
 - `className?: string | undefined`
 - `hideFooter?: boolean | undefined`: Leave out the Done/Delete foot when your panel draws its own.
 - `advancedExtra?: ReactNode`: Rows added inside the Advanced disclosure.
+- `commitOnBlur?: boolean | undefined`: A typed number commits on blur and Enter only, at once (not 0.3 s after a keystroke): for a form whose save may ask the person first, such as a run's settings when `run.edit` is `overwrites` or `new_run`.
 
 #### SciNumberInputProps
 

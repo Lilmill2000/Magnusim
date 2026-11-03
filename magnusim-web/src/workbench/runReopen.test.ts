@@ -145,6 +145,10 @@ describe('the words', () => {
     expect(newRunToast({ name: 'Run 3' }, done)).toBe('Made "Run 3" with the settings of "Run 1" and your change. "Run 1" keeps its results.');
     expect(finishedRefusal(done)).toBe('"Run 1" has finished and its results stay as they are: a change of its settings goes to a new run with the same settings.');
     expect(overwrittenToast(stopped)).toBe('"Run 1" starts over: its old results were deleted.');
+    expect(overwrittenToast(stopped, { droppedContinue: true })).toBe(
+      '"Run 1" starts over: its old results were deleted. Its queued Continue was removed from the queue.',
+    );
+    expect(overwrittenToast(stopped, { deleted: false, droppedContinue: true })).toBe('"Run 1" starts over. Its queued Continue was removed from the queue.');
   });
 });
 

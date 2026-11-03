@@ -76,6 +76,12 @@ export interface SchemaFormProps {
   hideFooter?: boolean;
   /** Rows added inside the Advanced disclosure. */
   advancedExtra?: ReactNode;
+  /**
+   * A typed number commits on blur and Enter only, at once (not 0.3 s after a keystroke): for a
+   * form whose save may ask the person first, such as a run's settings when `run.edit` is
+   * `overwrites` or `new_run`.
+   */
+  commitOnBlur?: boolean;
 }
 
 /** One job as the page follows it (useJob). */

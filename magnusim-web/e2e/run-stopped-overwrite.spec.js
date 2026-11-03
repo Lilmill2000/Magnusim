@@ -4,13 +4,20 @@
 // - On a stopped run with results, the first change of a solve setting asks (Overwrite "Run 1"?,
 //   Cancel by default). Cancel keeps everything (the field shows the saved value, the results and
 //   Continue stay). Overwrite deletes the results at once: the run is a draft with the change,
-//   Continue and the tree's Results row go, and it stays so after a reload. Later edits ask
-//   nothing; Start solves it from the beginning.
+//   Continue, the tree's Results row and its Monitors panel's charts go, and it stays so after a
+//   reload. A second change made while that save is on its way, and later edits, ask nothing;
+//   Start solves it from the beginning.
+// - A reset the server refuses (the run still stops) is not saved: a toast says why, and the
+//   field shows the saved value again.
+// - A stopped run with nothing saved and a queued Start: a change asks nothing, and the queued
+//   Start stays and solves it.
 // - Start on a stopped run with results asks too (Start "Run 1" over?); Cancel posts nothing.
 // - After the study's time dependency changed, the panel says what Start or a change does, the
 //   question names the mode, and the run follows its study once started over.
 // - A finished run is never overwritten: a change asks to make a new run with the same settings
-//   and the change ("Run 1" has finished / Make new run), which is selected; Cancel restores.
+//   (write interval, cores, monitors and their stop) and the change ("Run 1" has finished / Make
+//   new run), which is selected; Cancel restores. After its study changed mode, the new run
+//   solves the study's mode.
 // - The Assistant's change of a stopped run asks in the dock with the same words.
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake: no WSL) and the scripted model.
 // Fails on the code before: a stopped run's change saved with no question and its results stayed.
@@ -97,8 +104,8 @@ async function newRun(request, name) {
   return rid;
 }
 
-/** Its saved result at iteration 50 (the cavity's last frame), as a solve that stopped there leaves it. */
-async function giveResults(request, rid, status) {
+/** Its saved result at iteration 50 (the cavity's last frame), as a solve that stopped there leaves it; `extra` over its record. */
+async function giveResults(request, rid, status, extra = {}) {
   const runDir = await runDirOf(request, rid);
   const caseDir = join(runDir, 'case');
   mkdirSync(caseDir, { recursive: true });
@@ -123,6 +130,7 @@ async function giveResults(request, rid, status) {
         residuals: [{ t: 1, Ux: 1, p: 1 }, { t: 50, Ux: 0.01, p: 0.02 }],
         finished_at: new Date().toISOString(),
         case_dir: caseDir,
+        ...extra,
       },
       null,
       2,
@@ -130,6 +138,9 @@ async function giveResults(request, rid, status) {
   );
   return caseDir;
 }
+
+/** The run's record as stored (run.json): what the status rows leave out (its cores). */
+const runDoc = async (request, rid) => JSON.parse(readFileSync(join(await runDirOf(request, rid), 'run.json'), 'utf8'));
 
 /** A run stopped with its result at iteration 50, through the server's own Start and Stop. */
 async function stoppedRun(request, name) {
@@ -152,6 +163,46 @@ async function setField(panel, label, value) {
   await field.fill(String(value));
   await field.press('Enter');
 }
+
+/** A monitor row as a solve's /api/run/monitors gives it (the fake compute writes none). */
+const OLD_MONITOR = {
+  key: 'old-outlet',
+  name: 'Old outlet',
+  patch: 'outlet',
+  write_control: 'Time step',
+  series: [
+    { t: 1, p: 1 },
+    { t: 50, p: 2 },
+  ],
+  final: { pressure_Pa: 2 },
+};
+
+/** Opens the run's Monitors panel from the tree, as the person does. */
+async function openRunMonitors(page, rid) {
+  const runLi = page.locator(`#left-tree li[data-w27-run="${rid}"]`).first();
+  await expect(runLi).toBeVisible(STEP);
+  if (!(await runLi.evaluate((el) => el.classList.contains('expanded')))) await runLi.locator(':scope > .tree-row .tw').click();
+  await page.locator(`#left-tree li[data-w27-run-rcs="${rid}"] > .tree-row .tl`).click();
+  await expect(page.locator('#panel-results-hub')).toBeVisible(STEP);
+}
+
+/** A Forces monitor as the run records it (convergence.spec.js's). */
+const FORCES = {
+  write_control: 'Time step',
+  results: null,
+  series: null,
+  chart_values: null,
+  results_available: false,
+  id: 'rc-fin-f1',
+  name: 'Forces 1',
+  monitor_type: 'forces',
+  kind: 'Forces',
+  category: 'Boundary data',
+  boundaries: ['@walls'],
+};
+
+/** The compute queue's rows of this run. */
+const queuedRows = async (request, rid) => ((await getJson(request, '/api/compute-queue')).items || []).filter((r) => String(r.run_id) === rid);
 
 test('a stopped run: a change asks first, Cancel keeps its results, Overwrite starts it over, and Start solves it from the beginning', async ({ page, request }) => {
   test.setTimeout(240_000);
@@ -192,36 +243,76 @@ test('a stopped run: a change asks first, Cancel keeps its results, Overwrite st
   await expect(panel.locator('[data-run-continue="1"]')).toBeVisible();
   await expect(resultsRow(page, rid)).toBeVisible();
 
-  // Overwrite: the results go now, and the run is a draft with the change, with no reload.
+  // Its Monitors panel shows what its solve recorded (the page keeps it).
+  const monitorsOfRun = (url) => url.pathname === '/api/run/monitors' && url.searchParams.get('run_id') === rid;
+  await page.route(monitorsOfRun, (route) =>
+    route.fulfill({ json: { ok: true, run_id: rid, status: 'stopped', transient: false, monitors: [OLD_MONITOR], custom: [] } }),
+  );
+  await openRunMonitors(page, rid);
+  const monitorList = page.locator('#panel-results-hub #run-monitors-list');
+  await expect(monitorList).toContainText('Old outlet', STEP);
+  panel = await open(page, rid, false);
+
+  // Overwrite: the results go now, and the run is a draft with the change, with no reload. A
+  // second change made while that save is still on its way asks nothing more, and is saved after it.
   await page.evaluate(() => {
     window.__OVERWRITE_SAME_PAGE__ = true;
+  });
+  let release = () => {};
+  const held = new Promise((r) => {
+    release = r;
+  });
+  let holding = 0;
+  const runUpdates = (url) => url.pathname === '/api/run/update';
+  await page.route(runUpdates, async (route) => {
+    const body = route.request().postDataJSON() || {};
+    if (body.overwrite === true && !holding) {
+      holding += 1;
+      await held;
+    }
+    await route.continue();
   });
   await setField(panel, 'Iterations', 200);
   await expect(modal(page)).toBeVisible();
   await page.locator('#cf-confirm').click();
   await expect(modal(page)).toBeHidden();
+  await expect.poll(() => holding, STEP).toBe(1);
+  await setField(panel, 'Write interval', 25);
+  await page.waitForTimeout(800);
+  await expect(modal(page), 'the second change asks nothing').toBeHidden();
+  release();
   await expect.poll(async () => {
     const r = await runRow(request, rid);
-    return [r.status, r.endTime, r.has_results, Number(r.n_saved_times) || 0];
-  }, STEP).toEqual(['draft', 200, false, 0]);
-  expect(existsSync(caseDir), 'its case folder is gone').toBe(false);
+    return [r.status, r.endTime, r.writeInterval, r.has_results, Number(r.n_saved_times) || 0];
+  }, STEP).toEqual(['draft', 200, 25, false, 0]);
   await expect(page.locator('.app-toasts')).toContainText('"Run 1" starts over: its old results were deleted.', STEP);
+  await page.unroute(runUpdates);
+  // No "changed elsewhere" notice for the second change.
+  await expect(modal(page)).toBeHidden();
+  expect(existsSync(caseDir), 'its case folder is gone').toBe(false);
   const shownAsDraft = async () => {
     // Not started: its progress block (Run stopped, the iteration it stopped at) is gone.
     await expect(panel.locator('[data-run-status]')).toHaveCount(0, STEP);
     await expect(iterations).toHaveValue('200');
+    await expect(panel.getByLabel('Write interval', { exact: true })).toHaveValue('25');
     await expect(panel.locator('[data-run-continue="1"]')).toHaveCount(0);
     await expect(resultsRow(page, rid)).toHaveCount(0, STEP);
     await expect(panel.locator('[data-run-start]')).toBeEnabled(STEP);
   };
   await shownAsDraft();
+  // Its Monitors panel no longer shows the deleted results' charts: a draft's.
+  await openRunMonitors(page, rid);
+  await expect(monitorList).toContainText('Values appear once the run starts.', STEP);
+  await expect(monitorList).not.toContainText('Old outlet');
+  await page.unroute(monitorsOfRun);
+  panel = await open(page, rid, false);
   expect(await page.evaluate(() => window.__OVERWRITE_SAME_PAGE__ === true), 'no reload').toBe(true);
   panel = await open(page, rid);
   await shownAsDraft();
 
   // A draft now: further changes ask nothing.
-  await setField(panel, 'Write interval', 25);
-  await expect.poll(async () => (await runRow(request, rid)).writeInterval, STEP).toBe(25);
+  await setField(panel, 'Write interval', 20);
+  await expect.poll(async () => (await runRow(request, rid)).writeInterval, STEP).toBe(20);
   await expect(modal(page)).toBeHidden();
 
   // Start solves it from the beginning, to the new end, and the old result does not come back.
@@ -288,11 +379,89 @@ test('Start on a stopped run with results asks first; Cancel sends nothing; afte
   }
 });
 
-test('a finished run keeps its results: a change makes a new run with the same settings, selected; Cancel restores', async ({ page, request }) => {
+test('a reset the server refuses (the run still stops) is not saved: a toast says why, and the field shows the saved value', async ({ page, request }) => {
   test.setTimeout(180_000);
   page.setDefaultTimeout(30_000);
+  const STOPPING = 'This run is still stopping. Its settings can change once it has stopped.';
+  const { rid, caseDir } = await stoppedRun(request, 'Stopping run');
+  const panel = await open(page, rid);
+  await expect(panel.locator('[data-run-status="stopped"]')).toBeVisible();
+  const iterations = panel.getByLabel('Iterations', { exact: true });
+  await expect(iterations).toHaveValue('100');
+  // The server still holds the run's stop (its slot drains): it refuses the reset with its words.
+  const runUpdates = (url) => url.pathname === '/api/run/update';
+  await page.route(runUpdates, (route) =>
+    (route.request().postDataJSON() || {}).overwrite === true
+      ? route.fulfill({ status: 409, json: { ok: false, code: 'still_stopping', error: STOPPING } })
+      : route.continue(),
+  );
+  await setField(panel, 'Iterations', 200);
+  await expect(modal(page)).toBeVisible();
+  await page.locator('#cf-confirm').click();
+  await expect(modal(page)).toBeHidden();
+  await expect(page.locator('.app-toasts')).toContainText(`Not saved. ${STOPPING}`, STEP);
+  await expect(iterations).toHaveValue('100', STEP);
+  await expect(panel.locator('[data-run-status="stopped"]')).toBeVisible();
+  await expect(panel.locator('[data-run-continue="1"]')).toBeVisible();
+  const kept = await runRow(request, rid);
+  expect([kept.status, kept.endTime, kept.has_results]).toEqual(['stopped', 100, true]);
+  expect(existsSync(join(caseDir, '50'))).toBe(true);
+  await page.unroute(runUpdates);
+  // Once it has stopped, the same change asks again and starts it over.
+  await setField(panel, 'Iterations', 200);
+  await expect(modal(page)).toBeVisible();
+  await expect(page.locator('#cf-heading')).toHaveText('Overwrite "Stopping run"?');
+  await page.locator('#cf-confirm').click();
+  await expect.poll(async () => {
+    const r = await runRow(request, rid);
+    return [r.status, r.endTime];
+  }, STEP).toEqual(['draft', 200]);
+  await expect(iterations).toHaveValue('200', STEP);
+});
+
+test('a stopped run with nothing saved, queued to start: a change asks nothing, and its queued Start stays and solves it', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
+  // Stopped before it saved anything (the fake solve writes no results).
+  const rid = await newRun(request, 'Queued run');
+  await postOk(request, '/api/run/start', { project_id: PID, simulation_id: sim, run_id: rid });
+  await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('running');
+  await postOk(request, '/api/run/stop', { project_id: PID, run_id: rid });
+  await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('stopped');
+  await slotFree(request);
+  expect(!!(await runRow(request, rid)).has_results).toBe(false);
+  const busy = await newRun(request, 'Busy run');
+  const panel = await open(page, rid);
+  await expect(panel.locator('[data-run-status="stopped"]')).toBeVisible();
+  // Another run solves: Start queues this one.
+  await postOk(request, '/api/run/start', { project_id: PID, simulation_id: sim, run_id: busy });
+  await expect.poll(async () => (await runRow(request, busy)).status, STEP).toBe('running');
+  const start = panel.locator('[data-run-start]');
+  await start.click();
+  await expect(start).toHaveText('Remove from queue', STEP);
+  expect((await queuedRows(request, rid)).length).toBe(1);
+  // Its iterations change with no question (nothing to overwrite): it is a draft again, still queued.
+  await setField(panel, 'Iterations', 300);
+  await expect.poll(async () => (await runRow(request, rid)).endTime, STEP).toBe(300);
+  await expect(modal(page)).toBeHidden();
+  // It starts once the other run has finished, and solves to the new end.
+  await expect.poll(async () => (await runRow(request, rid)).status, { timeout: 90_000 }).toBe('done');
+  await expect(panel.locator('[data-run-status="done"]')).toBeVisible(STEP);
+  expect((await runRow(request, rid)).endTime).toBe(300);
+  await slotFree(request);
+});
+
+test('a finished run keeps its results: a change makes a new run with the same settings, selected; Cancel restores', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
   const rid = await newRun(request, 'Finished run');
-  const caseDir = await giveResults(request, rid, 'done');
+  // Settings that are none of a new run's defaults: a write interval, its cores, a monitor and a stop on it.
+  const caseDir = await giveResults(request, rid, 'done', {
+    writeInterval: 25,
+    cores: 2,
+    result_controls: [FORCES],
+    settle: { source: 'monitor', id: FORCES.id, quantity: 'Cd', tolerance: 0.001, window: 100 },
+  });
   let panel = await open(page, rid);
   await expect(panel.locator('[data-run-status="done"]')).toBeVisible();
   await expect(panel.locator('[data-run-reason="1"]')).toContainText('This run finished. Changing a setting makes a new run with the same settings and that change.');
@@ -325,8 +494,13 @@ test('a finished run keeps its results: a change makes a new run with the same s
   // The new run has the finished run's settings and the change, and is the one shown.
   await expect.poll(async () => {
     const r = await runRow(request, made);
-    return [r.status || 'draft', r.endTime, r.writeInterval, String(r.mesh_id)];
-  }, STEP).toEqual(['draft', 300, 50, meshId]);
+    return [r.status || 'draft', r.endTime, r.writeInterval, String(r.mesh_id), (r.result_controls || []).map((c) => c.name)];
+  }, STEP).toEqual(['draft', 300, 25, meshId, ['Forces 1']]);
+  const copied = await runDoc(request, made);
+  expect(copied.cores, 'its cores').toBe(2);
+  const monitorId = String(copied.result_controls[0].id);
+  expect(monitorId, 'the copied monitor has its own id').not.toBe(FORCES.id);
+  expect([copied.settle?.id, copied.settle?.quantity, copied.settle?.tolerance, copied.settle?.window], 'its stop follows its own monitor').toEqual([monitorId, 'Cd', 0.001, 100]);
   const newName = (await runRow(request, made)).name;
   expect(newName).toMatch(/^Run \d+$/);
   await expect(panel).toHaveAttribute('data-run-id', made, STEP);
@@ -342,6 +516,34 @@ test('a finished run keeps its results: a change makes a new run with the same s
   panel = await open(page, rid);
   await expect(iterations).toHaveValue('100');
   await expect(resultsRow(page, rid)).toBeVisible(STEP);
+
+  // The study becomes Transient: the panel says so, and the new run a change makes solves Transient.
+  await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Transient' });
+  try {
+    panel = await open(page, rid);
+    await expect(panel.locator('[data-run-reason="1"]')).toContainText(
+      "This run solved Steady-state; its study is now Transient. Changing a setting makes a new Transient run with this run's settings.",
+      STEP,
+    );
+    const runs = (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${sim}`)).runs.map((r) => String(r.id));
+    await setField(panel, 'Iterations', 400);
+    await expect(modal(page)).toBeVisible();
+    await expect(page.locator('#cf-heading')).toHaveText('"Finished run" has finished');
+    await page.locator('#cf-confirm').click();
+    await expect(modal(page)).toBeHidden();
+    let again = '';
+    await expect.poll(async () => {
+      again = (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${sim}`)).runs.map((r) => String(r.id)).find((id) => !runs.includes(id)) || '';
+      return again;
+    }, STEP).not.toBe('');
+    await expect.poll(async () => (await runRow(request, again)).time_dependency, STEP).toBe('Transient');
+    await expect(panel).toHaveAttribute('data-run-id', again, STEP);
+    await expect(panel.locator('[data-run-mode="1"]')).toHaveText('Transient', STEP);
+    const kept = await runRow(request, rid);
+    expect([kept.status, kept.time_dependency, kept.endTime]).toEqual(['done', 'Steady-state', 100]);
+  } finally {
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Steady-state' });
+  }
 });
 
 test("the Assistant's change of a stopped run asks in the dock with the same words, then the panel shows it started over", async ({ page, request }) => {

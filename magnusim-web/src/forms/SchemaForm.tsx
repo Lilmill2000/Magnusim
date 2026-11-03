@@ -27,10 +27,17 @@ export interface SchemaFormProps {
   hideFooter?: boolean;
   /** Host rows appended inside the Advanced disclosure (the mesh engine select). */
   advancedExtra?: ReactNode;
+  /**
+   * A typed number commits on blur and Enter only, at once, not 0.3 s after a keystroke: for a
+   * form whose save may ask the person first (a run that ended), so no question comes up in the
+   * middle of typing.
+   */
+  commitOnBlur?: boolean;
 }
 
 interface SchemaFormContext {
   advancedExtra?: ReactNode;
+  commitOnBlur?: boolean;
 }
 
 function AdvancedDetails({ children }: { children: ReactNode }) {
@@ -57,13 +64,14 @@ function NumberUnitWidget(props: WidgetProps) {
   const display =
     qty && unit && typeof props.value === 'number' ? fromSi(qty, props.value, unit) : props.value;
   const emit = (n: number) => props.onChange(qty && unit ? toSi(qty, n, unit) : n);
+  const blurOnly = !!(props.registry?.formContext as SchemaFormContext | undefined)?.commitOnBlur;
   return (
     <span className="bc-value-row">
       <SciNumberInput
         id={props.id}
         value={typeof display === 'number' ? display : null}
         label={props.label}
-        onLive={emit}
+        onLive={blurOnly ? undefined : emit}
         onCommit={emit}
       />
       {choices.length ? (
@@ -344,6 +352,7 @@ export function SchemaForm({
   className,
   hideFooter = false,
   advancedExtra,
+  commitOnBlur = false,
 }: SchemaFormProps) {
   const props = (schema && schema.properties) || {};
   const timer = useRef<number | null>(null);
@@ -396,7 +405,7 @@ export function SchemaForm({
         formData={live}
         widgets={{ ...widgets, ...pluginFieldWidgets() }}
         templates={{ FieldTemplate, ObjectFieldTemplate }}
-        formContext={{ advancedExtra } satisfies SchemaFormContext}
+        formContext={{ advancedExtra, commitOnBlur } satisfies SchemaFormContext}
         showErrorList={false}
         liveValidate
         onChange={(e) => {
@@ -407,6 +416,12 @@ export function SchemaForm({
             return;
           }
           if (timer.current) window.clearTimeout(timer.current);
+          // Numbers change here only on blur and Enter then: the change is the person's last word.
+          if (commitOnBlur) {
+            timer.current = null;
+            onCommit(values);
+            return;
+          }
           timer.current = window.setTimeout(() => onCommit(values), 300);
         }}
         onSubmit={(e) => {

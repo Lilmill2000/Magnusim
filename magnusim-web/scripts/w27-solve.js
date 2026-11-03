@@ -65,7 +65,7 @@ import {
   requiredPluginError,
   runDefaultsFor,
 } from './registry-defaults.js';
-import { removeComputeJob, scheduleComputeQueueKick } from './server/compute-queue.ts';
+import { removeComputeJob, scheduleComputeQueueKick, snapshotComputeQueue } from './server/compute-queue.ts';
 import { polyMeshComplete } from './poly-mesh.js';
 import { fakeCompute } from './test-compute.js';
 import { startFakeSolve, stopFakeSolve } from './test-solve.js';
@@ -1671,7 +1671,9 @@ async function applyRunSettings(id, runId, partial) {
   return {
     ok: true,
     run: rec,
-    ...(reopened ? { reopened: true, reopened_at: rec.reopened_at || reopened.reopened_at } : {}),
+    ...(reopened
+      ? { reopened: true, reopened_at: rec.reopened_at || reopened.reopened_at, ...(reopened.dropped_continue ? { dropped_continue: true } : {}) }
+      : {}),
     ...runListPayload(id, cat, { simulation_id: rec.simulation_id || found.sid || (partial && partial.simulation_id) }),
     meshes: listGeneratedMeshes(id, rec.simulation_id || found.sid || (partial && partial.simulation_id)),
   };
@@ -1732,6 +1734,8 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
       await queued;
     } catch (_) {}
   }
+  // The old case folders of a start-over still being removed, in this folder.
+  await overwrittenCasesRemoved(id, runId);
   try {
     // Windows can hold a file for a moment (the worker loading this run's fields for
     // its Run panel, the indexer, antivirus): retry (linear back-off, about 5 s in all).
@@ -1757,6 +1761,49 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
 
 /** Runs being started over now (runUpdateKey): Start, Continue and another reset refuse them meanwhile. */
 const reopening = new Set();
+
+/**
+ * Removals of the old case folders (case.overwritten-*) of runs started over, still going, by
+ * runUpdateKey: they run after the answer (a large case takes seconds to delete), one at a time
+ * per run, and a delete of the run waits for them.
+ * @type {Map<string, Promise<void>>}
+ */
+const overwrittenRemovals = new Map();
+
+/** Remove the old case folders in a run's folder (this start-over's, and any an earlier one left), after the answer. */
+function removeOverwrittenCases(key, runDir) {
+  const prev = overwrittenRemovals.get(key) || Promise.resolve();
+  const next = prev.then(async () => {
+    // After the answer has gone out.
+    await new Promise((r) => setImmediate(r));
+    let names = [];
+    try {
+      names = readdirSync(runDir).filter((n) => /^case\.overwritten-/.test(n));
+    } catch {}
+    for (const n of names) {
+      try {
+        await removeTree(join(runDir, n), { maxRetries: 10, retryDelay: 100 });
+      } catch (e) {
+        console.warn('[CFD] remove overwritten case', e);
+      }
+    }
+  });
+  overwrittenRemovals.set(key, next);
+  const settle = () => {
+    if (overwrittenRemovals.get(key) === next) overwrittenRemovals.delete(key);
+  };
+  next.then(settle, settle);
+  return next;
+}
+
+/** Resolves once the old case folders of this run's start-overs are removed (at once when none are). */
+export async function overwrittenCasesRemoved(projectId, runId) {
+  const p = overwrittenRemovals.get(runUpdateKey(projectId, runId));
+  if (!p) return;
+  try {
+    await p;
+  } catch {}
+}
 
 /**
  * Told when a run is about to be started over and its case folder moved away (live-routes.js:
@@ -1883,23 +1930,27 @@ async function reopenRunNow(id, runId, opts = {}) {
     try {
       if (existsSync(runSidecarPath(id, runId))) rmSync(runSidecarPath(id, runId), { force: true });
     } catch {}
-    // A queued Start or Continue of it would start what is gone.
+    // A queued Continue of it would go on from what is gone: it leaves the queue (the answer says
+    // so). A queued Start stays: it starts the run, a draft now, from the beginning.
+    let droppedContinue = 0;
     try {
-      removeComputeJob('solve', runId, id);
-    } catch {}
-    // This reset's folder, and any an earlier one left behind.
-    let names = [];
-    try {
-      names = readdirSync(folder.dir).filter((n) => /^case\.overwritten-/.test(n));
-    } catch {}
-    for (const n of names) {
-      try {
-        await removeTree(join(folder.dir, n), { maxRetries: 10, retryDelay: 100 });
-      } catch (e) {
-        console.warn('[CFD] remove overwritten case', e);
+      for (const q of snapshotComputeQueue(id).items) {
+        const s = q.settings;
+        if (q.kind !== 'solve' || String(q.run_id || '') !== String(runId) || !(s && typeof s === 'object' && s.continue)) continue;
+        removeComputeJob('solve', q.id, id);
+        droppedContinue += 1;
       }
-    }
-    return { ok: true, reopened: true, reopened_at: row.reopened_at, run: row, ...payload() };
+    } catch {}
+    // This reset's folder, and any an earlier one left behind: removed after the answer.
+    removeOverwrittenCases(key, folder.dir);
+    return {
+      ok: true,
+      reopened: true,
+      reopened_at: row.reopened_at,
+      ...(droppedContinue ? { dropped_continue: true } : {}),
+      run: row,
+      ...payload(),
+    };
   } finally {
     reopening.delete(key);
   }

@@ -9,6 +9,8 @@
 //   whatever the reference temperature; a new Wall starts No-slip.
 // - A run whose solver died of a cause its parser names: the Run panel's failure line
 //   shows the reason (long errors end with an ellipsis).
+// - A stopped run: a number typed in its settings asks to overwrite the run only once the
+//   field is left (never in the middle of typing); Cancel puts the saved value back.
 // - With WSL: a heated cavity meshed and solved through the app, its wall heat flux and
 //   energy balance read back; a channel's case written from BCs set only through the
 //   panels (the untouched inlet's 0/T, the new wall's 0/U).
@@ -94,8 +96,8 @@ async function addBc(page, s, kind, face) {
   return { id, editor };
 }
 
-/** Run `rid`'s case: the committed finished cavity, its run record done. */
-async function finishedRun(request, s, title) {
+/** Run `rid`'s case: the committed finished cavity, its run record done (or `status`; `extra` over it). */
+async function finishedRun(request, s, title, status = 'done', extra = {}) {
   const made = await (await request.post(s.q('/api/run/create'), { data: { project_id: s.pid, simulation_id: s.sid, name: title } })).json();
   const rid = String(made.run_id || (made.run && (made.run.id || made.run.run_id)));
   const rows = (await json(request, s.q('/api/run/status', { simulation_id: s.sid }))).runs || [];
@@ -109,14 +111,15 @@ async function finishedRun(request, s, title) {
     JSON.stringify(
       {
         ...rec,
-        status: 'done',
-        stage: 'done',
+        status,
+        stage: status,
         has_results: true,
         n_saved_times: 1,
         last_saved_iteration: 400,
         finished_at: new Date().toISOString(),
         case_dir: caseDir,
         analysis_key: 'heat_transfer_steady',
+        ...extra,
       },
       null,
       2,
@@ -433,6 +436,41 @@ test('a run whose solver died of a cause its parser names: the Run panel says th
   // Any error's first line shows up to 160 characters, an ellipsis when it is cut.
   await openRun(page, s.sid, rid2);
   await expect(panel.locator('[data-run-line="1"]')).toHaveText('x'.repeat(159) + '\u2026', { timeout: 30_000 });
+});
+
+test('a stopped run: a number typed in its settings asks to overwrite it only once the field is left; Cancel puts the saved value back', async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const s = await heatStudy(page, request);
+  const was = 500;
+  const rid = await finishedRun(request, s, 'Stopped', 'stopped', { endTime: was, writeInterval: 100, time_dependency: 'Steady-state' });
+  const stored = async () => ((await json(request, s.q('/api/run/status', { simulation_id: s.sid }))).runs || []).find((r) => String(r.id) === rid) || {};
+  await page.reload();
+  await s.ready();
+  await openRun(page, s.sid, rid);
+  const panel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
+  await expect(panel.locator('[data-run-status="stopped"]')).toBeVisible({ timeout: 30_000 });
+  const field = panel.getByLabel('Number of iterations', { exact: true });
+  await expect(field).toBeEnabled();
+  await expect(field).toHaveValue(String(was));
+  const modal = page.locator('#modal-confirm');
+  // Typing, with pauses: no question in the middle of it.
+  await field.fill('2');
+  await page.waitForTimeout(900);
+  await expect(modal).toBeHidden();
+  await field.pressSequentially('00', { delay: 400 });
+  await page.waitForTimeout(900);
+  await expect(modal).toBeHidden();
+  await expect(field).toHaveValue('200');
+  // Leaving the field asks, with the whole number.
+  await field.press('Tab');
+  await expect(modal).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('#cf-heading')).toHaveText('Overwrite "Stopped"?');
+  await page.locator('#cf-cancel').click();
+  await expect(modal).toBeHidden();
+  await expect(field).toHaveValue(String(was), { timeout: 15_000 });
+  await page.waitForTimeout(500);
+  const kept = await stored();
+  expect([kept.status, kept.endTime, kept.has_results]).toEqual(['stopped', was, true]);
 });
 
 test('WSL: a heated cavity meshed and solved through the app; its heat flux, energy balance and Nusselt number', async ({ page, request }) => {

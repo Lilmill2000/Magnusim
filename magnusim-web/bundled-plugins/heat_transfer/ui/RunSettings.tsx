@@ -259,6 +259,8 @@ export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }:
           schema={schema}
           formData={tools.pickSchemaValues(values, schema)}
           hideFooter
+          // A change of a run that ended asks first (the core's question): never in the middle of typing.
+          commitOnBlur={run.edit === 'overwrites' || run.edit === 'new_run'}
           onCommit={(next) => {
             const patch = tools.pickSchemaValues(next, schema);
             if (run.transient) void saveTransient({ ...run.transient_settings, ...patch });

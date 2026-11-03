@@ -36,6 +36,29 @@ describe('SchemaForm', () => {
     expect(onCommit).toHaveBeenCalled();
   });
 
+  it('commitOnBlur: a typed number commits when the field is left (at once), never in the middle of typing', async () => {
+    const counts: RJSFSchema = { type: 'object', properties: { end_time: { type: 'integer', title: 'Number of iterations', minimum: 1 } } };
+    const onCommit = vi.fn();
+    render(<SchemaForm schema={counts} formData={{ end_time: 500 }} onCommit={onCommit} hideFooter commitOnBlur />);
+    const box = screen.getByLabelText('Number of iterations') as HTMLInputElement;
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: '2' } });
+    await new Promise((r) => setTimeout(r, 350));
+    fireEvent.change(box, { target: { value: '200' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.blur(box);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit.mock.calls[0][0].end_time).toBe(200);
+    // Without it, a pause in typing commits what is typed so far (0.3 s).
+    cleanup();
+    const live = vi.fn();
+    render(<SchemaForm schema={counts} formData={{ end_time: 500 }} onCommit={live} hideFooter />);
+    fireEvent.change(screen.getByLabelText('Number of iterations'), { target: { value: '2' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(live.mock.calls.at(-1)?.[0].end_time).toBe(2);
+  });
+
   it('a temperature field (API 1.8) types in °C or °F with a K/°C/°F picker, and commits K', async () => {
     const thermal: RJSFSchema = {
       type: 'object',

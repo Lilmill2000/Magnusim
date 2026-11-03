@@ -114,6 +114,8 @@ export function GenericRunSettings({ run, row, saveSteady, saveTransient }: RunS
         schema={schema}
         formData={pickSchemaValues(values, schema)}
         hideFooter
+        // A change of a run that ended asks first: never in the middle of typing.
+        commitOnBlur={run.edit === 'overwrites' || run.edit === 'new_run'}
         onCommit={(next) => {
           const patch = pickSchemaValues(next, schema);
           if (run.transient) void saveTransient({ ...run.transient_settings, ...patch });

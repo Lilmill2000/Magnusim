@@ -248,9 +248,14 @@ export function newRunWords(rec: RunLike): Words {
   };
 }
 
-/** The toast once a run was started over. */
-export function overwrittenToast(rec: RunLike): string {
-  return quoted(rec) + ' starts over: its old results were deleted.';
+/**
+ * The toast once a run was started over. `deleted` (default true): it had results the person
+ * said to delete; `droppedContinue`: a queued Continue of it left the queue (it had nothing to
+ * go on from any more).
+ */
+export function overwrittenToast(rec: RunLike, opts?: { deleted?: boolean; droppedContinue?: boolean }): string {
+  const said = opts?.deleted === false ? quoted(rec) + ' starts over.' : quoted(rec) + ' starts over: its old results were deleted.';
+  return opts?.droppedContinue ? said + ' Its queued Continue was removed from the queue.' : said;
 }
 
 /** The toast once a finished run's change went to a new run. */

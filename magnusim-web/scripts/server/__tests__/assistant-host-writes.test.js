@@ -534,8 +534,20 @@ describe("setup_edit on a run that ended: the person's rules and words", () => {
       r.out.error.hint,
       `setup_edit {kind:'run', action:'add', other_id:'r1', values:[{"key":"endTime","value":"300"}]} makes the next run with the settings of "Run 1" and these changes; "Run 1" keeps its results.`,
     );
-    // Its free settings still save (a monitor, a name).
-    const named = await sent(tool, setup({ kind: 'run', action: 'update', id: 'r1', values: [{ key: 'cores', value: '2' }] }));
+    // Its Cores and settle stop stay as they are too, as the person's panel keeps them (read-only on a finished run).
+    const cores = await sent(tool, setup({ kind: 'run', action: 'update', id: 'r1', values: [{ key: 'cores', value: '2' }] }));
+    assert.deepEqual([cores.out.error.code, cores.writes], ['run_finished', []]);
+    assert.equal(
+      cores.out.error.hint,
+      `setup_edit {kind:'run', action:'add', other_id:'r1', values:[{"key":"cores","value":"2"}]} makes the next run with the settings of "Run 1" and these changes; "Run 1" keeps its results.`,
+    );
+    const settle = await sent(tool, setup({ kind: 'run', action: 'update', id: 'r1', values: [{ key: 'settle', value: 'null' }] }));
+    assert.deepEqual([settle.out.error.code, settle.writes], ['run_finished', []]);
+    // The person's panel offers no Copy settings from into a finished run either.
+    const copy = await sent(tool, setup({ kind: 'run', action: 'copy_from', id: 'r1', other_id: 'r2' }));
+    assert.deepEqual([copy.out.error.code, copy.writes], ['run_finished', []]);
+    // Its name still changes.
+    const named = await sent(tool, setup({ kind: 'run', action: 'rename', id: 'r1', name: 'Run 1 kept' }));
     assert.equal(named.out.ok, true, JSON.stringify(named.out));
   });
 

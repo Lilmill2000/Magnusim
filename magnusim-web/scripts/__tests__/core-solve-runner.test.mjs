@@ -670,6 +670,8 @@ describe('A stopped or failed run started over (runReopen.ts)', () => {
     const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, endTime: 200, cores: 3, overwrite: true });
     assert.equal(out.ok, true, JSON.stringify(out));
     assert.equal(out.reopened, true);
+    // Its queued Continue had nothing to go on from: it left the queue, and the answer says so.
+    assert.equal(out.dropped_continue, true);
     const doc = runDoc(rid);
     assert.deepEqual(
       [doc.status, doc.endTime, doc.writeInterval, doc.cores, doc.mesh_id, doc.has_results, doc.n_saved_times, doc.last_saved_iteration, doc.residuals],
@@ -681,6 +683,8 @@ describe('A stopped or failed run started over (runReopen.ts)', () => {
     assert.equal(typeof doc.reopened_at, 'string');
     assert.ok((doc.rev || 0) > (before.rev || 0), 'its rev moved');
     assert.equal(existsSync(caseOf(rid)), false, 'its case folder is gone');
+    // The old case folder (renamed away) is removed after the answer.
+    await w27.overwrittenCasesRemoved(PID, rid);
     const left = (await import('node:fs')).readdirSync(io.runFolderOf(PID, rid, SID).dir).filter((n) => n.startsWith('case'));
     assert.deepEqual(left, [], 'nothing of the old case is left');
     assert.equal(queued(rid), false, 'its queue row went');
@@ -692,6 +696,37 @@ describe('A stopped or failed run started over (runReopen.ts)', () => {
     // A draft: later changes save as any draft's.
     const later = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, writeInterval: 25 });
     assert.deepEqual([later.ok, later.reopened, runDoc(rid).writeInterval], [true, undefined, 25]);
+  });
+
+  it('a queued Start stays when its run starts over (it starts the draft); the answer does not wait for the old case to be deleted, a delete of the run does', async () => {
+    const rid = await stoppedWithFrame();
+    assert.equal(queue.enqueueComputeJob({ kind: 'solve', run_id: rid, simulation_id: SID, project_id: PID, mesh_id: MID }).ok, true);
+    // A big old case: many files, still being deleted after the answer.
+    for (let i = 1; i <= 60; i++) {
+      const d = join(caseOf(rid), String(100 + i));
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'U'), 'x'.repeat(256));
+    }
+    const out = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.dropped_continue, undefined, 'no Continue was queued');
+    assert.equal(queued(rid), true, 'its queued Start stays');
+    const dir = io.runFolderOf(PID, rid, SID).dir;
+    const old = (await import('node:fs')).readdirSync(dir).filter((n) => n.startsWith('case.overwritten-'));
+    assert.equal(old.length, 1, 'answered before the old case was deleted');
+    const del = await w27.deleteCatalogRun(PID, rid, SID);
+    assert.equal(del.ok, true, String(del.error));
+    assert.equal(existsSync(dir), false);
+    assert.equal(queued(rid), false);
+  });
+
+  it('a stopped run with nothing saved starts over quietly on a change: its queued Start stays', async () => {
+    const rid = draftRun({ status: 'stopped', note: 'Run stopped before the first saved iteration.' });
+    assert.equal(queue.enqueueComputeJob({ kind: 'solve', run_id: rid, simulation_id: SID, project_id: PID, mesh_id: MID }).ok, true);
+    const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, endTime: 300 });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual([out.reopened, out.dropped_continue, runDoc(rid).status, runDoc(rid).endTime], [true, undefined, 'draft', 300]);
+    assert.equal(queued(rid), true, 'the Start the person queued is still queued');
   });
 
   it('POST /api/run/reopen: asks for overwrite, checks the rev, and refuses a finished or solving run', async () => {

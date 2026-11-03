@@ -719,16 +719,27 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     // Only a call whose card asked to start the run over sends overwrite (runReopen.ts).
     const overwrite = kind === 'run' && overwriteAsked.has(input);
     let reopened = false;
+    // A queued Continue of a run started over leaves the queue (the route says so; the person's toast does too).
+    let droppedContinue = false;
+    const continueNote = () => (droppedContinue ? ' Its queued Continue was removed from the queue.' : '');
     const update = async (changes: Record<string, unknown>) => {
       const r = (await d.hostCall('run.update', { ...q, run_id: id, changes, ...(overwrite ? { overwrite: true } : {}), geometry_rev: g.geometryRev ?? undefined, base_rev: base }, o)) as Record<string, unknown>;
       if (r.ok === false) refuse('refused', cleanText(str(r.error) || 'The run was not saved.', 300));
       if (r.reopened === true) reopened = true;
+      if (r.dropped_continue === true) droppedContinue = true;
       return isRecord(r.run) ? r.run : {};
     };
-    /** A finished or solving run's solve settings don't change in place: refused with the person's words and the one call that does it. */
-    const endedRefusal = (changes: Record<string, unknown>): ToolOutcome | null => {
-      if (kind !== 'run' || !solveChanged(run, changes).length) return null;
+    /**
+     * A finished or solving run's settings don't change in place: refused with the person's words
+     * and the one call that does it. Its solve settings, and its Cores and settle stop too: the
+     * person's panel keeps those of a finished or solving run as they are (runIsLocked), and
+     * offers no Copy settings from into one (`whole`).
+     */
+    const endedRefusal = (changes: Record<string, unknown>, whole = false): ToolOutcome | null => {
+      if (kind !== 'run') return null;
       const state = runEditState(run);
+      if (state !== 'new_run' && state !== 'locked') return null;
+      if (!whole && !solveChanged(run, changes).length && !('cores' in changes) && !('settle' in changes)) return null;
       if (state === 'new_run') {
         const vals = JSON.stringify(Array.isArray(input.values) ? input.values : []);
         return fail(
@@ -785,14 +796,14 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
         });
         const changes: Record<string, unknown> = { ...copied.body };
         delete changes.run_id;
-        const no = endedRefusal(changes);
+        const no = endedRefusal(changes, true);
         if (no) return no;
         await update(changes);
         sync(['runs', 'tree'], sim, { run: [id] });
         return okDone({
-          done: copied.otherStudy
+          done: (copied.otherStudy
             ? `Copied the time settings from ${quoted(src.name)} of another study into ${quoted(run.name)}; its mesh and monitors stay there.${copied.note ? ` ${copied.note}` : ''}`
-            : `Copied the settings of ${quoted(src.name)} into ${quoted(run.name)}.${copied.note ? ` ${copied.note}` : ''}`,
+            : `Copied the settings of ${quoted(src.name)} into ${quoted(run.name)}.${copied.note ? ` ${copied.note}` : ''}`) + continueNote(),
           ids: { run: id },
         });
       }
@@ -810,9 +821,10 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       const saved = await update(nested);
       sync(reopened ? ['runs', 'tree'] : ['runs'], sim, { run: [id] }, revOf(saved) !== null ? { [id]: revOf(saved) as number } : {});
       return okDone({
-        done: reopened
-          ? `${quoted(run.name)} starts over: its old results were deleted. Saved ${Object.keys(parsed.values).join(', ')}.`
-          : `Saved ${Object.keys(parsed.values).join(', ')} of run ${quoted(run.name)}.`,
+        done:
+          (reopened
+            ? `${quoted(run.name)} starts over: its old results were deleted. Saved ${Object.keys(parsed.values).join(', ')}.`
+            : `Saved ${Object.keys(parsed.values).join(', ')} of run ${quoted(run.name)}.`) + continueNote(),
         ids: { run: id },
         rev: revOf(saved),
       });

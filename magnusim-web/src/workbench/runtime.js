@@ -30666,7 +30666,16 @@ async function onSimStartClick() {
   if (runId && liveId && String(runId) === String(liveId)) return;
   // A stopped or failed run with results starts over only once asked (runReopen.ts): its
   // results go first, then it starts (or queues) as a draft. Cancel leaves no trace.
-  if (rec && runEditState(rec) === 'overwrites') {
+  // One the person already said to start over (the settings save resetting it still on its way)
+  // asks nothing more: its Start goes out once that save has answered.
+  if (rec && runIsReopeningHere(rec)) {
+    const saving = runCatalog.settings_saves[String(runId)];
+    // Its own Start is resetting it now: this click adds nothing.
+    if (!saving) return;
+    try { await saving; } catch (_) {}
+    rec = findRunRecord(runId) || rec;
+  }
+  if (rec && runEditState(rec) === 'overwrites' && !runIsReopeningHere(rec)) {
     const baseRev = revOf(rec);
     const w = overwriteWords(rec, { action: 'start', studyTransient: simIsTransientClient() });
     if (!(await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, safe: true }))) return;
@@ -32073,9 +32082,23 @@ function runEditView(rec) {
   return rec ? { ...rec, transient: transientSettingsFor(rec) } : rec;
 }
 
+/**
+ * Runs the person said to start over whose reset (the save carrying `overwrite`, or Start's
+ * reset) is still on its way: this page still shows the old results until it answers, but asks
+ * nothing more of them (a second question would carry the rev from before the reset and be
+ * refused as stale). Later edits and Start go out behind it, to a draft.
+ */
+const runsReopening = new Set();
+
+/** The run is being started over by this page now (runsReopening). */
+function runIsReopeningHere(rec) {
+  return !!rec && runsReopening.has(String(rec.id || rec.run_id || ''));
+}
+
 /** The change `body` of a run's solve settings asks first (runReopen.ts): it ended, with results or finished. */
 function runSolveEditAsks(rec, body) {
   const state = runEditState(rec);
+  if (state === 'overwrites' && runIsReopeningHere(rec)) return false;
   return (state === 'overwrites' || state === 'new_run') && solveChanged(runEditView(rec), body).length > 0;
 }
 
@@ -32096,7 +32119,10 @@ async function askRunSolveEdit(rec, applyToNew) {
     const baseRev = revOf(rec);
     const w = overwriteWords(rec, { action: 'edit', studyTransient: simIsTransientClient() });
     const ok = await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, safe: true });
-    return ok ? { go: true, overwrite: true, base_rev: baseRev } : { go: false };
+    if (!ok) return { go: false };
+    // From the yes on, until its save has answered (persistRunSettings), nothing asks again.
+    runsReopening.add(String(rec.id || rec.run_id));
+    return { go: true, overwrite: true, base_rev: baseRev };
   }
   if (state === 'new_run') {
     const w = newRunWords(rec);
@@ -32145,17 +32171,24 @@ async function makeRunFromFinished(rec, applyToNew) {
  */
 async function reopenRunClient(rec, baseRev) {
   const runId = String(rec.id || rec.run_id);
-  const saving = runCatalog.settings_saves[runId];
-  if (saving) {
-    try { await saving; } catch (_) {}
+  // Nothing asks again while the reset is on its way (runsReopening).
+  runsReopening.add(runId);
+  let posted;
+  try {
+    const saving = runCatalog.settings_saves[runId];
+    if (saving) {
+      try { await saving; } catch (_) {}
+    }
+    posted = await postJson('/api/run/reopen', {
+      run_id: runId,
+      project_id: currentProjectId() || undefined,
+      ...runRequestStudyIds(runId),
+      overwrite: true,
+      ...(baseRev !== null && baseRev !== undefined ? { base_rev: baseRev } : {}),
+    });
+  } finally {
+    runsReopening.delete(runId);
   }
-  const posted = await postJson('/api/run/reopen', {
-    run_id: runId,
-    project_id: currentProjectId() || undefined,
-    ...runRequestStudyIds(runId),
-    overwrite: true,
-    ...(baseRev !== null && baseRev !== undefined ? { base_rev: baseRev } : {}),
-  });
   const j = posted.json;
   if (posted.response && posted.response.status === 409 && isStaleRecord(j)) {
     try { await refreshRunCatalog(); } catch (_) {}
@@ -32200,11 +32233,50 @@ function afterRunReopened(runId, j, opts) {
     runCatalog.start_error = null;
     runCatalog.start_error_run_id = null;
   }
+  // Its monitor charts were of the old solve: the Monitors panels show a draft's.
+  forgetRunMonitors([id]);
   try { refreshSetupTree(); } catch (_) {}
-  if (opts && opts.toast && rec) {
-    window.dispatchEvent(new CustomEvent('cfd:toast', { detail: { message: overwrittenToast(rec), kind: 'success' } }));
+  // A queued Continue of it left the queue (the server says so): said too, whether asked or not.
+  if (rec && ((opts && opts.toast) || (j && j.dropped_continue))) {
+    const message = overwrittenToast(rec, { droppedContinue: !!(j && j.dropped_continue), deleted: !!(opts && opts.toast) });
+    window.dispatchEvent(new CustomEvent('cfd:toast', { detail: { message, kind: 'success' } }));
   }
   try { syncSimControlPanel(); } catch (_) {}
+}
+
+/**
+ * The monitor data this page kept of these runs goes (window.__CFD_MONITORS__, filled while a
+ * run solves and when its Monitors panel opens), and the Monitors panels draw again: a run
+ * started over has none. Returns whether anything went.
+ */
+function forgetRunMonitors(ids) {
+  let dropped = false;
+  try {
+    const mon = window.__CFD_MONITORS__;
+    if (mon && mon.byRun) {
+      for (const id of ids) {
+        if (id && mon.byRun[String(id)]) {
+          delete mon.byRun[String(id)];
+          dropped = true;
+        }
+      }
+    }
+  } catch (_) {}
+  // After the caller's own redraw (this can run inside applyRunCatalog).
+  if (dropped) setTimeout(() => { try { syncResultsHub(); } catch (_) {} }, 0);
+  return dropped;
+}
+
+/**
+ * A draft has no monitor data: what this page kept of a run that was started over here, by the
+ * Assistant or in another window goes once its row says draft (forgetRunMonitors).
+ */
+function forgetDraftMonitors() {
+  const ids = [];
+  for (const r of [].concat(runCatalog.runs || [], runCatalog.runs_all || [])) {
+    if (r && runEditState(r) === 'draft') ids.push(String(r.id || r.run_id || ''));
+  }
+  if (ids.length) forgetRunMonitors(ids);
 }
 
 /**
@@ -32455,8 +32527,10 @@ async function persistRunSettings(partial, opts) {
   // The person said to start the run over (runReopen.ts): with the rev it had when they were asked.
   const overwrite = !!(opts && opts.overwrite);
   if (overwrite) body.overwrite = true;
+  // Nothing asks again until this save has answered (runsReopening).
+  if (overwrite) runsReopening.add(String(runId));
   const epoch = runRefusals.get(String(runId)) || 0;
-  return queueRunSettingsSave(runId, async () => {
+  const send = async () => {
     // A save queued before a refusal carries the edits refused with it.
     if (checked && (runRefusals.get(String(runId)) || 0) !== epoch) return { ok: false, code: 'stale_record', error: 'This was changed elsewhere.' };
     const askedRev = overwrite && opts.baseRev !== null && opts.baseRev !== undefined ? opts.baseRev : null;
@@ -32494,6 +32568,10 @@ async function persistRunSettings(partial, opts) {
       await showStaleNotice('run', String(runId), String((rec && rec.name) || ''));
       return j;
     }
+    if (j && j.ok === false && RUN_EDIT_REFUSED.has(String(j.code || ''))) {
+      await showRunEditRefused(runId, j);
+      return j;
+    }
     if (j && j.ok) {
       applyRunCatalog(j);
       const rec = findRunRecord(runId);
@@ -32504,11 +32582,58 @@ async function persistRunSettings(partial, opts) {
       if (j.reopened) afterRunReopened(runId, j, { toast: asked });
     }
     return j;
-  });
+  };
+  return queueRunSettingsSave(
+    runId,
+    overwrite
+      ? async () => {
+          try {
+            return await send();
+          } finally {
+            runsReopening.delete(String(runId));
+          }
+        }
+      : send,
+  );
 }
 
 /** Saves of a run refused as stale, by run: a save queued before a refusal is dropped with it. */
 const runRefusals = new Map();
+
+/**
+ * A run's settings save refused for a reason of the run's own (w27-solve.js): it still stops, a
+ * file of its case is in use, it is being started over, it started or finished meanwhile.
+ */
+const RUN_EDIT_REFUSED = new Set(['still_stopping', 'run_running', 'run_finished', 'case_in_use', 'reopening']);
+
+/**
+ * The change was not saved (RUN_EDIT_REFUSED): the person's unsaved edits of the run go, the
+ * fields show what is saved again, and a toast says why (the server's words) and what to do.
+ */
+async function showRunEditRefused(runId, j) {
+  const id = String(runId);
+  releaseFocus();
+  // A save of this run queued before the refusal carries edits made on what was refused: it goes too.
+  runRefusals.set(id, (runRefusals.get(id) || 0) + 1);
+  delete runCatalog.pending_control[id];
+  delete runCatalog.pending_cores[id];
+  delete runCatalog.pending_settle[id];
+  if (String(runCatalog.transient_run_id || '') === id) {
+    runCatalog.transient_run_id = '';
+    runCatalog.transient = null;
+    runCatalog.transient_preview = null;
+    runCatalog.transient_preview_key = '';
+  }
+  try { await refreshRunCatalog(); } catch (_) {}
+  const rec = findRunRecord(id);
+  if (rec && runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id) === id) {
+    runCatalog.run = { ...runCatalog.run, ...rec, run_id: rec.id || id };
+  }
+  const message = 'Not saved. ' + String((j && j.error) || 'This run did not take the change.');
+  window.dispatchEvent(new CustomEvent('cfd:toast', { detail: { message, kind: 'error' } }));
+  try { publishRunState(); } catch (_) {}
+  try { syncSimControlPanel(); } catch (_) {}
+}
 
 function syncRunMeshSelect() {
   const sel = document.getElementById('sim-run-mesh');
@@ -34001,6 +34126,7 @@ function applyRunCatalog(j) {
   }
   if (j && Array.isArray(j.meshes)) runCatalog.meshes = j.meshes;
   adoptReopenedRun();
+  forgetDraftMonitors();
   const incomingLive = catalogRunningRun(j);
   const incomingLiveId = incomingLive && (incomingLive.run_id || incomingLive.id);
   const catalogRows = [].concat(
