@@ -41,7 +41,7 @@ import {
 } from './job-common.ts';
 import { jobIdOf, parseJobId, type JobKind } from './job-state.ts';
 import { rememberJob } from './turn-jobs.ts';
-import { overwriteWords, runEditState } from '../../../../src/workbench/runReopen.ts';
+import { overwritesResults, overwriteWords, runEditState } from '../../../../src/workbench/runReopen.ts';
 
 /**
  * The run_start calls whose card asked to start a stopped or failed run over (its results
@@ -169,7 +169,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
           const found = await runOf(projectId, simId, ref.id, rt);
           step = `Start ${quoted(found?.name || ref.id)}`;
           // Starting it deletes its results: that start asks on its own (a grant never covers it).
-          if (found && runEditState(found.run) === 'overwrites') {
+          if (found && overwritesResults(runEditState(found.run))) {
             steps.push(`${step} over, which asks first: its results are deleted`);
             continue;
           }
@@ -267,7 +267,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
       const found = await runOf(projectId, study.id, str(input.run_id), rt);
       if (!found) return plain;
       const { run, name } = found;
-      if (action === 'run_start' && runEditState(run) === 'overwrites') {
+      if (action === 'run_start' && overwritesResults(runEditState(run))) {
         // A stopped or failed run with results: started over, its results deleted first (the
         // person's Start asks the same).
         const w = overwriteWords(run, { action: 'start', studyTransient: study.transient, assistant: true });

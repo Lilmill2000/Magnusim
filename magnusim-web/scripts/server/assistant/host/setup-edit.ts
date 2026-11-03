@@ -21,7 +21,21 @@ import type { ToolCtx, ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { carrySettle } from '../../../../src/workbench/runSettle.ts';
 import { runCopyBody } from '../../../../src/workbench/runCopyBody.ts';
-import { finishedRefusal, overwriteWords, runEditState, solveChanged, unresolveTransient } from '../../../../src/workbench/runReopen.ts';
+import {
+  chooseRestartWords,
+  continueCardWords,
+  continueChangesOf,
+  continueDoneWords,
+  finishedRefusal,
+  notContinueWords,
+  onlyContinueKeys,
+  overwritesResults,
+  overwriteWords,
+  pendingContinue,
+  runEditState,
+  solveChanged,
+  unresolveTransient,
+} from '../../../../src/workbench/runReopen.ts';
 import { bcFamily, materialModel, meshFields, REFINEMENT_FIELDS, runFields } from './catalog.ts';
 import {
   badValues,
@@ -90,6 +104,16 @@ const rcId = () => `rc-${randomBytes(4).toString('hex')}`;
  * the model tries again. The card's title, by call.
  */
 const overwriteAsked = new WeakMap<Record<string, unknown>, string>();
+
+/**
+ * The calls whose card asked to change a stopped run for when it continues (A2: type
+ * "at_continue", or a change that joins the one already waiting): only those send
+ * `at_continue`. The card's title, by call.
+ */
+const continueAsked = new WeakMap<Record<string, unknown>, string>();
+
+/** A run update's `type` (A2): how a stopped run's change of Max Courant, the correctors or Max time step applies. */
+const RUN_TYPES = ['', 'at_continue', 'start_over'];
 
 /** A run update's values as the route's body (run.update changes), read without the registry: for the overwrite check. */
 function changesOf(values: unknown): Record<string, unknown> {
@@ -168,8 +192,25 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       const st = (await d.hostCall('run.status', { project_id: project, simulation_id: sim, run_id: idOf(input) }, o)) as Record<string, unknown>;
       const run = isRecord(st.run) && (!idOf(input) || st.run.id === idOf(input) || st.run.run_id === idOf(input)) ? st.run : null;
       const state = run ? runEditState(run) : 'draft';
-      const solve = action === 'copy_from' || (!!run && solveChanged(run, changesOf(input.values)).length > 0);
-      if (run && solve && state === 'overwrites') {
+      const changes = changesOf(input.values);
+      const changed = run && action === 'update' ? solveChanged(run, changes) : [];
+      const solve = action === 'copy_from' || changed.length > 0;
+      const type = str(input.type).trim();
+      // A stopped run's change of only Max Courant, the correctors or Max time step (A2): the
+      // Assistant says how it applies. "at_continue" (or joining the change already waiting) is a
+      // compute card: its results are kept; "start_over" the destructive one below; none is
+      // refused in run() with the choice to make (choose_restart), so nothing is asked.
+      if (run && action === 'update' && state === 'continues' && onlyContinueKeys(changed) && type !== 'start_over') {
+        if (type === 'at_continue' || (!type && pendingContinue(run))) {
+          const w = continueCardWords(run, continueChangesOf(run, changes, changed), run.health);
+          continueAsked.set(input, w.title);
+          return { risk: 'compute', note: w.copy, detail: [{ label: 'Run', value: cleanText(str(run.name), 60) }] };
+        }
+        return null;
+      }
+      // "at_continue" for anything else is refused in run() (not_continue_settings): nothing is asked.
+      if (action === 'update' && type === 'at_continue') return null;
+      if (run && solve && overwritesResults(state)) {
         const studies = (await d.hostCall('simulation.get', { project_id: project, simulation_id: sim }, o)) as Record<string, unknown>;
         const study = isRecord(studies.simulation) ? studies.simulation : {};
         const w = overwriteWords(run, { action: 'edit', studyTransient: /transient/i.test(str(study.time_dependency)), assistant: true });
@@ -236,7 +277,7 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     gateText: (input, a) => ({
       title:
         a?.risk === 'compute'
-          ? 'Allow the Assistant to add the original geometry?'
+          ? (continueAsked.get(input) ?? 'Allow the Assistant to add the original geometry?')
           : input.kind === 'geometry'
             ? 'Allow the Assistant to overwrite this geometry?'
             : (overwriteAsked.get(input) ?? `Allow the Assistant to change this ${str(input.kind).replace('_', ' ')}?`),
@@ -716,14 +757,20 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
     const id = str(run.id ?? run.run_id);
     const base = baseRev(kind === 'run' ? input : { rev: 0 }, run);
     const g = await ctxOf();
-    // Only a call whose card asked to start the run over sends overwrite (runReopen.ts).
+    // Only a call whose card asked to start the run over sends overwrite (runReopen.ts), and only
+    // one whose card asked to change it for when it continues sends at_continue (A2).
     const overwrite = kind === 'run' && overwriteAsked.has(input);
+    const atContinue = kind === 'run' && !overwrite && continueAsked.has(input);
     let reopened = false;
     // A queued Continue of a run started over leaves the queue (the route says so; the person's toast does too).
     let droppedContinue = false;
     const continueNote = () => (droppedContinue ? ' Its queued Continue was removed from the queue.' : '');
     const update = async (changes: Record<string, unknown>) => {
-      const r = (await d.hostCall('run.update', { ...q, run_id: id, changes, ...(overwrite ? { overwrite: true } : {}), geometry_rev: g.geometryRev ?? undefined, base_rev: base }, o)) as Record<string, unknown>;
+      const r = (await d.hostCall(
+        'run.update',
+        { ...q, run_id: id, changes, ...(overwrite ? { overwrite: true } : {}), ...(atContinue ? { at_continue: true } : {}), geometry_rev: g.geometryRev ?? undefined, base_rev: base },
+        o,
+      )) as Record<string, unknown>;
       if (r.ok === false) refuse('refused', cleanText(str(r.error) || 'The run was not saved.', 300));
       if (r.reopened === true) reopened = true;
       if (r.dropped_continue === true) droppedContinue = true;
@@ -816,10 +863,29 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
       const nested = nest(parsed.values);
       const no = endedRefusal(nested);
       if (no) return no;
+      // A stopped run's change of only Max Courant, the correctors or Max time step (A2): how it
+      // applies is the person's choice, which the Assistant states in `type` (asked in its card).
+      const type = str(input.type).trim();
+      if (!RUN_TYPES.includes(type)) {
+        return fail('invalid_input', `A run update's type is "at_continue", "start_over" or "", not "${cleanText(type, 40)}".`, 'type says how a stopped run\'s change of Max Courant, the correctors or Max time step applies.');
+      }
+      const changedKeys = solveChanged(run, nested);
+      if (!overwrite && !atContinue && runEditState(run) === 'continues' && onlyContinueKeys(changedKeys)) {
+        const w = chooseRestartWords(run, continueChangesOf(run, nested, changedKeys));
+        return fail('choose_restart', w.message, w.hint);
+      }
+      if (type === 'at_continue' && !atContinue) {
+        return fail(
+          'not_continue_settings',
+          notContinueWords(run, changedKeys),
+          `Leave type "" to start it over (the person is asked), or setup_edit {kind:'run', action:'add', other_id:'${cleanText(id, 80)}', values} makes a new run with its settings and these changes.`,
+        );
+      }
       if (isRecord(nested.transient)) nested.transient = { ...(isRecord(run.transient) ? run.transient : {}), ...nested.transient };
       if ('settle' in nested) nested.settle_time_dependency = str(run.time_dependency) || str(study.time_dependency);
       const saved = await update(nested);
       sync(reopened ? ['runs', 'tree'] : ['runs'], sim, { run: [id] }, revOf(saved) !== null ? { [id]: revOf(saved) as number } : {});
+      if (atContinue) return okDone({ done: continueDoneWords({ ...run, ...saved }), ids: { run: id }, rev: revOf(saved) });
       return okDone({
         done:
           (reopened

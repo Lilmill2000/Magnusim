@@ -362,6 +362,11 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
        * its convergence, without the residual targets and the settle stop.
        */
       past_convergence?: boolean;
+      /**
+       * What changed for its Continue and waits for it ("Continue applies: Max Courant 100 → 5
+       * (from t = 0.45 s)."), else ''. Absent in a state published before it existed.
+       */
+      applies?: string;
   }
   /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */
   export interface RunState {
@@ -382,11 +387,21 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       /**
        * What a change of its solve settings does (runReopen.ts): `draft` saves it; `free` (a
        * stopped or failed run with nothing saved) makes it a draft again; `overwrites` (one with
-       * results) asks first, then deletes them; `new_run` (a finished run, locked) asks to make a
-       * new run with its settings and the change, so its solve fields stay usable; `locked`
-       * (solving or stopping) refuses. Absent in a state published before it existed.
+       * results) asks first, then deletes them; `continues` (a stopped run with a saved time
+       * Continue goes on from) asks the same, but a change of only its Max Courant, outer and
+       * pressure correctors or Max time step may instead wait for Continue (its results kept);
+       * `new_run` (a finished run, locked) asks to make a new run with its settings and the
+       * change, so its solve fields stay usable; `locked` (solving or stopping) refuses. Absent in
+       * a state published before it existed.
        */
-      edit?: 'draft' | 'free' | 'overwrites' | 'new_run' | 'locked';
+      edit?: 'draft' | 'free' | 'overwrites' | 'continues' | 'new_run' | 'locked';
+      /**
+       * The settings that wait for its Continue (`continues`: the person or the Assistant chose
+       * "Use when continuing"), as run settings keys ("transient.max_co",
+       * "transient.n_outer_correctors", "transient.n_correctors", "transient.max_delta_t"): show
+       * "Takes effect when you Continue" under each. Absent or empty when nothing waits.
+       */
+      continue_pending?: string[];
       running: boolean;
       done: boolean;
       can_start: boolean;
@@ -629,9 +644,14 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/public' {
       /**
        * A typed number commits on blur and Enter only, at once (not 0.3 s after a keystroke): for a
        * form whose save may ask the person first, such as a run's settings when `run.edit` is
-       * `overwrites` or `new_run`.
+       * `overwrites`, `continues` or `new_run`.
        */
       commitOnBlur?: boolean;
+      /**
+       * A note under a field, by the field's key: a line below its row, such as "Takes effect when
+       * you Continue" under each of `run.continue_pending`'s keys.
+       */
+      fieldNotes?: Record<string, ReactNode>;
   }
   /** One job as the page follows it (useJob). */
   export interface PluginJobMirror {
@@ -765,7 +785,10 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/slots' {
    * stopping, or finished). A finished run's solve fields stay usable when `run.edit` is
    * `new_run`: the core asks, and a change goes to a new run with the same settings. On a
    * stopped or failed run the core asks before a change starts it over, and a save the person
-   * cancels resolves without saving: the fields show `run` again.
+   * cancels resolves without saving: the fields show `run` again. On a stopped run with a saved
+   * time (`run.edit` `continues`) a change of only its Max Courant, outer or pressure correctors
+   * or Max time step may instead wait for its Continue: the fields show the new values, and
+   * `run.continue_pending` lists the keys that wait (show "Takes effect when you Continue").
    */
   export interface RunSettingsProps {
       run: RunState;

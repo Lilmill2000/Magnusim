@@ -662,7 +662,7 @@ export const REOPEN_CLEARED = Object.freeze([
   'started_at', 'finished_at', 'solve_started_at',
   // its results and progress
   'has_results', 'last_saved_iteration', 'n_saved_times', 'saved_times', 'iteration', 'sim_time', 'n_steps', 'residuals',
-  'co_max', 'co_mean', 'delta_t', 'phases', 'warnings', 'log_excerpt', 'converged', 'continued', 'attempts', 'continue_from',
+  'co_max', 'co_mean', 'delta_t', 'phases', 'warnings', 'log_excerpt', 'converged', 'continued', 'attempts', 'continue_from', 'continue_changes',
   // what its last Start planned and ran with
   'runner_job_id', 'log_path', 'log_jsonl_path', 'wsl_case', 'wsl_case_path', 'command', 'argv', 'n_procs', 'solve_protocol',
   'prepare_run', 'mesh_source', 'bcs', 'wall_default', 'launch', 'path_kind', 'mode', 'analysis_key', 'built_from',

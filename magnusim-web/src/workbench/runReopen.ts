@@ -15,6 +15,12 @@
  * time dependency. Free settings (name, cores, the settle stop, monitors, saved views) are used
  * by Continue too, so changing them deletes nothing.
  *
+ * A stopped run with a saved time Continue can go on from (A2, Daniel 2026-11-03): a change of
+ * only its Max Courant, outer correctors, pressure correctors or Max time step (CONTINUE_KEYS)
+ * asks one question with three answers: Start over (as above), Use when continuing (its results
+ * stay; Continue goes on with the new values, and the run records the change in
+ * `continue_changes`) or Cancel. Every other solve setting asks the two-way question.
+ *
  * Pure, with no imports: the server imports this file as it is.
  */
 
@@ -27,6 +33,17 @@ export const SOLVE_KEYS: readonly string[] = Object.freeze(['endTime', 'writeInt
 /** The run settings Continue uses too: changing them never deletes results. */
 export const FREE_KEYS: readonly string[] = Object.freeze(['name', 'cores', 'settle', 'settle_time_dependency', 'result_controls', 'views', 'current_view']);
 
+/**
+ * The solve settings a stopped run can take for when it continues (A2): Continue writes them
+ * from where it goes on. A subset of the transient settings (SOLVE_KEYS' `transient`).
+ */
+export const CONTINUE_KEYS: readonly string[] = Object.freeze([
+  'transient.max_co',
+  'transient.n_outer_correctors',
+  'transient.n_correctors',
+  'transient.max_delta_t',
+]);
+
 /** Transient keys that are bookkeeping, never the person's settings. */
 const TRANSIENT_BOOKKEEPING = new Set(['source', 'estimate']);
 
@@ -35,10 +52,12 @@ const TRANSIENT_BOOKKEEPING = new Set(['source', 'estimate']);
  * - draft: saved on it;
  * - free: an ended run with nothing to overwrite: it becomes a draft quietly, then saved;
  * - overwrites: an ended run with results: asks first, then deletes them;
+ * - continues: a stopped run with a saved time Continue goes on from: as overwrites, but a
+ *   change of only CONTINUE_KEYS may instead wait for Continue (A2, three answers);
  * - new_run: a finished run: a new run with its settings and the change;
  * - locked: solving or stopping: refused until it has ended.
  */
-export type RunEditState = 'draft' | 'free' | 'overwrites' | 'new_run' | 'locked';
+export type RunEditState = 'draft' | 'free' | 'overwrites' | 'continues' | 'new_run' | 'locked';
 
 export interface RunLike {
   id?: unknown;
@@ -57,6 +76,8 @@ export interface RunLike {
   mesh_id?: unknown;
   time_dependency?: unknown;
   transient?: unknown;
+  continue_from?: unknown;
+  continue_changes?: unknown;
   [k: string]: unknown;
 }
 
@@ -83,17 +104,39 @@ export function hasOverwritable(rec: RunLike | null | undefined): boolean {
   return rec.has_results === true || num(rec.n_saved_times) > 0 || num(rec.last_saved_iteration) > 0 || num(rec.n_steps) > 0;
 }
 
+/**
+ * Where Continue goes on from (the rule of the Run panel's Continue box): the run's
+ * `continue_from` when the read has it (the latest saved time in its case folder; null: none),
+ * else its last saved iteration or time when above 0; null when there is none.
+ */
+export function savedTimeOf(rec: RunLike | null | undefined): number | null {
+  if (!rec) return null;
+  const raw = rec.continue_from !== undefined ? rec.continue_from : num(rec.last_saved_iteration) > 0 ? rec.last_saved_iteration : null;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** What a change of this run's solve settings does (RunEditState). */
 export function runEditState(rec: RunLike | null | undefined): RunEditState {
   const st = statusOf(rec);
   if (!st || st === 'draft' || st === 'idle') return 'draft';
   if (st === 'done' || st === 'finished') return 'new_run';
-  if (REOPENABLE.includes(st)) return hasOverwritable(rec) ? 'overwrites' : 'free';
+  if (REOPENABLE.includes(st)) {
+    // Continue is offered for a stopped run with a saved time only (never a failed one).
+    if (st === 'stopped' && savedTimeOf(rec) !== null) return 'continues';
+    return hasOverwritable(rec) ? 'overwrites' : 'free';
+  }
   return 'locked';
 }
 
+/** A change of a solve setting deletes the run's results (asked first): overwrites, or continues. */
+export function overwritesResults(state: RunEditState): boolean {
+  return state === 'overwrites' || state === 'continues';
+}
+
 /** The edit state as the Assistant's read_setup reports it. */
-export function runSettingsWord(state: RunEditState): 'editable' | 'overwrites' | 'new_run' | 'locked' {
+export function runSettingsWord(state: RunEditState): 'editable' | 'overwrites' | 'continues' | 'new_run' | 'locked' {
   return state === 'draft' || state === 'free' ? 'editable' : state;
 }
 
@@ -172,7 +215,7 @@ function simTime(v: unknown): string {
   if (n === 0) return '0 s';
   const a = Math.abs(n);
   const s =
-    a >= 100 ? n.toFixed(0) : a >= 10 ? n.toFixed(1) : a >= 1 ? String(Number(n.toFixed(2))) : a >= 0.01 ? String(Number(n.toFixed(3))) : a >= 1e-3 ? String(Number(n.toFixed(4))) : n.toExponential(1);
+    a >= 100 ? n.toFixed(0) : a >= 10 ? n.toFixed(1) : a >= 1 ? String(Number(n.toFixed(2))) : a >= 1e-3 ? String(Number(n.toFixed(4))) : n.toExponential(1);
   return s + ' s';
 }
 
@@ -307,4 +350,299 @@ export function noSavedTimeText(status: unknown): string {
   return String(status || '') === 'stopped' || String(status || '') === 'failed'
     ? "This run can't continue: its case folder has no saved result. Start solves it again from the beginning."
     : "This run can't continue: its case folder has no saved result. Add a run to solve again.";
+}
+
+// ---------------------------------------------------------------- A2: a change for when it continues
+
+/** Every changed key (solveChanged's) is one Continue can take, and there is at least one. */
+export function onlyContinueKeys(changed: readonly string[]): boolean {
+  return changed.length > 0 && changed.every((k) => CONTINUE_KEYS.includes(k));
+}
+
+/** One change a run records for its Continue: a key ("transient.max_co"), its value before and after. */
+export interface ContinueChange {
+  key: string;
+  from: unknown;
+  to: unknown;
+}
+
+/**
+ * A run's `continue_changes` entry: what changed for its Continue, from which saved time, when
+ * and by whom. `applied_at` is null while it waits for Continue (at most one entry waits, of kind
+ * `settings`), then the time the Continue that took it started.
+ */
+export interface ContinueEntry {
+  from_t: number | null;
+  from_iteration: number | null;
+  at: string;
+  by: 'person' | 'assistant' | 'both';
+  kind: 'settings' | 'numerics';
+  changes: ContinueChange[];
+  applied_at: string | null;
+}
+
+/** At most this many entries are kept (the oldest applied one goes first). */
+export const CONTINUE_CHANGES_MAX = 20;
+/** At most this many changes in one entry. */
+const ENTRY_CHANGES_MAX = 8;
+
+function entriesOf(raw: unknown): ContinueEntry[] {
+  return (Array.isArray(raw) ? raw : []).filter((e): e is ContinueEntry => isObj(e) && Array.isArray((e as Record<string, unknown>).changes));
+}
+
+/** The entry still waiting for Continue, or null. */
+export function pendingContinue(rec: RunLike | null | undefined): ContinueEntry | null {
+  return entriesOf(rec && rec.continue_changes).find((e) => !e.applied_at && (e.kind || 'settings') === 'settings') || null;
+}
+
+/** The keys waiting for Continue (the Run panel's "Takes effect when you Continue" marks). */
+export function continuePendingKeys(rec: RunLike | null | undefined): string[] {
+  const e = pendingContinue(rec);
+  return e ? e.changes.map((c) => String(c.key)) : [];
+}
+
+/** A run's value of a key ("transient.max_co", "endTime"), as stored on it. */
+export function transientValue(rec: RunLike | null | undefined, key: string): unknown {
+  const t = rec && isObj(rec.transient) ? rec.transient : {};
+  return key.startsWith('transient.') ? t[key.slice('transient.'.length)] : rec ? rec[key] : undefined;
+}
+
+/**
+ * The changes a body makes of a run's CONTINUE_KEYS (each key of `changed` that is one):
+ * from the run's stored value, to the body's.
+ */
+export function continueChangesOf(rec: RunLike | null | undefined, body: Record<string, unknown> | null | undefined, changed: readonly string[]): ContinueChange[] {
+  const bodyT = body && isObj(body.transient) ? body.transient : {};
+  return changed
+    .filter((k) => CONTINUE_KEYS.includes(k))
+    .map((k) => ({ key: k, from: transientValue(rec, k) ?? null, to: bodyT[k.slice('transient.'.length)] ?? null }));
+}
+
+/**
+ * The merge rule (A2), the same for the person and the Assistant, applied by the server to
+ * every `at_continue` save: the waiting entry takes the changes (a key it has keeps its `from`
+ * and takes the new `to`; a new key comes with `from` = the value Continue would otherwise
+ * use); a key whose `to` equals its `from` leaves it, and an entry left empty goes. Its `at` is
+ * now; its `by` becomes 'both' when the other side changes an entry it did not start. With no
+ * entry waiting, a new one starts. At most CONTINUE_CHANGES_MAX entries are kept: the oldest
+ * applied ones go first.
+ */
+export function mergeContinueChanges(
+  raw: unknown,
+  changes: readonly ContinueChange[],
+  opts: { by: 'person' | 'assistant'; at: string; from_t: number | null; from_iteration: number | null },
+): ContinueEntry[] {
+  const list = entriesOf(raw).map((e) => ({ ...e, changes: e.changes.map((c) => ({ ...c })) }));
+  let entry = list.find((e) => !e.applied_at && (e.kind || 'settings') === 'settings') || null;
+  if (!entry) {
+    entry = { from_t: opts.from_t, from_iteration: opts.from_iteration, at: opts.at, by: opts.by, kind: 'settings', changes: [], applied_at: null };
+    list.push(entry);
+  } else if (entry.by !== opts.by) {
+    entry.by = 'both';
+  }
+  for (const c of changes) {
+    const had = entry.changes.find((x) => x.key === c.key);
+    if (had) had.to = c.to;
+    else entry.changes.push({ key: c.key, from: c.from, to: c.to });
+  }
+  entry.changes = entry.changes.filter((c) => !sameValue(c.from, c.to)).slice(0, ENTRY_CHANGES_MAX);
+  entry.at = opts.at;
+  let out = entry.changes.length ? list : list.filter((e) => e !== entry);
+  while (out.length > CONTINUE_CHANGES_MAX) {
+    const i = out.findIndex((e) => !!e.applied_at);
+    if (i < 0) break;
+    out = [...out.slice(0, i), ...out.slice(i + 1)];
+  }
+  return out;
+}
+
+/** The entries as a Continue that starts now leaves them: the waiting one applied (`at`). Null when there are none. */
+export function applyContinueChanges(raw: unknown, at: string): ContinueEntry[] | null {
+  const list = entriesOf(raw);
+  if (!list.length) return null;
+  return list.map((e) => (e.applied_at ? e : { ...e, applied_at: at }));
+}
+
+/** The words of a key: "Max Courant", "outer correctors", "pressure correctors", "Max time step". */
+const CONTINUE_LABELS: Record<string, string> = {
+  'transient.max_co': 'Max Courant',
+  'transient.n_outer_correctors': 'outer correctors',
+  'transient.n_correctors': 'pressure correctors',
+  'transient.max_delta_t': 'Max time step',
+};
+
+/** The words of a solve setting that cannot wait for Continue (not_continue_settings). */
+const OTHER_LABELS: Record<string, string> = {
+  endTime: 'Iterations',
+  writeInterval: 'Write interval',
+  mesh_id: 'The mesh',
+  time_dependency: 'Time dependency',
+  'transient.end_time': 'Simulation time',
+  'transient.write_count': 'Result frames',
+  'transient.average_from': 'Average from',
+  'transient.time_step_mode': 'Time step',
+  'transient.delta_t': 'Initial Δt',
+  'transient.time_scheme': 'Time scheme',
+  'transient.n_non_orth_correctors': 'Non-orthogonal correctors',
+};
+
+function labelOf(key: string): string {
+  return CONTINUE_LABELS[key] || OTHER_LABELS[key] || key.replace(/^transient\./, '').replace(/_/g, ' ');
+}
+
+const capital = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/** A value as the words show it: a number with at most 6 significant digits; Max time step in s; blank "auto". */
+function valueText(key: string, v: unknown): string {
+  if (v === null || v === undefined || v === '') return 'auto';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  const plain = String(Number(n.toPrecision(6)));
+  return key === 'transient.max_delta_t' ? plain + ' s' : plain;
+}
+
+/** "Max Courant 100 → 5". */
+export function continueChangeText(c: ContinueChange): string {
+  return labelOf(c.key) + ' ' + valueText(c.key, c.from) + ' → ' + valueText(c.key, c.to);
+}
+
+/** "A", "A and B", "A, B and C". */
+function andList(items: string[]): string {
+  if (items.length <= 1) return items[0] || '';
+  return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
+}
+
+/** Where a run goes on from: "t = 0.45 s", "iteration 450". */
+function fromText(rec: RunLike | null | undefined, at: number | null): string {
+  const n = at === null ? 0 : at;
+  return solvedTransient(rec) ? 't = ' + simTime(n) : 'iteration ' + String(Number(n.toPrecision(10)));
+}
+
+/** "Max Courant 100 → 5, outer correctors 1 → 3 (from t = 0.45 s)": an entry's changes. */
+export function continueEntryText(rec: RunLike | null | undefined, e: ContinueEntry): string {
+  const at = e.from_t !== null && e.from_t !== undefined ? e.from_t : e.from_iteration;
+  return e.changes.map(continueChangeText).join(', ') + ' (from ' + fromText(rec, at === null || at === undefined ? savedTimeOf(rec) : Number(at)) + ')';
+}
+
+/** The Continue box's line: "Continue applies: Max Courant 100 → 5 (from t = 0.45 s)." ('' when nothing waits). */
+export function continueAppliesLine(rec: RunLike | null | undefined): string {
+  const e = pendingContinue(rec);
+  return e && e.changes.length ? 'Continue applies: ' + continueEntryText(rec, e) + '.' : '';
+}
+
+/** The toast once a change waits for Continue: 'Max Courant 5 takes effect when "Run 1" continues.' */
+export function takesEffectToast(rec: RunLike, changes: readonly ContinueChange[]): string {
+  const said = changes.map((c) => labelOf(c.key) + ' ' + valueText(c.key, c.to));
+  return capital(andList(said)) + (changes.length > 1 ? ' take' : ' takes') + ' effect when ' + quoted(rec) + ' continues.';
+}
+
+/** A health record's sentence for a run whose saved results are from after it became unhealthy (or ''). */
+function fromZeroSentence(health: unknown): string {
+  if (!isObj(health) || health.restart !== 'from_zero') return '';
+  const first = isObj(health.first_unhealthy) ? health.first_unhealthy : null;
+  const t = first && first.t !== null && first.t !== undefined && Number.isFinite(Number(first.t)) ? Number(first.t) : null;
+  return t === null
+    ? ' Its saved results are from after it became unhealthy; continuing from them carries that on.'
+    : ' Its saved results are from after it became unhealthy (t = ' + simTime(t) + '); continuing from them carries that on.';
+}
+
+/** "its results (12 saved, up to t = 0.45 s)". */
+function resultsPhrase(rec: RunLike): string {
+  const w = whatGoes(rec);
+  return w.charAt(0).toLowerCase() + w.slice(1);
+}
+
+export interface ChoiceWords {
+  title: string;
+  copy: string;
+  over: { label: string; line: string };
+  cont: { label: string; line: string };
+  cancel: string;
+}
+
+/**
+ * The question when a stopped run's change is only of CONTINUE_KEYS (A2): Start over, Use when
+ * continuing, or Cancel (the safe answer). `health`: the run's health record, when it has one.
+ */
+export function continueChoiceWords(rec: RunLike, changes: readonly ContinueChange[], health?: unknown): ChoiceWords {
+  const name = quoted(rec);
+  const from = fromText(rec, savedTimeOf(rec));
+  const many = changes.length > 1;
+  return {
+    title: 'Change ' + name + '?',
+    copy: capital(changes.map(continueChangeText).join(', ')) + '. ' + name + ' has results up to ' + from + '.',
+    over: {
+      label: 'Start over',
+      line: 'Deletes ' + resultsPhrase(rec) + ' now. Start solves it again from ' + (solvedTransient(rec) ? 't = 0' : 'the beginning') + '.',
+    },
+    cont: {
+      label: 'Use when continuing',
+      line:
+        'Keeps its results. Continue goes on from ' + from + ' with the new ' + (many ? 'values' : 'value') + ', and the run records the ' + (many ? 'changes' : 'change') + '.' +
+        fromZeroSentence(health),
+    },
+    cancel: 'Cancel',
+  };
+}
+
+/** The Assistant's refusal when it did not say how a change of a stopped run's CONTINUE_KEYS applies (choose_restart). */
+export function chooseRestartWords(rec: RunLike, changes: readonly ContinueChange[]): { message: string; hint: string } {
+  return {
+    message:
+      quoted(rec) + ' has results up to ' + fromText(rec, savedTimeOf(rec)) + '. Say how ' + andList(changes.map(continueChangeText)) + (changes.length > 1 ? ' apply.' : ' applies.'),
+    hint:
+      'Pass type "at_continue" to keep its results and apply it when it continues, or type "start_over" to delete its results and solve again from ' +
+      (solvedTransient(rec) ? 't = 0' : 'the beginning') +
+      ' (the person is asked). Ask the person which.',
+  };
+}
+
+/**
+ * The Assistant's card before a change waits for Continue (`at_continue`): a new change, one
+ * that joins the change already waiting (the merged list), or one that empties it.
+ */
+export function continueCardWords(rec: RunLike, changes: readonly ContinueChange[], health?: unknown): { title: string; copy: string } {
+  const name = quoted(rec);
+  const title = 'Allow the Assistant to change ' + name + ' for when it continues?';
+  const waiting = pendingContinue(rec);
+  if (waiting) {
+    const merged = mergeContinueChanges(rec.continue_changes, changes, { by: 'assistant', at: '', from_t: null, from_iteration: null });
+    const after = merged.find((e) => !e.applied_at && e.kind === 'settings') || null;
+    if (!after) {
+      const back = changes.map((c) => {
+        const had = waiting.changes.find((x) => x.key === c.key);
+        return labelOf(c.key) + ' back to ' + valueText(c.key, had ? had.from : c.to);
+      });
+      return { title, copy: 'Sets ' + andList(back) + ': nothing is left waiting for ' + name + ' to continue.' };
+    }
+    return {
+      title,
+      copy: 'Joins the change already waiting for ' + name + ' to continue. Continue then applies: ' + continueEntryText(rec, after) + '. Its results are kept.' + fromZeroSentence(health),
+    };
+  }
+  return {
+    title,
+    copy:
+      capital(andList(changes.map(continueChangeText))) + (changes.length > 1 ? ' take' : ' takes') + ' effect when ' + name + ' continues from ' + fromText(rec, savedTimeOf(rec)) +
+      '. Its results are kept.' + fromZeroSentence(health),
+  };
+}
+
+/** The Assistant's answer once a change waits for Continue (or nothing is left waiting). */
+export function continueDoneWords(rec: RunLike): string {
+  const line = continueAppliesLine(rec);
+  return line ? 'Saved for when ' + quoted(rec) + ' continues. ' + line + ' Its results are kept.' : 'Nothing is left waiting for ' + quoted(rec) + ' to continue.';
+}
+
+/** Why a change cannot wait for Continue (not_continue_settings). `changed`: the keys it changes. */
+export function notContinueWords(rec: RunLike, changed: readonly string[]): string {
+  const other = changed.find((k) => !CONTINUE_KEYS.includes(k));
+  if (other) {
+    return 'Only Max Courant, the outer and pressure correctors and Max time step can wait for Continue. ' + labelOf(other) + ' needs Start over or a new run.';
+  }
+  const st = statusOf(rec);
+  if (st === 'failed') return 'A failed run does not continue (Continue is offered only for stopped and finished runs): a change of its settings starts it over.';
+  if (st === 'done' || st === 'finished') return finishedRefusal(rec);
+  if (st === 'stopped') return quoted(rec) + ' has no saved time to continue from: a change of its settings starts it over.';
+  return 'Only a stopped run with a saved time can take a change for when it continues.';
 }

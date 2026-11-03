@@ -267,6 +267,9 @@ export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
     simulation_id: str(a.simulation_id),
     run_id: str(a.run_id),
     overwrite: a.overwrite === true ? true : undefined,
+    // A stopped run's change for when it continues (A2): the Assistant asked for it, and the run records it as its.
+    at_continue: a.at_continue === true ? true : undefined,
+    by: a.at_continue === true ? 'assistant' : undefined,
     geometry_rev: opt(a.geometry_rev as number),
     base_rev: opt(a.base_rev as number),
   })),

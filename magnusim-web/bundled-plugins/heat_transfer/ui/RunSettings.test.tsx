@@ -129,6 +129,46 @@ describe('Heat Transfer run settings in the run panel', () => {
     );
   });
 
+  // A2: a stopped run's Max Courant, correctors and Max Δt may wait for its Continue.
+  it('a stopped transient run: each setting that waits for Continue says so under its row', async () => {
+    useProjectStore.setState({
+      registry: {
+        analysis: [
+          {
+            key: 'heat_transfer_transient',
+            label: 'Heat Transfer',
+            time_dependency: 'transient',
+            ui: UI,
+            control_schema: {
+              type: 'object',
+              properties: {
+                end_time: { type: 'number', title: 'Simulation time', default: 10 },
+                max_co: { type: 'number', title: 'Max Courant number', default: 0.8 },
+                n_outer_correctors: { type: 'integer', title: 'Outer correctors', default: 1 },
+              },
+            },
+            run_defaults: { end_time: 10, max_co: 0.8, n_outer_correctors: 1 },
+          },
+        ],
+      },
+    } as never);
+    window.__CFD_RUN_STATE__ = runState({
+      status: 'stopped',
+      edit: 'continues',
+      transient: true,
+      analysis_key: 'heat_transfer_transient',
+      transient_settings: { end_time: 10, max_co: 2, n_outer_correctors: 1 },
+      continue_pending: ['transient.max_co'],
+    } as Partial<RunState>);
+    const { container } = render(<RunControl panelId="panel-run" scope="p:proj/s:sim_1/r:r1" />);
+    expect(await screen.findByText('Max Courant number')).toBeInTheDocument();
+    const marks = [...container.querySelectorAll('[data-run-takes-effect]')];
+    expect(marks.map((m) => [m.getAttribute('data-run-takes-effect'), m.textContent])).toEqual([['max_co', 'Takes effect when you Continue']]);
+    // Under its own row.
+    const note = container.querySelector('[data-schema-note="max_co"]');
+    expect(note?.previousElementSibling?.getAttribute('data-schema-key')).toBe('max_co');
+  });
+
   it('an imperial project types the thermocouple tolerance in °F and saves it in K', async () => {
     window.__CFD_PROJECT_UNITS__ = () => 'Imperial';
     window.__CFD_RUN_STATE__ = runState({ settle: { id: 'mon-tc', quantity: 'T_pt', tolerance: 0.05, window: 20 } } as Partial<RunState>);

@@ -200,18 +200,27 @@ import { carrySettle } from './runSettle';
 import { answerStillCurrent, resultsDrawAllowed as resultsDrawRule } from './resultsDisplay';
 import { runCopyBody } from './runCopyBody';
 import {
+  continueAppliesLine,
+  continueChangesOf,
+  continueChoiceWords,
+  continuePendingKeys,
   endedRunReason,
   keepAutoBlank,
   newRunToast,
   newRunWords,
   noSavedTimeText,
+  onlyContinueKeys,
+  overwritesResults,
   overwriteWords,
   overwrittenToast,
+  pendingContinue,
   runEditState,
   solveChanged,
   STOPPING_REASON,
+  takesEffectToast,
   unresolveTransient,
 } from './runReopen';
+import { askRunChange } from './runChangeChoice';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
@@ -30675,7 +30684,7 @@ async function onSimStartClick() {
     try { await saving; } catch (_) {}
     rec = findRunRecord(runId) || rec;
   }
-  if (rec && runEditState(rec) === 'overwrites' && !runIsReopeningHere(rec)) {
+  if (rec && overwritesResults(runEditStateOf(rec)) && !runIsReopeningHere(rec)) {
     const baseRev = revOf(rec);
     const w = overwriteWords(rec, { action: 'start', studyTransient: simIsTransientClient() });
     if (!(await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, safe: true }))) return;
@@ -31313,7 +31322,7 @@ async function addProbeAtPoint(point) {
   // A monitor is a free setting (runReopen.ts): the selected run takes it unless it solves or
   // finished; else the newest run that has not started.
   const isDraft = (r) => r && runEditState(r) === 'draft';
-  const takesProbe = (r) => r && !runIsLocked(r) && ['draft', 'free', 'overwrites'].includes(runEditState(r));
+  const takesProbe = (r) => r && !runIsLocked(r) && ['draft', 'free', 'overwrites', 'continues'].includes(runEditState(r));
   const rec = takesProbe(selected) ? selected : runs.slice().reverse().find(isDraft) || null;
   if (!rec) {
     toast('Probes are added to a run that has not started. Create a run first.', 'error');
@@ -32051,7 +32060,7 @@ async function persistTransientSettings(next) {
       runCatalog.transient_run_id = String(made.id || made.run_id);
       runCatalog.transient = mt;
       await persistRunSettings({ run_id: made.id || made.run_id, transient: mt });
-    });
+    }, { transient: t });
     if (!save.go) {
       if (!save.moved) {
         runCatalog.transient = was;
@@ -32062,10 +32071,25 @@ async function persistTransientSettings(next) {
     }
   }
   try {
-    await persistRunSettings({ run_id: rec.id, transient: t }, save.overwrite ? { overwrite: true, baseRev: save.base_rev } : undefined);
+    const j = await persistRunSettings({ run_id: rec.id, transient: t }, runSaveOpts(save));
+    saidTakesEffect(rec, save, j);
   } catch (e) {
     console.warn('[CFD W30] transient settings save', e);
   }
+}
+
+/** persistRunSettings' options for an answer of askRunSolveEdit. */
+function runSaveOpts(save) {
+  if (save && save.overwrite) return { overwrite: true, baseRev: save.base_rev };
+  if (save && save.at_continue) return { at_continue: true };
+  return undefined;
+}
+
+/** A change the person said to use when the run continues was saved: the toast says so (A2). */
+function saidTakesEffect(rec, save, j) {
+  if (!rec || !save || !save.at_continue || !Array.isArray(save.changes) || !save.changes.length || !j || j.ok === false) return;
+  const message = takesEffectToast(findRunRecord(rec.id || rec.run_id) || rec, save.changes);
+  window.dispatchEvent(new CustomEvent('cfd:toast', { detail: { message, kind: 'success' } }));
 }
 
 /**
@@ -32077,9 +32101,24 @@ function runSolveEditable(rec) {
   return !!rec && (!runIsLocked(rec) || runEditState(rec) === 'new_run');
 }
 
-/** The run the change is compared against: its transient block as its panel shows it. */
+/**
+ * The run the change is compared against: its transient block as its panel shows it, and where
+ * Continue goes on from as the panel's doc of it says (its case folder's latest saved time).
+ */
 function runEditView(rec) {
-  return rec ? { ...rec, transient: transientSettingsFor(rec) } : rec;
+  if (!rec) return rec;
+  const doc = runCatalog.run;
+  const same = !!doc && String(doc.run_id || doc.id || '') === String(rec.id || rec.run_id || '');
+  return {
+    ...rec,
+    transient: transientSettingsFor(rec),
+    ...(same && doc.continue_from !== undefined ? { continue_from: doc.continue_from } : {}),
+  };
+}
+
+/** What a change of this run's solve settings does (runReopen.ts), as its panel knows it. */
+function runEditStateOf(rec) {
+  return rec ? runEditState(runEditView(rec)) : 'draft';
 }
 
 /**
@@ -32097,9 +32136,9 @@ function runIsReopeningHere(rec) {
 
 /** The change `body` of a run's solve settings asks first (runReopen.ts): it ended, with results or finished. */
 function runSolveEditAsks(rec, body) {
-  const state = runEditState(rec);
-  if (state === 'overwrites' && runIsReopeningHere(rec)) return false;
-  return (state === 'overwrites' || state === 'new_run') && solveChanged(runEditView(rec), body).length > 0;
+  const state = runEditStateOf(rec);
+  if (overwritesResults(state) && runIsReopeningHere(rec)) return false;
+  return (overwritesResults(state) || state === 'new_run') && solveChanged(runEditView(rec), body).length > 0;
 }
 
 /**
@@ -32109,13 +32148,36 @@ function runSolveEditAsks(rec, body) {
  * Make new run makes the next run with its settings and `applyToNew(newRun)` puts the change
  * there. Resolves {go: true, overwrite, base_rev} to save on this run, else {go: false}
  * (moved: the change went to a new run).
+ *
+ * A stopped run with a saved time whose change `body` is only of its Max Courant, outer and
+ * pressure correctors or Max time step (A2): one question with three answers (runChangeChoice.ts):
+ * Start over (as Overwrite), Use when continuing ({go: true, at_continue, changes}: its results
+ * stay) or Cancel. A change while one already waits for Continue joins it and asks nothing.
+ * Without `body` (Copy settings from) it asks the two-way question.
  */
-async function askRunSolveEdit(rec, applyToNew) {
-  const state = runEditState(rec);
+async function askRunSolveEdit(rec, applyToNew, body) {
+  const state = runEditStateOf(rec);
   // A field commits on Enter: that key press must end before the question is up, or it
   // answers it (a safe question takes Enter as Cancel).
-  if (state === 'overwrites' || state === 'new_run') await new Promise((r) => setTimeout(r, 0));
-  if (state === 'overwrites') {
+  if (overwritesResults(state) || state === 'new_run') await new Promise((r) => setTimeout(r, 0));
+  if (state === 'continues' && body) {
+    const view = runEditView(rec);
+    const changed = solveChanged(view, body);
+    if (onlyContinueKeys(changed)) {
+      if (pendingContinue(rec)) return { go: true, at_continue: true };
+      const changes = continueChangesOf(view, body, changed);
+      const baseRev = revOf(rec);
+      const answer = await askRunChange(continueChoiceWords(view, changes, rec.health));
+      if (answer === 'over') {
+        // From the answer on, until its save has answered (persistRunSettings), nothing asks again.
+        runsReopening.add(String(rec.id || rec.run_id));
+        return { go: true, overwrite: true, base_rev: baseRev };
+      }
+      if (answer === 'continue') return { go: true, at_continue: true, changes };
+      return { go: false };
+    }
+  }
+  if (overwritesResults(state)) {
     const baseRev = revOf(rec);
     const w = overwriteWords(rec, { action: 'edit', studyTransient: simIsTransientClient() });
     const ok = await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, safe: true });
@@ -32527,6 +32589,9 @@ async function persistRunSettings(partial, opts) {
   // The person said to start the run over (runReopen.ts): with the rev it had when they were asked.
   const overwrite = !!(opts && opts.overwrite);
   if (overwrite) body.overwrite = true;
+  // The person said to use the change when the run continues (A2): its results stay.
+  const atContinue = !overwrite && !!(opts && opts.at_continue);
+  if (atContinue) body.at_continue = true;
   // Nothing asks again until this save has answered (runsReopening).
   if (overwrite) runsReopening.add(String(runId));
   const epoch = runRefusals.get(String(runId)) || 0;
@@ -32553,6 +32618,25 @@ async function persistRunSettings(partial, opts) {
         try { syncSimControlPanel(); } catch (_) {}
         return j;
       }
+    }
+    if (posted.response && posted.response.status === 409 && j && j.code === 'choose_restart' && !overwrite && !atContinue) {
+      // A change of a stopped run's Max Courant, correctors or Max time step this page did not
+      // ask about (it learned of its saved time from the server): asked now, sent once more.
+      const rec = findRunRecord(runId);
+      const view = rec ? runEditView(rec) : null;
+      const changes = view ? continueChangesOf(view, body, Array.isArray(j.changed) ? j.changed : []) : [];
+      const answer = view && changes.length ? await askRunChange(continueChoiceWords(view, changes, rec.health)) : null;
+      if (!answer) {
+        dropUnsavedRunEdits(runId);
+        try { await refreshRunCatalog(); } catch (_) {}
+        try { publishRunState(); } catch (_) {}
+        try { syncSimControlPanel(); } catch (_) {}
+        return j;
+      }
+      if (answer === 'over') asked = true;
+      posted = await postRunUpdate({ ...body, ...(answer === 'over' ? { overwrite: true } : { at_continue: true }), ...(rev === null ? {} : { base_rev: rev }) });
+      j = posted.json;
+      if (answer === 'continue') saidTakesEffect(rec, { at_continue: true, changes }, j);
     }
     if (posted.response && posted.response.status === 409 && isStaleRecord(j)) {
       releaseFocus();
@@ -32604,7 +32688,21 @@ const runRefusals = new Map();
  * A run's settings save refused for a reason of the run's own (w27-solve.js): it still stops, a
  * file of its case is in use, it is being started over, it started or finished meanwhile.
  */
-const RUN_EDIT_REFUSED = new Set(['still_stopping', 'run_running', 'run_finished', 'case_in_use', 'reopening']);
+const RUN_EDIT_REFUSED = new Set(['still_stopping', 'run_running', 'run_finished', 'case_in_use', 'reopening', 'not_continue_settings']);
+
+/** The person's unsaved edits of a run go: its fields show what is saved again (after a refresh). */
+function dropUnsavedRunEdits(runId) {
+  const id = String(runId);
+  delete runCatalog.pending_control[id];
+  delete runCatalog.pending_cores[id];
+  delete runCatalog.pending_settle[id];
+  if (String(runCatalog.transient_run_id || '') === id) {
+    runCatalog.transient_run_id = '';
+    runCatalog.transient = null;
+    runCatalog.transient_preview = null;
+    runCatalog.transient_preview_key = '';
+  }
+}
 
 /**
  * The change was not saved (RUN_EDIT_REFUSED): the person's unsaved edits of the run go, the
@@ -32615,15 +32713,7 @@ async function showRunEditRefused(runId, j) {
   releaseFocus();
   // A save of this run queued before the refusal carries edits made on what was refused: it goes too.
   runRefusals.set(id, (runRefusals.get(id) || 0) + 1);
-  delete runCatalog.pending_control[id];
-  delete runCatalog.pending_cores[id];
-  delete runCatalog.pending_settle[id];
-  if (String(runCatalog.transient_run_id || '') === id) {
-    runCatalog.transient_run_id = '';
-    runCatalog.transient = null;
-    runCatalog.transient_preview = null;
-    runCatalog.transient_preview_key = '';
-  }
+  dropUnsavedRunEdits(id);
   try { await refreshRunCatalog(); } catch (_) {}
   const rec = findRunRecord(id);
   if (rec && runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id) === id) {
@@ -32968,7 +33058,7 @@ async function copyRunSettingsFrom(srcId, opts) {
   });
   // A stopped or failed run with results is started over by the copy: asked first (runReopen.ts).
   let save = { go: true };
-  if (!(opts && opts.insideCreate) && runEditState(dest) === 'overwrites' && runSolveEditAsks(dest, body)) {
+  if (!(opts && opts.insideCreate) && overwritesResults(runEditStateOf(dest)) && runSolveEditAsks(dest, body)) {
     save = await askRunSolveEdit(dest);
     if (!save.go) return;
   }
@@ -33501,12 +33591,12 @@ function computeRunState() {
   const canStart = !!(rec && (rec.id || rec.run_id) && !running && !done && meshReady && !computeBusy && setupIssue === null);
 
   // A finished run's queued Continue (F6) shows "Remove from queue" too.
-  const editState = rec ? runEditState(rec) : 'draft';
+  const editState = runEditStateOf(rec);
   const start = {
     visible: !!rec && ((!done && !running) || queuedHere),
     enabled: false,
     label: 'Start',
-    title: editState === 'overwrites' ? 'Solve this run again from the beginning (asks first: its results are deleted)' : 'Start the solver on this run',
+    title: overwritesResults(editState) ? 'Solve this run again from the beginning (asks first: its results are deleted)' : 'Start the solver on this run',
   };
   if (queuedHere) {
     Object.assign(start, { enabled: true, label: 'Remove from queue', title: 'Remove this run from the queue' });
@@ -33690,6 +33780,8 @@ function computeRunState() {
     // What a change of its solve settings does (runReopen.ts): a finished run's fields stay
     // usable (a change makes a new run) while it is locked.
     edit: editState,
+    // A2: the settings waiting for its Continue ("Takes effect when you Continue" under each).
+    continue_pending: continuePendingKeys(rec),
     running,
     done,
     can_start: canStart,
@@ -33856,7 +33948,7 @@ function runConvergedBadge(rec) {
  * span it last ran) and why it cannot continue now.
  */
 function continueStateFor(rec, run, ctx) {
-  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false };
+  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false, applies: '' };
   const status = String((run && run.status) || (rec && rec.status) || '');
   // A run that converged (F5) is 'done' with its `converged` set: it continues too.
   if (!rec || !run || ctx.running || !['done', 'stopped'].includes(status)) return off;
@@ -33892,6 +33984,8 @@ function continueStateFor(rec, run, ctx) {
     write_interval: every,
     reason,
     past_convergence: past,
+    // A2: what changed for it that Continue applies ('' when nothing waits).
+    applies: continueAppliesLine(pendingContinue(rec) ? rec : run),
   };
 }
 
@@ -33983,8 +34077,11 @@ async function persistSimControl(opts) {
     try {
       let save = { go: true };
       if (asking) {
-        save = await askRunSolveEdit(rec, (made) =>
-          persistRunSettings({ run_id: made.id || made.run_id, endTime, writeInterval, ...(body.transient ? { transient: keepAutoBlank(rec.transient, body.transient) } : {}) }),
+        save = await askRunSolveEdit(
+          rec,
+          (made) =>
+            persistRunSettings({ run_id: made.id || made.run_id, endTime, writeInterval, ...(body.transient ? { transient: keepAutoBlank(rec.transient, body.transient) } : {}) }),
+          body,
         );
       }
       if (!save.go) {
@@ -33997,7 +34094,8 @@ async function persistSimControl(opts) {
           runCatalog.writeInterval = before.writeInterval;
         }
       } else {
-        await persistRunSettings(body, save.overwrite ? { overwrite: true, baseRev: save.base_rev } : undefined);
+        const j = await persistRunSettings(body, runSaveOpts(save));
+        saidTakesEffect(rec, save, j);
       }
     } catch (e) {
       console.warn('[CFD] run settings save', e);
@@ -39215,6 +39313,17 @@ async function reloadRefsForSync(gen) {
 async function reloadRunsForSync(gen, ids) {
   if (gen !== studySwitchGen) return;
   await refreshRunCatalog();
+  // A run another writer changed (the Assistant, another window): the panel shows its stored
+  // transient settings, unless this page still has a save of that run on its way.
+  const shown = String(runCatalog.transient_run_id || '');
+  if (shown && (ids || []).map(String).includes(shown) && !runCatalog.settings_saves[shown]) {
+    const rec = findRunRecord(shown);
+    if (rec && rec.transient && typeof rec.transient === 'object') {
+      runCatalog.transient = transientSettingsFor(rec);
+      runCatalog.transient_preview = null;
+      runCatalog.transient_preview_key = '';
+    }
+  }
   try { syncSimControlPanel(); } catch (_) {}
   // The open Monitors panel's list of the run's monitors (added, renamed, removed).
   try { syncResultsHub(); } catch (_) {}

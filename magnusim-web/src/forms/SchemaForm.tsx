@@ -33,11 +33,17 @@ export interface SchemaFormProps {
    * middle of typing.
    */
   commitOnBlur?: boolean;
+  /**
+   * A note under a field, by its key (a run's "Takes effect when you Continue"): shown in a
+   * line below the field's row.
+   */
+  fieldNotes?: Record<string, ReactNode>;
 }
 
 interface SchemaFormContext {
   advancedExtra?: ReactNode;
   commitOnBlur?: boolean;
+  fieldNotes?: Record<string, ReactNode>;
 }
 
 function AdvancedDetails({ children }: { children: ReactNode }) {
@@ -204,6 +210,7 @@ function FieldTemplate(props: {
   hidden?: boolean;
   displayLabel?: boolean;
   schema?: RJSFSchema;
+  registry?: { formContext?: unknown };
 }) {
   if (props.hidden) return null;
   const id = String(props.id || '');
@@ -212,7 +219,8 @@ function FieldTemplate(props: {
   const key = id.startsWith('root_') ? id.slice('root_'.length) : '';
   const help = String(props.schema?.description || '');
   const tipId = help ? `${id}__help` : undefined;
-  return (
+  const note = key ? (props.registry?.formContext as SchemaFormContext | undefined)?.fieldNotes?.[key] : null;
+  const row = (
     <div className={`mat-row schema-field ${props.classNames || ''}`} data-schema-key={key || undefined}>
       {props.displayLabel && props.label ? (
         <span className="mat-k" data-help={help ? '1' : undefined}>
@@ -231,6 +239,15 @@ function FieldTemplate(props: {
       ) : null}
       <span className="mat-v">{props.children}</span>
     </div>
+  );
+  if (note === null || note === undefined || note === false) return row;
+  return (
+    <>
+      {row}
+      <p className="mat-assign-hint schema-field-note" data-schema-note={key}>
+        {note}
+      </p>
+    </>
   );
 }
 
@@ -353,6 +370,7 @@ export function SchemaForm({
   hideFooter = false,
   advancedExtra,
   commitOnBlur = false,
+  fieldNotes,
 }: SchemaFormProps) {
   const props = (schema && schema.properties) || {};
   const timer = useRef<number | null>(null);
@@ -405,7 +423,7 @@ export function SchemaForm({
         formData={live}
         widgets={{ ...widgets, ...pluginFieldWidgets() }}
         templates={{ FieldTemplate, ObjectFieldTemplate }}
-        formContext={{ advancedExtra, commitOnBlur } satisfies SchemaFormContext}
+        formContext={{ advancedExtra, commitOnBlur, fieldNotes } satisfies SchemaFormContext}
         showErrorList={false}
         liveValidate
         onChange={(e) => {

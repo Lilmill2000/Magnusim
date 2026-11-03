@@ -99,6 +99,50 @@ describe('run settings', () => {
     expect(screen.getByLabelText('Iterations')).toBeDisabled();
   });
 
+  // A2: a stopped run's Max Courant, correctors and Max Δt may wait for its Continue.
+  it('a stopped transient run (edit continues): its fields stay usable, and each setting that waits for Continue says so', () => {
+    const stopped = {
+      status: 'stopped',
+      edit: 'continues' as const,
+      transient: true,
+      analysis_key: 'incompressible_transient',
+      transient_settings: { ...TRANSIENT_DEFAULTS, max_co: 5, n_outer_correctors: 3, max_delta_t: 0.01 },
+      cont: {
+        visible: true,
+        enabled: true,
+        transient: true,
+        from: 0.05,
+        value: 0.1,
+        write_interval: null,
+        reason: '',
+        applies: 'Continue applies: Max Courant 100 → 5, outer correctors 1 → 3 (from t = 0.05 s).',
+      },
+    };
+    window.__CFD_RUN_STATE__ = runState({ ...stopped, continue_pending: ['transient.max_co', 'transient.n_outer_correctors'] });
+    const { container } = renderPanel();
+    expect(screen.getByLabelText('Max Courant number')).toBeEnabled();
+    expect(screen.getByLabelText('Max Courant number')).toHaveValue('5');
+    const marks = [...container.querySelectorAll('[data-run-takes-effect]')];
+    expect(marks.map((m) => [m.getAttribute('data-run-takes-effect'), m.textContent])).toEqual([
+      ['max_co', 'Takes effect when you Continue'],
+      ['n_outer_correctors', 'Takes effect when you Continue'],
+    ]);
+    // Each under its own row.
+    expect(container.querySelector('[data-run-takes-effect="max_co"]')?.previousElementSibling?.textContent).toContain('Max Courant number');
+    expect(container.querySelector('[data-run-continue-changes]')?.textContent).toBe('Continue applies: Max Courant 100 → 5, outer correctors 1 → 3 (from t = 0.05 s).');
+    cleanup();
+    // Max Δt waits too; nothing waiting: no mark and no line.
+    window.__CFD_RUN_STATE__ = runState({ ...stopped, continue_pending: ['transient.max_delta_t'] });
+    renderPanel();
+    expect(document.querySelectorAll('[data-run-takes-effect]').length).toBe(1);
+    expect(document.querySelector('[data-run-takes-effect="max_delta_t"]')).not.toBeNull();
+    cleanup();
+    window.__CFD_RUN_STATE__ = runState({ ...stopped, cont: { ...stopped.cont, applies: '' } });
+    renderPanel();
+    expect(document.querySelectorAll('[data-run-takes-effect]').length).toBe(0);
+    expect(document.querySelector('[data-run-continue-changes]')).toBeNull();
+  });
+
   it('a finished transient run (edit new_run): its transient fields stay usable', () => {
     window.__CFD_RUN_STATE__ = runState({
       status: 'done',

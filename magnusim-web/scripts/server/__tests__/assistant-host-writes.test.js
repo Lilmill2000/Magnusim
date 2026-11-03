@@ -571,12 +571,134 @@ describe("setup_edit on a run that ended: the person's rules and words", () => {
     const { readSetupTool } = await import('../assistant/host/read-setup.ts');
     const read = readSetupTool(deps());
     const out = await read.run({ project_id: '', simulation_id: '', what: 'runs', id: '', other_id: '', page: 0 }, rt());
+    // A stopped run with a saved time continues (A2: some of its settings may wait for Continue).
     assert.deepEqual(out.data.runs.map((r) => [r.id, r.settings]), [
       ['r1', 'new_run'],
       ['r2', 'editable'],
-      ['r3', 'overwrites'],
+      ['r3', 'continues'],
     ]);
     const one = await read.run({ project_id: '', simulation_id: '', what: 'run', id: 'r3', other_id: '', page: 0 }, rt());
-    assert.equal(one.data.settings, 'overwrites');
+    assert.equal(one.data.settings, 'continues');
+    assert.deepEqual([one.data.continue_pending, one.data.continue_changes], [[], []]);
+    // A failed run with results only starts over.
+    withStopped({ status: 'failed' });
+    const failed = await read.run({ project_id: '', simulation_id: '', what: 'run', id: 'r3', other_id: '', page: 0 }, rt());
+    assert.equal(failed.data.settings, 'overwrites');
+  });
+});
+
+// ------------------------------------------------------------------ A2: a change for when it continues
+
+describe("setup_edit A2: a stopped run's Max Courant, correctors and Max time step for when it continues", () => {
+  const t = () => setupEditTool(deps());
+  const ac = () => ({ ctx: rt().ctx, signal: new AbortController().signal, turn: 't' });
+  const BLOCK = { end_time: 1, write_count: 10, max_co: 100, n_outer_correctors: 1, n_correctors: 2, max_delta_t: 0.1 };
+  const stopped = {
+    id: 'r4',
+    name: 'Run_2',
+    status: 'stopped',
+    mesh_id: 'm1',
+    time_dependency: 'Transient',
+    transient: { ...BLOCK },
+    has_results: true,
+    n_saved_times: 1,
+    last_saved_iteration: 0.1667,
+    continue_from: 0.1667,
+    sim_time: 0.17,
+    rev: 5,
+    result_controls: [],
+  };
+  const WAITING = { from_t: 0.1667, from_iteration: null, at: 'a', by: 'person', kind: 'settings', changes: [{ key: 'transient.max_co', from: 100, to: 5 }], applied_at: null };
+  const withRun = (o = {}) => {
+    fresh();
+    app.w.runs.push({ ...stopped, ...o });
+  };
+  const maxCo = (v, o = {}) => setup({ kind: 'run', action: 'update', id: 'r4', values: [{ key: 'transient.max_co', value: String(v) }], ...o });
+
+  it('no type: refused choose_restart with the choice to make, no card and nothing written', async () => {
+    withRun();
+    const tool = t();
+    const input = maxCo(5);
+    assert.equal(await tool.escalate(input, ac()), null, 'nothing is asked');
+    const r = await sent(tool, input);
+    assert.deepEqual([r.out.error.code, r.writes], ['choose_restart', []]);
+    assert.equal(r.out.error.message, '"Run_2" has results up to t = 0.1667 s. Say how Max Courant 100 → 5 applies.');
+    assert.equal(
+      r.out.error.hint,
+      'Pass type "at_continue" to keep its results and apply it when it continues, or type "start_over" to delete its results and solve again from t = 0 (the person is asked). Ask the person which.',
+    );
+  });
+
+  it('type at_continue: a compute card (results kept), then at_continue is sent; the answer says what Continue applies', async () => {
+    withRun();
+    app.over = (m, path, q, body) =>
+      m === 'POST' && path === '/api/run/update'
+        ? { ok: true, run: { ...stopped, transient: { ...BLOCK, max_co: 5 }, continue_changes: [{ ...WAITING, by: 'assistant' }], rev: 6 } }
+        : undefined;
+    const tool = t();
+    const input = maxCo(5, { type: 'at_continue' });
+    const a = await tool.escalate(input, ac());
+    assert.equal(a.risk, 'compute');
+    assert.equal(a.note, 'Max Courant 100 → 5 takes effect when "Run_2" continues from t = 0.1667 s. Its results are kept.');
+    assert.equal(tool.gateText(input, a).title, 'Allow the Assistant to change "Run_2" for when it continues?');
+    const r = await sent(tool, input);
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.equal(r.writes.length, 1);
+    const b = r.writes[0].body;
+    assert.deepEqual([b.at_continue, b.by, 'overwrite' in b, b.transient.max_co, b.base_rev], [true, 'assistant', false, 5, 5]);
+    assert.equal(r.out.data.done, 'Saved for when "Run_2" continues. Continue applies: Max Courant 100 → 5 (from t = 0.1667 s). Its results are kept.');
+  });
+
+  it('type start_over: the destructive overwrite card, then overwrite is sent', async () => {
+    withRun();
+    const tool = t();
+    const input = maxCo(5, { type: 'start_over' });
+    const a = await tool.escalate(input, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(tool.gateText(input, a).title, 'Allow the Assistant to overwrite "Run_2"?');
+    assert.match(a.note, /^Changing this setting starts "Run_2" over\. Its results \(1 saved, up to t = 0\.1667 s\) are deleted now/);
+    const r = await sent(tool, input);
+    assert.deepEqual([r.writes[0].body.overwrite, 'at_continue' in r.writes[0].body], [true, false]);
+  });
+
+  it('a change already waits: no type joins it, with the same compute card saying so; set back, nothing is left', async () => {
+    withRun({ transient: { ...BLOCK, max_co: 5 }, continue_changes: [WAITING] });
+    const tool = t();
+    const input = setup({ kind: 'run', action: 'update', id: 'r4', values: [{ key: 'transient.n_outer_correctors', value: '3' }] });
+    const a = await tool.escalate(input, ac());
+    assert.equal(a.risk, 'compute');
+    assert.equal(tool.gateText(input, a).title, 'Allow the Assistant to change "Run_2" for when it continues?');
+    assert.equal(
+      a.note,
+      'Joins the change already waiting for "Run_2" to continue. Continue then applies: Max Courant 100 → 5, outer correctors 1 → 3 (from t = 0.1667 s). Its results are kept.',
+    );
+    const r = await sent(tool, input);
+    assert.equal(r.writes[0].body.at_continue, true);
+    const back = maxCo(100);
+    const b = await t().escalate(back, ac());
+    assert.equal(b.note, 'Sets Max Courant back to 100: nothing is left waiting for "Run_2" to continue.');
+  });
+
+  it('at_continue for anything else is refused not_continue_settings with nothing asked; a bad type is invalid', async () => {
+    withRun();
+    const tool = t();
+    const mixed = setup({ kind: 'run', action: 'update', id: 'r4', type: 'at_continue', values: [{ key: 'transient.max_co', value: '5' }, { key: 'transient.end_time', value: '2' }] });
+    assert.equal(await tool.escalate(mixed, ac()), null);
+    let r = await sent(tool, mixed);
+    assert.deepEqual([r.out.error.code, r.writes], ['not_continue_settings', []]);
+    assert.equal(r.out.error.message, 'Only Max Courant, the outer and pressure correctors and Max time step can wait for Continue. Simulation time needs Start over or a new run.');
+    // Without type, the mix asks the destructive overwrite card, as before.
+    const plain = setup({ kind: 'run', action: 'update', id: 'r4', values: [{ key: 'transient.max_co', value: '5' }, { key: 'transient.end_time', value: '2' }] });
+    assert.equal((await tool.escalate(plain, ac())).risk, 'destructive');
+    // A failed run never waits for Continue.
+    withRun({ status: 'failed', continue_from: null });
+    const failed = maxCo(5, { type: 'at_continue' });
+    assert.equal(await t().escalate(failed, ac()), null);
+    r = await sent(t(), failed);
+    assert.deepEqual([r.out.error.code, r.writes], ['not_continue_settings', []]);
+    assert.match(r.out.error.message, /^A failed run does not continue/);
+    withRun();
+    r = await sent(t(), maxCo(5, { type: 'later' }));
+    assert.deepEqual([r.out.error.code, r.writes], ['invalid_input', []]);
   });
 });

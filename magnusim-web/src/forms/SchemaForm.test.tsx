@@ -191,3 +191,16 @@ describe('SchemaForm', () => {
     }
   });
 });
+
+describe('fieldNotes', () => {
+  it('a note goes in a line under its field, and only there', () => {
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'number', title: 'A' }, b: { type: 'number', title: 'B' } },
+    } as RJSFSchema;
+    const { container } = render(<SchemaForm schema={schema} formData={{ a: 1, b: 2 }} hideFooter onCommit={() => {}} fieldNotes={{ b: <span data-mark="b">Takes effect later</span> }} />);
+    const notes = [...container.querySelectorAll('[data-schema-note]')];
+    expect(notes.map((n) => [n.getAttribute('data-schema-note'), n.textContent])).toEqual([['b', 'Takes effect later']]);
+    expect(notes[0].previousElementSibling?.getAttribute('data-schema-key')).toBe('b');
+  });
+});

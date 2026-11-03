@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyContinueChanges,
+  chooseRestartWords,
+  CONTINUE_KEYS,
+  continueAppliesLine,
+  continueCardWords,
+  continueChangesOf,
+  continueChoiceWords,
+  continueDoneWords,
+  continuePendingKeys,
   endedRunReason,
+  mergeContinueChanges,
+  notContinueWords,
+  onlyContinueKeys,
+  overwritesResults,
+  pendingContinue,
+  savedTimeOf,
+  takesEffectToast,
   finishedRefusal,
   hasOverwritable,
   keepAutoBlank,
@@ -38,8 +54,12 @@ describe('runEditState', () => {
     expect(runEditState(null)).toBe('draft');
     expect(runEditState({ status: 'draft' })).toBe('draft');
     expect(runEditState({})).toBe('draft');
-    expect(runEditState(stopped)).toBe('overwrites');
+    // A stopped run with a saved time: Continue can go on from it (A2).
+    expect(runEditState(stopped)).toBe('continues');
     expect(runEditState({ ...stopped, status: 'failed' })).toBe('overwrites');
+    // Its case folder has no saved time (the read says so): no Continue, a plain start-over.
+    expect(runEditState({ ...stopped, continue_from: null })).toBe('overwrites');
+    expect(runEditState({ ...stopped, last_saved_iteration: 0, n_steps: 40, continue_from: undefined })).toBe('overwrites');
     // Stopped before anything was written: quietly a draft again.
     expect(runEditState({ status: 'stopped', iteration: 0 })).toBe('free');
     expect(runEditState({ status: 'failed', has_results: false, n_saved_times: 0 })).toBe('free');
@@ -48,10 +68,12 @@ describe('runEditState', () => {
     expect(runEditState({ status: 'starting' })).toBe('locked');
   });
 
-  it('read_setup words: editable, overwrites, new_run, locked', () => {
+  it('read_setup words: editable, overwrites, continues, new_run, locked', () => {
     expect(runSettingsWord('draft')).toBe('editable');
     expect(runSettingsWord('free')).toBe('editable');
     expect(runSettingsWord('overwrites')).toBe('overwrites');
+    expect(runSettingsWord('continues')).toBe('continues');
+    expect([overwritesResults('overwrites'), overwritesResults('continues'), overwritesResults('free'), overwritesResults('new_run')]).toEqual([true, true, false, false]);
     expect(runSettingsWord('new_run')).toBe('new_run');
     expect(runSettingsWord('locked')).toBe('locked');
   });
@@ -177,5 +199,135 @@ describe('the Run panel reason lines', () => {
     expect(STOPPING_REASON).toBe("Stopping. You can change this run's settings once it has stopped.");
     expect(noSavedTimeText('stopped')).toBe("This run can't continue: its case folder has no saved result. Start solves it again from the beginning.");
     expect(noSavedTimeText('done')).toBe("This run can't continue: its case folder has no saved result. Add a run to solve again.");
+  });
+});
+
+// A2 (Daniel, 2026-11-03): a stopped run's Max Courant, outer and pressure correctors and Max
+// time step can wait for Continue instead of starting it over; the run records the change.
+describe('A2: a change for when a stopped run continues', () => {
+  const tr = {
+    ...stopped,
+    time_dependency: 'Transient',
+    last_saved_iteration: 0.45,
+    sim_time: 0.47,
+    transient: { end_time: 1, write_count: 20, max_co: 100, n_outer_correctors: 1, n_correctors: 2, max_delta_t: 0.05 },
+  };
+
+  it('the four keys, and where Continue goes on from', () => {
+    expect(CONTINUE_KEYS).toEqual(['transient.max_co', 'transient.n_outer_correctors', 'transient.n_correctors', 'transient.max_delta_t']);
+    expect(onlyContinueKeys(['transient.max_co', 'transient.n_correctors'])).toBe(true);
+    expect(onlyContinueKeys(['transient.max_co', 'transient.end_time'])).toBe(false);
+    expect(onlyContinueKeys(['endTime'])).toBe(false);
+    expect(onlyContinueKeys([])).toBe(false);
+    expect(savedTimeOf(tr)).toBe(0.45);
+    expect(savedTimeOf({ ...tr, continue_from: 0.4 })).toBe(0.4);
+    expect(savedTimeOf({ ...tr, continue_from: null })).toBeNull();
+    expect(savedTimeOf({ status: 'stopped' })).toBeNull();
+    expect(continueChangesOf(tr, { transient: { ...tr.transient, max_co: 5 } }, ['transient.max_co'])).toEqual([{ key: 'transient.max_co', from: 100, to: 5 }]);
+  });
+
+  it("the dialog's words: Start over, Use when continuing, Cancel", () => {
+    const w = continueChoiceWords(tr, [{ key: 'transient.max_co', from: 100, to: 5 }]);
+    expect(w).toEqual({
+      title: 'Change "Run 1"?',
+      copy: 'Max Courant 100 → 5. "Run 1" has results up to t = 0.45 s.',
+      over: { label: 'Start over', line: 'Deletes its results (12 saved, up to t = 0.45 s) now. Start solves it again from t = 0.' },
+      cont: { label: 'Use when continuing', line: 'Keeps its results. Continue goes on from t = 0.45 s with the new value, and the run records the change.' },
+      cancel: 'Cancel',
+    });
+    const two = continueChoiceWords(tr, [
+      { key: 'transient.n_outer_correctors', from: 1, to: 3 },
+      { key: 'transient.max_delta_t', from: 0.05, to: null },
+    ]);
+    expect(two.copy).toBe('Outer correctors 1 → 3, Max time step 0.05 s → auto. "Run 1" has results up to t = 0.45 s.');
+    expect(two.cont.line).toBe('Keeps its results. Continue goes on from t = 0.45 s with the new values, and the run records the changes.');
+    // Health says its saved results are from after it became unhealthy.
+    const sick = continueChoiceWords(tr, [{ key: 'transient.max_co', from: 100, to: 5 }], { restart: 'from_zero', first_unhealthy: { t: 0.0069061069, step: 25 } });
+    expect(sick.cont.line).toMatch(/ Its saved results are from after it became unhealthy \(t = 0\.0069 s\); continuing from them carries that on\.$/);
+    expect(continueChoiceWords(tr, [{ key: 'transient.max_co', from: 100, to: 5 }], { restart: 'continue_after_fix' }).cont.line).not.toMatch(/unhealthy/);
+  });
+
+  it('the merge rule: joins the waiting entry, a key set back leaves it, an emptied entry goes, by becomes both', () => {
+    const at = '2026-11-03T10:00:00.000Z';
+    let list = mergeContinueChanges(undefined, [{ key: 'transient.max_co', from: 100, to: 5 }], { by: 'person', at, from_t: 0.45, from_iteration: null });
+    expect(list).toEqual([{ from_t: 0.45, from_iteration: null, at, by: 'person', kind: 'settings', changes: [{ key: 'transient.max_co', from: 100, to: 5 }], applied_at: null }]);
+    // The Assistant joins: a new key with its stored value as from; a key it has keeps its from.
+    list = mergeContinueChanges(list, [{ key: 'transient.n_outer_correctors', from: 1, to: 3 }, { key: 'transient.max_co', from: 5, to: 3 }], { by: 'assistant', at: 'later', from_t: 0.5, from_iteration: null });
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ by: 'both', at: 'later', from_t: 0.45 });
+    expect(list[0].changes).toEqual([
+      { key: 'transient.max_co', from: 100, to: 3 },
+      { key: 'transient.n_outer_correctors', from: 1, to: 3 },
+    ]);
+    expect(pendingContinue({ continue_changes: list })).toBe(list[0]);
+    expect(continuePendingKeys({ continue_changes: list })).toEqual(['transient.max_co', 'transient.n_outer_correctors']);
+    // Set back: the key leaves; the last one gone takes the entry with it.
+    list = mergeContinueChanges(list, [{ key: 'transient.max_co', from: 3, to: 100 }], { by: 'both' as never, at: 'x', from_t: null, from_iteration: null });
+    expect(list[0].changes).toEqual([{ key: 'transient.n_outer_correctors', from: 1, to: 3 }]);
+    list = mergeContinueChanges(list, [{ key: 'transient.n_outer_correctors', from: 3, to: 1 }], { by: 'person', at: 'y', from_t: null, from_iteration: null });
+    expect(list).toEqual([]);
+    expect(continuePendingKeys({ continue_changes: list })).toEqual([]);
+  });
+
+  it('a Continue applies the waiting entry; a new change after it starts a new entry; at most 20 are kept', () => {
+    const one = mergeContinueChanges([], [{ key: 'transient.max_co', from: 100, to: 5 }], { by: 'person', at: 'a', from_t: 0.45, from_iteration: null });
+    const applied = applyContinueChanges(one, 'b') || [];
+    expect(applied[0].applied_at).toBe('b');
+    expect(pendingContinue({ continue_changes: applied })).toBeNull();
+    expect(applyContinueChanges(undefined, 'b')).toBeNull();
+    const next = mergeContinueChanges(applied, [{ key: 'transient.max_co', from: 5, to: 2 }], { by: 'assistant', at: 'c', from_t: 0.9, from_iteration: null });
+    expect(next.map((e) => [e.by, e.applied_at, e.from_t])).toEqual([
+      ['person', 'b', 0.45],
+      ['assistant', null, 0.9],
+    ]);
+    let many: ReturnType<typeof mergeContinueChanges> = [];
+    for (let i = 0; i < 25; i++) {
+      many = mergeContinueChanges(many, [{ key: 'transient.max_co', from: i, to: i + 1 }], { by: 'person', at: String(i), from_t: i, from_iteration: null });
+      many = applyContinueChanges(many, 'done ' + i) || [];
+    }
+    expect(many).toHaveLength(20);
+    expect(many[0].from_t).toBe(5);
+  });
+
+  it("the Continue box's line, the toast, and read words", () => {
+    const list = mergeContinueChanges([], [{ key: 'transient.max_co', from: 100, to: 5 }, { key: 'transient.n_outer_correctors', from: 1, to: 3 }], { by: 'person', at: 'a', from_t: 0.05, from_iteration: null });
+    expect(continueAppliesLine({ ...tr, continue_changes: list })).toBe('Continue applies: Max Courant 100 → 5, outer correctors 1 → 3 (from t = 0.05 s).');
+    expect(continueAppliesLine(tr)).toBe('');
+    expect(takesEffectToast(tr, [{ key: 'transient.max_co', from: 100, to: 5 }])).toBe('Max Courant 5 takes effect when "Run 1" continues.');
+    expect(takesEffectToast(tr, [{ key: 'transient.n_outer_correctors', from: 1, to: 3 }, { key: 'transient.max_co', from: 100, to: 5 }])).toBe(
+      'Outer correctors 3 and Max Courant 5 take effect when "Run 1" continues.',
+    );
+  });
+
+  it("the Assistant's refusal, cards and answer", () => {
+    const run2 = { ...tr, name: 'Run_2', last_saved_iteration: 0.1667 };
+    const ch = [{ key: 'transient.max_co', from: 100, to: 5 }];
+    expect(chooseRestartWords(run2, ch)).toEqual({
+      message: '"Run_2" has results up to t = 0.1667 s. Say how Max Courant 100 → 5 applies.',
+      hint: 'Pass type "at_continue" to keep its results and apply it when it continues, or type "start_over" to delete its results and solve again from t = 0 (the person is asked). Ask the person which.',
+    });
+    expect(continueCardWords(run2, ch)).toEqual({
+      title: 'Allow the Assistant to change "Run_2" for when it continues?',
+      copy: 'Max Courant 100 → 5 takes effect when "Run_2" continues from t = 0.1667 s. Its results are kept.',
+    });
+    // Joining the change already waiting: the merged list.
+    const waiting = { ...run2, continue_changes: mergeContinueChanges([], [{ key: 'transient.max_co', from: 100, to: 5 }], { by: 'person', at: 'a', from_t: 0.1667, from_iteration: null }) };
+    expect(continueCardWords(waiting, [{ key: 'transient.max_co', from: 5, to: 3 }, { key: 'transient.n_outer_correctors', from: 1, to: 3 }]).copy).toBe(
+      'Joins the change already waiting for "Run_2" to continue. Continue then applies: Max Courant 100 → 3, outer correctors 1 → 3 (from t = 0.1667 s). Its results are kept.',
+    );
+    expect(continueCardWords(waiting, [{ key: 'transient.max_co', from: 5, to: 100 }]).copy).toBe('Sets Max Courant back to 100: nothing is left waiting for "Run_2" to continue.');
+    expect(continueDoneWords(waiting)).toBe('Saved for when "Run_2" continues. Continue applies: Max Courant 100 → 5 (from t = 0.1667 s). Its results are kept.');
+    expect(continueDoneWords(run2)).toBe('Nothing is left waiting for "Run_2" to continue.');
+    // Never "safe", "fixed" or "enough": only what it does.
+    for (const t of [continueCardWords(run2, ch).copy, continueChoiceWords(run2, ch).cont.line, continueDoneWords(waiting)]) expect(t).not.toMatch(/\b(safe|fixed|fixes|enough|healthy)\b/i);
+  });
+
+  it('why a change cannot wait for Continue', () => {
+    expect(notContinueWords(tr, ['transient.max_co', 'endTime'])).toBe(
+      'Only Max Courant, the outer and pressure correctors and Max time step can wait for Continue. Iterations needs Start over or a new run.',
+    );
+    expect(notContinueWords(tr, ['transient.end_time'])).toMatch(/ Simulation time needs Start over or a new run\.$/);
+    expect(notContinueWords({ ...tr, status: 'failed' }, ['transient.max_co'])).toMatch(/^A failed run does not continue/);
+    expect(notContinueWords({ ...tr, continue_from: null }, ['transient.max_co'])).toBe('"Run 1" has no saved time to continue from: a change of its settings starts it over.');
   });
 });

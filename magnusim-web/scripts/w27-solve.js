@@ -46,10 +46,17 @@ import {
 import {
   RUNNING_REFUSAL,
   STOPPING_REFUSAL,
+  applyContinueChanges,
+  continueChangesOf,
+  continueChoiceWords,
   finishedRefusal,
   keepAutoBlank,
+  mergeContinueChanges,
   noSavedTimeText,
+  notContinueWords,
+  onlyContinueKeys,
   overwriteWords,
+  overwritesResults,
   REOPENABLE,
   runEditState,
   solveChanged,
@@ -1565,17 +1572,37 @@ async function applyRunSettings(id, runId, partial) {
   // A run that ended (runReopen.ts): a change of its solve settings starts a stopped or failed
   // run over (once asked: `overwrite`, when it has results) and goes to a new run for a
   // finished one; a run that solves or stops keeps them. Its free settings always save.
+  // A stopped run with a saved time (A2): a change of only Max Courant, the outer and pressure
+  // correctors and Max time step may instead wait for Continue (`at_continue`, asked first:
+  // without it nor `overwrite`, it is refused choose_restart with the question's words).
   const changed = solveChanged(rec, partial);
+  const atContinue = partial.at_continue === true;
   let reopened = null;
   let oldTransient = null;
+  /** @type {null | { by: 'person' | 'assistant', from: number | null, transient: boolean }} */
+  let waitsForContinue = null;
   if (changed.length) {
-    const state = runEditState(rec);
+    // Where Continue goes on from: the latest saved time in its case folder.
+    const view = { ...rec, continue_from: continueFromOf(rec) };
+    const state = runEditState(view);
     if (state === 'locked') {
       const stopping = !!rec.stop_requested;
       return { ok: false, status: 409, code: stopping ? 'still_stopping' : 'run_running', error: stopping ? STOPPING_REFUSAL : RUNNING_REFUSAL, changed };
     }
     if (state === 'new_run') return { ok: false, status: 409, code: 'run_finished', error: finishedRefusal(rec), changed };
-    if (state === 'overwrites' || state === 'free') {
+    const onlyContinue = onlyContinueKeys(changed);
+    if (atContinue) {
+      if (state !== 'continues' || !onlyContinue) {
+        return { ok: false, status: 409, code: 'not_continue_settings', error: notContinueWords(view, changed), changed };
+      }
+      const held = runStillHeld(id, String(runId), rec);
+      if (held) return { ...held, changed };
+      waitsForContinue = { by: partial.by === 'assistant' ? 'assistant' : 'person', from: view.continue_from, transient: runIsTransient(rec) };
+      oldTransient = rec.transient && typeof rec.transient === 'object' ? { ...rec.transient } : {};
+    } else if (state === 'continues' && onlyContinue && partial.overwrite !== true) {
+      const w = continueChoiceWords(view, continueChangesOf(view, partial, changed), rec.health);
+      return { ok: false, status: 409, code: 'choose_restart', error: `${w.copy} Start over deletes its results; Use when continuing keeps them.`, title: w.title, changed };
+    } else if (overwritesResults(state) || state === 'free') {
       oldTransient = rec.transient;
       const r = await reopenRunNow(id, String(runId), { simulationId: rec.simulation_id || found.sid, overwrite: partial.overwrite === true });
       if (!r.ok) return { ...r, changed };
@@ -1626,6 +1653,16 @@ async function applyRunSettings(id, runId, partial) {
     // Remember the latest transient settings as the study default for new runs.
     await saveSimulationControl(id, { transient: rec.transient }, rec.simulation_id || found.sid);
   }
+  // Waits for Continue (A2): the run records the change (runReopen.ts mergeContinueChanges).
+  if (waitsForContinue) {
+    const changes = continueChangesOf({ transient: oldTransient }, { transient: rec.transient }, changed);
+    rec.continue_changes = mergeContinueChanges(rec.continue_changes, changes, {
+      by: waitsForContinue.by,
+      at: new Date().toISOString(),
+      from_t: waitsForContinue.transient ? waitsForContinue.from : null,
+      from_iteration: waitsForContinue.transient ? null : waitsForContinue.from,
+    });
+  }
   // "Stop when a monitor settles" (API 1.4): stored on the run as its analysis's run
   // model cleans it (null: off): the model of the run's time dependency (a draft's
   // as its panel shows it, settle_time_dependency).
@@ -1674,6 +1711,7 @@ async function applyRunSettings(id, runId, partial) {
     ...(reopened
       ? { reopened: true, reopened_at: rec.reopened_at || reopened.reopened_at, ...(reopened.dropped_continue ? { dropped_continue: true } : {}) }
       : {}),
+    ...(waitsForContinue ? { at_continue: true } : {}),
     ...runListPayload(id, cat, { simulation_id: rec.simulation_id || found.sid || (partial && partial.simulation_id) }),
     meshes: listGeneratedMeshes(id, rec.simulation_id || found.sid || (partial && partial.simulation_id)),
   };
@@ -1761,6 +1799,30 @@ export async function deleteCatalogRun(projectId, runId, simulationId) {
 
 /** Runs being started over now (runUpdateKey): Start, Continue and another reset refuse them meanwhile. */
 const reopening = new Set();
+
+/**
+ * A run that ended whose stop is still going (the slot still holds it: it drains, its results
+ * still copy back, or its runner job is still active), or that is being started over: the
+ * refusal (still_stopping, reopening), else null. `insideStart`: its own Start asks (that Start
+ * holds the slot).
+ * @param {string} id
+ * @param {string} runId
+ * @param {any} rec
+ * @param {{ insideStart?: boolean }} [opts]
+ */
+function runStillHeld(id, runId, rec, opts = {}) {
+  if (reopening.has(runUpdateKey(id, runId))) return { ok: false, status: 409, code: 'reopening', error: 'This run is being started over already.' };
+  const doc = readRunDocFile(id, runId, rec && rec.simulation_id ? String(rec.simulation_id) : undefined) || rec;
+  const holder = computeSlotHolder();
+  const held =
+    !opts.insideStart &&
+    !!holder &&
+    holder.kind === 'solve' &&
+    String(holder.run_id) === String(runId) &&
+    sameProjectFolder(holder.project_id, id);
+  if (held || runnerJobActive(runnerRecordOf(doc))) return { ok: false, status: 409, code: 'still_stopping', error: STOPPING_REFUSAL };
+  return null;
+}
 
 /**
  * Removals of the old case folders (case.overwritten-*) of runs started over, still going, by
@@ -1873,20 +1935,15 @@ async function reopenRunNow(id, runId, opts = {}) {
   if (state === 'new_run') return { ok: false, status: 409, code: 'run_finished', error: finishedRefusal(rec) };
   const key = runUpdateKey(id, runId);
   if (reopening.has(key)) return { ok: false, status: 409, code: 'reopening', error: 'This run is being started over already.' };
-  const doc = readRunDocFile(id, runId, sid) || rec;
-  const holder = computeSlotHolder();
-  const held =
-    !opts.insideStart &&
-    !!holder &&
-    holder.kind === 'solve' &&
-    String(holder.run_id) === String(runId) &&
-    sameProjectFolder(holder.project_id, id);
-  if (state === 'locked' || held || runnerJobActive(runnerRecordOf(doc))) {
-    const stopping = state !== 'locked' || !!rec.stop_requested || (holder && holder.phase === 'draining');
+  if (state === 'locked') {
+    const holder = computeSlotHolder();
+    const stopping = !!rec.stop_requested || (!!holder && holder.phase === 'draining' && String(holder.run_id) === String(runId));
     return { ok: false, status: 409, code: stopping ? 'still_stopping' : 'run_running', error: stopping ? STOPPING_REFUSAL : RUNNING_REFUSAL };
   }
+  const held = runStillHeld(id, runId, { ...rec, simulation_id: sid }, { insideStart: opts.insideStart });
+  if (held) return held;
   const studyTransient = projectIsTransient(id, sid);
-  if (state === 'overwrites' && opts.overwrite !== true) {
+  if (overwritesResults(state) && opts.overwrite !== true) {
     const w = overwriteWords(rec, { action: opts.insideStart ? 'start' : 'edit', studyTransient });
     return { ok: false, status: 409, code: 'overwrites_results', error: w.copy, title: w.title, run_id: runId };
   }
@@ -2122,7 +2179,7 @@ export function pastConvergence(doc) {
  * where it continues from, its step count, its elapsed time, its log parts and each
  * earlier attempt's end), this attempt's status reset.
  * @param {any} old the run doc as it ended
- * @param {{ from: number, times: number[], past?: boolean }} cont
+ * @param {{ from: number, times: number[], past?: boolean, at?: string }} cont `at`: when this Continue started
  */
 export function continuedRunFields(old, cont) {
   const d = old || {};
@@ -2168,6 +2225,8 @@ export function continuedRunFields(old, cont) {
       stops_off: !!cont.past,
     },
     attempts: [...(Array.isArray(d.attempts) ? d.attempts : []), attempt],
+    // A change that waited for this Continue (A2) applies from here: stamped applied.
+    ...(Array.isArray(d.continue_changes) ? { continue_changes: applyContinueChanges(d.continue_changes, cont.at || new Date().toISOString()) } : {}),
   };
 }
 
@@ -2257,6 +2316,8 @@ async function startSolveBody(opts = {}, slot) {
   if (linkRefused) return { ...linkRefused, bodyExtra: { ...linkRefused.bodyExtra, increment: INCREMENT } };
   // Continue (F6): a separate action; a plain Start of a finished run still says it finished.
   const cont = opts.continueRun ? continuePlan(id, draft, opts.continueRun) : null;
+  // When this Continue started: a change that waited for it is stamped applied then (A2).
+  if (cont && cont.ok) cont.at = new Date().toISOString();
   if (cont && !cont.ok) {
     // Waiting cannot change these (a queued Continue leaves the queue with its reason).
     const final = cont.code !== 'same_run';
@@ -2474,7 +2535,13 @@ async function startSolveBody(opts = {}, slot) {
   const winOut = stored.case_dir;
   mkdirSync(winOut, { recursive: true });
   // Tests (MAGNUSIM_TEST_COMPUTE=fake): a stand-in solve after every real check (test-solve.js).
-  if (fakeCompute()) return startFakeSolve({ id, runId, simId, slot, endTime: et, onDone });
+  if (fakeCompute()) {
+    // As the runner's start does (continuedRunFields): a change that waited for this Continue applies.
+    if (cont && Array.isArray(cont.doc.continue_changes)) {
+      persistRun(id, simId, { id: runId, run_id: runId, continue_changes: applyContinueChanges(cont.doc.continue_changes, cont.at || new Date().toISOString()) });
+    }
+    return startFakeSolve({ id, runId, simId, slot, endTime: et, onDone });
+  }
   // The run solves on the step-list runner (core-solve.js).
   return startSolveOnRunner({
     id,

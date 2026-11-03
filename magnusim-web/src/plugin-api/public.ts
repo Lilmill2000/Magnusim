@@ -79,9 +79,14 @@ export interface SchemaFormProps {
   /**
    * A typed number commits on blur and Enter only, at once (not 0.3 s after a keystroke): for a
    * form whose save may ask the person first, such as a run's settings when `run.edit` is
-   * `overwrites` or `new_run`.
+   * `overwrites`, `continues` or `new_run`.
    */
   commitOnBlur?: boolean;
+  /**
+   * A note under a field, by the field's key: a line below its row, such as "Takes effect when
+   * you Continue" under each of `run.continue_pending`'s keys.
+   */
+  fieldNotes?: Record<string, ReactNode>;
 }
 
 /** One job as the page follows it (useJob). */

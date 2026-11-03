@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { RJSFSchema } from '@rjsf/utils';
 import type { RegistryRow } from '../../api/registry.gen';
 import { SchemaForm } from '../../forms/SchemaForm';
@@ -83,6 +83,20 @@ function RunTitle({ name, canRename }: { name: string; canRename: boolean }) {
   );
 }
 
+/** "Takes effect when you Continue" under each setting that waits for a stopped run's Continue (A2). */
+export function continueNotes(run: RunState): Record<string, ReactNode> | undefined {
+  const keys = (run.continue_pending || []).filter((k) => k.startsWith('transient.')).map((k) => k.slice('transient.'.length));
+  if (!keys.length) return undefined;
+  return Object.fromEntries(
+    keys.map((k) => [
+      k,
+      <span key={k} data-run-takes-effect={k}>
+        Takes effect when you Continue
+      </span>,
+    ]),
+  );
+}
+
 /**
  * An analysis without its own run settings: its run model's fields
  * (control_schema), read-only while the run solves or stops. A finished run's
@@ -115,7 +129,8 @@ export function GenericRunSettings({ run, row, saveSteady, saveTransient }: RunS
         formData={pickSchemaValues(values, schema)}
         hideFooter
         // A change of a run that ended asks first: never in the middle of typing.
-        commitOnBlur={run.edit === 'overwrites' || run.edit === 'new_run'}
+        commitOnBlur={run.edit === 'overwrites' || run.edit === 'continues' || run.edit === 'new_run'}
+        fieldNotes={continueNotes(run)}
         onCommit={(next) => {
           const patch = pickSchemaValues(next, schema);
           if (run.transient) void saveTransient({ ...run.transient_settings, ...patch });
@@ -260,6 +275,11 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
           {c.queue ? 'Add to queue' : 'Continue'}
         </button>
       </div>
+      {c.applies ? (
+        <p className="mat-assign-hint" data-run-continue-changes="1">
+          {c.applies}
+        </p>
+      ) : null}
       {c.reason ? (
         <p className="mat-assign-hint" data-run-continue-reason="1">
           {c.reason}

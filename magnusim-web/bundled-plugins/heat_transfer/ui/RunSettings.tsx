@@ -5,8 +5,11 @@
  * one of the run's Heat Transfer monitors (heat_transfer/settle.py writes it).
  * Locked while the run solves or stops. A finished run's solve fields stay usable
  * (run.edit 'new_run': the core asks, and the change goes to a new run); its stop
- * is shown read-only.
+ * is shown read-only. A stopped run's Max Courant, outer and pressure correctors and
+ * Max Δt may wait for its Continue (run.continue_pending): each says "Takes effect when
+ * you Continue".
  */
+import type { ReactNode } from 'react';
 import type { RJSFSchema } from '@rjsf/utils';
 import type { RunSettingsProps } from '../../../src/plugin-api';
 import type { RunSettleMonitor, RunState } from '../../../src/panels/legacyBridge';
@@ -235,6 +238,20 @@ function SettleStop({ run, saveSettle }: { run: RunState; saveSettle: RunSetting
   );
 }
 
+/** "Takes effect when you Continue" under each setting that waits for the stopped run's Continue. */
+export function continueNotes(run: RunState): Record<string, ReactNode> | undefined {
+  const keys = (run.continue_pending || []).filter((k) => k.startsWith('transient.')).map((k) => k.slice('transient.'.length));
+  if (!keys.length) return undefined;
+  return Object.fromEntries(
+    keys.map((k) => [
+      k,
+      <span key={k} data-run-takes-effect={k}>
+        Takes effect when you Continue
+      </span>,
+    ]),
+  );
+}
+
 export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }: RunSettingsProps) {
   const { SchemaForm, schema: tools } = host().pluginUi;
   const schema = tools.mergeObjectSchemas([row?.control_schema as RJSFSchema | undefined]);
@@ -260,7 +277,8 @@ export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }:
           formData={tools.pickSchemaValues(values, schema)}
           hideFooter
           // A change of a run that ended asks first (the core's question): never in the middle of typing.
-          commitOnBlur={run.edit === 'overwrites' || run.edit === 'new_run'}
+          commitOnBlur={run.edit === 'overwrites' || run.edit === 'continues' || run.edit === 'new_run'}
+          fieldNotes={continueNotes(run)}
           onCommit={(next) => {
             const patch = tools.pickSchemaValues(next, schema);
             if (run.transient) void saveTransient({ ...run.transient_settings, ...patch });

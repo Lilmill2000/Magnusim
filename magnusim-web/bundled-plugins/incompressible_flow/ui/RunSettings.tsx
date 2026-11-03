@@ -6,7 +6,9 @@
  * solve fields stay usable (run.edit 'new_run': the core asks, and the change goes
  * to a new run); its stop is shown read-only. On a stopped run the core asks before
  * a change starts it over; a change the person cancels is not saved, and the fields
- * show the run's values again.
+ * show the run's values again. A stopped run's Max Courant, outer and pressure correctors
+ * and Max Δt may instead wait for its Continue (run.continue_pending): each says
+ * "Takes effect when you Continue".
  */
 import { useEffect, useState } from 'react';
 import type { RunSettingsProps } from '../../../src/plugin-api';
@@ -27,6 +29,16 @@ import { frameInterval, normalizeTransient, transientHint, type TransientSetting
 
 /** The run's solve fields can't change now (it solves or stops); a finished run's change goes to a new run. */
 const solveLocked = (run: RunState) => run.locked && run.edit !== 'new_run';
+
+/** Under a setting whose change waits for the stopped run's Continue (run.continue_pending). */
+export function TakesEffect({ run, field }: { run: RunState; field: string }) {
+  if (!(run.continue_pending || []).includes(`transient.${field}`)) return null;
+  return (
+    <p className="mat-assign-hint" data-run-takes-effect={field}>
+      Takes effect when you Continue
+    </p>
+  );
+}
 
 function NumberRow({
   label,
@@ -367,13 +379,16 @@ function TransientFields({
           </select>
         </div>
         {!fixed ? (
-          <NumberRow
-            label="Max Courant number"
-            title="Largest cell Courant number allowed. 1 is time-accurate; up to ~5 runs faster with more outer correctors."
-            value={t.max_co}
-            disabled={locked}
-            onCommit={(v) => v != null && save({ max_co: v })}
-          />
+          <>
+            <NumberRow
+              label="Max Courant number"
+              title="Largest cell Courant number allowed. 1 is time-accurate; up to ~5 runs faster with more outer correctors."
+              value={t.max_co}
+              disabled={locked}
+              onCommit={(v) => v != null && save({ max_co: v })}
+            />
+            <TakesEffect run={run} field="max_co" />
+          </>
         ) : null}
         <div className="mat-row">
           <span className="mat-k" title="Leave blank to calculate from the mesh size and inlet speed.">
@@ -404,6 +419,7 @@ function TransientFields({
             </span>
           </div>
         ) : null}
+        {!fixed ? <TakesEffect run={run} field="max_delta_t" /> : null}
         <div className="mat-row">
           <span className="mat-k" title="Euler is first order and robust. Backward is second order in time.">
             Time scheme
@@ -426,6 +442,7 @@ function TransientFields({
           disabled={locked}
           onCommit={(v) => v != null && save({ n_outer_correctors: Math.round(v) })}
         />
+        <TakesEffect run={run} field="n_outer_correctors" />
         <NumberRow
           label="Pressure correctors"
           title="Pressure corrections per outer loop."
@@ -433,6 +450,7 @@ function TransientFields({
           disabled={locked}
           onCommit={(v) => v != null && save({ n_correctors: Math.round(v) })}
         />
+        <TakesEffect run={run} field="n_correctors" />
         <NumberRow
           label="Non-orthogonal correctors"
           title="Extra non-orthogonal corrections for skewed cells."

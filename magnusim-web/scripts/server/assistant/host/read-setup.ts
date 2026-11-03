@@ -6,7 +6,7 @@
  * answer is built from a whitelist of fields: no path ever reaches the model, and every
  * record carries its `rev` once records have one.
  */
-import { runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
+import { continuePendingKeys, runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { meshFields, REFINEMENT_FIELDS, studyFields } from './catalog.ts';
@@ -272,7 +272,9 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
               name: text(r.name),
               status: text(r.status ?? 'draft', 20),
               // What a change of its solve settings does (runReopen.ts): editable, overwrites (asks
-              // first, its results deleted), new_run (finished: add a run copying it), locked.
+              // first, its results deleted), continues (as overwrites, but Max Courant, the
+              // correctors and Max time step may wait for Continue: setup_edit type), new_run
+              // (finished: add a run copying it), locked.
               settings: runSettingsWord(runEditState(r)),
               mesh_id: text(r.mesh_id, 80),
               active: r.id === active,
@@ -329,6 +331,23 @@ export function refinementRow(r: Record<string, unknown>): Record<string, unknow
   };
 }
 
+/** A run's last 3 recorded changes for a Continue (A2), as plain fields. */
+function continueChangesRows(raw: unknown): Record<string, unknown>[] {
+  return records(raw)
+    .slice(-3)
+    .map((e) => ({
+      from_t: num(e.from_t),
+      from_iteration: num(e.from_iteration),
+      at: text(e.at, 40),
+      by: text(e.by, 20),
+      kind: text(e.kind, 20),
+      applied_at: e.applied_at ? text(e.applied_at, 40) : null,
+      changes: records(e.changes)
+        .slice(0, 8)
+        .map((c) => ({ key: text(c.key, 80), from: typeof c.from === 'number' || c.from === null ? c.from : text(c.from, 40), to: typeof c.to === 'number' || c.to === null ? c.to : text(c.to, 40) })),
+    }));
+}
+
 export function runRow(r: Record<string, unknown>, activeId: string): Record<string, unknown> {
   const monitors = records(r.result_controls).map((rc) => ({
     id: text(rc.id, 80),
@@ -356,6 +375,9 @@ export function runRow(r: Record<string, unknown>, activeId: string): Record<str
     views,
     converged: isRecord(r.converged) ? plainFields(r.converged, new Set()) : r.converged === false ? false : null,
     has_results: r.has_results === true,
+    // A2: the keys waiting for its Continue, and its last 3 recorded changes for a Continue.
+    continue_pending: continuePendingKeys(r),
+    continue_changes: continueChangesRows(r.continue_changes),
     active: (r.id ?? r.run_id) === activeId,
     ...(revOf(r) !== null ? { rev: revOf(r) } : {}),
   };
