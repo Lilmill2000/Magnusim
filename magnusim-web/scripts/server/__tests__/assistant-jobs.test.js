@@ -50,6 +50,9 @@ function freshState() {
     meshStop: [200, { ok: true, stopped: true }],
     runStop: [200, { ok: true, stopping: true }],
     reorder: [200, { ok: true }],
+    // The study's stored settings (RH3: its numerics) and the analyses' numerics schemas.
+    study: {},
+    registry: { analysis: [] },
   };
 }
 
@@ -85,8 +88,9 @@ function answer(method, path, q, body) {
   if (path === '/api/compute-queue' && method === 'PATCH') return S.reorder;
   if (path === '/api/compute-queue/kick') return [200, { ok: true }];
   if (path === '/api/project') return [200, { ok: true, project: { id: pid, title: 'Wing' } }];
+  if (path === '/api/registry') return [200, S.registry];
   if (path === '/api/simulation') {
-    return [200, { ok: true, active_id: 's1', simulation: { id: 's1', name: 'Pipe flow', geometry_id: 'g1' }, simulations: [{ id: 's1', name: 'Pipe flow', geometry_id: 'g1' }] }];
+    return [200, { ok: true, active_id: 's1', simulation: { id: 's1', name: 'Pipe flow', geometry_id: 'g1', ...S.study }, simulations: [{ id: 's1', name: 'Pipe flow', geometry_id: 'g1' }] }];
   }
   if (path === '/api/mesh' && method === 'GET') {
     const want = q.get('mesh_id');
@@ -140,7 +144,7 @@ function rt(o = {}) {
   const ac = o.controller ?? new AbortController();
   return { signal: ac.signal, ctx: ctx(o.ctx), turn: o.turn ?? `t-${++turnN}`, progress: (f, label, opts) => progress.push({ f, label, ...(opts?.waiting ? { waiting: true } : {}) }), progressLog: progress };
 }
-const input = (o) => ({ project_id: '', simulation_id: '', action: '', mesh_id: '', run_id: '', extra_iterations: 0, end_time: 0, frames: '', time: -1, plugin: '', chain: [], estimate_minutes: 0, ...o });
+const input = (o) => ({ project_id: '', simulation_id: '', action: '', mesh_id: '', run_id: '', extra_iterations: 0, end_time: 0, frames: '', time: -1, plugin: '', chain: [], estimate_minutes: 0, numerics: '', ...o });
 const writes = () => app.seen.filter((r) => r.method !== 'GET');
 
 // ------------------------------------------------------------------ schemas
@@ -1126,4 +1130,145 @@ describe('run health in the job tools (RH1)', () => {
     assert.equal(b.note, overwriteWords(S.run, { action: 'start', studyTransient: false, health: fixed }).copy);
     assert.match(b.note, / "Run 1" became unhealthy at t = 0\.0069 s\. A new run with the fix keeps these results\.$/);
   });
+});
+
+// RH3 (run health spec 5.3): run_continue once the study's numerics differ from what the run
+// started with (its numerics_used). With numerics "" it is refused choose_numerics with the hint,
+// and nothing is asked (no card) or sent; with "as_was" or "new" the compute card lists the same
+// differences as the person's Continue question (runReopen.ts numericsDiff), and after Allow the
+// route gets that answer, said to be the Assistant's. With nothing different the value is ignored.
+describe('RH3: run_continue after a study numerics change', () => {
+  const ac = (o = {}) => ({ ctx: ctx(o), signal: new AbortController().signal, turn: `t-numerics-${++turnN}` });
+  const SCHEMA = { type: 'object', properties: { relax_u: { type: 'number', title: 'Relaxation U' }, relax_p: { type: 'number', title: 'Relaxation p' } } };
+  const stoppedWithNumerics = (extra = {}) => {
+    S.mesh.generated = true;
+    S.registry = { analysis: [{ key: 'incompressible_steady', numerics_schema: SCHEMA }] };
+    S.study = { relax_p: 0.2 };
+    Object.assign(S.run, {
+      status: 'stopped',
+      time_dependency: 'Steady-state',
+      has_results: true,
+      n_saved_times: 1,
+      last_saved_iteration: 450,
+      continue_from: 450,
+      numerics_used: { analysis: 'incompressible_steady', mode: 'steady', at: '2026-11-04T00:00:00.000Z', values: { relax_u: null, relax_p: 0.3 } },
+      ...extra,
+    });
+  };
+  const posted = () => writes().find((x) => x.path === '/api/run/continue');
+
+  it('no numerics: refused choose_numerics with the hint; no card, nothing sent', async () => {
+    stoppedWithNumerics();
+    const t = tools();
+    const i = input({ action: 'run_continue', extra_iterations: 100 });
+    assert.equal(await t.compute.escalate(i, ac()), null, 'no card');
+    const out = await t.compute.run(i, rt());
+    assert.equal(out.ok, false);
+    assert.deepEqual(out.error.code, 'choose_numerics');
+    assert.equal(out.error.message, `The study's numerics changed after "Run 1" started (Relaxation p 0.3 → 0.2).`);
+    assert.equal(out.error.hint, 'Pass numerics "as_was" to continue with the numerics it started with, or "new" to use the study\'s numerics now. Ask the person which.');
+    assert.equal(posted(), undefined);
+    // Through the runner: nothing is asked.
+    const asked = [];
+    const runner = new ToolRunner({ gates: { ask: async (g) => (asked.push(g), 'allow') }, grants: createGrants() });
+    const { r } = await runVia(runner, t.compute, input({ action: 'run_continue', extra_iterations: 100 }), `t-numerics-${++turnN}`);
+    assert.equal(asked.length, 0);
+    assert.match(JSON.stringify(r), /choose_numerics/);
+    assert.equal(posted(), undefined);
+  });
+
+  it("'as_was' and 'new': the card lists the person's differences; after Allow the route gets the answer, as the Assistant's", async () => {
+    stoppedWithNumerics();
+    S.study = { relax_p: 0.2, relax_u: 0.5 };
+    const { numericsDiff, numericsChangedText } = await import('../../../src/workbench/runReopen.ts');
+    const list = 'Relaxation U preset → 0.5, Relaxation p 0.3 → 0.2';
+    // The person's Continue question says the same differences, from the same function.
+    assert.equal(numericsChangedText(S.run, numericsDiff(S.run, S.study, SCHEMA)), `The study's numerics changed after "Run 1" started: ${list}.`);
+    const t = tools();
+    const asWas = input({ action: 'run_continue', extra_iterations: 100, numerics: 'as_was' });
+    const a = await t.compute.escalate(asWas, ac());
+    assert.equal(a.risk, 'compute');
+    assert.equal(a.note, `Runs "Run 1" for 100 more iterations. Continues "Run 1" with the numerics it started with; the study's newer values (${list}) are not used.`);
+    assert.equal(t.compute.gateText(asWas, a).title, 'Allow the Assistant to continue a run?');
+    let out = await t.compute.run(asWas, rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual(posted().body, { project_id: P, simulation_id: 's1', run_id: 'r1', extra_iterations: 100, start_id: 'ai-abc123def456', numerics: 'as_was', by: 'assistant' });
+    app.seen = [];
+    const fresh = input({ action: 'run_continue', extra_iterations: 100, numerics: 'new' });
+    const b = await t.compute.escalate(fresh, ac());
+    assert.equal(b.note, `Runs "Run 1" for 100 more iterations. Continues "Run 1" with the study's new numerics (${list}).`);
+    out = await t.compute.run(fresh, rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(posted().body.numerics, 'new');
+    // Busy: queued with the answer, as the page queues it.
+    S.start = [409, { ok: false, code: 'busy', error: 'busy' }];
+    app.seen = [];
+    out = await t.compute.run(fresh, rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual(writes().find((x) => x.path === '/api/compute-queue').body.settings, { continue: { extra_iterations: 100, numerics: 'new', by: 'assistant' } });
+  });
+
+  it('a from_zero run: destructive, its health first, then the differences', async () => {
+    stoppedWithNumerics({
+      time_dependency: 'Transient',
+      continue_from: 0.1667,
+      last_saved_iteration: 0.1667,
+      numerics_used: { analysis: 'incompressible_steady', mode: 'transient', at: 'x', values: { relax_p: 0.3 } },
+      health: { verdict: 'unhealthy', unit: 'time step', t: 0.2, first_unhealthy: { t: 0.0069061069, step: 25 }, restart: 'from_zero', findings: [] },
+    });
+    const t = tools();
+    const i = input({ action: 'run_continue', end_time: 1, numerics: 'new' });
+    const a = await t.compute.escalate(i, ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(
+      a.note,
+      'Runs "Run 1" on to t = 1 s. Its saved results (t = 0.167 s) are from after it became unhealthy (t = 0.0069 s); continuing carries that on. A new run from t = 0 is safer.' +
+        ' Continues "Run 1" with the study\'s new numerics (Relaxation p 0.3 → 0.2).',
+    );
+    assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to continue "Run 1"?');
+  });
+
+  it('nothing different, or a run started before RH3: the value is ignored and the card is today\'s', async () => {
+    stoppedWithNumerics();
+    S.study = { relax_p: 0.3 };
+    const t = tools();
+    let a = await t.compute.escalate(input({ action: 'run_continue', extra_iterations: 100 }), ac());
+    assert.equal(a.note, 'Runs "Run 1" for 100 more iterations.');
+    a = await t.compute.escalate(input({ action: 'run_continue', extra_iterations: 100, numerics: 'new' }), ac());
+    assert.equal(a.note, 'Runs "Run 1" for 100 more iterations.');
+    delete S.run.numerics_used;
+    S.study = { relax_p: 0.2 };
+    a = await t.compute.escalate(input({ action: 'run_continue', extra_iterations: 100 }), ac());
+    assert.equal(a.note, 'Runs "Run 1" for 100 more iterations.');
+    const out = await t.compute.run(input({ action: 'run_continue', extra_iterations: 100 }), rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal('numerics' in posted().body, false);
+  });
+
+  it("the study changed between the card and the call: the route's refusal comes back as the same choice", async () => {
+    stoppedWithNumerics();
+    S.study = { relax_p: 0.3 };
+    S.start = [409, { ok: false, code: 'choose_numerics', error: "The study's numerics changed after \"Run 1\" started: Relaxation p 0.3 → 0.2." }];
+    const t = tools();
+    const i = input({ action: 'run_continue', extra_iterations: 100 });
+    assert.equal((await t.compute.escalate(i, ac())).risk, 'compute');
+    S.study = { relax_p: 0.2 };
+    const out = await t.compute.run(i, rt());
+    assert.deepEqual([out.ok, out.error.code, out.error.message], [false, 'choose_numerics', `The study's numerics changed after "Run 1" started (Relaxation p 0.3 → 0.2).`]);
+  });
+
+  async function runVia(runner, def, i, turn) {
+    const events = [];
+    const r = await runner.run(
+      { type: 'tool_call', callId: `c-${++turnN}`, name: def.name, input: i },
+      {
+        owner: { kind: 'turn', id: turn, tab: null },
+        ctx: ctx(),
+        signal: new AbortController().signal,
+        offered: new Map([[def.name, def]]),
+        turn: { id: turn, step: 1, emit: (e) => events.push(e), setState() {}, pause() {}, resume() {}, note: (text) => events.push({ type: 'note', text }) },
+      },
+    );
+    return { r, events };
+  }
 });

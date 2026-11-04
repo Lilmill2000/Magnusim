@@ -37,7 +37,7 @@ async function postOk(request, path, data = {}) {
 }
 
 /** A compute call's input as a strict model sends it: every field, "" / 0 / -1 / [] when unused. */
-const compute = (o) => ({ project_id: '', simulation_id: '', action: '', mesh_id: '', run_id: '', extra_iterations: 0, end_time: 0, frames: '', time: -1, plugin: '', chain: [], estimate_minutes: 0, ...o });
+const compute = (o) => ({ project_id: '', simulation_id: '', action: '', mesh_id: '', run_id: '', extra_iterations: 0, end_time: 0, frames: '', time: -1, plugin: '', chain: [], estimate_minutes: 0, numerics: '', ...o });
 const wait = (ids, timeout = 120) => ({ project_id: '', job_ids: ids, until: 'all', timeout_s: timeout });
 const jobs = (o) => ({ project_id: '', action: 'stop', job_id: '', ids: [], ...o });
 

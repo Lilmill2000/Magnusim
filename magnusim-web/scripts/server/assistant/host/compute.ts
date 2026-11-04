@@ -5,7 +5,10 @@
  *
  *   mesh_generate       POST /api/mesh/generate (queued when busy); the stored settings
  *   run_start           POST /api/run/start; busy: queued as the page queues it
- *   run_continue        POST /api/run/continue (extra_iterations or end_time); busy: queued
+ *   run_continue        POST /api/run/continue (extra_iterations or end_time); busy: queued. Once
+ *                       the study's numerics differ from what the run started with (RH3), it says
+ *                       which it goes on with (numerics "new" | "as_was"); without it, refused
+ *                       choose_numerics with no card, as the person's Continue asks first
  *   vtk_export          POST /api/results/export-vtk of the run's case (never its path to the model)
  *   hardware_check      POST /api/prefs/hardware-check (about a minute; no project)
  *   plugin_env_install  POST /api/plugins/:key/env/install (no project)
@@ -41,7 +44,17 @@ import {
 } from './job-common.ts';
 import { jobIdOf, parseJobId, type JobKind } from './job-state.ts';
 import { rememberJob } from './turn-jobs.ts';
-import { overwritesResults, overwriteWords, runEditState } from '../../../../src/workbench/runReopen.ts';
+import {
+  chooseNumericsWords,
+  NUMERICS_ANSWERS,
+  numericsCardSentence,
+  numericsDiff,
+  numericsUsedOf,
+  overwritesResults,
+  overwriteWords,
+  runEditState,
+  type NumericsDifference,
+} from '../../../../src/workbench/runReopen.ts';
 import { atWords, changeWords, continueAskWords, repeatSentence, type HealthRecord, type HealthRunView } from '../../../../src/workbench/runHealthWords.ts';
 import { startedWithWords, type CheckRow } from '../../../../src/workbench/runCheckWords.ts';
 
@@ -53,6 +66,11 @@ import { startedWithWords, type CheckRow } from '../../../../src/workbench/runCh
 const startOverAsked = new WeakMap<Record<string, unknown>, string>();
 /** RH1: a Continue of a run whose saved results come after it became unhealthy (from_zero): the card's title. */
 const continueHealthAsked = new WeakMap<Record<string, unknown>, string>();
+/**
+ * RH3: a run_continue that did not say which numerics once its study's differ from what the run
+ * started with: refused in run() with these words, and nothing is asked (no card).
+ */
+const numericsRefused = new WeakMap<Record<string, unknown>, { message: string; hint: string }>();
 
 export const COMPUTE_ACTIONS = ['mesh_generate', 'run_start', 'run_continue', 'vtk_export', 'hardware_check', 'plugin_env_install', 'queue_kick'] as const;
 type Action = (typeof COMPUTE_ACTIONS)[number];
@@ -64,7 +82,7 @@ const PLUGIN_KEY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const COMPUTE_SCHEMA: JsonSchemaObject = Object.freeze({
   type: 'object',
   additionalProperties: false,
-  required: ['project_id', 'simulation_id', 'action', 'mesh_id', 'run_id', 'extra_iterations', 'end_time', 'frames', 'time', 'plugin', 'chain', 'estimate_minutes'],
+  required: ['project_id', 'simulation_id', 'action', 'mesh_id', 'run_id', 'extra_iterations', 'end_time', 'frames', 'time', 'plugin', 'chain', 'estimate_minutes', 'numerics'],
   properties: {
     project_id: { type: 'string', maxLength: 80, description: '"" = this window\'s project' },
     simulation_id: { type: 'string', maxLength: 80, description: '"" = the study shown' },
@@ -83,11 +101,12 @@ export const COMPUTE_SCHEMA: JsonSchemaObject = Object.freeze({
       description: 'job ids this card should also cover, in order, e.g. ["mesh.m-1","solve.r-2"]; [] = this call only',
     },
     estimate_minutes: { type: 'number', minimum: 0, maximum: 100000, description: 'your estimate for the card; 0 = none' },
+    numerics: { type: 'string', enum: ['', ...NUMERICS_ANSWERS], description: 'run_continue after a study numerics change; "" = none' },
   },
 }) as JsonSchemaObject;
 
 const DESCRIPTION =
-  'Start work on this PC: mesh_generate, run_start, run_continue (extra_iterations or end_time), vtk_export (frames, time -1 = latest), hardware_check, plugin_env_install (plugin), queue_kick. Returns at once with a job_id; follow it with wait. Unused fields: "", 0, [] (chain). chain: later job ids one approval also covers.';
+  'Start work on this PC: mesh_generate, run_start, run_continue (extra_iterations or end_time), vtk_export (frames, time -1 = latest), hardware_check, plugin_env_install (plugin), queue_kick. Returns a job_id at once; follow it with wait. Unused fields: "", 0, [] (chain).';
 
 const ENGINES: Record<string, string> = { standard: 'Standard', snappy_hexdominant: 'Hex-dominant', cfmesh: 'cfMesh' };
 const engineOf = (mesh: Record<string, unknown>): string => {
@@ -203,8 +222,48 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     };
   }
 
-  /** The card's facts and its risk (C3: raise-only; never lower than the call's base). */
+  /**
+   * RH3 (spec 5.3): what differs between the numerics the run of a run_continue started with and
+   * its study's now (runReopen.ts numericsDiff, as the person's Continue box and question say it),
+   * with the run; null for a run that recorded none (started before RH3) or one not found.
+   */
+  async function continueNumericsOf(input: Record<string, unknown>, rt: { signal: AbortSignal; turn: string | null; ctx: ToolCtx }): Promise<{ run: Record<string, unknown>; diffs: NumericsDifference[] } | null> {
+    const projectId = str(input.project_id) || rt.ctx.projectId || '';
+    if (!projectId) return null;
+    const runCtx = { signal: rt.signal, ctx: rt.ctx, turn: rt.turn, progress: () => {} } as unknown as ToolRunContext;
+    const study = await studyFor(call, projectId, input, runCtx);
+    if (!study) return null;
+    const found = await runOf(projectId, study.id, str(input.run_id), rt);
+    const used = found ? numericsUsedOf(found.run) : null;
+    if (!found || !used) return null;
+    const sim = await call('simulation.get', { project_id: projectId, simulation_id: study.id }, o(rt));
+    const registry = await call('registry.get', {}, o(rt));
+    const row = rows(registry.analysis).find((a) => String(a.key) === String(used.analysis)) ?? null;
+    const run = { ...found.run, name: found.name };
+    return { run, diffs: numericsDiff(run, isRecord(sim.simulation) ? sim.simulation : null, row ? row.numerics_schema : null) };
+  }
+
+  /**
+   * The card's facts and its risk (C3: raise-only; never lower than the call's base). RH3: a
+   * run_continue once the study's numerics differ says which numerics it goes on with on its
+   * card; without an answer nothing is asked and run() refuses it (choose_numerics).
+   */
   async function escalate(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null> {
+    const a = await assess(input, rt);
+    if (str(input.action) !== 'run_continue') return a;
+    const n = await continueNumericsOf(input, rt);
+    if (!n || !n.diffs.length) return a;
+    const answer = str(input.numerics);
+    if (!NUMERICS_ANSWERS.includes(answer)) {
+      numericsRefused.set(input, chooseNumericsWords(n.run, n.diffs));
+      return null;
+    }
+    const said = numericsCardSentence(n.run, n.diffs, answer);
+    const base: Assessed = a ?? { risk: 'compute', note: '', detail: [] };
+    return { ...base, note: base.note ? `${base.note} ${said}` : said };
+  }
+
+  async function assess(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null> {
     const action = str(input.action) as Action;
     const estimate = num(input.estimate_minutes) ?? 0;
     const estimateRow: GateDetail[] = estimate > 0 ? [{ label: "Assistant's estimate", value: `about ${Math.round(estimate)} min` }] : [];
@@ -435,6 +494,11 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     const more = num(input.extra_iterations) ?? 0;
     const to = num(input.end_time) ?? 0;
     if (cont && !(more > 0) && !(to > 0)) return fail('bad_values', 'run_continue needs extra_iterations (a steady run) or end_time (a transient one).', '', [{ key: 'extra_iterations', problem: 'give one of extra_iterations or end_time' }]);
+    // RH3: the study's numerics differ from what it started with and the call did not say which.
+    const refused = cont ? numericsRefused.get(input) : undefined;
+    if (refused) return fail('choose_numerics', refused.message, refused.hint);
+    const numerics = cont && NUMERICS_ANSWERS.includes(str(input.numerics)) ? str(input.numerics) : '';
+    const asked = numerics ? { numerics } : {};
     // The run's mesh: its own, else the study's active one (as the page resolves it).
     let meshId = str(run.mesh_id);
     let mesh: Record<string, unknown> | null = null;
@@ -484,11 +548,23 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
           run_id: runId,
           start_id: startId,
           ...(cont ? (more > 0 ? { extra_iterations: more } : { end_time: to }) : {}),
+          ...asked,
         },
         o(rt),
       );
     } catch (err) {
       const code = err instanceof HostCallError ? err.appCode : null;
+      if (cont && err instanceof HostCallError && err.status === 409 && code === 'choose_numerics') {
+        // The study changed between the card and the call: the same choice, from what differs now.
+        let w = { message: cleanText(err.message, 400), hint: chooseNumericsWords(run, []).hint };
+        try {
+          const n = await continueNumericsOf(input, rt);
+          if (n && n.diffs.length) w = chooseNumericsWords(n.run, n.diffs);
+        } catch {
+          /* the route's words */
+        }
+        return fail('choose_numerics', w.message, w.hint);
+      }
       if (err instanceof HostCallError && err.status === 409 && code === 'same_run') {
         const jobId = remember('running');
         return answer(`${name} is already running`, jobId, 'running', 0);
@@ -507,7 +583,7 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
               project_id: projectId,
               name,
               mesh_generating: meshRunning,
-              ...(cont ? { continue: more > 0 ? { extra_iterations: more } : { end_time: to } } : {}),
+              ...(cont ? { continue: { ...(more > 0 ? { extra_iterations: more } : { end_time: to }), ...(numerics ? { numerics, by: 'assistant' } : {}) } } : {}),
             },
             o(rt),
           );

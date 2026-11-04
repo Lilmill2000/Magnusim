@@ -425,6 +425,9 @@ export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
         extra_iterations: n(a, 'extra_iterations'),
         end_time: n(a, 'end_time'),
         start_id: s(a, 'start_id'),
+        // RH3: after a study numerics change, which numerics it goes on with ('new' | 'as_was'), the Assistant's answer.
+        numerics: s(a, 'numerics'),
+        by: s(a, 'numerics') ? 'assistant' : undefined,
       }),
     band: 'write',
   },

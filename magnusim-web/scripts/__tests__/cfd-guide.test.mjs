@@ -39,6 +39,12 @@ describe('the CFD guide in Magnusim', () => {
     assert.ok(rule8.startsWith('8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply when it continues'), rule8);
   });
 
+  it('rule 8 (RH3) says a Continue after a study numerics change needs numerics "new" or "as_was", asked of the person, with no lane tag', () => {
+    const rule8 = cfdGuideText().split('\n').find((l) => l.startsWith('8. '));
+    assert.ok(rule8.endsWith(' After a study numerics change, run_continue needs numerics "new" or "as_was". Ask the person which.'), rule8);
+    assert.doesNotMatch(rule8, /\[RH\d\]/);
+  });
+
   it('rule 9 (RH2) names the pre-run check, its what-if values and its cost, with no lane tag', () => {
     const g = cfdGuideText();
     const rule9 = g.split('\n').find((l) => l.startsWith('9. '));
