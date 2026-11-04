@@ -5,6 +5,7 @@
 import { expect, test } from '@playwright/test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureStyled } from './page-styles.mjs';
 
 const GEOM = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'python', 'tests', 'fixtures', 'geometry');
 const ROUND = join(GEOM, 'transient-test.step');
@@ -15,12 +16,14 @@ export async function setup(page, request, title) {
   const stage = (msg) => console.log(`STAGE +${Math.round((performance.now() - t0) / 1000)}s ${msg}`);
   const shot = (name) => page.screenshot({ path: test.info().outputPath(`${name}.png`) }).catch(() => {});
   await page.goto('/#/');
+  await ensureStyled(page);
   await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
   const pid = await page.evaluate(async (t) => {
     const out = await window.__CFD_W16_CREATE__({ title: t, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' });
     return out && out.project && out.project.id;
   }, title);
   await page.goto(`/#/p/${encodeURIComponent(pid)}`);
+  await ensureStyled(page);
   await expect(page.locator('#app.workbench')).toBeVisible({ timeout: 60_000 });
   const q = (path, extra = {}) =>
     `${path}?${new URLSearchParams({ project_id: pid, ...extra }).toString()}`;
