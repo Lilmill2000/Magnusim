@@ -124,6 +124,22 @@ class Raw:
                     return abs(q)
         return None
 
+    def patch_pressure(self, patch: str) -> float | None:
+        """A patch monitor's last area-averaged pressure (Pa)."""
+        for mon in self.monitor_rows():
+            if str(mon.get("key") or "") == f"mon_{patch}" or str(mon.get("patch") or "") == patch:
+                return _f((self._last_point(mon) or {}).get("p_Pa"))
+        return None
+
+    def flow_balance(self) -> dict[str, float] | None:
+        """The monitors' flow balance: in, out (m³/s) and the imbalance (out - in, m³/s)."""
+        doc = self.get("monitors") or {}
+        bal = doc.get("balance") if isinstance(doc, dict) else None
+        if not isinstance(bal, dict):
+            return None
+        vals = {k: _f(bal.get(k)) for k in ("in_m3s", "out_m3s", "imbalance")}
+        return {k: v for k, v in vals.items() if v is not None} or None
+
     def patch_area(self, patch: str) -> float | None:
         """A patch monitor's mesh area (m²): the sum of its faces' areas."""
         for mon in self.monitor_rows():
@@ -370,5 +386,6 @@ def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
         "warnings": warnings + list(measured["warnings"]),
     }
     doc["setup"]["words"] = case.setup_words(doc)
+    doc["setup"]["mesh_words"] = case.mesh_words(doc)
     write_result(doc, run_dir / "result.json")
     return doc

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magnusim validation</title>
+<style>:root{color-scheme:light;--bg:#fcfcfb;--card:#ffffff;--text:#0b0b0b;--muted:#52514e;--line:#e3e2de;
+--accent:#2a78d6;--in:#0b6b3a;--out:#a3341b;--chip:#f1f0ec}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#1a1a19;--card:#232322;--text:#f0efec;
+--muted:#c3c2b7;--line:#3a3a37;--accent:#3987e5;--in:#5fcf8f;--out:#f08a6c;--chip:#2c2c2a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1080px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:28px;line-height:1.2;margin:8px 0 4px}
+h2{font-size:21px;margin:40px 0 8px;padding-top:8px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:28px 0 6px}
+p,li{max-width:76ch}
+.lede{color:var(--muted);margin:0 0 16px}
+.badge{display:inline-block;background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:13px}
+.env{color:var(--muted);font-size:13px}
+.scroll{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.in{color:var(--in)}.out{color:var(--out)}
+.facts{margin:6px 0;padding-left:20px}
+.facts li{margin:3px 0}
+figure{margin:16px 0;background:#fcfcfb;border:1px solid var(--line);border-radius:8px;padding:8px}
+figure img{display:block;width:100%;height:auto}
+figcaption{color:#52514e;font-size:13px;padding:4px 4px 0}
+.figs{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto}
+.refs li{margin:6px 0}
+a{color:var(--accent)}
+footer{margin-top:48px;color:var(--muted);font-size:13px}</style></head><body><main>
+<h1>Magnusim validation</h1>
+<p class="lede">Textbook flows with published answers, set up, meshed and solved through the app itself, and compared with their reference values. A value here is what the app produced: nothing is tuned per case and no number is typed in.</p>
+<p><span class="badge">Report-only</span> No case fails on these numbers yet. After the first full run the tolerances are locked; from then on a value outside its tolerance blocks a release. The bands shown are the proposed ones.</p>
+<p class="env">2026-11-04: commit 73f945bca1cf, OpenFOAM v2606 (build _481094f-20260618), 4 cores of a 32-thread PC: c1_laminar_pipe/hexdominant (WSL load 15.24 while it solved), c1_laminar_pipe/standard (WSL load 10.01 while it solved)</p>
+<h2>Results</h2>
+<div class="scroll"><table><thead><tr><th>Case</th><th>Mesher</th><th>Quantity</th><th>Reference</th><th>Magnusim</th><th>Error</th><th>Band</th></tr></thead><tbody>
+<tr><td>Laminar pipe, Re = 100</td><td>Hex-dominant</td><td>Darcy friction factor × Re, developed part (x/D 10 to 13)</td><td class=num>64</td><td class=num>63.286</td><td class="num in">-1.12 %</td><td class="num in">±2 % (inside)</td></tr>
+<tr><td>Laminar pipe, Re = 100</td><td>Hex-dominant</td><td>Centreline speed / bulk speed, developed part (x/D 10 to 13)</td><td class=num>2</td><td class=num>1.9328</td><td class="num out">-3.36 %</td><td class="num out">±1.5 % (outside)</td></tr>
+<tr><td>Laminar pipe, Re = 100</td><td>Hex-dominant</td><td>Development length L_e / D (to 99 % of the developed centreline speed)</td><td class=num>5.77</td><td class=num>5.5369</td><td class="num in">-4.04 %</td><td class="num in">±15 % (inside)</td></tr>
+<tr><td>Laminar pipe, Re = 100</td><td>Standard</td><td>Darcy friction factor × Re, developed part (x/D 10 to 13)</td><td class=num>64</td><td class=num>74.177</td><td class="num out">+15.90 %</td><td class="num out">±2 % (outside)</td></tr>
+<tr><td>Laminar pipe, Re = 100</td><td>Standard</td><td>Centreline speed / bulk speed, developed part (x/D 10 to 13)</td><td class=num>2</td><td class=num>1.9511</td><td class="num out">-2.44 %</td><td class="num out">±1.5 % (outside)</td></tr>
+<tr><td>Laminar pipe, Re = 100</td><td>Standard</td><td>Development length L_e / D (to 99 % of the developed centreline speed)</td><td class=num>5.77</td><td class=num>5.444</td><td class="num in">-5.65 %</td><td class="num in">±15 % (inside)</td></tr>
+</tbody></table></div>
+<h2>Laminar pipe, Re = 100</h2>
+<p>A pipe, D = 20 mm, L = 300 mm (15 D) along +x from x = 0 (STEP in mm, built with OCP); a custom fluid with nu = 0.0002 m²/s and rho = 1 kg/m³, so Re = U D / nu = 100; a velocity inlet of 1 m/s normal to the face, a 0 Pa pressure outlet and a no-slip wall; laminar, steady (simpleFoam), Accurate numerics, residual targets 1e-6, at most 3000 iterations.</p>
+<h3>Hex-dominant</h3><ul class=facts>
+<li>Status: ok</li>
+<li>Mesh settings: Hex-dominant at fineness 6 with an Inflate boundary layer of 4 layers, 1 mm in all, on the wall (automatic boundary layers off); 1 non-orthogonal corrector</li>
+<li>Mesh: 128706 cells; checkMesh OK (max non-orthogonality 69.3°, max skewness 1.49); wall layers applied (pipe_wall 3.83 of 4)</li>
+<li>Run: 144 iterations, converged at iteration 144; solve 19 s on 4 ranks; run health healthy</li>
+<li><strong>Darcy friction factor × Re, developed part (x/D 10 to 13)</strong>: how: f·Re = 2 D_eff² (−dp/dx) / (mu U_b): dp/dx the least-squares slope of the centreline pressure from Plot over path (0,0,0) to (0.3,0,0) m, 300 subdivisions, over x/D 10 to 13; U_b = Q / A and D_eff = sqrt(4 A / pi), Q the flow through the inlet and A the pipe&#x27;s meshed cross-section, the mean of the inlet&#x27;s and the outlet&#x27;s mesh areas (all three from the run&#x27;s monitors), since a meshed circle&#x27;s area is not exactly pi D²/4. Source: <code>route:/api/plot-over-path</code>. -dp/dx 15.8298 Pa/m from 60 samples (slope standard error 0.02 %, r² 0.999999); D_eff 19.995 mm, U_b 1.0000 m/s.</li>
+<li><strong>Centreline speed / bulk speed, developed part (x/D 10 to 13)</strong>: how: mean of the centreline speed |U| (= U_x on the axis) from Plot over path (0,0,0) to (0.3,0,0) m, 300 subdivisions, over x/D 10 to 13, over U_b = Q / A (as for f·Re). Source: <code>route:/api/plot-over-path</code>. centreline 1.9328 m/s (from 1.9317 to 1.9333 over 60 samples) over U_b 1.0000 m/s.</li>
+<li><strong>Development length L_e / D (to 99 % of the developed centreline speed)</strong>: how: the first x where the centreline speed from Plot over path reaches 99 % of its own developed value (its mean over x/D 10 to 13), linearly interpolated between samples, over D_eff. Source: <code>route:/api/plot-over-path</code>. 99 % of 1.9328 m/s reached at x = 110.7 mm.</li>
+</ul>
+<div class="figs">
+<figure><img src="img/c1_laminar_pipe-hexdominant-pressure.png" alt="Laminar pipe, Re = 100, Hex-dominant: centreline pressure" loading="lazy"><figcaption>Laminar pipe, Re = 100, Hex-dominant: centreline pressure</figcaption></figure>
+<figure><img src="img/c1_laminar_pipe-hexdominant-centreline.png" alt="Laminar pipe, Re = 100, Hex-dominant: centreline speed" loading="lazy"><figcaption>Laminar pipe, Re = 100, Hex-dominant: centreline speed</figcaption></figure>
+<figure><img src="img/c1_laminar_pipe-hexdominant-profile.png" alt="Laminar pipe, Re = 100, Hex-dominant: velocity profile at x = 12 D" loading="lazy"><figcaption>Laminar pipe, Re = 100, Hex-dominant: velocity profile at x = 12 D</figcaption></figure>
+<figure><img src="img/c1_laminar_pipe-hexdominant-residuals.png" alt="Laminar pipe, Re = 100, Hex-dominant: residuals" loading="lazy"><figcaption>Laminar pipe, Re = 100, Hex-dominant: residuals</figcaption></figure>
+</div>
+<h3>Standard</h3><ul class=facts>
+<li>Status: ok</li>
+<li>Mesh settings: Standard at fineness 6 with its automatic boundary layers and hex core; 2 non-orthogonal correctors</li>
+<li>Mesh: 139146 cells; checkMesh OK (max non-orthogonality 67.1°, max skewness 0.928); wall layers applied (pipe_wall 3 of 3)</li>
+<li>Run: 318 iterations, converged at iteration 318; solve 30 s on 4 ranks; run health healthy</li>
+<li><strong>Darcy friction factor × Re, developed part (x/D 10 to 13)</strong>: how: f·Re = 2 D_eff² (−dp/dx) / (mu U_b): dp/dx the least-squares slope of the centreline pressure from Plot over path (0,0,0) to (0.3,0,0) m, 300 subdivisions, over x/D 10 to 13; U_b = Q / A and D_eff = sqrt(4 A / pi), Q the flow through the inlet and A the pipe&#x27;s meshed cross-section, the mean of the inlet&#x27;s and the outlet&#x27;s mesh areas (all three from the run&#x27;s monitors), since a meshed circle&#x27;s area is not exactly pi D²/4. Source: <code>route:/api/plot-over-path</code>. -dp/dx 18.5846 Pa/m from 60 samples (slope standard error 0.05 %, r² 0.999985); D_eff 19.978 mm, U_b 1.0000 m/s.</li>
+<li><strong>Centreline speed / bulk speed, developed part (x/D 10 to 13)</strong>: how: mean of the centreline speed |U| (= U_x on the axis) from Plot over path (0,0,0) to (0.3,0,0) m, 300 subdivisions, over x/D 10 to 13, over U_b = Q / A (as for f·Re). Source: <code>route:/api/plot-over-path</code>. centreline 1.9511 m/s (from 1.9498 to 1.9520 over 60 samples) over U_b 1.0000 m/s.</li>
+<li><strong>Development length L_e / D (to 99 % of the developed centreline speed)</strong>: how: the first x where the centreline speed from Plot over path reaches 99 % of its own developed value (its mean over x/D 10 to 13), linearly interpolated between samples, over D_eff. Source: <code>route:/api/plot-over-path</code>. 99 % of 1.9511 m/s reached at x = 108.8 mm.</li>
+</ul>
+<div class="figs">
+<figure><img src="img/c1_laminar_pipe-standard-pressure.png" alt="Laminar pipe, Re = 100, Standard: centreline pressure" loading="lazy"><figcaption>Laminar pipe, Re = 100, Standard: centreline pressure</figcaption></figure>
+<figure><img src="img/c1_laminar_pipe-standard-centreline.png" alt="Laminar pipe, Re = 100, Standard: centreline speed" loading="lazy"><figcaption>Laminar pipe, Re = 100, Standard: centreline speed</figcaption></figure>
+<figure><img src="img/c1_laminar_pipe-standard-profile.png" alt="Laminar pipe, Re = 100, Standard: velocity profile at x = 12 D" loading="lazy"><figcaption>Laminar pipe, Re = 100, Standard: velocity profile at x = 12 D</figcaption></figure>
+<figure><img src="img/c1_laminar_pipe-standard-residuals.png" alt="Laminar pipe, Re = 100, Standard: residuals" loading="lazy"><figcaption>Laminar pipe, Re = 100, Standard: residuals</figcaption></figure>
+</div>
+<h3>References</h3><ul class=refs>
+<li><strong>Darcy friction factor × Re, developed part (x/D 10 to 13)</strong>: 64 (exact, CONFIRMED). G. Hagen (1839), &quot;Ueber die Bewegung des Wassers in engen cylindrischen Röhren&quot;, Ann. Phys. Chem. 46:423-442; J. L. M. Poiseuille (1840), C. R. Acad. Sci. Paris 11:961-967, 1041-1048: the exact (Hagen-Poiseuille) solution of the Navier-Stokes equations for fully developed laminar pipe flow; Darcy f = 64/Re (f = 0.640 at Re 100), i.e. -dp/dx = 32 mu U / D² = 16 Pa/m here. Conditions: fully developed, steady, Newtonian; Re = rho U D / mu with U the bulk (mean) speed; Re = 100.</li>
+<li><strong>Centreline speed / bulk speed, developed part (x/D 10 to 13)</strong>: 2 (exact, CONFIRMED). G. Hagen (1839), &quot;Ueber die Bewegung des Wassers in engen cylindrischen Röhren&quot;, Ann. Phys. Chem. 46:423-442; J. L. M. Poiseuille (1840), C. R. Acad. Sci. Paris 11:961-967, 1041-1048: the exact (Hagen-Poiseuille) solution of the Navier-Stokes equations for fully developed laminar pipe flow; u(r) = 2 U (1 - (r/R)²), so u_c = 2.000 U. Conditions: fully developed, steady, Newtonian; Re = rho U D / mu with U the bulk (mean) speed; Re = 100.</li>
+<li><strong>Development length L_e / D (to 99 % of the developed centreline speed)</strong>: 5.77 (correlation, SECONDARY). F. Durst, S. Ray, B. Ünsal, O. A. Bayoumi (2005), &quot;The development lengths of laminar pipe and channel flows&quot;, J. Fluids Eng. 127:1154-1160; the pipe correlation L/D = [0.619^1.6 + (0.0567 Re)^1.6]^(1/1.6) (constants as quoted from the abstract by citing papers; error under 3 % for all laminar Re), 5.77 at Re 100. Conditions: laminar, uniform inlet; the distance to 99 % of the developed centreline velocity; Re = 100. Depends on the 99 % definition and on the inlet profile; the 0.05 Re rule (5.0) is about 13 % short.</li>
+</ul>
+<h2>How to reproduce</h2>
+<p>On Windows with Magnusim's Setup done (WSL with OpenFOAM v2606), from <code>magnusim-web</code>:</p>
+<pre>npm run test:validation
+npm run validation:report</pre>
+<p>Each run's requests are in <code>validation/results/&lt;case&gt;/&lt;variant&gt;/plan.json</code> and its values, their sources, the mesh, the run and its health in <code>result.json</code> beside it; <a href="results.json">results.json</a> holds them all.</p>
+<footer>Generated from the committed results by <code>npm run validation:report</code>.</footer>
+</main></body></html>

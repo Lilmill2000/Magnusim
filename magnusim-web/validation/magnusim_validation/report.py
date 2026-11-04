@@ -196,6 +196,8 @@ def _variant_section(case: Any, res: dict[str, Any]) -> list[str]:
     lines = [f"### {label}\n"]
     status = res["status"] + (f": {res['status_detail']}" if res.get("status_detail") else "")
     lines.append(f"- Status: {cell(status)}.")
+    if res["setup"].get("mesh_words"):
+        lines.append(f"- Mesh settings: {cell(res['setup']['mesh_words'])}.")
     bg = (m.get("background") or {}).get("block")
     first = (m.get("layers") or {}).get("first_m")
     lines.append(
@@ -244,6 +246,9 @@ def _variant_section(case: Any, res: dict[str, Any]) -> list[str]:
                         f"so D_eff {num(shown['d_eff_mm'], 5)} mm and U_b {num(shown['ub_m_s'], 5)} m/s")
         if shown.get("dpdx_Pa_m") is not None:
             bits.append(f"-dp/dx {num(shown['dpdx_Pa_m'], 5)} Pa/m ({shown['dpdx_vs_nominal_pct']:+.2f} % against 32 mu U / D² = {num(shown['dpdx_exact_nominal_Pa_m'], 4)} Pa/m with the nominal D)")
+        if shown.get("inlet_p_Pa") is not None:
+            bits.append(f"the inlet's area-averaged pressure {num(shown['inlet_p_Pa'], 4)} Pa (the outlet's 0 Pa)"
+                        + (f", flow out against in {num(shown['imbalance_pct'], 2)} %" if shown.get("imbalance_pct") is not None else ""))
         if shown.get("f_darcy") is not None:
             bits.append(f"Darcy f {num(shown['f_darcy'], 4)} at Re_eff {num(shown['re_eff'], 5)}")
         if shown.get("probe_ucl_over_ub") is not None:

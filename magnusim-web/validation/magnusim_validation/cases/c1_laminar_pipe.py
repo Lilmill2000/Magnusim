@@ -137,6 +137,10 @@ NOTES = (
     "Plot over path samples the field interpolated to the mesh's points (each point the average of its cells), "
     "which reads a peak low where the cells are coarse. The centreline Point probes (the containing cell's own "
     "value) are shown beside it as the cross-check.",
+    "The development length is read where the centreline speed is nearly flat (about 0.03 % of it per mm on the "
+    "Hex-dominant mesh), so a change in the fourth digit of the solution moves the 99 % point by millimetres: two "
+    "runs of the same plan on Hex-dominant on 2026-11-04 (142 and 144 iterations, the same mesh) read 5.71 and "
+    "5.54. Its band is wide (±15 %) for that reason and for the 99 % definition.",
 )
 
 
@@ -268,6 +272,12 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
         ub, d_eff = U, D
         warnings.append("no inlet flow or patch areas from the monitors: D and U_b are the nominal 20 mm and 1 m/s")
     shown["re_eff"] = ub * d_eff / NU
+    p_in = raw.patch_pressure("inlet")
+    if p_in is not None:
+        shown["inlet_p_Pa"] = p_in
+    bal = raw.flow_balance()
+    if bal and bal.get("in_m3s"):
+        shown["imbalance_pct"] = 100.0 * bal.get("imbalance", 0.0) / bal["in_m3s"]
 
     p_line = raw.line("p_axis")
     u_line = raw.line("u_axis")
@@ -348,18 +358,25 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
 
 
 def setup_words(result: dict[str, Any]) -> str:
-    """The setup in words, for the report."""
-    v = result.get("variant")
-    mesh = result.get("setup", {}).get("mesh", {})
-    fine = (mesh.get("settings") or {}).get("fineness")
-    lay = ("an Inflate boundary layer of 4 layers, 1 mm in all, on the wall" if v == "hexdominant"
-           else "the mesher's automatic boundary layers and hex core")
+    """The case's setup in words, for the report (the same for every variant)."""
     return (
         f"A {GEOMETRY_WORDS} (STEP in mm, built with OCP); a custom fluid with nu = {NU:g} m²/s and "
         f"rho = {RHO:g} kg/m³, so Re = U D / nu = {RE:g}; a velocity inlet of {U:g} m/s normal to the face, "
         f"a 0 Pa pressure outlet and a no-slip wall; laminar, steady (simpleFoam), Accurate numerics, residual "
-        f"targets 1e-6; {VARIANT_LABELS.get(str(v), v)} mesh at fineness {fine} with {lay}."
+        f"targets 1e-6, at most 3000 iterations."
     )
+
+
+def mesh_words(result: dict[str, Any]) -> str:
+    """One variant's mesh settings in words."""
+    v = result.get("variant")
+    mesh = result.get("setup", {}).get("mesh", {})
+    fine = (mesh.get("settings") or {}).get("fineness")
+    lay = ("an Inflate boundary layer of 4 layers, 1 mm in all, on the wall (automatic boundary layers off)"
+           if v == "hexdominant" else "its automatic boundary layers and hex core")
+    n_orth = ((result.get("setup", {}).get("study") or {}).get("settings") or {}).get("n_non_orthogonal")
+    return (f"{VARIANT_LABELS.get(str(v), v)} at fineness {fine} with {lay}; "
+            f"{n_orth} non-orthogonal corrector{'s' if n_orth != 1 else ''}")
 
 
 # ---------------------------------------------------------------------------------------- figures

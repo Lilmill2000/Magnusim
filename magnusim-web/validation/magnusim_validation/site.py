@@ -114,6 +114,8 @@ def build_index(results: list[dict[str, Any]]) -> str:
             out.append(f"<h3>{esc(label)}</h3><ul class=facts>")
             status = res["status"] + (f": {res['status_detail']}" if res.get("status_detail") else "")
             out.append(f"<li>Status: {esc(status)}</li>")
+            if res["setup"].get("mesh_words"):
+                out.append(f"<li>Mesh settings: {esc(res['setup']['mesh_words'])}</li>")
             out.append(
                 f"<li>Mesh: {esc(_num(m.get('n_cells'), 7))} cells; checkMesh "
                 f"{'OK' if qual.get('ok') else 'not OK' if qual.get('known') else 'unknown'}"
