@@ -13,6 +13,7 @@ import { cleanText } from '../sanitize.ts';
 import { scrubContext, scrubText } from '../../../solver-log-scrub.js';
 import { NOT_CHECKED, chipWord, earlierPartLines, healthNextWords, noRecordWords, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
 import { pendingContinue, runEditState, valuesBeforeContinue } from '../../../../src/workbench/runReopen.ts';
+import { splitKept, withPrecheckCosts, type CheckRow } from '../../../../src/workbench/runCheckWords.ts';
 import { runFields } from './catalog.ts';
 import {
   badValues,
@@ -41,7 +42,9 @@ import {
   type HostToolDef,
 } from './common.ts';
 
-export const RESULT_KINDS = ['status', 'residuals', 'monitors', 'times', 'field_range', 'point', 'line', 'plugin_filter', 'media', 'exports', 'transient_preview', 'health', 'log_tail'] as const;
+export const RESULT_KINDS = ['status', 'residuals', 'monitors', 'times', 'field_range', 'point', 'line', 'plugin_filter', 'media', 'exports', 'transient_preview', 'health', 'log_tail', 'precheck'] as const;
+/** RH2: the most a `precheck` answer carries. */
+export const PRECHECK_ANSWER_MAX = 8 * 1024;
 /** RH1: the most a `health` and a `log_tail` answer carries. */
 export const HEALTH_ANSWER_MAX = 8 * 1024;
 export const LOG_TAIL_MAX = 24 * 1024;
@@ -83,7 +86,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
     name: 'read_results',
     title: 'Read the results',
     description:
-      'A run\'s numbers: status, residuals, monitors, times, field_range, point, line, plugin_filter, media, exports, transient_preview, health, log_tail. "" = this window\'s project, the shown study, its active run; time -1 = latest; unused: "", [], 0.',
+      'A run\'s numbers: status, residuals, monitors, times, field_range, point, line, plugin_filter, media, exports, transient_preview, health, log_tail, precheck. "" = this window\'s project, the shown study, its active run; time -1 = latest; unused: "", [], 0.',
     schema: objectSchema({
       project_id: S.id('"" = this window\'s project'),
       simulation_id: S.id('"" = the study shown'),
@@ -99,7 +102,7 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
       },
       samples: { type: 'integer', minimum: 0, maximum: 2000, description: 'line: samples along it; log_tail: lines (max 200); 0 = 100' },
       filter_key: S.text(80, 'plugin_filter: the filter (catalog filters); log_tail: "" or "issues"'),
-      values: S.values(24, 400, 'plugin_filter: its fields; transient_preview: transient.* keys. Each value is JSON text.'),
+      values: S.values(24, 400, 'plugin_filter: its fields; transient_preview, precheck: transient.* keys. Each value is JSON text.'),
     }),
     risk: 'read',
     projectData: true,
@@ -174,6 +177,21 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
           }
           case 'log_tail':
             return await logTail(d, o, { project, sim, runId, run, input });
+          case 'precheck': {
+            // What-if values: proposed transient.* settings, checked without saving (spec 4.5).
+            let proposed: Record<string, unknown> | null = null;
+            if (Array.isArray(input.values) && input.values.length) {
+              const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
+              const study = studies.list.find((s) => s.id === sim) ?? {};
+              const fields = runFields(registry, str(study.analysis_type)).filter((f) => f.key.startsWith('transient.'));
+              const parsed = parseValues(input.values, fields);
+              if (!parsed.ok) return badValues(parsed.problems, "precheck takes transient.* keys (catalog {kind:'analyses', key} lists them).");
+              const nested = nest(parsed.values);
+              proposed = isRecord(nested.transient) ? (nested.transient as Record<string, unknown>) : {};
+            }
+            const pc = (await d.hostCall('run.precheck', { project_id: project, simulation_id: sim, run_id: runId, ...(proposed ? { transient: proposed } : {}) }, o)) as Record<string, unknown>;
+            return precheckAnswer(pc, { runId, runName, sim, proposed });
+          }
           case 'residuals': {
             const rows = records(run.residuals);
             if (!rows.length) return noResults();
@@ -339,6 +357,83 @@ function statusWarnings(raw: unknown): Array<{ code: string; message: string; sc
     .map((w) => ({ code: text(w.code, 40) || '', message: scrubText(str(w.message), ctx, 300), scrubbed: true as const }));
 }
 
+/**
+ * A pre-run check fix as the tool call that makes it (spec 4.5): a run fix through setup_edit's run
+ * update, a study fix through study_edit set (both behind their usual cards, the routes the
+ * Run panel's Apply calls), a steady copy as study_edit copy then set_time; a place to open as
+ * the read that shows it.
+ */
+function checkFixCall(f: Record<string, unknown>, runId: string, sim: string) {
+  const values = records(f.values).map((v) => ({ key: text(v.key, 80), value: JSON.stringify(v.value ?? null) }));
+  const target = text(f.target, 20) || 'run';
+  let call: string | null = null;
+  if (target === 'run') call = `setup_edit {kind:'run', action:'update', id:'${runId}', values:${JSON.stringify(values)}}`;
+  else if (target === 'study') call = `study_edit {action:'set', id:'${sim}', values:${JSON.stringify(values)}}`;
+  else if (target === 'steady_copy') call = `study_edit {action:'copy', copy_from:'${sim}', copy_mode:'settings'}, then study_edit {action:'set_time', id:<the copy>, time_dependency:'steady'}`;
+  else if (target === 'mesh') call = "read_setup {what:'mesh'} (the person changes the mesh in its panel)";
+  else if (target === 'bcs') call = "read_setup {what:'bcs'}";
+  return {
+    label: text(f.label, 80),
+    target,
+    values,
+    cost: isRecord(f.cost) ? { steps: num(f.cost.steps), wall_s: num(f.cost.wall_s) } : null,
+    call,
+  };
+}
+
+/**
+ * read_results {kind:'precheck', values?} (RH2, spec 4.5): the run's pre-run check as "Before you
+ * start" shows it: the settings checked (saved, or with the proposed values over them), the mesh,
+ * the estimate, the velocity limit, the last other run's health and the rows (the health finding
+ * shape, with `kept`). Nothing is saved.
+ */
+function precheckAnswer(pc: Record<string, unknown>, c: { runId: string; runName: string; sim: string; proposed: Record<string, unknown> | null }): ToolOutcome {
+  if (pc.ok === false) return fail('failed', text(pc.error, 300) || 'The pre-run check did not answer.');
+  if (pc.checked === false) {
+    return okData({ run_id: c.runId, checked: false, why: text(pc.unavailable, 300) || 'This kind of run has no pre-run check.', shown_in: 'Run panel → Before you start' }, `${c.runName}: no pre-run check`);
+  }
+  const est = isRecord(pc.estimate) ? pc.estimate : null;
+  const kept: string[] = Array.isArray(pc.kept) ? pc.kept.map((k) => text(k, 40) || '').filter(Boolean) : [];
+  const rows = records(pc.checks) as unknown as CheckRow[];
+  const { open } = splitKept(rows, kept);
+  const findings = rows.map((r) => {
+    const raw = r as unknown as Record<string, unknown>;
+    return {
+      code: text(raw.code, 40),
+      level: text(raw.level, 10),
+      text: text(raw.text, 500),
+      fix: [raw.fix, raw.alt].filter(isRecord).map((f) => checkFixCall(f, c.runId, c.sim)),
+      kept: raw.kept === true || kept.includes(text(raw.code, 40) || ''),
+    };
+  });
+  const wall = est ? num(est.wall_s) : null;
+  const out: Record<string, unknown> = {
+    run_id: c.runId,
+    using: c.proposed ? 'proposed' : 'saved',
+    settings: isRecord(pc.settings) ? pc.settings : null,
+    mesh: isRecord(pc.mesh) ? pc.mesh : null,
+    estimate: est
+      ? {
+          delta_t_s: num(est.delta_t_s),
+          steps: num(est.steps ?? est.iterations),
+          wall_h: wall === null ? null : Math.round((wall / 3600) * 100) / 100,
+          flow_through_s: num(est.flow_through_s),
+          line: text(est.line, 400),
+        }
+      : null,
+    velocity_cap: est ? num(est.velocity_cap) : null,
+    earlier: isRecord(pc.earlier) ? pc.earlier : null,
+    findings,
+    shown_in: 'Run panel → Before you start',
+  };
+  // At most 8 KB: the alternatives' calls go first, then the notes.
+  const size = () => Buffer.byteLength(JSON.stringify(out), 'utf8');
+  if (size() > PRECHECK_ANSWER_MAX) for (const f of findings) f.fix = f.fix.slice(0, 1);
+  if (size() > PRECHECK_ANSWER_MAX) out.findings = findings.filter((f) => f.level !== 'info');
+  const n = open.length;
+  return okData(out, `${c.runName}: ${n ? `${n} to look at before it starts` : 'nothing found before it starts'}${c.proposed ? ' (with the proposed values)' : ''}`);
+}
+
 /** What read_results status says of a run's health: its verdict, its finding codes and where Continue would go on from. */
 function healthSummary(raw: unknown): { verdict: string; codes: string[]; restart: string | null } | null {
   if (!isRecord(raw) || typeof raw.verdict !== 'string') return null;
@@ -425,7 +520,9 @@ async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<t
   const view = runView(run, runName, studyTransient);
   // The change waiting for its Continue (A2), as the Run panel's Continue box shows it.
   const pending = pendingContinue(run);
-  const next = healthNextWords(view, h, pending);
+  // RH2 (spec 3.10): a fix's cost is the pre-run check's estimate of the same values when the run has one.
+  const prepRun = isRecord(run.prepare_run) ? run.prepare_run : {};
+  const next = healthNextWords(view, withPrecheckCosts(h, Array.isArray(prepRun.checks) ? (prepRun.checks as CheckRow[]) : null), pending);
   const before = valuesBeforeContinue(run);
   const findings = records(rec.findings).map((f) => ({
     code: text(f.code, 40),

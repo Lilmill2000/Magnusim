@@ -268,7 +268,7 @@ describe('compute', () => {
   it('run_start: start_id, then busy → the page\'s queue row (flat body), same_run → already running, a mesh not generated → not_ready', async () => {
     S.mesh.generated = true;
     let out = await tools().compute.run(input({ action: 'run_start' }), rt());
-    assert.equal(out.ok, true);
+    assert.equal(out.ok, true, JSON.stringify(out));
     const start = writes().find((x) => x.path === '/api/run/start');
     assert.deepEqual(start.body, { project_id: P, simulation_id: 's1', run_id: 'r1', start_id: 'ai-abc123def456' });
     assert.equal(out.data.job_id, 'solve.r1');
@@ -298,6 +298,32 @@ describe('compute', () => {
     out = await tools().compute.run(input({ action: 'run_start' }), rt());
     assert.equal(out.data.state, 'queued');
     assert.equal(writes().find((x) => x.path === '/api/compute-queue').body.mesh_generating, true);
+  });
+
+  it('run_start answers what the pre-run check found as it started (RH2: "Started with 1 warning: …", the Run panel line "Checked at start")', async () => {
+    S.mesh.generated = true;
+    const before = S.run;
+    S.run = {
+      ...S.run,
+      prepare_run: {
+        checks: [
+          { code: 'piso_high_co', level: 'warn', text: 'Max Courant 100 with 1 outer corrector.', short: 'Max Courant 100 with PISO' },
+          { code: 'still_start', level: 'info', text: 'The run starts from rest.', short: 'starts from rest' },
+        ],
+      },
+    };
+    try {
+      const out = await tools().compute.run(input({ action: 'run_start' }), rt());
+      assert.equal(out.ok, true, JSON.stringify(out));
+      assert.equal(out.data.done, 'Run 1 started. Started with 1 warning: Max Courant 100 with PISO.');
+      assert.equal(out.data.detail.checked_at_start, 'Started with 1 warning: Max Courant 100 with PISO.');
+      // Nothing found: the plain answer.
+      S.run = { ...before, prepare_run: { checks: [] } };
+      const plain = await tools().compute.run(input({ action: 'run_start' }), rt());
+      assert.equal(plain.data.done, 'Run 1 started');
+    } finally {
+      S.run = before;
+    }
   });
 
   it('run_start on a run with no mesh of its own: it takes the study mesh first, as the page Start does (seen live: "Generated mesh case missing" after the mesh had just finished)', async () => {

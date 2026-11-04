@@ -117,6 +117,8 @@ export function runFields(registry: Record<string, unknown>, analysisKey: string
     field('writeInterval', 'integer', 'Save every (steady)', { min: 1 }),
     field('cores', 'integer', 'Cores', { min: 1, max: 256, description: 'null = Auto' }),
     field('mesh_id', 'string', 'Mesh', { description: 'a mesh id from read_setup meshes' }),
+    // RH2: the pre-run check's codes kept as set (Run panel → Before you start → Keep as set).
+    field('checks_kept', 'array', 'Kept as set', { items: 'string', maxItems: 32, description: 'pre-run check codes kept as set (read_results precheck); [] = none' }),
   ];
   for (const f of flattenSchema(transient?.control_schema)) out.push({ ...f, key: `transient.${f.key}` });
   return out;

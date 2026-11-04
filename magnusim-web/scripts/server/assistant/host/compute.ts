@@ -43,6 +43,7 @@ import { jobIdOf, parseJobId, type JobKind } from './job-state.ts';
 import { rememberJob } from './turn-jobs.ts';
 import { overwritesResults, overwriteWords, runEditState } from '../../../../src/workbench/runReopen.ts';
 import { atWords, changeWords, continueAskWords, repeatSentence, type HealthRecord, type HealthRunView } from '../../../../src/workbench/runHealthWords.ts';
+import { startedWithWords, type CheckRow } from '../../../../src/workbench/runCheckWords.ts';
 
 /**
  * The run_start calls whose card asked to start a stopped or failed run over (its results
@@ -531,7 +532,19 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
     }
     const jobId = remember('running');
     sync();
-    return answer(cont ? `${name} continues` : `${name} started`, jobId, 'running', 0);
+    if (cont) return answer(`${name} continues`, jobId, 'running', 0);
+    // RH2: what the pre-run check found as it started (its prepare_run.checks), as the Run panel's
+    // "Checked at start" line says it; none of it stopped the start.
+    let startWords = '';
+    try {
+      const st = (await call('run.status', { project_id: projectId, simulation_id: study.id, run_id: runId }, o(rt))) as Record<string, unknown>;
+      const doc = isRecord(st.run) ? st.run : null;
+      const prep = doc && isRecord(doc.prepare_run) ? doc.prepare_run : null;
+      startWords = prep && Array.isArray(prep.checks) ? startedWithWords(prep.checks as CheckRow[]) : '';
+    } catch {
+      startWords = '';
+    }
+    return answer(startWords ? `${name} started. ${startWords}` : `${name} started`, jobId, 'running', 0, startWords ? { checked_at_start: startWords } : {});
   }
 
   async function vtkExport(projectId: string, input: Record<string, unknown>, rt: ToolRunContext): Promise<ToolOutcome> {

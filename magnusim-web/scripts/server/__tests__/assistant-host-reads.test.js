@@ -396,6 +396,77 @@ describe('read_results', () => {
   });
 });
 
+describe('read_results: precheck (RH2)', () => {
+  const res = (kind, more = {}) => ok('read_results', { project_id: '', simulation_id: '', run_id: '', kind, field: '', time: -1, points: [], samples: 0, filter_key: '', values: [], ...more });
+  const PISO = {
+    code: 'piso_high_co',
+    level: 'warn',
+    text: 'Max Courant 100 with 1 outer corrector.',
+    short: 'Max Courant 100 with PISO',
+    fix: { label: '3 outer correctors, Max Courant 5', target: 'run', values: [{ key: 'transient.n_outer_correctors', value: 3 }, { key: 'transient.max_co', value: 5 }], cost: { steps: 180000, wall_s: 315000 } },
+    alt: { label: 'Max Courant 1', target: 'run', values: [{ key: 'transient.max_co', value: 1 }], cost: { steps: 900000, wall_s: 525000 } },
+    kept: false,
+  };
+  const STILL = { code: 'still_start', level: 'info', text: 'The run starts from rest.', fix: { label: 'Start from potential flow', target: 'study', values: [{ key: 'potential_flow', value: true }], cost: null }, alt: null, kept: false };
+  const STEADY = { code: 'steady_for_mean', level: 'warn', text: 'A steady run solves the mean.', fix: { label: 'Make a steady copy', target: 'steady_copy', values: [], cost: { steps: 1500, wall_s: 900 } }, alt: null, kept: false };
+  const answer = (extra = {}) => ({
+    ok: true,
+    checked: true,
+    checks: [PISO, STEADY, STILL],
+    estimate: { line: 'Δt ≈ 1.1e-5 s at Max Courant 1', delta_t_s: 1.11e-5, steps: 900000, wall_s: 525000, flow_through_s: 0.177, velocity_cap: 226.113 },
+    earlier: { run_id: 'r9', name: 'Run_2', verdict: 'unhealthy', codes: ['pv_coupling'] },
+    mesh: { cells: 625221, max_non_orthogonality: 55, max_skewness: 2.1, max_aspect_ratio: 12 },
+    settings: { max_co: 100, n_outer_correctors: 1 },
+    kept: ['still_start'],
+    ...extra,
+  });
+
+  it("the run's check as Before you start shows it: the rows with their fix calls, kept, the estimate, the velocity limit and the last run's health", async () => {
+    fresh();
+    app.over = (m, path) => (path === '/api/run/precheck' ? answer() : undefined);
+    const from = app.seen.length;
+    const pc = await res('precheck');
+    const req = app.seen.slice(from).find((r) => r.path === '/api/run/precheck');
+    assert.deepEqual(req.body, { project_id: 'p1', run_id: 'r1', simulation_id: 's1' });
+    assert.equal(pc.using, 'saved');
+    assert.equal(pc.shown_in, 'Run panel → Before you start');
+    assert.deepEqual(pc.estimate, { delta_t_s: 1.11e-5, steps: 900000, wall_h: 145.83, flow_through_s: 0.177, line: 'Δt ≈ 1.1e-5 s at Max Courant 1' });
+    assert.equal(pc.velocity_cap, 226.113);
+    assert.deepEqual(pc.earlier, { run_id: 'r9', name: 'Run_2', verdict: 'unhealthy', codes: ['pv_coupling'] });
+    assert.deepEqual(pc.mesh, { cells: 625221, max_non_orthogonality: 55, max_skewness: 2.1, max_aspect_ratio: 12 });
+    const [piso, steady, still] = pc.findings;
+    assert.deepEqual([piso.code, piso.level, piso.kept, still.kept], ['piso_high_co', 'warn', false, true]);
+    // The fix and the alternative as the calls that make them (setup_edit's run update; study_edit set).
+    assert.equal(piso.fix[0].call, `setup_edit {kind:'run', action:'update', id:'r1', values:[{"key":"transient.n_outer_correctors","value":"3"},{"key":"transient.max_co","value":"5"}]}`);
+    assert.equal(piso.fix[1].call, `setup_edit {kind:'run', action:'update', id:'r1', values:[{"key":"transient.max_co","value":"1"}]}`);
+    assert.deepEqual(piso.fix[0].cost, { steps: 180000, wall_s: 315000 });
+    assert.equal(still.fix[0].call, `study_edit {action:'set', id:'s1', values:[{"key":"potential_flow","value":"true"}]}`);
+    assert.match(steady.fix[0].call, /^study_edit \{action:'copy', copy_from:'s1', copy_mode:'settings'\}, then study_edit \{action:'set_time'/);
+    assert.ok(Buffer.byteLength(JSON.stringify(pc), 'utf8') <= 8 * 1024);
+  });
+
+  it('values: proposed transient.* settings checked without saving (using: proposed); other keys are refused', async () => {
+    fresh();
+    app.over = (m, path) => (path === '/api/run/precheck' ? answer({ checks: [STILL] }) : undefined);
+    const from = app.seen.length;
+    const pc = await res('precheck', { values: [{ key: 'transient.n_outer_correctors', value: '3' }, { key: 'transient.max_co', value: '5' }] });
+    const reqs = app.seen.slice(from);
+    assert.deepEqual(reqs.find((r) => r.path === '/api/run/precheck').body, { project_id: 'p1', run_id: 'r1', simulation_id: 's1', transient: { n_outer_correctors: 3, max_co: 5 } });
+    assert.ok(!reqs.some((r) => r.path === '/api/run/update'), 'nothing saved');
+    assert.equal(pc.using, 'proposed');
+    assert.deepEqual(pc.findings.map((f) => f.code), ['still_start']);
+    const bad = await tools().read_results.run({ project_id: '', simulation_id: '', run_id: '', kind: 'precheck', field: '', time: -1, points: [], samples: 0, filter_key: '', values: [{ key: 'endTime', value: '5' }] }, rt());
+    assert.equal(bad.error.code, 'bad_values');
+  });
+
+  it('an analysis without the check says so', async () => {
+    fresh();
+    app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: false, checks: [], estimate: null, unavailable: 'Its plugin is off.' } : undefined);
+    const pc = await res('precheck');
+    assert.deepEqual(pc, { run_id: 'r1', checked: false, why: 'Its plugin is off.', shown_in: 'Run panel → Before you start' });
+  });
+});
+
 describe('read_results: health, log_tail and the status fields (RH1)', () => {
   const res = (kind, more = {}) => ok('read_results', { project_id: '', simulation_id: '', run_id: '', kind, field: '', time: -1, points: [], samples: 0, filter_key: '', values: [], ...more });
   const FIX = { label: 'New run: 3 outer correctors, Max Courant 5', target: 'new_run', values: [{ key: 'transient.n_outer_correctors', value: 3 }, { key: 'transient.max_co', value: 5 }], cost: { steps: 177878, wall_s: 308946 } };
@@ -446,6 +517,18 @@ describe('read_results: health, log_tail and the status fields (RH1)', () => {
     assert.equal(fix.call, `setup_edit {kind:'run', action:'add', other_id:'r1', name:'Run 1 fixed', values:${JSON.stringify(fix.values)}}`);
     assert.ok(!JSON.stringify(h).includes('/home/someone'));
     assert.ok(Buffer.byteLength(JSON.stringify(h), 'utf8') <= 8 * 1024);
+  });
+
+  it("health's fix label takes the pre-run check's cost of the same values when the run has one (spec 3.10)", async () => {
+    withRun({ prepare_run: { checks: [{ code: 'piso_high_co', level: 'warn', text: 'x', fix: { label: '3 outer correctors, Max Courant 5', target: 'run', values: [{ key: 'transient.n_outer_correctors', value: 3 }, { key: 'transient.max_co', value: 5 }], cost: { steps: 181000, wall_s: 320000 } } }] } });
+    app.over = (m, path) => (path === '/api/run/health' ? { ok: true, run_id: 'r1', health, health_checked: true } : undefined);
+    const h = await res('health');
+    assert.deepEqual(h.next.fixes[0].cost, { steps: 181000, wall_s: 320000 });
+    assert.deepEqual(h.checked_at_start, ['piso_high_co']);
+    // Without checks at start: the run's own measured cost.
+    withRun();
+    app.over = (m, path) => (path === '/api/run/health' ? { ok: true, run_id: 'r1', health, health_checked: true } : undefined);
+    assert.deepEqual((await res('health')).next.fixes[0].cost, { steps: 177878, wall_s: 308946 });
   });
 
   it("health's next offers \"Use when continuing\" only where the Run panel does; a waiting change: only Health on the continued part can tell; the fix's call sets the run's own values back (S3, S4, S5)", async () => {

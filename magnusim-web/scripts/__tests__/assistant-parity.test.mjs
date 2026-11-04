@@ -34,7 +34,7 @@ const { defaultHostTools } = await import('../server/assistant/host-tools.ts');
 const { HOST_ROUTES } = await import('../server/assistant/host-call.ts');
 
 /** The audit's Tier 0 and Tier 1 rows, and the Tier 2 rows the tools cover (spec 16.4): the fixture's header must say the same. */
-const REQUIRED = ['H1-H14', 'G1-G18', 'S1-S15', 'M1-M7', 'B1-B10', 'X1-X19', 'R1-R31', 'V1-V25', 'Q1-Q5', 'P2', 'P6', 'P8', 'P23', 'P24', 'L7', 'L9'];
+const REQUIRED = ['H1-H14', 'G1-G18', 'S1-S15', 'M1-M7', 'B1-B10', 'X1-X19', 'R1-R34', 'V1-V25', 'Q1-Q5', 'P2', 'P6', 'P8', 'P23', 'P24', 'L7', 'L9'];
 
 /** "H1-H14" → H1 … H14; "P2" → P2. */
 function expand(spec) {

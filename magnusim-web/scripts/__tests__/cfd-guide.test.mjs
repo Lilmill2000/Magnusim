@@ -39,6 +39,13 @@ describe('the CFD guide in Magnusim', () => {
     assert.ok(rule8.startsWith('8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply when it continues'), rule8);
   });
 
+  it('rule 9 (RH2) names the pre-run check, its what-if values and its cost, with no lane tag', () => {
+    const g = cfdGuideText();
+    const rule9 = g.split('\n').find((l) => l.startsWith('9. '));
+    assert.equal(rule9, '9. Before a run: read_results precheck, with proposed values to compare; give the cost (steps, time) from its estimate.');
+    assert.doesNotMatch(g, /\[RH\d\]/);
+  });
+
   it('goes in the system blocks after the prompt, before the workspace notes, with one cache mark', () => {
     const req = buildRequest(conv({ text: 'Notes.', pluginName: 'Demo' }), [], settings);
     assert.equal(req.system.length, 3);

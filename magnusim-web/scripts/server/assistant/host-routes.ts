@@ -117,6 +117,12 @@ export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
   'results.filter': read('/api/filter/:key', (a) => ({ ...obj(a.params), project_id: str(a.project_id), simulation_id: opt(str(a.simulation_id)), case: opt(str(a.case)) })),
   'media.list': read('/api/media/list', (a) => ({ ...PS(a), owner: str(a.owner) })),
   'results.export': read('/api/results/export-vtk/:id', P),
+  // RH2: the pre-run check, a read (w27 precheckRun): proposed transient settings are checked, not saved.
+  'run.precheck': write(
+    '/api/run/precheck',
+    (a) => ({ project_id: str(a.project_id), run_id: str(a.run_id), simulation_id: opt(str(a.simulation_id)), transient: a.transient === undefined ? undefined : obj(a.transient) }),
+    { band: 'read', timeoutMs: 120_000 },
+  ),
   // A read: it writes nothing (w27 previewTransient).
   'run.transient_preview': write(
     '/api/run/transient-preview',

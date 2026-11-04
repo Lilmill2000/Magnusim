@@ -6,6 +6,7 @@
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { failed, hostTool, isRecord, objectSchema, offeredIn, okData, projectIdOf, readableProject, records, S, str, studyIdOf, text, via, type HostToolDeps, type HostToolDef } from './common.ts';
+import { splitKept, type CheckRow } from '../../../../src/workbench/runCheckWords.ts';
 
 /** The tool call that fixes an issue, by its fix's `go` (runtime.js openSetupFix). */
 export function fixCall(go: string, fix: Record<string, unknown>): string | null {
@@ -72,7 +73,26 @@ export function explainReadyTool(d: HostToolDeps): HostToolDef {
           });
         // A stale mesh is put first without `ready` changing (w27): the issues decide.
         const ready = issues.length === 0 && verdict.ready !== false;
-        return okData({ ready, simulation_id: sim, issues }, ready ? 'Ready to run' : `${issues.length} issue${issues.length === 1 ? ' blocks' : 's block'} the run`);
+        // RH2: what the pre-run check would point out ("Before you start"); none of it blocks Start.
+        let advisories: number | null = null;
+        try {
+          const o = via(rt, 'explain_ready');
+          const st = (await d.hostCall('run.status', { project_id: project, simulation_id: sim, run_id: str(input.run_id) }, o)) as Record<string, unknown>;
+          const run = isRecord(st.run) ? st.run : null;
+          const runId = run ? str(run.id ?? run.run_id) : '';
+          if (runId) {
+            const pc = (await d.hostCall('run.precheck', { project_id: project, simulation_id: sim, run_id: runId }, o)) as Record<string, unknown>;
+            if (pc.ok !== false && pc.checked !== false) {
+              advisories = splitKept(records(pc.checks) as unknown as CheckRow[], Array.isArray(pc.kept) ? pc.kept.map((k) => str(k)) : []).open.length;
+            }
+          }
+        } catch {
+          advisories = null;
+        }
+        const out: Record<string, unknown> = { ready, simulation_id: sim, issues, advisories };
+        if (advisories) out.hint = "read_results {kind:'precheck'} lists them with their fixes (Run panel → Before you start); none blocks Start.";
+        const said = ready ? 'Ready to run' : `${issues.length} issue${issues.length === 1 ? ' blocks' : 's block'} the run`;
+        return okData(out, advisories ? `${said}; ${advisories} to look at before it starts` : said);
       } catch (err) {
         return failed(err);
       }

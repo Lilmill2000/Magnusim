@@ -551,6 +551,24 @@ describe("setup_edit on a run that ended: the person's rules and words", () => {
     assert.equal(named.out.ok, true, JSON.stringify(named.out));
   });
 
+  it("RH2: checks_kept (Keep as set) is a run key setup_edit's run update sends to run.update as it is; it asks nothing, even on a stopped or finished run", async () => {
+    withStopped();
+    const tool = t();
+    const keep = setup({ kind: 'run', action: 'update', id: 'r3', values: [{ key: 'checks_kept', value: '["piso_high_co","long_run"]' }] });
+    assert.equal(await tool.escalate(keep, ac()), null, 'a free setting: no card');
+    const r = await sent(tool, keep);
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.deepEqual(r.writes.map((w) => [w.path, w.body.checks_kept, 'overwrite' in w.body]), [['/api/run/update', ['piso_high_co', 'long_run'], false]]);
+    // A finished run keeps its solve settings, but its kept codes still save (nothing of the solve changes).
+    fresh();
+    const done = await sent(t(), setup({ kind: 'run', action: 'update', id: 'r1', values: [{ key: 'checks_kept', value: '["piso_high_co"]' }] }));
+    assert.equal(done.out.ok, true, JSON.stringify(done.out));
+    assert.deepEqual(done.writes[0].body.checks_kept, ['piso_high_co']);
+    // Not a list: refused with the field's words, nothing written.
+    const bad = await sent(t(), setup({ kind: 'run', action: 'update', id: 'r2', values: [{ key: 'checks_kept', value: '"piso_high_co"' }] }));
+    assert.deepEqual([bad.out.error.code, bad.writes], ['bad_values', []]);
+  });
+
   it('add with other_id: the next run with that run\'s settings and the changes, in one call; the finished run untouched', async () => {
     fresh();
     const r = await sent(t(), setup({ kind: 'run', action: 'add', other_id: 'r1', values: [{ key: 'endTime', value: '300' }] }));

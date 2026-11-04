@@ -1,10 +1,13 @@
 // The person's side of the Assistant's new parity rows (spec 3.17 item 6): each row of
-// scripts/server/assistant/parity-rows.json that names a `ui_control` (RH1: R25-R31) has that
-// control in the app, where its `reach` says, for a person to use. It covers nothing beyond the
-// new rows (spec 10, Cut).
+// scripts/server/assistant/parity-rows.json that names a `ui_control` (RH1: R25-R31; RH2: R32-R34)
+// has that control in the app, where its `reach` says, for a person to use. It covers nothing
+// beyond the new rows (spec 10, Cut). RH2's rows are checked both ways: what the person does
+// in Before you start is what the Assistant's routes read, and what those routes write is what
+// the person sees.
 // Its own server with the fake compute replaying Run_2's log through the real health tracker
 // (MAGNUSIM_TEST_SOLVE_LOG), so a run with a health record exists; an old run with a log and no
-// record has "Check its log".
+// record has "Check its log". The fake mesher writes a clean checkMesh report with its one-cell
+// mesh (MAGNUSIM_TEST_MESH_CHECKMESH), so a draft's pre-run check has its mesh's quality.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
@@ -17,6 +20,7 @@ import { expect, test } from './support/stress.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HEALTH = join(WEB, 'python', 'tests', 'fixtures', 'health');
+const CHECKMESH = join(WEB, 'python', 'tests', 'fixtures', 'mesh-facts', 'checkmesh', 'ok-hex-2d.log');
 const ROWS = JSON.parse(readFileSync(join(WEB, 'scripts', 'server', 'assistant', 'parity-rows.json'), 'utf8')).rows;
 const PID = 'parity-ui-e2e';
 const STEP = { timeout: 30_000 };
@@ -47,6 +51,7 @@ test.beforeAll(async ({ request }) => {
     env: {
       MAGNUSIM_TEST_COMPUTE: 'fake',
       MAGNUSIM_TEST_MESH_SECONDS: '1',
+      MAGNUSIM_TEST_MESH_CHECKMESH: CHECKMESH,
       MAGNUSIM_TEST_SOLVE_SECONDS: '1',
       MAGNUSIM_TEST_SOLVE_LOG: join(HEALTH, 'run2-head.log.gz'),
       MAGNUSIM_TEST_SOLVE_PACE_MS: '5',
@@ -103,4 +108,45 @@ test('each RH1 parity row names a control the person has (R25-R31)', async ({ pa
   expect(sel('R31')).toContain('[data-run-health-badge]');
   const oldPanel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: oid });
   await expect(oldPanel.locator(sel('R29'))).toHaveText('Check its log', STEP);
+});
+
+/** RH2's rows that name the person's control. */
+const RH2_ROWS = ROWS.filter((r) => r.ui_control && /^R3[2-4]$/.test(r.row));
+const precheck = async (request, id) => postOk(request, '/api/run/precheck', { project_id: PID, simulation_id: sim, run_id: id });
+
+test("each RH2 parity row names the person's control, and both sides read and write the same (R32-R34)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  expect(RH2_ROWS.map((r) => r.row)).toEqual(['R32', 'R33', 'R34']);
+  const sel = (row) => RH2_ROWS.find((r) => r.row === row).ui_control.selector;
+  const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name: 'Run_pc', mesh_id: meshId });
+  const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, transient: { end_time: 10, write_count: 60, max_co: 100, n_outer_correctors: 1, n_correctors: 2 } });
+  const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+  // R32: Before you start; the Assistant's read (run.precheck) has the row the person sees, word for word.
+  const block = panel.locator(sel('R32'));
+  await expect(block).toBeVisible(STEP);
+  const row = block.locator('[data-run-check-row="piso_high_co"]');
+  await expect(row).toBeVisible(STEP);
+  const read = await precheck(request, rid);
+  const piso = read.checks.find((c) => c.code === 'piso_high_co');
+  await expect(row.locator('[data-run-check-text="1"]')).toHaveText(piso.text);
+  // R33: the person's Apply writes what the Assistant's run update would (run.update): the route's
+  // next read has no such row and the run has the fix's values.
+  await row.locator(sel('R33')).click();
+  await expect.poll(async () => (await precheck(request, rid)).checks.some((c) => c.code === 'piso_high_co'), STEP).toBe(false);
+  const fixed = await runRow(request, rid);
+  expect([fixed.transient?.n_outer_correctors, fixed.transient?.max_co]).toEqual([3, 5]);
+  await expect(block.locator('[data-run-check-row="piso_high_co"]')).toHaveCount(0, STEP);
+  // R34: the person's Keep as set is what the Assistant reads as kept (checks_kept).
+  const first = block.locator('[data-run-check-row]').first();
+  const code = await first.getAttribute('data-run-check-row');
+  await first.locator(sel('R34')).click();
+  await expect.poll(async () => (await runRow(request, rid)).checks_kept, STEP).toEqual([code]);
+  expect((await precheck(request, rid)).checks.find((c) => c.code === code).kept).toBe(true);
+  // And the other way: checks_kept written through run.update (setup_edit's route) is what the person
+  // sees, after the page reads the run again.
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, checks_kept: [] });
+  const again = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+  await expect(again.locator(`${sel('R32')} [data-run-check-row="${code}"]`)).toBeVisible(STEP);
+  await expect(again.locator('[data-run-check-kept="1"]')).toHaveCount(0);
 });

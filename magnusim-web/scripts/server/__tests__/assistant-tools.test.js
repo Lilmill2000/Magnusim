@@ -354,14 +354,39 @@ describe('the host tools', () => {
         { message: 'Pick a material for the fluid.', fix: { go: 'materials', name: 'Air' }, fix_with: "setup_edit {kind:'material', action:'add'} or {action:'assign'}" },
         { message: 'The mesh is out of date.', fix: 'Generate the mesh again.' },
       ],
+      // RH2: no run to check (this stand-in has no run status): not known.
+      advisories: null,
     });
     assert.equal(out.summary, '2 issues block the run');
-    let r = app.seen.at(-1);
+    const lastReady = () => app.seen.filter((x) => x.path === '/api/run/ready').at(-1);
+    let r = lastReady();
     assert.deepEqual([r.path, r.query.get('project_id'), r.query.get('simulation_id')], ['/api/run/ready', 'p1', 's1']);
     tick();
     await t.explain_ready.run({ project_id: '', simulation_id: 's2', run_id: '' }, rt());
-    r = app.seen.at(-1);
+    r = lastReady();
     assert.deepEqual([r.query.get('project_id'), r.query.get('simulation_id')], ['p1', 's2']);
+    // RH2: the pre-run check's rows not kept as set, as advisories with a hint; none blocks Start.
+    app.answers.set('/api/run/status', () => ({ ok: true, run: { id: 'r1', name: 'Run_2', status: 'draft' }, runs: [] }));
+    app.answers.set('/api/run/precheck', () => ({
+      ok: true,
+      checked: true,
+      kept: ['still_start'],
+      checks: [
+        { code: 'piso_high_co', level: 'warn', text: 'Max Courant 100 with 1 outer corrector.', kept: false },
+        { code: 'long_run', level: 'warn', text: 'About 900,000 time steps.', kept: false },
+        { code: 'still_start', level: 'info', text: 'The run starts from rest.', kept: false },
+      ],
+    }));
+    try {
+      tick();
+      const adv = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt());
+      assert.equal(adv.data.advisories, 2);
+      assert.equal(adv.data.hint, "read_results {kind:'precheck'} lists them with their fixes (Run panel → Before you start); none blocks Start.");
+      assert.equal(adv.summary, '2 issues block the run; 2 to look at before it starts');
+    } finally {
+      app.answers.delete('/api/run/status');
+      app.answers.delete('/api/run/precheck');
+    }
     tick();
     const none = await t.explain_ready.run({ project_id: '', simulation_id: '', run_id: '' }, rt({ ctx: ctx({ projectId: null, tab: null }) }));
     assert.equal(none.error.code, 'no_project');
