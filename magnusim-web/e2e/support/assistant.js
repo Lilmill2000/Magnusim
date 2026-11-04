@@ -10,6 +10,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { ensureStyled } from './page-styles.mjs';
 
 /** The `expect` a bundled plugin's suite handed in (setExpect), or null for the app's. */
 let givenExpect = null;
@@ -34,11 +35,18 @@ export function assistantPane(page) {
   return page.locator('#setup-wizard .wiz-pane[data-wiz-key="assistant"]');
 }
 
-/** The app is up: the wizard is wired and the panel islands are registered. */
+/**
+ * The app is up: the wizard is wired, the panel islands are registered, and the page is
+ * styled (a page whose stylesheet failed is reloaded once, else the test stops with the
+ * reason: page-styles.mjs).
+ */
 export async function appReady(page) {
-  await page.waitForFunction(() => typeof window.__CFD_OPEN_WIZARD__ === 'function' && window.__CFD_PLUGINS_READY__ === true, null, {
-    timeout: 60_000,
-  });
+  const up = () =>
+    page.waitForFunction(() => typeof window.__CFD_OPEN_WIZARD__ === 'function' && window.__CFD_PLUGINS_READY__ === true, null, {
+      timeout: 60_000,
+    });
+  await up();
+  if ((await ensureStyled(page)) === 'reloaded') await up();
 }
 
 /**

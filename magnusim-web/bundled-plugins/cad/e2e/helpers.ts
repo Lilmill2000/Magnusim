@@ -6,6 +6,7 @@ import { expect, test, type APIRequestContext, type FrameLocator, type Locator, 
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ensureStyled, watchStyles } from '../../../e2e/support/page-styles.mjs';
 
 export function baseUrl(): string {
   const b = process.env.CAD_E2E_BASE_URL;
@@ -48,8 +49,15 @@ export async function watchPage(page: Page) {
   return seen;
 }
 
+/**
+ * Opens the project and waits until the app says it is ready. A page whose stylesheet failed
+ * (net::ERR_NO_BUFFER_SPACE in a long, loaded run) is reloaded once, else the test stops here
+ * with the reason instead of at its next click, minutes later (the core's page-styles.mjs).
+ */
 export async function openProject(page: Page, projectId: string) {
+  watchStyles(page);
   await page.goto(`${baseUrl()}/#/p/${projectId}`);
+  await ensureStyled(page);
   await page.waitForFunction((id) => (window as unknown as { __CFD_PROJECT_READY__?: string }).__CFD_PROJECT_READY__ === id, projectId, { timeout: 90_000 });
 }
 
@@ -66,7 +74,17 @@ export async function newPartFromTree(page: Page, title = 'Part 1', { offered = 
   // CAD's start action has a header button (D33): STUDIES shows once the project has a study,
   // so the first Part comes from the header's "CAD" menu (no name prompt: the app names it
   // "Part N"), renamed in the workspace header when the test wants another title.
-  await page.waitForFunction(() => (window as unknown as { __CFD_PLUGINS_READY__?: boolean }).__CFD_PLUGINS_READY__ === true, null, { timeout: 60_000 }).catch(() => {});
+  const pluginsReady = () =>
+    page.waitForFunction(() => (window as unknown as { __CFD_PLUGINS_READY__?: boolean }).__CFD_PLUGINS_READY__ === true, null, { timeout: 60_000 }).catch(() => {});
+  await pluginsReady();
+  // An unstyled page (a stylesheet failed) has the 3D view's canvas over every button: reloaded
+  // once, else the test stops here with the reason (a no-op on a page openProject checked).
+  // After a reload, a project's page is waited for as openProject waits for it.
+  if ((await ensureStyled(page)) === 'reloaded') {
+    await pluginsReady();
+    const pid = /#\/p\/([^/?]+)/.exec(page.url())?.[1];
+    if (pid) await page.waitForFunction((id) => (window as unknown as { __CFD_PROJECT_READY__?: string }).__CFD_PROJECT_READY__ === id, decodeURIComponent(pid), { timeout: 90_000 });
+  }
   const header = page.locator('#ws-start-host [data-start-header="cad:part"]');
   await expect(btn.or(header.locator('> button')).first()).toBeVisible({ timeout: 30_000 });
   if (await btn.isVisible()) {
@@ -880,7 +898,9 @@ export async function pickTheme(page: Page, theme: 'light' | 'dark'): Promise<vo
   if (!settings || settings.isClosed()) {
     const s = await page.context().newPage();
     settingsWindows.set(page, s);
+    watchStyles(s);
     await s.goto(`${baseUrl()}/#/`);
+    await ensureStyled(s);
     // Settings opens the wizard once the page has wired its button (as the host's own specs wait).
     await expect(async () => {
       await s.locator('#home-prefs').click();
