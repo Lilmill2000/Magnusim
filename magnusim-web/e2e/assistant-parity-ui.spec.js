@@ -1,5 +1,5 @@
 // The person's side of the Assistant's new parity rows (spec 3.17 item 6): each row of
-// scripts/server/assistant/parity-rows.json that names a `ui_control` (RH1: R25-R31; RH2: R32-R34)
+// scripts/server/assistant/parity-rows.json that names a `ui_control` (RH1: R25-R31; RH2: R32-R34; RH3: R35)
 // has that control in the app, where its `reach` says, for a person to use. It covers nothing
 // beyond the new rows (spec 10, Cut). RH2's rows are checked both ways: what the person does
 // in Before you start is what the Assistant's routes read, and what those routes write is what
@@ -160,4 +160,41 @@ test("each RH2 parity row names the person's control, and both sides read and wr
   again = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
   await expect(again.locator(`${sel('R32')} [data-run-check-row="${code}"]`)).toBeVisible(STEP);
   await expect(again.locator('[data-run-check-kept="1"]')).toHaveCount(0);
+});
+
+/** RH3's row that names the person's control (R35). */
+test("RH3's parity row names the person's control, and both sides read the same (R35)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const row = ROWS.find((r) => r.row === 'R35');
+  expect(row.ui_control.selector).toBe('[data-run-numerics]');
+  expect(row.paths[0]).toMatchObject({ tool: 'read_setup', where: { what: 'numerics' } });
+  const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name: 'Run_numerics', mesh_id: meshId });
+  const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, transient: { end_time: 1, write_count: 10, max_co: 4, n_outer_correctors: 3, n_correctors: 2, outer_relax_p: 0.4 } });
+  const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+  const box = panel.locator(row.ui_control.selector);
+  await expect(box).toBeVisible(STEP);
+  await box.locator('summary').click();
+  // What the Assistant's read_setup numerics reads (run.precheck's numerics) is what the person sees, word for word.
+  const shownRows = async () => {
+    const read = await precheck(request, rid);
+    expect(read.numerics.length).toBeGreaterThan(5);
+    for (const n of read.numerics) {
+      await expect(box.locator(`[data-run-numerics-group="${n.group}"] [data-run-numerics-row="${n.label}"] .run-numerics-value`)).toHaveText(n.value, STEP);
+    }
+    return Object.fromEntries(read.numerics.map((n) => [n.label, n.value]));
+  };
+  let seen = await shownRows();
+  expect(seen['Outer relaxation']).toBe('p 0.4, equations 0.7; the final outer loop 1');
+  expect(seen['Max Courant']).toBe('4');
+  // And the other way: a change through run.update (setup_edit's route) is what the person sees.
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, transient: { end_time: 1, write_count: 10, max_co: 2, n_outer_correctors: 3, n_correctors: 2, outer_relax_p: 0.5 } });
+  const again = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+  const box2 = again.locator(row.ui_control.selector);
+  await expect(box2).toBeVisible(STEP);
+  await box2.locator('summary').click();
+  await expect(box2.locator('[data-run-numerics-row="Outer relaxation"] .run-numerics-value')).toHaveText('p 0.5, equations 0.7; the final outer loop 1', STEP);
+  seen = Object.fromEntries((await precheck(request, rid)).numerics.map((n) => [n.label, n.value]));
+  expect(seen['Max Courant']).toBe('2');
+  await expect(box2.locator('[data-run-numerics-row="Max Courant"] .run-numerics-value')).toHaveText('2', STEP);
 });
