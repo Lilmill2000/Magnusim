@@ -56,6 +56,12 @@ import {
   mergeContinueChanges,
   noSavedTimeText,
   notContinueWords,
+  NUMERICS_ANSWERS,
+  numericsAsWas,
+  numericsChangedText,
+  numericsDiff,
+  numericsSnapshot,
+  numericsUsedOf,
   onlyContinueKeys,
   overwriteWords,
   overwritesResults,
@@ -63,6 +69,7 @@ import {
   runEditState,
   solveChanged,
   unresolveTransient,
+  withNumericsEntry,
 } from '../src/workbench/runReopen.ts';
 import { listFoamTimeDirs } from './project-layout.js';
 import { solveStartBlockReason } from './solve-start-block.js';
@@ -2129,23 +2136,60 @@ const CONTINUABLE = new Set(['done', 'stopped']);
  * Continue a finished or stopped run from its latest saved result (F6): a Start of
  * the same run that keeps its frames, residuals and steps. `extraIterations` (a
  * steady run) or `endTime` (a transient run, seconds) says how far.
- * @param {{ projectId?: string, simulationId?: string, runId?: string, extraIterations?: unknown, endTime?: unknown, startId?: string, onDone?: (result: any) => void }} [opts]
+ * RH3: `numerics` ('new' | 'as_was') says which numerics it goes on with once its study's differ
+ * from what it started with; `by` who said so ('person' | 'assistant').
+ * @param {{ projectId?: string, simulationId?: string, runId?: string, extraIterations?: unknown, endTime?: unknown, startId?: string, onDone?: (result: any) => void, numerics?: unknown, by?: unknown }} [opts]
  */
 export async function continueSolve(opts = {}) {
-  const { extraIterations, endTime, ...rest } = opts;
-  return startSolve({ ...rest, continueRun: { extra_iterations: extraIterations, end_time: endTime } });
+  const { extraIterations, endTime, numerics, by, ...rest } = opts;
+  // RH3: once the study's numerics differ from what the run started with, the Continue says which
+  // it goes on with ('new' or 'as_was'); without it nothing starts or queues (choose_numerics).
+  if (numerics !== undefined && numerics !== null && numerics !== '' && !NUMERICS_ANSWERS.includes(String(numerics))) {
+    return { ok: false, status: 400, bodyExtra: { error: 'numerics is "new", "as_was" or left out.', code: 'bad_request', increment: INCREMENT } };
+  }
+  const asked = continueNumericsAsked(rest, numerics);
+  if (asked) return asked;
+  return startSolve({ ...rest, continueRun: { extra_iterations: extraIterations, end_time: endTime, numerics, by } });
+}
+
+/**
+ * RH3: a Continue's refusal when the study's numerics differ from what the run started with and
+ * it did not say which (choose_numerics), else null. Asked before the compute slot, so a busy
+ * PC queues nothing that would only be refused later.
+ * @param {{ projectId?: string, runId?: string, simulationId?: string }} ids
+ * @param {unknown} numerics
+ */
+function continueNumericsAsked(ids, numerics) {
+  let id;
+  try {
+    id = ids.projectId || projectIdOrActive('', readActiveId);
+  } catch {
+    return null;
+  }
+  if (!id || !ids.runId) return null;
+  const doc = readRunDocFile(id, String(ids.runId), ids.simulationId ? String(ids.simulationId) : undefined);
+  if (!doc) return null;
+  const pick = continueNumerics(id, doc, numerics);
+  if (pick.ok) return null;
+  return {
+    ok: false,
+    status: pick.status,
+    // Waiting cannot answer it: a queued Continue leaves the queue with the question.
+    bodyExtra: { error: pick.error, code: pick.code, text: pick.text, differences: pick.differences, run_id: String(ids.runId), final: true, increment: INCREMENT },
+  };
 }
 
 /**
  * A queued solve row, started by the compute queue: a Start, or a Continue when the
- * row was queued by one (its `settings.continue`: {extra_iterations} or {end_time}).
+ * row was queued by one (its `settings.continue`: {extra_iterations} or {end_time}, and
+ * RH3's numerics answer and who gave it, {numerics, by}).
  * @param {{ project_id?: string | null, run_id?: string | null, simulation_id?: string | null, settings?: Record<string, any> | null }} item
  */
 export async function startQueuedSolve(item) {
   const ids = { projectId: item.project_id || null, runId: item.run_id || null, simulationId: item.simulation_id || null };
   const cont = item.settings && typeof item.settings === 'object' ? item.settings.continue : null;
   if (cont && typeof cont === 'object') {
-    return continueSolve({ ...ids, extraIterations: cont.extra_iterations, endTime: cont.end_time });
+    return continueSolve({ ...ids, extraIterations: cont.extra_iterations, endTime: cont.end_time, numerics: cont.numerics, by: cont.by });
   }
   return startSolve(ids);
 }
@@ -2286,9 +2330,92 @@ export function continuedRunFields(old, cont) {
       stops_off: !!cont.past,
     },
     attempts: [...(Array.isArray(d.attempts) ? d.attempts : []), attempt],
-    // A change that waited for this Continue (A2) applies from here: stamped applied.
-    ...(Array.isArray(d.continue_changes) ? { continue_changes: applyContinueChanges(d.continue_changes, cont.at || new Date().toISOString()) } : {}),
+    // A change that waited for this Continue (A2) applies from here: stamped applied. RH3: the
+    // study's new numerics it takes are recorded with it (an applied numerics entry), and what it
+    // goes on with replaces what the run started with.
+    ...continueChangesAfter(d, cont),
   };
+}
+
+/**
+ * What a Continue that starts now leaves of a run's `continue_changes` (A2: the waiting change
+ * applied) and `numerics_used` (RH3: replaced, with an applied numerics entry, when it takes the
+ * study's new numerics: `cont.numerics`, from continueNumerics).
+ * @param {any} d the run doc as it ended
+ * @param {any} cont the Continue (continuePlan's, with `at` and `numerics`)
+ */
+function continueChangesAfter(d, cont) {
+  const at = cont.at || new Date().toISOString();
+  const applied = Array.isArray(d.continue_changes) ? applyContinueChanges(d.continue_changes, at) : null;
+  const n = cont.numerics;
+  if (n && n.used && Array.isArray(n.differences) && n.differences.length) {
+    const from = Number(cont.from);
+    return {
+      numerics_used: n.used,
+      continue_changes: withNumericsEntry(applied || [], n.differences, {
+        by: n.by === 'assistant' ? 'assistant' : 'person',
+        at,
+        from_t: cont.transient ? from : null,
+        from_iteration: cont.transient ? null : from,
+      }),
+    };
+  }
+  return applied ? { continue_changes: applied } : {};
+}
+
+/**
+ * RH3: an analysis's numerics schema (its registry row's numerics_schema), or null.
+ * @param {unknown} analysisKey
+ */
+function numericsSchemaOf(analysisKey) {
+  const row = analysisKey ? analysisByKey(String(analysisKey)) : null;
+  const schema = row && row.numerics_schema;
+  return schema && typeof schema === 'object' && schema.properties && typeof schema.properties === 'object' ? schema : null;
+}
+
+/**
+ * RH3 (spec 5.3): what a fresh Start records of the numerics its run starts with
+ * (`numerics_used`): the study's stored value of every numerics setting of the run's analysis
+ * and mode, raw. Null for an analysis with no numerics settings.
+ * @param {any} study the run's study record
+ * @param {boolean} transient
+ */
+export function startNumerics(study, transient) {
+  const key = analysisKeyFor(String((study && study.analysis_type) || ''), transient ? 'Transient' : 'Steady-state');
+  const schema = numericsSchemaOf(key);
+  if (!schema || !Object.keys(schema.properties).length) return null;
+  return numericsSnapshot(key, transient, study || {}, schema, new Date().toISOString());
+}
+
+/**
+ * RH3 (spec 5.3): what a Continue of the run `doc` goes on with, by the answer (`numerics`: 'new'
+ * or 'as_was'; anything else is none). A run with no record of what it started with (started
+ * before RH3) goes on with its study's numerics, as before: `values` null. When the study's
+ * numerics differ from the record, an answer is needed: without one it is refused
+ * (choose_numerics, with the differences and the words the person's question shows). 'new': the
+ * study's values, and the record they become (`used`); 'as_was' (and no differences): what it
+ * started with.
+ * @param {string} projectId
+ * @param {any} doc the run doc as it ended
+ * @param {unknown} numerics
+ * @returns {{ ok: boolean, status?: number, code?: string, error?: string, text?: string, values?: Record<string, unknown> | null, used?: any, differences: any[] }}
+ */
+export function continueNumerics(projectId, doc, numerics) {
+  const used = numericsUsedOf(doc);
+  if (!used) return { ok: true, values: null, used: null, differences: [] };
+  const study = activeStudy(projectId, doc && doc.simulation_id ? String(doc.simulation_id) : undefined);
+  const schema = numericsSchemaOf(used.analysis);
+  const differences = numericsDiff(doc, study, schema);
+  const answer = NUMERICS_ANSWERS.includes(String(numerics || '')) ? String(numerics) : '';
+  if (differences.length && !answer) {
+    const text = numericsChangedText(doc, differences);
+    return { ok: false, status: 409, code: 'choose_numerics', error: text, text, differences };
+  }
+  if (differences.length && answer === 'new') {
+    const next = numericsSnapshot(used.analysis, used.mode === 'transient', study, schema, new Date().toISOString());
+    return { ok: true, values: next.values, used: next, differences };
+  }
+  return { ok: true, values: numericsAsWas(used, schema), used: null, differences: [] };
 }
 
 /**
@@ -2301,7 +2428,7 @@ export function continuedRunFields(old, cont) {
  *   transient?: object,
  *   onDone?: (result: { status: string, exit_code?: number, run_id?: string, project_id?: string, error?: string|null }) => void,
  *   startId?: string,
- *   continueRun?: { extra_iterations?: unknown, end_time?: unknown },
+ *   continueRun?: { extra_iterations?: unknown, end_time?: unknown, numerics?: unknown, by?: unknown },
  *   overwrite?: boolean,
  * }} [opts] continueRun: a Continue (continueSolve); overwrite: a stopped or failed run with
  *   results starts over (the person was asked; runReopen.ts)
@@ -2383,6 +2510,23 @@ async function startSolveBody(opts = {}, slot) {
     // Waiting cannot change these (a queued Continue leaves the queue with its reason).
     const final = cont.code !== 'same_run';
     return { ok: false, status: cont.status, bodyExtra: { error: cont.error, code: cont.code, run_id: runId, ...(final ? { final: true } : {}), increment: INCREMENT } };
+  }
+  if (cont) {
+    // RH3 (spec 5.3): the numerics it goes on with, where its case's study record is made: the
+    // prepare (and its plan) get them as `restart.numerics`, which the core puts over the study's
+    // values before the analysis reads them. A queued Continue the study changed under since it
+    // was queued leaves the queue with the question to answer.
+    const by = opts.continueRun && opts.continueRun.by === 'assistant' ? 'assistant' : 'person';
+    const pick = continueNumerics(id, { ...cont.doc, continue_from: cont.from }, opts.continueRun && opts.continueRun.numerics);
+    if (!pick.ok) {
+      return {
+        ok: false,
+        status: pick.status,
+        bodyExtra: { error: pick.error, code: pick.code, text: pick.text, differences: pick.differences, run_id: runId, final: true, increment: INCREMENT },
+      };
+    }
+    if (pick.values) cont.restart = /** @type {any} */ ({ ...cont.restart, numerics: pick.values });
+    cont.numerics = { ...pick, by };
   }
   if (!cont && draft && draft.status === 'done') {
     return {
@@ -2580,6 +2724,9 @@ async function startSolveBody(opts = {}, slot) {
   const startMeshId = (draft && draft.mesh_id) || (ready.mesh && ready.mesh.mesh_id) || null;
   // The run's build stamp (host API 1.5): its mesh as Start found it; only Start sets it.
   const builtFrom = runBuiltFrom(id, simId, startMeshId);
+  // RH3 (spec 5.3): a fresh Start (a start over too) records the numerics it starts with; a
+  // Continue's record changes only when it takes the study's new numerics (continueChangesAfter).
+  const startedNumerics = cont ? null : startNumerics(ready.sim, isTransient);
   const stored = persistRun(
     id,
     simId,
@@ -2590,6 +2737,7 @@ async function startSolveBody(opts = {}, slot) {
       simulation_id: simId,
       mesh_id: startMeshId,
       status: 'running',
+      ...(cont ? {} : { numerics_used: startedNumerics }),
     },
     builtFrom ? { builtFrom } : undefined,
   );
@@ -2599,10 +2747,9 @@ async function startSolveBody(opts = {}, slot) {
   if (fakeCompute()) {
     // A run named in MAGNUSIM_TEST_SOLVE_FAIL_START fails before its solver starts, as a plan that fails does.
     if (fakeStartFails(stored.name)) return failBeforeRunner({ id, runId, simId, draft, stored, cont }, 'Failed to prepare solve case: the test made this Start fail');
-    // As the runner's start does (continuedRunFields): a change that waited for this Continue applies.
-    if (cont && Array.isArray(cont.doc.continue_changes)) {
-      persistRun(id, simId, { id: runId, run_id: runId, continue_changes: applyContinueChanges(cont.doc.continue_changes, cont.at || new Date().toISOString()) });
-    }
+    // As the runner's start does (continuedRunFields): the run so far stays (its earlier part is
+    // an attempt), a change that waited for this Continue applies, and the numerics it took are recorded.
+    if (cont) persistRun(id, simId, { id: runId, run_id: runId, ...continuedRunFields(cont.doc, /** @type {any} */ (cont)) });
     // RH2: as a real Start's plan reports them (prepare_run.checks), the pre-run check it starts with.
     // Not awaited: nothing may come between the stop check and the hand-over.
     if (!cont) {
@@ -2632,6 +2779,7 @@ async function startSolveBody(opts = {}, slot) {
     startMeshId,
     onDone,
     cont,
+    startedNumerics,
   });
 }
 
@@ -2729,7 +2877,7 @@ function failBeforeRunner(c, error, extra = {}) {
  * and its analysis's fix; a Stop that came while it was planned leaves it as it was.
  */
 async function startSolveOnRunner(c) {
-  const { id, runId, simId, slot, draft, ready, stored, winOut, isTransient, timeDependency, transientSettings, et, wi, startMeshId, onDone, cont } = c;
+  const { id, runId, simId, slot, draft, ready, stored, winOut, isTransient, timeDependency, transientSettings, et, wi, startMeshId, onDone, cont, startedNumerics } = c;
   const failRun = (/** @type {string} */ error, /** @type {{ fix?: any, patches?: any }} */ extra = {}) => failBeforeRunner(c, error, extra);
   let plan;
   try {
@@ -2895,8 +3043,9 @@ async function startSolveOnRunner(c) {
         health: null,
         health_checked: true,
         // Continued (F6): the run so far stays (frames, residuals, steps, elapsed time, attempts).
-        // A Start from the beginning is no continued run (an earlier Continue's parts are gone).
-        ...(cont ? continuedRunFields(cont.doc, cont) : { continued: null, attempts: null }),
+        // A Start from the beginning is no continued run (an earlier Continue's parts are gone);
+        // it records the numerics it starts with (RH3).
+        ...(cont ? continuedRunFields(cont.doc, cont) : { continued: null, attempts: null, numerics_used: startedNumerics || null }),
         mesh_source: {
           case_dir: ready.mesh.case_dir,
           mesh_path: ready.mesh.mesh_path,
@@ -3822,6 +3971,9 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         extraIterations: body.extra_iterations,
         endTime: body.end_time,
         startId: body.start_id,
+        // RH3: after a study numerics change, which numerics it goes on with, and who said so.
+        numerics: body.numerics,
+        by: body.by === 'assistant' ? 'assistant' : 'person',
       });
       if (!started.ok) return sendJson(res, started.status, { ok: false, ...(started.bodyExtra || {}) });
       res.setHeader('X-CFD-Increment', INCREMENT);

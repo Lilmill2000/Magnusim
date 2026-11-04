@@ -7,7 +7,8 @@
   1e-12 to 1e-3."), one row, never blocking;
 - the core: SchemaField.caution as x-cfddesk.caution; run_normalize passes the edited keys to a
   run model that takes them; RunModel.check's "numerics" passed on cleaned; a started run's
-  numerics_used read in place of the study's.
+  numerics_used read in place of the study's; a Continue's restart numerics put over the study
+  record (5.3).
 """
 
 from __future__ import annotations
@@ -183,3 +184,32 @@ def test_a_started_run_reads_the_numerics_it_started_with():
     used = {"analysis": "incompressible_steady", "mode": "steady", "at": "2026-11-04T00:00:00Z", "values": {"relax_p": 0.3, "grad_limiter": None}}
     got = with_numerics_used(RunInputs(**{**base.__dict__, "run": {"numerics_used": used}}))
     assert got.study == {"relax_p": 0.3, "turbulence_model": "kOmegaSST"}
+
+
+def test_a_continue_goes_on_with_the_numerics_its_restart_names(tmp_path):
+    """RH3 (spec 5.3): a Continue's restart may carry the numerics it goes on with (what the run
+    started with, or the study's new values); the core puts them over the study record, a null
+    taking the key out (blank: the preset's), and the analysis never sees them in its restart."""
+    import json
+    import shutil
+    from pathlib import Path
+
+    from cfddesk.project.run_inputs import gather_run_inputs, with_numerics
+    from cfddesk.registry import run_case
+
+    assert with_numerics({"relax_p": 0.2, "grad_limiter": "light", "name": "S"}, {"relax_p": 0.3, "grad_limiter": None, "p_tolerance": 1e-8}) == {
+        "relax_p": 0.3,
+        "name": "S",
+        "p_tolerance": 1e-8,
+    }
+    root = tmp_path / "project"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "fixtures" / "js-project", root)
+    rec = {"id": "sim_1", "name": "S", "time_dependency": "Steady-state", "relax_p": 0.2, "grad_limiter": "light"}
+    (root / "simulation.json").write_text(json.dumps(rec), encoding="utf-8")
+    (root / "simulations.json").write_text(json.dumps({"active_id": "sim_1", "simulations": [rec]}), encoding="utf-8")
+    plain = gather_run_inputs(root, run_id="r", require_mesh=False)
+    assert (plain.study["relax_p"], plain.study["grad_limiter"], plain.restart) == (0.2, "light", None)
+    restart = run_case.restart_arg(json.dumps({"end_time": 200, "numerics": {"relax_p": 0.3, "grad_limiter": None}}))
+    got = gather_run_inputs(root, run_id="r", require_mesh=False, restart=restart)
+    assert got.study["relax_p"] == 0.3 and "grad_limiter" not in got.study
+    assert got.restart == {"end_time": 200.0, "write_interval": None}

@@ -1507,6 +1507,27 @@
       </div>
     </div>
 
+    <!-- RH3: Continue once the study's numerics differ from what the run started with (src/workbench/runContinueChoice.ts) -->
+    <div id="modal-run-continue" class="cfd-modal" hidden role="dialog" aria-modal="true" aria-labelledby="rcn-heading">
+      <div class="cfd-modal-backdrop" id="rcn-backdrop"></div>
+      <div class="cfd-modal-card link-choice-card">
+        <h2 id="rcn-heading">Continue this run?</h2>
+        <p class="link-choice-copy" id="rcn-health" hidden></p>
+        <p class="link-choice-copy" id="rcn-copy"></p>
+        <div class="link-choice-option">
+          <button type="button" class="home-btn" id="rcn-new">Continue with the new numerics</button>
+          <p class="link-choice-line" id="rcn-new-line"></p>
+        </div>
+        <div class="link-choice-option">
+          <button type="button" class="home-btn" id="rcn-as-was">Continue as it was</button>
+          <p class="link-choice-line" id="rcn-as-was-line"></p>
+        </div>
+        <div class="np-actions">
+          <button type="button" class="home-btn" id="rcn-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <div id="modal-prompt" class="cfd-modal" hidden role="dialog" aria-modal="true" aria-labelledby="pm-heading">
       <div class="cfd-modal-backdrop" id="pm-backdrop"></div>
       <div class="cfd-modal-card">

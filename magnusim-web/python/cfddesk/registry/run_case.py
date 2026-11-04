@@ -366,10 +366,13 @@ def transient_arg(text: str | None) -> dict[str, Any] | None:
 
 def restart_arg(text: str | None) -> dict[str, Any] | None:
     """A prepare job's ``--restart`` value (JSON text): ``{"end_time", "write_interval"?,
-    "stops_off"?}`` for a run continued from its latest saved time (``end_time`` the new
-    end, in the run's time unit; ``write_interval`` how often it saves, None to keep the
-    run's; ``stops_off`` true: it continues past its convergence, written without the
-    stops that ended it), or None when empty. Raises ValueError for anything else."""
+    "stops_off"?, "numerics"?}`` for a run continued from its latest saved time (``end_time``
+    the new end, in the run's time unit; ``write_interval`` how often it saves, None to keep
+    the run's; ``stops_off`` true: it continues past its convergence, written without the
+    stops that ended it; ``numerics`` the study's numerics settings it goes on with, by key,
+    null for blank (RH3: what it started with, or the study's new values; the core puts them
+    over the study record, :func:`run_inputs`)), or None when empty. Raises ValueError for
+    anything else."""
     import math
 
     raw = str(text or "").strip()
@@ -398,4 +401,11 @@ def restart_arg(text: str | None) -> dict[str, Any] | None:
     out: dict[str, Any] = {"end_time": end, "write_interval": positive("write_interval")}
     if stops_off:
         out["stops_off"] = True
+    numerics = value.get("numerics")
+    if numerics is not None:
+        if not isinstance(numerics, dict) or not all(isinstance(k, str) for k in numerics):
+            raise ValueError("--restart numerics must be a JSON object of settings")
+        if any(isinstance(v, (dict, list)) for v in numerics.values()):
+            raise ValueError("--restart numerics holds plain values only")
+        out["numerics"] = dict(numerics)
     return out

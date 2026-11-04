@@ -29,6 +29,7 @@ import { RunCores, runCanUseCores, useRankCap } from './RunCores';
 import { RunHealth, healthRunView, pendingChange } from './RunHealth';
 import { RunMonitors } from './RunMonitors';
 import { confirmAction } from '../../workbench/dialogs';
+import { askRunContinue } from '../../workbench/runContinueChoice';
 import { continueAskWords, continueHealthWords, type HealthRecord } from '../../workbench/runHealthWords';
 import { checkedAtStartLine, type CheckRow } from '../../workbench/runCheckWords';
 
@@ -225,7 +226,9 @@ export function continueHint(c: NonNullable<RunState['cont']>, amount: number, v
 /**
  * Continue a finished or stopped run (F6) from its latest saved result: a steady run
  * runs N more iterations, a transient run runs on to a later end time. The run keeps
- * its frames, residuals and steps.
+ * its frames, residuals and steps. RH3: once its study's numerics differ from what it
+ * started with, the box says so and Continue asks which it goes on with (one question; a run
+ * whose saved results come after it became unhealthy gets its health first in it).
  */
 export function ContinueRun({ state, scope, onError }: { state: RunState; scope: string | undefined; onError: (e: unknown) => void }) {
   const c = state.cont;
@@ -287,7 +290,15 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
           disabled={!c.enabled || !valid}
           onClick={async () => {
             const ask = c.transient ? { end_time: amount } : { extra_iterations: amount };
-            if (healthLine && healthLine.ask && health) {
+            const fromZero = !!(healthLine && healthLine.ask && health);
+            if (c.numerics && c.numerics.differences.length) {
+              // RH3: the study's numerics changed after it started: one question, its health first.
+              const answer = await askRunContinue({ ...c.numerics.words, health: fromZero && health ? continueAskWords(view, health).copy : '' });
+              if (!answer) return;
+              void simContinue({ ...ask, numerics: answer }, scope).catch(onError);
+              return;
+            }
+            if (fromZero && health) {
               const w = continueAskWords(view, health);
               const ok = await confirmAction({ title: w.title, copy: w.copy, yes: w.yes, no: w.no, safe: true });
               if (!ok) return;
@@ -301,6 +312,11 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
       {c.applies ? (
         <p className="mat-assign-hint" data-run-continue-changes="1">
           {c.applies}
+        </p>
+      ) : null}
+      {c.numerics && c.numerics.text ? (
+        <p className="mat-assign-hint" data-run-continue-numerics="1">
+          {c.numerics.text}
         </p>
       ) : null}
       {healthLine ? (

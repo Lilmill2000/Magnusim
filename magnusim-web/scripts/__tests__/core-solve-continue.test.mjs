@@ -7,7 +7,12 @@
 //     new steps count on from the old total and its residuals are continuous;
 //   - a plain Start of a finished run still says it finished; a Continue that cannot
 //     start (no saved result, a writer that cannot continue, bad input) leaves the run
-//     as it ended.
+//     as it ended;
+//   - RH3 (numerics at Continue): a fresh Start records the numerics it starts with
+//     (numerics_used); a Continue writes its case with them (restart.numerics), or, once the
+//     study's numerics differ, with the ones the caller chose: "as_was" or "new" (the run's
+//     record replaced, an applied numerics entry); without a choice it is refused
+//     choose_numerics and nothing starts or queues; a run with no record goes on as before.
 import { after, afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -208,6 +213,13 @@ const argOf = (spec, name) => {
   const i = spec.prepare.args.indexOf(name);
   return i >= 0 ? spec.prepare.args[i + 1] : undefined;
 };
+/** A restart without the numerics it goes on with (RH3; checked on their own). */
+const withoutNumerics = (r) => {
+  const { numerics, ...rest } = r || {};
+  return rest;
+};
+/** The prepare job's --restart, without its numerics. */
+const restartOf = (spec) => withoutNumerics(JSON.parse(argOf(spec, '--restart')));
 
 /** End the latest spawned run as `how` (its relay's final status). */
 function endRun(rid, how = 'done') {
@@ -259,7 +271,7 @@ describe('Continue (F6)', () => {
     // The flag reaches the relay's spec, and the case writer is told how far.
     const spec = specOf(job);
     assert.equal(spec.solver.restart, true);
-    assert.deepEqual(JSON.parse(argOf(spec, '--restart')), { end_time: 150, write_interval: 50 });
+    assert.deepEqual(restartOf(spec), { end_time: 150, write_interval: 50 });
     assert.equal(store.readFoamRecord(job).restart, true);
     // Nothing of the run so far was removed; its doc keeps it.
     assert.ok(existsSync(join(caseOf(rid), '50', 'U')) && existsSync(join(caseOf(rid), '100', 'U')));
@@ -317,7 +329,7 @@ describe('Continue (F6)', () => {
     assert.equal(first.n_steps, 4);
     ({ out } = await cont(rid, { extraIterations: 30 }));
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
-    assert.deepEqual(JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), { end_time: 150, write_interval: 50 });
+    assert.deepEqual(restartOf(specOf(out.bodyExtra.runner_job_id)), { end_time: 150, write_interval: 50 });
     const doc = runDoc(rid);
     assert.deepEqual([doc.continued.from_time, doc.continued.steps_before, doc.attempts.map((a) => a.status)], [120, 4, ['stopped', 'done']]);
     assert.equal(doc.continued.log_paths.length, 2);
@@ -355,8 +367,8 @@ describe('Continue (F6)', () => {
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     // Past its convergence: the case writer is told to leave its stops out, and the plan
     // is made for that case.
-    assert.deepEqual(JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), { end_time: 100, write_interval: 50, stops_off: true });
-    assert.deepEqual(fx.plans[fx.plans.length - 1].restart, { end_time: 100, write_interval: 50, stops_off: true });
+    assert.deepEqual(restartOf(specOf(out.bodyExtra.runner_job_id)), { end_time: 100, write_interval: 50, stops_off: true });
+    assert.deepEqual(withoutNumerics(fx.plans[fx.plans.length - 1].restart), { end_time: 100, write_interval: 50, stops_off: true });
     // The new attempt has not converged; the earlier one's end is kept with it.
     let doc = runDoc(rid);
     assert.deepEqual([doc.status, doc.converged, doc.continued.stops_off], ['running', null, true]);
@@ -461,7 +473,7 @@ describe('Continue (F6)', () => {
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     const spec = specOf(out.bodyExtra.runner_job_id);
     assert.equal(spec.solver.restart, true);
-    assert.deepEqual(JSON.parse(argOf(spec, '--restart')), { end_time: 130, write_interval: 50 });
+    assert.deepEqual(restartOf(spec), { end_time: 130, write_interval: 50 });
     assert.equal(runDoc(rid).continued.from_time, 100);
     endRun(rid, 'done');
     // A plain row of a finished run is still a Start: "already finished", it leaves the queue.
@@ -540,7 +552,7 @@ describe('Continue (F6)', () => {
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     const spec = specOf(out.bodyExtra.runner_job_id);
     assert.equal(spec.solver.restart, true);
-    assert.deepEqual(JSON.parse(argOf(spec, '--restart')), { end_time: 2, write_interval: 0.25 });
+    assert.deepEqual(restartOf(spec), { end_time: 2, write_interval: 0.25 });
     const tr = JSON.parse(argOf(spec, '--transient'));
     assert.deepEqual([tr.end_time, tr.write_count], [2, 8]);
     assert.deepEqual([fx.plans.at(-1).transient.end_time, fx.plans.at(-1).transient.write_count], [2, 8]);
@@ -716,7 +728,7 @@ describe('A2: a change for when a stopped run continues', () => {
     const { out } = await cont(rid, { endTime: 2 });
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     const spec = specOf(out.bodyExtra.runner_job_id);
-    assert.deepEqual(JSON.parse(argOf(spec, '--restart')), { end_time: 2, write_interval: 0.25 });
+    assert.deepEqual(restartOf(spec), { end_time: 2, write_interval: 0.25 });
     const tr = JSON.parse(argOf(spec, '--transient'));
     assert.deepEqual([tr.end_time, tr.write_count, tr.max_co, tr.max_delta_t], [2, 8, 5, 0.1]);
   });
@@ -748,5 +760,204 @@ describe('A2: a change for when a stopped run continues', () => {
     const f = w27.continuedRunFields({ status: 'stopped', n_steps: 4, continue_changes: [earlier, waiting] }, { from: 0.5, times: [0.5], at: 'now' });
     assert.deepEqual(f.continue_changes.map((e) => e.applied_at), ['old', 'now']);
     assert.equal('continue_changes' in w27.continuedRunFields({ status: 'stopped' }, { from: 0.5, times: [0.5] }), false);
+  });
+});
+
+// RH3 (run health spec 5.3): numerics at Continue. A fresh Start records the numerics its run
+// starts with (numerics_used: every numerics setting of its analysis and mode, raw); a Continue
+// writes its case with the numerics it goes on with (the prepare job's and the plan's
+// restart.numerics, which the core puts over the study record): what it started with, or once the
+// study's numerics differ, the caller's choice; without one it is refused and nothing starts or queues.
+describe('RH3: numerics at Continue', () => {
+  const REGISTRY = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'generated', 'registry.json'), 'utf8'));
+  const keysOf = (analysis) => Object.keys(REGISTRY.analysis.find((a) => a.key === analysis).numerics_schema.properties);
+  /** The study's settings (its folder's id.json, as the study catalog walks it). */
+  const studyIdPath = () => join(layout.findStudy(join(PROJECTS, PID), SID).dir, 'id.json');
+  let idBefore = '';
+  const studySet = (values) => {
+    const doc = JSON.parse(readFileSync(studyIdPath(), 'utf8'));
+    for (const [k, v] of Object.entries(values)) {
+      if (v === null) delete doc[k];
+      else doc[k] = v;
+    }
+    writeFileSync(studyIdPath(), JSON.stringify(doc));
+  };
+  beforeEach(() => {
+    idBefore = readFileSync(studyIdPath(), 'utf8');
+    studySet({ relax_p: 0.3 });
+  });
+  afterEach(() => writeFileSync(studyIdPath(), idBefore));
+  const numericsArg = (out) => JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')).numerics;
+
+  it('a fresh Start records every numerics setting of its analysis and mode, raw: Incompressible Flow steady and transient, Heat Transfer steady and transient', async () => {
+    const rid = await solvedRun('stopped');
+    const used = runDoc(rid).numerics_used;
+    assert.deepEqual([used.analysis, used.mode, typeof used.at], ['incompressible_steady', 'steady', 'string']);
+    assert.deepEqual(Object.keys(used.values).sort(), keysOf('incompressible_steady').sort());
+    for (const k of ['numerics_preset', 'residual_u', 'residual_p', 'simplec', 'relax_u', 'relax_p', 'n_non_orthogonal']) assert.ok(k in used.values, k);
+    // Raw: the stored value, blanks as null (the preset's).
+    assert.deepEqual([used.values.relax_p, used.values.relax_u, used.values.grad_limiter], [0.3, null, null]);
+    // The run panel's read has it too (the Assistant reads run.status).
+    assert.deepEqual(w27.getRunStatus(PID, rid, SID).body.run.numerics_used, used);
+    // Each analysis and mode: its own settings, RH3's included.
+    const ifT = w27.startNumerics({ analysis_type: 'incompressible_steady', relax_p: 0.3 }, true);
+    assert.deepEqual([ifT.analysis, ifT.mode, Object.keys(ifT.values).sort()], ['incompressible_transient', 'transient', keysOf('incompressible_transient').sort()]);
+    assert.ok(!('relax_p' in ifT.values), "a transient run's PIMPLE loops are its run's settings, not the study's relaxation");
+    assert.ok(['grad_limiter', 'momentum_convection', 'p_tolerance', 'velocity_limit'].every((k) => k in ifT.values));
+    const htS = w27.startNumerics({ analysis_type: 'heat_transfer_steady', relax_h: 0.5 }, false);
+    assert.deepEqual([htS.analysis, htS.mode, Object.keys(htS.values).sort()], ['heat_transfer_steady', 'steady', keysOf('heat_transfer_steady').sort()]);
+    for (const k of ['numerics_preset', 'relax_u', 'relax_p', 'relax_h', 'residual_target', 'n_non_orthogonal']) assert.ok(k in htS.values, k);
+    assert.equal(htS.values.relax_h, 0.5);
+    const htT = w27.startNumerics({ analysis_type: 'heat_transfer_steady' }, true);
+    assert.deepEqual([htT.analysis, htT.mode, Object.keys(htT.values).sort()], ['heat_transfer_transient', 'transient', keysOf('heat_transfer_transient').sort()]);
+    for (const k of ['numerics_preset', 'n_non_orthogonal', 'energy_convection']) assert.ok(k in htT.values, k);
+    assert.ok(!('relax_h' in htT.values));
+  });
+
+  it('no difference: Continue asks nothing and writes its case with what it started with', async () => {
+    const rid = await solvedRun('stopped');
+    const used = runDoc(rid).numerics_used;
+    const { out } = await cont(rid, { extraIterations: 20 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    const sent = numericsArg(out);
+    assert.deepEqual(Object.keys(sent).sort(), Object.keys(used.values).sort());
+    assert.deepEqual([sent.relax_p, sent.relax_u], [0.3, null]);
+    // The plan is made for the same case.
+    assert.deepEqual(fx.plans.at(-1).restart.numerics, sent);
+    assert.deepEqual(runDoc(rid).numerics_used, used);
+    assert.equal((runDoc(rid).continue_changes || []).some((e) => e.kind === 'numerics'), false);
+  });
+
+  it('differences and no choice: 409 choose_numerics with the differences and the words, nothing starts or queues (a busy PC too)', async () => {
+    const rid = await solvedRun('stopped');
+    studySet({ relax_p: 0.2, relax_u: 0.5 });
+    const before = fx.spawned.length;
+    const name = runDoc(rid).name;
+    let { out } = await cont(rid, { extraIterations: 20 });
+    assert.deepEqual([out.ok, out.status, out.bodyExtra.code], [false, 409, 'choose_numerics']);
+    assert.equal(out.bodyExtra.error, `The study's numerics changed after "${name}" started: Relaxation U preset → 0.5, Relaxation p 0.3 → 0.2.`);
+    assert.deepEqual(
+      out.bodyExtra.differences.map(({ key, label, from, to }) => ({ key, label, from, to })),
+      [
+        { key: 'relax_u', label: 'Relaxation U', from: null, to: 0.5 },
+        { key: 'relax_p', label: 'Relaxation p', from: 0.3, to: 0.2 },
+      ],
+    );
+    assert.equal(fx.spawned.length, before);
+    assert.deepEqual([runDoc(rid).status, slot.computeSlotHolder()], ['stopped', null]);
+    // Another job holds the PC: still refused, never queued.
+    const held = slot.claimComputeSlot('mesh', { project_id: PID, name: 'Mesh 1' });
+    assert.equal(held.ok, true);
+    try {
+      ({ out } = await cont(rid, { extraIterations: 20 }));
+      assert.deepEqual([out.status, out.bodyExtra.code], [409, 'choose_numerics']);
+      assert.deepEqual(queue.snapshotComputeQueue().items, []);
+    } finally {
+      slot.releaseComputeSlot(held.token);
+    }
+    // An answer that is neither: refused as bad input.
+    ({ out } = await cont(rid, { extraIterations: 20, numerics: 'newest' }));
+    assert.deepEqual([out.status, out.bodyExtra.code], [400, 'bad_request']);
+  });
+
+  it('"as_was": its case is written with what it started with, and its record stays', async () => {
+    const rid = await solvedRun('stopped');
+    const used = runDoc(rid).numerics_used;
+    studySet({ relax_p: 0.2 });
+    const { out } = await cont(rid, { extraIterations: 20, numerics: 'as_was' });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(numericsArg(out).relax_p, 0.3);
+    assert.equal(fx.plans.at(-1).restart.numerics.relax_p, 0.3);
+    const doc = runDoc(rid);
+    assert.deepEqual(doc.numerics_used, used);
+    assert.equal((doc.continue_changes || []).some((e) => e.kind === 'numerics'), false);
+  });
+
+  it('"new": its case is written with the study\'s numerics, its record replaced, and the change recorded applied (the person\'s, or the Assistant\'s)', async () => {
+    const rid = await solvedRun('stopped');
+    studySet({ relax_p: 0.2 });
+    let { out } = await cont(rid, { extraIterations: 20, numerics: 'new' });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(numericsArg(out).relax_p, 0.2);
+    let doc = runDoc(rid);
+    assert.equal(doc.numerics_used.values.relax_p, 0.2);
+    assert.deepEqual(Object.keys(doc.numerics_used.values).sort(), keysOf('incompressible_steady').sort());
+    const entry = doc.continue_changes.find((e) => e.kind === 'numerics');
+    assert.deepEqual(
+      { ...entry, at: 'x', applied_at: typeof entry.applied_at },
+      {
+        from_t: null,
+        from_iteration: 100,
+        at: 'x',
+        by: 'person',
+        kind: 'numerics',
+        changes: [{ key: 'relax_p', label: 'Relaxation p', from: 0.3, to: 0.2, text: 'Relaxation p 0.3 → 0.2' }],
+        applied_at: 'string',
+      },
+    );
+    relay([{ event: 'stage', stage: 'solve' }, ...step(101)]);
+    await sleep(FRAME_WAIT);
+    saveFrame(rid, 120);
+    relay([{ event: 'time_saved', t: 120 }]);
+    endRun(rid, 'stopped');
+    // Nothing differs now: the next Continue asks nothing and goes on with 0.2.
+    ({ out } = await cont(rid, { extraIterations: 10 }));
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(numericsArg(out).relax_p, 0.2);
+    relay([{ event: 'stage', stage: 'solve' }, ...step(121)]);
+    await sleep(FRAME_WAIT);
+    saveFrame(rid, 130);
+    relay([{ event: 'time_saved', t: 130 }]);
+    endRun(rid, 'stopped');
+    // The Assistant's "new", queued while the PC was busy: the row keeps it, and the run records who.
+    studySet({ relax_p: 0.15 });
+    const queued = await w27.startQueuedSolve({ project_id: PID, run_id: rid, simulation_id: SID, settings: { continue: { extra_iterations: 10, numerics: 'new', by: 'assistant' } } });
+    assert.equal(queued.ok, true, JSON.stringify(queued.bodyExtra));
+    doc = runDoc(rid);
+    assert.equal(doc.numerics_used.values.relax_p, 0.15);
+    assert.deepEqual(
+      doc.continue_changes.filter((e) => e.kind === 'numerics').map((e) => [e.by, e.from_iteration, e.changes.map((c) => c.text)]),
+      [
+        ['person', 100, ['Relaxation p 0.3 → 0.2']],
+        ['assistant', 130, ['Relaxation p 0.2 → 0.15']],
+      ],
+    );
+    endRun(rid, 'stopped');
+    // A queued Continue the study changed under since it was queued leaves the queue with the question.
+    studySet({ relax_p: 0.1 });
+    const stale = await w27.startQueuedSolve({ project_id: PID, run_id: rid, simulation_id: SID, settings: { continue: { extra_iterations: 10 } } });
+    assert.deepEqual([stale.ok, stale.status, stale.bodyExtra.code, stale.bodyExtra.final], [false, 409, 'choose_numerics', true]);
+    assert.equal(queue.startResultFromEngine(stale).final, true);
+  });
+
+  it('only the core writes the record: a run update that sends one is saved without it, and asks nothing', async () => {
+    const rid = await solvedRun('stopped');
+    const used = runDoc(rid).numerics_used;
+    const out = await w27.updateRunSettings(PID, { run_id: rid, simulation_id: SID, cores: 2, numerics_used: { analysis: 'x', mode: 'steady', at: 'y', values: { relax_p: 0.9 } } });
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.deepEqual([runDoc(rid).numerics_used, runDoc(rid).cores, runDoc(rid).status], [used, 2, 'stopped']);
+  });
+
+  it('before RH3: a run with no record continues with the study\'s numerics and asks nothing', async () => {
+    const rid = await solvedRun('stopped');
+    const rec = runDoc(rid);
+    delete rec.numerics_used;
+    writeFileSync(join(io.runFolderOf(PID, rid, SID).dir, 'run.json'), JSON.stringify(rec));
+    studySet({ relax_p: 0.2 });
+    const { out } = await cont(rid, { extraIterations: 20 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal('numerics' in JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart')), false);
+    assert.equal(runDoc(rid).numerics_used, undefined);
+  });
+
+  it('a start over drops the record; its fresh Start records the study\'s numerics then', async () => {
+    const rid = await solvedRun('stopped');
+    studySet({ relax_p: 0.2 });
+    const r = await w27.reopenCatalogRun(PID, { run_id: rid, simulation_id: SID, overwrite: true });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(runDoc(rid).numerics_used, undefined);
+    const { out } = await start(rid);
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(runDoc(rid).numerics_used.values.relax_p, 0.2);
   });
 });

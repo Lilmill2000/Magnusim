@@ -21,6 +21,10 @@
  * stay; Continue goes on with the new values, and the run records the change in
  * `continue_changes`) or Cancel. Every other solve setting asks the two-way question.
  *
+ * Numerics at Continue (RH3, spec 5.3): a Start records what numerics the run starts with
+ * (`numerics_used`). When the study's numerics differ from that record, Continue says so and
+ * asks: the study's new numerics, or as it was (numericsDiff makes the one list every text uses).
+ *
  * Pure, with no imports: the server imports this file as it is.
  */
 
@@ -89,6 +93,8 @@ export interface RunLike {
   transient?: unknown;
   continue_from?: unknown;
   continue_changes?: unknown;
+  /** RH3: what numerics it started with (NumericsUsed). */
+  numerics_used?: unknown;
   [k: string]: unknown;
 }
 
@@ -427,11 +433,16 @@ export function onlyContinueKeys(changed: readonly string[]): boolean {
   return changed.length > 0 && changed.every((k) => CONTINUE_KEYS.includes(k));
 }
 
-/** One change a run records for its Continue: a key ("transient.max_co"), its value before and after. */
+/**
+ * One change a run records for its Continue: a key ("transient.max_co"), its value before and
+ * after. A numerics change (RH3) also keeps its label and words ("Relaxation p 0.3 → 0.2").
+ */
 export interface ContinueChange {
   key: string;
   from: unknown;
   to: unknown;
+  label?: string;
+  text?: string;
 }
 
 /**
@@ -447,6 +458,8 @@ export interface ContinueEntry {
   kind: 'settings' | 'numerics';
   changes: ContinueChange[];
   applied_at: string | null;
+  /** RH3: a numerics entry's changes past the 8 it keeps. */
+  more?: number;
 }
 
 /** At most this many entries are kept (the oldest applied one goes first). */
@@ -751,4 +764,198 @@ export function notContinueWords(rec: RunLike, changed: readonly string[], study
     if (!changed.length) return 'This changes none of Max Courant, the correctors or Max time step of ' + quoted(rec) + ': nothing new waits for its Continue.';
   }
   return 'Only a stopped run with a saved time can take a change for when it continues.';
+}
+
+// ---------------------------------------------------------------- RH3: numerics at Continue
+
+/**
+ * What a run started with (RH3, spec 5.3): `values` holds its study's stored value of every
+ * numerics setting of the run's analysis and mode at its Start (raw; null when blank, which is
+ * the preset's). The server writes it at every fresh Start and at a Continue that takes the
+ * study's new numerics; nothing else changes it.
+ */
+export interface NumericsUsed {
+  analysis: string;
+  mode: 'steady' | 'transient';
+  at: string;
+  values: Record<string, unknown>;
+}
+
+/** A numerics setting whose study value differs from what the run started with. */
+export interface NumericsDifference {
+  key: string;
+  /** The setting's label (its schema title). */
+  label: string;
+  /** What the run started with (null: blank, the preset's). */
+  from: unknown;
+  /** The study's value now (null: blank). */
+  to: unknown;
+  /** "Relaxation p 0.3 → 0.2": the words every text of it uses. */
+  text: string;
+}
+
+/** The answers to the Continue question once the study's numerics differ (the route's and the Assistant's `numerics`). */
+export const NUMERICS_ANSWERS: readonly string[] = Object.freeze(['new', 'as_was']);
+
+/** The run's record of what it started with, or null (a run started before RH3, or a draft). */
+export function numericsUsedOf(rec: RunLike | null | undefined): NumericsUsed | null {
+  const used = rec && isObj(rec.numerics_used) ? rec.numerics_used : null;
+  return used && isObj(used.values) ? (used as unknown as NumericsUsed) : null;
+}
+
+/** A numerics schema's fields by key ({} for none). */
+function numericsFields(schema: unknown): Record<string, Record<string, unknown>> {
+  const props = isObj(schema) && isObj(schema.properties) ? schema.properties : {};
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [k, v] of Object.entries(props)) if (isObj(v)) out[k] = v;
+  return out;
+}
+
+const blankValue = (v: unknown) => v === null || v === undefined || v === '';
+
+/**
+ * The record a Start writes (`numerics_used`): every numerics field of the run's analysis and
+ * mode (its numerics_schema), at the study's stored value, raw, blanks as null.
+ */
+export function numericsSnapshot(analysis: string, transient: boolean, study: unknown, schema: unknown, at: string): NumericsUsed {
+  const s = isObj(study) ? study : {};
+  const values: Record<string, unknown> = {};
+  for (const key of Object.keys(numericsFields(schema))) values[key] = blankValue(s[key]) ? null : s[key];
+  return { analysis: String(analysis || ''), mode: transient ? 'transient' : 'steady', at, values };
+}
+
+/**
+ * The values a Continue "as it was" goes on with: what the run started with, and blank (the
+ * preset's) for a field of its analysis the record does not hold.
+ */
+export function numericsAsWas(used: NumericsUsed, schema: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(numericsFields(schema))) out[key] = null;
+  for (const [k, v] of Object.entries(used.values)) out[k] = blankValue(v) ? null : v;
+  return out;
+}
+
+/** A value as the differences say it: blank "preset", a choice by its label, on/off, a number (tolerances as 1e-7). */
+function numericsValueText(field: Record<string, unknown> | undefined, v: unknown): string {
+  if (blankValue(v)) return 'preset';
+  if (typeof v === 'boolean') return v ? 'on' : 'off';
+  const x = field && isObj(field['x-cfddesk']) ? field['x-cfddesk'] : null;
+  const choices = field && Array.isArray(field.enum) ? field.enum : null;
+  const labels = x && Array.isArray(x.enum_labels) ? x.enum_labels : null;
+  if (choices && labels) {
+    const i = choices.indexOf(v);
+    if (i >= 0 && typeof labels[i] === 'string') return String(labels[i]);
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    const a = Math.abs(v);
+    return a !== 0 && a < 1e-3 ? v.toExponential().replace('e+', 'e') : String(Number(v.toPrecision(6)));
+  }
+  return String(v);
+}
+
+/**
+ * The one list of what differs between the numerics a run started with (`run.numerics_used`) and
+ * its study's stored values now, in the schema's order: the page's Continue box and question,
+ * the route's refusal and the Assistant's refusal and card all say it from here. [] for a run
+ * with no record (started before RH3: Continue uses the study's values, as before) or no study.
+ */
+export function numericsDiff(run: RunLike | null | undefined, study: unknown, schema: unknown): NumericsDifference[] {
+  const used = numericsUsedOf(run);
+  if (!used || !isObj(study)) return [];
+  const fields = numericsFields(schema);
+  const keys = Object.keys(fields).length ? Object.keys(fields) : Object.keys(used.values);
+  const out: NumericsDifference[] = [];
+  for (const key of keys) {
+    const from = blankValue(used.values[key]) ? null : used.values[key];
+    const to = blankValue(study[key]) ? null : study[key];
+    if (sameValue(from, to)) continue;
+    const field = fields[key];
+    const label = field && typeof field.title === 'string' && field.title ? field.title : key.replace(/_/g, ' ');
+    out.push({ key, label, from, to, text: label + ' ' + numericsValueText(field, from) + ' → ' + numericsValueText(field, to) });
+  }
+  return out;
+}
+
+/** "Relaxation p 0.3 → 0.2, Relaxation U 0.7 → 0.5". */
+export function numericsDiffText(diffs: readonly NumericsDifference[]): string {
+  return diffs.map((d) => d.text).join(', ');
+}
+
+/** 'The study's numerics changed after "Run_2" started: Relaxation p 0.3 → 0.2.' (the Continue box's line, the question's text, the route's refusal). */
+export function numericsChangedText(rec: RunLike, diffs: readonly NumericsDifference[]): string {
+  return "The study's numerics changed after " + quoted(rec) + ' started: ' + numericsDiffText(diffs) + '.';
+}
+
+export interface ContinueNumericsWords {
+  title: string;
+  /** The run's health first (its saved results come after it became unhealthy), else ''. */
+  health: string;
+  copy: string;
+  fresh: { label: string; line: string };
+  asWas: { label: string; line: string };
+  cancel: string;
+}
+
+/**
+ * The person's Continue question once the study's numerics differ from what the run started
+ * with: "Continue with the new numerics", "Continue as it was" or Cancel. `health`: the copy of
+ * the Continue question of a run whose saved results come after it became unhealthy (from_zero),
+ * shown first: one question, never two.
+ */
+export function continueNumericsWords(rec: RunLike, diffs: readonly NumericsDifference[], health?: string): ContinueNumericsWords {
+  return {
+    title: 'Continue ' + quoted(rec) + '?',
+    health: health || '',
+    copy: numericsChangedText(rec, diffs),
+    fresh: {
+      label: 'Continue with the new numerics',
+      line: 'Goes on from ' + fromText(rec, savedTimeOf(rec)) + " with the study's numerics now. The run records the change.",
+    },
+    asWas: { label: 'Continue as it was', line: 'Goes on with the numerics it started with. The study keeps the new values for new runs.' },
+    cancel: 'Cancel',
+  };
+}
+
+/** The Assistant's refusal of a run_continue that did not say which numerics (choose_numerics). */
+export function chooseNumericsWords(rec: RunLike, diffs: readonly NumericsDifference[]): { message: string; hint: string } {
+  return {
+    message: "The study's numerics changed after " + quoted(rec) + ' started (' + numericsDiffText(diffs) + ').',
+    hint: 'Pass numerics "as_was" to continue with the numerics it started with, or "new" to use the study\'s numerics now. Ask the person which.',
+  };
+}
+
+/** The sentence the Assistant's run_continue card adds for its answer. */
+export function numericsCardSentence(rec: RunLike, diffs: readonly NumericsDifference[], answer: string): string {
+  return answer === 'new'
+    ? 'Continues ' + quoted(rec) + " with the study's new numerics (" + numericsDiffText(diffs) + ').'
+    : 'Continues ' + quoted(rec) + " with the numerics it started with; the study's newer values (" + numericsDiffText(diffs) + ') are not used.';
+}
+
+/**
+ * The run's `continue_changes` with the entry of a Continue that took the study's new numerics:
+ * written applied (`at`), from where it goes on, by whom, with its differences (at most 8; `more`
+ * counts the rest). At most CONTINUE_CHANGES_MAX entries are kept: the oldest applied ones go first.
+ */
+export function withNumericsEntry(
+  raw: unknown,
+  diffs: readonly NumericsDifference[],
+  opts: { by: 'person' | 'assistant'; at: string; from_t: number | null; from_iteration: number | null },
+): ContinueEntry[] {
+  const entry: ContinueEntry = {
+    from_t: opts.from_t,
+    from_iteration: opts.from_iteration,
+    at: opts.at,
+    by: opts.by,
+    kind: 'numerics',
+    changes: diffs.slice(0, ENTRY_CHANGES_MAX).map((d) => ({ key: d.key, label: d.label, from: d.from, to: d.to, text: d.text })),
+    applied_at: opts.at,
+    ...(diffs.length > ENTRY_CHANGES_MAX ? { more: diffs.length - ENTRY_CHANGES_MAX } : {}),
+  };
+  let out = [...entriesOf(raw), entry];
+  while (out.length > CONTINUE_CHANGES_MAX) {
+    const i = out.findIndex((e) => !!e.applied_at);
+    if (i < 0) break;
+    out = [...out.slice(0, i), ...out.slice(i + 1)];
+  }
+  return out;
 }

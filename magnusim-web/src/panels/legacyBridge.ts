@@ -101,7 +101,7 @@ export async function simStart(scope?: string): Promise<unknown> {
 }
 
 /** Continue the selected finished or stopped run (F6): more iterations, or on to a later end time. */
-export async function simContinue(ask: { extra_iterations?: number; end_time?: number }, scope?: string): Promise<unknown> {
+export async function simContinue(ask: { extra_iterations?: number; end_time?: number; numerics?: 'new' | 'as_was' }, scope?: string): Promise<unknown> {
   if (scope) window.__CFD_RUN_SCOPE__ = scope;
   const fn = window.__CFD_SIM_CONTINUE__;
   if (!fn) throw new Error('Continue is not ready yet.');
@@ -308,6 +308,24 @@ export interface RunContinueState {
    * null: the Continue box's health line and the Health block's words take it from here.
    */
   pending?: { from_t?: number | null; from_iteration?: number | null; applied_at?: string | null; changes?: Array<{ key: string; from: unknown; to: unknown }> } | null;
+  /**
+   * RH3: the study's numerics changed after the run started (its `numerics_used`): what differs
+   * (`differences`, each with its words), the Continue box's line (`text`) and the words of the
+   * question Continue asks first (`words`); null when nothing differs or the run recorded none.
+   * Absent in a state published before it existed.
+   */
+  numerics?: {
+    differences: Array<{ key: string; label: string; from: unknown; to: unknown; text: string }>;
+    text: string;
+    words: {
+      title: string;
+      health: string;
+      copy: string;
+      fresh: { label: string; line: string };
+      asWas: { label: string; line: string };
+      cancel: string;
+    };
+  } | null;
 }
 
 /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */

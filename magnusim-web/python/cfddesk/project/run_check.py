@@ -235,18 +235,14 @@ def with_numerics_used(inputs: Any) -> Any:
     reads the study's."""
     import dataclasses
 
+    from cfddesk.project.run_inputs import with_numerics
+
     run = getattr(inputs, "run", None)
     used = run.get("numerics_used") if isinstance(run, dict) else None
     values = used.get("values") if isinstance(used, dict) else None
     if not isinstance(values, dict):
         return inputs
-    study = dict(getattr(inputs, "study", None) or {})
-    for key, value in values.items():
-        if value is None:
-            study.pop(str(key), None)
-        else:
-            study[str(key)] = value
-    return dataclasses.replace(inputs, study=study)
+    return dataclasses.replace(inputs, study=with_numerics(dict(getattr(inputs, "study", None) or {}), values))
 
 
 def _mesh_summary(facts: dict[str, Any] | None) -> dict[str, Any] | None:

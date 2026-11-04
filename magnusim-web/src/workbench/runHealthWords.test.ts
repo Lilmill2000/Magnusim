@@ -293,6 +293,25 @@ describe('labels, earlier parts and the badge', () => {
     ).toEqual(['Earlier part (to iteration 400): Unhealthy.', 'Earlier part (to iteration 900): its health was not checked. Then pressure correctors 2 → 3 from iteration 900.']);
   });
 
+  it('RH3: a Continue that took the study\'s new numerics names them, after a change that waited for it', () => {
+    const numerics = {
+      from_t: null,
+      from_iteration: 450,
+      applied_at: 'x',
+      kind: 'numerics',
+      changes: [{ key: 'relax_p', label: 'Relaxation p', from: 0.3, to: 0.2, text: 'Relaxation p 0.3 → 0.2' }],
+    };
+    expect(earlierPartLines([{ last_saved_iteration: 450, health: { verdict: 'watch', codes: [] } }], [numerics], false)).toEqual([
+      'Earlier part (to iteration 450): Watch closely. Then Relaxation p 0.3 → 0.2 from iteration 450.',
+    ]);
+    // The same Continue applied a waiting change (A2) and took the new numerics: both, in that order.
+    const settings = { from_t: 0.1667, from_iteration: null, applied_at: 'x', kind: 'settings', changes: [{ key: 'transient.max_co', from: 100, to: 5 }] };
+    const both = { ...numerics, from_t: 0.1667, from_iteration: null, changes: [...numerics.changes, { key: 'relax_u', label: 'Relaxation U', from: null, to: 0.5, text: 'Relaxation U preset → 0.5' }], more: 2 };
+    expect(earlierPartLines([{ last_saved_iteration: 0.1667, health: null }], [settings, both], true)).toEqual([
+      'Earlier part (to t = 0.167 s): its health was not checked. Then Max Courant 100 → 5, Relaxation p 0.3 → 0.2, Relaxation U preset → 0.5 and 2 more from t = 0.167 s.',
+    ]);
+  });
+
   it('the tree badge title', () => {
     expect(badgeTitle(rec(), true)).toBe('Health: Unhealthy since t = 0.0069 s');
   });

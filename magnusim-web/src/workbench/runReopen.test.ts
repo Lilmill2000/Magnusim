@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyContinueChanges,
+  chooseNumericsWords,
+  continueNumericsWords,
+  numericsAsWas,
+  numericsCardSentence,
+  numericsChangedText,
+  numericsDiff,
+  numericsSnapshot,
+  numericsUsedOf,
+  withNumericsEntry,
   chooseRestartWords,
   CONTINUE_KEYS,
   continueAppliesLine,
@@ -449,5 +458,108 @@ describe('RH1: Start over on a run that became unhealthy (A3)', () => {
     expect(overwriteWords(run, { action: 'start', studyTransient: true, health: { first_unhealthy: null } }).copy).not.toMatch(/unhealthy/);
     expect(overwriteWords(run, { action: 'start', studyTransient: true }).copy).not.toMatch(/unhealthy/);
     expect(unhealthySentence(run, null)).toBe('');
+  });
+});
+
+// RH3 (spec 5.3): numerics at Continue. One list of what differs (numericsDiff) makes every text:
+// the Continue box's line, the question, the route's and the Assistant's refusals and the card.
+describe('numerics at Continue', () => {
+  const SCHEMA = {
+    type: 'object',
+    properties: {
+      numerics_preset: { type: 'string', enum: ['robust', 'accurate'], title: 'Numerics', 'x-cfddesk': { enum_labels: ['Robust', 'Accurate'] } },
+      simplec: { type: 'boolean', title: 'SIMPLEC (consistent)' },
+      relax_u: { type: 'number', title: 'Relaxation U' },
+      relax_p: { type: 'number', title: 'Relaxation p' },
+      p_tolerance: { type: 'number', title: 'p tolerance' },
+      momentum_convection: { type: 'string', enum: ['first_order', 'second_order'], title: 'Momentum convection', 'x-cfddesk': { enum_labels: ['First order (upwind)', 'Second order (linearUpwind)'] } },
+    },
+  };
+  const STUDY = { analysis_type: 'incompressible_steady', relax_p: 0.3, simplec: false, p_tolerance: 1e-7 };
+  const used = numericsSnapshot('incompressible_steady', false, STUDY, SCHEMA, '2026-11-04T00:00:00.000Z');
+  const steady = { name: 'Run_2', status: 'stopped', time_dependency: 'Steady-state', continue_from: 450, numerics_used: used };
+  const transient = { ...steady, time_dependency: 'Transient', continue_from: 0.1666667 };
+
+  it('a Start records every numerics setting of its analysis, raw, blanks as null', () => {
+    expect(used).toEqual({
+      analysis: 'incompressible_steady',
+      mode: 'steady',
+      at: '2026-11-04T00:00:00.000Z',
+      values: { numerics_preset: null, simplec: false, relax_u: null, relax_p: 0.3, p_tolerance: 1e-7, momentum_convection: null },
+    });
+    expect(numericsSnapshot('incompressible_transient', true, {}, SCHEMA, 'x').mode).toBe('transient');
+    expect(numericsUsedOf(steady)).toBe(used);
+    expect(numericsUsedOf({ name: 'Old' })).toBeNull();
+    expect(numericsUsedOf({ numerics_used: { analysis: 'x' } })).toBeNull();
+  });
+
+  it('nothing differs: an empty list; a run started before RH3 or no study: none either', () => {
+    expect(numericsDiff(steady, STUDY, SCHEMA)).toEqual([]);
+    // A number within 1e-9 of its size, a blank and a missing key are the same.
+    expect(numericsDiff(steady, { ...STUDY, relax_p: 0.3 + 1e-12, relax_u: '' }, SCHEMA)).toEqual([]);
+    expect(numericsDiff({ name: 'Old', status: 'stopped' }, { relax_p: 0.2 }, SCHEMA)).toEqual([]);
+    expect(numericsDiff(steady, null, SCHEMA)).toEqual([]);
+  });
+
+  it('labels from the schema, in its order; blank reads "preset", a choice its label, on/off, a tolerance in exponents', () => {
+    const now = { ...STUDY, relax_p: 0.2, relax_u: 0.5, numerics_preset: 'accurate', simplec: true, p_tolerance: 1e-8, momentum_convection: 'first_order' };
+    const d = numericsDiff(steady, now, SCHEMA);
+    expect(d.map((x) => x.text)).toEqual([
+      'Numerics preset → Accurate',
+      'SIMPLEC (consistent) off → on',
+      'Relaxation U preset → 0.5',
+      'Relaxation p 0.3 → 0.2',
+      'p tolerance 1e-7 → 1e-8',
+      'Momentum convection preset → First order (upwind)',
+    ]);
+    expect(d[3]).toEqual({ key: 'relax_p', label: 'Relaxation p', from: 0.3, to: 0.2, text: 'Relaxation p 0.3 → 0.2' });
+    // A value set back to blank: to null, "preset".
+    expect(numericsDiff(steady, { ...STUDY, relax_p: null }, SCHEMA)[0].text).toBe('Relaxation p 0.3 → preset');
+    // No schema (its plugin off): the record's keys, named by key.
+    expect(numericsDiff(steady, { ...STUDY, relax_p: 0.2 }, null).map((x) => x.text)).toEqual(['relax p 0.3 → 0.2']);
+  });
+
+  it("the words: the Continue box's line, the question (transient and steady), the Assistant's refusal and card", () => {
+    const d = numericsDiff(transient, { ...STUDY, relax_p: 0.2, relax_u: 0.5 }, SCHEMA);
+    const list = 'Relaxation U preset → 0.5, Relaxation p 0.3 → 0.2';
+    expect(numericsChangedText(transient, d)).toBe(`The study's numerics changed after "Run_2" started: ${list}.`);
+    const w = continueNumericsWords(transient, d);
+    expect(w).toEqual({
+      title: 'Continue "Run_2"?',
+      health: '',
+      copy: `The study's numerics changed after "Run_2" started: ${list}.`,
+      fresh: { label: 'Continue with the new numerics', line: "Goes on from t = 0.1667 s with the study's numerics now. The run records the change." },
+      asWas: { label: 'Continue as it was', line: 'Goes on with the numerics it started with. The study keeps the new values for new runs.' },
+      cancel: 'Cancel',
+    });
+    expect(continueNumericsWords(steady, d).fresh.line).toBe("Goes on from iteration 450 with the study's numerics now. The run records the change.");
+    expect(continueNumericsWords(steady, d, 'Its saved results come after it became unhealthy.').health).toBe('Its saved results come after it became unhealthy.');
+    expect(chooseNumericsWords(transient, d)).toEqual({
+      message: `The study's numerics changed after "Run_2" started (${list}).`,
+      hint: 'Pass numerics "as_was" to continue with the numerics it started with, or "new" to use the study\'s numerics now. Ask the person which.',
+    });
+    expect(numericsCardSentence(transient, d, 'new')).toBe(`Continues "Run_2" with the study's new numerics (${list}).`);
+    expect(numericsCardSentence(transient, d, 'as_was')).toBe(`Continues "Run_2" with the numerics it started with; the study's newer values (${list}) are not used.`);
+  });
+
+  it('"as it was": what it started with, and blank for a setting its record does not hold', () => {
+    const old = { ...used, values: { relax_p: 0.3 } };
+    expect(numericsAsWas(old, SCHEMA)).toEqual({ numerics_preset: null, simplec: null, relax_u: null, relax_p: 0.3, p_tolerance: null, momentum_convection: null });
+  });
+
+  it('a Continue that took the new numerics records them applied: at most 8 changes (the rest counted), at most 20 entries', () => {
+    const d = numericsDiff(steady, { ...STUDY, relax_p: 0.2 }, SCHEMA);
+    const waiting = { from_t: null, from_iteration: 450, at: 'a', by: 'person' as const, kind: 'settings' as const, changes: [{ key: 'transient.max_co', from: 100, to: 5 }], applied_at: 'b' };
+    const list = withNumericsEntry([waiting], d, { by: 'assistant', at: 'c', from_t: null, from_iteration: 450 });
+    expect(list).toEqual([
+      waiting,
+      { from_t: null, from_iteration: 450, at: 'c', by: 'assistant', kind: 'numerics', changes: [{ key: 'relax_p', label: 'Relaxation p', from: 0.3, to: 0.2, text: 'Relaxation p 0.3 → 0.2' }], applied_at: 'c' },
+    ]);
+    const many = Array.from({ length: 11 }, (_, i) => ({ key: `k${i}`, label: `K${i}`, from: i, to: i + 1, text: `K${i} ${i} → ${i + 1}` }));
+    const e = withNumericsEntry(null, many, { by: 'person', at: 'c', from_t: 0.5, from_iteration: null })[0];
+    expect([e.changes.length, e.more]).toEqual([8, 3]);
+    const full = Array.from({ length: 20 }, (_, i) => ({ ...waiting, at: String(i) }));
+    const capped = withNumericsEntry(full, d, { by: 'person', at: 'z', from_t: null, from_iteration: 450 });
+    expect([capped.length, capped[0].at, capped[19].kind]).toEqual([20, '1', 'numerics']);
   });
 });

@@ -413,16 +413,29 @@ export function healthNextWords(run: HealthRunView, h: HealthRecord | null | und
   return out;
 }
 
-/** "Max Courant 100 → 5, outer correctors 1 → 3" (A2's continue_changes). */
-export function changeWords(changes: Array<{ key: string; from: unknown; to: unknown }>): string {
-  return changes.map((c) => `${KEY_NAMES[c.key] || c.key.replace(/^transient\./, '').replace(/_/g, ' ')} ${String(c.from ?? 'auto')} → ${String(c.to ?? 'auto')}`).join(', ');
+/**
+ * "Max Courant 100 → 5, outer correctors 1 → 3" (A2's continue_changes). A numerics change (RH3)
+ * carries its own words ("Relaxation p 0.3 → 0.2", runReopen.ts numericsDiff).
+ */
+export function changeWords(changes: Array<{ key: string; from: unknown; to: unknown; text?: string }>): string {
+  return changes
+    .map((c) =>
+      typeof c.text === 'string' && c.text
+        ? c.text
+        : `${KEY_NAMES[c.key] || c.key.replace(/^transient\./, '').replace(/_/g, ' ')} ${String(c.from ?? 'auto')} → ${String(c.to ?? 'auto')}`,
+    )
+    .join(', ');
 }
 
 export interface ContinueChange {
   from_t?: number | null;
   from_iteration?: number | null;
   applied_at?: string | null;
-  changes?: Array<{ key: string; from: unknown; to: unknown }>;
+  /** settings (A2's four keys) or numerics (RH3: the study's new numerics taken at a Continue). */
+  kind?: string;
+  changes?: Array<{ key: string; from: unknown; to: unknown; text?: string }>;
+  /** A numerics entry's changes past the ones it keeps. */
+  more?: number;
 }
 
 /**
@@ -485,7 +498,8 @@ const sameTime = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Ma
  * clipping, turbulence bounding). Then Max Courant 100 → 5 from t = 0.2 s." A change belongs to
  * the part whose last saved time it went on from (its `from_t`, or `from_iteration`): a Continue
  * with no change adds a part and no entry, so the order alone does not pair them. A part no
- * applied change went on from gets no "Then".
+ * applied change went on from gets no "Then". A Continue that applied a waiting change and took
+ * the study's new numerics (RH3) names both, in that order.
  */
 export function earlierPartLines(
   attempts: Array<{ last_saved_iteration?: unknown; end_time?: unknown; health?: { verdict?: string; codes?: string[] } | null }> | null | undefined,
@@ -499,17 +513,22 @@ export function earlierPartLines(
     const to = isNum(Number(a.last_saved_iteration)) && Number(a.last_saved_iteration) > 0 ? Number(a.last_saved_iteration) : null;
     const words = attemptWords(a.health || null);
     let line = `Earlier part${to !== null ? ` (to ${atWords(to, transient)})` : ''}: ${words || 'its health was not checked'}.`;
-    const c =
-      to === null
-        ? undefined
-        : applied.find((x) => {
-            if (used.has(x)) return false;
-            const from = isNum(x.from_t) ? x.from_t : isNum(x.from_iteration) ? x.from_iteration : null;
-            return from !== null && sameTime(from, to);
-          });
-    if (c && c.changes) {
-      used.add(c);
-      line += ` Then ${changeWords(c.changes)} from ${atWords(to, transient)}.`;
+    // Each entry once: a settings entry and a numerics one of the same Continue go on from the same time.
+    const found: ContinueChange[] = [];
+    if (to !== null) {
+      for (const kind of ['settings', 'numerics']) {
+        const c = applied.find((x) => {
+          if (used.has(x) || (x.kind || 'settings') !== kind) return false;
+          const from = isNum(x.from_t) ? x.from_t : isNum(x.from_iteration) ? x.from_iteration : null;
+          return from !== null && sameTime(from, to);
+        });
+        if (c) found.push(c);
+      }
+    }
+    if (found.length) {
+      found.forEach((c) => used.add(c));
+      const said = found.map((c) => changeWords(c.changes || []) + (isNum(c.more) && c.more > 0 ? ` and ${c.more} more` : '')).join(', ');
+      line += ` Then ${said} from ${atWords(to, transient)}.`;
     }
     out.push(line);
   });

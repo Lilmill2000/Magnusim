@@ -384,6 +384,36 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
               to: unknown;
           }>;
       } | null;
+      /**
+       * RH3: the study's numerics changed after the run started (its `numerics_used`): what differs
+       * (`differences`, each with its words), the Continue box's line (`text`) and the words of the
+       * question Continue asks first (`words`); null when nothing differs or the run recorded none.
+       * Absent in a state published before it existed.
+       */
+      numerics?: {
+          differences: Array<{
+              key: string;
+              label: string;
+              from: unknown;
+              to: unknown;
+              text: string;
+          }>;
+          text: string;
+          words: {
+              title: string;
+              health: string;
+              copy: string;
+              fresh: {
+                  label: string;
+                  line: string;
+              };
+              asWas: {
+                  label: string;
+                  line: string;
+              };
+              cancel: string;
+          };
+      } | null;
   }
   /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */
   export interface RunState {

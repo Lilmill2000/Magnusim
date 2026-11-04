@@ -204,12 +204,16 @@ import {
   continueAppliesLine,
   continueChangesOf,
   continueChoiceWords,
+  continueNumericsWords,
   continuePendingKeys,
   endedRunReason,
   keepAutoBlank,
   newRunToast,
   newRunWords,
   noSavedTimeText,
+  numericsChangedText,
+  numericsDiff,
+  numericsUsedOf,
   onlyContinueKeys,
   overwritesResults,
   overwriteWords,
@@ -33471,6 +33475,8 @@ function runCheckStamp(rec, meshReady) {
   const live = mesh && mesh.live_mesh_result && typeof mesh.live_mesh_result === 'object' ? mesh.live_mesh_result : {};
   return JSON.stringify([
     runReadyStamp(rec, meshReady),
+    // RH3: a Continue that took the study's new numerics changes what "Numerics as written" shows.
+    (runNumericsUsed(rec) || {}).at || null,
     runCheckSettingsOf(rec),
     runControlFor(rec).endTime,
     runCoresOf(rec),
@@ -34353,7 +34359,7 @@ function runConvergedBadge(rec) {
  * span it last ran) and why it cannot continue now.
  */
 function continueStateFor(rec, run, ctx) {
-  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false, applies: '', pending: null };
+  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false, applies: '', pending: null, numerics: null };
   const status = String((run && run.status) || (rec && rec.status) || '');
   // A run that converged (F5) is 'done' with its `converged` set: it continues too.
   if (!rec || !run || ctx.running || !['done', 'stopped'].includes(status)) return off;
@@ -34380,6 +34386,8 @@ function continueStateFor(rec, run, ctx) {
     !!(run.continued && typeof run.continued === 'object' && run.continued.stops_off);
   const waiting = runWithPendingContinue(rec, run);
   return {
+    // RH3: the study's numerics changed after it started (its numerics_used): Continue asks which.
+    numerics: continueNumericsOf(rec, run, from),
     visible: true,
     // While another job runs a Continue queues, as Start does; a queued one is removed with Start's button.
     enabled: from !== null && !ctx.queued && !runCatalog.starting,
@@ -34395,6 +34403,23 @@ function continueStateFor(rec, run, ctx) {
     applies: continueAppliesLine(waiting),
     pending: pendingContinue(waiting),
   };
+}
+
+/**
+ * RH3 (spec 5.3): what differs between the numerics the run started with (its `numerics_used`)
+ * and its study's now (runReopen.ts numericsDiff, as the route and the Assistant say it), with
+ * the Continue box's line and its question's words; null when nothing differs, or for a run
+ * started before RH3 (Continue goes on with the study's numerics, as before).
+ */
+function continueNumericsOf(rec, run, from) {
+  const doc = run && numericsUsedOf(run) ? run : rec;
+  const used = numericsUsedOf(doc);
+  if (!used) return null;
+  const row = analysisRow(used.analysis);
+  const view = { ...doc, name: (rec && rec.name) || doc.name, continue_from: from };
+  const differences = numericsDiff(view, runStudyRecord(rec), row ? row.numerics_schema : null);
+  if (!differences.length) return null;
+  return { differences, text: numericsChangedText(view, differences), words: continueNumericsWords(view, differences) };
 }
 
 /** D26: the run panel's line for a run made on an older version of its linked geometry, else ''. */
@@ -35156,6 +35181,8 @@ async function startSolveClient(opts) {
         start_id: start.id,
         ...(typeof currentMeshStudyIds === 'function' ? currentMeshStudyIds() : {}),
         ...(cont.end_time != null ? { end_time: cont.end_time } : { extra_iterations: cont.extra_iterations }),
+        // RH3: which numerics it goes on with, once the study's differ from what it started with.
+        ...(cont.numerics ? { numerics: cont.numerics } : {}),
       });
     const r = posted.response;
     const j = posted.json;
@@ -35166,6 +35193,15 @@ async function startSolveClient(opts) {
         // Refused: the run is as it ended; the panel says why.
         const refusal = startRefusalKind(r.status, j);
         if (refusal === 'stopped') return endWithoutStart('Stopped before it started.', true);
+        // RH3: the study's numerics changed where this page did not see it (another window):
+        // nothing started. The study is read again, so the Continue box says what differs and
+        // Continue asks which numerics it goes on with.
+        if (j && j.code === 'choose_numerics') {
+          try {
+            await reloadStudies(studySwitchGen);
+          } catch (_) {}
+          return endWithoutStart((err || "The study's numerics changed after this run started.") + ' Continue again to choose which numerics it goes on with.');
+        }
         return endWithoutStart(err || 'This run could not continue.');
       }
       if (busy) {

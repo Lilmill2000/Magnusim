@@ -672,6 +672,8 @@ export const REOPEN_CLEARED = Object.freeze([
   // what its last Start planned and ran with
   'runner_job_id', 'log_path', 'log_jsonl_path', 'wsl_case', 'wsl_case_path', 'command', 'argv', 'n_procs', 'solve_protocol',
   'prepare_run', 'mesh_source', 'bcs', 'wall_default', 'launch', 'path_kind', 'mode', 'analysis_key', 'built_from',
+  // the numerics it started with (RH3): a draft again shows its study's
+  'numerics_used',
 ]);
 
 /**

@@ -35,7 +35,8 @@ class RunInputs:
     run: dict[str, Any] = field(default_factory=dict)
     transient_override: dict[str, Any] | None = None
     # A run continued from its latest saved time: {"end_time", "write_interval"}
-    # (run_case.restart_arg); None for a run written from the start.
+    # (run_case.restart_arg); None for a run written from the start. The numerics it goes on
+    # with (RH3, its "numerics") are already over ``study``, never kept here.
     restart: dict[str, Any] | None = None
     # RH2 (API 1.9): what the core adds for the pre-run check when it plans a run to start
     # (cfddesk.project.run_check.check_context: mesh facts, ranks, solve rate, kept codes);
@@ -60,7 +61,8 @@ def gather_run_inputs(
     ``time_dependency`` is the decision the caller already made (Node passes
     the run's). Without it: transient when transient settings are given, else
     the run's stamp, else its study's. ``restart`` continues the run from its
-    latest saved time (``RunInputs.restart``).
+    latest saved time (``RunInputs.restart``); its ``numerics`` (RH3: the numerics settings the
+    Continue goes on with) go over the study record (:func:`with_numerics`).
     """
     from cfddesk.project.paths import (
         assemble_study_bc_defaults,
@@ -120,6 +122,10 @@ def gather_run_inputs(
         run = find_run(root, run_id, sim_id) or {}
     except Exception:
         run = {}
+    study = study_doc(root, sim_id)
+    if restart and isinstance(restart.get("numerics"), dict):
+        study = with_numerics(study, restart["numerics"])
+        restart = {k: v for k, v in restart.items() if k != "numerics"}
     return RunInputs(
         project_dir=root,
         run_id=run_id,
@@ -136,11 +142,24 @@ def gather_run_inputs(
         simulation_control=_study_or_root("simulation_control.json"),
         mesh=resolve_mesh(root, mesh_id=mesh_id, simulation_id=sim_id, require_poly=require_mesh),
         face_props=load_face_props(root, _study_geometry_id(root, sim_id)),
-        study=study_doc(root, sim_id),
+        study=study,
         run={k: v for k, v in dict(run).items() if k != "dir"},
         transient_override=transient_override,
         restart=dict(restart) if restart else None,
     )
+
+
+def with_numerics(study: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """``study`` with numerics settings put over it (RH3): each key at its value, a null one
+    taken out (blank: the preset's, as an unset study key is). Both writers read them through
+    their usual parse, so a Continue's chosen numerics need no writer change."""
+    out = dict(study or {})
+    for key, value in (values or {}).items():
+        if value is None:
+            out.pop(str(key), None)
+        else:
+            out[str(key)] = value
+    return out
 
 
 def _study_geometry_id(root: Path, sim_id: str | None) -> str | None:
