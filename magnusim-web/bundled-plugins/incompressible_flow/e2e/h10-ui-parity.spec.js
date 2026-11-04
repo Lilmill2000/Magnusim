@@ -48,7 +48,15 @@ const TURBULENCE_HELP =
 // Start's title says what a draft starts with when its pre-run check found something (RH2);
 // otherwise it is v0.2.0's, which it is compared with.
 const START_CHECKED_TITLE = /(data-run-start="#" )title="Starts with [^"]*"/;
-const sameHelp = (line) => line.replace(TURBULENCE_HELP, '$1 …').replace(START_CHECKED_TITLE, '$1title="Start the solver on this run"');
+// The transient hint's long-run line is v0.2.0's; its words are now the pre-run check's
+// estimate (RH2: steps and time on this PC's cores, hours or days) or, without one, the
+// long-run sentence: compared as a line, not by its words (baseline and page alike).
+const LONG_RUN_LINE = /(<span class="<id>"> )(?:That is a long run\.|About .*? time steps, roughly ).*$/;
+const sameHelp = (line) =>
+  line
+    .replace(TURBULENCE_HELP, '$1 …')
+    .replace(START_CHECKED_TITLE, '$1title="Start the solver on this run"')
+    .replace(LONG_RUN_LINE, '$1(the long-run line)');
 // Study panel rows added after the baseline was recorded (the baseline is never
 // re-recorded): left out of the comparison, so every older row still must match.
 const NEW_STUDY_ROWS = [
