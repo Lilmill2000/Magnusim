@@ -15,9 +15,34 @@ run depends on what you are doing.
 | Before a local commit | `npm run test:e2e:changed`: the suites your change can affect, without WSL meshes and solves | minutes |
 | Before a push, and nightly | `npm run test:e2e`: every suite, with real meshes and solves | about 47 min |
 | Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about two hours |
+| Before a release, and nightly | The app's validation set: `npm run test:validation` (WSL meshes and solves through the app's routes, then `npm run validation:report`) | minutes per case (case 1: about 2 min a mesher at 4 cores) |
 
 The full run is the gate before a push. It is not needed for every commit. A
 validation set is never part of `-m wsl`: its cases run only when asked for.
+
+## The validation set
+
+`magnusim-web/validation/` (its `README.md`) compares the app's results with published
+reference values: each case is a STEP file imported into a project, set up, meshed and
+solved through the routes the page and the Assistant use, then measured from its monitors
+and Plot over path. It is opt-in: its browser suite (`validation/playwright.config.js`)
+skips unless `MAGNUSIM_E2E_VALIDATION=1`, no default suite or CI job runs it, and
+`scripts/e2e-suites.mjs` counts a change under `validation/` (and its two scripts) as
+running no suite. Its harness's own parts (plans, face selectors, extraction, comparison,
+the report) are tested by pytest (`validation/tests`, in `npm run test:py` and CI) and
+`scripts/__tests__/validation-driver.test.mjs` (in `npm run test:server`).
+
+| Command | What it runs |
+|---|---|
+| `npm run test:validation` | Every case and variant at 8 cores, one run at a time under the WSL test lock, then the report. |
+| `npm run test:validation -- --case c1 --variant standard --cores 4` | One case and mesher. `--coarse` makes quick coarse runs into `validation/results-coarse/` (never committed); `--mesh-only` meshes and records the mesh facts only; `--no-report` skips the report. |
+| `npm run validation:report` | `validation/VALIDATION.md` and the public page (`docs/validation/` at the repository's root) from the committed results; `-- --check` exits 1 when they are out of date (pytest checks this too). |
+
+Its app server loads only the bundled plugins (not the test plugins the core suite loads).
+`MAGNUSIM_E2E_LOCK=0` lets it run beside another WSL test run (set `--cores` low then);
+a run's result records WSL's load while it solved, so run times compare like with like.
+Results are report-only until the first full run's tolerances are locked; then a locked
+quantity outside its tolerance fails `npm run test:validation` and blocks a release.
 
 | Command | What it runs |
 |---|---|

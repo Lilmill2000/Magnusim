@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { PY_ROOT, PYTHON } from './python-env.js';
 
 const STEPS = {
-  ruff: ['-m', 'ruff', 'check', 'cfddesk', 'tools', 'tests', '../bundled-plugins'],
+  ruff: ['-m', 'ruff', 'check', 'cfddesk', 'tools', 'tests', '../bundled-plugins', '../validation'],
   mypy: [
     '-m',
     'mypy',
@@ -13,6 +13,8 @@ const STEPS = {
     '../bundled-plugins/incompressible_flow/incompressible_flow',
     '../bundled-plugins/incompressible_flow/plugin.py',
     '../bundled-plugins/heat_transfer/heat_transfer',
+    // The validation set's harness (validation/README.md).
+    '../validation/magnusim_validation',
   ],
   pytest: ['-m', 'pytest', '-q', '-p', 'no:cacheprovider'],
 };

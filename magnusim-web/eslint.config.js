@@ -73,7 +73,8 @@ export default [
     rules: phase0Rules,
   },
   {
-    files: ['scripts/**/*.{js,mjs,cjs}'],
+    // The validation set's driver, spec and config run in Node (Playwright's runner).
+    files: ['scripts/**/*.{js,mjs,cjs}', 'validation/**/*.{js,mjs,cjs}'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

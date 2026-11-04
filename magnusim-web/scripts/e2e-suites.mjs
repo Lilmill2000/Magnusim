@@ -231,6 +231,11 @@ export function classifyPath(rel, pluginKeys) {
   if (/(^|\/)(test-results|\.tmp-[^/]*)\//.test(rel) || rel.startsWith('.cache/')) return { kind: 'none', why: 'test output' };
   // The plugin template is not loaded by the app (its own pytest checks it).
   if (rel.startsWith('templates/')) return { kind: 'none', why: 'plugin template' };
+  // The validation set runs only when asked (npm run test:validation); its harness's own
+  // checks are pytest (validation/tests) and node tests, in the default unit runs.
+  if (rel.startsWith('validation/') || /^scripts\/validation-[^/]+\.mjs$/.test(rel)) {
+    return { kind: 'none', why: 'the validation set (npm run test:validation)' };
+  }
   const m = rel.match(/^bundled-plugins\/([^/]+)\/(.*)$/);
   if (m) {
     const [, key, rest] = m;
