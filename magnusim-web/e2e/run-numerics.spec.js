@@ -1,4 +1,4 @@
-// RH3, numerics as settings (spec 5.1-5.9, part 1: the settings). What the person sees and what
+// RH3, numerics as settings (spec 5.1-5.9). What the person sees and what
 // the Assistant reads and changes of a study's numerics and a run's PIMPLE outer loops, both ways.
 // - The Run panel: Max Courant and the new outer relaxation changed in its Advanced settings are
 //   what "Numerics as written" ([data-run-numerics]) shows and what the Assistant reads through
@@ -12,11 +12,23 @@
 //   …, outside … It is used as saved.", stays on an edit of another field, is listed by Before
 //   you start (setting_out_of_range) and blocks no Start; an edit outside the range is refused
 //   with why, by the panel and by the Assistant alike.
-// Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL.
+// - Numerics at Continue (spec 5.3): a Start records what numerics the run started with
+//   (numerics_used). After a study numerics change (steady relaxation p 0.3 -> 0.2) the stopped
+//   run's Continue box says what changed, and Continue asks one question (#modal-run-continue):
+//   "Continue with the new numerics", "Continue as it was" or Cancel (focused; Enter and Escape
+//   answer it, and nothing is posted). The new numerics: it goes on with 0.2, records them, and
+//   its Health block's earlier part names the change. A run whose saved results are from after
+//   it became unhealthy gets the same one question, its health first. The Assistant's
+//   run_continue without numerics is refused with the choice to make (no card); with "as_was" its
+//   card lists the same differences, and it goes on as it started. A Heat Transfer steady run
+//   gets the same question after a change of its energy relaxation.
+// Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL. Its fake solve
+// replays a healthy steady log through the real health tracker (MAGNUSIM_TEST_SOLVE_LOG).
 // Fails on the code before RH3: there were no such settings, no "Numerics as written" and no
-// read_setup numerics.
+// read_setup numerics; before its Continue part, a run recorded no numerics and Continue used
+// the study's numerics without a word.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdirSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { seedElbowProject } from './prepare-projects.js';
@@ -28,6 +40,10 @@ import { expect, test } from './support/stress.js';
 
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CHECKMESH = join(WEB, 'python', 'tests', 'fixtures', 'mesh-facts', 'checkmesh', 'ok-hex-2d.log');
+const CAVITY = join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d');
+const STEADY_LOG = join(WEB, 'python', 'tests', 'fixtures', 'health', 'calib', 'bfs-steady.log.gz');
+const REGISTRY = JSON.parse(readFileSync(join(WEB, 'scripts', 'generated', 'registry.json'), 'utf8'));
+const numericsKeys = (analysis) => Object.keys(REGISTRY.analysis.find((a) => a.key === analysis).numerics_schema.properties).sort();
 const PID = 'run-numerics-e2e';
 const STEP = { timeout: 30_000 };
 const FIRST_ORDER =
@@ -72,6 +88,8 @@ test.beforeAll(async ({ request }) => {
       MAGNUSIM_TEST_MESH_SECONDS: '1',
       MAGNUSIM_TEST_MESH_CHECKMESH: CHECKMESH,
       MAGNUSIM_TEST_SOLVE_SECONDS: '600',
+      MAGNUSIM_TEST_SOLVE_LOG: STEADY_LOG,
+      MAGNUSIM_TEST_SOLVE_PACE_MS: '5',
       PYTHONPATH: [join(WEB, 'python'), join(WEB, 'python', 'sdk'), process.env.PYTHONPATH || ''].filter(Boolean).join(delimiter),
     },
   });
@@ -325,4 +343,305 @@ test('the preset note counts the terms changed, and "Use the preset for all" cle
   } finally {
     await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Transient', grad_limiter: null, non_orth_correction: null });
   }
+});
+
+// ---------------------------------------------------------------- numerics at Continue (spec 5.3)
+
+const compute = (o) => ({ project_id: '', simulation_id: '', action: '', mesh_id: '', run_id: '', extra_iterations: 0, end_time: 0, frames: '', time: -1, plugin: '', chain: [], estimate_minutes: 0, numerics: '', ...o });
+const changedLine = (name, list) => `The study's numerics changed after "${name}" started: ${list}.`;
+
+/**
+ * A run of the study started (its Start records what numerics it starts with), then stopped, its
+ * result saved at iteration 50 (the cavity's last frame), as a steady solve stopped there leaves it.
+ */
+async function stoppedRun(request, name, study = sim) {
+  const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: study, name, mesh_id: meshId });
+  const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+  await postOk(request, '/api/run/start', { project_id: PID, simulation_id: study, run_id: rid });
+  await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('running');
+  await postOk(request, '/api/run/stop', { project_id: PID, run_id: rid });
+  await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('stopped');
+  const caseDir = (await runRow(request, rid)).case_dir;
+  cpSync(join(CAVITY, '0.5'), join(caseDir, '50'), { recursive: true });
+  const runJson = join(dirname(caseDir), 'run.json');
+  patchRun(runJson, { time_dependency: 'Steady-state', has_results: true, n_saved_times: 1, last_saved_iteration: 50, iteration: 50, n_steps: 50 });
+  return { rid, caseDir, runJson };
+}
+
+function patchRun(runJson, more) {
+  writeFileSync(runJson, JSON.stringify({ ...JSON.parse(readFileSync(runJson, 'utf8')), ...more }, null, 2));
+}
+
+/** What the page posts to start or continue a run, or to queue one (not the queue's kicks). */
+function postsOf(page) {
+  const posted = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /\/api\/(run\/(continue|start|reopen)|compute-queue)(\?|$)/.test(r.url())) posted.push({ url: r.url(), body: r.postDataJSON() });
+  });
+  return posted;
+}
+
+test.describe('numerics at Continue', () => {
+  test.beforeAll(async ({ request }) => {
+    // A steady study with relaxation p 0.3 saved.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Steady-state' });
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, relax_p: 0.3 });
+  });
+
+  test.beforeEach(async ({ request }) => {
+    await postOk(request, '/api/test/assistant/reset', {});
+    await useScriptedModel(request, host.base, fake, 'cloud');
+  });
+
+  test.afterEach(async () => {
+    expect(fake.pending(), 'scripted answers left unused').toBe(0);
+  });
+
+  test('the Continue box says what changed; Continue asks first, Cancel posts nothing; the new numerics go on with 0.2 and the run records them', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const { rid } = await stoppedRun(request, 'Run_cn');
+    // Its Start recorded what it started with: every numerics key of its analysis, blanks included.
+    let row = await runRow(request, rid);
+    expect(row.numerics_used).toMatchObject({ analysis: 'incompressible_steady', mode: 'steady' });
+    expect(Object.keys(row.numerics_used.values).sort()).toEqual(numericsKeys('incompressible_steady'));
+    const saved = await studyRec(request);
+    expect(row.numerics_used.values).toEqual(Object.fromEntries(numericsKeys('incompressible_steady').map((k) => [k, saved[k] ?? null])));
+    expect(row.numerics_used.values.relax_p).toBe(0.3);
+    // The person lowers the study's relaxation of p.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, relax_p: 0.2 });
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const box = panel.locator('[data-run-continue="1"]');
+    const said = changedLine('Run_cn', 'Relaxation p 0.3 → 0.2');
+    await expect(box.locator('[data-run-continue-numerics]')).toHaveText(said, STEP);
+    const posted = postsOf(page);
+    const dialog = page.locator('#modal-run-continue');
+    const go = box.locator('[data-run-continue-go="1"]');
+
+    // The question: three answers, Cancel focused; Escape answers Cancel.
+    await go.click();
+    await expect(dialog).toBeVisible(STEP);
+    await expect(page.locator('#modal-confirm')).toBeHidden();
+    await expect(page.locator('#rcn-heading')).toHaveText('Continue "Run_cn"?');
+    await expect(page.locator('#rcn-health')).toBeHidden();
+    await expect(page.locator('#rcn-copy')).toHaveText(said);
+    await expect(page.locator('#rcn-new')).toHaveText('Continue with the new numerics');
+    await expect(page.locator('#rcn-new-line')).toHaveText("Goes on from iteration 50 with the study's numerics now. The run records the change.");
+    await expect(page.locator('#rcn-as-was')).toHaveText('Continue as it was');
+    await expect(page.locator('#rcn-as-was-line')).toHaveText('Goes on with the numerics it started with. The study keeps the new values for new runs.');
+    await expect(page.locator('#rcn-cancel')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    // Enter answers Cancel too, and so does the Cancel button.
+    await go.click();
+    await expect(dialog).toBeVisible(STEP);
+    await page.keyboard.press('Enter');
+    await expect(dialog).toBeHidden();
+    await go.click();
+    await expect(dialog).toBeVisible(STEP);
+    await page.locator('#rcn-cancel').click();
+    await expect(dialog).toBeHidden();
+    await page.waitForTimeout(800);
+    expect(posted).toEqual([]);
+    row = await runRow(request, rid);
+    expect([row.status, row.numerics_used.values.relax_p]).toEqual(['stopped', 0.3]);
+
+    // "Continue with the new numerics": it goes on with 0.2, and records them.
+    await go.click();
+    await expect(dialog).toBeVisible(STEP);
+    await page.locator('#rcn-new').click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => posted.length, STEP).toBe(1);
+    expect([posted[0].url.endsWith('/api/run/continue'), posted[0].body.numerics]).toEqual([true, 'new']);
+    await expect.poll(async () => (await runRow(request, rid)).numerics_used?.values?.relax_p, STEP).toBe(0.2);
+    row = await runRow(request, rid);
+    const entry = (row.continue_changes || []).find((e) => e.kind === 'numerics');
+    expect(entry).toMatchObject({ by: 'person', from_iteration: 50, changes: [{ key: 'relax_p', label: 'Relaxation p', from: 0.3, to: 0.2 }] });
+    expect(typeof entry.applied_at).toBe('string');
+    // The Health block's earlier part names the change.
+    await expect(panel.locator('[data-run-health-earlier="1"]').first()).toContainText('Then Relaxation p 0.3 → 0.2 from iteration 50.', { timeout: 60_000 });
+    // "Numerics as written" shows what it goes on with, as the Assistant reads it (R35).
+    const written = panel.locator('[data-run-numerics="1"]');
+    await expect(written).toBeVisible(STEP);
+    if (!(await written.evaluate((el) => el.open))) await written.locator('summary').click();
+    await expect(written.locator('[data-run-numerics-group="Relaxation"] [data-run-numerics-row="p"] .run-numerics-value')).toHaveText('0.2', STEP);
+    const read = await postOk(request, '/api/run/precheck', { project_id: PID, simulation_id: sim, run_id: rid });
+    expect(read.numerics.find((n) => n.group === 'Relaxation' && n.label === 'p').value).toBe('0.2');
+    await postOk(request, '/api/run/stop', { project_id: PID, run_id: rid });
+    await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('stopped');
+    // Nothing differs now: the line is gone and Continue asks nothing.
+    await expect(box.locator('[data-run-continue-numerics]')).toHaveCount(0, STEP);
+  });
+
+  test('a run whose saved results are from after it became unhealthy gets one question, its health first', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const { rid, runJson } = await stoppedRun(request, 'Run_fz');
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, relax_p: 0.25 });
+    patchRun(runJson, {
+      health_checked: true,
+      health: {
+        v: 1,
+        verdict: 'unhealthy',
+        at: new Date().toISOString(),
+        step: 40,
+        t: 40,
+        unit: 'iteration',
+        window: 25,
+        live: false,
+        checked: ['residuals_stalled'],
+        skipped: [],
+        findings: [{ code: 'residuals_stalled', level: 'error', text: 'The residuals stopped falling.', evidence: null, since_t: 10, fix: [] }],
+        timeline: [{ t: 10, verdict: 'unhealthy' }],
+        first_unhealthy: { t: 10, step: 10, wall_s: 5 },
+        restart: 'from_zero',
+      },
+    });
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const box = panel.locator('[data-run-continue="1"]');
+    const health = box.locator('[data-run-continue-health="1"]');
+    await expect(health).toBeVisible(STEP);
+    await expect(box.locator('[data-run-continue-numerics]')).toHaveText(changedLine('Run_fz', 'Relaxation p 0.2 → 0.25'));
+    const posted = postsOf(page);
+    await box.locator('[data-run-continue-go="1"]').click();
+    // One dialog, never two: the health copy first, then the numerics and the three answers.
+    await expect(page.locator('#modal-run-continue')).toBeVisible(STEP);
+    await expect(page.locator('#modal-confirm')).toBeHidden();
+    await expect(page.locator('#rcn-health')).toHaveText((await health.textContent()) || '');
+    await expect(page.locator('#rcn-copy')).toHaveText(changedLine('Run_fz', 'Relaxation p 0.2 → 0.25'));
+    expect(await page.locator('#rcn-health').evaluate((el) => !!(el.compareDocumentPosition(document.getElementById('rcn-copy')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    await expect(page.locator('#rcn-new')).toBeVisible();
+    await expect(page.locator('#rcn-as-was')).toBeVisible();
+    await expect(page.locator('#rcn-cancel')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#modal-run-continue')).toBeHidden();
+    await expect(page.locator('#modal-confirm')).toBeHidden();
+    await page.waitForTimeout(800);
+    expect(posted).toEqual([]);
+    expect((await runRow(request, rid)).status).toBe('stopped');
+  });
+
+  test('the Assistant: run_continue without numerics is refused with the choice, then "as_was" asks with the same differences and goes on as it started', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const { rid } = await stoppedRun(request, 'Run_ai');
+    expect((await runRow(request, rid)).numerics_used.values.relax_p).toBe(0.25);
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, relax_p: 0.15 });
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const list = 'Relaxation p 0.25 → 0.15';
+    await expect(panel.locator('[data-run-continue-numerics]')).toHaveText(changedLine('Run_ai', list), STEP);
+    const seen = {};
+    fake.reply(
+      { tools: [{ name: 'compute', input: compute({ action: 'run_continue', run_id: rid, extra_iterations: 20 }) }] },
+      () => {
+        seen.none = lastResults()[0];
+        return { tools: [{ name: 'compute', input: compute({ action: 'run_continue', run_id: rid, extra_iterations: 20, numerics: 'as_was' }) }] };
+      },
+      () => {
+        seen.asWas = lastResults()[0];
+        return { text: 'It goes on as it started.' };
+      },
+    );
+    await openDock(page);
+    await dockSend(page, 'Continue Run_ai for 20 more iterations.');
+    const card = dockGate(page);
+    await expect(card.locator('.dock-gate-copy')).toContainText(
+      `Continues "Run_ai" with the numerics it started with; the study's newer values (${list}) are not used.`,
+      { timeout: 60_000 },
+    );
+    // The call with no numerics was refused with the choice to make, and asked nothing.
+    expect([seen.none.ok, seen.none.error.code]).toEqual([false, 'choose_numerics']);
+    expect(seen.none.error.message).toBe(`The study's numerics changed after "Run_ai" started (${list}).`);
+    expect(seen.none.error.hint).toBe('Pass numerics "as_was" to continue with the numerics it started with, or "new" to use the study\'s numerics now. Ask the person which.');
+    await expect(page.locator('#modal-run-continue'), 'the person is asked nothing').toBeHidden();
+    await card.locator('[data-gate-answer="yes"]').click(STEP);
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 90_000 });
+    expect(seen.asWas.ok, JSON.stringify(seen.asWas)).toBe(true);
+    // It went on with what it started with: its record and "Numerics as written" keep 0.25.
+    await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('running');
+    const row = await runRow(request, rid);
+    expect(row.numerics_used.values.relax_p).toBe(0.25);
+    expect((row.continue_changes || []).some((e) => e.kind === 'numerics')).toBe(false);
+    const read = await postOk(request, '/api/run/precheck', { project_id: PID, simulation_id: sim, run_id: rid });
+    expect(read.numerics.find((n) => n.group === 'Relaxation' && n.label === 'p').value).toBe('0.25');
+    await postOk(request, '/api/run/stop', { project_id: PID, run_id: rid });
+    await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('stopped');
+  });
+
+  test('the study changed where the page did not see it: nothing starts, the box then says what changed, and Continue asks', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const { rid } = await stoppedRun(request, 'Run_race');
+    const was = (await runRow(request, rid)).numerics_used.values.relax_p;
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const box = panel.locator('[data-run-continue="1"]');
+    const go = box.locator('[data-run-continue-go="1"]');
+    await expect(go).toBeEnabled(STEP);
+    await expect(box.locator('[data-run-continue-numerics]')).toHaveCount(0);
+    // Saved elsewhere (another window): this page still has the study as it was.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, relax_p: 0.12 });
+    const posted = postsOf(page);
+    await go.click();
+    const said = changedLine('Run_race', `Relaxation p ${was} → 0.12`);
+    await expect(panel.locator('[data-run-reason="1"]')).toContainText(`${said} Continue again to choose which numerics it goes on with.`, STEP);
+    await expect(box.locator('[data-run-continue-numerics]')).toHaveText(said, STEP);
+    expect(posted.map((x) => x.body.numerics ?? null)).toEqual([null]);
+    expect((await runRow(request, rid)).status).toBe('stopped');
+    // Continue now asks.
+    await go.click();
+    await expect(page.locator('#modal-run-continue')).toBeVisible(STEP);
+    await expect(page.locator('#rcn-copy')).toHaveText(said);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#modal-run-continue')).toBeHidden();
+    await page.waitForTimeout(500);
+    expect(posted.length).toBe(1);
+  });
+
+  test('a Heat Transfer steady run gets the same question after a change of its energy relaxation', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const ht = (await postOk(request, '/api/simulation', { project_id: PID, analysis_type: 'heat_transfer_steady', activate: true })).simulation.id;
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: ht, relax_h: 0.5 });
+    const study = (await getJson(request, `/api/simulation?project_id=${PID}&simulation_id=${ht}`)).simulation;
+    // A run started with energy relaxation 0.5 (as a Start records it), stopped at iteration 50.
+    const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: ht, name: 'Run_ht' });
+    const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+    const caseDir = (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${ht}`)).runs.find((r) => String(r.id) === rid).case_dir;
+    cpSync(join(CAVITY, '0.5'), join(caseDir, '50'), { recursive: true });
+    const values = Object.fromEntries(numericsKeys('heat_transfer_steady').map((k) => [k, study[k] ?? null]));
+    expect(values.relax_h).toBe(0.5);
+    patchRun(join(dirname(caseDir), 'run.json'), {
+      status: 'stopped',
+      stage: 'stopped',
+      time_dependency: 'Steady-state',
+      analysis_key: 'heat_transfer_steady',
+      path_kind: 'buoyantSimpleFoam',
+      has_results: true,
+      n_saved_times: 1,
+      last_saved_iteration: 50,
+      iteration: 50,
+      n_steps: 50,
+      started_at: new Date(Date.now() - 60_000).toISOString(),
+      finished_at: new Date().toISOString(),
+      case_dir: caseDir,
+      numerics_used: { analysis: 'heat_transfer_steady', mode: 'steady', at: new Date().toISOString(), values },
+    });
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: ht, relax_h: 0.3 });
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: ht, runId: rid });
+    const box = panel.locator('[data-run-continue="1"]');
+    const said = changedLine('Run_ht', 'Relaxation energy 0.5 → 0.3');
+    await expect(box.locator('[data-run-continue-numerics]')).toHaveText(said, STEP);
+    const posted = postsOf(page);
+    await box.locator('[data-run-continue-go="1"]').click();
+    await expect(page.locator('#modal-run-continue')).toBeVisible(STEP);
+    await expect(page.locator('#rcn-heading')).toHaveText('Continue "Run_ht"?');
+    await expect(page.locator('#rcn-copy')).toHaveText(said);
+    await expect(page.locator('#rcn-new-line')).toHaveText("Goes on from iteration 50 with the study's numerics now. The run records the change.");
+    await expect(page.locator('#rcn-cancel')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#modal-run-continue')).toBeHidden();
+    await page.waitForTimeout(800);
+    expect(posted).toEqual([]);
+    // The route refuses a Continue that does not say which, and queues nothing.
+    const refused = await request.post(api('/api/run/continue'), { data: { project_id: PID, simulation_id: ht, run_id: rid, extra_iterations: 10 } });
+    expect(refused.status()).toBe(409);
+    const j = await refused.json();
+    expect([j.code, j.error, j.differences.map((d) => d.key)]).toEqual(['choose_numerics', said, ['relax_h']]);
+    expect((await getJson(request, `/api/compute-queue?project_id=${PID}`)).items || []).toEqual([]);
+  });
 });

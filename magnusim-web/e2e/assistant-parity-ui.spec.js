@@ -3,13 +3,14 @@
 // has that control in the app, where its `reach` says, for a person to use. It covers nothing
 // beyond the new rows (spec 10, Cut). RH2's rows are checked both ways: what the person does
 // in Before you start is what the Assistant's routes read, and what those routes write is what
-// the person sees.
+// the person sees. RH3's note on R16: run_continue's numerics "new" and "as_was" are the person's
+// Continue question's two answers, and what each goes on with is what R35 shows both sides.
 // Its own server with the fake compute replaying Run_2's log through the real health tracker
 // (MAGNUSIM_TEST_SOLVE_LOG), so a run with a health record exists; an old run with a log and no
 // record has "Check its log". The fake mesher writes a clean checkMesh report with its one-cell
 // mesh (MAGNUSIM_TEST_MESH_CHECKMESH), so a draft's pre-run check has its mesh's quality.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
@@ -197,4 +198,67 @@ test("RH3's parity row names the person's control, and both sides read the same 
   seen = Object.fromEntries((await precheck(request, rid)).numerics.map((n) => [n.label, n.value]));
   expect(seen['Max Courant']).toBe('2');
   await expect(box2.locator('[data-run-numerics-row="Max Courant"] .run-numerics-value')).toHaveText('2', STEP);
+});
+
+/** RH3's note on R16: run_continue's numerics answers are the person's Continue question's, checked with R35. */
+test("R16's numerics answers are the person's Continue question's answers, and each goes on with what Numerics as written shows both sides (R35)", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const r16 = ROWS.find((r) => r.row === 'R16');
+  const r35 = ROWS.find((r) => r.row === 'R35');
+  expect(r16.ui_control).toMatchObject({ selector: '#modal-run-continue', answers: ['#rcn-new', '#rcn-as-was'] });
+  expect(r16.paths.find((p) => p.where && p.where.numerics).where).toEqual({ action: 'run_continue', numerics: ['new', 'as_was'] });
+  const [freshAnswer, asWasAnswer] = r16.ui_control.answers;
+  // A run that started (recording the numerics it started with) and finished, with a saved time.
+  const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name: 'Run_cont', mesh_id: meshId });
+  const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, transient: { end_time: 0.1, write_count: 2, max_co: 1, n_outer_correctors: 1, n_correctors: 2 } });
+  await postOk(request, '/api/run/start', { project_id: PID, simulation_id: sim, run_id: rid });
+  await expect.poll(async () => (await runRow(request, rid)).status, { timeout: 90_000 }).toBe('done');
+  expect((await runRow(request, rid)).numerics_used?.values).toBeTruthy();
+  const caseDir = (await runRow(request, rid)).case_dir;
+  cpSync(join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d', '0.5'), join(caseDir, '0.05'), { recursive: true });
+  const runJson = join(dirname(caseDir), 'run.json');
+  writeFileSync(runJson, JSON.stringify({ ...JSON.parse(readFileSync(runJson, 'utf8')), has_results: true, n_saved_times: 1, last_saved_iteration: 0.05 }));
+  // The study's p relative tolerance changes after it started.
+  await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, p_rel_tol: 0.02 });
+  try {
+    /** "Numerics as written" (R35) as the person sees it equals what read_setup numerics reads; the p row's value. */
+    const pRow = async (panel) => {
+      const box = panel.locator(r35.ui_control.selector);
+      await expect(box).toBeVisible(STEP);
+      if (!(await box.evaluate((el) => el.open))) await box.locator('summary').click();
+      const read = await precheck(request, rid);
+      for (const n of read.numerics) {
+        await expect(box.locator(`[data-run-numerics-group="${n.group}"] [data-run-numerics-row="${n.label}"] .run-numerics-value`)).toHaveText(n.value, STEP);
+      }
+      return read.numerics.find((n) => n.group === 'Linear solvers' && n.label === 'p').value;
+    };
+    const posted = [];
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && /\/api\/run\/continue$/.test(r.url())) posted.push(r.postDataJSON());
+    });
+    const continueWith = async (answer) => {
+      const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+      await expect(panel.locator('[data-run-continue-numerics]')).toHaveText(/^The study's numerics changed after "Run_cont" started: p relative tolerance preset → 0\.02\.$/, STEP);
+      await panel.locator('[data-run-continue-go="1"]').click();
+      await expect(page.locator(r16.ui_control.selector)).toBeVisible(STEP);
+      await page.locator(answer).click();
+      await expect(page.locator(r16.ui_control.selector)).toBeHidden();
+      await expect.poll(() => posted.length, STEP).toBeGreaterThan(0);
+      await expect.poll(async () => (await runRow(request, rid)).status, { timeout: 90_000 }).toBe('done');
+      return panel;
+    };
+    // "Continue as it was" is run_continue numerics "as_was": it goes on with what it started with.
+    let panel = await continueWith(asWasAnswer);
+    expect(posted.at(-1).numerics).toBe('as_was');
+    expect((await runRow(request, rid)).numerics_used.values.p_rel_tol ?? null).toBeNull();
+    expect(await pRow(panel)).toMatch(/relTol 0\.01\b/);
+    // "Continue with the new numerics" is numerics "new": it goes on with the study's, both sides.
+    panel = await continueWith(freshAnswer);
+    expect(posted.at(-1).numerics).toBe('new');
+    expect((await runRow(request, rid)).numerics_used.values.p_rel_tol).toBe(0.02);
+    expect(await pRow(panel)).toMatch(/relTol 0\.02\b/);
+  } finally {
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, p_rel_tol: null });
+  }
 });
