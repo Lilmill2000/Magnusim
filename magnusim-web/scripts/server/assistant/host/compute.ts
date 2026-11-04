@@ -289,21 +289,24 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
           status: String(run.status ?? ''),
           saved: num(run.continue_from) ?? (num(run.last_saved_iteration) && Number(run.last_saved_iteration) > 0 ? Number(run.last_saved_iteration) : null),
           transient: /transient/i.test(String(run.time_dependency ?? '')),
+          continues: runEditState(run, { studyTransient: study.transient }) === 'continues',
         };
         const pending = rows(run.continue_changes).find((c) => !c.applied_at && Array.isArray(c.changes) && c.changes.length);
         const more = num(input.extra_iterations) ?? 0;
         const to = num(input.end_time) ?? 0;
         const runs = more > 0 ? `Runs ${quoted(name)} for ${more} more iterations.` : `Runs ${quoted(name)} on to t = ${to} s.`;
+        const from = view.saved !== null ? atWords(view.saved, view.transient) : 'its last saved time';
+        // A change waiting for this Continue (A2): what it applies, and that only Health on the continued part can tell.
+        const applies = pending
+          ? ` Continue applies: ${changeWords(rows(pending.changes) as Array<{ key: string; from: unknown; to: unknown }>)} (from ${from}). Health checks the continued part from ${from}; whether the change is enough shows only there.`
+          : '';
         if (health.restart === 'from_zero') {
           const w = continueAskWords(view, health);
           continueHealthAsked.set(input, `Allow the Assistant to continue ${quoted(name)}?`);
-          return withChain({ risk: 'destructive', note: `${runs} ${w.copy}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
+          return withChain({ risk: 'destructive', note: `${runs} ${w.copy}${applies}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
         }
         if (health.verdict === 'unhealthy' || health.verdict === 'failed') {
-          const from = view.saved !== null ? atWords(view.saved, view.transient) : 'its last saved time';
-          const extra = pending
-            ? ` Continue applies: ${changeWords(rows(pending.changes) as Array<{ key: string; from: unknown; to: unknown }>)} (from ${from}). Health checks the continued part from ${from}; whether the change is enough shows only there.`
-            : ` ${repeatSentence(view, health)}`;
+          const extra = applies || ` ${repeatSentence(view, health)}`;
           return withChain({ risk: 'compute', note: `${runs}${extra}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
         }
       }

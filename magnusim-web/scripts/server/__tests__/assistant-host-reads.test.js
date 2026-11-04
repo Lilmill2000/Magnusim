@@ -414,6 +414,36 @@ describe('read_results: health, log_tail and the status fields (RH1)', () => {
     assert.ok(Buffer.byteLength(JSON.stringify(h), 'utf8') <= 8 * 1024);
   });
 
+  it("health's next offers \"Use when continuing\" only where the Run panel does; a waiting change: only Health on the continued part can tell; the fix's call sets the run's own values back (S3, S4, S5)", async () => {
+    const MC1 = { label: 'New run: Max Courant 1', target: 'new_run', values: [{ key: 'transient.max_co', value: 1 }], cost: { steps: 889391, wall_s: 514911 } };
+    const before = { ...health, restart: 'continue_after_fix', findings: [{ ...health.findings[1], fix: [MC1] }] };
+    const block = { end_time: 1, write_count: 20, write_interval: 0.05, max_co: 100, n_outer_correctors: 1, n_correctors: 2, max_delta_t: 0.05, source: { max_delta_t: 'auto' } };
+    withRun({ health: before, continue_from: 0.005, last_saved_iteration: 0.005, transient: block });
+    app.over = (m, path) => (path === '/api/run/health' ? { ok: true, run_id: 'r1', health: before, health_checked: true } : undefined);
+    const said = 'Its last saved time (t = 0.005 s) is before it became unhealthy (t = 0.0069 s).';
+    // Its study still Transient: the change can wait for Continue, as the person's question offers.
+    app.w.studies[0].time_dependency = 'Transient';
+    let h = await res('health');
+    assert.match(h.next.text, /A change made with "Use when continuing" \(Max Courant or the correctors\) may avoid that/);
+    // Its study now Steady-state: no Continue change is offered anywhere, so health offers none.
+    app.w.studies[0].time_dependency = 'Steady-state';
+    h = await res('health');
+    assert.equal(h.next.text, `${said} Continue goes on from there; with the same settings it will likely become unhealthy again. A new run from t = 0 is the surer way.`);
+    // Outer correctors 1 → 3 wait for its Continue (stored on the run at once).
+    app.w.studies[0].time_dependency = 'Transient';
+    Object.assign(app.w.runs[0], {
+      transient: { ...block, n_outer_correctors: 3 },
+      continue_changes: [{ from_t: 0.005, from_iteration: null, at: 'a', by: 'person', kind: 'settings', changes: [{ key: 'transient.n_outer_correctors', from: 1, to: 3 }], applied_at: null }],
+    });
+    h = await res('health');
+    assert.equal(h.next.text, `${said} Health checks the continued part from t = 0.005 s; whether the change is enough shows only there. A new run from t = 0 is the surer way.`);
+    // The new run is the one the fix's cost describes: 1 outer corrector (what the run solved with), then Max Courant 1.
+    const fix = h.next.fixes[0];
+    assert.deepEqual(fix.values, [{ key: 'transient.n_outer_correctors', value: '1' }, { key: 'transient.max_co', value: '1' }]);
+    assert.equal(fix.call, `setup_edit {kind:'run', action:'add', other_id:'r1', name:'Run 1 fixed', values:${JSON.stringify(fix.values)}}`);
+    assert.deepEqual(h.findings[0].fix[0].values, fix.values);
+  });
+
   it('health on an old ended run starts "Check its log" (no card); a kind of run not checked says so', async () => {
     withRun({ health: null, health_checked: undefined, status: 'done' });
     const asks = [];

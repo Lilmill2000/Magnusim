@@ -219,6 +219,7 @@ import {
   STOPPING_REASON,
   takesEffectToast,
   unresolveTransient,
+  valuesBeforeContinue,
 } from './runReopen';
 import { askRunChange } from './runChangeChoice';
 import { badgeTitle as healthBadgeTitle, fixedRunName as healthFixedRunName, unhealthyNotice as healthNoticeText } from './runHealthWords';
@@ -32228,7 +32229,8 @@ async function askRunSolveEdit(rec, applyToNew, body) {
       if (pendingContinue(rec)) return { go: true, at_continue: true };
       const changes = continueChangesOf(view, body, changed);
       const baseRev = revOf(rec);
-      const answer = await askRunChange(continueChoiceWords(view, changes, rec.health));
+      // Its health as the panel shows it (restart from its latest saved time), not the row's as written.
+      const answer = await askRunChange(continueChoiceWords(view, changes, runHealthOf(rec)));
       if (answer === 'over') {
         // From the answer on, until its save has answered (persistRunSettings), nothing asks again.
         runsReopening.add(String(rec.id || rec.run_id));
@@ -32687,7 +32689,7 @@ async function persistRunSettings(partial, opts) {
       const rec = findRunRecord(runId);
       const view = rec ? runEditView(rec) : null;
       const changes = view ? continueChangesOf(view, body, Array.isArray(j.changed) ? j.changed : []) : [];
-      const answer = view && changes.length ? await askRunChange(continueChoiceWords(view, changes, rec.health)) : null;
+      const answer = view && changes.length ? await askRunChange(continueChoiceWords(view, changes, runHealthOf(rec))) : null;
       if (!answer) {
         dropUnsavedRunEdits(runId);
         try { await refreshRunCatalog(); } catch (_) {}
@@ -33885,12 +33887,17 @@ function computeRunState() {
     // existed), and what its Health block reads of the run.
     health: run && run.health && typeof run.health === 'object' ? run.health : null,
     health_checked: run ? (run.health_checked === undefined ? null : run.health_checked) : null,
-    health_run: run ? runHealthView(run, running) : null,
+    // Its edit state says whether "Use when continuing" can be offered (the A2 question's own rule).
+    health_run: run ? runHealthView(run, running, editState === 'continues') : null,
   };
 }
 
-/** What a run's Health block reads of it (RH1): its status, a Stop on its way, its latest saved time, earlier parts. */
-function runHealthView(run, running) {
+/**
+ * What a run's Health block reads of it (RH1): its status, a Stop on its way, its latest saved
+ * time, earlier parts, and whether a change can wait for its Continue (`continues`: its edit
+ * state, runReopen.ts, is 'continues').
+ */
+function runHealthView(run, running, continues) {
   const raw = run.continue_from !== undefined && run.continue_from !== null ? run.continue_from : Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null;
   const saved = raw !== null && raw !== undefined && Number.isFinite(Number(raw)) ? Number(raw) : null;
   const steps = Number(run.n_steps);
@@ -33899,26 +33906,43 @@ function runHealthView(run, running) {
     stopping: !!(running && run.stop_requested),
     saved,
     n_steps: Number.isFinite(steps) ? steps : null,
+    continues: !!continues,
     attempts: Array.isArray(run.attempts) ? run.attempts : [],
     continue_changes: Array.isArray(run.continue_changes) ? run.continue_changes : [],
   };
 }
 
 /**
+ * The record whose change waits for its Continue (A2): the catalog row when it has one, else the
+ * panel's run doc `run` (the Assistant's save reaches the rows first). The Continue box's line,
+ * the Health words and a fix's new run all take the waiting change from here.
+ */
+function runWithPendingContinue(rec, run) {
+  if (pendingContinue(rec)) return rec;
+  if (run && pendingContinue(run)) return run;
+  return rec;
+}
+
+/**
  * RH1 (A3): the Health block's fix makes a NEW run from t = 0: "<run> fixed" (unique), with
  * the run's settings and the fix's values, selected and not started. The run keeps its status
- * and its results (the person's Start is theirs to make).
+ * and its results (the person's Start is theirs to make). A change waiting for the run's
+ * Continue (A2) is not the new run's: it takes the values the run solved with, then the fix's,
+ * so it is the run the fix's words and cost describe.
  */
 async function addHealthFixRun(runId, fix) {
   const rec = findRunRecord(runId) || selectedRunRecord();
   if (!rec) return null;
   const values = Array.isArray(fix && fix.values) ? fix.values : [];
   const name = uniqueRunName(String((fix && fix.name) || healthFixedRunName(String(rec.name || 'Run'))));
+  const id = String(rec.id || rec.run_id || '');
+  const doc = runCatalog.run && String(runCatalog.run.run_id || runCatalog.run.id || '') === id ? runCatalog.run : null;
+  const before = valuesBeforeContinue(runWithPendingContinue(rec, doc));
   return makeRunFromFinished(
     rec,
     async (made) => {
       const transient = { ...transientSettingsFor(made) };
-      for (const v of values) {
+      for (const v of [...before, ...values]) {
         const key = String((v && v.key) || '');
         if (key.startsWith('transient.')) transient[key.slice('transient.'.length)] = v.value;
       }
@@ -34082,7 +34106,7 @@ function runConvergedBadge(rec) {
  * span it last ran) and why it cannot continue now.
  */
 function continueStateFor(rec, run, ctx) {
-  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false, applies: '' };
+  const off = { visible: false, enabled: false, queue: false, transient: false, from: null, value: null, write_interval: null, reason: '', past_convergence: false, applies: '', pending: null };
   const status = String((run && run.status) || (rec && rec.status) || '');
   // A run that converged (F5) is 'done' with its `converged` set: it continues too.
   if (!rec || !run || ctx.running || !['done', 'stopped'].includes(status)) return off;
@@ -34107,6 +34131,7 @@ function continueStateFor(rec, run, ctx) {
   const past =
     !!(run.converged && typeof run.converged === 'object') ||
     !!(run.continued && typeof run.continued === 'object' && run.continued.stops_off);
+  const waiting = runWithPendingContinue(rec, run);
   return {
     visible: true,
     // While another job runs a Continue queues, as Start does; a queued one is removed with Start's button.
@@ -34118,8 +34143,10 @@ function continueStateFor(rec, run, ctx) {
     write_interval: every,
     reason,
     past_convergence: past,
-    // A2: what changed for it that Continue applies ('' when nothing waits).
-    applies: continueAppliesLine(pendingContinue(rec) ? rec : run),
+    // A2: what changed for it that Continue applies ('' when nothing waits), and that entry (null
+    // when nothing waits): the Continue box's health line and the Health block read this one.
+    applies: continueAppliesLine(waiting),
+    pending: pendingContinue(waiting),
   };
 }
 

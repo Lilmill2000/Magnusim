@@ -12,6 +12,7 @@ import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { scrubContext, scrubText } from '../../../solver-log-scrub.js';
 import { NOT_CHECKED, chipWord, earlierPartLines, healthNextWords, noRecordWords, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
+import { pendingContinue, runEditState, valuesBeforeContinue } from '../../../../src/workbench/runReopen.ts';
 import { runFields } from './catalog.ts';
 import {
   badValues,
@@ -165,8 +166,12 @@ export function readResultsTool(d: HostToolDeps): HostToolDef {
               `${runName}: ${str(run.status) || 'draft'}${isRecord(run.health) && typeof run.health.verdict === 'string' ? ` · health ${String(run.health.verdict)}` : ''}`,
             );
           }
-          case 'health':
-            return await healthAnswer(d, rt, o, { project, sim, runId, runName, run });
+          case 'health': {
+            // Its study's mode now: "Use when continuing" only where the person's panel offers it.
+            const study = studies.list.find((s) => s.id === sim);
+            const studyTransient = study ? /transient/i.test(str(study.time_dependency)) : null;
+            return await healthAnswer(d, rt, o, { project, sim, runId, runName, run, studyTransient });
+          }
           case 'log_tail':
             return await logTail(d, o, { project, sim, runId, run, input });
           case 'residuals': {
@@ -346,10 +351,13 @@ function healthSummary(raw: unknown): { verdict: string; codes: string[]; restar
   };
 }
 
-type Ctx = { project: string; sim: string; runId: string; runName: string; run: Record<string, unknown> };
+type Ctx = { project: string; sim: string; runId: string; runName: string; run: Record<string, unknown>; studyTransient: boolean | null };
 
-/** The view of the run the Health words read (the same as the Run panel's). */
-function runView(run: Record<string, unknown>, name: string) {
+/**
+ * The view of the run the Health words read (the same as the Run panel's). `studyTransient`: its
+ * study's mode now, when known (a change waits for Continue only where runEditState says so).
+ */
+function runView(run: Record<string, unknown>, name: string, studyTransient: boolean | null = null) {
   const status = str(run.status);
   const raw = run.continue_from ?? (num(run.last_saved_iteration) && Number(run.last_saved_iteration) > 0 ? run.last_saved_iteration : null);
   return {
@@ -358,13 +366,20 @@ function runView(run: Record<string, unknown>, name: string) {
     stopping: run.stop_requested === true && ['running', 'starting'].includes(status),
     saved: num(raw),
     transient: /transient/i.test(str(run.time_dependency)),
+    continues: runEditState(run, { studyTransient }) === 'continues',
     n_steps: num(run.n_steps),
   };
 }
 
-/** A fix as setup_edit's one call that makes the new run (A3: from t = 0; the run keeps its results). */
-function fixCall(f: Record<string, unknown>, runId: string, runName: string) {
-  const values = records(f.values).map((v) => ({ key: text(v.key, 80), value: JSON.stringify(v.value ?? null) }));
+/**
+ * A fix as setup_edit's one call that makes the new run (A3: from t = 0; the run keeps its
+ * results). `before`: the values the run solved with of the keys waiting for its Continue (A2,
+ * runReopen.ts valuesBeforeContinue), sent ahead of the fix's own, so the new run is the one the
+ * Run panel's button makes and the fix's cost describes.
+ */
+function fixCall(f: Record<string, unknown>, runId: string, runName: string, before: Array<{ key: string; value: unknown }> = []) {
+  const own = records(f.values).map((v) => ({ key: text(v.key, 80), value: JSON.stringify(v.value ?? null) }));
+  const values = [...before.filter((b) => !own.some((v) => v.key === b.key)).map((b) => ({ key: text(b.key, 80), value: JSON.stringify(b.value ?? null) })), ...own];
   const name = text(f.name, 64) || `${runName} fixed`;
   return {
     label: text(f.label, 60),
@@ -382,7 +397,7 @@ function fixCall(f: Record<string, unknown>, runId: string, runName: string) {
  * before health checks existed starts "Check its log" (a read of its own log: no card).
  */
 async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<typeof via>, c: Ctx): Promise<ToolOutcome> {
-  const { project, sim, runId, runName, run } = c;
+  const { project, sim, runId, runName, run, studyTransient } = c;
   const got = (await d.hostCall('run.health', { project_id: project, simulation_id: sim, run_id: runId }, o)) as Record<string, unknown>;
   let rec = isRecord(got.health) ? got.health : null;
   const checkedFlag = typeof got.health_checked === 'boolean' ? got.health_checked : null;
@@ -407,8 +422,11 @@ async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<t
   if (!rec) return fail('no_results', 'This run has no health record.');
   const ctx = scrubContext();
   const h = rec as unknown as HealthRecord;
-  const view = runView(run, runName);
-  const next = healthNextWords(view, h);
+  const view = runView(run, runName, studyTransient);
+  // The change waiting for its Continue (A2), as the Run panel's Continue box shows it.
+  const pending = pendingContinue(run);
+  const next = healthNextWords(view, h, pending);
+  const before = valuesBeforeContinue(run);
   const findings = records(rec.findings).map((f) => ({
     code: text(f.code, 40),
     level: text(f.level, 10),
@@ -422,7 +440,7 @@ async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<t
         }
       : null,
     since_t: num(f.since_t),
-    fix: records(f.fix).map((x) => fixCall(x, runId, runName)),
+    fix: records(f.fix).map((x) => fixCall(x, runId, runName, before)),
   }));
   const prep = isRecord(run.prepare_run) ? run.prepare_run : {};
   const turb = isRecord(prep.turbulence) ? prep.turbulence : {};
@@ -453,7 +471,7 @@ async function healthAnswer(d: HostToolDeps, rt: ToolRunContext, o: ReturnType<t
     restart: typeof rec.restart === 'string' ? rec.restart : null,
     findings,
     warnings: records(rec.warnings).map((w) => ({ text: scrubText(str(w.text), ctx, 160), count: num(w.count) })).slice(0, 3),
-    next: { text: next.text, stop: next.stop, fixes: next.fixes.map((f) => fixCall(f as unknown as Record<string, unknown>, runId, runName)) },
+    next: { text: next.text, stop: next.stop, fixes: next.fixes.map((f) => fixCall(f as unknown as Record<string, unknown>, runId, runName, before)) },
     algorithm: {
       solver: text(run.path_kind, 40) || null,
       turbulence: text(turb.model, 40) || null,

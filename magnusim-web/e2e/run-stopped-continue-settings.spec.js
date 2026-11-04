@@ -18,9 +18,18 @@
 //   new run (Add run) gets the settings as typed: its time steps blank, worked out at its Start.
 // - A transient run whose study is now Steady-state, or a steady run, never waits for Continue:
 //   the person gets the two-way Overwrite question, the Assistant the destructive card.
+// - An unhealthy stopped run (where RH1's health meets A2): the question's "Use when continuing"
+//   line reads its health as the panel shows it (restart from its latest saved time); What to do
+//   and the Continue box offer "Use when continuing" only where the run can take it, and once a
+//   change waits (here the Assistant's) both say only Health on the continued part can tell; each
+//   earlier part names the change it was continued with; Health's fix makes its new run with the
+//   run's own values, not the ones waiting for its Continue.
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake: no WSL) and the scripted model.
 // Fails on the code before: the change asked the two-way Overwrite question only (or, from the
-// Assistant, was saved with nothing recorded).
+// Assistant, was saved with nothing recorded). The last test failed on the code before the seam
+// fixes: the line read run.json's stale restart, What to do offered "Use when continuing" to a run
+// whose study is Steady-state and kept advising it once a change waited, the earlier parts hung
+// the change on the first part, and "Run 8 fixed" got the 3 waiting outer correctors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -163,6 +172,46 @@ async function endedRun(request, name, status = 'stopped', { steady = false } = 
     ),
   );
   return { rid, caseDir };
+}
+
+/**
+ * An unhealthy record from t = `onset`, as the run's health tracker last sent it (run.json keeps
+ * that `restart`; the reads work it out again from the run's latest saved time), offering a new
+ * run with Max Courant 1.
+ */
+function sickHealth(onset, restart) {
+  return {
+    v: 1,
+    verdict: 'unhealthy',
+    at: new Date().toISOString(),
+    step: 30,
+    t: 0.06,
+    unit: 'time step',
+    window: 25,
+    live: false,
+    checked: ['courant_mode'],
+    skipped: [],
+    findings: [
+      {
+        code: 'courant_mode',
+        level: 'error',
+        text: 'Likely cause: Max Courant 100 with 1 outer corrector (PISO).',
+        evidence: null,
+        since_t: onset,
+        fix: [{ label: 'New run: Max Courant 1', target: 'new_run', values: [{ key: 'transient.max_co', value: 1 }], cost: null }],
+      },
+    ],
+    timeline: [{ t: onset, verdict: 'unhealthy' }],
+    first_unhealthy: { t: onset, step: 15, wall_s: 5 },
+    restart,
+  };
+}
+
+/** Puts `health` (and `more`) on the run made by endedRun. */
+function writeHealth(caseDir, health, more = {}) {
+  const runJson = join(dirname(caseDir), 'run.json');
+  const rec = JSON.parse(readFileSync(runJson, 'utf8'));
+  writeFileSync(runJson, JSON.stringify({ ...rec, health_checked: true, health, ...more }, null, 2));
 }
 
 const open = (page, rid, reload = true) => openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid, reload });
@@ -485,4 +534,100 @@ test('a transient run whose study is now Steady-state, or a steady run: the two-
   } finally {
     await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Transient' });
   }
+});
+
+test("an unhealthy stopped run: the question, What to do, the Continue box and the fix's new run say what is true for it", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
+  await postOk(request, '/api/test/assistant/reset', {});
+  await useScriptedModel(request, host.base, fake, 'cloud');
+
+  // Run 7 became unhealthy at t = 0.03 and its result at t = 0.05 was saved after the tracker last
+  // sent its record (run.json still says continue_after_fix). The panel reads from_zero, and so
+  // does the question's "Use when continuing" line.
+  const seven = await endedRun(request, 'Run 7');
+  writeHealth(seven.caseDir, sickHealth(0.03, 'continue_after_fix'));
+  let panel = await open(page, seven.rid);
+  const next = panel.locator('[data-run-health-next="1"]');
+  await expect(next).toHaveText(
+    'Its saved results (from t = 0.05 s) come after the problem began (t = 0.03 s), so Continue would carry it on. Start again from t = 0 in a new run; Run 7 and its results stay.',
+    STEP,
+  );
+  await openAdvanced(panel);
+  await setField(panel, 'Max Courant number', 5);
+  await expect(choice(page)).toBeVisible(STEP);
+  await expect(page.locator('#rcc-continue-line')).toHaveText(
+    'Keeps its results. Continue goes on from t = 0.05 s with the new value, and the run records the change. Its saved results are from after it became unhealthy (t = 0.03 s); continuing from them carries that on.',
+  );
+  await page.keyboard.press('Escape');
+  await expect(choice(page)).toBeHidden();
+
+  // Run 8 became unhealthy at t = 0.08, after its last saved time (0.05). It was continued twice
+  // before: once with no change (to t = 0.01), once with pressure correctors 1 → 2 (from t = 0.02).
+  const eight = await endedRun(request, 'Run 8');
+  writeHealth(eight.caseDir, sickHealth(0.08, 'continue_after_fix'), {
+    attempts: [
+      { status: 'stopped', last_saved_iteration: 0.01, health: { verdict: 'healthy', codes: [] } },
+      { status: 'stopped', last_saved_iteration: 0.02, health: { verdict: 'watch', codes: ['courant_mode'] } },
+    ],
+    continue_changes: [
+      { from_t: 0.02, from_iteration: null, at: '2026-11-03T10:00:00.000Z', by: 'person', kind: 'settings', changes: [{ key: 'transient.n_correctors', from: 1, to: 2 }], applied_at: '2026-11-03T10:01:00.000Z' },
+    ],
+  });
+  const said = 'Its last saved time (t = 0.05 s) is before it became unhealthy (t = 0.08 s).';
+  const same = 'Continue goes on from there; with the same settings it will likely become unhealthy again.';
+  // Its study now Steady-state: no change can wait for its Continue, so nothing offers one.
+  await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Steady-state' });
+  try {
+    panel = await open(page, eight.rid);
+    await expect(panel.locator('[data-run-health-next="1"]')).toHaveText(`${said} ${same} A new run from t = 0 is the surer way.`, STEP);
+    await expect(panel.locator('[data-run-continue-health="1"]')).toHaveText(`${said} ${same} A new run from t = 0 is the surer way.`);
+  } finally {
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Transient' });
+  }
+  panel = await open(page, eight.rid);
+  await expect(panel.locator('[data-run-health-next="1"]')).toHaveText(
+    `${said} ${same} A change made with "Use when continuing" (Max Courant or the correctors) may avoid that, but only Health on the continued part can tell. A new run from t = 0 is the surer way.`,
+    STEP,
+  );
+  // Each earlier part with the change made when it was continued.
+  await expect(panel.locator('[data-run-health-earlier="1"]')).toHaveText([
+    'Earlier part (to t = 0.01 s): Healthy.',
+    'Earlier part (to t = 0.02 s): Watch closely (Courant number). Then pressure correctors 1 → 2 from t = 0.02 s.',
+  ]);
+
+  // The Assistant sets 3 outer correctors for when it continues: the Continue box and What to do
+  // both read that change, and say only Health on the continued part can tell.
+  fake.reply(
+    { text: 'Raising the outer correctors for when it continues.', tools: [{ name: 'setup_edit', input: setup({ kind: 'run', action: 'update', id: eight.rid, type: 'at_continue', values: [{ key: 'transient.n_outer_correctors', value: '3' }] }) }] },
+    { text: 'It waits for Continue.' },
+  );
+  await openDock(page);
+  await dockSend(page, 'Use 3 outer correctors when Run 8 continues.');
+  const card = dockGate(page);
+  await expect(card.locator('.dock-gate-title')).toHaveText('Allow the Assistant to change "Run 8" for when it continues?', { timeout: 60_000 });
+  await card.locator('[data-gate-answer="yes"]').click(STEP);
+  await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 90_000 });
+  const checks = 'Health checks the continued part from t = 0.05 s; whether the change is enough shows only there.';
+  await expect(panel.locator('[data-run-continue-changes]')).toHaveText('Continue applies: outer correctors 1 → 3 (from t = 0.05 s).', STEP);
+  await expect(panel.locator('[data-run-continue-health="1"]')).toHaveText(checks, STEP);
+  await expect(panel.locator('[data-run-health-next="1"]')).toHaveText(`${said} ${checks} A new run from t = 0 is the surer way.`, STEP);
+  expect(fake.pending()).toBe(0);
+
+  // Health's fix makes the run its words and cost describe: Max Courant 1 with the 1 outer
+  // corrector Run 8 solved with, not the 3 that wait for Run 8's Continue.
+  const fixButton = panel.locator('[data-run-health-newrun="0"]');
+  await expect(fixButton).toHaveText('New run: Max Courant 1');
+  await fixButton.click();
+  await expect(panel.locator('[data-run-title="1"]')).toHaveText('Run 8 fixed', STEP);
+  const fixedId = String(await panel.getAttribute('data-run-id'));
+  expect(fixedId).not.toBe(eight.rid);
+  await expect.poll(async () => {
+    const r = await runRow(request, fixedId);
+    return [r.status || 'draft', r.transient?.max_co, r.transient?.n_outer_correctors];
+  }, STEP).toEqual(['draft', 1, 1]);
+  // Run 8 keeps its results and the change waiting for its Continue.
+  const kept = await runDoc(request, eight.rid);
+  expect([kept.status, kept.transient.n_outer_correctors, kept.continue_changes.filter((e) => !e.applied_at).length]).toEqual(['stopped', 3, 1]);
+  expect(existsSync(join(eight.caseDir, '0.05'))).toBe(true);
 });

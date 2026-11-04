@@ -274,6 +274,11 @@ export interface RunContinueState {
    * (from t = 0.45 s)."), else ''. Absent in a state published before it existed.
    */
   applies?: string;
+  /**
+   * The change that waits for its Continue (A2's `continue_changes` entry `applies` reads), else
+   * null: the Continue box's health line and the Health block's words take it from here.
+   */
+  pending?: { from_t?: number | null; from_iteration?: number | null; applied_at?: string | null; changes?: Array<{ key: string; from: unknown; to: unknown }> } | null;
 }
 
 /** What runtime.publishRunState dispatches as `cfd:run-state` for the selected run. */
@@ -376,6 +381,8 @@ export interface RunState {
     saved: number | null;
     /** Its time steps (or iterations) solved so far, when known. */
     n_steps?: number | null;
+    /** A change can wait for its Continue ("Use when continuing": its edit state is `continues`). */
+    continues?: boolean;
     attempts: Array<Record<string, unknown>>;
     continue_changes: Array<Record<string, unknown>>;
   } | null;

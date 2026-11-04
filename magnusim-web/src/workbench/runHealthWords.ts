@@ -6,7 +6,9 @@
  * "Healthy" never reads as accurate or converged; no sentence says or implies that Continue
  * will be healthy, safe or fixed (`OVERCLAIM`, checked by runHealthWords.test.ts). The words of
  * what to do are gated by the run's state first (running, stopping, stopped with or without a
- * saved time, failed, done), then by `restart`.
+ * saved time, failed, done), then by `restart`. "Use when continuing" is offered only to a run
+ * that can take it (`continues`, runReopen.ts's rule), and once a change waits for Continue the
+ * words say only Health on the continued part can tell.
  *
  * Pure, with no imports: the server imports this file as it is.
  */
@@ -63,6 +65,12 @@ export interface HealthRunView {
   /** The latest saved time Continue would go on from (seconds or iteration), else null. */
   saved: number | null;
   transient: boolean;
+  /**
+   * A change of its Max Courant or the correctors can wait for its Continue ("Use when
+   * continuing"): runReopen.ts runEditState is 'continues' (a stopped transient run with a saved
+   * time, its study still Transient). Absent or false: it cannot, so the words never offer it.
+   */
+  continues?: boolean;
 }
 
 /** No health words may say or imply that Continue will be healthy, safe or fixed. */
@@ -319,8 +327,18 @@ function savedBeforeOnset(h: HealthRecord, saved: number | null): boolean {
   return isNum(saved) && isNum(onset) && saved < onset;
 }
 
-/** The `restart` sentence of a stopped or done run (spec 3.10), or ''. */
-export function restartSentence(run: HealthRunView, h: HealthRecord): string {
+/** A change waits for the run's Continue (A2's entry with its changes): only a stopped run's counts. */
+function changeWaits(run: HealthRunView, pending: ContinueChange | null | undefined): boolean {
+  return healthRunState(run) === 'stopped_saved' && !!pending && Array.isArray(pending.changes) && pending.changes.length > 0;
+}
+
+/**
+ * The `restart` sentence of a stopped or done run (spec 3.10), or ''. `pending`: the change
+ * waiting for its Continue (A2), when one waits: then it says only Health on the continued part
+ * can tell, never "with the same settings". "Use when continuing" is offered only when the run
+ * can take it (`run.continues`).
+ */
+export function restartSentence(run: HealthRunView, h: HealthRecord, pending?: ContinueChange | null): string {
   const state = healthRunState(run);
   if (state !== 'stopped_saved' && state !== 'done') return '';
   const t = unitOf(h, run.transient);
@@ -335,15 +353,22 @@ export function restartSentence(run: HealthRunView, h: HealthRecord): string {
   if (h.restart === 'from_zero') {
     return `Its saved results (from ${saved}) come after the problem began (${began}), so Continue would carry it on. Start again from ${t ? 't = 0' : 'iteration 0'} in a new run; ${name} and its results stay.`;
   }
+  const surer = `A new run from ${t ? 't = 0' : 'iteration 0'} is the surer way.`;
+  const waits = changeWaits(run, pending);
+  const checks = `Health checks the continued part from ${saved}; whether the change is enough shows only there.`;
   const end =
     state === 'done'
       ? "A finished run's settings do not change, so a change needs a new run."
-      : 'A change made with "Use when continuing" (Max Courant or the correctors) may avoid that, but only Health on the continued part can tell. A new run from t = 0 is the surer way.';
+      : run.continues
+        ? `A change made with "Use when continuing" (Max Courant or the correctors) may avoid that, but only Health on the continued part can tell. ${surer}`
+        : surer;
   if (savedBeforeOnset(h, run.saved)) {
+    if (waits) return `Its last saved time (${saved}) is before it became unhealthy (${began}). ${checks} ${surer}`;
     return `Its last saved time (${saved}) is before it became unhealthy (${began}). Continue goes on from there; with the same settings it will likely become unhealthy again. ${end}`;
   }
-  const doneEnd = state === 'done' ? end : 'A new run from t = 0 is the surer way.';
+  const doneEnd = state === 'done' ? end : surer;
   const from = h.first_unhealthy?.approx ? `from some time ${began}` : `from ${began}`;
+  if (waits) return `It was unhealthy ${from} and Healthy again by its last saved time (${saved}). Results saved in between hold the problem. ${checks} ${surer}`;
   return `It was unhealthy ${from} and Healthy again by its last saved time (${saved}). Results saved in between hold the problem, and Continue with the same settings may repeat it. ${doneEnd}`;
 }
 
@@ -358,9 +383,10 @@ export interface HealthNext {
 
 /**
  * What to do about an unhealthy (or failed) run (spec 3.10, A3), gated by the run's state:
- * the Health block, the Continue box and the Assistant's `next` all show this.
+ * the Health block, the Continue box and the Assistant's `next` all show this. `pending`: the
+ * change waiting for its Continue (A2), the one the Continue box shows.
  */
-export function healthNextWords(run: HealthRunView, h: HealthRecord | null | undefined): HealthNext {
+export function healthNextWords(run: HealthRunView, h: HealthRecord | null | undefined, pending?: ContinueChange | null): HealthNext {
   const fixes = healthFixes(h).map((f) => ({ ...f, words: fixLabel(f) }));
   const out: HealthNext = { text: '', stop: false, fixes };
   if (!h || (h.verdict !== 'unhealthy' && h.verdict !== 'failed')) return { text: '', stop: false, fixes: [] };
@@ -373,7 +399,7 @@ export function healthNextWords(run: HealthRunView, h: HealthRecord | null | und
       break;
     case 'stopped_saved':
     case 'done':
-      out.text = restartSentence(run, h);
+      out.text = restartSentence(run, h, pending);
       break;
     case 'stopped_unsaved':
       out.text = 'It has no saved time to continue from.';
@@ -394,6 +420,7 @@ export function changeWords(changes: Array<{ key: string; from: unknown; to: unk
 
 export interface ContinueChange {
   from_t?: number | null;
+  from_iteration?: number | null;
   applied_at?: string | null;
   changes?: Array<{ key: string; from: unknown; to: unknown }>;
 }
@@ -419,7 +446,7 @@ export function continueHealthWords(
     ask = true;
     parts.push(`Its saved results (${saved}) are from after it became unhealthy (${began}); continuing carries that on. A new run from t = 0 is safer.`);
   }
-  if (pending && pending.changes && pending.changes.length && state === 'stopped_saved') {
+  if (changeWaits(run, pending)) {
     parts.push(`Health checks the continued part from ${saved}; whether the change is enough shows only there.`);
   } else if (h.restart === 'continue_after_fix') {
     parts.push(restartSentence(run, h));
@@ -450,9 +477,15 @@ export function attemptWords(a: { verdict?: string; codes?: string[] } | null | 
   return codes.length ? `${word} (${codes.slice(0, 3).join(', ')})` : word;
 }
 
+/** Two saved times are the same within 1e-9 of their size. */
+const sameTime = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
+
 /**
  * The Health block's earlier-part lines: "Earlier part (to t = 0.2 s): Unhealthy (velocity
- * clipping, turbulence bounding). Then Max Courant 100 → 5 from t = 0.2 s."
+ * clipping, turbulence bounding). Then Max Courant 100 → 5 from t = 0.2 s." A change belongs to
+ * the part whose last saved time it went on from (its `from_t`, or `from_iteration`): a Continue
+ * with no change adds a part and no entry, so the order alone does not pair them. A part no
+ * applied change went on from gets no "Then".
  */
 export function earlierPartLines(
   attempts: Array<{ last_saved_iteration?: unknown; end_time?: unknown; health?: { verdict?: string; codes?: string[] } | null }> | null | undefined,
@@ -461,12 +494,23 @@ export function earlierPartLines(
 ): string[] {
   const out: string[] = [];
   const applied = (changes || []).filter((c) => c && c.applied_at && c.changes && c.changes.length);
-  (attempts || []).forEach((a, i) => {
+  const used = new Set<ContinueChange>();
+  (attempts || []).forEach((a) => {
     const to = isNum(Number(a.last_saved_iteration)) && Number(a.last_saved_iteration) > 0 ? Number(a.last_saved_iteration) : null;
     const words = attemptWords(a.health || null);
     let line = `Earlier part${to !== null ? ` (to ${atWords(to, transient)})` : ''}: ${words || 'its health was not checked'}.`;
-    const c = applied[i];
-    if (c && c.changes) line += ` Then ${changeWords(c.changes)}${isNum(c.from_t) ? ` from ${atWords(c.from_t, transient)}` : ''}.`;
+    const c =
+      to === null
+        ? undefined
+        : applied.find((x) => {
+            if (used.has(x)) return false;
+            const from = isNum(x.from_t) ? x.from_t : isNum(x.from_iteration) ? x.from_iteration : null;
+            return from !== null && sameTime(from, to);
+          });
+    if (c && c.changes) {
+      used.add(c);
+      line += ` Then ${changeWords(c.changes)} from ${atWords(to, transient)}.`;
+    }
     out.push(line);
   });
   return out;

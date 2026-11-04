@@ -1071,6 +1071,18 @@ describe('run health in the job tools (RH1)', () => {
     assert.doesNotMatch(b.note.replace('whether the change is enough', ''), /\benough\b|\bfixe[sd]\b|\bsafe\b/i);
   });
 
+  it('run_continue on a from_zero run with a change waiting: the destructive card says what Continue applies too (S7)', async () => {
+    stoppedUnhealthy({ continue_changes: [{ from_t: 0.1667, applied_at: null, changes: [{ key: 'transient.max_co', from: 100, to: 5 }] }] });
+    const t = tools();
+    const a = await t.compute.escalate(input({ action: 'run_continue', end_time: 1 }), ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(
+      a.note,
+      'Runs "Run 1" on to t = 1 s. Its saved results (t = 0.167 s) are from after it became unhealthy (t = 0.0069 s); continuing carries that on. A new run from t = 0 is safer.' +
+        ' Continue applies: Max Courant 100 → 5 (from t = 0.167 s). Health checks the continued part from t = 0.167 s; whether the change is enough shows only there.',
+    );
+  });
+
   it("run_start of a run that became unhealthy: the card's copy is the person's Start question's (overwriteWords)", async () => {
     stoppedUnhealthy();
     const { overwriteWords } = await import('../../../src/workbench/runReopen.ts');

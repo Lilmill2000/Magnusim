@@ -459,6 +459,27 @@ export function continuePendingKeys(rec: RunLike | null | undefined): string[] {
   return e ? e.changes.map((c) => String(c.key)) : [];
 }
 
+/**
+ * A new run made from this run (Health's fix, A3) solves from t = 0 and never continues it, so the
+ * values waiting for its Continue are not its: each waiting key at the value this run solved with
+ * (its `from`), set on the new run before the fix's own values. A Max time step that equals the
+ * run's write interval is what a blank one works out to, so it is blank (auto) again. [] when
+ * nothing waits.
+ */
+export function valuesBeforeContinue(rec: RunLike | null | undefined): Array<{ key: string; value: unknown }> {
+  const e = pendingContinue(rec);
+  if (!e) return [];
+  const t = rec && isObj(rec.transient) ? rec.transient : {};
+  return e.changes
+    .filter((c) => CONTINUE_KEYS.includes(String(c.key)))
+    .map((c) => {
+      const key = String(c.key);
+      let value = c.from === undefined || c.from === '' ? null : c.from;
+      if (key === 'transient.max_delta_t' && value !== null && t.write_interval != null && sameValue(value, t.write_interval)) value = null;
+      return { key, value };
+    });
+}
+
 /** A run's value of a key ("transient.max_co", "endTime"), as stored on it. */
 export function transientValue(rec: RunLike | null | undefined, key: string): unknown {
   const t = rec && isObj(rec.transient) ? rec.transient : {};
@@ -594,14 +615,19 @@ export function takesEffectToast(rec: RunLike, changes: readonly ContinueChange[
   return capital(andList(said)) + (changes.length > 1 ? ' take' : ' takes') + ' effect when ' + quoted(rec) + ' continues.';
 }
 
-/** A health record's sentence for a run whose saved results are from after it became unhealthy (or ''). */
+/**
+ * A health record's sentence for a run whose saved results are from after it became unhealthy
+ * (or ''). An onset in the unread middle of an old log (`approx`) is a span, as unhealthySentence
+ * says it: "(between t = A and t = B)", or "(after t = A)".
+ */
 function fromZeroSentence(health: unknown): string {
   if (!isObj(health) || health.restart !== 'from_zero') return '';
   const first = isObj(health.first_unhealthy) ? health.first_unhealthy : null;
   const t = first && first.t !== null && first.t !== undefined && Number.isFinite(Number(first.t)) ? Number(first.t) : null;
-  return t === null
-    ? ' Its saved results are from after it became unhealthy; continuing from them carries that on.'
-    : ' Its saved results are from after it became unhealthy (t = ' + simTime(t) + '); continuing from them carries that on.';
+  if (t === null) return ' Its saved results are from after it became unhealthy; continuing from them carries that on.';
+  const by = first && first.by_t !== null && first.by_t !== undefined ? Number(first.by_t) : NaN;
+  const when = first && first.approx ? (Number.isFinite(by) ? 'between t = ' + simTime(t) + ' and t = ' + simTime(by) : 'after t = ' + simTime(t)) : 't = ' + simTime(t);
+  return ' Its saved results are from after it became unhealthy (' + when + '); continuing from them carries that on.';
 }
 
 /** "its results (12 saved, up to t = 0.45 s)". */

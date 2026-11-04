@@ -34,6 +34,11 @@ describe('the CFD guide in Magnusim', () => {
     assert.match(g, /never present it as accurate or converged/);
   });
 
+  it('rule 8 offers at_continue only where the person gets "Use when continuing": a stopped transient run whose study is still Transient', () => {
+    const rule8 = cfdGuideText().split('\n').find((l) => l.startsWith('8. '));
+    assert.ok(rule8.startsWith('8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply when it continues'), rule8);
+  });
+
   it('goes in the system blocks after the prompt, before the workspace notes, with one cache mark', () => {
     const req = buildRequest(conv({ text: 'Notes.', pluginName: 'Demo' }), [], settings);
     assert.equal(req.system.length, 3);

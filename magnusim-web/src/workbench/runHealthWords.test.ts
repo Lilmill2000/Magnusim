@@ -164,7 +164,7 @@ describe('what to do, by the run state and restart (A3)', () => {
     expect(restartSentence(run('stopped', 0.1667), rec())).toBe(
       'Its saved results (from t = 0.167 s) come after the problem began (t = 0.0069 s), so Continue would carry it on. Start again from t = 0 in a new run; Run_2 and its results stay.',
     );
-    const before = restartSentence(run('stopped', 0.005), rec({ restart: 'continue_after_fix' }));
+    const before = restartSentence(run('stopped', 0.005, { continues: true }), rec({ restart: 'continue_after_fix' }));
     expect(before).toBe(
       'Its last saved time (t = 0.005 s) is before it became unhealthy (t = 0.0069 s). Continue goes on from there; with the same settings it will likely become unhealthy again. A change made with "Use when continuing" (Max Courant or the correctors) may avoid that, but only Health on the continued part can tell. A new run from t = 0 is the surer way.',
     );
@@ -176,13 +176,58 @@ describe('what to do, by the run state and restart (A3)', () => {
     expect(done).toMatch(/A finished run's settings do not change, so a change needs a new run\.$/);
     for (const [, view] of STATES) {
       for (const [, extra, saved] of RESTARTS) {
-        const v = { ...view, saved: view.saved === null ? null : saved };
-        const text = healthNextWords(v, rec(extra)).text;
-        if (/Use when continuing/.test(text)) expect(v.status).toBe('stopped');
+        for (const continues of [true, false]) {
+          const v = { ...view, saved: view.saved === null ? null : saved, continues };
+          const text = healthNextWords(v, rec(extra)).text;
+          if (/Use when continuing/.test(text)) expect([v.status, v.continues]).toEqual(['stopped', true]);
+        }
       }
     }
     expect(restartSentence(run('stopped', 0.1), rec({ restart: null }))).toBe('');
     expect(restartSentence(run('stopped', 0.1), rec({ restart: null, head_missing: true }))).toBe('The start of its log is gone, so when the problem began is unknown.');
+  });
+});
+
+describe('"Use when continuing" only where it can be taken (S4, S8)', () => {
+  // runReopen.ts runEditState: only a stopped transient run whose study is still Transient takes a
+  // change for when it continues; a steady run, or one whose study is now Steady-state, does not.
+  it('a stopped run that cannot take it: no "Use when continuing", a new run is the surer way', () => {
+    const sick = rec({ restart: 'continue_after_fix' });
+    const studySteady = healthNextWords(run('stopped', 0.005, { continues: false }), sick).text;
+    expect(studySteady).toBe(
+      'Its last saved time (t = 0.005 s) is before it became unhealthy (t = 0.0069 s). Continue goes on from there; with the same settings it will likely become unhealthy again. A new run from t = 0 is the surer way.',
+    );
+    const steady = rec({ restart: 'continue_after_fix', unit: 'iteration', first_unhealthy: { t: 120, step: 120 }, timeline: [{ t: 120, verdict: 'unhealthy' }] });
+    const steadyRun = run('stopped', 100, { transient: false });
+    expect(healthNextWords(steadyRun, steady).text).toBe(
+      'Its last saved time (iteration 100) is before it became unhealthy (iteration 120). Continue goes on from there; with the same settings it will likely become unhealthy again. A new run from iteration 0 is the surer way.',
+    );
+    // The Continue box says the same.
+    expect(continueHealthWords(steadyRun, steady, null)?.text).toBe(healthNextWords(steadyRun, steady).text);
+    for (const t of [studySteady, healthNextWords(steadyRun, steady).text]) expect(t).not.toMatch(/Use when continuing/);
+  });
+});
+
+describe('a change waiting for Continue (S5)', () => {
+  const waiting = { from_t: 0.005, applied_at: null, changes: [{ key: 'transient.max_co', from: 100, to: 5 }] };
+  it('What to do says only Health on the continued part can tell, never "with the same settings" or the advice to make the change', () => {
+    const sick = rec({ restart: 'continue_after_fix' });
+    const v = run('stopped', 0.005, { continues: true });
+    const next = healthNextWords(v, sick, waiting).text;
+    expect(next).toBe(
+      'Its last saved time (t = 0.005 s) is before it became unhealthy (t = 0.0069 s). Health checks the continued part from t = 0.005 s; whether the change is enough shows only there. A new run from t = 0 is the surer way.',
+    );
+    expect(next).not.toMatch(/same settings|Use when continuing/);
+    expect(next).not.toMatch(OVERCLAIM);
+    const again = rec({ restart: 'continue_after_fix', timeline: [{ t: 0.0069, verdict: 'unhealthy' }, { t: 0.05, verdict: 'healthy' }] });
+    expect(healthNextWords(run('stopped', 0.1, { continues: true }), again, { ...waiting, from_t: 0.1 }).text).toBe(
+      'It was unhealthy from t = 0.0069 s and Healthy again by its last saved time (t = 0.1 s). Results saved in between hold the problem. Health checks the continued part from t = 0.1 s; whether the change is enough shows only there. A new run from t = 0 is the surer way.',
+    );
+    // An entry with no changes, or none: the words without a waiting change.
+    expect(healthNextWords(v, sick, { ...waiting, changes: [] }).text).toMatch(/with the same settings/);
+    expect(healthNextWords(v, sick, null).text).toMatch(/with the same settings/);
+    // A from_zero run keeps its sentence: its saved results hold the problem whatever waits.
+    expect(healthNextWords(run('stopped', 0.1667, { continues: true }), rec(), waiting).text).toMatch(/^Its saved results \(from t = 0\.167 s\) come after the problem began/);
   });
 });
 
@@ -218,6 +263,34 @@ describe('labels, earlier parts and the badge', () => {
         true,
       ),
     ).toEqual(['Earlier part (to t = 0.2 s): Unhealthy (velocity clipping, turbulence bounding). Then Max Courant 100 → 5 from t = 0.2 s.']);
+  });
+
+  it('a change goes with the part it went on from, not with the part of the same index (S2)', () => {
+    // Continue to 0.2 with no change (a part, no entry); stopped at 0.2, Max Courant 100 → 5 waited, Continue.
+    const lines = earlierPartLines(
+      [
+        { last_saved_iteration: 0.1, health: { verdict: 'unhealthy', codes: ['velocity_clipped'] } },
+        { last_saved_iteration: 0.2, health: { verdict: 'unhealthy', codes: ['pv_coupling'] } },
+      ],
+      [{ from_t: 0.2, applied_at: '2026-11-03T10:00:00Z', changes: [{ key: 'transient.max_co', from: 100, to: 5 }] }],
+      true,
+    );
+    expect(lines).toEqual([
+      'Earlier part (to t = 0.1 s): Unhealthy (velocity clipping).',
+      'Earlier part (to t = 0.2 s): Unhealthy (pressure-velocity coupling). Then Max Courant 100 → 5 from t = 0.2 s.',
+    ]);
+    // A steady run's entry goes by its iteration; an entry from no part's time, or one still waiting, goes nowhere.
+    expect(
+      earlierPartLines(
+        [{ last_saved_iteration: 400, health: { verdict: 'unhealthy', codes: [] } }, { last_saved_iteration: 900, health: null }],
+        [
+          { from_t: null, from_iteration: 900, applied_at: 'x', changes: [{ key: 'transient.n_correctors', from: 2, to: 3 }] },
+          { from_t: 0.3, applied_at: 'y', changes: [{ key: 'transient.max_co', from: 5, to: 2 }] },
+          { from_t: 400, applied_at: null, changes: [{ key: 'transient.max_co', from: 2, to: 1 }] },
+        ],
+        false,
+      ),
+    ).toEqual(['Earlier part (to iteration 400): Unhealthy.', 'Earlier part (to iteration 900): its health was not checked. Then pressure correctors 2 → 3 from iteration 900.']);
   });
 
   it('the tree badge title', () => {

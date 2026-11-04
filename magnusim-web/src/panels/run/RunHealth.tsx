@@ -10,6 +10,7 @@ import {
   healthNextWords,
   healthSubline,
   noRecordWords,
+  type ContinueChange,
   type HealthFix,
   type HealthRecord,
   type HealthRunView,
@@ -24,8 +25,14 @@ export function healthRunView(state: RunState): HealthRunView & { n_steps: numbe
     stopping: !!(r && r.stopping),
     saved: r && typeof r.saved === 'number' ? r.saved : null,
     transient: state.transient,
+    continues: !!(r && r.continues),
     n_steps: r && typeof r.n_steps === 'number' ? r.n_steps : null,
   };
+}
+
+/** The change waiting for its Continue (A2), as the Continue box shows it (runtime.js `cont.pending`). */
+export function pendingChange(state: RunState): ContinueChange | null {
+  return (state.cont && state.cont.pending) || null;
 }
 
 const SHOWN = 3;
@@ -268,7 +275,7 @@ export function RunHealth({ state, ids }: { state: RunState; ids: { project_id: 
 
   const findings = h.findings || [];
   const shown = all ? findings : findings.slice(0, SHOWN);
-  const next = healthNextWords(view, h);
+  const next = healthNextWords(view, h, pendingChange(state));
   const age = h.at ? (now - Date.parse(h.at)) / 1000 : null;
   const earlier = earlierPartLines(
     (state.health_run && (state.health_run.attempts as Array<Record<string, unknown>>)) || [],

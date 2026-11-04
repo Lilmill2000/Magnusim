@@ -43,7 +43,7 @@ export function cfdGuideText(): string {
       '5. Linear solvers at their iteration limit on most steps: the time step is too large or the mesh is poor. Raising the limit hides it.',
       '6. Steady runs: residuals should fall 3 or more decades. If they stall while monitors oscillate, the flow is unsteady: propose a transient run.',
       '7. After a blow-up (health restart "from_zero"): do not Continue. Make a new run in one call (setup_edit kind run, action add, other_id the old run, values the fix), start it, read health again after 50-100 steps. Keep the old run. "continue_after_fix" never means Continue will be fine; follow health\'s next.',
-      '8. A stopped run\'s Max Courant, outer and pressure correctors and max time step can apply when it continues (setup_edit type "at_continue", results kept) or start it over (type "start_over", results deleted). Ask the person which; later changes of the four join the pending one.',
+      '8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply when it continues (setup_edit type "at_continue", results kept) or start it over (type "start_over", results deleted). Ask the person which; later changes of the four join the pending one.',
       '9. Mesh: non-orthogonality above 70 degrees needs 1-2 non-orthogonal correctors; skewness above 4 is a risk. y+ (field_range of yPlus): about 1 resolves the wall, 30-300 suits wall functions; k-omega SST handles both.',
       '10. Stop a run once; force_stop only when the person agrees.',
       '11. Change settings when the person asked for a fix; otherwise say what you would change and what it costs.',

@@ -24,10 +24,10 @@ import {
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { ResidualPlot } from './ResidualPlot';
 import { RunCores, runCanUseCores, useRankCap } from './RunCores';
-import { RunHealth, healthRunView } from './RunHealth';
+import { RunHealth, healthRunView, pendingChange } from './RunHealth';
 import { RunMonitors } from './RunMonitors';
 import { confirmAction } from '../../workbench/dialogs';
-import { continueAskWords, continueHealthWords, type ContinueChange, type HealthRecord } from '../../workbench/runHealthWords';
+import { continueAskWords, continueHealthWords, type HealthRecord } from '../../workbench/runHealthWords';
 
 function RunTitle({ name, canRename }: { name: string; canRename: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -234,10 +234,8 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
   // RH1: what its health says of continuing (spec 3.12), and whether Continue asks first.
   const view = healthRunView(state);
   const health = (state.health as HealthRecord | null | undefined) || null;
-  const pending = ((state.health_run && state.health_run.continue_changes) || []).find(
-    (x) => x && !(x as ContinueChange).applied_at,
-  ) as ContinueChange | undefined;
-  const healthLine = continueHealthWords(view, health, pending || null);
+  // The waiting change from the one place the "Continue applies" line reads it.
+  const healthLine = continueHealthWords(view, health, pendingChange(state));
   const invalid =
     text.trim() === '' || valid
       ? ''

@@ -32,6 +32,7 @@ import {
   STOPPING_REASON,
   unhealthySentence,
   unresolveTransient,
+  valuesBeforeContinue,
 } from './runReopen';
 
 // A run that ended and a change of its settings (Daniel, 2026-11-03): stopped and failed runs
@@ -254,6 +255,43 @@ describe('A2: a change for when a stopped run continues', () => {
     const sick = continueChoiceWords(tr, [{ key: 'transient.max_co', from: 100, to: 5 }], { restart: 'from_zero', first_unhealthy: { t: 0.0069061069, step: 25 } });
     expect(sick.cont.line).toMatch(/ Its saved results are from after it became unhealthy \(t = 0\.0069 s\); continuing from them carries that on\.$/);
     expect(continueChoiceWords(tr, [{ key: 'transient.max_co', from: 100, to: 5 }], { restart: 'continue_after_fix' }).cont.line).not.toMatch(/unhealthy/);
+  });
+
+  it('an onset in the unread middle of an old log is a span in the question and the card, as every health text says it (S6)', () => {
+    const ch = [{ key: 'transient.max_co', from: 100, to: 5 }];
+    const span = { restart: 'from_zero', first_unhealthy: { t: 0.0031, approx: true, by_t: 0.0069061069 } };
+    expect(continueChoiceWords(tr, ch, span).cont.line).toMatch(
+      / Its saved results are from after it became unhealthy \(between t = 0\.0031 s and t = 0\.0069 s\); continuing from them carries that on\.$/,
+    );
+    expect(continueCardWords(tr, ch, span).copy).toMatch(/became unhealthy \(between t = 0\.0031 s and t = 0\.0069 s\);/);
+    const after = { restart: 'from_zero', first_unhealthy: { t: 0.0031, approx: true } };
+    expect(continueChoiceWords(tr, ch, after).cont.line).toMatch(/became unhealthy \(after t = 0\.0031 s\);/);
+    for (const h of [span, after]) expect(continueChoiceWords(tr, ch, h).cont.line).not.toMatch(/\(t = 0\.0031 s\)/);
+  });
+
+  it("a fix's new run takes the values the run solved with, not the ones waiting for its Continue (S3)", () => {
+    const solved = { ...tr, transient: { ...tr.transient, write_interval: 0.05, max_co: 5, n_outer_correctors: 3, max_delta_t: 0.01 } };
+    const waiting = mergeContinueChanges(
+      [],
+      [
+        { key: 'transient.max_co', from: 100, to: 5 },
+        { key: 'transient.n_outer_correctors', from: 1, to: 3 },
+        { key: 'transient.max_delta_t', from: 0.05, to: 0.01 },
+      ],
+      { by: 'person', at: 'a', from_t: 0.45, from_iteration: null },
+    );
+    // A Max time step equal to the write interval is what a blank one worked out: blank again.
+    expect(valuesBeforeContinue({ ...solved, continue_changes: waiting })).toEqual([
+      { key: 'transient.max_co', value: 100 },
+      { key: 'transient.n_outer_correctors', value: 1 },
+      { key: 'transient.max_delta_t', value: null },
+    ]);
+    // One the person typed below it stays.
+    const typed = mergeContinueChanges([], [{ key: 'transient.max_delta_t', from: 0.02, to: 0.01 }], { by: 'person', at: 'a', from_t: 0.45, from_iteration: null });
+    expect(valuesBeforeContinue({ ...solved, continue_changes: typed })).toEqual([{ key: 'transient.max_delta_t', value: 0.02 }]);
+    // Nothing waits (none, or only applied ones): nothing to set.
+    expect(valuesBeforeContinue(solved)).toEqual([]);
+    expect(valuesBeforeContinue({ ...solved, continue_changes: applyContinueChanges(waiting, 'b') })).toEqual([]);
   });
 
   it('the merge rule: joins the waiting entry, a key set back leaves it, an emptied entry goes, by becomes both', () => {
