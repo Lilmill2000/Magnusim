@@ -10,6 +10,9 @@ verifyWslToolchain();
 const PORT = listenPort();
 // Public tunnel host so box bots can open https://simulation.lilmill2000.com/
 // MAGNUSIM_ALLOWED_HOSTS still appends extra comma-separated hosts.
+// The API (/api, /plugins, /plugin-sdk) reads this same list from Vite's resolved config and
+// refuses any other Host with 403 (scripts/server/http.ts refuseForeignHost): it runs before
+// Vite's own host check, so it must check for itself (DNS rebinding).
 const defaultAllowedHosts = ['simulation.lilmill2000.com', '.lilmill2000.com'];
 const envHosts = (process.env.MAGNUSIM_ALLOWED_HOSTS || '').split(',').map((s) => s.trim()).filter(Boolean);
 const allowedHosts = [...new Set([...defaultAllowedHosts, ...envHosts])];
