@@ -16,9 +16,8 @@ A row is ``{code, level, text, short, fix, alt, kept}``:
   (``values`` are the run's catalog keys: ``transient.max_co``, ``endTime``, ...),
   ``study`` (the study's settings keys), ``mesh`` (open the mesh), ``bcs`` (open the
   boundary conditions) or ``steady_copy`` (a copy of the study, set steady). ``cost`` is
-  ``{steps, wall_s}`` of a run with the fix, when it can be estimated. A fix that needs
-  settings the app does not offer yet (schemes, linear-solver limits, the velocity limit)
-  is named in the text and has no fix.
+  ``{steps, wall_s}`` of a run with the fix, when it can be estimated. A fix that needs a
+  setting the app does not offer is named in the text and has no fix.
 - ``setting_out_of_range`` (RH3, ``warn``): a study numerics setting or a run's outer
   relaxation or tolerance stored outside its field's range ("Saved p tolerance 1e-2 is outside
   1e-12 to 1e-3."). It is used as saved: bounds apply only to an edit, and nothing refuses it.

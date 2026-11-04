@@ -36,12 +36,14 @@ describe('the CFD guide in Magnusim', () => {
 
   it('rule 8 offers at_continue only where the person gets "Use when continuing": a stopped transient run whose study is still Transient', () => {
     const rule8 = cfdGuideText().split('\n').find((l) => l.startsWith('8. '));
-    assert.ok(rule8.startsWith('8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply when it continues'), rule8);
+    assert.ok(rule8.startsWith('8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply on Continue'), rule8);
   });
 
   it('rule 8 (RH3) says a Continue after a study numerics change needs numerics "new" or "as_was", asked of the person, with no lane tag', () => {
     const rule8 = cfdGuideText().split('\n').find((l) => l.startsWith('8. '));
-    assert.ok(rule8.endsWith(' After a study numerics change, run_continue needs numerics "new" or "as_was". Ask the person which.'), rule8);
+    assert.ok(rule8.endsWith(' After a study numerics change, run_continue needs numerics "new" or "as_was": ask too.'), rule8);
+    // The A2 choice (at_continue or start_over) is the person's as well (RH1).
+    assert.ok(rule8.includes('(type "start_over", results deleted): ask the person; later changes of the four join the pending one.'), rule8);
     assert.doesNotMatch(rule8, /\[RH\d\]/);
   });
 
