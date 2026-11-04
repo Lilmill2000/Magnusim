@@ -535,6 +535,20 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       checks_kept?: string[];
       /** RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not. */
       checked_at_start?: RunCheckRow[] | null;
+      /**
+       * RH3: "Numerics as written": what the run's case is written with (its analysis's
+       * RunModel.check `numerics`), for a draft from its study, for a started run from what it
+       * started with (`numerics_used`) once it has one; null when there is none to show.
+       */
+      numerics?: RunNumericsRow[] | null;
+  }
+  /** RH3: a row of "Numerics as written": its group (Schemes, Linear solvers, ...), label, value and where it comes from. */
+  export interface RunNumericsRow {
+      group: string;
+      label: string;
+      value: string;
+      /** study, run, preset, default, fixed or ''. */
+      source: string;
   }
   /** RH2: a pre-run check row's fix: its run or study values, or a place to open (mesh, bcs), or a steady copy. */
   export interface RunCheckFix {
@@ -762,6 +776,14 @@ declare module '@magnusim/plugin-api/_internal/plugin-api/public' {
        * you Continue" under each of `run.continue_pending`'s keys.
        */
       fieldNotes?: Record<string, ReactNode>;
+      /**
+       * API 1.9 (RH3): bounds apply only to an edit. A number edited outside its field's minimum or
+       * maximum is not saved, and the field says why ("Not saved: 0.9 is outside 0 to 0.5."); a saved
+       * value outside them is kept and used as saved, and the field says so ("Saved as 1e-2, outside
+       * 1e-12 to 1e-3. It is used as saved."). For forms whose saved values are used as saved. A
+       * field's x-cfddesk.caution for its current value shows under it in every form.
+       */
+      boundsOnEdit?: boolean;
   }
   /** One job as the page follows it (useJob). */
   export interface PluginJobMirror {

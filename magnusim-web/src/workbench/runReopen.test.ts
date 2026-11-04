@@ -116,6 +116,17 @@ describe('solveChanged', () => {
     expect(solveChanged(rec, { transient: { max_delta_t: null } })).toEqual([]);
     expect(solveChanged(rec, { transient: { max_delta_t: 0.01 } })).toEqual(['transient.max_delta_t']);
   });
+
+  it("RH3's run keys (outer relaxation, outer tolerance) are solve settings, not Continue's: a stopped run gets the two-way question", () => {
+    const rec = { ...stopped, time_dependency: 'Transient', transient: { end_time: 1, write_count: 20, n_outer_correctors: 3 } };
+    // A run saved before RH3 has none of them; a save that leaves them blank changes nothing.
+    expect(solveChanged(rec, { transient: { end_time: 1, outer_relax_p: null, outer_relax_eq: null, outer_tolerance: null } })).toEqual([]);
+    const changed = solveChanged(rec, { transient: { outer_relax_p: 0.4, outer_tolerance: 0.001 } });
+    expect(changed).toEqual(['transient.outer_relax_p', 'transient.outer_tolerance']);
+    expect(changed.some((k) => CONTINUE_KEYS.includes(k))).toBe(false);
+    expect(onlyContinueKeys(changed)).toBe(false);
+    expect(onlyContinueKeys([...changed, 'transient.max_co'])).toBe(false);
+  });
 });
 
 describe('transient values worked out at Start', () => {

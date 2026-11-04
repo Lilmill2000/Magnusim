@@ -33480,7 +33480,9 @@ function runCheckStamp(rec, meshReady) {
 }
 
 function refreshRunCheck(rec, meshReady) {
-  if (!rec || isPluginResultsKey(rec.id) || !runIsDraftRecord(rec)) return;
+  // A started run is checked only for "Numerics as written" (RH3), once it records what it
+  // started with (numerics_used): its "Before you start" is a draft's only.
+  if (!rec || isPluginResultsKey(rec.id) || !(runIsDraftRecord(rec) || runNumericsUsed(rec))) return;
   const id = String(rec.id || rec.run_id || '');
   const stamp = runCheckStamp(rec, meshReady);
   if ((runCheck.run_id === id && stamp === runCheck.stamp) || stamp === runCheck.pending) return;
@@ -33528,6 +33530,23 @@ function refreshRunCheck(rec, meshReady) {
       console.warn('[CFD] pre-run check', e);
     }
   }, force ? 0 : 300);
+}
+
+/** RH3: the numerics a started run recorded at its Start (`numerics_used`), or null. */
+function runNumericsUsed(rec) {
+  const used = rec && rec.numerics_used;
+  return used && typeof used === 'object' && used.values && typeof used.values === 'object' ? used : null;
+}
+
+/**
+ * RH3: the run's "Numerics as written" (its analysis's RunModel.check `numerics`): a draft's from
+ * its study, a started run's from what it started with (numerics_used) once it has one; else null.
+ */
+function runNumericsOf(rec) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  if (!id || runCheck.run_id !== id || !(runIsDraftRecord(rec) || runNumericsUsed(rec))) return null;
+  const rows = runCheck.result && Array.isArray(runCheck.result.numerics) ? runCheck.result.numerics : null;
+  return rows && rows.length ? rows : null;
 }
 
 /** The selected draft's pre-run check (its last answer), or null. */
@@ -34115,6 +34134,8 @@ function computeRunState() {
     precheck_error: rec && runCheck.run_id === String(rec.id || rec.run_id || '') ? runCheck.error || '' : '',
     checks_kept: keptNow,
     checked_at_start: run && run.prepare_run && typeof run.prepare_run === 'object' && Array.isArray(run.prepare_run.checks) ? run.prepare_run.checks : null,
+    // RH3: "Numerics as written" (a draft's, or a started run's from its numerics_used).
+    numerics: runNumericsOf(rec),
   };
 }
 

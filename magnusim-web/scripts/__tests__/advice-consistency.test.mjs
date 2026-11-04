@@ -6,7 +6,7 @@
 // advice, description, tooltip, warning or guide says a higher Courant number is faster.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +41,36 @@ describe('one advice text (A1: Max Courant warned about, never capped)', () => {
       assert.ok(!ui.includes(a.rule) && !ui.includes(a.more), 'an advice literal in the UI file');
     }
     assert.doesNotMatch(ui, /runs faster|allow a higher Courant number/);
+  });
+
+  // RH3 (spec 5.6): one advice source for every numerics and run setting it covers.
+  it('every numerics or control description of Incompressible Flow and Heat Transfer starts with its ADVICE rule, and every RH3 key has one', () => {
+    const rows = registry.analysis.filter((a) => /^(incompressible|heat_transfer)_(steady|transient)$/.test(a.key));
+    assert.equal(rows.length, 4);
+    const seen = new Set();
+    for (const a of rows) {
+      for (const schema of [a.numerics_schema, a.control_schema]) {
+        for (const [key, f] of Object.entries(schema.properties || {})) {
+          if (!ADVICE[key]) continue;
+          seen.add(key);
+          assert.ok(f.description.startsWith(ADVICE[key].rule + ' '), `${a.key}.${key}: ${f.description}`);
+        }
+      }
+    }
+    const RH3 = ['grad_limiter', 'momentum_convection', 'turbulence_convection', 'energy_convection', 'non_orth_correction', 'p_tolerance', 'p_rel_tol', 'p_max_iter', 'eq_tolerance', 'eq_rel_tol', 'eq_max_iter', 'relax_turbulence', 'velocity_limit', 'velocity_limit_max', 'outer_relax_p', 'outer_relax_eq', 'outer_tolerance'];
+    for (const key of [...RH3, 'max_co', 'n_outer_correctors']) assert.ok(seen.has(key), `${key}: no registry field carries its advice`);
+  });
+
+  it('no Incompressible Flow or Heat Transfer UI file holds an advice text: tooltips are the schema descriptions', () => {
+    for (const plugin of ['incompressible_flow', 'heat_transfer']) {
+      const dir = join(WEB, 'bundled-plugins', plugin, 'ui');
+      for (const name of readdirSync(dir).filter((n) => /\.tsx?$/.test(n) && !/\.test\./.test(n))) {
+        const ui = readFileSync(join(dir, name), 'utf8');
+        for (const [key, a] of Object.entries(ADVICE)) {
+          assert.ok(!ui.includes(a.rule) && !ui.includes(a.more), `${plugin}/ui/${name} holds ADVICE.${key}`);
+        }
+      }
+    }
   });
 
   it('nothing says a higher Courant number is faster', () => {

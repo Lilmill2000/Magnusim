@@ -7,6 +7,8 @@ import { pluginHost } from '../../../src/plugins/loader';
 import { useProjectStore } from '../../../src/store/project';
 import { register } from './index';
 import { normalizeTransient } from './transient';
+import { OWN_ROWS } from './RunSettings';
+import committed from '../../../scripts/generated/registry.json';
 
 // Incompressible Flow's run settings in the core's run panel (H10).
 const TRANSIENT_DEFAULTS = {
@@ -236,5 +238,76 @@ describe('normalizeTransient', () => {
   it('keeps the limits the written case uses', () => {
     const out = normalizeTransient({ n_outer_correctors: 99, n_correctors: 0, write_count: 0, delta_t: -1 }, {}, TRANSIENT_DEFAULTS);
     expect(out).toMatchObject({ n_outer_correctors: 50, n_correctors: 1, write_count: 50, delta_t: null });
+  });
+});
+
+// RH3 (spec 5.5, 5.9): every field of the registry's transient control schema is on the panel: its
+// own rows (OWN_ROWS), the rest in a schema form (the outer loops' relaxation and tolerance), with
+// their tooltips the schema's descriptions; an edit of one is saved, one out of its range is not.
+describe('RH3: the control schema on the Run panel', () => {
+  const control = (committed as unknown as { analysis: Array<{ key: string; control_schema: { properties: Record<string, { title: string; description?: string }> }; run_defaults: Record<string, unknown> }> }).analysis.find(
+    (a) => a.key === 'incompressible_transient',
+  )!;
+  // The panel's own rows by the label (or aria-label) the person reads.
+  const OWN_LABEL: Record<string, string> = {
+    end_time: 'Simulation time',
+    write_count: 'Result frames',
+    average_from: 'Average from',
+    time_step_mode: 'Time step mode',
+    max_co: 'Max Courant number',
+    delta_t: 'Time step in seconds',
+    max_delta_t: 'Maximum time step in seconds',
+    time_scheme: 'Time scheme',
+    n_outer_correctors: 'Outer correctors',
+    n_correctors: 'Pressure correctors',
+    n_non_orth_correctors: 'Non-orthogonal correctors',
+  };
+
+  function renderTransient(settings: Record<string, unknown> = {}) {
+    useProjectStore.setState({
+      registry: {
+        analysis: [{ key: 'incompressible_transient', label: 'Incompressible', time_dependency: 'transient', ui: UI, run_defaults: control.run_defaults, control_schema: control.control_schema }],
+      } as never,
+    });
+    window.__CFD_RUN_STATE__ = runState({
+      transient: true,
+      analysis_key: 'incompressible_transient',
+      transient_settings: { ...control.run_defaults, ...settings },
+    });
+    return renderPanel();
+  }
+
+  it('renders every control_schema field: its own rows and a schema form for the others', () => {
+    const { container } = renderTransient();
+    const keys = Object.keys(control.control_schema.properties);
+    expect(keys).toEqual(expect.arrayContaining(['outer_relax_p', 'outer_relax_eq', 'outer_tolerance']));
+    expect([...OWN_ROWS].sort()).toEqual(Object.keys(OWN_LABEL).sort());
+    for (const key of keys) {
+      if (OWN_ROWS.includes(key)) expect(screen.getAllByLabelText(OWN_LABEL[key]).length, key).toBeGreaterThan(0);
+      else expect(container.querySelector(`[data-run-numerics-fields] [data-schema-key="${key}"]`), key).not.toBeNull();
+    }
+    // Their tooltips are the schema's descriptions (one advice source).
+    const tip = container.querySelector('[data-schema-key="outer_tolerance"] [role="tooltip"]');
+    expect(tip?.textContent).toBe(control.control_schema.properties.outer_tolerance.description);
+  });
+
+  it('an outer relaxation edit is saved; one outside its range is not, and says why; a saved one outside it is kept', async () => {
+    renderTransient({ n_outer_correctors: 3, outer_tolerance: 0.5 });
+    // Saved outside its range: shown as saved, used as saved.
+    expect(screen.getByText('Saved as 5e-1, outside 1e-6 to 1e-1. It is used as saved.')).toBeInTheDocument();
+    const relax = screen.getByLabelText('Outer relaxation p');
+    fireEvent.change(relax, { target: { value: '0.4' } });
+    fireEvent.blur(relax);
+    await waitFor(() =>
+      expect(window.__CFD_RUN_TRANSIENT_SAVE__).toHaveBeenLastCalledWith(expect.objectContaining({ outer_relax_p: 0.4, outer_tolerance: 0.5, n_outer_correctors: 3 })),
+    );
+    const eq = screen.getByLabelText('Outer relaxation equations');
+    fireEvent.change(eq, { target: { value: '1.5' } });
+    fireEvent.blur(eq);
+    expect(await screen.findByText('Not saved: 1.5 is outside 0 to 1.')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 400));
+    // No save carries it (this test's run state stays as it was, so the earlier edit may go again).
+    const saves = (window.__CFD_RUN_TRANSIENT_SAVE__ as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(saves.every((s) => s.outer_relax_eq == null)).toBe(true);
   });
 });

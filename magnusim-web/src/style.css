@@ -6534,3 +6534,25 @@ body.on-workbench.results-chrome-shown .right-chrome { bottom: 64px; }
   font-size: var(--mg-text-sm);
   color: var(--mg-text-muted);
 }
+/* RH3: Advanced settings' sub-heads (Schemes, Linear solvers, Limiters) and "Numerics as written". */
+.schema-subhead {
+  margin: 10px 0 2px;
+  font-size: var(--mg-text-sm);
+  font-weight: 600;
+  color: var(--mg-text-muted);
+}
+.run-numerics {
+  margin: 8px 0;
+}
+.run-numerics > summary {
+  cursor: pointer;
+}
+.run-numerics-group {
+  margin: 8px 0 2px;
+  font-size: var(--mg-text-sm);
+  font-weight: 600;
+  color: var(--mg-text-muted);
+}
+.run-numerics-source {
+  color: var(--mg-text-muted);
+}

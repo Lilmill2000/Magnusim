@@ -209,7 +209,53 @@ export const STANDARD_MESH_NOTE =
   `about ${STANDARD_HEAT_HIGH_PCT} % high through a solid's walls; natural convection in a cavity was within 1.5 %. ` +
   'Mesh with Hex-dominant for heat numbers.';
 
+/**
+ * RH3: the scheme settings (x-cfddesk.group "schemes") the study sets itself, over its Numerics
+ * preset: a blank-able one with a value, another one away from its default.
+ */
+export function schemesChanged(record: Record<string, unknown>, schema: RJSFSchema): string[] {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { 'x-cfddesk'?: { group?: string; optional?: boolean } }>;
+  return Object.entries(props)
+    .filter(([key, prop]) => {
+      const x = prop['x-cfddesk'] || {};
+      const v = record[key];
+      return x.group === 'schemes' && !(v === undefined || v === null || v === '') && (x.optional || v !== prop.default);
+    })
+    .map(([key]) => key);
+}
+
+/**
+ * RH3: "Robust, 2 terms changed · Use the preset for all" under the numerics when the study's
+ * schemes depart from its preset; the button clears them, so the study follows its preset again.
+ */
+export function PresetNote({ record, schema, save }: { record: Record<string, unknown>; schema: RJSFSchema; save: (patch: Record<string, unknown>) => unknown }) {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { enum?: unknown[]; 'x-cfddesk'?: { enum_labels?: string[] } }>;
+  const preset = props.numerics_preset;
+  const changed = preset ? schemesChanged(record, schema) : [];
+  if (!preset || !changed.length) return null;
+  const value = String(record.numerics_preset || preset.default || '');
+  const i = Array.isArray(preset.enum) ? preset.enum.indexOf(value) : -1;
+  const name = (i >= 0 && (preset['x-cfddesk']?.enum_labels || [])[i]) || value;
+  return (
+    <p className="mat-assign-hint sim-def-hint" data-study-preset-note="1">
+      {`${name}, ${changed.length} term${changed.length === 1 ? '' : 's'} changed · `}
+      <button type="button" className="mat-clear-link" data-study-preset-reset="1" onClick={() => void save(Object.fromEntries(changed.map((k) => [k, null])))}>
+        Use the preset for all
+      </button>
+    </p>
+  );
+}
+
+/** A blank-able field (x-cfddesk.optional) the form left without a value (set back to "Not set"): null. */
+export function blanked(values: Record<string, unknown>, schema: RJSFSchema): Record<string, unknown> {
+  const props = (schema.properties || {}) as Record<string, { 'x-cfddesk'?: { optional?: boolean } }>;
+  return Object.fromEntries(Object.entries(props).filter(([k, p]) => p['x-cfddesk']?.optional && values[k] === undefined).map(([k]) => [k, null]));
+}
+
+/** A saved value and a form's value are the same (blank: undefined, null or ''). */
 function same(a: unknown, b: unknown): boolean {
+  const blank = (v: unknown) => v === undefined || v === null || v === '';
+  if (blank(a) && blank(b)) return true;
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
@@ -231,7 +277,7 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
   );
   const numericsSchema = shownNumericsSchema(tools.mergeObjectSchemas([row?.numerics_schema as RJSFSchema | undefined]), cht);
   const commit = (schema: RJSFSchema) => (values: Record<string, unknown>) => {
-    const patch = tools.pickSchemaValues(values, schema);
+    const patch = { ...blanked(values, schema), ...tools.pickSchemaValues(values, schema) };
     const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !same(record[k], v)));
     if (Object.keys(changed).length) void save(changed);
   };
@@ -282,9 +328,11 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
           schema={numericsSchema}
           formData={tools.pickSchemaValues(record, numericsSchema)}
           hideFooter
+          boundsOnEdit
           onCommit={commit(numericsSchema)}
         />
       ) : null}
+      {hasNumerics ? <PresetNote record={record} schema={numericsSchema} save={save} /> : null}
       {cht && !transient ? (
         <p className="mat-assign-hint sim-def-hint" data-ht-cht-stop="1">
           A conjugate heat transfer run does not stop on its residuals: it runs its iterations, or until a monitor

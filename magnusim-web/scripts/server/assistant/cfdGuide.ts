@@ -7,7 +7,8 @@
  *
  * Rule 2's advice is the one advice text (magnusim_sdk.numerics_advice, written by
  * `npm run gen:registry` into scripts/generated/numerics-advice.json); Max Courant is warned
- * about, never capped (A1). Rule 9 is the pre-run check's (RH2); a later lane adds the numerics (RH3) rules.
+ * about, never capped (A1). Rule 9 is the pre-run check's (RH2); rule 10's last sentence is the numerics
+ * settings' (RH3: the first-order caution); rule 8's numerics-at-Continue sentence comes with RH3's second part.
  * The guide is read when first asked for, so the CAD edition never reads it.
  */
 import { readFileSync } from 'node:fs';
@@ -45,7 +46,7 @@ export function cfdGuideText(): string {
       '7. After a blow-up (health restart "from_zero"): do not Continue. Make a new run in one call (setup_edit kind run, action add, other_id the old run, values the fix), start it, read health again after 50-100 steps. Keep the old run. "continue_after_fix" never means Continue will be fine; follow health\'s next.',
       '8. A stopped transient run (its study still Transient): its Max Courant, outer and pressure correctors and max time step can apply when it continues (setup_edit type "at_continue", results kept) or start it over (type "start_over", results deleted). Ask the person which; later changes of the four join the pending one.',
       '9. Before a run: read_results precheck, with proposed values to compare; give the cost (steps, time) from its estimate.',
-      '10. Mesh: non-orthogonality above 70 degrees needs 1-2 non-orthogonal correctors; skewness above 4 is a risk. y+ (field_range of yPlus): about 1 resolves the wall, 30-300 suits wall functions; k-omega SST handles both.',
+      '10. Mesh: non-orthogonality above 70 degrees needs 1-2 non-orthogonal correctors; skewness above 4 is a risk. y+ (field_range of yPlus): about 1 resolves the wall, 30-300 suits wall functions; k-omega SST handles both. First-order schemes lower accuracy: fix the time step or mesh first.',
       '11. Stop a run once; force_stop only when the person agrees.',
       '12. Change settings when the person asked for a fix; otherwise say what you would change and what it costs.',
     ].join('\n');

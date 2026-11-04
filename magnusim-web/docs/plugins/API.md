@@ -1917,6 +1917,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `precheck_error?: string | undefined`: RH2: why the last check did not answer ('' when it did).
 - `checks_kept?: string[] | undefined`: RH2: the pre-run check codes kept as set (the run's `checks_kept`).
 - `checked_at_start?: RunCheckRow[] | null | undefined`: RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not.
+- `numerics?: RunNumericsRow[] | null | undefined`: RH3: "Numerics as written": what the run's case is written with (its analysis's RunModel.check `numerics`), for a draft from its study, for a started run from what it started with (`numerics_used`) once it has one; null when there is none to show.
 
 #### SchemaFormProps
 
@@ -1938,6 +1939,7 @@ The core's schema form (the study panel's generic form).
 - `advancedExtra?: ReactNode`: Rows added inside the Advanced disclosure.
 - `commitOnBlur?: boolean | undefined`: A typed number commits on blur and Enter only, at once (not 0.3 s after a keystroke): for a form whose save may ask the person first, such as a run's settings when `run.edit` is `overwrites`, `continues` or `new_run`.
 - `fieldNotes?: Record<string, ReactNode> | undefined`: A note under a field, by the field's key: a line below its row, such as "Takes effect when you Continue" under each of `run.continue_pending`'s keys.
+- `boundsOnEdit?: boolean | undefined`: API 1.9 (RH3): bounds apply only to an edit. A number edited outside its field's minimum or maximum is not saved, and the field says why ("Not saved: 0.9 is outside 0 to 0.5."); a saved value outside them is kept and used as saved, and the field says so ("Saved as 1e-2, outside 1e-12 to 1e-3. It is used as saved."). For forms whose saved values are used as saved. A field's x-cfddesk.caution for its current value shows under it in every form.
 
 #### SciNumberInputProps
 
@@ -2826,10 +2828,10 @@ The advice's first sentence(s) for ``key``.
 #### description
 
 ```python
-description(key: str) -> str
+description(key: str, extra: str = "") -> str
 ```
 
-A setting's schema description: its rule, then the rest.
+A setting's schema description: its rule, then the rest, then ``extra`` (what one analysis adds of its own, such as its default).
 
 #### as_json
 
@@ -2847,6 +2849,232 @@ Constants:
 - `LIMIT_FLOOR = 50`
 - `ADVICE = { "max_co": { "rule": ( "Max Courant is not a speed setting on its own. With 1 outer corrector (P...`
 - `RULE_MAX = 160`
+
+### magnusim_sdk.numerics_settings
+
+Numerics as settings (run health, RH3): what Incompressible Flow and Heat Transfer share of a study's schemes, linear solvers, turbulence relaxation and velocity limit, and of a run's PIMPLE outer relaxation and outer tolerance.
+
+#### positive
+
+```python
+positive(v: Any) -> float | None
+```
+
+A stored number the solver can use that must be above 0 (a tolerance, a relaxation, a limit), as saved even outside its field's range; else None (blank).
+
+#### non_negative
+
+```python
+non_negative(v: Any) -> float | None
+```
+
+A stored number the solver can use that may be 0 (a relative tolerance), as saved.
+
+#### count
+
+```python
+count(v: Any) -> int | None
+```
+
+A stored iteration count of at least 1, as saved.
+
+#### choice
+
+```python
+choice(v: Any, table: dict[str, Any] | tuple[str, ...]) -> str | None
+```
+
+#### class NumericsSettings
+
+A study's RH3 numerics as stored: None = blank (as today).
+
+#### numerics_from_record
+
+```python
+numerics_from_record(rec: dict[str, Any] | None) -> NumericsSettings
+```
+
+The study record's RH3 numerics: each value the solver can use is kept as saved (even outside its field's range); a missing or unusable one is blank.
+
+#### run_value
+
+```python
+run_value(key: str, v: Any) -> float | None
+```
+
+A run's outer relaxation or outer tolerance as stored (None = blank).
+
+#### clamp_edit
+
+```python
+clamp_edit(key: str, v: float | None) -> float | None
+```
+
+An edited run key held to its bounds (an edit only: a stored value is never clamped).
+
+#### foam_number
+
+```python
+foam_number(x: float) -> str
+```
+
+A setting as the case writes it: 1e-7, 0.01, 0.7, 200.
+
+#### scheme_choices
+
+```python
+scheme_choices(ns: NumericsSettings, *, preset: str | None) -> dict[str, tuple[str, str]]
+```
+
+Each scheme key's choice and where it came from: ``(choice, "study" | "preset" | "default")``. ``preset`` None: a transient study without one (NO_PRESET_TRANSIENT).
+
+#### bounded
+
+```python
+bounded(text: str, steady: bool) -> str
+```
+
+#### changed_from_preset
+
+```python
+changed_from_preset(rec: dict[str, Any] | None, preset: str) -> list[str]
+```
+
+The scheme keys the study sets to something other than its preset's (the preset note: "Robust, 2 terms changed").
+
+#### velocity_cap
+
+```python
+velocity_cap(ns: NumericsSettings, speed_ref: float, *, default: str, factor: float, floor: float) -> dict[str, Any]
+```
+
+The velocity limit a case is written with: ``{mode, cap (m/s or None), auto, custom_blank}``. Custom with no maximum set is written as Automatic (and says so).
+
+#### limit_u_text
+
+```python
+limit_u_text(number: str) -> str
+```
+
+system/fvOptions with the limitVelocity cap (``number``: the cap as the writer prints it).
+
+#### fmt3
+
+```python
+fmt3(x: float | None) -> str
+```
+
+A speed or a factor: 3 significant figures ("226", "22.6", "0.5").
+
+#### row
+
+```python
+row(group: str, label: str, value: str, source: str = "") -> dict[str, str]
+```
+
+One "Numerics as written" row. ``source``: study, preset, default, run, fixed or ''.
+
+#### source_words
+
+```python
+source_words(source: str, preset: str | None = None) -> str
+```
+
+#### limit_value
+
+```python
+limit_value(v: dict[str, Any], *, speed: float | None, factor: float, floor: float, inlet: str = "", unknown: str = "the speed is known once the mesh is generated") -> str
+```
+
+The velocity limit as "Numerics as written" says it: "226 m/s = 10 × 22.6 m/s (inlet velocity_inlet_1_1)", "50 m/s (at least 50 m/s; 10 × 1.2 m/s is less)", "Off". ``unknown``: why there is no speed yet (``speed`` None).
+
+#### solver_value
+
+```python
+solver_value(name: str, tol: float, rel_tol: float, max_iter: int | None, *, default_max: str = "") -> str
+```
+
+"GAMG, tolerance 1e-7, relTol 0.01, maxIter 200".
+
+#### range_number
+
+```python
+range_number(x: float, small: bool) -> str
+```
+
+A bound or a value as the row says it: 1e-2 for a tolerance's range, else 0.5, 2000.
+
+#### lower_label
+
+```python
+lower_label(label: str) -> str
+```
+
+A label inside a sentence: "Relaxation turbulence" → "relaxation turbulence"; "p tolerance" stays.
+
+#### out_of_range
+
+```python
+out_of_range(fields: list[dict[str, Any]], values: dict[str, Any]) -> list[dict[str, Any]]
+```
+
+The stored values outside their field's range that the solver uses as saved: ``fields`` are ``{key, label, min, max, kind}`` (a schema's), ``values`` the stored ones. Each answer is ``{key, label, value, min, max, text}``: "Saved p tolerance 1e-2 is outside 1e-12 to 1e-3.".
+
+#### study_field_specs
+
+```python
+study_field_specs(*, transient: bool, energy: bool, simplec: bool, p_name: str, eq_max_iter_default: int | None, velocity_limit_default: str, extra: dict[str, str] | None = None) -> list[dict[str, Any]]
+```
+
+The RH3 study fields as SchemaField keyword arguments (numerics_schema, advanced). ``energy``: an energy equation (Heat Transfer); ``simplec``: Relaxation turbulence is unused while SIMPLEC is on; ``p_name``: the pressure field's name (p or p_rgh); ``extra``: words an analysis adds after a key's advice (its defaults).
+
+#### run_field_specs
+
+```python
+run_field_specs(*, p_name: str, extra: dict[str, str] | None = None) -> list[dict[str, Any]]
+```
+
+The RH3 run fields as SchemaField keyword arguments (control_schema, advanced).
+
+#### bounds_of
+
+```python
+bounds_of(fields: Any) -> list[dict[str, Any]]
+```
+
+``{key, label, min, max}`` of SchemaField-like objects (for :func:`out_of_range`).
+
+Constants:
+
+- `GRAD_LIMITERS = { "strong": "cellLimited Gauss linear 1", "light": "cellMDLimited Gauss linear 0.5", "none": "Gau...`
+- `GRAD_LIMITER_LABELS = ("Strong (cellLimited 1)", "Light (cellMDLimited 0.5)", "None")`
+- `CONVECTION = { "first_order": "Gauss upwind", "second_order": "Gauss limitedLinear 1", }`
+- `CONVECTION_LABELS = ("First order (upwind)", "Second order (limitedLinear)")`
+- `MOMENTUM = { "first_order": "Gauss upwind", "second_order": "Gauss linearUpwind grad(U)", "second_order_limi...`
+- `MOMENTUM_LABELS = ("First order (upwind)", "Second order (linearUpwind)", "Second order, limited (limitedLinearV)")`
+- `NON_ORTH = { "full": ("Gauss linear corrected", "corrected"), "limited_05": ("Gauss linear limited corrected...`
+- `NON_ORTH_LABELS = ("Full (corrected)", "Limited 0.5", "Limited 0.33", "None (uncorrected)")`
+- `VELOCITY_LIMITS = ("auto", "custom", "off")`
+- `VELOCITY_LIMIT_LABELS = ("Automatic", "Custom", "Off")`
+- `SCHEME_KEYS = ("grad_limiter", "momentum_convection", "turbulence_convection", "energy_convection", "non_orth_correction")`
+- `PRESET_CHOICES = { "robust": { "grad_limiter": "strong", "momentum_convection": "second_order", "turbulence_convec...`
+- `PRESET_LABELS = {"robust": "Robust", "accurate": "Accurate"}`
+- `NO_PRESET_TRANSIENT = { "grad_limiter": "strong", "momentum_convection": "second_order", "turbulence_convection": "seco...`
+- `CAUTION_FIRST_ORDER = "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; " "u...`
+- `CAUTION_LIMIT_OFF = "Nothing caps the velocity. An unstable run stops with an error instead of running on with " "cli...`
+- `BOUNDS = { "p_tolerance": (1e-12, 1e-3), "p_rel_tol": (0.0, 0.5), "p_max_iter": (10, 2000), "eq_tolerance"...`
+- `P_TOLERANCE = 1e-7`
+- `P_REL_TOL = 0.01`
+- `P_MAX_ITER = 200`
+- `EQ_TOLERANCE = 1e-8`
+- `EQ_REL_TOL = 0.1`
+- `RUN_KEYS = ("outer_relax_p", "outer_relax_eq", "outer_tolerance")`
+- `STUDY_KEYS = ( *SCHEME_KEYS, "p_tolerance", "p_rel_tol", "p_max_iter", "eq_tolerance", "eq_rel_tol", "eq_max_i...`
+- `GROUP_SCHEMES = "schemes"`
+- `GROUP_SOLVERS = "linear_solvers"`
+- `GROUP_LIMITERS = "limiters"`
+- `BLANK = NumericsSettings()`
+- `SOURCE_WORDS = {"study": "set in the study", "run": "set on the run", "default": "default", "fixed": "fixed"}`
 
 ### magnusim_sdk.proc
 
@@ -3051,7 +3279,7 @@ How many rows of each level (kept ones left out unless ``kept``).
 Constants:
 
 - `LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}`
-- `CODE_ORDER = ("mesh_failed", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
+- `CODE_ORDER = ("mesh_failed", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "setting_out_of_range", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
 - `COURANT_CODES = frozenset({"piso_high_co", "pimple_co_vs_outer", "fixed_step_co"})`
 - `STEADY_ITERATIONS = 1500`
 - `STARTUP_FTT_STILL = 3.0`

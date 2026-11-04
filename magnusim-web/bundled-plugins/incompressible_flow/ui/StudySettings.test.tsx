@@ -171,14 +171,32 @@ describe('SimulationDefaults (study panel)', () => {
     expect(again.options[again.selectedIndex].text).toBe(label);
   });
 
-  it('switches time dependency through the runtime, and a transient study hides SIMPLE numerics', async () => {
+  it('switches time dependency through the runtime; a transient study shows its own numerics (RH3) and says where the time step lives', async () => {
+    // The transient analysis's numerics: RH3's schemes (no SIMPLE ones).
+    const state = useProjectStore.getState();
+    const rows = ((state.registry as { analysis: Array<Record<string, unknown>> }).analysis || []).slice();
+    rows.push({
+      key: 'incompressible_transient',
+      label: 'Incompressible Fluid Flow (Transient)',
+      schema: settingsSchema,
+      numerics_schema: {
+        type: 'object',
+        properties: {
+          grad_limiter: { type: 'string', title: 'Gradient limiter', enum: ['strong', 'light', 'none'], default: null, 'x-cfddesk': { group: 'schemes', advanced: true, optional: true } },
+        },
+      },
+      ui: { study_settings: 'incompressible_flow.study', run_settings: 'incompressible_flow.run' },
+    });
+    useProjectStore.setState({ registry: { ...(state.registry as object), analysis: rows } });
     renderPanel();
     fireEvent.change(screen.getByLabelText('Time dependency'), { target: { value: 'Transient' } });
     expect(window.__CFD_STUDY_TIME__).toHaveBeenCalledWith('Transient');
-    publish(study({ time_dependency: 'Transient', algorithm: 'PIMPLE' }));
+    publish(study({ time_dependency: 'Transient', algorithm: 'PIMPLE', analysis_type: 'incompressible_transient' }));
     expect(screen.getByText('PIMPLE')).toBeInTheDocument();
     expect(screen.queryByText('Residual U')).toBeNull();
-    expect(screen.getByText(/PIMPLE correctors from each run/)).toBeInTheDocument();
+    expect(screen.getByText('Gradient limiter')).toBeInTheDocument();
+    expect(screen.getByText('Schemes')).toBeInTheDocument();
+    expect(screen.getByText("The time step and PIMPLE correctors are on each run's panel.")).toBeInTheDocument();
   });
 
   it('renames and deletes through the runtime, and shows a failed save', async () => {
@@ -388,5 +406,49 @@ describe('Reference values', () => {
     expect(box('Centre of rotation X')).toHaveValue('250');
     expect(box('Centre of rotation Z')).toHaveValue('-10');
     expect(box('Reference area')).toHaveValue('0.5');
+  });
+});
+
+// RH3 (spec 5.5): the preset note, and a saved numerics value outside its range.
+describe('RH3: the study numerics', () => {
+  const withSchemes = {
+    type: 'object',
+    properties: {
+      numerics_preset: { type: 'string', title: 'Numerics', enum: ['robust', 'accurate'], default: 'robust', 'x-cfddesk': { enum_labels: ['Robust', 'Accurate'] } },
+      grad_limiter: { type: 'string', title: 'Gradient limiter', enum: ['strong', 'light', 'none'], default: null, 'x-cfddesk': { group: 'schemes', advanced: true, optional: true } },
+      momentum_convection: { type: 'string', title: 'Momentum convection', enum: ['first_order', 'second_order'], default: 'second_order', 'x-cfddesk': { group: 'schemes', advanced: true } },
+      non_orth_correction: { type: 'string', title: 'Non-orthogonal correction', enum: ['full', 'none'], default: null, 'x-cfddesk': { group: 'schemes', advanced: true, optional: true } },
+      p_tolerance: { type: 'number', title: 'p tolerance', default: 1e-7, minimum: 1e-12, maximum: 1e-3, 'x-cfddesk': { group: 'linear_solvers', advanced: true } },
+    },
+  };
+  function withNumerics() {
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    useProjectStore.setState({ registry: { ...reg, analysis: [{ ...reg.analysis[0], numerics_schema: withSchemes }] } });
+  }
+
+  it('"Robust, 2 terms changed · Use the preset for all": the button clears them', async () => {
+    withNumerics();
+    window.__CFD_STUDY_STATE__ = study({}, { grad_limiter: 'light', non_orth_correction: 'full', momentum_convection: 'second_order' });
+    const view = renderPanel();
+    const note = view.container.querySelector('[data-study-preset-note="1"]')!;
+    expect(note.textContent).toBe('Robust, 2 terms changed · Use the preset for all');
+    fireEvent.click(screen.getByRole('button', { name: 'Use the preset for all' }));
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ grad_limiter: null, non_orth_correction: null }));
+    publish(study({}, { momentum_convection: 'first_order' }));
+    expect(view.container.querySelector('[data-study-preset-note="1"]')?.textContent).toBe('Robust, 1 term changed · Use the preset for all');
+    publish(study({}, {}));
+    expect(view.container.querySelector('[data-study-preset-note="1"]')).toBeNull();
+  });
+
+  it('a saved value outside its range shows as used as saved, and an edit of another field leaves it', async () => {
+    withNumerics();
+    window.__CFD_STUDY_STATE__ = study({}, { p_tolerance: 0.01 });
+    const view = renderPanel();
+    expect(view.container.querySelector('[data-schema-saved-outside="p_tolerance"]')?.textContent).toBe('Saved as 1e-2, outside 1e-12 to 1e-3. It is used as saved.');
+    fireEvent.change(screen.getByLabelText('Momentum convection', { selector: 'select' }), { target: { value: '0' } });
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalled());
+    for (const [patch] of (window.__CFD_STUDY_UPDATE__ as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(Object.keys(patch as object)).not.toContain('p_tolerance');
+    }
   });
 });

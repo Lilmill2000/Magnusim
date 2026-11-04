@@ -614,3 +614,43 @@ describe('read_results: health, log_tail and the status fields (RH1)', () => {
     assert.equal(at.hit_line, 3);
   });
 });
+
+// RH3 (parity row R35): read_setup {what:'numerics'}: the rows the Run panel's "Numerics as written"
+// shows, from the same route (run.precheck's numerics); a started run with none recorded says so.
+describe('read_setup: numerics (RH3)', () => {
+  const read = (more = {}) => ({ project_id: '', simulation_id: '', what: 'numerics', id: '', other_id: '', page: 0, ...more });
+  const ROWS = [
+    { group: 'Schemes', label: 'Gradient limiter', value: 'cellLimited Gauss linear 1', source: 'preset' },
+    { group: 'PIMPLE', label: 'Outer relaxation', value: 'p 0.4, equations 0.7; the final outer loop 1', source: 'run' },
+    { group: 'Limiters', label: 'Velocity limit', value: '226 m/s = 10 × 22.6 m/s (inlet velocity_inlet_1_1)', source: '' },
+  ];
+  it("a draft's rows, as Numerics as written shows them, from run.precheck", async () => {
+    fresh();
+    app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: true, checks: [], estimate: null, numerics: ROWS, case_dir: 'C:/x' } : undefined);
+    const from = app.seen.length;
+    const out = await ok('read_setup', read({ id: 'r2' }));
+    const req = app.seen.slice(from).find((r) => r.path === '/api/run/precheck');
+    assert.deepEqual(req.body, { project_id: 'p1', simulation_id: 's1', run_id: 'r2' });
+    assert.deepEqual(out, {
+      run_id: 'r2',
+      name: 'Run 2',
+      from: 'study',
+      rows: [
+        { group: 'Schemes', label: 'Gradient limiter', value: 'cellLimited Gauss linear 1', source: 'preset' },
+        { group: 'PIMPLE', label: 'Outer relaxation', value: 'p 0.4, equations 0.7; the final outer loop 1', source: 'run' },
+        { group: 'Limiters', label: 'Velocity limit', value: '226 m/s = 10 × 22.6 m/s (inlet velocity_inlet_1_1)' },
+      ],
+      shown_in: 'Run panel → Numerics as written',
+    });
+  });
+  it('a started run: what it started with (numerics_used), else none, saying why', async () => {
+    fresh();
+    app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: true, checks: [], numerics: ROWS } : undefined);
+    const none = await ok('read_setup', read({ id: 'r1' }));
+    assert.deepEqual([none.from, none.rows], [null, []]);
+    assert.equal(none.note, `"Run 1" started before its numerics were recorded; read_setup {what:'study'} has the study's now.`);
+    app.w.runs[0].numerics_used = { analysis: 'incompressible_steady', mode: 'steady', at: '2026-11-04T00:00:00Z', values: { relax_p: 0.3 } };
+    const used = await ok('read_setup', read({ id: 'r1' }));
+    assert.deepEqual([used.from, used.rows.length], ['numerics_used', 3]);
+  });
+});

@@ -279,6 +279,8 @@ export function RunSettings({ run, row, saveSteady, saveTransient, saveSettle }:
           // A change of a run that ended asks first (the core's question): never in the middle of typing.
           commitOnBlur={run.edit === 'overwrites' || run.edit === 'continues' || run.edit === 'new_run'}
           fieldNotes={continueNotes(run)}
+          // RH3: an edit outside a field's range is refused; a saved value outside it is kept.
+          boundsOnEdit
           onCommit={(next) => {
             const patch = tools.pickSchemaValues(next, schema);
             if (run.transient) void saveTransient({ ...run.transient_settings, ...patch });

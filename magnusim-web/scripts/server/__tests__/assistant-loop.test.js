@@ -1503,14 +1503,15 @@ describe('the offered list', () => {
     };
     m.provider.modelRow = async () => {
       order.push('row');
-      return { context: 6000, type: null };
+      // Room for the system text (the prompt and the CFD guide) beside half of it for the tools.
+      return { context: 6400, type: null };
     };
     m.provider.script({ text: 'ok' });
     const { turn: t } = await startTurn(m, 'x');
     await settled(t);
-    assert.deepEqual(order, ['row', 'select 3000']);
+    assert.deepEqual(order, ['row', 'select 3200']);
     const offered = many.filter((d) => m.provider.requests[0].req.tools.some((x) => x.name === d.name));
-    assert.ok(offered.length >= 1 && offered.length < 4 && offered.reduce((n, d) => n + toolTokens(d), 0) <= 3000);
+    assert.ok(offered.length >= 1 && offered.length < 4 && offered.reduce((n, d) => n + toolTokens(d), 0) <= 3200);
     assert.ok(!offered.some((d) => d.name === 'tool_0'), 'the lowest priority went first');
   });
 

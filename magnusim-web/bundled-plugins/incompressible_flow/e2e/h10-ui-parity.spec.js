@@ -22,10 +22,11 @@ const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 const STUDY_ADDED = '[data-study-reference]';
 // Rows the run panel gained after v0.2.0, left out of the comparison: Average from
 // (F2, transient), "Stop when a monitor settles" and how a finished run ended (F5),
-// and a finished run's Continue (F6), a run's Health block (RH1), and a draft's "Before you
-// start" and a started run's "Checked at start" (RH2).
+// and a finished run's Continue (F6), a run's Health block (RH1), a draft's "Before you
+// start" and a started run's "Checked at start" (RH2), and RH3's numerics: the outer loops'
+// relaxation and tolerance in Advanced settings and "Numerics as written".
 const RUN_ADDED =
-  '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue], [data-run-health-block], [data-run-check], [data-run-checked-at-start]';
+  '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue], [data-run-health-block], [data-run-check], [data-run-checked-at-start], [data-run-numerics-fields], [data-run-numerics]';
 // A converged run's tree badge (F5) and an unhealthy one's (RH1), left out of the tree's comparison.
 const TREE_ADDED = '[data-run-converged], [data-run-health-badge]';
 // The Create Simulation list's rows of the analyses of a bundled plugin that ships on
@@ -70,6 +71,13 @@ const NEW_STUDY_ROWS = [
   '[data-schema-key="initial_uy"]',
   '[data-schema-key="initial_uz"]',
   '[data-schema-key="potential_flow"]',
+  // RH3 numerics: a steady study's Advanced settings (schemes, linear solvers, velocity limit), a
+  // transient study's numerics form (it had none), the preset note, and the transient note's new
+  // words ("The time step and PIMPLE correctors are on each run's panel.").
+  '.sim-study-numerics details.mesh-advanced',
+  '.sim-study-numerics:not(:has([data-schema-key="residual_u"]))',
+  '[data-study-preset-note]',
+  '[data-study-transient-note]',
 ].join(', ');
 
 function stage(t0, msg) {

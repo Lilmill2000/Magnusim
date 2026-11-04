@@ -24,6 +24,7 @@ import {
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { ResidualPlot } from './ResidualPlot';
 import { RunCheck } from './RunCheck';
+import { RunNumerics } from './RunNumerics';
 import { RunCores, runCanUseCores, useRankCap } from './RunCores';
 import { RunHealth, healthRunView, pendingChange } from './RunHealth';
 import { RunMonitors } from './RunMonitors';
@@ -420,6 +421,7 @@ export function RunControl(props: IslandProps) {
           />
         ) : null}
         <RunCheck state={state} onError={report} />
+        <RunNumerics state={state} />
         <div className="sim-run-row">
           {state.start.visible ? (
             <button

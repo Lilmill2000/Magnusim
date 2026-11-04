@@ -430,6 +430,21 @@ export interface RunState {
   checks_kept?: string[];
   /** RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not. */
   checked_at_start?: RunCheckRow[] | null;
+  /**
+   * RH3: "Numerics as written": what the run's case is written with (its analysis's
+   * RunModel.check `numerics`), for a draft from its study, for a started run from what it
+   * started with (`numerics_used`) once it has one; null when there is none to show.
+   */
+  numerics?: RunNumericsRow[] | null;
+}
+
+/** RH3: a row of "Numerics as written": its group (Schemes, Linear solvers, ...), label, value and where it comes from. */
+export interface RunNumericsRow {
+  group: string;
+  label: string;
+  value: string;
+  /** study, run, preset, default, fixed or ''. */
+  source: string;
 }
 
 /** RH2: a pre-run check row's fix: its run or study values, or a place to open (mesh, bcs), or a steady copy. */

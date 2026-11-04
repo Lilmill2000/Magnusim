@@ -38,12 +38,69 @@ export interface SchemaFormProps {
    * line below the field's row.
    */
   fieldNotes?: Record<string, ReactNode>;
+  /**
+   * Bounds apply only to an edit (host API 1.9, run health RH3): a number edited outside its
+   * field's minimum or maximum is not saved, and the field says why ("Not saved: 0.9 is outside
+   * 0 to 0.5."); a saved value outside them is kept and used as saved, and the field says so
+   * ("Saved as 1e-2, outside 1e-12 to 1e-3. It is used as saved."). For forms whose saved
+   * values are used as saved (a study's numerics, a run's settings).
+   */
+  boundsOnEdit?: boolean;
 }
 
 interface SchemaFormContext {
   advancedExtra?: ReactNode;
   commitOnBlur?: boolean;
   fieldNotes?: Record<string, ReactNode>;
+  boundsOnEdit?: boolean;
+  /** The edits refused for being out of range, by key: the field's words. */
+  refused?: Record<string, string>;
+}
+
+/** Advanced settings' sub-heads, by x-cfddesk.group (RH3): their fields under them, in this order. */
+export const SUBHEADS: Readonly<Record<string, string>> = Object.freeze({
+  schemes: 'Schemes',
+  linear_solvers: 'Linear solvers',
+  limiters: 'Limiters',
+});
+
+type Bounds = { min: number | null; max: number | null };
+
+function boundsOf(schema: RJSFSchema | undefined): Bounds {
+  const s = (schema || {}) as { minimum?: unknown; maximum?: unknown };
+  return {
+    min: typeof s.minimum === 'number' && Number.isFinite(s.minimum) ? s.minimum : null,
+    max: typeof s.maximum === 'number' && Number.isFinite(s.maximum) ? s.maximum : null,
+  };
+}
+
+/** A bound or a value as the field's note says it: 1e-2 when the range is a tolerance's (its minimum under 1e-3), else 0.5, 2000. */
+export function rangeNumber(x: number, small: boolean): string {
+  return small && x !== 0 ? x.toExponential().replace('e+', 'e') : String(x);
+}
+
+/** "outside 1e-12 to 1e-3", "below 0", "above 5" for `v`, or '' when it is in range. */
+export function outsideWords(v: unknown, b: Bounds): string {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '';
+  const below = b.min !== null && v < b.min;
+  const above = b.max !== null && v > b.max;
+  if (!below && !above) return '';
+  const small = b.min !== null && b.min > 0 && b.min < 1e-3;
+  if (b.min !== null && b.max !== null) return `outside ${rangeNumber(b.min, small)} to ${rangeNumber(b.max, small)}`;
+  return b.min !== null ? `below ${rangeNumber(b.min, small)}` : `above ${rangeNumber(b.max as number, small)}`;
+}
+
+function smallRange(b: Bounds): boolean {
+  return b.min !== null && b.min > 0 && b.min < 1e-3;
+}
+
+/** The caution of a field's current value (x-cfddesk.caution, host API 1.9), or ''. */
+export function cautionOf(schema: RJSFSchema | undefined, value: unknown): string {
+  const x = ((schema || {}) as { 'x-cfddesk'?: { caution?: Record<string, unknown> } })['x-cfddesk'];
+  const c = x && x.caution && typeof x.caution === 'object' ? x.caution : null;
+  if (!c || value === undefined || value === null) return '';
+  const text = c[String(value)];
+  return typeof text === 'string' ? text : '';
 }
 
 function AdvancedDetails({ children }: { children: ReactNode }) {
@@ -210,6 +267,7 @@ function FieldTemplate(props: {
   hidden?: boolean;
   displayLabel?: boolean;
   schema?: RJSFSchema;
+  formData?: unknown;
   registry?: { formContext?: unknown };
 }) {
   if (props.hidden) return null;
@@ -219,7 +277,12 @@ function FieldTemplate(props: {
   const key = id.startsWith('root_') ? id.slice('root_'.length) : '';
   const help = String(props.schema?.description || '');
   const tipId = help ? `${id}__help` : undefined;
-  const note = key ? (props.registry?.formContext as SchemaFormContext | undefined)?.fieldNotes?.[key] : null;
+  const ctx = props.registry?.formContext as SchemaFormContext | undefined;
+  const note = key ? ctx?.fieldNotes?.[key] : null;
+  const caution = key ? cautionOf(props.schema, props.formData) : '';
+  const refused = key && ctx?.boundsOnEdit ? ctx.refused?.[key] || '' : '';
+  const b = boundsOf(props.schema);
+  const outside = key && ctx?.boundsOnEdit && !refused ? outsideWords(props.formData, b) : '';
   const row = (
     <div className={`mat-row schema-field ${props.classNames || ''}`} data-schema-key={key || undefined}>
       {props.displayLabel && props.label ? (
@@ -240,39 +303,108 @@ function FieldTemplate(props: {
       <span className="mat-v">{props.children}</span>
     </div>
   );
-  if (note === null || note === undefined || note === false) return row;
+  const hasNote = !(note === null || note === undefined || note === false);
+  if (!hasNote && !caution && !refused && !outside) return row;
   return (
     <>
       {row}
-      <p className="mat-assign-hint schema-field-note" data-schema-note={key}>
-        {note}
-      </p>
+      {hasNote ? (
+        <p className="mat-assign-hint schema-field-note" data-schema-note={key}>
+          {note}
+        </p>
+      ) : null}
+      {caution ? (
+        <p className="mat-assign-hint schema-field-note sim-tr-warn" data-schema-caution={key}>
+          {caution}
+        </p>
+      ) : null}
+      {refused ? (
+        <p className="mat-assign-hint schema-field-note sim-tr-warn" data-schema-refused={key} role="alert">
+          {refused}
+        </p>
+      ) : null}
+      {outside ? (
+        <p className="mat-assign-hint schema-field-note" data-schema-saved-outside={key}>
+          {`Saved as ${rangeNumber(props.formData as number, smallRange(b))}, ${outside}. It is used as saved.`}
+        </p>
+      ) : null}
     </>
   );
 }
 
-/** Advanced fields collapse into one disclosure, the way the legacy panels read. */
+/**
+ * Advanced fields collapse into one disclosure, the way the legacy panels read. Inside it, the
+ * fields of a sub-head group (SUBHEADS: Schemes, Linear solvers, Limiters) go under their
+ * sub-head, after the others.
+ */
 function ObjectFieldTemplate(props: ObjectFieldTemplateProps) {
   const extra = (props.registry?.formContext as SchemaFormContext | undefined)?.advancedExtra;
   const plain = props.properties.filter((p) => !isAdvanced(props.schema, p.name));
   const advanced = props.properties.filter((p) => isAdvanced(props.schema, p.name));
   if (!advanced.length && !extra) return <>{props.properties.map((p) => p.content)}</>;
+  const loose = advanced.filter((p) => !SUBHEADS[groupOf(props.schema, p.name)]);
+  const groups: string[] = [];
+  for (const p of advanced) {
+    const g = groupOf(props.schema, p.name);
+    if (SUBHEADS[g] && !groups.includes(g)) groups.push(g);
+  }
   return (
     <>
       {plain.map((p) => p.content)}
       <AdvancedDetails>
-        {advanced.map((p) => p.content)}
+        {loose.map((p) => p.content)}
+        {groups.map((g) => (
+          <div key={g} className="schema-subgroup" data-schema-group={g}>
+            <p className="schema-subhead" data-schema-subhead={g}>
+              {SUBHEADS[g]}
+            </p>
+            {advanced.filter((p) => groupOf(props.schema, p.name) === g).map((p) => p.content)}
+          </div>
+        ))}
         {extra}
       </AdvancedDetails>
     </>
   );
 }
 
-function isAdvanced(schema: RJSFSchema, name: string): boolean {
+function xOf(schema: RJSFSchema, name: string): { advanced?: boolean; group?: string } {
   const prop = (schema.properties || {})[name] as
-    | (RJSFSchema & { 'x-cfddesk'?: { advanced?: boolean } })
+    | (RJSFSchema & { 'x-cfddesk'?: { advanced?: boolean; group?: string } })
     | undefined;
-  return !!prop?.['x-cfddesk']?.advanced;
+  return prop?.['x-cfddesk'] || {};
+}
+
+function isAdvanced(schema: RJSFSchema, name: string): boolean {
+  return !!xOf(schema, name).advanced;
+}
+
+function groupOf(schema: RJSFSchema, name: string): string {
+  return String(xOf(schema, name).group || '');
+}
+
+/**
+ * The edit's values with each number edited outside its field's range put back as saved
+ * (`saved`), and the words of each refused one ("Not saved: 0.9 is outside 0 to 0.5."). Only the
+ * keys this edit changes are checked: a saved value outside its range is kept.
+ */
+export function refuseOutOfRange(
+  schema: RJSFSchema,
+  values: Record<string, unknown>,
+  saved: Record<string, unknown>,
+): { values: Record<string, unknown>; refused: Record<string, string> } {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema>;
+  const out = { ...values };
+  const refused: Record<string, string> = {};
+  for (const [key, prop] of Object.entries(props)) {
+    const v = values[key];
+    if (v === saved[key] || typeof v !== 'number') continue;
+    const b = boundsOf(prop);
+    const outside = outsideWords(v, b);
+    if (!outside) continue;
+    refused[key] = `Not saved: ${rangeNumber(v, smallRange(b))} is ${outside}.`;
+    out[key] = saved[key];
+  }
+  return { values: out, refused };
 }
 
 /** Drop the draft URI ajv8 cannot load, and turn saved strings into the schema's type. */
@@ -282,9 +414,19 @@ export function prepareSchemaForm(
 ): { schema: RJSFSchema; formData: Record<string, unknown> } {
   const next = { ...(schema || {}) } as RJSFSchema;
   delete (next as { $schema?: string }).$schema;
-  const props = (next.properties || {}) as Record<string, RJSFSchema>;
+  const props = { ...((next.properties || {}) as Record<string, RJSFSchema>) };
+  next.properties = props;
   const data = { ...(formData || {}) };
-  for (const [key, prop] of Object.entries(props)) {
+  for (const [key, raw] of Object.entries(props)) {
+    let prop = raw;
+    // A choice that may be left blank (x-cfddesk.optional, RH3) starts on "Not set", never on
+    // its first choice: it has no default to show.
+    if (blankChoice(prop)) {
+      const { default: _blank, ...rest } = prop as RJSFSchema & { default?: unknown };
+      prop = rest as RJSFSchema;
+      props[key] = prop;
+      if (data[key] === null) delete data[key];
+    }
     const type = prop?.type;
     const value = data[key];
     if ((value === undefined || value === '') && prop?.default !== undefined) {
@@ -300,6 +442,15 @@ export function prepareSchemaForm(
   }
   return { schema: next, formData: data };
 }
+
+/** A choice that may be left blank (x-cfddesk.optional, no default): its select offers "Not set". */
+function blankChoice(prop: RJSFSchema | undefined): boolean {
+  const p = (prop || {}) as RJSFSchema & { enum?: unknown[]; default?: unknown; 'x-cfddesk'?: { optional?: boolean } };
+  return !!p['x-cfddesk']?.optional && Array.isArray(p.enum) && (p.default === null || p.default === undefined);
+}
+
+/** The words of a blank choice's empty option. */
+export const NOT_SET = 'Not set';
 
 function buildUiSchema(schema: RJSFSchema): UiSchema {
   const ui: UiSchema = {};
@@ -341,6 +492,7 @@ function buildUiSchema(schema: RJSFSchema): UiSchema {
     if (Array.isArray(x.enum_labels) && Array.isArray(prop.enum) && x.enum_labels.length === prop.enum.length) {
       field['ui:enumNames'] = x.enum_labels;
     }
+    if (blankChoice(prop)) field['ui:placeholder'] = NOT_SET;
     ui[key] = field;
   }
   return ui;
@@ -371,10 +523,12 @@ export function SchemaForm({
   advancedExtra,
   commitOnBlur = false,
   fieldNotes,
+  boundsOnEdit = false,
 }: SchemaFormProps) {
   const props = (schema && schema.properties) || {};
   const timer = useRef<number | null>(null);
   const skipMount = useRef(true);
+  const [refused, setRefused] = useState<Record<string, string>>({});
   const prepared = useMemo(() => prepareSchemaForm(schema, formData), [schema, formData]);
   // A plugin widget registered after this form mounted must still replace the
   // core widget: the registry's version rebuilds the uiSchema.
@@ -423,7 +577,7 @@ export function SchemaForm({
         formData={live}
         widgets={{ ...widgets, ...pluginFieldWidgets() }}
         templates={{ FieldTemplate, ObjectFieldTemplate }}
-        formContext={{ advancedExtra, commitOnBlur, fieldNotes } satisfies SchemaFormContext}
+        formContext={{ advancedExtra, commitOnBlur, fieldNotes, boundsOnEdit, refused } satisfies SchemaFormContext}
         showErrorList={false}
         liveValidate
         onChange={(e) => {
@@ -434,13 +588,21 @@ export function SchemaForm({
             return;
           }
           if (timer.current) window.clearTimeout(timer.current);
+          // RH3: an edit outside a field's range is not saved (and says why); a saved value
+          // outside it is kept. Checked as the value is committed, not on every keystroke.
+          const commit = () => {
+            if (!boundsOnEdit) return onCommit(values);
+            const checked = refuseOutOfRange(prepared.schema, values, live);
+            setRefused(checked.refused);
+            onCommit(checked.values);
+          };
           // Numbers change here only on blur and Enter then: the change is the person's last word.
           if (commitOnBlur) {
             timer.current = null;
-            onCommit(values);
+            commit();
             return;
           }
-          timer.current = window.setTimeout(() => onCommit(values), 300);
+          timer.current = window.setTimeout(commit, 300);
         }}
         onSubmit={(e) => {
           onCommit((e.formData || {}) as Record<string, unknown>);

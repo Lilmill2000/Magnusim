@@ -87,6 +87,14 @@ export interface SchemaFormProps {
    * you Continue" under each of `run.continue_pending`'s keys.
    */
   fieldNotes?: Record<string, ReactNode>;
+  /**
+   * API 1.9 (RH3): bounds apply only to an edit. A number edited outside its field's minimum or
+   * maximum is not saved, and the field says why ("Not saved: 0.9 is outside 0 to 0.5."); a saved
+   * value outside them is kept and used as saved, and the field says so ("Saved as 1e-2, outside
+   * 1e-12 to 1e-3. It is used as saved."). For forms whose saved values are used as saved. A
+   * field's x-cfddesk.caution for its current value shows under it in every form.
+   */
+  boundsOnEdit?: boolean;
 }
 
 /** One job as the page follows it (useJob). */

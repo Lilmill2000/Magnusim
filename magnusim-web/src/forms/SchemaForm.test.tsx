@@ -204,3 +204,93 @@ describe('fieldNotes', () => {
     expect(notes[0].previousElementSibling?.getAttribute('data-schema-key')).toBe('b');
   });
 });
+
+// RH3 (host API 1.9): cautions, Advanced settings' sub-heads, and bounds that apply only to an edit.
+describe('RH3: cautions, sub-heads and bounds on an edit', () => {
+  const FIRST =
+    'First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started.';
+  const numerics: RJSFSchema = {
+    type: 'object',
+    properties: {
+      momentum_convection: {
+        type: 'string',
+        title: 'Momentum convection',
+        enum: ['first_order', 'second_order'],
+        default: 'second_order',
+        'x-cfddesk': { group: 'schemes', advanced: true, caution: { first_order: FIRST } },
+      },
+      relax_turbulence: { type: 'number', title: 'Relaxation turbulence', minimum: 0, maximum: 1, 'x-cfddesk': { group: 'relaxation', advanced: true } },
+      p_tolerance: { type: 'number', title: 'p tolerance', default: 1e-7, minimum: 1e-12, maximum: 1e-3, 'x-cfddesk': { group: 'linear_solvers', advanced: true } },
+      p_rel_tol: { type: 'number', title: 'p relative tolerance', default: 0.01, minimum: 0, maximum: 0.5, 'x-cfddesk': { group: 'linear_solvers', advanced: true } },
+      velocity_limit: { type: 'string', title: 'Velocity limit', enum: ['auto', 'off'], default: 'auto', 'x-cfddesk': { group: 'limiters', advanced: true } },
+    },
+  };
+
+  it("shows a value's caution under its field, only while that value is chosen", () => {
+    const { container, rerender } = render(<SchemaForm schema={numerics} formData={{ momentum_convection: 'second_order' }} onCommit={() => {}} hideFooter />);
+    expect(container.querySelector('[data-schema-caution]')).toBeNull();
+    rerender(<SchemaForm schema={numerics} formData={{ momentum_convection: 'first_order' }} onCommit={() => {}} hideFooter />);
+    expect(container.querySelector('[data-schema-caution="momentum_convection"]')?.textContent).toBe(FIRST);
+  });
+
+  it("puts Advanced settings' fields under their sub-heads (Schemes, Linear solvers, Limiters), the others first", () => {
+    const { container } = render(<SchemaForm schema={numerics} formData={{}} onCommit={() => {}} hideFooter />);
+    const heads = [...container.querySelectorAll('[data-schema-subhead]')].map((h) => h.textContent);
+    expect(heads).toEqual(['Schemes', 'Linear solvers', 'Limiters']);
+    const order = [...container.querySelectorAll('details.mesh-advanced [data-schema-key], details.mesh-advanced [data-schema-subhead]')].map(
+      (e) => e.getAttribute('data-schema-key') || `# ${e.textContent}`,
+    );
+    expect(order).toEqual(['relax_turbulence', '# Schemes', 'momentum_convection', '# Linear solvers', 'p_tolerance', 'p_rel_tol', '# Limiters', 'velocity_limit']);
+    // A form without those groups has no sub-head (the mesh panel's Advanced settings).
+    cleanup();
+    const plain = render(<SchemaForm schema={schema} formData={{ fineness: 5, hex: true }} onCommit={() => {}} hideFooter />);
+    expect(plain.container.querySelector('[data-schema-subhead]')).toBeNull();
+  });
+
+  it('boundsOnEdit: a saved value outside its range is shown as used as saved and kept on another edit', async () => {
+    const onCommit = vi.fn();
+    const { container } = render(<SchemaForm schema={numerics} formData={{ p_tolerance: 0.01, p_rel_tol: 0.01 }} onCommit={onCommit} hideFooter boundsOnEdit />);
+    expect(container.querySelector('[data-schema-saved-outside="p_tolerance"]')?.textContent).toBe('Saved as 1e-2, outside 1e-12 to 1e-3. It is used as saved.');
+    const rel = screen.getByLabelText('p relative tolerance');
+    fireEvent.change(rel, { target: { value: '0.05' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(onCommit).toHaveBeenLastCalledWith(expect.objectContaining({ p_rel_tol: 0.05, p_tolerance: 0.01 }));
+  });
+
+  it('boundsOnEdit: an edit outside its range is not saved, and the field says why', async () => {
+    const onCommit = vi.fn();
+    const { container } = render(<SchemaForm schema={numerics} formData={{ p_tolerance: 1e-7, p_rel_tol: 0.01 }} onCommit={onCommit} hideFooter boundsOnEdit />);
+    fireEvent.change(screen.getByLabelText('p relative tolerance'), { target: { value: '0.9' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(onCommit).toHaveBeenLastCalledWith(expect.objectContaining({ p_rel_tol: 0.01 }));
+    expect(container.querySelector('[data-schema-refused="p_rel_tol"]')?.textContent).toBe('Not saved: 0.9 is outside 0 to 0.5.');
+    fireEvent.change(screen.getByLabelText('p tolerance'), { target: { value: '0.5' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(container.querySelector('[data-schema-refused="p_tolerance"]')?.textContent).toBe('Not saved: 5e-1 is outside 1e-12 to 1e-3.');
+    // Back in range: saved, and the words go.
+    fireEvent.change(screen.getByLabelText('p relative tolerance'), { target: { value: '0.2' } });
+    fireEvent.change(screen.getByLabelText('p tolerance'), { target: { value: '1e-6' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(onCommit).toHaveBeenLastCalledWith(expect.objectContaining({ p_rel_tol: 0.2, p_tolerance: 1e-6 }));
+    expect(container.querySelector('[data-schema-refused]')).toBeNull();
+  });
+
+  it('a blank-able choice starts on "Not set", not on its first choice', () => {
+    const blank: RJSFSchema = {
+      type: 'object',
+      properties: { grad_limiter: { type: 'string', title: 'Gradient limiter', enum: ['strong', 'light'], default: null, 'x-cfddesk': { optional: true } } as RJSFSchema },
+    };
+    render(<SchemaForm schema={blank} formData={{ grad_limiter: null }} onCommit={() => {}} hideFooter />);
+    const select = screen.getByLabelText('Gradient limiter') as HTMLSelectElement;
+    expect(select.selectedOptions[0].textContent).toBe('Not set');
+    expect([...select.options].map((o) => o.textContent)).toEqual(['Not set', 'strong', 'light']);
+  });
+
+  it('without boundsOnEdit a form commits what is typed, as before', async () => {
+    const onCommit = vi.fn();
+    render(<SchemaForm schema={numerics} formData={{ p_rel_tol: 0.01 }} onCommit={onCommit} hideFooter />);
+    fireEvent.change(screen.getByLabelText('p relative tolerance'), { target: { value: '0.9' } });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(onCommit).toHaveBeenLastCalledWith(expect.objectContaining({ p_rel_tol: 0.9 }));
+  });
+});

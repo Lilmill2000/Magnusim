@@ -320,3 +320,25 @@ describe('helpers', () => {
     expect(Object.keys(shownSettingsSchema(settingsSchema as never, {}).properties || {})).toContain('gravity_magnitude');
   });
 });
+
+// RH3 (spec 5.5): Heat Transfer's preset note (its schemes include the energy equation's).
+describe('RH3: the preset note', () => {
+  it('counts the schemes the study sets over its preset, and "Use the preset for all" clears them', async () => {
+    const schemes = {
+      type: 'object',
+      properties: {
+        ...numericsSchema.properties,
+        energy_convection: { type: 'string', title: 'Energy convection', enum: ['first_order', 'second_order'], default: 'second_order', 'x-cfddesk': { group: 'schemes', advanced: true } },
+        grad_limiter: { type: 'string', title: 'Gradient limiter', enum: ['strong', 'light', 'none'], default: null, 'x-cfddesk': { group: 'schemes', advanced: true, optional: true } },
+      },
+    };
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    useProjectStore.setState({ registry: { ...reg, analysis: reg.analysis.map((a) => ({ ...a, numerics_schema: schemes })) } });
+    window.__CFD_STUDY_STATE__ = study({}, { energy_convection: 'first_order', grad_limiter: 'none' });
+    const view = renderPanel();
+    await waitFor(() => expect(view.container.querySelector('[data-study-preset-note="1"]')).not.toBeNull());
+    expect(view.container.querySelector('[data-study-preset-note="1"]')!.textContent).toMatch(/^.+, 2 terms changed · Use the preset for all$/);
+    fireEvent.click(screen.getByRole('button', { name: 'Use the preset for all' }));
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ energy_convection: null, grad_limiter: null }));
+  });
+});

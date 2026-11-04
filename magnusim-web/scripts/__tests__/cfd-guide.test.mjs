@@ -46,6 +46,11 @@ describe('the CFD guide in Magnusim', () => {
     assert.doesNotMatch(g, /\[RH\d\]/);
   });
 
+  it("rule 10 (RH3) ends with the first-order caution's sentence, with no lane tag", () => {
+    const rule10 = cfdGuideText().split('\n').find((l) => l.startsWith('10. '));
+    assert.ok(rule10.endsWith(' First-order schemes lower accuracy: fix the time step or mesh first.'), rule10);
+  });
+
   it('goes in the system blocks after the prompt, before the workspace notes, with one cache mark', () => {
     const req = buildRequest(conv({ text: 'Notes.', pluginName: 'Demo' }), [], settings);
     assert.equal(req.system.length, 3);

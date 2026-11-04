@@ -1,7 +1,8 @@
 /**
  * read_setup (Core host tools spec 4.5): a study's setup as its panels show it: the study
  * and its settings, materials, boundary conditions and their defaults, meshes, refinements,
- * runs and one run, the geometry with its bodies and faces (inside faces marked), the face
+ * runs and one run, a run's numerics as its case is written (RH3: "Numerics as written", parity
+ * row R35), the geometry with its bodies and faces (inside faces marked), the face
  * map to another geometry, lost faces, a linked design's state, and a plugin study. Every
  * answer is built from a whitelist of fields: no path ever reaches the model, and every
  * record carries its `rev` once records have one.
@@ -40,7 +41,7 @@ import {
 import type { HostCall } from '../host-call.ts';
 import { isLinked } from './project-summary.ts';
 
-export const READ_SETUP_WHATS = ['study', 'materials', 'bcs', 'meshes', 'mesh', 'refinements', 'runs', 'run', 'geometry', 'bodies', 'faces', 'face_map', 'lost_faces', 'linked', 'plugin_study'] as const;
+export const READ_SETUP_WHATS = ['study', 'materials', 'bcs', 'meshes', 'mesh', 'refinements', 'runs', 'run', 'numerics', 'geometry', 'bodies', 'faces', 'face_map', 'lost_faces', 'linked', 'plugin_study'] as const;
 export const FACES_PAGE = 200;
 /** How long a geometry's preview is waited for (it may still be made after an import). */
 const PREVIEW_WAIT_MS = 60_000;
@@ -137,7 +138,7 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
     name: 'read_setup',
     title: 'Read the study setup',
     description:
-      'Reads one part of a study\'s setup: study, materials, bcs, meshes, mesh, refinements, runs, run, geometry, bodies, faces (200 a page), face_map, lost_faces, linked, plugin_study. "" = this window\'s project, the shown study, the active record; other_id, page: "" and 0 when unused.',
+      'Reads one part of a study\'s setup: study, materials, bcs, meshes, mesh, refinements, runs, run, numerics (a run\'s, as written), geometry, bodies, faces (200 a page), face_map, lost_faces, linked, plugin_study. "" = this window\'s project, the shown study, the active record; other_id, page: "" and 0 when unused.',
     schema: objectSchema({
       project_id: S.id('"" = this window\'s project'),
       simulation_id: S.id('"" = the study shown'),
@@ -287,6 +288,8 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             if (!r || (id && r.id !== id && r.run_id !== id)) return fail('not_found', id ? `No run "${cleanText(id, 80)}" in this study.` : 'This study has no run yet.', "read_setup {what:'runs'} lists them.");
             return okData(runRow(r, str(doc.active_run_id), study ? /transient/i.test(str(study.time_dependency)) : null), `Run ${quoted(r.name)}`);
           }
+          case 'numerics':
+            return await numericsAnswer(d, rt, project, sim, id);
           default:
             return fail('invalid_input', `Unknown what "${cleanText(what, 40)}".`);
         }
@@ -295,6 +298,44 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
       }
     },
   });
+}
+
+/** Where the person sees what read_setup numerics answers. */
+export const NUMERICS_SHOWN_IN = 'Run panel → Numerics as written';
+
+/**
+ * read_setup {what:'numerics'} (RH3, parity row R35): what the run's case is written with, the
+ * rows the Run panel's "Numerics as written" shows, from the same route (run.precheck, its
+ * analysis's RunModel.check `numerics`): a draft's from its study, a started run's from what it
+ * started with (numerics_used). A run started before that was recorded has none: it says so, as
+ * the panel shows none.
+ */
+async function numericsAnswer(d: HostToolDeps, rt: ToolRunContext, project: string, sim: string, id: string): Promise<ToolOutcome> {
+  const o = via(rt, 'read_setup.numerics');
+  const doc = (await d.hostCall('run.status', { project_id: project, simulation_id: sim, run_id: id }, o)) as Record<string, unknown>;
+  const r = isRecord(doc.run) ? doc.run : null;
+  if (!r || (id && r.id !== id && r.run_id !== id)) return fail('not_found', id ? `No run "${cleanText(id, 80)}" in this study.` : 'This study has no run yet.', "read_setup {what:'runs'} lists them.");
+  const runId = str(r.id) || str(r.run_id);
+  const draft = !r.status || r.status === 'draft';
+  const used = isRecord(r.numerics_used) && isRecord(r.numerics_used.values);
+  if (!draft && !used) {
+    return okData(
+      { run_id: runId, name: text(r.name), from: null, rows: [], shown_in: NUMERICS_SHOWN_IN, note: `${quoted(r.name)} started before its numerics were recorded; read_setup {what:'study'} has the study's now.` },
+      `${quoted(r.name)}: no numerics recorded`,
+    );
+  }
+  const pc = (await d.hostCall('run.precheck', { project_id: project, simulation_id: sim, run_id: runId }, o)) as Record<string, unknown>;
+  if (pc.ok === false) return fail('app_error', `The run's numerics could not be read: ${cleanText(str(pc.error), 200)}`);
+  const rows = records(pc.numerics).map((x) => ({
+    group: text(x.group, 40),
+    label: text(x.label, 80),
+    value: text(x.value, 300),
+    ...(str(x.source) ? { source: text(x.source, 20) } : {}),
+  }));
+  return okData(
+    { run_id: runId, name: text(r.name), from: draft ? 'study' : 'numerics_used', rows, shown_in: NUMERICS_SHOWN_IN },
+    `${quoted(r.name)}: numerics as written (${rows.length} rows)`,
+  );
 }
 
 /**

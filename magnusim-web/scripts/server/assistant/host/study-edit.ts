@@ -4,6 +4,11 @@
  * open in this window only. A change to the settings of a study whose runs have results
  * asks first (those results no longer match).
  *
+ * A value with a caution (RH3, API 1.9: a first-order scheme, the velocity limit off) asks
+ * first too, and its card says the caution's words, as the study panel shows them under the
+ * field. A set value that is not used as the study is set (its depends_on, e.g. Relaxation
+ * turbulence while SIMPLEC is on) is saved, and the answer says so.
+ *
  * Route facts the tool works around: POST /api/simulation ignores `name` (a rename
  * follows); /api/simulation/activate answers 200 to an unknown id (checked first); the
  * page made no Run 1 on create, so the tool makes one when the study has none.
@@ -13,10 +18,12 @@ import { cleanText } from '../sanitize.ts';
 import { studyFields } from './catalog.ts';
 import {
   badValues,
+  cautionsOf,
   emitSync,
   failed,
   fail,
   hostTool,
+  inactiveDepends,
   isRecord,
   nest,
   objectSchema,
@@ -70,9 +77,19 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
     const studies = await studiesOf(d.hostCall, project, rt, 'study_edit');
     const sim = str(input.id) || a.ctx.simulationId || studies.activeId || '';
     if (!sim) return null;
+    // RH3: a value with a caution asks first, with its words (as the panel shows them).
+    let cautions: string[] = [];
+    if (input.action === 'set' && Array.isArray(input.values) && input.values.length) {
+      const s = studies.list.find((x) => x.id === sim);
+      const registry = (await d.hostCall('registry.get', {}, via(rt, 'study_edit'))) as Record<string, unknown>;
+      const fields = studyFields(registry, str(s?.analysis_type));
+      const parsed = parseValues(input.values, fields);
+      if (parsed.ok) cautions = cautionsOf(parsed.values, fields);
+    }
     const names = await runsWithResults(d.hostCall, rt, project, sim, 'study_edit');
-    if (!names.length) return null;
-    return { risk: 'destructive', note: resultsNote(names), detail: names.slice(0, 6).map((n) => ({ label: 'Has results', value: n })) };
+    if (!names.length) return cautions.length ? { risk: 'compute', note: cautions.join(' '), detail: [] } : null;
+    const note = [...cautions, resultsNote(names)].join(' ');
+    return { risk: 'destructive', note, detail: names.slice(0, 6).map((n) => ({ label: 'Has results', value: n })) };
   };
   return hostTool({
     name: 'study_edit',
@@ -207,7 +224,8 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
           case 'set': {
             const s = target();
             const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
-            const parsed = parseValues(input.values, studyFields(registry, str(s.analysis_type)));
+            const fields = studyFields(registry, str(s.analysis_type));
+            const parsed = parseValues(input.values, fields);
             if (!parsed.ok) return badValues(parsed.problems, `catalog {kind:'analyses', key:'${cleanText(str(s.analysis_type), 80)}'} lists the fields.`);
             if (!Object.keys(parsed.values).length) return fail('invalid_input', 'set needs at least one value.');
             try {
@@ -221,7 +239,11 @@ export function studyEditTool(d: HostToolDeps): HostToolDef {
             }
             sync(['study'], str(s.id), { study: [str(s.id)] });
             const keys = Object.keys(parsed.values);
-            return okDone({ done: `Set ${keys.join(', ')} of study ${quoted(s.name)}.`, ids: { study: str(s.id) } });
+            // RH3: a value saved that is not used as the study is set (its depends_on) says so.
+            const one = (await d.hostCall('simulation.get', { project_id: project, simulation_id: str(s.id) }, o)) as Record<string, unknown>;
+            const rec = isRecord(one.simulation) ? one.simulation : {};
+            const unused = inactiveDepends(parsed.values, rec, fields).map((u) => `${u.label} is saved but not used while ${u.why}.`);
+            return okDone({ done: [`Set ${keys.join(', ')} of study ${quoted(s.name)}.`, ...unused].join(' '), ids: { study: str(s.id) } });
           }
           case 'set_time': {
             const s = target();

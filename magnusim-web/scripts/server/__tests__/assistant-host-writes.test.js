@@ -156,6 +156,59 @@ describe('study_edit: every action, the exact routes and bodies', () => {
     assert.equal(await t().escalate(study({ action: 'rename' }), { ctx: rt().ctx, signal: new AbortController().signal, turn: 't' }), null);
     assert.match(t().gateText(study({ action: 'set' }), a).copy, /Run 1 has results/);
   });
+  // RH3 (spec 5.2, 5.7): a value with a caution asks first, its card in the panel's words; a value
+  // saved that its depends_on leaves unused says so.
+  const steadyNumerics = REGISTRY.analysis.find((x) => x.key === 'incompressible_steady').numerics_schema.properties;
+  const FIRST = steadyNumerics.momentum_convection['x-cfddesk'].caution.first_order;
+  const OFF = steadyNumerics.velocity_limit['x-cfddesk'].caution.off;
+  const ac = () => ({ ctx: rt().ctx, signal: new AbortController().signal, turn: 't' });
+  const noResults = () => {
+    app.over = (m, path) => (m === 'GET' && path === '/api/run/status' ? { ok: true, runs: [], run: null } : undefined);
+  };
+  it("RH3: a first-order scheme or the velocity limit off asks first (compute), the card in the caution's words", async () => {
+    fresh();
+    noResults();
+    const input = study({ action: 'set', id: 's2', values: [{ key: 'momentum_convection', value: '"first_order"' }] });
+    const a = await t().escalate(input, ac());
+    assert.deepEqual([a.risk, a.note], ['compute', FIRST]);
+    assert.equal(t().gateText(input, a).copy, FIRST);
+    const both = await t().escalate(study({ action: 'set', id: 's2', values: [{ key: 'turbulence_convection', value: '"first_order"' }, { key: 'velocity_limit', value: '"off"' }] }), ac());
+    assert.equal(both.note, `${FIRST} ${OFF}`);
+    // A value without a caution asks nothing; second order neither.
+    assert.equal(await t().escalate(study({ action: 'set', id: 's2', values: [{ key: 'p_max_iter', value: '300' }] }), ac()), null);
+    assert.equal(await t().escalate(study({ action: 'set', id: 's2', values: [{ key: 'momentum_convection', value: '"second_order"' }] }), ac()), null);
+  });
+  it('RH3: with results too, the card is the destructive one and says both', async () => {
+    fresh();
+    const a = await t().escalate(study({ action: 'set', id: 's1', values: [{ key: 'momentum_convection', value: '"first_order"' }] }), ac());
+    assert.equal(a.risk, 'destructive');
+    assert.equal(a.note, `${FIRST} Run 1 has results made with the old settings; they will no longer match these settings.`);
+  });
+  it('RH3: an edit outside its range is refused (bad_values); Relaxation turbulence while SIMPLEC is on is saved and said unused', async () => {
+    fresh();
+    let r = await sent(t(), study({ action: 'set', id: 's2', values: [{ key: 'p_rel_tol', value: '0.9' }, { key: 'p_tolerance', value: '0.01' }] }));
+    assert.equal(r.out.error.code, 'bad_values');
+    assert.match(r.out.error.message, /p_rel_tol: must be a number at most 0\.5/);
+    assert.match(r.out.error.message, /p_tolerance: must be a number at most 0\.001/);
+    assert.deepEqual(r.writes, []);
+    app.w.studies[1].simplec = true;
+    r = await sent(t(), study({ action: 'set', id: 's2', values: [{ key: 'relax_turbulence', value: '0.4' }] }));
+    assert.equal(r.out.ok, true, JSON.stringify(r.out));
+    assert.equal(r.out.data.done, 'Set relax_turbulence of study "Climb". Relaxation turbulence is saved but not used while SIMPLEC is on.');
+    assert.deepEqual([r.writes[0].path, r.writes[0].body.relax_turbulence], ['/api/simulation/update', 0.4]);
+    app.w.studies[1].simplec = false;
+    r = await sent(t(), study({ action: 'set', id: 's2', values: [{ key: 'relax_turbulence', value: '0.4' }] }));
+    assert.equal(r.out.data.done, 'Set relax_turbulence of study "Climb".');
+  });
+  it('RH3: fieldInfo says what the panel shows of a field: advanced, blank = calculated, depends_on, caution', async () => {
+    const { flattenSchema, fieldInfo } = await import('../assistant/host/common.ts');
+    const byKey = Object.fromEntries(flattenSchema(REGISTRY.analysis.find((x) => x.key === 'incompressible_steady').numerics_schema).map((f) => [f.key, fieldInfo(f)]));
+    assert.equal(byKey.grad_limiter.advanced, true);
+    assert.equal(byKey.grad_limiter.optional, 'null = calculated');
+    assert.deepEqual(byKey.relax_turbulence.depends_on, { simplec: false });
+    assert.deepEqual(byKey.momentum_convection.caution, { first_order: FIRST });
+    assert.equal(byKey.relax_p.advanced, undefined);
+  });
 });
 
 // ------------------------------------------------------------------ setup_edit

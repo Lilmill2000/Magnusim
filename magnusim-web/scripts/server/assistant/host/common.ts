@@ -301,6 +301,14 @@ export interface Field {
   min_items: number | null;
   max_items: number | null;
   description: string;
+  /** RH3: under the panel's Advanced settings (x-cfddesk.advanced). */
+  advanced?: boolean;
+  /** RH3: blank (null) is a real value: calculated, as the analysis has it (x-cfddesk.optional). */
+  optional?: boolean;
+  /** RH3: used only while these other fields have these values (x-cfddesk.depends_on). */
+  depends_on?: Record<string, unknown> | null;
+  /** RH3 (API 1.9): a caution per value (x-cfddesk.caution): setting that value asks first. */
+  caution?: Record<string, string> | null;
 }
 
 /** A JSON schema's fields, nested object properties as dotted keys (`advanced.mesh_engine`). */
@@ -331,7 +339,59 @@ export function flattenSchema(schema: unknown, prefix = '', depth = 0): Field[] 
       min_items: num(raw.minItems),
       max_items: num(raw.maxItems),
       description: cleanText(raw.description ?? '', 160),
+      ...(x.advanced === true ? { advanced: true } : {}),
+      ...(x.optional === true ? { optional: true } : {}),
+      ...(isRecord(x.depends_on) ? { depends_on: { ...x.depends_on } } : {}),
+      ...(isRecord(x.caution) ? { caution: cautionTable(x.caution) } : {}),
     });
+  }
+  return out;
+}
+
+/** A field's x-cfddesk.caution, cleaned: {value: words}. */
+function cautionTable(raw: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw).slice(0, 16)) if (typeof v === 'string' && v.trim()) out[cleanText(k, 64)] = cleanText(v, 300);
+  return out;
+}
+
+/**
+ * RH3 (API 1.9): the cautions an edit's values set (a field's x-cfddesk.caution for the value
+ * given), in field order, each once: the words its Allow card says. A study or run edit that sets
+ * one asks first.
+ */
+export function cautionsOf(values: Record<string, unknown>, fields: readonly Field[]): string[] {
+  const out: string[] = [];
+  for (const f of fields) {
+    if (!f.caution || !Object.hasOwn(values, f.key)) continue;
+    const v = values[f.key];
+    const words = v === null || v === undefined ? '' : f.caution[String(v)];
+    if (words && !out.includes(words)) out.push(words);
+  }
+  return out;
+}
+
+/**
+ * RH3: the fields an edit sets whose depends_on is not met by the record with the edit over it
+ * ("saved but not used while SIMPLEC is on"): {key, label, why}. `labelOf` names the other field
+ * (its schema title) and `valueWords` its value ("SIMPLEC is on").
+ */
+export function inactiveDepends(values: Record<string, unknown>, record: Record<string, unknown>, fields: readonly Field[]): Array<{ key: string; label: string; why: string }> {
+  const byKey = new Map(fields.map((f) => [f.key, f] as const));
+  const merged = { ...record, ...values };
+  const out: Array<{ key: string; label: string; why: string }> = [];
+  for (const key of Object.keys(values)) {
+    const f = byKey.get(key);
+    if (!f || !f.depends_on || values[key] === null) continue;
+    for (const [dep, want] of Object.entries(f.depends_on)) {
+      const now = merged[dep];
+      if (now === want || (now == null && want === false)) continue;
+      const other = byKey.get(dep);
+      const name = other ? other.label.replace(/\s*\(.*\)$/, '') : dep;
+      const why = typeof want === 'boolean' ? `${name} is ${now ? 'on' : 'off'}` : `${name} is not ${JSON.stringify(want)}`;
+      out.push({ key, label: f.label, why });
+      break;
+    }
   }
   return out;
 }
@@ -350,6 +410,12 @@ export function fieldInfo(f: Field): Record<string, unknown> {
     ...(f.min_items !== null ? { min_items: f.min_items } : {}),
     ...(f.max_items !== null ? { max_items: f.max_items } : {}),
     ...(f.description ? { description: f.description } : {}),
+    // RH3: what the panel shows of it: under Advanced settings, blank = calculated, used only
+    // with other values, and the values that ask first (their caution).
+    ...(f.advanced ? { advanced: true } : {}),
+    ...(f.optional ? { optional: 'null = calculated' } : {}),
+    ...(f.depends_on ? { depends_on: f.depends_on } : {}),
+    ...(f.caution ? { caution: f.caution } : {}),
   };
 }
 

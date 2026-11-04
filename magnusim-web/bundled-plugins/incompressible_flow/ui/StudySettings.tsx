@@ -1,8 +1,9 @@
 /**
  * The study panel rows between Analysis and the foot: Turbulence model, Time
- * dependency, Algorithm, the hint, and the steady SIMPLE numerics (a transient
- * study says where its time step and correctors live instead). Every value
- * here reaches the written case (incompressible_flow.physics). The settings
+ * dependency, Algorithm, the hint, and the numerics: a steady study's SIMPLE ones,
+ * and (RH3) both modes' schemes, linear solvers and velocity limit under Advanced
+ * settings (a transient study says where its time step and correctors live). Every
+ * value here reaches the written case (incompressible_flow.physics). The settings
  * schema's "reference" group is drawn as its own section (Reference values).
  */
 import type { RJSFSchema } from '@rjsf/utils';
@@ -61,6 +62,73 @@ export function splitReferenceSchema(schema: RJSFSchema): { settings: RJSFSchema
   return { settings: { ...schema, properties: kept, ...(required ? { required } : {}) }, reference };
 }
 
+/** A blank-able field (x-cfddesk.optional) the form left without a value (set back to "Not set"): null. */
+export function blanked(values: Record<string, unknown>, schema: RJSFSchema): Record<string, unknown> {
+  const props = (schema.properties || {}) as Record<string, { 'x-cfddesk'?: { optional?: boolean } }>;
+  return Object.fromEntries(Object.entries(props).filter(([k, p]) => p['x-cfddesk']?.optional && values[k] === undefined).map(([k]) => [k, null]));
+}
+
+/** A saved value and a form's value are the same (blank: undefined, null or ''). */
+export function sameValue(a: unknown, b: unknown): boolean {
+  const blank = (v: unknown) => v === undefined || v === null || v === '';
+  if (blank(a) && blank(b)) return true;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * RH3: the scheme settings (x-cfddesk.group "schemes") the study sets itself, over its Numerics
+ * preset: a blank-able one with a value, another one away from its default.
+ */
+export function schemesChanged(record: Record<string, unknown>, schema: RJSFSchema): string[] {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { 'x-cfddesk'?: { group?: string; optional?: boolean } }>;
+  const out: string[] = [];
+  for (const [key, prop] of Object.entries(props)) {
+    const x = prop['x-cfddesk'] || {};
+    if (x.group !== 'schemes') continue;
+    const v = record[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (x.optional || v !== prop.default) out.push(key);
+  }
+  return out;
+}
+
+/**
+ * RH3: the line under the numerics when a study's schemes depart from its preset: "Robust, 2 terms
+ * changed · Use the preset for all" (which clears them: the study then follows its preset).
+ */
+export function PresetNote({
+  record,
+  schema,
+  save,
+}: {
+  record: Record<string, unknown>;
+  schema: RJSFSchema;
+  save: (patch: Record<string, unknown>) => unknown;
+}) {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { enum?: unknown[]; 'x-cfddesk'?: { enum_labels?: string[] } }>;
+  const preset = props.numerics_preset;
+  if (!preset) return null;
+  const changed = schemesChanged(record, schema);
+  if (!changed.length) return null;
+  const value = String(record.numerics_preset || preset.default || '');
+  const labels = preset['x-cfddesk']?.enum_labels || [];
+  const i = Array.isArray(preset.enum) ? preset.enum.indexOf(value) : -1;
+  const name = (i >= 0 && labels[i]) || value;
+  return (
+    <p className="mat-assign-hint sim-def-hint" data-study-preset-note="1">
+      {`${name}, ${changed.length} term${changed.length === 1 ? '' : 's'} changed · `}
+      <button
+        type="button"
+        className="mat-clear-link"
+        data-study-preset-reset="1"
+        onClick={() => void save(Object.fromEntries(changed.map((k) => [k, null])))}
+      >
+        Use the preset for all
+      </button>
+    </p>
+  );
+}
+
 /** SIMPLEC's own relaxation, used in place of the study's (physics.SIMPLEC_RELAX_U / _P). */
 export const SIMPLEC_RELAX_U = 0.9;
 export const SIMPLEC_RELAX_P = 1;
@@ -82,7 +150,8 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
     ...(turbKey ? { turbulence_model: turbKey } : {}),
   };
   const hasSettings = Object.keys(settingsSchema.properties || {}).length > 0;
-  const hasNumerics = !transient && Object.keys(numericsSchema.properties || {}).length > 0;
+  // RH3: a transient study has numerics too (its schemes, linear solvers and velocity limit).
+  const hasNumerics = Object.keys(numericsSchema.properties || {}).length > 0;
   // SIMPLEC hides the relaxation rows (their depends_on, read from the saved
   // study like this note) and says what it uses instead.
   const simplecOn = hasNumerics && 'simplec' in (numericsSchema.properties || {}) && record.simplec === true;
@@ -137,13 +206,16 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
           schema={numericsSchema}
           formData={numericsData(record, numericsSchema, turbKey)}
           hideFooter
+          boundsOnEdit
           onCommit={(values) => {
-            const patch = tools.pickSchemaValues(values, numericsSchema);
-            const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => record[k] !== v));
+            const patch = { ...blanked(values, numericsSchema), ...tools.pickSchemaValues(values, numericsSchema) };
+            // Only what changed is saved: a saved value (one outside its range included) stays as it is.
+            const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !sameValue(record[k], v)));
             if (Object.keys(changed).length) void save(changed);
           }}
         />
       ) : null}
+      {hasNumerics ? <PresetNote record={record} schema={numericsSchema} save={save} /> : null}
       {simplecOn ? (
         <p className="mat-assign-hint sim-def-hint" data-study-simplec-note="1">
           SIMPLEC relaxes velocity and turbulence by {simplecU}
@@ -151,9 +223,9 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
           {SIMPLEC_RELAX_P}), in place of the study&apos;s relaxation.
         </p>
       ) : null}
-      {hasNumerics ? null : transient ? (
+      {transient ? (
         <p className="mat-assign-hint sim-def-hint" data-study-transient-note="1">
-          Transient runs take their time step, time scheme and PIMPLE correctors from each run&apos;s panel.
+          The time step and PIMPLE correctors are on each run&apos;s panel.
         </p>
       ) : null}
       {reference ? <ReferenceValues record={record} save={save} /> : null}
