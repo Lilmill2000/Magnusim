@@ -7,6 +7,8 @@
 //   npm run test:validation -- --mesh-only                mesh and record the mesh facts only (results-probe/, no report)
 //   npm run test:validation -- --case c1 --variant standard --mesh '{"hex_element_core":false}'
 //                                                         mesh settings changed by hand (results-probe/, no report)
+//   npm run test:validation -- --case c1 --variant standard --study '{"grad_limiter":"none"}'
+//                                                         study settings changed by hand (results-probe/, no report)
 //   npm run test:validation -- --no-report                skip the report
 // Anything else goes to Playwright (e.g. --reporter=line). MAGNUSIM_E2E_PORT picks the app's port.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -34,14 +36,15 @@ export function parseValidationArgs(argv, base = process.env) {
     else if (name === '--coarse') env.MAGNUSIM_VALIDATION_COARSE = '1';
     else if (name === '--mesh-only') env.MAGNUSIM_VALIDATION_MESH_ONLY = '1';
     else if (name === '--mesh') env.MAGNUSIM_VALIDATION_MESH = String(value());
+    else if (name === '--study') env.MAGNUSIM_VALIDATION_STUDY = String(value());
     else if (name === '--no-report') report = false;
     else passthrough.push(a);
   }
   if (cases.length) env.MAGNUSIM_VALIDATION_CASES = cases.join(',');
   if (variants.length) env.MAGNUSIM_VALIDATION_VARIANTS = variants.join(',');
-  // Coarse runs go to results-coarse/, mesh-only runs and changed mesh settings to
-  // results-probe/: nothing the report reads, so no report after them.
-  if (env.MAGNUSIM_VALIDATION_COARSE === '1' || env.MAGNUSIM_VALIDATION_MESH_ONLY === '1' || env.MAGNUSIM_VALIDATION_MESH) report = false;
+  // Coarse runs go to results-coarse/, mesh-only runs and changed mesh or study settings
+  // to results-probe/: nothing the report reads, so no report after them.
+  if (env.MAGNUSIM_VALIDATION_COARSE === '1' || env.MAGNUSIM_VALIDATION_MESH_ONLY === '1' || env.MAGNUSIM_VALIDATION_MESH || env.MAGNUSIM_VALIDATION_STUDY) report = false;
   const args = [join(WEB_ROOT, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', '-c', 'validation/playwright.config.js', ...passthrough];
   return { env, args, report };
 }

@@ -157,9 +157,11 @@ NOTES = (
     "read a few per cent apart. Its band is wide (±15 %) for that reason and for the 99 % definition.",
     "On Standard the friction factor reads well above the exact value. The wall shear stress the run itself saved "
     "(shown with each run) carries the same excess, and the cell values run faster than the parabola near the "
-    "wall and slower at mid-radius, so the pressure drop is the solution's, not an artefact of reading it. The "
-    "cause in Standard's mesh is under investigation (an app gap), and the turbulent pipe's Standard runs wait "
-    "for it.",
+    "wall and slower at mid-radius, so the pressure drop is the solution's, not an artefact of reading it. It is "
+    "under investigation (an app gap), and the turbulent pipe's Standard runs wait for it. Probes that change one "
+    "setting at a time point at the momentum convection scheme on Standard's cells, which are not aligned with "
+    "the flow: first-order convection raises the friction much further, a finer mesh lowers it only slowly, and "
+    "neither the gradient limiter, the hex core nor the wall layers account for it.",
 )
 
 # A steady run that stops at its iteration limit counts as settled only when these histories
@@ -588,14 +590,15 @@ def draw(kind: str, result: dict[str, Any], ax: Any) -> None:
         ax.plot(rr, [2 * ub * (1 - r * r) for r in rr], color=INK, linestyle="--", linewidth=1.2, label="2 U_b (1 - (r/R)²)")
         ax.set_xlabel("r / R (the line along y at z = 0; cells at ±r by the sign of y)")
         ax.set_ylabel("U (m/s)")
-        ax.legend(loc="lower center")
+        ax.set_ylim(-0.05, 2.55)
+        ax.legend(loc="upper left", fontsize=8)
         bits = []
         if shown.get("profile_rms_cells_over_ub") is not None:
             bits.append(f"cells: RMS difference {shown['profile_rms_cells_over_ub']:.4f} U_b")
         if shown.get("profile_rms_line_over_ub") is not None:
             bits.append(f"line: RMS difference {shown['profile_rms_line_over_ub']:.4f} U_b")
         if bits:
-            note(ax, "; ".join(bits))
+            note(ax, "\n".join(bits))
     elif kind == "residuals":
         h = s["residuals"]
         for i, key in enumerate(k for k in h if k != "t"):

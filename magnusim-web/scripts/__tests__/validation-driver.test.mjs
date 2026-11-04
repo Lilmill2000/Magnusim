@@ -91,6 +91,9 @@ test('npm run test:validation: its options become the suite\'s gate and knobs', 
   const probe = parseValidationArgs(['--case', 'c1', '--mesh', '{"hex_element_core":false}']);
   assert.equal(probe.env.MAGNUSIM_VALIDATION_MESH, '{"hex_element_core":false}');
   assert.equal(probe.report, false);
+  const studyProbe = parseValidationArgs(['--study', '{"grad_limiter":"none"}']);
+  assert.equal(studyProbe.env.MAGNUSIM_VALIDATION_STUDY, '{"grad_limiter":"none"}');
+  assert.equal(studyProbe.report, false);
   assert.equal(parseValidationArgs(['--no-report']).report, false);
   // WSL turned off by hand stays off (the suite then fails: it needs WSL).
   assert.equal(parseValidationArgs([], { MAGNUSIM_E2E_WSL: '0' }).env.MAGNUSIM_E2E_WSL, '0');

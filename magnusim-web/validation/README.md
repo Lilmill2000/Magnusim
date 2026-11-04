@@ -12,6 +12,8 @@ npm run test:validation -- --coarse                       # coarse runs into res
 npm run test:validation -- --case c1 --mesh-only          # a mesh probe: mesh and its facts only (results-probe/)
 npm run test:validation -- --case c1 --variant standard --mesh '{"hex_element_core":false}'
                                                           # mesh settings changed by hand (results-probe/)
+npm run test:validation -- --case c1 --variant standard --study '{"grad_limiter":"none"}'
+                                                          # study settings changed by hand (results-probe/)
 npm run validation:report                                 # VALIDATION.md and docs/validation/ from results/
 npm run validation:report -- --check                      # exit 1 when they are out of date
 ```
@@ -32,7 +34,7 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    custom size's level, the layer stack against the wall cell and a rough cell count. The
    driver refuses to Generate a plan estimated over `MAGNUSIM_VALIDATION_MAX_CELLS` (2 000 000).
    Only a full run of the case's own settings goes to `results/`; a coarse run goes to
-   `results-coarse/`, a mesh-only run or one with mesh settings changed by hand to
+   `results-coarse/`, a mesh-only run or one with mesh or study settings changed by hand to
    `results-probe/`, and the report never reads either.
 2. **Drive** (`e2e/driver.mjs`, from the opt-in spec `e2e/validation.spec.js`): the plan sent
    to a real app server over the routes the page and the Assistant use: project, STEP upload,
@@ -112,9 +114,17 @@ App gaps found so far, and what they block:
   thin axis are smaller, so on a thin part the cells come out finer and flatter than asked
   (`mesh_plan.py` shows it before Generate).
 - **No profile inlet** (case 4): the step needs an upstream channel.
-- **Standard's laminar friction** (case 1): the friction factor on Standard reads about 16 %
-  high and the wall shear stress the run saved carries the same excess, so it is the
-  solution, not the reading. It is under investigation; case 2's Standard runs wait for it.
+- **Standard's laminar friction** (case 1): the friction factor on Standard reads well above
+  the exact value and the wall shear stress the run saved carries the same excess, so it is
+  the solution, not the reading. Probes changing one setting at a time
+  (`--mesh '{"hex_element_core":false}'`, `--mesh '{"automatic_boundary_layers":false}'`,
+  `--mesh '{"fineness":8}'`, `--study '{"grad_limiter":"none"}'`,
+  `--study '{"momentum_convection":"first_order"}'` and `"second_order_limited"`) point at
+  the momentum convection scheme's numerical diffusion on Standard's cells, which are not
+  aligned with the flow (a cell Péclet number U h / nu of order 10 here): first-order
+  convection makes it much worse, a finer mesh helps only slowly, and the gradient limiter,
+  the hex core and the layers do not explain it. Under investigation; case 2's Standard runs
+  wait for it.
 
 Mesh probes first: `--mesh-only` for each new case (into `results-probe/`), with its plan's
 estimate checked, before any solve.

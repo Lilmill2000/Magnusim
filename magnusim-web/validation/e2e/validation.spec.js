@@ -12,6 +12,7 @@
 //   MAGNUSIM_VALIDATION_COARSE=1           each case's coarse settings, into results-coarse/ (never committed)
 //   MAGNUSIM_VALIDATION_MESH_ONLY=1        mesh and record the mesh facts, no solve (results-probe/)
 //   MAGNUSIM_VALIDATION_MESH='{"..."}'     mesh settings merged into each case's (a probe: results-probe/)
+//   MAGNUSIM_VALIDATION_STUDY='{"..."}'    study settings merged into each case's (a probe: results-probe/)
 //   MAGNUSIM_VALIDATION_MAX_CELLS=2000000  refuse to Generate a plan whose estimated mesh is bigger
 // Only a full run writes under results/, the one folder the report reads; the plan command
 // picks the folder (magnusim_validation/paths.py results_root) and the test checks it.
@@ -32,6 +33,7 @@ const WSL = process.env.MAGNUSIM_E2E_WSL === '1';
 const COARSE = process.env.MAGNUSIM_VALIDATION_COARSE === '1';
 const MESH_ONLY = process.env.MAGNUSIM_VALIDATION_MESH_ONLY === '1';
 const MESH_SETTINGS = String(process.env.MAGNUSIM_VALIDATION_MESH || '').trim();
+const STUDY_SETTINGS = String(process.env.MAGNUSIM_VALIDATION_STUDY || '').trim();
 const CORES = Number(process.env.MAGNUSIM_VALIDATION_CORES) || 8;
 const MAX_CELLS = Number(process.env.MAGNUSIM_VALIDATION_MAX_CELLS) || 2_000_000;
 const listOf = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -73,12 +75,14 @@ if (!GATE) {
       const planned = py([
         'plan', r.case, r.variant, '--cores', String(CORES),
         ...(COARSE ? ['--coarse'] : []), ...(MESH_ONLY ? ['--mesh-only'] : []), ...(MESH_SETTINGS ? ['--mesh-settings', MESH_SETTINGS] : []),
+        ...(STUDY_SETTINGS ? ['--study-settings', STUDY_SETTINGS] : []),
       ]);
       expect(planned.ok).toBe(true);
       const dir = planned.dir;
       // Only a full run of the case's own settings may write where the report reads.
       const reported = resolve(VALIDATION, 'results') + sep;
-      expect(resolve(dir).startsWith(reported), `${dir}: a coarse, mesh-only or changed-settings run went to results/`).toBe(!(COARSE || MESH_ONLY || MESH_SETTINGS));
+      const probe = COARSE || MESH_ONLY || MESH_SETTINGS || STUDY_SETTINGS;
+      expect(resolve(dir).startsWith(reported), `${dir}: a coarse, mesh-only or changed-settings run went to results/`).toBe(!probe);
       for (const w of planned.estimate_warnings || []) console.log(`PLAN ${r.case}/${r.variant}: ${w}`);
       // A run starts clean: the answers of an earlier run never mix with this one's.
       for (const old of ['raw', 'driver.json', 'result.json']) rmSync(join(dir, old), { recursive: true, force: true });

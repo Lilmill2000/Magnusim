@@ -265,6 +265,43 @@
  },
  "extract": [
   {
+   "key": "cells_window",
+   "kind": "cells",
+   "fields": [
+    "U"
+   ],
+   "box_m": [
+    [
+     0.2,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.26,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
+   "key": "wall_shear",
+   "kind": "patch",
+   "patch": "pipe_wall",
+   "field": "wallShearStress",
+   "box_m": [
+    [
+     0.2,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.26,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
    "key": "p_axis",
    "kind": "line",
    "field": "p",

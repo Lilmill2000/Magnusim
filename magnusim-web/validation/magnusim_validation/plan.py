@@ -6,9 +6,9 @@ time stamp is fixed), so a change in it shows in a diff. The driver adds the run
 to the project's title. A Hex-dominant plan also carries what its mesh will be
 (``mesh.estimate``, mesh_plan.py), worked out with the mesher's own sizing functions.
 
-Mesh settings given on the command line (``--mesh-settings``, a development probe) are merged
-into the case's own and recorded under ``overrides``; such a plan's runs go to
-``results-probe/`` and never into the report.
+Mesh or study settings given on the command line (``--mesh-settings``, ``--study-settings``: a
+development probe) are merged into the case's own and recorded under ``overrides``; such a
+plan's runs go to ``results-probe/`` and never into the report.
 """
 
 from __future__ import annotations
@@ -55,7 +55,8 @@ def merge_settings(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]
 
 
 def make_plan(case: ModuleType, variant: str, out_dir: Path, *, coarse: bool = False, cores: int = 4,
-              mesh_settings: dict[str, Any] | None = None) -> dict[str, Any]:
+              mesh_settings: dict[str, Any] | None = None,
+              study_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the case's geometry in ``out_dir`` and write ``plan.json`` there; return the plan."""
     if variant not in case.VARIANTS:
         raise ValueError(f"{case.ID} has no variant {variant!r} (has: {', '.join(case.VARIANTS)})")
@@ -76,6 +77,9 @@ def make_plan(case: ModuleType, variant: str, out_dir: Path, *, coarse: bool = F
                        for r in body["mesh"].get("refinements") or [])
         if body["mesh"]["settings"].get("automatic_boundary_layers") is False and not inflated:
             body["mesh"].setdefault("expect", {})["layers"] = False
+    if study_settings:
+        body["study"]["settings"] = merge_settings(body["study"]["settings"], study_settings)
+        overrides["study_settings"] = study_settings
     plan: dict[str, Any] = {
         "schema": SCHEMA_PLAN,
         "case": case.ID,

@@ -160,6 +160,10 @@ def test_mesh_settings_given_by_hand_are_merged_recorded_and_kept_out_of_results
     assert p["mesh"]["settings"]["advanced"] == {"mesh_engine": "standard", "x": 1}
     assert p["overrides"] == {"mesh_settings": {"hex_element_core": False, "advanced": {"x": 1}}}
     assert p["mesh"]["expect"]["layers"] is True
+    study = make_plan(c1, "standard", tmp_path / "st", cores=4, study_settings={"grad_limiter": "none"})
+    assert study["study"]["settings"]["grad_limiter"] == "none"
+    assert study["study"]["settings"]["numerics_preset"] == "accurate"
+    assert study["overrides"] == {"study_settings": {"grad_limiter": "none"}}
     # Layers turned off by hand: the probe expects none.
     off = make_plan(c1, "standard", tmp_path / "off", cores=4, mesh_settings={"automatic_boundary_layers": False})
     assert off["mesh"]["expect"]["layers"] is False

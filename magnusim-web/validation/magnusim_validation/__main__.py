@@ -2,8 +2,8 @@
 
     list                                    the cases and their variants, as JSON
     plan <case> <variant> [--out DIR] [--coarse] [--cores N] [--mesh-only] [--mesh-settings JSON]
-                                            geometry.step and plan.json for one run (a mesh-only
-                                            run or changed mesh settings: results-probe/)
+         [--study-settings JSON]            geometry.step and plan.json for one run (a mesh-only
+                                            run or changed settings: results-probe/)
     evaluate <run dir> [--failed WHY]       result.json from the driver's raw answers
     report [--check]                        VALIDATION.md and the public page (docs/validation/)
                                             from the committed results; --check exits 1 when
@@ -39,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     pp.add_argument("--cores", type=int, default=4)
     pp.add_argument("--mesh-only", action="store_true")
     pp.add_argument("--mesh-settings", default="", help="JSON merged into the case's mesh settings (a probe)")
+    pp.add_argument("--study-settings", default="", help="JSON merged into the case's study settings (a probe)")
     pe = sub.add_parser("evaluate")
     pe.add_argument("dir", type=Path)
     pe.add_argument("--failed", default="")
@@ -55,10 +56,14 @@ def main(argv: list[str] | None = None) -> int:
 
         case = cases.get(args.case)
         over = json.loads(args.mesh_settings) if args.mesh_settings else None
-        if over is not None and not isinstance(over, dict):
-            p.error("--mesh-settings takes a JSON object")
-        out_dir = args.out or _run_dir(case.ID, args.variant, args.coarse, args.mesh_only or bool(over))
-        plan = make_plan(case, args.variant, out_dir, coarse=args.coarse, cores=args.cores, mesh_settings=over)
+        study_over = json.loads(args.study_settings) if args.study_settings else None
+        for name, v in (("--mesh-settings", over), ("--study-settings", study_over)):
+            if v is not None and not isinstance(v, dict):
+                p.error(f"{name} takes a JSON object")
+        probe = args.mesh_only or bool(over) or bool(study_over)
+        out_dir = args.out or _run_dir(case.ID, args.variant, args.coarse, probe)
+        plan = make_plan(case, args.variant, out_dir, coarse=args.coarse, cores=args.cores, mesh_settings=over,
+                         study_settings=study_over)
         est = (plan.get("mesh") or {}).get("estimate") or {}
         print(json.dumps({"ok": True, "dir": str(out_dir), "case": plan["case"], "variant": plan["variant"],
                           "estimate_cells": est.get("n_cells"), "estimate_warnings": est.get("warnings") or []}))

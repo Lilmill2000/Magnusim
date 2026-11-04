@@ -35,7 +35,7 @@ the report) are tested by pytest (`validation/tests`, in `npm run test:py` and C
 | Command | What it runs |
 |---|---|
 | `npm run test:validation` | Every case and variant at 8 cores, one run at a time under the WSL test lock, then the report. |
-| `npm run test:validation -- --case c1 --variant standard --cores 4` | One case and mesher. `--coarse` makes quick coarse runs into `validation/results-coarse/` (never committed); `--mesh-only` meshes and records the mesh facts only, and `--mesh '{"hex_element_core":false}'` changes the case's mesh settings by hand: both are probes, into `validation/results-probe/` (never committed, never reported); `--no-report` skips the report. |
+| `npm run test:validation -- --case c1 --variant standard --cores 4` | One case and mesher. `--coarse` makes quick coarse runs into `validation/results-coarse/` (never committed); `--mesh-only` meshes and records the mesh facts only, and `--mesh '{"hex_element_core":false}'` or `--study '{"grad_limiter":"none"}'` change the case's mesh or study settings by hand: these are probes, into `validation/results-probe/` (never committed, never reported); `--no-report` skips the report. |
 | `npm run validation:report` | `validation/VALIDATION.md` and the public page (`docs/validation/` at the repository's root) from the committed results; `-- --check` exits 1 when they are out of date (pytest checks this too). |
 
 Its app server loads only the bundled plugins (not the test plugins the core suite loads).

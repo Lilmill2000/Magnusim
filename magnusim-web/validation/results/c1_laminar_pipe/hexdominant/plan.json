@@ -179,6 +179,47 @@
     20000,
     400000
    ]
+  },
+  "estimate": {
+   "mesher": "snappy_hexdominant",
+   "fineness": 6,
+   "bounds_mm": [
+    0.0,
+    300.0,
+    -10.0,
+    10.0,
+    -10.0,
+    10.0
+   ],
+   "block": [
+    67,
+    8,
+    12
+   ],
+   "base_cell_mm": [
+    5.9552,
+    3.325,
+    2.2167
+   ],
+   "walls_level": 2,
+   "wall_cell_mm": [
+    1.4888,
+    0.8313,
+    0.5542
+   ],
+   "custom_sizes": [],
+   "layers": [
+    {
+     "name": "Wall layers",
+     "n_layers": 4,
+     "stack_mm": 1.0,
+     "smallest_wall_cell_mm": 0.5542,
+     "stack_over_smallest_cell": 1.805
+    }
+   ],
+   "n_cells": 163000,
+   "n_cells_note": "an order of magnitude (1.3 to 1.4 times case 1's real meshes), not a prediction",
+   "warnings": []
   }
  },
  "run": {
@@ -275,6 +316,43 @@
   ]
  },
  "extract": [
+  {
+   "key": "cells_window",
+   "kind": "cells",
+   "fields": [
+    "U"
+   ],
+   "box_m": [
+    [
+     0.2,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.26,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
+   "key": "wall_shear",
+   "kind": "patch",
+   "patch": "pipe_wall",
+   "field": "wallShearStress",
+   "box_m": [
+    [
+     0.2,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.26,
+     0.012,
+     0.012
+    ]
+   ]
+  },
   {
    "key": "p_axis",
    "kind": "line",
