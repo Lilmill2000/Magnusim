@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from magnusim_sdk.mesh_facts import mesher_of
+from magnusim_sdk.numerics_settings import RUN_KEYS, clamp_edit, run_value
 
 TimeScheme = Literal["Euler", "backward"]
 TimeStepMode = Literal["adjustable", "fixed"]
@@ -43,6 +44,11 @@ TRANSIENT_DEFAULTS: dict[str, Any] = {
     "n_non_orth_correctors": 0,
     # Time averages (UMean, pMean) start here, in seconds: 0 = from the start.
     "average_from": 0.0,
+    # RH3: the PIMPLE outer loops' relaxation and tolerance (only with 2 or more outer
+    # correctors). None = as today: 0.3 and 0.7, and every outer corrector on every step.
+    "outer_relax_p": None,
+    "outer_relax_eq": None,
+    "outer_tolerance": None,
 }
 
 
@@ -110,6 +116,10 @@ class TransientControl:
     estimate: Mapping[str, Any] | None = None
     # Time averages (fieldAverage) start here, in seconds (0 = from the start).
     average_from: float = 0.0
+    # RH3 (None = as today; only with 2 or more outer correctors).
+    outer_relax_p: float | None = None
+    outer_relax_eq: float | None = None
+    outer_tolerance: float | None = None
 
     @classmethod
     def from_web(cls, d: dict | None, ctx: dict | None = None) -> TransientControl:
@@ -118,8 +128,13 @@ class TransientControl:
         return resolve_transient_control(t, ctx or {})
 
 
-def normalize_transient(partial: dict | None, base: dict | None = None) -> dict[str, Any]:
-    """Coerce a partial / stored transient block (w30 normalizeTransient)."""
+def normalize_transient(partial: dict | None, base: dict | None = None, edited: Any = None) -> dict[str, Any]:
+    """Coerce a partial / stored transient block (w30 normalizeTransient).
+
+    RH3's run keys (outer relaxation, outer tolerance) are kept as stored, even outside their
+    range (a stored value is used as saved); only the keys in ``edited`` (an edit's changed
+    keys) are held to their bounds.
+    """
     b = {**TRANSIENT_DEFAULTS, **(base or {})}
     p = partial if isinstance(partial, dict) else {}
     out = dict(b)
@@ -171,6 +186,10 @@ def normalize_transient(partial: dict | None, base: dict | None = None) -> dict[
     if raw_avg is not None and str(raw_avg).strip() != "":
         avg = _num(raw_avg, avg)
     out["average_from"] = clamp_average_from(avg, float(out["end_time"]), interval)
+    changed = set(edited) if edited is not None else set()
+    for key in RUN_KEYS:
+        kept = run_value(key, p[key] if key in p else b.get(key))
+        out[key] = clamp_edit(key, kept) if key in changed else kept
     return out
 
 
@@ -314,6 +333,9 @@ def resolve_transient_control(
         source=source,
         estimate=estimate,
         average_from=float(t["average_from"]),
+        outer_relax_p=t.get("outer_relax_p"),
+        outer_relax_eq=t.get("outer_relax_eq"),
+        outer_tolerance=t.get("outer_tolerance"),
     )
 
 

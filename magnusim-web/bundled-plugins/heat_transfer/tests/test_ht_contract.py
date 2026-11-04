@@ -82,7 +82,9 @@ def test_a_study_setting_saved_as_zero_is_refused_at_start():
     issue = _first(_ctx(study={"time_dependency": "Steady-state", "operating_pressure": 0}))
     assert issue == {"message": "Study settings: the operating pressure must be above 0.", "fix": {"go": "study"}}
     issue = _first(_ctx(study={"time_dependency": "Steady-state", "relax_h": 0}))
-    assert issue["message"] == "Study settings: the relaxation energy is 0; it must be above 0 and at most 1."
+    assert issue["message"] == "Study settings: the relaxation energy is 0; it must be above 0."
+    # RH3: a relaxation above 1 is used as saved, never refused at Start.
+    assert _first(_ctx(study={"time_dependency": "Steady-state", "relax_h": 1.5})) is None
 
 
 def test_materials_must_be_one_assigned_fluid():

@@ -286,6 +286,222 @@
             },
             "title": "Non-orthogonal correctors",
             "description": "Extra pressure corrections per iteration for skewed or non-orthogonal cells. 0 is enough for clean hex meshes; tetrahedral meshes usually need 1 to 3."
+          },
+          "grad_limiter": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "strong",
+              "light",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Strong (cellLimited 1)",
+                "Light (cellMDLimited 0.5)",
+                "None"
+              ]
+            },
+            "title": "Gradient limiter",
+            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset."
+          },
+          "momentum_convection": {
+            "type": "string",
+            "default": "second_order",
+            "enum": [
+              "first_order",
+              "second_order",
+              "second_order_limited"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (linearUpwind)",
+                "Second order, limited (limitedLinearV)"
+              ]
+            },
+            "title": "Momentum convection",
+            "description": "The velocity convection scheme. Second order (linearUpwind) is the default; first order is more stable but less accurate. Steady runs write it bounded. Second order, limited (limitedLinearV) lies between the two."
+          },
+          "turbulence_convection": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "first_order",
+              "second_order"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (limitedLinear)"
+              ]
+            },
+            "title": "Turbulence convection",
+            "description": "The turbulence equations' convection scheme: first order is more stable, second order more accurate. Blank uses the Numerics preset's (first order for Robust, second for Accurate), or second order in a transient study without a preset. A laminar run solves no turbulence equations."
+          },
+          "non_orth_correction": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "full",
+              "limited_05",
+              "limited_033",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Full (corrected)",
+                "Limited 0.5",
+                "Limited 0.33",
+                "None (uncorrected)"
+              ]
+            },
+            "title": "Non-orthogonal correction",
+            "description": "How face gradients are corrected for non-orthogonal cells: Full suits a good mesh, Limited is safer on skewed cells. Blank uses the Numerics preset's (Limited 0.5 for Robust, Full for Accurate), or Limited 0.5 in a transient study without a preset. None ignores non-orthogonality."
+          },
+          "p_tolerance": {
+            "type": "number",
+            "default": 1e-07,
+            "minimum": 1e-12,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p tolerance",
+            "description": "The pressure solver stops once its residual is below this tolerance, or has fallen by its relative tolerance. 1e-7 is the default."
+          },
+          "p_rel_tol": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p relative tolerance",
+            "description": "The pressure solver also stops once its residual has fallen to this fraction of its start (0 to 0.5). 0.01 is the default; the final loop of a transient time step always uses 0."
+          },
+          "p_max_iter": {
+            "type": "integer",
+            "default": 200,
+            "minimum": 10,
+            "maximum": 2000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p max iterations",
+            "description": "Most pressure solver iterations per solve. At the limit on most steps: the time step is too large or the mesh is poor. Raising it hides that. 200 is the default."
+          },
+          "eq_tolerance": {
+            "type": "number",
+            "default": 1e-08,
+            "minimum": 1e-14,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations tolerance",
+            "description": "The velocity and turbulence (and energy) solvers stop once their residual is below this tolerance. Or once it has fallen by their relative tolerance. 1e-8 is the default."
+          },
+          "eq_rel_tol": {
+            "type": "number",
+            "default": 0.1,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations relative tolerance",
+            "description": "The velocity and turbulence (and energy) solvers also stop once their residual has fallen to this fraction (0 to 0.5). 0.1 is the default; the final loop of a transient time step always uses 0."
+          },
+          "eq_max_iter": {
+            "type": "integer",
+            "default": 50,
+            "minimum": 5,
+            "maximum": 1000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations max iterations",
+            "description": "Most velocity and turbulence (and energy) solver iterations per solve. At the limit on most steps: the step or mesh is the cause. Raising it hides that. 50 is the default."
+          },
+          "relax_turbulence": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation",
+              "depends_on": {
+                "simplec": false
+              },
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Relaxation turbulence",
+            "description": "Under-relaxation of the turbulence equations (above 0, at most 1). Blank uses Relaxation U. Lower it alone when k or omega oscillate while the velocity settles. Not used while SIMPLEC is on."
+          },
+          "velocity_limit": {
+            "type": "string",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "custom",
+              "off"
+            ],
+            "x-cfddesk": {
+              "group": "limiters",
+              "advanced": true,
+              "caution": {
+                "off": "Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh)."
+              },
+              "enum_labels": [
+                "Automatic",
+                "Custom",
+                "Off"
+              ]
+            },
+            "title": "Velocity limit",
+            "description": "Caps the velocity in every cell (limitVelocity). Automatic is 10 x the reference speed, at least 50 m/s; Off caps nothing. Clipping after the first steps means the run is unstable and its results there are not physical: fix the cause, never raise or remove the cap to hide it."
+          },
+          "velocity_limit_max": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "velocity",
+              "group": "limiters",
+              "depends_on": {
+                "velocity_limit": "custom"
+              },
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Velocity limit maximum",
+            "description": "The custom velocity limit in m/s (above 0). Used only when Velocity limit is Custom."
           }
         },
         "additionalProperties": false
@@ -1426,7 +1642,208 @@
       "numerics_schema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
-        "properties": {},
+        "properties": {
+          "grad_limiter": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "strong",
+              "light",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Strong (cellLimited 1)",
+                "Light (cellMDLimited 0.5)",
+                "None"
+              ]
+            },
+            "title": "Gradient limiter",
+            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset."
+          },
+          "momentum_convection": {
+            "type": "string",
+            "default": "second_order",
+            "enum": [
+              "first_order",
+              "second_order",
+              "second_order_limited"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (linearUpwind)",
+                "Second order, limited (limitedLinearV)"
+              ]
+            },
+            "title": "Momentum convection",
+            "description": "The velocity convection scheme. Second order (linearUpwind) is the default; first order is more stable but less accurate. Steady runs write it bounded. Second order, limited (limitedLinearV) lies between the two."
+          },
+          "turbulence_convection": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "first_order",
+              "second_order"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (limitedLinear)"
+              ]
+            },
+            "title": "Turbulence convection",
+            "description": "The turbulence equations' convection scheme: first order is more stable, second order more accurate. Blank uses the Numerics preset's (first order for Robust, second for Accurate), or second order in a transient study without a preset. A laminar run solves no turbulence equations."
+          },
+          "non_orth_correction": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "full",
+              "limited_05",
+              "limited_033",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Full (corrected)",
+                "Limited 0.5",
+                "Limited 0.33",
+                "None (uncorrected)"
+              ]
+            },
+            "title": "Non-orthogonal correction",
+            "description": "How face gradients are corrected for non-orthogonal cells: Full suits a good mesh, Limited is safer on skewed cells. Blank uses the Numerics preset's (Limited 0.5 for Robust, Full for Accurate), or Limited 0.5 in a transient study without a preset. None ignores non-orthogonality."
+          },
+          "p_tolerance": {
+            "type": "number",
+            "default": 1e-07,
+            "minimum": 1e-12,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p tolerance",
+            "description": "The pressure solver stops once its residual is below this tolerance, or has fallen by its relative tolerance. 1e-7 is the default."
+          },
+          "p_rel_tol": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p relative tolerance",
+            "description": "The pressure solver also stops once its residual has fallen to this fraction of its start (0 to 0.5). 0.01 is the default; the final loop of a transient time step always uses 0."
+          },
+          "p_max_iter": {
+            "type": "integer",
+            "default": 200,
+            "minimum": 10,
+            "maximum": 2000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p max iterations",
+            "description": "Most pressure solver iterations per solve. At the limit on most steps: the time step is too large or the mesh is poor. Raising it hides that. 200 is the default."
+          },
+          "eq_tolerance": {
+            "type": "number",
+            "default": 1e-08,
+            "minimum": 1e-14,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations tolerance",
+            "description": "The velocity and turbulence (and energy) solvers stop once their residual is below this tolerance. Or once it has fallen by their relative tolerance. 1e-8 is the default."
+          },
+          "eq_rel_tol": {
+            "type": "number",
+            "default": 0.1,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations relative tolerance",
+            "description": "The velocity and turbulence (and energy) solvers also stop once their residual has fallen to this fraction (0 to 0.5). 0.1 is the default; the final loop of a transient time step always uses 0."
+          },
+          "eq_max_iter": {
+            "type": "integer",
+            "default": 50,
+            "minimum": 5,
+            "maximum": 1000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations max iterations",
+            "description": "Most velocity and turbulence (and energy) solver iterations per solve. At the limit on most steps: the step or mesh is the cause. Raising it hides that. 50 is the default."
+          },
+          "velocity_limit": {
+            "type": "string",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "custom",
+              "off"
+            ],
+            "x-cfddesk": {
+              "group": "limiters",
+              "advanced": true,
+              "caution": {
+                "off": "Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh)."
+              },
+              "enum_labels": [
+                "Automatic",
+                "Custom",
+                "Off"
+              ]
+            },
+            "title": "Velocity limit",
+            "description": "Caps the velocity in every cell (limitVelocity). Automatic is 10 x the reference speed, at least 50 m/s; Off caps nothing. Clipping after the first steps means the run is unstable and its results there are not physical: fix the cause, never raise or remove the cap to hide it."
+          },
+          "velocity_limit_max": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "velocity",
+              "group": "limiters",
+              "depends_on": {
+                "velocity_limit": "custom"
+              },
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Velocity limit maximum",
+            "description": "The custom velocity limit in m/s (above 0). Used only when Velocity limit is Custom."
+          }
+        },
         "additionalProperties": false
       },
       "control_schema": {
@@ -1563,6 +1980,45 @@
             },
             "title": "Non-orthogonal correctors",
             "description": "Extra pressure corrections for skewed or non-orthogonal cells."
+          },
+          "outer_relax_p": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Outer relaxation p",
+            "description": "Pressure under-relaxation in each time step's outer loops (above 0, at most 1). Used only with 2 or more outer correctors. The final outer loop always uses 1. Blank is 0.3."
+          },
+          "outer_relax_eq": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Outer relaxation equations",
+            "description": "Under-relaxation of the other equations in each time step's outer loops (above 0, at most 1). Used with 2 or more outer correctors. The final outer loop always uses 1. Blank is 0.7."
+          },
+          "outer_tolerance": {
+            "type": "number",
+            "default": null,
+            "minimum": 1e-06,
+            "maximum": 0.1,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Outer tolerance",
+            "description": "Ends a time step's outer loops early once every residual is below it (1e-6 to 0.1). Used only with 2 or more outer correctors. Blank runs every outer corrector on every step."
           },
           "average_from": {
             "type": "number",
@@ -2498,7 +2954,10 @@
         "n_outer_correctors": 1,
         "n_correctors": 2,
         "n_non_orth_correctors": 0,
-        "average_from": 0.0
+        "average_from": 0.0,
+        "outer_relax_p": null,
+        "outer_relax_eq": null,
+        "outer_tolerance": null
       },
       "bc_types": [
         "velocity_inlet_fixed",
@@ -2742,6 +3201,241 @@
             },
             "title": "Non-orthogonal correctors",
             "description": "Extra pressure corrections for skewed cells: 0 for clean hex meshes, 1 to 3 for tetrahedra."
+          },
+          "grad_limiter": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "strong",
+              "light",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Strong (cellLimited 1)",
+                "Light (cellMDLimited 0.5)",
+                "None"
+              ]
+            },
+            "title": "Gradient limiter",
+            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset."
+          },
+          "momentum_convection": {
+            "type": "string",
+            "default": "second_order",
+            "enum": [
+              "first_order",
+              "second_order",
+              "second_order_limited"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (linearUpwind)",
+                "Second order, limited (limitedLinearV)"
+              ]
+            },
+            "title": "Momentum convection",
+            "description": "The velocity convection scheme. Second order (linearUpwind) is the default; first order is more stable but less accurate. Steady runs write it bounded. Second order, limited (limitedLinearV) lies between the two."
+          },
+          "turbulence_convection": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "first_order",
+              "second_order"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (limitedLinear)"
+              ]
+            },
+            "title": "Turbulence convection",
+            "description": "The turbulence equations' convection scheme: first order is more stable, second order more accurate. Blank uses the Numerics preset's (first order for Robust, second for Accurate), or second order in a transient study without a preset. A laminar run solves no turbulence equations."
+          },
+          "energy_convection": {
+            "type": "string",
+            "default": "second_order",
+            "enum": [
+              "first_order",
+              "second_order"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (limitedLinear)"
+              ]
+            },
+            "title": "Energy convection",
+            "description": "The energy equation's convection scheme. Second order (limitedLinear) is the default in both presets. First order is more stable but smears temperature fronts."
+          },
+          "non_orth_correction": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "full",
+              "limited_05",
+              "limited_033",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Full (corrected)",
+                "Limited 0.5",
+                "Limited 0.33",
+                "None (uncorrected)"
+              ]
+            },
+            "title": "Non-orthogonal correction",
+            "description": "How face gradients are corrected for non-orthogonal cells: Full suits a good mesh, Limited is safer on skewed cells. Blank uses the Numerics preset's (Limited 0.5 for Robust, Full for Accurate), or Limited 0.5 in a transient study without a preset. None ignores non-orthogonality."
+          },
+          "p_tolerance": {
+            "type": "number",
+            "default": 1e-07,
+            "minimum": 1e-12,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p_rgh tolerance",
+            "description": "The pressure solver stops once its residual is below this tolerance, or has fallen by its relative tolerance. 1e-7 is the default."
+          },
+          "p_rel_tol": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p_rgh relative tolerance",
+            "description": "The pressure solver also stops once its residual has fallen to this fraction of its start (0 to 0.5). 0.01 is the default; the final loop of a transient time step always uses 0."
+          },
+          "p_max_iter": {
+            "type": "integer",
+            "default": 200,
+            "minimum": 10,
+            "maximum": 2000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p_rgh max iterations",
+            "description": "Most pressure solver iterations per solve. At the limit on most steps: the time step is too large or the mesh is poor. Raising it hides that. 200 is the default."
+          },
+          "eq_tolerance": {
+            "type": "number",
+            "default": 1e-08,
+            "minimum": 1e-14,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations tolerance",
+            "description": "The velocity and turbulence (and energy) solvers stop once their residual is below this tolerance. Or once it has fallen by their relative tolerance. 1e-8 is the default."
+          },
+          "eq_rel_tol": {
+            "type": "number",
+            "default": 0.1,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations relative tolerance",
+            "description": "The velocity and turbulence (and energy) solvers also stop once their residual has fallen to this fraction (0 to 0.5). 0.1 is the default; the final loop of a transient time step always uses 0."
+          },
+          "eq_max_iter": {
+            "type": "integer",
+            "default": null,
+            "minimum": 5,
+            "maximum": 1000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Equations max iterations",
+            "description": "Most velocity and turbulence (and energy) solver iterations per solve. At the limit on most steps: the step or mesh is the cause. Raising it hides that. Blank is OpenFOAM's 1000."
+          },
+          "relax_turbulence": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "relaxation",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Relaxation turbulence",
+            "description": "Under-relaxation of the turbulence equations (above 0, at most 1). Blank uses Relaxation U. Lower it alone when k or omega oscillate while the velocity settles."
+          },
+          "velocity_limit": {
+            "type": "string",
+            "default": "off",
+            "enum": [
+              "auto",
+              "custom",
+              "off"
+            ],
+            "x-cfddesk": {
+              "group": "limiters",
+              "advanced": true,
+              "caution": {
+                "off": "Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh)."
+              },
+              "enum_labels": [
+                "Automatic",
+                "Custom",
+                "Off"
+              ]
+            },
+            "title": "Velocity limit",
+            "description": "Caps the velocity in every cell (limitVelocity). Automatic is 10 x the reference speed, at least 50 m/s; Off caps nothing. Clipping after the first steps means the run is unstable and its results there are not physical: fix the cause, never raise or remove the cap to hide it. Heat Transfer's default is Off."
+          },
+          "velocity_limit_max": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "velocity",
+              "group": "limiters",
+              "depends_on": {
+                "velocity_limit": "custom"
+              },
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Velocity limit maximum",
+            "description": "The custom velocity limit in m/s (above 0). Used only when Velocity limit is Custom."
           }
         },
         "additionalProperties": false
@@ -3547,6 +4241,228 @@
             },
             "title": "Non-orthogonal correctors",
             "description": "Extra pressure corrections for skewed cells: 0 for clean hex meshes, 1 to 3 for tetrahedra."
+          },
+          "grad_limiter": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "strong",
+              "light",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Strong (cellLimited 1)",
+                "Light (cellMDLimited 0.5)",
+                "None"
+              ]
+            },
+            "title": "Gradient limiter",
+            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset."
+          },
+          "momentum_convection": {
+            "type": "string",
+            "default": "second_order",
+            "enum": [
+              "first_order",
+              "second_order",
+              "second_order_limited"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (linearUpwind)",
+                "Second order, limited (limitedLinearV)"
+              ]
+            },
+            "title": "Momentum convection",
+            "description": "The velocity convection scheme. Second order (linearUpwind) is the default; first order is more stable but less accurate. Steady runs write it bounded. Second order, limited (limitedLinearV) lies between the two."
+          },
+          "turbulence_convection": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "first_order",
+              "second_order"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (limitedLinear)"
+              ]
+            },
+            "title": "Turbulence convection",
+            "description": "The turbulence equations' convection scheme: first order is more stable, second order more accurate. Blank uses the Numerics preset's (first order for Robust, second for Accurate), or second order in a transient study without a preset. A laminar run solves no turbulence equations."
+          },
+          "energy_convection": {
+            "type": "string",
+            "default": "second_order",
+            "enum": [
+              "first_order",
+              "second_order"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "caution": {
+                "first_order": "First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started."
+              },
+              "enum_labels": [
+                "First order (upwind)",
+                "Second order (limitedLinear)"
+              ]
+            },
+            "title": "Energy convection",
+            "description": "The energy equation's convection scheme. Second order (limitedLinear) is the default in both presets. First order is more stable but smears temperature fronts."
+          },
+          "non_orth_correction": {
+            "type": "string",
+            "default": null,
+            "enum": [
+              "full",
+              "limited_05",
+              "limited_033",
+              "none"
+            ],
+            "x-cfddesk": {
+              "group": "schemes",
+              "advanced": true,
+              "optional": true,
+              "enum_labels": [
+                "Full (corrected)",
+                "Limited 0.5",
+                "Limited 0.33",
+                "None (uncorrected)"
+              ]
+            },
+            "title": "Non-orthogonal correction",
+            "description": "How face gradients are corrected for non-orthogonal cells: Full suits a good mesh, Limited is safer on skewed cells. Blank uses the Numerics preset's (Limited 0.5 for Robust, Full for Accurate), or Limited 0.5 in a transient study without a preset. None ignores non-orthogonality."
+          },
+          "p_tolerance": {
+            "type": "number",
+            "default": 1e-07,
+            "minimum": 1e-12,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p_rgh tolerance",
+            "description": "The pressure solver stops once its residual is below this tolerance, or has fallen by its relative tolerance. 1e-7 is the default."
+          },
+          "p_rel_tol": {
+            "type": "number",
+            "default": 0.01,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p_rgh relative tolerance",
+            "description": "The pressure solver also stops once its residual has fallen to this fraction of its start (0 to 0.5). 0.01 is the default; the final loop of a transient time step always uses 0."
+          },
+          "p_max_iter": {
+            "type": "integer",
+            "default": 200,
+            "minimum": 10,
+            "maximum": 2000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "p_rgh max iterations",
+            "description": "Most pressure solver iterations per solve. At the limit on most steps: the time step is too large or the mesh is poor. Raising it hides that. 200 is the default."
+          },
+          "eq_tolerance": {
+            "type": "number",
+            "default": 1e-08,
+            "minimum": 1e-14,
+            "maximum": 0.001,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations tolerance",
+            "description": "The velocity and turbulence (and energy) solvers stop once their residual is below this tolerance. Or once it has fallen by their relative tolerance. 1e-8 is the default."
+          },
+          "eq_rel_tol": {
+            "type": "number",
+            "default": 0.1,
+            "minimum": 0.0,
+            "maximum": 0.5,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true
+            },
+            "title": "Equations relative tolerance",
+            "description": "The velocity and turbulence (and energy) solvers also stop once their residual has fallen to this fraction (0 to 0.5). 0.1 is the default; the final loop of a transient time step always uses 0."
+          },
+          "eq_max_iter": {
+            "type": "integer",
+            "default": null,
+            "minimum": 5,
+            "maximum": 1000,
+            "x-cfddesk": {
+              "group": "linear_solvers",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Equations max iterations",
+            "description": "Most velocity and turbulence (and energy) solver iterations per solve. At the limit on most steps: the step or mesh is the cause. Raising it hides that. Blank is OpenFOAM's 1000."
+          },
+          "velocity_limit": {
+            "type": "string",
+            "default": "off",
+            "enum": [
+              "auto",
+              "custom",
+              "off"
+            ],
+            "x-cfddesk": {
+              "group": "limiters",
+              "advanced": true,
+              "caution": {
+                "off": "Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh)."
+              },
+              "enum_labels": [
+                "Automatic",
+                "Custom",
+                "Off"
+              ]
+            },
+            "title": "Velocity limit",
+            "description": "Caps the velocity in every cell (limitVelocity). Automatic is 10 x the reference speed, at least 50 m/s; Off caps nothing. Clipping after the first steps means the run is unstable and its results there are not physical: fix the cause, never raise or remove the cap to hide it. Heat Transfer's default is Off."
+          },
+          "velocity_limit_max": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "x-cfddesk": {
+              "quantity": "velocity",
+              "group": "limiters",
+              "depends_on": {
+                "velocity_limit": "custom"
+              },
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Velocity limit maximum",
+            "description": "The custom velocity limit in m/s (above 0). Used only when Velocity limit is Custom."
           }
         },
         "additionalProperties": false
@@ -3671,6 +4587,45 @@
               "advanced": true
             },
             "title": "Pressure correctors"
+          },
+          "outer_relax_p": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Outer relaxation p_rgh",
+            "description": "Pressure under-relaxation in each time step's outer loops (above 0, at most 1). Used only with 2 or more outer correctors. The final outer loop always uses 1. Blank is 1 (none)."
+          },
+          "outer_relax_eq": {
+            "type": "number",
+            "default": null,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Outer relaxation equations",
+            "description": "Under-relaxation of the other equations in each time step's outer loops (above 0, at most 1). Used with 2 or more outer correctors. The final outer loop always uses 1. Blank is 1 (none)."
+          },
+          "outer_tolerance": {
+            "type": "number",
+            "default": null,
+            "minimum": 1e-06,
+            "maximum": 0.1,
+            "x-cfddesk": {
+              "group": "control",
+              "advanced": true,
+              "optional": true
+            },
+            "title": "Outer tolerance",
+            "description": "Ends a time step's outer loops early once every residual is below it (1e-6 to 0.1). Used only with 2 or more outer correctors. Blank runs every outer corrector on every step."
           }
         },
         "additionalProperties": false
@@ -4135,7 +5090,10 @@
         "max_delta_t": null,
         "time_scheme": "Euler",
         "n_outer_correctors": 1,
-        "n_correctors": 2
+        "n_correctors": 2,
+        "outer_relax_p": null,
+        "outer_relax_eq": null,
+        "outer_tolerance": null
       },
       "bc_types": [
         "velocity_inlet_fixed",

@@ -19,6 +19,9 @@ A row is ``{code, level, text, short, fix, alt, kept}``:
   ``{steps, wall_s}`` of a run with the fix, when it can be estimated. A fix that needs
   settings the app does not offer yet (schemes, linear-solver limits, the velocity limit)
   is named in the text and has no fix.
+- ``setting_out_of_range`` (RH3, ``warn``): a study numerics setting or a run's outer
+  relaxation or tolerance stored outside its field's range ("Saved p tolerance 1e-2 is outside
+  1e-12 to 1e-3."). It is used as saved: bounds apply only to an edit, and nothing refuses it.
 - ``kept``: the person (or the Assistant) chose "Keep as set" for this code (the run's
   ``checks_kept``).
 
@@ -54,6 +57,7 @@ CODE_ORDER = (
     "laminar_turbulent",
     "mach",
     "steady_relax",
+    "setting_out_of_range",
     "average_startup",
     "duration_vs_ftt",
     "long_run",
@@ -246,6 +250,8 @@ class _Run:
         self.numerics = n
         self.steady_copy = bool(i.get("steady_copy"))
         self.kept = {str(c) for c in (i.get("kept") or []) if isinstance(c, str)}
+        # RH3: stored values outside their field's range ({key, label, value, min, max, text}).
+        self.out_of_range = [o for o in (i.get("out_of_range") or []) if isinstance(o, dict) and o.get("text")]
         # False when the analysis could read only the run's settings (no mesh yet): its mesh
         # and physics were not checked, and "nothing found" must not say they were.
         self.complete = i.get("inputs_complete") is not False
@@ -788,6 +794,17 @@ def _steady_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
             )
 
 
+def _range_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    """setting_out_of_range (RH3): the stored values outside their field's range, in one row.
+    They are used as saved (never refused); the row says which and where they should be."""
+    if not r.out_of_range:
+        return
+    text = " ".join(str(o["text"]) for o in r.out_of_range[:6])
+    n = len(r.out_of_range)
+    short = str(r.out_of_range[0].get("short") or r.out_of_range[0].get("label") or "") if n == 1 else f"{n} settings out of range"
+    rows.append(_row("setting_out_of_range", "warn", text, short or "a setting out of range"))
+
+
 def _cells_words(n: float) -> str:
     """625k, 1.2M."""
     if n >= 1e6:
@@ -882,7 +899,8 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     (the study's: ``relax_p``, ``relax_u``, ``simplec``, ``n_non_orthogonal``,
     ``numerics_preset``); ``steady_copy`` (a steady analysis of the family exists);
     ``kept`` (the codes kept as set); ``no_estimate`` (the line's words when the analysis
-    gives no time step); ``inputs_complete`` (False when only the run's settings could be
+    gives no time step); ``out_of_range`` (RH3: stored settings outside their field's range,
+    ``magnusim_sdk.numerics_settings.out_of_range``); ``inputs_complete`` (False when only the run's settings could be
     read, as before a mesh: the estimate's ``complete`` then says the mesh and physics were
     not checked, and ``unchecked`` says so in the analysis's words, from ``unchecked``).
     """
@@ -897,6 +915,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     else:
         _steady_rows(r, rows)
     _start_rows(r, rows)
+    _range_rows(r, rows)
     for row in rows:
         row["kept"] = row["code"] in r.kept
     order = {c: n for n, c in enumerate(CODE_ORDER)}

@@ -38,6 +38,10 @@ class SchemaField:
     # (host API 1.5): a linked geometry's update rewrites it like the "faces" and "body"
     # widgets (x-cfddesk.holds).
     holds: str = ""
+    # Host API 1.9 (run health, RH3): a caution per choice value ({"first_order": "..."}): the
+    # study panel shows it under the field while that value is chosen, and an Assistant edit
+    # that sets it asks first (its card says it). Emitted as x-cfddesk.caution.
+    caution: dict[str, str] | None = None
 
 
 _KIND_TO_JSON: dict[str, dict[str, Any]] = {
@@ -107,6 +111,8 @@ def to_json_schema(fields: list[SchemaField] | tuple[SchemaField, ...]) -> dict[
             x["holds"] = f.holds
         if f.optional:
             x["optional"] = True
+        if f.caution:
+            x["caution"] = {str(k): str(v) for k, v in f.caution.items()}
         if f.kind == "choice" and f.choice_labels and len(f.choice_labels) == len(f.choices):
             x["enum_labels"] = list(f.choice_labels)
         if x:

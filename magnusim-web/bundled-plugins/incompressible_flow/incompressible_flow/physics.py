@@ -14,6 +14,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from magnusim_sdk.numerics_settings import BLANK as BLANK_NUMERICS
+from magnusim_sdk.numerics_settings import NumericsSettings, numerics_from_record
+
 TurbulenceModel = Literal["laminar", "SpalartAllmaras", "kEpsilon", "realizableKE", "kOmegaSST", "LRR", "SSG"]
 # The study panel's order: by the number of equations solved.
 TURBULENCE_MODELS: tuple[str, ...] = (
@@ -154,6 +157,9 @@ class StudyPhysics:
     # The Custom starting velocity in m/s (the panel shows the unit system's unit).
     initial_u: tuple[float, float, float] = (0.0, 0.0, 0.0)
     potential_flow: bool = False
+    # RH3: the study's schemes, linear solvers, turbulence relaxation and velocity limit
+    # (magnusim_sdk.numerics_settings): blank = as before.
+    numerics_settings: NumericsSettings = BLANK_NUMERICS
 
     def uses_potential_flow(self) -> bool:
         """The case starts from potential flow: the study asks for it and the switch is on."""
@@ -199,7 +205,11 @@ def _num(value: Any) -> float | None:
 
 
 def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
-    """Read panel keys from one study record; bad or missing values keep the default."""
+    """Read panel keys from one study record; bad or missing values keep the default.
+
+    A value the solver can use is kept as saved even outside its field's range (RH3: bounds
+    apply only to an edit; the pre-run check lists it as ``setting_out_of_range``).
+    """
     rec = rec if isinstance(rec, dict) else {}
     raw_defaults = rec.get("defaults")
     defaults: dict[str, Any] = raw_defaults if isinstance(raw_defaults, dict) else {}
@@ -217,10 +227,10 @@ def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
 
     def fraction(key: str, fallback: float) -> float:
         v = _num(rec.get(key))
-        return v if v is not None and 0 < v <= 1 else fallback
+        return v if v is not None and v > 0 else fallback
 
     n = _num(rec.get("n_non_orthogonal"))
-    n_non_orth = int(n) if n is not None and 0 <= n <= 20 else d.n_non_orthogonal
+    n_non_orth = int(n) if n is not None and n >= 0 else d.n_non_orthogonal
     preset = str(rec.get("numerics_preset") or "").strip().lower()
     start = str(rec.get("initial_flow") or "").strip().lower()
 
@@ -240,6 +250,7 @@ def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
         initial_flow=start if start in INITIAL_FLOWS else d.initial_flow,
         initial_u=(component("initial_ux"), component("initial_uy"), component("initial_uz")),
         potential_flow=_flag(rec.get("potential_flow")),
+        numerics_settings=numerics_from_record(rec),
     )
 
 

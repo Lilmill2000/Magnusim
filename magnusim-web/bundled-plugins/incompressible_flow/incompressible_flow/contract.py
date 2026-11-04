@@ -343,10 +343,12 @@ def _transient_defaults() -> dict[str, Any]:
     return dict(TRANSIENT_DEFAULTS)
 
 
-def _transient_normalize(raw: dict[str, Any]) -> dict[str, Any]:
+def _transient_normalize(raw: dict[str, Any], edited: Any = None) -> dict[str, Any]:
+    """The run's transient block as stored; ``edited`` (API 1.9): the keys an edit changed,
+    the only ones RH3's run keys are held to their bounds for."""
     from .transient import normalize_transient
 
-    out = dict(normalize_transient({k: v for k, v in raw.items() if k != "settle"}))
+    out = dict(normalize_transient({k: v for k, v in raw.items() if k != "settle"}, edited=edited))
     out.pop("settle", None)
     _settle_into(out, raw, transient=True)
     return out

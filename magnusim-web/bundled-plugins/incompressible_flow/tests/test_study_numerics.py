@@ -75,8 +75,24 @@ def test_steady_schema_has_preset_and_simplec_and_hides_relaxation_under_simplec
     assert fields["simplec"].default is False and fields["simplec"].kind == "bool"
     assert fields["relax_u"].depends_on == {"simplec": False}
     assert fields["relax_p"].depends_on == {"simplec": False}
-    # A transient study's numerics live in the run panel.
-    assert build_incompressible_transient().numerics_schema == ()
+    # A transient study's time step and PIMPLE correctors live in the run panel; its numerics
+    # (RH3) are the schemes, linear solvers and velocity limit, under Advanced settings.
+    transient = {f.key: f for f in build_incompressible_transient().numerics_schema}
+    assert list(transient) == [
+        "grad_limiter",
+        "momentum_convection",
+        "turbulence_convection",
+        "non_orth_correction",
+        "p_tolerance",
+        "p_rel_tol",
+        "p_max_iter",
+        "eq_tolerance",
+        "eq_rel_tol",
+        "eq_max_iter",
+        "velocity_limit",
+        "velocity_limit_max",
+    ]
+    assert all(f.advanced for f in transient.values())
 
 
 def test_robust_default_writes_todays_schemes(tmp_path):

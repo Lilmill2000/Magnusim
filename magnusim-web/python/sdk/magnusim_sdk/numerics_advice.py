@@ -52,6 +52,88 @@ ADVICE: dict[str, Advice] = {
         ),
         "more": "More than 1 pays off only with Max Courant above 1.",
     },
+    # RH3: numerics as settings (magnusim_sdk.numerics_settings). Each description is the rule,
+    # the rest, then what the analysis adds of its own (its defaults).
+    "grad_limiter": {
+        "rule": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh.",
+        "more": (
+            "Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient "
+            "study without a preset."
+        ),
+    },
+    "momentum_convection": {
+        "rule": "The velocity convection scheme. Second order (linearUpwind) is the default; first order is more stable but less accurate.",
+        "more": "Steady runs write it bounded. Second order, limited (limitedLinearV) lies between the two.",
+    },
+    "turbulence_convection": {
+        "rule": "The turbulence equations' convection scheme: first order is more stable, second order more accurate.",
+        "more": (
+            "Blank uses the Numerics preset's (first order for Robust, second for Accurate), or second order in a "
+            "transient study without a preset. A laminar run solves no turbulence equations."
+        ),
+    },
+    "energy_convection": {
+        "rule": "The energy equation's convection scheme. Second order (limitedLinear) is the default in both presets.",
+        "more": "First order is more stable but smears temperature fronts.",
+    },
+    "non_orth_correction": {
+        "rule": "How face gradients are corrected for non-orthogonal cells: Full suits a good mesh, Limited is safer on skewed cells.",
+        "more": (
+            "Blank uses the Numerics preset's (Limited 0.5 for Robust, Full for Accurate), or Limited 0.5 in a "
+            "transient study without a preset. None ignores non-orthogonality."
+        ),
+    },
+    "p_tolerance": {
+        "rule": "The pressure solver stops once its residual is below this tolerance, or has fallen by its relative tolerance.",
+        "more": "1e-7 is the default.",
+    },
+    "p_rel_tol": {
+        "rule": "The pressure solver also stops once its residual has fallen to this fraction of its start (0 to 0.5).",
+        "more": "0.01 is the default; the final loop of a transient time step always uses 0.",
+    },
+    "p_max_iter": {
+        "rule": "Most pressure solver iterations per solve. At the limit on most steps: the time step is too large or the mesh is poor.",
+        "more": "Raising it hides that. 200 is the default.",
+    },
+    "eq_tolerance": {
+        "rule": "The velocity and turbulence (and energy) solvers stop once their residual is below this tolerance.",
+        "more": "Or once it has fallen by their relative tolerance. 1e-8 is the default.",
+    },
+    "eq_rel_tol": {
+        "rule": "The velocity and turbulence (and energy) solvers also stop once their residual has fallen to this fraction (0 to 0.5).",
+        "more": "0.1 is the default; the final loop of a transient time step always uses 0.",
+    },
+    "eq_max_iter": {
+        "rule": "Most velocity and turbulence (and energy) solver iterations per solve. At the limit on most steps: the step or mesh is the cause.",
+        "more": "Raising it hides that.",
+    },
+    "relax_turbulence": {
+        "rule": "Under-relaxation of the turbulence equations (above 0, at most 1). Blank uses Relaxation U.",
+        "more": "Lower it alone when k or omega oscillate while the velocity settles.",
+    },
+    "velocity_limit": {
+        "rule": "Caps the velocity in every cell (limitVelocity). Automatic is 10 x the reference speed, at least 50 m/s; Off caps nothing.",
+        "more": (
+            "Clipping after the first steps means the run is unstable and its results there are not physical: fix "
+            "the cause, never raise or remove the cap to hide it."
+        ),
+    },
+    "velocity_limit_max": {
+        "rule": "The custom velocity limit in m/s (above 0).",
+        "more": "Used only when Velocity limit is Custom.",
+    },
+    "outer_relax_p": {
+        "rule": "Pressure under-relaxation in each time step's outer loops (above 0, at most 1). Used only with 2 or more outer correctors.",
+        "more": "The final outer loop always uses 1.",
+    },
+    "outer_relax_eq": {
+        "rule": "Under-relaxation of the other equations in each time step's outer loops (above 0, at most 1). Used with 2 or more outer correctors.",
+        "more": "The final outer loop always uses 1.",
+    },
+    "outer_tolerance": {
+        "rule": "Ends a time step's outer loops early once every residual is below it (1e-6 to 0.1). Used only with 2 or more outer correctors.",
+        "more": "Blank runs every outer corrector on every step.",
+    },
 }
 
 RULE_MAX = 160
@@ -62,10 +144,11 @@ def rule(key: str) -> str:
     return ADVICE[key]["rule"]
 
 
-def description(key: str) -> str:
-    """A setting's schema description: its rule, then the rest."""
+def description(key: str, extra: str = "") -> str:
+    """A setting's schema description: its rule, then the rest, then ``extra`` (what one
+    analysis adds of its own, such as its default)."""
     a = ADVICE[key]
-    return a["rule"] + " " + a["more"]
+    return " ".join(t for t in (a["rule"], a["more"], extra) if t)
 
 
 def as_json() -> dict[str, dict[str, str]]:

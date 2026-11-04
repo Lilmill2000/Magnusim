@@ -4,7 +4,10 @@ the same RunSpec its case is written with.
 
 - the reference speed, the main inlet's direction and name (the speed the turbulence
   inlet values and the velocity limit use);
-- the velocity limit the case is written with (``max(50, 10 × the reference speed)``);
+- the velocity limit the case is written with (``max(50, 10 × the reference speed)``, or
+  the study's own, RH3);
+- the study's numerics and the run's RH3 keys stored outside their field's range, which the
+  case is written with as saved (``setting_out_of_range``);
 - the study's physics (turbulence model, starting flow, potential flow, numerics) and
   whether a boundary condition varies with time or moves;
 - the Δt a fixed time step is written with when it is left blank.
@@ -55,7 +58,7 @@ def _transient_settings(spec: Any, raw: dict[str, Any] | None) -> dict[str, Any]
     return out
 
 
-def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, Any] | None, *, transient: bool) -> dict[str, Any]:
+def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, Any] | None, *, transient: bool, inputs: Any = None) -> dict[str, Any]:
     """What :func:`magnusim_sdk.runcheck.check` reads of this run (``spec`` None: settings only)."""
     ctx = context if isinstance(context, dict) else {}
     raw = settings if isinstance(settings, dict) else {}
@@ -72,6 +75,10 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
         "kept": ctx.get("kept") or [],
         "steady_copy": bool(transient),
     }
+    from .numerics_written import stored_out_of_range
+
+    study = getattr(inputs, "study", None) if inputs is not None else None
+    out["out_of_range"] = stored_out_of_range(study, raw, transient=transient)
     if spec is None or not getattr(spec, "ok", False):
         # Only the run's settings could be read (the spec needs a generated mesh): the mesh,
         # the inlets and the physics are not checked, and the line says why there is no step.
@@ -106,8 +113,9 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
             "speed": float(speed) if inlets or speed > 1.0 else None,
             "direction": list(inlet_flow_direction(spec) or (1.0, 0.0, 0.0)),
             "inlet": name,
-            # The velocity limit the case is written with (writer: limitVelocity), transient only.
-            "velocity_cap": max(50.0, 10.0 * float(speed)) if transient else None,
+            # The velocity limit the case is written with (writer: limitVelocity; RH3: None when
+            # the study turned it off), transient only.
+            "velocity_cap": _cap(physics, speed) if transient else None,
             "fixed_inflow": fixed_inflow(spec),
             "time_varying": any(in_effect(_bc_dict(m.get("bc")), transient) for m in spec.mapped or [] if m.get("bc")),
             "moving": any(wall_kind(m.get("bc")) in ("Moving", "Rotating") for m in spec.mapped or [] if m.get("bc")),
@@ -138,8 +146,38 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
     return out
 
 
+def _cap(physics: Any, speed: float) -> float | None:
+    """The velocity limit the case is written with (writer.velocity_cap), None when off."""
+    from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
+    from magnusim_sdk.numerics_settings import velocity_cap
+
+    return velocity_cap(physics.numerics_settings, float(speed), default="auto", factor=LIMIT_FACTOR, floor=LIMIT_FLOOR)["cap"]
+
+
+def numerics(spec: Any, inputs: Any, settings: dict[str, Any], *, transient: bool) -> list[dict[str, str]]:
+    """RH3: "Numerics as written" of this run, from the spec its case is written with (before
+    the mesh is generated: the study's record and the run's settings)."""
+    from .numerics_written import numerics_rows
+
+    if spec is not None and getattr(spec, "ok", False):
+        from .writer import resolve_speed_and_dhyd
+
+        speed, _ = resolve_speed_and_dhyd(spec)
+        if spec.speed_for_k and spec.speed_for_k != 1.0:
+            speed = float(spec.speed_for_k)
+        words = check_inputs(spec, settings, {}, transient=transient)
+        return numerics_rows(spec.physics, transient=spec.transient, speed=float(speed), inlet=str(words.get("inlet") or ""))
+    from .physics import physics_from_record
+    from .transient import resolve_transient_control
+
+    physics = physics_from_record(getattr(inputs, "study", None) if inputs is not None else None)
+    ctrl = resolve_transient_control(settings, {}) if transient else None
+    return numerics_rows(physics, transient=ctrl, speed=None)
+
+
 def run_check(*, transient: bool, inputs: Any = None, settings: dict[str, Any] | None = None, context: dict[str, Any] | None = None, spec: Any = None) -> dict[str, Any]:
-    """``RunModel.check``: ``{"checks": [...], "estimate": {...}}`` (magnusim_sdk.runcheck)."""
+    """``RunModel.check``: ``{"checks": [...], "estimate": {...}, "numerics": [...]}``
+    (magnusim_sdk.runcheck; RH3: "Numerics as written")."""
     from magnusim_sdk.runcheck import check
 
     raw = settings if isinstance(settings, dict) else {}
@@ -147,4 +185,11 @@ def run_check(*, transient: bool, inputs: Any = None, settings: dict[str, Any] |
         from .runspec import load_run_spec
 
         spec = load_run_spec(inputs)
-    return check(check_inputs(spec, raw, context, transient=transient))
+    out = check(check_inputs(spec, raw, context, transient=transient, inputs=inputs))
+    try:
+        out["numerics"] = numerics(spec, inputs, raw, transient=transient)
+    except (AttributeError, TypeError, ValueError) as exc:
+        # "Numerics as written" is left out (and says why); the check's rows stand.
+        out["numerics"] = []
+        out["numerics_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return out

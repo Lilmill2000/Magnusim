@@ -30,7 +30,9 @@ def test_normalize_agrees_with_the_run_panel():
     shared = json.loads((Path(__file__).parent / "transient_vectors.json").read_text(encoding="utf-8"))
     assert shared["defaults"] == TRANSIENT_DEFAULTS
     for v in shared["vectors"]:
-        got = normalize_transient(v["raw"], v["base"])
+        # RH3: an edit's changed keys are the only ones held to their bounds.
+        edited = [k for k, val in v["raw"].items() if v["base"].get(k) != val]
+        got = normalize_transient(v["raw"], v["base"], edited=edited)
         want = {**shared["defaults"], **v["base"], **v["expected"]}
         for key, value in want.items():
             if isinstance(value, float):

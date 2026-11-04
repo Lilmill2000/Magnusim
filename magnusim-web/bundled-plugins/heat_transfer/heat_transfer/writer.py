@@ -35,6 +35,23 @@ from magnusim_sdk.foam import (
     write_foam_dict,
     write_vol_field,
 )
+from magnusim_sdk.numerics_settings import BLANK as BLANK_NUMERICS
+from magnusim_sdk.numerics_settings import (
+    CONVECTION,
+    EQ_REL_TOL,
+    EQ_TOLERANCE,
+    GRAD_LIMITERS,
+    MOMENTUM,
+    NON_ORTH,
+    P_MAX_ITER,
+    P_REL_TOL,
+    P_TOLERANCE,
+    NumericsSettings,
+    foam_number,
+    limit_u_text,
+    scheme_choices,
+    velocity_cap,
+)
 
 from .bcs import FIXED_T, HEAT_FLUX, HTC, backflow_temperature, inlet_temperature, wall_thermal
 from .functions import OPENING_KINDS, functions_text, plan_monitors
@@ -143,8 +160,27 @@ _SCHEMES: dict[str, dict[str, str]] = {
 }
 
 
-def fv_schemes_text(*, model: str, numerics: str, transient: TransientControl | None) -> str:
-    s = _SCHEMES.get(numerics) or _SCHEMES["robust"]
+def schemes(numerics: str, settings: NumericsSettings | None = None) -> dict[str, str]:
+    """The fvSchemes strings (not bounded): the study's choices (RH3), each blank one from its
+    Numerics preset; div(phi,K) and grad(h) always follow the preset (they stay fixed)."""
+    preset = numerics if numerics in _SCHEMES else "robust"
+    s = _SCHEMES[preset]
+    ch = scheme_choices(settings or BLANK_NUMERICS, preset=preset)
+    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
+    return {
+        "grad": GRAD_LIMITERS[ch["grad_limiter"][0]],
+        "momentum": MOMENTUM[ch["momentum_convection"][0]],
+        "energy": CONVECTION[ch["energy_convection"][0]],
+        "K": s["K"],
+        "turb": CONVECTION[ch["turbulence_convection"][0]],
+        "laplacian": laplacian,
+        "sn_grad": sn_grad,
+    }
+
+
+def fv_schemes_text(*, model: str, numerics: str, transient: TransientControl | None, settings: NumericsSettings | None = None) -> str:
+    """fvSchemes: the Numerics preset with the study's own choices over it (``settings``, RH3)."""
+    s = schemes(numerics, settings)
     bounded = "" if transient is not None else "bounded "
     if transient is None:
         ddt = "steadyState"
@@ -162,7 +198,7 @@ gradSchemes
 divSchemes
 {{
     default         none;
-    div(phi,U)      {bounded}Gauss linearUpwind grad(U);
+    div(phi,U)      {bounded}{s["momentum"]};
     div(phi,h)      {bounded}{s["energy"]};
     div(phi,K)      {bounded}{s["K"]};
 {divs}    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
@@ -171,6 +207,55 @@ laplacianSchemes {{ default {s["laplacian"]}; }}
 interpolationSchemes {{ default linear; }}
 snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}"""
+
+
+def linear_solvers(settings: NumericsSettings | None = None) -> dict[str, dict[str, Any]]:
+    """The linear solvers' settings the case is written with (RH3: the study's, blank = as
+    before; the equations' maxIter blank is OpenFOAM's own 1000, not written)."""
+    ns = settings or BLANK_NUMERICS
+    return {
+        "p": {
+            "tol": ns.p_tolerance or P_TOLERANCE,
+            "rel_tol": ns.p_rel_tol if ns.p_rel_tol is not None else P_REL_TOL,
+            "max_iter": ns.p_max_iter or P_MAX_ITER,
+        },
+        "eq": {
+            "tol": ns.eq_tolerance or EQ_TOLERANCE,
+            "rel_tol": ns.eq_rel_tol if ns.eq_rel_tol is not None else EQ_REL_TOL,
+            "max_iter": ns.eq_max_iter,
+        },
+    }
+
+
+# OpenFOAM's own maxIter of a solver that names none.
+OPENFOAM_MAX_ITER = 1000
+
+
+def outer_residual_text(fields: tuple[str, ...], tolerance: float) -> str:
+    """RH3: the PIMPLE dictionary's residualControl, the outer loops' tolerance: each listed
+    field's (relTol 0), 4-space indented, ending its last line."""
+    out = "    residualControl\n    {\n"
+    for f in fields:
+        out += f"        {f}\n        {{\n            tolerance       {foam_number(tolerance)};\n            relTol          0;\n        }}\n"
+    return out + "    }\n"
+
+
+def _p_rgh_lines(ls: dict[str, Any]) -> str:
+    return f"""        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       {foam_number(ls["tol"])};
+        relTol          {foam_number(ls["rel_tol"])};
+        maxIter         {int(ls["max_iter"])};
+"""
+
+
+def _eq_lines(ls: dict[str, Any]) -> str:
+    max_iter = f"        maxIter         {int(ls['max_iter'])};\n" if ls.get("max_iter") else ""
+    return f"""        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       {foam_number(ls["tol"])};
+        relTol          {foam_number(ls["rel_tol"])};
+{max_iter}"""
 
 
 def _eq_regex(model: str) -> str:
@@ -185,33 +270,30 @@ def fv_solution_text(
     transient: TransientControl | None,
     residual_control: bool = True,
     relax: tuple[float, float, float] = (0.7, 0.3, 0.5),
+    settings: NumericsSettings | None = None,
 ) -> str:
+    """fvSolution. ``settings`` (RH3): the study's linear solvers and turbulence relaxation;
+    the run's outer relaxation and outer tolerance come with ``transient``."""
     eq = _eq_regex(model)
     turb = solved_turbulence_fields(model)
+    ns = settings or BLANK_NUMERICS
+    ls = linear_solvers(ns)
     if transient is None:
         res = f"p_rgh {num(residual)}; U {num(residual)}; h {num(residual)};"
         if turb:
             res += ' "(' + "|".join(turb) + f')" {num(max(residual, 1e-4))};'
         residual_line = f"    residualControl {{ {res} }}\n" if residual_control else ""
         relax_u, relax_p, relax_h = (num(r) for r in relax)
-        turb_relax = f'        "({"|".join(turb)})" {relax_u};\n' if turb else ""
+        relax_t = num(ns.relax_turbulence) if ns.relax_turbulence is not None else relax_u
+        turb_relax = f'        "({"|".join(turb)})" {relax_t};\n' if turb else ""
         return f"""solvers
 {{
     p_rgh
     {{
-        solver          GAMG;
-        smoother        GaussSeidel;
-        tolerance       1e-7;
-        relTol          0.01;
-        maxIter         200;
-    }}
+{_p_rgh_lines(ls["p"])}    }}
     {eq}
     {{
-        solver          PBiCGStab;
-        preconditioner  DILU;
-        tolerance       1e-8;
-        relTol          0.1;
-    }}
+{_eq_lines(ls["eq"])}    }}
 }}
 
 SIMPLE
@@ -236,6 +318,33 @@ relaxationFactors
 {turb_relax}    }}
 }}"""
     final = eq[:-1] + 'Final"'
+    n_outer = max(1, int(transient.n_outer_correctors))
+    outer_p = getattr(transient, "outer_relax_p", None)
+    outer_eq = getattr(transient, "outer_relax_eq", None)
+    outer_tol = getattr(transient, "outer_tolerance", None)
+    residual_block = outer_residual_text(("p_rgh", eq), outer_tol) if n_outer > 1 and outer_tol else ""
+    if n_outer > 1 and (outer_p or outer_eq):
+        relax_block = f"""relaxationFactors
+{{
+    fields
+    {{
+        p_rgh           {num(outer_p or 1)};
+        p_rghFinal      1;
+    }}
+    equations
+    {{
+        {eq} {num(outer_eq or 1)};
+        {final} 1;
+    }}
+}}"""
+    else:
+        relax_block = """relaxationFactors
+{
+    equations
+    {
+        ".*"            1;
+    }
+}"""
     return f"""solvers
 {{
     "rho.*"
@@ -244,12 +353,7 @@ relaxationFactors
     }}
     p_rgh
     {{
-        solver          GAMG;
-        smoother        GaussSeidel;
-        tolerance       1e-7;
-        relTol          0.01;
-        maxIter         200;
-    }}
+{_p_rgh_lines(ls["p"])}    }}
     p_rghFinal
     {{
         $p_rgh;
@@ -258,11 +362,7 @@ relaxationFactors
     }}
     {eq}
     {{
-        solver          PBiCGStab;
-        preconditioner  DILU;
-        tolerance       1e-8;
-        relTol          0.1;
-    }}
+{_eq_lines(ls["eq"])}    }}
     {final}
     {{
         $U;
@@ -278,15 +378,9 @@ PIMPLE
     nNonOrthogonalCorrectors {int(n_non_orth)};
     pRefCell        0;
     pRefValue       0;
-}}
+{residual_block}}}
 
-relaxationFactors
-{{
-    equations
-    {{
-        ".*"            1;
-    }}
-}}"""
+{relax_block}"""
 
 
 def control_dict_text(
@@ -541,6 +635,29 @@ def _clean_regions(out: Path) -> None:
                 shutil.rmtree(child, ignore_errors=True)
 
 
+def fluid_velocity_cap(ph: Any, speed_ref: float | None) -> float | None:
+    """The velocity limit a fluid is written with (RH3; m/s), None when the study leaves it Off
+    (the default)."""
+    from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
+
+    return velocity_cap(ph.numerics_settings, float(speed_ref or 0.0), default="off", factor=LIMIT_FACTOR, floor=LIMIT_FLOOR)["cap"]
+
+
+def _limiter_hint(ph: Any, speed_ref: float | None) -> dict[str, Any] | None:
+    from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
+
+    cap = fluid_velocity_cap(ph, speed_ref)
+    return {"name": "limitU", "cap": float(cap), "factor": LIMIT_FACTOR, "floor": LIMIT_FLOOR} if cap is not None else None
+
+
+def transient_sidecar(t: TransientControl) -> dict[str, Any]:
+    """The transient control as w27-case.json keeps it: RH3's run keys only when set, so a run
+    that leaves them blank records what it did before."""
+    from magnusim_sdk.numerics_settings import RUN_KEYS
+
+    return {k: v for k, v in dataclasses.asdict(t).items() if not (k in RUN_KEYS and v is None)}
+
+
 def health_hints(
     spec: HtSpec,
     *,
@@ -551,9 +668,10 @@ def health_hints(
     max_di: float | None = None,
 ) -> dict[str, Any]:
     """The run's ``health_hints`` (RH1, magnusim_sdk.health): the solver mode, Courant
-    setting, reference speed, linear solver caps (p_rgh 200; the rest OpenFOAM's 1000), no
-    velocity limit, and a fixed inflow only when every opening that brings flow in holds a
-    fixed velocity (never for natural convection)."""
+    setting, reference speed, linear solver caps as written (RH3: the study's; p_rgh 200 and
+    the rest OpenFOAM's 1000 when blank), the velocity limit (None when off, the default), and
+    a fixed inflow only when every opening that brings flow in holds a fixed velocity (never
+    for natural convection)."""
     t = spec.transient
     n_outer = max(1, int(t.n_outer_correctors)) if t is not None else None
     if t is not None:
@@ -561,11 +679,18 @@ def health_hints(
     else:
         mode = "SIMPLE"
     final = 0.0 if t is not None else None
+    ls = linear_solvers(spec.physics.numerics_settings)
+    p_ls, eq_ls = ls["p"], ls["eq"]
     linsolve: dict[str, dict[str, Any]] = {
-        "p_rgh": {"max_iter": 200, "tol": 1e-7, "rel_tol": 0.01, "final_rel_tol": final if final is not None else 0.01}
+        "p_rgh": {"max_iter": int(p_ls["max_iter"]), "tol": float(p_ls["tol"]), "rel_tol": float(p_ls["rel_tol"]), "final_rel_tol": final if final is not None else float(p_ls["rel_tol"])}
     }
     for f in ("U", "h", *solved_turbulence_fields(model)):
-        linsolve[f] = {"max_iter": 1000, "tol": 1e-8, "rel_tol": 0.1, "final_rel_tol": final if final is not None else 0.1}
+        linsolve[f] = {
+            "max_iter": int(eq_ls["max_iter"] or OPENFOAM_MAX_ITER),
+            "tol": float(eq_ls["tol"]),
+            "rel_tol": float(eq_ls["rel_tol"]),
+            "final_rel_tol": final if final is not None else float(eq_ls["rel_tol"]),
+        }
     inlets = 0
     driven = False
     for rec in (records or {}).values():
@@ -588,7 +713,7 @@ def health_hints(
         "uref_source": "inlet" if inlets else None,
         "fixed_inflow": bool(inlets) and not driven,
         "turbulence": model,
-        "limiter": None,
+        "limiter": _limiter_hint(spec.physics, speed_ref),
         "linsolve": linsolve,
         "monitors": None,
     }
@@ -702,7 +827,12 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
     # A case written before by another solver may hold its own files here.
     for stale in ("transportProperties", "momentumTransport", "physicalProperties"):
         (out / "constant" / stale).unlink(missing_ok=True)
-    (out / "system" / "fvOptions").unlink(missing_ok=True)
+    # The velocity limit (RH3: Off by default in Heat Transfer, as before).
+    cap = fluid_velocity_cap(ph, flow.speed_ref)
+    if cap is None:
+        (out / "system" / "fvOptions").unlink(missing_ok=True)
+    else:
+        write_foam_dict(out / "system" / "fvOptions", "dictionary", "fvOptions", limit_u_text(num(cap)))
 
     from .runspec import convergence_stops_off
 
@@ -719,11 +849,12 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
     write_foam_dict(out / "system" / "controlDict", "dictionary", "controlDict",
                     control_dict_text(app=app, spec=spec, functions=functions, restart_from=restart_from))
     write_foam_dict(out / "system" / "fvSchemes", "dictionary", "fvSchemes",
-                    fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient))
+                    fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient,
+                                    settings=ph.numerics_settings))
     write_foam_dict(out / "system" / "fvSolution", "dictionary", "fvSolution",
                     fv_solution_text(model=model, residual=ph.residual, n_non_orth=ph.n_non_orthogonal,
                                      transient=spec.transient, residual_control=not stops_off,
-                                     relax=(ph.relax_u, ph.relax_p, ph.relax_h)))
+                                     relax=(ph.relax_u, ph.relax_p, ph.relax_h), settings=ph.numerics_settings))
     if int(spec.n_procs) > 1:
         write_decompose_par_dict(out / "system" / "decomposeParDict", int(spec.n_procs))
     else:
@@ -776,7 +907,7 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
     if settle is not None:
         sidecar["settle"] = settle
     if transient and spec.transient is not None:
-        sidecar["transient"] = dataclasses.asdict(spec.transient)
+        sidecar["transient"] = transient_sidecar(spec.transient)
     sidecar["health_hints"] = health_hints(spec, app=app, model=model, records=flow.records, speed_ref=flow.speed_ref)
     if restart_from is not None:
         sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}

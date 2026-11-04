@@ -13,7 +13,8 @@ the run's settings with any proposed change) and ``context``:
   the machine settings' own samples, :func:`magnusim_sdk.run_estimate.pc_solve_rate`);
 - ``kept``: the codes kept as set (the run's ``checks_kept``).
 
-:func:`run_check` answers ``{checks, estimate, earlier, ranks, ...}`` for the precheck route,
+:func:`run_check` answers ``{checks, estimate, numerics, earlier, ranks, ...}`` for the precheck route
+(RH3: ``numerics`` is "Numerics as written", from the run's ``numerics_used`` once it has one),
 reading files only, except that a mesh made before mesh facts existed gets them made once
 (``build``), as a mesher would have.
 """
@@ -198,6 +199,7 @@ def run_check(
         transient_override=raw if transient else None,
         time_dependency=spec.time_dependency,
     )
+    inputs = with_numerics_used(inputs)
     launch = None
     try:
         launch = contract.launch_spec(spec, get_registry("solver"), inputs=inputs)
@@ -224,6 +226,27 @@ def run_check(
         "mesh": _mesh_summary(context["mesh"]),
         "kept": context["kept"],
     }
+
+
+def with_numerics_used(inputs: Any) -> Any:
+    """A started run's inputs with the numerics it started with (RH3: ``run.numerics_used``,
+    ``{analysis, mode, at, values}``) in place of the study's, so "Numerics as written" shows
+    what its case was written with; a draft, or a run started before RH3 (none recorded),
+    reads the study's."""
+    import dataclasses
+
+    run = getattr(inputs, "run", None)
+    used = run.get("numerics_used") if isinstance(run, dict) else None
+    values = used.get("values") if isinstance(used, dict) else None
+    if not isinstance(values, dict):
+        return inputs
+    study = dict(getattr(inputs, "study", None) or {})
+    for key, value in values.items():
+        if value is None:
+            study.pop(str(key), None)
+        else:
+            study[str(key)] = value
+    return dataclasses.replace(inputs, study=study)
 
 
 def _mesh_summary(facts: dict[str, Any] | None) -> dict[str, Any] | None:

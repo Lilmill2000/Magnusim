@@ -15,6 +15,9 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from magnusim_sdk.numerics_settings import BLANK as BLANK_NUMERICS
+from magnusim_sdk.numerics_settings import NumericsSettings, numerics_from_record
+
 from .materials import FluidProps
 
 # --- Gravity ------------------------------------------------------------------
@@ -102,6 +105,9 @@ class StudyPhysics:
     relax_u: float = 0.7
     relax_p: float = 0.3
     relax_h: float = 0.5
+    # RH3: the study's schemes, linear solvers, turbulence relaxation and velocity limit
+    # (magnusim_sdk.numerics_settings): blank = as before.
+    numerics_settings: NumericsSettings = BLANK_NUMERICS
 
     @property
     def gravity_on(self) -> bool:
@@ -150,7 +156,9 @@ def _vec(value: Any) -> tuple[float, float, float] | None:
 
 
 def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
-    """The study's settings; a missing or bad value keeps its default."""
+    """The study's settings; a missing or bad value keeps its default. A value the solver can
+    use is kept as saved even outside its field's range (RH3: bounds apply only to an edit;
+    the pre-run check lists it as ``setting_out_of_range``)."""
     rec = rec if isinstance(rec, dict) else {}
     d = DEFAULT_PHYSICS
     gravity = str(rec.get("gravity") or d.gravity).strip().lower()
@@ -172,7 +180,7 @@ def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
 
     def fraction(key: str, fallback: float) -> float:
         v = _num(rec.get(key))
-        return v if v is not None and 0 < v <= 1 else fallback
+        return v if v is not None and v > 0 else fallback
 
     return StudyPhysics(
         gravity=gravity,
@@ -185,10 +193,11 @@ def physics_from_record(rec: dict[str, Any] | None) -> StudyPhysics:
         turbulence_model=model if model in TURBULENCE_MODELS else d.turbulence_model,
         numerics=preset if preset in NUMERICS_PRESETS else d.numerics,
         residual=residual if residual is not None and residual > 0 else d.residual,
-        n_non_orthogonal=int(n) if n is not None and 0 <= n <= 10 else d.n_non_orthogonal,
+        n_non_orthogonal=int(n) if n is not None and n >= 0 else d.n_non_orthogonal,
         relax_u=fraction("relax_u", d.relax_u),
         relax_p=fraction("relax_p", d.relax_p),
         relax_h=fraction("relax_h", d.relax_h),
+        numerics_settings=numerics_from_record(rec),
     )
 
 
@@ -209,7 +218,9 @@ _FRACTIONS: tuple[tuple[str, str], ...] = (
 def physics_problem(rec: dict[str, Any] | None) -> str | None:
     """A saved study setting the solve cannot use, in the user's words, else None.
 
-    Temperatures and pressures are checked as stored (K, Pa): "above absolute zero".
+    Temperatures and pressures are checked as stored (K, Pa): "above absolute zero". A
+    relaxation above 1 is not refused (RH3: a stored value outside its field's range is used
+    as saved; the pre-run check lists it): only one the solver cannot use (0 or less).
     """
     rec = rec if isinstance(rec, dict) else {}
     for key, label in _POSITIVE:
@@ -219,8 +230,8 @@ def physics_problem(rec: dict[str, Any] | None) -> str | None:
             return f"the {label} must be above {what}"
     for key, label in _FRACTIONS:
         v = _num(rec.get(key))
-        if v is not None and not 0 < v <= 1:
-            return f"the {label} is {v:g}; it must be above 0 and at most 1"
+        if v is not None and not v > 0:
+            return f"the {label} is {v:g}; it must be above 0"
     gravity = str(rec.get("gravity") or DEFAULT_GRAVITY).strip().lower()
     mag = _num(rec.get("gravity_magnitude"))
     if gravity != "off" and mag is not None and mag <= 0:

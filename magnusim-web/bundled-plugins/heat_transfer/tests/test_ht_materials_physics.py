@@ -97,8 +97,8 @@ def test_study_settings_and_their_defaults():
         ({"reference_temperature": 0}, "the reference temperature must be above absolute zero"),
         ({"initial_temperature": 0}, "the starting temperature must be above absolute zero"),
         ({"residual_target": 0}, "the residual target must be above 0"),
-        ({"relax_h": 0}, "the relaxation energy is 0; it must be above 0 and at most 1"),
-        ({"relax_u": 1.5}, "the relaxation U is 1.5; it must be above 0 and at most 1"),
+        ({"relax_h": 0}, "the relaxation energy is 0; it must be above 0"),
+        ({"relax_u": -0.5}, "the relaxation U is -0.5; it must be above 0"),
         ({"gravity": "-z", "gravity_magnitude": 0}, "the gravity magnitude must be above 0 (or set Gravity to Off)"),
         ({"gravity": "custom", "gravity_vector": [0, 0, 0]}, "the gravity direction has no length (all three components are 0)"),
     ],
@@ -106,6 +106,15 @@ def test_study_settings_and_their_defaults():
 def test_a_saved_setting_the_solve_cannot_use_is_named(saved, said):
     """A 0 the study panel saved is not swapped for the default behind the user's back."""
     assert physics_problem(saved) == said
+
+
+def test_a_saved_relaxation_above_1_is_used_as_saved_not_refused():
+    # RH3 (spec 5.4): a stored value outside its field's range (Relaxation 0 to 1) is used as
+    # saved; only one the solver cannot use is refused. The pre-run check lists it
+    # (setting_out_of_range).
+    assert physics_problem({"relax_u": 1.5}) is None
+    assert physics_from_record({"relax_u": 1.5, "n_non_orthogonal": 12}).relax_u == 1.5
+    assert physics_from_record({"n_non_orthogonal": 12}).n_non_orthogonal == 12
 
 
 def test_settings_that_are_fine_have_no_problem():

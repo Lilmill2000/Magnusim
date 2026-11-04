@@ -11,7 +11,10 @@
     "n_outer_correctors": 1,
     "n_correctors": 2,
     "n_non_orth_correctors": 0,
-    "average_from": 0.0
+    "average_from": 0.0,
+    "outer_relax_p": null,
+    "outer_relax_eq": null,
+    "outer_tolerance": null
   },
   "vectors": [
     {"name": "nothing typed", "raw": {}, "base": {}, "expected": {}},
@@ -30,6 +33,13 @@
     {"name": "averaging never before the start", "raw": {"average_from": -2}, "base": {}, "expected": {"average_from": 0.0}},
     {"name": "averaging past the end starts one frame before it", "raw": {"end_time": 2.0, "write_count": 20, "average_from": 5}, "base": {}, "expected": {"end_time": 2.0, "write_count": 20, "average_from": 1.9}},
     {"name": "blank averaging start keeps the stored one", "raw": {"average_from": ""}, "base": {"average_from": 1.0}, "expected": {"average_from": 1.0}},
-    {"name": "shorter run moves the stored averaging start", "raw": {"end_time": 1.0}, "base": {"average_from": 3.0}, "expected": {"end_time": 1.0, "average_from": 0.98}}
+    {"name": "shorter run moves the stored averaging start", "raw": {"end_time": 1.0}, "base": {"average_from": 3.0}, "expected": {"end_time": 1.0, "average_from": 0.98}},
+    {"name": "outer relaxation and tolerance kept", "raw": {"outer_relax_p": 0.5, "outer_relax_eq": 0.8, "outer_tolerance": 0.001}, "base": {}, "expected": {"outer_relax_p": 0.5, "outer_relax_eq": 0.8, "outer_tolerance": 0.001}},
+    {"name": "an edited outer relaxation or tolerance is held to its range", "raw": {"outer_relax_p": 1.5, "outer_relax_eq": 3, "outer_tolerance": 1}, "base": {}, "expected": {"outer_relax_p": 1.0, "outer_relax_eq": 1.0, "outer_tolerance": 0.1}},
+    {"name": "a tolerance edited below its range is raised to it", "raw": {"outer_tolerance": 1e-9}, "base": {}, "expected": {"outer_tolerance": 1e-6}},
+    {"name": "stored outer settings out of range are kept as saved on another edit", "raw": {"end_time": 3.0}, "base": {"outer_relax_p": 1.5, "outer_tolerance": 0.5}, "expected": {"end_time": 3.0, "outer_relax_p": 1.5, "outer_tolerance": 0.5}},
+    {"name": "a stored value sent again unchanged is kept as saved", "raw": {"outer_relax_p": 1.5, "max_co": 2}, "base": {"outer_relax_p": 1.5}, "expected": {"outer_relax_p": 1.5, "max_co": 2.0}},
+    {"name": "blank outer settings are as today", "raw": {"outer_relax_p": "", "outer_tolerance": null}, "base": {"outer_relax_p": 0.5, "outer_tolerance": 0.01}, "expected": {"outer_relax_p": null, "outer_tolerance": null}},
+    {"name": "an unusable outer relaxation is blank", "raw": {"outer_relax_eq": -0.2}, "base": {}, "expected": {"outer_relax_eq": null}}
   ]
 }

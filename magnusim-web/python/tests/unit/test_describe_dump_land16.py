@@ -80,7 +80,22 @@ def test_describe_emits_numerics_and_control_for_analysis():
         assert all("default" in p for p in row["control_schema"]["properties"].values())
     assert "delta_t" not in transient["control_schema"].get("required", [])
 
-    # Steady SIMPLE numerics the solve reads; defaults match the pre-Phase-6 writer.
+    # Steady SIMPLE numerics the solve reads; defaults match the pre-Phase-6 writer. RH3 adds the
+    # schemes, linear solvers, turbulence relaxation and velocity limit (both modes, advanced).
+    rh3 = {
+        "grad_limiter",
+        "momentum_convection",
+        "turbulence_convection",
+        "non_orth_correction",
+        "p_tolerance",
+        "p_rel_tol",
+        "p_max_iter",
+        "eq_tolerance",
+        "eq_rel_tol",
+        "eq_max_iter",
+        "velocity_limit",
+        "velocity_limit_max",
+    }
     steady_numerics = steady["numerics_schema"]["properties"]
     assert set(steady_numerics) == {
         "numerics_preset",
@@ -90,6 +105,8 @@ def test_describe_emits_numerics_and_control_for_analysis():
         "relax_u",
         "relax_p",
         "n_non_orthogonal",
+        "relax_turbulence",
+        *rh3,
     }
     # Robust (the schemes before the preset) and SIMPLE (not SIMPLEC) by default.
     assert steady_numerics["numerics_preset"]["default"] == "robust"
@@ -97,8 +114,9 @@ def test_describe_emits_numerics_and_control_for_analysis():
     assert steady_numerics["residual_u"]["default"] == 1e-4
     assert steady_numerics["n_non_orthogonal"]["default"] == 3
     assert all(prop.get("description") for prop in steady_numerics.values())
-    # PIMPLE settings come from the run panel, so the transient row has none.
-    assert transient["numerics_schema"]["properties"] == {}
+    # PIMPLE settings come from the run panel; the transient row has only RH3's, all advanced.
+    assert set(transient["numerics_schema"]["properties"]) == rh3
+    assert all(p["x-cfddesk"]["advanced"] for p in transient["numerics_schema"]["properties"].values())
     assert steady["time_dependency"] == "steady"
     assert transient["time_dependency"] == "transient"
     # Its turbulence choice is the settings_schema default, which seeds a new study.

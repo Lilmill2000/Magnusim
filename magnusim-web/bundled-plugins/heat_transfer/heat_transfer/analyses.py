@@ -8,6 +8,7 @@ from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 from magnusim_sdk.numerics_advice import description as advice_description
+from magnusim_sdk.numerics_settings import run_field_specs, study_field_specs
 
 from .bcs import BC_FIELDS, BC_SEEDS, BC_TYPES
 from .materials import FLUID_MODEL, SOLID_MODEL
@@ -152,6 +153,33 @@ def settings_schema() -> tuple[SchemaField, ...]:
     )
 
 
+# What Heat Transfer adds after a numerics key's advice (its own defaults).
+_RH3_EXTRA: dict[str, str] = {
+    "eq_max_iter": "Blank is OpenFOAM's 1000.",
+    "velocity_limit": "Heat Transfer's default is Off.",
+    "outer_relax_p": "Blank is 1 (none).",
+    "outer_relax_eq": "Blank is 1 (none).",
+}
+
+
+def _rh3_study_fields(*, transient: bool) -> list[SchemaField]:
+    """RH3: the study's schemes, linear solvers, turbulence relaxation (steady) and velocity
+    limit (magnusim_sdk.numerics_settings), under Advanced settings. Defaults are today's
+    values; a blank one is written as before (the preset's, or OpenFOAM's own)."""
+    return [
+        SchemaField(**kw)
+        for kw in study_field_specs(
+            transient=transient,
+            energy=True,
+            simplec=False,
+            p_name="p_rgh",
+            eq_max_iter_default=None,
+            velocity_limit_default="off",
+            extra=_RH3_EXTRA,
+        )
+    ]
+
+
 def numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
     fields: list[SchemaField] = [
         SchemaField(
@@ -201,6 +229,7 @@ def numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             description="Extra pressure corrections for skewed cells: 0 for clean hex meshes, 1 to 3 for tetrahedra.",
         )
     )
+    fields.extend(_rh3_study_fields(transient=transient))
     return tuple(fields)
 
 
@@ -236,6 +265,8 @@ def control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
                     group="control", advanced=True, description=advice_description("n_outer_correctors")),
         SchemaField("n_correctors", "Pressure correctors", "int", default=int(d["n_correctors"]), min=1, max=10,
                     group="control", advanced=True),
+        # RH3: the PIMPLE outer loops' relaxation and tolerance (blank = as today).
+        *(SchemaField(**kw) for kw in run_field_specs(p_name="p_rgh", extra=_RH3_EXTRA)),
     )
 
 
@@ -294,7 +325,7 @@ def _decision(spec: Any, ctx: CaseContext) -> dict[str, Any]:
 
         settings = override if spec.transient is not None else {"end_time": spec.end_time, "write_interval": spec.write_interval}
         try:
-            out["checks"] = run_check(transient=spec.transient is not None, spec=spec, settings=settings or {}, context=context)["checks"]
+            out["checks"] = run_check(transient=spec.transient is not None, spec=spec, inputs=ctx.inputs, settings=settings or {}, context=context)["checks"]
         except Exception as exc:  # noqa: BLE001 (the check never stops a Start: it is left out, and says why)
             out["checks_error"] = f"{type(exc).__name__}: {exc}"[:200]
     if convergence_stops_off(spec):

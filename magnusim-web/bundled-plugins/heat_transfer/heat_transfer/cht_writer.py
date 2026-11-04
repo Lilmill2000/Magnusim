@@ -124,10 +124,12 @@ mixture
 }}"""
 
 
-def solid_schemes_text(*, numerics: str, transient: Any) -> str:
-    from .writer import _SCHEMES
+def solid_schemes_text(*, numerics: str, transient: Any, settings: Any = None) -> str:
+    """A solid region's fvSchemes: the preset's non-orthogonal correction, or the study's own
+    (RH3)."""
+    from .writer import schemes
 
-    s = _SCHEMES.get(numerics) or _SCHEMES["robust"]
+    s = schemes(numerics, settings)
     if transient is None:
         ddt = "steadyState"
     else:
@@ -295,6 +297,7 @@ def _wall_turbulence(flow: Any, field: str) -> dict[str, str]:
 def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> dict[str, Any]:
     """Write a conjugate heat transfer run's case into ``out``; the report the core records."""
     from incompressible_flow.flow_bcs import flow_patches
+    from magnusim_sdk.numerics_settings import limit_u_text
 
     from .functions import OPENING_KINDS
     from .physics import solved_turbulence_fields
@@ -303,12 +306,14 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
     from .writer import (
         PRT,
         control_dict_text,
+        fluid_velocity_cap,
         fv_schemes_text,
         fv_solution_text,
         health_hints,
         reference_density,
         thermal_entries,
         thermophysical_text,
+        transient_sidecar,
         turbulence_text,
     )
 
@@ -433,11 +438,18 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
             write_foam_dict(out / "constant" / r / "turbulenceProperties", "dictionary", "turbulenceProperties",
                             turbulence_text(model))
             write_foam_dict(out / "system" / r / "fvSchemes", "dictionary", "fvSchemes",
-                            fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient))
+                            fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient,
+                                            settings=ph.numerics_settings))
             write_foam_dict(out / "system" / r / "fvSolution", "dictionary", "fvSolution",
                             fv_solution_text(model=model, residual=ph.residual, n_non_orth=ph.n_non_orthogonal,
                                              transient=spec.transient, residual_control=False,
-                                             relax=(ph.relax_u, ph.relax_p, ph.relax_h)))
+                                             relax=(ph.relax_u, ph.relax_p, ph.relax_h), settings=ph.numerics_settings))
+            # The velocity limit (RH3: Off by default, as before).
+            cap = fluid_velocity_cap(ph, flow.speed_ref if flow is not None else None)
+            if cap is None:
+                (out / "system" / r / "fvOptions").unlink(missing_ok=True)
+            else:
+                write_foam_dict(out / "system" / r / "fvOptions", "dictionary", "fvOptions", limit_u_text(num(cap)))
             for p in patches:
                 kind = flow.kinds.get(p, "wall")
                 if kind == "wall":
@@ -469,7 +481,7 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
             write_foam_dict(out / "constant" / r / "thermophysicalProperties", "dictionary", "thermophysicalProperties",
                             solid_thermo_text(props.rho, props.cp, props.k))
             write_foam_dict(out / "system" / r / "fvSchemes", "dictionary", "fvSchemes",
-                            solid_schemes_text(numerics=ph.numerics, transient=spec.transient))
+                            solid_schemes_text(numerics=ph.numerics, transient=spec.transient, settings=ph.numerics_settings))
             write_foam_dict(out / "system" / r / "fvSolution", "dictionary", "fvSolution",
                             solid_solution_text(n_non_orth=ph.n_non_orthogonal, transient=spec.transient))
             src = spec.heat_sources.get(str(region.record.get("id") or ""))
@@ -575,7 +587,7 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
     if settle is not None:
         sidecar["settle"] = settle
     if transient and spec.transient is not None:
-        sidecar["transient"] = {**dataclasses.asdict(spec.transient), "max_di": MAX_DI}
+        sidecar["transient"] = {**transient_sidecar(spec.transient), "max_di": MAX_DI}
     sidecar["health_hints"] = health_hints(
         spec,
         app=app,

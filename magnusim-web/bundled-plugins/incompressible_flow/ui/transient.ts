@@ -19,7 +19,29 @@ export interface TransientSettings {
   n_non_orth_correctors: number;
   /** When the time averages (mean velocity, mean pressure) start, in seconds; 0 = from the start. */
   average_from: number;
+  /** RH3: the PIMPLE outer loops' relaxation and tolerance (null = as today; used with 2 or more outer correctors). */
+  outer_relax_p: number | null;
+  outer_relax_eq: number | null;
+  outer_tolerance: number | null;
   [key: string]: unknown;
+}
+
+/**
+ * RH3's run keys and the range an edit of each is held to (magnusim_sdk.numerics_settings.BOUNDS;
+ * tests/transient_vectors.json keeps the two in step). A stored value is never held to it: it is
+ * used as saved.
+ */
+export const RUN_KEY_BOUNDS: Readonly<Record<'outer_relax_p' | 'outer_relax_eq' | 'outer_tolerance', readonly [number, number]>> = Object.freeze({
+  outer_relax_p: [0, 1] as const,
+  outer_relax_eq: [0, 1] as const,
+  outer_tolerance: [1e-6, 0.1] as const,
+});
+
+/** A run key's value the solver can use (above 0), or null (blank). */
+function positiveOrNull(v: unknown): number | null {
+  if (v === null || v === undefined || typeof v === 'boolean' || String(v).trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 export function frameInterval(t: Partial<TransientSettings> | null | undefined): number {
@@ -43,6 +65,8 @@ export function clampAverageFrom(value: unknown, endTime: number, interval: numb
 /**
  * Clamp and fill a settings object the way the form always has: `raw` over
  * `base` over the defaults; blank advanced values stay null (calculated).
+ * RH3's run keys (outer relaxation, outer tolerance) are held to their range only when `raw`
+ * changes them from `base` (the edit): a stored value outside it is kept as saved.
  */
 export function normalizeTransient(
   raw: Record<string, unknown> | null | undefined,
@@ -84,7 +108,15 @@ export function normalizeTransient(
   out.n_correctors = Math.min(Math.max(out.n_correctors || 1, 1), 10);
   out.n_non_orth_correctors = Math.min(Math.max(out.n_non_orth_correctors || 0, 0), 5);
   out.average_from = clampAverageFrom(out.average_from, out.end_time, interval);
-  return out;
+  const run: Record<string, number | null> = {};
+  for (const [key, [lo, hi]] of Object.entries(RUN_KEY_BOUNDS)) {
+    const given = Object.prototype.hasOwnProperty.call(src, key);
+    let v = positiveOrNull(given ? src[key] : b[key]);
+    const edited = given && positiveOrNull(src[key]) !== positiveOrNull(b[key]);
+    if (edited && v !== null) v = Math.min(Math.max(v, lo), hi);
+    run[key] = v !== null && v > 0 ? v : null;
+  }
+  return { ...out, outer_relax_p: run.outer_relax_p, outer_relax_eq: run.outer_relax_eq, outer_tolerance: run.outer_tolerance };
 }
 
 /**

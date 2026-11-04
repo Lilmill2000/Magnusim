@@ -8,6 +8,9 @@
 - a steady run's relaxation (buoyant SIMPLE) and, on a skewed mesh, the robust numerics
   preset as the alternative.
 
+- RH3: the study's numerics and the run's outer relaxation and tolerance stored outside their
+  field's range (``setting_out_of_range``; used as saved), and "Numerics as written".
+
 Heat Transfer passes no flow speed yet, so its runs get no time-step estimate, and its own
 rules (Boussinesq validity, a Rayleigh-number laminar/turbulent check) are not made here.
 """
@@ -21,8 +24,9 @@ NO_ESTIMATE = "No time-step estimate for Heat Transfer runs yet"
 UNCHECKED = "its mesh and physics are checked once the mesh is generated"
 
 
-def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, Any] | None, *, transient: bool) -> dict[str, Any]:
+def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, Any] | None, *, transient: bool, inputs: Any = None) -> dict[str, Any]:
     """What :func:`magnusim_sdk.runcheck.check` reads of this run (``spec`` None: settings only)."""
+    from .numerics_written import stored_out_of_range
     from .transient import normalize_transient
 
     ctx = context if isinstance(context, dict) else {}
@@ -39,6 +43,7 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
         "rate_source": ctx.get("rate_source"),
         "kept": ctx.get("kept") or [],
         "no_estimate": NO_ESTIMATE,
+        "out_of_range": stored_out_of_range(getattr(inputs, "study", None) if inputs is not None else None, raw, transient=transient),
     }
     if spec is None or not getattr(spec, "ok", False):
         # Only the run's settings could be read (the spec needs a generated mesh): its mesh
@@ -82,8 +87,23 @@ def _turbulence(model: str) -> dict[str, Any]:
     }
 
 
+def numerics(spec: Any, inputs: Any, settings: dict[str, Any], *, transient: bool) -> list[dict[str, str]]:
+    """RH3: "Numerics as written" of this run, from the spec its case is written with (before
+    the mesh is generated: the study's record and the run's settings)."""
+    from .numerics_written import numerics_rows
+
+    if spec is not None and getattr(spec, "ok", False):
+        return numerics_rows(spec.physics, transient=spec.transient, cht=bool(getattr(spec, "cht", False)))
+    from .physics import physics_from_record
+    from .transient import resolve_transient
+
+    physics = physics_from_record(getattr(inputs, "study", None) if inputs is not None else None)
+    return numerics_rows(physics, transient=resolve_transient(settings) if transient else None)
+
+
 def run_check(*, transient: bool, inputs: Any = None, settings: dict[str, Any] | None = None, context: dict[str, Any] | None = None, spec: Any = None) -> dict[str, Any]:
-    """``RunModel.check``: ``{"checks": [...], "estimate": {...}}`` (magnusim_sdk.runcheck)."""
+    """``RunModel.check``: ``{"checks": [...], "estimate": {...}, "numerics": [...]}``
+    (magnusim_sdk.runcheck; RH3: "Numerics as written")."""
     from magnusim_sdk.runcheck import check
 
     raw = settings if isinstance(settings, dict) else {}
@@ -91,4 +111,11 @@ def run_check(*, transient: bool, inputs: Any = None, settings: dict[str, Any] |
         from .runspec import load_spec
 
         spec = load_spec(inputs)
-    return check(check_inputs(spec, raw, context, transient=transient))
+    out = check(check_inputs(spec, raw, context, transient=transient, inputs=inputs))
+    try:
+        out["numerics"] = numerics(spec, inputs, raw, transient=transient)
+    except (AttributeError, TypeError, ValueError) as exc:
+        # "Numerics as written" is left out (and says why); the check's rows stand.
+        out["numerics"] = []
+        out["numerics_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return out

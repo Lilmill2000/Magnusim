@@ -18,6 +18,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from magnusim_sdk.numerics_settings import RUN_KEYS, clamp_edit, run_value
+
 # 1500 iterations: the heat-sink sample carries its 10 W out within about 1 % by then (VALIDATION.md, README).
 STEADY_DEFAULTS: dict[str, Any] = {"end_time": 1500, "write_interval": 100}
 
@@ -31,6 +33,11 @@ TRANSIENT_DEFAULTS: dict[str, Any] = {
     "time_scheme": "Euler",
     "n_outer_correctors": 1,
     "n_correctors": 2,
+    # RH3: the PIMPLE outer loops' relaxation and tolerance (only with 2 or more outer
+    # correctors). None = as today: no relaxation (1), and every outer corrector on every step.
+    "outer_relax_p": None,
+    "outer_relax_eq": None,
+    "outer_tolerance": None,
 }
 
 
@@ -69,8 +76,13 @@ def _pos_or_none(v: Any) -> float | None:
     return n if math.isfinite(n) and n > 0 else None
 
 
-def normalize_transient(partial: dict | None) -> dict[str, Any]:
-    """A transient block as it is stored: every key, each in range (a bad value keeps the default)."""
+def normalize_transient(partial: dict | None, edited: Any = None) -> dict[str, Any]:
+    """A transient block as it is stored: every key, each in range (a bad value keeps the default).
+
+    RH3's run keys (outer relaxation, outer tolerance) are kept as stored, even outside their
+    range (a stored value is used as saved); only the keys in ``edited`` (an edit's changed
+    keys) are held to their bounds.
+    """
     d = TRANSIENT_DEFAULTS
     p = partial if isinstance(partial, dict) else {}
     out = dict(d)
@@ -93,6 +105,10 @@ def normalize_transient(partial: dict | None) -> dict[str, Any]:
     interval = out["end_time"] / out["write_count"]
     if out["max_delta_t"] is not None and out["max_delta_t"] > interval:
         out["max_delta_t"] = interval
+    changed = set(edited) if edited is not None else set()
+    for key in RUN_KEYS:
+        kept = run_value(key, p.get(key))
+        out[key] = clamp_edit(key, kept) if key in changed else kept
     return out
 
 
@@ -110,6 +126,10 @@ class TransientControl:
     write_count: int
     time_step_mode: str
     source: dict[str, str]
+    # RH3 (None = as today; only with 2 or more outer correctors).
+    outer_relax_p: float | None = None
+    outer_relax_eq: float | None = None
+    outer_tolerance: float | None = None
 
 
 def resolve_transient(settings: dict | None, *, h_m: float | None = None, speed: float | None = None) -> TransientControl:
@@ -149,6 +169,9 @@ def resolve_transient(settings: dict | None, *, h_m: float | None = None, speed:
         write_count=frames,
         time_step_mode=str(t["time_step_mode"]),
         source=source,
+        outer_relax_p=t.get("outer_relax_p"),
+        outer_relax_eq=t.get("outer_relax_eq"),
+        outer_tolerance=t.get("outer_tolerance"),
     )
 
 

@@ -23,6 +23,23 @@ from magnusim_sdk.foam import (
     write_decompose_par_dict as _write_decompose_par_dict_sdk,
 )
 from magnusim_sdk.foam import write_foam_text as _write_foam
+from magnusim_sdk.numerics_settings import BLANK as BLANK_NUMERICS
+from magnusim_sdk.numerics_settings import (
+    CONVECTION,
+    EQ_REL_TOL,
+    EQ_TOLERANCE,
+    GRAD_LIMITERS,
+    MOMENTUM,
+    NON_ORTH,
+    P_MAX_ITER,
+    P_REL_TOL,
+    P_TOLERANCE,
+    NumericsSettings,
+    bounded,
+    foam_number,
+    scheme_choices,
+    velocity_cap,
+)
 from magnusim_sdk.units import UNITS as _UNITS
 
 from .bc_kinds import (
@@ -90,16 +107,71 @@ limitU
     )
 
 
+# The outer loops' relaxation with 2 or more outer correctors when the run leaves it blank (RH3).
+OUTER_RELAX_P = 0.3
+OUTER_RELAX_EQ = 0.7
+# The equations' maxIter when the study leaves it blank.
+EQ_MAX_ITER = 50
+
+
+def linear_solvers(numerics: NumericsSettings | None = None) -> dict[str, dict[str, Any]]:
+    """The linear solvers' settings the case is written with (RH3: the study's, blank = as
+    before): ``{"p": {tol, rel_tol, max_iter}, "eq": {...}}``."""
+    ns = numerics or BLANK_NUMERICS
+    return {
+        "p": {
+            "tol": ns.p_tolerance or P_TOLERANCE,
+            "rel_tol": ns.p_rel_tol if ns.p_rel_tol is not None else P_REL_TOL,
+            "max_iter": ns.p_max_iter or P_MAX_ITER,
+        },
+        "eq": {
+            "tol": ns.eq_tolerance or EQ_TOLERANCE,
+            "rel_tol": ns.eq_rel_tol if ns.eq_rel_tol is not None else EQ_REL_TOL,
+            "max_iter": ns.eq_max_iter or EQ_MAX_ITER,
+        },
+    }
+
+
+def outer_residual_text(fields: tuple[str, ...], tolerance: float) -> str:
+    """RH3: the PIMPLE dictionary's residualControl, the outer loops' tolerance: each listed
+    field's (relTol 0), 4-space indented, ending its last line."""
+    out = "    residualControl\n    {\n"
+    for f in fields:
+        out += f"        {f}\n        {{\n            tolerance       {foam_number(tolerance)};\n            relTol          0;\n        }}\n"
+    return out + "    }\n"
+
+
+def _p_solver_lines(ls: dict[str, Any]) -> str:
+    return f"""        solver          GAMG;
+        tolerance       {foam_number(ls["tol"])};
+        relTol          {foam_number(ls["rel_tol"])};
+        smoother        GaussSeidel;
+        nCellsInCoarsestLevel 20;
+        maxIter         {int(ls["max_iter"])};
+"""
+
+
+def _eq_solver_lines(ls: dict[str, Any]) -> str:
+    return f"""        solver          smoothSolver;
+        smoother        symGaussSeidel;
+        tolerance       {foam_number(ls["tol"])};
+        relTol          {foam_number(ls["rel_tol"])};
+        maxIter         {int(ls["max_iter"])};
+"""
+
+
 def write_fv_solution_pimple(
     path: Path,
     *,
     ctrl: TransientControl,
     turbulence: TurbulenceModel = "kOmegaSST",
-    numerics: Any | None = None,
+    numerics: NumericsSettings | None = None,
     potential_non_orth: int | None = None,
 ) -> None:
     """pimpleFoam fvSolution matching w30.transientFvSolution.
 
+    ``numerics`` (RH3): the study's linear solvers; the run's outer relaxation and outer
+    tolerance come with ``ctrl`` (blank = as before).
     ``potential_non_orth``: the study starts from potential flow; adds the Phi
     solver and the potentialFlow dict potentialFoam reads.
     """
@@ -107,17 +179,22 @@ def write_fv_solution_pimple(
     n_corr = max(1, int(round(ctrl.n_correctors)))
     n_non_orth = max(0, int(round(ctrl.n_non_orthogonal_correctors)))
     eq = _equation_regex(str(turbulence))
+    ls = linear_solvers(numerics)
+    outer_p = getattr(ctrl, "outer_relax_p", None) or OUTER_RELAX_P
+    outer_eq = getattr(ctrl, "outer_relax_eq", None) or OUTER_RELAX_EQ
+    outer_tol = getattr(ctrl, "outer_tolerance", None)
+    residual = outer_residual_text(("p", eq), outer_tol) if n_outer > 1 and outer_tol else ""
     if n_outer > 1:
         relax = f"""relaxationFactors
 {{
     fields
     {{
-        p               0.3;
+        p               {_foam_float(outer_p)};
         pFinal          1;
     }}
     equations
     {{
-        {eq}   0.7;
+        {eq}   {_foam_float(outer_eq)};
         {_final_regex(eq)} 1;
     }}
 }}"""
@@ -129,8 +206,6 @@ def write_fv_solution_pimple(
         ".*"            1;
     }
 }"""
-    # PIMPLE numerics come from the run panel (TransientControl), not the study panel.
-    _ = numerics
     _write_foam(
         path,
         _foam_header("fvSolution")
@@ -139,13 +214,7 @@ solvers
 {{
     p
     {{
-        solver          GAMG;
-        tolerance       1e-7;
-        relTol          0.01;
-        smoother        GaussSeidel;
-        nCellsInCoarsestLevel 20;
-        maxIter         200;
-    }}
+{_p_solver_lines(ls["p"])}    }}
     pFinal
     {{
         $p;
@@ -153,12 +222,7 @@ solvers
     }}
 {_potential_solver(potential_non_orth)}    {eq}
     {{
-        solver          smoothSolver;
-        smoother        symGaussSeidel;
-        tolerance       1e-8;
-        relTol          0.1;
-        maxIter         50;
-    }}
+{_eq_solver_lines(ls["eq"])}    }}
     {_final_regex(eq)}
     {{
         $U;
@@ -173,7 +237,7 @@ PIMPLE
     nNonOrthogonalCorrectors {n_non_orth};
     turbOnFinalIterOnly yes;
     consistent          no;
-}}
+{residual}}}
 {_potential_flow_dict(potential_non_orth)}{relax}
 
 // ************************************************************************* //
@@ -209,15 +273,24 @@ _POTENTIAL_DIV = "    div(div(phi,U)) Gauss linear;\n"
 
 
 def write_fv_schemes_transient(
-    path: Path, *, ctrl: TransientControl, turbulence: str = "kOmegaSST", potential: bool = False
+    path: Path,
+    *,
+    ctrl: TransientControl,
+    turbulence: str = "kOmegaSST",
+    potential: bool = False,
+    numerics: NumericsSettings | None = None,
 ) -> None:
     """Compact transient fvSchemes matching w30.transientFvSchemes / js_transient golden.
 
     ``potential``: the study starts from potential flow (the scheme potentialFoam -writep reads).
+    ``numerics`` (RH3): the study's schemes; blank ones are this writer's own.
     """
     ddt = "backward" if ctrl.time_scheme == "backward" else "Euler"
-    grads = _grad_lines(turbulence)
-    divs = _div_lines(turbulence, "Gauss limitedLinear 1") + (_POTENTIAL_DIV if potential else "")
+    ch = scheme_choices(numerics or BLANK_NUMERICS, preset=None)
+    grad = GRAD_LIMITERS[ch["grad_limiter"][0]]
+    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
+    grads = _grad_lines(turbulence, grad)
+    divs = _div_lines(turbulence, CONVECTION[ch["turbulence_convection"][0]]) + (_POTENTIAL_DIV if potential else "")
     _write_foam(
         path,
         _foam_header("fvSchemes")
@@ -226,16 +299,16 @@ ddtSchemes {{ default {ddt}; }}
 gradSchemes
 {{
     default         Gauss linear;
-    grad(U)         cellLimited Gauss linear 1;
+    grad(U)         {grad};
 {grads}}}
 divSchemes
 {{
     default         none;
-    div(phi,U)      Gauss linearUpwind grad(U);
+    div(phi,U)      {MOMENTUM[ch["momentum_convection"][0]]};
 {divs}}}
-laplacianSchemes {{ default Gauss linear limited corrected 0.5; }}
+laplacianSchemes {{ default {laplacian}; }}
 interpolationSchemes {{ default linear; }}
-snGradSchemes {{ default limited corrected 0.5; }}
+snGradSchemes {{ default {sn_grad}; }}
 wallDist {{ method meshWave; }}
 
 // ************************************************************************* //
@@ -654,11 +727,6 @@ def freestream_pressure_pa(bc: dict) -> float:
     return p if math.isfinite(p) else 0.0
 
 
-# The linear solvers the case's fvSolution names (write_fv_solution_pimple and the steady
-# body): their caps and tolerances, for the health check of solves at their limit.
-_LINSOLVE_P = {"max_iter": 200, "tol": 1e-7, "rel_tol": 0.01}
-_LINSOLVE_EQ = {"max_iter": 50, "tol": 1e-8, "rel_tol": 0.1}
-
 
 def fixed_inflow(spec: Any) -> bool:
     """Every inlet holds a fixed velocity or flow rate (RH1 ``fixed_inflow``): a velocity
@@ -686,12 +754,13 @@ def health_hints(
     physics: StudyPhysics,
     model: str,
     speed_ref: float,
-    u_max: float,
+    u_max: float | None,
     patch_names: list[str],
 ) -> dict[str, Any]:
     """The run's ``health_hints`` (w27-case.json and the case report): the solver mode, the
-    Courant setting, the reference speed and velocity limit, the linear solvers' caps, and the
-    inlet and outlet monitors (their function objects are ``mon_<patch>``)."""
+    Courant setting, the reference speed and velocity limit (None when the study turned it
+    off), the linear solvers' caps as written (RH3: the study's), and the inlet and outlet
+    monitors (their function objects are ``mon_<patch>``)."""
     _ensure_web_imports()
     t = getattr(spec, "transient", None)
     transient = t is not None
@@ -702,9 +771,10 @@ def health_hints(
     else:
         mode = "SIMPLEC" if physics.simplec else "SIMPLE"
     # A transient run's last loop solves with the *Final dictionaries (relTol 0); a steady run has none.
+    ls = linear_solvers(physics.numerics_settings)
     linsolve: dict[str, dict[str, Any]] = {}
-    for f, base in (("p", _LINSOLVE_P), *((f, _LINSOLVE_EQ) for f in ("U", *turbulence_fields(model)) if f not in ("nut", "R"))):
-        linsolve[f] = {**base, "final_rel_tol": 0.0 if transient else base["rel_tol"]}
+    for f, base in (("p", ls["p"]), *((f, ls["eq"]) for f in ("U", *turbulence_fields(model)) if f not in ("nut", "R"))):
+        linsolve[f] = {"max_iter": int(base["max_iter"]), "tol": float(base["tol"]), "rel_tol": float(base["rel_tol"]), "final_rel_tol": 0.0 if transient else float(base["rel_tol"])}
     inlet = outlet = None
     for m in spec.mapped or []:
         patch = m.get("patch")
@@ -729,7 +799,7 @@ def health_hints(
         "uref_source": "inlet" if any(is_velocity_inlet(m.get("bc")) for m in spec.mapped or []) else "pressure",
         "fixed_inflow": fixed_inflow(spec),
         "turbulence": model,
-        "limiter": {"name": "limitU", "cap": float(u_max), "factor": LIMIT_FACTOR, "floor": LIMIT_FLOOR},
+        "limiter": {"name": "limitU", "cap": float(u_max), "factor": LIMIT_FACTOR, "floor": LIMIT_FLOOR} if u_max is not None else None,
         "linsolve": linsolve,
         "monitors": {"inlet": inlet, "outlet": outlet} if inlet and outlet else None,
     }
@@ -1297,10 +1367,25 @@ _STEADY_SCHEMES: dict[str, dict[str, str]] = {
 }
 
 
+def steady_schemes(physics: StudyPhysics | None = None) -> dict[str, str]:
+    """The steady fvSchemes strings: the study's choices (RH3), each blank one from its
+    Numerics preset (_STEADY_SCHEMES). Convection is written bounded."""
+    ph = physics or DEFAULT_PHYSICS
+    ch = scheme_choices(ph.numerics_settings, preset=ph.numerics if ph.numerics in _STEADY_SCHEMES else "robust")
+    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
+    return {
+        "grad": GRAD_LIMITERS[ch["grad_limiter"][0]],
+        "turb_div": bounded(CONVECTION[ch["turbulence_convection"][0]], True),
+        "momentum": bounded(MOMENTUM[ch["momentum_convection"][0]], True),
+        "laplacian": laplacian,
+        "sn_grad": sn_grad,
+    }
+
+
 def _steady_fv_schemes_body(physics: StudyPhysics | None = None) -> str:
     ph = physics or DEFAULT_PHYSICS
     model = ph.turbulence_model
-    s = _STEADY_SCHEMES.get(ph.numerics) or _STEADY_SCHEMES["robust"]
+    s = steady_schemes(ph)
     return f"""ddtSchemes {{ default steadyState; }}
 gradSchemes
 {{
@@ -1310,12 +1395,19 @@ gradSchemes
 divSchemes
 {{
     default         none;
-    div(phi,U)      bounded Gauss linearUpwind grad(U);
+    div(phi,U)      {s["momentum"]};
 {_div_lines(model, s["turb_div"])}{_POTENTIAL_DIV if ph.uses_potential_flow() else ""}}}
 laplacianSchemes {{ default {s["laplacian"]}; }}
 interpolationSchemes {{ default linear; }}
 snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}"""
+
+
+def solve_relax_turbulence(ph: StudyPhysics) -> float:
+    """The turbulence equations' steady relaxation: the study's Relaxation turbulence (RH3; not
+    while SIMPLEC is on), else the velocity's."""
+    own = ph.numerics_settings.relax_turbulence
+    return own if own is not None and not ph.simplec else ph.solve_relax_u()
 
 
 def _steady_fv_solution_body(physics: StudyPhysics | None = None, *, residual_control: bool = True) -> str:
@@ -1333,29 +1425,20 @@ def _steady_fv_solution_body(physics: StudyPhysics | None = None, *, residual_co
     residual_line = f"    residualControl {{ {residual} }}\n" if residual_control else ""
     # SIMPLEC replaces the study's relaxation with its own (physics.solve_relax_*).
     relax_u = _foam_float(ph.solve_relax_u())
+    relax_t = _foam_float(solve_relax_turbulence(ph))
     equations = f"        U               {relax_u};\n"
     for name in turb:
-        equations += f"        {name:<15} {relax_u};\n"
+        equations += f"        {name:<15} {relax_t};\n"
     non_orth = ph.potential_flow_non_orth() if ph.uses_potential_flow() else None
+    ls = linear_solvers(ph.numerics_settings)
     return f"""solvers
 {{
     p
     {{
-        solver          GAMG;
-        tolerance       1e-7;
-        relTol          0.01;
-        smoother        GaussSeidel;
-        nCellsInCoarsestLevel 20;
-        maxIter         200;
-    }}
+{_p_solver_lines(ls["p"])}    }}
 {_potential_solver(non_orth)}    {_equation_regex(ph.turbulence_model)}
     {{
-        solver          smoothSolver;
-        smoother        symGaussSeidel;
-        tolerance       1e-8;
-        relTol          0.1;
-        maxIter         50;
-    }}
+{_eq_solver_lines(ls["eq"])}    }}
 }}
 SIMPLE
 {{
@@ -1812,11 +1895,13 @@ RAS
             ctrl=spec.transient,  # type: ignore[arg-type]
             turbulence=model,
             potential=physics.uses_potential_flow(),
+            numerics=physics.numerics_settings,
         )
         write_fv_solution_pimple(
             out / "system" / "fvSolution",
             ctrl=spec.transient,  # type: ignore[arg-type]
             turbulence=model,  # type: ignore[arg-type]
+            numerics=physics.numerics_settings,
             potential_non_orth=physics.potential_flow_non_orth() if physics.uses_potential_flow() else None,
         )
     else:
@@ -1841,8 +1926,13 @@ RAS
 
     from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
 
-    u_max = max(float(LIMIT_FLOOR), float(LIMIT_FACTOR) * abs(speed_ref))
-    write_fv_options_limit_u(out / "system" / "fvOptions", max_u=u_max)
+    # The velocity limit (RH3: the study's; Automatic is max(50, 10 x the reference speed)).
+    cap = velocity_cap(physics.numerics_settings, speed_ref, default="auto", factor=LIMIT_FACTOR, floor=LIMIT_FLOOR)
+    u_max: float | None = cap["cap"]
+    if u_max is None:
+        (out / "system" / "fvOptions").unlink(missing_ok=True)
+    else:
+        write_fv_options_limit_u(out / "system" / "fvOptions", max_u=u_max)
 
     if int(spec.n_procs) > 1:
         _write_decompose_par_dict_sdk(out / "system" / "decomposeParDict", int(spec.n_procs))

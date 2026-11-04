@@ -176,11 +176,15 @@ class RunModel:
     mesh's facts and Courant-rate table, the ranks the run would get, this PC's solve rate and
     the codes kept as set (cfddesk.project.run_check). The estimate says ``complete: False``
     with ``unchecked`` when only the run's settings could be read. :func:`run_check` calls it
-    and cleans what it returns; without it a run has no check.
+    and cleans what it returns; without it a run has no check. RH3 (API 1.9): its answer may
+    carry ``numerics`` ("Numerics as written": ``[{group, label, value, source}]``), and
+    ``normalize`` may take ``edited`` (the keys an edit changes: only those are held to their
+    bounds; a stored value outside them is kept as saved).
     """
 
     defaults: Callable[[], dict[str, Any]]
-    normalize: Callable[[dict[str, Any]], dict[str, Any]]
+    # (raw) -> stored; API 1.9: it may also take ``edited`` (the keys an edit changes).
+    normalize: Callable[..., dict[str, Any]]
     preview: Callable[..., dict[str, Any]] | None = None
     # API 1.9: the pre-run check (the class docstring).
     check: Callable[..., Any] | None = None
@@ -501,8 +505,24 @@ def run_normalize(
     model = run_model(spec)
     raw = {**(base or {}), **(settings or {})}
     if model is not None:
+        if _takes_edited(model.normalize):
+            # API 1.9 (RH3): the keys this edit changes, the only ones held to their bounds; a
+            # stored value outside them is kept as saved.
+            stored = base or {}
+            edited = sorted(k for k, v in (settings or {}).items() if k not in stored or stored.get(k) != v)
+            return dict(model.normalize(raw, edited=edited) or {})
         return dict(model.normalize(raw) or {})
     return {**run_defaults(spec), **raw}
+
+
+def _takes_edited(fn: Any) -> bool:
+    """Whether a run model's normalize takes ``edited`` (API 1.9)."""
+    import inspect
+
+    try:
+        return "edited" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def run_preview(spec: Any, **kwargs: Any) -> dict[str, Any]:
@@ -562,7 +582,16 @@ def run_check(spec: Any, **kwargs: Any) -> dict[str, Any]:
                 "kept": bool(row.get("kept")),
             }
         )
-    return {"checked": True, "checks": rows, "estimate": estimate}
+    out: dict[str, Any] = {"checked": True, "checks": rows, "estimate": estimate}
+    numerics = got.get("numerics") if isinstance(got, dict) else None
+    if isinstance(numerics, list):
+        # RH3: "Numerics as written" ({group, label, value, source} rows), when the analysis gives it.
+        out["numerics"] = [
+            {k: str(n.get(k) or "")[:300 if k == "value" else 80] for k in ("group", "label", "value", "source")}
+            for n in numerics[:60]
+            if isinstance(n, dict) and str(n.get("label") or "").strip()
+        ]
+    return out
 
 
 NO_MONITORS: dict[str, Any] = {

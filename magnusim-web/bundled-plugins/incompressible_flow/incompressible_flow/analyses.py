@@ -8,6 +8,7 @@ from cfddesk.registry.analysis import AnalysisType, CaseContext, ResultField
 from cfddesk.registry.requirements import Requirement
 from cfddesk.registry.schema import SchemaField
 from magnusim_sdk.numerics_advice import description as advice_description
+from magnusim_sdk.numerics_settings import run_field_specs, study_field_specs
 
 from . import physics as _physics
 from .bcs import BC_KEYS
@@ -249,14 +250,42 @@ def _potential_flow_fields() -> tuple[SchemaField, ...]:
     )
 
 
+# What Incompressible Flow adds after a numerics key's advice (its own defaults).
+_RH3_EXTRA: dict[str, str] = {
+    "eq_max_iter": "50 is the default.",
+    "relax_turbulence": "Not used while SIMPLEC is on.",
+    "outer_relax_p": "Blank is 0.3.",
+    "outer_relax_eq": "Blank is 0.7.",
+}
+
+
+def _rh3_study_fields(*, transient: bool) -> tuple[SchemaField, ...]:
+    """RH3: the study's schemes, linear solvers, turbulence relaxation (steady) and velocity
+    limit (magnusim_sdk.numerics_settings), under Advanced settings. Defaults are today's
+    values; a blank one is written as before (the preset's, or the transient writer's own)."""
+    return tuple(
+        SchemaField(**kw)
+        for kw in study_field_specs(
+            transient=transient,
+            energy=False,
+            simplec=not transient,
+            p_name="p",
+            eq_max_iter_default=50,
+            velocity_limit_default="auto",
+            extra=_RH3_EXTRA,
+        )
+    )
+
+
 def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
-    """Steady SIMPLE numerics. Transient runs take PIMPLE settings from the run panel.
+    """Steady SIMPLE numerics, and (RH3) both modes' schemes, linear solvers and velocity
+    limit. Transient runs take their time step and PIMPLE correctors from the run panel.
 
     Defaults are the values the solve used before these fields were wired, so
     untouched studies solve unchanged.
     """
     if transient:
-        return ()
+        return _rh3_study_fields(transient=True)
     return (
         SchemaField(
             "numerics_preset",
@@ -355,6 +384,7 @@ def _numerics_schema(*, transient: bool) -> tuple[SchemaField, ...]:
                 "0 is enough for clean hex meshes; tetrahedral meshes usually need 1 to 3."
             ),
         ),
+        *_rh3_study_fields(transient=False),
     )
 
 
@@ -498,6 +528,8 @@ def _control_schema(*, transient: bool) -> tuple[SchemaField, ...]:
             advanced=True,
             description="Extra pressure corrections for skewed or non-orthogonal cells.",
         ),
+        # RH3: the PIMPLE outer loops' relaxation and tolerance (blank = as today).
+        *(SchemaField(**kw) for kw in run_field_specs(p_name="p", extra=_RH3_EXTRA)),
         SchemaField(
             "average_from",
             "Average from",
@@ -576,7 +608,7 @@ def _decision(spec: Any, ctx: CaseContext) -> dict:
 
         settings = override if spec.transient is not None else {"end_time": spec.end_time, "write_interval": spec.write_interval}
         try:
-            out["checks"] = run_check(transient=spec.transient is not None, spec=spec, settings=settings or {}, context=context)["checks"]
+            out["checks"] = run_check(transient=spec.transient is not None, spec=spec, inputs=ctx.inputs, settings=settings or {}, context=context)["checks"]
         except Exception as exc:  # noqa: BLE001 (the check never stops a Start: it is left out, and says why)
             out["checks_error"] = f"{type(exc).__name__}: {exc}"[:200]
     from .runspec import convergence_stops_off

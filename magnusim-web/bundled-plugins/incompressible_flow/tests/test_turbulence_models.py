@@ -149,8 +149,15 @@ def test_v010_record_without_panel_keys_keeps_sst_and_the_old_numbers():
 
 
 def test_bad_numbers_fall_back_instead_of_writing_nonsense():
-    ph = physics_from_record({"residual_u": "abc", "relax_p": 1.5, "relax_u": 0, "n_non_orthogonal": -1})
+    ph = physics_from_record({"residual_u": "abc", "relax_p": -0.5, "relax_u": 0, "n_non_orthogonal": -1})
     assert (ph.residual_u, ph.relax_p, ph.relax_u, ph.n_non_orthogonal) == (1e-4, 0.3, 0.7, 3)
+
+
+def test_usable_numbers_outside_their_range_are_kept_as_saved():
+    # RH3 (spec 5.4): bounds apply only to an edit; a stored value the solver can use is
+    # written as saved (the pre-run check lists it as setting_out_of_range).
+    ph = physics_from_record({"relax_p": 1.5, "n_non_orthogonal": 30})
+    assert (ph.relax_p, ph.n_non_orthogonal) == (1.5, 30)
 
 
 @pytest.mark.parametrize("model", ["LRR", "SSG"])
