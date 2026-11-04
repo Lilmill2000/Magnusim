@@ -61,6 +61,7 @@ import { flushJobLogs } from './log.js';
 import { persistRun, runFolderOf } from './study-io.js';
 import { scheduleComputeQueueKick } from './server/compute-queue.ts';
 import { endedHealthRecord, healthPatch as shapeHealthPatch, scrubbedReason } from './run-health-shape.js';
+import { recordSolveRate } from './solve-rate.js';
 
 /** How often a live run's health is written to its doc when its verdict has not changed (RH1). */
 export const HEALTH_PATCH_MS = 30_000;
@@ -790,6 +791,8 @@ export function onCoreSolveEnd(rec) {
   s.done.delete(id);
   /** @type {Record<string, any> | null} */
   let out = null;
+  /** @type {Record<string, any> | null} */
+  let ended = null;
   try {
     const doc = readRunDocFile(String(rec.project_id), String(rec.run_id), String(rec.simulation_id));
     out = endedRunDoc(doc || {}, rec, {
@@ -802,8 +805,15 @@ export function onCoreSolveEnd(rec) {
     });
     // A run deleted meanwhile stays deleted.
     if (doc && s.host) s.host.writeRunDoc(String(rec.project_id), { ...doc, ...out, run_id: String(rec.run_id) });
+    ended = doc ? { ...doc, ...out } : null;
   } catch (e) {
     console.warn(`[CFD core solve] ${id}: the end was not written`, e);
+  }
+  // RH2: a finished run's solve rate joins this PC's (solve-rate.js), for the pre-run estimate.
+  try {
+    if (ended && ended.status === 'done') recordSolveRate(ended);
+  } catch (e) {
+    console.warn(`[CFD core solve] ${id}: solve rate`, e);
   }
   try {
     if (s.host) s.host.invalidate();
