@@ -12,6 +12,9 @@ the record's end), quickly and the same on every PC.
 
 MAGNUSIM_TEST_MESH_SECONDS: how long it "meshes" (0 to 600 s).
 MAGNUSIM_TEST_MESH_RESULT=fail: it ends failed ("Fake mesher failed"), exit 1.
+MAGNUSIM_TEST_MESH_CHECKMESH=<file>: a real checkMesh report it puts in the case as
+log.checkMesh; like the real generators it then writes the mesh's facts
+(cfddesk.mesh.facts) and its result carries their quality.
 """
 from __future__ import annotations
 
@@ -118,8 +121,21 @@ def main(argv: list[str]) -> int:
         json.dumps({**counts, "generate_id": args.generate_id, "source": "fake mesher"}), encoding="utf-8"
     )
     (case_dir / "log.standard_generate.txt").write_text("fake mesher (tests)\nMESH_SCRIPT_OK\n", encoding="utf-8")
-    _event("result", ok=True, counts_source="fake mesher", **counts)
+    quality = mesh_facts(case_dir, os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip())
+    _event("result", ok=True, counts_source="fake mesher", **counts, **({"quality": quality} if quality else {}))
     return 0
+
+
+def mesh_facts(case_dir: Path, checkmesh: str) -> dict | None:
+    """With a checkMesh report (MAGNUSIM_TEST_MESH_CHECKMESH), the mesh's facts as the real
+    generators write them, and the quality its record keeps; None without one."""
+    if not checkmesh:
+        return None
+    (case_dir / "log.checkMesh").write_bytes(Path(checkmesh).read_bytes())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from cfddesk.mesh.facts import finish_mesh_facts
+
+    return finish_mesh_facts(case_dir, None, lambda stage: _event("progress", stage=stage, msg="fake mesher (tests)"))
 
 
 if __name__ == "__main__":

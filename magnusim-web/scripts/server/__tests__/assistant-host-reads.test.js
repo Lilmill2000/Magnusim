@@ -278,6 +278,40 @@ describe('read_setup', () => {
     const ps = await read('plugin_study', { id: 'cs1' });
     assert.deepEqual([ps.plugin, ps.rev, ps.available], ['cad', 3, true]);
   });
+  it("a mesh's quality as the Mesh panel shows it (RH2): checkMesh's worst cells, failed checks and the panel's lines; null when not known", async () => {
+    fresh();
+    assert.equal((await read('mesh', { id: 'm1' })).quality, null);
+    app.w.meshes[0].live_mesh_result = {
+      status: 'done',
+      n_cells: 1200,
+      case_dir: `${WIN}\m1`,
+      quality: {
+        known: true,
+        ok: false,
+        n_failed: 1,
+        max_non_orthogonality: 72.64597596,
+        severe_non_orthogonal_faces: 750,
+        max_skewness: 8.000000342,
+        skewed_faces: 22,
+        max_aspect_ratio: 38.02406827,
+        failed: [{ check: 'skewness', count: 22, unit: 'faces', accepted: true }],
+      },
+    };
+    const mesh = await read('mesh', { id: 'm1' });
+    assert.deepEqual(mesh.quality, {
+      max_non_orthogonality: 72.64597596,
+      max_skewness: 8.000000342,
+      max_aspect_ratio: 38.02406827,
+      n_failed: 1,
+      failed: [{ check: 'skewness', count: 22, unit: 'faces' }],
+      lines: ['Worst cells: 73° non-orthogonal, skewness 8.0, aspect ratio 38', 'checkMesh failed 1 check: 22 highly skewed faces.'],
+    });
+    // A record with the worst cells as top-level keys (the older shape) still reads.
+    app.w.meshes[0].live_mesh_result = { status: 'done', n_cells: 1200, max_non_ortho: 78.2, max_skewness: 3.84, n_faces: 9000 };
+    assert.deepEqual((await read('mesh', { id: 'm1' })).quality.lines, ['Worst cells: 78° non-orthogonal, skewness 3.8']);
+    app.w.meshes[0].live_mesh_result = { status: 'done', n_cells: 1200, quality: { known: false } };
+    assert.equal((await read('mesh', { id: 'm1' })).quality, null);
+  });
   it('faces page by 200; a preview still being made is waited for; an unknown id is not_found', async () => {
     fresh();
     app.w.meta.g1.faces = Array.from({ length: 450 }, (_, i) => ({ id: i + 1, body: 1, area: 1 }));

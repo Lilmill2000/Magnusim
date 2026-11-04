@@ -44,6 +44,7 @@ import { prefersCollapseCompletedSections } from '../prefs';
 import { openSetupWizard } from '../wizard/controller';
 import { convertQuantity, fieldUnit, fromSi, preferredUnit, toSi, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
+import { meshQualityOf } from '../panels/mesh/meshQuality';
 import { useProjectStore } from '../store/project';
 import { workspaceHash } from '../workspace/route';
 import { confirmLeaveWorkspace } from '../workspace/leaveGuard';
@@ -17406,6 +17407,8 @@ function publishMeshJobState() {
     n_points: ready || running || failed ? (pts != null ? Number(pts) : null) : null,
     counts_source: jobState.counts_source || 'polyMesh',
     meta_bits: bits,
+    // RH2: checkMesh's report on the ready mesh, as its record keeps it (the panel words it).
+    quality: ready && live ? meshQualityOf(live) : null,
     started_at: !foreign && (mine || running || finishing) && Number.isFinite(startMs) ? startMs : null,
     finished_at: !running && Number.isFinite(endMs) ? endMs : null,
     elapsed_ms: elapsedMs,

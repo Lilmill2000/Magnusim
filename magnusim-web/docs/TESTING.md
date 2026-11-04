@@ -174,7 +174,10 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   the person sees while a mesh generates, a run solves, either is stopped or ends,
   or This PC is checked needs no OpenFOAM, no WSL and no minutes: meshes run
   `python/tools/fake_mesh_generate.py` through the same live job, compute slot and
-  queue (`MAGNUSIM_TEST_MESH_SECONDS`, default 6; `MAGNUSIM_TEST_MESH_RESULT=fail`),
+  queue (`MAGNUSIM_TEST_MESH_SECONDS`, default 6; `MAGNUSIM_TEST_MESH_RESULT=fail`;
+  `MAGNUSIM_TEST_MESH_CHECKMESH=<checkMesh report>` puts that report in the case and writes
+  the mesh's facts and quality as a real mesher does: `e2e/mesh-quality-line.spec.js`, with
+  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`),
   a Start runs `scripts/test-solve.js` after every check a real Start makes
   (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`), and
   each hardware probe answers after `MAGNUSIM_TEST_HW_PROBE_MS` (default 1500) with a

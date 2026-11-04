@@ -28,6 +28,7 @@ import {
 import { scopeIds, useRegistryReady } from '../scope';
 import { isStaleRecord } from '../../workbench/recordRev';
 import { stopMesh } from './meshStop';
+import { meshQualityLines } from './meshQuality';
 
 /** Settings as they live on disk (mesh.json `settings`). */
 interface MeshSettingsDoc {
@@ -337,6 +338,8 @@ function MeshStatus({ job }: { job: MeshJobState | null }) {
   else if (finishing) line = 'Writing the mesh into the project…';
   else if (ready) line = `${formatCount(job.n_cells)} cells / ${formatCount(job.n_points)} nodes`;
   const meta = [...(ready ? job.meta_bits : []), ...((ready || failed || stopped) && elapsed ? [elapsed] : [])];
+  // RH2: the ready mesh's worst cells and failed checks (checkMesh), only when they are known.
+  const quality = ready ? meshQualityLines(job.quality ?? null) : [];
   return (
     <div className="mesh-finished" data-mesh-status={job.phase}>
       <div className="mat-k">{title}</div>
@@ -350,6 +353,13 @@ function MeshStatus({ job }: { job: MeshJobState | null }) {
       </div>
       {(running || finishing) && elapsed ? <div className="mesh-elapsed">{elapsed}</div> : null}
       {meta.length ? <div className="mesh-finished-meta">{meta.join(' · ')}</div> : null}
+      {quality.length ? (
+        <div className="mesh-finished-meta" data-mesh-quality="1">
+          {quality.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

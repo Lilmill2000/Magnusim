@@ -7,6 +7,7 @@
  * record carries its `rev` once records have one.
  */
 import { continuePendingKeys, runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
+import { meshQualityLines, meshQualityOf } from '../../../../src/panels/mesh/meshQuality.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { meshFields, REFINEMENT_FIELDS, studyFields } from './catalog.ts';
@@ -245,14 +246,11 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             const flat = dotted(settings);
             const shown: Record<string, unknown> = {};
             for (const f of meshFields(registry, engine)) if (flat[f.key] !== undefined) shown[f.key] = flat[f.key];
-            const live = isRecord(rec.live_mesh_result) ? rec.live_mesh_result : {};
-            const quality: Record<string, unknown> = {};
-            for (const k of ['max_non_orthogonality', 'max_non_ortho', 'max_skewness', 'max_aspect_ratio', 'n_faces', 'n_patches', 'n_layers_added']) if (typeof live[k] === 'number') quality[k] = live[k];
             return okData(
               {
                 ...meshRow(row, str(doc.active_id)),
                 settings: shown,
-                ...(Object.keys(quality).length ? { quality } : {}),
+                quality: meshQualityAnswer(rec.live_mesh_result),
               },
               `Mesh ${quoted(rec.name ?? settings.name)}`,
             );
@@ -297,6 +295,24 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
       }
     },
   });
+}
+
+/**
+ * A mesh's quality as the Mesh panel shows it (RH2, meshQuality.ts): checkMesh's worst cells, its
+ * failed checks and the panel's lines, from the same reading of the record; null when it is not
+ * known (no checkMesh report: a mesh made before RH2, or not generated).
+ */
+export function meshQualityAnswer(live: unknown): Record<string, unknown> | null {
+  const q = meshQualityOf(live);
+  if (!q) return null;
+  return {
+    max_non_orthogonality: q.max_non_orthogonality,
+    max_skewness: q.max_skewness,
+    max_aspect_ratio: q.max_aspect_ratio,
+    n_failed: q.n_failed,
+    failed: q.failed.map((f) => ({ check: f.check, count: f.count, unit: f.unit })),
+    lines: meshQualityLines(q),
+  };
 }
 
 export function meshRow(m: Record<string, unknown>, activeId: string): Record<string, unknown> {

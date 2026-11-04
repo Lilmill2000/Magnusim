@@ -36,6 +36,7 @@ import { envGet } from './env-compat.js';
 import { writeJsonCli } from './py-json.js';
 import { MESH_ENGINES, mesherEngineOf, mesherKeys } from './registry-defaults.js';
 import { slimLiveMeshResult, slimMeshDoc } from './mesh-live-slim.js';
+import { cleanMeshQuality, meshFactsQuality } from './mesh-quality.js';
 import { plainMeshFailure } from './mesh-failure.js';
 import { assembleMeshDoc, persistMeshDoc, persistOneMesh, meshCasePath, meshFolderOf } from './study-io.js';
 import { buildStampOf, generateRev, linkStartRefusal, writeBuildStamp } from './link-build.js';
@@ -1081,6 +1082,8 @@ export function persistMeshResult(projectId, resultFields) {
     regions: Array.isArray(resultFields.regions) ? resultFields.regions : null,
     // Host API 1.8: bodies no material names, left out of the mesh.
     left_out: Array.isArray(resultFields.left_out) ? resultFields.left_out : null,
+    // RH2: checkMesh's report as numbers (mesh-quality.js), from the generator's result.
+    quality: cleanMeshQuality(resultFields.quality),
     note: resultFields.note,
     increment,
   };
@@ -1102,6 +1105,9 @@ export function persistMeshResult(projectId, resultFields) {
     live.case_dir = ownedCase;
     live.mesh_path = join(ownedCase, 'constant', 'polyMesh');
   }
+  // A done mesh whose result has no quality (found on disk, a kept previous mesh): the one its
+  // generator left in mesh-facts.json, while that still matches the mesh.
+  if (!live.quality && generated) live.quality = meshFactsQuality(live.case_dir);
   let meshes = Array.isArray(existing.meshes) ? existing.meshes.slice() : null;
   if (meshes && meshes.length) {
     if (!meshId) return existing;
@@ -1599,6 +1605,7 @@ function startStandardGenerate({ settings, projectId, onUpdate, engine, meshId }
       surface_size_m: (lastResult && lastResult.surface_size_m) || null,
       regions: lastResult && Array.isArray(lastResult.regions) ? lastResult.regions : null,
       left_out: lastResult && Array.isArray(lastResult.left_out) ? lastResult.left_out : null,
+      quality: status === 'done' && lastResult ? lastResult.quality || null : null,
       signal: signal || null,
       note:
         status === 'done'
@@ -2051,6 +2058,7 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       feature_marks_total: lastResult && lastResult.feature_marks_total != null ? lastResult.feature_marks_total : null,
       regions: lastResult && Array.isArray(lastResult.regions) ? lastResult.regions : null,
       left_out: lastResult && Array.isArray(lastResult.left_out) ? lastResult.left_out : null,
+      quality: status === 'done' && lastResult ? lastResult.quality || null : null,
       fingerprint_after: null,
       snappy_geometry_rev: lastResult && lastResult.snappy_geometry_rev != null ? lastResult.snappy_geometry_rev : null,
       block_used: lastResult && lastResult.block != null ? lastResult.block : null,

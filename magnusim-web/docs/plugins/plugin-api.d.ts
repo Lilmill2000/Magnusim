@@ -273,6 +273,7 @@ declare module '@magnusim/plugin-api/_internal/api/registry.gen' {
   }
 }
 declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
+  import type { MeshQuality } from '@magnusim/plugin-api/_internal/panels/mesh/meshQuality';
   export interface MeshGenerateOptions {
       mesh_id?: string;
       settings?: Record<string, unknown>;
@@ -297,6 +298,8 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       counts_source: string;
       /** Engine, layers, hex core, surface size; elapsed is appended by the panel. */
       meta_bits: string[];
+      /** RH2: the ready mesh's quality (checkMesh), null when it is not known (mesh/meshQuality.ts). */
+      quality?: MeshQuality | null;
       started_at: number | null;
       finished_at: number | null;
       elapsed_ms: number | null;
@@ -602,6 +605,28 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       label?: string | null;
       reason: 'gone' | 'claimed_twice' | 'held_elsewhere' | 'stale';
       targets?: string[];
+  }
+}
+declare module '@magnusim/plugin-api/_internal/panels/mesh/meshQuality' {
+  export interface MeshQualityFailed {
+      /** A short name: skewness, aspect_ratio, negative_volume, non_orthogonality, face_pyramids, ... or other. */
+      check: string;
+      count: number | null;
+      unit: 'cells' | 'faces' | 'edges' | null;
+      /** Standard and cfMesh keep a mesh whose only failures are skewed faces and up to 8 high aspect ratio cells. */
+      accepted: boolean;
+      /** checkMesh's own words for a check the app does not name. */
+      text?: string;
+  }
+  export interface MeshQuality {
+      /** checkMesh's verdict, when its report gave one. */
+      ok: boolean | null;
+      n_failed: number;
+      failed: MeshQualityFailed[];
+      /** Degrees. */
+      max_non_orthogonality: number | null;
+      max_skewness: number | null;
+      max_aspect_ratio: number | null;
   }
 }
 declare module '@magnusim/plugin-api/_internal/plugin-api/public' {
