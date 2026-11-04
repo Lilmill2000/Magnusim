@@ -179,7 +179,8 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   the mesh's facts and quality as a real mesher does: `e2e/mesh-quality-line.spec.js`, with
   OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`),
   a Start runs `scripts/test-solve.js` after every check a real Start makes
-  (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`), and
+  (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`) and keeps the
+  run's pre-run check as a real Start's plan does (`prepare_run.checks`: `e2e/run-precheck.spec.js`), and
   each hardware probe answers after `MAGNUSIM_TEST_HW_PROBE_MS` (default 1500) with a
   plausible PC (`e2e/assistant-jobs.spec.js`, `e2e/assistant-core-chain.spec.js`).
   `MAGNUSIM_TEST_SOLVE_LOG=<solver log>` (`.gz` too) makes the fake solve "solve" that

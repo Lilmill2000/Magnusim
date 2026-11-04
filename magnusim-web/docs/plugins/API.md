@@ -1912,6 +1912,11 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `health?: Record<string, unknown> | null | undefined`: RH1: the run's health record (verdict, checks, findings; spec 3.6), or null when it has none (not checked, not judged yet, or it ran before health checks existed).
 - `health_checked?: boolean | null | undefined`: RH1: true when its runs are health-checked, false when not, null when it ran before checks existed.
 - `health_run?: { status: string; stopping: boolean; saved: number | null; n_steps?: number | null; continues?: boolean; attempts: Array<Record<string, unknown>>; continue_c...`: RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts.
+- `precheck?: RunPrecheck | null | undefined`: RH2: a draft's pre-run check ("Before you start", POST /api/run/precheck): its analysis's rows (`checks`: code, level error|warn|info, text, short, fix, alt, kept) and `estimate` (`line`, the time step, steps, wall time, flow-through), or null before it answers and for a run that started. No row blocks Start.
+- `precheck_busy?: boolean | undefined`: RH2: a check of the draft is on its way.
+- `precheck_error?: string | undefined`: RH2: why the last check did not answer ('' when it did).
+- `checks_kept?: string[] | undefined`: RH2: the pre-run check codes kept as set (the run's `checks_kept`).
+- `checked_at_start?: RunCheckRow[] | null | undefined`: RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not.
 
 #### SchemaFormProps
 
@@ -2968,6 +2973,103 @@ Constants:
 - `DEFAULT_S_PER_CELL_STEP = 1.4e-5`
 - `RATE_SAMPLES_MAX = 20`
 
+### magnusim_sdk.runcheck
+
+The pre-run check (run health, RH2): what a run's settings, its mesh and its physics predict before it starts, as rows the Run panel's "Before you start" block and the Assistant's ``read_results precheck`` show, with the always-shown estimate line.
+
+#### num_words
+
+```python
+num_words(x: float | None) -> str
+```
+
+A setting as the person typed it: 100, 0.8, 1e-4.
+
+#### wall_words
+
+```python
+wall_words(s: float | None) -> str
+```
+
+A wall time: "about 15 minutes", "about 6 hours", "about 6 days".
+
+#### steps_words
+
+```python
+steps_words(n: float | None) -> str
+```
+
+Steps to 2 significant figures ("900,000").
+
+#### time_words
+
+```python
+time_words(t: float | None) -> str
+```
+
+A simulated time: 3 significant figures, in seconds ("0.177 s", "1.1e-5 s").
+
+#### cores_words
+
+```python
+cores_words(ranks: int) -> str
+```
+
+#### co_allowed
+
+```python
+co_allowed(n_outer: int) -> float
+```
+
+The largest Courant number the advice allows: 1 with 1 outer corrector (PISO), about 5 with 2 or more (numerics_advice).
+
+#### failed_words
+
+```python
+failed_words(f: dict[str, Any]) -> str
+```
+
+One failed checkMesh check in the Mesh panel's words (src/panels/mesh/meshQuality.ts).
+
+#### check
+
+```python
+check(inputs: dict[str, Any]) -> dict[str, Any]
+```
+
+The pre-run check of a run: ``{"checks": [rows], "estimate": {...}}``.
+
+#### counts
+
+```python
+counts(rows: list[dict[str, Any]] | None, *, kept: bool = False) -> dict[str, int]
+```
+
+How many rows of each level (kept ones left out unless ``kept``).
+
+Constants:
+
+- `LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}`
+- `CODE_ORDER = ("mesh_failed", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
+- `COURANT_CODES = frozenset({"piso_high_co", "pimple_co_vs_outer", "fixed_step_co"})`
+- `STEADY_ITERATIONS = 1500`
+- `STARTUP_FTT_STILL = 3.0`
+- `STARTUP_FTT_MOVING = 2.0`
+- `AVERAGE_FTT_MIN = 5.0`
+- `AVERAGE_FTT_MAX = 40.0`
+- `AVERAGE_FTT_FIX = 20.0`
+- `LONG_INFO_S = 4 * 3600.0`
+- `LONG_WARN_S = 24 * 3600.0`
+- `STEADY_WARN_S = 12 * 3600.0`
+- `STEADY_WARN_RATIO = 20.0`
+- `MACH_SPEED = 100.0`
+- `RE_DH_TURBULENT = 2300.0`
+- `RE_L_TURBULENT = 5e5`
+- `YPLUS_WALL_FN_MIN = 15.0`
+- `YPLUS_MAX = 300.0`
+- `STEADY_SHORT_ITERATIONS = 200`
+- `STEADY_SHORT_CELLS = 200_000`
+
 ### magnusim_sdk.service
 
 A plugin's service: its backend, in its own environment and its own process.
@@ -3198,7 +3300,8 @@ one and otherwise fall back to a neutral default:
 - :func:`validate_ready`: what still blocks a run, as
   ``[{"message", "fix"}]`` (empty when the run can start).
 - :func:`run_defaults`, :func:`run_normalize`, :func:`run_preview`: the run
-  settings model (iterations, or simulated time and time step).
+  settings model (iterations, or simulated time and time step); :func:`run_check`
+  (API 1.9): the pre-run check beside the preview.
 - :func:`launch_spec`: which program runs the case, how many frames are
   kept, which processes belong to it and how it is stopped.
 - :func:`log_parser_ref`: the module that turns the solver's output into job
@@ -3388,6 +3491,14 @@ run_preview(spec: Any, **kwargs: Any) -> dict[str, Any]
 
 The numbers a run would be written with now (``{"partial": True}`` if unknown).
 
+#### run_check
+
+```python
+run_check(spec: Any, **kwargs: Any) -> dict[str, Any]
+```
+
+The pre-run check (API 1.9): ``{"checks": [...], "estimate": {...} | None}``, the analysis's ``RunModel.check`` rows cleaned (an unknown level reads ``info``; no row blocks a run). An analysis without the hook has no rows (``checked: False``).
+
 #### declared_monitor_quantities
 
 ```python
@@ -3488,6 +3599,8 @@ Constants:
 - `UNIT_TEXT_MAX = 32`
 - `LIVE_METRIC_FORMATS = ("time", "sig2")`
 - `LIVE_METRIC_LABEL_MAX = 32`
+- `CHECK_LEVELS = ("error", "warn", "info")`
+- `CHECK_TARGETS = ("run", "study", "mesh", "bcs", "steady_copy")`
 - `NO_MONITORS = { "rho": None, "monitors": [], "custom": [], "balance": None, "quantities": [], "summary": [], "s...`
 - `LEGACY_MONITOR_QUANTITIES = ( MonitorQuantity( "p", "Pressure", "p_Pa", unit_quantity="pressure", unit="Pa", color="#6941c6",...`
 

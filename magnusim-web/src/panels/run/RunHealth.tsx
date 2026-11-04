@@ -15,6 +15,7 @@ import {
   type HealthRecord,
   type HealthRunView,
 } from '../../workbench/runHealthWords';
+import { withPrecheckCosts, type CheckRow } from '../../workbench/runCheckWords';
 
 /** The view of the run the Health words read (runHealthWords.ts). */
 export function healthRunView(state: RunState): HealthRunView & { n_steps: number | null } {
@@ -275,7 +276,8 @@ export function RunHealth({ state, ids }: { state: RunState; ids: { project_id: 
 
   const findings = h.findings || [];
   const shown = all ? findings : findings.slice(0, SHOWN);
-  const next = healthNextWords(view, h, pendingChange(state));
+  // RH2 (spec 3.10): a fix's cost is the pre-run check's estimate of the same values when the run has one.
+  const next = healthNextWords(view, withPrecheckCosts(h, state.checked_at_start as CheckRow[] | null | undefined), pendingChange(state));
   const age = h.at ? (now - Date.parse(h.at)) / 1000 : null;
   const earlier = earlierPartLines(
     (state.health_run && (state.health_run.attempts as Array<Record<string, unknown>>)) || [],

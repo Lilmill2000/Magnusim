@@ -6518,3 +6518,18 @@ body.on-workbench.results-chrome-shown .right-chrome { bottom: 64px; }
   border: 1px solid var(--mg-danger-border);
   border-radius: 999px;
 }
+/* RH2: the Run panel's "Before you start" (the pre-run check of a draft). */
+.run-check {
+  margin: 8px 0;
+}
+.run-check-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.run-check-kept summary {
+  cursor: pointer;
+  font-size: var(--mg-text-sm);
+  color: var(--mg-text-muted);
+}

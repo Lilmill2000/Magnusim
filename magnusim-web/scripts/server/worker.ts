@@ -65,7 +65,13 @@ const DEFAULT_BACKOFF = [250, 750, 2000];
  * never queue behind them.
  */
 export function isDataLaneMethod(method: string): boolean {
-  return method.startsWith('cad.') || (method.startsWith('filter.') && method !== 'filter.validate');
+  return (
+    method.startsWith('cad.') ||
+    (method.startsWith('filter.') && method !== 'filter.validate') ||
+    // RH2: the pre-run check reads the mesh's facts and Courant rates (and makes them once for a
+    // mesh generated before they existed): never behind project writes.
+    method === 'analysis.run_check'
+  );
 }
 
 /**

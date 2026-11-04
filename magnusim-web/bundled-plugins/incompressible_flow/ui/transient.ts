@@ -87,8 +87,18 @@ export function normalizeTransient(
   return out;
 }
 
+/**
+ * What the hint reads of the run's pre-run check (RH2, the Run panel's "Before you start"): its
+ * estimate's steps and flow-through time (from the mesh's Courant rates, in place of the preview's
+ * rough count), and its long_run row's words in place of the old long-run warning.
+ */
+export interface HintCheck {
+  estimate?: { steps?: unknown; flow_through_s?: unknown } | null;
+  checks?: Array<{ code: string; text: string }> | null;
+}
+
 /** The hint under the transient inputs: frame interval, the calculated Δt, steps, flow-through. */
-export function transientHint(t: TransientSettings, pv: RunPreview | null): { text: string; warn: string } {
+export function transientHint(t: TransientSettings, pv: RunPreview | null, check?: HintCheck | null): { text: string; warn: string } {
   const ctrl = (pv && pv.control) as
     | {
         adjust_time_step?: boolean;
@@ -118,7 +128,9 @@ export function transientHint(t: TransientSettings, pv: RunPreview | null): { te
     } else {
       bits.push('fixed Δt ' + formatSimTime(ctrl.delta_t) + (dtAuto ? ' (auto)' : ''));
     }
-    const est = ctrl.estimate || {};
+    // The pre-run check's estimate when it has one (the mesh's Courant rates), else the preview's.
+    const pc = check && check.estimate ? check.estimate : null;
+    const est = pc && Number(pc.steps) > 0 ? { steps: Number(pc.steps), flow_through_s: Number(pc.flow_through_s) } : ctrl.estimate || {};
     if (Number.isFinite(est.steps) && Number(est.steps) > 0) {
       bits.push('roughly ' + Number(est.steps).toLocaleString() + ' time steps');
     }
@@ -127,8 +139,10 @@ export function transientHint(t: TransientSettings, pv: RunPreview | null): { te
     }
   }
   let warn = '';
-  if (ctrl && ctrl.estimate && Number.isFinite(ctrl.estimate.steps) && Number(ctrl.estimate.steps) > 200000) {
-    warn = 'That is a long run. A shorter simulation time or fewer small cells will finish sooner; Before you start lists options.';
+  // RH2: the long_run row's words (Before you start lists what would shorten it).
+  const longRun = check && Array.isArray(check.checks) ? check.checks.find((r) => r && r.code === 'long_run') : null;
+  if (longRun) {
+    warn = longRun.text;
   } else if (pv && pv.partial) {
     warn = 'Assign a mesh and boundary conditions to see the calculated time step.';
   }

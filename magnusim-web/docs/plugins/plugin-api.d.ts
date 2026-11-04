@@ -520,6 +520,57 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
           attempts: Array<Record<string, unknown>>;
           continue_changes: Array<Record<string, unknown>>;
       } | null;
+      /**
+       * RH2: a draft's pre-run check ("Before you start", POST /api/run/precheck): its analysis's
+       * rows (`checks`: code, level error|warn|info, text, short, fix, alt, kept) and `estimate`
+       * (`line`, the time step, steps, wall time, flow-through), or null before it answers and for a
+       * run that started. No row blocks Start.
+       */
+      precheck?: RunPrecheck | null;
+      /** RH2: a check of the draft is on its way. */
+      precheck_busy?: boolean;
+      /** RH2: why the last check did not answer ('' when it did). */
+      precheck_error?: string;
+      /** RH2: the pre-run check codes kept as set (the run's `checks_kept`). */
+      checks_kept?: string[];
+      /** RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not. */
+      checked_at_start?: RunCheckRow[] | null;
+  }
+  /** RH2: a pre-run check row's fix: its run or study values, or a place to open (mesh, bcs), or a steady copy. */
+  export interface RunCheckFix {
+      label: string;
+      target: 'run' | 'study' | 'mesh' | 'bcs' | 'steady_copy';
+      values: Array<{
+          key: string;
+          value: unknown;
+      }>;
+      cost?: {
+          steps: number | null;
+          wall_s: number | null;
+      } | null;
+  }
+  /** RH2: one row of the pre-run check. */
+  export interface RunCheckRow {
+      code: string;
+      level: 'error' | 'warn' | 'info';
+      text: string;
+      short?: string;
+      fix?: RunCheckFix | null;
+      alt?: RunCheckFix | null;
+      kept?: boolean;
+  }
+  /** RH2: the pre-run check's answer for a draft. */
+  export interface RunPrecheck {
+      ok?: boolean;
+      checked?: boolean;
+      checks: RunCheckRow[];
+      estimate?: {
+          line?: string;
+          steps?: number | null;
+          flow_through_s?: number | null;
+          [k: string]: unknown;
+      } | null;
+      [k: string]: unknown;
   }
   /** A monitor a run's "Stop when a monitor settles" can watch (API 1.4). */
   export interface RunSettleMonitor {

@@ -340,7 +340,7 @@ function TransientFields({
   const fixed = t.time_step_mode === 'fixed';
   const save = (patch: Partial<TransientSettings>) =>
     void saveTransient({ ...normalizeTransient({ ...t, ...patch }, t, defaults) });
-  const hint = transientHint(t, run.run_preview);
+  const hint = transientHint(t, run.run_preview, run.precheck || null);
   const interval = frameInterval(t);
   return (
     <div data-run-transient="1">

@@ -224,6 +224,7 @@ import {
 } from './runReopen';
 import { askRunChange } from './runChangeChoice';
 import { badgeTitle as healthBadgeTitle, fixedRunName as healthFixedRunName, unhealthyNotice as healthNoticeText } from './runHealthWords';
+import { startTitle as precheckStartTitle } from './runCheckWords';
 import { splitStudiesOnRemove } from './geometryRemoveStudies';
 import { bcCatalog, materialCatalog, meshCatalog, refinementCatalog, resultCatalog, runCatalog, studyCatalog } from './catalogs.js';
 import { postJson, postRefinements, postRunRename, postRunStart, postRunUpdate } from './hostWrites.js';
@@ -32639,6 +32640,8 @@ async function persistRunSettings(partial, opts) {
   if (partial && Array.isArray(partial.result_controls)) body.result_controls = partial.result_controls;
   // Cores: a whole number, or null for Auto.
   if (partial && partial.cores !== undefined) body.cores = partial.cores;
+  // RH2: the pre-run check codes kept as set (a free setting: never asks to overwrite).
+  if (partial && Array.isArray(partial.checks_kept)) body.checks_kept = partial.checks_kept;
   // API 1.4: "Stop when a monitor settles" (null turns it off).
   if (partial && partial.settle !== undefined) {
     body.settle = partial.settle;
@@ -33444,6 +33447,198 @@ function refreshRunReady(rec, meshReady) {
 }
 
 /**
+ * RH2: the pre-run check of the selected draft (POST /api/run/precheck: its analysis's rows and
+ * estimate, the "Before you start" block). Asked again, 300 ms after the last change, when
+ * anything it reads changes: what runReady reads (the mesh, materials, boundary conditions, the
+ * study's physics) plus the run's transient settings as its panel shows them, its iterations, its
+ * Cores, its kept codes and its mesh's generation. "Check again" asks at once.
+ */
+const runCheck = { run_id: '', stamp: '', result: null, pending: '', timer: null, busy: false, error: '', now: false };
+
+function runIsDraftRecord(rec) {
+  return !!rec && (!rec.status || rec.status === 'draft');
+}
+
+function runCheckSettingsOf(rec) {
+  const id = String(rec.id || rec.run_id || '');
+  if (!runRecIsTransient(rec)) return null;
+  return String(runCatalog.transient_run_id || '') === id && runCatalog.transient ? runCatalog.transient : transientSettingsFor(rec);
+}
+
+function runCheckStamp(rec, meshReady) {
+  const meshId = resolveRunMeshForQueue(rec) || rec.mesh_id || '';
+  const mesh = meshId ? meshList().find((m) => String(m.id) === String(meshId)) : null;
+  const live = mesh && mesh.live_mesh_result && typeof mesh.live_mesh_result === 'object' ? mesh.live_mesh_result : {};
+  return JSON.stringify([
+    runReadyStamp(rec, meshReady),
+    runCheckSettingsOf(rec),
+    runControlFor(rec).endTime,
+    runCoresOf(rec),
+    runChecksKeptOf(rec),
+    live.generate_id || live.finished_at || live.status || null,
+  ]);
+}
+
+function refreshRunCheck(rec, meshReady) {
+  if (!rec || isPluginResultsKey(rec.id) || !runIsDraftRecord(rec)) return;
+  const id = String(rec.id || rec.run_id || '');
+  const stamp = runCheckStamp(rec, meshReady);
+  if ((runCheck.run_id === id && stamp === runCheck.stamp) || stamp === runCheck.pending) return;
+  // "Check again" asks at once; a change waits 300 ms for the next.
+  const force = runCheck.now;
+  runCheck.now = false;
+  runCheck.pending = stamp;
+  if (runCheck.timer) clearTimeout(runCheck.timer);
+  runCheck.timer = setTimeout(async () => {
+    runCheck.timer = null;
+    runCheck.busy = true;
+    const settings = runCheckSettingsOf(rec);
+    try {
+      const posted = await postJson('/api/run/precheck', {
+        project_id: currentProjectId() || undefined,
+        run_id: id,
+        ...runRequestStudyIds(id),
+        ...(settings ? { transient: settings } : {}),
+      });
+      const j = posted.json;
+      if (runCheck.pending !== stamp) return;
+      runCheck.pending = '';
+      runCheck.busy = false;
+      runCheck.run_id = id;
+      runCheck.stamp = stamp;
+      if (!j || j.ok === false) {
+        runCheck.result = null;
+        runCheck.error = String((j && j.error) || 'The check did not answer.');
+      } else {
+        runCheck.result = j;
+        runCheck.error = '';
+      }
+      publishRunState();
+    } catch (e) {
+      if (runCheck.pending === stamp) {
+        runCheck.pending = '';
+        runCheck.busy = false;
+      }
+      console.warn('[CFD] pre-run check', e);
+    }
+  }, force ? 0 : 300);
+}
+
+/** The selected draft's pre-run check (its last answer), or null. */
+function runCheckOf(rec) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  if (!id || runCheck.run_id !== id || !runIsDraftRecord(rec)) return null;
+  return runCheck.result;
+}
+
+/** The run's codes kept as set ("Keep as set"): one not saved yet wins. */
+function runChecksKeptOf(rec) {
+  const id = rec ? String(rec.id || rec.run_id || '') : '';
+  const edit = id ? runCatalog.pending_kept[id] : null;
+  const v = edit ? edit.checks_kept : rec && rec.checks_kept;
+  return Array.isArray(v) ? v.map(String) : [];
+}
+
+/** "Keep as set": the row's code joins the run's checks_kept (run.update; it never asks to overwrite). */
+async function keepRunCheck(code) {
+  const rec = selectedRunRecord();
+  if (!rec || !code) return null;
+  const runId = String(rec.id || rec.run_id);
+  const kept = runChecksKeptOf(rec);
+  if (kept.includes(code)) return null;
+  const next = [...kept, String(code)];
+  // Writers before readers: the row moves now, and stays moved until its save lands.
+  const edit = { checks_kept: next };
+  runCatalog.pending_kept[runId] = edit;
+  rec.checks_kept = next;
+  try { publishRunState(); } catch (_) {}
+  try {
+    const j = await persistRunSettings({ run_id: runId, checks_kept: next });
+    if (j && j.ok === false) throw new Error(j.error || 'Not saved');
+    return j;
+  } finally {
+    if (runCatalog.pending_kept[runId] === edit) delete runCatalog.pending_kept[runId];
+    try { publishRunState(); } catch (_) {}
+  }
+}
+
+/**
+ * A row's Apply (or its alternative): the same routes the Assistant's setup_edit and study_edit
+ * call. A run fix saves the run's settings (run.update), a study fix the study's
+ * (simulation.update); "Open mesh" and "Open boundary conditions" open them; "Make a steady copy"
+ * copies the study (its settings) and sets the copy steady.
+ */
+async function applyRunCheckFix(fix) {
+  const rec = selectedRunRecord();
+  if (!fix || !rec) return null;
+  // "Apply all": the run and study fixes together, one save each; a key two rows set takes the
+  // first row's value (the rows come problems first).
+  const many = Array.isArray(fix) ? fix.filter((f) => f && (f.target === 'run' || f.target === 'study')) : null;
+  const target = many ? 'many' : String(fix.target || '');
+  if (target === 'run' || target === 'study' || target === 'many') {
+    const list = many || [fix];
+    const transient = {};
+    const patch = {};
+    let endTime = null;
+    for (const f of list) {
+      for (const v of Array.isArray(f.values) ? f.values : []) {
+        const key = String((v && v.key) || '');
+        if (!key) continue;
+        if (f.target === 'study') {
+          if (!(key in patch)) patch[key] = v.value;
+        } else if (key.startsWith('transient.')) {
+          const k = key.slice('transient.'.length);
+          if (!(k in transient)) transient[k] = v.value;
+        } else if (key === 'endTime' && endTime == null) endTime = v.value;
+      }
+    }
+    if (Object.keys(transient).length) await persistTransientSettings(transient);
+    if (endTime != null) await persistSimControl({ end_time: endTime });
+    if (Object.keys(patch).length) await updateStudyClient(patch);
+    return { ok: true };
+  }
+  if (target === 'mesh') {
+    const meshId = resolveRunMeshForQueue(rec) || rec.mesh_id || '';
+    const mesh = meshId ? meshList().find((m) => String(m.id) === String(meshId)) : null;
+    openSetupFix({ go: 'mesh', id: meshId || undefined, name: (mesh && mesh.name) || undefined });
+    return { ok: true };
+  }
+  if (target === 'bcs') {
+    openSetupFix({ go: 'bcs' });
+    return { ok: true };
+  }
+  if (target === 'steady_copy') {
+    const sim = studyCatalog && studyCatalog.simulation;
+    if (!sim || !sim.id) return null;
+    await createSimulationClient({
+      analysis: sim.analysis || undefined,
+      analysis_type: sim.analysis_type || undefined,
+      time_dependency: 'Steady-state',
+      geometry_id: sim.geometry_id || undefined,
+      copy_from: sim.id,
+      copy_mode: 'settings',
+    });
+    // As the Assistant's study_edit set_time: the copy is steady, and its draft runs follow.
+    if (studyCatalog.simulation && !/steady/i.test(String(studyCatalog.simulation.time_dependency || ''))) {
+      await updateSimulationTimeDependency('Steady-state');
+    }
+    try { expandActiveStudyTree(); } catch (_) {}
+    let runs = typeof studyRunList === 'function' ? studyRunList() : [];
+    if (!runs.length) {
+      try {
+        await refreshRunCatalog();
+        refreshSetupTree();
+      } catch (_) {}
+      runs = typeof studyRunList === 'function' ? studyRunList() : [];
+    }
+    if (!runs.length) await createRunClient();
+    else openRunPanel(runs[0].id || runs[0].run_id);
+    return { ok: true };
+  }
+  return null;
+}
+
+/**
  * The first setup issue the run's analysis reports for this run (null: none),
  * or undefined while it has not answered yet. `mesh: false` skips issues whose
  * fix is to generate the mesh (a run may queue behind its mesh).
@@ -33642,6 +33837,7 @@ function computeRunState() {
   const queuedHere = !!(rec && typeof jobQueueHas === 'function' && jobQueueHas('solve', rec.id || rec.run_id));
   const meshSoon = !!(meshId && meshWillBeReadySoon(meshId));
   refreshRunReady(rec, meshReady);
+  refreshRunCheck(rec, meshReady);
   // The run's analysis's own readiness (undefined until it answers).
   const setupIssue = runSetupIssue(rec);
   const setupIssueNoMesh = runSetupIssue(rec, { mesh: false });
@@ -33673,6 +33869,14 @@ function computeRunState() {
     });
   } else {
     start.enabled = !runCatalog.starting && canStart;
+  }
+  // RH2: no check blocks Start; its title says what the run starts with.
+  const precheck = runCheckOf(rec);
+  const keptNow = runChecksKeptOf(rec);
+  if (precheck && start.label === 'Start' && start.enabled) {
+    const rows = (Array.isArray(precheck.checks) ? precheck.checks : []).map((r) => ({ ...r, kept: !!r.kept || keptNow.includes(String(r.code)) }));
+    const t = precheckStartTitle(rows);
+    if (t) start.title = t;
   }
   const stopping = !!(running && run && run.stop_requested);
   // A run on a seconds axis writes its current time step, else its iteration.
@@ -33892,6 +34096,13 @@ function computeRunState() {
     health_checked: run ? (run.health_checked === undefined ? null : run.health_checked) : null,
     // Its edit state says whether "Use when continuing" can be offered (the A2 question's own rule).
     health_run: run ? runHealthView(run, running, editState === 'continues') : null,
+    // RH2: a draft's pre-run check ("Before you start"), whether one is on its way, its codes kept
+    // as set, and what a started run was checked with (prepare_run.checks; null: not checked).
+    precheck,
+    precheck_busy: !!(rec && runIsDraftRecord(rec) && (runCheck.busy || runCheck.pending || runCheck.timer)),
+    precheck_error: rec && runCheck.run_id === String(rec.id || rec.run_id || '') ? runCheck.error || '' : '',
+    checks_kept: keptNow,
+    checked_at_start: run && run.prepare_run && typeof run.prepare_run === 'object' && Array.isArray(run.prepare_run.checks) ? run.prepare_run.checks : null,
   };
 }
 
@@ -35146,6 +35357,15 @@ async function renameActiveRunClient(name) {
   window.__CFD_RUN_SETUP_FIX__ = () => openSetupFix(runCatalog.start_fix);
   // RH1: the Health block's new run with a fix, and a read of the selected run again.
   window.__CFD_RUN_HEALTH_FIX__ = (runId, fix) => addHealthFixRun(runId, fix);
+  // RH2: "Before you start": a row's Apply, its Keep as set, and Check again.
+  window.__CFD_RUN_CHECK_APPLY__ = (fix) => applyRunCheckFix(fix);
+  window.__CFD_RUN_CHECK_KEEP__ = (code) => keepRunCheck(String(code || ''));
+  window.__CFD_RUN_CHECK_AGAIN__ = () => {
+    runCheck.stamp = '';
+    runCheck.pending = '';
+    runCheck.now = true;
+    publishRunState();
+  };
   window.__CFD_RUN_REFRESH__ = () =>
     refreshRunCatalog()
       .then(() => publishRunState())

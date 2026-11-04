@@ -23,11 +23,13 @@ import {
 } from '../legacyBridge';
 import { mergeObjectSchemas, pickSchemaValues, scopeIds, useRegistryReady } from '../scope';
 import { ResidualPlot } from './ResidualPlot';
+import { RunCheck } from './RunCheck';
 import { RunCores, runCanUseCores, useRankCap } from './RunCores';
 import { RunHealth, healthRunView, pendingChange } from './RunHealth';
 import { RunMonitors } from './RunMonitors';
 import { confirmAction } from '../../workbench/dialogs';
 import { continueAskWords, continueHealthWords, type HealthRecord } from '../../workbench/runHealthWords';
+import { checkedAtStartLine, type CheckRow } from '../../workbench/runCheckWords';
 
 function RunTitle({ name, canRename }: { name: string; canRename: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -165,6 +167,12 @@ function RunStatus({
         // How it ended (API 1.4). Marked: the v0.2.0 panel (h10 parity) had no such line.
         <p className={'run-converged' + (p.converged.kind === 'no' ? ' is-not' : '')} data-run-converged={p.converged.kind}>
           {p.converged.text}
+        </p>
+      ) : null}
+      {checkedAtStartLine(state.checked_at_start as CheckRow[] | null | undefined) ? (
+        // RH2: what the pre-run check found as it started (its prepare_run.checks).
+        <p className="mat-assign-hint" data-run-checked-at-start="1">
+          {checkedAtStartLine(state.checked_at_start as CheckRow[] | null | undefined)}
         </p>
       ) : null}
       <RunHealth state={state} ids={ids} />
@@ -411,6 +419,7 @@ export function RunControl(props: IslandProps) {
             onSave={(cores) => void saveRunCores(cores).catch(report)}
           />
         ) : null}
+        <RunCheck state={state} onError={report} />
         <div className="sim-run-row">
           {state.start.visible ? (
             <button

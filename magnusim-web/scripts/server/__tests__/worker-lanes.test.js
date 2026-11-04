@@ -46,10 +46,10 @@ describe('worker lanes', () => {
   });
 
   it('sends volume and CAD calls to the data lane, project calls to the main worker', () => {
-    for (const m of ['filter.case_field', 'filter.particle_trace', 'filter.warmup_volume', 'filter.release_volume', 'cad.preview']) {
+    for (const m of ['filter.case_field', 'filter.particle_trace', 'filter.warmup_volume', 'filter.release_volume', 'cad.preview', 'analysis.run_check']) {
       assert.equal(isDataLaneMethod(m), true, m);
     }
-    for (const m of ['runs.upsert', 'project.tree', 'filter.validate', 'mesh.set', 'project.hydrate']) {
+    for (const m of ['runs.upsert', 'project.tree', 'filter.validate', 'mesh.set', 'project.hydrate', 'analysis.run_preview', 'analysis.plan_run']) {
       assert.equal(isDataLaneMethod(m), false, m);
     }
   });

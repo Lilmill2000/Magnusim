@@ -81,6 +81,8 @@ export const runCatalog = {
   pending_cores: {},
   // A "Stop when settled" edit not saved yet, per run id ({ settle }: the setting, or null for Off).
   pending_settle: {},
+  // RH2: a "Keep as set" not saved yet, per run id ({ checks_kept }: the codes).
+  pending_kept: {},
   // The run-settings save in flight per run id (saves go out one at a time).
   settings_saves: {},
   steady_defaults: null,

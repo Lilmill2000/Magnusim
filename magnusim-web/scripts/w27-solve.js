@@ -22,6 +22,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wslCasePath, wslCaseRoot } from './wsl-env.js';
 import { hardwareRankCap, runCoresSetting, savedWslSlots } from './ranks.js';
+import { pcSolveRate } from './solve-rate.js';
 import { matchesStudy } from './w16-geometry-scope.js';
 import { firstLegacySimId, getActiveSimulation, liveStudyRows } from './w17-sim-catalog.js';
 import { simIsTransient } from './w30-transient.js';
@@ -1570,6 +1571,21 @@ function chainRunUpdate(projectId, runId, apply) {
   return next;
 }
 
+/**
+ * A run's `checks_kept` (RH2): the pre-run check codes kept as set, each a short code, at most 32.
+ * @param {unknown[]} list
+ * @returns {string[]}
+ */
+export function cleanChecksKept(list) {
+  /** @type {string[]} */
+  const out = [];
+  for (const c of list) {
+    const code = typeof c === 'string' ? c.trim().slice(0, 40) : '';
+    if (/^[a-z][a-z0-9_]*$/.test(code) && !out.includes(code)) out.push(code);
+  }
+  return out.slice(0, 32);
+}
+
 export function updateRunSettings(projectId, partial) {
   const id = projectId || projectIdOrActive('', readActiveId);
   const runId = partial && (partial.run_id || partial.id);
@@ -1731,6 +1747,8 @@ async function applyRunSettings(id, runId, partial) {
     rec.mesh_name = picked ? picked.name : rec.mesh_name;
   }
   if (Array.isArray(partial.result_controls)) rec.result_controls = partial.result_controls;
+  // RH2: the pre-run check's codes kept as set ("Keep as set"): a free setting, never a solve one.
+  if (Array.isArray(partial.checks_kept)) rec.checks_kept = cleanChecksKept(partial.checks_kept);
   // Cores: a whole number, or null for Auto (the ranks follow the mesh and the PC).
   if (partial.cores !== undefined) rec.cores = runCoresSetting(partial.cores);
   // Post-processing state: `views` are named filter sets the user saved for
@@ -2585,6 +2603,15 @@ async function startSolveBody(opts = {}, slot) {
     if (cont && Array.isArray(cont.doc.continue_changes)) {
       persistRun(id, simId, { id: runId, run_id: runId, continue_changes: applyContinueChanges(cont.doc.continue_changes, cont.at || new Date().toISOString()) });
     }
+    // RH2: as a real Start's plan reports them (prepare_run.checks), the pre-run check it starts with.
+    // Not awaited: nothing may come between the stop check and the hand-over.
+    if (!cont) {
+      precheckRun(id, String(runId), { transient: isTransient ? transientSettings : null }, simId)
+        .then((pc) => {
+          if (pc && pc.ok && Array.isArray(pc.checks)) persistRun(id, simId, { id: runId, run_id: runId, prepare_run: { checks: pc.checks } });
+        })
+        .catch((e) => console.warn('[CFD] fake start precheck', e));
+    }
     return startFakeSolve({ id, runId, simId, slot, endTime: et, onDone, caseDir: winOut });
   }
   // The run solves on the step-list runner (core-solve.js).
@@ -2715,7 +2742,7 @@ async function startSolveOnRunner(c) {
       ...(isTransient && transientSettings ? { transient: transientSettings } : {}),
       // A Continue is planned as its case is written: its new end, and past its
       // convergence its stops off (no residual_control or stop_when in the plan).
-      ...(cont ? { restart: cont.restart } : {}),
+      ...(cont ? { restart: cont.restart } : { check: precheckPcInputs(draft) }),
     });
   } catch (err) {
     return failRun('Failed to prepare solve case: ' + String(err));
@@ -3573,6 +3600,89 @@ export async function previewTransient(projectId, runId, settings, simulationId)
 }
 
 /**
+ * The most ranks a run may get on this PC (runRanks' cap): its physical cores, at most the WSL
+ * MPI slots Settings saved.
+ */
+export function precheckRankCap() {
+  const slots = savedWslSlots();
+  return Math.max(1, slots ? Math.min(hardwareRankCap(), slots) : hardwareRankCap());
+}
+
+/**
+ * The pre-run check's numbers from this PC (RH2, spec 4.3): the run's Cores, the ranks cap and
+ * this PC's solve rate (solve-rate.js), as `analysis.run_check` and a Start's plan take them.
+ * @param {any} rec the run (its `cores`)
+ */
+export function precheckPcInputs(rec) {
+  const rate = pcSolveRate();
+  return {
+    cores: runCoresSetting(rec && rec.cores),
+    rank_cap: precheckRankCap(),
+    s_per_cell_step: rate.s_per_cell_step,
+    rate_source: rate.source,
+  };
+}
+
+/**
+ * RH2: the pre-run check of a run (POST /api/run/precheck): its analysis's rows and estimate
+ * (analysis.run_check, the data lane: it reads files only) for the run's settings with
+ * `proposed` over them (the form's unsaved values, or the Assistant's what-if `transient.*`),
+ * with the ranks it would get (runRanks' rule) and this PC's solve rate merged in. Nothing is
+ * saved.
+ * @param {string} projectId
+ * @param {string} runId
+ * @param {{ transient?: Record<string, unknown> | null, endTime?: unknown }} proposed
+ * @param {string} [simulationId]
+ */
+export async function precheckRun(projectId, runId, proposed, simulationId) {
+  const id = projectId || projectIdOrActive('', readActiveId);
+  if (!id) return { ok: false, error: 'no active project' };
+  const cat = loadCatalog(id);
+  const scoped = runsForActiveStudy(id, cat.runs, simulationId);
+  const rec = runId ? scoped.find((r) => String(r.id) === String(runId)) : null;
+  if (!rec) return { ok: false, status: 404, error: 'Run not found' };
+  const sid = rec.simulation_id || simulationId || null;
+  const transient = runIsTransient(rec) || (!rec.time_dependency && projectIsTransient(id, sid));
+  const p = proposed && typeof proposed === 'object' ? proposed : {};
+  let settings;
+  if (transient) {
+    const ctrl = getSimulationControl(id, sid);
+    settings = {
+      ...ctrl.transient,
+      ...(rec.transient && typeof rec.transient === 'object' ? rec.transient : {}),
+      ...(p.transient && typeof p.transient === 'object' ? p.transient : {}),
+    };
+  } else {
+    // The run's iterations, else its study's (a draft not saved yet), with a proposed count over them.
+    const ctrl = getSimulationControl(id, sid);
+    settings = { end_time: positiveInt(ctrl.endTime), write_interval: positiveInt(ctrl.writeInterval), ...steadyBlock(rec) };
+    const end = positiveInt(p.endTime);
+    if (end != null) settings.end_time = end;
+  }
+  const pc = precheckPcInputs(rec);
+  const out = await commitRpc('analysis.run_check', {
+    project_id: id,
+    run_id: String(rec.id),
+    simulation_id: sid || '',
+    mesh_id: rec.mesh_id || '',
+    time_dependency: transient ? 'Transient' : 'Steady-state',
+    settings,
+    ...pc,
+  });
+  if (!out || typeof out !== 'object' || out.ok === false) return { ok: false, error: (out && out.error) || 'the pre-run check failed' };
+  const rate = pcSolveRate();
+  return {
+    ...out,
+    ok: true,
+    run_id: String(rec.id),
+    time_dependency: transient ? 'Transient' : 'Steady-state',
+    settings,
+    rate: { s_per_cell_step: rate.s_per_cell_step, runs: rate.runs, source: rate.source },
+    rank_cap: pc.rank_cap,
+  };
+}
+
+/**
  * Keep "Check its log"'s answer (RH1, spec 3.9), which can come minutes after the check began:
  * only when the run is still there, still ended, still has no health, and is the same attempt
  * (`asBegun`: its started_at and finished_at when the check began). A run deleted meanwhile is
@@ -3792,6 +3902,22 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
         body.simulation_id || u.searchParams.get('simulation_id')
       );
       return sendJson(res, pv.ok ? 200 : 400, { ...pv, increment: INCREMENT });
+    }
+    if (req.method === 'POST' && b === 'precheck') {
+      let body = {};
+      try {
+        body = (await readJsonBody(req)) || {};
+      } catch {
+        body = {};
+      }
+      const id = body.project_id || u.searchParams.get('project_id') || projectIdOrActive('', readActiveId);
+      const pc = await precheckRun(
+        id,
+        String(body.run_id || body.id || u.searchParams.get('run_id') || ''),
+        { transient: body.transient && typeof body.transient === 'object' ? body.transient : null, endTime: body.endTime },
+        body.simulation_id || u.searchParams.get('simulation_id'),
+      );
+      return sendJson(res, pc.ok ? 200 : pc.status || 400, { ...pc, increment: INCREMENT });
     }
     if (req.method === 'POST' && b === 'create') {
       let body = {};

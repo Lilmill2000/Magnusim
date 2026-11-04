@@ -31,7 +31,17 @@ export const REOPENABLE: readonly string[] = Object.freeze(['stopped', 'failed']
 export const SOLVE_KEYS: readonly string[] = Object.freeze(['endTime', 'writeInterval', 'transient', 'mesh_id', 'time_dependency']);
 
 /** The run settings Continue uses too: changing them never deletes results. */
-export const FREE_KEYS: readonly string[] = Object.freeze(['name', 'cores', 'settle', 'settle_time_dependency', 'result_controls', 'views', 'current_view']);
+export const FREE_KEYS: readonly string[] = Object.freeze([
+  'name',
+  'cores',
+  'settle',
+  'settle_time_dependency',
+  'result_controls',
+  'views',
+  'current_view',
+  // RH2: the pre-run check codes kept as set ("Keep as set").
+  'checks_kept',
+]);
 
 /**
  * The solve settings a stopped run can take for when it continues (A2): Continue writes them
