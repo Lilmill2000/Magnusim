@@ -137,16 +137,27 @@ test("each RH2 parity row names the person's control, and both sides read and wr
   const fixed = await runRow(request, rid);
   expect([fixed.transient?.n_outer_correctors, fixed.transient?.max_co]).toEqual([3, 5]);
   await expect(block.locator('[data-run-check-row="piso_high_co"]')).toHaveCount(0, STEP);
-  // R34: the person's Keep as set is what the Assistant reads as kept (checks_kept).
+  // R34: the person's Keep as set is what the Assistant reads as kept (checks_kept)...
   const first = block.locator('[data-run-check-row]').first();
   const code = await first.getAttribute('data-run-check-row');
   await first.locator(sel('R34')).click();
   await expect.poll(async () => (await runRow(request, rid)).checks_kept, STEP).toEqual([code]);
   expect((await precheck(request, rid)).checks.find((c) => c.code === code).kept).toBe(true);
+  // ...and the person's Undo keep is what it reads as not kept, as its checks_kept without the code is.
+  const keptBox = block.locator('[data-run-check-kept="1"]');
+  await keptBox.locator('summary').click();
+  await keptBox.locator(`[data-run-check-kept-row="${code}"]`).locator(sel('R34')).click();
+  await expect.poll(async () => (await runRow(request, rid)).checks_kept, STEP).toEqual([]);
+  expect((await precheck(request, rid)).checks.find((c) => c.code === code).kept).toBe(false);
+  await expect(block.locator(`[data-run-check-row="${code}"]`)).toBeVisible(STEP);
   // And the other way: checks_kept written through run.update (setup_edit's route) is what the person
-  // sees, after the page reads the run again.
+  // sees, after the page reads the run again: kept, then not.
+  await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, checks_kept: [code] });
+  let again = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+  await expect(again.locator('[data-run-check-kept="1"] summary')).toHaveText('Kept (1)', STEP);
+  await expect(again.locator(`${sel('R32')} [data-run-check-row="${code}"]`)).toHaveCount(0);
   await postOk(request, '/api/run/update', { project_id: PID, simulation_id: sim, run_id: rid, checks_kept: [] });
-  const again = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+  again = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
   await expect(again.locator(`${sel('R32')} [data-run-check-row="${code}"]`)).toBeVisible(STEP);
   await expect(again.locator('[data-run-check-kept="1"]')).toHaveCount(0);
 });

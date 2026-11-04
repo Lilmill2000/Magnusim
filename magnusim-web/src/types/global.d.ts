@@ -110,6 +110,7 @@ declare global {
     // RH2: the Run panel's "Before you start".
     __CFD_RUN_CHECK_APPLY__?: (fix: unknown) => Promise<unknown>;
     __CFD_RUN_CHECK_KEEP__?: (code: string) => Promise<unknown>;
+    __CFD_RUN_CHECK_UNKEEP__?: (code: string) => Promise<unknown>;
     __CFD_RUN_CHECK_AGAIN__?: () => void;
     __CFD_STUDY_STATE__?: import('../panels/legacyBridge').StudyState;
     __CFD_GEOMETRY_STATE__?: import('../panels/legacyBridge').GeometryState;

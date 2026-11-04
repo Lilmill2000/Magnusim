@@ -33494,11 +33494,15 @@ function refreshRunCheck(rec, meshReady) {
     runCheck.busy = true;
     const settings = runCheckSettingsOf(rec);
     try {
+      // What the stamp holds is what is checked: the panel's iterations and Cores too, which a
+      // save still on its way has not written yet (the server would read the old ones, and the
+      // answer, stored under the new stamp, would never be asked again).
       const posted = await postJson('/api/run/precheck', {
         project_id: currentProjectId() || undefined,
         run_id: id,
         ...runRequestStudyIds(id),
-        ...(settings ? { transient: settings } : {}),
+        ...(settings ? { transient: settings } : { endTime: runControlFor(rec).endTime }),
+        cores: runCoresOf(rec),
       });
       const j = posted.json;
       if (runCheck.pending !== stamp) return;
@@ -33506,7 +33510,9 @@ function refreshRunCheck(rec, meshReady) {
       runCheck.busy = false;
       runCheck.run_id = id;
       runCheck.stamp = stamp;
-      if (!j || j.ok === false) {
+      // Only a check that answered ok is shown: a failed one (a 500, a timeout) is "Not checked",
+      // never "Nothing found".
+      if (!posted.response || !posted.response.ok || !j || j.ok !== true) {
         runCheck.result = null;
         runCheck.error = String((j && j.error) || 'The check did not answer.');
       } else {
@@ -33539,14 +33545,18 @@ function runChecksKeptOf(rec) {
   return Array.isArray(v) ? v.map(String) : [];
 }
 
-/** "Keep as set": the row's code joins the run's checks_kept (run.update; it never asks to overwrite). */
-async function keepRunCheck(code) {
+/**
+ * "Keep as set": the row's code joins the run's checks_kept; "Undo keep" (`keep` false) takes it
+ * out again. Either is a run.update, as the Assistant's setup_edit checks_kept is; it never asks
+ * to overwrite (a free key).
+ */
+async function keepRunCheck(code, keep = true) {
   const rec = selectedRunRecord();
   if (!rec || !code) return null;
   const runId = String(rec.id || rec.run_id);
   const kept = runChecksKeptOf(rec);
-  if (kept.includes(code)) return null;
-  const next = [...kept, String(code)];
+  if (kept.includes(code) === keep) return null;
+  const next = keep ? [...kept, String(code)] : kept.filter((c) => c !== String(code));
   // Writers before readers: the row moves now, and stays moved until its save lands.
   const edit = { checks_kept: next };
   runCatalog.pending_kept[runId] = edit;
@@ -33873,10 +33883,12 @@ function computeRunState() {
   // RH2: no check blocks Start; its title says what the run starts with.
   const precheck = runCheckOf(rec);
   const keptNow = runChecksKeptOf(rec);
-  if (precheck && start.label === 'Start' && start.enabled) {
-    const rows = (Array.isArray(precheck.checks) ? precheck.checks : []).map((r) => ({ ...r, kept: !!r.kept || keptNow.includes(String(r.code)) }));
+  if (precheck && start.enabled && (start.label === 'Start' || start.label === 'Add to queue')) {
+    // The kept codes as the panel shows them (a Keep as set or Undo keep not saved yet wins).
+    const rows = (Array.isArray(precheck.checks) ? precheck.checks : []).map((r) => ({ ...r, kept: keptNow.includes(String(r.code)) }));
     const t = precheckStartTitle(rows);
-    if (t) start.title = t;
+    // A queued run starts later with the same rows: its title says so too.
+    if (t) start.title = start.label === 'Start' ? t : `${start.title}. ${t}`;
   }
   const stopping = !!(running && run && run.stop_requested);
   // A run on a seconds axis writes its current time step, else its iteration.
@@ -35360,6 +35372,7 @@ async function renameActiveRunClient(name) {
   // RH2: "Before you start": a row's Apply, its Keep as set, and Check again.
   window.__CFD_RUN_CHECK_APPLY__ = (fix) => applyRunCheckFix(fix);
   window.__CFD_RUN_CHECK_KEEP__ = (code) => keepRunCheck(String(code || ''));
+  window.__CFD_RUN_CHECK_UNKEEP__ = (code) => keepRunCheck(String(code || ''), false);
   window.__CFD_RUN_CHECK_AGAIN__ = () => {
     runCheck.stamp = '';
     runCheck.pending = '';

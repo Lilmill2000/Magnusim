@@ -4,7 +4,9 @@
 - transient: the Courant rows (with no velocity limit: Heat Transfer writes none), the
   pressure correctors, the outer correctors at a low Courant number;
 - the mesh's quality (checkMesh), its non-orthogonal cells against the study's
-  non-orthogonal correctors, and a short steady run on a large mesh.
+  non-orthogonal correctors, and a short steady run on a large mesh;
+- a steady run's relaxation (buoyant SIMPLE) and, on a skewed mesh, the robust numerics
+  preset as the alternative.
 
 Heat Transfer passes no flow speed yet, so its runs get no time-step estimate, and its own
 rules (Boussinesq validity, a Rayleigh-number laminar/turbulent check) are not made here.
@@ -15,6 +17,8 @@ from __future__ import annotations
 from typing import Any
 
 NO_ESTIMATE = "No time-step estimate for Heat Transfer runs yet"
+# What a check before the mesh leaves out ("Only its run settings were checked: ...").
+UNCHECKED = "its mesh and physics are checked once the mesh is generated"
 
 
 def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, Any] | None, *, transient: bool) -> dict[str, Any]:
@@ -37,14 +41,24 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
         "no_estimate": NO_ESTIMATE,
     }
     if spec is None or not getattr(spec, "ok", False):
+        # Only the run's settings could be read (the spec needs a generated mesh): its mesh
+        # and physics are not checked.
+        out["inputs_complete"] = False
+        out["unchecked"] = UNCHECKED
         return out
     ph = spec.physics
+    # The study's own non-orthogonal correctors (Heat Transfer's runs have none of their own);
+    # a steady run's buoyant SIMPLE relaxation and numerics preset too (steady_relax, and the
+    # robust preset as mesh_skew's alternative), under the same study keys Incompressible Flow uses.
+    numerics: dict[str, Any] = {"n_non_orthogonal": ph.n_non_orthogonal}
+    if not transient:
+        numerics.update({"relax_p": ph.relax_p, "relax_u": ph.relax_u, "simplec": False, "numerics_preset": ph.numerics})
     out.update(
         {
             "n_cells": spec.n_cells or out["n_cells"],
             "turbulence": _turbulence(ph.turbulence_model),
-            # The study's own non-orthogonal correctors (Heat Transfer's runs have none of their own).
-            "numerics": {"n_non_orthogonal": ph.n_non_orthogonal},
+            "numerics": numerics,
+            "steady_algorithm": "SIMPLE",
         }
     )
     return out

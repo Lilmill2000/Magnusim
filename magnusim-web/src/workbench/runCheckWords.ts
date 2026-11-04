@@ -114,10 +114,46 @@ export function countWords(rows: CheckRow[] | null | undefined, opts: { kept?: b
   return bits.join(' and ');
 }
 
-/** Start's title while rows are open: "Starts with 1 warning (see Before you start)"; null with none. */
+/**
+ * Start's title: "Starts with 1 warning (see Before you start)", "Starts with 2 warnings, 1 kept
+ * as set (see Before you start)"; null with none. It counts as "Checked at start" will: the rows
+ * kept as set still count (the run starts with them) and say so.
+ */
 export function startTitle(rows: CheckRow[] | null | undefined): string | null {
-  const n = countWords(rows);
-  return n ? `Starts with ${n} (see Before you start)` : null;
+  const n = countWords(rows, { kept: true });
+  if (!n) return null;
+  const { errors, warns } = counted(rows, { kept: true });
+  const kept = [...errors, ...warns].filter((r) => r.kept).length;
+  return `Starts with ${n}${kept ? `, ${kept} kept as set` : ''} (see Before you start)`;
+}
+
+/** The fixes "Apply all" makes: the run and study fixes of the problems and warnings shown (not the notes, not the rows hidden after the first six). */
+export function applyAllFixes(shown: CheckRow[]): CheckFix[] {
+  return shown
+    .filter((r) => r.level !== 'info' && !!r.fix && (r.fix.target === 'run' || r.fix.target === 'study') && r.fix.values.length > 0)
+    .map((r) => r.fix as CheckFix);
+}
+
+/** "Apply all"'s title: what it changes ("Applies 3 outer correctors, Max Courant 5; Average from 0.6667 s"). */
+export function applyAllTitle(fixes: CheckFix[]): string {
+  return `Applies ${fixes.map((f) => f.label).join('; ')}`;
+}
+
+/**
+ * What a check of the run's settings only says (its analysis could not read the rest, as before a
+ * mesh: the estimate's `complete` is false): "Only its run settings were checked: its mesh and
+ * physics are checked once the mesh is generated." Null for a full check.
+ */
+export function partialWords(estimate: { complete?: unknown; unchecked?: unknown; [k: string]: unknown } | null | undefined): string | null {
+  if (!estimate || estimate.complete !== false) return null;
+  const why = typeof estimate.unchecked === 'string' && estimate.unchecked.trim() ? estimate.unchecked.trim() : 'its mesh and physics were not checked';
+  return `Only its run settings were checked: ${why}.`;
+}
+
+/** The block's words when no row is open: never "nothing found in its mesh or physics" when only the settings were checked. */
+export function noneFoundWords(estimate: { complete?: unknown; [k: string]: unknown } | null | undefined, keptAny: boolean): string {
+  if (estimate && estimate.complete === false) return keptAny ? 'Nothing else found in its run settings.' : 'Nothing found in its run settings.';
+  return keptAny ? 'Nothing else found.' : 'Nothing found in its settings, mesh or physics.';
 }
 
 /** The short names of the rows that count, kept ones marked: "Max Courant 100 with PISO, kept as set". */

@@ -132,6 +132,13 @@ export async function keepRunCheck(code: string): Promise<unknown> {
   return fn(code);
 }
 
+/** RH2: "Undo keep": the row's code leaves the run's checks_kept, and the row is shown again. */
+export async function unkeepRunCheck(code: string): Promise<unknown> {
+  const fn = window.__CFD_RUN_CHECK_UNKEEP__;
+  if (!fn) throw new Error('The Run panel is not ready yet.');
+  return fn(code);
+}
+
 /** RH2: check the draft again now ("Check again"). */
 export function runCheckAgain(): void {
   window.__CFD_RUN_CHECK_AGAIN__?.();

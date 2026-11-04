@@ -111,6 +111,31 @@ describe('POST /api/run/precheck (precheckRun)', () => {
     assert.equal(none.ok, false);
   });
 
+  it("checks the panel's Cores as it shows them (null = Auto), not the saved ones a save on its way has not changed yet", async () => {
+    const calls = [];
+    py.attachWorkerBridge(async (method, params) => {
+      calls.push(params);
+      return { ok: true, checked: true, checks: [], estimate: { line: 'x' }, ranks: 1, kept: [] };
+    });
+    await w27.precheckRun(PID, 'r1', { cores: 8 }, SID);
+    assert.equal(calls[0].cores, 8);
+    await w27.precheckRun(PID, 'r1', { cores: null }, SID);
+    assert.equal(calls[1].cores, null, 'Auto');
+    // Not sent: the run's own (4).
+    await w27.precheckRun(PID, 'r1', {}, SID);
+    assert.equal(calls[2].cores, 4);
+  });
+
+  it('a check that fails answers ok: false with why (never a body the page could show as "nothing found")', async () => {
+    py.attachWorkerBridge(async () => {
+      throw new Error('worker call analysis.run_check timed out after 30000 ms');
+    });
+    const out = await w27.precheckRun(PID, 'r1', {}, SID);
+    assert.deepEqual(out, { ok: false, error: 'worker call analysis.run_check timed out after 30000 ms' });
+    py.attachWorkerBridge(async () => ({ ok: false, error: 'ContractError: bad row' }));
+    assert.deepEqual(await w27.precheckRun(PID, 'r1', {}, SID), { ok: false, error: 'ContractError: bad row' });
+  });
+
   it("Python's ranks follow runRanks' rule (Cores, then the analysis's serial threshold, at most the cap)", () => {
     const cap = w27.precheckRankCap();
     const table = [

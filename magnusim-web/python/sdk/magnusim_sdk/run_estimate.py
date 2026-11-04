@@ -86,18 +86,22 @@ def estimate_run(
     s_per_cell_step: float | None = None,
     bbox_m: dict[str, Any] | None = None,
     delta_t: float | None = None,
+    max_delta_t: float | None = None,
 ) -> dict[str, Any] | None:
     """A transient run's estimate, or None without a Courant-rate table or a speed.
 
     ``rates`` is the mesh's table (``courant-rates.json``), ``speed`` the inflow speed (m/s)
     along ``direction``; ``max_co`` the run's Max Courant; ``delta_t`` a fixed time step
-    (then the steps follow from it and ``co`` is the Courant number it gives). ``cells``,
-    ``ranks`` and ``n_outer`` (outer loops per step) with ``s_per_cell_step``
-    (:func:`pc_solve_rate`; Run_2's rate when None) give the wall time; ``bbox_m`` (the
-    mesh's box, ``mesh-facts.json``) the flow-through time.
+    (then the steps follow from it and ``co`` is the Courant number it gives), as the case is
+    written with it (at most one frame: the caller caps it). ``max_delta_t`` is the largest
+    step an adjustable run takes (its Max time step, at most one frame, as the case is
+    written): a Courant step above it is cut to it, and ``co`` is then the Courant number
+    the cut step gives (``capped`` True). ``cells``, ``ranks`` and ``n_outer`` (outer loops
+    per step) with ``s_per_cell_step`` (:func:`pc_solve_rate`; Run_2's rate when None) give
+    the wall time; ``bbox_m`` (the mesh's box, ``mesh-facts.json``) the flow-through time.
 
-    Returns ``{delta_t_s, co, steps, wall_s, flow_through_s, rate_per_m, speed_factor}``;
-    each is None when its inputs are missing.
+    Returns ``{delta_t_s, co, steps, wall_s, flow_through_s, rate_per_m, speed_factor,
+    capped}``; each is None when its inputs are missing.
     """
     u = _pos(speed)
     rate = rate_along(rates, direction)
@@ -105,11 +109,16 @@ def estimate_run(
         return None
     fixed = _pos(delta_t)
     co = _pos(max_co)
+    capped = False
     if fixed is not None:
         dt: float | None = fixed
         co = u * SPEED_FACTOR * rate * fixed
     else:
         dt = co / (u * SPEED_FACTOR * rate) if co is not None else None
+        cap = _pos(max_delta_t)
+        if dt is not None and cap is not None and dt > cap:
+            dt, capped = cap, True
+            co = u * SPEED_FACTOR * rate * cap
     end = _pos(end_time)
     steps = int(math.ceil(end / dt)) if end is not None and dt is not None else None
     per = _pos(s_per_cell_step) or DEFAULT_S_PER_CELL_STEP
@@ -126,6 +135,7 @@ def estimate_run(
         "flow_through_s": length / u if length is not None else None,
         "rate_per_m": rate,
         "speed_factor": SPEED_FACTOR,
+        "capped": capped,
     }
 
 

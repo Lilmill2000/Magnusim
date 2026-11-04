@@ -113,7 +113,7 @@ An `AnalysisType` needs only `key`, `label`, `category`, `time_dependency` and `
 - `family`: the Create Simulation title, description and tags, shared with a sibling analysis (steady and transient of the same physics).
 - `study_defaults(time_dependency)`, `algorithm_label`, `residual_keys`, `x_axis`, `ui`.
 - `validate_ready(ctx)`: what still blocks a run, as `[{"message", "fix"}]`. The Run panel shows the message.
-- `run_model`: run settings defaults, clean-up and the preview numbers (for example the time step).
+- `run_model`: run settings defaults, clean-up and the preview numbers (for example the time step); its `check` (API 1.9) is the pre-run check the Run panel's "Before you start" shows (`magnusim_sdk.runcheck` holds the shared rules; `compatibility.md` has its shape).
 - `write_case(ctx)`: writes the case; `ctx.simulation` holds the study's settings.
 - `launch` (or the default solver's `SolverApp`): the program, which frames to keep (`all` or `latest`), the process names Stop looks for, and `frame_fields` (fields that mark a written frame).
 - `launch` (API 1.8) may take `inputs`: a hook whose signature names an `inputs` parameter (not `**kwargs` alone) gets the run's `RunInputs` when the core plans a run (Start, Continue), so its program can follow the study (Heat Transfer runs `chtMultiRegionSimpleFoam` once a body has a solid material, else `buoyantSimpleFoam`). The relay asks the hook without them (for the run's log parser only): name one parser that reads every run the hook may plan.

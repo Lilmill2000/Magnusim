@@ -166,17 +166,23 @@ class LaunchSpec:
 
 @dataclass(frozen=True)
 class RunModel:
-    """An analysis's run settings: defaults, clean-up and the preview numbers."""
+    """An analysis's run settings: defaults, clean-up, the preview numbers and (API 1.9) the
+    pre-run check ``check(inputs=, settings=, context=)``, which returns the rows
+    ``[{code, level, text, short?, fix?, alt?}]`` or ``{"checks": rows, "estimate": {...}}``
+    (magnusim_sdk.runcheck.check makes both); no row blocks a run.
+
+    ``check`` (run health RH2) sits beside ``preview``: ``inputs`` is the run's RunInputs,
+    ``settings`` the run's settings with any proposed edit over them, and ``context`` the
+    mesh's facts and Courant-rate table, the ranks the run would get, this PC's solve rate and
+    the codes kept as set (cfddesk.project.run_check). The estimate says ``complete: False``
+    with ``unchecked`` when only the run's settings could be read. :func:`run_check` calls it
+    and cleans what it returns; without it a run has no check.
+    """
 
     defaults: Callable[[], dict[str, Any]]
     normalize: Callable[[dict[str, Any]], dict[str, Any]]
     preview: Callable[..., dict[str, Any]] | None = None
-    # API 1.9 (run health, RH2): the pre-run check, beside preview: called with ``inputs``
-    # (RunInputs), ``settings`` (the run's settings, proposed edits included) and
-    # ``context`` (the mesh's facts and Courant rates, ranks, this PC's solve rate, the codes
-    # kept as set: cfddesk.project.run_check). Returns the rows
-    # ``[{code, level, text, short?, fix?, alt?}]``, or ``{"checks": rows, "estimate": {...}}``
-    # (magnusim_sdk.runcheck.check). No row blocks a run.
+    # API 1.9: the pre-run check (the class docstring).
     check: Callable[..., Any] | None = None
 
 

@@ -13,7 +13,7 @@ import { cleanText } from '../sanitize.ts';
 import { scrubContext, scrubText } from '../../../solver-log-scrub.js';
 import { NOT_CHECKED, chipWord, earlierPartLines, healthNextWords, noRecordWords, type HealthRecord } from '../../../../src/workbench/runHealthWords.ts';
 import { pendingContinue, runEditState, valuesBeforeContinue } from '../../../../src/workbench/runReopen.ts';
-import { splitKept, withPrecheckCosts, type CheckRow } from '../../../../src/workbench/runCheckWords.ts';
+import { partialWords, splitKept, withPrecheckCosts, type CheckRow } from '../../../../src/workbench/runCheckWords.ts';
 import { runFields } from './catalog.ts';
 import {
   badValues,
@@ -426,12 +426,16 @@ function precheckAnswer(pc: Record<string, unknown>, c: { runId: string; runName
     findings,
     shown_in: 'Run panel → Before you start',
   };
+  // A check of the run's settings only (no mesh yet) says so, as the panel does.
+  const partial = partialWords(est);
+  if (partial) out.partial = partial;
   // At most 8 KB: the alternatives' calls go first, then the notes.
   const size = () => Buffer.byteLength(JSON.stringify(out), 'utf8');
   if (size() > PRECHECK_ANSWER_MAX) for (const f of findings) f.fix = f.fix.slice(0, 1);
   if (size() > PRECHECK_ANSWER_MAX) out.findings = findings.filter((f) => f.level !== 'info');
   const n = open.length;
-  return okData(out, `${c.runName}: ${n ? `${n} to look at before it starts` : 'nothing found before it starts'}${c.proposed ? ' (with the proposed values)' : ''}`);
+  const found = n ? `${n} to look at before it starts` : partial ? 'nothing found in its run settings' : 'nothing found before it starts';
+  return okData(out, `${c.runName}: ${found}${partial ? ' (only they were checked)' : ''}${c.proposed ? ' (with the proposed values)' : ''}`);
 }
 
 /** What read_results status says of a run's health: its verdict, its finding codes and where Continue would go on from. */

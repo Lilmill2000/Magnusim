@@ -459,6 +459,16 @@ describe('read_results: precheck (RH2)', () => {
     assert.equal(bad.error.code, 'bad_values');
   });
 
+  it('a check of the run settings only (no mesh yet) says so, as the panel does, and never "nothing found before it starts"', async () => {
+    fresh();
+    const est = { line: 'No time-step estimate until the mesh is generated', complete: false, unchecked: 'its mesh and physics are checked once the mesh is generated' };
+    app.over = (m, path) => (path === '/api/run/precheck' ? answer({ checks: [], kept: [], estimate: est, mesh: null }) : undefined);
+    const out = await tools().read_results.run({ project_id: '', simulation_id: '', run_id: '', kind: 'precheck', field: '', time: -1, points: [], samples: 0, filter_key: '', values: [] }, rt());
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.data.partial, 'Only its run settings were checked: its mesh and physics are checked once the mesh is generated.');
+    assert.equal(out.summary, 'Run 1: nothing found in its run settings (only they were checked)');
+  });
+
   it('an analysis without the check says so', async () => {
     fresh();
     app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: false, checks: [], estimate: null, unavailable: 'Its plugin is off.' } : undefined);

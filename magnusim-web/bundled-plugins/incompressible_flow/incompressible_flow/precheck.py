@@ -21,6 +21,10 @@ from typing import Any
 # models, which start from it); k-omega SST handles any y+.
 WALL_FUNCTION_MODELS = frozenset({"kEpsilon", "realizableKE", "LRR", "SSG"})
 ANY_YPLUS_MODEL = "kOmegaSST"
+# The estimate line before the run's mesh is generated (its spec needs the mesh).
+NO_MESH_ESTIMATE = "No time-step estimate until the mesh is generated"
+# What a check before the mesh leaves out ("Only its run settings were checked: ...").
+UNCHECKED = "its mesh and physics are checked once the mesh is generated"
 
 
 def turbulence_words(model: str) -> dict[str, Any]:
@@ -69,6 +73,12 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
         "steady_copy": bool(transient),
     }
     if spec is None or not getattr(spec, "ok", False):
+        # Only the run's settings could be read (the spec needs a generated mesh): the mesh,
+        # the inlets and the physics are not checked, and the line says why there is no step.
+        out["inputs_complete"] = False
+        out["unchecked"] = UNCHECKED
+        if transient:
+            out["no_estimate"] = NO_MESH_ESTIMATE
         return out
     from magnusim_sdk.study import bc_faces, is_velocity_inlet
 

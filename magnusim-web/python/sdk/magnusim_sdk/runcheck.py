@@ -37,7 +37,7 @@ from typing import Any
 
 from .health import fmt
 from .numerics_advice import CO_PIMPLE, CO_PISO, rule
-from .run_estimate import DEFAULT_S_PER_CELL_STEP, courant_at, estimate_run
+from .run_estimate import DEFAULT_S_PER_CELL_STEP, SPEED_FACTOR, courant_at, estimate_run
 
 LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 # The order rows of one level are shown in.
@@ -199,7 +199,10 @@ class _Run:
         self.write_count = max(1, _int(s.get("write_count"), 50))
         self.fixed = str(s.get("time_step_mode") or "adjustable") == "fixed"
         self.max_co = _pos(s.get("max_co")) or 1.0
-        self.delta_t = _pos(s.get("delta_t")) or _pos(i.get("delta_t_written"))
+        # The fixed step set (or the one a blank fixed step is written with); self.delta_t
+        # below is it as the case is written: at most one frame (IF transient.py).
+        self.delta_t_set = _pos(s.get("delta_t")) or _pos(i.get("delta_t_written"))
+        self.max_delta_t = _pos(s.get("max_delta_t"))
         self.n_outer = max(1, _int(s.get("n_outer_correctors"), 1))
         self.n_correctors = max(1, _int(s.get("n_correctors"), 2))
         self.n_non_orth = _int(s.get("n_non_orth_correctors"), 0) if "n_non_orth_correctors" in s else None
@@ -243,10 +246,32 @@ class _Run:
         self.numerics = n
         self.steady_copy = bool(i.get("steady_copy"))
         self.kept = {str(c) for c in (i.get("kept") or []) if isinstance(c, str)}
+        # False when the analysis could read only the run's settings (no mesh yet): its mesh
+        # and physics were not checked, and "nothing found" must not say they were.
+        self.complete = i.get("inputs_complete") is not False
+        self.unchecked = "" if self.complete else str(i.get("unchecked") or "its mesh and physics were not checked")
+        self.delta_t = self._fixed_step(self.end_time)
 
     @property
     def frame(self) -> float | None:
         return self.end_time / self.write_count if self.end_time else None
+
+    def _fixed_step(self, end_time: float | None) -> float | None:
+        """The fixed step the case is written with: the one set, at most one frame."""
+        frame = end_time / self.write_count if end_time else None
+        if self.delta_t_set and frame:
+            return min(self.delta_t_set, frame)
+        return self.delta_t_set
+
+    def _step_cap(self, end_time: float | None) -> tuple[float | None, str]:
+        """The largest step an adjustable run takes, as the case is written: its Max time
+        step, at most one frame. (step, "max_dt" | "frame" | "")."""
+        frame = end_time / self.write_count if end_time else None
+        if self.max_delta_t and (not frame or self.max_delta_t <= frame):
+            return self.max_delta_t, "max_dt"
+        if frame:
+            return frame, "frame"
+        return None, ""
 
     def estimate(self, *, max_co: float | None = None, n_outer: int | None = None, end_time: float | None = None, fixed: bool | None = None) -> dict[str, Any] | None:
         """The transient estimate with these settings in place of the run's.
@@ -260,19 +285,41 @@ class _Run:
         use_fixed = self.fixed if fixed is None else fixed
         outer = self.n_outer if n_outer is None else n_outer
         co = self.max_co if max_co is None else max_co
-        return estimate_run(
+        end = self.end_time if end_time is None else end_time
+        cap, capped_by = self._step_cap(end)
+        e = estimate_run(
             self.rates,
             max_co=min(co, co_allowed(outer)),
             speed=self.speed,
             direction=self.direction,
-            end_time=self.end_time if end_time is None else end_time,
+            end_time=end,
             cells=int(self.cells) if self.cells else None,
             ranks=self.ranks,
             n_outer=outer,
             s_per_cell_step=self.s_per_cell_step,
             bbox_m=_dict(self.mesh).get("bbox_m") or None,
-            delta_t=self.delta_t if use_fixed else None,
+            delta_t=self._fixed_step(end) if use_fixed else None,
+            max_delta_t=None if use_fixed else cap,
         )
+        if e is not None:
+            e["capped_by"] = capped_by if e.get("capped") else ""
+            return e
+        # No Courant-rate table: no time step, but the flow-through time from the box still
+        # tells when a mean may start and how long it averages.
+        length = self.length()
+        if not length:
+            return None
+        return {
+            "delta_t_s": None,
+            "co": None,
+            "steps": None,
+            "wall_s": None,
+            "flow_through_s": length / self.speed,
+            "rate_per_m": None,
+            "speed_factor": SPEED_FACTOR,
+            "capped": False,
+            "capped_by": "",
+        }
 
     def steady_wall(self, iterations: float) -> float | None:
         if not self.cells:
@@ -772,6 +819,9 @@ def _estimate_line(r: _Run, est: dict[str, Any] | None, phys: dict[str, Any]) ->
             where = f"smallest cells at {fmt(r.speed, 3)} m/s" + (f', inlet "{r.inlet}"' if r.inlet else "")
             if r.fixed:
                 bits.append(f"Δt {dt} s (fixed; Courant ≈ {fmt(est.get('co'), 2)} in the {where})")
+            elif est.get("capped"):
+                cap = "its Max time step" if est.get("capped_by") == "max_dt" else "one frame"
+                bits.append(f"Δt ≈ {dt} s, {cap} (Courant ≈ {fmt(est.get('co'), 2)} in the {where})")
             elif r.max_co > co_allowed(r.n_outer):
                 outer = "1 outer corrector allows" if r.n_outer <= 1 else f"{r.n_outer} outer correctors allow"
                 bits.append(f"Δt ≈ {dt} s at Max Courant {num_words(co_allowed(r.n_outer))}, as {outer} ({where})")
@@ -781,16 +831,10 @@ def _estimate_line(r: _Run, est: dict[str, Any] | None, phys: dict[str, Any]) ->
                 bits.append(f"~{steps_words(est['steps'])} steps")
             if est.get("wall_s") is not None:
                 bits.append(f"~{wall_words(est['wall_s']).removeprefix('about ')} on {cores_words(r.ranks)}")
-            if est.get("flow_through_s"):
-                bits.append(f"one flow-through ≈ {time_words(est['flow_through_s'])}")
-        elif r.i.get("no_estimate"):
-            bits.append(str(r.i["no_estimate"]))
-        elif not r.speed:
-            bits.append("No time-step estimate: no inlet speed or pressure difference sets a flow speed")
-        elif not r.rates:
-            bits.append("No time-step estimate: this mesh has no Courant rates (generate it again to get them)")
         else:
-            bits.append("No time-step estimate")
+            bits.append(_no_estimate_words(r))
+        if est and est.get("flow_through_s"):
+            bits.append(f"one flow-through ≈ {time_words(est['flow_through_s'])}")
     else:
         iters = _pos(r.s.get("end_time"))
         if iters:
@@ -801,6 +845,23 @@ def _estimate_line(r: _Run, est: dict[str, Any] | None, phys: dict[str, Any]) ->
     if phys.get("yplus") is not None:
         bits.append(f"y+ ≈ {fmt(phys['yplus'], 2)}")
     return " · ".join(bits)
+
+
+def _no_estimate_words(r: _Run) -> str:
+    """Why a transient run's line has no time step."""
+    if r.i.get("no_estimate"):
+        return str(r.i["no_estimate"])
+    if not r.speed:
+        return "No time-step estimate: no inlet speed or pressure difference sets a flow speed"
+    if not r.rates:
+        skipped = str(_dict(_dict(r.mesh).get("courant_rates")).get("skipped") or "")
+        if skipped.startswith("over "):
+            # courant_rates.write_rates skips meshes this large: generating again cannot help.
+            return f"No time-step estimate for a mesh {skipped}"
+        if skipped:
+            return "No time-step estimate: the mesh's cells could not be read"
+        return "No time-step estimate: this mesh has no Courant rates (generate it again to get them)"
+    return "No time-step estimate"
 
 
 def check(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -820,7 +881,10 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     ``potential_flow`` (None when the analysis has none), ``inlet_driven``; ``numerics``
     (the study's: ``relax_p``, ``relax_u``, ``simplec``, ``n_non_orthogonal``,
     ``numerics_preset``); ``steady_copy`` (a steady analysis of the family exists);
-    ``kept`` (the codes kept as set).
+    ``kept`` (the codes kept as set); ``no_estimate`` (the line's words when the analysis
+    gives no time step); ``inputs_complete`` (False when only the run's settings could be
+    read, as before a mesh: the estimate's ``complete`` then says the mesh and physics were
+    not checked, and ``unchecked`` says so in the analysis's words, from ``unchecked``).
     """
     r = _Run(inputs)
     rows: list[dict[str, Any]] = []
@@ -844,7 +908,10 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
         "yplus": phys.get("yplus"),
         "rate_source": "measured" if r.measured else "default",
         "velocity_cap": r.cap,
+        "complete": r.complete,
     }
+    if not r.complete:
+        estimate["unchecked"] = r.unchecked
     if r.transient:
         estimate.update(
             {
@@ -858,6 +925,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
                 "max_co": r.max_co,
                 "co_used": None if r.fixed else min(r.max_co, co_allowed(r.n_outer)),
                 "fixed": r.fixed,
+                "capped": bool((est or {}).get("capped")),
             }
         )
     else:

@@ -3628,10 +3628,13 @@ export function precheckPcInputs(rec) {
  * (analysis.run_check, the data lane: it reads files only) for the run's settings with
  * `proposed` over them (the form's unsaved values, or the Assistant's what-if `transient.*`),
  * with the ranks it would get (runRanks' rule) and this PC's solve rate merged in. Nothing is
- * saved.
+ * saved. `proposed.endTime` (a steady run's iterations) and `proposed.cores` (its Cores, null =
+ * Auto) are the panel's values as it shows them, which a save still on its way has not written
+ * yet. A check that fails (the worker's error, its timeout) answers `{ok: false, error}`, never
+ * a body the page could read as "nothing found".
  * @param {string} projectId
  * @param {string} runId
- * @param {{ transient?: Record<string, unknown> | null, endTime?: unknown }} proposed
+ * @param {{ transient?: Record<string, unknown> | null, endTime?: unknown, cores?: unknown }} proposed
  * @param {string} [simulationId]
  */
 export async function precheckRun(projectId, runId, proposed, simulationId) {
@@ -3659,16 +3662,21 @@ export async function precheckRun(projectId, runId, proposed, simulationId) {
     const end = positiveInt(p.endTime);
     if (end != null) settings.end_time = end;
   }
-  const pc = precheckPcInputs(rec);
-  const out = await commitRpc('analysis.run_check', {
-    project_id: id,
-    run_id: String(rec.id),
-    simulation_id: sid || '',
-    mesh_id: rec.mesh_id || '',
-    time_dependency: transient ? 'Transient' : 'Steady-state',
-    settings,
-    ...pc,
-  });
+  const pc = precheckPcInputs(Object.prototype.hasOwnProperty.call(p, 'cores') ? { ...rec, cores: p.cores } : rec);
+  let out;
+  try {
+    out = await commitRpc('analysis.run_check', {
+      project_id: id,
+      run_id: String(rec.id),
+      simulation_id: sid || '',
+      mesh_id: rec.mesh_id || '',
+      time_dependency: transient ? 'Transient' : 'Steady-state',
+      settings,
+      ...pc,
+    });
+  } catch (e) {
+    return { ok: false, error: String((e && /** @type {Error} */ (e).message) || e || 'the pre-run check failed').slice(0, 300) };
+  }
   if (!out || typeof out !== 'object' || out.ok === false) return { ok: false, error: (out && out.error) || 'the pre-run check failed' };
   const rate = pcSolveRate();
   return {
@@ -3914,7 +3922,11 @@ export async function handleW27Api(req, res, u, parts, { sendJson, readJsonBody 
       const pc = await precheckRun(
         id,
         String(body.run_id || body.id || u.searchParams.get('run_id') || ''),
-        { transient: body.transient && typeof body.transient === 'object' ? body.transient : null, endTime: body.endTime },
+        {
+          transient: body.transient && typeof body.transient === 'object' ? body.transient : null,
+          endTime: body.endTime,
+          ...(Object.prototype.hasOwnProperty.call(body, 'cores') ? { cores: body.cores } : {}),
+        },
         body.simulation_id || u.searchParams.get('simulation_id'),
       );
       return sendJson(res, pc.ok ? 200 : pc.status || 400, { ...pc, increment: INCREMENT });

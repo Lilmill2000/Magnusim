@@ -2947,7 +2947,7 @@ The Courant number a fixed time step ``delta_t`` (s) gives in the smallest cells
 #### estimate_run
 
 ```python
-estimate_run(rates: dict[str, Any] | None, *, max_co: float, speed: float, direction: Any = (1.0, 0.0, 0.0), end_time: float | None = None, cells: int | None = None, ranks: int = 1, n_outer: int = 1, s_per_cell_step: float | None = None, bbox_m: dict[str, Any] | None = None, delta_t: float | None = None) -> dict[str, Any] | None
+estimate_run(rates: dict[str, Any] | None, *, max_co: float, speed: float, direction: Any = (1.0, 0.0, 0.0), end_time: float | None = None, cells: int | None = None, ranks: int = 1, n_outer: int = 1, s_per_cell_step: float | None = None, bbox_m: dict[str, Any] | None = None, delta_t: float | None = None, max_delta_t: float | None = None) -> dict[str, Any] | None
 ```
 
 A transient run's estimate, or None without a Courant-rate table or a speed.
@@ -3392,7 +3392,7 @@ How the core runs a written case.
 
 #### class RunModel
 
-An analysis's run settings: defaults, clean-up and the preview numbers.
+An analysis's run settings: defaults, clean-up, the preview numbers and (API 1.9) the pre-run check ``check(inputs=, settings=, context=)``, which returns the rows ``[{code, level, text, short?, fix?, alt?}]`` or ``{"checks": rows, "estimate": {...}}`` (magnusim_sdk.runcheck.check makes both); no row blocks a run.
 
 #### class ContractError(ValueError)
 

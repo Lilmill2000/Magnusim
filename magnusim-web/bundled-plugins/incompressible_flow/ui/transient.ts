@@ -90,12 +90,17 @@ export function normalizeTransient(
 /**
  * What the hint reads of the run's pre-run check (RH2, the Run panel's "Before you start"): its
  * estimate's steps and flow-through time (from the mesh's Courant rates, in place of the preview's
- * rough count), and its long_run row's words in place of the old long-run warning.
+ * rough count), and its long_run row's words in place of the old long-run warning. Its steps are
+ * counted at the Courant number the outer correctors allow (`co_used`) when Max Courant is set
+ * above it, and the hint then says so (not when a frame or Max time step cuts each step: `capped`).
  */
 export interface HintCheck {
-  estimate?: { steps?: unknown; flow_through_s?: unknown } | null;
+  estimate?: { steps?: unknown; flow_through_s?: unknown; co_used?: unknown; max_co?: unknown; capped?: unknown } | null;
   checks?: Array<{ code: string; text: string }> | null;
 }
+
+/** The old warning, for a run the pre-run check could give no steps for (no Courant-rate table). */
+const LONG_RUN_WARNING = 'That is a long run. A shorter simulation time or fewer small cells will finish sooner.';
 
 /** The hint under the transient inputs: frame interval, the calculated Δt, steps, flow-through. */
 export function transientHint(t: TransientSettings, pv: RunPreview | null, check?: HintCheck | null): { text: string; warn: string } {
@@ -130,9 +135,17 @@ export function transientHint(t: TransientSettings, pv: RunPreview | null, check
     }
     // The pre-run check's estimate when it has one (the mesh's Courant rates), else the preview's.
     const pc = check && check.estimate ? check.estimate : null;
-    const est = pc && Number(pc.steps) > 0 ? { steps: Number(pc.steps), flow_through_s: Number(pc.flow_through_s) } : ctrl.estimate || {};
+    const fromCheck = !!(pc && Number(pc.steps) > 0);
+    const est = fromCheck && pc ? { steps: Number(pc.steps), flow_through_s: Number(pc.flow_through_s) } : ctrl.estimate || {};
     if (Number.isFinite(est.steps) && Number(est.steps) > 0) {
-      bits.push('roughly ' + Number(est.steps).toLocaleString() + ' time steps');
+      // The check counts a Max Courant above what the outer correctors allow at what they allow.
+      const used = fromCheck && pc ? Number(pc.co_used) : NaN;
+      const outer = Math.max(1, Math.round(Number(t.n_outer_correctors) || 1));
+      const at =
+        Number.isFinite(used) && used > 0 && used < Number(pc && pc.max_co) && !(pc && pc.capped)
+          ? ` at Max Courant ${used}, as ${outer <= 1 ? '1 outer corrector allows' : `${outer} outer correctors allow`}`
+          : '';
+      bits.push('roughly ' + Number(est.steps).toLocaleString() + ' time steps' + at);
     }
     if (Number.isFinite(est.flow_through_s) && Number(est.flow_through_s) > 0) {
       bits.push('one flow-through of the domain ≈ ' + formatSimTime(est.flow_through_s));
@@ -141,8 +154,11 @@ export function transientHint(t: TransientSettings, pv: RunPreview | null, check
   let warn = '';
   // RH2: the long_run row's words (Before you start lists what would shorten it).
   const longRun = check && Array.isArray(check.checks) ? check.checks.find((r) => r && r.code === 'long_run') : null;
+  const checkSteps = !!(check && check.estimate && Number(check.estimate.steps) > 0);
   if (longRun) {
     warn = longRun.text;
+  } else if (!checkSteps && ctrl && ctrl.estimate && Number.isFinite(ctrl.estimate.steps) && Number(ctrl.estimate.steps) > 200000) {
+    warn = LONG_RUN_WARNING;
   } else if (pv && pv.partial) {
     warn = 'Assign a mesh and boundary conditions to see the calculated time step.';
   }

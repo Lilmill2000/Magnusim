@@ -40,4 +40,24 @@ describe('transient hint: the pre-run check', () => {
     expect(h.warn).toBe('About 900,000 time steps, roughly 6 days on 15 cores (this PC\u2019s last runs).');
     expect(h.warn).not.toMatch(/That is a long run/);
   });
+  it('says the Courant number its steps are counted at when Max Courant is set above what the outer correctors allow', () => {
+    const h = transientHint(t, pv as never, { estimate: { steps: 900000, flow_through_s: 0.177, co_used: 1, max_co: 100 }, checks: [] });
+    expect(h.text).toContain('adjusted to keep Co ≤ 100 · roughly 900,000 time steps at Max Courant 1, as 1 outer corrector allows');
+    const t3 = normalizeTransient({ end_time: 10, write_count: 60, max_co: 20, n_outer_correctors: 3 }, {}, shared.defaults);
+    expect(transientHint(t3, pv as never, { estimate: { steps: 180000, co_used: 5, max_co: 20 }, checks: [] }).text).toContain(
+      'roughly 180,000 time steps at Max Courant 5, as 3 outer correctors allow',
+    );
+    // Each step cut to one frame: counted at that step, not at the Courant number.
+    expect(transientHint(t, pv as never, { estimate: { steps: 60, co_used: 1, max_co: 100, capped: true }, checks: [] }).text).toContain('roughly 60 time steps.');
+    // At or below what they allow: no words added.
+    expect(transientHint(t, pv as never, { estimate: { steps: 900000, co_used: 1, max_co: 1 }, checks: [] }).text).toContain('roughly 900,000 time steps.');
+  });
+  it('a check with no steps (no Courant-rate table) keeps the preview count and its long-run warning', () => {
+    const long = { ...pv, control: { ...pv.control, estimate: { steps: 250000, flow_through_s: 0.1 } } };
+    const h = transientHint(t, long as never, { estimate: { steps: null, flow_through_s: 0.177 }, checks: [] });
+    expect(h.text).toContain('roughly 250,000 time steps');
+    expect(h.warn).toBe('That is a long run. A shorter simulation time or fewer small cells will finish sooner.');
+    // With steps from the check and no long_run row, the check's count stands and there is no warning.
+    expect(transientHint(t, long as never, { estimate: { steps: 90000 }, checks: [] }).warn).toBe('');
+  });
 });

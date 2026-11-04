@@ -333,3 +333,64 @@ def test_words():
     assert wall_words(900) == "about 15 minutes"
     assert wall_words(6 * 3600) == "about 6 hours"
     assert wall_words(6.1 * 86400) == "about 6 days"
+
+
+def test_the_estimate_counts_the_step_the_case_is_written_with():
+    """The case's time step is at most its Max time step and one frame (IF transient.py): the
+    estimate, its steps and the costs count that step, and the line says it was cut."""
+    est = check(run2(max_co=1, max_delta_t=1e-6))["estimate"]
+    assert est["delta_t_s"] == pytest.approx(1e-6)
+    assert est["steps"] == pytest.approx(10_000_000, rel=0.01)
+    assert est["capped"] is True
+    assert est["line"].startswith("Δt ≈ 1e-6 s, its Max time step (Courant ≈ 0.09 in the smallest cells at 22.6 m/s")
+    assert "~10,000,000 steps" in est["line"]
+    # One frame: 60 frames over 3 ms are 50 µs, below the 55 µs Max Courant 5 would allow.
+    est = check(run2(end_time=0.003, n_outer_correctors=3, max_co=5))["estimate"]
+    assert est["delta_t_s"] == pytest.approx(5e-5)
+    assert est["line"].startswith("Δt ≈ 5e-5 s, one frame (Courant ≈ 4.5 in the smallest cells")
+    # Below the cap nothing changes (Run_2).
+    assert check(RUN2)["estimate"]["capped"] is False
+    # A fixed step longer than a frame is written as one frame.
+    out = check(run2(time_step_mode="fixed", delta_t=1.0))
+    assert out["estimate"]["delta_t_s"] == pytest.approx(10 / 60)
+    assert rows_of(out)["fixed_step_co"]["text"].startswith("A fixed step of 0.17 s gives a Courant number of about ")
+
+
+def test_without_a_rate_table_the_flow_through_rows_stay_and_the_line_says_why():
+    """A mesh with no Courant-rate table (over 4,000,000 cells, or unreadable) has no time step,
+    but its box still gives the flow-through time: the start-up and averaging rows stay, and
+    the line says why there is no step instead of asking for a mesh that would be skipped again."""
+    inputs = copy.deepcopy(RUN2)
+    inputs["rates"] = None
+    inputs["mesh"]["courant_rates"] = {"skipped": "over 4,000,000 cells"}
+    out = check(inputs)
+    rows = rows_of(out)
+    assert {"piso_high_co", "average_startup", "duration_vs_ftt", "still_start"} <= set(rows)
+    # No wall time: no long_run or steady_for_mean, and no costs.
+    assert not {"long_run", "steady_for_mean"} & set(rows)
+    assert rows["piso_high_co"]["fix"]["cost"] is None
+    assert out["estimate"]["flow_through_s"] == pytest.approx(4.0 / 22.6113)
+    assert out["estimate"]["line"] == "No time-step estimate for a mesh over 4,000,000 cells · one flow-through ≈ 0.177 s · Re ≈ 450,000"
+    inputs["mesh"]["courant_rates"] = {"skipped": "the mesh could not be read: points"}
+    assert check(inputs)["estimate"]["line"].startswith("No time-step estimate: the mesh's cells could not be read · one flow-through")
+
+
+def test_a_check_of_the_settings_only_says_so():
+    """Before a mesh the analysis reads only the run's settings: the estimate says it is not
+    complete (the panel and the Assistant then never say the mesh and physics were checked),
+    and the line gives the analysis's reason."""
+    inputs = {
+        "time_dependency": "transient",
+        "settings": dict(RUN2["settings"]),
+        "mesh": None,
+        "mesh_ready": False,
+        "inputs_complete": False,
+        "no_estimate": "No time-step estimate until the mesh is generated",
+    }
+    out = check(inputs)
+    assert out["estimate"]["complete"] is False
+    assert out["estimate"]["unchecked"] == "its mesh and physics were not checked"
+    assert out["estimate"]["line"] == "No time-step estimate until the mesh is generated"
+    assert {r["code"] for r in out["checks"]} == {"piso_high_co"}
+    assert check(RUN2)["estimate"]["complete"] is True
+    assert "unchecked" not in check(RUN2)["estimate"]

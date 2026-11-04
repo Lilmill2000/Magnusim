@@ -33,6 +33,7 @@ describe('Before you start (RH2)', () => {
   beforeEach(() => {
     window.__CFD_RUN_CHECK_APPLY__ = vi.fn(async () => ({ ok: true }));
     window.__CFD_RUN_CHECK_KEEP__ = vi.fn(async () => ({ ok: true }));
+    window.__CFD_RUN_CHECK_UNKEEP__ = vi.fn(async () => ({ ok: true }));
     window.__CFD_RUN_CHECK_AGAIN__ = vi.fn();
   });
 
@@ -65,12 +66,51 @@ describe('Before you start (RH2)', () => {
     expect(window.__CFD_RUN_CHECK_AGAIN__).toHaveBeenCalled();
   });
 
-  it('a kept row moves under "Kept (n)"; one fixable row left: no Apply all', () => {
+  it('a kept row moves under "Kept (n)" with Undo keep; one fixable row left: no Apply all', async () => {
     render(<RunCheck state={state({ checks_kept: ['piso_high_co'] })} onError={() => {}} />);
     expect(document.querySelector('[data-run-check-row="piso_high_co"]')).toBeNull();
     expect(screen.getByText('Kept (1)')).toBeInTheDocument();
     expect(document.querySelector('[data-run-check-kept-row="piso_high_co"]')).toHaveTextContent('Max Courant 100 with 1 outer corrector.');
     expect(document.querySelector('[data-run-check-apply-all="1"]')).toBeNull();
+    const undo = document.querySelector('[data-run-check-unkeep="piso_high_co"]') as HTMLElement;
+    expect(undo).toHaveTextContent('Undo keep');
+    fireEvent.click(undo);
+    await waitFor(() => expect(window.__CFD_RUN_CHECK_UNKEEP__).toHaveBeenCalledWith('piso_high_co'));
+  });
+
+  it("what is kept is the run's list as the panel shows it, not the last answer's", () => {
+    // The answer was checked while piso_high_co was kept; the person has since undone it.
+    const answered = { ok: true, checked: true, checks: [{ ...PISO, kept: true }, AVG], estimate: { line: 'x' } };
+    render(<RunCheck state={state({ precheck: answered, checks_kept: [] } as Partial<RunState>)} onError={() => {}} />);
+    expect(document.querySelector('[data-run-check-row="piso_high_co"]')).not.toBeNull();
+    expect(document.querySelector('[data-run-check-kept="1"]')).toBeNull();
+  });
+
+  it('Apply all applies only the problems and warnings shown, and says what it changes', async () => {
+    const STILL: RunCheckRow = { code: 'still_start', level: 'info', text: 'The run starts from rest.', fix: { label: 'Start from potential flow', target: 'study', values: [{ key: 'potential_flow', value: true }] } };
+    const warns = [0, 1, 2, 3, 4, 5].map((i) => ({ ...AVG, code: 'w' + i, fix: { ...AVG.fix!, label: 'Fix ' + i, values: [{ key: 'transient.k' + i, value: i }] } }));
+    // Seven warnings and a note: six shown, the seventh and the note left out.
+    const many = { ok: true, checked: true, checks: [...warns, { ...AVG, code: 'w6' }, STILL], estimate: { line: 'x' } };
+    render(<RunCheck state={state({ precheck: many } as Partial<RunState>)} onError={() => {}} />);
+    const all = document.querySelector('[data-run-check-apply-all="1"]') as HTMLElement;
+    expect(all.getAttribute('title')).toBe('Applies Fix 0; Fix 1; Fix 2; Fix 3; Fix 4; Fix 5');
+    fireEvent.click(all);
+    await waitFor(() => expect(window.__CFD_RUN_CHECK_APPLY__).toHaveBeenCalledWith(warns.map((w) => w.fix)));
+  });
+
+  it('a check of the run settings only says so, and never "nothing found in its mesh or physics"', () => {
+    const partial = {
+      ok: true,
+      checked: true,
+      checks: [],
+      estimate: { line: 'No time-step estimate until the mesh is generated', complete: false, unchecked: 'its mesh and physics are checked once the mesh is generated' },
+    };
+    render(<RunCheck state={state({ precheck: partial } as Partial<RunState>)} onError={() => {}} />);
+    expect(document.querySelector('[data-run-check-partial="1"]')).toHaveTextContent(
+      'Only its run settings were checked: its mesh and physics are checked once the mesh is generated.',
+    );
+    expect(document.querySelector('[data-run-check-none="1"]')).toHaveTextContent('Nothing found in its run settings.');
+    expect(screen.queryByText(/mesh or physics/)).toBeNull();
   });
 
   it('only for a draft; while it checks it says so', () => {

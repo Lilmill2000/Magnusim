@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cfddesk.registry import contract, load_all, reset_for_tests
@@ -107,3 +108,23 @@ def test_the_plan_at_start_reports_the_same_rows(project: Path):
     # A plan without the check context (the case writer, a Continue) reports none.
     plain = run_case.plan_run(project, "run-x", time_dependency="Transient", transient=PISO_100, require_mesh=False)
     assert "checks" not in plain["plan"]
+
+
+def test_before_a_mesh_only_the_settings_are_checked_and_the_line_says_why():
+    """No generated mesh: the spec cannot be read, so the inlets, mesh and physics are not
+    checked. The line says the estimate waits for the mesh (not that no inlet sets a speed),
+    and the answer says it is not complete, so nothing claims the mesh and physics were checked."""
+    from incompressible_flow.precheck import NO_MESH_ESTIMATE, run_check
+
+    for spec in (None, SimpleNamespace(ok=False, error="mesh.json missing — generate a mesh first")):
+        inputs = check_inputs(spec, PISO_100, {"mesh_ready": False}, transient=True)
+        assert inputs["inputs_complete"] is False
+        assert inputs["no_estimate"] == NO_MESH_ESTIMATE == "No time-step estimate until the mesh is generated"
+        out = run_check(transient=True, spec=spec or SimpleNamespace(ok=False), settings=PISO_100, context={"mesh_ready": False})
+        assert out["estimate"]["complete"] is False
+        assert out["estimate"]["unchecked"] == "its mesh and physics are checked once the mesh is generated"
+        assert out["estimate"]["line"] == NO_MESH_ESTIMATE
+        assert [r["code"] for r in out["checks"]] == ["piso_high_co"]
+    # A steady run without a mesh: settings only, no time-step words.
+    steady = check_inputs(None, {"end_time": 200}, {}, transient=False)
+    assert steady["inputs_complete"] is False and "no_estimate" not in steady
