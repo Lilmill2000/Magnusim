@@ -466,7 +466,12 @@ describe('read_results: precheck (RH2)', () => {
     const out = await tools().read_results.run({ project_id: '', simulation_id: '', run_id: '', kind: 'precheck', field: '', time: -1, points: [], samples: 0, filter_key: '', values: [] }, rt());
     assert.equal(out.ok, true, JSON.stringify(out));
     assert.equal(out.data.partial, 'Only its run settings were checked: its mesh and physics are checked once the mesh is generated.');
-    assert.equal(out.summary, 'Run 1: nothing found in its run settings (only they were checked)');
+    assert.equal(out.summary, 'Run 1: nothing found in its run settings');
+    // With rows, the summary says what was checked in words of its own.
+    app.over = (m, path) => (path === '/api/run/precheck' ? answer({ checks: [{ code: 'still_start', level: 'info', text: 'The run starts from rest.', fix: null }, { code: 'piso_correctors', level: 'warn', text: 'PISO needs at least 2 pressure correctors per step.', fix: null }], kept: [], estimate: est, mesh: null }) : undefined);
+    const rows = await tools().read_results.run({ project_id: '', simulation_id: '', run_id: '', kind: 'precheck', field: '', time: -1, points: [], samples: 0, filter_key: '', values: [] }, rt());
+    assert.equal(rows.ok, true, JSON.stringify(rows));
+    assert.match(rows.summary, /^Run 1: \d+ to look at before it starts \(only its run settings were checked\)$/);
   });
 
   it('an analysis without the check says so', async () => {

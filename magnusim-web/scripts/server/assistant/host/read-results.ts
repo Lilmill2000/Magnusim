@@ -435,7 +435,7 @@ function precheckAnswer(pc: Record<string, unknown>, c: { runId: string; runName
   if (size() > PRECHECK_ANSWER_MAX) out.findings = findings.filter((f) => f.level !== 'info');
   const n = open.length;
   const found = n ? `${n} to look at before it starts` : partial ? 'nothing found in its run settings' : 'nothing found before it starts';
-  return okData(out, `${c.runName}: ${found}${partial ? ' (only they were checked)' : ''}${c.proposed ? ' (with the proposed values)' : ''}`);
+  return okData(out, `${c.runName}: ${found}${n && partial ? ' (only its run settings were checked)' : ''}${c.proposed ? ' (with the proposed values)' : ''}`);
 }
 
 /** What read_results status says of a run's health: its verdict, its finding codes and where Continue would go on from. */

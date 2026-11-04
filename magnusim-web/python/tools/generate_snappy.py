@@ -552,8 +552,8 @@ def main() -> int:
 
         # The script emptied the case folder and copied back only the mesh, its dictionaries and
         # its logs: the meta goes back beside them, where the mesh's facts read its sizes and
-        # layers and the time-step readers know a Hex-dominant mesh (RH2).
-        case_dir.mkdir(parents=True, exist_ok=True)
+        # layers and the time-step readers know a Hex-dominant mesh (RH2). The script made the
+        # folder again; a folder deleted since stays deleted (this write fails, as the counts do).
         (case_dir / "w23-geometry-meta.json").write_text(
             json.dumps(meta_doc, indent=2), encoding="utf-8"
         )

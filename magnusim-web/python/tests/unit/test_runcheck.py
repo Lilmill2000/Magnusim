@@ -394,3 +394,17 @@ def test_a_check_of_the_settings_only_says_so():
     assert {r["code"] for r in out["checks"]} == {"piso_high_co"}
     assert check(RUN2)["estimate"]["complete"] is True
     assert "unchecked" not in check(RUN2)["estimate"]
+
+
+def test_cores_sent_as_auto_win_over_the_saved_number():
+    """The panel sends Cores as it shows them (null = Auto) while their save is still on its
+    way: 4 saved and Auto sent is checked on every rank this PC allows, not on 4."""
+    from types import SimpleNamespace
+
+    from cfddesk.project.run_check import check_context
+
+    inputs = SimpleNamespace(mesh={"ok": False}, time_dependency="transient", run={"cores": 4})
+    common = {"rank_cap": 15, "s_per_cell_step": 1.4e-5, "rate_source": "default"}
+    assert check_context(inputs, cores=None, **common)["ranks"] == 15
+    assert check_context(inputs, cores=2, **common)["ranks"] == 2
+    assert check_context(inputs, **common)["ranks"] == 4

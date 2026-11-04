@@ -957,15 +957,15 @@ def analysis_run_check(
     mesh_id: str = "",
     time_dependency: str = "",
     settings: dict | None = None,
-    cores: Any = None,
+    cores: Any = "saved",
     rank_cap: Any = None,
     s_per_cell_step: Any = None,
     rate_source: str = "",
 ) -> dict[str, Any]:
     """The pre-run check of a run (run health, RH2; contract API 1.9 ``RunModel.check``):
     its analysis's rows and estimate with ``settings`` (its own with any proposed change),
-    the mesh's facts, the ranks it would get (its Cores, else the analysis's serial rule,
-    at most ``rank_cap``) and this PC's solve rate. Reads files only (the data lane), but
+    the mesh's facts, the ranks it would get (``cores`` as given, null = Auto; left out, the
+    run's saved Cores; else the analysis's serial rule, at most ``rank_cap``) and this PC's solve rate. Reads files only (the data lane), but
     makes the facts of a mesh generated before they existed, once, as its mesher would
     have. An analysis without the hook answers ``checked: false``."""
     from cfddesk.project.run_check import run_check

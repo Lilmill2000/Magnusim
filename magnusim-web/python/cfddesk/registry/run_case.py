@@ -205,13 +205,13 @@ def plan_run(
     if failed is not None or launch is None:
         return failed or {"ok": False, "error": "the run cannot be planned"}
     if isinstance(check, dict) and restart is None:
-        from cfddesk.project.run_check import check_context
+        from cfddesk.project.run_check import SAVED_CORES, check_context
 
         try:
             context = check_context(
                 inputs,
                 launch=launch,
-                cores=check.get("cores"),
+                cores=check.get("cores", SAVED_CORES),
                 rank_cap=check.get("rank_cap"),
                 s_per_cell_step=check.get("s_per_cell_step"),
                 rate_source=check.get("rate_source"),

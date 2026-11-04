@@ -28,6 +28,9 @@ from typing import Any
 LEGACY_SERIAL_BELOW_CELLS = {"steady": 200_000, "transient": 50_000}
 # The codes a run keeps as set: at most this many, each at most 40 characters.
 KEPT_MAX = 32
+# ``cores`` when the caller gives none: the run's saved Cores. A given ``None`` is Auto, as
+# the panel shows it while its save is still on its way (Node always sends the value).
+SAVED_CORES = "saved"
 
 
 def check_ranks(
@@ -121,7 +124,7 @@ def check_context(
     inputs: Any,
     *,
     launch: Any = None,
-    cores: Any = None,
+    cores: Any = SAVED_CORES,
     rank_cap: Any = None,
     s_per_cell_step: Any = None,
     rate_source: str | None = None,
@@ -139,7 +142,7 @@ def check_context(
     n_cells = mesh.get("n_cells") or (facts or {}).get("n_cells")
     transient = getattr(inputs, "time_dependency", "steady") == "transient"
     run = getattr(inputs, "run", None) or {}
-    use_cores = cores if cores is not None else run.get("cores")
+    use_cores = run.get("cores") if cores == SAVED_CORES else cores
     ranks = check_ranks(
         n_cells,
         cores=use_cores,
@@ -169,7 +172,7 @@ def run_check(
     mesh_id: str | None = None,
     time_dependency: str | None = None,
     settings: dict[str, Any] | None = None,
-    cores: Any = None,
+    cores: Any = SAVED_CORES,
     rank_cap: Any = None,
     s_per_cell_step: Any = None,
     rate_source: str | None = None,

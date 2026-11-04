@@ -223,7 +223,7 @@ test('a check that fails says "Not checked" with why, never "Nothing found"; Che
   await expect(check.locator('[data-run-check-error="1"]')).toHaveCount(0);
 });
 
-test("the check reads Cores as the panel shows them, while their save is still on its way", async ({ page, request }) => {
+test("the check reads Cores as the panel shows them, while their save is still on its way, to a number and back to Auto", async ({ page, request }) => {
   test.setTimeout(180_000);
   const rid = await run2(request, 'Run_cores');
   const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
@@ -248,6 +248,24 @@ test("the check reads Cores as the panel shows them, while their save is still o
   await page.unroute('**/api/run/update', hold);
   await expect.poll(async () => (await runRow(request, rid)).cores, STEP).toBe(2);
   await expect(line).toContainText(' on 2 cores');
+  // Back to Auto with its save held: the server still has 2 saved, and Auto (sent as null)
+  // is checked as Auto, not as the saved 2.
+  let releaseAuto;
+  const heldAuto = new Promise((r) => (releaseAuto = r));
+  const holdAuto = async (route) => {
+    await heldAuto;
+    await route.continue();
+  };
+  await page.route('**/api/run/update', holdAuto);
+  await panel.getByLabel('Cores', { exact: true }).selectOption('auto');
+  await expect(line).toContainText(' on 1 core', STEP);
+  expect((await runRow(request, rid)).cores).toBe(2);
+  const savedAuto = page.waitForResponse((r) => r.url().includes('/api/run/update') && r.request().method() === 'POST');
+  releaseAuto();
+  await savedAuto;
+  await page.unroute('**/api/run/update', holdAuto);
+  await expect.poll(async () => (await runRow(request, rid)).cores ?? null, STEP).toBeNull();
+  await expect(line).toContainText(' on 1 core');
 });
 
 test('Apply all applies the problems and warnings shown, not the notes, and its title says what it changes', async ({ page, request }) => {
