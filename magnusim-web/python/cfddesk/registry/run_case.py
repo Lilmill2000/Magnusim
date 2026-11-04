@@ -20,6 +20,7 @@ them without importing the core's other packages:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from collections.abc import Callable
@@ -161,11 +162,17 @@ def plan_run(
     n_procs: int = 1,
     require_mesh: bool = True,
     restart: dict[str, Any] | None = None,
+    check: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What the run would be written with, writing nothing.
 
     ``restart`` (:func:`restart_arg`) plans a run continued from its latest saved
     time, as its prepare job will write it (its new end; ``stops_off``).
+
+    ``check`` (RH2, API 1.9; a Start's plan): ``{cores, rank_cap, s_per_cell_step,
+    rate_source}``. The run's inputs then carry the pre-run check's context
+    (``RunInputs.check_context``), so the analysis's plan reports its ``checks``
+    (``prepare_run.checks``).
 
     Ready: ``{ok, analysis_key, plugin, app, time_dependency, launch,
     prepare_job, serial_below_cells, plan}``, where ``plan`` is the analysis's
@@ -197,6 +204,22 @@ def plan_run(
     )
     if failed is not None or launch is None:
         return failed or {"ok": False, "error": "the run cannot be planned"}
+    if isinstance(check, dict) and restart is None:
+        from cfddesk.project.run_check import check_context
+
+        try:
+            context = check_context(
+                inputs,
+                launch=launch,
+                cores=check.get("cores"),
+                rank_cap=check.get("rank_cap"),
+                s_per_cell_step=check.get("s_per_cell_step"),
+                rate_source=check.get("rate_source"),
+            )
+        except Exception:  # noqa: BLE001 (the pre-run check never stops a Start: it is left out)
+            context = None
+        if context is not None:
+            inputs = dataclasses.replace(inputs, check_context=context)
     planned = plan_run_case(inputs, analysis_key=decision["analysis_key"])
     out: dict[str, Any] = {
         "ok": bool(planned.get("ok")),

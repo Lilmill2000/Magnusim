@@ -145,9 +145,11 @@ def pc_solve_rate(local_doc: dict[str, Any] | None) -> dict[str, Any]:
     ``{s_per_cell_step, runs, source}``, the median of the finished runs' rates kept in
     ``solve_rate.samples`` (``source`` ``measured``), else Run_2's rate (``source``
     ``default``, ``runs`` 0)."""
-    doc = local_doc if isinstance(local_doc, dict) else {}
-    block = doc.get("solve_rate") if isinstance(doc.get("solve_rate"), dict) else {}
-    samples = block.get("samples") if isinstance(block.get("samples"), list) else []
+    doc: dict[str, Any] = local_doc if isinstance(local_doc, dict) else {}
+    raw_block = doc.get("solve_rate")
+    block: dict[str, Any] = raw_block if isinstance(raw_block, dict) else {}
+    raw_samples = block.get("samples")
+    samples: list[Any] = raw_samples if isinstance(raw_samples, list) else []
     vals = [v for s in samples[-RATE_SAMPLES_MAX:] if isinstance(s, dict) and (v := _pos(s.get("s_per_cell_step"))) is not None]
     if not vals:
         return {"s_per_cell_step": DEFAULT_S_PER_CELL_STEP, "runs": 0, "source": "default"}

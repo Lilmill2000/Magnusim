@@ -12,7 +12,8 @@ one and otherwise fall back to a neutral default:
 - :func:`validate_ready`: what still blocks a run, as
   ``[{"message", "fix"}]`` (empty when the run can start).
 - :func:`run_defaults`, :func:`run_normalize`, :func:`run_preview`: the run
-  settings model (iterations, or simulated time and time step).
+  settings model (iterations, or simulated time and time step); :func:`run_check`
+  (API 1.9): the pre-run check beside the preview.
 - :func:`launch_spec`: which program runs the case, how many frames are
   kept, which processes belong to it and how it is stopped.
 - :func:`log_parser_ref`: the module that turns the solver's output into job
@@ -170,6 +171,13 @@ class RunModel:
     defaults: Callable[[], dict[str, Any]]
     normalize: Callable[[dict[str, Any]], dict[str, Any]]
     preview: Callable[..., dict[str, Any]] | None = None
+    # API 1.9 (run health, RH2): the pre-run check, beside preview: called with ``inputs``
+    # (RunInputs), ``settings`` (the run's settings, proposed edits included) and
+    # ``context`` (the mesh's facts and Courant rates, ranks, this PC's solve rate, the codes
+    # kept as set: cfddesk.project.run_check). Returns the rows
+    # ``[{code, level, text, short?, fix?, alt?}]``, or ``{"checks": rows, "estimate": {...}}``
+    # (magnusim_sdk.runcheck.check). No row blocks a run.
+    check: Callable[..., Any] | None = None
 
 
 class ContractError(ValueError):
@@ -497,6 +505,58 @@ def run_preview(spec: Any, **kwargs: Any) -> dict[str, Any]:
     if model is None or model.preview is None:
         return {"ok": True, "partial": True, "reason": None, "control": run_normalize(spec, kwargs.get("settings"))}
     return dict(model.preview(**kwargs) or {})
+
+
+CHECK_LEVELS = ("error", "warn", "info")
+CHECK_TARGETS = ("run", "study", "mesh", "bcs", "steady_copy")
+
+
+def _check_fix(raw: Any) -> dict[str, Any] | None:
+    """A check row's fix as the core passes it on: ``{label, target, values, cost}``."""
+    if not isinstance(raw, dict) or not str(raw.get("label") or "").strip():
+        return None
+    target = str(raw.get("target") or "run")
+    values = [
+        {"key": str(v.get("key")), "value": v.get("value")}
+        for v in raw.get("values") or []
+        if isinstance(v, dict) and str(v.get("key") or "").strip()
+    ]
+    cost = raw.get("cost") if isinstance(raw.get("cost"), dict) else None
+    return {
+        "label": str(raw["label"])[:80],
+        "target": target if target in CHECK_TARGETS else "run",
+        "values": values[:6],
+        "cost": {"steps": cost.get("steps"), "wall_s": cost.get("wall_s")} if cost else None,
+    }
+
+
+def run_check(spec: Any, **kwargs: Any) -> dict[str, Any]:
+    """The pre-run check (API 1.9): ``{"checks": [...], "estimate": {...} | None}``, the
+    analysis's ``RunModel.check`` rows cleaned (an unknown level reads ``info``; no row
+    blocks a run). An analysis without the hook has no rows (``checked: False``)."""
+    model = run_model(spec)
+    if model is None or model.check is None:
+        return {"checked": False, "checks": [], "estimate": None}
+    got = model.check(**kwargs)
+    raw_rows = got.get("checks") if isinstance(got, dict) else got
+    estimate = got.get("estimate") if isinstance(got, dict) and isinstance(got.get("estimate"), dict) else None
+    rows: list[dict[str, Any]] = []
+    for row in raw_rows or []:
+        if not isinstance(row, dict) or not str(row.get("code") or "").strip() or not str(row.get("text") or "").strip():
+            raise ContractError(f"{spec.key}: RunModel.check returned {row!r}")
+        level = str(row.get("level") or "info")
+        rows.append(
+            {
+                "code": str(row["code"])[:40],
+                "level": level if level in CHECK_LEVELS else "info",
+                "text": str(row["text"])[:500],
+                "short": str(row.get("short") or row["code"])[:80],
+                "fix": _check_fix(row.get("fix")),
+                "alt": _check_fix(row.get("alt")),
+                "kept": bool(row.get("kept")),
+            }
+        )
+    return {"checked": True, "checks": rows, "estimate": estimate}
 
 
 NO_MONITORS: dict[str, Any] = {

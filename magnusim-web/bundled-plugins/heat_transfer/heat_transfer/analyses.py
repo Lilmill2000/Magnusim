@@ -287,6 +287,16 @@ def _decision(spec: Any, ctx: CaseContext) -> dict[str, Any]:
         "density_model": density,
         "transient": spec.transient is not None,
     }
+    context = getattr(ctx.inputs, "check_context", None) if ctx.inputs is not None else None
+    if isinstance(context, dict):
+        # RH2 (API 1.9): the pre-run check as the run starts (prepare_run.checks).
+        from .precheck import run_check
+
+        settings = override if spec.transient is not None else {"end_time": spec.end_time, "write_interval": spec.write_interval}
+        try:
+            out["checks"] = run_check(transient=spec.transient is not None, spec=spec, settings=settings or {}, context=context)["checks"]
+        except Exception as exc:  # noqa: BLE001 (the check never stops a Start: it is left out, and says why)
+            out["checks_error"] = f"{type(exc).__name__}: {exc}"[:200]
     if convergence_stops_off(spec):
         out["stops_off"] = True
         return out

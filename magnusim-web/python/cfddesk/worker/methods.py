@@ -948,6 +948,52 @@ def analysis_run_preview(
     return {**out, "analysis_key": key}
 
 
+@rpc("analysis.run_check")
+def analysis_run_check(
+    project_id: str = "",
+    project_dir: str = "",
+    run_id: str = "",
+    simulation_id: str = "",
+    mesh_id: str = "",
+    time_dependency: str = "",
+    settings: dict | None = None,
+    cores: Any = None,
+    rank_cap: Any = None,
+    s_per_cell_step: Any = None,
+    rate_source: str = "",
+) -> dict[str, Any]:
+    """The pre-run check of a run (run health, RH2; contract API 1.9 ``RunModel.check``):
+    its analysis's rows and estimate with ``settings`` (its own with any proposed change),
+    the mesh's facts, the ranks it would get (its Cores, else the analysis's serial rule,
+    at most ``rank_cap``) and this PC's solve rate. Reads files only (the data lane), but
+    makes the facts of a mesh generated before they existed, once, as its mesher would
+    have. An analysis without the hook answers ``checked: false``."""
+    from cfddesk.project.run_check import run_check
+
+    root = _root(project_id, project_dir)
+    key = _run_analysis_key(root, simulation_id, run_id, time_dependency)
+    if not _analysis_installed(key):
+        return {"ok": True, "analysis_key": key, "checked": False, "checks": [], "estimate": None, "unavailable": _analysis_missing_issue()["message"]}
+    _analysis_spec(key)
+    try:
+        rate = float(s_per_cell_step) if s_per_cell_step is not None else None
+    except (TypeError, ValueError) as exc:
+        raise RpcError(-32602, "s_per_cell_step must be a number") from exc
+    return run_check(
+        root,
+        run_id=run_id,
+        simulation_id=simulation_id or None,
+        mesh_id=mesh_id or None,
+        time_dependency=time_dependency or None,
+        settings=settings if isinstance(settings, dict) else {},
+        cores=cores,
+        rank_cap=rank_cap,
+        s_per_cell_step=rate,
+        rate_source=rate_source or None,
+        analysis_key=key,
+    )
+
+
 @rpc("analysis.run_monitors")
 def analysis_run_monitors(
     project_id: str = "",
@@ -992,6 +1038,7 @@ def analysis_plan_run(
     transient: Any = None,
     n_procs: int = 1,
     restart: Any = None,
+    check: Any = None,
 ) -> dict[str, Any]:
     """What a run would be written with, writing nothing (API 1.5).
 
@@ -1036,6 +1083,7 @@ def analysis_plan_run(
         transient=transient,
         n_procs=procs,
         restart=restart,
+        check=check if isinstance(check, dict) else None,
     )
     if not out.get("ok"):
         return out

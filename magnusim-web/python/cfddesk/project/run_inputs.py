@@ -37,6 +37,10 @@ class RunInputs:
     # A run continued from its latest saved time: {"end_time", "write_interval"}
     # (run_case.restart_arg); None for a run written from the start.
     restart: dict[str, Any] | None = None
+    # RH2 (API 1.9): what the core adds for the pre-run check when it plans a run to start
+    # (cfddesk.project.run_check.check_context: mesh facts, ranks, solve rate, kept codes);
+    # None otherwise. An analysis's plan reports ``checks`` only with it.
+    check_context: dict[str, Any] | None = None
 
 
 def gather_run_inputs(

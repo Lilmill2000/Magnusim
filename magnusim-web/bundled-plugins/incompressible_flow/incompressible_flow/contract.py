@@ -395,5 +395,21 @@ def transient_preview(
     }
 
 
-STEADY_RUN_MODEL = RunModel(defaults=_steady_defaults, normalize=_steady_normalize, preview=_steady_preview)
-TRANSIENT_RUN_MODEL = RunModel(defaults=_transient_defaults, normalize=_transient_normalize, preview=transient_preview)
+def _steady_check(**kwargs: Any) -> dict[str, Any]:
+    """The pre-run check of a steady run (API 1.9; incompressible_flow.precheck)."""
+    from .precheck import run_check
+
+    return run_check(transient=False, **kwargs)
+
+
+def _transient_check(**kwargs: Any) -> dict[str, Any]:
+    """The pre-run check of a transient run (API 1.9; incompressible_flow.precheck)."""
+    from .precheck import run_check
+
+    return run_check(transient=True, **kwargs)
+
+
+STEADY_RUN_MODEL = RunModel(defaults=_steady_defaults, normalize=_steady_normalize, preview=_steady_preview, check=_steady_check)
+TRANSIENT_RUN_MODEL = RunModel(
+    defaults=_transient_defaults, normalize=_transient_normalize, preview=transient_preview, check=_transient_check
+)
