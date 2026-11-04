@@ -23,6 +23,7 @@ sys.path.insert(0, str(CFDDESK_ROOT))
 
 from cfddesk.jobs import legacy_markers as _legacy  # noqa: E402
 from cfddesk.jobs.events import emit  # noqa: E402
+from cfddesk.mesh.facts import finish_mesh_facts  # noqa: E402
 from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case  # noqa: E402
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     base_cell_size,
@@ -573,9 +574,12 @@ def main() -> int:
 
             zones = cell_zone_sizes(case_dir / "constant" / "polyMesh")
             region_rows = [{**r, "cells": int(zones.get(r["name"], 0))} for r in prep["mesh_regions"]]
+        quality = None
         if ok:
             # The script copied the mesh and logs to Windows; the WSL copy is done.
             remove_wsl_case(wsl_case)
+            # Its quality (checkMesh), box, layers and Courant rates (mesh-facts.json, RH2).
+            quality = finish_mesh_facts(case_dir, "hexdominant", _progress)
         return _result(
             ok,
             exit_code=rc,
@@ -596,6 +600,7 @@ def main() -> int:
             **mesh_input,
             **({"regions": region_rows} if region_rows else {}),
             **({"left_out": prep["left_out"]} if prep.get("left_out") else {}),
+            **({"quality": quality} if quality else {}),
         )
     except Exception as exc:
         return _result(False, error=str(exc), traceback=traceback.format_exc()[-2000:])

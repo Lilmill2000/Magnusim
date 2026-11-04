@@ -54,6 +54,27 @@ def test_mesh_meta_reads_checkmesh_volumes(tmp_path: Path):
     assert load_mesh_meta(None) is None
 
 
+def test_mesh_meta_leaves_out_a_hex_dominant_checkmesh(tmp_path: Path):
+    """Hex-dominant meshes have a checkMesh report only since RH2 (their quality, for the Mesh
+    panel and the pre-run check). Its volumes are not read, so the time step written for them
+    stays what it was before (spec RH2 4.1); Standard and cfMesh meshes read theirs as before."""
+    log = "    Min volume = 4.97e-09. Max volume = 1.2e-06.  Total volume = 0.0034.  Cell volumes OK.\n"
+    hexd = tmp_path / "hexd"
+    _write(hexd / "w23-geometry-meta.json", {"walls_level": 2, "add_layers": True})
+    before = load_mesh_meta(hexd)
+    est_before = estimate_delta_t(mesh_meta=before, n_cells=1000, speed_ref=2.0, max_co=1.0)
+    (hexd / "log.checkMesh").write_text(log, encoding="utf-8")
+    # The mesh's facts and Courant rates beside it change nothing either.
+    _write(hexd / "mesh-facts.json", {"v": 1, "quality": {"known": True}})
+    _write(hexd / "courant-rates.json", {"v": 1, "p99_9": [1e6, 1e6, 1e6]})
+    assert load_mesh_meta(hexd) == before == {}
+    assert estimate_delta_t(mesh_meta=load_mesh_meta(hexd), n_cells=1000, speed_ref=2.0, max_co=1.0) == est_before
+    cf = tmp_path / "cfmesh"
+    _write(cf / "w28-cfmesh-meta.json", {"backend": "cfmesh"})
+    (cf / "log.checkMesh").write_text(log, encoding="utf-8")
+    assert load_mesh_meta(cf)["min_cell_volume_m3"] == pytest.approx(4.97e-09)
+
+
 def _case_with_mesh_meta(tmp_path: Path) -> Path:
     root = tmp_path / "js"
     shutil.copytree(FIX, root)

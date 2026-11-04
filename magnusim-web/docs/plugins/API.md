@@ -1911,7 +1911,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `study?: Record<string, unknown> | null | undefined`: The record of the run's study when it is the open one (its analysis's settings), else null.
 - `health?: Record<string, unknown> | null | undefined`: RH1: the run's health record (verdict, checks, findings; spec 3.6), or null when it has none (not checked, not judged yet, or it ran before health checks existed).
 - `health_checked?: boolean | null | undefined`: RH1: true when its runs are health-checked, false when not, null when it ran before checks existed.
-- `health_run?: { status: string; stopping: boolean; saved: number | null; n_steps?: number | null; attempts: Array<Record<string, unknown>>; continue_changes: Array<Record<...`: RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts.
+- `health_run?: { status: string; stopping: boolean; saved: number | null; n_steps?: number | null; continues?: boolean; attempts: Array<Record<string, unknown>>; continue_c...`: RH1: what its Health block reads of the run: its status, a Stop on its way, its latest saved time, earlier parts.
 
 #### SchemaFormProps
 
@@ -2040,6 +2040,79 @@ magnusim_sdk: the helpers a Magnusim plugin may use, with no dependencies.
 Constants:
 
 - `SDK_VERSION = "1.5.0"`
+
+### magnusim_sdk.courant_rates
+
+The Courant-rate table of a mesh (run health, RH2): how fast each cell's Courant number grows with the flow speed, along x, y and z.
+
+#### class MeshReadError(ValueError)
+
+A polyMesh file this module cannot read.
+
+#### mesh_stamp
+
+```python
+mesh_stamp(poly_dir: Path | str) -> list[Any]
+```
+
+The mesh files' identity: each file's name, size and modification time (ns, as text: the server compares it too, and JSON numbers lose its last digits there).
+
+#### mesh_cell_count
+
+```python
+mesh_cell_count(poly_dir: Path | str) -> int | None
+```
+
+The cell count in ``owner``'s header note (``nCells:``), without reading its list.
+
+#### cell_rates
+
+```python
+cell_rates(poly_dir: Path | str) -> Any
+```
+
+Every cell's Courant rate along x, y and z (an ``(n_cells, 3)`` array, 1/m).
+
+#### rate_table
+
+```python
+rate_table(poly_dir: Path | str, *, top: int = TOP_CELLS) -> dict[str, Any]
+```
+
+The table ``courant-rates.json`` keeps: per axis the 99.9th and 99th percentiles, the median and the largest rate (1/m, over the cells with a positive volume), the mesh's box (``bbox_m``: its points' lowest and highest corner and the size), and the ``top`` cells with the largest rate along any axis (``[cell, x, y, z]``, largest first).
+
+#### rate_along
+
+```python
+rate_along(table: dict[str, Any] | None, direction: Any = (1.0, 0.0, 0.0)) -> float | None
+```
+
+The 99.9th-percentile Courant rate (1/m) along ``direction`` (any length).
+
+#### write_rates
+
+```python
+write_rates(case_dir: Path | str, *, max_cells: int = MAX_CELLS) -> dict[str, Any]
+```
+
+Make the table of the mesh in ``case_dir/constant/polyMesh`` and keep it in ``case_dir/courant-rates.json``. Returns its summary for mesh-facts.json: the table without ``top`` (``{"skipped": why}`` when it was not made).
+
+#### read_rates
+
+```python
+read_rates(case_dir: Path | str) -> dict[str, Any] | None
+```
+
+The table kept beside the mesh in ``case_dir``, or None when there is none or the mesh changed since it was made.
+
+Constants:
+
+- `RATES_FILE = "courant-rates.json"`
+- `RATES_VERSION = 1`
+- `TOP_CELLS = 2000`
+- `MAX_CELLS = 4_000_000`
+- `NO_FLUX_TYPES = frozenset({"wall", "empty", "symmetry", "symmetryPlane", "wedge"})`
+- `AXES = ("x", "y", "z")`
 
 ### magnusim_sdk.data
 
@@ -2607,6 +2680,108 @@ Constants:
 
 - `FORMATS = ("brep",)`
 
+### magnusim_sdk.mesh_facts
+
+Mesh facts (run health, RH2): what the pre-run check and the Mesh panel know of a generated mesh, in one file beside it (``mesh-facts.json``), the same for every mesher.
+
+#### parse_checkmesh
+
+```python
+parse_checkmesh(text: str | None) -> dict[str, Any]
+```
+
+checkMesh's report (``log.checkMesh``, OpenFOAM v2606) as numbers.
+
+#### checkmesh_bbox
+
+```python
+checkmesh_bbox(text: str | None) -> dict[str, list[float]] | None
+```
+
+checkMesh's "Overall domain bounding box (x y z) (x y z)" as {min, max, size} (m).
+
+#### record_quality
+
+```python
+record_quality(quality: dict[str, Any] | None) -> dict[str, Any]
+```
+
+The quality the mesh record keeps (``live_mesh_result.quality``): ``known``, and when known ``ok``, ``n_failed``, at most 8 ``failed`` checks, the worst cells and the counts behind the warnings. The Mesh panel's quality line and the Assistant's ``read_setup mesh`` read it.
+
+#### parse_snappy_layers
+
+```python
+parse_snappy_layers(text: str | None) -> list[dict[str, Any]] | None
+```
+
+snappyHexMesh's last layer report as rows ``{patch, faces, layers_asked, layers, total_m}``: ``layers`` is the mean number of layers it made on the patch's faces and ``total_m`` their mean overall thickness. None when the log has no report.
+
+#### snappy_layer_expansions
+
+```python
+snappy_layer_expansions(dict_text: str | None) -> tuple[float | None, dict[str, float]]
+```
+
+(the global expansion ratio, each patch's own) of a snappyHexMeshDict's ``addLayersControls``.
+
+#### first_layer_m
+
+```python
+first_layer_m(total_m: float | None, layers: float | None, expansion: float | None) -> float | None
+```
+
+The first layer's thickness of ``layers`` layers growing by ``expansion`` to ``total_m``.
+
+#### mesher_of
+
+```python
+mesher_of(case_dir: Path | str) -> str | None
+```
+
+The mesher whose record is in ``case_dir`` (the newest of them): ``standard``, ``cfmesh`` or ``hexdominant``; None for a mesh with none (a plugin's mesher).
+
+#### build_mesh_facts
+
+```python
+build_mesh_facts(case_dir: Path | str, *, mesher: str | None = None) -> dict[str, Any]
+```
+
+The facts of the mesh in ``case_dir`` from its files (no Courant rates).
+
+#### write_mesh_facts
+
+```python
+write_mesh_facts(case_dir: Path | str, *, mesher: str | None = None, rates: bool = True) -> dict[str, Any]
+```
+
+Build the facts of the mesh in ``case_dir``, make its Courant-rate table (with ``rates``) and keep both beside it. Returns the facts. A mesher calls this when its mesh is done; nothing here fails a mesh (an unreadable part is left out and says why).
+
+#### read_mesh_facts
+
+```python
+read_mesh_facts(case_dir: Path | str) -> dict[str, Any] | None
+```
+
+The facts kept beside the mesh in ``case_dir``; None when there are none or the mesh changed since they were written.
+
+#### load_mesh_facts
+
+```python
+load_mesh_facts(case_dir: Path | str | None, *, build: bool = False, rates: bool = True) -> dict[str, Any] | None
+```
+
+The facts of the mesh in ``case_dir``: as kept, else (with ``build``) made now and kept, as for a mesh generated before they existed. None without a mesh.
+
+Constants:
+
+- `FACTS_FILE = "mesh-facts.json"`
+- `FACTS_VERSION = 1`
+- `CHECKMESH_LOG = "log.checkMesh"`
+- `SNAPPY_LOG = "log.snappyHexMesh"`
+- `MESHER_META = { "standard": "standard-meta.json", "cfmesh": "w28-cfmesh-meta.json", "hexdominant": "w23-geometr...`
+- `ACCEPTED_ASPECT_CELLS = 8`
+- `RECORD_FAILED_MAX = 8`
+
 ### magnusim_sdk.msh22
 
 ASCII MSH 2.2 writer for gmshToFoam (hex / pyr / tet / tri / quad).
@@ -2750,6 +2925,48 @@ Constants:
 - `RE_REGION_COURANT = re.compile(r"^Region:\s*(\w+)\s+Courant Number mean:\s*([0-9.eE+-]+)\s+max:\s*([0-9.eE+-]+)")`
 - `REGION_KEY_SEP = ":"`
 - `PHASE_OF_STAGE = { "copy_to_wsl": "copy_in", "decompose": "decompose", "solve": "solve", "reconstruct": "reconstru...`
+
+### magnusim_sdk.run_estimate
+
+What a transient run will take, before it starts (run health, RH2): its time step at a Max Courant, its steps, a flow-through time and its wall time on this PC.
+
+#### courant_at
+
+```python
+courant_at(rates: dict[str, Any] | None, *, speed: float, direction: Any, delta_t: float) -> float | None
+```
+
+The Courant number a fixed time step ``delta_t`` (s) gives in the smallest cells at ``speed`` (m/s) along ``direction``, as the estimate counts it (1.5 × the speed).
+
+#### estimate_run
+
+```python
+estimate_run(rates: dict[str, Any] | None, *, max_co: float, speed: float, direction: Any = (1.0, 0.0, 0.0), end_time: float | None = None, cells: int | None = None, ranks: int = 1, n_outer: int = 1, s_per_cell_step: float | None = None, bbox_m: dict[str, Any] | None = None, delta_t: float | None = None) -> dict[str, Any] | None
+```
+
+A transient run's estimate, or None without a Courant-rate table or a speed.
+
+#### solve_rate_sample
+
+```python
+solve_rate_sample(*, solve_s: Any, steps: Any, cells: Any, ranks: Any = 1, n_outer: Any = 1) -> float | None
+```
+
+One finished run's rate: solve seconds / (steps · cells per rank · outer loops), or None when an input is missing or not positive.
+
+#### pc_solve_rate
+
+```python
+pc_solve_rate(local_doc: dict[str, Any] | None) -> dict[str, Any]
+```
+
+This PC's solve rate from its machine settings (``.magnusim-local.json``): ``{s_per_cell_step, runs, source}``, the median of the finished runs' rates kept in ``solve_rate.samples`` (``source`` ``measured``), else Run_2's rate (``source`` ``default``, ``runs`` 0).
+
+Constants:
+
+- `SPEED_FACTOR = 1.5`
+- `DEFAULT_S_PER_CELL_STEP = 1.4e-5`
+- `RATE_SAMPLES_MAX = 20`
 
 ### magnusim_sdk.service
 

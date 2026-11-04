@@ -4509,7 +4509,8 @@
         "gmsh": "Preparing the geometry",
         "gmshToFoam": "Building the OpenFOAM mesh and boundary layers",
         "boundary_layers_retry": "Retrying without boundary layers",
-        "copy_back": "Copying the mesh into the project"
+        "copy_back": "Copying the mesh into the project",
+        "mesh_facts": "Reading the mesh quality"
       },
       "stage_details": [
         [
@@ -4641,7 +4642,8 @@
         "step_loaded": "Reading geometry",
         "write_case": "Writing the case",
         "cartesianMesh": "Running cartesianMesh",
-        "copy_back": "Copying the mesh into the project"
+        "copy_back": "Copying the mesh into the project",
+        "mesh_facts": "Reading the mesh quality"
       },
       "stage_details": [],
       "report": [
@@ -4736,7 +4738,9 @@
         "start": "Starting the mesh in WSL",
         "surfaceFeatureExtract": "Finding feature edges",
         "blockMesh": "Building the background mesh",
-        "snappyHexMesh": "Snapping the mesh to the surface"
+        "snappyHexMesh": "Snapping the mesh to the surface",
+        "checkMesh": "Checking the mesh quality",
+        "mesh_facts": "Reading the mesh quality"
       },
       "stage_details": [],
       "report": [

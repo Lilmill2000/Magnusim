@@ -340,3 +340,23 @@ def test_health_hints_of_a_natural_convection_cavity(tmp_path):
     steady = _write(tmp_path / "s", materials=[WATER], bcs=CAVITY_BCS, study={"gravity": "-y", "turbulence_model": "laminar"})
     hs = json.loads(_text(steady, "w27-case.json"))["health_hints"]
     assert hs["mode"] == "SIMPLE" and hs["max_co"] is None
+
+
+def test_mesh_cell_size_leaves_out_a_hex_dominant_checkmesh(tmp_path: Path):
+    """Hex-dominant meshes have a checkMesh report only since RH2 (their quality): it is not
+    read, so the time step written for them stays what it was (spec RH2 4.1). Any other mesh's
+    report is read as before (a total volume written without the sentence's full stop)."""
+    from heat_transfer.runspec import _mesh_cell_size
+
+    log = "    Min volume = 1e-09. Max volume = 1e-06.  Total volume = 0.001\n"
+    hexd = tmp_path / "hexd"
+    hexd.mkdir()
+    (hexd / "w23-geometry-meta.json").write_text(json.dumps({"walls_level": 2}), encoding="utf-8")
+    assert _mesh_cell_size(hexd, 1000) is None
+    (hexd / "log.checkMesh").write_text(log, encoding="utf-8")
+    assert _mesh_cell_size(hexd, 1000) is None
+    cf = tmp_path / "cfmesh"
+    cf.mkdir()
+    (cf / "w28-cfmesh-meta.json").write_text("{}", encoding="utf-8")
+    (cf / "log.checkMesh").write_text(log, encoding="utf-8")
+    assert _mesh_cell_size(cf, 1000) == pytest.approx(0.01)

@@ -18,6 +18,8 @@ _REFINEMENTS = ("surface_custom_sizing", "inflate_boundary_layer")
 # Progress stages each generator reports, as the Mesh panel names them.
 _READ = (("load_step", "Reading geometry"), ("step_loaded", "Reading geometry"))
 _COPY_BACK = (("copy_back", "Copying the mesh into the project"),)
+# After the mesh is done: its quality, boundary layers and Courant rates (mesh-facts.json, RH2).
+_FACTS = (("mesh_facts", "Reading the mesh quality"),)
 _STANDARD_STAGES = (
     *_READ,
     ("surface_mesh", "Meshing the surface"),
@@ -25,6 +27,7 @@ _STANDARD_STAGES = (
     ("gmshToFoam", "Building the OpenFOAM mesh and boundary layers"),
     ("boundary_layers_retry", "Retrying without boundary layers"),
     *_COPY_BACK,
+    *_FACTS,
 )
 # generate_standard.py's gmsh lines (log.gmsh_host.txt), first match wins.
 _STANDARD_DETAILS = (
@@ -40,6 +43,7 @@ _CFMESH_STAGES = (
     ("write_case", "Writing the case"),
     ("cartesianMesh", "Running cartesianMesh"),
     *_COPY_BACK,
+    *_FACTS,
 )
 _HEX_STAGES = (
     # A linked or display-budgeted geometry: the mesh job builds Body1.stl first (LINK 5.9).
@@ -51,6 +55,8 @@ _HEX_STAGES = (
     ("surfaceFeatureExtract", "Finding feature edges"),
     ("blockMesh", "Building the background mesh"),
     ("snappyHexMesh", "Snapping the mesh to the surface"),
+    ("checkMesh", "Checking the mesh quality"),
+    *_FACTS,
 )
 
 

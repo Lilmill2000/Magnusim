@@ -88,13 +88,20 @@ else
   run_serial_snappy
 fi
 
+# The mesh's quality report (RH2): read by the Mesh panel and the pre-run check. It never
+# fails the mesh: Hex-dominant keeps what snappyHexMesh made, as before.
+if [ "${EC:-1}" -eq 0 ] && [ -f constant/polyMesh/owner ]; then
+  emit_json "{\"event\":\"progress\",\"stage\":\"checkMesh\",\"generate_id\":\"$GENERATE_ID\"}"
+  openfoam2606 checkMesh > log.checkMesh 2>&1 || true
+fi
+
 rm -rf "$WIN_OUT"
 mkdir -p "$WIN_OUT/constant/triSurface" "$WIN_OUT/system"
 if [ -d constant/polyMesh ]; then cp -a constant/polyMesh "$WIN_OUT/constant/"; fi
 if [ -f constant/triSurface/cadFeatures.eMesh ]; then cp -f constant/triSurface/cadFeatures.eMesh "$WIN_OUT/constant/triSurface/"; fi
 if [ -f constant/triSurface/Body1.stl ]; then cp -f constant/triSurface/Body1.stl "$WIN_OUT/constant/triSurface/"; fi
 cp -a system "$WIN_OUT/" 2>/dev/null || true
-cp -f log.blockMesh log.snappyHexMesh log.surfaceFeatureExtract log.decomposePar log.reconstructParMesh "$WIN_OUT/" 2>/dev/null || true
+cp -f log.blockMesh log.snappyHexMesh log.surfaceFeatureExtract log.decomposePar log.reconstructParMesh log.checkMesh "$WIN_OUT/" 2>/dev/null || true
 touch "$WIN_OUT/case.foam"
 
 OK=true

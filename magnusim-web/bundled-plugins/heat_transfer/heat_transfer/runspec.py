@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from magnusim_sdk.mesh_facts import mesher_of
 from magnusim_sdk.study import bc_faces, list_bc_records, matches_study
 
 from .materials import (
@@ -70,10 +71,13 @@ class HtSpec:
 
 
 def _mesh_cell_size(case_dir: Path, n_cells: int | None) -> float | None:
-    """The mean cell size (m): the mesh's volume over its cells (standard-meta / log.checkMesh)."""
+    """The mean cell size (m): the mesh's volume over its cells (standard-meta / log.checkMesh).
+
+    A Hex-dominant mesh's checkMesh report (since RH2, for its quality) is not read, so the time
+    step its cases are written with stays what it was (spec RH2 4.1)."""
     total = None
     try:
-        txt = (case_dir / "log.checkMesh").read_text(encoding="utf-8", errors="replace")
+        txt = "" if mesher_of(case_dir) == "hexdominant" else (case_dir / "log.checkMesh").read_text(encoding="utf-8", errors="replace")
     except OSError:
         txt = ""
     import re

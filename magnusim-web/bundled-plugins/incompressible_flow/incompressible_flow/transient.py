@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from magnusim_sdk.mesh_facts import mesher_of
+
 TimeScheme = Literal["Euler", "backward"]
 TimeStepMode = Literal["adjustable", "fixed"]
 
@@ -325,6 +327,10 @@ def load_mesh_meta(case_dir: str | Path | None) -> dict[str, Any] | None:
 
     standard-meta.json (recorded cell sizes, bounding box) plus checkMesh's
     smallest and total cell volume from log.checkMesh. None without a case dir.
+
+    A Hex-dominant mesh has a checkMesh report only since RH2 (its quality, for the Mesh
+    panel and the pre-run check); its volumes are not read, so the time step its cases are
+    written with stays what it was (spec RH2 4.1).
     """
     if not case_dir:
         return None
@@ -337,7 +343,7 @@ def load_mesh_meta(case_dir: str | Path | None) -> dict[str, Any] | None:
     except (OSError, ValueError):
         meta = {}
     try:
-        txt = (root / "log.checkMesh").read_text(encoding="utf-8", errors="replace")
+        txt = "" if mesher_of(root) == "hexdominant" else (root / "log.checkMesh").read_text(encoding="utf-8", errors="replace")
     except OSError:
         txt = ""
     if txt:

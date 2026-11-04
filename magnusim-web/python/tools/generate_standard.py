@@ -32,6 +32,7 @@ from cfddesk.cad.shared_faces import bc_refusal, face_bodies, shared_face_ids
 from cfddesk.cad.step import load_step
 from cfddesk.cad.units import shape_bbox
 from cfddesk.jobs import legacy_markers as _legacy
+from cfddesk.mesh.facts import finish_mesh_facts
 from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case
 from cfddesk.mesh.gmsh_standard import (
     apply_boundary_patch_types,
@@ -612,6 +613,8 @@ def main() -> int:
         (case_dir / "standard-meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         # The mesh and its logs are on Windows; nothing reads the WSL copy again.
         remove_wsl_case(wsl_case)
+        # Its quality, box, layers and Courant rates (mesh-facts.json, RH2).
+        quality = finish_mesh_facts(case_dir, "standard", _progress)
         return _result(
             True,
             path_kind=PATH_KIND,
@@ -632,6 +635,7 @@ def main() -> int:
             generate_id=args.generate_id,
             **({"regions": region_rows} if region_rows else {}),
             **_left_out(regions),
+            **({"quality": quality} if quality else {}),
         )
     except Exception as exc:
         traceback.print_exc()

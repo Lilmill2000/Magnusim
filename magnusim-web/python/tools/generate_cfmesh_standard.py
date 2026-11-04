@@ -33,6 +33,7 @@ from cfddesk.mesh.cfmesh_standard import (
     inject_named_local_refinement,
     replace_boundary_layers_block,
 )
+from cfddesk.mesh.facts import finish_mesh_facts
 from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case
 from cfddesk.mesh.gmsh_standard import (
     apply_boundary_patch_types,
@@ -505,6 +506,8 @@ def main() -> int:
         )
         # The mesh and its logs are on Windows; nothing reads the WSL copy again.
         remove_wsl_case(wsl_case)
+        # Its quality, box, layers and Courant rates (mesh-facts.json, RH2).
+        quality = finish_mesh_facts(case_dir, "cfmesh", _progress)
         return _result(
             True,
             path_kind="cartesianMesh",
@@ -522,6 +525,7 @@ def main() -> int:
             fineness=fineness,
             generate_id=args.generate_id,
             increment="W28",
+            **({"quality": quality} if quality else {}),
         )
     except Exception as exc:
         traceback.print_exc()
