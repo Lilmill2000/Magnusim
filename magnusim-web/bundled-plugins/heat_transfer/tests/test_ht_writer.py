@@ -355,6 +355,14 @@ def test_mesh_cell_size_leaves_out_a_hex_dominant_checkmesh(tmp_path: Path):
     assert _mesh_cell_size(hexd, 1000) is None
     (hexd / "log.checkMesh").write_text(log, encoding="utf-8")
     assert _mesh_cell_size(hexd, 1000) is None
+    # As the WSL script leaves the case (snappy_hexdominant.sh empties it; the counts and feature
+    # marks are written after it), before generate_snappy.py writes the meta again.
+    real = tmp_path / "hexd-as-left"
+    real.mkdir()
+    (real / "log.checkMesh").write_text(log, encoding="utf-8")
+    (real / "w21-counts.json").write_text(json.dumps({"n_cells": 1000}), encoding="utf-8")
+    (real / "w21-feature-marks.json").write_text(json.dumps({"marks": [12], "total": 12}), encoding="utf-8")
+    assert _mesh_cell_size(real, 1000) is None
     cf = tmp_path / "cfmesh"
     cf.mkdir()
     (cf / "w28-cfmesh-meta.json").write_text("{}", encoding="utf-8")

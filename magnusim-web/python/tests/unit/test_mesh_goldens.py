@@ -418,6 +418,85 @@ def test_hex_dominant_with_refinements(tmp_path: Path):
     )
 
 
+class _ScriptRun:
+    """What ``snappy_hexdominant.sh`` leaves in the case folder (Windows side): it empties the
+    folder (``rm -rf "$WIN_OUT"``), then copies back only polyMesh, the Body1 STL, system and the
+    logs. The mesh here is the sphere fixture's, with OpenFOAM's checkMesh report of it."""
+
+    def __init__(self, case: Path):
+        self.case = case
+        self.returncode = 0
+        facts = FIXTURES / "mesh-facts"
+        system = case.parent / "system-as-synced"
+        shutil.copytree(case / "system", system)
+        shutil.rmtree(case)
+        (case / "constant" / "triSurface").mkdir(parents=True)
+        shutil.copytree(facts / "sphere" / "constant" / "polyMesh", case / "constant" / "polyMesh")
+        shutil.copytree(system, case / "system")
+        log = (facts / "sphere" / "log.snappyHexMesh").read_text(encoding="utf-8")
+        # The elbow's run marks feature cells; the sphere's had no feature edges to mark.
+        log += "Marked for refinement due to explicit features    : 12 cells.\n"
+        (case / "log.snappyHexMesh").write_text(log, encoding="utf-8")
+        shutil.copy(facts / "checkmesh" / "ok-snappy-layers.log", case / "log.checkMesh")
+        (case / "case.foam").touch()
+        self.stdout = iter(['MAGNUSIM_EVENT {"event":"result","ok":true,"exit_code":0,"nproc":1,"path_kind":"snappyHexMesh","generate_id":"golden"}\n'])
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+
+def test_hex_dominant_meta_comes_back_after_the_wsl_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """RH2: the WSL script empties the case folder and copies back only the mesh, its
+    dictionaries and its logs, so generate_snappy.py writes ``w23-geometry-meta.json`` again
+    after it. The mesh's facts then carry the mesher's surface cell and the layers it was asked
+    for, and the case is known as Hex-dominant (whose new checkMesh report the time-step
+    readers leave out, so its cases keep the Δt they were written with). Fails on the code that
+    wrote the meta only before the script: its facts had no surface cell and no layers asked."""
+    from magnusim_sdk.mesh_facts import mesher_of
+
+    proj, mesh = _project(tmp_path)
+    step = next(proj.rglob("source.step"))
+    r = subprocess.run(
+        [sys.executable, str(TOOLS / "convert_step_to_stl.py"), "--step", str(step), "--out", str(step.with_name("Body1.stl")), "--cad-quality"],
+        cwd=str(PY), env=_env(), capture_output=True, text=True, timeout=600,
+    )
+    assert r.returncode == 0, r.stderr[-2000:]
+    case = mesh / "case"
+    monkeypatch.setenv("MAGNUSIM_WSL_CASE_ROOT", "/home/golden/cases")
+    monkeypatch.syspath_prepend(str(TOOLS))
+    import generate_snappy as gs
+
+    ran: list[Any] = []
+    monkeypatch.setattr(gs, "claim_generate_case", lambda *a, **k: [])
+    monkeypatch.setattr(gs, "release_generate_case", lambda *a, **k: None)
+    monkeypatch.setattr(gs, "sync_to_wsl", lambda *a, **k: None)
+    monkeypatch.setattr(gs, "remove_wsl_case", lambda *a, **k: None)
+    monkeypatch.setattr(gs, "get_wsl_distro", lambda: "Ubuntu-24.04")
+    monkeypatch.setattr(gs.subprocess, "Popen", lambda argv, **k: ran.append(argv) or _ScriptRun(case))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_snappy.py", "--project-dir", str(proj), "--case-dir", str(case), "--wsl-case", "cfddesk-golden-snappy",
+            "--generate-id", "golden", "--fineness", "5", "--add-layers", "1", "--mesh-id", "mesh_1", "--simulation-id", "sim_1",
+        ],
+    )
+    assert gs.main() == 0
+    assert ran, "the WSL script never ran"
+    meta = json.loads((case / "w23-geometry-meta.json").read_text(encoding="utf-8"))
+    assert meta["add_layers"] is True and meta["walls_level"] >= 1
+    facts = json.loads((case / "mesh-facts.json").read_text(encoding="utf-8"))
+    assert facts["mesher"] == "hexdominant"
+    assert facts["quality"]["known"] is True
+    assert isinstance(facts["surface_cell_m"], float) and facts["surface_cell_m"] > 0
+    assert facts["part_size_m"] and all(v > 0 for v in facts["part_size_m"])
+    assert facts["layers"]["asked"] is True
+    assert mesher_of(case) == "hexdominant"
+    # A Hex-dominant mesh made before the meta came back is still known by its feature marks.
+    (case / "w23-geometry-meta.json").unlink()
+    assert mesher_of(case) == "hexdominant"
+
+
 # ---------------------------------------------------------------------------
 # cfMesh (stays in the core)
 # ---------------------------------------------------------------------------

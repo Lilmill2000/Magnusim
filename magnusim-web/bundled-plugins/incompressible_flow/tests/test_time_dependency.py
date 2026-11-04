@@ -69,6 +69,16 @@ def test_mesh_meta_leaves_out_a_hex_dominant_checkmesh(tmp_path: Path):
     _write(hexd / "courant-rates.json", {"v": 1, "p99_9": [1e6, 1e6, 1e6]})
     assert load_mesh_meta(hexd) == before == {}
     assert estimate_delta_t(mesh_meta=load_mesh_meta(hexd), n_cells=1000, speed_ref=2.0, max_co=1.0) == est_before
+    # As the WSL script leaves a Hex-dominant case before generate_snappy.py writes its meta again
+    # (snappy_hexdominant.sh empties the folder and copies back the mesh, system and the logs; the
+    # counts and feature marks are written after it): known by its feature marks all the same.
+    real = tmp_path / "hexd-as-left"
+    (real / "constant" / "polyMesh").mkdir(parents=True)
+    (real / "log.checkMesh").write_text(log, encoding="utf-8")
+    _write(real / "w21-counts.json", {"n_cells": 1000})
+    _write(real / "w21-feature-marks.json", {"marks": [12], "total": 12})
+    assert load_mesh_meta(real) == {}
+    assert estimate_delta_t(mesh_meta=load_mesh_meta(real), n_cells=1000, speed_ref=2.0, max_co=1.0) == est_before
     cf = tmp_path / "cfmesh"
     _write(cf / "w28-cfmesh-meta.json", {"backend": "cfmesh"})
     (cf / "log.checkMesh").write_text(log, encoding="utf-8")

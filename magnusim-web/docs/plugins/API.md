@@ -2743,7 +2743,7 @@ The first layer's thickness of ``layers`` layers growing by ``expansion`` to ``t
 mesher_of(case_dir: Path | str) -> str | None
 ```
 
-The mesher whose record is in ``case_dir`` (the newest of them): ``standard``, ``cfmesh`` or ``hexdominant``; None for a mesh with none (a plugin's mesher).
+The mesher whose record is in ``case_dir`` (the newest of them): ``standard``, ``cfmesh`` or ``hexdominant``; None for a mesh with none (a plugin's mesher). A mesher's record is its meta file or another file only it leaves (``MESHER_MARKS``).
 
 #### build_mesh_facts
 
@@ -2784,6 +2784,7 @@ Constants:
 - `CHECKMESH_LOG = "log.checkMesh"`
 - `SNAPPY_LOG = "log.snappyHexMesh"`
 - `MESHER_META = { "standard": "standard-meta.json", "cfmesh": "w28-cfmesh-meta.json", "hexdominant": "w23-geometr...`
+- `MESHER_MARKS = { "hexdominant": ("w21-feature-marks.json",), }`
 - `ACCEPTED_ASPECT_CELLS = 8`
 - `RECORD_FAILED_MAX = 8`
 

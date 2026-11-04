@@ -550,6 +550,13 @@ def main() -> int:
                     emit("log", line=line[:500])
             rc = proc.wait(timeout=float(args.timeout))
 
+        # The script emptied the case folder and copied back only the mesh, its dictionaries and
+        # its logs: the meta goes back beside them, where the mesh's facts read its sizes and
+        # layers and the time-step readers know a Hex-dominant mesh (RH2).
+        case_dir.mkdir(parents=True, exist_ok=True)
+        (case_dir / "w23-geometry-meta.json").write_text(
+            json.dumps(meta_doc, indent=2), encoding="utf-8"
+        )
         counts = read_polymesh_counts(case_dir)
         (case_dir / "w21-counts.json").write_text(
             json.dumps(counts, indent=2), encoding="utf-8"

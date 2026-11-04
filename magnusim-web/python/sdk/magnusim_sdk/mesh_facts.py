@@ -40,6 +40,13 @@ MESHER_META = {
     "cfmesh": "w28-cfmesh-meta.json",
     "hexdominant": "w23-geometry-meta.json",
 }
+# Other files only one mesher leaves in its case: Hex-dominant writes its feature-edge marks
+# after its WSL script, which empties the case folder and copies back only the mesh, its
+# dictionaries and its logs (snappy_hexdominant.sh), so they mark its meshes even where its
+# meta file did not come back (meshes made before generate_snappy.py wrote it again).
+MESHER_MARKS = {
+    "hexdominant": ("w21-feature-marks.json",),
+}
 # The mesher keeps a mesh whose only failures are these (cfddesk.wsl.mesh_run): skewed
 # faces, and up to this many cells of high aspect ratio.
 ACCEPTED_ASPECT_CELLS = 8
@@ -331,15 +338,17 @@ def _read_text(path: Path) -> str:
 
 def mesher_of(case_dir: Path | str) -> str | None:
     """The mesher whose record is in ``case_dir`` (the newest of them): ``standard``,
-    ``cfmesh`` or ``hexdominant``; None for a mesh with none (a plugin's mesher)."""
+    ``cfmesh`` or ``hexdominant``; None for a mesh with none (a plugin's mesher). A mesher's
+    record is its meta file or another file only it leaves (``MESHER_MARKS``)."""
     case = Path(case_dir)
     best: tuple[int, str] | None = None
     for name, file in MESHER_META.items():
-        p = case / file
-        if p.is_file():
-            t = p.stat().st_mtime_ns
-            if best is None or t > best[0]:
-                best = (t, name)
+        for f in (file, *MESHER_MARKS.get(name, ())):
+            p = case / f
+            if p.is_file():
+                t = p.stat().st_mtime_ns
+                if best is None or t > best[0]:
+                    best = (t, name)
     return best[1] if best else None
 
 
