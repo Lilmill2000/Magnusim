@@ -313,8 +313,15 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   const plot = runControl.locator('[data-residual-plot="1"]');
   await expect(plot).toBeVisible({ timeout: 60_000 });
   await capture(page, 'run-done-transient', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
-  const box = await plot.boundingBox();
-  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+  // The Health block above the plot (findings, Solver output) can push it below the panel's
+  // fold and can still grow as the run's record loads: bring it into view and point at it
+  // again until its tip shows.
+  await expect(async () => {
+    await plot.scrollIntoViewIfNeeded();
+    const box = await plot.boundingBox();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+    await expect(runControl.locator('[data-residual-wrap="1"] .sim-plot-tip')).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 30_000 });
   await capture(page, 'residual-tip-transient', runControl.locator('[data-residual-wrap="1"]'));
   stage(t0, 'transient run done');
 

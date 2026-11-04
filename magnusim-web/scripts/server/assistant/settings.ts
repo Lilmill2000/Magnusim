@@ -455,7 +455,7 @@ export function validatePatch(current: AssistantSettings, patch: unknown): Patch
   if ('confirm_remote' in patch && typeof patch.confirm_remote !== 'boolean') return refuse('confirm_remote must be true or false.', 'confirm_remote');
   if ('base_url' in patch) {
     const url = checkBaseUrl(patch.base_url);
-    if (!url.ok) return refuse(url.error, 'base_url');
+    if (url.ok === false) return refuse(url.error, 'base_url');
     if (url.loopback) {
       next.base_url_confirmed_remote = null;
     } else if (patch.confirm_remote === true || current.base_url_confirmed_remote === url.url) {

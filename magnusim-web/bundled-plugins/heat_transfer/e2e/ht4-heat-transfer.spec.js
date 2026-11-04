@@ -431,7 +431,7 @@ test('a run whose solver died of a cause its parser names: the Run panel says th
   await s.ready();
   await openRun(page, s.sid, rid);
   const panel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');
-  await expect(panel.locator('[data-run-status="failed"] .mat-k')).toHaveText('Run failed', { timeout: 30_000 });
+  await expect(panel.locator('[data-run-status="failed"] > .mat-k')).toHaveText('Run failed', { timeout: 30_000 });
   await expect(panel.locator('[data-run-line="1"]')).toHaveText(reason);
   // Any error's first line shows up to 160 characters, an ellipsis when it is cut.
   await openRun(page, s.sid, rid2);

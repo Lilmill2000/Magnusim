@@ -313,7 +313,7 @@ export function checkImages(
     const raw = img && typeof img === 'object' ? (img as { base64?: unknown }).base64 : undefined;
     const base64 = typeof raw === 'string' ? raw : '';
     const c: ImageCheck = typeof raw === 'string' ? checkImage(Buffer.from(base64, 'base64')) : { ok: false, code: 'bad_result', error: 'It is not an image.' };
-    if (!c.ok) {
+    if (c.ok === false) {
       const what = c.code === 'too_large' ? "The tool's result is too large" : "The tool's result was refused";
       return { ok: false, code: c.code, message: `${what} (image ${i + 1} of ${all.length}): ${c.error}` };
     }
@@ -355,7 +355,7 @@ export function checkPromptImages(raw: unknown): { ok: true; images: ImagePart[]
     }
     if (r.data.length % 4 !== 0 || !BASE64_TEXT.test(r.data)) return { ok: false, code: 'bad_images', message: `${what}: data is not base64.` };
     const c = checkImage(Buffer.from(r.data, 'base64'));
-    if (!c.ok) return { ok: false, code: c.code === 'too_large' ? 'images_too_large' : 'bad_images', message: `${what}: ${c.error}` };
+    if (c.ok === false) return { ok: false, code: c.code === 'too_large' ? 'images_too_large' : 'bad_images', message: `${what}: ${c.error}` };
     if (c.mediaType !== r.media_type) return { ok: false, code: 'bad_images', message: `${what}: it is ${c.mediaType}, not ${r.media_type}.` };
     images.push({ type: 'image', mediaType: c.mediaType, base64: r.data, width: c.width, height: c.height });
   }
