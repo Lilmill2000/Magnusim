@@ -68,6 +68,22 @@ export function blanked(values: Record<string, unknown>, schema: RJSFSchema): Re
   return Object.fromEntries(Object.entries(props).filter(([k, p]) => p['x-cfddesk']?.optional && values[k] === undefined).map(([k]) => [k, null]));
 }
 
+/**
+ * What the form shows of each field before an edit: the value it was given, else the field's
+ * default as the form fills it in (a blank-able field, x-cfddesk.optional, stays blank). An edit
+ * saves only the fields whose value differs from this, so a default the study never set stays
+ * blank (blank is written as that default) and a run's Continue names only what the person changed.
+ */
+export function shownValues(data: Record<string, unknown>, schema: RJSFSchema): Record<string, unknown> {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { 'x-cfddesk'?: { optional?: boolean } }>;
+  const out = { ...data };
+  for (const [key, prop] of Object.entries(props)) {
+    const v = out[key];
+    if ((v === undefined || v === '') && !prop['x-cfddesk']?.optional && prop.default !== undefined && prop.default !== null) out[key] = prop.default;
+  }
+  return out;
+}
+
 /** A saved value and a form's value are the same (blank: undefined, null or ''). */
 export function sameValue(a: unknown, b: unknown): boolean {
   const blank = (v: unknown) => v === undefined || v === null || v === '';
@@ -209,8 +225,10 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
           boundsOnEdit
           onCommit={(values) => {
             const patch = { ...blanked(values, numericsSchema), ...tools.pickSchemaValues(values, numericsSchema) };
-            // Only what changed is saved: a saved value (one outside its range included) stays as it is.
-            const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !sameValue(record[k], v)));
+            // Only what the person changed is saved: a saved value (one outside its range included)
+            // stays as it is, and a default the form showed stays blank.
+            const shown = shownValues(numericsData(record, numericsSchema, turbKey), numericsSchema);
+            const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !sameValue(shown[k], v)));
             if (Object.keys(changed).length) void save(changed);
           }}
         />

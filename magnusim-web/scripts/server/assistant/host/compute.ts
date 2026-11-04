@@ -249,21 +249,28 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
    * card; without an answer nothing is asked and run() refuses it (choose_numerics).
    */
   async function escalate(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null> {
-    const a = await assess(input, rt);
-    if (str(input.action) !== 'run_continue') return a;
+    if (str(input.action) !== 'run_continue') return assess(input, rt);
     const n = await continueNumericsOf(input, rt);
-    if (!n || !n.diffs.length) return a;
+    if (!n || !n.diffs.length) return assess(input, rt);
     const answer = str(input.numerics);
     if (!NUMERICS_ANSWERS.includes(answer)) {
       numericsRefused.set(input, chooseNumericsWords(n.run, n.diffs));
       return null;
     }
     const said = numericsCardSentence(n.run, n.diffs, answer);
+    // An unhealthy run's card places it (and, with the new numerics, says only Health on the
+    // continued part can tell, never that its settings have not changed).
+    const a = await assess(input, rt, { said, fresh: answer === 'new' });
     const base: Assessed = a ?? { risk: 'compute', note: '', detail: [] };
+    if (base.note.includes(said)) return base;
     return { ...base, note: base.note ? `${base.note} ${said}` : said };
   }
 
-  async function assess(input: Record<string, unknown>, rt: AssessContext): Promise<Assessed | null> {
+  /**
+   * `numerics` (RH3): a run_continue's answer once the study's numerics differ: its card sentence
+   * (`said`) and whether it takes the study's new numerics (`fresh`).
+   */
+  async function assess(input: Record<string, unknown>, rt: AssessContext, numerics?: { said: string; fresh: boolean }): Promise<Assessed | null> {
     const action = str(input.action) as Action;
     const estimate = num(input.estimate_minutes) ?? 0;
     const estimateRow: GateDetail[] = estimate > 0 ? [{ label: "Assistant's estimate", value: `about ${Math.round(estimate)} min` }] : [];
@@ -356,17 +363,19 @@ export function createComputeTool(deps: JobToolDeps): ToolDef {
         const to = num(input.end_time) ?? 0;
         const runs = more > 0 ? `Runs ${quoted(name)} for ${more} more iterations.` : `Runs ${quoted(name)} on to t = ${to} s.`;
         const from = view.saved !== null ? atWords(view.saved, view.transient) : 'its last saved time';
-        // A change waiting for this Continue (A2): what it applies, and that only Health on the continued part can tell.
-        const applies = pending
-          ? ` Continue applies: ${changeWords(rows(pending.changes) as Array<{ key: string; from: unknown; to: unknown }>)} (from ${from}). Health checks the continued part from ${from}; whether the change is enough shows only there.`
-          : '';
+        // A change waiting for this Continue (A2), or (RH3) the study's new numerics it takes: what
+        // it applies, and that only Health on the continued part can tell.
+        const said = numerics ? ` ${numerics.said}` : '';
+        const checks = pending || numerics?.fresh ? ` Health checks the continued part from ${from}; whether the change is enough shows only there.` : '';
+        const applies =
+          (pending ? ` Continue applies: ${changeWords(rows(pending.changes) as Array<{ key: string; from: unknown; to: unknown }>)} (from ${from}).` : '') + said + checks;
         if (health.restart === 'from_zero') {
           const w = continueAskWords(view, health);
           continueHealthAsked.set(input, `Allow the Assistant to continue ${quoted(name)}?`);
           return withChain({ risk: 'destructive', note: `${runs} ${w.copy}${applies}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
         }
         if (health.verdict === 'unhealthy' || health.verdict === 'failed') {
-          const extra = applies || ` ${repeatSentence(view, health)}`;
+          const extra = checks ? applies : `${applies} ${repeatSentence(view, health)}`;
           return withChain({ risk: 'compute', note: `${runs}${extra}`, detail: [{ label: 'Run', value: name }, ...estimateRow] }, `Continue ${quoted(name)}`, steps, labels);
         }
       }

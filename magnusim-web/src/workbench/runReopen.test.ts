@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import committed from '../../scripts/generated/registry.json';
 import {
   applyContinueChanges,
   chooseNumericsWords,
@@ -517,6 +518,39 @@ describe('numerics at Continue', () => {
     expect(numericsDiff(steady, { ...STUDY, relax_p: null }, SCHEMA)[0].text).toBe('Relaxation p 0.3 → preset');
     // No schema (its plugin off): the record's keys, named by key.
     expect(numericsDiff(steady, { ...STUDY, relax_p: 0.2 }, null).map((x) => x.text)).toEqual(['relax p 0.3 → 0.2']);
+  });
+
+  it("a blank is its field's default (the registry's schemas): saving the defaults a form showed is no change; a change from blank names the default", () => {
+    const analyses = (committed as unknown as { analysis: Array<{ key: string; numerics_schema: Record<string, unknown> }> }).analysis;
+    for (const key of ['incompressible_steady', 'heat_transfer_steady']) {
+      const schema = analyses.find((a) => a.key === key)!.numerics_schema as { properties: Record<string, { default?: unknown; 'x-cfddesk'?: { optional?: boolean } }> };
+      // A run started on a study with no numerics saved (a new one): every value blank.
+      const run = { name: 'Run_1', status: 'stopped', time_dependency: 'Steady-state', continue_from: 50, numerics_used: numericsSnapshot(key, false, {}, schema, 'x') };
+      expect(Object.values(run.numerics_used.values).every((v) => v === null)).toBe(true);
+      // The first Study panel edit used to save every default the form showed with the one change.
+      const defaults = Object.fromEntries(
+        Object.entries(schema.properties)
+          .filter(([, p]) => !p['x-cfddesk']?.optional && p.default !== undefined && p.default !== null)
+          .map(([k, p]) => [k, p.default]),
+      );
+      expect(Object.keys(defaults).length).toBeGreaterThan(8);
+      expect(numericsDiff(run, defaults, schema)).toEqual([]);
+      const d = numericsDiff(run, { ...defaults, relax_p: 0.2 }, schema);
+      expect(d.map((x) => x.key)).toEqual(['relax_p']);
+      expect(d[0]).toMatchObject({ from: null, to: 0.2 });
+      expect(d[0].text).toMatch(/^Relaxation p(_rgh)? 0\.3 → 0\.2$/);
+      // Set back to the default: nothing differs.
+      expect(numericsDiff(run, { relax_p: 0.3 }, schema)).toEqual([]);
+      // A blank-able field (no default: the preset's or calculated) still reads "preset".
+      expect(numericsDiff(run, { grad_limiter: 'light' }, schema).map((x) => x.text)).toEqual(['Gradient limiter preset → Light (cellMDLimited 0.5)']);
+      // A choice's default by its label; on/off; set back to blank from a saved value.
+      expect(numericsDiff(run, { numerics_preset: 'accurate' }, schema).map((x) => x.text)).toEqual(['Numerics Robust → Accurate']);
+      const saved = { ...run, numerics_used: { ...run.numerics_used, values: { ...run.numerics_used.values, relax_p: 0.25 } } };
+      expect(numericsDiff(saved, {}, schema).map((x) => x.text)[0]).toMatch(/^Relaxation p(_rgh)? 0\.25 → 0\.3$/);
+    }
+    const ifSchema = analyses.find((a) => a.key === 'incompressible_steady')!.numerics_schema;
+    const run = { name: 'Run_1', status: 'stopped', numerics_used: numericsSnapshot('incompressible_steady', false, {}, ifSchema, 'x') };
+    expect(numericsDiff(run, { simplec: true }, ifSchema).map((x) => x.text)).toEqual(['SIMPLEC (consistent) off → on']);
   });
 
   it("the words: the Continue box's line, the question (transient and steady), the Assistant's refusal and card", () => {

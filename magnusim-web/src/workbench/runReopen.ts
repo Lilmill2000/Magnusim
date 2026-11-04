@@ -786,7 +786,7 @@ export interface NumericsDifference {
   key: string;
   /** The setting's label (its schema title). */
   label: string;
-  /** What the run started with (null: blank, the preset's). */
+  /** What the run started with (null: blank, the field's default or the preset's). */
   from: unknown;
   /** The study's value now (null: blank). */
   to: unknown;
@@ -835,8 +835,27 @@ export function numericsAsWas(used: NumericsUsed, schema: unknown): Record<strin
   return out;
 }
 
-/** A value as the differences say it: blank "preset", a choice by its label, on/off, a number (tolerances as 1e-7). */
-function numericsValueText(field: Record<string, unknown> | undefined, v: unknown): string {
+/**
+ * The value a blank stands for: the field's default when it has one and is not a blank-able
+ * field (x-cfddesk.optional, whose blank is the preset's or calculated); else blank. A blank is
+ * written as that default, so a study that saves the default it showed (or a run that started
+ * blank) has not changed what is written.
+ */
+function blankMeans(field: Record<string, unknown> | undefined, v: unknown): unknown {
+  if (!blankValue(v)) return v;
+  if (!field) return null;
+  const x = isObj(field['x-cfddesk']) ? field['x-cfddesk'] : null;
+  if (x && x.optional) return null;
+  return blankValue(field.default) ? null : field.default;
+}
+
+/**
+ * A value as the differences say it: a blank as its field's default ("0.3"), or "preset" when it
+ * has none (the Numerics preset's, or calculated); a choice by its label, on/off, a number
+ * (tolerances as 1e-7).
+ */
+function numericsValueText(field: Record<string, unknown> | undefined, raw: unknown): string {
+  const v = blankMeans(field, raw);
   if (blankValue(v)) return 'preset';
   if (typeof v === 'boolean') return v ? 'on' : 'off';
   const x = field && isObj(field['x-cfddesk']) ? field['x-cfddesk'] : null;
@@ -856,8 +875,10 @@ function numericsValueText(field: Record<string, unknown> | undefined, v: unknow
 /**
  * The one list of what differs between the numerics a run started with (`run.numerics_used`) and
  * its study's stored values now, in the schema's order: the page's Continue box and question,
- * the route's refusal and the Assistant's refusal and card all say it from here. [] for a run
- * with no record (started before RH3: Continue uses the study's values, as before) or no study.
+ * the route's refusal and the Assistant's refusal and card all say it from here. A blank and its
+ * field's default are the same value (blankMeans): saving the default a form showed changes
+ * nothing that is written. [] for a run with no record (started before RH3: Continue uses the
+ * study's values, as before) or no study.
  */
 export function numericsDiff(run: RunLike | null | undefined, study: unknown, schema: unknown): NumericsDifference[] {
   const used = numericsUsedOf(run);
@@ -868,8 +889,8 @@ export function numericsDiff(run: RunLike | null | undefined, study: unknown, sc
   for (const key of keys) {
     const from = blankValue(used.values[key]) ? null : used.values[key];
     const to = blankValue(study[key]) ? null : study[key];
-    if (sameValue(from, to)) continue;
     const field = fields[key];
+    if (sameValue(blankMeans(field, from), blankMeans(field, to))) continue;
     const label = field && typeof field.title === 'string' && field.title ? field.title : key.replace(/_/g, ' ');
     out.push({ key, label, from, to, text: label + ' ' + numericsValueText(field, from) + ' → ' + numericsValueText(field, to) });
   }

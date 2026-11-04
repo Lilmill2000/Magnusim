@@ -6,7 +6,7 @@ import { unregisterPlugin } from '../../../src/plugin-api';
 import { pluginHost } from '../../../src/plugins/loader';
 import { useProjectStore } from '../../../src/store/project';
 import { register } from './index';
-import { numericsData, turbulenceKey } from './StudySettings';
+import { numericsData, shownValues, turbulenceKey } from './StudySettings';
 
 // Incompressible Flow's study settings in the core's study panel (H10: the
 // component is the plugin's, the chrome around it the core's).
@@ -438,6 +438,32 @@ describe('RH3: the study numerics', () => {
     expect(view.container.querySelector('[data-study-preset-note="1"]')?.textContent).toBe('Robust, 1 term changed · Use the preset for all');
     publish(study({}, {}));
     expect(view.container.querySelector('[data-study-preset-note="1"]')).toBeNull();
+  });
+
+  it('an edit saves only what the person changed: a default the form showed stays blank (a run Continue names only the change)', async () => {
+    withNumerics();
+    window.__CFD_STUDY_STATE__ = study({}, {});
+    renderPanel();
+    fireEvent.change(screen.getByLabelText('Momentum convection', { selector: 'select' }), { target: { value: '0' } });
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalled());
+    expect((window.__CFD_STUDY_UPDATE__ as ReturnType<typeof vi.fn>).mock.calls.map(([patch]) => patch)).toEqual([{ momentum_convection: 'first_order' }]);
+    // What the form shows: the saved value, else the default; a blank-able field stays blank.
+    expect(shownValues({ p_tolerance: 0.01 }, withSchemes as never)).toEqual({ p_tolerance: 0.01, numerics_preset: 'robust', momentum_convection: 'second_order' });
+  });
+
+  it("a Reynolds-stress study's Relaxation U (shown 0.5) is not saved by an edit of another field", async () => {
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    const relax = { type: 'object', properties: { ...numericsSchema.properties, relax_u: { type: 'number', title: 'Relaxation U', default: 0.7 } } };
+    useProjectStore.setState({ registry: { ...reg, analysis: [{ ...reg.analysis[0], numerics_schema: relax }] } });
+    window.__CFD_STUDY_STATE__ = study({}, { turbulence_model: 'LRR', turbulence_model_key: 'LRR' });
+    renderPanel();
+    expect(screen.getByLabelText('Relaxation U')).toHaveValue('0.5');
+    const p = screen.getByLabelText('Relaxation p');
+    fireEvent.change(p, { target: { value: '0.2' } });
+    fireEvent.keyDown(p, { key: 'Enter' });
+    fireEvent.blur(p);
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalled());
+    for (const [patch] of (window.__CFD_STUDY_UPDATE__ as ReturnType<typeof vi.fn>).mock.calls) expect(patch).toEqual({ relax_p: 0.2 });
   });
 
   it('a saved value outside its range shows as used as saved, and an edit of another field leaves it', async () => {

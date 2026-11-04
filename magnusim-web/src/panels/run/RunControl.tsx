@@ -246,8 +246,10 @@ export function ContinueRun({ state, scope, onError }: { state: RunState; scope:
   // RH1: what its health says of continuing (spec 3.12), and whether Continue asks first.
   const view = healthRunView(state);
   const health = (state.health as HealthRecord | null | undefined) || null;
-  // The waiting change from the one place the "Continue applies" line reads it.
-  const healthLine = continueHealthWords(view, health, pendingChange(state));
+  // The waiting change from the one place the "Continue applies" line reads it; RH3: else the
+  // study's numerics changed since it started (the question offers them), never "not changed".
+  const numericsChange = c.numerics && c.numerics.differences.length ? { kind: 'numerics', changes: c.numerics.differences } : null;
+  const healthLine = continueHealthWords(view, health, pendingChange(state) || numericsChange);
   const invalid =
     text.trim() === '' || valid
       ? ''

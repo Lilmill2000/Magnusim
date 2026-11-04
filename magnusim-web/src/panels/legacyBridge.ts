@@ -463,6 +463,8 @@ export interface RunNumericsRow {
   value: string;
   /** study, run, preset, default, fixed or ''. */
   source: string;
+  /** A preset row's preset ("Robust"): the one the case is written with (a started run's, what it started with). */
+  preset?: string;
 }
 
 /** RH2: a pre-run check row's fix: its run or study values, or a place to open (mesh, bcs), or a steady copy. */

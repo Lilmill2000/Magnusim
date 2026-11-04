@@ -331,6 +331,8 @@ async function numericsAnswer(d: HostToolDeps, rt: ToolRunContext, project: stri
     label: text(x.label, 80),
     value: text(x.value, 300),
     ...(str(x.source) ? { source: text(x.source, 20) } : {}),
+    // A preset row's preset ("Robust"), as the panel names it: the run's, not the study's now.
+    ...(str(x.preset) ? { preset: text(x.preset, 20) } : {}),
   }));
   return okData(
     { run_id: runId, name: text(r.name), from: draft ? 'study' : 'numerics_used', rows, shown_in: NUMERICS_SHOWN_IN },

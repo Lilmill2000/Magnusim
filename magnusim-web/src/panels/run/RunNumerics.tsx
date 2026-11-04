@@ -15,9 +15,16 @@ const SOURCE: Readonly<Record<string, string>> = Object.freeze({
   default: 'default',
 });
 
-/** "Robust preset", "set in the study", or ''. */
+/**
+ * "Robust preset", "set in the study", or ''. A preset row names its own preset (the one the case
+ * is written with: a started run's is what it started with); `preset` (the study's) only when it
+ * does not.
+ */
 export function sourceWords(row: RunNumericsRow, preset: string): string {
-  if (row.source === 'preset') return preset ? `${preset} preset` : 'the preset';
+  if (row.source === 'preset') {
+    const name = row.preset || preset;
+    return name ? `${name} preset` : 'the preset';
+  }
   return SOURCE[row.source] || '';
 }
 

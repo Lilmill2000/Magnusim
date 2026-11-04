@@ -30,6 +30,13 @@ describe('Numerics as written', () => {
     expect(row('nCellsInCoarsestLevel')).toBe('20');
   });
 
+  it("a preset row names its own preset (what a started run started with), not the study's now", () => {
+    const rows = [{ group: 'Schemes', label: 'Gradient limiter', value: 'cellLimited Gauss linear 1', source: 'preset', preset: 'Robust' }];
+    const state = { numerics: rows, study: { numerics_preset: 'accurate' } } as unknown as RunState;
+    const { container } = render(<RunNumerics state={state} />);
+    expect(container.querySelector('[data-run-numerics-row="Gradient limiter"] .run-numerics-source')?.textContent).toBe(' (Robust preset)');
+  });
+
   it('shows nothing without rows (a run started before its numerics were recorded)', () => {
     const { container } = render(<RunNumerics state={{ numerics: null } as unknown as RunState} />);
     expect(container.innerHTML).toBe('');

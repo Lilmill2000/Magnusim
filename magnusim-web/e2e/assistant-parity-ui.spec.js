@@ -239,7 +239,7 @@ test("R16's numerics answers are the person's Continue question's answers, and e
     });
     const continueWith = async (answer) => {
       const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
-      await expect(panel.locator('[data-run-continue-numerics]')).toHaveText(/^The study's numerics changed after "Run_cont" started: p relative tolerance preset → 0\.02\.$/, STEP);
+      await expect(panel.locator('[data-run-continue-numerics]')).toHaveText(/^The study's numerics changed after "Run_cont" started: p relative tolerance 0\.01 → 0\.02\.$/, STEP);
       await panel.locator('[data-run-continue-go="1"]').click();
       await expect(page.locator(r16.ui_control.selector)).toBeVisible(STEP);
       await page.locator(answer).click();

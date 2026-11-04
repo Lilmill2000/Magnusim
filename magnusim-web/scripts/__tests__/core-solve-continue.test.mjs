@@ -835,7 +835,8 @@ describe('RH3: numerics at Continue', () => {
     const name = runDoc(rid).name;
     let { out } = await cont(rid, { extraIterations: 20 });
     assert.deepEqual([out.ok, out.status, out.bodyExtra.code], [false, 409, 'choose_numerics']);
-    assert.equal(out.bodyExtra.error, `The study's numerics changed after "${name}" started: Relaxation U preset → 0.5, Relaxation p 0.3 → 0.2.`);
+    // A blank reads its field's default (Relaxation U 0.7), as the person's question says it.
+    assert.equal(out.bodyExtra.error, `The study's numerics changed after "${name}" started: Relaxation U 0.7 → 0.5, Relaxation p 0.3 → 0.2.`);
     assert.deepEqual(
       out.bodyExtra.differences.map(({ key, label, from, to }) => ({ key, label, from, to })),
       [

@@ -2974,6 +2974,14 @@ row(group: str, label: str, value: str, source: str = "") -> dict[str, str]
 
 One "Numerics as written" row. ``source``: study, preset, default, run, fixed or ''.
 
+#### with_preset_name
+
+```python
+with_preset_name(rows: list[dict[str, str]], preset: str | None) -> list[dict[str, str]]
+```
+
+The rows whose value comes from the Numerics preset, each with that preset's name (``preset``: "Robust"): the preset the case is written with (a started run's, from what it started with), which "Numerics as written" and read_setup name, never the study's now.
+
 #### source_words
 
 ```python

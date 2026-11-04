@@ -245,6 +245,27 @@ describe('the Continue box (spec 3.12)', () => {
     expect(continueHealthWords(run('failed', 0.1), rec(), null)).toBeNull();
     expect(continueHealthWords(run('stopped', 0.1), rec({ first_unhealthy: null }), null)).toBeNull();
   });
+
+  it("RH3: the study's numerics changed since it started: only Health on the continued part can tell, never that its settings have not changed", () => {
+    const numerics = { kind: 'numerics', changes: [{ key: 'relax_p', from: 0.3, to: 0.2, text: 'Relaxation p 0.3 → 0.2' }] };
+    const checks = 'Health checks the continued part from t = 0.005 s; whether the change is enough shows only there.';
+    // Unhealthy, where Continue goes on from unknown (the start of its log gone): "will likely repeat" without a change.
+    const unknown = rec({ restart: null, head_missing: true });
+    expect(continueHealthWords(run('stopped', 0.005), unknown, null)?.text).toMatch(/its settings have not changed since, so Continue will likely repeat the problem\.$/);
+    expect(continueHealthWords(run('stopped', 0.005), unknown, numerics)).toEqual({ text: checks, ask: false });
+    // Saved before the onset (continue_after_fix): the same.
+    expect(continueHealthWords(run('stopped', 0.005), rec({ restart: 'continue_after_fix' }), numerics)?.text).toBe(checks);
+    // A finished run's Continue takes the new numerics too.
+    expect(continueHealthWords(run('done', 0.005), unknown, numerics)?.text).toBe(checks);
+    // from_zero keeps its question and adds the same sentence, as with a waiting change.
+    const z = continueHealthWords(run('stopped', 0.1667), rec(), numerics);
+    expect(z?.ask).toBe(true);
+    expect(z?.text).toBe(
+      'Its saved results (t = 0.167 s) are from after it became unhealthy (t = 0.0069 s); continuing carries that on. A new run from t = 0 is safer. Health checks the continued part from t = 0.167 s; whether the change is enough shows only there.',
+    );
+    // An empty list is no change.
+    expect(continueHealthWords(run('stopped', 0.005), unknown, { kind: 'numerics', changes: [] })?.text).toMatch(/will likely repeat/);
+  });
 });
 
 describe('labels, earlier parts and the badge', () => {

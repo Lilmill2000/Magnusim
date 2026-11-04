@@ -1223,9 +1223,34 @@ describe('RH3: run_continue after a study numerics change', () => {
     assert.equal(
       a.note,
       'Runs "Run 1" on to t = 1 s. Its saved results (t = 0.167 s) are from after it became unhealthy (t = 0.0069 s); continuing carries that on. A new run from t = 0 is safer.' +
-        ' Continues "Run 1" with the study\'s new numerics (Relaxation p 0.3 → 0.2).',
+        ' Continues "Run 1" with the study\'s new numerics (Relaxation p 0.3 → 0.2). Health checks the continued part from t = 0.167 s; whether the change is enough shows only there.',
     );
     assert.equal(t.compute.gateText(i, a).title, 'Allow the Assistant to continue "Run 1"?');
+  });
+
+  it('an unhealthy run: "new" says only Health on the continued part can tell, never that its settings have not changed; "as_was" will likely repeat', async () => {
+    const health = { verdict: 'unhealthy', unit: 'iteration', t: 400, first_unhealthy: { t: 120, step: 120 }, restart: 'continue_after_fix', findings: [] };
+    stoppedWithNumerics({ health });
+    const t = tools();
+    const fresh = await t.compute.escalate(input({ action: 'run_continue', extra_iterations: 100, numerics: 'new' }), ac());
+    assert.equal(fresh.risk, 'compute');
+    assert.equal(
+      fresh.note,
+      'Runs "Run 1" for 100 more iterations. Continues "Run 1" with the study\'s new numerics (Relaxation p 0.3 → 0.2). Health checks the continued part from iteration 450; whether the change is enough shows only there.',
+    );
+    assert.doesNotMatch(fresh.note, /not changed|likely repeat/);
+    const asWas = await t.compute.escalate(input({ action: 'run_continue', extra_iterations: 100, numerics: 'as_was' }), ac());
+    assert.equal(
+      asWas.note,
+      'Runs "Run 1" for 100 more iterations. Continues "Run 1" with the numerics it started with; the study\'s newer values (Relaxation p 0.3 → 0.2) are not used. It became unhealthy at iteration 120 and its settings have not changed since, so Continue will likely repeat the problem.',
+    );
+    // A change waiting for Continue (A2) and the new numerics: both, then the one Health sentence.
+    S.run.continue_changes = [{ from_iteration: 450, applied_at: null, changes: [{ key: 'transient.max_co', from: 100, to: 5 }] }];
+    const both = await t.compute.escalate(input({ action: 'run_continue', extra_iterations: 100, numerics: 'new' }), ac());
+    assert.equal(
+      both.note,
+      'Runs "Run 1" for 100 more iterations. Continue applies: Max Courant 100 → 5 (from iteration 450). Continues "Run 1" with the study\'s new numerics (Relaxation p 0.3 → 0.2). Health checks the continued part from iteration 450; whether the change is enough shows only there.',
+    );
   });
 
   it('nothing different, or a run started before RH3: the value is ignored and the card is today\'s', async () => {

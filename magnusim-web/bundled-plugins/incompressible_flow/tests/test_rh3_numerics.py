@@ -292,6 +292,9 @@ def test_numerics_as_written_names_what_the_case_is_written_with(tmp_path: Path)
     assert rows["Schemes/Gradient limiter"] == {"group": "Schemes", "label": "Gradient limiter", "value": "cellMDLimited Gauss linear 0.5", "source": "study"}
     assert rows["Schemes/Turbulence convection"]["value"] == "bounded Gauss upwind"
     assert rows["Schemes/Turbulence convection"]["source"] == "preset"
+    # A preset row names the preset the case is written with ("Robust": the study's is blank).
+    assert rows["Schemes/Turbulence convection"]["preset"] == "Robust"
+    assert "preset" not in rows["Schemes/Gradient limiter"]
     assert rows["Linear solvers/p"]["value"] == "GAMG, tolerance 1e-7, relTol 0.01, maxIter 500"
     assert rows["Relaxation/Turbulence"]["value"] == "0.7 (as U)"
     limit = rows["Limiters/Velocity limit"]["value"]
@@ -311,6 +314,8 @@ def test_numerics_as_written_of_a_transient_run(tmp_path: Path):
     assert rows["Limiters/Velocity limit"]["value"] == "Off: nothing caps the velocity"
     assert rows["Schemes/Turbulence convection"]["value"] == "Gauss limitedLinear 1"
     assert rows["Stays fixed/turbOnFinalIterOnly"]["value"] == "yes"
+    # A transient study has no preset: no row names one.
+    assert not [r for r in rows.values() if "preset" in r]
 
 
 def test_numerics_as_written_before_the_mesh_from_the_study_and_the_settings():

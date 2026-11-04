@@ -653,4 +653,12 @@ describe('read_setup: numerics (RH3)', () => {
     const used = await ok('read_setup', read({ id: 'r1' }));
     assert.deepEqual([used.from, used.rows.length], ['numerics_used', 3]);
   });
+  it("a preset row names the preset the run is written with (the run's, as the panel names it)", async () => {
+    fresh();
+    app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: true, checks: [], numerics: [{ ...ROWS[0], preset: 'Robust' }, ROWS[1]] } : undefined);
+    app.w.runs[0].numerics_used = { analysis: 'incompressible_steady', mode: 'steady', at: '2026-11-04T00:00:00Z', values: { numerics_preset: null } };
+    const used = await ok('read_setup', read({ id: 'r1' }));
+    assert.deepEqual(used.rows[0], { group: 'Schemes', label: 'Gradient limiter', value: 'cellLimited Gauss linear 1', source: 'preset', preset: 'Robust' });
+    assert.equal('preset' in used.rows[1], false);
+  });
 });

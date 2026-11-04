@@ -20,6 +20,17 @@ from magnusim_sdk.numerics_advice import ADVICE, RULE_MAX, description
 from magnusim_sdk.runcheck import check
 
 
+def test_with_preset_name_names_only_the_preset_rows():
+    from magnusim_sdk.numerics_settings import row, with_preset_name
+
+    rows = [row("Schemes", "Gradient limiter", "x", "preset"), row("Schemes", "Momentum convection", "y", "study")]
+    assert with_preset_name(rows, "accurate") == [
+        {"group": "Schemes", "label": "Gradient limiter", "value": "x", "source": "preset", "preset": "Accurate"},
+        {"group": "Schemes", "label": "Momentum convection", "value": "y", "source": "study"},
+    ]
+    assert with_preset_name([row("Schemes", "Gradient limiter", "x", "default")], None) == [row("Schemes", "Gradient limiter", "x", "default")]
+
+
 def test_stored_values_are_kept_as_saved_or_blank():
     got = ns.numerics_from_record(
         {
@@ -159,6 +170,11 @@ def test_run_check_passes_on_numerics_as_written_cleaned():
     model = contract.RunModel(defaults=dict, normalize=dict, check=lambda **_k: {"checks": [], "estimate": None, "numerics": rows})
     out = contract.run_check(SimpleNamespace(key="x", run_model=model))
     assert out["numerics"] == [{"group": "Schemes", "label": "Gradient limiter", "value": "cellLimited Gauss linear 1", "source": "preset"}]
+    # A preset row's preset name passes on (the run's preset, which the panel and read_setup name);
+    # on any other row it is dropped.
+    named = [{**rows[0], "preset": "Robust"}, {"group": "Schemes", "label": "Momentum convection", "value": "x", "source": "study", "preset": "Robust"}]
+    model = contract.RunModel(defaults=dict, normalize=dict, check=lambda **_k: {"checks": [], "estimate": None, "numerics": named})
+    assert [r.get("preset") for r in contract.run_check(SimpleNamespace(key="x", run_model=model))["numerics"]] == ["Robust", None]
     plain = contract.RunModel(defaults=dict, normalize=dict, check=lambda **_k: {"checks": [], "estimate": None})
     assert "numerics" not in contract.run_check(SimpleNamespace(key="y", run_model=plain))
 

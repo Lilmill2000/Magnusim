@@ -348,6 +348,18 @@ def row(group: str, label: str, value: str, source: str = "") -> dict[str, str]:
 SOURCE_WORDS = {"study": "set in the study", "run": "set on the run", "default": "default", "fixed": "fixed"}
 
 
+def with_preset_name(rows: list[dict[str, str]], preset: str | None) -> list[dict[str, str]]:
+    """The rows whose value comes from the Numerics preset, each with that preset's name
+    (``preset``: "Robust"): the preset the case is written with (a started run's, from what it
+    started with), which "Numerics as written" and read_setup name, never the study's now."""
+    name = PRESET_LABELS.get(preset or "", "")
+    if name:
+        for r in rows:
+            if r.get("source") == "preset":
+                r["preset"] = name
+    return rows
+
+
 def source_words(source: str, preset: str | None = None) -> str:
     if source == "preset":
         return f"{PRESET_LABELS.get(preset or '', 'the')} preset"

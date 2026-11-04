@@ -22,6 +22,11 @@
 //   run_continue without numerics is refused with the choice to make (no card); with "as_was" its
 //   card lists the same differences, and it goes on as it started. A Heat Transfer steady run
 //   gets the same question after a change of its energy relaxation.
+// - A study whose numerics were never set (a new one): one change in the Study panel saves only
+//   that change, and Continue names it alone, from its default ("Relaxation p 0.3 → 0.2"); set
+//   back to the default, nothing differs. An unhealthy run's Continue box and the Assistant's card
+//   with the new numerics say only Health on the continued part can tell, never that its settings
+//   have not changed. "Numerics as written" of a started run names the preset it started with.
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL. Its fake solve
 // replays a healthy steady log through the real health tracker (MAGNUSIM_TEST_SOLVE_LOG).
 // Fails on the code before RH3: there were no such settings, no "Numerics as written" and no
@@ -505,7 +510,11 @@ test.describe('numerics at Continue', () => {
     // One dialog, never two: the health copy first, then the numerics and the three answers.
     await expect(page.locator('#modal-run-continue')).toBeVisible(STEP);
     await expect(page.locator('#modal-confirm')).toBeHidden();
-    await expect(page.locator('#rcn-health')).toHaveText((await health.textContent()) || '');
+    // The box adds that only Health on the continued part can tell (the numerics changed); the
+    // question's health is the from_zero copy alone.
+    const fromZero = 'Its saved results (iteration 50) are from after it became unhealthy (iteration 10); continuing carries that on. A new run from t = 0 is safer.';
+    await expect(health).toHaveText(`${fromZero} Health checks the continued part from iteration 50; whether the change is enough shows only there.`);
+    await expect(page.locator('#rcn-health')).toHaveText(fromZero);
     await expect(page.locator('#rcn-copy')).toHaveText(changedLine('Run_fz', 'Relaxation p 0.2 → 0.25'));
     expect(await page.locator('#rcn-health').evaluate((el) => !!(el.compareDocumentPosition(document.getElementById('rcn-copy')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
     await expect(page.locator('#rcn-new')).toBeVisible();
@@ -643,5 +652,119 @@ test.describe('numerics at Continue', () => {
     const j = await refused.json();
     expect([j.code, j.error, j.differences.map((d) => d.key)]).toEqual(['choose_numerics', said, ['relax_h']]);
     expect((await getJson(request, `/api/compute-queue?project_id=${PID}`)).items || []).toEqual([]);
+  });
+
+  test('a study whose numerics were never set: one change in the Study panel is the one difference Continue names, and setting it back asks nothing', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    // The study as a new one holds it: no numerics saved (blank: their defaults and the preset).
+    const keys = numericsKeys('incompressible_steady');
+    const setKeys = (rec) => keys.filter((k) => rec[k] !== undefined && rec[k] !== null);
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, ...Object.fromEntries(keys.map((k) => [k, null])) });
+    expect(setKeys(await studyRec(request))).toEqual([]);
+    const { rid } = await stoppedRun(request, 'Run_fresh');
+    expect(setKeys((await runRow(request, rid)).numerics_used.values)).toEqual([]);
+    // The person lowers Relaxation p in the Study panel, where it shows its default, 0.3.
+    await page.goto(`${host.base}/#/p/${PID}`);
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
+    let numerics = await openStudyPanel(page);
+    await expect(numerics.getByLabel('Relaxation p', { exact: true })).toHaveValue('0.3', STEP);
+    await typeNumber(numerics, 'Relaxation p', 0.2);
+    await expect.poll(async () => (await studyRec(request)).relax_p, STEP).toBe(0.2);
+    // Only what the person changed is saved: the defaults the form shows stay blank.
+    await page.waitForTimeout(800);
+    expect(setKeys(await studyRec(request))).toEqual(['relax_p']);
+    // The Continue box, the question and the route name that one change, from its default.
+    const said = changedLine('Run_fresh', 'Relaxation p 0.3 → 0.2');
+    let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const go = panel.locator('[data-run-continue="1"] [data-run-continue-go="1"]');
+    await expect(panel.locator('[data-run-continue-numerics]')).toHaveText(said, STEP);
+    const posted = postsOf(page);
+    await go.click();
+    await expect(page.locator('#modal-run-continue')).toBeVisible(STEP);
+    await expect(page.locator('#rcn-copy')).toHaveText(said);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#modal-run-continue')).toBeHidden();
+    const refused = await request.post(api('/api/run/continue'), { data: { project_id: PID, simulation_id: sim, run_id: rid, extra_iterations: 10 } });
+    expect(refused.status()).toBe(409);
+    expect((await refused.json()).differences.map((d) => d.text)).toEqual(['Relaxation p 0.3 → 0.2']);
+    // Set back to 0.3, what the run started with (its default): nothing differs and nothing is asked.
+    numerics = await openStudyPanel(page);
+    await typeNumber(numerics, 'Relaxation p', 0.3);
+    await expect.poll(async () => (await studyRec(request)).relax_p, STEP).toBe(0.3);
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    await expect(panel.locator('[data-run-continue="1"] [data-run-continue-go="1"]')).toBeEnabled(STEP);
+    await expect(panel.locator('[data-run-continue-numerics]')).toHaveCount(0);
+    await page.waitForTimeout(500);
+    expect(posted).toEqual([]);
+  });
+
+  test("an unhealthy run after a study numerics change: the Continue box and the Assistant's card say only Health on the continued part can tell, never that nothing changed", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const { rid, runJson } = await stoppedRun(request, 'Run_uh');
+    const was = (await runRow(request, rid)).numerics_used.values.relax_p;
+    patchRun(runJson, {
+      health_checked: true,
+      health: {
+        v: 1,
+        verdict: 'unhealthy',
+        at: new Date().toISOString(),
+        step: 40,
+        t: 40,
+        unit: 'iteration',
+        window: 25,
+        live: false,
+        checked: ['residuals_stalled'],
+        skipped: [],
+        findings: [{ code: 'residuals_stalled', level: 'error', text: 'The residuals stopped falling.', evidence: null, since_t: 10, fix: [] }],
+        timeline: [{ t: 10, verdict: 'unhealthy' }],
+        first_unhealthy: { t: 10, step: 10, wall_s: 5 },
+        // The start of its log is gone: where Continue goes on from against the onset is unknown.
+        head_missing: true,
+        restart: null,
+      },
+    });
+    // Nothing changed yet: Continue will likely repeat it.
+    let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const health = panel.locator('[data-run-continue="1"] [data-run-continue-health="1"]');
+    await expect(health).toHaveText(/its settings have not changed since, so Continue will likely repeat the problem\.$/, STEP);
+    // The study's relaxation of p is lowered: the box no longer says nothing changed.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, relax_p: 0.22 });
+    const list = `Relaxation p ${was} → 0.22`;
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    await expect(panel.locator('[data-run-continue-numerics]')).toHaveText(changedLine('Run_uh', list), STEP);
+    await expect(health).toHaveText('Health checks the continued part from iteration 50; whether the change is enough shows only there.', STEP);
+    // The Assistant's run_continue with the new numerics says the same; as it was, it will likely repeat.
+    fake.reply(
+      { tools: [{ name: 'compute', input: compute({ action: 'run_continue', run_id: rid, extra_iterations: 20, numerics: 'new' }) }] },
+      () => ({ text: 'Not continued.' }),
+    );
+    await openDock(page);
+    await dockSend(page, 'Continue Run_uh with the new numerics.');
+    const card = dockGate(page);
+    await expect(card.locator('.dock-gate-copy')).toHaveText(
+      `Runs "Run_uh" for 20 more iterations. Continues "Run_uh" with the study's new numerics (${list}). Health checks the continued part from iteration 50; whether the change is enough shows only there.`,
+      { timeout: 60_000 },
+    );
+    await card.locator('[data-gate-answer="no"]').click(STEP);
+    await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 60_000 });
+    expect((await runRow(request, rid)).status).toBe('stopped');
+  });
+
+  test('"Numerics as written" of a started run names the preset it started with, not the study\'s now, as the Assistant reads it', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: null, grad_limiter: null });
+    const { rid } = await stoppedRun(request, 'Run_preset');
+    try {
+      // Started on Robust (blank); the study then switched to Accurate.
+      await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: 'accurate' });
+      const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+      await numericsOf(panel);
+      const grad = panel.locator('[data-run-numerics="1"] [data-run-numerics-row="Gradient limiter"]');
+      await expect(grad.locator('.run-numerics-source')).toHaveText(' (Robust preset)', STEP);
+      const read = await postOk(request, '/api/run/precheck', { project_id: PID, simulation_id: sim, run_id: rid });
+      expect(read.numerics.find((n) => n.label === 'Gradient limiter')).toMatchObject({ source: 'preset', preset: 'Robust' });
+    } finally {
+      await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: null });
+    }
   });
 });

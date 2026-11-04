@@ -23,6 +23,7 @@ from magnusim_sdk.numerics_settings import (
     scheme_choices,
     solver_value,
     velocity_cap,
+    with_preset_name,
 )
 
 from .physics import StudyPhysics, solved_turbulence_fields
@@ -106,7 +107,7 @@ def numerics_rows(
         rows.append(row(FIXED, "momentumPredictor", "yes", "fixed"))
         rows.append(row(FIXED, "turbOnFinalIterOnly", "yes", "fixed"))
         rows.append(row(FIXED, "consistent", "no", "fixed"))
-    return rows
+    return with_preset_name(rows, preset)
 
 
 def stored_out_of_range(study: dict[str, Any] | None, settings: dict[str, Any] | None, *, transient: bool) -> list[dict[str, Any]]:

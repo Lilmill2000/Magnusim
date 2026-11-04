@@ -327,9 +327,13 @@ function savedBeforeOnset(h: HealthRecord, saved: number | null): boolean {
   return isNum(saved) && isNum(onset) && saved < onset;
 }
 
-/** A change waits for the run's Continue (A2's entry with its changes): only a stopped run's counts. */
+/** A change waits for the run's Continue (A2's entry with its changes: only a stopped run's counts; RH3's numerics: a finished run's too). */
 function changeWaits(run: HealthRunView, pending: ContinueChange | null | undefined): boolean {
-  return healthRunState(run) === 'stopped_saved' && !!pending && Array.isArray(pending.changes) && pending.changes.length > 0;
+  if (!pending || !Array.isArray(pending.changes) || !pending.changes.length) return false;
+  const state = healthRunState(run);
+  // RH3: the study's numerics changed after it started (a numerics "change" the Continue
+  // question offers): a finished run's Continue takes it too.
+  return state === 'stopped_saved' || (state === 'done' && pending.kind === 'numerics');
 }
 
 /**
@@ -440,7 +444,10 @@ export interface ContinueChange {
 
 /**
  * The Continue box's health line (spec 3.12) and whether Continue asks first (`ask`: a
- * from_zero run). Null when it has none.
+ * from_zero run). Null when it has none. `pending`: the change waiting for its Continue (A2), or
+ * (RH3) the study's numerics changed since it started (`kind` 'numerics', the differences as its
+ * changes): either way it says only Health on the continued part can tell, never that its
+ * settings have not changed.
  */
 export function continueHealthWords(
   run: HealthRunView,
@@ -460,7 +467,7 @@ export function continueHealthWords(
     parts.push(`Its saved results (${saved}) are from after it became unhealthy (${began}); continuing carries that on. A new run from t = 0 is safer.`);
   }
   if (changeWaits(run, pending)) {
-    parts.push(`Health checks the continued part from ${saved}; whether the change is enough shows only there.`);
+    parts.push(`Health checks the continued part from ${saved || 'its last saved time'}; whether the change is enough shows only there.`);
   } else if (h.restart === 'continue_after_fix') {
     parts.push(restartSentence(run, h));
   } else if (!ask && h.verdict === 'unhealthy') {

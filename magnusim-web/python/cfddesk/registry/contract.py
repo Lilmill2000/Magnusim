@@ -585,13 +585,18 @@ def run_check(spec: Any, **kwargs: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"checked": True, "checks": rows, "estimate": estimate}
     numerics = got.get("numerics") if isinstance(got, dict) else None
     if isinstance(numerics, list):
-        # RH3: "Numerics as written" ({group, label, value, source} rows), when the analysis gives it.
-        out["numerics"] = [
-            {k: str(n.get(k) or "")[:300 if k == "value" else 80] for k in ("group", "label", "value", "source")}
-            for n in numerics[:60]
-            if isinstance(n, dict) and str(n.get("label") or "").strip()
-        ]
+        # RH3: "Numerics as written" ({group, label, value, source} rows), when the analysis gives it;
+        # a preset row may name its preset ("preset": "Robust", the one the case is written with).
+        out["numerics"] = [_numerics_row(n) for n in numerics[:60] if isinstance(n, dict) and str(n.get("label") or "").strip()]
     return out
+
+
+def _numerics_row(n: dict[str, Any]) -> dict[str, str]:
+    row = {k: str(n.get(k) or "")[:300 if k == "value" else 80] for k in ("group", "label", "value", "source")}
+    preset = str(n.get("preset") or "").strip()[:40]
+    if preset and row["source"] == "preset":
+        row["preset"] = preset
+    return row
 
 
 NO_MONITORS: dict[str, Any] = {

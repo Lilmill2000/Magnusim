@@ -341,4 +341,22 @@ describe('RH3: the preset note', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use the preset for all' }));
     await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalledWith({ energy_convection: null, grad_limiter: null }));
   });
+
+  it('an edit of the numerics saves only what the person changed: a default the form showed stays blank', async () => {
+    const schemes = {
+      type: 'object',
+      properties: {
+        ...numericsSchema.properties,
+        energy_convection: { type: 'string', title: 'Energy convection', enum: ['first_order', 'second_order'], default: 'second_order', 'x-cfddesk': { group: 'schemes', advanced: true } },
+        p_tolerance: { type: 'number', title: 'p_rgh tolerance', default: 1e-7, 'x-cfddesk': { group: 'linear_solvers', advanced: true } },
+      },
+    };
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    useProjectStore.setState({ registry: { ...reg, analysis: reg.analysis.map((a) => ({ ...a, numerics_schema: schemes })) } });
+    window.__CFD_STUDY_STATE__ = study({}, {});
+    renderPanel();
+    fireEvent.change(screen.getByLabelText('Energy convection', { selector: 'select' }), { target: { value: '0' } });
+    await waitFor(() => expect(window.__CFD_STUDY_UPDATE__).toHaveBeenCalled());
+    expect((window.__CFD_STUDY_UPDATE__ as ReturnType<typeof vi.fn>).mock.calls.map(([patch]) => patch)).toEqual([{ energy_convection: 'first_order' }]);
+  });
 });

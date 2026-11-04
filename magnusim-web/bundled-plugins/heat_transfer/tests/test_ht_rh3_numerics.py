@@ -157,6 +157,10 @@ def test_the_pre_run_check_lists_it_and_numerics_as_written_shows_the_case(tmp_p
     assert rows["Linear solvers/U, h, k, omega"]["value"] == "PBiCGStab, tolerance 1e-8, relTol 0.1, maxIter 5000"
     assert rows["Limiters/Velocity limit"]["value"] == "Off: nothing caps the velocity"
     assert rows["Stays fixed/div(phi,K)"]["value"] == "bounded Gauss upwind (the preset's)"
+    # A preset row names the preset the case is written with.
+    assert rows["Schemes/Gradient limiter"]["source"] == "preset" and rows["Schemes/Gradient limiter"]["preset"] == "Robust"
+    accurate = run_check(transient=False, inputs=make_inputs(tmp_path / "a", study={"numerics_preset": "accurate"}), settings={"end_time": 500})
+    assert {r["label"]: r for r in accurate["numerics"]}["Gradient limiter"]["preset"] == "Accurate"
 
 
 def test_conjugate_heat_transfer_fluid_regions_get_the_study_numerics(tmp_path: Path):

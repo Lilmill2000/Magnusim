@@ -252,6 +252,22 @@ export function blanked(values: Record<string, unknown>, schema: RJSFSchema): Re
   return Object.fromEntries(Object.entries(props).filter(([k, p]) => p['x-cfddesk']?.optional && values[k] === undefined).map(([k]) => [k, null]));
 }
 
+/**
+ * What the form shows of each field before an edit: the value it was given, else the field's
+ * default as the form fills it in (a blank-able field, x-cfddesk.optional, stays blank). An edit
+ * saves only the fields whose value differs from this, so a default the study never set stays
+ * blank (blank is written as that default) and a run's Continue names only what the person changed.
+ */
+export function shownValues(data: Record<string, unknown>, schema: RJSFSchema): Record<string, unknown> {
+  const props = (schema.properties || {}) as Record<string, RJSFSchema & { 'x-cfddesk'?: { optional?: boolean } }>;
+  const out = { ...data };
+  for (const [key, prop] of Object.entries(props)) {
+    const v = out[key];
+    if ((v === undefined || v === '') && !prop['x-cfddesk']?.optional && prop.default !== undefined && prop.default !== null) out[key] = prop.default;
+  }
+  return out;
+}
+
 /** A saved value and a form's value are the same (blank: undefined, null or ''). */
 function same(a: unknown, b: unknown): boolean {
   const blank = (v: unknown) => v === undefined || v === null || v === '';
@@ -276,9 +292,13 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
     record,
   );
   const numericsSchema = shownNumericsSchema(tools.mergeObjectSchemas([row?.numerics_schema as RJSFSchema | undefined]), cht);
-  const commit = (schema: RJSFSchema) => (values: Record<string, unknown>) => {
+  // Only what the person changed is saved. The numerics compare with what the form showed, so a
+  // default it showed stays blank (blank is written as that default; a run's Continue names only
+  // what changed); the settings keep comparing with the saved record, as before.
+  const commit = (schema: RJSFSchema, shownDefaults = false) => (values: Record<string, unknown>) => {
     const patch = { ...blanked(values, schema), ...tools.pickSchemaValues(values, schema) };
-    const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !same(record[k], v)));
+    const shown = shownDefaults ? shownValues(tools.pickSchemaValues(record, schema), schema) : record;
+    const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => !same(shown[k], v)));
     if (Object.keys(changed).length) void save(changed);
   };
   const hasNumerics = Object.keys(numericsSchema.properties || {}).length > 0;
@@ -329,7 +349,7 @@ export function StudySettings({ study, row, save, setTimeDependency }: StudySett
           formData={tools.pickSchemaValues(record, numericsSchema)}
           hideFooter
           boundsOnEdit
-          onCommit={commit(numericsSchema)}
+          onCommit={commit(numericsSchema, true)}
         />
       ) : null}
       {hasNumerics ? <PresetNote record={record} schema={numericsSchema} save={save} /> : null}
