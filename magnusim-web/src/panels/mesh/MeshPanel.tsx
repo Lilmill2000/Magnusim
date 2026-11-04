@@ -354,7 +354,7 @@ function MeshStatus({ job }: { job: MeshJobState | null }) {
       {(running || finishing) && elapsed ? <div className="mesh-elapsed">{elapsed}</div> : null}
       {meta.length ? <div className="mesh-finished-meta">{meta.join(' · ')}</div> : null}
       {quality.length ? (
-        <div className="mesh-finished-meta" data-mesh-quality="1">
+        <div className="mesh-quality-meta" data-mesh-quality="1">
           {quality.map((line) => (
             <div key={line}>{line}</div>
           ))}

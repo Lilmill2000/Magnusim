@@ -22,8 +22,10 @@ const SHOTS = process.env.MAGNUSIM_PARITY_SHOTS || '';
 const STUDY_ADDED = '[data-study-reference]';
 // Rows the run panel gained after v0.2.0, left out of the comparison: Average from
 // (F2, transient), "Stop when a monitor settles" and how a finished run ended (F5),
-// and a finished run's Continue (F6), and a run's Health block (RH1).
-const RUN_ADDED = '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue], [data-run-health-block]';
+// and a finished run's Continue (F6), a run's Health block (RH1), and a draft's "Before you
+// start" and a started run's "Checked at start" (RH2).
+const RUN_ADDED =
+  '[data-run-field="average_from"], [data-run-settle], [data-run-converged], [data-run-continue], [data-run-health-block], [data-run-check], [data-run-checked-at-start]';
 // A converged run's tree badge (F5) and an unhealthy one's (RH1), left out of the tree's comparison.
 const TREE_ADDED = '[data-run-converged], [data-run-health-badge]';
 // The Create Simulation list's rows of the analyses of a bundled plugin that ships on
@@ -43,7 +45,10 @@ const TURBULENCE_ADDED = [
 ].join(', ');
 const TURBULENCE_HELP =
   /(role="tooltip"> Which turbulence closure the solver uses\. k-omega SST is the general-purpose default and handles walls at any y\+\.) .*$/;
-const sameHelp = (line) => line.replace(TURBULENCE_HELP, '$1 …');
+// Start's title says what a draft starts with when its pre-run check found something (RH2);
+// otherwise it is v0.2.0's, which it is compared with.
+const START_CHECKED_TITLE = /(data-run-start="#" )title="Starts with [^"]*"/;
+const sameHelp = (line) => line.replace(TURBULENCE_HELP, '$1 …').replace(START_CHECKED_TITLE, '$1title="Start the solver on this run"');
 // Study panel rows added after the baseline was recorded (the baseline is never
 // re-recorded): left out of the comparison, so every older row still must match.
 const NEW_STUDY_ROWS = [

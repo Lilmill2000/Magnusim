@@ -3669,7 +3669,8 @@ select.fp-select {
   color: var(--mg-text);
   margin-top: 4px;
 }
-.mesh-finished-meta {
+.mesh-finished-meta,
+.mesh-quality-meta {
   font-size: var(--mg-text-xs);
   color: var(--mg-text-muted);
   margin-top: 4px;
