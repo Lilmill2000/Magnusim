@@ -33,8 +33,36 @@ def _centreline(x: float) -> float:
     return 2.0 - math.exp(-x / LAMBDA)
 
 
-def fake_run(run_dir: Path, *, layers_applied: bool = True, driver: dict | None = None, lines: bool = True) -> None:
-    """A run's raw answers as the driver saves them, for an exact developed pipe flow."""
+def _cells() -> dict:
+    """The developed part's cells (x/D 10 to 13) of an exact pipe flow, as sampling.cells saves them."""
+    xs, ys, zs, ux = [], [], [], []
+    for i in range(7):
+        x = 0.2 + 0.01 * i
+        for r in (0.0012, 0.0025, 0.004, 0.0055, 0.007, 0.0085, 0.0097):
+            for k in range(8):
+                a = 2 * math.pi * (k + 0.5) / 8
+                xs.append(x)
+                ys.append(r * math.cos(a))
+                zs.append(r * math.sin(a))
+                ux.append(2.0 * (1 - (r / (D / 2)) ** 2))
+    n = len(xs)
+    return {"source": "app_sampling", "n": n, "x": xs, "y": ys, "z": zs, "vol": [1e-9] * n, "U_x": ux,
+            "U_y": [0.0] * n, "U_z": [0.0] * n}
+
+
+def _wall_shear() -> dict:
+    """The wall's faces over the developed part: the exact (kinematic) 8 nu U / D, against the flow."""
+    n = 40
+    return {"source": "case_file:180/wallShearStress", "patch": "pipe_wall", "n": n,
+            "x": [0.2 + 0.06 * i / (n - 1) for i in range(n)], "area": [1e-6] * n,
+            "wallShearStress_x": [-8 * NU * 1.0 / D] * n, "wallShearStress_y": [0.0] * n, "wallShearStress_z": [0.0] * n}
+
+
+def fake_run(run_dir: Path, *, layers_applied: bool = True, driver: dict | None = None, lines: bool = True,
+             samples: bool = True, converged: bool = True, drift: float = 0.0) -> None:
+    """A run's raw answers as the driver saves them, for an exact developed pipe flow. Not
+    ``converged``: it stops at 3000 iterations, the inlet pressure moving by ``drift`` (relative)
+    over its last 10 %."""
     raw = run_dir / "raw"
     raw.mkdir(parents=True, exist_ok=True)
     drv = driver or {"outcome": "done", "failed_step": None, "error": None, "ids": {"run_id": "r1"},
@@ -48,22 +76,30 @@ def fake_run(run_dir: Path, *, layers_applied: bool = True, driver: dict | None 
                                           "walls": [{"patch": "pipe_wall", "layers_asked": 4,
                                                      "layers": 3.8 if layers_applied else 0.0}]}})
     (raw / "blockMeshDict.txt").write_text("blocks ( hex (0 1 2 3 4 5 6 7) (67 8 12) simpleGrading (1 1 1) );")
-    hist = [{"t": i, "U": 10 ** (-i / 30), "p": 10 ** (-i / 28)} for i in range(1, 181)]
-    _write(raw, "run-status", {"run": {"run_id": "r1", "status": "done", "iteration": 180, "n_procs": 4,
+    n_it = 180 if converged else 3000
+    hist = [{"t": i, "U": 10 ** (-i / 30), "p": 10 ** (-i / 28)} for i in range(1, n_it + 1)]
+    _write(raw, "run-status", {"run": {"run_id": "r1", "status": "done", "iteration": n_it, "n_procs": 4,
                                        "started_at": "2026-11-04T10:01:00Z", "finished_at": "2026-11-04T10:03:00Z",
                                        "residuals": hist}})
     _write(raw, "health", {"health": {"verdict": "healthy", "findings": []}, "checking": False})
     _write(raw, "precheck", {"status": 200, "body": {"checks": [{"code": "still_start", "level": "info", "text": "From rest."}]}})
     _write(raw, "solver-log-start", {"lines": ["| Version:  2606 |", "Build  : _481094f-20260618 OPENFOAM=2606"]})
-    _write(raw, "solver-log-end", {"lines": ["", "SIMPLE solution converged in 180 iterations", "End"]})
+    _write(raw, "solver-log-end", {"lines": ["", "SIMPLE solution converged in 180 iterations" if converged else "", "End"]})
     q = AREA * 1.0
+    p_in = 32 * NU / D**2 * L
+    # The inlet pressure's history: settled, or still moving by `drift` over the last 10 %.
+    p_hist = [{"t": i, "p_Pa": p_in * (1 + drift * max(0.0, (i - 0.9 * n_it) / (0.1 * n_it)))} for i in range(1, n_it + 1)]
     _write(raw, "monitors", {"monitors": [
-        {"key": "mon_inlet", "patch": "inlet", "area_m2": AREA, "last": {"Q_m3s": -q}},
+        {"key": "mon_inlet", "patch": "inlet", "area_m2": AREA, "last": {"Q_m3s": -q, "p_Pa": p_in}, "series": p_hist},
         {"key": "mon_outlet", "patch": "outlet", "area_m2": AREA, "last": {"Q_m3s": q}},
     ], "custom": [
-        {"key": f"probes_centreline_{i}", "point": [i * D, 0, 0], "last": {"U": [_centreline(i * D), 0.0, 0.0]}}
+        {"key": f"probes_centreline_{i}", "point": [i * D, 0, 0], "last": {"U": [_centreline(i * D), 0.0, 0.0]},
+         "series": [{"t": k, "U": [_centreline(i * D), 0.0, 0.0]} for k in range(1, n_it + 1)]}
         for i in range(1, 15)
     ]})
+    if samples:
+        _write(raw, "sample_cells_window", _cells())
+        _write(raw, "sample_wall_shear", _wall_shear())
     if lines:
         xs = [L * i / 300 for i in range(301)]
         # Developed: -dp/dx = 32 nu U / D² (rho = 1) after a short entrance.

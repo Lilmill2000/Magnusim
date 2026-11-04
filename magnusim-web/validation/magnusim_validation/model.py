@@ -40,8 +40,10 @@ class Reference:
             raise ValueError(f"reference confidence {self.confidence!r} is not one of {CONFIDENCE}")
         if not (self.citation.strip() and self.where.strip() and self.conditions.strip()):
             raise ValueError("a reference needs its citation, where in it, and its conditions")
-        if not math.isfinite(self.value) or self.value == 0:
-            raise ValueError("a reference value must be a finite, non-zero number")
+        # Zero is a reference too (a difference that should vanish, a profile's RMS
+        # difference): it is then compared within an absolute band (Tolerance.abs_tol).
+        if not math.isfinite(self.value):
+            raise ValueError("a reference value must be a finite number")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,12 +51,22 @@ class Reference:
 
 @dataclass(frozen=True)
 class Tolerance:
-    """A band around the reference, in per cent of it. ``locked`` once the first full run
-    has been reviewed; until then the band is proposed (report-only)."""
+    """A band around the reference: in per cent of it (``rel_pct``), or in the quantity's own
+    unit (``abs_tol``: a reference of zero, a profile within 0.01 U, a vortex centre within
+    0.01 L); exactly one of the two. ``locked`` once the first full run has been reviewed;
+    until then the band is proposed (report-only)."""
 
-    rel_pct: float
+    rel_pct: float | None = None
     locked: bool = False
     note: str = ""
+    abs_tol: float | None = None
+
+    def __post_init__(self) -> None:
+        given = [v for v in (self.rel_pct, self.abs_tol) if v is not None]
+        if len(given) != 1:
+            raise ValueError("a tolerance is either relative (rel_pct) or absolute (abs_tol), one of the two")
+        if not (math.isfinite(given[0]) and given[0] > 0):
+            raise ValueError("a tolerance must be a finite, positive number")
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -74,10 +86,16 @@ class QuantitySpec:
     reference: Reference
     tolerance: Tolerance
 
+    def __post_init__(self) -> None:
+        if self.tolerance.rel_pct is not None and self.reference.value == 0:
+            raise ValueError(f"{self.key}: a reference of zero needs an absolute tolerance (abs_tol)")
 
-def error_of(value: float, reference: float) -> dict[str, float]:
-    """The run's value against the reference: absolute and relative (%) error."""
-    return {"abs": value - reference, "rel_pct": 100.0 * (value - reference) / abs(reference)}
+
+def error_of(value: float, reference: float) -> dict[str, float | None]:
+    """The run's value against the reference: absolute and relative (%) error (no relative
+    error against a reference of zero)."""
+    rel = 100.0 * (value - reference) / abs(reference) if reference != 0 else None
+    return {"abs": value - reference, "rel_pct": rel}
 
 
 def compare(spec: QuantitySpec, value: float | None, *, uncertainty: dict[str, Any] | None = None,
@@ -104,7 +122,11 @@ def compare(spec: QuantitySpec, value: float | None, *, uncertainty: dict[str, A
         return row
     v = float(value)
     err = error_of(v, spec.reference.value)
-    within = abs(err["rel_pct"]) <= spec.tolerance.rel_pct
+    tol = spec.tolerance
+    if tol.abs_tol is not None:
+        within = abs(float(err["abs"] or 0.0)) <= tol.abs_tol
+    else:
+        within = abs(float(err["rel_pct"] or 0.0)) <= float(tol.rel_pct or 0.0)
     row.update({"value": v, "error": err, "within": within})
     if spec.tolerance.locked:
         row["verdict"] = "pass" if within else "fail"

@@ -4,7 +4,9 @@
 //   npm run test:validation                               every case and variant at 8 cores, then the report
 //   npm run test:validation -- --case c1 --variant standard --cores 4
 //   npm run test:validation -- --coarse                   each case's coarse settings (results-coarse/, no report)
-//   npm run test:validation -- --mesh-only                mesh and record the mesh facts only (no report)
+//   npm run test:validation -- --mesh-only                mesh and record the mesh facts only (results-probe/, no report)
+//   npm run test:validation -- --case c1 --variant standard --mesh '{"hex_element_core":false}'
+//                                                         mesh settings changed by hand (results-probe/, no report)
 //   npm run test:validation -- --no-report                skip the report
 // Anything else goes to Playwright (e.g. --reporter=line). MAGNUSIM_E2E_PORT picks the app's port.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -31,13 +33,15 @@ export function parseValidationArgs(argv, base = process.env) {
     else if (name === '--cores') env.MAGNUSIM_VALIDATION_CORES = String(Number(value()) || 8);
     else if (name === '--coarse') env.MAGNUSIM_VALIDATION_COARSE = '1';
     else if (name === '--mesh-only') env.MAGNUSIM_VALIDATION_MESH_ONLY = '1';
+    else if (name === '--mesh') env.MAGNUSIM_VALIDATION_MESH = String(value());
     else if (name === '--no-report') report = false;
     else passthrough.push(a);
   }
   if (cases.length) env.MAGNUSIM_VALIDATION_CASES = cases.join(',');
   if (variants.length) env.MAGNUSIM_VALIDATION_VARIANTS = variants.join(',');
-  // Coarse and mesh-only runs write nothing the report reads.
-  if (env.MAGNUSIM_VALIDATION_COARSE === '1' || env.MAGNUSIM_VALIDATION_MESH_ONLY === '1') report = false;
+  // Coarse runs go to results-coarse/, mesh-only runs and changed mesh settings to
+  // results-probe/: nothing the report reads, so no report after them.
+  if (env.MAGNUSIM_VALIDATION_COARSE === '1' || env.MAGNUSIM_VALIDATION_MESH_ONLY === '1' || env.MAGNUSIM_VALIDATION_MESH) report = false;
   const args = [join(WEB_ROOT, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', '-c', 'validation/playwright.config.js', ...passthrough];
   return { env, args, report };
 }

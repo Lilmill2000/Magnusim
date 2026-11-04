@@ -95,3 +95,76 @@ def test_a_coarse_plan_is_coarser(tmp_path: Path):
     assert p["run"]["endTime"] == 750 and p["run"]["cores"] == 2
     with pytest.raises(ValueError):
         make_plan(c1, "polyhedral", tmp_path / "x")
+
+
+def test_a_hex_dominant_plan_carries_what_its_mesh_will_be(tmp_path: Path):
+    c1 = cases.get("c1")
+    p = make_plan(c1, "hexdominant", tmp_path, cores=4)
+    est = p["mesh"]["estimate"]
+    # The mesher's own block: at least 8 cells across y and 12 across z, whatever the fineness.
+    assert est["block"] == [67, 8, 12]
+    assert est["walls_level"] == 2
+    assert est["wall_cell_mm"] == pytest.approx([1.4887, 0.8312, 0.5542], abs=1e-3)
+    # An order of magnitude: case 1's real Hex-dominant mesh at fineness 6 had 128 706 cells.
+    assert 128_706 <= est["n_cells"] <= 2 * 128_706
+    assert est["layers"][0]["stack_over_smallest_cell"] == pytest.approx(1.0 / 0.5542, rel=1e-3)
+    assert est["warnings"] == []
+    coarse = make_plan(c1, "hexdominant", tmp_path / "c", coarse=True, cores=4)["mesh"]["estimate"]
+    # Its real coarse mesh (fineness 4) had 78 243 cells.
+    assert coarse["block"] == [42, 8, 12] and 78_243 <= coarse["n_cells"] <= 2 * 78_243
+    # Standard sizes its own mesh: no estimate.
+    assert "estimate" not in make_plan(c1, "standard", tmp_path / "s", cores=4)["mesh"]
+
+
+def test_a_thick_layer_stack_on_a_thin_wall_cell_is_flagged():
+    from magnusim_validation.mesh_plan import estimate
+
+    faces = [{"id": 1, "area_mm2": 50265.0, "normal": [0.0, 0.0, -1.0], "surface_type": "Cylinder"},
+             {"id": 2, "area_mm2": 314.2, "normal": [1.0, 0.0, 0.0], "surface_type": "Plane"},
+             {"id": 3, "area_mm2": 314.2, "normal": [-1.0, 0.0, 0.0], "surface_type": "Plane"}]
+    mesh = {"settings": {"fineness": 7, "physics_based_meshing": True, "advanced": {"mesh_engine": "snappy_hexdominant"}},
+            "refinements": [{"name": "Wall layers", "type": "Inflate boundary layer", "faces": ["face 1@Body1"],
+                             "n_layers": 2, "total_thickness": 1.7, "total_thickness_unit": "mm"}]}
+    # The turbulent pipe of the design: 800 mm long, 20 mm across, at fineness 7.
+    est = estimate(mesh, faces, [0.0, 800.0, -10.0, 10.0, -10.0, 10.0], 251_327.0)
+    assert est is not None
+    assert est["block"] == [85, 8, 12]
+    assert est["wall_cell_mm"] == pytest.approx([1.5648, 0.4156, 0.2771], abs=1e-3)
+    assert est["warnings"] and "6.135 times the smallest wall cell" in est["warnings"][0]
+
+
+def test_a_custom_size_becomes_a_level_of_the_diagonal_base_size():
+    from magnusim_validation.mesh_plan import estimate
+
+    faces = [{"id": 1, "area_mm2": 10_000.0, "normal": [0.0, -1.0, 0.0], "surface_type": "Plane"},
+             {"id": 2, "area_mm2": 10_000.0, "normal": [0.0, 1.0, 0.0], "surface_type": "Plane"}]
+    mesh = {"settings": {"fineness": 6, "advanced": {"mesh_engine": "snappy_hexdominant"}},
+            "refinements": [{"name": "Floor", "type": "Surface custom sizing", "faces": ["face 1@Body1"],
+                             "default_size": 0.147, "default_size_unit": "mm"}]}
+    est = estimate(mesh, faces, [0.0, 400.0, 0.0, 10.0, 0.0, 51.0], 204_000.0)
+    assert est is not None
+    custom = est["custom_sizes"][0]
+    # The level comes from the diagonal's base size; the cells it gives are finer than asked on the thin axis.
+    assert custom["level"] == 6
+    assert custom["cell_mm"][1] < 0.147 / 2
+    assert est["n_cells"] > 1_000_000
+
+
+def test_mesh_settings_given_by_hand_are_merged_recorded_and_kept_out_of_results(tmp_path: Path):
+    from magnusim_validation.__main__ import _run_dir
+    from magnusim_validation.paths import RESULTS, RESULTS_COARSE, RESULTS_PROBE
+
+    c1 = cases.get("c1")
+    p = make_plan(c1, "standard", tmp_path, cores=4, mesh_settings={"hex_element_core": False, "advanced": {"x": 1}})
+    assert p["mesh"]["settings"]["hex_element_core"] is False
+    assert p["mesh"]["settings"]["advanced"] == {"mesh_engine": "standard", "x": 1}
+    assert p["overrides"] == {"mesh_settings": {"hex_element_core": False, "advanced": {"x": 1}}}
+    assert p["mesh"]["expect"]["layers"] is True
+    # Layers turned off by hand: the probe expects none.
+    off = make_plan(c1, "standard", tmp_path / "off", cores=4, mesh_settings={"automatic_boundary_layers": False})
+    assert off["mesh"]["expect"]["layers"] is False
+    # Only a full run of the case's own settings goes where the report reads.
+    assert _run_dir("c1_laminar_pipe", "standard", False) == RESULTS / "c1_laminar_pipe" / "standard"
+    assert _run_dir("c1_laminar_pipe", "standard", True) == RESULTS_COARSE / "c1_laminar_pipe" / "standard"
+    assert _run_dir("c1_laminar_pipe", "standard", False, True) == RESULTS_PROBE / "c1_laminar_pipe" / "standard"
+    assert _run_dir("c1_laminar_pipe", "standard", True, True) == RESULTS_PROBE / "c1_laminar_pipe" / "standard"

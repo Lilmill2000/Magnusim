@@ -24,7 +24,9 @@ VERDICT_WORDS = {"report_only": "report-only", "pass": "pass", "fail": "FAIL", "
 
 
 def load_results(root: Path = RESULTS) -> list[dict[str, Any]]:
-    """Every committed result, in the cases' order, Hex-dominant first."""
+    """Every committed result, in the cases' order, Hex-dominant first. A mesh-only run or
+    one whose settings were changed by hand is a probe, never a result: it is left out even
+    if it lands here."""
     out = []
     for cid in cases.CASES:
         case_dir = root / cid
@@ -33,7 +35,10 @@ def load_results(root: Path = RESULTS) -> list[dict[str, Any]]:
         for vdir in sorted(case_dir.iterdir(), key=lambda p: (VARIANT_ORDER.index(p.name) if p.name in VARIANT_ORDER else 99, p.name)):
             path = vdir / "result.json"
             if path.is_file():
-                out.append(read_result(path))
+                res = read_result(path)
+                if res.get("status") == "mesh_only" or res.get("overrides"):
+                    continue
+                out.append(res)
     return out
 
 
@@ -60,14 +65,30 @@ def cell(text: Any) -> str:
 
 
 def err_text(q: dict[str, Any]) -> str:
-    return "-" if q.get("error") is None else f"{q['error']['rel_pct']:+.2f} %"
+    err = q.get("error")
+    if err is None:
+        return "-"
+    if err.get("rel_pct") is None:
+        return f"{float(err['abs']):+.3g}{(' ' + q['unit']) if q.get('unit') else ''}"
+    return f"{err['rel_pct']:+.2f} %"
 
 
 def band_text(q: dict[str, Any]) -> str:
     tol = q["tolerance"]
     inside = q.get("within")
     mark = "" if inside is None else (" (inside)" if inside else " (outside)")
+    if tol.get("abs_tol") is not None:
+        return f"±{num(tol['abs_tol'], 3)}{(' ' + q['unit']) if q.get('unit') else ''}{mark}"
     return f"±{num(tol['rel_pct'], 3)} %{mark}"
+
+
+STATUS_WORDS = {"ok": "ok", "not_settled": "NOT SETTLED", "layers_not_applied": "LAYERS NOT APPLIED"}
+
+
+def status_text(res: dict[str, Any]) -> str:
+    """A run's status for the tables: ``ok``, or what kept it from its numbers."""
+    s = str(res.get("status"))
+    return STATUS_WORDS.get(s, s.replace("_", " ").upper())
 
 
 def layers_text(m: dict[str, Any]) -> str:
@@ -154,15 +175,15 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
         out.append("No results yet.\n")
         return "\n".join(out).rstrip() + "\n"
     out.append("Environment: " + "; ".join(env_lines(results)) + ".\n")
-    out.append("| Case | Mesher | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations | Solve time | Run health |")
-    out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    out.append("| Case | Mesher | Status | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations | Solve time | Run health |")
+    out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for res in results:
         case = cases.get(res["case"])
         m = res.get("mesh") or {}
         r = res.get("run") or {}
         for q in res["quantities"]:
             out.append(
-                f"| {cell(case.TITLE)} | {case.VARIANT_LABELS.get(res['variant'], res['variant'])} | {cell(q['label'])} | "
+                f"| {cell(case.TITLE)} | {case.VARIANT_LABELS.get(res['variant'], res['variant'])} | {status_text(res)} | {cell(q['label'])} | "
                 f"{num(q['reference']['value'])} | {num(q['value'], 5)} | {err_text(q)} | {band_text(q)} | "
                 f"{cells_text(m.get('n_cells'))} | {cell(layers_text(m))} | {r.get('iterations') if r.get('iterations') is not None else '-'} | "
                 f"{run_time_text(res)} | {health_text(r)} |"
@@ -188,77 +209,86 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def _variant_section(case: Any, res: dict[str, Any]) -> list[str]:
-    label = case.VARIANT_LABELS.get(res["variant"], res["variant"])
+def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:
+    """One run's facts in plain words, one per line (the report and the page): its status, mesh,
+    run, pre-run check, what is shown beside the compared values, and its warnings."""
     m = res.get("mesh") or {}
     r = res.get("run") or {}
     q_ = m.get("quality") or {}
-    lines = [f"### {label}\n"]
+    out = []
     status = res["status"] + (f": {res['status_detail']}" if res.get("status_detail") else "")
-    lines.append(f"- Status: {cell(status)}.")
+    out.append(f"Status: {status}")
     if res["setup"].get("mesh_words"):
-        lines.append(f"- Mesh settings: {cell(res['setup']['mesh_words'])}.")
+        out.append(f"Mesh settings: {res['setup']['mesh_words']}")
     bg = (m.get("background") or {}).get("block")
     first = (m.get("layers") or {}).get("first_m")
-    lines.append(
-        f"- Mesh: {cells_text(m.get('n_cells'))} cells"
+    est = ((res.get("setup") or {}).get("mesh") or {}).get("estimate") or {}
+    out.append(
+        f"Mesh: {cells_text(m.get('n_cells'))} cells"
+        + (f" (the plan's estimate about {cells_text(est['n_cells'])})" if est.get("n_cells") else "")
         + (f", background block {bg[0]} × {bg[1]} × {bg[2]}" if bg else "")
+        + (f", wall cells {' × '.join(num(v, 3) for v in est['wall_cell_mm'])} mm (x × y × z)" if est.get("wall_cell_mm") else "")
         + (f", generated in {num(m.get('generate_s'), 3)} s" if m.get("generate_s") is not None else "")
         + f"; checkMesh {'OK' if q_.get('ok') else 'not OK' if q_.get('known') else 'unknown'}"
         + (f" (max non-orthogonality {num(q_.get('max_non_orthogonality'), 3)}°, max skewness {num(q_.get('max_skewness'), 3)}, "
            f"max aspect ratio {num(q_.get('max_aspect_ratio'), 3)})" if q_.get("known") else "")
         + f"; wall layers {layers_text(m)}"
         + (f", first layer {num(float(first) * 1000, 3)} mm" if first else "")
-        + "."
     )
     conv = (f"converged at iteration {r['converged_at']}" if r.get("converged")
             else f"did not reach its residual targets within {r.get('end_time_set')} iterations")
-    lines.append(
-        f"- Run: {r.get('iterations') if r.get('iterations') is not None else '-'} iterations, {conv}; "
-        f"solve {run_time_text(res)} on {r.get('n_procs') or r.get('cores_set') or '-'} ranks (Cores {r.get('cores_set')}); "
+    settle = r.get("settle") or {}
+    drifts = [h for h in settle.get("histories") or [] if h.get("drift") is not None]
+    out.append(
+        f"Run: {r.get('iterations') if r.get('iterations') is not None else '-'} iterations, {conv}"
+        + (" (over its last 10 % of iterations: " + ", ".join(
+            str(h["label"]) + " moved " + num(100 * h["drift"], 2) + " %" for h in drifts) + ")"
+           if drifts and not settle.get("converged") else "")
+        + f"; solve {run_time_text(res)} on {r.get('n_procs') or r.get('cores_set') or '-'} ranks (Cores {r.get('cores_set')}); "
         f"run health {health_text(r)}"
         + ("" if not (r.get("health") or {}).get("findings") else ": " + "; ".join(
-            cell(f.get("title") or f.get("text") or f.get("message") or f.get("code")) for f in r["health"]["findings"]))
-        + "."
+            str(f.get("title") or f.get("text") or f.get("message") or f.get("code")) for f in r["health"]["findings"]))
     )
     pre = res.get("precheck") or {}
     rows = pre.get("rows") or []
     if rows:
-        lines.append("- Pre-run check: " + "; ".join(cell(f"{x.get('level', '')} {x.get('code', '')}: {x.get('text') or x.get('title') or ''}".strip().rstrip(".")) for x in rows) + ".")
+        out.append("Pre-run check: " + "; ".join(
+            f"{x.get('level', '')} {x.get('code', '')}: {x.get('text') or x.get('title') or ''}".strip().rstrip(".") for x in rows))
     else:
-        lines.append("- Pre-run check: nothing found." if pre.get("http_status") == 200 else "- Pre-run check: not recorded.")
-    est = (pre.get("estimate") or {}).get("line") if isinstance(pre.get("estimate"), dict) else None
-    if est:
-        lines.append(f"- Its estimate before Start: {cell(est)}.")
-    for q in res["quantities"]:
-        val = "no value" if q["value"] is None else f"{num(q['value'], 5)} against {num(q['reference']['value'])} ({err_text(q)}, band {band_text(q)}, {VERDICT_WORDS[q['verdict']]})"
-        unc = q.get("uncertainty") or {}
-        if q["value"] is not None and unc.get("value") is not None:
-            val += f"; ± {num(unc['value'], 2)} % ({unc.get('what') or unc.get('kind')})"
-        lines.append(f"- **{cell(q['label'])}**: {val}. How: {cell(q['how'])}. Source: `{q['source']}`."
-                     + (f" {cell(q['detail'])}." if q.get("detail") else ""))
-    shown = res.get("shown") or {}
+        out.append("Pre-run check: nothing found" if pre.get("http_status") == 200 else "Pre-run check: not recorded")
+    line = (pre.get("estimate") or {}).get("line") if isinstance(pre.get("estimate"), dict) else None
+    if line:
+        out.append(f"Its estimate before Start: {line}")
+    shown = case.shown_words(res) if hasattr(case, "shown_words") else []
     if shown:
-        bits = []
-        if shown.get("d_eff_mm") is not None:
-            bits.append(f"the pipe's cross-section as meshed {num(shown['area_mm2'], 5)} mm² (inlet {num(shown['inlet_area_mm2'], 5)}, "
-                        f"outlet {num(shown['outlet_area_mm2'], 5)}; {shown['area_vs_nominal_pct']:+.2f} % against pi D²/4), "
-                        f"so D_eff {num(shown['d_eff_mm'], 5)} mm and U_b {num(shown['ub_m_s'], 5)} m/s")
-        if shown.get("dpdx_Pa_m") is not None:
-            bits.append(f"-dp/dx {num(shown['dpdx_Pa_m'], 5)} Pa/m ({shown['dpdx_vs_nominal_pct']:+.2f} % against 32 mu U / D² = {num(shown['dpdx_exact_nominal_Pa_m'], 4)} Pa/m with the nominal D)")
-        if shown.get("inlet_p_Pa") is not None:
-            bits.append(f"the inlet's area-averaged pressure {num(shown['inlet_p_Pa'], 4)} Pa (the outlet's 0 Pa)"
-                        + (f", flow out against in {num(shown['imbalance_pct'], 2)} %" if shown.get("imbalance_pct") is not None else ""))
-        if shown.get("f_darcy") is not None:
-            bits.append(f"Darcy f {num(shown['f_darcy'], 4)} at Re_eff {num(shown['re_eff'], 5)}")
-        if shown.get("probe_ucl_over_ub") is not None:
-            bits.append(f"the centreline probes' mean U_x over x/D 10 to 13 {num(shown['probe_ucl_over_ub'], 5)} U_b (cell values)")
-        if shown.get("profile_rms_over_ub") is not None:
-            bits.append(f"the profile at x = 12 D within an RMS {num(shown['profile_rms_over_ub'], 3)} U_b of the parabola")
-        if bits:
-            lines.append("- Shown, not compared: " + "; ".join(bits) + ".")
-    for w in res.get("warnings") or []:
-        lines.append(f"- Warning: {cell(w)}.")
+        out.append("Shown, not compared: " + "; ".join(shown))
+    out.extend(f"Warning: {w}" for w in res.get("warnings") or [])
+    return out
+
+
+def quantity_value_text(q: dict[str, Any]) -> str:
+    """A compared quantity's value against its reference, error, band, verdict and uncertainty."""
+    if q["value"] is None:
+        return "no value"
+    val = (f"{num(q['value'], 5)} against {num(q['reference']['value'])} ({err_text(q)}, band {band_text(q)}, "
+           f"{VERDICT_WORDS[q['verdict']]})")
+    unc = q.get("uncertainty") or {}
+    if unc.get("value") is not None:
+        val += f"; ± {num(unc['value'], 2)} % ({unc.get('what') or unc.get('kind')})"
+    return val
+
+
+def _variant_section(case: Any, res: dict[str, Any]) -> list[str]:
+    label = case.VARIANT_LABELS.get(res["variant"], res["variant"])
+    facts = variant_facts(case, res)
+    # The quantities go after the run's facts and before what is shown beside them.
+    split = next((i for i, f in enumerate(facts) if f.startswith(("Shown, not compared", "Warning"))), len(facts))
+    lines = [f"### {label}\n"]
+    lines.extend(f"- {cell(f)}." for f in facts[:split])
+    for q in res["quantities"]:
+        lines.append(f"- **{cell(q['label'])}**: {quantity_value_text(q)}. How: {cell(q['how'])}. Source: `{q['source']}`."
+                     + (f" {cell(q['detail'])}." if q.get("detail") else ""))
+    lines.extend(f"- {cell(f)}." for f in facts[split:])
     lines.append("")
     for fig in figures_of(case, res):
         lines.append(f"![{res['title']}: {fig['caption']}](../../docs/validation/img/{fig['file']})")

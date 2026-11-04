@@ -80,6 +80,13 @@ export function latestTime(answer) {
   return nums.reduce((a, b) => (Number(b) > Number(a) ? b : a));
 }
 
+/** Why a plan's mesh is not generated: its estimated cells (mesh_plan.py) over `maxCells`; '' when it may be. */
+export function estimateTooBig(plan, maxCells) {
+  const est = Number(plan?.mesh?.estimate?.n_cells);
+  if (!(maxCells > 0) || !Number.isFinite(est) || est <= maxCells) return '';
+  return `the plan estimates about ${est} cells, over the ${maxCells} allowed (MAGNUSIM_VALIDATION_MAX_CELLS): not generated`;
+}
+
 /** A mesh answer's live result (GET /api/mesh?mesh_id). */
 export function liveMesh(answer) {
   const m = (answer && answer.mesh) || {};
@@ -100,17 +107,25 @@ export function runProgress(run) {
   return it === undefined || it === null ? '' : String(it);
 }
 
-/** The commit, its description, whether the tree has changes, and the branch (git in `cwd`). */
+/**
+ * The validation set's own outputs (repository paths): a run rewrites or deletes them, so they
+ * never count as the tree having changes.
+ */
+export const OWN_OUTPUTS = ['magnusim-web/validation/results', 'magnusim-web/validation/VALIDATION.md', 'docs/validation', 'docs/.nojekyll'];
+
+/** The commit, its description, whether the tree has changes (the set's own outputs aside), and the branch (git in `cwd`). */
 export function gitFacts(cwd) {
   const git = (args) => {
     const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
     return r.status === 0 ? String(r.stdout).trim() : null;
   };
-  const status = git(['status', '--porcelain', '--untracked-files=no']);
+  const status = git(['status', '--porcelain', '--untracked-files=no', '--', ':(top)', ...OWN_OUTPUTS.map((p) => `:(top,exclude)${p}`)]);
+  const dirty = status === null ? null : status.length > 0;
+  const describe = git(['describe', '--tags', '--always']);
   return {
     commit: git(['rev-parse', 'HEAD']),
-    describe: git(['describe', '--tags', '--always', '--dirty']),
-    dirty: status === null ? null : status.length > 0,
+    describe: describe && dirty ? `${describe}-dirty` : describe,
+    dirty,
     branch: git(['rev-parse', '--abbrev-ref', 'HEAD']),
   };
 }
@@ -133,10 +148,11 @@ export function wslLoad(distro = process.env.MAGNUSIM_WSL_DISTRO || 'Ubuntu-24.0
  * @param {string} o.webRoot    magnusim-web (git facts, versions)
  * @param {(msg: string) => void} [o.log]
  * @param {boolean} [o.meshOnly] stop after the mesh and its facts
+ * @param {number} [o.maxCells] refuse to Generate when the plan's estimated mesh is bigger
  * @param {(ms: number) => Promise<void>} [o.sleep]
  * @returns {Promise<object>} driver.json's content (also written)
  */
-export async function runPlan({ request, dir, webRoot, log = console.log, meshOnly = false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export async function runPlan({ request, dir, webRoot, log = console.log, meshOnly = false, maxCells = 0, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const plan = JSON.parse(readFileSync(join(dir, 'plan.json'), 'utf8'));
   const rawDir = join(dir, 'raw');
   mkdirSync(rawDir, { recursive: true });
@@ -366,8 +382,10 @@ export async function runPlan({ request, dir, webRoot, log = console.log, meshOn
     }
     if (refProblems.length) fail(`the refinements were not saved as sent: ${refProblems.join('; ')}`);
 
-    // 9. Generate, and wait for the mesh.
+    // 9. Generate, and wait for the mesh (never one the plan estimates too big for the PC).
     step('mesh');
+    const tooBig = estimateTooBig(plan, maxCells);
+    if (tooBig) fail(tooBig);
     const gen = await postJson('/api/mesh/generate', { project_id: pid, simulation_id: sid, mesh_id: mid, queue_if_busy: true }, { ok: false });
     save('mesh-generate', { status: gen.status, body: gen.body });
     if (gen.status >= 300) fail(`Generate answered ${gen.status}: ${JSON.stringify(gen.body).slice(0, 600)}`);

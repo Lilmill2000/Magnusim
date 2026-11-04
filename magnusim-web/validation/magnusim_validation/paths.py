@@ -14,6 +14,18 @@ PY_ROOT = WEB / "python"
 RESULTS = VALIDATION / "results"
 # Coarse development runs: never committed (.gitignore).
 RESULTS_COARSE = VALIDATION / "results-coarse"
+# Mesh-only probes and runs with mesh settings changed on the command line: never committed,
+# never reported (.gitignore).
+RESULTS_PROBE = VALIDATION / "results-probe"
+
+
+def results_root(*, coarse: bool = False, probe: bool = False) -> Path:
+    """Where a run's folder goes: a probe (mesh only, or settings changed by hand) under
+    results-probe/, a coarse run under results-coarse/, a full run under results/ (the only
+    one the report reads)."""
+    if probe:
+        return RESULTS_PROBE
+    return RESULTS_COARSE if coarse else RESULTS
 REPORT_MD = VALIDATION / "VALIDATION.md"
 # The public page (GitHub Pages from the repository's docs/ folder): built here, published
 # by a push only the owner makes.

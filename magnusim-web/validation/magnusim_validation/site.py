@@ -61,13 +61,15 @@ def _num(v: Any, digits: int = 4) -> str:
 
 
 def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
-    from .report import band_text, err_text
+    from .report import band_text, err_text, status_text
 
     inside = q.get("within")
     cls = "" if inside is None else (" in" if inside else " out")
+    scls = "" if res.get("status") == "ok" else " class=out"
     case = cases.get(res["case"])
     return (
         f"<tr><td>{esc(case.TITLE)}</td><td>{esc(case.VARIANT_LABELS.get(res['variant'], res['variant']))}</td>"
+        f"<td{scls}>{esc(status_text(res))}</td>"
         f"<td>{esc(q['label'])}</td><td class=num>{esc(_num(q['reference']['value']))}</td>"
         f"<td class=num>{esc(_num(q['value'], 5))}</td><td class=\"num{cls}\">{esc(err_text(q))}</td>"
         f"<td class=\"num{cls}\">{esc(band_text(q))}</td></tr>"
@@ -75,7 +77,7 @@ def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
 
 
 def build_index(results: list[dict[str, Any]]) -> str:
-    from .report import env_lines, layers_text, run_time_text
+    from .report import env_lines, quantity_value_text, variant_facts
 
     out = [
         "<!doctype html>",
@@ -94,7 +96,7 @@ def build_index(results: list[dict[str, Any]]) -> str:
     if results:
         out.append('<p class="env">' + "<br>".join(esc(x) for x in env_lines(results)) + "</p>")
         out.append("<h2>Results</h2>")
-        out.append('<div class="scroll"><table><thead><tr><th>Case</th><th>Mesher</th><th>Quantity</th>'
+        out.append('<div class="scroll"><table><thead><tr><th>Case</th><th>Mesher</th><th>Status</th><th>Quantity</th>'
                    "<th>Reference</th><th>Magnusim</th><th>Error</th><th>Band</th></tr></thead><tbody>")
         for res in results:
             out.extend(_q_row(res, q) for q in res["quantities"])
@@ -107,32 +109,15 @@ def build_index(results: list[dict[str, Any]]) -> str:
         out.append(f"<h2>{esc(case.TITLE)}</h2>")
         out.append(f"<p>{esc(mine[0]['setup']['words'])}</p>")
         for res in mine:
-            m = res.get("mesh") or {}
-            r = res.get("run") or {}
-            qual = m.get("quality") or {}
             label = case.VARIANT_LABELS.get(res["variant"], res["variant"])
             out.append(f"<h3>{esc(label)}</h3><ul class=facts>")
-            status = res["status"] + (f": {res['status_detail']}" if res.get("status_detail") else "")
-            out.append(f"<li>Status: {esc(status)}</li>")
-            if res["setup"].get("mesh_words"):
-                out.append(f"<li>Mesh settings: {esc(res['setup']['mesh_words'])}</li>")
-            out.append(
-                f"<li>Mesh: {esc(_num(m.get('n_cells'), 7))} cells; checkMesh "
-                f"{'OK' if qual.get('ok') else 'not OK' if qual.get('known') else 'unknown'}"
-                + (f" (max non-orthogonality {esc(_num(qual.get('max_non_orthogonality'), 3))}°, max skewness "
-                   f"{esc(_num(qual.get('max_skewness'), 3))})" if qual.get("known") else "")
-                + f"; wall layers {esc(layers_text(m))}</li>"
-            )
-            conv = (f"converged at iteration {r['converged_at']}" if r.get("converged")
-                    else f"stopped at its iteration limit ({r.get('end_time_set')})")
-            out.append(f"<li>Run: {esc(r.get('iterations'))} iterations, {esc(conv)}; solve {esc(run_time_text(res))} "
-                       f"on {esc(r.get('n_procs') or r.get('cores_set'))} ranks; run health "
-                       f"{esc((r.get('health') or {}).get('verdict') or '-')}</li>")
+            facts = variant_facts(case, res)
+            split = next((i for i, f in enumerate(facts) if f.startswith(("Shown, not compared", "Warning"))), len(facts))
+            out.extend(f"<li>{esc(f)}</li>" for f in facts[:split])
             for q in res["quantities"]:
-                out.append(f"<li><strong>{esc(q['label'])}</strong>: how: {esc(q['how'])}. Source: "
-                           f"<code>{esc(q['source'])}</code>.{(' ' + esc(q['detail']) + '.') if q.get('detail') else ''}</li>")
-            for w in res.get("warnings") or []:
-                out.append(f"<li>Warning: {esc(w)}</li>")
+                out.append(f"<li><strong>{esc(q['label'])}</strong>: {esc(quantity_value_text(q))}. How: {esc(q['how'])}. "
+                           f"Source: <code>{esc(q['source'])}</code>.{(' ' + esc(q['detail']) + '.') if q.get('detail') else ''}</li>")
+            out.extend(f"<li>{esc(f)}</li>" for f in facts[split:])
             out.append("</ul>")
             figs = figures_of(case, res)
             if figs:
@@ -142,6 +127,10 @@ def build_index(results: list[dict[str, Any]]) -> str:
                     out.append(f'<figure><img src="img/{esc(f["file"])}" alt="{esc(alt)}" loading="lazy">'
                                f"<figcaption>{esc(alt)}</figcaption></figure>")
                 out.append("</div>")
+        if getattr(case, "NOTES", ()):
+            out.append("<h3>Notes</h3><ul class=refs>")
+            out.extend(f"<li>{esc(n)}</li>" for n in case.NOTES)
+            out.append("</ul>")
         out.append("<h3>References</h3><ul class=refs>")
         for spec in case.QUANTITIES.values():
             ref = spec.reference

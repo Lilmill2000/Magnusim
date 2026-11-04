@@ -4,9 +4,12 @@ every result records: the app and the PC, the setup as sent, the mesh (cells, qu
 layers asked and applied, from RH2's mesh facts), the pre-run check, the run (iterations,
 convergence, run time, ranks, numerics as written) and its health (RH1), and the status.
 
-A run's status is ``ok`` only when it produced every compared value; otherwise it says
-where it stopped (``setup_failed``, ``mesh_failed``, ``layers_not_applied``,
-``solve_failed``, ``extract_failed``), with the app's words in ``status_detail``.
+A run's status is ``ok`` only when it produced every compared value and, if steady, settled;
+otherwise it says where it stopped (``setup_failed``, ``mesh_failed``, ``layers_not_applied``,
+``solve_failed``, ``not_settled``, ``extract_failed``), with the app's words in
+``status_detail``. A steady run that reached its residual targets is settled; one that stopped
+at its iteration limit is settled only when the case's monitor histories (``SETTLE``) moved
+less than ``SETTLE_DRIFT`` over its last 10 % of iterations.
 """
 
 from __future__ import annotations
@@ -18,9 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from . import SCHEMA_RESULT
+from .extract import last_drift
 from .model import compare
 from .plan import read_plan
 from .result import write_result
+from .sampling import sample_run
+
+SAMPLE_PROBLEMS = "sample-problems"
 
 # Where each driver step's failure leaves the run.
 STEP_STATUS = {
@@ -77,6 +84,19 @@ class Raw:
         doc = self.get(f"line_{key}")
         return doc if isinstance(doc, dict) else None
 
+    def sample(self, key: str) -> dict[str, Any] | None:
+        """What the harness read from the run's case folder (sampling.py), when it could."""
+        doc = self.get(f"sample_{key}")
+        return doc if isinstance(doc, dict) else None
+
+    def sample_problem(self, key: str) -> str:
+        """Why a sample is missing, in words."""
+        doc = self.get(SAMPLE_PROBLEMS) or {}
+        for line in doc.get("problems") or []:
+            if str(line).startswith(f"{key}:"):
+                return str(line)
+        return f"{key}: not read"
+
     def run(self) -> dict[str, Any]:
         """The run as its status route last answered."""
         st = self.get("run-status") or {}
@@ -111,6 +131,22 @@ class Raw:
                 return v[-1]
         last = mon.get("last")
         return last if isinstance(last, dict) else None
+
+    def monitor_series(self, key: str, sample: str, component: int | None = None) -> list[float]:
+        """A monitor's history of one sample (a vector's component when asked), step by step."""
+        for mon in self.monitor_rows():
+            if str(mon.get("key") or "") != key:
+                continue
+            out: list[float] = []
+            for row in mon.get("series") or []:
+                v = row.get(sample) if isinstance(row, dict) else None
+                if component is not None:
+                    v = v[component] if isinstance(v, list) and len(v) > component else None
+                x = _f(v)
+                if x is not None:
+                    out.append(x)
+            return out
+        return []
 
     def patch_flow(self, patch: str) -> float | None:
         """The last volumetric flow (m³/s, its magnitude) through a patch's flow monitor."""
@@ -295,6 +331,29 @@ def run_section(raw: Raw, plan: dict[str, Any], drv: dict[str, Any] | None) -> d
     }
 
 
+def _drift_text(drift: float | None) -> str:
+    return "unknown" if drift is None else f"{100 * drift:.3g} %"
+
+
+def settle_section(raw: Raw, case: Any, plan: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """Whether a steady run settled: it reached its residual targets, or the case's monitor
+    histories moved less than its drift limit over the run's last 10 % of iterations."""
+    steady = str((plan.get("study") or {}).get("time_dependency") or "") == "Steady-state"
+    limit = float(getattr(case, "SETTLE_DRIFT", 1e-3))
+    histories = []
+    for h in getattr(case, "SETTLE", ()):
+        vals = raw.monitor_series(h["monitor"], h["sample"], h.get("component"))
+        histories.append({"label": h["label"], "monitor": h["monitor"], "n": len(vals), "drift": last_drift(vals)})
+    if not steady:
+        settled = None
+    elif run.get("converged"):
+        settled = True
+    else:
+        settled = bool(histories) and all(x["drift"] is not None and x["drift"] <= limit for x in histories)
+    return {"steady": steady, "converged": bool(run.get("converged")), "drift_limit": limit,
+            "histories": histories, "settled": settled}
+
+
 def precheck_section(raw: Raw) -> dict[str, Any]:
     doc = raw.get("precheck") or {}
     body = doc.get("body") if isinstance(doc, dict) else None
@@ -329,6 +388,13 @@ def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
     mesh = mesh_section(raw, plan, drv)
     run = run_section(raw, plan, drv)
     warnings: list[str] = []
+    if status == "ok":
+        # The cell values and saved fields the case reads from the run's case folder, kept in raw/.
+        ids = (drv or {}).get("ids") or {}
+        probs = sample_run(run_dir, plan, ids.get("run_case_dir"), ids.get("latest_time"))
+        if probs:
+            (run_dir / "raw" / f"{SAMPLE_PROBLEMS}.json").write_text(
+                json.dumps({"problems": probs}) + "\n", encoding="utf-8", newline="\n")
     expect = (plan.get("mesh") or {}).get("expect") or {}
     if status in ("ok", "mesh_only") and expect.get("layers"):
         applied = mesh["layers"]["applied"]
@@ -349,6 +415,17 @@ def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
         verdict = (run["health"] or {}).get("verdict")
         if status == "ok" and verdict == "failed":
             status, detail = "solve_failed", "run health: failed"
+    run["settle"] = settle_section(raw, case, plan, run)
+    if status == "ok" and run["settle"]["settled"] is False:
+        moved = "; ".join(f"{h['label']} {_drift_text(h['drift'])}"
+                          for h in run["settle"]["histories"]) or "no monitor history to judge by"
+        status = "not_settled"
+        detail = (f"stopped at its iteration limit ({run.get('end_time_set')}) without reaching its residual targets, "
+                  f"and its monitors moved more than {100 * run['settle']['drift_limit']:.3g} % over the last 10 % "
+                  f"of iterations: {moved}")
+    elif status == "ok" and run["settle"]["steady"] and not run["settle"]["converged"]:
+        warnings.append("the run stopped at its iteration limit without reaching its residual targets; its monitors "
+                        f"moved less than {100 * run['settle']['drift_limit']:.3g} % over the last 10 % of iterations")
     hist = [r for r in (raw.run().get("residuals") or []) if isinstance(r, dict) and "t" in r]
     if hist:
         measured["series"]["residuals"] = residual_series(hist)
@@ -365,6 +442,8 @@ def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
         "status": status,
         "status_detail": detail,
         "coarse": bool(plan.get("coarse")),
+        # Mesh settings changed by hand (a probe, never reported).
+        "overrides": plan.get("overrides") or {},
         "when": {"started": (drv or {}).get("started_at"), "finished": (drv or {}).get("finished_at")},
         "app": app,
         "setup": {

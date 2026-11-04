@@ -10,12 +10,16 @@
 //   MAGNUSIM_VALIDATION_VARIANTS=standard  only these variants
 //   MAGNUSIM_VALIDATION_CORES=4            the runs' Cores (default 8, the release run's)
 //   MAGNUSIM_VALIDATION_COARSE=1           each case's coarse settings, into results-coarse/ (never committed)
-//   MAGNUSIM_VALIDATION_MESH_ONLY=1        mesh and record the mesh facts, no solve
+//   MAGNUSIM_VALIDATION_MESH_ONLY=1        mesh and record the mesh facts, no solve (results-probe/)
+//   MAGNUSIM_VALIDATION_MESH='{"..."}'     mesh settings merged into each case's (a probe: results-probe/)
+//   MAGNUSIM_VALIDATION_MAX_CELLS=2000000  refuse to Generate a plan whose estimated mesh is bigger
+// Only a full run writes under results/, the one folder the report reads; the plan command
+// picks the folder (magnusim_validation/paths.py results_root) and the test checks it.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON } from '../../scripts/python-env.js';
 import { NO_WSL } from '../../e2e/toolchain.js';
@@ -27,7 +31,9 @@ const GATE = process.env.MAGNUSIM_E2E_VALIDATION === '1';
 const WSL = process.env.MAGNUSIM_E2E_WSL === '1';
 const COARSE = process.env.MAGNUSIM_VALIDATION_COARSE === '1';
 const MESH_ONLY = process.env.MAGNUSIM_VALIDATION_MESH_ONLY === '1';
+const MESH_SETTINGS = String(process.env.MAGNUSIM_VALIDATION_MESH || '').trim();
 const CORES = Number(process.env.MAGNUSIM_VALIDATION_CORES) || 8;
+const MAX_CELLS = Number(process.env.MAGNUSIM_VALIDATION_MAX_CELLS) || 2_000_000;
 const listOf = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 /** python -m magnusim_validation <args> (the app's Python, in validation/); its last stdout line as JSON. */
@@ -64,15 +70,22 @@ if (!GATE) {
     test(`${r.case} ${r.variant}: ${r.title}`, async ({ request }) => {
       expect(WSL, NO_WSL).toBe(true);
       test.setTimeout(4 * 3600_000);
-      const dir = join(VALIDATION, COARSE ? 'results-coarse' : 'results', r.case, r.variant);
+      const planned = py([
+        'plan', r.case, r.variant, '--cores', String(CORES),
+        ...(COARSE ? ['--coarse'] : []), ...(MESH_ONLY ? ['--mesh-only'] : []), ...(MESH_SETTINGS ? ['--mesh-settings', MESH_SETTINGS] : []),
+      ]);
+      expect(planned.ok).toBe(true);
+      const dir = planned.dir;
+      // Only a full run of the case's own settings may write where the report reads.
+      const reported = resolve(VALIDATION, 'results') + sep;
+      expect(resolve(dir).startsWith(reported), `${dir}: a coarse, mesh-only or changed-settings run went to results/`).toBe(!(COARSE || MESH_ONLY || MESH_SETTINGS));
+      for (const w of planned.estimate_warnings || []) console.log(`PLAN ${r.case}/${r.variant}: ${w}`);
       // A run starts clean: the answers of an earlier run never mix with this one's.
       for (const old of ['raw', 'driver.json', 'result.json']) rmSync(join(dir, old), { recursive: true, force: true });
-      const planned = py(['plan', r.case, r.variant, '--out', dir, '--cores', String(CORES), ...(COARSE ? ['--coarse'] : [])]);
-      expect(planned.ok).toBe(true);
       let drove = null;
       let why = '';
       try {
-        drove = await runPlan({ request, dir, webRoot: WEB, meshOnly: MESH_ONLY });
+        drove = await runPlan({ request, dir, webRoot: WEB, meshOnly: MESH_ONLY, maxCells: MAX_CELLS });
       } catch (e) {
         why = String((e && e.message) || e);
       }

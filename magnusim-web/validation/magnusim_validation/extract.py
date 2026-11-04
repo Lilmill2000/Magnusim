@@ -54,6 +54,25 @@ def linear_fit(x: ArrayLike, y: ArrayLike) -> dict[str, float]:
     return {"slope": slope, "intercept": intercept, "slope_se": slope_se, "r2": r2, "n": float(n)}
 
 
+def radial_fit(r: ArrayLike, u: ArrayLike) -> dict[str, float]:
+    """Least-squares u = centre + curvature·r² over the samples (r a distance from the axis):
+    ``centre`` (the fit's value on the axis), its standard error ``centre_se``, ``curvature``
+    and ``n``. Needs at least three samples at two radii or more."""
+    ra, ua = arrays(r, u)
+    n = int(ra.size)
+    if n < 3:
+        raise ValueError(f"a radial fit needs at least 3 samples, got {n}")
+    if float(np.ptp(ra**2)) <= 0:
+        raise ValueError("a radial fit needs samples at more than one radius")
+    a = np.vstack([np.ones(n), ra**2]).T
+    coef, *_ = np.linalg.lstsq(a, ua, rcond=None)
+    resid = ua - a @ coef
+    s2 = float(np.sum(resid**2)) / (n - 2)
+    cov = s2 * np.linalg.inv(a.T @ a)
+    return {"centre": float(coef[0]), "curvature": float(coef[1]), "centre_se": math.sqrt(max(0.0, float(cov[0, 0]))),
+            "n": float(n)}
+
+
 def window_mean(x: ArrayLike, y: ArrayLike, lo: float, hi: float) -> dict[str, float]:
     """Mean, standard deviation, lowest, highest and count of ``y`` over ``lo <= x <= hi``."""
     _, yb = band(x, y, lo, hi)

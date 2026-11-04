@@ -23,7 +23,27 @@ def test_a_reference_must_carry_its_citation_and_conditions():
     with pytest.raises(ValueError):
         Reference(value=1.0, unit="", kind="exact", confidence="UNCONFIRMED", citation="c", where="w", conditions="x")
     with pytest.raises(ValueError):
-        Reference(value=0.0, unit="", kind="exact", confidence="CONFIRMED", citation="c", where="w", conditions="x")
+        Reference(value=float("nan"), unit="", kind="exact", confidence="CONFIRMED", citation="c", where="w", conditions="x")
+
+
+def test_a_reference_of_zero_is_compared_within_an_absolute_band():
+    zero = Reference(value=0.0, unit="U", kind="numerical", confidence="CONFIRMED", citation="c", where="w",
+                     conditions="x")
+    with pytest.raises(ValueError, match="absolute tolerance"):
+        QuantitySpec(key="rms", label="RMS", unit="U", how="h", source="s", reference=zero,
+                     tolerance=Tolerance(rel_pct=2.0))
+    q = QuantitySpec(key="rms", label="RMS", unit="U", how="h", source="s", reference=zero,
+                     tolerance=Tolerance(abs_tol=0.01))
+    row = compare(q, 0.008)
+    assert row["within"] is True and row["error"] == {"abs": 0.008, "rel_pct": None}
+    assert compare(q, 0.012)["within"] is False
+    assert compare(q, -0.012)["within"] is False
+
+
+def test_a_tolerance_is_relative_or_absolute():
+    for bad in ({}, {"rel_pct": 2.0, "abs_tol": 0.1}, {"rel_pct": 0.0}, {"abs_tol": -1.0}, {"rel_pct": float("inf")}):
+        with pytest.raises(ValueError):
+            Tolerance(**bad)
 
 
 def test_report_only_until_locked():
@@ -45,6 +65,7 @@ def test_a_value_the_run_did_not_give_is_missing():
 def test_error_of():
     assert error_of(2.1, 2.0) == pytest.approx({"abs": 0.1, "rel_pct": 5.0})
     assert error_of(-1.1, -1.0)["rel_pct"] == pytest.approx(-10.0)
+    assert error_of(0.5, 0.0) == {"abs": 0.5, "rel_pct": None}
 
 
 def _doc(**over):

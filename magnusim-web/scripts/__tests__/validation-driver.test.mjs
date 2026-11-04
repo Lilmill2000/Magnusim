@@ -4,8 +4,22 @@
 // in the validation suite (npm run test:validation).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { faceTableProblems, latestTime, liveMesh, pointsParam, readBackProblems, runOf, runProgress } from '../../validation/e2e/driver.mjs';
+import {
+  estimateTooBig,
+  faceTableProblems,
+  gitFacts,
+  latestTime,
+  liveMesh,
+  pointsParam,
+  readBackProblems,
+  runOf,
+  runProgress,
+} from '../../validation/e2e/driver.mjs';
 import { parseValidationArgs } from '../validation-run.mjs';
 
 const PLAN_FACES = [
@@ -73,7 +87,58 @@ test('npm run test:validation: its options become the suite\'s gate and knobs', 
   assert.equal(parseValidationArgs(['--coarse']).report, false);
   assert.equal(parseValidationArgs(['--coarse']).env.MAGNUSIM_VALIDATION_COARSE, '1');
   assert.equal(parseValidationArgs(['--mesh-only']).report, false);
+  // Mesh settings changed by hand: a probe (results-probe/), no report either.
+  const probe = parseValidationArgs(['--case', 'c1', '--mesh', '{"hex_element_core":false}']);
+  assert.equal(probe.env.MAGNUSIM_VALIDATION_MESH, '{"hex_element_core":false}');
+  assert.equal(probe.report, false);
   assert.equal(parseValidationArgs(['--no-report']).report, false);
   // WSL turned off by hand stays off (the suite then fails: it needs WSL).
   assert.equal(parseValidationArgs([], { MAGNUSIM_E2E_WSL: '0' }).env.MAGNUSIM_E2E_WSL, '0');
+});
+
+test('a plan whose estimated mesh is over the cap is not generated', () => {
+  const plan = { mesh: { estimate: { n_cells: 3_500_000 } } };
+  assert.match(estimateTooBig(plan, 2_000_000), /about 3500000 cells, over the 2000000 allowed/);
+  assert.equal(estimateTooBig(plan, 5_000_000), '');
+  assert.equal(estimateTooBig(plan, 0), '');
+  assert.equal(estimateTooBig({ mesh: {} }, 2_000_000), '');
+});
+
+test("a rerun does not count the set's own outputs as changes to the tree; any other change does", (t) => {
+  const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  if (git(process.cwd(), '--version').status !== 0) {
+    t.skip('no git');
+    return;
+  }
+  const repo = mkdtempSync(join(tmpdir(), 'mg-val-git-'));
+  try {
+    const web = join(repo, 'magnusim-web');
+    const run = join(web, 'validation', 'results', 'c1', 'hexdominant');
+    mkdirSync(run, { recursive: true });
+    mkdirSync(join(repo, 'docs', 'validation'), { recursive: true });
+    writeFileSync(join(run, 'result.json'), '{}\n');
+    writeFileSync(join(run, 'plan.json'), '{}\n');
+    writeFileSync(join(web, 'validation', 'VALIDATION.md'), '# V\n');
+    writeFileSync(join(repo, 'docs', 'validation', 'index.html'), '<p>\n');
+    writeFileSync(join(web, 'app.js'), 'x\n');
+    git(repo, 'init', '-q');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'one');
+    assert.equal(gitFacts(web).dirty, false);
+    // What a rerun does: the old result deleted, the plan, the report and the page rewritten.
+    unlinkSync(join(run, 'result.json'));
+    writeFileSync(join(run, 'plan.json'), '{"x":1}\n');
+    writeFileSync(join(web, 'validation', 'VALIDATION.md'), '# W\n');
+    writeFileSync(join(repo, 'docs', 'validation', 'index.html'), '<p>2\n');
+    const clean = gitFacts(web);
+    assert.equal(clean.dirty, false);
+    assert.doesNotMatch(String(clean.describe), /dirty/);
+    // A change to the app's own code is a change.
+    writeFileSync(join(web, 'app.js'), 'y\n');
+    const dirty = gitFacts(web);
+    assert.equal(dirty.dirty, true);
+    assert.match(String(dirty.describe), /-dirty$/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

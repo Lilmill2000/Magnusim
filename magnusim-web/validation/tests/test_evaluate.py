@@ -37,12 +37,62 @@ def test_an_exact_pipe_gives_the_exact_numbers(tmp_path: Path):
     assert doc["run"]["health"]["verdict"] == "healthy"
     assert doc["app"]["openfoam"] == "v2606 (build _481094f-20260618)"
     assert doc["precheck"]["rows"] == [{"code": "still_start", "level": "info", "text": "From rest."}]
-    assert doc["shown"]["profile_rms_over_ub"] == pytest.approx(0.0, abs=1e-9)
+    assert doc["shown"]["profile_rms_line_over_ub"] == pytest.approx(0.0, abs=1e-9)
+    assert doc["shown"]["profile_rms_cells_over_ub"] == pytest.approx(0.0, abs=1e-9)
     assert doc["shown"]["probe_ucl_over_ub"] == pytest.approx(2.0, abs=1e-3)
-    assert set(doc["series"]) >= {"p_axis", "u_axis", "u_radial", "probes", "residuals"}
+    assert doc["shown"]["ucl_line_over_ub"] == pytest.approx(2.0, abs=1e-6)
+    # The compared centreline speed is the cell values' fit, not the line's reading.
+    assert q["ucl"]["source"] == "app_sampling (cell values)"
+    assert doc["shown"]["ucl_cells"]["n"] == 7 * 3 * 8  # the radii within R/2
+    # The wall shear stress the run saved balances the pressure gradient.
+    assert doc["shown"]["tau_w"]["vs_exact_pct"] == pytest.approx(0.0, abs=1e-9)
+    assert doc["shown"]["tau_w"]["dpdx_balanced_Pa_m"] == pytest.approx(doc["shown"]["dpdx_Pa_m"], rel=1e-9)
+    assert doc["run"]["settle"]["settled"] is True
+    assert set(doc["series"]) >= {"p_axis", "u_axis", "u_radial", "probes", "residuals", "cells_profile"}
     assert len(doc["series"]["p_axis"]["x_m"]) <= 400
     on_disk = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
     assert on_disk == doc
+
+
+def test_a_line_that_reads_the_peak_low_does_not_move_the_compared_centreline(tmp_path: Path):
+    run_dir = plan_run(tmp_path)
+    fake_run(run_dir)
+    line = json.loads((run_dir / "raw" / "line_u_axis.json").read_text(encoding="utf-8"))
+    line["values"] = [0.97 * v for v in line["values"]]
+    (run_dir / "raw" / "line_u_axis.json").write_text(json.dumps(line), encoding="utf-8")
+    doc = evaluate_dir(run_dir)
+    q = {x["key"]: x for x in doc["quantities"]}
+    assert q["ucl"]["value"] == pytest.approx(2.0, rel=1e-9)
+    assert doc["shown"]["ucl_line_over_ub"] == pytest.approx(1.94, rel=1e-6)
+
+
+def test_without_its_cell_values_the_centreline_is_missing_and_says_why(tmp_path: Path):
+    run_dir = plan_run(tmp_path)
+    fake_run(run_dir, samples=False)
+    doc = evaluate_dir(run_dir)
+    assert doc["status"] == "extract_failed"
+    assert "no value for ucl" in doc["status_detail"]
+    assert "the run's case folder is gone" in doc["status_detail"]
+
+
+def test_a_steady_run_that_stops_at_its_limit_still_moving_is_not_settled(tmp_path: Path):
+    run_dir = plan_run(tmp_path)
+    fake_run(run_dir, converged=False, drift=0.01)
+    doc = evaluate_dir(run_dir)
+    assert doc["status"] == "not_settled"
+    assert "the inlet's area-averaged pressure 0.99 %" in doc["status_detail"]
+    assert doc["run"]["settle"]["settled"] is False
+    # Its numbers are still shown, as they are.
+    assert all(x["value"] is not None for x in doc["quantities"])
+
+
+def test_a_steady_run_that_stops_at_its_limit_but_has_settled_is_ok_with_a_warning(tmp_path: Path):
+    run_dir = plan_run(tmp_path)
+    fake_run(run_dir, converged=False, drift=1e-5)
+    doc = evaluate_dir(run_dir)
+    assert doc["status"] == "ok", doc["status_detail"]
+    assert doc["run"]["settle"]["settled"] is True
+    assert any("stopped at its iteration limit" in w for w in doc["warnings"])
 
 
 def test_layers_asked_and_not_applied_fail_the_run(tmp_path: Path):
