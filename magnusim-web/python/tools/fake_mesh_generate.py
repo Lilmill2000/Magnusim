@@ -12,6 +12,9 @@ the record's end), quickly and the same on every PC.
 
 MAGNUSIM_TEST_MESH_SECONDS: how long it "meshes" (0 to 600 s).
 MAGNUSIM_TEST_MESH_RESULT=fail: it ends failed ("Fake mesher failed"), exit 1.
+MAGNUSIM_TEST_MESH_RESULT=fail-with-mesh: it writes its mesh (as every real mesher copies its
+polyMesh back whatever its exit), then ends failed ("Fake mesher failed after writing its
+mesh"), exit 44.
 MAGNUSIM_TEST_MESH_CHECKMESH=<file>: a real checkMesh report it puts in the case as
 log.checkMesh; like the real generators it then writes the mesh's facts
 (cfddesk.mesh.facts) and its result carries their quality.
@@ -135,7 +138,8 @@ def main(argv: list[str]) -> int:
         end = time.monotonic() + per_stage
         while time.monotonic() < end:
             time.sleep(min(0.1, max(0.0, end - time.monotonic())))
-    if os.environ.get("MAGNUSIM_TEST_MESH_RESULT", "").strip() == "fail":
+    result = os.environ.get("MAGNUSIM_TEST_MESH_RESULT", "").strip()
+    if result == "fail":
         _event("result", ok=False, error="Fake mesher failed")
         return 1
     counts = write_one_cell_mesh(case_dir, bc_patch_names(args.project_dir, args.simulation_id, args.mesh_id))
@@ -143,6 +147,9 @@ def main(argv: list[str]) -> int:
         json.dumps({**counts, "generate_id": args.generate_id, "source": "fake mesher"}), encoding="utf-8"
     )
     (case_dir / "log.standard_generate.txt").write_text("fake mesher (tests)\nMESH_SCRIPT_OK\n", encoding="utf-8")
+    if result == "fail-with-mesh":
+        _event("result", ok=False, error="Fake mesher failed after writing its mesh")
+        return 44
     if two_d is not None:
         (case_dir / "w23-geometry-meta.json").write_text(json.dumps({"source": "fake mesher", "two_d": two_d}), encoding="utf-8")
     quality = mesh_facts(case_dir, os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip())

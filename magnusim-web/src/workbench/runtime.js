@@ -8762,6 +8762,9 @@ function isGeneratedMeshReady(mesh) {
   if (!meshBelongsToCurrentStudy(m)) return false;
   const live = m.live_mesh_result;
   if (live && live.status === 'running') return false;
+  // A failed generate is not a mesh, though its case holds the polyMesh it copied back (every
+  // mesher does, whatever its exit): the panel says Mesh failed, with its reason.
+  if (live && live.status === 'failed') return false;
   const caseDir = (live && live.case_dir) || m.case_dir || null;
   const cells = Number((live && live.n_cells) != null ? live.n_cells : m.n_cells);
   const hasCells = Number.isFinite(cells) && cells > 0;
