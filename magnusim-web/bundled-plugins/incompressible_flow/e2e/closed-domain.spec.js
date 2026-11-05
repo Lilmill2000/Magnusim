@@ -7,6 +7,8 @@
 //   flow-through; the run starts and ends, also after a reload. A transient study: its time
 //   step is calculated from the lid's speed ("smallest cells at 2 m/s") and its hint asks for
 //   no boundary conditions. A box whose only wall "moves" at 0 m/s is refused, and says why.
+//   A lid whose velocity goes through its own face: Before you start says the solve would stop
+//   on its first iteration (a continuity error nothing can flow out to remove), and why.
 // - With WSL: the box is meshed and solved through the app; the run ends done and its point
 //   probes read the lid's flow: along the lid near the top, back the other way below the
 //   middle (the Graphs panel's Velocity X).
@@ -51,7 +53,8 @@ async function postOk(request, url, data) {
 /**
  * A project with the box, an Incompressible Flow study (laminar), a fluid of kinematic
  * viscosity `nu` and two walls: "Lid" moving at `lid` m/s along `along` (x, or z: both lie
- * in the top face) on the top face, and "Walls" No-slip on the other five. Its ids and mesh.
+ * in the top face; y: through it) on the top face, and "Walls" No-slip on the other five. Its
+ * ids, mesh and the lid's face.
  */
 async function closedBox(request, base, { nu, lid, along = 'x', transient = false, title = 'Closed box' }) {
   const made = await postOk(request, `${base}/api/project`, {
@@ -112,7 +115,8 @@ async function closedBox(request, base, { nu, lid, along = 'x', transient = fals
     name: 'Lid',
     bc_type: 'Wall',
     wall_type: 'Moving',
-    wall_velocity: along === 'z' ? [0, 0, lid] : [lid, 0, 0],
+    // Along x or z: in the top face. Along y: straight through it.
+    wall_velocity: along === 'z' ? [0, 0, lid] : along === 'y' ? [0, lid, 0] : [lid, 0, 0],
     faces: [label(top)],
   });
   await postOk(request, `${base}/api/bcs`, {
@@ -132,7 +136,7 @@ async function closedBox(request, base, { nu, lid, along = 'x', transient = fals
   const meshes = (await json(request, q('/api/mesh', { simulation_id: sid }))).meshes || [];
   let mid = meshes[0] && meshes[0].id ? String(meshes[0].id) : '';
   if (!mid) mid = String((await postOk(request, `${base}/api/mesh`, { project_id: pid, simulation_id: sid, create: true, name: 'Mesh 1' })).mesh.id);
-  return { pid, sid, gid, mid, q, lidId: String(lidBc.bc?.id || lidBc.id || '') };
+  return { pid, sid, gid, mid, q, lidId: String(lidBc.bc?.id || lidBc.id || ''), lidFace: `Face ${top.id}@Body1` };
 }
 
 /** Generate the box's mesh and wait for it (`timeout` ms). */
@@ -246,6 +250,8 @@ test.describe('a closed box driven by its lid (fake compute)', () => {
     await expect(line).toContainText('Re ≈ 100');
     await expect(check).not.toContainText(FALSE_FOR_A_CLOSED_BOX);
     await expect(panel.locator('[data-run-numerics="1"]')).not.toContainText(FALSE_FOR_A_CLOSED_BOX);
+    // The lid slides along its face: nothing says it moves through it.
+    await expect(check.locator('[data-run-check-row="wall_through"]')).toHaveCount(0);
 
     await start.click();
     await expect.poll(async () => (await runRow(request, s, rid)).status, { timeout: 120_000 }).toBe('done');
@@ -283,6 +289,22 @@ test.describe('a closed box driven by its lid (fake compute)', () => {
     expect([preview.partial, preview.reason ?? null], JSON.stringify(preview).slice(0, 400)).toEqual([false, null]);
     expect(preview.control.estimate.u_ref).toBe(2);
     expect(preview.control.estimate.flow_through_s).toBeNull();
+  });
+
+  test('a lid that moves through its own face: Before you start says the solve would stop at once, and why', async ({ page, request }) => {
+    test.setTimeout(300_000);
+    // Before G1 this box was refused (no inlet); after it, Start was on with nothing said, and
+    // simpleFoam stopped on its first iteration ("Continuity error cannot be removed").
+    const s = await closedBox(request, host.base, { nu: 2e-3, lid: 2, along: 'y', title: 'Closed box lid through' });
+    await generate(request, host.base, s, 120_000);
+    const rid = await newRun(request, host.base, s, 'Lid through', { endTime: 400, writeInterval: 400 });
+    const panel = await openRunPanel(page, host.base, s, rid);
+    const row = panel.locator('[data-run-check="1"] [data-run-check-row="wall_through"]');
+    await expect(row).toContainText(
+      `Wall "Lid" moves through its own faces (${s.lidFace}): its velocity (0, 2, 0) m/s has a part across them. Nothing flows in or out of this box, so the solver stops on its first iteration ("Continuity error cannot be removed by adjusting the outflow"). Give it a velocity along the wall.`,
+      STEP,
+    );
+    await expect(row).toHaveAttribute('data-level', 'error');
   });
 
   test('a box whose only moving wall stands still is refused, and the reason says why', async ({ page, request }) => {

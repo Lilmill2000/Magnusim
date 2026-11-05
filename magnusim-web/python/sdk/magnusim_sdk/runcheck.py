@@ -20,7 +20,13 @@ A row is ``{code, level, text, short, fix, alt, kept}``:
   setting the app does not offer is named in the text and has no fix.
 - ``two_d_ends`` (``error``): the mesh is one cell across (2D, Hex-dominant's setting) but
   an end face's boundary condition is no longer a Symmetry, so the solve would not be 2D
-  (``two_d_unmirrored`` in the inputs: ``[{faces, bc}]``).
+  (``two_d_unmirrored`` in the inputs: ``[{faces, bc}]``; ``bc`` None with ``default_wall``
+  when no boundary condition holds them any more, so they are solved as that wall).
+- ``wall_through`` (``error``): in a closed box (nothing holds the pressure), a Moving wall
+  whose velocity has a part across its own faces: the solver stops on its first iteration on a
+  continuity error (``walls_through``: ``[{name, faces, velocity}]``). ``wall_curved``
+  (``warn``): a Moving wall there on curved faces, its velocity along them at their middle only
+  (``walls_curved``: ``[{name, faces}]``).
 - ``setting_out_of_range`` (RH3, ``warn``): a study numerics setting or a run's outer
   relaxation or tolerance stored outside its field's range ("Saved p tolerance 1e-2 is outside
   1e-12 to 1e-3."). It is used as saved: bounds apply only to an edit, and nothing refuses it.
@@ -49,6 +55,8 @@ LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 CODE_ORDER = (
     "mesh_failed",
     "two_d_ends",
+    "wall_through",
+    "wall_curved",
     "piso_high_co",
     "pimple_co_vs_outer",
     "fixed_step_co",
@@ -259,6 +267,8 @@ class _Run:
         self.out_of_range = [o for o in (i.get("out_of_range") or []) if isinstance(o, dict) and o.get("text")]
         # A 2D mesh's ends whose boundary condition is no longer a Symmetry ({faces, bc}).
         self.two_d_unmirrored = [e for e in (i.get("two_d_unmirrored") or []) if isinstance(e, dict)]
+        self.walls_through = [e for e in (i.get("walls_through") or []) if isinstance(e, dict)]
+        self.walls_curved = [e for e in (i.get("walls_curved") or []) if isinstance(e, dict)]
         # False when the analysis could read only the run's settings (no mesh yet): its mesh
         # and physics were not checked, and "nothing found" must not say they were.
         self.complete = i.get("inputs_complete") is not False
@@ -616,16 +626,55 @@ def _two_d_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
     else) on a mesh one cell deep give a flow that is not the 2D flow it was meshed for."""
     for end in r.two_d_unmirrored:
         faces = ", ".join(str(f) for f in end.get("faces") or []) or "its end faces"
-        bc = str(end.get("bc") or "another boundary condition")
+        bc = str(end.get("bc") or "")
+        now = (
+            f'now have "{bc}", not a Symmetry, so'
+            if bc
+            else f"now have no boundary condition, so the solve treats them as {str(end.get('default_wall') or 'No-slip')} walls "
+            "(the walls with no BC) and"
+        )
         rows.append(
             _row(
                 "two_d_ends",
                 "error",
-                f'This mesh is one cell across (2D), but its end faces ({faces}) now have "{bc}", not a Symmetry, '
-                "so the flow would not be 2D. Put a Symmetry back on them, or turn One cell across off and generate the mesh again.",
+                f"This mesh is one cell across (2D), but its end faces ({faces}) {now} the flow would not be 2D. "
+                "Put a Symmetry back on them, or turn One cell across off and generate the mesh again.",
                 "2D mesh ends not a Symmetry",
                 _fix("Open boundary conditions", "bcs"),
                 _fix("Open mesh", "mesh"),
+            )
+        )
+
+
+def _wall_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    """A closed box's Moving walls that push fluid through their own faces (the solve stops on
+    its first iteration), and those on curved faces checked only at their middle."""
+    for w in r.walls_through:
+        faces = ", ".join(str(f) for f in w.get("faces") or []) or "its faces"
+        vel = ", ".join(fmt(float(c), 3) for c in (w.get("velocity") or [])[:3])
+        rows.append(
+            _row(
+                "wall_through",
+                "error",
+                f'Wall "{w.get("name") or "a moving wall"}" moves through its own faces ({faces}): its velocity ({vel}) m/s '
+                "has a part across them. Nothing flows in or out of this box, so the solver stops on its first iteration "
+                '("Continuity error cannot be removed by adjusting the outflow"). Give it a velocity along the wall.',
+                "moving wall crosses its faces",
+                _fix("Open boundary conditions", "bcs"),
+            )
+        )
+    for w in r.walls_curved:
+        faces = ", ".join(str(f) for f in w.get("faces") or []) or "its faces"
+        rows.append(
+            _row(
+                "wall_curved",
+                "warn",
+                f'Wall "{w.get("name") or "a moving wall"}" is on curved faces ({faces}): in a closed box a Moving wall must '
+                "slide along its faces everywhere, or the solver stops on its first iteration on a continuity error. Its "
+                "velocity is along them at their middle; the rest was not checked. A Rotating wall moves along a curved "
+                "face by itself.",
+                "moving wall on curved faces",
+                _fix("Open boundary conditions", "bcs"),
             )
         )
 
@@ -931,7 +980,9 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     ``numerics_preset``); ``steady_copy`` (a steady analysis of the family exists);
     ``kept`` (the codes kept as set); ``two_d_unmirrored`` (a mesh one cell across whose end
     faces' boundary condition is no longer a Symmetry: ``[{faces, bc}]``, the analysis's reading
-    of the mesh facts' ``two_d``); ``no_estimate`` (the line's words when the analysis
+    of the mesh facts' ``two_d``); ``walls_through`` and ``walls_curved`` (a closed box's Moving
+    walls whose velocity crosses their own faces, ``[{name, faces, velocity}]``, and those on
+    curved faces checked at their middle only, ``[{name, faces}]``); ``no_estimate`` (the line's words when the analysis
     gives no time step); ``out_of_range`` (RH3: stored settings outside their field's range,
     ``magnusim_sdk.numerics_settings.out_of_range``); ``inputs_complete`` (False when only the run's settings could be
     read, as before a mesh: the estimate's ``complete`` then says the mesh and physics were
@@ -942,6 +993,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     est = r.estimate() if r.transient else None
     phys = _physics_rows(r, rows)
     _mesh_rows(r, rows)
+    _wall_rows(r, rows)
     if r.transient:
         _transient_rows(r, est, rows)
         _long_run(r, est, rows)

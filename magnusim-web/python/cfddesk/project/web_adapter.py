@@ -97,6 +97,7 @@ def load_face_props(project_dir: Path, geometry_id: str | None = None) -> dict[s
         area = f.get("area")
         cent = f.get("centroid")
         norm = f.get("normal")
+        stype = str(f.get("surface_type") or "")
         out[key] = dict(
             area_m2=(float(area) * s * s) if area is not None else None,
             centroid=(
@@ -109,6 +110,8 @@ def load_face_props(project_dir: Path, geometry_id: str | None = None) -> dict[s
                 if isinstance(norm, (list, tuple)) and len(norm) >= 3
                 else None
             ),
+            # Flat or not (the face table's surface type; None when it has none or it is unknown).
+            planar=(stype == "Plane") if stype and stype.lower() != "unknown" else None,
         )
     return out
 

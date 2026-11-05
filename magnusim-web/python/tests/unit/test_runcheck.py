@@ -446,3 +446,35 @@ def test_a_2d_mesh_whose_ends_lost_their_symmetry():
     )
     assert (row["fix"]["target"], row["alt"]["target"]) == ("bcs", "mesh")
     assert row["short"] == "2D mesh ends not a Symmetry"
+    # Their Symmetry deleted: no BC holds them, so they are solved as the walls with no BC are.
+    inputs["two_d_unmirrored"] = [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": None, "default_wall": "No-slip"}]
+    row = rows_of(check(inputs))["two_d_ends"]
+    assert row["level"] == "error"
+    assert row["text"] == (
+        "This mesh is one cell across (2D), but its end faces (Face 5@Body1, Face 3@Body1) now have no boundary condition, "
+        "so the solve treats them as No-slip walls (the walls with no BC) and the flow would not be 2D. Put a Symmetry back "
+        "on them, or turn One cell across off and generate the mesh again."
+    )
+
+
+def test_a_moving_wall_through_its_own_faces_in_a_closed_box():
+    """A closed box's Moving wall whose velocity crosses its own faces is an error row (the
+    solver stops on its first iteration); one on curved faces, checked at their middle only,
+    a warning; both with the boundary conditions to open."""
+    inputs = copy.deepcopy(RUN2)
+    assert not {"wall_through", "wall_curved"} & set(rows_of(check(inputs)))
+    inputs["walls_through"] = [{"name": "Lid", "faces": ["Face 3@Body1"], "velocity": [0.0, 2.0, 0.0]}]
+    inputs["walls_curved"] = [{"name": "Drum", "faces": ["Face 7@Body1", "Face 8@Body1"]}]
+    rows = rows_of(check(inputs))
+    row = rows["wall_through"]
+    assert row["level"] == "error"
+    assert row["text"] == (
+        'Wall "Lid" moves through its own faces (Face 3@Body1): its velocity (0, 2, 0) m/s has a part across them. '
+        "Nothing flows in or out of this box, so the solver stops on its first iteration "
+        '("Continuity error cannot be removed by adjusting the outflow"). Give it a velocity along the wall.'
+    )
+    assert (row["short"], row["fix"]["target"]) == ("moving wall crosses its faces", "bcs")
+    warn = rows["wall_curved"]
+    assert warn["level"] == "warn"
+    assert warn["text"].startswith('Wall "Drum" is on curved faces (Face 7@Body1, Face 8@Body1): in a closed box a Moving wall must slide')
+    assert warn["fix"]["target"] == "bcs"

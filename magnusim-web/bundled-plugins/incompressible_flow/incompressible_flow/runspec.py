@@ -62,6 +62,8 @@ class FaceProps:
     area_m2: float | None = None
     normal: tuple[float, float, float] | None = None
     centroid: tuple[float, float, float] | None = None
+    # Flat (the face table's surface type is Plane), curved (another type) or unknown (None).
+    planar: bool | None = None
 
 
 @dataclass
@@ -174,6 +176,7 @@ def _face_props(raw: dict[str, Any] | None) -> dict[str, FaceProps]:
                 area_m2=row.get("area_m2"),
                 normal=tuple(row["normal"]) if row.get("normal") else None,
                 centroid=tuple(row["centroid"]) if row.get("centroid") else None,
+                planar=bool(row["planar"]) if row.get("planar") is not None else None,
             )
     return out
 
