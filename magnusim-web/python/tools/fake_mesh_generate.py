@@ -56,18 +56,21 @@ def _write(path: Path, cls: str, obj: str, body: str, note: str = "") -> None:
 
 def bc_patch_names(project_dir: str, simulation_id: str, mesh_id: str) -> list[str]:
     """The patches the study's boundary conditions mesh under, named as the real generators
-    name them (web_bc_patch_name), so a run's checks find a patch for each. [] when unknown."""
+    name them (web_bc_patch_name, slugified as the project model's allocate_patch_name does:
+    "Lid" meshes as "lid"), so a run's checks find a patch for each. [] when unknown."""
     if not project_dir:
         return []
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from cfddesk.case.bc_registry import sanitize_patch_name
         from cfddesk.project.web_adapter import study_web_bcs, web_bc_mesh_entry, web_bc_patch_name
 
         names: list[str] = []
         for bc in study_web_bcs(project_dir, None, simulation_id=simulation_id or None, mesh_id=mesh_id or None):
             reg_key, _settings = web_bc_mesh_entry(bc)
-            name = web_bc_patch_name(bc, reg_key)
-            if name and name not in names and name != "walls":
+            raw = web_bc_patch_name(bc, reg_key)
+            name = sanitize_patch_name(raw, set(names)) if raw else ""
+            if name and name != "walls":
                 names.append(name)
         return names
     except Exception:
