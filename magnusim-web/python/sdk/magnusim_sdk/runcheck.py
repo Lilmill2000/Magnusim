@@ -245,6 +245,8 @@ class _Run:
         self.initial_flow = str(i.get("initial_flow") or "")
         self.potential_flow = i.get("potential_flow")
         self.inlet_driven = bool(i.get("inlet_driven"))
+        # Nothing flows through the domain (a box its moving walls drive): no flow-through time.
+        self.closed = bool(i.get("closed"))
         n = _dict(i.get("numerics"))
         self.numerics = n
         self.steady_copy = bool(i.get("steady_copy"))
@@ -308,11 +310,13 @@ class _Run:
         )
         if e is not None:
             e["capped_by"] = capped_by if e.get("capped") else ""
+            if self.closed:
+                e["flow_through_s"] = None
             return e
         # No Courant-rate table: no time step, but the flow-through time from the box still
-        # tells when a mean may start and how long it averages.
+        # tells when a mean may start and how long it averages (none in a closed domain).
         length = self.length()
-        if not length:
+        if not length or self.closed:
             return None
         return {
             "delta_t_s": None,
@@ -894,7 +898,9 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     ``wall_functions``, and ``any_yplus``: ``{label, key, value}``, the study setting of a model
     that handles any y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
     ``nu`` (m²/s); ``d_hyd`` (m, the inlet's hydraulic diameter); ``initial_flow``,
-    ``potential_flow`` (None when the analysis has none), ``inlet_driven``; ``numerics``
+    ``potential_flow`` (None when the analysis has none), ``inlet_driven``; ``closed`` (nothing
+    flows through the domain, a box its moving walls drive: no flow-through time, so no
+    "one flow-through" and no start-up or averaging rows counted in them); ``numerics``
     (the study's: ``relax_p``, ``relax_u``, ``simplec``, ``n_non_orthogonal``,
     ``numerics_preset``); ``steady_copy`` (a steady analysis of the family exists);
     ``kept`` (the codes kept as set); ``no_estimate`` (the line's words when the analysis

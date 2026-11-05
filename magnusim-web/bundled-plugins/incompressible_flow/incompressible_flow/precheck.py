@@ -91,10 +91,22 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
 
     from .bc_kinds import wall_kind
     from .reference import inlet_flow_direction
+    from .runspec import closed_domain
     from .time_table import in_effect
-    from .writer import _bc_dict, faces_area, fixed_inflow, inlet_ref_speed, resolve_speed_and_dhyd
+    from .writer import (
+        _bc_dict,
+        faces_area,
+        fixed_inflow,
+        inlet_ref_speed,
+        reference_speed,
+        wall_drive,
+    )
 
-    speed, d_hyd = resolve_speed_and_dhyd(spec)
+    speed, d_hyd, source = reference_speed(spec)
+    # A moving or rotating wall that sets the speed: the length Re is taken on runs along the way
+    # a moving wall slides (a lid-driven cavity's Re on the box's length along the lid).
+    walls = wall_drive(spec) if source == "wall" else []
+    wall_dir = walls[0]["direction"] if walls else None
     rho = float(getattr(spec, "rho", 0) or 0) or 1.2
     props = getattr(spec, "face_props", None) or {}
     inlets = [m.get("bc") for m in spec.mapped or [] if is_velocity_inlet(m.get("bc"))]
@@ -110,8 +122,10 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
     out.update(
         {
             "n_cells": spec.n_cells or out["n_cells"],
-            "speed": float(speed) if inlets or speed > 1.0 else None,
-            "direction": list(inlet_flow_direction(spec) or (1.0, 0.0, 0.0)),
+            "speed": float(speed) if inlets or speed > 1.0 or source == "wall" else None,
+            "direction": list(inlet_flow_direction(spec) or wall_dir or (1.0, 0.0, 0.0)),
+            # Nothing flows in or out (a box its walls drive): no flow-through time to speak of.
+            "closed": closed_domain(spec, source),
             "inlet": name,
             # The velocity limit the case is written with (writer: limitVelocity; RH3: None when
             # the study turned it off), transient only.

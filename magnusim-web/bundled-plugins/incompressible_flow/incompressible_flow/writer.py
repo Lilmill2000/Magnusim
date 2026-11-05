@@ -47,6 +47,7 @@ from .bc_kinds import (
     is_symmetry,
     is_total_pressure_inlet,
     wall_kind,
+    wall_moves,
     wall_rotation,
     wall_velocity,
 )
@@ -106,6 +107,14 @@ limitU
 """,
     )
 
+
+# The pressure's reference cell and value (validation set G1). OpenFOAM reads them only when no
+# boundary fixes the pressure level (setRefCell: p.needReference()), so they change nothing in a
+# case with a pressure boundary, a freestream or a total-pressure inlet; a closed box driven by a
+# moving or rotating wall (a lid-driven cavity) needs them, or the solver stops with "Unable to
+# set reference cell for field p". Cell 0 of the master rank; gauge 0 there.
+PRESSURE_REFERENCE_SIMPLE = "    pRefCell        0;\n    pRefValue       0;\n"
+PRESSURE_REFERENCE_PIMPLE = "    pRefCell            0;\n    pRefValue           0;\n"
 
 # The outer loops' relaxation with 2 or more outer correctors when the run leaves it blank (RH3).
 OUTER_RELAX_P = 0.3
@@ -237,7 +246,7 @@ PIMPLE
     nNonOrthogonalCorrectors {n_non_orth};
     turbOnFinalIterOnly yes;
     consistent          no;
-{residual}}}
+{PRESSURE_REFERENCE_PIMPLE}{residual}}}
 {_potential_flow_dict(potential_non_orth)}{relax}
 
 // ************************************************************************* //
@@ -796,7 +805,7 @@ def health_hints(
         "end_time": float(spec.end_time),
         "average_from": float(t.average_from) if t is not None else None,
         "uref": float(speed_ref),
-        "uref_source": "inlet" if any(is_velocity_inlet(m.get("bc")) for m in spec.mapped or []) else "pressure",
+        "uref_source": _uref_source(spec),
         "fixed_inflow": fixed_inflow(spec),
         "turbulence": model,
         "limiter": {"name": "limitU", "cap": float(u_max), "factor": LIMIT_FACTOR, "floor": LIMIT_FLOOR} if u_max is not None else None,
@@ -805,13 +814,85 @@ def health_hints(
     }
 
 
+def _uref_source(spec: Any) -> str:
+    """The health hints' ``uref_source``: ``inlet`` with a velocity inlet, ``wall`` when a moving
+    or rotating wall sets the speed (reference_speed), else ``pressure`` (as before)."""
+    if any(is_velocity_inlet(m.get("bc")) for m in spec.mapped or []):
+        return "inlet"
+    return "wall" if reference_speed(spec)[2] == "wall" else "pressure"
+
+
 def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
-    """Port of writeSolveCase speedRef / dHyd selection."""
+    """Port of writeSolveCase speedRef / dHyd selection (:func:`reference_speed` without its source)."""
+    speed, d_hyd, _source = reference_speed(spec)
+    return speed, d_hyd
+
+
+def _rotating_rim_m(faces: list[str], props: dict[str, FaceProps], origin: list[float], axis: list[float]) -> float | None:
+    """How far a rotating wall's faces reach from its axis (m), from the CAD face table: each
+    face's centroid distance from the axis plus the radius of a disc of its area (an upper
+    estimate: a disc centred on the axis gives its own radius). None without the table."""
+    n = math.hypot(*axis)
+    if not n > 0:
+        return None
+    a = [c / n for c in axis]
+    best: float | None = None
+    for f in faces:
+        fp = props.get(f)
+        if fp is None or fp.centroid is None:
+            continue
+        d = [float(fp.centroid[i]) - float(origin[i]) for i in range(3)]
+        off = math.hypot(d[1] * a[2] - d[2] * a[1], d[2] * a[0] - d[0] * a[2], d[0] * a[1] - d[1] * a[0])
+        r = off + math.sqrt(max(_props_area(fp), 0.0) / math.pi)
+        if math.isfinite(r):
+            best = r if best is None else max(best, r)
+    return best
+
+
+def wall_drive(spec: Any) -> list[dict[str, Any]]:
+    """The study's moving and rotating walls that drag the fluid, fastest first: each one's
+    ``name``, its surface ``speed`` in m/s (a moving wall's velocity; a rotating wall's at the
+    rim of its faces, :func:`_rotating_rim_m`; a rotating wall whose faces are not in the face
+    table is left out) and the unit ``direction`` a moving wall slides in (None when rotating)."""
+    _ensure_web_imports()
+    props = getattr(spec, "face_props", None) or {}
+    out: list[dict[str, Any]] = []
+    for m in getattr(spec, "mapped", None) or []:
+        raw = m.get("bc") if isinstance(m, dict) else None
+        if not raw:
+            continue
+        bc = _bc_dict(raw)
+        if not is_wall_bc(bc) or not bc_faces(bc) or not wall_moves(bc):
+            continue
+        name = str(bc.get("name") or "")
+        if wall_kind(bc) == "Moving":
+            v = wall_velocity(bc)
+            s = math.hypot(*v)
+            out.append({"name": name, "speed": s, "direction": [c / s for c in v]})
+            continue
+        origin, axis, omega = wall_rotation(bc)
+        rim = _rotating_rim_m(bc_faces(bc), props, origin, axis)
+        if rim is not None and rim > 0:
+            out.append({"name": name, "speed": abs(omega) * rim, "direction": None})
+    out.sort(key=lambda w: -float(w["speed"]))
+    return out
+
+
+def reference_speed(spec: RunSpec) -> tuple[float, float, str]:
+    """The case's reference speed (m/s), its hydraulic diameter (m) and what set the speed:
+    ``inlet`` (the fastest velocity inlet), ``pressure`` (a pressure difference, a velocity
+    outlet's outflow or a freestream), ``wall`` (a moving or rotating wall: a closed box's only
+    speed, else when faster than the rest) or ``none`` (nothing gives one: 1 m/s).
+
+    The speed the time step, the velocity limit and the starting turbulence are made from. With
+    a velocity inlet it is the inlet's, as before (a faster wall does not change it).
+    """
     _ensure_web_imports()
     rho = float(spec.rho) or LEGACY_AIR["rho"]
     props = spec.face_props or {}
     transient = spec_is_transient(spec)
     speed_ref = 1.0
+    source = "none"
     d_hyd: float | None = None
     inlets = [(m.get("bc"), m.get("patch")) for m in (spec.mapped or []) if is_velocity_inlet(m.get("bc"))]
     if inlets:
@@ -827,6 +908,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
             if area > best_area:
                 best_area = area
         speed_ref = max(best, 0.1)
+        source = "inlet"
         d_hyd = 2.0 * math.sqrt(best_area / math.pi) if best_area > 0 else None
     else:
         # Static pressures and total-pressure inlets: the pressure difference drives the flow.
@@ -839,6 +921,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
         if len(pvals) >= 2:
             dp = max(pvals) - min(pvals)
             speed_ref = max(1.0, math.sqrt((2.0 * abs(dp)) / rho))
+            source = "pressure"
         min_area = float("inf")
         for b in pm:
             if not b:
@@ -857,13 +940,22 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
             faces = bc_faces(ob)
             area = faces_area(faces, props)
             speed_ref = max(speed_ref, inlet_ref_speed(ob, area / max(1, len(faces)), rho))
+            source = "pressure"
         # No inlet: a freestream's speed is the case's speed when it is faster.
         for m in spec.mapped or []:
             if is_freestream(m.get("bc")):
                 speed_ref = max(speed_ref, freestream_speed(_bc_dict(m.get("bc"))))  # type: ignore[arg-type]
+                source = "pressure"
+        # No inlet: a moving or rotating wall's speed is the case's when nothing else gives
+        # one (a closed box: its own speed, even below 1 m/s), else when it is faster.
+        walls = wall_drive(spec)
+        if walls:
+            top = float(walls[0]["speed"])
+            if source == "none" or top > speed_ref:
+                speed_ref, source = top, "wall"
     if not d_hyd or not (d_hyd > 0):
         d_hyd = 0.05
-    return float(speed_ref), float(d_hyd)
+    return float(speed_ref), float(d_hyd), source
 
 
 def inlet_flow_direction(bc: dict, face_props: dict[str, FaceProps]) -> list[float] | None:
@@ -1444,7 +1536,7 @@ SIMPLE
 {{
     nNonOrthogonalCorrectors {int(ph.n_non_orthogonal)};
     consistent      {"yes" if ph.simplec else "no"};
-{residual_line}}}
+{PRESSURE_REFERENCE_SIMPLE}{residual_line}}}
 {_potential_flow_dict(non_orth)}relaxationFactors
 {{
     fields

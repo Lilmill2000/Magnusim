@@ -101,8 +101,11 @@ their citations; this list is what those modules must start from.
 
 App gaps found so far, and what they block:
 
-- **Closed domain** (case 3): the Start check does not count a moving wall as what drives the
-  flow, and no `pRefCell` is written for a domain with no pressure boundary.
+- **Closed domain** (case 3), fixed: a moving or rotating wall counts as what drives the flow,
+  no pressure boundary is asked for when nothing flows in or out, the SIMPLE and PIMPLE
+  dictionaries carry `pRefCell 0; pRefValue 0;` (read only when no boundary holds the
+  pressure), and the case's speed is the wall's
+  (`bundled-plugins/incompressible_flow/e2e/closed-domain.spec.js`, `tests/test_closed_domain.py`).
 - **Signed profiles** (cases 3 to 6): Plot over path gives a vector's magnitude only; the
   harness reads cell values with the app's own loader instead (`sampling.cells`).
 - **Point probes** take the value of the cell that holds the point (no interpolation).

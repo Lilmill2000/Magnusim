@@ -375,6 +375,28 @@ def test_without_a_rate_table_the_flow_through_rows_stay_and_the_line_says_why()
     assert check(inputs)["estimate"]["line"].startswith("No time-step estimate: the mesh's cells could not be read · one flow-through")
 
 
+def test_a_closed_domain_has_no_flow_through():
+    """A closed box driven by a moving wall (``closed``: nothing flows in or out, the analysis's
+    speed is the wall's): the step is estimated as any other, Re is on the box's length along
+    the wall's motion, and nothing speaks of a flow-through: no "one flow-through" in the line
+    and no start-up or averaging rows counted in them."""
+    inputs = copy.deepcopy(RUN2)
+    inputs.update({"closed": True, "inlet": "", "inlet_driven": False, "fixed_inflow": False, "moving": True, "d_hyd": None})
+    out = check(inputs)
+    rows = rows_of(out)
+    assert "piso_high_co" in rows
+    assert not {"average_startup", "duration_vs_ftt", "still_start", "steady_for_mean"} & set(rows)
+    assert out["estimate"]["flow_through_s"] is None
+    assert out["estimate"]["line"] == (
+        "Δt ≈ 1.1e-5 s at Max Courant 1, as 1 outer corrector allows (smallest cells at 22.6 m/s) · ~900,000 steps · ~6 days on 15 cores · Re ≈ 6,000,000"
+    )
+    assert out["estimate"]["re"] == pytest.approx(22.6113 * 4.0 / 1.5e-5)
+    assert all("flow-through" not in r["text"] for r in out["checks"])
+    # Without a rate table: no step, and still no flow-through.
+    inputs["rates"] = None
+    assert check(inputs)["estimate"]["line"] == "No time-step estimate: this mesh has no Courant rates (generate it again to get them) · Re ≈ 6,000,000"
+
+
 def test_a_check_of_the_settings_only_says_so():
     """Before a mesh the analysis reads only the run's settings: the estimate says it is not
     complete (the panel and the Assistant then never say the mesh and physics were checked),

@@ -195,7 +195,9 @@ def test_ready_needs_an_assigned_fluid(tmp_path: Path):
 def test_ready_needs_a_flow_driver(tmp_path: Path):
     no_faces = {"name": "Inlet", "bc_type": "Velocity inlet", "faces": []}
     issues = _ready(_study(tmp_path, fluid_assigned=True, bcs=[no_faces, OUTLET]))
-    assert issues[0]["message"] == "Add a velocity inlet or outlet, a freestream, or two pressure boundaries, each with an assigned face"
+    assert issues[0]["message"] == (
+        "Add a velocity inlet or outlet, a freestream, two pressure boundaries, or a moving or rotating wall, each with an assigned face"
+    )
     assert issues[0]["fix"] == {"go": "bc", "id": "b0", "name": "Inlet"}
 
 

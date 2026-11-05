@@ -162,7 +162,9 @@ def study_is_transient(study: Any) -> bool:
 
 
 def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
-    """What blocks a run: a fluid, a flow driver, a mesh patch per BC, a pressure difference."""
+    """What blocks a run: a fluid, a flow driver (an inlet or outlet, a freestream, two pressures
+    or a moving wall), a pressure boundary when something flows in or out, a mesh patch per BC,
+    a pressure difference."""
     from magnusim_sdk.study import (
         bc_faces,
         is_pressure_bc,
@@ -173,7 +175,13 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
         matches_study,
     )
 
-    from .bc_kinds import is_freestream, is_total_pressure_inlet, wall_motion_problem
+    from .bc_kinds import (
+        is_freestream,
+        is_total_pressure_inlet,
+        still_wall_words,
+        wall_motion_problem,
+        wall_moves,
+    )
     from .inlet_turbulence import settings_problem
     from .physics import physics_from_record
     from .runspec import air_from_materials
@@ -190,17 +198,33 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
     outlets = [b for b in records if is_velocity_outlet(b) and bc_faces(b)]
     # A freestream both brings the flow and holds the pressure level.
     freestreams = [b for b in records if is_freestream(b) and bc_faces(b)]
-    driven = bool(inlets or outlets or freestreams)
+    # A moving or rotating wall drags the fluid: in a closed box (a lid-driven cavity, a stirred
+    # tank) it is the only thing that moves it. Nothing flows in or out there, so no boundary
+    # holds the pressure level: the case's pRefCell does (writer, SIMPLE and PIMPLE).
+    moving = [b for b in records if is_wall_bc(b) and bc_faces(b) and wall_moves(b)]
+    driven = bool(inlets or outlets or freestreams or moving)
 
     if not air or not air.get("assigned"):
         return [{"message": "Assign a fluid to a volume first", "fix": {"go": "material"}}]
     if not driven and len(pressures) < 2:
+        still = next((b for b in records if is_wall_bc(b) and bc_faces(b) and still_wall_words(b)), None)
+        if still is not None:
+            why, what = still_wall_words(still) or ("", "")
+            return [
+                {
+                    "message": (
+                        f'Wall "{still.get("name")}" does not move ({why}), so nothing drives the flow. '
+                        f"{what}, or add an inlet and an outlet."
+                    ),
+                    "fix": {"go": "bc", "id": still.get("id"), "name": still.get("name")},
+                }
+            ]
         incomplete = next((b for b in records if not bc_faces(b)), None)
         return [
             {
                 "message": (
-                    "Add a velocity inlet or outlet, a freestream, or two pressure boundaries, "
-                    "each with an assigned face"
+                    "Add a velocity inlet or outlet, a freestream, two pressure boundaries, "
+                    "or a moving or rotating wall, each with an assigned face"
                 ),
                 "fix": (
                     {"go": "bc", "id": incomplete.get("id"), "name": incomplete.get("name")}
@@ -209,7 +233,9 @@ def validate_ready(ctx: ReadyContext) -> list[dict[str, Any]]:
                 ),
             }
         ]
-    if not pressures and not freestreams:
+    # Something flows in or out through a velocity boundary: the flow then comes or goes
+    # through a boundary that holds the pressure (a closed box driven by its walls needs none).
+    if (inlets or outlets) and not pressures and not freestreams:
         return [{"message": "Add a pressure boundary with an assigned face", "fix": {"go": "bc-picker"}}]
 
     patch_names = set(ctx.patches)
@@ -367,18 +393,20 @@ def transient_preview(
     the Δt that lands in controlDict. Partial (settings only) until the run has
     a mesh and a flow-driving boundary condition.
     """
-    from magnusim_sdk.study import is_pressure_bc, is_velocity_inlet, is_velocity_outlet
+    from magnusim_sdk.study import is_pressure_bc, is_velocity_inlet, is_velocity_outlet, is_wall_bc
 
-    from .bc_kinds import is_freestream, is_total_pressure_inlet
+    from .bc_kinds import is_freestream, is_total_pressure_inlet, wall_moves
     from .runspec import load_run_spec
     from .transient import control_to_web, resolve_transient_control
+    from .writer import _bc_dict
 
     raw = settings if isinstance(settings, dict) else {}
     if inputs is None:
         return {"ok": True, "partial": True, "reason": None, "control": control_to_web(resolve_transient_control(raw, {}), raw)}
     spec = load_run_spec(inputs)
-    bcs = [m.get("bc") for m in (spec.mapped or [])]
-    driven = any(is_velocity_inlet(b) or is_velocity_outlet(b) or is_freestream(b) for b in bcs) or (
+    bcs = [_bc_dict(m["bc"]) for m in (spec.mapped or []) if m.get("bc")]
+    # As validate_ready: a moving or rotating wall drives the flow too (a closed box's only driver).
+    driven = any(is_velocity_inlet(b) or is_velocity_outlet(b) or is_freestream(b) or (is_wall_bc(b) and wall_moves(b)) for b in bcs) or (
         sum(1 for b in bcs if is_pressure_bc(b) or is_total_pressure_inlet(b)) >= 2
     )
     if not spec.ok or spec.transient is None or not driven:

@@ -313,7 +313,8 @@ def resolve_transient_control(
         "basis": est["basis"] if est else None,
         "u_ref": est["u_ref"] if est else (float(speed) if speed is not None else None),
         "steps": steps_est,
-        "flow_through_s": flow_through_time(mesh_meta, speed),
+        # A closed box (moving walls drive it, nothing flows through) has no flow-through time.
+        "flow_through_s": None if c.get("closed") else flow_through_time(mesh_meta, speed),
     }
     scheme: TimeScheme = "backward" if t["time_scheme"] == "backward" else "Euler"
     mode: TimeStepMode = "fixed" if t["time_step_mode"] == "fixed" else "adjustable"
