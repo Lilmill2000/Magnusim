@@ -15,6 +15,11 @@ MAGNUSIM_TEST_MESH_RESULT=fail: it ends failed ("Fake mesher failed"), exit 1.
 MAGNUSIM_TEST_MESH_CHECKMESH=<file>: a real checkMesh report it puts in the case as
 log.checkMesh; like the real generators it then writes the mesh's facts
 (cfddesk.mesh.facts) and its result carries their quality.
+
+With ``--one-cell-across 1`` (Hex-dominant's One cell across, 2D) it first asks the real rule
+(tools/mesh_two_d.py): a part that can't be meshed so fails with Generate's words, as
+generate_snappy.py does; one that can ends as a 2D mesh's result (``one_cell_across``,
+``two_d``) and its meta says so (the facts' ``two_d``).
 """
 from __future__ import annotations
 
@@ -107,9 +112,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--project-dir", default="")
     parser.add_argument("--simulation-id", default="")
     parser.add_argument("--mesh-id", default="")
+    parser.add_argument("--one-cell-across", type=int, default=0)
     args, _rest = parser.parse_known_args(argv)
     case_dir = Path(args.case_dir)
     case_dir.mkdir(parents=True, exist_ok=True)
+    two_d = None
+    if args.one_cell_across:
+        # mesh_two_d puts this checkout's cfddesk and SDK first on the path.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from mesh_two_d import study_two_d
+
+        from cfddesk.mesh.two_d import refusal_words
+
+        answer = study_two_d(args.project_dir, args.simulation_id)
+        if not answer.get("available"):
+            _event("result", ok=False, error=refusal_words(str(answer.get("reason") or "")))
+            return 1
+        two_d = answer["two_d"]
     per_stage = _seconds() / len(STAGES)
     for stage in STAGES:
         _event("progress", stage=stage, msg="fake mesher (tests)")
@@ -124,8 +143,17 @@ def main(argv: list[str]) -> int:
         json.dumps({**counts, "generate_id": args.generate_id, "source": "fake mesher"}), encoding="utf-8"
     )
     (case_dir / "log.standard_generate.txt").write_text("fake mesher (tests)\nMESH_SCRIPT_OK\n", encoding="utf-8")
+    if two_d is not None:
+        (case_dir / "w23-geometry-meta.json").write_text(json.dumps({"source": "fake mesher", "two_d": two_d}), encoding="utf-8")
     quality = mesh_facts(case_dir, os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip())
-    _event("result", ok=True, counts_source="fake mesher", **counts, **({"quality": quality} if quality else {}))
+    _event(
+        "result",
+        ok=True,
+        counts_source="fake mesher",
+        **counts,
+        **({"quality": quality} if quality else {}),
+        **({"one_cell_across": True, "two_d": two_d} if two_d is not None else {}),
+    )
     return 0
 
 

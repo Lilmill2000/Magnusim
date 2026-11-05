@@ -31,7 +31,7 @@ import { envGet } from './env-compat.js';
 import { polyMeshComplete } from './poly-mesh.js';
 import { stopFilterToolsFor } from './filter-spawn.js';
 import { dropComputeJobsForMesh, removeComputeJob, snapshotComputeQueue } from './server/compute-queue.ts';
-import { writeJsonCli, writeProjectCli } from './py-json.js';
+import { pyJson, writeJsonCli, writeProjectCli } from './py-json.js';
 import {
   MESH_ENGINES,
   buildMeshDefaultsFromRegistry,
@@ -657,6 +657,29 @@ async function deleteGeneratedMesh(body) {
       live_mesh_result: null,
     }, proj),
   };
+}
+
+/**
+ * GET /api/mesh/two-d?project_id&simulation_id: whether the study's part can be meshed One cell
+ * across (2D, Hex-dominant's setting), and how: {ok, available: true, two_d: {axis, depth_m,
+ * cells_across, front, back}} or {ok, available: false, reason}, from the rule Generate meshes
+ * by (cfddesk/mesh/two_d.py, through tools/mesh_two_d.py). The Mesh panel shows it under the
+ * setting while it is on; the Assistant's read_setup mesh reads it.
+ */
+export async function meshTwoDRoute(params) {
+  const gate = requireProjectSim({ project_id: params && params.project_id, simulation_id: params && params.simulation_id });
+  if (!gate.ok) return gate;
+  const { projectId, sim } = gate;
+  let answer;
+  try {
+    answer = await pyJson('mesh_two_d.py', ['--project-dir', projectDir(projectId), '--simulation-id', String(sim.id)]);
+  } catch (e) {
+    return { ok: false, status: 500, body: { ok: false, error: String((e && e.message) || e).slice(0, 400), project_id: projectId } };
+  }
+  if (!answer || answer.ok === false) {
+    return { ok: false, status: 500, body: { ok: false, error: String((answer && answer.error) || 'no answer'), project_id: projectId } };
+  }
+  return { ok: true, status: 200, body: { ...answer, project_id: projectId, simulation_id: sim.id } };
 }
 
 /**

@@ -5664,6 +5664,15 @@
             },
             "title": "Physics-based meshing",
             "description": "Refine where the flow needs it: inlets, outlets and narrow gaps."
+          },
+          "one_cell_across": {
+            "type": "boolean",
+            "default": false,
+            "x-cfddesk": {
+              "group": "mesh"
+            },
+            "title": "One cell across (2D)",
+            "description": "Mesh the part one cell deep between its two parallel flat end faces, which must carry a Symmetry boundary condition: the flow is exactly 2D, with far fewer cells. The part must be a straight extrusion between them, along x, y or z."
           }
         },
         "additionalProperties": false
@@ -5697,7 +5706,9 @@
         "surfaceFeatureExtract": "Finding feature edges",
         "blockMesh": "Building the background mesh",
         "snappyHexMesh": "Snapping the mesh to the surface",
+        "extrudeMesh": "Making the mesh one cell across (2D)",
         "checkMesh": "Checking the mesh quality",
+        "createPatch": "Putting the 2D mesh's ends on their Symmetry",
         "mesh_facts": "Reading the mesh quality"
       },
       "stage_details": [],
@@ -5705,6 +5716,11 @@
         [
           "",
           "Hex-dominant",
+          ""
+        ],
+        [
+          "one_cell_across",
+          "one cell across (2D)",
           ""
         ],
         [

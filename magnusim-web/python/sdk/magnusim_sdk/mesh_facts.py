@@ -12,6 +12,10 @@ generated mesh, in one file beside it (``mesh-facts.json``), the same for every 
   snappyHexMesh's layer report (``log.snappyHexMesh``, :func:`parse_snappy_layers`).
 - ``courant_rates``: the summary of the mesh's Courant-rate table
   (:mod:`magnusim_sdk.courant_rates`; the table itself is ``courant-rates.json``).
+- ``two_d`` (a Hex-dominant mesh made one cell across, only then): ``axis`` (the depth's,
+  ``x``, ``y`` or ``z``), ``depth_m``, ``cells_across`` (1) and the two ends (``front``,
+  ``back``: their faces, boundary condition and patch). Its ``quality`` is checkMesh's on the
+  2D mesh (its ends ``empty``), so aspect ratios are the section's.
 
 The meshers write it when a mesh is done (:func:`write_mesh_facts`); :func:`load_mesh_facts`
 reads it, or builds it for a mesh made before it existed. Both files carry the mesh
@@ -353,7 +357,13 @@ def mesher_of(case_dir: Path | str) -> str | None:
 
 
 def _hexdominant_surface_cell(case: Path, meta: dict[str, Any]) -> float | None:
-    """The background block's cell over 2^level of the wall refinement (blockMeshDict)."""
+    """The background block's cell over 2^level of the wall refinement (blockMeshDict); a 2D
+    mesh's from its section's background cell (its block is one cell of the depth deep)."""
+    two = _dict(meta.get("two_d"))
+    level = meta.get("walls_level")
+    if two and isinstance(level, (int, float)):
+        base = _f(str(two.get("base_m"))) if two.get("base_m") is not None else None
+        return _sig(base / 2.0 ** int(level)) if base else None
     t = _read_text(case / "system" / "blockMeshDict")
     verts = re.search(r"vertices\s*\((.*?)\)\s*;", t, re.S)
     hexm = re.search(r"hex\s*\([^)]*\)\s*\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\)", t)
@@ -443,6 +453,16 @@ def build_mesh_facts(case_dir: Path | str, *, mesher: str | None = None) -> dict
             layers["applied"] = None
         else:
             layers["applied"] = False
+        two = _dict(meta.get("two_d"))
+        if two:
+            axis = two.get("axis")
+            facts["two_d"] = {
+                "axis": "xyz"[axis] if isinstance(axis, int) and 0 <= axis < 3 else str(axis or ""),
+                "depth_m": _f(str(two.get("depth_m"))) if two.get("depth_m") is not None else None,
+                "cells_across": 1,
+                "front": _dict(two.get("front")),
+                "back": _dict(two.get("back")),
+            }
     walls = [w for w in layers["walls"] if w.get("first_m")]
     if walls and layers["first_m"] is None:
         n = sum(w["faces"] for w in walls) or 1

@@ -112,8 +112,12 @@ def test_mesher_specs_shape():
     assert snappy.generate is not None
     assert snappy.generate() == "generate_snappy.py"
     assert "hex_element_core" not in {field.key for field in snappy.settings_schema}
-    # generate_snappy.py takes no small-feature, gap or gradation flags: the panel shows none.
-    assert [f.key for f in snappy.settings_schema] == ["fineness", "add_layers", "physics_based"]
+    # generate_snappy.py takes no small-feature, gap or gradation flags: the panel shows none. Its
+    # own One cell across (2D) it does take (--one-cell-across); no other mesher has it.
+    assert [f.key for f in snappy.settings_schema] == ["fineness", "add_layers", "physics_based", "one_cell_across"]
+    two_d = next(f for f in snappy.settings_schema if f.key == "one_cell_across")
+    assert (two_d.label, two_d.kind, two_d.default) == ("One cell across (2D)", "bool", False)
+    assert "one_cell_across" not in {f.key for f in (*standard.settings_schema, *cfmesh.settings_schema)}
     assert {"small_feature_suppression", "gap_refinement_factor", "global_gradation_rate"} <= {
         f.key for f in standard.settings_schema
     }

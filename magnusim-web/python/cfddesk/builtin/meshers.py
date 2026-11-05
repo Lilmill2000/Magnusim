@@ -55,15 +55,19 @@ _HEX_STAGES = (
     ("surfaceFeatureExtract", "Finding feature edges"),
     ("blockMesh", "Building the background mesh"),
     ("snappyHexMesh", "Snapping the mesh to the surface"),
+    # One cell across (2D): the 3D slab becomes one cell deep (cfddesk.mesh.two_d).
+    ("extrudeMesh", "Making the mesh one cell across (2D)"),
     ("checkMesh", "Checking the mesh quality"),
+    ("createPatch", "Putting the 2D mesh's ends on their Symmetry"),
     *_FACTS,
 )
 
 
-def _report(name: str) -> tuple[tuple[str, str, str], ...]:
+def _report(name: str, *, two_d: bool = False) -> tuple[tuple[str, str, str], ...]:
     """The finished-mesh summary: engine, then what the run applied."""
     return (
         ("", name, ""),
+        *((("one_cell_across", "one cell across (2D)", ""),) if two_d else ()),
         ("hex_core_applied", "hex element core", ""),
         ("layers_applied", "boundary layers", "no boundary layers"),
         ("surface_size_m", "surface size {length}", ""),
@@ -101,8 +105,15 @@ _CFMESH_HEX_CORE_HELP = (
 )
 
 
+_ONE_CELL_ACROSS_HELP = (
+    "Mesh the part one cell deep between its two parallel flat end faces, which must carry a "
+    "Symmetry boundary condition: the flow is exactly 2D, with far fewer cells. The part must "
+    "be a straight extrusion between them, along x, y or z."
+)
+
+
 def _live_mesh_schema(
-    *, hex_core: bool, advanced: bool = True, hex_core_help: str = _HEX_CORE_HELP
+    *, hex_core: bool, advanced: bool = True, hex_core_help: str = _HEX_CORE_HELP, one_cell_across: bool = False
 ) -> tuple[SchemaField, ...]:
     """The mesh panel, in the row order the V0.1.0 chrome used.
 
@@ -142,6 +153,19 @@ def _live_mesh_schema(
             description="Refine where the flow needs it: inlets, outlets and narrow gaps.",
         ),
     ]
+    if one_cell_across:
+        # Hex-dominant's own setting (validation gap G5): a mesher's own keys are saved under
+        # settings.mesher_settings, and the generator reads it (--one-cell-across).
+        fields.append(
+            SchemaField(
+                "one_cell_across",
+                "One cell across (2D)",
+                "bool",
+                default=False,
+                group="mesh",
+                description=_ONE_CELL_ACROSS_HELP,
+            )
+        )
     if hex_core:
         fields.append(
             SchemaField(
@@ -240,8 +264,8 @@ def build_snappy_hexdominant() -> MeshBackend:
     return MeshBackend(
         key="snappy_hexdominant",
         label="Hex-dominant",
-        # generate_snappy.py reads fineness, layers and physics-based only.
-        settings_schema=_live_mesh_schema(hex_core=False, advanced=False),
+        # generate_snappy.py reads fineness, layers, physics-based and one cell across.
+        settings_schema=_live_mesh_schema(hex_core=False, advanced=False, one_cell_across=True),
         refinement_types=_REFINEMENTS,
         tool="mesh",
         fingerprint_payload=_mesh_fingerprint,
@@ -253,7 +277,7 @@ def build_snappy_hexdominant() -> MeshBackend:
         multi_region=True,
         engine="snappy_hexdominant",
         stage_labels=_HEX_STAGES,
-        report=_report("Hex-dominant"),
+        report=_report("Hex-dominant", two_d=True),
     )
 
 
