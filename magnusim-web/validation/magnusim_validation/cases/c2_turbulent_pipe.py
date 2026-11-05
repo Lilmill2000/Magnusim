@@ -3,12 +3,12 @@ k-epsilon with wall functions, on Hex-dominant and on Standard.
 
 A 20 mm pipe 600 mm (30 D) long, a uniform velocity inlet of 1 m/s (its turbulence Auto: 5 %,
 0.07 D), a 0 Pa outlet and a no-slip wall; a custom fluid with nu = 4e-7 m²/s and rho = 1 kg/m³,
-so Re = U D / nu = 50 000. The friction factor is read over x/D 20 to 25, 5 D clear of the
-outlet; its slope over x/D 15 to 20 is shown beside it, so a flow still developing shows as two
-stretches that disagree (the reference data's second way when the reading cannot be 40 D from
-the inlet). The pipe is not longer because Hex-dominant cannot mesh one much longer cleanly
-(``NOTES``: its background cells grow along the pipe with its length, and at 55 D the
-castellated mesh already has thousands of faces over 65 degrees non-orthogonal).
+so Re = U D / nu = 50 000. The reference data ask for the friction at least 40 D from the inlet,
+or with a cyclic or mapped inlet; this case meets neither (the app has no cyclic inlet, gap G9,
+and the pipe is 30 D because Hex-dominant cannot mesh one much longer cleanly: ``NOTES``). The
+friction factor is read over x/D 20 to 25, 5 D clear of the outlet; its slope over x/D 15 to 20
+is shown beside it, and a run whose two differ by more than ``DEVELOPING_PCT`` carries a
+warning: its flow is still developing where f is read, so f reads above its developed value.
 
 Each mesher's mesh is made once: the k-epsilon run solves on the k-omega SST run's mesh (the
 same geometry, fluid, BCs and mesh; only the study's turbulence model and the run differ).
@@ -51,8 +51,10 @@ NU = 4.0e-7
 RHO = 1.0
 RE = U * D / NU
 FIT_FROM_D, FIT_TO_D = 20.0, 25.0
-# The stretch before it: a developed flow reads the same slope on both.
+# The stretch before it: a developed flow reads the same slope on both. Two that differ by
+# more than DEVELOPING_PCT give the run a warning (still developing where f is read).
 EARLY_FROM_D, EARLY_TO_D = 15.0, 20.0
+DEVELOPING_PCT = 1.0
 PROBE_X_D = tuple(float(x) for x in range(5, 30, 5))
 _WINDOW_BOX = [[FIT_FROM_D * D, -0.6 * D, -0.6 * D], [FIT_TO_D * D, 0.6 * D, 0.6 * D]]
 WALL_PATCH = "pipe_wall"
@@ -132,9 +134,13 @@ NOTES = (
     "The reference is McKeon et al.'s relation (0.0211 at Re 5e4); the band is ±10 %, the reference data's for RANS "
     "with wall functions (the design proposed ±8 % for SST, ±10 % for k-epsilon and ±15 % on Standard). The reference "
     "data win.",
-    "The reference data ask for the friction 40 D or more from a uniform inlet, or for two stretches whose slopes "
-    "agree. The pipe here is 30 D long and the friction is read over x/D 20 to 25, its slope over x/D 15 to 20 shown "
-    "beside it. It is not longer because Hex-dominant cannot mesh a much longer pipe cleanly (an app gap): its "
+    "The reference data ask for the friction to be read at least 40 D from the inlet, or with a cyclic or mapped "
+    "inlet. This case meets neither: the app has no cyclic or mapped inlet (gap G9), and the pipe is 30 D long. The "
+    "friction is read over x/D 20 to 25 and its slope over x/D 15 to 20 is shown beside it: in a developed flow the "
+    "two agree. Where they differ by more than 1 % the run carries a warning: the flow is still developing where f "
+    "is read, and its f reads above its developed value (the slope still falls along the pipe), so it is not quite "
+    "the fully developed f the reference is for. The pipe is not longer because Hex-dominant cannot mesh a much "
+    "longer pipe cleanly (an app gap): its "
     "background block keeps at least 8 and 12 cells across the pipe while its cells along the pipe grow with the "
     "length, so the cells near the wall get long and flat. On the mesh probes (2026-11-05) a 55 D pipe at fineness 6 "
     "had 25 196 faces over 65 degrees non-orthogonal before snapping, and its mesh failed checkMesh (8 cells of "
@@ -287,6 +293,14 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
             early = _slope(x, p, EARLY_FROM_D, EARLY_TO_D)
             shown["f_early"] = -early["slope"] * d_eff / dyn
             shown["f_early_vs_f_pct"] = 100.0 * (shown["f_early"] / f - 1.0)
+            if abs(shown["f_early_vs_f_pct"]) > DEVELOPING_PCT:
+                warnings.append(
+                    f"still developing where f is read: f over x/D {EARLY_FROM_D:g} to {EARLY_TO_D:g} reads "
+                    f"{shown['f_early_vs_f_pct']:+.2f} % against x/D {FIT_FROM_D:g} to {FIT_TO_D:g} (more than "
+                    f"{DEVELOPING_PCT:g} % apart; a developed flow reads the same), so f is above its developed value: "
+                    "the pipe is 30 D, not the 40 D from the inlet the reference data ask for, and the app has no "
+                    "cyclic inlet (gap G9)"
+                )
         except ValueError as e:
             warnings.append(f"pressure fit: {e}")
     else:

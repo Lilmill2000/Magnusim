@@ -2713,6 +2713,7 @@
   }
  },
  "warnings": [
-  "the run stopped at its iteration limit without reaching its residual targets; its monitors moved less than 0.1 % over the last 10 % of iterations"
+  "the run stopped at its iteration limit without reaching its residual targets; its monitors moved less than 0.1 % over the last 10 % of iterations",
+  "still developing where f is read: f over x/D 15 to 20 reads +1.75 % against x/D 20 to 25 (more than 1 % apart; a developed flow reads the same), so f is above its developed value: the pipe is 30 D, not the 40 D from the inlet the reference data ask for, and the app has no cyclic inlet (gap G9)"
  ]
 }

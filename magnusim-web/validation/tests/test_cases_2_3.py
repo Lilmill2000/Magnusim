@@ -155,9 +155,10 @@ def test_a_cavity_run_without_its_lines_says_what_is_missing(tmp_path: Path):
     assert "psi_min" in res["status_detail"] and "no stream function" in res["status_detail"]
 
 
-def _pipe_run(tmp_path: Path, variant: str, f: float) -> dict:
+def _pipe_run(tmp_path: Path, variant: str, f: float, early: float = 0.0) -> dict:
     """A case 2 run whose developed flow has Darcy friction factor ``f``: the pressure falls by
-    f rho U² / (2 D) per metre and the wall shear stress is f rho U² / 8."""
+    f rho U² / (2 D) per metre and the wall shear stress is f rho U² / 8; ``early`` (a fraction)
+    makes the pressure fall that much faster before x/D 20, a flow still developing there."""
     c2 = cases.get("c2")
     run_dir = tmp_path / variant
     make_plan(c2, variant, run_dir, cores=4)
@@ -171,7 +172,9 @@ def _pipe_run(tmp_path: Path, variant: str, f: float) -> dict:
     def w(name: str, doc: dict) -> None:
         (raw / f"{name}.json").write_text(json.dumps(doc), encoding="utf-8")
 
-    w("line_p_axis", {"status": 200, "n_valid": 301, "values": [g * (length - x) for x in xs], "sample_points": pts})
+    knee = c2.FIT_FROM_D * d
+    w("line_p_axis", {"status": 200, "n_valid": 301, "values": [g * (length - x) + early * g * max(0.0, knee - x) for x in xs],
+                      "sample_points": pts})
     w("line_u_axis", {"status": 200, "n_valid": 301, "values": [1.2] * 301, "sample_points": pts})
     n = 30
     face_x = [0.4 + 0.1 * i / (n - 1) for i in range(n)]
@@ -209,6 +212,26 @@ def test_case_2_reads_the_friction_from_the_pressure_and_from_the_wall(tmp_path:
     text = build_markdown([res, ke])
     assert "| Turbulent pipe, Re = 50 000 | Hex-dominant, k-omega SST | ok | Darcy friction factor from the pressure drop" in text
     assert "k-epsilon with wall functions" in text and "y+ over x/D 20 to 25 from 30 to 59" in text
+
+
+def test_a_pipe_flow_still_developing_where_f_is_read_carries_a_warning(tmp_path: Path):
+    """The reference data ask for f 40 D or more from the inlet (or a cyclic inlet, which the app
+    lacks): on the 30 D pipe, a run whose f over x/D 15 to 20 is more than 1 % above f over 20 to
+    25 says it is still developing there, so its f is above the developed value."""
+    developed = _pipe_run(tmp_path / "a", "hexdominant_sst", 0.0211)
+    assert not [w for w in developed["warnings"] if "developing" in w]
+    slight = _pipe_run(tmp_path / "b", "hexdominant_sst", 0.0211, early=0.005)
+    assert slight["shown"]["f_early_vs_f_pct"] == pytest.approx(0.5, rel=1e-6)
+    assert not [w for w in slight["warnings"] if "developing" in w]
+    res = _pipe_run(tmp_path / "c", "hexdominant_sst", 0.0211, early=0.03)
+    assert res["status"] == "ok" and res["shown"]["f_early_vs_f_pct"] == pytest.approx(3.0, rel=1e-6)
+    assert [w for w in res["warnings"] if "developing" in w] == [
+        "still developing where f is read: f over x/D 15 to 20 reads +3.00 % against x/D 20 to 25 (more than 1 % apart; "
+        "a developed flow reads the same), so f is above its developed value: the pipe is 30 D, not the 40 D from the "
+        "inlet the reference data ask for, and the app has no cyclic inlet (gap G9)"
+    ]
+    assert {x["key"]: x["value"] for x in res["quantities"]}["f"] == pytest.approx(0.0211, rel=1e-9)
+    assert "still developing where f is read" in build_markdown([res])
 
 
 def test_a_run_on_another_runs_mesh_says_so(tmp_path: Path):
