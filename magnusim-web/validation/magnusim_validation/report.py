@@ -289,7 +289,8 @@ def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:
         + f"; solve {run_time_text(res)} on {r.get('n_procs') or r.get('cores_set') or '-'} ranks (Cores {r.get('cores_set')}); "
         f"run health {health_text(r)}"
         + ("" if not (r.get("health") or {}).get("findings") else ": " + "; ".join(
-            str(f.get("title") or f.get("text") or f.get("message") or f.get("code")) for f in r["health"]["findings"]))
+            str(f.get("title") or f.get("text") or f.get("message") or f.get("code")).strip().rstrip(".")
+            for f in r["health"]["findings"]))
     )
     lr = r.get("log_residuals") or {}
     if lr:

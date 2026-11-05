@@ -144,7 +144,9 @@ NOTES = (
     "In a settled, developed flow they are equal (the force balance -dp/dx = 4 tau_w / D); a gap between them is a "
     "finding about the solution, not about the reading.",
     "The wall's y+ (OpenFOAM's yPlus, saved by every turbulent run) is shown for the same faces: the wall functions "
-    "assume y+ of about 30 to 100 at the first cell's centre; below that they misread the wall's friction.",
+    "assume y+ of about 30 to 100 at the first cell's centre; below that they misread the wall's friction. "
+    "Hex-dominant's one wall layer of 0.6 mm is sized for about 35; Standard sizes its own layers, so its y+ is "
+    "what its layers give, inside that range or not.",
     "Each mesher's mesh is made once and both turbulence models solve on it (the k-epsilon run on the k-omega SST "
     "run's mesh, the same geometry, fluid, BCs and mesh settings).",
 )
