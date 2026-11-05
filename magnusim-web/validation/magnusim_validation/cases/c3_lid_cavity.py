@@ -46,9 +46,10 @@ NU = {v: U * L / re for v, re in RE.items()}
 FINENESS = 7
 CELL_MM = 0.6
 REACH_MM = 50.0
-# Neither run meets its residual targets (NOTES: Uz), so each runs to its limit and must settle
-# there: at Re 100 the centre's U_x still moved 0.8 % over the last 10 % of 3000 iterations (the
-# first full run), at Re 1000 0.04 % over the last 10 % of 8000.
+# The iteration limits. Each run stops on its residual targets before them (the second full runs:
+# Re 100 at 6499, Re 1000 at 6056); one that reaches its limit must settle there (SETTLE). The
+# first full runs went to them (NOTES: the depth's velocity was solved too): at Re 100 the
+# centre's U_x still moved 0.8 % over the last 10 % of 3000 iterations, so its limit is 12 000.
 END_TIME = {"re100": 12000, "re1000": 8000}
 # The profiles: 201 samples along each centreline (as Plot over path samples them), and the
 # stream function from u on 99 vertical lines at x = L/100, 2 L/100, ... of 201 samples each.
@@ -165,8 +166,9 @@ def quantities(variant: str) -> list[QuantitySpec]:
 
 
 NOTES = (
-    "One cell across (2D): the cavity is meshed one cell deep between its front and back, both on one Symmetry, so "
-    "the solution is exactly 2D. The design's 40 mm slab is not needed (it cost several hundred times the cells and "
+    "One cell across (2D): the cavity is meshed one cell deep between its front and back, both on one Symmetry, "
+    "which the solve makes the 2D mesh's empty ends, so the solution is exactly 2D and nothing is solved across the "
+    "depth. The design's 40 mm slab is not needed (it cost several hundred times the cells and "
     "its middle was coarser than its ends), and there is nothing to measure between mid-depth and the symmetry "
     "planes: the design's second pair of lines at a quarter of the depth is left out.",
     "The mesh is one Hex-dominant custom size of 0.6 mm on all four walls with Refine out to 50 mm (half the cavity), "
@@ -181,12 +183,17 @@ NOTES = (
     "with those, and the primary vortex with Marchi et al. (2009).",
     "The Point probes at Ghia et al.'s stations are a cross-check (shown): they read the value at each point "
     "(OpenFOAM's cellPoint interpolation, gap G3, fixed).",
-    "Neither run stops on its residual targets: on a mesh one cell across whose two ends carry a Symmetry, OpenFOAM "
-    "still solves the velocity's z component, which is zero to round-off, and its normalised residual stays near "
-    "0.01 (the solver's last residuals are listed with each run: Ux, Uy and p fall far below it). The run's U "
-    "residual is its largest component, so Run health reads it as stalled (an app bug of One cell across, reported). "
-    "Each run goes to its iteration limit and counts only if it settled there: its centre probes moved less than "
-    "0.1 % over its last 10 % of iterations.",
+    "Each run stops on its residual targets of 1e-6 (Re 100 at 6499 iterations, Re 1000 at 6056; the solver's last "
+    "residuals are listed with each run); one that reached its iteration limit would count only if it settled there "
+    "(its centre probes moving less than 0.1 % over its last 10 % of iterations). The first full runs (2026-11-05) "
+    "kept the two ends as mirror planes, where OpenFOAM still solves the velocity's z component: zero to round-off, "
+    "its normalised residual stayed at 0.035 to 0.068, so neither run met its targets, both went to their limits "
+    "(12 000 and 8 000 iterations, Ux, Uy and p near 1e-8) and Run health read the U residual as stalled (an app bug "
+    "of One cell across, fixed: the ends are now empty).",
+    "The residual targets, not the empty ends, set how far these runs are converged: a probe of Re 100 with targets "
+    "of 1e-8 (not reported; it went to its 12 000 iterations) reads the first full run's values to within 1e-5 "
+    "(psi_min -0.10345, u_min -0.21390, v_max 0.17945), against -0.10335, -0.21358 and 0.17875 at 1e-6: the extrema and "
+    "psi_min move by 0.1 to 0.4 %, all inside their bands.",
 )
 
 # A steady run that stops at its iteration limit counts as settled only when these histories
@@ -385,7 +392,8 @@ def setup_words(result: dict[str, Any]) -> str:
     return (
         f"A {GEOMETRY_WORDS} (STEP in mm, built with OCP); a custom fluid with nu = {nu:g} m²/s and rho = {RHO:g} kg/m³, "
         f"so Re = U_lid L / nu = {RE.get(str(v))}; the lid a moving wall at {U:g} m/s along +x, the floor and the two "
-        f"sides no-slip walls, the front and back one Symmetry; nothing flows in or out; laminar, steady (simpleFoam), "
+        f"sides no-slip walls, the front and back one Symmetry (the 2D mesh's ends, solved empty); nothing flows in or "
+        f"out; laminar, steady (simpleFoam), "
         f"Accurate numerics, residual targets 1e-6, at most {END_TIME.get(str(v))} iterations."
     )
 

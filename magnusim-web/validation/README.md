@@ -137,7 +137,12 @@ App gaps found so far, and what they block:
   a slab whose two end faces carry a Symmetry one cell deep (`cfddesk/mesh/two_d.py`; the panel's
   note and Generate say why a part can't be; `e2e/mesh-one-cell-across.spec.js`,
   `python/tests/unit/test_two_d_mesh.py`). Without it Hex-dominant puts at least 8 cells across
-  y and 12 across z, refined near every surface, so a slab costs millions of cells.
+  y and 12 across z, refined near every surface, so a slab costs millions of cells. Its two ends
+  are solved empty, fixed after case 3's first runs: as mirror planes OpenFOAM still solved the
+  velocity across the depth, whose residual (0.035 to 0.068) never settled, so a steady run never
+  met its targets and Run health said the U residual had stopped falling
+  (`bundled-plugins/incompressible_flow/tests/test_two_d_solve.py`, the WSL test of
+  `e2e/mesh-one-cell-across.spec.js`).
 - **A custom size's level** comes from the diagonal's base size while the block's cells on a
   thin axis are smaller, so on a thin part the cells come out finer and flatter than asked
   (`mesh_plan.py` shows it before Generate).
