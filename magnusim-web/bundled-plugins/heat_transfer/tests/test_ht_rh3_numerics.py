@@ -67,7 +67,9 @@ def test_every_key_has_its_bounds_and_heat_transfer_defaults():
     assert steady["relax_turbulence"].depends_on is None  # Heat Transfer has no SIMPLEC
     assert steady["energy_convection"].default == "second_order"
     assert steady["energy_convection"].caution == {"first_order": CAUTION_FIRST_ORDER}
-    assert steady["velocity_limit"].default == "off" and steady["velocity_limit"].caution == {"off": CAUTION_LIMIT_OFF}
+    # Off is Heat Transfer's own default: no caution (it is cautioned only where Off is a choice).
+    assert steady["velocity_limit"].default == "off" and not steady["velocity_limit"].caution
+    assert CAUTION_LIMIT_OFF
     assert steady["eq_max_iter"].default is None and steady["eq_max_iter"].optional
     assert steady["p_tolerance"].label == "p_rgh tolerance"
     assert control["outer_relax_p"].label == "Outer relaxation p_rgh"

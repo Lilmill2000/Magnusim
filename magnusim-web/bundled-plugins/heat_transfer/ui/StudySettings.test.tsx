@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudyState } from '../../../src/panels/legacyBridge';
@@ -322,6 +325,23 @@ describe('helpers', () => {
 });
 
 // RH3 (spec 5.5): Heat Transfer's preset note (its schemes include the energy equation's).
+describe('RH3: the velocity limit (Daniel, 2026-11-05: Off is cautioned only where it is a choice)', () => {
+  it("shows Off, Heat Transfer's own default, with no caution, from the registry the app generates", async () => {
+    const generated = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'docs', 'plugins', 'registry.json'), 'utf8')) as {
+      analysis: Array<{ key: string; numerics_schema: Record<string, unknown> }>;
+    };
+    const real = generated.analysis.find((a) => a.key === 'heat_transfer_steady')!.numerics_schema;
+    const reg = useProjectStore.getState().registry as { analysis: Array<Record<string, unknown>> };
+    useProjectStore.setState({ registry: { ...reg, analysis: reg.analysis.map((a) => ({ ...a, numerics_schema: real })) } });
+    window.__CFD_STUDY_STATE__ = study({}, {});
+    const view = renderPanel();
+    await waitFor(() => expect(view.container.querySelector('[data-schema-key="velocity_limit"] select')).not.toBeNull());
+    const select = view.container.querySelector('[data-schema-key="velocity_limit"] select') as HTMLSelectElement;
+    expect(select.options[select.selectedIndex].textContent).toBe('Off');
+    expect(view.container.querySelector('[data-schema-caution="velocity_limit"]')).toBeNull();
+  });
+});
+
 describe('RH3: the preset note', () => {
   it('counts the schemes the study sets over its preset, and "Use the preset for all" clears them', async () => {
     const schemes = {

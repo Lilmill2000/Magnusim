@@ -602,7 +602,9 @@ def study_field_specs(
             "choice_labels": VELOCITY_LIMIT_LABELS,
             "group": GROUP_LIMITERS,
             "advanced": True,
-            "caution": {"off": CAUTION_LIMIT_OFF},
+            # Off is cautioned only where it is a choice (Daniel, 2026-11-05): an analysis whose
+            # own default is Off (Heat Transfer) runs that way by design and shows no caution.
+            **({"caution": {"off": CAUTION_LIMIT_OFF}} if velocity_limit_default != "off" else {}),
             "description": d("velocity_limit"),
         },
         {

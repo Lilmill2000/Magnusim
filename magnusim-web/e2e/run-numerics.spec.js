@@ -53,6 +53,7 @@ const PID = 'run-numerics-e2e';
 const STEP = { timeout: 30_000 };
 const FIRST_ORDER =
   'First-order schemes are more stable but less accurate. Fix the time step or the mesh first; use first order only to get a run started.';
+const LIMIT_OFF = 'Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh).';
 let host;
 let fake;
 let sim;
@@ -281,6 +282,24 @@ test.describe('the person and the Assistant', () => {
     const back = await openStudyPanel(page);
     await expect(back.locator('[data-schema-caution="turbulence_convection"]')).toHaveText(FIRST_ORDER, STEP);
     await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_convection: null });
+  });
+
+  test('the velocity limit Off shows its caution where it is a choice (Incompressible Flow: Automatic by default)', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await page.goto(`${host.base}/#/p/${PID}`);
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
+    const numerics = await openStudyPanel(page);
+    const limit = numerics.locator('[data-schema-key="velocity_limit"] select');
+    await expect(limit.locator('option:checked')).toHaveText('Automatic', STEP);
+    await expect(numerics.locator('[data-schema-caution="velocity_limit"]')).toHaveCount(0);
+    await limit.selectOption({ label: 'Off' }, STEP);
+    await expect(numerics.locator('[data-schema-caution="velocity_limit"]')).toHaveText(LIMIT_OFF, STEP);
+    await expect.poll(async () => (await studyRec(request)).velocity_limit, STEP).toBe('off');
+    // Back to Automatic: the caution goes.
+    await limit.selectOption({ label: 'Automatic' }, STEP);
+    await expect(numerics.locator('[data-schema-caution="velocity_limit"]')).toHaveCount(0, STEP);
+    await expect.poll(async () => (await studyRec(request)).velocity_limit ?? 'auto', STEP).toBe('auto');
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, velocity_limit: null });
   });
 });
 

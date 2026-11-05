@@ -3409,9 +3409,6 @@
             "x-cfddesk": {
               "group": "limiters",
               "advanced": true,
-              "caution": {
-                "off": "Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh)."
-              },
               "enum_labels": [
                 "Automatic",
                 "Custom",
@@ -4436,9 +4433,6 @@
             "x-cfddesk": {
               "group": "limiters",
               "advanced": true,
-              "caution": {
-                "off": "Nothing caps the velocity. An unstable run stops with an error instead of running on with clipped cells. Fix the cause (the time step or the mesh)."
-              },
               "enum_labels": [
                 "Automatic",
                 "Custom",
