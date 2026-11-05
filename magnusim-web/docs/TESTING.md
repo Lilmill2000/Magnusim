@@ -202,7 +202,9 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   queue (`MAGNUSIM_TEST_MESH_SECONDS`, default 6; `MAGNUSIM_TEST_MESH_RESULT=fail`;
   `MAGNUSIM_TEST_MESH_CHECKMESH=<checkMesh report>` puts that report in the case and writes
   the mesh's facts and quality as a real mesher does: `e2e/mesh-quality-line.spec.js`, with
-  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`),
+  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`; a Hex-dominant
+  mesh with One cell across (2D) on asks the real rule first, `tools/mesh_two_d.py`, and fails
+  with Generate's words on a part it can't mesh so: `e2e/mesh-one-cell-across.spec.js`),
   a Start runs `scripts/test-solve.js` after every check a real Start makes
   (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`) and keeps the
   run's pre-run check as a real Start's plan does (`prepare_run.checks`: `e2e/run-precheck.spec.js`), and

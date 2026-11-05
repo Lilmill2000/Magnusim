@@ -9,6 +9,7 @@
  */
 import { continuePendingKeys, runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
 import { meshQualityLines, meshQualityOf } from '../../../../src/panels/mesh/meshQuality.ts';
+import { twoDNote, type TwoDAnswer } from '../../../../src/panels/mesh/twoD.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { meshFields, REFINEMENT_FIELDS, studyFields } from './catalog.ts';
@@ -247,11 +248,14 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             const flat = dotted(settings);
             const shown: Record<string, unknown> = {};
             for (const f of meshFields(registry, engine)) if (flat[f.key] !== undefined) shown[f.key] = flat[f.key];
+            // One cell across (2D) on: the Mesh panel's note under it, from the same answer.
+            const twoD = shown['mesher_settings.one_cell_across'] === true ? twoDAnswer(await d.hostCall('mesh.two_d', q, o)) : null;
             return okData(
               {
                 ...meshRow(row, str(doc.active_id)),
                 settings: shown,
                 quality: meshQualityAnswer(rec.live_mesh_result),
+                ...(twoD ? { two_d: twoD } : {}),
               },
               `Mesh ${quoted(rec.name ?? settings.name)}`,
             );
@@ -358,6 +362,31 @@ export function meshQualityAnswer(live: unknown): Record<string, unknown> | null
   };
 }
 
+/**
+ * One cell across (2D) as the Mesh panel's note says it (twoD.ts, GET /api/mesh/two-d): whether
+ * the part can be meshed so and how (axis, depth, the two ends' faces and Symmetry), or why not
+ * (Generate refuses with the same reason), and the note's words.
+ */
+export function twoDAnswer(raw: unknown): Record<string, unknown> {
+  const a = isRecord(raw) ? (raw as TwoDAnswer) : { ok: false, error: 'no answer' };
+  const t = isRecord(a.two_d) ? (a.two_d as NonNullable<TwoDAnswer['two_d']>) : null;
+  return {
+    available: a.ok !== false && a.available === true,
+    ...(a.ok === false ? { error: text(a.error, 400) } : {}),
+    ...(a.ok !== false && !a.available ? { reason: text(a.reason, 400) } : {}),
+    ...(t
+      ? {
+          axis: text(t.axis, 4),
+          depth_m: num(t.depth_m),
+          cells_across: num(t.cells_across),
+          front: { faces: (t.front?.faces || []).map((f) => text(f, 40)), bc: text(t.front?.bc, 80) },
+          back: { faces: (t.back?.faces || []).map((f) => text(f, 40)), bc: text(t.back?.bc, 80) },
+        }
+      : {}),
+    note: twoDNote(a),
+  };
+}
+
 export function meshRow(m: Record<string, unknown>, activeId: string): Record<string, unknown> {
   const settings = isRecord(m.settings) ? m.settings : {};
   const live = isRecord(m.live_mesh_result) ? m.live_mesh_result : {};
@@ -369,6 +398,8 @@ export function meshRow(m: Record<string, unknown>, activeId: string): Record<st
       status: text(m.status ?? (m.generated ? 'done' : 'not generated'), 20),
       cells: num(m.n_cells) ?? num(live.n_cells),
       points: num(m.n_points) ?? num(live.n_points),
+      // A mesh made one cell across (2D): its summary in the Mesh panel says so.
+      ...(live.one_cell_across === true ? { one_cell_across: true } : {}),
     },
     active: m.id === activeId,
     ...(revOf(m) !== null ? { rev: revOf(m) } : {}),

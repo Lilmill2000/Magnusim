@@ -96,7 +96,7 @@
     { "row": "B9", "editions": ["magnusim"], "paths": [{ "tool": "explain_ready", "routes": ["run.ready"] }] },
     { "row": "B10", "editions": ["magnusim"], "paths": [{ "tool": "delete", "where": { "kind": "lost_faces" }, "routes": ["lost_faces.forget"] }] },
 
-    { "row": "X1", "editions": ["magnusim"], "paths": [{ "tool": "read_setup", "where": { "what": ["meshes", "mesh"] }, "routes": ["mesh.get"] }] },
+    { "row": "X1", "editions": ["magnusim"], "paths": [{ "tool": "read_setup", "where": { "what": ["meshes", "mesh"] }, "routes": ["mesh.get", "mesh.two_d"] }], "notes": "read_setup mesh also answers One cell across (2D)'s note (mesh.two_d) while it is on" },
     { "row": "X2", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "mesh", "action": "add" }, "routes": ["mesh.create"] }] },
     { "row": "X3", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "mesh", "action": "activate" }, "routes": ["mesh.activate"] }] },
     { "row": "X4", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "mesh", "action": "rename" }, "routes": ["mesh.rename"] }] },

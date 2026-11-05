@@ -112,8 +112,11 @@ App gaps found so far, and what they block:
   not the value of the cell that holds it.
 - **Refine out to** (cases 4 to 6): a custom size refines only about three target cells out
   from its faces, and there is no box refinement.
-- **A one-cell 2D slab** (cases 3 to 5): Hex-dominant puts at least 8 cells across y and 12
-  across z, refined near every surface, so a slab costs millions of cells.
+- **A one-cell 2D slab** (cases 3 to 5), added: Hex-dominant's "One cell across (2D)" meshes
+  a slab whose two end faces carry a Symmetry one cell deep (`cfddesk/mesh/two_d.py`; the panel's
+  note and Generate say why a part can't be; `e2e/mesh-one-cell-across.spec.js`,
+  `python/tests/unit/test_two_d_mesh.py`). Without it Hex-dominant puts at least 8 cells across
+  y and 12 across z, refined near every surface, so a slab costs millions of cells.
 - **A custom size's level** comes from the diagonal's base size while the block's cells on a
   thin axis are smaller, so on a thin part the cells come out finer and flatter than asked
   (`mesh_plan.py` shows it before Generate).

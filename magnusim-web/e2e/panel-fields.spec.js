@@ -46,10 +46,11 @@ test('a mesher shows the settings its run uses', async ({ page, request }) => {
   await expect(field('gap_refinement_factor')).toBeVisible();
   const engine = form.locator('select[data-mesh-engine="1"]');
 
-  // Hex-dominant reads fineness, layers and physics-based only.
+  // Hex-dominant reads fineness, layers, physics-based and its own One cell across (2D).
   await engine.selectOption('snappy_hexdominant');
   await expect(algorithm).toHaveText('Hex-dominant');
   await expect(field('fineness')).toBeVisible();
+  await expect(field('one_cell_across')).toContainText('One cell across (2D)');
   for (const key of ['small_feature_suppression', 'gap_refinement_factor', 'global_gradation_rate']) {
     await expect(field(key)).toHaveCount(0);
   }
@@ -61,6 +62,7 @@ test('a mesher shows the settings its run uses', async ({ page, request }) => {
     await expect(field(key)).toBeVisible();
   }
   await expect(field('gap_refinement_factor')).toHaveCount(0);
+  await expect(field('one_cell_across')).toHaveCount(0);
 
   // Without a hex core, cfMesh hands the mesh to Standard: the panel says so.
   const hexCore = form.locator('button[aria-label="Hex element core"]');

@@ -158,6 +158,9 @@ function answer(w, method, path, q, body) {
       }
       case '/api/mesh/refinements':
         return { ok: true, refinements: w.refinements, mesh_refinements_json_path: `${WIN}\\r.json` };
+      case '/api/mesh/two-d':
+        // One cell across (2D): the study's part (w.two_d), else one with no Symmetry.
+        return w.two_d || { ok: true, available: false, reason: 'No boundary condition is a Symmetry.', project_id: 'p1', simulation_id: sim };
       case '/api/run/status': {
         const want = q.get('run_id');
         const id = want || w.active_run;

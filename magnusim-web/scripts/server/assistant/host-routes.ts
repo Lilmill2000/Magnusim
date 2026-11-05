@@ -75,6 +75,8 @@ export const HOST_ROUTE_TABLE: Record<string, HostRoute> = {
   'materials.get': read('/api/materials', PS),
   'bcs.get': read('/api/bcs', PS),
   'mesh.get': read('/api/mesh', (a) => ({ ...PS(a), mesh_id: opt(str(a.mesh_id)) })),
+  // One cell across (2D, Hex-dominant): whether the study's part can be meshed so (the Mesh panel's note).
+  'mesh.two_d': read('/api/mesh/two-d', PS),
   'refinements.get': read('/api/mesh/refinements', PS),
   'run.status': read('/api/run/status', (a) => ({ ...PS(a), run_id: opt(str(a.run_id)) })),
   'geometry.meta': read('/api/geometry/cad', (a) => ({ project_id: str(a.project_id), geometry_id: opt(str(a.geometry_id)), part: 'meta' }), { maxBytes: MB16 }),

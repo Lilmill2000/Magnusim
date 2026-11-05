@@ -353,7 +353,18 @@ describe('setup_edit: every kind × action, the exact routes and bodies', () => 
     // An update with nothing to change sends nothing (an empty body restores the defaults).
     const none = await sent(t(), setup({ kind: 'mesh', action: 'update', id: 'm2' }));
     assert.deepEqual([none.out.error.code, none.writes], ['invalid_input', []]);
-    // A mesher's own setting goes under mesher_settings, merged with the stored ones.
+    // A mesher's own setting goes under mesher_settings, merged with the stored ones: Hex-dominant's
+    // One cell across (2D), as the Mesh panel saves it.
+    app.w.meshes[1].settings = { name: 'Mesh 2', fineness: 3, advanced: { mesh_engine: 'snappy_hexdominant' }, mesher_settings: { keep: 1 } };
+    const twoD = await sent(t(), setup({ kind: 'mesh', action: 'update', id: 'm2', values: [{ key: 'mesher_settings.one_cell_across', value: 'true' }] }));
+    assert.equal(twoD.out.ok, true, JSON.stringify(twoD.out));
+    assert.deepEqual(twoD.writes.map((w) => [w.path, w.body]), [
+      ['/api/mesh', { mesher_settings: { keep: 1, one_cell_across: true }, project_id: 'p1', simulation_id: 's1', mesh_id: 'm2' }],
+    ]);
+    // A mesher without it refuses the key.
+    app.w.meshes[1].settings = { name: 'Mesh 2', fineness: 3, advanced: { mesh_engine: 'standard' }, mesher_settings: { keep: 1 } };
+    const std = await sent(t(), setup({ kind: 'mesh', action: 'update', id: 'm2', values: [{ key: 'mesher_settings.one_cell_across', value: 'true' }] }));
+    assert.deepEqual([std.out.error.code, std.writes], ['bad_values', []]);
     app.w.meshes[1].settings.mesher_settings = { keep: 1 };
     const own = await sent(t(), setup({ kind: 'mesh', action: 'update', id: 'm2', values: [{ key: 'fineness', value: '11' }, { key: 'advanced.mesh_engine', value: '"nope"' }] }));
     assert.deepEqual([own.out.error.code, own.out.error.detail.length], ['bad_values', 2]);

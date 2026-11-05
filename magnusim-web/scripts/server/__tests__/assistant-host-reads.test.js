@@ -312,6 +312,48 @@ describe('read_setup', () => {
     app.w.meshes[0].live_mesh_result = { status: 'done', n_cells: 1200, quality: { known: false } };
     assert.equal((await read('mesh', { id: 'm1' })).quality, null);
   });
+  it("One cell across (2D) on: the Mesh panel's note under it, from the same answer (GET /api/mesh/two-d); off: not asked", async () => {
+    fresh();
+    const asked = () => app.seen.filter((r) => r.path === '/api/mesh/two-d').length;
+    const before = asked();
+    assert.equal((await read('mesh', { id: 'm1' })).two_d, undefined);
+    assert.equal(asked(), before);
+    app.w.meshes[0].settings = { name: 'Mesh 1', fineness: 4, advanced: { mesh_engine: 'snappy_hexdominant' }, mesher_settings: { one_cell_across: true } };
+    let mesh = await read('mesh', { id: 'm1' });
+    assert.equal(mesh.settings['mesher_settings.one_cell_across'], true);
+    assert.deepEqual(mesh.two_d, {
+      available: false,
+      reason: 'No boundary condition is a Symmetry.',
+      note: 'Not available on this part: No boundary condition is a Symmetry. Generate refuses until it is.',
+    });
+    app.w.two_d = {
+      ok: true,
+      available: true,
+      two_d: { axis: 'z', depth_m: 0.01, cells_across: 1, front: { faces: ['Face 5@Body1'], bc: 'Sides', patch: 'sides' }, back: { faces: ['Face 3@Body1'], bc: 'Sides', patch: 'sides' } },
+    };
+    mesh = await read('mesh', { id: 'm1' });
+    assert.deepEqual(mesh.two_d, {
+      available: true,
+      axis: 'z',
+      depth_m: 0.01,
+      cells_across: 1,
+      front: { faces: ['Face 5@Body1'], bc: 'Sides' },
+      back: { faces: ['Face 3@Body1'], bc: 'Sides' },
+      note: '2D: one cell across, 10 mm deep along z, between Face 5@Body1 and Face 3@Body1 (Symmetry "Sides").',
+    });
+    // The check failed: said so, not available.
+    app.w.two_d = { ok: false, error: 'FileNotFoundError: the study has no geometry' };
+    mesh = await read('mesh', { id: 'm1' });
+    assert.deepEqual(
+      [mesh.two_d.available, mesh.two_d.error, mesh.two_d.note],
+      [false, 'FileNotFoundError: the study has no geometry', "Couldn't check the part: FileNotFoundError: the study has no geometry"],
+    );
+    delete app.w.two_d;
+    // A mesh generated one cell across: its row says so, as its summary in the Mesh panel does.
+    app.w.meshes[0].live_mesh_result = { status: 'done', n_cells: 1769, one_cell_across: true, two_d: { axis: 'z', cells_across: 1 } };
+    assert.equal((await read('meshes')).meshes[0].generated.one_cell_across, true);
+    assert.equal((await read('meshes')).meshes[1].generated.one_cell_across, undefined);
+  });
   it('faces page by 200; a preview still being made is waited for; an unknown id is not_found', async () => {
     fresh();
     app.w.meta.g1.faces = Array.from({ length: 450 }, (_, i) => ({ id: i + 1, body: 1, area: 1 }));
