@@ -6,6 +6,11 @@ time stamp is fixed), so a change in it shows in a diff. The driver adds the run
 to the project's title. A Hex-dominant plan also carries what its mesh will be
 (``mesh.estimate``, mesh_plan.py), worked out with the mesher's own sizing functions.
 
+A variant the case says may use another's mesh (``MESH_FROM``: two turbulence models on one
+mesh) carries ``mesh_from`` (that variant and this plan's ``mesh_key``, a hash of its geometry,
+fluid, BCs and mesh): the driver reuses the other run's mesh only when its plan has the same
+key, else this run meshes its own.
+
 Mesh or study settings given on the command line (``--mesh-settings``, ``--study-settings``: a
 development probe) are merged into the case's own and recorded under ``overrides``; such a
 plan's runs go to ``results-probe/`` and never into the report.
@@ -13,6 +18,7 @@ plan's runs go to ``results-probe/`` and never into the report.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import ModuleType
@@ -99,12 +105,30 @@ def make_plan(case: ModuleType, variant: str, out_dir: Path, *, coarse: bool = F
     }
     if overrides:
         plan["overrides"] = overrides
+    plan["mesh_key"] = mesh_key(plan)
+    src = (getattr(case, "MESH_FROM", None) or {}).get(variant)
+    if src:
+        plan["mesh_from"] = {"variant": src, "key": plan["mesh_key"]}
     bounds_mm, volume_mm3 = shape_bounds_and_volume(shape)
     est = estimate(plan["mesh"], rows, bounds_mm, volume_mm3)
     if est is not None:
         plan["mesh"]["estimate"] = est
     (out_dir / PLAN_FILE).write_text(json.dumps(plan, indent=1) + "\n", encoding="utf-8", newline="\n")
     return plan
+
+
+def mesh_key(plan: dict[str, Any]) -> str:
+    """A hash of what a plan's mesh depends on and what its solve shares with it: the geometry,
+    the study's kind, the fluid, the BCs and the mesh (its settings and refinements)."""
+    mesh = plan.get("mesh") or {}
+    doc = {
+        "geometry": (plan.get("geometry") or {}).get("sha256"),
+        "study": {k: (plan.get("study") or {}).get(k) for k in ("analysis_type", "time_dependency")},
+        "material": plan.get("material"),
+        "bcs": plan.get("bcs"),
+        "mesh": {k: mesh.get(k) for k in ("name", "settings", "refinements")},
+    }
+    return hashlib.sha256(json.dumps(doc, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
 def read_plan(run_dir: Path) -> dict[str, Any]:

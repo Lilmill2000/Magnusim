@@ -185,8 +185,9 @@ class Raw:
                     return a
         return None
 
-    def probe_values(self, name: str, component: int = 0) -> list[tuple[float, float]]:
-        """(x, U component) at each point of a Point probe monitor's last saved step."""
+    def probe_values(self, name: str, component: int = 0, axis: int = 0) -> list[tuple[float, float]]:
+        """(the point's coordinate on ``axis``, U component) at each point of a Point probe
+        monitor's last saved step, in the order of that coordinate."""
         out: list[tuple[float, float]] = []
         slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
         for mon in self.monitor_rows():
@@ -198,7 +199,7 @@ class Raw:
             pt = mon.get("point") or mon.get("location") or (last or {}).get("point")
             if isinstance(u, list) and len(u) > component and isinstance(pt, list) and pt:
                 ux = _f(u[component])
-                x = _f(pt[0])
+                x = _f(pt[axis])
                 if ux is not None and x is not None:
                     out.append((x, ux))
         return sorted(out)
@@ -296,6 +297,9 @@ def mesh_section(raw: Raw, plan: dict[str, Any], drv: dict[str, Any] | None) -> 
         },
         "layers_applied": live.get("layers_applied"),
         "hex_core_applied": live.get("hex_core_applied"),
+        # The mesh an earlier variant made, reused (two turbulence models on one mesh).
+        "shared_from": ((drv or {}).get("mesh_shared") or {}).get("from"),
+        **({"two_d": facts["two_d"]} if facts.get("two_d") else {}),
         "facts_found": bool(facts),
     }
 
@@ -370,6 +374,14 @@ def precheck_section(raw: Raw) -> dict[str, Any]:
     }
 
 
+def specs_of(case: Any, variant: str) -> list[Any]:
+    """The quantities one variant of a case compares (a case whose references differ by variant
+    says which with ``quantities(variant)``)."""
+    if hasattr(case, "quantities"):
+        return list(case.quantities(variant))
+    return list(case.QUANTITIES.values())
+
+
 def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
     """Write ``result.json`` of the run in ``run_dir``; return it."""
     from . import cases
@@ -432,7 +444,7 @@ def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
     if hist:
         measured["series"]["residuals"] = residual_series(hist)
     if not measured["quantities"]:
-        measured["quantities"] = [compare(spec, None) for spec in case.QUANTITIES.values()]
+        measured["quantities"] = [compare(spec, None) for spec in specs_of(case, plan["variant"])]
     app = dict((drv or {}).get("app") or {})
     app["openfoam"] = openfoam_version(log_start)
     doc: dict[str, Any] = {

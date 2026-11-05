@@ -12,6 +12,12 @@ around a sphere of the same area), plus the layers. It reads about 1.3 to 1.4 ti
 real meshes. The driver refuses to Generate a plan whose count is
 over its cap (``MAGNUSIM_VALIDATION_MAX_CELLS``), so a probe never asks WSL for a mesh it
 cannot hold.
+
+With One cell across (2D) on (``mesher_settings.one_cell_across``) and the plan's depth axis
+(``mesh.two_d_axis``) the estimate is of the 2D mesh: the background block one cell deep and
+sized from the section's diagonal (``base_cell_size(two_d_axis=...)``, as the mesher does), each
+side face's cells along its length, a Refine out to's band as a ring around a circle of the
+faces' length, and the two end faces left out.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from typing import Any
 BAND_CELLS = 3
 # A layer stack this many times the smallest wall cell or more is likely to be shrunk or dropped.
 STACK_WARN = 3.0
+AXES = ("x", "y", "z")
 
 
 def shape_bounds_and_volume(shape: Any) -> tuple[list[float], float]:
@@ -68,6 +75,8 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
     settings = mesh.get("settings") or {}
     if (settings.get("advanced") or {}).get("mesh_engine") != "snappy_hexdominant":
         return None
+    if (settings.get("mesher_settings") or {}).get("one_cell_across") and mesh.get("two_d_axis") in AXES:
+        return _estimate_2d(mesh, faces, bounds_mm, volume_mm3, AXES.index(str(mesh["two_d_axis"])))
     from cfddesk.mesh.snappy_hexdominant import (
         _PAD,
         DEFAULT_BAND_CELLS,
@@ -171,5 +180,128 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
         "layers": layers,
         "n_cells": int(round(background + surface_cells + layer_cells, -3)),
         "n_cells_note": "an order of magnitude (1.3 to 1.4 times case 1's real meshes), not a prediction",
+        "warnings": warnings,
+    }
+
+
+def _estimate_2d(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[float], volume_mm3: float,
+                 axis: int) -> dict[str, Any]:
+    """The 2D (one cell across) Hex-dominant mesh a plan asks for, its depth along ``axis``."""
+    from cfddesk.mesh.snappy_hexdominant import (
+        _PAD,
+        DEFAULT_BAND_CELLS,
+        base_cell_size,
+        fineness_params,
+        refine_distance_m,
+        refinement_level_for_size,
+    )
+    from cfddesk.mesh.web_refinements import (
+        is_inflate,
+        is_surface_custom,
+        reach_metres,
+        size_to_metres,
+    )
+
+    settings = mesh.get("settings") or {}
+    f = int(settings.get("fineness") or 5)
+    physics = bool(settings.get("physics_based_meshing", True))
+    b = [v / 1000.0 for v in bounds_mm]
+    bounds_m = {"xmin": b[0], "xmax": b[1], "ymin": b[2], "ymax": b[3], "zmin": b[4], "zmax": b[5]}
+    params = fineness_params(f, physics_based=physics, bounds_m=bounds_m)
+    walls_level = int(params["walls_level"])
+    base_m = base_cell_size(f, bounds_m, two_d_axis=axis) or 0.0
+    ext_mm = [bounds_mm[1] - bounds_mm[0], bounds_mm[3] - bounds_mm[2], bounds_mm[5] - bounds_mm[4]]
+    depth_mm = ext_mm[axis]
+    inplane = [k for k in range(3) if k != axis]
+    block = [1 if k == axis else max(8, round(ext_mm[k] * _PAD / (base_m * 1000.0))) for k in range(3)]
+    base_mm = [depth_mm if k == axis else ext_mm[k] * _PAD / block[k] for k in range(3)]
+
+    def dims(level: int) -> list[float]:
+        return [v if k == axis else v / 2**level for k, v in enumerate(base_mm)]
+
+    def along(level: int) -> float:
+        d = dims(level)
+        return 0.5 * (d[inplane[0]] + d[inplane[1]])
+
+    def area_cell(level: int) -> float:
+        d = dims(level)
+        return d[inplane[0]] * d[inplane[1]]
+
+    def is_end(fc: dict[str, Any]) -> bool:
+        n = fc.get("normal")
+        if not n:
+            return False
+        return fc.get("surface_type") == "Plane" and abs(float(n[axis])) > 0.999
+
+    sides = {int(fc["id"]): fc for fc in faces if not is_end(fc)}
+    level_of = {fid: walls_level for fid in sides}
+    customs = []
+    for ref in mesh.get("refinements") or []:
+        if not is_surface_custom(ref):
+            continue
+        size_m = size_to_metres(ref.get("default_size", 2), ref.get("default_size_unit") or "mm")
+        level = refinement_level_for_size(base_m, size_m)
+        ids = [i for i in _label_ids(ref.get("faces") or []) if i in sides]
+        for i in ids:
+            level_of[i] = max(level_of[i], level)
+        reach_m = reach_metres(ref)
+        customs.append({"name": ref.get("name"), "size_mm": size_m * 1000.0, "level": level,
+                        "cell_mm": [round(v, 4) for v in dims(level)], "faces": len(ids), "ids": ids,
+                        **({"reach_mm": reach_m * 1000.0,
+                            "distance_mm": round(refine_distance_m(size_m, reach_m) * 1000.0, 4)} if reach_m else {})})
+    length = {fid: float(fc["area_mm2"]) / depth_mm for fid, fc in sides.items()}
+    face_cells = {fid: length[fid] / along(level_of[fid]) for fid in sides}
+    surface_cells = sum(BAND_CELLS * n for n in face_cells.values())
+    finest = max([walls_level, *level_of.values()])
+    for c in customs:
+        if c.get("distance_mm", 0.0) <= DEFAULT_BAND_CELLS * c["size_mm"] * (1.0 + 1e-9) or not c["ids"]:
+            continue
+        # The band around the faces: a ring of the distance around a circle of their length,
+        # never more than the section itself (a band that reaches across all of it).
+        d, perim = float(c["distance_mm"]), sum(length[i] for i in c["ids"])
+        band = min(perim * d + math.pi * d * d, volume_mm3 / depth_mm if depth_mm else 0.0)
+        surface_cells += band / area_cell(int(c["level"])) - BAND_CELLS * sum(face_cells[i] for i in c["ids"])
+    section_mm2 = volume_mm3 / depth_mm if depth_mm else 0.0
+    surface_cells = min(surface_cells, section_mm2 / area_cell(finest))
+    box_mm2 = math.prod(ext_mm[k] * _PAD for k in inplane)
+    background = block[inplane[0]] * block[inplane[1]] * min(1.0, section_mm2 / box_mm2)
+    layers = []
+    layer_cells = 0.0
+    for ref in mesh.get("refinements") or []:
+        if not is_inflate(ref):
+            continue
+        ids = [i for i in _label_ids(ref.get("faces") or []) if i in sides]
+        n_layers = int(ref.get("n_layers") or 0)
+        stack_mm = size_to_metres(ref.get("total_thickness") or 0, ref.get("total_thickness_unit") or "mm") * 1000.0
+        walls = [min(dims(level_of[i])[k] for k in inplane) for i in ids] or [min(dims(walls_level)[k] for k in inplane)]
+        cell = min(walls)
+        layer_cells += n_layers * sum(face_cells[i] for i in ids)
+        layers.append({"name": ref.get("name"), "n_layers": n_layers, "stack_mm": stack_mm,
+                       "smallest_wall_cell_mm": round(cell, 4),
+                       "stack_over_smallest_cell": round(stack_mm / cell, 3) if cell else None})
+    warnings = [
+        f"{x['name']}: the {x['stack_mm']:g} mm layer stack is {x['stack_over_smallest_cell']:g} times the smallest "
+        f"wall cell ({x['smallest_wall_cell_mm']:g} mm); the layers may be shrunk or dropped"
+        for x in layers
+        if x["stack_over_smallest_cell"] and x["stack_over_smallest_cell"] >= STACK_WARN
+    ]
+    n_cells = background + surface_cells + layer_cells
+    return {
+        "mesher": "snappy_hexdominant",
+        "one_cell_across": True,
+        "two_d_axis": AXES[axis],
+        "fineness": f,
+        "bounds_mm": [round(v, 4) for v in bounds_mm],
+        "block": block,
+        "base_cell_mm": [round(v, 4) for v in base_mm],
+        "walls_level": walls_level,
+        "wall_cell_mm": [round(v, 4) for v in dims(walls_level)],
+        "custom_sizes": [{k: v for k, v in c.items() if k != "ids"} for c in customs],
+        "layers": layers,
+        "n_cells": int(round(n_cells, -2)),
+        # Before extrudeMesh the 3D slab has up to 2^level cells across its depth for each 2D
+        # cell (cfddesk.mesh.two_d): at most about this many, all at the finest level.
+        "slab_3d_cells_max": int(round(n_cells * 2**finest, -3)),
+        "n_cells_note": "an order of magnitude of the 2D mesh (one cell across), not a prediction",
         "warnings": warnings,
     }

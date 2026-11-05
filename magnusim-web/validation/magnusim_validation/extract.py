@@ -139,3 +139,89 @@ def last_drift(values: Sequence[Any], fraction: float = 0.1) -> float | None:
         return None
     k = max(1, int(round(a.size * fraction)))
     return float(abs(a[-1] - a[-1 - k]) / abs(a[-1]))
+
+
+def interp_at(x: ArrayLike, y: ArrayLike, at: ArrayLike) -> np.ndarray:
+    """``y`` linearly interpolated at each of ``at`` (outside the samples: NaN, never the end
+    value carried on)."""
+    xa, ya = arrays(x, y)
+    if xa.size < 2:
+        raise ValueError(f"interpolation needs at least 2 samples, got {xa.size}")
+    q = np.asarray(at, dtype=float).reshape(-1)
+    out = np.interp(q, xa, ya)
+    eps = 1e-9 * max(1.0, float(np.abs(xa).max()))
+    out[(q < xa[0] - eps) | (q > xa[-1] + eps)] = np.nan
+    return out
+
+
+def extremum(x: ArrayLike, y: ArrayLike, *, kind: str = "min") -> dict[str, float]:
+    """The lowest (``kind="min"``) or highest sample of ``y`` refined by the parabola through it
+    and its two neighbours: ``x`` and ``value`` of the parabola's vertex (the sample itself at
+    either end of the series, or when the three are on a line), and ``x_sample``, ``value_sample``."""
+    if kind not in ("min", "max"):
+        raise ValueError(f"kind is 'min' or 'max', not {kind!r}")
+    xa, ya = arrays(x, y)
+    if xa.size < 3:
+        raise ValueError(f"an extremum needs at least 3 samples, got {xa.size}")
+    i = int(np.argmin(ya) if kind == "min" else np.argmax(ya))
+    out = {"x": float(xa[i]), "value": float(ya[i]), "x_sample": float(xa[i]), "value_sample": float(ya[i])}
+    if 0 < i < xa.size - 1:
+        x0, x1, x2 = xa[i - 1 : i + 2]
+        y0, y1, y2 = ya[i - 1 : i + 2]
+        a = np.polyfit([x0 - x1, 0.0, x2 - x1], [y0, y1, y2], 2)
+        if abs(a[0]) > 0:
+            dx = -a[1] / (2 * a[0])
+            if x0 - x1 <= dx <= x2 - x1:
+                out["x"] = float(x1 + dx)
+                out["value"] = float(a[2] - a[1] ** 2 / (4 * a[0]))
+    return out
+
+
+def stream_function(x: ArrayLike, y: ArrayLike, u: ArrayLike) -> np.ndarray:
+    """psi(x_i, y_j) = the integral of u from the first y up to y_j along each column (the
+    trapezoid rule), for u on a grid ``u[i, j]`` at ``x[i]``, ``y[j]`` (u = d psi / d y; psi is
+    zero on the wall at the first y)."""
+    ya = np.asarray(y, dtype=float).reshape(-1)
+    ua = np.asarray(u, dtype=float)
+    if ua.shape != (np.asarray(x).size, ya.size):
+        raise ValueError(f"u is {ua.shape}, not (len(x), len(y)) = ({np.asarray(x).size}, {ya.size})")
+    dy = np.diff(ya)
+    inc = 0.5 * (ua[:, 1:] + ua[:, :-1]) * dy[None, :]
+    return np.concatenate([np.zeros((ua.shape[0], 1)), np.cumsum(inc, axis=1)], axis=1)
+
+
+def grid_minimum(x: ArrayLike, y: ArrayLike, z: ArrayLike) -> dict[str, float]:
+    """The lowest value of ``z[i, j]`` (at ``x[i]``, ``y[j]``) refined by a least-squares
+    quadratic surface through the 3 x 3 samples around the lowest one: ``x``, ``y`` and
+    ``value`` of its minimum (the sample itself on the grid's edge, or when the surface has
+    no minimum inside those samples), and ``value_sample``."""
+    xa = np.asarray(x, dtype=float).reshape(-1)
+    ya = np.asarray(y, dtype=float).reshape(-1)
+    za = np.asarray(z, dtype=float)
+    if za.shape != (xa.size, ya.size):
+        raise ValueError(f"z is {za.shape}, not ({xa.size}, {ya.size})")
+    masked = np.where(np.isfinite(za), za, np.inf)
+    i, j = np.unravel_index(int(np.argmin(masked)), za.shape)
+    out = {"x": float(xa[i]), "y": float(ya[j]), "value": float(za[i, j]), "value_sample": float(za[i, j])}
+    if not (0 < i < xa.size - 1 and 0 < j < ya.size - 1):
+        return out
+    rows, vals = [], []
+    for di in (-1, 0, 1):
+        for dj in (-1, 0, 1):
+            v = za[i + di, j + dj]
+            if not np.isfinite(v):
+                return out
+            px, py = xa[i + di] - xa[i], ya[j + dj] - ya[j]
+            rows.append([1.0, px, py, px * px, px * py, py * py])
+            vals.append(v)
+    c, *_ = np.linalg.lstsq(np.asarray(rows), np.asarray(vals), rcond=None)
+    hess = np.array([[2 * c[3], c[4]], [c[4], 2 * c[5]]])
+    if np.linalg.det(hess) <= 0 or hess[0, 0] <= 0:
+        return out
+    d = np.linalg.solve(hess, -np.array([c[1], c[2]]))
+    if not (xa[i - 1] - xa[i] <= d[0] <= xa[i + 1] - xa[i] and ya[j - 1] - ya[j] <= d[1] <= ya[j + 1] - ya[j]):
+        return out
+    out["x"] = float(xa[i] + d[0])
+    out["y"] = float(ya[j] + d[1])
+    out["value"] = float(c[0] + c[1] * d[0] + c[2] * d[1] + c[3] * d[0] ** 2 + c[4] * d[0] * d[1] + c[5] * d[1] ** 2)
+    return out

@@ -118,3 +118,27 @@ def test_build_and_check_round_trip(tmp_path: Path):
     assert build_all(check=True, root=res_root, md_path=md, site_dir=site) == 0
     md.write_text(md.read_text(encoding="utf-8") + "edited\n", encoding="utf-8")
     assert build_all(check=True, root=res_root, md_path=md, site_dir=site) == 1
+
+
+def test_heat_transfers_own_set_is_in_the_report_and_on_the_page(tmp_path: Path):
+    """Daniel (2026-11-05): the page shows Heat Transfer's results too, from its own committed
+    rows, with their citations and the words on how its runs differ from this set's."""
+    from magnusim_validation import heat_transfer
+
+    ht = heat_transfer.load()
+    assert ht is not None and len(ht["rows"]) >= 10
+    res = _exact(tmp_path)
+    text = build_markdown([res])
+    assert "## Heat Transfer" in text and "not sent over the app's HTTP routes" in text
+    assert "| de Vahl Davis cavity, Ra = 1e5 | Nu-bar (mean of the hot and cold walls) | 4.519 | 4.494 ± 0.00 % | -0.55 % | Hex-dominant | 105 518 |" in text
+    assert "Reference: G. de Vahl Davis, Natural convection of air in a square cavity" in text
+    assert "V. Gnielinski" in text and "Shah and A. L. London" in text
+    files = build_site([res], ht)
+    page = files["index.html"]
+    assert "<h2>Heat Transfer</h2>" in page and "de Vahl Davis" in page and "Gnielinski" in page
+    assert page.index("<h2>Heat Transfer</h2>") < page.index("<h2>How to reproduce</h2>")
+    doc = json.loads(files["results.json"])
+    assert doc["heat_transfer"]["source"] == "bundled-plugins/heat_transfer/validation/results.json"
+    assert len(doc["heat_transfer"]["rows"]) == len(ht["rows"])
+    # Without Heat Transfer's rows the page has no such section.
+    assert "<h2>Heat Transfer</h2>" not in build_site([res])["index.html"]

@@ -1,0 +1,14 @@
+# citation: O. Botella, R. Peyret (1998), "Benchmark spectral results on the lid-driven cavity flow", Computers & Fluids 27(4):421-433
+# where: the extrema of u on the vertical centreline (x = 0.5) and of v on the horizontal one (y = 0.5), with where they lie (Chebyshev collocation, N = 128 and 160)
+# conditions: lid-driven square cavity, steady, two-dimensional; Re = U_lid L / nu (100 and 1000); x and y over L from the bottom-left corner, the lid at y = 1 moving in +x; velocities over U_lid; converged to about 1e-6
+# kind: numerical
+# confidence: SECONDARY
+# checked: the paper itself was not read; the values as reproduced by Marchi, Suero & Araki (2009) Tables 8 and 11-13, by Erturk, Corke & Gokcol (2005) Table 1 and by the notus-cfd validation page agree. Marchi et al.'s own 1024 x 1024 values, read in their full text (CONFIRMED), agree to the sixth digit: Re 100 u_min -0.2140417 at y 0.45850, v_max 0.179572814 at x 0.23682, v_min -0.253804 at x 0.81006; Re 1000 u_min -0.3885721 at y 0.17139, v_max 0.3769471 at x 0.15771, v_min -0.527056 at x 0.90967
+# note: "at" is where the extremum lies along its line: y for u_min, x for v_max and v_min
+re,quantity,value,at
+100,u_min,-0.2140424,0.4581
+100,v_max,0.1795728,0.2370
+100,v_min,-0.2538030,0.8104
+1000,u_min,-0.3885698,0.1717
+1000,v_max,0.3769447,0.1578
+1000,v_min,-0.5270771,0.9092

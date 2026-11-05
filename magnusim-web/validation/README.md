@@ -44,7 +44,8 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    every answer is saved in `raw/` (not committed).
 3. **Evaluate** (`python -m magnusim_validation evaluate <dir>`): first the values no route
    gives, read from the run's case folder while it is there (`sampling.py`: cell values by
-   the app's own volume loader, `app_sampling`; a patch field the run saved, `case_file`),
+   the app's own volume loader, or a line sampled as Plot over path samples it with a
+   vector's components kept, `app_sampling`; a patch field the run saved, `case_file`),
    kept in `raw/sample_<key>.json`; then `result.json`, the
    compared values with their source (`route:<path>`, `app_sampling`), how each was measured, its reference
    with the citation, the error and the proposed band; the mesh (cells, checkMesh, wall
@@ -55,7 +56,15 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    does a steady run that stops at its iteration limit while its monitors still move
    (`not_settled`: more than the case's `SETTLE_DRIFT` over the last 10 % of iterations).
 4. **Report** (`python -m magnusim_validation report`): `VALIDATION.md`, `docs/validation/`
-   (`index.html`, `results.json`) and the figures (`docs/validation/img/`, matplotlib).
+   (`index.html`, `results.json`) and the figures (`docs/validation/img/`, matplotlib), with
+   Heat Transfer's own validation set after the cases (`heat_transfer.py`: its committed
+   `bundled-plugins/heat_transfer/validation/results.json`, not run again; its runs go through
+   the plugin's own Python path, not the app's routes, and the report says so).
+
+Two variants of a case may share a mesh (`MESH_FROM`: case 2's k-epsilon run on its k-omega
+SST run's mesh). The plan carries a hash of its geometry, fluid, BCs and mesh (`mesh_key`);
+the driver reuses the earlier run's mesh only when that run is beside it with the same key
+and its project is still on the server, and otherwise meshes its own.
 
 ## Files
 
@@ -65,7 +74,9 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
 | `magnusim_validation/model.py` | References, tolerances, the comparison (report-only until locked) |
 | `magnusim_validation/geometry.py`, `faces.py`, `plan.py` | The STEP, the app's face table and selectors, `plan.json` |
 | `magnusim_validation/evaluate.py`, `extract.py`, `result.py` | `result.json` and its checker, the numerics |
-| `magnusim_validation/sampling.py`, `mesh_plan.py` | Reads of the run's case folder; what a Hex-dominant plan's mesh will be |
+| `magnusim_validation/sampling.py`, `mesh_plan.py` | Reads of the run's case folder; what a Hex-dominant plan's mesh will be (one cell across too) |
+| `magnusim_validation/refs.py`, `refs/*.csv` | Reference tables, each with its citation, where in the source, conditions, kind and confidence in its header |
+| `magnusim_validation/heat_transfer.py` | Heat Transfer's own set on the report and the page |
 | `magnusim_validation/report.py`, `site.py`, `plots.py` | `VALIDATION.md`, the public page, the figures |
 | `e2e/driver.mjs`, `e2e/validation.spec.js`, `playwright.config.js` | The HTTP driver and the opt-in suite (only the bundled plugins load) |
 | `results/<case>/<variant>/` | `plan.json` and `result.json` of the committed runs |
@@ -93,8 +104,8 @@ their citations; this list is what those modules must start from.
 
 | Case | What the reference data set |
 |---|---|
-| 2, turbulent pipe, Re 5e4 | f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). Read f at least 40 D from the inlet (turbulent development is about 20 D): a pipe of about 55 D, or check that the slopes over two stretches agree. |
-| 3, lid-driven cavity, Re 100 and 1000 | Ghia et al. (1982) Tables I and II; extrema within 3 % of Botella and Peyret (1998), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 %: absolute bands and a reference of zero (`Tolerance(abs_tol=...)`), and a reference table per profile. |
+| 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). Read f at least 40 D from the inlet (turbulent development is about 20 D), or check that the slopes over two stretches agree: Hex-dominant cannot mesh a pipe much longer than 30 D cleanly (below), so the pipe is 30 D, f is read over x/D 20 to 25 and the slope over 15 to 20 is shown beside it. |
+| 3, lid-driven cavity, Re 100 and 1000 | Built (`c3_lid_cavity.py`, one cell across). Ghia et al. (1982) Tables I and II (`refs/ghia_1982_*.csv`, with the one correction at x = 0.9063, Re 1000: -0.51550); extrema within 3 % of Botella and Peyret (1998, `refs/botella_peyret_1998_extrema.csv`), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 % of Marchi et al. (2009, `refs/marchi_2009_vortex.csv`). |
 | 4, backward-facing step | Re_D 100 against Armaly et al. (1983) Fig. 14, x1/S = 3.00, ±10 % (the flow turns three-dimensional near Re 400, so not Re 389); Re_D 800 against Gartling (1990), 12.20, ±7 %; outlet at least 30 H downstream. |
 | 5, cylinder | Cd ±5 % at Re 20 and 40; at Re 100 St ±3 %, mean Cd ±5 %, CL rms ±15 %. A domain at least 40 D wide (blockage at most 2.5 %), about 15 D upstream and 30 D or more downstream; averages over at least 20 shedding periods after the transient (about 200 D/U or more of run). |
 | 6, sphere, Re 100 | Cd 1.09 ±5 %, L/D 0.88 ±7 %; at least 15 D to each side and about 15 D downstream. |
@@ -107,7 +118,15 @@ App gaps found so far, and what they block:
   pressure), and the case's speed is the wall's
   (`bundled-plugins/incompressible_flow/e2e/closed-domain.spec.js`, `tests/test_closed_domain.py`).
 - **Signed profiles** (cases 3 to 6): Plot over path gives a vector's magnitude only; the
-  harness reads cell values with the app's own loader instead (`sampling.cells`).
+  harness reads cell values with the app's own loader (`sampling.cells`) or samples a line as
+  the route does with the components kept (`sampling.line`, checked against the route's own
+  program in `tests/test_sampling.py`, and against its answer in every cavity run).
+- **Long thin parts on Hex-dominant** (case 2): its background block keeps at least 8 and 12
+  cells across the part's two small axes while its cells along the long one grow with the
+  length, so the cells near the wall come out long and flat. A 55 D pipe at fineness 6 had
+  25 196 faces over 65 degrees non-orthogonal before snapping and failed checkMesh (8 cells
+  of negative volume) although Generate finished; a 40 D pipe at fineness 7 kept 0.03 of its
+  two wall layers. A 30 D pipe at fineness 6 meshes (its worst face at 65 degrees).
 - **Point probes**, fixed: they read the value at the point (`interpolationScheme cellPoint`),
   not the value of the cell that holds it.
 - **Refine out to** (cases 4 to 6), added: Surface custom sizing's "Refine out to" keeps the
@@ -133,7 +152,7 @@ App gaps found so far, and what they block:
   aligned with the flow (a cell Péclet number U h / nu of order 10 here): first-order
   convection makes it much worse, a finer mesh helps only slowly, and the gradient limiter,
   the hex core and the layers do not explain it. Under investigation; case 2's Standard runs
-  wait for it.
+  are in the set beside it, read the same way.
 
 Mesh probes first: `--mesh-only` for each new case (into `results-probe/`), with its plan's
 estimate checked, before any solve.

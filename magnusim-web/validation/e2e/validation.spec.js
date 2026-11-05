@@ -24,7 +24,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PYTHON } from '../../scripts/python-env.js';
 import { NO_WSL } from '../../e2e/toolchain.js';
-import { runPlan } from './driver.mjs';
+import { quantityLine, runPlan } from './driver.mjs';
 
 const VALIDATION = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WEB = join(VALIDATION, '..');
@@ -96,7 +96,8 @@ if (!GATE) {
       // Evaluate while the run's case folder is still there (each server start empties its projects root).
       const evaluated = py(['evaluate', dir, ...(why ? ['--failed', why.slice(0, 2000)] : [])]);
       const result = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8'));
-      const rows = (result.quantities || []).map((q) => `${q.key} ${q.value === null ? 'missing' : Number(q.value).toPrecision(5)} vs ${q.reference.value} (${q.error ? `${q.error.rel_pct.toFixed(2)} %` : '-'}, ${q.verdict})`);
+      // A quantity whose reference is zero has no relative error: its line gives the absolute one.
+      const rows = (result.quantities || []).map(quantityLine);
       console.log(`RESULT ${r.case}/${r.variant}: ${result.status} ${result.status_detail || ''}\n  ${rows.join('\n  ')}`);
       test.info().annotations.push({ type: 'result', description: `${result.status}: ${rows.join('; ')}` });
       expect(existsSync(join(dir, 'result.json'))).toBe(true);

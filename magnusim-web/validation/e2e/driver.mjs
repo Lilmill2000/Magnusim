@@ -100,6 +100,42 @@ export function runOf(answer, runId) {
   return run || (answer.runs || []).find((r) => String(r.id || r.run_id) === String(runId)) || null;
 }
 
+/**
+ * One compared quantity of a result in a line of the run's log: its value against the
+ * reference, the error (in per cent, or in the quantity's own unit where the reference is
+ * zero and the band absolute) and its verdict.
+ */
+export function quantityLine(q) {
+  const value = q.value === null || q.value === undefined ? 'missing' : Number(q.value).toPrecision(5);
+  let err = '-';
+  if (q.error && q.error.rel_pct !== null && q.error.rel_pct !== undefined) err = `${Number(q.error.rel_pct).toFixed(2)} %`;
+  else if (q.error && q.error.abs !== null && q.error.abs !== undefined) err = `${Number(q.error.abs) >= 0 ? '+' : ''}${Number(q.error.abs).toPrecision(3)}${q.unit ? ` ${q.unit}` : ''}`;
+  return `${q.key} ${value} vs ${q.reference.value} (${err}, ${q.verdict})`;
+}
+
+/**
+ * Whether a run may use the mesh an earlier run of its case made (`plan.mesh_from`: a variant
+ * whose geometry, fluid, BCs and mesh are the same as this one's; only its study settings and
+ * run differ, as for two turbulence models on one mesh). Given that variant's plan and
+ * driver.json (from its folder beside this one), returns its ids, or why not ('' reasons are
+ * never returned: a reason is always words).
+ */
+export function sharedMeshOf(plan, source) {
+  const from = plan?.mesh_from;
+  if (!from) return { reason: 'the plan meshes its own' };
+  const { plan: srcPlan, driver } = source || {};
+  if (!srcPlan || !driver) return { reason: `no run of ${from.variant} beside this one` };
+  if (srcPlan.mesh_key !== from.key) return { reason: `${from.variant}'s plan is not the same geometry, fluid, BCs and mesh` };
+  if (!!srcPlan.coarse !== !!plan.coarse) return { reason: `${from.variant}'s run was ${srcPlan.coarse ? '' : 'not '}coarse` };
+  const ids = driver.ids || {};
+  if (!ids.project_id || !ids.simulation_id || !ids.mesh_id || !ids.mesh_case_dir) return { reason: `${from.variant}'s run left no mesh` };
+  const meshed = (driver.steps || []).some((s) => s.step === 'run-settings' || s.step === 'mesh-facts');
+  if (!meshed || (driver.failed_step && ['setup', 'project', 'import', 'faces', 'study', 'material', 'bcs', 'mesh-settings', 'refinements', 'mesh'].includes(driver.failed_step))) {
+    return { reason: `${from.variant}'s run stopped before its mesh was done` };
+  }
+  return { ids: { project_id: ids.project_id, geometry_id: ids.geometry_id, simulation_id: ids.simulation_id, mesh_id: ids.mesh_id, mesh_case_dir: ids.mesh_case_dir }, variant: from.variant };
+}
+
 /** The iteration (steady) or time (transient) a run has reached, as text. */
 export function runProgress(run) {
   if (!run) return '';
@@ -250,7 +286,59 @@ export async function runPlan({ request, dir, webRoot, log = console.log, meshOn
   };
 
   const ids = drv.ids;
+  // The mesh of an earlier variant of this case (two turbulence models on one mesh): reused
+  // when that variant's run is beside this one, made by this server, and its mesh is still
+  // there; otherwise this run makes its own, the same way.
+  const readSource = () => {
+    if (!plan.mesh_from) return null;
+    const srcDir = join(dir, '..', plan.mesh_from.variant);
+    try {
+      return { plan: JSON.parse(readFileSync(join(srcDir, 'plan.json'), 'utf8')), driver: JSON.parse(readFileSync(join(srcDir, 'driver.json'), 'utf8')), dir: srcDir };
+    } catch {
+      return null;
+    }
+  };
   try {
+    let shared = sharedMeshOf(plan, readSource());
+    if (shared.ids) {
+      const s = shared.ids;
+      const proj = await getJson('/api/project', { project_id: s.project_id }, { ok: false });
+      const meshNow = proj.status === 200 ? await getJson('/api/mesh', { project_id: s.project_id, simulation_id: s.simulation_id, mesh_id: s.mesh_id }, { ok: false }) : null;
+      const liveNow = meshNow && meshNow.status === 200 ? liveMesh(meshNow.body) : {};
+      if (proj.status !== 200) shared = { reason: `${shared.variant}'s project is not on this server (it starts with an empty projects root)` };
+      else if (liveNow.status !== 'done' || !existsSync(join(s.mesh_case_dir, 'mesh-facts.json'))) shared = { reason: `${shared.variant}'s mesh is ${liveNow.status || 'gone'}` };
+    }
+    drv.mesh_shared = shared.ids ? { from: shared.variant, ...shared.ids } : { from: null, reason: shared.reason };
+    if (plan.mesh_from) stage(shared.ids ? `the mesh of ${shared.variant} (project ${shared.ids.project_id})` : `meshing its own: ${shared.reason}`);
+    if (shared.ids) {
+      Object.assign(ids, shared.ids);
+      const pid = ids.project_id;
+      const sid = ids.simulation_id;
+      const mid = ids.mesh_id;
+      // 4. The study's settings for this run (the rest is the earlier variant's, the same as this plan's).
+      step('study');
+      await postJson('/api/simulation/update', { project_id: pid, simulation_id: sid, ...plan.study.settings });
+      const sims = await getJson('/api/simulation', { project_id: pid, simulation_id: sid });
+      save('study', sims.body);
+      const study = (sims.body.simulations || []).find((x) => String(x.id) === sid) || sims.body.simulation || {};
+      const studyProblems = readBackProblems({ analysis_type: plan.study.analysis_type, ...plan.study.settings }, study);
+      if (studyProblems.length) fail(`the study did not keep its settings: ${studyProblems.join('; ')}`);
+      // 9-10. The mesh as it stands, and its facts.
+      step('mesh-facts');
+      const meshNow = await getJson('/api/mesh', { project_id: pid, simulation_id: sid, mesh_id: mid });
+      save('mesh', meshNow.body);
+      save('mesh-facts', JSON.parse(readFileSync(join(ids.mesh_case_dir, 'mesh-facts.json'), 'utf8')));
+      for (const f of ['blockMeshDict', 'snappyHexMeshDict']) {
+        const fp = join(ids.mesh_case_dir, 'system', f);
+        if (existsSync(fp)) writeFileSync(join(rawDir, `${f}.txt`), readFileSync(fp));
+      }
+      if (meshOnly) {
+        drv.outcome = 'mesh_only';
+        return drv;
+      }
+      return await runAndRead(pid, sid, mid);
+    }
+
     // 1. The project.
     step('project');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -422,7 +510,21 @@ export async function runPlan({ request, dir, webRoot, log = console.log, meshOn
       drv.outcome = 'mesh_only';
       return drv;
     }
+    return await runAndRead(pid, sid, mid);
+  } catch (e) {
+    drv.outcome = 'failed';
+    drv.failed_step = e.validationStep || current;
+    drv.error = String((e && e.message) || e);
+    throw e;
+  } finally {
+    drv.finished_at = new Date().toISOString();
+    drv.timings_s.total = Math.round((Date.now() - t0) / 100) / 10;
+    drv.plan_file = basename(join(dir, 'plan.json'));
+    writeDriver();
+  }
 
+  /** Steps 11 to 15 on the study's mesh: the run, its gate and pre-run check, Start, and what the run's routes give. */
+  async function runAndRead(pid, sid, mid) {
     // 11. The run and its settings.
     step('run-settings');
     const run = await postJson('/api/run/create', { project_id: pid, simulation_id: sid, name: plan.run.name, mesh_id: mid });
@@ -515,15 +617,5 @@ export async function runPlan({ request, dir, webRoot, log = console.log, meshOn
     });
     drv.outcome = 'done';
     return drv;
-  } catch (e) {
-    drv.outcome = 'failed';
-    drv.failed_step = e.validationStep || current;
-    drv.error = String((e && e.message) || e);
-    throw e;
-  } finally {
-    drv.finished_at = new Date().toISOString();
-    drv.timings_s.total = Math.round((Date.now() - t0) / 100) / 10;
-    drv.plan_file = basename(join(dir, 'plan.json'));
-    writeDriver();
   }
 }

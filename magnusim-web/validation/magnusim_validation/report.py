@@ -1,5 +1,7 @@
 """``VALIDATION.md`` and the public page (``<repo>/docs/validation/``: ``index.html``, ``img/``
-and ``results.json``) from the committed results (``results/<case>/<variant>/result.json``).
+and ``results.json``) from the committed results (``results/<case>/<variant>/result.json``),
+with Heat Transfer's own validation set beside them (``heat_transfer.py``: its committed
+``bundled-plugins/heat_transfer/validation/results.json``, no new runs).
 
 Both are generated: ``report --check`` exits 1 when either text differs from what the
 results give, or a figure is missing (the PNGs themselves are not compared byte for byte:
@@ -13,26 +15,26 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import cases
+from . import cases, heat_transfer
 from .paths import REPORT_MD, RESULTS, SITE, SITE_IMG
 from .plots import figures_of, render
 from .result import read_result
 from .site import build_site
 
-VARIANT_ORDER = ("hexdominant", "standard")
 VERDICT_WORDS = {"report_only": "report-only", "pass": "pass", "fail": "FAIL", "missing": "no value"}
 
 
 def load_results(root: Path = RESULTS) -> list[dict[str, Any]]:
-    """Every committed result, in the cases' order, Hex-dominant first. A mesh-only run or
-    one whose settings were changed by hand is a probe, never a result: it is left out even
-    if it lands here."""
+    """Every committed result, in the cases' order and each case's variants in its own order
+    (Hex-dominant first). A mesh-only run or one whose settings were changed by hand is a probe,
+    never a result: it is left out even if it lands here."""
     out = []
-    for cid in cases.CASES:
+    for cid, case in cases.CASES.items():
         case_dir = root / cid
         if not case_dir.is_dir():
             continue
-        for vdir in sorted(case_dir.iterdir(), key=lambda p: (VARIANT_ORDER.index(p.name) if p.name in VARIANT_ORDER else 99, p.name)):
+        order = list(case.VARIANTS)
+        for vdir in sorted(case_dir.iterdir(), key=lambda p: (order.index(p.name) if p.name in order else 99, p.name)):
             path = vdir / "result.json"
             if path.is_file():
                 res = read_result(path)
@@ -54,6 +56,13 @@ def num(v: Any, digits: int = 4) -> str:
         mant, exp = text.split("e")
         return f"{mant} × 10^{int(exp)}"
     return text
+
+
+def _wrap(text: str, width: int = 92) -> str:
+    """``text`` broken into lines of at most ``width`` characters (as the rest of the head)."""
+    import textwrap
+
+    return "\n".join(textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False))
 
 
 def cells_text(v: Any) -> str:
@@ -111,6 +120,16 @@ def run_time_text(res: dict[str, Any]) -> str:
     return "-" if t is None else f"{float(t):.0f} s"
 
 
+def variant_label(case: Any, res: dict[str, Any]) -> str:
+    return str(case.VARIANT_LABELS.get(res["variant"], res["variant"]))
+
+
+def mesher_label(res: dict[str, Any]) -> str:
+    """The run's mesher, as the Mesh panel names it."""
+    m = (res.get("mesh") or {}).get("mesher")
+    return {"snappy_hexdominant": "Hex-dominant", "standard": "Standard", "cfmesh": "cfMesh"}.get(str(m), str(m or "-"))
+
+
 def env_lines(results: list[dict[str, Any]]) -> list[str]:
     """One line per distinct environment the results ran in (commit, OpenFOAM, date, PC)."""
     seen: dict[tuple[Any, ...], list[str]] = {}
@@ -145,9 +164,7 @@ outside its tolerance fails the run and blocks a release. The bands shown are th
 ones (from the reference data). A run fails already when it cannot produce its numbers: a
 setup the app refuses, a mesh or solve that fails, wall layers asked and not applied.
 
-The set so far: case 1 (laminar pipe, both meshers). Cases 2 to 6 (turbulent pipe,
-lid-driven cavity, backward-facing step, cylinder, sphere) follow; see
-`validation/README.md`.
+{so_far}
 
 ## Running it
 
@@ -168,14 +185,32 @@ only when GitHub Pages is turned on for `docs/` and the branch is pushed.
 """
 
 
+# The cases the design plans after the ones built so far.
+PLANNED = "the backward-facing step, the cylinder and the sphere"
+
+
+def so_far_text(results: list[dict[str, Any]]) -> str:
+    """Which cases and runs the report holds, and which are still to come (from the results
+    themselves, so it never names a case without its numbers)."""
+    have: dict[str, list[str]] = {}
+    for res in results:
+        have.setdefault(res["case"], []).append(variant_label(cases.get(res["case"]), res))
+    done = [f"{cases.get(cid).TITLE} ({', '.join(labels)})" for cid, labels in have.items()]
+    waiting = [cases.get(cid).TITLE for cid in cases.CASES if cid not in have]
+    text = "The set so far: " + ("; ".join(done) if done else "no results yet") + "."
+    if waiting:
+        text += f" Built, its results to come: {'; '.join(waiting)}."
+    return text + f" Then {PLANNED}; see `validation/README.md`. Heat Transfer's own validation set is reported after them."
+
+
 def build_markdown(results: list[dict[str, Any]]) -> str:
-    out = [HEAD]
+    out = [HEAD.replace("{so_far}", _wrap(so_far_text(results)))]
     out.append("## Results\n")
     if not results:
         out.append("No results yet.\n")
         return "\n".join(out).rstrip() + "\n"
     out.append("Environment: " + "; ".join(env_lines(results)) + ".\n")
-    out.append("| Case | Mesher | Status | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations | Solve time | Run health |")
+    out.append("| Case | Run | Status | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations | Solve time | Run health |")
     out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for res in results:
         case = cases.get(res["case"])
@@ -183,7 +218,7 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
         r = res.get("run") or {}
         for q in res["quantities"]:
             out.append(
-                f"| {cell(case.TITLE)} | {case.VARIANT_LABELS.get(res['variant'], res['variant'])} | {status_text(res)} | {cell(q['label'])} | "
+                f"| {cell(case.TITLE)} | {cell(variant_label(case, res))} | {status_text(res)} | {cell(q['label'])} | "
                 f"{num(q['reference']['value'])} | {num(q['value'], 5)} | {err_text(q)} | {band_text(q)} | "
                 f"{cells_text(m.get('n_cells'))} | {cell(layers_text(m))} | {r.get('iterations') if r.get('iterations') is not None else '-'} | "
                 f"{run_time_text(res)} | {health_text(r)} |"
@@ -195,7 +230,7 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
         out.append(f"## {case.TITLE}\n")
         out.append(mine[0]["setup"]["words"] + "\n")
         for res in mine:
-            out.extend(_variant_section(case, res))
+            out.extend(_variant_section(case, res, mine[0]))
         out.append("### References\n")
         for spec in case.QUANTITIES.values():
             ref = spec.reference
@@ -206,6 +241,7 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
             out.append("### Notes\n")
             out.extend(f"- {n}" for n in case.NOTES)
             out.append("")
+    out.extend(heat_transfer.markdown(heat_transfer.load()))
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -220,11 +256,17 @@ def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:
     out.append(f"Status: {status}")
     if res["setup"].get("mesh_words"):
         out.append(f"Mesh settings: {res['setup']['mesh_words']}")
+    if m.get("shared_from"):
+        src = case.VARIANT_LABELS.get(m["shared_from"], m["shared_from"])
+        out.append(f"Mesh: the same mesh as the {src} run's (the same geometry, fluid, BCs and mesh settings; "
+                   "only the study's settings and the run differ)")
     bg = (m.get("background") or {}).get("block")
     first = (m.get("layers") or {}).get("first_m")
     est = ((res.get("setup") or {}).get("mesh") or {}).get("estimate") or {}
+    two_d = m.get("two_d") or {}
     out.append(
         f"Mesh: {cells_text(m.get('n_cells'))} cells"
+        + (f", one cell across (2D) along {two_d.get('axis')}" if two_d.get("cells_across") == 1 else "")
         + (f" (the plan's estimate about {cells_text(est['n_cells'])})" if est.get("n_cells") else "")
         + (f", background block {bg[0]} × {bg[1]} × {bg[2]}" if bg else "")
         + (f", wall cells {' × '.join(num(v, 3) for v in est['wall_cell_mm'])} mm (x × y × z)" if est.get("wall_cell_mm") else "")
@@ -278,12 +320,14 @@ def quantity_value_text(q: dict[str, Any]) -> str:
     return val
 
 
-def _variant_section(case: Any, res: dict[str, Any]) -> list[str]:
-    label = case.VARIANT_LABELS.get(res["variant"], res["variant"])
+def _variant_section(case: Any, res: dict[str, Any], first: dict[str, Any]) -> list[str]:
+    label = variant_label(case, res)
     facts = variant_facts(case, res)
     # The quantities go after the run's facts and before what is shown beside them.
     split = next((i for i, f in enumerate(facts) if f.startswith(("Shown, not compared", "Warning"))), len(facts))
     lines = [f"### {label}\n"]
+    if res["setup"]["words"] != first["setup"]["words"]:
+        lines.append(f"- Setup: {cell(res['setup']['words'])}")
     lines.extend(f"- {cell(f)}." for f in facts[:split])
     for q in res["quantities"]:
         lines.append(f"- **{cell(q['label'])}**: {quantity_value_text(q)}. How: {cell(q['how'])}. Source: `{q['source']}`."
@@ -300,7 +344,7 @@ def build_all(*, check: bool = False, root: Path = RESULTS, md_path: Path = REPO
     """Write (or with ``check`` compare) VALIDATION.md, the page, its results.json and figures."""
     results = load_results(root)
     texts: dict[Path, str] = {md_path: build_markdown(results)}
-    texts.update({site_dir / name: text for name, text in build_site(results).items()})
+    texts.update({site_dir / name: text for name, text in build_site(results, heat_transfer.load()).items()})
     figs = [(cases.get(r["case"]), r, f) for r in results for f in figures_of(cases.get(r["case"]), r)]
     if check:
         stale = []

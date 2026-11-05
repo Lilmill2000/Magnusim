@@ -16,9 +16,11 @@ import {
   latestTime,
   liveMesh,
   pointsParam,
+  quantityLine,
   readBackProblems,
   runOf,
   runProgress,
+  sharedMeshOf,
 } from '../../validation/e2e/driver.mjs';
 import { parseValidationArgs } from '../validation-run.mjs';
 
@@ -97,6 +99,31 @@ test('npm run test:validation: its options become the suite\'s gate and knobs', 
   assert.equal(parseValidationArgs(['--no-report']).report, false);
   // WSL turned off by hand stays off (the suite then fails: it needs WSL).
   assert.equal(parseValidationArgs([], { MAGNUSIM_E2E_WSL: '0' }).env.MAGNUSIM_E2E_WSL, '0');
+});
+
+test("a quantity's log line: its error in per cent, or in its own unit where the reference is zero", () => {
+  const ref = (value) => ({ value });
+  assert.equal(quantityLine({ key: 'f', value: 0.02234, reference: ref(0.0211), error: { abs: 0.00124, rel_pct: 5.877 }, verdict: 'report_only' }), 'f 0.022340 vs 0.0211 (5.88 %, report_only)');
+  // A difference whose reference is zero (the cavity's profiles) has no relative error.
+  assert.equal(quantityLine({ key: 'u_rms', unit: 'U_lid', value: 0.0042, reference: ref(0), error: { abs: 0.0042, rel_pct: null }, verdict: 'report_only' }), 'u_rms 0.0042000 vs 0 (+0.00420 U_lid, report_only)');
+  assert.equal(quantityLine({ key: 'x', value: -0.5, reference: ref(0), error: { abs: -0.5, rel_pct: null }, verdict: 'fail' }), 'x -0.50000 vs 0 (-0.500, fail)');
+  assert.equal(quantityLine({ key: 'u_rms', value: null, reference: ref(0), error: null, verdict: 'missing' }), 'u_rms missing vs 0 (-, missing)');
+});
+
+test("a run uses an earlier variant's mesh only when that run made it from the same plan", () => {
+  const plan = { mesh_from: { variant: 'hexdominant_sst', key: 'k1' }, coarse: false };
+  const ids = { project_id: 'p', geometry_id: 'g', simulation_id: 's', mesh_id: 'm', mesh_case_dir: 'C:/x', run_id: 'r' };
+  const driver = { ids, steps: [{ step: 'mesh' }, { step: 'mesh-facts' }, { step: 'run-settings' }], failed_step: null };
+  const ok = sharedMeshOf(plan, { plan: { mesh_key: 'k1', coarse: false }, driver });
+  assert.deepEqual(ok, { ids: { project_id: 'p', geometry_id: 'g', simulation_id: 's', mesh_id: 'm', mesh_case_dir: 'C:/x' }, variant: 'hexdominant_sst' });
+  // A later solve that failed still leaves its mesh.
+  assert.ok(sharedMeshOf(plan, { plan: { mesh_key: 'k1' }, driver: { ...driver, failed_step: 'solve' } }).ids);
+  assert.match(sharedMeshOf({}, null).reason, /meshes its own/);
+  assert.match(sharedMeshOf(plan, null).reason, /no run of hexdominant_sst/);
+  assert.match(sharedMeshOf(plan, { plan: { mesh_key: 'k2' }, driver }).reason, /not the same geometry, fluid, BCs and mesh/);
+  assert.match(sharedMeshOf(plan, { plan: { mesh_key: 'k1', coarse: true }, driver }).reason, /was coarse/);
+  assert.match(sharedMeshOf(plan, { plan: { mesh_key: 'k1' }, driver: { ...driver, ids: { project_id: 'p' } } }).reason, /left no mesh/);
+  assert.match(sharedMeshOf(plan, { plan: { mesh_key: 'k1' }, driver: { ...driver, failed_step: 'mesh', steps: [{ step: 'mesh' }] } }).reason, /before its mesh was done/);
 });
 
 test('a plan whose estimated mesh is over the cap is not generated', () => {

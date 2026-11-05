@@ -1,0 +1,25 @@
+# citation: U. Ghia, K. N. Ghia, C. T. Shin (1982), "High-Re solutions for incompressible flow using the Navier-Stokes equations and a multigrid method", J. Comput. Phys. 48(3):387-411, doi:10.1016/0021-9991(82)90058-4
+# where: Table I, u along the vertical line through the cavity's geometric centre (x = 0.5)
+# conditions: lid-driven square cavity, steady, two-dimensional; Re = U_lid L / nu (100 and 1000); x and y over L from the bottom-left corner, the lid at y = 1 moving in +x; u over U_lid; their uniform 129 x 129 grid, second-order accurate
+# kind: numerical
+# confidence: SECONDARY
+# checked: the paper itself was not read (its copies were out of reach); two independent transcriptions agree on every value: a GitHub gist by ivan-pi (gist.github.com/ivan-pi/3e9326d18a366ffe6a8e5bfda6353219) and the CSV files of github.com/PN-CourseWork/02689-AdvancedNumericalAlgorithmP3 (data/validation/ghia); Marchi, Suero & Araki (2009), Tables 9-13, quote the same Ghia values at nine of these points, the extrema among them
+# note: the y = 0.9766 row is missing from the CSV transcription and rests on the gist (and a rounded 0.8412 at Re 100 on a second page). Erturk et al. (2005) call Ghia's Re 1000 solution somewhat under-resolved: its extrema read 1 to 3 % below the converged values of Botella & Peyret (1998)
+y,u_re100,u_re1000
+1.0000,1.00000,1.00000
+0.9766,0.84123,0.65928
+0.9688,0.78871,0.57492
+0.9609,0.73722,0.51117
+0.9531,0.68717,0.46604
+0.8516,0.23151,0.33304
+0.7344,0.00332,0.18719
+0.6172,-0.13641,0.05702
+0.5000,-0.20581,-0.06080
+0.4531,-0.21090,-0.10648
+0.2813,-0.15662,-0.27805
+0.1719,-0.10150,-0.38289
+0.1016,-0.06434,-0.29730
+0.0703,-0.04775,-0.22220
+0.0625,-0.04192,-0.20196
+0.0547,-0.03717,-0.18109
+0.0000,0.00000,0.00000

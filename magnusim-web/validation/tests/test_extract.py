@@ -10,10 +10,14 @@ from magnusim_validation.extract import (
     arrays,
     band,
     downsample,
+    extremum,
     first_crossing,
+    grid_minimum,
+    interp_at,
     last_drift,
     linear_fit,
     rms,
+    stream_function,
     window_mean,
 )
 
@@ -84,3 +88,52 @@ def test_rms_downsample_and_drift():
     assert len(downsample([1, 2], [3, 4])["x"]) == 2
     assert last_drift([1.0] * 5) is None
     assert last_drift([1.0] * 90 + [1.1] * 10) == pytest.approx(0.1 / 1.1)
+
+
+def test_interpolation_is_linear_and_never_carries_an_end_on():
+    x = [0.0, 1.0, 2.0]
+    y = [0.0, 10.0, 0.0]
+    got = interp_at(x, y, [0.5, 1.0, 1.75, -0.1, 2.5])
+    assert got[:3] == pytest.approx([5.0, 10.0, 2.5])
+    assert np.isnan(got[3]) and np.isnan(got[4])
+    with pytest.raises(ValueError):
+        interp_at([1.0], [1.0], [1.0])
+
+
+def test_an_extremum_is_the_parabolas_vertex_through_the_three_samples_around_it():
+    x = np.linspace(0.0, 1.0, 21)
+    y = 2.0 * (x - 0.4567) ** 2 - 0.3
+    lo = extremum(x, y, kind="min")
+    # A parabola through samples of a parabola is the parabola itself.
+    assert lo["x"] == pytest.approx(0.4567, abs=1e-9) and lo["value"] == pytest.approx(-0.3, abs=1e-12)
+    assert lo["x_sample"] == pytest.approx(0.45)
+    hi = extremum(x, -y, kind="max")
+    assert hi["x"] == pytest.approx(0.4567, abs=1e-9) and hi["value"] == pytest.approx(0.3, abs=1e-12)
+    # At an end of the series: the sample itself.
+    edge = extremum(x, x, kind="min")
+    assert edge["x"] == 0.0 and edge["value"] == 0.0
+    with pytest.raises(ValueError):
+        extremum(x, y, kind="mean")
+
+
+def test_the_stream_function_and_its_minimum():
+    """psi = A sin²(pi x) sin²(pi y) (zero on the walls, lowest A at the centre): u = d psi / d y
+    integrated from the floor gives psi back, and its lowest value and centre."""
+    a = -0.1
+    x = np.linspace(0.01, 0.99, 99)
+    y = np.linspace(0.0, 1.0, 401)
+    xx, yy = np.meshgrid(x, y, indexing="ij")
+    u = a * np.pi * np.sin(np.pi * xx) ** 2 * np.sin(2 * np.pi * yy)
+    psi = stream_function(x, y, u)
+    want = a * np.sin(np.pi * xx) ** 2 * np.sin(np.pi * yy) ** 2
+    assert np.max(np.abs(psi - want)) < 1e-5
+    m = grid_minimum(x, y, psi)
+    assert m["x"] == pytest.approx(0.5, abs=1e-3) and m["y"] == pytest.approx(0.5, abs=1e-3)
+    assert m["value"] == pytest.approx(a, rel=1e-4)
+    # A bowl whose lowest point lies between the samples: found between them.
+    bowl = (xx - 0.3712) ** 2 + 2.0 * (yy - 0.6153) ** 2 - 0.05
+    m = grid_minimum(x, y, bowl)
+    assert (m["x"], m["y"], m["value"]) == (pytest.approx(0.3712, abs=1e-9), pytest.approx(0.6153, abs=1e-9),
+                                            pytest.approx(-0.05, abs=1e-12))
+    with pytest.raises(ValueError):
+        stream_function(x, y, u[:, :-1])

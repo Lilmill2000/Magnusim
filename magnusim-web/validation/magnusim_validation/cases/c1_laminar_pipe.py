@@ -148,9 +148,10 @@ NOTES = (
     "which reads a peak low where the cells are coarse, and on a mesh whose axis runs along cell edges no cell "
     "centre lies on the axis at all; what the line reads on the axis is shown beside the fit, with the profile's "
     "RMS difference from the exact parabola at the cells' own radii.",
-    "The centreline Point probes take the value of the cell that holds each point. Where the axis runs along cell "
-    "edges (Hex-dominant) that is one of the off-axis cells around it, the same cells the fit uses, so the probes "
-    "are shown, not used as an independent check.",
+    "In these runs (made before the probes read the value at the point: gap G3, fixed since) the centreline Point "
+    "probes took the value of the cell that holds each point. Where the axis runs along cell edges (Hex-dominant) "
+    "that is one of the off-axis cells around it, the same cells the fit uses, so the probes are shown, not used as "
+    "an independent check.",
     "The development length is read on Plot over path's centreline, against the same line's developed value, so "
     "the line's averaging enters both nearly alike. The 99 % point lies where the centreline speed is nearly flat: "
     "a change in the fourth digit of the solution moves it by millimetres, and repeated runs of the same plan can "
@@ -158,7 +159,7 @@ NOTES = (
     "On Standard the friction factor reads well above the exact value. The wall shear stress the run itself saved "
     "(shown with each run) carries the same excess, and the cell values run faster than the parabola near the "
     "wall and slower at mid-radius, so the pressure drop is the solution's, not an artefact of reading it. It is "
-    "under investigation (an app gap), and the turbulent pipe's Standard runs wait for it. Probes that change one "
+    "under investigation (an app gap); the turbulent pipe's Standard runs are read the same way. Probes that change one "
     "setting at a time point at the momentum convection scheme on Standard's cells, which are not aligned with "
     "the flow: first-order convection raises the friction much further, a finer mesh lowers it only slowly, and "
     "neither the gradient limiter, the hex core nor the wall layers account for it.",

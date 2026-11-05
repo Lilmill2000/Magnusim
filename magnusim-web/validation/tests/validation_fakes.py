@@ -114,3 +114,65 @@ def plan_run(tmp_path: Path) -> Path:
     run_dir = tmp_path / "run"
     make_plan(cases.get("c1"), "hexdominant", run_dir, cores=4)
     return run_dir
+
+
+# ---------------------------------------------------------------- case 3: a synthetic cavity flow
+
+def cavity_flow(a: float) -> tuple:
+    """psi = a sin²(pi x) sin²(pi y) over U L (x, y over L): zero on the walls, its lowest value a
+    at the centre. u = d psi / d y, v = -d psi / d x."""
+    import numpy as np
+
+    def u(x, y):
+        return a * np.pi * np.sin(np.pi * x) ** 2 * np.sin(2 * np.pi * y)
+
+    def v(x, y):
+        return -a * np.pi * np.sin(2 * np.pi * x) * np.sin(np.pi * y) ** 2
+
+    return u, v
+
+
+def _sampled(points: list, u, v, length: float) -> dict:
+    import numpy as np
+
+    pts = np.asarray(points, dtype=float)
+    x, y = pts[:, 0] / length, pts[:, 1] / length
+    return {"source": "app_sampling", "n_valid": len(points), "sample_points": pts.tolist(),
+            "distances": np.hypot(pts[:, 0] - pts[0, 0], pts[:, 1] - pts[0, 1]).tolist(),
+            "U_x": u(x, y).tolist(), "U_y": v(x, y).tolist(), "U_z": [0.0] * len(points),
+            "p": (0.01 * x + y * y).tolist()}
+
+
+def _line_points(a: list, b: list, n: int) -> list:
+    return [[a[k] + (b[k] - a[k]) * i / (n - 1) for k in range(3)] for i in range(n)]
+
+
+def fake_cavity_run(run_dir: Path, psi_min: float) -> None:
+    """A case 3 run's raw answers for the synthetic flow of ``cavity_flow(psi_min)``."""
+    from magnusim_validation.cases import c3_lid_cavity as c3
+
+    fake_run(run_dir, lines=False, samples=False)
+    raw = run_dir / "raw"
+    # A 2D mesh one cell deep along z, no wall layers.
+    _write(raw, "mesh-facts", {"n_cells": 34580, "quality": {"known": True, "ok": True, "max_non_orthogonality": 38.5},
+                               "layers": {"asked": False, "applied": False, "walls": []},
+                               "two_d": {"axis": "z", "depth_m": 0.01, "cells_across": 1}})
+    u, v = cavity_flow(psi_min)
+    plan = json.loads((run_dir / "plan.json").read_text(encoding="utf-8"))
+    ex = {e["key"]: e for e in plan["extract"]}
+    n = ex["u_vertical"]["subdivisions"] + 2
+    vert = _sampled(_line_points(*ex["u_vertical"]["points_m"], n), u, v, c3.L)
+    _write(raw, "sample_u_vertical", vert)
+    _write(raw, "sample_v_horizontal", _sampled(_line_points(*ex["v_horizontal"]["points_m"], n), u, v, c3.L))
+    _write(raw, "sample_psi_lines", {"source": "app_sampling", "paths": [
+        _sampled(_line_points(*p, n), u, v, c3.L) for p in ex["psi_lines"]["paths_m"]]})
+    _write(raw, "line_p_vertical", {"status": 200, "n_valid": n, "values": vert["p"], "sample_points": vert["sample_points"]})
+    rows = []
+    for rc in plan["run"]["result_controls"]:
+        slug = rc["name"].lower().replace(" ", "_")
+        for i, pt in enumerate(rc["points"]):
+            x, y = pt[0] / c3.L, pt[1] / c3.L
+            vec = [float(u(x, y)), float(v(x, y)), 0.0]
+            rows.append({"key": f"probes_{slug}_{i + 1}", "point": pt, "last": {"U": vec},
+                         "series": [{"t": k, "U": vec} for k in range(1, 181)]})
+    _write(raw, "monitors", {"monitors": [], "custom": rows})

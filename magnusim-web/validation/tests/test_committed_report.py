@@ -24,14 +24,26 @@ def test_every_committed_result_is_complete():
         assert not res["coarse"], f"{res['case']}/{res['variant']} is a coarse run"
         assert res["variant"] in cases.get(res["case"]).VARIANTS
         for q in res["quantities"]:
-            if q["value"] is not None:
-                rel = 100 * (q["value"] - q["reference"]["value"]) / abs(q["reference"]["value"])
-                assert abs(rel - q["error"]["rel_pct"]) < 1e-9
-    # Hex-dominant for every case, Standard on the pipes as well (the validation scope).
+            if q["value"] is None:
+                continue
+            ref = q["reference"]["value"]
+            assert q["error"]["abs"] == pytest.approx(q["value"] - ref, abs=1e-12)
+            # A reference of zero (a difference that should vanish) has no relative error;
+            # its band is absolute.
+            if ref == 0:
+                assert q["error"]["rel_pct"] is None and q["tolerance"]["abs_tol"] is not None
+            else:
+                assert abs(100 * (q["value"] - ref) / abs(ref) - q["error"]["rel_pct"]) < 1e-9
+            band = q["tolerance"]
+            inside = (abs(q["error"]["abs"]) <= band["abs_tol"] if band.get("abs_tol") is not None
+                      else abs(q["error"]["rel_pct"]) <= band["rel_pct"])
+            assert q["within"] is inside
+    # Hex-dominant for every case, Standard on the pipes as well (the validation scope), by
+    # the mesher each run used.
     by_case: dict[str, set[str]] = {}
     for res in results:
-        by_case.setdefault(res["case"], set()).add(res["variant"])
-    for cid, variants in by_case.items():
-        assert "hexdominant" in variants, cid
+        by_case.setdefault(res["case"], set()).add(str(res["mesh"]["mesher"]))
+    for cid, meshers in by_case.items():
+        assert "snappy_hexdominant" in meshers, cid
         if "pipe" in cid:
-            assert "standard" in variants, cid
+            assert "standard" in meshers, cid

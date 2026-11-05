@@ -26,6 +26,15 @@ def pipe(d_mm: float, l_mm: float) -> Any:
     return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), d_mm / 2.0, l_mm).Shape()
 
 
+def box(x_mm: float, y_mm: float, z_mm: float) -> Any:
+    """A box (the fluid) from the origin to (``x_mm``, ``y_mm``, ``z_mm``): six flat faces, one
+    at each end of each axis."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    return BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), gp_Pnt(x_mm, y_mm, z_mm)).Shape()
+
+
 def fix_header_stamp(text: str) -> str:
     """The STEP text without what changes from one write to the next: its FILE_NAME time
     stamp (``FIXED_STAMP``) and the writer's per-process count in the product's name."""

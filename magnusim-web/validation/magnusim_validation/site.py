@@ -1,7 +1,7 @@
 """The public page of the validation set: ``index.html`` (one static, self-contained page: no
 scripts, no external fonts or styles; light and dark by the reader's setting) and
-``results.json`` (every result as committed), built into ``<repo>/docs/validation/`` beside
-the figures in ``img/``. GitHub Pages serves ``docs/`` once it is turned on for the
+``results.json`` (every result as committed, and Heat Transfer's own rows), built into
+``<repo>/docs/validation/`` beside the figures in ``img/``. GitHub Pages serves ``docs/`` once it is turned on for the
 repository; nothing here turns it on or pushes.
 """
 
@@ -11,7 +11,7 @@ import html
 import json
 from typing import Any
 
-from . import cases
+from . import cases, heat_transfer
 from .plots import figures_of
 
 CSS = """
@@ -61,14 +61,14 @@ def _num(v: Any, digits: int = 4) -> str:
 
 
 def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
-    from .report import band_text, err_text, status_text
+    from .report import band_text, err_text, status_text, variant_label
 
     inside = q.get("within")
     cls = "" if inside is None else (" in" if inside else " out")
     scls = "" if res.get("status") == "ok" else " class=out"
     case = cases.get(res["case"])
     return (
-        f"<tr><td>{esc(case.TITLE)}</td><td>{esc(case.VARIANT_LABELS.get(res['variant'], res['variant']))}</td>"
+        f"<tr><td>{esc(case.TITLE)}</td><td>{esc(variant_label(case, res))}</td>"
         f"<td{scls}>{esc(status_text(res))}</td>"
         f"<td>{esc(q['label'])}</td><td class=num>{esc(_num(q['reference']['value']))}</td>"
         f"<td class=num>{esc(_num(q['value'], 5))}</td><td class=\"num{cls}\">{esc(err_text(q))}</td>"
@@ -76,8 +76,8 @@ def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
     )
 
 
-def build_index(results: list[dict[str, Any]]) -> str:
-    from .report import env_lines, quantity_value_text, variant_facts
+def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None) -> str:
+    from .report import env_lines, quantity_value_text, variant_facts, variant_label
 
     out = [
         "<!doctype html>",
@@ -96,7 +96,7 @@ def build_index(results: list[dict[str, Any]]) -> str:
     if results:
         out.append('<p class="env">' + "<br>".join(esc(x) for x in env_lines(results)) + "</p>")
         out.append("<h2>Results</h2>")
-        out.append('<div class="scroll"><table><thead><tr><th>Case</th><th>Mesher</th><th>Status</th><th>Quantity</th>'
+        out.append('<div class="scroll"><table><thead><tr><th>Case</th><th>Run</th><th>Status</th><th>Quantity</th>'
                    "<th>Reference</th><th>Magnusim</th><th>Error</th><th>Band</th></tr></thead><tbody>")
         for res in results:
             out.extend(_q_row(res, q) for q in res["quantities"])
@@ -109,8 +109,9 @@ def build_index(results: list[dict[str, Any]]) -> str:
         out.append(f"<h2>{esc(case.TITLE)}</h2>")
         out.append(f"<p>{esc(mine[0]['setup']['words'])}</p>")
         for res in mine:
-            label = case.VARIANT_LABELS.get(res["variant"], res["variant"])
-            out.append(f"<h3>{esc(label)}</h3><ul class=facts>")
+            out.append(f"<h3>{esc(variant_label(case, res))}</h3><ul class=facts>")
+            if res["setup"]["words"] != mine[0]["setup"]["words"]:
+                out.append(f"<li>Setup: {esc(res['setup']['words'])}</li>")
             facts = variant_facts(case, res)
             split = next((i for i, f in enumerate(facts) if f.startswith(("Shown, not compared", "Warning"))), len(facts))
             out.extend(f"<li>{esc(f)}</li>" for f in facts[:split])
@@ -138,10 +139,14 @@ def build_index(results: list[dict[str, Any]]) -> str:
                        f"{esc(ref.confidence)}). {esc(ref.citation)}; {esc(ref.where)}. Conditions: "
                        f"{esc(ref.conditions)}.{(' ' + esc(ref.note)) if ref.note else ''}</li>")
         out.append("</ul>")
+    out.extend(heat_transfer.html_section(ht))
     out.extend([
         "<h2>How to reproduce</h2>",
         "<p>On Windows with Magnusim's Setup done (WSL with OpenFOAM v2606), from <code>magnusim-web</code>:</p>",
         "<pre>npm run test:validation\nnpm run validation:report</pre>",
+        "<p>Heat Transfer's set, from <code>magnusim-web/python</code>:</p>",
+        "<pre>pytest -m validation ../bundled-plugins/heat_transfer/tests -s\n"
+        "python ../bundled-plugins/heat_transfer/validation/report.py</pre>",
         "<p>Each run's requests are in <code>validation/results/&lt;case&gt;/&lt;variant&gt;/plan.json</code> and its "
         "values, their sources, the mesh, the run and its health in <code>result.json</code> beside it; "
         '<a href="results.json">results.json</a> holds them all.</p>',
@@ -151,10 +156,13 @@ def build_index(results: list[dict[str, Any]]) -> str:
     return "\n".join(out) + "\n"
 
 
-def build_site(results: list[dict[str, Any]]) -> dict[str, str]:
-    """The page's text files by name (the figures are drawn by plots.render)."""
+def build_site(results: list[dict[str, Any]], ht: dict[str, Any] | None = None) -> dict[str, str]:
+    """The page's text files by name (the figures are drawn by plots.render); ``ht``: Heat
+    Transfer's rows (heat_transfer.load)."""
+    doc: dict[str, Any] = {"schema": "magnusim-validation-site/1", "results": results}
+    if ht:
+        doc["heat_transfer"] = {"source": ht["source"], "how": heat_transfer.HOW, "rows": ht["rows"]}
     return {
-        "index.html": build_index(results),
-        "results.json": json.dumps({"schema": "magnusim-validation-site/1", "results": results}, indent=1,
-                                   ensure_ascii=False) + "\n",
+        "index.html": build_index(results, ht),
+        "results.json": json.dumps(doc, indent=1, ensure_ascii=False) + "\n",
     }

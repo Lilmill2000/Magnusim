@@ -5,7 +5,12 @@
   within a radius of the x axis when asked, read by the app's own volume loader
   (``python/tools/case_volume.load_volume``, the code behind Plot over path and Inspect);
 - ``patch``: a patch field the run saved (``wallShearStress``) on the faces whose centres lie
-  in a box, read from the case folder (``case_file:<time>/<field>``).
+  in a box, read from the case folder (``case_file:<time>/<field>``);
+- ``app_sampling``: a line (or several) sampled as Plot over path samples it, with a vector's
+  components kept where the route gives its magnitude only (the design's gap G2): the same
+  loader, the same kinematic scaling, the field on the mesh's points and the route's own
+  sampler (``export_plot_over_path.sample_segment``, ``valid_mask``), so a scalar sampled here
+  is the route's answer (``tests/test_sampling.py`` checks it against the route's program).
 
 Each read is saved in ``raw/sample_<key>.json`` while the run's case folder is there (the spec
 evaluates right after the run), so ``evaluate`` reads the same numbers again from ``raw/``
@@ -22,7 +27,7 @@ from typing import Any
 
 from .paths import PY_ROOT
 
-SAMPLE_KINDS = ("cells", "patch")
+SAMPLE_KINDS = ("cells", "patch", "app_sampling")
 
 
 def _tools() -> None:
@@ -132,6 +137,93 @@ def patch(case_dir: Path, time: str, patch_name: str, field: str, *,
     return out
 
 
+def _on_points(grid: Any, fields: list[str]) -> Any:
+    """The volume with every asked field on its points, as Plot over path puts it there
+    (``result_names.point_shown_field``: the reader's point data, or the cell data promoted)."""
+    from result_names import point_shown_field
+
+    src = grid
+    for name in fields:
+        try:
+            src = point_shown_field(src, name, pass_cell_data=True)
+        except RuntimeError as e:
+            raise KeyError(f"the run's volume has no field {name!r}") from e
+    return src
+
+
+def _path(src: Any, points_m: list[list[float]], subdivisions: int, fields: list[str]) -> dict[str, Any]:
+    """One polyline sampled as ``export_plot_over_path.sample_over_path`` samples it: each
+    segment at ``subdivisions + 1`` steps, the first point of a later segment left out (it is
+    the earlier one's last), samples off the mesh left out (``valid_mask``), and a sample
+    where an asked field has no finite value left out too."""
+    import numpy as np
+    from export_plot_over_path import sample_segment, segment_resolution, valid_mask
+
+    pts = [[float(v) for v in p[:3]] for p in points_m]
+    if len(pts) < 2:
+        raise ValueError("a line needs two points or more")
+    res = segment_resolution(int(subdivisions))
+    out: dict[str, Any] = {"path_points": pts, "subdivisions": int(subdivisions), "distances": [], "sample_points": []}
+    cols: dict[str, list[float]] = {}
+    cum = 0.0
+    for i in range(len(pts) - 1):
+        a, b = np.asarray(pts[i], dtype=float), np.asarray(pts[i + 1], dtype=float)
+        seg = float(np.linalg.norm(b - a))
+        sampled = sample_segment(src, a, b, res)
+        mask = valid_mask(sampled)
+        sp = np.asarray(sampled.points, dtype=float)
+        local_t = np.linspace(0.0, 1.0, sp.shape[0]) if sp.shape[0] > 1 else np.array([0.0])
+        arrs = {name: np.asarray(sampled.point_data[name], dtype=float) for name in fields}
+        for j in range(0 if i == 0 else 1, sp.shape[0]):
+            if j >= len(mask) or not bool(mask[j]):
+                continue
+            row: dict[str, float] = {}
+            for name, arr in arrs.items():
+                if arr.ndim == 1:
+                    row[name] = float(arr[j])
+                else:
+                    for ci, c in enumerate("xyz"):
+                        row[f"{name}_{c}"] = float(arr[j, ci])
+            if not all(math.isfinite(v) for v in row.values()):
+                continue
+            out["distances"].append(cum + float(local_t[j]) * seg)
+            out["sample_points"].append([float(v) for v in sp[j, :3]])
+            for k, v in row.items():
+                cols.setdefault(k, []).append(v)
+        cum += seg
+    out.update(cols)
+    out["n_valid"] = len(out["distances"])
+    return out
+
+
+def line(case_dir: Path, time: str, fields: list[str], *, points_m: list[list[float]] | None = None,
+         paths_m: list[list[list[float]]] | None = None, subdivisions: int = 100,
+         use_cache: bool = True) -> dict[str, Any]:
+    """The run's fields at ``time`` sampled along a polyline (``points_m``, metres) or along each
+    of several (``paths_m``), as Plot over path samples them, a vector's components kept
+    (``U_x``, ``U_y``, ``U_z``) and the kinematic fields in Pa, as the route gives them."""
+    _tools()
+    from case_units import scale_kinematic
+    from case_volume import load_volume
+
+    if (points_m is None) == (paths_m is None):
+        raise ValueError("give points_m (one line) or paths_m (several), one of the two")
+    grid, source = load_volume(Path(case_dir), str(time), use_cache=use_cache)
+    scale_kinematic(grid, Path(case_dir))
+    src = _on_points(grid, list(fields))
+    head = {
+        "source": "app_sampling",
+        "loader": "case_volume.load_volume, case_units.scale_kinematic (as /api/plot-over-path)",
+        "sampler": "export_plot_over_path.sample_segment on the point data, components kept",
+        "read_from": source.split(":", 1)[0],
+        "time": str(time),
+        "fields": list(fields),
+    }
+    if points_m is not None:
+        return {**head, **_path(src, points_m, subdivisions, list(fields))}
+    return {**head, "paths": [_path(src, p, subdivisions, list(fields)) for p in paths_m or []]}
+
+
 def sample_run(run_dir: Path, plan: dict[str, Any], case_dir: str | None, time: str | None) -> list[str]:
     """Read every ``cells`` and ``patch`` extract of the plan from the run's case folder into
     ``raw/sample_<key>.json`` (an existing file is kept: it was read while the folder was
@@ -151,6 +243,9 @@ def sample_run(run_dir: Path, plan: dict[str, Any], case_dir: str | None, time: 
             if ex["kind"] == "cells":
                 doc = cells(Path(case_dir), time, list(ex["fields"]), box=ex.get("box_m"),
                             r_axis_max=ex.get("r_axis_max_m"))
+            elif ex["kind"] == "app_sampling":
+                doc = line(Path(case_dir), time, list(ex["fields"]), points_m=ex.get("points_m"),
+                           paths_m=ex.get("paths_m"), subdivisions=int(ex.get("subdivisions") or 100))
             else:
                 doc = patch(Path(case_dir), time, ex["patch"], ex["field"], box=ex.get("box_m"))
         except (OSError, KeyError, RuntimeError, ValueError) as e:
