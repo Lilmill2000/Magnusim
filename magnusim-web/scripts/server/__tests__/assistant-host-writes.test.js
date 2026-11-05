@@ -421,6 +421,15 @@ describe('setup_edit: every kind × action, the exact routes and bodies', () => 
       faces: ['face 1@Body1'],
       faces_explicit: true,
     });
+    // Refine out to (validation gap G4) with its unit; on a Standard mesh the answer says what its editor says.
+    r = await sent(t(), setup({ kind: 'refinement', action: 'update', id: 'ref-1', values: [{ key: 'reach', value: '30' }, { key: 'reach_unit', value: '"mm"' }] }));
+    assert.deepEqual([r.writes[0].body.reach, r.writes[0].body.reach_unit], [30, 'mm']);
+    assert.match(r.out.data.done, /Standard ignores Refine out to: it sizes these faces only\. Hex-dominant refines the cells out to this distance\.$/);
+    r = await sent(t(), setup({ kind: 'refinement', action: 'update', id: 'ref-1', values: [{ key: 'reach', value: 'null' }] }));
+    assert.equal(r.writes[0].body.reach, null);
+    assert.doesNotMatch(r.out.data.done, /ignores/);
+    r = await sent(t(), setup({ kind: 'refinement', action: 'update', id: 'ref-1', values: [{ key: 'reach', value: '-3' }] }));
+    assert.deepEqual([r.out.error.code, r.writes], ['bad_values', []]);
     r = await sent(t(), setup({ kind: 'refinement', action: 'assign', id: 'ref-1', faces: ['face 2'] }));
     assert.deepEqual(r.writes[0].body.faces, ['face 1@Body1', 'face 2@Body1']);
     r = await sent(t(), setup({ kind: 'refinement', action: 'unassign', id: 'ref-1', faces: ['face 1@Body1'] }));

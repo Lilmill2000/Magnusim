@@ -248,6 +248,8 @@ describe('read_setup', () => {
     assert.deepEqual([mesh.settings.fineness, mesh.settings['advanced.mesh_engine'], mesh.settings.automatic_boundary_layers], [5, 'standard', true]);
     const refs = await read('refinements', { id: 'm1' });
     assert.deepEqual(refs.refinements[0].values, { sizing: 'Custom', default_size: 2, default_size_unit: 'mm' });
+    // Its mesh is Standard's: the refinement editor's note under Refine out to (src/panels/mesh/reach.ts).
+    assert.equal(refs.refinements[0].note, 'Standard ignores Refine out to: it sizes these faces only. Hex-dominant refines the cells out to this distance.');
     assert.deepEqual((await read('refinements', { id: 'm2' })).refinements, []);
     const runs = await read('runs');
     assert.deepEqual(runs.runs.map((r) => [r.id, r.status, r.active]), [

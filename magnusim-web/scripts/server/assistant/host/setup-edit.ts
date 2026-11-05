@@ -21,6 +21,7 @@ import type { ToolCtx, ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { carrySettle } from '../../../../src/workbench/runSettle.ts';
 import { runCopyBody } from '../../../../src/workbench/runCopyBody.ts';
+import { reachNote } from '../../../../src/panels/mesh/reach.ts';
 import {
   chooseRestartWords,
   continueAppliesLine,
@@ -640,7 +641,20 @@ export function setupEditTool(d: HostToolDeps): HostToolDef {
             const id = str(ref.id);
             const rev = revOf(ref);
             sync(['refinements', 'tree'], sim, { refinement: [id] }, rev !== null ? { [id]: rev } : {});
-            return okDone({ done: `${action === 'add' ? 'Added' : 'Saved'} refinement ${quoted(ref.name)} on ${nextFaces.length} face${nextFaces.length === 1 ? '' : 's'}.`, ids: { refinement: id }, rev });
+            // A Refine out to on a mesh whose mesher ignores it: the words its editor shows.
+            let note = '';
+            if (typeof ref.reach === 'number' && ref.reach > 0) {
+              const m = meshes.find((x) => x.id === mesh) ?? {};
+              const ms = isRecord(m.settings) ? m.settings : {};
+              const engine = str(m.ui_mesh_engine) || str(isRecord(ms.advanced) ? ms.advanced.mesh_engine : '') || 'standard';
+              const registry = (await d.hostCall('registry.get', {}, o)) as Record<string, unknown>;
+              note = reachNote(records(registry.mesher).find((x) => x.key === engine) ?? null, engine);
+            }
+            return okDone({
+              done: `${action === 'add' ? 'Added' : 'Saved'} refinement ${quoted(ref.name)} on ${nextFaces.length} face${nextFaces.length === 1 ? '' : 's'}.${note ? ` ${note}` : ''}`,
+              ids: { refinement: id },
+              rev,
+            });
           }
           // ------------------------------------------------------------ runs, monitors, saved views
           case 'run':

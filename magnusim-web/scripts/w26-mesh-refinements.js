@@ -6,7 +6,9 @@ import { deleteTarget } from './delete-target.js';
  * GET/POST /api/mesh/refinements → projects/<id>/mesh_refinements.json
  *
  * Types:
- *   Surface custom sizing — max (and optional min) edge length on selected faces
+ *   Surface custom sizing — max (and optional min) edge length on selected faces, and
+ *     optionally how far out from them the cells keep that size ("Refine out to": `reach` with
+ *     `reach_unit`; null = about three cells of the size; src/panels/mesh/reach.ts)
  *   Inflate boundary layer — prism layers on selected faces
  *
  * Volume custom sizing and extrusion need geometry primitives / sweepable
@@ -30,6 +32,7 @@ import { checkRecordSave, studyLinkState, updatingAnswer } from './link-stamp.js
 import { firstStale, staleAnswer } from './record-rev.js';
 import { geometryFenced } from './server/link-job.js';
 import { mesherByKey } from './registry-defaults.js';
+import { reachValue } from '../src/panels/mesh/reach.ts';
 import {
   assembleMeshDoc,
   assembleRefinements,
@@ -303,6 +306,22 @@ function buildRefinement(body, list) {
       body.min_size_unit || (existing && existing.min_size_unit),
       rec.default_size_unit
     );
+    // Refine out to (validation gap G4): a distance above 0, or null for the default band (an
+    // empty field, 0). Anything else is refused, not saved as something else.
+    const reachRaw = Object.hasOwn(body, 'reach') ? body.reach : existing ? existing.reach : null;
+    const reach = reachValue(reachRaw);
+    if (reach === undefined) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: `Refine out to must be a distance above 0, or empty for about three cells of the size (got ${JSON.stringify(reachRaw)}).`,
+          field: 'reach',
+        },
+      };
+    }
+    rec.reach = reach;
+    rec.reach_unit = asUnit(body.reach_unit || (existing && existing.reach_unit), rec.default_size_unit);
   } else {
     rec.n_layers = Math.max(
       1,

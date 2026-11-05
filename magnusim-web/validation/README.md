@@ -110,8 +110,10 @@ App gaps found so far, and what they block:
   harness reads cell values with the app's own loader instead (`sampling.cells`).
 - **Point probes**, fixed: they read the value at the point (`interpolationScheme cellPoint`),
   not the value of the cell that holds it.
-- **Refine out to** (cases 4 to 6): a custom size refines only about three target cells out
-  from its faces, and there is no box refinement.
+- **Refine out to** (cases 4 to 6), added: Surface custom sizing's "Refine out to" keeps the
+  faces' size out to a distance from them on Hex-dominant (Standard and cfMesh say they ignore it;
+  `e2e/mesh-refine-reach.spec.js`, `python/tests/unit/test_refine_reach.py`); `mesh_plan.py` counts
+  its band. There is still no box refinement.
 - **A one-cell 2D slab** (cases 3 to 5), added: Hex-dominant's "One cell across (2D)" meshes
   a slab whose two end faces carry a Symmetry one cell deep (`cfddesk/mesh/two_d.py`; the panel's
   note and Generate say why a part can't be; `e2e/mesh-one-cell-across.spec.js`,

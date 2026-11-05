@@ -10,6 +10,7 @@
 import { continuePendingKeys, runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
 import { meshQualityLines, meshQualityOf } from '../../../../src/panels/mesh/meshQuality.ts';
 import { twoDNote, type TwoDAnswer } from '../../../../src/panels/mesh/twoD.ts';
+import { reachNote } from '../../../../src/panels/mesh/reach.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { meshFields, REFINEMENT_FIELDS, studyFields } from './catalog.ts';
@@ -261,10 +262,26 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             );
           }
           case 'refinements': {
-            const doc = (await d.hostCall('refinements.get', q, o)) as Record<string, unknown>;
+            const [doc, meshDoc, registry] = await Promise.all([
+              d.hostCall('refinements.get', q, o) as Promise<Record<string, unknown>>,
+              d.hostCall('mesh.get', q, o) as Promise<Record<string, unknown>>,
+              d.hostCall('registry.get', {}, o) as Promise<Record<string, unknown>>,
+            ]);
+            // Each mesh's mesher: a Surface custom sizing's Refine out to is used by Hex-dominant
+            // only, and its row says so as the refinement editor does (src/panels/mesh/reach.ts).
+            const meshes = [...records(meshDoc.meshes), ...records(meshDoc.meshes_all)];
+            const meshers = records(registry.mesher);
+            const noteOf = (r: Record<string, unknown>): string => {
+              if (str(r.type) !== 'Surface custom sizing') return '';
+              const m = meshes.find((x) => x.id === r.mesh_id);
+              if (!m) return '';
+              const settings = isRecord(m.settings) ? m.settings : {};
+              const engine = str(m.ui_mesh_engine) || str(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '') || 'standard';
+              return reachNote(meshers.find((x) => x.key === engine) ?? null, engine);
+            };
             const list = records(doc.refinements)
               .filter((r) => !id || r.mesh_id === id)
-              .map((r) => refinementRow(r));
+              .map((r) => refinementRow(r, noteOf(r)));
             return okData({ refinements: list }, `${list.length} refinements`);
           }
           case 'runs': {
@@ -406,7 +423,8 @@ export function meshRow(m: Record<string, unknown>, activeId: string): Record<st
   };
 }
 
-export function refinementRow(r: Record<string, unknown>): Record<string, unknown> {
+/** A refinement as read_setup gives it; `note`: what its editor says under a field (Refine out to). */
+export function refinementRow(r: Record<string, unknown>, note = ''): Record<string, unknown> {
   const type = str(r.type);
   const fields = REFINEMENT_FIELDS[type] ?? [];
   const values: Record<string, unknown> = {};
@@ -418,6 +436,7 @@ export function refinementRow(r: Record<string, unknown>): Record<string, unknow
     mesh_id: text(r.mesh_id, 80),
     faces: Array.isArray(r.faces) ? r.faces.map((f) => text(f, 40)) : [],
     values,
+    ...(note ? { note: text(note, 300) } : {}),
     ...(revOf(r) !== null ? { rev: revOf(r) } : {}),
   };
 }

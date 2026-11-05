@@ -400,7 +400,19 @@
                     </select>
                   </span>
                 </div>
-                <div class="mat-assign-hint">Default size is the target max edge length on the assigned faces. Minimum size of 0 means the mesher can go finer where it has to.</div>
+                <div class="mat-row" id="ref-reach-row">
+                  <span class="mat-k">Refine out to</span>
+                  <span class="mat-v bc-value-row">
+                    <input type="number" id="ref-reach" class="bc-input" value="" min="0" step="any" placeholder="Auto" aria-label="Refine out to" />
+                    <select id="ref-reach-unit" class="bc-select" aria-label="Refine out to unit">
+                      <option value="mm" selected>mm</option>
+                      <option value="m">m</option>
+                      <option value="in">in</option>
+                    </select>
+                  </span>
+                </div>
+                <div class="mat-assign-hint" id="ref-reach-note" data-ref-reach-note="ignored" hidden></div>
+                <div class="mat-assign-hint">Default size is the target max edge length on the assigned faces. Minimum size of 0 means the mesher can go finer where it has to. Refine out to is how far from the faces the cells keep this size, for a wake or a band of reversed flow; empty, or shorter than about three cells of the size, refines those three cells.</div>
               </div>
 
               <div id="ref-inflate-fields" hidden>
