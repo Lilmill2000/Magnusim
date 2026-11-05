@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { WEB_ROOT } from '../python-env.js';
 import { dispatch, Router } from './router.ts';
-import { HttpError, assertSameOrigin, sendJson } from './http.ts';
+import { HttpError, assertSameOrigin, hostRuleOf, refuseForeignHost, sendJson, type HostConfigSource } from './http.ts';
 import { keepIdleConnectionsOpen } from './keep-alive.ts';
 import { JobManager } from './jobs.ts';
 import { persistJobToWorker, registerPhase3Routes } from './routes.ts';
@@ -50,9 +50,14 @@ export function createApiPlugin() {
     server: {
       middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void };
       httpServer?: { on: (ev: string, fn: () => void) => void } | null;
+      /** Vite's resolved config (its allowedHosts); none on Magnusim CAD's own server. */
+      config?: HostConfigSource;
     },
     sdkVariant: SdkVariant,
   ) {
+      // The hosts the page answers on (vite.config.js allowedHosts, read as Vite resolved it);
+      // the API answers on the same ones and no others.
+      const hostRule = hostRuleOf(server.config, sdkVariant === 'prod' ? 'preview' : 'server');
       // Idle connections stay open far longer than Node's 6 s (scripts/server/keep-alive.ts).
       keepIdleConnectionsOpen(server.httpServer);
       worker.start();
@@ -105,6 +110,11 @@ export function createApiPlugin() {
             next();
             return;
           }
+          // Vite's host check runs after this middleware (a plugin's configureServer
+          // middlewares come before Vite's own), so the API makes the same check itself,
+          // first: a DNS-rebinding page sends its own domain as Host (and as Origin, which
+          // assertSameOrigin then finds equal), even though it reaches 127.0.0.1.
+          if (refuseForeignHost(req, res, hostRule)) return;
           // Plugin workspace frames have an opaque origin (Origin: null); they may GET
           // the SDK and their own workspace files, and nothing else.
           if (!isFrameAssetRequest(req.method, url)) assertSameOrigin(req);

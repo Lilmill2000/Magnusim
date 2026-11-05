@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wslBash } from '../toolchain.js';
+import { ensureStyled } from './page-styles.mjs';
 
 const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PY_DIR = join(WEB_ROOT, 'python');
@@ -173,6 +174,7 @@ export async function getJson(request, url) {
 /** Open a seeded elbow project's Mesh 1 settings form (as compute-queue.spec.js does); returns its Generate button. */
 export async function openMeshForm(page, projectId, { base = '' } = {}) {
   await page.goto(`${base}/#/p/${encodeURIComponent(projectId)}`);
+  await ensureStyled(page);
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, projectId, { timeout: 90_000 });
   const tree = page.locator('#left-tree');
   const meshRow = tree.locator('[data-w20-mesh-item]').first();
@@ -288,6 +290,7 @@ export async function openRunPanel(page, { base = '', projectId, simulationId = 
   if (reload) {
     await page.goto(`${base}/#/p/${encodeURIComponent(projectId)}`);
     await page.reload();
+    await ensureStyled(page);
   }
   await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, projectId, { timeout: 90_000 });
   const panel = page.locator('#panel-sim-control .cfd-island [data-run-control="1"]');

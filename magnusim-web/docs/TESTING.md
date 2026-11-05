@@ -152,6 +152,32 @@ context a test makes itself (`browser.newContext()`) is not throttled.
   their fixes. Throttling looks for a race. Once a race is found, the test that
   keeps it fixed forces its timing (below).
 
+## An unstyled page
+
+`index.html` loads the app's stylesheets (`/src/theme/tokens.css`,
+`/src/style.css`) with `<link>`. In a long, loaded run on Windows one of those
+requests can fail with `net::ERR_NO_BUFFER_SPACE` (the PC is out of socket
+buffers). Without `style.css`, `.main-row` loses its `position`, the 3D view's
+canvas covers the whole window, and the test's next click waits out its timeout
+("`<canvas>` … intercepts pointer events"). The harness checks for that once
+per page load (`e2e/support/page-styles.mjs`, one evaluate). When a stylesheet
+of the page's own origin did not apply, it logs which and why
+(`[e2e] the app page is unstyled: /src/style.css did not load (…); reloading it once`)
+and reloads the page once. If the page is still unstyled, the test stops at
+once with a message naming the stylesheet and the error.
+
+- The harness's `test` (`e2e/support/stress.js`, so `plugin-suite.js` too)
+  checks after every `page.goto` and `page.reload` that waits for the load.
+- So do the shared openers: `appReady` (`support/assistant.js`), `setup`
+  (`support/two-plates.js`), `openMeshForm` and `openRunPanel`
+  (`support/compute-slot.js`), `showsProject` (`support/link-streams.js`), and
+  CAD's `openProject`, `newPartFromTree` and `pickTheme`
+  (`bundled-plugins/cad/e2e/helpers.ts`).
+- A spec that opens the app its own way calls `ensureStyled(page)` after its
+  `goto`. When that returns `'reloaded'`, it waits for the app again.
+- `e2e/unstyled-page-guard.spec.js` and CAD's `cad-unstyled-page.spec.ts` fail
+  the stylesheet on purpose (`route.abort`) to show the reload and the stop.
+
 ## Writing tests
 
 - **Every bug fixed gets a browser test in a suite that runs by default.** It

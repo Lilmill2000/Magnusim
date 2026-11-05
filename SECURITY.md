@@ -11,6 +11,14 @@ original Host header, restrict access to trusted users, and explicitly set
 browser-origin validation are not authentication. Do not expose the raw Vite
 server or unrestricted API as a public multi-user service.
 
+The API (`/api/`, `/plugins/`, `/plugin-sdk/`) answers only requests whose Host
+is this PC's own (`localhost`, a `*.localhost` name, an IP address) or one of the
+hosts Vite allows the page on (`server.allowedHosts` in `vite.config.js`: the
+public tunnel's host and `MAGNUSIM_ALLOWED_HOSTS`). Any other Host gets 403
+before anything is read or written, so a web page whose domain is made to
+resolve to 127.0.0.1 (DNS rebinding) can't use it. Magnusim CAD's own server has
+no allowed list: this PC's names only.
+
 ## Plugins
 
 A plugin is trusted code. Its Python runs with the same permissions as

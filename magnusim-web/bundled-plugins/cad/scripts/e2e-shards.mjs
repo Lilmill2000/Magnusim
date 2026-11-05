@@ -38,6 +38,8 @@ export const SHARDS = {
     'e2e/cad-sketch-toolbar-fit.spec.ts',
     // v0.5.0 ribbon: groups resized by their line, rows by the bottom edge, sizes from one scale factor.
     'e2e/cad-toolbar-resize.spec.ts',
+    // The harness's unstyled-page guard: a host page whose style.css failed is reloaded once (openProject, newPartFromTree).
+    'e2e/cad-unstyled-page.spec.ts',
     // ux010 TOOLBAR builder: Banana for scale (SCALE MODELS after VIEW; never a body; dragged; not linked).
     'e2e/cad-ux010-banana.spec.ts',
     // Pictures drawn off screen (handle.snapshot) and the count of the person's camera moves.

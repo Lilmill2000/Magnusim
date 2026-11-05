@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
 
 export type SendJson = (res: ServerResponse, status: number, body: unknown) => void;
 
@@ -152,7 +153,118 @@ export function isLocalOperator(req: IncomingMessage): boolean {
   return LOOPBACK_ADDRS.has(remote);
 }
 
-/** Browser requests must come from the app origin, including localhost deployments. */
+/**
+ * The hosts a server answers on: Vite's `allowedHosts` (a list, or true for any host) and
+ * the extra names Vite adds from its own options (the `host` it was started with, the HMR
+ * host, the `origin`'s hostname).
+ */
+export interface HostRule {
+  allowed: readonly string[] | true;
+  extra: readonly string[];
+}
+
+/** A server with no Vite config (Magnusim CAD's): this PC's own names and IP addresses only. */
+export const LOOPBACK_ONLY: HostRule = Object.freeze({ allowed: Object.freeze([]) as readonly string[], extra: Object.freeze([]) as readonly string[] });
+
+/** What the host check reads of a Vite server's resolved config (ViteDevServer / PreviewServer `.config`). */
+export interface HostConfigSource {
+  server?: { allowedHosts?: readonly string[] | true; host?: unknown; hmr?: unknown; origin?: unknown; https?: unknown };
+  preview?: { allowedHosts?: readonly string[] | true; host?: unknown; https?: unknown };
+}
+
+/**
+ * The host rule of a Vite server (`side`: the dev server or `vite preview`), read from its
+ * resolved config so vite.config.js `allowedHosts` (MAGNUSIM_ALLOWED_HOSTS and the public
+ * tunnel's host included) stays the one list. The same as Vite's own host check: an HTTPS
+ * server checks no host (a rebinding page can't get its certificate), and `vite preview`'s
+ * list is the dev server's unless set. No config: LOOPBACK_ONLY.
+ */
+export function hostRuleOf(config: HostConfigSource | null | undefined, side: 'server' | 'preview'): HostRule {
+  if (!config || typeof config !== 'object') return LOOPBACK_ONLY;
+  const server = config.server || {};
+  const preview = config.preview || {};
+  const own = side === 'preview' ? preview : server;
+  if (own.https) return { allowed: true, extra: [] };
+  const list = (side === 'preview' ? preview.allowedHosts ?? server.allowedHosts : server.allowedHosts) ?? [];
+  const extra: string[] = [];
+  const named = (v: unknown) => {
+    if (typeof v === 'string' && v) extra.push(v);
+  };
+  named(server.host);
+  if (server.hmr && typeof server.hmr === 'object') named((server.hmr as { host?: unknown }).host);
+  named(preview.host);
+  if (typeof server.origin === 'string' && server.origin) {
+    try {
+      named(new URL(server.origin).hostname);
+    } catch {
+      /* not a URL: Vite skips it too */
+    }
+  }
+  return { allowed: list === true ? true : [...list], extra };
+}
+
+/**
+ * Whether a request's Host header names this server (Vite's host check, isHostAllowed): an IP
+ * address, `localhost` or a `*.localhost` name, one of `rule.extra`, or one of `rule.allowed`
+ * (a name starting with "." also allows every name under it). A DNS-rebinding page sends its own
+ * domain as Host, so it is refused even though its requests reach 127.0.0.1. No Host: refused.
+ */
+export function isAllowedHost(hostHeader: string | string[] | undefined, rule: HostRule = LOOPBACK_ONLY): boolean {
+  if (rule.allowed === true) return true;
+  const host = String(Array.isArray(hostHeader) ? hostHeader[0] : hostHeader ?? '').trim().toLowerCase();
+  if (!host) return false;
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']');
+    return end > 0 && isIP(host.slice(1, end)) === 6;
+  }
+  const colon = host.indexOf(':');
+  const name = colon === -1 ? host : host.slice(0, colon);
+  if (isIP(name) === 4) return true;
+  if (name === 'localhost' || name.endsWith('.localhost')) return true;
+  if (rule.extra.some((h) => h.toLowerCase() === name)) return true;
+  return rule.allowed.some((entry) => {
+    const h = entry.trim().toLowerCase();
+    if (h === name) return true;
+    return h.startsWith('.') && h.length > 1 && (h.slice(1) === name || name.endsWith(h));
+  });
+}
+
+/** The hostname a refusal names (the Host header without its port). */
+function hostnameOf(hostHeader: string | string[] | undefined): string {
+  const host = String(Array.isArray(hostHeader) ? hostHeader[0] : hostHeader ?? '').trim();
+  return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.replace(/:\d+$/, '');
+}
+
+/** The 403 a request to a host this server doesn't answer on gets (refuseForeignHost). */
+export function foreignHostBody(hostHeader: string | string[] | undefined): { ok: false; reason: 'host'; error: string } {
+  const name = hostnameOf(hostHeader);
+  return {
+    ok: false,
+    reason: 'host',
+    error:
+      `Blocked request: this host (${JSON.stringify(name)}) is not allowed. Magnusim answers only on this PC's own ` +
+      'addresses (localhost, 127.0.0.1) and the hosts in its allowed list (server.allowedHosts in vite.config.js, ' +
+      'plus MAGNUSIM_ALLOWED_HOSTS).',
+  };
+}
+
+/**
+ * Answers 403 (and returns true) for a request whose Host this server doesn't answer on. index.ts
+ * runs it first for every /api/, /plugins/ and /plugin-sdk/ request: the app's middleware runs
+ * before Vite's own host check (a plugin's configureServer middlewares come first), so without it
+ * a DNS-rebinding page could read and write projects and open the event streams.
+ */
+export function refuseForeignHost(req: IncomingMessage, res: ServerResponse, rule: HostRule): boolean {
+  if (isAllowedHost(req.headers.host, rule)) return false;
+  sendJson(res, 403, foreignHostBody(req.headers.host));
+  return true;
+}
+
+/**
+ * Browser requests must come from the app origin, including localhost deployments. This compares
+ * Origin with Host only, so it can't tell a rebinding page (both its own domain) from the app:
+ * refuseForeignHost runs before it.
+ */
 export function assertSameOrigin(req: IncomingMessage): void {
   const origin = req.headers.origin;
   if (req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'cross-site API request denied');

@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getJson } from './compute-slot.js';
+import { ensureStyled } from './page-styles.mjs';
 
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const EXPORTS = join(WEB, 'python', 'tests', 'fixtures', 'link-plugins', 'link-demo', 'workspace', 'exports');
@@ -152,6 +153,7 @@ export const studyRow = (page, sid) => page.locator(`[data-plugin-study="${sid}"
  */
 export async function showsProject(page, host, project, seen, { ready = true, streams = true } = {}) {
   await page.goto(`${host.base}/#/p/${project.pid}`);
+  await ensureStyled(page);
   if (ready) await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, project.pid, { timeout: 60_000 });
   for (const s of project.studies) await expect(geometryRow(page, s.gid)).toBeVisible({ timeout: 60_000 });
   if (streams) await expect.poll(() => seen.waitingStreams(), { timeout: 30_000, message: 'every link stream asked for is connected' }).toBe(0);
