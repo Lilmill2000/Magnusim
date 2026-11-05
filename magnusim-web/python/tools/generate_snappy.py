@@ -197,6 +197,7 @@ def boundary_patches(
     from cfddesk.cad.step import load_step, tessellate_faces
     from cfddesk.mesh.gmsh_standard import _face_to_patch_map, emitted_patch_types
     from cfddesk.mesh.snappy_hexdominant import (
+        refine_distance_m,
         refinement_level_for_size,
         write_patch_stls,
         write_refine_stls,
@@ -314,8 +315,9 @@ def boundary_patches(
                 "face_ids": n["face_ids"],
                 "size_m": float(n["size_m"]),
                 "level": refinement_level_for_size(base_m, float(n["size_m"])),
-                # Refine about three target cells out from the faces.
-                "distance_m": 3.0 * float(n["size_m"]),
+                # About three target cells out from the faces, or out to its Refine out to.
+                "distance_m": refine_distance_m(float(n["size_m"]), n.get("reach_m")),
+                **({"reach_m": float(n["reach_m"])} if n.get("reach_m") else {}),
                 "source": n.get("name"),
             }
             for n in size_notes
@@ -341,7 +343,13 @@ def boundary_patches(
         "refine_regions": regions,
         "inflate": inflate_notes(inflates),
         "surface_custom": [
-            {"name": r.get("source"), "size_m": r["size_m"], "level": r["level"], "faces": len(r["face_ids"])}
+            {
+                "name": r.get("source"),
+                "size_m": r["size_m"],
+                "level": r["level"],
+                "faces": len(r["face_ids"]),
+                **({"distance_m": r["distance_m"], "reach_m": r["reach_m"]} if r.get("reach_m") else {}),
+            }
             for r in regions
         ],
     }

@@ -150,6 +150,41 @@ def test_a_custom_size_becomes_a_level_of_the_diagonal_base_size():
     assert est["n_cells"] > 1_000_000
 
 
+def test_a_refine_out_to_counts_its_band_out_to_the_distance():
+    """A custom size with a Refine out to (gap G4): its band's cells out to the distance, at its
+    level, in place of its faces' three cells; the plan says how far it reaches."""
+    import math
+
+    from magnusim_validation.mesh_plan import estimate
+
+    # A sphere of 10 mm in a box 280 x 160 x 160 mm (case 6's), its face sized 0.5 mm.
+    faces = [{"id": 1, "area_mm2": math.pi * 100.0, "normal": None, "surface_type": "Sphere"},
+             *({"id": i, "area_mm2": 25_600.0, "normal": [1.0, 0.0, 0.0], "surface_type": "Plane"} for i in (2, 3)),
+             *({"id": i, "area_mm2": 44_800.0, "normal": [0.0, 1.0, 0.0], "surface_type": "Plane"} for i in (4, 5, 6, 7))]
+    bounds = [-80.0, 200.0, -80.0, 80.0, -80.0, 80.0]
+    volume = 280.0 * 160.0 * 160.0 - math.pi * 1000.0 / 6.0
+
+    def mesh(**reach):
+        return {"settings": {"fineness": 3, "advanced": {"mesh_engine": "snappy_hexdominant"}},
+                "refinements": [{"name": "Wake", "type": "Surface custom sizing", "faces": ["face 1@Body1"],
+                                 "default_size": 0.5, "default_size_unit": "mm", **reach}]}
+
+    plain = estimate(mesh(), faces, bounds, volume)
+    near = estimate(mesh(reach=15, reach_unit="mm"), faces, bounds, volume)
+    assert plain is not None and near is not None
+    assert "distance_mm" not in plain["custom_sizes"][0]
+    custom = near["custom_sizes"][0]
+    assert (custom["reach_mm"], custom["distance_mm"]) == (pytest.approx(15.0), pytest.approx(15.0))
+    # The band around the sphere (radius 5 mm) out to 15 mm: (20^3 - 5^3) 4/3 pi of the level's cells.
+    cell = custom["cell_mm"]
+    band = (20.0**3 - 5.0**3) * 4.0 / 3.0 * math.pi / (cell[0] * cell[1] * cell[2])
+    assert near["n_cells"] - plain["n_cells"] == pytest.approx(band, rel=0.05, abs=2_000)
+    # A distance within the default band changes nothing.
+    short = estimate(mesh(reach=1, reach_unit="mm"), faces, bounds, volume)
+    assert short is not None and short["n_cells"] == plain["n_cells"]
+    assert short["custom_sizes"][0]["distance_mm"] == pytest.approx(1.5)
+
+
 def test_mesh_settings_given_by_hand_are_merged_recorded_and_kept_out_of_results(tmp_path: Path):
     from magnusim_validation.__main__ import _run_dir
     from magnusim_validation.paths import RESULTS, RESULTS_COARSE, RESULTS_PROBE

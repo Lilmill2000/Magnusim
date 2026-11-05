@@ -51,6 +51,19 @@ def base_cell_size(fineness: int, bounds_m: dict[str, float] | None, *, two_d_ax
     return max(1e-5, min(1.0, diag / cells_across(clamp_fineness(fineness))))
 
 
+# A Surface custom sizing refines this many cells of its size out from its faces, unless its
+# Refine out to reaches further (``refine_distance_m``).
+DEFAULT_BAND_CELLS = 3
+
+
+def refine_distance_m(size_m: float, reach_m: float | None = None) -> float:
+    """How far from a Surface custom sizing's faces its cells are refined to its level (the
+    distance of its refinement region): its Refine out to (validation gap G4), but never less
+    than the default band of ``DEFAULT_BAND_CELLS`` cells of its size."""
+    band = DEFAULT_BAND_CELLS * float(size_m)
+    return max(float(reach_m), band) if reach_m and reach_m > 0 else band
+
+
 def refinement_level_for_size(base_m: float, size_m: float, *, max_level: int = 8) -> int:
     """Smallest snappy level whose cells (base / 2**level) are no larger than ``size_m``."""
     if not (base_m > 0 and size_m > 0):
@@ -275,8 +288,9 @@ def write_refine_stls(
 ) -> list[dict[str, Any]]:
     """One refinement-only STL per Surface custom sizing group.
 
-    ``groups`` rows carry ``face_ids``, ``level`` and ``distance_m``; the
-    returned rows add ``name`` / ``file`` for ``write_hexdominant_dicts``.
+    ``groups`` rows carry ``face_ids``, ``level`` and ``distance_m`` (and ``reach_m``, the Refine
+    out to asked, when there is one); the returned rows add ``name`` / ``file`` for
+    ``write_hexdominant_dicts``.
     These surfaces only drive ``refinementRegions``; they make no patch.
     """
     import numpy as np
@@ -643,7 +657,13 @@ def write_hexdominant_dicts(
             {"patch": getattr(s, "name", ""), "n_layers": int(getattr(s, "n_layers", 0) or 0)} for s in specs
         ],
         "refinement_regions": [
-            {"name": r["name"], "level": int(r["level"]), "distance_m": float(r["distance_m"])} for r in regions
+            {
+                "name": r["name"],
+                "level": int(r["level"]),
+                "distance_m": float(r["distance_m"]),
+                **({"reach_m": float(r["reach_m"])} if r.get("reach_m") else {}),
+            }
+            for r in regions
         ],
         "snap": {
             "n_smooth_patch": snap_nsmooth,

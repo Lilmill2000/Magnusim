@@ -10,6 +10,9 @@ generated mesh, in one file beside it (``mesh-facts.json``), the same for every 
   from the mesher's own record: Standard's ``standard-meta.json``, cfMesh's
   ``w28-cfmesh-meta.json`` and Hex-dominant's ``w23-geometry-meta.json``, with
   snappyHexMesh's layer report (``log.snappyHexMesh``, :func:`parse_snappy_layers`).
+- ``refined`` (a Hex-dominant mesh with Surface custom sizing, only then): each custom size's
+  band as the mesher wrote it: its level, the cell size there, how far from its faces it
+  reaches (``distance_m``) and the Refine out to asked (``reach_m``, when there was one).
 - ``courant_rates``: the summary of the mesh's Courant-rate table
   (:mod:`magnusim_sdk.courant_rates`; the table itself is ``courant-rates.json``).
 - ``two_d`` (a Hex-dominant mesh made one cell across, only then): ``axis`` (the depth's,
@@ -356,19 +359,16 @@ def mesher_of(case_dir: Path | str) -> str | None:
     return best[1] if best else None
 
 
-def _hexdominant_surface_cell(case: Path, meta: dict[str, Any]) -> float | None:
-    """The background block's cell over 2^level of the wall refinement (blockMeshDict); a 2D
-    mesh's from its section's background cell (its block is one cell of the depth deep)."""
+def _hexdominant_base_cell(case: Path, meta: dict[str, Any]) -> float | None:
+    """The background block's cell (blockMeshDict, the mean of its three sizes); a 2D mesh's
+    from its section's background cell (its block is one cell of the depth deep)."""
     two = _dict(meta.get("two_d"))
-    level = meta.get("walls_level")
-    if two and isinstance(level, (int, float)):
-        base = _f(str(two.get("base_m"))) if two.get("base_m") is not None else None
-        return _sig(base / 2.0 ** int(level)) if base else None
+    if two:
+        return _f(str(two.get("base_m"))) if two.get("base_m") is not None else None
     t = _read_text(case / "system" / "blockMeshDict")
     verts = re.search(r"vertices\s*\((.*?)\)\s*;", t, re.S)
     hexm = re.search(r"hex\s*\([^)]*\)\s*\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\)", t)
-    level = meta.get("walls_level")
-    if not verts or not hexm or not isinstance(level, (int, float)):
+    if not verts or not hexm:
         return None
     pts = [[float(v) for v in p.split()] for p in re.findall(r"\(([^()]*)\)", verts.group(1))]
     pts = [p for p in pts if len(p) == 3]
@@ -379,8 +379,36 @@ def _hexdominant_surface_cell(case: Path, meta: dict[str, Any]) -> float | None:
     cells = [s / c for s, c in zip(size, counts, strict=True) if s > 0 and c > 0]
     if not cells:
         return None
-    base = math.prod(cells) ** (1.0 / len(cells))
-    return _sig(base / 2.0 ** int(level))
+    return math.prod(cells) ** (1.0 / len(cells))
+
+
+def _hexdominant_surface_cell(case: Path, meta: dict[str, Any]) -> float | None:
+    """The background block's cell over 2^level of the wall refinement."""
+    level = meta.get("walls_level")
+    if not isinstance(level, (int, float)):
+        return None
+    base = _hexdominant_base_cell(case, meta)
+    return _sig(base / 2.0 ** int(level)) if base else None
+
+
+def _hexdominant_refined(case: Path, meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each Surface custom sizing's band as the mesher wrote it (its refinement region): its
+    level, the cell size there, how far from its faces (``distance_m``) and, when it had one,
+    the Refine out to asked (``reach_m``; the band is never shorter than three cells)."""
+    base = _hexdominant_base_cell(case, meta)
+    out: list[dict[str, Any]] = []
+    for r in meta.get("refinement_regions") or []:
+        if not isinstance(r, dict) or not isinstance(r.get("level"), (int, float)):
+            continue
+        row: dict[str, Any] = {
+            "level": int(r["level"]),
+            "cell_m": _sig(base / 2.0 ** int(r["level"])) if base else None,
+            "distance_m": _sig(_f(str(r.get("distance_m")))),
+        }
+        if r.get("reach_m"):
+            row["reach_m"] = _sig(_f(str(r["reach_m"])))
+        out.append(row)
+    return out
 
 
 def build_mesh_facts(case_dir: Path | str, *, mesher: str | None = None) -> dict[str, Any]:
@@ -444,6 +472,9 @@ def build_mesh_facts(case_dir: Path | str, *, mesher: str | None = None) -> dict
         if isinstance(b, dict) and all(k in b for k in ("xmin", "xmax", "ymin", "ymax", "zmin", "zmax")):
             facts["part_size_m"] = [_sig(abs(float(b[f"{a}max"]) - float(b[f"{a}min"]))) for a in "xyz"]
         facts["surface_cell_m"] = _hexdominant_surface_cell(case, meta)
+        refined = _hexdominant_refined(case, meta)
+        if refined:
+            facts["refined"] = refined
         asked = [x for x in meta.get("layers") or [] if isinstance(x, dict) and int(x.get("n_layers") or 0) > 0]
         layers["asked"] = bool(meta.get("add_layers")) or bool(asked)
         if snappy_rows is not None:

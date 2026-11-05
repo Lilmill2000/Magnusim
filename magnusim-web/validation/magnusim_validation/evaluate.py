@@ -277,6 +277,8 @@ def mesh_section(raw: Raw, plan: dict[str, Any], drv: dict[str, Any] | None) -> 
         "generate_s": ((drv or {}).get("timings_s") or {}).get("mesh"),
         "background": background_block(raw.text("blockMeshDict.txt")),
         "surface_cell_m": facts.get("surface_cell_m"),
+        # Each custom size's band as the mesher wrote it (Hex-dominant; with a Refine out to, its reach).
+        **({"refined": facts["refined"]} if facts.get("refined") else {}),
         "quality": {
             "known": q.get("known"),
             "ok": q.get("ok"),

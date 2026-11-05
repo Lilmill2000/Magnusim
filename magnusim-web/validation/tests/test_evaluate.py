@@ -95,6 +95,19 @@ def test_a_steady_run_that_stops_at_its_limit_but_has_settled_is_ok_with_a_warni
     assert any("stopped at its iteration limit" in w for w in doc["warnings"])
 
 
+def test_a_custom_sizes_band_from_the_mesh_facts_is_kept(tmp_path: Path):
+    """Each custom size's band as the mesher wrote it (a Refine out to's reach too) goes into
+    result.json's mesh; a mesh with none keeps the mesh section as it was."""
+    run_dir = plan_run(tmp_path)
+    fake_run(run_dir)
+    assert "refined" not in evaluate_dir(run_dir)["mesh"]
+    facts_path = run_dir / "raw" / "mesh-facts.json"
+    facts = json.loads(facts_path.read_text(encoding="utf-8"))
+    band = [{"level": 3, "cell_m": 0.0005, "distance_m": 0.03, "reach_m": 0.03}]
+    facts_path.write_text(json.dumps({**facts, "refined": band}), encoding="utf-8")
+    assert evaluate_dir(run_dir)["mesh"]["refined"] == band
+
+
 def test_layers_asked_and_not_applied_fail_the_run(tmp_path: Path):
     run_dir = plan_run(tmp_path)
     fake_run(run_dir, layers_applied=False)

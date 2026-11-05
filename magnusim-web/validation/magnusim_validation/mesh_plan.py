@@ -6,8 +6,10 @@ diagonal's base size, so on a thin part its cells come out finer and flatter tha
 the wall layers' stack against the wall cell, and a rough cell count.
 
 The count is an order of magnitude, not a prediction: the background block's cells inside
-the part, plus about three cells deep at each surface's level, plus the layers. It reads
-about 1.3 to 1.4 times case 1's real meshes. The driver refuses to Generate a plan whose count is
+the part, plus about three cells deep at each surface's level (or, for a custom size with a
+Refine out to, its band out to that distance: the faces' area times the distance, grown as
+around a sphere of the same area), plus the layers. It reads about 1.3 to 1.4 times case 1's
+real meshes. The driver refuses to Generate a plan whose count is
 over its cap (``MAGNUSIM_VALIDATION_MAX_CELLS``), so a probe never asks WSL for a mesh it
 cannot hold.
 """
@@ -68,11 +70,18 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
         return None
     from cfddesk.mesh.snappy_hexdominant import (
         _PAD,
+        DEFAULT_BAND_CELLS,
         base_cell_size,
         fineness_params,
+        refine_distance_m,
         refinement_level_for_size,
     )
-    from cfddesk.mesh.web_refinements import is_inflate, is_surface_custom, size_to_metres
+    from cfddesk.mesh.web_refinements import (
+        is_inflate,
+        is_surface_custom,
+        reach_metres,
+        size_to_metres,
+    )
 
     f = int(settings.get("fineness") or 5)
     physics = bool(settings.get("physics_based_meshing", True))
@@ -98,8 +107,11 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
         ids = _label_ids(ref.get("faces") or [])
         for i in ids:
             level_of[i] = max(level_of.get(i, 0), level)
+        reach_m = reach_metres(ref)
         customs.append({"name": ref.get("name"), "size_mm": size_m * 1000.0, "level": level,
-                        "cell_mm": [round(v, 4) for v in dims(level)], "faces": len(ids)})
+                        "cell_mm": [round(v, 4) for v in dims(level)], "faces": len(ids),
+                        **({"reach_mm": reach_m * 1000.0,
+                            "distance_mm": round(refine_distance_m(size_m, reach_m) * 1000.0, 4)} if reach_m else {})})
     by_id = {int(fc["id"]): fc for fc in faces}
     surface_cells = 0.0
     finest = walls_level
@@ -109,6 +121,21 @@ def estimate(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: list[
         finest = max(finest, lv)
         face_cells[fid] = float(fc["area_mm2"]) / _tangent_area(fc, dims(lv))
         surface_cells += BAND_CELLS * face_cells[fid]
+    # A custom size with a Refine out to: its band out to the distance in place of its faces'
+    # three cells (the band's volume around a sphere of the faces' area, at the custom level).
+    for c, ref in zip(customs, [r for r in mesh.get("refinements") or [] if is_surface_custom(r)], strict=True):
+        # No distance, or one within the default band: the mesher writes the default band.
+        if c.get("distance_mm", 0.0) <= DEFAULT_BAND_CELLS * c["size_mm"] * (1.0 + 1e-9):
+            continue
+        band_ids = [i for i in _label_ids(ref.get("faces") or []) if i in by_id]
+        area = sum(float(by_id[i]["area_mm2"]) for i in band_ids)
+        if area <= 0:
+            continue
+        d = float(c["distance_mm"])
+        r_eq = math.sqrt(area / (4.0 * math.pi))
+        band = area * d * (1.0 + d / r_eq + d * d / (3.0 * r_eq * r_eq))
+        band_cell = dims(int(c["level"]))
+        surface_cells += band / (band_cell[0] * band_cell[1] * band_cell[2]) - BAND_CELLS * sum(face_cells[i] for i in band_ids)
     fine = dims(finest)
     surface_cells = min(surface_cells, volume_mm3 / (fine[0] * fine[1] * fine[2]))
     box_mm3 = math.prod(e * _PAD for e in ext_mm)
