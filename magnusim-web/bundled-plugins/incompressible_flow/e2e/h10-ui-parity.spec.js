@@ -319,7 +319,8 @@ test('gate:h10-ui-parity the Steady-state and Transient panels match v0.2.0', as
   await openRun(transient);
   await expect(runControl.locator('[data-run-transient-hint]')).toContainText('(auto)', { timeout: 60_000 });
   await capture(page, 'run-draft-transient', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
-  await runControl.locator('details.mesh-advanced > summary').click();
+  // Advanced settings, not RH3's read-only "Numerics as written" below it.
+  await runControl.locator('details.mesh-advanced:not([data-run-numerics]) > summary').click();
   await capture(page, 'run-draft-transient-advanced', runPanel, { skip: `${RUN_ADDED}, ${CORES_ADDED}` });
   const pv = await (
     await request.post('/api/run/transient-preview', { data: { project_id: PROJECT, run_id: transient, simulation_id: SIM } })
