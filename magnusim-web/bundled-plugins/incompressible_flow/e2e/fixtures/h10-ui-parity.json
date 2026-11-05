@@ -331,7 +331,7 @@
   "      <span class=\"<id>\"> Algorithm",
   "      <span class=\"<id>\" data-study-algorithm=\"#\"> PIMPLE",
   "    <p class=\"<id> <id>\"> Steady-state solves for the converged flow with simpleFoam. Transient marches through real time with pimpleFoam and writes frames you can animate.",
-  "    <p class=\"<id> <id>\" data-study-transient-note=\"#\"> Transient runs take their time step, time scheme and PIMPLE correctors from each run's panel.",
+  "    <p class=\"<id> <id>\" data-study-transient-note=\"#\"> The time step and PIMPLE correctors are on each run's panel.",
   "    <div class=\"<id>\">",
   "      <div class=\"<id>\">",
   "        <button class=\"<id>\" title=\"Delete this simulation\" type=\"button\"> Delete",

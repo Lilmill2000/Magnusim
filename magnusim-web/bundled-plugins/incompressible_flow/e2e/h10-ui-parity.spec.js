@@ -72,12 +72,12 @@ const NEW_STUDY_ROWS = [
   '[data-schema-key="initial_uz"]',
   '[data-schema-key="potential_flow"]',
   // RH3 numerics: a steady study's Advanced settings (schemes, linear solvers, velocity limit), a
-  // transient study's numerics form (it had none), the preset note, and the transient note's new
-  // words ("The time step and PIMPLE correctors are on each run's panel.").
+  // transient study's numerics form (it had none) and the preset note. The transient note is
+  // v0.2.0's line with RH3's words ("The time step and PIMPLE correctors are on each run's
+  // panel."): the baseline line was edited to them, so it is still compared.
   '.sim-study-numerics details.mesh-advanced',
   '.sim-study-numerics:not(:has([data-schema-key="residual_u"]))',
   '[data-study-preset-note]',
-  '[data-study-transient-note]',
 ].join(', ');
 
 function stage(t0, msg) {
