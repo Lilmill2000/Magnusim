@@ -232,6 +232,22 @@ def converged_at(log_end: Any) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def last_initial_residuals(log_end: Any) -> dict[str, float]:
+    """Each field's initial residual in the last iteration the solver log's end shows (its last
+    "Solving for <field>, Initial residual = <r>" line per field; a pressure solved twice in an
+    iteration gives its first, as the run's residuals do)."""
+    lines = _log_text(log_end).splitlines()
+    start = max((i for i, s in enumerate(lines) if re.match(r"\s*Time = ", s)), default=-1)
+    out: dict[str, float] = {}
+    for s in lines[start + 1 :] if start >= 0 else lines:
+        m = re.search(r"Solving for (\w+), Initial residual = ([-+0-9.eE]+)", s)
+        if m and m.group(1) not in out:
+            v = _f(m.group(2))
+            if v is not None:
+                out[m.group(1)] = v
+    return out
+
+
 def background_block(block_mesh_dict: str) -> dict[str, Any] | None:
     """The background block's cell counts and size (blockMeshDict's first hex), when found."""
     m = re.search(r"hex\s*\([^)]*\)\s*\((\d+)\s+(\d+)\s+(\d+)\)", block_mesh_dict)
@@ -320,6 +336,8 @@ def run_section(raw: Raw, plan: dict[str, Any], drv: dict[str, Any] | None) -> d
         "converged": conv is not None,
         "converged_at": conv,
         "residuals_final": residuals[-1] if residuals else None,
+        # Per component, from the solver log (the run's "U" is its largest component).
+        "log_residuals": last_initial_residuals(log_end),
         "wall_s": _seconds(run.get("started_at"), run.get("finished_at")),
         "driver_solve_s": ((drv or {}).get("timings_s") or {}).get("solve"),
         "cores_set": (plan.get("run") or {}).get("cores"),

@@ -291,6 +291,9 @@ def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:
         + ("" if not (r.get("health") or {}).get("findings") else ": " + "; ".join(
             str(f.get("title") or f.get("text") or f.get("message") or f.get("code")) for f in r["health"]["findings"]))
     )
+    lr = r.get("log_residuals") or {}
+    if lr:
+        out.append("The solver's last initial residuals: " + ", ".join(f"{k} {num(v, 2)}" for k, v in lr.items()))
     pre = res.get("precheck") or {}
     rows = pre.get("rows") or []
     if rows:

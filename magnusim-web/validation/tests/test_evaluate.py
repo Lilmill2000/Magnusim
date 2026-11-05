@@ -12,6 +12,7 @@ from magnusim_validation.evaluate import (
     background_block,
     converged_at,
     evaluate_dir,
+    last_initial_residuals,
     openfoam_version,
     residual_series,
 )
@@ -142,3 +143,11 @@ def test_the_log_readers():
     hist = [{"t": i, "U": 1.0 / i, "p": 2.0 / i} for i in range(1, 1001)]
     s = residual_series(hist, n_max=100)
     assert len(s["t"]) <= 101 and s["t"][-1] == 1000.0 and s["U"][-1] == pytest.approx(1e-3)
+    # Each field's initial residual in the log's last iteration (a pressure solved twice: its first).
+    log = {"lines": ["Time = 2999", "smoothSolver:  Solving for Ux, Initial residual = 0.5, Final residual = 1",
+                     "Time = 3000", "smoothSolver:  Solving for Ux, Initial residual = 1.6e-05, Final residual = 7e-07",
+                     "smoothSolver:  Solving for Uz, Initial residual = 0.0132, Final residual = 0.0005",
+                     "GAMG:  Solving for p, Initial residual = 1.04e-05, Final residual = 9e-08",
+                     "GAMG:  Solving for p, Initial residual = 5.7e-07, Final residual = 8e-08", "End"]}
+    assert last_initial_residuals(log) == {"Ux": 1.6e-05, "Uz": 0.0132, "p": 1.04e-05}
+    assert last_initial_residuals({}) == {}

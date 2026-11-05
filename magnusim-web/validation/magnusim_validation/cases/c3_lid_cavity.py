@@ -46,7 +46,10 @@ NU = {v: U * L / re for v, re in RE.items()}
 FINENESS = 7
 CELL_MM = 0.6
 REACH_MM = 50.0
-END_TIME = {"re100": 3000, "re1000": 8000}
+# Neither run meets its residual targets (NOTES: Uz), so each runs to its limit and must settle
+# there: at Re 100 the centre's U_x still moved 0.8 % over the last 10 % of 3000 iterations (the
+# first full run), at Re 1000 0.04 % over the last 10 % of 8000.
+END_TIME = {"re100": 12000, "re1000": 8000}
 # The profiles: 201 samples along each centreline (as Plot over path samples them), and the
 # stream function from u on 99 vertical lines at x = L/100, 2 L/100, ... of 201 samples each.
 LINE_SUBDIV = 200
@@ -178,6 +181,12 @@ NOTES = (
     "with those, and the primary vortex with Marchi et al. (2009).",
     "The Point probes at Ghia et al.'s stations are a cross-check (shown): they read the value at each point "
     "(OpenFOAM's cellPoint interpolation, gap G3, fixed).",
+    "Neither run stops on its residual targets: on a mesh one cell across whose two ends carry a Symmetry, OpenFOAM "
+    "still solves the velocity's z component, which is zero to round-off, and its normalised residual stays near "
+    "0.01 (the solver's last residuals are listed with each run: Ux, Uy and p fall far below it). The run's U "
+    "residual is its largest component, so Run health reads it as stalled (an app bug of One cell across, reported). "
+    "Each run goes to its iteration limit and counts only if it settled there: its centre probes moved less than "
+    "0.1 % over its last 10 % of iterations.",
 )
 
 # A steady run that stops at its iteration limit counts as settled only when these histories
