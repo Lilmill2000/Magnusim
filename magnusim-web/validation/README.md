@@ -108,7 +108,8 @@ App gaps found so far, and what they block:
   (`bundled-plugins/incompressible_flow/e2e/closed-domain.spec.js`, `tests/test_closed_domain.py`).
 - **Signed profiles** (cases 3 to 6): Plot over path gives a vector's magnitude only; the
   harness reads cell values with the app's own loader instead (`sampling.cells`).
-- **Point probes** take the value of the cell that holds the point (no interpolation).
+- **Point probes**, fixed: they read the value at the point (`interpolationScheme cellPoint`),
+  not the value of the cell that holds it.
 - **Refine out to** (cases 4 to 6): a custom size refines only about three target cells out
   from its faces, and there is no box refinement.
 - **A one-cell 2D slab** (cases 3 to 5): Hex-dominant puts at least 8 cells across y and 12

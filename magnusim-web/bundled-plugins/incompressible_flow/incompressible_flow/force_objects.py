@@ -213,7 +213,12 @@ def forces_functions_text(plans: Iterable[dict[str, Any]], reference: Any, *, tr
 
 def probes_block(key: str, points: Iterable[Sequence[float]], *, write_control_text: str) -> str:
     """Velocity and (kinematic) pressure at each point, in the order given. A point
-    outside the mesh is written ``# Not Found`` with values of -1e300."""
+    outside the mesh is written ``# Not Found`` with values of -1e300.
+
+    The value at the point itself (``interpolationScheme cellPoint``: interpolated from the
+    cell's centre and its corner values), what a probe at a point is expected to read.
+    Without it OpenFOAM v2606 takes the containing cell's value (probeModel's default
+    ``cell``), off by up to half a cell's change across a steep profile (validation set G3)."""
     locations = " ".join(vec(p) for p in points)
     return f"""    {key}
     {{
@@ -221,6 +226,7 @@ def probes_block(key: str, points: Iterable[Sequence[float]], *, write_control_t
         libs            (sampling);
         {write_control_text}
         log             false;
+        interpolationScheme cellPoint;
         fields          (U p);
         probeLocations  ( {locations} );
     }}"""
