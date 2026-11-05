@@ -128,3 +128,18 @@ def test_before_a_mesh_only_the_settings_are_checked_and_the_line_says_why():
     # A steady run without a mesh: settings only, no time-step words.
     steady = check_inputs(None, {"end_time": 200}, {}, transient=False)
     assert steady["inputs_complete"] is False and "no_estimate" not in steady
+
+
+def test_a_2d_mesh_whose_ends_lost_their_symmetry_is_named():
+    """The mesh facts' two_d ends, read against the study's BCs on their patches: a Symmetry is
+    fine; anything else is listed once per BC with both ends' faces."""
+    from incompressible_flow.precheck import two_d_unmirrored
+
+    facts = {"two_d": {"front": {"faces": ["Face 5@Body1"], "bc": "Sides", "patch": "sides"}, "back": {"faces": ["Face 3@Body1"], "bc": "Sides", "patch": "sides"}}}
+    mirror = SimpleNamespace(mapped=[{"patch": "sides", "bc": {"name": "Sides", "bc_type": "Symmetry"}}, {"patch": "inlet", "bc": {"name": "Inlet", "bc_type": "Velocity inlet"}}])
+    assert two_d_unmirrored(mirror, facts) == []
+    walls = SimpleNamespace(mapped=[{"patch": "sides", "bc": {"name": "Sides", "bc_type": "Wall", "wall_type": "No-slip"}}])
+    assert two_d_unmirrored(walls, facts) == [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": "Sides"}]
+    # A 3D mesh, or a patch no BC has any more (readiness says so): nothing here.
+    assert two_d_unmirrored(walls, {"quality": {}}) == []
+    assert two_d_unmirrored(SimpleNamespace(mapped=[]), facts) == []

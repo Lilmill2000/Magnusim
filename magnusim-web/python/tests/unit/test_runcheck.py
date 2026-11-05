@@ -430,3 +430,19 @@ def test_cores_sent_as_auto_win_over_the_saved_number():
     assert check_context(inputs, cores=None, **common)["ranks"] == 15
     assert check_context(inputs, cores=2, **common)["ranks"] == 2
     assert check_context(inputs, **common)["ranks"] == 4
+
+
+def test_a_2d_mesh_whose_ends_lost_their_symmetry():
+    """One cell across (2D): an end face whose boundary condition is no longer a Symmetry is an
+    error row (the solve would not be 2D), with the BCs and the mesh to open; none without."""
+    inputs = copy.deepcopy(RUN2)
+    assert "two_d_ends" not in rows_of(check(inputs))
+    inputs["two_d_unmirrored"] = [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": "Walls"}]
+    row = rows_of(check(inputs))["two_d_ends"]
+    assert row["level"] == "error"
+    assert row["text"] == (
+        'This mesh is one cell across (2D), but its end faces (Face 5@Body1, Face 3@Body1) now have "Walls", not a Symmetry, '
+        "so the flow would not be 2D. Put a Symmetry back on them, or turn One cell across off and generate the mesh again."
+    )
+    assert (row["fix"]["target"], row["alt"]["target"]) == ("bcs", "mesh")
+    assert row["short"] == "2D mesh ends not a Symmetry"

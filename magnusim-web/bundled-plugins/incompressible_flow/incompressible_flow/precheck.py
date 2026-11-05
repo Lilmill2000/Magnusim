@@ -153,11 +153,37 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
             ),
         }
     )
+    unmirrored = two_d_unmirrored(spec, ctx.get("mesh"))
+    if unmirrored:
+        out["two_d_unmirrored"] = unmirrored
     tc = getattr(spec, "transient", None)
     if transient and tc is not None and not tc.adjust_time_step:
         # A blank fixed step is written with the case's own estimate.
         out["delta_t_written"] = float(tc.delta_t)
     return out
+
+
+def two_d_unmirrored(spec: Any, facts: Any) -> list[dict[str, Any]]:
+    """The ends of a mesh made one cell across (2D; the mesh facts' ``two_d``) whose patch's
+    boundary condition in this study is not a Symmetry: ``[{faces, bc}]``, one per such BC."""
+    from .bc_kinds import is_symmetry
+    from .writer import _bc_dict
+
+    two = facts.get("two_d") if isinstance(facts, dict) else None
+    if not isinstance(two, dict):
+        return []
+    by_patch = {str(m.get("patch") or ""): _bc_dict(m.get("bc") or {}) for m in getattr(spec, "mapped", None) or [] if m.get("bc")}
+    out: dict[str, dict[str, Any]] = {}
+    for end in (two.get("front"), two.get("back")):
+        if not isinstance(end, dict):
+            continue
+        bc = by_patch.get(str(end.get("patch") or ""))
+        if bc is None or is_symmetry(bc):
+            continue
+        name = str(bc.get("name") or bc.get("bc_type") or "")
+        row = out.setdefault(name, {"faces": [], "bc": name})
+        row["faces"] += [str(f) for f in end.get("faces") or [] if str(f) not in row["faces"]]
+    return list(out.values())
 
 
 def _cap(physics: Any, speed: float) -> float | None:

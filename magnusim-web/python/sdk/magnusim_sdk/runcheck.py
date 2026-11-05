@@ -18,6 +18,9 @@ A row is ``{code, level, text, short, fix, alt, kept}``:
   boundary conditions) or ``steady_copy`` (a copy of the study, set steady). ``cost`` is
   ``{steps, wall_s}`` of a run with the fix, when it can be estimated. A fix that needs a
   setting the app does not offer is named in the text and has no fix.
+- ``two_d_ends`` (``error``): the mesh is one cell across (2D, Hex-dominant's setting) but
+  an end face's boundary condition is no longer a Symmetry, so the solve would not be 2D
+  (``two_d_unmirrored`` in the inputs: ``[{faces, bc}]``).
 - ``setting_out_of_range`` (RH3, ``warn``): a study numerics setting or a run's outer
   relaxation or tolerance stored outside its field's range ("Saved p tolerance 1e-2 is outside
   1e-12 to 1e-3."). It is used as saved: bounds apply only to an edit, and nothing refuses it.
@@ -45,6 +48,7 @@ LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 # The order rows of one level are shown in.
 CODE_ORDER = (
     "mesh_failed",
+    "two_d_ends",
     "piso_high_co",
     "pimple_co_vs_outer",
     "fixed_step_co",
@@ -253,6 +257,8 @@ class _Run:
         self.kept = {str(c) for c in (i.get("kept") or []) if isinstance(c, str)}
         # RH3: stored values outside their field's range ({key, label, value, min, max, text}).
         self.out_of_range = [o for o in (i.get("out_of_range") or []) if isinstance(o, dict) and o.get("text")]
+        # A 2D mesh's ends whose boundary condition is no longer a Symmetry ({faces, bc}).
+        self.two_d_unmirrored = [e for e in (i.get("two_d_unmirrored") or []) if isinstance(e, dict)]
         # False when the analysis could read only the run's settings (no mesh yet): its mesh
         # and physics were not checked, and "nothing found" must not say they were.
         self.complete = i.get("inputs_complete") is not False
@@ -605,7 +611,27 @@ def _long_run(r: _Run, est: dict[str, Any] | None, rows: list[dict[str, Any]]) -
     )
 
 
+def _two_d_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    """A mesh made one cell across (2D) whose end faces lost their Symmetry: walls (or anything
+    else) on a mesh one cell deep give a flow that is not the 2D flow it was meshed for."""
+    for end in r.two_d_unmirrored:
+        faces = ", ".join(str(f) for f in end.get("faces") or []) or "its end faces"
+        bc = str(end.get("bc") or "another boundary condition")
+        rows.append(
+            _row(
+                "two_d_ends",
+                "error",
+                f'This mesh is one cell across (2D), but its end faces ({faces}) now have "{bc}", not a Symmetry, '
+                "so the flow would not be 2D. Put a Symmetry back on them, or turn One cell across off and generate the mesh again.",
+                "2D mesh ends not a Symmetry",
+                _fix("Open boundary conditions", "bcs"),
+                _fix("Open mesh", "mesh"),
+            )
+        )
+
+
 def _mesh_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    _two_d_rows(r, rows)
     q = r.quality
     if q is None:
         if r.i.get("mesh_ready"):
@@ -903,7 +929,9 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     "one flow-through" and no start-up or averaging rows counted in them); ``numerics``
     (the study's: ``relax_p``, ``relax_u``, ``simplec``, ``n_non_orthogonal``,
     ``numerics_preset``); ``steady_copy`` (a steady analysis of the family exists);
-    ``kept`` (the codes kept as set); ``no_estimate`` (the line's words when the analysis
+    ``kept`` (the codes kept as set); ``two_d_unmirrored`` (a mesh one cell across whose end
+    faces' boundary condition is no longer a Symmetry: ``[{faces, bc}]``, the analysis's reading
+    of the mesh facts' ``two_d``); ``no_estimate`` (the line's words when the analysis
     gives no time step); ``out_of_range`` (RH3: stored settings outside their field's range,
     ``magnusim_sdk.numerics_settings.out_of_range``); ``inputs_complete`` (False when only the run's settings could be
     read, as before a mesh: the estimate's ``complete`` then says the mesh and physics were
