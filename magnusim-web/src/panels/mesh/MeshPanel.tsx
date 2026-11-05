@@ -29,7 +29,7 @@ import { scopeIds, useRegistryReady } from '../scope';
 import { isStaleRecord } from '../../workbench/recordRev';
 import { stopMesh } from './meshStop';
 import { meshQualityLines } from './meshQuality';
-import { ONE_CELL_ACROSS, twoDNote, type TwoDAnswer } from './twoD';
+import { ONE_CELL_ACROSS, twoDNote, twoDSyncReads, type TwoDAnswer } from './twoD';
 
 /** Settings as they live on disk (mesh.json `settings`). */
 interface MeshSettingsDoc {
@@ -301,7 +301,8 @@ function useMeshCopy(meshId: string): MeshCopyState | null {
 
 /**
  * While One cell across (2D) is on: whether the study's part can be meshed so, read again when
- * the setting turns on, the mesh or study changes, or the Assistant changes its BCs or meshes.
+ * the setting turns on, the mesh or study changes, or the Assistant changes its BCs, materials,
+ * meshes or geometry. While a check runs the note says so, never the answer before it.
  */
 function useTwoD(on: boolean, projectId: string, simulationId: string, meshId: string): { answer: TwoDAnswer | null; loading: boolean } {
   const [answer, setAnswer] = useState<TwoDAnswer | null>(null);
@@ -310,7 +311,7 @@ function useTwoD(on: boolean, projectId: string, simulationId: string, meshId: s
   useEffect(() => {
     const onSync = (ev: Event) => {
       const kinds = (ev as CustomEvent<{ kinds?: string[] }>).detail?.kinds || [];
-      if (kinds.includes('bc') || kinds.includes('mesh') || kinds.includes('geometry')) setTick((n) => n + 1);
+      if (twoDSyncReads(kinds)) setTick((n) => n + 1);
     };
     window.addEventListener('cfd:ui-sync', onSync);
     return () => window.removeEventListener('cfd:ui-sync', onSync);
@@ -322,6 +323,7 @@ function useTwoD(on: boolean, projectId: string, simulationId: string, meshId: s
       return;
     }
     let dead = false;
+    setAnswer(null);
     setLoading(true);
     void apiGet('/api/mesh/two-d', { project_id: projectId, simulation_id: simulationId || undefined })
       .then((doc) => {

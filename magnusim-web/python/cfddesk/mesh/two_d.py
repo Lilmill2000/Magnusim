@@ -2,8 +2,10 @@
 
 A quasi-2D part (a slab: a straight extrusion between two parallel flat faces that carry a
 Symmetry boundary condition) meshed as a slab costs many cells across its depth near every
-surface. With this setting the mesh is one cell across: exactly 2D once the solve applies the
-study's Symmetry to the two end faces.
+surface. With this setting the mesh is one cell across: exactly 2D, as the solve makes the two
+end faces (the study's Symmetry patch) ``empty``, so nothing is solved across the depth
+(incompressible_flow.writer.two_d_empty_patches; as mirror planes the depth's velocity was
+solved too, its residual round-off that never settled).
 
 OpenFOAM v2606's snappyHexMesh has no 2D mode (checked in its source): its refinement
 (``hexRef8``) splits a cell in all three directions, and its directional refinement
@@ -14,7 +16,8 @@ snapped, so they stay flat), and only the side faces are surfaces, stretched alo
 past both ends (``stretched``). Then ``extrudeMesh`` builds the 2D mesh: one layer of the
 part's depth from the low end's faces, the patch of every face around them kept; the mesh is
 checked as a 2D mesh (its two ends ``empty`` for ``checkMesh``), and ``createPatch`` puts the
-two ends on the study's Symmetry patch (``snappy_hexdominant.sh``). Near the finest surfaces
+two ends on the study's Symmetry patch (``snappy_hexdominant.sh``), which the solve makes
+``empty`` again when it holds nothing but them. Near the finest surfaces
 the 3D slab still has 2^level cells across its depth for each 2D cell: it is a step on the way.
 
 When it applies (:func:`plan_two_d`): the part is one body of a CAD file; along x, y or z it

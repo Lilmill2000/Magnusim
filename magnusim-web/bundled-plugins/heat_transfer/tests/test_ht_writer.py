@@ -368,3 +368,29 @@ def test_mesh_cell_size_leaves_out_a_hex_dominant_checkmesh(tmp_path: Path):
     (cf / "w28-cfmesh-meta.json").write_text("{}", encoding="utf-8")
     (cf / "log.checkMesh").write_text(log, encoding="utf-8")
     assert _mesh_cell_size(cf, 1000) == pytest.approx(0.01)
+
+
+def test_a_2d_mesh_has_its_ends_empty_in_every_field(tmp_path):
+    """One cell across (2D): the mesh facts' two ends on the Symmetry "side", holding nothing but
+    end faces (one per cell each): every field and the boundary file make them empty, so the
+    flow and the heat are solved in the section's plane only (as Incompressible Flow does)."""
+    import json
+    import shutil
+
+    from ht_inputs import MESH
+    from magnusim_sdk import courant_rates
+    from magnusim_sdk.mesh_facts import FACTS_FILE, FACTS_VERSION
+
+    mesh = tmp_path / "mesh"
+    shutil.copytree(MESH, mesh)
+    poly = mesh / "constant" / "polyMesh"
+    ends = {"front": {"faces": ["Face 6@Body1"], "bc": "side", "patch": "side"}, "back": {"faces": ["Face 6@Body1"], "bc": "side", "patch": "side"}}
+    # The fixture's side holds 4 faces: two ends of a 2-cell 2D mesh.
+    facts = {"v": FACTS_VERSION, "n_cells": 2, "stamp": courant_rates.mesh_stamp(poly), "two_d": {"axis": "z", "cells_across": 1, **ends}}
+    (mesh / FACTS_FILE).write_text(json.dumps(facts), encoding="utf-8")
+    case = _write(tmp_path, mesh_dir=mesh)
+    for f in ("U", "T", "p_rgh", "p", "alphat", "k", "omega", "nut"):
+        assert _entry(_text(case, f"0/{f}"), "side") == "type empty;", f
+    assert re.search(r"side\n\s*\{\n\s*type\s+empty;", _text(case, "constant/polyMesh/boundary"))
+    # The walls are as on a 3D mesh.
+    assert _entry(_text(case, "0/T"), "cold_plate") == "type fixedValue; value uniform 283.15;"

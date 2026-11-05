@@ -7,11 +7,20 @@
 //   a reload. On the slab whose two end faces carry no Symmetry the note under it says why it
 //   can't be meshed so, and Generate fails with that reason. On the slab with a Symmetry on both
 //   ends the note says how (10 mm deep along z, between its two end faces, the Symmetry's name),
-//   and the generated mesh's summary says "one cell across (2D)", after a reload too.
+//   and the generated mesh's summary says "one cell across (2D)", after a reload too. Before you
+//   start says when the ends lost their Symmetry: another BC on them, or none (its BC deleted:
+//   then they are solved as the walls with no BC are).
+// - The Assistant changes the ends' BC while the Mesh panel is open: the note under the setting
+//   follows at once (the frame's kind is 'bcs'; the panel listened for 'bc' and kept the old note).
 // - The Assistant (a scripted model, through the dock): sets it with setup_edit (the panel shows
 //   it on without a reload) and reads the note's answer with read_setup mesh, word for word.
 // - With WSL: the slab is meshed one cell across for real (every point on one of its two end
-//   planes, checkMesh's 2D check OK in the panel's quality line) and a laminar run on it solves.
+//   planes, checkMesh's 2D check OK in the panel's quality line) and a laminar run on it, started
+//   from its Run panel, solves with its two ends empty (nothing solved across the depth): it
+//   stops on its residual targets before its limit (the tree's Converged), and Run health finds
+//   no stalled residual. As mirror planes the depth's velocity was solved too: its residual
+//   stayed at round-off (0.035 to 0.068 in the validation set's cavity), so a steady run never
+//   met its targets and Run health said the U residual had stopped falling.
 // Fails on the code before G5: Hex-dominant had no such setting (the panel has no such row).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -287,6 +296,51 @@ test.describe('One cell across (2D) (fake compute)', () => {
       STEP,
     );
     await expect(row).toHaveAttribute('data-level', 'error');
+    // Their BC deleted: no BC holds the ends, so the solve treats them as the walls with no BC are.
+    await postOk(request, `${host.base}/api/bcs`, { project_id: s.pid, simulation_id: s.sid, delete: true, id: s.sidesId });
+    panel = await openRunPanel(page, { base: host.base, projectId: s.pid, simulationId: s.sid, runId: rid });
+    const gone = panel.locator('[data-run-check="1"] [data-run-check-row="two_d_ends"]');
+    await expect(gone).toContainText(
+      `This mesh is one cell across (2D), but its end faces (${s.front}, ${s.back}) now have no boundary condition, so the solve treats them as No-slip walls (the walls with no BC) and the flow would not be 2D. Put a Symmetry back on them, or turn One cell across off and generate the mesh again.`,
+      STEP,
+    );
+    await expect(gone).toHaveAttribute('data-level', 'error');
+  });
+
+  test("the Assistant changes the ends' BC while the Mesh panel is open: the note follows, without a reload", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const s = await slabStudy(request, host.base, { symmetry: true, title: 'Slab BC edit' });
+    await postOk(request, `${host.base}/api/mesh`, { project_id: s.pid, simulation_id: s.sid, mesh_id: s.mid, mesher_settings: { one_cell_across: true } });
+    const form = await openMeshPanel(page, host.base, s);
+    const how = `2D: one cell across, 10 mm deep along z, between ${s.front} and ${s.back} (Symmetry "Sides").`;
+    await expect(noteOf(form).locator('[data-mesh-two-d="available"]')).toHaveText(how, STEP);
+    const setup = (o) => ({ project_id: '', simulation_id: '', kind: '', action: '', id: '', other_id: '', name: '', type: '', faces: [], bodies: [], values: [], rev: 0, ...o });
+    const asks = async (words, edit) => {
+      const seen = {};
+      fake.reply({ tools: [{ name: 'setup_edit', input: setup(edit) }] }, (body) => {
+        seen.edit = resultsIn(body)[0];
+        return { text: 'Done.' };
+      });
+      await dockSend(page, words);
+      const card = dockGate(page);
+      const ended = dockTurn(page).locator('[data-turn-end="done"]');
+      for (let i = 0; i < 3; i++) {
+        await expect(card.or(ended)).toBeVisible({ timeout: 60_000 });
+        if (await ended.isVisible()) break;
+        await card.locator('[data-gate-answer="yes"]').click(STEP);
+      }
+      await expect(ended).toBeVisible({ timeout: 60_000 });
+      expect(seen.edit.ok, JSON.stringify(seen.edit)).toBe(true);
+    };
+    await openDock(page);
+    // The ends become a wall: the note says it can't be meshed so, as the rule now answers.
+    await asks('Make the slab ends walls.', { kind: 'bc', action: 'update', id: s.sidesId, type: 'Wall', values: [{ key: 'wall_type', value: '"No-slip"' }] });
+    await expect(noteOf(form).locator('[data-mesh-two-d="unavailable"]')).toHaveText(`Not available on this part: ${NO_SYMMETRY} Generate refuses until it is.`, STEP);
+    const answer = await json(request, s.q('/api/mesh/two-d', { simulation_id: s.sid }));
+    expect(answer.available).toBe(false);
+    // And a Symmetry again: the note says how, again.
+    await asks('Make the slab ends a symmetry again.', { kind: 'bc', action: 'update', id: s.sidesId, type: 'Symmetry' });
+    await expect(noteOf(form).locator('[data-mesh-two-d="available"]')).toHaveText(how, STEP);
   });
 });
 
@@ -321,18 +375,28 @@ test('WSL: the slab is meshed one cell across, checkMesh passes it as a 2D mesh,
   expect(boundary).toMatch(/\bsides\s*\{/);
   expect(boundary).not.toMatch(/magnusim_2d/);
 
-  // A steady laminar run on it solves.
+  // A steady laminar run on it, started from its Run panel, solves and stops on its residual
+  // targets: the two ends are empty for the solve, so nothing is solved across the depth (as
+  // mirror planes the velocity's z component was solved too, its residual stayed at a few
+  // hundredths, the run went to its limit, and Run health said the U residual had stopped falling).
   const made = await postOk(request, '/api/run/create', { project_id: s.pid, simulation_id: s.sid, name: 'Slab 2D', mesh_id: s.mid });
   const rid = String(made.run_id || made.run?.id || made.run?.run_id);
-  await postOk(request, '/api/run/update', { project_id: s.pid, simulation_id: s.sid, run_id: rid, endTime: 400, writeInterval: 400, cores: 4 });
-  const ready = await json(request, s.q('/api/run/ready', { simulation_id: s.sid, run_id: rid, mesh_id: s.mid }));
-  expect(ready.issues || [], JSON.stringify(ready)).toEqual([]);
-  await postOk(request, '/api/run/start', { project_id: s.pid, simulation_id: s.sid, run_id: rid });
+  const LIMIT = 2000;
+  await postOk(request, '/api/run/update', { project_id: s.pid, simulation_id: s.sid, run_id: rid, endTime: LIMIT, writeInterval: LIMIT, cores: 4 });
+  const answered = page.waitForResponse((r) => r.url().includes('/api/run/ready?') && new URL(r.url()).searchParams.get('run_id') === rid, { timeout: 90_000 });
+  const panel = await openRunPanel(page, { base: '', projectId: s.pid, simulationId: s.sid, runId: rid });
+  await answered;
+  const start = panel.locator('[data-run-start="1"]');
+  await expect(start).toBeEnabled({ timeout: 60_000 });
+  await expect(panel.locator('[data-run-reason="1"]')).toHaveCount(0);
+  await expect(panel.locator('[data-run-check="1"] [data-run-check-row="two_d_ends"]')).toHaveCount(0);
+  await start.click();
+  const runRow = async () => ((await json(request, s.q('/api/run/status', { simulation_id: s.sid }))).runs || []).find((x) => String(x.id) === rid) || {};
   let end = 'wait';
   await expect
     .poll(
       async () => {
-        const r = ((await json(request, s.q('/api/run/status', { simulation_id: s.sid }))).runs || []).find((x) => String(x.id) === rid) || {};
+        const r = await runRow();
         end = /done|failed|stopped/.test(String(r.status)) ? `${r.status} ${JSON.stringify(r.error || '')}` : 'wait';
         return end;
       },
@@ -340,4 +404,25 @@ test('WSL: the slab is meshed one cell across, checkMesh passes it as a 2D mesh,
     )
     .not.toBe('wait');
   expect(end).toBe('done ""');
+  await expect(panel.locator('[data-run-status]')).toHaveAttribute('data-run-status', 'done', { timeout: 60_000 });
+  const row = await runRow();
+  console.log(`[mesh 2d wsl] run done at iteration ${row.iteration} of ${LIMIT}`);
+  // The case it solved: both ends on the study's Symmetry patch, empty in its boundary and in U.
+  const runCase = String(row.case_dir || '');
+  expect(runCase, JSON.stringify(row).slice(0, 400)).not.toBe('');
+  expect(readFileSync(join(runCase, 'constant', 'polyMesh', 'boundary'), 'utf8')).toMatch(/\bsides\s*\{\s*type\s+empty;/);
+  expect(readFileSync(join(runCase, '0', 'U'), 'utf8')).toMatch(/\bsides\s*\{\s*type\s+empty;/);
+  // What the person sees: the run's tree row says Converged (it stopped on its residual
+  // targets, before its limit), and Run health finds no stalled residual.
+  const converged = page.locator(`#left-tree li[data-w27-run="${rid}"] > .tree-row [data-run-converged="1"]`);
+  await expect(converged).toHaveText('Converged', { timeout: 60_000 });
+  const title = String(await converged.getAttribute('title'));
+  const at = Number((title.match(/after (\d+) iterations/) || [])[1]);
+  expect(at, title).toBeLessThan(LIMIT);
+  const health = panel.locator('[data-run-health]');
+  await expect(health).toBeVisible({ timeout: 120_000 });
+  await expect(health).not.toHaveAttribute('data-run-health', /pending/, { timeout: 120_000 });
+  console.log(`[mesh 2d wsl] run health: ${await health.getAttribute('data-run-health')}`);
+  await expect(panel.locator('[data-run-health-finding="residuals_stalled"]')).toHaveCount(0);
+  await expect(health).not.toHaveAttribute('data-run-health', /unhealthy|failed/);
 });

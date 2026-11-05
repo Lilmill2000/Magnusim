@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lengthWords, twoDNote } from './twoD';
+import { lengthWords, twoDNote, twoDSyncReads } from './twoD';
 
 describe('One cell across (2D): the note under the setting', () => {
   it('says how the part is meshed: depth, axis, the two ends and their Symmetry', () => {
@@ -24,6 +24,13 @@ describe('One cell across (2D): the note under the setting', () => {
     expect(twoDNote({ ok: false, error: 'the study has no geometry' })).toBe("Couldn't check the part: the study has no geometry");
     expect(twoDNote(null, true)).toBe('Checking the part…');
     expect(twoDNote(null, false)).toBe('');
+  });
+
+  it("is read again after the frames the Assistant's BC, material, mesh and geometry edits send", () => {
+    // setup_edit's frames (uiSync.ts kinds): a BC edit sends ['bcs', 'tree'], a material ['materials', 'tree'].
+    for (const kinds of [['bcs', 'tree'], ['materials', 'tree'], ['mesh'], ['geometry', 'tree']]) expect(twoDSyncReads(kinds)).toBe(true);
+    // Not a kind the frames use ('bc'), nor ones the rule does not read.
+    for (const kinds of [['bc'], ['runs', 'tree'], ['study'], []]) expect(twoDSyncReads(kinds)).toBe(false);
   });
 
   it('words lengths as the mesh summary does', () => {

@@ -5,7 +5,7 @@ One module writes the snappyHexMesh dictionaries:
 | Module | Role |
 |--------|------|
 | `cfddesk/mesh/snappy_hexdominant.py` | Hex-dominant **web Generate** host prep: `scale_body1_stl`, `write_hexdominant_dicts`, `read_polymesh_counts`, fineness via `snappy_policy`. Driven by `tools/generate_snappy.py` + `wsl/templates/snappy_hexdominant.sh`. |
-| `cfddesk/mesh/two_d.py` | **One cell across (2D)**, a Hex-dominant setting: when a part can be meshed so (`plan_two_d`), the background block one cell of the part's depth with its two ends as patches, the side faces stretched past them, then `extrudeMeshDict` (one layer from the low end, the ends `empty` while `checkMesh` checks the 2D mesh) and `createPatchDict` (the ends onto the study's Symmetry patch). |
+| `cfddesk/mesh/two_d.py` | **One cell across (2D)**, a Hex-dominant setting: when a part can be meshed so (`plan_two_d`), the background block one cell of the part's depth with its two ends as patches, the side faces stretched past them, then `extrudeMeshDict` (one layer from the low end, the ends `empty` while `checkMesh` checks the 2D mesh) and `createPatchDict` (the ends onto the study's Symmetry patch, which the solve makes `empty`: nothing solved across the depth). |
 
 Surface custom sizing: each record's faces become a refinement-only STL (`write_refine_stls`) and a
 `refinementRegions` entry in distance mode: its faces' size as a level of the base cell

@@ -464,8 +464,10 @@ def thermal_entries(
         p[name] = {"type": "calculated", "value": "uniform 0"}
         alphat[name] = {"type": "calculated", "value": "uniform 0"}
         if kind == "symmetry":
+            # A 2D mesh's ends (One cell across): empty, as the flow's entries are.
+            plane = "empty" if str((flow.U.get(name) or {}).get("type") or "") == "empty" else "symmetry"
             for d in (T, p_rgh, p, alphat):
-                d[name] = {"type": "symmetry"}
+                d[name] = {"type": plane}
             meta[name] = {"kind": kind}
             continue
         if kind in ("inlet", "total_pressure"):
@@ -811,8 +813,9 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
 
         types = {n: "wall" for n in wall_patches}
         types.update({n: "symmetry" for n in flow.patch_names if flow.kinds.get(n) == "symmetry"})
+        types.update({n: "empty" for n in flow.patch_names if str((flow.U.get(n) or {}).get("type") or "") == "empty"})
         for pname, ptype in parse_boundary_patch_types(poly_dst / "boundary").items():
-            if pname not in types and ptype in ("symmetry", "wall"):
+            if pname not in types and ptype in ("symmetry", "wall", "empty"):
                 types[pname] = "patch"
         apply_boundary_patch_types(poly_dst / "boundary", types)
 

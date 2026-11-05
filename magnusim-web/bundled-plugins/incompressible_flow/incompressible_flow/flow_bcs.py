@@ -337,6 +337,7 @@ def flow_patches(
         patch_turbulence,
         resolve_speed_and_dhyd,
         turb_value_strings,
+        two_d_empty_patches,
     )
 
     model = turbulence_model_name(turbulence_model)
@@ -359,7 +360,11 @@ def flow_patches(
     values = turb_value_strings(turb["k"], turb["omega"], nu_tilda)
     own = patch_turbulence(spec, speed_ref) if model != "laminar" else {}
     own_values = {p: turb_value_strings(sc["k"], sc["omega"], sc.get("nu_tilda")) for p, sc in own.items()}
-    u_entries, _p, turb_patches = _build_field_patches(spec, names, turb_values=values, patch_turb=own_values)
+    # One cell across (2D): its ends' entries are empty (their kind stays symmetry).
+    empties = two_d_empty_patches(spec, poly)
+    u_entries, _p, turb_patches = _build_field_patches(
+        spec, names, turb_values=values, patch_turb=own_values, empty_patches=empties
+    )
     if compressible:
         for entry in u_entries.values():
             if "massFlowRate" in entry and "rho" not in entry:

@@ -21,6 +21,15 @@ export interface TwoDAnswer {
 /** The setting's key in Hex-dominant's schema (its own key: saved under mesher_settings). */
 export const ONE_CELL_ACROSS = 'one_cell_across';
 
+/** The ui-sync kinds (workbench/uiSync.ts UiSyncKind) after which the answer is read again: the
+ * rule reads the study's BCs, its materials (a part of several regions), its mesh and geometry. */
+export const TWO_D_SYNC_KINDS: readonly string[] = ['bcs', 'materials', 'mesh', 'geometry'];
+
+/** Whether a ui-sync frame's kinds change what the 2D rule reads. */
+export function twoDSyncReads(kinds: readonly string[]): boolean {
+  return kinds.some((k) => TWO_D_SYNC_KINDS.includes(k));
+}
+
 /** A length in metres as the mesh summary words it (m, mm or µm). */
 export function lengthWords(m: unknown): string {
   const v = Number(m);

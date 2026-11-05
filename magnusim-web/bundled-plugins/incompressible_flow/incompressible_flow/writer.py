@@ -1142,18 +1142,69 @@ def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any
     return out
 
 
+def _boundary_faces(boundary: Path) -> dict[str, int]:
+    """Each patch's face count (``nFaces``) in a ``constant/polyMesh/boundary`` file."""
+    try:
+        text = boundary.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    text = re.sub(r"FoamFile\s*\{.*?\}", "", text, count=1, flags=re.S)
+    return {m.group(1): int(m.group(2)) for m in re.finditer(r"(?s)([A-Za-z_]\w*)\s*\{[^{}]*?\bnFaces\s+(\d+)\s*;", text)}
+
+
+def two_d_empty_patches(spec: Any, poly: Path | None) -> set[str]:
+    """One cell across (2D, Hex-dominant's setting): the patches of the mesh's two ends that the
+    solve makes ``empty``, so the flow is solved in the section's plane only. As mirror planes
+    (``symmetry``) OpenFOAM still solves the velocity across the depth: zero to round-off, its
+    normalised residual stays at a few hundredths, so a steady run never met its residual
+    targets and Run health read the U residual (its largest component) as stalled.
+
+    A patch is one when the mesh facts' ``two_d`` (beside the mesh, ``spec.mesh_case_dir``)
+    names it as an end, the study's boundary condition on it is a Symmetry, and it holds nothing
+    but end faces: one per cell for each end it holds, as an empty patch must (OpenFOAM refuses
+    one whose faces are not a multiple of the cells). A Symmetry that also holds side faces stays
+    a mirror plane; an end whose BC is no longer a Symmetry is solved as that BC (the pre-run
+    check's ``two_d_ends`` says the flow would not be 2D)."""
+    from magnusim_sdk.mesh_facts import read_mesh_facts
+
+    case = getattr(spec, "mesh_case_dir", None)
+    if not case:
+        return set()
+    try:
+        facts = read_mesh_facts(Path(case))
+    except (OSError, ValueError):
+        return set()
+    two = (facts or {}).get("two_d")
+    cells = (facts or {}).get("n_cells")
+    if not isinstance(two, dict) or not isinstance(cells, int) or cells <= 0:
+        return set()
+    ends: dict[str, int] = {}
+    for end in (two.get("front"), two.get("back")):
+        name = str(end.get("patch") or "") if isinstance(end, dict) else ""
+        if name:
+            ends[name] = ends.get(name, 0) + 1
+    if not ends:
+        return set()
+    sym = {str(m.get("patch") or "") for m in spec.mapped or [] if m.get("bc") and is_symmetry(_bc_dict(m["bc"]))}
+    boundary = (poly if poly is not None else Path(case) / "constant" / "polyMesh") / "boundary"
+    faces = _boundary_faces(boundary)
+    return {name for name, n in ends.items() if name in sym and faces.get(name) == n * cells}
+
+
 def _build_field_patches(
     spec: RunSpec,
     patch_names: list[str],
     *,
     turb_values: dict[str, str],
     patch_turb: dict[str, dict[str, str]] | None = None,
+    empty_patches: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[dict, dict, dict[str, dict]]:
     """U, p and one patch dict per turbulence field the study's model reads.
 
     ``turb_values`` holds the case-wide value string for k, omega, epsilon and
     R (inlets on Auto, walls, the internal field); ``patch_turb`` a patch's own
-    values when its "Turbulence at the inlet" sets them.
+    values when its "Turbulence at the inlet" sets them. ``empty_patches`` are a 2D mesh's
+    ends the solve makes ``empty`` (:func:`two_d_empty_patches`): every field empty there.
     """
     _ensure_web_imports()
     model = getattr(getattr(spec, "physics", None), "turbulence_model", "kOmegaSST")
@@ -1183,6 +1234,9 @@ def _build_field_patches(
 
     def symmetry(_name: str, _values: dict[str, str]) -> dict[str, str]:
         return {"type": "symmetry"}
+
+    def empty(_name: str, _values: dict[str, str]) -> dict[str, str]:
+        return {"type": "empty"}
 
     def freestream(name: str, values: dict[str, str]) -> dict[str, str]:
         if name == "nut":
@@ -1233,6 +1287,9 @@ def _build_field_patches(
             role[patch] = {"kind": "freestream", "bc": b}
         elif is_total_pressure_inlet(b):
             role[patch] = {"kind": "totalPressure", "bc": b}
+    for patch in empty_patches:
+        if patch in role:
+            role[patch] = {"kind": "empty", "bc": role[patch]["bc"]}
 
     U: dict[str, dict[str, str]] = {}
     p: dict[str, dict[str, str]] = {}
@@ -1322,6 +1379,12 @@ def _build_field_patches(
             U[name] = {"type": "symmetry"}
             p[name] = {"type": "symmetry"}
             set_turb(name, symmetry)
+        elif kind == "empty":
+            # A 2D mesh's ends (its Symmetry): nothing solved across the depth; the patch is
+            # made type empty (write_solve_case).
+            U[name] = {"type": "empty"}
+            p[name] = {"type": "empty"}
+            set_turb(name, empty)
         else:
             treatment = r["treatment"] if r and r.get("kind") == "wall" else wall_default
             if treatment == "Slip":
@@ -1828,7 +1891,11 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         patch: turb_value_strings(sc["k"], sc["omega"], sc.get("nu_tilda")) for patch, sc in own_turb.items()
     }
 
-    U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values, patch_turb=patch_turb)
+    # One cell across (2D): its ends empty, so the flow is solved in the section's plane only.
+    empties = two_d_empty_patches(spec, poly_dst)
+    U, p, turb_patches = _build_field_patches(
+        spec, patch_names, turb_values=turb_values, patch_turb=patch_turb, empty_patches=empties
+    )
     # Force controls: the mesh faces of their picked faces in patches of their own,
     # each with its wall's boundary conditions (the flow is the same).
     force_split = _split_force_faces(spec, poly_dst, patch_names, services, restart=restart_from is not None)
@@ -1887,8 +1954,9 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     # Wall functions require polyMesh type wall. gmshToFoam leftover
     # defaultFaces (prism end-caps) stay type patch unless we rewrite them.
     # A Symmetry BC's patch is made type symmetry here (it is meshed as a plain
-    # patch), and a patch left symmetry by an earlier solve opens again when its
-    # BC is no longer one, so a BC's type can change without a new mesh.
+    # patch; a 2D mesh's ends type empty), and a patch left symmetry or empty by an
+    # earlier solve opens again when its BC is no longer one, so a BC's type can
+    # change without a new mesh.
     if poly_dst and (poly_dst / "boundary").is_file():
         from magnusim_sdk.foam import parse_boundary_patch_types
         from magnusim_sdk.gmsh_helpers import apply_boundary_patch_types
@@ -1912,8 +1980,9 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         wall_names.discard("")
         patch_types = {n: "wall" for n in wall_names}
         patch_types.update({n: "symmetry" for n, e in U.items() if str((e or {}).get("type") or "") == "symmetry"})
+        patch_types.update({n: "empty" for n, e in U.items() if str((e or {}).get("type") or "") == "empty"})
         for pname, ptype in parse_boundary_patch_types(poly_dst / "boundary").items():
-            if ptype == "symmetry" and pname not in patch_types:
+            if ptype in ("symmetry", "empty") and pname not in patch_types:
                 patch_types[pname] = "patch"
         if patch_types:
             apply_boundary_patch_types(poly_dst / "boundary", patch_types)
@@ -1939,7 +2008,8 @@ RAS
 }}""",
     )
 
-    mon_patches = list(spec.monitor_patches or [])
+    # A 2D mesh's empty ends have no faces to the solver: nothing to monitor there.
+    mon_patches = [m for m in spec.monitor_patches or [] if m not in empties]
     functions_text = monitors_functions_text(mon_patches, transient=spec.transient)
     custom_meta = write_custom_monitor_surfaces(out, spec, services)
     if custom_meta:
