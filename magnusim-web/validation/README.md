@@ -106,9 +106,13 @@ and its project is still on the server, and otherwise meshes its own.
   solved on 4 cores before (a 4-core probe of case 1 read its development length 0.8 % above
   the run). The app changed after that run (below: Standard's laminar friction and k-omega
   SST at the wall), so `results/` is from before those fixes; the set is to be run again from
-  one commit. Probes of every case and variant at 4 cores before and after them: cases 3 to 6
-  and the Hex-dominant pipe read the same before the fixes as the committed run (to the
-  digits shown), so the probes compare like with like.
+  one commit. Probes of every case and variant at 4 cores before and after them: before the
+  fixes, cases 3 to 6 read within 0.01 % of the committed run (case 3 at Re 1000's profile
+  differences within 0.25 % of themselves, about 1e-5 U) and the Hex-dominant pipes within
+  0.5 % (case 1's development length -0.49 %, f Re +0.09 %; case 2's f -0.42 % with k-epsilon
+  and -0.25 % with k-omega SST, its f_tau within 0.04 %), so the probes compare like with like;
+  case 2's Standard f from the pressure drop read 2.1 and 2.5 % above the committed run's (its
+  f_tau within 0.3 %), as its meshes differ from one generate to the next (above).
 - The quick physics checks (`npm run test:physics`, docs/TESTING.md) are the set's fast
   companion: the case writer on three blockMesh grids (the cavity at Re 100 against Ghia et al.,
   the laminar pipe's f Re and U_cl / U_b, the cylinder's Cd at Re 20), in under a minute, first
