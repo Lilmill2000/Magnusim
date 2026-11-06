@@ -54,7 +54,9 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    OpenFOAM's version and WSL's load. A run that cannot produce its numbers (a setup the app
    refuses, a mesh or solve that fails, layers asked and not applied) fails the test, and so
    does a steady run that stops at its iteration limit while its monitors still move
-   (`not_settled`: more than the case's `SETTLE_DRIFT` over the last 10 % of iterations).
+   (`not_settled`: more than the case's `SETTLE_DRIFT` over the last 10 % of iterations), and
+   a transient run whose periodic signal never settles within it (`not_settled`: case 5's
+   shedding, `extract.settled_window`).
 4. **Report** (`python -m magnusim_validation report`): `VALIDATION.md`, `docs/validation/`
    (`index.html`, `results.json`) and the figures (`docs/validation/img/`, matplotlib), with
    Heat Transfer's own validation set after the cases (`heat_transfer.py`: its committed
@@ -107,7 +109,7 @@ their citations; this list is what those modules must start from.
 | 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). The reference data ask for f at least 40 D from the inlet (turbulent development is about 20 D), or a cyclic or mapped inlet. This case meets neither: the app has no cyclic inlet (G9) and Hex-dominant cannot mesh a pipe much longer than 30 D cleanly (below), so the pipe is 30 D and f is read over x/D 20 to 25, with the slope over 15 to 20 beside it; a run whose two differ by more than 1 % carries a warning (still developing there, f above its developed value). |
 | 3, lid-driven cavity, Re 100 and 1000 | Built (`c3_lid_cavity.py`, one cell across). Ghia et al. (1982) Tables I and II (`refs/ghia_1982_*.csv`, with the one correction at x = 0.9063, Re 1000: -0.51550); extrema within 3 % of Botella and Peyret (1998, `refs/botella_peyret_1998_extrema.csv`), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 % of Marchi et al. (2009, `refs/marchi_2009_vortex.csv`). |
 | 4, backward-facing step | Built (`c4_backward_step.py`, one cell across). Re_D 100 on Armaly et al.'s expansion ratio 1.942 against their Fig. 14, x1/S = 3.00, ±10 % (the flow turns three-dimensional near Re 400, so not the design's Re 389; `refs/armaly_1983_fig14_x1.csv`); Re_D 800 on expansion ratio 2 against Gartling (1990), x_r/S = 12.20, ±7 %, and the top wall's bubble (9.70 and 20.96 S, ±10 %; `refs/gartling_1990_re800.csv`), the literature's scatter beside it (`refs/bfs_re800_scatter.csv`); the outlet 30 H after the step; a uniform inlet with an upstream channel of 10 h or 10 H (no profile inlet). Read from the wall shear stress the run saved on the floor and the top, U_x 0.02 S from the wall as the cross-check. Re_D 800 solves with SIMPLEC: with SIMPLE it never settled. |
-| 5, cylinder | Cd ±5 % at Re 20 and 40; at Re 100 St ±3 %, mean Cd ±5 %, CL rms ±15 %. A domain at least 40 D wide (blockage at most 2.5 %), about 15 D upstream and 30 D or more downstream; averages over at least 20 shedding periods after the transient (about 200 D/U or more of run). |
+| 5, cylinder | Built (`c5_cylinder.py`, one cell across). Re 20 and 40 steady against Cd 2.02 and 1.50 and L/D 0.93 and 2.24 (±5 %, `refs/cylinder_re20_re40.csv`; the literature's spread in `refs/cylinder_steady_scatter.csv`); Re 100 transient against St 0.164 (±3 %), the mean Cd 1.33 (±5 %), CL rms 0.23 (±15 %) and the mean L/D 1.41 (±10 %, as information; `refs/cylinder_re100.csv`, `refs/cylinder_re100_scatter.csv`). The domain the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream and 30 D downstream, one Freestream round it; a Forces monitor on the cylinder with the study's reference values; 300 D/U of run, the shedding read by the harness over whole periods after the transient (at least 20; G8). A coarser mesh moves the steady values by at most 0.9 %; at Re 100 a finer one moves St and the mean Cd by 0.0 and 0.04 %, CL rms and the mean L/D by 1.0 and 0.9 % (the coarser one by up to 9.9 %). |
 | 6, sphere, Re 100 | Cd 1.09 ±5 %, L/D 0.88 ±7 %; at least 15 D to each side and about 15 D downstream. |
 
 App gaps found so far, and what they block:
@@ -138,7 +140,9 @@ App gaps found so far, and what they block:
 - **Refine out to** (cases 4 to 6), added: Surface custom sizing's "Refine out to" keeps the
   faces' size out to a distance from them on Hex-dominant (Standard and cfMesh say they ignore it;
   `e2e/mesh-refine-reach.spec.js`, `python/tests/unit/test_refine_reach.py`); `mesh_plan.py` counts
-  its band. There is still no box refinement.
+  its band. There is still no box refinement: a band is a distance from its faces, so case 5's
+  wake is refined by three rings round the whole cylinder (upstream too), cheap in 2D (70 793
+  cells), dearer in 3D.
 - **A one-cell 2D slab** (cases 3 to 5), added: Hex-dominant's "One cell across (2D)" meshes
   a slab whose two end faces carry a Symmetry one cell deep (`cfddesk/mesh/two_d.py`; the panel's
   note and Generate say why a part can't be; `e2e/mesh-one-cell-across.spec.js`,
@@ -161,6 +165,18 @@ App gaps found so far, and what they block:
   said the pressure residual had stalled); the study's SIMPLEC setting met its targets in
   1131 iterations on the same mesh. Not an app bug: Run health read it right and the setting
   is there; the case uses it and says so.
+- **No mean or frequency over a time window** (case 5, G8): the app's Graphs show a monitor's
+  history only, so the harness reads the shedding from the Forces monitor's history
+  (`extract.settled_window`, `spectrum_peak`, `time_mean`, `time_rms`, tested on synthetic
+  signals in `tests/test_extract.py`). The smallest fix: "mean, rms and frequency over a time
+  window" on a Graphs card (and the Assistant's monitors tool).
+- **A Freestream all round a body**, fixed: its flow monitor reads the net flow through it, which
+  is the solve's round-off (-3.9e-13 m³/s on the cylinder at Re 20), and the Graphs panel's flow
+  balance read "Flow in 3.910e-10 L/s · out 0 L/s · imbalance 100.00 %", as a warning, for a
+  flow that loses nothing. A boundary whose mean normal velocity is at most a millionth of its
+  mean speed now brings no flow in and takes none out, so with no opening that carries flow
+  there is no balance line (`incompressible_flow.results.net_flow`,
+  `bundled-plugins/incompressible_flow/e2e/freestream-balance.spec.js`, `tests/test_results.py`).
 - **Standard's laminar friction** (case 1): the friction factor on Standard reads well above
   the exact value and the wall shear stress the run saved carries the same excess, so it is
   the solution, not the reading. Probes changing one setting at a time

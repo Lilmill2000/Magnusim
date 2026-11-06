@@ -1,0 +1,680 @@
+{
+ "schema": "magnusim-validation-plan/1",
+ "case": "c5_cylinder",
+ "variant": "re20",
+ "title": "Circular cylinder, Re = 20, steady, Hex-dominant (2D)",
+ "coarse": false,
+ "geometry": {
+  "file": "geometry.step",
+  "sha256": "cee251881ca9e9c927d00aab9e5c008490b3853c9a27ae44045ce2a9b36d4601",
+  "units": "mm",
+  "builder": "a box x from -15 D to 30 D and y from -20 D to 20 D round a circular cylinder D = 10 mm along z at the origin (cut out: the box is the fluid), 5 mm deep in z (one cell across); blockage D / 40 D = 2.5 %",
+  "faces": [
+   {
+    "id": 1,
+    "body": 1,
+    "area_mm2": 2000.0,
+    "centroid_mm": [
+     -150.0,
+     0.0,
+     2.5
+    ],
+    "normal": [
+     -1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 2,
+    "body": 1,
+    "area_mm2": 2250.0,
+    "centroid_mm": [
+     75.0,
+     -200.0,
+     2.5
+    ],
+    "normal": [
+     0.0,
+     -1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 3,
+    "body": 1,
+    "area_mm2": 179921.460184,
+    "centroid_mm": [
+     75.032739,
+     0.0,
+     5.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     1.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 4,
+    "body": 1,
+    "area_mm2": 2250.0,
+    "centroid_mm": [
+     75.0,
+     200.0,
+     2.5
+    ],
+    "normal": [
+     0.0,
+     1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 5,
+    "body": 1,
+    "area_mm2": 179921.460184,
+    "centroid_mm": [
+     75.032739,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     -1.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 6,
+    "body": 1,
+    "area_mm2": 2000.0,
+    "centroid_mm": [
+     300.0,
+     0.0,
+     2.5
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 7,
+    "body": 1,
+    "area_mm2": 157.079633,
+    "centroid_mm": [
+     0.0,
+     0.0,
+     2.5
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Cylinder"
+   }
+  ],
+  "selectors": {
+   "inlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": -150.0,
+     "sign": -1
+    }
+   },
+   "outlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 300.0,
+     "sign": 1
+    }
+   },
+   "bottom": {
+    "plane": {
+     "axis": "y",
+     "at_mm": -200.0,
+     "sign": -1
+    }
+   },
+   "top": {
+    "plane": {
+     "axis": "y",
+     "at_mm": 200.0,
+     "sign": 1
+    }
+   },
+   "front": {
+    "plane": {
+     "axis": "z",
+     "at_mm": 0.0,
+     "sign": -1
+    }
+   },
+   "back": {
+    "plane": {
+     "axis": "z",
+     "at_mm": 5.0,
+     "sign": 1
+    }
+   },
+   "cylinder": {
+    "surface_type": "Cylinder",
+    "count": 1
+   }
+  },
+  "labels": {
+   "inlet": [
+    "face 1@Body1"
+   ],
+   "outlet": [
+    "face 6@Body1"
+   ],
+   "bottom": [
+    "face 2@Body1"
+   ],
+   "top": [
+    "face 4@Body1"
+   ],
+   "front": [
+    "face 5@Body1"
+   ],
+   "back": [
+    "face 3@Body1"
+   ],
+   "cylinder": [
+    "face 7@Body1"
+   ]
+  }
+ },
+ "project": {
+  "title": "Validation c5_cylinder re20",
+  "description": "",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects"
+ },
+ "study": {
+  "analysis_type": "incompressible_steady",
+  "time_dependency": "Steady-state",
+  "name": "c5_cylinder re20",
+  "settings": {
+   "turbulence_model": "laminar",
+   "numerics_preset": "accurate",
+   "residual_u": 1e-06,
+   "residual_p": 1e-06,
+   "n_non_orthogonal": 1,
+   "ref_speed": 1.0,
+   "ref_area": 5e-05,
+   "ref_length": 0.01,
+   "ref_drag_dir": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "ref_lift_dir": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "ref_cofr": [
+    0.0,
+    0.0,
+    0.0025
+   ],
+   "initial_flow": "inlet"
+  }
+ },
+ "material": {
+  "preset": "custom",
+  "name": "Validation fluid",
+  "kinematic_viscosity": 0.0005,
+  "density": 1.0,
+  "assigned_volumes": [
+   "Body1"
+  ]
+ },
+ "bcs": [
+  {
+   "name": "Far field",
+   "bc_type": "Freestream",
+   "velocity_input": "Speed and direction",
+   "value": 1.0,
+   "unit": "m/s",
+   "vector": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "freestream_pressure": 0,
+   "faces": [
+    "face 1@Body1",
+    "face 6@Body1",
+    "face 2@Body1",
+    "face 4@Body1"
+   ]
+  },
+  {
+   "name": "Cylinder",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 7@Body1"
+   ]
+  },
+  {
+   "name": "Sides",
+   "bc_type": "Symmetry",
+   "faces": [
+    "face 5@Body1",
+    "face 3@Body1"
+   ]
+  }
+ ],
+ "mesh": {
+  "name": "Mesh 1",
+  "settings": {
+   "fineness": 6,
+   "automatic_boundary_layers": false,
+   "physics_based_meshing": true,
+   "hex_element_core": true,
+   "advanced": {
+    "mesh_engine": "snappy_hexdominant"
+   },
+   "mesher_settings": {
+    "one_cell_across": true
+   }
+  },
+  "refinements": [
+   {
+    "name": "Cylinder",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 0.2083,
+    "default_size_unit": "mm",
+    "reach": 5.0,
+    "reach_unit": "mm"
+   },
+   {
+    "name": "Near wake",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 0.4167,
+    "default_size_unit": "mm",
+    "reach": 30.0,
+    "reach_unit": "mm"
+   },
+   {
+    "name": "Wake",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 0.8333,
+    "default_size_unit": "mm",
+    "reach": 80.0,
+    "reach_unit": "mm"
+   }
+  ],
+  "two_d_axis": "z",
+  "expect": {
+   "layers": false,
+   "n_cells": [
+    40000,
+    160000
+   ]
+  },
+  "estimate": {
+   "mesher": "snappy_hexdominant",
+   "one_cell_across": true,
+   "two_d_axis": "z",
+   "fineness": 6,
+   "bounds_mm": [
+    -150.0,
+    300.0,
+    -200.0,
+    200.0,
+    0.0,
+    5.0
+   ],
+   "block": [
+    50,
+    45,
+    1
+   ],
+   "base_cell_mm": [
+    11.97,
+    11.8222,
+    5.0
+   ],
+   "walls_level": 2,
+   "wall_cell_mm": [
+    2.9925,
+    2.9556,
+    5.0
+   ],
+   "custom_sizes": [
+    {
+     "name": "Cylinder",
+     "size_mm": 0.2083,
+     "level": 6,
+     "cell_mm": [
+      0.187,
+      0.1847,
+      5.0
+     ],
+     "faces": 1,
+     "reach_mm": 5.0,
+     "distance_mm": 5.0
+    },
+    {
+     "name": "Near wake",
+     "size_mm": 0.41670000000000007,
+     "level": 5,
+     "cell_mm": [
+      0.3741,
+      0.3694,
+      5.0
+     ],
+     "faces": 1,
+     "reach_mm": 30.0,
+     "distance_mm": 30.0
+    },
+    {
+     "name": "Wake",
+     "size_mm": 0.8333,
+     "level": 4,
+     "cell_mm": [
+      0.7481,
+      0.7389,
+      5.0
+     ],
+     "faces": 1,
+     "reach_mm": 80.0,
+     "distance_mm": 80.0
+    }
+   ],
+   "layers": [],
+   "n_cells": 77000,
+   "slab_3d_cells_max": 4927000,
+   "n_cells_note": "an order of magnitude of the 2D mesh (one cell across), not a prediction",
+   "warnings": []
+  }
+ },
+ "run": {
+  "name": "Validation",
+  "endTime": 3000,
+  "writeInterval": 3000,
+  "cores": 8,
+  "result_controls": [
+   {
+    "id": "rc-forces",
+    "name": "Cylinder",
+    "monitor_type": "forces",
+    "kind": "Forces",
+    "category": "Boundary data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "boundaries": [
+     "@bc:Cylinder"
+    ]
+   },
+   {
+    "id": "rc-wake",
+    "name": "Wake axis",
+    "monitor_type": "probe",
+    "kind": "Point probe",
+    "category": "Point data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "points": [
+     [
+      0.0055,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0073793,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0092586,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0111379,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0130172,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0148966,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0167759,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0186552,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0205345,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0224138,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0242931,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0261724,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0280517,
+      0.0,
+      0.0025
+     ],
+     [
+      0.029931,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0318103,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0336897,
+      0.0,
+      0.0025
+     ],
+     [
+      0.035569,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0374483,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0393276,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0412069,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0430862,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0449655,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0468448,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0487241,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0506034,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0524828,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0543621,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0562414,
+      0.0,
+      0.0025
+     ],
+     [
+      0.0581207,
+      0.0,
+      0.0025
+     ],
+     [
+      0.06,
+      0.0,
+      0.0025
+     ]
+    ]
+   },
+   {
+    "id": "rc-shedding",
+    "name": "Shedding",
+    "monitor_type": "probe",
+    "kind": "Point probe",
+    "category": "Point data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "points": [
+     [
+      0.02,
+      0.005,
+      0.0025
+     ]
+    ]
+   }
+  ]
+ },
+ "extract": [
+  {
+   "key": "wake_line",
+   "kind": "app_sampling",
+   "fields": [
+    "U",
+    "p"
+   ],
+   "points_m": [
+    [
+     0.005,
+     0.0,
+     0.0025
+    ],
+    [
+     0.1,
+     0.0,
+     0.0025
+    ]
+   ],
+   "subdivisions": 1900
+  },
+  {
+   "key": "p_wake_line",
+   "kind": "line",
+   "field": "p",
+   "points_m": [
+    [
+     0.005,
+     0.0,
+     0.0025
+    ],
+    [
+     0.1,
+     0.0,
+     0.0025
+    ]
+   ],
+   "subdivisions": 1900
+  },
+  {
+   "key": "cylinder_shear",
+   "kind": "patch",
+   "patch": "cylinder",
+   "field": "wallShearStress"
+  }
+ ],
+ "timeouts_s": {
+  "mesh": 2400,
+  "solve": 3600
+ },
+ "mesh_key": "5a54ecea1a1ddf6b"
+}

@@ -228,6 +228,22 @@ NOTES = (
     "cells of D/53, D/27 and D/13 (the background 1.2 D, the sides 0.3 D). Refine out to is a distance from the "
     "wall, so each band is a ring round the cylinder (upstream too), not a box along the wake: there is still no "
     "box refinement. No wall layers: the cells are D/53 up to the wall.",
+    "How much the mesh moves the answer (the coarse runs of 2026-11-06, every custom size doubled: a level fewer, "
+    "20 102 cells, D/27 at the wall; not reported): at Re 20 Cd 2.0756 and L/D 0.9209 against 2.0764 and 0.9291 on "
+    "70 793 cells (0.04 and 0.9 %), at Re 40 1.5483 and 2.2872 against 1.5481 and 2.2818 (0.01 and 0.2 %): the steady "
+    "values are converged in the mesh. At Re 100 St 0.16455, the mean Cd 1.3777, CL rms 0.2742 and the mean L/D 1.291 "
+    "against 0.16568, 1.3568, 0.2494 and 1.358 (0.7, 1.5, 9.9 and 4.9 %): the shedding's amplitude and the mean wake "
+    "still move from the coarse mesh. A finer one (fineness 7, where the same custom sizes come out at D/68, D/34 and "
+    "D/17: 117 332 cells; a probe at 4 cores, not reported) gave St 0.16568, the mean Cd 1.3573, CL rms 0.2468 and "
+    "the mean L/D 1.371 (0.0, 0.04, 1.0 and 0.9 % from the reported run): St and the mean Cd are converged in the "
+    "mesh, CL rms and the mean L/D to about 1 %. CL rms settles about 7 % above its reference, the value the "
+    "reference data call the most sensitive to the domain (6.25 % blockage against 3.1 % moved it by 7.6 %).",
+    "The steady drag coefficients sit 2.8 and 3.2 % above the reference values while the mesh hardly moves them; what "
+    "is left is the domain (40 D wide, its sides a Freestream) and the reference's own spread: Fornberg's large-domain "
+    "2.000 and 1.498 against the finite-box results of 2.06 and 1.54 (Linnick & Fasel, Taira & Colonius), within 1 % of these "
+    "values. The domain's share is not measured here: the reference data expect +1 to 3 % on Cd and St unless "
+    "the domain is at least 40 D wide with slip or symmetry sides (their judgement), and this one is 40 D wide with "
+    "Freestream sides. At Re 100 the mean Cd is 2.0 % and St 1.0 % above the references.",
     "Re 100 starts from a Custom starting flow, U = (1, 0.05, 0) m/s everywhere, so the wake is lopsided from the "
     "start and the shedding begins within the run (a symmetric start waits for round-off). The run is 300 D/U long "
     "(3 s), with 50 Result frames; the monitors write at a fiftieth of the frame interval (Incompressible Flow's "
