@@ -124,12 +124,13 @@ export function useDockContent(): DockContent | null {
   const visible = rows.slice(-page);
   const visibleIds = new Set(visible.map((t) => t.id));
 
-  // Requests bound to this tab from elsewhere, and the requests of cards not shown here.
+  // Requests bound to this tab from elsewhere, and the requests of cards not shown here, each
+  // once (a request bound here may also have an open card, or two).
   const relayTurns = useSyncExternalStore(subscribeRelayTurns, relayTurnsSnapshot, relayTurnsSnapshot);
   const cards = useGateCards();
   const [elsewhere, setElsewhere] = useState<string[]>([]);
   useEffect(() => setElsewhere([]), [store.shown, place.projectId]);
-  const wantElsewhere = [...relayTurns.map((t) => t.id), ...cards.map((c) => c.gate.turn ?? '')].filter((id) => id && !visibleIds.has(id));
+  const wantElsewhere = [...new Set([...relayTurns.map((t) => t.id), ...cards.map((c) => c.gate.turn ?? '')])].filter((id) => id && !visibleIds.has(id));
   const wantKey = wantElsewhere.join(',');
   useEffect(() => {
     if (!wantKey) return;
