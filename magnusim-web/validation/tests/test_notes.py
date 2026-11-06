@@ -59,7 +59,7 @@ def test_the_sphere_note_takes_its_iterations_from_the_result():
     case = cases.get("c6_sphere")
     mine = [r for r in load_results() if r["case"] == "c6_sphere"]
     text = " ".join(case_notes(case, [_rerun(r) for r in mine]))
-    assert "the reported run" in text and "after 777 iterations, its worst face 33.3°" in text
+    assert "the reported run" in text and "after 777 iterations (its worst face 33.3°)" in text
     # The typed runs are the earlier ones, dated, never the reported one's.
     assert "235 s" not in text
 

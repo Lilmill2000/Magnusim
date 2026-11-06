@@ -87,7 +87,8 @@ def precheck_note(by: dict[str, dict[str, Any]], labels: dict[str, str]) -> str 
         if wall is None or took is None:
             continue
         default = default or est.get("rate_source") == "default"
-        parts.append(f"{label} about {num(float(wall) / 60.0, 2)} minutes, the solve {num(took, 3)} s")
+        minutes = num(float(wall) / 60.0, 2)
+        parts.append(f"{label} about {minutes} minute{'' if minutes == '1' else 's'}, the solve {num(took, 3)} s")
     if not parts:
         return None
     rate = " from its default solve rate" if default else ""

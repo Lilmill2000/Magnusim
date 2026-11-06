@@ -306,6 +306,18 @@ def _note_domain(by: dict[str, dict[str, Any]]) -> str | None:
             "with Freestream sides.")
 
 
+def _note_average_check(by: dict[str, dict[str, Any]]) -> str | None:
+    """What the pre-run check's averaging row (when Re 100's check gave one) is about."""
+    rows = ((by.get("re100") or {}).get("precheck") or {}).get("rows") or []
+    if not any(r.get("code") == "duration_vs_ftt" for r in rows):
+        return None
+    return ("Re 100's pre-run check counts the app's own average (UMean from 1.5 s) in flow-throughs of the whole "
+            "domain, 45 D long, and finds it short of the 10 to 20 it asks for. That average is shown beside the "
+            "compared values only: they are means over the window's whole shedding periods, which must hold a settled "
+            "lift amplitude (above). Its rule counts flow-throughs, not shedding periods; it is the check's, not "
+            "changed here.")
+
+
 def _note_start(by: dict[str, dict[str, Any]]) -> str:
     """Re 100's start and its sampling: the samples a shedding period from its own run."""
     from ..report import num
@@ -354,6 +366,7 @@ NOTES = (
     "probes as the cross-check; Re 100's mean L/D from the probes' time means over the window, with the run's UMean "
     "(the app's own time average from 1.5 s, not whole periods) along the same line beside it.",
     lambda by: precheck_note(by, {v: f"Re {RE[v]}" for v in VARIANTS}),
+    lambda by: _note_average_check(by),
     "Reference confidence: every value is SECONDARY (read in compilations: arXiv:2205.15886, arXiv:1906.05387, "
     "arXiv:2303.09262, arXiv:1612.08356, Legendre et al. 2009), except Gautier et al.'s Re 40 values (1.4931, "
     "2.2360), read in their arXiv paper (CONFIRMED). The compilations disagree on Tritton's measured Cd (2.09 or "

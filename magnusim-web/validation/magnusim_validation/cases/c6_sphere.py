@@ -130,7 +130,10 @@ PROBES = {
 RATIO = 1.26
 # Full runs of the same settings before the reported one (2026-11-06), typed: they are not
 # results. Iterations, Cd, L/D and the worst face's non-orthogonality.
-EARLIER = ({"iterations": 549, "cd": 1.0925, "l_over_d": 0.8573, "non_ortho": 46.42},)
+EARLIER = (
+    {"iterations": 549, "cd": 1.0925, "l_over_d": 0.8573, "non_ortho": 46.42},
+    {"iterations": 548, "cd": 1.0925, "l_over_d": 0.8573, "non_ortho": 46.43},
+)
 
 
 def _richardson(coarse: float, mid: float, fine: float, r: float) -> float | None:
@@ -184,13 +187,13 @@ def _note_repeat(by: dict[str, dict[str, Any]]) -> str | None:
         return None
     r = res.get("run") or {}
     q = (res.get("mesh") or {}).get("quality") or {}
-    earlier = and_list([f"Cd {num(e['cd'], 5)} and L/D {num(e['l_over_d'], 4)} after {e['iterations']} iterations, "
-                        f"its worst face {num(e['non_ortho'], 4)}°" for e in EARLIER])
+    earlier = and_list([f"Cd {num(e['cd'], 5)}, L/D {num(e['l_over_d'], 4)} after {e['iterations']} iterations (its worst "
+                        f"face {num(e['non_ortho'], 4)}°)" for e in EARLIER])
     return (f"{'An earlier full run' if len(EARLIER) == 1 else 'Earlier full runs'} of the same settings (2026-11-06) "
-            f"gave {earlier}; the reported run Cd {num(quantity(res, 'cd').get('value'), 5)} and L/D "
-            f"{num(quantity(res, 'l_over_d').get('value'), 4)} after {r.get('iterations')} iterations, its worst face "
-            f"{num(q.get('max_non_orthogonality'), 4)}° (snappyHexMesh in parallel is not bit for bit the same each "
-            "time).")
+            f"gave {earlier}; the reported run Cd {num(quantity(res, 'cd').get('value'), 5)}, L/D "
+            f"{num(quantity(res, 'l_over_d').get('value'), 4)} after {r.get('iterations')} iterations (its worst face "
+            f"{num(q.get('max_non_orthogonality'), 4)}°): snappyHexMesh in parallel is not bit for bit the same each "
+            "time.")
 
 
 NOTES = (
