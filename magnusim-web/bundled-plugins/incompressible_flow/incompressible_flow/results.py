@@ -40,7 +40,9 @@ _P_COL = re.compile(r"areaAverage\(p\)")
 
 # A patch whose mean normal velocity is at most this fraction of its mean speed has no net flow
 # to speak of: what its flow monitor reads is the solve's round-off. One Freestream round a body
-# is such a patch: the stream goes in and out through it, and its net flow is zero.
+# is such a patch: the stream goes in and out through it, and its net flow is zero. Only when
+# every monitored opening reads so is there no balance to judge (run_monitors): a large far field's
+# real outflow (a jet's, leaving through it) is as small against its own speed.
 NET_FLOW_ROUND_OFF = 1e-6
 
 
@@ -53,17 +55,22 @@ def _number(v: Any) -> TypeGuard[float]:
 
 
 def net_flow(row: dict[str, Any]) -> float | None:
-    """A patch monitor's last net flow (m³/s, negative in), for the flow balance: 0 when it is
-    round-off against the flow along the patch (``NET_FLOW_ROUND_OFF``); None without one."""
+    """A patch monitor's last net flow (m³/s, negative in), for the flow balance; None without one."""
     last = row.get("last")
     if not isinstance(last, dict):
         return None
-    q, un, umag = last.get("Q_m3s"), last.get("Un_m_s"), last.get("Umag")
-    if not (_number(q) and math.isfinite(q)):
-        return None
-    if _number(un) and _number(umag) and math.isfinite(un) and umag > 0 and abs(un) <= NET_FLOW_ROUND_OFF * umag:
-        return 0.0
-    return float(q)
+    q = last.get("Q_m3s")
+    return float(q) if _number(q) and math.isfinite(q) else None
+
+
+def round_off_flow(row: dict[str, Any]) -> bool:
+    """True when a patch monitor's last net flow is round-off against the flow along the patch:
+    its mean normal velocity at most ``NET_FLOW_ROUND_OFF`` of its mean speed."""
+    last = row.get("last")
+    if not isinstance(last, dict):
+        return False
+    un, umag = last.get("Un_m_s"), last.get("Umag")
+    return bool(_number(un) and _number(umag) and math.isfinite(un) and umag > 0 and abs(un) <= NET_FLOW_ROUND_OFF * umag)
 
 
 def _mass_flow(q: Any, rho: float) -> float | None:
@@ -264,18 +271,15 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
     for plan in meta.get("probe_monitors") or []:
         if isinstance(plan, dict):
             custom.extend(probe_rows(case, plan, rho))
-    # Mass balance across all monitored openings. A patch whose net flow is round-off (a
-    # Freestream all round a body) brings none in and takes none out: without an opening that
-    # carries flow, there is no balance line (it read "imbalance 100 %" on round-off).
+    # Mass balance across all monitored openings, each with its net flow as it reads. When every
+    # one's is round-off (a Freestream all round a body) nothing flows through them: there is no
+    # balance line (it read "imbalance 100 %" on round-off). When one carries flow, every one
+    # counts: a large far field's real outflow is as small against its own speed as round-off.
+    flows = [(q, round_off_flow(m)) for m in out if (q := net_flow(m)) is not None]
     sum_in = sum_out = 0.0
-    for m in out:
-        q = net_flow(m)
-        if q is None:
-            continue
-        if q < 0:
-            sum_in += -q
-        else:
-            sum_out += q
+    if not all(r for _q, r in flows):
+        sum_in = sum(-q for q, _r in flows if q < 0)
+        sum_out = sum(q for q, _r in flows if q >= 0)
     balance = (
         {"in_m3s": sum_in, "out_m3s": sum_out, "imbalance": (sum_out - sum_in) / sum_in if sum_in > 0 else None}
         if out and (sum_in > 0 or sum_out > 0)

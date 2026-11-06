@@ -9,8 +9,11 @@ import { fileURLToPath } from 'node:url';
 // flow balance line used to read "Flow in 3.910e-10 L/s · out 0 L/s · imbalance 100.00 %", as a
 // warning, for a flow that loses nothing. With no opening that carries flow there is no
 // balance line, and the boundary's own card still shows its values; a real inlet and outlet
-// keep theirs (monitors-plugin-owned.spec.js). No WSL: a finished run whose case is the
-// committed cavity plus the two monitor files that run wrote for its far field.
+// keep theirs (monitors-plugin-owned.spec.js). A jet blowing into such a box balances what
+// leaves through the far field, though that outflow is as small against the far field's own
+// speed as round-off (it read "Flow in 0.0200 m³/s · out 0 L/s · imbalance 100.00 %", as a
+// warning, when the far field's net flow was taken as round-off on its own). No WSL: a finished run whose case is
+// the committed cavity plus the monitor files of its boundaries.
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const ROUND = join(WEB, 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
 const CAVITY = join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d');
@@ -36,16 +39,17 @@ function writeDat(caseDir, name, header, rows, area) {
   writeFileSync(join(dir, 'surfaceFieldValue.dat'), text);
 }
 
-test('a Freestream all round a body: no "imbalance 100 %" from its round-off net flow', async ({ page, request }) => {
-  test.setTimeout(240_000);
-  page.setDefaultTimeout(30_000);
+/** A project with the round test part, a study and a finished run whose case is the committed
+ * cavity with these boundaries (`mapped`, `monitors`) and monitor files (`dats`:
+ * [name, header, rows, area]); and how to open its Graphs panel. */
+async function finishedRun(page, request, title, mapped, monitors, dats) {
   await page.goto('/#/');
   await page.waitForFunction(() => typeof window.__CFD_W16_CREATE__ === 'function', null, { timeout: 60_000 });
   const pid = await page.evaluate(
     async (t) =>
       (await window.__CFD_W16_CREATE__({ title: t, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' }))
         .project.id,
-    `e2e freestream balance ${stamp()}`,
+    `${title} ${stamp()}`,
   );
   const q = (path, extra = {}) => `${path}?${new URLSearchParams({ project_id: pid, ...extra })}`;
   const ready = () => page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, pid, { timeout: 60_000 });
@@ -64,7 +68,6 @@ test('a Freestream all round a body: no "imbalance 100 %" from its round-off net
   const sid = await page.evaluate(() => window.__CFD_W17__.activeId);
   expect(sid).toBeTruthy();
 
-  // A finished run with what the cylinder's run wrote for its one Freestream ("Far field").
   const made = await (await request.post(q('/api/run/create'), { data: { project_id: pid, simulation_id: sid, name: 'Run A' } })).json();
   const rid = String(made.run_id || (made.run && (made.run.id || made.run.run_id)));
   expect(rid, JSON.stringify(made)).toBeTruthy();
@@ -82,15 +85,14 @@ test('a Freestream all round a body: no "imbalance 100 %" from its round-off net
         ...sidecar,
         app: 'simpleFoam',
         rho: 1,
-        mapped: [{ patch: 'far_field', name: 'Far field', bc_type: 'Freestream', faces: ['face 1@Body1', 'face 2@Body1'] }],
-        monitors: ['far_field'],
+        mapped,
+        monitors,
       },
       null,
       2,
     ),
   );
-  writeDat(caseDir, 'mon_far_field', 'areaAverage(p)\tareaAverage(U)', ['868\t0.0057530\t(0.99781626 -4.6808847e-09 0)', '869\t0.0057529782\t(0.99781626 -4.6808847e-09 0)'], '8.500000e-03');
-  writeDat(caseDir, 'flow_far_field', 'sum(phi)', ['868\t-4.02e-13', '869\t-3.91048955e-13'], '8.500000e-03');
+  for (const [name, header, rows, area] of dats) writeDat(caseDir, name, header, rows, area);
   const runJson = join(runDir, 'run.json');
   const rec = JSON.parse(readFileSync(runJson, 'utf8'));
   writeFileSync(
@@ -118,6 +120,19 @@ test('a Freestream all round a body: no "imbalance 100 %" from its round-off net
     if (!(await graphsRow.isVisible())) await results.locator(':scope > .tree-row .tw').click();
     await graphsRow.click();
   };
+  return { pid, sid, rid, q, ready, openGraphs };
+}
+
+const FAR_FIELD = { patch: 'far_field', name: 'Far field', bc_type: 'Freestream', faces: ['face 1@Body1', 'face 2@Body1'] };
+
+test('a Freestream all round a body: no "imbalance 100 %" from its round-off net flow', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
+  // What the cylinder's run wrote for its one Freestream ("Far field").
+  const { sid, rid, q, ready, openGraphs } = await finishedRun(page, request, 'e2e freestream balance', [FAR_FIELD], ['far_field'], [
+    ['mon_far_field', 'areaAverage(p)\tareaAverage(U)', ['868\t0.0057530\t(0.99781626 -4.6808847e-09 0)', '869\t0.0057529782\t(0.99781626 -4.6808847e-09 0)'], '8.500000e-03'],
+    ['flow_far_field', 'sum(phi)', ['868\t-4.02e-13', '869\t-3.91048955e-13'], '8.500000e-03'],
+  ]);
   const card = page.locator('#run-graphs-list .mon-card[data-monitor-key="mon_far_field"]');
   const balance = page.locator('#run-graphs-balance');
   const seen = async () => {
@@ -143,4 +158,40 @@ test('a Freestream all round a body: no "imbalance 100 %" from its round-off net
   expect(answer.ok, JSON.stringify(answer)).toBe(true);
   expect(answer.monitors.map((m) => [m.key, m.last && m.last.Q_m3s])).toEqual([['mon_far_field', -3.91048955e-13]]);
   expect([answer.balance, answer.summary, answer.summary_warn]).toEqual([null, [], false]);
+});
+
+test('a jet blowing into a Freestream box: its flow balances what leaves through the far field', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
+  // 0.02 m³/s from a 20 cm² jet leaves through 4000 m² of far field in a 30 m/s stream: 5e-6 m/s
+  // across the far field, 1.7e-7 of its own speed.
+  const jet = { patch: 'jet', name: 'Jet', bc_type: 'Velocity inlet', faces: ['face 3@Body1'] };
+  const { sid, rid, q, ready, openGraphs } = await finishedRun(page, request, 'e2e jet balance', [FAR_FIELD, jet], ['far_field', 'jet'], [
+    ['mon_far_field', 'areaAverage(p)\tareaAverage(U)', ['400\t0.0\t(30 0 0)'], '4.000000e+03'],
+    ['flow_far_field', 'sum(phi)', ['400\t0.02'], '4.000000e+03'],
+    ['mon_jet', 'areaAverage(p)\tareaAverage(U)', ['400\t0.0\t(0 10 0)'], '2.000000e-03'],
+    ['flow_jet', 'sum(phi)', ['400\t-0.02'], '2.000000e-03'],
+  ]);
+  const balance = page.locator('#run-graphs-balance');
+  const seen = async () => {
+    await expect(page.locator('#run-graphs-list .mon-card[data-monitor-key="mon_far_field"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('#run-graphs-list .mon-card[data-monitor-key="mon_jet"]')).toBeVisible();
+    await expect(balance).toBeVisible();
+    await expect(balance).toHaveText('Flow in 0.0200 m³/s · out 0.0200 m³/s · imbalance < 0.01 %');
+    await expect(balance).not.toHaveClass(/is-warn/);
+  };
+  await page.reload();
+  await ready();
+  await openGraphs();
+  await seen();
+  // After a reload, the same.
+  await page.reload();
+  await ready();
+  await openGraphs();
+  await seen();
+  // The route's answer, which the Assistant reads too.
+  const answer = await json(request, q('/api/run/monitors', { simulation_id: sid, run_id: rid }));
+  expect(answer.ok, JSON.stringify(answer)).toBe(true);
+  expect(answer.balance).toEqual({ in_m3s: 0.02, out_m3s: 0.02, imbalance: 0 });
+  expect(answer.summary_warn).toBe(false);
 });

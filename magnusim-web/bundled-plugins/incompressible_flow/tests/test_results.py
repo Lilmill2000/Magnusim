@@ -126,6 +126,46 @@ def test_a_freestream_all_round_a_body_has_no_flow_balance_line(tmp_path: Path):
     assert real["summary_warn"] is True
 
 
+def _jet_case(tmp_path: Path, far_q: str, jet_q: str, *, far_area: str, jet_area: str, far_u: str, jet_u: str) -> Path:
+    """A jet (a Velocity inlet) blowing into a box whose sides are one Freestream: what the jet
+    brings in leaves through the far field."""
+    case = tmp_path / "run-jet"
+    case.mkdir(parents=True)
+    (case / "w27-case.json").write_text(json.dumps({
+        "rho": 1.0,
+        "mapped": [
+            {"patch": "far_field", "name": "Far field", "bc_type": "Freestream", "faces": ["face 1@B"]},
+            {"patch": "jet", "name": "Jet", "bc_type": "Velocity inlet", "faces": ["face 7@B"]},
+        ],
+        "monitors": ["far_field", "jet"],
+    }), encoding="utf-8")
+    _dat(case, "mon_far_field", "0", "areaAverage(p)	areaAverage(U)", [f"1	0.0	{far_u}"], area=far_area)
+    _dat(case, "flow_far_field", "0", "sum(phi)", [f"1	{far_q}"], area=far_area)
+    _dat(case, "mon_jet", "0", "areaAverage(p)	areaAverage(U)", [f"1	0.0	{jet_u}"], area=jet_area)
+    _dat(case, "flow_jet", "0", "sum(phi)", [f"1	{jet_q}"], area=jet_area)
+    return case
+
+
+@pytest.mark.parametrize(
+    ("far_q", "jet_q", "far_area", "jet_area", "far_u", "jet_u"),
+    [
+        # 0.02 m³/s from a 20 cm² jet out through 4000 m² of far field at 30 m/s: 5e-6 m/s across
+        # it, 1.7e-7 of its speed (it read in 0.02, out 0, "imbalance 100 %").
+        ("0.02", "-0.02", "4.000000e+03", "2.000000e-03", "(30 0 0)", "(0 10 0)"),
+        # A 2 mm jet at 1 m/s into a co-flowing box with 5 m² of far field: 6e-7 of its speed.
+        ("3.1416e-06", "-3.1416e-06", "5.000000e+00", "3.141600e-06", "(1 0 0)", "(1 0 0)"),
+    ],
+)
+def test_a_far_field_carrying_a_jets_flow_out_balances(tmp_path: Path, far_q, jet_q, far_area, jet_area, far_u, jet_u):
+    """A far field's real net flow is as small against its own speed as round-off: with an
+    opening that carries flow, every opening counts, so the jet's flow balances what leaves."""
+    out = run_monitors(_jet_case(tmp_path, far_q, jet_q, far_area=far_area, jet_area=jet_area, far_u=far_u, jet_u=jet_u))
+    q = float(far_q)
+    assert out["balance"] == {"in_m3s": pytest.approx(q), "out_m3s": pytest.approx(q), "imbalance": pytest.approx(0.0, abs=1e-9)}
+    assert out["summary_warn"] is False
+    assert [s["label"] for s in out["summary"]] == ["Flow in", "out", "imbalance"]
+
+
 def test_run_monitors_without_results(tmp_path: Path):
     out = run_monitors(tmp_path / "never-ran")
     assert out == {
