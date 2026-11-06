@@ -17,6 +17,7 @@ from magnusim_validation.extract import (
     last_drift,
     linear_fit,
     rms,
+    sign_changes,
     stream_function,
     window_mean,
 )
@@ -76,6 +77,22 @@ def test_the_first_crossing_is_interpolated():
     assert first_crossing([0, 1, 2, 3], [0, 1, 0, 1], 0.5, start=1.5) == pytest.approx(2.5)
     # A series that starts at or above the level crosses at its first sample.
     assert first_crossing([0, 1], [3, 4], 1.0) == 0.0
+
+
+def test_every_sign_change_is_found_and_interpolated():
+    x = np.linspace(0.0, 10.0, 201)
+    y = np.sin(x)
+    got = sign_changes(x, y)
+    # sin's zeros after its first sample (0 itself is the first sample's value, not a change).
+    assert [c["x"] for c in got] == pytest.approx([math.pi, 2 * math.pi, 3 * math.pi], abs=2e-3)
+    assert [c["rising"] for c in got] == [False, True, False]
+    assert all(c["x_before"] < c["x"] < c["x_after"] for c in got)
+    # Linear between the two samples around the zero; unsorted input is sorted first.
+    assert sign_changes([1.0, 0.0], [1.0, -3.0]) == [{"x": 0.75, "rising": True, "x_before": 0.0, "x_after": 1.0}]
+    # A sample exactly at zero is the zero; a touch of zero without a change is none.
+    assert [c["x"] for c in sign_changes([0, 1, 2, 3], [-1.0, 0.0, 0.0, 2.0])] == [1.0]
+    assert sign_changes([0, 1, 2], [1.0, 0.0, 1.0]) == []
+    assert sign_changes([0, 1], [1.0, 2.0]) == []
 
 
 def test_rms_downsample_and_drift():

@@ -176,3 +176,76 @@ def fake_cavity_run(run_dir: Path, psi_min: float) -> None:
             rows.append({"key": f"probes_{slug}_{i + 1}", "point": pt, "last": {"U": vec},
                          "series": [{"t": k, "U": vec} for k in range(1, 181)]})
     _write(raw, "monitors", {"monitors": [], "custom": rows})
+
+
+# ------------------------------------------------------- case 4: a synthetic backward-step flow
+
+def fake_step_run(run_dir: Path, *, xr_s: float, corner_s: float | None = None, top: tuple[float, float] | None = None,
+                  line_shift_s: float = 0.0, reattaches: bool = True) -> None:
+    """A case 4 run's raw answers for a synthetic flow along the walls: the floor's flow reversed
+    from the step (or from ``corner_s``, a corner eddy's end) to ``xr_s`` and forward after it;
+    on the top wall reversed between ``top`` (x_s, x_r2) when given, else forward everywhere; all
+    in step heights. The wall shear stress carries OpenFOAM's sign (forward flow negative); U_x
+    0.02 S from each wall crosses zero ``line_shift_s`` further on. ``reattaches=False``: the floor
+    is reversed all the way to the outlet."""
+    import numpy as np
+    from magnusim_validation.cases import c4_backward_step as c4
+
+    fake_run(run_dir, lines=False, samples=False)
+    raw = run_dir / "raw"
+    plan = json.loads((run_dir / "plan.json").read_text(encoding="utf-8"))
+    g = c4.GEOM[plan["variant"]]
+    s, h, big_h, up, down = (g[k] / 1000.0 for k in ("S", "h", "H", "up", "down"))
+    depth = c4.DEPTH_MM / 1000.0
+    _write(raw, "mesh-facts", {"n_cells": 170000, "quality": {"known": True, "ok": True, "max_non_orthogonality": 30.0},
+                               "layers": {"asked": False, "applied": False, "walls": []},
+                               "two_d": {"axis": "z", "depth_m": depth, "cells_across": 1}})
+    a = (corner_s if corner_s is not None else -0.1) * s
+
+    def floor_fwd(x):
+        if not reattaches:
+            return -(1.0 + x)
+        return (x - a) * (x - xr_s * s) / s**2
+
+    def top_fwd(x):
+        if top is None:
+            return 1.0 + 0.0 * x
+        return (x - top[0] * s) * (x - top[1] * s) / s**2
+
+    def shear(x, fwd, patch):
+        n = x.size
+        return {"source": "case_file:4000/wallShearStress", "patch": patch, "n": n, "x": x.tolist(),
+                "area": [1e-7] * n, "wallShearStress_x": (-1e-3 * fwd).tolist(), "wallShearStress_y": [0.0] * n,
+                "wallShearStress_z": [0.0] * n}
+
+    xf = np.linspace(0.0, down, 1501)[1:] - 0.5 * down / 1500
+    _write(raw, "sample_floor_shear", shear(xf, floor_fwd(xf), "floor"))
+    xt = np.concatenate([np.linspace(-up, 0.0, 201)[:-1], xf])
+    _write(raw, "sample_top_shear", shear(xt, np.where(xt < 0, 1.0, top_fwd(xt)), "top"))
+
+    def line(y, fwd, shift):
+        x = np.linspace(0.0, down, 2001)
+        pts = [[float(v), y, c4.ZM] for v in x]
+        ux = 0.2 * fwd(x - shift * s)
+        return {"source": "app_sampling", "n_valid": x.size, "sample_points": pts, "distances": x.tolist(),
+                "U_x": ux.tolist(), "U_y": [0.0] * x.size, "U_z": [0.0] * x.size, "p": (1.0 - x / down).tolist()}
+
+    gap = c4.LINE_GAP_S * s
+    floor_line = line(gap, floor_fwd, line_shift_s)
+    _write(raw, "sample_floor_line", floor_line)
+    _write(raw, "sample_top_line", line(big_h - gap, top_fwd, line_shift_s))
+    _write(raw, "line_p_floor_line", {"status": 200, "n_valid": floor_line["n_valid"], "values": floor_line["p"],
+                                      "sample_points": floor_line["sample_points"]})
+    ys = np.linspace(s, big_h, 101)
+    eta = (ys - s) / h
+    _write(raw, "sample_inlet_profile", {"source": "app_sampling", "n_valid": ys.size,
+                                         "sample_points": [[-h, float(y), c4.ZM] for y in ys],
+                                         "U_x": (6.0 * eta * (1.0 - eta)).tolist(), "U_y": [0.0] * ys.size,
+                                         "U_z": [0.0] * ys.size})
+    area = h * depth
+    _write(raw, "monitors", {"monitors": [
+        {"key": "mon_inlet", "patch": "inlet", "area_m2": area, "last": {"Q_m3s": -area, "p_Pa": 0.4},
+         "series": [{"t": i, "p_Pa": 0.4, "Q_m3s": -area} for i in range(1, 181)]},
+        {"key": "mon_outlet", "patch": "outlet", "area_m2": big_h * depth, "last": {"Q_m3s": area}},
+    ], "balance": {"in_m3s": area, "out_m3s": area * (1 + 1e-6), "imbalance": 1e-6}, "custom": [{"key": "probes_bubble_1", "point": [3 * s, 0.1 * s, c4.ZM], "last": {"U": [-0.1, 0.0, 0.0]},
+                   "series": [{"t": k, "U": [-0.1, 0.0, 0.0]} for k in range(1, 181)]}]})

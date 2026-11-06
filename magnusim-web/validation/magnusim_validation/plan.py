@@ -68,10 +68,12 @@ def make_plan(case: ModuleType, variant: str, out_dir: Path, *, coarse: bool = F
         raise ValueError(f"{case.ID} has no variant {variant!r} (has: {', '.join(case.VARIANTS)})")
     out_dir.mkdir(parents=True, exist_ok=True)
     step = out_dir / GEOMETRY_FILE
-    shape = case.build_geometry()
+    # A case whose variants differ in geometry builds, selects and words it per variant.
+    per_variant = hasattr(case, "build_geometry_for")
+    shape = case.build_geometry_for(variant) if per_variant else case.build_geometry()
     sha = write_step(shape, step)
     rows = face_table(step)
-    selectors = case.FACE_SELECTORS
+    selectors = case.face_selectors(variant) if per_variant else case.FACE_SELECTORS
     labels = resolve(rows, selectors)
     body = case.requests(variant, coarse=coarse, cores=cores)
     overrides: dict[str, Any] = {}
@@ -96,7 +98,7 @@ def make_plan(case: ModuleType, variant: str, out_dir: Path, *, coarse: bool = F
             "file": GEOMETRY_FILE,
             "sha256": sha,
             "units": "mm",
-            "builder": case.GEOMETRY_WORDS,
+            "builder": case.geometry_words(variant) if per_variant else case.GEOMETRY_WORDS,
             "faces": rows,
             "selectors": selectors,
             "labels": labels,

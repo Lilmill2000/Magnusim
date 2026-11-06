@@ -108,6 +108,29 @@ def first_crossing(x: ArrayLike, y: ArrayLike, level: float, *, start: float | N
     return None
 
 
+def sign_changes(x: ArrayLike, y: ArrayLike) -> list[dict[str, Any]]:
+    """Every place where ``y`` changes sign along ``x``, in order: ``x`` the zero linearly
+    interpolated between the two samples around it (a sample exactly at zero is the zero
+    itself), and ``rising`` (negative to positive) or not, with the two samples around it
+    (``x_before``, ``x_after``). A zero between two samples of the same sign is not seen: the
+    samples must be close enough for that."""
+    xa, ya = arrays(x, y)
+    out: list[dict[str, Any]] = []
+    prev: int | None = None  # the last sample that was not zero
+    for i in range(xa.size):
+        if ya[i] == 0:
+            continue
+        if prev is not None and (ya[prev] > 0) != (ya[i] > 0):
+            if i - prev > 1:  # samples at zero in between: the first of them is the zero
+                xz = float(xa[prev + 1])
+            else:
+                t = -ya[prev] / (ya[i] - ya[prev])
+                xz = float(xa[prev] + t * (xa[i] - xa[prev]))
+            out.append({"x": xz, "rising": bool(ya[i] > 0), "x_before": float(xa[prev]), "x_after": float(xa[i])})
+        prev = i
+    return out
+
+
 def rms(values: ArrayLike) -> float:
     a = np.asarray(values, dtype=float)
     if a.size == 0:

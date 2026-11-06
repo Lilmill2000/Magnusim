@@ -1,0 +1,18 @@
+# citation: B. F. Armaly, F. Durst, J. C. F. Pereira, B. Schonung (1983), "Experimental and theoretical investigation of backward-facing step flow", J. Fluid Mech. 127:473-496
+# where: Fig. 14 (p. 490), "Comparison of experimental and theoretical results for the reattachment length up to Re = 800": the measured primary (lower-wall) reattachment length x1/S (the axis is labelled x3/S there), marker centres digitised on the 2100 x 3149 scan
+# conditions: backward-facing step, expansion ratio 1:1.94 (downstream channel 10.1 mm high, aspect ratio 18:1; inlet channel h about 5.2 mm and step S about 4.9 mm, derived); Re = V D / nu with V the mean inlet velocity (two-thirds of the measured maximum) and D = 2h the inlet channel's hydraulic diameter; air, laser-Doppler measurements; x1 from the step
+# kind: experimental
+# confidence: CONFIRMED
+# checked: read in the full scan (courses.washington.edu copy); digitising error about +-0.05 in x1/S and +-3 in Re; the experimental uncertainty itself is not stated in the paper
+# note: The flow was two-dimensional only for Re < 400 (and Re > 6000); from Re 453 upward the values are three-dimensional-affected and Armaly's own 2D predictions are no reference above Re about 400 (pp. 474, 489-490, 493)
+re,x1_over_s
+100,3.00
+152,3.99
+301,6.58
+391,8.58
+453,9.46
+501,10.06
+602,11.27
+643,12.22
+703,12.82
+804,14.19

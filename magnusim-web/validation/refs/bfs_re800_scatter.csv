@@ -1,0 +1,18 @@
+# citation: the compilation in Table 2 of arXiv:2507.16509 (backward-facing step, Re 800, expansion ratio 2), of Rogers & Kwak; Barton; E. Erturk (2008), Computers & Fluids 37:633-655; Kim & Moin; Lee & Mateescu; Guj & Stella; Grigoriev & Dargush; Keskar & Lyn; D. K. Gartling (1990); Gresho et al.
+# where: Table 2: each source's lower-wall reattachment x_r/S and upper bubble length/S
+# conditions: two-dimensional, steady; expansion ratio 2; Re = U_mean H / nu = 800 (equal to Re_D = U_mean 2h / nu); x over the step height S = H/2
+# kind: numerical
+# confidence: SECONDARY
+# checked: read in the compilation only (the sources themselves were not read)
+# note: The primary reattachment spreads over 11.5 to 12.2 S (about 6 %) and the upper bubble's length over 10.6 to 11.5 S (about 8 %); the same paper's own code gives x_r/S = 3.00 at Re 100 and expansion ratio 2
+source,xr_over_s,upper_bubble_over_s
+Rogers & Kwak,11.48,11.07
+Barton,11.51,11.52
+Erturk (2008),11.834,11.077
+Kim & Moin,11.90,11.50
+Lee & Mateescu,12.00,11.00
+Guj & Stella,12.05,10.60
+Grigoriev & Dargush,12.18,11.24
+Keskar & Lyn,12.19,11.25
+Gartling,12.20,11.26
+Gresho et al.,12.20,11.26

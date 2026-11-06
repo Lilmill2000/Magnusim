@@ -1,0 +1,11 @@
+# citation: D. K. Gartling (1990), "A test problem for outflow boundary conditions - flow over a backward-facing step", Int. J. Numer. Meth. Fluids 11(7):953-967, doi:10.1002/fld.1650110704
+# where: Tables II and III: the lower-wall (primary) reattachment and the upper-wall separation and reattachment, x in units of H (x_over_h) and of the step height S = H/2 (x_over_s)
+# conditions: two-dimensional, steady, Galerkin finite elements; expansion ratio 2 (step S = H/2, inlet channel h = H/2); a parabolic inlet u = 24 y (0.5 - y) at the step (mean 1, maximum 1.5); outlet channel 30 H long; Re = U_mean H / nu = 800 (equal to Re_D = U_mean 2h / nu); x from the step
+# kind: numerical
+# confidence: SECONDARY
+# checked: the paper itself was not read; the values are its Tables II and III as reproduced in the MFIX-Exa "Steady backward-facing step" tutorial
+# note: The upper bubble's length is 5.63 H (11.26 S); the lower eddy's centre (3.35, -0.20) H
+quantity,x_over_h,x_over_s
+lower_reattachment,6.10,12.20
+upper_separation,4.85,9.70
+upper_reattachment,10.48,20.96

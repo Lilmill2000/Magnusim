@@ -186,7 +186,7 @@ only when GitHub Pages is turned on for `docs/` and the branch is pushed.
 
 
 # The cases the design plans after the ones built so far.
-PLANNED = "the backward-facing step, the cylinder and the sphere"
+PLANNED = "the cylinder and the sphere"
 
 
 def so_far_text(results: list[dict[str, Any]]) -> str:
@@ -270,6 +270,10 @@ def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:
         + (f" (the plan's estimate about {cells_text(est['n_cells'])})" if est.get("n_cells") else "")
         + (f", background block {bg[0]} × {bg[1]} × {bg[2]}" if bg else "")
         + (f", wall cells {' × '.join(num(v, 3) for v in est['wall_cell_mm'])} mm (x × y × z)" if est.get("wall_cell_mm") else "")
+        # A custom size's cells (finer or coarser than the walls' level), so the wall cells are not
+        # read as the mesh's size where a custom size sets it.
+        + "".join(f", {c.get('name')}'s custom size cells {' × '.join(num(v, 3) for v in c['cell_mm'])} mm (level "
+                  f"{c.get('level')})" for c in est.get("custom_sizes") or [] if c.get("cell_mm"))
         + (f", generated in {num(m.get('generate_s'), 3)} s" if m.get("generate_s") is not None else "")
         + f"; checkMesh {'OK' if q_.get('ok') else 'not OK' if q_.get('known') else 'unknown'}"
         + (f" (max non-orthogonality {num(q_.get('max_non_orthogonality'), 3)}°, max skewness {num(q_.get('max_skewness'), 3)}, "
