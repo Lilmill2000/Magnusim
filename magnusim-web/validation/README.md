@@ -260,9 +260,15 @@ App gaps found so far, and what they block:
   74.30, +16.1 %) and Hex-dominant 63.21 (-1.24 %) (before 63.35, -1.02 %); Standard's
   development length 5.70 D (-1.2 %, before -5.7 %). Cases 3 to 6 (Hex-dominant) moved by
   at most 1 %: case 5 at Re 100 its mean Cd -0.5 % and its CL rms -1.0 % (both nearer their
-  references), St +0.09 %, the rest 0.25 % or less. Solves take longer: 5 to 35 % on
-  Hex-dominant (the probes, partly beside other load), 1.4 to 1.8 times on case 1's Standard
-  pipe (alone). A poor snapped mesh ran the Robust preset's new schemes to the end as it ran the
+  references), St +0.09 %, the rest 0.25 % or less. Solves take longer. On the 4-core probes:
+  on Hex-dominant from -2 % (case 3 at Re 1000) to +65 %
+  (case 5 at Re 20, in fewer iterations), 8 of its 11 runs between +14 and +35 %; on Standard
+  case 1's pipe +43 % (in 412 iterations against 319) and case 2's +9 and +19 %. Those probes
+  ran beside other work (WSL's 1-minute load 1 to 8.4 while they solved, and some overlapped
+  the investigation's own test runs), so their times are rough; the run of the whole set from
+  one commit gives clean ones. Alone, one solve at a time, case 1's Standard pipe took 1.8
+  times as long at fineness 6 (33 s against 18.6 s) and 1.4 times at fineness 8 (132 s
+  against 95 s). A poor snapped mesh ran the Robust preset's new schemes to the end as it ran the
   old: OpenFOAM's motorBike tutorial meshed on 4 ranks (checkMesh: 12 highly skewed faces, one
   failed check), 300 iterations with the old schemes, the new ones, and the new ones with k-omega
   SST's new walls: all three reached iteration 300 with no k or omega bounded (their p residual at
