@@ -17,13 +17,14 @@ past both ends (``stretched``). Then ``extrudeMesh`` builds the 2D mesh: one lay
 part's depth from the low end's faces, the patch of every face around them kept; the mesh is
 checked as a 2D mesh (its two ends ``empty`` for ``checkMesh``), and ``createPatch`` puts the
 two ends on the study's Symmetry patch (``snappy_hexdominant.sh``), which the solve makes
-``empty`` again when it holds nothing but them. Near the finest surfaces
+``empty`` again (that Symmetry is on the ends only: :func:`plan_two_d`). Near the finest surfaces
 the 3D slab still has 2^level cells across its depth for each 2D cell: it is a step on the way.
 
 When it applies (:func:`plan_two_d`): the part is one body of a CAD file; along x, y or z it
 is a straight extrusion between two end planes (every face is either flat on one of the two
 ends or parallel to that axis everywhere, so its section is the same at every depth); and the
-faces at each end carry one boundary condition of a Symmetry family. Otherwise it says why, in
+faces at each end carry one boundary condition of a Symmetry family that is on the ends only.
+Otherwise it says why, in
 words the Mesh panel, Generate and the Assistant all use.
 """
 
@@ -36,7 +37,7 @@ from typing import Any
 
 AXES = ("x", "y", "z")
 # The background block's two ends in the 3D slab: their own patches until createPatch puts
-# them on the study's patch (a Symmetry BC may also carry faces along the sides).
+# them on the study's Symmetry patch (which holds the ends only).
 FRONT = "magnusim_2d_front"
 BACK = "magnusim_2d_back"
 # The 3D slab's own case folder inside the WSL case: extrudeMesh's source.
@@ -248,11 +249,31 @@ def plan_two_d(
         names = {bc_of[f].name if f in bc_of else None for f in faces}
         return len(names) == 1 and None not in names and all(bc_of[f].symmetry for f in faces)
 
+    def off_ends(e: Ends) -> list[int]:
+        """The faces off the two ends that the ends' boundary conditions also hold."""
+        on_ends = {*e.lo_faces, *e.hi_faces}
+        held = {id(bc_of[f]) for f in on_ends}
+        return sorted({int(f) for b in rows if id(b) in held for f in b.faces} - on_ends)
+
     prisms = [e for e in ends if e.prism]
     good = [e for e in prisms if end_ok(e.lo_faces) and end_ok(e.hi_faces)]
-    if good:
-        # A box qualifies along more than one axis: the thinnest is the slab's depth.
+    # The ends' Symmetry must be on the ends only: the solve makes that patch empty (exactly 2D),
+    # and an empty patch can't also hold side faces (it would stay a mirror plane, whose depth
+    # velocity never settles). A box qualifies along more than one axis: the thinnest is the
+    # slab's depth.
+    own = [e for e in good if not off_ends(e)]
+    if good and not own:
         e = min(good, key=lambda x: (x.hi - x.lo, -x.axis))
+        extra = off_ends(e)
+        end_bcs = sorted({bc_of[f].name for f in (*e.lo_faces, *e.hi_faces)})
+        listed = " and ".join(f'"{n}"' for n in end_bcs)
+        shown = ", ".join(labels.get(f, _label(f)) for f in extra[:3]) + (f" and {len(extra) - 3} more" if len(extra) > 3 else "")
+        return (
+            f"{listed} is also on {shown}, off the part's ends along {AXES[e.axis]}: "
+            "give the two end faces a Symmetry of their own, so the solve can make them the 2D ends."
+        )
+    if own:
+        e = min(own, key=lambda x: (x.hi - x.lo, -x.axis))
         lo_bc, hi_bc = bc_of[e.lo_faces[0]], bc_of[e.hi_faces[0]]
         front = {face_to_patch.get(f, "") for f in e.lo_faces}
         back = {face_to_patch.get(f, "") for f in e.hi_faces}

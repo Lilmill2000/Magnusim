@@ -129,6 +129,8 @@ async function slabStudy(request, base, { symmetry, title, fineness = 3 }) {
     front: `Face ${front[0].id}@Body1`,
     back: `Face ${back[0].id}@Body1`,
     ends: ends.map(label),
+    outlet: label(outlet[0]),
+    outletFace: `Face ${outlet[0].id}@Body1`,
     sidesId: sides ? String(sides.bc?.id || sides.id || '') : '',
   };
 }
@@ -341,6 +343,12 @@ test.describe('One cell across (2D) (fake compute)', () => {
     // And a Symmetry again: the note says how, again.
     await asks('Make the slab ends a symmetry again.', { kind: 'bc', action: 'update', id: s.sidesId, type: 'Symmetry' });
     await expect(noteOf(form).locator('[data-mesh-two-d="available"]')).toHaveText(how, STEP);
+    // The ends' Symmetry also on the outlet face: its patch could not be made empty (the flow
+    // solved would not be 2D and never settle), so the note says why and what to do.
+    await asks('Put the outlet face on the Sides symmetry too.', { kind: 'bc', action: 'update', id: s.sidesId, faces: [...s.ends, s.outlet] });
+    const shared = `"Sides" is also on ${s.outletFace}, off the part's ends along z: give the two end faces a Symmetry of their own, so the solve can make them the 2D ends.`;
+    await expect(noteOf(form).locator('[data-mesh-two-d="unavailable"]')).toHaveText(`Not available on this part: ${shared} Generate refuses until it is.`, STEP);
+    expect((await json(request, s.q('/api/mesh/two-d', { simulation_id: s.sid }))).available).toBe(false);
   });
 });
 

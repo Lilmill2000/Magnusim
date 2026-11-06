@@ -121,6 +121,19 @@ def test_a_slab_with_symmetry_on_both_ends_is_meshed_one_cell_across(slab: Path)
     assert s["back"]["bc"] == "Sides"
 
 
+def test_an_end_symmetry_also_on_a_side_face_names_it(slab: Path):
+    """The ends' Symmetry also on the outlet face: its patch could not be made empty, so the
+    flow solved would not be 2D (it would never settle); Generate and the panel say so."""
+    solid = load_step(slab)
+    f = _faces(solid)
+    bcs = _bcs(f, front=("Sides", True), back=("Sides", True), out=("Sides", True), **{"in": ("Inlet", False)})
+    reason = two_d.plan_two_d(solid, 0.001, bcs, _patches(f, {"front": "sides", "back": "sides", "out": "sides", "in": "inlet"}))
+    assert reason == (
+        f"\"Sides\" is also on Face {f['out'][0] + 1}@Body1, off the part's ends along z: "
+        "give the two end faces a Symmetry of their own, so the solve can make them the 2D ends."
+    )
+
+
 def test_no_symmetry_says_so(slab: Path):
     solid = load_step(slab)
     f = _faces(solid)
@@ -178,14 +191,21 @@ def test_two_symmetry_bcs_one_per_end_keep_their_patches(slab: Path):
 
 
 def test_a_box_picks_the_axis_whose_ends_are_symmetry(tmp_path: Path):
-    """A box is a straight extrusion along x, y and z: the Symmetry ends choose; with every face
-    a Symmetry the thinnest depth is the slab's."""
+    """A box is a straight extrusion along x, y and z: the ends whose Symmetry is on them alone
+    choose (one Symmetry on every face is refused: it could not be made empty)."""
     solid = load_step(_write_step(_box(0, 0, 0, 40, 30, 20), tmp_path / "box.step"))
     ys = [r.face_id for r in solid.faces if r.surface_type == "Plane" and (abs(r.centroid[1]) < 1e-6 or abs(r.centroid[1] - 30) < 1e-6)]
     plan = two_d.plan_two_d(solid, 0.001, [two_d.BcFaces("Sym", True, tuple(ys))], {f: "sym" for f in ys})
     assert isinstance(plan, two_d.TwoDPlan) and plan.axis == 1
+    # One Symmetry on every face: its patch could not be made empty, so it is refused.
     every = [r.face_id for r in solid.faces]
-    plan = two_d.plan_two_d(solid, 0.001, [two_d.BcFaces("Sym", True, tuple(every))], {f: "sym" for f in every})
+    reason = two_d.plan_two_d(solid, 0.001, [two_d.BcFaces("Sym", True, tuple(every))], {f: "sym" for f in every})
+    assert isinstance(reason, str) and reason.startswith('"Sym" is also on ') and "a Symmetry of their own" in reason
+    # The z ends on a Symmetry of their own and the other faces on another: the z slab.
+    zs = [r.face_id for r in solid.faces if r.surface_type == "Plane" and (abs(r.centroid[2]) < 1e-6 or abs(r.centroid[2] - 20) < 1e-6)]
+    rest = [f for f in every if f not in zs]
+    bcs = [two_d.BcFaces("Ends", True, tuple(zs)), two_d.BcFaces("Walls", True, tuple(rest))]
+    plan = two_d.plan_two_d(solid, 0.001, bcs, {**{f: "ends" for f in zs}, **{f: "walls" for f in rest}})
     assert isinstance(plan, two_d.TwoDPlan) and plan.axis == 2 and plan.depth_m == pytest.approx(0.02)
 
 
