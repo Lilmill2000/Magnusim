@@ -20,6 +20,7 @@
     "test:e2e:desktop": "node bundled-plugins/cad/node_modules/@playwright/test/cli.js test -c playwright.desktop.config.js",
     "test:prepare-run-golden": "node scripts/__tests__/compare-js-case.mjs",
     "test:validation": "node scripts/validation-run.mjs",
+    "test:physics": "node scripts/physics-check.mjs",
     "validation:report": "node scripts/validation-report.mjs",
     "check:py": "node scripts/python-check.mjs",
     "test:py": "node scripts/python-check.mjs pytest",

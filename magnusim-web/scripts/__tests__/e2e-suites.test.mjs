@@ -354,6 +354,12 @@ test('the plan says whether it is the full tier', () => {
   assert.equal(plan(['--all']).full, true);
   assert.equal(plan(['--all', '--fast']).full, false);
   assert.equal(plan(['--changed', '--files', 'src/app/main.ts']).full, false);
+  // The quick physics checks run in the full tier only: never the per-commit fast tier.
+  assert.equal(plan(['--all']).physics, true);
+  assert.equal(plan(['--all', '--fast']).physics, false);
+  assert.equal(plan(['--changed', '--files', 'src/app/main.ts']).physics, false);
+  assert.equal(plan(['--changed', '--full', '--files', 'src/app/main.ts']).physics, false);
+  assert.equal(plan(['--all', 'e2e/smoke.spec.js']).physics, false);
 });
 
 test('changed paths read from magnusim-web, from the repository root, or absolute', () => {

@@ -11,7 +11,8 @@ function flag(name) {
   return String(raw).trim() === '1';
 }
 
-function openFoamInWsl() {
+/** Whether WSL has OpenFOAM v2606 (its simpleFoam); false off Windows. */
+export function openFoamInWsl() {
   if (process.platform !== 'win32') return false;
   const distro = process.env.MAGNUSIM_WSL_DISTRO || process.env.CFDDESK_WSL_DISTRO || 'Ubuntu-24.04';
   const r = spawnSync('wsl.exe', ['-d', distro, '--', 'openfoam2606', 'bash', '-c', 'command -v simpleFoam'], {

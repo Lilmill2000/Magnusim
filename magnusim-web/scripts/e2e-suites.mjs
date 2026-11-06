@@ -19,7 +19,8 @@
 // that plugin).
 // The full tier (--all without --fast, whole suites, MAGNUSIM_E2E_WSL not 0) sets
 // MAGNUSIM_E2E_FULL=1 for every suite: a test whose prerequisite is missing there fails
-// instead of skipping (docs/TESTING.md).
+// instead of skipping (docs/TESTING.md). It runs the quick physics checks first
+// (scripts/physics-check.mjs, npm run test:physics: skipped without WSL); no other run does.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -392,6 +393,12 @@ function runPlaywright(label, config, specs, o) {
   return spawnSync(process.execPath, args, { cwd: WEB_ROOT, env: suiteEnv(o), stdio: 'inherit' }).status;
 }
 
+/** The quick physics checks (scripts/physics-check.mjs), before the full tier's suites. */
+function runPhysics(o) {
+  console.log('\n[e2e] physics: npm run test:physics');
+  return spawnSync(process.execPath, [join(WEB_ROOT, 'scripts', 'physics-check.mjs')], { cwd: WEB_ROOT, env: suiteEnv(o), stdio: 'inherit' }).status;
+}
+
 function runPlugin(suite, specs, o) {
   if (suite.run === 'playwright') return runPlaywright(suite.key, suite.config, specs, o);
   const dir = join(WEB_ROOT, 'bundled-plugins', suite.key);
@@ -417,6 +424,7 @@ function describe(plan, o, changedCount) {
   else lines.push(`[e2e] ${o.suites.length ? `suites ${o.suites.join(', ')}` : 'every suite'}; ${tier}`);
   const few = (list) => (list.length > 4 ? `${list.slice(0, 4).join(', ')} (+${list.length - 4} more)` : list.join(', '));
   const what = (v) => (v.specs && v.specs.length ? v.specs.join(' ') : v.specs ? '(named specs)' : 'all specs');
+  if (isFullTier(o)) lines.push('  physics: the quick physics checks first (npm run test:physics; skipped without WSL)');
   if (plan.core) lines.push(`  core: ${what(plan.core)}${plan.core.why.length ? `  <- ${few(plan.core.why)}` : ''}`);
   for (const [k, v] of Object.entries(plan.plugins)) lines.push(`  ${k}: ${v.specs ? v.specs.join(' ') : 'its suite'}${v.why.length ? `  <- ${few(v.why)}` : ''}`);
   if (!plan.core && !Object.keys(plan.plugins).length) lines.push('  nothing to run');
@@ -462,12 +470,14 @@ export function main(argv = process.argv.slice(2)) {
     for (const k of Object.keys(plan.plugins)) if (!o.suites.includes(k)) delete plan.plugins[k];
   }
   if (o.json) {
-    console.log(JSON.stringify({ fast: o.fast, full: isFullTier(o), ...plan }, null, 2));
+    console.log(JSON.stringify({ fast: o.fast, full: isFullTier(o), physics: isFullTier(o), ...plan }, null, 2));
     return 0;
   }
   console.log(describe(plan, o, changedCount));
   if (o.plan) return 0;
   const results = [];
+  // The full tier only: the quick physics checks, a few minutes in WSL, before the suites.
+  if (isFullTier(o)) results.push(['physics', runPhysics(o)]);
   if (plan.core) results.push(['core', runPlaywright('core', null, plan.core.specs || [], o)]);
   for (const [k, v] of Object.entries(plan.plugins)) results.push([k, runPlugin(suites.find((s) => s.key === k), v.specs || [], o)]);
   if (results.length) console.log(`\n[e2e] ${results.map(([k, s]) => `${k}: ${s === 0 ? 'passed' : 'FAILED'}`).join(', ')}`);

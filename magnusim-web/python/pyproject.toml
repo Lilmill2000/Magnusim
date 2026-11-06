@@ -34,6 +34,7 @@ markers = [
   "wsl: needs WSL + OpenFOAM (deselect with -m 'not wsl')",
   "occt: needs cadquery-ocp and a STEP fixture",
   "slow: > 10 s",
+  "physics: a quick physics check, with wsl (npm run test:physics; docs/TESTING.md)",
 ]
 addopts = ["-m", "not wsl"]
 
