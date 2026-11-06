@@ -168,6 +168,7 @@
   },
   "layers_applied": true,
   "hex_core_applied": true,
+  "shared_from": null,
   "facts_found": true
  },
  "precheck": {
@@ -201,6 +202,12 @@
    "t": 316,
    "U": 9.9977745e-07,
    "p": 2.5642294e-08
+  },
+  "log_residuals": {
+   "Ux": 1.1927042e-07,
+   "Uy": 9.9977745e-07,
+   "Uz": 8.3344236e-07,
+   "p": 6.5226568e-07
   },
   "wall_s": 30.2,
   "driver_solve_s": 30.6,

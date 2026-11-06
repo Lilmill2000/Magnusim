@@ -310,7 +310,7 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
         shown["inlet_p_Pa"] = p_in
     bal = raw.flow_balance()
     if bal and bal.get("in_m3s"):
-        shown["imbalance_pct"] = 100.0 * bal.get("imbalance", 0.0) / bal["in_m3s"]
+        shown["imbalance_pct"] = 100.0 * bal.get("imbalance", 0.0)
 
     p_line = raw.line("p_axis")
     u_line = raw.line("u_axis")

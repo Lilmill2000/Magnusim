@@ -168,7 +168,8 @@ class Raw:
         return None
 
     def flow_balance(self) -> dict[str, float] | None:
-        """The monitors' flow balance: in, out (m³/s) and the imbalance (out - in, m³/s)."""
+        """The monitors' flow balance: in, out (m³/s) and the imbalance, (out - in) / in (a fraction, as
+        the route gives it: the Results panel shows it times 100 as a per cent)."""
         doc = self.get("monitors") or {}
         bal = doc.get("balance") if isinstance(doc, dict) else None
         if not isinstance(bal, dict):

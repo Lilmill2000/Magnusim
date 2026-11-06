@@ -55,6 +55,20 @@ def test_an_exact_pipe_gives_the_exact_numbers(tmp_path: Path):
     assert on_disk == doc
 
 
+def test_the_flow_imbalance_is_the_fraction_the_route_gives_as_a_per_cent(tmp_path: Path):
+    """The monitors' balance carries (out - in) / in, a fraction (the Results panel shows it times
+    100): the pipe's shown imbalance is that times 100, not divided by the flow again."""
+    run_dir = plan_run(tmp_path)
+    fake_run(run_dir)
+    mon_path = run_dir / "raw" / "monitors.json"
+    mon = json.loads(mon_path.read_text(encoding="utf-8"))
+    q = math.pi * D * D / 4
+    mon["balance"] = {"in_m3s": q, "out_m3s": q * (1 + 2e-6), "imbalance": 2e-6}
+    mon_path.write_text(json.dumps(mon), encoding="utf-8")
+    doc = evaluate_dir(run_dir)
+    assert doc["shown"]["imbalance_pct"] == pytest.approx(2e-4, rel=1e-9)
+
+
 def test_a_line_that_reads_the_peak_low_does_not_move_the_compared_centreline(tmp_path: Path):
     run_dir = plan_run(tmp_path)
     fake_run(run_dir)

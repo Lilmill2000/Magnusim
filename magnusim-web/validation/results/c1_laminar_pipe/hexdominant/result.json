@@ -226,6 +226,7 @@
   },
   "layers_applied": null,
   "hex_core_applied": null,
+  "shared_from": null,
   "facts_found": true
  },
  "precheck": {
@@ -259,6 +260,12 @@
    "t": 143,
    "U": 9.812189e-07,
    "p": 9.3419481e-08
+  },
+  "log_residuals": {
+   "Ux": 2.0967896e-07,
+   "Uy": 8.4839288e-07,
+   "Uz": 9.812189e-07,
+   "p": 2.2094603e-07
   },
   "wall_s": 20.6,
   "driver_solve_s": 30.5,
@@ -3556,7 +3563,7 @@
   "d_eff_mm": 19.994724181705557,
   "re_eff": 99.97338704822616,
   "inlet_p_Pa": 5.60573707,
-  "imbalance_pct": -0.0010142863873738308,
+  "imbalance_pct": -3.184786308876849e-07,
   "dpdx_Pa_m": 15.825208749806013,
   "dpdx_exact_nominal_Pa_m": 16.0,
   "dpdx_vs_nominal_pct": -1.0924453137124202,
