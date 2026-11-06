@@ -183,3 +183,13 @@ def test_the_model_help_gives_only_the_y_plus_that_were_tested():
     assert "Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested." in text
     for untested in ("any y+", "below about 0.5", "resolve the wall"):
         assert untested not in text, untested
+
+
+def test_the_model_help_says_what_the_probes_show_of_the_stress_limiter_not_how_it_acts():
+    """With the limiter off (b1 0) Standard's developed pipe read +12.6 % against the clean wedge's
+    +11.1 %: the limiter is involved; how it cuts nut on the tetrahedra is inferred, not shown."""
+    text = _model_help()
+    assert ("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); "
+            "with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though "
+            "how is not known.") in text
+    assert "uneven strain rate" not in text

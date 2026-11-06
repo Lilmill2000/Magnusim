@@ -293,10 +293,12 @@ App gaps found so far, and what they block:
   (+4.4 % on a finer stretch too), +0.4 % at 30 and -3.3 % at 100; Spalding's law with the
   default blending read 5 to 9 % high from y+ 5 to 12. Hex-dominant's pipe now reads f
   -4.10 % and f_tau -3.02 % (before -13.39 % and -12.82 %) and, with a mapped inlet holding the
-  developed flow, -0.4 %. The rest of the shortfall at y+ 35 to 100 is SST's stress limiter
-  acting on the wall cell (with it off, b1 0, the wedge read +3.4 % at y+ 35); OpenFOAM's
-  log law (E = 9.8) runs about 0.5 U+ above the inner layer there, which is why k-epsilon
-  reads -4.2 to -4.9 % from y+ 11.6 up. k-epsilon keeps `nutkWallFunction`: Spalding's law read
+  developed flow, -0.4 %. From y+ 35 up the wedge reads f lower as y+ grows (-0.6 % at 35,
+  -2.2 % at 50, -3.3 % at 100), and these probes do not show why: with SST's stress limiter off
+  (b1 0) the wedge read +3.4 % at y+ 35, an overshoot rather than the shortfall gone, so they do
+  not tie it to the limiter. OpenFOAM's log law (E = 9.8) runs about 0.5 U+ above the inner
+  layer there (Spalding's law at y+ 34.4 gives U+ 13.51 against the log law's 14.19), most
+  likely why k-epsilon reads -4.2 to -4.9 % from y+ 11.6 up. k-epsilon keeps `nutkWallFunction`: Spalding's law read
   it 6 to 20 % high below y+ 20 (epsilon takes its log value at any y+), and below y+ 11 its
   log law reads 5 to 75 % high. So Standard's k-epsilon pipe reading near its reference (f
   -0.96 % and f_tau +0.34 % on the probe after the fixes, -3.8 and -3.0 % on the first full
@@ -312,11 +314,12 @@ App gaps found so far, and what they block:
   is run again).
 - **k-omega SST on Standard's tetrahedra** (case 2, a limitation): developed (a mapped inlet,
   4000 iterations, both fixes) Standard reads f -9.2 % at y+ 11.5, where the wedge reads
-  +0.2 %, with U_cl / U_b 1.27 against 1.17. It is SST's stress limiter, nut = a1 k / max(a1
-  omega, b1 F2 S): the strain rate S comes from the cells' velocity gradient, which the
-  tetrahedra make uneven, and the max turns that unevenness into a one-sided cut of nut. With
-  the limiter off (b1 0) Standard read +12.6 % against the wedge's +11.1 %, Wilcox's k-omega
-  (no limiter) +16.8 % against +16.1 %. Ruled out: the mesh's fineness (fineness 8, with a hex core: -9.2 %), the turbulence
+  +0.2 %, with U_cl / U_b 1.27 against 1.17. The probes point at SST's stress limiter, nut =
+  a1 k / max(a1 omega, b1 F2 S): with the limiter off (b1 0) Standard read +12.6 % against the
+  wedge's +11.1 %, and Wilcox's k-omega (no limiter) +16.8 % against +16.1 %, so without it the
+  tetrahedra read as the clean mesh does. How the limiter cuts nut there is inferred, not shown:
+  the strain rate S comes from the cells' velocity gradient, which the tetrahedra may make
+  uneven, and the max would turn that unevenness into a one-sided cut of nut. Ruled out: the mesh's fineness (fineness 8, with a hex core: -9.2 %), the turbulence
   fields' gradients (skew-corrected too: -8.3 %) and the wall distance (Poisson instead of
   meshWave: -9.3 %). On the 30 D pipe with the uniform inlet the flow is still developing at 20
   to 25 D on Standard (f -26.6 % from the pressure drop, -15.0 % from the wall shear,

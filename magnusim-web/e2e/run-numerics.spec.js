@@ -843,7 +843,8 @@ test.describe('numerics at Continue', () => {
       await expect(help).toContainText('Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested.');
       await expect(help).not.toContainText('below about 0.5');
       await expect(help).not.toContainText('any y+');
-      await expect(help).toContainText("On Standard's tetrahedra its stress limiter reads their uneven strain rate", STEP);
+      await expect(help).toContainText("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though how is not known.", STEP);
+      await expect(help).not.toContainText('uneven strain rate');
       await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
     } finally {
       await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: model });
