@@ -197,8 +197,8 @@ only when GitHub Pages is turned on for `docs/` and the branch is pushed.
 """
 
 
-# The cases the design plans after the ones built so far.
-PLANNED = "the sphere"
+# The cases the design plans after the ones built so far (none: all six are built).
+PLANNED = ""
 
 
 def so_far_text(results: list[dict[str, Any]]) -> str:
@@ -212,7 +212,9 @@ def so_far_text(results: list[dict[str, Any]]) -> str:
     text = "The set so far: " + ("; ".join(done) if done else "no results yet") + "."
     if waiting:
         text += f" Built, its results to come: {'; '.join(waiting)}."
-    return text + f" Then {PLANNED}; see `validation/README.md`. Heat Transfer's own validation set is reported after them."
+    if PLANNED:
+        text += f" Then {PLANNED}; see `validation/README.md`."
+    return text + " Heat Transfer's own validation set is reported after them."
 
 
 def build_markdown(results: list[dict[str, Any]]) -> str:

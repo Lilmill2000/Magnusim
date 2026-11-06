@@ -42,7 +42,8 @@ def test_every_committed_table_reads():
     assert names == ["armaly_1983_fig14_x1.csv", "bfs_re800_scatter.csv", "botella_peyret_1998_extrema.csv",
                      "cylinder_re100.csv", "cylinder_re100_scatter.csv", "cylinder_re20_re40.csv",
                      "cylinder_steady_scatter.csv", "gartling_1990_re800.csv", "ghia_1982_table1_u.csv",
-                     "ghia_1982_table2_v.csv", "marchi_2009_vortex.csv"]
+                     "ghia_1982_table2_v.csv", "marchi_2009_vortex.csv", "sphere_re100.csv", "sphere_re100_cd.csv",
+                     "sphere_re100_scatter.csv"]
     for name in names:
         assert read(name).rows
 
@@ -102,3 +103,27 @@ def test_the_cylinder_tables_hold_the_reference_datas_values():
     hs = read("cylinder_re100_scatter.csv")
     st = [v for v in hs.column("st") if v is not None]
     assert (min(st), max(st)) == (0.164, 0.167) and hs.row(source="Qu et al. (2013)")["cl_rms"] == 0.225
+
+
+def test_the_sphere_tables_hold_the_reference_datas_values():
+    c = read("sphere_re100_cd.csv")
+    assert (c.meta["kind"], c.meta["confidence"]) == ("correlation", "SECONDARY") and "section 6" in c.meta["where"]
+    assert c.value(quantity="cd") == 1.09
+    # The two correlations, computed from their formulas at Re 100.
+    sn = 24 / 100 * (1 + 0.15 * 100**0.687)
+    cgw = 24 / 100 * (1 + 0.1935 * 100**0.6305)
+    assert c.value(quantity="cd_schiller_naumann") == round(sn, 4) == 1.0917
+    assert c.value(quantity="cd_clift_grace_weber") == round(cgw, 4) == 1.0870
+    assert c.value(quantity="cd") == round(0.5 * (sn + cgw), 2)
+    # Schiller & Naumann's citation is from memory: the header says so.
+    assert "UNCONFIRMED" in c.meta["checked"] and "Schiller" in c.meta["citation"] and "Clift" in c.meta["citation"]
+    j = read("sphere_re100.csv")
+    assert (j.meta["kind"], j.meta["confidence"]) == ("numerical", "SECONDARY") and "Johnson" in j.meta["citation"]
+    assert j.value(quantity="l_over_d") == 0.88 and j.value(quantity="cd") == 1.08 and j.value(quantity="theta_s_deg") == 53
+    assert "rear" in j.row(quantity="theta_s_deg")["source"]
+    sc = read("sphere_re100_scatter.csv")
+    cds = [v for v in sc.column("cd") if v is not None]
+    lds = [v for v in sc.column("l_over_d") if v is not None]
+    assert (min(cds), max(cds)) == (1.06, 1.14) and (min(lds), max(lds)) == (0.87, 0.92)
+    assert sc.row(source="Taneda (1956), experiment")["l_over_d"] == 0.89
+    assert not any("Fornberg" in str(r["source"]) for r in sc.rows) and "UNCONFIRMED" in sc.meta["note"]

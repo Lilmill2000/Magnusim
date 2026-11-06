@@ -84,6 +84,27 @@ def slab_with_hole(x0_mm: float, x1_mm: float, y0_mm: float, y1_mm: float, depth
     return cut.Shape()
 
 
+def box_with_sphere(x0_mm: float, x1_mm: float, half_mm: float, d_mm: float) -> Any:
+    """A box (the fluid) x from ``x0_mm`` to ``x1_mm`` and y and z from ``-half_mm`` to ``half_mm``,
+    with a sphere of diameter ``d_mm`` at the origin cut out (an external flow round a sphere):
+    seven faces, the six sides (x = x0 normal -x, x = x1 +x, y = -half -y, y = half +y,
+    z = -half -z, z = half +z) and the sphere's wall."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeSphere
+    from OCP.gp import gp_Pnt
+
+    r = d_mm / 2.0
+    if not (x0_mm < -r and x1_mm > r and half_mm > r and d_mm > 0):
+        raise ValueError("a box with a sphere needs the sphere inside it")
+    block = BRepPrimAPI_MakeBox(gp_Pnt(x0_mm, -half_mm, -half_mm), gp_Pnt(x1_mm, half_mm, half_mm)).Shape()
+    ball = BRepPrimAPI_MakeSphere(gp_Pnt(0, 0, 0), r).Shape()
+    cut = BRepAlgoAPI_Cut(block, ball)
+    cut.Build()
+    if not cut.IsDone():
+        raise RuntimeError("could not cut the sphere out of the box")
+    return cut.Shape()
+
+
 def fix_header_stamp(text: str) -> str:
     """The STEP text without what changes from one write to the next: its FILE_NAME time
     stamp (``FIXED_STAMP``) and the writer's per-process count in the product's name."""

@@ -110,7 +110,7 @@ their citations; this list is what those modules must start from.
 | 3, lid-driven cavity, Re 100 and 1000 | Built (`c3_lid_cavity.py`, one cell across). Ghia et al. (1982) Tables I and II (`refs/ghia_1982_*.csv`, with the one correction at x = 0.9063, Re 1000: -0.51550); extrema within 3 % of Botella and Peyret (1998, `refs/botella_peyret_1998_extrema.csv`), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 % of Marchi et al. (2009, `refs/marchi_2009_vortex.csv`). |
 | 4, backward-facing step | Built (`c4_backward_step.py`, one cell across). Re_D 100 on Armaly et al.'s expansion ratio 1.942 against their Fig. 14, x1/S = 3.00, ±10 % (the flow turns three-dimensional near Re 400, so not the design's Re 389; `refs/armaly_1983_fig14_x1.csv`); Re_D 800 on expansion ratio 2 against Gartling (1990), x_r/S = 12.20, ±7 %, and the top wall's bubble (9.70 and 20.96 S, ±10 %; `refs/gartling_1990_re800.csv`), the literature's scatter beside it (`refs/bfs_re800_scatter.csv`); the outlet 30 H after the step; a uniform inlet with an upstream channel of 10 h or 10 H (no profile inlet). Read from the wall shear stress the run saved on the floor and the top, U_x 0.02 S from the wall as the cross-check. Re_D 800 solves with SIMPLEC: with SIMPLE it never settled. |
 | 5, cylinder | Built (`c5_cylinder.py`, one cell across). Re 20 and 40 steady against Cd 2.02 and 1.50 and L/D 0.93 and 2.24 (±5 %, `refs/cylinder_re20_re40.csv`; the literature's spread in `refs/cylinder_steady_scatter.csv`); Re 100 transient against St 0.164 (±3 %), the mean Cd 1.33 (±5 %), CL rms 0.23 (±15 %) and the mean L/D 1.41 (±10 %, as information; `refs/cylinder_re100.csv`, `refs/cylinder_re100_scatter.csv`). The domain the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream and 30 D downstream, one Freestream round it; a Forces monitor on the cylinder with the study's reference values; 300 D/U of run, the shedding read by the harness over whole periods after the transient (at least 20; G8). A coarser mesh moves the steady values by at most 0.9 %; at Re 100 a finer one moves St and the mean Cd by 0.0 and 0.04 %, CL rms and the mean L/D by 1.0 and 0.9 % (the coarser one by up to 9.9 %). |
-| 6, sphere, Re 100 | Cd 1.09 ±5 %, L/D 0.88 ±7 %; at least 15 D to each side and about 15 D downstream. |
+| 6, sphere, Re 100 | Built (`c6_sphere.py`, 3D). Cd 1.09 ±5 % (the mean of the Schiller-Naumann and Clift, Grace & Weber correlations, 1.0917 and 1.0870; Johnson & Patel's computed 1.08 beside it; `refs/sphere_re100_cd.csv`) and L/D 0.88 ±7 % (Johnson & Patel, Taneda's measured 0.89 beside it; `refs/sphere_re100.csv`), the literature's spread in `refs/sphere_re100_scatter.csv`; the separation angle read from the wall shear stress the run saved and shown without a band. The box the reference data ask for: 15 D to each side and 15 D downstream (upstream the design's 8 D), one Freestream on all six sides; a Forces monitor on the sphere with the study's reference values (area pi D² / 4). Hex-dominant at fineness 4 with three custom sizes on the sphere, each with a Refine out to (D/32 out to 0.25 D, D/16 out to 1.5 D, D/8 out to 3 D: cells of D/42, D/21 and D/10.5) and 4 wall layers, 0.06 D in all, asserted applied: 669 786 cells. Fineness 3 and 5 with the same sizes move Cd by 0.1 and 0.04 % and L/D by 1.0 and 0.7 % (it grows towards a finer mesh). |
 
 App gaps found so far, and what they block:
 
@@ -142,7 +142,18 @@ App gaps found so far, and what they block:
   `e2e/mesh-refine-reach.spec.js`, `python/tests/unit/test_refine_reach.py`); `mesh_plan.py` counts
   its band. There is still no box refinement: a band is a distance from its faces, so case 5's
   wake is refined by three rings round the whole cylinder (upstream too), cheap in 2D (70 793
-  cells), dearer in 3D.
+  cells), dearer in 3D: case 6's near-wake band (D/21 out to 1.5 D) is a spherical shell of
+  about 290 000 of the mesh's 670 000 cells, half of it upstream of the sphere's centre, where
+  a box along the wake 2.5 D long and 1.5 D across at the same size would be about 51 000, or
+  could be a level finer for about 410 000. The sphere's recirculation length is the value
+  the mesh moves most (below). The smallest fix: a box (region) refinement with a size, in the
+  Mesh panel's refinements beside Surface custom sizing, and in the Assistant's.
+- **The sphere's recirculation length** (case 6): Cd is converged in the mesh (1.0914, 1.0925
+  and 1.0929 on 326 107, 669 786 and 1 359 124 cells: fineness 3, 4 and 5 with the same custom
+  sizes), the length behind it is not quite: L/D 0.8487, 0.8573 and 0.8636, still growing by
+  0.7 % at the finest step, about 2.6 % under its reference on the reported mesh (inside its
+  ±7 %). A finer wake costs a whole shell round the sphere (Refine out to, above); the run at
+  fineness 5 took 1009 s on 4 cores. Not a bug: recorded with its numbers.
 - **A one-cell 2D slab** (cases 3 to 5), added: Hex-dominant's "One cell across (2D)" meshes
   a slab whose two end faces carry a Symmetry one cell deep (`cfddesk/mesh/two_d.py`; the panel's
   note and Generate say why a part can't be; `e2e/mesh-one-cell-across.spec.js`,

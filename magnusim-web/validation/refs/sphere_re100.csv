@@ -1,0 +1,11 @@
+# citation: T. A. Johnson, V. C. Patel (1999), "Flow past a sphere up to a Reynolds number of 300", J. Fluid Mech. 378:19-70
+# where: the reference-data check of 2026-11-04, section 6, "Reference to use": the recirculation length L/D = 0.88 at Re 100; beside it Johnson & Patel's drag coefficient 1.08 and the separation angle, about 53 degrees from the rear stagnation point (127 from the front)
+# conditions: steady axisymmetric flow past a sphere in a uniform stream (axisymmetric for Re about 20 to 210) at Re = U D / nu = 100; L from the rear stagnation point to the closure point of the recirculation on the axis
+# kind: numerical
+# confidence: SECONDARY
+# checked: Johnson & Patel's values as quoted in arXiv:2309.08882 Table V and the notus-cfd sphere page; the primary paper was not read; other single sources give Johnson & Patel's Cd as 1.086 or 1.112 and the notus-cfd page their L/D as 0.86 (UNCONFIRMED, not used); arXiv:2309.08882 labels the 53 degree angle "from forward stagnation point", but it is measured from the rear (Nakamura 1976 and Giacobello et al. 2009 give the same)
+# note: The two quotations of Johnson & Patel's L/D differ by 0.02 (0.88, 0.86).
+quantity,value,source
+l_over_d,0.88,"T. A. Johnson, V. C. Patel (1999), J. Fluid Mech. 378:19-70 (via arXiv:2309.08882 Table V)"
+cd,1.08,"T. A. Johnson, V. C. Patel (1999), J. Fluid Mech. 378:19-70 (via arXiv:2309.08882 Table V and the notus-cfd sphere page)"
+theta_s_deg,53,"T. A. Johnson, V. C. Patel (1999), J. Fluid Mech. 378:19-70; also Nakamura (1976) and Giacobello et al. (2009) (via arXiv:2309.08882 Table V), from the rear stagnation point"

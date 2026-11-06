@@ -1,0 +1,14 @@
+# citation: the sphere results at Re 100 the reference-data check lists (section 6): T. A. Johnson, V. C. Patel (1999), J. Fluid Mech. 378:19-70; Mittal; Marella et al.; Constant et al. (immersed boundary, OpenFOAM); Giacobello et al. (2009); S. Taneda (1956), "Experimental investigation of the wake behind a sphere at low Reynolds numbers", J. Phys. Soc. Jpn 11(10):1104-1108
+# where: the reference-data check's table 6, each source's drag coefficient and recirculation length L/D at Re 100, as arXiv:2309.08882 Table V and the notus-cfd sphere page give them
+# conditions: steady axisymmetric flow past a sphere, Re = U D / nu = 100; Cd = F_x / (0.5 rho U^2 pi D^2 / 4); L from the rear stagnation point; empty cells where a source gives no value
+# kind: numerical
+# confidence: SECONDARY
+# checked: the compilations only (arXiv:2309.08882 Table V, the notus-cfd sphere page); no primary paper read
+# note: Shown beside the compared values, not compared. Taneda's row is an experiment. Fornberg's (1988) 1.0852 rests on one search snippet (UNCONFIRMED) and is left out.
+source,cd,l_over_d
+"Johnson & Patel (1999)",1.08,0.88
+"Mittal",1.09,0.87
+"Marella et al.",1.06,0.90
+"Constant et al.",1.14,0.92
+"Giacobello et al. (2009)",,0.88
+"Taneda (1956), experiment",,0.89

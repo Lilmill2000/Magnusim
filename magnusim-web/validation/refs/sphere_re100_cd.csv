@@ -1,0 +1,11 @@
+# citation: L. Schiller, A. Naumann (1933), Z. Ver. Dtsch. Ing. 77:318-320 (the drag correlation Cd = 24/Re (1 + 0.15 Re^0.687)); R. Clift, J. R. Grace, M. E. Weber (1978), Bubbles, Drops, and Particles, Academic Press, ch. 5 (the standard drag curve Cd = 24/Re (1 + 0.1935 Re^0.6305), 20 < Re < 260)
+# where: the reference-data check of 2026-11-04, section 6, "Reference to use": Cd = 1.09, the mean of the two correlations at Re 100 (Schiller-Naumann 1.0917, Clift, Grace & Weber 1.0870, both computed from their formulas)
+# conditions: steady axisymmetric flow past a sphere in an unbounded uniform stream at Re = U D / nu = 100; Cd = F_x / (0.5 rho U^2 pi D^2 / 4)
+# kind: correlation
+# confidence: SECONDARY
+# checked: the Schiller-Naumann formula and value as used by the MFIX-Exa sphere tutorial, the Clift, Grace & Weber curve as reproduced in python-fluids Clift() via Barati et al. (2014); the values computed from the formulas (re-derivable); Schiller & Naumann's original citation is from memory and not checked (UNCONFIRMED), Clift, Grace & Weber's table number not checked
+# note: The correlations give 1.087 to 1.092 at Re 100 (about ±0.25 %); resolved computations give 1.06 to 1.14 (about ±4 %, refs/sphere_re100_scatter.csv).
+quantity,value,source
+cd,1.09,"the mean of L. Schiller, A. Naumann (1933), Z. Ver. Dtsch. Ing. 77:318-320 (1.0917) and R. Clift, J. R. Grace, M. E. Weber (1978), Bubbles, Drops, and Particles, Academic Press, ch. 5 (1.0870)"
+cd_schiller_naumann,1.0917,"L. Schiller, A. Naumann (1933), Z. Ver. Dtsch. Ing. 77:318-320: 24/Re (1 + 0.15 Re^0.687) at Re 100 (citation UNCONFIRMED)"
+cd_clift_grace_weber,1.0870,"R. Clift, J. R. Grace, M. E. Weber (1978), Bubbles, Drops, and Particles, Academic Press, ch. 5: 24/Re (1 + 0.1935 Re^0.6305) at Re 100"

@@ -344,3 +344,65 @@ def fake_cylinder_run(run_dir: Path, *, cd: float = 2.0, ld: float = 0.95, theta
     _write(raw, "run-status", {"run": {"run_id": "r1", "status": "done", "iteration": float(t_end), "n_procs": 4,
                                        "started_at": "2026-11-06T10:01:00Z", "finished_at": "2026-11-06T10:11:00Z",
                                        "residuals": [{"t": float(t[k]), "Ux": 1e-6, "p": 1e-5} for k in range(0, t.size, 50)]}})
+
+
+# --------------------------------------------------------------- case 6: a synthetic sphere flow
+
+def fake_sphere_run(run_dir: Path, *, cd: float = 1.10, ld: float = 0.89, theta_s: float = 53.0,
+                    layers: float = 3.6, cross: float = 1e-4) -> None:
+    """A case 6 run's raw answers: a drag coefficient settling on ``cd``, U_x on the axis behind
+    the sphere closing the bubble at L/D = ``ld``, the wall shear stress along the sphere's
+    meridians (OpenFOAM's sign: attached flow against the meridian's direction) turning at
+    ``theta_s`` degrees from the rear on faces spread over the sphere, ``layers`` of the 4 wall
+    layers on average, a force across the stream of ``cross`` times the drag."""
+    import numpy as np
+    from magnusim_validation.cases import c6_sphere as c6
+
+    fake_run(run_dir, lines=False, samples=False)
+    raw = run_dir / "raw"
+    plan = json.loads((run_dir / "plan.json").read_text(encoding="utf-8"))
+    d, q_a = c6.D, c6.Q_A
+    _write(raw, "mesh-facts", {"n_cells": 260000, "quality": {"known": True, "ok": True, "max_non_orthogonality": 55.0},
+                               "layers": {"asked": True, "applied": layers >= 0.5, "first_m": 9e-5,
+                                          "walls": [{"patch": "sphere", "layers_asked": 4, "layers": layers,
+                                                     "faces": 3500, "first_m": 9e-5}]}})
+    ex = {e["key"]: e for e in plan["extract"]}
+    a, b = ex["wake_line"]["points_m"]
+    xs = np.linspace(a[0], b[0], ex["wake_line"]["subdivisions"] + 1)
+    pts = [[float(x), 0.0, 0.0] for x in xs]
+    x0 = (0.5 + ld) * d
+    ux = _wake_ux(xs, x0, d)
+    p_line = (0.3 * np.exp(-(xs - 0.5 * d) / d) - 0.05).tolist()
+    _write(raw, "sample_wake_line", {"source": "app_sampling", "n_valid": xs.size, "sample_points": pts,
+                                     "distances": (xs - xs[0]).tolist(), "U_x": ux.tolist(), "U_y": [0.0] * xs.size,
+                                     "U_z": [0.0] * xs.size, "p": p_line})
+    _write(raw, "line_p_wake_line", {"status": 200, "n_valid": xs.size, "values": p_line, "sample_points": pts})
+    # Faces spread evenly over the sphere (a Fibonacci lattice), each the same area.
+    n = 3000
+    k = np.arange(n) + 0.5
+    phi = np.arccos(1.0 - 2.0 * k / n)  # from the front stagnation point (x = -r)
+    az = np.pi * (1.0 + 5**0.5) * k
+    r = 0.5 * d
+    x, y, z = -r * np.cos(phi), r * np.sin(phi) * np.cos(az), r * np.sin(phi) * np.sin(az)
+    phi_s = np.radians(180.0 - theta_s)
+    tang = -np.sin(phi) * (phi_s - phi)  # attached (phi < phi_s): along the meridian, OpenFOAM's sign negative
+    e = np.stack([np.sin(phi), np.cos(phi) * np.cos(az), np.cos(phi) * np.sin(az)])
+    tau = tang * e
+    _write(raw, "sample_sphere_shear", {"source": "case_file:900/wallShearStress", "patch": "sphere", "n": n,
+                                        "x": x.tolist(), "y": y.tolist(), "z": z.tolist(),
+                                        "area": [math.pi * d * d / n] * n, "wallShearStress_x": tau[0].tolist(),
+                                        "wallShearStress_y": tau[1].tolist(), "wallShearStress_z": tau[2].tolist()})
+    n_it = 900
+
+    def cd_at(i: int) -> float:
+        return cd * (1 + 0.5 * math.exp(-i / 60))
+
+    hist = [{"t": i, "Cd": cd_at(i), "Cl": 1e-5, "Fd_N": cd_at(i) * q_a, "Fl_N": 1e-5 * q_a,
+             "Fdp_N": 0.55 * cd * q_a, "Fdv_N": cd_at(i) * q_a - 0.55 * cd * q_a,
+             "F_N": [cd_at(i) * q_a, cross * cd_at(i) * q_a, 0.0]} for i in range(1, n_it + 1)]
+    custom = [{"key": "forces_sphere", "name": "Sphere", "type": "forces", "series": hist, "last": hist[-1]}]
+    custom += [{"key": f"probes_wake_axis_{i + 1}", "point": p, "last": {"U": [float(_wake_ux(p[0], x0, d)), 0.0, 0.0]},
+                "series": [{"t": n_it, "U": [float(_wake_ux(p[0], x0, d)), 0.0, 0.0]}]}
+               for i, p in enumerate(c6.wake_probe_points())]
+    far = {"key": "mon_far_field", "patch": "far_field", "area_m2": 0.45, "last": {"Q_m3s": 0.0, "p_Pa": 0.0}}
+    _write(raw, "monitors", {"monitors": [far], "custom": custom})
