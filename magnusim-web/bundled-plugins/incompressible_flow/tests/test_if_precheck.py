@@ -260,3 +260,44 @@ def test_on_a_mesh_one_cell_across_re_is_a_2d_channels():
 
     flat = check_inputs(spec, {"end_time": 4000}, {"mesh": {"quality": {}}}, transient=False)
     assert flat["d_hyd"] == pytest.approx(2 * math.sqrt(h * depth / math.pi))
+
+
+@pytest.mark.parametrize("two_d", [True, False])
+def test_a_body_in_a_tunnel_fed_by_an_inlet_reads_re_on_the_studys_reference_length(two_d: bool):
+    """A cylinder (D 10 mm) in a box 40 D high fed by a Velocity inlet, laminar at Re_D 100: Re is on
+    the study's reference length, the body's, with no "turbulent" row. On a mesh one cell across it
+    read Re on twice the inlet's height ("Re ≈ 8,000 is turbulent; a laminar model will not
+    settle", its fix a turbulence model); on a 3D mesh on the circle of the inlet's area."""
+    import dataclasses
+
+    from magnusim_sdk.runcheck import check
+
+    from incompressible_flow.runspec import FaceProps
+
+    d, h, depth, nu = 0.01, 0.40, 0.005, 1e-4
+    inlet = {"name": "Inlet", "bc_type": "Velocity inlet", "faces": ["face 1@Body1"], "value": 1, "unit": "m/s"}
+    outlet = {"name": "Outlet", "bc_type": "Pressure", "faces": ["face 2@Body1"], "value": 0, "unit": "Pa"}
+    cyl = {"name": "Cylinder", "bc_type": "Wall", "wall_type": "No-slip", "faces": ["face 3@Body1"]}
+    props = {
+        "face 1@Body1": FaceProps(area_m2=h * depth, normal=(-1.0, 0.0, 0.0), planar=True),
+        "face 2@Body1": FaceProps(area_m2=h * depth, normal=(1.0, 0.0, 0.0), planar=True),
+    }
+    facts = {"two_d": {"axis": "z", "depth_m": depth, "cells_across": 1}} if two_d else {"quality": {}}
+
+    def laminar(spec):
+        return dataclasses.replace(spec, physics=dataclasses.replace(spec.physics, turbulence_model="laminar"))
+
+    spec = laminar(_run_spec(inlet, outlet, cyl, nu=nu, face_props=props, reference={"ref_length": d}))
+    inputs = check_inputs(spec, {"end_time": 2000}, {"mesh": facts}, transient=False)
+    assert inputs["ref_length"] == d and inputs["d_hyd"] is None
+    out = check(inputs)
+    assert out["estimate"]["re"] == pytest.approx(100.0)
+    assert "Re ≈ 100" in out["estimate"]["line"]
+    assert "laminar_turbulent" not in [r["code"] for r in out["checks"]]
+    # Without a reference length the tunnel is read as a channel, as the 2D step is: twice the
+    # inlet's height on a mesh one cell across (Re_Dh 8,000 for a channel is turbulent).
+    bare = check_inputs(laminar(_run_spec(inlet, outlet, cyl, nu=nu, face_props=props)), {"end_time": 2000}, {"mesh": facts}, transient=False)
+    assert bare["ref_length"] is None
+    if two_d:
+        assert bare["d_hyd"] == pytest.approx(2 * h)
+        assert "laminar_turbulent" in [r["code"] for r in check(bare)["checks"]]

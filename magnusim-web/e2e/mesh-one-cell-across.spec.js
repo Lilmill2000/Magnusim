@@ -11,6 +11,10 @@
 //   start reads Re on the 2D channel's hydraulic diameter (twice the inlet's height, not the
 //   circle of its area, which grows with the depth), and says when the ends lost their Symmetry:
 //   another BC on them, or none (its BC deleted: then they are solved as the walls with no BC are).
+//   The slab as a tunnel round its hole (the cylinder, D 10 mm) at nu 2e-5: Re on the channel's
+//   2h with no reference length ("Re ≈ 5,000", turbulent for a channel), and on the study's
+//   reference length once it sets one ("Re ≈ 500", no turbulent row: it read "Re ≈ 5,000 is
+//   turbulent; a laminar model will not settle" there too, its fix a turbulence model).
 // - The Assistant changes the ends' BC while the Mesh panel is open: the note under the setting
 //   follows at once (the frame's kind is 'bcs'; the panel listened for 'bc' and kept the old note).
 // - The Assistant (a scripted model, through the dock): sets it with setup_edit (the panel shows
@@ -66,11 +70,11 @@ async function postOk(request, url, data) {
 
 /**
  * The slab in a project of its own: an Incompressible Flow study (laminar), a fluid of
- * kinematic viscosity 5e-4 m²/s (Re 20 on the hole at 1 m/s), an inlet at x = 0, an outlet at
+ * kinematic viscosity `nu` (5e-4 m²/s: Re 20 on the hole at 1 m/s), an inlet at x = 0, an outlet at
  * x = 100 mm, and its two end faces (z = 0 and z = 10 mm) on a Symmetry "Sides" (`symmetry`)
  * or on the walls with the rest. Its mesh is Hex-dominant at `fineness`, no boundary layers.
  */
-async function slabStudy(request, base, { symmetry, title, fineness = 3 }) {
+async function slabStudy(request, base, { symmetry, title, fineness = 3, nu = 5e-4 }) {
   const made = await postOk(request, `${base}/api/project`, { title: `${title} ${stamp()}`, description: '', category: 'Other', units: 'Metric', folder: 'My Projects' });
   const pid = String(made.id || made.project?.id);
   const q = (path, extra = {}) => `${base}${path}?${new URLSearchParams({ project_id: pid, ...extra })}`;
@@ -103,7 +107,7 @@ async function slabStudy(request, base, { symmetry, title, fineness = 3 }) {
   const sim = await postOk(request, `${base}/api/simulation`, { project_id: pid, geometry_id: gid, analysis_type: 'incompressible_steady', time_dependency: 'Steady-state', activate: true });
   const sid = String(sim.simulation?.id || sim.id);
   await postOk(request, `${base}/api/simulation/update`, { project_id: pid, simulation_id: sid, turbulence_model: 'laminar' });
-  await postOk(request, `${base}/api/materials`, { project_id: pid, simulation_id: sid, preset: 'custom', name: 'Slab fluid', kinematic_viscosity: 5e-4, density: 1, assigned_volumes: ['Body1'] });
+  await postOk(request, `${base}/api/materials`, { project_id: pid, simulation_id: sid, preset: 'custom', name: 'Slab fluid', kinematic_viscosity: nu, density: 1, assigned_volumes: ['Body1'] });
   const bc = (data) => postOk(request, `${base}/api/bcs`, { project_id: pid, simulation_id: sid, geometry_id: gid, ...data });
   await bc({ name: 'Inlet', bc_type: 'Velocity inlet', velocity_type: 'Fixed', value: 1, unit: 'm/s', direction: 'Normal to face', faces: [label(inlet[0])] });
   await bc({ name: 'Outlet', bc_type: 'Pressure', pressure_type: 'Fixed value', value: 0, unit: 'Pa', faces: [label(outlet[0])] });
@@ -311,6 +315,46 @@ test.describe('One cell across (2D) (fake compute)', () => {
       STEP,
     );
     await expect(gone).toHaveAttribute('data-level', 'error');
+  });
+
+  test("the slab as a 2D tunnel round its hole: Re on the study's reference length once it sets one, no turbulent row", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    // nu 2e-5 m²/s at 1 m/s: Re 5,000 on the channel's 2h (2 x 50 mm), Re 500 on the hole's 10 mm.
+    const s = await slabStudy(request, host.base, { symmetry: true, title: 'Slab tunnel', nu: 2e-5 });
+    await postOk(request, `${host.base}/api/mesh`, { project_id: s.pid, simulation_id: s.sid, mesh_id: s.mid, mesher_settings: { one_cell_across: true } });
+    const gen = await request.post(`${host.base}/api/mesh/generate`, { data: { project_id: s.pid, simulation_id: s.sid, mesh_id: s.mid, queue_if_busy: true } });
+    expect(gen.status(), await gen.text()).toBeLessThan(300);
+    let end = 'wait';
+    await expect
+      .poll(
+        async () => {
+          const live = (await meshRecord(request, s)).live_mesh_result || {};
+          end = /done|failed|stopped/.test(String(live.status)) ? `${live.status} ${JSON.stringify(live.error || '')} ${live.two_d?.cells_across}` : 'wait';
+          return end;
+        },
+        { timeout: 120_000, intervals: [2_000] },
+      )
+      .not.toBe('wait');
+    expect(end).toBe('done "" 1');
+    const made = await postOk(request, `${host.base}/api/run/create`, { project_id: s.pid, simulation_id: s.sid, name: 'Tunnel 2D', mesh_id: s.mid });
+    const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+    // No reference length: the channel's Re, which is turbulent for a channel.
+    let panel = await openRunPanel(page, { base: host.base, projectId: s.pid, simulationId: s.sid, runId: rid });
+    let check = panel.locator('[data-run-check="1"]');
+    await expect(check.locator('[data-run-check-estimate="1"]')).toContainText('Re ≈ 5,000', STEP);
+    await expect(check.locator('[data-run-check-row="laminar_turbulent"]')).toContainText('Re ≈ 5,000 is turbulent; a laminar model will not settle.');
+    // The study's reference length, the hole's 10 mm: Re on it, and no turbulent row.
+    await postOk(request, `${host.base}/api/simulation/update`, { project_id: s.pid, simulation_id: s.sid, ref_length: 0.01 });
+    panel = await openRunPanel(page, { base: host.base, projectId: s.pid, simulationId: s.sid, runId: rid });
+    check = panel.locator('[data-run-check="1"]');
+    await expect(check.locator('[data-run-check-estimate="1"]')).toContainText('Re ≈ 500', STEP);
+    await expect(check.locator('[data-run-check-estimate="1"]')).not.toContainText('Re ≈ 5,000');
+    await expect(check.locator('[data-run-check-row="laminar_turbulent"]')).toHaveCount(0);
+    // The same check the Assistant reads (the panel's route).
+    const pre = await postOk(request, `${host.base}/api/run/precheck`, { project_id: s.pid, simulation_id: s.sid, run_id: rid });
+    const est = pre.estimate || pre.check?.estimate || {};
+    const codes = (pre.checks || pre.check?.checks || []).map((r) => r.code);
+    expect([Math.round(est.re), codes.includes('laminar_turbulent')], JSON.stringify(pre).slice(0, 600)).toEqual([500, false]);
   });
 
   test("the Assistant changes the ends' BC while the Mesh panel is open: the note follows, without a reload", async ({ page, request }) => {

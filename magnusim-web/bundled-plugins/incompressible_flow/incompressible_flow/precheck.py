@@ -5,9 +5,10 @@ the same RunSpec its case is written with.
 - the reference speed, the main inlet's direction and name (the speed the turbulence
   inlet values and the velocity limit use; a freestream's own when it sets it, even at 1 m/s
   or below);
-- the length Re is taken on: the largest inlet's hydraulic diameter (on a mesh one cell across,
-  a 2D channel's: twice the inlet's height in the plane, not the depth's circle), else the
-  study's reference length when a freestream sets the speed (a body in a stream);
+- the length Re is taken on: the study's reference length when it set one (a body's, in a
+  stream or in a tunnel fed by an inlet), else the largest inlet's hydraulic diameter (on a
+  mesh one cell across, a 2D channel's: twice the inlet's height in the plane, not the depth's
+  circle);
 - the velocity limit the case is written with (``max(50, 10 × the reference speed)``, or
   the study's own, RH3);
 - the study's numerics and the run's RH3 keys stored outside their field's range, which the
@@ -126,17 +127,19 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
             best, name = s, str(bc.get("name") or "")
         inlet_area = max(inlet_area, area)
     physics = spec.physics
-    # A mesh one cell across is a 2D slice of an arbitrary depth: an inlet's hydraulic diameter
-    # is a 2D channel's, twice its height in the plane (Re_D of a channel), not the circle of its
-    # area (which grows with the depth: a 2D step read "Re ≈ 55" at Re_D 100).
-    depth = _one_cell_depth(ctx.get("mesh"))
-    re_d = 2.0 * inlet_area / depth if inlets and depth and inlet_area > 0 else (float(d_hyd) if inlets and d_hyd else None)
-    # A body in a stream: Re on the length the study measures its forces against, when it set one.
-    ref_length = None
-    if not inlets and source == "freestream":
-        from .reference import resolve_reference
+    # Re on the length the study measures its forces against, when it set one: a body's, in a
+    # stream or in a tunnel fed by an inlet (on a 2D tunnel's inlet, twice its height, a cylinder
+    # at Re_D 100 read "Re ≈ 8,000 is turbulent; a laminar model will not settle"). Else on the
+    # largest inlet's hydraulic diameter: on a mesh one cell across (a 2D slice of an arbitrary
+    # depth) a 2D channel's, twice its height in the plane (Re_D of a channel), not the circle of
+    # its area (which grows with the depth: a 2D step read "Re ≈ 55" at Re_D 100).
+    from .reference import resolve_reference
 
-        ref_length = resolve_reference(spec).length
+    ref_length = resolve_reference(spec).length
+    depth = _one_cell_depth(ctx.get("mesh"))
+    re_d: float | None = None
+    if inlets and not ref_length:
+        re_d = 2.0 * inlet_area / depth if depth and inlet_area > 0 else (float(d_hyd) if d_hyd else None)
     out.update(
         {
             "n_cells": spec.n_cells or out["n_cells"],

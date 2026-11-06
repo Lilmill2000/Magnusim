@@ -208,7 +208,12 @@ App gaps found so far, and what they block:
   circle of its area, which on a mesh one cell across grows with the arbitrary depth: the step
   read "Re ≈ 55" at Re_D 100 and "Re ≈ 450" at 800, and a deeper slab could read as turbulent.
   On a mesh one cell across it is a 2D channel's now, twice the inlet's height in the plane
-  (`precheck.check_inputs`, `e2e/mesh-one-cell-across.spec.js`, `tests/test_if_precheck.py`). A
+  (`precheck.check_inputs`, `e2e/mesh-one-cell-across.spec.js`, `tests/test_if_precheck.py`). That
+  rule alone read a 2D tunnel's inlet as a channel: a cylinder at Re_D 100 in a box 40 D high fed
+  by a velocity inlet read "Re ≈ 8,000 is turbulent; a laminar model will not settle" (found in
+  review); Re is on the study's reference length whenever it sets one now, with an
+  inlet or without, and on the inlet's only when it sets none (a study that sets a reference
+  length for a pipe then reads Re on it, against the external-flow limit). A
   wide rectangular inlet in 3D still takes the circle of its area (Armaly's real 18:1 channel at
   Re_D 800 would read Re ≈ 2 700 and a laminar warning): the smallest fix is 4A/P with the face's
   perimeter from its CAD edges (the mesher's feature sizing reads them; the run's face table does
