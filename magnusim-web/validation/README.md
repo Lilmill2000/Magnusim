@@ -298,7 +298,15 @@ App gaps found so far, and what they block:
   log law (E = 9.8) runs about 0.5 U+ above the inner layer there, which is why k-epsilon
   reads -4.2 to -4.9 % from y+ 11.6 up. k-epsilon keeps `nutkWallFunction`: Spalding's law read
   it 6 to 20 % high below y+ 20 (epsilon takes its log value at any y+), and below y+ 11 its
-  log law reads 5 to 75 % high. Heat Transfer takes the same walls: its turbulent pipe's Nu read
+  log law reads 5 to 75 % high. So Standard's k-epsilon pipe reading near its reference (f
+  -0.96 % and f_tau +0.34 % on the probe after the fixes, -3.8 and -3.0 % on the first full
+  run) is most likely errors that cancel, not the best variant: its wall faces where f is read
+  sit at y+ 11.8 to 12.5 (11.4 to 12.3 on the first full run; the pre-run check estimated 9.7),
+  just above the switch at 11.53, where the wedge jumps from +4.8 % at y+ 10.2 to -4.8 % at
+  11.6, so its walls alone read f about 5 % low there and the rest (its tetrahedra and the
+  still-developing flow, not probed apart) reads it 1 to 5 points high; a mesh whose wall cells
+  sit on the other side of the switch can move f by up to about 10 points (case 2's notes work
+  it out from the reported run). Heat Transfer takes the same walls: its turbulent pipe's Nu read
   -1.61 % (before -9.64 %) on Hex-dominant and +0.29 % (before -20.28 %) on Standard (the 4-core probes before and after; its
   committed set and its study panel's Standard note still give the old numbers until that set
   is run again).

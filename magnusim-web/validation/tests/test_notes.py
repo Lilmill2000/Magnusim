@@ -122,3 +122,33 @@ def test_run_words_for_a_steady_run_that_stops_at_its_limit():
 
 def test_and_list():
     assert [and_list([]), and_list(["a"]), and_list(["a", "b"]), and_list(["a", "b", "c"])] == ["", "a", "a and b", "a, b and c"]
+
+
+def _ke_run(errs: tuple[float, float], y_plus: tuple[float, float, float]) -> dict:
+    lo, mean, hi = y_plus
+    return {
+        "variant": "standard_kepsilon",
+        "shown": {"y_plus": {"min": lo, "mean": mean, "max": hi, "n_faces": 10}},
+        "precheck": {"estimate": {"yplus": 9.72}},
+        "quantities": [{"key": k, "error": {"rel_pct": e}} for k, e in zip(("f", "f_tau"), errs, strict=True)],
+    }
+
+
+def test_standard_k_epsilons_small_error_is_read_against_its_walls_own_error():
+    """Case 2's Standard k-epsilon read -0.96 / +0.34 % on the probe after the fixes: its wall cells sit
+    just above its wall function's switch (y+ 11.53), where the clean wedge reads about 4.8 % low,
+    so that small error is errors that cancel, not the best variant. The note works it out from the
+    reported run (its y+ and errors), and says nothing without it."""
+    note = cases.get("c2_turbulent_pipe")._note_standard_kepsilon
+    assert note({}) is None
+    above = note({"standard_kepsilon": _ke_run((-3.79, -2.98), (11.6, 11.9, 12.3))})
+    assert "y+ 11.6 to 12.3 on the reported run (the pre-run check estimated 9.7), all above its wall function's switch at y+ 11.53" in above
+    assert "its f -3.79 % and f_tau -2.98 % mean the rest" in above and "reads it 1.0 to 1.8 points high" in above
+    assert "most likely errors that cancel, not a sign that it is the best variant" in above
+    assert "f -0.96 % and f_tau +0.34 % at y+ 11.8 to 12.5" in above
+    both = note({"standard_kepsilon": _ke_run((-3.79, -2.98), (11.4, 11.9, 12.3))})
+    assert "on both sides of its wall function's switch at y+ 11.53 (their area-weighted mean 11.9)" in both
+    below = note({"standard_kepsilon": _ke_run((4.0, 5.0), (9.6, 10.0, 10.9))})
+    assert "all below its wall function's switch" in below and "points high" not in below.split("The 4-core probe")[0]
+    committed = [r for r in load_results() if r["case"] == "c2_turbulent_pipe"]
+    assert any("errors that cancel" in n for n in case_notes(cases.get("c2_turbulent_pipe"), committed))

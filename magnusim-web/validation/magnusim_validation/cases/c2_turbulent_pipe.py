@@ -131,6 +131,56 @@ def _specs() -> dict[str, QuantitySpec]:
 
 QUANTITIES = _specs()
 
+# k-epsilon's walls (nutkWallFunction) switch to the log law at y+ 11.53; on the clean developed
+# wedge of 2026-11-06 they read f +4.8 % at y+ 10.2 and -4.8 % at y+ 11.6 (4.2 to 4.9 % low from
+# there to y+ 100: validation/README.md, "k-omega SST at the wall").
+KE_SWITCH_YPLUS = 11.53
+KE_WEDGE_ABOVE_PCT = -4.8
+
+
+def _note_standard_kepsilon(by: dict[str, dict[str, Any]]) -> str | None:
+    """Standard k-epsilon's error read against its walls' own error at the reported run's y+: an
+    error near 0 there is most likely errors that cancel (the probes, 2026-11-06), not the best
+    variant. None without that run or its y+."""
+    res = by.get("standard_kepsilon") or {}
+    yp = (res.get("shown") or {}).get("y_plus") or {}
+    errs: list[tuple[float, str]] = []
+    for k in ("f", "f_tau"):
+        e = (_q(res, k).get("error") or {}).get("rel_pct")
+        if isinstance(e, (int, float)):
+            errs.append((float(e), k))
+    if not yp or len(errs) != 2:
+        return None
+    lo, hi, mean = float(yp["min"]), float(yp["max"]), float(yp["mean"])
+    switch = f"its wall function's switch at y+ {KE_SWITCH_YPLUS:g}"
+    if lo >= KE_SWITCH_YPLUS:
+        where = f"all above {switch}"
+    elif hi < KE_SWITCH_YPLUS:
+        where = f"all below {switch}"
+    else:
+        where = f"on both sides of {switch} (their area-weighted mean {mean:.3g})"
+    est = ((res.get("precheck") or {}).get("estimate") or {}).get("yplus")
+    text = (
+        f"On Standard, k-epsilon's wall faces where f is read sit at y+ {lo:.3g} to {hi:.3g} on the reported run"
+        + (f" (the pre-run check estimated {est:.2g})" if isinstance(est, (int, float)) else "")
+        + f", {where}. On the clean developed wedge (the probes of "
+        "2026-11-06) its walls read f +4.8 % at y+ 10.2 and -4.8 % at y+ 11.6, and 4.2 to 4.9 % low from there to y+ "
+        "100, so a mesh whose wall cells sit on the other side of the switch can move f by up to about 10 points."
+    )
+    if mean >= KE_SWITCH_YPLUS:
+        rest = sorted(e - KE_WEDGE_ABOVE_PCT for e, _ in errs)
+        text += (
+            f" Its walls alone would read f about {abs(KE_WEDGE_ABOVE_PCT):g} % low there, so its f {errs[0][0]:+.2f} % and "
+            f"f_tau {errs[1][0]:+.2f} % mean the rest (the tetrahedra and the still-developing flow, not probed apart) "
+            f"reads it {rest[0]:.1f} to {rest[1]:.1f} points high: most likely errors that cancel, not a sign that it is "
+            "the best variant."
+        )
+    return text + (
+        " The 4-core probe after the fixes of 2026-11-06 read f -0.96 % and f_tau +0.34 % at y+ 11.8 to 12.5: errors "
+        "that cancel there too (the rest 3.8 to 5.1 points high)."
+    )
+
+
 NOTES = (
     "The reference is McKeon et al.'s relation (0.0211 at Re 5e4); the band is ±10 %, the reference data's for RANS "
     "with wall functions (the design proposed ±8 % for SST, ±10 % for k-epsilon and ±15 % on Standard). The reference "
@@ -162,6 +212,7 @@ NOTES = (
     "wedge): on the wedge it reads within about 2 % from y+ 5 to 15, +4.4 % at 20 and -3.3 % at 100, and 6 to 9 % "
     "low with the first cell's centre at y+ 1 to 3. Hex-dominant's one wall layer of 0.6 mm is sized for about "
     "35; Standard sizes its own layers, so its y+ is what its layers give.",
+    lambda by: _note_standard_kepsilon(by),
     "Each mesher's mesh is made once and both turbulence models solve on it (the k-epsilon run on the k-omega SST "
     "run's mesh, the same geometry, fluid, BCs and mesh settings).",
 )
