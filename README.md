@@ -46,10 +46,11 @@ Re 20, 40 and 100, the sphere at Re 100), each imported, meshed and solved throu
 routes, every reference value with its citation and how sure that value is. The results are in
 [`magnusim-web/validation/VALIDATION.md`](magnusim-web/validation/VALIDATION.md), with the Heat
 Transfer plugin's own set beside them. They are report-only: the tolerances are not locked yet
-(that waits for a review of the first full run, 2026-11-06), so the report shows where each value
-sits against its band and nothing fails on it. Most values sit inside their bands; the ones that do
-not (the laminar pipe's friction on the Standard mesher, the turbulent pipe with k-omega SST) are
-listed there with what is known of why. A public page of the same results is built in
+(that waits for Daniel's review of a full run of the whole set from one commit; the first,
+2026-11-06, is from before two fixes it led to, so the set is run again), so the report shows
+where each value sits against its band and nothing fails on it. Most values sit inside their
+bands; the ones that do not (the laminar pipe's friction on the Standard mesher, the turbulent
+pipe with k-omega SST) are listed there with what is known of why. A public page of the same results is built in
 `docs/validation/`; it is not published yet.
 
 Quick physics checks (`npm run test:physics` in `magnusim-web`, under a minute in WSL) run first

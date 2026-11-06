@@ -41,10 +41,12 @@ the report) are tested by pytest (`validation/tests`, in `npm run test:py` and C
 Its app server loads only the bundled plugins (not the test plugins the core suite loads).
 `MAGNUSIM_E2E_LOCK=0` lets it run beside another WSL test run (set `--cores` low then);
 a run's result records WSL's load while it solved, so run times compare like with like.
-Results are report-only until the first full run's tolerances are locked; then a locked
-quantity outside its tolerance fails `npm run test:validation` and blocks a release. The
-first full run of all six cases (2026-11-06, commit aaabb531, OpenFOAM v2606, 57.7 minutes)
-waits for Daniel's review; until then nothing is locked. Its meshes are not exactly the same
+Results are report-only until Daniel has reviewed a full run of the whole set and its
+tolerances are locked; then a locked quantity outside its tolerance fails
+`npm run test:validation` and blocks a release. The first full run of all six cases
+(2026-11-06, commit aaabb531, OpenFOAM v2606, 57.7 minutes) is from before two fixes to the
+case writer's schemes and walls (`validation/README.md`), so the set is run again from one
+commit; nothing is locked until Daniel has reviewed that run. Its meshes are not exactly the same
 from one generate to the next (snappyHexMesh and gmsh in parallel), so a rerun can move a
 value a little: case 1's development length about 1 %, case 2's Standard friction under 1 %.
 

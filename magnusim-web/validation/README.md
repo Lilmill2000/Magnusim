@@ -93,11 +93,12 @@ and its project is still on the server, and otherwise meshes its own.
   The values and bands come from the reference-data check of 2026-11-04 (each value's
   source read, or two transcriptions compared); where the harness's design proposed other
   bands, the reference data win.
-- Report-only until the first full run is reviewed; then the tolerances are locked
-  (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run. The first
-  full run of all six cases and every variant (2026-11-06, commit aaabb531 with no changes,
-  OpenFOAM v2606, 8 cores, one run at a time, 57.7 minutes) is what `results/` holds: 43 of
-  its 48 compared values inside their bands; nothing is locked until Daniel has reviewed it.
+- Report-only until Daniel has reviewed a full run of the whole set; then the tolerances are
+  locked (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run. The
+  first full run of all six cases and every variant (2026-11-06, commit aaabb531 with no
+  changes, OpenFOAM v2606, 8 cores, one run at a time, 57.7 minutes) is what `results/` holds:
+  43 of its 48 compared values inside their bands. The app changed after it (below), so the set
+  is run again from one commit, and nothing is locked until Daniel has reviewed that run.
   Between that run and the ones before it, cases 3 to 6 moved by at most 0.03 %; case 1's
   development length on Hex-dominant by 1 % and case 2's Standard friction by 0.6 to 0.75 %,
   as their meshes are not the same from one generate to the next (snappyHexMesh and gmsh in

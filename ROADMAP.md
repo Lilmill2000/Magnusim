@@ -276,14 +276,17 @@ September 2026 readiness audit. This list preserves the intended work.
     its public page.
 
 - **The validation set, after v1 (`magnusim-web/validation/`):**
-  - lock its tolerances once its first full run (2026-11-06, commit aaabb531) is
-    reviewed; a locked value outside its band then fails `npm run test:validation`
-    and blocks a release;
+  - lock its tolerances once Daniel has reviewed a full run of the whole set from one
+    commit (the first, 2026-11-06, commit aaabb531, is from before the two fixes
+    below, so the set is run again); a locked value outside its band then fails
+    `npm run test:validation` and blocks a release;
   - publish its page (`docs/validation/`, GitHub Pages from `docs/`);
-  - the values outside their bands: the laminar pipe's friction on Standard
-    (+16 %, its momentum convection on cells not aligned with the flow, under
-    investigation) and the turbulent pipe with k-omega SST (-13 % on Hex-dominant,
-    -25 % on Standard; k-epsilon sits inside on both);
+  - the values outside their bands on the first full run: the laminar pipe's
+    friction on Standard (+16 %: the flux and the velocity gradient ignored the
+    tetrahedra's skew, fixed) and the turbulent pipe with k-omega SST (-13 % on
+    Hex-dominant, -25 % on Standard: its walls, fixed; on Standard's tetrahedra it
+    still reads about 9 % low developed, a limitation); the 4-core probes after the
+    fixes are in `magnusim-web/validation/README.md`, the rerun gives the report's;
   - the app gaps it found (its README): a vector's components in Plot over path
     (G2), mean, rms and frequency over a time window on a Graphs card (G8), a
     periodic inlet (G9), a developed (parabolic) velocity inlet (G10), a box

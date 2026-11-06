@@ -8,9 +8,9 @@ path, and compared with the reference values below, each with its citation. Noth
 tuned per case and no number is typed in: a value here is what the app produced.
 
 **Report-only.** These numbers are what this version computes; no case fails on them yet.
-After the first full run the tolerances are locked, and from then on a locked quantity
-outside its tolerance fails the run and blocks a release. The bands shown are the proposed
-ones (from the reference data). A run fails already when it cannot produce its numbers: a
+The tolerances are locked once Daniel has reviewed a full run of the whole set, and from then
+on a locked quantity outside its tolerance fails the run and blocks a release. The bands
+shown are the proposed ones (from the reference data). A run fails already when it cannot produce its numbers: a
 setup the app refuses, a mesh or solve that fails, wall layers asked and not applied.
 
 The set so far: Laminar pipe, Re = 100 (Hex-dominant, Standard); Turbulent pipe, Re = 50 000

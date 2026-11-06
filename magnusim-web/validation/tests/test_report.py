@@ -142,3 +142,16 @@ def test_heat_transfers_own_set_is_in_the_report_and_on_the_page(tmp_path: Path)
     assert len(doc["heat_transfer"]["rows"]) == len(ht["rows"])
     # Without Heat Transfer's rows the page has no such section.
     assert "<h2>Heat Transfer</h2>" not in build_site([res])["index.html"]
+
+
+def test_the_report_and_the_page_say_the_tolerances_lock_once_daniel_has_reviewed_a_full_run(tmp_path: Path):
+    """The first full run is what the report shows and nothing is locked: neither says the
+    tolerances are locked "after the first full run"."""
+    res = _exact(tmp_path)
+    text = build_markdown([res])
+    page = build_site([res])["index.html"]
+    assert "The tolerances are locked once Daniel has reviewed a full run of the whole set" in text.replace("\n", " ")
+    assert "The tolerances are locked once Daniel has reviewed a full run of the whole set" in page
+    for out in (text.replace("\n", " "), page):
+        assert "After the first full run the tolerances are locked" not in out
+        assert "After the first full run the tolerances" not in out

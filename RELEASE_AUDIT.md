@@ -108,8 +108,10 @@ used as destructive test fixtures.
   compared values inside their proposed bands; the five outside are the laminar
   pipe's friction on the Standard mesher (+16 %) and the turbulent pipe with
   k-omega SST (-13 % on Hex-dominant, -25 % on Standard, from both the pressure
-  drop and the wall shear stress). It is report-only: its tolerances are not
-  locked until that run is reviewed, so it does not gate a release yet, and its
+  drop and the wall shear stress); two app fixes followed (the schemes on skewed
+  cells, and k-omega SST's walls), so the set is run again from one commit. It is
+  report-only: its tolerances are not locked until Daniel has reviewed that run,
+  so it does not gate a release yet, and its
   mesh studies cover a few cases only. Quick physics checks of the case writer
   (`npm run test:physics`) run in the full test tier before a push.
 
