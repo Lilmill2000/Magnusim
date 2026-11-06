@@ -955,6 +955,19 @@ export function inspectGeneratedCase(caseDir) {
   };
 }
 
+/**
+ * A failed record its own generate ended (a reason, or an exit code of its own), for the case on
+ * disk: not one marked interrupted (no generator's account), nor one whose case names another
+ * generate.
+ */
+function failedByItsGenerator(live, found) {
+  if (live.error === INTERRUPTED_NOTE) return false;
+  const own = !!live.error || (typeof live.exit_code === 'number' && live.exit_code > 0);
+  if (!own) return false;
+  const onDisk = found && found.generate_id ? String(found.generate_id) : '';
+  return !onDisk || !live.generate_id || onDisk === String(live.generate_id);
+}
+
 export function recoverStudyMeshesFromDisk(projectId, simId) {
   if (!projectId || !simId) return 0;
   dropDeadLiveJob();
@@ -969,6 +982,12 @@ export function recoverStudyMeshesFromDisk(projectId, simId) {
     const caseDir = (live && live.case_dir) || m.case_dir || meshCasePath(projectId, m.id, simId);
     const found = inspectGeneratedCase(caseDir);
     if (!found) continue;
+    // A generate that ended failed by its own account (its exit code or its reason) stays failed:
+    // a mesher copies its polyMesh back whatever its exit, so a whole one on disk is no sign it
+    // worked (Hex-dominant's "zero explicit feature refinement", a 2D mesh whose createPatch
+    // failed). A failure no generator reported (one marked interrupted when the server that
+    // started it was gone) or a case another generate wrote is still read from disk.
+    if (live && live.status === 'failed' && failedByItsGenerator(live, found)) continue;
     // Its build stamp (host API 1.5): the one its generate wrote at its start, else unknown.
     const generateId = found.generate_id || (live && live.generate_id) || null;
     const builtFromRev =
@@ -1078,6 +1097,9 @@ export function persistMeshResult(projectId, resultFields) {
     hex_core_applied: resultFields.hex_core_applied ?? null,
     layers_applied: resultFields.layers_applied ?? null,
     surface_size_m: resultFields.surface_size_m ?? null,
+    // One cell across (2D, Hex-dominant): the mesh's summary says so; its plan (axis, depth, ends).
+    one_cell_across: resultFields.one_cell_across === true ? true : null,
+    two_d: resultFields.two_d && typeof resultFields.two_d === 'object' ? resultFields.two_d : null,
     // Host API 1.8: a mesh of several regions (a study's materials), one cellZone each.
     regions: Array.isArray(resultFields.regions) ? resultFields.regions : null,
     // Host API 1.8: bodies no material names, left out of the mesh.
@@ -1273,10 +1295,12 @@ export function meshGenerateValues(settings) {
         : String(adv.small_feature_suppression).trim(),
     gapFactor: Number.isFinite(Number(adv.gap_refinement_factor)) ? Number(adv.gap_refinement_factor) : 0.05,
     gradation: Number.isFinite(Number(adv.global_gradation_rate)) ? Number(adv.global_gradation_rate) : 1.22,
+    // Hex-dominant's own setting (its schema field, saved under mesher_settings): One cell across (2D).
+    oneCellAcross: !!(s.mesher_settings && typeof s.mesher_settings === 'object' && s.mesher_settings.one_cell_across === true),
   };
 }
 
-/** Generator flags for those values. cfMesh and Hex-dominant read only the first three. */
+/** Generator flags for those values. cfMesh reads only the first three; Hex-dominant also One cell across. */
 export function meshGeneratorFlags(values, engine) {
   const flags = [
     '--fineness',
@@ -1286,6 +1310,7 @@ export function meshGeneratorFlags(values, engine) {
     '--physics-based',
     values.physicsBased ? '1' : '0',
   ];
+  if (engine === 'snappy_hexdominant' && values.oneCellAcross) flags.push('--one-cell-across', '1');
   if (engine === 'standard') {
     flags.push(
       '--hex-core',
@@ -2065,6 +2090,10 @@ function startMeshGenerateBody({ settings, projectId, onUpdate, meshId }) {
       feature_level_used: lastResult && lastResult.feature_level != null ? lastResult.feature_level : null,
       walls_level_used: lastResult && lastResult.walls_level != null ? lastResult.walls_level : null,
       snap_used: lastResult && lastResult.snap != null ? lastResult.snap : null,
+      // One cell across (2D): the Mesh panel's summary says so (the mesher's report) and the
+      // record keeps the plan (its axis, depth and the two ends' faces and Symmetry).
+      one_cell_across: status === 'done' && lastResult && lastResult.one_cell_across === true ? true : null,
+      two_d: status === 'done' && lastResult && lastResult.two_d && typeof lastResult.two_d === 'object' ? lastResult.two_d : null,
       // The input the generator built or found (prepare_input): its hash, from the result.
       ...(lastResult && lastResult.body1_sha256
         ? {

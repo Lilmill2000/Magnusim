@@ -11,7 +11,7 @@ import { registerLostFaceRoutes } from './link-routes.ts';
 import { registerOriginalImportRoute } from './geometry-edit-routes.ts';
 import { handleW18Api } from '../w18-materials.js';
 import { handleW19Api } from '../w19-boundary-conditions.js';
-import { handleW20Api, stopMeshRoute } from '../w20-mesh.js';
+import { handleW20Api, meshTwoDRoute, stopMeshRoute } from '../w20-mesh.js';
 import {
   startMeshGenerate,
   stopMeshGenerate,
@@ -425,6 +425,15 @@ export function registerLiveRoutes(router, { worker, jobs, services }) {
     ctx.sendJson(result.status, result.body);
   });
   router.add(['GET', 'HEAD', 'POST'], '/api/mesh/kick', wrap(handleW20Api));
+  // One cell across (2D, Hex-dominant): whether the study's part can be meshed so, and how, or why not.
+  router.get('/api/mesh/two-d', async (ctx) => {
+    const q = ctx.url.searchParams;
+    const result = await meshTwoDRoute({
+      project_id: q.get('project_id') || (ctx.scope && ctx.scope.projectId) || undefined,
+      simulation_id: q.get('simulation_id') || undefined,
+    });
+    ctx.sendJson(result.status, result.body);
+  });
 
   router.get('/api/fields/:field/series-range', async (ctx) => {
     const field = ctx.params.field;

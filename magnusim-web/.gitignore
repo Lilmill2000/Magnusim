@@ -25,3 +25,11 @@ dist/
 /occt-clone.log
 .DS_Store
 Thumbs.db
+# The validation set: route answers, geometry and case copies of a run, coarse development
+# runs and probes (plan.json and result.json of a full run are committed).
+validation/results/*/*/raw/
+validation/results/*/*/geometry.step
+validation/results/*/*/case/
+validation/results/*/*/driver.json
+validation/results-coarse/
+validation/results-probe/

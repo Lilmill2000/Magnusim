@@ -47,6 +47,7 @@ from .bc_kinds import (
     is_symmetry,
     is_total_pressure_inlet,
     wall_kind,
+    wall_moves,
     wall_rotation,
     wall_velocity,
 )
@@ -106,6 +107,14 @@ limitU
 """,
     )
 
+
+# The pressure's reference cell and value (validation set G1). OpenFOAM reads them only when no
+# boundary fixes the pressure level (setRefCell: p.needReference()), so they change nothing in a
+# case with a pressure boundary, a freestream or a total-pressure inlet; a closed box driven by a
+# moving or rotating wall (a lid-driven cavity) needs them, or the solver stops with "Unable to
+# set reference cell for field p". Cell 0 of the master rank; gauge 0 there.
+PRESSURE_REFERENCE_SIMPLE = "    pRefCell        0;\n    pRefValue       0;\n"
+PRESSURE_REFERENCE_PIMPLE = "    pRefCell            0;\n    pRefValue           0;\n"
 
 # The outer loops' relaxation with 2 or more outer correctors when the run leaves it blank (RH3).
 OUTER_RELAX_P = 0.3
@@ -237,7 +246,7 @@ PIMPLE
     nNonOrthogonalCorrectors {n_non_orth};
     turbOnFinalIterOnly yes;
     consistent          no;
-{residual}}}
+{PRESSURE_REFERENCE_PIMPLE}{residual}}}
 {_potential_flow_dict(potential_non_orth)}{relax}
 
 // ************************************************************************* //
@@ -796,7 +805,7 @@ def health_hints(
         "end_time": float(spec.end_time),
         "average_from": float(t.average_from) if t is not None else None,
         "uref": float(speed_ref),
-        "uref_source": "inlet" if any(is_velocity_inlet(m.get("bc")) for m in spec.mapped or []) else "pressure",
+        "uref_source": _uref_source(spec),
         "fixed_inflow": fixed_inflow(spec),
         "turbulence": model,
         "limiter": {"name": "limitU", "cap": float(u_max), "factor": LIMIT_FACTOR, "floor": LIMIT_FLOOR} if u_max is not None else None,
@@ -805,13 +814,85 @@ def health_hints(
     }
 
 
+def _uref_source(spec: Any) -> str:
+    """The health hints' ``uref_source``: ``inlet`` with a velocity inlet, ``wall`` when a moving
+    or rotating wall sets the speed (reference_speed), else ``pressure`` (as before)."""
+    if any(is_velocity_inlet(m.get("bc")) for m in spec.mapped or []):
+        return "inlet"
+    return "wall" if reference_speed(spec)[2] == "wall" else "pressure"
+
+
 def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
-    """Port of writeSolveCase speedRef / dHyd selection."""
+    """Port of writeSolveCase speedRef / dHyd selection (:func:`reference_speed` without its source)."""
+    speed, d_hyd, _source = reference_speed(spec)
+    return speed, d_hyd
+
+
+def _rotating_rim_m(faces: list[str], props: dict[str, FaceProps], origin: list[float], axis: list[float]) -> float | None:
+    """How far a rotating wall's faces reach from its axis (m), from the CAD face table: each
+    face's centroid distance from the axis plus the radius of a disc of its area (an upper
+    estimate: a disc centred on the axis gives its own radius). None without the table."""
+    n = math.hypot(*axis)
+    if not n > 0:
+        return None
+    a = [c / n for c in axis]
+    best: float | None = None
+    for f in faces:
+        fp = props.get(f)
+        if fp is None or fp.centroid is None:
+            continue
+        d = [float(fp.centroid[i]) - float(origin[i]) for i in range(3)]
+        off = math.hypot(d[1] * a[2] - d[2] * a[1], d[2] * a[0] - d[0] * a[2], d[0] * a[1] - d[1] * a[0])
+        r = off + math.sqrt(max(_props_area(fp), 0.0) / math.pi)
+        if math.isfinite(r):
+            best = r if best is None else max(best, r)
+    return best
+
+
+def wall_drive(spec: Any) -> list[dict[str, Any]]:
+    """The study's moving and rotating walls that drag the fluid, fastest first: each one's
+    ``name``, its surface ``speed`` in m/s (a moving wall's velocity; a rotating wall's at the
+    rim of its faces, :func:`_rotating_rim_m`; a rotating wall whose faces are not in the face
+    table is left out) and the unit ``direction`` a moving wall slides in (None when rotating)."""
+    _ensure_web_imports()
+    props = getattr(spec, "face_props", None) or {}
+    out: list[dict[str, Any]] = []
+    for m in getattr(spec, "mapped", None) or []:
+        raw = m.get("bc") if isinstance(m, dict) else None
+        if not raw:
+            continue
+        bc = _bc_dict(raw)
+        if not is_wall_bc(bc) or not bc_faces(bc) or not wall_moves(bc):
+            continue
+        name = str(bc.get("name") or "")
+        if wall_kind(bc) == "Moving":
+            v = wall_velocity(bc)
+            s = math.hypot(*v)
+            out.append({"name": name, "speed": s, "direction": [c / s for c in v]})
+            continue
+        origin, axis, omega = wall_rotation(bc)
+        rim = _rotating_rim_m(bc_faces(bc), props, origin, axis)
+        if rim is not None and rim > 0:
+            out.append({"name": name, "speed": abs(omega) * rim, "direction": None})
+    out.sort(key=lambda w: -float(w["speed"]))
+    return out
+
+
+def reference_speed(spec: RunSpec) -> tuple[float, float, str]:
+    """The case's reference speed (m/s), its hydraulic diameter (m) and what set the speed:
+    ``inlet`` (the fastest velocity inlet), ``pressure`` (a pressure difference, a velocity
+    outlet's outflow or a freestream), ``wall`` (a moving or rotating wall: a closed box's only
+    speed, else when faster than the rest) or ``none`` (nothing gives one: 1 m/s).
+
+    The speed the time step, the velocity limit and the starting turbulence are made from. With
+    a velocity inlet it is the inlet's, as before (a faster wall does not change it).
+    """
     _ensure_web_imports()
     rho = float(spec.rho) or LEGACY_AIR["rho"]
     props = spec.face_props or {}
     transient = spec_is_transient(spec)
     speed_ref = 1.0
+    source = "none"
     d_hyd: float | None = None
     inlets = [(m.get("bc"), m.get("patch")) for m in (spec.mapped or []) if is_velocity_inlet(m.get("bc"))]
     if inlets:
@@ -827,6 +908,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
             if area > best_area:
                 best_area = area
         speed_ref = max(best, 0.1)
+        source = "inlet"
         d_hyd = 2.0 * math.sqrt(best_area / math.pi) if best_area > 0 else None
     else:
         # Static pressures and total-pressure inlets: the pressure difference drives the flow.
@@ -839,6 +921,7 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
         if len(pvals) >= 2:
             dp = max(pvals) - min(pvals)
             speed_ref = max(1.0, math.sqrt((2.0 * abs(dp)) / rho))
+            source = "pressure"
         min_area = float("inf")
         for b in pm:
             if not b:
@@ -857,13 +940,22 @@ def resolve_speed_and_dhyd(spec: RunSpec) -> tuple[float, float]:
             faces = bc_faces(ob)
             area = faces_area(faces, props)
             speed_ref = max(speed_ref, inlet_ref_speed(ob, area / max(1, len(faces)), rho))
+            source = "pressure"
         # No inlet: a freestream's speed is the case's speed when it is faster.
         for m in spec.mapped or []:
             if is_freestream(m.get("bc")):
                 speed_ref = max(speed_ref, freestream_speed(_bc_dict(m.get("bc"))))  # type: ignore[arg-type]
+                source = "pressure"
+        # No inlet: a moving or rotating wall's speed is the case's when nothing else gives
+        # one (a closed box: its own speed, even below 1 m/s), else when it is faster.
+        walls = wall_drive(spec)
+        if walls:
+            top = float(walls[0]["speed"])
+            if source == "none" or top > speed_ref:
+                speed_ref, source = top, "wall"
     if not d_hyd or not (d_hyd > 0):
         d_hyd = 0.05
-    return float(speed_ref), float(d_hyd)
+    return float(speed_ref), float(d_hyd), source
 
 
 def inlet_flow_direction(bc: dict, face_props: dict[str, FaceProps]) -> list[float] | None:
@@ -1050,18 +1142,69 @@ def patch_turbulence(spec: RunSpec, speed_ref: float) -> dict[str, dict[str, Any
     return out
 
 
+def _boundary_faces(boundary: Path) -> dict[str, int]:
+    """Each patch's face count (``nFaces``) in a ``constant/polyMesh/boundary`` file."""
+    try:
+        text = boundary.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    text = re.sub(r"FoamFile\s*\{.*?\}", "", text, count=1, flags=re.S)
+    return {m.group(1): int(m.group(2)) for m in re.finditer(r"(?s)([A-Za-z_]\w*)\s*\{[^{}]*?\bnFaces\s+(\d+)\s*;", text)}
+
+
+def two_d_empty_patches(spec: Any, poly: Path | None) -> set[str]:
+    """One cell across (2D, Hex-dominant's setting): the patches of the mesh's two ends that the
+    solve makes ``empty``, so the flow is solved in the section's plane only. As mirror planes
+    (``symmetry``) OpenFOAM still solves the velocity across the depth: zero to round-off, its
+    normalised residual stays at a few hundredths, so a steady run never met its residual
+    targets and Run health read the U residual (its largest component) as stalled.
+
+    A patch is one when the mesh facts' ``two_d`` (beside the mesh, ``spec.mesh_case_dir``)
+    names it as an end, the study's boundary condition on it is a Symmetry, and it holds nothing
+    but end faces: one per cell for each end it holds, as an empty patch must (OpenFOAM refuses
+    one whose faces are not a multiple of the cells). A Symmetry that also holds side faces stays
+    a mirror plane; an end whose BC is no longer a Symmetry is solved as that BC (the pre-run
+    check's ``two_d_ends`` says the flow would not be 2D)."""
+    from magnusim_sdk.mesh_facts import read_mesh_facts
+
+    case = getattr(spec, "mesh_case_dir", None)
+    if not case:
+        return set()
+    try:
+        facts = read_mesh_facts(Path(case))
+    except (OSError, ValueError):
+        return set()
+    two = (facts or {}).get("two_d")
+    cells = (facts or {}).get("n_cells")
+    if not isinstance(two, dict) or not isinstance(cells, int) or cells <= 0:
+        return set()
+    ends: dict[str, int] = {}
+    for end in (two.get("front"), two.get("back")):
+        name = str(end.get("patch") or "") if isinstance(end, dict) else ""
+        if name:
+            ends[name] = ends.get(name, 0) + 1
+    if not ends:
+        return set()
+    sym = {str(m.get("patch") or "") for m in spec.mapped or [] if m.get("bc") and is_symmetry(_bc_dict(m["bc"]))}
+    boundary = (poly if poly is not None else Path(case) / "constant" / "polyMesh") / "boundary"
+    faces = _boundary_faces(boundary)
+    return {name for name, n in ends.items() if name in sym and faces.get(name) == n * cells}
+
+
 def _build_field_patches(
     spec: RunSpec,
     patch_names: list[str],
     *,
     turb_values: dict[str, str],
     patch_turb: dict[str, dict[str, str]] | None = None,
+    empty_patches: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[dict, dict, dict[str, dict]]:
     """U, p and one patch dict per turbulence field the study's model reads.
 
     ``turb_values`` holds the case-wide value string for k, omega, epsilon and
     R (inlets on Auto, walls, the internal field); ``patch_turb`` a patch's own
-    values when its "Turbulence at the inlet" sets them.
+    values when its "Turbulence at the inlet" sets them. ``empty_patches`` are a 2D mesh's
+    ends the solve makes ``empty`` (:func:`two_d_empty_patches`): every field empty there.
     """
     _ensure_web_imports()
     model = getattr(getattr(spec, "physics", None), "turbulence_model", "kOmegaSST")
@@ -1091,6 +1234,9 @@ def _build_field_patches(
 
     def symmetry(_name: str, _values: dict[str, str]) -> dict[str, str]:
         return {"type": "symmetry"}
+
+    def empty(_name: str, _values: dict[str, str]) -> dict[str, str]:
+        return {"type": "empty"}
 
     def freestream(name: str, values: dict[str, str]) -> dict[str, str]:
         if name == "nut":
@@ -1141,6 +1287,9 @@ def _build_field_patches(
             role[patch] = {"kind": "freestream", "bc": b}
         elif is_total_pressure_inlet(b):
             role[patch] = {"kind": "totalPressure", "bc": b}
+    for patch in empty_patches:
+        if patch in role:
+            role[patch] = {"kind": "empty", "bc": role[patch]["bc"]}
 
     U: dict[str, dict[str, str]] = {}
     p: dict[str, dict[str, str]] = {}
@@ -1230,6 +1379,12 @@ def _build_field_patches(
             U[name] = {"type": "symmetry"}
             p[name] = {"type": "symmetry"}
             set_turb(name, symmetry)
+        elif kind == "empty":
+            # A 2D mesh's ends (its Symmetry): nothing solved across the depth; the patch is
+            # made type empty (write_solve_case).
+            U[name] = {"type": "empty"}
+            p[name] = {"type": "empty"}
+            set_turb(name, empty)
         else:
             treatment = r["treatment"] if r and r.get("kind") == "wall" else wall_default
             if treatment == "Slip":
@@ -1444,7 +1599,7 @@ SIMPLE
 {{
     nNonOrthogonalCorrectors {int(ph.n_non_orthogonal)};
     consistent      {"yes" if ph.simplec else "no"};
-{residual_line}}}
+{PRESSURE_REFERENCE_SIMPLE}{residual_line}}}
 {_potential_flow_dict(non_orth)}relaxationFactors
 {{
     fields
@@ -1736,7 +1891,11 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         patch: turb_value_strings(sc["k"], sc["omega"], sc.get("nu_tilda")) for patch, sc in own_turb.items()
     }
 
-    U, p, turb_patches = _build_field_patches(spec, patch_names, turb_values=turb_values, patch_turb=patch_turb)
+    # One cell across (2D): its ends empty, so the flow is solved in the section's plane only.
+    empties = two_d_empty_patches(spec, poly_dst)
+    U, p, turb_patches = _build_field_patches(
+        spec, patch_names, turb_values=turb_values, patch_turb=patch_turb, empty_patches=empties
+    )
     # Force controls: the mesh faces of their picked faces in patches of their own,
     # each with its wall's boundary conditions (the flow is the same).
     force_split = _split_force_faces(spec, poly_dst, patch_names, services, restart=restart_from is not None)
@@ -1795,8 +1954,9 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
     # Wall functions require polyMesh type wall. gmshToFoam leftover
     # defaultFaces (prism end-caps) stay type patch unless we rewrite them.
     # A Symmetry BC's patch is made type symmetry here (it is meshed as a plain
-    # patch), and a patch left symmetry by an earlier solve opens again when its
-    # BC is no longer one, so a BC's type can change without a new mesh.
+    # patch; a 2D mesh's ends type empty), and a patch left symmetry or empty by an
+    # earlier solve opens again when its BC is no longer one, so a BC's type can
+    # change without a new mesh.
     if poly_dst and (poly_dst / "boundary").is_file():
         from magnusim_sdk.foam import parse_boundary_patch_types
         from magnusim_sdk.gmsh_helpers import apply_boundary_patch_types
@@ -1820,8 +1980,9 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         wall_names.discard("")
         patch_types = {n: "wall" for n in wall_names}
         patch_types.update({n: "symmetry" for n, e in U.items() if str((e or {}).get("type") or "") == "symmetry"})
+        patch_types.update({n: "empty" for n, e in U.items() if str((e or {}).get("type") or "") == "empty"})
         for pname, ptype in parse_boundary_patch_types(poly_dst / "boundary").items():
-            if ptype == "symmetry" and pname not in patch_types:
+            if ptype in ("symmetry", "empty") and pname not in patch_types:
                 patch_types[pname] = "patch"
         if patch_types:
             apply_boundary_patch_types(poly_dst / "boundary", patch_types)
@@ -1847,7 +2008,8 @@ RAS
 }}""",
     )
 
-    mon_patches = list(spec.monitor_patches or [])
+    # A 2D mesh's empty ends have no faces to the solver: nothing to monitor there.
+    mon_patches = [m for m in spec.monitor_patches or [] if m not in empties]
     functions_text = monitors_functions_text(mon_patches, transient=spec.transient)
     custom_meta = write_custom_monitor_surfaces(out, spec, services)
     if custom_meta:

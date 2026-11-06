@@ -375,6 +375,28 @@ def test_without_a_rate_table_the_flow_through_rows_stay_and_the_line_says_why()
     assert check(inputs)["estimate"]["line"].startswith("No time-step estimate: the mesh's cells could not be read · one flow-through")
 
 
+def test_a_closed_domain_has_no_flow_through():
+    """A closed box driven by a moving wall (``closed``: nothing flows in or out, the analysis's
+    speed is the wall's): the step is estimated as any other, Re is on the box's length along
+    the wall's motion, and nothing speaks of a flow-through: no "one flow-through" in the line
+    and no start-up or averaging rows counted in them."""
+    inputs = copy.deepcopy(RUN2)
+    inputs.update({"closed": True, "inlet": "", "inlet_driven": False, "fixed_inflow": False, "moving": True, "d_hyd": None})
+    out = check(inputs)
+    rows = rows_of(out)
+    assert "piso_high_co" in rows
+    assert not {"average_startup", "duration_vs_ftt", "still_start", "steady_for_mean"} & set(rows)
+    assert out["estimate"]["flow_through_s"] is None
+    assert out["estimate"]["line"] == (
+        "Δt ≈ 1.1e-5 s at Max Courant 1, as 1 outer corrector allows (smallest cells at 22.6 m/s) · ~900,000 steps · ~6 days on 15 cores · Re ≈ 6,000,000"
+    )
+    assert out["estimate"]["re"] == pytest.approx(22.6113 * 4.0 / 1.5e-5)
+    assert all("flow-through" not in r["text"] for r in out["checks"])
+    # Without a rate table: no step, and still no flow-through.
+    inputs["rates"] = None
+    assert check(inputs)["estimate"]["line"] == "No time-step estimate: this mesh has no Courant rates (generate it again to get them) · Re ≈ 6,000,000"
+
+
 def test_a_check_of_the_settings_only_says_so():
     """Before a mesh the analysis reads only the run's settings: the estimate says it is not
     complete (the panel and the Assistant then never say the mesh and physics were checked),
@@ -408,3 +430,51 @@ def test_cores_sent_as_auto_win_over_the_saved_number():
     assert check_context(inputs, cores=None, **common)["ranks"] == 15
     assert check_context(inputs, cores=2, **common)["ranks"] == 2
     assert check_context(inputs, **common)["ranks"] == 4
+
+
+def test_a_2d_mesh_whose_ends_lost_their_symmetry():
+    """One cell across (2D): an end face whose boundary condition is no longer a Symmetry is an
+    error row (the solve would not be 2D), with the BCs and the mesh to open; none without."""
+    inputs = copy.deepcopy(RUN2)
+    assert "two_d_ends" not in rows_of(check(inputs))
+    inputs["two_d_unmirrored"] = [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": "Walls"}]
+    row = rows_of(check(inputs))["two_d_ends"]
+    assert row["level"] == "error"
+    assert row["text"] == (
+        'This mesh is one cell across (2D), but its end faces (Face 5@Body1, Face 3@Body1) now have "Walls", not a Symmetry, '
+        "so the flow would not be 2D. Put a Symmetry back on them, or turn One cell across off and generate the mesh again."
+    )
+    assert (row["fix"]["target"], row["alt"]["target"]) == ("bcs", "mesh")
+    assert row["short"] == "2D mesh ends not a Symmetry"
+    # Their Symmetry deleted: no BC holds them, so they are solved as the walls with no BC are.
+    inputs["two_d_unmirrored"] = [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": None, "default_wall": "No-slip"}]
+    row = rows_of(check(inputs))["two_d_ends"]
+    assert row["level"] == "error"
+    assert row["text"] == (
+        "This mesh is one cell across (2D), but its end faces (Face 5@Body1, Face 3@Body1) now have no boundary condition, "
+        "so the solve treats them as No-slip walls (the walls with no BC) and the flow would not be 2D. Put a Symmetry back "
+        "on them, or turn One cell across off and generate the mesh again."
+    )
+
+
+def test_a_moving_wall_through_its_own_faces_in_a_closed_box():
+    """A closed box's Moving wall whose velocity crosses its own faces is an error row (the
+    solver stops on its first iteration); one on curved faces, checked at their middle only,
+    a warning; both with the boundary conditions to open."""
+    inputs = copy.deepcopy(RUN2)
+    assert not {"wall_through", "wall_curved"} & set(rows_of(check(inputs)))
+    inputs["walls_through"] = [{"name": "Lid", "faces": ["Face 3@Body1"], "velocity": [0.0, 2.0, 0.0]}]
+    inputs["walls_curved"] = [{"name": "Drum", "faces": ["Face 7@Body1", "Face 8@Body1"]}]
+    rows = rows_of(check(inputs))
+    row = rows["wall_through"]
+    assert row["level"] == "error"
+    assert row["text"] == (
+        'Wall "Lid" moves through its own faces (Face 3@Body1): its velocity (0, 2, 0) m/s has a part across them. '
+        "Nothing flows in or out of this box, so the solver stops on its first iteration "
+        '("Continuity error cannot be removed by adjusting the outflow"). Give it a velocity along the wall.'
+    )
+    assert (row["short"], row["fix"]["target"]) == ("moving wall crosses its faces", "bcs")
+    warn = rows["wall_curved"]
+    assert warn["level"] == "warn"
+    assert warn["text"].startswith('Wall "Drum" is on curved faces (Face 7@Body1, Face 8@Body1): in a closed box a Moving wall must slide')
+    assert warn["fix"]["target"] == "bcs"

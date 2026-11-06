@@ -200,6 +200,28 @@ def _reconcile_and_save(root: Path) -> bool:
     return changed
 
 
+def _study_refinements(root: Path, sid: str, legacy: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The study's refinements as GET /api/mesh/refinements has them (study-io.js
+    assembleRefinements and readMeshRefinements): each mesh folder's Ref_* records, then the
+    rows of its leftover refinements.json that no folder holds, each with its mesh and study.
+    The study's own mesh_refinements.json (``legacy``) is read only when no mesh of it holds
+    any. Hydrate read only that file, which the route no longer writes, so a reopened project
+    showed no refinements in its tree or editor (the mesher still used them)."""
+    from cfddesk.project.paths import walk_child_items, walk_meshes
+
+    rows: list[dict[str, Any]] = []
+    for m in walk_meshes(root, sid):
+        mdir = Path(m["dir"])
+        folder = [{k: v for k, v in r.items() if k not in ("dir", "folder")} for r in walk_child_items(mdir / "refinements", "refinement.json")]
+        have = {str(r.get("id")) for r in folder}
+        left = ww.read_json(mdir / "refinements.json") or {}
+        extra = [r for r in left.get("refinements") or [] if isinstance(r, dict) and r.get("id") is not None and str(r["id"]) not in have]
+        rows += [{**r, "mesh_id": r.get("mesh_id") or m["id"], "simulation_id": sid} for r in folder + extra]
+    if not rows:
+        return legacy
+    return {**(legacy or {}), "project_id": root.name, "simulation_id": sid, "refinements": rows}
+
+
 @rpc("project.hydrate")
 def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "") -> dict[str, Any]:
     pid = str(id or project_id or "").strip()
@@ -267,7 +289,7 @@ def project_hydrate(id: str = "", project_id: str = "", simulation_id: str = "")
         "materials": materials,
         "bcs": bcs,
         "mesh": mesh,
-        "refinements": scoped("mesh_refinements.json"),
+        "refinements": _study_refinements(root, sid, scoped("mesh_refinements.json")) if sid else None,
         "runs": runs,
         "result_controls": scoped("result_controls.json")
         or scoped("area_average.json"),

@@ -62,6 +62,8 @@ class FaceProps:
     area_m2: float | None = None
     normal: tuple[float, float, float] | None = None
     centroid: tuple[float, float, float] | None = None
+    # Flat (the face table's surface type is Plane), curved (another type) or unknown (None).
+    planar: bool | None = None
 
 
 @dataclass
@@ -174,6 +176,7 @@ def _face_props(raw: dict[str, Any] | None) -> dict[str, FaceProps]:
                 area_m2=row.get("area_m2"),
                 normal=tuple(row["normal"]) if row.get("normal") else None,
                 centroid=tuple(row["centroid"]) if row.get("centroid") else None,
+                planar=bool(row["planar"]) if row.get("planar") is not None else None,
             )
     return out
 
@@ -318,12 +321,40 @@ def load_run_spec(inputs: Any) -> RunSpec:
 
 def transient_context(spec: RunSpec) -> dict[str, Any]:
     """What the time-step estimate needs: the mesh this run solves on and the
-    case's reference speed (the same speed the turbulence inlet values use)."""
-    from .writer import resolve_speed_and_dhyd
+    case's reference speed (the same speed the turbulence inlet values use), and
+    whether the domain is closed (``closed``: a box its moving walls drive, which
+    nothing flows through, so it has no flow-through time)."""
+    from .writer import reference_speed
 
-    speed_ref, _d_hyd = resolve_speed_and_dhyd(spec)
+    speed_ref, _d_hyd, source = reference_speed(spec)
     return {
         "mesh_meta": load_mesh_meta(spec.mesh_case_dir),
         "n_cells": spec.n_cells,
         "speed_ref": speed_ref,
+        "closed": closed_domain(spec, source),
     }
+
+
+def closed_domain(spec: Any, source: str | None = None) -> bool:
+    """Nothing flows through the domain and a moving or rotating wall drives the flow: no
+    velocity inlet or outlet, no freestream, at most one pressure boundary (a closed box, or a
+    cavity with one opening), and the speed is a wall's (``source``: reference_speed's, worked
+    out when None). Such a domain has no flow-through time."""
+    from magnusim_sdk.study import is_pressure_bc, is_velocity_inlet, is_velocity_outlet
+
+    from .bc_kinds import is_freestream, is_total_pressure_inlet
+
+    pressures = 0
+    for m in getattr(spec, "mapped", None) or []:
+        bc = m.get("bc") if isinstance(m, dict) else None
+        if bc and (is_velocity_inlet(bc) or is_velocity_outlet(bc) or is_freestream(bc)):
+            return False
+        if bc and (is_pressure_bc(bc) or is_total_pressure_inlet(bc)):
+            pressures += 1
+    if pressures >= 2:
+        return False
+    if source is None:
+        from .writer import reference_speed
+
+        source = reference_speed(spec)[2]
+    return source == "wall"

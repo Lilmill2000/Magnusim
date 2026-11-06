@@ -45,6 +45,7 @@ import { openSetupWizard } from '../wizard/controller';
 import { convertQuantity, fieldUnit, fromSi, preferredUnit, toSi, unitIsImperial } from '../units/convert';
 import { isIsland, mountIsland, unmountIsland } from '../islands';
 import { meshQualityOf } from '../panels/mesh/meshQuality';
+import { reachNote, reachValue } from '../panels/mesh/reach';
 import { useProjectStore } from '../store/project';
 import { workspaceHash } from '../workspace/route';
 import { confirmLeaveWorkspace } from '../workspace/leaveGuard';
@@ -8761,6 +8762,9 @@ function isGeneratedMeshReady(mesh) {
   if (!meshBelongsToCurrentStudy(m)) return false;
   const live = m.live_mesh_result;
   if (live && live.status === 'running') return false;
+  // A failed generate is not a mesh, though its case holds the polyMesh it copied back (every
+  // mesher does, whatever its exit): the panel says Mesh failed, with its reason.
+  if (live && live.status === 'failed') return false;
   const caseDir = (live && live.case_dir) || m.case_dir || null;
   const cells = Number((live && live.n_cells) != null ? live.n_cells : m.n_cells);
   const hasCells = Number.isFinite(cells) && cells > 0;
@@ -27065,6 +27069,11 @@ function convertRefRecord(ref, imperial) {
   let changed = false;
   changed = convertLengthField(ref, 'default_size', 'default_size_unit', imperial) || changed;
   changed = convertLengthField(ref, 'min_size', 'min_size_unit', imperial) || changed;
+  if (ref.reach != null) changed = convertLengthField(ref, 'reach', 'reach_unit', imperial) || changed;
+  else if (ref.reach_unit && unitIsImperial(ref.reach_unit) !== !!imperial) {
+    ref.reach_unit = imperial ? 'in' : 'mm';
+    changed = true;
+  }
   changed = convertLengthField(ref, 'first_layer_thickness', 'first_layer_unit', imperial) || changed;
   changed = convertLengthField(ref, 'total_thickness', 'total_thickness_unit', imperial) || changed;
   return changed;
@@ -27921,6 +27930,10 @@ function publishW20(extra) {
     ...(extra || {}),
   };
   window.__CFD_W20__ = payload;
+  // The meshes changed (read, or a mesher picked): the refinement editor's note follows its mesh's mesher.
+  try {
+    if (typeof treeUi !== 'undefined' && treeUi.openPanel === 'ref' && activeRef()) syncRefReachNote(activeRef());
+  } catch (_) {}
   return payload;
 }
 
@@ -29301,6 +29314,38 @@ function syncRefInflateRows() {
   /* Number of layers + total thickness only. */
 }
 
+/** The mesher of the mesh a refinement is on (its registry row's key); null while that mesh is not read yet. */
+function refMeshEngine(ref) {
+  const rec = findMeshRecord((ref && ref.mesh_id) || currentRefMeshId());
+  if (!rec) return null;
+  return rec.ui_mesh_engine || (rec.settings && rec.settings.advanced && rec.settings.advanced.mesh_engine) || 'standard';
+}
+
+const REACH_REFUSED = 'Not saved: Refine out to must be a distance above 0, or empty for about three cells of the size.';
+
+/** A Refine out to typed that can't be kept ({id, value}): shown as typed, with why, until changed. */
+function refusedReach(ref) {
+  const r = refinementCatalog.reachRefused;
+  return r && ref && String(r.id) === String(ref.id) ? r : null;
+}
+
+/**
+ * Under Refine out to: why a value typed there is not saved, else, on a mesh whose mesher
+ * sizes the faces only (Standard, cfMesh), that it ignores the distance (src/panels/mesh/reach.ts;
+ * the Assistant's read_setup refinements says the same).
+ */
+function syncRefReachNote(ref) {
+  const el = document.getElementById('ref-reach-note');
+  if (!el) return;
+  const refused = !!refusedReach(ref);
+  const engine = refMeshEngine(ref);
+  // Its mesh not read yet: nothing is said (the meshes' read calls this again).
+  const words = refused ? REACH_REFUSED : engine ? reachNote(mesherFor(mesherRows(), engine), engine) : '';
+  el.textContent = words;
+  el.hidden = !words;
+  el.setAttribute('data-ref-reach-note', refused ? 'refused' : 'ignored');
+}
+
 function syncRefEditorFields() {
   const ref = activeRef();
   if (!ref) return;
@@ -29328,6 +29373,12 @@ function syncRefEditorFields() {
     if (min) min.value = String(ref.min_size != null ? ref.min_size : 0);
     const minU = document.getElementById('ref-min-size-unit');
     if (minU) minU.value = ref.min_size_unit || ref.default_size_unit || 'mm';
+    const reach = document.getElementById('ref-reach');
+    const refused = refusedReach(ref);
+    if (reach) reach.value = refused ? refused.value : ref.reach != null ? String(ref.reach) : '';
+    const reachU = document.getElementById('ref-reach-unit');
+    if (reachU) reachU.value = ref.reach_unit || ref.default_size_unit || 'mm';
+    syncRefReachNote(ref);
     syncRefSurfaceRows();
   } else {
     const n = document.getElementById('ref-n-layers');
@@ -29363,6 +29414,14 @@ function readRefEditorDraft() {
     out.min_size = Number((document.getElementById('ref-min-size') || {}).value);
     if (!Number.isFinite(out.min_size)) out.min_size = 0;
     out.min_size_unit = (document.getElementById('ref-min-size-unit') || {}).value || out.default_size_unit;
+    const reachEl = document.getElementById('ref-reach');
+    const reachRaw = reachEl ? String(reachEl.value || '') : '';
+    const reach = reachValue(reachRaw);
+    // A negative distance: the stored one is kept and the note says why (no silent change),
+    // until the field holds one it can keep.
+    refinementCatalog.reachRefused = reach === undefined ? { id: ref.id, value: reachRaw } : null;
+    if (reach !== undefined) out.reach = reach;
+    out.reach_unit = (document.getElementById('ref-reach-unit') || {}).value || out.default_size_unit;
   } else {
     out.n_layers = Number((document.getElementById('ref-n-layers') || {}).value || 3);
     if (!Number.isFinite(out.n_layers) || out.n_layers < 1) out.n_layers = 3;
@@ -29377,6 +29436,7 @@ function readRefEditorDraft() {
 function showRefEditor(ref) {
   if (!ref) return;
   refinementCatalog.activeId = ref.id;
+  refinementCatalog.reachRefused = null;
   if (ref.mesh_id) refinementCatalog.meshId = ref.mesh_id;
   refinementCatalog.draft_faces = (ref.faces || []).slice();
   const mid = currentRefMeshId();
@@ -29535,6 +29595,8 @@ async function createRefClient(type, opts) {
     local.default_size_unit = 'mm';
     local.min_size = 0;
     local.min_size_unit = 'mm';
+    local.reach = null;
+    local.reach_unit = 'mm';
   } else {
     local.n_layers = 3;
     local.total_thickness = 1;
@@ -29672,12 +29734,21 @@ window.__CFD_SHOW_REF__ = showRefEditor;
     syncRefSurfaceRows();
     persist();
   });
+  document.getElementById('ref-reach')?.addEventListener('change', (e) => {
+    const ref = activeRef();
+    if (!ref) return;
+    const value = String((e.target && e.target.value) || '');
+    refinementCatalog.reachRefused = reachValue(value) === undefined ? { id: ref.id, value } : null;
+    syncRefReachNote(ref);
+  });
   [
     'ref-fineness',
     'ref-default-size',
     'ref-default-size-unit',
     'ref-min-size',
     'ref-min-size-unit',
+    'ref-reach',
+    'ref-reach-unit',
     'ref-n-layers',
     'ref-total-thickness',
     'ref-total-unit',

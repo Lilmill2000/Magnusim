@@ -1,0 +1,14 @@
+# citation: C. H. Marchi, R. Suero, L. K. Araki (2009), "The lid-driven square cavity flow: numerical solution with a 1024 x 1024 grid", J. Braz. Soc. Mech. Sci. & Eng. 31(3):186-198
+# where: the primary vortex: the stream function's minimum psi_min and its centre (x, y), Re 1000 from their Table 8 (the Re 100 table's number was not recorded in the reference-data check); a 1024 x 1024 grid with multiple Richardson extrapolation
+# conditions: lid-driven square cavity, steady, two-dimensional; Re = U_lid L / nu (100 and 1000); x and y over L from the bottom-left corner, the lid at y = 1 moving in +x; psi over U_lid L, zero on the walls (u = d psi / d y)
+# kind: numerical
+# confidence: CONFIRMED
+# checked: read in the full text (pdfs.semanticscholar.org); at Re 1000 Botella & Peyret (1998) give -0.1189366 at (0.5308, 0.5652) and Erturk, Corke & Gokcol (2005), extrapolated, -0.118942 (both within 0.01 % of these)
+# note: Ghia et al. (1982) give -0.103423 at (0.6172, 0.7344) for Re 100 and -0.117929 at (0.5313, 0.5625) for Re 1000
+re,quantity,value
+100,psi_min,-0.1035212
+100,vortex_x,0.61621
+100,vortex_y,0.73730
+1000,psi_min,-0.118936708
+1000,vortex_x,0.53125
+1000,vortex_y,0.56543

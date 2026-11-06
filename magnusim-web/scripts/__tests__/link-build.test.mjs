@@ -226,6 +226,41 @@ describe('the mesh build stamp', () => {
     assert.equal(build.meshOutOfDate(p.pid, p.mid).outOfDate, true);
   });
 
+  it('a generate that failed by its own account stays failed, though its polyMesh is on disk', () => {
+    // Every mesher copies its polyMesh back whatever its exit (snappy_hexdominant.sh): G5's first
+    // WSL run failed (exit 44, "zero explicit feature refinement") and the next mesh read said
+    // "Recovered generated mesh (1765 cells)", with no quality and no log.
+    const p = linkedProject({ rev: 2 });
+    const folder = io.meshFolderOf(p.pid, p.mid);
+    const caseDir = join(folder.dir, 'case');
+    const poly = join(caseDir, 'constant', 'polyMesh');
+    mkdirSync(poly, { recursive: true });
+    for (const n of ['points', 'faces', 'owner', 'neighbour', 'boundary']) writeFileSync(join(poly, n), n);
+    const counts = (id) => writeFileSync(join(caseDir, 'w21-counts.json'), JSON.stringify({ n_cells: 1765, generate_id: id }));
+    counts('gF');
+    const failed = { status: 'failed', generate_id: 'gF', exit_code: 44, error: 'The mesher could not refine the part.' };
+    io.persistOneMesh(p.pid, p.sid, { ...meshRec(p), generated: false, live_mesh_result: failed }, { generator: true });
+    assert.equal(w21.recoverStudyMeshesFromDisk(p.pid, p.sid), 0);
+    assert.deepEqual(
+      [meshRec(p).live_mesh_result.status, meshRec(p).live_mesh_result.error, meshRec(p).live_mesh_result.exit_code],
+      ['failed', failed.error, 44],
+    );
+    // An exit code alone is its account too.
+    io.persistOneMesh(p.pid, p.sid, { ...meshRec(p), generated: false, live_mesh_result: { status: 'failed', generate_id: 'gF', exit_code: 1 } }, { generator: true });
+    assert.equal(w21.recoverStudyMeshesFromDisk(p.pid, p.sid), 0);
+    // A case another generate wrote is that generate's: read from disk.
+    counts('gNext');
+    io.persistOneMesh(p.pid, p.sid, { ...meshRec(p), generated: false, live_mesh_result: failed }, { generator: true });
+    assert.equal(w21.recoverStudyMeshesFromDisk(p.pid, p.sid), 1);
+    assert.equal(meshRec(p).live_mesh_result.status, 'done');
+    // Marked interrupted (the server that started it was gone: no generator's account): read too.
+    counts('gF');
+    const interrupted = { status: 'failed', generate_id: 'gF', exit_code: -1, error: 'Meshing stopped when the server restarted.' };
+    io.persistOneMesh(p.pid, p.sid, { ...meshRec(p), generated: false, live_mesh_result: interrupted }, { generator: true });
+    assert.equal(w21.recoverStudyMeshesFromDisk(p.pid, p.sid), 1);
+    assert.equal(meshRec(p).live_mesh_result.status, 'done');
+  });
+
   it('an interrupted generate that kept the previous mesh keeps that mesh\'s stamp, not its own', () => {
     const p = linkedProject({ rev: 3 });
     const folder = io.meshFolderOf(p.pid, p.mid);

@@ -91,10 +91,22 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
 
     from .bc_kinds import wall_kind
     from .reference import inlet_flow_direction
+    from .runspec import closed_domain
     from .time_table import in_effect
-    from .writer import _bc_dict, faces_area, fixed_inflow, inlet_ref_speed, resolve_speed_and_dhyd
+    from .writer import (
+        _bc_dict,
+        faces_area,
+        fixed_inflow,
+        inlet_ref_speed,
+        reference_speed,
+        wall_drive,
+    )
 
-    speed, d_hyd = resolve_speed_and_dhyd(spec)
+    speed, d_hyd, source = reference_speed(spec)
+    # A moving or rotating wall that sets the speed: the length Re is taken on runs along the way
+    # a moving wall slides (a lid-driven cavity's Re on the box's length along the lid).
+    walls = wall_drive(spec) if source == "wall" else []
+    wall_dir = walls[0]["direction"] if walls else None
     rho = float(getattr(spec, "rho", 0) or 0) or 1.2
     props = getattr(spec, "face_props", None) or {}
     inlets = [m.get("bc") for m in spec.mapped or [] if is_velocity_inlet(m.get("bc"))]
@@ -110,8 +122,10 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
     out.update(
         {
             "n_cells": spec.n_cells or out["n_cells"],
-            "speed": float(speed) if inlets or speed > 1.0 else None,
-            "direction": list(inlet_flow_direction(spec) or (1.0, 0.0, 0.0)),
+            "speed": float(speed) if inlets or speed > 1.0 or source == "wall" else None,
+            "direction": list(inlet_flow_direction(spec) or wall_dir or (1.0, 0.0, 0.0)),
+            # Nothing flows in or out (a box its walls drive): no flow-through time to speak of.
+            "closed": closed_domain(spec, source),
             "inlet": name,
             # The velocity limit the case is written with (writer: limitVelocity; RH3: None when
             # the study turned it off), transient only.
@@ -139,11 +153,125 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
             ),
         }
     )
+    unmirrored = two_d_unmirrored(spec, ctx.get("mesh"))
+    if unmirrored:
+        out["two_d_unmirrored"] = unmirrored
+    if out["closed"] and not holds_pressure(spec):
+        through, curved = walls_across(spec)
+        if through:
+            out["walls_through"] = through
+        if curved:
+            out["walls_curved"] = curved
     tc = getattr(spec, "transient", None)
     if transient and tc is not None and not tc.adjust_time_step:
         # A blank fixed step is written with the case's own estimate.
         out["delta_t_written"] = float(tc.delta_t)
     return out
+
+
+# A Moving wall's velocity counts as along a face when its part across it is under this
+# fraction of its speed (the solver's own check, adjustPhi, trips at 1e-8 of the flux).
+ALONG_FACE = 1e-6
+
+
+def holds_pressure(spec: Any) -> bool:
+    """A boundary holds the pressure's value (a pressure BC, a total-pressure inlet or a
+    freestream): the solver then needs no pressure reference and balances no flux."""
+    from magnusim_sdk.study import is_pressure_bc
+
+    from .bc_kinds import is_freestream, is_total_pressure_inlet
+
+    for m in getattr(spec, "mapped", None) or []:
+        bc = m.get("bc") if isinstance(m, dict) else None
+        if bc and (is_pressure_bc(bc) or is_total_pressure_inlet(bc) or is_freestream(bc)):
+            return True
+    return False
+
+
+def walls_across(spec: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The study's Moving walls whose velocity has a part across their own faces, and those with
+    curved faces it could not check everywhere: ``([{name, faces, velocity}], [{name, faces}])``.
+
+    A Moving wall is written as a fixed velocity on its faces (writer: fixedValue), so a velocity
+    across a face pushes fluid through it. In a closed box nothing can leave, and the solver
+    stops on its first iteration ("Continuity error cannot be removed by adjusting the outflow").
+    A face's normal is the CAD face table's at its middle: a flat face is checked whole; a curved
+    one only there, so a wall on curved faces whose velocity is along them there is listed as
+    unchecked. A Rotating wall's velocity is made along its faces by the solver (no row)."""
+    import math
+
+    from magnusim_sdk.study import bc_faces, is_wall_bc
+
+    from .bc_kinds import wall_kind, wall_moves, wall_velocity
+    from .writer import _bc_dict
+
+    props = getattr(spec, "face_props", None) or {}
+    through: list[dict[str, Any]] = []
+    curved: list[dict[str, Any]] = []
+    for m in getattr(spec, "mapped", None) or []:
+        raw = m.get("bc") if isinstance(m, dict) else None
+        if not raw:
+            continue
+        bc = _bc_dict(raw)
+        if not is_wall_bc(bc) or wall_kind(bc) != "Moving" or not wall_moves(bc):
+            continue
+        v = [float(c) for c in wall_velocity(bc)]
+        speed = math.hypot(*v)
+        across: list[str] = []
+        unchecked: list[str] = []
+        for face in bc_faces(bc):
+            fp = props.get(face)
+            n = getattr(fp, "normal", None) if fp is not None else None
+            if not n or len(n) != 3:
+                continue
+            size = math.hypot(*n) or 1.0
+            if abs(sum(float(a) * b for a, b in zip(n, v, strict=True))) / size > ALONG_FACE * speed:
+                across.append(_face_label(face))
+            elif getattr(fp, "planar", None) is False:
+                unchecked.append(_face_label(face))
+        name = str(bc.get("name") or "")
+        if across:
+            through.append({"name": name, "faces": across, "velocity": v})
+        elif unchecked:
+            curved.append({"name": name, "faces": unchecked})
+    return through, curved
+
+
+def _face_label(face: str) -> str:
+    """A face as the panels name it ("Face 3@Body1")."""
+    s = str(face)
+    return s[:1].upper() + s[1:] if s.lower().startswith("face ") else s
+
+
+def two_d_unmirrored(spec: Any, facts: Any) -> list[dict[str, Any]]:
+    """The ends of a mesh made one cell across (2D; the mesh facts' ``two_d``) whose patch's
+    boundary condition in this study is not a Symmetry: ``[{faces, bc}]``, one per such BC.
+
+    An end whose patch no boundary condition holds any more (its Symmetry deleted, or its faces
+    taken off it) is solved as the walls with no BC are (the writer's default wall): ``bc`` is
+    None and ``default_wall`` names that treatment. A Slip default mirrors the flow as a
+    Symmetry does, so it is not listed."""
+    from .bc_kinds import is_symmetry, wall_kind
+    from .writer import _bc_dict
+
+    two = facts.get("two_d") if isinstance(facts, dict) else None
+    if not isinstance(two, dict):
+        return []
+    by_patch = {str(m.get("patch") or ""): _bc_dict(m.get("bc") or {}) for m in getattr(spec, "mapped", None) or [] if m.get("bc")}
+    default_wall = wall_kind({"wall_type": getattr(spec, "wall_default", "") or ""})
+    out: dict[str, dict[str, Any]] = {}
+    for end in (two.get("front"), two.get("back")):
+        if not isinstance(end, dict) or not str(end.get("patch") or ""):
+            continue
+        bc = by_patch.get(str(end.get("patch") or ""))
+        if bc is not None and is_symmetry(bc):
+            continue
+        if bc is None and default_wall == "Slip":
+            continue
+        name = str(bc.get("name") or bc.get("bc_type") or "") if bc is not None else ""
+        row = out.setdefault(name, {"faces": [], "bc": name} if bc is not None else {"faces": [], "bc": None, "default_wall": default_wall})
+        row["faces"] += [str(f) for f in end.get("faces") or [] if str(f) not in row["faces"]]
+    return list(out.values())
 
 
 def _cap(physics: Any, speed: float) -> float | None:

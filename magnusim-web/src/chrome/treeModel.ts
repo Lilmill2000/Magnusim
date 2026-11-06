@@ -318,6 +318,9 @@ function meshReady(mesh: ProjectTreeMesh, activity: TreeActivity | null, studyId
   const thisGenerating =
     forStudy(activity, studyId) && activity?.kind === 'mesh' && !!id && String(activity.mesh_id) === id;
   if (mesh.live_status === 'running' && thisGenerating) return false;
+  // A generate that failed is not a mesh to run on, though its case holds one: every mesher
+  // copies its polyMesh back whatever its exit (the Mesh panel says Mesh failed).
+  if (mesh.live_status === 'failed') return false;
   const caseDir = mesh.case_dir;
   const cells = Number(mesh.n_cells);
   const hasCells = Number.isFinite(cells) && cells > 0;

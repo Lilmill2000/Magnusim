@@ -40,7 +40,7 @@ The core reaches the plugin only through the analysis contract
 | Contract field | Here |
 |---|---|
 | `family`, `study_defaults`, `algorithm_label`, `x_axis` | `incompressible_flow/contract.py`, `analyses.py` |
-| `validate_ready` | `contract.py`: fluid assigned, a flow-driving boundary condition, patches, pressures |
+| `validate_ready` | `contract.py`: fluid assigned, a flow-driving boundary condition (a moving or rotating wall drives a closed box: no pressure boundary is asked for, and the SIMPLE and PIMPLE dictionaries carry `pRefCell 0; pRefValue 0;`), patches, pressures |
 | `run_model` (defaults, normalize, preview) | `contract.py` and `transient.py` (`STEADY_DEFAULTS`, `TRANSIENT_DEFAULTS`, `normalize_transient`, the Δt estimate) |
 | `write_case`, `plan_case` | `writer.py` (with `runspec.py`, `physics.py`, `function_objects.py`) |
 | `launch` | not its own hook: the core builds it from its solver apps (`solvers.py`), its `frame_fields` (`U`, `p`) and its `log_parser` (`parser.py`) |

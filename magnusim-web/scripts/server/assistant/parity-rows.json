@@ -96,7 +96,7 @@
     { "row": "B9", "editions": ["magnusim"], "paths": [{ "tool": "explain_ready", "routes": ["run.ready"] }] },
     { "row": "B10", "editions": ["magnusim"], "paths": [{ "tool": "delete", "where": { "kind": "lost_faces" }, "routes": ["lost_faces.forget"] }] },
 
-    { "row": "X1", "editions": ["magnusim"], "paths": [{ "tool": "read_setup", "where": { "what": ["meshes", "mesh"] }, "routes": ["mesh.get"] }] },
+    { "row": "X1", "editions": ["magnusim"], "paths": [{ "tool": "read_setup", "where": { "what": ["meshes", "mesh"] }, "routes": ["mesh.get", "mesh.two_d"] }], "notes": "read_setup mesh also answers One cell across (2D)'s note (mesh.two_d) while it is on" },
     { "row": "X2", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "mesh", "action": "add" }, "routes": ["mesh.create"] }] },
     { "row": "X3", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "mesh", "action": "activate" }, "routes": ["mesh.activate"] }] },
     { "row": "X4", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "mesh", "action": "rename" }, "routes": ["mesh.rename"] }] },
@@ -110,7 +110,7 @@
     { "row": "X12", "editions": ["magnusim"], "paths": [{ "tool": "delete", "where": { "kind": "mesh" }, "routes": ["mesh.delete_record"] }] },
     { "row": "X13", "editions": ["magnusim"], "paths": [{ "tool": "core__show", "where": { "target": "mesh" }, "page": true }, { "tool": "core__view", "where": { "action": "picture" }, "page": true }, { "tool": "read_setup", "where": { "what": "mesh" }, "routes": ["mesh.get"] }] },
     { "row": "X14", "editions": ["magnusim"], "paths": [{ "tool": "wait", "routes": ["mesh.get"] }, { "tool": "read_setup", "where": { "what": "mesh" }, "routes": ["mesh.get"] }] },
-    { "row": "X15", "editions": ["magnusim"], "paths": [{ "tool": "read_setup", "where": { "what": "refinements" }, "routes": ["refinements.get"] }] },
+    { "row": "X15", "editions": ["magnusim"], "paths": [{ "tool": "read_setup", "where": { "what": "refinements" }, "routes": ["refinements.get", "mesh.get", "registry.get"] }], "notes": "each Surface custom sizing row carries the refinement editor's note under Refine out to when its mesh's mesher ignores it (mesh.get, registry.get)" },
     { "row": "X16", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "refinement", "action": ["add", "update", "assign", "unassign"] }, "routes": ["refinements.upsert"] }] },
     { "row": "X17", "editions": ["magnusim"], "paths": [{ "tool": "delete", "where": { "kind": "refinement" }, "routes": ["refinements.delete"] }] },
     { "row": "X18", "editions": ["magnusim"], "paths": [{ "tool": "setup_edit", "where": { "kind": "refinement", "action": "copy_from" }, "routes": ["refinements.copy"] }] },

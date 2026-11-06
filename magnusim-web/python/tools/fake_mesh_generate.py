@@ -12,9 +12,17 @@ the record's end), quickly and the same on every PC.
 
 MAGNUSIM_TEST_MESH_SECONDS: how long it "meshes" (0 to 600 s).
 MAGNUSIM_TEST_MESH_RESULT=fail: it ends failed ("Fake mesher failed"), exit 1.
+MAGNUSIM_TEST_MESH_RESULT=fail-with-mesh: it writes its mesh (as every real mesher copies its
+polyMesh back whatever its exit), then ends failed ("Fake mesher failed after writing its
+mesh"), exit 44.
 MAGNUSIM_TEST_MESH_CHECKMESH=<file>: a real checkMesh report it puts in the case as
 log.checkMesh; like the real generators it then writes the mesh's facts
 (cfddesk.mesh.facts) and its result carries their quality.
+
+With ``--one-cell-across 1`` (Hex-dominant's One cell across, 2D) it first asks the real rule
+(tools/mesh_two_d.py): a part that can't be meshed so fails with Generate's words, as
+generate_snappy.py does; one that can ends as a 2D mesh's result (``one_cell_across``,
+``two_d``) and its meta says so (the facts' ``two_d``).
 """
 from __future__ import annotations
 
@@ -56,18 +64,21 @@ def _write(path: Path, cls: str, obj: str, body: str, note: str = "") -> None:
 
 def bc_patch_names(project_dir: str, simulation_id: str, mesh_id: str) -> list[str]:
     """The patches the study's boundary conditions mesh under, named as the real generators
-    name them (web_bc_patch_name), so a run's checks find a patch for each. [] when unknown."""
+    name them (web_bc_patch_name, slugified as the project model's allocate_patch_name does:
+    "Lid" meshes as "lid"), so a run's checks find a patch for each. [] when unknown."""
     if not project_dir:
         return []
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from cfddesk.case.bc_registry import sanitize_patch_name
         from cfddesk.project.web_adapter import study_web_bcs, web_bc_mesh_entry, web_bc_patch_name
 
         names: list[str] = []
         for bc in study_web_bcs(project_dir, None, simulation_id=simulation_id or None, mesh_id=mesh_id or None):
             reg_key, _settings = web_bc_mesh_entry(bc)
-            name = web_bc_patch_name(bc, reg_key)
-            if name and name not in names and name != "walls":
+            raw = web_bc_patch_name(bc, reg_key)
+            name = sanitize_patch_name(raw, set(names)) if raw else ""
+            if name and name != "walls":
                 names.append(name)
         return names
     except Exception:
@@ -104,16 +115,31 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--project-dir", default="")
     parser.add_argument("--simulation-id", default="")
     parser.add_argument("--mesh-id", default="")
+    parser.add_argument("--one-cell-across", type=int, default=0)
     args, _rest = parser.parse_known_args(argv)
     case_dir = Path(args.case_dir)
     case_dir.mkdir(parents=True, exist_ok=True)
+    two_d = None
+    if args.one_cell_across:
+        # mesh_two_d puts this checkout's cfddesk and SDK first on the path.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from mesh_two_d import study_two_d
+
+        from cfddesk.mesh.two_d import refusal_words
+
+        answer = study_two_d(args.project_dir, args.simulation_id)
+        if not answer.get("available"):
+            _event("result", ok=False, error=refusal_words(str(answer.get("reason") or "")))
+            return 1
+        two_d = answer["two_d"]
     per_stage = _seconds() / len(STAGES)
     for stage in STAGES:
         _event("progress", stage=stage, msg="fake mesher (tests)")
         end = time.monotonic() + per_stage
         while time.monotonic() < end:
             time.sleep(min(0.1, max(0.0, end - time.monotonic())))
-    if os.environ.get("MAGNUSIM_TEST_MESH_RESULT", "").strip() == "fail":
+    result = os.environ.get("MAGNUSIM_TEST_MESH_RESULT", "").strip()
+    if result == "fail":
         _event("result", ok=False, error="Fake mesher failed")
         return 1
     counts = write_one_cell_mesh(case_dir, bc_patch_names(args.project_dir, args.simulation_id, args.mesh_id))
@@ -121,8 +147,20 @@ def main(argv: list[str]) -> int:
         json.dumps({**counts, "generate_id": args.generate_id, "source": "fake mesher"}), encoding="utf-8"
     )
     (case_dir / "log.standard_generate.txt").write_text("fake mesher (tests)\nMESH_SCRIPT_OK\n", encoding="utf-8")
+    if result == "fail-with-mesh":
+        _event("result", ok=False, error="Fake mesher failed after writing its mesh")
+        return 44
+    if two_d is not None:
+        (case_dir / "w23-geometry-meta.json").write_text(json.dumps({"source": "fake mesher", "two_d": two_d}), encoding="utf-8")
     quality = mesh_facts(case_dir, os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip())
-    _event("result", ok=True, counts_source="fake mesher", **counts, **({"quality": quality} if quality else {}))
+    _event(
+        "result",
+        ok=True,
+        counts_source="fake mesher",
+        **counts,
+        **({"quality": quality} if quality else {}),
+        **({"one_cell_across": True, "two_d": two_d} if two_d is not None else {}),
+    )
     return 0
 
 

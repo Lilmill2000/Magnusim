@@ -178,6 +178,15 @@ describe('readSetupTree job marks', () => {
     expect(again.meshes.find((m) => m.id === 'mesh_2')?.failed).toBeUndefined();
   });
 
+  it('a failed generate whose case holds the mesh it copied back is Failed, never ready', () => {
+    // Every mesher copies its polyMesh back whatever its exit, and the failed record keeps the
+    // case's cells (w21-mesh-generate.js): the panel says Mesh failed, so the tree does too.
+    const doc = treeDoc();
+    Object.assign(doc.geometries![0].studies![0].meshes![1], { live_status: 'failed', case_dir: '/mesh2/case', n_cells: 1765 });
+    const idle = readSetupTree(doc, activity({ kind: null, mesh_id: null })).geoms[0].studies[0];
+    expect(idle.meshes.find((m) => m.id === 'mesh_2')).toMatchObject({ busy: false, ready: false, failed: true });
+  });
+
   it('marks a mesh whose last generate was stopped, and never while it generates again', () => {
     const doc = treeDoc();
     doc.geometries![0].studies![0].meshes![1].live_status = 'stopped';

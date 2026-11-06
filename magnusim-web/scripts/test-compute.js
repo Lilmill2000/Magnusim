@@ -6,7 +6,7 @@
  *
  * - Meshes: python/tools/fake_mesh_generate.py runs in place of the engine's generator,
  *   with the same arguments, through the same live job, compute slot and queue
- *   (MAGNUSIM_TEST_MESH_SECONDS, MAGNUSIM_TEST_MESH_RESULT=fail).
+ *   (MAGNUSIM_TEST_MESH_SECONDS, MAGNUSIM_TEST_MESH_RESULT=fail or fail-with-mesh).
  * - The hardware check (Settings > This PC): each probe is a Node process that answers
  *   after MAGNUSIM_TEST_HW_PROBE_MS (default 1500), as a slow WSL does, with a plausible PC.
  * - Solves: test-solve.js, after every check a real Start makes.

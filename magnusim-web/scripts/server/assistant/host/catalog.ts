@@ -54,6 +54,9 @@ export const REFINEMENT_FIELDS: Readonly<Record<string, Field[]>> = Object.freez
     field('default_size_unit', 'string', 'Element size unit', { enum: ['mm', 'm', 'in'] }),
     field('min_size', 'number', 'Minimum size', { min: 0 }),
     field('min_size_unit', 'string', 'Minimum size unit', { enum: ['mm', 'm', 'in'] }),
+    // Validation gap G4 (src/panels/mesh/reach.ts): used by Hex-dominant; Standard and cfMesh ignore it.
+    field('reach', 'number', 'Refine out to', { min: 0, unitKey: 'reach_unit', description: 'how far from the faces the cells keep this size (Hex-dominant only); null or 0 = about 3 cells of it' }),
+    field('reach_unit', 'string', 'Refine out to unit', { enum: ['mm', 'm', 'in'] }),
   ],
   'Inflate boundary layer': [
     field('n_layers', 'integer', 'Layers', { min: 1, max: 50 }),

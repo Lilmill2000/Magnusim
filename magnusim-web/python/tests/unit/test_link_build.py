@@ -22,6 +22,7 @@ from cfddesk.project.paths import (
     create_mesh_folder,
     create_run_folder,
     create_study_folder,
+    find_geometry,
     find_mesh,
     find_run,
 )
@@ -192,6 +193,14 @@ def test_face_properties_come_from_the_studys_own_geometry(tmp_path: Path) -> No
     assert set(demo) == {"face 1@Body1", "face 2@Body1"}
     plate = load_face_props(root, "g-plate")
     assert plate["face 1@Body1"]["area_m2"] == 4.0
+    # Flat or not, from the face table's surface type (none in these tables: unknown).
+    assert plate["face 1@Body1"]["planar"] is None
+    table = Path(find_geometry(root, "g-plate")["dir"]) / "cad_preview.json"
+    _write(table, {"faces": [{"id": 1, "area": 4.0, "surface_type": "Plane"}, {"id": 2, "area": 1.0, "surface_type": "Cylinder"},
+                             {"id": 3, "area": 1.0, "surface_type": "unknown"}], "bodies": ["Body1"], "faces_length_unit": "m"})
+    flat = load_face_props(root, "g-plate")
+    assert [flat[f"face {i}@Body1"]["planar"] for i in (1, 2, 3)] == [True, False, None]
+    _write(table, {"faces": [{"id": 1, "area": 4.0, "centroid": [1, 1, 1]}], "bodies": ["Body1"], "faces_length_unit": "m"})
     # A run's inputs (the case writer's face areas) take the study's own geometry.
     ri = gather_run_inputs(root, run_id="r1", simulation_id="s-demo", require_mesh=False)
     assert ri.face_props["face 1@Body1"]["area_m2"] == 9.0

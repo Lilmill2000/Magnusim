@@ -44,6 +44,8 @@ PIMPLE
     nNonOrthogonalCorrectors 0;
     turbOnFinalIterOnly yes;
     consistent          no;
+    pRefCell            0;
+    pRefValue           0;
 }
 relaxationFactors
 {

@@ -165,9 +165,17 @@ def boundary_patches(
     base_m: float | None = None,
     walls_level: int = 1,
     add_layers: bool = False,
+    one_cell_across: bool = False,
+    fineness: int = 5,
 ) -> dict:
     """BC patches as one STL each in ``tri_dir``, a point inside the fluid, and
     the mesh's refinements.
+
+    ``one_cell_across`` (2D, ``cfddesk.mesh.two_d``): the part's plan, or a refusal that says
+    why (RuntimeError). The surfaces are the side faces only, stretched past both ends
+    (``two_d.stretched``; ``Body1.stl``, the feature edges' source, too): the end faces are the
+    background block's own patches. The background cell is the section's (``base_m`` from
+    ``fineness``).
 
     Same face -> patch map as the Standard mesher (``generate_standard``): the
     study's BCs, each Inflate boundary layer's faces on their own wall patch,
@@ -189,6 +197,7 @@ def boundary_patches(
     from cfddesk.cad.step import load_step, tessellate_faces
     from cfddesk.mesh.gmsh_standard import _face_to_patch_map, emitted_patch_types
     from cfddesk.mesh.snappy_hexdominant import (
+        refine_distance_m,
         refinement_level_for_size,
         write_patch_stls,
         write_refine_stls,
@@ -237,6 +246,21 @@ def boundary_patches(
     if refusal:
         raise RuntimeError(refusal)
     project = _apply_web_bcs(project, web_bcs, n_faces)
+    plan = None
+    if one_cell_across:
+        from cfddesk.mesh import two_d
+
+        plan = (
+            "The study meshes several regions (its materials): one cell across meshes one region."
+            if mesh_regs is not None
+            else two_d.plan_two_d(solid, scale, two_d.bc_faces_of(web_bcs, n_faces), _face_to_patch_map(project), bodies=bodies_of)
+        )
+        if isinstance(plan, str):
+            raise RuntimeError(two_d.refusal_words(plan))
+        lo, hi = pts_m.min(axis=0), pts_m.max(axis=0)
+        section = {f"{c}min": float(lo[k]) for k, c in enumerate("xyz")} | {f"{c}max": float(hi[k]) for k, c in enumerate("xyz")}
+        base_m = base_cell_size(int(fineness), section, two_d_axis=plan.axis)
+        h_wall_m = (base_m or diag_m / 20.0) / (2 ** max(0, int(walls_level)))
     sizes, _mins, size_notes = load_surface_custom_sizes(project_dir, mesh_id, n_faces, diag_m)
     inflates = load_inflate_refs(project_dir, mesh_id, n_faces, h_wall_m, extra_face_sizes=sizes)
     drop_inside_faces(excluded, sizes, _mins, size_notes, inflates)
@@ -246,9 +270,18 @@ def boundary_patches(
     else:
         project = _add_region_walls(project, leftover_faces(project, n_faces, excluded), mesh_regs, bodies_of)
     patch_types = emitted_patch_types(project)
-    patches = write_patch_stls(
-        tri_dir, pts_m, tris, fids, _face_to_patch_map(project), patch_types, inside=excluded
-    )
+    surf_pts, leave_out = pts_m, dict(excluded)
+    if plan is not None:
+        # One cell across: the side faces only, stretched past both ends (the ends are the
+        # background block's own patches), and the feature edges from them.
+        from cfddesk.mesh.snappy_hexdominant import write_binary_stl
+
+        ends = {int(f): int(f) for f in (*plan.front_faces, *plan.back_faces)}
+        leave_out.update(ends)
+        surf_pts = two_d.stretched(pts_m, plan.axis, plan.lo_m, plan.hi_m)
+        side = ~np.isin(np.asarray(fids, dtype=np.int64), np.asarray(sorted(ends), dtype=np.int64))
+        write_binary_stl(tri_dir / "Body1.stl", surf_pts, np.asarray(tris, dtype=np.int64)[side], "Magnusim 2D side faces")
+    patches = write_patch_stls(tri_dir, surf_pts, tris, fids, _face_to_patch_map(project), patch_types, inside=leave_out)
     interfaces: list[dict[str, str]] = []
     locations = None
     if mesh_regs is not None:
@@ -282,19 +315,25 @@ def boundary_patches(
                 "face_ids": n["face_ids"],
                 "size_m": float(n["size_m"]),
                 "level": refinement_level_for_size(base_m, float(n["size_m"])),
-                # Refine about three target cells out from the faces.
-                "distance_m": 3.0 * float(n["size_m"]),
+                # About three target cells out from the faces, or out to its Refine out to.
+                "distance_m": refine_distance_m(float(n["size_m"]), n.get("reach_m")),
+                **({"reach_m": float(n["reach_m"])} if n.get("reach_m") else {}),
                 "source": n.get("name"),
             }
             for n in size_notes
         ]
-        regions = write_refine_stls(tri_dir, pts_m, tris, fids, groups)
+        regions = write_refine_stls(tri_dir, surf_pts, tris, fids, groups)
     # A mesh of several regions is placed by its regions' points (locationsInMesh); the
     # part's own point would be found by classifying the whole compound, which fails for
     # some parts of several bodies (a body after the first read as outside).
     location_m = locations[0][0] if locations else find_location_in_mesh(solid, scale).point_metres
     return {
         "patches": patches,
+        "two_d": (
+            {**plan.summary(), "axis": plan.axis, "base_m": base_m, "front_patch": plan.front_patch, "back_patch": plan.back_patch}
+            if plan is not None
+            else None
+        ),
         "locations": locations,
         "interfaces": interfaces,
         "mesh_regions": mesh_regs.summary() if mesh_regs is not None else [],
@@ -304,10 +343,24 @@ def boundary_patches(
         "refine_regions": regions,
         "inflate": inflate_notes(inflates),
         "surface_custom": [
-            {"name": r.get("source"), "size_m": r["size_m"], "level": r["level"], "faces": len(r["face_ids"])}
+            {
+                "name": r.get("source"),
+                "size_m": r["size_m"],
+                "level": r["level"],
+                "faces": len(r["face_ids"]),
+                **({"distance_m": r["distance_m"], "reach_m": r["reach_m"]} if r.get("reach_m") else {}),
+            }
             for r in regions
         ],
     }
+
+
+def _two_d_record(two_d: dict) -> dict:
+    """A 2D mesh's plan as its record keeps it (no internal sizes)."""
+    keep = ("depth_m", "cells_across", "front", "back")
+    out = {k: two_d[k] for k in keep if k in two_d}
+    out["axis"] = "xyz"[int(two_d["axis"])] if isinstance(two_d.get("axis"), int) else two_d.get("axis")
+    return out
 
 
 class _AutoLayers:
@@ -333,6 +386,12 @@ def main() -> int:
     p.add_argument("--fineness", type=int, default=5)
     p.add_argument("--add-layers", type=int, default=0)
     p.add_argument("--physics-based", type=int, default=1)
+    p.add_argument(
+        "--one-cell-across",
+        type=int,
+        default=0,
+        help="One cell across (2D): mesh the part between its two Symmetry end faces one cell deep.",
+    )
     p.add_argument(
         "--legacy-markers",
         action="store_true",
@@ -435,6 +494,8 @@ def main() -> int:
             base_m=base_cell_size(int(args.fineness), bounds),
             walls_level=params["walls_level"],
             add_layers=add_layers,
+            one_cell_across=bool(int(args.one_cell_across)),
+            fineness=int(args.fineness),
         )
         patches, location_m = prep["patches"], prep["location_m"]
         _progress(
@@ -466,7 +527,10 @@ def main() -> int:
             refine_regions=prep["refine_regions"],
             locations=prep.get("locations"),
             interfaces=prep.get("interfaces"),
+            two_d=prep.get("two_d"),
         )
+        # One cell across: the background the dictionaries were written with (two_d.background).
+        params["block"] = meta["block"]
         meta_doc = {
             "increment": "W25",
             "project_id": project_dir.name,
@@ -561,7 +625,7 @@ def main() -> int:
         (case_dir / "w21-counts.json").write_text(
             json.dumps(counts, indent=2), encoding="utf-8"
         )
-        marks = read_feature_marks(case_dir / "log.snappyHexMesh")
+        marks = read_feature_marks(case_dir / "log.snappyHexMesh", distance=bool(prep.get("two_d")))
         (case_dir / "w21-feature-marks.json").write_text(
             json.dumps(marks, indent=2), encoding="utf-8"
         )
@@ -602,6 +666,8 @@ def main() -> int:
             snap=params["snap"],
             snappy_geometry_rev=params["snappy_geometry_rev"],
             generate_id=generate_id,
+            # One cell across (2D): what the Mesh panel's summary and the record say.
+            **({"one_cell_across": True, "two_d": _two_d_record(prep["two_d"])} if prep.get("two_d") else {}),
             wsl_case=wsl_case,
             case_dir=str(case_dir),
             **mesh_input,

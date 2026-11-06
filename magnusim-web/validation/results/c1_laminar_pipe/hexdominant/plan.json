@@ -1,0 +1,416 @@
+{
+ "schema": "magnusim-validation-plan/1",
+ "case": "c1_laminar_pipe",
+ "variant": "hexdominant",
+ "title": "Laminar pipe, Re = 100, Hex-dominant",
+ "coarse": false,
+ "geometry": {
+  "file": "geometry.step",
+  "sha256": "83c4456cecce31ad678d7bb2edefee22252267c934dcd91ad2524ad7a15fee77",
+  "units": "mm",
+  "builder": "pipe, D = 20 mm, L = 300 mm (15 D) along +x from x = 0",
+  "faces": [
+   {
+    "id": 1,
+    "body": 1,
+    "area_mm2": 18849.555922,
+    "centroid_mm": [
+     150.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     -1.0
+    ],
+    "surface_type": "Cylinder"
+   },
+   {
+    "id": 2,
+    "body": 1,
+    "area_mm2": 314.159265,
+    "centroid_mm": [
+     300.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 3,
+    "body": 1,
+    "area_mm2": 314.159265,
+    "centroid_mm": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     -1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   }
+  ],
+  "selectors": {
+   "inlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 0.0,
+     "sign": -1
+    }
+   },
+   "outlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 300.0,
+     "sign": 1
+    }
+   },
+   "wall": {
+    "rest": true,
+    "count": 1
+   }
+  },
+  "labels": {
+   "inlet": [
+    "face 3@Body1"
+   ],
+   "outlet": [
+    "face 2@Body1"
+   ],
+   "wall": [
+    "face 1@Body1"
+   ]
+  }
+ },
+ "project": {
+  "title": "Validation c1_laminar_pipe hexdominant",
+  "description": "",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects"
+ },
+ "study": {
+  "analysis_type": "incompressible_steady",
+  "time_dependency": "Steady-state",
+  "name": "c1_laminar_pipe hexdominant",
+  "settings": {
+   "turbulence_model": "laminar",
+   "numerics_preset": "accurate",
+   "residual_u": 1e-06,
+   "residual_p": 1e-06,
+   "n_non_orthogonal": 1
+  }
+ },
+ "material": {
+  "preset": "custom",
+  "name": "Validation fluid",
+  "kinematic_viscosity": 0.0002,
+  "density": 1.0,
+  "assigned_volumes": [
+   "Body1"
+  ]
+ },
+ "bcs": [
+  {
+   "name": "Inlet",
+   "bc_type": "Velocity inlet",
+   "velocity_type": "Fixed",
+   "value": 1.0,
+   "unit": "m/s",
+   "direction": "Normal to face",
+   "faces": [
+    "face 3@Body1"
+   ]
+  },
+  {
+   "name": "Outlet",
+   "bc_type": "Pressure",
+   "pressure_type": "Fixed value",
+   "value": 0,
+   "unit": "Pa",
+   "faces": [
+    "face 2@Body1"
+   ]
+  },
+  {
+   "name": "Pipe wall",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 1@Body1"
+   ]
+  }
+ ],
+ "mesh": {
+  "name": "Mesh 1",
+  "settings": {
+   "fineness": 6,
+   "automatic_boundary_layers": false,
+   "physics_based_meshing": true,
+   "hex_element_core": true,
+   "advanced": {
+    "mesh_engine": "snappy_hexdominant"
+   }
+  },
+  "refinements": [
+   {
+    "name": "Wall layers",
+    "type": "Inflate boundary layer",
+    "faces": [
+     "face 1@Body1"
+    ],
+    "n_layers": 4,
+    "total_thickness": 1.0,
+    "total_thickness_unit": "mm"
+   }
+  ],
+  "expect": {
+   "layers": true,
+   "n_cells": [
+    20000,
+    400000
+   ]
+  },
+  "estimate": {
+   "mesher": "snappy_hexdominant",
+   "fineness": 6,
+   "bounds_mm": [
+    0.0,
+    300.0,
+    -10.0,
+    10.0,
+    -10.0,
+    10.0
+   ],
+   "block": [
+    67,
+    8,
+    12
+   ],
+   "base_cell_mm": [
+    5.9552,
+    3.325,
+    2.2167
+   ],
+   "walls_level": 2,
+   "wall_cell_mm": [
+    1.4888,
+    0.8313,
+    0.5542
+   ],
+   "custom_sizes": [],
+   "layers": [
+    {
+     "name": "Wall layers",
+     "n_layers": 4,
+     "stack_mm": 1.0,
+     "smallest_wall_cell_mm": 0.5542,
+     "stack_over_smallest_cell": 1.805
+    }
+   ],
+   "n_cells": 163000,
+   "n_cells_note": "an order of magnitude (1.3 to 1.4 times case 1's real meshes), not a prediction",
+   "warnings": []
+  }
+ },
+ "run": {
+  "name": "Validation",
+  "endTime": 3000,
+  "writeInterval": 3000,
+  "cores": 4,
+  "result_controls": [
+   {
+    "id": "rc-centreline",
+    "name": "Centreline",
+    "monitor_type": "probe",
+    "kind": "Point probe",
+    "category": "Point data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "points": [
+     [
+      0.02,
+      0.0,
+      0.0
+     ],
+     [
+      0.04,
+      0.0,
+      0.0
+     ],
+     [
+      0.06,
+      0.0,
+      0.0
+     ],
+     [
+      0.08,
+      0.0,
+      0.0
+     ],
+     [
+      0.1,
+      0.0,
+      0.0
+     ],
+     [
+      0.12,
+      0.0,
+      0.0
+     ],
+     [
+      0.14,
+      0.0,
+      0.0
+     ],
+     [
+      0.16,
+      0.0,
+      0.0
+     ],
+     [
+      0.18,
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.0,
+      0.0
+     ],
+     [
+      0.22,
+      0.0,
+      0.0
+     ],
+     [
+      0.24,
+      0.0,
+      0.0
+     ],
+     [
+      0.26,
+      0.0,
+      0.0
+     ],
+     [
+      0.28,
+      0.0,
+      0.0
+     ]
+    ]
+   }
+  ]
+ },
+ "extract": [
+  {
+   "key": "cells_window",
+   "kind": "cells",
+   "fields": [
+    "U"
+   ],
+   "box_m": [
+    [
+     0.2,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.26,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
+   "key": "wall_shear",
+   "kind": "patch",
+   "patch": "pipe_wall",
+   "field": "wallShearStress",
+   "box_m": [
+    [
+     0.2,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.26,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
+   "key": "p_axis",
+   "kind": "line",
+   "field": "p",
+   "points_m": [
+    [
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.3,
+     0.0,
+     0.0
+    ]
+   ],
+   "subdivisions": 300
+  },
+  {
+   "key": "u_axis",
+   "kind": "line",
+   "field": "U",
+   "points_m": [
+    [
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.3,
+     0.0,
+     0.0
+    ]
+   ],
+   "subdivisions": 300
+  },
+  {
+   "key": "u_radial",
+   "kind": "line",
+   "field": "U",
+   "points_m": [
+    [
+     0.24,
+     -0.01,
+     0.0
+    ],
+    [
+     0.24,
+     0.01,
+     0.0
+    ]
+   ],
+   "subdivisions": 100
+  }
+ ],
+ "flow_patch": "inlet",
+ "timeouts_s": {
+  "mesh": 1800,
+  "solve": 5400
+ }
+}

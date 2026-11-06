@@ -9,6 +9,8 @@
  */
 import { continuePendingKeys, runEditState, runSettingsWord } from '../../../../src/workbench/runReopen.ts';
 import { meshQualityLines, meshQualityOf } from '../../../../src/panels/mesh/meshQuality.ts';
+import { twoDNote, type TwoDAnswer } from '../../../../src/panels/mesh/twoD.ts';
+import { reachNote } from '../../../../src/panels/mesh/reach.ts';
 import type { ToolOutcome, ToolRunContext } from '../registry.ts';
 import { cleanText } from '../sanitize.ts';
 import { meshFields, REFINEMENT_FIELDS, studyFields } from './catalog.ts';
@@ -247,20 +249,39 @@ export function readSetupTool(d: HostToolDeps): HostToolDef {
             const flat = dotted(settings);
             const shown: Record<string, unknown> = {};
             for (const f of meshFields(registry, engine)) if (flat[f.key] !== undefined) shown[f.key] = flat[f.key];
+            // One cell across (2D) on: the Mesh panel's note under it, from the same answer.
+            const twoD = shown['mesher_settings.one_cell_across'] === true ? twoDAnswer(await d.hostCall('mesh.two_d', q, o)) : null;
             return okData(
               {
                 ...meshRow(row, str(doc.active_id)),
                 settings: shown,
                 quality: meshQualityAnswer(rec.live_mesh_result),
+                ...(twoD ? { two_d: twoD } : {}),
               },
               `Mesh ${quoted(rec.name ?? settings.name)}`,
             );
           }
           case 'refinements': {
-            const doc = (await d.hostCall('refinements.get', q, o)) as Record<string, unknown>;
+            const [doc, meshDoc, registry] = await Promise.all([
+              d.hostCall('refinements.get', q, o) as Promise<Record<string, unknown>>,
+              d.hostCall('mesh.get', q, o) as Promise<Record<string, unknown>>,
+              d.hostCall('registry.get', {}, o) as Promise<Record<string, unknown>>,
+            ]);
+            // Each mesh's mesher: a Surface custom sizing's Refine out to is used by Hex-dominant
+            // only, and its row says so as the refinement editor does (src/panels/mesh/reach.ts).
+            const meshes = [...records(meshDoc.meshes), ...records(meshDoc.meshes_all)];
+            const meshers = records(registry.mesher);
+            const noteOf = (r: Record<string, unknown>): string => {
+              if (str(r.type) !== 'Surface custom sizing') return '';
+              const m = meshes.find((x) => x.id === r.mesh_id);
+              if (!m) return '';
+              const settings = isRecord(m.settings) ? m.settings : {};
+              const engine = str(m.ui_mesh_engine) || str(isRecord(settings.advanced) ? settings.advanced.mesh_engine : '') || 'standard';
+              return reachNote(meshers.find((x) => x.key === engine) ?? null, engine);
+            };
             const list = records(doc.refinements)
               .filter((r) => !id || r.mesh_id === id)
-              .map((r) => refinementRow(r));
+              .map((r) => refinementRow(r, noteOf(r)));
             return okData({ refinements: list }, `${list.length} refinements`);
           }
           case 'runs': {
@@ -358,6 +379,31 @@ export function meshQualityAnswer(live: unknown): Record<string, unknown> | null
   };
 }
 
+/**
+ * One cell across (2D) as the Mesh panel's note says it (twoD.ts, GET /api/mesh/two-d): whether
+ * the part can be meshed so and how (axis, depth, the two ends' faces and Symmetry), or why not
+ * (Generate refuses with the same reason), and the note's words.
+ */
+export function twoDAnswer(raw: unknown): Record<string, unknown> {
+  const a = isRecord(raw) ? (raw as TwoDAnswer) : { ok: false, error: 'no answer' };
+  const t = isRecord(a.two_d) ? (a.two_d as NonNullable<TwoDAnswer['two_d']>) : null;
+  return {
+    available: a.ok !== false && a.available === true,
+    ...(a.ok === false ? { error: text(a.error, 400) } : {}),
+    ...(a.ok !== false && !a.available ? { reason: text(a.reason, 400) } : {}),
+    ...(t
+      ? {
+          axis: text(t.axis, 4),
+          depth_m: num(t.depth_m),
+          cells_across: num(t.cells_across),
+          front: { faces: (t.front?.faces || []).map((f) => text(f, 40)), bc: text(t.front?.bc, 80) },
+          back: { faces: (t.back?.faces || []).map((f) => text(f, 40)), bc: text(t.back?.bc, 80) },
+        }
+      : {}),
+    note: twoDNote(a),
+  };
+}
+
 export function meshRow(m: Record<string, unknown>, activeId: string): Record<string, unknown> {
   const settings = isRecord(m.settings) ? m.settings : {};
   const live = isRecord(m.live_mesh_result) ? m.live_mesh_result : {};
@@ -369,13 +415,16 @@ export function meshRow(m: Record<string, unknown>, activeId: string): Record<st
       status: text(m.status ?? (m.generated ? 'done' : 'not generated'), 20),
       cells: num(m.n_cells) ?? num(live.n_cells),
       points: num(m.n_points) ?? num(live.n_points),
+      // A mesh made one cell across (2D): its summary in the Mesh panel says so.
+      ...(live.one_cell_across === true ? { one_cell_across: true } : {}),
     },
     active: m.id === activeId,
     ...(revOf(m) !== null ? { rev: revOf(m) } : {}),
   };
 }
 
-export function refinementRow(r: Record<string, unknown>): Record<string, unknown> {
+/** A refinement as read_setup gives it; `note`: what its editor says under a field (Refine out to). */
+export function refinementRow(r: Record<string, unknown>, note = ''): Record<string, unknown> {
   const type = str(r.type);
   const fields = REFINEMENT_FIELDS[type] ?? [];
   const values: Record<string, unknown> = {};
@@ -387,6 +436,7 @@ export function refinementRow(r: Record<string, unknown>): Record<string, unknow
     mesh_id: text(r.mesh_id, 80),
     faces: Array.isArray(r.faces) ? r.faces.map((f) => text(f, 40)) : [],
     values,
+    ...(note ? { note: text(note, 300) } : {}),
     ...(revOf(r) !== null ? { rev: revOf(r) } : {}),
   };
 }

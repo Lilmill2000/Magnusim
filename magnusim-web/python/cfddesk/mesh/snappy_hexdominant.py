@@ -33,15 +33,35 @@ def walls_level_for_settings(fineness: int, *, physics_based: bool = True) -> in
     return int(physics_refinement_for_fineness(f).walls)
 
 
-def base_cell_size(fineness: int, bounds_m: dict[str, float] | None) -> float | None:
-    """Background (level 0) cell size in metres, or None without bounds."""
+def base_cell_size(fineness: int, bounds_m: dict[str, float] | None, *, two_d_axis: int | None = None) -> float | None:
+    """Background (level 0) cell size in metres, or None without bounds.
+
+    One cell across (2D, ``two_d_axis`` the depth's axis): the part's section diagonal, its
+    box without the depth, over the fineness's cells across (``two_d.inplane_base``)."""
     if not bounds_m or not all(k in bounds_m for k in ("xmin", "xmax", "ymin", "ymax", "zmin", "zmax")):
         return None
+    if two_d_axis is not None:
+        from cfddesk.mesh.two_d import inplane_base
+
+        return inplane_base(cells_across(clamp_fineness(fineness)), bounds_m, int(two_d_axis))
     dx = abs(float(bounds_m["xmax"]) - float(bounds_m["xmin"]))
     dy = abs(float(bounds_m["ymax"]) - float(bounds_m["ymin"]))
     dz = abs(float(bounds_m["zmax"]) - float(bounds_m["zmin"]))
     diag = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
     return max(1e-5, min(1.0, diag / cells_across(clamp_fineness(fineness))))
+
+
+# A Surface custom sizing refines this many cells of its size out from its faces, unless its
+# Refine out to reaches further (``refine_distance_m``).
+DEFAULT_BAND_CELLS = 3
+
+
+def refine_distance_m(size_m: float, reach_m: float | None = None) -> float:
+    """How far from a Surface custom sizing's faces its cells are refined to its level (the
+    distance of its refinement region): its Refine out to (validation gap G4), but never less
+    than the default band of ``DEFAULT_BAND_CELLS`` cells of its size."""
+    band = DEFAULT_BAND_CELLS * float(size_m)
+    return max(float(reach_m), band) if reach_m and reach_m > 0 else band
 
 
 def refinement_level_for_size(base_m: float, size_m: float, *, max_level: int = 8) -> int:
@@ -268,8 +288,9 @@ def write_refine_stls(
 ) -> list[dict[str, Any]]:
     """One refinement-only STL per Surface custom sizing group.
 
-    ``groups`` rows carry ``face_ids``, ``level`` and ``distance_m``; the
-    returned rows add ``name`` / ``file`` for ``write_hexdominant_dicts``.
+    ``groups`` rows carry ``face_ids``, ``level`` and ``distance_m`` (and ``reach_m``, the Refine
+    out to asked, when there is one); the returned rows add ``name`` / ``file`` for
+    ``write_hexdominant_dicts``.
     These surfaces only drive ``refinementRegions``; they make no patch.
     """
     import numpy as np
@@ -353,6 +374,7 @@ def write_hexdominant_dicts(
     refine_regions: list[dict[str, Any]] | None = None,
     locations: list[tuple[tuple[float, float, float], str]] | None = None,
     interfaces: list[dict[str, str]] | None = None,
+    two_d: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write blockMeshDict / snappyHexMeshDict / surfaceFeatureExtractDict on host.
 
@@ -370,6 +392,14 @@ def write_hexdominant_dicts(
     request with per-patch layers (Inflate boundary layer + Automatic BL);
     ``refine_regions`` (``write_refine_stls``) refines cells near Surface
     custom sizing faces to the level that meets the requested size.
+
+    ``two_d`` (one cell across, ``cfddesk.mesh.two_d``: ``axis``, ``lo_m``, ``hi_m``,
+    ``base_m``, ``front_patch``, ``back_patch``): the background is the part's depth, one cell
+    deep, its ends the patches ``two_d.FRONT`` / ``BACK`` (``two_d.background``, in place of
+    ``block``; ``patches`` are then the side faces only, stretched past both ends), the point
+    inside the mesh sits off every refinement level's cell faces along the depth, and
+    ``extrudeMeshDict`` and ``createPatchDict`` make the 2D mesh from the 3D slab
+    (snappy_hexdominant.sh).
     """
     case_dir = Path(case_dir)
     system = case_dir / "system"
@@ -379,6 +409,26 @@ def write_hexdominant_dicts(
     verts, loc = _padded_box(bounds_m)
     if location_m is not None:
         loc = tuple(float(v) for v in location_m)
+    block_boundary = ""
+    feature_line = f"            level {int(feature_level)};"
+    if two_d is not None:
+        from cfddesk.mesh import two_d as _2d
+
+        axis = int(two_d["axis"])
+        lo, hi = float(two_d["lo_m"]), float(two_d["hi_m"])
+        verts, block, block_boundary = _2d.background(bounds_m, float(two_d["base_m"]), axis, lo, hi, _PAD)
+        moved = list(loc)
+        moved[axis] = lo + _2d.LOCATION_DEPTH * (hi - lo)
+        loc = (moved[0], moved[1], moved[2])
+        # The feature edges run past both ends of the block, so snappy's edge tracking (seeded
+        # at their end points) never starts: the cells within two feature-level cells of them
+        # are refined to that level instead (distance mode).
+        reach = 2.0 * float(two_d["base_m"]) / 2 ** int(feature_level)
+        feature_line = f"            levels (({reach:.6g} {int(feature_level)}));"
+        (system / "extrudeMeshDict").write_text(_2d.extrude_mesh_dict(hi - lo), encoding="utf-8")
+        (system / "createPatchDict").write_text(
+            _2d.create_patch_dict(str(two_d["front_patch"]), str(two_d["back_patch"])), encoding="utf-8"
+        )
     vert_lines = "\n".join(f"    ({v[0]:.8f} {v[1]:.8f} {v[2]:.8f})" for v in verts)
     bm = (
         _foam_header("blockMeshDict")
@@ -386,7 +436,7 @@ def write_hexdominant_dicts(
         + f"vertices\n(\n{vert_lines}\n);\n\n"
         + "blocks\n(\n"
         + f"    hex (0 1 2 3 4 5 6 7) {block} simpleGrading (1 1 1)\n"
-        + ");\n\nedges\n(\n);\n\nboundary\n(\n);\n\nmergePatchPairs\n(\n);\n"
+        + f");\n\nedges\n(\n);\n\nboundary\n(\n{block_boundary});\n\nmergePatchPairs\n(\n);\n"
     )
     (system / "blockMeshDict").write_text(bm, encoding="utf-8")
 
@@ -464,12 +514,16 @@ def write_hexdominant_dicts(
             "    minRefinementCells 0;",
             "    maxLoadUnbalance 0.10;",
             "    nCellsBetweenLevels 2;",
+            # One cell across: a background cell is the part's whole depth, its points all on
+            # the block's two ends; snappy would take each for a cell snapping squashes and
+            # baffle it off (every such cell a region of its own). Its ends are flat already.
+            *(["    handleSnapProblems false;"] if two_d is not None else []),
             "",
             "    features",
             "    (",
             "        {",
             '            file "cadFeatures.eMesh";',
-            f"            level {int(feature_level)};",
+            feature_line,
             "        }",
             "    );",
             "",
@@ -603,7 +657,13 @@ def write_hexdominant_dicts(
             {"patch": getattr(s, "name", ""), "n_layers": int(getattr(s, "n_layers", 0) or 0)} for s in specs
         ],
         "refinement_regions": [
-            {"name": r["name"], "level": int(r["level"]), "distance_m": float(r["distance_m"])} for r in regions
+            {
+                "name": r["name"],
+                "level": int(r["level"]),
+                "distance_m": float(r["distance_m"]),
+                **({"reach_m": float(r["reach_m"])} if r.get("reach_m") else {}),
+            }
+            for r in regions
         ],
         "snap": {
             "n_smooth_patch": snap_nsmooth,
@@ -614,6 +674,7 @@ def write_hexdominant_dicts(
         },
         "snappy_geometry_rev": int(SNAPPY_GEOMETRY_REV),
         "patches": [{"name": n, "type": t} for n, _f, t in surfaces],
+        **({"two_d": {k: v for k, v in two_d.items() if k not in ("labels",)}} if two_d is not None else {}),
         **(
             {
                 "locationsInMesh": [{"point": list(p), "region": name} for p, name in locations],
@@ -684,11 +745,11 @@ def read_polymesh_counts(case_dir: Path) -> dict[str, Any]:
     }
 
 
-def read_feature_marks(log_path: Path) -> dict[str, Any]:
+def read_feature_marks(log_path: Path, *, distance: bool = False) -> dict[str, Any]:
+    """The cells snappyHexMesh marked for its feature edges; with ``distance`` (one cell across,
+    whose features refine by distance) those marked by distance to them too."""
     text = Path(log_path).read_text(errors="ignore") if Path(log_path).is_file() else ""
-    marks = [
-        int(x)
-        for x in re.findall(r"Marked for refinement due to explicit features\s*:\s*(\d+)", text)
-    ]
+    pattern = r"Marked for refinement due to (?:distance to )?explicit features\s*:\s*(\d+)" if distance else r"Marked for refinement due to explicit features\s*:\s*(\d+)"
+    marks = [int(x) for x in re.findall(pattern, text)]
     total = sum(marks) if marks else 0
     return {"marks": marks, "total": total}

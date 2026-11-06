@@ -1,0 +1,357 @@
+{
+ "schema": "magnusim-validation-plan/1",
+ "case": "c2_turbulent_pipe",
+ "variant": "hexdominant_kepsilon",
+ "title": "Turbulent pipe, Re = 50 000, Hex-dominant, k-epsilon",
+ "coarse": false,
+ "geometry": {
+  "file": "geometry.step",
+  "sha256": "bb79d677a5cfa9d507b274aada0d09da12ac56016d56b9370fc276f7b697f474",
+  "units": "mm",
+  "builder": "pipe, D = 20 mm, L = 600 mm (30 D) along +x from x = 0",
+  "faces": [
+   {
+    "id": 1,
+    "body": 1,
+    "area_mm2": 37699.111843,
+    "centroid_mm": [
+     300.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     -1.0
+    ],
+    "surface_type": "Cylinder"
+   },
+   {
+    "id": 2,
+    "body": 1,
+    "area_mm2": 314.159265,
+    "centroid_mm": [
+     600.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 3,
+    "body": 1,
+    "area_mm2": 314.159265,
+    "centroid_mm": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     -1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   }
+  ],
+  "selectors": {
+   "inlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 0.0,
+     "sign": -1
+    }
+   },
+   "outlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 600.0,
+     "sign": 1
+    }
+   },
+   "wall": {
+    "rest": true,
+    "count": 1
+   }
+  },
+  "labels": {
+   "inlet": [
+    "face 3@Body1"
+   ],
+   "outlet": [
+    "face 2@Body1"
+   ],
+   "wall": [
+    "face 1@Body1"
+   ]
+  }
+ },
+ "project": {
+  "title": "Validation c2_turbulent_pipe hexdominant",
+  "description": "",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects"
+ },
+ "study": {
+  "analysis_type": "incompressible_steady",
+  "time_dependency": "Steady-state",
+  "name": "c2_turbulent_pipe hexdominant",
+  "settings": {
+   "turbulence_model": "kEpsilon",
+   "numerics_preset": "accurate",
+   "residual_u": 1e-05,
+   "residual_p": 1e-05,
+   "n_non_orthogonal": 1
+  }
+ },
+ "material": {
+  "preset": "custom",
+  "name": "Validation fluid",
+  "kinematic_viscosity": 4e-07,
+  "density": 1.0,
+  "assigned_volumes": [
+   "Body1"
+  ]
+ },
+ "bcs": [
+  {
+   "name": "Inlet",
+   "bc_type": "Velocity inlet",
+   "velocity_type": "Fixed",
+   "value": 1.0,
+   "unit": "m/s",
+   "direction": "Normal to face",
+   "faces": [
+    "face 3@Body1"
+   ]
+  },
+  {
+   "name": "Outlet",
+   "bc_type": "Pressure",
+   "pressure_type": "Fixed value",
+   "value": 0,
+   "unit": "Pa",
+   "faces": [
+    "face 2@Body1"
+   ]
+  },
+  {
+   "name": "Pipe wall",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 1@Body1"
+   ]
+  }
+ ],
+ "mesh": {
+  "name": "Mesh 1",
+  "settings": {
+   "fineness": 6,
+   "automatic_boundary_layers": false,
+   "physics_based_meshing": true,
+   "hex_element_core": true,
+   "advanced": {
+    "mesh_engine": "snappy_hexdominant"
+   }
+  },
+  "refinements": [
+   {
+    "name": "Wall layers",
+    "type": "Inflate boundary layer",
+    "faces": [
+     "face 1@Body1"
+    ],
+    "n_layers": 1,
+    "total_thickness": 0.6,
+    "total_thickness_unit": "mm"
+   }
+  ],
+  "expect": {
+   "layers": true,
+   "n_cells": [
+    20000,
+    600000
+   ]
+  },
+  "estimate": {
+   "mesher": "snappy_hexdominant",
+   "fineness": 6,
+   "bounds_mm": [
+    0.0,
+    600.0,
+    -10.0,
+    10.0,
+    -10.0,
+    10.0
+   ],
+   "block": [
+    67,
+    8,
+    12
+   ],
+   "base_cell_mm": [
+    11.9104,
+    3.325,
+    2.2167
+   ],
+   "walls_level": 2,
+   "wall_cell_mm": [
+    2.9776,
+    0.8313,
+    0.5542
+   ],
+   "custom_sizes": [],
+   "layers": [
+    {
+     "name": "Wall layers",
+     "n_layers": 1,
+     "stack_mm": 0.6,
+     "smallest_wall_cell_mm": 0.5542,
+     "stack_over_smallest_cell": 1.083
+    }
+   ],
+   "n_cells": 105000,
+   "n_cells_note": "an order of magnitude (1.3 to 1.4 times case 1's real meshes), not a prediction",
+   "warnings": []
+  }
+ },
+ "run": {
+  "name": "Validation k-epsilon",
+  "endTime": 2500,
+  "writeInterval": 2500,
+  "cores": 4,
+  "result_controls": [
+   {
+    "id": "rc-centreline",
+    "name": "Centreline",
+    "monitor_type": "probe",
+    "kind": "Point probe",
+    "category": "Point data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "points": [
+     [
+      0.1,
+      0.0,
+      0.0
+     ],
+     [
+      0.2,
+      0.0,
+      0.0
+     ],
+     [
+      0.3,
+      0.0,
+      0.0
+     ],
+     [
+      0.4,
+      0.0,
+      0.0
+     ],
+     [
+      0.5,
+      0.0,
+      0.0
+     ]
+    ]
+   }
+  ]
+ },
+ "extract": [
+  {
+   "key": "wall_shear",
+   "kind": "patch",
+   "patch": "pipe_wall",
+   "field": "wallShearStress",
+   "box_m": [
+    [
+     0.4,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.5,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
+   "key": "y_plus",
+   "kind": "patch",
+   "patch": "pipe_wall",
+   "field": "yPlus",
+   "box_m": [
+    [
+     0.4,
+     -0.012,
+     -0.012
+    ],
+    [
+     0.5,
+     0.012,
+     0.012
+    ]
+   ]
+  },
+  {
+   "key": "p_axis",
+   "kind": "line",
+   "field": "p",
+   "points_m": [
+    [
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.6,
+     0.0,
+     0.0
+    ]
+   ],
+   "subdivisions": 300
+  },
+  {
+   "key": "u_axis",
+   "kind": "line",
+   "field": "U",
+   "points_m": [
+    [
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.6,
+     0.0,
+     0.0
+    ]
+   ],
+   "subdivisions": 300
+  }
+ ],
+ "flow_patch": "inlet",
+ "timeouts_s": {
+  "mesh": 2400,
+  "solve": 7200
+ },
+ "mesh_key": "33816f47ff0150e7",
+ "mesh_from": {
+  "variant": "hexdominant_sst",
+  "key": "33816f47ff0150e7"
+ }
+}

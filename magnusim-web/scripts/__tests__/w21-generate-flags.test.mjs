@@ -25,6 +25,7 @@ describe('mesh settings reach the generator', () => {
         smallFeature: 'auto',
         gapFactor: 0.05,
         gradation: 1.22,
+        oneCellAcross: false,
       });
     }
   });
@@ -65,17 +66,32 @@ describe('mesh settings reach the generator', () => {
     assert.deepEqual(meshGeneratorFlags(meshGenerateValues(settings), 'snappy_hexdominant'), expected);
   });
 
+  it("gives Hex-dominant One cell across (2D), its own setting under mesher_settings, and no other mesher", () => {
+    const on = meshGenerateValues({ fineness: 4, advanced: { mesh_engine: 'snappy_hexdominant' }, mesher_settings: { one_cell_across: true } });
+    assert.equal(on.oneCellAcross, true);
+    assert.deepEqual(meshGeneratorFlags(on, 'snappy_hexdominant'), ['--fineness', '4', '--add-layers', '1', '--physics-based', '1', '--one-cell-across', '1']);
+    assert.deepEqual(meshGeneratorFlags(on, 'cfmesh'), ['--fineness', '4', '--add-layers', '1', '--physics-based', '1']);
+    assert.ok(!meshGeneratorFlags(on, 'standard').includes('--one-cell-across'));
+    // Off, missing, or not a boolean true: no flag.
+    for (const ms of [{ one_cell_across: false }, {}, { one_cell_across: 'true' }, null]) {
+      assert.equal(meshGeneratorFlags(meshGenerateValues({ mesher_settings: ms }), 'snappy_hexdominant').includes('--one-cell-across'), false, JSON.stringify(ms));
+    }
+  });
+
   it('only sends flags each generator script declares', () => {
-    const values = meshGenerateValues({});
-    for (const [engine, script] of [
-      ['standard', 'generate_standard.py'],
-      ['cfmesh', 'generate_cfmesh_standard.py'],
-      ['snappy_hexdominant', 'generate_snappy.py'],
-    ]) {
-      const declared = declaredFlags(script);
-      for (const flag of meshGeneratorFlags(values, engine).filter((a) => a.startsWith('--'))) {
-        assert.ok(declared.has(flag), `${script} does not declare ${flag}`);
+    for (const values of [meshGenerateValues({}), meshGenerateValues({ mesher_settings: { one_cell_across: true } })]) {
+      for (const [engine, script] of [
+        ['standard', 'generate_standard.py'],
+        ['cfmesh', 'generate_cfmesh_standard.py'],
+        ['snappy_hexdominant', 'generate_snappy.py'],
+      ]) {
+        const declared = declaredFlags(script);
+        for (const flag of meshGeneratorFlags(values, engine).filter((a) => a.startsWith('--'))) {
+          assert.ok(declared.has(flag), `${script} does not declare ${flag}`);
+        }
       }
     }
+    // The fake mesher (tests) reads it too.
+    assert.ok(declaredFlags('fake_mesh_generate.py').has('--one-cell-across'));
   });
 });

@@ -239,7 +239,13 @@ def is_inflate(rec: dict) -> bool:
 def load_surface_custom_sizes(
     project_dir: Path, mesh_id: str, n_faces: int, diag_m: float
 ) -> tuple[dict[int, float], dict[int, float], list[dict]]:
-    """W26 surface custom sizing → (target_m, min_m, notes) keyed by cfddesk face_id."""
+    """W26 surface custom sizing → (target_m, min_m, notes) keyed by cfddesk face_id.
+
+    A note carries ``reach_m`` when its record has a Refine out to (``reach`` with
+    ``reach_unit``, validation gap G4): how far from the faces the cells keep the size.
+    Hex-dominant refines out to it (``snappy_hexdominant.refine_distance_m``); Standard and
+    cfMesh size the faces only (the refinement editor says so).
+    """
     doc = _refinements_doc(project_dir, mesh_id)
     extra: dict[int, float] = {}
     mins: dict[int, float] = {}
@@ -267,6 +273,7 @@ def load_surface_custom_sizes(
             size_m = max(size_m, min_m)
         else:
             min_m = 0.0
+        reach_m = reach_metres(rec)
         fids, kept = _labels_to_fids(labels, n_faces)
         for fid in fids:
             prev = extra.get(fid)
@@ -282,9 +289,23 @@ def load_surface_custom_sizes(
                     "min_size_m": min_m if min_m > 0 else None,
                     "face_ids": fids,
                     "faces": kept,
+                    **({"reach_m": reach_m} if reach_m else {}),
                 }
             )
     return extra, mins, notes
+
+
+def reach_metres(rec: dict) -> float | None:
+    """A Surface custom sizing's Refine out to in metres; None when it has none (empty or 0:
+    the default band) or it is not a distance above 0."""
+    raw = rec.get("reach")
+    if raw is None or raw == "":
+        return None
+    try:
+        reach_m = size_to_metres(raw, rec.get("reach_unit") or rec.get("default_size_unit") or "mm")
+    except (TypeError, ValueError):
+        return None
+    return reach_m if math.isfinite(reach_m) and reach_m > 0 else None
 
 
 @dataclass

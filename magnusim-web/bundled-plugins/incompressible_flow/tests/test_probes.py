@@ -41,6 +41,8 @@ def test_probes_block_samples_u_and_p_at_the_points():
     assert "type            probes;" in text and "libs            (sampling);" in text
     assert "fields          (U p);" in text
     assert "probeLocations  ( (0.1 0 0) (0.25 -0.5 0.001) );" in text
+    # The value at the point (G3), not the containing cell's (v2606's default "cell").
+    assert "interpolationScheme cellPoint;" in text
 
 
 def test_probe_records_keep_well_formed_points():
@@ -74,6 +76,7 @@ def test_the_writer_emits_probes_and_records_them(tmp_path: Path):
     write_solve_case(spec, tmp_path / "case")
     control = (tmp_path / "case" / "system" / "controlDict").read_text(encoding="utf-8")
     assert "probes_point_probe_1" in control and "probeLocations  ( (0.01 0.02 0) );" in control
+    assert control.count("interpolationScheme cellPoint;") == 1
     side = json.loads((tmp_path / "case" / "w27-case.json").read_text(encoding="utf-8"))
     assert side["probe_monitors"] == [
         {"id": "rc-p", "name": "Point probe 1", "key": "probes_point_probe_1", "points": [[0.01, 0.02, 0.0]]}

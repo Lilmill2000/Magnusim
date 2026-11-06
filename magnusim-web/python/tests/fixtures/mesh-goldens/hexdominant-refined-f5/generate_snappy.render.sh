@@ -88,9 +88,35 @@ else
   run_serial_snappy
 fi
 
+# One cell across (2D; system/extrudeMeshDict, cfddesk/mesh/two_d.py): the 3D slab becomes
+# one layer of the part's depth, extruded from the faces of its low end (the patch of every face
+# around them kept). Its two ends are empty while checkMesh checks it as a 2D mesh; createPatch
+# then puts them on the study's Symmetry patch.
+CHECKED=0
+if [ "${EC:-1}" -eq 0 ] && [ -f system/extrudeMeshDict ]; then
+  emit_json "{\"event\":\"progress\",\"stage\":\"extrudeMesh\",\"generate_id\":\"$GENERATE_ID\"}"
+  rm -rf mgf3d
+  mkdir -p mgf3d/constant
+  cp -a system mgf3d/
+  mv constant/polyMesh mgf3d/constant/
+  openfoam2606 extrudeMesh 2>&1 | tee log.extrudeMesh
+  EC=${PIPESTATUS[0]}
+  if [ "$EC" -eq 0 ] && [ -f constant/polyMesh/owner ]; then
+    emit_json "{\"event\":\"progress\",\"stage\":\"checkMesh\",\"generate_id\":\"$GENERATE_ID\"}"
+    openfoam2606 checkMesh > log.checkMesh 2>&1 || true
+    CHECKED=1
+    emit_json "{\"event\":\"progress\",\"stage\":\"createPatch\",\"generate_id\":\"$GENERATE_ID\"}"
+    openfoam2606 createPatch -overwrite 2>&1 | tee log.createPatch
+    EC=${PIPESTATUS[0]}
+  elif [ "$EC" -eq 0 ]; then
+    EC=48
+  fi
+  rm -rf mgf3d
+fi
+
 # The mesh's quality report (RH2): read by the Mesh panel and the pre-run check. It never
 # fails the mesh: Hex-dominant keeps what snappyHexMesh made, as before.
-if [ "${EC:-1}" -eq 0 ] && [ -f constant/polyMesh/owner ]; then
+if [ "$CHECKED" -eq 0 ] && [ "${EC:-1}" -eq 0 ] && [ -f constant/polyMesh/owner ]; then
   emit_json "{\"event\":\"progress\",\"stage\":\"checkMesh\",\"generate_id\":\"$GENERATE_ID\"}"
   openfoam2606 checkMesh > log.checkMesh 2>&1 || true
 fi
@@ -101,7 +127,7 @@ if [ -d constant/polyMesh ]; then cp -a constant/polyMesh "$WIN_OUT/constant/"; 
 if [ -f constant/triSurface/cadFeatures.eMesh ]; then cp -f constant/triSurface/cadFeatures.eMesh "$WIN_OUT/constant/triSurface/"; fi
 if [ -f constant/triSurface/Body1.stl ]; then cp -f constant/triSurface/Body1.stl "$WIN_OUT/constant/triSurface/"; fi
 cp -a system "$WIN_OUT/" 2>/dev/null || true
-cp -f log.blockMesh log.snappyHexMesh log.surfaceFeatureExtract log.decomposePar log.reconstructParMesh log.checkMesh "$WIN_OUT/" 2>/dev/null || true
+cp -f log.blockMesh log.snappyHexMesh log.surfaceFeatureExtract log.decomposePar log.reconstructParMesh log.extrudeMesh log.createPatch log.checkMesh "$WIN_OUT/" 2>/dev/null || true
 touch "$WIN_OUT/case.foam"
 
 OK=true

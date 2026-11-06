@@ -30,6 +30,8 @@ SIMPLE
 {
     nNonOrthogonalCorrectors 3;
     consistent      no;
+    pRefCell        0;
+    pRefValue       0;
     residualControl { p 1e-4; U 1e-4; "(k|omega)" 1e-4; }
 }
 relaxationFactors

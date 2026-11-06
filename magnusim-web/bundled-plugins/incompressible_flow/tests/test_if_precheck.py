@@ -128,3 +128,62 @@ def test_before_a_mesh_only_the_settings_are_checked_and_the_line_says_why():
     # A steady run without a mesh: settings only, no time-step words.
     steady = check_inputs(None, {"end_time": 200}, {}, transient=False)
     assert steady["inputs_complete"] is False and "no_estimate" not in steady
+
+
+def test_a_2d_mesh_whose_ends_lost_their_symmetry_is_named():
+    """The mesh facts' two_d ends, read against the study's BCs on their patches: a Symmetry is
+    fine; anything else is listed once per BC with both ends' faces."""
+    from incompressible_flow.precheck import two_d_unmirrored
+
+    facts = {"two_d": {"front": {"faces": ["Face 5@Body1"], "bc": "Sides", "patch": "sides"}, "back": {"faces": ["Face 3@Body1"], "bc": "Sides", "patch": "sides"}}}
+    mirror = SimpleNamespace(mapped=[{"patch": "sides", "bc": {"name": "Sides", "bc_type": "Symmetry"}}, {"patch": "inlet", "bc": {"name": "Inlet", "bc_type": "Velocity inlet"}}])
+    assert two_d_unmirrored(mirror, facts) == []
+    walls = SimpleNamespace(mapped=[{"patch": "sides", "bc": {"name": "Sides", "bc_type": "Wall", "wall_type": "No-slip"}}])
+    assert two_d_unmirrored(walls, facts) == [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": "Sides"}]
+    # A 3D mesh: nothing here.
+    assert two_d_unmirrored(walls, {"quality": {}}) == []
+    # The Symmetry deleted (no BC holds the ends' patch any more): the writer solves them as the
+    # walls with no BC are, so they are listed with that wall; a Slip default mirrors the flow.
+    gone = [{"faces": ["Face 5@Body1", "Face 3@Body1"], "bc": None, "default_wall": "No-slip"}]
+    assert two_d_unmirrored(SimpleNamespace(mapped=[]), facts) == gone
+    assert two_d_unmirrored(SimpleNamespace(mapped=[{"patch": "sides"}], wall_default="No-slip"), facts) == gone
+    assert two_d_unmirrored(SimpleNamespace(mapped=[], wall_default="Slip"), facts) == []
+    # Facts that name no patch for an end can't be read against the BCs: nothing.
+    assert two_d_unmirrored(SimpleNamespace(mapped=[]), {"two_d": {"front": {"faces": ["Face 5@Body1"]}}}) == []
+
+
+def test_a_moving_wall_through_its_own_faces_in_a_closed_box_is_named():
+    """A Moving wall is a fixed velocity on its faces: a part across a face pushes fluid through
+    it, which a closed box can't take (the solver's adjustPhi stops it). Flat faces are checked
+    whole, curved ones at their middle only (listed as unchecked when along there); a Rotating
+    wall is never listed (the solver keeps it along its faces)."""
+    from incompressible_flow.precheck import holds_pressure, walls_across
+    from incompressible_flow.runspec import FaceProps
+
+    top = FaceProps(area_m2=0.01, normal=(0.0, 1.0, 0.0), centroid=(0.05, 0.1, 0.05), planar=True)
+    drum = FaceProps(area_m2=0.01, normal=(0.0, 0.0, 1.0), centroid=(0.05, 0.1, 0.05), planar=False)
+
+    def spec(velocity, props, kind="Moving", **extra):
+        lid = {"name": "Lid", "bc_type": "Wall", "wall_type": kind, "wall_velocity": velocity, "faces": ["face 3@Body1"], **extra}
+        return SimpleNamespace(mapped=[{"patch": "lid", "bc": lid}], face_props={"face 3@Body1": props})
+
+    # Along the lid: nothing. Straight up through it, or the field default (1, 0, 0) on a lid
+    # whose normal is x: listed, with its faces as the panels name them.
+    assert walls_across(spec([1.0, 0.0, 0.0], top)) == ([], [])
+    assert walls_across(spec([0.0, 2.0, 0.0], top)) == ([{"name": "Lid", "faces": ["Face 3@Body1"], "velocity": [0.0, 2.0, 0.0]}], [])
+    side = FaceProps(area_m2=0.01, normal=(1.0, 0.0, 0.0), planar=True)
+    assert walls_across(spec(None, side))[0] == [{"name": "Lid", "faces": ["Face 3@Body1"], "velocity": [1.0, 0.0, 0.0]}]
+    # A tilt under a millionth of the speed counts as along.
+    assert walls_across(spec([1.0, 1e-8, 0.0], top)) == ([], [])
+    # Curved: along it at its middle, the rest unchecked; across it at its middle, through.
+    assert walls_across(spec([1.0, 0.0, 0.0], drum)) == ([], [{"name": "Lid", "faces": ["Face 3@Body1"]}])
+    assert walls_across(spec([0.0, 0.0, 1.0], drum))[0][0]["faces"] == ["Face 3@Body1"]
+    # A face the table has no normal for, a Rotating wall, a still one: nothing.
+    assert walls_across(spec([0.0, 2.0, 0.0], FaceProps())) == ([], [])
+    rot = spec(None, top, kind="Rotating", rotation_axis=[0, 1, 0], rotation_speed=100)
+    assert walls_across(rot) == ([], [])
+    assert walls_across(spec([0.0, 0.0, 0.0], top)) == ([], [])
+    # A boundary that holds the pressure (a pressure BC, a total-pressure inlet, a freestream).
+    assert holds_pressure(spec([0.0, 2.0, 0.0], top)) is False
+    opening = SimpleNamespace(mapped=[{"patch": "out", "bc": {"name": "Out", "bc_type": "Pressure", "faces": ["face 1@Body1"]}}])
+    assert holds_pressure(opening) is True

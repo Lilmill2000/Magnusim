@@ -18,6 +18,15 @@ A row is ``{code, level, text, short, fix, alt, kept}``:
   boundary conditions) or ``steady_copy`` (a copy of the study, set steady). ``cost`` is
   ``{steps, wall_s}`` of a run with the fix, when it can be estimated. A fix that needs a
   setting the app does not offer is named in the text and has no fix.
+- ``two_d_ends`` (``error``): the mesh is one cell across (2D, Hex-dominant's setting) but
+  an end face's boundary condition is no longer a Symmetry, so the solve would not be 2D
+  (``two_d_unmirrored`` in the inputs: ``[{faces, bc}]``; ``bc`` None with ``default_wall``
+  when no boundary condition holds them any more, so they are solved as that wall).
+- ``wall_through`` (``error``): in a closed box (nothing holds the pressure), a Moving wall
+  whose velocity has a part across its own faces: the solver stops on its first iteration on a
+  continuity error (``walls_through``: ``[{name, faces, velocity}]``). ``wall_curved``
+  (``warn``): a Moving wall there on curved faces, its velocity along them at their middle only
+  (``walls_curved``: ``[{name, faces}]``).
 - ``setting_out_of_range`` (RH3, ``warn``): a study numerics setting or a run's outer
   relaxation or tolerance stored outside its field's range ("Saved p tolerance 1e-2 is outside
   1e-12 to 1e-3."). It is used as saved: bounds apply only to an edit, and nothing refuses it.
@@ -45,6 +54,9 @@ LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}
 # The order rows of one level are shown in.
 CODE_ORDER = (
     "mesh_failed",
+    "two_d_ends",
+    "wall_through",
+    "wall_curved",
     "piso_high_co",
     "pimple_co_vs_outer",
     "fixed_step_co",
@@ -245,12 +257,18 @@ class _Run:
         self.initial_flow = str(i.get("initial_flow") or "")
         self.potential_flow = i.get("potential_flow")
         self.inlet_driven = bool(i.get("inlet_driven"))
+        # Nothing flows through the domain (a box its moving walls drive): no flow-through time.
+        self.closed = bool(i.get("closed"))
         n = _dict(i.get("numerics"))
         self.numerics = n
         self.steady_copy = bool(i.get("steady_copy"))
         self.kept = {str(c) for c in (i.get("kept") or []) if isinstance(c, str)}
         # RH3: stored values outside their field's range ({key, label, value, min, max, text}).
         self.out_of_range = [o for o in (i.get("out_of_range") or []) if isinstance(o, dict) and o.get("text")]
+        # A 2D mesh's ends whose boundary condition is no longer a Symmetry ({faces, bc}).
+        self.two_d_unmirrored = [e for e in (i.get("two_d_unmirrored") or []) if isinstance(e, dict)]
+        self.walls_through = [e for e in (i.get("walls_through") or []) if isinstance(e, dict)]
+        self.walls_curved = [e for e in (i.get("walls_curved") or []) if isinstance(e, dict)]
         # False when the analysis could read only the run's settings (no mesh yet): its mesh
         # and physics were not checked, and "nothing found" must not say they were.
         self.complete = i.get("inputs_complete") is not False
@@ -308,11 +326,13 @@ class _Run:
         )
         if e is not None:
             e["capped_by"] = capped_by if e.get("capped") else ""
+            if self.closed:
+                e["flow_through_s"] = None
             return e
         # No Courant-rate table: no time step, but the flow-through time from the box still
-        # tells when a mean may start and how long it averages.
+        # tells when a mean may start and how long it averages (none in a closed domain).
         length = self.length()
-        if not length:
+        if not length or self.closed:
             return None
         return {
             "delta_t_s": None,
@@ -601,7 +621,66 @@ def _long_run(r: _Run, est: dict[str, Any] | None, rows: list[dict[str, Any]]) -
     )
 
 
+def _two_d_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    """A mesh made one cell across (2D) whose end faces lost their Symmetry: walls (or anything
+    else) on a mesh one cell deep give a flow that is not the 2D flow it was meshed for."""
+    for end in r.two_d_unmirrored:
+        faces = ", ".join(str(f) for f in end.get("faces") or []) or "its end faces"
+        bc = str(end.get("bc") or "")
+        now = (
+            f'now have "{bc}", not a Symmetry, so'
+            if bc
+            else f"now have no boundary condition, so the solve treats them as {str(end.get('default_wall') or 'No-slip')} walls "
+            "(the walls with no BC) and"
+        )
+        rows.append(
+            _row(
+                "two_d_ends",
+                "error",
+                f"This mesh is one cell across (2D), but its end faces ({faces}) {now} the flow would not be 2D. "
+                "Put a Symmetry back on them, or turn One cell across off and generate the mesh again.",
+                "2D mesh ends not a Symmetry",
+                _fix("Open boundary conditions", "bcs"),
+                _fix("Open mesh", "mesh"),
+            )
+        )
+
+
+def _wall_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    """A closed box's Moving walls that push fluid through their own faces (the solve stops on
+    its first iteration), and those on curved faces checked only at their middle."""
+    for w in r.walls_through:
+        faces = ", ".join(str(f) for f in w.get("faces") or []) or "its faces"
+        vel = ", ".join(fmt(float(c), 3) for c in (w.get("velocity") or [])[:3])
+        rows.append(
+            _row(
+                "wall_through",
+                "error",
+                f'Wall "{w.get("name") or "a moving wall"}" moves through its own faces ({faces}): its velocity ({vel}) m/s '
+                "has a part across them. Nothing flows in or out of this box, so the solver stops on its first iteration "
+                '("Continuity error cannot be removed by adjusting the outflow"). Give it a velocity along the wall.',
+                "moving wall crosses its faces",
+                _fix("Open boundary conditions", "bcs"),
+            )
+        )
+    for w in r.walls_curved:
+        faces = ", ".join(str(f) for f in w.get("faces") or []) or "its faces"
+        rows.append(
+            _row(
+                "wall_curved",
+                "warn",
+                f'Wall "{w.get("name") or "a moving wall"}" is on curved faces ({faces}): in a closed box a Moving wall must '
+                "slide along its faces everywhere, or the solver stops on its first iteration on a continuity error. Its "
+                "velocity is along them at their middle; the rest was not checked. A Rotating wall moves along a curved "
+                "face by itself.",
+                "moving wall on curved faces",
+                _fix("Open boundary conditions", "bcs"),
+            )
+        )
+
+
 def _mesh_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    _two_d_rows(r, rows)
     q = r.quality
     if q is None:
         if r.i.get("mesh_ready"):
@@ -894,10 +973,16 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     ``wall_functions``, and ``any_yplus``: ``{label, key, value}``, the study setting of a model
     that handles any y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
     ``nu`` (m²/s); ``d_hyd`` (m, the inlet's hydraulic diameter); ``initial_flow``,
-    ``potential_flow`` (None when the analysis has none), ``inlet_driven``; ``numerics``
+    ``potential_flow`` (None when the analysis has none), ``inlet_driven``; ``closed`` (nothing
+    flows through the domain, a box its moving walls drive: no flow-through time, so no
+    "one flow-through" and no start-up or averaging rows counted in them); ``numerics``
     (the study's: ``relax_p``, ``relax_u``, ``simplec``, ``n_non_orthogonal``,
     ``numerics_preset``); ``steady_copy`` (a steady analysis of the family exists);
-    ``kept`` (the codes kept as set); ``no_estimate`` (the line's words when the analysis
+    ``kept`` (the codes kept as set); ``two_d_unmirrored`` (a mesh one cell across whose end
+    faces' boundary condition is no longer a Symmetry: ``[{faces, bc}]``, the analysis's reading
+    of the mesh facts' ``two_d``); ``walls_through`` and ``walls_curved`` (a closed box's Moving
+    walls whose velocity crosses their own faces, ``[{name, faces, velocity}]``, and those on
+    curved faces checked at their middle only, ``[{name, faces}]``); ``no_estimate`` (the line's words when the analysis
     gives no time step); ``out_of_range`` (RH3: stored settings outside their field's range,
     ``magnusim_sdk.numerics_settings.out_of_range``); ``inputs_complete`` (False when only the run's settings could be
     read, as before a mesh: the estimate's ``complete`` then says the mesh and physics were
@@ -908,6 +993,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     est = r.estimate() if r.transient else None
     phys = _physics_rows(r, rows)
     _mesh_rows(r, rows)
+    _wall_rows(r, rows)
     if r.transient:
         _transient_rows(r, est, rows)
         _long_run(r, est, rows)

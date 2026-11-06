@@ -74,6 +74,29 @@ def wall_rotation(rec: Any) -> tuple[list[float], list[float], float]:
     return origin, axis, _num(d.get("rotation_speed"), 100.0) * RPM
 
 
+def wall_moves(rec: Any) -> bool:
+    """A Moving wall with a velocity, or a Rotating wall with a rotation speed: it drags the
+    fluid, so it drives the flow as an inlet does (a closed box's only driver: a lid-driven
+    cavity, a stirred tank). A Moving wall at 0 m/s or a Rotating wall at 0 rpm does not."""
+    kind = wall_kind(rec)
+    if kind == "Moving":
+        return math.hypot(*wall_velocity(rec)) > 0
+    if kind == "Rotating":
+        return wall_rotation(rec)[2] != 0
+    return False
+
+
+def still_wall_words(rec: Any) -> tuple[str, str] | None:
+    """Why a Moving or Rotating wall drags nothing and what to set, in the user's words
+    (("its velocity is 0", "Give it a velocity")); None when it moves, or is neither."""
+    kind = wall_kind(rec)
+    if kind not in ("Moving", "Rotating") or wall_moves(rec):
+        return None
+    if kind == "Moving":
+        return "its velocity is 0", "Give it a velocity"
+    return "its rotation speed is 0", "Give it a rotation speed"
+
+
 def wall_motion_problem(rec: Any) -> str | None:
     """What a moving or rotating wall lacks, in the user's words, else None."""
     if wall_kind(rec) != "Rotating":

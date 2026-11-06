@@ -1,0 +1,464 @@
+"""Case 2: turbulent flow in a smooth circular pipe, Re = 50 000 (3D), k-omega SST and
+k-epsilon with wall functions, on Hex-dominant and on Standard.
+
+A 20 mm pipe 600 mm (30 D) long, a uniform velocity inlet of 1 m/s (its turbulence Auto: 5 %,
+0.07 D), a 0 Pa outlet and a no-slip wall; a custom fluid with nu = 4e-7 m²/s and rho = 1 kg/m³,
+so Re = U D / nu = 50 000. The reference data ask for the friction at least 40 D from the inlet,
+or with a cyclic or mapped inlet; this case meets neither (the app has no cyclic inlet, gap G9,
+and the pipe is 30 D because Hex-dominant cannot mesh one much longer cleanly: ``NOTES``). The
+friction factor is read over x/D 20 to 25, 5 D clear of the outlet; its slope over x/D 15 to 20
+is shown beside it, and a run whose two differ by more than ``DEVELOPING_PCT`` carries a
+warning: its flow is still developing where f is read, so f reads above its developed value.
+
+Each mesher's mesh is made once: the k-epsilon run solves on the k-omega SST run's mesh (the
+same geometry, fluid, BCs and mesh; only the study's turbulence model and the run differ).
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any
+
+import numpy as np
+
+from ..extract import band, downsample, linear_fit, window_mean
+from ..model import QuantitySpec, Reference, Tolerance, compare
+from .c1_laminar_pipe import _line_xy
+
+ID = "c2_turbulent_pipe"
+TITLE = "Turbulent pipe, Re = 50 000"
+GROUP = "Internal flow"
+VARIANTS = ("hexdominant_sst", "hexdominant_kepsilon", "standard_sst", "standard_kepsilon")
+VARIANT_LABELS = {
+    "hexdominant_sst": "Hex-dominant, k-omega SST",
+    "hexdominant_kepsilon": "Hex-dominant, k-epsilon",
+    "standard_sst": "Standard, k-omega SST",
+    "standard_kepsilon": "Standard, k-epsilon",
+}
+MESHER = {v: v.split("_", 1)[0] for v in VARIANTS}
+MODEL = {v: "kOmegaSST" if v.endswith("_sst") else "kEpsilon" for v in VARIANTS}
+MODEL_WORDS = {"kOmegaSST": "k-omega SST", "kEpsilon": "k-epsilon"}
+MESH_ENGINE = {"hexdominant": "snappy_hexdominant", "standard": "standard"}
+# The k-epsilon run solves on the k-omega SST run's mesh (plan.py: mesh_from; the driver).
+MESH_FROM = {"hexdominant_kepsilon": "hexdominant_sst", "standard_kepsilon": "standard_sst"}
+
+D_MM = 20.0
+L_MM = 600.0
+D = D_MM / 1000.0
+L = L_MM / 1000.0
+U = 1.0
+NU = 4.0e-7
+RHO = 1.0
+RE = U * D / NU
+FIT_FROM_D, FIT_TO_D = 20.0, 25.0
+# The stretch before it: a developed flow reads the same slope on both. Two that differ by
+# more than DEVELOPING_PCT give the run a warning (still developing where f is read).
+EARLY_FROM_D, EARLY_TO_D = 15.0, 20.0
+DEVELOPING_PCT = 1.0
+PROBE_X_D = tuple(float(x) for x in range(5, 30, 5))
+_WINDOW_BOX = [[FIT_FROM_D * D, -0.6 * D, -0.6 * D], [FIT_TO_D * D, 0.6 * D, 0.6 * D]]
+WALL_PATCH = "pipe_wall"
+FINENESS = 6
+# Hex-dominant's wall layer: one of 0.6 mm, so the first cell's centre lies near y+ 35 for the
+# wall functions (y+ = 2570 y / D at f = 0.0211). Two layers of 1.2 mm in all (the design's
+# kind of stack) came out as about one on the mesh probe (0.96 of 2), one of 0.6 mm as 0.91 of 1.
+LAYERS = {"n_layers": 1, "total_thickness": 0.6}
+END_TIME = 2500
+
+GEOMETRY_WORDS = f"pipe, D = {D_MM:g} mm, L = {L_MM:g} mm ({L_MM / D_MM:g} D) along +x from x = 0"
+FACE_SELECTORS: dict[str, dict[str, Any]] = {
+    "inlet": {"plane": {"axis": "x", "at_mm": 0.0, "sign": -1}},
+    "outlet": {"plane": {"axis": "x", "at_mm": L_MM, "sign": 1}},
+    "wall": {"rest": True, "count": 1},
+}
+
+_MCKEON = (
+    "B. J. McKeon, M. V. Zagarola, A. J. Smits (2005), \"A new friction factor relationship for fully developed "
+    "pipe flow\", J. Fluid Mech. 538:429-443"
+)
+_REF = Reference(
+    value=0.0211,
+    unit="",
+    kind="correlation",
+    confidence="CONFIRMED",
+    citation=_MCKEON,
+    where=(
+        "eq. (3.5), p. 441: 1/sqrt f = 1.920 log10(Re sqrt f) - 0.475 - 7.04/(Re sqrt f)^0.55, within 1.4 % of the "
+        "Princeton Superpipe data and within 2.0 % of Blasius for 10e3 < Re <= 90e3; 0.02109 at Re 5e4"
+    ),
+    conditions="fully developed flow in a hydraulically smooth pipe; Darcy f = (dp/L) D / (rho U_b² / 2); Re = U_b D / nu = 50 000",
+    note=(
+        "Blasius (1913), f = 0.3164 Re^-0.25 (as given in McKeon et al. 2005 eq. 1.3), gives 0.02116; Colebrook (1939), "
+        "J. ICE 11(4):133-156, smooth, 0.02089 (as reproduced in standard texts); the correlations span 0.0207 to "
+        "0.0212, and the data scatter about ±1.5 %."
+    ),
+)
+_BAND = Tolerance(rel_pct=10.0, note="the reference data's band for RANS with wall functions (an engineering judgement)")
+
+
+def _specs() -> dict[str, QuantitySpec]:
+    return {
+        "f": QuantitySpec(
+            key="f",
+            label=f"Darcy friction factor from the pressure drop, x/D {FIT_FROM_D:g} to {FIT_TO_D:g}",
+            unit="",
+            how=(
+                f"f = (−dp/dx) D_eff / (rho U_b² / 2): dp/dx the least-squares slope of the centreline pressure from "
+                f"Plot over path (0,0,0) to ({L:g},0,0) m, 300 subdivisions, over x/D {FIT_FROM_D:g} to {FIT_TO_D:g}; "
+                "U_b = Q / A and D_eff = sqrt(4 A / pi), Q the flow through the inlet and A the pipe's meshed "
+                "cross-section, the mean of the inlet's and the outlet's mesh areas (all three from the run's monitors)"
+            ),
+            source="route:/api/plot-over-path",
+            reference=_REF,
+            tolerance=_BAND,
+        ),
+        "f_tau": QuantitySpec(
+            key="f_tau",
+            label=f"Darcy friction factor from the wall shear stress, x/D {FIT_FROM_D:g} to {FIT_TO_D:g}",
+            unit="",
+            how=(
+                "f_tau = 8 tau_w / (rho U_b²): tau_w the area-weighted mean of the axial wall shear stress the run "
+                f"saved (wallShearStress, kinematic, times rho) on the wall's faces between x/D {FIT_FROM_D:g} and "
+                f"{FIT_TO_D:g}; U_b as for f"
+            ),
+            source="case_file:<latest>/wallShearStress",
+            reference=_REF,
+            tolerance=_BAND,
+        ),
+    }
+
+
+QUANTITIES = _specs()
+
+NOTES = (
+    "The reference is McKeon et al.'s relation (0.0211 at Re 5e4); the band is ±10 %, the reference data's for RANS "
+    "with wall functions (the design proposed ±8 % for SST, ±10 % for k-epsilon and ±15 % on Standard). The reference "
+    "data win.",
+    "The reference data ask for the friction to be read at least 40 D from the inlet, or with a cyclic or mapped "
+    "inlet. This case meets neither: the app has no cyclic or mapped inlet (gap G9), and the pipe is 30 D long. The "
+    "friction is read over x/D 20 to 25 and its slope over x/D 15 to 20 is shown beside it: in a developed flow the "
+    "two agree. Where they differ by more than 1 % the run carries a warning: the flow is still developing where f "
+    "is read, and its f reads above its developed value (the slope still falls along the pipe), so it is not quite "
+    "the fully developed f the reference is for. The pipe is not longer because Hex-dominant cannot mesh a much "
+    "longer pipe cleanly (an app gap): its "
+    "background block keeps at least 8 and 12 cells across the pipe while its cells along the pipe grow with the "
+    "length, so the cells near the wall get long and flat. On the mesh probes (2026-11-05) a 55 D pipe at fineness 6 "
+    "had 25 196 faces over 65 degrees non-orthogonal before snapping, and its mesh failed checkMesh (8 cells of "
+    "negative volume) although Generate finished; a 40 D pipe at fineness 7 kept 0.03 of its 2 wall layers and "
+    "failed checkMesh too; the 30 D pipe at fineness 6 passes (its worst face 65 degrees).",
+    "Two readings of the same friction: the pressure drop along the axis, and the wall shear stress the run saved. "
+    "In a settled, developed flow they are equal (the force balance -dp/dx = 4 tau_w / D); a gap between them is a "
+    "finding about the solution, not about the reading.",
+    "The wall's y+ (OpenFOAM's yPlus, saved by every turbulent run) is shown for the same faces: the wall functions "
+    "assume y+ of about 30 to 100 at the first cell's centre; below that they misread the wall's friction. "
+    "Hex-dominant's one wall layer of 0.6 mm is sized for about 35; Standard sizes its own layers, so its y+ is "
+    "what its layers give, inside that range or not.",
+    "Each mesher's mesh is made once and both turbulence models solve on it (the k-epsilon run on the k-omega SST "
+    "run's mesh, the same geometry, fluid, BCs and mesh settings).",
+)
+
+SETTLE = (
+    {"monitor": "mon_inlet", "sample": "p_Pa", "label": "the inlet's area-averaged pressure"},
+    {"monitor": "probes_centreline_4", "sample": "U", "component": 0, "label": "U_x at the centreline probe at x = 20 D"},
+)
+SETTLE_DRIFT = 1e-3
+
+
+def build_geometry() -> Any:
+    from ..geometry import pipe
+
+    return pipe(D_MM, L_MM)
+
+
+def requests(variant: str, *, coarse: bool = False, cores: int = 4) -> dict[str, Any]:
+    mesher = MESHER[variant]
+    hexd = mesher == "hexdominant"
+    model = MODEL[variant]
+    end_time = END_TIME // (4 if coarse else 1)
+    mesh_settings: dict[str, Any] = {
+        "fineness": FINENESS - (2 if coarse else 0),
+        "automatic_boundary_layers": not hexd,
+        "physics_based_meshing": True,
+        "hex_element_core": True,
+        "advanced": {"mesh_engine": MESH_ENGINE[mesher]},
+    }
+    refinements = (
+        [{"name": "Wall layers", "type": "Inflate boundary layer", "faces": ["@wall"], **LAYERS,
+          "total_thickness_unit": "mm"}]
+        if hexd
+        else []
+    )
+    probe = {
+        "id": "rc-centreline", "name": "Centreline", "monitor_type": "probe", "kind": "Point probe",
+        "category": "Point data", "write_control": "Time step", "faces": [], "results": None, "series": None,
+        "chart_values": None, "results_available": False,
+        "points": [[round(x * D, 6), 0.0, 0.0] for x in PROBE_X_D],
+    }
+    return {
+        "project": {"title": f"Validation {ID} {mesher}", "description": "", "category": "Other",
+                    "units": "Metric", "folder": "My Projects"},
+        "study": {
+            "analysis_type": "incompressible_steady",
+            "time_dependency": "Steady-state",
+            "name": f"{ID} {mesher}",
+            "settings": {
+                "turbulence_model": model,
+                "numerics_preset": "accurate",
+                "residual_u": 1e-5,
+                "residual_p": 1e-5,
+                "n_non_orthogonal": 1 if hexd else 2,
+            },
+        },
+        "material": {"preset": "custom", "name": "Validation fluid", "kinematic_viscosity": NU, "density": RHO,
+                     "assigned_volumes": ["Body1"]},
+        "bcs": [
+            {"name": "Inlet", "bc_type": "Velocity inlet", "velocity_type": "Fixed", "value": U, "unit": "m/s",
+             "direction": "Normal to face", "faces": ["@inlet"]},
+            {"name": "Outlet", "bc_type": "Pressure", "pressure_type": "Fixed value", "value": 0, "unit": "Pa",
+             "faces": ["@outlet"]},
+            {"name": "Pipe wall", "bc_type": "Wall", "wall_type": "No-slip", "faces": ["@wall"]},
+        ],
+        "mesh": {
+            "name": "Mesh 1",
+            "settings": mesh_settings,
+            "refinements": refinements,
+            "expect": {"layers": True, "n_cells": [20_000, 600_000] if not coarse else [2_000, 300_000]},
+        },
+        "run": {"name": f"Validation {MODEL_WORDS[model]}", "endTime": end_time, "writeInterval": end_time,
+                "cores": int(cores), "result_controls": [probe]},
+        "extract": [
+            {"key": "wall_shear", "kind": "patch", "patch": WALL_PATCH, "field": "wallShearStress", "box_m": _WINDOW_BOX},
+            {"key": "y_plus", "kind": "patch", "patch": WALL_PATCH, "field": "yPlus", "box_m": _WINDOW_BOX},
+            {"key": "p_axis", "kind": "line", "field": "p", "points_m": [[0.0, 0.0, 0.0], [L, 0.0, 0.0]],
+             "subdivisions": 300},
+            {"key": "u_axis", "kind": "line", "field": "U", "points_m": [[0.0, 0.0, 0.0], [L, 0.0, 0.0]],
+             "subdivisions": 300},
+        ],
+        "flow_patch": "inlet",
+        "timeouts_s": {"mesh": 2400, "solve": 7200},
+    }
+
+
+# ---------------------------------------------------------------------------------------- evaluate
+
+def _slope(x: list[float], p: list[float], lo_d: float, hi_d: float) -> dict[str, float]:
+    xb, pb = band(x, p, lo_d * D, hi_d * D)
+    return linear_fit(xb, pb)
+
+
+def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
+    warnings: list[str] = []
+    shown: dict[str, Any] = {}
+    series: dict[str, Any] = {}
+    q_in = raw.patch_flow("inlet")
+    a_in, a_out = raw.patch_area("inlet"), raw.patch_area("outlet")
+    area_unc_pct = 0.0
+    if q_in and a_in and a_out:
+        area = 0.5 * (a_in + a_out)
+        area_unc_pct = 100.0 * abs(a_in - a_out) / 2.0 / area
+        ub = q_in / area
+        d_eff = math.sqrt(4.0 * area / math.pi)
+        shown.update({"inlet_area_mm2": a_in * 1e6, "outlet_area_mm2": a_out * 1e6, "area_mm2": area * 1e6,
+                      "area_vs_nominal_pct": 100.0 * (area / (math.pi * D * D / 4) - 1.0), "area_unc_pct": area_unc_pct,
+                      "ub_m_s": ub, "d_eff_mm": d_eff * 1000.0})
+    else:
+        ub, d_eff = U, D
+        warnings.append("no inlet flow or patch areas from the monitors: D and U_b are the nominal 20 mm and 1 m/s")
+    shown["re_eff"] = ub * d_eff / NU
+    p_in = raw.patch_pressure("inlet")
+    if p_in is not None:
+        shown["inlet_p_Pa"] = p_in
+    bal = raw.flow_balance()
+    if bal and bal.get("in_m3s"):
+        shown["imbalance_pct"] = 100.0 * bal.get("imbalance", 0.0) / bal["in_m3s"]
+    dyn = 0.5 * RHO * ub * ub
+    f = f_tau = None
+    f_detail = tau_detail = ""
+    p_line = raw.line("p_axis")
+    if p_line and p_line.get("n_valid"):
+        x, p = _line_xy(p_line, 0)
+        ds = downsample(x, p)
+        series["p_axis"] = {"x_m": ds["x"], "p_Pa": ds["y"]}
+        try:
+            fit = _slope(x, p, FIT_FROM_D, FIT_TO_D)
+            grad = -fit["slope"]
+            f = grad * d_eff / dyn
+            se_pct = 100.0 * fit["slope_se"] / abs(fit["slope"]) if fit["slope"] else float("nan")
+            shown["dpdx_Pa_m"] = grad
+            shown["fit"] = {"slope": fit["slope"], "intercept": fit["intercept"], "slope_se": fit["slope_se"],
+                            "r2": fit["r2"], "n": int(fit["n"]), "x_from_m": FIT_FROM_D * D, "x_to_m": FIT_TO_D * D}
+            shown["f_unc_pct"] = math.hypot(se_pct, 2.5 * area_unc_pct)
+            f_detail = (f"-dp/dx {grad:.5g} Pa/m from {int(fit['n'])} samples (slope standard error {se_pct:.2f} %, "
+                        f"r² {fit['r2']:.5f}); D_eff {d_eff * 1000:.3f} mm, U_b {ub:.4f} m/s")
+            early = _slope(x, p, EARLY_FROM_D, EARLY_TO_D)
+            shown["f_early"] = -early["slope"] * d_eff / dyn
+            shown["f_early_vs_f_pct"] = 100.0 * (shown["f_early"] / f - 1.0)
+            if abs(shown["f_early_vs_f_pct"]) > DEVELOPING_PCT:
+                warnings.append(
+                    f"still developing where f is read: f over x/D {EARLY_FROM_D:g} to {EARLY_TO_D:g} reads "
+                    f"{shown['f_early_vs_f_pct']:+.2f} % against x/D {FIT_FROM_D:g} to {FIT_TO_D:g} (more than "
+                    f"{DEVELOPING_PCT:g} % apart; a developed flow reads the same), so f is above its developed value: "
+                    "the pipe is 30 D, not the 40 D from the inlet the reference data ask for, and the app has no "
+                    "cyclic inlet (gap G9)"
+                )
+        except ValueError as e:
+            warnings.append(f"pressure fit: {e}")
+    else:
+        warnings.append(f"no centreline pressure: {(p_line or {}).get('reason') or 'no answer'}")
+    u_line = raw.line("u_axis")
+    if u_line and u_line.get("n_valid"):
+        x, u = _line_xy(u_line, 0)
+        ds = downsample(x, u)
+        series["u_axis"] = {"x_m": ds["x"], "U_m_s": ds["y"]}
+        try:
+            shown["ucl_over_ub"] = window_mean(x, u, FIT_FROM_D * D, FIT_TO_D * D)["mean"] / ub
+        except ValueError as e:
+            warnings.append(f"centreline speed: {e}")
+    ws = raw.sample("wall_shear")
+    if ws and ws.get("n"):
+        tx = np.asarray(ws["wallShearStress_x"], dtype=float)
+        fa = np.asarray(ws["area"], dtype=float)
+        tau = abs(float(np.sum(tx * fa) / np.sum(fa))) * RHO
+        f_tau = 8.0 * tau / (RHO * ub * ub)
+        shown["tau_w_Pa"] = tau
+        shown["tau_w_faces"] = int(ws["n"])
+        tau_detail = f"tau_w {tau:.5g} Pa over {int(ws['n'])} wall faces, U_b {ub:.4f} m/s"
+        if f is not None:
+            shown["f_tau_vs_f_pct"] = 100.0 * (f_tau / f - 1.0)
+    else:
+        warnings.append(f"no wall shear stress of the developed part: {raw.sample_problem('wall_shear')}")
+    yp = raw.sample("y_plus")
+    if yp and yp.get("n"):
+        v = np.asarray(yp["yPlus"], dtype=float)
+        a = np.asarray(yp["area"], dtype=float)
+        shown["y_plus"] = {"min": float(v.min()), "mean": float(np.sum(v * a) / np.sum(a)), "max": float(v.max()),
+                           "n_faces": int(yp["n"])}
+    else:
+        warnings.append(f"no y+ of the developed part: {raw.sample_problem('y_plus')}")
+    probes = raw.probe_values("Centreline", component=0)
+    if probes:
+        series["probes"] = {"x_m": [p[0] for p in probes], "Ux_m_s": [p[1] for p in probes]}
+    rows = [
+        compare(QUANTITIES["f"], f, detail=f_detail,
+                uncertainty=({"kind": "pct", "value": shown["f_unc_pct"],
+                              "what": "the slope's standard error and 2.5 times the cross-section's"}
+                             if "f_unc_pct" in shown else None)),
+        compare(QUANTITIES["f_tau"], f_tau, detail=tau_detail),
+    ]
+    return {"quantities": rows, "series": series, "shown": shown, "warnings": warnings}
+
+
+def setup_words(result: dict[str, Any]) -> str:
+    model = MODEL_WORDS[MODEL[str(result.get("variant"))]]
+    return (
+        f"A {GEOMETRY_WORDS} (STEP in mm, built with OCP); a custom fluid with nu = {NU:g} m²/s and rho = {RHO:g} kg/m³, "
+        f"so Re = U D / nu = {RE:,.0f}".replace(",", " ") + f"; a velocity inlet of {U:g} m/s normal to the face (its "
+        "turbulence Auto: 5 % intensity, 0.07 D), a 0 Pa pressure outlet and a no-slip wall; steady (simpleFoam), "
+        f"{model} with wall functions, Accurate numerics, residual targets 1e-5, at most {END_TIME} iterations."
+    )
+
+
+def mesh_words(result: dict[str, Any]) -> str:
+    v = str(result.get("variant"))
+    mesh = result.get("setup", {}).get("mesh", {})
+    fine = (mesh.get("settings") or {}).get("fineness")
+    lay = (f"an Inflate boundary layer of {LAYERS['n_layers']} layers, {LAYERS['total_thickness']:g} mm in all, on the "
+           "wall (automatic boundary layers off)" if MESHER[v] == "hexdominant" else "its automatic boundary layers and hex core")
+    n_orth = ((result.get("setup", {}).get("study") or {}).get("settings") or {}).get("n_non_orthogonal")
+    label = "Hex-dominant" if MESHER[v] == "hexdominant" else "Standard"
+    return f"{label} at fineness {fine} with {lay}; {n_orth} non-orthogonal corrector{'s' if n_orth != 1 else ''}"
+
+
+def shown_words(result: dict[str, Any]) -> list[str]:
+    from ..report import num
+
+    s = result.get("shown") or {}
+    bits: list[str] = []
+    if s.get("d_eff_mm") is not None:
+        bits.append(f"the pipe's cross-section as meshed {num(s['area_mm2'], 5)} mm² ({s['area_vs_nominal_pct']:+.2f} % "
+                    f"against pi D²/4), so D_eff {num(s['d_eff_mm'], 5)} mm, U_b {num(s['ub_m_s'], 5)} m/s and Re_eff "
+                    f"{num(s['re_eff'], 5)}")
+    if s.get("f_early") is not None:
+        bits.append(f"f from the pressure over x/D {EARLY_FROM_D:g} to {EARLY_TO_D:g} {num(s['f_early'], 4)} "
+                    f"({s['f_early_vs_f_pct']:+.2f} % against x/D {FIT_FROM_D:g} to {FIT_TO_D:g}: a developed flow reads the same)")
+    if s.get("f_tau_vs_f_pct") is not None:
+        bits.append(f"f from the wall shear stress {s['f_tau_vs_f_pct']:+.2f} % against f from the pressure drop")
+    yp = s.get("y_plus") or {}
+    if yp:
+        bits.append(f"the wall's y+ over x/D {FIT_FROM_D:g} to {FIT_TO_D:g} from {num(yp['min'], 3)} to {num(yp['max'], 3)}, "
+                    f"area-weighted mean {num(yp['mean'], 3)} ({yp['n_faces']} faces; the wall functions assume about 30 to 100)")
+    if s.get("ucl_over_ub") is not None:
+        bits.append(f"the centreline speed over x/D {FIT_FROM_D:g} to {FIT_TO_D:g} {num(s['ucl_over_ub'], 4)} U_b "
+                    "(Plot over path)")
+    if s.get("inlet_p_Pa") is not None:
+        bits.append(f"the inlet's area-averaged pressure {num(s['inlet_p_Pa'], 4)} Pa"
+                    + (f", flow out against in {num(s['imbalance_pct'], 2)} %" if s.get("imbalance_pct") is not None else ""))
+    return bits
+
+
+# ---------------------------------------------------------------------------------------- figures
+
+FIGURES = (
+    ("pressure", "centreline pressure"),
+    ("centreline", "centreline speed"),
+    ("residuals", "residuals"),
+)
+_NEEDS = {"pressure": "p_axis", "centreline": "u_axis", "residuals": "residuals"}
+
+
+def has_figure(kind: str, result: dict[str, Any]) -> bool:
+    return _NEEDS[kind] in (result.get("series") or {})
+
+
+def _q(result: dict[str, Any], key: str) -> dict[str, Any]:
+    return next((q for q in result.get("quantities") or [] if q["key"] == key), {})
+
+
+def _err_text(q: dict[str, Any], name: str) -> str:
+    if q.get("value") is None:
+        return f"{name}: no value"
+    return f"{name} {q['value']:.4g} (reference {q['reference']['value']:g}, {q['error']['rel_pct']:+.2f} %)"
+
+
+def draw(kind: str, result: dict[str, Any], ax: Any) -> None:
+    from ..plots import INK, SECOND, SERIES, note
+
+    s = result["series"]
+    shown = result.get("shown") or {}
+    ub = shown.get("ub_m_s") or U
+    d_eff = (shown.get("d_eff_mm") or D * 1000.0) / 1000.0
+    if kind == "pressure":
+        x = [v / D for v in s["p_axis"]["x_m"]]
+        ax.plot(x, s["p_axis"]["p_Pa"], color=SERIES, linewidth=1.6, label="Magnusim (Plot over path)")
+        fit = shown.get("fit")
+        if fit:
+            mid = 0.5 * (FIT_FROM_D + FIT_TO_D) * D
+            p_mid = fit["slope"] * mid + fit["intercept"]
+            g = _REF.value * 0.5 * RHO * ub * ub / d_eff
+            xs = [10.0, L / D]
+            ax.plot(xs, [p_mid + g * (mid - xx * D) for xx in xs], color=INK, linestyle="--", linewidth=1.2,
+                    label="McKeon et al. (2005) gradient (U_b, D_eff)")
+            ax.axvspan(FIT_FROM_D, FIT_TO_D, color=SERIES, alpha=0.08, linewidth=0, label="fit window")
+        ax.set_xlabel("x / D")
+        ax.set_ylabel("p (Pa, = kinematic, rho = 1)")
+        ax.legend(loc="upper right")
+        note(ax, _err_text(_q(result, "f"), "f") + "\n" + _err_text(_q(result, "f_tau"), "f_tau"))
+    elif kind == "centreline":
+        x = [v / D for v in s["u_axis"]["x_m"]]
+        ax.plot(x, [v / ub for v in s["u_axis"]["U_m_s"]], color=SERIES, linewidth=1.6, label="Magnusim (Plot over path)")
+        if "probes" in s:
+            ax.plot([v / D for v in s["probes"]["x_m"]], [v / ub for v in s["probes"]["Ux_m_s"]], linestyle="none",
+                    marker="o", markersize=5, color=SECOND, label="Point probes")
+        ax.axvspan(FIT_FROM_D, FIT_TO_D, color=SERIES, alpha=0.08, linewidth=0, label="fit window")
+        ax.set_xlabel("x / D")
+        ax.set_ylabel("U_cl / U_b")
+        ax.legend(loc="lower right")
+    elif kind == "residuals":
+        h = s["residuals"]
+        for i, key in enumerate(k for k in h if k != "t"):
+            ax.semilogy(h["t"], h[key], color=(SERIES, SECOND, INK, "#7a7a76")[i % 4], linewidth=1.2,
+                        label=f"{key} (initial residual)")
+        ax.axhline(1e-5, color=INK, linestyle=":", linewidth=1.0, label="target 1e-5")
+        ax.set_xlabel("iteration")
+        ax.set_ylabel("residual")
+        ax.legend(loc="upper right", fontsize=7)

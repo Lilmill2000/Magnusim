@@ -29,6 +29,7 @@ import { scopeIds, useRegistryReady } from '../scope';
 import { isStaleRecord } from '../../workbench/recordRev';
 import { stopMesh } from './meshStop';
 import { meshQualityLines } from './meshQuality';
+import { ONE_CELL_ACROSS, twoDNote, twoDSyncReads, type TwoDAnswer } from './twoD';
 
 /** Settings as they live on disk (mesh.json `settings`). */
 interface MeshSettingsDoc {
@@ -298,6 +299,49 @@ function useMeshCopy(meshId: string): MeshCopyState | null {
   return copy;
 }
 
+/**
+ * While One cell across (2D) is on: whether the study's part can be meshed so, read again when
+ * the setting turns on, the mesh or study changes, or the Assistant changes its BCs, materials,
+ * meshes or geometry. While a check runs the note says so, never the answer before it.
+ */
+function useTwoD(on: boolean, projectId: string, simulationId: string, meshId: string): { answer: TwoDAnswer | null; loading: boolean } {
+  const [answer, setAnswer] = useState<TwoDAnswer | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const onSync = (ev: Event) => {
+      const kinds = (ev as CustomEvent<{ kinds?: string[] }>).detail?.kinds || [];
+      if (twoDSyncReads(kinds)) setTick((n) => n + 1);
+    };
+    window.addEventListener('cfd:ui-sync', onSync);
+    return () => window.removeEventListener('cfd:ui-sync', onSync);
+  }, []);
+  useEffect(() => {
+    if (!on || !projectId) {
+      setAnswer(null);
+      setLoading(false);
+      return;
+    }
+    let dead = false;
+    setAnswer(null);
+    setLoading(true);
+    void apiGet('/api/mesh/two-d', { project_id: projectId, simulation_id: simulationId || undefined })
+      .then((doc) => {
+        if (!dead) setAnswer(doc as TwoDAnswer);
+      })
+      .catch((e: unknown) => {
+        if (!dead) setAnswer({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      })
+      .finally(() => {
+        if (!dead) setLoading(false);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [on, projectId, simulationId, meshId, tick]);
+  return { answer, loading };
+}
+
 function formatCount(n: number | null | undefined): string {
   return n == null ? '–' : Number(n).toLocaleString();
 }
@@ -516,6 +560,13 @@ export function MeshSettings(props: IslandProps) {
     engineNow.current = next;
     setEngineState(next);
   }
+
+  // One cell across (2D), Hex-dominant's own setting: while it is on, the note under it says how
+  // the part is meshed, or why it can't be (and Generate refuses).
+  const hasTwoD = !!(schema.properties && (schema.properties as Record<string, unknown>)[ONE_CELL_ACROSS]);
+  const scopedNow = ids();
+  const twoD = useTwoD(hasTwoD && data[ONE_CELL_ACROSS] === true, scopedNow.project_id || '', scopedNow.simulation_id || '', meshId);
+  const twoDText = hasTwoD && data[ONE_CELL_ACROSS] === true ? twoDNote(twoD.answer, twoD.loading) : '';
 
   function applyDoc(mesh: MeshDoc | undefined) {
     if (!mesh) return;
@@ -771,6 +822,21 @@ export function MeshSettings(props: IslandProps) {
           formData={data}
           hideFooter
           advancedExtra={engineRow}
+          fieldNotes={
+            twoDText
+              ? {
+                  [ONE_CELL_ACROSS]: (
+                    <span
+                      data-mesh-two-d={
+                        !twoD.answer ? 'checking' : twoD.answer.ok === false ? 'error' : twoD.answer.available ? 'available' : 'unavailable'
+                      }
+                    >
+                      {twoDText}
+                    </span>
+                  ),
+                }
+              : undefined
+          }
           onLive={(values) => {
             // Against what the form showed: the stored values, or the schema's defaults before they load.
             const shown = prepareSchemaForm(schema, live.current).formData;

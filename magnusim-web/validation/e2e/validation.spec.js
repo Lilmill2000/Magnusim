@@ -1,0 +1,111 @@
+// The validation set (validation/README.md): each case and variant planned in Python, sent to
+// the app by the driver over its own routes (real meshes and solves in WSL), then evaluated
+// against its published reference values into results/<case>/<variant>/result.json.
+//
+// Opt-in: every test skips unless MAGNUSIM_E2E_VALIDATION=1 (npm run test:validation sets it).
+// No default suite runs this folder (scripts/e2e-suites.mjs: validation/ is "none"), nor CI.
+// With the gate on, a PC without WSL and OpenFOAM fails instead of skipping.
+// Knobs (npm run test:validation sets them from its options):
+//   MAGNUSIM_VALIDATION_CASES=c1,c3        only these cases (ids or short names)
+//   MAGNUSIM_VALIDATION_VARIANTS=standard  only these variants
+//   MAGNUSIM_VALIDATION_CORES=4            the runs' Cores (default 8, the release run's)
+//   MAGNUSIM_VALIDATION_COARSE=1           each case's coarse settings, into results-coarse/ (never committed)
+//   MAGNUSIM_VALIDATION_MESH_ONLY=1        mesh and record the mesh facts, no solve (results-probe/)
+//   MAGNUSIM_VALIDATION_MESH='{"..."}'     mesh settings merged into each case's (a probe: results-probe/)
+//   MAGNUSIM_VALIDATION_STUDY='{"..."}'    study settings merged into each case's (a probe: results-probe/)
+//   MAGNUSIM_VALIDATION_MAX_CELLS=2000000  refuse to Generate a plan whose estimated mesh is bigger
+// Only a full run writes under results/, the one folder the report reads; the plan command
+// picks the folder (magnusim_validation/paths.py results_root) and the test checks it.
+// SPDX-License-Identifier: GPL-3.0-or-later
+import { expect, test } from '@playwright/test';
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { PYTHON } from '../../scripts/python-env.js';
+import { NO_WSL } from '../../e2e/toolchain.js';
+import { quantityLine, runPlan } from './driver.mjs';
+
+const VALIDATION = join(dirname(fileURLToPath(import.meta.url)), '..');
+const WEB = join(VALIDATION, '..');
+const GATE = process.env.MAGNUSIM_E2E_VALIDATION === '1';
+const WSL = process.env.MAGNUSIM_E2E_WSL === '1';
+const COARSE = process.env.MAGNUSIM_VALIDATION_COARSE === '1';
+const MESH_ONLY = process.env.MAGNUSIM_VALIDATION_MESH_ONLY === '1';
+const MESH_SETTINGS = String(process.env.MAGNUSIM_VALIDATION_MESH || '').trim();
+const STUDY_SETTINGS = String(process.env.MAGNUSIM_VALIDATION_STUDY || '').trim();
+const CORES = Number(process.env.MAGNUSIM_VALIDATION_CORES) || 8;
+const MAX_CELLS = Number(process.env.MAGNUSIM_VALIDATION_MAX_CELLS) || 2_000_000;
+const listOf = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+/** python -m magnusim_validation <args> (the app's Python, in validation/); its last stdout line as JSON. */
+function py(args, { timeout = 600_000 } = {}) {
+  const r = spawnSync(PYTHON, ['-m', 'magnusim_validation', ...args], { cwd: VALIDATION, encoding: 'utf8', timeout, windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const lines = String(r.stdout || '').trim().split(/\r?\n/);
+  let out = null;
+  try {
+    out = JSON.parse(lines[lines.length - 1]);
+  } catch {
+    /* below */
+  }
+  if (r.status !== 0 || !out) throw new Error(`magnusim_validation ${args.join(' ')} failed (${r.status}): ${String(r.stderr || '').slice(-2000)}`);
+  return out;
+}
+
+if (!GATE) {
+  test('the validation set runs only when asked (npm run test:validation)', () => {
+    test.skip(true, 'MAGNUSIM_E2E_VALIDATION is not 1');
+  });
+} else {
+  const wantCases = listOf(process.env.MAGNUSIM_VALIDATION_CASES);
+  const wantVariants = listOf(process.env.MAGNUSIM_VALIDATION_VARIANTS);
+  const all = py(['list']);
+  const runs = [];
+  for (const c of all) {
+    if (wantCases.length && !wantCases.some((w) => w === c.case || c.case.startsWith(`${w}_`))) continue;
+    for (const v of c.variants) if (!wantVariants.length || wantVariants.includes(v)) runs.push({ case: c.case, title: c.title, variant: v });
+  }
+  test('the validation set has runs to make', () => {
+    expect(runs.length, `no case matches MAGNUSIM_VALIDATION_CASES=${wantCases} / VARIANTS=${wantVariants}`).toBeGreaterThan(0);
+  });
+  for (const r of runs) {
+    test(`${r.case} ${r.variant}: ${r.title}`, async ({ request }) => {
+      expect(WSL, NO_WSL).toBe(true);
+      test.setTimeout(4 * 3600_000);
+      const planned = py([
+        'plan', r.case, r.variant, '--cores', String(CORES),
+        ...(COARSE ? ['--coarse'] : []), ...(MESH_ONLY ? ['--mesh-only'] : []), ...(MESH_SETTINGS ? ['--mesh-settings', MESH_SETTINGS] : []),
+        ...(STUDY_SETTINGS ? ['--study-settings', STUDY_SETTINGS] : []),
+      ]);
+      expect(planned.ok).toBe(true);
+      const dir = planned.dir;
+      // Only a full run of the case's own settings may write where the report reads.
+      const reported = resolve(VALIDATION, 'results') + sep;
+      const probe = COARSE || MESH_ONLY || MESH_SETTINGS || STUDY_SETTINGS;
+      expect(resolve(dir).startsWith(reported), `${dir}: a coarse, mesh-only or changed-settings run went to results/`).toBe(!probe);
+      for (const w of planned.estimate_warnings || []) console.log(`PLAN ${r.case}/${r.variant}: ${w}`);
+      // A run starts clean: the answers of an earlier run never mix with this one's.
+      for (const old of ['raw', 'driver.json', 'result.json']) rmSync(join(dir, old), { recursive: true, force: true });
+      let drove = null;
+      let why = '';
+      try {
+        drove = await runPlan({ request, dir, webRoot: WEB, meshOnly: MESH_ONLY, maxCells: MAX_CELLS });
+      } catch (e) {
+        why = String((e && e.message) || e);
+      }
+      // Evaluate while the run's case folder is still there (each server start empties its projects root).
+      const evaluated = py(['evaluate', dir, ...(why ? ['--failed', why.slice(0, 2000)] : [])]);
+      const result = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8'));
+      // A quantity whose reference is zero has no relative error: its line gives the absolute one.
+      const rows = (result.quantities || []).map(quantityLine);
+      console.log(`RESULT ${r.case}/${r.variant}: ${result.status} ${result.status_detail || ''}\n  ${rows.join('\n  ')}`);
+      test.info().annotations.push({ type: 'result', description: `${result.status}: ${rows.join('; ')}` });
+      expect(existsSync(join(dir, 'result.json'))).toBe(true);
+      // The run must produce its numbers; a locked quantity outside its tolerance fails it too.
+      expect(evaluated.status, `${result.status_detail || why}`).toBe(MESH_ONLY ? 'mesh_only' : 'ok');
+      expect(drove && drove.outcome, why).toBe(MESH_ONLY ? 'mesh_only' : 'done');
+      const failedLocked = (result.quantities || []).filter((q) => q.verdict === 'fail');
+      expect(failedLocked.map((q) => q.key), 'locked quantities outside their tolerance').toEqual([]);
+    });
+  }
+}

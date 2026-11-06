@@ -68,6 +68,8 @@ export const refinementCatalog = {
   draft_faces: [],
   focusFace: null,
   note: '',
+  // A Refine out to typed that can't be kept ({id, value}): the editor shows it with why (runtime.js).
+  reachRefused: null,
 };
 
 export const runCatalog = {

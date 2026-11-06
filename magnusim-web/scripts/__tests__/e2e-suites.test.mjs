@@ -34,6 +34,34 @@ test('documentation, unit tests and files outside the app run no browser suite',
   assert.deepEqual(planSuites(['docs/TESTING.md', 'src/x.test.ts'], PLUGINS).core, null);
 });
 
+test('the validation set runs in no default suite: only npm run test:validation runs it', () => {
+  for (const rel of [
+    'validation/e2e/validation.spec.js',
+    'validation/e2e/driver.mjs',
+    'validation/playwright.config.js',
+    'validation/magnusim_validation/cases/c1_laminar_pipe.py',
+    'validation/results/c1_laminar_pipe/hexdominant/result.json',
+    'validation/VALIDATION.md',
+    'scripts/validation-run.mjs',
+    'scripts/validation-report.mjs',
+    '../docs/validation/index.html',
+  ]) {
+    assert.deepEqual(classifyPath(rel, PLUGINS), { kind: 'none', why: rel.startsWith('../') ? 'outside the app' : rel.endsWith('.md') ? 'documentation' : 'the validation set (npm run test:validation)' }, rel);
+  }
+  assert.deepEqual(planSuites(['validation/e2e/validation.spec.js', 'scripts/validation-run.mjs'], PLUGINS), {
+    core: null,
+    plugins: {},
+    none: [
+      { file: 'validation/e2e/validation.spec.js', why: 'the validation set (npm run test:validation)' },
+      { file: 'scripts/validation-run.mjs', why: 'the validation set (npm run test:validation)' },
+    ],
+  });
+  // Its specs are in no suite's folder: the full tier never finds them.
+  for (const s of discoverPluginSuites(WEB_ROOT)) assert.ok(!String(s.config || '').startsWith('validation/'), s.key);
+  // Another file named like it elsewhere in scripts/ still runs the core suite.
+  assert.equal(classifyPath('scripts/validation-helpers/x.mjs', PLUGINS).kind, 'core');
+});
+
 test('a core change runs the whole core suite and every plugin suite', () => {
   for (const rel of [
     'src/panels/PanelChrome.tsx',

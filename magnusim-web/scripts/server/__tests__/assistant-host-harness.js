@@ -158,6 +158,9 @@ function answer(w, method, path, q, body) {
       }
       case '/api/mesh/refinements':
         return { ok: true, refinements: w.refinements, mesh_refinements_json_path: `${WIN}\\r.json` };
+      case '/api/mesh/two-d':
+        // One cell across (2D): the study's part (w.two_d), else one with no Symmetry.
+        return w.two_d || { ok: true, available: false, reason: 'No boundary condition is a Symmetry.', project_id: 'p1', simulation_id: sim };
       case '/api/run/status': {
         const want = q.get('run_id');
         const id = want || w.active_run;
@@ -218,7 +221,7 @@ function answer(w, method, path, q, body) {
     case '/api/mesh/refinements':
       if (body && body.copy_from_mesh) return { ok: true, copied: true, copied_count: 1, lost_faces: [] };
       if (body && body.delete) return { ok: true, deleted: true };
-      return { ok: true, refinement: { id: body.id || 'ref-new', name: body.name || 'Surface custom sizing 1', type: body.type, mesh_id: body.mesh_id, faces: body.faces } };
+      return { ok: true, refinement: { id: body.id || 'ref-new', name: body.name || 'Surface custom sizing 1', type: body.type, mesh_id: body.mesh_id, faces: body.faces, ...(body.reach !== undefined ? { reach: body.reach, reach_unit: body.reach_unit } : {}) } };
     case '/api/mesh':
       if (body && body.create) {
         // As the app's route: the new mesh joins the study's list, with the default settings.

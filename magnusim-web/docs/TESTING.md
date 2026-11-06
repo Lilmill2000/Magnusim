@@ -15,9 +15,34 @@ run depends on what you are doing.
 | Before a local commit | `npm run test:e2e:changed`: the suites your change can affect, without WSL meshes and solves | minutes |
 | Before a push, and nightly | `npm run test:e2e`: every suite, with real meshes and solves | about 47 min |
 | Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about two hours |
+| Before a release, and nightly | The app's validation set: `npm run test:validation` (WSL meshes and solves through the app's routes, then `npm run validation:report`) | minutes per case (case 1: about 2 min a mesher at 4 cores) |
 
 The full run is the gate before a push. It is not needed for every commit. A
 validation set is never part of `-m wsl`: its cases run only when asked for.
+
+## The validation set
+
+`magnusim-web/validation/` (its `README.md`) compares the app's results with published
+reference values: each case is a STEP file imported into a project, set up, meshed and
+solved through the routes the page and the Assistant use, then measured from its monitors
+and Plot over path. It is opt-in: its browser suite (`validation/playwright.config.js`)
+skips unless `MAGNUSIM_E2E_VALIDATION=1`, no default suite or CI job runs it, and
+`scripts/e2e-suites.mjs` counts a change under `validation/` (and its two scripts) as
+running no suite. Its harness's own parts (plans, face selectors, extraction, comparison,
+the report) are tested by pytest (`validation/tests`, in `npm run test:py` and CI) and
+`scripts/__tests__/validation-driver.test.mjs` (in `npm run test:server`).
+
+| Command | What it runs |
+|---|---|
+| `npm run test:validation` | Every case and variant at 8 cores, one run at a time under the WSL test lock, then the report. |
+| `npm run test:validation -- --case c1 --variant standard --cores 4` | One case and mesher. `--coarse` makes quick coarse runs into `validation/results-coarse/` (never committed); `--mesh-only` meshes and records the mesh facts only, and `--mesh '{"hex_element_core":false}'` or `--study '{"grad_limiter":"none"}'` change the case's mesh or study settings by hand: these are probes, into `validation/results-probe/` (never committed, never reported); `--no-report` skips the report. |
+| `npm run validation:report` | `validation/VALIDATION.md` and the public page (`docs/validation/` at the repository's root) from the committed results; `-- --check` exits 1 when they are out of date (pytest checks this too). |
+
+Its app server loads only the bundled plugins (not the test plugins the core suite loads).
+`MAGNUSIM_E2E_LOCK=0` lets it run beside another WSL test run (set `--cores` low then);
+a run's result records WSL's load while it solved, so run times compare like with like.
+Results are report-only until the first full run's tolerances are locked; then a locked
+quantity outside its tolerance fails `npm run test:validation` and blocks a release.
 
 | Command | What it runs |
 |---|---|
@@ -200,10 +225,14 @@ once with a message naming the stylesheet and the error.
   the person sees while a mesh generates, a run solves, either is stopped or ends,
   or This PC is checked needs no OpenFOAM, no WSL and no minutes: meshes run
   `python/tools/fake_mesh_generate.py` through the same live job, compute slot and
-  queue (`MAGNUSIM_TEST_MESH_SECONDS`, default 6; `MAGNUSIM_TEST_MESH_RESULT=fail`;
+  queue (`MAGNUSIM_TEST_MESH_SECONDS`, default 6; `MAGNUSIM_TEST_MESH_RESULT=fail`, or
+  `fail-with-mesh`: it writes its mesh, then fails, as a real mesher's copy-back does:
+  `e2e/mesh-failed-stays-failed.spec.js`;
   `MAGNUSIM_TEST_MESH_CHECKMESH=<checkMesh report>` puts that report in the case and writes
   the mesh's facts and quality as a real mesher does: `e2e/mesh-quality-line.spec.js`, with
-  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`),
+  OpenFOAM's own reports in `python/tests/fixtures/mesh-facts/checkmesh/`; a Hex-dominant
+  mesh with One cell across (2D) on asks the real rule first, `tools/mesh_two_d.py`, and fails
+  with Generate's words on a part it can't mesh so: `e2e/mesh-one-cell-across.spec.js`),
   a Start runs `scripts/test-solve.js` after every check a real Start makes
   (`MAGNUSIM_TEST_SOLVE_SECONDS`, default 6; `MAGNUSIM_TEST_SOLVE_RESULT=fail`) and keeps the
   run's pre-run check as a real Start's plan does (`prepare_run.checks`: `e2e/run-precheck.spec.js`), and
