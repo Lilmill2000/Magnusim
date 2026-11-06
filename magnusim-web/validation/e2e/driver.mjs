@@ -191,14 +191,21 @@ export function runProgress(run) {
  */
 export const OWN_OUTPUTS = ['magnusim-web/validation/results', 'magnusim-web/validation/VALIDATION.md', 'docs/validation', 'docs/.nojekyll'];
 
-/** The commit, its description, whether the tree has changes (the set's own outputs aside), and the branch (git in `cwd`). */
+/**
+ * The commit, its description, whether the tree has changes (the set's own outputs aside), and the
+ * branch (git in `cwd`, the app's folder). A change is a tracked file changed anywhere in the
+ * repository, or a file in the app's folder that git does not track and does not ignore (a new
+ * module a run would load); untracked files beside the app (the repository root's logs) are not.
+ */
 export function gitFacts(cwd) {
   const git = (args) => {
     const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
     return r.status === 0 ? String(r.stdout).trim() : null;
   };
-  const status = git(['status', '--porcelain', '--untracked-files=no', '--', ':(top)', ...OWN_OUTPUTS.map((p) => `:(top,exclude)${p}`)]);
-  const dirty = status === null ? null : status.length > 0;
+  const own = OWN_OUTPUTS.map((p) => `:(top,exclude)${p}`);
+  const tracked = git(['status', '--porcelain', '--untracked-files=no', '--', ':(top)', ...own]);
+  const untracked = git(['status', '--porcelain', '--untracked-files=all', '--', '.', ...own]);
+  const dirty = tracked === null || untracked === null ? null : tracked.length > 0 || untracked.length > 0;
   const describe = git(['describe', '--tags', '--always']);
   return {
     commit: git(['rev-parse', 'HEAD']),

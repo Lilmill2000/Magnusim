@@ -165,7 +165,7 @@ test('a plan whose estimated mesh is over the cap is not generated', () => {
   assert.equal(estimateTooBig({ mesh: {} }, 2_000_000), '');
 });
 
-test("a rerun does not count the set's own outputs as changes to the tree; any other change does", (t) => {
+test("a rerun does not count the set's own outputs as changes to the tree; any other change does, an untracked file of the app's too", (t) => {
   const git = (cwd, ...args) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
   if (git(process.cwd(), '--version').status !== 0) {
     t.skip('no git');
@@ -194,6 +194,24 @@ test("a rerun does not count the set's own outputs as changes to the tree; any o
     const clean = gitFacts(web);
     assert.equal(clean.dirty, false);
     assert.doesNotMatch(String(clean.describe), /dirty/);
+    // A new result folder the run writes, and untracked files beside the app (the root's logs), are not changes.
+    mkdirSync(join(run, '..', 'standard'), { recursive: true });
+    writeFileSync(join(run, '..', 'standard', 'result.json'), '{}\n');
+    writeFileSync(join(repo, 'gates-1.log'), 'x\n');
+    assert.equal(gitFacts(web).dirty, false);
+    // An untracked file of the app's that git ignores is not a change; one it does not ignore is.
+    writeFileSync(join(web, '.gitignore'), '*.tmp\n');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'magnusim-web/.gitignore');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'ignore');
+    writeFileSync(join(web, 'scratch.tmp'), 'x\n');
+    assert.equal(gitFacts(web).dirty, false);
+    mkdirSync(join(web, 'lib'), { recursive: true });
+    writeFileSync(join(web, 'lib', 'new_module.py'), 'x = 1\n');
+    const untracked = gitFacts(web);
+    assert.equal(untracked.dirty, true, 'an untracked module of the app is a change');
+    assert.match(String(untracked.describe), /-dirty$/);
+    unlinkSync(join(web, 'lib', 'new_module.py'));
+    assert.equal(gitFacts(web).dirty, false);
     // A change to the app's own code is a change.
     writeFileSync(join(web, 'app.js'), 'y\n');
     const dirty = gitFacts(web);
