@@ -165,6 +165,57 @@ def quantities(variant: str) -> list[QuantitySpec]:
     return list(_BY_VARIANT[variant].values())
 
 
+def _note_stops(by: dict[str, dict[str, Any]]) -> str | None:
+    """How the reported runs' solves ended, from their results."""
+    bits, all_met = [], True
+    for v, label in (("re100", "Re 100"), ("re1000", "Re 1000")):
+        run = (by.get(v) or {}).get("run") or {}
+        if not run:
+            continue
+        if run.get("converged") and run.get("converged_at") is not None:
+            bits.append(f"{label} at {int(run['converged_at'])} iterations")
+        else:
+            all_met = False
+            bits.append(f"{label} at its limit of {int(run.get('iterations') or 0)} iterations, short of them")
+    if not bits:
+        return None
+    from ..notes import and_list
+
+    head = "Each run stops on its residual targets of 1e-6" if all_met else "The runs' residual targets are 1e-6"
+    return (f"{head} ({and_list(bits)}; the solver's last residuals are listed with each run); one that reached its "
+            "iteration limit would count only if it settled there (its centre probes moving less than 0.1 % over its "
+            "last 10 % of iterations). The first full runs (2026-11-05) kept the two ends as mirror planes, where "
+            "OpenFOAM still solves the velocity's z component: zero to round-off, its normalised residual stayed at "
+            "0.035 to 0.068, so neither run met its targets, both went to their limits (12 000 and 8 000 iterations, "
+            "Ux, Uy and p near 1e-8) and Run health read the U residual as stalled (an app bug of One cell across, "
+            "fixed: the ends are now empty).")
+
+
+# A probe of Re 100 with residual targets of 1e-8 (2026-11-05, not reported: it went to its 12 000
+# iterations): psi_min, u_min and v_max.
+TIGHT_RE100 = {"psi_min": -0.10345, "u_min": -0.21390, "v_max": 0.17945}
+
+
+def _note_targets(by: dict[str, dict[str, Any]]) -> str | None:
+    """How far the residual targets leave the reported Re 100 run from a tighter one."""
+    from ..report import num, pct_text, quantity, rel_pct
+
+    res = by.get("re100")
+    got: dict[str, float] = {}
+    for k in TIGHT_RE100:
+        v = quantity(res, k).get("value")
+        if v is None:
+            return None
+        got[k] = float(v)
+    moves = [rel_pct(TIGHT_RE100[k], got[k]) for k in TIGHT_RE100]
+    inside = all(quantity(res, k).get("within") for k in TIGHT_RE100)
+    return ("The residual targets, not the empty ends, set how far these runs are converged: a probe of Re 100 with "
+            "targets of 1e-8 (2026-11-05, not reported; it went to its 12 000 iterations) gave psi_min -0.10345, "
+            f"u_min -0.21390 and v_max 0.17945, against {num(got['psi_min'], 5)}, {num(got['u_min'], 5)} and "
+            f"{num(got['v_max'], 5)} in the reported run at 1e-6: they move by {pct_text(min(moves))} to "
+            f"{pct_text(max(moves))} %" + (", all inside their bands." if inside else "."))
+
+
 NOTES = (
     "One cell across (2D): the cavity is meshed one cell deep between its front and back, both on one Symmetry, "
     "which the solve makes the 2D mesh's empty ends, so the solution is exactly 2D and nothing is solved across the "
@@ -183,17 +234,8 @@ NOTES = (
     "with those, and the primary vortex with Marchi et al. (2009).",
     "The Point probes at Ghia et al.'s stations are a cross-check (shown): they read the value at each point "
     "(OpenFOAM's cellPoint interpolation, gap G3, fixed).",
-    "Each run stops on its residual targets of 1e-6 (Re 100 at 6499 iterations, Re 1000 at 6056; the solver's last "
-    "residuals are listed with each run); one that reached its iteration limit would count only if it settled there "
-    "(its centre probes moving less than 0.1 % over its last 10 % of iterations). The first full runs (2026-11-05) "
-    "kept the two ends as mirror planes, where OpenFOAM still solves the velocity's z component: zero to round-off, "
-    "its normalised residual stayed at 0.035 to 0.068, so neither run met its targets, both went to their limits "
-    "(12 000 and 8 000 iterations, Ux, Uy and p near 1e-8) and Run health read the U residual as stalled (an app bug "
-    "of One cell across, fixed: the ends are now empty).",
-    "The residual targets, not the empty ends, set how far these runs are converged: a probe of Re 100 with targets "
-    "of 1e-8 (not reported; it went to its 12 000 iterations) reads the first full run's values to within 1e-5 "
-    "(psi_min -0.10345, u_min -0.21390, v_max 0.17945), against -0.10335, -0.21358 and 0.17875 at 1e-6: the extrema and "
-    "psi_min move by 0.1 to 0.4 %, all inside their bands.",
+    _note_stops,
+    _note_targets,
 )
 
 # A steady run that stops at its iteration limit counts as settled only when these histories

@@ -327,7 +327,7 @@
   "name": "Validation",
   "endTime": 8000,
   "writeInterval": 8000,
-  "cores": 4,
+  "cores": 8,
   "result_controls": [
    {
     "id": "rc-vertical",

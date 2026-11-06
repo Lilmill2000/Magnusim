@@ -174,7 +174,7 @@
   "name": "Validation",
   "endTime": 3000,
   "writeInterval": 3000,
-  "cores": 4,
+  "cores": 8,
   "result_controls": [
    {
     "id": "rc-centreline",
@@ -360,5 +360,6 @@
  "timeouts_s": {
   "mesh": 1800,
   "solve": 5400
- }
+ },
+ "mesh_key": "889e78219456b8ad"
 }

@@ -38,7 +38,7 @@ RE = U * D / NU
 FIT_FROM_D, FIT_TO_D = 10.0, 13.0
 # The radial profile's station (x/D), in the developed part.
 PROFILE_AT_D = 12.0
-# Centreline probes at x/D = 1, 2, ..., 14 (Point probe: the cell holding each point).
+# Centreline probes at x/D = 1, 2, ..., 14 (Point probe: the value at each point, cellPoint).
 PROBE_X_D = tuple(float(i) for i in range(1, 15))
 # The cells and wall faces of the developed part (a box around the pipe over x/D 10 to 13).
 _WINDOW_BOX = [[FIT_FROM_D * D, -0.6 * D, -0.6 * D], [FIT_TO_D * D, 0.6 * D, 0.6 * D]]
@@ -148,9 +148,9 @@ NOTES = (
     "which reads a peak low where the cells are coarse, and on a mesh whose axis runs along cell edges no cell "
     "centre lies on the axis at all; what the line reads on the axis is shown beside the fit, with the profile's "
     "RMS difference from the exact parabola at the cells' own radii.",
-    "In these runs (made before the probes read the value at the point: gap G3, fixed since) the centreline Point "
-    "probes took the value of the cell that holds each point. Where the axis runs along cell edges (Hex-dominant) "
-    "that is one of the off-axis cells around it, the same cells the fit uses, so the probes are shown, not used as "
+    "The centreline Point probes read the value at each point (OpenFOAM's cellPoint interpolation, gap G3, fixed "
+    "before these runs). Where the axis runs along cell edges (Hex-dominant) that value comes from the off-axis "
+    "cells around it, the same cells the fit uses, so the probes are shown, not used as "
     "an independent check.",
     "The development length is read on Plot over path's centreline, against the same line's developed value, so "
     "the line's averaging enters both nearly alike. The 99 % point lies where the centreline speed is nearly flat: "
@@ -433,8 +433,8 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
         diffs = [ui - 2 * ub * (1 - (yi / r_eff) ** 2) for yi, ui in zip(y, u, strict=True) if abs(yi) <= r_eff]
         if diffs:
             shown["profile_rms_line_over_ub"] = rms(diffs) / ub
-    # The probes: the value of the cell holding each point (shown; on a mesh whose axis runs
-    # along cell edges, one of the cells around it).
+    # The probes: the value at each point (cellPoint; shown: on a mesh whose axis runs along cell
+    # edges, from the cells around it).
     probes = raw.probe_values("Centreline", component=0)
     if probes:
         series["probes"] = {"x_m": [p[0] for p in probes], "Ux_m_s": [p[1] for p in probes]}
@@ -498,7 +498,7 @@ def shown_words(result: dict[str, Any]) -> list[str]:
                     f"(the field averaged to the mesh's points)")
     if s.get("probe_ucl_over_ub") is not None:
         bits.append(f"the centreline probes' mean U_x over x/D {FIT_FROM_D:g} to {FIT_TO_D:g} {_n(s['probe_ucl_over_ub'], 5)} U_b "
-                    f"(the cell holding each point)")
+                    f"(the value at each point)")
     if s.get("profile_rms_cells_over_ub") is not None:
         bits.append(f"the {s.get('profile_cells_n')} cells of x/D {FIT_FROM_D:g} to {FIT_TO_D:g} within an RMS "
                     f"{_n(s['profile_rms_cells_over_ub'], 3)} U_b of 2 U_b (1 - (r/R)²) at their own radii")
@@ -563,7 +563,7 @@ def draw(kind: str, result: dict[str, Any], ax: Any) -> None:
         ax.plot(x, [v / ub for v in s["u_axis"]["U_m_s"]], color=SERIES, linewidth=1.6, label="Magnusim (Plot over path)")
         if "probes" in s:
             ax.plot([v / D for v in s["probes"]["x_m"]], [v / ub for v in s["probes"]["Ux_m_s"]], linestyle="none",
-                    marker="o", markersize=5, color=SECOND, label="Point probes (the cell holding each point)")
+                    marker="o", markersize=5, color=SECOND, label="Point probes (the value at each point)")
         cfit = _q(result, "ucl")
         if cfit.get("value") is not None:
             ax.plot([FIT_FROM_D, FIT_TO_D], [cfit["value"]] * 2, color=SECOND, linewidth=3.0, solid_capstyle="butt",

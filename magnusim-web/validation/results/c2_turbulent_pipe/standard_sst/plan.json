@@ -174,7 +174,7 @@
   "name": "Validation k-omega SST",
   "endTime": 2500,
   "writeInterval": 2500,
-  "cores": 4,
+  "cores": 8,
   "result_controls": [
    {
     "id": "rc-centreline",

@@ -33,7 +33,7 @@ def _rerun(res: dict) -> dict:
         if q.get("value") is not None:
             q["value"] = q["value"] * 1.0101
             ref = q["reference"]["value"]
-            q["error"] = {"abs": q["value"] - ref, "rel_pct": 100.0 * (q["value"] - ref) / ref}
+            q["error"] = {"abs": q["value"] - ref, "rel_pct": 100.0 * (q["value"] - ref) / ref if ref else None}
     return out
 
 
@@ -62,6 +62,37 @@ def test_the_sphere_note_takes_its_iterations_from_the_result():
     assert "the reported run" in text and "after 777 iterations (its worst face 33.3°)" in text
     # The typed runs are the earlier ones, dated, never the reported one's.
     assert "235 s" not in text
+
+
+def test_the_cavity_notes_take_their_iterations_and_extrema_from_the_results():
+    """The cavity's notes said "Re 100 at 6499 iterations, Re 1000 at 6056" and quoted the 1e-6 run's
+    extrema, typed from the run of 2026-11-05; the full run of all six cases took 6507 and 6055."""
+    case = cases.get("c3_lid_cavity")
+    mine = [r for r in load_results() if r["case"] == "c3_lid_cavity"]
+    assert len(mine) == 2
+    before = " ".join(case_notes(case, mine))
+    for r in mine:
+        assert f"at {r['run']['converged_at']} iterations" in before
+    again = [_rerun(r) for r in mine]
+    after = " ".join(case_notes(case, again))
+    assert "Re 100 at 777 iterations" in after and "Re 1000 at 777 iterations" in after
+    for r in mine:
+        assert f"at {r['run']['converged_at']} iterations" not in after
+    psi = next(q for q in again[[r["variant"] for r in again].index("re100")]["quantities"] if q["key"] == "psi_min")["value"]
+    assert f"{psi:.5g}" in after
+    # A run that stopped at its limit is not said to have met its targets.
+    for r in again:
+        r["run"].update({"converged": False, "iterations": 12000})
+    short = " ".join(case_notes(case, again))
+    assert "Each run stops on its residual targets" not in short and "at its limit of 12000 iterations, short of them" in short
+
+
+def test_the_pipe_notes_say_the_probes_read_the_value_at_each_point():
+    """Case 1's runs are made after gap G3's fix: its probes read the value at the point (they said the
+    runs were made before it and took the value of the cell holding each point)."""
+    text = " ".join(case_notes(cases.get("c1_laminar_pipe"), [r for r in load_results() if r["case"] == "c1_laminar_pipe"]))
+    assert "the cell holding each point" not in text and "made before the probes" not in text
+    assert "read the value at each point" in text
 
 
 def test_a_case_without_results_has_only_its_fixed_notes():
