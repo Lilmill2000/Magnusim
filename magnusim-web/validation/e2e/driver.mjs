@@ -168,11 +168,21 @@ export function runSettingsSent(run) {
   return { endTime: r.endTime, writeInterval: r.writeInterval, cores: r.cores };
 }
 
-/** The iteration (steady) or time (transient) a run has reached, as text. */
+/**
+ * The iteration (steady) or time (transient) a run has reached, as text: what the solve's stall
+ * check watches. A transient run's `iteration` is its time rounded (it stood at "1" for longer
+ * than the stall limit at 4 cores), so its time and its count of steps come first when the
+ * status gives them.
+ */
 export function runProgress(run) {
   if (!run) return '';
-  const it = run.iteration ?? run.progress?.iteration ?? run.last_time ?? run.progress?.time;
-  return it === undefined || it === null ? '' : String(it);
+  const p = run.progress || {};
+  const t = run.sim_time ?? p.sim_time ?? p.time ?? run.last_time;
+  const steps = run.n_steps ?? p.n_steps;
+  const it = run.iteration ?? p.iteration;
+  const at = t ?? it;
+  if (steps !== undefined && steps !== null) return `${at === undefined || at === null ? '' : at} (${steps} steps)`.trim();
+  return at === undefined || at === null ? '' : String(at);
 }
 
 /**

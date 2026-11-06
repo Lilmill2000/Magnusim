@@ -75,6 +75,13 @@ test('the route parameters and the answers it reads', () => {
   assert.equal(runProgress({ iteration: 42 }), '42');
   assert.equal(runProgress({ progress: { time: 0.5 } }), '0.5');
   assert.equal(runProgress({}), '');
+  // A transient run's iteration is its time rounded: its time and steps show it moving (the stall check).
+  const before = runProgress({ iteration: 1, sim_time: 1.2345, n_steps: 9000 });
+  const after = runProgress({ iteration: 1, sim_time: 1.4012, n_steps: 10210 });
+  assert.equal(before, '1.2345 (9000 steps)');
+  assert.notEqual(before, after);
+  assert.equal(runProgress({ progress: { sim_time: 0.25, n_steps: 12 } }), '0.25 (12 steps)');
+  assert.equal(runProgress({ iteration: 7, n_steps: 7 }), '7 (7 steps)');
 });
 
 test('a Forces monitor on a BC gets that BC\'s id; a transient run reads back its transient block', () => {
