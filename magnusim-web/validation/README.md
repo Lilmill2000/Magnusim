@@ -104,7 +104,11 @@ and its project is still on the server, and otherwise meshes its own.
   parallel: two mesh probes in a row gave 128 704 and 128 706 cells for case 1, and case 2's
   Standard pipe 69 543 twice, against 69 436 in the run and 69 568 before), and they were
   solved on 4 cores before (a 4-core probe of case 1 read its development length 0.8 % above
-  the run).
+  the run). The app changed after that run (below: Standard's laminar friction and k-omega
+  SST at the wall), so `results/` is from before those fixes; the set is to be run again from
+  one commit. Probes of every case and variant at 4 cores before and after them: cases 3 to 6
+  and the Hex-dominant pipe read the same before the fixes as the committed run (to the
+  digits shown), so the probes compare like with like.
 - The quick physics checks (`npm run test:physics`, docs/TESTING.md) are the set's fast
   companion: the case writer on three blockMesh grids (the cavity at Re 100 against Ghia et al.,
   the laminar pipe's f Re and U_cl / U_b, the cylinder's Cd at Re 20), in under a minute, first
@@ -120,7 +124,7 @@ their citations; this list is what those modules must start from.
 
 | Case | What the reference data set |
 |---|---|
-| 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). The reference data ask for f at least 40 D from the inlet (turbulent development is about 20 D), or a cyclic or mapped inlet. This case meets neither: the app has no cyclic inlet (G9) and Hex-dominant cannot mesh a pipe much longer than 30 D cleanly (below), so the pipe is 30 D and f is read over x/D 20 to 25, with the slope over 15 to 20 beside it; a run whose two differ by more than 1 % carries a warning (still developing there, f above its developed value). |
+| 2, turbulent pipe, Re 5e4 | Built (`c2_turbulent_pipe.py`). f = 0.0211 (McKeon et al. 2005, eq. 3.5), band ±10 % with wall functions (±5 % if y+ < 1). The reference data ask for f at least 40 D from the inlet (turbulent development is about 20 D), or a cyclic or mapped inlet. This case meets neither: the app has no cyclic inlet (G9) and Hex-dominant cannot mesh a pipe much longer than 30 D cleanly (below), so the pipe is 30 D and f is read over x/D 20 to 25, with the slope over 15 to 20 beside it; a run whose two differ by more than 1 % carries a warning (still developing there, so not yet its developed value; from the Auto inlet it reads below it: Development at 20 to 25 D, below). |
 | 3, lid-driven cavity, Re 100 and 1000 | Built (`c3_lid_cavity.py`, one cell across). Ghia et al. (1982) Tables I and II (`refs/ghia_1982_*.csv`, with the one correction at x = 0.9063, Re 1000: -0.51550); extrema within 3 % of Botella and Peyret (1998, `refs/botella_peyret_1998_extrema.csv`), the profiles' largest difference at most 0.03 U, the primary vortex centre within 0.01 L and psi_min within 2 % of Marchi et al. (2009, `refs/marchi_2009_vortex.csv`). |
 | 4, backward-facing step | Built (`c4_backward_step.py`, one cell across). Re_D 100 on Armaly et al.'s expansion ratio 1.942 against their Fig. 14, x1/S = 3.00, ±10 % (the flow turns three-dimensional near Re 400, so not the design's Re 389; `refs/armaly_1983_fig14_x1.csv`); Re_D 800 on expansion ratio 2 against Gartling (1990), x_r/S = 12.20, ±7 %, and the top wall's bubble (9.70 and 20.96 S, ±10 %; `refs/gartling_1990_re800.csv`), the literature's scatter beside it (`refs/bfs_re800_scatter.csv`); the outlet 30 H after the step; a uniform inlet with an upstream channel of 10 h or 10 H (no profile inlet). Read from the wall shear stress the run saved on the floor and the top, U_x 0.02 S from the wall as the cross-check. Re_D 800 solves with SIMPLEC: with SIMPLE it never settled. |
 | 5, cylinder | Built (`c5_cylinder.py`, one cell across). Re 20 and 40 steady against Cd 2.02 and 1.50 and L/D 0.93 and 2.24 (±5 %, `refs/cylinder_re20_re40.csv`; the literature's spread in `refs/cylinder_steady_scatter.csv`); Re 100 transient against St 0.164 (±3 %), the mean Cd 1.33 (±5 %), CL rms 0.23 (±15 %) and the mean L/D 1.41 (±10 %, as information; `refs/cylinder_re100.csv`, `refs/cylinder_re100_scatter.csv`). The domain the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream and 30 D downstream, one Freestream round it; a Forces monitor on the cylinder with the study's reference values; 300 D/U of run, the shedding read by the harness over whole periods after the transient (at least 20; G8). How much a coarser and a finer mesh (the probes of 2026-11-06) move the reported values: the case's notes in `VALIDATION.md`, worked out from its results. |
@@ -232,17 +236,83 @@ App gaps found so far, and what they block:
   Re_D 800 would read Re ≈ 2 700 and a laminar warning): the smallest fix is 4A/P with the face's
   perimeter from its CAD edges (the mesher's feature sizing reads them; the run's face table does
   not carry them yet).
-- **Standard's laminar friction** (case 1): the friction factor on Standard reads well above
-  the exact value and the wall shear stress the run saved carries the same excess, so it is
-  the solution, not the reading. Probes changing one setting at a time
-  (`--mesh '{"hex_element_core":false}'`, `--mesh '{"automatic_boundary_layers":false}'`,
-  `--mesh '{"fineness":8}'`, `--study '{"grad_limiter":"none"}'`,
-  `--study '{"momentum_convection":"first_order"}'` and `"second_order_limited"`) point at
-  the momentum convection scheme's numerical diffusion on Standard's cells, which are not
-  aligned with the flow (a cell Péclet number U h / nu of order 10 here): first-order
-  convection makes it much worse, a finer mesh helps only slowly, and the gradient limiter,
-  the hex core and the layers do not explain it. Under investigation; case 2's Standard runs
-  are in the set beside it, read the same way.
+- **Standard's laminar friction** (case 1), fixed after the first full run: Standard read f Re
+  74.2 for 64 (+16 %), and the wall shear stress the run saved carried the same excess, so it
+  was the solution. The cause was the app's schemes, not the convection's numerical diffusion:
+  plain linear interpolation and Gauss linear gradients ignore a cell's skewness, which
+  Standard's tetrahedra (between its hex core and its wall layers) have in every direction, so
+  the mass flux from HbyA and the velocity gradient the viscous term reads (its non-orthogonal
+  correction and its explicit part) were wrong there: in that tet shell the viscous stress
+  carried 67 to 85 % of what the force balance needs (the hex core and the layers 98 to 101 %)
+  and the pressure gradient a cell felt swung between 0.33 and 1.50 times the real one in 1 mm
+  rings. Ruled out on the same mesh: convection (at Re 1 the excess stayed +11.5 %, central
+  differencing read 74.3), 4 non-orthogonal correctors for 2 (74.85), SIMPLEC, the gradient
+  limiter (None: 74.25), the hex core and the layers, the cross-section's faceting (area
+  -0.22 %) and the reading (the centreline slope, the cross-section mean and the wall shear
+  within 0.5 %). Both are skew-corrected now (`flux(HbyA) skewCorrected linear`, `grad(U) Gauss
+  skewCorrected linear`, never limited, steady and transient), and the study's gradient limiter
+  limits only the gradients convection reads (`limitedGradU` for linearUpwind, and the
+  turbulence fields'): on the 4-core probes Standard reads f Re 64.13 (+0.21 %) (before
+  74.30, +16.1 %) and Hex-dominant 63.21 (-1.24 %) (before 63.35, -1.02 %); Standard's
+  development length 5.70 D (-1.2 %, before -5.7 %). Cases 3 to 6 (Hex-dominant) moved by
+  at most 1 %: case 5 at Re 100 its mean Cd -0.5 % and its CL rms -1.0 % (both nearer their
+  references), St +0.09 %, the rest 0.25 % or less. Solves take longer: 5 to 35 % on
+  Hex-dominant (the probes, partly beside other load), 1.4 to 1.8 times on case 1's Standard
+  pipe (alone). A poor snapped mesh ran the Robust preset's new schemes as stably as the old: OpenFOAM's motorBike tutorial on 4 ranks (353 730 cells, max skewness
+  10.6, 12 highly skewed faces), 300 iterations each, Cd 0.3985 before and 0.3970 after
+  (0.3914 with k-omega SST's new walls), no k or omega bounded, about a quarter slower. Every
+  steady and transient Incompressible Flow study writes them at its next Start or Continue;
+  "Numerics as written" shows them under Stays fixed
+  (`bundled-plugins/incompressible_flow/tests/test_skew_and_walls.py`, `e2e/run-numerics.spec.js`).
+  Heat Transfer's writers keep the plain schemes: its Standard laminar pipes read Nu 13 to 14 %
+  high, likely the same cause (not probed here).
+- **k-omega SST at the wall** (case 2), fixed after the first full run: the app wrote
+  `nutkWallFunction`, which takes the wall's friction from the first cell's k with a switch to
+  the log law at y+ 11.53, and v2606's `omegaWallFunction`, whose default blending is binomial.
+  On a clean mesh (a developed pipe as a 5 degree wedge, one cell along it, a mean-velocity
+  source holding U_b, the app's schemes, the first cell's centre from y+ 1 to 100) that read f
+  8 to 20 % low from y+ 12 to 35 and 5 to 7 % low above; the Hex-dominant pipe (y+ 35) read 13 %
+  low, of which about 8 points were the wall treatment, 1.5 the mesh and 3 its development at
+  20 to 25 D. The walls take Spalding's law (`nutUSpaldingWallFunction`) with stepwise omega
+  now: on the wedge within -0.4 to +2.1 % from y+ 5 to 15 (smooth through the switch at
+  11.53: +0.45, +0.24, 0.0 and -0.13 % at y+ 11.0, 11.5, 12.4 and 12.9), +4.4 % at y+ 20
+  (+4.4 % on a finer stretch too), +0.4 % at 30 and -3.3 % at 100; Spalding's law with the
+  default blending read 5 to 9 % high from y+ 5 to 12. Hex-dominant's pipe now reads f
+  -4.10 % and f_tau -3.02 % (before -13.39 % and -12.82 %) and, with a mapped inlet holding the
+  developed flow, -0.4 %. The rest of the shortfall at y+ 35 to 100 is SST's stress limiter
+  acting on the wall cell (with it off, b1 0, the wedge read +3.4 % at y+ 35); OpenFOAM's
+  log law (E = 9.8) runs about 0.5 U+ above the inner layer there, which is why k-epsilon
+  reads -4.2 to -4.9 % from y+ 11.6 up. k-epsilon keeps `nutkWallFunction`: Spalding's law read
+  it 6 to 20 % high below y+ 20 (epsilon takes its log value at any y+), and below y+ 11 its
+  log law reads 5 to 75 % high. Heat Transfer takes the same walls: its turbulent pipe's Nu read
+  -1.61 % (before -9.64 %) on Hex-dominant and +0.29 % (before -20.28 %) on Standard (the 4-core probes before and after; its
+  committed set and its study panel's Standard note still give the old numbers until that set
+  is run again).
+- **k-omega SST on Standard's tetrahedra** (case 2, a limitation): developed (a mapped inlet,
+  4000 iterations, both fixes) Standard reads f -9.2 % at y+ 11.5, where the wedge reads
+  +0.2 %, with U_cl / U_b 1.27 against 1.17. It is SST's stress limiter, nut = a1 k / max(a1
+  omega, b1 F2 S): the strain rate S comes from the cells' velocity gradient, which the
+  tetrahedra make uneven, and the max turns that unevenness into a one-sided cut of nut. With
+  the limiter off (b1 0) Standard read +12.6 % against the wedge's +11.1 %, Wilcox's k-omega
+  (no limiter) +16.8 % against +16.1 %. Ruled out: the mesh's fineness (fineness 8, with a hex core: -9.2 %), the turbulence
+  fields' gradients (skew-corrected too: -8.3 %) and the wall distance (Poisson instead of
+  meshWave: -9.3 %). On the 30 D pipe with the uniform inlet the flow is still developing at 20
+  to 25 D on Standard (f -26.6 % from the pressure drop, -15.0 % from the wall shear,
+  before -23.2 % and -26.3 %). No small fix: the Study panel's model help says so, and Hex-dominant
+  suits turbulent wall friction.
+- **k-omega SST resolved to the wall** (case 2's wedge, a limitation): with the first cell's
+  centre at y+ 1 to 3 every wall treatment tried read f 6 to 9 % low (Spalding's law, nutk,
+  nutLowRe with k fixed at 0, Menter's omega on the wall face, kLowRe; a finer stretch, 1.05 and
+  1.02, about 1 point better); with the centre at y+ 0.3 it read -1.5 %. Resolving the wall
+  takes a first cell about y+ 1 high (its centre near 0.5), not y+ 1 at its centre; the model
+  help and the Assistant's guide say so.
+- **Development at 20 to 25 D** (case 2): from the Auto inlet (5 %, 0.07 D) the centreline speed
+  overshoots (U_cl / U_b 1.19 against 1.16 developed) and f at 20 to 25 D reads below its
+  developed value, not above it: on Hex-dominant 2.6 % (k-epsilon) and 3.6 % (k-omega SST)
+  below a mapped inlet's 15 D downstream; from 10 % and 0.1 D it read above it. The warning
+  says f is not yet its developed value, not which side. On Standard the 5 D pressure slopes
+  moved about 2 % between two meshes of the same settings while the wall shear stress agreed
+  within 0.2 %.
 
 Mesh probes first: `--mesh-only` for each new case (into `results-probe/`), with its plan's
 estimate checked, before any solve.

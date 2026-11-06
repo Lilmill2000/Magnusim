@@ -95,7 +95,7 @@ def test_the_page_is_self_contained_and_has_both_themes(tmp_path: Path):
     assert not re.search(r'(src|href)="(https?:)?//', page)
     assert 'src="img/c1_laminar_pipe-hexdominant-pressure.png"' in page
     # The page carries what the report does: the notes, what is shown beside the values, the pre-run check.
-    assert "<h3>Notes</h3>" in page and "under investigation" in page
+    assert "<h3>Notes</h3>" in page and "skew-corrected" in page
     assert "Shown, not compared:" in page and "Pre-run check: info still_start" in page
     doc = json.loads(files["results.json"])
     assert doc["results"][0]["case"] == "c1_laminar_pipe"

@@ -156,13 +156,15 @@ NOTES = (
     "the line's averaging enters both nearly alike. The 99 % point lies where the centreline speed is nearly flat: "
     "a change in the fourth digit of the solution moves it by millimetres, and repeated runs of the same plan can "
     "read a few per cent apart. Its band is wide (±15 %) for that reason and for the 99 % definition.",
-    "On Standard the friction factor reads well above the exact value. The wall shear stress the run itself saved "
-    "(shown with each run) carries the same excess, and the cell values run faster than the parabola near the "
-    "wall and slower at mid-radius, so the pressure drop is the solution's, not an artefact of reading it. It is "
-    "under investigation (an app gap); the turbulent pipe's Standard runs are read the same way. Probes that change one "
-    "setting at a time point at the momentum convection scheme on Standard's cells, which are not aligned with "
-    "the flow: first-order convection raises the friction much further, a finer mesh lowers it only slowly, and "
-    "neither the gradient limiter, the hex core nor the wall layers account for it.",
+    "On Standard the first full run (commit aaabb531) read the friction factor 16 % above the exact value, and "
+    "the wall shear stress the run saved carried the same excess: the solution's, not the reading's. The cause "
+    "was the app's schemes: plain linear interpolation and Gauss linear gradients ignore a cell's skewness, which "
+    "Standard's tetrahedra (between its hex core and its wall layers) have in every direction, so the mass flux "
+    "and the velocity gradient the viscous term reads were wrong there, and the flow needed about 17 % more "
+    "pressure gradient. Both are skew-corrected now (flux(HbyA) and grad(U); the gradient limiter is on the "
+    "convection gradient only): on the 4-core probes of 2026-11-06 Standard read f·Re 64.13 and Hex-dominant 63.21. "
+    "Convection's numerical diffusion was not the cause (at Re 1 the excess stayed +11 %), nor the gradient "
+    "limiter, the non-orthogonal correctors, the hex core, the wall layers or the cross-section's faceting.",
 )
 
 # A steady run that stops at its iteration limit counts as settled only when these histories
@@ -454,13 +456,21 @@ def setup_words(result: dict[str, Any]) -> str:
     )
 
 
+def standard_mesh_words(result: dict[str, Any]) -> str:
+    """Standard's own boundary layers and, as its mesh facts say, its hex core or none."""
+    core = (result.get("mesh") or {}).get("hex_core_applied")
+    if core is False:
+        return "its automatic boundary layers and no hex core (the mesher made none at this size)"
+    return "its automatic boundary layers and hex core"
+
+
 def mesh_words(result: dict[str, Any]) -> str:
     """One variant's mesh settings in words."""
     v = result.get("variant")
     mesh = result.get("setup", {}).get("mesh", {})
     fine = (mesh.get("settings") or {}).get("fineness")
     lay = ("an Inflate boundary layer of 4 layers, 1 mm in all, on the wall (automatic boundary layers off)"
-           if v == "hexdominant" else "its automatic boundary layers and hex core")
+           if v == "hexdominant" else standard_mesh_words(result))
     n_orth = ((result.get("setup", {}).get("study") or {}).get("settings") or {}).get("n_non_orthogonal")
     return (f"{VARIANT_LABELS.get(str(v), v)} at fineness {fine} with {lay}; "
             f"{n_orth} non-orthogonal corrector{'s' if n_orth != 1 else ''}")

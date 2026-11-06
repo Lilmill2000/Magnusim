@@ -8,7 +8,8 @@ or with a cyclic or mapped inlet; this case meets neither (the app has no cyclic
 and the pipe is 30 D because Hex-dominant cannot mesh one much longer cleanly: ``NOTES``). The
 friction factor is read over x/D 20 to 25, 5 D clear of the outlet; its slope over x/D 15 to 20
 is shown beside it, and a run whose two differ by more than ``DEVELOPING_PCT`` carries a
-warning: its flow is still developing where f is read, so f reads above its developed value.
+warning: its flow is still developing where f is read, so f is not yet its developed value (above
+or below it: with the Auto inlet the probes of 2026-11-06 read it below).
 
 Each mesher's mesh is made once: the k-epsilon run solves on the k-omega SST run's mesh (the
 same geometry, fluid, BCs and mesh; only the study's turbulence model and the run differ).
@@ -23,7 +24,7 @@ import numpy as np
 
 from ..extract import band, downsample, linear_fit, window_mean
 from ..model import QuantitySpec, Reference, Tolerance, compare
-from .c1_laminar_pipe import _line_xy
+from .c1_laminar_pipe import _line_xy, standard_mesh_words
 
 ID = "c2_turbulent_pipe"
 TITLE = "Turbulent pipe, Re = 50 000"
@@ -138,8 +139,13 @@ NOTES = (
     "inlet. This case meets neither: the app has no cyclic or mapped inlet (gap G9), and the pipe is 30 D long. The "
     "friction is read over x/D 20 to 25 and its slope over x/D 15 to 20 is shown beside it: in a developed flow the "
     "two agree. Where they differ by more than 1 % the run carries a warning: the flow is still developing where f "
-    "is read, and its f reads above its developed value (the slope still falls along the pipe), so it is not quite "
-    "the fully developed f the reference is for. The pipe is not longer because Hex-dominant cannot mesh a much "
+    "is read, so it is not quite the fully developed f the reference is for. Which side of it f reads depends on "
+    "the inlet's turbulence: from the Auto inlet (5 %, 0.07 D) the centreline speed overshoots and f at 20 to 25 D "
+    "reads below its developed value (the probes of 2026-11-06: 2.6 to 3.6 % below on Hex-dominant, against a "
+    "mapped inlet that holds the developed flow), from 10 % and 0.1 D it read above it. On Standard the slope over "
+    "5 D moved by about 2 % between two meshes of the same settings while the wall shear stress agreed within "
+    "0.2 %, so a warning there can come from the mesh as much as from the flow. The pipe is not longer because "
+    "Hex-dominant cannot mesh a much "
     "longer pipe cleanly (an app gap): its "
     "background block keeps at least 8 and 12 cells across the pipe while its cells along the pipe grow with the "
     "length, so the cells near the wall get long and flat. On the mesh probes (2026-11-05) a 55 D pipe at fineness 6 "
@@ -149,10 +155,13 @@ NOTES = (
     "Two readings of the same friction: the pressure drop along the axis, and the wall shear stress the run saved. "
     "In a settled, developed flow they are equal (the force balance -dp/dx = 4 tau_w / D); a gap between them is a "
     "finding about the solution, not about the reading.",
-    "The wall's y+ (OpenFOAM's yPlus, saved by every turbulent run) is shown for the same faces: the wall functions "
-    "assume y+ of about 30 to 100 at the first cell's centre; below that they misread the wall's friction. "
-    "Hex-dominant's one wall layer of 0.6 mm is sized for about 35; Standard sizes its own layers, so its y+ is "
-    "what its layers give, inside that range or not.",
+    "The wall's y+ (OpenFOAM's yPlus, saved by every turbulent run) is shown for the same faces. k-epsilon's wall "
+    "functions assume y+ of about 30 to 100 at the first cell's centre (on a clean developed wedge they read f "
+    "-4.2 to -4.9 % from y+ 11.6 up and 5 to 75 % high below it). k-omega SST's walls take Spalding's law with "
+    "stepwise omega since the first full run (which wrote nutkWallFunction: 8 to 20 % low from y+ 12 to 35 on the "
+    "wedge): on the wedge it reads within about 2 % from y+ 5 to 15, +4.4 % at 20 and -3.3 % at 100, and 6 to 9 % "
+    "low with the first cell's centre at y+ 1 to 3. Hex-dominant's one wall layer of 0.6 mm is sized for about "
+    "35; Standard sizes its own layers, so its y+ is what its layers give.",
     "Each mesher's mesh is made once and both turbulence models solve on it (the k-epsilon run on the k-omega SST "
     "run's mesh, the same geometry, fluid, BCs and mesh settings).",
 )
@@ -297,9 +306,9 @@ def evaluate(plan: dict[str, Any], raw: Any) -> dict[str, Any]:
                 warnings.append(
                     f"still developing where f is read: f over x/D {EARLY_FROM_D:g} to {EARLY_TO_D:g} reads "
                     f"{shown['f_early_vs_f_pct']:+.2f} % against x/D {FIT_FROM_D:g} to {FIT_TO_D:g} (more than "
-                    f"{DEVELOPING_PCT:g} % apart; a developed flow reads the same), so f is above its developed value: "
-                    "the pipe is 30 D, not the 40 D from the inlet the reference data ask for, and the app has no "
-                    "cyclic inlet (gap G9)"
+                    f"{DEVELOPING_PCT:g} % apart; a developed flow reads the same), so f is not yet its developed "
+                    "value (above or below it, as the inlet's turbulence sets: the case's notes): the pipe is 30 D, "
+                    "not the 40 D from the inlet the reference data ask for, and the app has no cyclic inlet (gap G9)"
                 )
         except ValueError as e:
             warnings.append(f"pressure fit: {e}")
@@ -363,7 +372,7 @@ def mesh_words(result: dict[str, Any]) -> str:
     mesh = result.get("setup", {}).get("mesh", {})
     fine = (mesh.get("settings") or {}).get("fineness")
     lay = (f"an Inflate boundary layer of {LAYERS['n_layers']} layers, {LAYERS['total_thickness']:g} mm in all, on the "
-           "wall (automatic boundary layers off)" if MESHER[v] == "hexdominant" else "its automatic boundary layers and hex core")
+           "wall (automatic boundary layers off)" if MESHER[v] == "hexdominant" else standard_mesh_words(result))
     n_orth = ((result.get("setup", {}).get("study") or {}).get("settings") or {}).get("n_non_orthogonal")
     label = "Hex-dominant" if MESHER[v] == "hexdominant" else "Standard"
     return f"{label} at fineness {fine} with {lay}; {n_orth} non-orthogonal corrector{'s' if n_orth != 1 else ''}"
@@ -386,7 +395,8 @@ def shown_words(result: dict[str, Any]) -> list[str]:
     yp = s.get("y_plus") or {}
     if yp:
         bits.append(f"the wall's y+ over x/D {FIT_FROM_D:g} to {FIT_TO_D:g} from {num(yp['min'], 3)} to {num(yp['max'], 3)}, "
-                    f"area-weighted mean {num(yp['mean'], 3)} ({yp['n_faces']} faces; the wall functions assume about 30 to 100)")
+                    f"area-weighted mean {num(yp['mean'], 3)} ({yp['n_faces']} faces"
+                    + ("; k-epsilon's wall functions assume about 30 to 100)" if MODEL.get(str(result.get("variant"))) == "kEpsilon" else ")"))
     if s.get("ucl_over_ub") is not None:
         bits.append(f"the centreline speed over x/D {FIT_FROM_D:g} to {FIT_TO_D:g} {num(s['ucl_over_ub'], 4)} U_b "
                     "(Plot over path)")

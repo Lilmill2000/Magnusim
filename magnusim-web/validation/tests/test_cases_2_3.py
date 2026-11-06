@@ -216,8 +216,9 @@ def test_case_2_reads_the_friction_from_the_pressure_and_from_the_wall(tmp_path:
 
 def test_a_pipe_flow_still_developing_where_f_is_read_carries_a_warning(tmp_path: Path):
     """The reference data ask for f 40 D or more from the inlet (or a cyclic inlet, which the app
-    lacks): on the 30 D pipe, a run whose f over x/D 15 to 20 is more than 1 % above f over 20 to
-    25 says it is still developing there, so its f is above the developed value."""
+    lacks): on the 30 D pipe, a run whose f over x/D 15 to 20 is more than 1 % from f over 20 to 25
+    says it is still developing there, so its f is not yet the developed value (which side of it
+    the inlet's turbulence sets: the warning does not say)."""
     developed = _pipe_run(tmp_path / "a", "hexdominant_sst", 0.0211)
     assert not [w for w in developed["warnings"] if "developing" in w]
     slight = _pipe_run(tmp_path / "b", "hexdominant_sst", 0.0211, early=0.005)
@@ -227,11 +228,24 @@ def test_a_pipe_flow_still_developing_where_f_is_read_carries_a_warning(tmp_path
     assert res["status"] == "ok" and res["shown"]["f_early_vs_f_pct"] == pytest.approx(3.0, rel=1e-6)
     assert [w for w in res["warnings"] if "developing" in w] == [
         "still developing where f is read: f over x/D 15 to 20 reads +3.00 % against x/D 20 to 25 (more than 1 % apart; "
-        "a developed flow reads the same), so f is above its developed value: the pipe is 30 D, not the 40 D from the "
-        "inlet the reference data ask for, and the app has no cyclic inlet (gap G9)"
+        "a developed flow reads the same), so f is not yet its developed value (above or below it, as the inlet's "
+        "turbulence sets: the case's notes): the pipe is 30 D, not the 40 D from the inlet the reference data ask "
+        "for, and the app has no cyclic inlet (gap G9)"
     ]
     assert {x["key"]: x["value"] for x in res["quantities"]}["f"] == pytest.approx(0.0211, rel=1e-9)
     assert "still developing where f is read" in build_markdown([res])
+
+
+def test_the_pipes_mesh_words_say_whether_standard_made_its_hex_core():
+    """Standard makes no hex core at case 2's size (its mesh facts: hex_core_applied false), so
+    its mesh words say so instead of naming one."""
+    for cid, variant in (("c1", "standard"), ("c2", "standard_sst")):
+        case = cases.get(cid)
+        res = {"variant": variant, "setup": {"mesh": {"settings": {"fineness": 6}}, "study": {"settings": {"n_non_orthogonal": 2}}}}
+        with_core = case.mesh_words({**res, "mesh": {"hex_core_applied": True}})
+        without = case.mesh_words({**res, "mesh": {"hex_core_applied": False}})
+        assert "its automatic boundary layers and hex core;" in with_core, with_core
+        assert "its automatic boundary layers and no hex core (the mesher made none at this size);" in without, without
 
 
 def test_a_run_on_another_runs_mesh_says_so(tmp_path: Path):
