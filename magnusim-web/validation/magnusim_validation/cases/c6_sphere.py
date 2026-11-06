@@ -137,12 +137,15 @@ NOTES = (
     "How much the mesh moves the answer (probes of 2026-11-06 at 4 cores, not reported): with the same sizes at "
     "fineness 3 (cells D/34, D/17 and D/8.4: 326 107 cells) Cd 1.0914, L/D 0.8487 and the separation angle 53.3°; at "
     "fineness 5 (D/53, D/26 and D/13: 1 359 124 cells, 4 of 4 layers kept) 1.0929, 0.8636 and 53.5°, against 1.0925, "
-    "0.8573 and 53.1° on the reported 669 786 cells: Cd is converged in the mesh (0.04 %), L/D still grows by 0.7 % "
+    "0.8573 and 53.2° on the reported 669 786 cells: Cd is converged in the mesh (0.04 %), L/D still grows by 0.7 % "
     "from the reported mesh to one 1.26 times finer (1.0 % from the coarser one to it), approaching its reference "
     "from below; a Richardson extrapolation from the three gives about 0.88 (rough: three meshes, an order of about "
     "1.3). Every custom size doubled at fineness 4 (166 824 cells) gave Cd 1.0853 and L/D 0.8045 (0.7 and 6.2 % "
     "below the reported run). The wake's band is a sphere round the sphere (Refine out to), so a finer wake costs "
-    "cells upstream as well: about 290 000 of the 669 786 are in the D/21 band.",
+    "cells upstream as well: about 290 000 of the 669 786 are in the D/21 band. An earlier run of the same settings "
+    "(from the tree before this case was committed) gave Cd 1.0925 and L/D 0.8573 again, after 549 iterations "
+    "against 548 (snappyHexMesh in parallel is not bit for bit the same each time: its worst face 46.42° against "
+    "46.43°).",
     "The pre-run check gave no Re and estimated \"2,000 iterations at most · ~39 minutes on 8 cores\" (its default "
     "rate) for a run that converged in 549 iterations and 235 s: it takes a Freestream's speed for the case's only "
     "above 1 m/s, so a 1 m/s free stream reads as none (the cylinder's runs show the same). Findings of this run, not "

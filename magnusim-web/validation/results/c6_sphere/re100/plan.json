@@ -1,0 +1,665 @@
+{
+ "schema": "magnusim-validation-plan/1",
+ "case": "c6_sphere",
+ "variant": "re100",
+ "title": "Sphere, Re = 100, steady, Hex-dominant",
+ "coarse": false,
+ "geometry": {
+  "file": "geometry.step",
+  "sha256": "30ac414e8c1584a1a05629a14790aa81727095dda935c55f5467b36487b858e5",
+  "units": "mm",
+  "builder": "a box x from -8 D to 15 D and y and z from -15 D to 15 D round a sphere D = 10 mm at the origin (cut out: the box is the fluid); blockage (pi D\u00b2 / 4) / (30 D)\u00b2 = 0.087 %",
+  "faces": [
+   {
+    "id": 1,
+    "body": 1,
+    "area_mm2": 90000.0,
+    "centroid_mm": [
+     -80.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     -1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 2,
+    "body": 1,
+    "area_mm2": 69000.0,
+    "centroid_mm": [
+     35.0,
+     -150.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     -1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 3,
+    "body": 1,
+    "area_mm2": 69000.0,
+    "centroid_mm": [
+     35.0,
+     0.0,
+     150.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     1.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 4,
+    "body": 1,
+    "area_mm2": 69000.0,
+    "centroid_mm": [
+     35.0,
+     150.0,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 5,
+    "body": 1,
+    "area_mm2": 69000.0,
+    "centroid_mm": [
+     35.0,
+     0.0,
+     -150.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     -1.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 6,
+    "body": 1,
+    "area_mm2": 90000.0,
+    "centroid_mm": [
+     150.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 7,
+    "body": 1,
+    "area_mm2": 314.159265,
+    "centroid_mm": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Sphere"
+   }
+  ],
+  "selectors": {
+   "inlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": -80.0,
+     "sign": -1
+    }
+   },
+   "outlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 150.0,
+     "sign": 1
+    }
+   },
+   "bottom": {
+    "plane": {
+     "axis": "y",
+     "at_mm": -150.0,
+     "sign": -1
+    }
+   },
+   "top": {
+    "plane": {
+     "axis": "y",
+     "at_mm": 150.0,
+     "sign": 1
+    }
+   },
+   "front": {
+    "plane": {
+     "axis": "z",
+     "at_mm": -150.0,
+     "sign": -1
+    }
+   },
+   "back": {
+    "plane": {
+     "axis": "z",
+     "at_mm": 150.0,
+     "sign": 1
+    }
+   },
+   "sphere": {
+    "surface_type": "Sphere",
+    "count": 1
+   }
+  },
+  "labels": {
+   "inlet": [
+    "face 1@Body1"
+   ],
+   "outlet": [
+    "face 6@Body1"
+   ],
+   "bottom": [
+    "face 2@Body1"
+   ],
+   "top": [
+    "face 4@Body1"
+   ],
+   "front": [
+    "face 5@Body1"
+   ],
+   "back": [
+    "face 3@Body1"
+   ],
+   "sphere": [
+    "face 7@Body1"
+   ]
+  }
+ },
+ "project": {
+  "title": "Validation c6_sphere re100",
+  "description": "",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects"
+ },
+ "study": {
+  "analysis_type": "incompressible_steady",
+  "time_dependency": "Steady-state",
+  "name": "c6_sphere re100",
+  "settings": {
+   "turbulence_model": "laminar",
+   "numerics_preset": "accurate",
+   "residual_u": 1e-06,
+   "residual_p": 1e-06,
+   "n_non_orthogonal": 1,
+   "ref_speed": 1.0,
+   "ref_area": 7.853981633974484e-05,
+   "ref_length": 0.01,
+   "ref_drag_dir": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "ref_lift_dir": [
+    0.0,
+    1.0,
+    0.0
+   ],
+   "ref_cofr": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "initial_flow": "inlet"
+  }
+ },
+ "material": {
+  "preset": "custom",
+  "name": "Validation fluid",
+  "kinematic_viscosity": 0.0001,
+  "density": 1.0,
+  "assigned_volumes": [
+   "Body1"
+  ]
+ },
+ "bcs": [
+  {
+   "name": "Far field",
+   "bc_type": "Freestream",
+   "velocity_input": "Speed and direction",
+   "value": 1.0,
+   "unit": "m/s",
+   "vector": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "freestream_pressure": 0,
+   "faces": [
+    "face 1@Body1",
+    "face 6@Body1",
+    "face 2@Body1",
+    "face 4@Body1",
+    "face 5@Body1",
+    "face 3@Body1"
+   ]
+  },
+  {
+   "name": "Sphere",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 7@Body1"
+   ]
+  }
+ ],
+ "mesh": {
+  "name": "Mesh 1",
+  "settings": {
+   "fineness": 4,
+   "automatic_boundary_layers": false,
+   "physics_based_meshing": true,
+   "hex_element_core": true,
+   "advanced": {
+    "mesh_engine": "snappy_hexdominant"
+   }
+  },
+  "refinements": [
+   {
+    "name": "Sphere",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 0.3125,
+    "default_size_unit": "mm",
+    "reach": 2.5,
+    "reach_unit": "mm"
+   },
+   {
+    "name": "Near wake",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 0.625,
+    "default_size_unit": "mm",
+    "reach": 15.0,
+    "reach_unit": "mm"
+   },
+   {
+    "name": "Wake",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 1.25,
+    "default_size_unit": "mm",
+    "reach": 30.0,
+    "reach_unit": "mm"
+   },
+   {
+    "name": "Sphere layers",
+    "type": "Inflate boundary layer",
+    "faces": [
+     "face 7@Body1"
+    ],
+    "n_layers": 4,
+    "total_thickness": 0.6,
+    "total_thickness_unit": "mm"
+   }
+  ],
+  "expect": {
+   "layers": true,
+   "n_cells": [
+    300000,
+    1200000
+   ]
+  },
+  "estimate": {
+   "mesher": "snappy_hexdominant",
+   "fineness": 4,
+   "bounds_mm": [
+    -80.0,
+    150.0,
+    -150.0,
+    150.0,
+    -150.0,
+    150.0
+   ],
+   "block": [
+    20,
+    26,
+    26
+   ],
+   "base_cell_mm": [
+    15.295,
+    15.3462,
+    15.3462
+   ],
+   "walls_level": 2,
+   "wall_cell_mm": [
+    3.8238,
+    3.8365,
+    3.8365
+   ],
+   "custom_sizes": [
+    {
+     "name": "Sphere",
+     "size_mm": 0.3125,
+     "level": 6,
+     "cell_mm": [
+      0.239,
+      0.2398,
+      0.2398
+     ],
+     "faces": 1,
+     "reach_mm": 2.5,
+     "distance_mm": 2.5
+    },
+    {
+     "name": "Near wake",
+     "size_mm": 0.625,
+     "level": 5,
+     "cell_mm": [
+      0.478,
+      0.4796,
+      0.4796
+     ],
+     "faces": 1,
+     "reach_mm": 15.0,
+     "distance_mm": 15.0
+    },
+    {
+     "name": "Wake",
+     "size_mm": 1.25,
+     "level": 4,
+     "cell_mm": [
+      0.9559,
+      0.9591,
+      0.9591
+     ],
+     "faces": 1,
+     "reach_mm": 30.0,
+     "distance_mm": 30.0
+    }
+   ],
+   "layers": [
+    {
+     "name": "Sphere layers",
+     "n_layers": 4,
+     "stack_mm": 0.6,
+     "smallest_wall_cell_mm": 0.239,
+     "stack_over_smallest_cell": 2.511
+    }
+   ],
+   "n_cells": 682000,
+   "n_cells_note": "an order of magnitude (1.3 to 1.4 times case 1's real meshes), not a prediction",
+   "warnings": []
+  }
+ },
+ "run": {
+  "name": "Validation",
+  "endTime": 2000,
+  "writeInterval": 2000,
+  "cores": 8,
+  "result_controls": [
+   {
+    "id": "rc-forces",
+    "name": "Sphere",
+    "monitor_type": "forces",
+    "kind": "Forces",
+    "category": "Boundary data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "boundaries": [
+     "@bc:Sphere"
+    ]
+   },
+   {
+    "id": "rc-wake",
+    "name": "Wake axis",
+    "monitor_type": "probe",
+    "kind": "Point probe",
+    "category": "Point data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "points": [
+     [
+      0.0055,
+      0.0,
+      0.0
+     ],
+     [
+      0.0063448,
+      0.0,
+      0.0
+     ],
+     [
+      0.0071897,
+      0.0,
+      0.0
+     ],
+     [
+      0.0080345,
+      0.0,
+      0.0
+     ],
+     [
+      0.0088793,
+      0.0,
+      0.0
+     ],
+     [
+      0.0097241,
+      0.0,
+      0.0
+     ],
+     [
+      0.010569,
+      0.0,
+      0.0
+     ],
+     [
+      0.0114138,
+      0.0,
+      0.0
+     ],
+     [
+      0.0122586,
+      0.0,
+      0.0
+     ],
+     [
+      0.0131034,
+      0.0,
+      0.0
+     ],
+     [
+      0.0139483,
+      0.0,
+      0.0
+     ],
+     [
+      0.0147931,
+      0.0,
+      0.0
+     ],
+     [
+      0.0156379,
+      0.0,
+      0.0
+     ],
+     [
+      0.0164828,
+      0.0,
+      0.0
+     ],
+     [
+      0.0173276,
+      0.0,
+      0.0
+     ],
+     [
+      0.0181724,
+      0.0,
+      0.0
+     ],
+     [
+      0.0190172,
+      0.0,
+      0.0
+     ],
+     [
+      0.0198621,
+      0.0,
+      0.0
+     ],
+     [
+      0.0207069,
+      0.0,
+      0.0
+     ],
+     [
+      0.0215517,
+      0.0,
+      0.0
+     ],
+     [
+      0.0223966,
+      0.0,
+      0.0
+     ],
+     [
+      0.0232414,
+      0.0,
+      0.0
+     ],
+     [
+      0.0240862,
+      0.0,
+      0.0
+     ],
+     [
+      0.024931,
+      0.0,
+      0.0
+     ],
+     [
+      0.0257759,
+      0.0,
+      0.0
+     ],
+     [
+      0.0266207,
+      0.0,
+      0.0
+     ],
+     [
+      0.0274655,
+      0.0,
+      0.0
+     ],
+     [
+      0.0283103,
+      0.0,
+      0.0
+     ],
+     [
+      0.0291552,
+      0.0,
+      0.0
+     ],
+     [
+      0.03,
+      0.0,
+      0.0
+     ]
+    ]
+   }
+  ]
+ },
+ "extract": [
+  {
+   "key": "wake_line",
+   "kind": "app_sampling",
+   "fields": [
+    "U",
+    "p"
+   ],
+   "points_m": [
+    [
+     0.005,
+     0.0,
+     0.0
+    ],
+    [
+     0.1,
+     0.0,
+     0.0
+    ]
+   ],
+   "subdivisions": 1900
+  },
+  {
+   "key": "p_wake_line",
+   "kind": "line",
+   "field": "p",
+   "points_m": [
+    [
+     0.005,
+     0.0,
+     0.0
+    ],
+    [
+     0.1,
+     0.0,
+     0.0
+    ]
+   ],
+   "subdivisions": 1900
+  },
+  {
+   "key": "sphere_shear",
+   "kind": "patch",
+   "patch": "sphere",
+   "field": "wallShearStress"
+  }
+ ],
+ "timeouts_s": {
+  "mesh": 2400,
+  "solve": 3600
+ },
+ "mesh_key": "704a7f8eb7f1e841"
+}
