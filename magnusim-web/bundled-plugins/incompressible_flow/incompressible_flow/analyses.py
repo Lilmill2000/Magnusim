@@ -110,12 +110,13 @@ def _settings_schema() -> tuple[SchemaField, ...]:
             group="flow",
             description=(
                 "Which turbulence closure the solver uses. k-omega SST is the general-purpose "
-                "default: with Spalding's law at the wall it suits a first cell at y+ from about 5 to "
-                "100, or below about 0.5 to resolve the wall (between the two it reads the wall's "
-                "friction several percent low). On Standard's tetrahedra its stress limiter reads their "
+                "default. With its walls (Spalding's law) a developed pipe on a clean mesh read its "
+                "friction within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % "
+                "up to y+ 100, but 6 to 9 % low at y+ 1 to 3; below y+ 1 only y+ 0.3 was tested (1.5 % "
+                "low). On Standard's tetrahedra its stress limiter reads their "
                 "uneven strain rate and the wall's friction comes out low (a developed pipe about 9 % low, "
                 "within 1 % on Hex-dominant). Spalart-Allmaras solves one equation and suits "
-                "flow around wings and bodies in a freestream; it also handles walls at any y+. "
+                "flow around wings and bodies in a freestream; how its walls read was not tested. "
                 "k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use "
                 "high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than "
                 "k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but "

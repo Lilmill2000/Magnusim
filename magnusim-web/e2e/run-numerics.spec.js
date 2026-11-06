@@ -30,8 +30,9 @@
 // - What stays fixed (the validation set's pipes, 2026-11-06): "Numerics as written" says the velocity
 //   gradient and the flux are skew-corrected, that the limiter is on the convection gradient
 //   (limitedGradU), and what each model's walls are written with (k-omega SST: Spalding's law, stepwise
-//   omega; k-epsilon: nutkWallFunction), as the Assistant reads it; the Study panel's model help says
-//   where k-omega SST's walls read well, not "any y+". Fails on the code before it: there were no
+//   omega; k-epsilon: nutkWallFunction), as the Assistant reads it; the Study panel's model help gives
+//   what k-omega SST's walls read at the y+ that were tested, not "any y+" or "below about 0.5", and
+//   no y+ for Spalart-Allmaras, whose walls were not tested. Fails on the code before it: there were no
 //   such rows and the limiter was on grad(U).
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL. Its fake solve
 // replays a healthy steady log through the real health tracker (MAGNUSIM_TEST_SOLVE_LOG).
@@ -833,12 +834,15 @@ test.describe('numerics at Continue', () => {
       row = await numericsOf(panel);
       await expect(row('Wall treatment')).toHaveText('nut nutkWallFunction, k kqRWallFunction, epsilon epsilonWallFunction', STEP);
       await expect(row('Velocity gradient')).toHaveText(sst['Velocity gradient'], STEP);
-      // The Study panel's model help says where k-omega SST's walls read well, not "any y+".
+      // The Study panel's model help gives only the y+ that were tested.
       await page.goto(`${host.base}/#/p/${PID}`);
       await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
       await page.locator(`#left-tree [data-w17-sim-id="${sim}"] > .tree-row`).first().click();
       const help = page.locator('#panel-study-settings [data-schema-key="turbulence_model"] [role="tooltip"]');
-      await expect(help).toContainText("with Spalding's law at the wall it suits a first cell at y+ from about 5 to 100", STEP);
+      await expect(help).toContainText("within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % up to y+ 100, but 6 to 9 % low at y+ 1 to 3; below y+ 1 only y+ 0.3 was tested (1.5 % low)", STEP);
+      await expect(help).toContainText('Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested.');
+      await expect(help).not.toContainText('below about 0.5');
+      await expect(help).not.toContainText('any y+');
       await expect(help).toContainText("On Standard's tetrahedra its stress limiter reads their uneven strain rate", STEP);
       await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
     } finally {

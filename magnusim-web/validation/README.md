@@ -325,9 +325,10 @@ App gaps found so far, and what they block:
 - **k-omega SST resolved to the wall** (case 2's wedge, a limitation): with the first cell's
   centre at y+ 1 to 3 every wall treatment tried read f 6 to 9 % low (Spalding's law, nutk,
   nutLowRe with k fixed at 0, Menter's omega on the wall face, kLowRe; a finer stretch, 1.05 and
-  1.02, about 1 point better); with the centre at y+ 0.3 it read -1.5 %. Resolving the wall
-  takes a first cell about y+ 1 high (its centre near 0.5), not y+ 1 at its centre; the model
-  help and the Assistant's guide say so.
+  1.02, about 1 point better); with the centre at y+ 0.3 it read -1.5 % (one run, with
+  nutkWallFunction). No other y+ below 1 was run, so where between 0.3 and 1 k-omega SST starts
+  to resolve the wall is not known; the model help and the Assistant's guide give only the y+
+  that were tested.
 - **Development at 20 to 25 D** (case 2): from the Auto inlet (5 %, 0.07 D) the centreline speed
   overshoots (U_cl / U_b 1.19 against 1.16 developed) and f at 20 to 25 D reads below its
   developed value, not above it: on Hex-dominant 2.6 % (k-epsilon) and 3.6 % (k-omega SST)

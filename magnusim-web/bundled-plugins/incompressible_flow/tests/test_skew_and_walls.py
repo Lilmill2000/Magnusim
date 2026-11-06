@@ -164,3 +164,22 @@ def test_numerics_as_written_says_what_stays_fixed(tmp_path: Path):
     tr = _rows(run_check(transient=True, spec=_spec(tmp_path / "d", {"turbulence_model": "kOmegaSST"}, TRANSIENT), settings=TRANSIENT))
     assert tr["Schemes/Momentum convection"] == "Gauss linearUpwind limitedGradU"
     assert tr["Stays fixed/Velocity gradient"].startswith("grad(U) Gauss skewCorrected linear")
+
+
+def _model_help() -> str:
+    from incompressible_flow.analyses import _settings_schema
+
+    return next(f for f in _settings_schema() if f.key == "turbulence_model").description
+
+
+def test_the_model_help_gives_only_the_y_plus_that_were_tested():
+    """The Study panel's model help (and the Assistant's catalog, from the same schema) says what the
+    clean developed wedge read at the y+ that were run, not "below about 0.5 resolves the wall" (one
+    run at y+ 0.3) and not "any y+" for Spalart-Allmaras (its walls were not tested)."""
+    text = _model_help()
+    assert ("With its walls (Spalding's law) a developed pipe on a clean mesh read its friction within about 2 % with "
+            "the first cell's centre at y+ 5 to 15 and within 4.5 % up to y+ 100, but 6 to 9 % low at y+ 1 to 3; below "
+            "y+ 1 only y+ 0.3 was tested (1.5 % low).") in text
+    assert "Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested." in text
+    for untested in ("any y+", "below about 0.5", "resolve the wall"):
+        assert untested not in text, untested

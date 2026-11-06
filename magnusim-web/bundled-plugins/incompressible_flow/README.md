@@ -64,9 +64,9 @@ schemes and solver settings each model needs):
 | Model (OpenFOAM name) | Fields in 0/ | Walls |
 |---|---|---|
 | Laminar (`laminar`) | none | |
-| Spalart-Allmaras (`SpalartAllmaras`) | `nuTilda`, `nut` | `nuTilda` 0, `nut` `nutUSpaldingWallFunction` (any y+) |
+| Spalart-Allmaras (`SpalartAllmaras`) | `nuTilda`, `nut` | `nuTilda` 0, `nut` `nutUSpaldingWallFunction` (not tested against a developed pipe) |
 | k-epsilon (`kEpsilon`), Realizable k-epsilon (`realizableKE`) | `k`, `epsilon`, `nut` | high-Re wall functions |
-| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | `nut` `nutUSpaldingWallFunction`, `omega` `omegaWallFunction` `blending stepwise`, `k` `kqRWallFunction`: a first cell at y+ from about 5 to 100, or below about 0.5 |
+| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | `nut` `nutUSpaldingWallFunction`, `omega` `omegaWallFunction` `blending stepwise`, `k` `kqRWallFunction`: a developed pipe read within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % up to 100, 6 to 9 % low at 1 to 3 (below 1, only y+ 0.3 was run: -1.5 %) |
 | LRR, SSG (`LRR`, `SSG`) | `k`, `epsilon`, `R`, `nut` | high-Re wall functions |
 
 A boundary's "Turbulence at the inlet" (`inlet_turbulence.py`) sets k, omega and

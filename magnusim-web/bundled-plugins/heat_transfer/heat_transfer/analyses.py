@@ -146,8 +146,9 @@ def settings_schema() -> tuple[SchemaField, ...]:
             group="flow",
             description=(
                 "Laminar suits slow natural convection (a Rayleigh number below about 10⁹) and low-Reynolds flow. "
-                "k-omega SST is the general-purpose model (Spalding's law at the wall: a first cell at y+ from about "
-                "5 to 100, or below about 0.5); k-epsilon and realizable "
+                "k-omega SST is the general-purpose model (Spalding's law at the wall, as in Incompressible Flow: a "
+                "developed pipe read its friction within 4.5 % with the first cell's centre at y+ 5 to 100 and 6 to 9 % "
+                "low at y+ 1 to 3); k-epsilon and realizable "
                 "k-epsilon use wall functions (y+ above about 30)."
             ),
         ),

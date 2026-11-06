@@ -59,6 +59,12 @@ describe('the CFD guide in Magnusim', () => {
     assert.ok(rule10.endsWith(' First-order schemes lower accuracy: fix the time step or mesh first.'), rule10);
   });
 
+  it('rule 10 gives only the y+ that were tested: k-omega SST on the developed wedge, not "under 0.5 resolves the wall" for every model', () => {
+    const rule10 = cfdGuideText().split('\n').find((l) => l.startsWith('10. '));
+    assert.ok(rule10.includes('y+ (field_range of yPlus): k-omega SST: within 4.5% at 5-100, 6-9% low at 1-3; wall functions assume 30-300.'), rule10);
+    assert.doesNotMatch(rule10, /resolves the wall|any y\+/);
+  });
+
   it('goes in the system blocks after the prompt, before the workspace notes, with one cache mark', () => {
     const req = buildRequest(conv({ text: 'Notes.', pluginName: 'Demo' }), [], settings);
     assert.equal(req.system.length, 3);

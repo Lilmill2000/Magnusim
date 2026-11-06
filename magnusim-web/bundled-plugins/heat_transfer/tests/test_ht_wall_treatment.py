@@ -72,3 +72,14 @@ def test_a_cht_interface_without_a_no_slip_wall_to_copy_follows_the_model():
     assert _wall_turbulence(flow, "omega", "kOmegaSST") == {"type": "omegaWallFunction", "blending": "stepwise", "value": "uniform 20"}
     assert _wall_turbulence(flow, "nut", "kEpsilon") == {"type": "nutkWallFunction", "value": "uniform 0"}
     assert _wall_turbulence(flow, "k", "kEpsilon") == {"type": "kqRWallFunction", "value": "uniform 0.1"}
+
+
+def test_the_model_help_gives_only_the_y_plus_that_were_tested():
+    """Heat Transfer's model help gives what Incompressible Flow's walls read on the clean developed
+    wedge at the y+ that were run, not "below about 0.5" (one run at y+ 0.3)."""
+    from heat_transfer.analyses import settings_schema
+
+    text = next(f for f in settings_schema() if f.key == "turbulence_model").description
+    assert ("a developed pipe read its friction within 4.5 % with the first cell's centre at y+ 5 to 100 and 6 to 9 % "
+            "low at y+ 1 to 3") in text
+    assert "below about 0.5" not in text
