@@ -155,3 +155,16 @@ def test_the_report_and_the_page_say_the_tolerances_lock_once_daniel_has_reviewe
     for out in (text.replace("\n", " "), page):
         assert "After the first full run the tolerances are locked" not in out
         assert "After the first full run the tolerances" not in out
+
+
+def test_the_error_is_given_in_its_bands_own_unit():
+    """The vortex centre's band is ±0.01 L: its error reads in L (it read "-0.07 %" beside "±0.01 L");
+    a relative band keeps the error in %, and a reference of zero reads in its unit."""
+    from magnusim_validation.report import band_text, err_text
+
+    vortex = {"unit": "L", "error": {"abs": -0.00040630459, "rel_pct": -0.0659360595}, "tolerance": {"abs_tol": 0.01, "rel_pct": None}, "within": True}
+    assert (err_text(vortex), band_text(vortex)) == ("-0.000406 L", "±0.01 L (inside)")
+    psi = {"unit": "", "error": {"abs": 0.000171, "rel_pct": 0.1654411}, "tolerance": {"abs_tol": None, "rel_pct": 2.0}, "within": True}
+    assert (err_text(psi), band_text(psi)) == ("+0.17 %", "±2 % (inside)")
+    rms = {"unit": "U_lid", "error": {"abs": 0.0023354, "rel_pct": None}, "tolerance": {"abs_tol": 0.01}, "within": True}
+    assert err_text(rms) == "+0.00234 U_lid"

@@ -74,11 +74,14 @@ def cell(text: Any) -> str:
 
 
 def err_text(q: dict[str, Any]) -> str:
+    """The error in its band's own unit: absolute (in the quantity's unit) beside an absolute band
+    (the vortex centre's ±0.01 L) or with no relative error (a reference of zero), else in %."""
     err = q.get("error")
     if err is None:
         return "-"
-    if err.get("rel_pct") is None:
-        return f"{float(err['abs']):+.3g}{(' ' + q['unit']) if q.get('unit') else ''}"
+    if err.get("rel_pct") is None or (q.get("tolerance") or {}).get("abs_tol") is not None:
+        x = float(err["abs"])
+        return f"{'-' if x < 0 else '+'}{num(abs(x), 3)}{(' ' + q['unit']) if q.get('unit') else ''}"
     return f"{err['rel_pct']:+.2f} %"
 
 
