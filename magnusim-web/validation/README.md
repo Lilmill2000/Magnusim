@@ -258,9 +258,13 @@ App gaps found so far, and what they block:
   at most 1 %: case 5 at Re 100 its mean Cd -0.5 % and its CL rms -1.0 % (both nearer their
   references), St +0.09 %, the rest 0.25 % or less. Solves take longer: 5 to 35 % on
   Hex-dominant (the probes, partly beside other load), 1.4 to 1.8 times on case 1's Standard
-  pipe (alone). A poor snapped mesh ran the Robust preset's new schemes as stably as the old: OpenFOAM's motorBike tutorial on 4 ranks (353 730 cells, max skewness
-  10.6, 12 highly skewed faces), 300 iterations each, Cd 0.3985 before and 0.3970 after
-  (0.3914 with k-omega SST's new walls), no k or omega bounded, about a quarter slower. Every
+  pipe (alone). A poor snapped mesh ran the Robust preset's new schemes to the end as it ran the
+  old: OpenFOAM's motorBike tutorial meshed on 4 ranks (checkMesh: 12 highly skewed faces, one
+  failed check), 300 iterations with the old schemes, the new ones, and the new ones with k-omega
+  SST's new walls: all three reached iteration 300 with no k or omega bounded (their p residual at
+  iteration 300 0.026, 0.031 and 0.040), the new schemes in 164 s against 134 s (22 % longer; 171 s
+  with the new walls). Those runs did not save their drag coefficient, so they say nothing about
+  Cd. Every
   steady and transient Incompressible Flow study writes them at its next Start or Continue;
   "Numerics as written" shows them under Stays fixed
   (`bundled-plugins/incompressible_flow/tests/test_skew_and_walls.py`, `e2e/run-numerics.spec.js`).
