@@ -14,7 +14,7 @@ boundaryField
 {
     walls
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
     velocity_inlet_1

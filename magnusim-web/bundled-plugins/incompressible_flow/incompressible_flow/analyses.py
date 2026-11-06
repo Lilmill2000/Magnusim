@@ -110,7 +110,11 @@ def _settings_schema() -> tuple[SchemaField, ...]:
             group="flow",
             description=(
                 "Which turbulence closure the solver uses. k-omega SST is the general-purpose "
-                "default and handles walls at any y+. Spalart-Allmaras solves one equation and suits "
+                "default: with Spalding's law at the wall it suits a first cell at y+ from about 5 to "
+                "100, or below about 0.5 to resolve the wall (between the two it reads the wall's "
+                "friction several percent low). On Standard's tetrahedra its stress limiter reads their "
+                "uneven strain rate and the wall's friction comes out low (a developed pipe about 9 % low, "
+                "within 1 % on Hex-dominant). Spalart-Allmaras solves one equation and suits "
                 "flow around wings and bodies in a freestream; it also handles walls at any y+. "
                 "k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use "
                 "high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than "
@@ -252,6 +256,10 @@ def _potential_flow_fields() -> tuple[SchemaField, ...]:
 
 # What Incompressible Flow adds after a numerics key's advice (its own defaults).
 _RH3_EXTRA: dict[str, str] = {
+    "grad_limiter": (
+        "It limits the gradients convection reads (the velocity's, for linearUpwind, and the turbulence "
+        "fields'); the viscous terms read the velocity gradient skew-corrected and unlimited."
+    ),
     "eq_max_iter": "50 is the default.",
     "relax_turbulence": "Not used while SIMPLEC is on.",
     "outer_relax_p": "Blank is 0.3.",

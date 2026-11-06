@@ -26,7 +26,8 @@ from __future__ import annotations
 from typing import Any
 
 # The models whose wall functions assume y+ above about 30 (k-epsilon and the Reynolds-stress
-# models, which start from it); k-omega SST handles any y+.
+# models, which start from it); k-omega SST (Spalding's law at the wall) suits lower y+ too: a
+# developed pipe read within about 2 % from y+ 5 to 15 (validation/README.md).
 WALL_FUNCTION_MODELS = frozenset({"kEpsilon", "realizableKE", "LRR", "SSG"})
 ANY_YPLUS_MODEL = "kOmegaSST"
 # The estimate line before the run's mesh is generated (its spec needs the mesh).
@@ -38,7 +39,7 @@ UNCHECKED = "its mesh and physics are checked once the mesh is generated"
 def turbulence_words(model: str) -> dict[str, Any]:
     """The study's turbulence model as the pre-run check reads it (the core names no model):
     whether it is laminar, its name, the fields it can drive below zero, whether it relies on
-    wall functions, and the study setting of the model that handles any y+."""
+    wall functions, and the study setting of the model that suits lower y+."""
     from .physics import TURBULENCE_SHORT_LABELS, turbulence_fields
 
     fields = [f for f in turbulence_fields(model) if f not in ("nut", "R")]

@@ -15,11 +15,13 @@ boundaryField
     walls
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 31.9438;
     }
     air_to_aluminium_6061
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 31.9438;
     }
 }

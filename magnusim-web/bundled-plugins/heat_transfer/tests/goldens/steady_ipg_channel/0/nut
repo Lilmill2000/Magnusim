@@ -14,7 +14,7 @@ boundaryField
 {
     walls
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
     inlet
@@ -29,17 +29,17 @@ boundaryField
     }
     heater
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
     cold_plate
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
     lid
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
     side

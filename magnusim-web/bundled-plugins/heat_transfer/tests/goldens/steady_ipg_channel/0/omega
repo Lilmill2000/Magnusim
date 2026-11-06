@@ -15,6 +15,7 @@ boundaryField
     walls
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 22.3806;
     }
     inlet
@@ -31,16 +32,19 @@ boundaryField
     heater
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 22.3806;
     }
     cold_plate
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 22.3806;
     }
     lid
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 22.3806;
     }
     side

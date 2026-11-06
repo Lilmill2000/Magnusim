@@ -47,6 +47,9 @@ records and the run's inputs, without copying the inlet logic:
 - :func:`wall_motion` gives a wall record's treatment as one of :data:`WALL_MOTIONS`.
 - :func:`varies_with_time` says whether a boundary's "Varies with time" table
   is in effect in a run (steady runs solve the fixed value).
+- :func:`wall_functions` gives a no-slip wall's entry (its ``type`` and, for k-omega SST's
+  omega, its ``blending``; no ``value``) of each turbulence field a model reads, and
+  :func:`wall_treatment_words` the same in words ("Numerics as written": Stays fixed).
 - :func:`boundary_problem` gives what Incompressible Flow's own Start refuses
   about one BC record, as a :class:`BoundaryProblem` whose ``message`` is the
   sentence Incompressible Flow shows; :func:`first_boundary_problem` the one its
@@ -80,7 +83,9 @@ __all__ = [
     "flow_patches",
     "turbulence_model_name",
     "varies_with_time",
+    "wall_functions",
     "wall_motion",
+    "wall_treatment_words",
 ]
 
 # What a mesh patch is, by its BC (``wall`` too for a patch no BC claims).
@@ -151,6 +156,21 @@ def turbulence_model_name(value: Any) -> str:
     if name is None:
         raise ValueError(f"unknown turbulence model {value!r}: one of {', '.join(TURBULENCE_MODELS)}")
     return name
+
+
+def wall_functions(model: str) -> dict[str, dict[str, str]]:
+    """A no-slip wall's entry (without its value) of each turbulence field ``model`` reads, as
+    Incompressible Flow writes it (k-omega SST: Spalding's law with stepwise omega)."""
+    from .writer import wall_functions as _wall_functions
+
+    return _wall_functions(model)
+
+
+def wall_treatment_words(model: str) -> str:
+    """What a no-slip wall is written with under ``model``, in words ("" when laminar)."""
+    from .writer import wall_treatment_words as _words
+
+    return _words(model)
 
 
 def boundary_kind(record: dict[str, Any] | None) -> str | None:

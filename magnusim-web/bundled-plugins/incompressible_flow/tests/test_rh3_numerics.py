@@ -123,8 +123,10 @@ def test_the_caution_reaches_the_json_schema():
 # ---------------------------------------------------------------------------
 
 STEADY_CASES = [
-    ({"grad_limiter": "light"}, "system/fvSchemes", "grad(U)         cellMDLimited Gauss linear 0.5;"),
-    ({"grad_limiter": "none"}, "system/fvSchemes", "grad(U)         Gauss linear;"),
+    # The limiter is on the gradient linearUpwind reads; grad(U) is skew-corrected and unlimited.
+    ({"grad_limiter": "light"}, "system/fvSchemes", "limitedGradU    cellMDLimited Gauss skewCorrected linear 0.5;"),
+    ({"grad_limiter": "light"}, "system/fvSchemes", "grad(U)         Gauss skewCorrected linear;"),
+    ({"grad_limiter": "none"}, "system/fvSchemes", "div(phi,U)      bounded Gauss linearUpwind grad(U);"),
     ({"momentum_convection": "first_order"}, "system/fvSchemes", "div(phi,U)      bounded Gauss upwind;"),
     ({"momentum_convection": "second_order_limited"}, "system/fvSchemes", "div(phi,U)      bounded Gauss limitedLinearV 1;"),
     ({"turbulence_convection": "second_order"}, "system/fvSchemes", "div(phi,k)      bounded Gauss limitedLinear 1;"),
@@ -144,7 +146,8 @@ def test_a_steady_study_key_is_written(tmp_path: Path, record: dict, rel: str, l
 
 
 TRANSIENT_CASES = [
-    ({"grad_limiter": "light"}, "grad(U)         cellMDLimited Gauss linear 0.5;"),
+    ({"grad_limiter": "light"}, "limitedGradU    cellMDLimited Gauss skewCorrected linear 0.5;"),
+    ({"grad_limiter": "light"}, "div(phi,U)      Gauss linearUpwind limitedGradU;"),
     ({"momentum_convection": "first_order"}, "div(phi,U)      Gauss upwind;"),
     ({"turbulence_convection": "first_order"}, "div(phi,k)      Gauss upwind;"),
     ({"non_orth_correction": "full"}, "snGradSchemes { default corrected; }"),
@@ -289,7 +292,12 @@ def test_numerics_as_written_names_what_the_case_is_written_with(tmp_path: Path)
     spec = _spec(tmp_path, {"grad_limiter": "light", "p_max_iter": 500})
     out = run_check(transient=False, spec=spec, settings={"end_time": 200})
     rows = _rows(out)
-    assert rows["Schemes/Gradient limiter"] == {"group": "Schemes", "label": "Gradient limiter", "value": "cellMDLimited Gauss linear 0.5", "source": "study"}
+    assert rows["Schemes/Gradient limiter"] == {
+        "group": "Schemes",
+        "label": "Gradient limiter",
+        "value": "limitedGradU cellMDLimited Gauss skewCorrected linear 0.5; grad(k), grad(omega) cellMDLimited Gauss linear 0.5",
+        "source": "study",
+    }
     assert rows["Schemes/Turbulence convection"]["value"] == "bounded Gauss upwind"
     assert rows["Schemes/Turbulence convection"]["source"] == "preset"
     # A preset row names the preset the case is written with ("Robust": the study's is blank).

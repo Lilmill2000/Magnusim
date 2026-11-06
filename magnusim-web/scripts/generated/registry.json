@@ -33,7 +33,7 @@
               ]
             },
             "title": "Turbulence model",
-            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; it also handles walls at any y+. k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default: with Spalding's law at the wall it suits a first cell at y+ from about 5 to 100, or below about 0.5 to resolve the wall (between the two it reads the wall's friction several percent low). On Standard's tetrahedra its stress limiter reads their uneven strain rate and the wall's friction comes out low (a developed pipe about 9 % low, within 1 % on Hex-dominant). Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; it also handles walls at any y+. k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           },
           "ref_speed": {
             "type": "number",
@@ -306,7 +306,7 @@
               ]
             },
             "title": "Gradient limiter",
-            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset."
+            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset. It limits the gradients convection reads (the velocity's, for linearUpwind, and the turbulence fields'); the viscous terms read the velocity gradient skew-corrected and unlimited."
           },
           "momentum_convection": {
             "type": "string",
@@ -1474,7 +1474,7 @@
               ]
             },
             "title": "Turbulence model",
-            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default and handles walls at any y+. Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; it also handles walls at any y+. k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
+            "description": "Which turbulence closure the solver uses. k-omega SST is the general-purpose default: with Spalding's law at the wall it suits a first cell at y+ from about 5 to 100, or below about 0.5 to resolve the wall (between the two it reads the wall's friction several percent low). On Standard's tetrahedra its stress limiter reads their uneven strain rate and the wall's friction comes out low (a developed pipe about 9 % low, within 1 % on Hex-dominant). Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; it also handles walls at any y+. k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than k-epsilon with separation and swirl. Reynolds-stress models suit strong swirl but may need a converged k-epsilon run first. Laminar solves no turbulence at all."
           },
           "ref_speed": {
             "type": "number",
@@ -1662,7 +1662,7 @@
               ]
             },
             "title": "Gradient limiter",
-            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset."
+            "description": "How strongly gradients are limited: Strong is the most stable, None the most accurate on a good mesh. Blank uses the Numerics preset's (Strong for Robust, Light for Accurate), or Strong in a transient study without a preset. It limits the gradients convection reads (the velocity's, for linearUpwind, and the turbulence fields'); the viscous terms read the velocity gradient skew-corrected and unlimited."
           },
           "momentum_convection": {
             "type": "string",
@@ -3122,7 +3122,7 @@
               ]
             },
             "title": "Turbulence model",
-            "description": "Laminar suits slow natural convection (a Rayleigh number below about 10\u2079) and low-Reynolds flow. k-omega SST is the general-purpose model and handles walls at any y+; k-epsilon and realizable k-epsilon use wall functions (y+ above about 30)."
+            "description": "Laminar suits slow natural convection (a Rayleigh number below about 10\u2079) and low-Reynolds flow. k-omega SST is the general-purpose model (Spalding's law at the wall: a first cell at y+ from about 5 to 100, or below about 0.5); k-epsilon and realizable k-epsilon use wall functions (y+ above about 30)."
           }
         },
         "additionalProperties": false
@@ -4202,7 +4202,7 @@
               ]
             },
             "title": "Turbulence model",
-            "description": "Laminar suits slow natural convection (a Rayleigh number below about 10\u2079) and low-Reynolds flow. k-omega SST is the general-purpose model and handles walls at any y+; k-epsilon and realizable k-epsilon use wall functions (y+ above about 30)."
+            "description": "Laminar suits slow natural convection (a Rayleigh number below about 10\u2079) and low-Reynolds flow. k-omega SST is the general-purpose model (Spalding's law at the wall: a first cell at y+ from about 5 to 100, or below about 0.5); k-epsilon and realizable k-epsilon use wall functions (y+ above about 30)."
           }
         },
         "additionalProperties": false

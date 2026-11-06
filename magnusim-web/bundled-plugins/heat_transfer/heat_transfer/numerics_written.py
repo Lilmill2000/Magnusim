@@ -102,6 +102,14 @@ def numerics_rows(physics: StudyPhysics, *, transient: Any = None, cht: bool = F
             rows.append(row(PIMPLE, "Outer tolerance", f"{foam_number(tol)} (p_rgh and the equations, relTol 0)" if tol else "Off: every outer corrector runs", "run" if tol else "default"))
     cap = velocity_cap(ns, 0.0, default="off", factor=LIMIT_FACTOR, floor=LIMIT_FLOOR)
     rows.append(row(LIMITERS, "Velocity limit", limit_value(cap, speed=None, factor=LIMIT_FACTOR, floor=LIMIT_FLOOR, unknown=SPEED_UNKNOWN), "study" if ns.velocity_limit else "default"))
+    if solved_turbulence_fields(model):
+        # The walls are Incompressible Flow's (flow_patches), with the heat's own wall function.
+        from incompressible_flow.flow_bcs import wall_treatment_words
+
+        from .writer import PRT
+
+        walls = wall_treatment_words(model)
+        rows.append(row(FIXED, "Wall treatment", f"{walls}, alphat compressible::alphatJayatillekeWallFunction (Prt {foam_number(PRT)})", "fixed"))
     rows.append(row(FIXED, "Solver types", f"GAMG for p_rgh, PBiCGStab (DILU) for {_eq_names(model)}", "fixed"))
     rows.append(row(FIXED, "grad(h)", "Gauss linear", "fixed"))
     rows.append(row(FIXED, "div(phi,K)", bounded(s["K"], steady) + " (the preset's)", "fixed"))

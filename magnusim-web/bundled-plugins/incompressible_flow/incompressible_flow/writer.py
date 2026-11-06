@@ -295,11 +295,8 @@ def write_fv_schemes_transient(
     ``numerics`` (RH3): the study's schemes; blank ones are this writer's own.
     """
     ddt = "backward" if ctrl.time_scheme == "backward" else "Euler"
-    ch = scheme_choices(numerics or BLANK_NUMERICS, preset=None)
-    grad = GRAD_LIMITERS[ch["grad_limiter"][0]]
-    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
-    grads = _grad_lines(turbulence, grad)
-    divs = _div_lines(turbulence, CONVECTION[ch["turbulence_convection"][0]]) + (_POTENTIAL_DIV if potential else "")
+    s = transient_schemes(numerics)
+    divs = _div_lines(turbulence, s["turb_div"]) + (_POTENTIAL_DIV if potential else "")
     _write_foam(
         path,
         _foam_header("fvSchemes")
@@ -307,17 +304,15 @@ def write_fv_schemes_transient(
 ddtSchemes {{ default {ddt}; }}
 gradSchemes
 {{
-    default         Gauss linear;
-    grad(U)         {grad};
-{grads}}}
+{_velocity_grad_lines(s)}{_grad_lines(turbulence, s["grad"])}}}
 divSchemes
 {{
     default         none;
-    div(phi,U)      {MOMENTUM[ch["momentum_convection"][0]]};
+    div(phi,U)      {s["momentum"]};
 {divs}}}
-laplacianSchemes {{ default {laplacian}; }}
-interpolationSchemes {{ default linear; }}
-snGradSchemes {{ default {sn_grad}; }}
+laplacianSchemes {{ default {s["laplacian"]}; }}
+interpolationSchemes {{ default linear; {FLUX_INTERPOLATION_ENTRY}; }}
+snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}
 
 // ************************************************************************* //
@@ -1198,6 +1193,46 @@ def two_d_empty_patches(spec: Any, poly: Path | None) -> set[str]:
     return {name for name, n in ends.items() if name in sym and faces.get(name) == n * cells}
 
 
+# A no-slip wall's turbulence entries per model (the value is the case's own). k-omega SST
+# (validation set, 2026-11-06; a developed pipe at Re 5e4 against McKeon et al. 2005, on a
+# clean wedge mesh with the first cell's centre from y+ 1 to 100): nutkWallFunction switches to
+# its log law at y+ 11.53 from k and reads the wall's friction 8 to 20 % low at y+ 12 to 35 (it
+# read the case's Hex-dominant pipe 13 % low), and the default (binomial) omega blending reads
+# 5 to 9 % high at y+ 5 to 12 under Spalding's law. Spalding's law for nut with stepwise omega
+# reads within -0.4 to +2.1 % at y+ 5 to 15, +4.4 % at 20 and -3.3 % at 100. Below about y+ 4
+# (resolving the wall) every treatment reads 6 to 9 % low until the first cell's centre is near
+# y+ 0.3 (-1.5 %): a resolution limit, not the wall function. k-epsilon keeps nutkWallFunction:
+# Spalding's law reads it 6 to 20 % high below y+ 20 (epsilon takes its log value at any y+).
+def wall_functions(model: str) -> dict[str, dict[str, str]]:
+    """The wall's entry (without its value) of each turbulence field the model reads."""
+    sst = model == "kOmegaSST"
+    return {
+        "k": {"type": "kqRWallFunction"},
+        "R": {"type": "kqRWallFunction"},
+        "omega": {"type": "omegaWallFunction", "blending": "stepwise"} if sst else {"type": "omegaWallFunction"},
+        "epsilon": {"type": "epsilonWallFunction"},
+        # Spalart-Allmaras and k-omega SST: Spalding's law covers the wall layer from the
+        # viscous sublayer to the log layer.
+        "nut": {"type": "nutUSpaldingWallFunction" if model == SA_MODEL or sst else "nutkWallFunction"},
+    }
+
+
+def wall_treatment_words(model: str) -> str:
+    """What a no-slip wall is written with for the model ("Numerics as written": Stays fixed)."""
+    from .physics import solved_turbulence_fields
+
+    if model == "laminar":
+        return ""
+    if model == SA_MODEL:
+        return "nut nutUSpaldingWallFunction, nuTilda 0 (Spalding's law)"
+    fn = wall_functions(model)
+    parts = []
+    for name in ("nut", *[f for f in solved_turbulence_fields(model) if f in fn]):
+        e = fn[name]
+        parts.append(f"{name} {e['type']}" + (f" ({e['blending']})" if e.get("blending") else ""))
+    return ", ".join(parts)
+
+
 def _build_field_patches(
     spec: RunSpec,
     patch_names: list[str],
@@ -1250,21 +1285,14 @@ def _build_field_patches(
             return {"type": "calculated", "value": "uniform 0"}
         return {"type": "freestream", "freestreamValue": f"uniform {values[name]}"}
 
-    wall_fn = {
-        "k": "kqRWallFunction",
-        "R": "kqRWallFunction",
-        "omega": "omegaWallFunction",
-        "epsilon": "epsilonWallFunction",
-        # Spalart-Allmaras: Spalding's law covers the wall layer at any y+.
-        "nut": "nutUSpaldingWallFunction" if model == SA_MODEL else "nutkWallFunction",
-    }
+    wall_fn = wall_functions(model)
 
     def no_slip(name: str, _values: dict[str, str]) -> dict[str, str]:
         if name == "nuTilda":
             # nuTilda is 0 at a wall (the model is integrated down to it).
             return {"type": "fixedValue", "value": "uniform 0"}
         value = "0" if name == "nut" else turb_values[name]
-        return {"type": wall_fn[name], "value": f"uniform {value}"}
+        return {**wall_fn[name], "value": f"uniform {value}"}
 
     from . import time_table as _tt
 
@@ -1529,19 +1557,70 @@ _STEADY_SCHEMES: dict[str, dict[str, str]] = {
 }
 
 
+# The velocity gradient (validation set, 2026-11-06): plain Gauss linear gradients and linear
+# face interpolation ignore a cell's skewness, which a tet mesh (Standard's) has in every
+# direction. Two places carried that error into the solution, so a laminar pipe at Re 100
+# on Standard read f Re 74.8 for 64 (+17 %) while Hex-dominant read 63.3:
+# - grad(U), which the viscous term's non-orthogonal correction, its explicit part
+#   div((nuEff*dev2(T(grad(U))))) and the turbulence models' production all read: it is
+#   skew-corrected and never limited (a limiter there flattens the viscous stress);
+# - the mass flux from HbyA: skew-corrected too.
+# Together they bring that pipe to 64.26 (+0.4 %, 64.05 from the wall shear) and leave
+# Hex-dominant at 63.2. The study's gradient limiter now limits only the gradient momentum
+# convection reads (linearUpwind's, limitedGradU) and the turbulence fields' gradients.
+VELOCITY_GRAD = "Gauss skewCorrected linear"
+CONVECTION_GRAD = "limitedGradU"
+FLUX_INTERPOLATION_ENTRY = "flux(HbyA) skewCorrected linear"
+
+
+def convection_grad(limiter: str) -> str:
+    """The study's gradient limiter (GRAD_LIMITERS) on the skew-corrected velocity gradient: the
+    gradient linearUpwind reads (``limitedGradU``)."""
+    return GRAD_LIMITERS[limiter].replace("Gauss linear", VELOCITY_GRAD)
+
+
+def _scheme_strings(ch: dict[str, tuple[str, str]], *, steady: bool) -> dict[str, str]:
+    """The fvSchemes strings of the scheme choices: the velocity gradient, the convection
+    gradient ("" when no scheme reads it: the limiter None, where linearUpwind reads grad(U), or a
+    momentum scheme without a gradient), the turbulence fields' gradients (``grad``), the
+    convection schemes (bounded when steady) and the non-orthogonal correction."""
+    limiter = ch["grad_limiter"][0]
+    momentum = MOMENTUM[ch["momentum_convection"][0]]
+    # Only linearUpwind reads a gradient (first order and limitedLinearV read none).
+    limited = "linearUpwind grad(U)" in momentum and convection_grad(limiter) != VELOCITY_GRAD
+    if limited:
+        momentum = momentum.replace("linearUpwind grad(U)", f"linearUpwind {CONVECTION_GRAD}")
+    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
+    return {
+        "velocity_grad": VELOCITY_GRAD,
+        "convection_grad": convection_grad(limiter) if limited else "",
+        "grad": GRAD_LIMITERS[limiter],
+        "turb_div": bounded(CONVECTION[ch["turbulence_convection"][0]], steady),
+        "momentum": bounded(momentum, steady),
+        "laplacian": laplacian,
+        "sn_grad": sn_grad,
+    }
+
+
 def steady_schemes(physics: StudyPhysics | None = None) -> dict[str, str]:
     """The steady fvSchemes strings: the study's choices (RH3), each blank one from its
     Numerics preset (_STEADY_SCHEMES). Convection is written bounded."""
     ph = physics or DEFAULT_PHYSICS
     ch = scheme_choices(ph.numerics_settings, preset=ph.numerics if ph.numerics in _STEADY_SCHEMES else "robust")
-    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
-    return {
-        "grad": GRAD_LIMITERS[ch["grad_limiter"][0]],
-        "turb_div": bounded(CONVECTION[ch["turbulence_convection"][0]], True),
-        "momentum": bounded(MOMENTUM[ch["momentum_convection"][0]], True),
-        "laplacian": laplacian,
-        "sn_grad": sn_grad,
-    }
+    return _scheme_strings(ch, steady=True)
+
+
+def transient_schemes(numerics: NumericsSettings | None = None) -> dict[str, str]:
+    """The transient fvSchemes strings: the study's choices (RH3), each blank one the transient
+    writer's own (NO_PRESET_TRANSIENT)."""
+    return _scheme_strings(scheme_choices(numerics or BLANK_NUMERICS, preset=None), steady=False)
+
+
+def _velocity_grad_lines(s: dict[str, str]) -> str:
+    out = f"    default         Gauss linear;\n    grad(U)         {s['velocity_grad']};\n"
+    if s["convection_grad"]:
+        out += f"    {CONVECTION_GRAD:<15} {s['convection_grad']};\n"
+    return out
 
 
 def _steady_fv_schemes_body(physics: StudyPhysics | None = None) -> str:
@@ -1551,16 +1630,14 @@ def _steady_fv_schemes_body(physics: StudyPhysics | None = None) -> str:
     return f"""ddtSchemes {{ default steadyState; }}
 gradSchemes
 {{
-    default         Gauss linear;
-    grad(U)         {s["grad"]};
-{_grad_lines(model, s["grad"])}}}
+{_velocity_grad_lines(s)}{_grad_lines(model, s["grad"])}}}
 divSchemes
 {{
     default         none;
     div(phi,U)      {s["momentum"]};
 {_div_lines(model, s["turb_div"])}{_POTENTIAL_DIV if ph.uses_potential_flow() else ""}}}
 laplacianSchemes {{ default {s["laplacian"]}; }}
-interpolationSchemes {{ default linear; }}
+interpolationSchemes {{ default linear; {FLUX_INTERPOLATION_ENTRY}; }}
 snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}"""
 

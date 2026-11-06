@@ -52,7 +52,7 @@
     {
       "file": "scripts/server/assistant/cfdGuide.ts",
       "line_contains": [
-        "k-omega SST handles both"
+        "k-omega SST suits 5-100"
       ],
       "reason": "The Assistant's CFD guide (core edition): its mesh rule tells the AI which wall treatment suits a y+ range, in the spec's words. Only that line is allowed."
     },

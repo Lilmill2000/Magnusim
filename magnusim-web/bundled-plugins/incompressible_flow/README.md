@@ -66,7 +66,7 @@ schemes and solver settings each model needs):
 | Laminar (`laminar`) | none | |
 | Spalart-Allmaras (`SpalartAllmaras`) | `nuTilda`, `nut` | `nuTilda` 0, `nut` `nutUSpaldingWallFunction` (any y+) |
 | k-epsilon (`kEpsilon`), Realizable k-epsilon (`realizableKE`) | `k`, `epsilon`, `nut` | high-Re wall functions |
-| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | wall functions (any y+) |
+| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | `nut` `nutUSpaldingWallFunction`, `omega` `omegaWallFunction` `blending stepwise`, `k` `kqRWallFunction`: a first cell at y+ from about 5 to 100, or below about 0.5 |
 | LRR, SSG (`LRR`, `SSG`) | `k`, `epsilon`, `R`, `nut` | high-Re wall functions |
 
 A boundary's "Turbulence at the inlet" (`inlet_turbulence.py`) sets k, omega and
@@ -76,6 +76,19 @@ a turbulent viscosity that `nuTilda` is solved back from.
 
 ## Changes
 
+- **Skew-corrected velocity gradient and flux; Spalding's law on k-omega SST walls
+  (validation set, 2026-11).** Plain linear interpolation and Gauss linear gradients
+  ignore a cell's skewness, so on Standard's tetrahedra the mass flux (`flux(HbyA)`) and
+  the velocity gradient the viscous term reads were wrong: the validation set's laminar
+  pipe read f Re 16 % high on Standard. Both are skew-corrected now (`flux(HbyA)
+  skewCorrected linear`, `grad(U) Gauss skewCorrected linear`, never limited, steady and
+  transient); the study's gradient limiter limits the gradient linearUpwind reads
+  (`limitedGradU`) and the turbulence fields' gradients. k-omega SST's no-slip walls take
+  `nutUSpaldingWallFunction` with `omegaWallFunction` `blending stepwise` (they had
+  `nutkWallFunction`, which read a developed pipe 8 to 20 % low from y+ 12 to 35); the
+  other models' walls are as before. "Numerics as written" lists the velocity gradient,
+  the flux interpolation and the wall treatment under Stays fixed. The evidence:
+  `validation/README.md`.
 - **Force on picked faces (Result control > Surface data > Force).** The force on
   exactly the faces a user picks in the 3D view, as Area average picks them (one
   face, several, or a whole wall, with no wall BC needed): total, pressure and

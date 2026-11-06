@@ -795,7 +795,7 @@ def _physics_rows(r: _Run, rows: list[dict[str, Any]]) -> dict[str, Any]:
         mm = fmt(first * 1000, 2)
         if r.wall_functions and yp < YPLUS_WALL_FN_MIN:
             said = f"Estimated y+ ≈ {fmt(yp, 2)} (first cell {mm} mm). {r.model_label or 'This model'}'s wall functions assume y+ above about 30"
-            said += f"; {r.model_fix['label']} handles any y+." if r.model_fix else "."
+            said += f"; {r.model_fix['label']} suits lower y+." if r.model_fix else "."
             rows.append(
                 _row(
                     "yplus_model",
@@ -841,7 +841,7 @@ def _physics_rows(r: _Run, rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _model_fix(r: _Run) -> dict[str, Any] | None:
-    """The study's turbulence model the analysis offers for any y+ (its own words and key)."""
+    """The study's turbulence model the analysis offers for lower y+ (its own words and key)."""
     if not r.model_fix:
         return None
     return _fix(str(r.model_fix["label"]), "study", {str(r.model_fix["key"]): r.model_fix.get("value")})
@@ -975,7 +975,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     velocity limit, None without one); ``time_varying``, ``moving``; ``turbulence`` (the
     analysis's words for its model: ``laminar``, ``label``, ``fields`` that can go negative,
     ``wall_functions``, and ``any_yplus``: ``{label, key, value}``, the study setting of a model
-    that handles any y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
+    that suits lower y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
     ``nu`` (m²/s); ``d_hyd`` (m, the inlet's hydraulic diameter); ``ref_length`` (m, the
     length Re is taken on without an inlet: a body's reference length; its turbulent limit is a
     boundary layer's, as on the domain's length); ``initial_flow``,

@@ -130,8 +130,9 @@ def test_an_explicit_slip_wall_under_a_no_slip_default_is_slip_on_its_patch_only
     # Every other wall keeps the No-slip default and its wall functions.
     assert u["walls"] == {"type": "noSlip"}
     assert turb["k"]["walls"] == {"type": "kqRWallFunction", "value": "uniform 0.5"}
-    assert turb["omega"]["walls"] == {"type": "omegaWallFunction", "value": "uniform 20"}
-    assert turb["nut"]["walls"] == {"type": "nutkWallFunction", "value": "uniform 0"}
+    # k-omega SST's walls: Spalding's law with stepwise omega.
+    assert turb["omega"]["walls"] == {"type": "omegaWallFunction", "blending": "stepwise", "value": "uniform 20"}
+    assert turb["nut"]["walls"] == {"type": "nutUSpaldingWallFunction", "value": "uniform 0"}
 
 
 # -- velocity outlets: the outflow the panel asks for ---------------------------
@@ -361,7 +362,7 @@ def test_a_moving_wall_slides_at_its_velocity_with_wall_functions():
     assert _vector(u["belt"]["value"]) == pytest.approx([2.0, 0.0, 0.0])
     assert p["belt"] == {"type": "zeroGradient"}
     assert turb["k"]["belt"] == {"type": "kqRWallFunction", "value": "uniform 0.5"}
-    assert turb["nut"]["belt"] == {"type": "nutkWallFunction", "value": "uniform 0"}
+    assert turb["nut"]["belt"] == {"type": "nutUSpaldingWallFunction", "value": "uniform 0"}
 
 
 def test_a_rotating_wall_turns_about_its_axis_in_rad_per_s():
@@ -380,7 +381,7 @@ def test_a_rotating_wall_turns_about_its_axis_in_rad_per_s():
     assert float(u["disc"]["omega"]) == pytest.approx(600 * 2 * math.pi / 60)
     assert u["disc"]["value"] == "uniform (0 0 0)"
     assert p["disc"] == {"type": "zeroGradient"}
-    assert turb["omega"]["disc"] == {"type": "omegaWallFunction", "value": "uniform 20"}
+    assert turb["omega"]["disc"] == {"type": "omegaWallFunction", "blending": "stepwise", "value": "uniform 20"}
 
 
 def test_moving_and_rotating_walls_are_wall_patches_in_a_laminar_case(tmp_path: Path):

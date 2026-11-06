@@ -282,16 +282,17 @@ def _copy_mesh(src_case: Path, dst: Path) -> Path:
     return dst
 
 
-def _wall_turbulence(flow: Any, field: str) -> dict[str, str]:
+def _wall_turbulence(flow: Any, field: str, model: str) -> dict[str, str]:
     """A no-slip wall's entry of a turbulence field, as Incompressible Flow writes it."""
+    from incompressible_flow.flow_bcs import wall_functions
+
     for patch, kind in flow.kinds.items():
         if kind == "wall" and flow.wall_motion.get(patch, "no_slip") == "no_slip":
             entry = (flow.turbulence.get(field) or {}).get(patch)
             if entry:
                 return dict(entry)
-    fn = {"k": "kqRWallFunction", "omega": "omegaWallFunction", "epsilon": "epsilonWallFunction", "nut": "nutkWallFunction"}
     value = "uniform 0" if field == "nut" else str(flow.turbulence_internal.get(field) or "uniform 0")
-    return {"type": fn.get(field, "zeroGradient"), "value": value}
+    return {**wall_functions(model).get(field, {"type": "zeroGradient"}), "value": value}
 
 
 def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> dict[str, Any]:
@@ -429,7 +430,7 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
                 for name in solved_turbulence_fields(model) + ("nut",):
                     entries = {p: e for p, e in (flow.turbulence.get(name) or {}).items() if p in patches}
                     for f in ifaces:
-                        entries[f] = _wall_turbulence(flow, name)
+                        entries[f] = _wall_turbulence(flow, name, model)
                     write_vol_field(z / name, object_name=name, cls="volScalarField", dims=dims[name],
                                     internal=flow.turbulence_internal[name], patches=entries)
             write_foam_dict(out / "constant" / r / "thermophysicalProperties", "dictionary", "thermophysicalProperties",

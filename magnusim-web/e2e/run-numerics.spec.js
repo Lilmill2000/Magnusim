@@ -27,6 +27,12 @@
 //   back to the default, nothing differs. An unhealthy run's Continue box and the Assistant's card
 //   with the new numerics say only Health on the continued part can tell, never that its settings
 //   have not changed. "Numerics as written" of a started run names the preset it started with.
+// - What stays fixed (the validation set's pipes, 2026-11-06): "Numerics as written" says the velocity
+//   gradient and the flux are skew-corrected, that the limiter is on the convection gradient
+//   (limitedGradU), and what each model's walls are written with (k-omega SST: Spalding's law, stepwise
+//   omega; k-epsilon: nutkWallFunction), as the Assistant reads it; the Study panel's model help says
+//   where k-omega SST's walls read well, not "any y+". Fails on the code before it: there were no
+//   such rows and the limiter was on grad(U).
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL. Its fake solve
 // replays a healthy steady log through the real health tracker (MAGNUSIM_TEST_SOLVE_LOG).
 // Fails on the code before RH3: there were no such settings, no "Numerics as written" and no
@@ -784,6 +790,59 @@ test.describe('numerics at Continue', () => {
       expect(read.numerics.find((n) => n.label === 'Gradient limiter')).toMatchObject({ source: 'preset', preset: 'Robust' });
     } finally {
       await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: null });
+    }
+  });
+
+  test('"Numerics as written" says the velocity gradient and the flux are skew-corrected, the limiter is on the convection gradient, and what each model\'s walls are written with, as the Assistant reads it', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const model = (await studyRec(request)).turbulence_model ?? null;
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
+    const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name: 'Run_fixed', mesh_id: meshId });
+    const rid = String(made.run_id || made.run?.id || made.run?.run_id);
+    const sst = {
+      'Gradient limiter': 'limitedGradU cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1',
+      'Momentum convection': 'bounded Gauss linearUpwind limitedGradU',
+      'Velocity gradient': 'grad(U) Gauss skewCorrected linear, never limited (the viscous terms and turbulence production)',
+      'Flux interpolation': 'flux(HbyA) skewCorrected linear; the rest linear',
+      'Wall treatment': 'nut nutUSpaldingWallFunction, k kqRWallFunction, omega omegaWallFunction (stepwise)',
+    };
+    try {
+      // The person: a steady k-omega SST draft on the Robust preset.
+      let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+      let row = await numericsOf(panel);
+      for (const [label, value] of Object.entries(sst)) await expect(row(label), label).toHaveText(value, STEP);
+      // The Assistant reads the same rows (read_setup numerics, R35).
+      const seen = {};
+      fake.reply(
+        { tools: [{ name: 'read_setup', input: readSetup({ what: 'numerics', id: rid }) }] },
+        () => {
+          seen.read = lastResults()[0];
+          return { text: 'Read.' };
+        },
+      );
+      await openDock(page);
+      await dockSend(page, 'Read the numerics of Run_fixed.');
+      await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 60_000 });
+      expect(seen.read.ok, JSON.stringify(seen.read)).toBe(true);
+      const read = Object.fromEntries(seen.read.data.rows.map((x) => [x.label, x.value]));
+      for (const [label, value] of Object.entries(sst)) expect(read[label], label).toBe(value);
+      // k-epsilon keeps the k-based log law at the wall; after a reload the panel shows it.
+      await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: 'kEpsilon' });
+      await page.reload();
+      panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+      row = await numericsOf(panel);
+      await expect(row('Wall treatment')).toHaveText('nut nutkWallFunction, k kqRWallFunction, epsilon epsilonWallFunction', STEP);
+      await expect(row('Velocity gradient')).toHaveText(sst['Velocity gradient'], STEP);
+      // The Study panel's model help says where k-omega SST's walls read well, not "any y+".
+      await page.goto(`${host.base}/#/p/${PID}`);
+      await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
+      await page.locator(`#left-tree [data-w17-sim-id="${sim}"] > .tree-row`).first().click();
+      const help = page.locator('#panel-study-settings [data-schema-key="turbulence_model"] [role="tooltip"]');
+      await expect(help).toContainText("with Spalding's law at the wall it suits a first cell at y+ from about 5 to 100", STEP);
+      await expect(help).toContainText("On Standard's tetrahedra its stress limiter reads their uneven strain rate", STEP);
+      await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
+    } finally {
+      await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: model });
     }
   });
 });
