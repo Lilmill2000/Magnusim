@@ -32,6 +32,7 @@ import numpy as np
 
 from ..extract import arrays, downsample, sign_changes
 from ..model import QuantitySpec, Tolerance, compare
+from ..notes import and_list, checkmesh_words, precheck_note, run_words
 from ..refs import read
 
 ID = "c4_backward_step"
@@ -181,6 +182,66 @@ def quantities(variant: str) -> list[QuantitySpec]:
 _SCATTER_XR = [float(r["xr_over_s"]) for r in SCATTER.rows]
 SCATTER_RANGE = (min(_SCATTER_XR), max(_SCATTER_XR))
 
+# The coarse runs of 2026-11-06 (the custom size doubled to 0.6 mm: level 3; not reported), typed:
+# they are not results. Re_D 800's ran with SIMPLEC, as the case does.
+COARSE = {
+    "re100": {"cells": 45_663, "x1_over_s": 2.852},
+    "re800": {"cells": 42_989, "xr_over_s": 11.48, "xs_top_over_s": 9.03, "xr_top_over_s": 20.33},
+}
+
+
+def _note_checkmesh(by: dict[str, dict[str, Any]]) -> str | None:
+    """What checkMesh said of the reported meshes."""
+    bits = [f"at Re_D {RE[v]} {checkmesh_words(by[v])}" for v in VARIANTS if v in by]
+    return ("The reported meshes, " + " and ".join(bits) + ".") if bits else None
+
+
+def _note_mesh_moves(by: dict[str, dict[str, Any]]) -> str | None:
+    """How much the coarse runs' mesh moves the reported values."""
+    from ..report import cells_text, num, pct_text, quantity, rel_pct
+
+    parts = []
+    worst800 = 0.0
+    for v in VARIANTS:
+        res = by.get(v)
+        if not res:
+            continue
+        keys = [k for k in COARSE[v] if k != "cells"]
+        got = [quantity(res, k).get("value") for k in keys]
+        if any(x is None for x in got):
+            continue
+        mine = [float(x) for x in got if x is not None]
+        pcts = [rel_pct(COARSE[v][k], x) for k, x in zip(keys, mine, strict=True)]
+        if v == "re800":
+            worst800 = max(pcts)
+        names = {"x1_over_s": "x1/S", "xr_over_s": "x_r/S", "xs_top_over_s": "x_s/S", "xr_top_over_s": "x_r2/S"}
+        coarse = and_list([f"{names[k]} {num(COARSE[v][k], 4)}" for k in keys])
+        parts.append(f"at Re_D {RE[v]}, {coarse} on {cells_text(COARSE[v]['cells'])} cells against "
+                     f"{and_list([num(x, 4) for x in mine])} on {cells_text((res.get('mesh') or {}).get('n_cells'))} "
+                     f"({and_list([pct_text(x) for x in pcts])} %)")
+    if not parts:
+        return None
+    text = ("How much the mesh moves the answer (the coarse runs of 2026-11-06, the custom size doubled to 0.6 mm: "
+            "level 3, a quarter of the cells; not reported): " + "; ".join(parts))
+    if worst800 >= 1.0:
+        text += (f": at Re_D 800 the values still move by up to {pct_text(worst800)} % for one level, so they are not "
+                 "converged in the mesh to better than that")
+    return text + "."
+
+
+def _note_simplec(by: dict[str, dict[str, Any]]) -> str:
+    """Why Re_D 800 solves with SIMPLEC, and how the reported run ended."""
+    text = ("SIMPLEC at Re_D 800 (the study's own setting, its relaxation the app's). With SIMPLE at 0.7 / 0.3 the "
+            "coarse run of 2026-11-06 never settled: its U residual stayed near 0.05 from iteration 600 to its limit "
+            "of 6000, the inlet pressure swung by ±0.75 % and a train of waves ran along the channel after the step "
+            "(U_y up to 0.03 m/s on its centreline, 30 to 60 S); Run health read the pressure residual as stalled. "
+            "With SIMPLEC the same mesh met its targets in 1131 iterations.")
+    res = by.get("re800")
+    if res:
+        text += f" The reported run {run_words(res, residual='U')}."
+    return text
+
+
 NOTES = (
     "Where the design and the reference data differ, the reference data win: the first variant runs at Re_D = 100 "
     "against Armaly et al.'s measured x1/S = 3.00 (±10 %), not at the design's Re 389 (the experiment turns "
@@ -207,21 +268,11 @@ NOTES = (
     "Fineness 10 because the part is long and thin (35 to 40 times longer than high, an app gap of Hex-dominant): its "
     "background block keeps at least 8 cells across the height (170 × 8 here) while it sizes them along the length "
     "from the part's diagonal, so at fineness 5 its cells would be 5 to 6 times longer than high (54 × 8), at 10 "
-    "about 1.7 to 1.9. Both meshes pass checkMesh (the most non-orthogonal face 24 degrees at Re_D 100, 48 at Re_D "
-    "800).",
-    "How much the mesh moves the answer (the coarse runs, 2026-11-06, the custom size doubled to 0.6 mm: level 3, a "
-    "quarter of the cells; not reported): at Re_D 100, x1/S 2.852 on 45 663 cells against 2.854 on 182 316 (0.1 %); "
-    "at Re_D 800, x_r/S 11.48, x_s/S 9.03 and x_r2/S 20.33 on 42 989 cells against 11.68, 9.22 and 20.38 on "
-    "171 840 (1.7, 2.1 and 0.3 %): at Re_D 800 the reattachment still moves by about 2 % per level, so it is not "
-    "converged in the mesh to better than that.",
-    "SIMPLEC at Re_D 800 (the study's own setting, its relaxation the app's). With SIMPLE at 0.7 / 0.3 the coarse run "
-    "never settled: its U residual stayed near 0.05 from iteration 600 to its limit of 6000, the inlet pressure "
-    "swung by ±0.75 % and a train of waves ran along the channel after the step (U_y up to 0.03 m/s on its "
-    "centreline, 30 to 60 S); Run health read the pressure residual as stalled. With SIMPLEC the same mesh met its "
-    "targets in 1131 iterations. The full run's U residual fell to 2.6e-6 by iteration 2700 and then stayed between "
-    "about 5e-6 and 1.3e-5 to its limit of 6000 (the targets are 1e-6), while its inlet pressure and the bubble's "
-    "probe moved less than 1e-7 over the last 10 % of iterations: settled, by this harness's rule, without meeting "
-    "its targets.",
+    "about 1.7 to 1.9.",
+    lambda by: _note_checkmesh(by),
+    lambda by: _note_mesh_moves(by),
+    lambda by: _note_simplec(by),
+    lambda by: precheck_note(by, {v: f"Re_D {RE[v]}" for v in VARIANTS}),
     "Reading the wall shear stress: OpenFOAM's wallShearStress carries the sign of its own convention, so on each "
     "wall its sign in the attached flow far after the step (from 0.6 to 0.9 of the length after it, where U_x 0.02 S "
     "from the wall must be forward too) is taken as forward. The reattachment is where the floor's turns from "

@@ -77,7 +77,7 @@ def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
 
 
 def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None) -> str:
-    from .report import env_lines, quantity_value_text, variant_facts, variant_label
+    from .report import case_notes, env_lines, quantity_value_text, variant_facts, variant_label
 
     out = [
         "<!doctype html>",
@@ -128,9 +128,10 @@ def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None)
                     out.append(f'<figure><img src="img/{esc(f["file"])}" alt="{esc(alt)}" loading="lazy">'
                                f"<figcaption>{esc(alt)}</figcaption></figure>")
                 out.append("</div>")
-        if getattr(case, "NOTES", ()):
+        notes = case_notes(case, mine)
+        if notes:
             out.append("<h3>Notes</h3><ul class=refs>")
-            out.extend(f"<li>{esc(n)}</li>" for n in case.NOTES)
+            out.extend(f"<li>{esc(n)}</li>" for n in notes)
             out.append("</ul>")
         out.append("<h3>References</h3><ul class=refs>")
         for spec in case.QUANTITIES.values():

@@ -251,12 +251,43 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
             out.append(f"- **{spec.label}**: {num(ref.value)} ({ref.kind}, {ref.confidence}). {ref.citation}; "
                        f"{ref.where}. Conditions: {ref.conditions}.{(' ' + ref.note) if ref.note else ''}")
         out.append("")
-        if getattr(case, "NOTES", ()):
+        notes = case_notes(case, mine)
+        if notes:
             out.append("### Notes\n")
-            out.extend(f"- {n}" for n in case.NOTES)
+            out.extend(f"- {n}" for n in notes)
             out.append("")
     out.extend(heat_transfer.markdown(heat_transfer.load()))
     return "\n".join(out).rstrip() + "\n"
+
+
+def case_notes(case: Any, results: list[dict[str, Any]]) -> list[str]:
+    """A case's notes (the report and the page). A note that quotes its reported runs (their
+    cells, values, iterations, times, what the pre-run check said) is a function of those runs
+    (``{variant: result}``) and returns None without them: it says what the results here give,
+    never figures typed when an earlier run was made. Probe and coarse runs are not results, so
+    their figures stay typed, dated."""
+    by = {str(r.get("variant")): r for r in results}
+    out = []
+    for note in getattr(case, "NOTES", ()) or ():
+        text = note(by) if callable(note) else note
+        if text:
+            out.append(str(text))
+    return out
+
+
+def pct_text(x: float) -> str:
+    """A per cent difference as the notes give it: one significant digit under 1 %, else two."""
+    return num(x, 1 if abs(x) < 1 else 2)
+
+
+def rel_pct(a: float, b: float) -> float:
+    """|a - b| as a per cent of |b|."""
+    return 100.0 * abs(float(a) - float(b)) / abs(float(b))
+
+
+def quantity(res: dict[str, Any] | None, key: str) -> dict[str, Any]:
+    """A result's compared quantity ``key`` ({} without it)."""
+    return next((q for q in (res or {}).get("quantities") or [] if q.get("key") == key), {})
 
 
 def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:

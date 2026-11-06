@@ -38,6 +38,7 @@ from ..extract import (
     time_rms,
 )
 from ..model import QuantitySpec, Tolerance, compare
+from ..notes import and_list, precheck_note
 from ..refs import read
 
 ID = "c5_cylinder"
@@ -208,13 +209,123 @@ def quantities(variant: str) -> list[QuantitySpec]:
     return list(_BY_VARIANT[variant].values())
 
 
+# The probes of 2026-11-06, typed: they are not results. The coarse runs: every custom size
+# doubled (a level fewer), 20 102 cells, D/27 at the wall. The finer probe: fineness 7, where the
+# same custom sizes come out at D/68, D/34 and D/17, 117 332 cells, at 4 cores.
+COARSE_CELLS = 20_102
+COARSE: dict[str, dict[str, float]] = {
+    "re20": {"cd": 2.0756, "l_over_d": 0.9209},
+    "re40": {"cd": 1.5483, "l_over_d": 2.2872},
+    "re100": {"st": 0.16455, "cd_mean": 1.3777, "cl_rms": 0.2742, "l_over_d_mean": 1.291},
+}
+FINER_CELLS = 117_332
+FINER: dict[str, float] = {"st": 0.16568, "cd_mean": 1.3573, "cl_rms": 0.2468, "l_over_d_mean": 1.371}
+_NAMES = {"cd": "Cd", "l_over_d": "L/D", "st": "St", "cd_mean": "the mean Cd", "cl_rms": "CL rms",
+          "l_over_d_mean": "the mean L/D"}
+
+
+def _moves(probe: dict[str, float], res: dict[str, Any]) -> tuple[list[float], list[float]] | None:
+    """The reported values of ``probe``'s keys and how far the probe's are from them (%)."""
+    from ..report import quantity, rel_pct
+
+    mine: list[float] = []
+    for k in probe:
+        x = quantity(res, k).get("value")
+        if x is None:
+            return None
+        mine.append(float(x))
+    return mine, [rel_pct(probe[k], x) for k, x in zip(probe, mine, strict=True)]
+
+
+def _note_mesh_moves(by: dict[str, dict[str, Any]]) -> str | None:
+    """How much the coarse and finer probes' meshes move the reported values."""
+    from ..report import cells_text, num, pct_text
+
+    bits = []
+    steady_worst = 0.0
+    for v in ("re20", "re40", "re100"):
+        res = by.get(v)
+        got = _moves(COARSE[v], res) if res else None
+        if not res or not got:
+            continue
+        mine, pcts = got
+        if v != "re100":
+            steady_worst = max(steady_worst, *pcts)
+        probe = and_list([f"{_NAMES[k]} {num(x, 5)}" for k, x in COARSE[v].items()])
+        bits.append(f"at Re {RE[v]} {probe} against {and_list([num(x, 5) for x in mine])} on "
+                    f"{cells_text((res.get('mesh') or {}).get('n_cells'))} cells ({and_list([pct_text(x) for x in pcts])} %)")
+    if not bits:
+        return None
+    text = ("How much the mesh moves the answer (the coarse runs of 2026-11-06, every custom size doubled: a level "
+            f"fewer, {cells_text(COARSE_CELLS)} cells, D/27 at the wall; not reported): " + "; ".join(bits) + ".")
+    if by.get("re20") and by.get("re40") and steady_worst < 1.0:
+        text += f" The steady values move by at most {pct_text(steady_worst)} %: they are converged in the mesh."
+    res = by.get("re100")
+    got = _moves(FINER, res) if res else None
+    if got:
+        _mine, pcts = got
+        probe = and_list([f"{_NAMES[k]} {num(x, 5)}" for k, x in FINER.items()])
+        text += (" A finer mesh at Re 100 (fineness 7, where the same custom sizes come out at D/68, D/34 and D/17: "
+                 f"{cells_text(FINER_CELLS)} cells; a probe at 4 cores, not reported) gave {probe} "
+                 f"({and_list([pct_text(x) for x in pcts])} % from the reported run).")
+    return text
+
+
+def _signed(q: dict[str, Any]) -> str:
+    from ..report import pct_text
+
+    rel = (q.get("error") or {}).get("rel_pct")
+    return "-" if rel is None else f"{pct_text(abs(rel))} % {'above' if rel >= 0 else 'below'}"
+
+
+def _note_domain(by: dict[str, dict[str, Any]]) -> str | None:
+    """Where the values sit against their references, and what of it the domain may be."""
+    from ..report import quantity
+
+    text = ""
+    steady = [quantity(by.get(v), "cd") for v in ("re20", "re40")]
+    if all(q.get("error") for q in steady):
+        text += (f"The steady drag coefficients sit {_signed(steady[0])} and {_signed(steady[1])} the reference values "
+                 "while the mesh hardly moves them; what is left is the domain (40 D wide, its sides a Freestream) and "
+                 "the reference's own spread: Fornberg's large-domain 2.000 and 1.498 against the finite-box results of "
+                 "2.06 and 1.54 (Linnick & Fasel, Taira & Colonius), within 1 % of these values. ")
+    res = by.get("re100")
+    if res:
+        cd, st, cl = quantity(res, "cd_mean"), quantity(res, "st"), quantity(res, "cl_rms")
+        if cd.get("error") and st.get("error"):
+            text += f"At Re 100 the mean Cd is {_signed(cd)} and St {_signed(st)} the references. "
+        if cl.get("error"):
+            text += (f"CL rms is {_signed(cl)} its reference. The reference data's one domain test moved CL rms the "
+                     "most of the three values it reports (by 7.6 %, from 6.25 % to 3.1 % blockage, where it gave "
+                     "0.236, 2.6 % above 0.23), and this domain's 2.5 % blockage is smaller than either, so blockage as "
+                     "that test measured it does not account for the excess here. ")
+    if not text:
+        return None
+    return (text + "The domain's share is not measured here: the reference data expect +1 to 3 % on Cd and St unless "
+            "the domain is at least 40 D wide with slip or symmetry sides (their judgement), and this one is 40 D wide "
+            "with Freestream sides.")
+
+
+def _note_start(by: dict[str, dict[str, Any]]) -> str:
+    """Re 100's start and its sampling: the samples a shedding period from its own run."""
+    from ..report import num
+
+    per = ((by.get("re100") or {}).get("shown") or {}).get("samples_per_period")
+    return ("Re 100 starts from a Custom starting flow, U = (1, 0.05, 0) m/s everywhere, so the wake is lopsided from "
+            "the start and the shedding begins within the run (a symmetric start waits for round-off). The run is "
+            "300 D/U long (3 s), with 50 Result frames; the monitors write at a fiftieth of the frame interval "
+            "(Incompressible Flow's rule), every 0.0012 s"
+            + (f", {num(per, 3)} samples a shedding period in the reported run" if per else "")
+            + "; the time step is adjusted to a Courant number of 1, second-order backward in time, 2 pressure "
+            "correctors, 1 non-orthogonal corrector.")
+
+
 NOTES = (
     "The values and bands are the reference data's (2026-11-04, section 5): Cd 2.02 and 1.50 at Re 20 and 40 with "
     "±5 % (the design's ±3 %), L/D 0.93 and 2.24 with ±5 %; at Re 100 St 0.164 ±3 %, the mean Cd 1.33 ±5 %, CL rms "
     "0.23 ±15 % and the mean L/D 1.41 ±10 % as information. The design's domain (10 D to each side, 10 D upstream, "
     "25 D downstream: 5 % blockage) is replaced by the reference data's: at least 40 D wide (2.5 %), about 15 D "
-    "upstream and 30 D or more downstream, which they expect to keep Cd and St within 1 to 3 % of an unbounded "
-    "domain.",
+    "upstream and 30 D or more downstream (their judgement numbers, built on one published blockage test).",
     "The four sides are one Freestream BC (OpenFOAM v2606's freestreamVelocity and freestreamPressure, which blend "
     "face by face, by how the velocity there meets the face, between the free stream's value and zero gradient: the "
     "velocity held where the flow comes straight in, the pressure (0 Pa) where it goes straight out, half of each on "
@@ -228,27 +339,9 @@ NOTES = (
     "cells of D/53, D/27 and D/13 (the background 1.2 D, the sides 0.3 D). Refine out to is a distance from the "
     "wall, so each band is a ring round the cylinder (upstream too), not a box along the wake: there is still no "
     "box refinement. No wall layers: the cells are D/53 up to the wall.",
-    "How much the mesh moves the answer (the coarse runs of 2026-11-06, every custom size doubled: a level fewer, "
-    "20 102 cells, D/27 at the wall; not reported): at Re 20 Cd 2.0756 and L/D 0.9209 against 2.0764 and 0.9291 on "
-    "70 793 cells (0.04 and 0.9 %), at Re 40 1.5483 and 2.2872 against 1.5481 and 2.2818 (0.01 and 0.2 %): the steady "
-    "values are converged in the mesh. At Re 100 St 0.16455, the mean Cd 1.3777, CL rms 0.2742 and the mean L/D 1.291 "
-    "against 0.16568, 1.3568, 0.2494 and 1.358 (0.7, 1.5, 9.9 and 4.9 %): the shedding's amplitude and the mean wake "
-    "still move from the coarse mesh. A finer one (fineness 7, where the same custom sizes come out at D/68, D/34 and "
-    "D/17: 117 332 cells; a probe at 4 cores, not reported) gave St 0.16568, the mean Cd 1.3573, CL rms 0.2468 and "
-    "the mean L/D 1.371 (0.0, 0.04, 1.0 and 0.9 % from the reported run): St and the mean Cd are converged in the "
-    "mesh, CL rms and the mean L/D to about 1 %. CL rms settles about 7 % above its reference, the value the "
-    "reference data call the most sensitive to the domain (6.25 % blockage against 3.1 % moved it by 7.6 %).",
-    "The steady drag coefficients sit 2.8 and 3.2 % above the reference values while the mesh hardly moves them; what "
-    "is left is the domain (40 D wide, its sides a Freestream) and the reference's own spread: Fornberg's large-domain "
-    "2.000 and 1.498 against the finite-box results of 2.06 and 1.54 (Linnick & Fasel, Taira & Colonius), within 1 % of these "
-    "values. The domain's share is not measured here: the reference data expect +1 to 3 % on Cd and St unless "
-    "the domain is at least 40 D wide with slip or symmetry sides (their judgement), and this one is 40 D wide with "
-    "Freestream sides. At Re 100 the mean Cd is 2.0 % and St 1.0 % above the references.",
-    "Re 100 starts from a Custom starting flow, U = (1, 0.05, 0) m/s everywhere, so the wake is lopsided from the "
-    "start and the shedding begins within the run (a symmetric start waits for round-off). The run is 300 D/U long "
-    "(3 s), with 50 Result frames; the monitors write at a fiftieth of the frame interval (Incompressible Flow's "
-    "rule), every 0.0012 s, about 51 samples a shedding period; the time step is adjusted to a Courant number of 1, "
-    "second-order backward in time, 2 pressure correctors, 1 non-orthogonal corrector.",
+    lambda by: _note_mesh_moves(by),
+    lambda by: _note_domain(by),
+    lambda by: _note_start(by),
     "The app has no mean or frequency of a monitor over a time window (gap G8): the harness reads them from the "
     "Forces monitor's history. The lift coefficient's whole periods run from one rise through its mean to the "
     "next; the window starts at the first period whose amplitude is within 2 % of the settled amplitude (the mean of "
@@ -260,10 +353,7 @@ NOTES = (
     "the velocity's components kept (Plot over path gives a vector's magnitude only, gap G2), the 30 wake-axis "
     "probes as the cross-check; Re 100's mean L/D from the probes' time means over the window, with the run's UMean "
     "(the app's own time average from 1.5 s, not whole periods) along the same line beside it.",
-    "The pre-run check gave Re 100 no time-step estimate and no Re (its words: \"No time-step estimate: no inlet speed "
-    "or pressure difference sets a flow speed\"): it takes a Freestream's speed for the case's only above 1 m/s, so a "
-    "1 m/s free stream reads as none. A finding of this run (the solve itself takes its time step from the Courant "
-    "number), not fixed here. Its steady estimates (about 6 minutes, under a minute) compare with 57 and 41 s.",
+    lambda by: precheck_note(by, {v: f"Re {RE[v]}" for v in VARIANTS}),
     "Reference confidence: every value is SECONDARY (read in compilations: arXiv:2205.15886, arXiv:1906.05387, "
     "arXiv:2303.09262, arXiv:1612.08356, Legendre et al. 2009), except Gautier et al.'s Re 40 values (1.4931, "
     "2.2360), read in their arXiv paper (CONFIRMED). The compilations disagree on Tritton's measured Cd (2.09 or "
