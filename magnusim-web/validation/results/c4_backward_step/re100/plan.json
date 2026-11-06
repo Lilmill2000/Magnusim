@@ -1,0 +1,527 @@
+{
+ "schema": "magnusim-validation-plan/1",
+ "case": "c4_backward_step",
+ "variant": "re100",
+ "title": "Backward-facing step, Re_D = 100 (Armaly et al.), Hex-dominant (2D)",
+ "coarse": false,
+ "geometry": {
+  "file": "geometry.step",
+  "sha256": "a2cdbe7ae5044dd5e1b167f41f6a9f52c08c98cf5f659743aa687b572e7d9331",
+  "units": "mm",
+  "builder": "backward-facing step channel: an inlet channel h = 5.2 mm high and 52 mm long on top of a step S = 4.9 mm, then a channel H = 10.1 mm high and 303 mm (30 H) long after it (expansion ratio 1.942), 5 mm deep in z (one cell across)",
+  "faces": [
+   {
+    "id": 1,
+    "body": 1,
+    "area_mm2": 26.0,
+    "centroid_mm": [
+     -52.0,
+     7.5,
+     2.5
+    ],
+    "normal": [
+     -1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 2,
+    "body": 1,
+    "area_mm2": 3330.7,
+    "centroid_mm": [
+     137.089816,
+     5.248901,
+     0.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     -1.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 3,
+    "body": 1,
+    "area_mm2": 50.5,
+    "centroid_mm": [
+     303.0,
+     5.05,
+     2.5
+    ],
+    "normal": [
+     1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 4,
+    "body": 1,
+    "area_mm2": 1515.0,
+    "centroid_mm": [
+     151.5,
+     0.0,
+     2.5
+    ],
+    "normal": [
+     0.0,
+     -1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 5,
+    "body": 1,
+    "area_mm2": 24.5,
+    "centroid_mm": [
+     0.0,
+     2.45,
+     2.5
+    ],
+    "normal": [
+     -1.0,
+     0.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 6,
+    "body": 1,
+    "area_mm2": 1775.0,
+    "centroid_mm": [
+     125.5,
+     10.1,
+     2.5
+    ],
+    "normal": [
+     0.0,
+     1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 7,
+    "body": 1,
+    "area_mm2": 3330.7,
+    "centroid_mm": [
+     137.089816,
+     5.248901,
+     5.0
+    ],
+    "normal": [
+     0.0,
+     0.0,
+     1.0
+    ],
+    "surface_type": "Plane"
+   },
+   {
+    "id": 8,
+    "body": 1,
+    "area_mm2": 260.0,
+    "centroid_mm": [
+     -26.0,
+     4.9,
+     2.5
+    ],
+    "normal": [
+     0.0,
+     -1.0,
+     0.0
+    ],
+    "surface_type": "Plane"
+   }
+  ],
+  "selectors": {
+   "inlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": -52.0,
+     "sign": -1
+    }
+   },
+   "outlet": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 303.0,
+     "sign": 1
+    }
+   },
+   "floor": {
+    "plane": {
+     "axis": "y",
+     "at_mm": 0.0,
+     "sign": -1
+    }
+   },
+   "top": {
+    "plane": {
+     "axis": "y",
+     "at_mm": 10.1,
+     "sign": 1
+    }
+   },
+   "inlet_floor": {
+    "plane": {
+     "axis": "y",
+     "at_mm": 4.9,
+     "sign": -1
+    }
+   },
+   "step": {
+    "plane": {
+     "axis": "x",
+     "at_mm": 0.0,
+     "sign": -1
+    }
+   },
+   "front": {
+    "plane": {
+     "axis": "z",
+     "at_mm": 0.0,
+     "sign": -1
+    }
+   },
+   "back": {
+    "plane": {
+     "axis": "z",
+     "at_mm": 5.0,
+     "sign": 1
+    }
+   }
+  },
+  "labels": {
+   "inlet": [
+    "face 1@Body1"
+   ],
+   "outlet": [
+    "face 3@Body1"
+   ],
+   "floor": [
+    "face 4@Body1"
+   ],
+   "top": [
+    "face 6@Body1"
+   ],
+   "inlet_floor": [
+    "face 8@Body1"
+   ],
+   "step": [
+    "face 5@Body1"
+   ],
+   "front": [
+    "face 2@Body1"
+   ],
+   "back": [
+    "face 7@Body1"
+   ]
+  }
+ },
+ "project": {
+  "title": "Validation c4_backward_step re100",
+  "description": "",
+  "category": "Other",
+  "units": "Metric",
+  "folder": "My Projects"
+ },
+ "study": {
+  "analysis_type": "incompressible_steady",
+  "time_dependency": "Steady-state",
+  "name": "c4_backward_step re100",
+  "settings": {
+   "turbulence_model": "laminar",
+   "numerics_preset": "accurate",
+   "residual_u": 1e-06,
+   "residual_p": 1e-06,
+   "n_non_orthogonal": 1
+  }
+ },
+ "material": {
+  "preset": "custom",
+  "name": "Validation fluid",
+  "kinematic_viscosity": 0.000104,
+  "density": 1.0,
+  "assigned_volumes": [
+   "Body1"
+  ]
+ },
+ "bcs": [
+  {
+   "name": "Inlet",
+   "bc_type": "Velocity inlet",
+   "velocity_type": "Fixed",
+   "value": 1.0,
+   "unit": "m/s",
+   "direction": "Normal to face",
+   "faces": [
+    "face 1@Body1"
+   ]
+  },
+  {
+   "name": "Outlet",
+   "bc_type": "Pressure",
+   "pressure_type": "Fixed value",
+   "value": 0,
+   "unit": "Pa",
+   "faces": [
+    "face 3@Body1"
+   ]
+  },
+  {
+   "name": "Floor",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 4@Body1"
+   ]
+  },
+  {
+   "name": "Top",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 6@Body1"
+   ]
+  },
+  {
+   "name": "Step walls",
+   "bc_type": "Wall",
+   "wall_type": "No-slip",
+   "faces": [
+    "face 8@Body1",
+    "face 5@Body1"
+   ]
+  },
+  {
+   "name": "Sides",
+   "bc_type": "Symmetry",
+   "faces": [
+    "face 2@Body1",
+    "face 7@Body1"
+   ]
+  }
+ ],
+ "mesh": {
+  "name": "Mesh 1",
+  "settings": {
+   "fineness": 10,
+   "automatic_boundary_layers": false,
+   "physics_based_meshing": true,
+   "hex_element_core": true,
+   "advanced": {
+    "mesh_engine": "snappy_hexdominant"
+   },
+   "mesher_settings": {
+    "one_cell_across": true
+   }
+  },
+  "refinements": [
+   {
+    "name": "Channel",
+    "type": "Surface custom sizing",
+    "faces": [
+     "face 4@Body1",
+     "face 6@Body1",
+     "face 8@Body1",
+     "face 5@Body1"
+    ],
+    "sizing": "Custom",
+    "default_size": 0.3,
+    "default_size_unit": "mm",
+    "reach": 5.05,
+    "reach_unit": "mm"
+   }
+  ],
+  "two_d_axis": "z",
+  "expect": {
+   "layers": false,
+   "n_cells": [
+    80000,
+    400000
+   ]
+  },
+  "estimate": {
+   "mesher": "snappy_hexdominant",
+   "one_cell_across": true,
+   "two_d_axis": "z",
+   "fineness": 10,
+   "bounds_mm": [
+    -52.0,
+    303.0,
+    0.0,
+    10.1,
+    0.0,
+    5.0
+   ],
+   "block": [
+    170,
+    8,
+    1
+   ],
+   "base_cell_mm": [
+    2.7774,
+    1.6791,
+    5.0
+   ],
+   "walls_level": 3,
+   "wall_cell_mm": [
+    0.3472,
+    0.2099,
+    5.0
+   ],
+   "custom_sizes": [
+    {
+     "name": "Channel",
+     "size_mm": 0.3,
+     "level": 4,
+     "cell_mm": [
+      0.1736,
+      0.1049,
+      5.0
+     ],
+     "faces": 4,
+     "reach_mm": 5.05,
+     "distance_mm": 5.05
+    }
+   ],
+   "layers": [],
+   "n_cells": 183600,
+   "slab_3d_cells_max": 2937000,
+   "n_cells_note": "an order of magnitude of the 2D mesh (one cell across), not a prediction",
+   "warnings": []
+  }
+ },
+ "run": {
+  "name": "Validation",
+  "endTime": 4000,
+  "writeInterval": 4000,
+  "cores": 8,
+  "result_controls": [
+   {
+    "id": "rc-bubble",
+    "name": "Bubble",
+    "monitor_type": "probe",
+    "kind": "Point probe",
+    "category": "Point data",
+    "write_control": "Time step",
+    "faces": [],
+    "results": null,
+    "series": null,
+    "chart_values": null,
+    "results_available": false,
+    "points": [
+     [
+      0.00735,
+      0.00049,
+      0.0025
+     ]
+    ]
+   }
+  ]
+ },
+ "extract": [
+  {
+   "key": "floor_shear",
+   "kind": "patch",
+   "patch": "floor",
+   "field": "wallShearStress"
+  },
+  {
+   "key": "top_shear",
+   "kind": "patch",
+   "patch": "top",
+   "field": "wallShearStress"
+  },
+  {
+   "key": "floor_line",
+   "kind": "app_sampling",
+   "fields": [
+    "U",
+    "p"
+   ],
+   "points_m": [
+    [
+     0.0,
+     9.800000000000001e-05,
+     0.0025
+    ],
+    [
+     0.303,
+     9.800000000000001e-05,
+     0.0025
+    ]
+   ],
+   "subdivisions": 2000
+  },
+  {
+   "key": "top_line",
+   "kind": "app_sampling",
+   "fields": [
+    "U"
+   ],
+   "points_m": [
+    [
+     0.0,
+     0.010001999999999999,
+     0.0025
+    ],
+    [
+     0.303,
+     0.010001999999999999,
+     0.0025
+    ]
+   ],
+   "subdivisions": 2000
+  },
+  {
+   "key": "inlet_profile",
+   "kind": "app_sampling",
+   "fields": [
+    "U"
+   ],
+   "points_m": [
+    [
+     -0.0052,
+     0.004900000000000001,
+     0.0025
+    ],
+    [
+     -0.0052,
+     0.0101,
+     0.0025
+    ]
+   ],
+   "subdivisions": 100
+  },
+  {
+   "key": "p_floor_line",
+   "kind": "line",
+   "field": "p",
+   "points_m": [
+    [
+     0.0,
+     9.800000000000001e-05,
+     0.0025
+    ],
+    [
+     0.303,
+     9.800000000000001e-05,
+     0.0025
+    ]
+   ],
+   "subdivisions": 2000
+  }
+ ],
+ "timeouts_s": {
+  "mesh": 2400,
+  "solve": 5400
+ },
+ "mesh_key": "463163bf75310cf5"
+}
