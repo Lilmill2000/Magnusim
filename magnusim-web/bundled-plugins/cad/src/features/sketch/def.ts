@@ -15,7 +15,7 @@ import type { SketchOutput, SketchRegion, SketchSolveSource, SolverSolveResult }
 import { curvesOf, dimensionLabel, drivenMeasures, drivingValues, entityGeometry, hasProfileCurves, isDimension, sameValues, storedRadii, withOrigin, type EntityGeom } from './geometry';
 import { resolveSupport } from './plane';
 import { unpackRegions } from './regions';
-import { envOf, linkBodies, reprojectLinks } from '../../sketch/project/rebuild';
+import { envOf, linkBodies, linkSketches, reprojectLinks } from '../../sketch/project/rebuild';
 
 /** Outline glyph (24 viewBox): a pencil over a sketched corner. */
 export const SKETCH_ICON = 'M4 4h7 M4 4v7 M5.5 19.5l1-4L16 6l3 3-9.5 9.5z M14 8l3 3';
@@ -60,7 +60,7 @@ export const sketchDef: FeatureTypeDef<SketchFeature, SketchValues> = {
     return r.ok ? null : r.message;
   },
   // A sketch on a CONSTRUCT plane (P4a) rebuilds when the plane does, and the plane cannot be deleted under it.
-  parents: (f) => (f.support?.kind === 'feature' ? [f.support.feature] : []),
+  parents: (f) => [...(f.support?.kind === 'feature' ? [f.support.feature] : []), ...linkSketches(f)],
   // P4b (SELECT): a sketch also reads the bodies its linked geometry (Project, Intersect) comes from.
   uses: (f) => [...new Set([...(f.support.kind === 'face' ? [f.support.body] : []), ...linkBodies(f)])],
   exprs: (f) => [

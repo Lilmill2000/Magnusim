@@ -6,7 +6,9 @@
 //              flat face while no profile is picked), extruded with no sketch
 //   Direction  Extent Blind / Symmetric / Two sides / Through all (Both sides) /
 //              Up to (a flat face or a vertex, and an Offset); Distance (and
-//              Distance 2); Flip direction; the arrow in the view drags the distance
+//              Distance 2); Draft angle (sketch profiles, Blind / Symmetric / Two sides); a
+//              tapped hole's cosmetic Thread (shown, with Remove);
+//              Flip direction; the arrow in the view drags the distance
 //   Operation  New body / Join / Cut / Intersect, once a body is made before
 //              it in history (or when it is not New body, so it can go back)
 // Every valid change applies live (the body is the preview); Done closes;
@@ -32,6 +34,8 @@ import { paletteOf } from '../../viewport/palette';
 import { drawnSketches, profilesView, sketchOutput } from '../sketch/view';
 import { handleGeometry, startPanelTool } from './handle';
 import { entityParents, PROFILE_REPAIRED, resolveRegionRef } from './profiles';
+import { TAPER_MAX_DEG, TAPER_RANGE_WORDS } from './def';
+import { threadWords } from '../hole/sizes';
 
 const OPS: { value: BodyOp; label: string }[] = [
   { value: 'new', label: 'New body' },
@@ -207,6 +211,8 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
   const doneDisabled = isNew && incomplete ? incomplete : null;
 
   const fieldErrors: string[] = [];
+  // A tapped hole's thread, said as its state is now (a thread feature added, failing or removed).
+  const threadText = useStateStore(doc.state, (s) => (draft.thread ? threadWords(s.doc.features, s.rebuild.features, draft) : ''));
   const unitsSvc = doc.units;
   const distanceField = (key: 'distance' | 'distance2', label: string, expr: Expr, validate: (v: number) => string | null) => {
     const id = `cad-f-${feature}-${key}`;
@@ -397,6 +403,33 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
           <Select id={`cad-f-${feature}-extent`} label="Extent" field="extent" value={ext.kind} onChange={(v) => setExtentKind(v as ExtrudeExtentDef['kind'])} options={EXTENTS.map((o) => ({ value: o.value, label: o.label }))} />
         </Field>
         {extentFields}
+        {!draft.face && (ext.kind === 'blind' || ext.kind === 'symmetric' || ext.kind === 'two' || draft.taper) ? (
+          <Field label="Draft angle" htmlFor={`cad-f-${feature}-taper`} field="taper">
+            <NumberUnitInput
+              id={`cad-f-${feature}-taper`}
+              field="taper"
+              label="Draft angle"
+              expr={draft.taper || '0 deg'}
+              quantity="angle"
+              units={unitsSvc}
+              validate={(v) => (Math.abs(v) <= TAPER_MAX_DEG ? null : TAPER_RANGE_WORDS)}
+              onCommit={(e) => {
+                const v = unitsSvc.evaluate(e, 'angle');
+                update({ taper: v.ok && v.value === 0 ? null : e } as Partial<Feature>);
+              }}
+            />
+          </Field>
+        ) : null}
+        {draft.thread ? (
+          <Field label="Thread" htmlFor={`cad-f-${feature}-thread`} field="thread">
+            <span id={`cad-f-${feature}-thread`} data-field="thread">
+              {threadText}{' '}
+              <button type="button" className="cad-vp-link" data-thread-remove="1" onClick={() => update({ thread: null } as Partial<Feature>)}>
+                Remove
+              </button>
+            </span>
+          </Field>
+        ) : null}
         {direction.element('Along', 'direction', () => setDirActive(true), 'Click a line or centerline, a straight edge, an axis, or a plane or flat face (its normal), in the view or the tree, to extrude along it; remove it to go along the normal again')}
         <Field label="Flip direction" htmlFor={`cad-f-${feature}-flip`} field="flip">
           <input

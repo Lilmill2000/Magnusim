@@ -17,7 +17,10 @@
 // the normal (the panel's Along: an origin or construction axis, a sketch line, an edge, "normal of
 // <plane>"), "" for the normal.
 // get_model full shows extrudes as this tool's input (registerFeatureIo), regions as "at(u, v)";
-// edit_feature sets distance (an Up to's offset) and distance2.
+// edit_feature sets distance (an Up to's offset), distance2 and taper.
+// taper: a draft angle ("" or 0 for straight walls; + narrows the profile as it goes), sketch
+// profiles with blind, symmetric or two only. A tapped hole's cosmetic thread (ExtrudeFeature.thread,
+// made by hole) is not an input here: an edit keeps it.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE } from '../../features/extrude/def';
@@ -61,8 +64,8 @@ interface Plan extends EditPlan {
 
 /** A dry-run refusal of the extent as the field it came from (CAD's own words). */
 function extentError(why: string): ToolError {
-  const field = /^Distance 2/.test(why) || /add up to 0/.test(why) ? 'distance2' : /^Up to/.test(why) ? 'to' : 'distance';
-  const reason = /^(Distance|Distance 1|Distance 2|Total distance|Offset): /.test(why) ? 'expr_error' : 'bad_input';
+  const field = /^Distance 2/.test(why) || /add up to 0/.test(why) ? 'distance2' : /^Up to/.test(why) ? 'to' : /draft angle/i.test(why) ? 'taper' : 'distance';
+  const reason = /^(Distance|Distance 1|Distance 2|Total distance|Offset|Draft angle): /.test(why) ? 'expr_error' : 'bad_input';
   return new ToolError(reason, `${field}: ${why}.`, { detail: { field } });
 }
 
@@ -139,6 +142,7 @@ const extrudeTool: EditTool<Plan> = {
     const regions = strings(input.regions);
     const faceSel = str(input.face);
     const dirSel = str(input.direction);
+    const taper = str(input.taper);
     const problems: string[] = [];
     if (!EXTENTS.includes(extent)) problems.push('extent: blind, symmetric, two, through, through_both or to');
     if (faceSel) {
@@ -188,6 +192,8 @@ const extrudeTool: EditTool<Plan> = {
     else if (extent === 'through' || extent === 'through_both') ext = { kind: 'through_all', both: extent === 'through_both', distance: keep };
     else ext = { kind: 'to', target: r.target!.ref, offset: d || '0 mm', distance: keep };
     const fields: Partial<ExtrudeFeature> = { profiles: r.reg.refs, extent: ext, flip: input.flip === true, op: op.op, scope: r.scope.ids };
+    // A draft angle is written only when given, or to clear the one an edit's feature has.
+    if (taper || editing?.taper) fields.taper = taper ? storeExpr(taper, 'angle', units) : null;
     // A face and a direction are written only when given, or to clear the ones an edit's feature has (the person's records have none otherwise).
     if (r.face || editing?.face) fields.face = r.face?.ref ?? null;
     if (r.direction || editing?.direction) fields.direction = r.direction?.ref ?? null;
@@ -205,6 +211,7 @@ const extrudeTool: EditTool<Plan> = {
       op: opWords(op.op, r.scope.words),
     };
     if (r.direction) resolved.direction = r.direction.words;
+    if (taper) resolved.taper = valueWords(services, fields.taper!, 'angle');
     if (r.target) resolved.to = r.target.words;
     if (editing) resolved.edit = editing.name;
     return {
@@ -304,6 +311,7 @@ registerFeatureIo('extrude', {
       face: g.face ? faceText(s, g.face.body, g.face.ref, at) : '',
       direction: g.direction ? axisText(s, g.direction, at) : '',
       ...extent,
+      taper: g.taper ?? '',
       flip: !!g.flip,
       op: g.op,
       bodies: g.op === 'new' ? [] : scopeTexts(services, g.scope),
@@ -312,16 +320,19 @@ registerFeatureIo('extrude', {
     };
   },
   values(f) {
-    const e = (f as ExtrudeFeature).extent;
-    if (e.kind === 'blind' || e.kind === 'symmetric') return [{ field: 'distance', expr: e.distance }];
-    if (e.kind === 'two') return [{ field: 'distance', expr: e.distance }, { field: 'distance2', expr: e.distance2 }];
-    if (e.kind === 'to') return [{ field: 'distance', expr: e.offset }];
-    return [];
+    const g = f as ExtrudeFeature;
+    const e = g.extent;
+    const taper = g.taper ? [{ field: 'taper', expr: g.taper }] : [];
+    if (e.kind === 'blind' || e.kind === 'symmetric') return [{ field: 'distance', expr: e.distance }, ...taper];
+    if (e.kind === 'two') return [{ field: 'distance', expr: e.distance }, { field: 'distance2', expr: e.distance2 }, ...taper];
+    if (e.kind === 'to') return [{ field: 'distance', expr: e.offset }, ...taper];
+    return taper;
   },
   pathOf(f, field, services) {
     const e = (f as ExtrudeFeature).extent;
     const map: Record<string, string> =
       e.kind === 'blind' || e.kind === 'symmetric' ? { distance: 'extent.distance' } : e.kind === 'two' ? { distance: 'extent.distance', distance2: 'extent.distance2' } : e.kind === 'to' ? { distance: 'extent.offset' } : {};
+    if ((f as ExtrudeFeature).taper) map.taper = 'taper';
     return pathIn(services, f, field, map);
   },
 });

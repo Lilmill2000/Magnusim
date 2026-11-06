@@ -1,14 +1,19 @@
 // Hole (SOLID): round holes drilled into one flat face in one step, the Assistant's hole tool on the
-// person's side: a sketch of circles and a cut extrude, the same two features. A tool panel (it
-// makes ordinary features, so it has no feature type of its own); "Hole" in a flat face's context
-// menu opens it with that face.
+// person's side: sketches of circles and cut extrudes, the same features. A tool panel (it makes
+// ordinary features); "Hole" in a flat face's context menu opens it with that face. Tapped holes'
+// cosmetic threads are drawn in the view (threads.ts); a modelled thread is the `thread` feature
+// type this module adds (thread-def.ts, its panel thread-panel.tsx).
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import '../p2/p2.css';
+import type { FeatureTypeDef } from '../../types/doc-service';
 import type { CadModule } from '../../types/modules';
 import { uiFor } from '../../ui/controller';
 import { selectItem } from '../../lib/selection';
 import { HolePanel } from './panel';
+import { installThreads } from './threads';
+import { threadDef } from './thread-def';
+import { ThreadPanel } from './thread-panel';
 
 export const HOLE_TOOL = 'solid.hole';
 
@@ -18,6 +23,8 @@ export const HOLE_ICON = 'M3 9l9-4 9 4v7l-9 4-9-4z M3 9l9 4 9-4 M12 13v7 M8 9m-1
 const module: CadModule = {
   id: 'hole',
   tools: [{ id: HOLE_TOOL, label: 'Hole', panel: HolePanel }],
+  features: [threadDef as unknown as FeatureTypeDef],
+  panels: { thread: ThreadPanel },
   contextMenu(services, pick) {
     if (!pick || pick.item.kind !== 'face') return [];
     const item = pick.item;
@@ -36,7 +43,9 @@ const module: CadModule = {
   },
   install(services) {
     const ui = uiFor(services);
-    return services.commands.register({
+    // Tapped holes' cosmetic threads, drawn in the view.
+    const offThreads = installThreads(services);
+    const offCommand = services.commands.register({
       id: HOLE_TOOL,
       label: 'Hole',
       group: 'solid',
@@ -57,6 +66,10 @@ const module: CadModule = {
         else ui.openTool(HOLE_TOOL);
       },
     });
+    return () => {
+      offCommand();
+      offThreads();
+    };
   },
 };
 

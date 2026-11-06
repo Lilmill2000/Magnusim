@@ -56,6 +56,7 @@ import { fitRegions, regionRows, shortRegions } from './sketch/regions';
 import { BRIEF_HARD_CAP } from './turn-info';
 import { closestName, closestWords } from './closest';
 import { personSection } from './view';
+import { threadWords } from '../features/hole/sizes';
 
 /** One sketch read with regions full shows at most this many regions. */
 export const SKETCH_REGIONS = 60;
@@ -160,6 +161,8 @@ export function briefFeature(services: AppServices, s: DocState, f: Feature): Ro
   // What the tree shows as the row's info mark (a Join's pieces left apart): said, not warned.
   if (st?.note && (st.state === 'ok' || st.state === 'warning')) row.note = st.note;
   if (st?.actions?.length) row.actions = [...st.actions];
+  // A tapped hole's cosmetic thread, said on its cut's row (it runs the cut's depth).
+  if (f.type === 'extrude' && f.thread) row.thread = threadWords(s.doc.features, s.rebuild.features, f);
   if (runtimeOf(services)?.madeBy.has(f.id)) row.by = 'assistant';
   // A kept structural edit of the Assistant's turned it red, and it still fails.
   if (st?.state === 'error' && runtimeOf(services)?.brokenBy.has(f.id)) row.broken_by_you = true;

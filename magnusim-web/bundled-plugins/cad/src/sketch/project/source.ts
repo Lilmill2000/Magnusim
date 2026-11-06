@@ -3,12 +3,16 @@
 // then signature, nothing repaired silently), and the curves it gives on the
 // sketch plane, from the kernel (API 5: `project`, `silhouette`, `section`,
 // each with `cubic: true` so a B-spline comes back as the sketch's non-rational
-// cubic). A source that is gone gives `lost` with the words the sketch shows
+// cubic). A `points` source is another sketch's points (its point entities and
+// circle centres, as that sketch built), projected along the normal: no body and
+// no kernel call. A source that is gone gives `lost` with the words the sketch shows
 // ("Edge … of flange not found after rebuild"): the sketch still builds
 // ("Don't block, just report").
 // Owner: P4b SELECT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyId, FeatureId, PersistentRef, PlaneFrame, SketchLink, SketchLinkSource, Vec2, Vec3 } from '../../types/doc';
+import type { BodyId, FeatureId, PersistentRef, PlaneFrame, SketchFeature, SketchLink, SketchLinkSource, Vec2, Vec3 } from '../../types/doc';
+import type { SketchOutput } from '../../types/sketch';
+import { toModel } from '../../features/sketch/plane';
 import type { KernelAdapter, KernelCallError } from '../../types/kernel';
 import type { PlaneCurve as KernelCurve, ShapeId } from '../../types/kernel-protocol';
 import type { FaceNames, NamingLookup } from '../../types/naming';
@@ -23,6 +27,8 @@ export interface LinkEnv {
   bodies: ReadonlyMap<BodyId, { shape: ShapeId; names: FaceNames | null; placement?: number[] | null }>;
   bodyName(id: BodyId): string;
   featureName(id: FeatureId): string | null;
+  /** Another sketch as built before this one (a `points` source), or null when it is not there. */
+  sketch?(id: FeatureId): { feature: SketchFeature; out: SketchOutput } | null;
 }
 
 export type LinkRead = { state: 'ok'; curves: KeyedCurve[]; warning?: string } | { state: 'lost'; message: string };
@@ -61,6 +67,7 @@ export function fromKernel(c: KernelCurve): PlaneCurve {
  * of flange"), "Silhouette of flange", "Section of flange". `sourceDetail` gives where a face came from.
  */
 export function sourceWords(src: SketchLinkSource, env: Pick<LinkEnv, 'bodyName' | 'featureName' | 'bodies'>): string {
+  if (src.kind === 'points') return `Points of ${env.featureName(src.feature) ?? 'a deleted sketch'}`;
   const body = env.bodyName(src.body);
   const faceNames = env.bodies.get(src.body)?.names?.faces ?? null;
   const num = (name: string) => {
@@ -101,6 +108,7 @@ export function sourceWords(src: SketchLinkSource, env: Pick<LinkEnv, 'bodyName'
 
 /** Where a source came from, in the feature's words (a tooltip): "End face of Extrude 1", "End · Side 2 of Extrude 1". */
 export function sourceDetail(src: SketchLinkSource, env: Pick<LinkEnv, 'bodyName' | 'featureName' | 'bodies'>): string | null {
+  if (src.kind === 'points') return null;
   const faceNames = env.bodies.get(src.body)?.names?.faces ?? null;
   const fname = (id: FeatureId) => env.featureName(id);
   if (src.kind === 'face') return describeFace(src.ref.name, fname, faceNames);
@@ -208,9 +216,40 @@ export async function projectSection(env: LinkEnv, shape: ShapeId, names: FaceNa
   return out;
 }
 
-/** Read one link from the bodies as they are now. */
+/** A sketch's points as built, in model mm: its point entities and its circles' centres (each point id once), keyed "pt:<point id>". */
+export function sketchPoints3d(feature: SketchFeature, out: SketchOutput): { key: string; at: Vec3 }[] {
+  const pts: { key: string; at: Vec3 }[] = [];
+  for (const e of feature.entities) {
+    const id = e.kind === 'point' ? e.p : e.kind === 'circle' ? e.c : null;
+    if (!id || !out.points[id] || pts.some((q) => q.key === `pt:${id}`)) continue;
+    pts.push({ key: `pt:${id}`, at: toModel(out.plane, out.points[id]) });
+  }
+  return pts;
+}
+
+/** Another sketch as built before the one reading it (a `points` source), from a document's features and outputs. */
+export function sketchReader(features: readonly { id: FeatureId; type: string }[], output: (id: FeatureId) => unknown): NonNullable<LinkEnv['sketch']> {
+  return (id) => {
+    const feature = features.find((g) => g.id === id);
+    const out = output(id) as SketchOutput | undefined;
+    return feature?.type === 'sketch' && out?.type === 'sketch' ? { feature: feature as SketchFeature, out } : null;
+  };
+}
+
+/** Read one link from the bodies (or, for `points`, the sketch) as they are now. */
 export async function readLink(link: SketchLink, plane: PlaneFrame, env: LinkEnv): Promise<LinkRead> {
   const src = link.source;
+  if (src.kind === 'points') {
+    // Only the points it was made with: a point added to that sketch later is not taken in (no stray
+    // point in this sketch); one removed is lost here, and its entity stays where it was.
+    const sk = env.sketch?.(src.feature) ?? null;
+    if (!sk) return { state: 'lost', message: `${sourceWords(src, env)}: that sketch is not there at this point` };
+    const keys = new Set(link.entities.map((r) => r.key));
+    const curves: KeyedCurve[] = sketchPoints3d(sk.feature, sk.out)
+      .filter((q) => keys.has(q.key))
+      .map((q) => ({ key: q.key, curve: { kind: 'point', p: toPlaneUv(plane, q.at) } }));
+    return curves.length ? { state: 'ok', curves } : { state: 'lost', message: `${sourceWords(src, env)}: none of its points is there now` };
+  }
   const body = env.bodies.get(src.body);
   if (!body) return { state: 'lost', message: `${sourceWords(src, env)}: ${env.bodyName(src.body)} is not there at this point` };
   try {

@@ -4,6 +4,55 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 
 ## Unreleased (0.2.0-dev)
 
+**Hole makes counterbores, countersinks, drill points, fastener sizes and threads (issue #7).**
+- SOLID > Hole has **Size**: Custom diameter, **Clearance hole for a bolt** (a
+  metric size M1.6 to M64 and a fit: close, normal or loose, the ISO 273 hole:
+  M6 normal is 6.6 mm) or **Tapped hole** (the tap drill: major diameter minus
+  the coarse pitch, M6x1 is 5 mm).
+- A tapped hole gets a **cosmetic thread**: its cut records it ("M6x1"),
+  get_model lists it, and the view draws it as a coil at the thread's diameter,
+  one turn per pitch, with its size beside the hole; it runs as deep as the cut
+  and follows it. The solid is not threaded. The Extrude panel shows it, with
+  Remove.
+- **Type** Counterbore (diameter, depth) or Countersink (diameter at the face,
+  angle, 90 deg by default): a circle about each hole in the holes' sketch and a
+  cut "<name> counterbore" or "<name> countersink" before the hole's own cut.
+  With a clearance hole, **From the screw table** sizes them: a socket head cap
+  screw's counterbore (ISO 4762, DIN 974-1, M3 to M30: M6 is 11 mm by 6.4 mm) or
+  a countersunk head screw's countersink (ISO 10642 at 90 deg, M3 to M20).
+  Counterbores or countersinks that would overlap are refused.
+- A blind hole's **Bottom** can be a **Drill point** (118 deg by default):
+  "<name> tip sketch" on the holes' bottom and the cut "<name> tip" to a point.
+- **From a sketch** puts a hole at each of a sketch's points and circle centres,
+  and the holes follow those points: the holes' sketch links each centre to its
+  point (a new link source, another sketch's points), so moving a point moves its
+  hole. The holes are the points there were when it was made: a point added
+  later gets no hole, and a point removed leaves its hole where it was, with a
+  lost reference warning. That sketch cannot be deleted while holes follow it.
+- **Inch sizes**: Unified #0 to 1 in, UNC and UNF ("1/4-20", "#10-32 UNF"): the
+  ASME B18.2.8 clearance holes (no #12 or 9/16 in that table) and the tap drills
+  for about 75% thread, by drill name (1/4-20: #7, 0.201 in). Inch sizes stay in
+  inches in the hole's expressions. The screw-head tables stay metric.
+- **Modelled threads**: Thread *Modelled* on a tapped hole also cuts the ISO /
+  Unified internal thread into the wall, as the feature "<name> thread" (60 deg
+  flanks, a P/8 flat at the major diameter, a helical groove per hole). It
+  follows the hole's circles, depth and size; it stops a pitch short of a blind
+  hole's bottom and just inside a through hole's far face, and its Length can be
+  shorter. A cut the kernel could not make fails in words rather than passing.
+- Every size stays an expression the features keep, so the holes follow
+  parameters; it is all one undo step, as before. A simple hole is made exactly
+  as before. The Assistant's hole takes the same: points, size and fit, type,
+  cb_diameter, cb_depth, cs_diameter, cs_angle, tip and tip_angle ("" sizes
+  from the screw table).
+- A blind hole deeper than the body goes through: Hole now says so ("Hole 2 is
+  30 mm deep, deeper than Block there, so it goes through"), and leaves out a
+  drill point it asked for. It used to call it blind with no warning.
+
+**Extrude has a Draft angle.**
+- Sketch profiles with Blind, Symmetric or Two sides: the walls lean that far
+  from the extrude direction, a positive angle narrowing the profile as it goes
+  (up to 89 deg either way). The Assistant's extrude takes taper ("" for none).
+
 **Find picks fillets and drilled holes by their shape.**
 - INSPECT > Find (and the Assistant's find) takes `fillet` (a round face
   joining two faces smoothly, whatever made it; chamfers are not fillets),

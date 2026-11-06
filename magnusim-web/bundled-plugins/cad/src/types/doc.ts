@@ -478,7 +478,12 @@ export type SketchLinkSource =
   /** Intersect: where the sketch plane cuts a body. */
   | { kind: 'section'; body: BodyId }
   /** A snap while drawing: where an edge pierces the sketch plane (the crossing nearest `near`, model mm). */
-  | { kind: 'pierce'; body: BodyId; ref: PersistentRef; near?: Vec3 };
+  | { kind: 'pierce'; body: BodyId; ref: PersistentRef; near?: Vec3 }
+  /**
+   * Another sketch's points (its point entities and circle centres, keyed "pt:<point id>"), seen
+   * along this sketch's normal: Hole's holes at a sketch's points follow them. No body.
+   */
+  | { kind: 'points'; feature: FeatureId; body?: undefined };
 
 export interface SketchLink {
   id: SketchLinkId;
@@ -762,6 +767,26 @@ export interface ExtrudeFeature extends FeatureBase<'extrude'>, BodyMaking {
    * instead of the profile's normal; flip reverses it. Absent or null: the normal.
    */
   direction?: AxisRef | null;
+  /**
+   * Draft angle (an angle expression): the side walls lean this far from the extrude direction,
+   * positive narrowing the profile as it goes (a countersink's cone, a moulding draft). Sketch
+   * profiles with Blind, Symmetric or Two sides only, along the normal. Absent, "" or 0: straight.
+   */
+  taper?: Expr | null;
+  /**
+   * A cosmetic thread (Hole's tapped hole): recorded, listed and drawn in the view (features/hole/
+   * threads.ts), the solid unchanged. It runs from the sketch plane into the cut, round each of the
+   * hole's circles (h1, h2...), as deep as the cut goes (Blind: its distance; Through all: to the
+   * far side of the body), so it follows the cut's depth.
+   */
+  thread?: HoleThread | null;
+}
+
+/** A cosmetic ISO metric thread: "M6x1", its major diameter and pitch (mm). */
+export interface HoleThread {
+  designation: string;
+  major: number;
+  pitch: number;
 }
 
 // ------------------------------------------------------------ P4a: solids (SOLIDS)
@@ -824,6 +849,19 @@ export interface FilletFeature extends FeatureBase<'fillet'> {
   /** Face references: every edge of each face. */
   faces: PersistentRef[];
   radius: Expr;
+}
+
+/**
+ * Thread (Hole's tapped hole, modelled): the ISO metric or Unified inch internal thread of a tapped hole cut into
+ * its wall, from the hole's tap drill out to the thread's major diameter, round each of the hole's
+ * circles, from the face into the hole. `hole` is the hole's own cut (an extrude with `thread`):
+ * the thread follows its circles, depth and size. `length` "": the whole hole (a blind one stops a
+ * pitch short of its bottom), else that far. The body keeps its id.
+ */
+export interface ThreadFeature extends FeatureBase<'thread'> {
+  hole: FeatureId;
+  body: BodyId;
+  length: Expr;
 }
 
 /** Chamfer (proposal §2.5): an equal distance, or two distances (`flip` swaps their sides). Same picks as Fillet. */
@@ -1031,6 +1069,7 @@ export type Feature =
   | FilletFeature
   | ChamferFeature
   | ShellFeature
+  | ThreadFeature
   // P4a: reference geometry (REFERENCE)
   | RefPlaneFeature
   | RefAxisFeature

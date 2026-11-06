@@ -277,6 +277,8 @@ const SHOWN_LABELS = new WeakMap<object, LabelIndex>();
 /** What a link reads, as a selector where one says it (a body, a face's label), else the person's words. */
 function linkRef(l: SketchLink, s: DocState): string {
   const src = l.source;
+  // Another sketch's points: that sketch, by name.
+  if (src.kind === 'points') return `points of ${quoteName(s.doc.features.find((g) => g.id === src.feature)?.name ?? 'a deleted sketch')}`;
   const body = s.rebuild.bodies.find((b) => b.id === src.body);
   const bodyName = body?.name ?? s.doc.bodies[src.body]?.name ?? 'a body';
   if (src.kind === 'silhouette' || src.kind === 'section') return quoteName(bodyName);

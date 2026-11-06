@@ -4,24 +4,30 @@
 // moved are put where their source is now (the build then re-solves, so what
 // is constrained to them follows). A lost source keeps its entities where they
 // were and the sketch still builds, with the words as a warning (amber: "Don't
-// block, just report"). A face, silhouette or section that now gives another
+// block, just report"). A `points` link reads another sketch's points as that
+// sketch built just before (BuildContext.outputs). A face, silhouette or section that now gives another
 // set of curves keeps the old ones until the sketch is opened (sketch mode
 // re-reads every link on entry and applies it).
 // Owner: P4b SELECT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { BodyId, PlaneFrame, SketchFeature } from '../../types/doc';
+import type { BodyId, FeatureId, PlaneFrame, SketchFeature } from '../../types/doc';
 import type { BuildContext } from '../../types/doc-service';
 import type { SketchOutput } from '../../types/sketch';
 import { entityLabel } from '../model';
 import { applyLinkCurves, type LinkDraft } from './curves';
-import { readLink, type LinkEnv } from './source';
+import { readLink, sketchReader, type LinkEnv } from './source';
 
 /** The bodies a sketch's links read (the sketch feature's `uses`). */
 export function linkBodies(f: Pick<SketchFeature, 'links'>): BodyId[] {
-  return [...new Set((f.links ?? []).map((l) => l.source.body))];
+  return [...new Set((f.links ?? []).flatMap((l) => (l.source.body ? [l.source.body] : [])))];
 }
 
-export function envOf(ctx: Pick<BuildContext, 'kernel' | 'bodies' | 'bodyName' | 'featureName'>): LinkEnv {
+/** The sketches a sketch's links read (`points` sources: the sketch feature's `parents`). */
+export function linkSketches(f: Pick<SketchFeature, 'links'>): FeatureId[] {
+  return [...new Set((f.links ?? []).flatMap((l) => (l.source.kind === 'points' ? [l.source.feature] : [])))];
+}
+
+export function envOf(ctx: Pick<BuildContext, 'kernel' | 'bodies' | 'bodyName' | 'featureName' | 'outputs' | 'doc'>): LinkEnv {
   return {
     kernel: ctx.kernel,
     bodies: ctx.bodies,
@@ -30,6 +36,7 @@ export function envOf(ctx: Pick<BuildContext, 'kernel' | 'bodies' | 'bodyName' |
       const n = ctx.featureName(id);
       return n === 'a deleted feature' ? null : n;
     },
+    sketch: sketchReader(ctx.doc.features, (id) => ctx.outputs.get(id)),
   };
 }
 

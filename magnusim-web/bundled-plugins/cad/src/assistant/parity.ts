@@ -249,6 +249,10 @@ export const FEATURE_FIELDS: FeatureFields = {
     flip: reach('extrude', 'flip'),
     face: reach('extrude', 'face'),
     direction: reach('extrude', 'direction'),
+    taper: reach('extrude', 'taper'),
+    // Set by hole's fit tapped (the panel's Tapped hole). The person can also Remove it in the Extrude
+    // panel; the Assistant takes it back with undo, or deletes the hole's features.
+    thread: reach('hole', 'fit'),
   },
   revolve: {
     ...BASE,
@@ -282,6 +286,8 @@ export const FEATURE_FIELDS: FeatureFields = {
     distance2: reach('modify', 'size2'),
     flip: reach('modify', 'flip'),
   },
+  // A modelled thread is made by hole (thread modelled); its length is an expression field (edit_feature).
+  thread: { ...BASE, hole: reach('hole', 'thread'), body: reach('hole', 'thread'), length: reach('edit_feature', 'set') },
   shell: { ...BASE, body: reach('modify', 'targets'), faces: reach('modify', 'targets'), thickness: reach('modify', 'size'), direction: reach('modify', 'inward') },
   combine: { ...BASE, op: reach('combine', 'op'), targets: reach('combine', 'targets'), tools: reach('combine', 'tools'), keepTools: reach('combine', 'keep_tools'), repair: REPAIR },
   import: {
@@ -964,6 +970,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     distance: panel('extrude', 'extent'),
     distance2: panel('extrude', 'extent'),
     to: panel('extrude', 'extent'),
+    taper: panel('extrude', 'taper'),
     flip: panel('extrude', 'flip'),
     ...OPS('extrude'),
     bodies: panel('extrude', 'scope'),
@@ -1118,9 +1125,20 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     'centers[].x': HOLE,
     'centers[].y': HOLE,
     'centers[].z': HOLE,
+    points: HOLE,
     diameter: HOLE,
+    size: HOLE,
+    fit: HOLE,
     ...each(['through', 'blind'], 'depth', HOLE),
     distance: HOLE,
+    ...each(['simple', 'counterbore', 'countersink'], 'type', HOLE),
+    cb_diameter: HOLE,
+    cb_depth: HOLE,
+    cs_diameter: HOLE,
+    cs_angle: HOLE,
+    ...each(['flat', 'drill'], 'tip', HOLE),
+    tip_angle: HOLE,
+    ...each(['cosmetic', 'modelled'], 'thread', HOLE),
   },
   workspace: {
     'action=roll_back_to': control('ui', 'rollBackTo'),

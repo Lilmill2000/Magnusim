@@ -8,6 +8,10 @@
 // vertex of a body (with an offset), and a flat face of a body extruded directly
 // with no sketch (Daniel's item 8: `face`; kernel extrude_face; its side faces are
 // named by the edge they were swept from, F:<id>:side:E:<a>&<b>).
+// `taper`: a draft angle (sketch profiles, Blind / Symmetric / Two sides, along the
+// normal; kernel extrude_regions' taper_deg, + narrowing the profile). `thread`: a
+// tapped hole's cosmetic thread (Hole sets it; drawn by features/hole/threads.ts),
+// which this feature only keeps: it changes nothing in the build.
 // Owner: P3-PROFILES (src/features/extrude/); P4a extents and face: SOLIDS.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -44,6 +48,28 @@ export type ExtentValues = Extract<ExtrudeExtent, { kind: 'blind' | 'symmetric' 
 
 export interface ExtrudeValues {
   extent: ExtentValues;
+  /** The draft angle in degrees (0: straight walls). */
+  taper: number;
+}
+
+/** The largest draft angle (degrees, either way): the walls must still go somewhere along the direction. */
+export const TAPER_MAX_DEG = 89;
+/** The words for a draft angle out of range (the panel's field says the same). */
+export const TAPER_RANGE_WORDS = `Draft angle must be between -${TAPER_MAX_DEG}° and ${TAPER_MAX_DEG}°`;
+
+/** The draft angle's value in degrees (0 when it is absent or ""), checked. */
+export function resolveTaper(f: Pick<ExtrudeFeature, 'taper' | 'face' | 'direction' | 'extent'>, units: UnitsService): ResolveResult<number> {
+  const t = typeof f.taper === 'string' ? f.taper.trim() : '';
+  if (!t) return { ok: true, values: 0 };
+  const r = units.evaluate(t, 'angle');
+  if (!r.ok) return { ok: false, message: `Draft angle: ${r.error}` };
+  if (r.value === 0) return { ok: true, values: 0 };
+  if (!(Math.abs(r.value) <= TAPER_MAX_DEG)) return { ok: false, message: TAPER_RANGE_WORDS };
+  // (Only an expression's own error reads "Draft angle: ...": the rules below are said as sentences.)
+  if (f.face) return { ok: false, message: 'A draft angle needs sketch profiles: a face extrude has straight walls (set it to 0)' };
+  if (f.direction) return { ok: false, message: 'A draft angle goes only along the normal: remove the direction or set it to 0' };
+  if (f.extent?.kind !== 'blind' && f.extent?.kind !== 'symmetric' && f.extent?.kind !== 'two') return { ok: false, message: 'A draft angle goes only with Blind, Symmetric or Two sides (set it to 0)' };
+  return { ok: true, values: r.value };
 }
 
 function evalLength(label: string, expr: Expr, units: UnitsService): { ok: true; value: number } | { ok: false; message: string } {
@@ -196,7 +222,9 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
   },
   resolve(f, units) {
     const r = resolveExtent(f, units);
-    return r.ok ? { ok: true, values: { extent: r.values } } : r;
+    if (!r.ok) return r;
+    const t = resolveTaper(f, units);
+    return t.ok ? { ok: true, values: { extent: r.values, taper: t.values } } : t;
   },
   incomplete(f, units) {
     const p = profilesProblem(f);
@@ -218,13 +246,15 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     const out: ExprField[] = [{ path: 'extent.distance', expr: f.extent.distance }];
     if (f.extent.kind === 'two') out.push({ path: 'extent.distance2', expr: f.extent.distance2 });
     if (f.extent.kind === 'to') out.push({ path: 'extent.offset', expr: f.extent.offset });
+    if (f.taper) out.push({ path: 'taper', expr: f.taper });
     return out;
   },
   mapExprs: (f, fn) => {
     const e = f.extent;
-    if (e.kind === 'two') return { ...f, extent: { ...e, distance: fn(e.distance), distance2: fn(e.distance2) } };
-    if (e.kind === 'to') return { ...f, extent: { ...e, distance: fn(e.distance), offset: fn(e.offset) } };
-    return { ...f, extent: { ...e, distance: fn(e.distance) } };
+    const g = f.taper ? { ...f, taper: fn(f.taper) } : f;
+    if (e.kind === 'two') return { ...g, extent: { ...e, distance: fn(e.distance), distance2: fn(e.distance2) } };
+    if (e.kind === 'to') return { ...g, extent: { ...e, distance: fn(e.distance), offset: fn(e.offset) } };
+    return { ...g, extent: { ...e, distance: fn(e.distance) } };
   },
   async build(f, v, ctx) {
     const problem = profilesProblem(f);
@@ -255,7 +285,7 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     try {
       let res;
       try {
-        res = await ctx.kernel.call('extrude_regions', { plane: out.plane, curves: out.curves, regions: keys, extent: ext.extent, flip: !!f.flip, ...(dir.dir ? { direction: dir.dir } : {}) });
+        res = await ctx.kernel.call('extrude_regions', { plane: out.plane, curves: out.curves, regions: keys, extent: ext.extent, flip: !!f.flip, ...(dir.dir ? { direction: dir.dir } : {}), ...(v.taper ? { taper_deg: v.taper } : {}) });
       } catch (err) {
         const e = err as KernelCallError;
         if (e.kind === 'input' && /region not found/i.test(e.message)) return { ok: false, message: lost };

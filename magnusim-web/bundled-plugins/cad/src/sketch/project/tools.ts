@@ -21,7 +21,7 @@ import type { StateStore } from '../../types/state';
 import { newId } from '../../lib/ids';
 import type { SketchMode, SketchPointer, SketchTool } from '../mode';
 import { applyLinkCurves, type LinkDraft } from './curves';
-import { readLink, sourceWords, type LinkEnv } from './source';
+import { readLink, sketchReader, sourceWords, type LinkEnv } from './source';
 
 /** The Project / Intersect options and picks (the Sketch panel's block shows them). */
 export interface ProjectState {
@@ -50,6 +50,7 @@ export function sketchEnv(services: AppServices): LinkEnv {
     bodies,
     bodyName: (id) => names.get(id) ?? s.doc.bodies[id]?.name ?? 'a body',
     featureName: (id) => s.doc.features.find((f) => f.id === id)?.name ?? null,
+    sketch: sketchReader(s.doc.features, (id) => s.rebuild.outputs[id]),
   };
 }
 
