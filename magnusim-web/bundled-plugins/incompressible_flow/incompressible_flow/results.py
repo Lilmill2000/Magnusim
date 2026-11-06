@@ -38,6 +38,11 @@ DEFAULT_RHO = LEGACY_AIR["rho"]
 _U_COL = re.compile(r"areaAverage\(U\)")
 _P_COL = re.compile(r"areaAverage\(p\)")
 
+# A patch whose mean normal velocity is at most this fraction of its mean speed has no net flow
+# to speak of: what its flow monitor reads is the solve's round-off. One Freestream round a body
+# is such a patch: the stream goes in and out through it, and its net flow is zero.
+NET_FLOW_ROUND_OFF = 1e-6
+
 
 def _finite(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
@@ -45,6 +50,20 @@ def _finite(v: Any) -> bool:
 
 def _number(v: Any) -> TypeGuard[float]:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def net_flow(row: dict[str, Any]) -> float | None:
+    """A patch monitor's last net flow (m³/s, negative in), for the flow balance: 0 when it is
+    round-off against the flow along the patch (``NET_FLOW_ROUND_OFF``); None without one."""
+    last = row.get("last")
+    if not isinstance(last, dict):
+        return None
+    q, un, umag = last.get("Q_m3s"), last.get("Un_m_s"), last.get("Umag")
+    if not (_number(q) and math.isfinite(q)):
+        return None
+    if _number(un) and _number(umag) and math.isfinite(un) and umag > 0 and abs(un) <= NET_FLOW_ROUND_OFF * umag:
+        return 0.0
+    return float(q)
 
 
 def _mass_flow(q: Any, rho: float) -> float | None:
@@ -245,11 +264,13 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
     for plan in meta.get("probe_monitors") or []:
         if isinstance(plan, dict):
             custom.extend(probe_rows(case, plan, rho))
-    # Mass balance across all monitored openings.
+    # Mass balance across all monitored openings. A patch whose net flow is round-off (a
+    # Freestream all round a body) brings none in and takes none out: without an opening that
+    # carries flow, there is no balance line (it read "imbalance 100 %" on round-off).
     sum_in = sum_out = 0.0
     for m in out:
-        q = m["last"] and m["last"]["Q_m3s"]
-        if not _finite(q):
+        q = net_flow(m)
+        if q is None:
             continue
         if q < 0:
             sum_in += -q

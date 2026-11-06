@@ -96,6 +96,36 @@ def test_run_monitors_patch_values_in_display_units(tmp_path: Path):
     assert bal["imbalance"] == pytest.approx(0.1)
 
 
+def _far_field_case(tmp_path: Path, nets: list[str]) -> Path:
+    """A body in a box whose four sides are one Freestream (the validation set's cylinder): its
+    flow monitor reads the net flow through all of them, ``nets`` (m³/s) at t = 1, 2."""
+    case = tmp_path / "run-ff"
+    case.mkdir(parents=True)
+    (case / "w27-case.json").write_text(json.dumps({
+        "rho": 1.0,
+        "mapped": [{"patch": "far_field", "name": "Far field", "bc_type": "Freestream", "faces": ["face 1@B", "face 6@B"]}],
+        "monitors": ["far_field", "cylinder"],
+    }), encoding="utf-8")
+    _dat(case, "mon_far_field", "0", "areaAverage(p)	areaAverage(U)",
+         ["1	0.006	(0.99781626 -4.7e-09 0)", "2	0.0057	(0.99781626 -4.7e-09 0)"], area="8.500000e-03")
+    _dat(case, "flow_far_field", "0", "sum(phi)", [f"{i + 1}	{q}" for i, q in enumerate(nets)], area="8.500000e-03")
+    return case
+
+
+def test_a_freestream_all_round_a_body_has_no_flow_balance_line(tmp_path: Path):
+    """The stream goes in and out through the one Freestream: its net flow is the solve's
+    round-off (-3.9e-13 m³/s on a 2D cylinder run), not flow in with none out (it read
+    "Flow in 3.910e-10 L/s · out 0 L/s · imbalance 100.00 %", a warning)."""
+    out = run_monitors(_far_field_case(tmp_path, ["-2.1e-12", "-3.91048955e-13"]))
+    (far,) = out["monitors"]
+    assert far["last"]["Q_m3s"] == pytest.approx(-3.91048955e-13)  # the monitor itself still says it
+    assert out["balance"] is None and out["summary"] == [] and out["summary_warn"] is False
+    # A real net flow through it (entrainment, a leak) still counts.
+    real = run_monitors(_far_field_case(tmp_path / "real", ["-1e-4", "-1e-4"]))
+    assert real["balance"] == {"in_m3s": pytest.approx(1e-4), "out_m3s": 0.0, "imbalance": pytest.approx(-1.0)}
+    assert real["summary_warn"] is True
+
+
 def test_run_monitors_without_results(tmp_path: Path):
     out = run_monitors(tmp_path / "never-ran")
     assert out == {
