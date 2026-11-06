@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Any, TypeGuard
 
 from magnusim_sdk.foam import read_surface_field_value
+from magnusim_sdk.study import is_pressure_bc, is_velocity_inlet, is_velocity_outlet
 
+from .bc_kinds import is_freestream, is_total_pressure_inlet
 from .forces_results import force_control_row, forces_row
 from .materials import LEGACY_AIR
 from .monitors import AREA_AVERAGE_QUANTITY_KEYS
@@ -42,7 +44,8 @@ _P_COL = re.compile(r"areaAverage\(p\)")
 # to speak of: what its flow monitor reads is the solve's round-off. One Freestream round a body
 # is such a patch: the stream goes in and out through it, and its net flow is zero. Only when
 # every monitored opening reads so is there no balance to judge (run_monitors): a large far field's
-# real outflow (a jet's, leaving through it) is as small against its own speed.
+# real outflow (a jet's, leaving through it) is as small against its own speed. Only openings
+# count (is_opening): a wall monitored for its area average carries no flow at all.
 NET_FLOW_ROUND_OFF = 1e-6
 
 
@@ -63,14 +66,24 @@ def net_flow(row: dict[str, Any]) -> float | None:
     return float(q) if _number(q) and math.isfinite(q) else None
 
 
+def is_opening(bc: dict[str, Any] | None) -> bool:
+    """True for a boundary flow goes in or out through: a velocity inlet or outlet, a pressure BC,
+    a total-pressure inlet or a freestream (the openings function_objects monitors). A wall or a
+    symmetry is monitored only for an area average on its faces: no flow goes through it."""
+    if not isinstance(bc, dict):
+        return False
+    return is_velocity_inlet(bc) or is_velocity_outlet(bc) or is_pressure_bc(bc) or is_freestream(bc) or is_total_pressure_inlet(bc)
+
+
 def round_off_flow(row: dict[str, Any]) -> bool:
     """True when a patch monitor's last net flow is round-off against the flow along the patch:
-    its mean normal velocity at most ``NET_FLOW_ROUND_OFF`` of its mean speed."""
+    its mean normal velocity at most ``NET_FLOW_ROUND_OFF`` of its mean speed. An opening at rest
+    (no speed and no flow: a velocity inlet of 0 m/s) carries none either."""
     last = row.get("last")
     if not isinstance(last, dict):
         return False
     un, umag = last.get("Un_m_s"), last.get("Umag")
-    return bool(_number(un) and _number(umag) and math.isfinite(un) and umag > 0 and abs(un) <= NET_FLOW_ROUND_OFF * umag)
+    return bool(_number(un) and _number(umag) and math.isfinite(un) and umag >= 0 and abs(un) <= NET_FLOW_ROUND_OFF * umag)
 
 
 def _mass_flow(q: Any, rho: float) -> float | None:
@@ -275,14 +288,20 @@ def run_monitors(case_dir: Path | str) -> dict[str, Any]:
     # one's is round-off (a Freestream all round a body) nothing flows through them: there is no
     # balance line (it read "imbalance 100 %" on round-off). When one carries flow, every one
     # counts: a large far field's real outflow is as small against its own speed as round-off.
-    flows = [(q, round_off_flow(m)) for m in out if (q := net_flow(m)) is not None]
+    # A wall monitored for an area average on its faces is no opening and is left out (its zero
+    # flow, no round-off, made the far field's round-off count: "imbalance 100 %" again). A run
+    # whose case names no BC types (an older one) counts every monitored patch, as before.
+    typed = any(m.get("bc_type") for m in mapped)
+    by_patch = {m.get("patch"): m for m in mapped}
+    openings = [m for m in out if not typed or is_opening(by_patch.get(m["patch"]))]
+    flows = [(q, round_off_flow(m)) for m in openings if (q := net_flow(m)) is not None]
     sum_in = sum_out = 0.0
     if not all(r for _q, r in flows):
         sum_in = sum(-q for q, _r in flows if q < 0)
         sum_out = sum(q for q, _r in flows if q >= 0)
     balance = (
         {"in_m3s": sum_in, "out_m3s": sum_out, "imbalance": (sum_out - sum_in) / sum_in if sum_in > 0 else None}
-        if out and (sum_in > 0 or sum_out > 0)
+        if openings and (sum_in > 0 or sum_out > 0)
         else None
     )
     summary, warn = balance_summary(balance)

@@ -166,6 +166,73 @@ def test_a_far_field_carrying_a_jets_flow_out_balances(tmp_path: Path, far_q, je
     assert [s["label"] for s in out["summary"]] == ["Flow in", "out", "imbalance"]
 
 
+def _stream_and_wall_case(tmp_path: Path, *, second: dict, second_u: str, second_q: str, second_area: str) -> Path:
+    """The cylinder in one Freestream (its round-off net flow, as the 2D run wrote it) and a second
+    monitored patch: ``second``'s mapped record with its area average and flow."""
+    case = tmp_path / "run-ff2"
+    case.mkdir(parents=True)
+    (case / "w27-case.json").write_text(json.dumps({
+        "rho": 1.0,
+        "mapped": [{"patch": "far_field", "name": "Far field", "bc_type": "Freestream", "faces": ["face 1@B"]}, second],
+        "monitors": ["far_field", second["patch"]],
+    }), encoding="utf-8")
+    _dat(case, "mon_far_field", "0", "areaAverage(p)\tareaAverage(U)", ["869\t0.0057529782\t(0.99781626 -4.6808847e-09 0)"], area="8.500000e-03")
+    _dat(case, "flow_far_field", "0", "sum(phi)", ["869\t-3.91048955e-13"], area="8.500000e-03")
+    _dat(case, f"mon_{second['patch']}", "0", "areaAverage(p)\tareaAverage(U)", [f"869\t0.21\t{second_u}"], area=second_area)
+    _dat(case, f"flow_{second['patch']}", "0", "sum(phi)", [f"869\t{second_q}"], area=second_area)
+    return case
+
+
+@pytest.mark.parametrize(
+    ("wall_type", "wall_u", "wall_q"),
+    [
+        # No-slip: U = 0 and phi = 0 on every face.
+        ("No-slip", "(0 0 0)", "0"),
+        # Rotating (a spinning cylinder): its faces' velocities cancel to round-off in the mean, and
+        # its flow is round-off too, so their ratio says nothing.
+        ("Rotating", "(2.1e-12 -1.3e-12 0)", "3.2e-20"),
+    ],
+)
+def test_a_wall_with_an_area_average_on_it_does_not_bring_the_round_off_balance_back(tmp_path: Path, wall_type, wall_u, wall_q):
+    """An Area average monitor on the cylinder's faces monitors its wall's patch too. A wall is no
+    opening: it is left out of the balance, so the Freestream's round-off still gives no balance
+    line (the wall, not read as round-off, made the far field's -3.9e-13 m³/s count: "Flow in
+    3.910e-10 L/s · out 0 L/s · imbalance 100.00 %" again)."""
+    wall = {"patch": "cylinder", "name": "Cylinder", "bc_type": "Wall", "wall_type": wall_type, "faces": ["face 5@B"]}
+    out = run_monitors(_stream_and_wall_case(tmp_path, second=wall, second_u=wall_u, second_q=wall_q, second_area="1.570800e-04"))
+    assert [m["patch"] for m in out["monitors"]] == ["far_field", "cylinder"]  # both still listed
+    assert out["balance"] is None and out["summary"] == [] and out["summary_warn"] is False
+
+
+def test_an_opening_at_rest_carries_no_flow(tmp_path: Path):
+    """A velocity inlet set to 0 m/s (no speed, no flow) beside the Freestream's round-off: nothing
+    flows through either, so there is no balance line (an opening with no speed never counted as
+    round-off, and the far field's -3.9e-13 m³/s read "imbalance 100 %")."""
+    still = {"patch": "jet", "name": "Jet", "bc_type": "Velocity inlet", "faces": ["face 7@B"], "value": 0}
+    out = run_monitors(_stream_and_wall_case(tmp_path, second=still, second_u="(0 0 0)", second_q="0", second_area="2.0e-03"))
+    assert out["balance"] is None and out["summary"] == [] and out["summary_warn"] is False
+
+
+def test_a_monitored_wall_is_left_out_of_a_real_balance(tmp_path: Path):
+    """An inlet, an outlet and a wall with an Area average on it: the balance is the inlet's and
+    the outlet's (the wall's zero flow adds nothing either way), and a run whose case names no BC
+    types (an older one) counts every monitored patch, as before."""
+    case = _case(tmp_path)
+    meta = json.loads((case / "w27-case.json").read_text(encoding="utf-8"))
+    meta["mapped"].append({"patch": "walls", "name": "Walls", "bc_type": "Wall", "faces": ["face 3@B"]})
+    (case / "w27-case.json").write_text(json.dumps(meta), encoding="utf-8")
+    _dat(case, "mon_walls", "0", "areaAverage(p)\tareaAverage(U)", ["4\t0.5\t(0 0 0)"], area="5.000000e-02")
+    _dat(case, "flow_walls", "0", "sum(phi)", ["4\t0"], area="5.000000e-02")
+    out = run_monitors(case)
+    assert [m["patch"] for m in out["monitors"]] == ["inlet", "outlet", "walls"]
+    assert out["balance"]["in_m3s"] == pytest.approx(0.03) and out["balance"]["out_m3s"] == pytest.approx(0.033)
+    for m in meta["mapped"]:
+        m.pop("bc_type")
+    (case / "w27-case.json").write_text(json.dumps(meta), encoding="utf-8")
+    old = run_monitors(case)
+    assert old["balance"]["in_m3s"] == pytest.approx(0.03) and old["balance"]["out_m3s"] == pytest.approx(0.033)
+
+
 def test_run_monitors_without_results(tmp_path: Path):
     out = run_monitors(tmp_path / "never-ran")
     assert out == {

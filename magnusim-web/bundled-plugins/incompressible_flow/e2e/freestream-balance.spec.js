@@ -12,8 +12,11 @@ import { fileURLToPath } from 'node:url';
 // keep theirs (monitors-plugin-owned.spec.js). A jet blowing into such a box balances what
 // leaves through the far field, though that outflow is as small against the far field's own
 // speed as round-off (it read "Flow in 0.0200 m³/s · out 0 L/s · imbalance 100.00 %", as a
-// warning, when the far field's net flow was taken as round-off on its own). No WSL: a finished run whose case is
-// the committed cavity plus the monitor files of its boundaries.
+// warning, when the far field's net flow was taken as round-off on its own). An Area average
+// on the body's faces monitors its wall's patch too: a wall is no opening and is left out of the
+// balance, so there is still no balance line (its zero flow, not round-off, made the far field's
+// round-off count: "Flow in 3.910e-10 L/s · out 0 L/s · imbalance 100.00 %" again). No WSL: a
+// finished run whose case is the committed cavity plus the monitor files of its boundaries.
 const WEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const ROUND = join(WEB, 'python', 'tests', 'fixtures', 'geometry', 'transient-test.step');
 const CAVITY = join(WEB, 'python', 'tests', 'fixtures', 'foam-results', 'cavity-2d');
@@ -194,4 +197,43 @@ test('a jet blowing into a Freestream box: its flow balances what leaves through
   expect(answer.ok, JSON.stringify(answer)).toBe(true);
   expect(answer.balance).toEqual({ in_m3s: 0.02, out_m3s: 0.02, imbalance: 0 });
   expect(answer.summary_warn).toBe(false);
+});
+
+test('an Area average on the body in a Freestream box: its wall is no opening, still no "imbalance 100 %"', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(30_000);
+  // The cylinder's run with an Area average monitor on the cylinder's faces: its wall's patch is
+  // monitored too (U = 0 and no flow on every face), beside the far field's round-off net flow.
+  const wall = { patch: 'cylinder', name: 'Cylinder', bc_type: 'Wall', wall_type: 'No-slip', faces: ['face 3@Body1'] };
+  const { sid, rid, q, ready, openGraphs } = await finishedRun(page, request, 'e2e freestream wall balance', [FAR_FIELD, wall], ['far_field', 'cylinder'], [
+    ['mon_far_field', 'areaAverage(p)\tareaAverage(U)', ['869\t0.0057529782\t(0.99781626 -4.6808847e-09 0)'], '8.500000e-03'],
+    ['flow_far_field', 'sum(phi)', ['869\t-3.91048955e-13'], '8.500000e-03'],
+    ['mon_cylinder', 'areaAverage(p)\tareaAverage(U)', ['869\t0.21\t(0 0 0)'], '1.570800e-04'],
+    ['flow_cylinder', 'sum(phi)', ['869\t0'], '1.570800e-04'],
+  ]);
+  const balance = page.locator('#run-graphs-balance');
+  const seen = async () => {
+    // Both cards, with their values: the cards and the balance line are drawn together.
+    await expect(page.locator('#run-graphs-list .mon-card[data-monitor-key="mon_far_field"]')).toBeVisible({ timeout: 30_000 });
+    const body = page.locator('#run-graphs-list .mon-card[data-monitor-key="mon_cylinder"]');
+    await expect(body).toBeVisible();
+    await expect(body.locator('.mon-card-name')).toHaveText('Cylinder');
+    expect(await balance.isHidden(), `the balance line reads: ${await balance.textContent()}`).toBe(true);
+    expect(await balance.textContent()).toBe('');
+    await expect(page.locator('#run-graphs-list')).not.toContainText('imbalance');
+  };
+  await page.reload();
+  await ready();
+  await openGraphs();
+  await seen();
+  // After a reload, the same.
+  await page.reload();
+  await ready();
+  await openGraphs();
+  await seen();
+  // The route's answer, which the Assistant reads too.
+  const answer = await json(request, q('/api/run/monitors', { simulation_id: sid, run_id: rid }));
+  expect(answer.ok, JSON.stringify(answer)).toBe(true);
+  expect(answer.monitors.map((m) => m.key)).toEqual(['mon_far_field', 'mon_cylinder']);
+  expect([answer.balance, answer.summary, answer.summary_warn]).toEqual([null, [], false]);
 });

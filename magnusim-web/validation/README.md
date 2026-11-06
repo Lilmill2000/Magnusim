@@ -189,8 +189,12 @@ App gaps found so far, and what they block:
   millionth of its mean speed, nothing flows through them and there is no balance line; when one
   carries flow, every one counts as it reads, since a large far field's real outflow (a jet's,
   leaving through it) is as small against its own speed (a first version of the fix took each
-  such boundary as carrying nothing, and a jet into a Freestream box read "imbalance 100 %";
-  `incompressible_flow.results.round_off_flow`,
+  such boundary as carrying nothing, and a jet into a Freestream box read "imbalance 100 %").
+  Only openings count (inlets, outlets, pressure boundaries, freestreams): an Area average on the
+  body's faces monitors its wall's patch too, and that wall (no flow, not read as round-off) made
+  the far field's round-off count again, "imbalance 100 %" (found in review,
+  fixed 2026-11-06); an opening at rest (a 0 m/s inlet) carries no flow either
+  (`incompressible_flow.results.round_off_flow`, `is_opening`,
   `bundled-plugins/incompressible_flow/e2e/freestream-balance.spec.js`, `tests/test_results.py`).
 - **Before you start on a Freestream** (cases 5 and 6), fixed: the case's speed took a
   Freestream's only above 1 m/s, so a 1 m/s stream round a body read "No time-step estimate: no
