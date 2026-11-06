@@ -17,7 +17,7 @@ test('the checks run where WSL with OpenFOAM is found, and are skipped, saying w
     return v;
   };
   assert.deepEqual(physicsPlan({}, found(true)), { run: true });
-  assert.deepEqual(physicsPlan({}, found(false)), { run: false, code: 0, why: 'skipped: WSL with OpenFOAM (openfoam2606 simpleFoam) was not found' });
+  assert.deepEqual(physicsPlan({}, found(false)), { run: false, code: 0, why: 'skipped: WSL with OpenFOAM v2606 was not found' });
   // Insisted on: a missing toolchain fails, as MAGNUSIM_E2E_WSL=1 does for the e2e suites.
   assert.equal(physicsPlan({ MAGNUSIM_E2E_WSL: '1' }, found(false)).code, 1);
   assert.deepEqual(physicsPlan({ MAGNUSIM_E2E_WSL: '1' }, found(true)), { run: true });

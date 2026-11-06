@@ -30,8 +30,8 @@ export function physicsPlan(env = process.env, found = openFoamInWsl) {
   const flag = String(env.MAGNUSIM_E2E_WSL ?? env.CFDDESK_E2E_WSL ?? '').trim();
   if (flag === '0') return { run: false, code: 0, why: 'skipped: MAGNUSIM_E2E_WSL=0' };
   if (found()) return { run: true };
-  if (flag === '1') return { run: false, code: 1, why: 'MAGNUSIM_E2E_WSL=1 but WSL with OpenFOAM (openfoam2606 simpleFoam) was not found' };
-  return { run: false, code: 0, why: 'skipped: WSL with OpenFOAM (openfoam2606 simpleFoam) was not found' };
+  if (flag === '1') return { run: false, code: 1, why: 'MAGNUSIM_E2E_WSL=1 but WSL with OpenFOAM v2606 was not found' };
+  return { run: false, code: 0, why: 'skipped: WSL with OpenFOAM v2606 was not found' };
 }
 
 export async function main(argv = process.argv.slice(2), env = process.env) {
