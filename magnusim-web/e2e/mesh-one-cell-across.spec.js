@@ -8,8 +8,9 @@
 //   can't be meshed so, and Generate fails with that reason. On the slab with a Symmetry on both
 //   ends the note says how (10 mm deep along z, between its two end faces, the Symmetry's name),
 //   and the generated mesh's summary says "one cell across (2D)", after a reload too. Before you
-//   start says when the ends lost their Symmetry: another BC on them, or none (its BC deleted:
-//   then they are solved as the walls with no BC are).
+//   start reads Re on the 2D channel's hydraulic diameter (twice the inlet's height, not the
+//   circle of its area, which grows with the depth), and says when the ends lost their Symmetry:
+//   another BC on them, or none (its BC deleted: then they are solved as the walls with no BC are).
 // - The Assistant changes the ends' BC while the Mesh panel is open: the note under the setting
 //   follows at once (the frame's kind is 'bcs'; the panel listened for 'bc' and kept the old note).
 // - The Assistant (a scripted model, through the dock): sets it with setup_edit (the panel shows
@@ -290,6 +291,9 @@ test.describe('One cell across (2D) (fake compute)', () => {
     const check = panel.locator('[data-run-check="1"]');
     await expect(check.locator('[data-run-check-estimate="1"]')).toBeVisible(STEP);
     await expect(check.locator('[data-run-check-row="two_d_ends"]')).toHaveCount(0);
+    // Re on a 2D channel's hydraulic diameter, twice the inlet's 50 mm height: 1 m/s x 0.1 m /
+    // 5e-4 m²/s = 200 (the circle of the inlet's 50 x 10 mm read "Re ≈ 50", and more on a deeper slab).
+    await expect(check.locator('[data-run-check-estimate="1"]')).toContainText('Re ≈ 200');
     await postOk(request, `${host.base}/api/bcs`, { project_id: s.pid, simulation_id: s.sid, geometry_id: s.gid, id: s.sidesId, name: 'Sides', bc_type: 'Wall', wall_type: 'No-slip', faces: s.ends });
     panel = await openRunPanel(page, { base: host.base, projectId: s.pid, simulationId: s.sid, runId: rid });
     const row = panel.locator('[data-run-check="1"] [data-run-check-row="two_d_ends"]');

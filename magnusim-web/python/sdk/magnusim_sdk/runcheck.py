@@ -254,6 +254,7 @@ class _Run:
         self.algorithm = str(i.get("steady_algorithm") or "")
         self.nu = _pos(i.get("nu"))
         self.d_hyd = _pos(i.get("d_hyd"))
+        self.ref_length = _pos(i.get("ref_length"))
         self.initial_flow = str(i.get("initial_flow") or "")
         self.potential_flow = i.get("potential_flow")
         self.inlet_driven = bool(i.get("inlet_driven"))
@@ -367,12 +368,15 @@ class _Run:
         return val if val > 0 else None
 
     def reynolds(self) -> tuple[float | None, str]:
-        """(Re, "dh" | "L"): on the inlet's hydraulic diameter when it has one, else on the
+        """(Re, "dh" | "ref" | "L"): on the inlet's hydraulic diameter when it has one, else on
+        the body's reference length when the analysis gives one (a body in a stream), else on the
         domain's length along the flow."""
         if not self.speed or not self.nu:
             return None, ""
         if self.d_hyd:
             return self.speed * self.d_hyd / self.nu, "dh"
+        if self.ref_length:
+            return self.speed * self.ref_length / self.nu, "ref"
         length = self.length()
         if length:
             return self.speed * length / self.nu, "L"
@@ -972,7 +976,9 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     analysis's words for its model: ``laminar``, ``label``, ``fields`` that can go negative,
     ``wall_functions``, and ``any_yplus``: ``{label, key, value}``, the study setting of a model
     that handles any y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
-    ``nu`` (m²/s); ``d_hyd`` (m, the inlet's hydraulic diameter); ``initial_flow``,
+    ``nu`` (m²/s); ``d_hyd`` (m, the inlet's hydraulic diameter); ``ref_length`` (m, the
+    length Re is taken on without an inlet: a body's reference length; its turbulent limit is a
+    boundary layer's, as on the domain's length); ``initial_flow``,
     ``potential_flow`` (None when the analysis has none), ``inlet_driven``; ``closed`` (nothing
     flows through the domain, a box its moving walls drive: no flow-through time, so no
     "one flow-through" and no start-up or averaging rows counted in them); ``numerics``

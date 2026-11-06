@@ -3,7 +3,11 @@
 the same RunSpec its case is written with.
 
 - the reference speed, the main inlet's direction and name (the speed the turbulence
-  inlet values and the velocity limit use);
+  inlet values and the velocity limit use; a freestream's own when it sets it, even at 1 m/s
+  or below);
+- the length Re is taken on: the largest inlet's hydraulic diameter (on a mesh one cell across,
+  a 2D channel's: twice the inlet's height in the plane, not the depth's circle), else the
+  study's reference length when a freestream sets the speed (a body in a stream);
 - the velocity limit the case is written with (``max(50, 10 × the reference speed)``, or
   the study's own, RH3);
 - the study's numerics and the run's RH3 keys stored outside their field's range, which the
@@ -112,17 +116,31 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
     inlets = [m.get("bc") for m in spec.mapped or [] if is_velocity_inlet(m.get("bc"))]
     name = ""
     best = -1.0
+    inlet_area = 0.0
     for raw_bc in inlets:
         bc = _bc_dict(raw_bc)
         faces = bc_faces(bc)
-        s = inlet_ref_speed(bc, faces_area(faces, props) / max(1, len(faces)), rho)
+        area = faces_area(faces, props)
+        s = inlet_ref_speed(bc, area / max(1, len(faces)), rho)
         if s > best:
             best, name = s, str(bc.get("name") or "")
+        inlet_area = max(inlet_area, area)
     physics = spec.physics
+    # A mesh one cell across is a 2D slice of an arbitrary depth: an inlet's hydraulic diameter
+    # is a 2D channel's, twice its height in the plane (Re_D of a channel), not the circle of its
+    # area (which grows with the depth: a 2D step read "Re ≈ 55" at Re_D 100).
+    depth = _one_cell_depth(ctx.get("mesh"))
+    re_d = 2.0 * inlet_area / depth if inlets and depth and inlet_area > 0 else (float(d_hyd) if inlets and d_hyd else None)
+    # A body in a stream: Re on the length the study measures its forces against, when it set one.
+    ref_length = None
+    if not inlets and source == "freestream":
+        from .reference import resolve_reference
+
+        ref_length = resolve_reference(spec).length
     out.update(
         {
             "n_cells": spec.n_cells or out["n_cells"],
-            "speed": float(speed) if inlets or speed > 1.0 or source == "wall" else None,
+            "speed": float(speed) if inlets or speed > 1.0 or source in ("wall", "freestream") else None,
             "direction": list(inlet_flow_direction(spec) or wall_dir or (1.0, 0.0, 0.0)),
             # Nothing flows in or out (a box its walls drive): no flow-through time to speak of.
             "closed": closed_domain(spec, source),
@@ -136,7 +154,8 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
             "turbulence": turbulence_words(physics.turbulence_model),
             "steady_algorithm": "SIMPLEC" if physics.simplec else "SIMPLE",
             "nu": float(spec.nu),
-            "d_hyd": float(d_hyd) if inlets and d_hyd else None,
+            "d_hyd": re_d,
+            "ref_length": ref_length,
             "initial_flow": physics.initial_flow,
             "potential_flow": bool(physics.potential_flow),
             "inlet_driven": bool(inlets),
@@ -241,6 +260,18 @@ def _face_label(face: str) -> str:
     """A face as the panels name it ("Face 3@Body1")."""
     s = str(face)
     return s[:1].upper() + s[1:] if s.lower().startswith("face ") else s
+
+
+def _one_cell_depth(facts: Any) -> float | None:
+    """The depth (m) of a mesh made one cell across (the mesh facts' ``two_d``), else None."""
+    two = facts.get("two_d") if isinstance(facts, dict) else None
+    if not isinstance(two, dict) or two.get("cells_across") != 1:
+        return None
+    try:
+        depth = float(two.get("depth_m") or 0)
+    except (TypeError, ValueError):
+        return None
+    return depth if depth > 0 else None
 
 
 def two_d_unmirrored(spec: Any, facts: Any) -> list[dict[str, Any]]:

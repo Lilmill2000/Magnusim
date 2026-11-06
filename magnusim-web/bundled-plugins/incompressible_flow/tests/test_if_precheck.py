@@ -187,3 +187,76 @@ def test_a_moving_wall_through_its_own_faces_in_a_closed_box_is_named():
     assert holds_pressure(spec([0.0, 2.0, 0.0], top)) is False
     opening = SimpleNamespace(mapped=[{"patch": "out", "bc": {"name": "Out", "bc_type": "Pressure", "faces": ["face 1@Body1"]}}])
     assert holds_pressure(opening) is True
+
+
+def _run_spec(*mapped: dict, nu: float = 1e-4, reference: dict | None = None, face_props: dict | None = None):
+    from incompressible_flow.runspec import RunSpec
+
+    return RunSpec(
+        project_dir=Path("."), run_id="r1", mesh_case_dir=Path("."), n_procs=1, solver_app="simpleFoam",
+        end_time=2000, write_interval=100, transient=None, nu=nu, rho=1.0, wall_default="No-slip", bcs=[],
+        monitor_patches=[], face_props=face_props or {}, n_cells=1000,
+        mapped=[{"bc": bc, "patch": str(bc["name"]).lower()} for bc in mapped], reference=reference or {},
+    )
+
+
+FAR = {"name": "Far", "bc_type": "Freestream", "faces": ["face 1@Body1"], "unit": "m/s", "vector": [1, 0, 0]}
+SPHERE = {"name": "Sphere", "bc_type": "Wall", "wall_type": "No-slip", "faces": ["face 2@Body1"]}
+
+
+@pytest.mark.parametrize("speed", [1.0, 0.5, 30.0])
+def test_a_freestream_sets_the_speed_and_re_on_the_bodys_reference_length(speed: float):
+    """A body in one Freestream: the stream's own speed is the case's, also at 1 m/s and below (a
+    1 m/s stream read as none: "No time-step estimate: no inlet speed or pressure difference sets
+    a flow speed", no Re), and Re is on the study's reference length (the sphere's D)."""
+    from magnusim_sdk.runcheck import check
+
+    from incompressible_flow.reference import resolve_reference
+    from incompressible_flow.writer import reference_speed
+
+    spec = _run_spec({**FAR, "value": speed}, SPHERE, reference={"ref_length": 0.01})
+    assert reference_speed(spec)[0::2] == (speed, "freestream")
+    # The force coefficients' blank reference speed is the stream's too (it was 1 m/s below it).
+    assert resolve_reference(spec).speed == speed
+    inputs = check_inputs(spec, {"end_time": 2000}, {}, transient=False)
+    assert inputs["speed"] == speed and inputs["d_hyd"] is None and inputs["ref_length"] == 0.01
+    est = check(inputs)["estimate"]
+    assert est["re"] == pytest.approx(speed * 0.01 / 1e-4)
+    assert f"Re ≈ {speed * 100:,.0f}" in est["line"]
+    # Without a reference length: Re on the domain's length along the flow, as before.
+    bare = check_inputs(_run_spec({**FAR, "value": speed}, SPHERE), {"end_time": 2000}, {}, transient=False)
+    assert bare["speed"] == speed and bare["ref_length"] is None
+
+
+def test_a_still_freestream_or_a_faster_pressure_drive_keep_the_speed_as_before():
+    from incompressible_flow.writer import reference_speed
+
+    # A freestream with no speed (an opening to still air) sets none: 1 m/s, as before.
+    assert reference_speed(_run_spec({**FAR, "value": 0}, SPHERE))[0::2] == (1.0, "pressure")
+    assert check_inputs(_run_spec({**FAR, "value": 0}, SPHERE), {"end_time": 10}, {}, transient=False)["speed"] is None
+    # A velocity outlet's faster outflow still wins over a slower stream.
+    out = {"name": "Out", "bc_type": "Velocity outlet", "faces": ["face 3@Body1"], "value": 4, "unit": "m/s"}
+    assert reference_speed(_run_spec({**FAR, "value": 0.5}, out))[0::2] == (4.0, "pressure")
+
+
+def test_on_a_mesh_one_cell_across_re_is_a_2d_channels():
+    """A 2D slice's inlet is h high and as deep as the slice: its hydraulic diameter is a 2D
+    channel's, 2h (Re_D = U 2h / nu), not the circle of its area (the 2D step read "Re ≈ 55" at
+    Re_D 100, and a deeper slice more)."""
+    from magnusim_sdk.runcheck import check
+
+    from incompressible_flow.runspec import FaceProps
+
+    h, depth, nu = 0.0052, 0.005, 1.04e-4
+    inlet = {"name": "Inlet", "bc_type": "Velocity inlet", "faces": ["face 1@Body1"], "value": 1, "unit": "m/s"}
+    props = {"face 1@Body1": FaceProps(area_m2=h * depth, normal=(-1.0, 0.0, 0.0), planar=True)}
+    spec = _run_spec(inlet, nu=nu, face_props=props)
+    facts = {"two_d": {"axis": "z", "depth_m": depth, "cells_across": 1}}
+    inputs = check_inputs(spec, {"end_time": 4000}, {"mesh": facts}, transient=False)
+    assert inputs["d_hyd"] == pytest.approx(2 * h)
+    assert check(inputs)["estimate"]["re"] == pytest.approx(100.0)
+    # A 3D mesh of the same part: the inlet's hydraulic diameter as before.
+    import math
+
+    flat = check_inputs(spec, {"end_time": 4000}, {"mesh": {"quality": {}}}, transient=False)
+    assert flat["d_hyd"] == pytest.approx(2 * math.sqrt(h * depth / math.pi))

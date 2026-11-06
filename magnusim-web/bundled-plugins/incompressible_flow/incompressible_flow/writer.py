@@ -880,9 +880,11 @@ def wall_drive(spec: Any) -> list[dict[str, Any]]:
 
 def reference_speed(spec: RunSpec) -> tuple[float, float, str]:
     """The case's reference speed (m/s), its hydraulic diameter (m) and what set the speed:
-    ``inlet`` (the fastest velocity inlet), ``pressure`` (a pressure difference, a velocity
-    outlet's outflow or a freestream), ``wall`` (a moving or rotating wall: a closed box's only
-    speed, else when faster than the rest) or ``none`` (nothing gives one: 1 m/s).
+    ``inlet`` (the fastest velocity inlet), ``freestream`` (the fastest freestream: its own
+    speed when nothing else sets one, even below 1 m/s, else when it is faster), ``pressure`` (a
+    pressure difference or a velocity outlet's outflow; a freestream without a speed), ``wall``
+    (a moving or rotating wall: a closed box's only speed, else when faster than the rest) or
+    ``none`` (nothing gives one: 1 m/s).
 
     The speed the time step, the velocity limit and the starting turbulence are made from. With
     a velocity inlet it is the inlet's, as before (a faster wall does not change it).
@@ -941,10 +943,15 @@ def reference_speed(spec: RunSpec) -> tuple[float, float, str]:
             area = faces_area(faces, props)
             speed_ref = max(speed_ref, inlet_ref_speed(ob, area / max(1, len(faces)), rho))
             source = "pressure"
-        # No inlet: a freestream's speed is the case's speed when it is faster.
-        for m in spec.mapped or []:
-            if is_freestream(m.get("bc")):
-                speed_ref = max(speed_ref, freestream_speed(_bc_dict(m.get("bc"))))  # type: ignore[arg-type]
+        # No inlet: the fastest freestream's speed is the case's when nothing above sets one (its
+        # own, even below 1 m/s: a body in a slow stream), else when it is faster. It was taken
+        # only above 1 m/s, so a 1 m/s or slower stream read as no speed at all.
+        streams = [freestream_speed(_bc_dict(m.get("bc"))) for m in spec.mapped or [] if is_freestream(m.get("bc"))]  # type: ignore[arg-type]
+        if streams:
+            top = max(streams)
+            if top > 0 and (source == "none" or top > speed_ref):
+                speed_ref, source = max(top, 0.1), "freestream"
+            elif source == "none":
                 source = "pressure"
         # No inlet: a moving or rotating wall's speed is the case's when nothing else gives
         # one (a closed box: its own speed, even below 1 m/s), else when it is faster.
