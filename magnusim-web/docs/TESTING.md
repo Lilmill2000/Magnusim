@@ -66,8 +66,12 @@ validation set's to check.
 | Laminar pipe, Re 100, a 5-block O-grid of 51 000 cells, 2 cores | f Re = 64 and U_cl / U_b = 2, each within 2 %, over x/D 10 to 13 | 64.19 and 1.986; 175 iterations, 7 s |
 | Circular cylinder, Re 20, one cell across, a ring 20 D out in one Freestream | Cd within 10 % of 2.02 (Forces monitor, the study's reference values) | 2.0675 (+2.35 %); 537 iterations, 3 s |
 
-Every run must stop on its residual targets. The bands are the validation set design's, not
-fitted to these runs. `npm run test:physics` took 26 s in all on 2026-11-06.
+Every run must stop on its residual targets. The cavity's and the pipe's bands are the
+validation set design's (1.12), not fitted to these runs; the cylinder's ±10 % is this check's
+own: the reference data give ±5 %, widened here for the ring's 2.5 % blockage and its coarse
+grid. `npm run test:physics` took 26 s in all on 2026-11-06; after that day's fixes to the
+schemes and k-omega SST's walls its pytest took 34 s, the pipe reading f Re 63.91 and
+U_cl / U_b 1.985 and the cylinder Cd 2.0671 (the cavity the same).
 
 The full tier (`npm run test:e2e`, before a push and nightly) runs them first, under the
 PC's WSL test lock. Nothing else does: not the per-commit fast tier (`test:e2e:changed`, also

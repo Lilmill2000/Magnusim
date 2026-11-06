@@ -3,7 +3,7 @@ case a run writes (Incompressible Flow's own ``write_solve_case``, from a projec
 study, boundary conditions and fluid, and a run's monitors) on a blockMesh grid, solved in WSL (OpenFOAM
 v2606), read with the run's own monitor reader (``results.run_monitors``) and held to published
 values with bands wide enough to stand without a mesh study. They check the case writer, its
-schemes and its monitors in minutes, not the meshers: the validation set does that, through
+schemes and its monitors in under a minute, not the meshers: the validation set does that, through
 the app's routes (``validation/README.md``).
 
 1. Lid-driven cavity, Re 100: 49 x 49 cells, one cell across (its two ends empty, as One cell
@@ -20,9 +20,10 @@ the app's routes (``validation/README.md``).
    and Dennis & Chang 1970, SECONDARY: ``validation/refs/cylinder_re20_re40.csv``), a wide band:
    the ring's 2.5 % blockage and its coarse grid raise it a little.
 
-Each run must stop on its residual targets (``SIMPLE solution converged``). The bands are the
-design's (validation set design 1.12), not fitted to these runs; the first run's numbers are in
-docs/TESTING.md.
+Each run must stop on its residual targets (``SIMPLE solution converged``). The cavity's and the
+pipe's bands are the design's (validation set design 1.12), not fitted to these runs; the
+cylinder's ±10 % is this check's own (the reference data give ±5 %), widened for the ring's
+blockage and its coarse grid. The first run's numbers are in docs/TESTING.md.
 """
 
 from __future__ import annotations
