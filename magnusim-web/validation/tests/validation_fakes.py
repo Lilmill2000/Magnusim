@@ -249,3 +249,98 @@ def fake_step_run(run_dir: Path, *, xr_s: float, corner_s: float | None = None, 
         {"key": "mon_outlet", "patch": "outlet", "area_m2": big_h * depth, "last": {"Q_m3s": area}},
     ], "balance": {"in_m3s": area, "out_m3s": area * (1 + 1e-6), "imbalance": 1e-6}, "custom": [{"key": "probes_bubble_1", "point": [3 * s, 0.1 * s, c4.ZM], "last": {"U": [-0.1, 0.0, 0.0]},
                    "series": [{"t": k, "U": [-0.1, 0.0, 0.0]} for k in range(1, 181)]}]})
+
+
+# ------------------------------------------------------------ case 5: a synthetic cylinder flow
+
+def _wake_ux(x, x0: float, d: float):
+    """U_x on the wake axis: reversed from the cylinder's back (x = d/2) to ``x0``, forward after."""
+    import numpy as np
+
+    return np.tanh((np.asarray(x, dtype=float) - 0.5 * d) * (np.asarray(x, dtype=float) - x0) / d**2)
+
+
+def fake_cylinder_run(run_dir: Path, *, cd: float = 2.0, ld: float = 0.95, theta_s: float = 44.0,
+                      st: float = 0.165, cd_mean: float = 1.34, cl_amp: float = 0.33, ld_mean: float = 1.42,
+                      t_on: float = 0.6, tau: float = 0.12, t_end: float = 3.0) -> None:
+    """A case 5 run's raw answers. Steady: a drag coefficient settling on ``cd``, U_x on the wake
+    axis closing the bubble at L/D = ``ld``, the wall shear stress along the cylinder turning at
+    ``theta_s`` degrees from the rear. Transient: a lift coefficient of amplitude ``cl_amp`` at
+    St = ``st`` growing in from ``t_on`` (``tau`` its growth's scale), the drag about ``cd_mean``
+    at twice the frequency, the wake-axis probes' mean closing at L/D = ``ld_mean``."""
+    import numpy as np
+    from magnusim_validation.cases import c5_cylinder as c5
+
+    fake_run(run_dir, lines=False, samples=False)
+    raw = run_dir / "raw"
+    plan = json.loads((run_dir / "plan.json").read_text(encoding="utf-8"))
+    transient = c5.TRANSIENT[plan["variant"]]
+    d, q_a = c5.D, c5.Q_A
+    _write(raw, "mesh-facts", {"n_cells": 76000, "quality": {"known": True, "ok": True, "max_non_orthogonality": 35.0},
+                               "layers": {"asked": False, "applied": False, "walls": []},
+                               "two_d": {"axis": "z", "depth_m": c5.DEPTH, "cells_across": 1}})
+    ex = {e["key"]: e for e in plan["extract"]}
+    a, b = ex["wake_line"]["points_m"]
+    xs = np.linspace(a[0], b[0], ex["wake_line"]["subdivisions"] + 1)
+    pts = [[float(x), 0.0, c5.ZM] for x in xs]
+    p_line = (0.5 * np.exp(-(xs - 0.5 * d) / d) - 0.1).tolist()
+    probes = c5.wake_probe_points()
+    far = {"key": "mon_far_field", "patch": "far_field", "area_m2": 0.017, "last": {"Q_m3s": 0.0, "p_Pa": 0.0}}
+    balance = {"in_m3s": 2e-3, "out_m3s": 2e-3, "imbalance": 2e-7}
+    if not transient:
+        x0 = (0.5 + ld) * d
+        ux = _wake_ux(xs, x0, d)
+        line = {"source": "app_sampling", "n_valid": xs.size, "sample_points": pts, "distances": (xs - xs[0]).tolist(),
+                "U_x": ux.tolist(), "U_y": [0.0] * xs.size, "U_z": [0.0] * xs.size, "p": p_line}
+        _write(raw, "sample_wake_line", line)
+        _write(raw, "line_p_wake_line", {"status": 200, "n_valid": xs.size, "values": p_line, "sample_points": pts})
+        phi = np.linspace(-np.pi, np.pi, 340, endpoint=False) + np.pi / 340
+        r = 0.5 * d
+        g = np.radians(np.abs(np.degrees(phi)) - theta_s)
+        tx, ty = -g * np.sin(phi) * np.sign(phi), g * np.cos(phi) * np.sign(phi)
+        _write(raw, "sample_cylinder_shear", {"source": "case_file:900/wallShearStress", "patch": "cylinder",
+                                              "n": phi.size, "x": (r * np.cos(phi)).tolist(), "y": (r * np.sin(phi)).tolist(),
+                                              "z": [c5.ZM] * phi.size, "area": [1e-7] * phi.size,
+                                              "wallShearStress_x": tx.tolist(), "wallShearStress_y": ty.tolist(),
+                                              "wallShearStress_z": [0.0] * phi.size})
+        n_it = 900
+        hist = [{"t": i, "Cd": cd * (1 + 0.5 * math.exp(-i / 60)), "Cl": 1e-6, "Fd_N": cd * (1 + 0.5 * math.exp(-i / 60)) * q_a,
+                 "Fl_N": 1e-6 * q_a, "Fdp_N": 0.6 * cd * q_a, "Fdv_N": 0.4 * cd * q_a * (1 + 0.5 * math.exp(-i / 60)) / 1}
+                for i in range(1, n_it + 1)]
+        # The last step's parts add up to the drag.
+        hist[-1]["Fdv_N"] = hist[-1]["Fd_N"] - hist[-1]["Fdp_N"]
+        custom = [{"key": "forces_cylinder", "name": "Cylinder", "type": "forces", "series": hist, "last": hist[-1]}]
+        custom += [{"key": f"probes_wake_axis_{i + 1}", "point": p, "last": {"U": [float(_wake_ux(p[0], x0, d)), 0.0, 0.0]},
+                    "series": [{"t": n_it, "U": [float(_wake_ux(p[0], x0, d)), 0.0, 0.0]}]} for i, p in enumerate(probes)]
+        _write(raw, "monitors", {"monitors": [far], "custom": custom, "balance": balance})
+        return
+    rng = np.random.default_rng(11)
+    dt = 0.0012
+    base = np.arange(dt, t_end, dt)
+    t = np.unique(np.clip(base + rng.uniform(0.0, 0.2 * dt, base.size), 0, t_end))
+    f = st / d
+    grow = 1.0 / (1.0 + np.exp(-(t - t_on) / tau))
+    cl = cl_amp * grow * np.sin(2 * np.pi * f * t)
+    cdt = cd_mean + 0.01 * grow * np.cos(4 * np.pi * f * t) + 0.05 * (1 - grow)
+    x0 = (0.5 + ld_mean) * d
+    series = [{"t": float(t[i]), "Cd": float(cdt[i]), "Cl": float(cl[i]), "Fd_N": float(cdt[i] * q_a),
+               "Fl_N": float(cl[i] * q_a), "Fdp_N": float(0.75 * cdt[i] * q_a), "Fdv_N": float(0.25 * cdt[i] * q_a)}
+              for i in range(t.size)]
+    custom = [{"key": "forces_cylinder", "name": "Cylinder", "type": "forces", "series": series, "last": series[-1]}]
+    wave = 0.3 * np.sin(2 * np.pi * f * t)
+    for i, p in enumerate(probes):
+        u0 = float(_wake_ux(p[0], x0, d))
+        rows = [{"t": float(t[k]), "U": [u0 + float(wave[k]), 0.1, 0.0]} for k in range(t.size)]
+        custom.append({"key": f"probes_wake_axis_{i + 1}", "point": p, "last": rows[-1], "series": rows})
+    sh = [{"t": float(t[k]), "U": [1.0, 0.5 * float(np.sin(2 * np.pi * f * t[k])), 0.0]} for k in range(t.size)]
+    custom.append({"key": "probes_shedding_1", "point": [0.02, 0.005, c5.ZM], "last": sh[-1], "series": sh})
+    _write(raw, "monitors", {"monitors": [far], "custom": custom, "balance": balance})
+    um = _wake_ux(xs, x0 + 0.02 * d, d)
+    _write(raw, "sample_umean_line", {"source": "app_sampling", "n_valid": xs.size, "sample_points": pts,
+                                      "UMean_x": um.tolist(), "UMean_y": [0.0] * xs.size, "UMean_z": [0.0] * xs.size})
+    _write(raw, "sample_wake_line", {"source": "app_sampling", "n_valid": xs.size, "sample_points": pts,
+                                     "U_x": um.tolist(), "U_y": [0.1] * xs.size, "U_z": [0.0] * xs.size, "p": p_line})
+    _write(raw, "line_p_wake_line", {"status": 200, "n_valid": xs.size, "values": p_line, "sample_points": pts})
+    _write(raw, "run-status", {"run": {"run_id": "r1", "status": "done", "iteration": float(t_end), "n_procs": 4,
+                                       "started_at": "2026-11-06T10:01:00Z", "finished_at": "2026-11-06T10:11:00Z",
+                                       "residuals": [{"t": float(t[k]), "Ux": 1e-6, "p": 1e-5} for k in range(0, t.size, 50)]}})

@@ -61,6 +61,29 @@ def step_channel(up_mm: float, down_mm: float, step_mm: float, height_mm: float,
     return unify.Shape()
 
 
+def slab_with_hole(x0_mm: float, x1_mm: float, y0_mm: float, y1_mm: float, depth_mm: float, d_mm: float) -> Any:
+    """A box (the fluid) x from ``x0_mm`` to ``x1_mm``, y from ``y0_mm`` to ``y1_mm`` and z from 0 to
+    ``depth_mm``, with a circular cylinder of diameter ``d_mm`` along z through the origin cut out
+    (an external flow round a cylinder): seven faces, the four sides (x = x0 normal -x, x = x1 +x,
+    y = y0 -y, y = y1 +y), the front (z = 0, -z) and the back (z = depth, +z), each with the
+    hole, and the cylinder's wall."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+    r = d_mm / 2.0
+    if not (x0_mm < -r and x1_mm > r and y0_mm < -r and y1_mm > r and depth_mm > 0 and d_mm > 0):
+        raise ValueError("a slab with a hole needs the hole inside it and a positive depth")
+    slab = BRepPrimAPI_MakeBox(gp_Pnt(x0_mm, y0_mm, 0), gp_Pnt(x1_mm, y1_mm, depth_mm)).Shape()
+    # Longer than the slab is deep, so the cut leaves no sliver at either end.
+    rod = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, -depth_mm), gp_Dir(0, 0, 1)), r, 3.0 * depth_mm).Shape()
+    cut = BRepAlgoAPI_Cut(slab, rod)
+    cut.Build()
+    if not cut.IsDone():
+        raise RuntimeError("could not cut the cylinder out of the slab")
+    return cut.Shape()
+
+
 def fix_header_stamp(text: str) -> str:
     """The STEP text without what changes from one write to the next: its FILE_NAME time
     stamp (``FIXED_STAMP``) and the writer's per-process count in the product's name."""

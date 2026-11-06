@@ -1,0 +1,20 @@
+# citation: the 2D computations of the cylinder at Re 100 the reference-data check lists (section 5b), as compiled in arXiv:2303.09262 Table 1, arXiv:2210.00148 Table 2, arXiv:1612.08356 Table I and Legendre, Lauga & Magnaudet (2009), arXiv:0905.0648
+# where: the reference-data check's table 5b, each source's Strouhal number, mean drag coefficient, lift coefficient rms and mean recirculation length at Re 100, as the compilations give them
+# conditions: periodic two-dimensional vortex shedding behind a circular cylinder, Re = U D / nu = 100; empty cells where the compilations give no value
+# kind: numerical
+# confidence: SECONDARY
+# checked: the compilations only; no primary paper read
+# note: Shown beside the compared values, not compared.
+source,st,cd_mean,cl_rms,l_over_d_mean
+Kravchenko,0.164,1.314,0.222,1.45
+Qu et al. (2013),0.165,1.319,0.225,1.41
+Posdziech & Grundmann (2007),0.164,1.325,0.228,
+Sivakumar,0.164,1.325,0.229,
+Mossaz,0.164,1.328,,
+Park et al. (1998),,1.33,,1.405
+Legendre et al. (2009),0.167,1.339,,
+Liu,0.165,1.35,,
+Peng,,1.361,0.235,
+Persillon & Braza,0.165,,,
+Constant,,1.37,,
+Braza,,1.386,,

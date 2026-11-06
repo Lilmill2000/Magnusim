@@ -1,0 +1,16 @@
+# citation: C. H. K. Williamson (1988), "Defining a universal and continuous Strouhal-Reynolds number relationship for the laminar vortex shedding of a circular cylinder", Phys. Fluids 31:2742-2744 (also cited as Williamson (1989), J. Fluid Mech. 206:579-627); J. Park, K. Kwon, H. Choi (1998), "Numerical solutions of flow past a circular cylinder at Reynolds numbers up to 160", KSME Int. J. 12(6):1200-1205; Qu, Norberg, Davidson, Peng & Wang (2013), J. Fluids Struct. 39:347-370
+# where: the reference-data check of 2026-11-04, section 5b, "Reference to use": St 0.164 (Williamson's fit gives 0.1643, his experiment 0.164, 2D numerics 0.164 to 0.167), mean Cd 1.33 (Park et al.; Posdziech & Grundmann 1.325, Qu et al. 1.319), CL rms 0.23 (Qu et al. 0.225, Posdziech & Grundmann 0.228; 0.222 to 0.235), mean L/D 1.41 (Qu et al.; Park et al. 1.405)
+# conditions: periodic two-dimensional (parallel) vortex shedding behind a circular cylinder in a uniform stream at Re = U D / nu = 100; St = f D / U with f the shedding (lift) frequency; Cd = F_x / (0.5 rho U^2 D) per unit span, averaged over whole periods; CL rms the lift coefficient's root-mean-square fluctuation; L the mean recirculation length from the rear stagnation point
+# kind: numerical
+# confidence: SECONDARY
+# checked: Williamson's coefficients as quoted in arXiv:1612.08356 and a JFM paper, his experimental 0.164 via Legendre et al. (2009) Table 2; Park et al.'s and Qu et al.'s values via arXiv:2303.09262 Table 1, arXiv:2205.15886 Table 1 and arXiv:1612.08356 Table I; the primary papers were not read
+# note: Williamson's St is an experiment (and its fit); the other values are 2D computations. The validity range of Williamson's fit (about 49 to 180) is not checked. A 32 D x 16 D box (blockage 6.25 %) against 64 D x 32 D (3.1 %) moved Cd by +3.0 %, CL rms by +7.6 % and St by +2.4 % (arXiv:2303.09262 Table 1, CONFIRMED as published there).
+quantity,value,source
+st,0.164,"C. H. K. Williamson (1988), Phys. Fluids 31:2742-2744 (experiment, and the fit St = -3.3265/Re + 0.1816 + 1.6e-4 Re = 0.1643)"
+cd_mean,1.33,"J. Park, K. Kwon, H. Choi (1998), KSME Int. J. 12(6):1200-1205 (2D computation)"
+cl_rms,0.23,"Qu, Norberg, Davidson, Peng & Wang (2013), J. Fluids Struct. 39:347-370 (0.225), and Posdziech & Grundmann (2007), J. Fluids Struct. 23:479-499, 0.228 (2D computations)"
+l_over_d_mean,1.41,"Qu, Norberg, Davidson, Peng & Wang (2013), J. Fluids Struct. 39:347-370 (2D computation; Park et al. 1.405)"
+cdp_mean,0.99,"J. Park, K. Kwon, H. Choi (1998), KSME Int. J. 12(6):1200-1205, the pressure part of the mean drag (via arXiv:2205.15886 Table 1)"
+cdv_mean,0.34,"J. Park, K. Kwon, H. Choi (1998), KSME Int. J. 12(6):1200-1205, the viscous part of the mean drag (via arXiv:2205.15886 Table 1)"
+cl_amplitude,0.332,"J. Park, K. Kwon, H. Choi (1998), KSME Int. J. 12(6):1200-1205, the lift coefficient's amplitude (via arXiv:1612.08356 Table I)"
+cd_amplitude,0.0091,"J. Park, K. Kwon, H. Choi (1998), KSME Int. J. 12(6):1200-1205, the drag coefficient's fluctuation amplitude"

@@ -248,3 +248,191 @@ def grid_minimum(x: ArrayLike, y: ArrayLike, z: ArrayLike) -> dict[str, float]:
     out["y"] = float(ya[j] + d[1])
     out["value"] = float(c[0] + c[1] * d[0] + c[2] * d[1] + c[3] * d[0] ** 2 + c[4] * d[0] * d[1] + c[5] * d[1] ** 2)
     return out
+
+
+# ---------------------------------------------------------------------- periodic (transient) signals
+#
+# The app has no mean or frequency of a monitor over a time window (the design's gap G8), so a
+# transient case's shedding is read here from the monitor's history: whole periods between the
+# up-crossings of its mean, the window once its amplitude has settled, the means over that
+# window, and the frequency from the spectrum with the mean period as the cross-check. The
+# samples may be unevenly spaced in time (a monitor writes at the first time step after each of
+# its intervals): every mean is a time integral of the piecewise-linear signal.
+
+
+def _window(t: ArrayLike, y: ArrayLike, t0: float, t1: float) -> tuple[np.ndarray, np.ndarray]:
+    """The piecewise-linear signal over ``[t0, t1]``: its samples inside, and the interpolated
+    values at both ends."""
+    ta, ya = arrays(t, y)
+    if ta.size < 2:
+        raise ValueError(f"a window needs at least 2 samples, got {ta.size}")
+    eps = 1e-12 * max(1.0, abs(t0), abs(t1))
+    if not (t1 > t0 and t0 >= ta[0] - eps and t1 <= ta[-1] + eps):
+        raise ValueError(f"the window {t0:g} to {t1:g} is not inside the samples ({ta[0]:g} to {ta[-1]:g})")
+    inner = (ta > t0) & (ta < t1)
+    xs = np.concatenate([[t0], ta[inner], [t1]])
+    ys = np.concatenate([[np.interp(t0, ta, ya)], ya[inner], [np.interp(t1, ta, ya)]])
+    return xs, ys
+
+
+def time_mean(t: ArrayLike, y: ArrayLike, t0: float, t1: float) -> float:
+    """The time mean of ``y`` over ``[t0, t1]``: the trapezoid integral of the piecewise-linear
+    signal over the window's length (unevenly spaced samples weigh as long as they last)."""
+    xs, ys = _window(t, y, t0, t1)
+    return float(np.sum(0.5 * (ys[1:] + ys[:-1]) * np.diff(xs)) / (t1 - t0))
+
+
+def time_rms(t: ArrayLike, y: ArrayLike, t0: float, t1: float, *, about: float | None = None) -> float:
+    """The root-mean-square of ``y - about`` over ``[t0, t1]`` (``about`` the window's time mean
+    when not given: the fluctuation's rms), by the trapezoid rule on the squared samples."""
+    m = time_mean(t, y, t0, t1) if about is None else float(about)
+    xs, ys = _window(t, y, t0, t1)
+    sq = (ys - m) ** 2
+    return float(math.sqrt(np.sum(0.5 * (sq[1:] + sq[:-1]) * np.diff(xs)) / (t1 - t0)))
+
+
+def up_crossings(t: ArrayLike, y: ArrayLike, level: float = 0.0, *, band: float = 0.0) -> np.ndarray:
+    """The times where ``y`` rises through ``level``, each linearly interpolated between the two
+    samples around it. With a ``band`` (> 0) a crossing counts only when the signal was below
+    ``level - band`` before it and reaches ``level + band`` after it (the last rise through the
+    level in between is the crossing), so noise about the level makes no extra crossings."""
+    ta, ya = arrays(t, y)
+    d = ya - float(level)
+    h = abs(float(band))
+    out: list[float] = []
+    armed = h == 0.0
+    cand: float | None = None
+    for i in range(ta.size):
+        if h > 0 and d[i] <= -h:
+            armed, cand = True, None
+            continue
+        if armed and i > 0 and d[i - 1] < 0 <= d[i]:
+            f = -d[i - 1] / (d[i] - d[i - 1])
+            cand = float(ta[i - 1] + f * (ta[i] - ta[i - 1]))
+            if h == 0.0:
+                out.append(cand)
+                cand = None
+                continue
+        if h > 0 and cand is not None and d[i] >= h:
+            out.append(cand)
+            armed, cand = False, None
+    return np.asarray(out, dtype=float)
+
+
+def periods(t: ArrayLike, y: ArrayLike, level: float = 0.0, *, band: float = 0.0) -> list[dict[str, float]]:
+    """The whole periods of ``y`` about ``level``: from each up-crossing to the next, its start
+    ``t0``, end ``t1``, ``period``, highest and lowest value (each refined by the parabola through
+    the extreme sample and its neighbours) and ``amplitude`` (half their difference); ``n`` the
+    samples inside it."""
+    ta, ya = arrays(t, y)
+    tc = up_crossings(ta, ya, level, band=band)
+    out: list[dict[str, float]] = []
+    for a, b in zip(tc[:-1], tc[1:], strict=True):
+        sel = (ta > a) & (ta < b)
+        n = int(sel.sum())
+        row: dict[str, float] = {"t0": float(a), "t1": float(b), "period": float(b - a), "n": float(n)}
+        if n >= 3:
+            hi = extremum(ta[sel], ya[sel], kind="max")["value"]
+            lo = extremum(ta[sel], ya[sel], kind="min")["value"]
+            row.update({"max": hi, "min": lo, "amplitude": 0.5 * (hi - lo)})
+        else:
+            row.update({"max": float("nan"), "min": float("nan"), "amplitude": float("nan")})
+        out.append(row)
+    return out
+
+
+def settled_window(t: ArrayLike, y: ArrayLike, *, rel: float = 0.02, n_check: int = 5,
+                   min_periods: int = 20, tail: float = 0.3, band_frac: float = 0.1) -> dict[str, Any]:
+    """Where a periodic signal (a lift coefficient's history) has settled, and the window of whole
+    periods after it.
+
+    The signal's periods are taken about its mean over the last ``tail`` of its time (then about
+    the window's own mean). Its settled amplitude is the mean of its last ``n_check`` periods'
+    amplitudes; it has settled when those agree within ``rel`` (their spread over that mean),
+    and the window starts at the first period from which every period's amplitude is within
+    ``rel`` of the settled one. ``settled`` is False, with the ``reason`` in words, when the
+    signal hardly moves, has fewer than ``n_check`` periods, has not settled, or leaves fewer than
+    ``min_periods`` whole periods in its window. The window's whole periods are ``periods``;
+    ``t0`` and ``t1`` its start and end; ``period`` its mean period (its length over the count)."""
+    ta, ya = arrays(t, y)
+    out: dict[str, Any] = {"settled": False, "reason": "", "rel": rel, "n_check": n_check, "min_periods": min_periods,
+                           "periods_all": [], "periods": [], "t0": None, "t1": None, "n_periods": 0}
+    if ta.size < 20 or ta[-1] <= ta[0]:
+        out["reason"] = f"only {ta.size} samples"
+        return out
+    t_from = float(ta[0] + (1.0 - tail) * (ta[-1] - ta[0]))
+    level = time_mean(ta, ya, t_from, float(ta[-1]))
+    last = ya[ta >= t_from]
+    swing = 0.5 * float(last.max() - last.min()) if last.size else 0.0
+    if not swing > 1e-9 * max(1.0, abs(level)):
+        out["reason"] = "the signal does not oscillate over the last part of the run"
+        return out
+
+    def judge(lv: float) -> dict[str, Any]:
+        pers = [p for p in periods(ta, ya, lv, band=band_frac * swing) if math.isfinite(p["amplitude"])]
+        res: dict[str, Any] = {"level": lv, "periods_all": pers, "periods": []}
+        if len(pers) < n_check:
+            res["reason"] = f"only {len(pers)} whole periods in the run: no settled oscillation"
+            return res
+        amps = np.asarray([p["amplitude"] for p in pers], dtype=float)
+        a_set = float(amps[-n_check:].mean())
+        spread = float(amps[-n_check:].max() - amps[-n_check:].min()) / a_set
+        res.update({"amplitude": a_set, "spread_last": spread})
+        if spread > rel:
+            res["reason"] = (f"its amplitude still changes by {100 * spread:.2g} % over the last {n_check} periods "
+                             f"(settled means within {100 * rel:g} %)")
+            return res
+        off = np.abs(amps - a_set) / a_set > rel
+        k0 = int(np.nonzero(off)[0][-1]) + 1 if off.any() else 0
+        res.update({"start_index": k0, "periods": pers[k0:]})
+        return res
+
+    res = judge(level)
+    if res["periods"]:
+        win = res["periods"]
+        res2 = judge(time_mean(ta, ya, win[0]["t0"], win[-1]["t1"]))
+        if res2["periods"]:
+            res = res2
+    out.update({k: v for k, v in res.items() if k in ("level", "periods_all", "periods", "amplitude", "spread_last",
+                                                      "start_index", "reason")})
+    win = out["periods"]
+    if win:
+        out.update({"t0": win[0]["t0"], "t1": win[-1]["t1"], "n_periods": len(win)})
+        out["period"] = (out["t1"] - out["t0"]) / len(win)
+        out["period_spread"] = float(np.ptp([p["period"] for p in win])) / out["period"]
+        if len(win) < min_periods:
+            out["reason"] = (f"only {len(win)} whole periods after the transient (from t = {out['t0']:.4g}); "
+                             f"at least {min_periods} are asked for")
+        else:
+            out["settled"] = True
+            out["reason"] = ""
+    return out
+
+
+def spectrum_peak(t: ArrayLike, y: ArrayLike, t0: float, t1: float, *, pad: int = 8) -> dict[str, Any]:
+    """The frequency of the strongest peak of ``y``'s spectrum over ``[t0, t1]``: the signal
+    resampled evenly at its median sample spacing, its mean taken off, a Hann window, zero
+    padded ``pad`` times, and the peak refined by a parabola through the logarithms of the three
+    magnitudes around the highest one. Also the bin spacing ``df`` and the (one-sided) magnitude
+    spectrum ``freq``, ``mag`` (normalised to the peak)."""
+    ta, ya = arrays(t, y)
+    inside = ta[(ta >= t0) & (ta <= t1)]
+    if inside.size < 8:
+        raise ValueError(f"a spectrum needs at least 8 samples in its window, got {inside.size}")
+    dt = float(np.median(np.diff(inside)))
+    n = int(math.floor((t1 - t0) / dt)) + 1
+    tu = t0 + dt * np.arange(n)
+    yu = np.interp(tu, ta, ya)
+    yu = yu - yu.mean()
+    m = int(pad) * n
+    mag = np.abs(np.fft.rfft(yu * np.hanning(n), n=m))
+    f = np.fft.rfftfreq(m, dt)
+    k = int(np.argmax(mag[1:])) + 1
+    f_peak = float(f[k])
+    if 0 < k < mag.size - 1 and mag[k - 1] > 0 and mag[k + 1] > 0:
+        a, b, c = (math.log(float(mag[i])) for i in (k - 1, k, k + 1))
+        den = a - 2.0 * b + c
+        if den < 0:
+            f_peak += 0.5 * (a - c) / den * float(f[1] - f[0])
+    return {"f": f_peak, "df": float(f[1] - f[0]), "dt": dt, "n": n, "pad": int(pad),
+            "freq": f, "mag": mag / float(mag[k])}

@@ -9,7 +9,9 @@ otherwise it says where it stopped (``setup_failed``, ``mesh_failed``, ``layers_
 ``solve_failed``, ``not_settled``, ``extract_failed``), with the app's words in
 ``status_detail``. A steady run that reached its residual targets is settled; one that stopped
 at its iteration limit is settled only when the case's monitor histories (``SETTLE``) moved
-less than ``SETTLE_DRIFT`` over its last 10 % of iterations.
+less than ``SETTLE_DRIFT`` over its last 10 % of iterations. A transient run is not settled when
+its case says the signal it reads never settled within the run (``not_settled`` in what the
+case measured, with the reason: case 5's vortex shedding); it then gives no values.
 """
 
 from __future__ import annotations
@@ -330,10 +332,17 @@ def run_section(raw: Raw, plan: dict[str, Any], drv: dict[str, Any] | None) -> d
     conv = converged_at(log_end)
     iterations = run.get("iteration") or run.get("last_saved_iteration")
     residuals = [r for r in (run.get("residuals") or []) if isinstance(r, dict)]
+    transient = (plan.get("run") or {}).get("transient")
     return {
         "status": run.get("status"),
         "iterations": iterations,
-        "end_time_set": (plan.get("run") or {}).get("endTime"),
+        # A transient run's end time (s) is its run settings' own; a steady run's limit is endTime.
+        "transient": bool(transient),
+        "end_time_set": (transient or {}).get("end_time") if transient else (plan.get("run") or {}).get("endTime"),
+        # A transient run: the time it reached (s) and its time steps, as its status gives them.
+        **({"sim_time": _f(run.get("sim_time") or (run.get("progress") or {}).get("sim_time")
+                           or (run.get("progress") or {}).get("time")),
+            "time_steps": run.get("n_steps") or (run.get("progress") or {}).get("n_steps")} if transient else {}),
         "converged": conv is not None,
         "converged_at": conv,
         "residuals_final": residuals[-1] if residuals else None,
@@ -443,7 +452,10 @@ def evaluate_dir(run_dir: Path, *, failed: str = "") -> dict[str, Any]:
     if status == "ok":
         measured = case.evaluate(plan, raw)
         missing = [q["key"] for q in measured["quantities"] if q["value"] is None]
-        if missing:
+        # A transient run whose signal never settled (the case says why) gives no values.
+        if measured.get("not_settled"):
+            status, detail = "not_settled", str(measured["not_settled"])
+        elif missing:
             status, detail = "extract_failed", f"no value for {', '.join(missing)}: " + "; ".join(measured["warnings"])
         verdict = (run["health"] or {}).get("verdict")
         if status == "ok" and verdict == "failed":

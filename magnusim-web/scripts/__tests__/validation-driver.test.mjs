@@ -18,8 +18,10 @@ import {
   pointsParam,
   quantityLine,
   readBackProblems,
+  resultControlsWithBcs,
   runOf,
   runProgress,
+  runSettingsSent,
   sharedMeshOf,
 } from '../../validation/e2e/driver.mjs';
 import { parseValidationArgs } from '../validation-run.mjs';
@@ -73,6 +75,28 @@ test('the route parameters and the answers it reads', () => {
   assert.equal(runProgress({ iteration: 42 }), '42');
   assert.equal(runProgress({ progress: { time: 0.5 } }), '0.5');
   assert.equal(runProgress({}), '');
+});
+
+test('a Forces monitor on a BC gets that BC\'s id; a transient run reads back its transient block', () => {
+  const controls = [
+    { id: 'rc-forces', name: 'Cylinder', monitor_type: 'forces', boundaries: ['@bc:Cylinder', '@walls'] },
+    { id: 'rc-wake', name: 'Wake axis', monitor_type: 'probe', points: [[0.01, 0, 0]] },
+  ];
+  const { controls: out, missing } = resultControlsWithBcs(controls, { Cylinder: 'bc-7', 'Far field': 'bc-1' });
+  assert.deepEqual(missing, []);
+  assert.deepEqual(out[0].boundaries, ['bc-7', '@walls']);
+  assert.equal(out[1], controls[1]);
+  // The plan's record is not changed; a BC the run has no id of is named.
+  assert.deepEqual(controls[0].boundaries, ['@bc:Cylinder', '@walls']);
+  assert.deepEqual(resultControlsWithBcs(controls, {}).missing, ['Cylinder']);
+  assert.deepEqual(resultControlsWithBcs(undefined, {}), { controls: [], missing: [] });
+  // Steady: the iteration limit, write interval and cores; transient: its block as sent.
+  assert.deepEqual(runSettingsSent({ name: 'V', endTime: 3000, writeInterval: 3000, cores: 4, result_controls: [] }), { endTime: 3000, writeInterval: 3000, cores: 4 });
+  const transient = { end_time: 3, write_count: 50, time_step_mode: 'adjustable', max_co: 1, average_from: 1.5 };
+  const sent = runSettingsSent({ name: 'V', cores: 8, transient, result_controls: [] });
+  assert.deepEqual(sent, { cores: 8, transient });
+  assert.deepEqual(readBackProblems(sent, { cores: 8, transient: { ...transient, write_interval: 0.06, delta_t: 1e-4 } }), []);
+  assert.deepEqual(readBackProblems(sent, { cores: 8, transient: { ...transient, write_count: 30 } }), ['transient.write_count: sent 50, stored 30']);
 });
 
 test('npm run test:validation: its options become the suite\'s gate and knobs', () => {

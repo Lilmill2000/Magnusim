@@ -1,0 +1,19 @@
+# citation: the steady cylinder results at Re 20 and 40 the reference-data check lists (section 5a): Fornberg (1980), J. Fluid Mech. 98:819-855; S. C. R. Dennis, G.-Z. Chang (1970), J. Fluid Mech. 42:471-489; Linnick & Fasel (2005), J. Comput. Phys. 204:157-192; Taira & Colonius (2007), J. Comput. Phys. 225:2118-2137; Gautier, Biau & Lamballais (2013), Computers & Fluids 75:103-111; M. Coutanceau, R. Bouard (1977), J. Fluid Mech. 79:231-256
+# where: the reference-data check's table 5a, each source's drag coefficient, recirculation length and separation angle (measured from the rear stagnation point) at Re 20 and 40, as the compilations give them
+# conditions: steady two-dimensional flow past a circular cylinder; Re = U D / nu; empty cells where a source gives no value
+# kind: numerical
+# confidence: SECONDARY
+# checked: via arXiv:2205.15886 Table 1 (Fornberg), Legendre et al. (2009) Table 2, arXiv:1906.05387 Table 5 and Gautier et al. Table 1 (Dennis & Chang), arXiv:2509.14713 Table 2 (Linnick & Fasel, Taira & Colonius, Dennis & Chang's angles); Gautier et al.'s own row read in arXiv:1310.6641 (CONFIRMED); Coutanceau & Bouard's measured lengths are the wall-confinement-corrected ones (some compilations list 0.73 and 1.89)
+# note: Shown beside the compared values, not compared. Coutanceau & Bouard's row is an experiment.
+source,re,cd,l_over_d,theta_s_deg
+Fornberg (1980),20,2.000,0.91,
+Dennis & Chang (1970),20,2.045,0.94,43.7
+Linnick & Fasel (2005),20,2.06,0.93,43.5
+Taira & Colonius (2007),20,2.06,0.94,43.3
+Coutanceau & Bouard (1977),20,,0.93,45.0
+Fornberg (1980),40,1.498,2.24,55.6
+Dennis & Chang (1970),40,1.522,2.345,53.8
+Linnick & Fasel (2005),40,1.54,2.28,53.6
+Taira & Colonius (2007),40,1.54,2.30,53.7
+Gautier et al. (2013),40,1.4931,2.2360,53.61
+Coutanceau & Bouard (1977),40,,2.13,53.8

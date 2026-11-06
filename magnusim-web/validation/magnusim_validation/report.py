@@ -120,6 +120,18 @@ def run_time_text(res: dict[str, Any]) -> str:
     return "-" if t is None else f"{float(t):.0f} s"
 
 
+def iterations_text(r: dict[str, Any]) -> str:
+    """How far a run went: a steady run's iterations; a transient run's time reached (s) and,
+    when its status gives them, its time steps."""
+    if r.get("transient"):
+        t = r.get("sim_time")
+        if t is None:
+            return "-"
+        steps = r.get("time_steps")
+        return f"t = {num(t, 4)} s" + (f" ({cells_text(steps)} steps)" if steps else "")
+    return str(r.get("iterations")) if r.get("iterations") is not None else "-"
+
+
 def variant_label(case: Any, res: dict[str, Any]) -> str:
     return str(case.VARIANT_LABELS.get(res["variant"], res["variant"]))
 
@@ -186,7 +198,7 @@ only when GitHub Pages is turned on for `docs/` and the branch is pushed.
 
 
 # The cases the design plans after the ones built so far.
-PLANNED = "the cylinder and the sphere"
+PLANNED = "the sphere"
 
 
 def so_far_text(results: list[dict[str, Any]]) -> str:
@@ -210,7 +222,7 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
         out.append("No results yet.\n")
         return "\n".join(out).rstrip() + "\n"
     out.append("Environment: " + "; ".join(env_lines(results)) + ".\n")
-    out.append("| Case | Run | Status | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations | Solve time | Run health |")
+    out.append("| Case | Run | Status | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations / time | Solve time | Run health |")
     out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for res in results:
         case = cases.get(res["case"])
@@ -220,7 +232,7 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
             out.append(
                 f"| {cell(case.TITLE)} | {cell(variant_label(case, res))} | {status_text(res)} | {cell(q['label'])} | "
                 f"{num(q['reference']['value'])} | {num(q['value'], 5)} | {err_text(q)} | {band_text(q)} | "
-                f"{cells_text(m.get('n_cells'))} | {cell(layers_text(m))} | {r.get('iterations') if r.get('iterations') is not None else '-'} | "
+                f"{cells_text(m.get('n_cells'))} | {cell(layers_text(m))} | {iterations_text(r)} | "
                 f"{run_time_text(res)} | {health_text(r)} |"
             )
     out.append("")
@@ -285,11 +297,18 @@ def variant_facts(case: Any, res: dict[str, Any]) -> list[str]:
             else f"did not reach its residual targets within {r.get('end_time_set')} iterations")
     settle = r.get("settle") or {}
     drifts = [h for h in settle.get("histories") or [] if h.get("drift") is not None]
+    if r.get("transient"):
+        # A transient run goes for its end time: how far it got in time, and in how many steps.
+        steps = r.get("time_steps")
+        head = (f"Run: {num(r.get('sim_time'), 4)} s of flow of the {num(r.get('end_time_set'), 4)} s set"
+                + (f", {cells_text(steps)} time steps" if steps else ""))
+    else:
+        head = (f"Run: {r.get('iterations') if r.get('iterations') is not None else '-'} iterations, {conv}"
+                + (" (over its last 10 % of iterations: " + ", ".join(
+                    str(h["label"]) + " moved " + num(100 * h["drift"], 2) + " %" for h in drifts) + ")"
+                   if drifts and not settle.get("converged") else ""))
     out.append(
-        f"Run: {r.get('iterations') if r.get('iterations') is not None else '-'} iterations, {conv}"
-        + (" (over its last 10 % of iterations: " + ", ".join(
-            str(h["label"]) + " moved " + num(100 * h["drift"], 2) + " %" for h in drifts) + ")"
-           if drifts and not settle.get("converged") else "")
+        head
         + f"; solve {run_time_text(res)} on {r.get('n_procs') or r.get('cores_set') or '-'} ranks (Cores {r.get('cores_set')}); "
         f"run health {health_text(r)}"
         + ("" if not (r.get("health") or {}).get("findings") else ": " + "; ".join(

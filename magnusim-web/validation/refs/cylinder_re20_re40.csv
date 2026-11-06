@@ -1,0 +1,12 @@
+# citation: Fornberg (1980), J. Fluid Mech. 98:819-855; S. C. R. Dennis, G.-Z. Chang (1970), "Numerical solutions for steady flow past a circular cylinder at Reynolds numbers up to 100", J. Fluid Mech. 42:471-489; M. Coutanceau, R. Bouard (1977), J. Fluid Mech. 79:231-256; Gautier, Biau & Lamballais (2013), "A reference solution of the flow over a circular cylinder at Re = 40", Computers & Fluids 75:103-111 (arXiv:1310.6641)
+# where: the reference-data check of 2026-11-04, section 5a, "Reference to use": at Re 20 Cd 2.02 (between Fornberg's 2.000 and Dennis & Chang's 2.045) and L/D 0.93 (the sources give 0.91 to 0.94: Coutanceau & Bouard's measured 0.93, Fornberg 0.91, Dennis & Chang 0.94); at Re 40 Cd 1.50 (Fornberg 1.498, Gautier et al. 1.4931, Posdziech & Grundmann 1.4942) and L/D 2.24 (Fornberg 2.24, Gautier et al. 2.2360)
+# conditions: steady two-dimensional flow past a circular cylinder in an unbounded uniform stream; Re = U D / nu; Cd = F_x / (0.5 rho U^2 D) per unit span; L the recirculation length from the rear stagnation point to the closure point on the axis
+# kind: numerical
+# confidence: SECONDARY
+# checked: Fornberg's values via arXiv:2205.15886 Table 1, Dennis & Chang's via Legendre et al. (2009) Table 2 and arXiv:1906.05387 Table 5, Coutanceau & Bouard's via compilations (SECONDARY); Gautier et al.'s Table 2 read in arXiv:1310.6641 (CONFIRMED; its journal volume and pages from memory)
+# note: Steady flow loses its stability near Re 47 (Legendre et al. 2009: 47.5), so Re 20 and 40 are steady. Gautier et al. put the literature at Re 40 between 2.13 and 2.35 in L/D and 1.48 and 1.62 in Cd; finite-box immersed-boundary results sit about 3 % above the large-domain values.
+re,quantity,value,source
+20,cd,2.02,"Fornberg (1980), J. Fluid Mech. 98:819-855 (2.000), and S. C. R. Dennis, G.-Z. Chang (1970), J. Fluid Mech. 42:471-489 (2.045)"
+20,l_over_d,0.93,"Fornberg (1980), J. Fluid Mech. 98:819-855 (0.91), and S. C. R. Dennis, G.-Z. Chang (1970), J. Fluid Mech. 42:471-489 (0.94); between them M. Coutanceau, R. Bouard (1977), J. Fluid Mech. 79:231-256 (measured, 0.93) and Linnick & Fasel (2005) (0.93)"
+40,cd,1.50,"Fornberg (1980), J. Fluid Mech. 98:819-855 (1.498), and Gautier, Biau & Lamballais (2013), Computers & Fluids 75:103-111 (1.4931, CONFIRMED)"
+40,l_over_d,2.24,"Fornberg (1980), J. Fluid Mech. 98:819-855 (2.24), and Gautier, Biau & Lamballais (2013), Computers & Fluids 75:103-111 (2.2360, CONFIRMED)"

@@ -59,16 +59,18 @@ class Table:
         return hits[0]
 
     def reference(self, value: float, *, unit: str = "", where: str = "", conditions: str = "",
-                  note: str = "") -> Reference:
+                  note: str = "", citation: str = "") -> Reference:
         """A Reference for one of the table's values, carrying the table's citation, where
-        (with the file's name, so the value can be traced), conditions, kind and confidence."""
+        (with the file's name, so the value can be traced), conditions, kind and confidence.
+        A table whose rows come from different sources gives the row's own ``citation`` (its
+        header's citation names them all)."""
         bits = [self.meta.get("note", ""), note]
         return Reference(
             value=float(value),
             unit=unit,
             kind=self.meta["kind"],
             confidence=self.meta["confidence"],
-            citation=self.meta["citation"],
+            citation=citation.strip() or self.meta["citation"],
             where=f"{where or self.meta['where']} (validation/refs/{self.name})",
             conditions=conditions or self.meta["conditions"],
             note=" ".join(b.strip() for b in bits if b and b.strip()),

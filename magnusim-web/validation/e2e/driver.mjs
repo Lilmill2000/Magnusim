@@ -136,6 +136,38 @@ export function sharedMeshOf(plan, source) {
   return { ids: { project_id: ids.project_id, geometry_id: ids.geometry_id, simulation_id: ids.simulation_id, mesh_id: ids.mesh_id, mesh_case_dir: ids.mesh_case_dir }, variant: from.variant };
 }
 
+/**
+ * The plan's result controls with each `"@bc:<name>"` among a control's boundaries (a Forces
+ * monitor on a BC) turned into that BC's id, as the Monitors dialog stores it. `bcIds` maps the
+ * plan's BC names to the ids their saves answered; `missing` names the BCs it has no id of.
+ */
+export function resultControlsWithBcs(controls, bcIds) {
+  const missing = [];
+  const out = (controls || []).map((rc) => {
+    if (!Array.isArray(rc.boundaries)) return rc;
+    const boundaries = rc.boundaries.map((b) => {
+      const m = /^@bc:(.+)$/.exec(String(b));
+      if (!m) return b;
+      const id = bcIds && bcIds[m[1]];
+      if (!id) missing.push(m[1]);
+      return id || b;
+    });
+    return { ...rc, boundaries };
+  });
+  return { controls: out, missing };
+}
+
+/**
+ * What a run's read-back compares of the plan's run settings: a steady run's iteration limit,
+ * write interval and cores; a transient run's cores and its transient block (end time, frames,
+ * time step, scheme, correctors, averaging) as sent.
+ */
+export function runSettingsSent(run) {
+  const r = run || {};
+  if (r.transient && typeof r.transient === 'object') return { cores: r.cores, transient: { ...r.transient } };
+  return { endTime: r.endTime, writeInterval: r.writeInterval, cores: r.cores };
+}
+
 /** The iteration (steady) or time (transient) a run has reached, as text. */
 export function runProgress(run) {
   if (!run) return '';
@@ -531,18 +563,19 @@ export async function runPlan({ request, dir, webRoot, log = console.log, meshOn
     ids.run_id = String(run.body.run_id || run.body.run?.id || run.body.run?.run_id || '');
     if (!ids.run_id) fail(`no run id in ${JSON.stringify(run.body).slice(0, 300)}`);
     const rid = ids.run_id;
-    const runSettings = { ...plan.run };
+    // A Forces monitor names its BC by the id its save answered (the Monitors dialog's record).
+    const { controls, missing } = resultControlsWithBcs(plan.run.result_controls, ids.bcs || {});
+    if (missing.length) fail(`no BC id for the result controls' ${missing.join(', ')}`);
+    const runSettings = { ...plan.run, result_controls: controls };
     delete runSettings.name;
     await postJson('/api/run/update', { project_id: pid, simulation_id: sid, run_id: rid, ...runSettings });
     const runDoc = runOf((await getJson('/api/run/status', { project_id: pid, simulation_id: sid, run_id: rid })).body, rid);
     save('run-settings', runDoc || {});
-    const runProblems = readBackProblems(
-      { endTime: plan.run.endTime, writeInterval: plan.run.writeInterval, cores: plan.run.cores, mesh_id: mid },
-      runDoc || {},
-    );
+    const runProblems = readBackProblems({ ...runSettingsSent(plan.run), mesh_id: mid }, runDoc || {});
     const rcs = (runDoc && runDoc.result_controls) || [];
-    for (const rc of plan.run.result_controls || []) {
-      if (!rcs.some((x) => x.id === rc.id && JSON.stringify(x.points || null) === JSON.stringify(rc.points || null))) runProblems.push(`result control ${rc.name}: not saved as sent`);
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    for (const rc of controls) {
+      if (!rcs.some((x) => x.id === rc.id && same(x.points, rc.points) && same(x.boundaries, rc.boundaries))) runProblems.push(`result control ${rc.name}: not saved as sent`);
     }
     if (runProblems.length) fail(`the run settings were not saved as sent: ${runProblems.join('; ')}`);
 

@@ -16,9 +16,15 @@ from magnusim_validation.extract import (
     interp_at,
     last_drift,
     linear_fit,
+    periods,
     rms,
+    settled_window,
     sign_changes,
+    spectrum_peak,
     stream_function,
+    time_mean,
+    time_rms,
+    up_crossings,
     window_mean,
 )
 
@@ -154,3 +160,108 @@ def test_the_stream_function_and_its_minimum():
                                             pytest.approx(-0.05, abs=1e-12))
     with pytest.raises(ValueError):
         stream_function(x, y, u[:, :-1])
+
+
+# ------------------------------------------------------------------- periodic (transient) signals
+
+def _uneven_times(t_end: float, dt: float, seed: int = 3) -> np.ndarray:
+    """Sample times as a transient monitor writes them: about every ``dt``, each at the first time
+    step after its interval (so jittered by up to a fifth of ``dt``)."""
+    rng = np.random.default_rng(seed)
+    base = np.arange(0.0, t_end, dt)
+    return np.unique(np.clip(base + rng.uniform(0.0, 0.2 * dt, base.size), 0.0, t_end))
+
+
+def _shedding(t: np.ndarray, *, f: float = 16.4, amp: float = 0.33, tau: float = 0.25, t_on: float = 0.6,
+              level: float = 0.0) -> np.ndarray:
+    """A lift coefficient that grows from almost nothing and settles: amplitude amp / (1 +
+    exp(-(t - t_on) / tau)), at frequency ``f``, about ``level``."""
+    return level + amp / (1.0 + np.exp(-(t - t_on) / tau)) * np.sin(2 * np.pi * f * t + 0.3)
+
+
+def test_time_means_of_unevenly_sampled_signals_weigh_each_sample_by_its_time():
+    t = _uneven_times(1.0, 0.001)
+    # A line's mean over any window is its middle's value; a sine's over whole periods its level.
+    assert time_mean(t, 2.0 + 3.0 * t, 0.2, 0.8) == pytest.approx(2.0 + 3.0 * 0.5, rel=1e-12)
+    f = 10.0
+    y = 1.5 + 0.4 * np.sin(2 * np.pi * f * t)
+    assert time_mean(t, y, 0.1, 0.9) == pytest.approx(1.5, abs=2e-5)
+    assert time_rms(t, y, 0.1, 0.9) == pytest.approx(0.4 / math.sqrt(2.0), rel=1e-4)
+    assert time_rms(t, y, 0.1, 0.9, about=0.0) == pytest.approx(math.sqrt(1.5**2 + 0.08), rel=1e-4)
+    # Clustered samples do not pull the mean: half the samples bunched in the first tenth.
+    tc = np.concatenate([np.linspace(0.0, 0.1, 5000), np.linspace(0.1, 1.0, 100)[1:]])
+    assert time_mean(tc, tc, 0.0, 1.0) == pytest.approx(0.5, rel=1e-9)
+    assert np.mean(tc) < 0.2
+    with pytest.raises(ValueError):
+        time_mean(t, y, 0.5, 2.0)
+
+
+def test_up_crossings_and_whole_periods_ignore_noise_about_the_level():
+    t = _uneven_times(1.0, 0.0005)
+    f = 12.5
+    clean = np.sin(2 * np.pi * f * t)
+    tc = up_crossings(t, clean)
+    assert tc.size == 12 and np.allclose(np.diff(tc), 1.0 / f, atol=2e-6)
+    # Noise of 5 % of the amplitude makes extra crossings, unless a band holds them off.
+    noisy = clean + 0.05 * np.random.default_rng(7).standard_normal(t.size)
+    assert up_crossings(t, noisy).size > 12
+    tn = up_crossings(t, noisy, band=0.2)
+    assert tn.size == 12 and np.allclose(np.diff(tn), 1.0 / f, atol=2e-3)
+    pers = periods(t, clean, band=0.1)
+    assert len(pers) == 11
+    assert all(abs(p["amplitude"] - 1.0) < 1e-4 and abs(p["period"] - 0.08) < 1e-5 for p in pers)
+    assert all(p["n"] > 150 for p in pers)
+
+
+def test_the_settled_window_starts_where_the_amplitude_has_settled():
+    """A shedding signal growing from almost nothing to 0.33 (half-way at t = 0.6 s): its window
+    starts once every period's amplitude is within 2 % of the settled one, holds whole periods
+    only, and its period and spectrum give the frequency."""
+    f, tau, t_on, amp = 16.4, 0.12, 0.6, 0.33
+    t = _uneven_times(3.0, 0.0012)
+    y = _shedding(t, f=f, amp=amp, tau=tau, t_on=t_on, level=0.004)
+    w = settled_window(t, y)
+    assert w["settled"] and w["reason"] == ""
+    # The amplitude is within 2 % of its final value from t_on + tau ln(1/0.02 - 1) on.
+    t_in = t_on + tau * math.log(1.0 / 0.02 - 1.0)
+    assert t_in - 1.0 / f < w["t0"] < t_in + 1.5 / f
+    assert all(abs(p["amplitude"] / amp - 1.0) <= 0.02 for p in w["periods"])
+    assert w["n_periods"] >= 20 and w["t1"] <= 3.0 and w["t1"] > 3.0 - 1.0 / f
+    assert w["period"] == pytest.approx(1.0 / f, rel=2e-4)
+    assert w["amplitude"] == pytest.approx(amp, rel=2e-3) and w["level"] == pytest.approx(0.004, abs=2e-3)
+    sp = spectrum_peak(t, y, w["t0"], w["t1"])
+    assert sp["f"] == pytest.approx(f, rel=1e-3)
+    assert sp["df"] == pytest.approx(1.0 / (8 * (w["t1"] - w["t0"])), rel=0.01)
+    assert sp["mag"].max() == pytest.approx(1.0)
+    # The means over the window's whole periods: the level, and the rms of a sine.
+    assert time_mean(t, y, w["t0"], w["t1"]) == pytest.approx(0.004, abs=5e-5)
+    assert time_rms(t, y, w["t0"], w["t1"]) == pytest.approx(amp / math.sqrt(2.0), rel=3e-3)
+
+
+def test_a_signal_that_has_not_settled_says_why():
+    t = _uneven_times(3.0, 0.0012)
+    # Still growing at the end: its last 5 periods' amplitudes differ by more than 2 %.
+    growing = settled_window(t, _shedding(t, tau=0.8, t_on=2.0))
+    assert not growing["settled"] and "still changes" in growing["reason"] and growing["periods"] == []
+    # Settled too late: fewer than 20 whole periods after the transient.
+    late = settled_window(t, _shedding(t, tau=0.05, t_on=2.2))
+    assert not late["settled"] and "whole periods after the transient" in late["reason"]
+    assert 5 <= late["n_periods"] < 20
+    # No oscillation at all (a steady wake), or too few periods.
+    flat = settled_window(t, 1e-12 * np.ones_like(t))
+    assert not flat["settled"] and "does not oscillate" in flat["reason"]
+    short = settled_window(t, np.sin(2 * np.pi * 1.0 * t))
+    assert not short["settled"] and "whole periods in the run" in short["reason"]
+    assert not settled_window(t[:10], t[:10])["settled"]
+    # A smaller window is enough when asked.
+    assert settled_window(t, _shedding(t, tau=0.05, t_on=2.2), min_periods=5)["settled"]
+
+
+def test_the_spectrum_peak_finds_the_frequency_between_its_bins():
+    t = _uneven_times(2.0, 0.001)
+    for f in (9.73, 16.4, 31.1):
+        y = 0.2 + np.sin(2 * np.pi * f * t) + 0.3 * np.sin(2 * np.pi * 2 * f * t)
+        sp = spectrum_peak(t, y, 0.1, 1.9)
+        assert sp["f"] == pytest.approx(f, rel=1e-3)
+    with pytest.raises(ValueError):
+        spectrum_peak(t, t, 0.0, 0.003)

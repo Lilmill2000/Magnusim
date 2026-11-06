@@ -93,7 +93,7 @@ def cells(case_dir: Path, time: str, fields: list[str], *, box: list[list[float]
 def patch(case_dir: Path, time: str, patch_name: str, field: str, *,
           box: list[list[float]] | None = None) -> dict[str, Any]:
     """A field the run saved on one patch (``<time>/<field>``'s boundary values) on the faces
-    whose centres lie in ``box``: face centres, areas and the field's values."""
+    whose centres lie in ``box``: face centres (``x``, ``y``, ``z``), areas and the field's values."""
     import numpy as np
     import pyvista as pv
 
@@ -127,6 +127,8 @@ def patch(case_dir: Path, time: str, patch_name: str, field: str, *,
         "time": str(time),
         "n": int(keep.sum()),
         "x": [_round(v) for v in centres[keep, 0].tolist()],
+        "y": [_round(v) for v in centres[keep, 1].tolist()],
+        "z": [_round(v) for v in centres[keep, 2].tolist()],
         "area": [_round(v) for v in area[keep].tolist()],
     }
     if arr.ndim == 1:

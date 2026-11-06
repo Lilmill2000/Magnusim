@@ -31,13 +31,18 @@ def test_a_table_needs_its_citation_where_conditions_kind_and_confidence():
         parse(HEAD + "x,v\n1\n")
     with pytest.raises(KeyError):
         t.column("y")
+    # A table of several sources gives a row's own citation; its header names them all.
+    own = t.reference(1.25, citation="B. Other (1901), J. 2:3-4")
+    assert own.citation == "B. Other (1901), J. 2:3-4" and own.confidence == "SECONDARY"
+    assert t.reference(1.25, citation="  ").citation == "A. Author (1900), J. 1:1-2"
 
 
 def test_every_committed_table_reads():
     names = sorted(p.name for p in REFS.glob("*.csv"))
     assert names == ["armaly_1983_fig14_x1.csv", "bfs_re800_scatter.csv", "botella_peyret_1998_extrema.csv",
-                     "gartling_1990_re800.csv", "ghia_1982_table1_u.csv", "ghia_1982_table2_v.csv",
-                     "marchi_2009_vortex.csv"]
+                     "cylinder_re100.csv", "cylinder_re100_scatter.csv", "cylinder_re20_re40.csv",
+                     "cylinder_steady_scatter.csv", "gartling_1990_re800.csv", "ghia_1982_table1_u.csv",
+                     "ghia_1982_table2_v.csv", "marchi_2009_vortex.csv"]
     for name in names:
         assert read(name).rows
 
@@ -73,3 +78,27 @@ def test_the_step_tables_hold_the_reference_datas_values():
     assert len(s.rows) == 10 and s.meta["confidence"] == "SECONDARY"
     assert (min(s.column("xr_over_s")), max(s.column("xr_over_s"))) == (11.48, 12.20)
     assert s.row(source="Erturk (2008)")["xr_over_s"] == 11.834
+
+
+def test_the_cylinder_tables_hold_the_reference_datas_values():
+    s = read("cylinder_re20_re40.csv")
+    assert (s.meta["kind"], s.meta["confidence"]) == ("numerical", "SECONDARY") and "section 5a" in s.meta["where"]
+    assert s.value(re=20, quantity="cd") == 2.02 and s.value(re=20, quantity="l_over_d") == 0.93
+    assert s.value(re=40, quantity="cd") == 1.50 and s.value(re=40, quantity="l_over_d") == 2.24
+    assert all(name in s.meta["citation"] for name in ("Fornberg (1980)", "Dennis", "Coutanceau", "Gautier"))
+    # Each value names its own sources.
+    assert "Dennis" in s.row(re=20, quantity="cd")["source"] and "Coutanceau" in s.row(re=20, quantity="l_over_d")["source"]
+    assert all("Gautier" in s.row(re=40, quantity=q)["source"] for q in ("cd", "l_over_d"))
+    sc = read("cylinder_steady_scatter.csv")
+    assert sc.row(source="Gautier et al. (2013)", re=40)["cd"] == 1.4931
+    assert sc.row(source="Fornberg (1980)", re=20)["cd"] == 2.0 and sc.row(source="Dennis & Chang (1970)", re=40)["l_over_d"] == 2.345
+    h = read("cylinder_re100.csv")
+    assert h.meta["confidence"] == "SECONDARY" and "section 5b" in h.meta["where"]
+    want = {"st": 0.164, "cd_mean": 1.33, "cl_rms": 0.23, "l_over_d_mean": 1.41, "cdp_mean": 0.99, "cdv_mean": 0.34,
+            "cl_amplitude": 0.332, "cd_amplitude": 0.0091}
+    assert {r["quantity"]: r["value"] for r in h.rows} == want
+    assert "Williamson (1988)" in h.row(quantity="st")["source"] and "Park" in h.row(quantity="cd_mean")["source"]
+    assert "Qu" in h.row(quantity="cl_rms")["source"] and "Qu" in h.row(quantity="l_over_d_mean")["source"]
+    hs = read("cylinder_re100_scatter.csv")
+    st = [v for v in hs.column("st") if v is not None]
+    assert (min(st), max(st)) == (0.164, 0.167) and hs.row(source="Qu et al. (2013)")["cl_rms"] == 0.225
