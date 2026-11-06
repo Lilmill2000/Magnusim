@@ -37,6 +37,24 @@ Removed unfinished UI features are recorded in [ROADMAP.md](ROADMAP.md).
 This is a trusted local application. Read [SECURITY.md](SECURITY.md) before exposing
 it remotely. The API does not provide user authentication.
 
+## Validation
+
+Magnusim's results are compared with published reference data by its validation set
+([`magnusim-web/validation/`](magnusim-web/validation/README.md)): six textbook flows (a laminar and a
+turbulent pipe, the lid-driven cavity, the laminar backward-facing step, the circular cylinder at
+Re 20, 40 and 100, the sphere at Re 100), each imported, meshed and solved through the app's own
+routes, every reference value with its citation and how sure that value is. The results are in
+[`magnusim-web/validation/VALIDATION.md`](magnusim-web/validation/VALIDATION.md), with the Heat
+Transfer plugin's own set beside them. They are report-only: the tolerances are not locked yet
+(that waits for a review of the first full run, 2026-11-06), so the report shows where each value
+sits against its band and nothing fails on it. Most values sit inside their bands; the ones that do
+not (the laminar pipe's friction on the Standard mesher, the turbulent pipe with k-omega SST) are
+listed there with what is known of why. A public page of the same results is built in
+`docs/validation/`; it is not published yet.
+
+Quick physics checks (`npm run test:physics` in `magnusim-web`, under a minute in WSL) run first
+in the full test tier before every push ([TESTING.md](magnusim-web/docs/TESTING.md)).
+
 ## Layout
 
 The running app is **`magnusim-web/`**. See `magnusim-web/README.md` for how the web UI, Node API, and Python tools fit together.

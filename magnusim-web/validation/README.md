@@ -94,7 +94,21 @@ and its project is still on the server, and otherwise meshes its own.
   source read, or two transcriptions compared); where the harness's design proposed other
   bands, the reference data win.
 - Report-only until the first full run is reviewed; then the tolerances are locked
-  (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run.
+  (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run. The first
+  full run of all six cases and every variant (2026-11-06, commit aaabb531 with no changes,
+  OpenFOAM v2606, 8 cores, one run at a time, 57.7 minutes) is what `results/` holds: 43 of
+  its 48 compared values inside their bands; nothing is locked until Daniel has reviewed it.
+  Between that run and the ones before it, cases 3 to 6 moved by at most 0.03 %; case 1's
+  development length on Hex-dominant by 1 % and case 2's Standard friction by 0.6 to 0.75 %,
+  as their meshes are not the same from one generate to the next (snappyHexMesh and gmsh in
+  parallel: two mesh probes in a row gave 128 704 and 128 706 cells for case 1, and case 2's
+  Standard pipe 69 543 twice, against 69 436 in the run and 69 568 before), and they were
+  solved on 4 cores before (a 4-core probe of case 1 read its development length 0.8 % above
+  the run).
+- The quick physics checks (`npm run test:physics`, docs/TESTING.md) are the set's fast
+  companion: the case writer on three blockMesh grids (the cavity at Re 100 against Ghia et al.,
+  the laminar pipe's f Re and U_cl / U_b, the cylinder's Cd at Re 20), in under a minute, first
+  in the full test tier before a push.
 - Hex-dominant for every case; the two pipe cases on Standard as well. Where layers are asked
   the run asserts they were applied.
 

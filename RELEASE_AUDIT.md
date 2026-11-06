@@ -98,7 +98,19 @@ used as destructive test fixtures.
   disabling the audited runtime from linting.
 - This is regression and workflow verification, not a claim that every possible
   geometry, mesher, browser, button-state combination, or numerical method has
-  been validated. Engineering accuracy needs benchmark cases and convergence
-  studies beyond these successful smoke solves.
+  been validated. Since November 2026 accuracy against published data is measured
+  by the validation set (`magnusim-web/validation/`, report in
+  `magnusim-web/validation/VALIDATION.md`): six textbook flows (laminar and
+  turbulent pipe, lid-driven cavity, backward-facing step, circular cylinder at
+  Re 20, 40 and 100, sphere at Re 100) meshed and solved through the app's own
+  routes, each reference with its citation and confidence. Its first full run
+  (2026-11-06, commit aaabb531, OpenFOAM v2606, 14 runs) put 43 of its 48
+  compared values inside their proposed bands; the five outside are the laminar
+  pipe's friction on the Standard mesher (+16 %) and the turbulent pipe with
+  k-omega SST (-13 % on Hex-dominant, -25 % on Standard, from both the pressure
+  drop and the wall shear stress). It is report-only: its tolerances are not
+  locked until that run is reviewed, so it does not gate a release yet, and its
+  mesh studies cover a few cases only. Quick physics checks of the case writer
+  (`npm run test:physics`) run in the full test tier before a push.
 
 The frozen hexcore reference directory was left untouched.

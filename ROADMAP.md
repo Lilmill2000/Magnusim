@@ -275,6 +275,24 @@ September 2026 readiness audit. This list preserves the intended work.
     (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`), and
     its public page.
 
+- **The validation set, after v1 (`magnusim-web/validation/`):**
+  - lock its tolerances once its first full run (2026-11-06, commit aaabb531) is
+    reviewed; a locked value outside its band then fails `npm run test:validation`
+    and blocks a release;
+  - publish its page (`docs/validation/`, GitHub Pages from `docs/`);
+  - the values outside their bands: the laminar pipe's friction on Standard
+    (+16 %, its momentum convection on cells not aligned with the flow, under
+    investigation) and the turbulent pipe with k-omega SST (-13 % on Hex-dominant,
+    -25 % on Standard; k-epsilon sits inside on both);
+  - the app gaps it found (its README): a vector's components in Plot over path
+    (G2), mean, rms and frequency over a time window on a Graphs card (G8), a
+    periodic inlet (G9), a developed (parabolic) velocity inlet (G10), a box
+    (region) refinement beside Refine out to, Hex-dominant's background cells
+    sized from a long thin part's smallest extent, and Re on a wide rectangular
+    inlet as 4A/P;
+  - meshes that come out the same from one generate to the next (snappyHexMesh
+    and gmsh in parallel are not), so a rerun reads exactly as before.
+
 Each restored control should have a persistence check and a successful
 end-to-end simulation or result-generation test. Do not expose placeholder
 buttons marked “coming soon.”
