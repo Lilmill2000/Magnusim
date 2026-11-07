@@ -3,7 +3,8 @@
 // name in the feature; both are taken), where it is in the feature, and its words. A word is
 // stored as the feature keeps it (Top -> origin:top, Z -> origin:z, "true" -> true). A field that
 // only matters in another mode (dir2 with no second direction, keepTool of a split by a plane) is
-// listed only where it applies.
+// listed only where it applies. A tapped hole's cut has `thread`: "kept" leaves it, "removed"
+// takes it off and keeps the cut, as the Remove beside the Thread row of its Extrude panel does.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { Feature, FeatureType } from '../types/doc';
@@ -16,8 +17,10 @@ export interface ChoiceField {
   aliases?: readonly string[];
   /** Its path in the feature ("dir1.mode", "tool.keepTool"). */
   path: string;
-  /** 'bool' (true/false), or its words with what each is stored as. */
-  words: 'bool' | readonly (readonly [word: string, stored: string])[];
+  /** 'bool' (true/false), or its words with what each is stored as (null: the field taken off). */
+  words: 'bool' | readonly (readonly [word: string, stored: string | null])[];
+  /** A word that keeps what the feature has (a value the words cannot hold: a tapped hole's thread). */
+  keep?: string;
   /** Whether the feature has this field now (dir2 only with a second direction). */
   when?: (f: Feature) => boolean;
 }
@@ -44,6 +47,7 @@ export const CHOICE_FIELDS: Readonly<Partial<Record<FeatureType, readonly Choice
   extrude: [
     { field: 'flip', path: 'flip', words: 'bool' },
     { field: 'op', path: 'op', words: BODY_OP },
+    { field: 'thread', path: 'thread', words: [['removed', null]], keep: 'kept', when: (f) => !!(f as unknown as Rec).thread },
   ],
   revolve: [
     { field: 'flip', path: 'flip', words: 'bool' },
@@ -134,24 +138,26 @@ const read = (f: Feature, path: string): unknown => path.split('.').reduce<unkno
 
 /** A choice's words ("true, false" or "new, join, cut, intersect"). */
 export function choiceWords(c: ChoiceField): string[] {
-  return c.words === 'bool' ? ['true', 'false'] : c.words.map((w) => w[0]);
+  return c.words === 'bool' ? ['true', 'false'] : [...(c.keep ? [c.keep] : []), ...c.words.map((w) => w[0])];
 }
 
-/** The value a word stores, or an error in words. */
-export function storedChoice(c: ChoiceField, word: string): { ok: true; value: unknown } | { ok: false; why: string } {
+/** The value a word stores on `f` (its keep word: what `f` has), or an error in words. */
+export function storedChoice(c: ChoiceField, word: string, f?: Feature): { ok: true; value: unknown } | { ok: false; why: string } {
   const w = word.trim().toLowerCase();
   if (c.words === 'bool') {
     if (['true', 'on', 'yes'].includes(w)) return { ok: true, value: true };
     if (['false', 'off', 'no'].includes(w)) return { ok: true, value: false };
     return { ok: false, why: `${c.field} is on or off: "true" or "false"` };
   }
-  const hit = c.words.find((x) => x[0].toLowerCase() === w || x[1].toLowerCase() === w);
+  if (c.keep && f && w === c.keep.toLowerCase()) return { ok: true, value: read(f, c.path) };
+  const hit = c.words.find((x) => x[0].toLowerCase() === w || (x[1] != null && x[1].toLowerCase() === w));
   return hit ? { ok: true, value: hit[1] } : { ok: false, why: `${c.field} is one of ${choiceWords(c).join(', ')}` };
 }
 
 /** A stored value as its word. */
 function wordOf(c: ChoiceField, v: unknown): string {
   if (c.words === 'bool') return v ? 'true' : 'false';
+  if (c.keep && v != null && !c.words.some((x) => x[1] === v)) return c.keep;
   return c.words.find((x) => x[1] === v)?.[0] ?? String(v ?? '');
 }
 

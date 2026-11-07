@@ -3,7 +3,9 @@
 // thing either made is the other's and editable either way.
 //   - Hole (features/hole: planFor + makeHoles, the Hole panel's Done): the same sketch and cut
 //     records as the hole tool's, one undo step "<name>", made_by hole; the Assistant then edits
-//     the person's hole by its sketch's d;
+//     the person's hole by its sketch's d; the same for a counterbore from the screw table, a
+//     tapped hole with a modelled thread and a drill point, and countersunk holes at a sketch's
+//     points (every feature each makes, one undo step for all of them);
 //   - body colour (UiController.setBodyColor, the tree's swatch and "Colour…"): the same BodyDef;
 //   - history order (UiController.moveFeature, a tree drag and Move up / Move down): the same
 //     order as edit_feature move, and the same refusal words;
@@ -30,11 +32,13 @@ import { findError, runFind } from '../../src/features/find/panel';
 import { forgetBreps } from '../../src/features/import/feature';
 import { recognitionOf } from '../../src/kernel/recognition';
 import { RECOGNIZE_MAX_FILLET_FACES, RECOGNIZE_MAX_HOLE_FACES } from '../../src/kernel/timeouts';
-import { makeHoles, planFor } from '../../src/features/hole/make';
+import holeModule from '../../src/features/hole';
+import { makeHoles, planFor, type HoleInput } from '../../src/features/hole/make';
 import { bodyRows, sectionRows } from '../../src/features/measure/panel';
 import { madeWith } from '../../src/assistant/made-with';
 import type { CadDoc, Feature } from '../../src/types/doc';
 import type { SelectionItem } from '../../src/types/selection';
+import { createModuleRegistry, registerModuleFeatures } from '../../src/modules';
 import { uiFor } from '../../src/ui/controller';
 import { VIEW_DIRS } from '../../src/viewport/camera';
 import { SNAPSHOT_DIRS } from '../../src/viewport/snapshot';
@@ -42,7 +46,7 @@ import { fail, ok } from './extrude-tools';
 import { assistantHarness, type AssistantHarness } from './harness';
 import { undoLabel } from './parts';
 import { importRoundedBlock } from './rounded-block';
-import { block, featureNamed, partNow, type Row } from './sketch-tools';
+import { block, C, E, featureNamed, partNow, SK, type Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -56,12 +60,13 @@ const P = (name: string, expr: string, comment = '') => ({ name, kind: 'length',
 const EDIT = (feature: string, o: Row = {}) => ({ feature, set: [], rename_to: '', suppress: 'keep', move: '', ...o });
 const BODY = (body: string, o: Row = {}) => ({ body, rename_to: '', color: '', simulation: 'keep', visibility: 'keep', ...o });
 
-/** A feature's record with its ids and the ids it names replaced by what they name (two Parts compared). */
+/** A feature's record with its ids and the ids it names (also inside a face name, "F:<id>:end") replaced by what they name (two Parts compared). */
 function recordOf(doc: CadDoc, name: string): unknown {
   const f = doc.features.find((g) => g.name === name);
   if (!f) throw new Error(`no feature ${name}`);
   const names = new Map(doc.features.map((g) => [g.id, `<${g.name}>`]));
-  return JSON.parse(JSON.stringify(f, (k, v) => (k === 'id' ? undefined : typeof v === 'string' && names.has(v) ? names.get(v) : v)));
+  const named = (v: string) => names.get(v) ?? v.replace(/\bf_[a-z0-9]+\b/g, (id) => names.get(id) ?? id);
+  return JSON.parse(JSON.stringify(f, (k, v) => (k === 'id' ? undefined : typeof v === 'string' ? named(v) : v)));
 }
 
 /** The one face a query names, as the person's pick (the Find panel's row). */
@@ -81,7 +86,9 @@ describe("the person's side of the Assistant's tools stores what the tools store
     async () => {
       h = await assistantHarness({ sketchMode: true });
       await block(h);
-      const input = { name: '', centers: [{ x: '12 mm', y: '-7 mm', z: '' }, { x: '-15 mm', y: '8 mm', z: '' }], diameter: '5 mm', depth: 'blind' as const, distance: '3 mm' };
+      // A simple hole: the size, type, tip and thread fields as the panel sends them for one.
+      const simple = { points: '', size: '', fit: '' as const, type: 'simple' as const, cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' as const };
+      const input = { name: '', centers: [{ x: '12 mm', y: '-7 mm', z: '' }, { x: '-15 mm', y: '8 mm', z: '' }], diameter: '5 mm', depth: 'blind' as const, distance: '3 mm', ...simple };
       // The Assistant's hole, its records, then taken back with the person's Ctrl+Z (one step).
       await ok(h, 'hole', { ...input, face: 'Base.end' });
       const ai = { sketch: recordOf(docNow(h), 'Hole 1 sketch'), cut: recordOf(docNow(h), 'Hole 1') };
@@ -112,6 +119,51 @@ describe("the person's side of the Assistant's tools stores what the tools store
       const n = docNow(h).features.length;
       await expect(planFor(h.services, await faceItem(h, 'Base.end'), { ...input, centers: [{ x: '90 mm', y: '0 mm', z: '' }] })).rejects.toThrow(/outside Base\.end/);
       expect(docNow(h).features).toHaveLength(n);
+    },
+    MS,
+  );
+
+  it(
+    "Hole's sizes, steps, threads and points: a table counterbore, a modelled thread with a drill point, countersinks at a sketch's points; the same features as the hole tool's, one undo step",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      // The hole module's thread feature and its panel, as the app installs them.
+      registerModuleFeatures(h.doc.features, [holeModule]);
+      h.services.modules = createModuleRegistry([...h.services.modules.all(), holeModule]);
+      await block(h, { t: 20 });
+      // The points' sketch in a request of its own (an undo entry of its own, before the holes').
+      await h.ok('sketch', SK({ name: 'Layout', entities: [E('a', 'point', [-15, 10]), E('b', 'point', [-15, -10])], constraints: [C('fa', 'fix', ['a']), C('fb', 'fix', ['b'])] }), { turn: 't-layout' });
+      const none = { name: '', centers: [], points: '', diameter: '', size: '', fit: '' as const, depth: 'through' as const, distance: '', type: 'simple' as const, cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' as const };
+      const inputs: [HoleInput, string[]][] = [
+        [{ ...none, centers: [{ x: '15 mm', y: '10 mm', z: '' }], size: 'M6', fit: 'normal', type: 'counterbore' }, ['Hole 1 sketch', 'Hole 1 counterbore', 'Hole 1']],
+        [{ ...none, centers: [{ x: '15 mm', y: '-10 mm', z: '' }], size: 'M6', fit: 'tapped', depth: 'blind', distance: '12 mm', tip: 'drill', thread: 'modelled' }, ['Hole 1 sketch', 'Hole 1', 'Hole 1 tip sketch', 'Hole 1 tip', 'Hole 1 thread']],
+        [{ ...none, points: 'Layout', diameter: '3 mm', type: 'countersink', cs_diameter: '6 mm' }, ['Hole 1 sketch', 'Hole 1 countersink', 'Hole 1']],
+      ];
+      const before = docNow(h).features.map((f) => f.name);
+      for (const [input, made] of inputs) {
+        // The Assistant's hole, its records, then taken back with one Ctrl+Z.
+        const r = await ok(h, 'hole', { ...input, face: 'Base.end' });
+        expect(r.data.made, made[0]).toEqual(made);
+        const ai = Object.fromEntries(made.map((n) => [n, recordOf(docNow(h!), n)]));
+        const volumeAi = h.doc.state.get().rebuild.bodies[0].volume!;
+        h.doc.undo();
+        await h.settle();
+        expect(docNow(h).features.map((f) => f.name)).toEqual(before);
+        // The person's Hole panel's Done on the picked face: the same features, one undo step, made by hole.
+        const plan = await planFor(h.services, await faceItem(h, 'Base.end'), input);
+        await makeHoles(h.services, plan);
+        await h.settle();
+        expect(partNow(h)).toMatchObject({ features: [...before, ...made], undo: 'Hole 1', session: false, panel: false, mode: 'model' });
+        for (const n of made) {
+          expect(recordOf(docNow(h), n), n).toEqual(ai[n]);
+          expect(madeWith(h.services, featureNamed<Feature>(h, n).id), n).toBe('hole');
+          expect(h.doc.state.get().rebuild.features[featureNamed<Feature>(h, n).id], n).toMatchObject({ state: 'ok' });
+        }
+        expect(h.doc.state.get().rebuild.bodies[0].volume).toBeCloseTo(volumeAi, 6);
+        h.doc.undo();
+        await h.settle();
+        expect(docNow(h).features.map((f) => f.name)).toEqual(before);
+      }
     },
     MS,
   );

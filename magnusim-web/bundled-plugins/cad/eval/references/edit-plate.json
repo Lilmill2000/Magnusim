@@ -132,6 +132,7 @@
               "distance": "t",
               "distance2": "",
               "to": "",
+              "taper": "",
               "flip": false,
               "op": "new",
               "bodies": [],
@@ -170,9 +171,19 @@
                   "z": ""
                 }
               ],
+              "points": "",
               "diameter": "hd",
+              "size": "",
+              "fit": "",
               "depth": "through",
-              "distance": ""
+              "distance": "",
+              "type": "simple",
+              "cb_diameter": "",
+              "cb_depth": "",
+              "cs_diameter": "",
+              "cs_angle": "",
+              "tip": "",
+              "thread": "cosmetic"
             }
           }
         ]

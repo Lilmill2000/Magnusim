@@ -419,7 +419,7 @@ test('cad:assistant-honest-pattern copies that miss their body change nothing; n
 // its -X face at v = +22.5 and cut through lies below it, so the answer is off_body with the face's
 // frame in words ("u runs +Y, v runs -Z"). Each time the person's tree, panels, volume and Undo are
 // as before the call.
-const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
 /** A disc on `on`, fully defined: its centre at (u, v) from the sketch origin and its diameter (no (-) in the tree). */
 const DISC = (name: string, on: string, u: number, v: number, r: number) => ({
   edit: '',
@@ -595,7 +595,7 @@ test('cad:assistant-honest-hole hole on the bracket\'s -X face lands where the m
     { tools: [{ name: 'cad__set_params', input: { set: [row('a', '50 mm'), row('b', '40 mm'), row('t', '5 mm')], remove: [] } }] },
     { tools: [{ name: 'cad__sketch', input: lProfile }] },
     { tools: [{ name: 'cad__extrude', input: EXTRUDE_IN({ name: 'Bracket', sketch: 'L profile', extent: 'symmetric', distance: '30 mm' }) }] },
-    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Bracket.side(p.6)', centers: [{ x: '', y: '0 mm', z: 'b/2' }], diameter: '6 mm', depth: 'through', distance: '' } }] },
+    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Bracket.side(p.6)', centers: [{ x: '', y: '0 mm', z: 'b/2' }], points: '', diameter: '6 mm', size: '', fit: '', depth: 'through', distance: '', type: 'simple', cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' } }] },
     { text: 'The bracket has a 6 mm hole through its upright.' },
   );
   const t = await startTurn(request, host, { text: 'An L bracket with a hole in its upright.', tab });

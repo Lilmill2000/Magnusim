@@ -85,7 +85,7 @@ describe('help', () => {
   it("the features topic gives each tool's fields and rules; parameters says how expressions read", () => {
     expect(HELP.features.map((r) => r.about)).toEqual(CAD_TOOLS.map((t) => t.name));
     const text = (about: string) => HELP.features.find((r) => r.about === about)!.text;
-    expect(text('extrude')).toContain('Fields: edit, name, sketch, regions, face, direction, extent, distance, distance2, to, flip, op, bodies, body_name, color.');
+    expect(text('extrude')).toContain('Fields: edit, name, sketch, regions, face, direction, extent, distance, distance2, to, taper, flip, op, bodies, body_name, color.');
     for (const t of CAD_TOOLS) expect(text(t.name).startsWith(`${t.title} (${t.risk}). Fields: ${Object.keys(t.inputSchema.properties).join(', ')}. `), t.name).toBe(true);
     // The faces each feature tool names, and what hole writes.
     expect(text('extrude')).toContain('<Name>.start (on the sketch), <Name>.end (the far cap), <Name>.side(<entity>)');
@@ -94,6 +94,9 @@ describe('help', () => {
     expect(text('pattern')).toContain('"<body> (Instance k)"');
     expect(text('hole')).toContain('d (diameter of h1)');
     expect(text('hole')).toContain('on a -X face z "b/2" becomes h1y "-(b/2)"');
+    // A counterbore, countersink, drill tip or modelled thread makes more than the sketch and one cut.
+    expect(text('hole')).toContain("a counterbore's or countersink's circles c1, c2... (dc); then the cuts");
+    expect(text('hole')).not.toContain('made lists both');
     expect(text('help')).toContain('Every field of every tool is required: "", [] or false when unused.');
     expect(HELP.parameters.map((r) => r.about)).toEqual(['expressions', 'bare numbers', 'names', 'kinds']);
     expect(HELP.parameters[0].text).toContain('mm, cm, m, in, ft, deg, rad');

@@ -8,6 +8,15 @@
 // vertex of a body (with an offset), and a flat face of a body extruded directly
 // with no sketch (Daniel's item 8: `face`; kernel extrude_face; its side faces are
 // named by the edge they were swept from, F:<id>:side:E:<a>&<b>).
+// `taper`: a draft angle (sketch profiles, Blind only, along the normal; kernel
+// extrude_regions' taper_deg, + narrowing the profile). A profile with a hole in it is refused
+// with a draft (the kernel's drafted prism fills the hole, or fails, or traps), and so are
+// Symmetric and Two sides (it drafts one prism from the far end, not each side from the sketch).
+// Blind with no distance and a draft that narrows runs until the walls meet (a point or a ridge: a
+// drill point); walls that meet before a distance given end the body there, and a warning says so.
+// `thread`: a
+// tapped hole's cosmetic thread (Hole sets it; drawn by features/hole/threads.ts),
+// which this feature only keeps: it changes nothing in the build.
 // Owner: P3-PROFILES (src/features/extrude/); P4a extents and face: SOLIDS.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -44,6 +53,72 @@ export type ExtentValues = Extract<ExtrudeExtent, { kind: 'blind' | 'symmetric' 
 
 export interface ExtrudeValues {
   extent: ExtentValues;
+  /** The draft angle in degrees (0: straight walls). */
+  taper: number;
+  /** Blind with no distance: until the walls meet (the distance is found at the build). */
+  meet: boolean;
+}
+
+/** The largest draft angle (degrees, either way): the walls must still go somewhere along the direction. */
+export const TAPER_MAX_DEG = 89;
+/** The words for a draft angle out of range (the panel's field says the same). */
+export const TAPER_RANGE_WORDS = `Draft angle must be between -${TAPER_MAX_DEG}° and ${TAPER_MAX_DEG}°`;
+
+/** The draft angle's value in degrees (0 when it is absent or ""), checked. */
+export function resolveTaper(f: Pick<ExtrudeFeature, 'taper' | 'face' | 'direction' | 'extent'>, units: UnitsService): ResolveResult<number> {
+  const t = typeof f.taper === 'string' ? f.taper.trim() : '';
+  if (!t) return { ok: true, values: 0 };
+  const r = units.evaluate(t, 'angle');
+  if (!r.ok) return { ok: false, message: `Draft angle: ${r.error}` };
+  if (r.value === 0) return { ok: true, values: 0 };
+  if (!(Math.abs(r.value) <= TAPER_MAX_DEG)) return { ok: false, message: TAPER_RANGE_WORDS };
+  // (Only an expression's own error reads "Draft angle: ...": the rules below are said as sentences.)
+  if (f.face) return { ok: false, message: 'A draft angle needs sketch profiles: a face extrude has straight walls (set it to 0)' };
+  if (f.direction) return { ok: false, message: 'A draft angle goes only along the normal: remove the direction or set it to 0' };
+  if (f.extent?.kind !== 'blind') return { ok: false, message: 'A draft angle goes only with Blind (set it to 0)' };
+  return { ok: true, values: r.value };
+}
+
+/** What Blind with no distance and a draft angle does (the panel and the Assistant say the same). */
+export const MEET_WORDS = 'until the walls meet';
+
+/** Whether an extrude is Blind with no distance (with a draft that narrows: until the walls meet). */
+export function meetsWalls(f: Pick<ExtrudeFeature, 'extent'>): boolean {
+  return f.extent?.kind === 'blind' && !String(f.extent.distance ?? '').trim();
+}
+
+/**
+ * Whether regions `keys` of a sketch, merged as the kernel merges them, go round a hole: a region
+ * left out that no path through other left-out regions joins to the outside. A loop's token on
+ * one region only borders the outside; a token on two borders both of them.
+ */
+export function regionsEncloseHole(regions: readonly { key: string; loops: readonly (readonly string[])[] }[], keys: readonly string[]): boolean {
+  const picked = new Set(keys);
+  const token = (t: string) => t.replace(/^[+-]/, '');
+  const owners = new Map<string, number[]>();
+  regions.forEach((r, i) => {
+    for (const loop of r.loops) for (const t of loop) owners.set(token(t), [...(owners.get(token(t)) ?? []), i]);
+  });
+  const left = regions.map((r) => !picked.has(r.key));
+  const reached = new Set<number>();
+  const queue: number[] = [];
+  regions.forEach((r, i) => {
+    if (left[i] && r.loops.some((l) => l.some((t) => owners.get(token(t))!.length < 2))) {
+      reached.add(i);
+      queue.push(i);
+    }
+  });
+  while (queue.length) {
+    const i = queue.pop()!;
+    for (const loop of regions[i].loops)
+      for (const t of loop)
+        for (const j of owners.get(token(t))!)
+          if (left[j] && !reached.has(j)) {
+            reached.add(j);
+            queue.push(j);
+          }
+  }
+  return left.some((l, i) => l && !reached.has(i));
 }
 
 function evalLength(label: string, expr: Expr, units: UnitsService): { ok: true; value: number } | { ok: false; message: string } {
@@ -195,8 +270,17 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     };
   },
   resolve(f, units) {
+    if (meetsWalls(f)) {
+      // No distance: with a draft that narrows, until the walls meet (the distance is found at the build).
+      const t = resolveTaper(f, units);
+      if (!t.ok) return t;
+      if (t.values > 0) return { ok: true, values: { extent: { kind: 'blind', d: 0 }, taper: t.values, meet: true } };
+      if (t.values < 0) return { ok: false, message: `A draft angle that widens never meets: give the distance (${MEET_WORDS} needs a draft angle more than 0)` };
+    }
     const r = resolveExtent(f, units);
-    return r.ok ? { ok: true, values: { extent: r.values } } : r;
+    if (!r.ok) return r;
+    const t = resolveTaper(f, units);
+    return t.ok ? { ok: true, values: { extent: r.values, taper: t.values, meet: false } } : t;
   },
   incomplete(f, units) {
     const p = profilesProblem(f);
@@ -218,13 +302,15 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     const out: ExprField[] = [{ path: 'extent.distance', expr: f.extent.distance }];
     if (f.extent.kind === 'two') out.push({ path: 'extent.distance2', expr: f.extent.distance2 });
     if (f.extent.kind === 'to') out.push({ path: 'extent.offset', expr: f.extent.offset });
+    if (f.taper) out.push({ path: 'taper', expr: f.taper });
     return out;
   },
   mapExprs: (f, fn) => {
     const e = f.extent;
-    if (e.kind === 'two') return { ...f, extent: { ...e, distance: fn(e.distance), distance2: fn(e.distance2) } };
-    if (e.kind === 'to') return { ...f, extent: { ...e, distance: fn(e.distance), offset: fn(e.offset) } };
-    return { ...f, extent: { ...e, distance: fn(e.distance) } };
+    const g = f.taper ? { ...f, taper: fn(f.taper) } : f;
+    if (e.kind === 'two') return { ...g, extent: { ...e, distance: fn(e.distance), distance2: fn(e.distance2) } };
+    if (e.kind === 'to') return { ...g, extent: { ...e, distance: fn(e.distance), offset: fn(e.offset) } };
+    return { ...g, extent: { ...e, distance: fn(e.distance) } };
   },
   async build(f, v, ctx) {
     const problem = profilesProblem(f);
@@ -246,7 +332,20 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
       if (r.how === 'repaired') repaired = true;
       if (!keys.includes(r.key)) keys.push(r.key);
     }
-    const ext = await kernelExtent(f, v.extent, ctx);
+    // The kernel's drafted prism fills a hole in the profile (or fails, or traps): refused in words.
+    if (v.taper && regionsEncloseHole(out.regions, keys)) {
+      return { ok: false, message: `${f.name} failed: a draft angle needs a profile with no hole in it, and the profile picked in ${sketchName} goes round a region left out: pick that region too, or set the draft angle to 0 and cut the hole after` };
+    }
+    let extent = v.extent;
+    if (v.meet) {
+      // Until the walls meet: far enough that they meet before it (half the profile's box across,
+      // leaning in at the angle); the kernel's drafted prism ends where they do.
+      const boxes = out.regions.filter((r) => keys.includes(r.key)).map((r) => r.bbox);
+      const w = Math.max(...boxes.map((b) => b[2])) - Math.min(...boxes.map((b) => b[0]));
+      const h = Math.max(...boxes.map((b) => b[3])) - Math.min(...boxes.map((b) => b[1]));
+      extent = { kind: 'blind', d: (1.5 * Math.hypot(w, h)) / 2 / Math.tan((v.taper * Math.PI) / 180) + MIN_SIZE_MM };
+    }
+    const ext = await kernelExtent(f, extent, ctx);
     if (!ext.ok) return { ok: false, message: `${f.name} failed: ${ext.message}` };
     const dir = await directionOf(f, ctx);
     if (!dir.ok) return { ok: false, message: `${f.name} failed: ${dir.message}` };
@@ -255,7 +354,7 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     try {
       let res;
       try {
-        res = await ctx.kernel.call('extrude_regions', { plane: out.plane, curves: out.curves, regions: keys, extent: ext.extent, flip: !!f.flip, ...(dir.dir ? { direction: dir.dir } : {}) });
+        res = await ctx.kernel.call('extrude_regions', { plane: out.plane, curves: out.curves, regions: keys, extent: ext.extent, flip: !!f.flip, ...(dir.dir ? { direction: dir.dir } : {}), ...(v.taper ? { taper_deg: v.taper } : {}) });
       } catch (err) {
         const e = err as KernelCallError;
         if (e.kind === 'input' && /region not found/i.test(e.message)) return { ok: false, message: lost };
@@ -270,6 +369,10 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
       if (repaired) notes.push(PROFILE_REPAIRED);
       if (ext.warning) notes.push(ext.warning);
       if (dir.warning) notes.push(dir.warning);
+      if (v.taper > 0 && !v.meet && v.extent.kind === 'blind') {
+        const short = await wallsMeetShort(res.result, Math.abs(v.extent.d), v.taper, out.plane.origin as Vec3, ctx);
+        if (short) notes.push(short);
+      }
 
       if (res.result.valid === false) {
         const why = res.result.reason ? `: ${res.result.reason.replace(/^invalid result\s*/i, '').trim()}` : '';
@@ -312,6 +415,28 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     }
   },
 };
+
+/**
+ * The warning for a drafted Blind extrude whose walls met before its distance (the kernel's
+ * drafted prism has no end face then), or null: how far out they meet, measured along the
+ * direction on the shape's box (exact along X, Y or Z; on a tilted plane only a box short of the
+ * distance is said, as at most that far), and the largest draft that reaches the distance.
+ */
+async function wallsMeetShort(result: { id: ShapeId; history?: OpHistory | null; direction?: Vec3 }, L: number, taperDeg: number, origin: Vec3, ctx: Pick<BuildContext, 'bbox'>): Promise<string | null> {
+  const h = result.history;
+  if (!h || !result.direction) return null;
+  const caps = Object.values(h.caps ?? {});
+  if (!(caps.length ? caps.some((c) => c.end == null) : h.end == null)) return null;
+  const d = result.direction;
+  const bb = await ctx.bbox(result.id);
+  let reach = -Infinity;
+  for (const x of [bb[0], bb[3]]) for (const y of [bb[1], bb[4]]) for (const z of [bb[2], bb[5]]) reach = Math.max(reach, (x - origin[0]) * d[0] + (y - origin[1]) * d[1] + (z - origin[2]) * d[2]);
+  if (!(reach < L - 1e-6 * Math.max(1, L))) return null;
+  const along = Math.max(Math.abs(d[0]), Math.abs(d[1]), Math.abs(d[2])) >= 1 - 1e-9;
+  const round = (x: number) => Math.round(x * 1000) / 1000;
+  const most = (Math.atan((reach * Math.tan((taperDeg * Math.PI) / 180)) / L) * 180) / Math.PI;
+  return `the draft walls meet ${along ? '' : 'at most '}${round(reach)} mm out, before the ${round(L)} mm distance: the body ends there (a draft angle of at most ${round(most)}° reaches ${round(L)} mm; an empty distance goes ${MEET_WORDS})`;
+}
 
 /**
  * Names of a face extrude's result: the kernel's sides `e<i>` (input edge i) become the edge's

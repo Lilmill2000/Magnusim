@@ -16,6 +16,12 @@
 // stack: the dock's check step says one part can slide along its shaft and names the wheel (+Z);
 // after the model presses a collar on above the wheel and checks again, the step says nothing is
 // loose.
+// Holes (Magnusim CAD PR 13), as the person sees them: on the person's 60 x 40 x 20 block, the scripted
+// model drills a clearance hole for an M6 bolt counterbored from the screw table (11 x 6.4 mm), a
+// tapped M6x1 hole 12 mm deep with a modelled thread and a drill point, countersunk holes at a
+// sketch's points, and a blind hole deeper than the block (issue 14: it says it goes through and
+// leaves out its drill point); each answer says what it made, the tree shows every feature built,
+// the volume chip less each hole, and one Undo takes them all.
 // Its own server with the Assistant's test switches and the scripted model (e2e/assistant-helpers.ts).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
@@ -141,7 +147,7 @@ const SKETCH = (name: string, on: string, circles: [number, number][]) => ({
 });
 const EXTRUDE = (name: string, sketch: string, distance: string, o: Record<string, unknown> = {}) => ({
   name: 'cad__extrude',
-  input: { edit: '', name, sketch, regions: ['all'], face: '', direction: '', extent: 'blind', distance, distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o },
+  input: { edit: '', name, sketch, regions: ['all'], face: '', direction: '', extent: 'blind', distance, distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o },
 });
 const CHECK_STACK = { name: 'cad__check', input: { kind: 'stack', bodies: [], clearance: '', axis: '' } };
 
@@ -187,4 +193,108 @@ test("cad:assistant-features-check the model checks a wheel on a shaft: the dock
   expect(second).toMatchObject({ tool: 'cad__check', ok: true, data: { loose: [] } });
   await expect(checkStep().locator('[data-dock-result]')).toContainText('Checked the stack: Nothing is loose: 1 part on 1 axis, each held both ways within 0.5 mm', STEP);
   await expect(checkStep()).not.toContainText('can slide');
+});
+
+/** The hole tool's input: every field, "" when unused (src/assistant/schemas.ts hole). */
+const HOLE = (o: Record<string, unknown>) => ({ name: 'cad__hole', input: { name: '', face: 'Extrude 1.end', centers: [], points: '', diameter: '', size: '', fit: '', depth: 'through', distance: '', type: 'simple', cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic', ...o } });
+
+test("cad:assistant-features-hole the model's hole with sizes, screw heads, a modelled thread, a drill point and a sketch's points; a blind hole that goes through says so; one Undo takes all", async ({ page, request }) => {
+  test.setTimeout(300_000);
+  const pid = await newProject(request, host, 'Assistant holes');
+  const { frame, tab } = await openNewPart(page, request, host, pid);
+  await cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.assistant.setPace('fast', 0));
+  // The person's 60 x 40 x 20 block (x 0..60, y 0..40) and a sketch "Layout" of two points, at (45, 10) and (45, 30).
+  await addSolid(page, { size: [60, 40, 20] });
+  await cadFrame(page).evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = (window as unknown as { __CAD__: { services: any } }).__CAD__.services;
+    // As addSketch: a sketch "made earlier" leaves the camera where it was.
+    const handle = s.viewport.get().handle;
+    const lookAt = handle?.lookAt;
+    if (handle) handle.lookAt = () => {};
+    const dim = (id: string, kind: string, pt: string, v: number) => ({ id, kind, refs: ['origin', pt], expr: `${v} mm`, driving: true });
+    try {
+      s.doc
+        .beginNew('sketch', {
+          name: 'Layout',
+          support: { kind: 'plane', plane: 'origin:top' },
+          plane: { origin: [0, 0, 0], normal: [0, 0, 1], xdir: [1, 0, 0] },
+          points: { pt_a: [45, 10], pt_b: [45, 30] },
+          entities: [
+            { id: 'e_a', kind: 'point', p: 'pt_a' },
+            { id: 'e_b', kind: 'point', p: 'pt_b' },
+          ],
+          constraints: [dim('c_ax', 'distance_x', 'pt_a', 45), dim('c_ay', 'distance_y', 'pt_a', 10), dim('c_bx', 'distance_x', 'pt_b', 45), dim('c_by', 'distance_y', 'pt_b', 30)],
+          solved: { values: { c_ax: 45, c_ay: 10, c_bx: 45, c_by: 30 }, dof: 0, state: 'fully' },
+        })
+        .commit();
+    } finally {
+      if (handle && lookAt) handle.lookAt = lookAt;
+    }
+  });
+  const base = ['Sketch 1 sketch ok', 'Extrude 1 extrude ok', 'Layout sketch ok'];
+  await expect.poll(() => treeRows(page), STEP).toEqual(base);
+  const mm3 = () => cadFrame(page).evaluate(() => Number(document.querySelector('[data-chip="volume"] [data-volume-mm3]')?.getAttribute('data-volume-mm3')));
+  await expect.poll(mm3, STEP).toBeCloseTo(48_000, 3);
+  const label = () => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel);
+  const undoBefore = await label();
+
+  const before = chats(host).length;
+  host.fake.reply(
+    // An M6 bolt's clearance hole (normal fit), counterbored for its socket head from the screw table.
+    { tools: [HOLE({ centers: [{ x: '15 mm', y: '20 mm', z: '' }], size: 'M6', fit: 'normal', type: 'counterbore' })] },
+    // A tapped M6x1 hole 12 mm deep, its thread modelled, with a drill point.
+    { tools: [HOLE({ centers: [{ x: '30 mm', y: '20 mm', z: '' }], size: 'M6', fit: 'tapped', depth: 'blind', distance: '12 mm', tip: 'drill', thread: 'modelled' })] },
+    // Countersunk holes 2.5 mm across at Layout's points.
+    { tools: [HOLE({ points: 'Layout', diameter: '2.5 mm', type: 'countersink', cs_diameter: '5 mm' })] },
+    // Magnusim CAD issue 14: blind 30 mm in the 20 mm block, with a drill point.
+    { tools: [HOLE({ centers: [{ x: '15 mm', y: '33 mm', z: '' }], diameter: '4 mm', depth: 'blind', distance: '30 mm', tip: 'drill' })] },
+    { text: 'The block has its four holes; the last one goes through.' },
+  );
+  const t = await startTurn(request, host, { text: 'Drill the holes in the block.', tab });
+  expect((await t.ended(STEP_MS * 6)).turn.state).toBe('done');
+  const [, a1, a2, a3, a4] = chats(host).slice(before);
+  const [bored] = resultsIn(a1);
+  expect(bored).toMatchObject({ tool: 'cad__hole', ok: true, data: { made: ['Hole 1 sketch', 'Hole 1 counterbore', 'Hole 1'], diameter_mm: 6.6, counterbore: { diameter_mm: 11, depth_mm: 6.4 }, size: 'M6 clearance, normal fit (ISO 273): 6.6 mm', warnings: [] } });
+  expect(bored.text).toMatch(/^Hole 1 ok: 1 counterbored hole 6\.6 mm across, through, in Extrude 1\.end · Body 1 48000 → 46927 mm³$/);
+  const [threaded] = resultsIn(a2);
+  expect(threaded).toMatchObject({ tool: 'cad__hole', ok: true, data: { made: ['Hole 2 sketch', 'Hole 2', 'Hole 2 tip sketch', 'Hole 2 tip', 'Hole 2 thread'], diameter_mm: 5, thread: 'M6x1', tip: { angle_deg: 118 }, warnings: [] } });
+  expect(threaded.text).toMatch(/^Hole 2 ok: 1 M6x1 tapped \(threaded\) hole 5 mm across, 12 mm deep with a drill point, in Extrude 1\.end /);
+  const [sunk] = resultsIn(a3);
+  expect(sunk).toMatchObject({
+    tool: 'cad__hole',
+    ok: true,
+    data: {
+      made: ['Hole 3 sketch', 'Hole 3 countersink', 'Hole 3'],
+      centers_mm: [
+        [45, 10, 20],
+        [45, 30, 20],
+      ],
+      countersink: { diameter_mm: 5, depth_mm: 1.25, angle_deg: 90 },
+    },
+  });
+  const [deep] = resultsIn(a4);
+  expect(deep).toMatchObject({ tool: 'cad__hole', ok: true, data: { made: ['Hole 4 sketch', 'Hole 4'], warnings: ['Hole 4 is 30 mm deep, at least as deep as Body 1 there, so it goes through (set depth through, or a smaller distance); the drill tip was left out'] } });
+  expect(deep.text).not.toContain('drill point');
+
+  // What the person sees: every feature in the tree, built; the volume chip less each hole.
+  const holes = ['Hole 1 sketch sketch ok', 'Hole 1 counterbore extrude ok', 'Hole 1 extrude ok', 'Hole 2 sketch sketch ok', 'Hole 2 extrude ok', 'Hole 2 tip sketch sketch ok', 'Hole 2 tip extrude ok', 'Hole 2 thread thread ok', 'Hole 3 sketch sketch ok', 'Hole 3 countersink extrude ok', 'Hole 3 extrude ok', 'Hole 4 sketch sketch ok', 'Hole 4 extrude ok'];
+  await expect.poll(() => treeRows(page), STEP).toEqual([...base, ...holes]);
+  // The counterbored hole; the two countersunk ones (each its hole and the cone above where it is
+  // 2.5 mm across); the one through; and the tapped one: its bore and tip, and the groove (30 to 50 more).
+  const cb = Math.PI * 30.25 * 6.4 + Math.PI * 10.89 * 13.6;
+  const cs = Math.PI * 1.5625 * 20 + (Math.PI * 1.25 * (6.25 + 3.125 + 1.5625)) / 3 - Math.PI * 1.5625 * 1.25;
+  const through = Math.PI * 4 * 20;
+  const tapped = Math.PI * 6.25 * 12 + (Math.PI * 6.25 * (2.5 / Math.tan((59 * Math.PI) / 180))) / 3;
+  const groove = 48_000 - (await mm3()) - (cb + 2 * cs + through + tapped);
+  expect(groove).toBeGreaterThan(30);
+  expect(groove).toBeLessThan(50);
+  // The request names the undo group.
+  expect(await label()).toBe('Assistant: Drill the holes in the block.');
+
+  // One Undo, named for the request, takes every hole away.
+  await frame.locator('[data-cad-toolbar] [data-command="edit.undo"]').click();
+  await expect.poll(() => treeRows(page), STEP).toEqual(base);
+  await expect.poll(mm3, STEP).toBeCloseTo(48_000, 3);
+  expect(await label()).toBe(undoBefore);
 });

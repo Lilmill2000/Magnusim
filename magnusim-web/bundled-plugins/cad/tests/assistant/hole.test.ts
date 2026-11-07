@@ -10,9 +10,23 @@
 //   - refused before anything changes (no feature, no panel, no undo entry): the fields, a curved
 //     face (not_flat), a tilted face (bad_input: use sketch and extrude cut), a missing coordinate,
 //     every expression problem at once, a centre off the face's plane, a centre outside the face
-//     (named by its row), the same centre twice, a name taken; edit_feature of the cut's d points to
+//     (named by its row), the same centre twice, a name taken, a size the tables do not have (they
+//     are named), an inch size with no clearance hole, a sketch of more points than a call takes
+//     (each with a way out that works); edit_feature of the cut's d points to
 //     the hole's sketch; a hole that breaks the face's edge
 //     (its centre off the face within half the diameter, or on it near an edge) is made and warned;
+//   - a drill point (tip "drill", 118 deg, or the point's own angle) below a blind hole, refused on
+//     a through hole; a blind hole deeper than the block goes through, the reply says so and leaves
+//     out the drill point it asked for (issue 14);
+//   - a blind hole deeper than the body there, one hole or one of two, says it goes through; one
+//     that keeps its bottom says nothing (issue 14);
+//   - a drill point and a countersink follow the holes' sketch: its d and h1x edited, the tip's
+//     circle (linked to the hole's) and its cone go with the hole, the countersink's cone meets it;
+//   - a tapped hole's thread is edit_feature's choice: kept, or removed (the cut kept);
+//   - a modelled thread's Length, "" for the whole hole, is a field edit_feature sets;
+//   - a modelled thread cuts each piece of its wall (below a counterbore, a wide countersink, both
+//     walls of a slot); a blind one past its budget (turns a hole, in all) or too shallow is refused
+//     before anything changes, a through one past it fails when cut, with ways out, nothing kept;
 //   - a value (set_params, the sketch's position dimension, with a rename too) that moves a hole
 //     off its body, where it builds and cuts nothing, changes nothing (broke_downstream with the
 //     diagnosis); a structural edit that leaves a scoped cut with nothing to cut is kept and warns;
@@ -28,13 +42,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { negated } from '../../src/assistant/tools/hole';
 import { runtimeOf } from '../../src/assistant/runtime';
-import type { ExtrudeFeature, SketchDimension, SketchFeature } from '../../src/types/doc';
+import holeModule from '../../src/features/hole';
+import { createModuleRegistry, registerModuleFeatures } from '../../src/modules';
+import type { ExtrudeFeature, SketchDimension, SketchFeature, ThreadFeature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
 import { installUi } from '../../src/ui/commands';
 import { EXTRUDE, fail, names, ok, volume } from './extrude-tools';
 import { assistantHarness, type AssistantHarness } from './harness';
 import { undoLabel } from './parts';
-import { block, E, featureNamed, partNow, SK, type Row } from './sketch-tools';
+import { block, E, featureNamed, outputOf, partNow, SK, type Row } from './sketch-tools';
 
 let h: AssistantHarness | null = null;
 afterEach(() => {
@@ -234,7 +250,7 @@ describe('hole', () => {
       const fields = await fail(h, 'hole', HOLE({ face: '', centers: [], diameter: '', depth: 'through', distance: '3 mm' }));
       expect(fields).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_input' } });
       expect(fields.message).toBe(
-        'bad_input: face: one flat face facing along X, Y or Z ("Plate.end", "Body 1 faces >Z"); centers: at least one centre; diameter: an expression such as "5 mm" or "hd"; distance: "" with depth through (the holes go through the face\'s body).',
+        'bad_input: face: one flat face facing along X, Y or Z ("Plate.end", "Body 1 faces >Z"); centers: at least one centre (or points: a sketch whose points are the centres); diameter: an expression such as "5 mm" or "hd" (or size and fit); distance: "" with depth through (the holes go through the face\'s body).',
       );
       expect((await fail(h, 'hole', HOLE({ centers: [CTR('0 mm', '0 mm', '')], depth: 'blind' }))).message).toBe('bad_input: distance: the depth, such as "6 mm" or "t".');
       // A round face, and a tilted one.
@@ -262,6 +278,12 @@ describe('hole', () => {
       expect((await fail(h, 'hole', HOLE({ name: 'wedge', centers: [CTR('5 mm', '5 mm', '')] }))).detail).toMatchObject({ reason: 'name_taken' });
       // The face as one face: a selector naming several lists candidates.
       expect((await fail(h, 'hole', HOLE({ face: 'Base faces |Z', centers: [CTR('5 mm', '5 mm', '')] }))).detail).toMatchObject({ reason: 'selector_ambiguous', field: 'face' });
+      // Sizes: one the tables do not have names those they do; an inch size with no clearance hole
+      // says how to give the diameter instead (with size and fit "", as diameter is refused beside a size).
+      expect((await fail(h, 'hole', HOLE({ centers: [CTR('5 mm', '5 mm', '')], diameter: '', size: 'M18', fit: 'normal' }))).message).toBe(
+        'bad_input: size: "M18" is not a size Hole knows: metric coarse M1.6, M2, M2.5, M3, M4, M5, M6, M8, M10, M12, M14, M16, M20, M24, M30, M36, M42, M48, M56, M60, M64 ("M6", "M6x1"), or Unified inch #0 to 1 in ("1/4-20", "#10-32", "1/4-28 UNF").',
+      );
+      expect((await fail(h, 'hole', HOLE({ centers: [CTR('5 mm', '5 mm', '')], diameter: '', size: '#12', fit: 'normal' }))).message).toBe('bad_input: size: ASME B18.2.8 has no clearance hole for #12; send size "" and fit "" with the diameter.');
       // The diameter sent to the cut: it is a dimension of the hole's sketch, and the answer says which.
       const onCut = await fail(h, 'edit_feature', EDIT('Hole 1', { set: [{ field: 'd', value: '8 mm' }] }));
       expect(onCut).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_input', sketch: 'Hole 1 sketch' }, hint: 'Call edit_feature with feature "Hole 1 sketch" and the same set rows.' });
@@ -270,10 +292,200 @@ describe('hole', () => {
       expect(undoLabel(h)).toBe(label);
       expect(uiFor(h.services).state.get().panel).toBeNull();
       expect(h.doc.session()).toBeNull();
+      // A sketch of 25 points: more than one call takes, and the way out is not another call with it.
+      await ok(h, 'sketch', SK({ name: 'Grid', entities: Array.from({ length: 25 }, (_, i) => E(`p${i}`, 'point', [-24 + 2 * i, 15])) }));
+      expect((await fail(h, 'hole', HOLE({ points: 'Grid', diameter: '1 mm' }))).message).toBe('bad_input: points: Grid has 25 points; hole takes at most 24 (give centers instead, at most 24 a call, or a sketch with fewer points).');
       // The next free names skip a sketch name that is taken.
       await ok(h, 'sketch', SK({ name: 'Hole 2 sketch', entities: [E('c', 'circle', [100, 100, 1])] }));
       const next = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '5 mm', '')] }));
       expect(next.data).toMatchObject({ made: ['Hole 3 sketch', 'Hole 3'] });
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a drill point: tip "drill" (118 deg) or the point\'s angle; refused on a through hole; a blind hole deeper than the block goes through, says so and leaves the point out (issue 14)',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      // The cone below a hole 4 mm across: radius 2, 2 / tan(angle / 2) deep.
+      const cone = (deg: number) => (PI * 4 * (2 / Math.tan((deg * PI) / 360))) / 3;
+      const a = await ok(h, 'hole', HOLE({ centers: [CTR('10 mm', '0 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: 'drill' }));
+      expect(a.text).toMatch(/^Hole 1 ok: 1 hole 4 mm across, 3 mm deep with a drill point, in Base\.end /);
+      expect(a.data).toMatchObject({ made: ['Hole 1 sketch', 'Hole 1', 'Hole 1 tip sketch', 'Hole 1 tip'], tip: { angle_deg: 118, depth_mm: expect.closeTo(2 / Math.tan((59 * PI) / 180), 3) }, warnings: [] });
+      expect(featureNamed<ExtrudeFeature>(h, 'Hole 1 tip')).toMatchObject({ extent: { kind: 'blind', distance: '' }, taper: '(118 deg) / 2' });
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 4 * 3 - cone(118), 3);
+      // The point's own angle in tip.
+      const b = await ok(h, 'hole', HOLE({ centers: [CTR('-10 mm', '0 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: '135 deg' }));
+      expect(b.data).toMatchObject({ made: ['Hole 2 sketch', 'Hole 2', 'Hole 2 tip sketch', 'Hole 2 tip'], tip: { angle_deg: 135 } });
+      expect(volume(h)).toBeCloseTo(BLOCK - 2 * PI * 4 * 3 - cone(118) - cone(135), 3);
+      // Refused before anything changes: a drill point on a through hole, an angle past Extrude's draft limit (twice 89 deg).
+      const doc = h.doc.state.get().doc;
+      expect((await fail(h, 'hole', HOLE({ centers: [CTR('0 mm', '10 mm', '')], diameter: '4 mm', tip: 'drill' }))).message).toBe('bad_input: tip: a drill point only with depth blind (a through hole has no bottom); send "".');
+      expect((await fail(h, 'hole', HOLE({ centers: [CTR('0 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: '200 deg' }))).message).toBe("bad_input: tip: the drill point's angle more than 0 and at most 178 deg (it is 200 deg).");
+      expect(h.doc.state.get().doc).toBe(doc);
+      // Issue 14: blind 20 mm into the 10 mm block cuts through. The reply says so, and leaves out the drill point it cannot make.
+      const deep = await ok(h, 'hole', HOLE({ centers: [CTR('0 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '20 mm', tip: 'drill' }));
+      expect(deep.data.made).toEqual(['Hole 3 sketch', 'Hole 3']);
+      expect(deep.data.warnings).toEqual(['Hole 3 is 20 mm deep, at least as deep as Body 1 there, so it goes through (set depth through, or a smaller distance); the drill tip was left out']);
+      expect(deep.text).not.toContain('drill point');
+      expect(deep.data).not.toHaveProperty('tip');
+      expect(volume(h)).toBeCloseTo(BLOCK - 2 * PI * 4 * 3 - cone(118) - cone(135) - PI * 4 * 10, 3);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    "a drill point and a countersink follow the holes' sketch: d and h1x edited, the tip keeps its hole's centre and size, the countersink's cone meets the new hole",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      // A cone r across at the base, to a point at an included angle.
+      const cone = (r: number, deg: number) => (PI * r * r * (r / Math.tan((deg * PI) / 360))) / 3;
+      await ok(h, 'hole', HOLE({ centers: [CTR('10 mm', '0 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: 'drill' }));
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 4 * 3 - cone(2, 118), 3);
+      // The tip's sketch has no size or place of its own: its circle is the hole's, by a link.
+      expect(featureNamed<SketchFeature>(h, 'Hole 1 tip sketch')).toMatchObject({ constraints: [], links: [{ source: { kind: 'points', feature: featureNamed(h, 'Hole 1 sketch').id }, entities: [{ key: 'c:h1', entity: 'h1' }] }] });
+      await ok(h, 'edit_feature', EDIT('Hole 1 sketch', { set: [{ field: 'd', value: '6 mm' }] }));
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 9 * 3 - cone(3, 118), 3);
+      // Moved: the tip goes with its hole (it stayed behind as a cone sealed in the block).
+      await ok(h, 'edit_feature', EDIT('Hole 1 sketch', { set: [{ field: 'h1x', value: '-10 mm' }] }));
+      const tip = outputOf(h, 'Hole 1 tip sketch');
+      expect(tip.points.h1__center).toEqual([expect.closeTo(-10, 9), expect.closeTo(0, 9)]);
+      expect(tip.radii.h1).toBeCloseTo(3, 9);
+      const faces = (await ok(h, 'find', { query: 'Hole 1 tip faces', limit: 20 })).data.rows as { center_mm?: number[] }[];
+      expect(faces.length).toBeGreaterThan(0);
+      for (const f of faces) expect(Math.hypot(f.center_mm![0] + 10, f.center_mm![1])).toBeLessThan(3);
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 9 * 3 - cone(3, 118), 3);
+      for (const n of ['Hole 1 sketch', 'Hole 1', 'Hole 1 tip sketch', 'Hole 1 tip']) expect(h.doc.state.get().rebuild.features[featureNamed(h, n).id], n).toMatchObject({ state: 'ok' });
+
+      // A countersink 10 mm across at 90 deg on a through hole 4 mm across: its cone runs to its point,
+      // the part narrower than the hole inside the hole, so it meets any hole.
+      const before = volume(h)!;
+      await ok(h, 'hole', HOLE({ name: 'Sink', centers: [CTR('15 mm', '10 mm', '')], diameter: '4 mm', type: 'countersink', cs_diameter: '10 mm' }));
+      expect(featureNamed<ExtrudeFeature>(h, 'Sink countersink')).toMatchObject({ extent: { kind: 'blind', distance: '' }, taper: '(90 deg) / 2' });
+      // The hole 10 mm deep, and the cone above where it is 4 mm across (3 mm deep).
+      const sunk = (r: number) => PI * r * r * 10 + (PI * (5 - r) * (25 + 5 * r + r * r)) / 3 - PI * r * r * (5 - r);
+      expect(before - volume(h)!).toBeCloseTo(sunk(2), 3);
+      // The hole 2 mm across: the cone now meets it 4 mm down (the cut's depth was the old hole's 3 mm).
+      await ok(h, 'edit_feature', EDIT('Sink sketch', { set: [{ field: 'd', value: '2 mm' }] }));
+      expect(before - volume(h)!).toBeCloseTo(sunk(1), 3);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a blind hole deeper than the body there goes through, and the reply says so: one hole, or some of several (issue 14)',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      // A foot under the block's +X half: 20 mm of material there, 10 mm at -X.
+      await ok(h, 'sketch', SK({ name: 'Foot sketch', entities: [E('r', 'rect', [0, -20, 30, 20])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Foot', sketch: 'Foot sketch', distance: '10 mm', flip: true, op: 'join' }));
+      const solid = BLOCK + 30 * 40 * 10;
+      expect(volume(h)).toBeCloseTo(solid, 4);
+      // The issue's case: blind 20 mm where the body is 10 mm thick. It cut through, and used to say "20 mm deep" alone.
+      const one = await ok(h, 'hole', HOLE({ centers: [CTR('-15 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '20 mm' }));
+      expect(one.data.warnings).toEqual(['Hole 1 is 20 mm deep, at least as deep as Body 1 there, so it goes through (set depth through, or a smaller distance)']);
+      expect(volume(h)).toBeCloseTo(solid - PI * 4 * 10, 3);
+      // Two holes 15 mm deep: the one over the foot keeps its bottom, the other goes through.
+      const two = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '0 mm', ''), CTR('-15 mm', '-10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '15 mm' }));
+      expect(two.data.warnings).toEqual(['1 of the 2 holes of Hole 2 is at least as deep as Body 1 there, so it goes through (15 mm deep)']);
+      expect(volume(h)).toBeCloseTo(solid - PI * 4 * 10 - PI * 4 * 15 - PI * 4 * 10, 3);
+      // A blind hole that keeps its bottom says nothing of the kind.
+      const shallow = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '15 mm' }));
+      expect(shallow.data.warnings).toEqual([]);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    "a tapped hole's thread is a choice edit_feature sets: kept, or removed (its cut kept), as the Extrude panel's Remove",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      await ok(h, 'hole', HOLE({ centers: [CTR('0 mm', '0 mm', '')], diameter: '', size: 'M6', fit: 'tapped', depth: 'blind', distance: '8 mm' }));
+      const drilled = volume(h);
+      const full = async () => (await ok(h!, 'get_model', { detail: 'full', feature: 'Hole 1', regions: 'short' })).data.feature as Row;
+      expect((await full()).choices).toMatchObject({ thread: 'kept' });
+      // kept changes nothing; a word it does not have is refused with the ones it has.
+      await ok(h, 'edit_feature', EDIT('Hole 1', { set: [{ field: 'thread', value: 'kept' }] }));
+      expect(featureNamed<ExtrudeFeature>(h, 'Hole 1').thread).toMatchObject({ designation: 'M6x1' });
+      expect((await fail(h, 'edit_feature', EDIT('Hole 1', { set: [{ field: 'thread', value: 'none' }] }))).message).toBe('bad_input: set[0].value: thread is one of kept, removed.');
+      await ok(h, 'edit_feature', EDIT('Hole 1', { set: [{ field: 'thread', value: 'removed' }] }));
+      expect(featureNamed<ExtrudeFeature>(h, 'Hole 1').thread ?? null).toBeNull();
+      expect(volume(h)).toBeCloseTo(drilled!, 6);
+      expect((await full()).choices).not.toHaveProperty('thread');
+    },
+    HOLE_MS,
+  );
+
+  it(
+    "a modelled thread's Length, \"\" for the whole hole, is a field edit_feature sets, as the Thread panel's Length",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      // The hole module's thread feature type and its panel, as the app installs them.
+      registerModuleFeatures(h.doc.features, [holeModule]);
+      h.services.modules = createModuleRegistry([...h.services.modules.all(), holeModule]);
+      await block(h);
+      await ok(h, 'hole', HOLE({ centers: [CTR('0 mm', '0 mm', '')], diameter: '', size: 'M6', fit: 'tapped', depth: 'blind', distance: '8 mm', thread: 'modelled' }));
+      const whole = volume(h);
+      const full = (await ok(h, 'get_model', { detail: 'full', feature: 'Hole 1 thread', regions: 'short' })).data.feature as Row;
+      expect(full).toMatchObject({ name: 'Hole 1 thread', type: 'thread', state: 'ok', values: [{ field: 'length', expr: '' }] });
+      await ok(h, 'edit_feature', EDIT('Hole 1 thread', { set: [{ field: 'length', value: '4 mm' }] }));
+      expect(featureNamed<ThreadFeature>(h, 'Hole 1 thread').length).toBe('4 mm');
+      // 4 mm of thread instead of the 7 mm the whole hole has (a pitch short of its bottom): less groove cut.
+      expect(volume(h)).toBeGreaterThan(whole! + 1);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a modelled thread cuts each piece of its wall (below a counterbore or a wide countersink, both walls of a slot a through hole crosses); past its budget it is refused in words, nothing kept',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      registerModuleFeatures(h.doc.features, [holeModule]);
+      h.services.modules = createModuleRegistry([...h.services.modules.all(), holeModule]);
+      await block(h, { t: 20 });
+      // A slot 10 mm high through the block's -X half: its walls there are z 0..5 and 15..20.
+      await ok(h, 'sketch', SK({ name: 'Slot sketch', on: 'Front', entities: [E('r', 'rect', [-40, 5, 0, 15])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Slot', sketch: 'Slot sketch', extent: 'symmetric', distance: '60 mm', op: 'cut', bodies: ['Body 1'] }));
+      // Each hole's tap drill (5 mm) and its counterbore or countersink, before the groove: the
+      // groove cut more than that. A countersink 12 mm across at 90 deg meets the 5 mm drill 3.5 mm down.
+      const sink = ((PI * 3.5) / 3) * (36 + 15 + 6.25) - PI * 6.25 * 3.5;
+      const cases: [string, Row, number, [number, number][]][] = [
+        ['Bored', { centers: [CTR('15 mm', '10 mm', '')], depth: 'blind', distance: '12 mm', type: 'counterbore', cb_diameter: '10 mm', cb_depth: '3 mm' }, PI * 25 * 3 + PI * 6.25 * 9, [[8, 17]]],
+        ['Sunk', { centers: [CTR('15 mm', '-10 mm', '')], type: 'countersink', cs_diameter: '12 mm', cs_angle: '90 deg' }, sink + PI * 6.25 * 20, [[0, 16.5]]],
+        ['Across', { centers: [CTR('-20 mm', '0 mm', '')] }, PI * 6.25 * 10, [[0, 5], [15, 20]]],
+      ];
+      for (const [name, input, drilled, walls] of cases) {
+        const before = volume(h)!;
+        const r = await ok(h, 'hole', HOLE({ name, diameter: '', size: 'M6', fit: 'tapped', thread: 'modelled', ...input }));
+        expect(r.data.made, name).toContain(`${name} thread`);
+        expect(h.doc.state.get().rebuild.features[featureNamed(h, `${name} thread`).id], name).toMatchObject({ state: 'ok' });
+        expect(before - volume(h)!, name).toBeGreaterThan(drilled + 1);
+        // The groove's faces lie in each piece of wall, and in no air between.
+        const faces = ((await ok(h, 'find', { query: `${name} thread faces`, limit: 200 })).data.rows as { center_mm: number[] }[]).map((f) => f.center_mm[2]);
+        for (const [lo, hi] of walls) expect(faces.some((z) => z > lo && z < hi), `${name} ${lo}..${hi}`).toBe(true);
+        expect(faces.every((z) => walls.some(([lo, hi]) => z >= lo - 1 && z <= hi + 1)), name).toBe(true);
+      }
+      // Past the budget: refused before anything changes, with the ways out (six holes clear of the slot: all their depth is wall).
+      const doc = h.doc.state.get().doc;
+      const six = [2, 7, 12, 17, 22, 27].map((x) => CTR(`${x} mm`, '-18 mm', ''));
+      const many = await fail(h, 'hole', HOLE({ centers: six, diameter: '', size: 'M3', fit: 'tapped', thread: 'modelled', depth: 'blind', distance: '15 mm' }));
+      expect(many.message).toBe('bad_input: thread: 6 modelled M3x0.5 threads 15 mm deep are up to 174 turns in all, more than the 160 one thread cuts at once (it would take minutes): use thread cosmetic, fewer holes, or shallower ones.');
+      const long = await fail(h, 'hole', HOLE({ centers: [CTR('25 mm', '15 mm', '')], diameter: '', size: 'M3', fit: 'tapped', thread: 'modelled', depth: 'blind', distance: '70 mm' }));
+      expect(long.message).toBe('bad_input: thread: a modelled M3x0.5 thread 70 mm deep is up to 139 turns, more than 120 a hole: use thread cosmetic, or a hole at most 60.5 mm deep.');
+      const shallow = await fail(h, 'hole', HOLE({ centers: [CTR('25 mm', '15 mm', '')], diameter: '', size: 'M6', fit: 'tapped', thread: 'modelled', depth: 'blind', distance: '1.5 mm' }));
+      expect(shallow.message).toBe('bad_input: thread: a modelled M6x1 thread 1.5 mm deep is too shallow to cut (a turn and a pitch to the bottom need 2 mm): use thread cosmetic, or a deeper hole.');
+      expect(h.doc.state.get().doc).toBe(doc);
+      // A through hole's wall is known once it is cut: a 70 mm column's M3 thread fails then, and nothing of the hole is kept.
+      await ok(h, 'sketch', SK({ name: 'Column sketch', entities: [E('r', 'rect', [60, 0, 70, 10])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Column', sketch: 'Column sketch', distance: '70 mm', body_name: 'Column' }));
+      const kept = names(h);
+      const tall = await fail(h, 'hole', HOLE({ face: 'Column.end', centers: [CTR('65 mm', '5 mm', '')], diameter: '', size: 'M3', fit: 'tapped', thread: 'modelled' }));
+      expect(tall.message).toMatch(/Hole \d+ thread failed: 140 turns of M3x0\.5 in hole 1 of Hole \d+ is more than 120 a hole: a Length of at most 60 mm, a hole at most that deep, or a cosmetic thread/);
+      expect(names(h)).toEqual(kept);
     },
     HOLE_MS,
   );

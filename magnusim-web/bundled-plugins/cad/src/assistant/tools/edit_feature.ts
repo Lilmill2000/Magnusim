@@ -11,7 +11,8 @@
 //     structural, so a feature they turn red is kept and listed in `broke`. With values in the same
 //     call, the values are judged first, as a value edit, before the rename, suppression or move.
 //   - Choice and on/off fields (choices.ts: flip, op, method, shape, padding, axis, keepTool,
-//     orientation, ruled, along, fromEnd, a pattern's symmetric and mode...) go the same way, a
+//     orientation, ruled, along, fromEnd, a pattern's symmetric and mode, a tapped hole's cut's
+//     thread kept or removed...) go the same way, a
 //     row's value one of the field's words; the feature with every row applied must be complete
 //     by its type's own check (a method that needs a pick it has not got is refused).
 //   - Magnusim CAD keeps an Enclosure made in Magnusim as it is (features/enclosure/kept.ts): its
@@ -158,7 +159,7 @@ const editFeature: EditTool<Plan> = {
       const path = pathOfField(f, field, services);
       const choice = path ? null : choiceField(f, field);
       if (choice) {
-        const st = storedChoice(choice, value);
+        const st = storedChoice(choice, value, f);
         if (!st.ok) problems.push(`set[${i}].value: ${st.why}`);
         else if (set.some((x) => x.path === choice.path)) problems.push(`set[${i}]: ${field} is set twice`);
         else set.push({ field: choice.field, path: choice.path, value, stored: st.value });
