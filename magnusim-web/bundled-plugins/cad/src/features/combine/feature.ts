@@ -11,10 +11,13 @@
 // such as an inlay of spots and rings is made that way on purpose. Tools go
 // unless kept.
 // Faces keep their names through the history. An invalid result is red with
-// "Try repair": fuzzy 0.001 mm, then 0.01 mm, then ShapeFix.
+// "Try repair": fuzzy 0.001 mm, then 0.01 mm, then ShapeFix. A result OCCT answered
+// as if a tool and a target it overlaps were apart (kernel API 10, as_if_apart
+// 'wrong'; GitHub issue 15) is red with words that say so, never "Nothing to cut".
 // Owner: P2-FEATURES.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
+import { tookForApart } from '../../doc/features/body-op';
 import { namesFromResult } from '../../naming/result';
 import { timeoutForFaces } from '../../kernel/timeouts';
 import type { BodyId, CombineFeature } from '../../types/doc';
@@ -121,14 +124,17 @@ export const combineDef: FeatureTypeDef<CombineFeature, Record<string, never>> =
       if (f.op === 'intersect' && tools.length > 1) {
         let acc = tools[0].shape;
         let accNames = tools[0].names;
+        const accWords = [ctx.bodyName(f.tools[0])];
         for (const t of tools.slice(1)) {
           const r = (await ctx.kernel.call('combine', { op: 'intersect', targets: [acc], tools: [t.shape], ...(fuzzy ? { fuzzy } : {}) }, timeoutMs ? { timeoutMs } : {})).result.results[0];
           if (!r) return { ok: false, message: `${f.name} failed: the kernel gave no result` };
           steps.push(r.id);
+          if (r.as_if_apart === 'wrong') return { ok: false, message: `${f.name} failed: ${tookForApart('intersect', ctx.bodyName(t.id), accWords.length === 1 ? accWords[0] : `what ${andList(accWords)} share`)}` };
           if (r.empty) return { ok: false, message: `${f.name} failed: Nothing in common: the tools ${andList(f.tools.map((id) => ctx.bodyName(id)))} have no volume that all of them share (touching is not enough)` };
           if (r.valid === false) return { ok: false, message: `${f.name} failed: ${invalidWords(r.reason, fuzzy)}`, actions: repairActions(fuzzy) };
           accNames = namesFromResult(f.id, { faces: r.faces, history: r.history }, new Map([[acc, accNames], [t.shape, t.names]] as [ShapeId, FaceNames | null][]));
           acc = r.id;
+          accWords.push(ctx.bodyName(t.id));
         }
         inputs.set(acc, accNames);
         toolShapes = [acc];
@@ -154,6 +160,13 @@ export const combineDef: FeatureTypeDef<CombineFeature, Record<string, never>> =
       for (const r of res.results) {
         const id = byShape.get(r.target);
         if (!id) continue;
+        if (r.as_if_apart === 'wrong') {
+          const subject = tools.length === 1 ? ctx.bodyName(f.tools[0]) : f.op === 'intersect' ? `what ${andList(f.tools.map((t) => ctx.bodyName(t)))} share` : `one of ${andList(f.tools.map((t) => ctx.bodyName(t)))}`;
+          // The other targets are held back too (the feature fails whole): the words say so.
+          const rest = f.op === 'join' ? [] : targets.filter((t) => t.id !== id).map((t) => ctx.bodyName(t.id));
+          const held = rest.length ? `; ${andList(rest)} ${rest.length === 1 ? 'is left as it was' : 'are left as they were'} too` : '';
+          return { ok: false, message: `${f.name} failed: ${tookForApart(f.op, subject, ctx.bodyName(id))}${held}` };
+        }
         if (r.empty) {
           removed.add(id);
           gone.push(ctx.bodyName(id));

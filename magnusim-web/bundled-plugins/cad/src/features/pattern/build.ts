@@ -8,9 +8,13 @@
 //               every body is named in an amber note
 //   Intersect   what the bodies and the copies have in common
 // A failure is the feature's red message; the model before it still shows (Onshape semantics).
+// A copy OCCT answered as if apart from a body it overlaps (kernel API 10, as_if_apart 'wrong';
+// GitHub issue 15) is a target, and an Operation OCCT got wrong there is red in words that say so,
+// never "already cut away".
 // Owner: P4b PATTERN.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { deriveBodyId, storedBodyName } from '../../doc/features/body-ids';
+import { tookForApart } from '../../doc/features/body-op';
 import { plainKernelMessage } from '../../doc/rebuild';
 import { namesFromResult } from '../../naming/result';
 import type { BodyId, BodyOp, Feature, FeatureId, PatternCommon, Vec3 } from '../../types/doc';
@@ -320,8 +324,10 @@ export async function buildPattern(f: PatternFeature, copies: PatternCopy[], ctx
             if (!overlaps(tb, await ctx.bbox(m.id), tol)) continue;
             nearBody = true;
             const c = await boolean('common', cur.shape, [m.id]);
-            if (!c.empty || src.op === 'join') {
-              if (c.empty) {
+            // An empty common OCCT answered as if apart although they overlap still makes the body a target.
+            const wrong = c.as_if_apart === 'wrong';
+            if (!c.empty || wrong || src.op === 'join') {
+              if (c.empty && !wrong) {
                 // Join also takes a body a copy only touches (a shared face): their fuse is one solid.
                 const u = await boolean('fuse', cur.shape, [m.id]);
                 if (!(u.valid !== false && !u.empty && u.solids === 1)) continue;
@@ -346,16 +352,24 @@ export async function buildPattern(f: PatternFeature, copies: PatternCopy[], ctx
         const before = await solidsOf(p.shape);
         const r = await boolean('fuse', p.shape, [...mine.map((m) => m.id), ...others.map((o) => current(o)!.shape)]);
         if (r.valid === false) return { ok: false, message: `${f.name} failed: the result is not a valid solid${r.reason ? ` (${r.reason.replace(/^invalid result\s*/i, '')})` : ''}`, actions: fuzzy && fuzzy >= 0.01 ? undefined : ['repair'] };
-        if (r.solids > before) {
-          // Which copies stand apart: fused alone with the body, they make a second solid.
+        if (r.solids > before || r.as_if_apart === 'wrong') {
+          // Which copies stand apart: fused alone with the body, they make a second solid; or OCCT
+          // answered that fuse as if apart although they overlap.
           const apart: PatternCopy[] = [];
+          const wrong: PatternCopy[] = [];
           for (const m of mine) {
             const u = await boolean('fuse', p.shape, [m.id]);
-            if (u.solids > before) apart.push(m.copy);
+            if (u.as_if_apart === 'wrong') wrong.push(m.copy);
+            else if (u.solids > before) apart.push(m.copy);
+          }
+          const what = src.part === 'boss' ? `the copied faces` : src.label;
+          if (wrong.length || r.as_if_apart === 'wrong') {
+            failed.push(...wrong.map((c) => c.key));
+            const subject = wrong.length ? `${instanceList(wrong.map((c) => c.label))} of ${what}` : `a copy of ${what}`;
+            return { ok: false, message: `${f.name} failed: ${tookForApart('join', subject, ctx.bodyName(primary), { many: wrong.length > 1 })}`, output: out(centre0, failed) };
           }
           const list = apart.length ? apart : mine.map((m) => m.copy);
           failed.push(...list.map((c) => c.key));
-          const what = src.part === 'boss' ? `the copied faces` : src.label;
           return {
             ok: false,
             message: `${f.name} failed: ${instanceList(list.map((c) => c.label))} of ${what} ${list.length === 1 ? "doesn't" : "don't"} touch ${ctx.bodyName(primary)}; Join needs overlap. Use New body or change the spacing`,
@@ -374,17 +388,26 @@ export async function buildPattern(f: PatternFeature, copies: PatternCopy[], ctx
         // body's box that meets no material lands where it was already cut away (fix round 1, B1).
         const hits = new Set<string>();
         const inBox = new Set<string>();
+        const what = src.part === 'pocket' ? 'the copied faces' : src.label;
         for (const t of targets) {
           const cur = current(t)!;
           const tb = await ctx.bbox(cur.shape);
           const tol = 1e-6 * Math.max(1, tb[3] - tb[0], tb[4] - tb[1], tb[5] - tb[2]);
+          // Copies whose common with this body OCCT answered as if apart although they overlap.
+          const wrong: PatternCopy[] = [];
           for (const m of mine) {
             if (hits.has(m.copy.key) || !overlaps(tb, await ctx.bbox(m.id), tol)) continue;
             inBox.add(m.copy.key);
             const c = await boolean('common', cur.shape, [m.id]);
-            if (!c.empty) hits.add(m.copy.key);
+            if (c.as_if_apart === 'wrong') wrong.push(m.copy);
+            if (!c.empty || c.as_if_apart === 'wrong') hits.add(m.copy.key);
           }
           const r = await boolean(src.op === 'cut' ? 'cut' : 'common', cur.shape, mine.map((m) => m.id));
+          if (r.as_if_apart === 'wrong') {
+            failed.push(...wrong.map((c) => c.key));
+            const subject = wrong.length ? `${instanceList(wrong.map((c) => c.label))} of ${what}` : `a copy of ${what}`;
+            return { ok: false, message: `${f.name} failed: ${tookForApart(src.op, subject, ctx.bodyName(t), { many: wrong.length > 1 })}`, output: out(centre0, failed) };
+          }
           if (r.valid === false) return { ok: false, message: `${f.name} failed: the result is not a valid solid${r.reason ? ` (${r.reason.replace(/^invalid result\s*/i, '')})` : ''}`, actions: fuzzy && fuzzy >= 0.01 ? undefined : ['repair'] };
           if (r.empty) {
             bodiesOut.delete(t);
@@ -398,7 +421,6 @@ export async function buildPattern(f: PatternFeature, copies: PatternCopy[], ctx
         }
         const missed = mine.filter((m) => !hits.has(m.copy.key)).map((m) => m.copy);
         if (missed.length) {
-          const what = src.part === 'pocket' ? 'the copied faces' : src.label;
           const away = missed.filter((c) => !inBox.has(c.key));
           const empty = missed.filter((c) => inBox.has(c.key));
           if (away.length) notes.push(`${instanceList(away.map((c) => c.label))} of ${what} ${away.length === 1 ? 'misses' : 'miss'} every body: ${src.op === 'cut' ? 'nothing is cut there' : 'nothing is kept there'}`);

@@ -36,8 +36,8 @@ const holeRows = (kt: Kit, id: number, rec: R) => {
 const brepBytes = (id: number): string => Buffer.from(k.takeBuffers(k.call('brep_write', { ids: [id] })).brep as Uint8Array).toString('base64');
 
 describe8('recognize (API 8)', () => {
-  it('version answers api 9 (the defeature budget and the two face limits) with Analysis Situs 2026.1.1', () => {
-    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 9, asi: '2026.1.1' });
+  it('version answers api 10 (API 9: the defeature budget and the two face limits; API 10: as_if_apart) with Analysis Situs 2026.1.1', () => {
+    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 10, asi: '2026.1.1' });
   });
 
   it('the Step 0 family rounded R1 and R2 on every edge: every fillet face found and nothing else, radius exact, one chain', () => {

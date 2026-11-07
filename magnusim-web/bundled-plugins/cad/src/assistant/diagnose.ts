@@ -211,7 +211,7 @@ async function toolShape(sc: Scene, how: 'flip' | 'whole' | 'ahead' | 'behind'):
   }
 }
 
-/** The first target body `tool` overlaps (more than touching), or null. */
+/** The first target body `tool` overlaps (more than touching), or null; an empty common OCCT answered as if apart although they overlap (kernel API 10) counts. */
 async function firstOverlap(sc: Scene, tool: ShapeId): Promise<EndBody | null> {
   const tb = await bboxOf(sc, tool);
   const tol = 1e-7 * Math.max(1, Math.hypot(tb[3] - tb[0], tb[4] - tb[1], tb[5] - tb[2]));
@@ -219,7 +219,7 @@ async function firstOverlap(sc: Scene, tool: ShapeId): Promise<EndBody | null> {
     if (!overlaps(tb, await bboxOf(sc, body.shape), tol)) continue;
     const c = (await sc.kernel.call('boolean', { op: 'common', targets: [body.shape], tools: [tool], keep_tools: true })).result;
     sc.made.push(c.id);
-    if (!c.empty) return body;
+    if (!c.empty || c.as_if_apart === 'wrong') return body;
   }
   return null;
 }

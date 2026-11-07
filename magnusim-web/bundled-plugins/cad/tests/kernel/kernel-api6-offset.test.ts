@@ -49,8 +49,8 @@ function filletBox(): { id: number; fillet: number } {
 }
 
 describe('offset_faces (API 6)', () => {
-  it('version answers api 9 (API 6, the volumes of API 7, the Analysis Situs ops of API 8 and the defeature budget of API 9)', () => {
-    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 9 });
+  it('version answers api 10 (API 6, the volumes of API 7, the Analysis Situs ops of API 8, the defeature budget of API 9 and as_if_apart of API 10)', () => {
+    expect(call(k, 'version')).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 10 });
   });
 
   it('a pipe bore grown and shrunk: +2 mm -> r 8, -2 mm -> r 12 (native volumes); the bore keeps its name, the input is unchanged', () => {

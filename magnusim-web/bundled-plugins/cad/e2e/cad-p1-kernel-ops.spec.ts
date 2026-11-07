@@ -115,9 +115,9 @@ test('cad:p1-kernel-ops the kernel in the Part frame checks, copies and repairs'
     return r;
   }, input);
 
-  // API 3 since P2/P3 (docs/p2p3-plan.md §2; the API 3 ops: cad-p2-kernel-ops.spec.ts), API 9 now
-  // (Analysis Situs and the defeature budget; the page's own check without the Vortex STEP: cad-kernel-api8.spec.ts).
-  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 9, asi: '2026.1.1' });
+  // API 3 since P2/P3 (docs/p2p3-plan.md §2; the API 3 ops: cad-p2-kernel-ops.spec.ts), API 10 now
+  // (Analysis Situs, the defeature budget and as_if_apart; the page's own check without the Vortex STEP: cad-kernel-api8.spec.ts).
+  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 10, asi: '2026.1.1' });
   // props: cheap by default.
   expect(out.props).toMatchObject({ faces: 17, edges: 34, bbox_mode: 'fast' });
   expect(out.props.volume).toBeUndefined();

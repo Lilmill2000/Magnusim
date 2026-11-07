@@ -1,6 +1,6 @@
 // Kernel API 8 (Analysis Situs asiAlgo 2026.1.1) in the Part's own worker: the ready message says
-// {api: 9, asi: '2026.1.1'} (API 9: defeature's time budget, recognize's two face limits, the
-// budget's words), `version` answers the same, and `recognize` on the proof's part A,
+// {api: 10, asi: '2026.1.1'} (API 9: defeature's time budget, recognize's two face limits, the
+// budget's words; API 10: as_if_apart), `version` answers the same, and `recognize` on the proof's part A,
 // built here with kernel ops (a 60 x 40 x 20 box, R5 on its 4 vertical edges, R3 round the top,
 // a 6 mm through hole and an 8 mm hole 10 deep), finds its 12 fillet faces (4 R5, 8 R3) and its
 // 2 holes (6 mm through, 8 mm blind). The page's recognition limits (window.__CAD__.recognition,
@@ -18,7 +18,7 @@
 import { expect, test } from '@playwright/test';
 import { newPartFromTree, newProject, openProject, partOpened, watchPage, workspaceFrame } from './helpers';
 
-test('cad:kernel-api8 the Part worker answers API 9 with Analysis Situs, finds part A\'s fillets and holes and stops a heal within its budget', async ({ page, request }) => {
+test('cad:kernel-api8 the Part worker answers API 10 with Analysis Situs, finds part A\'s fillets and holes and stops a heal within its budget', async ({ page, request }) => {
   const seen = await watchPage(page);
   const projectId = await newProject(request);
   await openProject(page, projectId);
@@ -92,9 +92,9 @@ test('cad:kernel-api8 the Part worker answers API 9 with Analysis Situs, finds p
   });
 
   // The ready message (the worker's first answer) and `version`.
-  expect(out.ready).toEqual({ api: 9, asi: '2026.1.1' });
-  expect(out.info).toMatchObject({ api: 9, asi: '2026.1.1', occt: '7.9.3' });
-  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 9, asi: '2026.1.1' });
+  expect(out.ready).toEqual({ api: 10, asi: '2026.1.1' });
+  expect(out.info).toMatchObject({ api: 10, asi: '2026.1.1', occt: '7.9.3' });
+  expect(out.version).toMatchObject({ occt: '7.9.3', build: 'wasm32', api: 10, asi: '2026.1.1' });
   expect(out.pageLimits).toEqual({ maxFilletFaces: 5000, maxHoleFaces: 2600 });
   // Part A, as built, and what recognize finds on it.
   expect(out.part).toEqual({ valid: true, faces: 21 });
