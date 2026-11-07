@@ -2,13 +2,14 @@
 // Part's model open on the server, which keeps 4 uploads open per project and plugin and ends an
 // idle one after 10 minutes. After four such tabs every save of the Part was refused ("Not saved:
 // too many files are being saved at once") until they ran out. A new upload of a file now ends
-// that file's older uploads that waited 30 s (scripts/server/plugin-files.ts UPLOAD_SUPERSEDE_MS).
-// Four tabs each change the Part and go while their save is on its way: its commit is held in
-// the browser (the begin and the bytes reached the server), then the tab's page crashes, so it
-// sends nothing more, as a closed or crashed tab does (with Playwright's own close the page still
-// aborted its upload: the server held none). The server then holds four uploads: a fifth begin is
-// refused. A fresh tab, once the last of them waited 30 s, changes the Part: no
-// save of it is refused, its chip says Saved, and the change is stored.
+// that file's older uploads that waited 30 s, and other files' ones when the plugin's places are
+// taken (scripts/server/plugin-files.ts UPLOAD_SUPERSEDE_MS).
+// Four tabs open the Part, then each in turn changes it and goes while its save is on its way: its
+// commit is held in the browser (the begin and the bytes reached the server), then the tab's page
+// crashes, so it sends nothing more, as a closed or crashed tab does (with Playwright's own close
+// the page still aborted its upload: the server held none). The server then holds four uploads:
+// while none waited 30 s, a fifth begin is refused. A fresh tab, once the last of them waited
+// 30 s, changes the Part: no save of it is refused, its chip says Saved, and the change is stored.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { expect, test, type APIRequestContext, type Page, type Response } from '@playwright/test';
 import { addSketch, baseUrl, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage } from './helpers';
@@ -43,16 +44,22 @@ test('cad:save-after-closed-tabs four tabs closed mid-save leave the Part saving
   await page.locator('#workspace-overlay [data-ws-back]').click();
   await expect(page.locator('#workspace-overlay')).toBeHidden();
 
-  let lastClosed = 0;
+  // The tabs open the Part first, so their saves follow each other closely.
+  const tabs: { tab: Page; held: Awaited<ReturnType<typeof holdCommits>> }[] = [];
   for (let i = 1; i <= 4; i++) {
     const tab = await context.newPage();
     await openProject(tab, projectId);
     await openPart(tab, rowIn(tab));
-    const held = await holdCommits(tab);
+    tabs.push({ tab, held: await holdCommits(tab) });
+  }
+  let firstSent = 0;
+  let lastClosed = 0;
+  for (const [n, { tab, held }] of tabs.entries()) {
     const begun = tab.waitForResponse(isBegin);
-    await addSketch(tab, { size: [10 + i, 10] });
-    expect((await begun).status(), `tab ${i}'s save began`).toBe(201);
-    await expect.poll(() => held.held(), { message: `tab ${i}'s save sent its bytes and its commit` }).toBe(1);
+    await addSketch(tab, { size: [11 + n, 10] });
+    expect((await begun).status(), `tab ${n + 1}'s save began`).toBe(201);
+    await expect.poll(() => held.held(), { message: `tab ${n + 1}'s save sent its bytes and its commit` }).toBe(1);
+    firstSent ||= Date.now();
     const cdp = await context.newCDPSession(tab);
     const crashed = tab.waitForEvent('crash');
     void cdp.send('Page.crash').catch(() => undefined);
@@ -60,7 +67,9 @@ test('cad:save-after-closed-tabs four tabs closed mid-save leave the Part saving
     await tab.close();
     lastClosed = Date.now();
   }
-  // The four uploads are open on the server: another begin of the plugin is refused.
+  // The four uploads are open on the server: another begin of the plugin is refused. A begin ends
+  // uploads that waited 30 s, so this holds only while none has.
+  expect(Date.now() - firstSent, 'the four tabs saved within 30 s (on a loaded PC, run this spec alone)').toBeLessThan(SUPERSEDE_MS - 2_000);
   const fifth = await request.post(`${baseUrl()}/api/plugin-files/uploads`, { data: { project_id: projectId, plugin: 'cad', rel: 'other.bin', size: 1 } });
   expect([fifth.status(), (await fifth.json()).code], "the server holds the four closed tabs' uploads").toEqual([429, 'too_many_uploads']);
 

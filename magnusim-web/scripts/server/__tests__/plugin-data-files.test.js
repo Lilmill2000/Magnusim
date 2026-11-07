@@ -1140,14 +1140,14 @@ test('a new upload of a file ends its older uploads that waited 30 s, so pages c
   writeFileSync(join(study, 'study.json'), '{}');
   const MODEL = 'studies/s1/model.json';
   const WAIT = 30_000;
-  const replaced = `a newer save of ${MODEL} replaced this one after it had waited 30 s`;
+  const replaced = `this upload of ${MODEL} had no call for 30 s, so a newer upload of the file ended it`;
   let clock = Date.now();
   const h = await harness({ now: () => clock });
   const c = client(h.base, pid);
   try {
     const t0 = clock;
     const etag1 = (await c.write(MODEL, Buffer.from('{"v":1}'))).body.file.etag;
-    // Another file's upload, idle longer than any: only uploads of the same file are ended.
+    // Another file's upload: while the plugin has a place, only uploads of the same file are ended.
     const other = (await c.begin('notes.bin', 2)).body.upload;
     // Three pages closed mid-save, a second apart: each began the model's upload; the first sent a chunk at the end.
     const left = [];
@@ -1158,6 +1158,7 @@ test('a new upload of a file ends its older uploads that waited 30 s, so pages c
       clock += 1000;
     }
     assert.equal((await c.put(left[0], 0, Buffer.from('{"v'))).status, 200);
+    assert.equal((await c.put(other, 0, Buffer.from('a'))).status, 200);
     assert.equal(stagingParts(pid).length, 4);
 
     // While each may still be saving (none of the model's waited 30 s), a fifth begin is refused.
@@ -1177,7 +1178,7 @@ test('a new upload of a file ends its older uploads that waited 30 s, so pages c
     assert.equal((await c.abort(left[1])).body.aborted, false);
     assert.deepEqual(stagingParts(pid).sort(), [`${other}.part`, `${left[0]}.part`, `${fresh.body.upload}.part`].sort());
     // The other file's upload goes on.
-    assert.equal((await c.put(other, 0, Buffer.from('ab'))).body.received, 2);
+    assert.equal((await c.put(other, 1, Buffer.from('b'))).body.received, 2);
     assert.equal((await c.commit(other)).status, 200);
 
     // The fresh page's save lands.
@@ -1211,6 +1212,130 @@ test('a new upload of a file ends its older uploads that waited 30 s, so pages c
     assert.equal((await c.abort(during.body.upload)).body.aborted, true);
     assert.deepEqual(stagingParts(pid), []);
     assert.equal(UPLOAD_SUPERSEDE_MS, WAIT);
+  } finally {
+    await h.close();
+  }
+});
+
+test("when a plugin's four upload places are taken, a begin ends its longest-waiting uploads of other files that waited 30 s, as many as it needs (Magnusim CAD issue 17)", async () => {
+  const pid = 'p-supersede-files';
+  project(pid);
+  const WAIT = 30_000;
+  const tookPlace = (rel) => `this upload of ${rel} had no call for 30 s, so another upload took its place (a plugin may write 4 files at a time)`;
+  let clock = Date.now();
+  const h = await harness({ now: () => clock });
+  const c = client(h.base, pid);
+  try {
+    const t0 = clock;
+    // Four pages closed mid-save, a second apart, each saving another file; the second sent a chunk at the end.
+    const left = [];
+    for (let i = 1; i <= 4; i += 1) {
+      const b = await c.begin(`parts/${i}.json`, 2);
+      assert.equal(b.status, 201, JSON.stringify(b.body));
+      left.push(b.body.upload);
+      clock += 1000;
+    }
+    assert.equal((await c.put(left[1], 0, Buffer.from('{'))).status, 200);
+
+    // While each may still be saving (none waited 30 s), a begin of a fifth file is refused and ends none.
+    clock = t0 + WAIT - 1;
+    const refused = await c.begin('parts/5.json', 2);
+    assert.deepEqual([refused.status, refused.body.code], [429, 'too_many_uploads']);
+    assert.equal(stagingParts(pid).length, 4);
+
+    // Once two waited 30 s, a begin of the fifth file ends the one that waited longest, and only it.
+    clock = t0 + 2000 + WAIT;
+    const fifth = await c.begin('parts/5.json', 2);
+    assert.equal(fifth.status, 201, JSON.stringify(fifth.body));
+    const late = await c.commit(left[0]);
+    assert.deepEqual([late.status, late.body.code, late.body.error], [404, 'upload_not_found', tookPlace('parts/1.json')]);
+    assert.deepEqual(stagingParts(pid).sort(), [left[1], left[2], left[3], fifth.body.upload].map((u) => `${u}.part`).sort());
+    // The others go on, the one that also waited 30 s too.
+    assert.equal((await c.put(left[2], 0, Buffer.from('{}'))).body.received, 2);
+    assert.equal((await c.commit(left[2])).status, 200);
+    assert.equal((await c.put(left[1], 1, Buffer.from('}'))).body.received, 2);
+    assert.equal((await c.commit(left[1])).status, 200);
+    assert.equal((await c.put(fifth.body.upload, 0, Buffer.from('[]'))).body.received, 2);
+    assert.equal((await c.commit(fifth.body.upload)).status, 200);
+    assert.equal((await c.read('parts/5.json')).buf.toString(), '[]');
+    assert.equal((await c.read('parts/1.json')).status, 404);
+
+    // An upload taking a chunk is never ended to make room, though it had its last call longest ago.
+    const slow = left[3];
+    const put = openPut(h.base, `/api/plugin-files/uploads/${slow}?${c.qs({ offset: '0' })}`, {
+      'content-type': 'application/octet-stream',
+      'content-length': '2',
+    });
+    put.req.write(Buffer.from('{'));
+    await eventually(async () => (await c.commit(slow)).body.code === 'busy', 'the chunk to start');
+    clock += 1000;
+    const more = [];
+    for (let i = 6; i <= 8; i += 1) {
+      const b = await c.begin(`parts/${i}.json`, 2);
+      assert.equal(b.status, 201, JSON.stringify(b.body));
+      more.push(b.body.upload);
+    }
+    clock += 10 * WAIT;
+    const ninth = await c.begin('parts/9.json', 2);
+    assert.equal(ninth.status, 201, JSON.stringify(ninth.body));
+    put.req.end(Buffer.from('}'));
+    assert.deepEqual((await put.answer).body, { ok: true, received: 2 });
+    assert.equal((await c.commit(slow)).status, 200);
+    assert.equal((await c.put(more[0], 0, Buffer.from('{}'))).body.error, tookPlace('parts/6.json'));
+    for (const u of [...more.slice(1), ninth.body.upload]) assert.equal((await c.abort(u)).body.aborted, true);
+    assert.deepEqual(stagingParts(pid), []);
+  } finally {
+    await h.close();
+  }
+});
+
+test('a begin that is refused ends none of the uploads it would have ended (Magnusim CAD issue 17)', async () => {
+  const pid = 'p-supersede-refused';
+  project(pid);
+  const study = join(pluginDir(pid), 'studies', 's1');
+  mkdirSync(study, { recursive: true });
+  writeFileSync(join(study, 'study.json'), '{}');
+  const MODEL = 'studies/s1/model.json';
+  const WAIT = 30_000;
+  let clock = Date.now();
+  let free = Number.POSITIVE_INFINITY;
+  const h = await harness({
+    rows: [{ key: KEY, status: 'enabled', files: { max_file_bytes: 1000, max_total_bytes: 1000 } }],
+    now: () => clock,
+    fsOps: { statfs: async () => ({ bavail: free, bsize: 1 }) },
+  });
+  const c = client(h.base, pid);
+  try {
+    // Another file takes half of the plugin's 1000 bytes.
+    assert.equal((await c.write('other.bin', Buffer.alloc(500))).status, 200);
+    // A page sent the bytes of its save of the model, then waited 30 s before its commit.
+    const older = (await c.begin(MODEL, 10)).body.upload;
+    assert.equal((await c.put(older, 0, Buffer.from('0123456789'))).status, 200);
+    clock += WAIT;
+    // A newer save of the model too large for the quota is refused and ends nothing; so is one the disk has no room for.
+    const big = await c.begin(MODEL, 600);
+    assert.deepEqual([big.status, big.body.code], [413, 'quota']);
+    free = DISK_SPARE_BYTES + 50;
+    const full = await c.begin(MODEL, 100);
+    assert.deepEqual([full.status, full.body.code], [507, 'disk_full']);
+    free = Number.POSITIVE_INFINITY;
+    assert.deepEqual(stagingParts(pid), [`${older}.part`], 'a refused begin ended the older upload');
+    // The older save still lands.
+    assert.equal((await c.commit(older)).status, 200);
+    assert.equal((await c.read(MODEL)).buf.toString(), '0123456789');
+
+    // A newer save that is let in ends one that waited, and that page's next call is told so.
+    const again = (await c.begin(MODEL, 10)).body.upload;
+    clock += WAIT;
+    const newer = await c.begin(MODEL, 10);
+    assert.equal(newer.status, 201, JSON.stringify(newer.body));
+    const told = await c.put(again, 0, Buffer.from('9876543210'));
+    assert.deepEqual(
+      [told.status, told.body.code, told.body.error],
+      [404, 'upload_not_found', `this upload of ${MODEL} had no call for 30 s, so a newer upload of the file ended it`],
+    );
+    assert.deepEqual(stagingParts(pid), [`${newer.body.upload}.part`]);
+    assert.equal((await c.abort(newer.body.upload)).body.aborted, true);
   } finally {
     await h.close();
   }
