@@ -331,8 +331,9 @@ export const hasBottom = (services: AppServices, plan: HolePlan): boolean => !pl
 export function throughWords(plan: HolePlan, bottoms = 0): string {
   const n = plan.centers.length;
   const some = bottoms > 0 && bottoms < n;
+  const one = n - bottoms === 1;
   return some
-    ? `${n - bottoms} of the ${n} holes of ${plan.name} are deeper than ${plan.bodyName} there, so they go through (${len(plan.depth ?? 0)} mm deep)`
+    ? `${n - bottoms} of the ${n} holes of ${plan.name} ${one ? 'is' : 'are'} deeper than ${plan.bodyName} there, so ${one ? 'it goes' : 'they go'} through (${len(plan.depth ?? 0)} mm deep)`
     : `${plan.name} is ${len(plan.depth ?? 0)} mm deep, deeper than ${plan.bodyName} there, so it goes through (set depth through, or a smaller distance)`;
 }
 

@@ -16,6 +16,8 @@
 //   - a drill point (tip "drill", 118 deg, or the point's own angle) below a blind hole, refused on
 //     a through hole; a blind hole deeper than the block goes through, the reply says so and leaves
 //     out the drill point it asked for (issue 14);
+//   - a blind hole deeper than the body there, one hole or one of two, says it goes through; one
+//     that keeps its bottom says nothing (issue 14);
 //   - a value (set_params, the sketch's position dimension, with a rename too) that moves a hole
 //     off its body, where it builds and cuts nothing, changes nothing (broke_downstream with the
 //     diagnosis); a structural edit that leaves a scoped cut with nothing to cut is kept and warns;
@@ -309,6 +311,31 @@ describe('hole', () => {
       expect(deep.text).not.toContain('drill point');
       expect(deep.data).not.toHaveProperty('tip');
       expect(volume(h)).toBeCloseTo(BLOCK - 2 * PI * 4 * 3 - cone(118) - cone(135) - PI * 4 * 10, 3);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a blind hole deeper than the body there goes through, and the reply says so: one hole, or some of several (issue 14)',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      // A foot under the block's +X half: 20 mm of material there, 10 mm at -X.
+      await ok(h, 'sketch', SK({ name: 'Foot sketch', entities: [E('r', 'rect', [0, -20, 30, 20])] }));
+      await ok(h, 'extrude', EXTRUDE({ name: 'Foot', sketch: 'Foot sketch', distance: '10 mm', flip: true, op: 'join' }));
+      const solid = BLOCK + 30 * 40 * 10;
+      expect(volume(h)).toBeCloseTo(solid, 4);
+      // The issue's case: blind 20 mm where the body is 10 mm thick. It cut through, and used to say "20 mm deep" alone.
+      const one = await ok(h, 'hole', HOLE({ centers: [CTR('-15 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '20 mm' }));
+      expect(one.data.warnings).toEqual(['Hole 1 is 20 mm deep, deeper than Body 1 there, so it goes through (set depth through, or a smaller distance)']);
+      expect(volume(h)).toBeCloseTo(solid - PI * 4 * 10, 3);
+      // Two holes 15 mm deep: the one over the foot keeps its bottom, the other goes through.
+      const two = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '0 mm', ''), CTR('-15 mm', '-10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '15 mm' }));
+      expect(two.data.warnings).toEqual(['1 of the 2 holes of Hole 2 is deeper than Body 1 there, so it goes through (15 mm deep)']);
+      expect(volume(h)).toBeCloseTo(solid - PI * 4 * 10 - PI * 4 * 15 - PI * 4 * 10, 3);
+      // A blind hole that keeps its bottom says nothing of the kind.
+      const shallow = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '15 mm' }));
+      expect(shallow.data.warnings).toEqual([]);
     },
     HOLE_MS,
   );
