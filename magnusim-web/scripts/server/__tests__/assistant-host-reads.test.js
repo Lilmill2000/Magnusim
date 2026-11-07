@@ -168,6 +168,23 @@ describe('catalog', () => {
       ['heat_transfer', false],
     ]);
   });
+  it("a key's fields carry each field's whole help, as the panel's tooltip shows it (two-way parity: the model help's caveats, not its first 160 characters)", async () => {
+    fresh();
+    const { REGISTRY } = await import('./assistant-host-harness.js');
+    for (const key of ['incompressible_steady', 'incompressible_transient', 'heat_transfer_steady']) {
+      const row = REGISTRY.analysis.find((a) => a.key === key);
+      const help = { ...row.schema.properties, ...(row.numerics_schema || {}).properties };
+      const one = await cat('analyses', key);
+      for (const f of one.settings) {
+        const want = String(help[f.key]?.description || '').replace(/\s+/g, ' ').trim();
+        assert.equal(f.description ?? '', want, `${key} ${f.key}`);
+      }
+    }
+    const one = await cat('analyses', 'incompressible_steady');
+    const model = one.settings.find((f) => f.key === 'turbulence_model');
+    assert.ok(model.description.length > 160, `${model.description.length} characters`);
+    assert.match(model.description, /On Standard's tetrahedra/);
+  });
   it('an unknown key is not_found, with the way to list', async () => {
     const out = await tools().catalog.run({ kind: 'analyses', key: 'nope' }, rt());
     assert.deepEqual([out.ok, out.error.code], [false, 'not_found']);
@@ -706,6 +723,15 @@ describe('read_setup: numerics (RH3)', () => {
     const out = await ok('read_setup', read({ id: 'r1' }));
     assert.deepEqual([out.from, out.recorded, out.rows], ['numerics_used', false, [{ group: 'Not recorded', label: 'Numerics as written', value: row.value }]]);
     assert.equal(out.note, `"Run 1" started before what its case was written with was recorded: its case folder holds it; read_setup {what:'study'} has the study's numerics now.`);
+  });
+  it("a started run whose analysis reported no rows: the one row the panel shows, and a note saying its analysis did not report them", async () => {
+    fresh();
+    const row = { group: 'Not recorded', label: 'Numerics as written', value: "This run's analysis did not report what its case was written with, so it is not shown here.", source: '' };
+    app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: true, checks: [], numerics: [row], numerics_recorded: false, numerics_unrecorded: 'not_reported' } : undefined);
+    app.w.runs[0].numerics_used = { analysis: 'incompressible_steady', mode: 'steady', at: '2026-11-04T00:00:00Z', values: { relax_p: 0.3 }, written: false };
+    const out = await ok('read_setup', read({ id: 'r1' }));
+    assert.deepEqual([out.from, out.recorded, out.rows], ['numerics_used', false, [{ group: 'Not recorded', label: 'Numerics as written', value: row.value }]]);
+    assert.equal(out.note, `"Run 1"'s analysis did not report what its case was written with: its case folder holds it; read_setup {what:'study'} has the study's numerics now.`);
   });
   it("a preset row names the preset the run is written with (the run's, as the panel names it)", async () => {
     fresh();

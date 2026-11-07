@@ -357,8 +357,13 @@ async function numericsAnswer(d: HostToolDeps, rt: ToolRunContext, project: stri
     ...(str(x.preset) ? { preset: text(x.preset, 20) } : {}),
   }));
   // A started run's rows are the ones recorded when its case was written; a run started before
-  // they were recorded shows one row saying so (the route's numerics_recorded false), as the panel does.
+  // they were recorded, or whose analysis reported none, shows one row saying so (the route's
+  // numerics_recorded false, numerics_unrecorded why), as the panel does.
   const unrecorded = !draft && pc.numerics_recorded === false;
+  const why =
+    pc.numerics_unrecorded === 'not_reported'
+      ? `${quoted(r.name)}'s analysis did not report what its case was written with`
+      : `${quoted(r.name)} started before what its case was written with was recorded`;
   return okData(
     {
       run_id: runId,
@@ -366,7 +371,7 @@ async function numericsAnswer(d: HostToolDeps, rt: ToolRunContext, project: stri
       from: draft ? 'study' : 'numerics_used',
       rows,
       shown_in: NUMERICS_SHOWN_IN,
-      ...(unrecorded ? { recorded: false, note: `${quoted(r.name)} started before what its case was written with was recorded: its case folder holds it; read_setup {what:'study'} has the study's numerics now.` } : {}),
+      ...(unrecorded ? { recorded: false, note: `${why}: its case folder holds it; read_setup {what:'study'} has the study's numerics now.` } : {}),
     },
     unrecorded ? `${quoted(r.name)}: numerics as written not recorded` : `${quoted(r.name)}: numerics as written (${rows.length} rows)`,
   );

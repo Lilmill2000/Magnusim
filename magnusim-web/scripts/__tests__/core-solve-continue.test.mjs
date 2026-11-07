@@ -1049,6 +1049,35 @@ describe('RH3: what a started run was written with', () => {
     assert.deepEqual((await w27.precheckRun(PID, rid, {}, SID)).numerics, rows('new'));
   });
 
+  it("a Start or a Continue with new numerics whose plan reports no rows records false: the run says its analysis did not report them, never rows rebuilt with today's writer", async () => {
+    // An analysis without rows (a third-party one), or one whose rows failed (numerics_error).
+    fx.plan = () => planAnswer({ plan: { ...planAnswer().plan, numerics_error: 'no rows' } });
+    const rid = await solvedRun('stopped');
+    assert.equal(runDoc(rid).numerics_used.written, false);
+    let pc = await w27.precheckRun(PID, rid, {}, SID);
+    assert.deepEqual([pc.numerics, pc.numerics_recorded, pc.numerics_unrecorded], [w27.NUMERICS_NOT_REPORTED.map((r) => ({ ...r })), false, 'not_reported']);
+    assert.match(pc.numerics[0].value, /^This run's analysis did not report what its case was written with, so it is not shown here/);
+    // A Continue that keeps its numerics keeps that record.
+    fx.plan = () => planAnswer({ plan: { ...planAnswer().plan, numerics: rows('kept') } });
+    let { out } = await cont(rid, { extraIterations: 20 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    endRun(rid, 'stopped');
+    assert.equal(runDoc(rid).numerics_used.written, false);
+    // A Continue with the study's new numerics whose plan reports none: false again.
+    studySet({ relax_p: 0.2 });
+    fx.plan = () => planAnswer({ plan: { ...planAnswer().plan } });
+    ({ out } = await cont(rid, { extraIterations: 20, numerics: 'new' }));
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.deepEqual([runDoc(rid).numerics_used.values.relax_p, runDoc(rid).numerics_used.written], [0.2, false]);
+    assert.equal((await w27.precheckRun(PID, rid, {}, SID)).numerics_unrecorded, 'not_reported');
+    // A run started before rows were recorded says that instead.
+    const runJson = join(io.runFolderOf(PID, rid, SID).dir, 'run.json');
+    const doc = runDoc(rid);
+    const { written: _w, ...older } = doc.numerics_used;
+    writeFileSync(runJson, JSON.stringify({ ...doc, numerics_used: older }));
+    assert.equal((await w27.precheckRun(PID, rid, {}, SID)).numerics_unrecorded, 'before');
+  });
+
   it('a run started before its rows were recorded says so; one whose rows are being recorded shows them as written now; a draft its study\'s', async () => {
     const rid = await solvedRun('stopped');
     const runJson = join(io.runFolderOf(PID, rid, SID).dir, 'run.json');

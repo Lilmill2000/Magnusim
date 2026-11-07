@@ -32,15 +32,17 @@
 //   (limitedGradU), and what each model's walls are written with (k-omega SST: Spalding's law, stepwise
 //   omega; k-epsilon: nutkWallFunction), as the Assistant reads it; the Study panel's model help gives
 //   what k-omega SST's walls read at the y+ that were tested, not "any y+" or "below about 0.5", and
-//   no y+ for Spalart-Allmaras, whose walls were not tested. Fails on the code before it: there were no
-//   such rows and the limiter was on grad(U).
+//   no y+ for Spalart-Allmaras, whose walls were not tested, and the Assistant reads that whole help
+//   (catalog), word for word. Fails on the code before it: there were no such rows, the limiter was on
+//   grad(U), and the Assistant read only the help's first 160 characters.
 // - What a run was written with: a started run shows the rows its Start (or a Continue with the new
 //   numerics) recorded when its case was written (numerics_used.written). After the study turns to
 //   k-epsilon, a started k-omega SST run still shows SST's walls while a draft shows k-epsilon's
 //   (Heat Transfer's Wall treatment row too), and rows an earlier writer recorded show as written; a
-//   run started before the rows were recorded shows one row saying so. The Assistant reads the same.
+//   run started before the rows were recorded shows one row saying so, and so does a run whose
+//   analysis reported none (its record false: "did not report"). The Assistant reads the same.
 //   Fails on the code before it: a started run's rows were rebuilt from its numerics with today's
-//   writer and the study's model now.
+//   writer and the study's model now, and a run whose plan reported none read "started before".
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL. Its fake solve
 // replays a healthy steady log through the real health tracker (MAGNUSIM_TEST_SOLVE_LOG).
 // Fails on the code before RH3: there were no such settings, no "Numerics as written" and no
@@ -819,6 +821,8 @@ test.describe('what a run was written with', () => {
   const HT_SST_WALLS = `${IF_SST['Wall treatment']}, alphat compressible::alphatJayatillekeWallFunction (Prt 0.85)`;
   const NOT_RECORDED =
     'This run started before the app recorded what its case was written with, so it is not shown here: its case folder (system/fvSchemes and the fields it saved) holds what it solved with.';
+  const NOT_REPORTED =
+    "This run's analysis did not report what its case was written with, so it is not shown here: its case folder (system/fvSchemes and the fields it saved) holds what it solved with.";
   /** Runs a test made ({study, rid}) and study fields to put back ({study, values}), undone in afterEach. */
   let made = [];
   let restore = [];
@@ -920,6 +924,20 @@ test.describe('what a run was written with', () => {
     await expect(help).toContainText("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though how is not known.", STEP);
     await expect(help).not.toContainText('uneven strain rate');
     await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
+    // The Assistant reads the same whole help (catalog analyses), word for word, not its first 160
+    // characters: what the person is told of where k-omega SST reads off, it is told too.
+    const shown = String(await help.textContent()).replace(/\s+/g, ' ').trim();
+    expect(shown.length).toBeGreaterThan(160);
+    const seen = {};
+    fake.reply({ tools: [{ name: 'catalog', input: { kind: 'analyses', key: 'incompressible_steady' } }] }, () => {
+      seen.cat = lastResults()[0];
+      return { text: 'Read.' };
+    });
+    await openDock(page);
+    await dockSend(page, 'What does the turbulence model help say?');
+    await expect(dockTurn(page).locator('[data-turn-end="done"]').last()).toBeVisible({ timeout: 60_000 });
+    expect(seen.cat.ok, JSON.stringify(seen.cat)).toBe(true);
+    expect(seen.cat.data.settings.find((f) => f.key === 'turbulence_model').description).toBe(shown);
   });
 
   test("a started run shows what its case was written with: its walls stay its model's after the study's changes, and an earlier writer's rows stay as they were written, as the Assistant reads them", async ({ page, request }) => {
@@ -976,6 +994,25 @@ test.describe('what a run was written with', () => {
     const read = await assistantReads(page, rid, 'Run_older');
     expect([read.recorded, read.rows]).toEqual([false, [{ group: 'Not recorded', label: 'Numerics as written', value: NOT_RECORDED }]]);
     expect(read.note).toBe(`"Run_older" started before what its case was written with was recorded: its case folder holds it; read_setup {what:'study'} has the study's numerics now.`);
+  });
+
+  test("a run whose analysis reported no rows says so, in the Run panel and to the Assistant, never with what today's writer would write", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await studyFields(request, sim, { numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
+    const { rid, runJson } = await startedRun(request, 'Run_unreported');
+    // As the core records a Start whose plan reported none (an analysis without them, or one whose rows failed).
+    const doc = JSON.parse(readFileSync(runJson, 'utf8'));
+    patchRun(runJson, { numerics_used: { ...doc.numerics_used, at: new Date().toISOString(), written: false } });
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const box = panel.locator('[data-run-numerics="1"]');
+    await expect(box).toBeVisible(STEP);
+    if (!(await box.evaluate((el) => el.open))) await box.locator('summary').click();
+    await expect(box.locator('[data-run-numerics-group="Not recorded"] [data-run-numerics-row="Numerics as written"] .run-numerics-value')).toHaveText(NOT_REPORTED, STEP);
+    await expect(box.locator('[data-run-numerics-row]')).toHaveCount(1);
+    await expect(box.locator('[data-run-numerics-row="Velocity gradient"]')).toHaveCount(0);
+    const read = await assistantReads(page, rid, 'Run_unreported');
+    expect([read.recorded, read.rows]).toEqual([false, [{ group: 'Not recorded', label: 'Numerics as written', value: NOT_REPORTED }]]);
+    expect(read.note).toBe(`"Run_unreported"'s analysis did not report what its case was written with: its case folder holds it; read_setup {what:'study'} has the study's numerics now.`);
   });
 
   test("Heat Transfer's Wall treatment row: a draft's follows its study, a started run's stays what its case was written with, as the Assistant reads it", async ({ page, request }) => {

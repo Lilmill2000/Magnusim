@@ -2767,8 +2767,13 @@ async function startSolveBody(opts = {}, slot) {
     if (!cont || newUsed) {
       precheckRun(id, String(runId), { transient: isTransient ? transientSettings : null }, simId, { asWritten: true })
         .then((pc) => {
-          if (!pc || !pc.ok) return;
-          const written = newUsed && Array.isArray(pc.numerics) ? { numerics_used: { ...newUsed, written: pc.numerics } } : {};
+          // As a real plan without rows does: a check that fails or gives none records false (not reported).
+          const rows = pc && pc.ok && Array.isArray(pc.numerics) ? pc.numerics : false;
+          const written = newUsed ? { numerics_used: { ...newUsed, written: rows } } : {};
+          if (!pc || !pc.ok) {
+            if (Object.keys(written).length) persistRun(id, simId, { id: runId, run_id: runId, ...written });
+            return;
+          }
           const checks = !cont && Array.isArray(pc.checks) ? { prepare_run: { checks: pc.checks } } : {};
           if (Object.keys(written).length || Object.keys(checks).length) persistRun(id, simId, { id: runId, run_id: runId, ...checks, ...written });
         })
@@ -2957,12 +2962,13 @@ async function startSolveOnRunner(c) {
   // prepare_run's report was. RH3: its "Numerics as written" (the plan's `numerics`, the rows of
   // the case as this Start or Continue writes it) is the run's record of them
   // (numerics_used.written): a fresh Start's, or a Continue's that takes the study's new numerics.
-  // A Continue that keeps its numerics keeps the run's record (its case keeps its schemes).
+  // A Continue that keeps its numerics keeps the run's record (its case keeps its schemes). A plan
+  // that reports no rows (an analysis without them, or one whose rows failed: numerics_error)
+  // records false: the run then says they were not reported, never rows rebuilt with today's writer.
   const { numerics: writtenRows, ...planReport } = plan.plan && typeof plan.plan === 'object' ? plan.plan : {};
-  if (Array.isArray(writtenRows)) {
-    if (!cont && startedNumerics) startedNumerics.written = writtenRows;
-    else if (cont && cont.numerics && cont.numerics.used) cont.numerics.used.written = writtenRows;
-  }
+  const recorded = Array.isArray(writtenRows) ? writtenRows : false;
+  if (!cont && startedNumerics) startedNumerics.written = recorded;
+  else if (cont && cont.numerics && cont.numerics.used) cont.numerics.used.written = recorded;
   const report = {
     ...planReport,
     app: solver,
@@ -3860,7 +3866,7 @@ export async function precheckRun(projectId, runId, proposed, simulationId, opts
   const written = opts && opts.asWritten ? null : writtenNumericsOf(readRunDocFile(id, String(rec.id), sid ? String(sid) : undefined) || rec);
   return {
     ...out,
-    ...(written ? { numerics: written.rows, numerics_recorded: written.recorded } : {}),
+    ...(written ? { numerics: written.rows, numerics_recorded: written.recorded, ...(written.unrecorded ? { numerics_unrecorded: written.unrecorded } : {}) } : {}),
     ok: true,
     run_id: String(rec.id),
     time_dependency: transient ? 'Transient' : 'Steady-state',
@@ -3881,15 +3887,27 @@ export const NUMERICS_NOT_RECORDED = Object.freeze([
   }),
 ]);
 
+/** The one row a started run shows when its analysis's plan reported no rows of "Numerics as written" (RH3). */
+export const NUMERICS_NOT_REPORTED = Object.freeze([
+  Object.freeze({
+    group: 'Not recorded',
+    label: 'Numerics as written',
+    value:
+      "This run's analysis did not report what its case was written with, so it is not shown here: its case folder (system/fvSchemes and the fields it saved) holds what it solved with.",
+    source: '',
+  }),
+]);
+
 /**
  * RH3: a started run's "Numerics as written": the rows recorded when its case was written
  * (numerics_used.written: its Start's, or a Continue's that took the study's new numerics), or
- * the not-recorded row for a run that has numerics_used without them (started before they were
- * recorded). Null for a draft, a run with no numerics_used, or one whose rows are being recorded
- * (written null: its Start or Continue is writing its case now): its rows then come from its
- * numerics as written now.
+ * one not-recorded row: for a run that has numerics_used without them (started before they were
+ * recorded, `unrecorded` "before") or whose plan reported none (written false: an analysis without
+ * them, or one whose rows failed; `unrecorded` "not_reported"). Null for a draft, a run with no
+ * numerics_used, or one whose rows are being recorded (written null: its Start or Continue is
+ * writing its case now): its rows then come from its numerics as written now.
  * @param {any} doc the run doc
- * @returns {{ rows: any[], recorded: boolean } | null}
+ * @returns {{ rows: any[], recorded: boolean, unrecorded?: 'before' | 'not_reported' } | null}
  */
 export function writtenNumericsOf(doc) {
   if (!doc || !doc.status || doc.status === 'draft') return null;
@@ -3900,7 +3918,8 @@ export function writtenNumericsOf(doc) {
   // Being recorded (this Start or Continue writes its case now, with this code): the rows from its
   // numerics are what it writes.
   if (rows === null) return null;
-  return { rows: NUMERICS_NOT_RECORDED.map((r) => ({ ...r })), recorded: false };
+  if (rows === false) return { rows: NUMERICS_NOT_REPORTED.map((r) => ({ ...r })), recorded: false, unrecorded: 'not_reported' };
+  return { rows: NUMERICS_NOT_RECORDED.map((r) => ({ ...r })), recorded: false, unrecorded: 'before' };
 }
 
 /**
