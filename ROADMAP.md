@@ -267,27 +267,25 @@ September 2026 readiness audit. This list preserves the intended work.
   - the turbulent pipe (Re = 50 000, k-omega SST, wall functions) read about
     10 % (Hex-dominant) and 20 % (Standard) under Gnielinski's correlation
     with k-omega SST's walls before the validation set's fix of 2026-11-06;
-    with Spalding's law it reads -1.6 % and +0.3 % (its two rows rerun
-    2026-11-07; the rest of the set is to be run again from one commit);
+    with Spalding's law it reads -1.6 % and +0.3 % (the whole set run again
+    on 2026-11-07 from one commit, with the validation set's cases);
   - the validation set's tolerances, once its first full run is reviewed
     (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`), and
     its public page.
 
 - **The validation set, after v1 (`magnusim-web/validation/`):**
   - lock its tolerances once Daniel has reviewed a full run of the whole set from one
-    commit (the first, 2026-11-06, commit aaabb531, is from before the two fixes
-    below, so the set is run again); a locked value outside its band then fails
+    commit (the second, 2026-11-07, commit 977c1480, after the two fixes below, is the
+    one to review); a locked value outside its band then fails
     `npm run test:validation` and blocks a release;
   - publish its page (`docs/validation/`, GitHub Pages from `docs/`);
-  - the values outside their bands on the first full run: the laminar pipe's
+  - the values outside their bands: on the first full run the laminar pipe's
     friction on Standard (+16 %: the flux and the velocity gradient ignored the
-    tetrahedra's skew, fixed) and the turbulent pipe with k-omega SST (-13 % on
-    Hex-dominant: its walls, fixed, about -4 % now; -25 % on Standard: not fixed,
-    a limitation: with the new walls and the plain schemes k-omega SST keeps on
-    Standard, the probes read f and f_tau 11 to 18 % low there, still outside
-    their ±10 % bands, so expect two values outside on the rerun); the 4-core
-    probes after the fixes are in `magnusim-web/validation/README.md`, the rerun
-    gives the report's;
+    tetrahedra's skew, fixed: +0.03 % on the second) and the turbulent pipe with
+    k-omega SST (-13 % on Hex-dominant: its walls, fixed: -4.1 % on the second;
+    -25 % on Standard: not fixed, a limitation: with the new walls and the plain
+    schemes k-omega SST keeps on Standard the second full run read f -14.3 % and
+    f_tau -17.1 %, the two values outside their ±10 % bands);
   - the app gaps it found (its README): a vector's components in Plot over path
     (G2), mean, rms and frequency over a time window on a Graphs card (G8), a
     periodic inlet (G9), a developed (parabolic) velocity inlet (G10), a box

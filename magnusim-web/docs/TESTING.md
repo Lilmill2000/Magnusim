@@ -14,8 +14,8 @@ run depends on what you are doing.
 | While you work on something | `npm run typecheck`, the unit tests for that area, and the e2e specs for what you touched | seconds to minutes |
 | Before a local commit | `npm run test:e2e:changed`: the suites your change can affect, without WSL meshes and solves | minutes |
 | Before a push, and nightly | `npm run test:e2e`: the quick physics checks (`npm run test:physics`, below), then every suite, with real meshes and solves | about 47 min, the physics checks under a minute of it |
-| Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about two hours |
-| Before a release, and nightly | The app's validation set: `npm run test:validation` (WSL meshes and solves through the app's routes, then `npm run validation:report`), then read `validation/VALIDATION.md`: every value against its band, and anything that moved since the last committed run | about 58 min for its 14 runs at 8 cores (2026-11-06) |
+| Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about 35 min for its 12 cases at 8 processes (2026-11-07) |
+| Before a release, and nightly | The app's validation set: `npm run test:validation` (WSL meshes and solves through the app's routes, then `npm run validation:report`), then read `validation/VALIDATION.md`: every value against its band, and anything that moved since the last committed run | about 72 min for its 14 runs at 8 cores (2026-11-07) |
 
 The full run is the gate before a push. It is not needed for every commit. A
 validation set is never part of `-m wsl`: its cases run only when asked for.
@@ -43,12 +43,13 @@ Its app server loads only the bundled plugins (not the test plugins the core sui
 a run's result records WSL's load while it solved, so run times compare like with like.
 Results are report-only until Daniel has reviewed a full run of the whole set and its
 tolerances are locked; then a locked quantity outside its tolerance fails
-`npm run test:validation` and blocks a release. The first full run of all six cases
-(2026-11-06, commit aaabb531, OpenFOAM v2606, 57.7 minutes) is from before two fixes to the
-case writer's schemes and walls (`validation/README.md`), so the set is run again from one
-commit; nothing is locked until Daniel has reviewed that run. Its meshes are not exactly the same
-from one generate to the next (snappyHexMesh and gmsh in parallel), so a rerun can move a
-value a little: case 1's development length about 1 %, case 2's Standard friction under 1 %.
+`npm run test:validation` and blocks a release. The report shows the second full run of all
+six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9 minutes), after two fixes to the
+case writer's schemes and walls that the first (2026-11-06, commit aaabb531, 57.7 minutes) led
+to (`validation/README.md`), with Heat Transfer's set run from the same commit; nothing is
+locked until Daniel has reviewed it. Its meshes are not exactly the same from one generate to
+the next (snappyHexMesh and gmsh in parallel), so a rerun can move a value a little: case 1's
+development length about 1 %, case 2's Standard friction under 1 %.
 
 ## The quick physics checks
 

@@ -94,26 +94,35 @@ and its project is still on the server, and otherwise meshes its own.
   source read, or two transcriptions compared); where the harness's design proposed other
   bands, the reference data win.
 - Report-only until Daniel has reviewed a full run of the whole set; then the tolerances are
-  locked (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run. The
-  first full run of all six cases and every variant (2026-11-06, commit aaabb531 with no
-  changes, OpenFOAM v2606, 8 cores, one run at a time, 57.7 minutes) is what `results/` holds:
-  43 of its 48 compared values inside their bands. The app changed after it (below), so the set
-  is run again from one commit, and nothing is locked until Daniel has reviewed that run.
-  Between that run and the ones before it, cases 3 to 6 moved by at most 0.03 %; case 1's
-  development length on Hex-dominant by 1 % and case 2's Standard friction by 0.6 to 0.75 %,
-  as their meshes are not the same from one generate to the next (snappyHexMesh and gmsh in
-  parallel: two mesh probes in a row gave 128 704 and 128 706 cells for case 1, and case 2's
-  Standard pipe 69 543 twice, against 69 436 in the run and 69 568 before), and they were
-  solved on 4 cores before (a 4-core probe of case 1 read its development length 0.8 % above
-  the run). The app changed after that run (below: Standard's laminar friction and k-omega
-  SST at the wall), so `results/` is from before those fixes; the set is to be run again from
-  one commit. Probes of every case and variant at 4 cores before and after them: before the
-  fixes, cases 3 to 6 read within 0.01 % of the committed run (case 3 at Re 1000's profile
-  differences within 0.25 % of themselves, about 1e-5 U) and the Hex-dominant pipes within
-  0.5 % (case 1's development length -0.49 %, f Re +0.09 %; case 2's f -0.42 % with k-epsilon
-  and -0.25 % with k-omega SST, its f_tau within 0.04 %), so the probes compare like with like;
-  case 2's Standard f from the pressure drop read 2.1 and 2.5 % above the committed run's (its
-  f_tau within 0.3 %), as its meshes differ from one generate to the next (above).
+  locked (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run.
+  `results/` holds the second full run of all six cases and every variant (2026-11-07, commit
+  977c1480 with no changes, OpenFOAM v2606, 8 cores, one run at a time, 71.9 minutes), after the
+  two fixes below (Standard's laminar friction and k-omega SST at the wall), with Heat
+  Transfer's own set run from the same commit after it: 46 of its 48 compared values inside
+  their bands, the two outside k-omega SST's friction on Standard (f -14.25 % and f_tau
+  -17.05 %: a limitation, below). Nothing is locked until Daniel has reviewed that run. The
+  first full run (2026-11-06, commit aaabb531, 57.7 minutes; in git's history) had 43 of its 48
+  inside. Against it the second moved case 1's Standard f Re from +15.99 to +0.03 % (its
+  development length from -5.53 to -0.19 %), case 2's k-omega SST on Hex-dominant from f
+  -13.17 % and f_tau -12.79 % to -4.14 and -3.06 %, on Standard from -25.13 and -26.46 % to
+  -14.25 and -17.05 %, and case 2's Standard k-epsilon from -3.79 and -2.98 % to -0.97 and
+  +0.34 %; case 1 on Hex-dominant moved by at most 0.8 % (its development length, f Re -0.14 %),
+  case 2's Hex-dominant k-epsilon by 0.2 % (f), and cases 3 to 6 by at most 0.82 % (case 5 at
+  Re 100: its CL rms -0.82 % and mean Cd -0.43 %, both nearer their references; the sphere's Cd
+  -0.25 %; the rest 0.16 % or less). Meshes are not exactly the same from one generate to the
+  next (snappyHexMesh and gmsh in parallel): case 1's Hex-dominant mesh had 128 704 cells in the
+  first full run and 128 706 in the second (two mesh probes in a row gave the same two), its
+  Standard mesh 139 228 and 139 148, and case 2's Standard pipe 69 436 and 69 543 (two mesh
+  probes before gave 69 543 twice, and 69 568 before that); between the first full run and the
+  runs before it, cases 3 to 6 moved by at most 0.03 %, case 1's development length on
+  Hex-dominant by 1 % and case 2's Standard friction by 0.6 to 0.75 %. Probes of every case
+  and variant at 4 cores before and after the fixes: before them, cases 3 to 6 read within
+  0.01 % of the first full run (case 3 at Re 1000's profile differences within 0.25 % of
+  themselves, about 1e-5 U) and the Hex-dominant pipes within 0.5 % (case 1's development
+  length -0.49 %, f Re +0.09 %; case 2's f -0.42 % with k-epsilon and -0.25 % with k-omega SST,
+  its f_tau within 0.04 %), so the probes compare like with like; case 2's Standard f from the
+  pressure drop read 2.1 and 2.5 % above the first full run's (its f_tau within 0.3 %), as its
+  meshes differ from one generate to the next.
 - The quick physics checks (`npm run test:physics`, docs/TESTING.md) are the set's fast
   companion: the case writer on three blockMesh grids (the cavity at Re 100 against Ghia et al.,
   the laminar pipe's f Re and U_cl / U_b, the cylinder's Cd at Re 20), in under a minute, first
@@ -264,15 +273,21 @@ App gaps found so far, and what they block:
   with only its fvSchemes changed: f Re 64.004 either way with Accurate, 64.247 against 64.237 with
   Robust; neither line alone is enough: the flux alone read 69.91, the gradient alone 68.90, the
   plain lines 74.24), so Strong limits what the viscous terms read again, as before the fix, and
-  the app path reads 63.998 (Accurate). Cases 3 to 6 (Hex-dominant) moved by
+  the app path reads 63.998 (Accurate); the second full run read f Re 64.02 (+0.03 %) on
+  Standard and 63.20 (-1.25 %) on Hex-dominant. Cases 3 to 6 (Hex-dominant) moved by
   at most 1 %: case 5 at Re 100 its mean Cd -0.5 % and its CL rms -1.0 % (both nearer their
   references), St +0.09 %, the rest 0.25 % or less. Solves take longer. On the 4-core probes:
   on Hex-dominant from -2 % (case 3 at Re 1000) to +65 %
   (case 5 at Re 20, in fewer iterations), 8 of its 11 runs between +14 and +35 %; on Standard
   case 1's pipe +43 % (in 412 iterations against 319) and case 2's +9 and +19 %. Those probes
   ran beside other work (WSL's 1-minute load 1 to 8.4 while they solved, and some overlapped
-  the investigation's own test runs), so their times are rough; the run of the whole set from
-  one commit gives clean ones. Alone, one solve at a time, case 1's Standard pipe took 1.8
+  the investigation's own test runs), so their times are rough. The two full runs, each solve
+  alone on 8 cores (WSL's 1-minute load 1 to 8.9 while they solved, their own 8 ranks), give
+  the solver's own times: on Hex-dominant +17 % (case 1) to +70 % (case 6, 431 s against 254 s
+  in 548 iterations against 549), 10 of its 11 runs between +17 and +50 %; on Standard case 1's
+  pipe +33 % (in 380 iterations against 317), case 2's k-epsilon +23 % and its k-omega SST,
+  written with the plain lines, +7 %; the whole set took 71.9 minutes against 57.7.
+  Alone, one solve at a time, case 1's Standard pipe took 1.8
   times as long at fineness 6 (33 s against 18.6 s) and 1.4 times at fineness 8 (132 s
   against 95 s). A poor snapped mesh ran the Robust preset's new schemes to the end as it ran the
   old: OpenFOAM's motorBike tutorial meshed on 4 ranks (checkMesh: 12 highly skewed faces, one
@@ -306,7 +321,8 @@ App gaps found so far, and what they block:
   11.53: +0.45, +0.24, 0.0 and -0.13 % at y+ 11.0, 11.5, 12.4 and 12.9), +4.4 % at y+ 20
   (+4.4 % on a finer stretch too), +0.4 % at 30 and -3.3 % at 100; Spalding's law with the
   default blending read 5 to 9 % high from y+ 5 to 12. Hex-dominant's pipe now reads f
-  -4.10 % and f_tau -3.02 % (before -13.39 % and -12.82 %) and, with a mapped inlet holding the
+  -4.10 % and f_tau -3.02 % (before -13.39 % and -12.82 %; the second full run -4.14 % and
+  -3.06 %, the first -13.17 % and -12.79 %) and, with a mapped inlet holding the
   developed flow, -0.4 %. From y+ 35 up the wedge reads f lower as y+ grows (-0.6 % at 35,
   -2.2 % at 50, -3.3 % at 100), and these probes do not show why: with SST's stress limiter off
   (b1 0) the wedge read +3.4 % at y+ 35, an overshoot rather than the shortfall gone, so they do
@@ -315,17 +331,18 @@ App gaps found so far, and what they block:
   likely why k-epsilon reads -4.2 to -4.9 % from y+ 11.6 up. k-epsilon keeps `nutkWallFunction`: Spalding's law read
   it 6 to 20 % high below y+ 20 (epsilon takes its log value at any y+), and below y+ 11 its
   log law reads 5 to 75 % high. So Standard's k-epsilon pipe reading near its reference (f
-  -0.96 % and f_tau +0.34 % on the probe after the fixes, -3.8 and -3.0 % on the first full
-  run) is most likely errors that cancel, not the best variant: its wall faces where f is read
-  sit at y+ 11.8 to 12.5 (11.4 to 12.3 on the first full run; the pre-run check estimated 9.7),
+  -0.97 % and f_tau +0.34 % on the second full run, -0.96 and +0.34 % on the probe after the
+  fixes, -3.8 and -3.0 % on the first full run) is most likely errors that cancel, not the best
+  variant: its wall faces where f is read sit at y+ 11.8 to 12.5 (on the second full run and the
+  probe; 11.4 to 12.3 on the first full run; the pre-run check estimated 9.7),
   just above the switch at 11.53, where the wedge jumps from +4.8 % at y+ 10.2 to -4.8 % at
   11.6, so its walls alone read f about 5 % low there and the rest (its tetrahedra and the
   still-developing flow, not probed apart) reads it 1 to 5 points high; a mesh whose wall cells
   sit on the other side of the switch can move f by up to about 10 points (case 2's notes work
   it out from the reported run). Heat Transfer takes the same walls: its turbulent pipe's Nu read
   -1.61 % (before -9.64 %) on Hex-dominant and +0.29 % (before -20.28 %) on Standard (the 4-core probes before and after;
-  its committed set's two turbulent rows, rerun on 2026-11-07 at 8 ranks, read -1.61 % and +0.31 %, and its study panel's
-  Standard note and pre-run check say so).
+  its whole set, run again on 2026-11-07 from the commit of the cases' second full run, at 8 ranks, read -1.61 % and
+  +0.34 %, and its study panel's Standard note and pre-run check say so).
 - **k-omega SST on Standard's tetrahedra** (case 2, a limitation, and the skew-corrected lines
   left out there): the 4-core probes of 2026-11-07 re-solved case 2's Standard meshes (from the
   Auto inlet, 2500 iterations, f at 20 to 25 D) with only their fvSchemes changed, the
@@ -348,7 +365,8 @@ App gaps found so far, and what they block:
   -5.7 %). So k-omega SST on a Standard mesh (the mesh facts' mesher) is written with the plain
   lines and every other study with the skew-corrected ones
   (`incompressible_flow/writer.py` `skew_corrected`; "Numerics as written" says which). Through
-  the app path, with that: Standard with layers f -14.3 % and f_tau -17.1 % (Accurate), -15.0 %
+  the app path, with that: Standard with layers f -14.3 % and f_tau -17.1 % (Accurate; the
+  second full run, 69 543 cells: -14.25 % and -17.05 %, the two values outside its bands), -15.0 %
   and -14.0 % (Robust); without layers -18.8 % and -28.0 % (Accurate); one mesh each, and
   Standard's meshes of the same settings differ (these and the re-solves above are different
   meshes). Why the skew-corrected lines read k-omega SST's friction lower on tetrahedra from an
