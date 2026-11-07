@@ -10,8 +10,11 @@
 // the page still aborted its upload: the server held none). The server then holds four uploads:
 // while none waited 30 s, a fifth begin is refused. A fresh tab, once the last of them waited
 // 30 s, changes the Part: no save of it is refused, its chip says Saved, and the change is stored.
+// The page's own side: a tab closed (not crashed) while its save's bytes are on their way aborts
+// that upload as its page goes (src/workspace/bridge.ts pageGone), so the server holds none of
+// it at once, with no 30 s wait.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { expect, test, type APIRequestContext, type Page, type Response } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page, type Response, type Route } from '@playwright/test';
 import { addSketch, baseUrl, holdCommits, newPartFromTree, newProject, openPart, openProject, partOpened, watchPage } from './helpers';
 
 /** How long the server lets an older upload of a file wait before a new one of it ends it (UPLOAD_SUPERSEDE_MS). */
@@ -90,4 +93,55 @@ test('cad:save-after-closed-tabs four tabs closed mid-save leave the Part saving
   await expect.poll(async () => JSON.stringify((await storedModel(request, projectId, studyId)).doc.features), { message: 'the change is stored' }).toContain('"37 mm"');
   expect(begins.every((s) => s === 201), `every save began: ${begins}`).toBe(true);
   expect(seen.errors, 'console errors').toEqual([]);
+});
+
+test('cad:save-tab-closed-mid-save a tab closed while its save is on its way leaves no upload open', async ({ page, context, request }) => {
+  const projectId = await newProject(request);
+  await openProject(page, projectId);
+  await newPartFromTree(page, 'Part 1');
+  const first = await partOpened(page);
+  await expect(first.locator('[data-chip="save"]')).toHaveText('Saved', { timeout: 20_000 });
+  const studyId = studyIdOf(page);
+  await page.locator('#workspace-overlay [data-ws-back]').click();
+  await expect(page.locator('#workspace-overlay')).toBeHidden();
+
+  const tab = await context.newPage();
+  await openProject(tab, projectId);
+  await openPart(tab, tab.locator(`#plugin-studies-section li[data-plugin="cad"][data-plugin-study="${studyId}"]`));
+  // The save's bytes (its chunk PUT) are held in the browser: the server has its begin only.
+  const held: Route[] = [];
+  await tab.route(
+    (url) => /^\/api\/plugin-files\/uploads\/[^/]+$/.test(url.pathname),
+    (route) => (route.request().method() === 'PUT' ? void held.push(route) : route.continue()),
+  );
+  const begun = tab.waitForResponse(isBegin);
+  await addSketch(tab, { size: [12, 10] });
+  expect((await begun).status(), "the tab's save began").toBe(201);
+  await expect.poll(() => held.length, { message: "the tab's save sent its bytes" }).toBe(1);
+  await tab.close();
+
+  // The server holds none of the closed tab's uploads: with three other files begun, a fourth still
+  // gets a place well before the server would end the tab's upload by itself (30 s).
+  const begin = (rel: string) => request.post(`${baseUrl()}/api/plugin-files/uploads`, { data: { project_id: projectId, plugin: 'cad', rel, size: 1 } });
+  const ids: string[] = [];
+  for (const rel of ['probe-1.bin', 'probe-2.bin', 'probe-3.bin']) {
+    const r = await begin(rel);
+    expect(r.status(), `${rel} began: ${await r.text()}`).toBe(201);
+    ids.push((await r.json()).upload);
+  }
+  await expect
+    .poll(
+      async () => {
+        const r = await begin('probe-4.bin');
+        const text = await r.text();
+        if (r.status() === 201) ids.push(JSON.parse(text).upload);
+        return `${r.status()} ${text}`;
+      },
+      { message: "the closed tab's upload was aborted as its page went", timeout: 5_000 },
+    )
+    .toMatch(/^201 /);
+  for (const id of ids) {
+    const r = await request.post(`${baseUrl()}/api/plugin-files/uploads/${id}/abort`, { data: { project_id: projectId, plugin: 'cad' } });
+    expect((await r.json()).aborted).toBe(true);
+  }
 });
