@@ -189,6 +189,9 @@ export function plainSaveReason(e: unknown): string {
       return 'the project was removed';
     case 'too_many_uploads':
       return 'too many files are being saved at once';
+    case 'upload_not_found':
+      // The host ended the save before its commit (it waited too long, the app restarted, the plugin reloaded); its words name a path.
+      return 'the app ended the save before it finished';
     case 'unavailable':
       return 'the app is busy';
     case 'checksum':

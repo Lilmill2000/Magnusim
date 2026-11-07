@@ -15,6 +15,8 @@ export const SHARDS = {
     'e2e/cad-p1-scaffold.spec.ts',
     'e2e/cad-p1-document.spec.js',
     'e2e/cad-p1-doc-storage.spec.ts',
+    // Issue 17: four tabs closed mid-save, then a fresh tab's change still saves.
+    'e2e/cad-save-closed-tabs.spec.ts',
     'e2e/cad-p1-kernel-ops.spec.ts',
     // Kernel API 8 in the Part's worker (Analysis Situs): ready {api: 8, asi}, recognize on part A built in the page.
     'e2e/cad-kernel-api8.spec.ts',

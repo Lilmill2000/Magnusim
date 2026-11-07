@@ -488,6 +488,50 @@ describe('WorkspaceCalls: files in its own folder', () => {
     expect(inits[2].keepalive).toBe(true);
   });
 
+  it("the app's page going for good aborts the uploads whose commit was not sent; the back/forward cache aborts none", async () => {
+    // Magnusim CAD issue 17: a tab closed mid-save left its upload open on the server.
+    const h = hooks();
+    const c = new WorkspaceCalls(SCOPE, h);
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    const detach = new WorkspaceBridge(frame, c, h).attach();
+    const transition = (type: 'pagehide' | 'pageshow', persisted: boolean) => {
+      const e = new Event(type);
+      Object.defineProperty(e, 'persisted', { value: persisted });
+      window.dispatchEvent(e);
+    };
+    const between = (await c.handle('files.write.begin', { rel: 'a.bin', size: 5 })) as { upload: string };
+    const chunking = (await c.handle('files.write.begin', { rel: 'b.bin', size: 5 })) as { upload: string };
+    const committing = (await c.handle('files.write.begin', { rel: 'studies/st-1/model.json', size: 0 })) as { upload: string };
+    let putDone: (a: Answer) => void = () => undefined;
+    let commitDone: (a: Answer) => void = () => undefined;
+    answer = (url, method, init) =>
+      method === 'PUT' ? new Promise<Answer>((r) => (putDone = r)) : url.endsWith('/commit') ? new Promise<Answer>((r) => (commitDone = r)) : filesApp(url, method, init);
+    const chunk = c.handle('files.write.chunk', { upload: chunking.upload, offset: 0, data: new ArrayBuffer(5) });
+    // The page's last save: its commit is sent, and the server may still land it.
+    const commit = c.handle('files.write.commit', { upload: committing.upload });
+    await vi.waitFor(() => expect(calls.length).toBe(5));
+    calls = [];
+    inits = [];
+    // Kept in the back/forward cache: the page may come back and go on with them.
+    transition('pagehide', true);
+    transition('pageshow', true);
+    expect(calls).toEqual([]);
+    transition('pagehide', false);
+    const scoped = { project_id: 'proj-a', plugin: 'ws-demo' };
+    expect(calls).toEqual([
+      { url: `/api/plugin-files/uploads/${between.upload}/abort`, method: 'POST', body: scoped },
+      { url: `/api/plugin-files/uploads/${chunking.upload}/abort`, method: 'POST', body: scoped },
+    ]);
+    expect(inits.map((i) => i.keepalive)).toEqual([true, true]);
+    putDone({ status: 404, body: { ok: false, error: 'no such upload (it finished, was stopped or expired)', code: 'upload_not_found' } });
+    expect((await refused(chunk)).code).toBe('upload_not_found');
+    commitDone({ status: 200, body: { ok: true, file: { ...INFO, sha256: SHA } } });
+    expect(await commit).toEqual({ ...INFO, sha256: SHA });
+    detach();
+    frame.remove();
+  });
+
   it("takes the app's own error code when it names one", async () => {
     const c = new WorkspaceCalls(SCOPE, hooks());
     answer = () => ({ status: 413, body: { ok: false, error: "over this plugin's 512 MB", code: 'quota', limit: 1, used: 2 } });

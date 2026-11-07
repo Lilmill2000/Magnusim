@@ -832,6 +832,11 @@ describe('ws.files (host API 1.2)', () => {
       ['plugin_off', 'this plugin is not on', 'Magnusim CAD was turned off'],
       ['busy', 'studies/st-test/model.json is in use by another program', "another program has the part's file open"],
       ['invalid_path', "not a path in the plugin's folder: x", "the part's file name was refused"],
+      [
+        'upload_not_found',
+        'this upload of studies/st-test/model.json had no call for 30 s, so a newer upload of the file ended it',
+        'the app ended the save before it finished',
+      ],
     ];
     sketch(doc);
     await saved(doc);
