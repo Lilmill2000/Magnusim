@@ -138,7 +138,8 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
   },
   parents: (f) => (f.hole ? [f.hole] : []),
   uses: (f) => (f.body ? [f.body] : []),
-  exprs: (f) => (f.length ? [{ path: 'length', expr: f.length } as ExprField] : []),
+  // Listed while "" (the whole hole) too, so edit_feature sets it as the Thread panel's Length does.
+  exprs: (f) => [{ path: 'length', expr: f.length ?? '' } as ExprField],
   mapExprs: (f, fn) => (f.length ? { ...f, length: fn(f.length) } : f),
   async build(f, v, ctx): Promise<FeatureBuildResult> {
     // ---- the hole: its cut, its thread, its sketch's circles

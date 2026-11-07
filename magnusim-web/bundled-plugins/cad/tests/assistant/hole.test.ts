@@ -18,6 +18,7 @@
 //     out the drill point it asked for (issue 14);
 //   - a blind hole deeper than the body there, one hole or one of two, says it goes through; one
 //     that keeps its bottom says nothing (issue 14);
+//   - a modelled thread's Length, "" for the whole hole, is a field edit_feature sets;
 //   - a value (set_params, the sketch's position dimension, with a rename too) that moves a hole
 //     off its body, where it builds and cuts nothing, changes nothing (broke_downstream with the
 //     diagnosis); a structural edit that leaves a scoped cut with nothing to cut is kept and warns;
@@ -33,7 +34,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { negated } from '../../src/assistant/tools/hole';
 import { runtimeOf } from '../../src/assistant/runtime';
-import type { ExtrudeFeature, SketchDimension, SketchFeature } from '../../src/types/doc';
+import holeModule from '../../src/features/hole';
+import { createModuleRegistry, registerModuleFeatures } from '../../src/modules';
+import type { ExtrudeFeature, SketchDimension, SketchFeature, ThreadFeature } from '../../src/types/doc';
 import { uiFor } from '../../src/ui/controller';
 import { installUi } from '../../src/ui/commands';
 import { EXTRUDE, fail, names, ok, volume } from './extrude-tools';
@@ -336,6 +339,26 @@ describe('hole', () => {
       // A blind hole that keeps its bottom says nothing of the kind.
       const shallow = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '15 mm' }));
       expect(shallow.data.warnings).toEqual([]);
+    },
+    HOLE_MS,
+  );
+
+  it(
+    "a modelled thread's Length, \"\" for the whole hole, is a field edit_feature sets, as the Thread panel's Length",
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      // The hole module's thread feature type and its panel, as the app installs them.
+      registerModuleFeatures(h.doc.features, [holeModule]);
+      h.services.modules = createModuleRegistry([...h.services.modules.all(), holeModule]);
+      await block(h);
+      await ok(h, 'hole', HOLE({ centers: [CTR('0 mm', '0 mm', '')], diameter: '', size: 'M6', fit: 'tapped', depth: 'blind', distance: '8 mm', thread: 'modelled' }));
+      const whole = volume(h);
+      const full = (await ok(h, 'get_model', { detail: 'full', feature: 'Hole 1 thread', regions: 'short' })).data.feature as Row;
+      expect(full).toMatchObject({ name: 'Hole 1 thread', type: 'thread', state: 'ok', values: [{ field: 'length', expr: '' }] });
+      await ok(h, 'edit_feature', EDIT('Hole 1 thread', { set: [{ field: 'length', value: '4 mm' }] }));
+      expect(featureNamed<ThreadFeature>(h, 'Hole 1 thread').length).toBe('4 mm');
+      // 4 mm of thread instead of the 7 mm the whole hole has (a pitch short of its bottom): less groove cut.
+      expect(volume(h)).toBeGreaterThan(whole! + 1);
     },
     HOLE_MS,
   );
