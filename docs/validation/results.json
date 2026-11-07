@@ -27643,7 +27643,7 @@
      "tolerance": {
       "rel_pct": 10.0,
       "locked": true,
-      "note": "the reference data's band for the top wall's bubble (reported only)",
+      "note": "the reference data's band for the top wall's bubble",
       "abs_tol": null,
       "report_only": ""
      },
@@ -27681,7 +27681,7 @@
      "tolerance": {
       "rel_pct": 10.0,
       "locked": true,
-      "note": "the reference data's band for the top wall's bubble (reported only)",
+      "note": "the reference data's band for the top wall's bubble",
       "abs_tol": null,
       "report_only": ""
      },
@@ -37118,7 +37118,7 @@
     },
     {
      "key": "l_over_d_mean",
-     "label": "Mean recirculation length L/D (Re 100, information)",
+     "label": "Mean recirculation length L/D (Re 100)",
      "unit": "D",
      "value": 1.3605352091587284,
      "uncertainty": {
@@ -37141,7 +37141,7 @@
      "tolerance": {
       "rel_pct": 10.0,
       "locked": true,
-      "note": "the reference data's band, as information",
+      "note": "the reference data's band",
       "abs_tol": null,
       "report_only": ""
      },

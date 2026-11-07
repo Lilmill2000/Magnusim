@@ -127,7 +127,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             )
         }
     row = {q: GARTLING.row(quantity=q) for q in ("lower_reattachment", "upper_separation", "upper_reattachment")}
-    band10 = Tolerance(locked=True, rel_pct=10.0, note="the reference data's band for the top wall's bubble (reported only)")
+    band10 = Tolerance(locked=True, rel_pct=10.0, note="the reference data's band for the top wall's bubble")
     return {
         "xr_over_s": QuantitySpec(
             key="xr_over_s",

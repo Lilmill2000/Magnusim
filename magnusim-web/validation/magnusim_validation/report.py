@@ -28,11 +28,15 @@ VERDICT_WORDS = {"report_only": "report-only (band not locked)", "pass": "pass",
 
 
 def verdict_text(q: dict[str, Any]) -> str:
-    """A value's verdict in words: pass or FAIL in a locked band; a report-only band's reason
-    ("report only: known limit of ..."), or that its band is not locked yet."""
+    """A value's verdict in words: pass or FAIL in a locked band, and why a locked value fails
+    although it is inside its band ("FAIL: its run did not end ok (not settled)", from the locks);
+    a report-only band's reason ("report only: known limit of ..."), or that its band is not locked
+    yet."""
     why = (q.get("tolerance") or {}).get("report_only")
     if q.get("verdict") == "report_only" and why:
         return f"report only: {why}"
+    if q.get("verdict") == "fail" and q.get("verdict_why"):
+        return f"FAIL: {q['verdict_why']}"
     return VERDICT_WORDS[q["verdict"]]
 
 
@@ -58,8 +62,10 @@ def lock_text(results: list[dict[str, Any]]) -> str:
                  f"or fail: {items}; the case's notes say why.")
     if n["not_locked"]:
         text += f" {n['not_locked']} have a proposed band: report-only, with no pass or fail until it is locked."
-    return text + (" A run fails already when it cannot produce its numbers: a setup the app refuses, a mesh or solve "
-                   "that fails, wall layers asked and not applied.")
+    return text + (" A locked value fails as well when its run did not end ok, and any value whose run was compared "
+                   "with another reference or band than its case's now fails until it is run again. A run fails "
+                   "already when it cannot produce its numbers: a setup the app refuses, a mesh or solve that fails, "
+                   "wall layers asked and not applied.")
 
 
 def lock_html(results: list[dict[str, Any]]) -> str:

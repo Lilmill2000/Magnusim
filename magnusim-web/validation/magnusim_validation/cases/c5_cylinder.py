@@ -7,7 +7,7 @@ Three variants, as the reference data set them:
   separation angle shown;
 - ``re100``: transient (pimpleFoam), the vortex street, against the Strouhal number 0.164
   (±3 %), the mean Cd 1.33 (±5 %), the lift coefficient's rms 0.23 (±15 %) and the mean L/D
-  1.41 (±10 %, as information), each over whole shedding periods after the transient.
+  1.41 (±10 %), each over whole shedding periods after the transient.
 
 The domain is what the reference data ask for: 40 D wide (blockage 2.5 %), 15 D upstream of the
 cylinder's centre and 30 D after it, D = 10 mm and 5 mm deep in z. Its four sides are one
@@ -187,7 +187,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
         ),
         "l_over_d_mean": QuantitySpec(
             key="l_over_d_mean",
-            label=f"Mean recirculation length L/D ({tag}, information)",
+            label=f"Mean recirculation length L/D ({tag})",
             unit="D",
             how=("the 30 wake-axis Point probes' U_x (0.55 D to 6 D, y = 0, mid-depth), each a time mean " + _WINDOW_WORDS
                  + "; x0 where that mean turns from reversed to forward, linearly interpolated between the two probes "
@@ -195,7 +195,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             source="route:/api/run/monitors",
             reference=RE100.reference(ldm["value"], unit="D", citation=str(ldm["source"]),
                                       where="the mean L/D at Re 100 (section 5b)"),
-            tolerance=Tolerance(locked=True, rel_pct=10.0, note="the reference data's band, as information"),
+            tolerance=Tolerance(locked=True, rel_pct=10.0, note="the reference data's band"),
         ),
     }
 
@@ -335,7 +335,7 @@ def _note_start(by: dict[str, dict[str, Any]]) -> str:
 NOTES = (
     "The values and bands are the reference data's (2026-11-04, section 5): Cd 2.02 and 1.50 at Re 20 and 40 with "
     "±5 % (the design's ±3 %), L/D 0.93 and 2.24 with ±5 %; at Re 100 St 0.164 ±3 %, the mean Cd 1.33 ±5 %, CL rms "
-    "0.23 ±15 % and the mean L/D 1.41 ±10 % as information. The design's domain (10 D to each side, 10 D upstream, "
+    "0.23 ±15 % and the mean L/D 1.41 ±10 %. The design's domain (10 D to each side, 10 D upstream, "
     "25 D downstream: 5 % blockage) is replaced by the reference data's: at least 40 D wide (2.5 %), about 15 D "
     "upstream and 30 D or more downstream (their judgement numbers, built on one published blockage test).",
     "The four sides are one Freestream BC (OpenFOAM v2606's freestreamVelocity and freestreamPressure, which blend "

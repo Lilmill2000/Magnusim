@@ -7,6 +7,7 @@ never does; the committed results all pass under the locks."""
 from __future__ import annotations
 
 import copy
+import dataclasses
 import html
 import json
 import re
@@ -14,9 +15,9 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from magnusim_validation import cases
-from magnusim_validation.evaluate import evaluate_dir
-from magnusim_validation.paths import RESULTS
+from magnusim_validation import cases, locks
+from magnusim_validation.evaluate import evaluate_dir, specs_of
+from magnusim_validation.paths import RESULTS, SITE, WEB
 from magnusim_validation.plan import make_plan
 from magnusim_validation.report import build_all, build_markdown, load_results
 from test_cases_2_3 import _pipe_run
@@ -28,8 +29,8 @@ KNOWN = "report only: known limit of k-omega SST on Standard's tetrahedra"
 HEX_SST = "Turbulent pipe, Re = 50 000, Hex-dominant, k-omega SST"
 
 
-def _committed(variant: str) -> dict:
-    return json.loads((RESULTS / "c2_turbulent_pipe" / variant / "result.json").read_text(encoding="utf-8"))
+def _committed(variant: str, case: str = "c2_turbulent_pipe") -> dict:
+    return json.loads((RESULTS / case / variant / "result.json").read_text(encoding="utf-8"))
 
 
 def _moved(res: dict, key: str, value: float) -> dict:
@@ -170,8 +171,6 @@ def test_the_committed_results_pass_under_the_locks():
     assert len(rows) == 48
     assert Counter(r["Verdict"] for r in rows) == {"pass": 46, KNOWN: 2}
     assert {(r["Case"], r["Run"]) for r in rows if r["Verdict"] == KNOWN} == {("Turbulent pipe, Re = 50 000", "Standard, k-omega SST")}
-    from magnusim_validation import locks
-
     judged, failures = locks.judge(results)
     assert failures == []
     assert locks.counts(judged) == {"all": 48, "locked": 46, "known_limit": 2, "not_locked": 0}
@@ -182,3 +181,95 @@ def test_the_committed_results_pass_under_the_locks():
             assert j["verdict"] == ("pass" if j["tolerance"]["locked"] else "report_only")
     # Judging judged results again gives the same.
     assert locks.judge(judged) == (judged, [])
+
+
+def test_a_reference_moved_after_its_run_fails(tmp_path: Path, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch):
+    """A band is the reference and its tolerance: a run compared with another reference than its case's now (a corrected
+    refs/ file or case) fails the report and its check, and its row reads FAIL with why, not pass, until it is run again."""
+    p = _paths(tmp_path)
+    res = _committed("hexdominant", "c1_laminar_pipe")
+    _commit(p["root"], res)
+    c1 = cases.get("c1")
+    spec = c1.QUANTITIES["fRe"]
+    monkeypatch.setitem(c1.QUANTITIES, "fRe", dataclasses.replace(spec, reference=dataclasses.replace(spec.reference, value=70.0)))
+    moved = "its run was compared with the reference 64, not its reference now, 70"
+    assert build_all(**p) == 1
+    err = capsys.readouterr().err
+    assert "FAIL: 1 locked value does not pass" in err
+    assert f"Laminar pipe, Re = 100, Hex-dominant: fRe: {moved} (run it again)" in err
+    text = p["md_path"].read_text(encoding="utf-8")
+    verdicts = {r["Quantity"]: r["Verdict"] for r in _table(text)}
+    assert verdicts["Darcy friction factor × Re, developed part (x/D 10 to 13)"] == f"FAIL: {moved}", verdicts
+    assert sorted(verdicts.values()) == sorted([f"FAIL: {moved}", "pass", "pass"])
+    assert f"band ±2 % (inside), FAIL: {moved})" in text
+    page = (p["site_dir"] / "index.html").read_text(encoding="utf-8")
+    assert f"<td class=out>FAIL: {moved}</td>" in page
+    assert build_all(check=True, **p) == 1
+    err = capsys.readouterr().err
+    assert "out of date" not in err and f"fRe: {moved} (run it again)" in err
+    # Judging judged results again gives the same: the failure stays until the run is run again.
+    judged, failures = locks.judge([res])
+    assert locks.judge(judged) == (judged, failures) and len(failures) == 1
+    # Its reference back: both pass.
+    monkeypatch.undo()
+    assert build_all(**p) == 0
+    assert build_all(check=True, **p) == 0
+
+
+def test_a_locked_value_from_a_run_that_did_not_end_ok_fails(tmp_path: Path, capsys: pytest.CaptureFixture):
+    """A run whose solve's health failed or whose signal never settled keeps its values, and they may sit inside their
+    bands: a locked one reads FAIL with why (never pass) and fails the report and its check; a report-only one still
+    never fails."""
+    p = _paths(tmp_path)
+    c1 = dict(_committed("hexdominant", "c1_laminar_pipe"), status="solve_failed", status_detail="run health: failed")
+    c6 = dict(_committed("re100", "c6_sphere"), status="not_settled", status_detail="its drag moved 3 % over the last 10 %")
+    sst = dict(_committed("standard_sst"), status="not_settled", status_detail="its pressure drop moved")
+    for res in (c1, c6, sst):
+        assert all(q["within"] for q in res["quantities"] if res is not sst)
+        _commit(p["root"], res)
+    assert build_all(**p) == 1
+    err = capsys.readouterr().err
+    assert "FAIL: 5 locked values do not pass" in err
+    assert ("Laminar pipe, Re = 100, Hex-dominant: fRe: its run did not end ok (solve failed), so its value cannot pass "
+            "(run it again)") in err
+    assert "Sphere, Re = 100, steady, Hex-dominant: cd: its run did not end ok (not settled), so its value cannot pass" in err
+    assert "Turbulent pipe" not in err
+    rows = _table(p["md_path"].read_text(encoding="utf-8"))
+    assert [(r["Status"], r["Verdict"]) for r in rows] == (
+        [("SOLVE FAILED", "FAIL: its run did not end ok (solve failed)")] * 3
+        + [("NOT SETTLED", KNOWN)] * 2
+        + [("NOT SETTLED", "FAIL: its run did not end ok (not settled)")] * 2)
+    assert all(r["Band"].endswith("(inside)") for r in rows if r["Verdict"] != KNOWN)
+    page = (p["site_dir"] / "index.html").read_text(encoding="utf-8")
+    assert "<td class=out>FAIL: its run did not end ok (solve failed)</td>" in page and "<td class=in>pass</td>" not in page
+    site = json.loads((p["site_dir"] / "results.json").read_text(encoding="utf-8"))["results"]
+    assert {(q["verdict"], q["verdict_at_run"]) for r in site for q in r["quantities"] if r["case"] != "c2_turbulent_pipe"} == {
+        ("fail", "report_only")}
+    assert build_all(check=True, **p) == 1
+    assert "so its value cannot pass" in capsys.readouterr().err
+
+
+LOCK_UNSAID = re.compile(r"information|informative|reported only|report[- ]only|not gated", re.IGNORECASE)
+
+
+def test_no_locked_value_is_called_information_or_reported_only():
+    """Daniel locked 46 values (2026-11-07): none of them is named or noted as information or reported only (case 5's
+    mean L/D at Re 100 read "information" beside its pass, case 4's top-wall bubble "(reported only)"), and no text says
+    so of them."""
+    for cid, case in cases.CASES.items():
+        for variant in case.VARIANTS:
+            for spec in specs_of(case, variant):
+                if spec.tolerance.locked:
+                    assert not LOCK_UNSAID.search(spec.label), (cid, variant, spec.label)
+                    assert not LOCK_UNSAID.search(spec.tolerance.note), (cid, variant, spec.tolerance.note)
+    judged = locks.judge(load_results())[0]
+    for res in judged:
+        for q in res["quantities"]:
+            if q["tolerance"]["locked"]:
+                assert not LOCK_UNSAID.search(q["label"] + " " + q["tolerance"]["note"]), (res["case"], q["key"])
+    said = re.compile(r"(?<!had it )as information|reported only|, information\)")
+    for path in (WEB / "validation" / "README.md", WEB / "validation" / "VALIDATION.md", SITE / "index.html",
+                 SITE / "results.json", WEB / "validation" / "magnusim_validation" / "cases" / "c5_cylinder.py",
+                 WEB / "validation" / "magnusim_validation" / "cases" / "c4_backward_step.py"):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert said.findall(text) == [], path.name

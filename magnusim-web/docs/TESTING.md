@@ -42,9 +42,9 @@ Its app server loads only the bundled plugins (not the test plugins the core sui
 `MAGNUSIM_E2E_LOCK=0` lets it run beside another WSL test run (set `--cores` low then);
 a run's result records WSL's load while it solved, so run times compare like with like.
 The tolerances were locked on 2026-11-07, after Daniel reviewed the second full run of the
-whole set: a locked value outside its band (or with no value) fails `npm run test:validation`,
-`npm run validation:report` and its `--check` (and the committed-report pytest), and blocks a
-release. 46 of the 48 values have a locked band; case 2's two with k-omega SST on the Standard
+whole set: a locked value outside its band (or with no value, or from a run that did not end
+ok) fails `npm run test:validation`, `npm run validation:report` and its `--check` (and the
+committed-report pytest), and blocks a release. 46 of the 48 values have a locked band; case 2's two with k-omega SST on the Standard
 mesher (f and f_tau) are report-only until that limit is fixed: compared and shown with their
 error, never a failure. Heat Transfer's own set has no bands and stays report-only. The report
 shows that second full run of all six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9

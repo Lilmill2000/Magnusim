@@ -7,10 +7,13 @@ report judges each value again against its case's tolerance (``evaluate.specs_of
 band gives ``pass`` or ``fail``; a report-only band (``Tolerance.report_only``, a known limit) or
 one not locked yet gives ``report_only`` and never fails.
 
-A locked value outside its band, a locked value the run did not give, and a band that is not the
-one the run was compared with (a band changed after the run: locking moves no band) are
-failures: ``report`` and ``report --check`` say which and exit 1, so ``npm run test:validation``
-fails on them too, beside its own check of each new run's verdicts.
+A locked value outside its band, a locked value the run did not give, a locked value from a run
+that did not end ok (a solve whose health failed, a transient that never settled: its values are
+kept, and may sit inside their bands), and a band or a reference that is not the one the run was
+compared with (changed after the run: locking moves no band) are failures: ``report`` and
+``report --check`` say which and exit 1, so ``npm run test:validation`` fails on them too, beside
+its own check of each new run's verdicts. Such a locked value reads FAIL with the reason
+(``verdict_why``), never pass.
 """
 
 from __future__ import annotations
@@ -39,16 +42,22 @@ def _name(case: Any, res: dict[str, Any], key: str) -> str:
     return f"{case.TITLE}, {label}: {key}"
 
 
+def _ref(value: Any, unit: str) -> str:
+    return f"{float(value):g}{(' ' + unit) if unit else ''}" if value is not None else "none"
+
+
 def judge(results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
-    """``results`` judged by the locks (copies: each quantity's ``tolerance`` and ``verdict`` as its
-    case gives them now, the verdict its run gave in ``verdict_at_run``) and the failures, in
-    plain words (none when every locked value passes). Judging judged results again gives the
-    same."""
+    """``results`` judged by the locks (copies: each quantity's ``label``, ``tolerance`` and
+    ``verdict`` as its case gives them now, the verdict its run gave in ``verdict_at_run``, the band
+    it was compared with in ``tolerance_at_run`` when that is not its band now, and why a locked
+    value fails although it is inside its band in ``verdict_why``) and the failures, in plain words
+    (none when every locked value passes). Judging judged results again gives the same."""
     judged: list[dict[str, Any]] = []
     failures: list[str] = []
     for res in results:
         case = cases.get(res["case"])
         specs = {s.key: s for s in specs_of(case, res["variant"])}
+        status = str(res.get("status"))
         out = copy.deepcopy(res)
         seen = set()
         for q in out["quantities"]:
@@ -59,21 +68,36 @@ def judge(results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str
                 failures.append(f"{name}: not one of the case's compared quantities now (run it again)")
                 continue
             tol = spec.tolerance
-            ran = q.get("tolerance") or {}
+            unit = str(q.get("unit") or "")
+            ran = q.get("tolerance_at_run") or q.get("tolerance") or {}
+            ref = q.get("reference") or {}
+            has = q.get("value") is not None
+            why: list[str] = []
             if (ran.get("rel_pct"), ran.get("abs_tol")) != (tol.rel_pct, tol.abs_tol):
-                failures.append(f"{name}: its run was compared with the band {_band(ran, q.get('unit', ''))}, not its band "
-                                f"now, {_band(tol, q.get('unit', ''))} (run it again)")
+                q["tolerance_at_run"] = copy.deepcopy(ran)
+                why.append(f"its run was compared with the band {_band(ran, unit)}, not its band now, {_band(tol, unit)}")
+            if (ref.get("value"), ref.get("unit", "")) != (spec.reference.value, spec.reference.unit):
+                why.append(f"its run was compared with the reference {_ref(ref.get('value'), str(ref.get('unit') or ''))}, "
+                           f"not its reference now, {_ref(spec.reference.value, spec.reference.unit)}")
+            if has and tol.locked and status != "ok":
+                why.append(f"its run did not end ok ({status.replace('_', ' ')}), so its value cannot pass")
+            failures.extend(f"{name}: {w} (run it again)" for w in why)
             q.setdefault("verdict_at_run", q.get("verdict"))
+            q["label"] = spec.label
             q["tolerance"] = tol.as_dict()
-            q["verdict"] = verdict_of(tol, None if q.get("value") is None else bool(q.get("within")))
-            if q["verdict"] == "fail":
+            q["verdict"] = verdict_of(tol, bool(q.get("within")) if has else None)
+            q.pop("verdict_why", None)
+            if has and tol.locked and why:
+                q["verdict"] = "fail"
+                q["verdict_why"] = "; ".join(w.split(", so ")[0] for w in why)
+            elif q["verdict"] == "fail":
                 err = q.get("error") or {}
                 off = (f"{err['rel_pct']:+.2f} %" if err.get("rel_pct") is not None and tol.abs_tol is None
-                       else f"{float(err.get('abs') or 0):+.3g}{(' ' + q['unit']) if q.get('unit') else ''}")
+                       else f"{float(err.get('abs') or 0):+.3g}{(' ' + unit) if unit else ''}")
                 failures.append(f"{name}: {float(q['value']):.5g} against {q['reference']['value']:g} ({off}) is outside "
-                                f"its locked band {_band(tol, q.get('unit', ''))}")
+                                f"its locked band {_band(tol, unit)}")
             elif q["verdict"] == "missing" and tol.locked:
-                failures.append(f"{name}: no value, and its band is locked ({res.get('status')})")
+                failures.append(f"{name}: no value, and its band is locked ({status})")
         for key, spec in specs.items():
             if key not in seen and spec.tolerance.locked:
                 failures.append(f"{_name(case, res, key)}: not in its result, and its band is locked (run it again)")
