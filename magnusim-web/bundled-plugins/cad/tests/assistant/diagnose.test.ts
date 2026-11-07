@@ -13,6 +13,8 @@
 //     that cuts one of two bodies is kept, warning of the other; an intersect on a body it misses
 //     fails (it would leave nothing of it);
 //   - a join beside the plate: feature_failed no_overlap with CAD's words;
+//   - a blind cut pointing away from the plate whose common the other way OCCT answers as if apart
+//     (kernel API 10, as_if_apart wrong; GitHub issue 15): still wrong_side, the body and the flip hint;
 //   - a revolve cut turning away: wrong_side with the revolve's hint;
 //   - forced races: the person's Escape while the miss is checked answers taken_over; a kernel
 //     restart while it is checked leaves the sub-reason out (no guess); a restart while a scoped
@@ -23,6 +25,7 @@ import { HINTS } from '../../src/assistant/errors';
 import { runtimeOf } from '../../src/assistant/runtime';
 import type { KernelAdapter } from '../../src/types/kernel';
 import { uiFor } from '../../src/ui/controller';
+import { commonsAsIfApart } from '../fakes/as-if-apart';
 import { realKernelAnywhere } from '../features/p2/kernel-anywhere';
 import { EXTRUDE, fail, names, ok, REVOLVE, volume, type ToolErr as Err } from './extrude-tools';
 import { assistantHarness, REAL_KERNEL_MS, type AssistantHarness } from './harness';
@@ -114,6 +117,27 @@ describe('a cut that points away', () => {
       const e = await fail(h, 'extrude', EXTRUDE({ sketch: 'Under', distance: '3 mm', flip: true, op: 'cut' }));
       expect(e).toMatchObject({ hint: 'The cut points away from the body: set flip false, or use hole.', detail: { sub: 'wrong_side', other_way: 'Body 1' } });
       expect(e.message).toMatch(/It points away from the body: with flip false it would cut Body 1\.$/);
+      same();
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'when OCCT answers the common of the other way as if apart (kernel API 10, as_if_apart wrong; GitHub issue 15): still wrong_side with the body and the flip hint, never a plain miss',
+    async () => {
+      // The real kernel, but every common with volume comes back as OCCT gave issue 15's: empty, answered as if apart.
+      const k = commonsAsIfApart(realKernelAnywhere());
+      h = await assistantHarness({ sketchMode: true, kernel: k.kernel });
+      await plate(h);
+      await ok(h, 'sketch', disc('Pocket sketch', 'Plate.end', 0, 0));
+      const same = unchanged(h);
+      k.set(true);
+      const e = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'Pocket sketch', distance: '3 mm', op: 'cut' }));
+      expect(e).toMatchObject({
+        code: 'failed',
+        hint: HINTS.wrong_side,
+        detail: { reason: 'feature_failed', feature: 'Pocket', sub: 'wrong_side', other_way: 'Body 1', message: 'Nothing to cut: Pocket does not overlap any body made before it (touching is not enough): tick Flip direction to cut into Body 1' },
+      });
       same();
     },
     REAL_KERNEL_MS,

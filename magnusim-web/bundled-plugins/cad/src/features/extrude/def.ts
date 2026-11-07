@@ -382,7 +382,10 @@ async function buildFace(f: ExtrudeFeature, v: ExtrudeValues, ctx: BuildContext)
   }
 }
 
-/** The first body the extrude flipped would overlap (its name), or null. Every shape made here is released. */
+/**
+ * The first body the extrude flipped would overlap (its name), or null; an empty common OCCT answered
+ * as if apart although they overlap (kernel API 10) counts. Every shape made here is released.
+ */
 async function bodyTheOtherWay(f: ExtrudeFeature, extent: ExtrudeExtent, out: SketchOutput, keys: string[], ctx: BuildContext): Promise<string | null> {
   const made: ShapeId[] = [];
   try {
@@ -396,7 +399,7 @@ async function bodyTheOtherWay(f: ExtrudeFeature, extent: ExtrudeExtent, out: Sk
       if (!(tb[0] <= bb[3] + tol && bb[0] <= tb[3] + tol && tb[1] <= bb[4] + tol && bb[1] <= tb[4] + tol && tb[2] <= bb[5] + tol && bb[2] <= tb[5] + tol)) continue;
       const c = await ctx.kernel.call('boolean', { op: 'common', targets: [body.shape], tools: [tool] });
       made.push(c.result.id);
-      if (!c.result.empty) return ctx.bodyName(body.id);
+      if (!c.result.empty || c.result.as_if_apart === 'wrong') return ctx.bodyName(body.id);
     }
     return null;
   } catch (err) {

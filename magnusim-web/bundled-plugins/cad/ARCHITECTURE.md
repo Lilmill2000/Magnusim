@@ -185,8 +185,8 @@ with the host once for the page's life, and its chip goes in the dock.
 - Facade C ABI and ops: `p0/CONTRACT.md` and `src/types/kernel-protocol.ts`
   (`KernelOps` maps op -> params/result; the typed file is the one to read).
   Shape ids are integers owned by the worker; face/edge/vertex indices start at
-  0 and are stable per shape id. `version` returns `api: 9` and `asi: '2026.1.1'` (the
-  contract below plus the API 3 to API 9 tables at the end of this section); the worker's
+  0 and are stable per shape id. `version` returns `api: 10` and `asi: '2026.1.1'` (the
+  contract below plus the API 3 to API 10 tables at the end of this section); the worker's
   `ready` message carries both, and so does `KernelReadyInfo`.
 - Worker protocol: `ready` | `fatal` | `result` (worker -> main), `call`
   (main -> worker, `bytes` transferred as `params.ptr/len`). Buffers come back
@@ -583,6 +583,23 @@ with the host once for the page's life, and its chip goes in the dock.
   body of 410 faces), and Delete faces allows 1.4 s for taking fillets off as fillets").
   Delete faces passes the defeature budget and `far_skip`, and runs its third way (the Delete
   faces paragraph of the kernel section above).
+- **API 10 (answered as if apart, 2026-11-06, GitHub issue 15; `facade/facade.cpp` `answeredApart`,
+  `apartCheck`; tests `tests/kernel/kernel-api10-apart.test.ts`, `tests/doc/apart-real-kernel.test.ts`;
+  why and what was measured: `kernel-build/SOURCES.md`, "answered as if apart").**
+
+  | Op | What | Refusals (words) |
+  |---|---|---|
+  | `boolean`, `combine` (each result) | `as_if_apart` when OCCT's result is the one for inputs apart (a cut that kept every target face and made none of a tool's own, an empty common, a fuse that merged no solid): `right` when no point of either lies inside the other (never under glue), `wrong` when one does, with the point in `warning_text` and `warnings` true. The same failure on one solid of several (the groove as one of two tools, or one solid of a two-solid tool, beside one that cuts; a fuse that kept one input as it came) answers `wrong` only, its words naming that solid. Absent on any other result, which costs nothing more; `timings.apart_ms` whenever the check ran; `apart_late` when it ran out of its 1 s (no verdict then). | none (a flag, like `valid`) |
+
+  OCCT 7.9.3 took a helical thread groove that runs out through the bottom of a drilled block for
+  apart from the block: its cut removed nothing (valid, no warning), its common was empty, its fuse
+  kept two solids. Join, Cut and Intersect (`src/doc/features/body-op.ts`: Extrude, Revolve, Sweep,
+  Loft, Hole), Combine and Pattern / Mirror fail on `wrong` in words that say so ("it overlaps
+  Body 1, but the geometry kernel's cut removed nothing from Body 1 (OCCT took the two for
+  apart)"), naming the other targets left as they were; a body that is a target only through such
+  a common fails too when its Cut or Join gives it back as it was. The Assistant's overlap facts,
+  its miss diagnosis, the flip hint and the assembly checks read `wrong` as an overlap the kernel
+  could not measure ("they overlap, but the geometry kernel could not measure what they share").
 
 ## 6. Document
 

@@ -281,9 +281,13 @@ without its hole (94.39 mm³). Without unify the cut has 40 faces: OCCT split
 the block's faces where the groove crosses them, then kept every piece.
 
 - Such an answer is the one for inputs apart: a cut that keeps every target
-  face (itself or its pieces) and no tool face, a common with no face, a fuse
-  that merges no solid. `facade.cpp`'s `answeredApart` reads that from the
-  boolean's history and counts, so an ordinary boolean (one that cut, joined or
+  face (itself or its pieces) and gives no tool face a piece of its own, a
+  common with no face, a fuse that merges no solid. A piece a tool face shares
+  with a target face is not its own (review round 1: a counterbore flush with
+  the block's top, fused onto the groove, has its cap's piece in the block's
+  top; the cut removed nothing and said nothing); one two tools share is.
+  `facade.cpp`'s `answeredApart` reads that from the boolean's history, its
+  builder's pieces and counts, so an ordinary boolean (one that cut, joined or
   kept something) runs no check and answers as before: on the probe set (cut,
   common and fuse of the drilled block with a box inside it, a box holding it,
   a cylinder through it and the 15.3-turn groove) the same BREP bytes, history
@@ -293,21 +297,50 @@ the block's faces where the groove crosses them, then kept every piece.
   twice the largest face tolerance) inside the other side. The pieces of the
   faces the boolean split (its builder's images, same-domain pieces left out:
   a flush face) on the side with more faces are sampled on a grid (at most
-  1,024 points, at most 1 s) and classified against the side with fewer faces;
-  a solid whose box lies inside the other side's is tried at a few points of
-  its boundary. Found: `as_if_apart: "wrong"`, `warnings: true` and
+  1,024 points) and classified against the side with fewer faces; a solid
+  whose box lies inside the other side's is tried at a few points of its
+  boundary. Found: `as_if_apart: "wrong"`, `warnings: true` and
   `warning_text` naming the point ("the cut removed nothing although the tool
   overlaps the target (a point of the target at (15.867, 2.511, 20) mm lies
   inside the tool): OCCT took them for apart and gave the target back
-  unchanged"); not found: `"right"` (apart, or only touching). Out of time
-  (two large bodies) or sheets: no `as_if_apart`.
+  unchanged"); not found: `"right"` (apart, or only touching), except under
+  glue (shift, full), where OCCT does not split every crossing: no verdict
+  then. Sheets: no `as_if_apart`.
+- One solid of several (review round 1): the groove as one of two tools, or
+  one solid of a two-solid tool, beside one that cuts the top. OCCT cut the box
+  (32 mm³) and nothing of the groove, so the answer is not the one for inputs
+  apart. A tool solid that gave a cut's or common's result no piece of its own,
+  or an input solid a fuse kept as it came (every piece), is checked alone, and
+  only a point a right answer could not have says `"wrong"`: a kept piece of a
+  target inside the solid, or a piece of the solid inside a target and outside
+  every other tool (a right cut makes those its new faces); for a common a
+  dropped piece of a target inside the solid (not inside another target); for a
+  fuse a point of the solid inside another input, or a kept piece of another
+  input inside it (an input it holds whole is merged, its faces gone, so only
+  one that also stood as it came is tried whole). The words name the solid
+  ("the cut removed nothing where tool 1 overlaps the target (a point of the
+  target at (15.867, 2.511, 20) mm lies inside tool 1): OCCT took them for
+  apart and left that part uncut"; "solid 1 of the tool"; "the fuse kept the
+  target as a separate solid although it overlaps another input"). Nothing
+  found: no field. No ordinary boolean with several tools or solids answered
+  `"wrong"` on 20 shapes x 3 ops probed (overlapping pins, a pin in a bigger
+  pin, a box in a pocket, the same pin twice, tools flush with each other, a
+  pocket from the top face, a twelve-pin row, three tools with one apart, two
+  targets), 11 of them in the test.
+- The check keeps to 1 s, the steps that try whole solids too (review round
+  1: 100 tools in a 5,000-face ring's opening took 808 ms against a 649 ms
+  cut, past the budget): past it, no verdict, `apart_late: true`, and
+  `timings.apart_ms` says the time (it is there whenever the check ran).
 - Cost (Node, 2026-11-06, while other lanes ran tests): the issue's groove
-  2-4 ms against a 1.3 s boolean. On a 5,000-face prism an ordinary cut runs no
-  check; a box apart inside the prism's box answers "right" in 130-340 ms
-  (cut, common; the fuse up to 760 ms) against booleans of 0.8-4.6 s, flush on
-  its top 36-110 ms, touching one of its vertices 38-200 ms.
+  2-6 ms against a 1.3 s boolean, one solid of several 20-40 ms. On a 5,000-face
+  prism an ordinary cut runs no check; a box apart inside the prism's box answers "right" in 84-107 ms against
+  booleans of 0.4-0.6 s, flush on its top 22 ms, touching one of its vertices 39-47 ms
+  (the first API 10 build: 130-340, 36-110 and 38-200 ms, other lanes busier); 300 tools in a 5,000-face ring's
+  opening stop at 1,008 ms (the cut 5.6 s).
 - Tests: `tests/kernel/kernel-api10-apart.test.ts` (the issue's case fails on
-  the API 9 kernel), `tests/doc/apart-real-kernel.test.ts` (History's words).
+  the API 9 kernel; review round 1's flush cap, one solid of several, glue and
+  the budget fail on the first API 10 kernel), `tests/doc/apart-real-kernel.test.ts`
+  (History's words, Pattern, Combine, the overlap readers).
 
 ## Flags
 
@@ -404,12 +437,13 @@ node kernel-build/ship.mjs                           # queued with e2e runs; rep
   both kernels and both build records identical, the kernels and record identical
   to the shipped ones, no build-machine path in any.
 - API 10 (2026-11-06: as_if_apart in boolean and combine; the facade only, OCCT and
-  `libasi.a` reused): shipped with `node kernel-build/ship.mjs --clean`, `FACADE_OBJ` of
-  its own: `mk32.wasm` 23,311,258 bytes, sha256 `99d3adfb94f60141…` (+20,375 bytes against
-  API 9's c59b3a0f); `mk32.mjs` unchanged (`aad011be5d356a6a…`). `repro-check.sh
-  --against-shipped` (2m46s, other lanes building meanwhile): both `libasi.a`, both
-  kernels and both build records identical, the kernels and record identical to the
-  shipped ones, no build-machine path in any.
+  `libasi.a` reused; review round 1's rebuild): shipped with `node kernel-build/ship.mjs
+  --clean`, `FACADE_OBJ` of its own: `mk32.wasm` 23,337,841 bytes, sha256
+  `629b153c8efac04e…` (+46,958 bytes against API 9's c59b3a0f; the first API 10 build was
+  23,311,258 bytes, `99d3adfb…`); `mk32.mjs` unchanged (`aad011be5d356a6a…`).
+  `repro-check.sh --against-shipped` (134 s): both `libasi.a`, both kernels and both build
+  records identical, the kernels and record identical to the shipped ones, no
+  build-machine path in any.
 - Analysis Situs linked, nothing calling it (2026-11-01, still API 7): `build.sh`
   with `libasi.a` (43 objects, 4,133,068 bytes, sha256 `102b2d769f72f28a…`) on
   the link line gives `mk32.wasm` 22,483,974 bytes, sha256 `69bb460d53a2510f…`,

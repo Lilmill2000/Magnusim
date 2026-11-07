@@ -291,11 +291,20 @@ class Run {
 
 // ------------------------------------------------------------------ interference
 
+/** A pair that overlaps although the kernel could not measure what they share (InterferenceRow.unmeasured), in the words of the check panel and the Assistant. */
+export const UNMEASURED_OVERLAP = 'they overlap, but the geometry kernel could not measure what they share (OCCT took the two for apart)';
+
 export interface InterferenceRow {
   a: string;
   b: string;
-  /** The volume they share (mm³), or null for a pair that only comes close. */
+  /** The volume they share (mm³), or null for a pair that only comes close (or `unmeasured`). */
   overlap: number | null;
+  /**
+   * They overlap, but the kernel could not measure what they share: OCCT answered their common as if
+   * they were apart (kernel API 10, as_if_apart 'wrong'; GitHub issue 15). `at`: where they overlap (a point
+   * of one inside the other, from the kernel's words).
+   */
+  unmeasured?: true;
   /** The overlap is a thin ring round a line both have round faces on: a bore drawn under its shaft (a press fit), not a collision. */
   press: boolean;
   /** Their distance (mm) when they do not overlap: below the clearance (0: they touch). */
@@ -376,6 +385,14 @@ export async function checkInterference(env: CheckEnv, bodies: readonly Assembly
       // They meet: what do they share?
       const common = (await run.call('boolean', { op: 'common', targets: [a.shape], tools: [b.shape], keep_tools: true }, `intersect ${a.name} with ${b.name}`, faces)).result;
       run.keep(common.id);
+      if (common.as_if_apart === 'wrong') {
+        // The kernel's words name a point of one inside the other.
+        const w = /at \((-?[\d.e+-]+), (-?[\d.e+-]+), (-?[\d.e+-]+)\) mm lies inside/.exec(common.warning_text ?? '');
+        rows.push({ a: a.name, b: b.name, overlap: null, unmeasured: true, press: false, gap: null, at: w ? [Number(w[1]), Number(w[2]), Number(w[3])] : mid });
+        await run.trim();
+        checked++;
+        continue;
+      }
       let volume = 0;
       let at = mid;
       if (!common.empty) {
@@ -396,7 +413,7 @@ export async function checkInterference(env: CheckEnv, bodies: readonly Assembly
   } finally {
     await run.release();
   }
-  const rank = (x: InterferenceRow) => (x.overlap === null ? 2 : x.press ? 1 : 0);
+  const rank = (x: InterferenceRow) => (x.unmeasured ? 0 : x.overlap === null ? 2 : x.press ? 1 : 0);
   rows.sort((p, q) => rank(p) - rank(q) || (q.overlap ?? -1) - (p.overlap ?? -1) || (p.gap ?? 0) - (q.gap ?? 0));
   const n = solid.length;
   return { bodies: bodies.length, one: one?.name ?? null, pairs: one ? Math.max(0, n - 1) : (n * (n - 1)) / 2, boxPairs: pairs.length, checked, rows, touching, surfaces, complete: checked === pairs.length };
@@ -1120,7 +1137,8 @@ export async function checkSweep(env: CheckEnv, bodies: readonly AssemblyBody[],
       run.keep(common.id);
       let v = 0;
       if (!common.empty) v = Math.max(0, (await run.call('props', { id: common.id, volume: true, bbox: 'none' }, `measure what ${t.name} turned and ${x.name} share`, t.faces + x.faces)).result.volume ?? 0);
-      h.overlap = v;
+      // OCCT answered the common as if apart although they overlap (kernel API 10): no word on how much.
+      if (common.as_if_apart !== 'wrong') h.overlap = v;
       await run.release([...copy.ids, common.id]);
     }
   } finally {

@@ -25,8 +25,9 @@
 // and the allowance; debug_budget_words (tests). `version` answers api: 9.
 // API 10 (2026-11-06, GitHub issue 15): boolean and combine answer `as_if_apart` when OCCT's result
 // is the one for inputs apart (a cut that removed nothing, an empty common, a fuse that merged no
-// solid): 'right' when they are, 'wrong' (with words in warning_text) when a tool overlaps a target.
-// `version` answers api: 10.
+// solid): 'right' when they are, 'wrong' (with words in warning_text) when a tool overlaps a target;
+// 'wrong' too when one solid of several was answered so; `apart_late` when the check ran out of
+// time. `version` answers api: 10.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -164,14 +165,19 @@ export interface Validity {
 /**
  * API 10 (boolean, combine; GitHub issue 15): present only when OCCT's result is the one for inputs
  * apart, read from its history and counts (a cut that kept every target face and made none from a
- * tool, so the targets come back unchanged; a common with no face; a fuse that merged no solid).
- * 'right': they are apart, or only touch (no point of either lies inside the other), so the result
- * is right. 'wrong': a tool overlaps a target (a point of one lies more than the tolerance inside
- * the other), so OCCT took them for apart and the result is wrong, valid as it may be;
- * warning_text says so with the point, and `warnings` is true. Absent on any other result (an
- * ordinary cut, a fuse of a tool inside its target, a cut by a tool flush on a face: a face of it
- * is in the result), which costs nothing more; the check's time is timings.apart_ms. Absent too
- * for sheets and wires, and when the check ran out of its time (1 s, two large bodies).
+ * tool, so the targets come back unchanged; a common with no face; a fuse that merged no solid), or
+ * when one solid of several was answered so. 'right': they are apart, or only touch (no point of
+ * either lies inside the other), so the result is right; never under glue (OCCT does not split
+ * every crossing there). 'wrong': a tool overlaps a target (a point of one lies more than the
+ * tolerance inside the other), so OCCT took them for apart and the result is wrong, valid as it
+ * may be; warning_text says so with the point, and `warnings` is true. The same failure on one
+ * solid of several (the groove as one of two tools, or one solid of a two-solid tool, beside one
+ * that cuts; a fuse that kept one input as it came) answers 'wrong' only, its words naming that
+ * solid ("tool 2", "solid 2 of the tool"); nothing found there gives no field. A tool's piece it
+ * shares with a target face (a cap flush with the target's top) is not a face it made. Absent on
+ * any other result (an ordinary cut, a fuse of a tool inside its target), which costs nothing
+ * more; timings.apart_ms is the check's time whenever it ran. Absent too for sheets and wires, and
+ * when the check ran out of its time (1 s, two large bodies): `apart_late` is true then.
  */
 export type AsIfApart = 'right' | 'wrong';
 
@@ -309,7 +315,7 @@ export interface KernelOps {
       unify?: boolean;
       check_inverted?: boolean;
     };
-    result: ShapeResult & { empty: boolean; solids: number; warnings: boolean; warning_text?: string; as_if_apart?: AsIfApart; fuzzy: number; glue: 'off' | 'shift' | 'full' };
+    result: ShapeResult & { empty: boolean; solids: number; warnings: boolean; warning_text?: string; as_if_apart?: AsIfApart; apart_late?: boolean; fuzzy: number; glue: 'off' | 'shift' | 'full' };
   };
   /**
    * Split by a plane or by a tool body; `valid` is true only if every piece is and
@@ -691,7 +697,7 @@ export interface KernelOps {
       unify?: boolean;
     };
     result: {
-      results: (Validity & { target: ShapeId; id: ShapeId; empty: boolean; solids: number; faces: number; unified: boolean; history: OpHistory; warning_text?: string; as_if_apart?: AsIfApart })[];
+      results: (Validity & { target: ShapeId; id: ShapeId; empty: boolean; solids: number; faces: number; unified: boolean; history: OpHistory; warning_text?: string; as_if_apart?: AsIfApart; apart_late?: boolean })[];
       timings: Record<string, number>;
     };
   };

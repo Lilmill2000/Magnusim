@@ -211,9 +211,9 @@ export async function pairFacts(services: AppServices, a: Entity, b: Entity): Pr
 }
 
 export interface OverlapFacts {
-  /** The volume the two bodies share (0: no interference); null when one is a surface body. */
+  /** The volume the two bodies share (0: no interference); null when one is a surface body, or the kernel could not compute it. */
   overlap: number | null;
-  /** Solids and sealed voids of the two joined; null when one is a surface body. */
+  /** Solids and sealed voids of the two joined; null when one is a surface body, or the kernel could not compute them. */
   unionSolids: number | null;
   unionVoids: number | null;
   /** Why the numbers are null, or absent. */
@@ -223,7 +223,9 @@ export interface OverlapFacts {
 /**
  * Two bodies' interference and their union (§9.3): boolean common then props {volume} (an empty
  * result is 0), boolean fuse then props (solids, shells). The bodies never change (the kernel works
- * on copies); the shapes made here are released.
+ * on copies); the shapes made here are released. A common or fuse OCCT answered as if the two were
+ * apart although they overlap (kernel API 10, as_if_apart 'wrong'; GitHub issue 15) gives no
+ * numbers but a note that says so, never "overlap 0".
  */
 export async function overlapFacts(services: AppServices, a: BodyInfo, b: BodyInfo, solids: { a: number; b: number }): Promise<OverlapFacts> {
   if (solids.a === 0 || solids.b === 0) {
@@ -243,6 +245,9 @@ export async function overlapFacts(services: AppServices, a: BodyInfo, b: BodyIn
     }
     const fuse = (await kcall(services, 'boolean', { op: 'fuse', targets: [a.shape], tools: [b.shape], keep_tools: true }, `join ${a.name} and ${b.name}`, faces)).result;
     made.push(fuse.id);
+    if (common.as_if_apart === 'wrong' || fuse.as_if_apart === 'wrong') {
+      return { overlap: null, unionSolids: null, unionVoids: null, note: `${a.name} and ${b.name} overlap, but the geometry kernel could not compute what they share or their union (OCCT took the two for apart)` };
+    }
     const u = (await kcall(services, 'props', { id: fuse.id, bbox: 'none' }, `count the pieces of ${a.name} and ${b.name} joined`, faces)).result;
     return { overlap, unionSolids: u.solids, unionVoids: u.solids > 0 ? Math.max(0, u.shells - u.solids) : null };
   } finally {

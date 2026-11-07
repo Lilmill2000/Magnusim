@@ -162,7 +162,10 @@ export const combineDef: FeatureTypeDef<CombineFeature, Record<string, never>> =
         if (!id) continue;
         if (r.as_if_apart === 'wrong') {
           const subject = tools.length === 1 ? ctx.bodyName(f.tools[0]) : f.op === 'intersect' ? `what ${andList(f.tools.map((t) => ctx.bodyName(t)))} share` : `one of ${andList(f.tools.map((t) => ctx.bodyName(t)))}`;
-          return { ok: false, message: `${f.name} failed: ${tookForApart(f.op, subject, ctx.bodyName(id))}` };
+          // The other targets are held back too (the feature fails whole): the words say so.
+          const rest = f.op === 'join' ? [] : targets.filter((t) => t.id !== id).map((t) => ctx.bodyName(t.id));
+          const held = rest.length ? `; ${andList(rest)} ${rest.length === 1 ? 'is left as it was' : 'are left as they were'} too` : '';
+          return { ok: false, message: `${f.name} failed: ${tookForApart(f.op, subject, ctx.bodyName(id))}${held}` };
         }
         if (r.empty) {
           removed.add(id);

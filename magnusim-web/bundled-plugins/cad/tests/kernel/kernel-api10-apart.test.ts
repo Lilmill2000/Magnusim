@@ -9,6 +9,12 @@
 // solids. Such a result now answers as_if_apart 'wrong' with words; inputs really apart (or only
 // touching) answer 'right'; any other result (an ordinary cut, a fuse of a tool inside its target)
 // has no as_if_apart and is the API 9 kernel's answer, byte for byte. Every shape is built here.
+// Review round 1: a counterbore flush with the block's top fused onto the groove still answers wrong
+// (the piece of its cap in the top is no face of its own; a box flush on the top answers right);
+// the groove as one solid of several (beside a box that cuts, as two tools or a two-solid tool;
+// a fuse that kept the block as it came) answers wrong naming that solid; ordinary booleans with
+// several tools never answer wrong; under glue no right is given; the check keeps to its second
+// (apart_late, its time reported).
 // Owner: KERNEL-HARDENING.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createHash } from 'node:crypto';
@@ -211,4 +217,132 @@ describe('as_if_apart (API 10)', () => {
       }
     console.log(`[as_if_apart cost, 5,000-face prism] ${rows.join('; ')}`);
   }, 120_000);
+});
+
+/** Booleans with several targets or tools at once. */
+const several = (op: string, targets: number[], tools: number[], extra: R = {}): R => call(k, 'boolean', { op, targets, tools, ...extra });
+/** The point the words name lies in the ring round the hole (from its wall to rOut), within the block's height. */
+function inRing(text: string, rOut: number): void {
+  const m = /at \((-?[\d.]+), (-?[\d.]+), (-?[\d.]+)\) mm lies inside/.exec(text);
+  expect(m, text).not.toBeNull();
+  const [x, y, z] = m!.slice(1).map(Number);
+  expect(Math.hypot(x - AXIS[0], y - AXIS[1])).toBeGreaterThan(HOLE_R - 1e-3);
+  expect(Math.hypot(x - AXIS[0], y - AXIS[1])).toBeLessThan(rOut + 1e-3);
+  expect(z).toBeGreaterThan(-1e-3);
+  expect(z).toBeLessThan(20 + 1e-3);
+}
+
+describe('as_if_apart, review round 1', () => {
+  it("a counterbore flush with the block's top fused onto the groove (one tool): its cut and common answer wrong (the piece of the tool's cap in the block's top is no face the tool made); a box flush on the top answers right; the counterbore alone still cuts", () => {
+    expect(api).toBeGreaterThanOrEqual(10);
+    const b = block();
+    const before = vol(b);
+    const tool = boolean('fuse', groove(16.75), cyl(3.5, 2, [AXIS[0], AXIS[1], 18]));
+    expect(tool).toMatchObject({ valid: true, solids: 1 });
+    const cut = boolean('cut', b, tool.id);
+    expect(cut).toMatchObject({ valid: true, empty: false, solids: 1, faces: 7, as_if_apart: 'wrong', warnings: true });
+    expect(Math.abs(vol(cut.id) - before)).toBeLessThan(1e-6);
+    expect(cut.warning_text).toMatch(/^the cut removed nothing although the tool overlaps the target \(.+\): OCCT took them for apart and gave the target back unchanged$/);
+    inRing(cut.warning_text, 3.5);
+    expect(boolean('common', b, tool.id)).toMatchObject({ empty: true, as_if_apart: 'wrong', warnings: true });
+    // A box on the top (only touching): the piece it shares with the top is no face of its own either.
+    const flush = box(10, 10, 5, [-10, -10, 20]);
+    for (const op of ['cut', 'common']) expect(boolean(op, b, flush), op).toMatchObject({ as_if_apart: 'right', warnings: false });
+    const alone = boolean('cut', b, cyl(3.5, 2, [AXIS[0], AXIS[1], 18]));
+    expect(alone.as_if_apart).toBeUndefined();
+    expect(before - vol(alone.id)).toBeCloseTo(Math.PI * (3.5 ** 2 - HOLE_R ** 2) * 2, 4);
+  }, 120_000);
+
+  it('one solid of several: the groove beside a box that cuts the top (two tools, or a two-solid tool) or beside an inner box answers wrong for cut, common and fuse, naming that solid; the box is cut as it was; Combine says the same', () => {
+    expect(api).toBeGreaterThanOrEqual(10);
+    const b = block();
+    const g = groove(16.75);
+    const before = vol(b);
+    const top = box(4, 4, 4, [-10, -2, 18]);
+    const inner = box(4, 4, 4, [-10, -2, 8]);
+    const two = boolean('fuse', g, top);
+    expect(two.solids).toBe(2);
+    for (const [name, tools, removed, who] of [
+      ['two tools', [g, top], 32, 'tool 1'],
+      ['a two-solid tool', [two.id], 32, 'solid \\d of the tool'],
+      ['beside an inner box', [g, inner], 64, 'tool 1'],
+    ] as const) {
+      const cut = several('cut', [b], [...tools]);
+      expect(cut, name).toMatchObject({ valid: true, empty: false, solids: 1, as_if_apart: 'wrong', warnings: true });
+      expect(before - vol(cut.id), name).toBeCloseTo(removed, 6);
+      expect(cut.warning_text).toMatch(new RegExp(`^the cut removed nothing where ${who} overlaps the target \\(a point of (${who}|the target) at \\(.+\\) mm lies inside (the target|${who})\\): OCCT took them for apart and left that part uncut$`));
+      witness(cut.warning_text);
+      const common = several('common', [b], [...tools]);
+      expect(common, name).toMatchObject({ empty: false, as_if_apart: 'wrong', warnings: true });
+      expect(common.warning_text).toMatch(new RegExp(`^the common left out where ${who} overlaps the target \\(.+\\): OCCT took them for apart$`));
+      witness(common.warning_text);
+      const fuse = several('fuse', [b], [...tools]);
+      expect(fuse, name).toMatchObject({ solids: 2, as_if_apart: 'wrong', warnings: true });
+      expect(fuse.warning_text).toMatch(/^the fuse kept (the target|tool 1|solid \d of the tool) as a separate solid although it overlaps another input \(.+\): OCCT took them for apart$/);
+      witness(fuse.warning_text);
+      release(cut.id, common.id, fuse.id);
+    }
+    for (const op of ['cut', 'intersect', 'join']) expect(call(k, 'combine', { op, targets: [b], tools: [g, top] }).results[0].as_if_apart, op).toBe('wrong');
+  }, 120_000);
+
+  it('a fuse that kept the block as it came beside a block under it that the groove runs into (a Join over the two): wrong, naming the target', () => {
+    expect(api).toBeGreaterThanOrEqual(10);
+    const fuse = several('fuse', [block()], [groove(16.75), box(6, 6, 2.7, [12, -3, -3])]);
+    expect(fuse).toMatchObject({ valid: true, solids: 2, as_if_apart: 'wrong', warnings: true });
+    expect(fuse.warning_text).toMatch(/^the fuse kept the target as a separate solid although it overlaps another input \(a point of (the target|another input) at \(.+\) mm lies inside (another input|the target)\): OCCT took them for apart$/);
+    witness(fuse.warning_text);
+  }, 120_000);
+
+  it('booleans with several tools or solids that OCCT gets right never answer wrong: overlapping pins, a pin in a bigger pin, a box in a pocket, the same pin twice, tools flush with each other, a pocket from the top, a box flush on top, a two-solid tool with a solid apart, twelve overlapping pins, three tools of which one is apart, a box inside and one apart', () => {
+    const plate = () => box(40, 40, 10, [0, 0, 0]);
+    const cases: [string, () => number[]][] = [
+      ['two overlapping pins', () => [cyl(3, 20, [10, 10, -5]), cyl(3, 20, [14, 10, -5])]],
+      ['a pin inside a bigger pin', () => [cyl(5, 20, [10, 10, -5]), cyl(1, 8, [10, 10, 1])]],
+      ['a box inside a pocket in the material', () => [box(10, 10, 4, [5, 5, 3]), box(2, 2, 2, [8, 8, 4])]],
+      ['the same pin twice', () => [cyl(3, 20, [10, 10, -5]), cyl(3, 20, [10, 10, -5])]],
+      ['two tools flush with each other', () => [box(5, 10, 20, [5, 5, -5]), box(5, 10, 20, [10, 5, -5])]],
+      ['a pocket from the top face and a pin', () => [box(10, 10, 5, [5, 5, 5]), cyl(2, 20, [30, 30, -5])]],
+      ['a box flush on top and a pin', () => [box(10, 10, 5, [5, 5, 10]), cyl(2, 20, [30, 30, -5])]],
+      ['a two-solid tool: a pin and a sphere apart', () => [boolean('fuse', cyl(2, 20, [30, 30, -5]), call(k, 'sphere', { r: 2, center: [20, 20, 30] }).id).id]],
+      ['twelve overlapping pins', () => Array.from({ length: 12 }, (_, i) => cyl(2, 20, [5 + 2.5 * i, 20, -5]))],
+      ['three tools: one overlapping, one apart, one flush on top', () => [box(10, 10, 10, [35, 35, 5]), box(5, 5, 5, [100, 0, 0]), box(10, 10, 10, [0, 0, 10])]],
+      ['a box inside and one apart', () => [box(4, 4, 4, [5, 5, 3]), box(5, 5, 5, [100, 0, 0])]],
+    ];
+    for (const [name, tools] of cases)
+      for (const op of ['cut', 'common', 'fuse']) {
+        const r = several(op, [plate()], tools());
+        expect(r.as_if_apart, `${name} ${op}: ${r.warning_text}`).not.toBe('wrong');
+        expect(r.warnings, `${name} ${op}`).toBe(false);
+        release(r.id);
+      }
+  }, 120_000);
+
+  it("under glue (shift, full) OCCT does not split every crossing, so no 'right' is given: boxes that overlap or are apart, glued full, have no verdict; an overlap glue shift misses is still wrong", () => {
+    expect(api).toBeGreaterThanOrEqual(10);
+    const a = box(10, 10, 10, [0, 0, 0]);
+    const over = box(10, 10, 10, [5, 5, 5]);
+    const apart = box(10, 10, 10, [20, 0, 0]);
+    for (const op of ['cut', 'common', 'fuse']) {
+      expect(boolean(op, a, over, { glue: 'full' }).as_if_apart, `full overlap ${op}`).toBeUndefined();
+      expect(boolean(op, a, apart, { glue: 'full' }).as_if_apart, `full apart ${op}`).toBeUndefined();
+      expect(boolean(op, a, over, { glue: 'shift' }), `shift overlap ${op}`).toMatchObject({ as_if_apart: 'wrong', warnings: true });
+      expect(boolean(op, a, apart).as_if_apart, `off apart ${op}`).toBe('right');
+    }
+  });
+
+  it("the check keeps to its second where 300 tools lie apart in a 5,000-face ring's opening: it stops with no verdict, says apart_late and reports its time", () => {
+    expect(api).toBeGreaterThanOrEqual(10);
+    const n = 4998;
+    const pts = Array.from({ length: n }, (_, i) => [100 * Math.cos((2 * Math.PI * i) / n), 100 * Math.sin((2 * Math.PI * i) / n)]);
+    const prism = call(k, 'extrude', { profile: poly(pts, XY), extent: { kind: 'blind', d: 10 }, check: false }).id;
+    const ring = boolean('cut', prism, cyl(50, 30, [0, 0, -5]), { check: false }).id;
+    const tools = Array.from({ length: 300 }, (_, i) => box(2, 2, 2, [30 * Math.cos((2 * Math.PI * i) / 300) - 1, 30 * Math.sin((2 * Math.PI * i) / 300) - 1, 4]));
+    const r = several('cut', [ring], tools, { check: false });
+    expect(r.as_if_apart).toBeUndefined();
+    expect(r.apart_late).toBe(true);
+    expect(r.timings.apart_ms).toBeGreaterThanOrEqual(1000);
+    // Generous (the machine may be busy): it stops at the first point classified after 1 s.
+    expect(r.timings.apart_ms).toBeLessThan(2500);
+    console.log(`[as_if_apart budget, 300 tools in a 5,000-face ring] check ${r.timings.apart_ms.toFixed(0)} ms, boolean ${r.timings.boolean_ms.toFixed(0)} ms`);
+  }, 180_000);
 });

@@ -8,7 +8,8 @@
 // A boolean OCCT answered as if the tool and a body it overlaps were apart
 // (kernel API 10, as_if_apart 'wrong'; GitHub issue 15: a cut that removed
 // nothing, valid and without a warning) fails the feature in words that say so,
-// never "Nothing to cut".
+// never "Nothing to cut"; so does a Cut or Join that leaves a body as it was
+// whose common OCCT answered so.
 // Face names (src/naming) follow the booleans' history when the kernel gives
 // the result's face count and history (API 3); otherwise the body is unnamed.
 // Owner: DOC-CORE.
@@ -68,11 +69,12 @@ export function nothingToActOn(op: Exclude<BodyOp, 'new'>, label: string): strin
  * What went wrong when OCCT answered a Join / Cut / Intersect as if `subject` and `body` were apart
  * although they overlap (kernel API 10, as_if_apart 'wrong'; GitHub issue 15): "it overlaps Body 1,
  * but the geometry kernel's cut removed nothing from Body 1 (OCCT took the two for apart)".
- * Combine's words too (its subject names the tools).
+ * Combine's and Pattern's words too (their subject names the tools, or the instances: `many`).
+ * `unchanged`: a Join that gave the body back as it was ("join gave Body 1 back as it was").
  */
-export function tookForApart(op: Exclude<BodyOp, 'new'>, subject: string, body: string): string {
-  const what = op === 'cut' ? `cut removed nothing from ${body}` : op === 'join' ? 'join kept them as separate solids' : 'intersect found nothing in common';
-  return `${subject} overlaps ${body}, but the geometry kernel's ${what} (OCCT took the two for apart)`;
+export function tookForApart(op: Exclude<BodyOp, 'new'>, subject: string, body: string, o: { many?: boolean; unchanged?: boolean } = {}): string {
+  const what = op === 'cut' ? `cut removed nothing from ${body}` : op === 'join' ? (o.unchanged ? `join gave ${body} back as it was` : 'join kept them as separate solids') : 'intersect found nothing in common';
+  return `${subject} ${o.many ? 'overlap' : 'overlaps'} ${body}, but the geometry kernel's ${what} (OCCT took the two for apart)`;
 }
 
 function overlaps(a: BBox, b: BBox, tol: number): boolean {
@@ -82,6 +84,17 @@ function overlaps(a: BBox, b: BBox, tol: number): boolean {
 async function volumeOf(ctx: BuildContext, id: ShapeId): Promise<number> {
   const r = await ctx.kernel.call('props', { id, volume: true, bbox: 'none', bbox_mode: 'fast' });
   return typeof r.result.volume === 'number' ? r.result.volume : NaN;
+}
+
+async function solidsOf(ctx: BuildContext, id: ShapeId): Promise<number> {
+  return (await ctx.kernel.call('props', { id, bbox: 'none', bbox_mode: 'fast' })).result.solids;
+}
+
+/** Whether a cut or join gave `body` back as it was: as many faces, and the same volume (to 1e-9 of it). */
+async function unchanged(ctx: BuildContext, body: ShapeId, r: BoolOut): Promise<boolean> {
+  if (typeof r.faces !== 'number' || r.faces !== (await ctx.faces(body))) return false;
+  const [before, after] = [await volumeOf(ctx, body), await volumeOf(ctx, r.id)];
+  return Math.abs(after - before) <= 1e-9 * Math.max(1, Math.abs(before));
 }
 
 /**
@@ -135,6 +148,10 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
     // Targets: the scope's bodies, or every body the tool overlaps (for Join, or touches).
     let targets: BuiltBody[];
     const common = new Map<BodyId, BoolOut>();
+    // Bodies that are targets only because OCCT answered their common as if apart although they
+    // overlap: the Operation must change them, or OCCT took them for apart there too (review round 1:
+    // a tool with a cap flush on the block's top cut nothing, and the Cut was green).
+    const apart = new Set<BodyId>();
     if (f.scope.length) {
       targets = f.scope.map((id) => ctx.bodies.get(id)).filter((b): b is BuiltBody => !!b);
       if (!targets.length) {
@@ -161,6 +178,7 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
           }
           continue;
         }
+        if (c.empty) apart.add(body.id);
         targets.push(body);
         if (f.op === 'intersect') {
           made.push(c.id);
@@ -179,11 +197,28 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
     const named = (r: BoolOut, inputs: BuiltBody[]) => namesFromResult(f.id, r, new Map<ShapeId, FaceNames | null>([...inputs.map((b): [ShapeId, FaceNames | null] => [b.shape, b.names]), [tool.shape, tool.names ?? null]]));
     const removed: BodyId[] = [];
     const gone: string[] = [];
+    // A body OCCT took for apart fails the Operation; the words say the other targets are held back too.
+    const tookApart = (op: Exclude<BodyOp, 'new'>, bodies: BuiltBody[], unchanged = false): FeatureBuildResult => {
+      const rest = targets.filter((o) => !bodies.includes(o)).map((o) => ctx.bodyName(o.id));
+      const held = rest.length ? `; ${rest.join(', ')} ${rest.length === 1 ? 'is left as it was' : 'are left as they were'} too` : '';
+      return { ok: false, message: `${label} failed: ${tookForApart(op, 'it', bodies.map((t) => ctx.bodyName(t.id)).join(', '), { unchanged })}${held}` };
+    };
     if (f.op === 'join') {
       const [primary, ...others] = targets;
       const r = await boolean(ctx, 'fuse', [primary.shape], [tool.shape, ...others.map((o) => o.shape)], fuzzy);
       made.push(r.id);
-      if (r.asIfApart === 'wrong') return { ok: false, message: `${label} failed: ${tookForApart('join', 'it', targets.map((t) => ctx.bodyName(t.id)).join(', '))}` };
+      if (r.asIfApart === 'wrong') return tookApart('join', apart.size ? targets.filter((t) => apart.has(t.id)) : targets);
+      // Every target meets the tool, so the join has at least one solid fewer per target than they and
+      // the tool had; more, and a body OCCT took for apart stayed a solid of its own (review round 1:
+      // Body 1 became two solids and Body 2 went, "ok").
+      if (apart.size) {
+        let had = await solidsOf(ctx, tool.shape);
+        for (const t of targets) had += await solidsOf(ctx, t.shape);
+        if (r.solids > had - targets.length) return tookApart('join', targets.filter((t) => apart.has(t.id)));
+        // Joined with the tool alone and given back as it was: OCCT dropped the tool (the tool's cap
+        // flush with the block's top, review round 1).
+        if (!others.length && (await unchanged(ctx, primary.shape, r))) return tookApart('join', [primary], true);
+      }
       out.push({ id: primary.id, shape: r.id, valid: r.valid, reason: r.reason, names: named(r, targets) });
       removed.push(...others.map((o) => o.id));
     } else {
@@ -193,7 +228,9 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
           r = await boolean(ctx, f.op === 'cut' ? 'cut' : 'common', [t.shape], [tool.shape], fuzzy);
           made.push(r.id);
         }
-        if (r.asIfApart === 'wrong') return { ok: false, message: `${label} failed: ${tookForApart(f.op, 'it', ctx.bodyName(t.id))}` };
+        if (r.asIfApart === 'wrong') return tookApart(f.op, [t]);
+        // Its common answered as if apart, and the cut gave it back as it was: taken for apart again.
+        if (apart.has(t.id) && f.op === 'cut' && !r.empty && (await unchanged(ctx, t.shape, r))) return tookApart('cut', [t]);
         if (r.empty) {
           removed.push(t.id);
           gone.push(ctx.bodyName(t.id));
