@@ -19,11 +19,13 @@
 // get_model full shows extrudes as this tool's input (registerFeatureIo), regions as "at(u, v)";
 // edit_feature sets distance (an Up to's offset), distance2 and taper.
 // taper: a draft angle ("" or 0 for straight walls; + narrows the profile as it goes), sketch
-// profiles with blind, symmetric or two only. A tapped hole's cosmetic thread (ExtrudeFeature.thread,
+// profiles with no hole in them, blind only; with one that narrows, blind distance "" runs until the
+// walls meet (to a point or a ridge, as the panel's Until the walls meet). Walls that meet before
+// a distance given end the body there, with a warning. A tapped hole's cosmetic thread (ExtrudeFeature.thread,
 // made by hole) is not an input here: an edit keeps it.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { DEFAULT_DISTANCE } from '../../features/extrude/def';
+import { DEFAULT_DISTANCE, MEET_WORDS } from '../../features/extrude/def';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
 import type { BodyRef, ExtrudeExtentDef, ExtrudeFeature, Feature, FeatureId, SketchFeature } from '../../types/doc';
@@ -116,7 +118,7 @@ function extentWords(services: AppServices, plan: { extent: Extent; distance: st
   const d = valueWords(services, plan.distance, 'length');
   switch (plan.extent) {
     case 'blind':
-      return `blind ${d} along ${along}`;
+      return plan.distance ? `blind ${d} along ${along}` : `blind along ${along}, ${MEET_WORDS}`;
     case 'symmetric':
       return `symmetric ${d} in all, half each side, along ${both}`;
     case 'two':
@@ -156,7 +158,8 @@ const extrudeTool: EditTool<Plan> = {
     regions.forEach((t, i) => {
       if (!t) problems.push(`regions[${i}]: a region, not ""`);
     });
-    if ((extent === 'blind' || extent === 'symmetric' || extent === 'two') && !distance) problems.push(`distance: the length (${extent === 'symmetric' ? 'in all, half each side' : 'along the sketch normal'}), such as "10 mm" or "t"`);
+    // Blind with a taper and no distance runs until the walls meet (the taper's own check refuses one that widens).
+    if ((extent === 'blind' || extent === 'symmetric' || extent === 'two') && !distance && !(extent === 'blind' && taper)) problems.push(`distance: the length (${extent === 'symmetric' ? 'in all, half each side' : 'along the sketch normal'}), such as "10 mm" or "t"`);
     if ((extent === 'through' || extent === 'through_both') && distance) problems.push(`distance: "" with ${extent} (it goes past every body)`);
     if (extent === 'two' && !distance2) problems.push('distance2: the length against the sketch normal');
     if (extent !== 'two' && distance2) problems.push('distance2: only with extent two; send ""');

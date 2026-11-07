@@ -429,7 +429,7 @@ const SPECS: ToolSpec[] = [
       distance: EXPR('blind, symmetric, two: a length; to: an offset or ""; through: ""'),
       distance2: EXPR('two: the length against the normal; else ""'),
       to: SEL('to: one face or vertex; else ""'),
-      taper: EXPR('Draft angle: "" for straight walls, or an angle such as "5 deg" (+ narrows the profile as it goes); sketch profiles with blind, symmetric or two only'),
+      taper: EXPR('Draft angle: "" for none, or such as "5 deg" (+ narrows); blind only, profiles with no hole; with distance "": until the walls meet'),
       flip: bool('Against the sketch normal'),
       op: OP,
       bodies: BODIES,

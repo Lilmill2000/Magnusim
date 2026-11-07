@@ -6,7 +6,8 @@
 //              flat face while no profile is picked), extruded with no sketch
 //   Direction  Extent Blind / Symmetric / Two sides / Through all (Both sides) /
 //              Up to (a flat face or a vertex, and an Offset); Distance (and
-//              Distance 2); Draft angle (sketch profiles, Blind / Symmetric / Two sides); a
+//              Distance 2); Draft angle (sketch profiles, Blind), and with one that
+//              narrows Until the walls meet (no distance: to a point or a ridge); a
 //              tapped hole's cosmetic Thread (shown, with Remove);
 //              Flip direction; the arrow in the view drags the distance
 //   Operation  New body / Join / Cut / Intersect, once a body is made before
@@ -34,7 +35,7 @@ import { paletteOf } from '../../viewport/palette';
 import { drawnSketches, profilesView, sketchOutput } from '../sketch/view';
 import { handleGeometry, startPanelTool } from './handle';
 import { entityParents, PROFILE_REPAIRED, resolveRegionRef } from './profiles';
-import { TAPER_MAX_DEG, TAPER_RANGE_WORDS } from './def';
+import { DEFAULT_DISTANCE, MEET_WORDS, meetsWalls, TAPER_MAX_DEG, TAPER_RANGE_WORDS } from './def';
 import { threadWords } from '../hole/sizes';
 
 const OPS: { value: BodyOp; label: string }[] = [
@@ -235,6 +236,12 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
   };
 
   const ext = draft.extent;
+  // A draft that narrows can run until the walls meet (Blind with no distance); off, the default distance.
+  const narrows = (() => {
+    const t = draft.taper ? unitsSvc.evaluate(draft.taper, 'angle') : null;
+    return !!t?.ok && t.value > 0;
+  })();
+  const blindDefault = DEFAULT_DISTANCE[unitsSvc.units().length] ?? '10 mm';
   const otherMm = (key: 'distance' | 'distance2'): number | null => {
     if (ext.kind !== 'two') return null;
     const r = unitsSvc.evaluate(key === 'distance' ? ext.distance2 : ext.distance, 'length');
@@ -262,7 +269,15 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
               <NumberUnitInput id={offsetId} field="offset" label="Offset" expr={ext.offset} quantity="length" units={unitsSvc} onCommit={(e) => update({ extent: { ...ext, offset: e } } as Partial<Feature>)} />
             </Field>,
           ]
-        : ext.kind === 'blind'
+        : ext.kind === 'blind' && meetsWalls(draft) && draft.taper
+          ? [
+              <Field key="distance" label="Distance" htmlFor={`cad-f-${feature}-distance`} field="distance">
+                <span id={`cad-f-${feature}-distance`} data-field="distance">
+                  {MEET_WORDS}
+                </span>
+              </Field>,
+            ]
+          : ext.kind === 'blind'
       ? [distanceField('distance', 'Distance', ext.distance, (v) => (v === 0 ? 'Distance must not be 0' : Math.abs(v) < MIN_SIZE_MM ? 'Distance must be at least 0.000001 mm' : null))]
       : ext.kind === 'symmetric'
         ? [distanceField('distance', 'Total distance', ext.distance, (v) => (!(v > 0) ? 'Distance must be more than 0' : v < MIN_SIZE_MM ? 'Distance must be at least 0.000001 mm' : null))]
@@ -403,7 +418,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
           <Select id={`cad-f-${feature}-extent`} label="Extent" field="extent" value={ext.kind} onChange={(v) => setExtentKind(v as ExtrudeExtentDef['kind'])} options={EXTENTS.map((o) => ({ value: o.value, label: o.label }))} />
         </Field>
         {extentFields}
-        {!draft.face && (ext.kind === 'blind' || ext.kind === 'symmetric' || ext.kind === 'two' || draft.taper) ? (
+        {!draft.face && (ext.kind === 'blind' || draft.taper) ? (
           <Field label="Draft angle" htmlFor={`cad-f-${feature}-taper`} field="taper">
             <NumberUnitInput
               id={`cad-f-${feature}-taper`}
@@ -415,10 +430,23 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
               validate={(v) => (Math.abs(v) <= TAPER_MAX_DEG ? null : TAPER_RANGE_WORDS)}
               onCommit={(e) => {
                 const v = unitsSvc.evaluate(e, 'angle');
-                update({ taper: v.ok && v.value === 0 ? null : e } as Partial<Feature>);
+                const straight = v.ok && v.value === 0;
+                // Straight walls never meet: a distance again.
+                update({ taper: straight ? null : e, ...(straight && meetsWalls(draft) ? { extent: { kind: 'blind', distance: blindDefault } } : {}) } as Partial<Feature>);
               }}
             />
           </Field>
+        ) : null}
+        {!draft.face && ext.kind === 'blind' && (narrows || meetsWalls(draft)) ? (
+          <Switch
+            field="meet"
+            label="Until the walls meet"
+            checked={meetsWalls(draft)}
+            onChange={(v) => {
+              const refused = update({ extent: { kind: 'blind', distance: v ? '' : blindDefault } } as Partial<Feature>);
+              if (refused) ui.setPanelNote(refused);
+            }}
+          />
         ) : null}
         {draft.thread ? (
           <Field label="Thread" htmlFor={`cad-f-${feature}-thread`} field="thread">

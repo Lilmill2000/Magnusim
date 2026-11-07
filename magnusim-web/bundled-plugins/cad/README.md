@@ -260,8 +260,10 @@ touching bodies apart.
 
 - **Extrude** (E): pick sketch regions (profiles). Extents: blind, two sides,
   symmetric, through all, or up to a face or a vertex, with an offset; along the
-  sketch normal or a chosen direction; Flip; a **Draft angle** (walls that lean,
-  narrowing the profile as it goes). You can also extrude a **flat face
+  sketch normal or a chosen direction; Flip; a **Draft angle** with Blind (walls
+  that lean, narrowing the profile as it goes; a profile with a hole in it takes
+  none), and with one that narrows **Until the walls meet** (to a point or a
+  ridge). You can also extrude a **flat face
   of a body** directly, with no sketch: right-click it, **Extrude face**. A drag
   arrow in the view changes the distance.
 - **Revolve**: profiles about an axis (a centerline or line of the sketch, a

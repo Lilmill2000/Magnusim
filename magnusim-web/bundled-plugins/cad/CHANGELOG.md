@@ -49,9 +49,16 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   drill point it asked for. It used to call it blind with no warning.
 
 **Extrude has a Draft angle.**
-- Sketch profiles with Blind, Symmetric or Two sides: the walls lean that far
-  from the extrude direction, a positive angle narrowing the profile as it goes
-  (up to 89 deg either way). The Assistant's extrude takes taper ("" for none).
+- Sketch profiles with Blind: the walls lean that far from the extrude
+  direction, a positive angle narrowing the profile as it goes (up to 89 deg
+  either way). The Assistant's extrude takes taper ("" for none).
+- With one that narrows, **Until the walls meet** (no distance; the Assistant's
+  distance "") runs to a point or a ridge. Walls that meet before a distance
+  given end the body there, and a warning says how far and the largest angle
+  that reaches the distance.
+- A profile with a hole in it is refused with a draft (the kernel's drafted
+  prism filled the hole, or failed), as are Symmetric and Two sides (it drafted
+  one prism from the far end, not each side from the sketch).
 
 **Find picks fillets and drilled holes by their shape.**
 - INSPECT > Find (and the Assistant's find) takes `fillet` (a round face

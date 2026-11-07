@@ -8,6 +8,10 @@
 //     still keeps the same regions; the person's Ctrl+Z while "Ask each step" asks about an
 //     extrude that named and coloured its body (three undo entries of the step's) takes all of it
 //     back;
+//   - a draft angle: refused round a hole in the profile (+ and -, a plate's and a ring's) and with
+//     symmetric or two, nothing changed; the plate with its disc drafts whole; a rib's walls that
+//     meet before the distance end it there with a warning; distance "" runs until they meet (a
+//     pyramid), resent as it is; one that widens with no distance is refused;
 //   - regions in every form: "all" keeps a plate's hole open (even-odd), "r2", "at(u, v)", another
 //     sketch's region refused; join, cut through given bodies, up to a face and a vertex, two sides,
 //     symmetric, through both ways;
@@ -108,6 +112,59 @@ describe('extrude', () => {
       expect(ends).toEqual(['p.1', 'p.2']);
       expect(open.message).not.toContain('__');
       expect(open.message).toMatch(/p\.1 at \(0, 0\)/);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a draft angle: never round a hole in the profile, Blind only; walls that meet before the distance end the body and warn; distance "" runs until they meet',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await ok(h, 'sketch', PLATE_WITH_HOLE);
+      // A ring 20 / 10 across, beside the plate.
+      await ok(h, 'sketch', SK({ name: 'Ring sketch', entities: [E('a', 'circle', [100, 0, 10]), E('b', 'circle', [100, 0, 5])] }));
+      const doc = h.doc.state.get().doc;
+      // The plate round its hole (r1 alone): the kernel filled the hole at +5 deg and made no valid
+      // solid at -5 deg; the ring trapped it. Refused in words, nothing changes.
+      for (const [sketch, regions, taper] of [
+        ['Plate sketch', ['r1'], '5 deg'],
+        ['Plate sketch', ['r1'], '-5 deg'],
+        ['Ring sketch', ['at(107.5, 0)'], '5 deg'],
+        ['Ring sketch', ['at(107.5, 0)'], '-5 deg'],
+      ] as const) {
+        const r = await fail(h, 'extrude', EXTRUDE({ sketch, regions: [...regions], distance: '4 mm', taper }));
+        expect(r.message, `${sketch} ${taper}`).toContain(`a draft angle needs a profile with no hole in it, and the profile picked in ${sketch} goes round a region left out: pick that region too, or set the draft angle to 0 and cut the hole after`);
+      }
+      // Symmetric and two sides (the kernel drafts one prism from the far end): refused.
+      for (const extent of ['symmetric', 'two'] as const) {
+        const r = await fail(h, 'extrude', EXTRUDE({ sketch: 'Plate sketch', regions: ['r1', 'r2'], extent, distance: '4 mm', distance2: extent === 'two' ? '4 mm' : '', taper: '5 deg' }));
+        expect(r.message, extent).toBe('bad_input: taper: A draft angle goes only with Blind (set it to 0).');
+      }
+      expect(h.doc.state.get().doc).toBe(doc);
+      // Its disc picked too, the plate drafts whole: 60 x 40 narrowing by 2 * tan(5 deg) a side each mm, 2 mm up.
+      await ok(h, 'extrude', EXTRUDE({ name: 'Plate', sketch: 'Plate sketch', regions: ['r1', 'r2'], distance: '2 mm', taper: '5 deg' }));
+      const t = Math.tan((5 * PI) / 180);
+      const frustum = (2 / 3) * (60 * 40 + (60 - 4 * t) * (40 - 4 * t) + Math.sqrt(60 * 40 * (60 - 4 * t) * (40 - 4 * t)));
+      expect(volume(h)).toBeCloseTo(frustum, 0);
+      // A rib 2 mm wide, 20 mm at 5 deg: its walls meet 1 / tan(5 deg) = 11.43 mm up, and it says so.
+      await ok(h, 'sketch', SK({ name: 'Rib sketch', entities: [E('r', 'rect', [-1, 40, 1, 80])] }));
+      const rib = await ok(h, 'extrude', EXTRUDE({ name: 'Rib', sketch: 'Rib sketch', distance: '20 mm', taper: '5 deg', body_name: 'Rib' }));
+      expect(rib.data.warnings).toEqual(["Rib: the draft walls meet 11.43 mm out, before the 20 mm distance: the body ends there (a draft angle of at most 2.862° reaches 20 mm; an empty distance goes until the walls meet)"]);
+      expect(h.doc.state.get().rebuild.features[featureNamed(h, 'Rib').id]).toMatchObject({ state: 'warning' });
+      // 5 mm stays below where they meet: no word.
+      await ok(h, 'edit_feature', EDIT('Rib', { set: [{ field: 'distance', value: '5 mm' }] }));
+      expect(h.doc.state.get().rebuild.features[featureNamed(h, 'Rib').id]).toMatchObject({ state: 'ok' });
+      // distance "" with a draft that narrows: a 10 mm square at 30 deg runs to a point 5 / tan(30 deg) up.
+      await ok(h, 'sketch', SK({ name: 'Square sketch', entities: [E('s', 'rect', [200, 0, 210, 10])] }));
+      const sq = await ok(h, 'extrude', EXTRUDE({ name: 'Peak', sketch: 'Square sketch', distance: '', taper: '30 deg', body_name: 'Peak' }));
+      expect(sq.data).toMatchObject({ resolved: { extent: 'blind along +Z, until the walls meet', taper: '30 deg' }, warnings: [] });
+      expect(featureNamed<ExtrudeFeature>(h, 'Peak').extent).toEqual({ kind: 'blind', distance: '' });
+      expect(volume(h, 'Peak')).toBeCloseTo((100 * (5 / Math.tan(PI / 6))) / 3, 3);
+      const peak = await fullOf(h, 'Peak');
+      expect(peak.inputs).toMatchObject({ extent: 'blind', distance: '', taper: '30 deg' });
+      // One that widens never meets: refused.
+      const wide = await fail(h, 'extrude', EXTRUDE({ sketch: 'Square sketch', distance: '', taper: '-5 deg' }));
+      expect(wide.message).toBe('bad_input: taper: A draft angle that widens never meets: give the distance (until the walls meet needs a draft angle more than 0).');
     },
     REAL_KERNEL_MS,
   );
