@@ -247,7 +247,7 @@ describe('Extrude panel', () => {
   it('switches the extent between Blind, Symmetric and Two sides with their fields and words', async () => {
     const a = await opened();
     const labels = () => a.$$('[data-cad-panel] [data-field-row] .mgk-field-k').map((l) => l.textContent);
-    expect(labels()).toEqual(['Extent', 'Distance', 'Flip direction']);
+    expect(labels()).toEqual(['Extent', 'Distance', 'Draft angle', 'Flip direction']);
     expect(field(a, 'distance').value).toBe('10');
     setField(a, 'distance', '0');
     expect(a.$('[data-cad-panel] .nui[data-field="distance"] [data-nui-error]')!.textContent).toBe('Distance must not be 0');
@@ -255,7 +255,7 @@ describe('Extrude panel', () => {
     await a.settle();
     expect(extrude(a)!.extent).toEqual({ kind: 'blind', distance: '-25 mm' });
     act(() => void fireEvent.change(a.$('[data-cad-panel] [data-field="extent"] select')!, { target: { value: 'symmetric' } }));
-    expect(labels()).toEqual(['Extent', 'Total distance', 'Flip direction']);
+    expect(labels()).toEqual(['Extent', 'Total distance', 'Draft angle', 'Flip direction']);
     await a.settle();
     expect(extrude(a)!.extent).toEqual({ kind: 'symmetric', distance: '25 mm' });
     setField(a, 'distance', '-3');
@@ -264,7 +264,7 @@ describe('Extrude panel', () => {
     await a.settle();
     expect(extrude(a)!.extent).toEqual({ kind: 'symmetric', distance: '30 mm' });
     act(() => void fireEvent.change(a.$('[data-cad-panel] [data-field="extent"] select')!, { target: { value: 'two' } }));
-    expect(labels()).toEqual(['Extent', 'Distance 1', 'Distance 2', 'Flip direction']);
+    expect(labels()).toEqual(['Extent', 'Distance 1', 'Distance 2', 'Draft angle', 'Flip direction']);
     await a.settle();
     expect(extrude(a)!.extent).toEqual({ kind: 'two', distance: '30 mm', distance2: '30 mm' });
     setField(a, 'distance2', '-30');

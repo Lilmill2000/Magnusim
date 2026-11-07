@@ -1136,8 +1136,7 @@ export const AI_TOOLS: Readonly<Record<string, Readonly<Record<string, PersonPat
     cb_depth: HOLE,
     cs_diameter: HOLE,
     cs_angle: HOLE,
-    ...each(['flat', 'drill'], 'tip', HOLE),
-    tip_angle: HOLE,
+    tip: HOLE,
     ...each(['cosmetic', 'modelled'], 'thread', HOLE),
   },
   workspace: {

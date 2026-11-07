@@ -13,6 +13,9 @@
 //     (named by its row), the same centre twice, a name taken; edit_feature of the cut's d points to
 //     the hole's sketch; a hole that breaks the face's edge
 //     (its centre off the face within half the diameter, or on it near an edge) is made and warned;
+//   - a drill point (tip "drill", 118 deg, or the point's own angle) below a blind hole, refused on
+//     a through hole; a blind hole deeper than the block goes through, the reply says so and leaves
+//     out the drill point it asked for (issue 14);
 //   - a value (set_params, the sketch's position dimension, with a rename too) that moves a hole
 //     off its body, where it builds and cuts nothing, changes nothing (broke_downstream with the
 //     diagnosis); a structural edit that leaves a scoped cut with nothing to cut is kept and warns;
@@ -234,7 +237,7 @@ describe('hole', () => {
       const fields = await fail(h, 'hole', HOLE({ face: '', centers: [], diameter: '', depth: 'through', distance: '3 mm' }));
       expect(fields).toMatchObject({ code: 'invalid_input', detail: { reason: 'bad_input' } });
       expect(fields.message).toBe(
-        'bad_input: face: one flat face facing along X, Y or Z ("Plate.end", "Body 1 faces >Z"); centers: at least one centre; diameter: an expression such as "5 mm" or "hd"; distance: "" with depth through (the holes go through the face\'s body).',
+        'bad_input: face: one flat face facing along X, Y or Z ("Plate.end", "Body 1 faces >Z"); centers: at least one centre (or points: a sketch whose points are the centres); diameter: an expression such as "5 mm" or "hd" (or size and fit); distance: "" with depth through (the holes go through the face\'s body).',
       );
       expect((await fail(h, 'hole', HOLE({ centers: [CTR('0 mm', '0 mm', '')], depth: 'blind' }))).message).toBe('bad_input: distance: the depth, such as "6 mm" or "t".');
       // A round face, and a tilted one.
@@ -274,6 +277,38 @@ describe('hole', () => {
       await ok(h, 'sketch', SK({ name: 'Hole 2 sketch', entities: [E('c', 'circle', [100, 100, 1])] }));
       const next = await ok(h, 'hole', HOLE({ centers: [CTR('15 mm', '5 mm', '')] }));
       expect(next.data).toMatchObject({ made: ['Hole 3 sketch', 'Hole 3'] });
+    },
+    HOLE_MS,
+  );
+
+  it(
+    'a drill point: tip "drill" (118 deg) or the point\'s angle; refused on a through hole; a blind hole deeper than the block goes through, says so and leaves the point out (issue 14)',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await block(h);
+      // The cone below a hole 4 mm across: radius 2, 2 / tan(angle / 2) deep.
+      const cone = (deg: number) => (PI * 4 * (2 / Math.tan((deg * PI) / 360))) / 3;
+      const a = await ok(h, 'hole', HOLE({ centers: [CTR('10 mm', '0 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: 'drill' }));
+      expect(a.text).toMatch(/^Hole 1 ok: 1 hole 4 mm across, 3 mm deep with a drill point, in Base\.end /);
+      expect(a.data).toMatchObject({ made: ['Hole 1 sketch', 'Hole 1', 'Hole 1 tip sketch', 'Hole 1 tip'], tip: { angle_deg: 118, depth_mm: expect.closeTo(2 / Math.tan((59 * PI) / 180), 3) }, warnings: [] });
+      expect(featureNamed<ExtrudeFeature>(h, 'Hole 1 tip')).toMatchObject({ extent: { kind: 'blind', distance: '(4 mm) / 2 / tan((118 deg) / 2)' }, taper: '(118 deg) / 2' });
+      expect(volume(h)).toBeCloseTo(BLOCK - PI * 4 * 3 - cone(118), 3);
+      // The point's own angle in tip.
+      const b = await ok(h, 'hole', HOLE({ centers: [CTR('-10 mm', '0 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: '135 deg' }));
+      expect(b.data).toMatchObject({ made: ['Hole 2 sketch', 'Hole 2', 'Hole 2 tip sketch', 'Hole 2 tip'], tip: { angle_deg: 135 } });
+      expect(volume(h)).toBeCloseTo(BLOCK - 2 * PI * 4 * 3 - cone(118) - cone(135), 3);
+      // Refused before anything changes: a drill point on a through hole, an angle past Extrude's draft limit (twice 89 deg).
+      const doc = h.doc.state.get().doc;
+      expect((await fail(h, 'hole', HOLE({ centers: [CTR('0 mm', '10 mm', '')], diameter: '4 mm', tip: 'drill' }))).message).toBe('bad_input: tip: a drill point only with depth blind (a through hole has no bottom); send "".');
+      expect((await fail(h, 'hole', HOLE({ centers: [CTR('0 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '3 mm', tip: '200 deg' }))).message).toBe("bad_input: tip: the drill point's angle more than 0 and at most 178 deg (it is 200 deg).");
+      expect(h.doc.state.get().doc).toBe(doc);
+      // Issue 14: blind 20 mm into the 10 mm block cuts through. The reply says so, and leaves out the drill point it cannot make.
+      const deep = await ok(h, 'hole', HOLE({ centers: [CTR('0 mm', '10 mm', '')], diameter: '4 mm', depth: 'blind', distance: '20 mm', tip: 'drill' }));
+      expect(deep.data.made).toEqual(['Hole 3 sketch', 'Hole 3']);
+      expect(deep.data.warnings).toEqual(['Hole 3 is 20 mm deep, deeper than Body 1 there, so it goes through (set depth through, or a smaller distance); the drill tip was left out']);
+      expect(deep.text).not.toContain('drill point');
+      expect(deep.data).not.toHaveProperty('tip');
+      expect(volume(h)).toBeCloseTo(BLOCK - 2 * PI * 4 * 3 - cone(118) - cone(135) - PI * 4 * 10, 3);
     },
     HOLE_MS,
   );

@@ -81,7 +81,9 @@ describe("the person's side of the Assistant's tools stores what the tools store
     async () => {
       h = await assistantHarness({ sketchMode: true });
       await block(h);
-      const input = { name: '', centers: [{ x: '12 mm', y: '-7 mm', z: '' }, { x: '-15 mm', y: '8 mm', z: '' }], diameter: '5 mm', depth: 'blind' as const, distance: '3 mm' };
+      // A simple hole: the size, type, tip and thread fields as the panel sends them for one.
+      const simple = { points: '', size: '', fit: '' as const, type: 'simple' as const, cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' as const };
+      const input = { name: '', centers: [{ x: '12 mm', y: '-7 mm', z: '' }, { x: '-15 mm', y: '8 mm', z: '' }], diameter: '5 mm', depth: 'blind' as const, distance: '3 mm', ...simple };
       // The Assistant's hole, its records, then taken back with the person's Ctrl+Z (one step).
       await ok(h, 'hole', { ...input, face: 'Base.end' });
       const ai = { sketch: recordOf(docNow(h), 'Hole 1 sketch'), cut: recordOf(docNow(h), 'Hole 1') };

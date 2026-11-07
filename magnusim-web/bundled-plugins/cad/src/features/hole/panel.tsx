@@ -93,7 +93,7 @@ export function HolePanel({ close }: ToolPanelProps) {
   /** A sketch whose points are the centres (the holes follow them), or "". */
   const [pointsFrom, setPointsFrom] = useState('');
   pointsFromRef.current = pointsFrom;
-  const [tip, setTip] = useState<HoleInput['tip']>('flat');
+  const [tip, setTip] = useState<'flat' | 'drill'>('flat');
   const [tipAngle, setTipAngle] = useState('118 deg');
   const [depth, setDepth] = useState<'through' | 'blind'>('through');
   const [distance, setDistance] = useState('10 mm');
@@ -202,8 +202,8 @@ export function HolePanel({ close }: ToolPanelProps) {
     cb_depth: type === 'counterbore' && !tabled ? cbDepth.trim() : '',
     cs_diameter: type === 'countersink' && !tabled ? csDiameter.trim() : '',
     cs_angle: type === 'countersink' && !tabled ? csAngle.trim() : '',
-    tip: depth === 'blind' ? tip : 'flat',
-    tip_angle: depth === 'blind' && tip === 'drill' ? tipAngle.trim() : '',
+    // A drill point is its angle (the tool's one field for the bottom); an empty angle is the 118 deg default.
+    tip: depth === 'blind' && tip === 'drill' ? tipAngle.trim() || 'drill' : '',
     thread: sizing === 'tapped' ? threadMode : 'cosmetic',
   });
   /** The diameter a size gives, in words ("6.6 mm"), or null. */
@@ -452,7 +452,7 @@ export function HolePanel({ close }: ToolPanelProps) {
               label="Bottom"
               field="tip"
               value={tip}
-              onChange={(v) => setTip(v as HoleInput['tip'])}
+              onChange={(v) => setTip(v as 'flat' | 'drill')}
               options={[
                 { value: 'flat', label: 'Flat' },
                 { value: 'drill', label: 'Drill point' },

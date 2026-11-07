@@ -141,7 +141,7 @@ const SKETCH = (name: string, on: string, circles: [number, number][]) => ({
 });
 const EXTRUDE = (name: string, sketch: string, distance: string, o: Record<string, unknown> = {}) => ({
   name: 'cad__extrude',
-  input: { edit: '', name, sketch, regions: ['all'], face: '', direction: '', extent: 'blind', distance, distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o },
+  input: { edit: '', name, sketch, regions: ['all'], face: '', direction: '', extent: 'blind', distance, distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o },
 });
 const CHECK_STACK = { name: 'cad__check', input: { kind: 'stack', bodies: [], clearance: '', axis: '' } };
 

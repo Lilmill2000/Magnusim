@@ -47,7 +47,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Bracket", "sketch": "L profile", "regions": ["all"], "face": "", "direction": "", "extent": "symmetric", "distance": "wid", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Bracket", "sketch": "L profile", "regions": ["all"], "face": "", "direction": "", "extent": "symmetric", "distance": "wid", "distance2": "", "to": "", "taper": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
           }
         ]
       },
@@ -63,7 +63,7 @@
         "tools": [
           {
             "name": "cad__hole",
-            "input": { "name": "Base hole", "face": "Bracket.side(p.1)", "centers": [{ "x": "a/2", "y": "0 mm", "z": "" }], "diameter": "hd", "depth": "through", "distance": "" }
+            "input": { "name": "Base hole", "face": "Bracket.side(p.1)", "centers": [{ "x": "a/2", "y": "0 mm", "z": "" }], "points": "", "diameter": "hd", "size": "", "fit": "", "depth": "through", "distance": "", "type": "simple", "cb_diameter": "", "cb_depth": "", "cs_diameter": "", "cs_angle": "", "tip": "", "thread": "cosmetic" }
           }
         ]
       },
@@ -71,7 +71,7 @@
         "tools": [
           {
             "name": "cad__hole",
-            "input": { "name": "Upright hole", "face": "Bracket.side(p.6)", "centers": [{ "x": "", "y": "0 mm", "z": "b/2" }], "diameter": "hd", "depth": "through", "distance": "" }
+            "input": { "name": "Upright hole", "face": "Bracket.side(p.6)", "centers": [{ "x": "", "y": "0 mm", "z": "b/2" }], "points": "", "diameter": "hd", "size": "", "fit": "", "depth": "through", "distance": "", "type": "simple", "cb_diameter": "", "cb_depth": "", "cs_diameter": "", "cs_angle": "", "tip": "", "thread": "cosmetic" }
           }
         ]
       },

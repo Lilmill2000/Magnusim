@@ -109,7 +109,7 @@ const PLATE = (name: string, on = 'Top') => ({
 });
 const sketchCall = (name: string, on = 'Top') => ({ name: 'cad__sketch', input: PLATE(name, on) });
 const PARAM = (name: string, expr: string) => ({ name: 'cad__set_params', input: { set: [{ name, kind: 'length', expr, comment: '', rename_to: '' }], remove: [] } });
-const HOLE = (face: string, x: string, y: string) => ({ name: 'cad__hole', input: { name: '', face, centers: [{ x, y, z: '' }], diameter: '5 mm', depth: 'through', distance: '' } });
+const HOLE = (face: string, x: string, y: string) => ({ name: 'cad__hole', input: { name: '', face, centers: [{ x, y, z: '' }], points: '', diameter: '5 mm', size: '', fit: '', depth: 'through', distance: '', type: 'simple', cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' } });
 const FILLET = (target: string) => ({ name: 'cad__modify', input: { edit: '', name: '', kind: 'fillet', targets: [target], size: '2 mm', size2: '', flip: false, inward: false } });
 
 const names = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().doc.features.map((f) => f.name));
@@ -321,7 +321,7 @@ test('cad:assistant-takeover-looking clicks and a drag in the view, and a click 
 });
 
 /** The plate (PLATE, its hole beside the centre) extruded 5 mm: its even-odd region, the plate less the hole. */
-const EXTRUDE_PLATE = { name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '5 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } };
+const EXTRUDE_PLATE = { name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '5 mm', distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } };
 
 test("cad:assistant-takeover-looking-extrude clicks on the sketch's regions and a drag on the arrow, at the Assistant's extrude, take nothing over: it is kept as asked", async ({ page, request }) => {
   test.setTimeout(240_000);

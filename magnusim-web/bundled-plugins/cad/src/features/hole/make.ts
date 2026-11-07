@@ -39,8 +39,8 @@ export interface HoleInput {
   cb_depth: string;
   cs_diameter: string;
   cs_angle: string;
-  tip: 'flat' | 'drill';
-  tip_angle: string;
+  /** A blind hole's bottom: "" flat, "drill" a 118 deg drill point, or a drill point's included angle ("135 deg"). */
+  tip: string;
   /** A tapped hole's thread: drawn only (cosmetic) or also cut into the wall (modelled). */
   thread: 'cosmetic' | 'modelled';
 }

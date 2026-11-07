@@ -42,8 +42,8 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 - Every size stays an expression the features keep, so the holes follow
   parameters; it is all one undo step, as before. A simple hole is made exactly
   as before. The Assistant's hole takes the same: points, size and fit, type,
-  cb_diameter, cb_depth, cs_diameter, cs_angle, tip and tip_angle ("" sizes
-  from the screw table).
+  cb_diameter, cb_depth, cs_diameter, cs_angle ("" sizes from the screw table),
+  tip ("drill" or the point's angle) and thread.
 - A blind hole deeper than the body goes through: Hole now says so ("Hole 2 is
   30 mm deep, deeper than Block there, so it goes through"), and leaves out a
   drill point it asked for. It used to call it blind with no warning.

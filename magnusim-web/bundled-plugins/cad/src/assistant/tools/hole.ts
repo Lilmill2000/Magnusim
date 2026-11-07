@@ -16,11 +16,12 @@
 // ring, blind cb_depth) or "<name> countersink" (blind the cone's depth (cs_diameter - diameter) /
 // 2 / tan(cs_angle / 2), draft angle cs_angle / 2: a cone that narrows to the hole); "<name>" then
 // cuts the discs only. Two counterbores or countersinks that would overlap are refused.
-// tip drill (blind holes) ends each hole in a drill point: the sketch "<name> tip sketch" on the
-// holes' bottom ("<name>.end", or "<name>.end(1)" with several holes: they lie in one plane), the
-// same circles placed the same way, and the cut "<name> tip" (blind diameter / 2 /
-// tan(tip_angle / 2), draft tip_angle / 2: to a point). Every size is an expression the features
-// keep, so they follow parameters.
+// tip "drill" (118 deg) or a point's included angle (blind holes; "" is a flat bottom) ends each
+// hole in a drill point: the sketch "<name> tip sketch" on the holes' bottom ("<name>.end", or
+// "<name>.end(1)" with several holes: they lie in one plane), the same circles placed the same
+// way, and the cut "<name> tip" (blind diameter / 2 / tan(angle / 2), draft angle / 2: to a
+// point). One field holds the bottom and its angle, so the tool keeps to 16 fields. Every size is
+// an expression the features keep, so they follow parameters.
 // size "M6" (or an inch size, "1/4-20", "#10-32 UNF") sizes the hole from a fastener
 // (features/hole/sizes.ts): fit close, normal or loose gives the clearance hole (ISO 273, or
 // ASME B18.2.8 for inch sizes), fit tapped the tap drill and a cosmetic thread on the
@@ -376,8 +377,10 @@ const holeTool: EditTool<Plan> = {
     const pointsIn = str(input.points);
     const threadMode = str(input.thread) || 'cosmetic';
     const csAngle = str(input.cs_angle) || (type === 'countersink' ? CS_ANGLE_DEFAULT : '');
-    const tip = (str(input.tip) || 'flat') as 'flat' | 'drill';
-    const tipAngle = str(input.tip_angle) || (tip === 'drill' ? TIP_ANGLE_DEFAULT : '');
+    // tip: "" (or "flat") a flat bottom; "drill" a drill point of TIP_ANGLE_DEFAULT; else the point's included angle.
+    const tipIn = str(input.tip);
+    const tip: 'flat' | 'drill' = !tipIn || tipIn === 'flat' ? 'flat' : 'drill';
+    const tipAngle = tip === 'drill' ? (tipIn === 'drill' ? TIP_ANGLE_DEFAULT : tipIn) : '';
     const rows = (Array.isArray(input.centers) ? input.centers : []) as unknown[];
 
     // ---- the fields
@@ -441,11 +444,9 @@ const holeTool: EditTool<Plan> = {
     if (type !== 'counterbore' && (cbDiameter || cbDepth)) problems.push('cb_diameter, cb_depth: only with type counterbore; send ""');
     if (type === 'countersink' && !csDiameter && !noTable) problems.push("cs_diameter: the countersink's diameter at the face, wider than the hole (or \"\" with a clearance size and a 90 deg angle: the screw table's)");
     if (type !== 'countersink' && (csDiameter || str(input.cs_angle))) problems.push('cs_diameter, cs_angle: only with type countersink; send ""');
-    if (tip !== 'flat' && tip !== 'drill') problems.push('tip: flat or drill');
     if (threadMode !== 'cosmetic' && threadMode !== 'modelled') problems.push('thread: cosmetic or modelled');
     if (threadMode === 'modelled' && fit !== 'tapped') problems.push('thread: modelled only with fit tapped (a size\'s tapped hole)');
-    if (tip === 'drill' && depth === 'through') problems.push('tip: drill only with depth blind (a through hole has no bottom)');
-    if (tip !== 'drill' && str(input.tip_angle)) problems.push('tip_angle: only with tip drill; send ""');
+    if (tip === 'drill' && depth === 'through') problems.push('tip: a drill point only with depth blind (a through hole has no bottom); send ""');
     if (depth === 'through' && distance) problems.push(`distance: "" with depth through (the holes go through the face's body)`);
     if (depth === 'blind' && !distance) problems.push('distance: the depth, such as "6 mm" or "t"');
     if (problems.length) throw new ToolError('bad_input', `${problems.join('; ')}.`, { detail: { problems } });
@@ -485,7 +486,7 @@ const holeTool: EditTool<Plan> = {
       const cbH = type === 'counterbore' ? lengthOf(units, cbDepth, 'cb_depth', exprs) : null;
       const csD = type === 'countersink' ? lengthOf(units, csDiameter, 'cs_diameter', exprs) : null;
       const csA = type === 'countersink' ? angleOf(units, csAngle, 'cs_angle', exprs) : null;
-      const tipA = tip === 'drill' ? angleOf(units, tipAngle, 'tip_angle', exprs) : null;
+      const tipA = tip === 'drill' ? angleOf(units, tipAngle, 'tip', exprs) : null;
       // A sketch's points: their model coordinates, the one along the face's normal left to the face.
       const asRows: unknown[] = fromSketch ? fromSketch.points.map((q) => Object.fromEntries(AXES.map((a, i) => [a, i === k ? '' : `${len(q[i])} mm`]))) : rows;
       const rowName = (r: number) => (fromSketch ? `points[${r}] (${fromSketch.name}'s point ${r + 1})` : `centers[${r}]`);
@@ -529,7 +530,7 @@ const holeTool: EditTool<Plan> = {
           step = { diameter: csD, depth: h, angle: csA };
         }
       }
-      if (tipA !== null && !(tipA > 0 && tipA <= 2 * TAPER_MAX_DEG)) where.push(`tip_angle: more than 0 and at most ${2 * TAPER_MAX_DEG} deg (it is ${len(tipA)} deg)`);
+      if (tipA !== null && !(tipA > 0 && tipA <= 2 * TAPER_MAX_DEG)) where.push(`tip: the drill point's angle more than 0 and at most ${2 * TAPER_MAX_DEG} deg (it is ${len(tipA)} deg)`);
       const centers: Vec3[] = [];
       for (const [r, row] of read.entries()) {
         const p = row.p as number[];

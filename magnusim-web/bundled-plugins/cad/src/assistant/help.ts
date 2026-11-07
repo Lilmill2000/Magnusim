@@ -85,7 +85,7 @@ const FEATURE_NOTES: Readonly<Record<string, string>> = {
     "brief first. detail full or feature <name> adds the inputs in the tool's own fields, ready to resend with edit. user_changes: what the person changed since your last call (while this one ran too). editable false says why. Holes, a brief short of room: help details.",
   help: 'Fixed text; no Part needed. Every field of every tool is required: "", [] or false when unused.',
   hole:
-    'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); then the cut "<name>" into the face\'s body only. made lists both. A name is at most 33 characters. A tilted face: sketch on it and extrude cut with flip true.',
+    'Writes "<name> sketch" on the face: circles h1, h2...; d (diameter of h1) and equal for the rest; h1x, h1y... (distance_x, distance_y from the face origin, signed by the face frame: on a -X face z "b/2" becomes h1y "-(b/2)"); a counterbore\'s or countersink\'s circles c1, c2... (dc); then the cuts into the face\'s body only. made lists them all. Names, sizes, tilted faces: help traps.',
   measure:
     'Targets: body names, face, edge or vertex selectors and handles, "(x, y, z)", "selection", origin, construction planes, axes and points. Two bodies: distance, overlap_mm3, touching, union_solids, union_voids. Totals, checks: help details. section (one body): area, loops, holes, regions.',
   modify:

@@ -58,7 +58,7 @@
         "tools": [
           {
             "name": "cad__hole",
-            "input": { "name": "", "face": "Flange.side(p.3)", "centers": [{ "x": "pcd/2", "y": "0 mm", "z": "" }], "diameter": "hd", "depth": "through", "distance": "" }
+            "input": { "name": "", "face": "Flange.side(p.3)", "centers": [{ "x": "pcd/2", "y": "0 mm", "z": "" }], "points": "", "diameter": "hd", "size": "", "fit": "", "depth": "through", "distance": "", "type": "simple", "cb_diameter": "", "cb_depth": "", "cs_diameter": "", "cs_angle": "", "tip": "", "thread": "cosmetic" }
           }
         ]
       },
