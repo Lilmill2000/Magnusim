@@ -2,6 +2,11 @@
 # Hex-dominant snappyHexMesh pipeline (Phase 1 Step 6).
 # Placeholders: __DST__ __WIN_OUT__ __GENERATE_ID__
 set -uo pipefail
+# One thread for scotch, which splits the mesh into ranks (decomposePar, a parallel
+# snappyHexMesh's own balancing): Ubuntu's scotch 7 splits on several threads and
+# gives the same mesh a different split each time, so the same study meshed or
+# solved twice came out different. One thread gives the same split every time.
+export SCOTCH_PTHREAD_NUMBER=1
 DST="__DST__"
 WIN_OUT="__WIN_OUT__"
 GENERATE_ID="__GENERATE_ID__"

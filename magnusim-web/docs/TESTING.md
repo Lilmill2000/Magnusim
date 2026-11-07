@@ -47,9 +47,12 @@ tolerances are locked; then a locked quantity outside its tolerance fails
 six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9 minutes), after two fixes to the
 case writer's schemes and walls that the first (2026-11-06, commit aaabb531, 57.7 minutes) led
 to (`validation/README.md`), with Heat Transfer's set run from the same commit; nothing is
-locked until Daniel has reviewed it. Its meshes are not exactly the same from one generate to
-the next (snappyHexMesh and gmsh in parallel), so a rerun can move a value a little: case 1's
-development length about 1 %, case 2's Standard friction under 1 %.
+locked until Daniel has reviewed it. Its meshes were not exactly the same from one generate to
+the next (snappyHexMesh and gmsh in parallel), so a rerun could move a value a little: case 1's
+development length about 1 %, case 2's Standard friction under 1 %. Since 2026-11-07 the WSL
+scripts run scotch, which splits a mesh into ranks, on one thread (on several it split the same
+mesh differently each run), so on one commit a Hex-dominant generate and a parallel solve repeat
+exactly; a Standard mesh (gmsh) can still differ.
 
 ## The quick physics checks
 

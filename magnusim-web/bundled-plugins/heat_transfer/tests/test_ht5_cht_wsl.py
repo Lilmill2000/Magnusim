@@ -328,13 +328,14 @@ def test_heat_sink_in_a_channel_carries_its_source_out(sink_study, wsl: str) -> 
     one iteration reads anywhere in that band. The sink is settled (it gives the air its
     10 W through their shared faces within 0.01 %); the swing is the air's.
 
-    Where iteration 3000 falls in the cycle changes from run to run, because the mesh and the
-    solve's split into ranks change: scotch 7 partitions on several threads and splits the
-    same mesh differently each time. A Hex-dominant Generate (snappyHexMesh on 16 ranks)
-    gives the same 95,902 cells with a third of them up to 0.13 mm apart, and one mesh split
-    4 ways for the solve takes another path from the first iteration. A landing run read
-    10.28 W at its last iteration (2.8 % off) where others read 9.96 to 10.12 W. With
-    SCOTCH_PTHREAD_NUMBER=1 both repeat exactly; the test keeps the app's own runs.
+    Where iteration 3000 falls in the cycle changed from run to run while scotch, which splits
+    a mesh into ranks, ran on several threads: it split the same mesh differently each time,
+    so a Hex-dominant Generate (snappyHexMesh on 16 ranks) gave the same 95,902 cells with a
+    third of them up to 0.13 mm apart, and one mesh split 4 ways for the solve took another
+    path from the first iteration. A landing run read 10.28 W at its last iteration (2.8 %
+    off) where others read 9.96 to 10.12 W. The WSL scripts now run scotch on one thread, so
+    the same commit repeats exactly, but any change to the mesh or the solve moves where the
+    last iteration falls in the cycle, so the test reads the average.
 
     Over whole cycles what the iterations store and give back cancels, so the average is the
     balance: 10.002 to 10.014 W (0.02 to 0.14 % off) in all nine runs measured. Nothing

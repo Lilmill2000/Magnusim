@@ -19,6 +19,11 @@
 # .magnusim-stop in the Windows case, checked before and after each step, ends
 # the run with exit 130. This script never creates the Windows case folder.
 set -uo pipefail
+# One thread for scotch, which splits the mesh into ranks (decomposePar, a parallel
+# snappyHexMesh's own balancing): Ubuntu's scotch 7 splits on several threads and
+# gives the same mesh a different split each time, so the same study meshed or
+# solved twice came out different. One thread gives the same split every time.
+export SCOTCH_PTHREAD_NUMBER=1
 DST="__DST__"
 WIN_OUT="__WIN_OUT__"
 TOKEN="__TOKEN__"

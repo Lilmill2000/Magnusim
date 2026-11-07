@@ -341,6 +341,63 @@ def test_the_meshing_plan(world: World, n_procs: int):
     assert [e for e in evs if e["event"] == "prepare_stage"] == [{"event": "prepare_stage", "stage": "writing"}]
 
 
+SPLIT_PLAN = [{"tool": "blockMesh"}, {"tool": "decomposePar"}, {"tool": "reconstructParMesh"}]
+
+
+def _fine_cavity(world: World, name: str) -> tuple[Path, Path, list[str]]:
+    """The cavity at 300 x 300 cells (90,000) for ten steps of 0.2 ms (Courant 0.6)."""
+    case, base, parts = world.cavity(name, end_time=0.002, write_interval=0.002)
+    for rel, old, new in (("system/blockMeshDict", "(20 20 1)", "(300 300 1)"),
+                          ("system/controlDict", "deltaT          0.005;", "deltaT          0.0002;")):
+        path = case / rel
+        text = path.read_text(encoding="utf-8")
+        assert old in text, (rel, old)
+        path.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
+    return case, base, parts
+
+
+def _solve_lines(case: Path) -> list[str]:
+    """The solver's log from its first time step, without the timing lines (the header
+    before it names the date, host and processes)."""
+    lines = (case / "log.pimpleFoam").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("Time = "))
+    return [line for line in lines[start:] if not line.startswith("ExecutionTime")]
+
+
+def test_the_same_case_splits_and_solves_the_same_way_twice(world: World):
+    """One case run twice on 4 ranks gives the same mesh and the same solve.
+
+    Ubuntu's scotch 7 splits a mesh into ranks on several threads and splits the same
+    mesh differently each run (three of three decomposePar runs of an 81,000-cell box
+    differed). foam_pre.sh, solve.sh and the Hex-dominant Generate's script run it on
+    one thread (SCOTCH_PTHREAD_NUMBER=1), which gives the same split every time. Here the
+    steps' decomposePar ... reconstructParMesh span (foam_pre.sh) brings the mesh back in
+    its split's cell order, so a different split is a different polyMesh; then solve.sh
+    splits it again for a 4-rank pimpleFoam, whose residuals follow the split. With the
+    export taken out of both scripts this test fails on both."""
+    runs = []
+    for name in ("same1", "same2"):
+        case, base, parts = _fine_cavity(world, name)
+        spec, doc = world.spec(case, base, parts, pre=SPLIT_PLAN, n_procs=4)
+        code, evs = world.relay(spec, timeout=600)
+        assert code == 0, [e for e in evs if e["event"] in ("refused", "pre", "pre_result", "relay_end", "log")][-8:]
+        assert evs[-1]["outcome"]["ok"] is True
+        assert next(e["n_procs"] for e in evs if e["event"] == "ranks") == 4
+        pre = {e["tool"]: e for e in evs if e["event"] == "pre"}
+        assert not pre["decomposePar"].get("skipped") and not pre["reconstructParMesh"].get("skipped")
+        assert "Processor 3" in (case / "log.decomposePar.2").read_text(encoding="utf-8")
+        assert (case / "0.002" / "U").is_file() and not world.exists(doc["wsl_case"])
+        runs.append(case)
+    a, b = runs
+    assert n_cells(a) == 90000
+    for name in ("points", "faces", "owner", "neighbour"):
+        assert (a / "constant" / "polyMesh" / name).read_bytes() == (b / "constant" / "polyMesh" / name).read_bytes(), name
+    solve_a, solve_b = _solve_lines(a), _solve_lines(b)
+    assert sum(line.startswith("Time = ") for line in solve_a) == 10
+    assert solve_a == solve_b, next(f"{x}\n{y}" for x, y in zip(solve_a, solve_b, strict=False) if x != y)
+    assert (a / "0.002" / "U").read_bytes() == (b / "0.002" / "U").read_bytes()
+
+
 CAVITY_FIXTURE = FIXTURES / "foam-results" / "cavity-2d"
 FIXTURE_FRAMES = ["0.1", "0.2", "0.3", "0.4", "0.5"]
 
