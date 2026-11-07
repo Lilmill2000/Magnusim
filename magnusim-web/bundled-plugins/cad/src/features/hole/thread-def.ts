@@ -12,7 +12,8 @@
 // is a boolean the kernel answers with nothing removed). `length` "" is the whole wall, stopping
 // a pitch short of a blind hole's bottom and just inside a face the wall ends at (a groove crossing
 // that face is such a boolean too); else that far from the face, at most that. A cut that removes
-// nothing fails in words rather than passing as threaded. The cost has a budget: at most
+// nothing fails in words rather than passing as threaded, and so does one the kernel says left a
+// groove out as if apart (API 10, as_if_apart 'wrong'). The cost has a budget: at most
 // THREAD_TURNS_MAX turns a hole and THREAD_TURNS_TOTAL_MAX for all the holes (the boolean's time
 // grows with them), and the boolean and lofts have their own measured kernel timeouts. The hole
 // must run along X, Y or Z (as Hole makes it): a wall is measured by its box. The body keeps its
@@ -264,6 +265,12 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
       if (!vols.ok || !(vols.value[0] - vols.value[1] > 1e-6 * Math.max(1, vols.value[0]))) {
         await ctx.release([res.id]);
         return vols.ok ? { ok: false, message: `${f.name} failed: the kernel's cut of the thread's groove removed nothing from ${ctx.bodyName(f.body)}, so it is not threaded (a cosmetic thread draws it instead)` } : vols;
+      }
+      // One groove of several left out as if apart from the body it overlaps (kernel API 10, as_if_apart
+      // 'wrong'; GitHub issue 15) while the others cut: the volume went down, but a hole is not threaded.
+      if (res.as_if_apart === 'wrong') {
+        await ctx.release([res.id]);
+        return { ok: false, message: `${f.name} failed: the geometry kernel's cut left out a piece of the thread's groove that overlaps ${ctx.bodyName(f.body)} (OCCT took the two for apart), so part of the thread would be missing (a cosmetic thread draws it instead)` };
       }
       const names = namesFromResult(f.id, res, new Map<ShapeId, FaceNames | null>([[body.shape, body.names], ...tools.map((t) => [t.shape, t.names] as [ShapeId, FaceNames])]));
       return { ok: true, bodies: [{ id: f.body, shape: res.id, valid: true, names }], removed: [] };

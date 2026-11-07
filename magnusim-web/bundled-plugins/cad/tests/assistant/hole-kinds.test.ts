@@ -28,6 +28,8 @@ import type { ExtrudeFeature, SketchDimension, SketchFeature } from '../../src/t
 import { uiFor } from '../../src/ui/controller';
 import { EXTRUDE, fail, names, ok, volume } from './extrude-tools';
 import { assistantHarness, type AssistantHarness } from './harness';
+import { multiToolCutsAsIfApart } from '../fakes/as-if-apart';
+import { realKernelAnywhere } from '../features/p2/kernel-anywhere';
 import { undoLabel } from './parts';
 import { block, C, E, featureNamed, SK, type Row } from './sketch-tools';
 
@@ -159,6 +161,32 @@ describe('hole sizes, screw heads, threads and points', () => {
       expect(modelled.removed).toBeCloseTo(273.9, 0);
       const modelledRow = ((await ok(h, 'get_model', { detail: 'brief' })).data.features as Row[]).find((f) => f.name === 'Hole 5');
       expect(modelledRow).toMatchObject({ thread: 'M6x1 thread, 12 mm deep, cut into the wall (Hole 5 thread)' });
+    },
+    MS,
+  );
+
+  it(
+    "a modelled thread one of whose grooves OCCT left out as if apart (kernel API 10, GitHub issue 15) fails in words, though the others cut",
+    async () => {
+      const k = multiToolCutsAsIfApart(realKernelAnywhere());
+      h = await assistantHarness({ sketchMode: true, kernel: k.kernel });
+      withThreads(h);
+      await block(h, { t: 20 });
+      const kept = names(h);
+      // Two holes, two grooves in one cut: the kernel says one was left out, though the volume went down.
+      const two = HOLE({ centers: [CTR('-15 mm', '0 mm'), CTR('15 mm', '0 mm')], size: 'M6', fit: 'tapped', depth: 'blind', distance: '12 mm', thread: 'modelled' });
+      k.set(true);
+      const e = await fail(h, 'hole', two);
+      expect(e.message).toBe(
+        "feature_failed: Hole 1 thread fails: Hole 1 thread failed: the geometry kernel's cut left out a piece of the thread's groove that overlaps Body 1 (OCCT took the two for apart), so part of the thread would be missing (a cosmetic thread draws it instead)",
+      );
+      expect(names(h)).toEqual(kept);
+      await h.settle();
+      expect(volume(h)).toBeCloseTo(BLOCK, 6);
+      // The same holes on the kernel's own answer: threaded.
+      k.set(false);
+      const r = await ok(h, 'hole', two);
+      expect(r.text).toMatch(/^Hole 1 ok: 2 M6x1 tapped \(threaded\) holes 5 mm across, 12 mm deep, in Base\.end /);
     },
     MS,
   );
