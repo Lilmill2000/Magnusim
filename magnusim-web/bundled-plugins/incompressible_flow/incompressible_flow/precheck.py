@@ -15,7 +15,9 @@ the same RunSpec its case is written with.
   case is written with as saved (``setting_out_of_range``);
 - the study's physics (turbulence model, starting flow, potential flow, numerics) and
   whether a boundary condition varies with time or moves;
-- the Δt a fixed time step is written with when it is left blank.
+- the Δt a fixed time step is written with when it is left blank;
+- its own rows (``analysis_rows``): ``wall_friction_mesh``, a turbulent study whose Standard mesh
+  has no wall layers (not asked, or dropped), so its wall cells are tetrahedra under wall functions.
 
 The core passes the mesh's facts and Courant-rate table, the ranks, this PC's solve rate
 and the codes kept as set (``context``, cfddesk.project.run_check).
@@ -30,6 +32,45 @@ from typing import Any
 # developed pipe read within about 2 % from y+ 5 to 15 (validation/README.md).
 WALL_FUNCTION_MODELS = frozenset({"kEpsilon", "realizableKE", "LRR", "SSG"})
 ANY_YPLUS_MODEL = "kOmegaSST"
+# A turbulent study on a Standard mesh with no wall layers: its wall cells are tetrahedra under wall
+# functions. On the validation set's turbulent pipe (Re 5e4, a uniform inlet, f at 20 to 25 D; the
+# 4-core probes of 2026-11-07, validation/README.md) k-omega SST read its friction from the pressure
+# drop and the wall shear 0.0 % and 9.9 % low with the Robust preset and 31 % and 28 % low with
+# Accurate (as written now: no skew correction for SST on Standard); k-epsilon read it 12.8 % and
+# 13.0 % low with Robust and diverged with Accurate (with or without the skew-corrected lines).
+# Other models were not run there.
+WALL_FRICTION_TEXT = (
+    "This Standard mesh has no wall layers{why}, so its wall cells are tetrahedra under wall functions: on the "
+    "validation set's turbulent pipe such walls read the wall friction up to about 31 % low with k-omega SST "
+    "(0 to 10 % with the Robust preset, 28 to 31 % with Accurate) and about 13 % low with k-epsilon (Robust; "
+    "with Accurate it diverged). Add boundary layers, or mesh with Hex-dominant, for wall friction."
+)
+
+
+def analysis_rows(physics: Any, mesh: Any) -> list[dict[str, Any]]:
+    """Incompressible Flow's own pre-run rows (magnusim_sdk.runcheck ``analysis_rows``) from the
+    study's physics and the mesh's facts: ``wall_friction_mesh`` (warn) for a turbulent study on a
+    Standard mesh whose walls have no layers (none asked, or the mesher dropped them)."""
+    if getattr(physics, "turbulence_model", "laminar") == "laminar" or not isinstance(mesh, dict):
+        return []
+    if mesh.get("mesher") != "standard":
+        return []
+    raw = mesh.get("layers")
+    layers: dict[str, Any] = raw if isinstance(raw, dict) else {}
+    if layers.get("asked") and layers.get("applied") is not False:
+        return []
+    why = " (the mesher dropped the ones asked for)" if layers.get("asked") else ""
+    return [
+        {
+            "code": "wall_friction_mesh",
+            "level": "warn",
+            "text": WALL_FRICTION_TEXT.format(why=why),
+            "short": "no wall layers on a Standard mesh",
+            "fix": {"label": "Open mesh", "target": "mesh", "values": [], "cost": None},
+        }
+    ]
+
+
 # The estimate line before the run's mesh is generated (its spec needs the mesh).
 NO_MESH_ESTIMATE = "No time-step estimate until the mesh is generated"
 # What a check before the mesh leaves out ("Only its run settings were checked: ...").
@@ -179,6 +220,9 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
     unmirrored = two_d_unmirrored(spec, ctx.get("mesh"))
     if unmirrored:
         out["two_d_unmirrored"] = unmirrored
+    own = analysis_rows(physics, ctx.get("mesh"))
+    if own:
+        out["analysis_rows"] = own
     if out["closed"] and not holds_pressure(spec):
         through, curved = walls_across(spec)
         if through:
@@ -328,8 +372,10 @@ def numerics(spec: Any, inputs: Any, settings: dict[str, Any], *, transient: boo
         speed, _ = resolve_speed_and_dhyd(spec)
         if spec.speed_for_k and spec.speed_for_k != 1.0:
             speed = float(spec.speed_for_k)
+        from .writer import mesher_of
+
         words = check_inputs(spec, settings, {}, transient=transient)
-        return numerics_rows(spec.physics, transient=spec.transient, speed=float(speed), inlet=str(words.get("inlet") or ""))
+        return numerics_rows(spec.physics, transient=spec.transient, speed=float(speed), inlet=str(words.get("inlet") or ""), mesher=mesher_of(spec))
     from .physics import physics_from_record
     from .transient import resolve_transient_control
 

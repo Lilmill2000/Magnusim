@@ -254,12 +254,17 @@ App gaps found so far, and what they block:
   differencing read 74.3), 4 non-orthogonal correctors for 2 (74.85), SIMPLEC, the gradient
   limiter (None: 74.25), the hex core and the layers, the cross-section's faceting (area
   -0.22 %) and the reading (the centreline slope, the cross-section mean and the wall shear
-  within 0.5 %). Both are skew-corrected now (`flux(HbyA) skewCorrected linear`, `grad(U) Gauss
-  skewCorrected linear`, never limited, steady and transient), and the study's gradient limiter
-  limits only the gradients convection reads (`limitedGradU` for linearUpwind, and the
-  turbulence fields'): on the 4-core probes Standard reads f Re 64.13 (+0.21 %) (before
-  74.30, +16.1 %) and Hex-dominant 63.21 (-1.24 %) (before 63.35, -1.02 %); Standard's
-  development length 5.70 D (-1.2 %, before -5.7 %). Cases 3 to 6 (Hex-dominant) moved by
+  within 0.5 %). Both are skew-corrected now (`flux(HbyA) skewCorrected linear`, and `grad(U)`
+  the study's gradient limiter on `Gauss skewCorrected linear`, steady and transient), but for
+  k-omega SST on a Standard mesh (below): on the 4-core probes Standard reads f Re 64.13 (+0.21 %)
+  (before 74.30, +16.1 %) and Hex-dominant 63.21 (-1.24 %) (before 63.35, -1.02 %); Standard's
+  development length 5.70 D (-1.2 %, before -5.7 %). The first version of the fix (f7926eb0) wrote
+  `grad(U)` never limited and put the limiter on a `limitedGradU` for linearUpwind; the limiter
+  inside the skew-corrected gradient reads the same (2026-11-07, case 1's Standard mesh re-solved
+  with only its fvSchemes changed: f Re 64.004 either way with Accurate, 64.247 against 64.237 with
+  Robust; neither line alone is enough: the flux alone read 69.91, the gradient alone 68.90, the
+  plain lines 74.24), so Strong limits what the viscous terms read again, as before the fix, and
+  the app path reads 63.998 (Accurate). Cases 3 to 6 (Hex-dominant) moved by
   at most 1 %: case 5 at Re 100 its mean Cd -0.5 % and its CL rms -1.0 % (both nearer their
   references), St +0.09 %, the rest 0.25 % or less. Solves take longer. On the 4-core probes:
   on Hex-dominant from -2 % (case 3 at Re 1000) to +65 %
@@ -276,18 +281,19 @@ App gaps found so far, and what they block:
   iteration 300 0.026, 0.031 and 0.040), the new schemes in 164 s against 134 s (22 % longer; 171 s
   with the new walls). Those runs did not save their drag coefficient, so they say nothing about
   Cd. Every
-  steady and transient Incompressible Flow study writes them at its next Start or Continue;
-  "Numerics as written" shows them under Stays fixed
+  steady and transient Incompressible Flow study writes them at a Start, or a Continue that takes
+  the study's new numerics; "Numerics as written" shows them under Stays fixed
   (`bundled-plugins/incompressible_flow/tests/test_skew_and_walls.py`, `e2e/run-numerics.spec.js`).
   Heat Transfer's writers keep the plain schemes. Probed on its own validation meshes
   (2026-11-06, `bundled-plugins/heat_transfer/README.md`, "Validation"), the same lines with
   `grad(h)` skew-corrected too took its laminar pipe on Standard from Nu +13.1 % and f Re +15 % to
   +5.2 % and -1.1 %, but its turbulent pipe on Standard, whose wall cells are tetrahedra under
   wall functions (no layers), from Nu +0.3 % to -39 % and f +2 % to +101 %. This case's own pipe
-  on Standard with its layers turned off (k-omega SST, Accurate, y+ 41 to 143) reads the same
+  on Standard with its layers turned off (k-omega SST, Accurate, y+ 41 to 143) read the same
   way: f -31 % and f_tau -27 % with the schemes before the fix, -62 % and -65 % with the
-  skew-corrected ones, on one mesh. The default Standard mesh has its layers, but where a wall's
-  layers are off or not applied these lines read a wall-function wall's friction far lower.
+  skew-corrected ones, on one mesh; so did k-omega SST on Standard with its layers, from the
+  Auto inlet, so Incompressible Flow writes k-omega SST on a Standard mesh without them (two
+  items below).
 - **k-omega SST at the wall** (case 2), fixed after the first full run: the app wrote
   `nutkWallFunction`, which takes the wall's friction from the first cell's k with a switch to
   the log law at y+ 11.53, and v2606's `omegaWallFunction`, whose default blending is binomial.
@@ -320,19 +326,46 @@ App gaps found so far, and what they block:
   -1.61 % (before -9.64 %) on Hex-dominant and +0.29 % (before -20.28 %) on Standard (the 4-core probes before and after; its
   committed set and its study panel's Standard note still give the old numbers until that set
   is run again).
-- **k-omega SST on Standard's tetrahedra** (case 2, a limitation): developed (a mapped inlet,
-  4000 iterations, both fixes) Standard reads f -9.2 % at y+ 11.5, where the wedge reads
-  +0.2 %, with U_cl / U_b 1.27 against 1.17. The probes point at SST's stress limiter, nut =
-  a1 k / max(a1 omega, b1 F2 S): with the limiter off (b1 0) Standard read +12.6 % against the
-  wedge's +11.1 %, and Wilcox's k-omega (no limiter) +16.8 % against +16.1 %, so without it the
-  tetrahedra read as the clean mesh does. How the limiter cuts nut there is inferred, not shown:
-  the strain rate S comes from the cells' velocity gradient, which the tetrahedra may make
-  uneven, and the max would turn that unevenness into a one-sided cut of nut. Ruled out: the mesh's fineness (fineness 8, with a hex core: -9.2 %), the turbulence
-  fields' gradients (skew-corrected too: -8.3 %) and the wall distance (Poisson instead of
-  meshWave: -9.3 %). On the 30 D pipe with the uniform inlet the flow is still developing at 20
-  to 25 D on Standard (f -26.6 % from the pressure drop, -15.0 % from the wall shear,
-  before -23.2 % and -26.3 %). No small fix: the Study panel's model help says so, and Hex-dominant
-  suits turbulent wall friction.
+- **k-omega SST on Standard's tetrahedra** (case 2, a limitation, and the skew-corrected lines
+  left out there): the 4-core probes of 2026-11-07 re-solved case 2's Standard meshes (from the
+  Auto inlet, 2500 iterations, f at 20 to 25 D) with only their fvSchemes changed, the
+  skew-corrected lines against the plain ones (f from the pressure drop, then f_tau from the wall
+  shear):
+
+  | Standard mesh, preset | Skew-corrected (f7926eb0) | Plain lines |
+  |---|---|---|
+  | With layers, Robust (the default preset) | -22.9 %, -21.0 % | -10.9 %, -13.8 % |
+  | With layers, Accurate | -24.7 %, -15.1 % | -17.6 %, -17.2 % |
+  | No layers, Robust | -50.4 %, -53.6 % | 0.0 %, -9.9 % |
+  | No layers, Accurate (y+ 41 to 143) | -61.9 %, -65.3 % | -31.2 %, -27.7 % |
+
+  With the limiter inside the skew-corrected gradient they read the same as f7926eb0's lines or
+  further off (Robust with layers -24.3 %, -24.5 %). Developed (a mapped inlet, Accurate,
+  fineness 8) the skew-corrected lines read better, f -9.2 % against -14.4 %, and the flux and
+  the gradient each made the pipe without layers worse alone (f -43.6 % and -34.9 %, lane 2's
+  probe). k-epsilon on Standard reads better with them (-1.0 % and +0.3 % against -1.9 % and
+  -3.0 %, with layers), and Hex-dominant's SST pipe too (-4.2 % and -3.0 % against -6.6 % and
+  -5.7 %). So k-omega SST on a Standard mesh (the mesh facts' mesher) is written with the plain
+  lines and every other study with the skew-corrected ones
+  (`incompressible_flow/writer.py` `skew_corrected`; "Numerics as written" says which). Through
+  the app path, with that: Standard with layers f -14.3 % and f_tau -17.1 % (Accurate), -15.0 %
+  and -14.0 % (Robust); without layers -18.8 % and -28.0 % (Accurate); one mesh each, and
+  Standard's meshes of the same settings differ (these and the re-solves above are different
+  meshes). Why the skew-corrected lines read k-omega SST's friction lower on tetrahedra from an
+  inlet is not shown. Developed (a mapped inlet, 4000 iterations, both fixes, the skew-corrected
+  lines) Standard read f -9.2 % at y+ 11.5, where the wedge reads +0.2 %, with U_cl / U_b 1.27
+  against 1.17. The probes point at SST's stress limiter, nut = a1 k / max(a1 omega, b1 F2 S):
+  with the limiter off (b1 0) Standard read +12.6 % against the wedge's +11.1 %, and Wilcox's
+  k-omega (no limiter) +16.8 % against +16.1 %, so without it the tetrahedra read as the clean
+  mesh does. How the limiter cuts nut there is inferred, not shown: the strain rate S comes from
+  the cells' velocity gradient, which the tetrahedra may make uneven, and the max would turn that
+  unevenness into a one-sided cut of nut. Ruled out: the mesh's fineness (fineness 8, with a hex
+  core: -9.2 %), the turbulence fields' gradients (skew-corrected too: -8.3 %) and the wall
+  distance (Poisson instead of meshWave: -9.3 %). No small fix: the Study panel's model help and
+  the Assistant's guide say what a pipe read on each mesher, the pre-run check warns of a Standard
+  mesh with no wall layers under a turbulent study (`wall_friction_mesh`: k-epsilon there read
+  -12.8 % and -13.0 % with Robust and diverged with Accurate, with the skew-corrected lines or the
+  plain), and Hex-dominant suits turbulent wall friction.
 - **k-omega SST resolved to the wall** (case 2's wedge, a limitation): with the first cell's
   centre at y+ 1 to 3 every wall treatment tried read f 6 to 9 % low (Spalding's law, nutk,
   nutLowRe with k fixed at 0, Menter's omega on the wall face, kLowRe; a finer stretch, 1.05 and

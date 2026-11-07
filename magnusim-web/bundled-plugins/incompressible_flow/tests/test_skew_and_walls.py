@@ -1,11 +1,15 @@
-"""The velocity gradient and the flux are skew-corrected, and k-omega SST's walls take Spalding's law
-(the validation set's pipes, 2026-11-06: validation/README.md).
+"""The velocity gradient and the flux are skew-corrected (but for k-omega SST on a Standard mesh), and
+k-omega SST's walls take Spalding's law (the validation set's pipes, 2026-11-06 and -07:
+validation/README.md).
 
-- Steady and transient: ``grad(U)`` is ``Gauss skewCorrected linear`` and never limited (the viscous
-  terms and the turbulence production read it); the study's gradient limiter is on the gradient
-  momentum convection reads (``limitedGradU``, ``linearUpwind limitedGradU``) and on the turbulence
-  fields' gradients; with the limiter None, linearUpwind reads ``grad(U)``; ``flux(HbyA)`` is
-  interpolated ``skewCorrected linear``.
+- Steady and transient: ``grad(U)`` is the study's gradient limiter on ``Gauss skewCorrected linear``
+  (``cellLimited Gauss skewCorrected linear 1`` under Robust, ``Gauss skewCorrected linear`` with the
+  limiter None), which linearUpwind, the viscous terms and the turbulence production read; the
+  turbulence fields' gradients take the limiter on ``Gauss linear``; ``flux(HbyA)`` is interpolated
+  ``skewCorrected linear``. No ``limitedGradU``.
+- k-omega SST on a Standard mesh (its mesh facts' mesher) is written without them: ``grad(U)`` the
+  limiter on ``Gauss linear`` and no flux entry (the validation pipe read its friction further off
+  with them there); k-epsilon and laminar studies on Standard keep them.
 - A no-slip wall under k-omega SST: ``nutUSpaldingWallFunction`` and ``omegaWallFunction`` with
   ``blending stepwise``; k-epsilon keeps ``nutkWallFunction``; Spalart-Allmaras Spalding's law.
 - "Numerics as written" says so: the Gradient limiter and Momentum convection rows as written, and
@@ -25,9 +29,15 @@ from cfddesk.registry.analysis import write_run_case
 from conftest import JS_PROJECT
 from conftest import run_spec as load_run_spec
 
+from incompressible_flow import writer as if_writer
 from incompressible_flow.physics import solved_turbulence_fields
 from incompressible_flow.precheck import run_check
-from incompressible_flow.writer import wall_functions, wall_treatment_words
+from incompressible_flow.writer import (
+    mesher_of,
+    skew_corrected,
+    wall_functions,
+    wall_treatment_words,
+)
 
 TRANSIENT = {"end_time": 5, "write_count": 50, "max_co": 1, "n_outer_correctors": 1, "n_correctors": 2, "delta_t": 0.001, "max_delta_t": 0.1}
 
@@ -82,20 +92,20 @@ def _wall(text: str, patch: str = "walls") -> str:
         ({"grad_limiter": "light"}, TRANSIENT, "cellMDLimited Gauss skewCorrected linear 0.5", "cellMDLimited Gauss linear 0.5"),
     ],
 )
-def test_the_limiter_is_on_the_convection_gradient_and_grad_u_is_skew_corrected(tmp_path: Path, record, transient, limited, turb):
+def test_the_limiter_is_on_the_skew_corrected_velocity_gradient(tmp_path: Path, record, transient, limited, turb):
     schemes = _text(_write(tmp_path, record, transient), "system/fvSchemes")
-    assert _grad(schemes, "grad(U)") == "Gauss skewCorrected linear"
-    assert _grad(schemes, "limitedGradU") == limited
+    assert _grad(schemes, "grad(U)") == limited
+    assert _grad(schemes, "limitedGradU") is None and "limitedGradU" not in schemes
     assert _grad(schemes, "grad(k)") == turb and _grad(schemes, "grad(omega)") == turb
     bounded = "" if transient else "bounded "
-    assert f"div(phi,U)      {bounded}Gauss linearUpwind limitedGradU;" in schemes
+    assert f"div(phi,U)      {bounded}Gauss linearUpwind grad(U);" in schemes
     assert "interpolationSchemes { default linear; flux(HbyA) skewCorrected linear; }" in schemes
-    # The viscous term's explicit part reads grad(U) (the unlimited one).
+    # The viscous term's explicit part reads grad(U) too.
     assert "div((nuEff*dev2(T(grad(U))))) Gauss linear;" in schemes
 
 
 @pytest.mark.parametrize("transient", [None, TRANSIENT])
-def test_with_the_limiter_none_linear_upwind_reads_grad_u(tmp_path: Path, transient):
+def test_with_the_limiter_none_grad_u_is_skew_corrected_and_unlimited(tmp_path: Path, transient):
     schemes = _text(_write(tmp_path, {"grad_limiter": "none"}, transient), "system/fvSchemes")
     assert _grad(schemes, "grad(U)") == "Gauss skewCorrected linear"
     assert _grad(schemes, "limitedGradU") is None
@@ -104,12 +114,75 @@ def test_with_the_limiter_none_linear_upwind_reads_grad_u(tmp_path: Path, transi
 
 
 @pytest.mark.parametrize(("choice", "written"), [("first_order", "bounded Gauss upwind"), ("second_order_limited", "bounded Gauss limitedLinearV 1")])
-def test_momentum_schemes_without_a_gradient_read_no_convection_gradient(tmp_path: Path, choice, written):
+def test_momentum_schemes_without_a_gradient_keep_the_limited_velocity_gradient(tmp_path: Path, choice, written):
     schemes = _text(_write(tmp_path, {"momentum_convection": choice}), "system/fvSchemes")
     assert f"div(phi,U)      {written};" in schemes
-    assert _grad(schemes, "grad(U)") == "Gauss skewCorrected linear"
-    # Nothing reads a limited velocity gradient, so none is written.
-    assert _grad(schemes, "limitedGradU") is None and "linearUpwind" not in schemes
+    # The viscous terms still read grad(U): the limiter on the skew-corrected gradient.
+    assert _grad(schemes, "grad(U)") == "cellLimited Gauss skewCorrected linear 1"
+    assert "limitedGradU" not in schemes and "linearUpwind" not in schemes
+
+
+def test_skew_correction_is_left_out_only_for_k_omega_sst_on_a_standard_mesh():
+    """The gate (writer.skew_corrected): k-omega SST on Standard's tetrahedra is written with the plain
+    lines; every other model on Standard, and every model on another mesher or before the mesh is known,
+    with the skew-corrected ones."""
+    assert skew_corrected("kOmegaSST", "standard") is False
+    for model in ("laminar", "kEpsilon", "realizableKE", "SpalartAllmaras", "LRR", "SSG"):
+        assert skew_corrected(model, "standard") is True, model
+    for mesher in ("hexdominant", "snappy_hexdominant", "cfmesh", None, ""):
+        assert skew_corrected("kOmegaSST", mesher) is True, mesher
+
+
+def _standard_facts(spec) -> None:
+    """Mesh facts saying the run's mesh is Standard's, stamped with its mesh (as the mesher keeps them)."""
+    from magnusim_sdk import courant_rates
+    from magnusim_sdk.mesh_facts import FACTS_FILE, FACTS_VERSION
+
+    case = Path(spec.mesh_case_dir)
+    stamp = courant_rates.mesh_stamp(case / "constant" / "polyMesh")
+    (case / FACTS_FILE).write_text(json.dumps({"v": FACTS_VERSION, "mesher": "standard", "stamp": stamp}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("transient", [None, TRANSIENT])
+def test_k_omega_sst_on_a_standard_mesh_is_written_with_the_plain_lines_and_says_so(tmp_path: Path, transient):
+    spec = _spec(tmp_path, {"turbulence_model": "kOmegaSST"}, transient)
+    _standard_facts(spec)
+    assert mesher_of(spec) == "standard"
+    case = tmp_path / "case"
+    assert write_run_case(spec, case)["ok"]
+    schemes = _text(case, "system/fvSchemes")
+    assert _grad(schemes, "grad(U)") == "cellLimited Gauss linear 1"
+    assert "skewCorrected" not in schemes and "limitedGradU" not in schemes
+    assert "interpolationSchemes { default linear; }" in schemes
+    bounded = "" if transient else "bounded "
+    assert f"div(phi,U)      {bounded}Gauss linearUpwind grad(U);" in schemes
+    rows = _rows(run_check(transient=transient is not None, spec=spec, settings=transient or {"end_time": 200}))
+    assert rows["Schemes/Gradient limiter"] == "grad(U) cellLimited Gauss linear 1; grad(k), grad(omega) cellLimited Gauss linear 1"
+    assert rows["Stays fixed/Velocity gradient"] == (
+        "grad(U) Gauss linear inside the gradient limiter, not skew-corrected: k-omega SST on a Standard mesh; "
+        "linearUpwind, the viscous terms and turbulence production read it"
+    )
+    assert rows["Stays fixed/Flux interpolation"] == "linear, not skew-corrected: k-omega SST on a Standard mesh"
+
+
+def test_k_epsilon_and_laminar_on_a_standard_mesh_keep_the_skew_corrected_lines(tmp_path: Path):
+    for n, model in enumerate(("kEpsilon", "laminar")):
+        spec = _spec(tmp_path / str(n), {"turbulence_model": model})
+        _standard_facts(spec)
+        case = tmp_path / f"case{n}"
+        assert write_run_case(spec, case)["ok"]
+        schemes = _text(case, "system/fvSchemes")
+        assert _grad(schemes, "grad(U)") == "cellLimited Gauss skewCorrected linear 1", model
+        assert "flux(HbyA) skewCorrected linear" in schemes, model
+
+
+def test_a_mesh_without_facts_is_written_skew_corrected(tmp_path: Path):
+    """When the mesh's mesher is not known (no facts beside it) every model is written skew-corrected."""
+    spec = _spec(tmp_path, {"turbulence_model": "kOmegaSST"})
+    assert mesher_of(spec) is None
+    assert if_writer.skew_corrected("kOmegaSST", mesher_of(spec)) is True
+    schemes = _text(_write(tmp_path / "w", {"turbulence_model": "kOmegaSST"}), "system/fvSchemes")
+    assert _grad(schemes, "grad(U)") == "cellLimited Gauss skewCorrected linear 1"
 
 
 def test_k_omega_sst_walls_take_spaldings_law_and_stepwise_omega(tmp_path: Path):
@@ -150,20 +223,24 @@ def _rows(out: dict) -> dict[str, str]:
 
 def test_numerics_as_written_says_what_stays_fixed(tmp_path: Path):
     rows = _rows(run_check(transient=False, spec=_spec(tmp_path / "a", {"turbulence_model": "kOmegaSST"}), settings={"end_time": 200}))
-    assert rows["Schemes/Gradient limiter"] == "limitedGradU cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1"
-    assert rows["Schemes/Momentum convection"] == "bounded Gauss linearUpwind limitedGradU"
-    assert rows["Stays fixed/Velocity gradient"] == "grad(U) Gauss skewCorrected linear, never limited (the viscous terms and turbulence production)"
+    assert rows["Schemes/Gradient limiter"] == "grad(U) cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1"
+    assert rows["Schemes/Momentum convection"] == "bounded Gauss linearUpwind grad(U)"
+    assert rows["Stays fixed/Velocity gradient"] == (
+        "grad(U) skew-corrected (Gauss skewCorrected linear) inside the gradient limiter; "
+        "linearUpwind, the viscous terms and turbulence production read it"
+    )
     assert rows["Stays fixed/Flux interpolation"] == "flux(HbyA) skewCorrected linear; the rest linear"
     assert rows["Stays fixed/Wall treatment"] == "nut nutUSpaldingWallFunction, k kqRWallFunction, omega omegaWallFunction (stepwise)"
     ke = _rows(run_check(transient=False, spec=_spec(tmp_path / "b", {"turbulence_model": "kEpsilon"}), settings={"end_time": 200}))
     assert ke["Stays fixed/Wall treatment"] == "nut nutkWallFunction, k kqRWallFunction, epsilon epsilonWallFunction"
     lam = _rows(run_check(transient=False, spec=_spec(tmp_path / "c", {"turbulence_model": "laminar", "grad_limiter": "none"}), settings={"end_time": 200}))
     assert "Stays fixed/Wall treatment" not in lam
-    assert lam["Schemes/Gradient limiter"] == "linearUpwind reads grad(U) (Gauss skewCorrected linear, unlimited)"
+    assert lam["Schemes/Gradient limiter"] == "grad(U) Gauss skewCorrected linear"
     assert lam["Schemes/Momentum convection"] == "bounded Gauss linearUpwind grad(U)"
+    assert lam["Stays fixed/Velocity gradient"] == "grad(U) skew-corrected (Gauss skewCorrected linear) inside the gradient limiter; linearUpwind and the viscous terms read it"
     tr = _rows(run_check(transient=True, spec=_spec(tmp_path / "d", {"turbulence_model": "kOmegaSST"}, TRANSIENT), settings=TRANSIENT))
-    assert tr["Schemes/Momentum convection"] == "Gauss linearUpwind limitedGradU"
-    assert tr["Stays fixed/Velocity gradient"].startswith("grad(U) Gauss skewCorrected linear")
+    assert tr["Schemes/Momentum convection"] == "Gauss linearUpwind grad(U)"
+    assert tr["Stays fixed/Velocity gradient"].startswith("grad(U) skew-corrected (Gauss skewCorrected linear)")
 
 
 def _model_help() -> str:
@@ -189,7 +266,17 @@ def test_the_model_help_says_what_the_probes_show_of_the_stress_limiter_not_how_
     """With the limiter off (b1 0) Standard's developed pipe read +12.6 % against the clean wedge's
     +11.1 %: the limiter is involved; how it cuts nut on the tetrahedra is inferred, not shown."""
     text = _model_help()
-    assert ("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); "
-            "with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though "
-            "how is not known.") in text
+    assert ("developed on Standard it read about 14 % low, and about as high as on a clean mesh with SST's stress limiter "
+            "off (probed with skew-corrected schemes), so the limiter is involved, though how is not known.") in text
     assert "uneven strain rate" not in text
+
+
+def test_the_model_help_says_what_a_pipe_from_an_inlet_reads_on_each_mesher():
+    """The validation pipe from its uniform inlet, as the app writes it now (2026-11-07 probes): within
+    about 4 % on Hex-dominant (-4.2 %, -3.0 % Accurate; -3.7 %, -2.8 % Robust), 11 to 18 % low on Standard
+    with layers (-10.9 % and -13.8 % Robust, -17.6 % and -17.2 % Accurate) and up to 31 % low without
+    (0.0 % and -9.9 % Robust, -31 % and -28 % Accurate): not the developed pipe's 9 % alone."""
+    text = _model_help()
+    assert ("A pipe from a uniform inlet read its friction within about 4 % on Hex-dominant, but on Standard's tetrahedra "
+            "11 to 18 % low with wall layers and up to about 31 % low with none (0 to 10 % with the Robust preset)") in text
+    assert "about 9 % low" not in text

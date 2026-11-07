@@ -113,9 +113,12 @@ def _settings_schema() -> tuple[SchemaField, ...]:
                 "default. With its walls (Spalding's law) a developed pipe on a clean mesh read its "
                 "friction within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % "
                 "up to y+ 100, but 6 to 9 % low at y+ 1 to 3; below y+ 1 only y+ 0.3 was tested (1.5 % "
-                "low). On Standard's tetrahedra a developed pipe read its friction about 9 % low (within "
-                "1 % on Hex-dominant); with SST's stress limiter off it read about as high as on a clean mesh, so "
-                "the limiter is involved, though how is not known. Spalart-Allmaras solves one equation and suits "
+                "low). A pipe from a uniform inlet read its friction within about 4 % on Hex-dominant, but on "
+                "Standard's tetrahedra 11 to 18 % low with wall layers and up to about 31 % low with none (0 to 10 % "
+                "with the Robust preset); developed on Standard it read about 14 % low, and about as high as on a "
+                "clean mesh with SST's stress limiter off (probed with skew-corrected schemes), so the limiter is "
+                "involved, though how is not known. "
+                "Spalart-Allmaras solves one equation and suits "
                 "flow around wings and bodies in a freestream; how its walls read was not tested. "
                 "k-epsilon, realizable k-epsilon and the Reynolds-stress models (LRR, SSG) use "
                 "high-Re wall functions (y+ above about 30); realizable k-epsilon copes better than "
@@ -258,8 +261,8 @@ def _potential_flow_fields() -> tuple[SchemaField, ...]:
 # What Incompressible Flow adds after a numerics key's advice (its own defaults).
 _RH3_EXTRA: dict[str, str] = {
     "grad_limiter": (
-        "It limits the gradients convection reads (the velocity's, for linearUpwind, and the turbulence "
-        "fields'); the viscous terms read the velocity gradient skew-corrected and unlimited."
+        "It limits the velocity gradient (which linearUpwind and the viscous terms read; skew-corrected, "
+        "but for k-omega SST on a Standard mesh) and the turbulence fields' gradients."
     ),
     "eq_max_iter": "50 is the default.",
     "relax_turbulence": "Not used while SIMPLEC is on.",

@@ -301,3 +301,59 @@ def test_a_body_in_a_tunnel_fed_by_an_inlet_reads_re_on_the_studys_reference_len
     if two_d:
         assert bare["d_hyd"] == pytest.approx(2 * h)
         assert "laminar_turbulent" in [r["code"] for r in check(bare)["checks"]]
+
+
+def _std_mesh(**layers):
+    return {"mesher": "standard", "layers": {"asked": False, "applied": False, "first_m": None, "walls": [], **layers}}
+
+
+@pytest.mark.parametrize("model", ["kOmegaSST", "kEpsilon", "SpalartAllmaras"])
+def test_a_turbulent_study_on_a_standard_mesh_without_wall_layers_is_warned(model: str):
+    """wall_friction_mesh (validation set, 2026-11-07): a turbulent study whose Standard mesh has no
+    wall layers (none asked, or dropped) has tetrahedra under wall functions at its walls, where the
+    validation pipe read k-omega SST's friction up to about 31 % low and k-epsilon's about 13 % low or diverged."""
+    from magnusim_sdk.runcheck import check
+
+    from incompressible_flow.precheck import WALL_FRICTION_TEXT, analysis_rows
+
+    ph = SimpleNamespace(turbulence_model=model)
+    rows = analysis_rows(ph, _std_mesh())
+    assert [r["code"] for r in rows] == ["wall_friction_mesh"]
+    assert rows[0]["level"] == "warn" and rows[0]["fix"]["target"] == "mesh"
+    assert rows[0]["text"] == WALL_FRICTION_TEXT.format(why="")
+    assert rows[0]["text"].startswith("This Standard mesh has no wall layers, so its wall cells are tetrahedra under wall functions:")
+    assert ("up to about 31 % low with k-omega SST (0 to 10 % with the Robust preset, 28 to 31 % with Accurate) and about "
+            "13 % low with k-epsilon (Robust; with Accurate it diverged)") in rows[0]["text"]
+    dropped = analysis_rows(ph, _std_mesh(asked=True, applied=False))
+    assert dropped[0]["text"].startswith("This Standard mesh has no wall layers (the mesher dropped the ones asked for), so")
+    # Kept and ordered by the core, after the dropped layers and before y+; once each.
+    out = check({"turbulence": {"label": model}, "mesh": _std_mesh(asked=True, applied=False, first_m=None), "analysis_rows": dropped + dropped, "kept": ["wall_friction_mesh"]})
+    codes = [r["code"] for r in out["checks"]]
+    assert codes.count("wall_friction_mesh") == 1
+    assert codes.index("layers_dropped") < codes.index("wall_friction_mesh")
+    assert next(r for r in out["checks"] if r["code"] == "wall_friction_mesh")["kept"] is True
+
+
+@pytest.mark.parametrize(
+    ("model", "mesh"),
+    [
+        ("laminar", _std_mesh()),
+        ("kOmegaSST", _std_mesh(asked=True, applied=True, first_m=1e-4)),
+        ("kOmegaSST", _std_mesh(asked=True, applied=None)),
+        ("kOmegaSST", {"mesher": "snappy_hexdominant", "layers": {"asked": False, "applied": False}}),
+        ("kOmegaSST", {"mesher": "cfmesh", "layers": {"asked": False, "applied": False}}),
+        ("kOmegaSST", None),
+    ],
+)
+def test_no_wall_friction_row_with_layers_another_mesher_or_a_laminar_study(model: str, mesh):
+    from incompressible_flow.precheck import analysis_rows
+
+    assert analysis_rows(SimpleNamespace(turbulence_model=model), mesh) == []
+
+
+def test_check_inputs_pass_the_row_from_the_mesh_facts(project: Path):
+    spec = load_run_spec(project, run_id="run-w", require_mesh=False)
+    spec.physics = __import__("dataclasses").replace(spec.physics, turbulence_model="kOmegaSST")
+    inputs = check_inputs(spec, {"end_time": 200}, {"mesh": _std_mesh()}, transient=False)
+    assert [r["code"] for r in inputs["analysis_rows"]] == ["wall_friction_mesh"]
+    assert "analysis_rows" not in check_inputs(spec, {"end_time": 200}, {"mesh": {"mesher": "standard", "layers": {"asked": True, "applied": True}}}, transient=False)

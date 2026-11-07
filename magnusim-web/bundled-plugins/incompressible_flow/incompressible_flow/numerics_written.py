@@ -36,19 +36,13 @@ def _eq_names(model: str) -> str:
 
 
 def _limiter_words(model: str, s: dict[str, str]) -> str:
-    """Where the study's gradient limiter is written (writer._scheme_strings): on the gradient
-    linearUpwind reads (limitedGradU) and on the turbulence fields' gradients."""
-    from .writer import CONVECTION_GRAD, VELOCITY_GRAD
-
-    parts: list[str] = []
-    if s["convection_grad"]:
-        parts.append(f"{CONVECTION_GRAD} {s['convection_grad']}")
-    elif "linearUpwind grad(U)" in s["momentum"]:
-        parts.append(f"linearUpwind reads grad(U) ({VELOCITY_GRAD}, unlimited)")
+    """Where the study's gradient limiter is written (writer._scheme_strings): on the velocity
+    gradient (which linearUpwind and the viscous terms read) and on the turbulence fields'."""
+    parts = [f"grad(U) {s['velocity_grad']}"]
     turb = [f"grad({f})" for f in solved_turbulence_fields(model) if f != "R"]
     if turb:
         parts.append(f"{', '.join(turb)} {s['grad']}")
-    return "; ".join(parts) or f"{s['grad']} (no scheme reads a limited gradient)"
+    return "; ".join(parts)
 
 
 def numerics_rows(
@@ -57,18 +51,21 @@ def numerics_rows(
     transient: Any = None,
     speed: float | None = None,
     inlet: str = "",
+    mesher: str | None = None,
 ) -> list[dict[str, str]]:
     """The rows of "Numerics as written": ``transient`` the run's TransientControl (None for a
     steady run), ``speed`` the reference speed the velocity limit is made from (None before the
-    mesh is generated), ``inlet`` the inlet it comes from."""
+    mesh is generated), ``inlet`` the inlet it comes from, ``mesher`` the mesh's (its facts; None
+    before the mesh is generated), which decides whether the velocity gradient and the flux are
+    skew-corrected (writer.skew_corrected)."""
     from magnusim_sdk.numerics_advice import LIMIT_FACTOR, LIMIT_FLOOR
 
     from .writer import (
         FLUX_INTERPOLATION_ENTRY,
         OUTER_RELAX_EQ,
         OUTER_RELAX_P,
-        VELOCITY_GRAD,
         linear_solvers,
+        skew_corrected,
         solve_relax_turbulence,
         steady_schemes,
         transient_schemes,
@@ -80,8 +77,9 @@ def numerics_rows(
     steady = transient is None
     preset = physics.numerics if steady else None
     ch = scheme_choices(ns, preset=preset)
+    skew = skew_corrected(model, mesher)
     # The writer's own strings (what fvSchemes holds).
-    s = steady_schemes(physics) if steady else transient_schemes(ns)
+    s = steady_schemes(physics, skew=skew) if steady else transient_schemes(ns, skew=skew)
     rows: list[dict[str, str]] = []
     src = lambda key: ch[key][1]  # noqa: E731
     rows.append(row(SCHEMES, "Gradient limiter", _limiter_words(model, s), src("grad_limiter")))
@@ -122,9 +120,14 @@ def numerics_rows(
             rows.append(row(PIMPLE, "Outer tolerance", f"{foam_number(tol)} (p and the equations, relTol 0)" if tol else "Off: every outer corrector runs", "run" if tol else "default"))
     cap = velocity_cap(ns, speed or 0.0, default="auto", factor=LIMIT_FACTOR, floor=LIMIT_FLOOR)
     rows.append(row(LIMITERS, "Velocity limit", limit_value(cap, speed=speed, factor=LIMIT_FACTOR, floor=LIMIT_FLOOR, inlet=inlet), "study" if ns.velocity_limit else "default"))
-    reads = "the viscous terms and turbulence production" if solved_turbulence_fields(model) else "the viscous terms"
-    rows.append(row(FIXED, "Velocity gradient", f"grad(U) {VELOCITY_GRAD}, never limited ({reads})", "fixed"))
-    rows.append(row(FIXED, "Flux interpolation", f"{FLUX_INTERPOLATION_ENTRY}; the rest linear", "fixed"))
+    reads = "linearUpwind, the viscous terms and turbulence production" if solved_turbulence_fields(model) else "linearUpwind and the viscous terms"
+    if skew:
+        rows.append(row(FIXED, "Velocity gradient", f"grad(U) skew-corrected (Gauss skewCorrected linear) inside the gradient limiter; {reads} read it", "fixed"))
+        rows.append(row(FIXED, "Flux interpolation", f"{FLUX_INTERPOLATION_ENTRY}; the rest linear", "fixed"))
+    else:
+        why = "not skew-corrected: k-omega SST on a Standard mesh"
+        rows.append(row(FIXED, "Velocity gradient", f"grad(U) Gauss linear inside the gradient limiter, {why}; {reads} read it", "fixed"))
+        rows.append(row(FIXED, "Flux interpolation", f"linear, {why}", "fixed"))
     walls = wall_treatment_words(model)
     if walls:
         rows.append(row(FIXED, "Wall treatment", walls, "fixed"))

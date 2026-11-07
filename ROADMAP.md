@@ -284,9 +284,12 @@ September 2026 readiness audit. This list preserves the intended work.
   - the values outside their bands on the first full run: the laminar pipe's
     friction on Standard (+16 %: the flux and the velocity gradient ignored the
     tetrahedra's skew, fixed) and the turbulent pipe with k-omega SST (-13 % on
-    Hex-dominant, -25 % on Standard: its walls, fixed; on Standard's tetrahedra it
-    still reads about 9 % low developed, a limitation); the 4-core probes after the
-    fixes are in `magnusim-web/validation/README.md`, the rerun gives the report's;
+    Hex-dominant: its walls, fixed, about -4 % now; -25 % on Standard: not fixed,
+    a limitation: with the new walls and the plain schemes k-omega SST keeps on
+    Standard, the probes read f and f_tau 11 to 18 % low there, still outside
+    their ±10 % bands, so expect two values outside on the rerun); the 4-core
+    probes after the fixes are in `magnusim-web/validation/README.md`, the rerun
+    gives the report's;
   - the app gaps it found (its README): a vector's components in Plot over path
     (G2), mean, rms and frequency over a time window on a Graphs card (G8), a
     periodic inlet (G9), a developed (parabolic) velocity inlet (G10), a box

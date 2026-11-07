@@ -183,7 +183,7 @@ describe('catalog', () => {
     const one = await cat('analyses', 'incompressible_steady');
     const model = one.settings.find((f) => f.key === 'turbulence_model');
     assert.ok(model.description.length > 160, `${model.description.length} characters`);
-    assert.match(model.description, /On Standard's tetrahedra/);
+    assert.match(model.description, /on Standard's tetrahedra 11 to 18 % low with wall layers and up to about 31 % low with none/);
   });
   it('an unknown key is not_found, with the way to list', async () => {
     const out = await tools().catalog.run({ kind: 'analyses', key: 'nope' }, rt());

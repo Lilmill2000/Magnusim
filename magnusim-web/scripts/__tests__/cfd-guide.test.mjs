@@ -61,8 +61,14 @@ describe('the CFD guide in Magnusim', () => {
 
   it('rule 10 gives only the y+ that were tested: k-omega SST on the developed wedge, not "under 0.5 resolves the wall" for every model', () => {
     const rule10 = cfdGuideText().split('\n').find((l) => l.startsWith('10. '));
-    assert.ok(rule10.includes('y+ (field_range of yPlus): k-omega SST: within 4.5% at 5-100, 6-9% low at 1-3; wall functions assume 30-300.'), rule10);
+    assert.ok(rule10.includes('y+ (field_range of yPlus): k-omega SST: within 4.5% at 5-100 on a clean mesh, 6-9% low at 1-3;'), rule10);
+    assert.ok(rule10.includes('wall functions assume 30-300.'), rule10);
     assert.doesNotMatch(rule10, /resolves the wall|any y\+/);
+  });
+
+  it("rule 10 says what the Study panel's model help says of Standard's tetrahedra: a pipe from its inlet read 11-18% low, up to 31% with no layers, never 'within 4.5%' alone", () => {
+    const rule10 = cfdGuideText().split('\n').find((l) => l.startsWith('10. '));
+    assert.ok(rule10.includes('on Standard a pipe read 11-18% low, up to 31% with no layers;'), rule10);
   });
 
   it('goes in the system blocks after the prompt, before the workspace notes, with one cache mark', () => {

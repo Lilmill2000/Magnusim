@@ -28,8 +28,8 @@
 //   with the new numerics say only Health on the continued part can tell, never that its settings
 //   have not changed. "Numerics as written" of a started run names the preset it started with.
 // - What stays fixed (the validation set's pipes, 2026-11-06): "Numerics as written" says the velocity
-//   gradient and the flux are skew-corrected, that the limiter is on the convection gradient
-//   (limitedGradU), and what each model's walls are written with (k-omega SST: Spalding's law, stepwise
+//   gradient and the flux are skew-corrected, that the limiter is on that velocity gradient (as on the
+//   turbulence fields'), and what each model's walls are written with (k-omega SST: Spalding's law, stepwise
 //   omega; k-epsilon: nutkWallFunction), as the Assistant reads it; the Study panel's model help gives
 //   what k-omega SST's walls read at the y+ that were tested, not "any y+" or "below about 0.5", and
 //   no y+ for Spalart-Allmaras, whose walls were not tested, and the Assistant reads that whole help
@@ -811,9 +811,9 @@ test.describe('numerics at Continue', () => {
 // with the page closed first (a test's finally is skipped on a timeout).
 test.describe('what a run was written with', () => {
   const IF_SST = {
-    'Gradient limiter': 'limitedGradU cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1',
-    'Momentum convection': 'bounded Gauss linearUpwind limitedGradU',
-    'Velocity gradient': 'grad(U) Gauss skewCorrected linear, never limited (the viscous terms and turbulence production)',
+    'Gradient limiter': 'grad(U) cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1',
+    'Momentum convection': 'bounded Gauss linearUpwind grad(U)',
+    'Velocity gradient': 'grad(U) skew-corrected (Gauss skewCorrected linear) inside the gradient limiter; linearUpwind, the viscous terms and turbulence production read it',
     'Flux interpolation': 'flux(HbyA) skewCorrected linear; the rest linear',
     'Wall treatment': 'nut nutUSpaldingWallFunction, k kqRWallFunction, omega omegaWallFunction (stepwise)',
   };
@@ -894,7 +894,7 @@ test.describe('what a run was written with', () => {
     return seen.read.data;
   }
 
-  test('"Numerics as written" says the velocity gradient and the flux are skew-corrected, the limiter is on the convection gradient, and what each model\'s walls are written with, as the Assistant reads it', async ({ page, request }) => {
+  test('"Numerics as written" says the velocity gradient and the flux are skew-corrected, the limiter is on the velocity gradient, and what each model\'s walls are written with, as the Assistant reads it', async ({ page, request }) => {
     test.setTimeout(240_000);
     await studyFields(request, sim, { numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
     const rid = await newRun(request, 'Run_fixed');
@@ -921,7 +921,9 @@ test.describe('what a run was written with', () => {
     await expect(help).toContainText('Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested.');
     await expect(help).not.toContainText('below about 0.5');
     await expect(help).not.toContainText('any y+');
-    await expect(help).toContainText("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though how is not known.", STEP);
+    await expect(help).toContainText("A pipe from a uniform inlet read its friction within about 4 % on Hex-dominant, but on Standard's tetrahedra 11 to 18 % low with wall layers and up to about 31 % low with none (0 to 10 % with the Robust preset)", STEP);
+    await expect(help).toContainText('developed on Standard it read about 14 % low');
+    await expect(help).not.toContainText('about 9 % low');
     await expect(help).not.toContainText('uneven strain rate');
     await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
     // The Assistant reads the same whole help (catalog analyses), word for word, not its first 160

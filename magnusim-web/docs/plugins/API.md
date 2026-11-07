@@ -3331,7 +3331,7 @@ How many rows of each level (kept ones left out unless ``kept``).
 Constants:
 
 - `LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}`
-- `CODE_ORDER = ("mesh_failed", "two_d_ends", "wall_through", "wall_curved", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "setting_out_of_range", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
+- `CODE_ORDER = ("mesh_failed", "two_d_ends", "wall_through", "wall_curved", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "wall_friction_mesh", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "setting_out_of_range", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
 - `COURANT_CODES = frozenset({"piso_high_co", "pimple_co_vs_outer", "fixed_step_co"})`
 - `STEADY_ITERATIONS = 1500`
 - `STARTUP_FTT_STILL = 3.0`
