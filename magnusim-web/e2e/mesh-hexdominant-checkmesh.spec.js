@@ -14,11 +14,17 @@
 // read_setup mesh reads the same reason and the same quality lines (two-way parity).
 // Fails on the code before D1: the panel said Mesh ready (and the quality line said
 // "aspect ratio 4,453,130,000,…" in 94 digits).
+//
+// No run starts on that mesh: a run whose Start the person clicked while the mesh generated
+// (queued behind it) leaves the queue once the mesh fails, never started, and the toast says why
+// in the mesh's own words; a Start sent straight to the route is refused with them. Fails on D1
+// alone (before Start's gate read the mesh's status): the queued run solved on the failed mesh.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { seedElbowProject } from './prepare-projects.js';
+import { createRun, getJson, openRunPanel, runRow } from './support/compute-slot.js';
 import { dockSend, dockTurn, openDock, resultsIn, useScriptedModel } from './support/assistant.js';
 import { startFakeLlm } from './support/fake-llm.mjs';
 import { e2eTemp, startHost } from './support/host-server.mjs';
@@ -51,7 +57,8 @@ test.beforeAll(async () => {
     projects,
     env: {
       MAGNUSIM_TEST_COMPUTE: 'fake',
-      MAGNUSIM_TEST_MESH_SECONDS: '1',
+      // Long enough to start a run while it meshes.
+      MAGNUSIM_TEST_MESH_SECONDS: '8',
       MAGNUSIM_TEST_MESH_CHECKMESH: CHECKMESH,
       MAGNUSIM_TEST_ASSISTANT: '1',
       MAGNUSIM_TEST_ASSISTANT_PROVIDER_URL: fake.base,
@@ -147,4 +154,57 @@ test('a Hex-dominant mesh that fails checkMesh ends Generate failed, naming the 
   expect(read.data.engine).toBe('snappy_hexdominant');
   expect(read.data.generated).toMatchObject({ status: 'failed', error: REASON });
   expect(read.data.quality.lines).toEqual([WORST, REASON]);
+});
+
+test('a run started while its Hex-dominant mesh generates never starts once the mesh fails checkMesh, and the person is told why', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const mesh = await meshOf(request);
+  const meshId = String(mesh.id);
+  const sim = String(mesh.simulation_id || '');
+  const set = await request.post(api('/api/mesh'), { data: { project_id: PID, simulation_id: sim, mesh_id: meshId, advanced: { mesh_engine: 'snappy_hexdominant' } } });
+  expect(set.ok(), await set.text()).toBe(true);
+  const meshName = String(mesh.name || 'Mesh 1');
+  // Start's refusal, in the mesh's own words (validateSolveReady).
+  const refused = `${meshName}'s last Generate failed: ${REASON} Generate it again before using it on a run.`;
+  const name = 'Run behind the mesh';
+  const runId = await createRun(request, { base: host.base, projectId: PID, simulationId: sim, name });
+
+  // Generate, then the run's Start while the mesh generates: it queues the run behind its mesh.
+  const form = await openMeshPanel(page, meshId);
+  await form.locator('[data-mesh-generate="1"]').click();
+  await expect(form.locator('.mesh-finished')).toHaveAttribute('data-mesh-status', 'generating', STEP);
+  // Every text the finish toast shows from here on (this page load stays).
+  await page.evaluate(() => {
+    window.__d1Toasts = [];
+    const el = document.getElementById('job-finish-toast');
+    new MutationObserver(() => {
+      if (el && !el.hidden && el.textContent) window.__d1Toasts.push(el.textContent);
+    }).observe(el, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+  });
+  const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId, reload: false });
+  const start = panel.locator('[data-run-start]');
+  await expect(start).toHaveText('Add to queue', STEP);
+  await start.click();
+  await expect(start).toHaveText('Remove from queue', STEP);
+
+  // The mesh fails; the run leaves the queue at once, never started, and the toast says why.
+  await expect.poll(async () => (await meshOf(request)).live_mesh_result?.status, { timeout: 90_000 }).toBe('failed');
+  await expect
+    .poll(() => page.evaluate(() => window.__d1Toasts.slice()), { timeout: 30_000 })
+    .toContain(`${name} could not start from the queue: ${refused}`);
+  const queue = await getJson(request, api(`/api/compute-queue?project_id=${PID}`));
+  expect((queue.items || []).filter((r) => String(r.run_id) === runId)).toEqual([]);
+  expect((queue.failed || []).filter((f) => String(f.run_id) === runId).map((f) => f.error)).toEqual([refused.replace(/\.$/, '')]);
+  // It never started: still a draft, nothing solving.
+  expect((await runRow(request, { base: host.base, projectId: PID, simulationId: sim, runId })).status).toBe('draft');
+  expect((await getJson(request, api('/api/compute-queue'))).busy || null).toBeNull();
+  // Its Run panel: Start again, and the mesh to generate first.
+  await expect(start).toHaveText('Start', STEP);
+  await expect(panel.locator('[data-run-reason="1"] .sim-run-hint-msg')).toHaveText(`Generate "${meshName}" before starting.`, STEP);
+
+  // A Start sent straight to the route is refused with the same reason.
+  const direct = await request.post(api('/api/run/start'), { data: { project_id: PID, simulation_id: sim, run_id: runId } });
+  expect(direct.status()).toBe(400);
+  expect((await direct.json()).error).toBe(refused);
+  expect((await runRow(request, { base: host.base, projectId: PID, simulationId: sim, runId })).status).toBe('draft');
 });

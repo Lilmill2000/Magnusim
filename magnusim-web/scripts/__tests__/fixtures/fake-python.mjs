@@ -5,7 +5,10 @@
 //   generate_*.py      waits while $FAKE_PY_HOLD exists, then writes a small polyMesh and
 //                      w21-counts.json into --case-dir and exits 0 (a done mesh); with
 //                      --input-shape-sha256 its result reports the input it built
-//                      (body1_sha256 'f' x 64, mesh_input_built), as prepare_input does
+//                      (body1_sha256 'f' x 64, mesh_input_built), as prepare_input does;
+//                      with $FAKE_PY_FAIL set it still writes the polyMesh (every real
+//                      mesher copies its mesh back whatever its result), then ends failed
+//                      with those words as its error and exits 1
 //   convert_step_to_stl.py  writes --out (a 120-byte STL) and exits 0
 //   prepare_run.py     prints {"ok":false,"error":"fake prepare_run"} and exits 1
 //   anything else      exits 3
@@ -33,6 +36,11 @@ async function main() {
     writeFileSync(join(caseDir, 'w21-counts.json'), JSON.stringify(counts));
     writeFileSync(join(caseDir, 'log.standard_generate.txt'), 'MESH_SCRIPT_OK\n');
     const built = args.includes('--input-shape-sha256') ? { body1_sha256: 'f'.repeat(64), mesh_input_built: true } : {};
+    const fail = process.env.FAKE_PY_FAIL || '';
+    if (fail) {
+      writeSync(1, `CFMESH_RESULT ${JSON.stringify({ ok: false, error: fail, ...counts })}\n`);
+      return 1;
+    }
     writeSync(1, `CFMESH_RESULT ${JSON.stringify({ ok: true, ...counts, ...built })}\n`);
     return 0;
   }
