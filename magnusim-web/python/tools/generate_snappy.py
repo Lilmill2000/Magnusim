@@ -27,6 +27,7 @@ from cfddesk.mesh.facts import finish_mesh_facts  # noqa: E402
 from cfddesk.mesh.generate_guard import claim_generate_case, release_generate_case  # noqa: E402
 from cfddesk.mesh.snappy_hexdominant import (  # noqa: E402
     base_cell_size,
+    cell_limit_refusal,
     fineness_params,
     read_feature_marks,
     read_polymesh_counts,
@@ -539,6 +540,11 @@ def main() -> int:
         )
         # One cell across: the background the dictionaries were written with (two_d.background).
         params["block"] = meta["block"]
+        # A background block whose cells alone pass snappyHexMesh's limit (a needle's, its cells
+        # kept within 3:1, F2) could not be refined at all: refused before WSL, with the reason.
+        too_long = cell_limit_refusal(int(args.fineness), bounds, two_d=prep.get("two_d"))
+        if too_long:
+            return _result(False, error=too_long, block=params["block"], snappy_geometry_rev=params["snappy_geometry_rev"])
         meta_doc = {
             "increment": "W25",
             "project_id": project_dir.name,
@@ -655,6 +661,9 @@ def main() -> int:
             region_rows = [{**r, "cells": int(zones.get(r["name"], 0))} for r in prep["mesh_regions"]]
         quality = None
         failed_check = None
+        # A mesh whose refinement reached snappyHexMesh's cell limit (its log: "No cells marked for
+        # refinement since reached limit") is judged as any other, by checkMesh alone, whatever
+        # its block: Generate says nothing of the limit, as before F2.
         if ok:
             # The script copied the mesh and logs to Windows; the WSL copy is done.
             remove_wsl_case(wsl_case)

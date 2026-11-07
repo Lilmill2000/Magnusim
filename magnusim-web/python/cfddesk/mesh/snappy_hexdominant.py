@@ -71,17 +71,128 @@ def refinement_level_for_size(base_m: float, size_m: float, *, max_level: int = 
     return max(0, min(int(max_level), math.ceil(math.log2(base_m / size_m) - 1e-9)))
 
 
+# A background cell is at most this many times as long as the longer of its other two sides
+# (F2): the rule is for needles, cells long against both their other sides. snappyHexMesh splits
+# a cell into eight of its own shape, so the cells at the walls keep the background's aspect.
+# The block keeps at least 8, 8 and 12 cells across, while its cell along the part comes from
+# the part's diagonal: on a long thin part the cells were needles (a 55 D pipe at fineness 6:
+# 6.5 times as long as their side across y, 9.7 times their side across z) and snapped into
+# cells of negative volume; a 30 D pipe at 3.6 (5.4 across z) passed. A flat part's cells (a
+# plate's, wide along two axes and thin along the third) are long against their thin side only:
+# they are left as they were, and such a mesh passes checkMesh (a 100 x 100 x 2 mm plate at
+# fineness 4: only skewed faces, which the rule accepts).
+MAX_BACKGROUND_ASPECT = 3.0
+# snappyHexMesh's limit on the whole mesh (castellatedMeshControls maxGlobalCells, as
+# write_hexdominant_dicts writes it): it stops refining once the mesh has that many cells.
+MAX_GLOBAL_CELLS = 4_000_000
+
+
+def background_counts(
+    extents_m: list[float] | tuple[float, ...],
+    pad: float,
+    base_m: float,
+    minimums: tuple[int, int, int],
+    *,
+    one_cell_axis: int | None = None,
+    aspect_cap: bool = True,
+) -> list[int]:
+    """The background block's cells along x, y and z: each axis's extent times ``pad`` over the
+    base cell, at least its minimum; one cell along ``one_cell_axis`` (One cell across, 2D).
+
+    With ``aspect_cap`` (F2), an axis whose cells come out more than ``MAX_BACKGROUND_ASPECT``
+    times as long as the longest cell side of the other axes (a needle: long against both)
+    gets more cells, the fewest that bring them within it. Only the longest axis can be such
+    an axis; a flat part's wide axes never are. The one-cell axis and an axis of no extent are
+    left out of the rule (in 2D the section's long axis is held to its short one). A block
+    already within it is the block it was before (the same counts)."""
+    counts = [
+        1 if k == one_cell_axis else max(int(minimums[k]), round((float(extents_m[k]) * pad) / base_m))
+        for k in range(3)
+    ]
+    sized = [k for k in range(3) if k != one_cell_axis and float(extents_m[k]) > 0.0]
+    if not aspect_cap or len(sized) < 2:
+        return counts
+    side = {k: float(extents_m[k]) * pad / counts[k] for k in sized}
+    for k in sized:
+        longest = MAX_BACKGROUND_ASPECT * max(side[j] for j in sized if j != k)
+        span = float(extents_m[k]) * pad
+        if side[k] > longest * (1.0 + 1e-9):
+            counts[k] = math.ceil(span / longest - 1e-9)
+    return counts
+
+
+def _extents(bounds_m: dict[str, float]) -> list[float]:
+    return [abs(float(bounds_m[f"{c}max"]) - float(bounds_m[f"{c}min"])) for c in "xyz"]
+
+
+def background_of(
+    fineness: int,
+    bounds_m: dict[str, float] | None,
+    *,
+    two_d: dict[str, Any] | None = None,
+    aspect_cap: bool = True,
+) -> list[int] | None:
+    """The background block's cell counts the mesher writes for a part (None without bounds):
+    ``block_from_fineness``'s, or with ``two_d`` (its ``axis`` and ``base_m``, as
+    ``write_hexdominant_dicts`` takes it) the 2D background's (``two_d.background``)."""
+    if two_d is not None:
+        if not bounds_m:
+            return None
+        return background_counts(
+            _extents(bounds_m), _PAD, float(two_d["base_m"]), (8, 8, 8), one_cell_axis=int(two_d["axis"]), aspect_cap=aspect_cap
+        )
+    base = base_cell_size(clamp_fineness(fineness), bounds_m)
+    if base is None or not bounds_m:
+        return None
+    return background_counts(_extents(bounds_m), _PAD, base, (8, 8, 12), aspect_cap=aspect_cap)
+
+
+def _block_cells_at(fineness: int, bounds_m: dict[str, float], two_d: dict[str, Any] | None) -> int | None:
+    """The background block's cell count at ``fineness`` (in 2D its section base at that fineness)."""
+    if two_d is None:
+        counts = background_of(fineness, bounds_m)
+    else:
+        base = base_cell_size(fineness, bounds_m, two_d_axis=int(two_d["axis"]))
+        counts = background_of(fineness, bounds_m, two_d={"axis": int(two_d["axis"]), "base_m": base}) if base else None
+    return math.prod(counts) if counts else None
+
+
+def cell_limit_refusal(fineness: int, bounds_m: dict[str, float] | None, *, two_d: dict[str, Any] | None = None) -> str | None:
+    """Before the run: why Hex-dominant can't mesh a part, when its background block alone, its
+    cells kept within ``MAX_BACKGROUND_ASPECT`` (F2), would have more cells than snappyHexMesh's
+    limit (snappyHexMesh could refine none of them); None when it fits.
+
+    A needle gets there (its block lengthened along it), and its sides across are held at their
+    minimum counts, so every lower fineness gives the same block: the words then say no fineness
+    helps. A lower fineness that fits is named, if there is one; a part the cap did not lengthen
+    (only a part over a hundred metres across) is not called long and thin. The Standard mesher has no
+    background block, so the words name it."""
+    counts = background_of(fineness, bounds_m, two_d=two_d)
+    if counts is None or not bounds_m or math.prod(counts) <= MAX_GLOBAL_CELLS:
+        return None
+    f = clamp_fineness(fineness)
+    fits = next((g for g in range(f - 1, 0, -1) if (n := _block_cells_at(g, bounds_m, two_d)) and n <= MAX_GLOBAL_CELLS), None)
+    where = "at any fineness" if fits is None else f"at fineness {f}"
+    lower = "" if fits is None else f" Fineness {fits} or lower fits."
+    needle = counts != background_of(fineness, bounds_m, two_d=two_d, aspect_cap=False)
+    why = (
+        f"it is so long and thin that its background block alone, with no cell more than "
+        f"{MAX_BACKGROUND_ASPECT:g} times as long as wide, would have"
+        if needle
+        else "its background block alone would have"
+    )
+    standard = "Try the Standard mesher: it has no background block" + (", but it meshes in 3D." if two_d is not None else ".")
+    return (
+        f"Hex-dominant can't mesh this part {where}: {why} {math.prod(counts):,} cells, "
+        f"over snappyHexMesh's limit of {MAX_GLOBAL_CELLS:,}.{lower} {standard}"
+    )
+
+
 def block_from_fineness(fineness: int, bounds_m: dict[str, float] | None) -> str:
     f = clamp_fineness(fineness)
-    base = base_cell_size(f, bounds_m)
-    if base is not None and bounds_m:
-        dx = abs(float(bounds_m["xmax"]) - float(bounds_m["xmin"]))
-        dy = abs(float(bounds_m["ymax"]) - float(bounds_m["ymin"]))
-        dz = abs(float(bounds_m["zmax"]) - float(bounds_m["zmin"]))
-        nx = max(8, round((dx * _PAD) / base))
-        ny = max(8, round((dy * _PAD) / base))
-        nz = max(12, round((dz * _PAD) / base))
-        return f"({nx} {ny} {nz})"
+    counts = background_of(f, bounds_m)
+    if counts is not None:
+        return f"({counts[0]} {counts[1]} {counts[2]})"
     if f <= 3:
         return "(10 10 20)"
     if f <= 6:
@@ -510,7 +621,7 @@ def write_hexdominant_dicts(
             "castellatedMeshControls",
             "{",
             "    maxLocalCells 2000000;",
-            "    maxGlobalCells 4000000;",
+            f"    maxGlobalCells {MAX_GLOBAL_CELLS};",
             "    minRefinementCells 0;",
             "    maxLoadUnbalance 0.10;",
             "    nCellsBetweenLevels 2;",

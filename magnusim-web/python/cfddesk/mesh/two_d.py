@@ -344,24 +344,27 @@ def background(
     bounds_m: dict[str, float], base_m: float, axis: int, lo_m: float, hi_m: float, pad: float
 ) -> tuple[list[tuple[float, float, float]], str, str]:
     """The background block of a 2D mesh: across the axis as a 3D mesh's (the part's box times
-    ``pad``, cells of ``base_m``, at least 8); along it exactly the part's depth, one cell. Its
-    two ends are the patches ``FRONT`` (low) and ``BACK`` (high), the 2D mesh's two ends.
+    ``pad``, cells of ``base_m``, at least 8, the section's long side at most 3 times its short
+    one: the aspect cap of ``snappy_hexdominant.background_counts``, the depth left out of it);
+    along it exactly
+    the part's depth, one cell. Its two ends are the patches ``FRONT`` (low) and ``BACK``
+    (high), the 2D mesh's two ends.
     Returns the 8 vertices, the cell counts ``(nx ny nz)`` and the ``boundary`` entries."""
+    from cfddesk.mesh.snappy_hexdominant import background_counts
+
     lo_hi = [(float(bounds_m["xmin"]), float(bounds_m["xmax"])), (float(bounds_m["ymin"]), float(bounds_m["ymax"])), (float(bounds_m["zmin"]), float(bounds_m["zmax"]))]
     a: list[float] = []
     b: list[float] = []
-    counts: list[int] = []
+    counts = background_counts([hi - lo for lo, hi in lo_hi], pad, base_m, (8, 8, 8), one_cell_axis=int(axis))
     for k in range(3):
         if k == axis:
             a.append(float(lo_m))
             b.append(float(hi_m))
-            counts.append(1)
             continue
         c = 0.5 * (lo_hi[k][0] + lo_hi[k][1])
         h = 0.5 * (lo_hi[k][1] - lo_hi[k][0]) * pad
         a.append(c - h)
         b.append(c + h)
-        counts.append(max(8, round((lo_hi[k][1] - lo_hi[k][0]) * pad / base_m)))
     verts = [
         (a[0], a[1], a[2]),
         (b[0], a[1], a[2]),

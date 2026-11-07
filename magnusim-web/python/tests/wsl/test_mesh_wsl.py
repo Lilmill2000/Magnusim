@@ -17,9 +17,14 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
   tabs, so their layers are sized in bands (patches of their own for the
   layers pass): after the mesh they are one ``walls`` patch again.
 - W6 Hex-dominant on a long pipe (55 D, fineness 6): its background cells along the
-  pipe are about ten times their size across it, and snappyHexMesh leaves cells of
-  negative volume. Generate ends failed and names the failed check, in the words the
-  Mesh panel shows (Daniel's D1: a mesh that fails checkMesh is not kept as done).
+  pipe were six to ten times their size across it, and snappyHexMesh left cells of
+  negative volume (Generate failed, naming the check: Daniel's D1). With the cells kept
+  within 3 times as long as the longer side across (F2) the block has more cells along
+  the pipe, and the mesh passes checkMesh.
+- W7 Hex-dominant on a flat plate (100 x 100 x 2 mm, fineness 4, the box of Heat
+  Transfer's cavity-slab.step): the rule is for needles only, so the plate keeps the
+  block it had before F2 (30 30 12; F2's first rule gave it 200 200 12, and its
+  refinement reached snappyHexMesh's cell limit), and Generate ends done.
 
 Each run has its own WSL case id and removes it when done. Record the cell
 counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``.
@@ -295,13 +300,64 @@ def test_w6_hex_dominant_long_pipe(tmp_path: Path):
         remove_wsl_case(wsl_case)
     assert results, (rc, err)
     res = results[-1]
-    # snappyHexMesh finished and made its mesh; checkMesh failed it, and Generate says which check.
-    assert rc == 1 and res["ok"] is False and res["exit_code"] == 0, (rc, res, err)
     log = (case / "log.checkMesh").read_text(encoding="utf-8")
-    assert res["error"] == checkmesh_failure(log), (res["error"], log[-3000:])
-    assert re.fullmatch(r"checkMesh failed \d+ checks?: .*\d+ cells? with a negative volume.*\.", res["error"]), res["error"]
-    # The quality its record keeps, so the Mesh panel's line shows the failed check too.
+    # The cap: 147 cells along the 1463 mm (padded) pipe, 9.95 mm each, 3 times the 3.33 mm
+    # across y (8 cells); it had 68, 21.5 mm each.
+    assert res["block"] == "(147 8 12)", res
+    # The mesh passes checkMesh, with no failed check at all, and Generate ends done.
+    assert rc == 0 and res["ok"] is True and "error" not in res, (rc, res, err, log[-3000:])
+    assert checkmesh_failure(log) is None
     quality = res["quality"]
-    assert quality["known"] is True and quality["ok"] is False
-    assert any(f["check"] == "negative_volume" for f in quality["failed"]), quality
+    assert quality["known"] is True and quality["ok"] is True and not quality.get("failed"), quality
     assert res["n_cells"] and res["n_cells"] > 0
+
+
+def _box_project(tmp: Path, *, x_mm: float, y_mm: float, z_mm: float) -> tuple[Path, Path]:
+    """A box ``x_mm`` x ``y_mm`` x ``z_mm`` from the origin (the fluid), its inlet the face at
+    x = 0 and its outlet the face at x = ``x_mm``, in the sample project's study."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    from cfddesk.cad.io import write_step
+    from cfddesk.cad.step import load_step
+
+    step = tmp / "box.step"
+    write_step(BRepPrimAPI_MakeBox(x_mm, y_mm, z_mm).Shape(), step)
+    solid = load_step(step)
+    inlet = [f.face_id for f in solid.faces if abs(f.centroid[0]) < 1e-6]
+    outlet = [f.face_id for f in solid.faces if abs(f.centroid[0] - x_mm) < 1e-6]
+    assert len(inlet) == 1 and len(outlet) == 1, [(f.face_id, f.centroid) for f in solid.faces]
+    proj, mesh = _project(tmp / "p", step=step, faces=(inlet[0] + 1, outlet[0] + 1))
+    _body1(proj)
+    return proj, mesh
+
+
+def test_w7_hex_dominant_flat_plate(tmp_path: Path):
+    from cfddesk.wsl.mesh_run import checkmesh_failure
+
+    proj, mesh = _box_project(tmp_path, x_mm=100.0, y_mm=100.0, z_mm=2.0)
+    case = mesh / "case"
+    wsl_case = _case_id("w7")
+    try:
+        rc, results, err = _results(
+            [
+                str(TOOLS / "generate_snappy.py"),
+                "--project-dir", str(proj), "--case-dir", str(case), "--wsl-case", wsl_case,
+                "--generate-id", "golden", "--fineness", "4", "--add-layers", "0",
+                "--mesh-id", "mesh_1", "--simulation-id", "sim_1",
+            ]
+        )
+    finally:
+        remove_wsl_case(wsl_case)
+    assert results, (rc, err)
+    res = results[-1]
+    log = (case / "log.checkMesh").read_text(encoding="utf-8")
+    # The block it had before F2: its cells 4.4 mm wide and 0.22 mm through, long against the
+    # thin side only.
+    assert res["block"] == "(30 30 12)", res
+    # Its refinement stays well under snappyHexMesh's limit, and the mesh passes the rule.
+    snappy = (case / "log.snappyHexMesh").read_text(encoding="utf-8", errors="replace")
+    assert "reached limit" not in snappy
+    assert rc == 0 and res["ok"] is True and "error" not in res, (rc, res, err, log[-3000:])
+    assert checkmesh_failure(log) is None
+    assert res["quality"]["known"] is True
+    assert res["n_cells"] and 0 < res["n_cells"] < 400_000, res["n_cells"]

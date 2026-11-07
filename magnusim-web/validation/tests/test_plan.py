@@ -101,7 +101,8 @@ def test_a_hex_dominant_plan_carries_what_its_mesh_will_be(tmp_path: Path):
     c1 = cases.get("c1")
     p = make_plan(c1, "hexdominant", tmp_path, cores=4)
     est = p["mesh"]["estimate"]
-    # The mesher's own block: at least 8 cells across y and 12 across z, whatever the fineness.
+    # The mesher's own block: at least 8 cells across y and 12 across z, whatever the fineness
+    # (the 15 D pipe at fineness 6 is within 3:1: its cells 5.95 mm along, 3.33 mm across y).
     assert est["block"] == [67, 8, 12]
     assert est["walls_level"] == 2
     assert est["wall_cell_mm"] == pytest.approx([1.4887, 0.8312, 0.5542], abs=1e-3)
@@ -110,7 +111,8 @@ def test_a_hex_dominant_plan_carries_what_its_mesh_will_be(tmp_path: Path):
     assert est["layers"][0]["stack_over_smallest_cell"] == pytest.approx(1.0 / 0.5542, rel=1e-3)
     assert est["warnings"] == []
     coarse = make_plan(c1, "hexdominant", tmp_path / "c", coarse=True, cores=4)["mesh"]["estimate"]
-    # Its real coarse mesh (fineness 4) had 78 243 cells.
+    # At fineness 4 its 42 cells along (9.5 mm) are within 3 times the 3.33 mm across y: the same
+    # block as before the cap. Its real coarse mesh had 78 243 cells.
     assert coarse["block"] == [42, 8, 12] and 78_243 <= coarse["n_cells"] <= 2 * 78_243
     # Standard sizes its own mesh: no estimate.
     assert "estimate" not in make_plan(c1, "standard", tmp_path / "s", cores=4)["mesh"]
@@ -128,8 +130,9 @@ def test_a_thick_layer_stack_on_a_thin_wall_cell_is_flagged():
     # The turbulent pipe of the design: 800 mm long, 20 mm across, at fineness 7.
     est = estimate(mesh, faces, [0.0, 800.0, -10.0, 10.0, -10.0, 10.0], 251_327.0)
     assert est is not None
-    assert est["block"] == [85, 8, 12]
-    assert est["wall_cell_mm"] == pytest.approx([1.5648, 0.4156, 0.2771], abs=1e-3)
+    # 85 cells along (12.5 mm, 3.76 times the 3.33 mm across y) before the 3:1 cap; 107 with it.
+    assert est["block"] == [107, 8, 12]
+    assert est["wall_cell_mm"] == pytest.approx([1.2430, 0.4156, 0.2771], abs=1e-3)
     assert est["warnings"] and "6.135 times the smallest wall cell" in est["warnings"][0]
 
 

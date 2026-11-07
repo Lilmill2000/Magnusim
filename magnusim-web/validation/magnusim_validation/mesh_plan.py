@@ -1,6 +1,7 @@
 """What a plan's Hex-dominant mesh will be, worked out before Generate with the mesher's own
 sizing functions (``cfddesk.mesh.snappy_hexdominant``): the background block (at least 8
-cells across y and 12 across z, whatever the fineness), the cell size on each axis at the
+cells across y and 12 across z, whatever the fineness, and along a long thin part as many as
+keep its cells within 3 times as long as their side across y), the cell size on each axis at the
 walls' level and at each custom size's level (a custom size becomes a level of the
 diagonal's base size, so on a thin part its cells come out finer and flatter than asked),
 the wall layers' stack against the wall cell, and a rough cell count.
@@ -190,6 +191,7 @@ def _estimate_2d(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: l
     from cfddesk.mesh.snappy_hexdominant import (
         _PAD,
         DEFAULT_BAND_CELLS,
+        background_of,
         base_cell_size,
         fineness_params,
         refine_distance_m,
@@ -213,7 +215,9 @@ def _estimate_2d(mesh: dict[str, Any], faces: list[dict[str, Any]], bounds_mm: l
     ext_mm = [bounds_mm[1] - bounds_mm[0], bounds_mm[3] - bounds_mm[2], bounds_mm[5] - bounds_mm[4]]
     depth_mm = ext_mm[axis]
     inplane = [k for k in range(3) if k != axis]
-    block = [1 if k == axis else max(8, round(ext_mm[k] * _PAD / (base_m * 1000.0))) for k in range(3)]
+    # The mesher's own 2D background (two_d.background): at least 8 cells across the section, its
+    # long side at most 3 times its short one (the aspect cap), one cell along the depth.
+    block = background_of(f, bounds_m, two_d={"axis": axis, "base_m": base_m}) or [1, 1, 1]
     base_mm = [depth_mm if k == axis else ext_mm[k] * _PAD / block[k] for k in range(3)]
 
     def dims(level: int) -> list[float]:
