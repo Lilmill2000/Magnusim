@@ -11,6 +11,10 @@
 - RH3: the study's numerics and the run's outer relaxation and tolerance stored outside their
   field's range (``setting_out_of_range``; used as saved), and "Numerics as written".
 
+- its own row (``analysis_rows``): ``standard_mesh_heat`` (info), on a Standard mesh, the Study
+  panel's note of how far the heat through walls read off there (the validation set), so the
+  Assistant reads it too.
+
 Heat Transfer passes no flow speed yet, so its runs get no time-step estimate, and its own
 rules (Boussinesq validity, a Rayleigh-number laminar/turbulent check) are not made here.
 """
@@ -22,6 +26,30 @@ from typing import Any
 NO_ESTIMATE = "No time-step estimate for Heat Transfer runs yet"
 # What a check before the mesh leaves out ("Only its run settings were checked: ...").
 UNCHECKED = "its mesh and physics are checked once the mesh is generated"
+# The Study panel's note on a Standard mesh (ui/StudySettings.tsx STANDARD_MESH_NOTE, word for word:
+# tests/test_ht_precheck.py), from the validation set (validation/results.json).
+STANDARD_MESH_NOTE = (
+    "On a Standard mesh (tetrahedra) the heat through walls is less accurate next to a laminar flow: up to about 14 % "
+    "high (the validation's laminar pipes), and about 6 % high through a solid's walls. Its turbulent pipe "
+    "(k-omega SST, wall functions) read within about 1 %, and natural convection in a cavity within 1.5 %. "
+    "Mesh with Hex-dominant for heat numbers."
+)
+
+
+def analysis_rows(mesh: Any) -> list[dict[str, Any]]:
+    """Heat Transfer's own pre-run rows (magnusim_sdk.runcheck ``analysis_rows``): on a Standard mesh
+    (the mesh facts' mesher), ``standard_mesh_heat`` with the Study panel's note."""
+    if not isinstance(mesh, dict) or mesh.get("mesher") != "standard":
+        return []
+    return [
+        {
+            "code": "standard_mesh_heat",
+            "level": "info",
+            "text": STANDARD_MESH_NOTE,
+            "short": "heat through walls on a Standard mesh",
+            "fix": {"label": "Open mesh", "target": "mesh", "values": [], "cost": None},
+        }
+    ]
 
 
 def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, Any] | None, *, transient: bool, inputs: Any = None) -> dict[str, Any]:
@@ -66,6 +94,9 @@ def check_inputs(spec: Any, settings: dict[str, Any] | None, context: dict[str, 
             "steady_algorithm": "SIMPLE",
         }
     )
+    own = analysis_rows(ctx.get("mesh"))
+    if own:
+        out["analysis_rows"] = own
     return out
 
 

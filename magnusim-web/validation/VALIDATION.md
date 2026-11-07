@@ -527,7 +527,7 @@ The domain is a box x from -8 D to 15 D and y and z from -15 D to 15 D round a s
 
 Heat Transfer's own validation set: natural convection in a square cavity (de Vahl Davis), forced convection in a pipe (laminar and turbulent) and conduction through solids, each against its published value. Its runs go another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so the two sets exercise different parts of the app. Report-only, as above. Its rows are the ones it committed (bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); they were not run again for this report. Its own report: `bundled-plugins/heat_transfer/VALIDATION.md`.
 
-Results of 2026-10-15 (Heat Transfer 0.1.0, OpenFOAM v2606 (build _481094f-20260618)).
+Results of 2026-10-15 (Heat Transfer 0.1.0, OpenFOAM v2606 (build _481094f-20260618)); 2026-11-07 (Heat Transfer 0.2.0, OpenFOAM v2606 (build _481094f-20260618)).
 
 | Case | Quantity | Reference | Magnusim | Error | Mesher | Cells | Iterations |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -543,8 +543,8 @@ Results of 2026-10-15 (Heat Transfer 0.1.0, OpenFOAM v2606 (build _481094f-20260
 | Laminar pipe, fixed wall heat flux (10 W/m²) | Nu (fully developed) | 4.364 | 4.967 ± 0.18 % | +13.81 % | Standard | 139 169 | 3000 |
 | Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C) | Nu (fully developed) | 3.657 | 3.644 ± 1.77 % | -0.35 % | Hex-dominant | 124 662 | 3000 |
 | Laminar pipe, fixed wall temperature (30 °C, inlet 20 °C) | Nu (fully developed) | 3.657 | 4.135 ± 0.35 % | +13.07 % | Standard | 139 200 | 3000 |
-| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 96.63 ± 0.13 % | -9.64 % | Hex-dominant | 59 736 | 2000 |
-| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 85.03 ± 0.39 % | -20.48 % | Standard | 36 219 | 2000 |
+| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 105.2 ± 0.15 % | -1.61 % | Hex-dominant | 59 736 | 2000 |
+| Turbulent pipe, fixed wall heat flux (1000 W/m²) | Nu (17.5 to 22.5 D from the inlet) | 106.9 | 107.3 ± 0.44 % | +0.31 % | Standard | 36 219 | 2000 |
 | Composite wall (steel 10 mm, stainless steel 20 mm) | Heat through the wall (W) | 5.338 | 5.343 | +0.11 % | Hex-dominant | 13 634 | 600 |
 | Heated block (stainless steel, 10 W, h = 500 W/(m²·K)) | Heat out (W) | 10.00 | 10.00 | +0.00 % | Hex-dominant | 12 576 | 800 |
 | Heated block (stainless steel, 10 W, h = 500 W/(m²·K)) | Highest temperature rise (K) | 14.60 | 14.60 | +0.03 % | Hex-dominant | 12 576 | 800 |
@@ -599,8 +599,8 @@ Reference: R. K. Shah and A. L. London, Laminar Flow Forced Convection in Ducts,
 pipe D = 20 mm, L = 500 mm, air with constant properties (Pr = 0.731), Re = 50 000 (uniform inlet 37.89 m/s at 20 °C, the inlet's default turbulence), gravity off, k-omega SST with wall functions (no layers), buoyantSimpleFoam; Nu the mean of five 20 mm slices from x = 350 to 450 mm (17.5 to 22.5 D after the uniform inlet: the flow is still developing there, and a developing flow's Nu is above the developed one, so the developed value would read lower still).
 Reference: V. Gnielinski, New equations for heat and mass transfer in turbulent pipe and channel flow, Int. Chem. Eng. 16 (1976) 359-368, with Petukhov's friction factor.
 
-- Nu (17.5 to 22.5 D from the inlet) on Hex-dominant: 96.63 ± 0.13 % against 106.9 (-9.64 %); mesh: Hex-dominant fineness 6, no layers; wall y+ in the slices 12.4 to 55.72 (mean 25.47); slices 360 mm: 96.495, 380 mm: 96.489, 400 mm: 96.514, 420 mm: 97.122, 440 mm: 96.548 (lowest 96.489, highest 97.122); at 400 mm T_wall 303.096 K, T_bulk 294.853 K, q 1000.00 W/m². An under-prediction not explained yet (Gnielinski's own scatter is about ±10 %).
-- Nu (17.5 to 22.5 D from the inlet) on Standard: 85.03 ± 0.39 % against 106.9 (-20.48 %); mesh: Standard fineness 6, no layers; wall y+ in the slices 46.22 to 108.47 (mean 64.3); slices 360 mm: 84.436, 380 mm: 86.286, 400 mm: 85.039, 420 mm: 84.657, 440 mm: 84.753 (lowest 84.436, highest 86.286); at 400 mm T_wall 304.209 K, T_bulk 294.854 K, q 999.98 W/m². An under-prediction not explained yet (Gnielinski's own scatter is about ±10 %); layers applied: no.
+- Nu (17.5 to 22.5 D from the inlet) on Hex-dominant: 105.2 ± 0.15 % against 106.9 (-1.61 %); mesh: Hex-dominant fineness 6, no layers; wall y+ in the slices 13.77 to 58.01 (mean 27.95); slices 360 mm: 104.939, 380 mm: 105.002, 400 mm: 105.094, 420 mm: 105.809, 440 mm: 105.232 (lowest 104.939, highest 105.809); at 400 mm T_wall 302.419 K, T_bulk 294.849 K, q 1000.00 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %.
+- Nu (17.5 to 22.5 D from the inlet) on Standard: 107.3 ± 0.44 % against 106.9 (+0.31 %); mesh: Standard fineness 6, no layers; wall y+ in the slices 53.83 to 166.53 (mean 91.41); slices 360 mm: 106.292, 380 mm: 108.766, 400 mm: 107.627, 420 mm: 106.233, 440 mm: 107.439 (lowest 106.233, highest 108.766); at 400 mm T_wall 302.240 K, T_bulk 294.848 K, q 1000.01 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %; layers applied: no.
 
 ### Conduction (CHT)
 

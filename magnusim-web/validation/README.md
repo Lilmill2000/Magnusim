@@ -323,9 +323,9 @@ App gaps found so far, and what they block:
   still-developing flow, not probed apart) reads it 1 to 5 points high; a mesh whose wall cells
   sit on the other side of the switch can move f by up to about 10 points (case 2's notes work
   it out from the reported run). Heat Transfer takes the same walls: its turbulent pipe's Nu read
-  -1.61 % (before -9.64 %) on Hex-dominant and +0.29 % (before -20.28 %) on Standard (the 4-core probes before and after; its
-  committed set and its study panel's Standard note still give the old numbers until that set
-  is run again).
+  -1.61 % (before -9.64 %) on Hex-dominant and +0.29 % (before -20.28 %) on Standard (the 4-core probes before and after;
+  its committed set's two turbulent rows, rerun on 2026-11-07 at 8 ranks, read -1.61 % and +0.31 %, and its study panel's
+  Standard note and pre-run check say so).
 - **k-omega SST on Standard's tetrahedra** (case 2, a limitation, and the skew-corrected lines
   left out there): the 4-core probes of 2026-11-07 re-solved case 2's Standard meshes (from the
   Auto inlet, 2500 iterations, f at 20 to 25 D) with only their fvSchemes changed, the

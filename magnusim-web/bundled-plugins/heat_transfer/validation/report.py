@@ -71,16 +71,18 @@ The rows are in `validation/results.json` (`HT_VALIDATION_OUT` writes them elsew
   pattern along the pipe. The air has constant properties (constant density, gravity
   off), as the correlations assume. The turbulent pipe's slices are 17.5 to 22.5 D after
   a uniform inlet, where the flow is still developing (its Nu is above the developed
-  one), and its wall's y+ (OpenFOAM's yPlus on the solved case) is recorded with it. It
-  reads under Gnielinski's correlation by more than the correlation's own scatter, and
-  why is not known yet.
+  one), and its wall's y+ (OpenFOAM's yPlus on the solved case) is recorded with it. With
+  k-omega SST's walls before 2026-11-06 (nutkWallFunction) it read 10 to 20 % under
+  Gnielinski's correlation, more than the correlation's own scatter; with Spalding's law and
+  stepwise omega since, within 2 % (its two rows rerun on 2026-11-07).
 - **Conduction.** The heat through each face from the wall heat flux monitors, and the
   highest temperature from the solid's own monitor row.
 
-Mesh checks of the turbulent pipe (2026-10-15, before the y+ was recorded, not in the
-table): Hex-dominant at fineness 7 (293 760 cells) read 98.52, −7.88 % (fineness 6:
-−9.64 %); Standard at fineness 8 (141 197 cells) read 82.16, −23.17 % (fineness 6:
-−20.55 %). Standard's tetrahedra with wall functions read low whatever the cell count.
+Mesh checks of the turbulent pipe (2026-10-15, with the walls before 2026-11-06, before the
+y+ was recorded, not in the table): Hex-dominant at fineness 7 (293 760 cells) read 98.52,
+−7.88 % (fineness 6: −9.64 %); Standard at fineness 8 (141 197 cells) read 82.16, −23.17 %
+(fineness 6: −20.55 %). With those walls Standard's tetrahedra read low whatever the cell
+count; the checks were not run again with the new walls.
 """
 
 

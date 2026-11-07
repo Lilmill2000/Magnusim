@@ -2,7 +2,7 @@
 // - A study on a part of two bodies: Air on Body1, then Aluminium 6061 (a solid) on Body2.
 //   The study panel says which solver runs and why, shows the solid's heat source (set in
 //   its material: 10 W, saved in W on the record), hides the residual target its solver
-//   never reads, and says a Standard mesh reads wall heat high (not once the mesh is
+//   never reads, and says a Standard mesh reads wall heat high next to a laminar flow (not once the mesh is
 //   Hex-dominant); the BC picker offers a Solid wall (its temperature in °C, saved in K).
 //   Body2 given back to the air makes it buoyant flow again and back: nothing is lost.
 //   All after a reload.
@@ -191,7 +191,7 @@ async function setHeatSource(page, value) {
 
 const sourceShown = (panel, id) => panel.locator(`[data-ht-heat-source="${id}"] [data-ht-heat-source-value]`);
 const STANDARD_NOTE =
-  /On a Standard mesh \(tetrahedra\) the heat through walls is less accurate: up to about \d+ % high next to a laminar flow and about \d+ % low with wall functions/;
+  /On a Standard mesh \(tetrahedra\) the heat through walls is less accurate next to a laminar flow: up to about \d+ % high \(the validation's laminar pipes\), and about \d+ % high through a solid's walls\. Its turbulent pipe \(k-omega SST, wall functions\) read within about \d+ %/;
 
 const CHT_LINE = 'Conjugate heat transfer with chtMultiRegionSimpleFoam: Body2 is Aluminium 6061 (solid). Body1 is Air (fluid).';
 

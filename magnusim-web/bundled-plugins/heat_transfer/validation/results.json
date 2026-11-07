@@ -56,15 +56,15 @@
    "group": "Forced convection",
    "quantity": "Nu (17.5 to 22.5 D from the inlet)",
    "reference": 106.941,
-   "value": 96.633,
-   "uncertainty_pct": 0.127,
+   "value": 105.215,
+   "uncertainty_pct": 0.149,
    "mesher": "Hex-dominant",
    "iterations": 2000,
    "source": "V. Gnielinski, New equations for heat and mass transfer in turbulent pipe and channel flow, Int. Chem. Eng. 16 (1976) 359-368, with Petukhov's friction factor",
    "y_plus": {
-    "min": 12.4,
-    "mean": 25.47,
-    "max": 55.72
+    "min": 13.77,
+    "mean": 27.95,
+    "max": 58.01
    },
    "x_over_d": [
     17.5,
@@ -72,27 +72,27 @@
    ],
    "setup": "pipe D = 20 mm, L = 500 mm, air with constant properties (Pr = 0.731), Re = 50 000 (uniform inlet 37.89 m/s at 20 °C, the inlet's default turbulence), gravity off, k-omega SST with wall functions (no layers), buoyantSimpleFoam; Nu the mean of five 20 mm slices from x = 350 to 450 mm (17.5 to 22.5 D after the uniform inlet: the flow is still developing there, and a developing flow's Nu is above the developed one, so the developed value would read lower still)",
    "mesh": "Hex-dominant fineness 6, no layers",
-   "detail": "wall y+ in the slices 12.4 to 55.72 (mean 25.47); slices 360 mm: 96.495, 380 mm: 96.489, 400 mm: 96.514, 420 mm: 97.122, 440 mm: 96.548 (lowest 96.489, highest 97.122); at 400 mm T_wall 303.096 K, T_bulk 294.853 K, q 1000.00 W/m². An under-prediction not explained yet (Gnielinski's own scatter is about ±10 %)",
+   "detail": "wall y+ in the slices 13.77 to 58.01 (mean 27.95); slices 360 mm: 104.939, 380 mm: 105.002, 400 mm: 105.094, 420 mm: 105.809, 440 mm: 105.232 (lowest 104.939, highest 105.809); at 400 mm T_wall 302.419 K, T_bulk 294.849 K, q 1000.00 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %",
    "cells": 59736,
-   "date": "2026-10-15",
-   "plugin_version": "0.1.0",
+   "date": "2026-11-07",
+   "plugin_version": "0.2.0",
    "openfoam": "v2606 (build _481094f-20260618)",
-   "error_pct": -9.639
+   "error_pct": -1.614
   },
   {
    "case": "Turbulent pipe, fixed wall heat flux (1000 W/m²)",
    "group": "Forced convection",
    "quantity": "Nu (17.5 to 22.5 D from the inlet)",
    "reference": 106.941,
-   "value": 85.034,
-   "uncertainty_pct": 0.385,
+   "value": 107.271,
+   "uncertainty_pct": 0.439,
    "mesher": "Standard",
    "iterations": 2000,
    "source": "V. Gnielinski, New equations for heat and mass transfer in turbulent pipe and channel flow, Int. Chem. Eng. 16 (1976) 359-368, with Petukhov's friction factor",
    "y_plus": {
-    "min": 46.22,
-    "mean": 64.3,
-    "max": 108.47
+    "min": 53.83,
+    "mean": 91.41,
+    "max": 166.53
    },
    "x_over_d": [
     17.5,
@@ -100,13 +100,13 @@
    ],
    "setup": "pipe D = 20 mm, L = 500 mm, air with constant properties (Pr = 0.731), Re = 50 000 (uniform inlet 37.89 m/s at 20 °C, the inlet's default turbulence), gravity off, k-omega SST with wall functions (no layers), buoyantSimpleFoam; Nu the mean of five 20 mm slices from x = 350 to 450 mm (17.5 to 22.5 D after the uniform inlet: the flow is still developing there, and a developing flow's Nu is above the developed one, so the developed value would read lower still)",
    "mesh": "Standard fineness 6, no layers",
-   "detail": "wall y+ in the slices 46.22 to 108.47 (mean 64.3); slices 360 mm: 84.436, 380 mm: 86.286, 400 mm: 85.039, 420 mm: 84.657, 440 mm: 84.753 (lowest 84.436, highest 86.286); at 400 mm T_wall 304.209 K, T_bulk 294.854 K, q 999.98 W/m². An under-prediction not explained yet (Gnielinski's own scatter is about ±10 %)",
+   "detail": "wall y+ in the slices 53.83 to 166.53 (mean 91.41); slices 360 mm: 106.292, 380 mm: 108.766, 400 mm: 107.627, 420 mm: 106.233, 440 mm: 107.439 (lowest 106.233, highest 108.766); at 400 mm T_wall 302.240 K, T_bulk 294.848 K, q 1000.01 W/m². k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); Gnielinski's own scatter is about ±10 %",
    "cells": 36219,
    "layers_applied": false,
-   "date": "2026-10-15",
-   "plugin_version": "0.1.0",
+   "date": "2026-11-07",
+   "plugin_version": "0.2.0",
    "openfoam": "v2606 (build _481094f-20260618)",
-   "error_pct": -20.485
+   "error_pct": 0.309
   },
   {
    "case": "Laminar pipe, fixed wall heat flux (10 W/m²)",

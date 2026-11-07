@@ -257,20 +257,18 @@ September 2026 readiness audit. This list preserves the intended work.
   - the energy balance counts the heat the flow carries through openings, not
     heat conducted back out of an inlet;
   - heat through walls on Standard (tetrahedral) meshes: the validation read
-    it up to about 14 % high next to a laminar flow (the laminar pipes),
-    about 20 % low with wall functions (the turbulent pipe), about 6 % high
-    through a solid's walls (the gradient at the wall of a tetrahedron;
-    corrected schemes do not help), and within 1.5 % in the cavity; the
-    study panel says so, and a Heat Transfer study's new mesh starts on
+    it up to about 14 % high next to a laminar flow (the laminar pipes) and
+    about 6 % high through a solid's walls (the gradient at the wall of a
+    tetrahedron; corrected schemes do not help); the turbulent pipe read
+    within 0.4 % and the cavity within 1.5 %; the study panel and the
+    pre-run check say so, and a Heat Transfer study's new mesh starts on
     Hex-dominant. A wall-normal correction, or prism layers that always
     hold, would fix it;
-  - the turbulent pipe (Re = 50 000, k-omega SST, wall functions) reads
-    about 10 % under Gnielinski's correlation on Hex-dominant, more than the
-    correlation's own scatter, and why is not known yet (its slices are 17.5
-    to 22.5 D after a uniform inlet; the wall's y+ is about 12 to 56, so part
-    of the first cells sit in the buffer layer): a longer pipe or a fully
-    developed inlet, and y+ near 1 with low-Re wall treatment or y+ above 30
-    everywhere, would tell which;
+  - the turbulent pipe (Re = 50 000, k-omega SST, wall functions) read about
+    10 % (Hex-dominant) and 20 % (Standard) under Gnielinski's correlation
+    with k-omega SST's walls before the validation set's fix of 2026-11-06;
+    with Spalding's law it reads -1.6 % and +0.3 % (its two rows rerun
+    2026-11-07; the rest of the set is to be run again from one commit);
   - the validation set's tolerances, once its first full run is reviewed
     (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`), and
     its public page.

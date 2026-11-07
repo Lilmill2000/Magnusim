@@ -448,7 +448,9 @@ def test_turbulent_pipe_against_gnielinski(tmp_path: Path, wsl: str, mesher: str
         "mesh": f"{MESHERS[mesher]} fineness {fineness}, no layers",
         "detail": (f"wall y+ in the slices {y_plus['min']} to {y_plus['max']} (mean {y_plus['mean']}); {spread}; at "
                    f"{mid['x_mm']:g} mm T_wall {mid['t_wall']:.3f} K, T_bulk {mid['t_bulk']:.3f} K, q {mid['q']:.2f} W/m². "
-                   "An under-prediction not explained yet (Gnielinski's own scatter is about ±10 %)"),
+                   "k-omega SST's walls take Spalding's law with stepwise omega (Incompressible Flow's walls, since the "
+                   "validation set's fix of 2026-11-06; before it, nutkWallFunction read this pipe 10 to 20 % low); "
+                   "Gnielinski's own scatter is about ±10 %"),
         **notes,
     }], case=case)
     assert math.isfinite(nu), line
