@@ -30,6 +30,16 @@ export const MAX_CHUNK_BYTES = 32 * MB;
 /** An upload with no call for this long is dropped, with its staging file. */
 export const UPLOAD_IDLE_MS = 10 * 60_000;
 export const MAX_OPEN_UPLOADS = 4;
+/**
+ * A begin of a file ends that file's older uploads (same project and plugin) that take no call
+ * and had none for this long: a page closed or crashed mid-save leaves its upload open, and four
+ * of them refused every write of the plugin for UPLOAD_IDLE_MS. A save still going waits far
+ * less between its calls: the SDK sends each chunk on the answer to the last, and waits 1 s
+ * (COMMIT_RETRY_MS) between commits refused as busy.
+ */
+export const UPLOAD_SUPERSEDE_MS = 30_000;
+/** Ended uploads whose next call is told why (the newest). */
+const ENDED_KEPT = 256;
 /** Free space a write must leave on the disk. */
 export const DISK_SPARE_BYTES = 256 * MB;
 export const LIST_MAX = 10_000;
@@ -469,8 +479,8 @@ function checkIfMatch(want: string | null | undefined, current: BigIntStats | nu
   }
 }
 
-function uploadGone(): PluginFileError {
-  return new PluginFileError(404, 'upload_not_found', 'no such upload (it finished, was stopped or expired)');
+function uploadGone(why?: string): PluginFileError {
+  return new PluginFileError(404, 'upload_not_found', why || 'no such upload (it finished, was stopped or expired)');
 }
 
 function busyError(rel: string): PluginFileError {
@@ -482,6 +492,8 @@ interface Upload {
   projectId: string;
   plugin: string;
   rel: string;
+  /** Where it writes, as this system compares paths. */
+  target: string;
   size: number;
   ifMatch: string | null | undefined;
   staging: string;
@@ -512,6 +524,8 @@ export class PluginFiles {
   private readonly maxEntries: number;
   private readonly activeCases: ((projectId: string, plugin: string) => string[]) | null;
   private readonly uploads = new Map<string, Upload>();
+  /** Uploads a newer one of their file ended, and why (their page's next call is told). */
+  private readonly ended = new Map<string, { projectId: string; plugin: string; why: string }>();
   private readonly locks = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | null = null;
 
@@ -734,8 +748,27 @@ export class PluginFiles {
   private uploadFor(id: string, projectId: string, plugin: string): Upload {
     const up = this.uploads.get(String(id || ''));
     // Another project's or plugin's upload gets the same answer as an unknown id.
-    if (!up || up.projectId !== projectId || up.plugin !== plugin) throw uploadGone();
+    if (!up || up.projectId !== projectId || up.plugin !== plugin) {
+      const gone = this.ended.get(String(id || ''));
+      throw uploadGone(gone && gone.projectId === projectId && gone.plugin === plugin ? gone.why : undefined);
+    }
     return up;
+  }
+
+  /**
+   * The older uploads of the file `up` writes that take no call and had none for
+   * UPLOAD_SUPERSEDE_MS go, with their staging files: their pages closed or crashed
+   * mid-save. Their next call says why. Called in the folder's lock, before its room is
+   * counted (their bytes are no longer spoken for).
+   */
+  private async supersede(up: Upload): Promise<void> {
+    const now = this.now();
+    const stale = this.openFor(up.projectId, up.plugin).filter((u) => u.target === up.target && !u.busy && now - u.lastActive >= UPLOAD_SUPERSEDE_MS);
+    for (const u of stale) {
+      this.ended.set(u.id, { projectId: u.projectId, plugin: u.plugin, why: `a newer save of ${u.rel} replaced this one after it had waited ${UPLOAD_SUPERSEDE_MS / 1000} s` });
+      if (this.ended.size > ENDED_KEPT) this.ended.delete(this.ended.keys().next().value as string);
+    }
+    await Promise.all(stale.map((u) => this.drop(u)));
   }
 
   private async drop(up: Upload): Promise<void> {
@@ -880,6 +913,7 @@ export class PluginFiles {
       projectId,
       plugin,
       rel: parts.join('/'),
+      target: lockKey(at.target),
       size,
       ifMatch,
       staging: join(stagingDir, `${id}.part`),
@@ -890,6 +924,7 @@ export class PluginFiles {
       inflight: null,
     };
     await this.inFolder(at.root, async () => {
+      await this.supersede(up);
       await this.checkRoom(at, row, up, current, true);
       // One disk for every project: what the open uploads still have to write is spoken for.
       await this.withLock('disk', async () => {

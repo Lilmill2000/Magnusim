@@ -35,7 +35,7 @@ mkdirSync(PROJECTS, { recursive: true });
 process.env.MAGNUSIM_PROJECTS_ROOT = PROJECTS;
 
 const { Router, dispatch } = await import('../router.ts');
-const { PluginFiles, registerPluginFileRoutes, pluginFileRel, isStudyRecord, isStudyContainer, UPLOAD_IDLE_MS, DISK_SPARE_BYTES, LIST_MAX } =
+const { PluginFiles, registerPluginFileRoutes, pluginFileRel, isStudyRecord, isStudyContainer, UPLOAD_IDLE_MS, UPLOAD_SUPERSEDE_MS, DISK_SPARE_BYTES, LIST_MAX } =
   await import('../plugin-files.ts');
 const { registerPhase3Routes } = await import('../routes.ts');
 const { JobManager } = await import('../jobs.ts');
@@ -1127,6 +1127,90 @@ test('failure injection: a held target, a full disk, idle uploads, stale staging
     assert.equal(existsSync(join(staging, stale)), false);
     assert.equal(existsSync(join(staging, fresh)), true);
     assert.equal((await c.abort(up)).body.aborted, true);
+  } finally {
+    await h.close();
+  }
+});
+
+test('a new upload of a file ends its older uploads that waited 30 s, so pages closed mid-save never keep it from saving (Magnusim CAD issue 17)', async () => {
+  const pid = 'p-supersede';
+  project(pid);
+  const study = join(pluginDir(pid), 'studies', 's1');
+  mkdirSync(study, { recursive: true });
+  writeFileSync(join(study, 'study.json'), '{}');
+  const MODEL = 'studies/s1/model.json';
+  const WAIT = 30_000;
+  const replaced = `a newer save of ${MODEL} replaced this one after it had waited 30 s`;
+  let clock = Date.now();
+  const h = await harness({ now: () => clock });
+  const c = client(h.base, pid);
+  try {
+    const t0 = clock;
+    const etag1 = (await c.write(MODEL, Buffer.from('{"v":1}'))).body.file.etag;
+    // Another file's upload, idle longer than any: only uploads of the same file are ended.
+    const other = (await c.begin('notes.bin', 2)).body.upload;
+    // Three pages closed mid-save, a second apart: each began the model's upload; the first sent a chunk at the end.
+    const left = [];
+    for (let i = 0; i < 3; i += 1) {
+      const b = await c.begin(MODEL, 7, { if_match: etag1 });
+      assert.equal(b.status, 201, JSON.stringify(b.body));
+      left.push(b.body.upload);
+      clock += 1000;
+    }
+    assert.equal((await c.put(left[0], 0, Buffer.from('{"v'))).status, 200);
+    assert.equal(stagingParts(pid).length, 4);
+
+    // While each may still be saving (none of the model's waited 30 s), a fifth begin is refused.
+    clock = t0 + 1000 + WAIT - 1;
+    const refused = await c.begin(MODEL, 7, { if_match: etag1 });
+    assert.equal(refused.status, 429);
+    assert.equal(refused.body.code, 'too_many_uploads');
+
+    // Once two of them waited 30 s, a fresh page's save of the model ends those two and begins.
+    clock = t0 + 2000 + WAIT;
+    const fresh = await c.begin(MODEL, 7, { if_match: etag1 });
+    assert.equal(fresh.status, 201, JSON.stringify(fresh.body));
+    for (const r of [await c.put(left[1], 0, Buffer.from('{')), await c.commit(left[2])]) {
+      assert.equal(r.status, 404);
+      assert.deepEqual([r.body.code, r.body.error], ['upload_not_found', replaced]);
+    }
+    assert.equal((await c.abort(left[1])).body.aborted, false);
+    assert.deepEqual(stagingParts(pid).sort(), [`${other}.part`, `${left[0]}.part`, `${fresh.body.upload}.part`].sort());
+    // The other file's upload goes on.
+    assert.equal((await c.put(other, 0, Buffer.from('ab'))).body.received, 2);
+    assert.equal((await c.commit(other)).status, 200);
+
+    // The fresh page's save lands.
+    assert.equal((await c.put(fresh.body.upload, 0, Buffer.from('{"v":2}'))).status, 200);
+    const saved = await c.commit(fresh.body.upload, { sha256: sha(Buffer.from('{"v":2}')) });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    // A page still saving from the older version never overwrites it: its commit is told the file changed.
+    assert.equal((await c.put(left[0], 3, Buffer.from('":3}'))).body.received, 7);
+    const late = await c.commit(left[0]);
+    assert.equal(late.status, 409);
+    assert.equal(late.body.code, 'changed');
+    // Nor does a page whose upload was ended and that saves again from the version it read.
+    assert.equal((await c.begin(MODEL, 7, { if_match: etag1 })).body.code, 'changed');
+    assert.equal((await c.read(MODEL)).buf.toString(), '{"v":2}');
+
+    // An upload taking a chunk is never ended, however long the chunk takes.
+    const etag2 = saved.body.file.etag;
+    const slow = (await c.begin(MODEL, 4, { if_match: etag2 })).body.upload;
+    const put = openPut(h.base, `/api/plugin-files/uploads/${slow}?${c.qs({ offset: '0' })}`, {
+      'content-type': 'application/octet-stream',
+      'content-length': '4',
+    });
+    put.req.write(Buffer.from('{}'));
+    await eventually(async () => (await c.commit(slow)).body.code === 'busy', 'the chunk to start');
+    clock += 10 * WAIT;
+    const during = await c.begin(MODEL, 4, { if_match: etag2 });
+    assert.equal(during.status, 201);
+    put.req.end(Buffer.from('[]'));
+    assert.deepEqual((await put.answer).body, { ok: true, received: 4 });
+    assert.equal((await c.commit(slow)).status, 200);
+    assert.equal((await c.abort(during.body.upload)).body.aborted, true);
+    assert.deepEqual(stagingParts(pid), []);
+    assert.equal(UPLOAD_SUPERSEDE_MS, WAIT);
   } finally {
     await h.close();
   }
