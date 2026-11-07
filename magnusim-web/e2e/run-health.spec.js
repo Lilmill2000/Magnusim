@@ -19,11 +19,14 @@
 //   the validation pipe's pattern (k-omega SST on Hex-dominant: k and omega bounded every
 //   iteration, omega's first residual 1.06e-3 / 0.90e-3 on odd / even iterations) reads Healthy
 //   with its two info rows; a stall that clears just before the run ends reads "Watch closely"
-//   with the stall's warn row saying it cleared and why the verdict stays. Both after a reload,
-//   and the run health read the Assistant's read_results takes carries the same rows. The pipe's
-//   log solved by the fake compute (its own server) reads Healthy all the way. Before the fix the
-//   pipe read "Watch closely" (from iteration 551 while it solved) and the stall showed no warn
-//   row: only info rows.
+//   with the stall's warn row saying it cleared and that the run ended before the verdict could
+//   ease; a residual that swings wide (3e-3 / 3e-4) without falling reads "Watch closely" with
+//   the stall's warn row. All after a reload, and the run health read the Assistant's
+//   read_results takes carries the same rows. The pipe's log solved by the fake compute (its own
+//   server) reads Healthy all the way. Before the fix the pipe read "Watch closely" (from
+//   iteration 551 while it solved) and the stall showed no warn row: only info rows; then the
+//   swing read Healthy with no stall row, and the ended stall said "Watch closely stays until 5
+//   iterations in a row are better" as if it could still ease.
 // Fails on the code before RH1: the Run panel had no Health block.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { spawnSync } from 'node:child_process';
@@ -309,7 +312,7 @@ test.describe('a verdict always says why', () => {
     expect(wrote.status, wrote.stderr).toBe(0);
     const runJson = join(runDir, 'run.json');
     const rec = JSON.parse(readFileSync(runJson, 'utf8'));
-    const iterations = log === 'stall_end' ? 1000 : 2500;
+    const iterations = log === 'stall_end' || log === 'swing' ? 1000 : 2500;
     writeFileSync(
       runJson,
       JSON.stringify({
@@ -361,12 +364,30 @@ test.describe('a verdict always says why', () => {
       code: 'residuals_stalled',
       level: 'warn',
       text:
-        "The omega residual has stopped falling at about 0.002 (0.002 about 500 iterations before); a steady run's residuals should keep falling. " +
-        'It cleared at iteration 998; Watch closely stays until 5 iterations in a row are better (3 so far).',
+        "The omega residual has not halved in 500 iterations (about 0.0011, from 0.002); a steady run's residuals should keep falling. " +
+        'It cleared at iteration 998; the run ended before 5 better iterations in a row could ease Watch closely.',
     };
     const settled = { code: 'not_settled', level: 'info', text: 'It ended without its residuals meeting their targets: its results may not have settled.' };
     await expect.poll(() => rowsOf(panel), STEP).toEqual([stall, settled]);
     await expect(panel.locator('[data-run-health-finding="residuals_stalled"] [data-run-health-evidence="1"]')).toHaveText('Show in log');
+    // It stays after a reload, and the Assistant reads the same record.
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    await expect(chip(page)).toHaveText('Watch closely', STEP);
+    await expect.poll(() => rowsOf(panel), STEP).toEqual([stall, settled]);
+    expect(await hostRows(request, host.base, PID, sim, rid)).toEqual({ verdict: 'watch', rows: [stall, settled] });
+  });
+
+  test('a residual that swings wide without falling reads Watch closely with the stall saying why, after a reload too', async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const rid = await oldSteadyRun(request, 'Swinging', 'swing');
+    let panel = await checkItsLog(page, rid, 'Watch closely');
+    const stall = {
+      code: 'residuals_stalled',
+      level: 'warn',
+      text: "The omega residual has not halved in 500 iterations (about 0.0017, from 0.0017); a steady run's residuals should keep falling.",
+    };
+    const settled = { code: 'not_settled', level: 'info', text: 'It ended without its residuals meeting their targets: its results may not have settled.' };
+    await expect.poll(() => rowsOf(panel), STEP).toEqual([stall, settled]);
     // It stays after a reload, and the Assistant reads the same record.
     panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
     await expect(chip(page)).toHaveText('Watch closely', STEP);

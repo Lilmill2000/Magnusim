@@ -2598,8 +2598,11 @@ Constants:
 - `GAP_SETTLE = 5`
 - `DISSIPATION_FIELDS = ("omega", "epsilon")`
 - `DISSIPATION_WATCH_GROWTH = 2.0`
-- `STALL_SMOOTH = 10`
+- `STALL_SMOOTH = 50`
+- `STALL_FLOOR = 1e-3`
+- `STALL_OFF = 0.9e-3`
 - `WORDS_EVERY = 5`
+- `GAP_CARRIED = ("pv_coupling", "residuals_high", "speed_growth", "velocity_clipped", "turbulence_bounded", "solver_at_limit", "continuity_bias", "courant_mode", "monitor_drift")`
 - `TIMELINE_MAX = 20`
 - `VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}`
 - `VERDICT_WORDS = {"healthy": "Healthy", "watch": "Watch closely", "unhealthy": "Unhealthy", "failed": "Failed"}`

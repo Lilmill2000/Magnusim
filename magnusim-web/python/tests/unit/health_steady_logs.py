@@ -8,8 +8,14 @@ floors, its bounding lines and its inlet and outlet monitors.
   0.90e-3 on even iterations (the rest settle under 1e-3), 2,500 iterations. Its verdict turned
   "Watch closely" at iteration 551 with only info findings.
 - ``c2_bounding_only``: the same bounding with omega flat at 9e-4: the bounding alone.
-- ``stall_end``: omega flat at 2e-3 from iteration 26 (a real stall: Watch closely from 551),
-  then 1e-5 from iteration 997; it ends at iteration 1,000, before the verdict can ease.
+- ``stall_end``: omega flat at 2e-3 from iteration 26 (a real stall: Watch closely from 600),
+  then 1e-5 from iteration 973; the stall clears at iteration 998 and the log ends at 1,000,
+  before the verdict can ease.
+- ``swing``: omega's first residual swings 3e-3 on odd and 3e-4 on even iterations from
+  iteration 26 and never falls (its mean is 1.65e-3, over the 1e-3 floor), 1,000 iterations:
+  a real stall, Watch closely from 600.
+- ``near_floor``: the pipe's pattern (odd iterations 8 % over, even 8 % under) at 1.00e-3 with
+  5 % noise (seeded), 2,500 iterations: its mean hovers at the floor.
 
 The e2e (run-health.spec.js) writes them into a run's case folder:
 
@@ -21,6 +27,7 @@ which writes ``log.simpleFoam`` and ``w27-case.json`` (its health hints) there.
 from __future__ import annotations
 
 import json
+import random
 import sys
 from pathlib import Path
 
@@ -58,7 +65,7 @@ HEAD = [
     "",
 ]
 
-NAMES = ("c2_sst", "c2_bounding_only", "stall_end")
+NAMES = ("c2_sst", "c2_bounding_only", "stall_end", "swing", "near_floor")
 
 
 def _decay(n: int, start: float, floor: float, rate: float = 0.01) -> float:
@@ -101,7 +108,7 @@ def _block(n: int, *, u: float, p: float, om: float, k: float, bound_omega: bool
 
 def end_of(name: str) -> int:
     """The log's last iteration."""
-    return 1000 if name == "stall_end" else 2500
+    return 1000 if name in ("stall_end", "swing") else 2500
 
 
 def lines(name: str) -> list[str]:
@@ -109,16 +116,21 @@ def lines(name: str) -> list[str]:
     if name not in NAMES:
         raise ValueError(name)
     out = list(HEAD)
+    noise = random.Random(7)
     for n in range(1, end_of(name) + 1):
         u = _decay(n, 0.64, 3.8e-4)
         p = _decay(n, 0.39, 2.2e-4)
         k = _decay(n, 0.22, 6.5e-4)
         om = _decay(n, 0.032, 9e-4, rate=0.1)
-        bound = name != "stall_end"
+        bound = name in ("c2_sst", "c2_bounding_only", "near_floor")
         if name == "c2_sst" and n >= 26:
             om = 1.06e-3 if n % 2 else 0.90e-3
         if name == "stall_end" and n >= 26:
-            om = 2e-3 if n < 997 else 1e-5
+            om = 2e-3 if n < 973 else 1e-5
+        if name == "swing" and n >= 26:
+            om = 3e-3 if n % 2 else 3e-4
+        if name == "near_floor" and n >= 26:
+            om = 1.0e-3 * (1.08 if n % 2 else 0.92) * (1 + noise.uniform(-0.05, 0.05))
         out += _block(n, u=u, p=p, om=om, k=k, bound_omega=bound, bound_k=bound and n >= 4)
     out += ["End", ""]
     return out
