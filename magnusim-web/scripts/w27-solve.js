@@ -2525,7 +2525,13 @@ async function startSolveBody(opts = {}, slot) {
         bodyExtra: { error: pick.error, code: pick.code, text: pick.text, differences: pick.differences, run_id: runId, final: true, increment: INCREMENT },
       };
     }
-    if (pick.values) cont.restart = /** @type {any} */ ({ ...cont.restart, numerics: pick.values });
+    // It goes on with what the run had (as it was, or nothing changed): its case keeps its own
+    // schemes and the walls its saved time holds (keep_numerics), so it solves as it did and as
+    // its "Numerics as written" (its record) says. With the study's new numerics the case is
+    // written afresh, its saved walls too, and the record becomes the plan's rows.
+    if (pick.values) cont.restart = /** @type {any} */ ({ ...cont.restart, numerics: pick.values, ...(pick.used ? {} : { keep_numerics: true }) });
+    // The new record's rows come with the Continue's plan (or a fake one's check): being recorded.
+    if (pick.used) /** @type {any} */ (pick.used).written = null;
     cont.numerics = { ...pick, by };
   }
   if (!cont && draft && draft.status === 'done') {
@@ -2727,6 +2733,9 @@ async function startSolveBody(opts = {}, slot) {
   // RH3 (spec 5.3): a fresh Start (a start over too) records the numerics it starts with; a
   // Continue's record changes only when it takes the study's new numerics (continueChangesAfter).
   const startedNumerics = cont ? null : startNumerics(ready.sim, isTransient);
+  // The rows its case is written with come with its plan (or, in a fake Start, its check): until
+  // then the record says they are being recorded (null), not that it has none.
+  if (startedNumerics) /** @type {any} */ (startedNumerics).written = null;
   const stored = persistRun(
     id,
     simId,
@@ -2750,12 +2759,18 @@ async function startSolveBody(opts = {}, slot) {
     // As the runner's start does (continuedRunFields): the run so far stays (its earlier part is
     // an attempt), a change that waited for this Continue applies, and the numerics it took are recorded.
     if (cont) persistRun(id, simId, { id: runId, run_id: runId, ...continuedRunFields(cont.doc, /** @type {any} */ (cont)) });
-    // RH2: as a real Start's plan reports them (prepare_run.checks), the pre-run check it starts with.
+    // RH2: as a real Start's plan reports them (prepare_run.checks), the pre-run check it starts with;
+    // RH3: and, as its plan reports them, the rows of "Numerics as written" its case is written with
+    // (numerics_used.written), for a Start and for a Continue with the study's new numerics.
     // Not awaited: nothing may come between the stop check and the hand-over.
-    if (!cont) {
-      precheckRun(id, String(runId), { transient: isTransient ? transientSettings : null }, simId)
+    const newUsed = cont ? cont.numerics && cont.numerics.used : startedNumerics;
+    if (!cont || newUsed) {
+      precheckRun(id, String(runId), { transient: isTransient ? transientSettings : null }, simId, { asWritten: true })
         .then((pc) => {
-          if (pc && pc.ok && Array.isArray(pc.checks)) persistRun(id, simId, { id: runId, run_id: runId, prepare_run: { checks: pc.checks } });
+          if (!pc || !pc.ok) return;
+          const written = newUsed && Array.isArray(pc.numerics) ? { numerics_used: { ...newUsed, written: pc.numerics } } : {};
+          const checks = !cont && Array.isArray(pc.checks) ? { prepare_run: { checks: pc.checks } } : {};
+          if (Object.keys(written).length || Object.keys(checks).length) persistRun(id, simId, { id: runId, run_id: runId, ...checks, ...written });
         })
         .catch((e) => console.warn('[CFD] fake start precheck', e));
     }
@@ -2939,9 +2954,17 @@ async function startSolveOnRunner(c) {
     cores: draft && draft.cores,
   });
   // What the run is written with (the analysis's plan): recorded on the run as
-  // prepare_run's report was.
+  // prepare_run's report was. RH3: its "Numerics as written" (the plan's `numerics`, the rows of
+  // the case as this Start or Continue writes it) is the run's record of them
+  // (numerics_used.written): a fresh Start's, or a Continue's that takes the study's new numerics.
+  // A Continue that keeps its numerics keeps the run's record (its case keeps its schemes).
+  const { numerics: writtenRows, ...planReport } = plan.plan && typeof plan.plan === 'object' ? plan.plan : {};
+  if (Array.isArray(writtenRows)) {
+    if (!cont && startedNumerics) startedNumerics.written = writtenRows;
+    else if (cont && cont.numerics && cont.numerics.used) cont.numerics.used.written = writtenRows;
+  }
   const report = {
-    ...(plan.plan && typeof plan.plan === 'object' ? plan.plan : {}),
+    ...planReport,
     app: solver,
     launch,
     time_dependency: timeDependency,
@@ -3785,8 +3808,10 @@ export function precheckPcInputs(rec) {
  * @param {string} runId
  * @param {{ transient?: Record<string, unknown> | null, endTime?: unknown, cores?: unknown }} proposed
  * @param {string} [simulationId]
+ * @param {{ asWritten?: boolean }} [opts] asWritten: "Numerics as written" as the case is written
+ *   now, from the run's numerics (a fake Start's record), not the run's record of them
  */
-export async function precheckRun(projectId, runId, proposed, simulationId) {
+export async function precheckRun(projectId, runId, proposed, simulationId, opts = {}) {
   const id = projectId || projectIdOrActive('', readActiveId);
   if (!id) return { ok: false, error: 'no active project' };
   const cat = loadCatalog(id);
@@ -3828,8 +3853,14 @@ export async function precheckRun(projectId, runId, proposed, simulationId) {
   }
   if (!out || typeof out !== 'object' || out.ok === false) return { ok: false, error: (out && out.error) || 'the pre-run check failed' };
   const rate = pcSolveRate();
+  // RH3: a started run's "Numerics as written" is what its case was written with, as recorded
+  // when it was (numerics_used.written), never what today's writer would write from its numerics:
+  // a run started before that was recorded says so. `opts.asWritten`: the rows as the case is
+  // written now (what a fake Start records).
+  const written = opts && opts.asWritten ? null : writtenNumericsOf(readRunDocFile(id, String(rec.id), sid ? String(sid) : undefined) || rec);
   return {
     ...out,
+    ...(written ? { numerics: written.rows, numerics_recorded: written.recorded } : {}),
     ok: true,
     run_id: String(rec.id),
     time_dependency: transient ? 'Transient' : 'Steady-state',
@@ -3837,6 +3868,39 @@ export async function precheckRun(projectId, runId, proposed, simulationId) {
     rate: { s_per_cell_step: rate.s_per_cell_step, runs: rate.runs, source: rate.source },
     rank_cap: pc.rank_cap,
   };
+}
+
+/** The one row a started run shows when its "Numerics as written" was not recorded (RH3). */
+export const NUMERICS_NOT_RECORDED = Object.freeze([
+  Object.freeze({
+    group: 'Not recorded',
+    label: 'Numerics as written',
+    value:
+      'This run started before the app recorded what its case was written with, so it is not shown here: its case folder (system/fvSchemes and the fields it saved) holds what it solved with.',
+    source: '',
+  }),
+]);
+
+/**
+ * RH3: a started run's "Numerics as written": the rows recorded when its case was written
+ * (numerics_used.written: its Start's, or a Continue's that took the study's new numerics), or
+ * the not-recorded row for a run that has numerics_used without them (started before they were
+ * recorded). Null for a draft, a run with no numerics_used, or one whose rows are being recorded
+ * (written null: its Start or Continue is writing its case now): its rows then come from its
+ * numerics as written now.
+ * @param {any} doc the run doc
+ * @returns {{ rows: any[], recorded: boolean } | null}
+ */
+export function writtenNumericsOf(doc) {
+  if (!doc || !doc.status || doc.status === 'draft') return null;
+  const used = numericsUsedOf(doc);
+  if (!used) return null;
+  const rows = /** @type {any} */ (used).written;
+  if (Array.isArray(rows)) return { rows, recorded: true };
+  // Being recorded (this Start or Continue writes its case now, with this code): the rows from its
+  // numerics are what it writes.
+  if (rows === null) return null;
+  return { rows: NUMERICS_NOT_RECORDED.map((r) => ({ ...r })), recorded: false };
 }
 
 /**

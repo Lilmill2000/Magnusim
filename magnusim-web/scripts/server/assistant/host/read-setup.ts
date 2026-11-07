@@ -327,9 +327,10 @@ export const NUMERICS_SHOWN_IN = 'Run panel → Numerics as written';
 /**
  * read_setup {what:'numerics'} (RH3, parity row R35): what the run's case is written with, the
  * rows the Run panel's "Numerics as written" shows, from the same route (run.precheck, its
- * analysis's RunModel.check `numerics`): a draft's from its study, a started run's from what it
- * started with (numerics_used). A run started before that was recorded has none: it says so, as
- * the panel shows none.
+ * analysis's RunModel.check `numerics`): a draft's from its study, a started run's as its case was
+ * written (the rows recorded then, numerics_used.written). A run started before numerics_used was
+ * recorded has none, and one started before the rows were recorded only the row saying so: each
+ * says so, as the panel does.
  */
 async function numericsAnswer(d: HostToolDeps, rt: ToolRunContext, project: string, sim: string, id: string): Promise<ToolOutcome> {
   const o = via(rt, 'read_setup.numerics');
@@ -355,9 +356,19 @@ async function numericsAnswer(d: HostToolDeps, rt: ToolRunContext, project: stri
     // A preset row's preset ("Robust"), as the panel names it: the run's, not the study's now.
     ...(str(x.preset) ? { preset: text(x.preset, 20) } : {}),
   }));
+  // A started run's rows are the ones recorded when its case was written; a run started before
+  // they were recorded shows one row saying so (the route's numerics_recorded false), as the panel does.
+  const unrecorded = !draft && pc.numerics_recorded === false;
   return okData(
-    { run_id: runId, name: text(r.name), from: draft ? 'study' : 'numerics_used', rows, shown_in: NUMERICS_SHOWN_IN },
-    `${quoted(r.name)}: numerics as written (${rows.length} rows)`,
+    {
+      run_id: runId,
+      name: text(r.name),
+      from: draft ? 'study' : 'numerics_used',
+      rows,
+      shown_in: NUMERICS_SHOWN_IN,
+      ...(unrecorded ? { recorded: false, note: `${quoted(r.name)} started before what its case was written with was recorded: its case folder holds it; read_setup {what:'study'} has the study's numerics now.` } : {}),
+    },
+    unrecorded ? `${quoted(r.name)}: numerics as written not recorded` : `${quoted(r.name)}: numerics as written (${rows.length} rows)`,
   );
 }
 

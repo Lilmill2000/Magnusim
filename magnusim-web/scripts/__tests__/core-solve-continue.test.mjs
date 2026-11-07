@@ -213,9 +213,9 @@ const argOf = (spec, name) => {
   const i = spec.prepare.args.indexOf(name);
   return i >= 0 ? spec.prepare.args[i + 1] : undefined;
 };
-/** A restart without the numerics it goes on with (RH3; checked on their own). */
+/** A restart without the numerics it goes on with and whether it keeps them (RH3; checked on their own). */
 const withoutNumerics = (r) => {
-  const { numerics, ...rest } = r || {};
+  const { numerics, keep_numerics, ...rest } = r || {};
   return rest;
 };
 /** The prepare job's --restart, without its numerics. */
@@ -960,5 +960,109 @@ describe('RH3: numerics at Continue', () => {
     const { out } = await start(rid);
     assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
     assert.equal(runDoc(rid).numerics_used.values.relax_p, 0.2);
+  });
+});
+
+// RH3 (the validation set's pipes, 2026-11-06): "Numerics as written" of a started run is what its
+// case was written with, recorded then (numerics_used.written: the analysis's plan's rows), never
+// what today's writer would write from its numerics. A Continue that goes on with what the run had
+// keeps its record and tells the case writer to keep its schemes and saved walls (keep_numerics);
+// one with the study's new numerics records the Continue's plan rows. The route's answer for a
+// started run is its record, or one row saying it has none (a run started before they were
+// recorded). Fails on the code before it: no record, no keep_numerics, and the rows rebuilt with
+// today's writer.
+describe('RH3: what a started run was written with', () => {
+  const studyIdPath = () => join(layout.findStudy(join(PROJECTS, PID), SID).dir, 'id.json');
+  let idBefore = '';
+  const studySet = (values) => {
+    const doc = JSON.parse(readFileSync(studyIdPath(), 'utf8'));
+    for (const [k, v] of Object.entries(values)) {
+      if (v === null) delete doc[k];
+      else doc[k] = v;
+    }
+    writeFileSync(studyIdPath(), JSON.stringify(doc));
+  };
+  const rows = (tag) => [
+    { group: 'Schemes', label: 'Gradient limiter', value: `limitedGradU ${tag}`, source: 'preset', preset: 'Robust' },
+    { group: 'Stays fixed', label: 'Wall treatment', value: `nut ${tag}`, source: 'fixed' },
+  ];
+  const restartArg = (out) => JSON.parse(argOf(specOf(out.bodyExtra.runner_job_id), '--restart'));
+  /** The worker's run check: rows from the run's numerics as today's writer writes them. */
+  const TODAY = [{ group: 'Stays fixed', label: 'Wall treatment', value: 'nut today', source: 'fixed' }];
+  beforeEach(() => {
+    idBefore = readFileSync(studyIdPath(), 'utf8');
+    studySet({ relax_p: 0.3 });
+    fx.plan = () => planAnswer({ plan: { ...planAnswer().plan, numerics: rows('at start') } });
+    attachWorkerBridge(async (method, params) => {
+      if (method === 'analysis.validate_ready') return { ready: true, issues: [] };
+      if (method === 'analysis.run_normalize') return { settings: { end_time: 100, write_interval: 50, ...(params && params.settings) } };
+      if (method === 'analysis.plan_run') {
+        fx.plans.push(params);
+        return fx.plan(params);
+      }
+      if (method === 'analysis.run_check') return { ok: true, checked: true, checks: [], estimate: null, numerics: TODAY };
+      return { ok: true };
+    });
+  });
+  afterEach(() => writeFileSync(studyIdPath(), idBefore));
+
+  it("a fresh Start records its plan's rows as what its case is written with, not in prepare_run", async () => {
+    const rid = await solvedRun('stopped');
+    const doc = runDoc(rid);
+    assert.deepEqual(doc.numerics_used.written, rows('at start'));
+    assert.equal('numerics' in doc.prepare_run, false);
+    // The route answers the record, whatever today's writer would write (the check's rows).
+    const pc = await w27.precheckRun(PID, rid, {}, SID);
+    assert.deepEqual([pc.ok, pc.numerics, pc.numerics_recorded], [true, rows('at start'), true]);
+    // As the case is written now (what a fake Start records): the check's own rows.
+    assert.deepEqual((await w27.precheckRun(PID, rid, {}, SID, { asWritten: true })).numerics, TODAY);
+  });
+
+  it('a Continue that goes on with what the run had keeps its record and tells the writer to keep its schemes and saved walls', async () => {
+    const rid = await solvedRun('stopped');
+    const used = runDoc(rid).numerics_used;
+    fx.plan = () => planAnswer({ plan: { ...planAnswer().plan, numerics: rows('today') } });
+    let { out } = await cont(rid, { extraIterations: 20 });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(restartArg(out).keep_numerics, true);
+    assert.equal(fx.plans.at(-1).restart.keep_numerics, true);
+    assert.deepEqual(runDoc(rid).numerics_used, used);
+    endRun(rid, 'stopped');
+    // "as_was" after a study change: the same.
+    studySet({ relax_p: 0.2 });
+    ({ out } = await cont(rid, { extraIterations: 20, numerics: 'as_was' }));
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal(restartArg(out).keep_numerics, true);
+    assert.deepEqual(runDoc(rid).numerics_used, used);
+    assert.deepEqual((await w27.precheckRun(PID, rid, {}, SID)).numerics, rows('at start'));
+  });
+
+  it("a Continue with the study's new numerics records that Continue's plan rows, and its case is written afresh", async () => {
+    const rid = await solvedRun('stopped');
+    studySet({ relax_p: 0.2 });
+    fx.plan = () => planAnswer({ plan: { ...planAnswer().plan, numerics: rows('new') } });
+    const { out } = await cont(rid, { extraIterations: 20, numerics: 'new' });
+    assert.equal(out.ok, true, JSON.stringify(out.bodyExtra));
+    assert.equal('keep_numerics' in restartArg(out), false);
+    const used = runDoc(rid).numerics_used;
+    assert.deepEqual([used.values.relax_p, used.written], [0.2, rows('new')]);
+    assert.deepEqual((await w27.precheckRun(PID, rid, {}, SID)).numerics, rows('new'));
+  });
+
+  it('a run started before its rows were recorded says so; one whose rows are being recorded shows them as written now; a draft its study\'s', async () => {
+    const rid = await solvedRun('stopped');
+    const runJson = join(io.runFolderOf(PID, rid, SID).dir, 'run.json');
+    const doc = runDoc(rid);
+    const { written: _w, ...older } = doc.numerics_used;
+    writeFileSync(runJson, JSON.stringify({ ...doc, numerics_used: older }));
+    let pc = await w27.precheckRun(PID, rid, {}, SID);
+    assert.deepEqual([pc.numerics, pc.numerics_recorded], [w27.NUMERICS_NOT_RECORDED.map((r) => ({ ...r })), false]);
+    assert.match(pc.numerics[0].value, /^This run started before the app recorded what its case was written with, so it is not shown here/);
+    writeFileSync(runJson, JSON.stringify({ ...doc, numerics_used: { ...older, written: null } }));
+    pc = await w27.precheckRun(PID, rid, {}, SID);
+    assert.deepEqual([pc.numerics, 'numerics_recorded' in pc], [TODAY, false]);
+    const draft = draftRun();
+    pc = await w27.precheckRun(PID, draft, {}, SID);
+    assert.deepEqual([pc.numerics, 'numerics_recorded' in pc], [TODAY, false]);
   });
 });

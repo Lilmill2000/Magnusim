@@ -724,6 +724,11 @@ def health_hints(
     return hints
 
 
+# The fields whose wall entries a Continue with new numerics gives a saved time (RH3): the
+# turbulence fields and the heat's own wall function.
+RESTART_WALL_FIELDS = ("nut", "k", "omega", "epsilon", "alphat")
+
+
 def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
     """Write the whole case into ``out_dir``; the report the core records."""
     from incompressible_flow.flow_bcs import flow_patches
@@ -819,6 +824,21 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
                 types[pname] = "patch"
         apply_boundary_patch_types(poly_dst / "boundary", types)
 
+    # A Continue (RH3): one that goes on with what the run had keeps its own fvSchemes and the
+    # walls its saved time holds; one with the study's new numerics (or no record of them) gets
+    # the writer's walls in that saved time too, so the case solves with what it is written with.
+    from .runspec import restart_keeps_numerics
+
+    keep_numerics = restart_keeps_numerics(spec) and restart_from is not None
+    walls_rewritten: dict[str, list[str]] = {}
+    if restart_from is not None and not keep_numerics:
+        from magnusim_sdk.foam import FoamFieldError, restart_wall_entries
+
+        try:
+            walls_rewritten = restart_wall_entries(out, restart_from, list(RESTART_WALL_FIELDS))
+        except FoamFieldError as exc:
+            return {"ok": False, "error": f"The run's saved walls could not be given the new wall treatment ({exc}); add a run to solve again."}
+
     transient = spec.transient is not None
     write_foam_dict(out / "constant" / "thermophysicalProperties", "dictionary", "thermophysicalProperties",
                     thermophysical_text(fluid, density=density, t_ref=ph.reference_temperature,
@@ -851,9 +871,10 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
     app = solver_app(spec)
     write_foam_dict(out / "system" / "controlDict", "dictionary", "controlDict",
                     control_dict_text(app=app, spec=spec, functions=functions, restart_from=restart_from))
-    write_foam_dict(out / "system" / "fvSchemes", "dictionary", "fvSchemes",
-                    fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient,
-                                    settings=ph.numerics_settings))
+    if not (keep_numerics and (out / "system" / "fvSchemes").is_file()):
+        write_foam_dict(out / "system" / "fvSchemes", "dictionary", "fvSchemes",
+                        fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient,
+                                        settings=ph.numerics_settings))
     write_foam_dict(out / "system" / "fvSolution", "dictionary", "fvSolution",
                     fv_solution_text(model=model, residual=ph.residual, n_non_orth=ph.n_non_orthogonal,
                                      transient=spec.transient, residual_control=not stops_off,
@@ -916,6 +937,11 @@ def write_case(spec: HtSpec, out_dir: Path | str) -> dict[str, Any]:
         sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}
         if stops_off:
             sidecar["restart"]["stops_off"] = True
+        # RH3: what the Continue kept of the run, or the saved walls it gave the new treatment.
+        if keep_numerics:
+            sidecar["restart"]["kept_numerics"] = True
+        if walls_rewritten:
+            sidecar["restart"]["walls_rewritten"] = walls_rewritten
     (out / "w27-case.json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
     report: dict[str, Any] = {
         "ok": True,

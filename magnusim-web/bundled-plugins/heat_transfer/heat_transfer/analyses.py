@@ -321,11 +321,22 @@ def _decision(spec: Any, ctx: CaseContext) -> dict[str, Any]:
         "transient": spec.transient is not None,
     }
     context = getattr(ctx.inputs, "check_context", None) if ctx.inputs is not None else None
+    settings = override if spec.transient is not None else {"end_time": spec.end_time, "write_interval": spec.write_interval}
+    from .runspec import restart_keeps_numerics
+
+    if not restart_keeps_numerics(spec):
+        # RH3: "Numerics as written" of the case as this plan writes it; the core records it on the
+        # run (numerics_used.written). A Continue that keeps its numerics keeps the run's record.
+        from .precheck import numerics as numerics_as_written
+
+        try:
+            out["numerics"] = numerics_as_written(spec, ctx.inputs, settings or {}, transient=spec.transient is not None)
+        except Exception as exc:  # noqa: BLE001 (the rows never stop a Start: left out, and says why)
+            out["numerics_error"] = f"{type(exc).__name__}: {exc}"[:200]
     if isinstance(context, dict):
         # RH2 (API 1.9): the pre-run check as the run starts (prepare_run.checks).
         from .precheck import run_check
 
-        settings = override if spec.transient is not None else {"end_time": spec.end_time, "write_interval": spec.write_interval}
         try:
             out["checks"] = run_check(transient=spec.transient is not None, spec=spec, inputs=ctx.inputs, settings=settings or {}, context=context)["checks"]
         except Exception as exc:  # noqa: BLE001 (the check never stops a Start: it is left out, and says why)

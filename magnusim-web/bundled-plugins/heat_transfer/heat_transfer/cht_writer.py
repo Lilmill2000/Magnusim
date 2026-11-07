@@ -377,6 +377,11 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
             compressible=True,
         )
 
+    # A Continue (RH3) that goes on with what the run had keeps each region's fvSchemes and the
+    # walls its saved time holds; one with new numerics gets the writer's walls there (below).
+    from .runspec import restart_keeps_numerics
+
+    keep_numerics = restart_keeps_numerics(spec) and restart_from is not None
     region_rows: list[dict[str, Any]] = []
     sources_total = 0.0
     thermal_meta: dict[str, dict[str, Any]] = {}
@@ -438,9 +443,10 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
                                                 p_op=ph.operating_pressure, transient=transient))
             write_foam_dict(out / "constant" / r / "turbulenceProperties", "dictionary", "turbulenceProperties",
                             turbulence_text(model))
-            write_foam_dict(out / "system" / r / "fvSchemes", "dictionary", "fvSchemes",
-                            fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient,
-                                            settings=ph.numerics_settings))
+            if not (keep_numerics and (out / "system" / r / "fvSchemes").is_file()):
+                write_foam_dict(out / "system" / r / "fvSchemes", "dictionary", "fvSchemes",
+                                fv_schemes_text(model=model, numerics=ph.numerics, transient=spec.transient,
+                                                settings=ph.numerics_settings))
             write_foam_dict(out / "system" / r / "fvSolution", "dictionary", "fvSolution",
                             fv_solution_text(model=model, residual=ph.residual, n_non_orth=ph.n_non_orthogonal,
                                              transient=spec.transient, residual_control=False,
@@ -481,8 +487,9 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
                             internal="uniform 0", patches={'".*"': {"type": "calculated", "value": "uniform 0"}})
             write_foam_dict(out / "constant" / r / "thermophysicalProperties", "dictionary", "thermophysicalProperties",
                             solid_thermo_text(props.rho, props.cp, props.k))
-            write_foam_dict(out / "system" / r / "fvSchemes", "dictionary", "fvSchemes",
-                            solid_schemes_text(numerics=ph.numerics, transient=spec.transient, settings=ph.numerics_settings))
+            if not (keep_numerics and (out / "system" / r / "fvSchemes").is_file()):
+                write_foam_dict(out / "system" / r / "fvSchemes", "dictionary", "fvSchemes",
+                                solid_schemes_text(numerics=ph.numerics, transient=spec.transient, settings=ph.numerics_settings))
             write_foam_dict(out / "system" / r / "fvSolution", "dictionary", "fvSolution",
                             solid_solution_text(n_non_orth=ph.n_non_orthogonal, transient=spec.transient))
             src = spec.heat_sources.get(str(region.record.get("id") or ""))
@@ -499,6 +506,20 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
         row["walls"] = walls
         region_rows.append(row)
 
+    walls_rewritten: dict[str, list[str]] = {}
+    if restart_from is not None and not keep_numerics:
+        from magnusim_sdk.foam import FoamFieldError, restart_wall_entries
+
+        from .writer import RESTART_WALL_FIELDS
+
+        for row_ in region_rows:
+            if row_["role"] != FLUID:
+                continue
+            try:
+                got = restart_wall_entries(out, restart_from, list(RESTART_WALL_FIELDS), region=str(row_["name"]))
+            except FoamFieldError as exc:
+                return {"ok": False, "error": f"The run's saved walls could not be given the new wall treatment ({exc}); add a run to solve again."}
+            walls_rewritten.update({f"{row_['name']}/{k}": v for k, v in got.items()})
     write_foam_dict(out / "constant" / "regionProperties", "dictionary", "regionProperties", region_properties_text(lay))
     g = ph.g()
     write_foam_dict(out / "constant" / "g", "uniformDimensionedVectorField", "g",
@@ -601,6 +622,11 @@ def write_cht_case(spec: HtSpec, out: Path, *, restart_from: float | None) -> di
         sidecar["restart"] = {"from_time": restart_from, "end_time": float(spec.end_time)}
         if stops_off:
             sidecar["restart"]["stops_off"] = True
+        # RH3: what the Continue kept of the run, or the saved walls it gave the new treatment.
+        if keep_numerics:
+            sidecar["restart"]["kept_numerics"] = True
+        if walls_rewritten:
+            sidecar["restart"]["walls_rewritten"] = walls_rewritten
     (out / "w27-case.json").write_text(json.dumps(sidecar, indent=2) + "\n", encoding="utf-8")
     report: dict[str, Any] = {
         "ok": True,

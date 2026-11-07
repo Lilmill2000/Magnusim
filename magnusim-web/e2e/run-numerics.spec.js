@@ -34,6 +34,13 @@
 //   what k-omega SST's walls read at the y+ that were tested, not "any y+" or "below about 0.5", and
 //   no y+ for Spalart-Allmaras, whose walls were not tested. Fails on the code before it: there were no
 //   such rows and the limiter was on grad(U).
+// - What a run was written with: a started run shows the rows its Start (or a Continue with the new
+//   numerics) recorded when its case was written (numerics_used.written). After the study turns to
+//   k-epsilon, a started k-omega SST run still shows SST's walls while a draft shows k-epsilon's
+//   (Heat Transfer's Wall treatment row too), and rows an earlier writer recorded show as written; a
+//   run started before the rows were recorded shows one row saying so. The Assistant reads the same.
+//   Fails on the code before it: a started run's rows were rebuilt from its numerics with today's
+//   writer and the study's model now.
 // Its own server with the fake compute (MAGNUSIM_TEST_COMPUTE=fake): no WSL. Its fake solve
 // replays a healthy steady log through the real health tracker (MAGNUSIM_TEST_SOLVE_LOG).
 // Fails on the code before RH3: there were no such settings, no "Numerics as written" and no
@@ -793,61 +800,219 @@ test.describe('numerics at Continue', () => {
       await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: null });
     }
   });
+});
+
+// What a run was written with (the validation set's pipes, 2026-11-06, changed the writer): a draft's
+// "Numerics as written" is its study's; a started run's is what its case was written with, recorded
+// then (numerics_used.written), so its rows (its wall treatment too) follow the run, not the study's
+// model now or today's writer; a run started before they were recorded says so. Cleanup in afterEach,
+// with the page closed first (a test's finally is skipped on a timeout).
+test.describe('what a run was written with', () => {
+  const IF_SST = {
+    'Gradient limiter': 'limitedGradU cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1',
+    'Momentum convection': 'bounded Gauss linearUpwind limitedGradU',
+    'Velocity gradient': 'grad(U) Gauss skewCorrected linear, never limited (the viscous terms and turbulence production)',
+    'Flux interpolation': 'flux(HbyA) skewCorrected linear; the rest linear',
+    'Wall treatment': 'nut nutUSpaldingWallFunction, k kqRWallFunction, omega omegaWallFunction (stepwise)',
+  };
+  const IF_KE_WALLS = 'nut nutkWallFunction, k kqRWallFunction, epsilon epsilonWallFunction';
+  const HT_SST_WALLS = `${IF_SST['Wall treatment']}, alphat compressible::alphatJayatillekeWallFunction (Prt 0.85)`;
+  const NOT_RECORDED =
+    'This run started before the app recorded what its case was written with, so it is not shown here: its case folder (system/fvSchemes and the fields it saved) holds what it solved with.';
+  /** Runs a test made ({study, rid}) and study fields to put back ({study, values}), undone in afterEach. */
+  let made = [];
+  let restore = [];
+
+  test.beforeAll(async ({ request }) => {
+    // A steady study (as numerics at Continue leaves it; this describe may run alone).
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, time_dependency: 'Steady-state' });
+  });
+
+  test.beforeEach(async ({ request }) => {
+    made = [];
+    restore = [];
+    await postOk(request, '/api/test/assistant/reset', {});
+    await useScriptedModel(request, host.base, fake, 'cloud');
+  });
+
+  test.afterEach(async ({ page, request }) => {
+    await page.close();
+    for (const { study: s, rid } of made) {
+      await request.post(api('/api/run/stop'), { data: { project_id: PID, simulation_id: s, run_id: rid } }).catch(() => {});
+      await expect
+        .poll(async () => ((await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${s}`)).runs || []).find((r) => String(r.id) === rid)?.status ?? 'gone', STEP)
+        .not.toBe('running');
+      await postOk(request, '/api/run/delete', { project_id: PID, simulation_id: s, run_id: rid });
+    }
+    for (const { study: s, values } of restore.reverse()) await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: s, ...values });
+    expect(fake.pending(), 'scripted answers left unused').toBe(0);
+  });
+
+  /** Sets study fields for this test, keeping what they were for afterEach. */
+  async function studyFields(request, s, values) {
+    const was = (await getJson(request, `/api/simulation?project_id=${PID}&simulation_id=${s}`)).simulation;
+    restore.push({ study: s, values: Object.fromEntries(Object.keys(values).map((k) => [k, was[k] ?? null])) });
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: s, ...values });
+  }
+
+  async function newRun(request, name, s = sim) {
+    const out = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: s, name, ...(s === sim ? { mesh_id: meshId } : {}) });
+    const rid = String(out.run_id || out.run?.id || out.run?.run_id);
+    made.push({ study: s, rid });
+    return rid;
+  }
+
+  /** A run started (the fake compute) once its Start recorded the rows its case is written with, then stopped. */
+  async function startedRun(request, name) {
+    const rid = await newRun(request, name);
+    await postOk(request, '/api/run/start', { project_id: PID, simulation_id: sim, run_id: rid });
+    await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('running');
+    await expect.poll(async () => ((await runRow(request, rid)).numerics_used?.written || []).length, STEP).toBeGreaterThan(5);
+    await postOk(request, '/api/run/stop', { project_id: PID, run_id: rid });
+    await expect.poll(async () => (await runRow(request, rid)).status, STEP).toBe('stopped');
+    return { rid, runJson: join(dirname((await runRow(request, rid)).case_dir), 'run.json') };
+  }
+
+  /** The Assistant's read_setup numerics of `rid`, from a dock turn in `page`. */
+  async function assistantReads(page, rid, name) {
+    const seen = {};
+    fake.reply(
+      { tools: [{ name: 'read_setup', input: readSetup({ what: 'numerics', id: rid }) }] },
+      () => {
+        seen.read = lastResults()[0];
+        return { text: 'Read.' };
+      },
+    );
+    await openDock(page);
+    await dockSend(page, `Read the numerics of ${name}.`);
+    await expect(dockTurn(page).locator('[data-turn-end="done"]').last()).toBeVisible({ timeout: 60_000 });
+    expect(seen.read.ok, JSON.stringify(seen.read)).toBe(true);
+    return seen.read.data;
+  }
 
   test('"Numerics as written" says the velocity gradient and the flux are skew-corrected, the limiter is on the convection gradient, and what each model\'s walls are written with, as the Assistant reads it', async ({ page, request }) => {
     test.setTimeout(240_000);
-    const model = (await studyRec(request)).turbulence_model ?? null;
-    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
-    const made = await postOk(request, '/api/run/create', { project_id: PID, simulation_id: sim, name: 'Run_fixed', mesh_id: meshId });
-    const rid = String(made.run_id || made.run?.id || made.run?.run_id);
-    const sst = {
-      'Gradient limiter': 'limitedGradU cellLimited Gauss skewCorrected linear 1; grad(k), grad(omega) cellLimited Gauss linear 1',
-      'Momentum convection': 'bounded Gauss linearUpwind limitedGradU',
-      'Velocity gradient': 'grad(U) Gauss skewCorrected linear, never limited (the viscous terms and turbulence production)',
-      'Flux interpolation': 'flux(HbyA) skewCorrected linear; the rest linear',
-      'Wall treatment': 'nut nutUSpaldingWallFunction, k kqRWallFunction, omega omegaWallFunction (stepwise)',
-    };
-    try {
-      // The person: a steady k-omega SST draft on the Robust preset.
-      let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
-      let row = await numericsOf(panel);
-      for (const [label, value] of Object.entries(sst)) await expect(row(label), label).toHaveText(value, STEP);
-      // The Assistant reads the same rows (read_setup numerics, R35).
-      const seen = {};
-      fake.reply(
-        { tools: [{ name: 'read_setup', input: readSetup({ what: 'numerics', id: rid }) }] },
-        () => {
-          seen.read = lastResults()[0];
-          return { text: 'Read.' };
-        },
-      );
-      await openDock(page);
-      await dockSend(page, 'Read the numerics of Run_fixed.');
-      await expect(dockTurn(page).locator('[data-turn-end="done"]')).toBeVisible({ timeout: 60_000 });
-      expect(seen.read.ok, JSON.stringify(seen.read)).toBe(true);
-      const read = Object.fromEntries(seen.read.data.rows.map((x) => [x.label, x.value]));
-      for (const [label, value] of Object.entries(sst)) expect(read[label], label).toBe(value);
-      // k-epsilon keeps the k-based log law at the wall; after a reload the panel shows it.
-      await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: 'kEpsilon' });
-      await page.reload();
-      panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
-      row = await numericsOf(panel);
-      await expect(row('Wall treatment')).toHaveText('nut nutkWallFunction, k kqRWallFunction, epsilon epsilonWallFunction', STEP);
-      await expect(row('Velocity gradient')).toHaveText(sst['Velocity gradient'], STEP);
-      // The Study panel's model help gives only the y+ that were tested.
-      await page.goto(`${host.base}/#/p/${PID}`);
-      await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
-      await page.locator(`#left-tree [data-w17-sim-id="${sim}"] > .tree-row`).first().click();
-      const help = page.locator('#panel-study-settings [data-schema-key="turbulence_model"] [role="tooltip"]');
-      await expect(help).toContainText("within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % up to y+ 100, but 6 to 9 % low at y+ 1 to 3; below y+ 1 only y+ 0.3 was tested (1.5 % low)", STEP);
-      await expect(help).toContainText('Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested.');
-      await expect(help).not.toContainText('below about 0.5');
-      await expect(help).not.toContainText('any y+');
-      await expect(help).toContainText("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though how is not known.", STEP);
-      await expect(help).not.toContainText('uneven strain rate');
-      await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
-    } finally {
-      await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: model });
-    }
+    await studyFields(request, sim, { numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
+    const rid = await newRun(request, 'Run_fixed');
+    // The person: a steady k-omega SST draft on the Robust preset.
+    let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    let row = await numericsOf(panel);
+    for (const [label, value] of Object.entries(IF_SST)) await expect(row(label), label).toHaveText(value, STEP);
+    // The Assistant reads the same rows (read_setup numerics, R35).
+    const read = Object.fromEntries((await assistantReads(page, rid, 'Run_fixed')).rows.map((x) => [x.label, x.value]));
+    for (const [label, value] of Object.entries(IF_SST)) expect(read[label], label).toBe(value);
+    // A draft follows its study: k-epsilon keeps the k-based log law at the wall; after a reload the panel shows it.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: 'kEpsilon' });
+    await page.reload();
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    row = await numericsOf(panel);
+    await expect(row('Wall treatment')).toHaveText(IF_KE_WALLS, STEP);
+    await expect(row('Velocity gradient')).toHaveText(IF_SST['Velocity gradient'], STEP);
+    // The Study panel's model help gives only the y+ that were tested.
+    await page.goto(`${host.base}/#/p/${PID}`);
+    await page.waitForFunction((id) => window.__CFD_PROJECT_READY__ === id, PID, { timeout: 90_000 });
+    await page.locator(`#left-tree [data-w17-sim-id="${sim}"] > .tree-row`).first().click();
+    const help = page.locator('#panel-study-settings [data-schema-key="turbulence_model"] [role="tooltip"]');
+    await expect(help).toContainText("within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % up to y+ 100, but 6 to 9 % low at y+ 1 to 3; below y+ 1 only y+ 0.3 was tested (1.5 % low)", STEP);
+    await expect(help).toContainText('Spalart-Allmaras solves one equation and suits flow around wings and bodies in a freestream; how its walls read was not tested.');
+    await expect(help).not.toContainText('below about 0.5');
+    await expect(help).not.toContainText('any y+');
+    await expect(help).toContainText("On Standard's tetrahedra a developed pipe read its friction about 9 % low (within 1 % on Hex-dominant); with SST's stress limiter off it read about as high as on a clean mesh, so the limiter is involved, though how is not known.", STEP);
+    await expect(help).not.toContainText('uneven strain rate');
+    await expect(help).not.toContainText('SST is the general-purpose default and handles walls at any y+');
+  });
+
+  test("a started run shows what its case was written with: its walls stay its model's after the study's changes, and an earlier writer's rows stay as they were written, as the Assistant reads them", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await studyFields(request, sim, { numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
+    // A k-omega SST run is started (and stopped): its Start records the rows its case is written with.
+    const { rid, runJson } = await startedRun(request, 'Run_written');
+    const written = (await runRow(request, rid)).numerics_used.written;
+    expect(Object.fromEntries(written.map((x) => [x.label, x.value]))).toMatchObject(IF_SST);
+    // The study turns to k-epsilon: a new draft follows it, the started run keeps its own walls.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: sim, turbulence_model: 'kEpsilon' });
+    const draft = await newRun(request, 'Run_draft_ke');
+    let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: draft });
+    let row = await numericsOf(panel);
+    await expect(row('Wall treatment')).toHaveText(IF_KE_WALLS, STEP);
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    row = await numericsOf(panel);
+    await expect(row('Wall treatment')).toHaveText(IF_SST['Wall treatment'], STEP);
+    for (const [label, value] of Object.entries(IF_SST)) await expect(row(label), label).toHaveText(value, STEP);
+    let read = await assistantReads(page, rid, 'Run_written');
+    expect([read.from, 'recorded' in read]).toEqual(['numerics_used', false]);
+    expect(Object.fromEntries(read.rows.map((x) => [x.label, x.value]))['Wall treatment']).toBe(IF_SST['Wall treatment']);
+    // A run whose case an earlier writer wrote: its record holds that writer's rows, which it shows as
+    // they were written (not what today's writer would write from its numerics), after a reload too.
+    const earlier = written.map((x) =>
+      x.label === 'Velocity gradient' ? { ...x, value: 'grad(U) cellLimited Gauss linear 1 (as an earlier writer wrote it)' } : x.label === 'Flux interpolation' ? null : x,
+    ).filter(Boolean);
+    const doc = JSON.parse(readFileSync(runJson, 'utf8'));
+    patchRun(runJson, { numerics_used: { ...doc.numerics_used, at: new Date().toISOString(), written: earlier } });
+    await page.reload();
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    row = await numericsOf(panel);
+    await expect(row('Velocity gradient')).toHaveText('grad(U) cellLimited Gauss linear 1 (as an earlier writer wrote it)', STEP);
+    await expect(row('Flux interpolation')).toHaveCount(0);
+    read = await assistantReads(page, rid, 'Run_written');
+    expect(read.rows.map((x) => [x.label, x.value])).toEqual(earlier.map((x) => [x.label, x.value]));
+  });
+
+  test('a run started before its rows were recorded says so, in the Run panel and to the Assistant, never with what today\'s writer would write', async ({ page, request }) => {
+    test.setTimeout(240_000);
+    await studyFields(request, sim, { numerics_preset: null, grad_limiter: null, turbulence_model: 'kOmegaSST' });
+    const { rid, runJson } = await startedRun(request, 'Run_older');
+    // As a run started before the rows were recorded holds it: what it started with, no rows.
+    const doc = JSON.parse(readFileSync(runJson, 'utf8'));
+    const { written: _w, ...older } = doc.numerics_used;
+    patchRun(runJson, { numerics_used: { ...older, at: new Date().toISOString() } });
+    const panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: sim, runId: rid });
+    const box = panel.locator('[data-run-numerics="1"]');
+    await expect(box).toBeVisible(STEP);
+    if (!(await box.evaluate((el) => el.open))) await box.locator('summary').click();
+    await expect(box.locator('[data-run-numerics-group="Not recorded"] [data-run-numerics-row="Numerics as written"] .run-numerics-value')).toHaveText(NOT_RECORDED, STEP);
+    await expect(box.locator('[data-run-numerics-row]')).toHaveCount(1);
+    await expect(box.locator('[data-run-numerics-row="Velocity gradient"]')).toHaveCount(0);
+    const read = await assistantReads(page, rid, 'Run_older');
+    expect([read.recorded, read.rows]).toEqual([false, [{ group: 'Not recorded', label: 'Numerics as written', value: NOT_RECORDED }]]);
+    expect(read.note).toBe(`"Run_older" started before what its case was written with was recorded: its case folder holds it; read_setup {what:'study'} has the study's numerics now.`);
+  });
+
+  test("Heat Transfer's Wall treatment row: a draft's follows its study, a started run's stays what its case was written with, as the Assistant reads it", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const ht = (await postOk(request, '/api/simulation', { project_id: PID, analysis_type: 'heat_transfer_steady', activate: true })).simulation.id;
+    await studyFields(request, ht, { turbulence_model: 'kOmegaSST' });
+    const draft = await newRun(request, 'Run_ht_walls', ht);
+    let panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: ht, runId: draft });
+    let row = await numericsOf(panel);
+    await expect(row('Wall treatment')).toHaveText(HT_SST_WALLS, STEP);
+    let read = await assistantReads(page, draft, 'Run_ht_walls');
+    expect(Object.fromEntries(read.rows.map((x) => [x.label, x.value]))['Wall treatment']).toBe(HT_SST_WALLS);
+    // A started Heat Transfer run, with the rows its Start recorded (the draft's, as written then).
+    const check = await postOk(request, '/api/run/precheck', { project_id: PID, simulation_id: ht, run_id: draft });
+    const started = await newRun(request, 'Run_ht_started', ht);
+    const caseDir = (await getJson(request, `/api/run/status?project_id=${PID}&simulation_id=${ht}`)).runs.find((r) => String(r.id) === started).case_dir;
+    const study = (await getJson(request, `/api/simulation?project_id=${PID}&simulation_id=${ht}`)).simulation;
+    const values = Object.fromEntries(numericsKeys('heat_transfer_steady').map((k) => [k, study[k] ?? null]));
+    patchRun(join(dirname(caseDir), 'run.json'), {
+      status: 'stopped',
+      stage: 'stopped',
+      time_dependency: 'Steady-state',
+      analysis_key: 'heat_transfer_steady',
+      started_at: new Date(Date.now() - 60_000).toISOString(),
+      finished_at: new Date().toISOString(),
+      numerics_used: { analysis: 'heat_transfer_steady', mode: 'steady', at: new Date().toISOString(), values, written: check.numerics },
+    });
+    // The study turns to k-epsilon: the draft follows it, the started run keeps k-omega SST's walls.
+    await postOk(request, '/api/simulation/update', { project_id: PID, simulation_id: ht, turbulence_model: 'kEpsilon' });
+    await page.reload();
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: ht, runId: draft });
+    row = await numericsOf(panel);
+    await expect(row('Wall treatment')).toHaveText(/^nut nutkWallFunction, k kqRWallFunction, epsilon epsilonWallFunction, alphat compressible::alphatJayatillekeWallFunction/, STEP);
+    panel = await openRunPanel(page, { base: host.base, projectId: PID, simulationId: ht, runId: started });
+    row = await numericsOf(panel);
+    await expect(row('Wall treatment')).toHaveText(HT_SST_WALLS, STEP);
+    read = await assistantReads(page, started, 'Run_ht_started');
+    expect(Object.fromEntries(read.rows.map((x) => [x.label, x.value]))['Wall treatment']).toBe(HT_SST_WALLS);
   });
 });

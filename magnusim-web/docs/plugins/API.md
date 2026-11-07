@@ -1917,7 +1917,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `precheck_error?: string | undefined`: RH2: why the last check did not answer ('' when it did).
 - `checks_kept?: string[] | undefined`: RH2: the pre-run check codes kept as set (the run's `checks_kept`).
 - `checked_at_start?: RunCheckRow[] | null | undefined`: RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not.
-- `numerics?: RunNumericsRow[] | null | undefined`: RH3: "Numerics as written": what the run's case is written with (its analysis's RunModel.check `numerics`), for a draft from its study, for a started run from what it started with (`numerics_used`) once it has one; null when there is none to show.
+- `numerics?: RunNumericsRow[] | null | undefined`: RH3: "Numerics as written": what the run's case is written with (its analysis's RunModel.check `numerics`), for a draft from its study, for a started run as its case was written (the rows recorded then, `numerics_used.written`, or one row saying a run started before they were recorded has none) once it has `numerics_used`; null when there is none to show.
 
 #### SchemaFormProps
 
@@ -2413,6 +2413,50 @@ read_surface_field_value(case_dir: Path, name: str, region: str = "") -> dict | 
 ```
 
 ``postProcessing/<name>/<time>/surfaceFieldValue.dat``, every time folder merged.
+
+#### class FoamFieldError(ValueError)
+
+A field file the reader cannot follow (so nothing in it is rewritten).
+
+#### boundary_entries
+
+```python
+boundary_entries(b: bytes) -> dict[str, tuple[int, int]]
+```
+
+The patch entries of a field file's ``boundaryField`` (ascii or binary): each patch's name and the span of its entry, from its ``{`` to its ``}`` inclusive.
+
+#### boundary_entry_types
+
+```python
+boundary_entry_types(path: Path) -> dict[str, str]
+```
+
+Each patch's ``type`` in a field file's ``boundaryField`` (ascii or binary).
+
+#### sync_wall_entries
+
+```python
+sync_wall_entries(time_file: Path, fresh_file: Path, patches: list[str]) -> list[str]
+```
+
+Give the ``patches`` of a saved time's field file (``time_file``: what the run solved with, ascii or binary) the entries the case writer just wrote in ``fresh_file`` (its new ``0/`` file), each with the value the run saved. Returns the patches whose entry changed (none: the file is left as it is). Raises :class:`FoamFieldError` when either file cannot be followed.
+
+#### saved_time_folder
+
+```python
+saved_time_folder(case_dir: Path, t: float) -> Path | None
+```
+
+The folder of saved time ``t`` in a case (its name as the run wrote it), or None.
+
+#### restart_wall_entries
+
+```python
+restart_wall_entries(case_dir: Path, t: float, fields: list[str], region: str = "") -> dict[str, list[str]]
+```
+
+A run continued with new numerics from its saved time ``t``: each of ``fields`` the case writer just wrote in ``0/`` (``0/<region>/``) gets those entries on its wall patches (type ``wall``, or ``mappedWall`` for a region's interface, in the mesh's boundary) in the saved time's file, with the values the run saved (:func:`sync_wall_entries`), so the case solves with the walls it is written with. Returns the patches changed by field. Raises :class:`FoamFieldError` when a file cannot be followed.
 
 ### magnusim_sdk.gmsh_helpers
 

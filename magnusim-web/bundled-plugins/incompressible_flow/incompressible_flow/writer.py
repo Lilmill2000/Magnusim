@@ -2071,6 +2071,23 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         if patch_types:
             apply_boundary_patch_types(poly_dst / "boundary", patch_types)
 
+    # A Continue (RH3): one that goes on with what the run had keeps its own fvSchemes and the
+    # walls its saved time holds (it solves as it did, as "Numerics as written" says); one with the
+    # study's new numerics (or a run with no record of them) gets the writer's walls in that saved
+    # time too, so the case solves with what it is written with.
+    from .runspec import restart_keeps_numerics
+
+    keep_numerics = restart_keeps_numerics(spec) and restart_from is not None
+    walls_rewritten: dict[str, list[str]] = {}
+    if restart_from is not None and not keep_numerics:
+        from magnusim_sdk.foam import FoamFieldError, restart_wall_entries
+
+        try:
+            walls_rewritten = restart_wall_entries(out, restart_from, list(turb_patches))
+        except FoamFieldError as exc:
+            return {"ok": False, "error": f"The run's saved walls could not be given the new wall treatment ({exc}); add a run to solve again."}
+    keep_schemes = keep_numerics and (out / "system" / "fvSchemes").is_file()
+
     write_foam_dict(
         out / "constant" / "transportProperties",
         "dictionary",
@@ -2136,13 +2153,14 @@ RAS
             functions_text=functions_text,
             restart=restart_from is not None,
         )
-        write_fv_schemes_transient(
-            out / "system" / "fvSchemes",
-            ctrl=spec.transient,  # type: ignore[arg-type]
-            turbulence=model,
-            potential=physics.uses_potential_flow(),
-            numerics=physics.numerics_settings,
-        )
+        if not keep_schemes:
+            write_fv_schemes_transient(
+                out / "system" / "fvSchemes",
+                ctrl=spec.transient,  # type: ignore[arg-type]
+                turbulence=model,
+                potential=physics.uses_potential_flow(),
+                numerics=physics.numerics_settings,
+            )
         write_fv_solution_pimple(
             out / "system" / "fvSolution",
             ctrl=spec.transient,  # type: ignore[arg-type]
@@ -2157,12 +2175,13 @@ RAS
             "controlDict",
             _steady_control_dict_body(spec.end_time, spec.write_interval, functions_text, restart_from=restart_from),
         )
-        write_foam_dict(
-            out / "system" / "fvSchemes",
-            "dictionary",
-            "fvSchemes",
-            _steady_fv_schemes_body(physics),
-        )
+        if not keep_schemes:
+            write_foam_dict(
+                out / "system" / "fvSchemes",
+                "dictionary",
+                "fvSchemes",
+                _steady_fv_schemes_body(physics),
+            )
         write_foam_dict(
             out / "system" / "fvSolution",
             "dictionary",
@@ -2268,6 +2287,11 @@ RAS
         if stops_off:
             # Past its convergence: no residual targets, no settle stop.
             sidecar["restart"]["stops_off"] = True
+        # RH3: what the Continue kept of the run, or the saved walls it gave the new treatment.
+        if keep_numerics:
+            sidecar["restart"]["kept_numerics"] = True
+        if walls_rewritten:
+            sidecar["restart"]["walls_rewritten"] = walls_rewritten
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {

@@ -371,8 +371,10 @@ def restart_arg(text: str | None) -> dict[str, Any] | None:
     the run's; ``stops_off`` true: it continues past its convergence, written without the
     stops that ended it; ``numerics`` the study's numerics settings it goes on with, by key,
     null for blank (RH3: what it started with, or the study's new values; the core puts them
-    over the study record, :func:`run_inputs`)), or None when empty. Raises ValueError for
-    anything else."""
+    over the study record, :func:`run_inputs`); ``keep_numerics`` true: it goes on with the
+    numerics it had, so its case keeps its own schemes and the walls its saved time holds, and
+    the analysis's plan leaves out "Numerics as written" (the run's record stays)), or None
+    when empty. Raises ValueError for anything else."""
     import math
 
     raw = str(text or "").strip()
@@ -398,9 +400,14 @@ def restart_arg(text: str | None) -> dict[str, Any] | None:
     stops_off = value.get("stops_off", False)
     if not isinstance(stops_off, bool):
         raise ValueError("--restart stops_off must be true or false")
+    keep_numerics = value.get("keep_numerics", False)
+    if not isinstance(keep_numerics, bool):
+        raise ValueError("--restart keep_numerics must be true or false")
     out: dict[str, Any] = {"end_time": end, "write_interval": positive("write_interval")}
     if stops_off:
         out["stops_off"] = True
+    if keep_numerics:
+        out["keep_numerics"] = True
     numerics = value.get("numerics")
     if numerics is not None:
         if not isinstance(numerics, dict) or not all(isinstance(k, str) for k in numerics):

@@ -696,6 +696,16 @@ describe('read_setup: numerics (RH3)', () => {
     app.w.runs[0].numerics_used = { analysis: 'incompressible_steady', mode: 'steady', at: '2026-11-04T00:00:00Z', values: { relax_p: 0.3 } };
     const used = await ok('read_setup', read({ id: 'r1' }));
     assert.deepEqual([used.from, used.rows.length], ['numerics_used', 3]);
+    assert.equal('recorded' in used, false);
+  });
+  it('a started run whose rows were not recorded (started before they were): the one row the panel shows, and a note saying so', async () => {
+    fresh();
+    const row = { group: 'Not recorded', label: 'Numerics as written', value: 'This run started before the app recorded what its case was written with, so it is not shown here.', source: '' };
+    app.over = (m, path) => (path === '/api/run/precheck' ? { ok: true, checked: true, checks: [], numerics: [row], numerics_recorded: false } : undefined);
+    app.w.runs[0].numerics_used = { analysis: 'incompressible_steady', mode: 'steady', at: '2026-11-04T00:00:00Z', values: { relax_p: 0.3 } };
+    const out = await ok('read_setup', read({ id: 'r1' }));
+    assert.deepEqual([out.from, out.recorded, out.rows], ['numerics_used', false, [{ group: 'Not recorded', label: 'Numerics as written', value: row.value }]]);
+    assert.equal(out.note, `"Run 1" started before what its case was written with was recorded: its case folder holds it; read_setup {what:'study'} has the study's numerics now.`);
   });
   it("a preset row names the preset the run is written with (the run's, as the panel names it)", async () => {
     fresh();
