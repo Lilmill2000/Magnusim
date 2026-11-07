@@ -269,9 +269,9 @@ September 2026 readiness audit. This list preserves the intended work.
     with k-omega SST's walls before the validation set's fix of 2026-11-06;
     with Spalding's law it reads -1.6 % and +0.3 % (the whole set run again
     on 2026-11-07 from one commit, with the validation set's cases);
-  - the validation set's tolerances, once its first full run is reviewed
-    (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`), and
-    its public page.
+  - the validation set's tolerances, once Daniel has reviewed a full run of
+    the whole set (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`),
+    and its public page.
 
 - **The validation set, after v1 (`magnusim-web/validation/`):**
   - lock its tolerances once Daniel has reviewed a full run of the whole set from one

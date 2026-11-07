@@ -178,7 +178,7 @@ def _note_standard_friction(by: dict[str, dict[str, Any]]) -> str:
         "reading's. The cause was the app's schemes: plain linear interpolation and Gauss linear gradients ignore a "
         "cell's skewness, which Standard's tetrahedra (between its hex core and its wall layers) have in every "
         "direction, so the mass flux and the velocity gradient the viscous term reads were wrong there, and the flow "
-        "needed about 17 % more pressure gradient. Both are skew-corrected now (flux(HbyA) skewCorrected linear, and "
+        "needed about 16 % more pressure gradient. Both are skew-corrected now (flux(HbyA) skewCorrected linear, and "
         f"grad(U) the study's gradient limiter on Gauss skewCorrected linear){reads}. Convection's numerical "
         "diffusion was not the cause (at Re 1 the excess stayed +11 %), nor the gradient limiter, the non-orthogonal "
         "correctors, the hex core, the wall layers or the cross-section's faceting."
