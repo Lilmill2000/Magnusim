@@ -156,16 +156,33 @@ NOTES = (
     "the line's averaging enters both nearly alike. The 99 % point lies where the centreline speed is nearly flat: "
     "a change in the fourth digit of the solution moves it by millimetres, and repeated runs of the same plan can "
     "read a few per cent apart. Its band is wide (±15 %) for that reason and for the 99 % definition.",
-    "On Standard the first full run (commit aaabb531) read the friction factor 16 % above the exact value, and "
-    "the wall shear stress the run saved carried the same excess: the solution's, not the reading's. The cause "
-    "was the app's schemes: plain linear interpolation and Gauss linear gradients ignore a cell's skewness, which "
-    "Standard's tetrahedra (between its hex core and its wall layers) have in every direction, so the mass flux "
-    "and the velocity gradient the viscous term reads were wrong there, and the flow needed about 17 % more "
-    "pressure gradient. Both are skew-corrected now (flux(HbyA) and grad(U); the gradient limiter is on the "
-    "convection gradient only): on the 4-core probes of 2026-11-06 Standard read f·Re 64.13 and Hex-dominant 63.21. "
-    "Convection's numerical diffusion was not the cause (at Re 1 the excess stayed +11 %), nor the gradient "
-    "limiter, the non-orthogonal correctors, the hex core, the wall layers or the cross-section's faceting.",
+    lambda by: _note_standard_friction(by),
 )
+
+
+def _note_standard_friction(by: dict[str, dict[str, Any]]) -> str:
+    """Standard's friction, fixed after the first full run: what that run read (commit aaabb531, in git's
+    history) and what the reported runs read (their results, so a rerun's figures are the note's)."""
+    from ..notes import and_list
+
+    now = []
+    for variant, label in (("standard", "Standard"), ("hexdominant", "Hex-dominant")):
+        q = _q(by.get(variant) or {}, "fRe")
+        err = (q.get("error") or {}).get("rel_pct")
+        if q.get("value") is not None and isinstance(err, (int, float)):
+            now.append(f"{label} f·Re {q['value']:.2f} ({err:+.2f} %)")
+    reads = f": the reported runs read {and_list(now)}" if now else ""
+    return (
+        "On Standard the first full run (commit aaabb531) read the friction factor 16 % above the exact value "
+        "(f·Re 74.23), and the wall shear stress the run saved carried the same excess: the solution's, not the "
+        "reading's. The cause was the app's schemes: plain linear interpolation and Gauss linear gradients ignore a "
+        "cell's skewness, which Standard's tetrahedra (between its hex core and its wall layers) have in every "
+        "direction, so the mass flux and the velocity gradient the viscous term reads were wrong there, and the flow "
+        "needed about 17 % more pressure gradient. Both are skew-corrected now (flux(HbyA) skewCorrected linear, and "
+        f"grad(U) the study's gradient limiter on Gauss skewCorrected linear){reads}. Convection's numerical "
+        "diffusion was not the cause (at Re 1 the excess stayed +11 %), nor the gradient limiter, the non-orthogonal "
+        "correctors, the hex core, the wall layers or the cross-section's faceting."
+    )
 
 # A steady run that stops at its iteration limit counts as settled only when these histories
 # (the run's monitors) moved less than SETTLE_DRIFT over its last 10 % of iterations.

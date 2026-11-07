@@ -145,10 +145,68 @@ def test_standard_k_epsilons_small_error_is_read_against_its_walls_own_error():
     assert "y+ 11.6 to 12.3 on the reported run (the pre-run check estimated 9.7), all above its wall function's switch at y+ 11.53" in above
     assert "its f -3.79 % and f_tau -2.98 % mean the rest" in above and "reads it 1.0 to 1.8 points high" in above
     assert "most likely errors that cancel, not a sign that it is the best variant" in above
-    assert "f -0.96 % and f_tau +0.34 % at y+ 11.8 to 12.5" in above
+    # The reported run is after the fixes: no probe of them beside it.
+    assert "4-core probe" not in above and "-0.96 %" not in above
     both = note({"standard_kepsilon": _ke_run((-3.79, -2.98), (11.4, 11.9, 12.3))})
     assert "on both sides of its wall function's switch at y+ 11.53 (their area-weighted mean 11.9)" in both
     below = note({"standard_kepsilon": _ke_run((4.0, 5.0), (9.6, 10.0, 10.9))})
-    assert "all below its wall function's switch" in below and "points high" not in below.split("The 4-core probe")[0]
+    assert "all below its wall function's switch" in below and "points high" not in below
     committed = [r for r in load_results() if r["case"] == "c2_turbulent_pipe"]
     assert any("errors that cancel" in n for n in case_notes(cases.get("c2_turbulent_pipe"), committed))
+
+
+def test_the_laminar_pipe_note_quotes_the_reported_runs_friction():
+    """Case 1's note on Standard's friction quoted 4-core probes (f·Re 64.13 and 63.21) and said the
+    gradient limiter was on the convection gradient only; the limiter is inside grad(U) again (94d15ce6),
+    and the reported runs' own f·Re is what the note gives."""
+    case = cases.get("c1_laminar_pipe")
+    mine = [r for r in load_results() if r["case"] == "c1_laminar_pipe"]
+    text = " ".join(case_notes(case, mine))
+    for r in mine:
+        q = next(q for q in r["quantities"] if q["key"] == "fRe")
+        assert f"f·Re {q['value']:.2f} ({q['error']['rel_pct']:+.2f} %)" in text
+    assert "the convection gradient only" not in text and "64.13" not in text
+    assert "grad(U) the study's gradient limiter on Gauss skewCorrected linear" in text
+    assert "first full run (commit aaabb531)" in text and "f·Re 74.23" in text
+    again = " ".join(case_notes(case, [_rerun(r) for r in mine]))
+    for r in mine:
+        q = next(q for q in r["quantities"] if q["key"] == "fRe")
+        assert f"f·Re {q['value']:.2f} (" not in again
+
+
+def _sst_run(errs: tuple[float, float], within: tuple[bool, bool], *, written: str | None = None) -> dict:
+    run: dict = {"numerics_used": {"written": [{"label": "Velocity gradient", "value": written}]}} if written else {}
+    return {
+        "variant": "standard_sst",
+        "shown": {"y_plus": {"min": 9.99, "mean": 11.0, "max": 11.7, "n_faces": 10}},
+        "run": run,
+        "quantities": [{"key": k, "error": {"rel_pct": e}, "within": w, "tolerance": {"rel_pct": 10.0}}
+                       for k, e, w in zip(("f", "f_tau"), errs, within, strict=True)],
+    }
+
+
+def test_the_standard_sst_note_reads_the_reported_run():
+    """k-omega SST on Standard is the case's two values outside their bands: the note gives the reported
+    run's errors, y+ and the velocity gradient its case was written with, and calls it a limitation."""
+    note = cases.get("c2_turbulent_pipe")._note_standard_sst
+    assert note({}) is None
+    plain = ("grad(U) Gauss linear inside the gradient limiter, not skew-corrected: k-omega SST on a Standard mesh; "
+             "linearUpwind, the viscous terms and turbulence production read it")
+    text = note({"standard_sst": _sst_run((-14.25, -17.05), (False, False), written=plain),
+                 "hexdominant_sst": {"quantities": [{"key": "f", "error": {"rel_pct": -4.14}},
+                                                     {"key": "f_tau", "error": {"rel_pct": -3.06}}]}})
+    assert text.startswith("On Standard, k-omega SST read f -14.25 % and f_tau -17.05 % on the reported run "
+                           "(its wall faces where f is read at y+ 9.99 to 11.7), both outside the ±10 % band.")
+    assert ("(its \"Numerics as written\": grad(U) Gauss linear inside the gradient limiter, not skew-corrected: "
+            "k-omega SST on a Standard mesh).") in text
+    assert "This is a limitation, not fixed" in text
+    assert "On Hex-dominant the same model and walls read f -4.14 % and f_tau -3.06 %" in text
+    one = note({"standard_sst": _sst_run((-9.0, -11.0), (True, False))})
+    assert "f_tau outside the ±10 % band" in one and "Numerics as written" not in one and "Hex-dominant the same" not in one
+    inside = note({"standard_sst": _sst_run((-5.0, -6.0), (True, True))})
+    assert "outside" not in inside
+    committed = [r for r in load_results() if r["case"] == "c2_turbulent_pipe"]
+    std = next(r for r in committed if r["variant"] == "standard_sst")
+    words = " ".join(case_notes(cases.get("c2_turbulent_pipe"), committed))
+    f = next(q for q in std["quantities"] if q["key"] == "f")
+    assert f"On Standard, k-omega SST read f {f['error']['rel_pct']:+.2f} %" in words

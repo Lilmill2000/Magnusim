@@ -175,10 +175,38 @@ def _note_standard_kepsilon(by: dict[str, dict[str, Any]]) -> str | None:
             f"reads it {rest[0]:.1f} to {rest[1]:.1f} points high: most likely errors that cancel, not a sign that it is "
             "the best variant."
         )
-    return text + (
-        " The 4-core probe after the fixes of 2026-11-06 read f -0.96 % and f_tau +0.34 % at y+ 11.8 to 12.5: errors "
-        "that cancel there too (the rest 3.8 to 5.1 points high)."
-    )
+    return text
+
+
+def _note_standard_sst(by: dict[str, dict[str, Any]]) -> str | None:
+    """k-omega SST on Standard against its band, the reported run's own errors and y+ and the velocity
+    gradient its case was written with (its "Numerics as written"), beside Hex-dominant's run of the same
+    model. None without that run's two errors."""
+    res = by.get("standard_sst") or {}
+    qs = [_q(res, k) for k in ("f", "f_tau")]
+    errs = [(q.get("error") or {}).get("rel_pct") for q in qs]
+    if not all(isinstance(e, (int, float)) for e in errs):
+        return None
+    band = (qs[0].get("tolerance") or {}).get("rel_pct")
+    outside = [q for q in qs if q.get("within") is False]
+    side = (f", {'both' if len(outside) == 2 else 'f' if outside[0] is qs[0] else 'f_tau'} outside the ±{band:g} % band"
+            if outside and isinstance(band, (int, float)) else "")
+    yp = (res.get("shown") or {}).get("y_plus") or {}
+    at = f" (its wall faces where f is read at y+ {float(yp['min']):.3g} to {float(yp['max']):.3g})" if yp else ""
+    text = f"On Standard, k-omega SST read f {errs[0]:+.2f} % and f_tau {errs[1]:+.2f} % on the reported run{at}{side}."
+    written = next((str(r.get("value")) for r in ((res.get("run") or {}).get("numerics_used") or {}).get("written") or []
+                    if r.get("label") == "Velocity gradient"), "")
+    if written:
+        text += (" Its case was written with the plain velocity gradient and flux, as the app writes k-omega SST on a "
+                 f"Standard mesh (its \"Numerics as written\": {written.split(';')[0]}).")
+    text += (" This is a limitation, not fixed: from an inlet, k-omega SST reads a pipe's friction low on Standard's "
+             "tetrahedra (the probes of 2026-11-07 read it 11 to 18 % low with wall layers, and why is not shown: the "
+             "validation README, \"k-omega SST on Standard's tetrahedra\").")
+    hex_errs = [(_q(by.get("hexdominant_sst") or {}, k).get("error") or {}).get("rel_pct") for k in ("f", "f_tau")]
+    if all(isinstance(e, (int, float)) for e in hex_errs):
+        text += (f" On Hex-dominant the same model and walls read f {hex_errs[0]:+.2f} % and f_tau {hex_errs[1]:+.2f} %: "
+                 "the Study panel's model help says what a pipe from an inlet read on each mesher.")
+    return text
 
 
 NOTES = (
@@ -213,6 +241,7 @@ NOTES = (
     "low with the first cell's centre at y+ 1 to 3. Hex-dominant's one wall layer of 0.6 mm is sized for about "
     "35; Standard sizes its own layers, so its y+ is what its layers give.",
     lambda by: _note_standard_kepsilon(by),
+    lambda by: _note_standard_sst(by),
     "Each mesher's mesh is made once and both turbulence models solve on it (the k-epsilon run on the k-omega SST "
     "run's mesh, the same geometry, fluid, BCs and mesh settings).",
 )
