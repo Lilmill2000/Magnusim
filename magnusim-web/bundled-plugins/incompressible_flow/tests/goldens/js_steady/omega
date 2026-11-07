@@ -15,6 +15,7 @@ boundaryField
     walls
     {
         type          omegaWallFunction;
+        blending          stepwise;
         value          uniform 1572.04;
     }
     velocity_inlet_1

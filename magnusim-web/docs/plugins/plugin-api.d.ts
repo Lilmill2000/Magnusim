@@ -567,8 +567,9 @@ declare module '@magnusim/plugin-api/_internal/panels/legacyBridge' {
       checked_at_start?: RunCheckRow[] | null;
       /**
        * RH3: "Numerics as written": what the run's case is written with (its analysis's
-       * RunModel.check `numerics`), for a draft from its study, for a started run from what it
-       * started with (`numerics_used`) once it has one; null when there is none to show.
+       * RunModel.check `numerics`), for a draft from its study, for a started run as its case was
+       * written (the rows recorded then, `numerics_used.written`, or one row saying a run started
+       * before they were recorded has none) once it has `numerics_used`; null when there is none to show.
        */
       numerics?: RunNumericsRow[] | null;
   }

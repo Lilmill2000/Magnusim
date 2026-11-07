@@ -32,6 +32,9 @@ A row is ``{code, level, text, short, fix, alt, kept}``:
   1e-12 to 1e-3."). It is used as saved: bounds apply only to an edit, and nothing refuses it.
 - ``kept``: the person (or the Assistant) chose "Keep as set" for this code (the run's
   ``checks_kept``).
+- The analysis's own rows (``analysis_rows`` in the inputs): what only it can word, from its
+  physics and the mesh facts (Incompressible Flow's ``wall_friction_mesh``: a turbulent study
+  whose Standard mesh has no wall layers), kept and ordered as the core's own.
 
 The estimate (transient): ``Δt = maxCo / (U · 1.5 · rate)`` from the mesh's Courant-rate
 table (:mod:`magnusim_sdk.run_estimate`), the steps to the end, the wall time on this PC
@@ -64,6 +67,7 @@ CODE_ORDER = (
     "non_ortho_correctors",
     "mesh_skew",
     "layers_dropped",
+    "wall_friction_mesh",
     "yplus_model",
     "laminar_turbulent",
     "mach",
@@ -270,6 +274,10 @@ class _Run:
         self.two_d_unmirrored = [e for e in (i.get("two_d_unmirrored") or []) if isinstance(e, dict)]
         self.walls_through = [e for e in (i.get("walls_through") or []) if isinstance(e, dict)]
         self.walls_curved = [e for e in (i.get("walls_curved") or []) if isinstance(e, dict)]
+        # The analysis's own rows (its physics, which the core does not word).
+        self.analysis_rows = [
+            a for a in (i.get("analysis_rows") or []) if isinstance(a, dict) and a.get("code") and a.get("text") and a.get("level") in LEVEL_ORDER
+        ]
         # False when the analysis could read only the run's settings (no mesh yet): its mesh
         # and physics were not checked, and "nothing found" must not say they were.
         self.complete = i.get("inputs_complete") is not False
@@ -795,7 +803,7 @@ def _physics_rows(r: _Run, rows: list[dict[str, Any]]) -> dict[str, Any]:
         mm = fmt(first * 1000, 2)
         if r.wall_functions and yp < YPLUS_WALL_FN_MIN:
             said = f"Estimated y+ ≈ {fmt(yp, 2)} (first cell {mm} mm). {r.model_label or 'This model'}'s wall functions assume y+ above about 30"
-            said += f"; {r.model_fix['label']} handles any y+." if r.model_fix else "."
+            said += f"; {r.model_fix['label']} suits lower y+." if r.model_fix else "."
             rows.append(
                 _row(
                     "yplus_model",
@@ -841,7 +849,7 @@ def _physics_rows(r: _Run, rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _model_fix(r: _Run) -> dict[str, Any] | None:
-    """The study's turbulence model the analysis offers for any y+ (its own words and key)."""
+    """The study's turbulence model the analysis offers for lower y+ (its own words and key)."""
     if not r.model_fix:
         return None
     return _fix(str(r.model_fix["label"]), "study", {str(r.model_fix["key"]): r.model_fix.get("value")})
@@ -885,6 +893,19 @@ def _range_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
     n = len(r.out_of_range)
     short = str(r.out_of_range[0].get("short") or r.out_of_range[0].get("label") or "") if n == 1 else f"{n} settings out of range"
     rows.append(_row("setting_out_of_range", "warn", text, short or "a setting out of range"))
+
+
+def _analysis_rows(r: _Run, rows: list[dict[str, Any]]) -> None:
+    """The analysis's own rows (``analysis_rows``), each once by its code."""
+    have = {row["code"] for row in rows}
+    for a in r.analysis_rows:
+        code = str(a["code"])
+        if code in have:
+            continue
+        have.add(code)
+        fix = a.get("fix") if isinstance(a.get("fix"), dict) else None
+        alt = a.get("alt") if isinstance(a.get("alt"), dict) else None
+        rows.append(_row(code, str(a["level"]), str(a["text"]), str(a.get("short") or code), fix, alt))
 
 
 def _cells_words(n: float) -> str:
@@ -975,7 +996,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     velocity limit, None without one); ``time_varying``, ``moving``; ``turbulence`` (the
     analysis's words for its model: ``laminar``, ``label``, ``fields`` that can go negative,
     ``wall_functions``, and ``any_yplus``: ``{label, key, value}``, the study setting of a model
-    that handles any y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
+    that suits lower y+); ``steady_algorithm`` (its steady pressure-velocity algorithm's name);
     ``nu`` (m²/s); ``d_hyd`` (m, the inlet's hydraulic diameter); ``ref_length`` (m, the
     length Re is taken on without an inlet: a body's reference length; its turbulent limit is a
     boundary layer's, as on the domain's length); ``initial_flow``,
@@ -990,7 +1011,9 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
     walls whose velocity crosses their own faces, ``[{name, faces, velocity}]``, and those on
     curved faces checked at their middle only, ``[{name, faces}]``); ``no_estimate`` (the line's words when the analysis
     gives no time step); ``out_of_range`` (RH3: stored settings outside their field's range,
-    ``magnusim_sdk.numerics_settings.out_of_range``); ``inputs_complete`` (False when only the run's settings could be
+    ``magnusim_sdk.numerics_settings.out_of_range``); ``analysis_rows`` (rows of the analysis's own physics,
+    ``[{code, level, text, short, fix?, alt?}]``, kept and ordered as the core's: what the core
+    cannot word, as it names no flow model); ``inputs_complete`` (False when only the run's settings could be
     read, as before a mesh: the estimate's ``complete`` then says the mesh and physics were
     not checked, and ``unchecked`` says so in the analysis's words, from ``unchecked``).
     """
@@ -1007,6 +1030,7 @@ def check(inputs: dict[str, Any]) -> dict[str, Any]:
         _steady_rows(r, rows)
     _start_rows(r, rows)
     _range_rows(r, rows)
+    _analysis_rows(r, rows)
     for row in rows:
         row["kept"] = row["code"] in r.kept
     order = {c: n for n, c in enumerate(CODE_ORDER)}

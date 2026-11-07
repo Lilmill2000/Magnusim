@@ -257,33 +257,35 @@ September 2026 readiness audit. This list preserves the intended work.
   - the energy balance counts the heat the flow carries through openings, not
     heat conducted back out of an inlet;
   - heat through walls on Standard (tetrahedral) meshes: the validation read
-    it up to about 14 % high next to a laminar flow (the laminar pipes),
-    about 20 % low with wall functions (the turbulent pipe), about 6 % high
-    through a solid's walls (the gradient at the wall of a tetrahedron;
-    corrected schemes do not help), and within 1.5 % in the cavity; the
-    study panel says so, and a Heat Transfer study's new mesh starts on
+    it up to about 14 % high next to a laminar flow (the laminar pipes) and
+    about 6 % high through a solid's walls (the gradient at the wall of a
+    tetrahedron; corrected schemes do not help); the turbulent pipe read
+    within 0.4 % and the cavity within 1.5 %; the study panel and the
+    pre-run check say so, and a Heat Transfer study's new mesh starts on
     Hex-dominant. A wall-normal correction, or prism layers that always
     hold, would fix it;
-  - the turbulent pipe (Re = 50 000, k-omega SST, wall functions) reads
-    about 10 % under Gnielinski's correlation on Hex-dominant, more than the
-    correlation's own scatter, and why is not known yet (its slices are 17.5
-    to 22.5 D after a uniform inlet; the wall's y+ is about 12 to 56, so part
-    of the first cells sit in the buffer layer): a longer pipe or a fully
-    developed inlet, and y+ near 1 with low-Re wall treatment or y+ above 30
-    everywhere, would tell which;
-  - the validation set's tolerances, once its first full run is reviewed
-    (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`), and
-    its public page.
+  - the turbulent pipe (Re = 50 000, k-omega SST, wall functions) read about
+    10 % (Hex-dominant) and 20 % (Standard) under Gnielinski's correlation
+    with k-omega SST's walls before the validation set's fix of 2026-11-06;
+    with Spalding's law it reads -1.6 % and +0.3 % (the whole set run again
+    on 2026-11-07 from one commit, with the validation set's cases);
+  - the validation set's tolerances, once Daniel has reviewed a full run of
+    the whole set (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`),
+    and its public page.
 
 - **The validation set, after v1 (`magnusim-web/validation/`):**
-  - lock its tolerances once its first full run (2026-11-06, commit aaabb531) is
-    reviewed; a locked value outside its band then fails `npm run test:validation`
-    and blocks a release;
+  - lock its tolerances once Daniel has reviewed a full run of the whole set from one
+    commit (the second, 2026-11-07, commit 977c1480, after the two fixes below, is the
+    one to review); a locked value outside its band then fails
+    `npm run test:validation` and blocks a release;
   - publish its page (`docs/validation/`, GitHub Pages from `docs/`);
-  - the values outside their bands: the laminar pipe's friction on Standard
-    (+16 %, its momentum convection on cells not aligned with the flow, under
-    investigation) and the turbulent pipe with k-omega SST (-13 % on Hex-dominant,
-    -25 % on Standard; k-epsilon sits inside on both);
+  - the values outside their bands: on the first full run the laminar pipe's
+    friction on Standard (+16 %: the flux and the velocity gradient ignored the
+    tetrahedra's skew, fixed: +0.03 % on the second) and the turbulent pipe with
+    k-omega SST (-13 % on Hex-dominant: its walls, fixed: -4.1 % on the second;
+    -25 % on Standard: not fixed, a limitation: with the new walls and the plain
+    schemes k-omega SST keeps on Standard the second full run read f -14.3 % and
+    f_tau -17.1 %, the two values outside their ±10 % bands);
   - the app gaps it found (its README): a vector's components in Plot over path
     (G2), mean, rms and frequency over a time window on a Graphs card (G8), a
     periodic inlet (G9), a developed (parabolic) velocity inlet (G10), a box

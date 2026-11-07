@@ -239,6 +239,10 @@ def test_restart_arg():
     past = run_case.restart_arg('{"end_time": 300, "stops_off": true}')
     assert past == {"end_time": 300.0, "write_interval": None, "stops_off": True}
     assert "stops_off" not in run_case.restart_arg('{"end_time": 300, "stops_off": false}')
+    # RH3: a Continue that goes on with the numerics the run had keeps its schemes and saved walls.
+    kept = run_case.restart_arg('{"end_time": 300, "keep_numerics": true}')
+    assert kept == {"end_time": 300.0, "write_interval": None, "keep_numerics": True}
+    assert "keep_numerics" not in run_case.restart_arg('{"end_time": 300, "keep_numerics": false}')
     for bad in (
         "[1]",
         "{}",
@@ -246,6 +250,7 @@ def test_restart_arg():
         '{"end_time": true}',
         '{"end_time": 5, "write_interval": "x"}',
         '{"end_time": 5, "stops_off": "yes"}',
+        '{"end_time": 5, "keep_numerics": 1}',
     ):
         with pytest.raises(ValueError):
             run_case.restart_arg(bad)

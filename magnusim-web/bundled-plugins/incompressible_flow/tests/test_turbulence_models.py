@@ -44,8 +44,9 @@ SOLVED = {
     "SSG": ("R", "epsilon"),
 }
 ALL_TURB = {"k", "omega", "epsilon", "R", "nut", "nuTilda"}
-# nut at a no-slip wall: Spalding's law (any y+) for Spalart-Allmaras, else the high-Re wall function.
-NUT_WALL = {"SpalartAllmaras": "nutUSpaldingWallFunction"}
+# nut at a no-slip wall: Spalding's law for Spalart-Allmaras and k-omega SST, else the k-based
+# log law (nutkWallFunction).
+NUT_WALL = {"SpalartAllmaras": "nutUSpaldingWallFunction", "kOmegaSST": "nutUSpaldingWallFunction"}
 
 
 def _project(tmp_path: Path, record: dict) -> Path:

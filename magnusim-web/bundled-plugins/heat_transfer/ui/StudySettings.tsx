@@ -199,14 +199,18 @@ export function useStudyMeshEngine(projectId: string, simId: string, fresh = '')
 export const STANDARD_HEAT_HIGH_PCT = 6;
 /** The validation set's laminar pipes on a Standard mesh read Nu up to this much high (VALIDATION.md). */
 export const STANDARD_LAMINAR_HIGH_PCT = 14;
-/** Its turbulent pipe (k-omega SST, wall functions) on a Standard mesh read Nu about this much low. */
-export const STANDARD_TURBULENT_LOW_PCT = 20;
+/** Its turbulent pipe (k-omega SST, wall functions, no layers) on a Standard mesh read Nu within this much (VALIDATION.md). */
+export const STANDARD_TURBULENT_WITHIN_PCT = 1;
 
-/** The note of a study on a Standard mesh: how far the heat through walls was off there. */
+/**
+ * The note of a study on a Standard mesh: how far the heat through walls was off there. The pre-run
+ * check says the same (heat_transfer/precheck.py STANDARD_MESH_NOTE, word for word), where the
+ * Assistant reads it.
+ */
 export const STANDARD_MESH_NOTE =
-  `On a Standard mesh (tetrahedra) the heat through walls is less accurate: up to about ${STANDARD_LAMINAR_HIGH_PCT} % ` +
-  `high next to a laminar flow and about ${STANDARD_TURBULENT_LOW_PCT} % low with wall functions (the validation's pipes), ` +
-  `about ${STANDARD_HEAT_HIGH_PCT} % high through a solid's walls; natural convection in a cavity was within 1.5 %. ` +
+  `On a Standard mesh (tetrahedra) the heat through walls is less accurate next to a laminar flow: up to about ${STANDARD_LAMINAR_HIGH_PCT} % ` +
+  `high (the validation's laminar pipes), and about ${STANDARD_HEAT_HIGH_PCT} % high through a solid's walls. Its turbulent pipe ` +
+  `(k-omega SST, wall functions) read within about ${STANDARD_TURBULENT_WITHIN_PCT} %, and natural convection in a cavity within 1.5 %. ` +
   'Mesh with Hex-dominant for heat numbers.';
 
 /**

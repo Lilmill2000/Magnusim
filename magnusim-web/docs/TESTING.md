@@ -14,8 +14,8 @@ run depends on what you are doing.
 | While you work on something | `npm run typecheck`, the unit tests for that area, and the e2e specs for what you touched | seconds to minutes |
 | Before a local commit | `npm run test:e2e:changed`: the suites your change can affect, without WSL meshes and solves | minutes |
 | Before a push, and nightly | `npm run test:e2e`: the quick physics checks (`npm run test:physics`, below), then every suite, with real meshes and solves | about 47 min, the physics checks under a minute of it |
-| Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about two hours |
-| Before a release, and nightly | The app's validation set: `npm run test:validation` (WSL meshes and solves through the app's routes, then `npm run validation:report`), then read `validation/VALIDATION.md`: every value against its band, and anything that moved since the last committed run | about 58 min for its 14 runs at 8 cores (2026-11-06) |
+| Before a release of a physics plugin | Its validation set: Heat Transfer's `pytest -m validation ../bundled-plugins/heat_transfer/tests -s` (from `python/`), then `python ../bundled-plugins/heat_transfer/validation/report.py` | about 35 min for its 12 cases at 8 processes (2026-11-07) |
+| Before a release, and nightly | The app's validation set: `npm run test:validation` (WSL meshes and solves through the app's routes, then `npm run validation:report`), then read `validation/VALIDATION.md`: every value against its band, and anything that moved since the last committed run | about 72 min for its 14 runs at 8 cores (2026-11-07) |
 
 The full run is the gate before a push. It is not needed for every commit. A
 validation set is never part of `-m wsl`: its cases run only when asked for.
@@ -41,12 +41,15 @@ the report) are tested by pytest (`validation/tests`, in `npm run test:py` and C
 Its app server loads only the bundled plugins (not the test plugins the core suite loads).
 `MAGNUSIM_E2E_LOCK=0` lets it run beside another WSL test run (set `--cores` low then);
 a run's result records WSL's load while it solved, so run times compare like with like.
-Results are report-only until the first full run's tolerances are locked; then a locked
-quantity outside its tolerance fails `npm run test:validation` and blocks a release. The
-first full run of all six cases (2026-11-06, commit aaabb531, OpenFOAM v2606, 57.7 minutes)
-waits for Daniel's review; until then nothing is locked. Its meshes are not exactly the same
-from one generate to the next (snappyHexMesh and gmsh in parallel), so a rerun can move a
-value a little: case 1's development length about 1 %, case 2's Standard friction under 1 %.
+Results are report-only until Daniel has reviewed a full run of the whole set and its
+tolerances are locked; then a locked quantity outside its tolerance fails
+`npm run test:validation` and blocks a release. The report shows the second full run of all
+six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9 minutes), after two fixes to the
+case writer's schemes and walls that the first (2026-11-06, commit aaabb531, 57.7 minutes) led
+to (`validation/README.md`), with Heat Transfer's set run from the same commit; nothing is
+locked until Daniel has reviewed it. Its meshes are not exactly the same from one generate to
+the next (snappyHexMesh and gmsh in parallel), so a rerun can move a value a little: case 1's
+development length about 1 %, case 2's Standard friction under 1 %.
 
 ## The quick physics checks
 
@@ -64,8 +67,12 @@ validation set's to check.
 | Laminar pipe, Re 100, a 5-block O-grid of 51 000 cells, 2 cores | f Re = 64 and U_cl / U_b = 2, each within 2 %, over x/D 10 to 13 | 64.19 and 1.986; 175 iterations, 7 s |
 | Circular cylinder, Re 20, one cell across, a ring 20 D out in one Freestream | Cd within 10 % of 2.02 (Forces monitor, the study's reference values) | 2.0675 (+2.35 %); 537 iterations, 3 s |
 
-Every run must stop on its residual targets. The bands are the validation set design's, not
-fitted to these runs. `npm run test:physics` took 26 s in all on 2026-11-06.
+Every run must stop on its residual targets. The cavity's and the pipe's bands are the
+validation set design's (1.12), not fitted to these runs; the cylinder's ±10 % is this check's
+own: the reference data give ±5 %, widened here for the ring's 2.5 % blockage and its coarse
+grid. `npm run test:physics` took 26 s in all on 2026-11-06; after that day's fixes to the
+schemes and k-omega SST's walls its pytest took 34 s, the pipe reading f Re 63.91 and
+U_cl / U_b 1.985 and the cylinder Cd 2.0671 (the cavity the same).
 
 The full tier (`npm run test:e2e`, before a push and nightly) runs them first, under the
 PC's WSL test lock. Nothing else does: not the per-commit fast tier (`test:e2e:changed`, also

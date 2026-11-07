@@ -243,13 +243,15 @@ describe('Heat Transfer study settings with a solid body (conjugate heat transfe
     );
   });
 
-  it('says that a Standard mesh reads wall heat high, and not for a Hex-dominant one', async () => {
+  it('says that a Standard mesh reads wall heat high next to a laminar flow and through solids, and not for a Hex-dominant one', async () => {
     materials([AIR, AL], 'standard');
     renderPanel();
     expect(await screen.findByText(STANDARD_MESH_NOTE)).toBeInTheDocument();
-    expect(STANDARD_MESH_NOTE).toContain('up to about 14 % high next to a laminar flow');
-    expect(STANDARD_MESH_NOTE).toContain('about 20 % low with wall functions');
+    expect(STANDARD_MESH_NOTE).toContain('less accurate next to a laminar flow: up to about 14 % high');
     expect(STANDARD_MESH_NOTE).toContain("about 6 % high through a solid's walls");
+    // The turbulent pipe with k-omega SST's walls (Spalding's law since 2026-11-06) reads +0.3 %, not 20 % low.
+    expect(STANDARD_MESH_NOTE).toContain('Its turbulent pipe (k-omega SST, wall functions) read within about 1 %');
+    expect(STANDARD_MESH_NOTE).not.toContain('20 % low');
     cleanup();
     materials([AIR, AL], '');
     renderPanel();

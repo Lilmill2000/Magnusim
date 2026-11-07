@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { NO_WSL, waitSlotFree, wslPathExists } from '../../../e2e/support/plugin-suite.js';
 
@@ -8,7 +8,12 @@ import { NO_WSL, waitSlotFree, wslPathExists } from '../../../e2e/support/plugin
 // ones, its residual plot runs on from where it was (one series over both parts, the
 // panel's plot drawing all of it), its steps count on from the first part's total, and
 // its case keeps the first part's solver log as log.simpleFoam.1. Its WSL copy goes once
-// the results are back, as for any solve.
+// the results are back, as for any solve. RH3: a Continue with nothing changed goes on with
+// what the run had: its case keeps its own fvSchemes, byte for byte (w27-case.json
+// restart.kept_numerics). A Continue with the study's new numerics ("Continue with the new
+// numerics") writes fvSchemes afresh and gives the saved time's wall patches the writer's
+// entries (restart.walls_rewritten): a run whose saved time an earlier writer wrote with
+// nutkWallFunction solves on with Spalding's law, as its "Numerics as written" says.
 const WSL = (process.env.MAGNUSIM_E2E_WSL || process.env.CFDDESK_E2E_WSL) === '1';
 const ID = 'sample-project-steady-state-e2e';
 const SIM = 'sim_1';
@@ -88,6 +93,7 @@ test('Continue +10 on a finished steady run: the residual plot is continuous and
   expect(from).toBeGreaterThan(0);
   expect(first.residuals.length).toBeGreaterThan(1);
   const framesBefore = Number(first.n_saved_times);
+  const schemesBefore = readFileSync(join(first.case_dir, 'system', 'fvSchemes'), 'utf8');
 
   // Continue: 10 more iterations from the last saved result.
   panel = await openRunPanel(page, rid);
@@ -123,6 +129,9 @@ test('Continue +10 on a finished steady run: the residual plot is continuous and
   expect(existsSync(join(second.case_dir, 'log.simpleFoam.1'))).toBe(true);
   expect(existsSync(join(second.case_dir, 'log.simpleFoam'))).toBe(true);
   expect(wslPathExists(second.wsl_case_path), `${second.wsl_case_path} removed after the solve`).toBe(false);
+  // RH3: nothing changed, so it went on with what the run had: its own fvSchemes, byte for byte.
+  expect(JSON.parse(readFileSync(join(second.case_dir, 'w27-case.json'), 'utf8')).restart).toMatchObject({ kept_numerics: true });
+  expect(readFileSync(join(second.case_dir, 'system', 'fvSchemes'), 'utf8')).toBe(schemesBefore);
 
   // The panel's plot draws both parts as one line per series, to the new end.
   panel = await openRunPanel(page, rid);
@@ -210,4 +219,107 @@ test('Continue on a converged run runs every iteration past its convergence', as
   } finally {
     await study({ residual_u: 1e-4, residual_p: 1e-4 });
   }
+});
+
+// RH3, solved for real (WSL): a Continue with the study's new numerics solves with what its rows
+// say. The first part's saved time is given nutkWallFunction on its walls, as a run an earlier
+// writer wrote saved it; the study turns to the Accurate preset; the person picks "Continue with
+// the new numerics". The case's fvSchemes is written afresh (the Accurate limiter), the saved
+// time's nut walls take the writer's Spalding's law (w27-case.json restart.walls_rewritten), and
+// the run finishes. Fails on the code before it: the saved time kept nutkWallFunction.
+test.describe('Continue with the new numerics', () => {
+  /** The study fields to put back after the test. */
+  let restore = null;
+
+  test.afterEach(async ({ page, request }) => {
+    await page.close();
+    if (restore) await postJson(request, '/api/simulation/update', { project_id: ID, simulation_id: SIM, ...restore });
+    restore = null;
+  });
+
+  test("writes fvSchemes afresh and gives the saved time's walls the writer's entries", async ({ page, request }) => {
+    test.skip(!WSL, NO_WSL);
+    test.setTimeout(2_400_000);
+    page.setDefaultTimeout(30_000);
+    const run = async (rid) => (await getJson(request, `/api/run/status?project_id=${ID}&simulation_id=${SIM}&run_id=${encodeURIComponent(rid)}`)).run || {};
+    const ended = async (rid) => {
+      await expect
+        .poll(async () => {
+          const r = await run(rid);
+          return String(r.run_id || r.id) === rid ? r.status : 'wait';
+        }, { timeout: 900_000, intervals: [3_000] })
+        .toMatch(/done|failed|stopped/);
+      return run(rid);
+    };
+    const was = (await getJson(request, `/api/simulation?project_id=${ID}&simulation_id=${SIM}`)).simulation || {};
+    restore = { numerics_preset: was.numerics_preset ?? null, turbulence_model: was.turbulence_model ?? null, time_dependency: was.time_dependency || 'Steady-state' };
+    const set = async (patch) => {
+      const r = await postJson(request, '/api/simulation/update', { project_id: ID, simulation_id: SIM, ...patch });
+      expect(r.ok(), await r.text()).toBe(true);
+    };
+    await set({ time_dependency: 'Steady-state', turbulence_model: 'kOmegaSST', numerics_preset: 'robust' });
+    const meshes = async () => (await getJson(request, `/api/run/status?project_id=${ID}&simulation_id=${SIM}`)).meshes || [];
+    if (!(await meshes()).some((m) => m.ready && m.n_cells > 0)) {
+      await waitSlotFree(request, { timeoutMs: 900_000 });
+      const made = await postJson(request, '/api/mesh/generate', {
+        project_id: ID,
+        simulation_id: SIM,
+        mesh_id: 'mesh_1',
+        name: 'Mesh 1',
+        settings: { fineness: 1, hex_element_core: false, automatic_boundary_layers: false },
+      });
+      expect(made.status(), await made.text()).toBeLessThan(300);
+      await expect.poll(async () => (await meshes()).some((m) => m.ready && m.n_cells > 0), { timeout: 900_000, intervals: [3_000] }).toBe(true);
+    }
+    await waitSlotFree(request, { timeoutMs: 900_000 });
+
+    const created = await (await postJson(request, '/api/run/create', { project_id: ID, simulation_id: SIM, name: 'New numerics' })).json();
+    const rid = String(created.run_id || (created.run && (created.run.id || created.run.run_id)) || created.id);
+    const upd = await postJson(request, '/api/run/update', { project_id: ID, simulation_id: SIM, run_id: rid, endTime: 20, writeInterval: 10 });
+    expect(upd.ok(), await upd.text()).toBe(true);
+    let panel = await openRunPanel(page, rid);
+    await expect(panel.locator('[data-run-start]')).toBeEnabled({ timeout: 60_000 });
+    await panel.locator('[data-run-start]').click();
+    const first = await ended(rid);
+    expect(first.status, first.error || first.note).toBe('done');
+    const from = Number(first.last_saved_iteration);
+    const savedNut = join(first.case_dir, String(from), 'nut');
+    const schemesBefore = readFileSync(join(first.case_dir, 'system', 'fvSchemes'), 'utf8');
+    expect(schemesBefore).toContain('cellLimited Gauss');
+    // As a run an earlier writer wrote saved it: k's log law on its walls (the field file's
+    // dictionary is text in ascii and binary files alike).
+    const saved = readFileSync(savedNut, 'latin1');
+    expect(saved).toContain('nutUSpaldingWallFunction');
+    writeFileSync(savedNut, saved.replaceAll('nutUSpaldingWallFunction', 'nutkWallFunction'), 'latin1');
+
+    // The study turns to the Accurate preset; Continue asks, and the person takes the new numerics.
+    await set({ numerics_preset: 'accurate' });
+    panel = await openRunPanel(page, rid);
+    const box = panel.locator('[data-run-continue="1"]');
+    await expect(box).toBeVisible();
+    await expect(box.locator('[data-run-continue-numerics]')).toBeVisible({ timeout: 60_000 });
+    await box.locator('#run-continue-amount').fill('10');
+    await box.locator('[data-run-continue-go="1"]').click();
+    await expect(page.locator('#modal-run-continue')).toBeVisible();
+    await page.locator('#rcn-new').click();
+    await expect(page.locator('#modal-run-continue')).toBeHidden();
+    await expect.poll(async () => ((await run(rid)).attempts || []).length, { timeout: 120_000 }).toBe(1);
+    const second = await ended(rid);
+    expect(second.status, second.error || second.note).toBe('done');
+    expect(Number(second.last_saved_iteration)).toBeGreaterThan(from);
+
+    // Its case: fvSchemes afresh (the Accurate limiter), the saved time's nut walls the writer's.
+    const restart = JSON.parse(readFileSync(join(second.case_dir, 'w27-case.json'), 'utf8')).restart;
+    expect(restart.kept_numerics ?? false).toBe(false);
+    expect(Object.keys(restart.walls_rewritten || {})).toContain('nut');
+    const schemes = readFileSync(join(second.case_dir, 'system', 'fvSchemes'), 'utf8');
+    expect(schemes).not.toBe(schemesBefore);
+    expect(schemes).toContain('cellMDLimited Gauss');
+    const rewritten = readFileSync(savedNut, 'latin1');
+    expect(rewritten).toContain('nutUSpaldingWallFunction');
+    expect(rewritten).not.toContain('nutkWallFunction');
+    // Its record: the new numerics, with the rows this Continue's case was written with.
+    expect(second.numerics_used && second.numerics_used.values && second.numerics_used.values.numerics_preset).toBe('accurate');
+    expect(Array.isArray(second.numerics_used.written) && second.numerics_used.written.length).toBeGreaterThan(5);
+  });
 });

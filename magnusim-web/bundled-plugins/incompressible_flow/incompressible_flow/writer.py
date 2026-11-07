@@ -288,18 +288,17 @@ def write_fv_schemes_transient(
     turbulence: str = "kOmegaSST",
     potential: bool = False,
     numerics: NumericsSettings | None = None,
+    skew: bool = True,
 ) -> None:
     """Compact transient fvSchemes matching w30.transientFvSchemes / js_transient golden.
 
     ``potential``: the study starts from potential flow (the scheme potentialFoam -writep reads).
-    ``numerics`` (RH3): the study's schemes; blank ones are this writer's own.
+    ``numerics`` (RH3): the study's schemes; blank ones are this writer's own. ``skew``: the
+    velocity gradient and the flux skew-corrected (:func:`skew_corrected`).
     """
     ddt = "backward" if ctrl.time_scheme == "backward" else "Euler"
-    ch = scheme_choices(numerics or BLANK_NUMERICS, preset=None)
-    grad = GRAD_LIMITERS[ch["grad_limiter"][0]]
-    laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
-    grads = _grad_lines(turbulence, grad)
-    divs = _div_lines(turbulence, CONVECTION[ch["turbulence_convection"][0]]) + (_POTENTIAL_DIV if potential else "")
+    s = transient_schemes(numerics, skew=skew)
+    divs = _div_lines(turbulence, s["turb_div"]) + (_POTENTIAL_DIV if potential else "")
     _write_foam(
         path,
         _foam_header("fvSchemes")
@@ -307,17 +306,15 @@ def write_fv_schemes_transient(
 ddtSchemes {{ default {ddt}; }}
 gradSchemes
 {{
-    default         Gauss linear;
-    grad(U)         {grad};
-{grads}}}
+{_velocity_grad_lines(s)}{_grad_lines(turbulence, s["grad"])}}}
 divSchemes
 {{
     default         none;
-    div(phi,U)      {MOMENTUM[ch["momentum_convection"][0]]};
+    div(phi,U)      {s["momentum"]};
 {divs}}}
-laplacianSchemes {{ default {laplacian}; }}
-interpolationSchemes {{ default linear; }}
-snGradSchemes {{ default {sn_grad}; }}
+laplacianSchemes {{ default {s["laplacian"]}; }}
+{_interpolation_line(s)}
+snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}
 
 // ************************************************************************* //
@@ -1198,6 +1195,46 @@ def two_d_empty_patches(spec: Any, poly: Path | None) -> set[str]:
     return {name for name, n in ends.items() if name in sym and faces.get(name) == n * cells}
 
 
+# A no-slip wall's turbulence entries per model (the value is the case's own). k-omega SST
+# (validation set, 2026-11-06; a developed pipe at Re 5e4 against McKeon et al. 2005, on a
+# clean wedge mesh with the first cell's centre from y+ 1 to 100): nutkWallFunction switches to
+# its log law at y+ 11.53 from k and reads the wall's friction 8 to 20 % low at y+ 12 to 35 (it
+# read the case's Hex-dominant pipe 13 % low), and the default (binomial) omega blending reads
+# 5 to 9 % high at y+ 5 to 12 under Spalding's law. Spalding's law for nut with stepwise omega
+# reads within -0.4 to +2.1 % at y+ 5 to 15, +4.4 % at 20 and -3.3 % at 100. Below about y+ 4
+# (resolving the wall) every treatment reads 6 to 9 % low until the first cell's centre is near
+# y+ 0.3 (-1.5 %): a resolution limit, not the wall function. k-epsilon keeps nutkWallFunction:
+# Spalding's law reads it 6 to 20 % high below y+ 20 (epsilon takes its log value at any y+).
+def wall_functions(model: str) -> dict[str, dict[str, str]]:
+    """The wall's entry (without its value) of each turbulence field the model reads."""
+    sst = model == "kOmegaSST"
+    return {
+        "k": {"type": "kqRWallFunction"},
+        "R": {"type": "kqRWallFunction"},
+        "omega": {"type": "omegaWallFunction", "blending": "stepwise"} if sst else {"type": "omegaWallFunction"},
+        "epsilon": {"type": "epsilonWallFunction"},
+        # Spalart-Allmaras and k-omega SST: Spalding's law covers the wall layer from the
+        # viscous sublayer to the log layer.
+        "nut": {"type": "nutUSpaldingWallFunction" if model == SA_MODEL or sst else "nutkWallFunction"},
+    }
+
+
+def wall_treatment_words(model: str) -> str:
+    """What a no-slip wall is written with for the model ("Numerics as written": Stays fixed)."""
+    from .physics import solved_turbulence_fields
+
+    if model == "laminar":
+        return ""
+    if model == SA_MODEL:
+        return "nut nutUSpaldingWallFunction, nuTilda 0 (Spalding's law)"
+    fn = wall_functions(model)
+    parts = []
+    for name in ("nut", *[f for f in solved_turbulence_fields(model) if f in fn]):
+        e = fn[name]
+        parts.append(f"{name} {e['type']}" + (f" ({e['blending']})" if e.get("blending") else ""))
+    return ", ".join(parts)
+
+
 def _build_field_patches(
     spec: RunSpec,
     patch_names: list[str],
@@ -1250,21 +1287,14 @@ def _build_field_patches(
             return {"type": "calculated", "value": "uniform 0"}
         return {"type": "freestream", "freestreamValue": f"uniform {values[name]}"}
 
-    wall_fn = {
-        "k": "kqRWallFunction",
-        "R": "kqRWallFunction",
-        "omega": "omegaWallFunction",
-        "epsilon": "epsilonWallFunction",
-        # Spalart-Allmaras: Spalding's law covers the wall layer at any y+.
-        "nut": "nutUSpaldingWallFunction" if model == SA_MODEL else "nutkWallFunction",
-    }
+    wall_fn = wall_functions(model)
 
     def no_slip(name: str, _values: dict[str, str]) -> dict[str, str]:
         if name == "nuTilda":
             # nuTilda is 0 at a wall (the model is integrated down to it).
             return {"type": "fixedValue", "value": "uniform 0"}
         value = "0" if name == "nut" else turb_values[name]
-        return {"type": wall_fn[name], "value": f"uniform {value}"}
+        return {**wall_fn[name], "value": f"uniform {value}"}
 
     from . import time_table as _tt
 
@@ -1529,38 +1559,113 @@ _STEADY_SCHEMES: dict[str, dict[str, str]] = {
 }
 
 
-def steady_schemes(physics: StudyPhysics | None = None) -> dict[str, str]:
-    """The steady fvSchemes strings: the study's choices (RH3), each blank one from its
-    Numerics preset (_STEADY_SCHEMES). Convection is written bounded."""
-    ph = physics or DEFAULT_PHYSICS
-    ch = scheme_choices(ph.numerics_settings, preset=ph.numerics if ph.numerics in _STEADY_SCHEMES else "robust")
+# The velocity gradient and the flux (validation set, 2026-11-06 and -07): plain Gauss linear
+# gradients and linear face interpolation ignore a cell's skewness, which a tet mesh (Standard's)
+# has in every direction. Two places carried that error into the solution, so a laminar pipe at
+# Re 100 on Standard read f Re 74.2 for 64 (+16 %) while Hex-dominant read 63.3:
+# - grad(U), which the viscous term's non-orthogonal correction, its explicit part
+#   div((nuEff*dev2(T(grad(U))))), linearUpwind and the turbulence models' production all read;
+# - the mass flux from HbyA.
+# Both are skew-corrected (the pipe reads 64.0 with the Accurate preset, 64.25 with Robust), the
+# velocity gradient inside the study's gradient limiter as before (limited or not, that pipe reads
+# the same: +0.01 % and +0.39 %), so Strong still limits what the viscous terms read.
+# Not for k-omega SST on a Standard mesh: there the same lines read the validation set's turbulent
+# pipe (Re 5e4, from a uniform inlet, f at 20 to 25 D) further from its friction on one mesh each,
+# with the Robust preset f -22.9 % and f_tau -21.0 % against -10.9 % and -13.8 % with layers, and
+# -50 % and -54 % against 0.0 % and -9.9 % without; with Accurate -24.7 % and -15.1 % against
+# -17.6 % and -17.2 %, and -62 % and -65 % against -31 % and -28 % (the 4-core probes of
+# 2026-11-07, validation/README.md). k-epsilon on Standard reads better with them (-1.0 % and
+# +0.3 % against -1.9 % and -3.0 %).
+VELOCITY_GRAD = "Gauss skewCorrected linear"
+FLUX_INTERPOLATION_ENTRY = "flux(HbyA) skewCorrected linear"
+# The models written without the skew-corrected lines on a Standard mesh (tetrahedra).
+PLAIN_ON_STANDARD = frozenset({"kOmegaSST"})
+
+
+def skew_corrected(model: str, mesher: str | None) -> bool:
+    """Whether the velocity gradient and the flux are written skew-corrected: always, but for the
+    models of PLAIN_ON_STANDARD on a Standard mesh (``mesher`` the mesh facts' ``mesher``; None
+    when not known, as before a mesh)."""
+    return not (mesher == "standard" and model in PLAIN_ON_STANDARD)
+
+
+def mesher_of(spec: Any) -> str | None:
+    """The mesher of the run's mesh (its mesh facts, beside ``spec.mesh_case_dir``), None when not known."""
+    from magnusim_sdk.mesh_facts import read_mesh_facts
+
+    case = getattr(spec, "mesh_case_dir", None)
+    if not case:
+        return None
+    try:
+        facts = read_mesh_facts(Path(case))
+    except (OSError, ValueError):
+        return None
+    mesher = (facts or {}).get("mesher")
+    return str(mesher) if mesher else None
+
+
+def velocity_grad(limiter: str, skew: bool = True) -> str:
+    """grad(U) as written: the study's gradient limiter (GRAD_LIMITERS) on the skew-corrected
+    gradient, or on the plain one (``skew`` False)."""
+    plain = GRAD_LIMITERS[limiter]
+    return plain.replace("Gauss linear", VELOCITY_GRAD) if skew else plain
+
+
+def _scheme_strings(ch: dict[str, tuple[str, str]], *, steady: bool, skew: bool = True) -> dict[str, str]:
+    """The fvSchemes strings of the scheme choices: the velocity gradient (``velocity_grad``,
+    which linearUpwind reads too), the turbulence fields' gradients (``grad``), the flux entry
+    (``flux``, "" when not skew-corrected), the convection schemes (bounded when steady) and the
+    non-orthogonal correction."""
+    limiter = ch["grad_limiter"][0]
     laplacian, sn_grad = NON_ORTH[ch["non_orth_correction"][0]]
     return {
-        "grad": GRAD_LIMITERS[ch["grad_limiter"][0]],
-        "turb_div": bounded(CONVECTION[ch["turbulence_convection"][0]], True),
-        "momentum": bounded(MOMENTUM[ch["momentum_convection"][0]], True),
+        "velocity_grad": velocity_grad(limiter, skew),
+        "grad": GRAD_LIMITERS[limiter],
+        "flux": FLUX_INTERPOLATION_ENTRY if skew else "",
+        "turb_div": bounded(CONVECTION[ch["turbulence_convection"][0]], steady),
+        "momentum": bounded(MOMENTUM[ch["momentum_convection"][0]], steady),
         "laplacian": laplacian,
         "sn_grad": sn_grad,
     }
 
 
-def _steady_fv_schemes_body(physics: StudyPhysics | None = None) -> str:
+def steady_schemes(physics: StudyPhysics | None = None, *, skew: bool = True) -> dict[str, str]:
+    """The steady fvSchemes strings: the study's choices (RH3), each blank one from its
+    Numerics preset (_STEADY_SCHEMES). Convection is written bounded."""
+    ph = physics or DEFAULT_PHYSICS
+    ch = scheme_choices(ph.numerics_settings, preset=ph.numerics if ph.numerics in _STEADY_SCHEMES else "robust")
+    return _scheme_strings(ch, steady=True, skew=skew)
+
+
+def transient_schemes(numerics: NumericsSettings | None = None, *, skew: bool = True) -> dict[str, str]:
+    """The transient fvSchemes strings: the study's choices (RH3), each blank one the transient
+    writer's own (NO_PRESET_TRANSIENT)."""
+    return _scheme_strings(scheme_choices(numerics or BLANK_NUMERICS, preset=None), steady=False, skew=skew)
+
+
+def _velocity_grad_lines(s: dict[str, str]) -> str:
+    return f"    default         Gauss linear;\n    grad(U)         {s['velocity_grad']};\n"
+
+
+def _interpolation_line(s: dict[str, str]) -> str:
+    return f"interpolationSchemes {{ default linear; {s['flux']}; }}" if s["flux"] else "interpolationSchemes { default linear; }"
+
+
+def _steady_fv_schemes_body(physics: StudyPhysics | None = None, *, skew: bool = True) -> str:
     ph = physics or DEFAULT_PHYSICS
     model = ph.turbulence_model
-    s = steady_schemes(ph)
+    s = steady_schemes(ph, skew=skew)
     return f"""ddtSchemes {{ default steadyState; }}
 gradSchemes
 {{
-    default         Gauss linear;
-    grad(U)         {s["grad"]};
-{_grad_lines(model, s["grad"])}}}
+{_velocity_grad_lines(s)}{_grad_lines(model, s["grad"])}}}
 divSchemes
 {{
     default         none;
     div(phi,U)      {s["momentum"]};
 {_div_lines(model, s["turb_div"])}{_POTENTIAL_DIV if ph.uses_potential_flow() else ""}}}
 laplacianSchemes {{ default {s["laplacian"]}; }}
-interpolationSchemes {{ default linear; }}
+{_interpolation_line(s)}
 snGradSchemes {{ default {s["sn_grad"]}; }}
 wallDist {{ method meshWave; }}"""
 
@@ -1994,6 +2099,25 @@ def write_solve_case(spec: RunSpec, out_dir: Path | str, services: Any = None) -
         if patch_types:
             apply_boundary_patch_types(poly_dst / "boundary", patch_types)
 
+    # A Continue (RH3): one that goes on with what the run had keeps its own fvSchemes and the
+    # walls its saved time holds (it solves as it did, as "Numerics as written" says); one with the
+    # study's new numerics (or a run with no record of them) gets the writer's walls in that saved
+    # time too, so the case solves with what it is written with.
+    from .runspec import restart_keeps_numerics
+
+    keep_numerics = restart_keeps_numerics(spec) and restart_from is not None
+    walls_rewritten: dict[str, list[str]] = {}
+    if restart_from is not None and not keep_numerics:
+        from magnusim_sdk.foam import FoamFieldError, restart_wall_entries
+
+        try:
+            walls_rewritten = restart_wall_entries(out, restart_from, list(turb_patches))
+        except FoamFieldError as exc:
+            return {"ok": False, "error": f"The run's saved walls could not be given the new wall treatment ({exc}); add a run to solve again."}
+    keep_schemes = keep_numerics and (out / "system" / "fvSchemes").is_file()
+    # The velocity gradient and the flux skew-corrected, but for k-omega SST on a Standard mesh.
+    skew = skew_corrected(physics.turbulence_model, mesher_of(spec))
+
     write_foam_dict(
         out / "constant" / "transportProperties",
         "dictionary",
@@ -2059,13 +2183,15 @@ RAS
             functions_text=functions_text,
             restart=restart_from is not None,
         )
-        write_fv_schemes_transient(
-            out / "system" / "fvSchemes",
-            ctrl=spec.transient,  # type: ignore[arg-type]
-            turbulence=model,
-            potential=physics.uses_potential_flow(),
-            numerics=physics.numerics_settings,
-        )
+        if not keep_schemes:
+            write_fv_schemes_transient(
+                out / "system" / "fvSchemes",
+                ctrl=spec.transient,  # type: ignore[arg-type]
+                turbulence=model,
+                potential=physics.uses_potential_flow(),
+                numerics=physics.numerics_settings,
+                skew=skew,
+            )
         write_fv_solution_pimple(
             out / "system" / "fvSolution",
             ctrl=spec.transient,  # type: ignore[arg-type]
@@ -2080,12 +2206,13 @@ RAS
             "controlDict",
             _steady_control_dict_body(spec.end_time, spec.write_interval, functions_text, restart_from=restart_from),
         )
-        write_foam_dict(
-            out / "system" / "fvSchemes",
-            "dictionary",
-            "fvSchemes",
-            _steady_fv_schemes_body(physics),
-        )
+        if not keep_schemes:
+            write_foam_dict(
+                out / "system" / "fvSchemes",
+                "dictionary",
+                "fvSchemes",
+                _steady_fv_schemes_body(physics, skew=skew),
+            )
         write_foam_dict(
             out / "system" / "fvSolution",
             "dictionary",
@@ -2191,6 +2318,11 @@ RAS
         if stops_off:
             # Past its convergence: no residual targets, no settle stop.
             sidecar["restart"]["stops_off"] = True
+        # RH3: what the Continue kept of the run, or the saved walls it gave the new treatment.
+        if keep_numerics:
+            sidecar["restart"]["kept_numerics"] = True
+        if walls_rewritten:
+            sidecar["restart"]["walls_rewritten"] = walls_rewritten
     if is_transient and spec.transient is not None:
         t = spec.transient
         sidecar["transient"] = {

@@ -181,6 +181,14 @@ def _face_props(raw: dict[str, Any] | None) -> dict[str, FaceProps]:
     return out
 
 
+def restart_keeps_numerics(spec: Any) -> bool:
+    """A Continue that goes on with the numerics the run had (RH3: "as it was", or no change;
+    RunInputs.restart ``keep_numerics``): its case keeps the schemes and the saved walls it solved
+    with."""
+    restart = getattr(spec, "restart", None)
+    return bool(isinstance(restart, dict) and restart.get("keep_numerics"))
+
+
 def convergence_stops_off(spec: Any) -> bool:
     """A run continued past its convergence (RunInputs.restart ``stops_off``): its case
     is written without the stops that ended it (the residual targets' residualControl

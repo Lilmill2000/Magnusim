@@ -779,6 +779,12 @@ export interface NumericsUsed {
   mode: 'steady' | 'transient';
   at: string;
   values: Record<string, unknown>;
+  /**
+   * The rows of "Numerics as written" its case was written with (the analysis's plan, recorded by
+   * the Start or by a Continue that took the study's new numerics); null while that Start or
+   * Continue is recording them; absent on a run started before they were recorded.
+   */
+  written?: Array<{ group: string; label: string; value: string; source?: string; preset?: string }> | null;
 }
 
 /** A numerics setting whose study value differs from what the run started with. */

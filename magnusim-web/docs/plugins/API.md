@@ -1917,7 +1917,7 @@ What runtime.publishRunState dispatches as `cfd:run-state` for the selected run.
 - `precheck_error?: string | undefined`: RH2: why the last check did not answer ('' when it did).
 - `checks_kept?: string[] | undefined`: RH2: the pre-run check codes kept as set (the run's `checks_kept`).
 - `checked_at_start?: RunCheckRow[] | null | undefined`: RH2: the rows a started run was checked with (its `prepare_run.checks`), null when it was not.
-- `numerics?: RunNumericsRow[] | null | undefined`: RH3: "Numerics as written": what the run's case is written with (its analysis's RunModel.check `numerics`), for a draft from its study, for a started run from what it started with (`numerics_used`) once it has one; null when there is none to show.
+- `numerics?: RunNumericsRow[] | null | undefined`: RH3: "Numerics as written": what the run's case is written with (its analysis's RunModel.check `numerics`), for a draft from its study, for a started run as its case was written (the rows recorded then, `numerics_used.written`, or one row saying a run started before they were recorded has none) once it has `numerics_used`; null when there is none to show.
 
 #### SchemaFormProps
 
@@ -2414,6 +2414,50 @@ read_surface_field_value(case_dir: Path, name: str, region: str = "") -> dict | 
 
 ``postProcessing/<name>/<time>/surfaceFieldValue.dat``, every time folder merged.
 
+#### class FoamFieldError(ValueError)
+
+A field file the reader cannot follow (so nothing in it is rewritten).
+
+#### boundary_entries
+
+```python
+boundary_entries(b: bytes) -> dict[str, tuple[int, int]]
+```
+
+The patch entries of a field file's ``boundaryField`` (ascii or binary): each patch's name and the span of its entry, from its ``{`` to its ``}`` inclusive.
+
+#### boundary_entry_types
+
+```python
+boundary_entry_types(path: Path) -> dict[str, str]
+```
+
+Each patch's ``type`` in a field file's ``boundaryField`` (ascii or binary).
+
+#### sync_wall_entries
+
+```python
+sync_wall_entries(time_file: Path, fresh_file: Path, patches: list[str]) -> list[str]
+```
+
+Give the ``patches`` of a saved time's field file (``time_file``: what the run solved with, ascii or binary) the entries the case writer just wrote in ``fresh_file`` (its new ``0/`` file), each with the value the run saved. Returns the patches whose entry changed (none: the file is left as it is). Raises :class:`FoamFieldError` when either file cannot be followed.
+
+#### saved_time_folder
+
+```python
+saved_time_folder(case_dir: Path, t: float) -> Path | None
+```
+
+The folder of saved time ``t`` in a case (its name as the run wrote it), or None.
+
+#### restart_wall_entries
+
+```python
+restart_wall_entries(case_dir: Path, t: float, fields: list[str], region: str = "") -> dict[str, list[str]]
+```
+
+A run continued with new numerics from its saved time ``t``: each of ``fields`` the case writer just wrote in ``0/`` (``0/<region>/``) gets those entries on its wall patches (type ``wall``, or ``mappedWall`` for a region's interface, in the mesh's boundary) in the saved time's file, with the values the run saved (:func:`sync_wall_entries`), so the case solves with the walls it is written with. Returns the patches changed by field. Raises :class:`FoamFieldError` when a file cannot be followed.
+
 ### magnusim_sdk.gmsh_helpers
 
 gmsh / gmshToFoam helpers that need nothing but the standard library.
@@ -2480,7 +2524,7 @@ A solver log's health, line by line. ``hints`` are the analysis's ``health_hints
 - `converged() -> None`: The analysis's parser said the run converged (its ``converged`` event).
 - `missing_head() -> None`: The start of the log is gone (deleted parts): its onset is unknown.
 - `extras(cur: _Step) -> None`
-- `codes() -> list[str]`: The codes at watch or worse, and the info ones, in finding order.
+- `codes() -> list[str]`: The codes at watch or worse, the info ones and the held ones, in finding order.
 - `restart(latest_saved: float | None = None) -> str | None`: Where Continue would go on from, against the onset (spec 3.6): ``from_zero``, ``continue_after_fix`` or None. It never says Continue will be healthy.
 - `report(*, latest_saved: float | None = None, final: bool = False) -> dict[str, Any]`: The run record's ``health`` (at most 4 KB, ``shrink``).
 
@@ -2554,8 +2598,14 @@ Constants:
 - `GAP_SETTLE = 5`
 - `DISSIPATION_FIELDS = ("omega", "epsilon")`
 - `DISSIPATION_WATCH_GROWTH = 2.0`
+- `STALL_SMOOTH = 50`
+- `STALL_FLOOR = 1e-3`
+- `STALL_OFF = 0.9e-3`
+- `WORDS_EVERY = 5`
+- `GAP_CARRIED = ("pv_coupling", "residuals_high", "speed_growth", "velocity_clipped", "turbulence_bounded", "solver_at_limit", "continuity_bias", "courant_mode", "monitor_drift")`
 - `TIMELINE_MAX = 20`
 - `VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}`
+- `VERDICT_WORDS = {"healthy": "Healthy", "watch": "Watch closely", "unhealthy": "Unhealthy", "failed": "Failed"}`
 - `LEVEL_WORD = {0: "", 1: "warn", 2: "error"}`
 - `LEVEL_RANK = {"error": 0, "warn": 1, "info": 2}`
 - `NUM = r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|[-+]?(?i:nan|inf))"`
@@ -3287,7 +3337,7 @@ How many rows of each level (kept ones left out unless ``kept``).
 Constants:
 
 - `LEVEL_ORDER = {"error": 0, "warn": 1, "info": 2}`
-- `CODE_ORDER = ("mesh_failed", "two_d_ends", "wall_through", "wall_curved", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "setting_out_of_range", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
+- `CODE_ORDER = ("mesh_failed", "two_d_ends", "wall_through", "wall_curved", "piso_high_co", "pimple_co_vs_outer", "fixed_step_co", "piso_correctors", "non_ortho_correctors", "mesh_skew", "layers_dropped", "wall_friction_mesh", "yplus_model", "laminar_turbulent", "mach", "steady_relax", "setting_out_of_range", "average_startup", "duration_vs_ftt", "long_run", "steady_for_mean", "outer_unneeded", "still_start", "steady_short", "quality_unknown")`
 - `COURANT_CODES = frozenset({"piso_high_co", "pimple_co_vs_outer", "fixed_step_co"})`
 - `STEADY_ITERATIONS = 1500`
 - `STARTUP_FTT_STILL = 3.0`

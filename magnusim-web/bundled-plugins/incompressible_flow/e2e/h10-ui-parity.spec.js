@@ -38,14 +38,14 @@ const OTHER_ANALYSES = '#cs-type-list li:has(> [data-analysis-key^="heat_transfe
 const CORES_ADDED = '[data-run-cores], [data-run-cores-hint]';
 // The turbulence models the study panel gained after v0.2.0 (F8): their options (the 2nd
 // and 4th of the list) are left out of the comparison, the other options are still
-// compared. The model's help text gained sentences about them: it is compared up to the
-// end of its v0.2.0 opening (baseline and page alike).
+// compared. The model's help text gained sentences about them, and its words on k-omega SST's
+// walls changed with their wall treatment (Spalding's law, 2026-11): it is compared up to the
+// end of its first sentence (baseline and page alike).
 const TURBULENCE_ADDED = [
   '[data-schema-key="turbulence_model"] option:nth-child(2)',
   '[data-schema-key="turbulence_model"] option:nth-child(4)',
 ].join(', ');
-const TURBULENCE_HELP =
-  /(role="tooltip"> Which turbulence closure the solver uses\. k-omega SST is the general-purpose default and handles walls at any y\+\.) .*$/;
+const TURBULENCE_HELP = /(role="tooltip"> Which turbulence closure the solver uses\.) .*$/;
 // Start's title says what a draft starts with when its pre-run check found something (RH2);
 // otherwise it is v0.2.0's, which it is compared with.
 const START_CHECKED_TITLE = /(data-run-start="#" )title="Starts with [^"]*"/;

@@ -64,9 +64,9 @@ schemes and solver settings each model needs):
 | Model (OpenFOAM name) | Fields in 0/ | Walls |
 |---|---|---|
 | Laminar (`laminar`) | none | |
-| Spalart-Allmaras (`SpalartAllmaras`) | `nuTilda`, `nut` | `nuTilda` 0, `nut` `nutUSpaldingWallFunction` (any y+) |
+| Spalart-Allmaras (`SpalartAllmaras`) | `nuTilda`, `nut` | `nuTilda` 0, `nut` `nutUSpaldingWallFunction` (not tested against a developed pipe) |
 | k-epsilon (`kEpsilon`), Realizable k-epsilon (`realizableKE`) | `k`, `epsilon`, `nut` | high-Re wall functions |
-| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | wall functions (any y+) |
+| k-omega SST (`kOmegaSST`, the default) | `k`, `omega`, `nut` | `nut` `nutUSpaldingWallFunction`, `omega` `omegaWallFunction` `blending stepwise`, `k` `kqRWallFunction`: a developed pipe on a clean mesh read within about 2 % with the first cell's centre at y+ 5 to 15 and within 4.5 % up to 100, 6 to 9 % low at 1 to 3 (below 1, only y+ 0.3 was run: -1.5 %); a pipe from a uniform inlet read within about 4 % on Hex-dominant, but 11 to 18 % low on Standard's tetrahedra with wall layers and up to about 31 % low with none |
 | LRR, SSG (`LRR`, `SSG`) | `k`, `epsilon`, `R`, `nut` | high-Re wall functions |
 
 A boundary's "Turbulence at the inlet" (`inlet_turbulence.py`) sets k, omega and
@@ -76,6 +76,24 @@ a turbulent viscosity that `nuTilda` is solved back from.
 
 ## Changes
 
+- **Skew-corrected velocity gradient and flux; Spalding's law on k-omega SST walls
+  (validation set, 2026-11).** Plain linear interpolation and Gauss linear gradients
+  ignore a cell's skewness, so on Standard's tetrahedra the mass flux (`flux(HbyA)`) and
+  the velocity gradient the viscous term reads were wrong: the validation set's laminar
+  pipe read f Re 16 % high on Standard. Both are skew-corrected now (`flux(HbyA)
+  skewCorrected linear`, and `grad(U)` the study's gradient limiter on `Gauss skewCorrected
+  linear`, which linearUpwind and the viscous terms read; steady and transient), but for k-omega
+  SST on a Standard mesh, which keeps the plain lines: there the skew-corrected ones read the
+  validation set's turbulent pipe from its inlet further from its friction (with the Robust
+  preset f -22.9 % against -10.9 % with layers, -50 % against 0 % without). The pre-run check
+  warns of a turbulent study on a Standard mesh with no wall layers (`wall_friction_mesh`): such
+  walls read the pipe's friction up to about 31 % low with k-omega SST and about 13 % low with
+  k-epsilon (Robust; with Accurate it diverged). k-omega SST's no-slip walls take
+  `nutUSpaldingWallFunction` with `omegaWallFunction` `blending stepwise` (they had
+  `nutkWallFunction`, which read a developed pipe 8 to 20 % low from y+ 12 to 35); the
+  other models' walls are as before. "Numerics as written" lists the velocity gradient,
+  the flux interpolation and the wall treatment under Stays fixed. The evidence:
+  `validation/README.md`.
 - **Force on picked faces (Result control > Surface data > Force).** The force on
   exactly the faces a user picks in the 3D view, as Area average picks them (one
   face, several, or a whole wall, with no wall BC needed): total, pressure and

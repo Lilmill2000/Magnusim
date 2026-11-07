@@ -17,7 +17,9 @@ number) is at a level when at least 3 of its last 5 scored steps reached it. An
 event check (``velocity_clipped``, ``solver_at_limit``, ``turbulence_bounded``,
 ``continuity_bias``) uses its share over the last 50 scored steps. The verdict
 worsens at once and improves only after 5 scored steps in a row at the better
-verdict. Baselines come from steps 6-25; the checks that need them start at step 26.
+verdict; while it waits, the checks that set it stay listed at its level (``held``), so a
+verdict of watch or unhealthy always has a finding at warn or error that says why. Baselines come
+from steps 6-25; the checks that need them start at step 26.
 
 Memory is O(50): the last 50 scored steps, the baseline buffer, lifetime counters,
 30 averaging bins and a timeline of at most 20 entries. The window's shares are
@@ -65,9 +67,45 @@ GAP_SETTLE = 5
 # too, to this many times its early value. k keeps the spec's rule (it feeds the flow).
 DISSIPATION_FIELDS = ("omega", "epsilon")
 DISSIPATION_WATCH_GROWTH = 2.0
+# residuals_stalled reads each field's first residual as the mean of its last this many iterations
+# (arithmetic, so a residual that swings keeps the weight of its peaks), for the floor and for the
+# samples taken every 50 iterations; the Unhealthy rule (a decade over the early peak) keeps the
+# raw value, so a divergence is not delayed. Calibration (spec 2.6): the validation set's turbulent
+# pipe (k-omega SST, Hex-dominant, 2,500 iterations) settles with omega's first residual
+# alternating about 1.06e-3 on odd and 0.90e-3 on even iterations, every other check quiet and the
+# flow steady (inlet pressure within 6e-5 % over its last 10 %). Read one iteration at a time the
+# stall switched on and off every iteration from 551 on, and the debounce held "Watch closely" to
+# the end with no finding left to say why; the mean (about 0.98e-3) sits under the floor. A residual
+# that swings 3e-3 / 3e-4 (mean 1.65e-3), or in a limit cycle of up to about 50 iterations, is over
+# it and stays a stall.
+STALL_SMOOTH = 50
+# The floor a stalled residual's mean is over. Once a field is stalled it stays so until its mean
+# is under STALL_OFF (or it falls 0.3 decade per 500 iterations): a residual that hovers at the
+# floor with noise does not switch the verdict on and off.
+STALL_FLOOR = 1e-3
+STALL_OFF = 0.9e-3
+# How often (scored steps) the words of a check that sets the verdict are kept while it is on:
+# the words a held finding shows (``held``) once it has cleared and the verdict has not eased yet.
+WORDS_EVERY = 5
+# The checks whose evidence an unread middle (``gap``) resets: each keeps the level it had before the
+# gap until the tail's steps show or clear it (3 steps; monitor_drift: 2 monitor samples).
+GAP_CARRIED = (
+    "pv_coupling",
+    "residuals_high",
+    "speed_growth",
+    "velocity_clipped",
+    "turbulence_bounded",
+    "solver_at_limit",
+    "continuity_bias",
+    "courant_mode",
+    "monitor_drift",
+)
 TIMELINE_MAX = 20
 
 VERDICT_RANK = {"healthy": 0, "watch": 1, "unhealthy": 2, "failed": 3}
+# The verdicts as the person and the Assistant read them (src/workbench/runHealthWords.ts
+# VERDICT_WORDS, as CHECK_LABEL mirrors its CHECK_NAMES).
+VERDICT_WORDS = {"healthy": "Healthy", "watch": "Watch closely", "unhealthy": "Unhealthy", "failed": "Failed"}
 LEVEL_WORD = {0: "", 1: "warn", 2: "error"}
 LEVEL_RANK = {"error": 0, "warn": 1, "info": 2}
 
@@ -436,8 +474,27 @@ class HealthTracker:
         self.mon_step: dict[str, int] = {}
         self.mon_last_dp: float | None = None
         self.bins: dict[str, list[list[float]]] = {}
-        # Steady residual history: one sample per 50 iterations, 11 kept (500 iterations).
+        # Steady residual history: one sample per 50 iterations, 11 kept (500 iterations), each the
+        # mean of the field's last STALL_SMOOTH first residuals (kept with their running sum).
         self.stall_samples: dict[str, deque[float]] = {}
+        self._resid_vals: dict[str, deque[float]] = {}
+        self._resid_sum: dict[str, float] = {}
+        # The fields residuals_stalled has at Watch closely now (STALL_OFF), and what it last
+        # found: the field, its level and its values (its words).
+        self._stall_on: set[str] = set()
+        self._stall_now: dict[str, Any] | None = None
+        # The checks whose level this step is the one they had before an unread middle (``gap``),
+        # not yet shown or cleared by the steps read after it: their rows say so.
+        self._carried: set[str] = set()
+        # While the debounce holds the verdict above what the checks now say (``held``): per
+        # verdict rank (1 watch, 2 unhealthy), the checks at that rank at the last step the
+        # checks reached it, with their level and since; when the checks first fell below it;
+        # each such check's words from when it was on (text, level, scored step, carried over a gap).
+        self._drivers: dict[int, dict[str, tuple[int, float | None]]] = {1: {}, 2: {}}
+        self._clear_t: dict[int, float | None] = {1: None, 2: None}
+        self._words: dict[str, tuple[str, int, int, bool]] = {}
+        self.held: dict[str, dict[str, Any]] = {}
+        self._held_rank = 0
         self.first_bounded: dict[str, tuple[float, float]] = {}
         self.extras_t_min: float | None = None
         self.extras_t_max: float | None = None
@@ -650,6 +707,11 @@ class HealthTracker:
         self.mon_samples.clear()
         self.mon_name = None
         self.region = ""
+        # Until the tail's steps are read, the levels of the checks they reset are the ones from
+        # before the gap (_score carries them): their rows say so, not the emptied window's words.
+        self._carried = {c for c in GAP_CARRIED if self.level.get(c, 0) > 0}
+        if self._co_setting_level() >= self.level.get("courant_mode", 0):
+            self._carried.discard("courant_mode")
         # The lines after a gap are inside the time loop.
         self.time_loop = True
 
@@ -1048,11 +1110,19 @@ class HealthTracker:
                     self._spread_was = self._spread()
                 info["courant_spread"] = self._spread_was
         # monitor_drift (a fixed inflow, inlet and outlet monitors).
-        if self.fixed_inflow and self.monitors and self.mon_base is not None and len(self.mon_samples) >= 2:
-            base = self._dp_base()
-            ratios = [abs(x) / base for x in self.mon_samples]
-            low = min(ratios)
-            lv["monitor_drift"] = 2 if low >= 10 else 1 if low >= 2 else 0
+        carried: set[str] = set()
+        if self.fixed_inflow and self.monitors and self.mon_base is not None:
+            if len(self.mon_samples) >= 2:
+                base = self._dp_base()
+                ratios = [abs(x) / base for x in self.mon_samples]
+                low = min(ratios)
+                lv["monitor_drift"] = 2 if low >= 10 else 1 if low >= 2 else 0
+            elif self.after_gap and self.level.get("monitor_drift", 0) > 0:
+                # Not 2 samples since an unread middle yet (the monitors write every few steps of
+                # a transient run, at write_interval/50): the level it had before the gap is
+                # carried, with words saying so, until they come.
+                lv["monitor_drift"] = self.level["monitor_drift"]
+                carried.add("monitor_drift")
         # HT rules (hints max_di, t_bc_max).
         if self.max_di is not None and cur.di_max is not None:
             lv["diffusion_high"] = 1 if cur.di_max > self.max_di else 0
@@ -1063,18 +1133,29 @@ class HealthTracker:
         if self.after_gap:
             # Right after an unread middle a check needs its 3 steps again: until then it
             # keeps the level it had before the gap.
+            # A level kept above what the tail shows is carried: its row says so (_gap_words).
             for code, d in (("pv_coupling", "pv_coupling"), ("residuals_high", "residuals_high"), ("speed_growth", "speed_growth")):
                 if len(self.cont_levels[d]) < 3 and code in self.level:
+                    if self.level[code] > lv.get(code, 0):
+                        carried.add(code)
                     lv[code] = self.level[code]
             if len(self.win) < 3:
                 for code in ("velocity_clipped", "turbulence_bounded", "solver_at_limit", "continuity_bias", "courant_mode"):
                     if code in self.level:
+                        if self.level[code] > lv.get(code, 0):
+                            carried.add(code)
                         lv[code] = max(lv.get(code, 0), self.level[code])
+        self._carried = carried
         # Since when each check is at its level, and the evidence line of that step.
         for code, level in lv.items():
             before = self.level.get(code, 0)
             if level > before:
-                self.since[code] = cur.t
+                held = self.held.get(code)
+                if held is not None and held["since"] is not None and self._rank_of(code, level) <= held["level"]:
+                    # Back on while the verdict it set still holds: the same episode, its onset.
+                    self.since[code] = held["since"]
+                else:
+                    self.since[code] = cur.t
                 ev = self._evidence_of(code, cur)
                 if ev is not None:
                     self.evidence[code] = ev
@@ -1088,7 +1169,9 @@ class HealthTracker:
                     self.evidence.setdefault(code, ev)
         self.level.update(lv)
         self.info.update(info)
-        self._verdict_step(cur)
+        target = self._target()
+        self._verdict_step(cur, target)
+        self._hold_step(cur, target)
 
     def _evidence_of(self, code: str, cur: _Step) -> Any:
         if code in cur.ev and cur.ev[code] is not None:
@@ -1159,23 +1242,47 @@ class HealthTracker:
         return False
 
     def _stalled(self, cur: _Step) -> int:
+        """residuals_stalled (spec 2.4): a field's first residual 1 decade or more over its early
+        peak (Unhealthy, the raw value), or flat (under 0.3 decade per 500 iterations) above
+        STALL_FLOOR (Watch closely, the mean of its last STALL_SMOOTH iterations; once stalled,
+        until the mean is under STALL_OFF). Its words name the field that tripped
+        (``_stall_now``): the most risen one, else the highest stalled one."""
         worst = 0
+        pick: dict[str, Any] | None = None
         for f, v in cur.first_init.items():
             if v <= 0:
                 continue
             early = self.base_resid.get(f)
             if early and early > 0 and cur.n > BASELINE_TO and math.log10(v / early) >= 1.0:
-                worst = max(worst, 2)
-                cur.ev["residuals_stalled"] = cur.ev.get("resid:" + f)
+                if worst < 2 or (pick is not None and v / early > pick["v"] / pick["early"]):
+                    pick = {"level": 2, "field": f, "v": v, "early": early}
+                worst = 2
+            vals = self._resid_vals.get(f)
+            if vals is None:
+                vals = self._resid_vals[f] = deque(maxlen=STALL_SMOOTH)
+            total = self._resid_sum.get(f, 0.0)
+            if len(vals) == STALL_SMOOTH:
+                total -= vals[0]
+            vals.append(v)
+            # The running sum, summed afresh once per window so its rounding never builds up.
+            total = sum(vals) if cur.n % STALL_SMOOTH == 0 else total + v
+            self._resid_sum[f] = total
+            mean = total / len(vals)
             samples = self.stall_samples.setdefault(f, deque(maxlen=11))
             if cur.n % 50 == 0:
-                samples.append(v)
-            if len(samples) == 11 and v > 1e-3:
-                old = samples[0]
-                if old > 0 and math.log10(old / v) < 0.3:
-                    if worst < 1:
-                        cur.ev["residuals_stalled"] = cur.ev.get("resid:" + f)
-                    worst = max(worst, 1)
+                samples.append(mean)
+            old = samples[0] if len(samples) == 11 else 0.0
+            stalled = old > 0 and mean > (STALL_OFF if f in self._stall_on else STALL_FLOOR) and math.log10(old / mean) < 0.3
+            if stalled:
+                self._stall_on.add(f)
+            else:
+                self._stall_on.discard(f)
+            if stalled and worst < 2 and (pick is None or mean > pick["mean"]):
+                pick = {"level": 1, "field": f, "mean": mean, "old": old}
+                worst = 1
+        if pick is not None:
+            cur.ev["residuals_stalled"] = cur.ev.get("resid:" + pick["field"])
+            self._stall_now = pick
         return worst
 
     def _bounded_fields(self) -> list[str]:
@@ -1264,21 +1371,31 @@ class HealthTracker:
 
     # ------------------------------------------------------------------ the verdict
 
+    @staticmethod
+    def _rank_of(code: str, level: int) -> int:
+        """The verdict rank a check's level counts for: 2 (Unhealthy) for a symptom at 2, else 1
+        (Watch closely) at 1 or more; ``failed`` is the verdict's own."""
+        if code == "failed" or level <= 0:
+            return 0
+        return 2 if level >= 2 and code in SYMPTOMS else 1
+
     def _target(self) -> str:
+        # _rank_of, inline (once per scored step).
         worst = 0
         for code, level in self.level.items():
             if code == "failed":
                 continue
             if level >= 2 and code in SYMPTOMS:
-                worst = max(worst, 2)
-            elif level >= 1:
-                worst = max(worst, 1)
+                worst = 2
+            elif level >= 1 and worst < 1:
+                worst = 1
         return ("healthy", "watch", "unhealthy")[worst]
 
-    def _verdict_step(self, cur: _Step) -> None:
+    def _verdict_step(self, cur: _Step, target: str | None = None) -> None:
         if self.verdict == "failed":
             return
-        target = self._target()
+        if target is None:
+            target = self._target()
         if self.verdict == "pending":
             self._set_verdict(target, cur.t, cur)
             return
@@ -1315,11 +1432,65 @@ class HealthTracker:
                 fu = {"t": self.gap_t, "step": None, "wall_s": None, "approx": True, "by_t": t}
             self.first_unhealthy = fu
 
+    def _hold_step(self, cur: _Step, target: str) -> None:
+        """The checks that set a verdict the debounce still holds (``held``).
+
+        The verdict improves only after IMPROVE_AFTER better steps in a row, while the findings
+        show what the checks say now. So once the checks that set it clear, the verdict would
+        stay with nothing at its level to say why. Those checks stay listed instead (``held``),
+        at the level that set it (Watch closely: warn, Unhealthy: error), with their words from
+        when they were on and their onset, until the verdict eases or they come back."""
+        trank = VERDICT_RANK[target]
+        if trank:
+            steps = "steps" if self.transient else "iterations"
+            for r in (1, 2):
+                if trank < r:
+                    if self._clear_t[r] is None:
+                        self._clear_t[r] = cur.t
+                    continue
+                on: dict[str, tuple[int, float | None]] = {}
+                for code, lv in self.level.items():
+                    if self._rank_of(code, lv) < r:
+                        continue
+                    on[code] = (lv, self.since.get(code))
+                    w = self._words.get(code)
+                    gap = code in self._carried
+                    if w is None or w[1] != lv or w[3] != gap or self.scored - w[2] >= WORDS_EVERY:
+                        # A level carried over an unread middle keeps the gap's words, never the
+                        # near-empty window's.
+                        text = self._gap_words(code, lv, steps, held=True) if gap else self._text(code, steps, False)
+                        self._words[code] = (text, lv, self.scored, gap)
+                self._drivers[r] = on
+                self._clear_t[r] = None
+        else:
+            for r in (1, 2):
+                if self._clear_t[r] is None:
+                    self._clear_t[r] = cur.t
+        vr = VERDICT_RANK.get(self.verdict, 0)
+        if vr not in (1, 2) or trank >= vr:
+            if self._held_rank:
+                self.held = {}
+                self._held_rank = 0
+            return
+        if self._held_rank != vr:
+            self._held_rank = vr
+            self.held = {
+                code: {
+                    "level": vr,
+                    "since": since,
+                    "cleared": self._clear_t[vr],
+                    "words": (self._words.get(code) or ("",))[0],
+                }
+                for code, (_lv, since) in self._drivers[vr].items()
+            }
+
     # ------------------------------------------------------------------ the record
 
     def codes(self) -> list[str]:
-        """The codes at watch or worse, and the info ones, in finding order."""
+        """The codes at watch or worse, the info ones and the held ones, in finding order."""
         on = {c for c, lv in self.level.items() if lv > 0} | {c for c, x in self.info.items() if x}
+        if self.held:
+            on |= set(self.held)
         if self._co_setting_level() and self.transient:
             on.add("courant_mode")
         return [c for c in FINDING_ORDER if c in on]
@@ -1526,22 +1697,39 @@ class HealthTracker:
                 codes.append("not_settled")
         cause = self._courant_cause()
         for code in codes:
-            level = self.level.get(code, 0)
-            if code == "courant_mode":
-                level = max(level, self._co_setting_level())
-            lw = LEVEL_WORD.get(level) or "info"
-            if code in ("courant_mode",) and level >= 1:
-                lw = "warn"
-            text = self._text(code, steps, final)
-            if not text:
-                continue
+            held = self.held.get(code)
+            if held is not None:
+                # It set the verdict the debounce still holds: listed at that level, saying so.
+                lw = LEVEL_WORD[held["level"]]
+                text = self._held_text(code, held, steps, final)
+                since_t = held["since"]
+            else:
+                level = self.level.get(code, 0)
+                if code == "courant_mode":
+                    level = max(level, self._co_setting_level())
+                if level >= 2 and code not in SYMPTOMS and code != "failed":
+                    # A risk check is at most Watch closely in the verdict (_target): so is its row.
+                    level = 1
+                lw = LEVEL_WORD.get(level) or "info"
+                if code in self._carried:
+                    # Its level is the one it had before an unread middle: the tail's near-empty
+                    # window has nothing to say about it.
+                    text = self._gap_words(code, level, steps)
+                else:
+                    text = self._text(code, steps, final)
+                if not text and level >= 1:
+                    # A check the verdict counts is never left out for want of words.
+                    text = self._plain_words(code, level)
+                if not text:
+                    continue
+                since_t = self.since.get(code)
             ev = self.evidence.get(code)
             f: dict[str, Any] = {
                 "code": code,
                 "level": lw,
                 "text": text[:240],
                 "evidence": self._evidence_doc(ev),
-                "since_t": self.since.get(code),
+                "since_t": since_t,
             }
             out.append(f)
         out.sort(key=lambda f: (LEVEL_RANK[f["level"]], FINDING_ORDER.index(f["code"])))
@@ -1559,6 +1747,58 @@ class HealthTracker:
             if first_error is not None:
                 first_error["fix"] = fixes
         return out[:6]
+
+    def _held_text(self, code: str, held: dict[str, Any], steps: str, final: bool = False) -> str:
+        """A held check's words (``_hold_step``): its words from when it was on, then when it
+        cleared and that the verdict stays until IMPROVE_AFTER better steps in a row (live), that
+        the run ended before it could ease (``final``), or only when it cleared once the run has
+        failed (Failed is final), within the record's 240 characters (its last sentences and
+        clauses go first)."""
+        word = VERDICT_WORDS["unhealthy" if held["level"] >= 2 else "watch"]
+        label = CHECK_LABEL.get(code, code.replace("_", " "))
+        base = held["words"] or f"The {label} check was at {word}."
+        t = held["cleared"]
+        if t is None:
+            at = f"the last {steps[:-1]}"
+        elif self.transient:
+            at = f"t = {fmt(t, 3)} s"
+        else:
+            at = f"iteration {int(round(t)):,}"
+        verb = "eased" if self.level.get(code, 0) > 0 else "cleared"
+        unit = "time steps" if self.transient else "iterations"
+        if self.verdict == "failed":
+            hold = f"It {verb} at {at}, before the run failed."
+        elif final:
+            hold = f"It {verb} at {at}; the run ended before {IMPROVE_AFTER} better {unit} in a row could ease {word}."
+        else:
+            hold = f"It {verb} at {at}; {word} stays until {IMPROVE_AFTER} {unit} in a row are better ({self.better_run} so far)."
+        room = 240 - len(hold) - 1
+        while len(base) > room:
+            body = base.rstrip(".")
+            cut = max(body.rfind(". "), body.rfind("; "))
+            if cut <= 0:
+                base = base[: max(0, room - 1)].rstrip() + "…"
+                break
+            base = body[:cut].rstrip() + "."
+        return f"{base} {hold}" if base else hold
+
+    def _gap_words(self, code: str, level: int, steps: str, held: bool = False) -> str:
+        """A level carried over an unread middle (``_carried``): it was at that level before the
+        gap, and the steps read after it do not show it (yet: live; did not: a held row's words)."""
+        label = CHECK_LABEL.get(code, code.replace("_", " "))
+        word = VERDICT_WORDS["unhealthy" if self._rank_of(code, level) >= 2 else "watch"]
+        tail = "did not show it" if held else "do not show it yet"
+        return f"The {label} check was at {word} before the unread middle of the log; the {steps} read after it {tail}."
+
+    def _plain_words(self, code: str, level: int) -> str:
+        """Plain words for a check the verdict counts whose own words are empty: its words from
+        when it was on, else the level it is at."""
+        snap = self._words.get(code)
+        if snap and snap[0]:
+            return snap[0]
+        label = CHECK_LABEL.get(code, code.replace("_", " "))
+        word = VERDICT_WORDS["unhealthy" if self._rank_of(code, level) >= 2 else "watch"]
+        return f"The {label} check is at {word}."
 
     def _evidence_doc(self, ev: Any) -> dict[str, Any] | None:
         if not ev:
@@ -1661,14 +1901,21 @@ class HealthTracker:
                 "(a healthy transient run stays below 0.05)."
             )
         if code == "residuals_stalled":
-            last = self.win[-1] if self.win else None
-            if last is None or not last.first_init:
+            # The field that tripped (_stalled), not the largest residual of the last iteration.
+            s = self._stall_now
+            if not s:
                 return ""
-            f, v = max(last.first_init.items(), key=lambda x: x[1])
-            early = self.base_resid.get(f)
-            if self.level.get(code, 0) >= 2 and early:
-                return f"The {f} residual rose to {fmt(v, 2)}, {fmt(v / early, 2)}× its early peak: the run is diverging."
-            return f"The {f} residual has stopped falling at {fmt(v, 2)}; a steady run's residuals should keep falling."
+            if s["level"] >= 2:
+                return (
+                    f"The {s['field']} residual rose to {fmt(s['v'], 2)}, {fmt(s['v'] / s['early'], 2)}× its early peak: "
+                    "the run is diverging."
+                )
+            # The means of 50 iterations (STALL_SMOOTH): one that is falling, but too slowly, reads
+            # true as well as one that is flat.
+            return (
+                f"The {s['field']} residual has not halved in 500 {steps} (about {fmt(s['mean'], 2)}, from "
+                f"{fmt(s['old'], 2)}); a steady run's residuals should keep falling."
+            )
         if code == "solver_at_limit":
             rows = self._limit_rows()
             if not rows:

@@ -33546,8 +33546,10 @@ function runCheckStamp(rec, meshReady) {
   const live = mesh && mesh.live_mesh_result && typeof mesh.live_mesh_result === 'object' ? mesh.live_mesh_result : {};
   return JSON.stringify([
     runReadyStamp(rec, meshReady),
-    // RH3: a Continue that took the study's new numerics changes what "Numerics as written" shows.
+    // RH3: a Continue that took the study's new numerics changes what "Numerics as written" shows,
+    // and so does the record of the rows its case was written with once it is there.
     (runNumericsUsed(rec) || {}).at || null,
+    Array.isArray((runNumericsUsed(rec) || {}).written) ? runNumericsUsed(rec).written.length : null,
     runCheckSettingsOf(rec),
     runControlFor(rec).endTime,
     runCoresOf(rec),
@@ -33617,7 +33619,9 @@ function runNumericsUsed(rec) {
 
 /**
  * RH3: the run's "Numerics as written" (its analysis's RunModel.check `numerics`): a draft's from
- * its study, a started run's from what it started with (numerics_used) once it has one; else null.
+ * its study, a started run's as its case was written (the rows recorded then, numerics_used.written,
+ * or a row saying a run started before they were recorded has none) once it has numerics_used;
+ * else null.
  */
 function runNumericsOf(rec) {
   const id = rec ? String(rec.id || rec.run_id || '') : '';

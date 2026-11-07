@@ -311,6 +311,9 @@ export interface Field {
   caution?: Record<string, string> | null;
 }
 
+/** The most of a field's help (its schema description) the Assistant reads: all of what the panel shows. */
+export const FIELD_HELP_MAX = TEXT_CAPS.other;
+
 /** A JSON schema's fields, nested object properties as dotted keys (`advanced.mesh_engine`). */
 export function flattenSchema(schema: unknown, prefix = '', depth = 0): Field[] {
   const props = isRecord(schema) && isRecord(schema.properties) ? schema.properties : {};
@@ -338,7 +341,9 @@ export function flattenSchema(schema: unknown, prefix = '', depth = 0): Field[] 
       items: typeof items.type === 'string' ? items.type : null,
       min_items: num(raw.minItems),
       max_items: num(raw.maxItems),
-      description: cleanText(raw.description ?? '', 160),
+      // A field's whole help, as the panel's tooltip shows it (two-way parity: a model's help says
+      // where it reads off, which a cut at 160 characters left out).
+      description: cleanText(raw.description ?? '', FIELD_HELP_MAX),
       ...(x.advanced === true ? { advanced: true } : {}),
       ...(x.optional === true ? { optional: true } : {}),
       ...(isRecord(x.depends_on) ? { depends_on: { ...x.depends_on } } : {}),

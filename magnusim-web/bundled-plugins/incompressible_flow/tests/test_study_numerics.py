@@ -97,7 +97,9 @@ def test_steady_schema_has_preset_and_simplec_and_hides_relaxation_under_simplec
 
 def test_robust_default_writes_todays_schemes(tmp_path):
     schemes = _text(_write(tmp_path, {}), "system/fvSchemes")
-    assert "grad(U)         cellLimited Gauss linear 1;" in schemes
+    # The velocity gradient is skew-corrected, inside the preset's limiter (linearUpwind reads it).
+    assert "grad(U)         cellLimited Gauss skewCorrected linear 1;" in schemes
+    assert "limitedGradU" not in schemes
     assert re.search(r"grad\(k\)\s+cellLimited Gauss linear 1;", schemes)
     assert re.search(r"div\(phi,k\)\s+bounded Gauss upwind;", schemes)
     assert "laplacianSchemes { default Gauss linear limited corrected 0.5; }" in schemes
@@ -110,7 +112,8 @@ def test_robust_default_writes_todays_schemes(tmp_path):
 def test_accurate_writes_second_order_turbulence_and_lighter_limiting(tmp_path, model):
     case = _write(tmp_path, {"turbulence_model": model, "numerics_preset": "accurate"})
     schemes = _text(case, "system/fvSchemes")
-    assert "grad(U)         cellMDLimited Gauss linear 0.5;" in schemes
+    assert "grad(U)         cellMDLimited Gauss skewCorrected linear 0.5;" in schemes
+    assert "limitedGradU" not in schemes
     assert "cellLimited" not in schemes
     assert "div(phi,U)      bounded Gauss linearUpwind grad(U);" in schemes
     assert "bounded Gauss upwind" not in schemes

@@ -25,7 +25,7 @@ for _root in (PLUGIN_ROOT, IF_ROOT):
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "validation: the validation set (WSL, about two hours); runs only with -m validation")
+    config.addinivalue_line("markers", "validation: the validation set (WSL, about 35 minutes); runs only with -m validation")
 
 
 def pytest_collection_modifyitems(config, items):

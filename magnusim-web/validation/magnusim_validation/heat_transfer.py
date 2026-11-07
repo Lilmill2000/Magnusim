@@ -33,8 +33,8 @@ HOW = (
     "another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved "
     "by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so "
     "the two sets exercise different parts of the app. Report-only, as above. Its rows are the ones it committed "
-    "(bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); they were not run "
-    "again for this report."
+    "(bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); this report reads "
+    "them and runs nothing."
 )
 
 

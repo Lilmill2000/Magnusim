@@ -476,7 +476,7 @@ export function main(argv = process.argv.slice(2)) {
   console.log(describe(plan, o, changedCount));
   if (o.plan) return 0;
   const results = [];
-  // The full tier only: the quick physics checks, a few minutes in WSL, before the suites.
+  // The full tier only: the quick physics checks, under a minute in WSL, before the suites.
   if (isFullTier(o)) results.push(['physics', runPhysics(o)]);
   if (plan.core) results.push(['core', runPlaywright('core', null, plan.core.specs || [], o)]);
   for (const [k, v] of Object.entries(plan.plugins)) results.push([k, runPlugin(suites.find((s) => s.key === k), v.specs || [], o)]);

@@ -89,8 +89,8 @@ def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None)
         '<p class="lede">Textbook flows with published answers, set up, meshed and solved through the app itself, '
         "and compared with their reference values. A value here is what the app produced: nothing is tuned per case "
         "and no number is typed in.</p>",
-        '<p><span class="badge">Report-only</span> No case fails on these numbers yet. After the first full run the '
-        "tolerances are locked; from then on a value outside its tolerance blocks a release. The bands shown are the "
+        '<p><span class="badge">Report-only</span> No case fails on these numbers yet. The tolerances are locked once '
+        "Daniel has reviewed a full run of the whole set; from then on a value outside its tolerance blocks a release. The bands shown are the "
         "proposed ones.</p>",
     ]
     if results:

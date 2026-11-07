@@ -14,12 +14,12 @@ boundaryField
 {
     walls
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
     air_to_aluminium_6061
     {
-        type          nutkWallFunction;
+        type          nutUSpaldingWallFunction;
         value          uniform 0;
     }
 }

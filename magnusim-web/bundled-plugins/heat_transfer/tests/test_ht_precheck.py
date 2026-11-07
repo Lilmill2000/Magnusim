@@ -79,3 +79,27 @@ def test_before_a_mesh_only_the_settings_are_checked():
     out = run_check(transient=True, spec=SimpleNamespace(ok=False), settings={"end_time": 100, "max_co": 20, "n_outer_correctors": 1})
     assert out["estimate"]["complete"] is False
     assert [r["code"] for r in out["checks"]] == ["piso_high_co"]
+
+
+def test_a_standard_mesh_gets_the_study_panels_note_as_a_pre_run_row():
+    """standard_mesh_heat (info): on a Standard mesh the pre-run check carries the Study panel's note,
+    word for word (ui/StudySettings.tsx STANDARD_MESH_NOTE), so the Assistant (read_results precheck)
+    reads what the person reads; on another mesher, none."""
+    import re
+    from pathlib import Path
+
+    from heat_transfer.precheck import STANDARD_MESH_NOTE
+
+    ui = (Path(__file__).resolve().parents[1] / "ui" / "StudySettings.tsx").read_text(encoding="utf-8")
+    consts = {m.group(1): m.group(2) for m in re.finditer(r"export const (STANDARD_\w+_PCT) = (\d+(?:\.\d+)?);", ui)}
+    body = re.search(r"export const STANDARD_MESH_NOTE =\s*(.+?);\n", ui, re.S).group(1)  # type: ignore[union-attr]
+    parts = re.findall(r"`([^`]*)`|'([^']*)'", body)
+    text = "".join(a or b for a, b in parts)
+    text = re.sub(r"\$\{(\w+)\}", lambda m: consts[m.group(1)], text)
+    assert text == STANDARD_MESH_NOTE
+    mesh = {"mesher": "standard", "quality": {"known": False}}
+    out = run_check(transient=False, spec=_spec(relax_p=0.3, relax_u=0.7, numerics="robust"), settings={"end_time": 1000}, context={"mesh": mesh, "mesh_ready": True})
+    row = next(r for r in out["checks"] if r["code"] == "standard_mesh_heat")
+    assert (row["level"], row["text"], row["fix"]["target"]) == ("info", STANDARD_MESH_NOTE, "mesh")
+    hexd = run_check(transient=False, spec=_spec(relax_p=0.3, relax_u=0.7, numerics="robust"), settings={"end_time": 1000}, context={"mesh": {"mesher": "snappy_hexdominant"}, "mesh_ready": True})
+    assert "standard_mesh_heat" not in [r["code"] for r in hexd["checks"]]

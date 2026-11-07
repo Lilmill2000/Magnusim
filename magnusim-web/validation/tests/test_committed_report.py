@@ -47,3 +47,17 @@ def test_every_committed_result_is_complete():
         assert "snappy_hexdominant" in meshers, cid
         if "pipe" in cid:
             assert "standard" in meshers, cid
+
+
+def test_every_committed_result_comes_from_one_commit_with_no_changes_and_its_own_settings():
+    """The report is one run of the whole set: every result records the same commit, a tree with no
+    changes (driver.gitFacts: tracked changes, and untracked files of the app's) and no settings
+    changed by hand (``overrides``), so a probe or a run from a changed tree never reaches it."""
+    results = load_results()
+    assert results, f"no results under {RESULTS}"
+    commits = {str((res.get("app") or {}).get("commit") or "") for res in results}
+    assert len(commits) == 1 and "" not in commits, f"the results come from {sorted(commits)}"
+    for res in results:
+        name = f"{res['case']}/{res['variant']}"
+        assert res["app"].get("dirty") is False, f"{name} ran on a tree with changes"
+        assert not res.get("overrides"), f"{name} ran with settings changed by hand: {res.get('overrides')}"

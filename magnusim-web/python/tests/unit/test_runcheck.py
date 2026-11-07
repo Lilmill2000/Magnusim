@@ -296,7 +296,7 @@ def test_physics_rows():
     inputs["mesh"]["layers"] = {"asked": True, "applied": True, "first_m": 2e-5, "walls": []}
     row = rows_of(check(inputs))["yplus_model"]
     assert row["text"].startswith("Estimated y+ ≈ ")
-    assert "(first cell 0.02 mm). k-epsilon's wall functions assume y+ above about 30; k-omega SST handles any y+." in row["text"]
+    assert "(first cell 0.02 mm). k-epsilon's wall functions assume y+ above about 30; k-omega SST suits lower y+." in row["text"]
     inputs = copy.deepcopy(RUN2)
     inputs["mesh"]["layers"] = {"asked": True, "applied": False, "first_m": None, "walls": []}
     inputs["mesh"]["surface_cell_m"] = 0.004

@@ -18,6 +18,9 @@ mesh"), exit 44.
 MAGNUSIM_TEST_MESH_CHECKMESH=<file>: a real checkMesh report it puts in the case as
 log.checkMesh; like the real generators it then writes the mesh's facts
 (cfddesk.mesh.facts) and its result carries their quality.
+MAGNUSIM_TEST_MESH_MESHER=standard: it leaves the Standard mesher's meta as a mesh with no wall
+layers (standard-meta.json: none asked, none applied), so the facts say a Standard mesh without
+layers (the mesher, and the walls an analysis reads from them).
 
 With ``--one-cell-across 1`` (Hex-dominant's One cell across, 2D) it first asks the real rule
 (tools/mesh_two_d.py): a part that can't be meshed so fails with Generate's words, as
@@ -152,6 +155,9 @@ def main(argv: list[str]) -> int:
         return 44
     if two_d is not None:
         (case_dir / "w23-geometry-meta.json").write_text(json.dumps({"source": "fake mesher", "two_d": two_d}), encoding="utf-8")
+    elif os.environ.get("MAGNUSIM_TEST_MESH_MESHER", "").strip() == "standard":
+        meta = {"source": "fake mesher", "add_layers": False, "layers_applied": False}
+        (case_dir / "standard-meta.json").write_text(json.dumps(meta), encoding="utf-8")
     quality = mesh_facts(case_dir, os.environ.get("MAGNUSIM_TEST_MESH_CHECKMESH", "").strip())
     _event(
         "result",

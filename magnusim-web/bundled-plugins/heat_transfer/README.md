@@ -184,22 +184,24 @@ Temperatures in these messages show in the project's unit.
   each interface is listed with the run's monitors.
 - Results legends show temperature in the project's unit (°C or °F) with no K/°C/°F picker
   of their own; the viewport shows no gravity arrow.
-- On a tetrahedral mesh (Standard) the heat through walls is less accurate: up to about
-  14 % high next to a laminar flow (the validation set's laminar pipes; within 0.1 % on
-  Hex-dominant), about 20 % low with wall functions (the turbulent pipe; −10 % on
-  Hex-dominant), about 6 % high through a solid's walls, and within 1.5 % in a natural
-  convection cavity. Through a solid's fixed-temperature face: the
+- On a tetrahedral mesh (Standard) the heat through walls is less accurate next to a
+  laminar flow: up to about 14 % high (the validation set's laminar pipes; within 0.4 % on
+  Hex-dominant), and about 6 % high through a solid's walls. The turbulent pipe (k-omega
+  SST, wall functions, no layers) reads +0.34 % on Standard and −1.61 % on Hex-dominant
+  since k-omega SST's walls take Spalding's law (before: −20.5 % and −9.6 %; "Validation",
+  below), and a natural convection cavity within 1.5 %. Through a solid's fixed-temperature face: the
   composite wall below gave 6.35 % more heat on 195 345 tetrahedra (the temperature inside
   the solids was right to 0.45 % of ΔT), and 0.11 % on Hex-dominant hexahedra. Corrected
   schemes for the solids ("Accurate" numerics: `Gauss linear corrected`, `snGrad
   corrected`) do not fix it (+6.97 %): the error is the gradient at the wall of a
   tetrahedron next to it, which OpenFOAM does not correct. The study panel of every Heat
-  Transfer study whose mesh is Standard says so ("On a Standard mesh (tetrahedra) the heat
-  through walls is less accurate: up to about 14 % high next to a laminar flow and about
-  20 % low with wall functions (the validation's pipes), about 6 % high through a solid's
-  walls; natural convection in a cavity was within 1.5 %. Mesh with Hex-dominant for heat
-  numbers."), and a new mesh in a Heat Transfer study starts on Hex-dominant. Use
-  Hex-dominant for heat numbers.
+  Transfer study whose mesh is Standard says so, and its pre-run check (Before you start, which
+  the Assistant reads) in the same words ("On a Standard mesh (tetrahedra) the heat through
+  walls is less accurate next to a laminar flow: up to about 14 % high (the validation's
+  laminar pipes), and about 6 % high through a solid's walls. Its turbulent pipe (k-omega SST,
+  wall functions) read within about 1 %, and natural convection in a cavity within 1.5 %. Mesh
+  with Hex-dominant for heat numbers."), and a new mesh in a Heat Transfer study starts on
+  Hex-dominant. Use Hex-dominant for heat numbers.
 - Start reads the unsplit mesh once (patches, the regions they touch, how thin each solid
   is) and keeps what it found beside the mesh (`<mesh case>/ht-mesh-summary.json`, keyed
   by the mesh files' sizes and times): a 2 million cell ascii mesh is checked in about
@@ -277,34 +279,81 @@ composite wall and heated block below. Each case runs through the app's own path
 The numbers, the setups and the sources: [VALIDATION.md](VALIDATION.md). It is
 report-only for now; `pytest -m validation` runs it.
 
-The full run of 2026-10-15 (Heat Transfer 0.1.0, OpenFOAM v2606), the error against the
-reference (± the case's own uncertainty: for the cavity half the gap between its hot and
-cold walls, for the pipes the standard error of the slices' mean):
+The full run of 2026-11-07 (Heat Transfer 0.2.0, OpenFOAM v2606, 8 processes, 34.6 minutes, from
+the commit of the app's validation set's second full run), the error against the reference
+(± the case's own uncertainty: for the cavity half the gap between its hot and cold walls, for
+the pipes the standard error of the slices' mean):
 
 | Case | Reference | Hex-dominant | Standard |
 |---|---|---|---|
-| Cavity, Ra = 10³ / 10⁴ / 10⁵ / 10⁶: Nu-bar (the mean of the hot and cold walls) | 1.118 / 2.243 / 4.519 / 8.800 | +0.00 / +0.09 / −0.55 / −0.63 ± 0.89 % | |
+| Cavity, Ra = 10³ / 10⁴ / 10⁵ / 10⁶: Nu-bar (the mean of the hot and cold walls) | 1.118 / 2.243 / 4.519 / 8.800 | +0.00 / +0.09 / −0.55 / −0.64 ± 0.88 % | |
 | The same: Nu_max on the hot wall (y/L 0.01 to 0.99) | 1.505 / 3.528 / 7.717 / 17.925 | +0.13 / −0.17 / −1.37 / −4.83 % (each peak within 0.005 L of the reference's height) | |
-| Laminar pipe, fixed wall heat flux: Nu | 4.364 | −0.09 ± 1.44 % | +13.8 ± 0.2 % |
-| Laminar pipe, fixed wall temperature: Nu | 3.657 | −0.35 ± 1.77 % | +13.1 ± 0.3 % |
-| Turbulent pipe, Re = 50 000 (k-omega SST, wall functions), 17.5 to 22.5 D from the inlet: Nu | 106.9 (Gnielinski) | −9.6 % (y+ 12 to 56) | −20.5 % (y+ 46 to 108) |
+| Laminar pipe, fixed wall heat flux: Nu | 4.364 | −0.06 ± 1.45 % | +13.84 ± 0.18 % |
+| Laminar pipe, fixed wall temperature: Nu | 3.657 | −0.29 ± 1.75 % | +13.08 ± 0.35 % |
+| Turbulent pipe, Re = 50 000 (k-omega SST, wall functions, Spalding's law at the walls), 17.5 to 22.5 D from the inlet: Nu | 106.9 (Gnielinski) | −1.61 % (y+ 14 to 58) | +0.34 % (y+ 54 to 167) |
 | Composite wall: heat | 5.338 W | +0.11 % | |
 | Heated block: heat out, highest temperature rise | 10 W, 14.60 K | +0.00 %, +0.03 % | |
 
 The cavity's reference is de Vahl Davis's Nu-bar, the cavity's mean Nusselt number; his
 hot-wall values Nu_0 are 1.117, 2.238, 4.509 and 8.817, and the hot wall alone read
-1.1180, 2.2449, 4.4940 and 8.8219. Standard meshes (tetrahedra) read the heat through walls
-up to about 14 % high next to a laminar flow, about 20 % low with wall functions, about 6 %
-high through a solid's walls (the boundary gradient of a tetrahedron next to a wall), and
-within 1.5 % in a cavity (the Ra = 10⁵ proof below, meshed by Standard); the study panel says so for every Heat Transfer study on a
-Standard mesh, and a new mesh in a Heat Transfer study starts on Hex-dominant. Use
-Hex-dominant for heat numbers. The turbulent pipe reads about 10 % under Gnielinski's
-correlation on Hex-dominant (−7.9 % on a finer mesh, fineness 7, 293 760 cells): more than
-the correlation's own scatter, and why is not known yet. Its slices are 17.5 to 22.5 D
-after a uniform inlet, where the flow is still developing, and its wall's y+ runs from 12
-to 56, so part of the first cells sit in the buffer layer, where wall functions are least
-accurate; a longer pipe, a developed inlet and a mesh with y+ above 30 (or near 1) would
-tell which.
+1.1180, 2.2449, 4.4940 and 8.8200. Standard meshes (tetrahedra) read the heat through walls
+up to about 14 % high next to a laminar flow, about 6 % high through a solid's walls (the
+boundary gradient of a tetrahedron next to a wall), within 1.5 % in a cavity (the Ra = 10⁵
+proof below, meshed by Standard), and the turbulent pipe within 0.4 %; the study panel and
+the pre-run check say so for every Heat Transfer study on a Standard mesh, and a new mesh in a
+Heat Transfer study starts on Hex-dominant. Use Hex-dominant for heat numbers. Against the run
+before it (2026-10-15, Heat Transfer 0.1.0, and the turbulent pipe's two rows of 2026-11-07, run
+again after k-omega SST's walls changed) every row moved by at most 0.06 points of its error (the
+laminar pipes on Hex-dominant, whose meshes differ from one generate to the next: 124 648 and
+124 210 cells against 124 242 and 124 662), the turbulent pipe on Standard +0.03 points (+0.34 %
+against +0.31 %, the same 36 219 cells). With the walls before that
+(nutkWallFunction) the pipe read about 10 % under Gnielinski's correlation on Hex-dominant
+(−7.9 % on a finer mesh, fineness 7, 293 760 cells) and about 20 % under on Standard. Its
+slices are 17.5 to 22.5 D after a uniform inlet, where the flow is still developing.
+
+Since that run (probes of 2026-11-06 on OpenFOAM v2606, 8 ranks):
+
+- **The turbulent pipe's shortfall was k-omega SST's wall treatment.** Heat Transfer's walls
+  are Incompressible Flow's, and since f7926eb0 they take Spalding's law with stepwise omega
+  (the validation set's README, "k-omega SST at the wall"): the pipe's Nu reads -1.61 % on
+  Hex-dominant (y+ 14 to 58) and +0.34 % on Standard (y+ 54 to 167), from -9.6 % and -20.5 %
+  (the committed rows above, the full run of 2026-11-07; the probe read +0.32 % and the two rows'
+  first rerun +0.31 %).
+- **The fluid's schemes stay as they are.** Incompressible Flow writes `grad(U)` and the flux
+  skew-corrected since f7926eb0, which took its laminar pipe on Standard from f Re +16 % to
+  +0.2 %. The same lines in Heat Transfer (`grad(U) Gauss skewCorrected linear`, the limiter on
+  `limitedGradU`, `flux((rho*HbyA)) skewCorrected linear`: v2606's buoyant and CHT solvers form
+  phiHbyA from `fvc::flux(rho*HbyA)`), with `grad(h) Gauss skewCorrected linear` as well, were
+  probed on the validation cases' own meshes, the case re-solved with only its fvSchemes changed
+  (re-solved unchanged, the laminar and turbulent pipes on Standard give the app's Nu to four
+  digits; the heat sink, still settling at 3000 iterations, is compared with its own unchanged
+  re-solve (the app's own run of it carried 10.124 W out):
+
+  | Case | As written | Skew-corrected |
+  |---|---|---|
+  | Laminar pipe, fixed wall temperature, Standard (139 200 cells, one layer): Nu / f Re | +13.07 % / +15.1 % | +5.15 % / -1.1 % |
+  | Laminar pipe, fixed wall heat flux, Standard: Nu / f Re | +13.83 % / +15.1 % | +5.63 % / -1.1 % |
+  | Laminar pipes, Hex-dominant (4 layers): Nu, fixed flux / fixed temperature | -0.04 / -0.26 % | -0.30 / -0.58 % (each within its slices' ± 1.5 to 1.8 %) |
+  | Turbulent pipe, Hex-dominant: Nu | -1.61 % | -0.94 % |
+  | Turbulent pipe, Standard (no layers: tetrahedra at the wall, wall functions): Nu / f | +0.32 % / +2.3 % | -39.3 % / +101 % |
+  | de Vahl Davis cavity, Ra = 10⁵, Hex-dominant: Nu-bar / Nu_max | -0.55 / -1.37 % | -0.56 / -1.35 % |
+  | Heat sink in a channel (HT5, Hex-dominant, 3000 iterations): heat carried out / sink T_max | 10.002 W / 359.261 K | 9.901 W / 359.713 K |
+
+  (f from the pressure drop over the slices against Petukhov's 0.0210 at Re 50 000, both from
+  re-solves; the flow is still developing there.) On the laminar pipe the friction is the velocity gradient and the flux (each alone
+  halves its error; Nu moves less than a point), and most of Nu's error is `grad(h)`'s (alone:
+  Nu +5.5 %); what is left is not the gradient scheme (least squares +5.0 %), the energy's
+  convection (central +4.8 %), the face interpolation (+5.2 %) nor the non-orthogonal correction
+  (full: +6.1 %). On the turbulent pipe on Standard every one of the lines reads worse: the flux
+  alone Nu -14 % and f +115 %, `grad(U)` alone -20 % and +60 %, `grad(h)` alone -7.7 % and f
+  unchanged. Incompressible Flow's own turbulent pipe on Standard with its layers turned off
+  (case 2, k-omega SST, Accurate, y+ 41 to 143) reads the same way: f -31 % and f_tau -27 %
+  with the schemes before f7926eb0, -62 % and -65 % with its skew-corrected ones (the flux alone
+  -44 / -42 %, `grad(U)` alone -35 / -42 %). So the skew-corrected lines help where the wall
+  cells are layers and hurt where they are tetrahedra under wall functions (most likely the cell
+  gradients the corrections use, which a wall function's profile across the first cell does not
+  follow; not probed further), and Heat Transfer keeps its schemes until a set of lines reads
+  both right.
 
 ## Proofs (HT4)
 

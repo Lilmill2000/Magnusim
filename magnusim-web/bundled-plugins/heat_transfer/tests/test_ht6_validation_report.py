@@ -69,16 +69,16 @@ def test_the_report_lists_each_row():
 
 def test_the_study_panel_note_states_what_standard_meshes_read():
     """The note a study on a Standard mesh shows ("up to about N % high next to a laminar
-    flow and about M % low with wall functions") is what the validation set's pipes read on
+    flow"; "its turbulent pipe read within about M %") is what the validation set's pipes read on
     Standard."""
     import re
 
     ui = (PLUGIN / "ui" / "StudySettings.tsx").read_text(encoding="utf-8")
     high = float(re.search(r"STANDARD_LAMINAR_HIGH_PCT = (\d+(?:\.\d+)?)", ui).group(1))  # type: ignore[union-attr]
-    low = float(re.search(r"STANDARD_TURBULENT_LOW_PCT = (\d+(?:\.\d+)?)", ui).group(1))  # type: ignore[union-attr]
+    within = float(re.search(r"STANDARD_TURBULENT_WITHIN_PCT = (\d+(?:\.\d+)?)", ui).group(1))  # type: ignore[union-attr]
     rows = json.loads((PLUGIN / "validation" / "results.json").read_text(encoding="utf-8"))["rows"]
     laminar = [float(r["error_pct"]) for r in rows if r["mesher"] == "Standard" and r["case"].startswith("Laminar pipe")]
     turbulent = [float(r["error_pct"]) for r in rows if r["mesher"] == "Standard" and r["case"].startswith("Turbulent pipe")]
     assert len(laminar) == 2 and len(turbulent) == 1
     assert 0 < max(laminar) <= high + 1.0 and max(laminar) > high - 2.0, (laminar, high)
-    assert abs(-turbulent[0] - low) < 3.0, (turbulent, low)
+    assert abs(turbulent[0]) <= within and abs(turbulent[0]) > within - 1.0, (turbulent, within)

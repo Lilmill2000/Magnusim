@@ -95,7 +95,7 @@ def test_the_page_is_self_contained_and_has_both_themes(tmp_path: Path):
     assert not re.search(r'(src|href)="(https?:)?//', page)
     assert 'src="img/c1_laminar_pipe-hexdominant-pressure.png"' in page
     # The page carries what the report does: the notes, what is shown beside the values, the pre-run check.
-    assert "<h3>Notes</h3>" in page and "under investigation" in page
+    assert "<h3>Notes</h3>" in page and "skew-corrected" in page
     assert "Shown, not compared:" in page and "Pre-run check: info still_start" in page
     doc = json.loads(files["results.json"])
     assert doc["results"][0]["case"] == "c1_laminar_pipe"
@@ -142,3 +142,29 @@ def test_heat_transfers_own_set_is_in_the_report_and_on_the_page(tmp_path: Path)
     assert len(doc["heat_transfer"]["rows"]) == len(ht["rows"])
     # Without Heat Transfer's rows the page has no such section.
     assert "<h2>Heat Transfer</h2>" not in build_site([res])["index.html"]
+
+
+def test_the_report_and_the_page_say_the_tolerances_lock_once_daniel_has_reviewed_a_full_run(tmp_path: Path):
+    """The first full run is what the report shows and nothing is locked: neither says the
+    tolerances are locked "after the first full run"."""
+    res = _exact(tmp_path)
+    text = build_markdown([res])
+    page = build_site([res])["index.html"]
+    assert "The tolerances are locked once Daniel has reviewed a full run of the whole set" in text.replace("\n", " ")
+    assert "The tolerances are locked once Daniel has reviewed a full run of the whole set" in page
+    for out in (text.replace("\n", " "), page):
+        assert "After the first full run the tolerances are locked" not in out
+        assert "After the first full run the tolerances" not in out
+
+
+def test_the_error_is_given_in_its_bands_own_unit():
+    """The vortex centre's band is ±0.01 L: its error reads in L (it read "-0.07 %" beside "±0.01 L");
+    a relative band keeps the error in %, and a reference of zero reads in its unit."""
+    from magnusim_validation.report import band_text, err_text
+
+    vortex = {"unit": "L", "error": {"abs": -0.00040630459, "rel_pct": -0.0659360595}, "tolerance": {"abs_tol": 0.01, "rel_pct": None}, "within": True}
+    assert (err_text(vortex), band_text(vortex)) == ("-0.000406 L", "±0.01 L (inside)")
+    psi = {"unit": "", "error": {"abs": 0.000171, "rel_pct": 0.1654411}, "tolerance": {"abs_tol": None, "rel_pct": 2.0}, "within": True}
+    assert (err_text(psi), band_text(psi)) == ("+0.17 %", "±2 % (inside)")
+    rms = {"unit": "U_lid", "error": {"abs": 0.0023354, "rel_pct": None}, "tolerance": {"abs_tol": 0.01}, "within": True}
+    assert err_text(rms) == "+0.00234 U_lid"

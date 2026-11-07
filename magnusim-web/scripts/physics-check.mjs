@@ -1,5 +1,5 @@
 // npm run test:physics: the quick physics checks (docs/TESTING.md). Incompressible Flow's case
-// writer on blockMesh grids, solved in WSL, against published values in a few minutes:
+// writer on blockMesh grids, solved in WSL, against published values in under a minute:
 // bundled-plugins/incompressible_flow/tests/test_physics_quick_wsl.py (pytest -m "wsl and
 // physics", with the app's own Python). The full e2e tier (npm run test:e2e) runs them first;
 // the per-commit fast tier and CI (no WSL) never do.
