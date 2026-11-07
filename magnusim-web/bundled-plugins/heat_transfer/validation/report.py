@@ -31,12 +31,12 @@ monitors and its saved fields. Hex-dominant meshes every case; the pipes are mes
 Standard as well.
 
 **Report-only.** These numbers are what this version computes; no case fails on them yet.
-The first full run sets the tolerances, after which a case outside its tolerance blocks a
-release. The proofs in `tests/test_ht_wsl_proofs.py` and `tests/test_ht5_cht_wsl.py` keep
+The tolerances are locked once Daniel has reviewed a full run of the whole set; from then on a
+case outside its tolerance blocks a release. The proofs in `tests/test_ht_wsl_proofs.py` and `tests/test_ht5_cht_wsl.py` keep
 their own tolerances.
 
-Run the set (WSL with OpenFOAM v2606: about two hours one case after another, each on 8
-cores; under an hour in three groups side by side with `-k`), then this report:
+Run the set (WSL with OpenFOAM v2606: about 35 minutes one case after another, each on 8
+cores, on 2026-11-07; groups of cases can run side by side with `-k`), then this report:
 
 ```bash
 cd python
@@ -74,7 +74,7 @@ The rows are in `validation/results.json` (`HT_VALIDATION_OUT` writes them elsew
   one), and its wall's y+ (OpenFOAM's yPlus on the solved case) is recorded with it. With
   k-omega SST's walls before 2026-11-06 (nutkWallFunction) it read 10 to 20 % under
   Gnielinski's correlation, more than the correlation's own scatter; with Spalding's law and
-  stepwise omega since, within 2 % (its two rows rerun on 2026-11-07).
+  stepwise omega since, within 2 % (the full run of 2026-11-07).
 - **Conduction.** The heat through each face from the wall heat flux monitors, and the
   highest temperature from the solid's own monitor row.
 

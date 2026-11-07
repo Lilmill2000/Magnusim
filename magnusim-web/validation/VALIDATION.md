@@ -527,7 +527,7 @@ The domain is a box x from -8 D to 15 D and y and z from -15 D to 15 D round a s
 
 ## Heat Transfer
 
-Heat Transfer's own validation set: natural convection in a square cavity (de Vahl Davis), forced convection in a pipe (laminar and turbulent) and conduction through solids, each against its published value. Its runs go another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so the two sets exercise different parts of the app. Report-only, as above. Its rows are the ones it committed (bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); they were not run again for this report. Its own report: `bundled-plugins/heat_transfer/VALIDATION.md`.
+Heat Transfer's own validation set: natural convection in a square cavity (de Vahl Davis), forced convection in a pipe (laminar and turbulent) and conduction through solids, each against its published value. Its runs go another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so the two sets exercise different parts of the app. Report-only, as above. Its rows are the ones it committed (bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); this report reads them and runs nothing. Its own report: `bundled-plugins/heat_transfer/VALIDATION.md`.
 
 Results of 2026-11-07 (Heat Transfer 0.2.0, OpenFOAM v2606 (build _481094f-20260618)).
 

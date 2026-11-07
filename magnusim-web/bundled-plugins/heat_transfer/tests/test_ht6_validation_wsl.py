@@ -20,8 +20,8 @@ Hex-dominant for every case; the pipes on Standard as well.
 4. The composite wall and the heated block of the HT5 proofs (analytic 1D solutions).
 
 Only selected with ``-m validation`` (or ``HT_VALIDATION=1``): ``pytest -m validation
-../bundled-plugins/heat_transfer/tests -s`` from ``python/``: about two hours one case after
-another (each solve on 8 cores, ``HT6_PROCS``).
+../bundled-plugins/heat_transfer/tests -s`` from ``python/``: about 35 minutes one case after
+another (each solve on 8 cores, ``HT6_PROCS``; 2026-11-07).
 """
 
 from __future__ import annotations
