@@ -88,6 +88,18 @@ export function meetsWalls(f: Pick<ExtrudeFeature, 'extent'>): boolean {
 }
 
 /**
+ * Until the walls meet: the Blind distance the build gives the kernel, far enough that they meet
+ * before it (half the profile's box across, leaning in at `taper`, a draft that narrows); the
+ * kernel's drafted prism ends where they do. The Assistant's miss checks use the same.
+ */
+export function meetExtent(regions: readonly { key: string; bbox: readonly number[] }[], keys: readonly string[], taper: number): ExtentValues {
+  const boxes = regions.filter((r) => keys.includes(r.key)).map((r) => r.bbox);
+  const w = Math.max(...boxes.map((b) => b[2])) - Math.min(...boxes.map((b) => b[0]));
+  const h = Math.max(...boxes.map((b) => b[3])) - Math.min(...boxes.map((b) => b[1]));
+  return { kind: 'blind', d: (1.5 * Math.hypot(w, h)) / 2 / Math.tan((taper * Math.PI) / 180) + MIN_SIZE_MM };
+}
+
+/**
  * Whether regions `keys` of a sketch, merged as the kernel merges them, go round a hole: a region
  * left out that no path through other left-out regions joins to the outside. A loop's token on
  * one region only borders the outside; a token on two borders both of them.
@@ -336,15 +348,7 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
     if (v.taper && regionsEncloseHole(out.regions, keys)) {
       return { ok: false, message: `${f.name} failed: a draft angle needs a profile with no hole in it, and the profile picked in ${sketchName} goes round a region left out: pick that region too, or set the draft angle to 0 and cut the hole after` };
     }
-    let extent = v.extent;
-    if (v.meet) {
-      // Until the walls meet: far enough that they meet before it (half the profile's box across,
-      // leaning in at the angle); the kernel's drafted prism ends where they do.
-      const boxes = out.regions.filter((r) => keys.includes(r.key)).map((r) => r.bbox);
-      const w = Math.max(...boxes.map((b) => b[2])) - Math.min(...boxes.map((b) => b[0]));
-      const h = Math.max(...boxes.map((b) => b[3])) - Math.min(...boxes.map((b) => b[1]));
-      extent = { kind: 'blind', d: (1.5 * Math.hypot(w, h)) / 2 / Math.tan((v.taper * Math.PI) / 180) + MIN_SIZE_MM };
-    }
+    const extent = v.meet ? meetExtent(out.regions, keys, v.taper) : v.extent;
     const ext = await kernelExtent(f, extent, ctx);
     if (!ext.ok) return { ok: false, message: `${f.name} failed: ${ext.message}` };
     const dir = await directionOf(f, ctx);
@@ -406,7 +410,7 @@ export const extrudeDef: FeatureTypeDef<ExtrudeFeature, ExtrudeValues> = {
       // A Cut or Intersect that points away from the bodies: say that the other way acts on one
       // (review P2/P3 round 4: a Cut from a face pointed out of the body and said only "Nothing to cut").
       if (!r.ok && (f.op === 'cut' || f.op === 'intersect') && !f.scope.length && (v.extent.kind === 'blind' || v.extent.kind === 'two') && r.message === nothingToActOn(f.op, f.name)) {
-        const other = await bodyTheOtherWay(f, ext.extent, out, keys, ctx);
+        const other = await bodyTheOtherWay(f, ext.extent, v.taper, out, keys, ctx);
         if (other) return { ...r, message: `${r.message}: ${flipVerb(f.flip)} Flip direction to ${f.op === 'cut' ? 'cut' : 'intersect'} ${f.op === 'cut' ? 'into' : 'with'} ${other}` };
       }
       return r;
@@ -509,12 +513,14 @@ async function buildFace(f: ExtrudeFeature, v: ExtrudeValues, ctx: BuildContext)
 
 /**
  * The first body the extrude flipped would overlap (its name), or null; an empty common OCCT answered
- * as if apart although they overlap (kernel API 10) counts. Every shape made here is released.
+ * as if apart although they overlap (kernel API 10) counts. The flipped extrude keeps its draft
+ * angle (`taper`), so the hint names only a body the flipped feature would reach. Every shape made
+ * here is released.
  */
-async function bodyTheOtherWay(f: ExtrudeFeature, extent: ExtrudeExtent, out: SketchOutput, keys: string[], ctx: BuildContext): Promise<string | null> {
+async function bodyTheOtherWay(f: ExtrudeFeature, extent: ExtrudeExtent, taper: number, out: SketchOutput, keys: string[], ctx: BuildContext): Promise<string | null> {
   const made: ShapeId[] = [];
   try {
-    const res = await ctx.kernel.call('extrude_regions', { plane: out.plane, curves: out.curves, regions: keys, extent, flip: !f.flip });
+    const res = await ctx.kernel.call('extrude_regions', { plane: out.plane, curves: out.curves, regions: keys, extent, flip: !f.flip, ...(taper ? { taper_deg: taper } : {}) });
     const tool = res.result.id;
     made.push(tool);
     const tb = await ctx.bbox(tool);

@@ -9,6 +9,11 @@
 //     the bracket: off_body, the face's frame in words (u runs +Y, v runs -Z), the profile's box
 //     beside the body's; at v = -22.5 it cuts;
 //   - a cut from above that stops short: too_short, the body it is in line with;
+//   - drafted cuts (Extrude's draft angle): until the walls meet pointing away is wrong_side with
+//     the flip hint, as the panel says; one whose flipped walls meet short of the plate gets no flip
+//     hint and too_short that says the draft narrows it off first (with flip in its hint); a smaller
+//     draft that reaches gets the hint; drafted misses get hints with no extent through, and a drafted
+//     check the kernel refuses leaves the sub-reason out;
 //   - a cut on given bodies that cuts nothing away: cut_removed_nothing with the sub-reason; one
 //     that cuts one of two bodies is kept, warning of the other; an intersect on a body it misses
 //     fails (it would leave nothing of it);
@@ -210,6 +215,107 @@ describe('a cut that stops short, and cuts on given bodies', () => {
       // As the hint says: the cut goes 2 mm into the plate.
       await ok(h, 'extrude', EXTRUDE({ sketch: 'High', distance: '6 mm', flip: true, op: 'cut' }));
       expect(volume(h)).toBeCloseTo(14400 - 25 * PI * 2, 3);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'until the walls meet, pointing away from the plate: wrong_side with the flip hint the panel gives, never too_short; with flip it cuts the cone',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await plate(h);
+      await ok(h, 'sketch', disc('Cone sketch', 'Plate.end', 0, 0));
+      const same = unchanged(h);
+      const e = await fail(h, 'extrude', EXTRUDE({ name: 'Cone', sketch: 'Cone sketch', distance: '', taper: '59 deg', op: 'cut' }));
+      expect(e).toMatchObject({
+        code: 'failed',
+        hint: HINTS.wrong_side,
+        detail: { reason: 'feature_failed', feature: 'Cone', sub: 'wrong_side', other_way: 'Body 1', message: 'Nothing to cut: Cone does not overlap any body made before it (touching is not enough): tick Flip direction to cut into Body 1' },
+      });
+      expect(e.message).toBe('feature_failed: Cone fails: Nothing to cut: Cone does not overlap any body made before it (touching is not enough): tick Flip direction to cut into Body 1. It points away from the body: with flip true it would cut Body 1.');
+      same();
+      // As both say: flipped, the cone (r 5, its walls meeting 5 / tan 59 deg = 3.00 mm down) goes into the plate.
+      await ok(h, 'extrude', EXTRUDE({ name: 'Cone', sketch: 'Cone sketch', distance: '', taper: '59 deg', flip: true, op: 'cut' }));
+      expect(volume(h)).toBeCloseTo(14400 - (PI * 25 * (5 / Math.tan((59 * PI) / 180))) / 3, 2);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a drafted cut whose walls, flipped, meet short of the plate gets no flip hint and says the draft narrows it off the plate first; a smaller draft that reaches gets the hint, and cuts',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      await plate(h);
+      // 25 mm up (the plate is z 0 to 6), r 10, pointing up. Flipped at 30 deg the walls meet 10 / tan 30 deg = 17.32 mm down, at z 7.68.
+      await ok(h, 'sketch', disc('High', 'Top offset 25 mm', 0, 0, 10));
+      const same = unchanged(h);
+      const e = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'High', distance: '30 mm', taper: '30 deg', op: 'cut' }));
+      expect(e).toMatchObject({
+        code: 'failed',
+        hint: 'The cut narrows off the body before it reaches it: set a smaller taper (or taper 0) with a distance that reaches it, and flip true; or use hole.',
+        detail: { reason: 'feature_failed', feature: 'Pocket', sub: 'too_short', in_line: 'Body 1', message: 'Nothing to cut: Pocket does not overlap any body made before it (touching is not enough)' },
+      });
+      expect(e.message).toMatch(/The profile is in line with Body 1, but drafted at 30 deg it narrows off it before it reaches it, whichever way it points: a smaller draft angle reaches farther\./);
+      same();
+      // At 10 deg, flipped, the walls are still 6.65 mm out where they reach the plate's top (19 mm down): the hint names it.
+      const r = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'High', distance: '30 mm', taper: '10 deg', op: 'cut' }));
+      expect(r).toMatchObject({
+        hint: HINTS.wrong_side,
+        detail: { sub: 'wrong_side', other_way: 'Body 1', message: 'Nothing to cut: Pocket does not overlap any body made before it (touching is not enough): tick Flip direction to cut into Body 1' },
+      });
+      same();
+      await ok(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'High', distance: '30 mm', taper: '10 deg', flip: true, op: 'cut' }));
+      // The frustum through the plate, 19 to 25 mm down.
+      const t = Math.tan((10 * PI) / 180);
+      const [r1, r2] = [10 - 19 * t, 10 - 25 * t];
+      expect(volume(h)).toBeCloseTo(14400 - (PI * 6 * (r1 * r1 + r1 * r2 + r2 * r2)) / 3, 2);
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'drafted cuts that stop short or point away get hints with no extent through (a draft goes only with Blind); a drafted check the kernel refuses leaves the sub-reason out',
+    async () => {
+      const real = realKernelAnywhere();
+      let refuse = false;
+      // The kernel refusing a drafted extrude past 31 mm (the checks out to where the walls meet), as OCCT can.
+      const kernel = new Proxy(real, {
+        get(t, p) {
+          if (p === 'call')
+            return async (op: string, params: Record<string, unknown>, opts?: object) => {
+              const ext = params.extent as { kind?: string; d?: number } | undefined;
+              if (refuse && op === 'extrude_regions' && params.taper_deg && ext?.kind === 'blind' && (ext.d ?? 0) > 31) throw Object.assign(new Error('tapered extrude failed'), { kind: 'occt' });
+              return (real.call as (o: string, q: unknown, s?: object) => Promise<unknown>)(op, params, opts);
+            };
+          const v = Reflect.get(t, p);
+          return typeof v === 'function' ? v.bind(t) : v;
+        },
+      }) as KernelAdapter;
+      h = await assistantHarness({ sketchMode: true, kernel });
+      await plate(h);
+      // 10 mm up, r 5; the plate's top is 4 mm below.
+      await ok(h, 'sketch', disc('High', 'Top offset 10 mm', 0, 0));
+      const same = unchanged(h);
+      const NO_THROUGH = 'The cut stops before it reaches the body: make distance larger (a draft angle goes only with Blind).';
+      // Widening, pointing at the plate, 2 mm: a longer distance reaches it.
+      const wide = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'High', distance: '2 mm', taper: '-5 deg', flip: true, op: 'cut' }));
+      expect(wide).toMatchObject({ hint: NO_THROUGH, detail: { sub: 'too_short', in_line: 'Body 1' } });
+      // Narrowing at 10 deg, pointing at the plate: still 4.29 mm across where it reaches the plate, so a longer distance does too.
+      const narrow = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'High', distance: '2 mm', taper: '10 deg', flip: true, op: 'cut' }));
+      expect(narrow).toMatchObject({ hint: NO_THROUGH, detail: { sub: 'too_short', in_line: 'Body 1' } });
+      // Pointing away: wrong_side with the gap, and no extent through in its hint.
+      const away = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'High', distance: '2 mm', taper: '10 deg', op: 'cut' }));
+      expect(away).toMatchObject({ hint: 'The cut points away from the body: set flip true and a distance over 4 mm, or use hole.', detail: { sub: 'wrong_side', other_way: 'Body 1', gap_mm: 4 } });
+      same();
+      // The kernel refuses the drafted checks out to where the walls meet: which way it missed is not guessed.
+      await ok(h, 'sketch', disc('Higher', 'Top offset 25 mm', 0, 0, 10));
+      const same2 = unchanged(h);
+      refuse = true;
+      const unknown = await fail(h, 'extrude', EXTRUDE({ name: 'Pocket', sketch: 'Higher', distance: '30 mm', taper: '30 deg', op: 'cut' }));
+      expect(unknown.detail).toMatchObject({ reason: 'feature_failed', feature: 'Pocket' });
+      expect(unknown.detail).not.toHaveProperty('sub');
+      expect(unknown.message).toMatch(/Which way it missed could not be checked \(the geometry kernel could not make the drafted extrude out to where its walls meet\)\. On Higher, /);
+      same2();
     },
     REAL_KERNEL_MS,
   );

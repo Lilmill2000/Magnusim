@@ -71,6 +71,10 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 - A profile with a hole in it is refused with a draft (the kernel's drafted
   prism filled the hole, or failed), as are Symmetric and Two sides (it drafted
   one prism from the far end, not each side from the sketch).
+- A drafted Cut or Intersect that meets nothing says "tick Flip direction" only
+  when the flipped extrude, with its draft angle, reaches a body; the Assistant's
+  diagnosis of the miss reads the draft the same way, and says when the draft
+  narrows the cut off the body before it reaches it.
 
 **A cut that removes nothing from a body it overlaps is red in History (issue #15).**
 - The geometry kernel (OCCT) can answer a Cut, Join or Intersect as if the
