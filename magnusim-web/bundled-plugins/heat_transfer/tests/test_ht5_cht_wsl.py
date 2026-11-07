@@ -15,7 +15,8 @@ analysis's own ``run_monitors`` (OpenFOAM v2606).
    source given per volume (625 000 W/m³) gives the same 10 W.
 3. A heat sink in a channel: an aluminium sink (base and fins) on the floor of an
    air channel, 10 W in the sink, air at 20 °C and 0.5 m/s, gravity. The source's
-   power equals m·cp·ΔT_bulk of the air within 2 % (the energy balance), gauge
+   power equals m·cp·ΔT_bulk of the air within 2 % (the energy balance) averaged over
+   the run's last third (the steady solve swings about it: the test says why), gauge
    pressure throughout. Built as CAD's Enclosure + Combine leave such a part: the
    sink and the channel's box minus the sink, sharing the sink's faces (OCP here:
    the CAD workspace runs in the browser and is not scripted).
@@ -317,24 +318,64 @@ def _sink_solve(proj: Path, res: dict[str, Any], wsl: str) -> tuple[dict[str, An
 
 
 def test_heat_sink_in_a_channel_carries_its_source_out(sink_study, wsl: str) -> None:
+    """The energy balance: the heat the air carries out (m·cp·ΔT_bulk, the enthalpy flow
+    through the openings), averaged over the run's last third (iterations 2001 to 3000), is
+    the source's 10 W within 2 %.
+
+    The average, not the last iteration: with gravity the steady solver never stops at one
+    answer here. From about iteration 1500 it repeats a cycle of about 80 iterations in which
+    the heat carried out swings 2 to 3 % either side of 10 W (9.71 to 10.34 W measured), so
+    one iteration reads anywhere in that band. The sink is settled (it gives the air its
+    10 W through their shared faces within 0.01 %); the swing is the air's.
+
+    Where iteration 3000 falls in the cycle changes from run to run, because the mesh and the
+    solve's split into ranks change: scotch 7 partitions on several threads and splits the
+    same mesh differently each time. A Hex-dominant Generate (snappyHexMesh on 16 ranks)
+    gives the same 95,902 cells with a third of them up to 0.13 mm apart, and one mesh split
+    4 ways for the solve takes another path from the first iteration. A landing run read
+    10.28 W at its last iteration (2.8 % off) where others read 9.96 to 10.12 W. With
+    SCOTCH_PTHREAD_NUMBER=1 both repeat exactly; the test keeps the app's own runs.
+
+    Over whole cycles what the iterations store and give back cancels, so the average is the
+    balance: 10.002 to 10.014 W (0.02 to 0.14 % off) in all nine runs measured. Nothing
+    wrong hides in it: the source in the case must be the 10 W set, the window's two halves
+    must agree within 0.5 % (a run still drifting fails) and the swing must stay under 10 %
+    of the source. With gravity off (the finer-mesh test below) the swing is about 1 %."""
+    from heat_transfer.cht_results import balance_series, region_wall_heat_flux
+
     proj, res = sink_study
-    side, answer, _case = _sink_solve(proj, res, wsl)
-    b = answer["balance"]
+    side, answer, case = _sink_solve(proj, res, wsl)
+    power = 10.0
     rho_in = 101325 * 28.97 / (8314.462618 * T_IN)
     mdot = rho_in * U_IN * 0.05 * 0.05
-    carried = b["carried_out_W"]
+    regions = [str(r["name"]) for r in side["region_rows"]]
+    series = balance_series(case, side, {r: region_wall_heat_flux(case, r) for r in regions})
+    end = series[-1]["t"]
+    window = [s for s in series if s["t"] > end * 2 / 3]
+    q = [s["carried_out_W"] for s in window]
+    half = len(q) // 2
+    carried = sum(q) / len(q)
+    halves = (sum(q[:half]) / half, sum(q[half:]) / (len(q) - half))
+    swing = (max(q) - min(q)) / power
+    drift = abs(halves[1] - halves[0]) / power
+    imbalance = sum(s["imbalance"] or 0.0 for s in window) / len(window)
     dt_bulk = carried / (mdot * 1007.0)
-    err = abs(carried - 10.0) / 10.0
+    err = abs(carried - power) / power
+    last = answer["balance"]
     tc = next(r for r in answer["custom"] if r["name"] == "Sink base")
     body = next(r for r in answer["monitors"] if r.get("region"))
     iface = answer.get("interfaces") or []
     line = (f"heat sink in a channel (air {U_IN} m/s at 20 °C, aluminium sink, 10 W, gravity, laminar): source "
-            f"{side['sources_W']:.4f} W, m·cp·ΔT_bulk {carried:.5f} W ({100 * err:.3f} % off; ΔT_bulk {dt_bulk:.4f} K at "
-            f"m {mdot:.4e} kg/s), imbalance {100 * abs(b['imbalance'] or 0):.4f} %, interface heat {iface}, sink T_max "
-            f"{body['last']['T_max_K']:.3f} K, thermocouple in the sink ({tc.get('region')}) {tc['last']['T_K']:.3f} K, "
-            f"{res.get('n_cells')} cells, regions {[(r['name'], r['cells']) for r in res['regions']]}")
+            f"{side['sources_W']:.4f} W, m·cp·ΔT_bulk over iterations {window[0]['t']:g}-{end:g} {carried:.5f} W "
+            f"({100 * err:.3f} % off; ΔT_bulk {dt_bulk:.4f} K at m {mdot:.4e} kg/s), halves {halves[0]:.5f} / {halves[1]:.5f} W, "
+            f"swing {min(q):.4f} to {max(q):.4f} W ({100 * swing:.2f} % of the source), mean imbalance {100 * imbalance:+.4f} %, "
+            f"last iteration {last['carried_out_W']:.5f} W (imbalance {100 * abs(last['imbalance'] or 0):.4f} %), interface heat "
+            f"{iface}, sink T_max {body['last']['T_max_K']:.3f} K, thermocouple in the sink ({tc.get('region')}) "
+            f"{tc['last']['T_K']:.3f} K, {res.get('n_cells')} cells, regions {[(r['name'], r['cells']) for r in res['regions']]}")
     _note("ht5-heat-sink", line)
     assert tc.get("region") == next(r["name"] for r in res["regions"] if r["role"] == "solid"), line
+    assert abs(side["sources_W"] - power) < 1e-6, line
+    assert drift < 0.005 and swing < 0.10, line
     assert err < 0.02, line
 
 
