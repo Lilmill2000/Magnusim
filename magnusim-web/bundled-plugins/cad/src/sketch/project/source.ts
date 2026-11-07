@@ -4,8 +4,9 @@
 // sketch plane, from the kernel (API 5: `project`, `silhouette`, `section`,
 // each with `cubic: true` so a B-spline comes back as the sketch's non-rational
 // cubic). A `points` source is another sketch's points (its point entities and
-// circle centres, as that sketch built), projected along the normal: no body and
-// no kernel call. A source that is gone gives `lost` with the words the sketch shows
+// circle centres, as that sketch built), projected along the normal, and its circles
+// (keys "c:<entity>", centre and radius) on a plane parallel to it: no body and no
+// kernel call (a drill tip's sketch keeps its holes' circles so). A source that is gone gives `lost` with the words the sketch shows
 // ("Edge … of flange not found after rebuild"): the sketch still builds
 // ("Don't block, just report").
 // Owner: P4b SELECT.
@@ -227,6 +228,11 @@ export function sketchPoints3d(feature: SketchFeature, out: SketchOutput): { key
   return pts;
 }
 
+/** A sketch's circles as built, in model mm (centre) and mm (radius), keyed "c:<entity id>". */
+export function sketchCircles3d(feature: SketchFeature, out: SketchOutput): { key: string; at: Vec3; r: number }[] {
+  return feature.entities.flatMap((e) => (e.kind === 'circle' && out.points[e.c] ? [{ key: `c:${e.id}`, at: toModel(out.plane, out.points[e.c]), r: out.radii[e.id] ?? e.r }] : []));
+}
+
 /** Another sketch as built before the one reading it (a `points` source), from a document's features and outputs. */
 export function sketchReader(features: readonly { id: FeatureId; type: string }[], output: (id: FeatureId) => unknown): NonNullable<LinkEnv['sketch']> {
   return (id) => {
@@ -248,6 +254,10 @@ export async function readLink(link: SketchLink, plane: PlaneFrame, env: LinkEnv
     const curves: KeyedCurve[] = sketchPoints3d(sk.feature, sk.out)
       .filter((q) => keys.has(q.key))
       .map((q) => ({ key: q.key, curve: { kind: 'point', p: toPlaneUv(plane, q.at) } }));
+    // Its circles, seen along a normal they share (on a tilted plane a circle is no circle: lost).
+    const n = sk.out.plane.normal;
+    const parallel = Math.abs(n[0] * plane.normal[0] + n[1] * plane.normal[1] + n[2] * plane.normal[2]) >= 1 - 1e-9;
+    if (parallel) for (const q of sketchCircles3d(sk.feature, sk.out)) if (keys.has(q.key)) curves.push({ key: q.key, curve: { kind: 'circle', c: toPlaneUv(plane, q.at), r: q.r } });
     return curves.length ? { state: 'ok', curves } : { state: 'lost', message: `${sourceWords(src, env)}: none of its points is there now` };
   }
   const body = env.bodies.get(src.body);

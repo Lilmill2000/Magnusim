@@ -2,8 +2,8 @@
 // the real DocService: the command's reason without profiles, select-first
 // (selected regions, a selected sketch, the only profile), the profile list
 // (area, remove, hover), clicks on regions toggling profiles (one sketch),
-// extent kinds and their fields, the Draft angle (Blind only; Until the walls meet), flip, the
-// Operation row rule, the distance
+// extent kinds and their fields, the Draft angle (Blind only; Until the walls meet), a tapped
+// hole's Thread row and its Remove, flip, the Operation row rule, the distance
 // arrow's drag, "Profile lost" in the list and the foot, the region tool's
 // selection rules in model mode, the open-profile chip, and the sketch's tree
 // row (prefix, lock, dimension count, eye).
@@ -304,6 +304,16 @@ describe('Extrude panel', () => {
     act(() => void fireEvent.change(a.$('[data-cad-panel] [data-field="extent"] select')!, { target: { value: 'symmetric' } }));
     await a.settle();
     expect(labels()).toEqual(['Extent', 'Total distance', 'Flip direction']);
+  });
+
+  it("shows a tapped hole's cosmetic thread with Remove, which takes the thread off and keeps the cut (the Assistant's edit_feature thread removed)", async () => {
+    const a = await opened({ thread: { designation: 'M6x1', major: 6, pitch: 1 } } as Partial<ExtrudeFeature>);
+    expect(a.$('[data-cad-panel] span[data-field="thread"]')!.textContent).toBe('M6x1 thread, 10 mm deep (cosmetic: drawn and listed, not modelled) Remove');
+    act(() => void fireEvent.click(a.$('[data-cad-panel] [data-thread-remove]')!));
+    await a.settle();
+    expect(extrude(a)!.thread ?? null).toBeNull();
+    expect(extrude(a)!.extent).toEqual({ kind: 'blind', distance: '10 mm' });
+    expect(a.$('[data-cad-panel] span[data-field="thread"]')).toBeNull();
   });
 
   it('shows the Operation row only once a body is made before it', async () => {

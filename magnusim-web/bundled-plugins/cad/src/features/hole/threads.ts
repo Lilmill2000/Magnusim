@@ -1,12 +1,14 @@
 // Cosmetic threads in the viewport (layer `hole.threads`, order 35): each tapped hole's thread
 // (ExtrudeFeature.thread, set by Hole) drawn as a helix at the thread's major diameter, one turn
 // per pitch (at most TURNS_MAX turns), faintly through the material, round each of the hole's
-// circles (h1, h2...) from its sketch plane into the cut, as deep as the cut goes: a Blind cut's
-// distance, or to the far side of the body for Through all (the body's box along the hole). The
-// designation ("M6x1") is labelled beside the first hole. The solid is not changed. A thread that
-// is also modelled (a thread feature cut it into the wall) keeps only its label: the real groove
-// is there to see. It reads the document and redraws only when a thread, its cut, its sketch, its
-// body or its modelled thread changed.
+// circles (h1, h2...) along that hole's own wall as the body has it (thread-def.ts wallPieces: a
+// blind hole that went through, a counterbore's or a slot's air, a body that ends short of the
+// box), as a modelled thread runs; where the wall cannot be measured (no face names), a Blind
+// cut's distance, or to the far side of the body's box for Through all. The designation ("M6x1")
+// is labelled beside the first hole. The solid is not changed. A thread that is also modelled (a
+// thread feature cut it into the wall) keeps only its label: the real groove is there to see. A
+// hidden body's threads are not drawn. It reads the document and redraws only when a thread, its
+// cut, its sketch, its body (or whether it is shown) or its modelled thread changed.
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -14,7 +16,8 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { toModel, ydirOf } from '../sketch/plane';
 import type { AppServices } from '../../types/app';
-import type { ExtrudeFeature, HoleThread, SketchFeature, Vec3 } from '../../types/doc';
+import type { ExtrudeFeature, FeatureId, HoleThread, SketchFeature, Vec3 } from '../../types/doc';
+import { wallPieces } from './thread-def';
 import type { SketchOutput } from '../../types/sketch';
 import type { OverlayLayer, ViewportHandle } from '../../types/viewport';
 import { paletteOf } from '../../viewport/palette';
@@ -24,11 +27,13 @@ const THREADS_LAYER = 'hole.threads';
 const PER_TURN = 24;
 const TURNS_MAX = 200;
 
-/** One thread to draw: its cut's name, the thread, each hole's centre, the direction into the cut, the sketch's x, its length (mm, or null: to the far side of `body`), and whether it is modelled (label only). */
+/** One thread to draw: its cut (id, name), the thread, each hole's circle id and centre, the direction into the cut, the sketch's x, its length when unmeasured (mm, or null: to the far side of `body`), and whether it is modelled (label only). */
 interface ThreadDraw {
+  cut: FeatureId;
   name: string;
   modelled: boolean;
   thread: HoleThread;
+  ids: string[];
   centres: Vec3[];
   d: Vec3;
   x: Vec3;
@@ -36,17 +41,22 @@ interface ThreadDraw {
   body: string | null;
 }
 
-/** Segment pairs of a helix about centre `c` along `d` (unit), starting along `x`: radius r, pitch p, length L. */
-function helix(c: Vec3, d: Vec3, x: Vec3, r: number, p: number, L: number): number[] {
+/**
+ * Segment pairs of a helix about centre `c` along `d` (unit), radius r, pitch p, from `a` to `b` mm
+ * along the hole, turned as one helix from the face starting along `x` (a long fine one is drawn
+ * with fewer, longer turns: at most `most`).
+ */
+function helix(c: Vec3, d: Vec3, x: Vec3, r: number, p: number, a: number, b: number, most: number): number[] {
   const y: Vec3 = [d[1] * x[2] - d[2] * x[1], d[2] * x[0] - d[0] * x[2], d[0] * x[1] - d[1] * x[0]];
-  const turns = Math.min(TURNS_MAX, L / p);
+  const L = b - a;
+  const turns = Math.min(most, L / p);
   const n = Math.max(2, Math.ceil(turns * PER_TURN));
   const out: number[] = [];
   let prev: number[] | null = null;
   for (let i = 0; i <= n; i++) {
     const t = i / n;
-    const a = 2 * Math.PI * turns * t;
-    const q = [0, 1, 2].map((k) => c[k] + d[k] * L * t + r * (Math.cos(a) * x[k] + Math.sin(a) * y[k]));
+    const ang = 2 * Math.PI * (a / p + turns * t);
+    const q = [0, 1, 2].map((k) => c[k] + d[k] * (a + L * t) + r * (Math.cos(ang) * x[k] + Math.sin(ang) * y[k]));
     if (prev) out.push(...prev, ...q);
     prev = q;
   }
@@ -71,15 +81,18 @@ function threadsOf(services: AppServices): { list: ThreadDraw[]; key: string } {
     if (!sk || !out || out.type !== 'sketch') continue;
     const n = out.plane.normal;
     const d: Vec3 = f.flip ? [-n[0], -n[1], -n[2]] : [n[0], n[1], n[2]];
-    const centres = sk.entities.flatMap((e) => (e.kind === 'circle' && /^h\d+$/.test(e.id) && out.points[e.c] ? [toModel(out.plane, out.points[e.c])] : []));
-    if (!centres.length) continue;
+    const circles = sk.entities.flatMap((e) => (e.kind === 'circle' && /^h\d+$/.test(e.id) && out.points[e.c] ? [{ id: e.id, at: toModel(out.plane, out.points[e.c]) }] : []));
+    if (!circles.length) continue;
     const blind = f.extent.kind === 'blind' ? services.doc.units.evaluate(f.extent.distance, 'length') : null;
     const length = blind ? (blind.ok ? Math.abs(blind.value) : null) : null;
     if (f.extent.kind === 'blind' && length == null) continue;
     const body = f.scope[0] ?? null;
-    const shape = length == null ? (s.rebuild.bodies.find((b) => b.id === body)?.shape ?? null) : null;
-    list.push({ name: f.name, modelled: modelled.has(f.id), thread: f.thread!, centres, d, x: out.plane.xdir as Vec3, length, body });
-    parts.push(JSON.stringify([f.name, modelled.has(f.id), f.thread, centres, d, out.plane.xdir, length, shape]));
+    const built = s.rebuild.bodies.find((b) => b.id === body);
+    // A hidden body's threads go with it.
+    if (built && built.visible === false) continue;
+    const centres = circles.map((c) => c.at);
+    list.push({ cut: f.id, name: f.name, modelled: modelled.has(f.id), thread: f.thread!, ids: circles.map((c) => c.id), centres, d, x: out.plane.xdir as Vec3, length, body });
+    parts.push(JSON.stringify([f.name, modelled.has(f.id), f.thread, centres, d, out.plane.xdir, length, built?.shape ?? null]));
   }
   return { list, key: parts.join('|') };
 }
@@ -126,42 +139,60 @@ class ThreadOverlay {
     });
   }
 
-  /** Each thread's length (a Through all one from its body's box), then the helices, if anything changed. */
+  /** Each hole's wall, measured on its body (or, unmeasured, the cut's length), then the helices, if anything changed. */
   private async sync(): Promise<void> {
     const { list, key } = threadsOf(this.services);
     if (key === this.key) return;
     const run = ++this.run;
-    const drawn: { t: ThreadDraw; length: number }[] = [];
+    const drawn: { t: ThreadDraw; pieces: [number, number][][] }[] = [];
     for (const t of list) {
-      let L = t.length;
-      if (L == null) {
-        const b = this.services.doc.state.get().rebuild.bodies.find((x) => x.id === t.body);
-        if (!b) continue;
-        try {
+      const b = this.services.doc.state.get().rebuild.bodies.find((x) => x.id === t.body);
+      // A modelled thread is drawn by its groove: only its label here.
+      if (t.modelled) {
+        drawn.push({ t, pieces: [] });
+        continue;
+      }
+      if (!b) continue;
+      let pieces: [number, number][][] | null = null;
+      try {
+        const w = await wallPieces(t.name, { kernel: this.services.kernel }, { shape: b.shape, names: b.names ?? null }, t.cut, t.ids, t.centres.map((c) => ({ c, d: t.d })));
+        if (w.ok && w.value.some((x) => x.length)) pieces = w.value;
+        let L = t.length;
+        if (!pieces && L == null) {
           const bb = (await this.services.kernel.call('props', { id: b.shape, bbox: 'fast' })).result.bbox;
           if (!bb) continue;
-          // The farthest corner of the body's box along the hole, from its first centre.
+          // Unmeasured: the farthest corner of the body's box along the hole, from its first centre.
           const c = t.centres[0];
           L = 0;
           for (const cx of [bb[0], bb[3]]) for (const cy of [bb[1], bb[4]]) for (const cz of [bb[2], bb[5]]) L = Math.max(L, (cx - c[0]) * t.d[0] + (cy - c[1]) * t.d[1] + (cz - c[2]) * t.d[2]);
-        } catch {
-          continue;
         }
-        if (run !== this.run) return;
+        if (!pieces) pieces = L != null && L > 0 ? t.centres.map((): [number, number][] => [[0, L!]]) : null;
+      } catch {
+        continue;
       }
-      if (L > 0) drawn.push({ t, length: L });
+      if (run !== this.run) return;
+      if (pieces) drawn.push({ t, pieces });
     }
     if (run !== this.run) return;
     this.key = key;
     this.draw(drawn);
   }
 
-  private draw(list: { t: ThreadDraw; length: number }[]): void {
+  private draw(list: { t: ThreadDraw; pieces: [number, number][][] }[]): void {
     this.clear();
-    for (const { t, length } of list) {
+    for (const { t, pieces } of list) {
+      // A modelled thread's groove is there to see; a wall with nothing measured draws no line.
+      const pos: number[] = [];
       if (!t.modelled) {
-        const pos: number[] = [];
-        for (const c of t.centres) pos.push(...helix(c, t.d, t.x, t.thread.major / 2, t.thread.pitch, length));
+        const P = t.thread.pitch;
+        for (const [i, c] of t.centres.entries()) {
+          // At most TURNS_MAX turns a hole, shared by its pieces by their lengths.
+          const mine = pieces[i] ?? [];
+          const all = mine.reduce((u, [a, b]) => u + (b - a) / P, 0);
+          for (const [a, b] of mine) if (b > a) pos.push(...helix(c, t.d, t.x, t.thread.major / 2, P, a, b, all > TURNS_MAX ? (TURNS_MAX * (b - a)) / P / all : Infinity));
+        }
+      }
+      if (pos.length) {
         const geo = new LineSegmentsGeometry();
         geo.setPositions(pos);
         const line = new LineSegments2(geo, this.mat);

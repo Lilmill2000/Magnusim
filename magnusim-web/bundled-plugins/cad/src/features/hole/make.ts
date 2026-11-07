@@ -18,8 +18,8 @@ import { personCall } from '../../assistant/person-call';
 import { regionsOf } from '../../assistant/region-tools';
 import { withScene } from '../../assistant/selectors/resolve';
 import { whole } from '../../assistant/sketch/write';
-import { boreWarning, bottomOf, cutFields, hasBottom, planHole, threadFields, throughWords, type HolePlan } from '../../assistant/tools/hole';
-import type { Solved } from '../../assistant/sketch/solve';
+import { boreWarning, bottomOf, cutFields, hasBottom, planHole, threadFields, throughWords, tipGeometry, type HolePlan } from '../../assistant/tools/hole';
+import type { SketchGeometry } from '../../assistant/sketch/compile';
 import type { SelectionItem } from '../../types/selection';
 
 /** What the hole tool's input holds (schemas.ts hole), the face as "selection" (the panel's pick). */
@@ -60,7 +60,7 @@ export function planFor(services: AppServices, face: SelectionItem, input: HoleI
 const featureOf = (services: AppServices, id: FeatureId) => services.doc.state.get().doc.features.find((f) => f.id === id) ?? null;
 
 /** One sketch on the person's path: its panel, one apply of the solution, Finish. Resolves with its id. */
-async function drawSketch(services: AppServices, support: SketchSupport, name: string, solved: Solved): Promise<FeatureId> {
+async function drawSketch(services: AppServices, support: SketchSupport, name: string, geometry: SketchGeometry): Promise<FeatureId> {
   const { doc } = services;
   const ui = uiFor(services);
   const mode = modeFor(services);
@@ -71,7 +71,7 @@ async function drawSketch(services: AppServices, support: SketchSupport, name: s
   if (!session || !session.open) throw new Error(`${name} did not open`);
   if (session.draft.name !== name) session.update({ name } as Partial<Feature>);
   const sketch = session.feature;
-  const applied = await mode.apply('Sketch', () => whole(solved.geometry));
+  const applied = await mode.apply('Sketch', () => whole(geometry));
   await mode.idle();
   if (!applied.ok) {
     ui.cancelPanel();
@@ -93,7 +93,8 @@ export async function makeHoles(services: AppServices, plan: HolePlan): Promise<
   const made: FeatureId[] = [];
   const warnings: string[] = [];
   // 1. The sketch on the face, as a person draws one.
-  const sketch = await drawSketch(services, plan.support, plan.sketchName, plan.solved);
+  const sketch = await drawSketch(services, plan.support, plan.sketchName, plan.solved.geometry);
+  plan.sketch = sketch;
   made.push(sketch);
   let steps = 1;
   const takeBack = () => {
@@ -110,7 +111,7 @@ export async function makeHoles(services: AppServices, plan: HolePlan): Promise<
           break;
         }
         const support = await bottomOf(personCall(services, 'hole', {}), plan);
-        on = await drawSketch(services, support, plan.tip!.sketchName, plan.tip!.solved);
+        on = await drawSketch(services, support, plan.tip!.sketchName, tipGeometry(services, plan));
         onName = plan.tip!.sketchName;
         made.push(on);
         steps++;

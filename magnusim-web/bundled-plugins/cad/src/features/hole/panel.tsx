@@ -4,11 +4,12 @@
 //   Centres    model X, Y, Z of each centre (the coordinate along the face's normal is the
 //              face's own); a click on the face adds a centre where it was clicked; Add centre
 //              adds a row to type in; From a sketch puts a hole at each of a sketch's points and
-//              circle centres, following them when that sketch changes (× goes back to centres).
+//              circle centres, following them as they move (a point added later gets no hole; ×
+//              goes back to centres).
 //   Size       Custom (Diameter, an expression: "5 mm", "hd"), Clearance hole (a bolt size, metric or
 //              inch, and a fit: ISO 273 / ASME B18.2.8) or Tapped hole (a metric or UNC/UNF thread:
 //              its tap drill, and its thread drawn in the view, or also cut into the wall: Thread
-//              Modelled); Depth: Through (the face's body) or Blind (Depth).
+//              model Modelled); Depth: Through (the face's body) or Blind (Depth).
 //   Type       Simple, Counterbore (diameter, depth) or Countersink (diameter at the face, angle);
 //              with a clearance hole, From the screw table fills them (ISO 4762 socket head,
 //              DIN 974-1; ISO 10642 countersunk head at 90°);
@@ -125,7 +126,8 @@ export function HolePanel({ close }: ToolPanelProps) {
       // The first face, or Face active: the face. Then a click on that face adds a centre there.
       if (!face || active === 'face') {
         setFace({ item: p.item, along });
-        setRows(face && selectionKey(face.item) === selectionKey(p.item) ? rows : []);
+        // A sketch's points stay the centres on another face; clicked centres were on the old one.
+        setRows(pointsFromRef.current || (face && selectionKey(face.item) === selectionKey(p.item)) ? rows : []);
         setActive('centres');
         if (along === null) setNote('That face does not face along X, Y or Z: a hole needs one that does (sketch circles on it and cut them otherwise)');
         return;
@@ -142,7 +144,7 @@ export function HolePanel({ close }: ToolPanelProps) {
     const f = added.find((it) => it.kind === 'face');
     if (f) {
       setFace({ item: f, along: null });
-      setRows([]);
+      if (!pointsFromRef.current) setRows([]);
       setActive('centres');
     }
   });
@@ -183,7 +185,7 @@ export function HolePanel({ close }: ToolPanelProps) {
       const got = sketchPoints(services, name);
       setPointsFrom(got.name);
       setRows(got.points.map((p) => ({ x: fmt(p[0]), y: fmt(p[1]), z: fmt(p[2]) })));
-      setNote(`${got.points.length} ${got.points.length === 1 ? 'hole' : 'holes'} at ${got.name}'s points: they follow those points when ${got.name} changes`);
+      setNote(`${got.points.length} ${got.points.length === 1 ? 'hole' : 'holes'} at ${got.name}'s points: they follow those points when they move (a point added to ${got.name} later gets no hole)`);
     } catch (e) {
       setError(holeError(e));
     }
@@ -276,7 +278,7 @@ export function HolePanel({ close }: ToolPanelProps) {
           onActivate={() => setActive('face')}
           onRemove={() => {
             setFace(null);
-            setRows([]);
+            if (!pointsFromRef.current) setRows([]);
             setActive('face');
           }}
           single
@@ -377,8 +379,8 @@ export function HolePanel({ close }: ToolPanelProps) {
           </Field>
         ) : null}
         {sized ? (
-          <Field label={sizing === 'tapped' ? 'Thread' : 'Bolt size'} htmlFor="cad-hole-size" field="size">
-            <Select id="cad-hole-size" label={sizing === 'tapped' ? 'Thread' : 'Bolt size'} field="size" value={size} onChange={setSize} options={sizeOptions} />
+          <Field label={sizing === 'tapped' ? 'Thread size' : 'Bolt size'} htmlFor="cad-hole-size" field="size">
+            <Select id="cad-hole-size" label={sizing === 'tapped' ? 'Thread size' : 'Bolt size'} field="size" value={size} onChange={setSize} options={sizeOptions} />
           </Field>
         ) : null}
         {sizing === 'clearance' ? (
@@ -413,10 +415,10 @@ export function HolePanel({ close }: ToolPanelProps) {
           </Field>
         )}
         {sizing === 'tapped' ? (
-          <Field label="Thread" htmlFor="cad-hole-thread" field="thread">
+          <Field label="Thread model" htmlFor="cad-hole-thread" field="thread">
             <Select
               id="cad-hole-thread"
-              label="Thread"
+              label="Thread model"
               field="thread"
               value={threadMode}
               onChange={(v) => setThreadMode(v as HoleInput['thread'])}

@@ -3,7 +3,8 @@
 //   cad:pp-hole     SOLID's Hole: a face clicked, two centres clicked on it, diameter and a blind
 //               depth typed, Done: "Hole 1 sketch" and "Hole 1" in the tree, the volume drops by
 //               the two holes, one Ctrl+Z takes both back and Ctrl+Y brings them; then a blind
-//               hole with a drill point at a typed 120 deg: its tip sketch and cut at that angle;
+//               hole with a drill point at a typed 120 deg: its tip sketch (its circle linked to
+//               the hole's) and cut at that angle, until its walls meet;
 //   cad:pp-tree     a body's colour from its swatch (and "Colour…" in its menu), a feature dragged to a
 //               new place in the history and moved with Move down, a drag the order rule refuses
 //               (said, nothing moved), and Delete of two selected features as one undo step;
@@ -141,10 +142,14 @@ test('cad:pp-hole SOLID Hole: a face and two centres clicked, diameter and blind
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1', 'Hole 1 sketch', 'Hole 1', 'Hole 2 sketch', 'Hole 2', 'Hole 2 tip sketch', 'Hole 2 tip']);
   await settled(page);
   const tip = await workspaceFrame(page).evaluate(() => {
-    const cut = (window as unknown as W).__CAD__.services.doc.state.get().doc.features.find((f: { name: string }) => f.name === 'Hole 2 tip');
-    return { extent: cut.extent, taper: cut.taper };
+    const features = (window as unknown as W).__CAD__.services.doc.state.get().doc.features;
+    const cut = features.find((f: { name: string }) => f.name === 'Hole 2 tip');
+    const sketch = features.find((f: { name: string }) => f.name === 'Hole 2 tip sketch');
+    const holes = features.find((f: { name: string }) => f.name === 'Hole 2 sketch');
+    return { extent: cut.extent, taper: cut.taper, constraints: sketch.constraints.length, links: sketch.links.map((l: { source: { kind: string; feature: string }; entities: { key: string }[] }) => ({ kind: l.source.kind, onHoles: l.source.feature === holes.id, keys: l.entities.map((e) => e.key) })) };
   });
-  expect(tip).toEqual({ extent: { kind: 'blind', distance: '(4 mm) / 2 / tan((120 deg) / 2)' }, taper: '(120 deg) / 2' });
+  // The tip runs until its walls meet, its circle linked to the hole's (so it follows the hole's d and place).
+  expect(tip).toEqual({ extent: { kind: 'blind', distance: '' }, taper: '(120 deg) / 2', constraints: 0, links: [{ kind: 'points', onHoles: true, keys: ['c:h1'] }] });
   // The hole, 3 mm deep, and its cone (radius 2, 2 / tan(60 deg) deep).
   const pointed = holes - Math.PI * 4 * 3 - (Math.PI * 4 * (2 / Math.tan(Math.PI / 3))) / 3;
   await expect.poll(() => singleVolume(frame), { timeout: 30_000 }).toBeCloseTo(pointed, 2);

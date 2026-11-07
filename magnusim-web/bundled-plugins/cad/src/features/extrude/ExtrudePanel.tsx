@@ -213,7 +213,7 @@ export function ExtrudePanel({ session, feature, isNew }: FeaturePanelProps) {
 
   const fieldErrors: string[] = [];
   // A tapped hole's thread, said as its state is now (a thread feature added, failing or removed).
-  const threadText = useStateStore(doc.state, (s) => (draft.thread ? threadWords(s.doc.features, s.rebuild.features, draft) : ''));
+  const threadText = useStateStore(doc.state, (s) => (draft.thread ? threadWords(s.doc.features, s.rebuild.features, draft, s.rebuild.bodies) : ''));
   const unitsSvc = doc.units;
   const distanceField = (key: 'distance' | 'distance2', label: string, expr: Expr, validate: (v: number) => string | null) => {
     const id = `cad-f-${feature}-${key}`;

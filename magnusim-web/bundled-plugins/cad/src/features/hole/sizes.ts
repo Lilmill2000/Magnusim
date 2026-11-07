@@ -1,7 +1,8 @@
 // Hole sizes from a fastener, metric or inch (fastener()): the clearance hole for a bolt (close,
 // normal or loose fit) and the tap drill and thread of a tapped hole.
-//   Metric (ISO): M1.6 to M64, coarse pitches only (ISO 261); the ISO 273 clearance holes; the tap
-//   drill is the major diameter minus the pitch. With a clearance hole, the counterbore for an
+//   Metric (ISO): M1.6 to M64 (the sizes in METRIC_SIZES: ISO 261's first and some second
+//   choices), coarse pitches only; the ISO 273 clearance holes; the tap drill is the ISO 2306 drill,
+//   the major diameter minus the pitch but for M8 (6.8 mm) and M12 (10.2 mm). With a clearance hole, the counterbore for an
 //   ISO 4762 socket head cap screw (DIN 974-1, M3 to M30) and the countersink for an ISO 10642
 //   countersunk head screw (its head's theoretical diameter at 90 deg, M3 to M20).
 //   Unified inch: #0 to 1 in, UNC and UNF (ASME B1.1; "1/4-20", "1/4-28 UNF", "#10-32", "1/4"
@@ -15,7 +16,7 @@
 // published charts each.
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
-import type { ExtrudeExtentDef, ExtrudeFeature, Feature } from '../../types/doc';
+import type { ExtrudeFeature, Feature } from '../../types/doc';
 
 export type ClearanceFit = 'close' | 'normal' | 'loose';
 const MM_PER_IN = 25.4;
@@ -87,16 +88,21 @@ const UNIFIED: readonly [string, number, number | null, number, Drill | null, Dr
 
 const FITS: readonly ClearanceFit[] = ['close', 'normal', 'loose'];
 const round = (v: number) => Math.round(v * 1e6) / 1e6;
+/** The metric sizes Hole knows, in words (its refusal of another lists them). */
+export const METRIC_SIZES = METRIC.map((r) => `M${r[0]}`).join(', ');
+/** ISO 2306's tap drills where they are not the major diameter minus the pitch (6.75 and 10.25 are no stock drills). */
+const TAP_DRILL: Readonly<Record<number, number>> = { 8: 6.8, 12: 10.2 };
 
 function metricOf(row: (typeof METRIC)[number]): Fastener {
   const [d, pitch, ...holes] = row;
+  const tap = TAP_DRILL[d] ?? round(d - pitch);
   return {
     system: 'metric',
     size: `M${d}`,
     thread: `M${d}x${pitch}`,
     major: d,
     pitch,
-    tap: { expr: `${round(d - pitch)} mm`, mm: round(d - pitch), words: `${round(d - pitch)} mm` },
+    tap: { expr: `${tap} mm`, mm: tap, words: `${tap} mm` },
     clearance: Object.fromEntries(FITS.map((f, i) => [f, { expr: `${holes[i]} mm`, mm: holes[i] }])) as Fastener['clearance'],
   };
 }
@@ -167,7 +173,7 @@ const COUNTERBORES: readonly [number, number, number][] = [
   [16, 26, 16.6],
   [20, 33, 20.6],
   [24, 40, 24.8],
-  [30, 48, 30.8],
+  [30, 50, 31],
 ];
 
 /** Countersinks for ISO 10642 countersunk head screws: the head's theoretical diameter dk at 90 deg (mm), so it sits flush. M3 to M20. */
@@ -202,18 +208,33 @@ export function countersinkFor(size: string): { diameter: number } | null {
   return row ? { diameter: row[1] } : null;
 }
 
-/** How deep a cut's thread runs, in words: a Blind cut's distance, else the whole hole (its cut's own extent). */
-function threadDepthWords(extent: ExtrudeExtentDef): string {
-  return extent.kind === 'blind' ? `${extent.distance} deep` : extent.kind === 'through_all' ? 'the whole hole' : "the cut's depth";
+/**
+ * How deep a cut's thread runs, in words: a Blind cut's distance, else the whole hole (its cut's
+ * own extent). A Blind cut whose body has none of its bottoms (Magnusim CAD issue 14: deeper than
+ * the body) runs through, and one with fewer bottoms than holes runs through some: its body's face
+ * names say (the cut's end caps, "F:<cut>:end" or "F:<cut>:end:<n>", a piece "#k" of one the same).
+ */
+function threadDepthWords(cut: Pick<ExtrudeFeature, 'id' | 'extent' | 'profiles' | 'scope'>, bodies: readonly { id: string; names?: { faces: readonly string[] } | null }[]): string {
+  const extent = cut.extent;
+  if (extent.kind !== 'blind') return extent.kind === 'through_all' ? 'the whole hole' : "the cut's depth";
+  const faces = bodies.find((b) => b.id === cut.scope[0])?.names?.faces;
+  if (faces) {
+    const end = `F:${cut.id}:end`;
+    const bottoms = new Set(faces.flatMap((n) => n.split('|').map((q) => q.replace(/#\d+$/, '')).filter((q) => q === end || (q.startsWith(`${end}:`) && /^\d+$/.test(q.slice(end.length + 1))))));
+    if (!bottoms.size) return `through the hole (its ${extent.distance} reaches through the body there)`;
+    if (bottoms.size < cut.profiles.length) return `${extent.distance} deep, and through where the body is thinner`;
+  }
+  return `${extent.distance} deep`;
 }
 
 /**
  * A tapped hole's thread in words, for its cut's row in get_model and its Extrude panel: "M6x1 thread,
  * 12 mm deep, cut into the wall (Hole 1 thread)" while a thread feature cuts it (built: the rule the
- * view's threads.ts follows too), else "... (cosmetic: drawn and listed, not modelled)".
+ * view's threads.ts follows too), else "... (cosmetic: drawn and listed, not modelled)". `bodies`
+ * (the rebuild's) tell a Blind hole that went through.
  */
-export function threadWords(features: readonly Feature[], states: Readonly<Record<string, { state?: string } | undefined>>, cut: ExtrudeFeature): string {
+export function threadWords(features: readonly Feature[], states: Readonly<Record<string, { state?: string } | undefined>>, cut: ExtrudeFeature, bodies: readonly { id: string; names?: { faces: readonly string[] } | null }[] = []): string {
   if (!cut.thread) return '';
   const by = features.find((g) => g.type === 'thread' && g.hole === cut.id && !g.suppressed && states[g.id]?.state === 'ok');
-  return `${cut.thread.designation} thread, ${threadDepthWords(cut.extent)}${by ? `, cut into the wall (${by.name})` : ' (cosmetic: drawn and listed, not modelled)'}`;
+  return `${cut.thread.designation} thread, ${threadDepthWords(cut, bodies)}${by ? `, cut into the wall (${by.name})` : ' (cosmetic: drawn and listed, not modelled)'}`;
 }

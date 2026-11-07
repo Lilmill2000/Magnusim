@@ -3,16 +3,21 @@
 // rebuild the thread reads that cut's sketch (its circles h1, h2...: centres and the tap drill's
 // radius), its direction and depth, and the thread's size, so it follows the hole.
 // The groove is the basic profile's: 60 deg flanks, a flat P/8 wide at the major diameter, running
-// from just inside the hole's wall out to the major diameter. Each hole's groove is one kernel
-// loft_regions through that profile in planes round the axis (PER_TURN per turn, each a pitch's
-// fraction further along it: a helical sweep), and every hole's groove is cut from the body in one
-// boolean. Each hole's thread runs along its own wall (the cut's side face of that circle, measured
-// on the body): `length` "" is the whole wall, stopping a pitch short of a blind hole's bottom and
-// just inside a through hole's far face (a groove crossing that face is a boolean the kernel answers
-// with nothing removed, so it never does); else that far from the face, at most that. A cut that
-// removes nothing fails in words rather than passing as threaded. The hole must run along X, Y or
-// Z (as Hole makes it): a wall's length is measured by its box. The body keeps its id; the groove's
-// faces are F:<id>:thread:<hole>.<k>, which the Assistant's labels call "Face of <name> thread".
+// from just inside the hole's wall out to the major diameter. Each piece of a hole's wall gets one
+// kernel loft_regions through that profile in planes round the axis (PER_TURN per turn, each a
+// pitch's fraction further along it: a helical sweep, one helix through the pieces), and every
+// groove is cut from the body in one boolean. Each hole's thread runs along its own wall (the cut's
+// side face of that circle, measured on the body), piece by piece: a counterbore's or countersink's
+// air above it, or a gap the hole crosses, has no groove (a groove through a pitch or more of air
+// is a boolean the kernel answers with nothing removed). `length` "" is the whole wall, stopping
+// a pitch short of a blind hole's bottom and just inside a face the wall ends at (a groove crossing
+// that face is such a boolean too); else that far from the face, at most that. A cut that removes
+// nothing fails in words rather than passing as threaded. The cost has a budget: at most
+// THREAD_TURNS_MAX turns a hole and THREAD_TURNS_TOTAL_MAX for all the holes (the boolean's time
+// grows with them), and the boolean and lofts have their own measured kernel timeouts. The hole
+// must run along X, Y or Z (as Hole makes it): a wall is measured by its box. The body keeps its
+// id; the groove's faces are F:<id>:thread:<hole>.<k>, which the Assistant's labels call "Face of
+// <name> thread".
 // Owner: ASSISTANT (the person's side of hole).
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { newId, nextName } from '../../lib/ids';
@@ -35,6 +40,15 @@ import { bodyFor } from '../solids/local';
 const PER_TURN = 16;
 /** The most turns one hole's thread may have (a long fine thread past it is refused with the reason). */
 export const THREAD_TURNS_MAX = 120;
+/**
+ * The most turns of all a thread feature's holes together. Measured in Node on the real kernel
+ * (2026-11-06, a loaded PC): 4 x M3x0.5 20 mm deep (156 turns) cut in 13.2 s, 8 x M6x1 through
+ * 30 mm (232 turns) in 19.4 s, at the 20 s default watchdog; the reviewer's 24 x M3 (936) ran past 90 s.
+ */
+export const THREAD_TURNS_TOTAL_MAX = 160;
+/** The thread's boolean and each loft: their own watchdogs, with room for a slower machine at the budget. */
+const THREAD_BOOLEAN_MS = 120_000;
+const THREAD_LOFT_MS = 60_000;
 /** How far inside the hole's wall the groove starts (a fraction of the pitch), so its cut meets no face edge-on. */
 const INSIDE = 0.02;
 /** A thread with an outline (24 viewBox): a bolt's shank with its crests. */
@@ -63,10 +77,11 @@ interface ThreadHole {
 }
 
 /**
- * The groove's profile planes for one hole: the basic profile (r from rIn to R, a P/8 flat at R,
- * 60 deg flanks) in the plane through the axis at each angle, a pitch per turn along it.
+ * The groove's profile planes for one piece of a hole's wall: the basic profile (r from rIn to R, a
+ * P/8 flat at R, 60 deg flanks) in the plane through the axis at each angle, a pitch per turn along
+ * it, from `from` turns (from the face: one helix through every piece) for `turns`.
  */
-function grooveSections(h: ThreadHole, rIn: number, R: number, P: number, turns: number, key: string): RegionSection[] {
+function grooveSections(h: ThreadHole, rIn: number, R: number, P: number, from: number, turns: number, key: string): RegionSection[] {
   const { c, d, x } = h;
   const y: Vec3 = [d[1] * x[2] - d[2] * x[1], d[2] * x[0] - d[0] * x[2], d[0] * x[1] - d[1] * x[0]];
   const crest = P / 8;
@@ -82,7 +97,7 @@ function grooveSections(h: ThreadHole, rIn: number, R: number, P: number, turns:
   const n = Math.max(2, Math.ceil(turns * PER_TURN));
   const out: RegionSection[] = [];
   for (let i = 0; i <= n; i++) {
-    const t = (turns * i) / n;
+    const t = from + (turns * i) / n;
     const th = 2 * Math.PI * t;
     const cs = Math.cos(th);
     const sn = Math.sin(th);
@@ -94,28 +109,46 @@ function grooveSections(h: ThreadHole, rIn: number, R: number, P: number, turns:
   return out;
 }
 
+/** Pieces of wall closer than this along the hole (mm) are one piece. */
+const JOIN_MM = 1e-6;
+
 /**
- * How far each hole's wall runs from its centre on the face along the hole (mm), measured on the
- * body (the cut's side face of that circle, "F:<cut>:side:<h>[..." and the pieces later features
- * split it into), or null for a hole whose wall is not there.
+ * The pieces of each hole's wall along the hole (mm from its centre on the face, near to far),
+ * measured on the body: the cut's side face of that circle ("F:<cut>:side:<h>[..." and the pieces
+ * later features split it into), touching ones joined; [] for a hole whose wall is not there.
+ * Exported for the cosmetic thread (threads.ts), which draws along the same wall.
  */
-async function wallLengths(name: string, ctx: Pick<BuildContext, 'kernel'>, body: BuiltBody, cut: FeatureId, ids: readonly string[], holes: readonly ThreadHole[]): Promise<{ ok: true; value: (number | null)[] } | { ok: false; message: string }> {
+export async function wallPieces(name: string, ctx: Pick<BuildContext, 'kernel'>, body: Pick<BuiltBody, 'shape' | 'names'>, cut: FeatureId, ids: readonly string[], holes: readonly Pick<ThreadHole, 'c' | 'd'>[]): Promise<{ ok: true; value: [number, number][][] } | { ok: false; message: string }> {
   const faces = body.names?.faces ?? [];
   const of = ids.map((id) => faces.flatMap((n, i) => (n.split('|').some((p) => p.startsWith(`F:${cut}:side:${id}[`)) ? [i] : [])));
   const all = [...new Set(of.flat())];
-  if (!all.length) return { ok: true, value: ids.map(() => null) };
+  if (!all.length) return { ok: true, value: ids.map(() => []) };
   const topo = await kernelStep(name, () => ctx.kernel.call('topo', { id: body.shape, faces: all, edges: 'none', vertices: 'none', face_bbox: 'exact', face_mass: false }));
   if (!topo.ok) return topo;
   const box = new Map(topo.value.result.faces.map((t) => [t.i, t.bbox ?? null]));
   const value = of.map((list, k) => {
     const { c, d } = holes[k];
-    let far: number | null = null;
+    const spans: [number, number][] = [];
     for (const i of list) {
       const bb = box.get(i);
       if (!bb) continue;
-      for (const x of [bb[0], bb[3]]) for (const y of [bb[1], bb[4]]) for (const z of [bb[2], bb[5]]) far = Math.max(far ?? -Infinity, (x - c[0]) * d[0] + (y - c[1]) * d[1] + (z - c[2]) * d[2]);
+      let near = Infinity;
+      let far = -Infinity;
+      for (const x of [bb[0], bb[3]]) for (const y of [bb[1], bb[4]]) for (const z of [bb[2], bb[5]]) {
+        const a = (x - c[0]) * d[0] + (y - c[1]) * d[1] + (z - c[2]) * d[2];
+        near = Math.min(near, a);
+        far = Math.max(far, a);
+      }
+      spans.push([near, far]);
     }
-    return far;
+    spans.sort((a, b) => a[0] - b[0]);
+    const joined: [number, number][] = [];
+    for (const sp of spans) {
+      const last = joined.at(-1);
+      if (last && sp[0] <= last[1] + JOIN_MM) last[1] = Math.max(last[1], sp[1]);
+      else joined.push([sp[0], sp[1]]);
+    }
+    return joined;
   });
   return { ok: true, value };
 }
@@ -169,43 +202,57 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
     const b = bodyFor(f.name, f.body, ctx);
     if (!b.ok) return b;
     const body = b.value;
-    const blind = hole.extent.kind === 'blind';
+    // A blind hole's bottom (where its wall ends at the cut's own depth): a pitch clear of it.
+    const deep = hole.extent.kind === 'blind' ? ctx.units.evaluate(hole.extent.distance, 'length') : null;
+    const bottomAt = deep?.ok ? Math.abs(deep.value) : null;
     const wIn = P / 8 + 2 * (R - rIn) * Math.tan(Math.PI / 6);
-    // Clear of a blind hole's bottom by a pitch; inside a through hole's far face by the groove's half width and a little.
-    const clear = blind ? P : wIn / 2 + INSIDE * P;
-    const walls = await wallLengths(f.name, ctx, body, hole.id, circles.map((e) => e.id), holes);
+    // Inside a face the wall ends at by the groove's half width and a little.
+    const inside = wIn / 2 + INSIDE * P;
+    const walls = await wallPieces(f.name, ctx, body, hole.id, circles.map((e) => e.id), holes);
     if (!walls.ok) return walls;
-    const lengths: number[] = [];
-    for (const [i, wall] of walls.value.entries()) {
-      if (wall == null) return { ok: false, message: `${f.name} failed: the wall of hole ${i + 1} of ${hole.name} is not on ${ctx.bodyName(f.body)}` };
-      let L = wall - clear;
+    const spans: [number, number][][] = [];
+    for (const [i, pieces] of walls.value.entries()) {
+      if (!pieces.length) return { ok: false, message: `${f.name} failed: the wall of hole ${i + 1} of ${hole.name} is not on ${ctx.bodyName(f.body)}` };
+      // Each piece from where it starts to just short of where it ends.
+      let mine = pieces.map(([a, b]): [number, number] => [a, b - (bottomAt != null && Math.abs(b - bottomAt) <= 1e-6 * Math.max(1, bottomAt) ? P : inside)]);
+      const most = mine.at(-1)![1];
       if (v.length != null) {
-        if (v.length > L + 1e-9) return { ok: false, message: `${f.name} failed: a length of ${v.length} mm is more than hole ${i + 1} of ${hole.name} allows (${Math.round(L * 1000) / 1000} mm, ${blind ? 'a pitch short of its bottom' : 'inside its far face'})` };
-        L = v.length;
+        if (v.length > most + 1e-9) return { ok: false, message: `${f.name} failed: a length of ${v.length} mm is more than hole ${i + 1} of ${hole.name} allows (${Math.round(most * 1000) / 1000} mm, ${bottomAt != null && Math.abs(pieces.at(-1)![1] - bottomAt) <= 1e-6 * Math.max(1, bottomAt) ? 'a pitch short of its bottom' : 'inside its far face'})` };
+        mine = mine.map(([a, b]): [number, number] => [a, Math.min(b, v.length!)]);
       }
-      if (!(L >= P)) return { ok: false, message: `${f.name} failed: hole ${i + 1} of ${hole.name} is too shallow for a thread of pitch ${P} mm` };
-      if (L / P > THREAD_TURNS_MAX) return { ok: false, message: `${f.name} failed: ${Math.ceil(L / P)} turns of ${th.designation} is more than ${THREAD_TURNS_MAX}: give a shorter length` };
-      lengths.push(L);
+      // A piece shorter than a pitch has no room for a turn.
+      mine = mine.filter(([a, b]) => b - a >= P);
+      if (!mine.length) return { ok: false, message: `${f.name} failed: hole ${i + 1} of ${hole.name} is too shallow for a thread of pitch ${P} mm` };
+      const turns = mine.reduce((t, [a, b]) => t + (b - a) / P, 0);
+      if (turns > THREAD_TURNS_MAX) return { ok: false, message: `${f.name} failed: ${Math.ceil(turns)} turns of ${th.designation} in hole ${i + 1} of ${hole.name} is more than ${THREAD_TURNS_MAX} a hole: a Length of at most ${Math.round(THREAD_TURNS_MAX * P * 1000) / 1000} mm, a hole at most that deep, or a cosmetic thread` };
+      spans.push(mine);
     }
+    const all = spans.reduce((t, mine) => t + mine.reduce((u, [a, b]) => u + (b - a) / P, 0), 0);
+    if (all > THREAD_TURNS_TOTAL_MAX) return { ok: false, message: `${f.name} failed: ${spans.length} holes of ${th.designation} are ${Math.ceil(all)} turns in all, more than the ${THREAD_TURNS_TOTAL_MAX} one thread cuts at once (the cut would take minutes): a shorter Length, fewer or shallower holes, or a cosmetic thread` };
 
     // ---- the grooves, then one cut
     const made: ShapeId[] = [];
     try {
-      const probe = grooveSections(holes[0], rIn, R, P, 0, '');
+      const probe = grooveSections(holes[0], rIn, R, P, 0, 0, '');
       const regions = await kernelStep(f.name, () => ctx.kernel.call('sketch_regions', { plane: probe[0].plane, curves: probe[0].curves }));
       if (!regions.ok) return regions;
       const key = regions.value.result.regions[0]?.key;
       if (!key) return { ok: false, message: `${f.name} failed: the thread's profile made no region` };
       const tools: { shape: ShapeId; names: FaceNames }[] = [];
       for (const [i, h] of holes.entries()) {
-        const lo = await kernelStep(f.name, () => ctx.kernel.call('loft_regions', { sections: grooveSections(h, rIn, R, P, lengths[i] / P, key), ruled: false }));
-        if (!lo.ok) return lo;
-        made.push(lo.value.result.id);
-        if (lo.value.result.valid === false) return { ok: false, message: `${f.name} failed: the thread of hole ${i + 1} is not a valid solid` };
-        const count = lo.value.result.faces ?? 0;
-        tools.push({ shape: lo.value.result.id, names: { faces: Array.from({ length: count }, (_, k) => faceName(f.id, 'thread', `${i + 1}.${k}`)) } });
+        // One groove a piece of wall, one helix through them; its faces numbered on along the hole.
+        let k0 = 0;
+        for (const [a, b] of spans[i]) {
+          const lo = await kernelStep(f.name, () => ctx.kernel.call('loft_regions', { sections: grooveSections(h, rIn, R, P, a / P, (b - a) / P, key), ruled: false }, { timeoutMs: THREAD_LOFT_MS }));
+          if (!lo.ok) return lo;
+          made.push(lo.value.result.id);
+          if (lo.value.result.valid === false) return { ok: false, message: `${f.name} failed: the thread of hole ${i + 1} is not a valid solid` };
+          const count = lo.value.result.faces ?? 0;
+          tools.push({ shape: lo.value.result.id, names: { faces: Array.from({ length: count }, (_, k) => faceName(f.id, 'thread', `${i + 1}.${k0 + k}`)) } });
+          k0 += count;
+        }
       }
-      const cut = await kernelStep(f.name, () => ctx.kernel.call('boolean', { op: 'cut', targets: [body.shape], tools: tools.map((t) => t.shape) }));
+      const cut = await kernelStep(f.name, () => ctx.kernel.call('boolean', { op: 'cut', targets: [body.shape], tools: tools.map((t) => t.shape) }, { timeoutMs: THREAD_BOOLEAN_MS }));
       if (!cut.ok) return cut;
       const res = cut.value.result;
       if (res.valid === false) {
@@ -216,7 +263,7 @@ export const threadDef: FeatureTypeDef<ThreadFeature, ThreadValues> = {
       const vols = await kernelStep(f.name, () => Promise.all([body.shape, res.id].map(async (id) => (await ctx.kernel.call('props', { id, volume: true, bbox: 'none' })).result.volume ?? 0)));
       if (!vols.ok || !(vols.value[0] - vols.value[1] > 1e-6 * Math.max(1, vols.value[0]))) {
         await ctx.release([res.id]);
-        return vols.ok ? { ok: false, message: `${f.name} failed: the kernel cut nothing (the thread's groove did not meet ${ctx.bodyName(f.body)}'s wall)` } : vols;
+        return vols.ok ? { ok: false, message: `${f.name} failed: the kernel's cut of the thread's groove removed nothing from ${ctx.bodyName(f.body)}, so it is not threaded (a cosmetic thread draws it instead)` } : vols;
       }
       const names = namesFromResult(f.id, res, new Map<ShapeId, FaceNames | null>([[body.shape, body.names], ...tools.map((t) => [t.shape, t.names] as [ShapeId, FaceNames])]));
       return { ok: true, bodies: [{ id: f.body, shape: res.id, valid: true, names }], removed: [] };

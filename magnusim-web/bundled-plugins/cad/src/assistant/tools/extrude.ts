@@ -22,7 +22,8 @@
 // profiles with no hole in them, blind only; with one that narrows, blind distance "" runs until the
 // walls meet (to a point or a ridge, as the panel's Until the walls meet). Walls that meet before
 // a distance given end the body there, with a warning. A tapped hole's cosmetic thread (ExtrudeFeature.thread,
-// made by hole) is not an input here: an edit keeps it.
+// made by hole) is not an input here: an edit keeps it, and edit_feature's thread "removed" takes it
+// off (the Extrude panel's Remove).
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE, MEET_WORDS } from '../../features/extrude/def';

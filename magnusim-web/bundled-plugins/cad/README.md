@@ -276,11 +276,11 @@ touching bodies apart.
 - **Hole** (a flat face's menu, or SOLID > Hole): round holes into one flat face
   facing along X, Y or Z. Click the face for each centre, type them, or take
   them **From a sketch** (a hole at each of its points and circle centres, and
-  they follow those points when that sketch changes). **Size**, metric or inch:
+  they follow those points as they move; a point added later gets no hole). **Size**, metric or inch:
   a custom diameter, a **clearance hole for a bolt** (M1.6 to M64, ISO 273; #0 to
   1 in, ASME B18.2.8; close, normal or loose fit) or a **tapped hole** (ISO coarse
   or UNC / UNF: its tap drill, and its thread, listed and drawn in the view as a
-  coil with its size, "M6x1"; **Thread: Modelled** also cuts the real thread into
+  coil with its size, "M6x1"; **Thread model: Modelled** also cuts the real thread into
   the wall, as the feature "Hole 1 thread", which follows the hole).
   **Type**: simple, **counterbore** (diameter, depth) or **countersink**
   (diameter at the face, angle); with a clearance hole, **From the screw table**

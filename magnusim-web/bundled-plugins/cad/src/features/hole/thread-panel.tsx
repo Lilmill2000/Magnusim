@@ -15,10 +15,19 @@ export function ThreadPanel(props: FeaturePanelProps) {
   const kit = useFeaturePanel<ThreadFeature>(props);
   const f = kit.draft;
   const hole = useStateStore(services.doc.state, (s) => s.doc.features.find((g) => g.id === f.hole) as ExtrudeFeature | undefined);
+  const failed = useStateStore(services.doc.state, (s) => s.rebuild.features[props.feature]?.state === 'error');
+  // The hole, its thread and this feature's rebuild, each said as it is (the build's words say why it fails).
+  const hint = !hole
+    ? 'Its tapped hole is gone.'
+    : !hole.thread
+      ? `${hole.name} has no thread now (it was removed from that cut): there is nothing to cut.`
+      : failed
+        ? `${hole.thread.designation} in ${hole.name} is not cut now: its rebuild fails (the reason is below).`
+        : `${hole.thread.designation} cut into ${hole.name}, following its holes.`;
   const id = `cad-thread-${props.feature}-length`;
   return (
     <P2FeaturePanel props={props} kit={kit}>
-      <Hint>{hole?.thread ? `${hole.thread.designation} cut into ${hole.name}, following its holes.` : 'Its tapped hole is gone.'}</Hint>
+      <Hint>{hint}</Hint>
       <Field label="Length" htmlFor={id} field="length">
         {/* Applied on Enter or leaving the field: each rebuild cuts the thread again (a second or two). */}
         <input

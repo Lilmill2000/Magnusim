@@ -13,15 +13,18 @@
 // type counterbore or countersink adds, in the same sketch, a circle c1, c2... about each hole
 // (on its centre point, so they move together), its diameter dimension dc on c1 and c2... equal
 // to it (eqc2...), and before the cut "<name>" the cut "<name> counterbore" (each hole's disc and
-// ring, blind cb_depth) or "<name> countersink" (blind the cone's depth (cs_diameter - diameter) /
-// 2 / tan(cs_angle / 2), draft angle cs_angle / 2: a cone that narrows to the hole); "<name>" then
-// cuts the discs only. Two counterbores or countersinks that would overlap are refused.
+// ring, blind cb_depth) or "<name> countersink" (draft angle cs_angle / 2, blind until the walls
+// meet: a cone from cs_diameter to a point, whose part narrower than the hole lies inside the hole,
+// so it holds for any d; a blind hole shallower than that cone stops it at the hole's depth);
+// "<name>" then cuts the discs only. Two counterbores or countersinks that would overlap are refused.
 // tip "drill" (118 deg) or a point's included angle (blind holes; "" is a flat bottom) ends each
 // hole in a drill point: the sketch "<name> tip sketch" on the holes' bottom ("<name>.end", or
-// "<name>.end(1)" with several holes: they lie in one plane), the same circles placed the same
-// way, and the cut "<name> tip" (blind diameter / 2 / tan(angle / 2), draft angle / 2: to a
-// point). One field holds the bottom and its angle, so the tool keeps to 16 fields. Every size is
-// an expression the features keep, so they follow parameters.
+// "<name>.end(1)" with several holes: they lie in one plane), its circles h1, h2... linked to the
+// holes' circles (a points link to "<name> sketch", keys "c:h1"...: their centres and size), and
+// the cut "<name> tip" (draft angle / 2, blind until the walls meet: to a point). So a drill point
+// follows its hole when the sketch's d or h1x changes. One field holds the bottom and its angle, so
+// the tool keeps to 16 fields. Every size is an expression the features keep, so they follow
+// parameters.
 // size "M6" (or an inch size, "1/4-20", "#10-32 UNF") sizes the hole from a fastener
 // (features/hole/sizes.ts): fit close, normal or loose gives the clearance hole (ISO 273, or
 // ASME B18.2.8 for inch sizes), fit tapped the tap drill and a cosmetic thread on the
@@ -31,7 +34,10 @@
 // ISO 10642 countersunk head screw's.
 // thread modelled (fit tapped) also cuts the thread into the wall: the feature "<name> thread"
 // (features/hole/thread-def.ts) after the cuts, following the hole; cosmetic (the default) only
-// records and draws it.
+// records and draws it. Blind holes whose thread the feature would refuse (too shallow for a turn
+// and a pitch to the bottom, past its turns a hole or in all: up to the depth's turns, as a wall
+// can be shorter than the hole but no longer) are refused here first, with the ways out; a through
+// hole's wall is measured only when it is cut, so its thread says so then (nothing is kept).
 // points "<sketch>" puts a centre at each point of that sketch (its point entities and circle
 // centres), seen along the face's normal; centers is then []. The holes follow those points: the
 // holes' sketch (and a drill tip's) holds each centre with a link to that sketch's point
@@ -55,7 +61,8 @@
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { DEFAULT_DISTANCE, TAPER_MAX_DEG } from '../../features/extrude/def';
-import { counterboreFor, COUNTERBORE_SIZES, countersinkFor, COUNTERSINK_SIZES, fastener, type ClearanceFit } from '../../features/hole/sizes';
+import { counterboreFor, COUNTERBORE_SIZES, countersinkFor, COUNTERSINK_SIZES, fastener, METRIC_SIZES, type ClearanceFit } from '../../features/hole/sizes';
+import { THREAD_TURNS_MAX, THREAD_TURNS_TOTAL_MAX } from '../../features/hole/thread-def';
 import type { SketchOutput } from '../../types/sketch';
 import { faceFrame, ydirOf } from '../../features/sketch/plane';
 import { sketchPoints3d } from '../../sketch/project/source';
@@ -63,7 +70,7 @@ import { nextName } from '../../lib/ids';
 import { isDimension } from '../../sketch/model';
 import type { AppServices } from '../../types/app';
 import type { CallCtx, EditData, ToolImpl, ToolReply } from '../../types/assistant';
-import type { BodyId, ExtrudeExtentDef, Feature, FeatureId, HoleThread, PlaneFrame, RegionRef, SketchFeature, SketchSupport, Vec3 } from '../../types/doc';
+import type { BodyId, ExtrudeExtentDef, Feature, FeatureId, HoleThread, PlaneFrame, RegionRef, SketchEntity, SketchFeature, SketchLink, SketchSupport, Vec2, Vec3 } from '../../types/doc';
 import type { UnitsService } from '../../types/units';
 import { heartbeat } from '../busy';
 import { ToolError } from '../errors';
@@ -78,7 +85,7 @@ import { runtimeOf } from '../runtime';
 import { dot, sub, unit } from '../selectors/geometry';
 import { faceRefOf } from '../selectors/refs';
 import { faceLabel, hitWords, selectOne, withScene } from '../selectors/resolve';
-import { compileSketch, storeExpr, type Compiled, type ConstraintIn, type EntityIn } from '../sketch/compile';
+import { compileSketch, storeExpr, type Compiled, type ConstraintIn, type EntityIn, type SketchGeometry } from '../sketch/compile';
 import { JOIN_TOL } from '../sketch/macros';
 import { solveSketch, type Solved } from '../sketch/solve';
 import { writeSketch } from '../sketch/write';
@@ -144,8 +151,8 @@ export interface HolePlan extends EditPlan {
   step: { diameter: number; depth: number; angle: number | null } | null;
   /** The cuts, in order (the hole's own is role bore). */
   cuts: HoleCut[];
-  /** The drill tip: its sketch's name, compiled and solved (same frame as the hole's), or null. */
-  tip: { sketchName: string; compiled: Compiled; solved: Solved; angle: number; depth: number } | null;
+  /** The drill tip: its sketch's name (its circles linked to the hole's: tipGeometry), angle and depth, or null. */
+  tip: { sketchName: string; angle: number; depth: number } | null;
   /** "M6 clearance (normal fit)", "M6x1 tap drill", or "". */
   sizeWords: string;
   warnings: string[];
@@ -281,7 +288,7 @@ export function sketchPoints(services: AppServices, name: string): { name: strin
     keys.push(q.key);
   }
   if (!points.length) throw new ToolError('bad_input', `points: ${f.name} has no points or circles to put holes at.`, { detail: { field: 'points' } });
-  if (points.length > CENTERS_MAX) throw new ToolError('bad_input', `points: ${f.name} has ${points.length} points; hole takes at most ${CENTERS_MAX} (call hole again for the rest).`, { detail: { field: 'points' } });
+  if (points.length > CENTERS_MAX) throw new ToolError('bad_input', `points: ${f.name} has ${points.length} points; hole takes at most ${CENTERS_MAX} (give centers instead, at most ${CENTERS_MAX} a call, or a sketch with fewer points).`, { detail: { field: 'points' } });
   return { name: f.name, feature: f.id, points, keys };
 }
 
@@ -333,8 +340,8 @@ export function throughWords(plan: HolePlan, bottoms = 0): string {
   const some = bottoms > 0 && bottoms < n;
   const one = n - bottoms === 1;
   return some
-    ? `${n - bottoms} of the ${n} holes of ${plan.name} ${one ? 'is' : 'are'} deeper than ${plan.bodyName} there, so ${one ? 'it goes' : 'they go'} through (${len(plan.depth ?? 0)} mm deep)`
-    : `${plan.name} is ${len(plan.depth ?? 0)} mm deep, deeper than ${plan.bodyName} there, so it goes through (set depth through, or a smaller distance)`;
+    ? `${n - bottoms} of the ${n} holes of ${plan.name} ${one ? 'is' : 'are'} at least as deep as ${plan.bodyName} there, so ${one ? 'it goes' : 'they go'} through (${len(plan.depth ?? 0)} mm deep)`
+    : `${plan.name} is ${len(plan.depth ?? 0)} mm deep, at least as deep as ${plan.bodyName} there, so it goes through (set depth through, or a smaller distance)`;
 }
 
 /**
@@ -347,6 +354,24 @@ export function boreWarning(services: AppServices, plan: HolePlan): string | nul
   if (bottoms === 0) return plan.tip ? null : throughWords(plan);
   if (bottoms < plan.centers.length && !plan.overlap) return throughWords(plan, bottoms);
   return null;
+}
+
+/**
+ * The drill tip's sketch once the holes' sketch is made: each hole's circle (h1, h2...) linked to
+ * it (a points link, keys "c:<circle>"), so the tips keep the holes' centres and size; no dimension
+ * of its own. On the bottom the frame turns as on the face, so the holes' u and v are where they start.
+ */
+export function tipGeometry(services: AppServices, plan: HolePlan): SketchGeometry {
+  const sk = services.doc.state.get().doc.features.find((f) => f.id === plan.sketch) as SketchFeature | undefined;
+  if (!sk) throw new ToolError('internal', `${plan.sketchName} is not in the Part.`);
+  const circles = sk.entities.filter((e): e is Extract<SketchEntity, { kind: 'circle' }> => e.kind === 'circle' && /^h\d+$/.test(e.id));
+  const link: SketchLink = { id: 'lk1', type: 'projected', source: { kind: 'points', feature: sk.id }, entities: circles.map((e) => ({ key: `c:${e.id}`, entity: e.id })) };
+  return {
+    points: Object.fromEntries(circles.map((e) => [e.c, [...sk.points[e.c]] as Vec2])),
+    entities: circles.map((e) => ({ id: e.id, kind: 'circle', c: e.c, r: e.r, link: link.id })),
+    constraints: [],
+    links: [link],
+  };
 }
 
 /** The hole's bottom as a sketch support (after its cut is made). */
@@ -398,11 +423,11 @@ const holeTool: EditTool<Plan> = {
       if (!size) problems.push('size: a size such as "M6" or "1/4-20" with fit');
       else if (!(FITS as readonly string[]).includes(fit)) problems.push('fit: close, normal or loose (a clearance hole for the bolt), or tapped (the tap drill)');
       else if (diameter) problems.push('diameter: "" with size (the size gives it)');
-      else if (!screw) problems.push(`size: "${size}" is not a size Hole knows: metric coarse M1.6 to M64 ("M6", "M6x1"), or Unified inch #0 to 1 in ("1/4-20", "#10-32", "1/4-28 UNF")`);
+      else if (!screw) problems.push(`size: "${size}" is not a size Hole knows: metric coarse ${METRIC_SIZES} ("M6", "M6x1"), or Unified inch #0 to 1 in ("1/4-20", "#10-32", "1/4-28 UNF")`);
       else if (fit === 'tapped') {
         diameter = screw.tap.expr;
         sizeWords = `${screw.thread} tap drill ${screw.tap.words} (its thread is drawn and listed${threadMode === 'modelled' ? ', and cut' : ', not modelled'})`;
-      } else if (!screw.clearance) problems.push(`size: ASME B18.2.8 has no clearance hole for ${screw.size}; give the diameter`);
+      } else if (!screw.clearance) problems.push(`size: ASME B18.2.8 has no clearance hole for ${screw.size}; send size "" and fit "" with the diameter`);
       else {
         diameter = screw.clearance[fit as ClearanceFit].expr;
         sizeWords = `${screw.size} clearance, ${fit} fit (${screw.system === 'metric' ? 'ISO 273' : 'ASME B18.2.8'}): ${diameter}`;
@@ -602,6 +627,25 @@ const holeTool: EditTool<Plan> = {
       return { label, along, ref, frame, centers, uv, D: D!, deep, step, tipA, warnings, overlap, body: hit.body.id, bodyName: hit.body.name };
     });
 
+    // ---- a modelled thread in blind holes: what its feature would refuse, refused now (thread-def.ts: a
+    // pitch short of the bottom). The walls are not cut yet: the depth bounds them (a counterbore or a
+    // gap the hole crosses leaves less), so the turns are said as at most that.
+    if (threadMode === 'modelled' && screw && found.deep !== null) {
+      const P = screw.pitch;
+      const turns = (found.deep - P) / P;
+      const n = found.centers.length;
+      const deep = `${len(found.deep)} mm deep`;
+      const why =
+        turns < 1
+          ? `thread: a modelled ${screw.thread} thread ${deep} is too shallow to cut (a turn and a pitch to the bottom need ${len(2 * P)} mm): use thread cosmetic, or a deeper hole`
+          : turns > THREAD_TURNS_MAX
+            ? `thread: a modelled ${screw.thread} thread ${deep} is up to ${Math.ceil(turns)} turns, more than ${THREAD_TURNS_MAX} a hole: use thread cosmetic, or a hole at most ${len((THREAD_TURNS_MAX + 1) * P)} mm deep`
+            : n * turns > THREAD_TURNS_TOTAL_MAX
+              ? `thread: ${n} modelled ${screw.thread} threads ${deep} are up to ${Math.ceil(n * turns)} turns in all, more than the ${THREAD_TURNS_TOTAL_MAX} one thread cuts at once (it would take minutes): use thread cosmetic, fewer holes, or shallower ones`
+              : null;
+      if (why) throw new ToolError('bad_input', `${why}.`, { detail: { field: 'thread' } });
+    }
+
     // ---- the sketch, compiled and solved headless before anything changes
     const entities: EntityIn[] = found.uv.map((h, r) => ({ id: `h${r + 1}`, kind: 'circle', at: [h.u, h.v, found.D / 2], construction: false }));
     const constraints: ConstraintIn[] = [
@@ -628,7 +672,6 @@ const holeTool: EditTool<Plan> = {
     if (solved.state !== 'fully') throw new ToolError('internal', `The holes' sketch is not fully defined (dof ${solved.dof}).`);
     if (fromSketch) solved = followPoints(solved, fromSketch);
 
-    const D = storeExpr(diameter, 'length', units);
     const extent: ExtrudeExtentDef = depth === 'blind' ? { kind: 'blind', distance: storeExpr(distance, 'length', units) } : { kind: 'through_all', both: false, distance: DEFAULT_DISTANCE[units.units().length] ?? '10 mm' };
     const atText = (u: number, v: number) => `at(${len(u)}, ${len(v)})`;
     const discs = found.uv.map((h) => atText(h.u, h.v));
@@ -636,29 +679,27 @@ const holeTool: EditTool<Plan> = {
     if (found.step) {
       // The ring of each hole: a point half way between the hole's circle and the step's.
       const ringsAt = found.uv.map((h) => atText(h.u + (found.D + found.step!.diameter) / 4, h.v));
-      const S = storeExpr(stepExpr, 'length', units);
       const A = type === 'countersink' ? storeExpr(csAngle, 'angle', units) : '';
+      // A countersink's cone to its point (it holds for any d of the hole), unless a blind hole ends before the point.
+      const apex = found.step.angle !== null ? found.step.diameter / 2 / Math.tan((found.step.angle * Math.PI) / 360) : 0;
+      const toPoint = found.deep === null || apex <= found.deep;
       cuts.push({
         role: 'step',
         name: `${names.name}${STEP_SUFFIX[type as 'counterbore' | 'countersink']}`,
         regions: [...discs, ...ringsAt],
-        extent: { kind: 'blind', distance: type === 'counterbore' ? storeExpr(cbDepth, 'length', units) : `((${S}) - (${D})) / 2 / tan((${A}) / 2)` },
+        extent: { kind: 'blind', distance: type === 'counterbore' ? storeExpr(cbDepth, 'length', units) : toPoint ? '' : storeExpr(distance, 'length', units) },
         taper: type === 'countersink' ? `(${A}) / 2` : null,
       });
     }
     const thread: HoleThread | undefined = fit === 'tapped' && screw ? { designation: screw.thread, major: screw.major, pitch: screw.pitch } : undefined;
     cuts.push({ role: 'bore', name: names.name, regions: found.step ? discs : ['all'], extent, taper: null, ...(thread ? { thread } : {}) });
 
-    // The drill tip: the same circles on the hole's bottom (its frame turns the same way, so the same u and v), cut to a point.
+    // The drill tip: the holes' circles on their bottom (tipGeometry, made once the holes' sketch is), cut until the walls meet.
     let tipPlan: HolePlan['tip'] = null;
     if (found.tipA !== null && found.deep !== null) {
       const T = storeExpr(tipAngle, 'angle', units);
-      const tc = compileSketch({ entities: [...entities, ...anchors], constraints, infer: false }, { units, stored: null });
-      let ts = await solveSketch(ctx, { ...tc, geometry: tc.draft });
-      if (ts.state !== 'fully') throw new ToolError('internal', `The drill tip's sketch is not fully defined (dof ${ts.dof}).`);
-      if (fromSketch) ts = followPoints(ts, fromSketch);
-      tipPlan = { sketchName: `${names.name}${TIP_SKETCH_SUFFIX}`, compiled: tc, solved: ts, angle: found.tipA, depth: found.D / 2 / Math.tan((found.tipA * Math.PI) / 360) };
-      cuts.push({ role: 'tip', name: `${names.name}${TIP_SUFFIX}`, regions: ['all'], extent: { kind: 'blind', distance: `(${D}) / 2 / tan((${T}) / 2)` }, taper: `(${T}) / 2` });
+      tipPlan = { sketchName: `${names.name}${TIP_SKETCH_SUFFIX}`, angle: found.tipA, depth: found.D / 2 / Math.tan((found.tipA * Math.PI) / 360) };
+      cuts.push({ role: 'tip', name: `${names.name}${TIP_SUFFIX}`, regions: ['all'], extent: { kind: 'blind', distance: '' }, taper: `(${T}) / 2` });
     }
 
     const n = found.centers.length;
@@ -730,7 +771,7 @@ const holeTool: EditTool<Plan> = {
         plan.tipMade = true;
         await ctx.checkpoint({ hold: 'between-opens' });
         const support = await bottomOf(ctx, plan);
-        on = await writeSketch(ctx, { target: { kind: 'new', support, name: plan.tip!.sketchName }, geometry: plan.tip!.solved.geometry }, plan.tip!.compiled.refOf);
+        on = await writeSketch(ctx, { target: { kind: 'new', support, name: plan.tip!.sketchName }, geometry: tipGeometry(services, plan) });
         onName = plan.tip!.sketchName;
         plan.made.push(on);
         await heartbeat(ctx, services.doc.settled(ctx.signal), onName);

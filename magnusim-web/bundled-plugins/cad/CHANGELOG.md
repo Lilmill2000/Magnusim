@@ -7,22 +7,29 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
 **Hole makes counterbores, countersinks, drill points, fastener sizes and threads (issue #7).**
 - SOLID > Hole has **Size**: Custom diameter, **Clearance hole for a bolt** (a
   metric size M1.6 to M64 and a fit: close, normal or loose, the ISO 273 hole:
-  M6 normal is 6.6 mm) or **Tapped hole** (the tap drill: major diameter minus
-  the coarse pitch, M6x1 is 5 mm).
+  M6 normal is 6.6 mm) or **Tapped hole** (the ISO 2306 tap drill: major
+  diameter minus the coarse pitch, M6x1 is 5 mm, but M8 6.8 mm and M12 10.2 mm).
 - A tapped hole gets a **cosmetic thread**: its cut records it ("M6x1"),
   get_model lists it, and the view draws it as a coil at the thread's diameter,
-  one turn per pitch, with its size beside the hole; it runs as deep as the cut
-  and follows it. The solid is not threaded. The Extrude panel shows it, with
-  Remove.
+  one turn per pitch, with its size beside the hole; it runs along that hole's
+  own wall (a blind hole that went through, a counterbore's air, a slot it
+  crosses) and follows it, and goes with its body when the body is hidden. The
+  solid is not threaded. The Extrude panel shows it, with Remove, and the
+  Assistant's edit_feature takes it off the same way (thread "removed").
 - **Type** Counterbore (diameter, depth) or Countersink (diameter at the face,
   angle, 90 deg by default): a circle about each hole in the holes' sketch and a
   cut "<name> counterbore" or "<name> countersink" before the hole's own cut.
   With a clearance hole, **From the screw table** sizes them: a socket head cap
-  screw's counterbore (ISO 4762, DIN 974-1, M3 to M30: M6 is 11 mm by 6.4 mm) or
+  screw's counterbore (ISO 4762, DIN 974-1, M3 to M30: M6 is 11 mm by 6.4 mm,
+  M30 50 mm by 31 mm) or
   a countersunk head screw's countersink (ISO 10642 at 90 deg, M3 to M20).
   Counterbores or countersinks that would overlap are refused.
+  A countersink's cone runs to its point (inside the hole below where it meets
+  it), so it fits the hole whatever its diameter becomes.
 - A blind hole's **Bottom** can be a **Drill point** (118 deg by default):
-  "<name> tip sketch" on the holes' bottom and the cut "<name> tip" to a point.
+  "<name> tip sketch" on the holes' bottom, its circles linked to the holes'
+  (centre and size), and the cut "<name> tip" until its walls meet: the point
+  follows its hole when the sketch's diameter or position changes.
 - **From a sketch** puts a hole at each of a sketch's points and circle centres,
   and the holes follow those points: the holes' sketch links each centre to its
   point (a new link source, another sketch's points), so moving a point moves its
@@ -38,14 +45,18 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   flanks, a P/8 flat at the major diameter, a helical groove per hole). It
   follows the hole's circles, depth and size; it stops a pitch short of a blind
   hole's bottom and just inside a through hole's far face, and its Length can be
-  shorter. A cut the kernel could not make fails in words rather than passing.
+  shorter. Each piece of wall gets its groove, so a counterbore, a wide
+  countersink or a slot the hole crosses is threaded below or beside the air. A
+  thread has a budget (120 turns a hole, 160 in all: the cut grows slow past
+  it): a blind hole past it is refused before anything is made, with the ways
+  out. A cut the kernel could not make fails in words rather than passing.
 - Every size stays an expression the features keep, so the holes follow
   parameters; it is all one undo step, as before. A simple hole is made exactly
   as before. The Assistant's hole takes the same: points, size and fit, type,
   cb_diameter, cb_depth, cs_diameter, cs_angle ("" sizes from the screw table),
   tip ("drill" or the point's angle) and thread.
 - A blind hole deeper than the body goes through: Hole now says so ("Hole 2 is
-  30 mm deep, deeper than Block there, so it goes through"), and leaves out a
+  30 mm deep, at least as deep as Block there, so it goes through"), and leaves out a
   drill point it asked for. It used to call it blind with no warning.
 
 **Extrude has a Draft angle.**
