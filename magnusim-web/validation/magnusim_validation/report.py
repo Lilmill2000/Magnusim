@@ -5,23 +5,68 @@ with Heat Transfer's own validation set beside them (``heat_transfer.py``: its c
 
 Both are generated: ``report --check`` exits 1 when either text differs from what the
 results give, or a figure is missing (the PNGs themselves are not compared byte for byte:
-fonts and the plotting library's version change their pixels, not their content). Nothing
-here publishes the page: that is a push, which only the project's owner makes.
+fonts and the plotting library's version change their pixels, not their content). Each value
+is judged by the locks (``locks.py``): ``report`` and ``report --check`` both exit 1, and say
+which, when a locked value is outside its band. Nothing here publishes the page: that is a
+push, which only the project's owner makes.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
-from . import cases, heat_transfer
+from . import cases, heat_transfer, locks
 from .paths import REPORT_MD, RESULTS, SITE, SITE_IMG
 from .plots import figures_of, render
 from .result import read_result
 from .site import build_site
 
-VERDICT_WORDS = {"report_only": "report-only", "pass": "pass", "fail": "FAIL", "missing": "no value"}
+VERDICT_WORDS = {"report_only": "report-only (band not locked)", "pass": "pass", "fail": "FAIL", "missing": "no value"}
+
+
+def verdict_text(q: dict[str, Any]) -> str:
+    """A value's verdict in words: pass or FAIL in a locked band; a report-only band's reason
+    ("report only: known limit of ..."), or that its band is not locked yet."""
+    why = (q.get("tolerance") or {}).get("report_only")
+    if q.get("verdict") == "report_only" and why:
+        return f"report only: {why}"
+    return VERDICT_WORDS[q["verdict"]]
+
+
+def lock_text(results: list[dict[str, Any]]) -> str:
+    """What the locks are and what they cover in ``results`` (judged), in plain words; commands
+    in backticks (the page turns them into code)."""
+    text = (f"{locks.LOCKED_WORDS}: a locked value outside its band fails the run (`npm run test:validation`) and "
+            "this report's check (`npm run validation:report -- --check`), and blocks a release. The bands are the "
+            "reference data's, as proposed: locking changed none.")
+    n = locks.counts(results)
+    if n["all"]:
+        text += f" {n['locked']} of the {n['all']} compared values here have a locked band."
+    known: dict[tuple[str, str, str], list[str]] = {}
+    for res in results:
+        for q in res["quantities"]:
+            why = (q.get("tolerance") or {}).get("report_only")
+            if why:
+                case = cases.get(res["case"])
+                known.setdefault((case.TITLE, variant_label(case, res), why), []).append(str(q["key"]))
+    if known:
+        items = "; ".join(f"{title}, {label}: {' and '.join(keys)} ({why})" for (title, label, why), keys in known.items())
+        text += (f" Report-only until its limit is fixed, compared and shown with its band and error but with no pass "
+                 f"or fail: {items}; the case's notes say why.")
+    if n["not_locked"]:
+        text += f" {n['not_locked']} have a proposed band: report-only, with no pass or fail until it is locked."
+    return text + (" A run fails already when it cannot produce its numbers: a setup the app refuses, a mesh or solve "
+                   "that fails, wall layers asked and not applied.")
+
+
+def lock_html(results: list[dict[str, Any]]) -> str:
+    """``lock_text`` for the page: escaped, its commands as code."""
+    from .site import esc
+
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", esc(lock_text(results)))
 
 
 def load_results(root: Path = RESULTS) -> list[dict[str, Any]]:
@@ -173,11 +218,7 @@ Assistant use; its numbers are then read from the run's own monitors and from Pl
 path, and compared with the reference values below, each with its citation. Nothing is
 tuned per case and no number is typed in: a value here is what the app produced.
 
-**Report-only.** These numbers are what this version computes; no case fails on them yet.
-The tolerances are locked once Daniel has reviewed a full run of the whole set, and from then
-on a locked quantity outside its tolerance fails the run and blocks a release. The bands
-shown are the proposed ones (from the reference data). A run fails already when it cannot produce its numbers: a
-setup the app refuses, a mesh or solve that fails, wall layers asked and not applied.
+{locks}
 
 {so_far}
 
@@ -193,6 +234,7 @@ npm run validation:report                                 # this file and the pu
 npm run validation:report -- --check                      # exit 1 when they are out of date
 ```
 
+Both report commands exit 1 too, and say which, when a locked value is outside its band.
 Each run writes `validation/results/<case>/<variant>/plan.json` (every request it sends)
 and `result.json` (the values, their sources, the mesh, the run and its health). The
 public page is built into `docs/validation/` at the repository's root; it is published
@@ -221,14 +263,17 @@ def so_far_text(results: list[dict[str, Any]]) -> str:
 
 
 def build_markdown(results: list[dict[str, Any]]) -> str:
-    out = [HEAD.replace("{so_far}", _wrap(so_far_text(results)))]
+    """VALIDATION.md of ``results``, each value judged by the locks."""
+    results = locks.judge(results)[0]
+    head = HEAD.replace("{locks}", _wrap("**Locked.** " + lock_text(results)))
+    out = [head.replace("{so_far}", _wrap(so_far_text(results)))]
     out.append("## Results\n")
     if not results:
         out.append("No results yet.\n")
         return "\n".join(out).rstrip() + "\n"
     out.append("Environment: " + "; ".join(env_lines(results)) + ".\n")
-    out.append("| Case | Run | Status | Quantity | Reference | Magnusim | Error | Band (report-only) | Cells | Wall layers | Iterations / time | Solve time | Run health |")
-    out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    out.append("| Case | Run | Status | Quantity | Reference | Magnusim | Error | Band | Verdict | Cells | Wall layers | Iterations / time | Solve time | Run health |")
+    out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for res in results:
         case = cases.get(res["case"])
         m = res.get("mesh") or {}
@@ -237,7 +282,7 @@ def build_markdown(results: list[dict[str, Any]]) -> str:
             out.append(
                 f"| {cell(case.TITLE)} | {cell(variant_label(case, res))} | {status_text(res)} | {cell(q['label'])} | "
                 f"{num(q['reference']['value'])} | {num(q['value'], 5)} | {err_text(q)} | {band_text(q)} | "
-                f"{cells_text(m.get('n_cells'))} | {cell(layers_text(m))} | {iterations_text(r)} | "
+                f"{cell(verdict_text(q))} | {cells_text(m.get('n_cells'))} | {cell(layers_text(m))} | {iterations_text(r)} | "
                 f"{run_time_text(res)} | {health_text(r)} |"
             )
     out.append("")
@@ -376,7 +421,7 @@ def quantity_value_text(q: dict[str, Any]) -> str:
     if q["value"] is None:
         return "no value"
     val = (f"{num(q['value'], 5)} against {num(q['reference']['value'])} ({err_text(q)}, band {band_text(q)}, "
-           f"{VERDICT_WORDS[q['verdict']]})")
+           f"{verdict_text(q)})")
     unc = q.get("uncertainty") or {}
     if unc.get("value") is not None:
         val += f"; ± {num(unc['value'], 2)} % ({unc.get('what') or unc.get('kind')})"
@@ -404,8 +449,15 @@ def _variant_section(case: Any, res: dict[str, Any], first: dict[str, Any]) -> l
 
 
 def build_all(*, check: bool = False, root: Path = RESULTS, md_path: Path = REPORT_MD, site_dir: Path = SITE) -> int:
-    """Write (or with ``check`` compare) VALIDATION.md, the page, its results.json and figures."""
-    results = load_results(root)
+    """Write (or with ``check`` compare) VALIDATION.md, the page, its results.json and figures,
+    each value judged by the locks (``locks.judge``). 1 when they are out of date (``check``) or a
+    locked value fails, else 0."""
+    results, failures = locks.judge(load_results(root))
+    failed = ""
+    if failures:
+        many = len(failures) != 1
+        failed = (f"FAIL: {len(failures)} locked value{'s' if many else ''} {'do' if many else 'does'} not pass (the "
+                  f"tolerances were locked on {locks.LOCKED_ON}):\n  " + "\n  ".join(failures))
     texts: dict[Path, str] = {md_path: build_markdown(results)}
     texts.update({site_dir / name: text for name, text in build_site(results, heat_transfer.load()).items()})
     figs = [(cases.get(r["case"]), r, f) for r in results for f in figures_of(cases.get(r["case"]), r)]
@@ -418,8 +470,11 @@ def build_all(*, check: bool = False, root: Path = RESULTS, md_path: Path = REPO
         stale += [str(site_dir / "img" / f["file"]) for _, _, f in figs if not (site_dir / "img" / f["file"]).is_file()]
         if stale:
             print("out of date (run npm run validation:report): " + ", ".join(stale), file=sys.stderr)
+        if failed:
+            print(failed, file=sys.stderr)
+        if stale or failed:
             return 1
-        print(f"validation report up to date ({len(results)} results)")
+        print(f"validation report up to date ({len(results)} results, every locked value passes)")
         return 0
     for path, text in texts.items():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -431,5 +486,8 @@ def build_all(*, check: bool = False, root: Path = RESULTS, md_path: Path = REPO
     if not nojekyll.exists():
         nojekyll.write_text("", encoding="utf-8")
     print(f"wrote {md_path} and {site_dir} ({len(results)} results)")
+    if failed:
+        print(failed, file=sys.stderr)
+        return 1
     return 0
 

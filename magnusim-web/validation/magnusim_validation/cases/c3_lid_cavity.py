@@ -104,7 +104,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             source="app_sampling",
             reference=table.reference(0.0, unit="U_lid", where=f"{which} at its {len(st)} interior stations (the RMS of "
                                       "the differences from them, zero for a perfect match)"),
-            tolerance=Tolerance(abs_tol=rms_tol, note="the reference data's target RMS"),
+            tolerance=Tolerance(locked=True, abs_tol=rms_tol, note="the reference data's target RMS"),
         )
         out[f"{comp}_maxdiff"] = QuantitySpec(
             key=f"{comp}_maxdiff",
@@ -114,7 +114,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             source="app_sampling",
             reference=table.reference(0.0, unit="U_lid", where=f"{which} at its {len(st)} interior stations (the largest "
                                       "difference from them, zero for a perfect match)"),
-            tolerance=Tolerance(abs_tol=0.03, note="the reference data's largest difference; Ghia et al. themselves are "
+            tolerance=Tolerance(locked=True, abs_tol=0.03, note="the reference data's largest difference; Ghia et al. themselves are "
                                 "about 0.003 (Re 100) and 0.012 (Re 1000) off the converged values"),
         )
     for key, comp, line, kind in (("u_min", "u", "vertical", "min"), ("v_max", "v", "horizontal", "max"),
@@ -129,7 +129,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
                  f"({line_how}), refined by the parabola through it and its two neighbours"),
             source="app_sampling",
             reference=BOTELLA.reference(float(row["value"]), where=f"the {comp}_{kind} of {tag}, at {along} = {row['at']:g} L"),
-            tolerance=Tolerance(rel_pct=3.0, note="the reference data's band for the extrema"),
+            tolerance=Tolerance(locked=True, rel_pct=3.0, note="the reference data's band for the extrema"),
         )
     psi_how = (f"psi = the integral of u dy from the floor, on {PSI_LINES} vertical lines at x = L/100 to 99 L/100 (u "
                f"sampled as for the centrelines, {LINE_SUBDIV + 1} samples each, trapezoid rule), over U_lid L; its "
@@ -141,7 +141,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
         how=psi_how,
         source="app_sampling",
         reference=MARCHI.reference(MARCHI.value(re=re, quantity="psi_min"), where=f"psi_min of {tag}"),
-        tolerance=Tolerance(rel_pct=2.0, note="the reference data's band for psi_min"),
+        tolerance=Tolerance(locked=True, rel_pct=2.0, note="the reference data's band for psi_min"),
     )
     for key, axis in (("vortex_x", "x"), ("vortex_y", "y")):
         out[key] = QuantitySpec(
@@ -151,7 +151,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             how=f"where psi is lowest (as for psi_min), its {axis} over L",
             source="app_sampling",
             reference=MARCHI.reference(MARCHI.value(re=re, quantity=key), unit="L", where=f"the vortex centre's {axis} of {tag}"),
-            tolerance=Tolerance(abs_tol=0.01, note="the reference data's band for the vortex centre"),
+            tolerance=Tolerance(locked=True, abs_tol=0.01, note="the reference data's band for the vortex centre"),
         )
     return out
 

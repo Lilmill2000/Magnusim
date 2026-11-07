@@ -6,10 +6,11 @@ plugin's prepare job, then `solve.sh` in WSL with OpenFOAM v2606), then measured
 monitors and its saved fields. Hex-dominant meshes every case; the pipes are meshed with
 Standard as well.
 
-**Report-only.** These numbers are what this version computes; no case fails on them yet.
-The tolerances are locked once Daniel has reviewed a full run of the whole set; from then on a
-case outside its tolerance blocks a release. The proofs in `tests/test_ht_wsl_proofs.py` and `tests/test_ht5_cht_wsl.py` keep
-their own tolerances.
+**Report-only.** These numbers are what this version computes; no case fails on them. This set
+has no tolerance bands, so it stays report-only: the tolerances locked on 2026-11-07, after
+Daniel reviewed the second full run of the whole set, are the app's validation set's
+(`magnusim-web/validation/VALIDATION.md`), not this set's. The proofs in
+`tests/test_ht_wsl_proofs.py` and `tests/test_ht5_cht_wsl.py` keep their own tolerances.
 
 Run the set (WSL with OpenFOAM v2606: about 35 minutes one case after another, each on 8
 cores, on 2026-11-07; groups of cases can run side by side with `-k`), then this report:

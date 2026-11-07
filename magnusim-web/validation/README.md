@@ -18,6 +18,8 @@ npm run validation:report                                 # VALIDATION.md and do
 npm run validation:report -- --check                      # exit 1 when they are out of date
 ```
 
+Both report commands also exit 1, and say which, when a locked value fails its band (Rules, below).
+
 It needs WSL with OpenFOAM v2606 (the app's Setup). `MAGNUSIM_E2E_PORT` picks the app
 server's port; `MAGNUSIM_E2E_LOCK=0` runs it beside another WSL test run (keep `--cores` low
 then). No default browser suite and no CI job runs it (`scripts/e2e-suites.mjs`); the harness's
@@ -48,7 +50,7 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    vector's components kept, `app_sampling`; a patch field the run saved, `case_file`),
    kept in `raw/sample_<key>.json`; then `result.json`, the
    compared values with their source (`route:<path>`, `app_sampling`), how each was measured, its reference
-   with the citation, the error and the proposed band; the mesh (cells, checkMesh, wall
+   with the citation, the error, the band and the verdict (`model.verdict_of`); the mesh (cells, checkMesh, wall
    layers asked and applied: RH2's mesh facts), the pre-run check, the run (iterations,
    convergence, time, ranks, numerics as written) and its health (RH1); the app's commit,
    OpenFOAM's version and WSL's load. A run that cannot produce its numbers (a setup the app
@@ -57,7 +59,8 @@ own tests run in `npm run test:py` (`tests/`) and `npm run test:server`
    (`not_settled`: more than the case's `SETTLE_DRIFT` over the last 10 % of iterations), and
    a transient run whose periodic signal never settles within it (`not_settled`: case 5's
    shedding, `extract.settled_window`).
-4. **Report** (`python -m magnusim_validation report`): `VALIDATION.md`, `docs/validation/`
+4. **Report** (`python -m magnusim_validation report`): every committed value judged by the locks
+   (`locks.py`, Rules below), then `VALIDATION.md`, `docs/validation/`
    (`index.html`, `results.json`) and the figures (`docs/validation/img/`, matplotlib), with
    Heat Transfer's own validation set after the cases (`heat_transfer.py`: its committed
    `bundled-plugins/heat_transfer/validation/results.json`, not run again; its runs go through
@@ -73,7 +76,8 @@ and its project is still on the server, and otherwise meshes its own.
 | Path | What it is |
 |---|---|
 | `magnusim_validation/cases/` | One module per case: geometry, face selectors, requests per variant, references with citations, tolerances, extraction, figures |
-| `magnusim_validation/model.py` | References, tolerances, the comparison (report-only until locked) |
+| `magnusim_validation/model.py` | References, tolerances (locked, or report-only with why), the comparison and its verdict |
+| `magnusim_validation/locks.py` | Every committed value judged against its case's band now; what fails the report and its check |
 | `magnusim_validation/geometry.py`, `faces.py`, `plan.py` | The STEP, the app's face table and selectors, `plan.json` |
 | `magnusim_validation/evaluate.py`, `extract.py`, `result.py` | `result.json` and its checker, the numerics |
 | `magnusim_validation/sampling.py`, `mesh_plan.py` | Reads of the run's case folder; what a Hex-dominant plan's mesh will be (one cell across too) |
@@ -93,14 +97,25 @@ and its project is still on the server, and otherwise meshes its own.
   The values and bands come from the reference-data check of 2026-11-04 (each value's
   source read, or two transcriptions compared); where the harness's design proposed other
   bands, the reference data win.
-- Report-only until Daniel has reviewed a full run of the whole set; then the tolerances are
-  locked (`Tolerance(locked=True)`) and a locked quantity outside its band fails the run.
-  `results/` holds the second full run of all six cases and every variant (2026-11-07, commit
-  977c1480 with no changes, OpenFOAM v2606, 8 cores, one run at a time, 71.9 minutes), after the
-  two fixes below (Standard's laminar friction and k-omega SST at the wall), with Heat
-  Transfer's own set run from the same commit after it: 46 of its 48 compared values inside
-  their bands, the two outside k-omega SST's friction on Standard (f -14.25 % and f_tau
-  -17.05 %: a limitation, below). Nothing is locked until Daniel has reviewed that run. The
+- The tolerances were locked on 2026-11-07, after Daniel reviewed the second full run of the
+  whole set (below). Every band is `Tolerance(locked=True)` but those of case 2's k-omega SST
+  on Standard (f and f_tau), which are report-only until that limit is fixed
+  (`c2_turbulent_pipe.REPORT_ONLY`, `Tolerance(report_only=...)` with why: still compared and
+  shown with their band, error and the case's note, "report only: known limit of k-omega SST on
+  Standard's tetrahedra", with no pass or fail; taking the variant out of `REPORT_ONLY` locks
+  them). The lock changed no band. A locked value outside its band, or with no value, fails the
+  run (`npm run test:validation`: a verdict `fail` in its result), the report and its check
+  (`npm run validation:report`, `-- --check`: `locks.py` judges every committed value against its
+  case's band now, and a band changed since its run fails too), so it blocks a release; a
+  report-only value never fails. `results/` holds the second full run of all six cases and every
+  variant (2026-11-07, commit 977c1480 with no changes, OpenFOAM v2606, 8 cores, one run at a
+  time, 71.9 minutes), after the two fixes below (Standard's laminar friction and k-omega SST at
+  the wall), with Heat Transfer's own set run from the same commit after it: 46 of its 48
+  compared values inside their bands (the 46 locked), the two outside k-omega SST's friction on
+  Standard (f -14.25 % and f_tau -17.05 %: a limitation, below; the two report-only). Its
+  `result.json` files keep the verdicts their evaluation gave before the lock (`report_only`); the
+  report and the page show the locks' (`verdict_at_run` beside it in the page's `results.json`).
+  Heat Transfer's own set has no bands and stays report-only. The
   first full run (2026-11-06, commit aaabb531, 57.7 minutes; in git's history) had 43 of its 48
   inside. Against it the second moved case 1's Standard f Re from +15.99 to +0.03 % (its
   development length from -5.53 to -0.19 %), case 2's k-omega SST on Hex-dominant from f
@@ -383,7 +398,8 @@ App gaps found so far, and what they block:
   the Assistant's guide say what a pipe read on each mesher, the pre-run check warns of a Standard
   mesh with no wall layers under a turbulent study (`wall_friction_mesh`: k-epsilon there read
   -12.8 % and -13.0 % with Robust and diverged with Accurate, with the skew-corrected lines or the
-  plain), and Hex-dominant suits turbulent wall friction.
+  plain), and Hex-dominant suits turbulent wall friction. Its two values are report-only until
+  this is fixed (the lock of 2026-11-07, Rules above).
 - **k-omega SST resolved to the wall** (case 2's wedge, a limitation): with the first cell's
   centre at y+ 1 to 3 every wall treatment tried read f 6 to 9 % low (Spalding's law, nutk,
   nutLowRe with k fixed at 0, Menter's omega on the wall face, kLowRe; a finer stretch, 1.05 and

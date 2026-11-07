@@ -137,7 +137,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
                 reference=STEADY.reference(cd["value"], citation=str(cd["source"]),
                                            where=f"Re {re}, Cd {cd['value']:.2f}: the reference data's value to use "
                                                  "(section 5a)"),
-                tolerance=Tolerance(rel_pct=5.0, note="the reference data's band: the sources' spread and the domain's "
+                tolerance=Tolerance(locked=True, rel_pct=5.0, note="the reference data's band: the sources' spread and the domain's "
                                     "size"),
             ),
             "l_over_d": QuantitySpec(
@@ -149,7 +149,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
                 reference=STEADY.reference(ld["value"], unit="D", citation=str(ld["source"]),
                                            where=f"Re {re}, L/D {ld['value']:.2f}: the reference data's value to use "
                                                  "(section 5a)"),
-                tolerance=Tolerance(rel_pct=5.0, note="the reference data's band"),
+                tolerance=Tolerance(locked=True, rel_pct=5.0, note="the reference data's band"),
             ),
         }
     st, cdm, clr, ldm = (_ref100(q) for q in ("st", "cd_mean", "cl_rms", "l_over_d_mean"))
@@ -164,7 +164,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
                  "cross-check"),
             source="route:/api/run/monitors",
             reference=RE100.reference(st["value"], citation=str(st["source"]), where="St at Re 100 (section 5b)"),
-            tolerance=Tolerance(rel_pct=3.0, note="the reference data's band"),
+            tolerance=Tolerance(locked=True, rel_pct=3.0, note="the reference data's band"),
         ),
         "cd_mean": QuantitySpec(
             key="cd_mean",
@@ -173,7 +173,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             how=_CD_HOW.format(what="its time mean " + _WINDOW_WORDS),
             source="route:/api/run/monitors",
             reference=RE100.reference(cdm["value"], citation=str(cdm["source"]), where="the mean Cd at Re 100 (section 5b)"),
-            tolerance=Tolerance(rel_pct=5.0, note="the reference data's band"),
+            tolerance=Tolerance(locked=True, rel_pct=5.0, note="the reference data's band"),
         ),
         "cl_rms": QuantitySpec(
             key="cl_rms",
@@ -183,7 +183,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
                  + ", lift along +y"),
             source="route:/api/run/monitors",
             reference=RE100.reference(clr["value"], citation=str(clr["source"]), where="CL rms at Re 100 (section 5b)"),
-            tolerance=Tolerance(rel_pct=15.0, note="the reference data's band: the most domain-sensitive value"),
+            tolerance=Tolerance(locked=True, rel_pct=15.0, note="the reference data's band: the most domain-sensitive value"),
         ),
         "l_over_d_mean": QuantitySpec(
             key="l_over_d_mean",
@@ -195,7 +195,7 @@ def _specs(variant: str) -> dict[str, QuantitySpec]:
             source="route:/api/run/monitors",
             reference=RE100.reference(ldm["value"], unit="D", citation=str(ldm["source"]),
                                       where="the mean L/D at Re 100 (section 5b)"),
-            tolerance=Tolerance(rel_pct=10.0, note="the reference data's band, as information"),
+            tolerance=Tolerance(locked=True, rel_pct=10.0, note="the reference data's band, as information"),
         ),
     }
 

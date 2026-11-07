@@ -36,18 +36,21 @@ the report) are tested by pytest (`validation/tests`, in `npm run test:py` and C
 |---|---|
 | `npm run test:validation` | Every case and variant at 8 cores, one run at a time under the WSL test lock, then the report. |
 | `npm run test:validation -- --case c1 --variant standard --cores 4` | One case and mesher. `--coarse` makes quick coarse runs into `validation/results-coarse/` (never committed); `--mesh-only` meshes and records the mesh facts only, and `--mesh '{"hex_element_core":false}'` or `--study '{"grad_limiter":"none"}'` change the case's mesh or study settings by hand: these are probes, into `validation/results-probe/` (never committed, never reported); `--no-report` skips the report. |
-| `npm run validation:report` | `validation/VALIDATION.md` and the public page (`docs/validation/` at the repository's root) from the committed results; `-- --check` exits 1 when they are out of date (pytest checks this too). |
+| `npm run validation:report` | `validation/VALIDATION.md` and the public page (`docs/validation/` at the repository's root) from the committed results; `-- --check` exits 1 when they are out of date (pytest checks this too). Both exit 1, and say which, when a locked value fails its band. |
 
 Its app server loads only the bundled plugins (not the test plugins the core suite loads).
 `MAGNUSIM_E2E_LOCK=0` lets it run beside another WSL test run (set `--cores` low then);
 a run's result records WSL's load while it solved, so run times compare like with like.
-Results are report-only until Daniel has reviewed a full run of the whole set and its
-tolerances are locked; then a locked quantity outside its tolerance fails
-`npm run test:validation` and blocks a release. The report shows the second full run of all
-six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9 minutes), after two fixes to the
-case writer's schemes and walls that the first (2026-11-06, commit aaabb531, 57.7 minutes) led
-to (`validation/README.md`), with Heat Transfer's set run from the same commit; nothing is
-locked until Daniel has reviewed it. Its meshes are not exactly the same from one generate to
+The tolerances were locked on 2026-11-07, after Daniel reviewed the second full run of the
+whole set: a locked value outside its band (or with no value) fails `npm run test:validation`,
+`npm run validation:report` and its `--check` (and the committed-report pytest), and blocks a
+release. 46 of the 48 values have a locked band; case 2's two with k-omega SST on the Standard
+mesher (f and f_tau) are report-only until that limit is fixed: compared and shown with their
+error, never a failure. Heat Transfer's own set has no bands and stays report-only. The report
+shows that second full run of all six cases (2026-11-07, commit 977c1480, OpenFOAM v2606, 71.9
+minutes), after two fixes to the case writer's schemes and walls that the first (2026-11-06,
+commit aaabb531, 57.7 minutes) led to (`validation/README.md`), with Heat Transfer's set run
+from the same commit. Its meshes are not exactly the same from one generate to
 the next (snappyHexMesh and gmsh in parallel), so a rerun can move a value a little: case 1's
 development length about 1 %, case 2's Standard friction under 1 %.
 

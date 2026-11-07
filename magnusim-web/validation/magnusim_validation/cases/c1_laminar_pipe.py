@@ -81,7 +81,7 @@ QUANTITIES: dict[str, QuantitySpec] = {
             where="Darcy f = 64/Re (f = 0.640 at Re 100), i.e. -dp/dx = 32 mu U / D² = 16 Pa/m here",
             conditions=_HP_CONDITIONS,
         ),
-        tolerance=Tolerance(rel_pct=2.0, note="the answer is exact, so only mesh error remains"),
+        tolerance=Tolerance(locked=True, rel_pct=2.0, note="the answer is exact, so only mesh error remains"),
     ),
     "ucl": QuantitySpec(
         key="ucl",
@@ -103,7 +103,7 @@ QUANTITIES: dict[str, QuantitySpec] = {
             where="u(r) = 2 U (1 - (r/R)²), so u_c = 2.000 U",
             conditions=_HP_CONDITIONS,
         ),
-        tolerance=Tolerance(rel_pct=1.5),
+        tolerance=Tolerance(locked=True, rel_pct=1.5),
     ),
     "le": QuantitySpec(
         key="le",
@@ -131,7 +131,7 @@ QUANTITIES: dict[str, QuantitySpec] = {
             conditions="laminar, uniform inlet; the distance to 99 % of the developed centreline velocity; Re = 100",
             note="Depends on the 99 % definition and on the inlet profile; the 0.05 Re rule (5.0) is about 13 % short.",
         ),
-        tolerance=Tolerance(rel_pct=15.0),
+        tolerance=Tolerance(locked=True, rel_pct=15.0),
     ),
 }
 

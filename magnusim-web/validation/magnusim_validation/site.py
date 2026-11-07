@@ -1,6 +1,7 @@
 """The public page of the validation set: ``index.html`` (one static, self-contained page: no
 scripts, no external fonts or styles; light and dark by the reader's setting) and
-``results.json`` (every result as committed, and Heat Transfer's own rows), built into
+``results.json`` (every result as committed, each value's band and verdict as the locks judge it
+now and the verdict its run gave in ``verdict_at_run``, and Heat Transfer's own rows), built into
 ``<repo>/docs/validation/`` beside the figures in ``img/``. GitHub Pages serves ``docs/`` once it is turned on for the
 repository; nothing here turns it on or pushes.
 """
@@ -61,10 +62,11 @@ def _num(v: Any, digits: int = 4) -> str:
 
 
 def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
-    from .report import band_text, err_text, status_text, variant_label
+    from .report import band_text, err_text, status_text, variant_label, verdict_text
 
     inside = q.get("within")
     cls = "" if inside is None else (" in" if inside else " out")
+    vcls = {"pass": " class=in", "fail": " class=out"}.get(str(q.get("verdict")), "")
     scls = "" if res.get("status") == "ok" else " class=out"
     case = cases.get(res["case"])
     return (
@@ -72,12 +74,20 @@ def _q_row(res: dict[str, Any], q: dict[str, Any]) -> str:
         f"<td{scls}>{esc(status_text(res))}</td>"
         f"<td>{esc(q['label'])}</td><td class=num>{esc(_num(q['reference']['value']))}</td>"
         f"<td class=num>{esc(_num(q['value'], 5))}</td><td class=\"num{cls}\">{esc(err_text(q))}</td>"
-        f"<td class=\"num{cls}\">{esc(band_text(q))}</td></tr>"
+        f"<td class=\"num{cls}\">{esc(band_text(q))}</td><td{vcls}>{esc(verdict_text(q))}</td></tr>"
     )
 
 
 def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None) -> str:
-    from .report import case_notes, env_lines, quantity_value_text, variant_facts, variant_label
+    from .locks import LOCKED_ON
+    from .report import (
+        case_notes,
+        env_lines,
+        lock_html,
+        quantity_value_text,
+        variant_facts,
+        variant_label,
+    )
 
     out = [
         "<!doctype html>",
@@ -89,15 +99,13 @@ def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None)
         '<p class="lede">Textbook flows with published answers, set up, meshed and solved through the app itself, '
         "and compared with their reference values. A value here is what the app produced: nothing is tuned per case "
         "and no number is typed in.</p>",
-        '<p><span class="badge">Report-only</span> No case fails on these numbers yet. The tolerances are locked once '
-        "Daniel has reviewed a full run of the whole set; from then on a value outside its tolerance blocks a release. The bands shown are the "
-        "proposed ones.</p>",
+        f'<p><span class="badge">Locked {esc(LOCKED_ON)}</span> {lock_html(results)}</p>',
     ]
     if results:
         out.append('<p class="env">' + "<br>".join(esc(x) for x in env_lines(results)) + "</p>")
         out.append("<h2>Results</h2>")
         out.append('<div class="scroll"><table><thead><tr><th>Case</th><th>Run</th><th>Status</th><th>Quantity</th>'
-                   "<th>Reference</th><th>Magnusim</th><th>Error</th><th>Band</th></tr></thead><tbody>")
+                   "<th>Reference</th><th>Magnusim</th><th>Error</th><th>Band</th><th>Verdict</th></tr></thead><tbody>")
         for res in results:
             out.extend(_q_row(res, q) for q in res["quantities"])
         out.append("</tbody></table></div>")
@@ -158,8 +166,11 @@ def build_index(results: list[dict[str, Any]], ht: dict[str, Any] | None = None)
 
 
 def build_site(results: list[dict[str, Any]], ht: dict[str, Any] | None = None) -> dict[str, str]:
-    """The page's text files by name (the figures are drawn by plots.render); ``ht``: Heat
-    Transfer's rows (heat_transfer.load)."""
+    """The page's text files by name (the figures are drawn by plots.render), each value judged by
+    the locks; ``ht``: Heat Transfer's rows (heat_transfer.load)."""
+    from .locks import judge
+
+    results = judge(results)[0]
     doc: dict[str, Any] = {"schema": "magnusim-validation-site/1", "results": results}
     if ht:
         doc["heat_transfer"] = {"source": ht["source"], "how": heat_transfer.HOW, "rows": ht["rows"]}

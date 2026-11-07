@@ -12,7 +12,7 @@ from magnusim_validation import cases
 from magnusim_validation.evaluate import evaluate_dir
 from magnusim_validation.report import build_all, build_markdown
 from magnusim_validation.site import build_site
-from validation_fakes import fake_run, plan_run
+from validation_fakes import REAL_SCALE, fake_run, plan_run
 
 pytestmark = pytest.mark.occt
 
@@ -26,7 +26,7 @@ def _exact(tmp_path: Path) -> dict:
 def test_the_markdown_lists_each_quantity_with_its_reference(tmp_path: Path):
     res = _exact(tmp_path)
     text = build_markdown([res])
-    assert "| Laminar pipe, Re = 100 | Hex-dominant | ok | Darcy friction factor × Re, developed part (x/D 10 to 13) | 64 | 64 | +0.00 % | ±2 % (inside) | 120 000 |" in text
+    assert "| Laminar pipe, Re = 100 | Hex-dominant | ok | Darcy friction factor × Re, developed part (x/D 10 to 13) | 64 | 64 | +0.00 % | ±2 % (inside) | pass | 120 000 |" in text
     assert "Environment: 2026-11-04: commit abc, OpenFOAM v2606 (build _481094f-20260618), 4 cores" in text
     assert "### Hex-dominant" in text and "- Status: ok." in text
     assert "converged at iteration 180" in text and "run health healthy" in text
@@ -105,7 +105,9 @@ def test_build_and_check_round_trip(tmp_path: Path):
     res_root = tmp_path / "results"
     run_dir = res_root / "c1_laminar_pipe" / "hexdominant"
     run_dir.mkdir(parents=True)
-    fake_run(run_dir)
+    # Every locked value inside its band: the round trip is about the texts (test_locks.py: a
+    # locked value outside its band).
+    fake_run(run_dir, scale=REAL_SCALE)
     from magnusim_validation.plan import make_plan
 
     make_plan(cases.get("c1"), "hexdominant", run_dir, cores=4)
@@ -144,17 +146,36 @@ def test_heat_transfers_own_set_is_in_the_report_and_on_the_page(tmp_path: Path)
     assert "<h2>Heat Transfer</h2>" not in build_site([res])["index.html"]
 
 
-def test_the_report_and_the_page_say_the_tolerances_lock_once_daniel_has_reviewed_a_full_run(tmp_path: Path):
-    """The first full run is what the report shows and nothing is locked: neither says the
-    tolerances are locked "after the first full run"."""
+def test_the_report_and_the_page_say_the_tolerances_were_locked_after_daniel_reviewed_the_second_full_run(tmp_path: Path):
+    """Daniel (2026-11-07): lock the 46 values, k-omega SST on Standard report-only. The report and the
+    page say when and after what the tolerances were locked, never that they lock later."""
     res = _exact(tmp_path)
-    text = build_markdown([res])
+    text = " ".join(build_markdown([res]).split())
     page = build_site([res])["index.html"]
-    assert "The tolerances are locked once Daniel has reviewed a full run of the whole set" in text.replace("\n", " ")
-    assert "The tolerances are locked once Daniel has reviewed a full run of the whole set" in page
-    for out in (text.replace("\n", " "), page):
-        assert "After the first full run the tolerances are locked" not in out
-        assert "After the first full run the tolerances" not in out
+    said = "The tolerances were locked on 2026-11-07, after Daniel reviewed the second full run of the whole set"
+    assert said in text and said in page
+    assert "**Locked.**" in text and '<span class="badge">Locked 2026-11-07</span>' in page
+    assert "<code>npm run validation:report -- --check</code>" in page
+    for out in (text, page):
+        assert "locked once Daniel" not in out and "Report-only.**" not in out and "No case fails on these numbers yet" not in out
+        assert "proposed ones" not in out
+
+
+def test_no_doc_says_the_tolerances_lock_later():
+    """Every text that told of the lock to come says it happened (2026-11-07)."""
+    from magnusim_validation.paths import WEB
+
+    repo = WEB.parent
+    later = ("locked once Daniel", "lock once Daniel", "not locked until Daniel", "not locked yet",
+             "once Daniel has reviewed a full run", "until Daniel has reviewed", "Nothing is locked")
+    for path in (WEB / "validation" / "README.md", WEB / "validation" / "VALIDATION.md", WEB / "docs" / "TESTING.md",
+                 WEB / "bundled-plugins" / "heat_transfer" / "VALIDATION.md",
+                 WEB / "bundled-plugins" / "heat_transfer" / "README.md", repo / "README.md",
+                 repo / "RELEASE_AUDIT.md", repo / "ROADMAP.md", repo / "docs" / "validation" / "index.html"):
+        if not path.is_file():
+            continue
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        assert [w for w in later if w in text] == [], path.name
 
 
 def test_the_error_is_given_in_its_bands_own_unit():

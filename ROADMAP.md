@@ -269,15 +269,17 @@ September 2026 readiness audit. This list preserves the intended work.
     with k-omega SST's walls before the validation set's fix of 2026-11-06;
     with Spalding's law it reads -1.6 % and +0.3 % (the whole set run again
     on 2026-11-07 from one commit, with the validation set's cases);
-  - the validation set's tolerances, once Daniel has reviewed a full run of
-    the whole set (it is report-only: `bundled-plugins/heat_transfer/VALIDATION.md`),
-    and its public page.
+  - tolerance bands for its validation set: it has none, so it stays
+    report-only (`bundled-plugins/heat_transfer/VALIDATION.md`), while the
+    app's validation set locked its own on 2026-11-07; its results are on that
+    set's public page, which is built, not published.
 
 - **The validation set, after v1 (`magnusim-web/validation/`):**
-  - lock its tolerances once Daniel has reviewed a full run of the whole set from one
-    commit (the second, 2026-11-07, commit 977c1480, after the two fixes below, is the
-    one to review); a locked value outside its band then fails
-    `npm run test:validation` and blocks a release;
+  - its tolerances were locked on 2026-11-07, after Daniel reviewed the second
+    full run of the whole set (commit 977c1480, after the two fixes below): a
+    locked value outside its band fails `npm run test:validation` and the
+    report's check and blocks a release. Still to do: lock the two values of
+    k-omega SST on Standard, report-only until their limit is fixed (below);
   - publish its page (`docs/validation/`, GitHub Pages from `docs/`);
   - the values outside their bands: on the first full run the laminar pipe's
     friction on Standard (+16 %: the flux and the velocity gradient ignored the
@@ -285,7 +287,8 @@ September 2026 readiness audit. This list preserves the intended work.
     k-omega SST (-13 % on Hex-dominant: its walls, fixed: -4.1 % on the second;
     -25 % on Standard: not fixed, a limitation: with the new walls and the plain
     schemes k-omega SST keeps on Standard the second full run read f -14.3 % and
-    f_tau -17.1 %, the two values outside their ±10 % bands);
+    f_tau -17.1 %, the two values outside their ±10 % bands, report-only since
+    the lock);
   - the app gaps it found (its README): a vector's components in Plot over path
     (G2), mean, rms and frequency over a time window on a Graphs card (G8), a
     periodic inlet (G9), a developed (parabolic) velocity inlet (G10), a box

@@ -32,7 +32,9 @@ HOW = (
     "in a pipe (laminar and turbulent) and conduction through solids, each against its published value. Its runs go "
     "another way than the cases above: each case is a study set up in Python, meshed by the app's mesher and solved "
     "by the plugin's prepare job and solve.sh in WSL (the relay Start uses), not sent over the app's HTTP routes, so "
-    "the two sets exercise different parts of the app. Report-only, as above. Its rows are the ones it committed "
+    "the two sets exercise different parts of the app. Its rows have no tolerance bands, so the set stays "
+    "report-only: the lock of 2026-11-07 covers the cases above, and nothing here passes or fails. Its rows are the "
+    "ones it committed "
     "(bundled-plugins/heat_transfer/validation/results.json, from pytest -m validation there); this report reads "
     "them and runs nothing."
 )

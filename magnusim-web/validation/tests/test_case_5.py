@@ -110,7 +110,8 @@ def test_case_5_steady_reads_the_drag_and_the_wake_length(tmp_path: Path):
     assert q["cd"]["reference"]["value"] == 2.02 and q["cd"]["tolerance"]["rel_pct"] == 5.0 and q["cd"]["within"]
     assert q["l_over_d"]["value"] == pytest.approx(0.95, abs=2e-3) and q["l_over_d"]["reference"]["value"] == 0.93
     assert q["l_over_d"]["source"] == "app_sampling" and q["cd"]["source"] == "route:/api/run/monitors"
-    assert all(x["verdict"] == "report_only" for x in q.values())
+    # Locked (2026-11-07): inside their bands, they pass.
+    assert all(x["verdict"] == "pass" and x["tolerance"]["locked"] for x in q.values())
     s = res["shown"]
     assert s["cd_from_fd"] == pytest.approx(q["cd"]["value"], rel=1e-9)
     assert s["cdp"] + s["cdv"] == pytest.approx(q["cd"]["value"], rel=1e-9)

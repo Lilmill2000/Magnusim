@@ -30,7 +30,9 @@ def test_an_exact_pipe_gives_the_exact_numbers(tmp_path: Path):
     assert q["ucl"]["value"] == pytest.approx(2.0, rel=1e-6)
     # 2 - exp(-x/lambda) reaches 99 % of its plateau (2, to 1e-7) where exp(-x/lambda) = 0.02.
     assert q["le"]["value"] == pytest.approx(LAMBDA * math.log(50) / D, rel=2e-3)
-    assert all(x["verdict"] == "report_only" for x in doc["quantities"])
+    # Locked (2026-11-07): f·Re and U_cl / U_b inside their bands pass; the synthetic centreline
+    # develops in 2.35 D, far outside 5.77 D ± 15 %, so its development length fails.
+    assert {k: x["verdict"] for k, x in q.items()} == {"fRe": "pass", "ucl": "pass", "le": "fail"}
     assert q["fRe"]["within"] and q["ucl"]["within"]
     assert doc["mesh"]["n_cells"] == 120000 and doc["mesh"]["layers"]["applied"] is True
     assert doc["mesh"]["background"] == {"block": [67, 8, 12]}
