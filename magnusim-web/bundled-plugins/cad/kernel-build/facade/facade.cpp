@@ -71,6 +71,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_ListOfStatus.hxx>
 #include <BRepCheck_Result.hxx>
+#include <BOPAlgo_Builder.hxx>
 #include <BOPAlgo_GlueEnum.hxx>
 #include <Geom2d_Curve.hxx>
 #include <Geom_Surface.hxx>
@@ -164,7 +165,9 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRepGProp.hxx>
 #include <BRepGProp_Domain.hxx>
 #include <BRepGProp_Face.hxx>
@@ -1031,7 +1034,10 @@ std::unique_ptr<Profile> buildProfile(const JV& jp, double shiftAlongNormal) {
 // recognize's two face limits (max_fillet_faces 5,000, max_hole_faces 2,600, words naming both)
 // on the faster adjacency graph; suppress_blends' budget refusal names the time and the allowance;
 // debug_budget_words (tests).
-const int kFacadeApi = 9;
+// 10 = boolean and combine say when OCCT answered as if the inputs were apart (as_if_apart:
+// "right", or "wrong" with words in warning_text: a cut that removed nothing, an empty common or
+// an unmerged fuse although a tool overlaps a target; GitHub issue 15).
+const int kFacadeApi = 10;
 
 JV opVersion(const JV&) {
   JV r = JV::obj();
@@ -1641,6 +1647,260 @@ std::string algoWarnings(const A& a) {
   return s;
 }
 
+// ----------------------------------------------- answered as if apart (API 10) ---
+// OCCT's booleans can take a tool that overlaps a target for one apart from it, and say nothing
+// (GitHub issue 15, 2026-11-06): a helical thread groove (a loft through 268 trapezoids) in the
+// wall of a hole through a 60 x 40 x 20 block, running out through the block's bottom face. Its
+// cut removed nothing (0 of 86 mm3), its common was empty and its fuse kept both as separate
+// solids, each valid and without a warning, with fuzzy up to 0.01 too; the same groove cut the
+// block without its hole, and one ending inside the block cut it. Such an answer is the one for
+// inputs apart: a cut that keeps every target face and makes none from a tool (the targets come
+// back unchanged), a common with no face, a fuse that merges no solid. answeredApart() reads that
+// from what the boolean has (its history, the result's faces and solids), so a boolean that did
+// change something costs nothing more. Only such an answer is checked: the inputs overlap when a
+// point of one side's boundary lies inside the other side (more than `tol` from its faces).
+// Solids whose volumes meet have such points on both sides, unless one holds the other whole; and
+// where their boundaries cross, the boolean split the faces (its builder's images: in issue 15 the
+// block's bottom face and the hole's wall were split, then every piece kept). So the pieces of the
+// faces the boolean split on the side with more faces are sampled (a grid on each piece, where the
+// other side is) and classified against the side with fewer faces (a classification tests every
+// face of the solid: about 25 ms a point on a 5,000-face prism), and a solid whose box
+// lies inside the other side's box is tried at a few points of its boundary. A point found:
+// "wrong" (the answer is wrong, the words name the point); none: "right" (apart, or only touching:
+// a flush face's pieces are the builder's same-domain faces, left out). Sheets and wires are not
+// checked, nor is a sampling that runs past kApartBudgetMs (two large bodies): no verdict then.
+
+// The solids of some shapes, each with its box (grown by tol) and a classifier made when needed.
+struct SolidsOf {
+  std::vector<TopoDS_Shape> solids;
+  std::vector<Bnd_Box> boxes;
+  std::vector<std::unique_ptr<BRepClass3d_SolidClassifier>> cls;
+  Bnd_Box box;
+  int faces = 0;
+  SolidsOf(const std::vector<TopoDS_Shape>& shapes, double tol) {
+    for (const TopoDS_Shape& s : shapes) {
+      faces += countOf(s, TopAbs_FACE);
+      for (TopExp_Explorer ex(s, TopAbs_SOLID); ex.More(); ex.Next()) {
+        Bnd_Box b;
+        BRepBndLib::Add(ex.Current(), b, false);
+        b.Enlarge(tol);
+        solids.push_back(ex.Current());
+        boxes.push_back(b);
+        box.Add(b);
+        cls.emplace_back();
+      }
+    }
+  }
+  // IN when p lies inside one of the solids (more than tol from its faces), ON when it lies on
+  // one's boundary (within tol), else OUT.
+  TopAbs_State state(const gp_Pnt& p, double tol) {
+    bool on = false;
+    for (size_t k = 0; k < solids.size(); ++k) {
+      if (boxes[k].IsOut(p)) continue;
+      if (!cls[k]) {
+        cls[k].reset(new BRepClass3d_SolidClassifier());
+        cls[k]->Load(solids[k]);
+      }
+      cls[k]->Perform(p, tol);
+      const TopAbs_State s = cls[k]->State();
+      if (s == TopAbs_IN) return TopAbs_IN;
+      if (s == TopAbs_ON) on = true;
+    }
+    return on ? TopAbs_ON : TopAbs_OUT;
+  }
+};
+
+// Points on faces that lie in box, at most cap more in `out`: on each face whose box meets it,
+// the cell centres of an n x n grid over its parameters that lie on the face (inside its trim; n
+// from 1 to 6, about cap points over those faces).
+void facePoints(const std::vector<TopoDS_Face>& all, const Bnd_Box& box, size_t cap, std::vector<gp_Pnt>& out) {
+  const size_t stop = out.size() + cap;
+  std::vector<const TopoDS_Face*> faces;
+  for (const TopoDS_Face& F : all) {
+    if (box.IsWhole()) {
+      faces.push_back(&F);
+      continue;
+    }
+    Bnd_Box fb;
+    BRepBndLib::Add(F, fb, false);
+    if (!fb.IsOut(box)) faces.push_back(&F);
+  }
+  if (faces.empty()) return;
+  const int n = std::max(1, std::min(6, (int)std::floor(std::sqrt((double)cap / faces.size()))));
+  for (const TopoDS_Face* F : faces) {
+    double u0, u1, v0, v1;
+    BRepTools::UVBounds(*F, u0, u1, v0, v1);
+    BRepTopAdaptor_FClass2d fc(*F, Precision::PConfusion());
+    BRepAdaptor_Surface S(*F, false);
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < n; ++j) {
+        if (out.size() >= stop) return;
+        const double u = u0 + (u1 - u0) * (i + 0.5) / n, v = v0 + (v1 - v0) * (j + 0.5) / n;
+        if (fc.Perform(gp_Pnt2d(u, v)) != TopAbs_IN) continue;
+        const gp_Pnt p = S.Value(u, v);
+        if (!box.IsOut(p)) out.push_back(p);
+      }
+  }
+}
+
+// A few points on the boundary of solid s (at most cap): face grid points as facePoints gives them
+// over its first faces, then the vertices.
+void fewPoints(const TopoDS_Shape& s, size_t cap, std::vector<gp_Pnt>& out) {
+  const size_t stop = out.size() + cap;
+  std::vector<TopoDS_Face> faces;
+  for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More() && faces.size() < cap; ex.Next()) faces.push_back(TopoDS::Face(ex.Current()));
+  Bnd_Box whole;
+  whole.SetWhole();
+  facePoints(faces, whole, cap, out);
+  for (TopExp_Explorer ex(s, TopAbs_VERTEX); ex.More() && out.size() < stop; ex.Next()) out.push_back(BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())));
+}
+
+// Whether box a lies inside box b (both corners).
+bool boxInside(const Bnd_Box& a, const Bnd_Box& b) {
+  if (a.IsVoid() || b.IsVoid()) return false;
+  double x0, y0, z0, x1, y1, z1;
+  a.Get(x0, y0, z0, x1, y1, z1);
+  return !b.IsOut(gp_Pnt(x0, y0, z0)) && !b.IsOut(gp_Pnt(x1, y1, z1));
+}
+
+// Whether a boolean's result (stored as resId, after its history h) is the one for inputs apart:
+// a cut keeps every target face (itself or its pieces) and no tool face, a common has no face, a
+// fuse has as many solids as its inputs together. Read from the history and counts only.
+bool answeredApart(const std::string& kind, int resId, const BRepTools_History& h, const std::vector<TopoDS_Shape>& targets,
+                   const std::vector<TopoDS_Shape>& tools) {
+  const TopTools_IndexedMapOfShape& out = indexOf(resId).f;
+  if (kind == "common") return out.Extent() == 0;
+  if (out.Extent() == 0) return false;
+  if (kind == "fuse") {
+    int n = 0;
+    for (const TopoDS_Shape& s : targets) n += countOf(s, TopAbs_SOLID);
+    for (const TopoDS_Shape& s : tools) n += countOf(s, TopAbs_SOLID);
+    return n >= 2 && countOf(shapeOf(resId), TopAbs_SOLID) >= n;
+  }
+  auto kept = [&](const TopoDS_Shape& F) {
+    for (TopTools_ListIteratorOfListOfShape it(h.Modified(F)); it.More(); it.Next())
+      if (out.Contains(it.Value())) return true;
+    return !h.IsRemoved(F) && out.Contains(F);
+  };
+  for (const TopoDS_Shape& s : tools)
+    for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next())
+      if (kept(ex.Current())) return false;
+  for (const TopoDS_Shape& s : targets)
+    for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next())
+      if (!kept(ex.Current())) return false;
+  return true;
+}
+
+// "(17.8, -1.2, 10.4) mm": a point in words, to 0.001 mm.
+std::string pointWords(const gp_Pnt& p) {
+  auto r = [](double x) {
+    const double y = std::round(x * 1000) / 1000;
+    return y == 0 ? 0.0 : y;
+  };
+  std::ostringstream os;
+  os << "(" << r(p.X()) << ", " << r(p.Y()) << ", " << r(p.Z()) << ") mm";
+  return os.str();
+}
+
+// The answer as if apart, checked: verdict "" (not such an answer, sheets, or out of time),
+// "right" or "wrong" (then `words` say what is wrong and where); ms: the check's time.
+struct ApartVerdict {
+  std::string verdict;
+  std::string words;
+  double ms = 0;
+};
+
+// The most points sampled on the pieces of split faces, and the time they may take to classify.
+const size_t kApartPoints = 1024;
+const double kApartBudgetMs = 1000;
+
+// bop: the boolean's builder (its images: input face -> pieces; its same-domain faces), or null.
+ApartVerdict apartCheck(const std::string& kind, int resId, const BRepTools_History& h, const std::vector<TopoDS_Shape>& targets,
+                        const std::vector<TopoDS_Shape>& tools, double fuzzy, const BOPAlgo_Builder* bop) {
+  ApartVerdict v;
+  if (!answeredApart(kind, resId, h, targets, tools)) return v;
+  const double t0 = nowMs();
+  // Closer than this to the other side's faces is touching, not inside (OCCT's own tolerances too).
+  double tol = std::max(1e-4, 2 * fuzzy);
+  for (const auto* side : {&targets, &tools})
+    for (const TopoDS_Shape& s : *side) tol = std::max(tol, 2 * BRep_Tool::MaxTolerance(s, TopAbs_FACE));
+  SolidsOf A(targets, tol), B(tools, tol);
+  if (A.solids.empty() || B.solids.empty()) return v;
+  int on = 0;  // 1: a point of a tool inside a target; 2: a point of a target inside a tool
+  gp_Pnt at;
+  bool late = false;
+  if (!A.box.IsOut(B.box)) {
+    // A solid inside the other side: every point of its boundary is inside or on it, so the first
+    // point that is not on it says (inside: a witness; outside: it is not held).
+    auto held = [&](SolidsOf& in, SolidsOf& by, int which) {
+      for (size_t k = 0; k < in.solids.size() && !on; ++k) {
+        if (!boxInside(in.boxes[k], by.box)) continue;
+        std::vector<gp_Pnt> pts;
+        fewPoints(in.solids[k], 8, pts);
+        for (const gp_Pnt& p : pts) {
+          const TopAbs_State s = by.state(p, tol);
+          if (s == TopAbs_ON) continue;
+          if (s == TopAbs_IN) {
+            at = p;
+            on = which;
+          }
+          break;
+        }
+      }
+    };
+    held(B, A, 1);
+    held(A, B, 2);
+    // Boundaries that cross: the pieces of the faces split on the side with more faces, against the other.
+    if (!on && bop) {
+      const bool targetSide = A.faces >= B.faces;
+      SolidsOf& by = targetSide ? B : A;
+      TopTools_MapOfShape seen, same;
+      for (TopTools_DataMapIteratorOfDataMapOfShapeShape it(bop->ShapesSD()); it.More(); it.Next()) {
+        same.Add(it.Key());
+        same.Add(it.Value());
+      }
+      std::vector<TopoDS_Face> pieces;
+      for (const TopoDS_Shape& s : targetSide ? targets : tools)
+        for (TopExp_Explorer ex(s, TopAbs_FACE); ex.More(); ex.Next()) {
+          if (!seen.Add(ex.Current())) continue;
+          if (const TopTools_ListOfShape* im = bop->Images().Seek(ex.Current()))
+            for (TopTools_ListIteratorOfListOfShape it(*im); it.More(); it.Next())
+              if (it.Value().ShapeType() == TopAbs_FACE && !same.Contains(it.Value())) pieces.push_back(TopoDS::Face(it.Value()));
+        }
+      std::vector<gp_Pnt> pts;
+      facePoints(pieces, by.box, kApartPoints, pts);
+      for (const gp_Pnt& p : pts) {
+        if (by.state(p, tol) == TopAbs_IN) {
+          at = p;
+          on = targetSide ? 2 : 1;
+          break;
+        }
+        if (nowMs() - t0 > kApartBudgetMs) {
+          late = true;
+          break;
+        }
+      }
+    }
+  }
+  v.ms = nowMs() - t0;
+  if (late) return v;
+  if (!on) {
+    v.verdict = "right";
+    return v;
+  }
+  v.verdict = "wrong";
+  const std::string tool = tools.size() == 1 ? "the tool" : "a tool", target = targets.size() == 1 ? "the target" : "a target";
+  const std::string where = "(" + std::string(on == 1 ? "a point of " + tool + " at " + pointWords(at) + " lies inside " + target
+                                                      : "a point of " + target + " at " + pointWords(at) + " lies inside " + tool) + ")";
+  const std::string overlap = tool + " overlaps " + target + " " + where;
+  if (kind == "cut")
+    v.words = "the cut removed nothing although " + overlap + ": OCCT took them for apart and gave " +
+              (targets.size() == 1 ? "the target" : "the targets") + " back unchanged";
+  else if (kind == "common") v.words = "the common is empty although " + overlap + ": OCCT took them for apart";
+  else v.words = "the fuse merged nothing although " + overlap + ": OCCT took them for apart and kept them as separate solids";
+  return v;
+}
+
 // Join / cut / intersect (fuse / cut / common), several targets and several tools.
 //   fuzzy: extra tolerance (mm) for nearly coincident geometry (0 = OCCT's default)
 //   glue: "off" (default) | "shift" (touching or partly shared faces) | "full"
@@ -1648,7 +1908,9 @@ std::string algoWarnings(const A& a) {
 //         when the inputs only touch; wrong results if they really intersect.
 //   unify: merge same-domain faces and edges afterwards (default true), with history.
 // Runs on work copies of every input. Reports `valid` (BRepCheck) and the reasons:
-// OCCT can finish a fuse "successfully" with an invalid solid (P0 verify).
+// OCCT can finish a fuse "successfully" with an invalid solid (P0 verify). API 10:
+// `as_if_apart` when the result is the one for inputs apart (apartCheck): "right", or
+// "wrong" with the words in warning_text (and warnings true).
 JV opBoolean(const JV& q) {
   std::string kind = q.str("op", q.str("kind", ""));
   std::vector<int> targets = idList(q, "targets", true);
@@ -1702,13 +1964,18 @@ JV opBoolean(const JV& q) {
   const double t2 = nowMs();
   res = unwrap(res);
   int id = putShape(res);
+  std::vector<TopoDS_Shape> ts, ls;
+  for (size_t k = 0; k < inputs.size(); ++k) (k < targets.size() ? ts : ls).push_back(wc.shape(k));
+  const ApartVerdict apart = apartCheck(kind, id, *hist, ts, ls, fuzzy, algo->Builder());
   JV r = JV::obj();
   r.set("id", id);
   r.set("empty", countOf(res, TopAbs_FACE) == 0);
   r.set("solids", countOf(res, TopAbs_SOLID));
-  r.set("warnings", algo->HasWarnings());
+  r.set("warnings", algo->HasWarnings() || apart.verdict == "wrong");
   std::string wtext = algoWarnings(*algo);
+  if (!apart.words.empty()) wtext += (wtext.empty() ? "" : "\n") + apart.words;
   if (!wtext.empty()) r.set("warning_text", wtext);
+  if (!apart.verdict.empty()) r.set("as_if_apart", apart.verdict);
   r.set("fuzzy", fuzzy);
   r.set("glue", glue);
   r.set("history", historyForPairs(wc.pairs(), *hist, id));
@@ -1717,6 +1984,7 @@ JV opBoolean(const JV& q) {
   tm.set("copy_ms", wc.ms);
   tm.set("boolean_ms", t1 - t0);
   tm.set("unify_ms", t2 - t1);
+  if (!apart.verdict.empty()) tm.set("apart_ms", apart.ms);
   r.set("timings", std::move(tm));
   return r;
 }
@@ -5691,7 +5959,8 @@ JV opOffsetFaces(const JV& q) {
 // with the union of the tools (several tools are fused first). Each result reports
 // `empty` (nothing left), `solids`, `faces`, `valid` (+ reasons) and its history
 // against the input ids. Whether tool bodies stay is the document's business: the
-// inputs never change. UnifySameDomain with history unless unify:false.
+// inputs never change. UnifySameDomain with history unless unify:false. API 10: each
+// result's `as_if_apart`, as boolean's (apartCheck: join as a fuse, intersect as a common).
 JV opCombine(const JV& q) {
   const std::string op = q.str("op");
   if (op != "join" && op != "cut" && op != "intersect") throw InputError("combine op must be join, cut or intersect");
@@ -5724,22 +5993,33 @@ JV opCombine(const JV& q) {
     b.SetToFillHistory(true);
     if (fuzzy > 0) b.SetFuzzyValue(fuzzy);
   };
-  // One result: the boolean's shape and history -> unify -> stored, with JSON.
+  // One result: the boolean's shape and history -> unify -> stored, with JSON. API 10:
+  // `as_if_apart` (apartCheck of `kind` on its targets and tools), "wrong" words in warning_text.
+  double apartMs = 0;
+  bool apartRan = false;
   auto finish = [&](BRepAlgoAPI_BooleanOperation& b, Handle(BRepTools_History) hist, int target,
-                    const std::vector<std::pair<int, int>>& pairs) {
+                    const std::vector<std::pair<int, int>>& pairs, const std::string& kind,
+                    const std::vector<TopoDS_Shape>& ts, const std::vector<TopoDS_Shape>& ls) {
     if (!b.History().IsNull()) hist->Merge(b.History());
     const double u0 = nowMs();
     const Unified uni = unifyChecked(b.Shape(), hist, unify, check);
     unifyMs += nowMs() - u0;
     const TopoDS_Shape& res = uni.shape;
     const int id = putShape(res);
+    const ApartVerdict apart = apartCheck(kind, id, *uni.hist, ts, ls, fuzzy, b.Builder());
+    if (!apart.verdict.empty()) {
+      apartMs += apart.ms;
+      apartRan = true;
+    }
     JV o = JV::obj();
     o.set("target", target);
     o.set("id", id);
     o.set("empty", countOf(res, TopAbs_FACE) == 0);
     o.set("solids", countOf(res, TopAbs_SOLID));
     std::string w = algoWarnings(b);
+    if (!apart.words.empty()) w += (w.empty() ? "" : "\n") + apart.words;
     if (!w.empty()) o.set("warning_text", w);
+    if (!apart.verdict.empty()) o.set("as_if_apart", apart.verdict);
     o.set("history", historyForPairs(pairs, *uni.hist, id));
     putChecked(o, id, uni);
     return o;
@@ -5759,7 +6039,10 @@ JV opCombine(const JV& q) {
     f.Build();
     boolMs += nowMs() - b0;
     if (f.HasErrors()) throw OcctError("join failed: " + algoErrors(f) + "; the bodies are unchanged");
-    results.push(finish(f, new BRepTools_History(), targets[0], wc.pairs()));
+    std::vector<TopoDS_Shape> ts, ls;
+    for (TopTools_ListIteratorOfListOfShape it(A); it.More(); it.Next()) ts.push_back(it.Value());
+    for (TopTools_ListIteratorOfListOfShape it(T); it.More(); it.Next()) ls.push_back(it.Value());
+    results.push(finish(f, new BRepTools_History(), targets[0], wc.pairs(), "fuse", ts, ls));
   } else {
     // The tools as one shape (intersect with several tools: their union).
     TopoDS_Shape toolShape;
@@ -5795,7 +6078,9 @@ JV opCombine(const JV& q) {
       hist->Merge(toolHist);
       std::vector<std::pair<int, int>> pairs{{wc.id(t), targets[t]}};
       for (size_t k = nt; k < inputs.size(); ++k) pairs.emplace_back(wc.id(k), inputs[k]);
-      results.push(finish(*b, hist, targets[t], pairs));
+      std::vector<TopoDS_Shape> ls;
+      for (TopTools_ListIteratorOfListOfShape it(toolList); it.More(); it.Next()) ls.push_back(it.Value());
+      results.push(finish(*b, hist, targets[t], pairs, op == "cut" ? "cut" : "common", {wc.shape(t)}, ls));
     }
   }
   JV r = JV::obj();
@@ -5804,6 +6089,7 @@ JV opCombine(const JV& q) {
   tm.set("copy_ms", wc.ms);
   tm.set("boolean_ms", boolMs);
   tm.set("unify_check_ms", unifyMs);
+  if (apartRan) tm.set("apart_ms", apartMs);
   r.set("timings", std::move(tm));
   return r;
 }

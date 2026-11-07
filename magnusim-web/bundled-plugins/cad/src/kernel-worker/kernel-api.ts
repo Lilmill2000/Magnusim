@@ -39,7 +39,7 @@ export interface RawResult {
 
 export interface Kernel {
   variant: 'wasm32';
-  /** What `version` answered at start: api (8 = Analysis Situs, 9 = defeature's time budget), asi (its release, absent without it). */
+  /** What `version` answered at start: api (8 = Analysis Situs, 9 = defeature's time budget, 10 = as_if_apart), asi (its release, absent without it). */
   version: { occt: string; build: string; api?: number; asi?: string };
   initMs: number;
   module: EmModule;

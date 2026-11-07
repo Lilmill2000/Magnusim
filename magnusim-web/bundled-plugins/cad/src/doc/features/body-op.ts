@@ -5,6 +5,10 @@
 // ("Result is not a valid solid") and offers Try repair, which rebuilds with a
 // fuzzy tolerance and, if that is not enough, the kernel's ShapeFix repair
 // (kept only when it is valid and keeps the volume).
+// A boolean OCCT answered as if the tool and a body it overlaps were apart
+// (kernel API 10, as_if_apart 'wrong'; GitHub issue 15: a cut that removed
+// nothing, valid and without a warning) fails the feature in words that say so,
+// never "Nothing to cut".
 // Face names (src/naming) follow the booleans' history when the kernel gives
 // the result's face count and history (API 3); otherwise the body is unnamed.
 // Owner: DOC-CORE.
@@ -12,7 +16,7 @@
 import type { BodyId, BodyMaking, BodyOp, FeatureId } from '../../types/doc';
 import type { BuildContext, BuiltBody, FeatureBuildResult } from '../../types/doc-service';
 import type { KernelCallError } from '../../types/kernel';
-import type { BBox, OpHistory, ShapeId } from '../../types/kernel-protocol';
+import type { AsIfApart, BBox, OpHistory, ShapeId } from '../../types/kernel-protocol';
 import type { FaceNames } from '../../types/naming';
 import { timeoutForFaces } from '../../kernel/timeouts';
 import { namesFromResult } from '../../naming/result';
@@ -36,6 +40,8 @@ interface BoolOut {
   /** API 3: the result's face count and history (for names). */
   faces?: number;
   history?: OpHistory;
+  /** API 10: the result is the one for inputs apart; 'wrong' when they overlap (the kernel's words: warning_text). */
+  asIfApart?: AsIfApart;
 }
 
 async function boolean(ctx: BuildContext, op: BooleanKind, targets: ShapeId[], tools: ShapeId[], fuzzy: number | undefined): Promise<BoolOut> {
@@ -45,7 +51,7 @@ async function boolean(ctx: BuildContext, op: BooleanKind, targets: ShapeId[], t
   const timeoutMs = timeoutForFaces('boolean', faces);
   const r = await ctx.kernel.call('boolean', { op, targets, tools, ...(fuzzy ? { fuzzy } : {}) }, timeoutMs ? { timeoutMs } : {});
   const res = r.result;
-  return { id: res.id, valid: res.valid !== false, empty: !!res.empty, solids: typeof res.solids === 'number' ? res.solids : 1, reason: res.reason, faces: res.faces, history: res.history };
+  return { id: res.id, valid: res.valid !== false, empty: !!res.empty, solids: typeof res.solids === 'number' ? res.solids : 1, reason: res.reason, faces: res.faces, history: res.history, ...(res.as_if_apart ? { asIfApart: res.as_if_apart } : {}) };
 }
 
 /**
@@ -56,6 +62,17 @@ async function boolean(ctx: BuildContext, op: BooleanKind, targets: ShapeId[], t
 export function nothingToActOn(op: Exclude<BodyOp, 'new'>, label: string): string {
   if (op === 'join') return `Nothing to join: ${label} shares no face with a body made before it`;
   return `Nothing to ${VERB[op]}: ${label} does not overlap any body made before it (touching is not enough)`;
+}
+
+/**
+ * What went wrong when OCCT answered a Join / Cut / Intersect as if `subject` and `body` were apart
+ * although they overlap (kernel API 10, as_if_apart 'wrong'; GitHub issue 15): "it overlaps Body 1,
+ * but the geometry kernel's cut removed nothing from Body 1 (OCCT took the two for apart)".
+ * Combine's words too (its subject names the tools).
+ */
+export function tookForApart(op: Exclude<BodyOp, 'new'>, subject: string, body: string): string {
+  const what = op === 'cut' ? `cut removed nothing from ${body}` : op === 'join' ? 'join kept them as separate solids' : 'intersect found nothing in common';
+  return `${subject} overlaps ${body}, but the geometry kernel's ${what} (OCCT took the two for apart)`;
 }
 
 function overlaps(a: BBox, b: BBox, tol: number): boolean {
@@ -131,7 +148,9 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
       for (const body of ctx.bodies.values()) {
         if (!overlaps(tb, await ctx.bbox(body.shape), tol)) continue;
         const c = await boolean(ctx, 'common', [body.shape], [tool.shape], fuzzy);
-        if (c.empty) {
+        // An empty common OCCT answered as if the two were apart although they overlap (kernel API 10)
+        // still makes the body a target: its Operation below says whether OCCT got it right.
+        if (c.empty && c.asIfApart !== 'wrong') {
           await ctx.release([c.id]);
           // Join also takes a body the tool only touches (a shared face, as Box 2 placed
           // against Box 1): the two fuse into one solid. Bodies that are apart stay two.
@@ -164,6 +183,7 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
       const [primary, ...others] = targets;
       const r = await boolean(ctx, 'fuse', [primary.shape], [tool.shape, ...others.map((o) => o.shape)], fuzzy);
       made.push(r.id);
+      if (r.asIfApart === 'wrong') return { ok: false, message: `${label} failed: ${tookForApart('join', 'it', targets.map((t) => ctx.bodyName(t.id)).join(', '))}` };
       out.push({ id: primary.id, shape: r.id, valid: r.valid, reason: r.reason, names: named(r, targets) });
       removed.push(...others.map((o) => o.id));
     } else {
@@ -173,6 +193,7 @@ export async function applyBodyOp(f: BodyMaking & { id: FeatureId }, label: stri
           r = await boolean(ctx, f.op === 'cut' ? 'cut' : 'common', [t.shape], [tool.shape], fuzzy);
           made.push(r.id);
         }
+        if (r.asIfApart === 'wrong') return { ok: false, message: `${label} failed: ${tookForApart(f.op, 'it', ctx.bodyName(t.id))}` };
         if (r.empty) {
           removed.push(t.id);
           gone.push(ctx.bodyName(t.id));

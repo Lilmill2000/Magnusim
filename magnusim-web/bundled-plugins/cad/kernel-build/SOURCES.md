@@ -10,7 +10,9 @@ kernel API 8 (shipped 2026-11-02) the facade's Analysis Situs ops
 (`facade/asi_ops.cpp`: `recognize`, `suppress_blends`, `debug_reshape`) call
 it, so `mk32.wasm` holds the asiAlgo code they reach (`LICENSES/README.md`).
 Kernel API 9 (2026-11-02) adds defeature's time budget (below, with OCCT patch
-0002), recognize's two face limits and the budget's words.
+0002), recognize's two face limits and the budget's words. Kernel API 10
+(2026-11-06) has boolean and combine say when OCCT answered as if the inputs
+were apart (`as_if_apart`, below).
 
 ## Pins
 
@@ -265,6 +267,48 @@ must go, and the heal only grows faces. The other build order (R1 first) runs
   kernel; the budget test fails without 0002), `e2e/cad-kernel-api8.spec.ts`
   in the Part's own worker.
 
+## as_if_apart (API 10, 2026-11-06)
+
+GitHub issue 15: a cut reported success while removing nothing. A 60 x 40 x 20
+block with a 5.1054 mm hole at (15, 0), and a helical groove in the hole's wall
+(a loft through a 1/4-20 thread's basic profile, 16 planes a turn, 1.27 mm a
+turn, its inner edge 0.0254 mm inside the wall). Ending inside the block (15.3
+turns, 92.06 mm³) the groove cuts 86.19 mm³; running out through the bottom face
+(16.5 to 20 turns, 16.75: 100.78 mm³) OCCT 7.9.3 cuts nothing (the block back,
+valid, no warning), its common is empty and its fuse keeps two solids, with
+fuzzy 1e-4, 1e-3 and 0.01 too and without unify; the same groove cuts the box
+without its hole (94.39 mm³). Without unify the cut has 40 faces: OCCT split
+the block's faces where the groove crosses them, then kept every piece.
+
+- Such an answer is the one for inputs apart: a cut that keeps every target
+  face (itself or its pieces) and no tool face, a common with no face, a fuse
+  that merges no solid. `facade.cpp`'s `answeredApart` reads that from the
+  boolean's history and counts, so an ordinary boolean (one that cut, joined or
+  kept something) runs no check and answers as before: on the probe set (cut,
+  common and fuse of the drilled block with a box inside it, a box holding it,
+  a cylinder through it and the 15.3-turn groove) the same BREP bytes, history
+  and fields as the API 9 kernel, and no `as_if_apart`.
+- Only then `apartCheck` asks whether the inputs overlap: a point of one
+  side's boundary more than the tolerance (1e-4 mm, twice the fuzzy value or
+  twice the largest face tolerance) inside the other side. The pieces of the
+  faces the boolean split (its builder's images, same-domain pieces left out:
+  a flush face) on the side with more faces are sampled on a grid (at most
+  1,024 points, at most 1 s) and classified against the side with fewer faces;
+  a solid whose box lies inside the other side's is tried at a few points of
+  its boundary. Found: `as_if_apart: "wrong"`, `warnings: true` and
+  `warning_text` naming the point ("the cut removed nothing although the tool
+  overlaps the target (a point of the target at (15.867, 2.511, 20) mm lies
+  inside the tool): OCCT took them for apart and gave the target back
+  unchanged"); not found: `"right"` (apart, or only touching). Out of time
+  (two large bodies) or sheets: no `as_if_apart`.
+- Cost (Node, 2026-11-06, while other lanes ran tests): the issue's groove
+  2-4 ms against a 1.3 s boolean. On a 5,000-face prism an ordinary cut runs no
+  check; a box apart inside the prism's box answers "right" in 130-340 ms
+  (cut, common; the fuse up to 760 ms) against booleans of 0.8-4.6 s, flush on
+  its top 36-110 ms, touching one of its vertices 38-200 ms.
+- Tests: `tests/kernel/kernel-api10-apart.test.ts` (the issue's case fails on
+  the API 9 kernel), `tests/doc/apart-real-kernel.test.ts` (History's words).
+
 ## Flags
 
 - Compile (OCCT and facade): `-O3 -fwasm-exceptions -msimd128`, plus
@@ -322,7 +366,7 @@ node kernel-build/ship.mjs                           # queued with e2e runs; rep
   renames), so a page that starts a worker meanwhile does not load halves of
   two builds.
 
-## Reproducibility (measured 2026-09-30; API 3 build 2026-10-01; API 7 build 2026-10-30; Analysis Situs linked 2026-11-01; API 8 and API 9 builds 2026-11-02)
+## Reproducibility (measured 2026-09-30; API 3 build 2026-10-01; API 7 build 2026-10-30; Analysis Situs linked 2026-11-01; API 8 and API 9 builds 2026-11-02; API 10 build 2026-11-06)
 
 - `repro-check.sh --against-shipped`: two facade builds from clean object
   folders are byte-identical to each other and to the shipped files. API 3
@@ -359,6 +403,13 @@ node kernel-build/ship.mjs                           # queued with e2e runs; rep
   changes no header). `repro-check.sh --against-shipped` (93 s): both `libasi.a`,
   both kernels and both build records identical, the kernels and record identical
   to the shipped ones, no build-machine path in any.
+- API 10 (2026-11-06: as_if_apart in boolean and combine; the facade only, OCCT and
+  `libasi.a` reused): shipped with `node kernel-build/ship.mjs --clean`, `FACADE_OBJ` of
+  its own: `mk32.wasm` 23,311,258 bytes, sha256 `99d3adfb94f60141…` (+20,375 bytes against
+  API 9's c59b3a0f); `mk32.mjs` unchanged (`aad011be5d356a6a…`). `repro-check.sh
+  --against-shipped` (2m46s, other lanes building meanwhile): both `libasi.a`, both
+  kernels and both build records identical, the kernels and record identical to the
+  shipped ones, no build-machine path in any.
 - Analysis Situs linked, nothing calling it (2026-11-01, still API 7): `build.sh`
   with `libasi.a` (43 objects, 4,133,068 bytes, sha256 `102b2d769f72f28a…`) on
   the link line gives `mk32.wasm` 22,483,974 bytes, sha256 `69bb460d53a2510f…`,
@@ -394,7 +445,7 @@ the P0 hazard comes back (the vortex-finder cut removes 0.015 mm³ instead of
 `-DMK_TEST_NO_SUPPRESS_BUDGET` makes one whose `suppress_blends` never refuses
 on its budget, and `-DMK_TEST_COST_IN_WORDS` adds SuppressBlendsInc's time to a
 refusal that came after it ran: the kernel the budget's model was measured
-with. The API 8 and 9 tests (`kernel-api8-*.test.ts`, `kernel-api9-*.test.ts`) run against the shipped kernel;
+with. The API 8, 9 and 10 tests (`kernel-api8-*.test.ts`, `kernel-api9-*.test.ts`, `kernel-api10-*.test.ts`) run against the shipped kernel;
 `kernel-api8-nist.test.ts` also needs `ASI_CORPUS_DIR` (the NIST MBE PMI STEP
 files, never committed). `tests/kernel/asi-licence.test.ts` checks
 `LICENSES/AnalysisSitus-BSD-3-Clause.txt` against the vendored files' headers.
