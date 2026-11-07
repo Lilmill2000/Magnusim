@@ -111,6 +111,8 @@ export const SHARDS = {
     'e2e/cad-p4b-fix1-pattern.spec.ts',
     // Parity both ways: the person's Hole, body colour, history order, Back isometric, Find, Picture, Measure's extras.
     'e2e/cad-person-parity.spec.ts',
+    // The person's Hole with sizes, screw heads, modelled threads and a sketch's points (PR 13), a blind hole that goes through (issue 14), Extrude's Draft angle.
+    'e2e/cad-hole-kinds.spec.ts',
     // Volumes of B-spline bodies (kernel API 7): a loft's chip, Press-pull of its cap, a Cut by a block that only touches it.
     'e2e/cad-volume-accuracy.spec.ts',
     // INSPECT > Find of fillets and holes by size (kernel API 8) on an imported STEP part: rows, Select all, Delete, refusals.

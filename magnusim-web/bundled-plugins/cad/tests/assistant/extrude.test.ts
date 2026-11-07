@@ -11,7 +11,9 @@
 //   - a draft angle: refused round a hole in the profile (+ and -, a plate's and a ring's) and with
 //     symmetric or two, nothing changed; the plate with its disc drafts whole; a rib's walls that
 //     meet before the distance end it there with a warning; distance "" runs until they meet (a
-//     pyramid), resent as it is; one that widens with no distance is refused;
+//     pyramid), resent as it is; one that widens with no distance is refused; a 10 mm square 10 mm
+//     high at 5 deg is its frustum (835.23 mm3), the angle a parameter and edit_feature set, refused
+//     with through and up to;
 //   - regions in every form: "all" keeps a plate's hole open (even-odd), "r2", "at(u, v)", another
 //     sketch's region refused; join, cut through given bodies, up to a face and a vertex, two sides,
 //     symmetric, through both ways;
@@ -165,6 +167,37 @@ describe('extrude', () => {
       // One that widens never meets: refused.
       const wide = await fail(h, 'extrude', EXTRUDE({ sketch: 'Square sketch', distance: '', taper: '-5 deg' }));
       expect(wide.message).toBe('bad_input: taper: A draft angle that widens never meets: give the distance (until the walls meet needs a draft angle more than 0).');
+    },
+    REAL_KERNEL_MS,
+  );
+
+  it(
+    'a draft angle of 5 deg on a 10 mm square 10 mm high is its frustum (835.23 mm3, as worked by hand); a parameter and edit_feature set it; through and up to are refused',
+    async () => {
+      h = await assistantHarness({ sketchMode: true });
+      const P = (name: string, expr: string) => ({ name, kind: 'angle', expr, comment: '', rename_to: '' });
+      await ok(h, 'set_params', { set: [P('dr', '5 deg')], remove: [] });
+      await ok(h, 'sketch', rectInput('Square sketch', 10, 10));
+      // The top is 10 - 2 * 10 tan(angle) across: h / 3 (A + a + sqrt(A a)).
+      const frustum = (deg: number) => {
+        const top = (10 - 20 * Math.tan((deg * PI) / 180)) ** 2;
+        return (10 / 3) * (100 + top + Math.sqrt(100 * top));
+      };
+      const r = await ok(h, 'extrude', EXTRUDE({ name: 'Boss', sketch: 'Square sketch', distance: '10 mm', taper: 'dr' }));
+      expect(r.data).toMatchObject({ resolved: { taper: 'dr (5 deg)' }, warnings: [] });
+      expect(featureNamed<ExtrudeFeature>(h, 'Boss').taper).toBe('dr');
+      expect(volume(h)).toBeCloseTo(frustum(5), 3);
+      expect(volume(h)).toBeCloseTo(835.23, 2);
+      // The parameter drives it, and edit_feature sets it.
+      await ok(h, 'set_params', { set: [P('dr', '10 deg')], remove: [] });
+      expect(volume(h)).toBeCloseTo(frustum(10), 3);
+      await ok(h, 'edit_feature', EDIT('Boss', { set: [{ field: 'taper', value: '3 deg' }] }));
+      expect(volume(h)).toBeCloseTo(frustum(3), 3);
+      // Through all and up to a face take no draft: refused, nothing changed.
+      const doc = h.doc.state.get().doc;
+      expect((await fail(h, 'extrude', EXTRUDE({ sketch: 'Square sketch', extent: 'through', taper: '5 deg', op: 'cut', bodies: ['Body 1'] }))).message).toBe('bad_input: taper: A draft angle goes only with Blind (set it to 0).');
+      expect((await fail(h, 'extrude', EXTRUDE({ sketch: 'Square sketch', extent: 'to', to: 'Boss.end', taper: '5 deg', op: 'join', bodies: ['Body 1'] }))).message).toBe('bad_input: taper: A draft angle goes only with Blind (set it to 0).');
+      expect(h.doc.state.get().doc).toBe(doc);
     },
     REAL_KERNEL_MS,
   );
