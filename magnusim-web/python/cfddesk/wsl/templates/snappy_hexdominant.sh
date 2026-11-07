@@ -114,8 +114,9 @@ if [ "${EC:-1}" -eq 0 ] && [ -f system/extrudeMeshDict ]; then
   rm -rf mgf3d
 fi
 
-# The mesh's quality report (RH2): read by the Mesh panel and the pre-run check. It never
-# fails the mesh: Hex-dominant keeps what snappyHexMesh made, as before.
+# The mesh's quality report (RH2): read by the Mesh panel and the pre-run check. Its verdict is
+# applied after the copy-back (generate_snappy.py: a failed check ends Generate failed), so it
+# never stops this script: the mesh and its logs still come back.
 if [ "$CHECKED" -eq 0 ] && [ "${EC:-1}" -eq 0 ] && [ -f constant/polyMesh/owner ]; then
   emit_json "{\"event\":\"progress\",\"stage\":\"checkMesh\",\"generate_id\":\"$GENERATE_ID\"}"
   openfoam2606 checkMesh > log.checkMesh 2>&1 || true

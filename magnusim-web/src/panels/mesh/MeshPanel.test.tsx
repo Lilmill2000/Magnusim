@@ -351,6 +351,32 @@ describe('MeshSettings', () => {
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
   });
 
+  it('a mesh whose checkMesh failed Generate shows the failed checks once and its worst cells (D1)', async () => {
+    render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
+    await waitFor(() => expect(screen.getByText('Mesh 1')).toBeInTheDocument());
+    const reason = 'checkMesh failed 2 checks: 8 cells with a negative volume, 84 faces over 90° non-orthogonal.';
+    publishJob({
+      phase: 'failed',
+      status: 'failed',
+      error: reason,
+      quality: {
+        ok: false,
+        n_failed: 2,
+        failed: [
+          { check: 'negative_volume', count: 8, unit: 'cells', accepted: false },
+          { check: 'non_orthogonality', count: 84, unit: 'faces', accepted: false },
+        ],
+        max_non_orthogonality: 180,
+        max_skewness: 29.2463,
+        max_aspect_ratio: 4.45,
+      },
+    });
+    expect(screen.getByText('Mesh failed')).toBeInTheDocument();
+    expect(screen.getAllByText(reason)).toHaveLength(1);
+    const lines = [...document.querySelectorAll('[data-mesh-quality] > div')].map((d) => d.textContent);
+    expect(lines).toEqual(['Worst cells: 180° non-orthogonal, skewness 29, aspect ratio 4.5']);
+  });
+
   it('shows Stop while this mesh generates: it asks, POSTs /api/mesh/stop, and the status says Stopped', async () => {
     render(<MeshSettings panelId="panel-mesh-form" itemId="m1" scope="p:p1/s:s1/mesh:m1" />);
     await waitFor(() => expect(screen.getByText('Mesh 1')).toBeInTheDocument());

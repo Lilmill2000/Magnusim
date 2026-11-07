@@ -16,6 +16,8 @@ bash make_fixtures.sh /mnt/c/<somewhere>/out   # works in ~/rh2-fixture-work
 | broken | the contraction with one point pushed through its cell | `checkmesh/negative-volume.log` (4 failed checks) |
 | sheared | a sheared, graded thin slab | `checkmesh/skewed.log` (skewness failed; 750 faces over 70°) |
 | thin | a 3D slab of cells 1,000 times thinner than wide | `checkmesh/high-aspect-ratio.log` |
+| thin-sheared | 8 thin sheared cells, graded 30 across (2026-11-07) | `checkmesh/skewed-few-thin.log` (skewness and 4 cells of high aspect ratio: the two failed checks the meshers keep) |
+| a 55 D pipe on Hex-dominant | snappyHexMesh's mesh of a pipe 20 mm across and 1,100 mm long at fineness 6 (2026-11-07, `tests/wsl/test_mesh_wsl.py` W6, in parallel) | `checkmesh/hexdominant-pipe-55d.log` (cells of negative volume: Generate fails, naming the check) |
 
 `courant-logged.json` keeps each pimpleFoam run's largest Courant number per step, from its
 `Courant Number mean: … max: …` lines. Both runs start from a uniform flow at the inflow speed,

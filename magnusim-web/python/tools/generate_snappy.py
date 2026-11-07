@@ -37,7 +37,7 @@ from cfddesk.runner.case_id import validate_wsl_case_id, wsl_case_path  # noqa: 
 from cfddesk.runner.cleanup import remove_wsl_case  # noqa: E402
 from cfddesk.runner.sync import sync_to_wsl  # noqa: E402
 from cfddesk.wsl.config import get_wsl_distro  # noqa: E402
-from cfddesk.wsl.mesh_run import windows_to_wsl_path  # noqa: E402
+from cfddesk.wsl.mesh_run import checkmesh_failure, windows_to_wsl_path  # noqa: E402
 
 _TEMPLATES = CFDDESK_ROOT / "cfddesk" / "wsl" / "templates"
 _SNAPPY_SH = _TEMPLATES / "snappy_hexdominant.sh"
@@ -65,6 +65,14 @@ def _read_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _read_text(path: Path) -> str:
+    """A log's text, or "" when it is missing or unreadable."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _sha256_file(path: Path) -> str:
@@ -646,13 +654,20 @@ def main() -> int:
             zones = cell_zone_sizes(case_dir / "constant" / "polyMesh")
             region_rows = [{**r, "cells": int(zones.get(r["name"], 0))} for r in prep["mesh_regions"]]
         quality = None
+        failed_check = None
         if ok:
             # The script copied the mesh and logs to Windows; the WSL copy is done.
             remove_wsl_case(wsl_case)
             # Its quality (checkMesh), box, layers and Courant rates (mesh-facts.json, RH2).
             quality = finish_mesh_facts(case_dir, "hexdominant", _progress)
+            # checkMesh's verdict, by the rule Standard and cfMesh are gated by: a mesh that fails
+            # it (or whose report has no verdict) ends Generate failed, naming the check (D1).
+            # Its quality stays in the result, so the Mesh panel's line shows the failed check.
+            failed_check = checkmesh_failure(_read_text(case_dir / "log.checkMesh"))
+            ok = failed_check is None
         return _result(
             ok,
+            **({"error": failed_check} if failed_check else {}),
             exit_code=rc,
             n_cells=counts.get("n_cells"),
             n_points=counts.get("n_points"),

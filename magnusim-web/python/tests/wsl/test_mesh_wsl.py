@@ -6,7 +6,8 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
 - W1 Standard, one thread, layers off: the cell count is exactly the host
   mesh's, each boundary face is one golden triangle, checkMesh passes.
 - W2 Hex-dominant: ok, feature refinement marked, its patches, the cell count
-  near the recorded one, and checkMesh run here (its own pipeline has none).
+  near the recorded one, and checkMesh run here too (its own pipeline runs it as well
+  and fails Generate on a check it does not accept).
 - W3 cfMesh: checkMesh passes, patch types, the cell count near the recorded one.
 - W4 Standard with production threads: within 1 % of the one-thread golden
   (threads make gmsh differ run to run, so this one cannot be byte-exact).
@@ -15,6 +16,10 @@ These run the same command lines to the end (``pytest -m wsl``, minutes each):
   layers, and checkMesh passes. Its walls are meshed finer than h around the
   tabs, so their layers are sized in bands (patches of their own for the
   layers pass): after the mesh they are one ``walls`` patch again.
+- W6 Hex-dominant on a long pipe (55 D, fineness 6): its background cells along the
+  pipe are about ten times their size across it, and snappyHexMesh leaves cells of
+  negative volume. Generate ends failed and names the failed check, in the words the
+  Mesh panel shows (Daniel's D1: a mesh that fails checkMesh is not kept as done).
 
 Each run has its own WSL case id and removes it when done. Record the cell
 counts after a deliberate change with ``CFDDESK_UPDATE_GOLDEN=1``.
@@ -43,15 +48,21 @@ pytestmark = [pytest.mark.wsl, pytest.mark.occt, pytest.mark.slow]
 _PATCH = re.compile(r"^\s*(\w+)\s*\{[^}]*?\btype\s+(\w+);[^}]*?\bnFaces\s+(\d+);", re.M | re.S)
 
 
-def _run(argv: list[str], *, timeout: float = 3600) -> dict[str, Any]:
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(PY), str(PY / "sdk")])}
+def _results(argv: list[str], *, timeout: float = 3600) -> tuple[int, list[dict[str, Any]], str]:
+    """The generator's exit code, its result lines and the end of its stderr. Its output is
+    UTF-8, as the app runs it (scripts/job-runner.js): a reason can say "90°"."""
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(PY), str(PY / "sdk")]), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     env.pop("CFDDESK_UPDATE_GOLDEN", None)
     r = subprocess.run(
-        [sys.executable, *argv], cwd=str(PY), env=env, capture_output=True, text=True, timeout=timeout
+        [sys.executable, *argv], cwd=str(PY), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
     )
     events = [json.loads(line.split(" ", 1)[1]) for line in r.stdout.splitlines() if line.startswith("MAGNUSIM_EVENT ")]
-    results = [e for e in events if e.get("event") == "result"]
-    assert r.returncode == 0 and results and results[-1].get("ok"), (r.returncode, results[-1:], r.stderr[-2000:])
+    return r.returncode, [e for e in events if e.get("event") == "result"], r.stderr[-2000:]
+
+
+def _run(argv: list[str], *, timeout: float = 3600) -> dict[str, Any]:
+    rc, results, err = _results(argv, timeout=timeout)
+    assert rc == 0 and results and results[-1].get("ok"), (rc, results[-1:], err)
     return results[-1]
 
 
@@ -133,8 +144,8 @@ def test_w1_standard(tmp_path: Path):
         assert {k: v[1] for k, v in patches.items()} == _merged_groups(msh["triangles_per_group"])
 
 
-def test_w2_hex_dominant(tmp_path: Path):
-    proj, mesh = _project(tmp_path)
+def _body1(proj: Path) -> None:
+    """The project's Body1.stl at CAD quality, as the server builds it before a Hex-dominant Generate."""
     step = next(proj.rglob("source.step"))
     r = subprocess.run(
         [sys.executable, str(TOOLS / "convert_step_to_stl.py"), "--step", str(step), "--out", str(step.with_name("Body1.stl")), "--cad-quality"],
@@ -142,6 +153,11 @@ def test_w2_hex_dominant(tmp_path: Path):
         env={**os.environ, "PYTHONPATH": os.pathsep.join([str(PY), str(PY / "sdk")])},
     )
     assert r.returncode == 0, r.stderr[-2000:]
+
+
+def test_w2_hex_dominant(tmp_path: Path):
+    proj, mesh = _project(tmp_path)
+    _body1(proj)
     case = mesh / "case"
     wsl_case = _case_id("w2")
     try:
@@ -237,3 +253,55 @@ def test_w5_standard_tabs_part(tmp_path: Path):
     patches = _patches(case)
     assert sorted(patches) == ["pressure_1", "velocity_inlet_1", "walls"], sorted(patches)
     assert patches["walls"][0] == "wall"
+
+
+def _pipe_project(tmp: Path, *, d_mm: float, l_mm: float) -> tuple[Path, Path]:
+    """A pipe of diameter ``d_mm`` and length ``l_mm`` along +x (the fluid), its inlet the disc
+    at x = 0 and its outlet the disc at x = L, in the sample project's study."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+    from cfddesk.cad.io import write_step
+    from cfddesk.cad.step import load_step
+
+    step = tmp / "pipe.step"
+    write_step(BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), d_mm / 2.0, l_mm).Shape(), step)
+    solid = load_step(step)
+    inlet = [f.face_id for f in solid.faces if abs(f.centroid[0]) < 1e-6]
+    outlet = [f.face_id for f in solid.faces if abs(f.centroid[0] - l_mm) < 1e-6]
+    assert len(inlet) == 1 and len(outlet) == 1, [(f.face_id, f.centroid) for f in solid.faces]
+    # Face labels are 1-based.
+    proj, mesh = _project(tmp / "p", step=step, faces=(inlet[0] + 1, outlet[0] + 1))
+    _body1(proj)
+    return proj, mesh
+
+
+def test_w6_hex_dominant_long_pipe(tmp_path: Path):
+    from cfddesk.wsl.mesh_run import checkmesh_failure
+
+    proj, mesh = _pipe_project(tmp_path, d_mm=20.0, l_mm=1100.0)
+    case = mesh / "case"
+    wsl_case = _case_id("w6")
+    try:
+        rc, results, err = _results(
+            [
+                str(TOOLS / "generate_snappy.py"),
+                "--project-dir", str(proj), "--case-dir", str(case), "--wsl-case", wsl_case,
+                "--generate-id", "golden", "--fineness", "6", "--add-layers", "0",
+                "--mesh-id", "mesh_1", "--simulation-id", "sim_1",
+            ]
+        )
+    finally:
+        remove_wsl_case(wsl_case)
+    assert results, (rc, err)
+    res = results[-1]
+    # snappyHexMesh finished and made its mesh; checkMesh failed it, and Generate says which check.
+    assert rc == 1 and res["ok"] is False and res["exit_code"] == 0, (rc, res, err)
+    log = (case / "log.checkMesh").read_text(encoding="utf-8")
+    assert res["error"] == checkmesh_failure(log), (res["error"], log[-3000:])
+    assert re.fullmatch(r"checkMesh failed \d+ checks?: .*\d+ cells? with a negative volume.*\.", res["error"]), res["error"]
+    # The quality its record keeps, so the Mesh panel's line shows the failed check too.
+    quality = res["quality"]
+    assert quality["known"] is True and quality["ok"] is False
+    assert any(f["check"] == "negative_volume" for f in quality["failed"]), quality
+    assert res["n_cells"] and res["n_cells"] > 0

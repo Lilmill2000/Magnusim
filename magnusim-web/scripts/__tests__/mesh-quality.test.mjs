@@ -2,6 +2,8 @@
 // `live_mesh_result.quality`, from the generator's result (persistMeshResult), and a done mesh
 // whose result has none reads the mesh-facts.json its generator left beside it, only while
 // that still matches the mesh. The Python writer's stamp and the server's agree.
+// D1 (2026-11-07): Hex-dominant's checkMesh verdict fails Generate, naming the check, and the
+// failed record keeps the quality; the fake mesher standing in for it does the same.
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -23,6 +25,7 @@ const { cleanMeshQuality, meshFactsQuality, meshStamp } = await import('../mesh-
 const { persistMeshResult } = await import('../w21-mesh-generate.js');
 const { meshCasePath } = await import('../study-io.js');
 const { PYTHON, pyTool } = await import('../python-env.js');
+const { meshGeneratorArgs } = await import('../test-compute.js');
 const { seedElbowProject } = await import('../../e2e/prepare-projects.js');
 
 after(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -33,14 +36,19 @@ const meshDoc = JSON.parse(readFileSync(join(PROJECTS, PID, 'mesh.json'), 'utf8'
 const MESH = String(meshDoc.meshes[0].id);
 const SIM = String(meshDoc.meshes[0].simulation_id || JSON.parse(readFileSync(join(PROJECTS, PID, 'simulations.json'), 'utf8')).simulations[0].id);
 
-/** The fake mesher, as Generate runs it in tests: a one-cell mesh, and with a checkMesh report the mesh's facts. */
-function fakeGenerate(caseDir, checkmesh) {
-  const r = spawnSync(PYTHON, [pyTool('fake_mesh_generate.py'), '--case-dir', caseDir, '--generate-id', 'g1'], {
+/**
+ * The fake mesher, as Generate runs it in tests: a one-cell mesh, and with a checkMesh report the
+ * mesh's facts. `standsFor`: the generator it stands in for (scripts/test-compute.js); `exit`: the
+ * exit code it must end with.
+ */
+function fakeGenerate(caseDir, checkmesh, { standsFor = '', exit = 0 } = {}) {
+  const args = ['--case-dir', caseDir, '--generate-id', 'g1', ...(standsFor ? ['--stands-for', standsFor] : [])];
+  const r = spawnSync(PYTHON, [pyTool('fake_mesh_generate.py'), ...args], {
     encoding: 'utf8',
     windowsHide: true,
     env: { ...process.env, MAGNUSIM_TEST_MESH_SECONDS: '0', MAGNUSIM_TEST_MESH_CHECKMESH: checkmesh ? join(CHECKMESH, checkmesh) : '' },
   });
-  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.status, exit, r.stderr);
   const line = r.stdout.split(/\r?\n/).find((l) => l.includes('"event":"result"'));
   return JSON.parse(line.slice(line.indexOf('{')));
 }
@@ -105,6 +113,45 @@ describe('the mesh record keeps checkMesh quality', () => {
     writeFileSync(join(caseDir, 'constant', 'polyMesh', 'points'), readFileSync(join(caseDir, 'constant', 'polyMesh', 'points'), 'utf8') + '\n');
     assert.equal(meshFactsQuality(caseDir), null);
     assert.equal(liveOf(persistMeshResult(PID, done())).quality, null);
+  });
+
+  it('standing in for Hex-dominant, the fake fails a mesh its checkMesh rule refuses, naming the check, and the failed record keeps the quality (D1)', () => {
+    const neg = fakeGenerate(join(ROOT, 'hex-neg'), 'hexdominant-pipe-55d.log', { standsFor: 'generate_snappy.py', exit: 1 });
+    assert.equal(neg.ok, false);
+    assert.equal(
+      neg.error,
+      'checkMesh failed 5 checks: 8 cells with a high aspect ratio, 8 cells with a negative volume, 84 faces over 90° non-orthogonal, 644 wrongly oriented faces, 164 highly skewed faces.',
+    );
+    assert.equal(neg.quality.n_failed, 5);
+    const rec = liveOf(persistMeshResult(PID, { ...done(), status: 'failed', error: neg.error, quality: neg.quality }));
+    assert.equal(rec.error, neg.error);
+    assert.deepEqual(rec.quality.failed.map((f) => [f.check, f.count]), [
+      ['aspect_ratio', 8],
+      ['negative_volume', 8],
+      ['non_orthogonality', 84],
+      ['face_pyramids', 644],
+      ['skewness', 164],
+    ]);
+    // Skewed faces and up to 8 cells of high aspect ratio: kept, as Standard and cfMesh keep them.
+    const kept = fakeGenerate(join(ROOT, 'hex-kept'), 'skewed-few-thin.log', { standsFor: 'generate_snappy.py' });
+    assert.equal(kept.ok, true);
+    assert.equal(kept.error, undefined);
+    assert.equal(kept.quality.n_failed, 2);
+    // Standing in for Standard, it ends as before (Standard gates inside its own pipeline).
+    assert.equal(fakeGenerate(join(ROOT, 'std-neg'), 'negative-volume.log', { standsFor: 'generate_standard.py' }).ok, true);
+  });
+
+  it('meshGeneratorArgs: the stand-in learns which generator it stands in for; a real run gets its own arguments', () => {
+    const was = process.env.MAGNUSIM_TEST_COMPUTE;
+    try {
+      process.env.MAGNUSIM_TEST_COMPUTE = 'fake';
+      assert.deepEqual(meshGeneratorArgs(join('python', 'tools', 'generate_snappy.py'), ['--fineness', '6']), ['--stands-for', 'generate_snappy.py', '--fineness', '6']);
+      delete process.env.MAGNUSIM_TEST_COMPUTE;
+      assert.deepEqual(meshGeneratorArgs(join('python', 'tools', 'generate_snappy.py'), ['--fineness', '6']), ['--fineness', '6']);
+    } finally {
+      if (was === undefined) delete process.env.MAGNUSIM_TEST_COMPUTE;
+      else process.env.MAGNUSIM_TEST_COMPUTE = was;
+    }
   });
 
   it('cleanMeshQuality: unknown stays unknown, junk is null', () => {
