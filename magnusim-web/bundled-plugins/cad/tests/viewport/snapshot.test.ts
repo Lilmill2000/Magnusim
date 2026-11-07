@@ -161,7 +161,8 @@ describe('the layers a picture leaves out', () => {
 
   it('manipulators, markers and bananas; the sketches and reference planes stay', () => {
     expect([...SNAPSHOT_HIDDEN_LAYERS].sort()).toEqual([HANDLE_LAYER, HANDLES_LAYER, MOVE_HANDLE_LAYER, SECTION_ARROW_LAYER, 'p2-measure', MARKERS_LAYER, PICKS_LAYER, 'sketch.pick', BANANA_LAYER, SKETCH_BANANA_LAYER].sort());
-    const kept = [LAYER_CONSTRUCT, LAYER_REGIONS, LAYER_SKETCHES, LAYER_MARKERS, 'sketch-geometry', 'sketch-annotations'];
+    // A tapped hole's cosmetic thread (features/hole/threads.ts) is part of the model, as the person sees it: kept.
+    const kept = [LAYER_CONSTRUCT, LAYER_REGIONS, LAYER_SKETCHES, LAYER_MARKERS, 'sketch-geometry', 'sketch-annotations', 'hole.threads'];
     for (const id of kept) expect(SNAPSHOT_HIDDEN_LAYERS.has(id), id).toBe(false);
     // Every layer the app adds is one or the other (a new layer must be placed in one list).
     const ids = layerIds();

@@ -151,7 +151,7 @@ test('cad:assistant-eval-repair a first shot that fails gets one repair turn nam
   // the first shot ends with no body; the repair turn makes it.
   const steps = fakeSteps(loadReference('spacer'), 0);
   const extrude = steps.findIndex((s) => s.tools?.[0]?.name === 'cad__extrude');
-  const bad = { tools: [{ name: 'cad__hole', input: { name: '', face: 'Spacer.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '3 mm', depth: 'through', distance: '' } }] };
+  const bad = { tools: [{ name: 'cad__hole', input: { name: '', face: 'Spacer.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], points: '', diameter: '3 mm', size: '', fit: '', depth: 'through', distance: '', type: 'simple', cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' } }] };
   const driver: EvalDriver = {
     kind: 'scripted',
     beforeTurn: () => host.fake.reply(bad, ...steps.slice(0, extrude), { text: 'The spacer sketch is ready.' }, { text: 'Review: no changes' }),

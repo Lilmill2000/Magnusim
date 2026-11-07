@@ -50,7 +50,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Chip", "sketch": "Chip sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "chip_t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "Red", "color": "#b3261e" }
+            "input": { "edit": "", "name": "Chip", "sketch": "Chip sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "chip_t", "distance2": "", "to": "", "taper": "", "flip": false, "op": "new", "bodies": [], "body_name": "Red", "color": "#b3261e" }
           }
         ]
       },
@@ -76,7 +76,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Pocket", "sketch": "Pocket sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "disc_t", "distance2": "", "to": "", "flip": false, "op": "cut", "bodies": ["Red"], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Pocket", "sketch": "Pocket sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "disc_t", "distance2": "", "to": "", "taper": "", "flip": false, "op": "cut", "bodies": ["Red"], "body_name": "", "color": "" }
           }
         ]
       },
@@ -106,7 +106,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Ring", "sketch": "Ring sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "ring_t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "White", "color": "#f2f2f2" }
+            "input": { "edit": "", "name": "Ring", "sketch": "Ring sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "ring_t", "distance2": "", "to": "", "taper": "", "flip": false, "op": "new", "bodies": [], "body_name": "White", "color": "#f2f2f2" }
           }
         ]
       },
@@ -135,7 +135,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Spot", "sketch": "Spot sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "chip_t", "distance2": "", "to": "", "flip": false, "op": "join", "bodies": ["White"], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Spot", "sketch": "Spot sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "chip_t", "distance2": "", "to": "", "taper": "", "flip": false, "op": "join", "bodies": ["White"], "body_name": "", "color": "" }
           }
         ]
       },

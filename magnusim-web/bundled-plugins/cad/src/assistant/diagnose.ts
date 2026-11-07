@@ -12,12 +12,17 @@
 //                 how far away it starts (gap_mm), since no longer distance this way reaches it
 //     off_body    neither: the profile lies beside the bodies; the frame (where u and v point in
 //                 model axes, and the origin) and the profile's model box beside each body's
+// An extrude is read as its build reads it: until the walls meet is Blind to the build's distance,
+// and the flipped tool keeps the draft angle. With a draft that narrows, the one-way checks reach
+// only as far as its walls meet (no distance goes farther); when neither reaches a body the profile
+// is in line with, too_short says the draft narrows it off the body first (and whether flip is part
+// of the fix). A drafted check the kernel refuses leaves the sub-reason out, as below.
 // A kernel that refuses one of the checks (or restarts) leaves the sub-reason out: the answer says
 // the check could not be made, never a guess.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { nothingToActOn } from '../doc/features/body-op';
-import { kernelExtent, resolveExtent } from '../features/extrude/def';
+import { extrudeDef, kernelExtent, meetExtent, type ExtentValues } from '../features/extrude/def';
 import { entityParents, resolveRegionRef } from '../features/extrude/profiles';
 import { resolveAxis } from '../features/refgeom/resolve';
 import { resolveRevolveExtent } from '../features/revolve/def';
@@ -117,6 +122,8 @@ interface Scene {
   epoch: number;
   /** The kernel, guarded against a respawn (guarded()). */
   kernel: KernelAdapter;
+  /** The kernel refused a drafted one-way check (its extrude out to where the walls meet): that way is unknown, not empty. */
+  draftRefused?: boolean;
 }
 
 /**
@@ -177,23 +184,39 @@ async function bboxOf(sc: Scene, shape: ShapeId, exact = false): Promise<BBox> {
  * everything its own way, `ahead`, or the other way, `behind`), or null when that way makes
  * nothing (the kernel refuses it). The shape is released with the scene.
  */
-async function toolShape(sc: Scene, how: 'flip' | 'whole' | 'ahead' | 'behind'): Promise<ShapeId | null> {
+async function toolShape(sc: Scene, how: 'flip' | 'whole' | 'ahead' | 'behind', o: { straight?: boolean } = {}): Promise<ShapeId | null> {
   const { f, out, keys, services, kernel } = sc;
   const units = services.doc.units;
   const section = { plane: out.plane, curves: out.curves, regions: keys };
+  let draftedProbe = false;
   try {
     let id: ShapeId;
     if (f.type === 'extrude') {
       let extent;
-      if (how !== 'flip') extent = { kind: 'through_all' as const, targets: sc.targets.map((b) => b.shape), both: how === 'whole' };
+      let taper = 0;
+      const drafted = !o.straight && (how === 'ahead' || how === 'behind') ? extrudeOf(sc) : null;
+      if (drafted && drafted.taper > 0) {
+        // A draft that narrows reaches no farther than where its walls meet, whatever the distance.
+        // A refusal of it leaves that way unknown (draftRefused), never "nothing that way".
+        draftedProbe = true;
+        const k = await kernelExtent(f, meetExtent(out.regions, keys, drafted.taper), buildCtx(sc));
+        if (!k.ok) {
+          sc.draftRefused = true;
+          return null;
+        }
+        extent = k.extent;
+        taper = drafted.taper;
+      } else if (how !== 'flip') extent = { kind: 'through_all' as const, targets: sc.targets.map((b) => b.shape), both: how === 'whole' };
       else {
-        const v = resolveExtent(f, units);
-        if (!v.ok) return null;
-        const k = await kernelExtent(f, v.values, buildCtx(sc));
+        // Flipped as the feature would build: its extent (until the walls meet: the build's distance) and its draft angle.
+        const v = extrudeOf(sc);
+        if (!v) return null;
+        const k = await kernelExtent(f, v.extent, buildCtx(sc));
         if (!k.ok) return null;
         extent = k.extent;
+        taper = v.taper;
       }
-      id = (await kernel.call('extrude_regions', { ...section, extent, flip: how === 'flip' || how === 'behind' ? !f.flip : !!f.flip })).result.id;
+      id = (await kernel.call('extrude_regions', { ...section, extent, flip: how === 'flip' || how === 'behind' ? !f.flip : !!f.flip, ...(taper ? { taper_deg: taper } : {}) })).result.id;
     } else {
       if (!f.axis) return null;
       const axis = await resolveAxis(f.axis, buildCtx(sc));
@@ -206,12 +229,15 @@ async function toolShape(sc: Scene, how: 'flip' | 'whole' | 'ahead' | 'behind'):
     sc.made.push(id);
     return id;
   } catch (e) {
-    if (refusal(e)) return null;
+    if (refusal(e)) {
+      if (draftedProbe) sc.draftRefused = true;
+      return null;
+    }
     throw e;
   }
 }
 
-/** The first target body `tool` overlaps (more than touching), or null. */
+/** The first target body `tool` overlaps (more than touching), or null; an empty common OCCT answered as if apart although they overlap (kernel API 10) counts. */
 async function firstOverlap(sc: Scene, tool: ShapeId): Promise<EndBody | null> {
   const tb = await bboxOf(sc, tool);
   const tol = 1e-7 * Math.max(1, Math.hypot(tb[3] - tb[0], tb[4] - tb[1], tb[5] - tb[2]));
@@ -219,7 +245,7 @@ async function firstOverlap(sc: Scene, tool: ShapeId): Promise<EndBody | null> {
     if (!overlaps(tb, await bboxOf(sc, body.shape), tol)) continue;
     const c = (await sc.kernel.call('boolean', { op: 'common', targets: [body.shape], tools: [tool], keep_tools: true })).result;
     sc.made.push(c.id);
-    if (!c.empty) return body;
+    if (!c.empty || c.as_if_apart === 'wrong') return body;
   }
   return null;
 }
@@ -230,14 +256,26 @@ async function firstWay(sc: Scene, how: 'ahead' | 'behind'): Promise<EndBody | n
   return tool !== null ? firstOverlap(sc, tool) : null;
 }
 
+/**
+ * An extrude's extent and draft angle as its build reads them, or null when they do not resolve:
+ * Blind with no distance and a draft that narrows (until the walls meet) is Blind to the distance
+ * the build gives the kernel.
+ */
+function extrudeOf(sc: Scene): { extent: ExtentValues; taper: number } | null {
+  if (sc.f.type !== 'extrude') return null;
+  const r = extrudeDef.resolve(sc.f, sc.services.doc.units);
+  if (!r.ok) return null;
+  return { extent: r.values.meet ? meetExtent(sc.out.regions, sc.keys, r.values.taper) : r.values.extent, taper: r.values.taper };
+}
+
 /** Whether flipping changes the shape at all (symmetric extents and equal two-sided ones do not). */
 function flipMatters(sc: Scene): boolean {
   const { f } = sc;
   const units = sc.services.doc.units;
   if (f.type === 'extrude') {
-    const v = resolveExtent(f, units);
-    if (!v.ok) return false;
-    const e = v.values;
+    const v = extrudeOf(sc);
+    if (!v) return false;
+    const e = v.extent;
     if (e.kind === 'symmetric') return false;
     if (e.kind === 'through_all') return !e.both;
     if (e.kind === 'two') return Math.abs(e.d1 - e.d2) > 1e-9;
@@ -326,12 +364,14 @@ export async function diagnoseMiss(services: AppServices, f: SweptFeature, o: { 
       }
     }
     // A blind extrude: its own way (any length), then the other way (flip and length both wrong).
-    const blind = f.type === 'extrude' && (() => {
-      const v = resolveExtent(f, sc.services.doc.units);
-      return v.ok && v.values.kind === 'blind';
-    })();
+    // A draft goes only with Blind, so its hints offer no extent through.
+    const ex = f.type === 'extrude' ? extrudeOf(sc) : null;
+    const narrows = ex?.taper && ex.taper > 0 ? ex.taper : 0;
+    const blind = ex?.extent.kind === 'blind';
+    let ahead: EndBody | null = null;
     if (blind) {
-      const behind = (await firstWay(sc, 'ahead')) ? null : await firstWay(sc, 'behind');
+      ahead = await firstWay(sc, 'ahead');
+      const behind = ahead ? null : await firstWay(sc, 'behind');
       if (behind) {
         // How far the body starts from the sketch plane, the other way.
         const away: Vec3 = (f.flip ? [...plane.normal] : plane.normal.map((c) => -c)) as Vec3;
@@ -340,12 +380,28 @@ export async function diagnoseMiss(services: AppServices, f: SweptFeature, o: { 
         for (const x of [b[0], b[3]]) for (const y of [b[1], b[4]]) for (const z of [b[2], b[5]]) near = Math.min(near, (x - plane.origin[0]) * away[0] + (y - plane.origin[1]) * away[1] + (z - plane.origin[2]) * away[2]);
         const gap = Math.max(0, near);
         const words = `It points away from the body, and ${behind.name} starts ${len(gap)} mm away on the other side: with flip ${!f.flip} and a distance over ${len(gap)} mm it would ${verb} ${behind.name}. ${where}`;
-        return { sub: 'wrong_side', words, detail: { sub: 'wrong_side', other_way: behind.name, gap_mm: len(gap), ...detail }, hint: `The ${verb} points away from the body: set flip ${!f.flip} and a distance over ${len(gap)} mm (or extent through), or use hole.` };
+        return { sub: 'wrong_side', words, detail: { sub: 'wrong_side', other_way: behind.name, gap_mm: len(gap), ...detail }, hint: `The ${verb} points away from the body: set flip ${!f.flip} and a distance over ${len(gap)} mm${ex?.taper ? '' : ' (or extent through)'}, or use hole.` };
       }
     }
+    // A drafted one-way check the kernel refused: which way it missed is not known (never a guess).
+    if (sc.draftRefused && !ahead) return { sub: null, words: `Which way it missed could not be checked (the geometry kernel could not make the drafted ${tool} out to where its walls meet). ${where}`, detail };
     const whole = await toolShape(sc, 'whole');
     const inLine = whole !== null ? await firstOverlap(sc, whole) : null;
+    if (ex?.taper && ahead) {
+      // A longer distance its own way reaches it: before a narrowing draft's walls meet, or ever with one that widens.
+      const words = `The profile is in line with ${ahead.name}, but the ${tool} stops before it reaches it. ${where}`;
+      return { sub: 'too_short', words, detail: { sub: 'too_short', in_line: ahead.name, ...detail }, hint: `The ${verb} stops before it reaches the body: make distance larger (a draft angle goes only with Blind).` };
+    }
     if (inLine) {
+      if (narrows) {
+        // No distance reaches it either way: the draft narrows it off the body (or its walls meet) first.
+        // Which way the body lies, from the straight extrude its own way, says whether flip is part of the fix.
+        const own = await toolShape(sc, 'ahead', { straight: true });
+        const ownWay = own !== null && (await firstOverlap(sc, own)) !== null;
+        const words = `The profile is in line with ${inLine.name}, but drafted at ${+narrows.toFixed(3)} deg it narrows off it before it reaches it, whichever way it points: a smaller draft angle reaches farther. ${where}`;
+        const hint = `The ${verb} narrows off the body before it reaches it: set a smaller taper (or taper 0) with a distance that reaches it${ownWay ? '' : `, and flip ${!f.flip}`}${verb === 'cut' ? '; or use hole' : ''}.`;
+        return { sub: 'too_short', words, detail: { sub: 'too_short', in_line: inLine.name, ...detail }, hint };
+      }
       const words = f.type === 'extrude' ? `The profile is in line with ${inLine.name}, but the ${tool} stops before it reaches it. ${where}` : `A full turn would meet ${inLine.name}, but this angle stops before it. ${where}`;
       return { sub: 'too_short', words, detail: { sub: 'too_short', in_line: inLine.name, ...detail } };
     }

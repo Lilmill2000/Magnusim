@@ -13,6 +13,8 @@
  * After every frame load the host asks the document it talks to whether it is
  * still there (probe/alive); a new document that has not connected (a reload,
  * a navigation) ends the old channel, the job streams and the uploads it opened.
+ * The app's page going for good (pagehide, not into the back/forward cache)
+ * aborts the uploads whose commit was not sent.
  *
  * The page has unsaved work while it says so (nav.setDirty) or while one of its
  * uploads is open; the host hears of every change (hooks.setDirty) and asks
@@ -913,6 +915,8 @@ interface OpenUpload {
   received: number;
   /** A chunk or the commit is on its way (one at a time). */
   busy: boolean;
+  /** Its commit was sent: the server may land it even when the page goes. */
+  committing: boolean;
 }
 
 /**
@@ -2059,7 +2063,7 @@ export class WorkspaceCalls {
           this.dropUpload(r.upload);
           throw new BridgeError('the workspace closed', 'failed');
         }
-        this.uploads.set(r.upload, { rel, size, chunkBytes: r.chunk_bytes, received: 0, busy: false });
+        this.uploads.set(r.upload, { rel, size, chunkBytes: r.chunk_bytes, received: 0, busy: false, committing: false });
         this.report();
         return { upload: r.upload, chunkBytes: r.chunk_bytes };
       }
@@ -2094,13 +2098,20 @@ export class WorkspaceCalls {
         const sha = params.sha256;
         if (sha != null && !(typeof sha === 'string' && SHA256_HEX.test(sha))) throw badParam('sha256 (64 hex digits)');
         if (up.busy) throw new BridgeError('the last chunk of this upload is still on its way', 'busy');
-        const r = await this.onUpload(up, () =>
-          this.onFile(up.rel, () =>
-            api<{ file: FileWriteResult }>(`/api/plugin-files/uploads/${encodeURIComponent(id)}/commit`, {
-              body: { project_id: s.projectId, plugin: s.plugin, ...(typeof sha === 'string' ? { sha256: sha.toLowerCase() } : {}) },
-            }),
-          ),
-        );
+        up.committing = true;
+        let r: { file: FileWriteResult };
+        try {
+          r = await this.onUpload(up, () =>
+            this.onFile(up.rel, () =>
+              api<{ file: FileWriteResult }>(`/api/plugin-files/uploads/${encodeURIComponent(id)}/commit`, {
+                body: { project_id: s.projectId, plugin: s.plugin, ...(typeof sha === 'string' ? { sha256: sha.toLowerCase() } : {}) },
+              }),
+            ),
+          );
+        } catch (err) {
+          up.committing = false;
+          throw err;
+        }
         this.uploads.delete(id);
         this.report();
         return r.file;
@@ -2201,6 +2212,22 @@ export class WorkspaceCalls {
       .map((p) => p.replace(/[ .]+$/, '').toLowerCase())
       .filter(Boolean);
     return parts.length >= 3 && parts[0] === 'studies' && parts[1] === this.scope.studyId.toLowerCase();
+  }
+
+  /**
+   * The app's page goes for good (pagehide, not into the back/forward cache). A page that has
+   * gone sends nothing more, so an upload whose commit was not sent can never finish: each is
+   * aborted, and the server frees its place and its staging file at once (Magnusim CAD issue
+   * 17: four such uploads refused every save for 10 minutes). One whose commit was sent stays:
+   * the server may still land it, and it can be the page's last save (the Part saves as its
+   * page goes).
+   */
+  pageGone(): void {
+    for (const [id, up] of [...this.uploads]) {
+      if (up.committing) continue;
+      this.uploads.delete(id);
+      this.dropUpload(id);
+    }
   }
 
   /** Abort an upload without waiting (keepalive: it still goes when the page is closing). */
@@ -2499,6 +2526,7 @@ export class WorkspaceBridge {
 
   attach(): () => void {
     window.addEventListener('message', this.onMessage);
+    window.addEventListener('pagehide', this.onPageHide);
     this.frame.addEventListener('load', this.onLoad);
     window.addEventListener('cfd:units', this.onUnits);
     window.addEventListener(ASSISTANT_KEYS_EVENT, this.onAssistantKeys);
@@ -2516,6 +2544,7 @@ export class WorkspaceBridge {
     }
     return () => {
       window.removeEventListener('message', this.onMessage);
+      window.removeEventListener('pagehide', this.onPageHide);
       this.frame.removeEventListener('load', this.onLoad);
       window.removeEventListener('cfd:units', this.onUnits);
       window.removeEventListener(ASSISTANT_KEYS_EVENT, this.onAssistantKeys);
@@ -2543,6 +2572,11 @@ export class WorkspaceBridge {
   channelSignal(): AbortSignal | null {
     return this.channel ? this.channel.ended.signal : null;
   }
+
+  /** The app's page goes; for good (not kept in the back/forward cache), its unfinished uploads go. */
+  private onPageHide = (event: PageTransitionEvent): void => {
+    if (!event.persisted) this.calls.pageGone();
+  };
 
   private onMessage = (event: MessageEvent): void => {
     if (event.source !== this.frame.contentWindow) return;

@@ -2,7 +2,8 @@
 // the real DocService: the command's reason without profiles, select-first
 // (selected regions, a selected sketch, the only profile), the profile list
 // (area, remove, hover), clicks on regions toggling profiles (one sketch),
-// extent kinds and their fields, flip, the Operation row rule, the distance
+// extent kinds and their fields, the Draft angle (Blind only; Until the walls meet), a tapped
+// hole's Thread row and its Remove, flip, the Operation row rule, the distance
 // arrow's drag, "Profile lost" in the list and the foot, the region tool's
 // selection rules in model mode, the open-profile chip, and the sketch's tree
 // row (prefix, lock, dimension count, eye).
@@ -247,7 +248,7 @@ describe('Extrude panel', () => {
   it('switches the extent between Blind, Symmetric and Two sides with their fields and words', async () => {
     const a = await opened();
     const labels = () => a.$$('[data-cad-panel] [data-field-row] .mgk-field-k').map((l) => l.textContent);
-    expect(labels()).toEqual(['Extent', 'Distance', 'Flip direction']);
+    expect(labels()).toEqual(['Extent', 'Distance', 'Draft angle', 'Flip direction']);
     expect(field(a, 'distance').value).toBe('10');
     setField(a, 'distance', '0');
     expect(a.$('[data-cad-panel] .nui[data-field="distance"] [data-nui-error]')!.textContent).toBe('Distance must not be 0');
@@ -273,6 +274,46 @@ describe('Extrude panel', () => {
     await a.settle();
     expect(extrude(a)!.flip).toBe(true);
     expect(a.kernel.calls.filter((c) => c.op === 'extrude_regions').at(-1)!.params).toMatchObject({ flip: true, extent: { kind: 'two', d1: 30, d2: 30 } });
+  });
+
+  it('offers a Draft angle with Blind only, and with one that narrows Until the walls meet (no distance)', async () => {
+    const a = await opened();
+    const labels = () => a.$$('[data-cad-panel] [data-field-row] .mgk-field-k').map((l) => l.textContent);
+    const meet = () => a.$<HTMLInputElement>('[data-cad-panel] [data-switch="meet"] input');
+    expect(meet()).toBeNull();
+    setField(a, 'taper', '30');
+    await a.settle();
+    expect(extrude(a)!.taper).toBe('30 deg');
+    act(() => void fireEvent.click(meet()!));
+    await a.settle();
+    expect(extrude(a)!.extent).toEqual({ kind: 'blind', distance: '' });
+    // The distance is no field now: the words say how far it goes, and the build goes past where the
+    // 20 x 10 profile's walls meet (half its box across, leaning in at 30 deg, and half as much again).
+    expect(labels()).toEqual(['Extent', 'Distance', 'Draft angle', 'Flip direction']);
+    expect(a.$('[data-cad-panel] span[data-field="distance"]')!.textContent).toBe('until the walls meet');
+    const call = a.kernel.calls.filter((c) => c.op === 'extrude_regions').at(-1)!.params as { taper_deg: number; extent: { kind: string; d: number } };
+    expect(call.taper_deg).toBe(30);
+    expect(call.extent.d).toBeCloseTo((1.5 * Math.hypot(20, 10)) / 2 / Math.tan(Math.PI / 6), 5);
+    expect(a.doc.state.get().rebuild.features[extrude(a)!.id].state).toBe('ok');
+    // Straight walls never meet: a distance again.
+    setField(a, 'taper', '0');
+    await a.settle();
+    expect(extrude(a)).toMatchObject({ taper: null, extent: { kind: 'blind', distance: '10 mm' } });
+    expect(meet()).toBeNull();
+    // Symmetric has no Draft angle (the Assistant's extrude is refused one with the same words).
+    act(() => void fireEvent.change(a.$('[data-cad-panel] [data-field="extent"] select')!, { target: { value: 'symmetric' } }));
+    await a.settle();
+    expect(labels()).toEqual(['Extent', 'Total distance', 'Flip direction']);
+  });
+
+  it("shows a tapped hole's cosmetic thread with Remove, which takes the thread off and keeps the cut (the Assistant's edit_feature thread removed)", async () => {
+    const a = await opened({ thread: { designation: 'M6x1', major: 6, pitch: 1 } } as Partial<ExtrudeFeature>);
+    expect(a.$('[data-cad-panel] span[data-field="thread"]')!.textContent).toBe('M6x1 thread, 10 mm deep (cosmetic: drawn and listed, not modelled) Remove');
+    act(() => void fireEvent.click(a.$('[data-cad-panel] [data-thread-remove]')!));
+    await a.settle();
+    expect(extrude(a)!.thread ?? null).toBeNull();
+    expect(extrude(a)!.extent).toEqual({ kind: 'blind', distance: '10 mm' });
+    expect(a.$('[data-cad-panel] span[data-field="thread"]')).toBeNull();
   });
 
   it('shows the Operation row only once a body is made before it', async () => {

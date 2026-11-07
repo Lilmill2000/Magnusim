@@ -132,7 +132,7 @@ test("cad:assistant-watch-get-model get_model reads the Part to the model; a hol
   host.fake.reply(
     // The model is still answering: the chip says the Assistant thinks.
     { hold: 'think', tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
-    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Extrude 1.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], diameter: '5 mm', depth: 'through', distance: '' } }] },
+    { tools: [{ name: 'cad__hole', input: { name: '', face: 'Extrude 1.end', centers: [{ x: '0 mm', y: '0 mm', z: '' }], points: '', diameter: '5 mm', size: '', fit: '', depth: 'through', distance: '', type: 'simple', cb_diameter: '', cb_depth: '', cs_diameter: '', cs_angle: '', tip: '', thread: 'cosmetic' } }] },
     { text: 'The Part is empty, so there is no face to drill yet.' },
   );
   // The read stops where the Part has settled, so the chip is seen working.
@@ -683,7 +683,7 @@ test("cad:assistant-watch-plate the guide's plate, watched: its sketch going to 
   host.fake.reply(
     { tools: [{ name: 'cad__set_params', input: { set: [PLATE_PARAM('w', '60 mm'), PLATE_PARAM('d', '40 mm'), PLATE_PARAM('t', '6 mm'), PLATE_PARAM('hd', '5 mm'), PLATE_PARAM('e', '8 mm')], remove: [] } }] },
     { tools: [sketchOf('Plate sketch', 'Top', [SC('c0', 'coincident', ['r.center', 'origin']), SC('dw', 'distance', ['r.bottom'], 'w'), SC('dh', 'distance', ['r.left'], 'd')])] },
-    { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: 't', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
+    { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: 't', distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
     {
       tools: [
         {
@@ -697,9 +697,19 @@ test("cad:assistant-watch-plate the guide's plate, watched: its sketch going to 
               { x: `-(${ex})`, y: `-(${ey})`, z: '' },
               { x: ex, y: `-(${ey})`, z: '' },
             ],
+            points: '',
             diameter: 'hd',
+            size: '',
+            fit: '',
             depth: 'through',
             distance: '',
+            type: 'simple',
+            cb_diameter: '',
+            cb_depth: '',
+            cs_diameter: '',
+            cs_angle: '',
+            tip: '',
+            thread: 'cosmetic',
           },
         },
       ],
@@ -1006,7 +1016,7 @@ test("cad:assistant-watch-pictures each edit's result carries one iso picture of
     const from = chats(host).length;
     host.fake.reply(
       { tools: [sketchOf('Plate sketch', 'Top')] },
-      { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '6 mm', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
+      { tools: [{ name: 'cad__extrude', input: { edit: '', name: 'Plate', sketch: 'Plate sketch', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '6 mm', distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '' } }] },
       { tools: [{ name: 'cad__get_model', input: { detail: 'brief', feature: '', regions: 'short' } }] },
       { text: 'The plate is made.' },
     );

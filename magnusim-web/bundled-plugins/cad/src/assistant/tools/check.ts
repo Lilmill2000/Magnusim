@@ -21,7 +21,7 @@
 // sweepReply), and its axis list resolves reference axes with axisOf.
 // Owner: ASSISTANT.
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { axisLine, CheckKernelError, checkInterference, checkStack, checkSweep, PLAY_MM, sharedAxes, SLABS_MAX, sideWords, type AssemblyBody, type AxisLine, type CheckEnv, type InterferenceResult, type StackResult, type StackSide, type SweepResult } from '../../features/assembly/check';
+import { axisLine, CheckKernelError, checkInterference, checkStack, checkSweep, PLAY_MM, sharedAxes, SLABS_MAX, sideWords, UNMEASURED_OVERLAP, type AssemblyBody, type AxisLine, type CheckEnv, type InterferenceResult, type StackResult, type StackSide, type SweepResult } from '../../features/assembly/check';
 import type { CallCtx, ToolImpl, ToolReply } from '../../types/assistant';
 import type { DocState } from '../../types/doc-service';
 import type { BodyInfo } from '../../types/kernel';
@@ -114,11 +114,17 @@ async function interference(env: CheckEnv, bodies: AssemblyBody[], clearance: nu
 
 /** An interference check's reply (clearance in mm, 0 for none). */
 export function interferenceReply(r: InterferenceResult, clearance: number): ToolReply {
-  const overlaps = r.rows.filter((x) => x.overlap !== null && !x.press);
+  const overlaps = r.rows.filter((x) => (x.overlap !== null && !x.press) || x.unmeasured);
   const press = r.rows.filter((x) => x.press);
   const gaps = r.rows.filter((x) => x.gap !== null);
-  const { rows, more } = roundRows(r.rows, (x) => (x.overlap !== null ? { bodies: [x.a, x.b], overlap_mm3: sig6(x.overlap), ...(x.press ? { press_fit: true } : {}), at_mm: vec(x.at) } : { bodies: [x.a, x.b], gap_mm: len(x.gap ?? 0), at_mm: vec(x.at) }));
-  const named = overlaps.slice(0, 3).map((x) => `${x.a} and ${x.b} ${sig6(x.overlap!)} mm3`);
+  const { rows, more } = roundRows(r.rows, (x) =>
+    x.unmeasured
+      ? { bodies: [x.a, x.b], overlap_mm3: null, overlap_unmeasured: UNMEASURED_OVERLAP, at_mm: vec(x.at) }
+      : x.overlap !== null
+        ? { bodies: [x.a, x.b], overlap_mm3: sig6(x.overlap), ...(x.press ? { press_fit: true } : {}), at_mm: vec(x.at) }
+        : { bodies: [x.a, x.b], gap_mm: len(x.gap ?? 0), at_mm: vec(x.at) },
+  );
+  const named = overlaps.slice(0, 3).map((x) => `${x.a} and ${x.b} ${x.unmeasured ? '(not measured)' : `${sig6(x.overlap!)} mm3`}`);
   const head = overlaps.length ? `${word(overlaps.length, 'pair')} overlap${overlaps.length === 1 ? 's' : ''}` : 'no pair overlaps';
   const list = named.length ? `: ${named.join(', ')}${overlaps.length > 3 ? ', ...' : ''}` : '';
   const scope = r.one ? `${r.one} against ${word(r.pairs, 'other body', 'other bodies')}, ${r.boxPairs} near enough to measure` : `${word(r.bodies, 'body', 'bodies')}, ${r.boxPairs} of ${r.pairs} pairs near enough to measure`;

@@ -44,7 +44,7 @@
         "tools": [
           {
             "name": "cad__extrude",
-            "input": { "edit": "", "name": "Plate", "sketch": "Plate sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "t", "distance2": "", "to": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
+            "input": { "edit": "", "name": "Plate", "sketch": "Plate sketch", "regions": ["all"], "face": "", "direction": "", "extent": "blind", "distance": "t", "distance2": "", "to": "", "taper": "", "flip": false, "op": "new", "bodies": [], "body_name": "", "color": "" }
           }
         ]
       },
@@ -61,9 +61,19 @@
                 { "x": "-(L/2 - e)", "y": "-(W/2 - e)", "z": "" },
                 { "x": "L/2 - e", "y": "-(W/2 - e)", "z": "" }
               ],
+              "points": "",
               "diameter": "hd",
+              "size": "",
+              "fit": "",
               "depth": "through",
-              "distance": ""
+              "distance": "",
+              "type": "simple",
+              "cb_diameter": "",
+              "cb_depth": "",
+              "cs_diameter": "",
+              "cs_angle": "",
+              "tip": "",
+              "thread": "cosmetic"
             }
           }
         ]

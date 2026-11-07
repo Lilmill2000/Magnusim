@@ -216,7 +216,7 @@ describe('recognition client (the real kernel)', () => {
   it("part A (60 x 40 x 20, R5 verticals, R3 round the top, a 6 mm through hole and an 8 mm hole 10 deep): what recognize answers; the lowered limit says the kernel's words; a restart forgets", async () => {
     const { kernel } = realKernelAdapter();
     const info = await kernel.start();
-    expect(info).toMatchObject({ api: 9, asi: '2026.1.1' });
+    expect(info).toMatchObject({ api: 10, asi: '2026.1.1' });
     const call = async (op: string, p: R): Promise<R> => (await kernel.call(op as never, p as never)).result as R;
     const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
     const box = (await call('box', { dx: 60, dy: 40, dz: 20, origin: [0, 0, 0] })).id;

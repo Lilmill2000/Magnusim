@@ -60,7 +60,7 @@ type W = {
 };
 const E = (id: string, kind: string, at: number[]) => ({ id, kind, at, construction: false });
 const C = (id: string, kind: string, refs: string[], value = '') => ({ id, kind, refs, value });
-const EXTRUDE = (name: string, sketch: string, distance: string, op = 'new') => ({ name: 'cad__extrude', input: { edit: '', name, sketch, regions: ['all'], face: '', direction: '', extent: 'blind', distance, distance2: '', to: '', flip: false, op, bodies: [], body_name: '', color: '' } });
+const EXTRUDE = (name: string, sketch: string, distance: string, op = 'new') => ({ name: 'cad__extrude', input: { edit: '', name, sketch, regions: ['all'], face: '', direction: '', extent: 'blind', distance, distance2: '', to: '', taper: '', flip: false, op, bodies: [], body_name: '', color: '' } });
 const featureOf = (page: Page, name: string) => cadFrame(page).evaluate((n) => (window as unknown as W).__CAD__.services.doc.state.get().doc.features.find((f) => f.name === n) ?? null, name);
 const undoNow = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as W).__CAD__.services.doc.state.get().history.undoLabel);
 const volumeNow = async (page: Page) => Number(await cadFrame(page).locator('[data-chip="volume"] [data-volume-mm3]').getAttribute('data-volume-mm3'));

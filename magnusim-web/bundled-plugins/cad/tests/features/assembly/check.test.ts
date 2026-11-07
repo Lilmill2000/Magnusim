@@ -13,6 +13,8 @@
 //   - sweep: a hand turned about its arbor meets a key at the angle the geometry gives (7.39 deg, and
 //     332.87 deg the other way), and the kernel's turned copy 1 degree past it overlaps the key; the
 //     same hand above the key meets nothing;
+//   - sweep: when OCCT answers the turned copy's common as if apart (kernel API 10; GitHub issue 15)
+//     the hit stays, with no word on what they share (never 0);
 //   - 48 small bodies (a grid of rings on pins, every second one overlapping its neighbours) are
 //     checked for interference and stack within CHECK_48_MS, every pair near enough measured;
 //   - a check reports progress, stops with the signal, and past its time limit says how far it got;
@@ -26,6 +28,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { axisLine, checkInterference, checkStack, checkSweep, type StackPart } from '../../../src/features/assembly/check';
 import type { KernelAdapter } from '../../../src/types/kernel';
+import { commonsAsIfApart } from '../../fakes/as-if-apart';
 import { realKernelAnywhere } from '../p2/kernel-anywhere';
 import { Fixture } from './fixtures';
 
@@ -219,6 +222,22 @@ describe('sweep', () => {
       const high = await checkSweep(env(), f.bodies, [3], axisLine([0, 0, 0], [0, 0, 1]));
       expect(high.hits).toEqual([]);
       expect(high.near).toBeGreaterThan(0);
+    },
+    MS,
+  );
+
+  it(
+    "when OCCT answers the turned copy's common as if apart (kernel API 10, as_if_apart wrong; GitHub issue 15): the hit stays, with no word on what they share (never 0 shared)",
+    async () => {
+      const f = await fixture();
+      await f.shaft('Arbor', 2, 0, 30);
+      await f.hand('Hand', 2.1, 4, 10, 1, 40, 4);
+      await f.box('Key', [20, 5, 8], [3, 3, 6]);
+      const k = commonsAsIfApart(kernel!);
+      k.set(true);
+      const r = await checkSweep({ kernel: k.kernel }, f.bodies, [1], axisLine([0, 0, 0], [0, 0, 1]));
+      expect(r.hits).toHaveLength(1);
+      expect(r.hits[0]).toMatchObject({ turning: 'Hand', hits: 'Key', overlap: null });
     },
     MS,
   );

@@ -70,7 +70,7 @@ type DockCad = {
 };
 const features = (page: Page) => cadFrame(page).evaluate(() => (window as unknown as DockCad).__CAD__.services.doc.state.get().doc.features.map((f) => f.name));
 
-const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
+const EXTRUDE_IN = (o: Record<string, unknown>) => ({ edit: '', name: '', sketch: '', regions: ['all'], face: '', direction: '', extent: 'blind', distance: '', distance2: '', to: '', taper: '', flip: false, op: 'new', bodies: [], body_name: '', color: '', ...o });
 /** A disc on Top, fully defined. */
 const DISC = (name: string, r: number) => ({
   edit: '',

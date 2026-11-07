@@ -59,14 +59,14 @@ test('New project makes a Part that opens in CAD, and the project page keeps its
   // The Part hears at once that this app links nothing into a project (no simulation here).
   const part = page.frames().find((f) => /\/plugins\/cad\/workspace\//.test(f.url()));
   expect(await part!.evaluate(() => (window as unknown as { __CAD__: { services: { bridge: { context: { projectLinks?: boolean } } } } }).__CAD__.services.bridge.context.projectLinks)).toBe(false);
-  // The kernel this app ships is the one Magnusim ships: API 9, with Analysis Situs (fillets and holes found by shape).
+  // The kernel this app ships is the one Magnusim ships: API 10, with Analysis Situs (fillets and holes found by shape).
   const kernel = await part!.evaluate(async () => {
     const k = (window as unknown as { __CAD__: { services: { kernel: { start(): Promise<{ api: number; asi: string | null }>; call(op: string, p: object): Promise<{ result: Record<string, unknown> }> } } } }).__CAD__.services.kernel;
     const ready = await k.start();
     return { ready: { api: ready.api, asi: ready.asi }, version: (await k.call('version', {})).result };
   });
-  expect(kernel.ready).toEqual({ api: 9, asi: '2026.1.1' });
-  expect(kernel.version).toMatchObject({ build: 'wasm32', api: 9, asi: '2026.1.1' });
+  expect(kernel.ready).toEqual({ api: 10, asi: '2026.1.1' });
+  expect(kernel.version).toMatchObject({ build: 'wasm32', api: 10, asi: '2026.1.1' });
   await drawBlock(page, frame, 40, 20, 10);
   await expect(historyNames(frame)).toHaveText(['Sketch 1', 'Extrude 1']);
   // Its body as this app shows it: no simulation toggle or mark, and its menu has no simulation

@@ -15,6 +15,8 @@ export const SHARDS = {
     'e2e/cad-p1-scaffold.spec.ts',
     'e2e/cad-p1-document.spec.js',
     'e2e/cad-p1-doc-storage.spec.ts',
+    // Issue 17: four tabs closed mid-save, then a fresh tab's change still saves.
+    'e2e/cad-save-closed-tabs.spec.ts',
     'e2e/cad-p1-kernel-ops.spec.ts',
     // Kernel API 8 in the Part's worker (Analysis Situs): ready {api: 8, asi}, recognize on part A built in the page.
     'e2e/cad-kernel-api8.spec.ts',
@@ -111,6 +113,8 @@ export const SHARDS = {
     'e2e/cad-p4b-fix1-pattern.spec.ts',
     // Parity both ways: the person's Hole, body colour, history order, Back isometric, Find, Picture, Measure's extras.
     'e2e/cad-person-parity.spec.ts',
+    // The person's Hole with sizes, screw heads, modelled threads and a sketch's points (PR 13), a blind hole that goes through (issue 14), Extrude's Draft angle.
+    'e2e/cad-hole-kinds.spec.ts',
     // Volumes of B-spline bodies (kernel API 7): a loft's chip, Press-pull of its cap, a Cut by a block that only touches it.
     'e2e/cad-volume-accuracy.spec.ts',
     // INSPECT > Find of fillets and holes by size (kernel API 8) on an imported STEP part: rows, Select all, Delete, refusals.

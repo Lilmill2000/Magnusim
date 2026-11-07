@@ -23,6 +23,11 @@
 // kernel-build/occt-patches/0002); recognize has two face limits (max_fillet_faces 5,000,
 // max_hole_faces 2,600) and its refusal names both; suppress_blends' budget refusal names the time
 // and the allowance; debug_budget_words (tests). `version` answers api: 9.
+// API 10 (2026-11-06, GitHub issue 15): boolean and combine answer `as_if_apart` when OCCT's result
+// is the one for inputs apart (a cut that removed nothing, an empty common, a fuse that merged no
+// solid): 'right' when they are, 'wrong' (with words in warning_text) when a tool overlaps a target;
+// 'wrong' too when one solid of several was answered so; `apart_late` when the check ran out of
+// time. `version` answers api: 10.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import type { PlaneFrame, Vec2, Vec3 } from './doc';
 
@@ -34,7 +39,7 @@ export interface KernelReadyMsg {
   variant: 'wasm32';
   /** OCCT version the kernel was built from, "7.9.3". */
   occt: string;
-  /** API 8: the facade contract revision `version` answers (8 = fillet and hole recognition, 9 = defeature's time budget). */
+  /** API 8: the facade contract revision `version` answers (8 = fillet and hole recognition, 9 = defeature's time budget, 10 = as_if_apart). */
   api: number;
   /** API 8: the Analysis Situs release linked into the kernel ("2026.1.1"), or null when it has none. */
   asi: string | null;
@@ -157,6 +162,25 @@ export interface Validity {
   problem_total?: number;
 }
 
+/**
+ * API 10 (boolean, combine; GitHub issue 15): present only when OCCT's result is the one for inputs
+ * apart, read from its history and counts (a cut that kept every target face and made none from a
+ * tool, so the targets come back unchanged; a common with no face; a fuse that merged no solid), or
+ * when one solid of several was answered so. 'right': they are apart, or only touch (no point of
+ * either lies inside the other), so the result is right; never under glue (OCCT does not split
+ * every crossing there). 'wrong': a tool overlaps a target (a point of one lies more than the
+ * tolerance inside the other), so OCCT took them for apart and the result is wrong, valid as it
+ * may be; warning_text says so with the point, and `warnings` is true. The same failure on one
+ * solid of several (the groove as one of two tools, or one solid of a two-solid tool, beside one
+ * that cuts; a fuse that kept one input as it came) answers 'wrong' only, its words naming that
+ * solid ("tool 2", "solid 2 of the tool"); nothing found there gives no field. A tool's piece it
+ * shares with a target face (a cap flush with the target's top) is not a face it made. Absent on
+ * any other result (an ordinary cut, a fuse of a tool inside its target), which costs nothing
+ * more; timings.apart_ms is the check's time whenever it ran. Absent too for sheets and wires, and
+ * when the check ran out of its time (1 s, two large bodies): `apart_late` is true then.
+ */
+export type AsIfApart = 'right' | 'wrong';
+
 /** Result of any op that makes one shape. */
 export interface ShapeResult extends Validity {
   id: ShapeId;
@@ -278,6 +302,7 @@ export interface KernelOps {
    * that only touch ('shift' partial, 'full' identical faces): faster and more
    * robust there, but WRONG (valid, un-subtracted) on bodies that really overlap,
    * so never on by default. unify (default true): merge same-domain faces, with history.
+   * API 10: `as_if_apart` (AsIfApart) says when the result is the one for inputs apart.
    */
   boolean: {
     params: CheckParam & {
@@ -290,7 +315,7 @@ export interface KernelOps {
       unify?: boolean;
       check_inverted?: boolean;
     };
-    result: ShapeResult & { empty: boolean; solids: number; warnings: boolean; warning_text?: string; fuzzy: number; glue: 'off' | 'shift' | 'full' };
+    result: ShapeResult & { empty: boolean; solids: number; warnings: boolean; warning_text?: string; as_if_apart?: AsIfApart; apart_late?: boolean; fuzzy: number; glue: 'off' | 'shift' | 'full' };
   };
   /**
    * Split by a plane or by a tool body; `valid` is true only if every piece is and
@@ -660,7 +685,8 @@ export interface KernelOps {
    * UnifySameDomain (unify, default true) runs on a copy and is checked: when the
    * merged result is invalid and the unmerged one valid (OCCT 7.9.3 can merge two
    * coincident cylinders with different seams into a broken face), the unmerged
-   * one is kept and `unified` is false.
+   * one is kept and `unified` is false. API 10: each result's `as_if_apart`
+   * (AsIfApart; join checked as a fuse, intersect as a common).
    */
   combine: {
     params: CheckParam & {
@@ -671,7 +697,7 @@ export interface KernelOps {
       unify?: boolean;
     };
     result: {
-      results: (Validity & { target: ShapeId; id: ShapeId; empty: boolean; solids: number; faces: number; unified: boolean; history: OpHistory; warning_text?: string })[];
+      results: (Validity & { target: ShapeId; id: ShapeId; empty: boolean; solids: number; faces: number; unified: boolean; history: OpHistory; warning_text?: string; as_if_apart?: AsIfApart; apart_late?: boolean })[];
       timings: Record<string, number>;
     };
   };

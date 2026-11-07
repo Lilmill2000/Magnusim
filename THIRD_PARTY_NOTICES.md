@@ -61,6 +61,15 @@ also says how to rebuild the plugin with a changed OCCT, Analysis Situs or
 PlaneGCS. Analysis Situs' licence and copyright lines:
 `LICENSES/AnalysisSitus-BSD-3-Clause.txt`.
 
+The Hole tool's metric sizes (`src/features/hole/sizes.ts`: ISO 273 clearance holes, ISO 261
+coarse pitches, the tap drill being the major diameter minus the pitch, DIN 974-1 counterbores
+for ISO 4762 socket head cap screws and ISO 10642 countersunk heads) are the standards' published
+values. The metric clearance holes, pitches and ISO 4762 head sizes, and the Unified inch
+major diameters and threads per inch (ASME B1.1), were cross-checked against SolidCraft's tables
+(https://github.com/tangency-labs/solidcraft, MIT OR Apache-2.0). The Unified tap drills (about 75%
+thread) and ASME B18.2.8 clearance holes are the published values, each checked against two or more
+public charts.
+
 ## 2D Wind Tunnel plugin
 
 The 2D Wind Tunnel plugin (`magnusim-web/bundled-plugins/tunnel2d`, bundled,

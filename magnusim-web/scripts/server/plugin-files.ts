@@ -30,6 +30,17 @@ export const MAX_CHUNK_BYTES = 32 * MB;
 /** An upload with no call for this long is dropped, with its staging file. */
 export const UPLOAD_IDLE_MS = 10 * 60_000;
 export const MAX_OPEN_UPLOADS = 4;
+/**
+ * A begin that is let in ends the older uploads of its file (same project and plugin) that take
+ * no call and had none for this long, and, when the plugin's MAX_OPEN_UPLOADS places are all
+ * taken, as many of its other such uploads as it needs: a page closed or crashed mid-save leaves
+ * its upload open, and four of them refused every write of the plugin for UPLOAD_IDLE_MS. A save
+ * still going waits far less between its calls: the SDK sends each chunk on the answer to the
+ * last, and waits 1 s (COMMIT_RETRY_MS) between commits refused as busy.
+ */
+export const UPLOAD_SUPERSEDE_MS = 30_000;
+/** Ended uploads whose next call is told why (the newest). */
+const ENDED_KEPT = 256;
 /** Free space a write must leave on the disk. */
 export const DISK_SPARE_BYTES = 256 * MB;
 export const LIST_MAX = 10_000;
@@ -469,8 +480,8 @@ function checkIfMatch(want: string | null | undefined, current: BigIntStats | nu
   }
 }
 
-function uploadGone(): PluginFileError {
-  return new PluginFileError(404, 'upload_not_found', 'no such upload (it finished, was stopped or expired)');
+function uploadGone(why?: string): PluginFileError {
+  return new PluginFileError(404, 'upload_not_found', why || 'no such upload (it finished, was stopped or expired)');
 }
 
 function busyError(rel: string): PluginFileError {
@@ -482,6 +493,8 @@ interface Upload {
   projectId: string;
   plugin: string;
   rel: string;
+  /** Where it writes, as this system compares paths. */
+  target: string;
   size: number;
   ifMatch: string | null | undefined;
   staging: string;
@@ -512,6 +525,8 @@ export class PluginFiles {
   private readonly maxEntries: number;
   private readonly activeCases: ((projectId: string, plugin: string) => string[]) | null;
   private readonly uploads = new Map<string, Upload>();
+  /** Uploads a newer one of their file ended, and why (their page's next call is told). */
+  private readonly ended = new Map<string, { projectId: string; plugin: string; why: string }>();
   private readonly locks = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | null = null;
 
@@ -692,16 +707,21 @@ export class PluginFiles {
     return this.withLock(`folder:${lockKey(root)}`, fn);
   }
 
-  /**
-   * Room for a file of `size` bytes at `at` (in place of `current`): what the folder
-   * holds, plus the uploads still open (`self` left out), within the plugin's quota
-   * and MAX_ENTRIES. Called in the folder's lock.
-   */
-  private async checkRoom(at: Place, row: PluginRow, self: Upload, current: BigIntStats | null, sweep: boolean): Promise<void> {
-    const { maxTotal } = limitsOf(row);
+  /** What the plugin's folder at `at` holds; a begin (`sweep`) also removes the temp files a crash left. Called in the folder's lock. */
+  private async usageOf(at: Place, sweep: boolean): Promise<Usage> {
     const usage = await folderUsage(at.root, this.maxEntries, this.now() - STALE_PART_MS);
     if (sweep) await Promise.all(usage.stale.map((path) => fsp.rm(path, { force: true }).catch(() => undefined)));
-    const others = this.openFor(self.projectId, self.plugin).filter((u) => u.id !== self.id);
+    return usage;
+  }
+
+  /**
+   * Room for a file of `size` bytes (in place of `current`): what the folder holds
+   * (`usage`), plus the uploads still open (`self` and the ones `leaving` left out),
+   * within the plugin's quota and MAX_ENTRIES. Called in the folder's lock.
+   */
+  private checkRoom(usage: Usage, row: PluginRow, self: Upload, current: BigIntStats | null, leaving: Upload[] = []): void {
+    const { maxTotal } = limitsOf(row);
+    const others = this.openFor(self.projectId, self.plugin).filter((u) => u.id !== self.id && !leaving.includes(u));
     if (usage.entries + others.length + (current ? 0 : 1) > this.maxEntries) {
       throw new PluginFileError(413, 'quota', `a plugin may keep ${this.maxEntries} files and folders in a project`, {
         max_entries: this.maxEntries,
@@ -734,8 +754,47 @@ export class PluginFiles {
   private uploadFor(id: string, projectId: string, plugin: string): Upload {
     const up = this.uploads.get(String(id || ''));
     // Another project's or plugin's upload gets the same answer as an unknown id.
-    if (!up || up.projectId !== projectId || up.plugin !== plugin) throw uploadGone();
+    if (!up || up.projectId !== projectId || up.plugin !== plugin) {
+      const gone = this.ended.get(String(id || ''));
+      throw uploadGone(gone && gone.projectId === projectId && gone.plugin === plugin ? gone.why : undefined);
+    }
     return up;
+  }
+
+  /** Takes no call and had none for UPLOAD_SUPERSEDE_MS: its page closed or crashed mid-save. */
+  private waited(u: Upload, now: number): boolean {
+    return !u.busy && now - u.lastActive >= UPLOAD_SUPERSEDE_MS;
+  }
+
+  /**
+   * The uploads a begin of `up` ends if it is let in: the older uploads of its file that
+   * waited, and, when the plugin's MAX_OPEN_UPLOADS places are all taken, as many of its
+   * uploads of other files that waited as it needs, the longest waiting first. The begin's
+   * checks leave them out; read with no await before the begin is counted.
+   */
+  private leftBehind(up: Upload): Upload[] {
+    const now = this.now();
+    const open = this.openFor(up.projectId, up.plugin);
+    const same = open.filter((u) => u.target === up.target && this.waited(u, now));
+    const rest = open.filter((u) => !same.includes(u));
+    const need = rest.length + 1 - MAX_OPEN_UPLOADS;
+    if (need <= 0) return same;
+    const longest = rest.filter((u) => this.waited(u, now)).sort((a, b) => a.lastActive - b.lastActive);
+    return [...same, ...longest.slice(0, need)];
+  }
+
+  /** The uploads `up` was let in over go, with their staging files; each one's next call is told why. */
+  private endLeftBehind(leaving: Upload[], up: Upload): Promise<unknown> {
+    const waited = `had no call for ${UPLOAD_SUPERSEDE_MS / 1000} s`;
+    for (const u of leaving) {
+      const why =
+        u.target === up.target
+          ? `this upload of ${u.rel} ${waited}, so a newer upload of the file ended it`
+          : `this upload of ${u.rel} ${waited}, so another upload took its place (a plugin may write ${MAX_OPEN_UPLOADS} files at a time)`;
+      this.ended.set(u.id, { projectId: u.projectId, plugin: u.plugin, why });
+      if (this.ended.size > ENDED_KEPT) this.ended.delete(this.ended.keys().next().value as string);
+    }
+    return Promise.all(leaving.map((u) => this.drop(u)));
   }
 
   private async drop(up: Upload): Promise<void> {
@@ -880,6 +939,7 @@ export class PluginFiles {
       projectId,
       plugin,
       rel: parts.join('/'),
+      target: lockKey(at.target),
       size,
       ifMatch,
       staging: join(stagingDir, `${id}.part`),
@@ -890,25 +950,32 @@ export class PluginFiles {
       inflight: null,
     };
     await this.inFolder(at.root, async () => {
-      await this.checkRoom(at, row, up, current, true);
+      const usage = await this.usageOf(at, true);
+      let ended: Promise<unknown> = Promise.resolve();
       // One disk for every project: what the open uploads still have to write is spoken for.
       await this.withLock('disk', async () => {
-        const owed = [...this.uploads.values()].reduce((n, u) => n + u.size - u.received, 0);
         const free = await this.freeBytes(dir);
+        // No await from here to the count: the uploads it would end are left out of every check,
+        // and end only once it is let in (a refused begin ends none).
+        const leaving = this.leftBehind(up);
+        this.checkRoom(usage, row, up, current, leaving);
+        const owed = [...this.uploads.values()].filter((u) => !leaving.includes(u)).reduce((n, u) => n + u.size - u.received, 0);
         if (size + owed + DISK_SPARE_BYTES > free) {
           throw new PluginFileError(507, 'disk_full', 'there is not enough free disk space for this file', {
             needed: size + owed + DISK_SPARE_BYTES,
             free,
           });
         }
-        if (this.openFor(projectId, plugin).length >= MAX_OPEN_UPLOADS) {
+        if (this.openFor(projectId, plugin).length - leaving.length >= MAX_OPEN_UPLOADS) {
           throw new PluginFileError(429, 'too_many_uploads', `a plugin may write ${MAX_OPEN_UPLOADS} files at a time`, {
             limit: MAX_OPEN_UPLOADS,
           });
         }
         // Counted from here on: the checks and this happen in both locks.
         this.uploads.set(id, up);
+        ended = this.endLeftBehind(leaving, up);
       });
+      await ended;
     });
     try {
       await fsp.mkdir(stagingDir, { recursive: true });
@@ -1045,7 +1112,7 @@ export class PluginFiles {
         checkIfMatch(up.ifMatch, current);
         if (up.aborted) throw uploadGone();
         // The plugin's own code or ws.data may have filled the folder since the begin.
-        await this.checkRoom(at, row, up, current, false);
+        this.checkRoom(await this.usageOf(at, false), row, up, current);
         await this.fs.mkdir(dirname(at.target), { recursive: true });
         if (partsWithin(at.root, await fsp.realpath(dirname(at.target))) === null) {
           throw invalidPath("it leads outside the plugin's folder");

@@ -32,7 +32,7 @@ import { Button, DisabledReason, Field, Hint, PanelChrome, Select } from '../../
 import { formatQuantity, formatReadout, formatVolume, MM_PER } from '../../ui/kit/format';
 import { timeoutForFaces } from '../../kernel/timeouts';
 import { selectedBodies } from '../../ui/tree/model';
-import { axisWords, PLAY_MM, sideWords as directionWords, type CheckEnv, type InterferenceResult, type SharedAxis, type StackResult, type StackSide, type SweepResult } from '../assembly/check';
+import { axisWords, PLAY_MM, sideWords as directionWords, UNMEASURED_OVERLAP, type CheckEnv, type InterferenceResult, type SharedAxis, type StackResult, type StackSide, type SweepResult } from '../assembly/check';
 import { axesNow, lengthIn, referenceAxes, referenceAxis, runAssembly, type AssemblyKind, type AssemblyOutcome, type AssemblyRequest } from './assembly';
 import { CHECK_MODE_LABELS, CHECK_MODES, type CheckMode } from './controls';
 import './check.css';
@@ -461,11 +461,11 @@ function InterferenceRows({ r, units, rowProps }: { r: InterferenceResult; units
         <table className="cad-p2-table" data-check-pairs="1">
           <tbody>
             {r.rows.map((x) => (
-              <tr key={`${x.a}|${x.b}`} {...rowProps([x.a, x.b])} title={`${x.press ? 'A press fit: a ring round the axis both have round faces on. ' : ''}${x.overlap !== null ? 'The middle of what they share' : 'Halfway between their nearest points'}: ${pointWords(x.at, units)}`} data-check-pair={`${x.a}|${x.b}`} data-check-overlap-mm3={x.overlap ?? undefined} data-check-press={x.press ? '1' : undefined} data-check-gap-mm={x.gap ?? undefined}>
+              <tr key={`${x.a}|${x.b}`} {...rowProps([x.a, x.b])} title={x.unmeasured ? `${x.a} and ${x.b}: ${UNMEASURED_OVERLAP}. Where they overlap: ${pointWords(x.at, units)}` : `${x.press ? 'A press fit: a ring round the axis both have round faces on. ' : ''}${x.overlap !== null ? 'The middle of what they share' : 'Halfway between their nearest points'}: ${pointWords(x.at, units)}`} data-check-pair={`${x.a}|${x.b}`} data-check-overlap-mm3={x.overlap ?? undefined} data-check-unmeasured={x.unmeasured ? '1' : undefined} data-check-press={x.press ? '1' : undefined} data-check-gap-mm={x.gap ?? undefined}>
                 <td>
                   {x.a} and {x.b}
                 </td>
-                <td className={`num${x.overlap !== null && !x.press ? ' cad-p2-bad' : ''}`}>{x.overlap !== null ? `${formatVolume(x.overlap, units)} ${x.press ? 'press fit' : 'overlap'}` : x.gap ? `${formatQuantity(x.gap, 'length', units)} apart` : 'touching'}</td>
+                <td className={`num${(x.overlap !== null && !x.press) || x.unmeasured ? ' cad-p2-bad' : ''}`}>{x.unmeasured ? 'overlap (not measured)' : x.overlap !== null ? `${formatVolume(x.overlap, units)} ${x.press ? 'press fit' : 'overlap'}` : x.gap ? `${formatQuantity(x.gap, 'length', units)} apart` : 'touching'}</td>
               </tr>
             ))}
           </tbody>

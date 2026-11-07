@@ -5,6 +5,8 @@
 //     lists the pair with its volume (and where, on hover), a click selects both bodies and hovering lights them; a
 //     clearance that does not read is refused under Check with its reason; one selected body is
 //     checked against every other shown body, in the tool's words for one body;
+//   - Interference: a block and the GitHub issue 15 groove as a body (OCCT answers their common as if
+//     apart): the pair overlaps, not measured, in the tool's words, the row says so (never "touching");
 //   - Loose parts: a wheel on a headed shaft with nothing above it: the finding names the wheel and
 //     +Z, the parts table says what holds each side, a click on the finding selects the wheel; a
 //     collar pressed on above it: nothing is loose; past the time limit the line says it stopped
@@ -19,6 +21,7 @@ import { act, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkClock, CHECK_TIME_MS } from '../../../src/features/assembly/check';
 import { block, cylinder, registerSolidFeatures } from '../../doc/blocks';
+import { drilledBlock, grooveDef } from '../../doc/groove';
 import { mountApp, type TestApp } from '../p2/app';
 import { hybridKernel } from '../p2/hybrid-kernel';
 import { realKernelAnywhere } from '../p2/kernel-anywhere';
@@ -142,6 +145,30 @@ describe("INSPECT's Check: Interference, Loose parts, Rotation", () => {
       act(() => a.services.selection.set((s) => ({ ...s, items: [{ kind: 'body', body: idOf(a, 'Block A') }] })));
       expect(a.$('[data-check-scope]')?.textContent).toBe('Checks Block A against every other shown body (1)');
       expect(await check(a, 'interference')).toBe('1 pair overlaps (Block A against 1 other body, 1 near enough to measure): Block A and Block B 4000 mm3');
+    },
+    MS,
+  );
+
+  it(
+    'Interference: a block and the GitHub issue 15 groove as a body, whose common OCCT answers as if apart (kernel API 10): the pair overlaps, not measured, in the check tool\'s words (never "touching")',
+    async () => {
+      const a = await start();
+      a.services.doc.features.register(grooveDef('groove'));
+      await act(async () => void drilledBlock(a.services.doc));
+      await named(a, 1, 'Block');
+      await act(async () => {
+        const s = a.services.doc.beginNew('groove' as never, { turns: 16.75, op: 'new' } as never);
+        s.commit();
+      });
+      await named(a, 2, 'Groove');
+      await settled(a);
+      await openMode(a, 'interference');
+      expect(await check(a, 'interference')).toBe('1 pair overlaps (2 bodies, 1 of 1 pairs near enough to measure): Block and Groove (not measured)');
+      const row = a.$('[data-check-pair="Block|Groove"]')!;
+      expect(row.getAttribute('data-check-unmeasured')).toBe('1');
+      expect(row.getAttribute('data-check-overlap-mm3')).toBeNull();
+      expect(row.textContent).toBe('Block and Grooveoverlap (not measured)');
+      expect(row.getAttribute('title')).toMatch(/^Block and Groove: they overlap, but the geometry kernel could not measure what they share \(OCCT took the two for apart\)\. Where they overlap: \(.+\) mm$/);
     },
     MS,
   );
