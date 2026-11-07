@@ -80,7 +80,12 @@ export async function reprojectLinks(f: SketchFeature, plane: PlaneFrame, env: L
     }
     const lostIds = a.link.entities.filter((x) => a.lostKeys.includes(x.key)).map((x) => x.entity);
     if (lostIds.length) {
-      const msg = `${lostIds.length === 1 ? entityLabel({ entities: draft.entities }, lostIds[0]) : `${lostIds.length} curves`} no longer on the model`;
+      // A `points` link's source is a sketch: its points (or circles) are gone from that sketch, not from the model.
+      const src = link.source;
+      const points = src.kind === 'points';
+      const kinds = new Set(lostIds.map((id) => draft.entities.find((e) => e.id === id)?.kind));
+      const many = points && kinds.size === 1 && (kinds.has('point') || kinds.has('circle')) ? `${[...kinds][0]}s` : 'curves';
+      const msg = `${lostIds.length === 1 ? entityLabel({ entities: draft.entities }, lostIds[0]) : `${lostIds.length} ${many}`} no longer ${points ? `in ${env.featureName(src.feature) ?? 'its sketch'}` : 'on the model'}`;
       status[link.id] = { state: 'lost', message: msg, lost: lostIds };
       warnings.push(`Lost reference: ${msg}`);
     } else status[link.id] = { state: 'ok' };
