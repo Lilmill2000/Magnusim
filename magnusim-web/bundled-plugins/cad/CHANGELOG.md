@@ -72,6 +72,27 @@ What changed in Magnusim CAD, newest first. How to use each part: `README.md`.
   prism filled the hole, or failed), as are Symmetric and Two sides (it drafted
   one prism from the far end, not each side from the sketch).
 
+**A cut that removes nothing from a body it overlaps is red in History (issue #15).**
+- The geometry kernel (OCCT) can answer a Cut, Join or Intersect as if the
+  tool and the body were apart, though they overlap (a helical groove that
+  crosses the body's far face): the body came back unchanged and the feature
+  was green. Extrude, Revolve, Sweep, Loft, Hole, Combine, Pattern and a
+  modelled thread now fail in words that say so ("it overlaps Body 1, but the
+  geometry kernel's cut removed nothing from Body 1 (OCCT took the two for
+  apart)"), also when one tool of several, or one body of several, was taken
+  for apart. Check's Interference and Measure say such bodies overlap but
+  could not be measured, rather than touching or overlapping by 0. The
+  kernel's own fault is not fixed: such a cut still cannot be made, and now
+  says so.
+
+**Saves are no longer refused for 10 minutes after tabs close mid-save (issue #17).**
+- A Part closed, crashed or reloaded while it saved left its upload open on
+  the app, and four of them refused every save of the plugin ("too many files
+  are being saved at once") until they timed out 10 minutes later. A new save
+  now takes the place of an upload that has had no call for 30 s, and a tab
+  that closes aborts the uploads it can no longer finish. A save the app ended
+  this way says "the app ended the save before it finished".
+
 **Find picks fillets and drilled holes by their shape.**
 - INSPECT > Find (and the Assistant's find) takes `fillet` (a round face
   joining two faces smoothly, whatever made it; chamfers are not fillets),
